@@ -1,0 +1,2 @@
+# optarena dependency list (hand-maintained).
+anthropic

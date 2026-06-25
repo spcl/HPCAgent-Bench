@@ -1,0 +1,164 @@
+
+#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
+#   However, in case of collaboration, if having platform-specific dependencies or dependencies
+#   having no cross-platform support, pipenv may install dependencies that don't work, or not
+#   install all needed dependencies.
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+# Byte-compiled / optimized / DLL files
+# C extensions
+# Celery stuff
+# Distribution / packaging
+# Django stuff:
+# Environments
+# Flask stuff:
+# IPython
+# Installer logs
+# Jupyter Notebook
+# PEP 582; used by e.g. github.com/David-OConnor/pyflow
+# PyBuilder
+# PyInstaller
+# Pyre type checker
+# Rope project settings
+# SageMath parsed files
+# Scrapy stuff:
+# Sphinx documentation
+# Spyder project settings
+# Translations
+# Unit test / coverage reports
+# dace
+# mkdocs documentation
+# mypy
+# optarena hardware_info downloads (HPL tarball, stream.c, extracted trees)
+# pipenv
+# pyenv
+#Pipfile.lock
+*$py.class
+*.cover
+*.csv
+*.dacecache/
+*.egg
+*.egg-info/
+*.log
+*.manifest
+*.mo
+*.pot
+*.py,cover
+*.py[cod]
+*.sage.py
+*.sdfg
+*.so
+*.spec
+.Python
+.cache
+.coverage
+.coverage.*
+.dacecache/
+.dmypy.json
+.eggs/
+.env
+.hypothesis/
+.installed.cfg
+.ipynb_checkpoints
+.mypy_cache/
+.nox/
+.optarena_cache/
+.pyre/
+.pytest_cache/
+.python-version
+.ropeproject
+.scrapy
+.spyderproject
+.spyproject
+.tox/
+.venv
+.webassets-cache
+/site
+ENV/
+MANIFEST
+__pycache__/
+__pypackages__/
+_dacegraphs/
+build/
+celerybeat-schedule
+celerybeat.pid
+coverage.xml
+db.sqlite3
+db.sqlite3-journal
+develop-eggs/
+dist/
+dmypy.json
+docs/_build/
+downloads/
+eggs/
+env.bak/
+env/
+htmlcov/
+instance/
+ipython_config.py
+lib/
+lib64/
+local_settings.py
+nosetests.xml
+optarena.db
+parts/
+pip-delete-this-directory.txt
+pip-log.txt
+pip-wheel-metadata/
+profile_default/
+results/
+sdfg.sdfg
+sdist/
+share/python-wheels/
+target/
+var/
+venv.bak/
+venv/
+wheels/
+
+# --- Generated benchmark artifacts (NOT committed) ---------------------------
+# A kernel's framework siblings are regenerated from <kernel>_numpy.py (the
+# source of truth) -- lazily by the framework loaders (run_benchmark.py emits a
+# missing sibling on demand) or in bulk via scripts/emit_all_siblings.py. They
+# are deterministic, so the repo keeps only the numpy reference + manifest +
+# hand-written overrides. A HAND override at one of these canonical names is
+# committed explicitly with `git add -f <file>`.
+optarena/benchmarks/**/*_dace.py
+optarena/benchmarks/**/*_cupy.py
+optarena/benchmarks/**/*_numba_n.py
+optarena/benchmarks/**/*_numba_np.py
+optarena/benchmarks/**/*_pythran.py
+# JAX is auto-generated for ALL kernels (numpyto_jax); the only committed
+# *_jax.py are hand overrides for legacy (microbench) kernels, force-added.
+# (TVM/Triton have NO auto-translator, so they are NOT ignored -- their
+# committed hand siblings, microbench only, are the sole source.)
+optarena/benchmarks/**/*_jax.py
+optarena/benchmarks/**/*_auto.py
+# Native (C/C++/Fortran) siblings: <short>[_<sparse>]_<fptype>.<ext> + the
+# <module>_cpp.py wrapper + the per-precision binding JSON, all generated on
+# demand from <short>_numpy.py. The repo commits none; a HAND override at one of
+# these names is committed with `git add -f`.
+optarena/benchmarks/**/*_cpp.py
+optarena/benchmarks/**/cpp_backend/*.c
+optarena/benchmarks/**/cpp_backend/*.cpp
+optarena/benchmarks/**/cpp_backend/*.f90
+optarena/benchmarks/**/cpp_backend/*_binding.json
+optarena/benchmarks/**/cpp_backend/*.so
+optarena/benchmarks/**/cpp_backend/build/
+optarena/benchmarks/**/cpp_backend/build-clang/
+
+# Pluto polyhedral-optimizer intermediates (the committed *_pluto_input.c are the
+# INPUTS and stay; .pluto.cloog is a generated artifact -- never commit it).
+*.pluto.cloog
+
+# --- Local run scratch (machine-specific; never committed) --------------------
+# Hardware/CPU dumps, agent run outputs, and SDFG/visualization scratch left by
+# local runs. A fresh clone should not carry any of these.
+dmidecode_output
+agent_out/
+_dacegraphs/
+_session_scratch/
+
+# Local-only dev tools (kept on disk, not published)
+scripts/infer_output_args.py
+scripts/verify_tvm.py

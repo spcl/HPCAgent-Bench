@@ -1,0 +1,48 @@
+name: agentbench-gpu
+
+# Runs the agent_bench suite on a real NVIDIA GPU so the device-residency CUDA
+# path executes for real (GitHub-hosted runners have no GPU -- this needs a
+# self-hosted runner labelled [self-hosted, gpu] with the CUDA toolkit/nvcc and
+# a recent driver). Adjust the `runs-on` labels to match your runner.
+
+on:
+  push:
+    branches: [ extended, main ]
+  pull_request:
+    branches: [ extended, main ]
+
+jobs:
+  gpu-agentbench:
+    runs-on: [self-hosted, gpu]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: GPU + toolchain sanity
+        run: |
+          nvidia-smi
+          nvcc --version
+          gcc --version | head -1
+          gfortran --version | head -1
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements/nvidia.txt
+          python -m pip install jinja2 tree-sitter tree-sitter-languages pytest
+          python -m pip install -e .
+
+      - name: cupy attaches to the device
+        run: |
+          python -c "import cupy; n=cupy.cuda.runtime.getDeviceCount(); assert n>0, n; print('devices', n, 'cc', cupy.cuda.Device(0).compute_capability)"
+
+      - name: agent_bench tests (device-residency CUDA runs for real)
+        # On this runner the cupy/nvcc gates are satisfied, so the GPU
+        # device-residency test executes instead of skipping.
+        run: python -m pytest tests/test_agent_bench.py -v
+
+      - name: Codegen frameworks on the GPU (Triton + TVM-GPU execute for real)
+        # requirements/nvidia.txt installs triton + apache-tvm; with a real GPU
+        # present the triton / tvm (cuda) framework tests run instead of skipping.
+        env:
+          OPTARENA_TVM_NOTUNE: "1"
+        run: python -m pytest tests/test_frameworks.py -v -rs

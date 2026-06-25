@@ -1,0 +1,10 @@
+# optarena dependency list (hand-maintained).
+numpy
+scipy
+pandas
+matplotlib
+ml_dtypes
+pygount
+pyyaml
+jsonschema
+setuptools

@@ -1,0 +1,27 @@
+# optarena dependency list (hand-maintained).
+# --pre required for: apache-tvm
+--pre
+numpy
+scipy
+pandas
+matplotlib
+ml_dtypes
+pygount
+pyyaml
+jsonschema
+setuptools
+jinja2
+cffi
+tree-sitter-language-pack
+psutil
+py-cpuinfo
+GPUtil
+h5py
+netCDF4
+dace
+numba
+pythran
+jax
+apache-tvm
+xgboost
+torch

@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "numpytranslators"
+version = "0.1.0"
+description = "NumpyTranslators: a numpy(-numeric subset) source -> C99/C++/Pluto, Fortran, CuPy, Numba, Pythran and JAX emitters, sharing one frontend/IR (numpyto_common)."
+requires-python = ">=3.9"
+dependencies = []
+
+# One installable distribution gathering every backend package under src/.
+# They share numpyto_common (frontend, IR, lowering, parallelism, sanitize),
+# so a single ``src`` on the path makes the whole translator suite importable
+# -- including numpyto_jax, which now consumes numpyto_common directly.
+[project.scripts]
+numpyto = "numpyto_common.cli:main"
+numpyto_c = "numpyto_c.cli:main"
+numpyto_fortran = "numpyto_fortran.cli:main"
+numpyto_cupy = "numpyto_cupy.cli:main"
+numpyto_numba = "numpyto_numba.cli:main"
+numpyto_pythran = "numpyto_pythran.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

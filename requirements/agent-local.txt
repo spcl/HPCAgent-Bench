@@ -1,0 +1,4 @@
+# optarena dependency list (hand-maintained).
+transformers
+huggingface-hub
+accelerate
