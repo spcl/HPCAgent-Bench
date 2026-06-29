@@ -107,6 +107,17 @@ COMPILE = {
 }
 BACKENDS = tuple(COMPILE)
 
+
+def _all_backend_status(reason: str) -> Dict[str, str]:
+    """``{backend: reason}`` for EVERY backend the gate evaluates -- the native
+    languages, the python emitters (``PY_BACKENDS``), AND jax. A whole-kernel
+    outcome (sparse operand, no init, init failure) applies to all of them equally,
+    so it must be reported for all of them. Returning only ``BACKENDS`` here is what
+    left numba / pythran / jax with no entry, so the gate read them as a misleading
+    ``skip:absent`` (never attempted) instead of the real, shared reason. (``PY_BACKENDS``
+    is resolved at call time -- it is defined further down the module.)"""
+    return {b: reason for b in (*BACKENDS, *PY_BACKENDS, "jax")}
+
 #: Built-in defaults for the operational config -- used when a key is absent from
 #: the consolidated ``optarena/config.yaml`` ``oracle:`` block so the oracle never
 #: hard-depends on it.
@@ -285,9 +296,9 @@ def run_kernel(short: str, preset: str = "S", precision: str = "fp64", seed: int
     from optarena.emit_bridge import legacy_bench_info_dict
     info = legacy_bench_info_dict(BenchSpec.load(short))["benchmark"]
     if "sparse_layouts" in info:
-        return {b: "skip:sparse" for b in BACKENDS}  # see tests/sparse_oracle
+        return _all_backend_status("skip:sparse")  # see tests/sparse_oracle
     if spec.init is None:
-        return {b: "skip:no-init" for b in BACKENDS}
+        return _all_backend_status("skip:no-init")
     out_args = info["output_args"]
     syms = dict(spec.parameters[preset])
     # Polybench presets are huge (NI=1000+); scale every size symbol down
@@ -368,12 +379,12 @@ def run_kernel(short: str, preset: str = "S", precision: str = "fp64", seed: int
                                     },
                                     seed=seed)))
         else:
-            return {b: "skip:no-init" for b in BACKENDS}
+            return _all_backend_status("skip:no-init")
     except Exception as exc:  # noqa: BLE001
         # Materialising inputs failed -- this is the GATE'S OWN premise breaking
         # (not a backend that can't express the kernel), so it is a FAILURE, not
         # a silent skip that would hide the kernel for every backend at once.
-        return {b: f"FAIL:init-error:{type(exc).__name__}" for b in (*BACKENDS, *PY_BACKENDS)}
+        return _all_backend_status(f"FAIL:init-error:{type(exc).__name__}")
 
     # A kernel whose initializer yields a genuinely SPARSE operand (a scipy
     # sparse matrix -- the sp_* Krylov solvers' CSR ``A``) cannot be marshalled
@@ -385,7 +396,7 @@ def run_kernel(short: str, preset: str = "S", precision: str = "fp64", seed: int
     try:
         from scipy.sparse import issparse
         if any(issparse(v) for v in by.values()):
-            return {b: "skip:sparse" for b in BACKENDS}
+            return _all_backend_status("skip:sparse")
     except ImportError:
         pass
 
