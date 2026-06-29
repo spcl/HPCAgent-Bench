@@ -14,6 +14,7 @@ Apptainer is not pip-installable (a Go binary); :func:`install_apptainer` runs i
 unprivileged install into a user prefix (exposed as ``optarena-install-apptainer``).
 udocker is `pip install udocker`.
 """
+import os
 import subprocess
 import sys
 
@@ -56,8 +57,14 @@ def local_run_command(image, *cmd, name=None):
 
 def install_apptainer(prefix="~/.local"):
     """Install Apptainer unprivileged (no sudo) into ``prefix`` via its official
-    installer. Returns the subprocess return code."""
-    return subprocess.run(f"curl -fsSL {APPTAINER_INSTALLER} | bash -s - {prefix}", shell=True).returncode
+    installer. Returns the subprocess return code.
+
+    The installer is downloaded then piped to ``bash`` over stdin, with ``prefix``
+    passed as a real argv element -- NOT interpolated into a ``shell=True`` string
+    (which would let a crafted ``prefix`` inject arbitrary commands)."""
+    prefix = os.path.expanduser(prefix)
+    script = subprocess.run(["curl", "-fsSL", APPTAINER_INSTALLER], check=True, capture_output=True, text=True).stdout
+    return subprocess.run(["bash", "-s", "-", prefix], input=script, text=True).returncode
 
 
 def install_apptainer_main(argv=None):
