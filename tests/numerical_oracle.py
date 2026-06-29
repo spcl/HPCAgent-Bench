@@ -182,6 +182,14 @@ def _within_norm_error(got, exp, norm_error: float) -> bool:
     return rel <= norm_error
 
 
+def _is_perfect_cube(n: int) -> bool:
+    """True if ``n`` is a positive perfect cube (``edgeElems**3``)."""
+    if not isinstance(n, int) or n < 1:
+        return False
+    r = round(n ** (1.0 / 3.0))
+    return any(c >= 1 and c * c * c == n for c in (r - 1, r, r + 1))
+
+
 def _custom_initialize(info, syms, datatype=np.float64) -> Dict[str, Any]:
     """Run a kernel's hand-written ``initialize`` (the optarena default for
     non-foundation kernels) and bind its results by ``init.output_args``.
@@ -290,12 +298,34 @@ def run_kernel(short: str, preset: str = "S", precision: str = "fp64", seed: int
             # derived sizes sane while still shrinking polybench's 1000s.
             def _scale_dim(v):
                 t = max(int(round(v * f)), 10)
+                is_pow2 = v > 1 and (v & (v - 1)) == 0
+                is_cube = _is_perfect_cube(v)
+                # A dimension that is BOTH a perfect cube and a power of two is a
+                # power of EIGHT (8, 64, 512, 4096 -- lulesh's numElem = edgeElems^3
+                # with a power-of-two edge). Round DOWN to the nearest power of
+                # eight (floor 8): the result is simultaneously a cube AND a power
+                # of two, so it satisfies a cube-constrained kernel (lulesh) and a
+                # pow2-constrained one (a bitonic length that happens to be a cube).
+                if is_pow2 and is_cube:
+                    p = 8
+                    while p * 8 <= max(t, 8):
+                        p *= 8
+                    return p
                 # Preserve power-of-2-ness: a kernel whose length MUST be a power
                 # of two (bitonic_sort's ``i ^ j`` comparator network, radix-2
                 # FFTs) breaks on a non-power-of-2 length. Round such a dimension
                 # DOWN to the nearest power of two (floor 8) instead of to ~48.
-                if v > 1 and (v & (v - 1)) == 0:
+                if is_pow2:
                     return 1 << max(3, max(t, 8).bit_length() - 1)
+                # Preserve perfect-cube-ness: lulesh's ``numElem`` MUST be a
+                # perfect cube (``edgeElems**3``); scaling 64 -> 32 made it
+                # non-cube and the initializer raised. Round the EDGE length down
+                # (floor 2) so the scaled value stays a cube.
+                if is_cube:
+                    e = max(2, round(t ** (1.0 / 3.0)))
+                    while e > 2 and e * e * e > max(t, 8):
+                        e -= 1
+                    return e * e * e
                 return t
             syms = {k: (_scale_dim(v) if (k in ints and v > 48) else v) for k, v in syms.items()}
     # Kernel scalar params (``init.scalars``, e.g. crc16's CRC polynomial

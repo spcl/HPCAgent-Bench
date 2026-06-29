@@ -1948,6 +1948,17 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
                     new_slice = ast.Tuple(elts=list(dims) + pad, ctx=ast.Load())
                     return ast.Subscript(value=node.value, slice=new_slice,
                                          ctx=node.ctx)
+            # A FULLY scalar-indexed read (``w_dist[-1]``) is a scalar element:
+            # resolve any negative index against the axis length (C / Fortran
+            # have no negative indexing) and keep it -- the stencil_*_vc
+            # last-weight read inside a slice-fused statement.
+            if source_shape is not None and len(dims) == len(source_shape):
+                resolved = [self._resolve_scalar_index(d, name, axis)
+                            for axis, d in enumerate(dims)]
+                if any(r is not d for r, d in zip(resolved, dims)):
+                    slot = (resolved[0] if len(resolved) == 1
+                            else ast.Tuple(elts=resolved, ctx=ast.Load()))
+                    return ast.Subscript(value=node.value, slice=slot, ctx=node.ctx)
             return node
         rhs_name = _name_of_subscript(node)
         # The LHS has N slice axes -- collect the iter vars + LHS lo
@@ -3432,6 +3443,35 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
             expanded = self._expand_partial(target, node.value)
             if expanded:
                 return expanded
+        # ``A[b] = <Nd slice/BinOp expression>`` -- a partial-subscript LHS (a
+        # sub-array, plain SCALAR leading index) assigned a whole arithmetic
+        # expression of the remaining shape (stencil_4d's
+        # ``out_grid[b] = w_dist[-1]*padded[...]``). The trailing residual axes
+        # loop element-by-element, mirroring the AugAssign partial-subscript path.
+        # Guarded narrowly so gather stores / scatter (index-array lead, bare
+        # Subscript gather RHS) keep their own handling: the lead must be plain
+        # scalars (no index arrays) and the RHS broadcast extent must match the
+        # residual rank.
+        if (isinstance(target, ast.Subscript)
+                and isinstance(target.value, ast.Name)
+                and target.value.id in self.shape_table
+                and not isinstance(target.slice, ast.Slice)
+                and isinstance(node.value, (ast.BinOp, ast.UnaryOp, ast.IfExp))):
+            shape = self.shape_table.get(target.value.id)
+            lead = (list(target.slice.elts) if isinstance(target.slice, ast.Tuple)
+                    else [target.slice])
+            from numpyto_common.lib_nodes import _iter_extent_of
+            if (shape
+                    and not any(isinstance(e, ast.Slice) for e in lead)
+                    and not any(isinstance(e, ast.Name)
+                                and self.shape_table.get(e.id) for e in lead)):
+                n_trailing = len(shape) - len(lead)
+                rhs_ext = _iter_extent_of(node.value, self.shape_table)
+                if (n_trailing > 0 and rhs_ext is not None
+                        and len(rhs_ext) == n_trailing):
+                    expanded = self._expand_partial_subscript(target, node.value, None)
+                    if expanded:
+                        return expanded
         # Track Name = Name aliases in source order so a reassigned ``x``
         # gets the shape of whichever RHS preceded each use. If the LHS
         # is a fresh local (not already an array), record it so the
@@ -3698,7 +3738,12 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
                                 slice=lhs_idx, ctx=ast.Store())
         rhs = _SubscriptifyNames(self.shape_table, iters).visit(
             copy.deepcopy(value))
-        out: List[ast.stmt] = [ast.AugAssign(target=lhs_sub, op=op, value=rhs)]
+        # ``op is None`` -> a plain ``arr[lead] = rhs`` store (stencil_4d's
+        # ``out_grid[b] = w_dist[-1] * padded[...]`` slice-expression RHS);
+        # otherwise the augmented accumulate (``out_grid[b] += ...``).
+        leaf: ast.stmt = (ast.Assign(targets=[lhs_sub], value=rhs) if op is None
+                          else ast.AugAssign(target=lhs_sub, op=op, value=rhs))
+        out: List[ast.stmt] = [leaf]
         for var, bound in zip(reversed(iters), reversed(trailing)):
             out = [ast.For(
                 target=ast.Name(id=var, ctx=ast.Store()),
@@ -3706,6 +3751,26 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
                               args=[_token_to_ast(bound)], keywords=[]),
                 body=out, orelse=[])]
         return out
+
+
+def _resolve_neg_index(idx: ast.expr, axis_len: ast.expr) -> ast.expr:
+    """Resolve a negative constant array index to ``axis_len - K``.
+
+    numpy ``arr[-1]`` reads the last element; C / Fortran have no negative
+    indexing, so a literal ``-K`` must become ``dim - K`` (the stencils'
+    ``w_dist[-1]`` last-weight read). Both spellings -- ``Constant(-K)`` and
+    ``UnaryOp(USub, Constant(K))`` -- are handled; everything else passes
+    through unchanged."""
+    k = None
+    if isinstance(idx, ast.Constant) and isinstance(idx.value, int) and idx.value < 0:
+        k = -idx.value
+    elif (isinstance(idx, ast.UnaryOp) and isinstance(idx.op, ast.USub)
+          and isinstance(idx.operand, ast.Constant)
+          and isinstance(idx.operand.value, int)):
+        k = idx.operand.value
+    if k is None:
+        return idx
+    return ast.BinOp(left=copy.deepcopy(axis_len), op=ast.Sub(), right=ast.Constant(value=k))
 
 
 class _SubscriptifyNames(ast.NodeTransformer):
@@ -3941,20 +4006,43 @@ class _SubscriptifyNames(ast.NodeTransformer):
             # the read stays rank-1 (``Ham(n)`` in Fortran -> rank
             # mismatch; ``Ham[n]`` in C -> silently wrong numerics).
             lead = (list(sl.elts) if isinstance(sl, ast.Tuple) else [sl])
+
+            def _has_idx_array(e):
+                # An advanced-index axis references an index ARRAY (a Name whose
+                # own shape is known) -- ``arr[idx - 1, jk, blk - 1]`` (velocity /
+                # icon gathers). Those must keep the generic-visit gather path.
+                return any(isinstance(s, ast.Name) and self.shape_table.get(s.id)
+                           for s in ast.walk(e))
             if (lead
                     and not any(isinstance(e, ast.Slice) for e in lead)
                     and not any(isinstance(e, ast.Constant) and e.value is None
-                                for e in lead)):
+                                for e in lead)
+                    and not any(_has_idx_array(e) for e in lead)):
                 shape = self.shape_table.get(node.value.id)
                 if shape is not None:
                     rank = len(shape)
                     n_trailing = rank - len(lead)
+                    # Resolve any negative scalar index (``arr[-1]``) against its
+                    # axis length -- C / Fortran have no negative indexing.
+                    res_lead = [_resolve_neg_index(e, _token_to_ast(shape[ax]))
+                                for ax, e in enumerate(lead)]
                     if 0 < n_trailing <= len(self.iters):
                         offset = len(self.iters) - n_trailing
-                        new_elts = list(lead) + [
+                        new_elts = list(res_lead) + [
                             ast.Name(id=self.iters[offset + j], ctx=ast.Load())
                             for j in range(n_trailing)]
                         new_slot = ast.Tuple(elts=new_elts, ctx=ast.Load())
+                        return ast.Subscript(value=node.value,
+                                             slice=new_slot, ctx=ast.Load())
+                    if n_trailing == 0:
+                        # The subscript already FULLY indexes the array with
+                        # concrete scalar indices (``w_dist[-1]``, ``w[r - 1]``):
+                        # it is a scalar element read. Returning it (with negatives
+                        # resolved) stops the default generic_visit from
+                        # subscriptifying the base Name and emitting
+                        # ``w_dist[__w2][-1]`` (the stencils' last-weight read).
+                        new_slot = (res_lead[0] if len(res_lead) == 1
+                                    else ast.Tuple(elts=res_lead, ctx=ast.Load()))
                         return ast.Subscript(value=node.value,
                                              slice=new_slot, ctx=ast.Load())
         self.generic_visit(node)

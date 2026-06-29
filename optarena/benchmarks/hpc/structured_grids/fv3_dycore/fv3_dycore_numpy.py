@@ -2903,23 +2903,28 @@ def remap_profile_iv1_kordsmall(a4_1, a4_2, a4_3, a4_4, delp, qmin,
             a1 = [a4_1[i, j, k] for k in range(nk)]
             dp = [delp[i, j, k] for k in range(nk)]
             gam = [0.0] * nk
-            q = [0.0] * (nk + 1)   # interface values, length nk+1
-            # set_initial_vals (iv != -2): tri-diagonal FORWARD then BACKWARD
+            # q[0..nk-1] are the GTScript field levels; the q[nk] slot stays 0 --
+            # GTScript never writes the bottom-most interface, so a4_3[nk-1] = q[nk]
+            # = 0 and the last layer's edges are set by posdef_iv1 below.
+            q = [0.0] * (nk + 1)
+            # set_initial_vals (iv != -2, kord<9), transcribed level-for-level from
+            # the three GTScript intervals: the bottom interval(-1, None) writes the
+            # LAST layer q[nk-1] (field-relative offsets -1/-2), NOT a separate q[nk].
             grid_ratio = dp[1] / dp[0]
             bet = grid_ratio * (grid_ratio + 0.5)
             q[0] = ((grid_ratio + grid_ratio) * (grid_ratio + 1.0) * a1[0] + a1[1]) / bet
             gam[0] = (1.0 + grid_ratio * (grid_ratio + 1.5)) / bet
-            for k in range(1, nk):
+            for k in range(1, nk - 1):   # interval(1, -1): k = 1 .. nk-2
                 d4 = dp[k - 1] / dp[k]
                 bet = 2.0 + d4 + d4 - gam[k - 1]
                 q[k] = (3.0 * (a1[k - 1] + d4 * a1[k]) - q[k - 1]) / bet
                 gam[k] = d4 / bet
-            # bottom interface (q[nk])
-            d4 = dp[nk - 2] / dp[nk - 1]
+            # interval(-1, None): bottom layer q[nk-1]
+            d4 = dp[nk - 3] / dp[nk - 2]
             a_bot = 1.0 + d4 * (d4 + 1.5)
-            q[nk] = ((2.0 * d4 * (d4 + 1.0) * a1[nk - 1] + a1[nk - 2] - a_bot * q[nk - 1])
-                     / (d4 * (d4 + 0.5) - a_bot * gam[nk - 1]))
-            for k in range(nk - 1, -1, -1):
+            q[nk - 1] = ((2.0 * d4 * (d4 + 1.0) * a1[nk - 2] + a1[nk - 3] - a_bot * q[nk - 2])
+                         / (d4 * (d4 + 0.5) - a_bot * gam[nk - 2]))
+            for k in range(nk - 2, -1, -1):   # BACKWARD interval(0, -1): k = nk-2 .. 0
                 q[k] = q[k] - gam[k] * q[k + 1]
             # apply_constraints: gam, tmp/tmp2 clamps, set a4_2/a4_3, extm
             a2 = [0.0] * nk

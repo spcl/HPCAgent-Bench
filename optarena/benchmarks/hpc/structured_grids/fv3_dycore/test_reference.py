@@ -3597,19 +3597,15 @@ def test_moist_pt_last_step_matches_gt4py():
 # remap_profile (iv=1, kord<9) bit-exact vs GT4Py
 # ===========================================================================
 @pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
-@pytest.mark.xfail(reason="remap_profile_iv1_kordsmall: interior is close but the "
-                          "interior/bottom-edge layers (k>=nk-2) of the kord<9 "
-                          "limiter + bottom posdef constraint are not yet bit-exact "
-                          "vs GT4Py -- a known incomplete hand-transcription of the "
-                          "remap_profile edge regions. Documented as a gap; the full "
-                          "remap/map_single chain therefore is NOT validated.",
-                   strict=True)
 def test_remap_profile_iv1_kordsmall_matches_gt4py():
     """RemapProfile (iv=1, kord<9 -> kord=8) q4 reconstruction vs the verbatim
     pyfv3 GTScript (set_initial_vals -> apply_constraints -> set_interp_coeffs).
 
-    Interior layers agree; the bottom-edge layers do not yet (xfail). The other
-    remap leaves (set_dp, lagrangian_contributions, fix_tracer) ARE validated."""
+    Bit-exact for all layers including the edges. The earlier mismatch was the
+    bottom interface: GTScript's set_initial_vals interval(-1, None) writes the
+    LAST layer q[nk-1] with field-relative offsets and leaves the q[nk] slot at 0
+    (so a4_3[nk-1] is set by posdef_iv1); the port previously computed a separate
+    q[nk] with shifted indices, which perturbed the whole column via back-sub."""
     npy = _load("fv3_dycore_numpy")
     nhalo, ni, nj, nk = 3, 12, 12, 10
     nx, ny, kz = nhalo + ni + nhalo, nhalo + nj + nhalo, nk + 1
@@ -3780,8 +3776,7 @@ def test_fv_dynamics_gt4_orchestration():
     tracer_advection_gt4 -> dry Lagrangian->Eulerian remap) is composed from
     pieces that are individually GT4Py-validated (dyn_core orchestration-validated;
     tracer_advection orchestration-validated; the remap leaves set_dp /
-    lagrangian_contributions / fix_tracer / moist_cv validated, EXCEPT
-    remap_profile whose bottom-edge layers are not yet bit-exact (xfail)).
+    lagrangian_contributions / fix_tracer / moist_cv / remap_profile all bit-exact).
 
     This validates the fv_dynamics ORCHESTRATION -- the k_split iteration, the
     delp->dp1 copy timing, and the dyn_core/tracer/remap call wiring -- against an
@@ -3790,7 +3785,8 @@ def test_fv_dynamics_gt4_orchestration():
     coupled solver may diverge identically in both).
 
     VALIDATION LEVEL: orchestration only (like dyn_core). NOT a physical
-    end-to-end check, and the remap sub-step is not bit-exact (remap_profile gap).
+    end-to-end check (every leaf, incl. remap_profile, is now bit-exact, but the
+    coupled trajectory is not validated against a real serialized atmosphere).
     """
     npy = _load("fv3_dycore_numpy")
     st_a, g, nhalo, ni, nj, nk = _dyncore_state_and_grid(seed=141)

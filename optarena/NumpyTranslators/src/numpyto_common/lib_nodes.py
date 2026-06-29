@@ -484,6 +484,15 @@ def _iter_extent_of(expr: ast.expr,
             if attr == "diagonal" and expr.args:
                 base = _iter_extent_of(expr.args[0], shape_table)
                 return (base[0],) if base else None
+            # ``np.pad(src, pad_width, ...)`` -> each source axis grown by its
+            # ``before + after`` width (scalar R or per-axis tuple). The stencil
+            # ghost cells / the vector variants' unpadded component axis.
+            if attr == "pad" and expr.args:
+                base = _iter_extent_of(expr.args[0], shape_table)
+                if base is None:
+                    return None
+                pad_arg = _kwarg_or_pos(expr.args, expr.keywords, 1, "pad_width")
+                return _pad_output_extent(base, pad_arg)
             # ``np.concatenate((a, b, ...), axis=k)`` -> the operands' common
             # shape with axis ``k`` summed across operands (dwt2d Haar
             # recompose). Other axes are taken from the first operand.
@@ -844,7 +853,12 @@ def _scalarize_at_iters(expr: ast.expr, iters: List[ast.expr],
                     new_axes.append(_scalarize_at_iters(ax, idx_iters, shape_table))
                     src_axis += 1
                     continue
-                new_axes.append(ax)
+                # Concrete scalar index -- resolve a negative ``arr[-1]`` against
+                # the axis length (C / Fortran have no negative indexing): the
+                # stencil_*_vc ``w_dist[-1]`` last-weight read.
+                axis_len = (_const_or_name(shape[src_axis])
+                            if shape and src_axis < len(shape) else None)
+                new_axes.append(_resolve_negative(ax, axis_len))
             src_axis += 1
         # If the source has more axes than the Subscript covered, the iter
         # nest may carry additional trailing iters that map straight to
@@ -2766,6 +2780,167 @@ def expand_vdot(target: ast.expr, args: List[ast.expr],
             *_wrap_for_loops([it], [shape[0]], body)]
 
 
+def _pad_widths(pad_arg: Optional[ast.expr], n_axes: int):
+    """Per-axis ``(before, after)`` pad widths for an ``np.pad`` call.
+
+    Accepts the two numpy spellings that the corpus uses:
+
+    * a scalar ``R`` (int / Name) -- every axis padded ``(R, R)``;
+    * a tuple of per-axis ``(before, after)`` pairs --
+      ``((R, R), (R, R), (R, R), (0, 0))`` (the vector stencils leave the
+      component axis unpadded). A bare int inside the tuple means ``(v, v)``.
+
+    Returns a list of ``(before_node, after_node)`` of length ``n_axes`` (each
+    an AST expr), or ``None`` when the spelling is not statically resolvable."""
+    if isinstance(pad_arg, (ast.Constant, ast.Name)):
+        return [(pad_arg, pad_arg) for _ in range(n_axes)]
+    if isinstance(pad_arg, (ast.Tuple, ast.List)) and len(pad_arg.elts) == n_axes:
+        out = []
+        for e in pad_arg.elts:
+            if isinstance(e, (ast.Tuple, ast.List)) and len(e.elts) == 2:
+                out.append((e.elts[0], e.elts[1]))
+            elif isinstance(e, (ast.Constant, ast.Name)):
+                out.append((e, e))
+            else:
+                return None
+        return out
+    return None
+
+
+def _pad_output_extent(src_extent, pad_arg: Optional[ast.expr]):
+    """Output extent of ``np.pad``: each source axis grown by ``before+after``.
+
+    ``src_extent`` is the tuple of source-axis extent AST nodes; returns the
+    per-axis output extent nodes, or ``None`` if ``pad_arg`` is unsupported."""
+    widths = _pad_widths(pad_arg, len(src_extent))
+    if widths is None:
+        return None
+    out = []
+    for d, (before, after) in zip(src_extent, widths):
+        total = ast.BinOp(left=copy.deepcopy(before), op=ast.Add(),
+                          right=copy.deepcopy(after))
+        out.append(ast.BinOp(left=d, op=ast.Add(), right=total))
+    return tuple(out)
+
+
+def _pad_src_base_and_lead(src_node: ast.expr):
+    """Split an ``np.pad`` source into ``(base_name, lead_scalar_indices)``.
+
+    A bare ``Name`` pads the whole array (no lead). A ``Subscript`` with leading
+    SCALAR indices -- ``in_grid[b]`` (stencil_4d) -- pads the sliced sub-array,
+    so the lead scalars are prepended to every generated source read. Returns
+    ``None`` for any other form (slice-bearing subscripts etc.)."""
+    if isinstance(src_node, ast.Name):
+        return src_node.id, []
+    if isinstance(src_node, ast.Subscript) and isinstance(src_node.value, ast.Name):
+        sl = src_node.slice
+        elts = list(sl.elts) if isinstance(sl, ast.Tuple) else [sl]
+        if any(isinstance(e, ast.Slice) for e in elts):
+            return None
+        return src_node.value.id, elts
+    return None
+
+
+def _pad_mode_str(args: List[ast.expr], kwargs) -> str:
+    """The ``mode`` string of an ``np.pad`` call (default numpy ``constant``)."""
+    m = _kwarg_or_pos(args, kwargs or [], 2, "mode")
+    if isinstance(m, ast.Constant) and isinstance(m.value, str):
+        return m.value
+    return "constant"
+
+
+def expand_pad(target: ast.expr, args: List[ast.expr],
+               shape_table: Dict[str, Tuple[str, ...]],
+               kwargs=None, local_dtypes=None,
+               fresh_local_allocs=None) -> List[ast.stmt]:
+    """``padded = np.pad(src, pad_width, mode=...)`` -> a ghost-cell fill loop.
+
+    Each source axis is grown by its ``before + after`` pad width (a scalar
+    ``R`` pads every axis ``(R, R)``; a per-axis tuple lets the vector stencils
+    leave the component axis ``(0, 0)``). The source may be a bare array or a
+    leading-scalar-indexed sub-array (``in_grid[b]``). Two modes are lowered:
+
+    * ``edge`` -- each output cell takes the nearest source edge value:
+      ``padded[i...] = src[clamp(i - before, 0, d - 1)...]``. The clamp is
+      emitted as scalar ``__ps<k>`` index locals with two guard ``if``s per
+      padded axis (no ``min``/``max`` call in subscript position).
+    * ``constant`` (numpy default, fill 0) -- zero the buffer, then copy the
+      interior ``padded[i + before...] = src[i...]``.
+
+    The halo-exchange idiom of the structured-grid stencils (``stencil_3d`` /
+    ``stencil_4d`` and the vector variants)."""
+    if not args:
+        raise NotImplementedError("np.pad needs a source operand")
+    base = _pad_src_base_and_lead(args[0])
+    if base is None:
+        raise NotImplementedError("np.pad source must be a Name or scalar-indexed sub-array")
+    base_name, lead = base
+    src_ext = _iter_extent_of(args[0], shape_table)
+    if src_ext is None:
+        raise NotImplementedError(f"np.pad: shape of {base_name!r} unknown")
+    view = [_const_or_name(s) if isinstance(s, str) else s for s in src_ext]
+    pad_arg = _kwarg_or_pos(args, kwargs or [], 1, "pad_width")
+    widths = _pad_widths(pad_arg, len(view))
+    if widths is None:
+        raise NotImplementedError("np.pad needs scalar or per-axis tuple pad_width")
+    mode = _pad_mode_str(args, kwargs)
+    if mode not in ("edge", "constant"):
+        raise NotImplementedError(f"np.pad mode={mode!r} unsupported")
+    rank = len(view)
+
+    def _before(k):
+        return copy.deepcopy(widths[k][0])
+
+    def _dim(k):
+        return copy.deepcopy(view[k])
+
+    out_bounds = [b for b in _pad_output_extent(tuple(_dim(k) for k in range(rank)), pad_arg)]
+
+    def _store_target(idx_nodes):
+        sl = idx_nodes[0] if rank == 1 else ast.Tuple(elts=idx_nodes, ctx=ast.Load())
+        return ast.Subscript(value=_name(target.id), slice=sl, ctx=ast.Store())
+
+    def _src_read(idx_nodes):
+        full = [copy.deepcopy(e) for e in lead] + idx_nodes
+        sl = full[0] if len(full) == 1 else ast.Tuple(elts=full, ctx=ast.Load())
+        return ast.Subscript(value=_name(base_name), slice=sl, ctx=ast.Load())
+
+    if mode == "constant":
+        # Zero the whole padded buffer, then copy the interior shifted by before.
+        zero_iters = [f"__pz{k}" for k in range(rank)]
+        zero_body = [ast.Assign(
+            targets=[_store_target([_name(v) for v in zero_iters])], value=_const(0.0))]
+        stmts = _wrap_for_loops(zero_iters, out_bounds, zero_body)
+        cp_iters = [f"__pc{k}" for k in range(rank)]
+        dst_idx = [ast.BinOp(left=_name(cp_iters[k]), op=ast.Add(), right=_before(k))
+                   for k in range(rank)]
+        cp_body = [ast.Assign(targets=[_store_target(dst_idx)],
+                              value=_src_read([_name(v) for v in cp_iters]))]
+        stmts += _wrap_for_loops(cp_iters, [_dim(k) for k in range(rank)], cp_body)
+        return stmts
+
+    # mode == "edge": clamp each output index back into the source range.
+    out_iters = [f"__pp{k}" for k in range(rank)]
+    src_idx_vars = [f"__ps{k}" for k in range(rank)]
+    pre: List[ast.stmt] = []
+    for k in range(rank):
+        sv = src_idx_vars[k]
+        pre.append(ast.Assign(targets=[_store(sv)],
+                              value=ast.BinOp(left=_name(out_iters[k]),
+                                              op=ast.Sub(), right=_before(k))))
+        pre.append(ast.If(
+            test=ast.Compare(left=_name(sv), ops=[ast.Lt()], comparators=[_const(0)]),
+            body=[ast.Assign(targets=[_store(sv)], value=_const(0))], orelse=[]))
+        upper = ast.BinOp(left=_dim(k), op=ast.Sub(), right=_const(1))
+        pre.append(ast.If(
+            test=ast.Compare(left=_name(sv), ops=[ast.Gt()], comparators=[upper]),
+            body=[ast.Assign(targets=[_store(sv)], value=copy.deepcopy(upper))],
+            orelse=[]))
+    body = pre + [ast.Assign(targets=[_store_target([_name(v) for v in out_iters])],
+                             value=_src_read([_name(v) for v in src_idx_vars]))]
+    return _wrap_for_loops(out_iters, out_bounds, body)
+
+
 def expand_trace(target: ast.expr, args: List[ast.expr],
                  shape_table: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     """``np.trace(A)`` -> ``sum_i A[i, i]`` (the diagonal sum)."""
@@ -4266,6 +4441,7 @@ NP_CALL_EXPANDERS: Dict[Tuple[str, str], Callable] = {
     ("np", "median"):    expand_median,
     ("np", "roll"):      expand_roll,
     ("np", "tril"):      expand_tril,
+    ("np", "pad"):       expand_pad,
     ("np", "outer"):     expand_outer,
     ("np", "add.outer"): expand_add_outer,
     ("np", "transpose"): expand_transpose,
@@ -5428,6 +5604,23 @@ class _CallHoister(ast.NodeTransformer):
 
     def _derive_output_shape(self, key, args, keywords=None):
         op = key[1]
+        # Tensor contractions (einsum / tensordot / inner): reuse the shared
+        # output-extent resolver so the hoister can lift a contraction out of a
+        # BinOp -- seissol's ``Q[:] = Q + np.einsum('dkl,blq,dqp->bkp', ...)``
+        # (a batched GEMM written as an einsum). A scalar-result contraction
+        # ('ii->') yields a None extent and is handled by the direct-assign
+        # expander path instead.
+        if op in {"einsum", "tensordot", "inner"} and len(args) >= 2:
+            ext = _iter_extent_of(_attr_call("np", op, list(args)), self.shape_table)
+            if ext is not None:
+                return tuple(self._extent_to_shape_token(e) for e in ext)
+        # ``np.pad`` -> source shape with each axis grown by ``2 * pad_width``.
+        if op == "pad" and args:
+            call = _attr_call("np", "pad", list(args))
+            call.keywords = list(keywords or [])
+            ext = _iter_extent_of(call, self.shape_table)
+            if ext is not None:
+                return tuple(self._extent_to_shape_token(e) for e in ext)
         # Allocator-style calls: shape from the constructor arg.
         if op in {"linspace", "arange"}:
             # linspace(start, stop, n) -> (n,); arange(stop) -> (stop,);
@@ -5661,6 +5854,7 @@ _ELEMENT_WRITE_EXPANDERS = {
     ("np", "einsum"), ("np", "tensordot"), ("np", "inner"),
     ("np", "trace"), ("np", "diagonal"),
     ("np", "cumsum"), ("np", "cumprod"), ("np", "roll"), ("np", "tril"),
+    ("np", "pad"),
 }
 
 
