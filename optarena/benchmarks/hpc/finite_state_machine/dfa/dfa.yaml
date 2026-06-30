@@ -28,7 +28,7 @@ init:
   - trans
   - symbols
   - counts
-  generate: initialize
+  func_name: initialize
 array_args:
 - trans
 - symbols

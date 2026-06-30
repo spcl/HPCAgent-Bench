@@ -46,7 +46,7 @@ init:
     P1:
       shape: (NR, NM)
       dtype: complex128
-  generate: initialize
+  func_name: initialize
 array_args:
 - Ham
 - int_pts

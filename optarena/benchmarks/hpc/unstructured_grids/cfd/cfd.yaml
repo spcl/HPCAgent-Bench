@@ -32,7 +32,7 @@ init:
   - res_density
   - res_momentum
   - res_energy
-  generate: initialize
+  func_name: initialize
 array_args:
 - density
 - momentum

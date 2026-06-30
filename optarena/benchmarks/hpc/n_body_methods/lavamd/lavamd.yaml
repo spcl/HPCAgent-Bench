@@ -35,7 +35,7 @@ init:
   - neigh
   - fv
   - fa
-  generate: initialize
+  func_name: initialize
 array_args:
 - pos
 - charge

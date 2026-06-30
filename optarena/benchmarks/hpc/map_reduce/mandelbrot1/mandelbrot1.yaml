@@ -47,7 +47,7 @@ init:
   output_args:
   - Z_out
   - N_out
-  generate: initialize
+  func_name: initialize
   shapes:
     Z_out: (yn, xn)
     N_out: (yn, xn)

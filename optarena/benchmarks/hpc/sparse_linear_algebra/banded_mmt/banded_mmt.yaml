@@ -41,7 +41,7 @@ init:
     A: (N, AW)
     B: (N, BW)
     ret_out: (N, N)
-  generate: initialize
+  func_name: initialize
 output_args:
 - ret_out
 variants:

@@ -33,7 +33,7 @@ init:
   - apos
   - charge
   - phi
-  generate: initialize
+  func_name: initialize
   shapes:
     pos: (npoints, 3)
     apos: (natoms, 3)

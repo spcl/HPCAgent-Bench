@@ -25,7 +25,7 @@ init:
     rank:
       shape: (N,)
       dtype: float64
-  generate: initialize
+  func_name: initialize
 array_args:
 - trans
 - rank

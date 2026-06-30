@@ -24,7 +24,7 @@ init:
   - beta
   - C
   - A
-  generate: initialize
+  func_name: initialize
 array_args:
 - C
 - A

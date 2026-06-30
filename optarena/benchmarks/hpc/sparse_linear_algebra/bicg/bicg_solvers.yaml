@@ -39,7 +39,7 @@ init:
     A: (N, N)
     b: (N,)
     x: (N,)
-  generate: initialize
+  func_name: initialize
 output_args:
 - x
 variants:

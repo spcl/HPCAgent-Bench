@@ -34,7 +34,7 @@ init:
     matches:
       shape: (1,)
       dtype: int64
-  generate: initialize
+  func_name: initialize
 array_args:
 - text
 - pattern

@@ -28,7 +28,7 @@ init:
   - in_field
   - out_field
   - coeff
-  generate: initialize
+  func_name: initialize
 array_args:
 - in_field
 - out_field

@@ -30,7 +30,7 @@ init:
   - C
   - A
   - B
-  generate: initialize
+  func_name: initialize
 array_args:
 - C
 - A

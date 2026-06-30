@@ -21,7 +21,7 @@ init:
   - theta_2
   - phi_2
   - distance_matrix
-  generate: initialize
+  func_name: initialize
 array_args:
 - theta_1
 - phi_1

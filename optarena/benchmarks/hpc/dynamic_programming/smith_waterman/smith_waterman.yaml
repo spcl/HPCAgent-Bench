@@ -23,7 +23,7 @@ init:
   - a
   - b
   - H
-  generate: initialize
+  func_name: initialize
 array_args:
 - a
 - b

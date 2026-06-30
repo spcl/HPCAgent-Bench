@@ -35,7 +35,7 @@ init:
     y:
       shape: (N,)
       dtype: complex128
-  generate: initialize
+  func_name: initialize
 output_args:
 - y
 taxonomy:

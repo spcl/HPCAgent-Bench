@@ -46,7 +46,7 @@ init:
     path:
       shape: (T,)
       dtype: int64
-  generate: initialize
+  func_name: initialize
 array_args:
 - log_init
 - log_trans

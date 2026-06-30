@@ -24,7 +24,7 @@ init:
   - A
   - x
   - b
-  generate: initialize
+  func_name: initialize
 input_args:
 - A
 - b

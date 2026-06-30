@@ -18,7 +18,7 @@ init:
   output_args:
   - A
   - B
-  generate: initialize
+  func_name: initialize
 array_args:
 - A
 - B

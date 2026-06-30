@@ -52,7 +52,7 @@ init:
     out_semi:
       shape: (nproma, nlev, nblks)
       dtype: float64
-  generate: initialize
+  func_name: initialize
 array_args:
 - val
 - nbr_idx

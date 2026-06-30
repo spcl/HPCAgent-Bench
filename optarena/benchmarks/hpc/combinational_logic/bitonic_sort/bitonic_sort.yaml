@@ -21,7 +21,7 @@ init:
     data:
       shape: (N,)
       dtype: int64
-  generate: initialize
+  func_name: initialize
 array_args:
 - data
 output_args:

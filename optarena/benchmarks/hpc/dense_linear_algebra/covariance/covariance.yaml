@@ -24,7 +24,7 @@ init:
   - float_n
   - data
   - cov
-  generate: initialize
+  func_name: initialize
 array_args:
 - data
 - cov

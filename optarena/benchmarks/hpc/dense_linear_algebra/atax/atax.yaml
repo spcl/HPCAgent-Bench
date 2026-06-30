@@ -23,7 +23,7 @@ init:
   - x
   - A
   - out
-  generate: initialize
+  func_name: initialize
 array_args:
 - A
 - x

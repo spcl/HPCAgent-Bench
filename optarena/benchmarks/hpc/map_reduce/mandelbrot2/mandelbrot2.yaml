@@ -50,7 +50,7 @@ init:
   dtypes:
     Z_out: complex128
     N_out: int64
-  generate: initialize
+  func_name: initialize
 input_args:
 - xmin
 - xmax

@@ -25,7 +25,7 @@ init:
   dtypes:
     graph: int64
     level: int64
-  generate: initialize
+  func_name: initialize
 array_args:
 - graph
 - level

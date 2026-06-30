@@ -21,7 +21,7 @@ init:
   dtypes:
     seq: int32
     table: int32
-  generate: initialize
+  func_name: initialize
 array_args:
 - seq
 - table

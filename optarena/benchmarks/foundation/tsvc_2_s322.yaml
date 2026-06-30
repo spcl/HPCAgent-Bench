@@ -19,7 +19,7 @@ init:
     a: (LEN_1D,)
     b: (LEN_1D,)
     c: (LEN_1D,)
-  generate: initialize
+  func_name: initialize
 output_args:
 - a
 taxonomy:

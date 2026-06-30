@@ -26,7 +26,7 @@ init:
   - w
   - x
   - Lx
-  generate: initialize
+  func_name: initialize
 array_args:
 - src
 - dst

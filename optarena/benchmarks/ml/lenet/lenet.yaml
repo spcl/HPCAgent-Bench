@@ -39,7 +39,7 @@ init:
   - fc3b
   - out
   - C_before_fc1
-  generate: initialize
+  func_name: initialize
 array_args:
 - input
 - conv1

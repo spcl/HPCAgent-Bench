@@ -20,7 +20,7 @@ init:
   - N
   output_args:
   - u
-  generate: initialize
+  func_name: initialize
 array_args:
 - u
 output_args:

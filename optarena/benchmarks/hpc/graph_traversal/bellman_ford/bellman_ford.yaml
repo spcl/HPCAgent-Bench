@@ -18,7 +18,7 @@ init:
   output_args:
   - graph
   - dist
-  generate: initialize
+  func_name: initialize
 array_args:
 - graph
 - dist

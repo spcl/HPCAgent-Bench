@@ -33,7 +33,7 @@ init:
   arrays:
     x: (N,)
     y: (M,)
-  generate: initialize
+  func_name: initialize
 array_args:
 - A
 - x

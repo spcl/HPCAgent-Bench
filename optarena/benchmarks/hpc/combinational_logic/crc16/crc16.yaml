@@ -22,7 +22,7 @@ init:
     crc: int64
   scalars:
     poly: 4129
-  generate: initialize
+  func_name: initialize
 array_args:
 - data
 - crc

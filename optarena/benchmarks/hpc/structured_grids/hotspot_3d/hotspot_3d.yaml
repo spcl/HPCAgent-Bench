@@ -47,7 +47,7 @@ init:
   - temp
   - power
   - T
-  generate: initialize
+  func_name: initialize
 array_args:
 - temp
 - power

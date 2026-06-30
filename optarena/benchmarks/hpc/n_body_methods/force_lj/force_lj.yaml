@@ -21,7 +21,7 @@ init:
   output_args:
   - pos
   - force
-  generate: initialize
+  func_name: initialize
   shapes:
     pos: (N, 3)
     force: (N, 3)

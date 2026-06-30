@@ -17,7 +17,7 @@ init:
   - N
   output_args:
   - path
-  generate: initialize
+  func_name: initialize
 array_args:
 - path
 output_args:

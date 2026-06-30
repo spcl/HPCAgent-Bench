@@ -27,7 +27,7 @@ init:
   output_args:
   - x
   - out
-  generate: initialize
+  func_name: initialize
 array_args:
 - x
 - out

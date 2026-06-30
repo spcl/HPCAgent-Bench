@@ -31,7 +31,7 @@ init:
     z:
       shape: (N,)
       dtype: complex128
-  generate: initialize
+  func_name: initialize
 array_args:
 - x
 - y

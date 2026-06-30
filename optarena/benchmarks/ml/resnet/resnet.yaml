@@ -41,7 +41,7 @@ init:
   - conv2
   - conv3
   - out
-  generate: initialize
+  func_name: initialize
 array_args:
 - input
 - conv1

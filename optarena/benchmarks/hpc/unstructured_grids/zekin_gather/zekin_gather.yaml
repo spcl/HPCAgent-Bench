@@ -47,7 +47,7 @@ init:
     z_ekinh:
       shape: (NB, NLEV, NPROMA)
       dtype: float64
-  generate: initialize
+  func_name: initialize
 array_args:
 - e_bln
 - edge_idx

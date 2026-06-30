@@ -559,14 +559,15 @@ class BenchSpec:
         init_spec = None
         if bench.get("init"):
             init_raw = bench["init"]
-            # Unified surface (preferred): ``init.arrays`` = {name: {shape,
-            # dtype?, dist?}} for the DEFAULT generation path, and
-            # ``init.generate`` = the name of a user-provided generation
-            # function. Legacy keys (``shapes`` / ``dtypes`` / ``dists`` /
-            # ``func_name``) are still honoured so migration can be incremental;
-            # they seed the same internal fields (``dists`` is also how a parsed
-            # spec round-trips through ``legacy_bench_info_dict``). A bare string
-            # array entry is shorthand for ``{shape: <str>}``.
+            # Unified surface: ``init.arrays`` = {name: {shape, dtype?, dist?}}
+            # for the DEFAULT generation path, and ``init.func_name`` = the name
+            # of a user-provided generation function (the SINGLE canonical key;
+            # the old ``generate`` alias is rejected below). Legacy array keys
+            # (``shapes`` / ``dtypes`` / ``dists``) are still honoured so
+            # migration can be incremental; they seed the same internal fields
+            # (``dists`` is also how a parsed spec round-trips through
+            # ``legacy_bench_info_dict``). A bare string array entry is shorthand
+            # for ``{shape: <str>}``.
             shapes = dict(init_raw.get("shapes", {}))
             dtypes = dict(init_raw.get("dtypes", {}))
             dists: Dict[str, str] = dict(init_raw.get("dists", {}))
@@ -581,7 +582,10 @@ class BenchSpec:
                     dtypes[name] = entry["dtype"]
                 if entry.get("dist"):
                     dists[name] = entry["dist"]
-            func_name = init_raw.get("generate") or init_raw.get("func_name", "")
+            if "generate" in init_raw:
+                raise ValueError(f"{source}: init.generate is not a valid key; use init.func_name "
+                                 "(the single canonical name of the generation function)")
+            func_name = init_raw.get("func_name", "")
             # ``init.output_args`` (what initialize materialises) is optional too:
             # by default init produces every declared array and scalar.
             init_out = init_raw.get("output_args")

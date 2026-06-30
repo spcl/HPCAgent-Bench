@@ -43,7 +43,7 @@ init:
   - dx
   - dy
   - dt
-  generate: initialize
+  func_name: initialize
 array_args:
 - u
 - v

@@ -47,7 +47,7 @@ init:
     loglik:
       shape: (1,)
       dtype: float64
-  generate: initialize
+  func_name: initialize
 array_args:
 - init
 - trans

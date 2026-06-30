@@ -45,7 +45,7 @@ init:
   - weights
   - bias
   - out
-  generate: initialize
+  func_name: initialize
 array_args:
 - input
 - weights

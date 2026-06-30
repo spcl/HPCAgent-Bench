@@ -26,7 +26,7 @@ init:
   output_args:
   - image
   - out
-  generate: initialize
+  func_name: initialize
 array_args:
 - image
 - out

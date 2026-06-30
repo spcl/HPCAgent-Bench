@@ -19,7 +19,7 @@ init:
   - b
   - x
   - y
-  generate: initialize
+  func_name: initialize
 array_args:
 - A
 - b

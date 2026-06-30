@@ -29,7 +29,7 @@ init:
   - data
   - radius
   - out
-  generate: initialize
+  func_name: initialize
 array_args:
 - data
 - radius

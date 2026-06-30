@@ -36,7 +36,7 @@ parameters:
     batch: 16384
     order: 9
 init:
-  generate: initialize
+  func_name: initialize
   input_args:
   - batch
   - order
