@@ -169,6 +169,17 @@ def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optio
     # in-loop unroll already ran, so do one more pass once inlining settles.
     _unroll_const_list_loops(fn)
     ast.fix_missing_locations(fn)
+    # Re-fold ``local = param`` aliases EXPOSED BY INLINING. fv3_dycore's
+    # copy_corners(field) is ``f = field; f[corner] = f[...]`` -- an in-place
+    # corner fill THROUGH the alias. Inlining turns it into ``__inlN_f = q;
+    # __inlN_f[corner] = ...``; the first alias pass (which ran BEFORE inlining)
+    # never saw it, so the backend copies q into a fresh __inlN_f buffer and the
+    # corner writes are lost (q's halo stays stale -> the PPM stencils read garbage
+    # -> wrong fluxes). Re-running here folds __inlN_f -> q so the writes land on q.
+    _alias_sub_post = _SubstituteParamAliases(input_args)
+    _alias_sub_post.collect(fn)
+    _alias_sub_post.visit(fn)
+    ast.fix_missing_locations(fn)
     # Materialise module-level constant ARRAYS (lookup tables -- lulesh's
     # ``_VOLU_PERM = np.array([[...]], dtype=np.intp)``) into the kernel body as a
     # zeros local + element stores. Runs AFTER inlining so a table referenced only
