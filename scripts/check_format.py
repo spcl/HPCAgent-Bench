@@ -89,25 +89,30 @@ def classify(rel):
     return None
 
 
+# Each checker returns True when the file NEEDS formatting (an offender). With
+# fix=True it additionally applies the formatter in place -- so the caller's count
+# of "True"s is accurate in both modes (check: how many fail; fix: how many were
+# reformatted).
 def _needs_format_py(path, fix):
-    if fix:
-        return _run(["yapf", "-i", path]).returncode != 0  # error, not "changed"
-    out = _run(["yapf", "--diff", path])
-    return bool(out.stdout.strip())
+    needs = bool(_run(["yapf", "--diff", path]).stdout.strip())
+    if fix and needs:
+        _run(["yapf", "-i", path])
+    return needs
 
 
 def _needs_format_cpp(path, fix):
-    if fix:
-        return _run(["clang-format", "-i", path]).returncode != 0
-    return _run(["clang-format", "--dry-run", "-Werror", path]).returncode != 0
+    needs = _run(["clang-format", "--dry-run", "-Werror", path]).returncode != 0
+    if fix and needs:
+        _run(["clang-format", "-i", path])
+    return needs
 
 
 def _needs_format_fortran(path, fix):
     cfg = str(REPO_ROOT / ".fprettify.rc")
-    if fix:
-        return _run(["fprettify", "--config", cfg, path]).returncode != 0
-    out = _run(["fprettify", "--config", cfg, "--diff", path])
-    return bool(out.stdout.strip())
+    needs = bool(_run(["fprettify", "--config", cfg, "--diff", path]).stdout.strip())
+    if fix and needs:
+        _run(["fprettify", "--config", cfg, path])
+    return needs
 
 
 CHECKERS = {
