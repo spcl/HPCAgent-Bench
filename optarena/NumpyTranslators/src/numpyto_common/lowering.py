@@ -456,13 +456,21 @@ class _ScatterAtRewriter(ast.NodeTransformer):
             return func.value.attr
         return None
 
-    def _val_at(self, vals: ast.expr, k: str) -> ast.expr:
+    @staticmethod
+    def _index_of(iters: List[str]) -> ast.expr:
+        """A scalar subscript index over ``iters`` -- a single Name (1 axis) or a
+        Tuple of Names (multi-axis ``arr[k0, k1, ...]``)."""
+        if len(iters) == 1:
+            return ast.Name(id=iters[0], ctx=ast.Load())
+        return ast.Tuple(elts=[ast.Name(id=it, ctx=ast.Load()) for it in iters], ctx=ast.Load())
+
+    def _val_at(self, vals: ast.expr, iters: List[str]) -> ast.expr:
         if isinstance(vals, ast.Name):
             return ast.Subscript(value=ast.Name(id=vals.id, ctx=ast.Load()),
-                                 slice=ast.Name(id=k, ctx=ast.Load()), ctx=ast.Load())
+                                 slice=self._index_of(iters), ctx=ast.Load())
         if isinstance(vals, ast.UnaryOp) and isinstance(vals.op, ast.USub) \
                 and isinstance(vals.operand, ast.Name):
-            return ast.UnaryOp(op=ast.USub(), operand=self._val_at(vals.operand, k))
+            return ast.UnaryOp(op=ast.USub(), operand=self._val_at(vals.operand, iters))
         raise NotImplementedError("np.<op>.at value must be an array name or its negation")
 
     def visit_Expr(self, node: ast.Expr) -> ast.AST:
@@ -489,14 +497,22 @@ class _ScatterAtRewriter(ast.NodeTransformer):
         if not bound:
             raise NotImplementedError(f"np.<op>.at: unknown extent for index '{idx.id}'")
         self._n += 1
-        k = f"__sat{self._n}"
+        # Iterate EVERY axis of the index array (lulesh's nodelist is 2-D
+        # ``(numelem, 8)``), so the scatter is a scalar ``target[idx[k0,k1]] op=
+        # vals[k0,k1]`` -- not a leading-axis-only loop that leaves the trailing
+        # axes as unlowered slices. ``vals`` is indexed with the same iters
+        # (it broadcasts to the index shape for a 1-D target).
+        # 1-D index keeps the flat ``__sat{n}`` name (the common edge_laplacian
+        # case); a multi-D index (lulesh nodelist) suffixes one iter per axis.
+        iters = ([f"__sat{self._n}"] if len(bound) == 1
+                 else [f"__sat{self._n}_{d}" for d in range(len(bound))])
         idx_k = ast.Subscript(value=ast.Name(id=idx.id, ctx=ast.Load()),
-                              slice=ast.Name(id=k, ctx=ast.Load()), ctx=ast.Load())
-        val_k = self._val_at(vals, k)
+                              slice=self._index_of(iters), ctx=ast.Load())
+        val_k = self._val_at(vals, iters)
         if op in self._AUG:
             lhs = ast.Subscript(value=ast.Name(id=target.id, ctx=ast.Load()),
                                 slice=idx_k, ctx=ast.Store())
-            stmt = ast.AugAssign(target=lhs, op=self._AUG[op](), value=val_k)
+            stmt: ast.stmt = ast.AugAssign(target=lhs, op=self._AUG[op](), value=val_k)
         else:                                   # maximum / minimum -> t[i] = fn(t[i], v)
             lhs = ast.Subscript(value=ast.Name(id=target.id, ctx=ast.Load()),
                                 slice=idx_k, ctx=ast.Store())
@@ -505,12 +521,14 @@ class _ScatterAtRewriter(ast.NodeTransformer):
             stmt = ast.Assign(targets=[lhs], value=ast.Call(
                 func=ast.Name(id=self._FOLD[op], ctx=ast.Load()),
                 args=[cur, val_k], keywords=[]))
-        loop = ast.For(
-            target=ast.Name(id=k, ctx=ast.Store()),
-            iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()),
-                          args=[_const_or_name_token(bound[0])], keywords=[]),
-            body=[stmt], orelse=[])
-        return ast.copy_location(loop, node)
+        body: List[ast.stmt] = [stmt]
+        for it, ext in zip(reversed(iters), reversed(bound)):  # nest deepest-last
+            body = [ast.For(
+                target=ast.Name(id=it, ctx=ast.Store()),
+                iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()),
+                              args=[_const_or_name_token(ext)], keywords=[]),
+                body=body, orelse=[])]
+        return ast.copy_location(body[0], node)
 
     def _multi_index_scatter(self, node, op, target: ast.Name,
                              idx_tuple: ast.Tuple, vals: ast.expr) -> ast.AST:

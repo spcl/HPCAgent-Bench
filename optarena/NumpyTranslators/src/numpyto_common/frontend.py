@@ -123,6 +123,12 @@ def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optio
     _alias_sub.visit(fn)  # also drops no-op ``x = x`` self-assignments
     ast.fix_missing_locations(fn)
 
+    # Flatten helpers NESTED inside other top-level helpers first (lulesh's
+    # per-helper ``def c(a, i): return a[:, i]`` column shorthand). A helper that
+    # contains a nested def is rejected by _collect_inlinable_helpers (a
+    # FunctionDef is not an allowed mid statement) and would never inline -- a
+    # deadlock, since its nested def is only "exposed" by inlining the parent.
+    _flatten_nested_helpers(tree)
     # Inline helper calls to a FIXPOINT: a single pass only inlines the
     # outermost level (NodeTransformer does not re-visit freshly spliced-in
     # bodies), so a helper that itself calls helpers -- lulesh's
@@ -149,6 +155,12 @@ def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optio
         if not any(
                 isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in names for n in ast.walk(fn)):
             break
+    # Materialise module-level constant ARRAYS (lookup tables -- lulesh's
+    # ``_VOLU_PERM = np.array([[...]], dtype=np.intp)``) into the kernel body as a
+    # zeros local + element stores. Runs AFTER inlining so a table referenced only
+    # inside a helper (lulesh's _calc_volume_derivative) is now in the kernel body.
+    _materialize_const_arrays(tree, fn, input_args)
+    ast.fix_missing_locations(fn)
     # Normalise ``np.newaxis`` -> ``None`` AFTER inlining so any
     # helper-body references also get caught.
     _NewaxisToNone().visit(fn)
@@ -675,6 +687,114 @@ def _inline_module_constants(tree: ast.Module, fn: ast.FunctionDef, input_args: 
 
     _Sub().visit(fn)
     ast.fix_missing_locations(fn)
+
+
+_ARRAY_LITERAL_DTYPES = {
+    "intp": "int64", "int_": "int64", "int64": "int64", "int32": "int32",
+    "int8": "int8", "int16": "int16", "float64": "float64", "float32": "float32",
+    "float_": "float64", "double": "float64",
+}
+
+
+def _numeric_const(node: ast.AST):
+    """A plain int/float constant (incl. unary minus); else ``None``."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+        return node.value
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        v = _numeric_const(node.operand)
+        if v is None:
+            return None
+        return -v if isinstance(node.op, ast.USub) else +v
+    return None
+
+
+def _parse_array_literal(call: ast.Call):
+    """``np.array(<nested list of numeric literals>, dtype=...)`` ->
+    ``(shape_tuple, dtype_str, flat_values)`` or ``None``. Regular (rectangular)
+    nested ``ast.List`` only; values are int/float constants."""
+    if not (isinstance(call.func, ast.Attribute) and call.func.attr == "array"
+            and isinstance(call.func.value, ast.Name) and call.func.value.id in ("np", "numpy") and call.args):
+        return None
+
+    def _walk(node):
+        """Return (shape, flat_values, all_int) for a nested list / scalar."""
+        if isinstance(node, (ast.List, ast.Tuple)):
+            subs = [_walk(e) for e in node.elts]
+            if not subs or any(s is None for s in subs):
+                return None
+            shp0 = subs[0][0]
+            if any(s[0] != shp0 for s in subs):  # ragged -> reject
+                return None
+            flat = []
+            all_int = True
+            for s in subs:
+                flat.extend(s[1])
+                all_int = all_int and s[2]
+            return ((len(node.elts), ) + shp0, flat, all_int)
+        v = _numeric_const(node)
+        if v is None:
+            return None
+        return ((), [v], isinstance(v, int))
+
+    parsed = _walk(call.args[0])
+    if parsed is None or not parsed[0]:
+        return None
+    shape, flat, all_int = parsed
+    dtype = None
+    for kw in call.keywords:
+        if kw.arg == "dtype":
+            tag = kw.value.attr if isinstance(kw.value, ast.Attribute) else (
+                kw.value.id if isinstance(kw.value, ast.Name) else None)
+            dtype = _ARRAY_LITERAL_DTYPES.get(tag)
+    if dtype is None:
+        dtype = "int64" if all_int else "float64"
+    return shape, dtype, flat
+
+
+def _materialize_const_arrays(tree: ast.Module, fn: ast.FunctionDef, input_args: List[str]) -> None:
+    """Materialise module-level ``NAME = np.array(<nested numeric literal>, dtype=)``
+    lookup tables referenced in the kernel as a fresh ``NAME = np.zeros(shape, dt)``
+    local followed by per-element stores, so the downstream shape harvest / gather
+    machinery sees a known-shape int/float array (lulesh ``_VOLU_PERM``). Reuses
+    the existing zeros-local + scalar-store lowering -- no new emitter path."""
+    consts: Dict[str, Tuple] = {}
+    for stmt in tree.body:
+        if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
+                and isinstance(stmt.value, ast.Call)):
+            parsed = _parse_array_literal(stmt.value)
+            if parsed is not None:
+                consts[stmt.targets[0].id] = parsed
+    if not consts:
+        return
+    shadowed = {a.arg for a in fn.args.args} | set(input_args)
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    shadowed.add(t.id)
+    used = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+    prelude: List[ast.stmt] = []
+    for name, (shape, dtype, flat) in consts.items():
+        if name not in used or name in shadowed:
+            continue
+        shape_tuple = ast.Tuple(elts=[ast.Constant(value=d) for d in shape], ctx=ast.Load())
+        prelude.append(ast.Assign(
+            targets=[ast.Name(id=name, ctx=ast.Store())],
+            value=ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="zeros", ctx=ast.Load()),
+                           args=[shape_tuple],
+                           keywords=[ast.keyword(arg="dtype", value=ast.Attribute(
+                               value=ast.Name(id="np", ctx=ast.Load()), attr=dtype, ctx=ast.Load()))])))
+        # Row-major element stores ``NAME[i, j, ...] = const``.
+        import itertools
+        for idx, val in zip(itertools.product(*[range(d) for d in shape]), flat):
+            sl = (ast.Tuple(elts=[ast.Constant(value=i) for i in idx], ctx=ast.Load())
+                  if len(idx) > 1 else ast.Constant(value=idx[0]))
+            prelude.append(ast.Assign(
+                targets=[ast.Subscript(value=ast.Name(id=name, ctx=ast.Load()), slice=sl, ctx=ast.Store())],
+                value=ast.Constant(value=val)))
+    if prelude:
+        fn.body = prelude + fn.body
+        ast.fix_missing_locations(fn)
 
 
 class _PruneSparseDispatch(ast.NodeTransformer):
@@ -1381,6 +1501,35 @@ def _collect_inlinable_helpers(tree: ast.Module, kernel_fn: ast.FunctionDef) -> 
     return out
 
 
+def _flatten_nested_helpers(tree: ast.Module) -> None:
+    """Inline helpers NESTED inside other top-level helpers, in place.
+
+    lulesh's compute helpers each carry a one-line column shorthand
+    ``def c(a, i): return a[:, i]`` and call it (``x0 = c(x, 0)``). That nested
+    ``def`` makes the OUTER helper un-inlinable (a FunctionDef is not an allowed
+    mid statement in :func:`_collect_inlinable_helpers`), and it is never
+    "exposed" to the kernel-level fixpoint because the parent never inlines --
+    a deadlock. Inlining the nested defs INTO their parent (then dropping them)
+    leaves each outer helper nested-def-free, so the kernel-level fixpoint can
+    inline it normally. Iterated for helpers nested more than one level deep."""
+    for _ in range(16):
+        changed = False
+        for h in list(tree.body):
+            if not isinstance(h, ast.FunctionDef):
+                continue
+            if not any(isinstance(n, ast.FunctionDef) for n in h.body):
+                continue
+            inl = _collect_inlinable_helpers(tree, h)  # top-level + nested-in-h
+            if not inl:
+                continue
+            _HoistMultiStmtHelpers(inl).visit(h)
+            _InlineHelpers(inl).visit(h)
+            ast.fix_missing_locations(h)
+            changed = True
+        if not changed:
+            break
+
+
 class _HoistMultiStmtHelpers(ast.NodeTransformer):
     """Lift Form-3 helper Calls out of expression contexts so the
     multi-statement inliner can consume them via Assign-level visits.
@@ -1532,7 +1681,22 @@ class _InlineHelpers(ast.NodeTransformer):
                 ret_expr = ast.parse(ast.unparse(body[-1].value), mode="eval").body
                 ret_expr = renamer.visit(ret_expr)
                 ast.fix_missing_locations(ret_expr)
-                new_body.append(ast.Assign(targets=[node.targets[0]], value=ret_expr))
+                tgt = node.targets[0]
+                # A tuple-target multi-output helper (lulesh ``b, detJ =
+                # _calc_shape_fn_derivatives(..)`` whose body ends ``return b,
+                # volume``) must be DESTRUCTURED into per-element assigns -- a
+                # backend has no runtime tuple, so ``(b, detJ) = (x, y)`` would
+                # reach emit as an unlowerable Tuple. ``_`` elements are discarded.
+                if (isinstance(tgt, ast.Tuple) and isinstance(ret_expr, ast.Tuple)
+                        and len(tgt.elts) == len(ret_expr.elts)):
+                    for t_elt, v_elt in zip(tgt.elts, ret_expr.elts):
+                        if isinstance(t_elt, ast.Name) and t_elt.id == "_":
+                            continue
+                        a = ast.Assign(targets=[t_elt], value=v_elt)
+                        ast.fix_missing_locations(a)
+                        new_body.append(a)
+                else:
+                    new_body.append(ast.Assign(targets=[tgt], value=ret_expr))
                 return new_body
         return node
 
