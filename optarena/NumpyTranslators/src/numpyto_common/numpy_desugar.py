@@ -1480,6 +1480,139 @@ class _IntMatmulInline(ast.NodeTransformer):
         return self._hoist(node)
 
 
+def _is_transpose_expr(v: ast.AST) -> bool:
+    """``np.transpose(x, ...)`` / ``x.transpose(...)`` / ``x.T`` -- these produce a
+    non-contiguous view."""
+    return (_np_attr(v) == "transpose" or (isinstance(v, ast.Attribute) and v.attr == "T")
+            or (isinstance(v, ast.Call) and isinstance(v.func, ast.Attribute) and v.func.attr == "transpose"))
+
+
+def _noncontig_names(tree: ast.AST) -> set:
+    """Names bound to a non-contiguous view (a transpose, or a transpose chained
+    through another such name) -- to a fixpoint."""
+    nc: set = set()
+    for _ in range(6):
+        grew = False
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
+                v = node.value
+                bad = _is_transpose_expr(v) or (isinstance(v, ast.Name) and v.id in nc)
+                if bad and node.targets[0].id not in nc:
+                    nc.add(node.targets[0].id)
+                    grew = True
+        if not grew:
+            break
+    return nc
+
+
+class _ReshapeContiguousInline(ast.NodeTransformer):
+    """Wrap a reshape's array operand in ``np.ascontiguousarray`` when it is
+    non-contiguous (a transpose or a transpose-derived name) -- numba's reshape
+    requires a contiguous array (stockham's ``np.reshape(tmp_perm, (N,))`` where
+    ``tmp_perm = np.transpose(yv, ...)``). A no-op for already-contiguous inputs."""
+
+    def __init__(self, noncontig: set):
+        self.noncontig = noncontig
+        self.changed = False
+
+    def _noncontig(self, x: ast.AST) -> bool:
+        return (isinstance(x, ast.Name) and x.id in self.noncontig) or _is_transpose_expr(x)
+
+    def _wrap(self, x: ast.AST) -> ast.Call:
+        self.changed = True
+        acont = ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="ascontiguousarray", ctx=ast.Load())
+        return ast.Call(func=acont, args=[x], keywords=[])
+
+    def visit_Call(self, node: ast.Call):
+        self.generic_visit(node)
+        if _np_attr(node) == "reshape" and node.args and self._noncontig(node.args[0]):
+            node.args[0] = self._wrap(node.args[0])
+        elif (isinstance(node.func, ast.Attribute) and node.func.attr == "reshape"
+              and self._noncontig(node.func.value)):
+            node.func.value = self._wrap(node.func.value)
+        return node
+
+
+class _RepeatAxisHoister(ast.NodeTransformer):
+    """Replace ``np.repeat(x, m, axis=k)`` (constant axis, scalar count) with a
+    temp Name, emitting the gather loop ``out[..., j, ...] = x[..., j // m, ...]``
+    into ``self.pre`` (numpy repeats each slice ``m`` times consecutively along
+    ``axis``). numba rejects the ``axis=`` kwarg on np.repeat (stockham's
+    ``np.repeat(reshape(tmp, (R, R**i, 1)), R**(K-i-1), axis=2)``)."""
+
+    def __init__(self, ranks: Dict[str, int], ctr: int):
+        self.ranks = ranks
+        self.ctr = ctr
+        self.pre: List[ast.stmt] = []
+
+    def visit_Call(self, node: ast.Call):
+        self.generic_visit(node)
+        if _np_attr(node) != "repeat" or len(node.args) < 2:
+            return node
+        kw = {k.arg: k.value for k in node.keywords}
+        ax = kw.get("axis") or (node.args[2] if len(node.args) > 2 else None)
+        if not (isinstance(ax, ast.Constant) and isinstance(ax.value, int)):
+            return node  # no axis / non-constant -> leave verbatim (a clean skip)
+        x, m = node.args[0], node.args[1]
+        rank = _expr_rank(x, self.ranks)
+        if rank is None:
+            return node
+        k = ax.value % rank
+        p = f"__rp{self.ctr}"
+        self.ctr += 1
+        pre = []
+        if isinstance(x, ast.Name):
+            xid = x.id
+        else:
+            xid = f"{p}_x"
+            pre.append(f"{xid} = {ast.unparse(x)}")
+        ms = f"({ast.unparse(m)})"
+        dims = [(f"{xid}.shape[{d}] * {ms}" if d == k else f"{xid}.shape[{d}]") for d in range(rank)]
+        iters = [f"{p}_i{d}" for d in range(rank)]
+        out = f"{p}_o"
+        lines = pre + [f"{out} = np.empty(({', '.join(dims)},), {xid}.dtype)"]
+        deep = ""
+        for d in range(rank):
+            lines.append(f"{deep}for {iters[d]} in range({dims[d]}):")
+            deep += "    "
+        src_idx = ", ".join((f"{iters[k]} // {ms}" if d == k else iters[d]) for d in range(rank))
+        lines.append(f"{deep}{out}[{', '.join(iters)}] = {xid}[{src_idx}]")
+        self.pre.extend(ast.parse("\n".join(lines)).body)
+        return ast.copy_location(ast.Name(id=out, ctx=ast.Load()), node)
+
+
+class _RepeatAxisInline(ast.NodeTransformer):
+    """Hoist ``np.repeat(..., axis=k)`` out of any value-bearing statement."""
+
+    def __init__(self, ranks: Dict[str, int]):
+        self.ranks = ranks
+        self.changed = False
+        self._ctr = 0
+
+    def _hoist(self, node):
+        if getattr(node, "value", None) is None:
+            return node
+        h = _RepeatAxisHoister(self.ranks, self._ctr)
+        node.value = h.visit(node.value)
+        self._ctr = h.ctr
+        if h.pre:
+            self.changed = True
+            return h.pre + [node]
+        return node
+
+    def visit_Assign(self, node):
+        return self._hoist(node)
+
+    def visit_AugAssign(self, node):
+        return self._hoist(node)
+
+    def visit_Return(self, node):
+        return self._hoist(node)
+
+    def visit_Expr(self, node):
+        return self._hoist(node)
+
+
 def _as_matmul(node: ast.AST):
     """``a @ b`` / ``np.matmul(a, b)`` / ``np.dot(a, b)`` -> ``(a, b)`` else None."""
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.MatMult):
@@ -1621,6 +1754,7 @@ def desugar_for_python_backend(source: str, kir) -> str:
             seed.update(kir_seed)
         ranks = _rank_table(fn, seed)
         dtypes = _dtype_table(fn, kir_dtype_seed if is_kernel else {})
+        noncontig = _noncontig_names(fn)
         passes = [
             _ReshapeMatmulInline(ranks),
             _BatchedMatmulToLoop(ranks),
@@ -1635,6 +1769,8 @@ def desugar_for_python_backend(source: str, kir) -> str:
             _MaskedAssignToLoop(ranks, dtypes),
             _AddAtInline(ranks),
             _HistogramInline(ranks),
+            _RepeatAxisInline(ranks),
+            _ReshapeContiguousInline(noncontig),
             _IntMatmulInline(ranks, dtypes),
         ]
         for p in passes:

@@ -974,3 +974,26 @@ def test_issparse_folds_to_false_for_dense_abi():
                                                             ("B", "float64", ("N", "N")),
                                                             ("out", "float64", ("N", "N"))], [], ["A", "B", "out"]))
     assert "issparse" not in out and "False" in out
+
+
+def test_repeat_axis_lowers_to_gather_loop():
+    """np.repeat(x, m, axis=k) -> out[..., j, ...] = x[..., j // m, ...] (numba
+    rejects the axis= kwarg on np.repeat -- stockham)."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    src = ("def k(x, out):\n"
+           "    out[:] = np.repeat(x, M, axis=2)\n")
+    out = desugar_for_python_backend(src, _py_kir("k", src, [("x", "float64", ("A", "B", "C")),
+                                                            ("out", "float64", ("A", "B", "D"))], ["M"], ["x", "out"]))
+    assert "np.repeat" not in out and "// " in out and "for " in out
+
+
+def test_reshape_of_transpose_forced_contiguous():
+    """np.reshape of a transpose (non-contiguous) gets np.ascontiguousarray;
+    numba's reshape requires contiguous (stockham's reshape(tmp_perm, (N,)))."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    src = ("def k(y, out):\n"
+           "    perm = np.transpose(y, axes=(1, 0))\n"
+           "    out[:] = np.reshape(perm, (N,))\n")
+    out = desugar_for_python_backend(src, _py_kir("k", src, [("y", "float64", ("A", "B")),
+                                                            ("out", "float64", ("N",))], ["N"], ["y", "out"]))
+    assert "ascontiguousarray(perm)" in out
