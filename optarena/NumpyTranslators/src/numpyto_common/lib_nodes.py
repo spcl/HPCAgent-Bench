@@ -1879,26 +1879,32 @@ def expand_clip(target: ast.expr, args: List[ast.expr],
 
 def expand_where(target: ast.expr, args: List[ast.expr],
                  shape_table: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
-    """``out = np.where(mask, a, b)`` -> elementwise ternary."""
-    if len(args) != 3 or not isinstance(args[0], ast.Name):
-        raise NotImplementedError("np.where needs Name mask + 2 args")
-    mask = args[0]
-    shape = shape_table.get(mask.id)
+    """``out = np.where(cond, a, b)`` -> elementwise ternary.
+
+    ``cond`` may be a bare mask Name OR a whole-array COMPARISON
+    (``sel == XI_M_SYMM``, lulesh's BC selection); ``a`` / ``b`` may be a Name
+    or any whole-array expression (incl. a fancy gather ``delv[ielem]``). Every
+    operand is scalarised recursively at the iters.
+    """
+    if len(args) != 3:
+        raise NotImplementedError("np.where needs cond + 2 args")
+    # Result shape: the hoister registered the target temp's shape; fall back to
+    # the mask Name's own shape when ``where`` is assigned directly.
+    shape = shape_table.get(target.id) if isinstance(target, ast.Name) else None
+    if not shape and isinstance(args[0], ast.Name):
+        shape = shape_table.get(args[0].id)
     if not shape:
         raise NotImplementedError("np.where: shape unknown")
     iters = [f"__r{i}" for i in range(len(shape))]
     idx = (_name(iters[0]) if len(iters) == 1 else
            ast.Tuple(elts=[_name(i) for i in iters], ctx=ast.Load()))
-    m_sub = ast.Subscript(value=_name(mask.id), slice=idx, ctx=ast.Load())
-    # A branch may be a bare array Name OR a whole-array EXPRESSION
-    # (``difcoef * area_c * lap``): scalarise it recursively at the iters so
-    # every array operand inside is subscripted, not just a top-level Name.
     iter_nodes = [_name(i) for i in iters]
 
     def maybe_sub(arg):
         return _scalarize_at_iters(arg, iter_nodes, shape_table)
 
-    ternary = ast.IfExp(test=m_sub, body=maybe_sub(args[1]), orelse=maybe_sub(args[2]))
+    ternary = ast.IfExp(test=maybe_sub(args[0]), body=maybe_sub(args[1]),
+                        orelse=maybe_sub(args[2]))
     body = [ast.Assign(
         targets=[ast.Subscript(value=_name(target.id), slice=idx, ctx=ast.Store())],
         value=ternary)]

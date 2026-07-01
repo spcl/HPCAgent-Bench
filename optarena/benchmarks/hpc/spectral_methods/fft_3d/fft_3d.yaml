@@ -59,4 +59,3 @@ taxonomy:
   subtrack: fft_3d
   dwarf: spectral_methods
   domain: Physics
-norm_error: 1.0e-05

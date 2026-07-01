@@ -734,3 +734,148 @@ def test_max_min_propagate_nan_like_python(backend):
     assert out == "1 1 1 1", (
         f"{backend} max/min NaN order diverges from Python's builtin: got {out!r} "
         f"(expected '1 1 1 1' = max(nan,x)->nan, max(x,nan)->x, min likewise)")
+
+
+# --------------------------------------------------------------------------- #
+# N. numba/pythran desugar of np.fft.* / np.mgrid + the pythran export order.   #
+#    numba has no np.fft at all; pythran has 1-D fft/ifft but not fftn/ifftn    #
+#    nor np.mgrid. ``desugar_for_python_backend`` lowers these to plain loops/  #
+#    broadcasts both backends compile; the #pythran export must list types in   #
+#    the verbatim def-signature order, not the alphabetical ABI param_order.    #
+# --------------------------------------------------------------------------- #
+def _py_kir(name, src, arrays, syms, input_args):
+    """Minimal KernelIR for the source-level python-backend passes."""
+    from numpyto_common.ir import ArrayDesc, KernelIR, SymbolDesc
+    tree = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef))
+    return KernelIR(tree=tree, kernel_name=name, input_args=input_args,
+                    symbols=[SymbolDesc(s) for s in syms],
+                    arrays=[ArrayDesc(*a) for a in arrays], scalars=[])
+
+
+def test_fft_desugar_lowers_npfft_to_dft_loops():
+    """``np.fft.fft``/``ifft`` -> a naive-DFT loop nest (no np.fft survives;
+    numba cannot type np.fft at all)."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    src = ("def k(x, y, z):\n"
+           "    y[:] = np.fft.fft(x)\n"
+           "    z[:] = np.fft.ifft(y)\n")
+    arrays = [("x", "complex128", ("N",)), ("y", "complex128", ("N",)), ("z", "complex128", ("N",))]
+    out = desugar_for_python_backend(src, _py_kir("k", src, arrays, [], ["x", "y", "z"]))
+    assert "np.fft" not in out                       # intrinsic lowered away
+    assert "np.exp(" in out and "for " in out        # explicit DFT loop nest
+    # ifft divides the accumulated output by N (a second statement reading the
+    # store-target back) -- the forward transform has no such self-divide.
+    assert "] / " in out
+
+
+def test_mgrid_desugar_to_arange_broadcast():
+    """``i, j = np.mgrid[0:R, 0:R]`` -> arange reshaped + broadcast (pythran has
+    no np.mgrid)."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    src = ("def k(R, out):\n"
+           "    i, j = np.mgrid[0:R, 0:R]\n"
+           "    out[:] = i * j\n")
+    out = desugar_for_python_backend(src, _py_kir("k", src, [("out", "int64", ("R", "R"))], ["R"], ["R", "out"]))
+    assert "np.mgrid" not in out
+    assert out.count("np.arange(") == 2 and "reshape(" in out
+
+
+def test_pythran_export_uses_signature_order_not_abi():
+    """#pythran export types follow the def signature (``input_args``), NOT the
+    alphabetical-then-scalars ABI ``param_order`` -- otherwise fft_3d's scalar
+    ``niter`` is typed as a complex array (the arg-order scramble that made
+    ``range(1, niter + 1)`` a complex-array expression)."""
+    from numpyto_pythran.emit import emit_pythran
+    src = "def fft_3d(u0, twiddle, niter, chk):\n    chk[0] = u0[0, 0, 0] + niter\n"
+    arrays = [("u0", "complex128", ("nx", "ny", "nz")), ("twiddle", "float64", ("nx", "ny", "nz")),
+              ("chk", "complex128", ("niter",))]
+    kir = _py_kir("fft_3d", src, arrays, ["niter"], ["u0", "twiddle", "niter", "chk"])
+    export = next(l for l in emit_pythran(src, kir).splitlines() if l.startswith("#pythran export"))
+    assert "fft_3d(complex128[:,:,:], float64[:,:,:], int, complex128[:])" in export
+
+
+@pytest.mark.parametrize("kernel", ["fft_1d", "fft_3d"])
+def test_fft_numba_pythran_e2e(kernel):
+    """fft_1d/fft_3d run bit-close to numpy on numba (np.fft lowered) AND pythran
+    (fftn lowered + export in signature order); fft_3d also exercises the
+    multi-array fancy gather ``u2[q, r, s]``."""
+    no = _oracle()
+    status = no.run_kernel(kernel, preset="S", precision="fp64", seed=0)
+    for b in ("numba", "pythran"):
+        s = status.get(b)
+        if s == "skip:not-installed":
+            continue
+        assert s == "ok", f"{kernel} {b}: {s}"
+
+
+# --------------------------------------------------------------------------- #
+# O. numba desugars: axis reductions, masked assignment, ufunc.outer, call     #
+#    fixups. numba rejects ``axis=`` on mean/std/min/max/argmax, 2-D bool-mask  #
+#    indexing, ufunc.outer, np.ndarray/linspace(dtype=)/abs(array).            #
+# --------------------------------------------------------------------------- #
+def test_reduce_axis_desugar_lowers_mean_min():
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    src = ("def k(data, mn, mx):\n"
+           "    mn[:] = np.mean(data, axis=0)\n"
+           "    mx[:] = np.max(data, axis=0)\n")
+    arrays = [("data", "float64", ("M", "N")), ("mn", "float64", ("N",)), ("mx", "float64", ("N",))]
+    out = desugar_for_python_backend(src, _py_kir("k", src, arrays, [], ["data", "mn", "mx"]))
+    assert "np.mean" not in out and "np.max" not in out
+    assert "for " in out and "/ " in out  # explicit mean loop divides by N
+
+
+def test_masked_assign_lowers_to_guarded_loop_not_where():
+    """Masked assignment -> a guarded loop (NOT np.where): the RHS must be
+    computed only on selected elements (mandelbrot freezes diverged points to
+    avoid overflow; force_lj divides only where rsq > 0)."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    src = ("def k(rsq, out):\n"
+           "    in_range = (rsq < 1.0) & (rsq > 0.0)\n"
+           "    out[in_range] = 1.0 / rsq[in_range]\n")
+    out = desugar_for_python_backend(src, _py_kir("k", src, [("rsq", "float64", ("N", "N")),
+                                                             ("out", "float64", ("N", "N"))], [], ["rsq", "out"]))
+    assert "np.where" not in out               # a loop, not np.where (overflow-safe)
+    assert "if " in out and "for " in out      # guarded per-element write
+    assert "out[in_range]" not in out          # mask indexing removed
+
+
+def test_ufunc_outer_and_call_fixups():
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    src = ("def k(a, tmp, out):\n"
+           "    tmp[:] = np.ndarray((a.shape[0],), dtype=a.dtype)\n"
+           "    out[:] = np.add.outer(a, a)\n")
+    out = desugar_for_python_backend(src, _py_kir("k", src, [("a", "float64", ("N",)),
+                                                            ("tmp", "float64", ("N",)),
+                                                            ("out", "float64", ("N", "N"))], [], ["a", "tmp", "out"]))
+    assert "np.ndarray(" not in out and "np.empty(" in out   # ndarray -> empty
+    assert "np.add.outer" not in out and "reshape(" in out   # outer -> reshape+broadcast
+
+
+def test_add_at_scatter_and_mixed_gather():
+    """np.add.at -> a scatter loop (accumulates duplicate indices); a mixed
+    2-D-array + scalar fancy gather -> a gather loop (numba supports neither)."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    src = ("def k(A, i2, j2, jk, out, Lx, src, flux):\n"
+           "    out[:] = A[i2, jk, j2]\n"
+           "    np.add.at(Lx, src, flux)\n")
+    arrays = [("A", "float64", ("M", "L", "M")), ("i2", "int64", ("P", "Q")), ("j2", "int64", ("P", "Q")),
+              ("out", "float64", ("P", "Q")), ("Lx", "float64", ("N",)), ("src", "int64", ("E",)),
+              ("flux", "float64", ("E",))]
+    out = desugar_for_python_backend(src, _py_kir("k", src, arrays, ["jk"],
+                                                  ["A", "i2", "j2", "jk", "out", "Lx", "src", "flux"]))
+    assert "A[i2, jk, j2]" not in out and "np.add.at" not in out
+    assert "np.empty(" in out and "+=" in out and "for " in out
+
+
+def test_reduce_axis_method_form_and_helper_function():
+    """``levmask.any(axis=0)`` (method form) lowers, and a reduction in a HELPER
+    function is reached (its param ranks inferred from the call site)."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    src = ("def helper(m):\n"
+           "    return m.any(axis=0)\n"
+           "def k(mask, out):\n"
+           "    out[:] = helper(mask)\n")
+    out = desugar_for_python_backend(src, _py_kir("k", src, [("mask", "bool", ("R", "C")),
+                                                            ("out", "bool", ("C",))], [], ["mask", "out"]))
+    assert ".any(axis" not in out and "np.any" not in out   # method-form reduction lowered in the helper
+    assert "for " in out

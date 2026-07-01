@@ -209,6 +209,10 @@ class _FortranBodyEmitter(BaseEmitter):
             "float32": "c_float",
             "float16": "c_float"
         }.get(vars(kir.tree).get("float_precision", "float64"), "c_double")
+        # libm functions Fortran lacks an intrinsic for, called through a bind(C)
+        # interface so the result is bit-identical to the C backend (and numpy,
+        # which also uses libm) -- collected here, declared in the spec part.
+        self._used_libm: Set[Tuple[str, str]] = set()
 
     def _emit_for(self, node: ast.For, indent: str) -> str:
         target = node.target
@@ -428,12 +432,30 @@ class _FortranBodyEmitter(BaseEmitter):
                         f"size({t}, {i + 1}) /= ({d})"
                         for i, d in enumerate(rev_shape))
                         if rev_shape else f"size({t}) /= 1")
-                    return (f"{indent}if (.not. allocated({t})) then\n"
-                            f"{indent}    allocate({t}({dims}))\n"
-                            f"{indent}else if ({realloc}) then\n"
-                            f"{indent}    deallocate({t})\n"
-                            f"{indent}    allocate({t}({dims}))\n"
-                            f"{indent}end if")
+                    alloc = (f"{indent}if (.not. allocated({t})) then\n"
+                             f"{indent}    allocate({t}({dims}))\n"
+                             f"{indent}else if ({realloc}) then\n"
+                             f"{indent}    deallocate({t})\n"
+                             f"{indent}    allocate({t}({dims}))\n"
+                             f"{indent}end if")
+                    # An ALLOCATABLE ``np.zeros`` / ``np.ones`` must ALSO be filled
+                    # after allocation -- Fortran ``allocate`` does NOT initialise
+                    # the memory (the C path memsets), so without this the array is
+                    # read as heap garbage (lulesh's node-normal accumulator ``pf =
+                    # np.zeros((n,8,3))`` then ``pf[:,k,:] += ..``). The fixed-bound
+                    # path below already fills; the inline-allocate path skipped it.
+                    # The ``__reassign__`` sentinel (a self-referential reset the
+                    # following loop overwrites/reads) must NOT be re-filled.
+                    is_reassign = any(isinstance(a, ast.Constant) and a.value == "__reassign__"
+                                      for a in node.value.args)
+                    if not is_reassign:
+                        kind = vars(self.kir.tree).get("zeros_fills", {}).get(target.id)
+                        is_logical = target.id in vars(self).get("_logical_array_locals", set())
+                        if kind in ("zeros", "zeros_like"):
+                            alloc += f"\n{indent}{t} = {'.false.' if is_logical else '0'}"
+                        elif kind in ("ones", "ones_like"):
+                            alloc += f"\n{indent}{t} = {'.true.' if is_logical else '1'}"
+                    return alloc
                 # A ``__reassign__`` marker -- the lowering's no-op sentinel for a
                 # whole-array reassignment ``X = f(...)`` immediately followed by a
                 # per-element loop that FULLY overwrites X -- must NOT be re-zeroed:
@@ -727,7 +749,30 @@ class _FortranBodyEmitter(BaseEmitter):
             if ktag:
                 lit = f"{branch.value}_{self._int_kind_selector(ktag)}"
                 return f"({lit})" if branch.value < 0 else lit
+            # The partner branch is REAL: merge() is strict on TYPE, so an integer
+            # literal beside a real branch must be emitted as a real of the kernel
+            # float kind -- ``np.where(cond, 0, real_arr)`` -> ``merge(0.0_c_double,
+            # real_arr, ..)`` (hdiff). C's ternary promotes silently; Fortran does not.
+            if not self._expr_is_integer(partner):
+                lit = f"{branch.value}.0_{self._rk}"
+                return f"({lit})" if branch.value < 0 else lit
         return self.emit_expr(branch)
+
+    def _expr_is_integer(self, e: ast.AST) -> bool:
+        """True if ``e`` is an integer-typed Fortran expression (so a merge()
+        partner literal should be int-kinded, not real-promoted)."""
+        if isinstance(e, ast.Constant):
+            return isinstance(e.value, int) and not isinstance(e.value, bool)
+        if isinstance(e, ast.Name):
+            return self._name_int_kind(e.id) is not None
+        if isinstance(e, ast.Subscript):
+            base = e.value
+            return isinstance(base, ast.Name) and self._name_int_kind(base.id) is not None
+        if isinstance(e, ast.UnaryOp):
+            return self._expr_is_integer(e.operand)
+        if isinstance(e, ast.BinOp) and not isinstance(e.op, ast.Div):
+            return self._expr_is_integer(e.left) and self._expr_is_integer(e.right)
+        return False
 
     def _emit_subscript(self, node: ast.Subscript) -> str:
         # Boolean-mask indexing ``arr[mask]`` -> Fortran ``PACK(arr,
@@ -894,10 +939,17 @@ class _FortranBodyEmitter(BaseEmitter):
                 rk = self._rk
                 return (f"(merge(1.0_{rk}, 0.0_{rk}, ({x}) > 0) - "
                         f"merge(1.0_{rk}, 0.0_{rk}, ({x}) < 0))")
-            # libm unary funcs Fortran lacks -> inline expression (literal
-            # kinds follow the kernel float precision).
+            # libm unary funcs Fortran lacks an intrinsic for (cbrt / exp2 / log2
+            # / expm1 / log1p). Emit a bind(C) call to the SAME libm the C backend
+            # and numpy use, so the result is bit-identical -- not an expression
+            # approximation. ``x**(1/3)`` differs from libm cbrt in ~57% of inputs;
+            # ``exp(x)-1`` / ``log(1+x)`` lose all precision for small x where
+            # expm1/log1p exist precisely. gfortran's own intrinsics (sin/cos/exp/
+            # ...) already resolve to libm bit-for-bit, so only these five route here.
             if fn in _FORTRAN_FN_EXPR and len(node.args) == 1:
-                return "(" + _FORTRAN_FN_EXPR[fn].format(a=self.emit_expr(node.args[0]), rk=self._rk) + ")"
+                libm = fn if self._rk == "c_double" else fn + "f"
+                self._used_libm.add((libm, self._rk))
+                return f"{libm}({self.emit_expr(node.args[0])})"
             # Integer-returning CONVERSIONS (int / floor / ceil -> INT / FLOOR /
             # CEILING) default to the int32 KIND in Fortran; pin them to the int64
             # ABI kind so the result does not clash with int64 operands (azimint
@@ -1858,6 +1910,20 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, dtype_override: O
         dealloc_lines = [f"    deallocate({n})" for n, _, _ in allocatable_locals]
         body = "\n".join(alloc_lines) + "\n" + body + "\n" + "\n".join(dealloc_lines)
 
+    # bind(C) interface block for any libm functions Fortran lacks (cbrt/exp2/
+    # log2/expm1/log1p) -- declared so the body's ``cbrt(x)`` calls resolve to
+    # the C library (linked via -lm), bit-identical to the C/numpy result.
+    libm_iface = ""
+    if body_emitter._used_libm:
+        lines = ["    interface"]
+        for libm, rk in sorted(body_emitter._used_libm):
+            lines.append(f'        pure real({rk}) function {libm}(x) bind(C, name="{libm}")')
+            lines.append(f"            import :: {rk}")
+            lines.append(f"            real({rk}), value :: x")
+            lines.append(f"        end function {libm}")
+        lines.append("    end interface")
+        libm_iface = "\n".join(lines)
+
     return _format_subroutine(
         name=name,
         params=param_names,
@@ -1865,6 +1931,7 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, dtype_override: O
         iter_decls=iter_decls,
         locals_block=locals_block,
         body=body,
+        interface_block=libm_iface,
     )
 
 
@@ -2187,15 +2254,16 @@ def _collect_for_targets(stmts: List[ast.stmt]) -> Set[str]:
 
 
 def _format_subroutine(name: str, params: List[str], decls: List[str], iter_decls: List[str], locals_block: List[str],
-                       body: str) -> str:
+                       body: str, interface_block: str = "") -> str:
     param_list = ", ".join(params)
     decl_block = "\n".join(f"    {d}" for d in decls)
     iter_block = "\n".join(iter_decls)
     locals_block_text = "\n".join(locals_block)
+    iface = (interface_block + "\n") if interface_block else ""
     return f"""\
 subroutine {name}({param_list}) bind(C, name="{name}")
     use, intrinsic :: iso_c_binding
-{decl_block}
+{iface}{decl_block}
 {iter_block}
 {locals_block_text}
     integer(c_int64_t) :: t1_, t2_, rate_

@@ -123,6 +123,12 @@ def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optio
     _alias_sub.visit(fn)  # also drops no-op ``x = x`` self-assignments
     ast.fix_missing_locations(fn)
 
+    # Flatten helpers NESTED inside other top-level helpers first (lulesh's
+    # per-helper ``def c(a, i): return a[:, i]`` column shorthand). A helper that
+    # contains a nested def is rejected by _collect_inlinable_helpers (a
+    # FunctionDef is not an allowed mid statement) and would never inline -- a
+    # deadlock, since its nested def is only "exposed" by inlining the parent.
+    _flatten_nested_helpers(tree)
     # Inline helper calls to a FIXPOINT: a single pass only inlines the
     # outermost level (NodeTransformer does not re-visit freshly spliced-in
     # bodies), so a helper that itself calls helpers -- lulesh's
@@ -131,6 +137,11 @@ def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optio
     # round re-collects (so a helper-local ``def c`` exposed by inlining its
     # parent becomes collectable) and re-inlines module constants (their
     # references now living in the spliced-in helper bodies).
+    # Counters shared across all fixpoint iterations so the ``__inl<N>_`` /
+    # ``__hcall<N>`` prefixes stay globally unique (a per-iteration reset would
+    # let a nested helper inlined later collide with an outer one inlined earlier).
+    inl_counter: List[int] = [0]
+    hcall_counter: List[int] = [0]
     for _ in range(64):
         helpers = _collect_inlinable_helpers(tree, fn)
         if not helpers:
@@ -141,14 +152,40 @@ def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optio
         # ``relu(conv2d(input, w) + b)`` becomes
         # ``__hcall0 = conv2d(input, w); relu(__hcall0 + b)``; the _InlineHelpers
         # pass then inlines the hoisted call via its visit_Assign path.
-        _HoistMultiStmtHelpers(helpers).visit(fn)
-        _InlineHelpers(helpers).visit(fn)
+        # Unroll ``for x in [<const tuples>]: body`` (lulesh face-node loops)
+        # BEFORE inlining so the per-iteration void-helper calls (``_sum_face_normal
+        # (.., *f)``) become concrete statements the inliner can splice.
+        _unroll_const_list_loops(fn)
+        _HoistMultiStmtHelpers(helpers, hcall_counter).visit(fn)
+        _InlineHelpers(helpers, inl_counter).visit(fn)
         ast.fix_missing_locations(fn)
         _inline_module_constants(tree, fn, input_args)
         # Done when no call to a (still-inlinable) helper survives in the body.
         if not any(
                 isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in names for n in ast.walk(fn)):
             break
+    # Final unroll: the LAST inline round can splice in fresh ``for nk in
+    # (n0,n1,n2,n3)`` tuple-literal loops (lulesh _sum_face_normal) after the
+    # in-loop unroll already ran, so do one more pass once inlining settles.
+    _unroll_const_list_loops(fn)
+    ast.fix_missing_locations(fn)
+    # Re-fold ``local = param`` aliases EXPOSED BY INLINING. fv3_dycore's
+    # copy_corners(field) is ``f = field; f[corner] = f[...]`` -- an in-place
+    # corner fill THROUGH the alias. Inlining turns it into ``__inlN_f = q;
+    # __inlN_f[corner] = ...``; the first alias pass (which ran BEFORE inlining)
+    # never saw it, so the backend copies q into a fresh __inlN_f buffer and the
+    # corner writes are lost (q's halo stays stale -> the PPM stencils read garbage
+    # -> wrong fluxes). Re-running here folds __inlN_f -> q so the writes land on q.
+    _alias_sub_post = _SubstituteParamAliases(input_args)
+    _alias_sub_post.collect(fn)
+    _alias_sub_post.visit(fn)
+    ast.fix_missing_locations(fn)
+    # Materialise module-level constant ARRAYS (lookup tables -- lulesh's
+    # ``_VOLU_PERM = np.array([[...]], dtype=np.intp)``) into the kernel body as a
+    # zeros local + element stores. Runs AFTER inlining so a table referenced only
+    # inside a helper (lulesh's _calc_volume_derivative) is now in the kernel body.
+    _materialize_const_arrays(tree, fn, input_args)
+    ast.fix_missing_locations(fn)
     # Normalise ``np.newaxis`` -> ``None`` AFTER inlining so any
     # helper-body references also get caught.
     _NewaxisToNone().visit(fn)
@@ -659,10 +696,22 @@ def _inline_module_constants(tree: ast.Module, fn: ast.FunctionDef, input_args: 
 
     consts: Dict[str, Any] = {}
     for stmt in tree.body:
-        if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
+        if not isinstance(stmt, ast.Assign) or len(stmt.targets) != 1:
+            continue
+        tgt = stmt.targets[0]
+        if isinstance(tgt, ast.Name):
             val = _const_value(stmt.value)
-            if val is not None and stmt.targets[0].id not in shadowed:
-                consts[stmt.targets[0].id] = val
+            if val is not None and tgt.id not in shadowed:
+                consts[tgt.id] = val
+        # Tuple-unpacking of constants ``A, B, C = c1, c2, c3`` -- lulesh's BC
+        # mask flags (``XI_M, XI_M_SYMM, XI_M_FREE = 0x003, 0x001, 0x002``).
+        elif (isinstance(tgt, ast.Tuple) and isinstance(stmt.value, ast.Tuple)
+              and len(tgt.elts) == len(stmt.value.elts)):
+            for sub, v in zip(tgt.elts, stmt.value.elts):
+                if isinstance(sub, ast.Name):
+                    val = _const_value(v)
+                    if val is not None and sub.id not in shadowed:
+                        consts[sub.id] = val
     if not consts:
         return
 
@@ -675,6 +724,114 @@ def _inline_module_constants(tree: ast.Module, fn: ast.FunctionDef, input_args: 
 
     _Sub().visit(fn)
     ast.fix_missing_locations(fn)
+
+
+_ARRAY_LITERAL_DTYPES = {
+    "intp": "int64", "int_": "int64", "int64": "int64", "int32": "int32",
+    "int8": "int8", "int16": "int16", "float64": "float64", "float32": "float32",
+    "float_": "float64", "double": "float64",
+}
+
+
+def _numeric_const(node: ast.AST):
+    """A plain int/float constant (incl. unary minus); else ``None``."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+        return node.value
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        v = _numeric_const(node.operand)
+        if v is None:
+            return None
+        return -v if isinstance(node.op, ast.USub) else +v
+    return None
+
+
+def _parse_array_literal(call: ast.Call):
+    """``np.array(<nested list of numeric literals>, dtype=...)`` ->
+    ``(shape_tuple, dtype_str, flat_values)`` or ``None``. Regular (rectangular)
+    nested ``ast.List`` only; values are int/float constants."""
+    if not (isinstance(call.func, ast.Attribute) and call.func.attr == "array"
+            and isinstance(call.func.value, ast.Name) and call.func.value.id in ("np", "numpy") and call.args):
+        return None
+
+    def _walk(node):
+        """Return (shape, flat_values, all_int) for a nested list / scalar."""
+        if isinstance(node, (ast.List, ast.Tuple)):
+            subs = [_walk(e) for e in node.elts]
+            if not subs or any(s is None for s in subs):
+                return None
+            shp0 = subs[0][0]
+            if any(s[0] != shp0 for s in subs):  # ragged -> reject
+                return None
+            flat = []
+            all_int = True
+            for s in subs:
+                flat.extend(s[1])
+                all_int = all_int and s[2]
+            return ((len(node.elts), ) + shp0, flat, all_int)
+        v = _numeric_const(node)
+        if v is None:
+            return None
+        return ((), [v], isinstance(v, int))
+
+    parsed = _walk(call.args[0])
+    if parsed is None or not parsed[0]:
+        return None
+    shape, flat, all_int = parsed
+    dtype = None
+    for kw in call.keywords:
+        if kw.arg == "dtype":
+            tag = kw.value.attr if isinstance(kw.value, ast.Attribute) else (
+                kw.value.id if isinstance(kw.value, ast.Name) else None)
+            dtype = _ARRAY_LITERAL_DTYPES.get(tag)
+    if dtype is None:
+        dtype = "int64" if all_int else "float64"
+    return shape, dtype, flat
+
+
+def _materialize_const_arrays(tree: ast.Module, fn: ast.FunctionDef, input_args: List[str]) -> None:
+    """Materialise module-level ``NAME = np.array(<nested numeric literal>, dtype=)``
+    lookup tables referenced in the kernel as a fresh ``NAME = np.zeros(shape, dt)``
+    local followed by per-element stores, so the downstream shape harvest / gather
+    machinery sees a known-shape int/float array (lulesh ``_VOLU_PERM``). Reuses
+    the existing zeros-local + scalar-store lowering -- no new emitter path."""
+    consts: Dict[str, Tuple] = {}
+    for stmt in tree.body:
+        if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
+                and isinstance(stmt.value, ast.Call)):
+            parsed = _parse_array_literal(stmt.value)
+            if parsed is not None:
+                consts[stmt.targets[0].id] = parsed
+    if not consts:
+        return
+    shadowed = {a.arg for a in fn.args.args} | set(input_args)
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    shadowed.add(t.id)
+    used = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+    prelude: List[ast.stmt] = []
+    for name, (shape, dtype, flat) in consts.items():
+        if name not in used or name in shadowed:
+            continue
+        shape_tuple = ast.Tuple(elts=[ast.Constant(value=d) for d in shape], ctx=ast.Load())
+        prelude.append(ast.Assign(
+            targets=[ast.Name(id=name, ctx=ast.Store())],
+            value=ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="zeros", ctx=ast.Load()),
+                           args=[shape_tuple],
+                           keywords=[ast.keyword(arg="dtype", value=ast.Attribute(
+                               value=ast.Name(id="np", ctx=ast.Load()), attr=dtype, ctx=ast.Load()))])))
+        # Row-major element stores ``NAME[i, j, ...] = const``.
+        import itertools
+        for idx, val in zip(itertools.product(*[range(d) for d in shape]), flat):
+            sl = (ast.Tuple(elts=[ast.Constant(value=i) for i in idx], ctx=ast.Load())
+                  if len(idx) > 1 else ast.Constant(value=idx[0]))
+            prelude.append(ast.Assign(
+                targets=[ast.Subscript(value=ast.Name(id=name, ctx=ast.Load()), slice=sl, ctx=ast.Store())],
+                value=ast.Constant(value=val)))
+    if prelude:
+        fn.body = prelude + fn.body
+        ast.fix_missing_locations(fn)
 
 
 class _PruneSparseDispatch(ast.NodeTransformer):
@@ -1352,10 +1509,12 @@ def _collect_inlinable_helpers(tree: ast.Module, kernel_fn: ast.FunctionDef) -> 
                 and isinstance(body[0].orelse[0], ast.Return)):
             return True
         # Form 3: multi-statement body ending with ``return expr``. No
-        # early returns / yields / nested defs allowed.
+        # early returns / yields / nested defs allowed. ``Expr`` statements are
+        # allowed (side-effect void calls -- lulesh ``_integrate_stress`` runs
+        # ``np.add.at(fx, nodelist, sfx)`` scatters then ``return determ``).
         if isinstance(body[-1], ast.Return) and body[-1].value is not None:
             mid = body[:-1]
-            if all(isinstance(s, (ast.Assign, ast.AugAssign, ast.For, ast.If)) for s in mid):
+            if all(isinstance(s, (ast.Assign, ast.AugAssign, ast.For, ast.If, ast.Expr)) for s in mid):
                 if not any(isinstance(sub, ast.Return) for s in mid for sub in ast.walk(s)):
                     return True
         # Form 4: void helper -- simple Assign / AugAssign / For / If / Expr
@@ -1381,6 +1540,143 @@ def _collect_inlinable_helpers(tree: ast.Module, kernel_fn: ast.FunctionDef) -> 
     return out
 
 
+def _flatten_nested_helpers(tree: ast.Module) -> None:
+    """Inline helpers NESTED inside other top-level helpers, in place.
+
+    lulesh's compute helpers each carry a one-line column shorthand
+    ``def c(a, i): return a[:, i]`` and call it (``x0 = c(x, 0)``). That nested
+    ``def`` makes the OUTER helper un-inlinable (a FunctionDef is not an allowed
+    mid statement in :func:`_collect_inlinable_helpers`), and it is never
+    "exposed" to the kernel-level fixpoint because the parent never inlines --
+    a deadlock. Inlining the nested defs INTO their parent (then dropping them)
+    leaves each outer helper nested-def-free, so the kernel-level fixpoint can
+    inline it normally. Iterated for helpers nested more than one level deep."""
+    for _ in range(16):
+        changed = False
+        for h in list(tree.body):
+            if not isinstance(h, ast.FunctionDef):
+                continue
+            if not any(isinstance(n, ast.FunctionDef) for n in h.body):
+                continue
+            inl = _collect_inlinable_helpers(tree, h)  # top-level + nested-in-h
+            if not inl:
+                continue
+            _HoistMultiStmtHelpers(inl).visit(h)
+            _InlineHelpers(inl).visit(h)
+            ast.fix_missing_locations(h)
+            changed = True
+        if not changed:
+            break
+
+
+def _is_const_list_literal(node: ast.AST) -> bool:
+    """A non-empty list/tuple literal usable as a compile-time-unrollable loop
+    iterable: lulesh's ``faces = [(0,1,2,3), (0,4,5,1), ...]`` AND the inlined
+    ``for nk in (n0, n1, n2, n3)``. Elements may be constants, names, or nested
+    sequences -- the loop body is cloned once per element with the loop variable
+    substituted, so any element expression is fine."""
+    return isinstance(node, (ast.List, ast.Tuple)) and bool(node.elts)
+
+
+class _LoopVarSubst(ast.NodeTransformer):
+    """Substitute a (now compile-time-known) loop variable with one list element.
+
+    Handles a Tuple target (``for (a, b, d, e) in faces`` -> a/b/d/e bound to the
+    element's components) and a single Name target (``for f in faces`` -> ``*f`` in
+    a call expanded to the element's components, and bare ``f`` replaced by it)."""
+
+    def __init__(self, target: ast.AST, elt: ast.AST) -> None:
+        self.elt = elt
+        self.map: Dict[str, ast.AST] = {}
+        if (isinstance(target, ast.Tuple) and isinstance(elt, (ast.Tuple, ast.List))
+                and len(target.elts) == len(elt.elts)):
+            for t, v in zip(target.elts, elt.elts):
+                if isinstance(t, ast.Name):
+                    self.map[t.id] = v
+        self.single = target.id if isinstance(target, ast.Name) else None
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        self.generic_visit(node)
+        # After substitution ``*f`` has become ``*(c0, c1, ...)`` (a Starred over a
+        # literal tuple/list) -- splat it into the call's positional args.
+        if any(isinstance(a, ast.Starred) and isinstance(a.value, (ast.Tuple, ast.List)) for a in node.args):
+            new_args: List[ast.expr] = []
+            for a in node.args:
+                if isinstance(a, ast.Starred) and isinstance(a.value, (ast.Tuple, ast.List)):
+                    new_args.extend(copy.deepcopy(e) for e in a.value.elts)
+                else:
+                    new_args.append(a)
+            node.args = new_args
+        return node
+
+    def visit_Name(self, node: ast.Name) -> ast.AST:
+        if isinstance(node.ctx, ast.Load):
+            if node.id in self.map:
+                return copy.deepcopy(self.map[node.id])
+            if self.single is not None and node.id == self.single:
+                return copy.deepcopy(self.elt)
+        return node
+
+
+def _unroll_const_list_loops(fn: ast.FunctionDef) -> None:
+    """Unroll ``for x in <const list of tuples/values>: body`` at compile time --
+    a backend has no Python list iteration (lulesh's face-node loops). The
+    iterable is a list literal directly, or a local bound exactly once to one;
+    the consumed binding is dropped so no list literal reaches emit."""
+    binds_count: Dict[str, int] = {}
+    for s in ast.walk(fn):
+        if isinstance(s, ast.Assign):
+            for t in s.targets:
+                if isinstance(t, ast.Name):
+                    binds_count[t.id] = binds_count.get(t.id, 0) + 1
+    list_binds: Dict[str, List[ast.expr]] = {}
+    for s in ast.walk(fn):
+        if (isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name)
+                and _is_const_list_literal(s.value) and binds_count.get(s.targets[0].id) == 1):
+            list_binds[s.targets[0].id] = s.value.elts
+    consumed: Set[str] = set()
+
+    class _U(ast.NodeTransformer):
+
+        def visit_For(self, node: ast.For):
+            self.generic_visit(node)
+            if node.orelse:
+                return node
+            seq: Optional[List[ast.expr]] = None
+            src: Optional[str] = None
+            if _is_const_list_literal(node.iter):
+                seq = node.iter.elts
+            elif isinstance(node.iter, ast.Name) and node.iter.id in list_binds:
+                seq = list_binds[node.iter.id]
+                src = node.iter.id
+            if seq is None:
+                return node
+            out: List[ast.stmt] = []
+            for elt in seq:
+                for st in node.body:
+                    cloned = ast.parse(ast.unparse(st)).body[0]
+                    cloned = _LoopVarSubst(node.target, elt).visit(cloned)
+                    ast.fix_missing_locations(cloned)
+                    out.append(cloned)
+            if src is not None:
+                consumed.add(src)
+            return out
+
+    _U().visit(fn)
+    if consumed:
+
+        class _DropBind(ast.NodeTransformer):
+
+            def visit_Assign(self, node: ast.Assign):
+                if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                        and node.targets[0].id in consumed and _is_const_list_literal(node.value)):
+                    return None
+                return node
+
+        _DropBind().visit(fn)
+    ast.fix_missing_locations(fn)
+
+
 class _HoistMultiStmtHelpers(ast.NodeTransformer):
     """Lift Form-3 helper Calls out of expression contexts so the
     multi-statement inliner can consume them via Assign-level visits.
@@ -1396,10 +1692,11 @@ class _HoistMultiStmtHelpers(ast.NodeTransformer):
     Assigns are prepended.
     """
 
-    def __init__(self, helpers: Dict[str, ast.FunctionDef]) -> None:
+    def __init__(self, helpers: Dict[str, ast.FunctionDef], counter: Optional[List[int]] = None) -> None:
         self.helpers = helpers
         self.multi_stmt = {name: fn for name, fn in helpers.items() if _is_multi_stmt_return_form(fn)}
-        self._counter = [0]
+        # Shared across the inline fixpoint -- see _InlineHelpers re: prefix reuse.
+        self._counter = counter if counter is not None else [0]
         self._pending: List[ast.stmt] = []
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
@@ -1495,9 +1792,15 @@ class _InlineHelpers(ast.NodeTransformer):
       return forms remains in visit_Call.
     """
 
-    def __init__(self, helpers: Dict[str, ast.FunctionDef]):
+    def __init__(self, helpers: Dict[str, ast.FunctionDef], counter: Optional[List[int]] = None):
         self.helpers = helpers
-        self._counter = [0]
+        # The ``__inl<N>_`` prefix counter MUST persist across the parse_kernel
+        # inline fixpoint -- a nested helper exposed in a later iteration would
+        # otherwise reuse a prefix already taken by an outer helper inlined in an
+        # earlier iteration (lulesh ``_integrate_stress``'s local ``b`` colliding
+        # with the nested ``_calc_shape_fn_derivatives``'s ``b`` -> ``__inl1_b``
+        # for both, crossing their shapes). A shared counter keeps prefixes unique.
+        self._counter = counter if counter is not None else [0]
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         self.generic_visit(node)
@@ -1517,13 +1820,29 @@ class _InlineHelpers(ast.NodeTransformer):
                 # Map params to call args; locals (assigned in body) get
                 # the prefix so multiple inlines don't collide.
                 local_names = _collect_assigned_names(body[:-1])
-                rename: Dict[str, ast.AST] = dict(zip(param_names, node.value.args))
+                arg_map = dict(zip(param_names, node.value.args))
+                rename: Dict[str, ast.AST] = dict(arg_map)
+                # A parameter that is REASSIGNED in the body (lulesh _phi's
+                # ``delvm = delvm * normd``) becomes a fresh prefixed local. It
+                # MUST be initialised from the call argument first, otherwise the
+                # first read is of the uninitialised local -- a heap-garbage read
+                # the native backends inherit (numba/cupy use a real Python var
+                # and are unaffected). Value semantics: a fresh local copy, so the
+                # caller's argument array is never mutated by the rebind.
+                reassigned_params: List[str] = []
                 for ln in local_names:
                     rename[ln] = ast.Name(id=f"{prefix}{ln}", ctx=ast.Load())
+                    if ln in arg_map:
+                        reassigned_params.append(ln)
                 # Substitute throughout the helper body and the return
                 # expression.
                 renamer = _SubstNames(rename)
                 new_body: List[ast.stmt] = []
+                for _pn in reassigned_params:
+                    _init = ast.Assign(targets=[ast.Name(id=f"{prefix}{_pn}", ctx=ast.Store())],
+                                       value=ast.parse(ast.unparse(arg_map[_pn]), mode="eval").body)
+                    ast.fix_missing_locations(_init)
+                    new_body.append(_init)
                 for stmt in body[:-1]:
                     cloned = ast.parse(ast.unparse(stmt)).body[0]
                     cloned = renamer.visit(cloned)
@@ -1532,7 +1851,22 @@ class _InlineHelpers(ast.NodeTransformer):
                 ret_expr = ast.parse(ast.unparse(body[-1].value), mode="eval").body
                 ret_expr = renamer.visit(ret_expr)
                 ast.fix_missing_locations(ret_expr)
-                new_body.append(ast.Assign(targets=[node.targets[0]], value=ret_expr))
+                tgt = node.targets[0]
+                # A tuple-target multi-output helper (lulesh ``b, detJ =
+                # _calc_shape_fn_derivatives(..)`` whose body ends ``return b,
+                # volume``) must be DESTRUCTURED into per-element assigns -- a
+                # backend has no runtime tuple, so ``(b, detJ) = (x, y)`` would
+                # reach emit as an unlowerable Tuple. ``_`` elements are discarded.
+                if (isinstance(tgt, ast.Tuple) and isinstance(ret_expr, ast.Tuple)
+                        and len(tgt.elts) == len(ret_expr.elts)):
+                    for t_elt, v_elt in zip(tgt.elts, ret_expr.elts):
+                        if isinstance(t_elt, ast.Name) and t_elt.id == "_":
+                            continue
+                        a = ast.Assign(targets=[t_elt], value=v_elt)
+                        ast.fix_missing_locations(a)
+                        new_body.append(a)
+                else:
+                    new_body.append(ast.Assign(targets=[tgt], value=ret_expr))
                 return new_body
         return node
 

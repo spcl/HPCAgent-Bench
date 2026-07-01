@@ -456,13 +456,21 @@ class _ScatterAtRewriter(ast.NodeTransformer):
             return func.value.attr
         return None
 
-    def _val_at(self, vals: ast.expr, k: str) -> ast.expr:
+    @staticmethod
+    def _index_of(iters: List[str]) -> ast.expr:
+        """A scalar subscript index over ``iters`` -- a single Name (1 axis) or a
+        Tuple of Names (multi-axis ``arr[k0, k1, ...]``)."""
+        if len(iters) == 1:
+            return ast.Name(id=iters[0], ctx=ast.Load())
+        return ast.Tuple(elts=[ast.Name(id=it, ctx=ast.Load()) for it in iters], ctx=ast.Load())
+
+    def _val_at(self, vals: ast.expr, iters: List[str]) -> ast.expr:
         if isinstance(vals, ast.Name):
             return ast.Subscript(value=ast.Name(id=vals.id, ctx=ast.Load()),
-                                 slice=ast.Name(id=k, ctx=ast.Load()), ctx=ast.Load())
+                                 slice=self._index_of(iters), ctx=ast.Load())
         if isinstance(vals, ast.UnaryOp) and isinstance(vals.op, ast.USub) \
                 and isinstance(vals.operand, ast.Name):
-            return ast.UnaryOp(op=ast.USub(), operand=self._val_at(vals.operand, k))
+            return ast.UnaryOp(op=ast.USub(), operand=self._val_at(vals.operand, iters))
         raise NotImplementedError("np.<op>.at value must be an array name or its negation")
 
     def visit_Expr(self, node: ast.Expr) -> ast.AST:
@@ -489,14 +497,22 @@ class _ScatterAtRewriter(ast.NodeTransformer):
         if not bound:
             raise NotImplementedError(f"np.<op>.at: unknown extent for index '{idx.id}'")
         self._n += 1
-        k = f"__sat{self._n}"
+        # Iterate EVERY axis of the index array (lulesh's nodelist is 2-D
+        # ``(numelem, 8)``), so the scatter is a scalar ``target[idx[k0,k1]] op=
+        # vals[k0,k1]`` -- not a leading-axis-only loop that leaves the trailing
+        # axes as unlowered slices. ``vals`` is indexed with the same iters
+        # (it broadcasts to the index shape for a 1-D target).
+        # 1-D index keeps the flat ``__sat{n}`` name (the common edge_laplacian
+        # case); a multi-D index (lulesh nodelist) suffixes one iter per axis.
+        iters = ([f"__sat{self._n}"] if len(bound) == 1
+                 else [f"__sat{self._n}_{d}" for d in range(len(bound))])
         idx_k = ast.Subscript(value=ast.Name(id=idx.id, ctx=ast.Load()),
-                              slice=ast.Name(id=k, ctx=ast.Load()), ctx=ast.Load())
-        val_k = self._val_at(vals, k)
+                              slice=self._index_of(iters), ctx=ast.Load())
+        val_k = self._val_at(vals, iters)
         if op in self._AUG:
             lhs = ast.Subscript(value=ast.Name(id=target.id, ctx=ast.Load()),
                                 slice=idx_k, ctx=ast.Store())
-            stmt = ast.AugAssign(target=lhs, op=self._AUG[op](), value=val_k)
+            stmt: ast.stmt = ast.AugAssign(target=lhs, op=self._AUG[op](), value=val_k)
         else:                                   # maximum / minimum -> t[i] = fn(t[i], v)
             lhs = ast.Subscript(value=ast.Name(id=target.id, ctx=ast.Load()),
                                 slice=idx_k, ctx=ast.Store())
@@ -505,12 +521,14 @@ class _ScatterAtRewriter(ast.NodeTransformer):
             stmt = ast.Assign(targets=[lhs], value=ast.Call(
                 func=ast.Name(id=self._FOLD[op], ctx=ast.Load()),
                 args=[cur, val_k], keywords=[]))
-        loop = ast.For(
-            target=ast.Name(id=k, ctx=ast.Store()),
-            iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()),
-                          args=[_const_or_name_token(bound[0])], keywords=[]),
-            body=[stmt], orelse=[])
-        return ast.copy_location(loop, node)
+        body: List[ast.stmt] = [stmt]
+        for it, ext in zip(reversed(iters), reversed(bound)):  # nest deepest-last
+            body = [ast.For(
+                target=ast.Name(id=it, ctx=ast.Store()),
+                iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()),
+                              args=[_const_or_name_token(ext)], keywords=[]),
+                body=body, orelse=[])]
+        return ast.copy_location(body[0], node)
 
     def _multi_index_scatter(self, node, op, target: ast.Name,
                              idx_tuple: ast.Tuple, vals: ast.expr) -> ast.AST:
@@ -1377,6 +1395,39 @@ def _harvest_local_shapes(tree: ast.AST,
                 shape_table[target.id] = tuple(ast.unparse(e) for e in ext)
 
 
+class _FullLikeRewriter(ast.NodeTransformer):
+    """``X = np.full_like(src, val)`` -> ``X = np.empty_like(src); X[:] = val`` and
+    ``X = np.full(shape, val)`` -> ``X = np.empty(shape); X[:] = val``.
+
+    The existing empty-alias shape harvest declares X (shape from src / the shape
+    arg) and the whole-array scalar-broadcast assign fills it -- so no dedicated
+    full/full_like emitter path is needed (lulesh ``pbvc = np.full_like(bvc, c1s)``)."""
+
+    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+        self.generic_visit(node)
+        v = node.value
+        if not (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and isinstance(v, ast.Call)
+                and isinstance(v.func, ast.Attribute) and v.func.attr in ("full_like", "full")
+                and isinstance(v.func.value, ast.Name) and v.func.value.id in ("np", "numpy") and len(v.args) >= 2):
+            return node
+        tgt = node.targets[0]
+        alloc_attr = "empty_like" if v.func.attr == "full_like" else "empty"
+        dtype_kw = [kw for kw in v.keywords if kw.arg == "dtype"]
+        alloc = ast.Assign(
+            targets=[ast.Name(id=tgt.id, ctx=ast.Store())],
+            value=ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=alloc_attr, ctx=ast.Load()),
+                           args=[v.args[0]], keywords=dtype_kw))
+        fill = ast.Assign(
+            targets=[ast.Subscript(value=ast.Name(id=tgt.id, ctx=ast.Load()),
+                                   slice=ast.Slice(lower=None, upper=None, step=None), ctx=ast.Store())],
+            value=v.args[1])
+        for s in (alloc, fill):
+            ast.copy_location(s, node)
+        ast.fix_missing_locations(alloc)
+        ast.fix_missing_locations(fill)
+        return [alloc, fill]
+
+
 class _ZerosRewriter(ast.NodeTransformer):
     """Turn ``x = np.zeros((N, K))`` (and family) into a side-table entry.
 
@@ -1979,10 +2030,13 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
         # 2-slice-axis LHS ``A[k+1:, k:]`` reads from the COLUMN iter ``si1``,
         # not the row iter ``si0`` (gaussian's rank-1 update). ``align`` shifts
         # the per-axis consumption by the rank difference.
+        # A Slice / newaxis contributes one result axis; an ADVANCED index (a Name
+        # whose own shape is in the table, e.g. lulesh ``x1[:, _VOLU_PERM]`` with
+        # _VOLU_PERM (8,6)) contributes its RANK; a scalar index contributes none.
         rhs_result_axes = sum(
-            1 for d in dims
-            if isinstance(d, ast.Slice)
-            or (isinstance(d, ast.Constant) and d.value is None))
+            (len(self.array_shapes[d.id]) if isinstance(d, ast.Name) and self.array_shapes.get(d.id) else
+             1 if (isinstance(d, ast.Slice) or (isinstance(d, ast.Constant) and d.value is None)) else 0)
+            for d in dims)
         align = max(0, len(lhs_slice_iters) - rhs_result_axes)
         idx_nodes: List[ast.AST] = []
         rhs_slice_idx = 0
@@ -1993,6 +2047,19 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
                 # broadcast pulls the source through the size-1 axis.
                 rhs_slice_idx += 1
                 continue
+            # Advanced index mixed with slices: a rank-r index array consumes r
+            # result axes and reads ``IDX[(those iters)]`` along this source axis
+            # (``x1[:, _VOLU_PERM]`` -> ``x1[w0, _VOLU_PERM[w1, w2]]``).
+            if isinstance(d, ast.Name) and self.array_shapes.get(d.id):
+                r = len(self.array_shapes[d.id])
+                if align + rhs_slice_idx + r <= len(lhs_slice_iters):
+                    giters = [ast.Name(id=lhs_slice_iters[align + rhs_slice_idx + k][0].id, ctx=ast.Load())
+                              for k in range(r)]
+                    rhs_slice_idx += r
+                    gslot = giters[0] if r == 1 else ast.Tuple(elts=giters, ctx=ast.Load())
+                    idx_nodes.append(ast.Subscript(value=ast.Name(id=d.id, ctx=ast.Load()),
+                                                   slice=gslot, ctx=ast.Load()))
+                    continue
             if not isinstance(d, ast.Slice):
                 idx_nodes.append(self._resolve_scalar_index(d, rhs_name, axis))
                 continue
@@ -3916,20 +3983,26 @@ class _SubscriptifyNames(ast.NodeTransformer):
                 # (full ``:`` OR bounded ``:-1`` / ``a:b``) or a
                 # non-Slice concrete index. Substitute each Slice with
                 # the next iter (in axis order, right-aligned).
-                # Mixed slice + rank-1 index-array form ``xe[:, idx]`` (lulesh):
-                # each ``:`` axis and each index-array axis consumes one result
-                # axis (right-aligned); a sliced axis subscripts its iter, an
-                # index-array axis becomes ``idx[that_iter]``, concrete indices
-                # stay. Handles the index array on ANY axis, not just leading.
+                # Mixed slice + index-array form ``xe[:, idx]`` (lulesh): a ``:``
+                # axis consumes one result axis (subscripts its iter); an index
+                # array of rank r consumes r result axes and becomes
+                # ``idx[(those r iters)]``; concrete indices stay. Right-aligned.
+                # Handles a rank>1 index array (lulesh ``x1[:, _VOLU_PERM]`` with
+                # _VOLU_PERM (8,6) -> ``x1[w0, _VOLU_PERM[w1, w2]]``) and the index
+                # array on any axis, not just leading.
+                def _idx_rank(e):
+                    return (len(self.shape_table[e.id])
+                            if isinstance(e, ast.Name) and self.shape_table.get(e.id) else 0)
+
                 def _is_index_array(e):
-                    return (isinstance(e, ast.Name)
-                            and len(self.shape_table.get(e.id, ())) == 1)
+                    return _idx_rank(e) >= 1
                 if (any(isinstance(e, ast.Slice) for e in sl.elts)
                         and any(_is_index_array(e) for e in sl.elts)):
-                    result_axes = [k for k, e in enumerate(sl.elts)
-                                   if isinstance(e, ast.Slice) or _is_index_array(e)]
-                    if len(result_axes) <= len(self.iters):
-                        offset = len(self.iters) - len(result_axes)
+                    result_axis_count = sum(
+                        1 if isinstance(e, ast.Slice) else (_idx_rank(e) if _is_index_array(e) else 0)
+                        for e in sl.elts)
+                    if result_axis_count <= len(self.iters):
+                        offset = len(self.iters) - result_axis_count
                         pos = 0
                         new_elts = []
                         for e in sl.elts:
@@ -3941,9 +4014,12 @@ class _SubscriptifyNames(ast.NodeTransformer):
                                     it = ast.BinOp(left=it, op=ast.Add(), right=e.lower)
                                 new_elts.append(it)
                             elif _is_index_array(e):
-                                it = ast.Name(id=self.iters[offset + pos], ctx=ast.Load())
-                                pos += 1
-                                new_elts.append(ast.Subscript(value=e, slice=it, ctx=ast.Load()))
+                                r = _idx_rank(e)
+                                giters = [ast.Name(id=self.iters[offset + pos + k], ctx=ast.Load())
+                                          for k in range(r)]
+                                pos += r
+                                gslot = (giters[0] if r == 1 else ast.Tuple(elts=giters, ctx=ast.Load()))
+                                new_elts.append(ast.Subscript(value=e, slice=gslot, ctx=ast.Load()))
                             else:
                                 new_elts.append(e)
                         slot = (new_elts[0] if len(new_elts) == 1
@@ -4169,6 +4245,7 @@ def lower(kir: KernelIR) -> KernelIR:
     # before any slice-aware pass runs (lulesh ``a[..., k]``).
     _EllipsisExpander(arrays_shapes).visit(lowered.tree)
     _NpAliasRewriter().visit(lowered.tree)
+    _FullLikeRewriter().visit(lowered.tree)
     _MatmulCallRewriter().visit(lowered.tree)
     _ScatterAtRewriter(arrays_shapes).visit(lowered.tree)
     _TransposeAttrRewriter(set(kir.sparse or {})).visit(lowered.tree)
@@ -4457,6 +4534,27 @@ def lower(kir: KernelIR) -> KernelIR:
             k: list(v) for k, v in wa_rewriter._reassign_shapes.items()},
     ).visit(lowered.tree)
     ast.fix_missing_locations(lowered.tree)
+    # Force index-array LOCALS to int64. A local whose VALUES index another array
+    # (``delv[neigh_safe[w0]]`` -- neigh_safe = np.clip(lxim, ..) is a local, so
+    # the param-only _detect_output_and_index_arrays misses it) must be integer;
+    # C/Fortran reject a float subscript. A name used as a subscript index is
+    # always integral, so this is sound.
+    _idx_locals: Set[str] = set()
+    for node in ast.walk(lowered.tree):
+        if isinstance(node, ast.Subscript):
+            sl = node.slice
+            elts = sl.elts if isinstance(sl, ast.Tuple) else [sl]
+            for e in elts:
+                if isinstance(e, ast.Subscript) and isinstance(e.value, ast.Name):
+                    _idx_locals.add(e.value.id)        # A[B[i]] -> B is an index array
+                elif isinstance(e, ast.Name):
+                    _idx_locals.add(e.id)              # A[B] (whole-array gather) -> B
+    for _nm in _idx_locals:
+        if (_nm in shapes or _nm in local_dtypes):
+            _dt = local_dtypes.get(_nm)
+            if not (_dt and _dt.startswith(("int", "uint"))):
+                local_dtypes[_nm] = "int64"
+    lowered.tree.local_dtypes = local_dtypes  # type: ignore[attr-defined]
     return lowered
 
 

@@ -4,7 +4,6 @@ Pins the ONE-knob contract: every searching optimizer (TVM MetaSchedule, Triton
 autotune, an Agent) draws its budget from :class:`TuningBudget`, and a framework
 declares whether it is an auto-tuner.
 """
-import os
 
 import pytest
 

@@ -1,7 +1,6 @@
 import psutil
 from cpuinfo import get_cpu_info
 import subprocess
-import json
 import yaml
 import os
 import GPUtil

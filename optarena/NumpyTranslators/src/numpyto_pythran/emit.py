@@ -55,8 +55,13 @@ def emit_pythran(numpy_source: str, kir: KernelIR) -> str:
     arr_by_name = {a.name: a for a in kir.arrays}
     sca_by_name = {s.name: s for s in kir.scalars}
 
+    # The export types must be in the kernel's *verbatim def signature* order --
+    # ``input_args`` -- NOT ``param_order()`` (the alphabetical-then-scalars ABI
+    # order the C/Fortran bindings reorder into). Pythran compiles the body as-is,
+    # so the i-th export type binds to the i-th def parameter; ABI order would land
+    # types on the wrong params (e.g. fft_3d's scalar ``niter`` typed as an array).
     types: List[str] = []
-    for arg in kir.param_order():
+    for arg in kir.input_args:
         if arg in sym_by_name:
             types.append("int")
         elif arg in arr_by_name:

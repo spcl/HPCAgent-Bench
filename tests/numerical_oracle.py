@@ -32,7 +32,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
@@ -280,8 +280,18 @@ def _emit(short, info, out: pathlib.Path, precision: str = "") -> bool:
     return True
 
 
-def run_kernel(short: str, preset: str = "S", precision: str = "fp64", seed: int = 0) -> Dict[str, str]:
+def run_kernel(short: str, preset: str = "S", precision: str = "fp64", seed: int = 0,
+               max_size: Optional[int] = None, only_backends: Optional[set] = None) -> Dict[str, str]:
     """Return ``{backend: "ok" | "skip:..." | "FAIL:..."}`` for ``short``.
+
+    ``max_size`` caps every size dimension to at most this value (on top of the
+    polybench down-scaling) -- used to run JAX at a SMALL size, since eager JAX
+    dispatches each scalar op to XLA and is impractically slow for the larger
+    presets of work-heavy kernels (the backtracking subset_sum DFS is ~10^6 nodes
+    at N=20). Correctness is size-independent, so a small JAX size validates the
+    translation without timing out. ``only_backends`` restricts which backends are
+    actually built/run (the rest are omitted from the result) -- so the JAX-capped
+    pass does not redundantly recompile c/cpp/fortran.
 
     ``precision`` selects the float width of the whole run (``fp64`` /
     ``fp32``): the input data, the emitted code (via the IR precision
@@ -311,8 +321,11 @@ def run_kernel(short: str, preset: str = "S", precision: str = "fp64", seed: int
     if "foundation" not in info.get("relative_path", ""):
         ints = {k: v for k, v in syms.items() if isinstance(v, int) and not isinstance(v, bool)}
         mx = max(ints.values(), default=0)
-        if mx > 48:
-            f = 48.0 / mx
+        # Default down-scale target is 48; ``max_size`` (JAX small-size pass)
+        # tightens it so even sub-48 presets (subset_sum N=20) shrink.
+        cap = 48 if max_size is None else min(48, max_size)
+        if mx > cap:
+            f = float(cap) / mx
 
             # Scale only the genuinely-large dimensions. A small radix /
             # exponent param (stockham_fft R=2, K=15) must stay put --
@@ -351,7 +364,7 @@ def run_kernel(short: str, preset: str = "S", precision: str = "fp64", seed: int
                     return e * e * e
                 return t
 
-            syms = {k: (_scale_dim(v) if (k in ints and v > 48) else v) for k, v in syms.items()}
+            syms = {k: (_scale_dim(v) if (k in ints and v > cap) else v) for k, v in syms.items()}
     # Kernel scalar params (``init.scalars``, e.g. crc16's CRC polynomial
     # ``poly``) pass to the kernel by value and must resolve by name like a
     # preset symbol. They are CONSTANTS, not dimensions, so merge them only
@@ -530,6 +543,8 @@ def run_kernel(short: str, preset: str = "S", precision: str = "fp64", seed: int
 
         _ext = {"c": ".c", "cpp": ".cpp", "fortran": ".f90"}
         for backend in BACKENDS:
+            if only_backends is not None and backend not in only_backends:
+                continue
             matches = sorted(tdp.glob(f"*_{fptype}{_ext[backend]}"))
             if not matches:
                 status[backend] = "FAIL:no-source"
@@ -555,6 +570,8 @@ def run_kernel(short: str, preset: str = "S", precision: str = "fp64", seed: int
         # Python/JIT backends (numba / pythran / cupy): skip cleanly when
         # the dependency is absent, else emit + run + compare like above.
         for pb in PY_BACKENDS:
+            if only_backends is not None and pb not in only_backends:
+                continue
             try:
                 status[pb] = _run_py_backend(pb,
                                              short,
@@ -569,19 +586,20 @@ def run_kernel(short: str, preset: str = "S", precision: str = "fp64", seed: int
                                              norm_error=spec.norm_error or 0.0)
             except Exception as exc:  # noqa: BLE001
                 status[pb] = f"FAIL:{type(exc).__name__}"
-        try:
-            status["jax"] = _run_jax_backend(short,
-                                             info,
-                                             by,
-                                             syms,
-                                             expected,
-                                             compare,
-                                             rtol,
-                                             atol,
-                                             emit_prec=emit_prec,
-                                             norm_error=spec.norm_error or 0.0)
-        except Exception as exc:  # noqa: BLE001
-            status["jax"] = f"FAIL:{type(exc).__name__}"
+        if only_backends is None or "jax" in only_backends:
+            try:
+                status["jax"] = _run_jax_backend(short,
+                                                 info,
+                                                 by,
+                                                 syms,
+                                                 expected,
+                                                 compare,
+                                                 rtol,
+                                                 atol,
+                                                 emit_prec=emit_prec,
+                                                 norm_error=spec.norm_error or 0.0)
+            except Exception as exc:  # noqa: BLE001
+                status["jax"] = f"FAIL:{type(exc).__name__}"
     finally:
         td_ctx.cleanup()
     return status

@@ -77,8 +77,6 @@ def validate_sparse_config(
     :param source: Human-readable label for error messages
         (typically the YAML file path).
     """
-    array_arg_set = set(array_args)
-
     # ---- Rule 1: format must be in SUPPORTED_SPARSE_FORMATS ----------
     # ---- Rule 2: required buffer roles per format --------------------
     # ---- Rule 3: buffer dtype in _NUMERIC_DTYPES ---------------------
