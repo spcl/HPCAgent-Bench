@@ -521,6 +521,59 @@ def _emit_body(body: List[ast.stmt], live_out: Set[str], indent: str) -> List[st
 
 _EMIT_STATIC: Set[str] = set()
 
+#: names that alias ``scipy.linalg.eigh`` in the current module (cegterg's
+#: ``_sci_eigh``); populated per ``emit_jax`` call and read by ``_rewrite_eigh``.
+_EIGH_ALIASES: Set[str] = set()
+
+
+def _rewrite_eigh(fn: ast.FunctionDef) -> None:
+    """Rewrite ``w, v = eigh(a[, b], subset_by_index=[lo, hi])`` (np.linalg /
+    scipy.linalg / an imported alias) to the Cholesky-reduced form whose standard
+    step is a native ``np.linalg.eigh(C)`` -- ``jnp.linalg.eigh`` handles the
+    complex-Hermitian standard case, but jax has no generalized eigh, so the
+    ``a x = w b x`` reduction runs on jnp.linalg.cholesky / inv / matmul (np->jnp
+    happens downstream). In place."""
+    from numpyto_common.numpy_desugar import _eigh_call_ab, _eigh_stmts
+
+    class _R(ast.NodeTransformer):
+        def __init__(self):
+            self.ctr = 0
+
+        def visit_Assign(self, node: ast.Assign):
+            if len(node.targets) != 1:
+                return node
+            hit = _eigh_call_ab(node.value, _EIGH_ALIASES)
+            if hit is None:
+                return node
+            a_node, b_node, kw = hit
+            tgt = node.targets[0]
+            if not (isinstance(tgt, ast.Tuple) and len(tgt.elts) == 2
+                    and all(isinstance(e, ast.Name) for e in tgt.elts)):
+                return node
+            w, v = tgt.elts[0].id, tgt.elts[1].id
+            p = f"__eigh{self.ctr}"
+            self.ctr += 1
+            pre: List[str] = []
+
+            def name_of(nd, tag):
+                if isinstance(nd, ast.Name):
+                    return nd.id
+                pre.append(f"{p}_{tag} = np.ascontiguousarray({ast.unparse(nd)})")
+                return f"{p}_{tag}"
+
+            aname = name_of(a_node, "a")
+            bname = name_of(b_node, "b") if b_node is not None else None
+            s = kw.get("subset_by_index")
+            if isinstance(s, (ast.List, ast.Tuple)) and len(s.elts) == 2:
+                lo, hi = ast.unparse(s.elts[0]), f"({ast.unparse(s.elts[1])}) + 1"
+            else:
+                lo, hi = "None", "None"
+            lines = pre + _eigh_stmts(w, v, aname, bname, lo, hi, p, native_std=True)
+            return [ast.copy_location(st, node) for st in ast.parse("\n".join(lines)).body]
+
+    _R().visit(fn)
+    ast.fix_missing_locations(fn)
+
 
 def _emit_if(node: ast.If, live_out: Set[str], indent: str) -> List[str]:
     """Lower an ``if`` to ``jnp.where`` selects, or keep it as a real Python
@@ -810,6 +863,9 @@ def emit_jax(numpy_src: str, func_name: str, jit: bool = False) -> str:
     fn = next((n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == func_name), None)
     if fn is None:
         raise EmitError(f"function {func_name!r} not found")
+    from numpyto_common.numpy_desugar import _eigh_alias_names
+    _EIGH_ALIASES.clear()
+    _EIGH_ALIASES.update(_eigh_alias_names(tree))
     # Substitute whole-array ``local = param`` aliases with the param itself
     # (ICON velocity_tendencies aliases ~40 params: ``vt = p_diag_vt``). In
     # functional jax an in-place write through the alias rebinds the LOCAL, so
@@ -918,6 +974,7 @@ def _emit_function(fn: ast.FunctionDef,
         _rewrite_inplace_helper_calls(fn, helper_mut)
     if eager:
         return _emit_function_eager(fn, decorate)
+    _rewrite_eigh(fn)
     _desugar_foreach(fn)
     params = [a.arg for a in fn.args.args]
     # Static jit args are concrete at trace time -- an ``if`` testing only them
@@ -960,6 +1017,7 @@ def _emit_function_eager(fn: ast.FunctionDef, decorate: Optional[str]) -> List[s
     indexing and data-dependent breaks directly on concrete arrays."""
     # Multi-target / tuple-of-subscript assigns still need splitting so each
     # subscript target functionalises to its own ``.at[..].set(..)``.
+    _rewrite_eigh(fn)
     _expand_tuple_targets(fn)
     _expand_chained_assigns(fn)
     params = [a.arg for a in fn.args.args]

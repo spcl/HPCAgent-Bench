@@ -2237,14 +2237,18 @@ def _eigh_jacobi_lines(w: str, y: str, c: str, p: str) -> List[str]:
     ]
 
 
-def _eigh_stmts(w: str, v: str, a: str, b: Optional[str], lo: str, hi: str, p: str) -> List[str]:
+def _eigh_stmts(w: str, v: str, a: str, b: Optional[str], lo: str, hi: str, p: str,
+                native_std: bool = False) -> List[str]:
     """Source lines for ``w, v = eigh(a[, b])[subset lo:hi]`` (ascending). The
     generalized Hermitian problem ``a x = w b x`` is reduced to standard form via
     the Cholesky factor of ``b`` (``b = L Lᴴ``): ``C = L⁻¹ a L⁻ᴴ`` is Hermitian
     with the same eigenvalues, and its eigenvectors back-transform as ``x = L⁻ᴴ
     y``. ``cholesky``/``inv``/``@`` are left as ``np.linalg``/matmul for the native
     backends (numba/dace) and lowered by :class:`_LinalgInline` for pythran; the
-    standard eigh is the self-contained Jacobi above. Validated vs scipy ~1e-15."""
+    standard eigh is the self-contained Jacobi above, unless ``native_std`` (used
+    by backends whose ``np.linalg.eigh`` handles the standard complex-Hermitian
+    case natively -- jax's ``jnp.linalg.eigh``), in which case a single
+    ``np.linalg.eigh`` call is emitted for it. Validated vs scipy ~1e-15."""
     if b is not None:
         pre = [
             f"{p}_L = np.linalg.cholesky({b})",
@@ -2255,7 +2259,9 @@ def _eigh_stmts(w: str, v: str, a: str, b: Optional[str], lo: str, hi: str, p: s
     else:
         pre = [f"{p}_C = {a}.copy()"]
         cname = f"{p}_C"
-    lines = pre + _eigh_jacobi_lines(f"{p}_wa", f"{p}_ya", cname, p)
+    std = ([f"{p}_wa, {p}_ya = np.linalg.eigh({cname})"] if native_std else _eigh_jacobi_lines(
+        f"{p}_wa", f"{p}_ya", cname, p))
+    lines = pre + std
     xname = f"{p}_xa" if b is not None else f"{p}_ya"
     if b is not None:
         lines.append(f"{p}_xa = {p}_Li.conj().T @ {p}_ya")
