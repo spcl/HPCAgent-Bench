@@ -76,6 +76,28 @@ def test_sparse_kernel_jax_matches_scipy(kernel, seed):
     assert res.ok, f"{kernel.short} jax (seed={seed}): {res.detail}"
 
 
+@pytest.mark.skipif(not _KERNELS, reason="no sparse kernels discovered")
+@pytest.mark.parametrize("kernel", _KERNELS, ids=_IDS)
+def test_sparse_kernel_dace_emits(kernel):
+    """dace emits a syntactically-valid ``@dc.program`` for every sparse kernel (the
+    sparse analog of test_dace_emit). Structural only -- dace RUNTIME sparse is a known
+    gap on two counts: (1) the emitted CSR body recomputes a shape symbol
+    (``M = A_indptr.shape[0] - 1``) which dace's parser rejects (KeyError M), and
+    (2) the data-dependent slice ``A_indices[A_indptr[i]:A_indptr[i+1]]`` is not
+    expressible in an SDFG (dace access ranges must be symbolic/static, not runtime
+    data-dependent). Making dace RUN sparse is a focused numpyto_dace follow-up; this
+    check locks that the emit itself stays valid in the meantime."""
+    pytest.importorskip("dace")
+    import ast
+    import _bench_yaml as _bh
+    from numpyto_c.dace_emit import emit_dace
+    src = emit_dace(_bh.kir_for(kernel.short, do_lower=False))
+    tree = ast.parse(src)  # must be valid python/dace source
+    progs = [f for f in tree.body if isinstance(f, ast.FunctionDef)
+             and any(isinstance(d, ast.Attribute) and d.attr == "program" for d in f.decorator_list)]
+    assert progs, f"{kernel.short}: dace emit produced no @dc.program"
+
+
 def test_at_least_the_known_sparse_kernels_are_discovered():
     """Guards against the discovery silently finding nothing (e.g. a path
     regression). spmv + spmm are migrated to sparse_layouts today."""
