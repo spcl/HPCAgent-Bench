@@ -1329,74 +1329,59 @@ def emit_cpp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
 
 
 def _pluto_multidim_array_signature(arr: ArrayDesc) -> str:
-    """Pluto signature for a rank>=2 array: the C-ABI flat pointer param,
-    renamed ``<name>__lin``. A multidimensional VIEW over it is declared in the
-    body (see :func:`_pluto_view_decls`) so the polyhedral analyzer sees affine
-    ``A[i][j]`` accesses rather than flattened pointer arithmetic."""
+    """Pluto signature for a rank>=2 array: a DIRECT VLA parameter
+    ``T name[restrict d0][d1]...``. pet extracts an affine scop from these
+    (``A[i][j]``); the flat-pointer + local cast-view form yields ZERO statements
+    -- pet drops every scop that reaches an array through a cast pointer, silently
+    miscompiling the kernel to a no-op (the output write vanishes). The VLA dims
+    must be in scope, so :func:`_emit_pluto_signature` emits the size symbols BEFORE
+    the array params and :func:`emit_pluto_binding` matches that order."""
     base = _c_type(arr.dtype)
     qual = "" if arr.is_output else "const "
-    return f"{qual}{base} *restrict {arr.name}__lin"
+    dims = (f"[restrict {_c_shape_token(arr.shape[0])}]"
+            + "".join(f"[{_c_shape_token(d)}]" for d in arr.shape[1:]))
+    return f"{qual}{base} {arr.name}{dims}"
 
 
 def _emit_pluto_signature(kir: KernelIR, fn_name: str, multidim: Set[str]) -> str:
-    """Like :func:`_emit_signature` but rank>=2 array params keep the flat ABI
-    pointer under a ``__lin`` suffix (a multidim view is declared in the body)."""
-    parts: List[str] = []
+    """Pluto signature with rank>=2 arrays as direct VLA params (see
+    :func:`_pluto_multidim_array_signature`). Because a VLA dim must be lexically
+    in scope, the order is regrouped from the canonical C-ABI: SIZE SYMBOLS first,
+    then array params, then scalars, then ``time_ns``. :func:`emit_pluto_binding`
+    emits the matching arg order so the harness marshals correctly."""
     sym_by_name = {s.name: s for s in kir.symbols}
     arr_by_name = {a.name: a for a in kir.arrays}
     sca_by_name = {s.name: s for s in kir.scalars}
-    for nm in kir.param_order():
-        if nm in sym_by_name:
-            parts.append(f"{dtypes.c_type('int')} {nm}")
-        elif nm in arr_by_name:
-            arr = arr_by_name[nm]
-            parts.append(_pluto_multidim_array_signature(arr)
-                         if nm in multidim else _array_signature(arr))
-        elif nm in sca_by_name:
-            parts.append(f"{_c_type(sca_by_name[nm].dtype)} {nm}")
-        else:
+    order = kir.param_order()
+    for nm in order:
+        if nm not in sym_by_name and nm not in arr_by_name and nm not in sca_by_name:
             raise ValueError(f"unknown parameter {nm!r} in kernel {kir.kernel_name}")
+    parts: List[str] = [f"{dtypes.c_type('int')} {nm}" for nm in order if nm in sym_by_name]
+    for nm in order:
+        if nm in arr_by_name:
+            arr = arr_by_name[nm]
+            parts.append(_pluto_multidim_array_signature(arr) if nm in multidim else _array_signature(arr))
+    parts += [f"{_c_type(sca_by_name[nm].dtype)} {nm}" for nm in order if nm in sca_by_name]
     parts.append("int64_t *restrict time_ns")
     return f"void {fn_name}({', '.join(parts)})"
 
 
-def _pluto_view_decls(kir: KernelIR, multidim: Set[str], indent: str) -> str:
-    """Declare a ``T (*A)[d1][d2]... = (T (*)[d1][d2]...) A__lin;`` view per
-    rank>=2 array param, casting the flat C-ABI buffer to a true
-    multidimensional array so the scop body can index it as ``A[i][j][k]``
-    (row-major; the leading dimension is implicit in the pointer)."""
-    lines: List[str] = []
-    arr_by_name = {a.name: a for a in kir.arrays}
-    for nm in kir.param_order():
-        if nm not in multidim:
-            continue
-        arr = arr_by_name[nm]
-        base = _c_type(arr.dtype)
-        qual = "" if arr.is_output else "const "
-        trailing = "".join(f"[{_c_shape_token(d)}]" for d in arr.shape[1:])
-        lines.append(f"{indent}{qual}{base} (*{nm}){trailing} = "
-                     f"({qual}{base} (*){trailing}) {nm}__lin;")
-    return "\n".join(lines)
-
-
 def emit_pluto(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     name = fn_name or f"{kir.kernel_name}_d_pluto"
-    # Rank>=2 array PARAMS get a multidimensional view so polycc sees affine
-    # array references; rank-1 params and locals stay flat (a 1-D ``a[i]`` is
-    # already affine, and local scratch is not part of the cross-iteration
-    # dependence Pluto reasons about).
+    # Rank>=2 array PARAMS are direct VLA parameters so polycc/pet see affine
+    # ``A[i][j]`` references (see _pluto_multidim_array_signature). Rank-1 params
+    # and malloc'd local scratch stay flat / cast-view (a 1-D ``a[i]`` is already
+    # affine, and pet accepts malloc'd cast-views -- only PARAM cast-views break it).
     multidim = {a.name for a in kir.arrays if len(a.shape) >= 2}
     signature = _emit_pluto_signature(kir, name, multidim)
-    views = _pluto_view_decls(kir, multidim, indent="        ")
     decls, body, frees = _emit_body(kir, indent="        ", multidim_arrays=multidim,
                                     pluto=True, return_parts=True)
     # Local allocations / frees live OUTSIDE ``#pragma scop`` -- malloc/free are
     # non-affine and would break the polyhedral region; only the affine loop
     # nests stay inside. (Deferred-malloc locals, whose shape needs a body
     # scalar, still allocate at their marker inside the scop -- rare.)
-    view_block = (views + "\n") if views else ""
     decl_block = (decls + "\n") if decls else ""
     free_block = (frees + "\n") if frees else ""
     return (f"{_C_HEADER}\n{signature} {{\n{_C_PRELUDE}"
-            f"{view_block}{decl_block}    #pragma scop\n{body}\n    #pragma endscop\n"
+            f"{decl_block}    #pragma scop\n{body}\n    #pragma endscop\n"
             f"{free_block}{_C_EPILOGUE}}}\n")

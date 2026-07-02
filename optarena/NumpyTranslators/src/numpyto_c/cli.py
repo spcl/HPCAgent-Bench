@@ -17,7 +17,7 @@ import argparse
 import pathlib
 import sys
 
-from numpyto_c.bindings import emit_binding
+from numpyto_c.bindings import emit_binding, emit_pluto_binding
 from numpyto_c.emit import emit_c, emit_cpp, emit_pluto
 from numpyto_c.frontend import parse_kernel
 from numpyto_c.ir import apply_precision
@@ -49,6 +49,9 @@ def cmd_emit(args: argparse.Namespace) -> int:
     write_generated(out / f"{base}_pluto_input.c", emit_pluto(kir, fn_name=base),
                     line_comment="// ", source=src)
     emit_binding(kir, out / f"{base}_binding.json", base_name=base)
+    # Pluto's VLA-param signature reorders args (size symbols first), so it needs its
+    # own binding for the harness to marshal correctly (see emit_pluto_binding).
+    emit_pluto_binding(kir, out / f"{base}_pluto_binding.json", base_name=base)
     print(f"numpyto_c: emitted {base}.{{c,cpp}} + {base}_pluto_input.c + {base}_binding.json")
     return 0
 

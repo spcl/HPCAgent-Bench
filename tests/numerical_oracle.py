@@ -45,6 +45,13 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 #: jax backend ONLY -- so one un-traceable kernel cannot stall the whole e2e sweep
 #: (the run is serial + un-timed in CI). Env-overridable for slow machines.
 JAX_FORK_TIMEOUT_S = int(os.environ.get("OPTARENA_JAX_FORK_TIMEOUT_S", "180"))
+#: Wall-clock cap (seconds) on a forked native-invoke child (C/C++/Fortran/pluto). A
+#: miscompiled kernel can spin forever -- e.g. a Pluto transform that yields an
+#: unbounded loop -- and the parent otherwise blocks on the result pipe indefinitely.
+#: Bounding the read + SIGKILL on expiry records ``FAIL:timeout`` instead of hanging the
+#: whole sweep (the e2e job runs ``pytest -n auto`` with NO per-test timeout, so one
+#: hang would stall CI to its job cap). Env-overridable for slow machines.
+_INVOKE_TIMEOUT_S = int(os.environ.get("OPTARENA_INVOKE_TIMEOUT_S", "120"))
 # Cap OpenMP threads: the pluto backend compiles with -fopenmp, and under `pytest -n
 # auto` each xdist worker would otherwise fan out to N_cores threads (N_cores^2
 # oversubscription). Serial omp regions also keep the strict-xfail gate deterministic
@@ -1044,7 +1051,8 @@ def _run_pluto(tdp, short, fptype, binding, by, syms, expected, compare, rtol, a
         # numpyto_c emits no scop for this kernel -- nothing for polycc to optimize.
         return "skip:unsupported:no-scop"
     src = inputs[0]
-    out_c = src.with_name(src.stem.replace("_pluto_input", "_pluto") + ".c")
+    base = src.stem.replace("_pluto_input", "")
+    out_c = src.with_name(base + "_pluto.c")
     try:
         # --pet (libpet) is a PARSER choice, not a transform tweak: the default clan
         # parser chokes on the emitted int64_t loop counters, so --pet is needed just to
@@ -1069,9 +1077,12 @@ def _run_pluto(tdp, short, fptype, binding, by, syms, expected, compare, rtol, a
         return "skip:unsupported:compile-timeout"
     if rc:
         return "FAIL:compile"
-    # Same symbol + C-ABI as the C backend -> marshal via the "c" binding.
+    # The transformed function keeps the Pluto signature (VLA params, size symbols
+    # first), so marshal via its OWN binding (emit_pluto_binding), not the C one.
+    pb = src.with_name(base + "_pluto_binding.json")
+    pluto_binding = json.loads(pb.read_text()) if pb.exists() else binding
     try:
-        return _invoke_isolated("c", binding, so, by, syms, expected, compare, rtol, atol, norm_error)
+        return _invoke_isolated("c", pluto_binding, so, by, syms, expected, compare, rtol, atol, norm_error)
     except Exception as exc:  # noqa: BLE001
         return f"FAIL:{type(exc).__name__}"
 
@@ -1099,8 +1110,22 @@ def _invoke_isolated(backend, binding, so, by, syms, expected, compare, rtol, at
         finally:
             os._exit(0)
     os.close(w)  # parent
+    # Bound the wait: a miscompiled kernel can spin forever, so poll the pipe against a
+    # deadline and SIGKILL on expiry (FAIL:timeout) rather than block on os.read.
+    deadline = time.monotonic() + _INVOKE_TIMEOUT_S
     chunks = []
     while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            os.close(r)
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            os.waitpid(pid, 0)
+            return "FAIL:timeout"
+        if not select.select([r], [], [], remaining)[0]:
+            continue
         b = os.read(r, 4096)
         if not b:
             break
