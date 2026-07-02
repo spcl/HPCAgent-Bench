@@ -22,8 +22,11 @@ def cmd_emit(args: argparse.Namespace) -> int:
         from numpyto_common.sanitize import sanitize
         out_src = sanitize(out_src)
     short = args.kernel.stem.removesuffix("_numpy")
+    # A sparse config names a distinct sub-benchmark (spmv_csr vs spmv_csc); cupy
+    # transforms the buffer-style numpy source directly, so just tag the filename.
+    base = f"{short}_{args.config}" if args.config else short
     args.out.mkdir(parents=True, exist_ok=True)
-    name = f"{short}_cupy.py"
+    name = f"{base}_cupy.py"
     status = write_generated(args.out / name, out_src, source=f"{short}_numpy.py")
     print(f"numpyto_cupy: {status} {name}")
     return 0
@@ -35,6 +38,8 @@ def build_parser() -> argparse.ArgumentParser:
     e = sub.add_parser("emit")
     e.add_argument("--kernel", type=pathlib.Path, required=True)
     e.add_argument("--out", type=pathlib.Path, required=True)
+    e.add_argument("--bench-info", type=pathlib.Path, required=False, help="accepted for driver parity; cupy emits from source")
+    e.add_argument("--config", default=None, help="sparse layout config (e.g. csr); tags the emitted filename")
     e.add_argument("--sanitize", action="store_true",
                    help="strip comments/docstrings (directive #4: container handoff)")
     e.set_defaults(func=cmd_emit)
