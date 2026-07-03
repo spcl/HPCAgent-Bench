@@ -64,14 +64,6 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 # contention and is deterministic. ``setdefault`` so a caller can still force
 # ``JAX_PLATFORMS=cuda`` (e.g. a single-worker perf probe) if they want the GPU.
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
-# All translators live under one unified src tree (numpyto_c / numpyto_fortran /
-# numpyto_common / ...). SRC and FSRC are kept as aliases of it.
-SRC = FSRC = REPO / "optarena" / "numpy_translators" / "src"
-# Emitter packages' import root, for the emit subprocess PYTHONPATH.
-_EMITTER_SRC = [SRC]
-for _p in (str(REPO), str(SRC), str(FSRC)):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
 
 from optarena.spec import BenchSpec  # noqa: E402
 from optarena.initialize import auto_initialize  # noqa: E402
@@ -294,7 +286,6 @@ def _numpy_fn(info):
 
 def _emit(short, info, out: pathlib.Path, precision: str = "") -> bool:
     from optarena.emit_bridge import bench_info_tempfile
-    env = {**os.environ, "PYTHONPATH": f"{SRC}:{FSRC}"}
     npy = (REPO / "optarena" / "benchmarks" / info["relative_path"] / f'{info["module_name"]}_numpy.py')
     # The legacy bench_info JSON the emitter reads is synthesized on the fly from
     # the co-located YAML (the bench_info/ corpus is retired).
@@ -303,7 +294,7 @@ def _emit(short, info, out: pathlib.Path, precision: str = "") -> bool:
             cmd = [sys.executable, "-m", mod, "emit", "--kernel", str(npy), "--bench-info", str(bi), "--out", str(out)]
             if precision:
                 cmd += ["--precision", precision]
-            r = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=str(REPO))
+            r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(REPO))
             if r.returncode:
                 return False
     return True
@@ -750,7 +741,6 @@ def _run_py_backend(backend,
     cli, extra, pattern, dep = PY_BACKENDS[backend]
     if not _dep_available(dep):
         return "skip:not-installed"
-    env = {**os.environ, "PYTHONPATH": ":".join(str(p) for p in _EMITTER_SRC)}
     npy = (REPO / "optarena" / "benchmarks" / info["relative_path"] / f'{info["module_name"]}_numpy.py')
     from optarena.emit_bridge import bench_info_tempfile
     # bench_info JSON synthesized from the co-located YAML (corpus retired).
@@ -768,7 +758,7 @@ def _run_py_backend(backend,
             cmd += ["--fastmath"]
         if backend == "cupy":  # cupy CLI takes no bench-info
             cmd = [sys.executable, "-m", cli, "emit", "--kernel", str(npy), "--out", str(tdp)]
-        if subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=str(REPO)).returncode:
+        if subprocess.run(cmd, capture_output=True, text=True, cwd=str(REPO)).returncode:
             return "FAIL:emit"
         mods = sorted(tdp.glob(pattern))
         if not mods:
