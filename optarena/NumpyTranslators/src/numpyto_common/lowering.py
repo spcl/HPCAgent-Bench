@@ -1646,6 +1646,122 @@ class _PadImplicitTrailingSlices(ast.NodeTransformer):
         return ast.copy_location(node, node)
 
 
+def _fold_subarray_aliases(tree: ast.AST, array_shapes: Dict[str, List[str]]) -> None:
+    """Fold a partial / trailing-slice sub-array alias into ONE flat multi-dim index.
+
+    ``low = A[i, j]`` (or ``A[i, j, :]``) on a 3-D array is a sub-array; each use
+    ``low[k]`` becomes ``A[i, j, k]`` -- a single subscript the emitter lowers to a
+    flat offset -- instead of the chained ``A[i][j]`` a partial index otherwise emits
+    on a flat C pointer (xsbench's ``low`` / ``high`` five-channel reads). Fires only
+    when the alias is a basic-index sub-array of a known array, is assigned exactly
+    once, and EVERY use is a further subscript (a bare whole-array use would need the
+    row materialised, so it is left alone)."""
+
+    def _is_full_slice(e):
+        return isinstance(e, ast.Slice) and e.lower is None and e.upper is None and e.step is None
+
+    aliases: Dict[str, tuple] = {}
+    for stmt in ast.walk(tree):
+        if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
+            continue
+        val = stmt.value
+        if not (isinstance(val, ast.Subscript) and isinstance(val.value, ast.Name)):
+            continue
+        shape = array_shapes.get(val.value.id)
+        if not shape:
+            continue
+        elts = list(val.slice.elts) if isinstance(val.slice, ast.Tuple) else [val.slice]
+        while elts and _is_full_slice(elts[-1]):
+            elts.pop()  # trailing ``:`` axes are exactly what ``local[k]`` will fill
+        # remaining index axes must be plain scalars (no slice / newaxis) and leave at
+        # least one trailing source axis (a genuine sub-array, not a full element index).
+        if any(isinstance(e, ast.Slice) or (isinstance(e, ast.Constant) and e.value is None) for e in elts):
+            continue
+        if len(elts) >= len(shape):
+            continue
+        aliases[stmt.targets[0].id] = (val.value.id, elts)
+    if not aliases:
+        return
+
+    assigns: Dict[str, int] = {}
+    sub_value_ids: set = set()
+    load_ids: Dict[str, List[int]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name) and t.id in aliases:
+                    assigns[t.id] = assigns.get(t.id, 0) + 1
+        if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) and node.value.id in aliases:
+            sub_value_ids.add(id(node.value))
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in aliases:
+            load_ids.setdefault(node.id, []).append(id(node))
+    # Base-index stability: reject an alias whose base index name is reassigned in a
+    # statement that can execute AFTER it (its block-tail, recursively) -- else the
+    # folded ``A[i, j, k]`` at the use site would read the NEW i/j, not the value the
+    # alias captured. (Reassignment BEFORE the alias is fine.)
+    def _child_blocks(s):
+        if isinstance(s, (ast.For, ast.While, ast.If)):
+            yield s.body
+            yield s.orelse
+        elif isinstance(s, ast.Try):
+            yield s.body
+            yield s.orelse
+            yield s.finalbody
+            for h in s.handlers:
+                yield h.body
+
+    def _stores_in(stmts):
+        out: set = set()
+        for s in stmts:
+            for n in ast.walk(s):
+                if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
+                    out.add(n.id)
+                elif isinstance(n, ast.For) and isinstance(n.target, ast.Name):
+                    out.add(n.target.id)
+        return out
+
+    unsafe: set = set()
+
+    def _scan(stmts):
+        for i, s in enumerate(stmts):
+            if (isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name)
+                    and s.targets[0].id in aliases):
+                _, base = aliases[s.targets[0].id]
+                base_names = {n.id for b in base for n in ast.walk(b) if isinstance(n, ast.Name)}
+                if base_names & _stores_in(stmts[i + 1:]):
+                    unsafe.add(s.targets[0].id)
+            for cb in _child_blocks(s):
+                _scan(cb)
+
+    _scan(tree.body if isinstance(tree, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)) else [tree])
+    good = {name: aliases[name] for name in aliases
+            if name not in unsafe and assigns.get(name, 0) == 1
+            and all(i in sub_value_ids for i in load_ids.get(name, []))}
+    if not good:
+        return
+
+    class _Fold(ast.NodeTransformer):
+        def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+            self.generic_visit(node)
+            if isinstance(node.value, ast.Name) and node.value.id in good:
+                aname, base = good[node.value.id]
+                more = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
+                new_idx = [copy.deepcopy(b) for b in base] + more
+                sl = ast.Tuple(elts=new_idx, ctx=ast.Load()) if len(new_idx) > 1 else new_idx[0]
+                return ast.copy_location(
+                    ast.Subscript(value=ast.Name(id=aname, ctx=ast.Load()), slice=sl, ctx=node.ctx), node)
+            return node
+
+        def visit_Assign(self, node: ast.Assign) -> Optional[ast.AST]:
+            if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in good:
+                return None  # drop the now-unused alias assignment
+            self.generic_visit(node)
+            return node
+
+    _Fold().visit(tree)
+    ast.fix_missing_locations(tree)
+
+
 class SliceFusion(ast.NodeTransformer):
     """Rewrite slice-bearing assignments into a single fused loop.
 
@@ -4570,6 +4686,10 @@ def lower(kir: KernelIR) -> KernelIR:
         _resolve_inl_table(zeros_locals)
         _resolve_inl_table(shapes)
         lowered.tree.zeros_locals = zeros_locals  # type: ignore[attr-defined]
+    # Fold partial sub-array aliases (``low = A[i, j]; low[k]`` -> ``A[i, j, k]``)
+    # BEFORE padding, so the emitter emits one flat multi-dim index rather than a
+    # chained ``A[i][j]`` on a flat pointer (xsbench channel-vector reads).
+    _fold_subarray_aliases(lowered.tree, shapes)
     _PadImplicitTrailingSlices(shapes).visit(lowered.tree)
     SliceFusion(shapes).visit(lowered.tree)
     # Final pass: resolve any surviving ``arr.shape[i]`` references to
