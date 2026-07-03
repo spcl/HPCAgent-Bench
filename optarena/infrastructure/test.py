@@ -10,27 +10,27 @@ from typing import Any, Callable, Dict, Sequence, Tuple, Optional
 
 #: The SINGLE source of validation tolerances, keyed by datatype string in BOTH
 #: the numpy-style ("float32") and Precision-enum ("fp32"/"fp8_e4m3") spellings.
-#: Each entry is ``(rtol, atol, norm_error)``; coarser formats get looser floors
+#: Each entry is ``(rtol, atol)``; coarser formats get looser floors
 #: (their eps is larger: fp64 ~2.2e-16, fp32 ~1.2e-7, fp16 ~9.8e-4, bf16 ~7.8e-3,
 #: fp8_e4m3 ~6e-2, fp8_e5m2 ~1.2e-1). Per-benchmark ``rtol``/``atol`` overrides win.
 TOLERANCES = {
-    'float64': (1e-9, 1e-11, 1e-9),
-    'fp64': (1e-9, 1e-11, 1e-9),
-    'float32': (1e-3, 1e-5, 1e-3),
-    'fp32': (1e-3, 1e-5, 1e-3),
-    'float16': (1e-2, 1e-3, 1e-2),
-    'fp16': (1e-2, 1e-3, 1e-2),
-    'bfloat16': (3e-2, 1e-2, 3e-2),
-    'bf16': (3e-2, 1e-2, 3e-2),
-    'float8_e4m3': (1e-1, 1e-2, 1e-1),
-    'fp8_e4m3': (1e-1, 1e-2, 1e-1),
-    'float8_e5m2': (2e-1, 1e-1, 2e-1),
-    'fp8_e5m2': (2e-1, 1e-1, 2e-1),
+    'float64': (1e-9, 1e-11),
+    'fp64': (1e-9, 1e-11),
+    'float32': (1e-3, 1e-5),
+    'fp32': (1e-3, 1e-5),
+    'float16': (1e-2, 1e-3),
+    'fp16': (1e-2, 1e-3),
+    'bfloat16': (3e-2, 1e-2),
+    'bf16': (3e-2, 1e-2),
+    'float8_e4m3': (1e-1, 1e-2),
+    'fp8_e4m3': (1e-1, 1e-2),
+    'float8_e5m2': (2e-1, 1e-1),
+    'fp8_e5m2': (2e-1, 1e-1),
 }
 
 
-def tolerances_for(datatype) -> Tuple[float, float, float]:
-    """``(rtol, atol, norm_error)`` for ``datatype`` in any spelling.
+def tolerances_for(datatype) -> Tuple[float, float]:
+    """``(rtol, atol)`` for ``datatype`` in any spelling.
 
     Resolves through the precision registry first so every valid spelling --
     numpy (``float16``), enum (``fp16``), or ml_dtypes (``float8_e4m3fn``) --
@@ -263,11 +263,10 @@ class Test(object):
                     # Datatype-aware ULP-scaled tolerances from the single
                     # module-level TOLERANCES table; per-benchmark rtol/atol
                     # overrides still win below.
-                    _r, _a, _n = tolerances_for(datatype)
+                    _r, _a = tolerances_for(datatype)
                     rtol = self.bench.info.get('rtol', _r)
                     atol = self.bench.info.get('atol', _a)
-                    norm_error = self.bench.info.get('norm_error', _n)
-                    valid = util.validate(np_out, frmwrk_out, frmwrk_name, rtol=rtol, atol=atol, norm_error=norm_error)
+                    valid = util.validate(np_out, frmwrk_out, frmwrk_name, rtol=rtol, atol=atol)
                     if valid:
                         print("{} - {} - validation: SUCCESS".format(frmwrk_name, impl_name))
                     elif not ignore_errors:

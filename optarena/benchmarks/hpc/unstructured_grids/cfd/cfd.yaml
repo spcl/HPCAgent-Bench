@@ -51,4 +51,3 @@ taxonomy:
   subtrack: cfd
   dwarf: unstructured_grids
   domain: Physics
-norm_error: 1.0e-05

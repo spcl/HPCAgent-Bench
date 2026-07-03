@@ -73,4 +73,3 @@ taxonomy:
   subtrack: mandelbrot2
   dwarf: map_reduce
   domain: Other
-norm_error: 0.001

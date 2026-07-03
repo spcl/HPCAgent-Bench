@@ -33,4 +33,3 @@ taxonomy:
   subtrack: dwt2d
   dwarf: spectral_methods
   domain: Image Processing
-norm_error: 1.0e-05

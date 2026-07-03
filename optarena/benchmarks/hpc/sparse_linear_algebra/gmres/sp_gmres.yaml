@@ -63,4 +63,3 @@ taxonomy:
   domain: Sparse solver
 rtol: 0.001
 atol: 1.0e-05
-norm_error: 1.0

@@ -207,24 +207,6 @@ def _norm(arr) -> np.ndarray:
     return a.astype(np.complex128 if np.iscomplexobj(a) else np.float64)
 
 
-def _within_norm_error(got, exp, norm_error: float) -> bool:
-    """Relative-L2-norm tolerance fallback (the optarena criterion). A
-    boundary-/reassociation-sensitive kernel (nbody's matmul reassociates
-    differently in jax/XLA than numpy's BLAS, amplifying over time steps) can
-    diverge elementwise while staying within its declared global tolerance.
-    Mirrors the native ``_invoke`` path so every backend treats ``norm_error``
-    identically."""
-    if norm_error <= 0.0:
-        return False
-    finite = np.isfinite(got) & np.isfinite(exp)
-    if not finite.all():
-        return False
-    denom = float(np.linalg.norm(exp.ravel()))
-    diff = float(np.linalg.norm((got - exp).ravel()))
-    rel = diff / denom if denom > 0 else diff
-    return rel <= norm_error
-
-
 def _is_perfect_cube(n: int) -> bool:
     """True if ``n`` is a positive perfect cube (``edgeElems**3``)."""
     if not isinstance(n, int) or n < 1:
@@ -587,8 +569,7 @@ def run_kernel(short: str,
                 status[backend] = "FAIL:compile"
                 continue
             try:
-                status[backend] = _invoke_isolated(backend, binding, so, by, syms, expected, compare, rtol, atol,
-                                                   spec.norm_error or 0.0)
+                status[backend] = _invoke_isolated(backend, binding, so, by, syms, expected, compare, rtol, atol)
             except Exception as exc:  # noqa: BLE001
                 status[backend] = f"FAIL:{type(exc).__name__}"
         # Pluto: polyhedral transform of the emitted C source (best effort). OPT-IN --
@@ -596,8 +577,7 @@ def run_kernel(short: str,
         # legacy correctness suites that scan the whole status dict for FAIL) never
         # sees a pluto entry. The e2e gate + generator pass only_backends=E2E_BACKENDS.
         if only_backends is not None and PLUTO in only_backends:
-            status[PLUTO] = _run_pluto(tdp, short, fptype, binding, by, syms, expected, compare, rtol, atol,
-                                       spec.norm_error or 0.0)
+            status[PLUTO] = _run_pluto(tdp, short, fptype, binding, by, syms, expected, compare, rtol, atol)
         # Python/JIT backends (numba / pythran / cupy): skip cleanly when
         # the dependency is absent, else emit + run + compare like above.
         for pb in PY_BACKENDS:
@@ -613,8 +593,7 @@ def run_kernel(short: str,
                                              compare,
                                              rtol,
                                              atol,
-                                             emit_prec=emit_prec,
-                                             norm_error=spec.norm_error or 0.0)
+                                             emit_prec=emit_prec)
             except Exception as exc:  # noqa: BLE001
                 status[pb] = f"FAIL:{type(exc).__name__}"
         if only_backends is None or "jax" in only_backends:
@@ -627,8 +606,7 @@ def run_kernel(short: str,
                                                  compare,
                                                  rtol,
                                                  atol,
-                                                 emit_prec=emit_prec,
-                                                 norm_error=spec.norm_error or 0.0)
+                                                 emit_prec=emit_prec)
             except Exception as exc:  # noqa: BLE001
                 status["jax"] = f"FAIL:{type(exc).__name__}"
     finally:
@@ -719,17 +697,7 @@ def _dep_available(dep: str) -> bool:
     return True
 
 
-def _run_py_backend(backend,
-                    short,
-                    info,
-                    by,
-                    syms,
-                    expected,
-                    compare,
-                    rtol,
-                    atol,
-                    emit_prec: str = "",
-                    norm_error: float = 0.0) -> str:
+def _run_py_backend(backend, short, info, by, syms, expected, compare, rtol, atol, emit_prec: str = "") -> str:
     """Validate a Python/JIT backend (numba/pythran/cupy) vs numpy.
 
     Skips cleanly when the dependency is absent. Emits the backend module,
@@ -839,24 +807,13 @@ def _run_py_backend(backend,
             if g.shape != e.shape:
                 return f"FAIL:shape:{nm}"
             if g.size and not np.allclose(g, e, rtol=rtol, atol=atol, equal_nan=True):
-                if _within_norm_error(g, e, norm_error):
-                    continue
                 fin = np.isfinite(g) & np.isfinite(e)
                 d = float(np.abs(g[fin] - e[fin]).max()) if fin.any() else float("nan")
                 return f"FAIL:{nm}:d={d:.2e}"
         return "ok"
 
 
-def _run_jax_backend(short,
-                     info,
-                     by,
-                     syms,
-                     expected,
-                     compare,
-                     rtol,
-                     atol,
-                     emit_prec: str = "",
-                     norm_error: float = 0.0) -> str:
+def _run_jax_backend(short, info, by, syms, expected, compare, rtol, atol, emit_prec: str = "") -> str:
     """Validate the NumpyToJAX emitter vs numpy, in a forked child.
 
     JAX is multithreaded, and importing it poisons the parent's ``os.fork``
@@ -873,7 +830,7 @@ def _run_jax_backend(short,
     if pid == 0:  # child (jax lives here only)
         os.close(r)
         try:
-            res = _jax_compute(short, info, by, syms, expected, compare, rtol, atol, emit_prec, norm_error)
+            res = _jax_compute(short, info, by, syms, expected, compare, rtol, atol, emit_prec)
         except Exception as exc:  # noqa: BLE001
             res = f"FAIL:{type(exc).__name__}"
         try:
@@ -909,7 +866,7 @@ def _run_jax_backend(short,
     return b"".join(chunks).decode() or "FAIL:no-result"
 
 
-def _jax_compute(short, info, by, syms, expected, compare, rtol, atol, emit_prec: str, norm_error: float = 0.0) -> str:
+def _jax_compute(short, info, by, syms, expected, compare, rtol, atol, emit_prec: str) -> str:
     """Emit + run + compare the jax kernel. Runs ONLY inside the forked child.
 
     JAX is functional: the emitted kernel RETURNS its outputs (even when the
@@ -977,8 +934,6 @@ def _jax_compute(short, info, by, syms, expected, compare, rtol, atol, emit_prec
         if g.shape != e.shape:
             return f"FAIL:shape:{nm}"
         if g.size and not np.allclose(g, e, rtol=rtol, atol=atol, equal_nan=True):
-            if _within_norm_error(g, e, norm_error):
-                continue
             fin = np.isfinite(g) & np.isfinite(e)
             d = float(np.abs(g[fin] - e[fin]).max()) if fin.any() else float("nan")
             return f"FAIL:{nm}:d={d:.2e}"
@@ -1023,7 +978,7 @@ def _run_bounded(cmd, timeout, cwd):
         raise
 
 
-def _run_pluto(tdp, short, fptype, binding, by, syms, expected, compare, rtol, atol, norm_error=0.0) -> str:
+def _run_pluto(tdp, short, fptype, binding, by, syms, expected, compare, rtol, atol) -> str:
     """Pluto backend: transform the emitted ``<base>_<fptype>_pluto_input.c`` scop with
     ``polycc``, compile it, and call it through the C binding (the transformed function
     keeps the same symbol + C-ABI, so it marshals like the C backend).
@@ -1072,12 +1027,12 @@ def _run_pluto(tdp, short, fptype, binding, by, syms, expected, compare, rtol, a
     pb = src.with_name(base + "_pluto_binding.json")
     pluto_binding = json.loads(pb.read_text()) if pb.exists() else binding
     try:
-        return _invoke_isolated("c", pluto_binding, so, by, syms, expected, compare, rtol, atol, norm_error)
+        return _invoke_isolated("c", pluto_binding, so, by, syms, expected, compare, rtol, atol)
     except Exception as exc:  # noqa: BLE001
         return f"FAIL:{type(exc).__name__}"
 
 
-def _invoke_isolated(backend, binding, so, by, syms, expected, compare, rtol, atol, norm_error=0.0) -> str:
+def _invoke_isolated(backend, binding, so, by, syms, expected, compare, rtol, atol) -> str:
     """Run a compiled backend's ctypes call in a forked child.
 
     A miscompiled kernel can corrupt the heap or segfault; since the
@@ -1092,7 +1047,7 @@ def _invoke_isolated(backend, binding, so, by, syms, expected, compare, rtol, at
     if pid == 0:  # child
         os.close(r)
         try:
-            res = _invoke(backend, binding, so, by, syms, expected, compare, rtol, atol, norm_error)
+            res = _invoke(backend, binding, so, by, syms, expected, compare, rtol, atol)
         except Exception as exc:  # noqa: BLE001
             res = f"FAIL:{type(exc).__name__}"
         try:
@@ -1127,7 +1082,7 @@ def _invoke_isolated(backend, binding, so, by, syms, expected, compare, rtol, at
     return b"".join(chunks).decode() or "FAIL:no-result"
 
 
-def _invoke(backend, binding, so, by, syms, expected, compare, rtol, atol, norm_error=0.0) -> str:
+def _invoke(backend, binding, so, by, syms, expected, compare, rtol, atol) -> str:
     lib = ctypes.CDLL(str(so))
     fn = getattr(lib, binding["symbols"][backend])
     is_f = backend == "fortran"
@@ -1176,20 +1131,7 @@ def _invoke(backend, binding, so, by, syms, expected, compare, rtol, atol, norm_
         # nan==nan / inf==inf / -inf==-inf count as equal (equal_nan=True;
         # np.allclose already treats matching infinities as close).
         if got.size and not np.allclose(got, exp, rtol=rtol, atol=atol, equal_nan=True):
-            # Fallback to the optarena relative-L2-norm criterion against the
-            # kernel's declared ``norm_error``. The strict elementwise allclose
-            # above catches codegen bugs, but a boundary-sensitive kernel
-            # (mandelbrot: one grid pixel escaping a single iteration earlier
-            # under fp rounding shifts that pixel's Z by O(1)) legitimately
-            # diverges elementwise while staying within its declared global
-            # tolerance -- exactly what ``norm_error`` exists to express.
             finite = np.isfinite(got) & np.isfinite(exp)
-            if norm_error > 0.0 and finite.all():
-                denom = float(np.linalg.norm(exp.ravel()))
-                rel = (float(np.linalg.norm(
-                    (got - exp).ravel())) / denom if denom > 0 else float(np.linalg.norm((got - exp).ravel())))
-                if rel <= norm_error:
-                    continue
             d = float(np.abs(got[finite] - exp[finite]).max()) if finite.any() else float("nan")
             return f"FAIL:{nm}:d={d:.2e}"
     return "ok"

@@ -35,4 +35,3 @@ taxonomy:
   subtrack: force_lj
   dwarf: n_body_methods
   domain: Physics
-norm_error: 1.0e-05

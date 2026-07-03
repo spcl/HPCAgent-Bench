@@ -46,4 +46,3 @@ taxonomy:
   subtrack: kmeans
   dwarf: map_reduce
   domain: Machine Learning
-norm_error: 1.0e-05
