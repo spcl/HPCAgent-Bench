@@ -213,6 +213,10 @@ class _FortranBodyEmitter(BaseEmitter):
         # interface so the result is bit-identical to the C backend (and numpy,
         # which also uses libm) -- collected here, declared in the spec part.
         self._used_libm: Set[Tuple[str, str]] = set()
+        # Whether the body references IEEE infinity / NaN (``np.inf`` / ``np.nan``
+        # lowered to the C ``INFINITY`` / ``NAN`` names), which Fortran expresses via
+        # ``ieee_value`` -- gates a ``use, intrinsic :: ieee_arithmetic`` in the preamble.
+        self._used_ieee = False
 
     def _emit_for(self, node: ast.For, indent: str) -> str:
         target = node.target
@@ -546,6 +550,16 @@ class _FortranBodyEmitter(BaseEmitter):
                 return "0"
             raise NotImplementedError(f"literal {v!r}")
         if isinstance(node, ast.Name):
+            # ``np.inf`` / ``np.nan`` were lowered to the C99 ``INFINITY`` / ``NAN``
+            # names; Fortran has no such macro, so express them as the kind-matched
+            # ``ieee_value`` (else a bare ``INFINITY`` is an undeclared real and a
+            # ``merge`` beside a real(c_double) raises a kind mismatch).
+            if node.id == "INFINITY":
+                self._used_ieee = True
+                return f"ieee_value(0.0_{self._rk}, ieee_positive_inf)"
+            if node.id == "NAN":
+                self._used_ieee = True
+                return f"ieee_value(0.0_{self._rk}, ieee_quiet_nan)"
             return node.id
         if isinstance(node, ast.Tuple):
             # ``(a, b, c)`` as an axis tuple / array constructor -- emit
@@ -1951,6 +1965,7 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, dtype_override: O
         locals_block=locals_block,
         body=body,
         interface_block=libm_iface,
+        use_ieee=body_emitter._used_ieee,
     )
 
 
@@ -2273,16 +2288,17 @@ def _collect_for_targets(stmts: List[ast.stmt]) -> Set[str]:
 
 
 def _format_subroutine(name: str, params: List[str], decls: List[str], iter_decls: List[str], locals_block: List[str],
-                       body: str, interface_block: str = "") -> str:
+                       body: str, interface_block: str = "", use_ieee: bool = False) -> str:
     param_list = ", ".join(params)
     decl_block = "\n".join(f"    {d}" for d in decls)
     iter_block = "\n".join(iter_decls)
     locals_block_text = "\n".join(locals_block)
     iface = (interface_block + "\n") if interface_block else ""
+    ieee_use = "    use, intrinsic :: ieee_arithmetic\n" if use_ieee else ""
     return f"""\
 subroutine {name}({param_list}) bind(C, name="{name}")
     use, intrinsic :: iso_c_binding
-{iface}{decl_block}
+{ieee_use}{iface}{decl_block}
 {iter_block}
 {locals_block_text}
     integer(c_int64_t) :: t1_, t2_, rate_

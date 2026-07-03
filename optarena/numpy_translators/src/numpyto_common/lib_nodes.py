@@ -447,9 +447,23 @@ def _iter_extent_of(expr: ast.expr,
                 elts: Optional[List[ast.expr]] = None
                 if isinstance(newshape, (ast.Tuple, ast.List)):
                     elts = list(newshape.elts)
-                elif isinstance(newshape, (ast.Name, ast.Constant, ast.BinOp)):
+                elif isinstance(newshape, (ast.Name, ast.Constant, ast.BinOp, ast.UnaryOp)):
                     elts = [newshape]
                 if elts is not None:
+                    # Resolve a ``-1`` placeholder (``x.reshape(batch, -1)``) to
+                    # ``total_source_size // product(other target dims)``.
+                    neg1 = [i for i, e in enumerate(elts) if _const_int(e) == -1]
+                    if len(neg1) == 1:
+                        base = _iter_extent_of(expr.args[0], shape_table)
+                        if base is None:
+                            return None
+                        others = [e for j, e in enumerate(elts) if j != neg1[0]]
+                        denom = _mul_exts(others) if others else _const(1)
+                        # ``/`` (renders as integer division in C/Fortran for int dims),
+                        # not ``//`` which is not valid C when the token is emitted.
+                        elts[neg1[0]] = ast.BinOp(left=_mul_exts(base), op=ast.Div(), right=denom)
+                    elif neg1:
+                        return None  # more than one -1 is ambiguous
                     return tuple(elts)
             if attr == "transpose" and expr.args:
                 # ``x.T`` / ``np.transpose(x)`` -> the operand's extent with
@@ -2500,6 +2514,18 @@ def _const_int(node: Optional[ast.expr]) -> Optional[int]:
     return None
 
 
+def _mul_exts(exprs) -> ast.expr:
+    """Left-folded product of the given extent expressions (``1`` when empty) -- used to
+    size a ``reshape(-1)`` dimension from the source extent and the other target dims."""
+    exprs = list(exprs)
+    if not exprs:
+        return _const(1)
+    prod = exprs[0]
+    for e in exprs[1:]:
+        prod = ast.BinOp(left=prod, op=ast.Mult(), right=e)
+    return prod
+
+
 def _stack_axis(args, kwargs, rank: int) -> int:
     """The (possibly negative) NEW-axis position for ``np.stack``, normalized to
     ``[0, rank]`` (an insert position, so ``rank`` -- append -- is valid, unlike
@@ -2542,28 +2568,40 @@ def expand_stack(target: ast.expr, args: List[ast.expr],
 
 
 def expand_flip(target: ast.expr, args: List[ast.expr],
-                shape_table: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
-    """``out = np.flip(A)`` -> reverse-order copy (last axis only here)."""
+                shape_table: Dict[str, Tuple[str, ...]], kwargs=None) -> List[ast.stmt]:
+    """``out = np.flip(A[, axis])`` -> reverse-order copy. Without ``axis`` EVERY axis is
+    reversed (numpy's default); with ``axis=k`` only that axis. N-D: a loop nest over the
+    shape where each flipped axis index ``i`` reads ``extent - 1 - i`` from the source."""
     if not args_one_name(args):
         raise NotImplementedError("np.flip needs Name arg")
     a = args[0]
     shape = shape_table.get(a.id)
-    if not shape or len(shape) != 1:
-        raise NotImplementedError("np.flip: only 1-D supported")
-    n = shape[0]
-    n_ast = _const_or_name(n)
+    if not shape:
+        raise NotImplementedError("np.flip: source shape unknown")
+    rank = len(shape)
+    axis_node = _kwarg_or_pos(args, kwargs, 1, "axis")
+    if axis_node is None:
+        flipped = set(range(rank))
+    else:
+        ax = _const_axis(axis_node, rank)
+        if ax is None:
+            raise NotImplementedError("np.flip: axis must be a constant int in range")
+        flipped = {ax}
+    iters = [f"__fl{d}" for d in range(rank)]
+    src_elts: List[ast.expr] = []
+    for d in range(rank):
+        if d in flipped:
+            ext = _const_or_name(shape[d])
+            src_elts.append(ast.BinOp(left=ast.BinOp(left=ext, op=ast.Sub(), right=_const(1)),
+                                      op=ast.Sub(), right=_name(iters[d])))
+        else:
+            src_elts.append(_name(iters[d]))
+    out_slot = _name(iters[0]) if rank == 1 else ast.Tuple(elts=[_name(i) for i in iters], ctx=ast.Load())
+    src_slot = src_elts[0] if rank == 1 else ast.Tuple(elts=src_elts, ctx=ast.Load())
     body = [ast.Assign(
-        targets=[ast.Subscript(value=_name(target.id), slice=_name("__i"), ctx=ast.Store())],
-        value=ast.Subscript(
-            value=_name(a.id),
-            slice=ast.BinOp(
-                left=ast.BinOp(left=n_ast, op=ast.Sub(), right=_const(1)),
-                op=ast.Sub(), right=_name("__i")),
-            ctx=ast.Load()))]
-    return [ast.For(
-        target=_store("__i"),
-        iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
-        body=body, orelse=[])]
+        targets=[ast.Subscript(value=_name(target.id), slice=out_slot, ctx=ast.Store())],
+        value=ast.Subscript(value=_name(a.id), slice=src_slot, ctx=ast.Load()))]
+    return _wrap_for_loops(iters, shape, body)
 
 
 def expand_std(target, args, shape_table, kwargs=None):
@@ -6030,12 +6068,23 @@ class _CallHoister(ast.NodeTransformer):
             if isinstance(shape_arg, ast.Tuple):
                 parts = []
                 for e in shape_arg.elts:
-                    if isinstance(e, ast.Constant) and isinstance(e.value, int):
-                        parts.append(str(e.value))
+                    if _const_int(e) is not None:
+                        parts.append(str(_const_int(e)))
                     elif isinstance(e, ast.Name):
                         parts.append(e.id)
                     else:
                         parts.append(ast.unparse(e))
+                # Resolve a ``-1`` placeholder (``x.reshape(batch, -1)``) to the source
+                # element count over the product of the other target dims. ``/`` renders
+                # as integer division in C/Fortran (both dims are integers).
+                neg1 = [i for i, p in enumerate(parts) if p.strip() == "-1"]
+                src = args[0]
+                src_shape = self.shape_table.get(src.id) if isinstance(src, ast.Name) else None
+                if len(neg1) == 1 and src_shape:
+                    total = " * ".join(f"({t})" for t in src_shape)
+                    others = [p for j, p in enumerate(parts) if j != neg1[0]]
+                    denom = " * ".join(f"({p})" for p in others) if others else "1"
+                    parts[neg1[0]] = f"({total}) / ({denom})"
                 return tuple(parts)
         if op in {"outer", "add.outer"} and len(args) == 2:
             a_ext = _iter_extent_of(args[0], self.shape_table)
@@ -6235,10 +6284,19 @@ class LibNodeRewriter(ast.NodeTransformer):
                     toks = tuple(ast.unparse(e) for e in newshape.elts)
                 elif isinstance(newshape, ast.Name):
                     toks = (newshape.id,)
-                elif (isinstance(newshape, ast.Constant)
-                      and isinstance(newshape.value, int)):
-                    toks = (str(newshape.value),)
+                elif _const_int(newshape) is not None:
+                    toks = (str(_const_int(newshape)),)
                 if toks is not None:
+                    # Resolve a ``-1`` placeholder (``x.reshape(batch, -1)``) to the source
+                    # element count divided by the product of the other target dims.
+                    neg1 = [i for i, t in enumerate(toks) if t.strip() == "-1"]
+                    src = rhs.args[0]
+                    src_shape = self.shape_table.get(src.id) if isinstance(src, ast.Name) else None
+                    if len(neg1) == 1 and src_shape:
+                        total = " * ".join(f"({t})" for t in src_shape)
+                        others = [t for j, t in enumerate(toks) if j != neg1[0]]
+                        denom = " * ".join(f"({t})" for t in others) if others else "1"
+                        toks = tuple(f"({total}) / ({denom})" if j == neg1[0] else t for j, t in enumerate(toks))
                     self.shape_table[target_id] = toks
             # For reshape with an unparsed newshape, and for
             # repeat / transpose, the dedicated expander plus the
