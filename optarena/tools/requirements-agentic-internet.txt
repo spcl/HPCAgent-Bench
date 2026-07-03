@@ -1,0 +1,5 @@
+# Optional second research backend requested for comparison.
+# Install this in addition to requirements.txt when you want
+# /web/research/agentic-internet to use the upstream project directly.
+git+https://github.com/AgenticInternet/agentic-internet.git
+
