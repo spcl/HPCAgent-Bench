@@ -1,26 +1,26 @@
-"""Sanitize emitted Python source before it crosses into a container / mounted
-work folder (directive #4).
+"""Source sanitization -- the single canonical implementation, shared by the
+standalone numpytranslators package and (re-exported through ``optarena.sanitize``)
+the optarena application.
 
-Two operations, both driven through ``ast`` so they are faithful (never a regex
-guess):
-
-* **strip comments** -- ``ast.parse`` -> ``ast.unparse`` drops every ``#``
-  comment (comments are not part of the AST); docstrings are string-expression
-  *statements* and survive unparse, so they are removed explicitly.
-* **mangle identifiers** -- rename locals per a ``{original: mangled}`` registry
-  via a ``NodeTransformer`` (off by default; opt-in).
-
-Scope: the *Python-emitting* backends (CuPy / Numba / Pythran, and later
-JAX / DaCe) plus the assembled runnable module. The C / Fortran emitters never
-carry Python comments (they reconstruct the program from the AST), so they do
-not route through here.
-
-Comment stripping is automatic for any backend that already round-trips through
-``ast.unparse``; this module is what gives the *textual passthrough* backends
-the same guarantee without forcing them onto the IR.
+* :func:`strip_comments` (comments.py) -- multi-language comment removal across the
+  benchmark languages (tree-sitter when importable, else a stdlib fallback), leaving
+  string literals AND a leading license / attribution header intact so a ported
+  kernel's CC-BY notice survives redistribution.
+* :func:`mangle` / :func:`build_name_map` (mangle.py) -- boundary-safe identifier
+  de-identification.
+* :func:`sanitize` (below) -- ast-based ``#``-comment + docstring strip for the
+  EMITTED Python of the textual-passthrough backends (CuPy / Numba / Pythran, and
+  later JAX / DaCe), optionally mangled per a ``{original: mangled}`` registry.
+  ``ast.parse`` -> ``ast.unparse`` drops comments (not in the AST); docstrings
+  survive unparse as string-expression statements, so they are removed explicitly.
 """
 import ast
 from typing import Dict, Optional
+
+from .comments import strip_comments, tree_sitter_available
+from .mangle import build_name_map, mangle
+
+__all__ = ["strip_comments", "mangle", "build_name_map", "tree_sitter_available", "sanitize"]
 
 
 class Rename(ast.NodeTransformer):

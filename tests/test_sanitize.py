@@ -18,8 +18,7 @@ import tempfile
 
 import pytest
 
-from optarena.sanitize import build_name_map, mangle, strip_comments
-from optarena.sanitize.comments import tree_sitter_available
+from optarena.sanitize import build_name_map, mangle, strip_comments, tree_sitter_available
 
 TREE_SITTER = tree_sitter_available()
 
