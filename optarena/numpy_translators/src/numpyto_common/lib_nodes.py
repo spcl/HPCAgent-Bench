@@ -3713,73 +3713,137 @@ def expand_repeat(target: ast.expr, args: List[ast.expr],
     return out
 
 
-def expand_linalg_norm(target: ast.expr, args: List[ast.expr],
+def _classify_norm_ord(node: Optional[ast.expr]) -> Optional[str]:
+    """Classify a ``np.linalg.norm`` ``ord`` argument.
+
+    ``"l2"`` for the default (``None`` / 2 -> Euclidean vector norm or
+    Frobenius matrix norm), ``"l1"`` for ``ord=1``, ``"inf"`` for ``np.inf``
+    / ``math.inf`` / ``float("inf")``. Anything else (3, ``'nuc'``, ``'fro'``
+    spelled out, ``-inf``, the matrix spectral 2-norm) -> ``None``, so the
+    caller raises rather than emit a silently-wrong norm.
+    """
+    if node is None:
+        return "l2"
+    if isinstance(node, ast.Constant):
+        v = node.value
+        if isinstance(v, bool):
+            return None
+        if v is None or v == 2:
+            return "l2"
+        if v == 1:
+            return "l1"
+        if isinstance(v, float) and v == float("inf"):
+            return "inf"
+        return None
+    if isinstance(node, ast.Attribute) and node.attr in ("inf", "Inf", "PINF"):
+        return "inf"
+    # ``np.inf`` is rewritten to the bare Name ``INFINITY`` (the lowered
+    # numeric-constant token, see lowering.py) before this expander runs.
+    if isinstance(node, ast.Name) and node.id in ("INFINITY", "inf", "Inf"):
+        return "inf"
+    return None
+
+
+def expand_linalg_norm(target: ast.expr,
+                       args: List[ast.expr],
                        shape_table: Dict[str, Tuple[str, ...]],
                        kwargs=None) -> List[ast.stmt]:
-    """``s = np.linalg.norm(v[, ord=2, axis=None, keepdims=False])`` ->
-    L2 norm via squared-sum accumulator + sqrt.
+    """``s = np.linalg.norm(v[, ord, axis=None, keepdims=False])``.
 
-    Supports the common iterative-solver pattern ``np.linalg.norm(r)``
-    (full reduction, scalar result) AND axis-aware norms (per-row /
-    per-column norms via ``axis=k`` or ``axis=(k1, k2, ...)``).
-    ``keepdims=True`` is forwarded through the underlying axis
-    reduction. ``ord`` other than 2 (or None which defaults to 2 for
-    vectors / Frobenius for matrices) raises NotImplementedError.
+    numpy puts ``ord`` SECOND (positional) -- unlike a reduction, whose second
+    positional is ``axis`` -- so it is parsed explicitly before delegating
+    axis/keepdims handling (else a positional ``ord`` is misread as ``axis``:
+    ``ord=1`` spuriously raises and ``ord=np.inf`` silently returns the L2
+    norm). Supported:
+
+    * ``ord`` in {None, 2}: L2 / Frobenius via squared-sum + sqrt, full or
+      axis-aware (``np.linalg.norm(r)`` and per-row / per-column ``axis=``).
+    * ``ord`` in {1, inf} for a 1-D (vector) operand: ``sum(|v|)`` / ``max(|v|)``.
+
+    A matrix 1/inf norm (max col/row abs-sum), an ord+axis combination, or any
+    other ``ord`` raises NotImplementedError -- never a silent wrong norm.
     """
     if not args:
         raise NotImplementedError("np.linalg.norm needs an operand")
-    # Reject non-default ``ord=`` explicitly so the caller can fall
-    # back rather than silently producing the wrong norm.
-    for kw in kwargs or []:
-        if kw.arg == "ord":
-            if not (isinstance(kw.value, ast.Constant)
-                    and kw.value.value in (None, 2, 2.0)):
-                raise NotImplementedError(
-                    "np.linalg.norm: only ord=2 (default) supported")
+    kwargs = list(kwargs or [])
     a = args[0]
-    # Axis-aware: lower as ``sqrt(sum(a*a, axis, keepdims))`` --
-    # delegate the loop nest scaffolding to the shared axis reducer
-    # by squaring the operand inline.
-    axes, keepdims = _read_axis_keepdims(args, kwargs)
-    if axes is None:
-        # Full reduction -- scalar accumulator + sqrt.
-        extent = _iter_extent_of(a, shape_table)
-        if extent is None:
-            raise NotImplementedError(
-                "np.linalg.norm: cannot derive iteration extent")
-        iters = [_make_iter_name("__nr", i) for i in range(len(extent))]
-        sa = _scalarize_at_iters(a, [_name(it) for it in iters], shape_table)
-        acc_init = ast.Assign(targets=[_store(target.id)], value=_const(0.0))
-        inner = [ast.AugAssign(
-            target=_store(target.id),
-            op=ast.Add(),
-            value=ast.BinOp(left=sa, op=ast.Mult(), right=sa))]
-        loops = _wrap_for_loops(iters, extent, inner)
-        finish = ast.Assign(
-            targets=[_store(target.id)],
-            value=ast.Call(func=_name("sqrt"),
-                           args=[_name(target.id)], keywords=[]))
-        return [acc_init, *loops, finish]
-    # Axis-aware -- reduce per axis kept, sum-of-squares, then sqrt.
-    # Use the shared scaffold via ``_expand_axis_reduction``: feed it
-    # ``a`` and an ``op_fn`` that adds the squared scalarised element.
-    sq_op = lambda acc, x: ast.BinOp(
-        left=acc, op=ast.Add(),
-        right=ast.BinOp(left=x, op=ast.Mult(), right=x))
-    # Post-fn: target = sqrt(target) per output element.
-    sqrt_post = lambda lvalue, divisor: ast.Assign(
-        targets=[lvalue if isinstance(lvalue, ast.Name)
-                 else ast.Subscript(value=lvalue.value, slice=lvalue.slice,
-                                    ctx=ast.Store())],
-        value=ast.Call(
-            func=_name("sqrt"),
-            args=[lvalue if isinstance(lvalue, ast.Name)
-                  else ast.Subscript(value=lvalue.value, slice=lvalue.slice,
-                                     ctx=ast.Load())],
-            keywords=[]))
-    return _expand_axis_reduction(
-        target, args, kwargs, shape_table,
-        init=_const(0.0), op_fn=sq_op, post_fn=sqrt_post)
+    ord_node: Optional[ast.expr] = args[1] if len(args) >= 2 else None
+    for kw in kwargs:
+        if kw.arg == "ord":
+            ord_node = kw.value
+    kind = _classify_norm_ord(ord_node)
+    if kind is None:
+        raise NotImplementedError("np.linalg.norm: unsupported ord (only None/2, 1, inf)")
+    # Strip ``ord`` (positional arg[1] or keyword) so the shared axis reader
+    # sees the reduction layout (operand, axis, keepdims).
+    reduction_args = [a] + list(args[2:])
+    reduction_kwargs = [kw for kw in kwargs if kw.arg != "ord"]
+    axes, keepdims = _read_axis_keepdims(reduction_args, reduction_kwargs)
+
+    if kind == "l2":
+        if axes is None:
+            # Full reduction -- scalar accumulator + sqrt.
+            extent = _iter_extent_of(a, shape_table)
+            if extent is None:
+                raise NotImplementedError("np.linalg.norm: cannot derive iteration extent")
+            iters = [_make_iter_name("__nr", i) for i in range(len(extent))]
+            sa = _scalarize_at_iters(a, [_name(it) for it in iters], shape_table)
+            acc_init = ast.Assign(targets=[_store(target.id)], value=_const(0.0))
+            inner = [
+                ast.AugAssign(target=_store(target.id), op=ast.Add(), value=ast.BinOp(left=sa, op=ast.Mult(), right=sa))
+            ]
+            loops = _wrap_for_loops(iters, extent, inner)
+            finish = ast.Assign(targets=[_store(target.id)],
+                                value=ast.Call(func=_name("sqrt"), args=[_name(target.id)], keywords=[]))
+            return [acc_init, *loops, finish]
+        # Axis-aware -- reduce per axis kept, sum-of-squares, then sqrt.
+        sq_op = lambda acc, x: ast.BinOp(left=acc, op=ast.Add(), right=ast.BinOp(left=x, op=ast.Mult(), right=x))
+        sqrt_post = lambda lvalue, divisor: ast.Assign(targets=[
+            lvalue
+            if isinstance(lvalue, ast.Name) else ast.Subscript(value=lvalue.value, slice=lvalue.slice, ctx=ast.Store())
+        ],
+                                                       value=ast.Call(func=_name("sqrt"),
+                                                                      args=[
+                                                                          lvalue if isinstance(lvalue, ast.Name) else
+                                                                          ast.Subscript(value=lvalue.value,
+                                                                                        slice=lvalue.slice,
+                                                                                        ctx=ast.Load())
+                                                                      ],
+                                                                      keywords=[]))
+        return _expand_axis_reduction(target,
+                                      reduction_args,
+                                      reduction_kwargs,
+                                      shape_table,
+                                      init=_const(0.0),
+                                      op_fn=sq_op,
+                                      post_fn=sqrt_post)
+
+    # ``ord`` in {1, inf}: VECTOR (1-D) only. A matrix 1/inf norm is the max
+    # column / row abs-sum -- a different reduction not lowered here.
+    if axes is not None:
+        raise NotImplementedError("np.linalg.norm: ord=1/inf with axis= not supported")
+    extent = _iter_extent_of(a, shape_table)
+    if extent is None:
+        raise NotImplementedError("np.linalg.norm: cannot derive iteration extent")
+    if len(extent) != 1:
+        raise NotImplementedError("np.linalg.norm: ord=1/inf only supported for a 1-D operand")
+    it = _make_iter_name("__nr", 0)
+    sa = _scalarize_at_iters(a, [_name(it)], shape_table)
+    abs_sa = ast.Call(func=_name("abs"), args=[sa], keywords=[])
+    acc_init = ast.Assign(targets=[_store(target.id)], value=_const(0.0))
+    if kind == "l1":
+        inner = [ast.AugAssign(target=_store(target.id), op=ast.Add(), value=abs_sa)]
+    else:  # inf: running max of |v| (|v| >= 0, so 0 is a safe max identity)
+        inner = [
+            ast.Assign(targets=[_store(target.id)],
+                       value=ast.IfExp(test=ast.Compare(left=copy.deepcopy(abs_sa),
+                                                        ops=[ast.Gt()],
+                                                        comparators=[_name(target.id)]),
+                                       body=abs_sa,
+                                       orelse=_name(target.id)))
+        ]
+    loops = _wrap_for_loops([it], extent, inner)
+    return [acc_init, *loops]
 
 
 def _guarded_div(num: ast.expr, denom: ast.expr) -> ast.expr:
