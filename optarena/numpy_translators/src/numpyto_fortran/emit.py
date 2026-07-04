@@ -293,6 +293,12 @@ class _FortranBodyEmitter(BaseEmitter):
         # ``m & ~m3`` routes to ``.AND.`` of two logicals, not integer IAND.
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Invert):
             return self._is_logical_operand(node.operand)
+        # A ``& | ^`` combine of logicals is itself logical, so a NESTED combine
+        # ``(m1 & m2) | m3`` routes the OUTER op to ``.OR.`` of two logicals rather than
+        # integer IOR (gfortran rejects IAND/IOR/IEOR of LOGICAL args). Mirrors
+        # ``_is_logical_node``; without it only two-way combines lower correctly.
+        if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.BitAnd, ast.BitOr, ast.BitXor)):
+            return self._is_logical_operand(node.left) and self._is_logical_operand(node.right)
         if isinstance(node, ast.Name) and node.id in self._logical_array_locals:
             return True
         # A subscript into a known boolean-array local is also logical.
@@ -323,10 +329,16 @@ class _FortranBodyEmitter(BaseEmitter):
 
     def _is_logical_node(self, node: ast.AST) -> bool:
         """True when ``node`` emits a Fortran LOGICAL: a comparison / bool-op /
-        ``not`` (``_produces_logical``) or a Name / Subscript of a local the
-        lowering typed boolean."""
+        ``not`` (``_produces_logical``), a Name / Subscript of a local the
+        lowering typed boolean, or a ``~`` / ``& | ^`` combine of those (so
+        ``~(m1 & m2)`` is recognised -- ``_produces_logical`` alone bottoms out
+        at the bare Name locals and misses it)."""
         if _produces_logical(node):
             return True
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Invert):
+            return self._is_logical_node(node.operand)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.BitAnd, ast.BitOr, ast.BitXor)):
+            return self._is_logical_node(node.left) and self._is_logical_node(node.right)
         logicals = vars(self).get("_logical_array_locals", set())
         if isinstance(node, ast.Name) and node.id in logicals:
             return True
@@ -634,6 +646,11 @@ class _FortranBodyEmitter(BaseEmitter):
                 left, right = self._emit_bitwise_pair(node.left, node.right)
                 return f"IOR({left}, {right})"
             if isinstance(node.op, ast.BitXor):
+                # ``^`` on LOGICAL masks is elementwise XOR -> Fortran ``.neqv.``
+                # (IEOR is an INTEGER bit op and rejects a logical operand), mirroring
+                # the ``&`` / ``|`` -> ``.AND.`` / ``.OR.`` handling above.
+                if self._is_logical_operand(node.left) and self._is_logical_operand(node.right):
+                    return f"({self.emit_expr(node.left)} .neqv. {self.emit_expr(node.right)})"
                 left, right = self._emit_bitwise_pair(node.left, node.right)
                 return f"IEOR({left}, {right})"
             if isinstance(node.op, ast.LShift):

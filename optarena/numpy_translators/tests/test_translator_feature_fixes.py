@@ -373,23 +373,23 @@ def _oracle():
     return no
 
 
-#: Kernels unblocked by this batch, with the feature each exercises. All three
-#: native backends (C / C++ / Fortran) must reproduce numpy.
+#: Kernels unblocked by this batch, with the feature each exercises. This is a curated,
+#: feature-labeled NATIVE regression pointer (C / C++ / Fortran must reproduce numpy). The
+#: numba / pythran / jax breadth for the hpc kernels here is already provided by the repo-wide
+#: corpus gate (tests/test_e2e_numerical.py, which carries the jax-timeout retry), so this
+#: file stays native-only. ABI-order duplicates are collapsed to one representative per family
+#: (matvec -> gesummv, stencil -> conv2d, wavefront-DP -> smith_waterman).
 _E2E = [
     ("edge_laplacian", "np.add.at scatter + fancy-index gather x[src]"),
     ("gem", "3D broadcast + axis reduction + sqrt-of-reduction local decl"),
     ("dfa", "rng.integers 2-D shape recovery + dynamic gather flatten"),
     ("bellman_ford", "np.full(N, fill) shape (no INF phantom axis)"),
-    ("atax", "Fortran ABI param-order (promoted return)"),
-    ("bicg", "Fortran ABI param-order"),
-    ("gesummv", "Fortran ABI param-order"),
-    ("conv2d", "Fortran ABI param-order"),
-    ("fdtd_2d", "Fortran ABI param-order (_fict_ rename)"),
-    ("smith_waterman", "outer-broadcast + dim-alias fold + int32-out + Fortran where/max"),
-    ("needleman_wunsch", "outer-broadcast + dim-alias fold + int32 output buffer"),
+    ("gesummv", "Fortran ABI param-order (matvec family: subsumes atax/bicg)"),
+    ("conv2d", "Fortran ABI param-order (stencil family: subsumes fdtd_2d; ml-track, only e2e net)"),
+    ("smith_waterman", "outer-broadcast + dim-alias fold + int32-out + Fortran where/max (DP family: subsumes needleman_wunsch)"),
     ("hotspot_3d", "N-D implicit trailing-slice padding (3-D stencil shifts)"),
     ("gaussian", "broadcast right-alignment (rank-1 update mult[:,None]*A[k,k:])"),
-    ("lenet", "newaxis not counted vs rank in trailing-slice pad (conv reduction)"),
+    # lenet moved to test_microapps.py (full backend matrix, not native-only)
     ("fft_3d", "np.fft.fftn/ifftn naive DFT + 3-D fancy gather u2[q,r,s] + arange int dtype"),
     ("fft_1d", "np.fft.fft/ifft 1-D naive DFT (single-axis path) + complex round-trip"),
     ("bfs", "int64 graph/level (yaml dtypes) -> Fortran logical/int merge typing"),
@@ -402,12 +402,23 @@ _E2E = [
 ]
 
 
+#: Backend set per e2e kernel. Default is native-only: the numba/pythran/jax breadth for the
+#: hpc kernels already lives in the corpus gate (test_e2e_numerical.py), and several of these
+#: (smith_waterman, dfa, cloudsc, velocity_tendencies) are scalar in-place DP nests jax lowers
+#: to a forked data-dependent while-loop and hangs on. conv2d is the exception: it is ml-track,
+#: so the corpus gate (foundation+hpc only) never covers it -- validate its wider matrix here so
+#: its jax path is checked somewhere (numba/pythran self-skip; jax is verified ok -- conv2d is a
+#: counted conv loop, not a data-dependent while, so it lowers and runs, it does not hang).
+_E2E_NATIVE = {"c", "cpp", "fortran"}
+_E2E_BACKENDS = {"conv2d": {"c", "cpp", "fortran", "numba", "pythran", "jax"}}
+
+
 @pytest.mark.parametrize("kernel,feature", _E2E, ids=[k for k, _ in _E2E])
 def test_feature_kernels_e2e(kernel, feature):
     no = _oracle()
-    status = no.run_kernel(kernel, preset="S", precision="fp64", seed=0)
-    fails = {b: s for b, s in status.items()
-             if b in ("c", "cpp", "fortran") and s.startswith("FAIL")}
+    status = no.run_kernel(kernel, preset="S", precision="fp64", seed=0,
+                           only_backends=_E2E_BACKENDS.get(kernel, _E2E_NATIVE))
+    fails = {b: s for b, s in status.items() if s.startswith("FAIL")}
     assert not fails, f"{kernel} ({feature}): {fails}"
 
 
@@ -531,7 +542,10 @@ def test_fortran_where_negative_int_literal():
     """``np.where(cond, 2, -1)`` -- both MERGE branches share a type (the -1 is
     a UnaryOp, not a Constant; the old code left it integer beside a real)."""
     no = _oracle()
-    status = no.run_kernel("smith_waterman", preset="S", precision="fp64", seed=0)
+    # fortran-only: this is a focused section-R pointer (where neg-int-literal typing), so it
+    # need not re-run the other backends the _E2E smith_waterman entry already covers.
+    status = no.run_kernel("smith_waterman", preset="S", precision="fp64", seed=0,
+                           only_backends={"fortran"})
     assert status.get("fortran") == "ok", status
 
 

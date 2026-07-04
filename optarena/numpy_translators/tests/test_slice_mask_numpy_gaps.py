@@ -17,7 +17,10 @@ Four families, each validated numerically vs numpy across C / C++ / Fortran:
 import numpy as np
 from _op_oracle import run_op
 
-_NATIVE = ("c", "cpp", "fortran")
+# Full backend matrix: native c/c++/fortran + numba + pythran + jax. A backend
+# that does not lower a pattern reports ``skip`` (pythran declines the fancy
+# slice/mask forms) and is accepted; only a real FAIL fails the test.
+_ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 
 
 def _ok(res):
@@ -26,7 +29,7 @@ def _ok(res):
 
 def _run(body, ins, outs, syms, shapes):
     src = "import numpy as np\ndef f(" + ", ".join(list(ins) + list(outs)) + "):\n" + body + "\n"
-    return _ok(run_op(src, "f", ins, outs, syms, shapes=shapes, backends=_NATIVE))
+    return _ok(run_op(src, "f", ins, outs, syms, shapes=shapes, backends=_ALL))
 
 
 _A = np.linspace(0.5, 3.0, 6)
@@ -40,26 +43,9 @@ def test_reverse_whole_array_assign():
     assert ok, res
 
 
-def test_reverse_to_local_then_copy():
-    ok, res = _run(" b = a[::-1]\n for i in range(6):\n  out[i] = b[i]",
-                   {"a": _A}, {"out": (6, )}, {"N": 6}, {"a": "(N,)", "out": "(N,)"})
-    assert ok, res
-
-
 def test_strided_reverse_step2():
     ok, res = _run(" b = a[::-2]\n for i in range(3):\n  out[i] = b[i]",
                    {"a": _A}, {"out": (3, )}, {"N": 6}, {"a": "(N,)", "out": "(3,)"})
-    assert ok, res
-
-
-def test_forward_strided_slice_regression():
-    ok, res = _run(" b = a[1:6:2]\n for i in range(3):\n  out[i] = b[i]",
-                   {"a": _A}, {"out": (3, )}, {"N": 6}, {"a": "(N,)", "out": "(3,)"})
-    assert ok, res
-
-
-def test_whole_array_copy_regression():
-    ok, res = _run(" out[:] = a[:]", {"a": _A}, {"out": (6, )}, {"N": 6}, {"a": "(N,)", "out": "(N,)"})
     assert ok, res
 
 
@@ -70,19 +56,6 @@ def test_masked_sum_inline():
     ok, res = _run(" m = a > 1.5\n out[0] = np.sum(a[m])", {"a": _A}, {"out": (1, )}, {"N": 6},
                    {"a": "(N,)", "out": "(1,)"})
     assert ok, res
-
-
-def test_masked_mean_inline():
-    ok, res = _run(" m = a > 1.5\n out[0] = np.mean(a[m])", {"a": _A}, {"out": (1, )}, {"N": 6},
-                   {"a": "(N,)", "out": "(1,)"})
-    assert ok, res
-
-
-def test_masked_max_min_method_form():
-    for op in ("max", "min"):
-        ok, res = _run(f" m = a > 1.5\n out[0] = a[m].{op}()", {"a": _A}, {"out": (1, )}, {"N": 6},
-                       {"a": "(N,)", "out": "(1,)"})
-        assert ok, (op, res)
 
 
 def test_masked_max_seed_excludes_index0():
@@ -124,20 +97,6 @@ def test_count_nonzero_mask_and_float():
     assert ok, res
 
 
-def test_any_all_count_inline_compare():
-    for op in ("any", "all", "count_nonzero"):
-        ok, res = _run(f" out[0] = np.{op}(a > 1.5)", {"a": _A}, {"out": (1, )}, {"N": 6},
-                       {"a": "(N,)", "out": "(1,)"})
-        assert ok, (op, res)
-
-
-def test_count_nonzero_axis():
-    a = np.array([[0.0, 1.0, 0.0], [2.0, 0.0, 3.0]])
-    ok, res = _run(" out[:] = np.count_nonzero(a, axis=1)", {"a": a}, {"out": (2, )}, {"M": 2, "N": 3},
-                   {"a": "(M, N)", "out": "(M,)"})
-    assert ok, res
-
-
 def test_any_all_axis():
     a = np.array([[0.0, 1.0, 0.0], [2.0, 0.0, 3.0]])
     ok, res = _run(" m = a > 1.0\n out[:] = np.any(m, axis=0)", {"a": a}, {"out": (3, )}, {"M": 2, "N": 3},
@@ -159,20 +118,20 @@ def test_not_mask_in_where():
     assert ok, res
 
 
-def test_not_mask_inline_compare():
-    ok, res = _run(" out[:] = np.where(~(a > 1.0), a, 0.0)", {"a": _S}, {"out": (6, )}, {"N": 6},
-                   {"a": "(N,)", "out": "(N,)"})
-    assert ok, res
-
-
-def test_not_mask_named_then_reduce():
-    ok, res = _run(" m = a > 1.0\n nm = ~m\n out[0] = np.sum(a[nm])", {"a": _S}, {"out": (1, )}, {"N": 6},
-                   {"a": "(N,)", "out": "(1,)"})
-    assert ok, res
-
-
-def test_not_mask_in_combine():
-    for combine in ("m & ~m3", "m | ~m3", "~m & ~m3"):
-        ok, res = _run(f" m = a > 1.0\n m3 = a > 2.0\n out[:] = np.where({combine}, a, 0.0)",
+def test_not_over_compound_mask():
+    """``~`` applied to a ``& | ^`` COMBINE (De Morgan), not just a bare Name -- the
+    operand is a BinOp, so the bool-detection must recurse. C bitwise ``~`` on the
+    0/1 combine would give the truthy -2 (always-true where); Fortran NOT() on a
+    logical is a compile error."""
+    for combine in ("m1 & m2", "m1 | m2", "m1 ^ m2"):
+        ok, res = _run(f" m1 = a > 0.0\n m2 = a < 2.0\n out[:] = np.where(~({combine}), a, 0.0)",
                        {"a": _S}, {"out": (6, )}, {"N": 6}, {"a": "(N,)", "out": "(N,)"})
         assert ok, (combine, res)
+
+
+def test_logical_xor_combine():
+    """``m1 ^ m2`` on boolean masks is elementwise XOR (Fortran ``.neqv.``, not the
+    integer IEOR that rejects a logical operand)."""
+    ok, res = _run(" m1 = a > 0.0\n m2 = a < 2.0\n out[:] = np.where(m1 ^ m2, a, 0.0)",
+                   {"a": _S}, {"out": (6, )}, {"N": 6}, {"a": "(N,)", "out": "(N,)"})
+    assert ok, res

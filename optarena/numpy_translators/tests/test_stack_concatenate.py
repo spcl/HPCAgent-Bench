@@ -3,12 +3,14 @@
 ``np.concatenate`` was already lowered (join operands along an existing axis); ``np.stack``
 adds a NEW axis (out rank = operand rank + 1, the k-th extent = number of operands) and is
 lowered here. Both emit per-operand copy loops for the C / Fortran backends (numba / pythran
-/ jax run the numpy verbatim). Validated numerically vs numpy across C / C++ / Fortran.
+/ jax run the numpy verbatim). Validated numerically vs numpy across the full backend matrix
+(C / C++ / Fortran + numba / pythran / jax, skip-tolerant). ``test_stack_negative_axis_appends``
+subsumes the positive last-axis case (``-1`` normalizes to it).
 """
 import numpy as np
 from _op_oracle import run_op
 
-_NATIVE = ("c", "cpp", "fortran")
+_ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 
 
 def _ok(res):
@@ -29,7 +31,7 @@ def _stack3d(axis, out_shape, out_sym, n_operands=2):
            "            for l in range(out.shape[2]):\n"
            "                out[i, j, l] = c[i, j, l]\n")
     return run_op(src, "k", {"a": _A, "b": _B}, {"out": out_shape}, {"M": 2, "N": 3},
-                  shapes={"a": "(M, N)", "b": "(M, N)", "out": out_sym}, backends=_NATIVE)
+                  shapes={"a": "(M, N)", "b": "(M, N)", "out": out_sym}, backends=_ALL)
 
 
 def test_stack_axis0():
@@ -39,11 +41,6 @@ def test_stack_axis0():
 
 def test_stack_axis1():
     ok, res = _ok(_stack3d(1, (2, 2, 3), "(M, 2, N)"))
-    assert ok, res
-
-
-def test_stack_last_axis():
-    ok, res = _ok(_stack3d(2, (2, 3, 2), "(M, N, 2)"))
     assert ok, res
 
 
@@ -72,7 +69,7 @@ def _concat(axis, out_shape, out_sym, n_operands=2):
            "        for j in range(out.shape[1]):\n"
            "            out[i, j] = c[i, j]\n")
     return run_op(src, "k", {"a": _A, "b": _B}, {"out": out_shape}, {"M": 2, "N": 3},
-                  shapes={"a": "(M, N)", "b": "(M, N)", "out": out_sym}, backends=_NATIVE)
+                  shapes={"a": "(M, N)", "b": "(M, N)", "out": out_sym}, backends=_ALL)
 
 
 def test_concatenate_axis0():

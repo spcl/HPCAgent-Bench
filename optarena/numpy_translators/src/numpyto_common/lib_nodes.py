@@ -649,9 +649,18 @@ def _iter_extent_of(expr: ast.expr,
                 # elements (== ``len(range(lo, hi, k))``). dwt2d's Haar
                 # ``b[:, 0::2]`` over an even axis ``s`` -> ``s // 2``.
                 step = _slice_step_const(ax)
+                if step is not None and step < 0 and (ax.lower is not None or ax.upper is not None):
+                    # A BOUNDED reverse slice (``a[lo::-1]`` / ``a[:hi:-1]``): the
+                    # forward-default span ``raw = hi - lo`` is NOT the element count
+                    # under a negative step (numpy flips the bound defaults), so the
+                    # ceil below would over-count and the copy loop would read OOB.
+                    # Only full-axis reverse (``a[::-k]``, both bounds omitted) is
+                    # reliably counted here -- bail on the bounded form.
+                    return None
                 if step is not None and step != 1:
-                    # Element count is ceil(raw / |step|) -- a negative step (reverse)
-                    # spans the same number of elements as its positive magnitude.
+                    # Element count is ceil(raw / |step|) -- a full-axis negative step
+                    # (reverse) spans the same number of elements as its positive
+                    # magnitude.
                     astep = abs(step)
                     if isinstance(raw, ast.Constant):
                         ext.append(_const((raw.value + astep - 1) // astep))

@@ -2255,6 +2255,13 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
                         _al = (_const(int(_ss[axis])) if str(_ss[axis]).isdigit()
                                else ast.Name(id=str(_ss[axis]), ctx=ast.Load()))
                         rhs_start = _binop(_al, ast.Sub(), _const(1))
+                    else:
+                        # Without the axis length we cannot seed the reverse start at
+                        # ``axis_len - 1``; emitting ``pos * -1`` would be a negative,
+                        # out-of-bounds read. Refuse rather than miscompile (a loud,
+                        # rare skip -- untracked-shape reverse slice).
+                        raise NotImplementedError(
+                            f"reverse slice of {rhs_name!r} needs a known axis length")
                 pos: ast.expr = ivar
                 if not (isinstance(lhs_start, ast.Constant) and lhs_start.value == 0):
                     pos = _binop(ivar, ast.Sub(), lhs_start)
@@ -3127,13 +3134,17 @@ class _BooleanMaskReductionRewriter(ast.NodeTransformer):
                     i += 1
                     continue
             # ``Name = Subscript(Name(arr), Name(mask))`` followed by
-            # ``Name2 = np.<reduction>(Name)``
+            # ``Name2 = np.<reduction>(Name)``. Gated on a KNOWN-boolean mask
+            # (like the inline form) so an integer-index gather ``t = a[idx];
+            # s = t.sum()`` is left for the gather materialiser, not mis-lowered
+            # into a mask-guarded accumulate loop.
             if (isinstance(stmt, ast.Assign)
                     and len(stmt.targets) == 1
                     and isinstance(stmt.targets[0], ast.Name)
                     and isinstance(stmt.value, ast.Subscript)
                     and isinstance(stmt.value.value, ast.Name)
                     and isinstance(stmt.value.slice, ast.Name)
+                    and stmt.value.slice.id in self.bool_names
                     and i + 1 < len(stmts)):
                 tmp_name = stmt.targets[0].id
                 arr = stmt.value.value.id
@@ -4304,8 +4315,6 @@ class _SubscriptifyNames(ast.NodeTransformer):
                     # Strided / reverse lone slice ``arr[::k]`` / ``arr[lo::k]``: source
                     # index = start + iter*k, where start is ``lower``, or 0 (positive step)
                     # / axis_len-1 (negative step -- ``arr[::-1]``) when omitted.
-                    iterv: ast.expr = ast.Name(id=self.iters[-1], ctx=ast.Load())
-                    scaled: ast.expr = ast.BinOp(left=iterv, op=ast.Mult(), right=ast.Constant(value=step))
                     start: Optional[ast.expr] = sl.lower
                     if start is None and step < 0:
                         sh = self.shape_table.get(node.value.id)
@@ -4313,8 +4322,15 @@ class _SubscriptifyNames(ast.NodeTransformer):
                             al = (ast.Constant(value=int(sh[0])) if str(sh[0]).isdigit()
                                   else ast.Name(id=str(sh[0]), ctx=ast.Load()))
                             start = ast.BinOp(left=al, op=ast.Sub(), right=ast.Constant(value=1))
-                    idx = scaled if start is None else ast.BinOp(left=scaled, op=ast.Add(), right=start)
-                    return ast.Subscript(value=node.value, slice=idx, ctx=ast.Load())
+                    # A negative step with an UNRESOLVED start (axis length not tracked)
+                    # would emit ``arr[iter*-1]`` -- a negative, out-of-bounds read. Only
+                    # emit the reverse form when the start is known; else fall through to
+                    # the safe bounded-slice path below.
+                    if not (step < 0 and start is None):
+                        iterv: ast.expr = ast.Name(id=self.iters[-1], ctx=ast.Load())
+                        scaled: ast.expr = ast.BinOp(left=iterv, op=ast.Mult(), right=ast.Constant(value=step))
+                        idx = scaled if start is None else ast.BinOp(left=scaled, op=ast.Add(), right=start)
+                        return ast.Subscript(value=node.value, slice=idx, ctx=ast.Load())
                 # Bounded lone slice ``arr[:k]`` / ``arr[a:b]`` / ``arr[1:]``
                 # on a 1-D array: the iter loop bound already enforces the
                 # slice range, so replace the slice with the (right-aligned)

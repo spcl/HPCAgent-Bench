@@ -803,6 +803,13 @@ class _CBodyEmitter(BaseEmitter):
             return True
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
             return True
+        # ``~x`` / ``m1 & m2`` (mask invert / combine) is boolean iff its operands
+        # are -- so ``~(m1 & m2)`` is detected and emits ``!`` rather than a
+        # bitwise ``~`` that would turn the 0/1 mask into the truthy -2.
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Invert):
+            return self._operand_is_bool(node.operand)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.BitAnd, ast.BitOr, ast.BitXor)):
+            return self._operand_is_bool(node.left) and self._operand_is_bool(node.right)
         if isinstance(node, ast.Name):
             return self._dtype_for_name(node.id) in ("bool", "bool_")
         if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):

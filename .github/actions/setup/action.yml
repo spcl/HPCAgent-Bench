@@ -1,0 +1,45 @@
+name: "OptArena CI setup"
+description: >
+  Native toolchain (make/gcc/g++/gfortran/clang + OpenBLAS + FFTW) and the base Python
+  deps every CI runner shares. Job-specific extras (tvm, Pluto, gt4py, Apptainer) stay in
+  the job so only the runner that needs one pays for it.
+
+runs:
+  using: composite
+  steps:
+    - name: Native toolchain + OpenBLAS + FFTW
+      shell: bash
+      run: |
+        # build-essential: make + gcc + g++ (C/C++ backends). gfortran/clang: Fortran backend
+        # + judge. pkg-config + libopenblas-dev: the BLAS optimizer links cblas_*. libfftw3-dev:
+        # the vexx port oracle links -lfftw3.
+        sudo apt-get update
+        sudo apt-get install -y build-essential gfortran clang pkg-config libopenblas-dev libfftw3-dev
+
+    - name: Base Python deps (translators + the frameworks every phase shares)
+      shell: bash
+      run: |
+        # requirements.txt (numpy 2.x + core) + the translator stack + numba/pythran/jax/dace,
+        # which co-resolve with numpy 2.x. tvm/gt4py/pluto/apptainer are job-specific and added
+        # by the job that needs them. pytest-xdist gives every runner its own -n auto.
+        python -m pip install --upgrade pip
+        python -m pip install -r requirements.txt \
+          pytest pytest-timeout pytest-xdist sympy jinja2 cffi tree-sitter-language-pack psutil py-cpuinfo
+        python -m pip install "jax[cpu]" dace numba pythran pyarrow
+        python -m pip install -e .
+
+    - name: Verify common toolchain (fail fast on a missing dependency)
+      shell: bash
+      run: |
+        # Turn a silently-skipped test into a loud setup error so a provisioning regression
+        # cannot masquerade as a green run. (Apptainer/polycc are verified in their own jobs.)
+        missing=0
+        for t in make gcc g++ gfortran clang pkg-config; do
+          if command -v "$t" >/dev/null 2>&1; then
+            printf '  ok    %-12s %s\n' "$t" "$(command -v "$t")"
+          else
+            printf '  MISS  %s\n' "$t"; missing=1
+          fi
+        done
+        pkg-config --exists openblas || { echo '  MISS  openblas (pkg-config)'; missing=1; }
+        [ "$missing" = 0 ] || { echo 'Toolchain incomplete -- see MISS lines above'; exit 1; }
