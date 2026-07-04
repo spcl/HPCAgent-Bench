@@ -307,3 +307,27 @@ jobs:
           OPTARENA_JUDGE_SIF: ${{ github.workspace }}/optarena-cpu.sif
         run: |
           python -m pytest -q -p no:cacheprovider --timeout=900 tests/test_container_launch.py
+
+  # ===========================================================================================
+  # gpu -- DISABLED 5th runner (blocked). GPU codegen tests (tvm-gpu / triton) belong on a real
+  # GPU box; this job is the home for them but stays OFF (if: false) until one is provisioned.
+  # On the CPU runners those cases self-skip (no CUDA / no triton), so nothing is lost meanwhile.
+  # To enable: flip ``if: false`` to a self-hosted GPU runner label.
+  # ===========================================================================================
+  gpu:
+    if: false
+    name: gpu (tvm-gpu / triton codegen) [disabled -- no GPU runner]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/setup
+      - name: Setup -- GPU codegen frameworks (tvm + triton)
+        run: python -m pip install apache-tvm triton
+      - name: GPU frameworks + fp16 (tvm-gpu / triton targets)
+        run: |
+          python -m pytest -q -p no:cacheprovider -rs --timeout=900 \
+            tests/test_frameworks.py tests/test_fp16.py

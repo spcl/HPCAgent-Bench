@@ -718,7 +718,7 @@ _REDUCTION_NAMES: Set[str] = {
     # NOT preserved at the operand''s iter extent. ``np.linalg.*``
     # similarly produces shapes that don''t map to operand extent
     # (``norm`` collapses to scalar; ``lstsq`` returns a tuple).
-    "dot", "vdot", "inner", "norm", "lstsq",
+    "dot", "vdot", "inner", "norm", "det", "lstsq",
 }
 
 
@@ -4953,6 +4953,153 @@ def expand_linalg_inv(target: ast.expr, args: List[ast.expr],
     return out
 
 
+def expand_linalg_det(target: ast.expr, args: List[ast.expr],
+                      shape_table: Dict[str, Tuple[str, ...]],
+                      kwargs=None,
+                      local_dtypes: Optional[Dict[str, str]] = None,
+                      fresh_local_allocs: Optional[Dict[str, Tuple[str, ...]]] = None) -> List[ast.stmt]:
+    """``s = np.linalg.det(A)`` -- LU factorisation (Gaussian elimination
+    with partial pivoting) on a scratch copy ``__det_aw`` of A. The
+    determinant is the product of the pivots (U's diagonal) times
+    ``(-1) ** (# row swaps)``.
+
+    ``target`` is a scalar (the hoister lifts a nested ``np.linalg.det``
+    to a fresh scalar temp before this fires). Conservative: ``A`` must be
+    a Name with a known square 2-D shape; ``A`` is preserved -- the
+    elimination runs on the copy ``__det_aw``.
+    """
+    if not args or not isinstance(args[0], ast.Name):
+        raise NotImplementedError("np.linalg.det needs Name first arg")
+    if not isinstance(target, ast.Name):
+        raise NotImplementedError("np.linalg.det: scalar Name target expected")
+    a = args[0]
+    shape = shape_table.get(a.id)
+    if not shape or len(shape) != 2:
+        raise NotImplementedError(
+            "np.linalg.det: only 2-D square input supported")
+    n = shape[0]
+    n_ast = _const_or_name(n)
+    out: List[ast.stmt] = []
+    # Publish the working buffer's shape + dtype + fresh-local alloc so the
+    # emit declares ``__det_aw`` as a flat 2-D buffer of A's element dtype
+    # (same registration logic as ``expand_linalg_inv``).
+    shape_table["__det_aw"] = (n, n)
+    a_dt = None
+    if local_dtypes is not None:
+        a_dt = local_dtypes.get(a.id)
+        if a_dt is not None:
+            local_dtypes["__det_aw"] = a_dt
+            for nm in ("__det_tmp", "__det_factor"):
+                local_dtypes.setdefault(nm, a_dt)
+            # The determinant of a complex matrix is complex; keep the
+            # accumulator's dtype aligned with A's element dtype.
+            local_dtypes.setdefault(target.id, a_dt)
+    if fresh_local_allocs is not None:
+        fresh_local_allocs["__det_aw"] = (n, n)
+    aw = lambda r, c: ast.Subscript(
+        value=_name("__det_aw"),
+        slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Load())
+    aw_store = lambda r, c: ast.Subscript(
+        value=_name("__det_aw"),
+        slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Store())
+    out.append(ast.Assign(
+        targets=[_store("__det_aw")],
+        value=ast.Call(func=_name("__optarena_zeros__"), args=[], keywords=[])))
+    # Copy A into the working buffer.
+    out.append(ast.For(
+        target=_store("__det_i"),
+        iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
+        body=[ast.For(
+            target=_store("__det_j"),
+            iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
+            body=[ast.Assign(
+                targets=[aw_store(_name("__det_i"), _name("__det_j"))],
+                value=ast.Subscript(
+                    value=_name(a.id),
+                    slice=ast.Tuple(elts=[_name("__det_i"), _name("__det_j")],
+                                    ctx=ast.Load()),
+                    ctx=ast.Load()))],
+            orelse=[])],
+        orelse=[]))
+    # Accumulator starts at 1 (product of pivots * swap sign).
+    out.append(ast.Assign(targets=[_store(target.id)], value=_const(1.0)))
+    K = _name("__det_k")
+    P = _name("__det_p")
+    R = _name("__det_r")
+    C = _name("__det_c")
+    F = _name("__det_factor")
+    T = _name("__det_tmp")
+    # Pivot search: p = argmax_{r >= k} |aw[r, k]|.
+    pivot_init = ast.Assign(targets=[_store("__det_p")], value=K)
+    pivot_scan = ast.For(
+        target=_store("__det_r"),
+        iter=ast.Call(func=_name("range"),
+                      args=[ast.BinOp(left=K, op=ast.Add(), right=_const(1)),
+                            n_ast], keywords=[]),
+        body=[ast.If(
+            test=ast.Compare(
+                left=ast.Call(func=_name("abs"), args=[aw(R, K)], keywords=[]),
+                ops=[ast.Gt()],
+                comparators=[ast.Call(func=_name("abs"), args=[aw(P, K)],
+                                      keywords=[])]),
+            body=[ast.Assign(targets=[_store("__det_p")], value=R)],
+            orelse=[])],
+        orelse=[])
+    # Swap rows p and k (when distinct) and flip the running sign.
+    swap_body = [
+        ast.Assign(targets=[_store("__det_tmp")], value=aw(K, C)),
+        ast.Assign(targets=[aw_store(K, C)], value=aw(P, C)),
+        ast.Assign(targets=[aw_store(P, C)], value=T),
+    ]
+    swap_loop = ast.For(
+        target=_store("__det_c"),
+        iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
+        body=swap_body, orelse=[])
+    sign_flip = ast.Assign(targets=[_store(target.id)],
+                           value=ast.UnaryOp(op=ast.USub(),
+                                             operand=_name(target.id)))
+    swap_if = ast.If(
+        test=ast.Compare(left=P, ops=[ast.NotEq()], comparators=[K]),
+        body=[swap_loop, sign_flip], orelse=[])
+    # Multiply the determinant by this pivot.
+    pivot_mul = ast.Assign(
+        targets=[_store(target.id)],
+        value=ast.BinOp(left=_name(target.id), op=ast.Mult(), right=aw(K, K)))
+    # Eliminate rows below k (guard a zero pivot so a singular matrix
+    # yields det == 0 rather than a NaN from divide-by-zero).
+    elim_factor = ast.Assign(
+        targets=[_store("__det_factor")],
+        value=ast.BinOp(left=aw(R, K), op=ast.Div(), right=aw(K, K)))
+    elim_inner = ast.For(
+        target=_store("__det_c"),
+        iter=ast.Call(func=_name("range"),
+                      args=[ast.BinOp(left=K, op=ast.Add(), right=_const(1)),
+                            n_ast], keywords=[]),
+        body=[ast.Assign(
+            targets=[aw_store(R, C)],
+            value=ast.BinOp(left=aw(R, C), op=ast.Sub(),
+                            right=ast.BinOp(left=F, op=ast.Mult(),
+                                            right=aw(K, C))))],
+        orelse=[])
+    elim_outer = ast.For(
+        target=_store("__det_r"),
+        iter=ast.Call(func=_name("range"),
+                      args=[ast.BinOp(left=K, op=ast.Add(), right=_const(1)),
+                            n_ast], keywords=[]),
+        body=[elim_factor, elim_inner], orelse=[])
+    elim_guard = ast.If(
+        test=ast.Compare(
+            left=ast.Call(func=_name("abs"), args=[aw(K, K)], keywords=[]),
+            ops=[ast.Gt()], comparators=[_const(0.0)]),
+        body=[elim_outer], orelse=[])
+    k_body = [pivot_init, pivot_scan, swap_if, pivot_mul, elim_guard]
+    out.append(ast.For(
+        target=_store("__det_k"),
+        iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
+        body=k_body, orelse=[]))
+    return out
+
+
 #: Map of ``("np", attr) -> expander``. The expander signature is
 #: ``(assign_target, call_args, shape_table) -> list[stmt]``.
 NP_CALL_EXPANDERS: Dict[Tuple[str, str], Callable] = {
@@ -4984,6 +5131,7 @@ NP_CALL_EXPANDERS: Dict[Tuple[str, str], Callable] = {
     ("np", "linalg.norm"): expand_linalg_norm,
     ("np", "linalg.lstsq"): expand_lstsq,
     ("np", "linalg.inv"): expand_linalg_inv,
+    ("np", "linalg.det"): expand_linalg_det,
     ("np", "linalg.solve"): expand_linalg_solve,
     ("np", "fft.fftn"): expand_fftn,
     ("np", "fft.ifftn"): expand_ifftn,
@@ -6085,7 +6233,7 @@ class _CallHoister(ast.NodeTransformer):
         temp = f"__cb{self.counter[0]}"
         # Classify: scalar return vs array return.
         is_scalar = key[1] in {"sum", "max", "min", "mean", "prod", "std", "var",
-                                "dot", "vdot", "inner", "linalg.norm",
+                                "dot", "vdot", "inner", "linalg.norm", "linalg.det",
                                 "argmax", "argmin", "any", "all",
                                 "count_nonzero", "median", "trace"}
         # ``np.inner`` is scalar ONLY for rank-1 x rank-1; higher ranks
