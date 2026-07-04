@@ -3883,32 +3883,65 @@ def expand_linalg_norm(target: ast.expr,
                                       op_fn=sq_op,
                                       post_fn=sqrt_post)
 
-    # ``ord`` in {1, inf}: VECTOR (1-D) only. A matrix 1/inf norm is the max
-    # column / row abs-sum -- a different reduction not lowered here.
+    # ``ord`` in {1, inf}. A 1-D operand is a vector norm (sum|v| / max|v|); a
+    # 2-D operand is a matrix norm (ord=1 = max column abs-sum, ord=inf = max row
+    # abs-sum) -- the max over per-line abs-sums.
     if axes is not None:
         raise NotImplementedError("np.linalg.norm: ord=1/inf with axis= not supported")
     extent = _iter_extent_of(a, shape_table)
     if extent is None:
         raise NotImplementedError("np.linalg.norm: cannot derive iteration extent")
-    if len(extent) != 1:
-        raise NotImplementedError("np.linalg.norm: ord=1/inf only supported for a 1-D operand")
-    it = _make_iter_name("__nr", 0)
-    sa = _scalarize_at_iters(a, [_name(it)], shape_table)
-    abs_sa = ast.Call(func=_name("abs"), args=[sa], keywords=[])
-    acc_init = ast.Assign(targets=[_store(target.id)], value=_const(0.0))
-    if kind == "l1":
-        inner = [ast.AugAssign(target=_store(target.id), op=ast.Add(), value=abs_sa)]
-    else:  # inf: running max of |v| (|v| >= 0, so 0 is a safe max identity)
-        inner = [
-            ast.Assign(targets=[_store(target.id)],
-                       value=ast.IfExp(test=ast.Compare(left=copy.deepcopy(abs_sa),
-                                                        ops=[ast.Gt()],
-                                                        comparators=[_name(target.id)]),
-                                       body=abs_sa,
-                                       orelse=_name(target.id)))
-        ]
-    loops = _wrap_for_loops([it], extent, inner)
-    return [acc_init, *loops]
+    if len(extent) == 1:
+        it = _make_iter_name("__nr", 0)
+        sa = _scalarize_at_iters(a, [_name(it)], shape_table)
+        abs_sa = ast.Call(func=_name("abs"), args=[sa], keywords=[])
+        acc_init = ast.Assign(targets=[_store(target.id)], value=_const(0.0))
+        if kind == "l1":
+            inner = [ast.AugAssign(target=_store(target.id), op=ast.Add(), value=abs_sa)]
+        else:  # inf: running max of |v| (|v| >= 0, so 0 is a safe max identity)
+            inner = [
+                ast.Assign(targets=[_store(target.id)],
+                           value=ast.IfExp(test=ast.Compare(left=copy.deepcopy(abs_sa),
+                                                            ops=[ast.Gt()],
+                                                            comparators=[_name(target.id)]),
+                                           body=abs_sa,
+                                           orelse=_name(target.id)))
+            ]
+        loops = _wrap_for_loops([it], extent, inner)
+        return [acc_init, *loops]
+    if len(extent) == 2 and isinstance(a, ast.Name):
+        # Matrix ord=1 / ord=inf: accumulate each line's abs-sum into a scalar
+        # ``__nmc`` then keep the running max. ord=1 sums down columns (outer j),
+        # ord=inf sums across rows (outer i); the element a[i, j] is the same.
+        m_ext, n_ext = extent
+        i_it, j_it, csum = "__nmi", "__nmj", "__nmc"
+        elem = ast.Call(func=_name("abs"),
+                        args=[
+                            ast.Subscript(value=_name(a.id),
+                                          slice=ast.Tuple(elts=[_name(i_it), _name(j_it)], ctx=ast.Load()),
+                                          ctx=ast.Load())
+                        ],
+                        keywords=[])
+        if kind == "l1":  # outer over columns j, inner over rows i
+            outer_it, outer_bound, inner_it, inner_bound = j_it, n_ext, i_it, m_ext
+        else:  # inf: outer over rows i, inner over columns j
+            outer_it, outer_bound, inner_it, inner_bound = i_it, m_ext, j_it, n_ext
+        inner_loop = ast.For(target=_store(inner_it),
+                             iter=ast.Call(func=_name("range"), args=[copy.deepcopy(inner_bound)], keywords=[]),
+                             body=[ast.AugAssign(target=_store(csum), op=ast.Add(), value=elem)],
+                             orelse=[])
+        keep_max = ast.Assign(targets=[_store(target.id)],
+                              value=ast.IfExp(test=ast.Compare(left=_name(csum),
+                                                               ops=[ast.Gt()],
+                                                               comparators=[_name(target.id)]),
+                                              body=_name(csum),
+                                              orelse=_name(target.id)))
+        outer_loop = ast.For(target=_store(outer_it),
+                             iter=ast.Call(func=_name("range"), args=[copy.deepcopy(outer_bound)], keywords=[]),
+                             body=[ast.Assign(targets=[_store(csum)], value=_const(0.0)), inner_loop, keep_max],
+                             orelse=[])
+        return [ast.Assign(targets=[_store(target.id)], value=_const(0.0)), outer_loop]
+    raise NotImplementedError("np.linalg.norm: ord=1/inf supported for a 1-D or 2-D operand")
 
 
 def _guarded_div(num: ast.expr, denom: ast.expr) -> ast.expr:
