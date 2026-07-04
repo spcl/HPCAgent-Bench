@@ -173,7 +173,7 @@ Lower to straightforward naive implementations (user-approved):
 - **median** -> sort the (copied) data + pick middle / mean of the two middles
   (needs a small emitted sort routine; `percentile/quantile` follow once sort lands).
 
-## Translator: lulesh advanced-indexing gaps (HIGH) + tril expander
+## Translator: lulesh advanced-indexing gaps (HIGH)
 
 Blocking lulesh's NumpyToX auto-emit (currently allowlisted in
 `tests/e2e_known_failures.txt`):
@@ -182,8 +182,7 @@ Blocking lulesh's NumpyToX auto-emit (currently allowlisted in
 - **2-D fancy gather `xe[:, idx]`** (slice axis + N-D index array -> higher-rank
   result): extend `_WholeArrayAssignRewriter._expand` / `_SubscriptifyNames`.
 - **ellipsis `...`** indexing: a `_ExpandEllipsis` pre-pass using the array rank.
-- **`tril` BUG**: in the dispatch set (lib_nodes.py:4744) but NO expander -> raises
-  if hit; 5-line clone of `expand_triu` with `j <= i + k`.
+  (`tril` is done: `expand_tril` at lib_nodes.py:3476, registered at :4764.)
 
 ## YAML style: stencil manifests missing final newline / header
 
