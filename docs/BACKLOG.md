@@ -2,6 +2,35 @@
 
 Tracked work that is scoped but not yet done. Newest on top.
 
+## Translator capability gaps — empirically verified 2026-07-04
+
+Each claimed gap was probed with a minimal kernel through c/cpp/fortran via the
+op-oracle (`run_op`). Most catalogued "gaps" are DEAD `raise`s in secondary
+paths shadowed by the real lowering — do NOT re-implement those. The ones that
+ACTUALLY fail today:
+
+- **`np.pad` reflect / wrap / symmetric** (c/cpp/fortran): only `constant` /
+  `edge` lower to a native pad; other modes raise. (numba/pythran already inline
+  an edge-pad copy nest.) Pure index-remap → bit-exact-testable.
+- **matrix `np.linalg.norm(A, 1)` / `(A, inf)`** (max col / row abs-sum): the
+  VECTOR ord=1/inf forms now lower (fixed 2026-07-04); the matrix forms raise
+  cleanly (a different reduction).
+- **einsum ellipsis `...`**: raises by design
+  (`test_parse_einsum_ellipsis_unsupported` asserts it); needs a rank-aware
+  ellipsis expansion of the subscript before the contraction lowering.
+- **axis-aware L2 norm `np.linalg.norm(x, axis=1)`**: PRE-EXISTING compile bug
+  (`__cb1 undeclared`, from the `_expand_axis_reduction` post-fn temp); the
+  full-reduction `norm(r)` and Frobenius forms are fine.
+
+Confirmed ALREADY DONE (catalog was stale — do not re-implement): batched ≥3-D
+matmul, `tril`, N-D `argmax`, einsum / tensordot / inner / vdot,
+cumsum / cumprod / diagonal / trace / median, method `.reshape`, ellipsis
+INDEXING (`a[..., 0]`), Frobenius / L2 norm.
+
+NOT here — the OTHER chat owns it: strided slice-assign `out[::2] = a[::2]`
+(their in-progress step-handling in `lowering.py`; currently miscompiles — leave
+it alone). The naive-lowering and contraction-family sections below are DONE.
+
 ## FV3 dycore — remaining after the gt==4 dry core (assembled + validated)
 
 `hpc/structured_grids/fv3_dycore/` has a FULL gt==4 dry nonhydrostatic dycore
