@@ -9,6 +9,10 @@ import pytest
 
 from optarena import fuzz
 
+# Validates the REAL size ranges/distributions -> opt out of the suite-wide small-size
+# cap (the autouse _cap_fuzz_sizes fixture in conftest). No speed cost: pure sampler.
+pytestmark = pytest.mark.real_fuzz
+
 
 def _fuzzed(**params):
     return {"fuzzed": dict(params)}

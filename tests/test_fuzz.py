@@ -1,7 +1,13 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Dimension-fuzzing sampler (optarena.fuzz)."""
+import pytest
+
 from optarena import fuzz
+
+# Validates the REAL size ranges/distributions -> opt out of the suite-wide small-size
+# cap (the autouse _cap_fuzz_sizes fixture in conftest). No speed cost: pure sampler.
+pytestmark = pytest.mark.real_fuzz
 
 PARAMS = {
     "S": {

@@ -6,7 +6,14 @@ config enumeration, correctness edge shapes, and timed large shapes.
 See docs/DESIGN_perf_protocol_configs_shapes.md. These are pure resolvers (no
 emitter / FFI), so they run everywhere.
 """
+import pytest
+
 from optarena import fuzz
+
+# Validates the REAL size ranges/large-shape draws -> opt out of the suite-wide
+# small-size cap (the autouse _cap_fuzz_sizes fixture in conftest). Pure resolvers,
+# so no speed cost from the full range.
+pytestmark = pytest.mark.real_fuzz
 
 
 # --------------------------------------------------------------------------- #
