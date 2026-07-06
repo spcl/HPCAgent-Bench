@@ -381,11 +381,10 @@ declaration scan instead of a mutable structure threaded through ~22 passes.
 
 ---
 
-## 6. Enforcement: `optarena/validate_cnf.py`
+## 6. The CNF contract (checked in review)
 
-A validator (built separately) AST-walks each `*_numpy.py` kernel and rejects CNF
-violations at CI time. It does **not** rewrite code — it points at the line and names
-the canonical fix. The contract it checks:
+New kernels are reviewed against the following CNF invariants; a violation points at
+the line and names the canonical fix (it is never auto-rewritten):
 
 - **Inv. 1:** flag any `Name` target that is assigned a new shape after first
   declaration (track each name's declared shape; error if a later assign produces a
@@ -410,7 +409,7 @@ stockham_fft_numpy.py:21: CNF Invariant 1 (static shape):
     Fix (cookbook 4.2/4.4): reshape into a freshly declared buffer.
 ```
 
-CI fails on any violation in a non-grandfathered kernel (§7).
+A non-grandfathered kernel that violates these is rewritten before it lands (§7).
 
 ---
 
@@ -423,8 +422,8 @@ CI fails on any violation in a non-grandfathered kernel (§7).
   (Many of them — `gemm`, `jacobi_2d`, `atax`, `doitgen` — are already CNF or close to
   it and serve as positive examples.)
 - **New kernels are authored in CNF from the start.** Any new benchmark — HPC,
-  sparse, or foundation-model additions — must pass `validate_cnf.py`. Read this
-  document and write to the vocabulary in §3 before submitting.
+  sparse, or foundation-model additions — must satisfy the CNF invariants (§6). Read
+  this document and write to the vocabulary in §3 before submitting.
 
 When in doubt: one name = one shape (Inv. 1), index every axis (Inv. 2), declare then
 fill (Inv. 3).

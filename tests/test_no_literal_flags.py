@@ -25,8 +25,6 @@ _PATTERN = re.compile(r"-O3|-march=native|-ffast-math")
 _SCAN_DIRS = ("optarena", "scripts")
 _ALLOW = {
     "optarena/flags.py",  # the matrix itself
-    "optarena/hardware_info/practical/flops_with_linpack.py",  # emits an HPL Makefile
-    "optarena/hardware_info/practical/memory_with_stream.py",  # emits a STREAM build
     "scripts/emit_cpp_ports.py",  # emits CMake text (TODO: route)
     "scripts/emit_c_variants.py",  # emits CMake text (TODO: route)
     "scripts/pull_cpp.py",  # emits CMake text (TODO: route)
