@@ -140,7 +140,7 @@ class _CBodyEmitter(BaseEmitter):
         #: casts to the matching multidimensional pointer type).
         self.md_trailing: Dict[str, str] = {}
         self.array_shapes: Dict[str, List[str]] = {a.name: list(a.shape) for a in kir.arrays}
-        zeros = getattr(kir.tree, "zeros_locals", {}) or {}
+        zeros = kir.zeros_locals
         for name, shape in zeros.items():
             self.array_shapes[name] = list(shape) if shape else ["1"]
         self._loop_iter_names: Set[str] = set()
@@ -155,7 +155,7 @@ class _CBodyEmitter(BaseEmitter):
         # ``array_shapes[x]`` carries the FINAL rank-2 FC shape.
         self._reassign_shapes: Dict[str, List[Tuple[str, ...]]] = {
             k: list(v)
-            for k, v in (getattr(kir.tree, "reassign_shapes", {}) or {}).items()
+            for k, v in kir.reassign_shapes.items()
         }
 
     # ----- statement-level ------------------------------------------------
@@ -325,7 +325,7 @@ class _CBodyEmitter(BaseEmitter):
                     local_dtypes = vars(self).get("local_dtypes_for_inline", {})
                     size_tokens = [f"({_c_shape_token(s)})" for s in shape] if shape else []
                     size = " * ".join(size_tokens) if size_tokens else "1"
-                    default_float = vars(self.kir.tree).get("float_precision", "float64")
+                    default_float = self.kir.float_precision or "float64"
                     dtype_tag = local_dtypes.get(t, default_float)
                     c_type = _c_type(dtype_tag)
                     return f"{indent}{c_type} {t}[{size}];"
@@ -748,7 +748,7 @@ class _CBodyEmitter(BaseEmitter):
                 if s.name == n:
                     return True
             # ``int_locals`` are tuple-unpack int locals.
-            int_locals = getattr(self.kir.tree, "int_locals", []) or []
+            int_locals = self.kir.int_locals
             if n in int_locals:
                 return True
             # For-loop iter names are always declared ``int`` in the
@@ -790,29 +790,15 @@ class _CBodyEmitter(BaseEmitter):
         return out
 
     def _is_complex_operand(self, node: ast.AST) -> bool:
-        """Return True when ``node``''s element dtype is a complex form.
+        """Return True when ``node``'s element dtype is a complex form.
 
-        Recognises:
-        * Direct ``Subscript(Name(...))`` against a known-complex array.
-        * BinOp / UnaryOp / Call whose AST contains ANY complex literal
-          (``Constant(complex)``) or Name reference resolving to a
-          complex-dtype array. Walks the whole subtree so a deeper
-          ``exp(BinOp_with_complex_literal)`` is recognised.
+        Delegates to the shared call-aware :func:`_walk_complex`, so a
+        real-returning ufunc / accessor of a complex operand (``np.abs(z)`` /
+        ``np.real(z)`` / ``z.real``) is correctly REAL -- a whole-subtree walk would
+        see the inner ``z`` and mis-route ``sqrt`` to ``csqrt`` on a real value.
         """
-        # Walk every Subscript / Constant in the node and short-circuit
-        # on the first match.
-        for sub in ast.walk(node):
-            if isinstance(sub, ast.Constant) and isinstance(sub.value, complex):
-                return True
-            if isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Name):
-                dt = self._dtype_for_name(sub.value.id)
-                if dt and dt.startswith("complex"):
-                    return True
-            if isinstance(sub, ast.Name):
-                dt = self._dtype_for_name(sub.id)
-                if dt and dt.startswith("complex"):
-                    return True
-        return False
+        from numpyto_common.lowering import _walk_complex
+        return _walk_complex(node, self._dtype_for_name) is not None
 
     def _is_float_operand(self, node: ast.AST, _scalars=None) -> bool:
         """Return True when ``node`` is provably floating-point: a float
@@ -865,7 +851,7 @@ class _CBodyEmitter(BaseEmitter):
         return floats
 
     def _dtype_for_name(self, name: str):
-        local_dtypes = getattr(self.kir.tree, "local_dtypes", {}) or {}
+        local_dtypes = self.kir.local_dtypes
         dt = local_dtypes.get(name)
         if dt is None:
             for a in self.kir.arrays:
@@ -995,7 +981,7 @@ def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
     local array (``np.zeros``) is implicit. The type is inferred in
     priority order:
 
-    1. ``tree.local_dtypes`` (populated by the lowering pipeline for
+    1. ``kir.local_dtypes`` (populated by the lowering pipeline for
        loop-vars that inherit the source array's element dtype, e.g.
        ``for b in data:`` where ``data`` is ``uint8``).
     2. Used-as-int promotion (subscript / range / bitwise operand).
@@ -1003,9 +989,9 @@ def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
     """
     declared: Set[str] = set()
     declared.update(kir.input_args)
-    declared.update(getattr(kir.tree, "int_locals", []) or [])
-    declared.update((getattr(kir.tree, "zeros_locals", {}) or {}).keys())
-    local_dtypes = getattr(kir.tree, "local_dtypes", {}) or {}
+    declared.update(kir.int_locals)
+    declared.update(kir.zeros_locals.keys())
+    local_dtypes = kir.local_dtypes
     out: List[Tuple[str, str]] = []
     needs_int = _names_used_as_int(kir.tree)
     seen: Set[str] = set(declared)
@@ -1069,11 +1055,11 @@ def _emit_body(kir: KernelIR, indent: str = "  ",
     emitter = _CBodyEmitter(kir, multidim_arrays=multidim_arrays)
     emitter.pluto = pluto
     emitter.return_mode = return_mode
-    zeros = getattr(kir.tree, "zeros_locals", {}) or {}
-    zeros_fills = vars(kir.tree).get("zeros_fills", {}) or {}
-    int_locals = getattr(kir.tree, "int_locals", []) or []
+    zeros = kir.zeros_locals
+    zeros_fills = kir.zeros_fills
+    int_locals = kir.int_locals
     implicit = _collect_implicit_locals(kir)
-    local_dtypes = getattr(kir.tree, "local_dtypes", {}) or {}
+    local_dtypes = kir.local_dtypes
     # Output parameters that a ``np.zeros``/``np.empty`` in the kernel
     # body aliases (e.g. ``table = np.zeros((N, N)); return table``). These
     # must NOT get a fresh local declaration -- that would shadow the
@@ -1154,7 +1140,7 @@ def _emit_body(kir: KernelIR, indent: str = "  ",
         emitter.multidim_arrays = set(emitter.multidim_arrays) | md_locals
     # Default dtype for a float temp not listed in local_dtypes (e.g. a
     # matmul scratch) follows the kernel's float precision set on the IR.
-    default_float = vars(kir.tree).get("float_precision", "float64")
+    default_float = kir.float_precision or "float64"
     # Register each local ARRAY's resolved dtype. Source-level float
     # locals (gmres ``Q`` / ``H`` / ``e1`` from ``np.zeros``) are declared
     # as the default float but never tagged in ``local_dtypes``; without a
@@ -1164,7 +1150,7 @@ def _emit_body(kir: KernelIR, indent: str = "  ",
     # overrides an explicit int / complex tag.
     for name in (*fn_top_locals, *deferred_malloc_locals, *inline_locals):
         local_dtypes.setdefault(name, default_float)
-    kir.tree.local_dtypes = local_dtypes
+    kir.local_dtypes = local_dtypes
     decls: List[str] = []
     frees: List[str] = []
     for name in int_locals:

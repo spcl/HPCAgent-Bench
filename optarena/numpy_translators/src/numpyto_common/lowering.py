@@ -34,7 +34,7 @@ inert until a kernel that uses them lands.
 import ast
 import copy
 import re
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 
 import sympy
 
@@ -3112,20 +3112,65 @@ class _LiftFreshArrayFromSlices(ast.NodeTransformer):
         return False
 
 
-def _infer_complex_dtype(expr: ast.AST,
-                         local_dtypes: Dict[str, str]) -> Optional[str]:
-    """Return ``"complex128"`` if ``expr`` produces a complex value,
-    otherwise ``None``. Conservative -- only the ``Constant(complex)``
-    literal and Name references to already-complex arrays count.
-    """
-    for sub in ast.walk(expr):
+#: numpy functions / accessors that return a REAL value even from a COMPLEX
+#: operand. The complex-detection walk must NOT descend into their arguments --
+#: else ``np.abs(z)`` / ``np.real(z)`` / ``z.real`` read as complex and mis-drive
+#: both the lifted-temp dtype (declaring a real magnitude ``complex128``) and the
+#: intrinsic router (``csqrt`` on a real, wrong for a negative operand).
+_REAL_FROM_COMPLEX: FrozenSet[str] = frozenset({"real", "imag", "abs", "absolute", "angle", "hypot", "sign"})
+
+
+def _walk_complex(node: ast.AST, name_dtype: "Callable[[str], Optional[str]]") -> Optional[str]:
+    """Return a complex dtype string if ``node`` produces a complex value, else
+    ``None``. Call-AWARE: a ``np.<real-returning>(...)`` call (:data:`_REAL_FROM_COMPLEX`)
+    or a ``.real`` / ``.imag`` accessor is REAL regardless of complex operands (its
+    arguments are NOT walked); complex-preserving ops (``exp``/``sqrt``/``conj``/
+    arithmetic) are complex iff an operand is. ``name_dtype(id)`` resolves a Name's
+    element dtype. This is the single complex predicate for the lowering + emitters."""
+    if isinstance(node, ast.Constant):
+        return "complex128" if isinstance(node.value, complex) else None
+    if isinstance(node, ast.Name):
+        dt = name_dtype(node.id)
+        return dt if dt and dt.startswith("complex") else None
+    if isinstance(node, ast.Attribute):
+        return None if node.attr in ("real", "imag") else _walk_complex(node.value, name_dtype)
+    if isinstance(node, ast.Subscript):
+        return _walk_complex(node.value, name_dtype)
+    if isinstance(node, (ast.Compare, ast.BoolOp)):
+        return None
+    if isinstance(node, ast.BinOp):
+        return _walk_complex(node.left, name_dtype) or _walk_complex(node.right, name_dtype)
+    if isinstance(node, ast.UnaryOp):
+        return _walk_complex(node.operand, name_dtype)
+    if isinstance(node, ast.IfExp):
+        return _walk_complex(node.body, name_dtype) or _walk_complex(node.orelse, name_dtype)
+    if isinstance(node, ast.Call):
+        fn = (node.func.attr if isinstance(node.func, ast.Attribute)
+              else node.func.id if isinstance(node.func, ast.Name) else None)
+        if fn in _REAL_FROM_COMPLEX:
+            return None
+        for a in node.args:
+            r = _walk_complex(a, name_dtype)
+            if r:
+                return r
+        return None
+    # Unhandled node type -- fall back to a conservative whole-subtree scan.
+    for sub in ast.walk(node):
         if isinstance(sub, ast.Constant) and isinstance(sub.value, complex):
             return "complex128"
         if isinstance(sub, ast.Name):
-            dt = local_dtypes.get(sub.id)
-            if dt is not None and dt.startswith("complex"):
+            dt = name_dtype(sub.id)
+            if dt and dt.startswith("complex"):
                 return dt
     return None
+
+
+def _infer_complex_dtype(expr: ast.AST,
+                         local_dtypes: Dict[str, str]) -> Optional[str]:
+    """Return a complex dtype string if ``expr`` produces a complex value, else
+    ``None``. Delegates to the call-aware :func:`_walk_complex` so a real-returning
+    ufunc / accessor of a complex operand is correctly REAL."""
+    return _walk_complex(expr, local_dtypes.get)
 
 
 def _ctor_complex_tag(call: ast.Call, local_dtypes: Dict[str, str]) -> Optional[str]:
@@ -3810,6 +3855,8 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         #: (``x = __cb2`` where ``x`` wasn't previously an array) --
         #: emitter must declare them as stack arrays.
         self.alias_locals: Dict[str, Tuple[str, ...]] = {}
+        #: Monotonic id for the buffered fancy ``A[idx] += rhs`` snapshot temps.
+        self._scatter_ctr = 0
         #: Per-name list of shapes recorded in source order, one entry
         #: per ``Name = expr`` reassignment that the rewriter
         #: expanded to a per-element loop nest. Consumed by the
@@ -3947,14 +3994,44 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         lhs = ast.Subscript(value=ast.Name(id=name, ctx=ast.Load()),
                             slice=lhs_slice, ctx=ast.Store())
         rhs = _SubscriptifyNames(self.shape_table, [it]).visit(copy.deepcopy(value))
-        inner: ast.stmt = (ast.AugAssign(target=lhs, op=op, value=rhs) if op
-                           else ast.Assign(targets=[lhs], value=rhs))
-        loop = ast.For(target=ast.Name(id=it, ctx=ast.Store()),
-                       iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()),
-                                     args=[_token_to_ast(extent)], keywords=[]),
-                       body=[inner], orelse=[])
-        ast.fix_missing_locations(loop)
-        return [loop]
+
+        def _loop(body_stmt: ast.stmt) -> ast.For:
+            f = ast.For(target=ast.Name(id=it, ctx=ast.Store()),
+                        iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()),
+                                      args=[_token_to_ast(extent)], keywords=[]),
+                        body=[body_stmt], orelse=[])
+            return f
+
+        if op is None:
+            # Plain fancy store ``A[idx, c] = rhs`` -- a single per-element loop.
+            # Sequential last-write-wins on a repeated index equals numpy's
+            # buffered fancy assignment, so no snapshot is needed.
+            out: List[ast.stmt] = [_loop(ast.Assign(targets=[lhs], value=rhs))]
+        else:
+            # numpy fancy ``A[idx] += rhs`` is BUFFERED: it reads the OLD A[idx],
+            # applies the op against rhs, and scatters back with LAST-WRITE-WINS for
+            # a repeated index -- it does NOT accumulate (that is ``np.add.at``,
+            # routed elsewhere). Snapshot the gathered old values into a temp, then
+            # store, so a duplicate index matches numpy (a single in-place ``+=``
+            # loop would over-count). The snapshot is a rank-1 local of A's dtype.
+            gname = f"__scg{self._scatter_ctr}"
+            self._scatter_ctr += 1
+            self.alias_locals[gname] = (extent, )
+            if name in self.local_dtypes:
+                self.local_dtypes[gname] = self.local_dtypes[name]
+            g_store = ast.Subscript(value=ast.Name(id=gname, ctx=ast.Load()),
+                                    slice=ast.Name(id=it, ctx=ast.Load()), ctx=ast.Store())
+            g_load = ast.Subscript(value=ast.Name(id=gname, ctx=ast.Load()),
+                                   slice=ast.Name(id=it, ctx=ast.Load()), ctx=ast.Load())
+            a_load = ast.Subscript(value=ast.Name(id=name, ctx=ast.Load()),
+                                   slice=copy.deepcopy(lhs_slice), ctx=ast.Load())
+            gather = _loop(ast.Assign(targets=[g_store], value=a_load))
+            store = _loop(ast.Assign(targets=[copy.deepcopy(lhs)],
+                                     value=ast.BinOp(left=g_load, op=op, right=rhs)))
+            out = [gather, store]
+        for s in out:
+            ast.fix_missing_locations(s)
+        return out
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         self.generic_visit(node)
@@ -4265,11 +4342,11 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
             expanded = self._expand(node.target, node.value, node.op)
             if expanded:
                 return expanded
-        # Fancy-index scatter ACCUMULATE ``A[idx, c] += rhs`` (idx an index
-        # array): a per-element loop, exactly as the plain-store sibling in
-        # ``visit_Assign``. numpy accumulates duplicate ``idx`` entries, so the
-        # loop form ``for k: A[idx[k], c] += rhs[k]`` is the faithful lowering
-        # (the QE ultrasoft ``rhoc[nl] += aux2 * sf`` / ``rhoc[box] += ...``).
+        # Fancy-index scatter ``A[idx, c] += rhs`` (idx an index array): lowered by
+        # ``_expand_fancy_scatter_store`` to a snapshot-gather + store pair, matching
+        # numpy's BUFFERED fancy ``+=`` (old value, last-write-wins on a duplicate
+        # index -- NOT an accumulate) (the QE ultrasoft ``rhoc[nl] += aux2 * sf`` /
+        # ``rhoc[box] += ...``).
         if (isinstance(node.target, ast.Subscript)
                 and isinstance(node.target.value, ast.Name)):
             scattered = self._expand_fancy_scatter_store(
@@ -4748,23 +4825,59 @@ class _TupleAssignRewriter(ast.NodeTransformer):
         return node
 
 
-def lower(kir: KernelIR) -> KernelIR:
-    """Return a lowered copy of ``kir`` ready for backend emission.
+#: Matches a residual inlined-scalar token (``__inl3_N``) or an unresolved
+#: ``arr.shape[`` attribute access -- the never-worse guard in the inl resolver
+#: keeps the original token whenever expansion would leave one of these behind.
+_INL_RE = re.compile(r"__inl\w*|\w+\.shape\[")
 
-    Pipeline: math rename -> ``np.zeros`` -> slice fusion. Order
-    matters: the slice rewriter consults the array-shape table, and
-    ``np.zeros`` locals must be registered first so their shapes are
-    visible to the slice rewriter.
 
-    Matmul (``A @ B`` / ``np.matmul`` -- normalised to ``@`` by
-    :class:`_MatmulCallRewriter`) is loop-lowered uniformly for every target;
-    the Fortran ``MATMUL`` intrinsic is reserved for the rare unresolved-shape
-    case the loop hoister cannot lower (handled in the Fortran emitter).
+class LoweringContext:
+    """Mutable state threaded across the ordered lowering phases in :func:`lower`.
+
+    Each ``_lp_*`` phase reads and writes fields here instead of the long list of
+    loose locals the monolithic ``lower()`` used to carry. The finalised
+    side-tables (``local_dtypes`` / ``zeros_locals`` / ``zeros_fills`` /
+    ``reassign_shapes`` / ``int_locals`` / ``scalar_call_temps``) are written
+    straight onto :attr:`kir` -- typed :class:`KernelIR` fields the emitter reads
+    directly, not attributes monkey-patched onto ``tree.__dict__``.
     """
-    lowered = copy.deepcopy(kir)
-    arrays_shapes: Dict[str, List[str]] = {
-        a.name: list(a.shape) for a in lowered.arrays
-    }
+
+    def __init__(self, original_kir: KernelIR, lowered: KernelIR) -> None:
+        #: The un-lowered input IR -- source of ``.sparse`` and ``.helpers``.
+        self.original_kir = original_kir
+        #: The working (lowered) IR -- what :func:`lower` returns.
+        self.kir = lowered
+        #: Shortcut to the function-body AST every pass rewrites in place.
+        self.tree = lowered.tree
+        # Shape / dtype tables built up across phases and consumed downstream.
+        self.arrays_shapes: Dict[str, List[str]] = {}
+        self.lib_shape_table: Dict[str, object] = {}
+        self.local_dtypes: Dict[str, str] = {}
+        self.zeros_locals: Dict[str, Tuple[str, ...]] = {}
+        self.shapes: Dict[str, List[str]] = {}
+        self.scalar_temps: Dict[str, Tuple[str, ...]] = {}
+        self.inl_defs: Dict[str, object] = {}
+        self.param_seed: Dict[str, Tuple[str, ...]] = {}
+        #: Bound ``_resolve_inl_table`` closure, set in the resolve-inl phase and
+        #: re-used by the slice-normalise phase (both resolve ``__inl`` tokens).
+        self.resolve_inl_table: Optional[Callable[[Dict], None]] = None
+        # Rewriter handles whose post-visit state a later phase consumes.
+        self.iter_rewriter: Optional[_ArrayIterRewriter] = None
+        self.wa_rewriter: Optional[_WholeArrayAssignRewriter] = None
+        self.lib_rewriter: object = None
+        self.zeros: Optional[_ZerosRewriter] = None
+        self.lifter: Optional[_LiftFreshArrayFromSlices] = None
+
+
+def _lp_seed_shape_table(ctx: LoweringContext) -> None:
+    """Seed the array-shape table, then resolve shape-mid-expressions / ellipses.
+
+    Shape-mid-expression first -- legacy kernels use ``A.shape[0]`` inside loops /
+    array constructors; everything downstream is easier if those are resolved to
+    bare symbol names.
+    """
+    lowered = ctx.kir
+    ctx.arrays_shapes = {a.name: list(a.shape) for a in lowered.arrays}
     # Sparse arrays carry CSR/etc. buffers, not a dense ArrayDesc, so they
     # are absent from ``lowered.arrays`` -- but the body still reads
     # ``A.shape[i]`` (cg/bicgstab/minres' ``n = A.shape[0]``). Seed the
@@ -4772,98 +4885,112 @@ def lower(kir: KernelIR) -> KernelIR:
     # maps ``A.shape[0]`` -> the logical dim symbol.
     for _sname, _sd in (lowered.sparse or {}).items():
         if _sd.logical_shape:
-            arrays_shapes.setdefault(_sname, list(_sd.logical_shape))
-    # Shape-mid-expression first -- legacy kernels use ``A.shape[0]``
-    # inside loops / array constructors; everything downstream is
-    # easier if those are resolved to bare symbol names.
-    _ShapeMidExpressionRewriter(arrays_shapes).visit(lowered.tree)
+            ctx.arrays_shapes.setdefault(_sname, list(_sd.logical_shape))
+    _ShapeMidExpressionRewriter(ctx.arrays_shapes).visit(ctx.tree)
     # Expand ``...`` (Ellipsis) to explicit full slices using each array's rank
     # before any slice-aware pass runs (lulesh ``a[..., k]``).
-    _EllipsisExpander(arrays_shapes).visit(lowered.tree)
-    _NpAliasRewriter().visit(lowered.tree)
+    _EllipsisExpander(ctx.arrays_shapes).visit(ctx.tree)
+
+
+def _lp_normalize_calls(ctx: LoweringContext) -> None:
+    """Canonicalise numpy call / method forms (alloc, matmul, transpose, math,
+    casts, iteration, tuple-unpack) into the loop-lowerable subset."""
+    tree = ctx.tree
+    ash = ctx.arrays_shapes
+    _NpAliasRewriter().visit(tree)
     # ``X = alloc(...) if cond else None`` -> ``X = alloc(...)`` before the zeros
     # harvester runs, so the conditionally-allocated buffer is seen as a plain local
     # (the backends have no ``None``; reads are guarded by the same ``cond``).
-    _ConditionalNoneAllocRewriter().visit(lowered.tree)
-    _FullLikeRewriter().visit(lowered.tree)
+    _ConditionalNoneAllocRewriter().visit(tree)
+    _FullLikeRewriter().visit(tree)
     # ``np.eye`` / ``np.identity`` -> zeros + diagonal fill, BEFORE the zeros
     # harvest so the resulting ``np.zeros((n, n))`` is picked up normally.
-    _EyeToZerosDiagonal().visit(lowered.tree)
-    _MatmulCallRewriter().visit(lowered.tree)
-    _ScatterAtRewriter(arrays_shapes).visit(lowered.tree)
-    _TransposeRewriter(set(kir.sparse or {})).visit(lowered.tree)
-    _AstypeRewriter({a.name: a.dtype for a in lowered.arrays if a.dtype}).visit(lowered.tree)
-    _MethodCallRewriter().visit(lowered.tree)
-    iter_rewriter = _ArrayIterRewriter(arrays_shapes)
-    iter_rewriter.visit(lowered.tree)
-    _EnumerateZipRewriter(arrays_shapes).visit(lowered.tree)
-    _BuiltinCastRewriter().visit(lowered.tree)
-    _MathRewriter(set(arrays_shapes.keys())).visit(lowered.tree)
-    _DaceMapRewriter().visit(lowered.tree)
-    _ChainedAssignRewriter().visit(lowered.tree)
-    tuple_rewriter = _TupleAssignRewriter(arrays_shapes)
-    tuple_rewriter.visit(lowered.tree)
+    _EyeToZerosDiagonal().visit(tree)
+    _MatmulCallRewriter().visit(tree)
+    _ScatterAtRewriter(ash).visit(tree)
+    _TransposeRewriter(set(ctx.original_kir.sparse or {})).visit(tree)
+    _AstypeRewriter({a.name: a.dtype for a in ctx.kir.arrays if a.dtype}).visit(tree)
+    _MethodCallRewriter().visit(tree)
+    ctx.iter_rewriter = _ArrayIterRewriter(ash)
+    ctx.iter_rewriter.visit(tree)
+    _EnumerateZipRewriter(ash).visit(tree)
+    _BuiltinCastRewriter().visit(tree)
+    _MathRewriter(set(ash.keys())).visit(tree)
+    _DaceMapRewriter().visit(tree)
+    _ChainedAssignRewriter().visit(tree)
+    tuple_rewriter = _TupleAssignRewriter(ash)
+    tuple_rewriter.visit(tree)
     # Stash the int-locals so the emitter can declare them.
-    lowered.tree.int_locals = tuple_rewriter.int_locals  # type: ignore[attr-defined]
-    # After tuple-unpack expansion, the kernel body may reference shape
-    # symbols that the JSON's input_args did not declare (a numpy
-    # kernel commonly reads ``n, k = a.shape`` then iterates over
-    # ``range(n)``). Promote those symbols to first-class kernel
-    # parameters so the emitted C signature carries them.
+    ctx.kir.int_locals = tuple_rewriter.int_locals
+
+
+def _lp_promote_params(ctx: LoweringContext) -> None:
+    """Promote shape symbols / free names to params and flag output+index arrays.
+
+    After tuple-unpack expansion, the kernel body may reference shape symbols that
+    the JSON's input_args did not declare (a numpy kernel commonly reads
+    ``n, k = a.shape`` then iterates over ``range(n)``). Promote those symbols to
+    first-class kernel parameters so the emitted C signature carries them.
+    """
+    lowered = ctx.kir
     _fold_shape_aliases(lowered)
     _promote_shape_symbols_to_params(lowered)
-    # Anything still referenced in the body that isn't a declared
-    # parameter, builtin, or assigned local becomes an ``int``
-    # parameter (symbolic strides / chunk sizes in TSVC-2.5 kernels).
+    # Anything still referenced in the body that isn't a declared parameter,
+    # builtin, or assigned local becomes an ``int`` parameter (symbolic strides /
+    # chunk sizes in TSVC-2.5 kernels).
     _promote_free_names_to_params(lowered)
-    # Body-driven: detect writes (force is_output) and index-array
-    # usage (force int64 dtype) so the emitter picks the right pointer
-    # qualifier and element type.
+    # Body-driven: detect writes (force is_output) and index-array usage (force
+    # int64 dtype) so the emitter picks the right pointer qualifier / element type.
     _detect_output_and_index_arrays(lowered)
-    # Library-node expansion -- reductions, matmul, etc. -- runs before
-    # ``_ZerosRewriter`` so any matmul temps the rewriter introduces
-    # are picked up by the zeros pass as local arrays.
-    from numpyto_common.lib_nodes import LibNodeRewriter
-    lib_shape_table = dict(arrays_shapes)
-    # Pre-pass: lower ``Xi, Yi = np.mgrid[a:b, c:d]`` tuple-unpack
-    # assignments to a pair of per-element init loops -- before the
-    # main harvest so the resulting fresh arrays get their shape
-    # registered like any other local.
-    _MgridLowering().visit(lowered.tree)
-    ast.fix_missing_locations(lowered.tree)
-    # Pre-pass: rewrite ``x.shape = expr`` -> ``x = np.reshape(x, expr)``.
-    # Handles chained ``Xi.shape = Yi.shape = expr`` too. Mandelbrot2
-    # canonical uses this idiom in line 19.
-    _ShapeAttrToReshape().visit(lowered.tree)
-    ast.fix_missing_locations(lowered.tree)
-    # Fold ``(a, b, c)[K]`` Tuple subscripts -- comes from
-    # ``arr.shape[-2]`` when the shape is a tuple literal.
-    _TupleSubscriptFolder().visit(lowered.tree)
-    ast.fix_missing_locations(lowered.tree)
-    # Peephole: fuse ``tmp = arr[mask]; X = np.<reduction>(tmp)`` into
-    # a single masked iteration so we avoid materialising the dynamic-
-    # length compacted view from boolean fancy indexing. Seeded with
-    # the kernel-array shapes so the loop bound is the right symbol.
+
+
+def _lp_pre_libnode_normalize(ctx: LoweringContext) -> None:
+    """Pre-LibNode normalisation: mgrid, ``x.shape =`` reshape, tuple-subscript
+    fold, boolean-mask reduction fusion. Also seeds the LibNode shape table."""
+    tree = ctx.tree
+    ctx.lib_shape_table = dict(ctx.arrays_shapes)
+    # Pre-pass: lower ``Xi, Yi = np.mgrid[a:b, c:d]`` tuple-unpack assignments to a
+    # pair of per-element init loops -- before the main harvest so the resulting
+    # fresh arrays get their shape registered like any other local.
+    _MgridLowering().visit(tree)
+    ast.fix_missing_locations(tree)
+    # Pre-pass: rewrite ``x.shape = expr`` -> ``x = np.reshape(x, expr)``. Handles
+    # chained ``Xi.shape = Yi.shape = expr`` too. Mandelbrot2 canonical uses this.
+    _ShapeAttrToReshape().visit(tree)
+    ast.fix_missing_locations(tree)
+    # Fold ``(a, b, c)[K]`` Tuple subscripts -- comes from ``arr.shape[-2]`` when
+    # the shape is a tuple literal.
+    _TupleSubscriptFolder().visit(tree)
+    ast.fix_missing_locations(tree)
+    # Peephole: fuse ``tmp = arr[mask]; X = np.<reduction>(tmp)`` into a single
+    # masked iteration so we avoid materialising the dynamic-length compacted view
+    # from boolean fancy indexing. Seeded with the kernel-array shapes so the loop
+    # bound is the right symbol.
     _BooleanMaskReductionRewriter(
-        arrays_shapes, _collect_bool_names(lowered.tree, lowered.arrays)).visit(lowered.tree)
-    ast.fix_missing_locations(lowered.tree)
-    # Pre-pass: harvest shapes from ``name = np.zeros / empty / zeros_like``
-    # at the top of the body so LibNodeRewriter sees the shape of locals
-    # like ``Q = np.zeros_like(A)`` when it visits later uses of ``Q``.
-    local_dtypes: Dict[str, str] = {}
-    # Seed with signature-array dtypes so downstream passes
-    # (call hoister _infer_complex, BinOp dtype propagation, emit-time
-    # decl) consistently treat declared inputs/outputs the same way as
-    # locals. Every array goes in -- the table is keyed by name so
-    # there is no cost to a uniform copy of all declared dtypes.
-    for arr in lowered.arrays:
+        ctx.arrays_shapes, _collect_bool_names(tree, ctx.kir.arrays)).visit(tree)
+    ast.fix_missing_locations(tree)
+
+
+def _lp_seed_dtypes_and_harvest(ctx: LoweringContext) -> None:
+    """Seed local dtypes (signature + boolean constructors), unify mixed-complex
+    selects, SSA-rename reassigned locals, then harvest local-array shapes."""
+    tree = ctx.tree
+    # Seed with signature-array dtypes so downstream passes (call hoister
+    # _infer_complex, BinOp dtype propagation, emit-time decl) consistently treat
+    # declared inputs/outputs the same way as locals. Every array goes in -- the
+    # table is keyed by name so there is no cost to a uniform copy of all dtypes.
+    ctx.local_dtypes = {}
+    # Bind the finalised table onto the IR now; the phases below mutate it in
+    # place, so the emitter reads the fully-populated dict after ``lower`` returns.
+    ctx.kir.local_dtypes = ctx.local_dtypes
+    for arr in ctx.kir.arrays:
         if arr.dtype:
-            local_dtypes[arr.name] = arr.dtype
-    # Seed boolean-typed locals from explicit ``np.zeros/empty/ones(...,
+            ctx.local_dtypes[arr.name] = arr.dtype
+    # Seed boolean-typed locals from explicit ``np.zeros/empty/ones(..,
     # dtype=np.bool_)`` constructors (ICON cfl_clip / levmask) so a derived
     # ``mask = cfl_clip & owner`` is recognised as boolean (and declared bool /
     # logical) before the whole-array rewriter runs.
-    for _s in ast.walk(lowered.tree):
+    for _s in ast.walk(tree):
         if (isinstance(_s, ast.Assign) and len(_s.targets) == 1
                 and isinstance(_s.targets[0], ast.Name) and isinstance(_s.value, ast.Call)):
             for _kw in _s.value.keywords:
@@ -4872,33 +4999,36 @@ def lower(kir: KernelIR) -> KernelIR:
                 _dv = _kw.value
                 if ((isinstance(_dv, ast.Attribute) and _dv.attr in ("bool_", "bool"))
                         or (isinstance(_dv, ast.Name) and _dv.id == "bool")):
-                    local_dtypes.setdefault(_s.targets[0].id, "bool_")
+                    ctx.local_dtypes.setdefault(_s.targets[0].id, "bool_")
     # Unify a mixed real/complex conditional's branches (``d = z.real if flag else
     # z``) BEFORE any downstream pass, using the now-seeded signature dtypes -- so
     # Fortran ``merge`` (strict same-type) and the JIT type unifiers see a uniform
     # complex select instead of a real-vs-complex pair (QE vexx gamma_only path).
-    _PromoteMixedComplexIfExp(local_dtypes).visit(lowered.tree)
-    # SSA-style rename for Names reassigned with different broadcast
-    # extents (hdiff / vadv ``res = ...; res = ...`` with two distinct
-    # shapes). Runs BEFORE harvest so each version registers under its
-    # own name and downstream passes (harvest / LibNodeRewriter / lifter)
-    # see unambiguous shapes per local.
-    _ssa_rename_reassigned(lowered.tree, arrays_shapes)
-    _harvest_local_shapes(lowered.tree, lib_shape_table, local_dtypes)
-    # Inlined-helper locals (conv2d's ``__inl1_output``) get their shape
-    # from ``__inl<k>_`` scalar-dim locals (``__inl1_N`` ...) that are
-    # *assigned later in the body* -- so an allocation sized from them at
-    # function top reads garbage, and the tokens never bind. Build a
-    # resolver that substitutes each ``__inl<k>_`` dim-local away (fixpoint)
-    # and concretises the resulting ``param.shape[i]`` against the real
-    # param shapes; applied later to the declaration / malloc sink
+    _PromoteMixedComplexIfExp(ctx.local_dtypes).visit(tree)
+    # SSA-style rename for Names reassigned with different broadcast extents (hdiff
+    # / vadv ``res = ...; res = ...`` with two distinct shapes). Runs BEFORE harvest
+    # so each version registers under its own name and downstream passes (harvest /
+    # LibNodeRewriter / lifter) see unambiguous shapes per local.
+    _ssa_rename_reassigned(tree, ctx.arrays_shapes)
+    _harvest_local_shapes(tree, ctx.lib_shape_table, ctx.local_dtypes)
+
+
+def _lp_resolve_inlined_shapes(ctx: LoweringContext) -> None:
+    """Resolve inlined-scalar dim tokens in the harvest table, inherit loop-var
+    dtypes, and pre-lift ``alpha * A`` so the matmul hoister sees a bare Name."""
+    tree = ctx.tree
+    # Inlined-helper locals (conv2d's ``__inl1_output``) get their shape from
+    # ``__inl<k>_`` scalar-dim locals (``__inl1_N`` ...) that are *assigned later
+    # in the body* -- so an allocation sized from them at function top reads garbage,
+    # and the tokens never bind. Build a resolver that substitutes each ``__inl<k>_``
+    # dim-local away (fixpoint) and concretises the resulting ``param.shape[i]``
+    # against the real param shapes; applied later to the declaration / malloc sink
     # (``zeros_locals`` / ``shapes``).
     from numpyto_common.frontend import (_collect_inlined_scalar_defs,
                                     _substitute_inlined_scalar_defs,
                                     _resolve_shape_attr_tokens)
-    _inl_defs = _collect_inlined_scalar_defs(lowered.tree)
-    _param_seed = {n: tuple(s) for n, s in arrays_shapes.items()}
-    _INL_RE = re.compile(r"__inl\w*|\w+\.shape\[")
+    ctx.inl_defs = _collect_inlined_scalar_defs(tree)
+    ctx.param_seed = {n: tuple(s) for n, s in ctx.arrays_shapes.items()}
 
     def _resolve_inl(shape):
         """Substitute ``__inl<k>_`` dim-locals away then resolve
@@ -4911,10 +5041,10 @@ def lower(kir: KernelIR) -> KernelIR:
         ``x__v1`` is itself a local), the ORIGINAL token is kept so the
         downstream source-order ``_ResolveArrShape`` pass still handles it
         exactly as it did before this fix existed."""
-        if not _inl_defs:
+        if not ctx.inl_defs:
             return tuple(shape)
-        subbed = _substitute_inlined_scalar_defs(tuple(shape), _inl_defs)
-        resolved = _resolve_shape_attr_tokens(subbed, _param_seed)
+        subbed = _substitute_inlined_scalar_defs(tuple(shape), ctx.inl_defs)
+        resolved = _resolve_shape_attr_tokens(subbed, ctx.param_seed)
         return tuple(new if not _INL_RE.search(new) else str(orig)
                      for orig, new in zip(shape, resolved))
 
@@ -4923,190 +5053,214 @@ def lower(kir: KernelIR) -> KernelIR:
             table[nm] = list(_resolve_inl(table[nm])) \
                 if isinstance(table[nm], list) else _resolve_inl(table[nm])
 
+    ctx.resolve_inl_table = _resolve_inl_table
     # Resolve the harvest table now so the passes that consume it (notably
     # ``_WholeArrayAssignRewriter``, which decides whether ``__hcall1 + bias``
     # is a same-rank broadcast to expand into a loop vs. a raw pointer add)
     # see ``__inl1_output``'s real shape. The never-worse guard leaves the
     # chained-inline locals (whose dims reference another local's ``.shape``)
     # untouched for the source-order ``_ResolveArrShape`` pass downstream.
-    if _inl_defs:
-        _resolve_inl_table(lib_shape_table)
+    if ctx.inl_defs:
+        _resolve_inl_table(ctx.lib_shape_table)
     # Loop-var dtype inheritance: ``for b in data:`` (where ``data`` is
     # uint8) declares ``b`` as the element dtype of ``data``.
-    array_dtypes_by_name = {a.name: a.dtype for a in lowered.arrays}
-    for loop_var, source_arr in iter_rewriter.var_to_array.items():
-        src_dt = array_dtypes_by_name.get(source_arr) or local_dtypes.get(source_arr)
+    array_dtypes_by_name = {a.name: a.dtype for a in ctx.kir.arrays}
+    for loop_var, source_arr in ctx.iter_rewriter.var_to_array.items():
+        src_dt = array_dtypes_by_name.get(source_arr) or ctx.local_dtypes.get(source_arr)
         if src_dt is not None:
-            local_dtypes[loop_var] = src_dt
-    lowered.tree.local_dtypes = local_dtypes  # type: ignore[attr-defined]
-    # Pre-matmul: lift ``alpha * A`` -> temp so the matmul hoister sees
-    # a bare Name on the left of ``A @ B``. The pre-lift runs per Assign.
-    scalar_temps: Dict[str, Tuple[str, ...]] = {}
+            ctx.local_dtypes[loop_var] = src_dt
+    # Pre-matmul: lift ``alpha * A`` -> temp so the matmul hoister sees a bare Name
+    # on the left of ``A @ B``. The pre-lift runs per Assign.
+    ctx.scalar_temps = {}
     scalar_counter = [0]
-    for stmt in list(lowered.tree.body):
+    for stmt in list(tree.body):
         if isinstance(stmt, (ast.Assign, ast.AugAssign)):
-            sm = _ScalarTimesMatmulRewriter(lib_shape_table, scalar_temps, scalar_counter)
-            if hasattr(stmt, "value"):
-                stmt.value = sm.visit(stmt.value)
-                # Prepend pre_stmts before the original statement.
-                if sm.pre_stmts:
-                    idx = lowered.tree.body.index(stmt)
-                    lowered.tree.body[idx:idx] = sm.pre_stmts
+            sm = _ScalarTimesMatmulRewriter(ctx.lib_shape_table, ctx.scalar_temps, scalar_counter)
+            stmt.value = sm.visit(stmt.value)
+            # Prepend pre_stmts before the original statement.
+            if sm.pre_stmts:
+                idx = tree.body.index(stmt)
+                tree.body[idx:idx] = sm.pre_stmts
+
+
+def _lp_libnode_expand(ctx: LoweringContext) -> None:
+    """FFT-grid + reshape normalisation, then the LibNode expander (reductions /
+    matmul / linalg); a second free-name promotion for structural scalars."""
+    tree = ctx.tree
     # Flat-grid FFT idiom (vexx invfft/fwfft: reshape-to-grid -> fftn over the
     # grid axes -> reshape-back) -> materialised reshape + fft temps, so the
     # reshape/DFT expanders below see bare Names with known shapes.
-    _FftGridReshapeRewriter(lib_shape_table, local_dtypes, [0]).visit(lowered.tree)
-    ast.fix_missing_locations(lowered.tree)
+    _FftGridReshapeRewriter(ctx.lib_shape_table, ctx.local_dtypes, [0]).visit(tree)
+    ast.fix_missing_locations(tree)
     # Normalize ``X.reshape(a, b)`` method form to ``np.reshape(X, (a, b))``
     # AFTER the FFT idiom match (which consumes its own reshape chains) so the
     # single expand_reshape path serves lulesh's varargs spelling.
-    _ReshapeMethodRewriter().visit(lowered.tree)
-    ast.fix_missing_locations(lowered.tree)
-    lib_rewriter = LibNodeRewriter(lib_shape_table,
-                                   known_arrays=set(arrays_shapes.keys()),
-                                   local_dtypes=local_dtypes,
-                                   sparse=getattr(kir, "sparse", None))
-    lib_rewriter.visit(lowered.tree)
-    # Second free-name promotion: sparse matvec dispatchers introduce
-    # structural scalar symbols that don't exist until the hoister runs
-    # (SELL-C-sigma's slice height ``C``), so the first promotion at the
-    # top of lower() can't see them. Re-run now -- matmul temps and the
-    # JDS scratch are subscript-store targets, so they're treated as
-    # locals and excluded; only genuinely free Load names get promoted.
-    _promote_free_names_to_params(lowered)
-    # Whole-array Augmented / plain assignment between same-shape arrays
-    # (``x1 += temp`` or ``out = a``) is numpy's elementwise form;
-    # expand to a loop nest so the C/Fortran emitter does not see
-    # pointer arithmetic.
-    # Pass the set of REAL kernel arrays (not aliases that LibNodeRewriter
-    # added) so the whole-array rewriter knows which aliases are fresh
-    # locals needing declaration.
-    real_arrays = set(arrays_shapes.keys())
-    # Boolean masking: ``arr[mask_expr] = value`` -> per-element loop
-    # with an ``if mask_expr[i]:`` guard. Runs before the whole-array
-    # rewriter so the LHS is a plain scalar subscript downstream.
-    _BooleanMaskRewriter(lib_shape_table).visit(lowered.tree)
-    wa_rewriter = _WholeArrayAssignRewriter(lib_shape_table, real_arrays,
-                                            local_dtypes=local_dtypes)
-    wa_rewriter.visit(lowered.tree)
-    zeros = _ZerosRewriter(lib_shape_table)
-    zeros.visit(lowered.tree)
-    # Merge matmul-hoisted temps with the np.zeros locals -- both
-    # become C stack arrays / Fortran locals in the prelude.
-    zeros_locals = dict(zeros.zeros)
-    zeros_locals.update(lib_rewriter.matmul_temps)
-    zeros_locals.update(lib_rewriter.fresh_local_allocs)
-    zeros_locals.update(scalar_temps)
-    zeros_locals.update(wa_rewriter.alias_locals)
-    # Pre-pass harvested local arrays (corr = np.eye(M, ...),
-    # imgOut = np.copy(...), etc.) that the LibNode expanders didn't
-    # rewrite. They must still be declared so the emitter sees them.
-    for name, shape in lib_shape_table.items():
-        if name not in zeros_locals and name not in arrays_shapes:
+    _ReshapeMethodRewriter().visit(tree)
+    ast.fix_missing_locations(tree)
+    # Library-node expansion -- reductions, matmul, etc. -- runs before
+    # ``_ZerosRewriter`` so any matmul temps the rewriter introduces are picked up
+    # by the zeros pass as local arrays.
+    from numpyto_common.lib_nodes import LibNodeRewriter
+    ctx.lib_rewriter = LibNodeRewriter(ctx.lib_shape_table,
+                                       known_arrays=set(ctx.arrays_shapes.keys()),
+                                       local_dtypes=ctx.local_dtypes,
+                                       sparse=ctx.original_kir.sparse)
+    ctx.lib_rewriter.visit(tree)
+    # Second free-name promotion: sparse matvec dispatchers introduce structural
+    # scalar symbols that don't exist until the hoister runs (SELL-C-sigma's slice
+    # height ``C``), so the first promotion at the top of lower() can't see them.
+    # Re-run now -- matmul temps and the JDS scratch are subscript-store targets, so
+    # they're treated as locals and excluded; only genuinely free Load names get
+    # promoted.
+    _promote_free_names_to_params(ctx.kir)
+
+
+def _lp_whole_array_and_zeros(ctx: LoweringContext) -> None:
+    """Whole-array assignment expansion, the zeros harvest, and the merged
+    local-array declaration tables (``zeros_locals`` / ``zeros_fills`` /
+    ``scalar_call_temps`` / ``shapes``)."""
+    tree = ctx.tree
+    # Whole-array Augmented / plain assignment between same-shape arrays (``x1 +=
+    # temp`` or ``out = a``) is numpy's elementwise form; expand to a loop nest so
+    # the C/Fortran emitter does not see pointer arithmetic. Pass the set of REAL
+    # kernel arrays (not aliases that LibNodeRewriter added) so the whole-array
+    # rewriter knows which aliases are fresh locals needing declaration.
+    real_arrays = set(ctx.arrays_shapes.keys())
+    # Boolean masking: ``arr[mask_expr] = value`` -> per-element loop with an ``if
+    # mask_expr[i]:`` guard. Runs before the whole-array rewriter so the LHS is a
+    # plain scalar subscript downstream.
+    _BooleanMaskRewriter(ctx.lib_shape_table).visit(tree)
+    ctx.wa_rewriter = _WholeArrayAssignRewriter(ctx.lib_shape_table, real_arrays,
+                                                local_dtypes=ctx.local_dtypes)
+    ctx.wa_rewriter.visit(tree)
+    ctx.zeros = _ZerosRewriter(ctx.lib_shape_table)
+    ctx.zeros.visit(tree)
+    # Merge matmul-hoisted temps with the np.zeros locals -- both become C stack
+    # arrays / Fortran locals in the prelude.
+    zeros_locals = dict(ctx.zeros.zeros)
+    zeros_locals.update(ctx.lib_rewriter.matmul_temps)
+    zeros_locals.update(ctx.lib_rewriter.fresh_local_allocs)
+    zeros_locals.update(ctx.scalar_temps)
+    zeros_locals.update(ctx.wa_rewriter.alias_locals)
+    # Pre-pass harvested local arrays (corr = np.eye(M, ...), imgOut = np.copy(...),
+    # etc.) that the LibNode expanders didn't rewrite. They must still be declared
+    # so the emitter sees them.
+    for name, shape in ctx.lib_shape_table.items():
+        if name not in zeros_locals and name not in ctx.arrays_shapes:
             zeros_locals[name] = tuple(shape) if shape else ("1",)
-    lowered.tree.zeros_locals = zeros_locals  # type: ignore[attr-defined]
+    ctx.zeros_locals = zeros_locals
+    ctx.kir.zeros_locals = zeros_locals
     # Fill kind per local (zeros / ones / empty / ...). Only the explicit
-    # ``np.<ctor>`` path (``_ZerosRewriter``) carries a meaningful kind;
-    # every other source (matmul temps, slice-fusion lifts, alias locals)
-    # is a write-before-read temp, so it defaults to ``empty``. The
-    # emitter consults this only when a local name aliases an OUTPUT
-    # parameter -- to initialise the caller's buffer correctly without a
-    # shadowing declaration.
-    lowered.tree.zeros_fills = dict(zeros.fills)  # type: ignore[attr-defined]
-    # Scalar call-hoist temps: declared as plain double locals by the
-    # emit walker via its implicit-local logic (they appear as a
-    # bare Name on the LHS of an Assign whose RHS is a Call).
-    lowered.tree.scalar_call_temps = list(lib_rewriter.scalar_call_temps)  # type: ignore[attr-defined]
+    # ``np.<ctor>`` path (``_ZerosRewriter``) carries a meaningful kind; every other
+    # source (matmul temps, slice-fusion lifts, alias locals) is a write-before-read
+    # temp, so it defaults to ``empty``. The emitter consults this only when a local
+    # name aliases an OUTPUT parameter -- to initialise the caller's buffer correctly
+    # without a shadowing declaration.
+    ctx.kir.zeros_fills = dict(ctx.zeros.fills)
+    # Scalar call-hoist temps: declared as plain double locals by the emit walker
+    # via its implicit-local logic (they appear as a bare Name on the LHS of an
+    # Assign whose RHS is a Call).
+    ctx.kir.scalar_call_temps = list(ctx.lib_rewriter.scalar_call_temps)
     # Re-collect the shape table -- np.zeros locals are included for slice fusion.
-    shapes: Dict[str, List[str]] = dict(arrays_shapes)
-    for name, shape in zeros.zeros.items():
+    shapes: Dict[str, List[str]] = dict(ctx.arrays_shapes)
+    for name, shape in ctx.zeros.zeros.items():
         shapes[name] = list(shape) if shape else ["1"]
     # Also include any shapes harvested by the pre-pass (np.eye / np.copy /
-    # np.transpose / np.linalg.* etc) that aren't in arrays_shapes /
-    # zeros locals -- needed when slice fusion encounters omitted-stop
-    # slices on such temps.
-    for name, shape in lib_shape_table.items():
+    # np.transpose / np.linalg.* etc) that aren't in arrays_shapes / zeros locals --
+    # needed when slice fusion encounters omitted-stop slices on such temps.
+    for name, shape in ctx.lib_shape_table.items():
         if name not in shapes:
             shapes[name] = list(shape)
+    ctx.shapes = shapes
+
+
+def _lp_slice_normalize_and_lift(ctx: LoweringContext) -> None:
+    """Normalise subscript forms, lift array-valued slice RHS to fresh locals, and
+    re-resolve ``.size`` / ``.shape`` / ``__inl`` tokens over the new locals."""
+    tree = ctx.tree
+    shapes = ctx.shapes
     # Normalise subscript forms BEFORE the slice lifter so a row/column read
     # ``box = tabxx_box[ia]`` / ``qr = tabxx_qr[ia][:, k]`` (QE ultrasoft
-    # augmentation) is materialised into a rank-1 local the fancy scatter /
-    # gather can index. Flatten chained subscripts ``B[inner][outer]`` into one
-    # combined index, fold scalar-prefix sub-array aliases (``low = A[i, j];
-    # low[k]`` -> ``A[i, j, k]``, xsbench -- runs before padding so its bare
-    # ``A[i]`` def is dropped and not lifted into a copy), then make numpy's
-    # implicit trailing axes explicit (``tabxx_box[ia]`` -> ``[ia, :]``).
-    _FlattenChainedSubscripts(shapes).visit(lowered.tree)
-    _fold_subarray_aliases(lowered.tree, shapes)
-    _PadImplicitTrailingSlices(shapes).visit(lowered.tree)
-    # Lift array-valued RHS (slice-bearing BinOp / Call / etc) on a
-    # bare-Name LHS to a ``Name = np.zeros(extent); Name[:] = expr``
-    # pair so slice fusion can lower the per-element loop. Computes the
-    # shape from the iteration extent of the RHS, registers the new
-    # local in both ``shapes`` and ``zeros_locals``.
-    lifter = _LiftFreshArrayFromSlices(shapes, local_dtypes=local_dtypes)
-    new_locals = lifter.run(lowered.tree)
+    # augmentation) is materialised into a rank-1 local the fancy scatter / gather
+    # can index. Flatten chained subscripts ``B[inner][outer]`` into one combined
+    # index, fold scalar-prefix sub-array aliases (``low = A[i, j]; low[k]`` -> ``A[i,
+    # j, k]``, xsbench -- runs before padding so its bare ``A[i]`` def is dropped and
+    # not lifted into a copy), then make numpy's implicit trailing axes explicit
+    # (``tabxx_box[ia]`` -> ``[ia, :]``).
+    _FlattenChainedSubscripts(shapes).visit(tree)
+    _fold_subarray_aliases(tree, shapes)
+    _PadImplicitTrailingSlices(shapes).visit(tree)
+    # Lift array-valued RHS (slice-bearing BinOp / Call / etc) on a bare-Name LHS to
+    # a ``Name = np.zeros(extent); Name[:] = expr`` pair so slice fusion can lower
+    # the per-element loop. Computes the shape from the iteration extent of the RHS,
+    # registers the new local in both ``shapes`` and ``zeros_locals``.
+    ctx.lifter = _LiftFreshArrayFromSlices(shapes, local_dtypes=ctx.local_dtypes)
+    new_locals = ctx.lifter.run(tree)
     if new_locals:
         for name, shape in new_locals.items():
             shapes[name] = list(shape)
-            zeros_locals[name] = tuple(shape)
-        lowered.tree.zeros_locals = zeros_locals  # type: ignore[attr-defined]
-    # The lifter may have inferred complex dtypes; propagate to the
-    # tree-side local_dtypes the emitter consumes.
-    lowered.tree.local_dtypes = local_dtypes  # type: ignore[attr-defined]
+            ctx.zeros_locals[name] = tuple(shape)
+    # ``zeros_locals`` / ``local_dtypes`` are the same objects the IR already holds
+    # (bound in earlier phases), so the lifter's in-place additions -- and the
+    # complex dtypes it inferred -- are already visible to the emitter.
     # Re-resolve ``.size`` / ``.shape`` / ``len(..)`` over the NOW-materialised
     # locals (``box = tabxx_box[ia, :]`` -> a rank-1 local). The early pass at
-    # parse-shape time saw only params, so ``box.size == 0`` (the QE ultrasoft
-    # empty-box guard) survived unresolved; with ``box`` in ``shapes`` it folds
-    # to its extent. Already-resolved references are bare Names now, so the
-    # other branches are no-ops.
-    _ShapeMidExpressionRewriter(shapes).visit(lowered.tree)
-    # ``_ZerosRewriter`` re-derives the ``np.empty`` shape straight from the
-    # AST tuple, so ``__inl<k>_`` tokens reappear in ``zeros_locals`` /
-    # ``shapes`` even after the early ``lib_shape_table`` resolve. These are
-    # the declaration / malloc / subscript-stride sink the emitter reads --
-    # resolve them to pure params here so the top-of-function malloc is sized
-    # from real parameters (not yet-unassigned ``__inl1_N`` locals).
-    if _inl_defs:
-        _resolve_inl_table(zeros_locals)
-        _resolve_inl_table(shapes)
-        lowered.tree.zeros_locals = zeros_locals  # type: ignore[attr-defined]
-    SliceFusion(shapes).visit(lowered.tree)
-    # Final pass: resolve any surviving ``arr.shape[i]`` references to
-    # the concrete shape token from the harvested table. These survive
-    # whenever a harvested helper variable's shape was a string-form
-    # ``arr.shape[i]`` (e.g. inlined maxpool ``np.empty([x.shape[0],
-    # x.shape[1] // 2, ...])`` -- the harvest stage resolves what it
-    # can, but the body's range / loop bounds still reference the
-    # attribute expression). The emit walker has no idea what to do
-    # with an Attribute, so we substitute here.
-    # Seed the source-order resolver with bench-info parameter shapes
-    # only (not the harvest's final-state shapes for reassigned
-    # locals). The resolver then builds the current shape table per
-    # statement as it walks, so ``x.shape[i]`` at line K resolves
-    # against the shape ``x`` had AT line K -- not after the kernel''s
-    # final reassignment.
-    # Stash a fresh copy of the reassign FIFO on the tree -- the emit
-    # walker consumes it in source order to thread per-statement
-    # shape into multi-D subscript flattening. The resolver below
-    # consumes its OWN copy (the lower() call passes a new dict).
-    lowered.tree.reassign_shapes = {  # type: ignore[attr-defined]
-        k: list(v) for k, v in wa_rewriter._reassign_shapes.items()}
+    # parse-shape time saw only params, so ``box.size == 0`` (the QE ultrasoft empty-
+    # box guard) survived unresolved; with ``box`` in ``shapes`` it folds to its
+    # extent. Already-resolved references are bare Names now, so the other branches
+    # are no-ops.
+    _ShapeMidExpressionRewriter(shapes).visit(tree)
+    # ``_ZerosRewriter`` re-derives the ``np.empty`` shape straight from the AST
+    # tuple, so ``__inl<k>_`` tokens reappear in ``zeros_locals`` / ``shapes`` even
+    # after the early ``lib_shape_table`` resolve. These are the declaration / malloc
+    # / subscript-stride sink the emitter reads -- resolve them to pure params here
+    # so the top-of-function malloc is sized from real parameters (not yet-unassigned
+    # ``__inl1_N`` locals).
+    if ctx.inl_defs:
+        ctx.resolve_inl_table(ctx.zeros_locals)
+        ctx.resolve_inl_table(shapes)
+
+
+def _lp_slice_fusion_and_resolve(ctx: LoweringContext) -> None:
+    """Slice fusion, source-order ``arr.shape[i]`` resolution, and forcing
+    index-array locals to int64."""
+    tree = ctx.tree
+    shapes = ctx.shapes
+    SliceFusion(shapes).visit(tree)
+    # Final pass: resolve any surviving ``arr.shape[i]`` references to the concrete
+    # shape token from the harvested table. These survive whenever a harvested helper
+    # variable's shape was a string-form ``arr.shape[i]`` (e.g. inlined maxpool
+    # ``np.empty([x.shape[0], x.shape[1] // 2, ...])`` -- the harvest stage resolves
+    # what it can, but the body's range / loop bounds still reference the attribute
+    # expression). The emit walker has no idea what to do with an Attribute, so we
+    # substitute here.
+    #
+    # Seed the source-order resolver with bench-info parameter shapes only (not the
+    # harvest's final-state shapes for reassigned locals). The resolver then builds
+    # the current shape table per statement as it walks, so ``x.shape[i]`` at line K
+    # resolves against the shape ``x`` had AT line K -- not after the kernel's final
+    # reassignment.
+    #
+    # Stash a fresh copy of the reassign FIFO on the IR -- the emit walker consumes
+    # it in source order to thread per-statement shape into multi-D subscript
+    # flattening. The resolver below consumes its OWN copy (a fresh dict).
+    ctx.kir.reassign_shapes = {
+        k: list(v) for k, v in ctx.wa_rewriter._reassign_shapes.items()}
     _ResolveArrShape(
         shapes,
-        param_shapes={k: tuple(v) for k, v in arrays_shapes.items()},
-        zeros_locals={k: tuple(v) for k, v in zeros_locals.items()},
+        param_shapes={k: tuple(v) for k, v in ctx.arrays_shapes.items()},
+        zeros_locals={k: tuple(v) for k, v in ctx.zeros_locals.items()},
         reassign_shapes={
-            k: list(v) for k, v in wa_rewriter._reassign_shapes.items()},
-    ).visit(lowered.tree)
-    ast.fix_missing_locations(lowered.tree)
+            k: list(v) for k, v in ctx.wa_rewriter._reassign_shapes.items()},
+    ).visit(tree)
+    ast.fix_missing_locations(tree)
     # Force index-array LOCALS to int64. A local whose VALUES index another array
-    # (``delv[neigh_safe[w0]]`` -- neigh_safe = np.clip(lxim, ..) is a local, so
-    # the param-only _detect_output_and_index_arrays misses it) must be integer;
-    # C/Fortran reject a float subscript. A name used as a subscript index is
-    # always integral, so this is sound.
+    # (``delv[neigh_safe[w0]]`` -- neigh_safe = np.clip(lxim, ..) is a local, so the
+    # param-only _detect_output_and_index_arrays misses it) must be integer;
+    # C/Fortran reject a float subscript. A name used as a subscript index is always
+    # integral, so this is sound.
     _idx_locals: Set[str] = set()
-    for node in ast.walk(lowered.tree):
+    for node in ast.walk(tree):
         if isinstance(node, ast.Subscript):
             sl = node.slice
             elts = sl.elts if isinstance(sl, ast.Tuple) else [sl]
@@ -5116,16 +5270,56 @@ def lower(kir: KernelIR) -> KernelIR:
                 elif isinstance(e, ast.Name):
                     _idx_locals.add(e.id)              # A[B] (whole-array gather) -> B
     for _nm in _idx_locals:
-        if (_nm in shapes or _nm in local_dtypes):
-            _dt = local_dtypes.get(_nm)
+        if (_nm in shapes or _nm in ctx.local_dtypes):
+            _dt = ctx.local_dtypes.get(_nm)
             if not (_dt and _dt.startswith(("int", "uint"))):
-                local_dtypes[_nm] = "int64"
-    lowered.tree.local_dtypes = local_dtypes  # type: ignore[attr-defined]
-    # Lower each non-inlinable helper the same way -- it is a self-contained
-    # sub-kernel (own params + body). Its early ``return`` survives lowering
-    # (the return-extraction is a parse_kernel step, not a lowering pass).
-    lowered.helpers = [lower(h) for h in kir.helpers]
-    return lowered
+                ctx.local_dtypes[_nm] = "int64"
+
+
+def _lp_lower_helpers(ctx: LoweringContext) -> None:
+    """Lower each non-inlinable helper the same way -- it is a self-contained
+    sub-kernel (own params + body). Its early ``return`` survives lowering (the
+    return-extraction is a parse_kernel step, not a lowering pass)."""
+    ctx.kir.helpers = [lower(h) for h in ctx.original_kir.helpers]
+
+
+#: The lowering pipeline as data: an ordered list of ``(name, phase)`` pairs run
+#: over a shared :class:`LoweringContext`. The ORDER is load-bearing -- a slice
+#: pass consults the array-shape table, so ``np.zeros`` locals must be registered
+#: before it; see each phase's docstring / inline comments for the rationale.
+_LOWER_PHASES: List[Tuple[str, Callable[["LoweringContext"], None]]] = [
+    ("seed-shape-table", _lp_seed_shape_table),
+    ("normalize-calls", _lp_normalize_calls),
+    ("promote-params", _lp_promote_params),
+    ("pre-libnode-normalize", _lp_pre_libnode_normalize),
+    ("seed-dtypes-and-harvest", _lp_seed_dtypes_and_harvest),
+    ("resolve-inlined-shapes", _lp_resolve_inlined_shapes),
+    ("libnode-expand", _lp_libnode_expand),
+    ("whole-array-and-zeros", _lp_whole_array_and_zeros),
+    ("slice-normalize-and-lift", _lp_slice_normalize_and_lift),
+    ("slice-fusion-and-resolve", _lp_slice_fusion_and_resolve),
+    ("lower-helpers", _lp_lower_helpers),
+]
+
+
+def lower(kir: KernelIR) -> KernelIR:
+    """Return a lowered copy of ``kir`` ready for backend emission.
+
+    The body is a fixed sequence of named phases (:data:`_LOWER_PHASES`), each
+    mutating a shared :class:`LoweringContext`. Pipeline shape: math rename ->
+    ``np.zeros`` -> slice fusion. Order matters: the slice rewriter consults the
+    array-shape table, and ``np.zeros`` locals must be registered first so their
+    shapes are visible to it.
+
+    Matmul (``A @ B`` / ``np.matmul`` -- normalised to ``@`` by
+    :class:`_MatmulCallRewriter`) is loop-lowered uniformly for every target;
+    the Fortran ``MATMUL`` intrinsic is reserved for the rare unresolved-shape
+    case the loop hoister cannot lower (handled in the Fortran emitter).
+    """
+    ctx = LoweringContext(kir, copy.deepcopy(kir))
+    for _name, _phase in _LOWER_PHASES:
+        _phase(ctx)
+    return ctx.kir
 
 
 #: Python builtins / harness identifiers that may appear in the body

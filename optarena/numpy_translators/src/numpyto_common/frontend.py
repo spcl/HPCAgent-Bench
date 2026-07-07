@@ -32,6 +32,41 @@ from typing import Dict, List, Optional, Set, Tuple
 from numpyto_common.ir import ArrayDesc, KernelIR, ScalarDesc, SymbolDesc
 
 
+def native_desugar(fn: ast.FunctionDef) -> None:
+    """Apply the native-backend AST desugars to ``fn`` in place.
+
+    These rewrites strip constructs the C/Fortran emitters cannot lower and
+    canonicalise the ones they can to a single form. Runs identically on the
+    kernel body (in :func:`parse_kernel`) and on every non-inlined helper (in
+    :func:`_build_helper_kirs`) -- a helper that survives inlining otherwise
+    keeps un-emittable ``np.newaxis`` / ufunc-``out=`` / roll-on-slice /
+    ``.real`` / ``.ndim``-guard forms the kernel body had already shed.
+
+    * ``np.newaxis`` -> ``None``.
+    * ``np.multiply(a, b, out=c)`` and the other binary-ufunc ``out=`` forms ->
+      ``c = a <op> b`` (the native backends have no ufunc dispatch; minife axpby).
+    * ``X[..] = np.roll(X[..], shift, axis)`` on a sliced operand/target -> bare-name
+      temps so the native roll expander applies and a self-roll snapshots its input.
+    * Complex accessors to their function form so the native emitter has ONE
+      handler per op: ``z.real`` -> ``np.real(z)``, ``z.imag`` -> ``np.imag(z)``,
+      ``z.conjugate()`` / ``z.conj()`` -> ``np.conj(z)``.
+    * Drop input-validation guards (``if array.ndim != 1: raise ...``) whole, so
+      their unemittable ``.ndim`` / ``.flags`` conditions never reach an emitter.
+    * Fold static ``None is None`` / ``None is not None`` comparisons (an inlined
+      helper's unsupplied optional parameter defaults to None) and DCE the dead
+      IfExp / if branches, so a backend never meets a bare None literal at emit.
+    """
+    from numpyto_common.numpy_desugar import (_ComplexAccessorToFunc, _DecomposeRollSlice, _DropValidationGuards,
+                                              _UfuncOutInline)
+    _NewaxisToNone().visit(fn)
+    _UfuncOutInline().visit(fn)
+    _DecomposeRollSlice().visit(fn)
+    _ComplexAccessorToFunc().visit(fn)
+    _DropValidationGuards().visit(fn)
+    _FoldStaticNoneBranches().visit(fn)
+    ast.fix_missing_locations(fn)
+
+
 def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optional[str] = None) -> KernelIR:
     """Build a :class:`KernelIR` from ``numpy_py`` + ``bench_info``.
 
@@ -193,33 +228,11 @@ def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optio
     # inside a helper (lulesh's _calc_volume_derivative) is now in the kernel body.
     _materialize_const_arrays(tree, fn, input_args)
     ast.fix_missing_locations(fn)
-    # Normalise ``np.newaxis`` -> ``None`` AFTER inlining so any
-    # helper-body references also get caught.
-    _NewaxisToNone().visit(fn)
-    ast.fix_missing_locations(fn)
-
-    # ``np.multiply(a, b, out=c)`` and the other binary-ufunc ``out=`` forms ->
-    # ``c = a <op> b`` (the native backends have no ufunc dispatch; minife axpby).
-    from numpyto_common.numpy_desugar import (_ComplexAccessorToFunc, _DecomposeRollSlice, _DropValidationGuards,
-                                              _UfuncOutInline)
-    _UfuncOutInline().visit(fn)
-    # ``X[..] = np.roll(X[..], shift, axis)`` on a sliced operand/target -> bare-name
-    # temps so the native roll expander applies and a self-roll snapshots its input.
-    _DecomposeRollSlice().visit(fn)
-    # Canonicalise complex accessors to their function form so the native emitter
-    # has ONE handler per op: ``z.real`` -> ``np.real(z)``, ``z.imag`` ->
-    # ``np.imag(z)``, ``z.conjugate()`` / ``z.conj()`` -> ``np.conj(z)``.
-    _ComplexAccessorToFunc().visit(fn)
-    # Drop input-validation guards (``if array.ndim != 1: raise ...``) whole, so their
-    # unemittable ``.ndim`` / ``.flags`` conditions do not reach a native emitter.
-    _DropValidationGuards().visit(fn)
-    ast.fix_missing_locations(fn)
-
-    # Fold static ``None is None`` / ``None is not None`` comparisons (an inlined
-    # helper's unsupplied optional parameter defaults to None) and DCE the dead
-    # IfExp / if branches, so a backend never meets a bare None literal at emit.
-    _FoldStaticNoneBranches().visit(fn)
-    ast.fix_missing_locations(fn)
+    # Native-backend desugars (newaxis, ufunc-out, roll-slice, complex accessors,
+    # validation-guard drop, static-None fold). Applied here to the kernel body
+    # AND, identically, to every non-inlined helper in ``_build_helper_kirs`` so a
+    # helper that survives inlining is not left with un-emittable constructs.
+    native_desugar(fn)
 
     # Inline tuple-valued shape locals and fold tuple concatenation AFTER
     # inlining so references inside inlined helper bodies (vexx's invfft/fwfft
@@ -1906,6 +1919,11 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
         hfn = copy.deepcopy(hdef)
         pnames = [a.arg for a in hfn.args.args]
         _inline_module_constants(tree, hfn, pnames)
+        # Same native-backend desugars the kernel body already ran (BUG-3: a helper
+        # that survives inlining kept its ``np.newaxis`` / ufunc-``out=`` / roll-on-
+        # slice / ``.real`` / ``.ndim``-guard forms). Runs before ``_mark_written_
+        # outputs`` so a ufunc-out / roll rewrite is seen as a write to its target.
+        native_desugar(hfn)
 
         if hret_shape is None:
             # SCALAR (by-value) return -- params inferred straight from the call.

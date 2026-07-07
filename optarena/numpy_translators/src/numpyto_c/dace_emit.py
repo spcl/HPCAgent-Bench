@@ -368,10 +368,10 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
     # __optarena_zeros__()`` markers for its fixed-shape accumulators -- turn them into
     # ``np.zeros`` / ``np.ones`` (per the recorded fill kind) so the @dc.program
     # allocates the transient with its declared initial value.
-    zeros_locals = vars(kir.tree).get("zeros_locals", {}) or {}
-    zeros_fills = vars(kir.tree).get("zeros_fills", {}) or {}
-    local_dtypes = vars(kir.tree).get("local_dtypes", {}) or {}
-    default_dtype = vars(kir.tree).get("float_precision") or "float64"
+    zeros_locals = kir.zeros_locals
+    zeros_fills = kir.zeros_fills
+    local_dtypes = kir.local_dtypes
+    default_dtype = kir.float_precision or "float64"
     fn_ast = _ResolveZeros(zeros_locals, zeros_fills, local_dtypes, default_dtype).visit(fn_ast)
     # dace has no runtime ``.shape`` and its symbols are immutable: rewrite
     # ``arr.shape[k]`` to the symbolic dimension and drop any recompute of a size

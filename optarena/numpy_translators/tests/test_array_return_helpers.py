@@ -83,6 +83,32 @@ def test_array_return_specialized_config_flag():
     assert ok, res
 
 
+def test_array_return_helper_native_desugar_bug3():
+    # BUG-3: a NON-inlined array-returning helper used to keep native constructs
+    # the kernel body had already shed -- the desugars only ran on the kernel, not
+    # on ``_build_helper_kirs`` bodies. This helper is non-inlinable (an early
+    # ``if s < 0: return`` inside the body) and carries a ``.ndim`` validation
+    # guard plus an ``np.newaxis``; both must be desugared away on the HELPER for
+    # the native backends to emit. Before DI-2 the ``.ndim`` / ``newaxis`` reached
+    # the emitter and it failed.
+    src = ("import numpy as np\n"
+           "def scale_row(v, s):\n"
+           " if s < 0.0:\n"
+           "  return -v\n"
+           " if v.ndim != 1:\n"
+           "  raise ValueError('expected 1-D input')\n"
+           " w = v[:, np.newaxis]\n"
+           " return w[:, 0] * s\n"
+           "def f(x, s, out):\n"
+           " for i in range(x.shape[0]):\n"
+           "  out[i, :] = scale_row(x[i, :], s)\n")
+    x = np.linspace(-2.0, 2.0, 20).reshape(4, 5).astype(np.float64)
+    ok, res = _all_ok(
+        run_op(src, "f", {"x": x, "s": 1.5}, {"out": (4, 5)}, {"M": 4, "n": 5},
+               shapes={"x": "(M,n)", "out": "(M,n)"}, backends=_ALL))
+    assert ok, res
+
+
 def test_array_helper_emitted_as_outparam_c_function():
     # Structural: the helper is a ``void`` C function with a trailing out-param,
     # and the call site is a SINGLE opaque call (not a per-element loop calling
