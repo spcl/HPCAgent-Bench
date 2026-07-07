@@ -23,3 +23,5 @@ jax
 apache-tvm
 xgboost
 torch
+# mpi4py: the MPI-track SPMD Python driver; built against the image's MPICH (MPICC pin in cpu.def)
+mpi4py

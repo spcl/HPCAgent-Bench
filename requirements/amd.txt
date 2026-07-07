@@ -25,3 +25,5 @@ apache-tvm
 xgboost
 torch
 triton
+# mpi4py: the MPI-track SPMD Python driver; built against the image's MPICH (MPICC pin in amd.def)
+mpi4py
