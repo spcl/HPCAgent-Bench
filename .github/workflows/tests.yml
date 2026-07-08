@@ -1,9 +1,9 @@
 name: CI
 
-# Four parallel CPU runners, each a self-contained slice of the pipeline (was one ~200-min
+# Five parallel CPU runners, each a self-contained slice of the pipeline (was one ~200-min
 # sequential runner). Shared toolchain + base pip come from ./.github/actions/setup; each job
-# adds only the extra it needs, so ONLY frameworks-pluto pays for the Pluto build and ONLY
-# translators pays for gt4py.
+# adds only the extra it needs, so ONLY frameworks-pluto pays for the Pluto build, ONLY
+# translators pays for gt4py, and ONLY mpi pays for the MPICH + mpi4py source build.
 #
 # The e2e sweep (tests/test_e2e_numerical.py) is partitioned by BACKEND via
 # OPTARENA_E2E_BACKENDS so no single runner carries all ~80 min of it and Pluto stays isolated:
@@ -18,6 +18,8 @@ name: CI
 #   translators      numpyto op suite + ports + benchmark refs (gt4py)
 #   frameworks-pluto codegen frameworks + fp16 + e2e[pluto]            (ONLY Pluto build)
 #   e2e-container    e2e[c,cpp,fortran,pythran] + agent-bench container image
+#   mpi              the whole MPI/distributed track (descriptor + driver codegen + launch +
+#                    scoring + halo + sizing) on MPICH + a source-built mpi4py (ONLY MPI build)
 #
 # GPU frameworks (triton, tvm-gpu) self-skip here and run in agentbench-gpu.yml.
 
@@ -95,22 +97,6 @@ jobs:
             tests/test_packaging.py \
             tests/test_optimizer_plugin.py \
             tests/test_agent_bench.py
-
-      - name: Phase 4 -- MPI track (data distribution + oversubscribed multi-rank launch)
-        if: ${{ !cancelled() }}
-        timeout-minutes: 15
-        # MPICH is the default MPI for the OptArena MPI track (ABI-compatible with
-        # cray-mpich for host replacement on Ault; only libfabric/CXI injected on Alps).
-        # The pure-numpy data-distribution tests need no launcher; the launch/e2e MPI tests
-        # `mpirun --oversubscribe` on the CI cores and self-skip when MPI_Init is unavailable.
-        run: |
-          # libmpich-dev provides mpicc.mpich (the mpich runtime pkg does not); python3-dev
-          # is needed to source-build mpi4py.
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends mpich libmpich-dev python3-dev
-          # --no-binary forces a source build against MPICH; the prebuilt wheel is multi-ABI
-          # and would auto-select OpenMPI at runtime, mismatching the MPICH driver.
-          MPICC=mpicc.mpich python -m pip install --no-binary=mpi4py mpi4py
-          python -m pytest -q -p no:cacheprovider --timeout=600 tests/test_mpi_descriptor.py
 
       - name: Phase 5 -- e2e numerical sweep [numba, jax] @ S
         if: ${{ !cancelled() }}
@@ -333,7 +319,68 @@ jobs:
           python -m pytest -q -p no:cacheprovider --timeout=900 tests/test_container_launch.py
 
   # ===========================================================================================
-  # gpu -- DISABLED 5th runner (blocked). GPU codegen tests (tvm-gpu / triton) belong on a real
+  # mpi -- the whole MPI / distributed-residency track on its own runner (the "5th runner"): the
+  # pure-numpy data-distribution + descriptor tests, the C-driver / stub codegen, the ABI + wire
+  # checks, the oversubscribed multi-rank launch + scoring e2e, the halo exchange, and the sizing
+  # (strong/weak) tests. MPICH is the track default (ABI-compatible with cray-mpich for host
+  # replacement on Ault; only libfabric/CXI injected on Alps), and mpi4py is source-built against
+  # it. The launch/e2e tests ``mpirun --oversubscribe`` on the CI cores and self-skip cleanly when
+  # MPI_Init cannot bootstrap; the GPU-device e2e tests self-skip with no CUDA/nvcc.
+  # ===========================================================================================
+  mpi:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
+    name: mpi (distributed track -- descriptor + codegen + launch + scoring)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/setup
+
+      - name: Setup -- MPICH + a source-built mpi4py (the track's ABI-matched toolchain)
+        # libmpich-dev provides mpicc.mpich (the mpich runtime pkg does not); python3-dev is
+        # needed to source-build mpi4py. --no-binary forces the source build against MPICH; the
+        # prebuilt wheel is multi-ABI and would auto-select OpenMPI at runtime, mismatching the
+        # MPICH-built C driver.
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends mpich libmpich-dev python3-dev
+          MPICC=mpicc.mpich python -m pip install --no-binary=mpi4py mpi4py
+
+      - name: Phase 1 -- data distribution + descriptor (pure numpy, no launcher)
+        if: ${{ !cancelled() }}
+        run: |
+          python -m pytest -q -p no:cacheprovider --timeout=600 \
+            tests/test_mpi_descriptor.py \
+            tests/test_mpi_scatter_gather_roundtrip.py \
+            tests/test_mpi_wire.py \
+            tests/test_mpi_sizing.py \
+            tests/test_mpi_prompt.py
+
+      - name: Phase 2 -- driver / stub codegen + ABI shape (mpicc.mpich -c compile checks)
+        if: ${{ !cancelled() }}
+        run: |
+          python -m pytest -q -p no:cacheprovider --timeout=600 \
+            tests/test_mpi_driver_codegen.py \
+            tests/test_mpi_halo.py
+
+      - name: Phase 3 -- oversubscribed multi-rank launch + scoring + correctness e2e
+        # Real MPI launches: run WITHOUT pytest-xdist so R oversubscribed ranks per test do not
+        # also contend with parallel test workers on the few CI cores. --timeout is the per-test
+        # backstop; the launch helpers self-skip when no MPI bootstraps.
+        if: ${{ !cancelled() }}
+        timeout-minutes: 30
+        run: |
+          python -m pytest -q -p no:cacheprovider -rs --timeout=900 \
+            tests/test_mpi_call.py \
+            tests/test_mpi_drivers_launch.py \
+            tests/test_mpi_correctness_oracle.py \
+            tests/test_mpi_scoring.py \
+            tests/test_noop_mpi_optimizer.py
+
+  # ===========================================================================================
+  # gpu -- DISABLED extra runner (blocked). GPU codegen tests (tvm-gpu / triton) belong on a real
   # GPU box; this job is the home for them but stays OFF (if: false) until one is provisioned.
   # On the CPU runners those cases self-skip (no CUDA / no triton), so nothing is lost meanwhile.
   # To enable: flip ``if: false`` to a self-hosted GPU runner label.

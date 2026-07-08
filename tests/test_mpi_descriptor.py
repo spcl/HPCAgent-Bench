@@ -14,11 +14,14 @@ import math
 import numpy as np
 import pytest
 
+from optarena.agent_bench import mpi_sizing
 from optarena.agent_bench.envelope import Submission
-from optarena.agent_bench.mpi_descriptor import (AxisDist, ArrayDist, Descriptor, Grid, default_distribution,
-                                                 factor_grid, gather, halo_slice, is_partition, local_shape,
-                                                 owned_indices, scatter)
-from optarena.bindings.contract import Arg, Binding
+from optarena.agent_bench.mpi_descriptor import (AxisDist, ArrayDist, Descriptor, Grid,
+                                                 blockcyclic_distribution_from_shapes, default_distribution,
+                                                 distribution_for_kernel, distribution_over_symbol, factor_grid, gather,
+                                                 hypercube_grid, is_partition, local_shape, owned_indices, scatter)
+from optarena.bindings.contract import Arg, Binding, binding_from_spec
+from optarena.spec import BenchSpec
 
 DTYPES = [np.float64, np.float32, np.int64, np.int32]
 
@@ -144,31 +147,6 @@ def test_block_cyclic_owner_formula():
         assert got == want
 
 
-# --- halo (structured-stencil read margin) ------------------------------------------
-
-
-@pytest.mark.parametrize("n,parts,halo", [(12, 3, 1), (10, 4, 2), (7, 3, 1), (5, 5, 1)])
-def test_halo_slice_widens_interior_and_clamps(n, parts, halo):
-    g = Grid((parts, ))
-    ax = AxisDist(grid_dim=0, scheme="block", block_size=1, halo=halo)
-    for coord in range(parts):
-        interior = owned_indices(n, AxisDist(grid_dim=0, scheme="block"), g, (coord, ))
-        lo, hi = halo_slice(n, ax, g, (coord, ))
-        assert 0 <= lo <= hi <= n
-        if len(interior):
-            # ghost margin present except where clamped at the global boundary
-            assert lo == max(0, interior[0] - halo)
-            assert hi == min(n, interior[-1] + 1 + halo)
-        # neighbours' halos overlap the interior they read from
-        assert hi - lo >= len(interior)
-
-
-def test_halo_slice_rejects_non_block():
-    g = Grid((2, ))
-    with pytest.raises(ValueError):
-        halo_slice(10, AxisDist(grid_dim=0, scheme="cyclic", halo=1), g, (0, ))
-
-
 # --- factor_grid + default_distribution ---------------------------------------------
 
 
@@ -216,16 +194,6 @@ def test_is_partition_false_for_overlapping_dist():
     g = Grid((2, ))
     dist = ArrayDist(axes=(AxisDist(grid_dim=0, scheme="block"), AxisDist(grid_dim=0, scheme="block")))
     assert is_partition((4, 4), dist, g) is False
-
-
-def test_halo_slice_empty_interior_reads_no_ghost():
-    """A rank that owns no interior (more ranks than elements) reads NO ghost margin."""
-    n, parts, halo = 3, 5, 1  # ranks 3,4 own nothing
-    g = Grid((parts, ))
-    ax = AxisDist(grid_dim=0, scheme="block", halo=halo)
-    for coord in (3, 4):
-        lo, hi = halo_slice(n, ax, g, (coord, ))
-        assert lo == hi, (coord, lo, hi)  # empty extent, not a spurious 1-cell window
 
 
 def test_axis_count_mismatch_is_a_clear_error():
@@ -276,9 +244,9 @@ def _sub(dist) -> Submission:
     return Submission(language="c", source="x", distribution=dist)
 
 
-def _block_axis0(scheme="block", block_size=1, halo=0):
+def _block_axis0(scheme="block", block_size=1):
     # array laid out block over grid dim 0 (the leading axis), axis 1 whole.
-    return {"axes": [{"grid_dim": 0, "scheme": scheme, "block_size": block_size, "halo": halo}, {"grid_dim": None}]}
+    return {"axes": [{"grid_dim": 0, "scheme": scheme, "block_size": block_size}, {"grid_dim": None}]}
 
 
 def test_from_submission_resolves_declared_and_replicates_the_rest():
@@ -328,11 +296,25 @@ def test_from_submission_rejects_axis_count_mismatch():
         Descriptor.from_submission(_sub(dist), b, ranks=2)
 
 
-def test_from_submission_rejects_halo_on_non_block():
-    b = _binding_2d()
-    dist = {"grid": [2, 1], "arrays": {"A": _block_axis0(scheme="cyclic", halo=1)}}
-    with pytest.raises(ValueError, match="halo=1 requires scheme 'block'"):
-        Descriptor.from_submission(_sub(dist), b, ranks=2)
+def test_validate_distribution_rejects_two_axes_on_one_split_grid_dim():
+    # Both axes bound to grid_dim 0 (size 2): each coordinate owns only the diagonal (block x
+    # block) sub-tile, so the off-diagonal blocks are unowned and gather returns uninit holes.
+    # Structural (shape-free) rejection at Submission construction.
+    dist = {"grid": [2, 1], "arrays": {"C": {"axes": [{"grid_dim": 0}, {"grid_dim": 0}]}}}
+    with pytest.raises(ValueError, match="at most one array axis"):
+        _sub(dist)
+
+
+def test_validate_distribution_allows_repeated_size1_grid_dim():
+    # A size-1 grid dim is a no-op split, so two axes may reference it (full ownership, no holes).
+    _sub({"grid": [1, 1], "arrays": {"C": {"axes": [{"grid_dim": 0}, {"grid_dim": 0}]}}})
+
+
+def test_validate_distribution_rejects_zero_block_size():
+    # block_size 0 was silently coerced to 1 by owned_indices; reject it structurally instead.
+    dist = {"grid": [2], "arrays": {"A": {"axes": [{"grid_dim": 0, "scheme": "block_cyclic", "block_size": 0}]}}}
+    with pytest.raises(ValueError, match="block_size must be a positive int"):
+        _sub(dist)
 
 
 def test_descriptor_scatter_gather_roundtrip_declared_and_replicated():
@@ -381,7 +363,17 @@ def test_local_size_scalars_localises_distributed_symbol_only():
 
 def test_local_size_scalars_ragged_split():
     b = _binding_2d()
-    d = Descriptor.from_submission(_sub({"grid": [3, 1], "arrays": {"A": _block_axis0()}}), b, ranks=3)
+    # Both A and C row-decomposed the SAME way, so M is unambiguously the local row count (an A
+    # decomposed while C is replicated would make M's per-rank value ambiguous -- guarded elsewhere).
+    d = Descriptor.from_submission(_sub({
+        "grid": [3, 1],
+        "arrays": {
+            "A": _block_axis0(),
+            "C": _block_axis0()
+        }
+    }),
+                                   b,
+                                   ranks=3)
     g = {"M": 7, "N": 4}  # 7 over 3 -> 3, 2, 2
     assert [d.local_size_scalars(g, r)["M"] for r in range(3)] == [3, 2, 2]
 
@@ -401,3 +393,365 @@ def test_local_size_scalars_no_shapes_leaves_symbols_global():
     # explicit manifest mapping N -> A:0 makes it local
     d2 = Descriptor.from_submission(sub, b, ranks=2, symbol_axes={"N": ("A", 0)})
     assert d2.local_size_scalars({"N": 8}, 0)["N"] == 4
+
+
+# --- Nrow/Ncol decouple: a size symbol's per-rank value must be unambiguous -----------------
+#
+# A symbol may size several axes, but only if they all yield the SAME per-rank value (all
+# decomposed identically, or all replicated). A symbol that sizes a DECOMPOSED axis AND a
+# replicated one (the classic square `N` on an `N x N` field: N = local rows AND global columns)
+# has no single value; the harness rejects it (a scored error) so the agent decouples it into a
+# local row symbol and a global column symbol, rather than silently taking the first.
+
+
+def _binding_square() -> Binding:
+    """A square `A[N, N]` where ONE symbol N sizes both axes -- the coupling case."""
+    args = (
+        Arg(name="A", kind="ptr", dtype="float64", is_const=True, shape=("N", "N")),
+        Arg(name="y", kind="ptr", dtype="float64", is_const=False, shape=("N", ), role="output"),
+        Arg(name="N", kind="scalar", dtype="int64", is_const=True, role="symbol"),
+    )
+    return Binding(kernel="ksq", config="dense", args=args, symbols={})
+
+
+def test_local_size_scalars_rejects_row_col_coupled_symbol():
+    # N sizes A axis 0 (decomposed, block over the 1-D grid) AND A axis 1 (replicated) -- ambiguous.
+    b = _binding_square()
+    sub = _sub({"grid": [2], "arrays": {"A": {"axes": [{"grid_dim": 0, "scheme": "block"}, {"grid_dim": None}]}}})
+    d = Descriptor.from_submission(sub, b, ranks=2)
+    with pytest.raises(ValueError, match="row/column coupling|conflicting distributions"):
+        d.local_size_scalars({"N": 8}, 0)
+
+
+def test_local_size_scalars_allows_decoupled_row_col_symbols():
+    # The decouple: A[Nrow, Ncol] with DISTINCT symbols -- Nrow decomposed (local), Ncol whole
+    # (global). A genuinely NON-SQUARE field (Nrow != Ncol) must localise only the row extent.
+    args = (
+        Arg(name="A", kind="ptr", dtype="float64", is_const=True, shape=("Nrow", "Ncol")),
+        Arg(name="y", kind="ptr", dtype="float64", is_const=False, shape=("Nrow", ), role="output"),
+        Arg(name="Nrow", kind="scalar", dtype="int64", is_const=True, role="symbol"),
+        Arg(name="Ncol", kind="scalar", dtype="int64", is_const=True, role="symbol"),
+    )
+    b = Binding(kernel="krect", config="dense", args=args, symbols={})
+    sub = _sub({
+        "grid": [4],
+        "arrays": {
+            "A": {
+                "axes": [{
+                    "grid_dim": 0,
+                    "scheme": "block"
+                }, {
+                    "grid_dim": None
+                }]
+            },
+            "y": {
+                "axes": [{
+                    "grid_dim": 0,
+                    "scheme": "block"
+                }]
+            },
+        },
+    })
+    d = Descriptor.from_submission(sub, b, ranks=4)
+    g = {"Nrow": 12, "Ncol": 5}  # non-square: 12 rows over 4 ranks -> 3 each; 5 cols stay global
+    for r in range(4):
+        loc = d.local_size_scalars(g, r)
+        assert loc["Nrow"] == 3 and loc["Ncol"] == 5
+
+
+def test_local_size_scalars_allows_symbol_on_several_identically_split_axes():
+    # LEN_1D-style: one symbol sizing two axes decomposed the SAME way is NOT ambiguous (both give
+    # the same local value), so it localises without error (regression: the guard is not over-eager).
+    args = (
+        Arg(name="x", kind="ptr", dtype="float64", is_const=True, shape=("LEN", )),
+        Arg(name="y", kind="ptr", dtype="float64", is_const=False, shape=("LEN", ), role="output"),
+        Arg(name="LEN", kind="scalar", dtype="int64", is_const=True, role="symbol"),
+    )
+    b = Binding(kernel="k1d", config="dense", args=args, symbols={})
+    sub = _sub({
+        "grid": [4],
+        "arrays": {
+            "x": {
+                "axes": [{
+                    "grid_dim": 0,
+                    "scheme": "block"
+                }]
+            },
+            "y": {
+                "axes": [{
+                    "grid_dim": 0,
+                    "scheme": "block"
+                }]
+            }
+        }
+    })
+    d = Descriptor.from_submission(sub, b, ranks=4)
+    assert d.local_size_scalars({"LEN": 16}, 0)["LEN"] == 4
+
+
+# --- A real v2 no-halo kernel: CLOUDSC column physics decomposed over `klon` --------------
+#
+# CLOUDSC's columns (the `klon` axis) are independent -- the vertical loop couples LEVELS
+# within a column, not across columns -- so a block split over `klon` needs NO communication.
+# `klon` is the LAST axis of the 2-D/3-D fields but axis 0 of the 1-D ones, so this is the
+# case the default array-axis-d -> grid-dim-d layout cannot express: the split axis is
+# per-array. These tests prove the EXISTING descriptor handles it end to end, on the real
+# binding, through the same Submission -> Descriptor path an agent would drive.
+
+
+def _split_over_klon(binding: Binding, ranks: int) -> dict:
+    """Block-split every array over its own `klon` axis on a 1-D grid of `ranks` (klon sits at a
+    different axis index per array: 0 for the 1-D fields, 1 for 2-D, 2 for 3-D). This is exactly
+    the shipped `distribution_over_symbol` helper -- delegating keeps the cloudsc e2e tests on the
+    same code path the NoOpMPIOptimizer / a klon-decomposed submission uses."""
+    return distribution_over_symbol(binding, ["klon"], ranks)
+
+
+def _cloudsc_binding() -> Binding:
+    return binding_from_spec(BenchSpec.load("cloudsc"))
+
+
+def test_distribution_over_symbol_scaled_add_1d():
+    b = binding_from_spec(BenchSpec.load("scaled_add"))
+    block0 = {"axes": [{"grid_dim": 0, "scheme": "block"}]}
+    assert distribution_over_symbol(b, ["LEN_1D"], 4) == {"grid": [4], "arrays": {"x": block0, "y": block0}}
+
+
+def test_distribution_over_symbol_splits_klon_at_its_per_array_axis():
+    """The last-axis / per-array case default_distribution cannot express: `klon` is grid_dim-0
+    block on axis 0 / 1 / 2 depending on the field's rank, every other axis replicated."""
+    dist = distribution_over_symbol(_cloudsc_binding(), ["klon"], 4)
+    assert dist["grid"] == [4]
+    assert dist["arrays"]["ktype"]["axes"] == [{"grid_dim": 0, "scheme": "block"}]  # 1-D: axis 0
+    assert dist["arrays"]["pt"]["axes"] == [{"grid_dim": None}, {"grid_dim": 0, "scheme": "block"}]  # 2-D: axis 1
+    assert dist["arrays"]["pclv"]["axes"] == [
+        {  # 3-D: axis 2
+            "grid_dim": None
+        },
+        {
+            "grid_dim": None
+        },
+        {
+            "grid_dim": 0,
+            "scheme": "block"
+        }
+    ]
+
+
+def test_distribution_over_symbol_no_matching_axis_raises():
+    b = binding_from_spec(BenchSpec.load("scaled_add"))
+    with pytest.raises(ValueError, match="nothing to distribute"):
+        distribution_over_symbol(b, ["NOPE"], 4)
+
+
+@pytest.mark.parametrize(
+    "name,shape",
+    [
+        ("ktype", (14, )),  # 1-D field: klon at axis 0
+        ("pt", (8, 14)),  # 2-D (nlev, klon): klon at axis 1
+        ("paph", (9, 14)),  # 2-D (nlev+1, klon): klon at axis 1
+        ("pclv", (5, 8, 14)),  # 3-D (nclv, nlev, klon): klon at axis 2
+    ])
+def test_cloudsc_klon_split_roundtrips_per_array(name, shape):
+    """gather(scatter(A)) is bit-exact and the owned interiors partition the array, for a
+    representative field of each rank (klon is axis 0 / 1 / 2 depending on the field)."""
+    b = _cloudsc_binding()
+    d = Descriptor.from_submission(_sub(_split_over_klon(b, 4)), b, ranks=4)
+    a = _arange(shape, np.float64 if name != "ktype" else np.int32)
+    tiles = d.scatter(name, a)
+    assert len(tiles) == 4
+    for r in range(4):
+        assert tuple(tiles[r].shape) == d.local_shape(name, shape, r)
+    assert is_partition(shape, d.dist_for(name, shape), d.grid)
+    assert np.array_equal(d.gather(name, tiles, shape, a.dtype), a)
+
+
+def test_cloudsc_klon_localises_only_klon_not_nlev():
+    """Per-rank size scalars: `klon` becomes the LOCAL column count (ragged 14/4 -> 4,4,3,3)
+    while `nlev` (the un-decomposed vertical extent) stays global on every rank -- so each
+    rank's `8*nlev*klon`-style scratch scales with its own tile."""
+    b = _cloudsc_binding()
+    d = Descriptor.from_submission(_sub(_split_over_klon(b, 4)), b, ranks=4)
+    g = {"klon": 14, "nlev": 8}
+    local_klon = [d.local_size_scalars(g, r)["klon"] for r in range(4)]
+    assert local_klon == [4, 4, 3, 3] and sum(local_klon) == 14  # exact ragged partition
+    assert all(d.local_size_scalars(g, r)["nlev"] == 8 for r in range(4))  # nlev un-decomposed
+
+
+def test_cloudsc_weak_scaling_grows_only_klon():
+    """The manifest `mpi:` block decomposes over `klon` (work linear in klon => work_exponent
+    1), so weak scaling multiplies klon by R and leaves nlev fixed -- per-rank column work is
+    held constant as ranks grow."""
+    spec = BenchSpec.load("cloudsc")
+    axis = spec.mpi["decomposition"]["axis"]
+    k = spec.mpi["decomposition"]["work_exponent"]
+    assert axis == ["klon"] and k == 1
+    sized = mpi_sizing.sized_params({"nlev": 90, "klon": 8192}, "weak", axis, ranks=4, work_exponent=k)
+    assert sized["klon"] == 8192 * 4 and sized["nlev"] == 90
+
+
+# --- Block-cyclic on an equal-edge processor hypercube -------------------------------------
+#
+# Block-cyclic (ScaLAPACK MB/NB round-robin) is defined on a hypercube whose every grid edge is
+# the same size: the agent picks the cube's DIMENSIONALITY (line / square / cube), the edge follows
+# from the rank count. hypercube_grid builds it; the envelope rejects a non-equal grid for cyclic.
+
+
+@pytest.mark.parametrize("nranks,ndim,dims", [(4, 1, (4, )), (4, 2, (2, 2)), (8, 3, (2, 2, 2)), (9, 2, (3, 3))])
+def test_hypercube_grid_equal_edges(nranks, ndim, dims):
+    g = hypercube_grid(nranks, ndim)
+    assert g.dims == dims and g.nranks == nranks
+
+
+def test_hypercube_grid_rejects_non_perfect_power():
+    with pytest.raises(ValueError, match="perfect 2-th power|not a perfect"):
+        hypercube_grid(8, 2)  # 8 is not a perfect square -> no equal-edge 2-D cube
+
+
+def test_block_cyclic_roundtrips_on_equal_hypercube():
+    # A 3-D array block-cyclic over a 2x2x2 equal-edge cube must scatter/gather bit-exact.
+    grid = hypercube_grid(8, 3)
+    dist = ArrayDist(axes=tuple(AxisDist(grid_dim=d, scheme="block_cyclic", block_size=1) for d in range(3)))
+    a = _arange((4, 6, 4), np.float64)
+    assert is_partition(a.shape, dist, grid)
+    back = gather(scatter(a, dist, grid), dist, grid, a.shape, np.dtype(np.float64))
+    assert np.array_equal(back, a)
+
+
+def test_envelope_rejects_block_cyclic_on_unequal_grid():
+    # grid [2, 4] is not an equal-edge hypercube, so a block_cyclic axis on it is rejected.
+    bad = {
+        "grid": [2, 4],
+        "arrays": {
+            "A": {
+                "axes": [{
+                    "grid_dim": 0,
+                    "scheme": "block_cyclic"
+                }, {
+                    "grid_dim": 1,
+                    "scheme": "block_cyclic"
+                }]
+            }
+        }
+    }
+    with pytest.raises(ValueError, match="equal-edge hypercube"):
+        Submission(language="c", source="x", distribution=bad)
+
+
+def test_envelope_allows_block_cyclic_on_equal_hypercube():
+    ok = {
+        "grid": [2, 2],
+        "arrays": {
+            "A": {
+                "axes": [{
+                    "grid_dim": 0,
+                    "scheme": "block_cyclic"
+                }, {
+                    "grid_dim": 1,
+                    "scheme": "block_cyclic"
+                }]
+            }
+        }
+    }
+    Submission(language="c", source="x", distribution=ok)  # no raise
+    # a 1-D block-cyclic grid is trivially equal-edge (one dimension).
+    Submission(language="c",
+               source="x",
+               distribution={
+                   "grid": [4],
+                   "arrays": {
+                       "A": {
+                           "axes": [{
+                               "grid_dim": 0,
+                               "scheme": "block_cyclic"
+                           }]
+                       }
+                   }
+               })
+
+
+# --- 2-D block-cyclic builder: the default a block_cyclic/grid_ndim>1 kernel serves -----------
+# blockcyclic_distribution_from_shapes is the N-D analog of the 1-D block builder: it deals each
+# array's leading grid_ndim axes block-cyclic over an equal-edge hypercube. distribution_for_kernel
+# dispatches to it when the mpi: decomposition names scheme=block_cyclic + grid_ndim>1.
+
+
+def test_blockcyclic_builder_deals_leading_axes_over_hypercube():
+    dist = blockcyclic_distribution_from_shapes({"A": ("M", "N"), "B": ("M", "N")}, 4, grid_ndim=2, block_size=2)
+    assert dist["grid"] == [2, 2]  # equal-edge 2-D hypercube for 4 ranks
+    for name in ("A", "B"):
+        axes = dist["arrays"][name]["axes"]
+        assert axes == [{
+            "grid_dim": 0,
+            "scheme": "block_cyclic",
+            "block_size": 2
+        }, {
+            "grid_dim": 1,
+            "scheme": "block_cyclic",
+            "block_size": 2
+        }]
+    # The emitted layout must scatter/gather bit-exact through the descriptor math (a real partition).
+    grid = Grid(tuple(dist["grid"]))
+    ad = ArrayDist(axes=(AxisDist(0, "block_cyclic", 2), AxisDist(1, "block_cyclic", 2)))
+    a = _arange((10, 7), np.float64)  # ragged (not P*block-divisible) to stress NUMROC
+    assert is_partition(a.shape, ad, grid)
+    assert np.array_equal(gather(scatter(a, ad, grid), ad, grid, a.shape, np.dtype(np.float64)), a)
+
+
+def test_blockcyclic_builder_replicates_low_rank_arrays_and_rejects_bad_ranks():
+    # An array with fewer axes than grid_ndim cannot carry the whole grid -> omitted (replicated).
+    dist = blockcyclic_distribution_from_shapes({"A": ("M", "N"), "v": ("M", )}, 4, grid_ndim=2)
+    assert "v" not in dist["arrays"] and "A" in dist["arrays"]
+    # No equal-edge 2-D cube exists for 8 ranks.
+    with pytest.raises(ValueError, match="not a perfect|perfect 2-th power"):
+        blockcyclic_distribution_from_shapes({"A": ("M", "N")}, 8, grid_ndim=2)
+
+
+def test_distribution_for_kernel_dispatches_blockcyclic_2d():
+    # The mat_scaled_add mpi: block (scheme=block_cyclic, grid_ndim=2) routes to the hypercube
+    # builder; a plain block decomposition (default) stays a 1-D grid.
+    binding = binding_from_spec(BenchSpec.load("mat_scaled_add"))
+    mpi = {"decomposition": {"axis": ["M", "N"], "scheme": "block_cyclic", "grid_ndim": 2, "block_size": 2}}
+    dist = distribution_for_kernel(mpi, binding, 4)
+    assert dist["grid"] == [2, 2]
+    assert dist["arrays"]["A"]["axes"][1] == {"grid_dim": 1, "scheme": "block_cyclic", "block_size": 2}
+    # Default (no scheme / grid_ndim) is the 1-D block split over a size-ranks line.
+    dist1d = distribution_for_kernel({"decomposition": {"axis": ["M"]}}, binding, 4)
+    assert dist1d["grid"] == [4]
+
+
+# --- Per-array residency: any array on host or device, independently -----------------------
+
+
+def test_from_submission_captures_per_array_location():
+    b = _binding_2d()
+    sub = _sub({
+        "grid": [2, 1],
+        "arrays": {
+            "A": {
+                **_block_axis0(), "location": "device"
+            },
+            "C": _block_axis0()
+        }
+    })  # C defaults to host
+    d = Descriptor.from_submission(sub, b, ranks=2)
+    assert d.locations["A"] == "device" and d.locations["C"] == "host"
+    # device_pointer_indices is in binding.pointers order (A is pointer 0, C pointer 1).
+    assert d.device_pointer_indices(b) == (0, ) and d.any_device(b) is True
+
+
+def test_from_submission_default_location_applies():
+    b = _binding_2d()
+    sub = _sub({"grid": [2, 1], "arrays": {"A": _block_axis0(), "C": _block_axis0()}})
+    d = Descriptor.from_submission(sub, b, ranks=2, default_location="device")
+    assert d.locations["A"] == "device" and d.locations["C"] == "device"
+    assert d.device_pointer_indices(b) == (0, 1)
+    # host default -> no device pointers.
+    dh = Descriptor.from_submission(sub, b, ranks=2)
+    assert dh.device_pointer_indices(b) == () and dh.any_device(b) is False
+
+
+def test_envelope_rejects_bad_location():
+    bad = {"grid": [2], "arrays": {"A": {"axes": [{"grid_dim": 0, "scheme": "block"}], "location": "gpu"}}}
+    with pytest.raises(ValueError, match="location must be"):
+        Submission(language="c", source="x", distribution=bad)

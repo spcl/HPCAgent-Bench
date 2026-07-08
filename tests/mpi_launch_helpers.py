@@ -103,7 +103,12 @@ def mpi4py_launcher():
         import mpi4py  # noqa: F401
     except ImportError:
         return None
-    prog = "from mpi4py import MPI; print('rank', MPI.COMM_WORLD.rank, flush=True)"
+    # Check-and-init like the real driver (mpi_py_driver.run), so this probe -- and hence the gated
+    # launch tests -- do not silently skip under an ambient MPI4PY_RC_INITIALIZE=0 (the rc attribute
+    # does not override that env var in mpi4py 4.x, an explicit MPI.Init() does).
+    prog = ("from mpi4py import MPI\n"
+            "MPI.Init() if not MPI.Is_initialized() else None\n"
+            "print('rank', MPI.COMM_WORLD.rank, flush=True)")
     for launch in (["mpiexec.mpich", "-n"], ["mpirun", "--oversubscribe", "-n"]):
         if shutil.which(launch[0]) is None:
             continue
