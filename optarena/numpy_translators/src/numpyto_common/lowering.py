@@ -1684,6 +1684,75 @@ def _has_any_slice(node: ast.AST) -> bool:
     return any(isinstance(d, ast.Slice) for d in _slice_dims(node))
 
 
+def _is_full_slice(node: ast.AST) -> bool:
+    """``True`` for a bare ``:`` slice (no lower / upper / step)."""
+    return (isinstance(node, ast.Slice) and node.lower is None
+            and node.upper is None and node.step is None)
+
+
+class _CollapseChainedSubscripts(ast.NodeTransformer):
+    """Collapse a chained subscript ``A[i][j]`` into a single ``A[i, j]``.
+
+    Helper inlining leaves chained indexing where the source sliced a view then
+    indexed it -- vexx_k's ``tabxx_qr[ia][:, ijtoh[ih, jh]]`` (a real-space
+    Q-table column) and ``becxx[:, jbnd, ikq][ikb]`` (a beta-projection row).
+    numpy basic indexing associates: ``A[i][rest] == A[i, rest]`` for a scalar
+    ``i``, and an index applied to a full-slice axis selects that axis
+    (``A[:, j, k][m] == A[m, j, k]``). Flattening to a SINGLE subscript up front
+    lets every downstream shape harvest / scalarizer / scatter path treat the
+    access uniformly, instead of mis-mapping a loop iterator onto the inner ``:``
+    (which corrupts the fancy-scatter store and the dot-product operand).
+
+    Conservative: only collapses when the base is a known-shape array, every inner
+    index is a scalar or a FULL ``:`` slice, and the outer indices fit the
+    surviving (slice + trailing) axes -- any partial slice, strided slice, gather,
+    or ``newaxis`` in the inner subscript is left untouched.
+    """
+
+    def __init__(self, shape_table: Dict[str, Tuple[str, ...]]):
+        self.shape_table = shape_table
+
+    def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        self.generic_visit(node)  # collapse inner chains first (bottom-up)
+        inner = node.value
+        if not isinstance(inner, ast.Subscript) or not isinstance(inner.value, ast.Name):
+            return node
+        base_shape = self.shape_table.get(inner.value.id)
+        if not base_shape:
+            return node
+        inner_idx = _slice_dims(inner)
+        outer_idx = _slice_dims(node)
+        # A newaxis in either subscript shifts the axis alignment -- bail.
+        if any(isinstance(x, ast.Constant) and x.value is None for x in inner_idx + outer_idx):
+            return node
+        # Map inner indices onto base axes: a full ``:`` survives as a result axis,
+        # a scalar consumes its axis. Anything else (partial / strided slice) bails.
+        new_idx: List[ast.AST] = []
+        result_axes: List[int] = []
+        for ix in inner_idx:
+            if _is_full_slice(ix):
+                result_axes.append(len(new_idx))
+                new_idx.append(ix)
+            elif isinstance(ix, ast.Slice):
+                return node
+            else:
+                new_idx.append(ix)
+        # Base axes the inner subscript did not name are trailing result axes.
+        trailing = len(base_shape) - len(new_idx)
+        if trailing < 0:
+            return node
+        for _ in range(trailing):
+            result_axes.append(len(new_idx))
+            new_idx.append(ast.Slice())
+        # The outer indices apply positionally to the surviving result axes.
+        if len(outer_idx) > len(result_axes):
+            return node
+        for oi, ax in zip(outer_idx, result_axes):
+            new_idx[ax] = oi
+        slot = new_idx[0] if len(new_idx) == 1 else ast.Tuple(elts=new_idx, ctx=ast.Load())
+        return ast.copy_location(ast.Subscript(value=inner.value, slice=slot, ctx=node.ctx), node)
+
+
 def _name_of_subscript(node: ast.Subscript) -> Optional[str]:
     return node.value.id if isinstance(node.value, ast.Name) else None
 
@@ -2233,6 +2302,16 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
         slot = elts[0] if len(elts) == 1 else ast.Tuple(elts=elts, ctx=ast.Load())
         return ast.Subscript(value=node, slice=slot, ctx=ast.Load())
 
+    @staticmethod
+    def _iter_minus_start(iter_name: ast.Name, start: ast.AST) -> ast.AST:
+        """The LOCAL result position ``iter - lhs_start`` (or just ``iter`` when the
+        LHS slice starts at 0). A gather-index array / trailing source axis reads at
+        its 0-based position within the slice, not the absolute destination index."""
+        iv = ast.Name(id=iter_name.id, ctx=ast.Load())
+        if isinstance(start, ast.Constant) and start.value == 0:
+            return iv
+        return _binop(iv, ast.Sub(), start)
+
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
         # Pure broadcast-reshape on a NON-Name value (a BinOp / Call result):
         # ``(q_nb[:, None, :] * fs)[:, :, :, None]`` (lavamd). The slice is only
@@ -2284,8 +2363,11 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
             if (source_shape is not None
                     and any(isinstance(d, ast.Name) and self.array_shapes.get(d.id)
                             for d in dims)):
-                lhs_iters = [iv for iv, dim in zip(self.iter_vars, self.lhs_dims)
+                lhs_pairs = [(iv, rng[0]) for iv, dim, rng in
+                             zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
                              if isinstance(dim, ast.Slice) and iv is not None]
+                lhs_iters = [iv for iv, _ in lhs_pairs]
+                lhs_starts = [st for _, st in lhs_pairs]
                 n_trailing = len(source_shape) - len(dims)
                 result_rank = sum(
                     (len(self.array_shapes[d.id])
@@ -2298,8 +2380,14 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
                     for axis, d in enumerate(dims):
                         if isinstance(d, ast.Name) and self.array_shapes.get(d.id):
                             r = len(self.array_shapes[d.id])
-                            giters = [ast.Name(id=lhs_iters[pos + k].id,
-                                               ctx=ast.Load()) for k in range(r)]
+                            # The gather INDEX is the LOCAL result position, so read
+                            # it at ``iter - lhs_start`` -- a slice assignment into a
+                            # non-zero-start destination (vexx_k noncolin
+                            # ``big_result[ip*n:ip*n+n] -= rg[nlg]``, ip=1) must read
+                            # ``nlg[si0 - ip*n]``, not ``nlg[si0]`` (which runs off
+                            # the length-n index array).
+                            giters = [self._iter_minus_start(lhs_iters[pos + k], lhs_starts[pos + k])
+                                      for k in range(r)]
                             pos += r
                             gslot = (giters[0] if r == 1
                                      else ast.Tuple(elts=giters, ctx=ast.Load()))
@@ -2308,7 +2396,7 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
                         else:
                             new_elts.append(self._resolve_scalar_index(d, name, axis))
                     for _ in range(max(0, n_trailing)):
-                        new_elts.append(ast.Name(id=lhs_iters[pos].id, ctx=ast.Load()))
+                        new_elts.append(self._iter_minus_start(lhs_iters[pos], lhs_starts[pos]))
                         pos += 1
                     slot = (new_elts[0] if len(new_elts) == 1
                             else ast.Tuple(elts=new_elts, ctx=ast.Load()))
@@ -2377,7 +2465,11 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
             if isinstance(d, ast.Name) and self.array_shapes.get(d.id):
                 r = len(self.array_shapes[d.id])
                 if align + rhs_slice_idx + r <= len(lhs_slice_iters):
-                    giters = [ast.Name(id=lhs_slice_iters[align + rhs_slice_idx + k][0].id, ctx=ast.Load())
+                    # Gather index reads at the LOCAL result position (iter - start),
+                    # so a non-zero-start LHS slice indexes the length-matched index
+                    # array within bounds.
+                    giters = [self._iter_minus_start(lhs_slice_iters[align + rhs_slice_idx + k][0],
+                                                     lhs_slice_iters[align + rhs_slice_idx + k][1])
                               for k in range(r)]
                     rhs_slice_idx += r
                     gslot = giters[0] if r == 1 else ast.Tuple(elts=giters, ctx=ast.Load())
@@ -3203,8 +3295,14 @@ def _scalar_expr_complex(expr: ast.AST, local_dtypes: Dict[str, str]) -> bool:
         return isinstance(expr.value, complex)
     if isinstance(expr, ast.Name):
         return (local_dtypes.get(expr.id) or "").startswith("complex")
-    if isinstance(expr, ast.Subscript) and isinstance(expr.value, ast.Name):
-        return (local_dtypes.get(expr.value.id) or "").startswith("complex")
+    if isinstance(expr, ast.Subscript):
+        # Bottom out a subscript CHAIN (``deexx[:, ii][ikb]``) at its base Name --
+        # the element dtype is the base array's, whatever indexing follows.
+        base = expr.value
+        while isinstance(base, ast.Subscript):
+            base = base.value
+        if isinstance(base, ast.Name):
+            return (local_dtypes.get(base.id) or "").startswith("complex")
     if isinstance(expr, ast.BinOp):
         return _scalar_expr_complex(expr.left, local_dtypes) or _scalar_expr_complex(expr.right, local_dtypes)
     if isinstance(expr, ast.UnaryOp):
@@ -4950,6 +5048,11 @@ def _lp_pre_libnode_normalize(ctx: LoweringContext) -> None:
     fold, boolean-mask reduction fusion. Also seeds the LibNode shape table."""
     tree = ctx.tree
     ctx.lib_shape_table = dict(ctx.arrays_shapes)
+    # Pre-pass: collapse chained subscripts ``A[i][j]`` -> ``A[i, j]`` (vexx_k's
+    # ``tabxx_qr[ia][:, ijtoh[ih, jh]]`` / ``becxx[:, jbnd, ikq][ikb]``) so the
+    # harvest, scalarizers and fancy-scatter store all see a single-level access.
+    _CollapseChainedSubscripts(ctx.arrays_shapes).visit(tree)
+    ast.fix_missing_locations(tree)
     # Pre-pass: lower ``Xi, Yi = np.mgrid[a:b, c:d]`` tuple-unpack assignments to a
     # pair of per-element init loops -- before the main harvest so the resulting
     # fresh arrays get their shape registered like any other local.
@@ -5001,17 +5104,18 @@ def _lp_seed_dtypes_and_harvest(ctx: LoweringContext) -> None:
                 if ((isinstance(_dv, ast.Attribute) and _dv.attr in ("bool_", "bool"))
                         or (isinstance(_dv, ast.Name) and _dv.id == "bool")):
                     ctx.local_dtypes.setdefault(_s.targets[0].id, "bool_")
-    # Unify a mixed real/complex conditional's branches (``d = z.real if flag else
-    # z``) BEFORE any downstream pass, using the now-seeded signature dtypes -- so
-    # Fortran ``merge`` (strict same-type) and the JIT type unifiers see a uniform
-    # complex select instead of a real-vs-complex pair (QE vexx gamma_only path).
-    _PromoteMixedComplexIfExp(ctx.local_dtypes).visit(tree)
     # SSA-style rename for Names reassigned with different broadcast extents (hdiff
     # / vadv ``res = ...; res = ...`` with two distinct shapes). Runs BEFORE harvest
     # so each version registers under its own name and downstream passes (harvest /
     # LibNodeRewriter / lifter) see unambiguous shapes per local.
     _ssa_rename_reassigned(tree, ctx.arrays_shapes)
     _harvest_local_shapes(tree, ctx.lib_shape_table, ctx.local_dtypes)
+    # Unify a mixed real/complex conditional's branches (``d = z.real if flag else
+    # z``) so Fortran ``merge`` (strict same-type) and the JIT type unifiers see a
+    # uniform complex select instead of a real-vs-complex pair (QE vexx gamma_only
+    # path). Runs AFTER the harvest so a complex LOCAL branch (``deexx`` typed from
+    # its ``np.zeros(.., complex128)`` constructor) is already known complex.
+    _PromoteMixedComplexIfExp(ctx.local_dtypes).visit(tree)
 
 
 def _lp_resolve_inlined_shapes(ctx: LoweringContext) -> None:

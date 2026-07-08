@@ -341,6 +341,11 @@ class _FortranBodyEmitter(BaseEmitter):
             return self._is_logical_operand(node.left) and self._is_logical_operand(node.right)
         if isinstance(node, ast.Name) and node.id in self._logical_array_locals:
             return True
+        # A bool-typed scalar parameter (vexx_k config flag) is logical.
+        if isinstance(node, ast.Name) and node.id in self._bool_scalar_names():
+            return True
+        if isinstance(node, ast.Constant) and isinstance(node.value, bool):
+            return True
         # A subscript into a known boolean-array local is also logical.
         if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) \
                 and node.value.id in self._logical_array_locals:
@@ -387,15 +392,31 @@ class _FortranBodyEmitter(BaseEmitter):
             return True
         return False
 
+    def _bool_scalar_names(self) -> Set[str]:
+        """Scalar PARAMETERS the frontend typed ``bool`` (vexx_k's config flags
+        ``okvan`` / ``okpaw`` / ``tqr`` / ...). They declare ``logical(c_bool)`` and
+        so are ALREADY logical -- a boolean use must NOT be wrapped ``/= 0``."""
+        names = vars(self).get("_bool_scalar_names_cache")
+        if names is None:
+            names = {s.name for s in self.kir.scalars if s.dtype in ("bool", "bool_")}
+            self._bool_scalar_names_cache = names
+        return names
+
     def _as_logical_operand(self, node: ast.AST) -> str:
         """Emit ``node`` as a Fortran LOGICAL operand for ``.and.`` / ``.or.``.
 
-        A comparison / ``not`` / logical-local already IS logical and passes
-        through; anything else in a boolean context is a numeric truthiness test
-        (cloudsc's int flag ``ldcum[jl]`` or a folded literal ``0``) and becomes
-        ``(expr) /= 0`` -- the Fortran spelling of Python's non-zero truthiness."""
+        A comparison / ``not`` / logical-local / bool literal / bool-typed scalar
+        parameter already IS logical and passes through; anything else in a boolean
+        context is a numeric truthiness test (cloudsc's int flag ``ldcum[jl]`` or a
+        folded literal ``0``) and becomes ``(expr) /= 0`` -- the Fortran spelling of
+        Python's non-zero truthiness."""
         e = self.emit_expr(node)
         if _produces_logical(node):
+            return e
+        # A boolean literal (a folded ``.false.`` / ``.true.``) is already logical.
+        if isinstance(node, ast.Constant) and isinstance(node.value, bool):
+            return e
+        if isinstance(node, ast.Name) and node.id in self._bool_scalar_names():
             return e
         logicals = vars(self).get("_logical_array_locals", set())
         if isinstance(node, ast.Name) and node.id in logicals:

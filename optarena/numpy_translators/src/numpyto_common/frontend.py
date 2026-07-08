@@ -94,6 +94,10 @@ def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optio
     # this split they'd be declared ``int`` and truncate to 0. Scan all
     # presets + init.scalars for a float value per name.
     _float_preset_names = _collect_float_preset_names(parameters, info.get("init", {}).get("scalars", {}) or {})
+    # Preset names whose value is a boolean are runtime CONFIG FLAGS (typed bool),
+    # not integer size symbols -- so Fortran declares them ``logical`` and the
+    # ``if (flag)`` / ``.not. flag`` conditionals type-check.
+    _bool_preset_names = _collect_bool_preset_names(parameters)
 
     src = numpy_py.read_text()
     tree = ast.parse(src, filename=str(numpy_py))
@@ -363,8 +367,12 @@ def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optio
                     shape=_parse_shape_expression(shape_expr),
                     is_output=arg in output_args,
                 ))
-        elif arg in preset_symbols and arg not in _float_preset_names:
+        elif arg in preset_symbols and arg not in _float_preset_names and arg not in _bool_preset_names:
             symbols.append(SymbolDesc(name=arg))
+        elif arg in _bool_preset_names:
+            # A boolean config flag: a runtime ``bool`` scalar (C ``bool`` /
+            # Fortran ``logical(c_bool)``), NOT an integer dimension.
+            scalars.append(ScalarDesc(name=arg, dtype="bool", is_output=arg in output_args))
         else:
             # Plain scalar input (e.g. ``alpha`` in gemm). Type comes
             # from the JSON's ``init.scalars`` block when present --
@@ -1692,7 +1700,31 @@ def _local_array_def(fn: ast.FunctionDef, name: str):
     return None
 
 
-def _infer_param_desc(arg: ast.AST, pname: str, arr_by, sca_by, sym_by):
+def _resolve_local_array_arg(fn: ast.FunctionDef, name: str, arr_by):
+    """A helper call arg that is a kernel-LOCAL array (``xkq = xkq_collect[:, k]``
+    or a bare alias of a param) -- resolve its ``(shape, dtype)`` from the local's
+    FIRST definition, so the helper param is typed as an array rather than
+    defaulted to a scalar double. Only a slice/alias of a KNOWN array is resolved
+    (vexx_k's ``_g2_convolution`` ``xkq`` / ``xk`` (3,) q-vector args)."""
+    for node in ast.walk(fn):
+        if not (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name) and node.targets[0].id == name):
+            continue
+        rhs = node.value
+        if isinstance(rhs, ast.Name) and rhs.id in arr_by:
+            a = arr_by[rhs.id]
+            return a.shape, a.dtype
+        if (isinstance(rhs, ast.Subscript) and isinstance(rhs.value, ast.Name)
+                and rhs.value.id in arr_by):
+            a = arr_by[rhs.value.id]
+            kept = _apply_subscript_axes(list(a.shape), rhs.slice)
+            if kept:
+                return tuple(kept), a.dtype
+        return None  # first def is not a resolvable array-derived local
+    return None
+
+
+def _infer_param_desc(arg: ast.AST, pname: str, arr_by, sca_by, sym_by, fn=None):
     """Infer a helper parameter's descriptor from the CALL-SITE argument.
     Returns ``("array"|"scalar"|"symbol", desc)``."""
     if isinstance(arg, ast.Name):
@@ -1703,6 +1735,11 @@ def _infer_param_desc(arg: ast.AST, pname: str, arr_by, sca_by, sym_by):
             return ("scalar", ScalarDesc(name=pname, dtype=sca_by[arg.id].dtype))
         if arg.id in sym_by:
             return ("symbol", SymbolDesc(name=pname))
+        if fn is not None:
+            res = _resolve_local_array_arg(fn, arg.id, arr_by)
+            if res is not None:
+                shape, dtype = res
+                return ("array", ArrayDesc(name=pname, dtype=dtype, shape=shape, is_output=False))
     if (isinstance(arg, ast.Subscript) and isinstance(arg.value, ast.Name) and arg.value.id in arr_by):
         a = arr_by[arg.value.id]
         # ``arr[:, k]`` -- a slice-bearing read is a (sub-shaped) array param;
@@ -1744,14 +1781,14 @@ def _helper_return_array_shape(lhs, arr_by, fn):
     return None, None
 
 
-def _infer_helper_params(pnames, args, arr_by, sca_by, sym_by):
+def _infer_helper_params(pnames, args, arr_by, sca_by, sym_by, fn=None):
     """Split a helper's (param, call-arg) pairs into array / scalar / symbol
     descriptors inferred from each call-site argument."""
     arrays: List[ArrayDesc] = []
     scalars: List[ScalarDesc] = []
     symbols: List[SymbolDesc] = []
     for pname, arg in zip(pnames, args):
-        kind, desc = _infer_param_desc(arg, pname, arr_by, sca_by, sym_by)
+        kind, desc = _infer_param_desc(arg, pname, arr_by, sca_by, sym_by, fn)
         (arrays if kind == "array" else symbols if kind == "symbol" else scalars).append(desc)
     return arrays, scalars, symbols
 
@@ -1928,7 +1965,7 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
 
         if hret_shape is None:
             # SCALAR (by-value) return -- params inferred straight from the call.
-            arrays, scalars, symbols = _infer_helper_params(pnames, call.args, arr_by, sca_by, sym_by)
+            arrays, scalars, symbols = _infer_helper_params(pnames, call.args, arr_by, sca_by, sym_by, kernel_fn)
             _mark_written_outputs(hfn, arrays)
             out.append(KernelIR(
                 tree=hfn, kernel_name=hdef.name, short_name=hdef.name, input_args=list(pnames),
@@ -1953,7 +1990,7 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
         kept_args = [a for _, a in keep]
         hfn.args.args = [a for a in hfn.args.args if a.arg in used]
         hfn.args.defaults = []
-        arrays, scalars, symbols = _infer_helper_params(pnames, kept_args, arr_by, sca_by, sym_by)
+        arrays, scalars, symbols = _infer_helper_params(pnames, kept_args, arr_by, sca_by, sym_by, kernel_fn)
         _mark_written_outputs(hfn, arrays)
         # The returned array becomes a trailing out-param the body writes into.
         hret = f"__hret_{hidx}"
@@ -2523,6 +2560,26 @@ def _collect_float_preset_names(parameters: Dict, scalars: Dict) -> set:
         if isinstance(v, float) and not isinstance(v, bool):
             out.add(k)
     return out
+
+
+def _collect_bool_preset_names(parameters: Dict) -> set:
+    """Return preset names whose value is a BOOLEAN -- a runtime boolean CONFIG
+    FLAG (vexx_k's ``okvan`` / ``okpaw`` / ``noncolin`` / ``tqr`` / ``gamma_only``),
+    NOT an integer size symbol. Typed ``bool`` so Fortran declares them
+    ``logical(c_bool)`` and ``if (flag)`` / ``.not. flag`` type-check (C tolerates
+    the int-as-bool spelling; gfortran does not). A name that is a plain integer /
+    float in any preset is excluded (only genuinely-boolean flags qualify)."""
+    plain_bool: set = set()
+    non_bool: set = set()
+    for vals in parameters.values():
+        if not isinstance(vals, dict):
+            continue
+        for k, v in vals.items():
+            if isinstance(v, bool):
+                plain_bool.add(k)
+            elif isinstance(v, (int, float, str)):
+                non_bool.add(k)
+    return plain_bool - non_bool
 
 
 _SHAPE_TUPLE_RE = re.compile(r"^\s*\(\s*(.*?)\s*\)\s*$")

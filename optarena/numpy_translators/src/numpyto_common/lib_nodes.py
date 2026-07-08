@@ -211,6 +211,16 @@ def _slice_step_const(sl: ast.Slice) -> Optional[int]:
     return v if v not in (None, 0) else None
 
 
+def _is_shape_scalar(node: ast.AST) -> bool:
+    """``True`` for a ``.shape`` read -- ``A.shape`` (a tuple of dimensions) or
+    ``A.shape[i]`` (one dimension). Both are INTEGER-valued regardless of ``A``'s
+    element dtype, so a value/dtype walk must not descend into them."""
+    if isinstance(node, ast.Attribute) and node.attr == "shape":
+        return True
+    return (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Attribute)
+            and node.value.attr == "shape")
+
+
 def _slice_axes(node: ast.AST) -> List[ast.AST]:
     """Return a flat list of per-axis index nodes for any Subscript.
 
@@ -6058,16 +6068,18 @@ class _CallHoister(ast.NodeTransformer):
         self.pre_stmts: List[ast.stmt] = []
 
     def _infer_complex(self, expr: ast.AST) -> bool:
-        """Walk ``expr`` for any Constant(complex) or Name reference
-        to a complex-dtype local / array."""
-        for sub in ast.walk(expr):
-            if isinstance(sub, ast.Constant) and isinstance(sub.value, complex):
-                return True
-            if isinstance(sub, ast.Name):
-                dt = self.local_dtypes.get(sub.id)
-                if dt and dt.startswith("complex"):
-                    return True
-        return False
+        """``True`` iff ``expr`` reads a complex value: any Constant(complex) or
+        Name tagged complex. A ``.shape`` access is NOT a value read (it yields
+        integer dimensions), so its subtree is skipped -- ``qgm.shape[0]`` is an
+        integer bound even though ``qgm`` is complex."""
+        if _is_shape_scalar(expr):
+            return False
+        if isinstance(expr, ast.Constant):
+            return isinstance(expr.value, complex)
+        if isinstance(expr, ast.Name):
+            dt = self.local_dtypes.get(expr.id)
+            return bool(dt and dt.startswith("complex"))
+        return any(self._infer_complex(c) for c in ast.iter_child_nodes(expr))
 
     def _key_of(self, call: ast.Call):
         func = call.func
@@ -6660,6 +6672,14 @@ class LibNodeRewriter(ast.NodeTransformer):
             if ext is not None:
                 self.shape_table[target_id] = tuple(
                     _CallHoister._extent_to_shape_token(e) for e in ext)
+            # ``ngm = qgm.shape[0]`` reads a DIMENSION -- an integer, regardless
+            # of the array's dtype. Type it int64 and skip the complex walk below,
+            # which would otherwise see the complex base Name ``qgm`` and wrongly
+            # tag the scalar bound complex (vexx_k ``_addusxx_g``/``_newdxx_g``).
+            if _is_shape_scalar(rhs):
+                if target_id not in self.local_dtypes:
+                    self.local_dtypes[target_id] = "int64"
+                return
             # Complex-dtype propagation for BinOp / UnaryOp / Call:
             # a subtree carrying a complex Constant or a Name tagged
             # complex promotes the LHS so subsequent statements see
