@@ -308,6 +308,9 @@ jobs:
           # bare ``torch`` would drag in the ~2 GB CUDA stack (see cpu.def). Assert the ``+cpu``
           # local version.
           apptainer exec optarena-cpu.sif python3 -c "import numpy, scipy, dace, jax, numba, pythran, xgboost, h5py, netCDF4; import torch; assert '+cpu' in torch.__version__, 'cpu image has non-CPU torch: ' + torch.__version__; print('cpu image OK: deps import, torch', torch.__version__)"
+          # The agent-linkable numeric libs (containers/LIBRARIES.md) must be present: HPTT is
+          # SOURCE-built (build-hptt.sh, the fragile step -- guard header + .so), the rest are apt.
+          apptainer exec optarena-cpu.sif sh -c 'set -e; test -e /usr/local/include/hptt.h; test -e /usr/local/lib/libhptt.so; for l in libhwy libsleef libhwloc liblapacke; do ldconfig -p | grep -q "$l" || { echo "missing $l"; exit 1; }; done; echo "cpu image native libs OK: hptt (src) + hwy + sleef + hwloc + lapacke"'
 
       - name: Phase 6b -- container functionality (sudoless two-container launch)
         # Non-fatal: depends on the 6a image + the same userns privileges (see above).
