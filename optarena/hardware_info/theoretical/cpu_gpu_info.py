@@ -32,14 +32,6 @@ def parse_lscpu():
                     lscpu_dict[key] = value
     return lscpu_dict
 
-def check_sudo_privileges():
-    """Check if the current user has sudo privileges by running a simple sudo command."""
-    try:
-        subprocess.run(['sudo', '-n', '-v'], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        return True
-    except subprocess.CalledProcessError:
-        return False
-
 def get_cpu_flops(num_cores):
     """Returns peak FLOPS of CPU as GFLOPs/s"""
     

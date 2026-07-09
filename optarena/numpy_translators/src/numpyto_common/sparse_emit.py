@@ -1107,12 +1107,3 @@ SPARSE_MATMUL_DISPATCH: Dict[DispatchKey, Callable] = {
     # case when the surrounding expression scales/adds a dense matrix)
     ("csr",          "csr",   "matmul_dense"): expand_matmul_csr_csr_dense,
 }
-
-
-def is_supported_combo(lhs_fmt: str, rhs_fmt: str,
-                         op: str = "matmul_vec") -> bool:
-    """Check whether the dispatcher table has an entry for ``(lhs_fmt,
-    rhs_fmt, op)``. Useful for the lib_nodes hoister to decide whether
-    to route into the sparse path or fall through to the existing
-    dense-matmul builder."""
-    return (lhs_fmt, rhs_fmt, op) in SPARSE_MATMUL_DISPATCH

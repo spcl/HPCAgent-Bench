@@ -1,19 +1,31 @@
 # optarena container image (hand-maintained).
 # Hardware: amd   network(runtime): allowed
+# MPI: MPICH (OptArena MPI-track default; ABI-compatible with cray-mpich / Slingshot-CXI
+# on the cluster). MPICH-in-container approach follows SPCL's XaaS containers artifact
+# (github.com/spcl/xaas-containers-artifact, Copik et al.).
+# RCCL (rccl + rccl-dev): ROCm GPU collective lib (AMD's NCCL) for GPU-initiated comms in a
+# distributed device-residency kernel_mpi. hipcc + HIP runtime come from rocm-hip-sdk.
 Bootstrap: docker
 From: ubuntu:26.04
 
 %files
     requirements/amd.txt /requirements/amd.txt
+    containers/build-hptt.sh /build-hptt.sh
 
 %post
     export DEBIAN_FRONTEND=noninteractive
     apt-get update && apt-get install -y --no-install-recommends wget ca-certificates gnupg
     wget -qO /tmp/amdgpu-install.deb https://repo.radeon.com/amdgpu-install/7.2.4/ubuntu/noble/amdgpu-install_7.2.4.70204-1_all.deb
     apt-get install -y --no-install-recommends /tmp/amdgpu-install.deb && rm -f /tmp/amdgpu-install.deb
-    apt-get update && apt-get install -y --no-install-recommends python3 python3-pip python3-venv gcc g++ gfortran clang flang rocm-hip-sdk gdb valgrind linux-tools-common ca-certificates git curl wget openssh-client gnupg ripgrep fd-find jq less tree htop unzip vim nano libopenblas-dev liblapack-dev libfftw3-dev libhdf5-dev libnetcdf-dev libgsl-dev libeigen3-dev libsuitesparse-dev libmetis-dev libopenmpi-dev libscalapack-openmpi-dev libpetsc-real-dev libsuperlu-dev libmumps-seq-dev libhypre-dev libsundials-dev libboost-all-dev libblis-dev libucx-dev
+    apt-get update && apt-get install -y --no-install-recommends python3 python3-pip python3-venv python3-dev gcc g++ gfortran clang flang rocm-hip-sdk rccl rccl-dev gdb valgrind linux-tools-common ca-certificates git curl wget openssh-client gnupg ripgrep fd-find jq less tree htop unzip vim nano libopenblas-dev liblapack-dev libfftw3-dev libhdf5-dev libnetcdf-dev libgsl-dev libeigen3-dev libsuitesparse-dev libmetis-dev mpich libmpich-dev libscalapack-mpich-dev libpetsc-real-dev libsuperlu-dev libmumps-seq-dev libhypre-dev libsundials-dev libboost-all-dev libblis-dev libucx-dev liblapacke-dev libomp-dev libtbb-dev libsleef-dev libxsimd-dev libhwy-dev libnuma-dev libhwloc-dev libarmadillo-dev libfftw3-mpi-dev make cmake pkg-config
     rm -rf /var/lib/apt/lists/*
-    python3 -m pip install --break-system-packages --no-cache-dir -r /requirements/amd.txt
+    # HPTT (tensor transpose): not in apt -- build the portable CPU-scalar lib to /usr/local
+    # so agents can -lhptt. See containers/LIBRARIES.md.
+    sh /build-hptt.sh
+    # mpi4py: source-build against MPICH -- --no-binary honors MPICC (needs python3-dev); the
+    # prebuilt wheel is multi-ABI and auto-selects OpenMPI at runtime. See cpu.def.
+    export MPICC=mpicc.mpich
+    python3 -m pip install --break-system-packages --no-cache-dir --no-binary=mpi4py -r /requirements/amd.txt
 
 %environment
     export LC_ALL=C

@@ -17,6 +17,7 @@ the Fortran-specific tweaks:
 """
 
 import ast
+import copy
 import dataclasses
 import re
 from typing import Dict, List, Optional, Set, Tuple
@@ -24,6 +25,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from numpyto_c.ir import ArrayDesc, KernelIR
 from numpyto_common import dtypes, operators
 from numpyto_common.emitter import BaseEmitter
+from numpyto_common.frontend import pure_int_arith
 
 #: Whole-identifier matcher for scanning a shape-token string for the
 #: names it references (so ``m`` matches in ``m + 1`` but not ``__mm``).
@@ -51,7 +53,6 @@ _FORTRAN_FN_EXPR = operators.FORTRAN_FN_EXPR
 _INT_CONV_INTRINSIC: Dict[str, str] = {"int": "INT", "floor": "FLOOR", "ceil": "CEILING"}
 
 #: Reserved name suffix for the emitted timing-buffer argument.
-_TIMING_ARG = "time_ns"
 
 
 def _fortran_type(dtype: str) -> str:
@@ -159,6 +160,22 @@ def _produces_logical(rhs: ast.AST) -> bool:
     return False
 
 
+def _int_literal_value(node: ast.AST) -> Optional[int]:
+    """The integer value of a possibly-negated int literal (``5`` -> 5, ``-5``
+    -> -5), else None. A negative literal parses as ``UnaryOp(USub,
+    Constant(5))`` rather than a bare ``Constant(-5)``, so an
+    ``isinstance(node, ast.Constant)`` check alone misses it -- which left a
+    ``merge(ci, -1, ...)`` branch un-kinded (``-1`` defaults to int32) and
+    clashed with an int64 partner."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, int) and not isinstance(node.value, bool):
+        return node.value
+    if (isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd))
+            and isinstance(node.operand, ast.Constant) and isinstance(node.operand.value, int)
+            and not isinstance(node.operand.value, bool)):
+        return -node.operand.value if isinstance(node.op, ast.USub) else node.operand.value
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Body walker
 # ---------------------------------------------------------------------------
@@ -188,13 +205,36 @@ class _FortranBodyEmitter(BaseEmitter):
     _KW_BREAK = "exit"
     _KW_CONTINUE = "cycle"
 
+    def emit_stmt(self, node: ast.stmt, indent: str) -> str:
+        # A bare helper-subroutine call statement -- an array-returning helper's
+        # out-param call ``h(args, out)`` -- emits as ``call h(args, out)`` (the
+        # out-param is already the last arg; a scalar helper's ``X = h(...)`` still
+        # routes through ``_emit_assign``).
+        if (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Name) and node.value.func.id in self._helper_out):
+            args = ", ".join(self.emit_expr(a) for a in node.value.args)
+            return f"{indent}call {node.value.func.id}({args})"
+        return super().emit_stmt(node, indent)
+
     def _emit_return(self, node: ast.Return, indent: str) -> str:
+        # In a HELPER subroutine the returned value is written to the out-param
+        # ``return_mode`` (Fortran has no by-value return in our out-param
+        # scheme -- see the user-chosen design), then a bare ``return``.
+        mode = getattr(self, "return_mode", None)
+        if mode is not None and node.value is not None:
+            return f"{indent}{mode} = {self.emit_expr(node.value)}\n{indent}return"
         return f"{indent}return"
 
     def __init__(self, kir: KernelIR):
         self.kir = kir
+        #: When this body IS a helper subroutine: the out-param name its
+        #: ``return`` writes into (``None`` for the kernel).
+        self.return_mode: Optional[str] = None
+        #: name -> out-param name for each non-inlinable helper CALLED here, so a
+        #: ``X = helper(args)`` assign lowers to ``call helper(args, X)``.
+        self._helper_out: Dict[str, str] = {}
         self.array_names: Set[str] = {a.name for a in kir.arrays}
-        zeros = getattr(kir.tree, "zeros_locals", {}) or {}
+        zeros = kir.zeros_locals
         self.local_arrays: Dict[str, List[str]] = {
             name: list(shape) if shape else ["1"]
             for name, shape in zeros.items()
@@ -208,7 +248,7 @@ class _FortranBodyEmitter(BaseEmitter):
         self._rk = {
             "float32": "c_float",
             "float16": "c_float"
-        }.get(vars(kir.tree).get("float_precision", "float64"), "c_double")
+        }.get(kir.float_precision or "float64", "c_double")
         # libm functions Fortran lacks an intrinsic for, called through a bind(C)
         # interface so the result is bit-identical to the C backend (and numpy,
         # which also uses libm) -- collected here, declared in the spec part.
@@ -301,6 +341,11 @@ class _FortranBodyEmitter(BaseEmitter):
             return self._is_logical_operand(node.left) and self._is_logical_operand(node.right)
         if isinstance(node, ast.Name) and node.id in self._logical_array_locals:
             return True
+        # A bool-typed scalar parameter (vexx_k config flag) is logical.
+        if isinstance(node, ast.Name) and node.id in self._bool_scalar_names():
+            return True
+        if isinstance(node, ast.Constant) and isinstance(node.value, bool):
+            return True
         # A subscript into a known boolean-array local is also logical.
         if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) \
                 and node.value.id in self._logical_array_locals:
@@ -347,15 +392,31 @@ class _FortranBodyEmitter(BaseEmitter):
             return True
         return False
 
+    def _bool_scalar_names(self) -> Set[str]:
+        """Scalar PARAMETERS the frontend typed ``bool`` (vexx_k's config flags
+        ``okvan`` / ``okpaw`` / ``tqr`` / ...). They declare ``logical(c_bool)`` and
+        so are ALREADY logical -- a boolean use must NOT be wrapped ``/= 0``."""
+        names = vars(self).get("_bool_scalar_names_cache")
+        if names is None:
+            names = {s.name for s in self.kir.scalars if s.dtype in ("bool", "bool_")}
+            self._bool_scalar_names_cache = names
+        return names
+
     def _as_logical_operand(self, node: ast.AST) -> str:
         """Emit ``node`` as a Fortran LOGICAL operand for ``.and.`` / ``.or.``.
 
-        A comparison / ``not`` / logical-local already IS logical and passes
-        through; anything else in a boolean context is a numeric truthiness test
-        (cloudsc's int flag ``ldcum[jl]`` or a folded literal ``0``) and becomes
-        ``(expr) /= 0`` -- the Fortran spelling of Python's non-zero truthiness."""
+        A comparison / ``not`` / logical-local / bool literal / bool-typed scalar
+        parameter already IS logical and passes through; anything else in a boolean
+        context is a numeric truthiness test (cloudsc's int flag ``ldcum[jl]`` or a
+        folded literal ``0``) and becomes ``(expr) /= 0`` -- the Fortran spelling of
+        Python's non-zero truthiness."""
         e = self.emit_expr(node)
         if _produces_logical(node):
+            return e
+        # A boolean literal (a folded ``.false.`` / ``.true.``) is already logical.
+        if isinstance(node, ast.Constant) and isinstance(node.value, bool):
+            return e
+        if isinstance(node, ast.Name) and node.id in self._bool_scalar_names():
             return e
         logicals = vars(self).get("_logical_array_locals", set())
         if isinstance(node, ast.Name) and node.id in logicals:
@@ -426,6 +487,13 @@ class _FortranBodyEmitter(BaseEmitter):
         if len(node.targets) != 1:
             raise NotImplementedError("chained assignment not supported")
         target = node.targets[0]
+        # ``X = helper(args)`` where helper is emitted as a subroutine with a
+        # trailing out-param -> ``call helper(args, X)``.
+        if (isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
+                and node.value.func.id in self._helper_out):
+            call_args = [self.emit_expr(a) for a in node.value.args]
+            call_args.append(self.emit_expr(target))
+            return f"{indent}call {node.value.func.id}({', '.join(call_args)})"
         # The __optarena_zeros__ marker may have been renamed by the
         # leading-underscore-strip pass to ``x_optarena_zeros__``.
         if (isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
@@ -483,7 +551,7 @@ class _FortranBodyEmitter(BaseEmitter):
                     is_reassign = any(isinstance(a, ast.Constant) and a.value == "__reassign__"
                                       for a in node.value.args)
                     if not is_reassign:
-                        kind = vars(self.kir.tree).get("zeros_fills", {}).get(target.id)
+                        kind = self.kir.zeros_fills.get(target.id)
                         is_logical = target.id in vars(self).get("_logical_array_locals", set())
                         if kind in ("zeros", "zeros_like"):
                             alloc += f"\n{indent}{t} = {'.false.' if is_logical else '0'}"
@@ -507,7 +575,7 @@ class _FortranBodyEmitter(BaseEmitter):
                 # pass's values (contour_integral's Tz accumulator). The
                 # whole-array ``= 0`` / ``= 1`` converts to the local's
                 # numeric kind (incl. complex).
-                kind = vars(self.kir.tree).get("zeros_fills", {}).get(target.id)
+                kind = self.kir.zeros_fills.get(target.id)
                 # A LOGICAL array (cfl_clip / levmask, np.bool_) fills with
                 # ``.false.`` / ``.true.`` -- Fortran rejects int 0/1 there.
                 is_logical = target.id in vars(self).get("_logical_array_locals", set())
@@ -690,7 +758,7 @@ class _FortranBodyEmitter(BaseEmitter):
 
                 # Detect locals (allocatable / zeros_locals) and treat
                 # known 1-D ones as rank-1.
-                zl = getattr(self.kir.tree, "zeros_locals", {}) or {}
+                zl = self.kir.zeros_locals
 
                 def _shape_of_local(name):
                     s = zl.get(name)
@@ -734,7 +802,7 @@ class _FortranBodyEmitter(BaseEmitter):
                     for a in self.kir.arrays:
                         if a.name == n.id:
                             return False
-                    zl = getattr(self.kir.tree, "zeros_locals", {}) or {}
+                    zl = self.kir.zeros_locals
                     return n.id not in zl
 
                 if (_is_scalar_name(node.left) and _is_scalar_name(node.right)):
@@ -796,36 +864,32 @@ class _FortranBodyEmitter(BaseEmitter):
             return (f"merge({self._emit_merge_branch(node.body, node.orelse)}, "
                     f"{self._emit_merge_branch(node.orelse, node.body)}, "
                     f"{self.emit_expr(node.test)})")
-        # ``z.real`` / ``z.imag`` accessor on a complex scalar -> Fortran
-        # ``real(z, kind)`` / ``aimag(z)`` (the complex-Hermitian eigh Jacobi uses
-        # them only on complex operands). ``real(z, rk)`` is also the identity on a
-        # real operand.
-        if isinstance(node, ast.Attribute) and node.attr in ("real", "imag"):
-            x = self.emit_expr(node.value)
-            return f"real({x}, {self._rk})" if node.attr == "real" else f"aimag({x})"
+        # A bare ``z.real`` / ``z.imag`` Attribute never reaches emit: ``native_desugar``
+        # rewrites the accessor to ``np.real(z)`` / ``np.imag(z)`` at parse time, and the
+        # ``real(z, kind)`` / ``aimag(z)`` lowering lives on that canonical call form.
         raise NotImplementedError(f"expression {type(node).__name__} (line {getattr(node, 'lineno', '?')})")
 
     def _emit_merge_branch(self, branch: ast.AST, partner: ast.AST) -> str:
         """Emit one ``merge`` branch, suffixing an integer literal with its
         integer partner's KIND (so ``merge(m, 0, ...)`` becomes
         ``merge(m, 0_c_int64_t, ...)`` and gfortran's same-kind rule holds)."""
-        if isinstance(branch, ast.Constant) and isinstance(branch.value, int) and not isinstance(branch.value, bool):
+        litval = _int_literal_value(branch)
+        if litval is not None:
             ktag = None
             if isinstance(partner, ast.Name):
                 ktag = self._name_int_kind(partner.id)
-            elif (isinstance(partner, ast.Constant) and isinstance(partner.value, int)
-                  and not isinstance(partner.value, bool)):
+            elif _int_literal_value(partner) is not None:
                 ktag = "int64"
             if ktag:
-                lit = f"{branch.value}_{self._int_kind_selector(ktag)}"
-                return f"({lit})" if branch.value < 0 else lit
+                lit = f"{litval}_{self._int_kind_selector(ktag)}"
+                return f"({lit})" if litval < 0 else lit
             # The partner branch is REAL: merge() is strict on TYPE, so an integer
             # literal beside a real branch must be emitted as a real of the kernel
             # float kind -- ``np.where(cond, 0, real_arr)`` -> ``merge(0.0_c_double,
             # real_arr, ..)`` (hdiff). C's ternary promotes silently; Fortran does not.
             if not self._expr_is_integer(partner):
-                lit = f"{branch.value}.0_{self._rk}"
-                return f"({lit})" if branch.value < 0 else lit
+                lit = f"{litval}.0_{self._rk}"
+                return f"({lit})" if litval < 0 else lit
         return self.emit_expr(branch)
 
     def _expr_is_integer(self, e: ast.AST) -> bool:
@@ -1241,6 +1305,20 @@ class _FortranBodyEmitter(BaseEmitter):
             # np.conj / np.conjugate (vexx) -> Fortran CONJG intrinsic.
             if attr in {"conj", "conjugate"} and len(args_e) == 1:
                 return f"CONJG({args_e[0]})"
+            # ``np.real(z)`` / ``np.imag(z)`` -- the canonical function form the
+            # ``.real`` / ``.imag`` accessor desugars to. ``real(z, kind)`` is the
+            # real part (identity on a real operand too). ``aimag`` REQUIRES a
+            # complex operand (gfortran errors on a real), so guard it: a real
+            # operand's imaginary part is ``0`` -- matching numpy ``np.imag(real)``.
+            if attr in {"real", "imag"} and len(args_e) == 1:
+                if attr == "real":
+                    return f"real({args_e[0]}, {self._rk})"
+                from numpyto_common.lowering import _walk_complex
+                arr_dt = {a.name: a.dtype for a in self.kir.arrays}
+                arr_dt.update(self.kir.local_dtypes)
+                if _walk_complex(node.args[0], arr_dt.get) is not None:
+                    return f"aimag({args_e[0]})"
+                return f"0.0_{self._rk}"
             # ``np.sign(x)`` in scalar context -> -1 / 0 / +1 (numpy: sign(0)==0,
             # unlike Fortran SIGN which gives +1 at 0). Built from MERGE, same as
             # the array ``__npb_sign`` marker. cloudsc scalar np.sign.
@@ -1303,7 +1381,7 @@ class _FortranBodyEmitter(BaseEmitter):
         # Walk the body for Subscript(Name).dtype hints carried by
         # the lowering pipeline (when the local was typed via the
         # implicit-locals integer(c_int64_t) path).
-        local_dtypes = getattr(self.kir.tree, "local_dtypes", {}) or {}
+        local_dtypes = self.kir.local_dtypes
         dt = local_dtypes.get(name)
         if dt in self._INT_KIND_SUFFIX:
             return dt
@@ -1364,7 +1442,7 @@ class _FortranBodyEmitter(BaseEmitter):
                 for s in self.kir.scalars:
                     if s.name == e.id:
                         return s.dtype in ("int", "int32", "int64")
-                if e.id in (getattr(self.kir.tree, "int_locals", []) or []):
+                if e.id in self.kir.int_locals:
                     return True
                 if e.id in self._loop_iter_names:
                     return True
@@ -1610,7 +1688,6 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, dtype_override: O
     # loop iter ``k`` clash. Compute the case_map from declared
     # parameters / symbols / arrays and have ``_FortranRenameTemps``
     # rewrite collisions with an ``f_`` prefix.
-    import copy
     # Case-insensitive collision map (Fortran folds ``B`` and ``b`` to one
     # identifier). ``case_map[lc]`` is the ``f_``-prefixed rewrite for the
     # offender; ``case_map[lc + "_reserved"]`` is the ONE spelling that keeps its
@@ -1711,32 +1788,22 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, dtype_override: O
             return case_map[s.lower()]
         return s
 
-    if hasattr(kir.tree, "zeros_locals"):
-        kir_tree.zeros_locals = {  # type: ignore[attr-defined]
-            _safe_full(k): tuple(_fortran_safe_token(tok) for tok in v) if v else v
-            for k, v in kir.tree.zeros_locals.items()
-        }  # type: ignore[attr-defined]
-    # ``zeros_fills`` (constructor kind per local) -- rename the keys so
-    # the marker handler can re-zero a renamed local (e.g. ``Tz``).
-    _zf = vars(kir.tree).get("zeros_fills")
-    if _zf:
-        kir_tree.zeros_fills = {  # type: ignore[attr-defined]
-            _safe_full(k): v
-            for k, v in _zf.items()
-        }
-    # Same for ``reassign_shapes`` and ``local_dtypes`` side-tables.
-    if hasattr(kir.tree, "reassign_shapes"):
-        kir_tree.reassign_shapes = {  # type: ignore[attr-defined]
-            _safe_full(k): [tuple(_fortran_safe_token(t) for t in shape) for shape in v]
-            for k, v in kir.tree.reassign_shapes.items()
-        }
-    if hasattr(kir.tree, "local_dtypes"):
-        kir_tree.local_dtypes = {  # type: ignore[attr-defined]
-            _safe_full(k): v
-            for k, v in kir.tree.local_dtypes.items()
-        }
-    # Swap the tree on the IR copy used downstream.
-    kir = dataclasses.replace(kir, tree=kir_tree)
+    # The side-tables are typed KernelIR fields, so their Fortran-safe copies ride
+    # along on the same ``dataclasses.replace`` that swaps in the renamed tree.
+    # ``zeros_fills`` keys are renamed so the marker handler can re-zero a renamed
+    # local (e.g. ``Tz``); ``zeros_locals`` / ``reassign_shapes`` also rename each
+    # embedded ``__name`` shape token. ``int_locals`` / ``scalar_call_temps`` /
+    # ``float_precision`` carry over unchanged (they held original names before).
+    kir = dataclasses.replace(
+        kir,
+        tree=kir_tree,
+        zeros_locals={_safe_full(k): tuple(_fortran_safe_token(tok) for tok in v) if v else v
+                      for k, v in kir.zeros_locals.items()},
+        zeros_fills={_safe_full(k): v for k, v in kir.zeros_fills.items()},
+        reassign_shapes={_safe_full(k): [tuple(_fortran_safe_token(t) for t in shape) for shape in v]
+                         for k, v in kir.reassign_shapes.items()},
+        local_dtypes={_safe_full(k): v for k, v in kir.local_dtypes.items()},
+    )
 
     sym_by_name = {s.name: s for s in kir.symbols}
     arr_by_name = {a.name: a for a in kir.arrays}
@@ -1775,10 +1842,12 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, dtype_override: O
         elif arg in arr_by_name:
             arr_decls.append(_array_decl(arr_by_name[arg]))
     decls = sym_decls + sca_int_decls + arr_decls + sca_real_decls
-    param_names.append(_TIMING_ARG)
-    decls.append(f"integer(c_int64_t), intent(out) :: {_TIMING_ARG}")
 
     body_emitter = _FortranBodyEmitter(kir)
+    # Non-inlinable helpers -> ``call helper(args, X)`` at each ``X =
+    # helper(args)`` site. Keyed by the Fortran-safe helper name (the tree Names
+    # were renamed above), value = return kind (unused; membership is what maps).
+    body_emitter._helper_out = {_fortran_safe(h.kernel_name): h.return_kind for h in kir.helpers}
     # Pre-compute implicit-local int kinds before emit_block so the
     # body emitter can apply kind-matched bitwise literal suffixes.
     _pre_implicit = _collect_implicit_locals(kir)
@@ -1795,14 +1864,22 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, dtype_override: O
     # Array locals the lowering typed boolean (``owner = mask != 0``,
     # ``mask = cfl_clip & owner``) -- their dtype is recorded in local_dtypes
     # rather than via a bare True/False literal assignment.
-    _ld_pre = getattr(kir.tree, "local_dtypes", {}) or {}
+    _ld_pre = kir.local_dtypes
     _pre_logical_arr_locals |= {nm for nm, dt in _ld_pre.items() if dt in ("bool", "bool_")}
     for node in ast.walk(kir.tree):
-        if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Subscript)
-                and isinstance(node.targets[0].value, ast.Name)):
-            rhs = node.value
-            if _produces_logical(rhs):
-                _pre_logical_arr_locals.add(node.targets[0].value.id)
+        if not (isinstance(node, ast.Assign) and len(node.targets) == 1):
+            continue
+        tgt = node.targets[0]
+        if not _produces_logical(node.value):
+            continue
+        # ``mask[i] = a[i] < b[i]`` (boolean ARRAY local) and, equally,
+        # ``do_lj = (flags & CI_DO_LJ) != 0`` (boolean SCALAR local): both are
+        # Fortran ``logical`` and the emitter must route a bare use (``.not.
+        # do_lj``, ``arr[mask]``) as LOGICAL rather than wrapping it ``/= 0``.
+        if isinstance(tgt, ast.Subscript) and isinstance(tgt.value, ast.Name):
+            _pre_logical_arr_locals.add(tgt.value.id)
+        elif isinstance(tgt, ast.Name):
+            _pre_logical_arr_locals.add(tgt.id)
     body_emitter._logical_array_locals = _pre_logical_arr_locals
     # Int-typed PARAMETER arrays cannot be re-typed (C ABI), so their use as a
     # 0/1 flag in a boolean context is wrapped with ``/= 0`` at the condition
@@ -1816,7 +1893,7 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, dtype_override: O
 
     # Local arrays produced by ``np.zeros`` -- declare in the prelude.
     locals_block = []
-    int_locals = getattr(kir.tree, "int_locals", []) or []
+    int_locals = kir.int_locals
     # Fortran is case-insensitive; collapse names that clash (in any case)
     # with parameter names already declared. The tuple-unpack rewriter
     # produces ``n = N`` -> in Fortran they refer to the same identifier
@@ -1858,8 +1935,20 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, dtype_override: O
     logical_array_locals: Set[str] = set(_assigned_bool_literal(kir.tree))
     # Array locals the lowering typed boolean via local_dtypes (whole-array
     # Compare / BoolOp / bitwise-of-bools) are logical too -- declare them so.
-    _ld_decl = getattr(kir.tree, "local_dtypes", {}) or {}
+    _ld_decl = kir.local_dtypes
     logical_array_locals |= {nm for nm, dt in _ld_decl.items() if dt in ("bool", "bool_")}
+    # SCALAR locals whose RHS is boolean-valued are Fortran ``logical`` too
+    # (GROMACS ``do_lj = (flags & CI_DO_LJ) != 0``, ``half_lj = ... and
+    # do_coul``). They are already DECLARED logical (the implicit-locals
+    # ``logical_uses`` pass), but the emitter's operand routing keys off this
+    # set: without them here a bare use (``.not. do_lj``, ``... .and.
+    # do_coul``) is treated as an integer flag and wrapped ``/= 0``, which
+    # gfortran rejects against the LOGICAL declaration.
+    for node in ast.walk(kir.tree):
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and _produces_logical(node.value)):
+            logical_array_locals.add(node.targets[0].id)
     # Track inferred dtype for array locals via per-element assigns.
     # ``cols[si0] = A_col[expr]`` -> cols inherits A_col''s dtype.
     inferred_local_dtypes: Dict[str, str] = {}
@@ -1949,12 +2038,12 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, dtype_override: O
         # Python ``//`` (floor-div) to ``/`` since Fortran reads
         # ``//`` as the string-concat operator.
         rev_shape = ([_to_fortran_shape_token(s) for s in reversed(shape)] if shape else ["1"])
-        local_dtypes = getattr(kir.tree, "local_dtypes", {}) or {}
+        local_dtypes = kir.local_dtypes
         # A float temp with no recorded dtype defaults to the KERNEL's
         # float precision, not a hard-coded ``float64`` -- in fp32 mode the
         # locals must be ``real(c_float)`` so a relu ``max(x + bias,
         # 0.0_c_float)`` does not mix kinds with the c_float inputs (lenet).
-        _default_float = vars(kir.tree).get("float_precision", "float64")
+        _default_float = kir.float_precision or "float64"
         dt = local_dtypes.get(name_, inferred_local_dtypes.get(name_, _default_float))
         # Bool-typed locals declare as Fortran ``logical(c_bool)`` -- the 1-byte
         # C-ABI logical (from the dtype registry), so a comparison RHS
@@ -2021,6 +2110,7 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, dtype_override: O
         lines.append("    end interface")
         libm_iface = "\n".join(lines)
 
+    contained = "".join(_emit_fortran_helper(h) for h in kir.helpers)
     return _format_subroutine(
         name=name,
         params=param_names,
@@ -2030,6 +2120,7 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, dtype_override: O
         body=body,
         interface_block=libm_iface,
         use_ieee=body_emitter._used_ieee,
+        contained=contained,
     )
 
 
@@ -2044,12 +2135,12 @@ def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
     """
     # Float locals follow the kernel's precision (real(c_float) at fp32),
     # else a double local clashes with float32 arrays/values.
-    rk = {"float32": "c_float", "float16": "c_float"}.get(vars(kir.tree).get("float_precision", "float64"), "c_double")
+    rk = {"float32": "c_float", "float16": "c_float"}.get(kir.float_precision or "float64", "c_double")
     real_t = f"real({rk})"
     ck = {
         "float32": "c_float_complex",
         "float16": "c_float_complex"
-    }.get(vars(kir.tree).get("float_precision", "float64"), "c_double_complex")
+    }.get(kir.float_precision or "float64", "c_double_complex")
     complex_t = f"complex({ck})"
     # Scalar locals whose lowering-recorded dtype is complex must be
     # declared complex, not real -- a real decl silently drops the
@@ -2057,7 +2148,7 @@ def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
     # working scalars ``__sol_factor`` / ``__sol_tmp``). ``local_dtypes``
     # is keyed by the pre-rename name; index the fortran-safe rename too
     # so the lookup also works once names are sanitised.
-    _ldt = vars(kir.tree).get("local_dtypes", {}) or {}
+    _ldt = kir.local_dtypes
     complex_names: Set[str] = set()
     for _k, _v in _ldt.items():
         if isinstance(_v, str) and _v.startswith("complex"):
@@ -2065,8 +2156,8 @@ def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
             complex_names.add(_fortran_safe(_k))
     declared: Set[str] = set()
     declared.update(kir.input_args)
-    declared.update(getattr(kir.tree, "int_locals", []) or [])
-    declared.update((getattr(kir.tree, "zeros_locals", {}) or {}).keys())
+    declared.update(kir.int_locals)
+    declared.update(kir.zeros_locals.keys())
     # Loop iter vars are declared via _collect_for_targets.
     for s in ast.walk(kir.tree):
         if isinstance(s, ast.For) and isinstance(s.target, ast.Name):
@@ -2124,6 +2215,17 @@ def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
             _walk_bitwise_operands(rhs.right)
         elif isinstance(rhs, ast.UnaryOp):
             _walk_bitwise_operands(rhs.operand)
+        elif isinstance(rhs, ast.Compare):
+            # A bitwise op can hide inside a comparison (``(flags & CI_DO_LJ)
+            # != 0``): the ``flags`` operand of IAND must still be INTEGER, so
+            # descend into the compared expressions.
+            _walk_bitwise_operands(rhs.left)
+            for c in rhs.comparators:
+                _walk_bitwise_operands(c)
+        elif isinstance(rhs, ast.BoolOp):
+            # ...and inside ``and`` / ``or`` (``(flags & 4) != 0 or ...``).
+            for v in rhs.values:
+                _walk_bitwise_operands(v)
 
     for node in ast.walk(kir.tree):
         if isinstance(node, (ast.Assign, ast.AugAssign)):
@@ -2170,7 +2272,7 @@ def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
     # nqueens backtracking stack) carry their dtype in ``local_dtypes``, not in
     # ``kir.arrays``; seed them too so their elements/derived scalars stay int64
     # and don't clash under -std=f2018. Dtype-derived, never a literal kind.
-    _local_dtypes_seed = getattr(kir.tree, "local_dtypes", {}) or {}
+    _local_dtypes_seed = kir.local_dtypes
     for nm, dt in _local_dtypes_seed.items():
         if isinstance(dt, str) and dt in dtypes.REGISTRY and _fortran_type(dt) == int64_kind:
             int64_names.add(nm)
@@ -2329,13 +2431,19 @@ def _names_used_as_int(tree: ast.AST) -> Set[str]:
     # assigns from another Name Y, Y is also int-typed (the result
     # flows into an int target). Required for chains like
     # ``m_lbound = min(...)`` then ``m_start = max(i - m_lbound, 0)``
-    # where m_start is used as a range arg.
+    # where m_start is used as a range arg. Bounded by
+    # :func:`pure_int_arith` so the closure never propagates BACKWARD
+    # across a float divide / sqrt or an ``int(...)`` truncation: without
+    # it, GROMACS ``ri = int(rs)`` (ri indexes the Coulomb table) walked
+    # into ``rs = rsq * rinv * tab_coul_scale`` and mistyped the whole
+    # distance chain (``rsq`` / ``rinv`` / ``dx``) as integer, so every
+    # coordinate difference truncated to 0 and SQRT rejected the int arg.
     changed = True
     while changed:
         changed = False
         for node in ast.walk(tree):
             if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
-                    and node.targets[0].id in int_uses):
+                    and node.targets[0].id in int_uses and pure_int_arith(node.value)):
                 before = len(int_uses)
                 collect(node.value)
                 if len(int_uses) > before:
@@ -2351,25 +2459,129 @@ def _collect_for_targets(stmts: List[ast.stmt]) -> Set[str]:
     return found
 
 
+def _helper_returns_int(hkir: KernelIR) -> bool:
+    """True when every ``return`` value of a scalar helper is an integer literal
+    (so its out-param is integer-typed rather than the default real)."""
+    rets = [n.value for n in ast.walk(hkir.tree) if isinstance(n, ast.Return) and n.value is not None]
+    return bool(rets) and all(isinstance(v, ast.Constant) and isinstance(v.value, int) and not isinstance(v.value, bool)
+                              for v in rets)
+
+
+def _rename_helper_to_fortran_safe(hkir: KernelIR) -> KernelIR:
+    """Fortran-safe rename of a captured helper KIR -- its body tree, the harvested
+    side-tables, and every descriptor -- mirroring the kernel-level rename so the
+    helper's lowering temps (``__cb1``, ``__w0``) and out-param (``__hret_0``) in
+    the body match the names its declarations use."""
+    htree = copy.deepcopy(hkir.tree)
+    _FortranRenameTemps().visit(htree)
+    ast.fix_missing_locations(htree)
+    r_arrays = [dataclasses.replace(a, name=_fortran_safe(a.name),
+                                    shape=tuple(_fortran_safe_token(t) for t in a.shape)) for a in hkir.arrays]
+    r_scalars = [dataclasses.replace(s, name=_fortran_safe(s.name)) for s in hkir.scalars]
+    r_symbols = [dataclasses.replace(s, name=_fortran_safe(s.name)) for s in hkir.symbols]
+    r_return = (_fortran_safe(hkir.return_kind) if hkir.return_kind not in (None, "scalar") else hkir.return_kind)
+    # The harvested side-tables are typed KernelIR fields; rename their keys and
+    # embedded ``__name`` shape tokens the same way and carry them on the replace.
+    return dataclasses.replace(
+        hkir, tree=htree, arrays=r_arrays, scalars=r_scalars, symbols=r_symbols,
+        input_args=[_fortran_safe(p) for p in hkir.input_args], return_kind=r_return,
+        zeros_locals={_fortran_safe(k): tuple(_fortran_safe_token(t) for t in v) if v else v
+                      for k, v in hkir.zeros_locals.items()},
+        zeros_fills={_fortran_safe(k): v for k, v in hkir.zeros_fills.items()},
+        reassign_shapes={_fortran_safe(k): [tuple(_fortran_safe_token(t) for t in sh) for sh in v]
+                         for k, v in hkir.reassign_shapes.items()},
+        local_dtypes={_fortran_safe(k): v for k, v in hkir.local_dtypes.items()})
+
+
+def _emit_fortran_helper(hkir: KernelIR) -> str:
+    """Emit a non-inlinable helper as a CONTAINED Fortran subroutine whose return
+    value comes back through a trailing out-param (Fortran functions are avoided
+    -- the out-param mirrors the C scheme, per the chosen design). A scalar
+    return synthesises a scalar ``intent(out)`` param; an array return reuses the
+    out-param already present in ``input_args``."""
+    hkir = _rename_helper_to_fortran_safe(hkir)
+    name = _fortran_safe(hkir.kernel_name)
+    sym_by = {s.name: s for s in hkir.symbols}
+    arr_by = {a.name: a for a in hkir.arrays}
+    sca_by = {s.name: s for s in hkir.scalars}
+    if hkir.return_kind == "scalar":
+        ret_name = "hret_"
+        ret_dtype = "int64" if _helper_returns_int(hkir) else "float64"
+        ret_decl = f"{_fortran_type(ret_dtype)}, intent(out) :: {ret_name}"
+        param_names = [_fortran_safe(p) for p in hkir.input_args] + [ret_name]
+    else:
+        ret_name = _fortran_safe(hkir.return_kind)
+        ret_decl = None
+        param_names = [_fortran_safe(p) for p in hkir.input_args]
+    # Symbols / int scalars declared before the arrays that use them as bounds.
+    sym_decls: List[str] = []
+    sca_int_decls: List[str] = []
+    arr_decls: List[str] = []
+    sca_real_decls: List[str] = []
+    for orig in hkir.input_args:
+        if orig in sym_by:
+            sym_decls.append(_symbol_decl(_fortran_safe(orig)))
+        elif orig in sca_by:
+            sca = sca_by[orig]
+            d = _scalar_decl(_fortran_safe(orig), sca.dtype, sca.is_output)
+            (sca_int_decls if sca.dtype in ("int64", "int32", "int") else sca_real_decls).append(d)
+        elif orig in arr_by:
+            a = arr_by[orig]
+            arr_decls.append(_array_decl(ArrayDesc(name=_fortran_safe(orig), dtype=a.dtype,
+                                                    shape=a.shape, is_output=a.is_output)))
+    decls = sym_decls + sca_int_decls + arr_decls + sca_real_decls
+    if ret_decl:
+        decls.append(ret_decl)
+    # Local arrays the lowering harvested inside the helper (np.where / np.maximum
+    # temps like ``x_cb1``, the ``gf`` / ``nonsing`` work arrays) need explicit
+    # fixed-shape declarations -- a contained subroutine has no enclosing scope to
+    # inherit them from. Shapes are reversed for the C-interop (col-major) layout,
+    # matching :func:`_array_decl`; the dtype comes from the lowering's
+    # ``local_dtypes`` (a bool mask -> ``logical``, a complex temp -> ``complex``).
+    rk = {"float32": "c_float", "float16": "c_float"}.get(hkir.float_precision or "float64", "c_double")
+    default_real = f"real({rk})"
+    ldt = hkir.local_dtypes
+    param_set = set(hkir.input_args)
+    local_arr_decls: List[str] = []
+    for lname, lshape in hkir.zeros_locals.items():
+        if lname in param_set:
+            continue
+        rev = [_to_fortran_shape_token(s) for s in reversed(lshape)] if lshape else ["1"]
+        dt = ldt.get(lname)
+        ftype = _fortran_type(dt) if dt else default_real
+        local_arr_decls.append(f"{ftype} :: {lname}({', '.join(rev)})")
+    implicit = _collect_implicit_locals(hkir)
+    local_decls = local_arr_decls + [f"{ft} :: {nm}" for nm, ft in implicit]
+    iter_vars = _collect_for_targets(hkir.tree.body)
+    iter_decls = [f"{_fortran_type('int')} :: " + ", ".join(sorted(iter_vars))] if iter_vars else []
+    be = _FortranBodyEmitter(hkir)
+    be.return_mode = ret_name
+    body = be.emit_block(hkir.tree.body, indent="            ")
+    decl_lines = "\n".join(f"        {d}" for d in decls + iter_decls + local_decls)
+    return (f"    subroutine {name}({', '.join(param_names)})\n"
+            f"        use, intrinsic :: iso_c_binding\n"
+            f"{decl_lines}\n{body}\n"
+            f"    end subroutine {name}\n")
+
+
 def _format_subroutine(name: str, params: List[str], decls: List[str], iter_decls: List[str], locals_block: List[str],
-                       body: str, interface_block: str = "", use_ieee: bool = False) -> str:
+                       body: str, interface_block: str = "", use_ieee: bool = False, contained: str = "") -> str:
     param_list = ", ".join(params)
     decl_block = "\n".join(f"    {d}" for d in decls)
     iter_block = "\n".join(iter_decls)
     locals_block_text = "\n".join(locals_block)
     iface = (interface_block + "\n") if interface_block else ""
     ieee_use = "    use, intrinsic :: ieee_arithmetic\n" if use_ieee else ""
+    # Non-inlinable helpers are CONTAINED procedures (automatic explicit
+    # interface, no bind(C) needed -- they are called only from Fortran).
+    contains_block = f"contains\n{contained}" if contained else ""
     return f"""\
 subroutine {name}({param_list}) bind(C, name="{name}")
     use, intrinsic :: iso_c_binding
 {ieee_use}{iface}{decl_block}
 {iter_block}
 {locals_block_text}
-    integer(c_int64_t) :: t1_, t2_, rate_
-
-    call system_clock(t1_, rate_)
 {body}
-    call system_clock(t2_)
-    {_TIMING_ARG} = (t2_ - t1_) * 1000000000_c_int64_t / rate_
+{contains_block}
 end subroutine {name}
 """

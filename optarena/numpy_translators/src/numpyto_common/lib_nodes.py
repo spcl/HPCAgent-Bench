@@ -61,14 +61,6 @@ def _attr_call(mod: str, attr: str, args: List[ast.expr]) -> ast.Call:
         args=args, keywords=[])
 
 
-def _is_attr_call(node: ast.AST, mod: str, attr: str) -> bool:
-    return (isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == mod
-            and node.func.attr == attr)
-
-
 # ---------------------------------------------------------------------------
 # Expanders. Each returns a list of replacement statements for the
 # original assignment.
@@ -76,20 +68,6 @@ def _is_attr_call(node: ast.AST, mod: str, attr: str) -> bool:
 
 def _make_iter_name(prefix: str, depth: int) -> str:
     return f"{prefix}{depth}"
-
-
-def _flatten_loop(arr_name: str, shape: Tuple[str, ...],
-                  iter_prefix: str) -> Tuple[List[ast.AST], ast.AST]:
-    """Build a nested ``for`` loop over an N-D array and return
-    ``(loops, leaf_subscript)``. The caller wraps the leaf with the
-    reduction body."""
-    iters = [_make_iter_name(iter_prefix, i) for i in range(len(shape))]
-    subscript = (ast.Subscript(value=_name(arr_name),
-                               slice=(_name(iters[0]) if len(iters) == 1 else
-                                      ast.Tuple(elts=[_name(i) for i in iters],
-                                                ctx=ast.Load())),
-                               ctx=ast.Load()))
-    return iters, subscript
 
 
 def _wrap_for_loops(iters: List[str], bounds, body: List[ast.stmt]) -> List[ast.stmt]:
@@ -221,42 +199,6 @@ def _shape_total_product(shape: Tuple[str, ...]) -> ast.expr:
     return expr
 
 
-def _reduction(target: ast.expr, arr_node: ast.expr, init: ast.expr,
-               op_fn: Callable[[ast.expr, ast.expr], ast.expr],
-               shape: Tuple[str, ...], post: Optional[ast.expr] = None
-               ) -> List[ast.stmt]:
-    """Build an accumulator loop reducing ``arr_node`` into ``target``.
-
-    :param target: assignment LHS (``s`` in ``s = np.sum(A)``).
-    :param arr_node: the array being reduced (``np.sum(A)`` -> ``A``).
-    :param init: initial accumulator value.
-    :param op_fn: callable returning the inner update expression --
-        e.g. ``lambda acc, x: acc + x`` for sum.
-    :param shape: array shape (drives the loop nest).
-    :param post: optional post-loop expression to overwrite ``target``
-        (used by mean for the divide-by-count).
-    """
-    if not isinstance(arr_node, ast.Name):
-        # ``np.sum(A * B)`` etc. -- bind to a temporary first.
-        # For now keep simple: only Name forms supported.
-        raise NotImplementedError("non-Name reduction operand")
-    arr_name = arr_node.id
-    iters = [_make_iter_name("__r", i) for i in range(len(shape))]
-    subscript = ast.Subscript(
-        value=_name(arr_name),
-        slice=(_name(iters[0]) if len(iters) == 1 else
-               ast.Tuple(elts=[_name(i) for i in iters], ctx=ast.Load())),
-        ctx=ast.Load())
-    target_load = ast.Name(id=target.id, ctx=ast.Load()) if isinstance(target, ast.Name) else target
-    body = [ast.Assign(targets=[target], value=op_fn(target_load, subscript))]
-    loops = _wrap_for_loops(iters, shape, body)
-    stmts: List[ast.stmt] = [ast.Assign(targets=[target], value=init)]
-    stmts.extend(loops)
-    if post is not None:
-        stmts.append(ast.Assign(targets=[target], value=post))
-    return stmts
-
-
 def _slice_step_const(sl: ast.Slice) -> Optional[int]:
     """Return a Slice's constant integer step (``a[lo:hi:k]`` -> ``k``), or ``None`` when
     there is no step or it is not a nonzero integer constant. A NEGATIVE step (``a[::-1]``
@@ -267,6 +209,33 @@ def _slice_step_const(sl: ast.Slice) -> Optional[int]:
         return None
     v = _const_int(step)
     return v if v not in (None, 0) else None
+
+
+def _is_shape_scalar(node: ast.AST) -> bool:
+    """``True`` for a ``.shape`` read -- ``A.shape`` (a tuple of dimensions) or
+    ``A.shape[i]`` (one dimension). Both are INTEGER-valued regardless of ``A``'s
+    element dtype, so a value/dtype walk must not descend into them."""
+    if isinstance(node, ast.Attribute) and node.attr == "shape":
+        return True
+    return (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Attribute)
+            and node.value.attr == "shape")
+
+
+def _reads_complex(expr: ast.AST, local_dtypes: Dict[str, str]) -> bool:
+    """``True`` iff evaluating ``expr`` reads a complex value: a ``Constant(complex)``
+    or a ``Name`` tagged complex in ``local_dtypes``. A ``.shape`` access yields
+    integer dimensions (never a value read), so its subtree is skipped -- both
+    ``qgm.shape[0]`` and the compound ``qgm.shape[0] - 1`` are integer bounds even
+    when ``qgm`` is complex. The single complex predicate for the dtype-propagation
+    passes (``_CallHoister._infer_complex`` and ``LibNodeRewriter.visit_Assign``)."""
+    if _is_shape_scalar(expr):
+        return False
+    if isinstance(expr, ast.Constant):
+        return isinstance(expr.value, complex)
+    if isinstance(expr, ast.Name):
+        dt = local_dtypes.get(expr.id)
+        return bool(dt and dt.startswith("complex"))
+    return any(_reads_complex(c, local_dtypes) for c in ast.iter_child_nodes(expr))
 
 
 def _slice_axes(node: ast.AST) -> List[ast.AST]:
@@ -3024,12 +2993,6 @@ def expand_einsum(target: ast.expr, args: List[ast.expr],
     return inner
 
 
-def _einsum_call(spec: str, *operands: ast.expr) -> ast.Call:
-    """Build an ``np.einsum(spec, *operands)`` Call so the wrapper ops
-    (tensordot / inner / vdot) reuse :func:`expand_einsum`."""
-    return _attr_call("np", "einsum", [_const(spec), *operands])
-
-
 def expand_tensordot(target: ast.expr, args: List[ast.expr],
                      shape_table: Dict[str, Tuple[str, ...]],
                      kwargs=None) -> List[ast.stmt]:
@@ -3401,6 +3364,35 @@ def expand_diagonal(target: ast.expr, args: List[ast.expr],
     return _wrap_for_loops([it], [shape[0]], body)
 
 
+def _scan_target_offsets(target, ndim):
+    """Resolve a cumulative-scan assignment target into ``(base_name, starts)``.
+
+    ``starts[k]`` is the lower bound to add to the operand's index along axis
+    ``k`` (``None`` for a zero / omitted lower bound). A bare ``Name`` target
+    scans from 0 on every axis; a partial-slice target such as ``out[1:]``
+    shifts the written region by its explicit lower bound -- this is DBCSR's
+    ``row_offsets[1:] = np.cumsum(m_sizes)``, whose target is a slice one
+    element longer than the operand."""
+    if isinstance(target, ast.Name):
+        return target.id, [None] * ndim
+    if isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name):
+        slc = target.slice
+        parts = slc.elts if isinstance(slc, ast.Tuple) else [slc]
+        if len(parts) != ndim:
+            raise NotImplementedError("cumulative scan: slice-target rank mismatch")
+        starts = []
+        for p in parts:
+            if not isinstance(p, ast.Slice):
+                raise NotImplementedError("cumulative scan: non-slice index in target")
+            lo = p.lower
+            if lo is None or (isinstance(lo, ast.Constant) and lo.value == 0):
+                starts.append(None)
+            else:
+                starts.append(lo)
+        return target.value.id, starts
+    raise NotImplementedError("cumulative scan: unsupported target")
+
+
 def _expand_cumulative(target, args, shape_table, op, kwargs=None):
     """Shared prefix-scan for ``cumsum`` / ``cumprod``.
 
@@ -3429,15 +3421,26 @@ def _expand_cumulative(target, args, shape_table, op, kwargs=None):
         elts = [scan_expr if i == axis else _name(iters[i]) for i in range(n)]
         return elts[0] if n == 1 else ast.Tuple(elts=elts, ctx=ast.Load())
 
-    out_at = lambda e: ast.Subscript(value=_name(target.id), slice=_idx(e), ctx=ast.Load())
+    target_base, t_start = _scan_target_offsets(target, n)
+
+    def _add_off(e, off):
+        return e if off is None else ast.BinOp(left=e, op=ast.Add(), right=copy.deepcopy(off))
+
+    def _tidx(scan_expr):
+        # Target index space = operand index space shifted by the slice''s
+        # per-axis lower bound (``out[1:] = np.cumsum(a)`` writes ``out[1+i]``).
+        elts = [_add_off(scan_expr if i == axis else _name(iters[i]), t_start[i]) for i in range(n)]
+        return elts[0] if n == 1 else ast.Tuple(elts=elts, ctx=ast.Load())
+
+    out_at = lambda e: ast.Subscript(value=_name(target_base), slice=_tidx(e), ctx=ast.Load())
     a_at = lambda e: ast.Subscript(value=_name(a.id), slice=_idx(e), ctx=ast.Load())
     sc_prev = ast.BinOp(left=_name(sc), op=ast.Sub(), right=_const(1))
-    # out[..0..] = a[..0..]
-    init = ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=_idx(_const(0)), ctx=ast.Store())],
+    # out[..start+0..] = a[..0..]
+    init = ast.Assign(targets=[ast.Subscript(value=_name(target_base), slice=_tidx(_const(0)), ctx=ast.Store())],
                       value=a_at(_const(0)))
-    # for sc in 1..N: out[..sc..] = out[..sc-1..] (op) a[..sc..]
+    # for sc in 1..N: out[..start+sc..] = out[..start+sc-1..] (op) a[..sc..]
     recur = ast.Assign(
-        targets=[ast.Subscript(value=_name(target.id), slice=_idx(_name(sc)), ctx=ast.Store())],
+        targets=[ast.Subscript(value=_name(target_base), slice=_tidx(_name(sc)), ctx=ast.Store())],
         value=ast.BinOp(left=out_at(sc_prev), op=op, right=a_at(_name(sc))))
     scan_loop = ast.For(target=_store(sc),
                         iter=ast.Call(func=_name("range"), args=[_const(1), _const_or_name(shape[axis])], keywords=[]),
@@ -6122,16 +6125,8 @@ class _CallHoister(ast.NodeTransformer):
         self.pre_stmts: List[ast.stmt] = []
 
     def _infer_complex(self, expr: ast.AST) -> bool:
-        """Walk ``expr`` for any Constant(complex) or Name reference
-        to a complex-dtype local / array."""
-        for sub in ast.walk(expr):
-            if isinstance(sub, ast.Constant) and isinstance(sub.value, complex):
-                return True
-            if isinstance(sub, ast.Name):
-                dt = self.local_dtypes.get(sub.id)
-                if dt and dt.startswith("complex"):
-                    return True
-        return False
+        """``True`` iff ``expr`` reads a complex value (skipping ``.shape`` reads)."""
+        return _reads_complex(expr, self.local_dtypes)
 
     def _key_of(self, call: ast.Call):
         func = call.func
@@ -6547,6 +6542,14 @@ def _call_expander(expander, target, args, keywords, shape_table,
     return expander(target, args, shape_table, **extras)
 
 
+#: Expander keys that accept a partial-slice assignment target
+#: (``row_offsets[1:] = np.cumsum(m_sizes)``) in addition to a bare Name.
+#: The full-slice form is canonicalised to a Name in ``visit_Assign``; only a
+#: shifted slice reaches here, and only the cumulative scans know how to honour
+#: the lower-bound offset (via :func:`_scan_target_offsets`).
+_SLICE_TARGET_EXPANDERS = {("np", "cumsum"), ("np", "cumprod")}
+
+
 #: Expander keys that write element-wise to ``target`` (no allocation).
 #: ``target`` must already be declared at the C level. When the
 #: kernel body uses ``X = np.linspace(...)`` as the first reference
@@ -6724,21 +6727,21 @@ class LibNodeRewriter(ast.NodeTransformer):
             if ext is not None:
                 self.shape_table[target_id] = tuple(
                     _CallHoister._extent_to_shape_token(e) for e in ext)
-            # Complex-dtype propagation for BinOp / UnaryOp / Call:
-            # a subtree carrying a complex Constant or a Name tagged
-            # complex promotes the LHS so subsequent statements see
-            # the right dtype.
-            if target_id not in self.local_dtypes:
-                for sub in ast.walk(rhs):
-                    if (isinstance(sub, ast.Constant)
-                            and isinstance(sub.value, complex)):
-                        self.local_dtypes[target_id] = "complex128"
-                        break
-                    if isinstance(sub, ast.Name):
-                        dt = self.local_dtypes.get(sub.id)
-                        if dt and dt.startswith("complex"):
-                            self.local_dtypes[target_id] = "complex128"
-                            break
+            # ``ngm = qgm.shape[0]`` reads a DIMENSION -- an integer, regardless
+            # of the array's dtype. Type it int64 and skip the complex walk below,
+            # which would otherwise see the complex base Name ``qgm`` and wrongly
+            # tag the scalar bound complex (vexx_k ``_addusxx_g``/``_newdxx_g``).
+            if _is_shape_scalar(rhs):
+                if target_id not in self.local_dtypes:
+                    self.local_dtypes[target_id] = "int64"
+                return
+            # Complex-dtype propagation for BinOp / UnaryOp / Call: a subtree that
+            # READS a complex Constant or Name promotes the LHS so subsequent
+            # statements see the right dtype. ``.shape`` subtrees are skipped, so a
+            # dimension read off a complex array (``ngm = qgm.shape[0] - 1``) is a
+            # complex-free integer expression and is NOT mis-tagged complex.
+            if target_id not in self.local_dtypes and _reads_complex(rhs, self.local_dtypes):
+                self.local_dtypes[target_id] = "complex128"
             return
 
     def _lookup(self, call: ast.Call):
@@ -6855,6 +6858,26 @@ class LibNodeRewriter(ast.NodeTransformer):
                         return prelude + expanded
                     except NotImplementedError:
                         pass
+        # Partial-slice assignment target for a cumulative scan
+        # (``row_offsets[1:] = np.cumsum(m_sizes)``): the full-slice case is
+        # canonicalised to a bare Name above, but a shifted slice keeps its
+        # offset, so route it to the offset-aware cumulative expander.
+        if (len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Subscript)
+                and isinstance(node.targets[0].value, ast.Name)
+                and isinstance(node.value, ast.Call)):
+            key = self._lookup(node.value)
+            if key in _SLICE_TARGET_EXPANDERS:
+                try:
+                    expanded = _call_expander(
+                        NP_CALL_EXPANDERS[key], node.targets[0],
+                        node.value.args, node.value.keywords,
+                        self.shape_table,
+                        local_dtypes=self.local_dtypes,
+                        fresh_local_allocs=self.fresh_local_allocs)
+                    return prelude + expanded
+                except NotImplementedError:
+                    pass
         if prelude:
             return prelude + [node]
         return node

@@ -532,12 +532,23 @@ def vexx_all_paths(
                     ibnd = int(ibands[ii, eg])
                     if ibnd == 0 or ibnd > m:
                         continue
-                    js = [int(egrp_pairs[1, ip, eg]) for ip in range(max_pairs)
-                          if int(egrp_pairs[0, ip, eg]) == ibnd]
-                    if not js:
+                    # Occupied-orbital range [jmin, jmax] paired with this band,
+                    # found by a fixed ``max_pairs`` min/max scan over egrp_pairs
+                    # (rather than a ragged ``[... for ip if ...]`` list-comp the
+                    # translator can't lower) -- identical to the sibling ``vexx``.
+                    jmin = 0
+                    jmax = -1
+                    for ip in range(max_pairs):
+                        if int(egrp_pairs[0, ip, eg]) == ibnd:
+                            jv = int(egrp_pairs[1, ip, eg])
+                            if jmax < 0 or jv < jmin:
+                                jmin = jv
+                            if jv > jmax:
+                                jmax = jv
+                    if jmax < 0:
                         continue
-                    jstart = max(min(js), jblock_start)
-                    jend = min(max(js), jblock_end)
+                    jstart = max(jmin, jblock_start)
+                    jend = min(jmax, jblock_end)
                     if jend < jstart:
                         continue
                     for jbnd in range(jstart, jend + 1):

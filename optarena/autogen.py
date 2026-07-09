@@ -6,13 +6,11 @@ ONE canonical file per (kernel, framework): ``<module>_<fw>.py``
 ``optarena-autogen`` marker is a hand-written OVERRIDE and is never overwritten
 (so the committed microbench ``*_jax.py`` overrides win over autogen).
 
-Two entry points:
+Entry point:
 
 * :func:`ensure` -- emit any MISSING target for one kernel. The framework
   loaders call this so a sibling is generated **on demand** the first time it is
   needed (``run_benchmark.py -f cupy`` with no ``<k>_cupy.py`` yet just works).
-* :func:`regen_all` / :func:`clean_dead` -- whole-corpus regeneration + dead-file
-  hygiene, regenerated lazily by the framework loaders.
 
 The emitter reads a bench_info JSON synthesized from the co-located YAML
 (:mod:`optarena.emit_bridge`); the flat ``bench_info/`` corpus is gone. native
@@ -239,72 +237,3 @@ def ensure_native(short_name: str, lang: Optional[str] = None) -> None:
         emit_native(spec, langs)
     except Exception:
         pass
-
-
-#: Stale generated-file globs the canonical scheme supersedes (the old ``_auto``
-#: Python siblings). Native ``cpp_backend/*_auto.*`` are out of scope here.
-_DEAD_GLOBS = (
-    "**/*_cupy_auto.py",
-    "**/*_numba_n_auto.py",
-    "**/*_numba_np_auto.py",
-    "**/*_pythran_auto.py",
-)
-
-#: Canonical generated-sibling globs (one per auto-gen target). A file matching
-#: one of these is DELETABLE only if it carries the auto marker -- a marker-less
-#: file at the same name is a hand override and is kept.
-_SIBLING_GLOBS = (
-    "**/*_dace.py",
-    "**/*_cupy.py",
-    "**/*_numba_n.py",
-    "**/*_numba_np.py",
-    "**/*_pythran.py",
-)
-
-
-def _is_generated(p: pathlib.Path) -> bool:
-    """Single source of generator-marker detection (first line anchored). Shared
-    with the emitter side so the override guard cannot drift between them."""
-    from numpyto_common.emit_io import is_generated
-    return is_generated(p)
-
-
-def clean_dead(base: Optional[pathlib.Path] = None) -> int:
-    """Delete superseded ``*_auto.py`` siblings; return the count removed."""
-    base = base or paths.BENCHMARKS
-    n = 0
-    for pat in _DEAD_GLOBS:
-        for p in base.glob(pat):
-            p.unlink()
-            n += 1
-    return n
-
-
-def clean_generated(base: Optional[pathlib.Path] = None) -> int:
-    """Delete every AUTO-generated canonical sibling (debloat): the repo keeps
-    only ``<kernel>_numpy.py`` + hand overrides + manifests; the dace/cupy/numba/
-    pythran siblings are regenerated on demand. A marker-less file (a hand
-    override) is never deleted. Returns the count removed."""
-    base = base or paths.BENCHMARKS
-    n = 0
-    for pat in _SIBLING_GLOBS:
-        for p in base.glob(pat):
-            if _is_generated(p):
-                p.unlink()
-                n += 1
-    return n
-
-
-def regen_all(names: Optional[List[str]] = None) -> Dict[str, Dict[str, int]]:
-    """Regenerate every (or the named) kernel's siblings. Returns per-target
-    ``{ok, override, fail}`` tallies."""
-    from optarena.spec import KERNELS, BenchSpec
-    tally = {t: {"ok": 0, "override": 0, "fail": 0} for t in TARGETS}
-    for name in (names or sorted(KERNELS)):
-        try:
-            spec = BenchSpec.load(name)
-        except Exception:
-            continue
-        for t, status in emit_targets(spec, TARGETS).items():
-            tally[t]["fail" if status.startswith("fail") else status] += 1
-    return tally

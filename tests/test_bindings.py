@@ -6,7 +6,7 @@ Pins the load-bearing guarantees of ``optarena/docs/abi_contract.md`` for one
 dense kernel (``gemm``) and one sparse kernel (``spmv``):
 
 * §4 canonical order -- pointers alpha-sorted, then scalars+symbols
-  alpha-sorted, then ``time_ns`` (described separately, position trailing);
+  alpha-sorted, then the reserved ``workspace`` / ``workspace_size`` pair;
 * §5 const-ness -- scalars/symbols const, input pointers const, output
   pointers non-const;
 * §3 packed group -- a sparse logical array unpacks into ordered member
@@ -71,15 +71,14 @@ def test_gemm_canonical_order_and_constness():
     assert by["alpha"].dtype == "float64"
 
 
-def test_gemm_time_ns_trailing_and_separate():
+def test_gemm_has_no_timer_arg():
     spec = _load("gemm")
     b = binding_from_spec(spec)
-    # time_ns is NOT in args; it is the separate trailing descriptor (§6).
+    # timing is harness-owned externally (§6): no timer in the args or the JSON.
     assert all(a.name != "time_ns" for a in b.args)
     j = b.to_json()
-    assert j["time_ns"]["position"] == "trailing"
-    assert j["time_ns"]["name"] == "time_ns"
-    assert j["time_ns"]["dtype"] == "int64"
+    assert "time_ns" not in j
+    assert j["workspace"]["position"] == "trailing"
     assert j["packed"] == {}
 
 
@@ -90,7 +89,7 @@ def test_gemm_stub_has_signature_and_todo_not_reference():
         stub = gen_call_stub(b, lang)
         assert b.symbols[lang] in stub, lang
         assert "TODO" in stub, lang
-        assert "time_ns" in stub, lang
+        assert "time_ns" not in stub, lang  # timing is harness-owned externally (§6)
         assert "workspace" in stub and "workspace_size" in stub, lang  # §11 always present
         # Never the reference solution.
         assert "alpha * A @ B" not in stub
@@ -102,20 +101,18 @@ def test_gemm_stub_has_signature_and_todo_not_reference():
     assert "double *restrict C" in c_stub  # output, non-const
     assert "const long" not in c_stub  # symbols are int64_t
     assert "const int64_t NI" in c_stub
-    assert "int64_t *restrict time_ns" in c_stub
-    # §11 reserved scratch pair, after time_ns.
+    # §11 reserved scratch pair, the trailing args.
     assert "uint8_t *restrict workspace" in c_stub
     assert "const int64_t workspace_size" in c_stub
-    assert c_stub.index("time_ns") < c_stub.index("workspace")
+    assert c_stub.index("beta") < c_stub.index("workspace")  # scratch pair is trailing
 
 
-def test_gemm_host_glue_brackets_pure_with_timer():
+def test_gemm_host_glue_forwards_pure():
     spec = _load("gemm")
     b = binding_from_spec(spec)
     glue = gen_host_glue(b)
     assert "gemm_pure" in glue
-    assert "timer_start" in glue and "timer_end" in glue
-    assert "time_ns[0] =" in glue
+    assert "time_ns" not in glue  # timing is harness-owned externally (§6)
     assert b.symbols["c"] in glue
 
 
@@ -126,7 +123,7 @@ def test_gemm_json_round_trip():
     assert j["kernel"] == "gemm"
     assert j["abi"] == "c-abi-v2"
     assert j["symbol"] == "gemm_fp64"
-    # §11 reserved scratch pair described after time_ns, NULLable + never in args.
+    # §11 reserved scratch pair, the trailing pair, NULLable + never in args.
     assert j["workspace"]["name"] == "workspace" and j["workspace"]["dtype"] == "uint8"
     assert j["workspace"]["size_name"] == "workspace_size" and j["workspace"]["nullable"] is True
     assert set(j["symbols"]) == set(LANGS)

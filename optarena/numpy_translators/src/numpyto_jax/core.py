@@ -28,6 +28,7 @@ back rather than emit something wrong.
 from __future__ import annotations
 
 import ast
+import copy
 from typing import List, Optional, Set
 
 
@@ -921,40 +922,112 @@ def emit_jax(numpy_src: str, func_name: str, jit: bool = False) -> str:
 
 
 def _helper_mutation_map(helpers: List[ast.FunctionDef]) -> dict:
-    """Map ``helper_name -> [positions of params it mutates in place]`` for
-    helpers that mutate and return ``None`` (e.g. cavity_flow's ``build_up_b``).
-    Their emitted form returns those params, so a bare call site must capture
-    the result back. Helpers with an explicit ``return`` are excluded (their
-    calls are already value-producing)."""
+    """Map ``helper_name -> emitted-return rebind slots`` for every helper that
+    mutates a param in place (jax arrays are immutable, so the mutation only
+    survives if the call site captures it back).
+
+    The emitter turns such a helper's return into ``own_return_elts + [mutated
+    params not already returned by name]`` (``_augment_returns``; a no-return
+    helper returns just the mutated params). Each returned slot is either
+    ``("mut", pos)`` -- that value is the new value of the arg passed at param
+    ``pos`` -- or ``("val",)`` -- a genuine return value the call's LHS captures.
+    ``_rewrite_inplace_helper_calls`` uses the slots to rebind every call site:
+
+    * ``build_up_b(b, ...)`` (mutates ``b``, returns None) -> ``b = build_up_b(b, ...)``;
+    * ``_addusxx_r(rhoc, ...)`` (mutates AND ``return rhoc``) -> ``rhoc = _addusxx_r(rhoc, ...)``;
+    * ``fac = _g2_convolution_all(cf, cd, ...)`` (returns a column, mutates the
+      ``cf``/``cd`` caches) -> ``fac, cf, cd = _g2_convolution_all(cf, cd, ...)``.
+    """
     out = {}
     for h in helpers:
-        if any(isinstance(s, ast.Return) and s.value for s in ast.walk(h)):
-            continue
         params = [a.arg for a in h.args.args]
         muts = _mutated_params(h, params)
-        if muts:
-            out[h.name] = [params.index(m) for m in muts]
+        if not muts:
+            continue
+        slots = _emitted_return_slots(h, params, muts)
+        if slots is not None:
+            out[h.name] = slots
     return out
 
 
+def _emitted_return_slots(h: ast.FunctionDef, params: List[str], muts: List[str]):
+    """Ordered rebind slots for a mutating helper's EMITTED return, or None when
+    it can't be rewritten safely (a return the augmentation can't reach, or
+    inconsistent return points)."""
+    mpos = {m: params.index(m) for m in muts}
+    rets = _own_returns(h)
+    top = [s for s in h.body if isinstance(s, ast.Return) and s.value is not None]
+    if not rets:
+        # No own return: the emitter appends ``return <mutated, signature order>``.
+        return [("mut", mpos[m]) for m in muts]
+    if len(rets) != len(top):
+        return None  # a return nested in a branch/loop -- augmentation only reaches fn.body
+    slot_sets = set()
+    for r in top:
+        elts = r.value.elts if isinstance(r.value, ast.Tuple) else [r.value]
+        present = {e.id for e in elts if isinstance(e, ast.Name)}
+        slots = [("mut", mpos[e.id]) if (isinstance(e, ast.Name) and e.id in mpos) else ("val", ) for e in elts]
+        slots += [("mut", mpos[m]) for m in muts if m not in present]
+        slot_sets.add(tuple(slots))
+    # Every return point must rebind identically for a single call-site rewrite.
+    return list(next(iter(slot_sets))) if len(slot_sets) == 1 else None
+
+
 def _rewrite_inplace_helper_calls(fn: ast.FunctionDef, helper_mut: dict) -> None:
-    """``foo(b, ...)`` (bare statement, ``foo`` mutates ``b``) -> ``b = foo(b, ...)``."""
+    """Capture a mutating helper's in-place effect at every call site, per its
+    emitted-return slots (see ``_helper_mutation_map``). A ``("mut", pos)`` slot
+    rebinds the arg passed at ``pos`` (a plain Name, or a subscript/attribute view
+    like ``deexx[:, ii]`` that then flows through ``_functionalize_stmt`` into
+    ``deexx = deexx.at[:, ii].set(...)``); a ``("val",)`` slot is taken from the
+    call's LHS."""
+
+    def _targets(call: ast.Call, lhs_elts: List[ast.AST]):
+        slots = helper_mut[call.func.id]
+        if sum(1 for s in slots if s[0] == "val") != len(lhs_elts):
+            return None  # LHS arity must match the genuine return values
+        for kind, *rest in slots:
+            if kind == "mut" and (rest[0] >= len(call.args) or not _is_assignable(call.args[rest[0]])):
+                return None  # mutated param not passed positionally / not assignable
+        vi = iter(lhs_elts)
+        return [_as_store(next(vi) if s[0] == "val" else call.args[s[1]]) for s in slots]
+
+    def _rebind(call, lhs_elts, node):
+        tgts = _targets(call, lhs_elts)
+        if tgts is None:
+            return node
+        tgt = tgts[0] if len(tgts) == 1 else ast.Tuple(elts=tgts, ctx=ast.Store())
+        return ast.copy_location(ast.Assign(targets=[tgt], value=call), node)
+
+    def _is_mut_call(c):
+        return isinstance(c, ast.Call) and isinstance(c.func, ast.Name) and c.func.id in helper_mut
 
     class _T(ast.NodeTransformer):
 
-        def visit_Expr(self, node):
-            c = node.value
-            if isinstance(c, ast.Call) and isinstance(c.func, ast.Name) and c.func.id in helper_mut:
-                idxs = helper_mut[c.func.id]
-                if all(i < len(c.args) and isinstance(c.args[i], ast.Name) for i in idxs):
-                    names = [c.args[i].id for i in idxs]
-                    tgt = ast.Name(id=names[0], ctx=ast.Store()) if len(names) == 1 else \
-                        ast.Tuple(elts=[ast.Name(id=n, ctx=ast.Store()) for n in names], ctx=ast.Store())
-                    return ast.copy_location(ast.Assign(targets=[tgt], value=c), node)
+        def visit_Expr(self, node):  # bare call: no captured return values
+            return _rebind(node.value, [], node) if _is_mut_call(node.value) else node
+
+        def visit_Assign(self, node):  # value-captured call: LHS supplies the ``val`` slots
+            if _is_mut_call(node.value) and len(node.targets) == 1:
+                lhs = node.targets[0]
+                return _rebind(node.value, lhs.elts if isinstance(lhs, ast.Tuple) else [lhs], node)
             return node
 
     _T().visit(fn)
     ast.fix_missing_locations(fn)
+
+
+def _is_assignable(node: ast.AST) -> bool:
+    """An expression that can be an assignment target (so a mutating helper's
+    in-place arg can be rebound from its return)."""
+    return isinstance(node, (ast.Name, ast.Subscript, ast.Attribute))
+
+
+def _as_store(node: ast.AST) -> ast.AST:
+    """A copy of an assignable expression with Store context -- the original stays
+    a Load arg inside the call, so it must not be mutated in place."""
+    n = copy.deepcopy(node)
+    n.ctx = ast.Store()
+    return n
 
 
 def _kernel_decorator(fn: ast.FunctionDef) -> str:

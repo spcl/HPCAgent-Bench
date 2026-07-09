@@ -65,20 +65,21 @@ def _array_signature(arr: ArrayDesc) -> str:
     return f"{qual}{base} *restrict {arr.name}"
 
 
-def _emit_signature(kir: KernelIR, fn_name: str) -> str:
-    """Emit the C signature in ``kir.input_args`` order.
+def _emit_signature(kir: KernelIR, fn_name: str, order: Optional[List[str]] = None) -> str:
+    """Emit the C signature in ABI (``kir.param_order()``) order, or in an
+    explicit ``order`` when given.
 
-    The original OptArena JSON's ``input_args`` list controls the
-    positional argument order the harness uses to call the kernel.
-    Emitting in any other order would make every ctypes call swap
-    array pointers with int sizes -- which is precisely the bug
-    that surfaced as `llvm_auto` validation failures on s111.
+    The harness calls the top-level kernel through ``param_order()`` (arrays then
+    scalars, each sorted), so that order is the ABI. A captured HELPER, though, is
+    called only by generated code, and its call site emits args in source
+    (``input_args``) order -- so helpers pass ``order=input_args`` to keep the
+    signature and the call site aligned (and the trailing out-param last).
     """
     parts: List[str] = []
     sym_by_name = {s.name: s for s in kir.symbols}
     arr_by_name = {a.name: a for a in kir.arrays}
     sca_by_name = {s.name: s for s in kir.scalars}
-    for name in kir.param_order():
+    for name in (order if order is not None else kir.param_order()):
         if name in sym_by_name:
             parts.append(f"{dtypes.c_type('int')} {name}")  # int64_t (canonical)
         elif name in arr_by_name:
@@ -89,7 +90,6 @@ def _emit_signature(kir: KernelIR, fn_name: str) -> str:
             parts.append(f"{c_ty} {name}")
         else:
             raise ValueError(f"unknown parameter {name!r} in kernel {kir.kernel_name}")
-    parts.append("int64_t *restrict time_ns")
     return f"void {fn_name}({', '.join(parts)})"
 
 
@@ -130,12 +130,17 @@ class _CBodyEmitter(BaseEmitter):
         self.multidim_arrays: Set[str] = multidim_arrays or set()
         #: Pluto only: emit local arrays as multidimensional pointer-to-array.
         self.pluto: bool = False
+        #: Return handling when this body is a HELPER function rather than the
+        #: (void) kernel: ``None`` -> drop the return; ``"scalar"`` -> emit
+        #: ``return <expr>;``; an out-param array name -> copy the returned array
+        #: into that param, then ``return;``.
+        self.return_mode: Optional[str] = None
         #: Pluto only: ``name -> "[d1][d2]"`` trailing-dim string for a local
         #: array declared as a pointer-to-array (so its deferred-malloc marker
         #: casts to the matching multidimensional pointer type).
         self.md_trailing: Dict[str, str] = {}
         self.array_shapes: Dict[str, List[str]] = {a.name: list(a.shape) for a in kir.arrays}
-        zeros = getattr(kir.tree, "zeros_locals", {}) or {}
+        zeros = kir.zeros_locals
         for name, shape in zeros.items():
             self.array_shapes[name] = list(shape) if shape else ["1"]
         self._loop_iter_names: Set[str] = set()
@@ -150,7 +155,7 @@ class _CBodyEmitter(BaseEmitter):
         # ``array_shapes[x]`` carries the FINAL rank-2 FC shape.
         self._reassign_shapes: Dict[str, List[Tuple[str, ...]]] = {
             k: list(v)
-            for k, v in (getattr(kir.tree, "reassign_shapes", {}) or {}).items()
+            for k, v in kir.reassign_shapes.items()
         }
 
     # ----- statement-level ------------------------------------------------
@@ -207,6 +212,26 @@ class _CBodyEmitter(BaseEmitter):
         return (f"{indent}while ({self.emit_expr(node.test)}) {{\n"
                 f"{body}\n"
                 f"{indent}}}")
+
+    def _emit_return(self, node: ast.Return, indent: str) -> str:
+        # In the (void) kernel, a ``return`` is dropped (outputs go through array
+        # params). In a HELPER function it is a real C ``return``.
+        mode = self.return_mode
+        if mode is None:
+            return ""
+        if node.value is None or mode == "scalar":
+            val = "" if node.value is None else f" {self.emit_expr(node.value)}"
+            return f"{indent}return{val};"
+        # Array return: write the value into the out-param, then return void.
+        # ``return X`` -> ``memcpy``/elementwise copy handled as a whole-array
+        # assign ``__hret[:] = X`` reusing the existing slice-assign path.
+        assign = ast.Assign(
+            targets=[ast.Subscript(value=ast.Name(id=mode, ctx=ast.Load()),
+                                   slice=ast.Slice(lower=None, upper=None, step=None), ctx=ast.Store())],
+            value=node.value)
+        ast.copy_location(assign, node)
+        ast.fix_missing_locations(assign)
+        return f"{self._emit_assign(assign, indent)}\n{indent}return;"
 
     def _emit_if(self, node: ast.If, indent: str) -> str:
         then = self.emit_block(node.body, indent + "  ")
@@ -300,7 +325,7 @@ class _CBodyEmitter(BaseEmitter):
                     local_dtypes = vars(self).get("local_dtypes_for_inline", {})
                     size_tokens = [f"({_c_shape_token(s)})" for s in shape] if shape else []
                     size = " * ".join(size_tokens) if size_tokens else "1"
-                    default_float = vars(self.kir.tree).get("float_precision", "float64")
+                    default_float = self.kir.float_precision or "float64"
                     dtype_tag = local_dtypes.get(t, default_float)
                     c_type = _c_type(dtype_tag)
                     return f"{indent}{c_type} {t}[{size}];"
@@ -403,12 +428,16 @@ class _CBodyEmitter(BaseEmitter):
             if isinstance(node.op, ast.FloorDiv):
                 return (f"int_floor({self.emit_expr(node.left)}, "
                         f"{self.emit_expr(node.right)})")
-            # ``a % b`` -> ``python_mod(a, b)`` because Python (and numpy)
-            # take the sign of the divisor; C/C++ take the sign of the
-            # dividend. The macro converts.
+            # ``a % b`` -> ``python_mod`` / ``python_fmod`` because Python (and
+            # numpy) take the sign of the divisor; C/C++ take the sign of the
+            # dividend. Integer operands use the exact integer ``%`` macro; a
+            # float operand (numpy ``np.mod`` on reals) needs the ``fmod``-based
+            # variant since C ``%`` rejects doubles.
             if isinstance(node.op, ast.Mod):
-                return (f"python_mod({self.emit_expr(node.left)}, "
-                        f"{self.emit_expr(node.right)})")
+                left, right = self.emit_expr(node.left), self.emit_expr(node.right)
+                if self._is_float_operand(node.left) or self._is_float_operand(node.right):
+                    return f"python_fmod({left}, {right})"
+                return f"python_mod({left}, {right})"
             # ``scalar @ scalar`` (numpy treats ``@`` between two
             # 0-D values as ordinary multiplication). Reaches emit
             # only when the matmul hoister rejected it because both
@@ -440,14 +469,9 @@ class _CBodyEmitter(BaseEmitter):
             return (f"({self.emit_expr(node.test)} ? "
                     f"{self.emit_expr(node.body)} : "
                     f"{self.emit_expr(node.orelse)})")
-        # ``z.real`` / ``z.imag`` accessor on a complex scalar -> ``creal``/
-        # ``cimag`` (C99 <complex.h>); on a real operand ``.real`` is the value and
-        # ``.imag`` is 0. Used by the complex-Hermitian eigh Jacobi.
-        if isinstance(node, ast.Attribute) and node.attr in ("real", "imag"):
-            x = self.emit_expr(node.value)
-            if self._is_complex_operand(node.value):
-                return f"creal({x})" if node.attr == "real" else f"cimag({x})"
-            return f"({x})" if node.attr == "real" else "0.0"
+        # A bare ``z.real`` / ``z.imag`` Attribute never reaches emit: ``native_desugar``
+        # rewrites the accessor to ``np.real(z)`` / ``np.imag(z)`` at parse time, and the
+        # ``creal`` / ``cimag`` lowering lives on that canonical call form in ``_emit_call``.
         raise NotImplementedError(
             f"expression {type(node).__name__} "
             f"(line {getattr(node, 'lineno', '?')}): {ast.unparse(node)[:120]}")
@@ -470,7 +494,50 @@ class _CBodyEmitter(BaseEmitter):
             cur = cur.value
         return cur, chain
 
+    def _dim_minus_k(self, dim_token: str, k: int, orig: ast.AST) -> ast.AST:
+        """Build the index AST ``<dim> - k`` from a shape token, or return the
+        original node when the extent will not parse (a compound token stays a
+        negative index rather than a broken expression)."""
+        try:
+            dim_ast = ast.parse(str(dim_token), mode="eval").body
+        except SyntaxError:
+            return orig
+        return ast.copy_location(ast.BinOp(left=dim_ast, op=ast.Sub(), right=ast.Constant(value=k)), orig)
+
+    def _normalize_negative_indices(self, node: ast.Subscript) -> None:
+        """Rewrite a negative CONSTANT index into an explicit ``dim - k`` in place
+        so C / C++ read the element numpy's ``a[-k]`` denotes -- C has no negative
+        indexing, so ``a[-1]`` underflows the pointer and reads garbage (fortran /
+        numba / pythran / jax wrap negatives natively; the C ABI addresses raw
+        memory). Only a DIRECT ``Subscript(Name)`` with a known shape is touched: a
+        bare index counts from axis 0; a fully-positional tuple index (no newaxis /
+        ellipsis, one entry per axis) counts each index from its own axis. Anything
+        else -- a chained subscript, an unknown shape, a newaxis-shifted tuple -- is
+        left verbatim rather than normalized against a mis-identified axis."""
+        if not isinstance(node.value, ast.Name):
+            return
+        shape = self.array_shapes.get(node.value.id)
+        if not shape:
+            return
+        sl = node.slice
+        if isinstance(sl, ast.Tuple):
+            elts = sl.elts
+            if len(elts) != len(shape) or any(_is_newaxis_or_ellipsis(e) for e in elts):
+                return
+            for axis, e in enumerate(elts):
+                k = _negative_const_k(e)
+                if k is not None:
+                    elts[axis] = self._dim_minus_k(shape[axis], k, e)
+        else:
+            k = _negative_const_k(sl)
+            if k is not None:  # a bare index indexes axis 0 (of any rank)
+                node.slice = self._dim_minus_k(shape[0], k, sl)
+
     def _emit_subscript(self, node: ast.Subscript) -> str:
+        # numpy negative index ``a[-1]`` -> explicit ``a[N-1]`` (C has no negative
+        # indexing). Done first so both the flatten and chained paths below see the
+        # normalized index. Slices (``a[:-1]``) are untouched -- handled elsewhere.
+        self._normalize_negative_indices(node)
         # Fold a constant-index subscript of a tuple literal: ``(n,)[0]`` -> ``n``.
         # This arises when a 1-D ``x.shape`` is substituted to its tuple form and
         # then indexed (``int(x.shape[0])`` in xsbench's ``n = x.shape[0]``).
@@ -599,22 +666,26 @@ class _CBodyEmitter(BaseEmitter):
             # element loop where the operand becomes ``r[i]``.
             if attr in {"flip", "copy", "transpose"} and len(node.args) == 1:
                 return self.emit_expr(node.args[0])
-            # ``z.conjugate()`` / ``z.conj()`` -- complex conjugate on a
-            # scalar value. Routes to ``conj(z)`` in both C and C++ via
-            # the ``__npb_make_complex(creal(z), -cimag(z))`` macro
-            # provided in the prelude.
-            if attr in {"conjugate", "conj"} and not node.args:
-                z = self.emit_expr(node.func.value)
-                return f"__npb_conj({z})"
+            # The method form ``z.conjugate()`` / ``z.conj()`` never reaches emit:
+            # ``native_desugar`` rewrites it to ``np.conj(z)`` at parse time, handled by
+            # the function-form branch just below.
             # ``np.conj(z)`` / ``np.conjugate(z)`` -- function form (vexx
             # ``np.conj(exxbuff)``, scalarised to a per-element operand).
             if (isinstance(node.func.value, ast.Name)
                     and node.func.value.id in ("np", "numpy")
                     and attr in {"conj", "conjugate"} and len(node.args) == 1):
                 return f"__npb_conj({self.emit_expr(node.args[0])})"
-            # ``z.real`` / ``z.imag`` -- accessor on a complex scalar.
-            # (Not reached for an Attribute Load, only Call here, but
-            # kept symmetric for an Attribute-call form.)
+            # ``np.real(z)`` / ``np.imag(z)`` -- the canonical function form the
+            # ``.real`` / ``.imag`` accessor desugars to. Complex operand ->
+            # ``creal`` / ``cimag``; a real operand is the value / 0 (numpy allows
+            # ``.real`` / ``.imag`` on a real too).
+            if (isinstance(node.func.value, ast.Name)
+                    and node.func.value.id in ("np", "numpy")
+                    and attr in {"real", "imag"} and len(node.args) == 1):
+                x = self.emit_expr(node.args[0])
+                if self._is_complex_operand(node.args[0]):
+                    return f"creal({x})" if attr == "real" else f"cimag({x})"
+                return f"({x})" if attr == "real" else "0.0"
             # ``np.where(cond, a, b)`` in scalar context (inside an
             # already-scalarised per-element body) -- numpy semantics
             # are ``(a if cond else b)`` per element. Lower to the C
@@ -669,7 +740,7 @@ class _CBodyEmitter(BaseEmitter):
                 if s.name == n:
                     return True
             # ``int_locals`` are tuple-unpack int locals.
-            int_locals = getattr(self.kir.tree, "int_locals", []) or []
+            int_locals = self.kir.int_locals
             if n in int_locals:
                 return True
             # For-loop iter names are always declared ``int`` in the
@@ -711,29 +782,15 @@ class _CBodyEmitter(BaseEmitter):
         return out
 
     def _is_complex_operand(self, node: ast.AST) -> bool:
-        """Return True when ``node``''s element dtype is a complex form.
+        """Return True when ``node``'s element dtype is a complex form.
 
-        Recognises:
-        * Direct ``Subscript(Name(...))`` against a known-complex array.
-        * BinOp / UnaryOp / Call whose AST contains ANY complex literal
-          (``Constant(complex)``) or Name reference resolving to a
-          complex-dtype array. Walks the whole subtree so a deeper
-          ``exp(BinOp_with_complex_literal)`` is recognised.
+        Delegates to the shared call-aware :func:`_walk_complex`, so a
+        real-returning ufunc / accessor of a complex operand (``np.abs(z)`` /
+        ``np.real(z)`` / ``z.real``) is correctly REAL -- a whole-subtree walk would
+        see the inner ``z`` and mis-route ``sqrt`` to ``csqrt`` on a real value.
         """
-        # Walk every Subscript / Constant in the node and short-circuit
-        # on the first match.
-        for sub in ast.walk(node):
-            if isinstance(sub, ast.Constant) and isinstance(sub.value, complex):
-                return True
-            if isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Name):
-                dt = self._dtype_for_name(sub.value.id)
-                if dt and dt.startswith("complex"):
-                    return True
-            if isinstance(sub, ast.Name):
-                dt = self._dtype_for_name(sub.id)
-                if dt and dt.startswith("complex"):
-                    return True
-        return False
+        from numpyto_common.lowering import _walk_complex
+        return _walk_complex(node, self._dtype_for_name) is not None
 
     def _is_float_operand(self, node: ast.AST, _scalars=None) -> bool:
         """Return True when ``node`` is provably floating-point: a float
@@ -786,7 +843,7 @@ class _CBodyEmitter(BaseEmitter):
         return floats
 
     def _dtype_for_name(self, name: str):
-        local_dtypes = getattr(self.kir.tree, "local_dtypes", {}) or {}
+        local_dtypes = self.kir.local_dtypes
         dt = local_dtypes.get(name)
         if dt is None:
             for a in self.kir.arrays:
@@ -816,25 +873,33 @@ class _CBodyEmitter(BaseEmitter):
             return self._dtype_for_name(node.value.id) in ("bool", "bool_")
         return False
 
-    def _is_complex_subscript_legacy(self, node: ast.AST) -> bool:
-        """Retained for the original Subscript(Name) shortcut."""
-        if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
-            name = node.value.id
-            local_dtypes = getattr(self.kir.tree, "local_dtypes", {}) or {}
-            dt = local_dtypes.get(name)
-            if dt is None:
-                for a in self.kir.arrays:
-                    if a.name == name:
-                        dt = a.dtype
-                        break
-            if dt is not None and dt.startswith("complex"):
-                return True
-        return False
-
 
 # ---------------------------------------------------------------------------
 # Top-level emitters
 # ---------------------------------------------------------------------------
+
+
+def _negative_const_k(node: ast.AST):
+    """If ``node`` is a negative integer index constant, return its magnitude
+    ``k > 0`` (the index is ``-k``); else None. A literal ``-1`` parses as
+    ``UnaryOp(USub, Constant(1))``, but a folded ``Constant(-1)`` is handled too.
+    ``bool`` is excluded (``a[True]`` is not a negative index)."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, int) and not isinstance(node.value,
+                                                                                         bool) and node.value < 0:
+        return -node.value
+    if (isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub) and isinstance(node.operand, ast.Constant)
+            and isinstance(node.operand.value, int) and not isinstance(node.operand.value, bool)):
+        return node.operand.value
+    return None
+
+
+def _is_newaxis_or_ellipsis(e: ast.AST) -> bool:
+    """A ``None`` / ``np.newaxis`` / ``...`` element -- either shifts the
+    position->axis mapping (newaxis adds a dim) or spans several axes (ellipsis),
+    so a positional negative-index normalization must not fire when one is present."""
+    if isinstance(e, ast.Constant) and (e.value is None or e.value is Ellipsis):
+        return True
+    return isinstance(e, ast.Attribute) and e.attr == "newaxis"
 
 
 def _c_shape_token(tok: str) -> str:
@@ -908,7 +973,7 @@ def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
     local array (``np.zeros``) is implicit. The type is inferred in
     priority order:
 
-    1. ``tree.local_dtypes`` (populated by the lowering pipeline for
+    1. ``kir.local_dtypes`` (populated by the lowering pipeline for
        loop-vars that inherit the source array's element dtype, e.g.
        ``for b in data:`` where ``data`` is ``uint8``).
     2. Used-as-int promotion (subscript / range / bitwise operand).
@@ -916,9 +981,9 @@ def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
     """
     declared: Set[str] = set()
     declared.update(kir.input_args)
-    declared.update(getattr(kir.tree, "int_locals", []) or [])
-    declared.update((getattr(kir.tree, "zeros_locals", {}) or {}).keys())
-    local_dtypes = getattr(kir.tree, "local_dtypes", {}) or {}
+    declared.update(kir.int_locals)
+    declared.update(kir.zeros_locals.keys())
+    local_dtypes = kir.local_dtypes
     out: List[Tuple[str, str]] = []
     needs_int = _names_used_as_int(kir.tree)
     seen: Set[str] = set(declared)
@@ -977,14 +1042,16 @@ def _md_trailing(shape) -> str:
 
 def _emit_body(kir: KernelIR, indent: str = "  ",
                multidim_arrays: Optional[Set[str]] = None,
-               pluto: bool = False, return_parts: bool = False):
+               pluto: bool = False, return_parts: bool = False,
+               return_mode: Optional[str] = None):
     emitter = _CBodyEmitter(kir, multidim_arrays=multidim_arrays)
     emitter.pluto = pluto
-    zeros = getattr(kir.tree, "zeros_locals", {}) or {}
-    zeros_fills = vars(kir.tree).get("zeros_fills", {}) or {}
-    int_locals = getattr(kir.tree, "int_locals", []) or []
+    emitter.return_mode = return_mode
+    zeros = kir.zeros_locals
+    zeros_fills = kir.zeros_fills
+    int_locals = kir.int_locals
     implicit = _collect_implicit_locals(kir)
-    local_dtypes = getattr(kir.tree, "local_dtypes", {}) or {}
+    local_dtypes = kir.local_dtypes
     # Output parameters that a ``np.zeros``/``np.empty`` in the kernel
     # body aliases (e.g. ``table = np.zeros((N, N)); return table``). These
     # must NOT get a fresh local declaration -- that would shadow the
@@ -1065,7 +1132,7 @@ def _emit_body(kir: KernelIR, indent: str = "  ",
         emitter.multidim_arrays = set(emitter.multidim_arrays) | md_locals
     # Default dtype for a float temp not listed in local_dtypes (e.g. a
     # matmul scratch) follows the kernel's float precision set on the IR.
-    default_float = vars(kir.tree).get("float_precision", "float64")
+    default_float = kir.float_precision or "float64"
     # Register each local ARRAY's resolved dtype. Source-level float
     # locals (gmres ``Q`` / ``H`` / ``e1`` from ``np.zeros``) are declared
     # as the default float but never tagged in ``local_dtypes``; without a
@@ -1075,7 +1142,7 @@ def _emit_body(kir: KernelIR, indent: str = "  ",
     # overrides an explicit int / complex tag.
     for name in (*fn_top_locals, *deferred_malloc_locals, *inline_locals):
         local_dtypes.setdefault(name, default_float)
-    kir.tree.local_dtypes = local_dtypes
+    kir.local_dtypes = local_dtypes
     decls: List[str] = []
     frees: List[str] = []
     for name in int_locals:
@@ -1212,6 +1279,14 @@ _C_HEADER = ("#define _POSIX_C_SOURCE 199309L\n"
              "#ifndef python_mod\n"
              "#define python_mod(a, b) (((a) % (b) + (b)) % (b))\n"
              "#endif\n"
+             "/* Floating-point ``%``: numpy's floored modulo takes the sign of the\n"
+             " * divisor, which integer ``python_mod`` cannot express on doubles.\n"
+             " * Mirrors numpy ``npy_remainder`` (fmod + sign-of-divisor fixup). */\n"
+             "static inline double python_fmod(double a, double b) {\n"
+             "    double m = fmod(a, b);\n"
+             "    if (m != 0.0 && ((b < 0.0) != (m < 0.0))) m += b;\n"
+             "    return m;\n"
+             "}\n"
              "/* Integer power for VLA shape bounds like ``R ** K``. */\n"
              "static inline int64_t __npb_int_pow(int64_t base, int64_t exp) {\n"
              "    int64_t result = 1;\n"
@@ -1312,46 +1387,66 @@ _CPP_HEADER = ('#include <chrono>\n#include <cstdint>\n#include <cmath>\n'
                '/* Python ``%`` returns the sign of the divisor; C/C++ the\n'
                ' * dividend. ``python_mod`` bridges the gap. */\n'
                'template <class A, class B>\n'
-               'constexpr auto python_mod(A a, B b) { return (a % b + b) % b; }\n\n'
+               'constexpr auto python_mod(A a, B b) { return (a % b + b) % b; }\n'
+               '/* Floating-point ``%``: numpy floored modulo (sign of the divisor),\n'
+               ' * which integer ``python_mod`` cannot express on doubles. Mirrors\n'
+               ' * numpy ``npy_remainder`` (fmod + sign-of-divisor fixup). */\n'
+               'inline double python_fmod(double a, double b) {\n'
+               '    double m = std::fmod(a, b);\n'
+               '    if (m != 0.0 && ((b < 0.0) != (m < 0.0))) m += b;\n'
+               '    return m;\n'
+               '}\n\n'
                'extern "C" {\n')
 _CPP_FOOTER = '} // extern "C"\n'
 
-_C_PRELUDE = ("    struct timespec __t1, __t2;\n"
-              "    int64_t __dsec, __dnsec;\n"
-              "    clock_gettime(CLOCK_MONOTONIC, &__t1);\n"
-              "    {\n")
+# Timing is owned by the harness bracket externally (abi_contract.md §6); the emitted
+# kernel neither self-times nor receives a timer argument.
+_C_PRELUDE = ""
+_C_EPILOGUE = ""
+_CPP_PRELUDE = ""
+_CPP_EPILOGUE = ""
 
-_C_EPILOGUE = ("    }\n"
-               "    clock_gettime(CLOCK_MONOTONIC, &__t2);\n"
-               "    __dsec  = __t2.tv_sec  - __t1.tv_sec;\n"
-               "    __dnsec = __t2.tv_nsec - __t1.tv_nsec;\n"
-               "    time_ns[0] = __dsec * 1000000000LL + __dnsec;\n")
 
-_CPP_PRELUDE = ("    auto __t1 = std::chrono::high_resolution_clock::now();\n"
-                "    {\n")
+def _helper_return_ctype(hkir: KernelIR) -> str:
+    """C return type for a scalar-returning helper: int64 when every ``return``
+    value is an integer literal, else double (the common physics-helper case)."""
+    returns = [n.value for n in ast.walk(hkir.tree) if isinstance(n, ast.Return) and n.value is not None]
+    if returns and all(isinstance(v, ast.Constant) and isinstance(v.value, int) and not isinstance(v.value, bool)
+                       for v in returns):
+        return _c_type("int")
+    return _c_type("float64")
 
-_CPP_EPILOGUE = ("    }\n"
-                 "    auto __t2 = std::chrono::high_resolution_clock::now();\n"
-                 "    time_ns[0] = std::chrono::duration_cast<std::chrono::nanoseconds>(\n"
-                 "                       __t2 - __t1).count();\n")
+
+def _emit_c_helper(hkir: KernelIR, cpp: bool = False) -> str:
+    """Emit one non-inlinable helper as a ``static`` C/C++ function. A scalar
+    return keeps its value type; an array return is a leading out-param and the
+    function is ``void`` (each ``return X`` copies X into the out-param)."""
+    rettype = "void" if hkir.return_kind != "scalar" else _helper_return_ctype(hkir)
+    signature = _emit_signature(hkir, hkir.kernel_name, order=hkir.input_args).replace("void ", f"{rettype} ", 1)
+    if cpp:
+        signature = signature.replace("*restrict ", "*__restrict__ ")
+    body = _emit_body(hkir, indent="    ", return_mode=hkir.return_kind)
+    return f"static {signature} {{\n{body}\n}}\n\n"
 
 
 def emit_c(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     name = fn_name or f"{kir.kernel_name}_d_c"
+    helpers = "".join(_emit_c_helper(h) for h in kir.helpers)
     signature = _emit_signature(kir, name)
     body = _emit_body(kir, indent="        ")
-    return f"{_C_HEADER}\n{signature} {{\n{_C_PRELUDE}{body}\n{_C_EPILOGUE}}}\n"
+    return f"{_C_HEADER}\n{helpers}{signature} {{\n{_C_PRELUDE}{body}\n{_C_EPILOGUE}}}\n"
 
 
 def emit_cpp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     name = fn_name or f"{kir.kernel_name}_d"
+    helpers = "".join(_emit_c_helper(h, cpp=True) for h in kir.helpers)
     signature = _emit_signature(kir, name)
     # ``restrict`` is a C99 keyword; C++ accepts it under the
     # ``__restrict__`` GCC / Clang extension. Rewrite for the C++ output
     # so the same body string serves both targets.
     signature = signature.replace("*restrict ", "*__restrict__ ")
     body = _emit_body(kir, indent="        ")
-    return (f"{_CPP_HEADER}\n{signature} {{\n{_CPP_PRELUDE}{body}\n"
+    return (f"{_CPP_HEADER}\n{helpers}{signature} {{\n{_CPP_PRELUDE}{body}\n"
             f"{_CPP_EPILOGUE}}}\n{_CPP_FOOTER}")
 
 
@@ -1374,7 +1469,7 @@ def _emit_pluto_signature(kir: KernelIR, fn_name: str, multidim: Set[str]) -> st
     """Pluto signature with rank>=2 arrays as direct VLA params (see
     :func:`_pluto_multidim_array_signature`). Because a VLA dim must be lexically
     in scope, the order is regrouped from the canonical C-ABI: SIZE SYMBOLS first,
-    then array params, then scalars, then ``time_ns``. :func:`emit_pluto_binding`
+    then array params, then scalars. :func:`emit_pluto_binding`
     emits the matching arg order so the harness marshals correctly."""
     sym_by_name = {s.name: s for s in kir.symbols}
     arr_by_name = {a.name: a for a in kir.arrays}
@@ -1389,7 +1484,6 @@ def _emit_pluto_signature(kir: KernelIR, fn_name: str, multidim: Set[str]) -> st
             arr = arr_by_name[nm]
             parts.append(_pluto_multidim_array_signature(arr) if nm in multidim else _array_signature(arr))
     parts += [f"{_c_type(sca_by_name[nm].dtype)} {nm}" for nm in order if nm in sca_by_name]
-    parts.append("int64_t *restrict time_ns")
     return f"void {fn_name}({', '.join(parts)})"
 
 

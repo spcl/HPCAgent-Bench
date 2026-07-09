@@ -285,6 +285,35 @@ def test_cumsum_axis1_scans_inner_axis():
     assert "out[__cs0, __cs1] = out[__cs0, __cs1 - 1] + a[__cs0, __cs1]" in out
 
 
+def _slice_target(name, lower):
+    """``name[lower:]`` Store subscript for a partial-slice scan target."""
+    return ast.Subscript(value=ast.Name(id=name, ctx=ast.Load()),
+                         slice=ast.Slice(lower=(None if lower is None else ast.Constant(lower)),
+                                         upper=None, step=None),
+                         ctx=ast.Store())
+
+
+def test_cumsum_partial_slice_target_shifts_write_index():
+    """``row_offsets[1:] = np.cumsum(m_sizes)`` (DBCSR): the scan runs over the
+    operand's length but every write lands at ``lower + i``. Before the fix a
+    partial-slice target never reached the cumulative expander at all, so the
+    ``np.cumsum`` call survived to emit and raised 'not supported'."""
+    out = _unparse(expand_cumsum(_slice_target("row_offsets", 1), [_name("m_sizes")], {"m_sizes": ("M", )}))
+    assert "row_offsets[0 + 1] = m_sizes[0]" in out
+    assert "row_offsets[__cs0 + 1] = row_offsets[__cs0 - 1 + 1] + m_sizes[__cs0]" in out
+    assert "range(1, M)" in out
+
+
+def test_cumsum_zero_lower_slice_target_has_no_offset():
+    """A ``[0:]`` (or bare ``[:]``) lower bound adds no shift -- the emitted
+    recurrence is identical to a bare-Name target, so the fix never perturbs
+    the existing full-target path."""
+    shifted = _unparse(expand_cumsum(_slice_target("out", 0), [_name("a")], {"a": ("N", )}))
+    bare = _unparse(expand_cumsum(_name("out"), [_name("a")], {"a": ("N", )}))
+    assert shifted == bare
+    assert "+ 0" not in shifted
+
+
 # --------------------------------------------------------------------------- #
 # B.7  median: copy + sort + pick middle                                       #
 # --------------------------------------------------------------------------- #
@@ -481,6 +510,18 @@ def _assert_ok(status, label):
      }, {
          "a": "(N,)",
          "out": "(1,)"
+     }),
+    # Partial-slice cumsum target (DBCSR row/col offsets):
+    # ``out[1:] = np.cumsum(a)`` writes the prefix sums shifted by one, with
+    # ``out[0]`` left at its initialised value. Exercises the offset-aware
+    # cumulative expander end to end.
+    ("cumsum_slice_target",
+     "import numpy as np\ndef f(a,out):\n    out[0] = 0.0\n    out[1:] = np.cumsum(a)\n", "f", [("a", (6, ))], (7, ), {
+         "N": 6,
+         "M": 7
+     }, {
+         "a": "(N,)",
+         "out": "(M,)"
      }),
     ("roll", "import numpy as np\ndef f(a,out):\n    out[:] = np.roll(a, 3)\n", "f", [("a", (8, ))], (8, ), {
         "N": 8

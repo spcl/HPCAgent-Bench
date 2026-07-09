@@ -32,6 +32,42 @@ from typing import Dict, List, Optional, Set, Tuple
 from numpyto_common.ir import ArrayDesc, KernelIR, ScalarDesc, SymbolDesc
 
 
+def native_desugar(fn: ast.FunctionDef) -> None:
+    """Apply the native-backend AST desugars to ``fn`` in place.
+
+    These rewrites strip constructs the C/Fortran emitters cannot lower and
+    canonicalise the ones they can to a single form. Runs identically on the
+    kernel body (in :func:`parse_kernel`) and on every non-inlined helper (in
+    :func:`_build_helper_kirs`) -- a helper that survives inlining otherwise
+    keeps un-emittable ``np.newaxis`` / ufunc-``out=`` / roll-on-slice /
+    ``.real`` / ``.ndim``-guard forms the kernel body had already shed.
+
+    * ``np.newaxis`` -> ``None``.
+    * ``np.multiply(a, b, out=c)`` and the other binary-ufunc ``out=`` forms ->
+      ``c = a <op> b`` (the native backends have no ufunc dispatch; minife axpby).
+    * ``X[..] = np.roll(X[..], shift, axis)`` on a sliced operand/target -> bare-name
+      temps so the native roll expander applies and a self-roll snapshots its input.
+    * Complex accessors to their function form so the native emitter has ONE
+      handler per op: ``z.real`` -> ``np.real(z)``, ``z.imag`` -> ``np.imag(z)``,
+      ``z.conjugate()`` / ``z.conj()`` -> ``np.conj(z)``.
+    * Drop input-validation guards (``if array.ndim != 1: raise ...``) whole, so
+      their unemittable ``.ndim`` / ``.flags`` conditions never reach an emitter.
+    * Fold static ``None is None`` / ``None is not None`` comparisons (an inlined
+      helper's unsupplied optional parameter defaults to None) and DCE the dead
+      IfExp / if branches, so a backend never meets a bare None literal at emit.
+    """
+    from numpyto_common.numpy_desugar import (_ComplexAccessorToFunc, _DecomposeRollSlice, _DropValidationGuards,
+                                              _ElementalUfuncToPrimitive, _UfuncOutInline)
+    _NewaxisToNone().visit(fn)
+    _UfuncOutInline().visit(fn)
+    _DecomposeRollSlice().visit(fn)
+    _ComplexAccessorToFunc().visit(fn)
+    _ElementalUfuncToPrimitive().visit(fn)
+    _DropValidationGuards().visit(fn)
+    _FoldStaticNoneBranches().visit(fn)
+    ast.fix_missing_locations(fn)
+
+
 def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optional[str] = None) -> KernelIR:
     """Build a :class:`KernelIR` from ``numpy_py`` + ``bench_info``.
 
@@ -58,6 +94,10 @@ def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optio
     # this split they'd be declared ``int`` and truncate to 0. Scan all
     # presets + init.scalars for a float value per name.
     _float_preset_names = _collect_float_preset_names(parameters, info.get("init", {}).get("scalars", {}) or {})
+    # Preset names whose value is a boolean are runtime CONFIG FLAGS (typed bool),
+    # not integer size symbols -- so Fortran declares them ``logical`` and the
+    # ``if (flag)`` / ``.not. flag`` conditionals type-check.
+    _bool_preset_names = _collect_bool_preset_names(parameters)
 
     src = numpy_py.read_text()
     tree = ast.parse(src, filename=str(numpy_py))
@@ -193,25 +233,11 @@ def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optio
     # inside a helper (lulesh's _calc_volume_derivative) is now in the kernel body.
     _materialize_const_arrays(tree, fn, input_args)
     ast.fix_missing_locations(fn)
-    # Normalise ``np.newaxis`` -> ``None`` AFTER inlining so any
-    # helper-body references also get caught.
-    _NewaxisToNone().visit(fn)
-    ast.fix_missing_locations(fn)
-
-    # ``np.multiply(a, b, out=c)`` and the other binary-ufunc ``out=`` forms ->
-    # ``c = a <op> b`` (the native backends have no ufunc dispatch; minife axpby).
-    from numpyto_common.numpy_desugar import _DropValidationGuards, _UfuncOutInline
-    _UfuncOutInline().visit(fn)
-    # Drop input-validation guards (``if array.ndim != 1: raise ...``) whole, so their
-    # unemittable ``.ndim`` / ``.flags`` conditions do not reach a native emitter.
-    _DropValidationGuards().visit(fn)
-    ast.fix_missing_locations(fn)
-
-    # Fold static ``None is None`` / ``None is not None`` comparisons (an inlined
-    # helper's unsupplied optional parameter defaults to None) and DCE the dead
-    # IfExp / if branches, so a backend never meets a bare None literal at emit.
-    _FoldStaticNoneBranches().visit(fn)
-    ast.fix_missing_locations(fn)
+    # Native-backend desugars (newaxis, ufunc-out, roll-slice, complex accessors,
+    # validation-guard drop, static-None fold). Applied here to the kernel body
+    # AND, identically, to every non-inlined helper in ``_build_helper_kirs`` so a
+    # helper that survives inlining is not left with un-emittable constructs.
+    native_desugar(fn)
 
     # Inline tuple-valued shape locals and fold tuple concatenation AFTER
     # inlining so references inside inlined helper bodies (vexx's invfft/fwfft
@@ -341,8 +367,12 @@ def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optio
                     shape=_parse_shape_expression(shape_expr),
                     is_output=arg in output_args,
                 ))
-        elif arg in preset_symbols and arg not in _float_preset_names:
+        elif arg in preset_symbols and arg not in _float_preset_names and arg not in _bool_preset_names:
             symbols.append(SymbolDesc(name=arg))
+        elif arg in _bool_preset_names:
+            # A boolean config flag: a runtime ``bool`` scalar (C ``bool`` /
+            # Fortran ``logical(c_bool)``), NOT an integer dimension.
+            scalars.append(ScalarDesc(name=arg, dtype="bool", is_output=arg in output_args))
         else:
             # Plain scalar input (e.g. ``alpha`` in gemm). Type comes
             # from the JSON's ``init.scalars`` block when present --
@@ -389,7 +419,7 @@ def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optio
         input_args = expanded_input
 
     short_name = info.get("short_name", func_name)
-    return KernelIR(
+    kir = KernelIR(
         tree=fn,
         kernel_name=func_name,
         short_name=short_name,
@@ -400,6 +430,12 @@ def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optio
         source_path=str(numpy_py),
         sparse=sparse_descs,
     )
+    # Helpers that survived the inlining fixpoint as CALLS (an early ``return`` /
+    # recursion blocks inlining) become their own native functions -- the early
+    # return is then just a native ``return``. Each helper param's type/shape is
+    # inferred from the call site; :func:`lower` lowers every helper body too.
+    kir.helpers = _build_helper_kirs(tree, fn, kir)
+    return kir
 
 
 def _load_bench_info(path: pathlib.Path) -> Dict:
@@ -689,11 +725,20 @@ def _inline_module_constants(tree: ast.Module, fn: ast.FunctionDef, input_args: 
         if (isinstance(v, ast.Attribute) and isinstance(v.value, ast.Name)
                 and v.value.id in ("np", "numpy", "math")):
             return {"pi": 3.141592653589793, "e": 2.718281828459045, "tau": 6.283185307179586}.get(v.attr)
-        if isinstance(v, ast.UnaryOp) and isinstance(v.op, (ast.USub, ast.UAdd)):
+        if isinstance(v, ast.UnaryOp) and isinstance(v.op, (ast.USub, ast.UAdd, ast.Invert)):
             x = _const_value(v.operand)
             if x is None:
                 return None
-            return -x if isinstance(v.op, ast.USub) else +x
+            if isinstance(v.op, ast.USub):
+                return -x
+            if isinstance(v.op, ast.Invert):
+                return ~x if isinstance(x, int) else None
+            return +x
+        # A Name referencing an already-folded module constant (bit-flag masks
+        # compose: ``CI_HALF_LJ = CI_DO_LJ | CI_HALF``); resolve it from the
+        # constants collected so far in source order.
+        if isinstance(v, ast.Name) and v.id in consts:
+            return consts[v.id]
         if isinstance(v, ast.BinOp):
             a, b = _const_value(v.left), _const_value(v.right)
             if a is None or b is None:
@@ -713,6 +758,20 @@ def _inline_module_constants(tree: ast.Module, fn: ast.FunctionDef, input_args: 
                     return a % b
                 if isinstance(v.op, ast.Pow):
                     return a**b
+                # Bitwise ops -- GROMACS / lulesh flag masks (``1 << 1``,
+                # ``0x1 | 0x2``, ``flags & MASK``). Integer operands only.
+                if isinstance(v.op, (ast.LShift, ast.RShift, ast.BitOr, ast.BitAnd, ast.BitXor)):
+                    if not (isinstance(a, int) and isinstance(b, int)):
+                        return None
+                    if isinstance(v.op, ast.LShift):
+                        return a << b
+                    if isinstance(v.op, ast.RShift):
+                        return a >> b
+                    if isinstance(v.op, ast.BitOr):
+                        return a | b
+                    if isinstance(v.op, ast.BitAnd):
+                        return a & b
+                    return a ^ b
             except (ZeroDivisionError, ValueError, TypeError):
                 return None
         return None
@@ -1127,49 +1186,20 @@ def _resolve_call_args(call: ast.Call, helper: ast.FunctionDef) -> Optional[List
     return call_args + defaults[-missing:]
 
 
-def _collect_returned_outputs(fn: ast.FunctionDef) -> List[str]:
-    """Return the list of Names mentioned in a final ``return`` of the
-    function body.
-
-    Recognised forms:
-    * ``return X`` -> ``['X']``
-    * ``return X, Y, Z`` -> ``['X', 'Y', 'Z']``
-    * Anything else (expressions, no return) -> ``[]``.
-    """
-    if not fn.body:
-        return []
-    last = fn.body[-1]
-    if not isinstance(last, ast.Return) or last.value is None:
-        return []
-    if isinstance(last.value, ast.Name):
-        return [last.value.id]
-    if isinstance(last.value, ast.Tuple):
-        names: List[str] = []
-        for elt in last.value.elts:
-            if isinstance(elt, ast.Name):
-                names.append(elt.id)
-            else:
-                # Mixed-form return -- bail; the kernel needs manual
-                # care (or extension here later).
-                return []
-        return names
-    return []
-
-
 def _synthesize_return_temps(fn: ast.FunctionDef):
-    """Rewrite a trailing ``return <expr>`` into ``optarena_out0 = <expr>;
-    return optarena_out0`` so a computed (non-Name) return can flow through
+    """Rewrite a trailing ``return <expr>`` into ``ret_arr0 = <expr>;
+    return ret_arr0`` so a computed (non-Name) return can flow through
     the same output-promotion path as ``return X``.
 
     The temp name has NO leading underscore on purpose: it becomes a public
     output PARAMETER (it appears in the binding JSON and every emitted
     signature), and a leading ``__`` is both a reserved identifier in C/C++
     and illegal in Fortran -- forcing a per-backend rename that can desync the
-    positional ABI from the binding. ``optarena_out<i>`` is a valid, collision-
+    positional ABI from the binding. ``ret_arr<i>`` is a valid, collision-
     resistant identifier in every target, so no backend has to rename it.
 
-    ``return (A @ x) @ A`` -> ``optarena_out0 = (A @ x) @ A; return optarena_out0``;
-    ``return histw / histu`` -> ``optarena_out0 = histw / histu; ...``;
+    ``return (A @ x) @ A`` -> ``ret_arr0 = (A @ x) @ A; return ret_arr0``;
+    ``return histw / histu`` -> ``ret_arr0 = histw / histu; ...``;
     ``return r @ A, A @ p`` -> two temps. Name elements are left alone
     (``return Q, R`` is unchanged). Returns ``(names, revert)`` where
     ``revert()`` restores the original body -- the caller calls it when
@@ -1192,7 +1222,7 @@ def _synthesize_return_temps(fn: ast.FunctionDef):
             names.append(elt.id)
             new_elts.append(elt)
             continue
-        tname = f"optarena_out{len(new_stmts)}"
+        tname = f"ret_arr{len(new_stmts)}"
         new_stmts.append(ast.Assign(targets=[ast.Name(id=tname, ctx=ast.Store())], value=elt))
         names.append(tname)
         new_elts.append(ast.Name(id=tname, ctx=ast.Load()))
@@ -1218,7 +1248,7 @@ def _strip_trailing_return(fn: ast.FunctionDef) -> None:
 
 def _promote_scalar_returns(fn: ast.FunctionDef, names: List[str]) -> List[str]:
     """Rewrite a trailing ``return x[, y]`` of SCALAR values into 1-element output
-    buffer writes ``optarena_out<i>[0] = x`` and drop the return.
+    buffer writes ``optarena_ret<i>[0] = x`` and drop the return.
 
     A kernel whose only result is a scalar (xsbench ``grid_search`` returns the
     binary-search index) has no array to promote, so without this the value is
@@ -1232,7 +1262,7 @@ def _promote_scalar_returns(fn: ast.FunctionDef, names: List[str]) -> List[str]:
     writes: List[ast.stmt] = []
     out_names: List[str] = []
     for i, nm in enumerate(names):
-        buf = f"optarena_ret{i}"  # distinct from the ``optarena_out`` synthesis temps
+        buf = f"optarena_ret{i}"  # distinct from the ``ret_arr`` array-synthesis temps
         writes.append(ast.Assign(
             targets=[ast.Subscript(value=ast.Name(id=buf, ctx=ast.Load()),
                                    slice=ast.Constant(value=0), ctx=ast.Store())],
@@ -1293,6 +1323,10 @@ def _derive_returned_array_metadata(
                 # ``np.sum(.., axis=k)`` promotes (force_lj / gem). Full
                 # reductions (axis=None) stay scalar / unpromoted.
                 shape_str = _shape_from_reduction(stmt.value, shape_strs)
+            if shape_str is None:
+                # ``x.T`` / ``np.transpose`` -- a returned transposed view
+                # materializes into a fresh buffer (reversed / permuted shape).
+                shape_str = _shape_from_transpose(stmt.value, shape_strs)
             if shape_str is None:
                 # BinOp / Subscript broadcasting (+ Call when route_calls).
                 shape_str = _shape_from_iter_extent(stmt.value, shape_strs, route_calls=route_calls)
@@ -1530,6 +1564,57 @@ def _shape_from_linspace_or_arange(node: ast.AST) -> Optional[str]:
     return None
 
 
+def _shape_from_transpose(node: ast.AST, known: Dict[str, str]) -> Optional[str]:
+    """``x.T`` / ``np.transpose(x[, axes])`` / ``x.transpose([axes])`` -> the base
+    array's shape with its axes reversed (no axes) or permuted (explicit axes).
+    A returned transposed VIEW must materialize into a fresh output buffer;
+    ``_iter_extent_of`` bails on transpose, so it needs its own deriver. The base's
+    shape comes from ``known`` (a Name) or ``_iter_extent_of`` (a compound base)."""
+    axes_node: Optional[ast.AST] = None
+    base: Optional[ast.AST] = None
+    if isinstance(node, ast.Attribute) and node.attr == "T":
+        base = node.value
+    elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        f = node.func
+        if (f.attr == "transpose" and isinstance(f.value, ast.Name) and f.value.id in ("np", "numpy") and node.args):
+            base = node.args[0]  # np.transpose(x[, axes])
+            axes_node = node.args[1] if len(node.args) > 1 else None
+        elif f.attr == "transpose":  # x.transpose([axes]) -- tuple arg or varargs ints
+            base = f.value
+            if len(node.args) == 1 and isinstance(node.args[0], (ast.Tuple, ast.List)):
+                axes_node = node.args[0]
+            elif node.args:
+                axes_node = ast.Tuple(elts=list(node.args), ctx=ast.Load())
+    if base is None:
+        return None
+    # Resolve the base's dim tokens AS STRINGS (``_parse_shape_expression`` yields
+    # string tokens; ``_iter_extent_of`` yields AST nodes to unparse).
+    if isinstance(base, ast.Name):
+        sstr = known.get(base.id)
+        toks = [str(t) for t in _parse_shape_expression(sstr)] if sstr else None
+    else:
+        table: Dict[str, Tuple[str, ...]] = {}
+        for name, sstr in known.items():
+            tk = _parse_shape_expression(sstr)
+            if tk:
+                table[name] = tk
+        from numpyto_common.lib_nodes import _iter_extent_of
+        ext = _iter_extent_of(base, table)
+        toks = [ast.unparse(e) for e in ext] if ext else None
+    if not toks:
+        return None
+    if axes_node is None:
+        new = list(reversed(toks))
+    else:
+        if not isinstance(axes_node, (ast.Tuple, ast.List)):
+            return None
+        perm = [e.value for e in axes_node.elts if isinstance(e, ast.Constant) and isinstance(e.value, int)]
+        if len(perm) != len(toks) or sorted(perm) != list(range(len(toks))):
+            return None
+        new = [toks[p] for p in perm]
+    return "(" + ", ".join(new) + ",)" if len(new) == 1 else "(" + ", ".join(new) + ")"
+
+
 def _shape_from_dot_shape(node: ast.AST, known: Dict[str, str]) -> Optional[str]:
     """Resolve constructor calls of the form ``np.zeros(C.shape, ...)``
     by looking ``C`` up in the so-far shape table."""
@@ -1555,6 +1640,381 @@ def _strip_docstrings(stmts: List[ast.stmt]) -> List[ast.stmt]:
         s for s in stmts
         if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant) and isinstance(s.value.value, str))
     ]
+
+
+def _collect_called_helper_defs(tree: ast.Module, kernel_fn: ast.FunctionDef) -> List[ast.FunctionDef]:
+    """Top-level helper ``FunctionDef``s still CALLED after inlining -- the ones
+    inlining could not absorb (an early ``return`` / recursion). Collected
+    transitively: a captured helper may call another non-inlinable helper, which
+    must be emitted too. Returned in definition order (a callee defined above its
+    caller emits first, so no forward declaration is needed)."""
+    defs_by_name: Dict[str, ast.FunctionDef] = {
+        n.name: n for n in tree.body if isinstance(n, ast.FunctionDef) and n is not kernel_fn}
+    captured: Dict[str, ast.FunctionDef] = {}
+    frontier: List[ast.AST] = [kernel_fn]
+    while frontier:
+        node = frontier.pop()
+        for sub in ast.walk(node):
+            if (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)
+                    and sub.func.id in defs_by_name and sub.func.id not in captured):
+                d = defs_by_name[sub.func.id]
+                captured[sub.func.id] = d
+                frontier.append(d)
+    # Definition order (as they appear in the module), so a helper that calls
+    # another emits after its callee.
+    return [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in captured]
+
+
+def _apply_subscript_axes(dims: List, sub_slice: ast.AST) -> List:
+    """Result shape of subscripting a ``dims``-shaped array with ``sub_slice``:
+    a full-``Slice`` axis keeps its dimension, an integer/scalar index drops it,
+    and any trailing un-indexed axes are kept. ``dims`` may be shape-strings or
+    AST exprs -- they are passed through untouched, only selected/dropped."""
+    axes = sub_slice.elts if isinstance(sub_slice, ast.Tuple) else [sub_slice]
+    kept = [dim for ax, dim in zip(axes, dims) if isinstance(ax, ast.Slice)]
+    kept.extend(dims[len(axes):])
+    return kept
+
+
+def _local_array_def(fn: ast.FunctionDef, name: str):
+    """Shape (list of AST exprs) and dtype string of a local array from its
+    ``name = np.zeros/empty/ones(<shape>, dtype=...)`` definition, or ``None``.
+    Used to size the out-param temp when an array-returning helper writes into a
+    slice of a kernel-local array (``coulomb_fac[:, j] = h(...)``)."""
+    for node in ast.walk(fn):
+        if not (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name) and node.targets[0].id == name
+                and isinstance(node.value, ast.Call)):
+            continue
+        f = node.value.func
+        fname = f.attr if isinstance(f, ast.Attribute) else f.id if isinstance(f, ast.Name) else None
+        if fname in ("zeros", "empty", "ones") and node.value.args:
+            shp = node.value.args[0]
+            dims = list(shp.elts) if isinstance(shp, ast.Tuple) else [shp]
+            dtype = "float64"
+            for kw in node.value.keywords:
+                if kw.arg == "dtype":
+                    d = kw.value
+                    dtype = d.attr if isinstance(d, ast.Attribute) else d.id if isinstance(d, ast.Name) else dtype
+            return dims, dtype
+    return None
+
+
+def _resolve_local_array_arg(fn: ast.FunctionDef, name: str, arr_by):
+    """A helper call arg that is a kernel-LOCAL array (``xkq = xkq_collect[:, k]``
+    or a bare alias of a param) -- resolve its ``(shape, dtype)`` from the local's
+    FIRST definition, so the helper param is typed as an array rather than
+    defaulted to a scalar double. Only a slice/alias of a KNOWN array is resolved
+    (vexx_k's ``_g2_convolution`` ``xkq`` / ``xk`` (3,) q-vector args)."""
+    for node in ast.walk(fn):
+        if not (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name) and node.targets[0].id == name):
+            continue
+        rhs = node.value
+        if isinstance(rhs, ast.Name) and rhs.id in arr_by:
+            a = arr_by[rhs.id]
+            return a.shape, a.dtype
+        if (isinstance(rhs, ast.Subscript) and isinstance(rhs.value, ast.Name)
+                and rhs.value.id in arr_by):
+            a = arr_by[rhs.value.id]
+            kept = _apply_subscript_axes(list(a.shape), rhs.slice)
+            if kept:
+                return tuple(kept), a.dtype
+        return None  # first def is not a resolvable array-derived local
+    return None
+
+
+def _infer_param_desc(arg: ast.AST, pname: str, arr_by, sca_by, sym_by, fn=None):
+    """Infer a helper parameter's descriptor from the CALL-SITE argument.
+    Returns ``("array"|"scalar"|"symbol", desc)``."""
+    if isinstance(arg, ast.Name):
+        if arg.id in arr_by:
+            a = arr_by[arg.id]
+            return ("array", ArrayDesc(name=pname, dtype=a.dtype, shape=a.shape, is_output=False))
+        if arg.id in sca_by:
+            return ("scalar", ScalarDesc(name=pname, dtype=sca_by[arg.id].dtype))
+        if arg.id in sym_by:
+            return ("symbol", SymbolDesc(name=pname))
+        if fn is not None:
+            res = _resolve_local_array_arg(fn, arg.id, arr_by)
+            if res is not None:
+                shape, dtype = res
+                return ("array", ArrayDesc(name=pname, dtype=dtype, shape=shape, is_output=False))
+    if (isinstance(arg, ast.Subscript) and isinstance(arg.value, ast.Name) and arg.value.id in arr_by):
+        a = arr_by[arg.value.id]
+        # ``arr[:, k]`` -- a slice-bearing read is a (sub-shaped) array param;
+        # ``arr[i]`` / ``arr[i, j]`` -- a fully-indexed read is a scalar element.
+        kept = _apply_subscript_axes(list(a.shape), arg.slice)
+        if kept:
+            return ("array", ArrayDesc(name=pname, dtype=a.dtype, shape=tuple(kept), is_output=False))
+        return ("scalar", ScalarDesc(name=pname, dtype=a.dtype))
+    if isinstance(arg, ast.Constant):
+        if isinstance(arg.value, bool):
+            return ("scalar", ScalarDesc(name=pname, dtype="bool"))
+        if isinstance(arg.value, int):
+            return ("scalar", ScalarDesc(name=pname, dtype="int"))
+        return ("scalar", ScalarDesc(name=pname, dtype="float64"))
+    # A negated / arithmetic scalar expression -- default to double.
+    return ("scalar", ScalarDesc(name=pname, dtype="float64"))
+
+
+def _helper_return_array_shape(lhs, arr_by, fn):
+    """When a captured helper's result is stored into an ARRAY target
+    (``X = h(...)`` with X an array, or ``X[:, j] = h(...)``), return the returned
+    array's ``(shape_strings, dtype)`` -- so the helper emits an out-param of that
+    shape. A scalar / non-array target returns ``(None, None)`` (by-value path)."""
+    if isinstance(lhs, ast.Name) and lhs.id in arr_by:
+        a = arr_by[lhs.id]
+        return list(a.shape), a.dtype
+    if isinstance(lhs, ast.Subscript) and isinstance(lhs.value, ast.Name):
+        base = lhs.value.id
+        if base in arr_by:
+            a = arr_by[base]
+            kept = _apply_subscript_axes(list(a.shape), lhs.slice)
+            return (kept, a.dtype) if kept else (None, None)
+        loc = _local_array_def(fn, base)  # a kernel-local array (np.zeros(...))
+        if loc is not None:
+            dims, dtype = loc
+            kept = _apply_subscript_axes(dims, lhs.slice)
+            if kept:
+                return [ast.unparse(e) for e in kept], dtype
+    return None, None
+
+
+def _infer_helper_params(pnames, args, arr_by, sca_by, sym_by, fn=None):
+    """Split a helper's (param, call-arg) pairs into array / scalar / symbol
+    descriptors inferred from each call-site argument."""
+    arrays: List[ArrayDesc] = []
+    scalars: List[ScalarDesc] = []
+    symbols: List[SymbolDesc] = []
+    for pname, arg in zip(pnames, args):
+        kind, desc = _infer_param_desc(arg, pname, arr_by, sca_by, sym_by, fn)
+        (arrays if kind == "array" else symbols if kind == "symbol" else scalars).append(desc)
+    return arrays, scalars, symbols
+
+
+def _mark_written_outputs(hfn: ast.FunctionDef, arrays: List[ArrayDesc]) -> None:
+    """Mark every array param the helper WRITES to (``p[i] = ...``) as an output
+    (drops ``const`` on the pointer)."""
+    written: Set[str] = set()
+    for n in ast.walk(hfn):
+        targets = (n.targets if isinstance(n, ast.Assign)
+                   else [n.target] if isinstance(n, ast.AugAssign) else [])
+        for t in targets:
+            if isinstance(t, ast.Name):
+                written.add(t.id)
+            elif isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name):
+                written.add(t.value.id)
+    for a in arrays:
+        if a.name in written:
+            a.is_output = True
+
+
+def _substitute_names(node: ast.AST, consts: Dict[str, ast.expr]) -> None:
+    """Replace each ``Load`` use of a name in ``consts`` with its constant expr."""
+
+    class _Sub(ast.NodeTransformer):
+
+        def visit_Name(self, n: ast.Name):
+            if isinstance(n.ctx, ast.Load) and n.id in consts:
+                return ast.copy_location(copy.deepcopy(consts[n.id]), n)
+            return n
+
+    _Sub().visit(node)
+
+
+def _rewrite_returns_to_outparam(hfn: ast.FunctionDef, hret: str) -> None:
+    """Rewrite every ``return <expr>`` into ``<hret>[:] = <expr>`` + a bare
+    ``return`` -- so the whole-array return lowers like any slice assignment and
+    the helper emits as a ``void`` out-param function."""
+
+    class _Ret(ast.NodeTransformer):
+
+        def visit_Return(self, n: ast.Return):
+            if n.value is None:
+                return n
+            store = ast.Assign(
+                targets=[ast.Subscript(value=ast.Name(id=hret, ctx=ast.Load()),
+                                       slice=ast.Slice(lower=None, upper=None, step=None), ctx=ast.Store())],
+                value=n.value)
+            bare = ast.Return(value=None)
+            ast.copy_location(store, n)
+            ast.copy_location(bare, n)
+            return [store, bare]
+
+    _Ret().visit(hfn)
+    ast.fix_missing_locations(hfn)
+
+
+def _shape_symbols(arrays: List[ArrayDesc]) -> Set[str]:
+    """Free identifiers appearing in array-param shape expressions (``ngm`` in a
+    ``(3, ngm)`` shape) -- the symbols a helper must receive to size its loops."""
+    syms: Set[str] = set()
+    for a in arrays:
+        for tok in a.shape:
+            try:
+                for node in ast.walk(ast.parse(str(tok), mode="eval")):
+                    if isinstance(node, ast.Name):
+                        syms.add(node.id)
+            except SyntaxError:
+                pass
+    return syms
+
+
+def _build_callsite_stmts(lhs, name, pnames, kept_args, extra_syms, param_info, hret_shape, hret_dtype, hidx):
+    """Replacement statements for an array-returning helper call.
+
+    Slice / non-bare array args are first materialised into contiguous temps (a
+    strided column ``xk[:, k]`` cannot be passed as a flat pointer, and a slice in
+    the call would otherwise trip the per-element slice lowering). Shape symbols
+    are appended by name. A bare-array target is then filled in place (the emitter
+    appends it as the out-param); a slice target fills a temp, then copies it in.
+    """
+    pre: List[str] = []
+    call_srcs: List[str] = []
+    for k, (pn, arg) in enumerate(zip(pnames, kept_args)):
+        info = param_info.get(pn)
+        if info is not None and not isinstance(arg, ast.Name):
+            shp, dt = info
+            atmp = f"__harg_{hidx}_{k}"
+            pre.append(f"{atmp} = np.empty(({', '.join(shp)},), dtype=np.{dt})")
+            pre.append(f"{atmp}[:] = {ast.unparse(arg)}")
+            call_srcs.append(atmp)
+        else:
+            call_srcs.append(ast.unparse(arg))
+    call_srcs.extend(extra_syms)
+    # The out-param is the last call arg -- a BARE call statement (not ``tmp =
+    # h(...)``, which would be seen as a whole-array reassignment and lowered
+    # element-wise). A bare-array target is written in place; a slice target fills
+    # a fresh temp, then a normal slice copy stores it.
+    if isinstance(lhs, ast.Name):
+        call_srcs.append(lhs.id)
+        return ast.parse("\n".join(pre + [f"{name}({', '.join(call_srcs)})"])).body
+    tmp = f"__hret_tmp_{hidx}"
+    call_srcs.append(tmp)
+    lines = pre + [f"{tmp} = np.empty(({', '.join(hret_shape)},), dtype=np.{hret_dtype})",
+                   f"{name}({', '.join(call_srcs)})",
+                   f"{ast.unparse(lhs)} = {tmp}"]
+    return ast.parse("\n".join(lines)).body
+
+
+class _ReplaceStmts(ast.NodeTransformer):
+    """Replace specific ``Assign`` nodes (keyed by ``id``) with a stmt list."""
+
+    def __init__(self, mapping: Dict[int, List[ast.stmt]]):
+        self.mapping = mapping
+
+    def visit_Assign(self, node: ast.Assign):
+        repl = self.mapping.get(id(node))
+        if repl is None:
+            return node
+        for s in repl:
+            ast.copy_location(s, node)
+            ast.fix_missing_locations(s)
+        return repl
+
+
+def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: KernelIR) -> List[KernelIR]:
+    """One :class:`KernelIR` per non-inlinable called helper (see
+    :func:`_collect_called_helper_defs`). Each helper param's type/shape is read
+    off the FIRST call site's argument via :func:`_infer_param_desc`; module
+    constants (``_THRESH = 5.0``) are inlined into the helper body. The return is
+    classified scalar (by-value) or array (out-param, added as a leading param).
+
+    Only DIRECT kernel-body call sites are resolved here (args refer to the
+    kernel's own params); a helper called only from another helper is skipped
+    (left for a later pass) so we never infer against the wrong scope.
+    """
+    helper_defs = _collect_called_helper_defs(tree, kernel_fn)
+    if not helper_defs:
+        return []
+    arr_by = {a.name: a for a in parent.arrays}
+    sca_by = {s.name: s for s in parent.scalars}
+    sym_by = {s.name: s for s in parent.symbols}
+    # First call site of each helper in the KERNEL body, plus its enclosing
+    # assignment (``X = h(...)`` / ``X[:, j] = h(...)``) -- the LHS classifies the
+    # return (array vs scalar) and sizes the out-param.
+    call_of: Dict[str, ast.Call] = {}
+    assign_of: Dict[str, ast.Assign] = {}
+    for node in ast.walk(kernel_fn):
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Name) and node.value.func.id not in call_of):
+            call_of[node.value.func.id] = node.value
+            assign_of[node.value.func.id] = node
+    for node in ast.walk(kernel_fn):  # plain-call fallback (scalar helper in an expression)
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id not in call_of):
+            call_of[node.func.id] = node
+    out: List[KernelIR] = []
+    callsite_rewrites: Dict[int, List[ast.stmt]] = {}  # {id(Assign): replacement stmts}
+    for hidx, hdef in enumerate(helper_defs):
+        call = call_of.get(hdef.name)
+        if call is None:
+            # Called only from another helper -- resolve in a later pass.
+            continue
+        assign = assign_of.get(hdef.name)
+        lhs = assign.targets[0] if assign is not None else None
+        hret_shape, hret_dtype = _helper_return_array_shape(lhs, arr_by, kernel_fn)
+        hfn = copy.deepcopy(hdef)
+        pnames = [a.arg for a in hfn.args.args]
+        _inline_module_constants(tree, hfn, pnames)
+        # Same native-backend desugars the kernel body already ran (BUG-3: a helper
+        # that survives inlining kept its ``np.newaxis`` / ufunc-``out=`` / roll-on-
+        # slice / ``.real`` / ``.ndim``-guard forms). Runs before ``_mark_written_
+        # outputs`` so a ufunc-out / roll rewrite is seen as a write to its target.
+        native_desugar(hfn)
+
+        if hret_shape is None:
+            # SCALAR (by-value) return -- params inferred straight from the call.
+            arrays, scalars, symbols = _infer_helper_params(pnames, call.args, arr_by, sca_by, sym_by, kernel_fn)
+            _mark_written_outputs(hfn, arrays)
+            out.append(KernelIR(
+                tree=hfn, kernel_name=hdef.name, short_name=hdef.name, input_args=list(pnames),
+                symbols=symbols, arrays=arrays, scalars=scalars,
+                source_path=parent.source_path, return_kind="scalar"))
+            continue
+
+        # ARRAY return. Specialize the helper at its call site: fold every literal
+        # arg into the body (``x_gamma_extrapolation`` -> ``False``) and prune the
+        # now-dead branches, so config-only paths (the vcut / gamma branches whose
+        # tuples & sibling-helper calls don't lower) disappear. Then drop the
+        # params left unused -- their args (incl. a bare ``None``) are dropped from
+        # the call too, so signature and call site stay aligned.
+        call_consts = {pn: a for pn, a in zip(pnames, call.args) if isinstance(a, ast.Constant)}
+        if call_consts:
+            _substitute_names(hfn, call_consts)
+            _FoldStaticNoneBranches().visit(hfn)
+            ast.fix_missing_locations(hfn)
+        used = {n.id for n in ast.walk(hfn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+        keep = [(pn, a) for pn, a in zip(pnames, call.args) if pn in used]
+        pnames = [pn for pn, _ in keep]
+        kept_args = [a for _, a in keep]
+        hfn.args.args = [a for a in hfn.args.args if a.arg in used]
+        hfn.args.defaults = []
+        arrays, scalars, symbols = _infer_helper_params(pnames, kept_args, arr_by, sca_by, sym_by, kernel_fn)
+        _mark_written_outputs(hfn, arrays)
+        # The returned array becomes a trailing out-param the body writes into.
+        hret = f"__hret_{hidx}"
+        arrays.append(ArrayDesc(name=hret, dtype=hret_dtype, shape=tuple(hret_shape), is_output=True))
+        # Shape symbols the helper's array params reference (``ngm`` in ``g``'s
+        # ``(3, ngm)``) that are not already passed as args must be received too;
+        # declare them here (so they are not re-promoted) and thread them into the
+        # call in a fixed order.
+        extra_syms = sorted(s for s in _shape_symbols(arrays) if s not in set(pnames))
+        symbols.extend(SymbolDesc(name=s) for s in extra_syms)
+        _rewrite_returns_to_outparam(hfn, hret)
+        out.append(KernelIR(
+            tree=hfn, kernel_name=hdef.name, short_name=hdef.name,
+            input_args=list(pnames) + extra_syms + [hret],
+            symbols=symbols, arrays=arrays, scalars=scalars,
+            source_path=parent.source_path, return_kind=hret))
+        if assign is not None:
+            param_info = {a.name: (a.shape, a.dtype) for a in arrays if a.name != hret}
+            callsite_rewrites[id(assign)] = _build_callsite_stmts(
+                lhs, hdef.name, pnames, kept_args, extra_syms, param_info, hret_shape, hret_dtype, hidx)
+    if callsite_rewrites:
+        _ReplaceStmts(callsite_rewrites).visit(kernel_fn)
+        ast.fix_missing_locations(kernel_fn)
+    return out
 
 
 def _collect_inlinable_helpers(tree: ast.Module, kernel_fn: ast.FunctionDef) -> Dict[str, ast.FunctionDef]:
@@ -2102,6 +2562,26 @@ def _collect_float_preset_names(parameters: Dict, scalars: Dict) -> set:
     return out
 
 
+def _collect_bool_preset_names(parameters: Dict) -> set:
+    """Return preset names whose value is a BOOLEAN -- a runtime boolean CONFIG
+    FLAG (vexx_k's ``okvan`` / ``okpaw`` / ``noncolin`` / ``tqr`` / ``gamma_only``),
+    NOT an integer size symbol. Typed ``bool`` so Fortran declares them
+    ``logical(c_bool)`` and ``if (flag)`` / ``.not. flag`` type-check (C tolerates
+    the int-as-bool spelling; gfortran does not). A name that is a plain integer /
+    float in any preset is excluded (only genuinely-boolean flags qualify)."""
+    plain_bool: set = set()
+    non_bool: set = set()
+    for vals in parameters.values():
+        if not isinstance(vals, dict):
+            continue
+        for k, v in vals.items():
+            if isinstance(v, bool):
+                plain_bool.add(k)
+            elif isinstance(v, (int, float, str)):
+                non_bool.add(k)
+    return plain_bool - non_bool
+
+
 _SHAPE_TUPLE_RE = re.compile(r"^\s*\(\s*(.*?)\s*\)\s*$")
 
 
@@ -2544,6 +3024,35 @@ def _infer_scalar_dtype(default_value) -> str:
 
 # Relocated from numpyto_c.emit (Phase 1): a neutral AST analysis used by
 # both the frontend (helper-inlining int check) and the C int-typing pass.
+def pure_int_arith(n: ast.AST) -> bool:
+    """True when ``n`` is a value-preserving integer computation over Names
+    and int literals -- ``+ - * // %`` (binary), unary ``+ -``, and
+    ``min`` / ``max`` / ``abs`` (which preserve the operand type: int in ->
+    int out). Used to bound the backward int-ness closure in
+    :func:`_names_used_as_int` so it never crosses a float divide, a
+    transcendental call, or -- critically -- an ``int(...)`` TRUNCATION.
+
+    ``int(...)`` is a value-CHANGING truncation, not a pass-through: the
+    result being integer says nothing about the argument's type. Treating
+    it as pure-int lets int-ness flow BACKWARD from an index into a float
+    source (GROMACS ``ri = int(rs)`` with ``rs = rsq * rinv *
+    tab_coul_scale`` mistyped the whole distance chain int and truncated
+    every force to zero). So ``int`` is a BARRIER here, not a pass-through.
+    """
+    if isinstance(n, ast.Name):
+        return True
+    if isinstance(n, ast.Constant):
+        return isinstance(n.value, int) and not isinstance(n.value, bool)
+    if isinstance(n, ast.BinOp):
+        return (isinstance(n.op, (ast.Add, ast.Sub, ast.Mult, ast.FloorDiv, ast.Mod))
+                and pure_int_arith(n.left) and pure_int_arith(n.right))
+    if isinstance(n, ast.UnaryOp):
+        return isinstance(n.op, (ast.USub, ast.UAdd)) and pure_int_arith(n.operand)
+    if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in ("min", "max", "abs")):
+        return all(pure_int_arith(a) for a in n.args)
+    return False
+
+
 def _names_used_as_int(tree: ast.AST) -> Set[str]:
     """Return the set of ``Name`` ids that flow into an integer-only
     position (array subscript, ``range()`` argument). The implicit-
@@ -2635,23 +3144,9 @@ def _names_used_as_int(tree: ast.AST) -> Set[str]:
     # Transitive closure: a Name feeding an int-used local through PURE integer
     # arithmetic is itself integer. ``buf = jbnd - all_start_tmp + iexx_start - 1``
     # (buf later indexes ``exxbuff``) promotes its additive index offsets; the
-    # propagation is bounded to +/-/*///% / min / max / abs / int over Names and
-    # int literals so it never crosses a float divide or a transcendental call.
-    def _pure_int_arith(n: ast.AST) -> bool:
-        if isinstance(n, ast.Name):
-            return True
-        if isinstance(n, ast.Constant):
-            return isinstance(n.value, int) and not isinstance(n.value, bool)
-        if isinstance(n, ast.BinOp):
-            return (isinstance(n.op, (ast.Add, ast.Sub, ast.Mult, ast.FloorDiv, ast.Mod))
-                    and _pure_int_arith(n.left) and _pure_int_arith(n.right))
-        if isinstance(n, ast.UnaryOp):
-            return isinstance(n.op, (ast.USub, ast.UAdd)) and _pure_int_arith(n.operand)
-        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-                and n.func.id in ("min", "max", "abs", "int")):
-            return all(_pure_int_arith(a) for a in n.args)
-        return False
-
+    # propagation is bounded by :func:`pure_int_arith` (``+ - * // %`` / min /
+    # max / abs over Names and int literals) so it never crosses a float divide,
+    # a transcendental call, or an ``int(...)`` truncation.
     assigns = [(node.targets[0].id, node.value) for node in ast.walk(tree)
                if isinstance(node, ast.Assign) and len(node.targets) == 1
                and isinstance(node.targets[0], ast.Name)]
@@ -2659,7 +3154,7 @@ def _names_used_as_int(tree: ast.AST) -> Set[str]:
     while changed:
         changed = False
         for name, rhs in assigns:
-            if name in int_uses and _pure_int_arith(rhs):
+            if name in int_uses and pure_int_arith(rhs):
                 before = len(int_uses)
                 collect(rhs)
                 if len(int_uses) > before:

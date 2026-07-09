@@ -43,8 +43,8 @@ def apply_precision(kir: "KernelIR", precision: Optional[str]) -> "KernelIR":
     """Set the kernel's floating precision ON THE IR, so every emitter
     just reads ``arr.dtype`` -- no per-emit override. Remaps float/complex
     array, scalar and local dtypes to ``precision`` (ints untouched) and
-    records ``tree.float_precision`` so the emitter's default for a temp
-    not listed in ``local_dtypes`` (e.g. a matmul scratch) matches.
+    records :attr:`KernelIR.float_precision` so the emitter's default for a
+    temp not listed in ``local_dtypes`` (e.g. a matmul scratch) matches.
 
     ``precision`` of ``None``/empty is a no-op (each dtype keeps its
     declared value -- the natural fp64 path).
@@ -55,11 +55,9 @@ def apply_precision(kir: "KernelIR", precision: Optional[str]) -> "KernelIR":
         arr.dtype = _apply_precision(arr.dtype, precision)
     for sca in kir.scalars:
         sca.dtype = _apply_precision(sca.dtype, precision)
-    local_dtypes = vars(kir.tree).get("local_dtypes")
-    if local_dtypes:
-        for name, dt in list(local_dtypes.items()):
-            local_dtypes[name] = _apply_precision(dt, precision)
-    kir.tree.float_precision = precision   # type: ignore[attr-defined]
+    for name, dt in list(kir.local_dtypes.items()):
+        kir.local_dtypes[name] = _apply_precision(dt, precision)
+    kir.float_precision = precision
     return kir
 
 
@@ -157,6 +155,44 @@ class KernelIR:
     #: layout (CSR / CSC / ...). Empty for dense kernels. Consumed by
     #: the matmul hoister to route ``A @ B`` through the sparse path.
     sparse: Dict[str, "SparseArrayDesc"] = field(default_factory=dict)
+    #: One sub-:class:`KernelIR` per top-level helper that is CALLED in the kernel
+    #: body but could not be inlined (an early ``return`` / recursion). Built by
+    #: :func:`parse_kernel` (params inferred from the call site) and lowered by
+    #: :func:`lower`; every emitter emits each as its own native function, so the
+    #: early ``return`` is just a native ``return``.
+    helpers: List["KernelIR"] = field(default_factory=list)
+    #: When this KernelIR IS a helper: how its value comes back --
+    #: ``None`` for a void/in-place helper, ``"scalar"`` for a by-value return
+    #: (the return dtype is the sole :attr:`scalars` entry marked ``is_output``),
+    #: or the out-parameter array name for an array return.
+    return_kind: Optional[str] = None
+    # ------------------------------------------------------------------
+    # Lowering side-tables. Populated by :func:`numpyto_common.lowering.lower`
+    # (empty on a freshly-parsed IR) and consumed by every emitter. They live
+    # on the IR -- not monkey-patched onto ``tree.__dict__`` -- so a reader is a
+    # typed field access (``kir.local_dtypes``) with a sane empty default, never
+    # a ``getattr(kir.tree, ...)`` with a hand-repeated fallback.
+    # ------------------------------------------------------------------
+    #: Loop-index / tuple-unpack integer locals the emitter must declare ``int``.
+    int_locals: List[str] = field(default_factory=list)
+    #: Local-name -> numpy dtype tag for body locals (``"complex128"``, ``"int64"``,
+    #: ``"bool_"``) the signature does not carry. Drives temp declarations.
+    local_dtypes: Dict[str, str] = field(default_factory=dict)
+    #: Local-name -> shape tuple of token strings for harvested / lifted local
+    #: arrays (``np.zeros`` temps, matmul scratch, slice-fusion lifts).
+    zeros_locals: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
+    #: Local-name -> constructor kind (``"zeros"`` / ``"ones"`` / ``"empty"`` /
+    #: ...) so the emitter re-initialises a local that aliases an output buffer.
+    zeros_fills: Dict[str, str] = field(default_factory=dict)
+    #: Scalar call-hoist temp names (declared as plain float locals by the emit
+    #: walker's implicit-local logic; kept for completeness / diagnostics).
+    scalar_call_temps: List[str] = field(default_factory=list)
+    #: Local-name -> FIFO of per-reassignment shapes (SSA-versioned locals whose
+    #: broadcast extent changes between writes), consumed in source order at emit.
+    reassign_shapes: Dict[str, List[Tuple[str, ...]]] = field(default_factory=dict)
+    #: Floating precision the sweep pinned (``"float32"`` / ...); the emitter's
+    #: default dtype for a temp not in ``local_dtypes``. ``None`` = natural fp64.
+    float_precision: Optional[str] = None
 
     def param_order(self) -> List[str]:
         """Return the argument names in **ABI order**.
@@ -176,15 +212,3 @@ class KernelIR:
         refs = sorted(a.name for a in self.arrays)
         scalars = sorted([s.name for s in self.symbols] + [s.name for s in self.scalars])
         return refs + scalars
-
-    def is_array(self, name: str) -> bool:
-        return any(a.name == name for a in self.arrays)
-
-    def is_symbol(self, name: str) -> bool:
-        return any(s.name == name for s in self.symbols)
-
-    def find_array(self, name: str) -> Optional[ArrayDesc]:
-        for a in self.arrays:
-            if a.name == name:
-                return a
-        return None

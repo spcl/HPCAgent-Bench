@@ -36,11 +36,6 @@ def set_override(dotted: str, value: Any) -> None:
     _OVERRIDES[dotted] = value
 
 
-def clear_overrides() -> None:
-    """Drop all runtime overrides (mainly for tests)."""
-    _OVERRIDES.clear()
-
-
 def _coerce(s: str) -> Any:
     low = s.lower()
     if low in ("true", "false"):

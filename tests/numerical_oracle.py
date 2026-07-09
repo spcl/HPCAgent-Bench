@@ -428,40 +428,69 @@ def run_kernel(short: str,
     td_ctx = tempfile.TemporaryDirectory()
     tdp = pathlib.Path(td_ctx.name)
     try:
-        if not _emit(short, info, tdp, precision=emit_prec):
-            return {b: "FAIL:emit" for b in BACKENDS}
         # Canonical native name carries the fp tag: <short>[_<sparse>]_<fptype>.
         fptype = "fp32" if emit_prec == "float32" else "fp64"
-        # Resolve binding + sources by glob: emitted filenames use the
-        # SHORT name while binding["sources"] may use the normalized
-        # func_name (jacobi_2d -> jacobi2d), so trust the files.
-        bindings = list(tdp.glob(f"*_{fptype}_binding.json"))
-        if not bindings:
-            return {b: "FAIL:no-binding" for b in BACKENDS}
-        binding = json.loads(bindings[0].read_text())
+        # The native (C/C++/Fortran) emit is shared by exactly those three
+        # backends. The Python/JIT backends (numba/pythran/cupy) and jax emit
+        # from the numpy source INDEPENDENTLY, so a native-emit failure must not
+        # short-circuit the whole oracle -- a kernel the dense native translator
+        # can't lower yet (vexx_k's ``np.linalg.inv``/``det`` + None-literal call
+        # arg) is still validated under jax. Record the native failure and keep
+        # going; the native backends below report it, the rest still run.
+        binding = None
+        native_emit_error = None
+        if not _emit(short, info, tdp, precision=emit_prec):
+            native_emit_error = "FAIL:emit"
+        else:
+            # Resolve binding + sources by glob: emitted filenames use the
+            # SHORT name while binding["sources"] may use the normalized
+            # func_name (jacobi_2d -> jacobi2d), so trust the files.
+            bindings = list(tdp.glob(f"*_{fptype}_binding.json"))
+            if not bindings:
+                native_emit_error = "FAIL:no-binding"
+            else:
+                binding = json.loads(bindings[0].read_text())
         # Derive shape SYMBOLS from the actual input-array dimensions. A
-        # binding scalar symbol can name an input array's extent rather than a
-        # preset parameter (needleman_wunsch's ``M = a.shape[0]``); such a
-        # symbol isn't in the preset, so -- exactly like a real caller -- read
-        # it off the data. Match each provided input array's binding shape
-        # tokens to its concrete numpy shape and bind any bare-identifier token
-        # (skip compound extents like ``M+1`` and never override a preset).
-        for a in binding["args"]:
-            if not a["kind"].startswith("ptr_"):
-                continue
-            arr = by.get(a["name"])
-            if not isinstance(arr, np.ndarray):
-                continue
-            for tok, dim in zip(a.get("shape", []) or [], arr.shape):
-                tok = str(tok)
-                if tok.isidentifier() and tok not in syms:
-                    syms[tok] = int(dim)
-        # A ptr arg the initializer did not provide is an OUTPUT the
-        # kernel writes (a return value or an internal allocation, e.g.
-        # covariance ``cov``, nussinov ``table``). Allocate a buffer for
-        # each so the C call has somewhere to write.
-        ptr_args = [a for a in binding["args"] if a["kind"].startswith("ptr_")]
-        extra_outputs = [a["name"] for a in ptr_args if a["name"] not in by and a["name"] not in syms]
+        # scalar symbol can name an input array's extent rather than a preset
+        # parameter (needleman_wunsch's ``M = a.shape[0]``); such a symbol isn't
+        # in the preset, so -- exactly like a real caller -- read it off the
+        # data. With a binding, use its declared arg shapes; without one (native
+        # emit failed) fall back to the spec's symbolic init shapes so the
+        # jax/py path still resolves data-derived extents. Bind any bare-
+        # identifier token (skip compound extents like ``M+1``, never override a
+        # preset).
+        if binding is not None:
+            for a in binding["args"]:
+                if not a["kind"].startswith("ptr_"):
+                    continue
+                arr = by.get(a["name"])
+                if not isinstance(arr, np.ndarray):
+                    continue
+                for tok, dim in zip(a.get("shape", []) or [], arr.shape):
+                    tok = str(tok)
+                    if tok.isidentifier() and tok not in syms:
+                        syms[tok] = int(dim)
+        else:
+            for nm, shp in (spec.init.shapes or {}).items():
+                arr = by.get(nm)
+                if not isinstance(arr, np.ndarray):
+                    continue
+                toks = [t.strip() for t in str(shp).strip("()").split(",") if t.strip()]
+                for tok, dim in zip(toks, arr.shape):
+                    if tok.isidentifier() and tok not in syms:
+                        syms[tok] = int(dim)
+        # An output the initializer did not provide is one the kernel writes (a
+        # return value or an internal allocation, e.g. covariance ``cov``,
+        # nussinov ``table``). With a binding these are its unfilled ptr args;
+        # without one, the output_args the init left unset. The native C call
+        # needs a buffer for each (allocated below); jax/py read them from the
+        # kernel's return, so ``ptr_args`` staying empty here is harmless.
+        if binding is not None:
+            ptr_args = [a for a in binding["args"] if a["kind"].startswith("ptr_")]
+            extra_outputs = [a["name"] for a in ptr_args if a["name"] not in by and a["name"] not in syms]
+        else:
+            ptr_args = []
+            extra_outputs = [nm for nm in out_args if nm not in by and nm not in syms]
 
         # numpy oracle on private input copies (in-place mutation captured).
         npd = {n: (v.copy() if isinstance(v, np.ndarray) else v) for n, v in by.items()}
@@ -553,6 +582,9 @@ def run_kernel(short: str,
         for backend in BACKENDS:
             if only_backends is not None and backend not in only_backends:
                 continue
+            if native_emit_error is not None:
+                status[backend] = native_emit_error
+                continue
             matches = sorted(tdp.glob(f"*_{fptype}{_ext[backend]}"))
             if not matches:
                 status[backend] = "FAIL:no-source"
@@ -579,7 +611,11 @@ def run_kernel(short: str,
         # legacy correctness suites that scan the whole status dict for FAIL) never
         # sees a pluto entry. The e2e gate + generator pass only_backends=E2E_BACKENDS.
         if only_backends is not None and PLUTO in only_backends:
-            status[PLUTO] = _run_pluto(tdp, short, fptype, binding, by, syms, expected, compare, rtol, atol)
+            # Pluto transforms the emitted C source, so it inherits the native
+            # emit failure (no source to polyhedrally optimize).
+            status[PLUTO] = (native_emit_error
+                             if native_emit_error is not None else _run_pluto(
+                                 tdp, short, fptype, binding, by, syms, expected, compare, rtol, atol))
         # Python/JIT backends (numba / pythran / cupy): skip cleanly when
         # the dependency is absent, else emit + run + compare like above.
         for pb in PY_BACKENDS:

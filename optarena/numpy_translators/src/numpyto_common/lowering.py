@@ -33,8 +33,9 @@ inert until a kernel that uses them lands.
 
 import ast
 import copy
+import os
 import re
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 
 import sympy
 
@@ -844,17 +845,21 @@ class _EnumerateZipRewriter(ast.NodeTransformer):
         return node
 
 
-class _TransposeAttrRewriter(ast.NodeTransformer):
-    """Replace ``A.T`` (the numpy transpose property) with
-    ``np.transpose(A)`` so the existing LibNodeRewriter / matmul
-    pipeline can hoist + lower it uniformly.
+class _TransposeRewriter(ast.NodeTransformer):
+    """Normalize both transpose spellings to the ``np.transpose(A[, axes])``
+    function form so the single ``expand_transpose`` path serves every spelling:
+
+    * the property ``A.T`` -> ``np.transpose(A)``;
+    * the method ``A.transpose()`` / ``A.transpose(axes)`` / ``A.transpose(1, 0)``
+      -> ``np.transpose(A[, (axes)])`` (the varargs ints are packed into a tuple).
     """
 
     def __init__(self, sparse_names=None):
-        #: Logical sparse matrices whose ``A.T`` must stay a transpose ATTRIBUTE
-        #: -- the sparse matmul hoister turns ``A.T @ x`` into a transpose SpMV
-        #: on A's own buffers (CSR<->CSC). Densifying it via np.transpose would
-        #: index the sparse buffers as a dense 2-D matrix (wrong + uncompilable).
+        #: Logical sparse matrices whose ``A.T`` / ``A.transpose()`` must stay a
+        #: transpose ATTRIBUTE/method -- the sparse matmul hoister turns ``A.T @
+        #: x`` into a transpose SpMV on A's own buffers (CSR<->CSC). Densifying it
+        #: via np.transpose would index the sparse buffers as a dense 2-D matrix
+        #: (wrong + uncompilable).
         self.sparse_names = set(sparse_names or ())
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
@@ -869,6 +874,26 @@ class _TransposeAttrRewriter(ast.NodeTransformer):
                 args=[node.value],
                 keywords=[])
         return node
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        self.generic_visit(node)
+        f = node.func
+        if not (isinstance(f, ast.Attribute) and f.attr == "transpose"):
+            return node
+        if isinstance(f.value, ast.Name) and f.value.id in ("np", "numpy"):
+            return node  # already the ``np.transpose(...)`` function form
+        if isinstance(f.value, ast.Name) and f.value.id in self.sparse_names:
+            return node  # sparse transpose stays a method on its own buffers
+        base = f.value
+        if len(node.args) == 1 and isinstance(node.args[0], (ast.Tuple, ast.List)):
+            args = [base, node.args[0]]            # x.transpose((1, 0))
+        elif node.args:
+            args = [base, ast.Tuple(elts=list(node.args), ctx=ast.Load())]  # x.transpose(1, 0)
+        else:
+            args = [base]                          # x.transpose() -- full reverse
+        return ast.copy_location(
+            ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="transpose", ctx=ast.Load()),
+                     args=args, keywords=[]), node)
 
 
 class _ShapeMidExpressionRewriter(ast.NodeTransformer):
@@ -900,6 +925,20 @@ class _ShapeMidExpressionRewriter(ast.NodeTransformer):
             if shape and 0 <= node.slice.value < len(shape):
                 return _token_to_ast(shape[node.slice.value])
         self.generic_visit(node)
+        return node
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        self.generic_visit(node)
+        # ``len(arr)`` -> the array's FIRST-dim size symbol (numpy ``len`` is
+        # ``shape[0]``). C / C++ have no array ``len`` and Fortran's ``len`` is
+        # the CHARACTER-length intrinsic, so the literal call fails to compile;
+        # the python backends (numba / pythran / jax) run the body verbatim and
+        # keep the builtin, so they never reach this native-only rewriter.
+        if (isinstance(node.func, ast.Name) and node.func.id == "len" and len(node.args) == 1 and not node.keywords
+                and isinstance(node.args[0], ast.Name)):
+            shape = self.arrays_shapes.get(node.args[0].id)
+            if shape:
+                return _token_to_ast(shape[0])
         return node
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
@@ -934,20 +973,31 @@ class _ShapeMidExpressionRewriter(ast.NodeTransformer):
 
 
 class _BuiltinCastRewriter(ast.NodeTransformer):
-    """Drop Python's ``float(x)`` / ``int(x)`` casts on the kernel body.
+    """Drop Python's ``float(x)`` cast on the kernel body.
 
     In C / Fortran the surrounding operation promotes int -> double
-    automatically; the explicit cast Python uses for division
-    semantics is unnecessary (and the emitter would otherwise produce
-    ``float(x)`` literally, which is not valid C).
-    """
+    automatically, so the ``float(x)`` Python uses for division
+    semantics is a genuine no-op (and the emitter would otherwise
+    produce ``float(x)`` literally, which is not valid C).
 
-    _DROP_CALLS = {"float", "int"}
+    ``int(x)`` is NOT dropped: it is a value-changing TRUNCATION, not a
+    no-op. Dropping it relied on the target being int-declared so the
+    assignment truncated implicitly -- but that is fragile (``y =
+    int(x) + 0.5`` with a double ``y`` would silently keep the fraction)
+    and, worse, it erases the barrier that keeps int-ness from
+    propagating BACKWARD into a float source: after ``ri = int(rs)``
+    became ``ri = rs``, the used-as-int analysis walked from the
+    index ``ri`` into ``rs`` and mistyped the whole GROMACS distance
+    chain (``rsq``/``rinv``/``dx``) as int, truncating every force to
+    zero. Every native emitter already renders a bare ``int(x)`` (C/C++
+    ``(int)(x)``, Fortran ``INT(x, kind)``), so leaving it in place is
+    both correct and faithful.
+    """
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
         if (isinstance(node.func, ast.Name)
-                and node.func.id in self._DROP_CALLS
+                and node.func.id == "float"
                 and len(node.args) == 1):
             return node.args[0]
         return node
@@ -1471,6 +1521,68 @@ class _FullLikeRewriter(ast.NodeTransformer):
         return [alloc, fill]
 
 
+class _EyeToZerosDiagonal(ast.NodeTransformer):
+    """``X = np.eye(n)`` / ``np.eye(m, n)`` / ``np.identity(n)`` -> a zeros
+    allocation plus an explicit diagonal fill::
+
+        X = np.zeros((n, n))            # or (m, n)
+        for __eye<k> in range(n):       # range(min(m, n)) when rectangular
+            X[__eye<k>, __eye<k>] = 1.0
+
+    Built from primitives every backend already lowers (``np.zeros`` + a loop +
+    a scalar store), so no per-emitter identity path is needed. The zeros
+    harvest then declares X and picks up the ``(n, n)`` shape as usual. Native
+    lowering only -- the python backends keep the builtin ``np.eye``.
+    """
+
+    def __init__(self):
+        self._n = 0
+
+    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+        self.generic_visit(node)
+        v = node.value
+        if not (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and isinstance(v, ast.Call)
+                and isinstance(v.func, ast.Attribute) and v.func.attr in ("eye", "identity")
+                and isinstance(v.func.value, ast.Name) and v.func.value.id in ("np", "numpy") and v.args):
+            return node
+        tgt = node.targets[0].id
+        rows = v.args[0]
+        # ``eye(m, n)`` with a real second extent is rectangular (diagonal =
+        # min(m, n)); ``eye(n)`` / ``identity(n)`` (or ``eye(n, None)``) is square.
+        rectangular = (v.func.attr == "eye" and len(v.args) >= 2
+                       and not (isinstance(v.args[1], ast.Constant) and v.args[1].value is None))
+        if rectangular:
+            cols = v.args[1]
+            diag = ast.Call(func=ast.Name(id="min", ctx=ast.Load()),
+                            args=[copy.deepcopy(rows), copy.deepcopy(cols)], keywords=[])
+        else:
+            cols = copy.deepcopy(rows)
+            diag = copy.deepcopy(rows)
+        dtype_kw = [kw for kw in v.keywords if kw.arg == "dtype"]
+        zeros = ast.Assign(
+            targets=[ast.Name(id=tgt, ctx=ast.Store())],
+            value=ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="zeros", ctx=ast.Load()),
+                           args=[ast.Tuple(elts=[copy.deepcopy(rows), cols], ctx=ast.Load())], keywords=dtype_kw))
+        it = f"__diag{self._n}"
+        self._n += 1
+        loop = ast.For(
+            target=ast.Name(id=it, ctx=ast.Store()),
+            iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[diag], keywords=[]),
+            body=[ast.Assign(
+                targets=[ast.Subscript(
+                    value=ast.Name(id=tgt, ctx=ast.Load()),
+                    slice=ast.Tuple(elts=[ast.Name(id=it, ctx=ast.Load()),
+                                          ast.Name(id=it, ctx=ast.Load())], ctx=ast.Load()),
+                    ctx=ast.Store())],
+                value=ast.Constant(value=1.0))],
+            orelse=[])
+        for s in (zeros, loop):
+            ast.copy_location(s, node)
+        ast.fix_missing_locations(zeros)
+        ast.fix_missing_locations(loop)
+        return [zeros, loop]
+
+
 class _ZerosRewriter(ast.NodeTransformer):
     """Turn ``x = np.zeros((N, K))`` (and family) into a side-table entry.
 
@@ -1557,14 +1669,6 @@ def _shape_from_ast(node, shape_table=None) -> Tuple[str, ...]:
 _DEFAULT_SLICE_START = "0"
 
 
-def _slice_dim_count(node: ast.Subscript) -> int:
-    """Return the number of dim entries the subscript carries."""
-    sl = node.slice
-    if isinstance(sl, ast.Tuple):
-        return len(sl.elts)
-    return 1
-
-
 def _slice_dims(node: ast.Subscript) -> List[ast.AST]:
     """Return per-axis slice entries (either ``Slice`` or non-slice index)."""
     sl = node.slice
@@ -1578,6 +1682,85 @@ def _has_any_slice(node: ast.AST) -> bool:
     if not isinstance(node, ast.Subscript):
         return False
     return any(isinstance(d, ast.Slice) for d in _slice_dims(node))
+
+
+def _is_full_slice(node: ast.AST) -> bool:
+    """``True`` for a bare ``:`` slice (no lower / upper / step)."""
+    return (isinstance(node, ast.Slice) and node.lower is None
+            and node.upper is None and node.step is None)
+
+
+class _CollapseChainedSubscripts(ast.NodeTransformer):
+    """Collapse a chained subscript ``A[i][j]`` into a single ``A[i, j]``.
+
+    Helper inlining leaves chained indexing where the source sliced a view then
+    indexed it -- vexx_k's ``tabxx_qr[ia][:, ijtoh[ih, jh]]`` (a real-space
+    Q-table column) and ``becxx[:, jbnd, ikq][ikb]`` (a beta-projection row).
+    numpy basic indexing associates: ``A[i][rest] == A[i, rest]`` for a scalar
+    ``i``, and an index applied to a full-slice axis selects that axis
+    (``A[:, j, k][m] == A[m, j, k]``). Flattening to a SINGLE subscript up front
+    lets every downstream shape harvest / scalarizer / scatter path treat the
+    access uniformly, instead of mis-mapping a loop iterator onto the inner ``:``
+    (which corrupts the fancy-scatter store and the dot-product operand).
+
+    Conservative: only collapses when the base is a known-shape array, every inner
+    index is a scalar or a FULL ``:`` slice, and the outer indices fit the
+    surviving (slice + trailing) axes -- any partial slice, strided slice, gather,
+    or ``newaxis`` in the inner subscript is left untouched.
+    """
+
+    def __init__(self, shape_table: Dict[str, Tuple[str, ...]]):
+        self.shape_table = shape_table
+
+    def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        self.generic_visit(node)  # collapse inner chains first (bottom-up)
+        inner = node.value
+        if not isinstance(inner, ast.Subscript) or not isinstance(inner.value, ast.Name):
+            return node
+        base_shape = self.shape_table.get(inner.value.id)
+        if not base_shape:
+            return node
+        inner_idx = _slice_dims(inner)
+        outer_idx = _slice_dims(node)
+        # A newaxis or ellipsis in either subscript shifts the axis alignment by an
+        # unknown number of axes -- basic-index associativity no longer holds, bail.
+        if any(isinstance(x, ast.Constant) and (x.value is None or x.value is Ellipsis)
+               for x in inner_idx + outer_idx):
+            return node
+        # Map inner indices onto base axes: a full ``:`` survives as a result axis,
+        # a scalar consumes its axis. Anything else (partial / strided slice, or a
+        # fancy index-array) bails.
+        new_idx: List[ast.AST] = []
+        result_axes: List[int] = []
+        for ix in inner_idx:
+            if _is_full_slice(ix):
+                result_axes.append(len(new_idx))
+                new_idx.append(ix)
+            elif isinstance(ix, ast.Slice):
+                return node
+            elif isinstance(ix, ast.Name) and ix.id in self.shape_table:
+                # An inner index that is itself an ARRAY is a fancy GATHER, not a
+                # scalar axis-consume: ``A[idx][j] == A[idx[j]]`` (a gathered row),
+                # NOT the ``A[idx, j]`` a collapse would emit. numpy basic-index
+                # associativity does not hold for an advanced index, so leave the
+                # chain untouched (the docstring's gather exclusion).
+                return node
+            else:
+                new_idx.append(ix)
+        # Base axes the inner subscript did not name are trailing result axes.
+        trailing = len(base_shape) - len(new_idx)
+        if trailing < 0:
+            return node
+        for _ in range(trailing):
+            result_axes.append(len(new_idx))
+            new_idx.append(ast.Slice())
+        # The outer indices apply positionally to the surviving result axes.
+        if len(outer_idx) > len(result_axes):
+            return node
+        for oi, ax in zip(outer_idx, result_axes):
+            new_idx[ax] = oi
+        slot = new_idx[0] if len(new_idx) == 1 else ast.Tuple(elts=new_idx, ctx=ast.Load())
+        return ast.copy_location(ast.Subscript(value=inner.value, slice=slot, ctx=node.ctx), node)
 
 
 def _name_of_subscript(node: ast.Subscript) -> Optional[str]:
@@ -1804,6 +1987,60 @@ def _fold_subarray_aliases(tree: ast.AST, array_shapes: Dict[str, List[str]]) ->
     ast.fix_missing_locations(tree)
 
 
+class _FlattenChainedSubscripts(ast.NodeTransformer):
+    """Flatten a chained subscript ``B[inner][outer]`` into ONE combined subscript
+    ``B[combined]`` -- the outer index addresses the axes the inner FULL-slices, in
+    order. ``deexx[:, ii][ikb]`` -> ``deexx[ikb, ii]``; ``tabxx_qr[ia, :, :][:, k]``
+    -> ``tabxx_qr[ia, :, k]``. Unlike :func:`_fold_subarray_aliases` (scalar-prefix
+    aliases), this handles slices interleaved in the inner index and applies to any
+    chained subscript, not just single-assign aliases -- the QE ultrasoft
+    augmentation reads ``tabxx_qr[ia][:, ijtoh[ih, jh]]`` / ``deexx[:, ii][ikb]``.
+    A non-full inner slice (``a[1:5][k]``) carries an offset the flat combine can't
+    express, so it is left untouched."""
+
+    def __init__(self, shapes: Dict[str, List[str]]):
+        self.shapes = shapes
+
+    @staticmethod
+    def _is_full_slice(e) -> bool:
+        return isinstance(e, ast.Slice) and e.lower is None and e.upper is None and e.step is None
+
+    @staticmethod
+    def _is_special(e) -> bool:  # np.newaxis (``None``) / Ellipsis -- rank-shifting
+        return isinstance(e, ast.Constant) and (e.value is None or e.value is Ellipsis)
+
+    def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        self.generic_visit(node)  # flatten inner chains first (bottom-up)
+        inner = node.value
+        if not (isinstance(inner, ast.Subscript) and isinstance(inner.value, ast.Name)):
+            return node
+        shape = self.shapes.get(inner.value.id)
+        if not shape:
+            return node
+        rank = len(shape)
+        inner_idx = list(inner.slice.elts) if isinstance(inner.slice, ast.Tuple) else [inner.slice]
+        if len(inner_idx) > rank or any(self._is_special(e) for e in inner_idx):
+            return node
+        inner_idx = inner_idx + [ast.Slice() for _ in range(rank - len(inner_idx))]  # pad trailing ``:``
+        if any(isinstance(e, ast.Slice) and not self._is_full_slice(e) for e in inner_idx):
+            return node
+        outer_idx = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
+        n_kept = sum(1 for e in inner_idx if isinstance(e, ast.Slice))
+        if len(outer_idx) != n_kept or any(self._is_special(e) for e in outer_idx):
+            return node
+        combined: List[ast.expr] = []
+        oi = 0
+        for e in inner_idx:
+            if isinstance(e, ast.Slice):
+                combined.append(copy.deepcopy(outer_idx[oi]))
+                oi += 1
+            else:
+                combined.append(copy.deepcopy(e))
+        sl = ast.Tuple(elts=combined, ctx=ast.Load()) if len(combined) > 1 else combined[0]
+        return ast.copy_location(
+            ast.Subscript(value=ast.Name(id=inner.value.id, ctx=ast.Load()), slice=sl, ctx=node.ctx), node)
+
+
 class SliceFusion(ast.NodeTransformer):
     """Rewrite slice-bearing assignments into a single fused loop.
 
@@ -1869,7 +2106,7 @@ class SliceFusion(ast.NodeTransformer):
                 raise NotImplementedError("slice step != 1 not supported")
             start = self._resolve_bound(d.lower, lhs_name, axis, default=_const(0))
             stop = self._resolve_bound(d.upper, lhs_name, axis,
-                                       default=self._axis_length(lhs_name, axis))
+                                       default=lambda: self._axis_length(lhs_name, axis))
             ranges.append((start, stop))
         # Build the per-axis scalarisation: iter var ``i_axis`` ranging
         # ``[start, stop)``; every RHS subscript gets the iter var
@@ -1934,7 +2171,7 @@ class SliceFusion(ast.NodeTransformer):
         return _token_to_ast(shape[axis])
 
     def _resolve_bound(self, bound: Optional[ast.AST], array_name: str,
-                       axis: int, default: ast.AST) -> ast.AST:
+                       axis: int, default) -> ast.AST:
         """Resolve a slice bound, expanding numpy's negative-index form.
 
         A bound of ``None`` -> ``default`` (typically 0 for start,
@@ -1942,9 +2179,15 @@ class SliceFusion(ast.NodeTransformer):
         ``UnaryOp(USub, Constant)``) -> ``axis_length - K``. All other
         bounds pass through unchanged so symbolic expressions like
         ``N-1`` survive.
+
+        ``default`` may be a plain AST node or a zero-arg callable
+        producing one; the stop bound's default calls ``_axis_length``,
+        which can raise ``NotImplementedError`` on an array with unknown
+        shape, so it must only be evaluated when the bound is actually
+        omitted -- not on every explicit-stop slice (e.g. ``a[:n]``).
         """
         if bound is None:
-            return default
+            return default() if callable(default) else default
         if isinstance(bound, ast.Constant) and isinstance(bound.value, int) and bound.value < 0:
             return _binop(self._axis_length(array_name, axis),
                           ast.Sub(), _const(-bound.value))
@@ -2071,9 +2314,24 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
             if isinstance(start, ast.Constant) and start.value == 0:
                 elts.append(ivar)
             else:
-                elts.append(_binop(ivar, ast.Sub(), start))
+                # Copy the shared ``start`` node (also the loop-header bound) so the
+                # bare-operand offset does not alias it into two tree positions.
+                elts.append(_binop(ivar, ast.Sub(), copy.deepcopy(start)))
         slot = elts[0] if len(elts) == 1 else ast.Tuple(elts=elts, ctx=ast.Load())
         return ast.Subscript(value=node, slice=slot, ctx=ast.Load())
+
+    @staticmethod
+    def _iter_minus_start(iter_name: ast.Name, start: ast.AST) -> ast.AST:
+        """The LOCAL result position ``iter - lhs_start`` (or just ``iter`` when the
+        LHS slice starts at 0). A gather-index array / trailing source axis reads at
+        its 0-based position within the slice, not the absolute destination index."""
+        iv = ast.Name(id=iter_name.id, ctx=ast.Load())
+        if isinstance(start, ast.Constant) and start.value == 0:
+            return iv
+        # Copy ``start``: it is the SAME node object as the loop-header ``range``
+        # lower bound, so embedding it directly would alias one mutable subtree into
+        # two live tree positions (a later in-place rewrite of one corrupts both).
+        return _binop(iv, ast.Sub(), copy.deepcopy(start))
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
         # Pure broadcast-reshape on a NON-Name value (a BinOp / Call result):
@@ -2126,8 +2384,11 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
             if (source_shape is not None
                     and any(isinstance(d, ast.Name) and self.array_shapes.get(d.id)
                             for d in dims)):
-                lhs_iters = [iv for iv, dim in zip(self.iter_vars, self.lhs_dims)
+                lhs_pairs = [(iv, rng[0]) for iv, dim, rng in
+                             zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
                              if isinstance(dim, ast.Slice) and iv is not None]
+                lhs_iters = [iv for iv, _ in lhs_pairs]
+                lhs_starts = [st for _, st in lhs_pairs]
                 n_trailing = len(source_shape) - len(dims)
                 result_rank = sum(
                     (len(self.array_shapes[d.id])
@@ -2140,8 +2401,14 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
                     for axis, d in enumerate(dims):
                         if isinstance(d, ast.Name) and self.array_shapes.get(d.id):
                             r = len(self.array_shapes[d.id])
-                            giters = [ast.Name(id=lhs_iters[pos + k].id,
-                                               ctx=ast.Load()) for k in range(r)]
+                            # The gather INDEX is the LOCAL result position, so read
+                            # it at ``iter - lhs_start`` -- a slice assignment into a
+                            # non-zero-start destination (vexx_k noncolin
+                            # ``big_result[ip*n:ip*n+n] -= rg[nlg]``, ip=1) must read
+                            # ``nlg[si0 - ip*n]``, not ``nlg[si0]`` (which runs off
+                            # the length-n index array).
+                            giters = [self._iter_minus_start(lhs_iters[pos + k], lhs_starts[pos + k])
+                                      for k in range(r)]
                             pos += r
                             gslot = (giters[0] if r == 1
                                      else ast.Tuple(elts=giters, ctx=ast.Load()))
@@ -2150,7 +2417,7 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
                         else:
                             new_elts.append(self._resolve_scalar_index(d, name, axis))
                     for _ in range(max(0, n_trailing)):
-                        new_elts.append(ast.Name(id=lhs_iters[pos].id, ctx=ast.Load()))
+                        new_elts.append(self._iter_minus_start(lhs_iters[pos], lhs_starts[pos]))
                         pos += 1
                     slot = (new_elts[0] if len(new_elts) == 1
                             else ast.Tuple(elts=new_elts, ctx=ast.Load()))
@@ -2159,12 +2426,18 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
                     and len(dims) < len(source_shape)
                     and not any(isinstance(d, ast.Constant) and d.value is None
                                 for d in dims)):
-                lhs_iters = [iv for iv, dim in zip(self.iter_vars, self.lhs_dims)
+                lhs_pairs = [(iv, rng[0]) for iv, dim, rng in
+                             zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
                              if isinstance(dim, ast.Slice) and iv is not None]
                 n_trailing = len(source_shape) - len(dims)
-                if 0 < n_trailing <= len(lhs_iters):
-                    pad = [ast.Name(id=iv.id, ctx=ast.Load())
-                           for iv in lhs_iters[-n_trailing:]]
+                if 0 < n_trailing <= len(lhs_pairs):
+                    # The implicit trailing source axes read at the LOCAL slice
+                    # position ``iter - lhs_start`` -- a partial-scalar read
+                    # (``out[k:k+m] = dH[a, b]``) into a NON-zero-start destination
+                    # must span the source's length-``m`` trailing axis from 0, not
+                    # from ``k`` (the sibling gather branch applies the same offset).
+                    pad = [self._iter_minus_start(iv, st)
+                           for iv, st in lhs_pairs[-n_trailing:]]
                     new_slice = ast.Tuple(elts=list(dims) + pad, ctx=ast.Load())
                     return ast.Subscript(value=node.value, slice=new_slice,
                                          ctx=node.ctx)
@@ -2219,7 +2492,11 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
             if isinstance(d, ast.Name) and self.array_shapes.get(d.id):
                 r = len(self.array_shapes[d.id])
                 if align + rhs_slice_idx + r <= len(lhs_slice_iters):
-                    giters = [ast.Name(id=lhs_slice_iters[align + rhs_slice_idx + k][0].id, ctx=ast.Load())
+                    # Gather index reads at the LOCAL result position (iter - start),
+                    # so a non-zero-start LHS slice indexes the length-matched index
+                    # array within bounds.
+                    giters = [self._iter_minus_start(lhs_slice_iters[align + rhs_slice_idx + k][0],
+                                                     lhs_slice_iters[align + rhs_slice_idx + k][1])
                               for k in range(r)]
                     rhs_slice_idx += r
                     gslot = giters[0] if r == 1 else ast.Tuple(elts=giters, ctx=ast.Load())
@@ -2367,15 +2644,6 @@ def _fold_offset(rhs_start: ast.AST, lhs_start: ast.AST) -> Optional[int]:
             and isinstance(lhs_start.value, int)):
         return rhs_start.value - lhs_start.value
     return None
-
-
-def _ast_equal(a: ast.AST, b: ast.AST) -> bool:
-    """Best-effort structural equality on simple Constant / Name nodes."""
-    if isinstance(a, ast.Constant) and isinstance(b, ast.Constant):
-        return a.value == b.value
-    if isinstance(a, ast.Name) and isinstance(b, ast.Name):
-        return a.id == b.id
-    return ast.dump(a) == ast.dump(b)
 
 
 class _DaceMapRewriter(ast.NodeTransformer):
@@ -2964,20 +3232,65 @@ class _LiftFreshArrayFromSlices(ast.NodeTransformer):
         return False
 
 
-def _infer_complex_dtype(expr: ast.AST,
-                         local_dtypes: Dict[str, str]) -> Optional[str]:
-    """Return ``"complex128"`` if ``expr`` produces a complex value,
-    otherwise ``None``. Conservative -- only the ``Constant(complex)``
-    literal and Name references to already-complex arrays count.
-    """
-    for sub in ast.walk(expr):
+#: numpy functions / accessors that return a REAL value even from a COMPLEX
+#: operand. The complex-detection walk must NOT descend into their arguments --
+#: else ``np.abs(z)`` / ``np.real(z)`` / ``z.real`` read as complex and mis-drive
+#: both the lifted-temp dtype (declaring a real magnitude ``complex128``) and the
+#: intrinsic router (``csqrt`` on a real, wrong for a negative operand).
+_REAL_FROM_COMPLEX: FrozenSet[str] = frozenset({"real", "imag", "abs", "absolute", "angle", "hypot", "sign"})
+
+
+def _walk_complex(node: ast.AST, name_dtype: "Callable[[str], Optional[str]]") -> Optional[str]:
+    """Return a complex dtype string if ``node`` produces a complex value, else
+    ``None``. Call-AWARE: a ``np.<real-returning>(...)`` call (:data:`_REAL_FROM_COMPLEX`)
+    or a ``.real`` / ``.imag`` accessor is REAL regardless of complex operands (its
+    arguments are NOT walked); complex-preserving ops (``exp``/``sqrt``/``conj``/
+    arithmetic) are complex iff an operand is. ``name_dtype(id)`` resolves a Name's
+    element dtype. This is the single complex predicate for the lowering + emitters."""
+    if isinstance(node, ast.Constant):
+        return "complex128" if isinstance(node.value, complex) else None
+    if isinstance(node, ast.Name):
+        dt = name_dtype(node.id)
+        return dt if dt and dt.startswith("complex") else None
+    if isinstance(node, ast.Attribute):
+        return None if node.attr in ("real", "imag") else _walk_complex(node.value, name_dtype)
+    if isinstance(node, ast.Subscript):
+        return _walk_complex(node.value, name_dtype)
+    if isinstance(node, (ast.Compare, ast.BoolOp)):
+        return None
+    if isinstance(node, ast.BinOp):
+        return _walk_complex(node.left, name_dtype) or _walk_complex(node.right, name_dtype)
+    if isinstance(node, ast.UnaryOp):
+        return _walk_complex(node.operand, name_dtype)
+    if isinstance(node, ast.IfExp):
+        return _walk_complex(node.body, name_dtype) or _walk_complex(node.orelse, name_dtype)
+    if isinstance(node, ast.Call):
+        fn = (node.func.attr if isinstance(node.func, ast.Attribute)
+              else node.func.id if isinstance(node.func, ast.Name) else None)
+        if fn in _REAL_FROM_COMPLEX:
+            return None
+        for a in node.args:
+            r = _walk_complex(a, name_dtype)
+            if r:
+                return r
+        return None
+    # Unhandled node type -- fall back to a conservative whole-subtree scan.
+    for sub in ast.walk(node):
         if isinstance(sub, ast.Constant) and isinstance(sub.value, complex):
             return "complex128"
         if isinstance(sub, ast.Name):
-            dt = local_dtypes.get(sub.id)
-            if dt is not None and dt.startswith("complex"):
+            dt = name_dtype(sub.id)
+            if dt and dt.startswith("complex"):
                 return dt
     return None
+
+
+def _infer_complex_dtype(expr: ast.AST,
+                         local_dtypes: Dict[str, str]) -> Optional[str]:
+    """Return a complex dtype string if ``expr`` produces a complex value, else
+    ``None``. Delegates to the call-aware :func:`_walk_complex` so a real-returning
+    ufunc / accessor of a complex operand is correctly REAL."""
+    return _walk_complex(expr, local_dtypes.get)
 
 
 def _ctor_complex_tag(call: ast.Call, local_dtypes: Dict[str, str]) -> Optional[str]:
@@ -3009,13 +3322,49 @@ def _scalar_expr_complex(expr: ast.AST, local_dtypes: Dict[str, str]) -> bool:
         return isinstance(expr.value, complex)
     if isinstance(expr, ast.Name):
         return (local_dtypes.get(expr.id) or "").startswith("complex")
-    if isinstance(expr, ast.Subscript) and isinstance(expr.value, ast.Name):
-        return (local_dtypes.get(expr.value.id) or "").startswith("complex")
+    if isinstance(expr, ast.Subscript):
+        # Bottom out a subscript CHAIN (``deexx[:, ii][ikb]``) at its base Name --
+        # the element dtype is the base array's, whatever indexing follows.
+        base = expr.value
+        while isinstance(base, ast.Subscript):
+            base = base.value
+        if isinstance(base, ast.Name):
+            return (local_dtypes.get(base.id) or "").startswith("complex")
     if isinstance(expr, ast.BinOp):
         return _scalar_expr_complex(expr.left, local_dtypes) or _scalar_expr_complex(expr.right, local_dtypes)
     if isinstance(expr, ast.UnaryOp):
         return _scalar_expr_complex(expr.operand, local_dtypes)
     return False
+
+
+class _PromoteMixedComplexIfExp(ast.NodeTransformer):
+    """Make a mixed real/complex conditional's two branches the SAME type.
+
+    ``d = z.real if gamma_only else z`` pairs a REAL branch (``.real`` strips the
+    imaginary part) with a COMPLEX one. C promotes the real branch implicitly, but
+    Fortran ``merge`` -- and the numba/pythran/jax type unifiers -- are strict and
+    reject a real-vs-complex pair. Promote the real branch to complex with a
+    cast-free ``+ 0j`` (a complex-literal add, NOT a C-style cast), so every
+    backend sees a uniform-type select. Numerically identical: the promoted branch
+    carries a zero imaginary part. (QE vexx ``_add_nlxx_pot`` gamma_only path.)"""
+
+    def __init__(self, local_dtypes: Dict[str, str]):
+        self.local_dtypes = local_dtypes
+
+    def visit_IfExp(self, node: ast.IfExp) -> ast.AST:
+        self.generic_visit(node)
+        body_cplx = _scalar_expr_complex(node.body, self.local_dtypes)
+        else_cplx = _scalar_expr_complex(node.orelse, self.local_dtypes)
+        if body_cplx and not else_cplx:
+            node.orelse = self._to_complex(node.orelse)
+        elif else_cplx and not body_cplx:
+            node.body = self._to_complex(node.body)
+        return node
+
+    @staticmethod
+    def _to_complex(e: ast.expr) -> ast.expr:
+        return ast.copy_location(
+            ast.BinOp(left=e, op=ast.Add(), right=ast.Constant(value=0j)), e)
 
 
 class _TupleSubscriptFolder(ast.NodeTransformer):
@@ -3632,6 +3981,8 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         #: (``x = __cb2`` where ``x`` wasn't previously an array) --
         #: emitter must declare them as stack arrays.
         self.alias_locals: Dict[str, Tuple[str, ...]] = {}
+        #: Monotonic id for the buffered fancy ``A[idx] += rhs`` snapshot temps.
+        self._scatter_ctr = 0
         #: Per-name list of shapes recorded in source order, one entry
         #: per ``Name = expr`` reassignment that the rewriter
         #: expanded to a per-element loop nest. Consumed by the
@@ -3769,14 +4120,44 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         lhs = ast.Subscript(value=ast.Name(id=name, ctx=ast.Load()),
                             slice=lhs_slice, ctx=ast.Store())
         rhs = _SubscriptifyNames(self.shape_table, [it]).visit(copy.deepcopy(value))
-        inner: ast.stmt = (ast.AugAssign(target=lhs, op=op, value=rhs) if op
-                           else ast.Assign(targets=[lhs], value=rhs))
-        loop = ast.For(target=ast.Name(id=it, ctx=ast.Store()),
-                       iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()),
-                                     args=[_token_to_ast(extent)], keywords=[]),
-                       body=[inner], orelse=[])
-        ast.fix_missing_locations(loop)
-        return [loop]
+
+        def _loop(body_stmt: ast.stmt) -> ast.For:
+            f = ast.For(target=ast.Name(id=it, ctx=ast.Store()),
+                        iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()),
+                                      args=[_token_to_ast(extent)], keywords=[]),
+                        body=[body_stmt], orelse=[])
+            return f
+
+        if op is None:
+            # Plain fancy store ``A[idx, c] = rhs`` -- a single per-element loop.
+            # Sequential last-write-wins on a repeated index equals numpy's
+            # buffered fancy assignment, so no snapshot is needed.
+            out: List[ast.stmt] = [_loop(ast.Assign(targets=[lhs], value=rhs))]
+        else:
+            # numpy fancy ``A[idx] += rhs`` is BUFFERED: it reads the OLD A[idx],
+            # applies the op against rhs, and scatters back with LAST-WRITE-WINS for
+            # a repeated index -- it does NOT accumulate (that is ``np.add.at``,
+            # routed elsewhere). Snapshot the gathered old values into a temp, then
+            # store, so a duplicate index matches numpy (a single in-place ``+=``
+            # loop would over-count). The snapshot is a rank-1 local of A's dtype.
+            gname = f"__scg{self._scatter_ctr}"
+            self._scatter_ctr += 1
+            self.alias_locals[gname] = (extent, )
+            if name in self.local_dtypes:
+                self.local_dtypes[gname] = self.local_dtypes[name]
+            g_store = ast.Subscript(value=ast.Name(id=gname, ctx=ast.Load()),
+                                    slice=ast.Name(id=it, ctx=ast.Load()), ctx=ast.Store())
+            g_load = ast.Subscript(value=ast.Name(id=gname, ctx=ast.Load()),
+                                   slice=ast.Name(id=it, ctx=ast.Load()), ctx=ast.Load())
+            a_load = ast.Subscript(value=ast.Name(id=name, ctx=ast.Load()),
+                                   slice=copy.deepcopy(lhs_slice), ctx=ast.Load())
+            gather = _loop(ast.Assign(targets=[g_store], value=a_load))
+            store = _loop(ast.Assign(targets=[copy.deepcopy(lhs)],
+                                     value=ast.BinOp(left=g_load, op=op, right=rhs)))
+            out = [gather, store]
+        for s in out:
+            ast.fix_missing_locations(s)
+        return out
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         self.generic_visit(node)
@@ -4024,39 +4405,6 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
                         return expanded
         return node
 
-    def _widest_array_shape(self, expr: ast.AST):
-        """Return the widest (highest-rank) shape among array Name
-        references in ``expr`` that are read AS arrays (not as scalar
-        subscripts). Returns ``None`` if no array Names are referenced
-        in array context.
-
-        ``a[i] + 0.0`` does NOT infer ``a``'s shape -- the subscript
-        reduces ``a`` to a scalar; only bare Name references and
-        slice-bearing subscripts count.
-        """
-        best = None
-        # Find every Subscript so we can exclude its base from the
-        # "bare Name" scan unless the slice contains a Slice.
-        scalar_subscript_bases: Set[int] = set()
-        for sub in ast.walk(expr):
-            if isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Name):
-                sl = sub.slice
-                has_slice = (isinstance(sl, ast.Slice)
-                             or (isinstance(sl, ast.Tuple)
-                                 and any(isinstance(e, ast.Slice) for e in sl.elts)))
-                if not has_slice:
-                    scalar_subscript_bases.add(id(sub.value))
-        for sub in ast.walk(expr):
-            if isinstance(sub, ast.Name):
-                if id(sub) in scalar_subscript_bases:
-                    continue
-                shape = self.shape_table.get(sub.id)
-                if shape is None:
-                    continue
-                if best is None or len(shape) > len(best):
-                    best = tuple(shape)
-        return best
-
     def _rhs_is_whole_array(self, expr: ast.AST, lhs_name: str) -> bool:
         """Check that every array Name referenced in ``expr`` has a
         shape compatible with ``lhs_name``: equal, or broadcastable
@@ -4120,6 +4468,17 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
             expanded = self._expand(node.target, node.value, node.op)
             if expanded:
                 return expanded
+        # Fancy-index scatter ``A[idx, c] += rhs`` (idx an index array): lowered by
+        # ``_expand_fancy_scatter_store`` to a snapshot-gather + store pair, matching
+        # numpy's BUFFERED fancy ``+=`` (old value, last-write-wins on a duplicate
+        # index -- NOT an accumulate) (the QE ultrasoft ``rhoc[nl] += aux2 * sf`` /
+        # ``rhoc[box] += ...``).
+        if (isinstance(node.target, ast.Subscript)
+                and isinstance(node.target.value, ast.Name)):
+            scattered = self._expand_fancy_scatter_store(
+                node.target, node.value, node.op)
+            if scattered:
+                return scattered
         # Partial-index subscript target: ``Sigma[k, E, a] += __mm2`` on a
         # rank-5 Sigma indexes only 3 axes, leaving a (Norb, Norb) residual
         # slice. Loop the residual axes so the matrix accumulate lands
@@ -4592,23 +4951,59 @@ class _TupleAssignRewriter(ast.NodeTransformer):
         return node
 
 
-def lower(kir: KernelIR) -> KernelIR:
-    """Return a lowered copy of ``kir`` ready for backend emission.
+#: Matches a residual inlined-scalar token (``__inl3_N``) or an unresolved
+#: ``arr.shape[`` attribute access -- the never-worse guard in the inl resolver
+#: keeps the original token whenever expansion would leave one of these behind.
+_INL_RE = re.compile(r"__inl\w*|\w+\.shape\[")
 
-    Pipeline: math rename -> ``np.zeros`` -> slice fusion. Order
-    matters: the slice rewriter consults the array-shape table, and
-    ``np.zeros`` locals must be registered first so their shapes are
-    visible to the slice rewriter.
 
-    Matmul (``A @ B`` / ``np.matmul`` -- normalised to ``@`` by
-    :class:`_MatmulCallRewriter`) is loop-lowered uniformly for every target;
-    the Fortran ``MATMUL`` intrinsic is reserved for the rare unresolved-shape
-    case the loop hoister cannot lower (handled in the Fortran emitter).
+class LoweringContext:
+    """Mutable state threaded across the ordered lowering phases in :func:`lower`.
+
+    Each ``_lp_*`` phase reads and writes fields here instead of the long list of
+    loose locals the monolithic ``lower()`` used to carry. The finalised
+    side-tables (``local_dtypes`` / ``zeros_locals`` / ``zeros_fills`` /
+    ``reassign_shapes`` / ``int_locals`` / ``scalar_call_temps``) are written
+    straight onto :attr:`kir` -- typed :class:`KernelIR` fields the emitter reads
+    directly, not attributes monkey-patched onto ``tree.__dict__``.
     """
-    lowered = copy.deepcopy(kir)
-    arrays_shapes: Dict[str, List[str]] = {
-        a.name: list(a.shape) for a in lowered.arrays
-    }
+
+    def __init__(self, original_kir: KernelIR, lowered: KernelIR) -> None:
+        #: The un-lowered input IR -- source of ``.sparse`` and ``.helpers``.
+        self.original_kir = original_kir
+        #: The working (lowered) IR -- what :func:`lower` returns.
+        self.kir = lowered
+        #: Shortcut to the function-body AST every pass rewrites in place.
+        self.tree = lowered.tree
+        # Shape / dtype tables built up across phases and consumed downstream.
+        self.arrays_shapes: Dict[str, List[str]] = {}
+        self.lib_shape_table: Dict[str, object] = {}
+        self.local_dtypes: Dict[str, str] = {}
+        self.zeros_locals: Dict[str, Tuple[str, ...]] = {}
+        self.shapes: Dict[str, List[str]] = {}
+        self.scalar_temps: Dict[str, Tuple[str, ...]] = {}
+        self.inl_defs: Dict[str, object] = {}
+        self.param_seed: Dict[str, Tuple[str, ...]] = {}
+        #: Bound ``_resolve_inl_table`` closure, set in the resolve-inl phase and
+        #: re-used by the slice-normalise phase (both resolve ``__inl`` tokens).
+        self.resolve_inl_table: Optional[Callable[[Dict], None]] = None
+        # Rewriter handles whose post-visit state a later phase consumes.
+        self.iter_rewriter: Optional[_ArrayIterRewriter] = None
+        self.wa_rewriter: Optional[_WholeArrayAssignRewriter] = None
+        self.lib_rewriter: object = None
+        self.zeros: Optional[_ZerosRewriter] = None
+        self.lifter: Optional[_LiftFreshArrayFromSlices] = None
+
+
+def _lp_seed_shape_table(ctx: LoweringContext) -> None:
+    """Seed the array-shape table, then resolve shape-mid-expressions / ellipses.
+
+    Shape-mid-expression first -- legacy kernels use ``A.shape[0]`` inside loops /
+    array constructors; everything downstream is easier if those are resolved to
+    bare symbol names.
+    """
+    lowered = ctx.kir
+    ctx.arrays_shapes = {a.name: list(a.shape) for a in lowered.arrays}
     # Sparse arrays carry CSR/etc. buffers, not a dense ArrayDesc, so they
     # are absent from ``lowered.arrays`` -- but the body still reads
     # ``A.shape[i]`` (cg/bicgstab/minres' ``n = A.shape[0]``). Seed the
@@ -4616,95 +5011,117 @@ def lower(kir: KernelIR) -> KernelIR:
     # maps ``A.shape[0]`` -> the logical dim symbol.
     for _sname, _sd in (lowered.sparse or {}).items():
         if _sd.logical_shape:
-            arrays_shapes.setdefault(_sname, list(_sd.logical_shape))
-    # Shape-mid-expression first -- legacy kernels use ``A.shape[0]``
-    # inside loops / array constructors; everything downstream is
-    # easier if those are resolved to bare symbol names.
-    _ShapeMidExpressionRewriter(arrays_shapes).visit(lowered.tree)
+            ctx.arrays_shapes.setdefault(_sname, list(_sd.logical_shape))
+    _ShapeMidExpressionRewriter(ctx.arrays_shapes).visit(ctx.tree)
     # Expand ``...`` (Ellipsis) to explicit full slices using each array's rank
     # before any slice-aware pass runs (lulesh ``a[..., k]``).
-    _EllipsisExpander(arrays_shapes).visit(lowered.tree)
-    _NpAliasRewriter().visit(lowered.tree)
+    _EllipsisExpander(ctx.arrays_shapes).visit(ctx.tree)
+
+
+def _lp_normalize_calls(ctx: LoweringContext) -> None:
+    """Canonicalise numpy call / method forms (alloc, matmul, transpose, math,
+    casts, iteration, tuple-unpack) into the loop-lowerable subset."""
+    tree = ctx.tree
+    ash = ctx.arrays_shapes
+    _NpAliasRewriter().visit(tree)
     # ``X = alloc(...) if cond else None`` -> ``X = alloc(...)`` before the zeros
     # harvester runs, so the conditionally-allocated buffer is seen as a plain local
     # (the backends have no ``None``; reads are guarded by the same ``cond``).
-    _ConditionalNoneAllocRewriter().visit(lowered.tree)
-    _FullLikeRewriter().visit(lowered.tree)
-    _MatmulCallRewriter().visit(lowered.tree)
-    _ScatterAtRewriter(arrays_shapes).visit(lowered.tree)
-    _TransposeAttrRewriter(set(kir.sparse or {})).visit(lowered.tree)
-    _AstypeRewriter({a.name: a.dtype for a in lowered.arrays if a.dtype}).visit(lowered.tree)
-    _MethodCallRewriter().visit(lowered.tree)
-    iter_rewriter = _ArrayIterRewriter(arrays_shapes)
-    iter_rewriter.visit(lowered.tree)
-    _EnumerateZipRewriter(arrays_shapes).visit(lowered.tree)
-    _BuiltinCastRewriter().visit(lowered.tree)
-    _MathRewriter(set(arrays_shapes.keys())).visit(lowered.tree)
-    _DaceMapRewriter().visit(lowered.tree)
-    _ChainedAssignRewriter().visit(lowered.tree)
-    tuple_rewriter = _TupleAssignRewriter(arrays_shapes)
-    tuple_rewriter.visit(lowered.tree)
+    _ConditionalNoneAllocRewriter().visit(tree)
+    _FullLikeRewriter().visit(tree)
+    # ``np.eye`` / ``np.identity`` -> zeros + diagonal fill, BEFORE the zeros
+    # harvest so the resulting ``np.zeros((n, n))`` is picked up normally.
+    _EyeToZerosDiagonal().visit(tree)
+    _MatmulCallRewriter().visit(tree)
+    _ScatterAtRewriter(ash).visit(tree)
+    _TransposeRewriter(set(ctx.original_kir.sparse or {})).visit(tree)
+    _AstypeRewriter({a.name: a.dtype for a in ctx.kir.arrays if a.dtype}).visit(tree)
+    _MethodCallRewriter().visit(tree)
+    ctx.iter_rewriter = _ArrayIterRewriter(ash)
+    ctx.iter_rewriter.visit(tree)
+    _EnumerateZipRewriter(ash).visit(tree)
+    _BuiltinCastRewriter().visit(tree)
+    _MathRewriter(set(ash.keys())).visit(tree)
+    _DaceMapRewriter().visit(tree)
+    _ChainedAssignRewriter().visit(tree)
+    tuple_rewriter = _TupleAssignRewriter(ash)
+    tuple_rewriter.visit(tree)
     # Stash the int-locals so the emitter can declare them.
-    lowered.tree.int_locals = tuple_rewriter.int_locals  # type: ignore[attr-defined]
-    # After tuple-unpack expansion, the kernel body may reference shape
-    # symbols that the JSON's input_args did not declare (a numpy
-    # kernel commonly reads ``n, k = a.shape`` then iterates over
-    # ``range(n)``). Promote those symbols to first-class kernel
-    # parameters so the emitted C signature carries them.
+    ctx.kir.int_locals = tuple_rewriter.int_locals
+
+
+def _lp_promote_params(ctx: LoweringContext) -> None:
+    """Promote shape symbols / free names to params and flag output+index arrays.
+
+    After tuple-unpack expansion, the kernel body may reference shape symbols that
+    the JSON's input_args did not declare (a numpy kernel commonly reads
+    ``n, k = a.shape`` then iterates over ``range(n)``). Promote those symbols to
+    first-class kernel parameters so the emitted C signature carries them.
+    """
+    lowered = ctx.kir
     _fold_shape_aliases(lowered)
     _promote_shape_symbols_to_params(lowered)
-    # Anything still referenced in the body that isn't a declared
-    # parameter, builtin, or assigned local becomes an ``int``
-    # parameter (symbolic strides / chunk sizes in TSVC-2.5 kernels).
+    # Anything still referenced in the body that isn't a declared parameter,
+    # builtin, or assigned local becomes an ``int`` parameter (symbolic strides /
+    # chunk sizes in TSVC-2.5 kernels).
     _promote_free_names_to_params(lowered)
-    # Body-driven: detect writes (force is_output) and index-array
-    # usage (force int64 dtype) so the emitter picks the right pointer
-    # qualifier and element type.
+    # Body-driven: detect writes (force is_output) and index-array usage (force
+    # int64 dtype) so the emitter picks the right pointer qualifier / element type.
     _detect_output_and_index_arrays(lowered)
-    # Library-node expansion -- reductions, matmul, etc. -- runs before
-    # ``_ZerosRewriter`` so any matmul temps the rewriter introduces
-    # are picked up by the zeros pass as local arrays.
-    from numpyto_common.lib_nodes import LibNodeRewriter
-    lib_shape_table = dict(arrays_shapes)
-    # Pre-pass: lower ``Xi, Yi = np.mgrid[a:b, c:d]`` tuple-unpack
-    # assignments to a pair of per-element init loops -- before the
-    # main harvest so the resulting fresh arrays get their shape
-    # registered like any other local.
-    _MgridLowering().visit(lowered.tree)
-    ast.fix_missing_locations(lowered.tree)
-    # Pre-pass: rewrite ``x.shape = expr`` -> ``x = np.reshape(x, expr)``.
-    # Handles chained ``Xi.shape = Yi.shape = expr`` too. Mandelbrot2
-    # canonical uses this idiom in line 19.
-    _ShapeAttrToReshape().visit(lowered.tree)
-    ast.fix_missing_locations(lowered.tree)
-    # Fold ``(a, b, c)[K]`` Tuple subscripts -- comes from
-    # ``arr.shape[-2]`` when the shape is a tuple literal.
-    _TupleSubscriptFolder().visit(lowered.tree)
-    ast.fix_missing_locations(lowered.tree)
-    # Peephole: fuse ``tmp = arr[mask]; X = np.<reduction>(tmp)`` into
-    # a single masked iteration so we avoid materialising the dynamic-
-    # length compacted view from boolean fancy indexing. Seeded with
-    # the kernel-array shapes so the loop bound is the right symbol.
+
+
+def _lp_pre_libnode_normalize(ctx: LoweringContext) -> None:
+    """Pre-LibNode normalisation: mgrid, ``x.shape =`` reshape, tuple-subscript
+    fold, boolean-mask reduction fusion. Also seeds the LibNode shape table."""
+    tree = ctx.tree
+    ctx.lib_shape_table = dict(ctx.arrays_shapes)
+    # Pre-pass: collapse chained subscripts ``A[i][j]`` -> ``A[i, j]`` (vexx_k's
+    # ``tabxx_qr[ia][:, ijtoh[ih, jh]]`` / ``becxx[:, jbnd, ikq][ikb]``) so the
+    # harvest, scalarizers and fancy-scatter store all see a single-level access.
+    _CollapseChainedSubscripts(ctx.arrays_shapes).visit(tree)
+    ast.fix_missing_locations(tree)
+    # Pre-pass: lower ``Xi, Yi = np.mgrid[a:b, c:d]`` tuple-unpack assignments to a
+    # pair of per-element init loops -- before the main harvest so the resulting
+    # fresh arrays get their shape registered like any other local.
+    _MgridLowering().visit(tree)
+    ast.fix_missing_locations(tree)
+    # Pre-pass: rewrite ``x.shape = expr`` -> ``x = np.reshape(x, expr)``. Handles
+    # chained ``Xi.shape = Yi.shape = expr`` too. Mandelbrot2 canonical uses this.
+    _ShapeAttrToReshape().visit(tree)
+    ast.fix_missing_locations(tree)
+    # Fold ``(a, b, c)[K]`` Tuple subscripts -- comes from ``arr.shape[-2]`` when
+    # the shape is a tuple literal.
+    _TupleSubscriptFolder().visit(tree)
+    ast.fix_missing_locations(tree)
+    # Peephole: fuse ``tmp = arr[mask]; X = np.<reduction>(tmp)`` into a single
+    # masked iteration so we avoid materialising the dynamic-length compacted view
+    # from boolean fancy indexing. Seeded with the kernel-array shapes so the loop
+    # bound is the right symbol.
     _BooleanMaskReductionRewriter(
-        arrays_shapes, _collect_bool_names(lowered.tree, lowered.arrays)).visit(lowered.tree)
-    ast.fix_missing_locations(lowered.tree)
-    # Pre-pass: harvest shapes from ``name = np.zeros / empty / zeros_like``
-    # at the top of the body so LibNodeRewriter sees the shape of locals
-    # like ``Q = np.zeros_like(A)`` when it visits later uses of ``Q``.
-    local_dtypes: Dict[str, str] = {}
-    # Seed with signature-array dtypes so downstream passes
-    # (call hoister _infer_complex, BinOp dtype propagation, emit-time
-    # decl) consistently treat declared inputs/outputs the same way as
-    # locals. Every array goes in -- the table is keyed by name so
-    # there is no cost to a uniform copy of all declared dtypes.
-    for arr in lowered.arrays:
+        ctx.arrays_shapes, _collect_bool_names(tree, ctx.kir.arrays)).visit(tree)
+    ast.fix_missing_locations(tree)
+
+
+def _lp_seed_dtypes_and_harvest(ctx: LoweringContext) -> None:
+    """Seed local dtypes (signature + boolean constructors), unify mixed-complex
+    selects, SSA-rename reassigned locals, then harvest local-array shapes."""
+    tree = ctx.tree
+    # Seed with signature-array dtypes so downstream passes (call hoister
+    # _infer_complex, BinOp dtype propagation, emit-time decl) consistently treat
+    # declared inputs/outputs the same way as locals. Every array goes in -- the
+    # table is keyed by name so there is no cost to a uniform copy of all dtypes.
+    ctx.local_dtypes = {}
+    # Bind the finalised table onto the IR now; the phases below mutate it in
+    # place, so the emitter reads the fully-populated dict after ``lower`` returns.
+    ctx.kir.local_dtypes = ctx.local_dtypes
+    for arr in ctx.kir.arrays:
         if arr.dtype:
-            local_dtypes[arr.name] = arr.dtype
-    # Seed boolean-typed locals from explicit ``np.zeros/empty/ones(...,
+            ctx.local_dtypes[arr.name] = arr.dtype
+    # Seed boolean-typed locals from explicit ``np.zeros/empty/ones(..,
     # dtype=np.bool_)`` constructors (ICON cfl_clip / levmask) so a derived
     # ``mask = cfl_clip & owner`` is recognised as boolean (and declared bool /
     # logical) before the whole-array rewriter runs.
-    for _s in ast.walk(lowered.tree):
+    for _s in ast.walk(tree):
         if (isinstance(_s, ast.Assign) and len(_s.targets) == 1
                 and isinstance(_s.targets[0], ast.Name) and isinstance(_s.value, ast.Call)):
             for _kw in _s.value.keywords:
@@ -4713,28 +5130,37 @@ def lower(kir: KernelIR) -> KernelIR:
                 _dv = _kw.value
                 if ((isinstance(_dv, ast.Attribute) and _dv.attr in ("bool_", "bool"))
                         or (isinstance(_dv, ast.Name) and _dv.id == "bool")):
-                    local_dtypes.setdefault(_s.targets[0].id, "bool_")
-    # SSA-style rename for Names reassigned with different broadcast
-    # extents (hdiff / vadv ``res = ...; res = ...`` with two distinct
-    # shapes). Runs BEFORE harvest so each version registers under its
-    # own name and downstream passes (harvest / LibNodeRewriter / lifter)
-    # see unambiguous shapes per local.
-    _ssa_rename_reassigned(lowered.tree, arrays_shapes)
-    _harvest_local_shapes(lowered.tree, lib_shape_table, local_dtypes)
-    # Inlined-helper locals (conv2d's ``__inl1_output``) get their shape
-    # from ``__inl<k>_`` scalar-dim locals (``__inl1_N`` ...) that are
-    # *assigned later in the body* -- so an allocation sized from them at
-    # function top reads garbage, and the tokens never bind. Build a
-    # resolver that substitutes each ``__inl<k>_`` dim-local away (fixpoint)
-    # and concretises the resulting ``param.shape[i]`` against the real
-    # param shapes; applied later to the declaration / malloc sink
+                    ctx.local_dtypes.setdefault(_s.targets[0].id, "bool_")
+    # SSA-style rename for Names reassigned with different broadcast extents (hdiff
+    # / vadv ``res = ...; res = ...`` with two distinct shapes). Runs BEFORE harvest
+    # so each version registers under its own name and downstream passes (harvest /
+    # LibNodeRewriter / lifter) see unambiguous shapes per local.
+    _ssa_rename_reassigned(tree, ctx.arrays_shapes)
+    _harvest_local_shapes(tree, ctx.lib_shape_table, ctx.local_dtypes)
+    # Unify a mixed real/complex conditional's branches (``d = z.real if flag else
+    # z``) so Fortran ``merge`` (strict same-type) and the JIT type unifiers see a
+    # uniform complex select instead of a real-vs-complex pair (QE vexx gamma_only
+    # path). Runs AFTER the harvest so a complex LOCAL branch (``deexx`` typed from
+    # its ``np.zeros(.., complex128)`` constructor) is already known complex.
+    _PromoteMixedComplexIfExp(ctx.local_dtypes).visit(tree)
+
+
+def _lp_resolve_inlined_shapes(ctx: LoweringContext) -> None:
+    """Resolve inlined-scalar dim tokens in the harvest table, inherit loop-var
+    dtypes, and pre-lift ``alpha * A`` so the matmul hoister sees a bare Name."""
+    tree = ctx.tree
+    # Inlined-helper locals (conv2d's ``__inl1_output``) get their shape from
+    # ``__inl<k>_`` scalar-dim locals (``__inl1_N`` ...) that are *assigned later
+    # in the body* -- so an allocation sized from them at function top reads garbage,
+    # and the tokens never bind. Build a resolver that substitutes each ``__inl<k>_``
+    # dim-local away (fixpoint) and concretises the resulting ``param.shape[i]``
+    # against the real param shapes; applied later to the declaration / malloc sink
     # (``zeros_locals`` / ``shapes``).
     from numpyto_common.frontend import (_collect_inlined_scalar_defs,
                                     _substitute_inlined_scalar_defs,
                                     _resolve_shape_attr_tokens)
-    _inl_defs = _collect_inlined_scalar_defs(lowered.tree)
-    _param_seed = {n: tuple(s) for n, s in arrays_shapes.items()}
-    _INL_RE = re.compile(r"__inl\w*|\w+\.shape\[")
+    ctx.inl_defs = _collect_inlined_scalar_defs(tree)
+    ctx.param_seed = {n: tuple(s) for n, s in ctx.arrays_shapes.items()}
 
     def _resolve_inl(shape):
         """Substitute ``__inl<k>_`` dim-locals away then resolve
@@ -4747,10 +5173,10 @@ def lower(kir: KernelIR) -> KernelIR:
         ``x__v1`` is itself a local), the ORIGINAL token is kept so the
         downstream source-order ``_ResolveArrShape`` pass still handles it
         exactly as it did before this fix existed."""
-        if not _inl_defs:
+        if not ctx.inl_defs:
             return tuple(shape)
-        subbed = _substitute_inlined_scalar_defs(tuple(shape), _inl_defs)
-        resolved = _resolve_shape_attr_tokens(subbed, _param_seed)
+        subbed = _substitute_inlined_scalar_defs(tuple(shape), ctx.inl_defs)
+        resolved = _resolve_shape_attr_tokens(subbed, ctx.param_seed)
         return tuple(new if not _INL_RE.search(new) else str(orig)
                      for orig, new in zip(shape, resolved))
 
@@ -4759,177 +5185,214 @@ def lower(kir: KernelIR) -> KernelIR:
             table[nm] = list(_resolve_inl(table[nm])) \
                 if isinstance(table[nm], list) else _resolve_inl(table[nm])
 
+    ctx.resolve_inl_table = _resolve_inl_table
     # Resolve the harvest table now so the passes that consume it (notably
     # ``_WholeArrayAssignRewriter``, which decides whether ``__hcall1 + bias``
     # is a same-rank broadcast to expand into a loop vs. a raw pointer add)
     # see ``__inl1_output``'s real shape. The never-worse guard leaves the
     # chained-inline locals (whose dims reference another local's ``.shape``)
     # untouched for the source-order ``_ResolveArrShape`` pass downstream.
-    if _inl_defs:
-        _resolve_inl_table(lib_shape_table)
+    if ctx.inl_defs:
+        _resolve_inl_table(ctx.lib_shape_table)
     # Loop-var dtype inheritance: ``for b in data:`` (where ``data`` is
     # uint8) declares ``b`` as the element dtype of ``data``.
-    array_dtypes_by_name = {a.name: a.dtype for a in lowered.arrays}
-    for loop_var, source_arr in iter_rewriter.var_to_array.items():
-        src_dt = array_dtypes_by_name.get(source_arr) or local_dtypes.get(source_arr)
+    array_dtypes_by_name = {a.name: a.dtype for a in ctx.kir.arrays}
+    for loop_var, source_arr in ctx.iter_rewriter.var_to_array.items():
+        src_dt = array_dtypes_by_name.get(source_arr) or ctx.local_dtypes.get(source_arr)
         if src_dt is not None:
-            local_dtypes[loop_var] = src_dt
-    lowered.tree.local_dtypes = local_dtypes  # type: ignore[attr-defined]
-    # Pre-matmul: lift ``alpha * A`` -> temp so the matmul hoister sees
-    # a bare Name on the left of ``A @ B``. The pre-lift runs per Assign.
-    scalar_temps: Dict[str, Tuple[str, ...]] = {}
+            ctx.local_dtypes[loop_var] = src_dt
+    # Pre-matmul: lift ``alpha * A`` -> temp so the matmul hoister sees a bare Name
+    # on the left of ``A @ B``. The pre-lift runs per Assign.
+    ctx.scalar_temps = {}
     scalar_counter = [0]
-    for stmt in list(lowered.tree.body):
+    for stmt in list(tree.body):
         if isinstance(stmt, (ast.Assign, ast.AugAssign)):
-            sm = _ScalarTimesMatmulRewriter(lib_shape_table, scalar_temps, scalar_counter)
-            if hasattr(stmt, "value"):
-                stmt.value = sm.visit(stmt.value)
-                # Prepend pre_stmts before the original statement.
-                if sm.pre_stmts:
-                    idx = lowered.tree.body.index(stmt)
-                    lowered.tree.body[idx:idx] = sm.pre_stmts
+            sm = _ScalarTimesMatmulRewriter(ctx.lib_shape_table, ctx.scalar_temps, scalar_counter)
+            stmt.value = sm.visit(stmt.value)
+            # Prepend pre_stmts before the original statement.
+            if sm.pre_stmts:
+                idx = tree.body.index(stmt)
+                tree.body[idx:idx] = sm.pre_stmts
+
+
+def _lp_libnode_expand(ctx: LoweringContext) -> None:
+    """FFT-grid + reshape normalisation, then the LibNode expander (reductions /
+    matmul / linalg); a second free-name promotion for structural scalars."""
+    tree = ctx.tree
     # Flat-grid FFT idiom (vexx invfft/fwfft: reshape-to-grid -> fftn over the
     # grid axes -> reshape-back) -> materialised reshape + fft temps, so the
     # reshape/DFT expanders below see bare Names with known shapes.
-    _FftGridReshapeRewriter(lib_shape_table, local_dtypes, [0]).visit(lowered.tree)
-    ast.fix_missing_locations(lowered.tree)
+    _FftGridReshapeRewriter(ctx.lib_shape_table, ctx.local_dtypes, [0]).visit(tree)
+    ast.fix_missing_locations(tree)
     # Normalize ``X.reshape(a, b)`` method form to ``np.reshape(X, (a, b))``
     # AFTER the FFT idiom match (which consumes its own reshape chains) so the
     # single expand_reshape path serves lulesh's varargs spelling.
-    _ReshapeMethodRewriter().visit(lowered.tree)
-    ast.fix_missing_locations(lowered.tree)
-    lib_rewriter = LibNodeRewriter(lib_shape_table,
-                                   known_arrays=set(arrays_shapes.keys()),
-                                   local_dtypes=local_dtypes,
-                                   sparse=getattr(kir, "sparse", None))
-    lib_rewriter.visit(lowered.tree)
-    # Second free-name promotion: sparse matvec dispatchers introduce
-    # structural scalar symbols that don't exist until the hoister runs
-    # (SELL-C-sigma's slice height ``C``), so the first promotion at the
-    # top of lower() can't see them. Re-run now -- matmul temps and the
-    # JDS scratch are subscript-store targets, so they're treated as
-    # locals and excluded; only genuinely free Load names get promoted.
-    _promote_free_names_to_params(lowered)
-    # Whole-array Augmented / plain assignment between same-shape arrays
-    # (``x1 += temp`` or ``out = a``) is numpy's elementwise form;
-    # expand to a loop nest so the C/Fortran emitter does not see
-    # pointer arithmetic.
-    # Pass the set of REAL kernel arrays (not aliases that LibNodeRewriter
-    # added) so the whole-array rewriter knows which aliases are fresh
-    # locals needing declaration.
-    real_arrays = set(arrays_shapes.keys())
-    # Boolean masking: ``arr[mask_expr] = value`` -> per-element loop
-    # with an ``if mask_expr[i]:`` guard. Runs before the whole-array
-    # rewriter so the LHS is a plain scalar subscript downstream.
-    _BooleanMaskRewriter(lib_shape_table).visit(lowered.tree)
-    wa_rewriter = _WholeArrayAssignRewriter(lib_shape_table, real_arrays,
-                                            local_dtypes=local_dtypes)
-    wa_rewriter.visit(lowered.tree)
-    zeros = _ZerosRewriter(lib_shape_table)
-    zeros.visit(lowered.tree)
-    # Merge matmul-hoisted temps with the np.zeros locals -- both
-    # become C stack arrays / Fortran locals in the prelude.
-    zeros_locals = dict(zeros.zeros)
-    zeros_locals.update(lib_rewriter.matmul_temps)
-    zeros_locals.update(lib_rewriter.fresh_local_allocs)
-    zeros_locals.update(scalar_temps)
-    zeros_locals.update(wa_rewriter.alias_locals)
-    # Pre-pass harvested local arrays (corr = np.eye(M, ...),
-    # imgOut = np.copy(...), etc.) that the LibNode expanders didn't
-    # rewrite. They must still be declared so the emitter sees them.
-    for name, shape in lib_shape_table.items():
-        if name not in zeros_locals and name not in arrays_shapes:
+    _ReshapeMethodRewriter().visit(tree)
+    ast.fix_missing_locations(tree)
+    # Library-node expansion -- reductions, matmul, etc. -- runs before
+    # ``_ZerosRewriter`` so any matmul temps the rewriter introduces are picked up
+    # by the zeros pass as local arrays.
+    from numpyto_common.lib_nodes import LibNodeRewriter
+    ctx.lib_rewriter = LibNodeRewriter(ctx.lib_shape_table,
+                                       known_arrays=set(ctx.arrays_shapes.keys()),
+                                       local_dtypes=ctx.local_dtypes,
+                                       sparse=ctx.original_kir.sparse)
+    ctx.lib_rewriter.visit(tree)
+    # Second free-name promotion: sparse matvec dispatchers introduce structural
+    # scalar symbols that don't exist until the hoister runs (SELL-C-sigma's slice
+    # height ``C``), so the first promotion at the top of lower() can't see them.
+    # Re-run now -- matmul temps and the JDS scratch are subscript-store targets, so
+    # they're treated as locals and excluded; only genuinely free Load names get
+    # promoted.
+    _promote_free_names_to_params(ctx.kir)
+
+
+def _lp_whole_array_and_zeros(ctx: LoweringContext) -> None:
+    """Whole-array assignment expansion, the zeros harvest, and the merged
+    local-array declaration tables (``zeros_locals`` / ``zeros_fills`` /
+    ``scalar_call_temps`` / ``shapes``)."""
+    tree = ctx.tree
+    # Whole-array Augmented / plain assignment between same-shape arrays (``x1 +=
+    # temp`` or ``out = a``) is numpy's elementwise form; expand to a loop nest so
+    # the C/Fortran emitter does not see pointer arithmetic. Pass the set of REAL
+    # kernel arrays (not aliases that LibNodeRewriter added) so the whole-array
+    # rewriter knows which aliases are fresh locals needing declaration.
+    real_arrays = set(ctx.arrays_shapes.keys())
+    # Boolean masking: ``arr[mask_expr] = value`` -> per-element loop with an ``if
+    # mask_expr[i]:`` guard. Runs before the whole-array rewriter so the LHS is a
+    # plain scalar subscript downstream.
+    _BooleanMaskRewriter(ctx.lib_shape_table).visit(tree)
+    ctx.wa_rewriter = _WholeArrayAssignRewriter(ctx.lib_shape_table, real_arrays,
+                                                local_dtypes=ctx.local_dtypes)
+    ctx.wa_rewriter.visit(tree)
+    ctx.zeros = _ZerosRewriter(ctx.lib_shape_table)
+    ctx.zeros.visit(tree)
+    # Merge matmul-hoisted temps with the np.zeros locals -- both become C stack
+    # arrays / Fortran locals in the prelude.
+    zeros_locals = dict(ctx.zeros.zeros)
+    zeros_locals.update(ctx.lib_rewriter.matmul_temps)
+    zeros_locals.update(ctx.lib_rewriter.fresh_local_allocs)
+    zeros_locals.update(ctx.scalar_temps)
+    zeros_locals.update(ctx.wa_rewriter.alias_locals)
+    # Pre-pass harvested local arrays (corr = np.eye(M, ...), imgOut = np.copy(...),
+    # etc.) that the LibNode expanders didn't rewrite. They must still be declared
+    # so the emitter sees them.
+    for name, shape in ctx.lib_shape_table.items():
+        if name not in zeros_locals and name not in ctx.arrays_shapes:
             zeros_locals[name] = tuple(shape) if shape else ("1",)
-    lowered.tree.zeros_locals = zeros_locals  # type: ignore[attr-defined]
+    ctx.zeros_locals = zeros_locals
+    ctx.kir.zeros_locals = zeros_locals
     # Fill kind per local (zeros / ones / empty / ...). Only the explicit
-    # ``np.<ctor>`` path (``_ZerosRewriter``) carries a meaningful kind;
-    # every other source (matmul temps, slice-fusion lifts, alias locals)
-    # is a write-before-read temp, so it defaults to ``empty``. The
-    # emitter consults this only when a local name aliases an OUTPUT
-    # parameter -- to initialise the caller's buffer correctly without a
-    # shadowing declaration.
-    lowered.tree.zeros_fills = dict(zeros.fills)  # type: ignore[attr-defined]
-    # Scalar call-hoist temps: declared as plain double locals by the
-    # emit walker via its implicit-local logic (they appear as a
-    # bare Name on the LHS of an Assign whose RHS is a Call).
-    lowered.tree.scalar_call_temps = list(lib_rewriter.scalar_call_temps)  # type: ignore[attr-defined]
+    # ``np.<ctor>`` path (``_ZerosRewriter``) carries a meaningful kind; every other
+    # source (matmul temps, slice-fusion lifts, alias locals) is a write-before-read
+    # temp, so it defaults to ``empty``. The emitter consults this only when a local
+    # name aliases an OUTPUT parameter -- to initialise the caller's buffer correctly
+    # without a shadowing declaration.
+    ctx.kir.zeros_fills = dict(ctx.zeros.fills)
+    # Scalar call-hoist temps: declared as plain double locals by the emit walker
+    # via its implicit-local logic (they appear as a bare Name on the LHS of an
+    # Assign whose RHS is a Call).
+    ctx.kir.scalar_call_temps = list(ctx.lib_rewriter.scalar_call_temps)
     # Re-collect the shape table -- np.zeros locals are included for slice fusion.
-    shapes: Dict[str, List[str]] = dict(arrays_shapes)
-    for name, shape in zeros.zeros.items():
+    shapes: Dict[str, List[str]] = dict(ctx.arrays_shapes)
+    for name, shape in ctx.zeros.zeros.items():
         shapes[name] = list(shape) if shape else ["1"]
     # Also include any shapes harvested by the pre-pass (np.eye / np.copy /
-    # np.transpose / np.linalg.* etc) that aren't in arrays_shapes /
-    # zeros locals -- needed when slice fusion encounters omitted-stop
-    # slices on such temps.
-    for name, shape in lib_shape_table.items():
+    # np.transpose / np.linalg.* etc) that aren't in arrays_shapes / zeros locals --
+    # needed when slice fusion encounters omitted-stop slices on such temps.
+    for name, shape in ctx.lib_shape_table.items():
         if name not in shapes:
             shapes[name] = list(shape)
-    # Lift array-valued RHS (slice-bearing BinOp / Call / etc) on a
-    # bare-Name LHS to a ``Name = np.zeros(extent); Name[:] = expr``
-    # pair so slice fusion can lower the per-element loop. Computes the
-    # shape from the iteration extent of the RHS, registers the new
-    # local in both ``shapes`` and ``zeros_locals``.
-    lifter = _LiftFreshArrayFromSlices(shapes, local_dtypes=local_dtypes)
-    new_locals = lifter.run(lowered.tree)
+    ctx.shapes = shapes
+
+
+def _lp_slice_normalize_and_lift(ctx: LoweringContext) -> None:
+    """Normalise subscript forms, lift array-valued slice RHS to fresh locals, and
+    re-resolve ``.size`` / ``.shape`` / ``__inl`` tokens over the new locals."""
+    tree = ctx.tree
+    shapes = ctx.shapes
+    # Normalise subscript forms BEFORE the slice lifter so a row/column read
+    # ``box = tabxx_box[ia]`` / ``qr = tabxx_qr[ia][:, k]`` (QE ultrasoft
+    # augmentation) is materialised into a rank-1 local the fancy scatter / gather
+    # can index. Flatten chained subscripts ``B[inner][outer]`` into one combined
+    # index, fold scalar-prefix sub-array aliases (``low = A[i, j]; low[k]`` -> ``A[i,
+    # j, k]``, xsbench -- runs before padding so its bare ``A[i]`` def is dropped and
+    # not lifted into a copy), then make numpy's implicit trailing axes explicit
+    # (``tabxx_box[ia]`` -> ``[ia, :]``).
+    _FlattenChainedSubscripts(shapes).visit(tree)
+    _fold_subarray_aliases(tree, shapes)
+    _PadImplicitTrailingSlices(shapes).visit(tree)
+    # Lift array-valued RHS (slice-bearing BinOp / Call / etc) on a bare-Name LHS to
+    # a ``Name = np.zeros(extent); Name[:] = expr`` pair so slice fusion can lower
+    # the per-element loop. Computes the shape from the iteration extent of the RHS,
+    # registers the new local in both ``shapes`` and ``zeros_locals``.
+    ctx.lifter = _LiftFreshArrayFromSlices(shapes, local_dtypes=ctx.local_dtypes)
+    new_locals = ctx.lifter.run(tree)
     if new_locals:
         for name, shape in new_locals.items():
             shapes[name] = list(shape)
-            zeros_locals[name] = tuple(shape)
-        lowered.tree.zeros_locals = zeros_locals  # type: ignore[attr-defined]
-    # The lifter may have inferred complex dtypes; propagate to the
-    # tree-side local_dtypes the emitter consumes.
-    lowered.tree.local_dtypes = local_dtypes  # type: ignore[attr-defined]
-    # ``_ZerosRewriter`` re-derives the ``np.empty`` shape straight from the
-    # AST tuple, so ``__inl<k>_`` tokens reappear in ``zeros_locals`` /
-    # ``shapes`` even after the early ``lib_shape_table`` resolve. These are
-    # the declaration / malloc / subscript-stride sink the emitter reads --
-    # resolve them to pure params here so the top-of-function malloc is sized
-    # from real parameters (not yet-unassigned ``__inl1_N`` locals).
-    if _inl_defs:
-        _resolve_inl_table(zeros_locals)
-        _resolve_inl_table(shapes)
-        lowered.tree.zeros_locals = zeros_locals  # type: ignore[attr-defined]
-    # Fold partial sub-array aliases (``low = A[i, j]; low[k]`` -> ``A[i, j, k]``)
-    # BEFORE padding, so the emitter emits one flat multi-dim index rather than a
-    # chained ``A[i][j]`` on a flat pointer (xsbench channel-vector reads).
-    _fold_subarray_aliases(lowered.tree, shapes)
-    _PadImplicitTrailingSlices(shapes).visit(lowered.tree)
-    SliceFusion(shapes).visit(lowered.tree)
-    # Final pass: resolve any surviving ``arr.shape[i]`` references to
-    # the concrete shape token from the harvested table. These survive
-    # whenever a harvested helper variable's shape was a string-form
-    # ``arr.shape[i]`` (e.g. inlined maxpool ``np.empty([x.shape[0],
-    # x.shape[1] // 2, ...])`` -- the harvest stage resolves what it
-    # can, but the body's range / loop bounds still reference the
-    # attribute expression). The emit walker has no idea what to do
-    # with an Attribute, so we substitute here.
-    # Seed the source-order resolver with bench-info parameter shapes
-    # only (not the harvest's final-state shapes for reassigned
-    # locals). The resolver then builds the current shape table per
-    # statement as it walks, so ``x.shape[i]`` at line K resolves
-    # against the shape ``x`` had AT line K -- not after the kernel''s
-    # final reassignment.
-    # Stash a fresh copy of the reassign FIFO on the tree -- the emit
-    # walker consumes it in source order to thread per-statement
-    # shape into multi-D subscript flattening. The resolver below
-    # consumes its OWN copy (the lower() call passes a new dict).
-    lowered.tree.reassign_shapes = {  # type: ignore[attr-defined]
-        k: list(v) for k, v in wa_rewriter._reassign_shapes.items()}
+            ctx.zeros_locals[name] = tuple(shape)
+    # ``zeros_locals`` / ``local_dtypes`` are the same objects the IR already holds
+    # (bound in earlier phases), so the lifter's in-place additions -- and the
+    # complex dtypes it inferred -- are already visible to the emitter.
+    # Re-resolve ``.size`` / ``.shape`` / ``len(..)`` over the NOW-materialised
+    # locals (``box = tabxx_box[ia, :]`` -> a rank-1 local). The early pass at
+    # parse-shape time saw only params, so ``box.size == 0`` (the QE ultrasoft empty-
+    # box guard) survived unresolved; with ``box`` in ``shapes`` it folds to its
+    # extent. Already-resolved references are bare Names now, so the other branches
+    # are no-ops.
+    _ShapeMidExpressionRewriter(shapes).visit(tree)
+    # ``_ZerosRewriter`` re-derives the ``np.empty`` shape straight from the AST
+    # tuple, so ``__inl<k>_`` tokens reappear in ``zeros_locals`` / ``shapes`` even
+    # after the early ``lib_shape_table`` resolve. These are the declaration / malloc
+    # / subscript-stride sink the emitter reads -- resolve them to pure params here
+    # so the top-of-function malloc is sized from real parameters (not yet-unassigned
+    # ``__inl1_N`` locals).
+    if ctx.inl_defs:
+        ctx.resolve_inl_table(ctx.zeros_locals)
+        ctx.resolve_inl_table(shapes)
+
+
+def _lp_slice_fusion_and_resolve(ctx: LoweringContext) -> None:
+    """Slice fusion, source-order ``arr.shape[i]`` resolution, and forcing
+    index-array locals to int64."""
+    tree = ctx.tree
+    shapes = ctx.shapes
+    SliceFusion(shapes).visit(tree)
+    # Final pass: resolve any surviving ``arr.shape[i]`` references to the concrete
+    # shape token from the harvested table. These survive whenever a harvested helper
+    # variable's shape was a string-form ``arr.shape[i]`` (e.g. inlined maxpool
+    # ``np.empty([x.shape[0], x.shape[1] // 2, ...])`` -- the harvest stage resolves
+    # what it can, but the body's range / loop bounds still reference the attribute
+    # expression). The emit walker has no idea what to do with an Attribute, so we
+    # substitute here.
+    #
+    # Seed the source-order resolver with bench-info parameter shapes only (not the
+    # harvest's final-state shapes for reassigned locals). The resolver then builds
+    # the current shape table per statement as it walks, so ``x.shape[i]`` at line K
+    # resolves against the shape ``x`` had AT line K -- not after the kernel's final
+    # reassignment.
+    #
+    # Stash a fresh copy of the reassign FIFO on the IR -- the emit walker consumes
+    # it in source order to thread per-statement shape into multi-D subscript
+    # flattening. The resolver below consumes its OWN copy (a fresh dict).
+    ctx.kir.reassign_shapes = {
+        k: list(v) for k, v in ctx.wa_rewriter._reassign_shapes.items()}
     _ResolveArrShape(
         shapes,
-        param_shapes={k: tuple(v) for k, v in arrays_shapes.items()},
-        zeros_locals={k: tuple(v) for k, v in zeros_locals.items()},
+        param_shapes={k: tuple(v) for k, v in ctx.arrays_shapes.items()},
+        zeros_locals={k: tuple(v) for k, v in ctx.zeros_locals.items()},
         reassign_shapes={
-            k: list(v) for k, v in wa_rewriter._reassign_shapes.items()},
-    ).visit(lowered.tree)
-    ast.fix_missing_locations(lowered.tree)
+            k: list(v) for k, v in ctx.wa_rewriter._reassign_shapes.items()},
+    ).visit(tree)
+    ast.fix_missing_locations(tree)
     # Force index-array LOCALS to int64. A local whose VALUES index another array
-    # (``delv[neigh_safe[w0]]`` -- neigh_safe = np.clip(lxim, ..) is a local, so
-    # the param-only _detect_output_and_index_arrays misses it) must be integer;
-    # C/Fortran reject a float subscript. A name used as a subscript index is
-    # always integral, so this is sound.
+    # (``delv[neigh_safe[w0]]`` -- neigh_safe = np.clip(lxim, ..) is a local, so the
+    # param-only _detect_output_and_index_arrays misses it) must be integer;
+    # C/Fortran reject a float subscript. A name used as a subscript index is always
+    # integral, so this is sound.
     _idx_locals: Set[str] = set()
-    for node in ast.walk(lowered.tree):
+    for node in ast.walk(tree):
         if isinstance(node, ast.Subscript):
             sl = node.slice
             elts = sl.elts if isinstance(sl, ast.Tuple) else [sl]
@@ -4939,12 +5402,105 @@ def lower(kir: KernelIR) -> KernelIR:
                 elif isinstance(e, ast.Name):
                     _idx_locals.add(e.id)              # A[B] (whole-array gather) -> B
     for _nm in _idx_locals:
-        if (_nm in shapes or _nm in local_dtypes):
-            _dt = local_dtypes.get(_nm)
+        if (_nm in shapes or _nm in ctx.local_dtypes):
+            _dt = ctx.local_dtypes.get(_nm)
             if not (_dt and _dt.startswith(("int", "uint"))):
-                local_dtypes[_nm] = "int64"
-    lowered.tree.local_dtypes = local_dtypes  # type: ignore[attr-defined]
-    return lowered
+                ctx.local_dtypes[_nm] = "int64"
+
+
+def _lp_lower_helpers(ctx: LoweringContext) -> None:
+    """Lower each non-inlinable helper the same way -- it is a self-contained
+    sub-kernel (own params + body). Its early ``return`` survives lowering (the
+    return-extraction is a parse_kernel step, not a lowering pass)."""
+    ctx.kir.helpers = [lower(h) for h in ctx.original_kir.helpers]
+
+
+#: The lowering pipeline as data: an ordered list of ``(name, phase)`` pairs run
+#: over a shared :class:`LoweringContext`. The ORDER is load-bearing -- a slice
+#: pass consults the array-shape table, so ``np.zeros`` locals must be registered
+#: before it; see each phase's docstring / inline comments for the rationale.
+_LOWER_PHASES: List[Tuple[str, Callable[["LoweringContext"], None]]] = [
+    ("seed-shape-table", _lp_seed_shape_table),
+    ("normalize-calls", _lp_normalize_calls),
+    ("promote-params", _lp_promote_params),
+    ("pre-libnode-normalize", _lp_pre_libnode_normalize),
+    ("seed-dtypes-and-harvest", _lp_seed_dtypes_and_harvest),
+    ("resolve-inlined-shapes", _lp_resolve_inlined_shapes),
+    ("libnode-expand", _lp_libnode_expand),
+    ("whole-array-and-zeros", _lp_whole_array_and_zeros),
+    ("slice-normalize-and-lift", _lp_slice_normalize_and_lift),
+    ("slice-fusion-and-resolve", _lp_slice_fusion_and_resolve),
+    ("lower-helpers", _lp_lower_helpers),
+]
+
+#: Environment flag that turns on the between-phase invariant checks below.
+#: Off by default (production emit pays nothing); flip it on to localise a
+#: pipeline regression to the exact phase that corrupted the shared state.
+_INVARIANT_ENV = "OPTARENA_LOWER_INVARIANTS"
+
+
+def _assert_lowering_invariants(phase_name: str, ctx: LoweringContext) -> None:
+    """Check the cross-phase invariants that must hold after ``phase_name``.
+
+    Debug-only (gated by :data:`_INVARIANT_ENV`). Every failure names the phase
+    that broke it, so a side-table assigned the wrong container type or an AST
+    the context stopped tracking is caught at the phase boundary that introduced
+    it -- not later, as an inscrutable emit-time ``KeyError`` or ``AttributeError``.
+    """
+    kir = ctx.kir
+    # The context's tree handle must remain the kir's tree: a phase that rebuilds
+    # the AST has to write it back to both, or later phases rewrite an orphan.
+    if ctx.tree is not kir.tree:
+        raise AssertionError(f"lowering invariant after '{phase_name}': ctx.tree no "
+                             "longer aliases ctx.kir.tree (a phase rebuilt the AST "
+                             "without writing it back to both handles)")
+    if not isinstance(kir.tree, ast.FunctionDef):
+        raise AssertionError(f"lowering invariant after '{phase_name}': kir.tree is "
+                             f"{type(kir.tree).__name__}, expected ast.FunctionDef")
+    # The typed side-tables keep their declared container type -- a phase that
+    # assigns the wrong shape surfaces here, not at the emitter reader.
+    for _fld, _typ in (("int_locals", list), ("local_dtypes", dict), ("zeros_locals", dict), ("zeros_fills", dict),
+                       ("scalar_call_temps", list), ("reassign_shapes", dict)):
+        _val = vars(kir)[_fld]
+        if not isinstance(_val, _typ):
+            raise AssertionError(f"lowering invariant after '{phase_name}': kir.{_fld} "
+                                 f"is {type(_val).__name__}, expected {_typ.__name__}")
+    # The AST stays structurally well-formed: a rewriter that leaves a bad field
+    # (a raw string where a node belongs, a Call missing args) fails to unparse.
+    # Unparse a fixed-up copy -- synthetic nodes legitimately lack ``lineno``
+    # mid-lowering, so filling locations on a throwaway keeps the check about
+    # structure (and leaves the real tree untouched).
+    try:
+        ast.unparse(ast.fix_missing_locations(copy.deepcopy(kir.tree)))
+    except Exception as exc:
+        raise AssertionError(f"lowering invariant after '{phase_name}': kir.tree does "
+                             f"not round-trip through ast.unparse ({exc})") from exc
+
+
+def lower(kir: KernelIR) -> KernelIR:
+    """Return a lowered copy of ``kir`` ready for backend emission.
+
+    The body is a fixed sequence of named phases (:data:`_LOWER_PHASES`), each
+    mutating a shared :class:`LoweringContext`. Pipeline shape: math rename ->
+    ``np.zeros`` -> slice fusion. Order matters: the slice rewriter consults the
+    array-shape table, and ``np.zeros`` locals must be registered first so their
+    shapes are visible to it.
+
+    Matmul (``A @ B`` / ``np.matmul`` -- normalised to ``@`` by
+    :class:`_MatmulCallRewriter`) is loop-lowered uniformly for every target;
+    the Fortran ``MATMUL`` intrinsic is reserved for the rare unresolved-shape
+    case the loop hoister cannot lower (handled in the Fortran emitter).
+
+    Set :data:`_INVARIANT_ENV` in the environment to run
+    :func:`_assert_lowering_invariants` after every phase.
+    """
+    check = _assert_lowering_invariants if _INVARIANT_ENV in os.environ else None
+    ctx = LoweringContext(kir, copy.deepcopy(kir))
+    for _name, _phase in _LOWER_PHASES:
+        _phase(ctx)
+        if check is not None:
+            check(_name, ctx)
+    return ctx.kir
 
 
 #: Python builtins / harness identifiers that may appear in the body
@@ -5086,6 +5642,13 @@ def _promote_free_names_to_params(kir: KernelIR) -> None:
     # never be promoted to scalar int params even if a residual
     # reference survives lowering. The matmul hoister consumes them.
     declared.update(getattr(kir, "sparse", {}) or {})
+    # Non-inlinable helpers emitted as their own native functions: their names
+    # appear as CALL funcs (``classify(x[i])``), never as scalar parameters.
+    declared.update(h.kernel_name for h in getattr(kir, "helpers", []) or [])
+    # A Name used as a call function is never a scalar parameter either.
+    for node in ast.walk(kir.tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            declared.add(node.func.id)
     # Names assigned anywhere in the body are local variables, not params.
     def _names_in_target(tgt: ast.AST) -> List[str]:
         """Collect every bare Name id appearing as an assignment target,

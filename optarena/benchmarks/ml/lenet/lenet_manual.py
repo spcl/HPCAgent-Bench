@@ -25,12 +25,6 @@ def relu4(x: dace.float32[S0, S1, S2, S3]):
 @dace.program
 def conv2d(input: dace.float32[S0, S1, S2, S3], weights: dace.float32[S4, S4,
                                                                       S3, S5]):
-    # K = weights.shape[0]  # Assuming square kernel
-    # N = input.shape[0]
-    # H_out = input.shape[1] - K + 1
-    # W_out = input.shape[2] - K + 1
-    # C_out = weights.shape[3]
-    # output = np.empty((N, H_out, W_out, C_out), dtype=np.float32)
     output = np.ndarray((S0, S1 - S4 + 1, S2 - S4 + 1, S5), dtype=np.float32)
 
     # Loop structure adapted from https://github.com/SkalskiP/ILearnDeepLearning.py/blob/ba0b5ba589d4e656141995e8d1a06d44db6ce58d/01_mysteries_of_neural_networks/06_numpy_convolutional_neural_net/src/layers/convolutional.py#L88
@@ -42,12 +36,6 @@ def conv2d(input: dace.float32[S0, S1, S2, S3], weights: dace.float32[S4, S4,
                 weights[np.newaxis, :, :, :],
                 axis=(1, 2, 3),
             )
-            # # TODO: View operations are needed
-            # output[:, i, j, :] = np.sum(
-            #     np.reshape(input[:, i:i+S4, j:j+S4, :], (S0, S4, S4, S3, 1)) *
-            #     np.reshape(weights, (1, S4, S4, S3, S5)),
-            #     axis=(1, 2, 3),
-            # )
 
     return output
 
@@ -59,13 +47,6 @@ def lenet5_ca(
     conv1: dace.float32[5, 5, 1, 6],
     conv1bias: dace.float32[6],
 ):
-    # x = relu(conv2d(input, conv1) + conv1bias)
-    # x = maxpool2d(x)
-    # x = relu(conv2d(x, conv2) + conv2bias)
-    # x = maxpool2d(x)
-    # x = np.reshape(x, (N, C_before_fc1))
-    # x = relu(x @ fc1w + fc1b)
-    # x = relu(x @ fc2w + fc2b)
     return relu4(conv2d(input, conv1) + conv1bias)
 
 

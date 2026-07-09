@@ -32,21 +32,27 @@ import numerical_oracle as _no  # noqa: E402
 
 
 def _bench_info(func: str, inputs: List[str], outputs: List[str],
-                shapes: Dict[str, str], syms: Dict[str, int]) -> Dict:
+                shapes: Dict[str, str], syms: Dict[str, int],
+                dtypes: Dict[str, str] = None) -> Dict:
     """Synthesize the legacy bench_info the translator front end consumes.
 
     The kernel signature is ``inputs ++ outputs`` in order, so ``input_args``
     lists ALL parameters (mirroring a real benchmark where an in-place output
-    appears in both ``input_args`` and ``output_args``)."""
+    appears in both ``input_args`` and ``output_args``). ``dtypes`` populates the
+    ``init.dtypes`` override block so a complex (or otherwise non-float64) array
+    is declared with the right element type -- the front end reads it directly."""
     all_args = inputs + outputs
     array_args = [a for a in all_args if a in shapes]
+    init = {"shapes": shapes}
+    if dtypes:
+        init["dtypes"] = dict(dtypes)
     return {
         "benchmark": {
             "name": func, "short_name": func, "relative_path": "",
             "module_name": func, "func_name": func,
             "parameters": {"S": dict(syms)},
             "input_args": all_args, "array_args": array_args,
-            "output_args": outputs, "init": {"shapes": shapes},
+            "output_args": outputs, "init": init,
         }
     }
 
@@ -72,7 +78,8 @@ def run_op(src: str, func: str, inputs: Dict[str, np.ndarray],
            shapes: Dict[str, str] = None,
            rtol: float = 1e-9, atol: float = 1e-9,
            backends=("c", "cpp", "fortran", "numba", "pythran", "jax"),
-           skip_backends: Dict[str, str] = None) -> Dict[str, str]:
+           skip_backends: Dict[str, str] = None,
+           dtypes: Dict[str, str] = None) -> Dict[str, str]:
     """Emit ``src``'s ``func`` for each backend, run it, compare to numpy.
 
     :param inputs: name -> concrete numpy array / scalar (kernel call order is
@@ -92,11 +99,42 @@ def run_op(src: str, func: str, inputs: Dict[str, np.ndarray],
     import shutil
     status: Dict[str, str] = {}
     # numpy reference.
+    # Effective element types: read each complex INPUT array's ACTUAL dtype
+    # (complex64 vs complex128 -- never hardcoded), then apply any caller-declared
+    # ``dtypes`` (needed for complex OUTPUT buffers, whose type can't be inferred
+    # before the numpy reference runs -- a float64 output buffer would silently
+    # drop the imaginary part of a complex result). ``.real`` / ``.imag`` accessors
+    # are only meaningful when the operand is declared with its true complex type.
+    eff_dtypes: Dict[str, str] = {
+        n: str(v.dtype) for n, v in inputs.items()
+        if isinstance(v, np.ndarray) and np.iscomplexobj(v)
+    }
+    eff_dtypes.update(dtypes or {})
+
+    def _np_dtype(name):
+        dt = eff_dtypes.get(name)
+        return np.dtype(dt).type if dt else np.float64
+
     ns: Dict[str, object] = {}
     exec(compile(src, "<op>", "exec"), ns)
     npfn = ns[func]
+    # Footgun guard: a complex-producing OUTPUT the caller declared real (float64)
+    # would let the numpy reference SILENTLY TRUNCATE the imaginary part below, and
+    # backends that also truncate would spuriously agree on the wrong value. Run the
+    # reference into a complex scratch (fresh input copies, no in-place mutation of
+    # the real run) and fail loudly if a real-declared output is actually complex.
+    if any(_np_dtype(n) is not np.complex128 for n in outputs):
+        _si = {n: (v.copy() if isinstance(v, np.ndarray) else v) for n, v in inputs.items()}
+        _sc = {n: np.zeros(sh, dtype=np.complex128) for n, sh in outputs.items()}
+        npfn(*[_si[n] for n in inputs], *[_sc[n] for n in outputs])
+        for n in outputs:
+            if _np_dtype(n) is not np.complex128 and np.any(np.asarray(_sc[n]).imag != 0):
+                raise AssertionError(
+                    f"run_op: output {n!r} has a nonzero imaginary part but was declared real -- pass "
+                    f"dtypes={{{n!r}: 'complex128'}} (else the numpy reference truncates it and backends "
+                    f"that also truncate spuriously agree)")
     np_in = {n: (v.copy() if isinstance(v, np.ndarray) else v) for n, v in inputs.items()}
-    out_init = {n: np.zeros(sh, dtype=np.float64) for n, sh in outputs.items()}
+    out_init = {n: np.zeros(sh, dtype=_np_dtype(n)) for n, sh in outputs.items()}
     npfn(*[np_in[n] for n in inputs], *[out_init[n] for n in outputs])
     expected = {n: _no._norm(out_init[n]) for n in outputs}
 
@@ -104,10 +142,10 @@ def run_op(src: str, func: str, inputs: Dict[str, np.ndarray],
         shapes = {n: f"({', '.join(_shape_tokens(v))})" for n, v in inputs.items() if isinstance(v, np.ndarray)}
         shapes.update({n: f"({', '.join(str(d) for d in sh)})" for n, sh in outputs.items()})
 
-    bi_dict = _bench_info(func, list(inputs), list(outputs), shapes, syms)
+    bi_dict = _bench_info(func, list(inputs), list(outputs), shapes, syms, eff_dtypes)
     by = {**inputs}
     for n, sh in outputs.items():
-        by[n] = np.zeros(sh, dtype=np.float64)
+        by[n] = np.zeros(sh, dtype=_np_dtype(n))
 
     with tempfile.TemporaryDirectory() as td:
         tdp = pathlib.Path(td)
@@ -167,7 +205,7 @@ def _run_numba(src, func, inputs, outputs, syms, expected, rtol, atol) -> str:
     try:
         fn = numba.njit(ns[func])
         ins = {n: (v.copy() if isinstance(v, np.ndarray) else v) for n, v in inputs.items()}
-        outs = {n: np.zeros(sh) for n, sh in outputs.items()}
+        outs = {n: np.zeros(sh, dtype=expected[n].dtype) for n, sh in outputs.items()}
         fn(*[ins[n] for n in inputs], *[outs[n] for n in outputs])
     except Exception as exc:  # noqa: BLE001
         return f"skip:unsupported:{type(exc).__name__}"
@@ -197,7 +235,7 @@ def _run_pythran(npy, bi, func, inputs, outputs, syms, expected, rtol, atol, tdp
     spec.loader.exec_module(m)
     fn = vars(m)[func]
     ins = {n: (v.copy() if isinstance(v, np.ndarray) else v) for n, v in inputs.items()}
-    outs = {n: np.zeros(sh) for n, sh in outputs.items()}
+    outs = {n: np.zeros(sh, dtype=expected[n].dtype) for n, sh in outputs.items()}
     # The emitter may append free size symbols (``M, N``) as trailing scalar
     # params; recover them from the emitted signature so the call arity matches.
     import ast as _ast
@@ -296,7 +334,7 @@ def _jax_child(src, func, inputs, outputs, expected, rtol, atol) -> str:
             ret_names = [e.id for e in tgt if isinstance(e, ast.Name)]
             break
     args = [jnp.asarray(v) if isinstance(v, np.ndarray) else v for v in inputs.values()]
-    args += [jnp.zeros(sh) for sh in outputs.values()]
+    args += [jnp.zeros(sh, dtype=expected[n].dtype) for n, sh in outputs.items()]
     try:
         ret = fn(*args)
     except Exception as exc:  # noqa: BLE001

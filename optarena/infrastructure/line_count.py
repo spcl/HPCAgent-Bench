@@ -30,7 +30,6 @@ class LineCount(object):
         if self.numpy:
             np_file, _ = self.numpy.impl_files(self.bench)[0]
             np_analysis = SourceAnalysis.from_file(np_file, "pygount")
-            # print(np_analysis.code_count)
         else:
             np_analysis = None
 
@@ -61,7 +60,6 @@ class LineCount(object):
         for impl_file, impl_name in self.frmwrk.impl_files(self.bench):
             try:
                 frmwrk_analysis = SourceAnalysis.from_file(impl_file, "pygount")
-                # print(frmwrk_analysis.code_count)
                 if np_analysis:
                     text1 = open(np_file).readlines()
                     text2 = open(impl_file).readlines()
@@ -92,5 +90,4 @@ class LineCount(object):
                 'npdiff': d["npdiff"]
             }
             result = tuple(new_d.values())
-            # print(result)
             util.create_result(conn, util.sql_insert_into_lcounts_table, result)
