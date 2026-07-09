@@ -1,60 +1,54 @@
 ---
 name: pytorch-to-numpy-translator
-description: Translate PyTorch model/kernel Python files into NumpyToC-compatible numpy, build or improve the translator under src, generate result/level1 result/level2 result/level3 outputs, and create parity tests comparing original PyTorch behavior against numpy implementations.
+description: Translate PyTorch KernelBench kernels into NumpyToC-compatible numpy, build or improve the translator under src, generate result/level1 and result/level2 outputs, and write parity tests comparing PyTorch against numpy.
 ---
 
-# PyTorch To NumPy Translator
+# PyTorch to NumPy Translator
 
 ## Operating Contract
 
-Use this skill when working on this repository's PyTorch-to-numpy translator. Treat `CONTRIBUTOR_GUIDE.md` as the compatibility contract for generated numpy: outputs should be static-shape, buffer-oriented wherever possible, free of `torch` imports, and limited to the numpy/control-flow surface documented there.
+`CONTRIBUTOR_GUIDE.md` is the compatibility contract for generated numpy: static-shape, buffer-oriented where possible, no `torch` imports, limited to the numpy/control-flow surface it documents.
 
-Generated kernels are meant to be consumed later by NumpyToC/NumpyToFortran, which will read each result file in isolation. Each generated result file must therefore be a clean, minimal, standalone numpy implementation of the original kernel math. Do not emit shared runtime imports, helper libraries, broad generic compatibility layers, or unused helper code into result files. Inline only the math needed by that specific source kernel. In rare cases where buffer-form output is too hard for a given construct, a numpy-array-returning implementation is acceptable as a temporary fallback and should be tracked by tests/status output.
+Each result file is read in isolation by NumpyToC/NumpyToFortran, so it must be a clean, minimal, standalone numpy implementation of that kernel's math. Inline only what the kernel needs; emit no shared runtime imports, helper libraries, or compatibility layers. A numpy-returning form is an acceptable temporary fallback where buffer-form is too hard, tracked in test/status output.
 
-Do not weaken the contributor guide to make a conversion pass. If an original PyTorch feature cannot be represented within the guide, stop and explain the missing rule before editing the guide.
+Do not weaken the guide to force a pass. If a PyTorch feature does not fit the guide, stop and explain the missing rule before editing the guide.
 
 ## Required Layout
 
-- Build translator code under `src/`.
-- Write converted kernels under `result/level1/`, `result/level2/`, and `result/level3/`, preserving source filenames.
-- Put parity test infrastructure under `test/`.
-- Keep source inputs in `level1/`, `level2/`, and `level3/` unchanged unless the user explicitly asks otherwise.
-- Do not keep separate project notes that override this skill and `CONTRIBUTOR_GUIDE.md`.
+- Translator code under `src/`; parity tests under `test/`.
+- Converted kernels under `result/level1/` and `result/level2/`, preserving source filenames.
+- Treat the `KernelBench/` submodule sources as read-only upstream.
+- Do not keep separate project notes that override this skill or `CONTRIBUTOR_GUIDE.md`.
 
 ## Translation Workflow
 
-1. Read a representative sample from each level before changing translator logic.
-2. Implement translator behavior in reusable code, not by one-off manual edits to results.
-3. Generate minimal standalone numpy results from the translator, preferring buffer-form signatures.
+1. Read a representative sample before changing translator logic.
+2. Implement behavior in reusable translator code, not one-off edits to results.
+3. Generate minimal standalone numpy results, preferring buffer-form signatures.
 4. Run parity tests against the original PyTorch files.
-5. Classify failures by unsupported PyTorch construct, shape/state initialization issue, numerical tolerance issue, or test harness issue.
-6. Improve the translator progressively by level: level 1 first, then level 2, then level 3. Level 3 contains difficult model families, so incomplete level 3 coverage is acceptable only when failures are clearly reported and tied to unsupported constructs.
+5. Classify failures: unsupported construct, shape/init issue, tolerance, or harness.
+6. Improve by level, level 1 then level 2.
 
 ## Conversion Rules
 
-- Replace `torch` tensor operations with `numpy` equivalents from `CONTRIBUTOR_GUIDE.md`.
-- Strip autograd-only behavior such as `requires_grad`, `.detach()`, `.cpu()`, `.cuda()`, `.to()` device movement, and training-only state unless it affects inference numerics.
-- Convert `.view(...)` and `.reshape(...)` to `np.reshape(...)`; convert `.permute(...)` to `np.transpose(...)` only when the downstream guide supports it, otherwise emit explicit loops.
-- Convert `.size(dim)` and `.shape[dim]` to numpy shape reads.
-- Convert reductions using `dim=` to numpy reductions using `axis=`.
-- Convert PyTorch in-place operations to numpy augmented assignment.
-- For `nn.Module` models, preserve inference semantics: initialize weights from the PyTorch model in tests, and emit numpy forward logic that consumes equivalent parameter arrays.
-- For layers such as convolution, batch normalization, pooling, linear, activation, dropout in eval mode, and sequential containers, emit only the concrete numpy code needed by that kernel. Do not import a local runtime helper from generated result files.
-- Generated result files may import `numpy` only. They must not import `torch`, scipy, project-local runtime files, or any other dependency.
-- Generated kernels should not include code that is not part of the original kernel's math.
+- Replace `torch` tensor ops with the `numpy` equivalents in `CONTRIBUTOR_GUIDE.md`.
+- Strip autograd-only behavior (`requires_grad`, `.detach()`, `.cpu()`, `.cuda()`, `.to()`, training-only state) unless it changes inference numerics.
+- `.view` / `.reshape` -> `np.reshape`; `.permute` -> `np.transpose` where the guide supports it, else explicit loops.
+- `.size(dim)` / `.shape[dim]` -> numpy shape reads; `dim=` reductions -> `axis=`; in-place ops -> augmented assignment.
+- For `nn.Module` models, preserve inference semantics: tests seed weights from the torch model, the numpy forward consumes equivalent parameter arrays.
+- Emit only the concrete numpy a kernel needs (conv, batchnorm, pooling, linear, activations, eval-mode dropout, sequential); no local runtime helper imports.
+- Result files import `numpy` only -- never `torch`, scipy, or project-local files -- and contain nothing outside the kernel's math.
 
 ## Test Expectations
 
-- Tests should import each original PyTorch file dynamically and call `get_init_inputs()` and `get_inputs()` where present.
-- Tests should instantiate the PyTorch `Model`, set `eval()` when available, and compare its forward output to the generated numpy implementation.
-- Convert torch tensors to numpy arrays for numpy execution; convert learned PyTorch parameters to numpy arrays without changing values.
-- Tests may import `torch`; generated result files may not.
-- Tests may reduce very large benchmark dimensions so they run on CPU, while preserving representative operation structure. Avoid making reduced cases trivially small.
-- Add per-test timeout handling around 150 seconds. If a case times out, reduce that case's test size and rerun before treating it as a translator failure.
-- Use tolerance appropriate to dtype and operation depth. Start with `rtol=1e-4, atol=1e-5` for float32-heavy neural kernels, and tighten when stable.
-- Report per-file failures with enough context to improve the translator quickly: exception type, missing operation, shape mismatch, or max numerical error.
+- Import each PyTorch file dynamically; call `get_init_inputs()` / `get_inputs()` where present.
+- Instantiate the torch `Model`, `eval()` where available, compare its forward to the numpy output.
+- Convert torch tensors/parameters to numpy without changing values. Tests may import `torch`; result files may not.
+- Reduce oversized dims to run on CPU, keeping representative structure (not trivially small).
+- ~150s per-test timeout; on timeout, shrink that case and rerun before calling it a translator failure.
+- Tolerance by dtype/depth: start `rtol=1e-4, atol=1e-5` for float32-heavy kernels, tighten when stable.
+- Report per-file failures with exception type, missing op, shape mismatch, or max error.
 
 ## Project References
 
-- Read `CONTRIBUTOR_GUIDE.md` for the allowed generated-numpy surface.
-- This skill is the repository-specific operating note for the translator.
+- `CONTRIBUTOR_GUIDE.md` -- the allowed generated-numpy surface.
