@@ -131,8 +131,15 @@ def _apply_size_cap(ranges: Dict[str, Any], cap: int = None) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     for name, value in ranges.items():
         if is_range(value):
-            lo, hi = value
-            out[name] = [min(int(lo), cap), min(int(hi), cap)]  # lo <= hi -> stays ordered
+            lo, hi = int(value[0]), int(value[1])
+            clo, chi = min(lo, cap), min(hi, cap)
+            # A real interval (lo < hi) whose BOTH ends exceed the cap would collapse to [cap, cap] --
+            # a single value, which makes a distinct-dimension constraint (e.g. NI != NJ) unsatisfiable
+            # and silently drops every fuzz cell for the kernel. Keep a sub-cap spread instead so the
+            # capped draw still ranges over distinct sizes.
+            if clo == chi and lo < hi:
+                clo = max(1, chi // 2)
+            out[name] = [clo, chi]  # lo <= hi -> stays ordered
         elif isinstance(value, int) and value > 1:
             out[name] = min(value, cap)
         else:
@@ -305,7 +312,8 @@ def _resolve_config(configs, rng):
 def sample_params(parameters: Dict[str, Any],
                   iteration: int = 0,
                   configs: Dict[str, Any] = None,
-                  constraints=None) -> Dict[str, Any]:
+                  constraints=None,
+                  size_cap: int = None) -> Dict[str, Any]:
     """Concrete params for fuzz ``iteration``, seeded by ``seeds.fuzz + iteration``.
 
     Microkernels pass just ``parameters`` -- intervals / sets / scalars resolve as
@@ -314,8 +322,11 @@ def sample_params(parameters: Dict[str, Any],
     ``constraints`` (python predicates over the resolved params); size params may
     use ``{derive}`` / ``{construct}`` / ``{in}`` forms resolved against the
     config + other sizes. Resamples (bounded) until the constraints hold.
+    ``size_cap`` forwards to :func:`resolve_ranges`; the correctness data path passes
+    :func:`correctness_size_cap` so a correct-but-slow reference is not drawn a
+    GPU-scale shape it cannot finish inside ``timeouts.kernel_s`` (mislabelling it wrong).
     """
-    fuzzed = resolve_ranges(parameters)
+    fuzzed = resolve_ranges(parameters, size_cap)
     seed = int(config.get("seeds.fuzz", 42)) + int(iteration)
     distribution = config.get("fuzz.size_distribution", "log_uniform")
     constraints = constraints or []

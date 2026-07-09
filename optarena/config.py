@@ -36,6 +36,11 @@ def set_override(dotted: str, value: Any) -> None:
     _OVERRIDES[dotted] = value
 
 
+def clear_override(dotted: str) -> None:
+    """Remove a runtime override set by :func:`set_override` (a no-op if unset)."""
+    _OVERRIDES.pop(dotted, None)
+
+
 def _coerce(s: str) -> Any:
     low = s.lower()
     if low in ("true", "false"):
