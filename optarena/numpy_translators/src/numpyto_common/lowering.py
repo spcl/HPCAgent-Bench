@@ -993,12 +993,60 @@ class _BuiltinCastRewriter(ast.NodeTransformer):
     both correct and faithful.
     """
 
+    def visit_BinOp(self, node: ast.BinOp) -> ast.AST:
+        # True-division barrier: a ``float(x)`` operand of ``/`` must be
+        # PRESERVED, not dropped -- numpy ``/`` is true division, so an int/int
+        # ``float(a) / b`` must stay floating. Rewrite the ``float(x)`` cast to a
+        # real ``np.float64(x)`` cast (which the C / Fortran emitters render)
+        # BEFORE ``generic_visit`` reaches the inner ``float`` call and drops it.
+        if isinstance(node.op, ast.Div):
+            node.left = self._keep_float_as_cast(node.left)
+            node.right = self._keep_float_as_cast(node.right)
+        self.generic_visit(node)
+        return node
+
+    @staticmethod
+    def _keep_float_as_cast(operand: ast.AST) -> ast.AST:
+        if (isinstance(operand, ast.Call) and isinstance(operand.func, ast.Name)
+                and operand.func.id == "float" and len(operand.args) == 1):
+            return ast.copy_location(
+                ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()),
+                                            attr="float64", ctx=ast.Load()),
+                         args=list(operand.args), keywords=[]), operand)
+        return operand
+
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
         if (isinstance(node.func, ast.Name)
                 and node.func.id == "float"
                 and len(node.args) == 1):
             return node.args[0]
+        return node
+
+
+class _TrueDivisionPromoter(ast.NodeTransformer):
+    """numpy ``/`` is TRUE division: int / int -> float64. C ``/`` and Fortran
+    ``/`` do INTEGER division on integer operands, so wrap the left operand of an
+    all-integer division in an ``np.float64(...)`` cast (which both emitters
+    render as ``(double)(x)`` / ``REAL(x, kind=c_double)``) to force a floating
+    divide -- matching numpy. Float / complex operands are left untouched (the
+    surrounding arithmetic already promotes); ``//`` (FloorDiv) is a distinct op
+    handled by the emitters' integer floor macro and is NOT touched here."""
+
+    def __init__(self, local_dtypes, array_names):
+        self.local_dtypes = local_dtypes or {}
+        self.array_names = array_names or set()
+
+    def visit_BinOp(self, node: ast.BinOp) -> ast.AST:
+        from numpyto_common.lib_nodes import _is_integer_expr
+        self.generic_visit(node)
+        if (isinstance(node.op, ast.Div)
+                and _is_integer_expr(node.left, self.local_dtypes, self.array_names)
+                and _is_integer_expr(node.right, self.local_dtypes, self.array_names)):
+            node.left = ast.copy_location(
+                ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()),
+                                            attr="float64", ctx=ast.Load()),
+                         args=[node.left], keywords=[]), node.left)
         return node
 
 
@@ -5407,6 +5455,22 @@ def _lp_slice_fusion_and_resolve(ctx: LoweringContext) -> None:
                 ctx.local_dtypes[_nm] = "int64"
 
 
+def _lp_promote_true_division(ctx: LoweringContext) -> None:
+    """Promote all-integer ``/`` to a floating divide (numpy true division).
+
+    Runs EARLY -- right after dtype seeding + harvest, BEFORE the LibNode /
+    slice / reshape passes synthesize their own integer index arithmetic
+    (row-major ``idx / stride`` decompositions that MUST stay integer). It
+    therefore only rewrites divisions the numpy SOURCE wrote, never internally
+    generated index math. Array names come from the harvested shape tables so a
+    float array element is not mistaken for an integer; a later scalarization of
+    a whole-array ``np.float64(a) / b`` recurses into the cast operand
+    unchanged."""
+    array_names = set(ctx.lib_shape_table) | set(ctx.arrays_shapes)
+    _TrueDivisionPromoter(ctx.local_dtypes, array_names).visit(ctx.tree)
+    ast.fix_missing_locations(ctx.tree)
+
+
 def _lp_lower_helpers(ctx: LoweringContext) -> None:
     """Lower each non-inlinable helper the same way -- it is a self-contained
     sub-kernel (own params + body). Its early ``return`` survives lowering (the
@@ -5424,6 +5488,7 @@ _LOWER_PHASES: List[Tuple[str, Callable[["LoweringContext"], None]]] = [
     ("promote-params", _lp_promote_params),
     ("pre-libnode-normalize", _lp_pre_libnode_normalize),
     ("seed-dtypes-and-harvest", _lp_seed_dtypes_and_harvest),
+    ("promote-true-division", _lp_promote_true_division),
     ("resolve-inlined-shapes", _lp_resolve_inlined_shapes),
     ("libnode-expand", _lp_libnode_expand),
     ("whole-array-and-zeros", _lp_whole_array_and_zeros),

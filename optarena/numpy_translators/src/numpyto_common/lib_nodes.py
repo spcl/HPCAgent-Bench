@@ -720,11 +720,34 @@ def _broadcast_extents(l_ext: Tuple[ast.expr, ...],
     r_pad = (_const(1),) * (rank - len(r_ext)) + r_ext
     out: List[ast.expr] = []
     for l, r in zip(l_pad, r_pad):
-        if _is_const_one(l):
+        # A size-1 axis (on EITHER side) is stretched to the other side's
+        # extent. Symmetric: a size-1 RIGHT axis must yield the LEFT extent, not
+        # silently keep the (already equal) left -- so ``B(N, M) * a(N, 1)``
+        # broadcasts the last axis to ``M`` rather than dropping it.
+        if _extent_is_one(l):
             out.append(r)
+        elif _extent_is_one(r):
+            out.append(l)
         else:
+            # Neither side is a literal 1: equal extents keep either; a genuine
+            # mismatch is a runtime-1 broadcast we cannot resolve statically, so
+            # take the left (the scalarizer indexes each operand by its own
+            # shape, so a per-operand size-1 axis is still read with a 0).
             out.append(l)
     return tuple(out)
+
+
+def _extent_is_one(node: ast.expr) -> bool:
+    """True when an extent is the literal ``1`` -- a bare ``Constant(1)`` or a
+    node that unparses to ``"1"`` (a shape token ``"1"`` re-parsed via
+    ``_const_or_name``). A symbolic extent that is only 1 at runtime cannot be
+    detected here."""
+    if _is_const_one(node):
+        return True
+    try:
+        return ast.unparse(node).strip() == "1"
+    except (AttributeError, ValueError):
+        return False
 
 
 def _is_integer_expr(node: ast.AST, local_dtypes: Dict[str, str],
@@ -1053,6 +1076,14 @@ def _expand_axis_reduction(target, args, kwargs, shape_table, init, op_fn, post_
     axes, keepdims = _read_axis_keepdims(args, kwargs)
     n_dim = len(shape)
 
+    # ``initial=`` (sum / prod / max / min) seeds the reduction with the given
+    # value instead of the default identity / first element. The reduction loop
+    # still walks every element (max / min are idempotent, so re-including index
+    # 0 is harmless), yielding numpy's ``op(initial, *elements)``.
+    initial = _read_kwarg(kwargs, "initial")
+    if initial is not None:
+        init = initial
+
     if axes is None:
         # Full reduction -- scalar target.
         iters = [_make_iter_name("__r", i) for i in range(n_dim)]
@@ -1188,27 +1219,91 @@ def _init_for(init, arr, n_dim):
     return init
 
 
-def expand_sum(target, args, shape_table, kwargs=None):
+def _read_kwarg(kwargs, name):
+    """Return the AST value of keyword ``name`` in ``kwargs`` (list of
+    ``ast.keyword``), or ``None`` when absent."""
+    for kw in (kwargs or []):
+        if kw.arg == name:
+            return kw.value
+    return None
+
+
+def _reduction_elem_is_integer(args, local_dtypes):
+    """True when the reduced array (first arg, a bare Name) is tagged an
+    integer / boolean dtype -- numpy upcasts int8/16/32/bool to int64 for
+    ``sum`` / ``prod``, so the accumulator must be an integer, not a float."""
+    if not local_dtypes or not args or not isinstance(args[0], ast.Name):
+        return False
+    dt = local_dtypes.get(args[0].id)
+    return dt is not None and dt.startswith(("int", "uint", "bool"))
+
+
+def _nan_reduce_op(cmp):
+    """Running max/min update that propagates NaN like numpy.
+
+    Emits ``x if (x <cmp> acc or x != x) else acc``. The ``x != x`` NaN test
+    lets a NaN element win, and once the accumulator is NaN it sticks (nothing
+    compares ``<cmp>`` against a NaN, and a later NaN keeps setting it). This is
+    the numpy semantics ``np.max``/``np.min`` return NaN if ANY element is NaN --
+    unlike C ``fmax`` / the ``max`` macro, which suppress NaN."""
+    def _f(acc, x):
+        return ast.IfExp(
+            test=ast.BoolOp(op=ast.Or(), values=[
+                ast.Compare(left=copy.deepcopy(x), ops=[cmp()],
+                            comparators=[copy.deepcopy(acc)]),
+                ast.Compare(left=copy.deepcopy(x), ops=[ast.NotEq()],
+                            comparators=[copy.deepcopy(x)])]),
+            body=copy.deepcopy(x),
+            orelse=copy.deepcopy(acc))
+    return _f
+
+
+def expand_sum(target, args, shape_table, kwargs=None, local_dtypes=None):
+    is_int = _reduction_elem_is_integer(args, local_dtypes)
+    if is_int and local_dtypes is not None and isinstance(target, ast.Name):
+        local_dtypes[target.id] = "int64"
     return _expand_axis_reduction(
         target, args, kwargs, shape_table,
-        init=_const(0.0),
+        init=_const(0) if is_int else _const(0.0),
         op_fn=lambda acc, x: ast.BinOp(left=acc, op=ast.Add(), right=x))
 
 
 def expand_max(target, args, shape_table, kwargs=None):
     arr = args[0]
+    _reject_zero_size_reduction(args, kwargs, shape_table)
     return _expand_axis_reduction(
         target, args, kwargs, shape_table,
         init=ast.Subscript(value=arr, slice=_const(0), ctx=ast.Load()),
-        op_fn=lambda acc, x: ast.Call(func=_name("max"), args=[acc, x], keywords=[]))
+        op_fn=_nan_reduce_op(ast.Gt))
 
 
 def expand_min(target, args, shape_table, kwargs=None):
     arr = args[0]
+    _reject_zero_size_reduction(args, kwargs, shape_table)
     return _expand_axis_reduction(
         target, args, kwargs, shape_table,
         init=ast.Subscript(value=arr, slice=_const(0), ctx=ast.Load()),
-        op_fn=lambda acc, x: ast.Call(func=_name("min"), args=[acc, x], keywords=[]))
+        op_fn=_nan_reduce_op(ast.Lt))
+
+
+def _reject_zero_size_reduction(args, kwargs, shape_table):
+    """Refuse to lower ``np.max``/``np.min`` over a statically zero-length
+    reduction axis: numpy raises ``zero-size array to reduction ... which has
+    no identity``, and the seed ``arr[..., 0]`` would read out of bounds. When a
+    reduction axis has literal extent ``0`` we raise ``NotImplementedError`` so
+    the call is left un-lowered (compile-time error) rather than emitting an OOB
+    seed. (A symbolic extent that is 0 only at runtime cannot be caught here.)"""
+    if not args or not isinstance(args[0], ast.Name):
+        return
+    shape = shape_table.get(args[0].id)
+    if not shape:
+        return
+    n_dim = len(shape)
+    axes, _ = _read_axis_keepdims(args, kwargs)
+    red_axes = range(n_dim) if axes is None else [a + n_dim if a < 0 else a for a in axes]
+    for ax in red_axes:
+        if 0 <= ax < n_dim and str(shape[ax]) == "0":
+            raise NotImplementedError("zero-size array to reduction which has no identity")
 
 
 def expand_mean(target, args, shape_table, kwargs=None):
@@ -1268,10 +1363,13 @@ def expand_mean(target, args, shape_table, kwargs=None):
                 op=ast.Div(), right=divisor)))
 
 
-def expand_prod(target, args, shape_table, kwargs=None):
+def expand_prod(target, args, shape_table, kwargs=None, local_dtypes=None):
+    is_int = _reduction_elem_is_integer(args, local_dtypes)
+    if is_int and local_dtypes is not None and isinstance(target, ast.Name):
+        local_dtypes[target.id] = "int64"
     return _expand_axis_reduction(
         target, args, kwargs, shape_table,
-        init=_const(1.0),
+        init=_const(1) if is_int else _const(1.0),
         op_fn=lambda acc, x: ast.BinOp(left=acc, op=ast.Mult(), right=x))
 
 
@@ -1458,11 +1556,26 @@ def _expand_arg_reduction(target, args, shape_table, kwargs, op: str):
                 left=ast.BinOp(left=flat_idx, op=ast.Mult(),
                                right=_const_or_name(shape[axes_norm[k]])),
                 op=ast.Add(), right=_name(red_iter_map[axes_norm[k]]))
+    # NaN semantics (numpy): argmax/argmin return the index of the FIRST NaN.
+    # Update rule: ``(best == best) and (src != src or src <cmp> best)``.
+    #   * ``best == best`` is false once ``best`` is NaN -> the index locks at the
+    #     first NaN (nothing updates it afterward, so a later NaN can't move it).
+    #   * ``src != src`` lets a NaN element win (sets best = NaN, locking).
+    #   * otherwise the ordinary ``src <cmp> best`` comparison drives the arg.
+    # (When element 0 is already NaN, the seed ``best == best`` is false and the
+    # index stays 0 -- the first-NaN index.)
+    best_not_nan = ast.Compare(left=_name(best_val), ops=[ast.Eq()],
+                               comparators=[_name(best_val)])
+    src_is_nan = ast.Compare(left=copy.deepcopy(src_sub), ops=[ast.NotEq()],
+                             comparators=[copy.deepcopy(src_sub)])
+    ordinary = ast.Compare(left=copy.deepcopy(src_sub), ops=[cmp_op],
+                           comparators=[_name(best_val)])
     update = ast.If(
-        test=ast.Compare(left=src_sub, ops=[cmp_op],
-                         comparators=[_name(best_val)]),
+        test=ast.BoolOp(op=ast.And(), values=[
+            best_not_nan,
+            ast.BoolOp(op=ast.Or(), values=[src_is_nan, ordinary])]),
         body=[
-            ast.Assign(targets=[_store(best_val)], value=src_sub),
+            ast.Assign(targets=[_store(best_val)], value=copy.deepcopy(src_sub)),
             ast.Assign(targets=[out_sub], value=flat_idx),
         ],
         orelse=[])
@@ -1778,13 +1891,22 @@ def _expand_elementwise(target, args, shape_table, op_fn):
     if len(args) != 2:
         raise NotImplementedError("elementwise needs 2 args")
     a, b = args
-    # Either operand may be array-valued; the iteration extent comes
-    # from whichever operand resolves to an array shape first.
-    extent = _iter_extent_of(a, shape_table)
-    if extent is None:
-        extent = _iter_extent_of(b, shape_table)
-    if extent is None:
+    # The iteration extent is the numpy BROADCAST of BOTH operands, not just the
+    # first: ``np.maximum(a(M,), B(N, M))`` or ``np.multiply(a(1, M), B(N, M))``
+    # must iterate the full ``(N, M)`` output, so fold both operand extents
+    # through ``_broadcast_extents`` (right-aligned, size-1 axes stretched).
+    # ``_scalarize_at_iters`` then indexes each operand against the full iter
+    # nest, reading a size-1 / missing leading axis with a constant 0.
+    ea = _iter_extent_of(a, shape_table)
+    eb = _iter_extent_of(b, shape_table)
+    if ea is None and eb is None:
         raise NotImplementedError("elementwise: extent unknown for both args")
+    if ea is None:
+        extent = eb
+    elif eb is None:
+        extent = ea
+    else:
+        extent = _broadcast_extents(ea, eb)
     iters = [_name(f"__r{i}") for i in range(len(extent))]
     # Constants / scalar Names broadcast; arrays scalarize.
     def maybe_scalar(node):
@@ -2449,11 +2571,15 @@ def _concat_operands_axis(args, kwargs, shape_table):
     if not isinstance(seq, (ast.Tuple, ast.List)):
         raise NotImplementedError("np.concatenate: sequence must be a tuple/list")
     axis = 0
-    if len(args) >= 2 and isinstance(args[1], ast.Constant):
-        axis = args[1].value
+    # ``axis`` may be a plain literal or a negated one (``axis=-1`` parses as
+    # ``UnaryOp(USub, Constant(1))``, NOT ``Constant(-1)``); ``_const_int``
+    # accepts both. The ``axis < 0`` fixup below then resolves it mod rank
+    # (mirrors ``_stack_axis`` / ``_read_axis_keepdims``).
+    if len(args) >= 2 and _const_int(args[1]) is not None:
+        axis = _const_int(args[1])
     for kw in kwargs:
-        if kw.arg == "axis" and isinstance(kw.value, ast.Constant):
-            axis = kw.value.value
+        if kw.arg == "axis" and _const_int(kw.value) is not None:
+            axis = _const_int(kw.value)
     names: List[str] = []
     shapes: List[Tuple[str, ...]] = []
     for op in seq.elts:
@@ -2741,11 +2867,17 @@ def _expand_var_or_std(target, args, shape_table, kwargs, finish: str):
     sq = ast.BinOp(left=diff, op=ast.Mult(), right=diff)
     init_acc = ast.Assign(targets=[_store(sd_acc)], value=_const(0.0))
     add_acc = ast.AugAssign(target=_store(sd_acc), op=ast.Add(), value=sq)
-    # Divisor = product of every reduction-axis size.
+    # Divisor = product of every reduction-axis size, minus ``ddof`` (numpy's
+    # ``np.var``/``np.std`` divide by ``N - ddof``; ddof defaults to 0). The
+    # mean above always divides by the full ``N`` -- only the variance honors
+    # ddof.
     divisor: ast.expr = _const_or_name(shape[axes_norm[0]])
     for ax in axes_norm[1:]:
         divisor = ast.BinOp(left=divisor, op=ast.Mult(),
                             right=_const_or_name(shape[ax]))
+    ddof = _read_kwarg(kwargs, "ddof")
+    if ddof is not None and not (isinstance(ddof, ast.Constant) and ddof.value == 0):
+        divisor = ast.BinOp(left=divisor, op=ast.Sub(), right=copy.deepcopy(ddof))
     finalize_value: ast.expr = ast.BinOp(
         left=_name(sd_acc), op=ast.Div(), right=divisor)
     if finish == "sqrt":
@@ -6378,10 +6510,19 @@ class _CallHoister(ast.NodeTransformer):
             "divide", "true_divide", "power", "clip", "where",
         }
         if op in ELEMENTWISE and args:
+            # Broadcast the extents of ALL operands (not just the first): the
+            # hoisted temp for ``np.maximum(a(M,), B(N, M))`` must be the full
+            # broadcast shape ``(N, M)``, matching the elementwise expander's
+            # own broadcast iteration (fix: a lower-rank first operand no longer
+            # under-sizes the temp).
+            acc: Optional[Tuple[ast.expr, ...]] = None
             for arg in args:
                 ext = _iter_extent_of(arg, self.shape_table)
-                if ext is not None:
-                    return tuple(self._extent_to_shape_token(e) for e in ext)
+                if ext is None:
+                    continue
+                acc = ext if acc is None else _broadcast_extents(acc, ext)
+            if acc is not None:
+                return tuple(self._extent_to_shape_token(e) for e in acc)
         # ``np.hstack((a, b, c))`` -- horizontal stack along axis 1
         # for 2-D operands, axis 0 for 1-D operands. Sum the
         # concatenation-axis widths; the other axes are shared.

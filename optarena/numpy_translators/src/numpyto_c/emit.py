@@ -18,6 +18,7 @@ for this tool.
 """
 
 import ast
+import math
 import re
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -32,13 +33,24 @@ _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 
 
 def _c_type(dtype: str) -> str:
-    # dtype -> C type is the single registry in numpyto_common.dtypes
-    # (the canonical ``int`` is int64_t so index arithmetic is 64-bit).
+    # The dtype -> C type mapping is the single registry in numpyto_common.dtypes
+    # (note: the canonical ``int`` is int64_t so index arithmetic is 64-bit).
     try:
         return dtypes.c_type(dtype)
     except KeyError:
         return "double"
 
+
+#: libm functions with a ``<name>f`` single-precision variant. In a float32
+#: kernel the double-precision libm call would round in double where numpy rounds
+#: in float32, so the ``f`` variant is emitted (see ``_math_name``). ``fmax`` /
+#: ``fmin`` are absent -- they route through the NaN-propagating ``__npb_fmax`` /
+#: ``__npb_fmin`` helpers, and max/min are exact (no precision to lose).
+_FLOATABLE = frozenset({
+    "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "exp", "exp2",
+    "expm1", "log", "log2", "log10", "log1p", "sqrt", "cbrt", "hypot", "atan2", "pow", "floor", "ceil", "round",
+    "trunc", "fabs", "fmod", "copysign", "erf", "erfc", "tgamma", "lgamma"
+})
 
 #: ``u?int{8,16,32}_t`` -- the integer C types NARROWER than the int64 ABI
 #: integer (matched on the registry's C-type string, not a dtype-name list).
@@ -52,6 +64,26 @@ def _is_narrow_int(dtype: str) -> bool:
         return bool(_NARROW_INT_CT.fullmatch(dtypes.c_type(dtype)))
     except KeyError:
         return False
+
+
+def _default_float_dtype(kir: KernelIR) -> str:
+    """The floating dtype for a temp not otherwise typed (a matmul / elementwise
+    scratch). ``kir.float_precision`` wins when a global precision was applied;
+    otherwise it is INFERRED from the signature: when every floating array /
+    scalar is float32 (and none is float64), the kernel is uniformly float32 and
+    its temps must be float32 too -- else a ``np.sqrt(a)`` scratch would silently
+    compute in double and diverge from numpy's per-op float32 rounding. A mixed
+    or all-float64 kernel keeps float64. Reads only signature arrays / scalars
+    (NOT ``local_dtypes``, which the temps themselves populate)."""
+    if kir.float_precision:
+        return kir.float_precision
+    cts: Set[str] = set()
+    for desc in (*kir.arrays, *kir.scalars):
+        if desc.dtype:
+            cts.add(_c_type(desc.dtype))
+    if cts & {"float", "double"} == {"float"}:
+        return "float32"
+    return "float64"
 
 
 def _array_signature(arr: ArrayDesc) -> str:
@@ -153,10 +185,7 @@ class _CBodyEmitter(BaseEmitter):
         # against the THEN-current shape of ``x`` instead of
         # falling through to chained ``[][]`` because
         # ``array_shapes[x]`` carries the FINAL rank-2 FC shape.
-        self._reassign_shapes: Dict[str, List[Tuple[str, ...]]] = {
-            k: list(v)
-            for k, v in kir.reassign_shapes.items()
-        }
+        self._reassign_shapes: Dict[str, List[Tuple[str, ...]]] = {k: list(v) for k, v in kir.reassign_shapes.items()}
 
     # ----- statement-level ------------------------------------------------
 
@@ -225,10 +254,12 @@ class _CBodyEmitter(BaseEmitter):
         # Array return: write the value into the out-param, then return void.
         # ``return X`` -> ``memcpy``/elementwise copy handled as a whole-array
         # assign ``__hret[:] = X`` reusing the existing slice-assign path.
-        assign = ast.Assign(
-            targets=[ast.Subscript(value=ast.Name(id=mode, ctx=ast.Load()),
-                                   slice=ast.Slice(lower=None, upper=None, step=None), ctx=ast.Store())],
-            value=node.value)
+        assign = ast.Assign(targets=[
+            ast.Subscript(value=ast.Name(id=mode, ctx=ast.Load()),
+                          slice=ast.Slice(lower=None, upper=None, step=None),
+                          ctx=ast.Store())
+        ],
+                            value=node.value)
         ast.copy_location(assign, node)
         ast.fix_missing_locations(assign)
         return f"{self._emit_assign(assign, indent)}\n{indent}return;"
@@ -309,8 +340,7 @@ class _CBodyEmitter(BaseEmitter):
                         lines.append(f"{indent}free({t});")
                     # Pluto: cast to the multidimensional pointer-to-array type
                     # matching the declaration (``T (*X)[d1]``); else flat ``T*``.
-                    cast = (f"({c_type} (*){self.md_trailing[t]})"
-                            if t in self.md_trailing else f"({c_type} *)")
+                    cast = (f"({c_type} (*){self.md_trailing[t]})" if t in self.md_trailing else f"({c_type} *)")
                     lines.append(f"{indent}{t} = {cast}malloc(({size}) "
                                  f"* sizeof({c_type}));")
                     if fill is not None:
@@ -325,7 +355,7 @@ class _CBodyEmitter(BaseEmitter):
                     local_dtypes = vars(self).get("local_dtypes_for_inline", {})
                     size_tokens = [f"({_c_shape_token(s)})" for s in shape] if shape else []
                     size = " * ".join(size_tokens) if size_tokens else "1"
-                    default_float = self.kir.float_precision or "float64"
+                    default_float = _default_float_dtype(self.kir)
                     dtype_tag = local_dtypes.get(t, default_float)
                     c_type = _c_type(dtype_tag)
                     return f"{indent}{c_type} {t}[{size}];"
@@ -370,7 +400,14 @@ class _CBodyEmitter(BaseEmitter):
             if isinstance(v, int):
                 return str(v)
             if isinstance(v, float):
-                return repr(v)
+                # In a float32 kernel a bare double literal would force the
+                # surrounding arithmetic into double (numpy keeps it float32);
+                # the ``f`` suffix keeps it single-precision. Non-finite values
+                # (inf/nan) have no ``f``-suffixed spelling, so leave them.
+                lit = repr(v)
+                if self._is_float32_kernel() and math.isfinite(v):
+                    lit += "f"
+                return lit
             if isinstance(v, complex):
                 # C99 ``_Complex`` literal via ``_Complex_I`` (C-only;
                 # avoids the bare ``I`` macro which collides with
@@ -419,15 +456,19 @@ class _CBodyEmitter(BaseEmitter):
                 if (self._is_int_operand(node.left) and self._is_int_operand(node.right)):
                     return (f"__npb_int_pow({self.emit_expr(node.left)}, "
                             f"{self.emit_expr(node.right)})")
-                return (f"pow({self.emit_expr(node.left)}, "
+                return (f"{self._math_name('pow')}({self.emit_expr(node.left)}, "
                         f"{self.emit_expr(node.right)})")
-            # ``a // b`` -> ``int_floor(a, b)``: C's ``/`` truncates
-            # toward zero, Python's ``//`` floors toward -inf; the macro
-            # in the header bridges the gap so mixed-sign operands match
-            # numpy.
+            # ``a // b``: integer operands -> ``int_floor(a, b)`` (C's ``/``
+            # truncates toward zero, Python's ``//`` floors toward -inf; the
+            # header macro bridges the gap for mixed-sign operands). FLOAT
+            # operands -> ``floor(a / b)``: ``int_floor`` uses integer ``%`` /
+            # ``/`` which C rejects on doubles, and numpy float floor-division
+            # is ``floor(a / b)``. Mirrors the Mod float-routing above.
             if isinstance(node.op, ast.FloorDiv):
-                return (f"int_floor({self.emit_expr(node.left)}, "
-                        f"{self.emit_expr(node.right)})")
+                left, right = self.emit_expr(node.left), self.emit_expr(node.right)
+                if self._is_float_operand(node.left) or self._is_float_operand(node.right):
+                    return f"{self._math_name('floor')}(({left}) / ({right}))"
+                return f"int_floor({left}, {right})"
             # ``a % b`` -> ``python_mod`` / ``python_fmod`` because Python (and
             # numpy) take the sign of the divisor; C/C++ take the sign of the
             # dividend. Integer operands use the exact integer ``%`` macro; a
@@ -472,9 +513,8 @@ class _CBodyEmitter(BaseEmitter):
         # A bare ``z.real`` / ``z.imag`` Attribute never reaches emit: ``native_desugar``
         # rewrites the accessor to ``np.real(z)`` / ``np.imag(z)`` at parse time, and the
         # ``creal`` / ``cimag`` lowering lives on that canonical call form in ``_emit_call``.
-        raise NotImplementedError(
-            f"expression {type(node).__name__} "
-            f"(line {getattr(node, 'lineno', '?')}): {ast.unparse(node)[:120]}")
+        raise NotImplementedError(f"expression {type(node).__name__} "
+                                  f"(line {getattr(node, 'lineno', '?')}): {ast.unparse(node)[:120]}")
 
     def _unchain_subscript(self, node: ast.Subscript) -> Tuple[ast.AST, List[str]]:
         """Collapse a subscript CHAIN ``a[i][j]...`` that bottoms out at a base
@@ -583,7 +623,7 @@ class _CBodyEmitter(BaseEmitter):
         keeps its declared width; a write (Store ctx) is untouched and an
         assignment back into the narrow array narrows implicitly."""
         base = node.value
-        while isinstance(base, ast.Subscript):   # chained ``a[i][j]`` -> Name a
+        while isinstance(base, ast.Subscript):  # chained ``a[i][j]`` -> Name a
             base = base.value
         if (isinstance(node.ctx, ast.Load) and isinstance(base, ast.Name)
                 and _is_narrow_int(self._dtype_for_name(base.id) or "")):
@@ -611,10 +651,13 @@ class _CBodyEmitter(BaseEmitter):
                 return f"{_COMPLEX_INTRINSIC[fn]}({args})"
             # Python ``abs(x)`` on a floating operand must be C ``fabs`` --
             # plain ``abs`` is <stdlib.h> INTEGER abs and would truncate
-            # the double (s3113 / s318: ``abs(a[i])``). Integer operands
-            # keep ``abs`` (``fabs`` would break an int array subscript).
-            if (fn == "abs" and len(node.args) == 1 and self._is_float_operand(node.args[0])):
-                return f"fabs({self.emit_expr(node.args[0])})"
+            # the double (s3113 / s318: ``abs(a[i])``). Integer operands use
+            # ``llabs`` -- the canonical integer is int64, and C ``abs`` is
+            # 32-bit and would truncate a large |int64| magnitude.
+            if fn == "abs" and len(node.args) == 1:
+                if self._is_float_operand(node.args[0]):
+                    return f"{self._math_name('fabs')}({self.emit_expr(node.args[0])})"
+                return f"llabs({self.emit_expr(node.args[0])})"
             # ``pow(complex_value, K)`` -> integer-2 fast path or
             # ``cpow``. ``pow`` in C++ has no complex overload.
             if (fn == "pow" and len(node.args) == 2 and self._is_complex_operand(node.args[0])):
@@ -623,17 +666,16 @@ class _CBodyEmitter(BaseEmitter):
                     return f"(({z})*({z}))"
                 z, w = (self.emit_expr(node.args[0]), self.emit_expr(node.args[1]))
                 return f"cpow({z}, {w})"
-            # Python ``int(x)`` is a TYPECAST in both C and C++. C
-            # syntax ``(int)expr`` works in both; ``int(expr)`` only
-            # in C++. Emit the portable cast form so the C compile
-            # accepts it too.
+            # Python ``int(x)`` is a TYPECAST. The canonical integer is int64,
+            # so cast to int64_t (a 32-bit ``(int)`` would truncate a value
+            # past 2^31). Resolved through the registry so no width is hardcoded.
             if fn == "int" and len(node.args) == 1:
-                return f"((int)({self.emit_expr(node.args[0])}))"
-            # ``np.sign`` marker -> -1 / 0 / +1. C bool subtraction gives
-            # the integer result, promoted to the target's type.
+                return f"(({_c_type('int')})({self.emit_expr(node.args[0])}))"
+            # ``np.sign`` marker: numpy ``sign(nan) == nan`` (the naive
+            # ``(x>0)-(x<0)`` gives 0 for NaN and evaluates ``x`` twice) -->
+            # the NaN-aware single-evaluation ``__npb_sign`` helper.
             if fn == "__npb_sign" and len(node.args) == 1:
-                x = self.emit_expr(node.args[0])
-                return f"((({x}) > 0) - (({x}) < 0))"
+                return f"__npb_sign({self.emit_expr(node.args[0])})"
             # Variadic builtin ``max(a, b, c, ...)`` / ``min(...)``: the C and
             # C++ ``max``/``min`` are 2-arg macros (prelude), so fold a 3+-arg
             # call into a left-nested chain ``max(max(a, b), c)`` (needleman_
@@ -644,8 +686,14 @@ class _CBodyEmitter(BaseEmitter):
                 for a in node.args[1:]:
                     acc = f"{fn}({acc}, {self.emit_expr(a)})"
                 return acc
+            # Elementwise ``np.maximum``/``np.minimum`` lower to ``fmax``/``fmin``
+            # (shared MATH_BUILTINS); libm ``fmax``/``fmin`` SUPPRESS NaN but numpy
+            # PROPAGATES it -- route to the NaN-propagating helpers instead.
+            if fn in ("fmax", "fmin") and len(node.args) == 2:
+                helper = "__npb_fmax" if fn == "fmax" else "__npb_fmin"
+                return f"{helper}({self.emit_expr(node.args[0])}, {self.emit_expr(node.args[1])})"
             args = ", ".join(self.emit_expr(a) for a in node.args)
-            return f"{fn}({args})"
+            return f"{self._math_name(fn)}({args})"
         # ``np.X(arg)`` / ``arr.X(...)`` -- handle a small set of
         # passthrough / identity intrinsics that survived lowering.
         if isinstance(node.func, ast.Attribute):
@@ -655,8 +703,7 @@ class _CBodyEmitter(BaseEmitter):
             # C cast to that dtype's C type, resolved through the dtype registry
             # so no width string is hardcoded. ``np.bool_`` carries a trailing
             # underscore; strip it before the registry lookup.
-            if (isinstance(node.func.value, ast.Name) and node.func.value.id == "np"
-                    and len(node.args) == 1):
+            if (isinstance(node.func.value, ast.Name) and node.func.value.id == "np" and len(node.args) == 1):
                 key = attr[:-1] if attr.endswith("_") else attr
                 if key in dtypes.REGISTRY or key in dtypes.SCALAR_KINDS:
                     return f"(({dtypes.c_type(key)})({self.emit_expr(node.args[0])}))"
@@ -671,16 +718,14 @@ class _CBodyEmitter(BaseEmitter):
             # the function-form branch just below.
             # ``np.conj(z)`` / ``np.conjugate(z)`` -- function form (vexx
             # ``np.conj(exxbuff)``, scalarised to a per-element operand).
-            if (isinstance(node.func.value, ast.Name)
-                    and node.func.value.id in ("np", "numpy")
+            if (isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy")
                     and attr in {"conj", "conjugate"} and len(node.args) == 1):
                 return f"__npb_conj({self.emit_expr(node.args[0])})"
             # ``np.real(z)`` / ``np.imag(z)`` -- the canonical function form the
             # ``.real`` / ``.imag`` accessor desugars to. Complex operand ->
             # ``creal`` / ``cimag``; a real operand is the value / 0 (numpy allows
             # ``.real`` / ``.imag`` on a real too).
-            if (isinstance(node.func.value, ast.Name)
-                    and node.func.value.id in ("np", "numpy")
+            if (isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy")
                     and attr in {"real", "imag"} and len(node.args) == 1):
                 x = self.emit_expr(node.args[0])
                 if self._is_complex_operand(node.args[0]):
@@ -696,32 +741,30 @@ class _CBodyEmitter(BaseEmitter):
                 a = self.emit_expr(node.args[1])
                 b = self.emit_expr(node.args[2])
                 return f"({c} ? {a} : {b})"
-            # ``np.sign(x)`` in scalar context -> -1 / 0 / +1 (numpy's
-            # convention: sign(0) == 0). Same inline as the array ``__npb_sign``
-            # marker. cloudsc's ``max(0.0, 1.0 * np.sign(ztp1[..] - rtt))``.
-            if (isinstance(node.func.value, ast.Name)
-                    and node.func.value.id in ("np", "numpy")
-                    and attr == "sign" and len(node.args) == 1):
-                x = self.emit_expr(node.args[0])
-                return f"((({x}) > 0) - (({x}) < 0))"
+            # ``np.sign(x)`` in scalar context: numpy ``sign(nan) == nan`` and
+            # ``sign(0) == 0``. Same NaN-aware single-evaluation ``__npb_sign``
+            # helper as the array marker. cloudsc's ``max(0.0, 1.0 * np.sign(..))``.
+            if (isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy") and attr == "sign"
+                    and len(node.args) == 1):
+                return f"__npb_sign({self.emit_expr(node.args[0])})"
             # ``np.abs(x)`` in scalar context (whole-array ``np.abs(arr)`` is
             # scalarised to per-element form by lowering): complex -> ``cabs``,
             # float -> ``fabs`` (plain int ``abs`` would truncate a double),
-            # integer -> ``abs``. Mirrors the builtin ``abs`` handling above.
-            if (isinstance(node.func.value, ast.Name)
-                    and node.func.value.id in ("np", "numpy")
+            # integer -> ``llabs`` (64-bit; ``abs`` is 32-bit and truncates a
+            # large |int64|). Mirrors the builtin ``abs`` handling above.
+            if (isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy")
                     and attr in ("abs", "absolute", "fabs") and len(node.args) == 1):
                 x = node.args[0]
                 if self._is_complex_operand(x):
                     return f"cabs({self.emit_expr(x)})"
                 if attr == "fabs" or self._is_float_operand(x):
-                    return f"fabs({self.emit_expr(x)})"
-                return f"abs({self.emit_expr(x)})"
+                    return f"{self._math_name('fabs')}({self.emit_expr(x)})"
+                return f"llabs({self.emit_expr(x)})"
             # ``np.hypot(a, b)`` -> C99 ``hypot`` (both operands real -- the
             # eigh Jacobi's ``np.hypot(z.real, z.imag)`` = |z|).
-            if (isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy")
-                    and attr == "hypot" and len(node.args) == 2):
-                return f"hypot({self.emit_expr(node.args[0])}, {self.emit_expr(node.args[1])})"
+            if (isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy") and attr == "hypot"
+                    and len(node.args) == 2):
+                return f"{self._math_name('hypot')}({self.emit_expr(node.args[0])}, {self.emit_expr(node.args[1])})"
         raise NotImplementedError(f"call to {ast.unparse(node.func)} not supported")
 
     def _is_int_operand(self, node: ast.AST) -> bool:
@@ -828,19 +871,35 @@ class _CBodyEmitter(BaseEmitter):
         if cache is not None:
             return cache
         floats: set = set()
-        for _ in range(8):                          # small fixpoint
+        for _ in range(8):  # small fixpoint
             changed = False
             for node in ast.walk(self.kir.tree):
-                if (isinstance(node, ast.Assign) and len(node.targets) == 1
-                        and isinstance(node.targets[0], ast.Name)
-                        and node.targets[0].id not in floats
-                        and self._is_float_operand(node.value, floats)):
+                if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                        and node.targets[0].id not in floats and self._is_float_operand(node.value, floats)):
                     floats.add(node.targets[0].id)
                     changed = True
             if not changed:
                 break
         self._fsn_cache = floats
         return floats
+
+    def _is_float32_kernel(self) -> bool:
+        """True when the kernel's floating-point work is uniformly float32, so
+        float Constants are ``f``-suffixed and libm transcendentals use their
+        ``<name>f`` variant -- reproducing numpy's per-op float32 rounding (a
+        double literal / double libm call would round in double). Shares the
+        signature-based signal with :func:`_default_float_dtype` (temps then also
+        default to float32). A MIXED float32+float64 kernel returns False and
+        keeps double behaviour: a per-Constant precision cannot be inferred
+        without surrounding-value context the emit_expr walk does not carry."""
+        return _default_float_dtype(self.kir) == "float32"
+
+    def _math_name(self, fn: str) -> str:
+        """``<name>f`` single-precision libm variant in a float32 kernel, else the
+        double-precision name unchanged (see :meth:`_is_float32_kernel`)."""
+        if fn in _FLOATABLE and self._is_float32_kernel():
+            return fn + "f"
+        return fn
 
     def _dtype_for_name(self, name: str):
         local_dtypes = self.kir.local_dtypes
@@ -884,8 +943,8 @@ def _negative_const_k(node: ast.AST):
     ``k > 0`` (the index is ``-k``); else None. A literal ``-1`` parses as
     ``UnaryOp(USub, Constant(1))``, but a folded ``Constant(-1)`` is handled too.
     ``bool`` is excluded (``a[True]`` is not a negative index)."""
-    if isinstance(node, ast.Constant) and isinstance(node.value, int) and not isinstance(node.value,
-                                                                                         bool) and node.value < 0:
+    if isinstance(node, ast.Constant) and isinstance(node.value,
+                                                     int) and not isinstance(node.value, bool) and node.value < 0:
         return -node.value
     if (isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub) and isinstance(node.operand, ast.Constant)
             and isinstance(node.operand.value, int) and not isinstance(node.operand.value, bool)):
@@ -998,9 +1057,11 @@ def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
         # ``needs_int`` -- used as a subscript or range arg -- takes
         # precedence over the source-array-dtype inheritance below
         # because using a float as an array subscript is a hard C
-        # error (``s4114``: ``k = ip[i]; c[LEN_1D - k - 1]``).
+        # error (``s4114``: ``k = ip[i]; c[LEN_1D - k - 1]``). The
+        # canonical integer is int64 (a 32-bit ``int`` would truncate an
+        # index past 2^31), resolved through the registry.
         if name in needs_int:
-            return "int"
+            return _c_type("int")
         # ``x = arr[i]`` (scalar Subscript on a Name with known dtype).
         if value is not None and isinstance(value, ast.Subscript) \
                 and isinstance(value.value, ast.Name):
@@ -1040,9 +1101,11 @@ def _md_trailing(shape) -> str:
     return "".join(f"[{_c_shape_token(d)}]" for d in shape[1:])
 
 
-def _emit_body(kir: KernelIR, indent: str = "  ",
+def _emit_body(kir: KernelIR,
+               indent: str = "  ",
                multidim_arrays: Optional[Set[str]] = None,
-               pluto: bool = False, return_parts: bool = False,
+               pluto: bool = False,
+               return_parts: bool = False,
                return_mode: Optional[str] = None):
     emitter = _CBodyEmitter(kir, multidim_arrays=multidim_arrays)
     emitter.pluto = pluto
@@ -1123,16 +1186,15 @@ def _emit_body(kir: KernelIR, indent: str = "  ",
     # C / C++ backends are byte-for-byte unchanged.
     md_locals: Set[str] = set()
     if pluto:
-        for _nm, _shp in (list(fn_top_locals.items())
-                          + list(deferred_malloc_locals.items())
-                          + list(inline_locals.items())):
+        for _nm, _shp in (list(fn_top_locals.items()) + list(deferred_malloc_locals.items()) +
+                          list(inline_locals.items())):
             if len(_shp) >= 2:
                 md_locals.add(_nm)
                 emitter.md_trailing[_nm] = _md_trailing(_shp)
         emitter.multidim_arrays = set(emitter.multidim_arrays) | md_locals
     # Default dtype for a float temp not listed in local_dtypes (e.g. a
     # matmul scratch) follows the kernel's float precision set on the IR.
-    default_float = kir.float_precision or "float64"
+    default_float = _default_float_dtype(kir)
     # Register each local ARRAY's resolved dtype. Source-level float
     # locals (gmres ``Q`` / ``H`` / ``e1`` from ``np.zeros``) are declared
     # as the default float but never tagged in ``local_dtypes``; without a
@@ -1229,8 +1291,7 @@ def _emit_body(kir: KernelIR, indent: str = "  ",
         # Pluto: keep allocations / frees OUT of the loop body so the caller can
         # place them outside ``#pragma scop`` (malloc/free are non-affine and
         # break the polyhedral SCoP).
-        return ("\n".join(d for d in decls if d), body,
-                "\n".join(f for f in frees if f))
+        return ("\n".join(d for d in decls if d), body, "\n".join(f for f in frees if f))
     return "\n".join(d for d in (*decls, body, *frees) if d)
 
 
@@ -1259,17 +1320,35 @@ _C_HEADER = ("#define _POSIX_C_SOURCE 199309L\n"
              " * boolean mask) don''t collide. Complex literals continue\n"
              " * to use the portable ``_Complex_I`` form. */\n"
              "#ifdef I\n#undef I\n#endif\n"
-             "/* Operand order matches Python's builtin ``max``/``min``: the\n"
-             " * result is the SECOND arg only when it strictly wins, else the\n"
-             " * FIRST -- so a NaN first operand propagates (``max(nan, x) ==\n"
-             " * nan``) exactly as Python/numpy do, rather than the\n"
-             " * NaN-suppressing ``fmax`` semantics a naive ``a > b`` gives. */\n"
+             "/* ``max``/``min`` PROPAGATE NaN (a NaN in EITHER operand yields NaN):\n"
+             " * these serve the elementwise ``np.maximum``/``np.minimum`` broadcast\n"
+             " * and the ``np.maximum.at`` / ``np.minimum.at`` scatter folds, which\n"
+             " * follow numpy (propagate), not Python's builtin max (which drops a NaN\n"
+             " * second operand). ``(a)+(b)`` is NaN whenever either operand is; for\n"
+             " * finite operands the ternary picks the larger/smaller -- identical to\n"
+             " * a plain comparison, so the 3-way builtin max (needleman_wunsch, always\n"
+             " * finite) is unchanged. For integer operands the NaN test is dead. */\n"
              "#ifndef min\n"
-             "#define min(a, b) (((b) < (a)) ? (b) : (a))\n"
+             "#define min(a, b) ((((a) != (a)) || ((b) != (b))) ? ((a) + (b)) : (((b) < (a)) ? (b) : (a)))\n"
              "#endif\n"
              "#ifndef max\n"
-             "#define max(a, b) (((b) > (a)) ? (b) : (a))\n"
+             "#define max(a, b) ((((a) != (a)) || ((b) != (b))) ? ((a) + (b)) : (((b) > (a)) ? (b) : (a)))\n"
              "#endif\n"
+             "/* Elementwise ``np.maximum``/``np.minimum`` lower to ``fmax``/``fmin``;\n"
+             " * libm ``fmax``/``fmin`` SUPPRESS NaN (return the non-NaN operand) but\n"
+             " * numpy PROPAGATES it. These single-evaluation helpers return NaN when\n"
+             " * either operand is NaN, else the larger/smaller. */\n"
+             "static inline double __npb_fmax(double a, double b) {\n"
+             "    return (a != a) ? a : (b != b) ? b : (a > b ? a : b);\n"
+             "}\n"
+             "static inline double __npb_fmin(double a, double b) {\n"
+             "    return (a != a) ? a : (b != b) ? b : (a < b ? a : b);\n"
+             "}\n"
+             "/* ``np.sign``: numpy ``sign(nan) == nan`` and ``sign(0) == 0``. The\n"
+             " * naive ``(x>0)-(x<0)`` gives 0 for NaN and evaluates ``x`` twice. */\n"
+             "static inline double __npb_sign(double x) {\n"
+             "    return x != x ? x : (double)((x > 0) - (x < 0));\n"
+             "}\n"
              "/* Python ``//`` floor-toward-neg-inf vs C trunc-toward-zero;\n"
              " * matches numpy ``//`` for both same- and mixed-sign inputs. */\n"
              "#ifndef int_floor\n"
@@ -1309,7 +1388,7 @@ _C_HEADER = ("#define _POSIX_C_SOURCE 199309L\n"
 # / ... declarations would clash with our own definitions); ``double _Complex``
 # is a GCC/Clang extension available without it.
 _CPP_HEADER = ('#include <chrono>\n#include <cstdint>\n#include <cmath>\n'
-               '#include <cstring>\n'
+               '#include <cstring>\n#include <cstdlib>\n'
                '// Math constants as typed constexpr values. ``<cmath>`` may\n'
                '// predefine M_PI / M_E as macros (glibc __USE_MISC); undefine\n'
                '// them so the names rebind to our constexpr values -- we emit no\n'
@@ -1369,15 +1448,31 @@ _CPP_HEADER = ('#include <chrono>\n#include <cstdint>\n#include <cmath>\n'
                '/* Ternary-form ``max`` / ``min`` as constexpr function templates\n'
                ' * so a mixed call like ``max(double, int)`` promotes the int\n'
                ' * operand via the usual arithmetic conversions (``std::max``\n'
-               ' * would require both args to share a type). Operand order picks\n'
-               ' * the SECOND arg only when it strictly wins, else the FIRST --\n'
-               ' * matching Python''s builtin max/min so a NaN first operand\n'
-               ' * propagates (``max(nan, x) == nan``), not the NaN-suppressing\n'
-               ' * ``fmax`` behaviour a plain ``a > b`` would give. */\n'
+               ' * would require both args to share a type). They PROPAGATE NaN (a\n'
+               ' * NaN in EITHER operand yields NaN): these serve the elementwise\n'
+               ' * ``np.maximum``/``np.minimum`` broadcast and the ``np.maximum.at`` /\n'
+               ' * ``np.minimum.at`` scatter folds, which follow numpy (propagate),\n'
+               ' * not Python builtin max. For finite operands the result is the\n'
+               ' * larger/smaller -- so the 3-way builtin max (needleman_wunsch,\n'
+               ' * always finite) is unchanged; integer NaN tests are dead. */\n'
                'template <class A, class B>\n'
-               'constexpr auto max(A a, B b) { return b > a ? b : a; }\n'
+               'constexpr auto max(A a, B b) { return a != a ? a : (b != b ? b : (b > a ? b : a)); }\n'
                'template <class A, class B>\n'
-               'constexpr auto min(A a, B b) { return b < a ? b : a; }\n'
+               'constexpr auto min(A a, B b) { return a != a ? a : (b != b ? b : (b < a ? b : a)); }\n'
+               '/* Elementwise ``np.maximum``/``np.minimum`` lower to ``fmax``/``fmin``;\n'
+               ' * libm ``fmax``/``fmin`` SUPPRESS NaN but numpy PROPAGATES it. These\n'
+               ' * single-evaluation helpers return NaN when either operand is NaN. */\n'
+               'inline double __npb_fmax(double a, double b) {\n'
+               '    return (a != a) ? a : (b != b) ? b : (a > b ? a : b);\n'
+               '}\n'
+               'inline double __npb_fmin(double a, double b) {\n'
+               '    return (a != a) ? a : (b != b) ? b : (a < b ? a : b);\n'
+               '}\n'
+               '/* ``np.sign``: numpy ``sign(nan) == nan`` and ``sign(0) == 0``. The\n'
+               ' * naive ``(x>0)-(x<0)`` gives 0 for NaN and evaluates ``x`` twice. */\n'
+               'inline double __npb_sign(double x) {\n'
+               '    return x != x ? x : (double)((x > 0) - (x < 0));\n'
+               '}\n'
                '/* Python ``//`` floor-toward-neg-inf (C/C++ ``/`` truncates\n'
                ' * toward zero); matches numpy ``//`` for mixed-sign inputs. */\n'
                'template <class A, class B>\n'
@@ -1411,8 +1506,9 @@ def _helper_return_ctype(hkir: KernelIR) -> str:
     """C return type for a scalar-returning helper: int64 when every ``return``
     value is an integer literal, else double (the common physics-helper case)."""
     returns = [n.value for n in ast.walk(hkir.tree) if isinstance(n, ast.Return) and n.value is not None]
-    if returns and all(isinstance(v, ast.Constant) and isinstance(v.value, int) and not isinstance(v.value, bool)
-                       for v in returns):
+    if returns and all(
+            isinstance(v, ast.Constant) and isinstance(v.value, int) and not isinstance(v.value, bool)
+            for v in returns):
         return _c_type("int")
     return _c_type("float64")
 
@@ -1460,8 +1556,7 @@ def _pluto_multidim_array_signature(arr: ArrayDesc) -> str:
     the array params and :func:`emit_pluto_binding` matches that order."""
     base = _c_type(arr.dtype)
     qual = "" if arr.is_output else "const "
-    dims = (f"[restrict {_c_shape_token(arr.shape[0])}]"
-            + "".join(f"[{_c_shape_token(d)}]" for d in arr.shape[1:]))
+    dims = (f"[restrict {_c_shape_token(arr.shape[0])}]" + "".join(f"[{_c_shape_token(d)}]" for d in arr.shape[1:]))
     return f"{qual}{base} {arr.name}{dims}"
 
 
@@ -1495,8 +1590,7 @@ def emit_pluto(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     # affine, and pet accepts malloc'd cast-views -- only PARAM cast-views break it).
     multidim = {a.name for a in kir.arrays if len(a.shape) >= 2}
     signature = _emit_pluto_signature(kir, name, multidim)
-    decls, body, frees = _emit_body(kir, indent="        ", multidim_arrays=multidim,
-                                    pluto=True, return_parts=True)
+    decls, body, frees = _emit_body(kir, indent="        ", multidim_arrays=multidim, pluto=True, return_parts=True)
     # Local allocations / frees live OUTSIDE ``#pragma scop`` -- malloc/free are
     # non-affine and would break the polyhedral region; only the affine loop
     # nests stay inside. (Deferred-malloc locals, whose shape needs a body

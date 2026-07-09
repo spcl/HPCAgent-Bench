@@ -131,9 +131,8 @@ def _np_to_jnp(tree: ast.AST) -> ast.AST:
             # layout) -- jax arrays have no user-facing layout distinction. Drop
             # it from constructors only (jnp.reshape DOES honour ``order=``, so it
             # is left intact). ``np.zeros(s, dtype=.., order='F')`` -> ``jnp.zeros(s, dtype=..)``.
-            if (isinstance(node.func, ast.Attribute)
-                    and node.func.attr in ("zeros", "ones", "empty", "full", "zeros_like",
-                                           "ones_like", "empty_like", "full_like")):
+            if (isinstance(node.func, ast.Attribute) and node.func.attr
+                    in ("zeros", "ones", "empty", "full", "zeros_like", "ones_like", "empty_like", "full_like")):
                 node.keywords = [k for k in node.keywords if k.arg != "order"]
             # Python builtins ``max``/``min`` over two (traced) arrays must use
             # the elementwise jnp ufuncs.
@@ -177,14 +176,32 @@ def _np_to_jnp(tree: ast.AST) -> ast.AST:
             return node
 
         def visit_BoolOp(self, node):
-            # ``a and b`` / ``a or b`` short-circuit on a Python bool, which a
-            # traced array cannot provide -> elementwise ``&`` / ``|``.
             self.generic_visit(node)
-            bitop = ast.BitAnd() if isinstance(node.op, ast.And) else ast.BitOr()
-            expr = node.values[0]
-            for rhs in node.values[1:]:
-                expr = ast.BinOp(left=expr, op=bitop, right=rhs)
-            return ast.copy_location(expr, node)
+            # ``a and b`` / ``a or b`` mean two different things depending on the
+            # operands. When EVERY operand is a provably-boolean array expression
+            # (a comparison or an ``np.logical_*`` / predicate call), this is a
+            # whole-array mask combine, and the faithful lowering is the
+            # elementwise ``&`` / ``|`` (a Python bool from a traced array is
+            # impossible, and bitwise on booleans is exact).
+            #
+            # For non-boolean operands Python/numpy ``and``/``or`` return one
+            # OPERAND by truthiness (``n = n or N`` yields ``N`` when ``n`` is
+            # falsy) -- ``&`` / ``|`` would instead bit-combine the VALUES, which
+            # is a miscompile. There is no single traceable rewrite of a general
+            # value-select ``and``/``or`` (a full lowering would need
+            # ``jnp.where(bool(first), ...)``, itself untraceable on a non-scalar,
+            # and short-circuit side effects). In eager mode -- the default and
+            # the widest-coverage path -- the operands are concrete host
+            # scalars/0-d arrays, so leaving the Python ``and``/``or`` verbatim
+            # preserves exact numpy semantics (a jit trace of such a construct
+            # would raise honestly rather than silently miscompile).
+            if all(_is_bool_expr(v) for v in node.values):
+                bitop = ast.BitAnd() if isinstance(node.op, ast.And) else ast.BitOr()
+                expr = node.values[0]
+                for rhs in node.values[1:]:
+                    expr = ast.BinOp(left=expr, op=bitop, right=rhs)
+                return ast.copy_location(expr, node)
+            return node
 
     return _R().visit(tree)
 
@@ -383,24 +400,39 @@ def _functionalize_stmt(s: ast.stmt) -> List[ast.stmt]:
     if isinstance(s, ast.Assign) and len(s.targets) == 1 and \
             isinstance(s.targets[0], ast.Subscript):
         tgt = s.targets[0]
-        arr = tgt.value
-        sl = tgt.slice
+        # Flatten a chained subscript target ``a[i][j]`` into a single multi-axis
+        # index ``a[i, j]`` (it indexes consecutive leading axes, which is
+        # numpy-equivalent to tuple indexing for basic indices). A naive
+        # ``a[i].at[j].set(v)`` would rebind ``a`` to the single row ``a[i]``,
+        # dropping the rest of the array.
+        indices: List[ast.expr] = []
+        base = tgt
+        while isinstance(base, ast.Subscript):
+            indices.append(base.slice)
+            base = base.value
+        indices.reverse()
+        arr = base
+        sl = indices[0] if len(indices) == 1 else ast.Tuple(elts=indices, ctx=ast.Load())
         name = ast.Name(id=_base_name(arr), ctx=ast.Store())
         if _is_full_slice(sl):
             # ``a[:] = <scalar>`` fills every element -- a plain ``a = <scalar>``
             # would rebind ``a`` to a SCALAR (then ``a.at[...]`` / array uses
             # break). Broadcast via ``jnp.full_like`` so ``a`` stays an array
             # of its original shape/dtype (edge_laplacian's ``Lx[:] = 0.0``).
-            # An array-valued RHS ``a[:] = arr`` is a straight rebind.
             if isinstance(s.value, ast.Constant) and not isinstance(s.value.value, str):
-                fill = ast.Call(
-                    func=ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()),
-                                       attr="full_like", ctx=ast.Load()),
-                    args=[ast.Name(id=_base_name(arr), ctx=ast.Load()), s.value],
-                    keywords=[])
+                fill = ast.Call(func=ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()),
+                                                   attr="full_like",
+                                                   ctx=ast.Load()),
+                                args=[ast.Name(id=_base_name(arr), ctx=ast.Load()), s.value],
+                                keywords=[])
                 new = ast.Assign(targets=[name], value=fill)
             else:
-                new = ast.Assign(targets=[name], value=s.value)
+                # ``a[:] = <array-expr>`` is an in-place store: numpy broadcasts
+                # the RHS to ``a``'s shape and casts it to ``a``'s dtype. A plain
+                # rebind ``a = <expr>`` would instead let ``a`` inherit the RHS's
+                # shape/dtype, silently changing the output buffer -- keep the
+                # declared shape+dtype via ``broadcast_to(...).astype(a.dtype)``.
+                new = ast.Assign(targets=[name], value=_broadcast_astype(arr, s.value))
         else:
             at = ast.Subscript(value=ast.Attribute(value=arr, attr="at", ctx=ast.Load()), slice=sl, ctx=ast.Load())
             call = ast.Call(func=ast.Attribute(value=at, attr="set", ctx=ast.Load()), args=[s.value], keywords=[])
@@ -410,8 +442,7 @@ def _functionalize_stmt(s: ast.stmt) -> List[ast.stmt]:
 
 
 #: numpy unbuffered-scatter ufunc -> jax ``.at[idx].<method>`` name.
-_SCATTER_AT_METHOD = {"add": "add", "subtract": "add", "multiply": "multiply",
-                      "maximum": "max", "minimum": "min"}
+_SCATTER_AT_METHOD = {"add": "add", "subtract": "add", "multiply": "multiply", "maximum": "max", "minimum": "min"}
 
 
 def _scatter_at_assign(call: ast.Call) -> Optional[ast.Assign]:
@@ -423,26 +454,20 @@ def _scatter_at_assign(call: ast.Call) -> Optional[ast.Assign]:
     flux)``); ``subtract.at`` maps to ``.add(-vals)`` since jax has no
     ``.subtract``."""
     f = call.func
-    if not (isinstance(f, ast.Attribute) and f.attr == "at"
-            and isinstance(f.value, ast.Attribute)
-            and isinstance(f.value.value, ast.Name)
-            and f.value.value.id in ("np", "numpy")
-            and f.value.attr in _SCATTER_AT_METHOD
-            and len(call.args) >= 2):
+    if not (isinstance(f, ast.Attribute) and f.attr == "at" and isinstance(f.value, ast.Attribute)
+            and isinstance(f.value.value, ast.Name) and f.value.value.id in ("np", "numpy")
+            and f.value.attr in _SCATTER_AT_METHOD and len(call.args) >= 2):
         return None
     op = f.value.attr
     target, idx = call.args[0], call.args[1]
     vals: ast.expr = call.args[2] if len(call.args) > 2 else ast.Constant(value=1)
     if op == "subtract":
         vals = ast.UnaryOp(op=ast.USub(), operand=vals)
-    at = ast.Subscript(value=ast.Attribute(value=target, attr="at", ctx=ast.Load()),
-                       slice=idx, ctx=ast.Load())
-    rebind = ast.Call(func=ast.Attribute(value=at, attr=_SCATTER_AT_METHOD[op],
-                                         ctx=ast.Load()),
-                      args=[vals], keywords=[])
-    return ast.copy_location(
-        ast.Assign(targets=[ast.Name(id=_base_name(target), ctx=ast.Store())],
-                   value=rebind), call)
+    at = ast.Subscript(value=ast.Attribute(value=target, attr="at", ctx=ast.Load()), slice=idx, ctx=ast.Load())
+    rebind = ast.Call(func=ast.Attribute(value=at, attr=_SCATTER_AT_METHOD[op], ctx=ast.Load()),
+                      args=[vals],
+                      keywords=[])
+    return ast.copy_location(ast.Assign(targets=[ast.Name(id=_base_name(target), ctx=ast.Store())], value=rebind), call)
 
 
 def _base_name(t: ast.AST) -> str:
@@ -459,6 +484,20 @@ def _load(t: ast.AST) -> ast.AST:
 def _is_full_slice(sl: ast.AST) -> bool:
     return isinstance(sl, ast.Slice) and sl.lower is None and sl.upper is None \
         and sl.step is None
+
+
+def _broadcast_astype(arr: ast.AST, value: ast.expr) -> ast.Call:
+    """``jnp.broadcast_to(value, arr.shape).astype(arr.dtype)`` -- the faithful
+    lowering of numpy's in-place ``arr[:] = value`` store, which broadcasts the
+    RHS to ``arr``'s shape and casts it to ``arr``'s dtype (dtype/shape inferred
+    from the live array, never hardcoded)."""
+    name = _base_name(arr)
+    shape = ast.Attribute(value=ast.Name(id=name, ctx=ast.Load()), attr="shape", ctx=ast.Load())
+    bcast = ast.Call(func=ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()), attr="broadcast_to", ctx=ast.Load()),
+                     args=[value, shape],
+                     keywords=[])
+    dtype = ast.Attribute(value=ast.Name(id=name, ctx=ast.Load()), attr="dtype", ctx=ast.Load())
+    return ast.Call(func=ast.Attribute(value=bcast, attr="astype", ctx=ast.Load()), args=[dtype], keywords=[])
 
 
 # ---------------------------------------------------------------------------
@@ -509,9 +548,8 @@ def _emit_body(body: List[ast.stmt], live_out: Set[str], indent: str) -> List[st
             # safely drop -> fall back rather than silently miscompile.
             if isinstance(s.value, ast.Constant):
                 continue
-            sc = (_scatter_at_assign(s.value)
-                  if isinstance(s.value, ast.Call) else None)
-            if sc is not None:        # np.add.at(...) -> a = a.at[idx].add(...)
+            sc = (_scatter_at_assign(s.value) if isinstance(s.value, ast.Call) else None)
+            if sc is not None:  # np.add.at(...) -> a = a.at[idx].add(...)
                 lines.append(indent + _u(sc))
                 continue
             raise EmitError("bare expression statement (possible in-place op)")
@@ -537,6 +575,7 @@ def _rewrite_eigh(fn: ast.FunctionDef) -> None:
     from numpyto_common.numpy_desugar import _eigh_call_ab, _eigh_stmts
 
     class _R(ast.NodeTransformer):
+
         def __init__(self):
             self.ctr = 0
 
@@ -886,8 +925,11 @@ def emit_jax(numpy_src: str, func_name: str, jit: bool = False) -> str:
     _defined = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
 
     def _called_names(node: ast.AST) -> set:
-        return {c.func.id for c in ast.walk(node)
-                if isinstance(c, ast.Call) and isinstance(c.func, ast.Name) and c.func.id in _defined}
+        return {
+            c.func.id
+            for c in ast.walk(node)
+            if isinstance(c, ast.Call) and isinstance(c.func, ast.Name) and c.func.id in _defined
+        }
 
     _reachable: set = set()
     _frontier = _called_names(fn)
@@ -902,6 +944,11 @@ def emit_jax(numpy_src: str, func_name: str, jit: bool = False) -> str:
 
     head = [
         "import jax",
+        # numpy's default float/int are 64-bit; jax silently narrows to 32-bit
+        # unless x64 is enabled. Turn it on at the TOP of the module (before any
+        # jnp array is built) so ``jnp.float64``/``int64`` are honoured and the
+        # kernel matches the numpy reference's precision.
+        "jax.config.update('jax_enable_x64', True)",
         "import jax.numpy as jnp",
         "from jax import lax",
         "from functools import partial",
@@ -1160,7 +1207,7 @@ def _functionalize_bare_expr(call: ast.AST) -> Optional[ast.Assign]:
     """
     if not isinstance(call, ast.Call):
         return None
-    sc = _scatter_at_assign(call)   # np.add.at(a, idx, v) -> a = a.at[idx].add(v)
+    sc = _scatter_at_assign(call)  # np.add.at(a, idx, v) -> a = a.at[idx].add(v)
     if sc is not None:
         return sc
     for kw in call.keywords:  # explicit out= keyword wins
@@ -1810,9 +1857,7 @@ def _augment_returns(fn: ast.FunctionDef, mutated: List[str]) -> None:
         present = {e.id for e in cur if isinstance(e, ast.Name)}
         extra = [m for m in mutated if m not in present]
         if extra:
-            stmt.value = ast.Tuple(
-                elts=cur + [ast.Name(id=m, ctx=ast.Load()) for m in extra],
-                ctx=ast.Load())
+            stmt.value = ast.Tuple(elts=cur + [ast.Name(id=m, ctx=ast.Load()) for m in extra], ctx=ast.Load())
 
 
 def _own_returns(fn: ast.FunctionDef) -> List[ast.Return]:

@@ -116,6 +116,12 @@ def _is_newaxis(e: ast.AST) -> bool:
             or (isinstance(e, ast.Name) and e.id == "newaxis"))
 
 
+def _is_ellipsis(e: ast.AST) -> bool:
+    """A ``...`` subscript entry (``ast.Constant(Ellipsis)``). It expands to
+    full slices over every otherwise-unindexed axis, so it drops NO axis."""
+    return isinstance(e, ast.Constant) and e.value is Ellipsis
+
+
 #: numpy reductions that take an ``axis`` (drops the reduced axes; no axis ->
 #: scalar). Used only for ndim propagation, not rewriting.
 _REDUCE_FNS = {"sum", "prod", "mean", "std", "var", "min", "max", "amin", "amax", "argmin", "argmax", "any", "all"}
@@ -162,11 +168,15 @@ def _expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
             return base  # a full/partial slice keeps the rank
         if _is_newaxis(sl):
             return base + 1  # a[None] / a[np.newaxis] -- a newaxis adds a dimension
+        if _is_ellipsis(sl):
+            return base  # a[...] keeps every axis
         if isinstance(sl, ast.Tuple):
-            # slices keep a dim, newaxis adds one, an integer/array index removes one.
+            # slices keep a dim, newaxis adds one, an integer/array index removes
+            # one, and an ellipsis (``a[..., i]``) expands to full slices over
+            # all otherwise-unindexed axes -- it drops NOTHING.
             drop = 0
             for e in sl.elts:
-                if isinstance(e, ast.Slice):
+                if isinstance(e, ast.Slice) or _is_ellipsis(e):
                     continue
                 if _is_newaxis(e):
                     drop -= 1
@@ -232,14 +242,28 @@ def _expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
     return None
 
 
-def _rank_table(tree: ast.AST, seed: Dict[str, int]) -> Dict[str, int]:
-    """Propagate ndim across straight-line assignments to a fixpoint."""
+def _call_return_rank(value: ast.AST, call_returns: Dict[str, int]) -> Optional[int]:
+    """Rank of ``helper(...)`` when ``helper`` is a local function with a known
+    return rank -- ``_expr_rank`` alone returns None for a call to a non-numpy
+    Name, so ``x = relu(a @ b)`` would leave ``x`` untracked."""
+    if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
+        return call_returns.get(value.func.id)
+    return None
+
+
+def _rank_table(tree: ast.AST, seed: Dict[str, int], call_returns: Optional[Dict[str, int]] = None) -> Dict[str, int]:
+    """Propagate ndim across straight-line assignments to a fixpoint. ``call_returns``
+    (a ``{helper: return_ndim}`` map) lets a local bound to a helper call inherit
+    that helper's return rank (the ML kernels thread arrays through relu/conv2d
+    helpers, which ``_expr_rank`` cannot see into)."""
     ranks = dict(seed)
     for _ in range(8):
         changed = False
         for node in ast.walk(tree):
             if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
                 r = _expr_rank(node.value, ranks)
+                if r is None and call_returns is not None:
+                    r = _call_return_rank(node.value, call_returns)
                 if r is not None and ranks.get(node.targets[0].id) != r:
                     ranks[node.targets[0].id] = r
                     changed = True
@@ -860,78 +884,139 @@ class _FancyGatherInline(ast.NodeTransformer):
 
 #: Reductions numba does NOT accept an ``axis=`` kwarg for (unlike ``sum`` /
 #: ``prod``, which it supports natively). ``mean`` additionally has no axis form.
-_REDUCE_AXIS_OPS = {"mean", "std", "var", "min", "max", "amin", "amax", "argmin", "argmax", "any", "all"}
+_REDUCE_AXIS_OPS = {"sum", "prod", "mean", "std", "var", "min", "max", "amin", "amax", "argmin", "argmax", "any", "all"}
 
 
-def _reduce_axis_stmts(tname: str, sname: str, op: str, ax: int, rank: int, ctr: int) -> List[ast.stmt]:
-    """Source statements reducing ``sname`` over axis ``ax`` into a freshly
-    allocated ``tname`` (rank-1+ result) via an explicit loop nest -- the
-    numba/pythran-compatible form of ``np.mean/min/max/argmin/argmax(x, axis=k)``
-    (numba rejects ``axis=`` on these). Output indices iterate every axis but
-    ``ax``; the reduction iterator runs over ``ax``. Mean accumulates then
-    divides (matches the C/Fortran sequential lowering); min/max/arg* compare."""
+def _const_int(node: ast.AST) -> Optional[int]:
+    """A constant integer literal, including a negated one (``axis=-1`` parses as
+    ``UnaryOp(USub, Constant(1))``, NOT ``Constant(-1)``)."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, int) and not isinstance(node.value, bool):
+        return node.value
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        v = _const_int(node.operand)
+        return None if v is None else -v
+    return None
+
+
+def _axis_list(ax: Optional[ast.AST], rank: int) -> Optional[List[int]]:
+    """Normalize an ``axis=`` node to a sorted list of non-negative axis indices,
+    or None when it is not an all-constant int / tuple of ints. Handles the single
+    ``axis=k`` / ``axis=-1`` form and the tuple ``axis=(1, 2, 3)`` form (pooling /
+    conv reductions)."""
+    if ax is None:
+        return None
+
+    def _in_range(v: Optional[int]) -> bool:
+        # A valid numpy program's axis is in [-rank, rank); an out-of-range value
+        # means our rank estimate is wrong, so bail (leave verbatim) rather than
+        # wrap it into an over-reduction.
+        return v is not None and -rank <= v < rank
+
+    if isinstance(ax, (ast.Tuple, ast.List)):
+        vals = [_const_int(e) for e in ax.elts]
+        if not vals or any(not _in_range(v) for v in vals):
+            return None
+        return sorted({v % rank for v in vals})
+    v = _const_int(ax)
+    return [v % rank] if _in_range(v) else None
+
+
+def _reduce_axis_stmts(tname: str,
+                       sname: str,
+                       op: str,
+                       axes: List[int],
+                       rank: int,
+                       ctr: int,
+                       keepdims: bool = False,
+                       elem_is_float: bool = False) -> List[ast.stmt]:
+    """Source statements reducing ``sname`` over ``axes`` (a sorted list of one or
+    more axis indices) into a freshly allocated ``tname`` via an explicit loop nest
+    -- the numba/pythran-compatible form of ``np.sum/prod/mean/min/max/argmin/
+    argmax(x, axis=..., keepdims=...)`` (numba rejects ``keepdims`` and a tuple
+    axis over a >4-D array; pythran rejects ``keepdims``). Output indices iterate
+    every non-reduced axis; the reduction iterators run over ``axes`` (nested).
+    ``keepdims`` keeps each reduced axis as a size-1 output dim (so the result
+    broadcasts back against the input, as softmax's ``x - max`` needs). Mean/var
+    divide by the reduced-element count; min/max/arg* compare against a seed."""
     p = f"__rd{ctr}"
-    out_axes = [i for i in range(rank) if i != ax]
+    axset = set(axes)
+    out_axes = [i for i in range(rank) if i not in axset]
     d = [f"{p}_d{i}" for i in range(rank)]
     lines: List[str] = [f"{d[i]} = {sname}.shape[{i}]" for i in range(rank)]
     is_arg = op in ("argmin", "argmax")
+    # ``mean``/``std``/``var`` preserve a FLOAT input's dtype (float32 stays
+    # float32); an integer / bool / unknown input upcasts to float64 (numpy's
+    # rule). ``{sname}.dtype`` resolves the concrete width at compile time and is
+    # numba/pythran-safe (already used by the sum/prod/min/max branch).
+    float_res = f"{sname}.dtype" if elem_is_float else "np.float64"
     dtype = ("np.int64" if is_arg else
-             "np.bool_" if op in ("any", "all") else "np.float64" if op in ("mean", "std", "var") else f"{sname}.dtype")
-    lines.append(f"{tname} = np.empty(({''.join(d[i] + ', ' for i in out_axes)}), {dtype})")
+             "np.bool_" if op in ("any", "all") else float_res if op in ("mean", "std", "var") else f"{sname}.dtype")
+    shape_dims = [(d[i] if i in out_axes else "1") for i in range(rank)] if keepdims else [d[i] for i in out_axes]
+    lines.append(f"{tname} = np.empty(({''.join(s + ', ' for s in shape_dims)}), {dtype})")
     o = {i: f"{p}_k{i}" for i in out_axes}
     ind = ""
     for i in out_axes:
         lines.append(f"{ind}for {o[i]} in range({d[i]}):")
         ind += "    "
-    tgt = f"{tname}[{', '.join(o[i] for i in out_axes)}]"
+    tgt_idx = [(o[i] if i in out_axes else "0") for i in range(rank)] if keepdims else [o[i] for i in out_axes]
+    tgt = f"{tname}[{', '.join(tgt_idx)}]"
+    jv = {ax: f"{p}_j{ax}" for ax in axes}
+    count = " * ".join(d[ax] for ax in axes)
 
-    def elem(jexpr):
-        return f"{sname}[{', '.join((jexpr if i == ax else o[i]) for i in range(rank))}]"
+    def elem(seed: bool = False):
+        # index reduced axes with their loop var (or 0 for the comparison seed).
+        return f"{sname}[{', '.join(('0' if seed else jv[i]) if i in axset else o[i] for i in range(rank))}]"
+
+    def reduce_loops(base_ind: str, body: List[str]) -> None:
+        cur = base_ind
+        for ax in axes:
+            lines.append(f"{cur}for {jv[ax]} in range({d[ax]}):")
+            cur += "    "
+        for b in body:
+            lines.append(f"{cur}{b}")
 
     if op in ("any", "all"):
         lines.append(f"{ind}{tgt} = {'True' if op == 'all' else 'False'}")
-        lines.append(f"{ind}for {p}_j in range({d[ax]}):")
         if op == "all":
-            lines.append(f"{ind}    if not {elem(p + '_j')}:")
-            lines.append(f"{ind}        {tgt} = False")
+            reduce_loops(ind, [f"if not {elem()}:", f"    {tgt} = False"])
         else:
-            lines.append(f"{ind}    if {elem(p + '_j')}:")
-            lines.append(f"{ind}        {tgt} = True")
+            reduce_loops(ind, [f"if {elem()}:", f"    {tgt} = True"])
+    elif op == "sum":
+        lines.append(f"{ind}{tgt} = 0")
+        reduce_loops(ind, [f"{tgt} += {elem()}"])
+    elif op == "prod":
+        lines.append(f"{ind}{tgt} = 1")
+        reduce_loops(ind, [f"{tgt} *= {elem()}"])
     elif op == "mean":
         lines.append(f"{ind}{tgt} = 0.0")
-        lines.append(f"{ind}for {p}_j in range({d[ax]}):")
-        lines.append(f"{ind}    {tgt} += {elem(p + '_j')}")
-        lines.append(f"{ind}{tgt} = {tgt} / {d[ax]}")
+        reduce_loops(ind, [f"{tgt} += {elem()}"])
+        lines.append(f"{ind}{tgt} = {tgt} / ({count})")
     elif op in ("var", "std"):
         # two-pass (mean, then sum of squared deviations / N, ddof=0) -- matches
         # numpy's np.var/np.std default and the C/Fortran sequential lowering.
         m, dv = f"{p}_m", f"{p}_dv"
         lines.append(f"{ind}{m} = 0.0")
-        lines.append(f"{ind}for {p}_j in range({d[ax]}):")
-        lines.append(f"{ind}    {m} += {elem(p + '_j')}")
-        lines.append(f"{ind}{m} = {m} / {d[ax]}")
+        reduce_loops(ind, [f"{m} += {elem()}"])
+        lines.append(f"{ind}{m} = {m} / ({count})")
         lines.append(f"{ind}{tgt} = 0.0")
-        lines.append(f"{ind}for {p}_j in range({d[ax]}):")
-        lines.append(f"{ind}    {dv} = {elem(p + '_j')} - {m}")
-        lines.append(f"{ind}    {tgt} += {dv} * {dv}")
-        lines.append(f"{ind}{tgt} = {tgt} / {d[ax]}")
+        reduce_loops(ind, [f"{dv} = {elem()} - {m}", f"{tgt} += {dv} * {dv}"])
+        lines.append(f"{ind}{tgt} = {tgt} / ({count})")
         if op == "std":
             lines.append(f"{ind}{tgt} = np.sqrt({tgt})")
     elif op in ("min", "amin", "max", "amax"):
         cmp = "<" if op in ("min", "amin") else ">"
-        lines.append(f"{ind}{tgt} = {elem('0')}")
-        lines.append(f"{ind}for {p}_j in range(1, {d[ax]}):")
-        lines.append(f"{ind}    if {elem(p + '_j')} {cmp} {tgt}:")
-        lines.append(f"{ind}        {tgt} = {elem(p + '_j')}")
-    else:  # argmin / argmax -- track best value + its index
+        lines.append(f"{ind}{tgt} = {elem(seed=True)}")
+        reduce_loops(ind, [f"if {elem()} {cmp} {tgt}:", f"    {tgt} = {elem()}"])
+    else:  # argmin / argmax -- single axis (the hoister rejects tuple-axis arg*)
+        ax = axes[0]
         cmp = "<" if op == "argmin" else ">"
         best = f"{p}_best"
-        lines.append(f"{ind}{best} = {elem('0')}")
+        lines.append(f"{ind}{best} = {elem(seed=True)}")
         lines.append(f"{ind}{tgt} = 0")
-        lines.append(f"{ind}for {p}_j in range(1, {d[ax]}):")
-        lines.append(f"{ind}    if {elem(p + '_j')} {cmp} {best}:")
-        lines.append(f"{ind}        {best} = {elem(p + '_j')}")
-        lines.append(f"{ind}        {tgt} = {p}_j")
+        lines.append(f"{ind}for {jv[ax]} in range(1, {d[ax]}):")
+        lines.append(f"{ind}    if {elem()} {cmp} {best}:")
+        lines.append(f"{ind}        {best} = {elem()}")
+        lines.append(f"{ind}        {tgt} = {jv[ax]}")
     return ast.parse("\n".join(lines)).body
 
 
@@ -943,9 +1028,10 @@ class _ReduceAxisHoister(ast.NodeTransformer):
     graph``) is hoisted to a temp first; a non-constant axis or a rank<2
     (scalar-result) reduction is left verbatim (numba's no-axis scalar form)."""
 
-    def __init__(self, ranks: Dict[str, int], ctr: int):
+    def __init__(self, ranks: Dict[str, int], ctr: int, dtypes: Optional[Dict[str, str]] = None):
         self.ranks = ranks
         self.ctr = ctr
+        self.dtypes = dtypes or {}
         self.pre: List[ast.stmt] = []
 
     def visit_Call(self, node: ast.Call):
@@ -961,18 +1047,26 @@ class _ReduceAxisHoister(ast.NodeTransformer):
             ax = kw.get("axis") or (node.args[0] if node.args else None)
         else:
             return node
-        if not (isinstance(ax, ast.Constant) and isinstance(ax.value, int)):
-            return node
         rank = _expr_rank(arg, self.ranks)
         if rank is None or rank < 2:
             return node
+        axes = _axis_list(ax, rank)
+        if not axes:
+            return node
+        kd = kw.get("keepdims")
+        keepdims = isinstance(kd, ast.Constant) and kd.value is True
+        if len(axes) == rank and not keepdims:
+            return node  # every axis reduced -> a scalar; leave the backend's full reduction
+        if op in ("argmin", "argmax") and len(axes) > 1:
+            return node  # numpy itself rejects a tuple axis for argmin/argmax
         if isinstance(arg, ast.Name):
             sname = arg.id
         else:
             sname = f"__rsrc{self.ctr}"
             self.pre.extend(ast.parse(f"{sname} = {ast.unparse(arg)}").body)
         temp = f"__rdo{self.ctr}"
-        self.pre.extend(_reduce_axis_stmts(temp, sname, op, ax.value % rank, rank, self.ctr))
+        elem_is_float = _dtype_kind(arg, self.dtypes) == "float"
+        self.pre.extend(_reduce_axis_stmts(temp, sname, op, axes, rank, self.ctr, keepdims, elem_is_float))
         self.ctr += 1
         return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
 
@@ -982,15 +1076,16 @@ class _ReduceAxisInline(ast.NodeTransformer):
     reduction loops (handles ``V = np.max(s, axis=0) + e`` and the bare
     ``mean = np.mean(data, axis=0)``)."""
 
-    def __init__(self, ranks: Dict[str, int]):
+    def __init__(self, ranks: Dict[str, int], dtypes: Optional[Dict[str, str]] = None):
         self.ranks = ranks
+        self.dtypes = dtypes or {}
         self.changed = False
         self._ctr = 0
 
     def _hoist(self, node):
-        if getattr(node, "value", None) is None:
+        if vars(node).get("value") is None:
             return node
-        h = _ReduceAxisHoister(self.ranks, self._ctr)
+        h = _ReduceAxisHoister(self.ranks, self._ctr, self.dtypes)
         node.value = h.visit(node.value)
         self._ctr = h.ctr
         if h.pre:
@@ -1039,6 +1134,16 @@ class _CallFixups(ast.NodeTransformer):
             self.changed = True
             return ast.copy_location(ast.Constant(value=False), node)
         attr = _np_attr(node)
+        # numba/pythran want a TUPLE shape, not a list literal: ``np.empty([a, b],
+        # ...)`` (a common ML-port idiom, lenet's maxpool) fails to type. Rewrite
+        # the shape-carrying list argument to a tuple (data lists -- ``np.array([
+        # ...])`` -- are not shape args, so ``array`` is not in this set).
+        shape_pos = {"zeros": 0, "ones": 0, "empty": 0, "full": 0, "reshape": 1}.get(attr)
+        if shape_pos is not None and len(node.args) > shape_pos and isinstance(node.args[shape_pos], ast.List):
+            lst = node.args[shape_pos]
+            node.args[shape_pos] = ast.copy_location(ast.Tuple(elts=lst.elts, ctx=ast.Load()), lst)
+            self.changed = True
+            return node
         if attr in ("zeros", "ones", "empty", "full") and any(k.arg == "order" for k in node.keywords):
             self.changed = True
             node.keywords = [k for k in node.keywords if k.arg != "order"]
@@ -1366,8 +1471,8 @@ class _MaskedReduceInline(ast.NodeTransformer):
         return node
 
     def visit_Assign(self, node: ast.Assign):
-        if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
-                and node.targets[0].id in self.gathers and isinstance(node.value, ast.Subscript)):
+        if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in self.gathers
+                and isinstance(node.value, ast.Subscript)):
             self.changed = True
             return []  # drop the masked select; each reduction inlines its own loop
         return self._hoist(node)
@@ -1508,9 +1613,15 @@ class _HistogramHoister(ast.NodeTransformer):
 
 #: binary arithmetic ufuncs whose ``out=`` form maps to a plain BinOp.
 _UFUNC_OUT_OPS = {
-    "add": ast.Add, "subtract": ast.Sub, "multiply": ast.Mult, "divide": ast.Div,
-    "true_divide": ast.Div, "power": ast.Pow, "floor_divide": ast.FloorDiv,
-    "remainder": ast.Mod, "mod": ast.Mod,
+    "add": ast.Add,
+    "subtract": ast.Sub,
+    "multiply": ast.Mult,
+    "divide": ast.Div,
+    "true_divide": ast.Div,
+    "power": ast.Pow,
+    "floor_divide": ast.FloorDiv,
+    "remainder": ast.Mod,
+    "mod": ast.Mod,
 }
 
 
@@ -1818,6 +1929,72 @@ class _RepeatAxisInline(ast.NodeTransformer):
         return self._hoist(node)
 
 
+#: numpy ops whose RESULT keeps the operand's dimensionality, so a negative
+#: ``axis=`` counts back from the operand's own rank (``flip``/``roll``/``cumsum``
+#: /``concatenate``/... are all axis-preserving).
+_AXIS_PRESERVING_OPS = {
+    "flip", "roll", "cumsum", "cumprod", "nancumsum", "nancumprod", "sort", "argsort", "concatenate", "diff", "gradient"
+}
+#: ops that ADD one axis, so the axis-space is the operand rank PLUS one
+#: (``np.stack((a, b), axis=-1)`` on rank-2 operands addresses axis 2).
+_AXIS_ADDING_OPS = {"stack", "expand_dims"}
+
+
+class _NormalizeNegativeAxis(ast.NodeTransformer):
+    """Rewrite a NEGATIVE ``axis=`` literal to the positive index it denotes --
+    ``np.flip(a, axis=-1)`` -> ``np.flip(a, axis=1)`` for a rank-2 ``a``.
+
+    numpy counts a negative axis back from the last (``-1`` == ``rank - 1``), but
+    some backend runtimes mishandle it: pythran's ``np.flip`` / ``np.stack`` with
+    ``axis=-1`` silently return the wrong result. The native C/Fortran lowering
+    and the reduction desugar already normalize the axis, so only the
+    verbatim-body python backends (pythran especially) are affected; rewriting the
+    literal to ``rank + axis`` makes every backend agree.
+
+    The axis-space rank is the first array operand's rank for an axis-preserving
+    op and that rank + 1 for an axis-ADDING op (``stack``/``expand_dims``, whose
+    result has one more dimension than the operand). A negative axis whose op or
+    operand rank cannot be determined is left verbatim (never guessed). Only the
+    ``axis=`` keyword form is normalized -- a positional axis position differs per
+    op (``np.roll``'s second positional arg is the shift, not the axis)."""
+
+    def __init__(self, ranks: Dict[str, int]):
+        self.ranks = ranks
+        self.changed = False
+
+    def _operand_rank(self, node: ast.Call) -> Optional[int]:
+        # The first positional operand carries the rank; for stack/expand_dims it
+        # is the SEQUENCE being stacked (a tuple/list), so take its first element.
+        if not node.args:
+            return None
+        a0 = node.args[0]
+        if isinstance(a0, (ast.Tuple, ast.List)):
+            return _expr_rank(a0.elts[0], self.ranks) if a0.elts else None
+        return _expr_rank(a0, self.ranks)
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        self.generic_visit(node)
+        op = _np_attr(node)
+        adding = op in _AXIS_ADDING_OPS
+        if not adding and op not in _AXIS_PRESERVING_OPS:
+            return node
+        kw = next((k for k in node.keywords if k.arg == "axis"), None)
+        if kw is None:
+            return node
+        val = _const_int(kw.value)
+        if val is None or val >= 0:
+            return node
+        base = self._operand_rank(node)
+        if base is None:
+            return node
+        pos = base + (1 if adding else 0) + val  # val < 0
+        if pos < 0:
+            return node  # rank estimate off -> leave verbatim rather than wrap wrong
+        kw.value = ast.copy_location(ast.Constant(value=pos), kw.value)
+        self.changed = True
+        return node
+
+
 class _DropGuards(ast.NodeTransformer):
     """Replace ``raise ...`` / ``assert ...`` statements with ``pass``. These are
     input-validation guards (``if bad: raise ValueError(f"...")``); OptArena kernels
@@ -1849,8 +2026,7 @@ class _DropValidationGuards(ast.NodeTransformer):
 
     def visit_If(self, node: ast.If):
         self.generic_visit(node)
-        if (not node.orelse and node.body
-                and all(isinstance(s, (ast.Raise, ast.Assert, ast.Pass)) for s in node.body)):
+        if (not node.orelse and node.body and all(isinstance(s, (ast.Raise, ast.Assert, ast.Pass)) for s in node.body)):
             return None
         return node
 
@@ -2151,9 +2327,8 @@ class _LinalgHoister(ast.NodeTransformer):
         self.ctr += 1
         an, bn = self._src_name(a, p, "a"), self._src_name(b, p, "b")
         temp = f"{p}_o"
-        self._emit([f"{p}_aw = {an}.copy()", f"{temp} = {bn}.copy()"]
-                   + _gauss_jordan_lines(f"{p}_aw", temp, f"{an}.shape[0]",
-                                         (f"{bn}.shape[1]" if rb == 2 else None), p))
+        self._emit([f"{p}_aw = {an}.copy()", f"{temp} = {bn}.copy()"] +
+                   _gauss_jordan_lines(f"{p}_aw", temp, f"{an}.shape[0]", (f"{bn}.shape[1]" if rb == 2 else None), p))
         return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
 
     def _inv(self, node: ast.Call):
@@ -2168,8 +2343,8 @@ class _LinalgHoister(ast.NodeTransformer):
         an = self._src_name(a, p, "a")
         temp, n = f"{p}_o", f"{an}.shape[0]"
         self._emit([
-            f"{p}_aw = {an}.copy()", f"{temp} = np.zeros(({n}, {n}), {an}.dtype)",
-            f"for {p}_d in range({n}):", f"    {temp}[{p}_d, {p}_d] = 1"
+            f"{p}_aw = {an}.copy()", f"{temp} = np.zeros(({n}, {n}), {an}.dtype)", f"for {p}_d in range({n}):",
+            f"    {temp}[{p}_d, {p}_d] = 1"
         ] + _gauss_jordan_lines(f"{p}_aw", temp, n, n, p))
         return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
 
@@ -2299,7 +2474,13 @@ def _eigh_jacobi_lines(w: str, y: str, c: str, n: str, p: str) -> List[str]:
     ]
 
 
-def _eigh_stmts(w: str, v: str, a: str, b: Optional[str], lo: str, hi: str, p: str,
+def _eigh_stmts(w: str,
+                v: str,
+                a: str,
+                b: Optional[str],
+                lo: str,
+                hi: str,
+                p: str,
                 native_std: bool = False) -> List[str]:
     """Source lines for ``w, v = eigh(a[, b])[subset lo:hi]`` (ascending). The
     generalized Hermitian problem ``a x = w b x`` is reduced to standard form via
@@ -2561,23 +2742,67 @@ _NATIVE_LINALG: Dict[Optional[str], set] = {
 }
 
 
+def _param_body_rank_evidence(fn: ast.FunctionDef) -> Dict[str, int]:
+    """Lower bounds on a helper's param ranks from how the BODY uses each param,
+    independent of call sites: ``p.shape[k]`` implies rank >= k+1, and a
+    multi-axis subscript ``p[:, a:b, c:d, :]`` implies rank >= (non-newaxis index
+    count). This is flow-insensitive-proof -- a call site that passes a local
+    which was later reshaped to a smaller rank poisons the call-site inference
+    (lenet reshapes ``x`` from 4-D to 2-D), but the body's own ``x.shape[3]`` /
+    4-slice index pins the true rank."""
+    params = {a.arg for a in fn.args.args}
+    ev: Dict[str, int] = {}
+
+    def bump(name: str, r: int) -> None:
+        if name in params and r > ev.get(name, 0):
+            ev[name] = r
+
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Subscript):
+            v = node.value
+            if (isinstance(v, ast.Attribute) and v.attr == "shape" and isinstance(v.value, ast.Name)):
+                k = _const_int(node.slice)
+                if k is not None and k >= 0:
+                    bump(v.value.id, k + 1)  # p.shape[k] -> rank >= k+1
+            elif isinstance(v, ast.Name) and isinstance(node.slice, ast.Tuple):
+                bump(v.id, sum(0 if _is_newaxis(e) else 1 for e in node.slice.elts))
+    return ev
+
+
+def _return_rank(fn: ast.FunctionDef, ranks: Dict[str, int]) -> Optional[int]:
+    """Rank of ``fn``'s returned value (the max over its ``return`` statements),
+    given a rank table for its body -- so a caller can propagate it."""
+    rs = [_expr_rank(n.value, ranks) for n in ast.walk(fn) if isinstance(n, ast.Return) and n.value is not None]
+    rs = [r for r in rs if r is not None]
+    return max(rs) if rs else None
+
+
 def _infer_param_ranks(funcs: List[ast.FunctionDef], kernel_name: str,
                        kir_seed: Dict[str, int]) -> Dict[str, Dict[str, int]]:
     """Per-function ``{param: ndim}`` seeds. The kernel's array params come from
     ``kir_seed``; a HELPER function's param ranks are inferred from its call sites
     -- ``getAcc(pos, ...)`` in the kernel tells ``getAcc`` that ``pos`` has the
-    kernel's rank for ``pos``. Iterated to a fixpoint so a helper calling another
-    helper also resolves (nbody's masked ops live in getAcc/getEnergy)."""
+    kernel's rank for ``pos`` -- unified with body-usage lower bounds
+    (:func:`_param_body_rank_evidence`). Ranks merge by MAX: a param used at rank
+    R somewhere is at least rank R, and a conflicting smaller value only ever comes
+    from a flow-insensitive rank-table mix-up (a reshaped local passed to a
+    helper), never from the param's real dimensionality. Iterated to a fixpoint so
+    a helper calling another helper also resolves."""
     by_name = {fn.name: fn for fn in funcs}
     params = {fn.name: [a.arg for a in fn.args.args] for fn in funcs}
-    seeds: Dict[str, Dict[str, int]] = {name: {} for name in by_name}
-    for _ in range(4):
+    seeds: Dict[str, Dict[str, int]] = {fn.name: dict(_param_body_rank_evidence(fn)) for fn in funcs}
+    ret_rank: Dict[str, int] = {}
+    for _ in range(6):
         changed = False
         for fn in funcs:
             base = dict(seeds[fn.name])
             if fn.name == kernel_name:
                 base.update(kir_seed)
-            ranks = _rank_table(fn, base)
+            ranks = _rank_table(fn, base, call_returns=ret_rank)
+            rr = _return_rank(fn, ranks)
+            if rr is not None and ret_rank.get(fn.name) != rr:
+                ret_rank[fn.name] = rr
+                changed = True
             for node in ast.walk(fn):
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in by_name:
                     callee = node.func.id
@@ -2585,8 +2810,10 @@ def _infer_param_ranks(funcs: List[ast.FunctionDef], kernel_name: str,
                         if i >= len(params[callee]):
                             break
                         r = _expr_rank(arg, ranks)
+                        if r is None:
+                            r = _call_return_rank(arg, ret_rank)
                         pname = params[callee][i]
-                        if r is not None and seeds[callee].get(pname) != r:
+                        if r is not None and r > seeds[callee].get(pname, -1):
                             seeds[callee][pname] = r
                             changed = True
         if not changed:
@@ -2618,8 +2845,8 @@ class _DecomposeRollSlice(ast.NodeTransformer):
         # is not lowerable -- don't decompose it into a dead snapshot temp, leave it
         # to fail loudly unchanged.
         if not (isinstance(v, ast.Call) and isinstance(v.func, ast.Attribute) and v.func.attr == "roll"
-                and isinstance(v.func.value, ast.Name) and v.func.value.id in ("np", "numpy")
-                and len(v.args) >= 2 and len(node.targets) == 1):
+                and isinstance(v.func.value, ast.Name) and v.func.value.id in ("np", "numpy") and len(v.args) >= 2
+                and len(node.targets) == 1):
             return node
         target = node.targets[0]
         op_bare = isinstance(v.args[0], ast.Name)
@@ -2664,7 +2891,8 @@ class _ComplexAccessorToFunc(ast.NodeTransformer):
         self.changed = True
         return ast.copy_location(
             ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=fn, ctx=ast.Load()),
-                     args=[arg], keywords=[]), arg)
+                     args=[arg],
+                     keywords=[]), arg)
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         # ``x.conjugate()`` / ``x.conj()`` (no args) -> ``np.conj(x)``. Handled at
@@ -2787,6 +3015,7 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
         masked_gathers = _masked_reduce_map(fn, ranks, dtypes)
         passes = [
             _DropGuards(),
+            _NormalizeNegativeAxis(ranks),
             _EighInline(ranks, eigh_aliases),
             _LinalgInline(ranks, dtypes, lower_linalg),
             _ReshapeMatmulInline(ranks),
@@ -2796,7 +3025,7 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
             _FftInline(ranks),
             _MgridInline(),
             _FancyGatherInline(ranks),
-            _ReduceAxisInline(ranks),
+            _ReduceAxisInline(ranks, dtypes),
             _MaskedReduceInline(masked_gathers, ranks),
             _CallFixups(ranks),
             _IssubdtypeFold(dtypes),
