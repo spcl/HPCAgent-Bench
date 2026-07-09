@@ -1,8 +1,4 @@
 import numpy as np
 
-
-def init():
-    pass
-
-def forward(A, B):
-    return np.matmul(A.T, B)
+def forward(A, B, out):
+    out[:] = np.matmul(A.T, B)

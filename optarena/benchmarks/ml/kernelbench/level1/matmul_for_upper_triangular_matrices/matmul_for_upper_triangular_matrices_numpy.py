@@ -1,8 +1,4 @@
 import numpy as np
 
-
-def init():
-    pass
-
-def forward(A, B):
-    return np.triu(np.matmul(A, B))
+def forward(A, B, out):
+    out[:] = np.triu(np.matmul(A, B))
