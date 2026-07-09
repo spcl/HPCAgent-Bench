@@ -15,10 +15,9 @@ AST rewriter passes in `lowering.py`. Those passes share a fragile, mutable
 anticipate, the shape table goes stale and emission produces wrong or
 non-compiling code. **Canonical NumPy Form (CNF) inverts the contract.** Instead of
 the translator bending to fit any kernel, we define a single, small NumPy subset
-that is *provably* lowerable, and we rewrite kernels into it. The payoff is a
+that is *provably* lowerable, and we rewrite kernels into it. The payoff: a
 translator that can *delete* its riskiest passes (see §5), plus benchmark authors
-who get a clear, mechanical rulebook (§4) and a CI gate (§6) instead of a guessing
-game.
+who get a mechanical rulebook (§4) and a CI gate (§6).
 
 CNF rests on **three invariants**. They are decided. This document explains them,
 shows canonical-vs-non-canonical pairs from real kernels, and gives a rewrite

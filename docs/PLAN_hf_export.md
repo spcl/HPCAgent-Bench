@@ -1,9 +1,8 @@
 # Plan — HuggingFace Dataset export (auto-updating)
 
-Status: **Phase 1 implemented.** This doc is the focused plan for the exporter and,
+Status: **Phase 1 implemented.** This doc is the plan for the exporter and,
 in particular, the *auto-update* design the broader
-`DESIGN_hf_dataset_and_harbor.md` defers to. It records the options considered, the
-decision, and what remains.
+`DESIGN_hf_dataset_and_harbor.md` defers to.
 
 ## Goal
 

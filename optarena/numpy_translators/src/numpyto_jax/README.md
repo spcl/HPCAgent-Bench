@@ -144,7 +144,7 @@ data-dependent (mandelbrot2's compaction, gmres's break) can't be traced and
 **falls back to eager execution** — the `(aot)`/`(eager)` tag on each result
 line says which happened. `--no-aot` runs everything eagerly.
 
-One thing that would otherwise force the fallback is Python's `float()` builtin:
+Python's `float()` builtin would otherwise force the fallback:
 the TSVC argmax kernels close with `result = maxv + float(index)`, and in the
 rolled body `index` is a *traced* carry — `float()` must return a host Python
 float, which a tracer can't provide, so the whole kernel would drop to eager.

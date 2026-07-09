@@ -215,7 +215,7 @@ einsum is the keystone, the rest are thin wrappers:
 
 ## Translator: naive-lowering ops (trace / cumsum / diagonal / median)
 
-Lower to straightforward naive implementations (user-approved):
+Lower to naive implementations (user-approved):
 - **trace** -> `acc += A[i,i]`; **diagonal** -> `out[i]=A[i,i]` (build: `out[i,i]=v[i]`).
 - **cumsum / cumprod** -> sequential prefix-scan loop `out[i]=out[i-1] ∘ a[i]`
   (axis-aware: kept axes outside, scan axis inside).

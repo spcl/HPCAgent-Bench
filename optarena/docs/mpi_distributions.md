@@ -1,6 +1,6 @@
 # MPI data distributions — ScaLAPACK model and OptArena's descriptor
 
-This is the design assessment for the multi-node track's data distribution: how ScaLAPACK
+Design assessment for the multi-node track's data distribution: how ScaLAPACK
 distributes arrays, which of those distributions OptArena supports, and how the
 `agent_bench/mpi_descriptor.py` `Descriptor` implements them.
 

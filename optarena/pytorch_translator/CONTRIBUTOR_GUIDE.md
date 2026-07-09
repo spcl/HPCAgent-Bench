@@ -195,5 +195,4 @@ Examples in the tree:
 | Calls | Inline helper functions (no tuple return) | Tuple/list/dict returns; recursion |
 
 When unsure: start with the simplest explicit `for` loop and only
-reach for numpy intrinsics where the gain is real. The same shape of
-code emits in all three targets.
+reach for numpy intrinsics where the gain is real.

@@ -1,7 +1,7 @@
 # Frameworks
 
 Most framework implementations are **auto-generated** from each kernel's NumPy
-reference. You rarely need to touch this layer; a hand-written override is just
+reference. You rarely need to touch this layer; a hand-written override is
 `<kernel>_<framework>.py` next to the manifest.
 
 To add a *new* framework backend (two edits, no JSON files):

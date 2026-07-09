@@ -1,6 +1,6 @@
 # Contributing to OptArena
 
-The contributor guide lives in the **[README](README.md)** — it is the single,
+The contributor guide lives in the **[README](README.md)** — the single,
 comprehensive document. Jump to:
 
 - [**Add a benchmark**](README.md#contributing-add-a-benchmark) — the two files you

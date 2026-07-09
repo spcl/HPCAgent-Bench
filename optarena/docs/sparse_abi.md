@@ -7,7 +7,7 @@ manifest-/author-facing companion to [`abi_contract.md`](abi_contract.md) (which
 defines the native C-ABI symbol shape). Read §3–§4 there for the native side;
 this doc defines how a manifest declares a sparse array and how it unpacks.
 
-The one rule to remember:
+The one rule:
 
 > A logical sparse array `A` unpacks into a tuple of physical buffers whose names
 > are **`<logical>_<role>`** and whose layout depends on the chosen sparse
@@ -45,7 +45,7 @@ The role vocabulary + required roles per format live in
 Every buffer name **must** be exactly `<logical>_<role>`. This is checked by
 `validate_sparse_config` **Rule 11** — a buffer named `A_row` for the CSR
 `indptr` role (i.e. claiming the COO `row` name for a CSR pointer) is rejected.
-The convention is what makes the unpacked argument names deterministic and the
+The convention makes the unpacked argument names deterministic and the
 alphabetical ordering reproducible across every baseline.
 
 ## 3. What the manifest declares
