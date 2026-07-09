@@ -5,15 +5,13 @@ import matplotlib.pyplot as plt
 
 from optarena.infrastructure import utilities as util
 
-# create a database connection
 database = r"optarena.db"
 conn = util.create_connection(database)
 data = pd.read_sql_query("SELECT * FROM lcounts", conn)
 
-# get rid of kind and dwarf, we don't use them
+# drop columns we don't use
 data = data.drop(['timestamp', 'kind', 'dwarf', 'version'], axis=1).reset_index(drop=True)
 
-# Remove everything that does not have a domain
 data = data[data["domain"] != ""]
 
 # for each framework and benchmark, choose only the best details,mode (based on min npdiff), then get rid of those
@@ -58,7 +56,6 @@ plt.style.use('classic')
 figsz = (len(frmwrks) + 1, 12)
 fig, ax0 = plt.subplots(nrows=1, ncols=1, figsize=figsz)
 
-# plot benchmark heatmap
 im = ax0.imshow(colors.to_numpy(), cmap='RdYlGn_r', interpolation='nearest', aspect="auto", vmin=0, vmax=100)
 
 for i in range(len(data['benchmark'])):
@@ -81,14 +78,11 @@ for i in range(len(data['benchmark'])):
             if not math.isnan(lo):
                 text = ax0.text(j, i, int(l), ha="center", va="center", color="white", fontweight='bold', fontsize=10)
 
-# We want to show all ticks...
 ticks = ax0.set_xticks(np.arange(len(colors.columns)))
 ticks = ax0.set_yticks(np.arange(len(data['benchmark'])))
-# ... and label them with the respective list entries
 ticks = ax0.set_xticklabels(colors.columns)
 ticks = ax0.set_yticklabels(data['benchmark'])
 
-# Rotate the tick labels and set their alignment.
 plt.setp(ax0.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
 
 plt.tight_layout()

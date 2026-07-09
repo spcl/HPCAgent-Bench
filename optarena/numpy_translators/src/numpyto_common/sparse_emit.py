@@ -1,8 +1,7 @@
 """Per-format sparse-matmul dispatcher (Workstream 0 implementation).
 
-Each function in this module takes an AST snippet representing one
-sparse-matmul operation and returns the lowered loop nest that the
-existing emit walker can consume. The dispatchers are routed from
+Each dispatcher takes an AST snippet for one sparse-matmul op and returns the
+lowered loop nest the emit walker consumes. They are routed from
 :mod:`numpyto_common.lib_nodes`'s matmul hoister via :data:`SPARSE_MATMUL_DISPATCH`.
 
 Each dispatcher follows the same shape::
@@ -459,10 +458,6 @@ def expand_matmul_sell_c_sigma_dense_vec(
                     if col < row_len[global_r]:
                         acc += val[e] * x[col_idx[e]]
                 y[perm[global_r]] = acc
-
-    SELL-C-σ stores each slice column-major so SIMD lanes (of width C)
-    can load contiguously. `row_len` lets the kernel skip padded zeros.
-    The `perm` unscatters the sorted-y back into original row order.
 
     SELL-C-σ stores each slice column-major so SIMD lanes (of width C)
     can load contiguously. ``row_len`` lets the kernel skip padded zeros.

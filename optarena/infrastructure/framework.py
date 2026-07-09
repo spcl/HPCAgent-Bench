@@ -346,10 +346,9 @@ class Framework(object):
 
         return [(ldict['impl'], 'default')]
 
-    # ----- Direct-callable invocation (replaces the old setup_str/exec_str
-    # string `exec` + the ``__npb_<prefix>_<arg>`` generated-name builders).
-    # Frameworks customize behaviour by overriding METHODS below -- never by
-    # returning code strings or by string-dispatching a generated function. ---
+    # ----- Direct-callable invocation. Frameworks customize behaviour by
+    # overriding METHODS below -- never by returning code strings or by
+    # string-dispatching a generated function. -----------------------------
 
     def after_setup(self) -> None:
         """Hook run after the fresh input copies are made, OUTSIDE the timed

@@ -10,8 +10,8 @@ instead of a per-backend env var.
 
 * :class:`TuningBudget` -- the single source of "how much search", resolved from
   ``OPTARENA_TUNE_BUDGET`` (a scale name or an integer) and exposing the
-  per-backend caps (TVM trials, Triton config cap). The legacy per-framework env
-  vars remain honoured as overrides for back-compat.
+  per-backend caps (TVM trials, Triton config cap). Legacy per-framework env vars
+  remain honoured as overrides for back-compat.
 * :class:`AutoTuner` -- ``tune(program, budget) -> optimized program``. A
   framework that does not search inherits the identity tuner
   (:meth:`optarena.infrastructure.framework.Framework.autotune` default).
@@ -88,8 +88,8 @@ class AutoTuner(abc.ABC):
 
     :meth:`tune` takes a kernel handle plus a :class:`TuningBudget` and returns
     the optimized artifact (the same type the framework would otherwise run), so
-    the harness scores a tuner exactly like a plain framework. Implementations:
-    TVM MetaSchedule, Triton autotune, Polly/Pluto (a one-point "search" = a flag
+    the harness scores a tuner like a plain framework. Implementations: TVM
+    MetaSchedule, Triton autotune, Polly/Pluto (a one-point "search" = a flag
     preset), and the AI ``Agent`` (budget = tokens/$/time). A framework that does
     not search inherits :class:`IdentityTuner`.
     """
@@ -102,8 +102,8 @@ class AutoTuner(abc.ABC):
 
 
 class IdentityTuner(AutoTuner):
-    """No search -- returns the program unchanged (the default for a framework
-    that is not an auto-tuner)."""
+    """No search -- returns the program unchanged (default for a framework that is
+    not an auto-tuner)."""
 
     name = "identity"
 

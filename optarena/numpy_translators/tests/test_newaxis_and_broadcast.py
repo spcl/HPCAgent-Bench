@@ -2,13 +2,10 @@
 NumpyToC's lowering machinery.
 
 These cover the *structural* behaviour of ``_iter_extent_of`` and
-``_scalarize_at_iters`` -- the two helpers everything in
-``lib_nodes`` builds on. The goal is the contract: given a source AST
-and a shape table, the extent / scalarisation come out matching the
-numpy semantics the user would write by hand.
-
-Each test exercises one axis-shape combination so a regression
-points straight at the failing rule.
+``_scalarize_at_iters`` -- the two helpers everything in ``lib_nodes`` builds on.
+Given a source AST and a shape table, the extent / scalarisation must match numpy
+semantics. Each test exercises one axis-shape combination so a regression points
+straight at the failing rule.
 """
 
 import ast

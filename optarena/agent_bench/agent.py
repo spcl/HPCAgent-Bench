@@ -234,7 +234,7 @@ class ClaudeAgent(Agent):
 
 
 class LocalHFAgent(Agent):
-    """MVP fully-local agent (the colleague will flesh the provider layer out).
+    """MVP fully-local agent.
 
     Runs an open-weight model IN-PROCESS via ``transformers`` -- NO server, NO
     API, NO network once the weights are cached on disk. Default model

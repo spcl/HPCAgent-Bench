@@ -13,17 +13,18 @@ _AUTOTUNE_SUBSET_APPLIED = False
 
 
 def _apply_autotune_subset_once():
-    """Cap each kernel's Triton autotune-config sweep to the unified search
-    budget. Triton kernels in optarena ship with itertools.product sweeps that
-    explode to 32-60 configs; running the full sweep on every S-preset run dwarfs
-    the per-call work, so the default ``small`` budget caps it. The cap comes
-    from the ONE shared knob (:class:`optarena.autotune.TuningBudget`, driven by
-    ``$OPTARENA_TUNE_BUDGET``); the legacy ``OPTARENA_TRITON_AUTOTUNE_SIZE=full`` /
-    ``OPTARENA_TRITON_AUTOTUNE_N`` still override it.
+    """Cap each kernel's Triton autotune-config sweep to the unified search budget.
 
-    The implementation monkey-patches triton.runtime.autotuner.Autotuner so
-    every autotuned kernel sees only the first N configs. Must run before any
-    `*_triton.py` module is imported, which TritonFramework.__init__ guarantees.
+    Triton kernels in optarena ship with itertools.product sweeps that explode to
+    32-60 configs; the full sweep on every S-preset run dwarfs the per-call work,
+    so the default ``small`` budget caps it. The cap comes from the ONE shared knob
+    (:class:`optarena.autotune.TuningBudget`, driven by ``$OPTARENA_TUNE_BUDGET``);
+    the legacy ``OPTARENA_TRITON_AUTOTUNE_SIZE=full`` / ``OPTARENA_TRITON_AUTOTUNE_N``
+    still override it.
+
+    Monkey-patches triton.runtime.autotuner.Autotuner so every autotuned kernel
+    sees only the first N configs. Must run before any `*_triton.py` module is
+    imported, which TritonFramework.__init__ guarantees.
     """
     global _AUTOTUNE_SUBSET_APPLIED
     if _AUTOTUNE_SUBSET_APPLIED:

@@ -2,9 +2,9 @@
 
 The inliner only absorbs helpers whose body is a single trailing ``return``. A
 helper with a data-dependent EARLY return (GROMACS-style ``if x > 0: return a``)
-was left as an un-emittable call. Such helpers are now emitted as their own
-native function (C/C++/Fortran) where the early ``return`` is just a native
-``return``; the kernel calls them. The python backends run the source verbatim.
+was left un-emittable. Such helpers are now emitted as their own native function
+(C/C++/Fortran) where the early ``return`` is a native ``return``; the kernel
+calls them. The python backends run the source verbatim.
 """
 import numpy as np
 

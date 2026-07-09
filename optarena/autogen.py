@@ -10,7 +10,7 @@ Entry point:
 
 * :func:`ensure` -- emit any MISSING target for one kernel. The framework
   loaders call this so a sibling is generated **on demand** the first time it is
-  needed (``run_benchmark.py -f cupy`` with no ``<k>_cupy.py`` yet just works).
+  needed (``run_benchmark.py -f cupy`` with no ``<k>_cupy.py`` yet works).
 
 The emitter reads a bench_info JSON synthesized from the co-located YAML
 (:mod:`optarena.emit_bridge`); the flat ``bench_info/`` corpus is gone. native
@@ -50,8 +50,7 @@ def _emit_jax(numpy_py: pathlib.Path, bench_info: pathlib.Path, out: pathlib.Pat
     # In-process like _emit_dace: numpyto_jax.emit_jax is a pure-AST np->jnp
     # translation (it imports no jax), emitted in EAGER mode -- the faithful 1:1
     # form that covers the widest kernel set. write_generated's marker guard
-    # leaves a hand-written *_jax.py override (the committed microbench ones)
-    # untouched.
+    # leaves a hand-written *_jax.py override untouched.
     import json
     from numpyto_jax import emit_jax
     from numpyto_common.emit_io import write_generated
@@ -155,8 +154,8 @@ def _native_targets(spec) -> List[tuple]:
     A dense kernel yields ``[(None, <short>)]``; a sparse kernel yields one
     ``(<config>, <short>_<config>)`` per configuration (the layout IS the
     sub-benchmark -- each is a full kernel with its own source / symbol / lib).
-    Distributions sharing one configuration collapse to a single native source
-    (they differ only in runtime data), so the list is deduped by base."""
+    Distributions sharing one configuration differ only in runtime data, so the
+    list is deduped by base."""
     seen: set = set()
     out: List[tuple] = []
     for rb in spec.expand_layouts():
@@ -225,8 +224,8 @@ def emit_native(spec, langs: Iterable[str]) -> Dict[str, str]:
 def ensure_native(short_name: str, lang: Optional[str] = None) -> None:
     """Generate the native sources (+ wrapper) for kernel ``short_name`` if
     missing. ``lang`` restricts to one language (else all of NATIVE_FRAMEWORKS).
-    Best-effort: a failed emit is swallowed so the caller surfaces the real
-    error at build/import time."""
+    Best-effort: a failed emit is swallowed so the caller surfaces the real error
+    at build/import time."""
     try:
         from optarena.spec import BenchSpec
         spec = BenchSpec.load(short_name)

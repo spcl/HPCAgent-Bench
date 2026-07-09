@@ -26,9 +26,8 @@ Three kinds of rewrites:
    ``B[i-1]`` / ``B[i+1]`` / ``B[i]`` -- not four separate temporary
    arrays. Multi-dim slices nest accordingly. See :class:`SliceFusion`.
 
-Today's Foundation corpus only exercises ``math.exp``,
-``math.sqrt`` and ``np.zeros``; the other rules are declared but
-inert until a kernel that uses them lands.
+The Foundation corpus exercises only ``math.exp``, ``math.sqrt`` and
+``np.zeros``; the other rules are declared but inert until a kernel uses them.
 """
 
 import ast

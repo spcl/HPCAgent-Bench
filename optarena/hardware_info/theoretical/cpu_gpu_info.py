@@ -13,14 +13,12 @@ def parse_lscpu():
 
     lscpu_dict = {}
 
-    # parse lscpu
     for line in lscpu_lines:
         key, value = line.split(":", 1)
         key = key.strip()
         value = value.strip()
         if value:
             if key == "Flags":
-                # Split the flags into a list of strings
                 lscpu_dict[key] = value.split()
             else:
                 try:
@@ -45,7 +43,7 @@ def get_cpu_flops(num_cores):
     cpu_model = cpu_info.get('model', '')
 
     if(f"{cpu_vendor}_{cpu_model}" in cpu_db.keys()):
-        #if the json with cpu info contains the current cpu, we use the info
+        # use spec-sheet info when the DB knows this CPU
 
         cpu_info = cpu_db[f"{cpu_vendor}_{cpu_model}"] | cpu_info
 
@@ -60,7 +58,7 @@ def get_cpu_flops(num_cores):
         fma_tp_sp = cpu_info['SP vector FMA tp']
 
     else:
-        #else, we try to obtain as much information as possible by parsing lscpu
+        # else infer what we can from lscpu
         lscpu_dict = parse_lscpu()
 
         cpu_info = lscpu_dict | cpu_info
@@ -82,7 +80,7 @@ def get_cpu_flops(num_cores):
         cpu_cores = psutil.cpu_count(logical=False)
         elements_per_vector_dp = simd_width/64
         elements_per_vector_sp = simd_width/32
-        fma_tp_dp = 1 # since we cannot know the fma throughput of the cpu without looking at the manual, we simply assume 1
+        fma_tp_dp = 1 # fma throughput unknown without the manual; assume 1
         fma_tp_sp = 1
 
     cpu_cores = min(cpu_cores, num_cores)

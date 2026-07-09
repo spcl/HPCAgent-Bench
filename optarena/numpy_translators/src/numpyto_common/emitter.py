@@ -1,17 +1,14 @@
 """Shared statement-dispatch skeleton for the imperative body emitters.
 
-Only the genuinely target-agnostic part of the walk lives here: ``emit_block``
-and the ``emit_stmt`` dispatch (For / While / If / Assign / AugAssign / Expr /
-Break / Continue / Pass / Return). The leaves that differ per target are small
-hooks (statement terminator, break / continue keyword, return handling).
+Only the target-agnostic walk lives here: ``emit_block`` and the ``emit_stmt``
+dispatch (For / While / If / Assign / AugAssign / Expr / Break / Continue /
+Pass / Return). Per-target leaves are small hooks (statement terminator,
+break / continue keyword, return handling).
 
-The body of each statement/expression *form* (loops, subscripts, calls, the
-type system) is legitimately language-specific -- C flattens N-D subscripts and
-runs an int-typing pass, Fortran is 1-based / column-major with kind inference,
-their indent step differs (2 vs 4 spaces), control flow is braces vs
-``do/end do`` -- so those stay overridden in the subclass rather than forced
-through a leaky hook surface. A subclass is free to override ``emit_stmt``
-wholesale if a target ever needs a different dispatch.
+Each statement/expression *form* (loops, subscripts, calls, the type system) is
+language-specific -- C flattens N-D subscripts and int-types, Fortran is 1-based
+column-major with kind inference, indent steps differ -- so those stay
+overridden in the subclass. A subclass may override ``emit_stmt`` wholesale.
 """
 import ast
 from typing import List
@@ -19,8 +16,7 @@ from typing import List
 
 class BaseEmitter:
     """Target-agnostic statement walk. Subclasses provide the per-form emit
-    methods (``_emit_for`` etc.), the ``emit_expr`` expression walk, and the
-    leaf hooks below."""
+    methods (``_emit_for`` etc.), ``emit_expr``, and the leaf hooks below."""
 
     #: Statement terminator appended to a bare expression statement
     #: (C: ``";"``; Fortran: ``""``).

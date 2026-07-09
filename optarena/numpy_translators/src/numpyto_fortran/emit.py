@@ -442,7 +442,6 @@ class _FortranBodyEmitter(BaseEmitter):
         # LOGICAL-vs-INTEGER type error.
         if _produces_logical(node):
             return cond
-        # Already a clearly-logical expression -- no wrap needed.
         if isinstance(node, (ast.Compare, ast.BoolOp)):
             return cond
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
@@ -1886,10 +1885,10 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, dtype_override: O
     # site instead (cloudsc's ``ldcum``). kir.arrays are the parameters.
     body_emitter._int_array_names = {
         a.name for a in kir.arrays if _fortran_type(a.dtype).startswith("integer")}
-    # NOTE: the body is emitted further down, AFTER every body_emitter
-    # side-table (especially ``inline_alloc_locals``) is populated, so
-    # the ``np.zeros`` marker handler can emit an ``allocate`` for
-    # loop-iter-sized locals (otherwise they stay unallocated -> SIG11).
+    # The body is emitted further down, AFTER every body_emitter side-table
+    # (especially ``inline_alloc_locals``) is populated, so the ``np.zeros``
+    # marker handler can emit an ``allocate`` for loop-iter-sized locals
+    # (otherwise they stay unallocated -> SIG11).
 
     # Local arrays produced by ``np.zeros`` -- declare in the prelude.
     locals_block = []

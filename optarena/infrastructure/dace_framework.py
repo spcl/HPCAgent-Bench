@@ -11,7 +11,7 @@ Pipelines
 
 Four pipelines applied serially on top of one parsed SDFG. Each is a
 small dataclass entry in :data:`DACE_PIPELINES` so that adding a fifth
-(e.g. ``"polly_par"``) is one entry, not 60 lines of copy-paste:
+(e.g. ``"polly_par"``) is one entry:
 
 * ``strict``    -- ``apply_strict_transformations``
 * ``fusion``    -- strict + ``MapFusion``-repeated + strict-again
@@ -332,15 +332,14 @@ class DaceFramework(Framework):
             except Exception:
                 pass
 
-    # ----- Argument plumbing (unchanged from the original) -----------------
+    # ----- Argument plumbing -----------------------------------------------
 
     def params(self, bench: Benchmark, impl: Callable = None):
         return [p for p in bench.info["parameters"]['L'].keys() if p not in bench.info["input_args"]]
 
     def call_args(self, bench: Benchmark, impl: Callable, resolved, bdata):
         """DaCe compiled programs take the inputs AND the symbol params as
-        KEYWORDS (``A=..., NI=..., NJ=...``). Method override of the base
-        positional default -- replaces the old ``arg_str`` string builder."""
+        KEYWORDS (``A=..., NI=..., NJ=...``)."""
         kwargs = {a: resolved[a] for a in bench.info["input_args"]}
         for p in self.params(bench, impl):
             kwargs[p] = bdata[p]

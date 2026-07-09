@@ -16,9 +16,9 @@ from numpyto_common.emit_io import write_generated
 
 def cmd_emit(args: argparse.Namespace) -> int:
     kir = parse_kernel(args.kernel, args.bench_info, config=args.config)
-    # pythran's ``#pythran export`` is dtype-SPECIFIC (unlike numba/cupy
-    # which infer at runtime), so the export must match the input
-    # precision; apply it on the IR (float/complex only).
+    # pythran's ``#pythran export`` is dtype-SPECIFIC (numba/cupy infer at
+    # runtime), so it must match the input precision; apply on the IR
+    # (float/complex only).
     if args.precision:
         kir = apply_precision(kir, args.precision)
     src = args.kernel.read_text()

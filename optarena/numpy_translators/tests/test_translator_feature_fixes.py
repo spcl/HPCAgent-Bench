@@ -1,4 +1,4 @@
-"""Unit tests for the translator feature/bug fixes in this work batch.
+"""Unit tests for the translator feature/bug fixes.
 
 Grouped by feature so a regression points straight at the cause:
 

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Opt-in integration test: build the container and smoke-check it.
 
-This actually invokes ``docker build`` (slow, needs a daemon + network), so it is
+Invokes ``docker build`` (slow, needs a daemon + network), so it is
 SKIPPED unless ``OPTARENA_DOCKER_TEST=1`` and docker is reachable. It builds the
 ``cpu`` image from its Dockerfile and asserts:
 

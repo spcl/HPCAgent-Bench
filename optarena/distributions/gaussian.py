@@ -1,16 +1,12 @@
 """Standard-normal :math:`\\mathcal{N}(0, 1)` generator.
 
-Generates one independent standard-normal draw per array cell at the
-requested precision. Useful for stencil/solver benchmarks whose
-conditioning depends on the input statistics (Hessian eigenvalue
-spread, RHS norm, ...). The sparse benchmarks already exercise the
-companion ``variants`` mechanism with format + distribution pairs --
-this module brings the same idea to dense kernels.
+One independent standard-normal draw per array cell at the requested
+precision.
 
-Backend choice -- we draw via :class:`numpy.random.Generator` to
-match what :mod:`optarena.distributions.uniform` uses. ``scipy.stats``
-would give an equivalent answer at higher cost; defer to scipy only
-when a kernel-specific shape (e.g. truncated, mixture) is needed.
+We draw via :class:`numpy.random.Generator` to match
+:mod:`optarena.distributions.uniform`. ``scipy.stats`` would give an
+equivalent answer at higher cost; defer to scipy only when a
+kernel-specific shape (e.g. truncated, mixture) is needed.
 """
 import numpy as np
 

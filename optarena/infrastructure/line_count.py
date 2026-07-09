@@ -33,13 +33,11 @@ class LineCount(object):
         else:
             np_analysis = None
 
-        # create a database connection
         database = r"optarena.db"
         conn = util.create_connection(database)
 
         # create tables
         if conn is not None:
-            # create results table
             util.create_table(conn, util.sql_create_lcounts_table)
         else:
             print("Error! cannot create the database connection.")

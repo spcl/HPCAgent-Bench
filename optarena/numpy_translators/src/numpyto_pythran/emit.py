@@ -1,9 +1,8 @@
 """Emit a Pythran-AOT version of a numpy kernel.
 
-Pythran reads a magic ``#pythran export <funcname>(<argtypes>)``
-comment at the top of the file to know how to AOT-compile it. We
-synthesise that comment from the IR's parameter table (which carries
-shape + dtype for every array and the int type for symbols).
+Pythran reads a magic ``#pythran export <funcname>(<argtypes>)`` comment to
+AOT-compile the file; synthesise it from the IR's parameter table (shape +
+dtype per array, int type for symbols).
 """
 
 import ast

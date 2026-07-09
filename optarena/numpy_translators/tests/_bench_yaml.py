@@ -1,11 +1,10 @@
 """Shared test helper: drive the translator tests off the co-located YAML.
 
-The flat ``bench_info/*.json`` corpus is gone -- the minimal per-kernel YAML
-manifest is the single source of truth. These helpers load a :class:`BenchSpec`
-from the registry and synthesize the transient bench_info JSON the (untouchable)
-emitter still reads, via :mod:`optarena.emit_bridge` -- so every test resolves
-kernels by name through the YAML, never a hand-built ``bench_info/<short>.json``
-path or the old per-kernel folder layout.
+The flat ``bench_info/*.json`` corpus is gone; the per-kernel YAML manifest is
+the single source of truth. These helpers load a :class:`BenchSpec` from the
+registry and synthesize the transient bench_info JSON the (untouchable) emitter
+still reads, via :mod:`optarena.emit_bridge` -- so every test resolves kernels by
+name through the YAML, never a hand-built ``bench_info/<short>.json`` path.
 """
 import contextlib
 import pathlib

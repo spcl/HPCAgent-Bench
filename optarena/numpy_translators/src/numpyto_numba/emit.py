@@ -1,11 +1,8 @@
 """Emit a Numba-compiled version of a numpy kernel.
 
-Numba supports a large subset of numpy plus pure-Python loops; the
-translation is simply wrapping the function in ``@numba.njit`` or
-``@numba.njit(parallel=True)`` and leaving the body alone.
-
-The ``parallel=True`` variant additionally rewrites bare ``range``
-calls to ``numba.prange`` so loop-level parallelism is opt-in.
+Wrap the function in ``@numba.njit`` or ``@numba.njit(parallel=True)``, body
+unchanged. The ``parallel=True`` variant rewrites bare ``range`` to
+``numba.prange`` so loop-level parallelism is opt-in.
 """
 
 import re
@@ -13,12 +10,11 @@ from typing import Literal
 
 Flavor = Literal["njit", "njit_parallel"]
 
-#: Per-flavor njit options (besides ``fastmath``, which is opt-in below).
+#: Per-flavor njit options (besides ``fastmath``, opt-in below).
 #: ``fastmath`` is OFF by default: it lets LLVM reassociate reductions and
-#: assume no-nan/no-inf, which diverges from numpy's exact semantics (so a
-#: faithful translation must not enable it) and additionally miscompiles
-#: some gather/while-loop reductions into a SIGSEGV on numba 0.65 + LLVM.
-#: Pass ``fastmath=True`` to opt back into the perf-oriented flavor.
+#: assume no-nan/no-inf, diverging from numpy's exact semantics, and
+#: miscompiles some gather/while-loop reductions to a SIGSEGV on numba 0.65 +
+#: LLVM. Pass ``fastmath=True`` for the perf-oriented flavor.
 _BASE_OPTS = {
     "njit": [],
     "njit_parallel": ["parallel=True"],
@@ -48,7 +44,7 @@ def emit_numba(numpy_source: str, flavor: Flavor = "njit", fastmath: bool = Fals
     opts.append("cache=True")
     decorator = f"@nb.njit({', '.join(opts)})"
 
-    # 1. Make sure ``import numba as nb`` is present.
+    # 1. Ensure ``import numba as nb`` is present.
     out = numpy_source
     if "import numba" not in out:
         out = "import numba as nb\n" + out
@@ -56,9 +52,8 @@ def emit_numba(numpy_source: str, flavor: Flavor = "njit", fastmath: bool = Fals
     # 2. Inject the decorator on the first ``def`` line.
     out = re.sub(r"(?m)^(def\s+\w+\()", f"{decorator}\n\\1", out, count=1)
 
-    # 3. Parallel flavor rewrites ``range`` to ``nb.prange`` (only the
-    #    outermost call we see; we leave inner loops alone since
-    #    nested prange tends to underperform).
+    # 3. Parallel flavor rewrites ``range`` to ``nb.prange`` (only the first
+    #    call; inner loops left alone -- nested prange tends to underperform).
     if flavor == "njit_parallel":
         out = re.sub(r"\bfor\s+(\w+)\s+in\s+range\(", r"for \1 in nb.prange(", out, count=1)
 

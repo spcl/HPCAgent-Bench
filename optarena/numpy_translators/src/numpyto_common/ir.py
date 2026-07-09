@@ -1,13 +1,8 @@
 """In-memory representation: the Python AST + a layout side-table.
 
-The IR follows the same pattern as :mod:`affinepython.ir` -- the AST
-is the canonical form (round-trips via :func:`ast.unparse` for free),
-and three small dataclasses carry the layout / shape information the
-backends need to emit typed C signatures and resolve subscripts.
-
-The design is deliberately reusable: when ``NumpyToDaCe`` and friends
-land, this module hoists to ``numpyto_common.ir`` unchanged. Until
-then, NumpyToC consumes it locally.
+The AST is the canonical form (round-trips via :func:`ast.unparse`); three small
+dataclasses carry the layout / shape information the backends need to emit typed
+C signatures and resolve subscripts.
 """
 
 import ast
@@ -40,14 +35,13 @@ def _apply_precision(dtype: str, precision: Optional[str]) -> str:
 
 
 def apply_precision(kir: "KernelIR", precision: Optional[str]) -> "KernelIR":
-    """Set the kernel's floating precision ON THE IR, so every emitter
-    just reads ``arr.dtype`` -- no per-emit override. Remaps float/complex
-    array, scalar and local dtypes to ``precision`` (ints untouched) and
-    records :attr:`KernelIR.float_precision` so the emitter's default for a
-    temp not listed in ``local_dtypes`` (e.g. a matmul scratch) matches.
+    """Set the kernel's floating precision ON THE IR, so every emitter reads
+    ``arr.dtype`` -- no per-emit override. Remaps float/complex array, scalar and
+    local dtypes to ``precision`` (ints untouched) and records
+    :attr:`KernelIR.float_precision` so the emitter's default for a temp not in
+    ``local_dtypes`` (e.g. a matmul scratch) matches.
 
-    ``precision`` of ``None``/empty is a no-op (each dtype keeps its
-    declared value -- the natural fp64 path).
+    ``precision`` of ``None``/empty is a no-op (each dtype keeps its value).
     """
     if not precision:
         return kir

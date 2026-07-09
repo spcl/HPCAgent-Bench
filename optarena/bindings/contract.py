@@ -53,11 +53,11 @@ RESERVED_ARG_NAMES = frozenset({WORKSPACE_NAME, WORKSPACE_SIZE_NAME})
 
 
 def workspace_c_params() -> Tuple[str, str]:
-    """The reserved scratch pair as C parameter declarations (§11), the trailing
-    reserved args: a raw byte buffer + its length. The SINGLE source both the stub
-    generator and the host glue render from, so the agent's signature and the
-    generated wrapper can never disagree. Element/size types come from the registry
-    (:mod:`optarena.dtypes`), never hardcoded."""
+    """The reserved scratch pair as C parameter declarations (§11): a raw byte
+    buffer + its length. The SINGLE source both the stub generator and the host
+    glue render from, so the agent's signature and the generated wrapper can never
+    disagree. Element/size types come from the registry (:mod:`optarena.dtypes`),
+    never hardcoded."""
     return (f"{c_type(WORKSPACE_DTYPE)} *restrict {WORKSPACE_NAME}",
             f"const {c_type(DEFAULT_SYMBOL_DTYPE)} {WORKSPACE_SIZE_NAME}")
 
@@ -186,9 +186,8 @@ class Binding:
 
 
 def _symbol_names(spec: BenchSpec) -> Tuple[str, ...]:
-    """Size-symbol names for the kernel (the ``parameters`` keys, unioned
-    across every size class -- they are identical in practice but we union
-    defensively). Returned sorted."""
+    """Size-symbol names for the kernel (the ``parameters`` keys, unioned across
+    every size class -- identical in practice, but unioned defensively). Sorted."""
     names: set = set()
     for size_class in spec.parameters.values():
         names.update(size_class.keys())

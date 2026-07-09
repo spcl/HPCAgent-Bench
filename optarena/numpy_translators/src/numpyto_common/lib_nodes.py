@@ -1,13 +1,9 @@
 """Library-node registry: numpy idioms -> Python-loop AST expansions.
 
-The registry is the single source of truth for how each numpy library
-call is lowered into plain loops. Each entry registers an expander
-that returns a list of AST statements; the existing C / Fortran
-emitters then walk those loops and render them without any
-target-specific knowledge of the original idiom. This keeps the
-C-template / Fortran-template logic inside the language emitters
-(which already handle ``for``, ``range``, augmented assign,
-arithmetic etc.) and the lowering logic in one place.
+Single source of truth for how each numpy library call lowers into plain loops.
+Each entry registers an expander returning a list of AST statements; the C /
+Fortran emitters walk those loops with no knowledge of the original idiom, so
+lowering logic stays in one place.
 
 Supported idioms:
 

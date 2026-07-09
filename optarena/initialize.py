@@ -1,13 +1,8 @@
 """Declarative input-data generator.
 
-Most OptArena kernels carry a hand-written ``initialize`` that fills
-each array with the same static formula. When every array of a kernel
-is drawn from the same statistical distribution, the kernel's
-``initialize`` is pure boilerplate: a loop over ``np.fromfunction``
-calls, one per array.
-
-This module replaces that boilerplate with a single
-:func:`auto_initialize` that consumes:
+When every array of a kernel is drawn from the same distribution, its
+hand-written ``initialize`` is pure boilerplate. This module replaces it with a
+single :func:`auto_initialize` that consumes:
 
 * the kernel's declarative ``init.shapes`` block (array name -> shape
   expression like ``"(NI,NJ)"``),
@@ -15,14 +10,12 @@ This module replaces that boilerplate with a single
   value), and
 * a registered distribution by name (``uniform``, ``gaussian``, ...).
 
-It returns the tuple of ``(scalars..., arrays...)`` in the order
-declared by the kernel's ``output_args``, matching the existing
-``initialize`` calling convention.
+It returns ``(scalars..., arrays...)`` in the order declared by the kernel's
+``output_args``, matching the existing ``initialize`` calling convention.
 
-A kernel opts into the auto-initializer by *omitting* ``init.func_name``
-from its JSON. Kernels that need custom logic (Thomas tridiagonal
-matrices, well-conditioned solvers, ...) keep their existing
-``initialize`` function untouched.
+A kernel opts in by *omitting* ``init.func_name`` from its JSON. Kernels that
+need custom logic (Thomas tridiagonal matrices, well-conditioned solvers, ...)
+keep their existing ``initialize`` untouched.
 """
 import ast
 from typing import Any, Dict, Tuple
@@ -125,7 +118,7 @@ def auto_initialize(
         per call); an int makes the WHOLE materialisation deterministic
         so every backend / precision / re-run sees identical inputs (one
         ``default_rng(seed)`` stream threads through the index fills and
-        the distribution). Supports both seed-fuzzing and pinned runs.
+        the distribution).
     :returns: A tuple ``(scalar_0, ..., array_0, ...)`` in the order
         given by ``spec.init.output_args``.
     :raises ValueError: When the spec is missing the declarative

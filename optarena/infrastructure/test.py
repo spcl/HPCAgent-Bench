@@ -58,19 +58,14 @@ class Test(object):
                  ignore_errors: bool) -> Tuple[Any, Sequence[float]]:
         """Run ``impl`` ``repeat`` times via the framework's timing hooks.
 
-        Replaces the historic ``util.benchmark`` (``timeit.repeat`` with
-        a string ``stmt``) with :meth:`Framework.measure`. The semantics
-        match: ``setup_str`` runs *outside* the timed bracket before each
-        repeat (fresh input copies), ``exec_str`` runs inside it. The
-        framework's :meth:`time_call` decides whether the native series
-        is populated -- DaCe reads its instrumentation report, the C++
+        ``before_each`` (fresh input copies) runs outside the timed bracket,
+        the call inside it. The framework's timing decides whether the native
+        series is populated -- DaCe reads its instrumentation report, the C++
         backends consult their 1-element timing buffer, JAX wraps
         ``block_until_ready``, etc.
 
-        Returns ``(outputs, python_time_list)`` for back-compat with the
-        existing :meth:`run` consumer. The native-time series is stashed
-        on ``self._last_native_times`` so ``run`` can pick it up if it
-        wants the dual report.
+        Returns ``(outputs, python_time_list)``; the native-time series is
+        stashed on ``self._last_native_times`` for ``run`` to pick up.
         """
         report_str = frmwrk.info["full_name"] + " - " + impl_name
         # Structured failure reason for the caller to record (no silent drop).
@@ -164,12 +159,9 @@ class Test(object):
         self.frmwrk.set_datatype(datatype)
         bdata = self.bench.get_data(preset, datatype, variant=variant, fuzz_iteration=fuzz_iteration)
 
-        # Some of the input data is taken from float constants defined in the benchmark JSON file.
-        # These constants are stored as Python floats.
-        # However, frameworks like DaCe generally expect scalars to be in a specific datatype (e.g., np.float32 or np.float64).
-        # Since we don't have any information about the expected datatype of these constants in the JSON file,
-        # we try to detect the expected datatype from the input data we got from the benchmark.
-        # Ideally, we would store the expected datatype information in the benchmark JSON file directly so we don't have to guess here.
+        # Float constants from the benchmark JSON are Python floats, but frameworks
+        # like DaCe expect a specific scalar dtype. The JSON records no expected
+        # dtype, so detect it from the input array data (ideally the JSON would store it).
         dtypes = set(type(v) for v in bdata.values() if type(v) in [np.float32, np.float64])
         dtypes |= set(
             type(v.dtype.type()) for v in bdata.values()
@@ -289,13 +281,11 @@ class Test(object):
                     "validated": valid,
                 }
 
-        # create a database connection
         database = r"optarena.db"
         conn = util.create_connection(database)
 
         # create tables
         if conn is not None:
-            # create results table
             util.create_table(conn, util.sql_create_results_table)
             util.ensure_datatype_column(conn)
             util.ensure_variant_column(conn)

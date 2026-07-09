@@ -7,9 +7,9 @@ Cover:
 * ``axis=[k1, k2]`` -- list form, same semantics as the tuple.
 
 Each test parses the source AST, drives ``_expand_axis_reduction``
-through ``expand_sum`` (a thin wrapper that supplies the addition
-op_fn and 0.0 init), and inspects the resulting statement list for the
-expected loop structure -- iteration count and inner ``+=`` form.
+through ``expand_sum`` (a wrapper supplying the addition op_fn and 0.0
+init), and checks the statement list for the expected loop structure --
+iteration count and inner ``+=`` form.
 """
 
 import ast
@@ -119,7 +119,7 @@ def test_sum_axis_tuple_3_of_4_collapses_to_one_kept_axis():
 
 def test_sum_axis_tuple_all_axes_reduces_to_scalar():
     """``np.sum(arr, axis=(0, 1))`` on a 2-D array reduces every axis
-    and emits the same code as ``axis=None`` (just two for-loops, no
+    and emits the same code as ``axis=None`` (two for-loops, no
     Subscripts on the target since out is scalar)."""
     args, kws = _call_args("np.sum(arr, axis=(0, 1))")
     stmts = expand_sum(_target("out"), args, {"arr": ("N", "M")}, kws)

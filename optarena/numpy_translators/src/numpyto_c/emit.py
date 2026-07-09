@@ -32,8 +32,8 @@ _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 
 
 def _c_type(dtype: str) -> str:
-    # The dtype -> C type mapping is the single registry in numpyto_common.dtypes
-    # (note: the canonical ``int`` is int64_t so index arithmetic is 64-bit).
+    # dtype -> C type is the single registry in numpyto_common.dtypes
+    # (the canonical ``int`` is int64_t so index arithmetic is 64-bit).
     try:
         return dtypes.c_type(dtype)
     except KeyError:
