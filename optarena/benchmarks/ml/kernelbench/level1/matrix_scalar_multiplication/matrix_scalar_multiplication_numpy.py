@@ -1,8 +1,5 @@
 import numpy as np
 
 
-def init():
-    pass
-
-def forward(A, s):
-    return (A * s)
+def forward(A, s, out):
+    out[:] = (A * s)
