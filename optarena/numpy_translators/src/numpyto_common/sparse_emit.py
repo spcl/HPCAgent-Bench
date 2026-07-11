@@ -309,7 +309,6 @@ def expand_matmul_csr_dense_vec(
     indexing.
     """
     yi = _subscript(target.id, _name("__i"), ctx=ast.Store())
-    yi_load = _subscript(target.id, _name("__i"))
     indptr = lhs_buffers["indptr"]
     indices = lhs_buffers["indices"]
     data = lhs_buffers["data"]
@@ -390,8 +389,6 @@ def expand_matmul_jds_dense_vec(
         orelse=[])
 
     # Inner: accumulate over each jagged diagonal.
-    jd_start = ast.BinOp(left=_subscript(jd_ptr, _name("__jd")),
-                              op=ast.Add(), right=_const(0))
     # jd_len = A_jd_ptr[jd + 1] - A_jd_ptr[jd]
     jd_next = _subscript(jd_ptr,
                               ast.BinOp(left=_name("__jd"),

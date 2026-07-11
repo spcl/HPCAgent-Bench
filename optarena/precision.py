@@ -36,6 +36,12 @@ class Precision(enum.Enum):
                          f"{[p.value for p in cls]}")
 
 
+#: CLI ``--datatype`` choices -- the numpy spellings ``float32`` / ``float64``
+#: (NOT the :class:`Precision` values ``fp32`` / ``fp64``), so this is an authored
+#: list rather than ``[p.value for p in Precision]``.
+DATATYPE_CHOICES = ("float32", "float64", "fp16", "bf16", "fp8_e4m3", "fp8_e5m2")
+
+
 #: Mapping from :class:`Precision` to its numpy realization.
 DTYPES: Dict[Precision, type] = {
     Precision.FP64: np.float64,

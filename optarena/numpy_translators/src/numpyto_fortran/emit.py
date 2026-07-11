@@ -240,6 +240,8 @@ class _FortranBodyEmitter(BaseEmitter):
 
     def __init__(self, kir: KernelIR):
         self.kir = kir
+        #: Lazy cache of the names used in an integer context (see ``_int_uses``).
+        self._int_uses_cache: Optional[Set[str]] = None
         #: When this body IS a helper subroutine: the out-param name its
         #: ``return`` writes into (``None`` for the kernel).
         self.return_mode: Optional[str] = None
@@ -461,10 +463,7 @@ class _FortranBodyEmitter(BaseEmitter):
         # Heuristic: BinOp with a bitwise op, or a Call whose name is
         # one of the int intrinsics, or a Name that's in the int_uses
         # set -- wrap with ``/= 0``.
-        int_uses = getattr(self, "_int_uses_cache", None)
-        if int_uses is None:
-            int_uses = _names_used_as_int(self.kir.tree)
-            self._int_uses_cache = int_uses
+        int_uses = self._int_uses()
 
         def is_int_expr(n):
             if isinstance(n, ast.Constant):
@@ -1505,6 +1504,14 @@ class _FortranBodyEmitter(BaseEmitter):
                     return k
         return None
 
+    def _int_uses(self) -> Set[str]:
+        """Names used in an integer context anywhere in the kernel, computed
+        once and cached (both the ``/= 0`` truthiness wrap and the min/max
+        operand-typing consult it)."""
+        if self._int_uses_cache is None:
+            self._int_uses_cache = _names_used_as_int(self.kir.tree)
+        return self._int_uses_cache
+
     def _emit_bitwise_pair(self, left: ast.AST, right: ast.AST) -> Tuple[str, str]:
         """Emit the two operands of a bitwise op with matched int
         kinds. When one side resolves to a typed integer Name and the
@@ -1512,8 +1519,6 @@ class _FortranBodyEmitter(BaseEmitter):
         (``255_c_int64_t``)."""
         l_kind = self._infer_int_kind(left)
         r_kind = self._infer_int_kind(right)
-        # Pick the kind: prefer left, fall back to right.
-        kind = l_kind or r_kind
 
         def emit_one(e, other_typed):
             base = self.emit_expr(e)
@@ -1546,10 +1551,7 @@ class _FortranBodyEmitter(BaseEmitter):
         uniform. If any operand is a non-int (or Name resolving to a
         real-typed local), promote integer literals to ``0.0d0``-style
         real literals. Returns ``(all_int, emitted_args)``."""
-        int_uses = getattr(self, "_int_uses_cache", None)
-        if int_uses is None:
-            int_uses = _names_used_as_int(self.kir.tree)
-            self._int_uses_cache = int_uses
+        int_uses = self._int_uses()
 
         def is_int(e):
             if isinstance(e, ast.Constant):

@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 
 from scipy.stats.mstats import gmean
 from optarena.infrastructure import utilities as util
+from optarena.spec import PRESET_CHOICES
 
 
 def my_round(x, width):
@@ -83,7 +84,7 @@ def bootstrap_ci(data, statfunction=np.median, alpha=0.05, n_samples=300):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("-p", "--preset", choices=['S', 'M', 'L', 'XL', 'paper'], nargs="?", default='S')
+    parser.add_argument("-p", "--preset", choices=list(PRESET_CHOICES), nargs="?", default='S')
     parser.add_argument("-d",
                         "--datatype",
                         choices=['float32', 'float64'],
@@ -187,7 +188,6 @@ overall_time = pd.melt(overall_time, ['benchmark'])
 overall_time = overall_time.groupby(
     ['framework']).value.apply(my_geomean).reset_index()  #this throws warnings if NA is found, which is ok
 overall_time_wide = overall_time.pivot_table(columns="framework", values="value", dropna=False).reset_index(drop=True)
-overall_time_wide = overall_wide[frmwrks]
 
 plt.style.use('classic')
 figsz = (len(frmwrks) + 1, 12)
@@ -236,9 +236,7 @@ for i in range(len(best_wide['benchmark'])):
         if j < len(hm_data.columns) - 1:
             label = hm_data.to_numpy()[i, j]
             if math.isnan(label):
-                r = ""
-                if len(r) > 0:
-                    text = ax1.text(j, i, str(r.to_numpy()[0]), ha="center", va="center", color="red", fontsize=7)
+                pass  # NaN cell renders blank
             else:
                 p = cidata[(cidata['framework_'] == f) & (cidata['benchmark_'] == b)]['perc']
                 ci = int(p.to_numpy()[0])
@@ -267,17 +265,7 @@ for i in range(len(best_wide['benchmark'])):
                                     fontsize=8)
         else:
             label = best_wide_time['numpy'].to_numpy()[i]
-            p = cidata[(cidata['framework_'] == f) & (cidata['benchmark_'] == b)]['perc']
-            try:
-                ci = int(p.to_numpy()[0])
-                if ci > 0:
-                    ci = "$^{(" + str(ci) + ")}$"
-                else:
-                    ci = ""
-            except:
-                pass
-            finally:
-                ci = ""
+            ci = ""  # numpy runtime column shows no CI superscript
             text = ax1.text(j, i, my_runtime_abbr(label) + ci, ha="center", va="center", color="black", fontsize=8)
 
 ax1.set_ylabel("Benchmarks", labelpad=0)
