@@ -1,0 +1,14 @@
+# Optional framework baselines with platform-specific install friction. Split out of
+# requirements/cpu.txt so that file installs cleanly everywhere (including macOS arm64,
+# where these two block `pip install`); neither is needed for the core agent or
+# collection paths.
+#
+#   pip install -r requirements/optional.txt
+#
+# apache-tvm -- a TVM framework baseline. Ships only prerelease wheels (--pre) and has
+#   spotty macOS arm64 coverage.
+# mpi4py -- the MPI-track SPMD Python driver. Builds from an sdist against a system MPI
+#   (the images pin MPICH via MPICC; on macOS `brew install mpich` or open-mpi first).
+--pre
+apache-tvm
+mpi4py

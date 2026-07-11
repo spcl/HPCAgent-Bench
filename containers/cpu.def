@@ -16,6 +16,7 @@ From: ubuntu:26.04
 
 %files
     requirements/cpu.txt /requirements/cpu.txt
+    requirements/optional.txt /requirements/optional.txt
     containers/build-hptt.sh /build-hptt.sh
 
 %post
@@ -30,12 +31,15 @@ From: ubuntu:26.04
     # weight in a CPU image. Install it from the CPU wheel index first so the
     # requirements step sees torch already satisfied and never pulls the CUDA stack.
     python3 -m pip install --break-system-packages --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
-    # mpi4py (in cpu.txt) must build against THIS image's MPICH so the generated C driver
-    # and the mpi4py SPMD driver share one MPI ABI. --no-binary forces a SOURCE build that
-    # honors MPICC (needs python3-dev); the prebuilt wheel is multi-ABI and auto-selects
-    # OpenMPI at runtime, silently mismatching the MPICH driver.
     export MPICC=mpicc.mpich
-    python3 -m pip install --break-system-packages --no-cache-dir --no-binary=mpi4py -r /requirements/cpu.txt
+    python3 -m pip install --break-system-packages --no-cache-dir -r /requirements/cpu.txt
+    # The optional framework baselines (apache-tvm, mpi4py) are split out of cpu.txt so it
+    # installs on macOS arm64; the Linux image still needs them. mpi4py must build against
+    # THIS image's MPICH so the generated C driver and the mpi4py SPMD driver share one MPI
+    # ABI -- --no-binary forces the SOURCE build that honors MPICC (exported above; the
+    # prebuilt wheel is multi-ABI and auto-selects OpenMPI, silently mismatching MPICH).
+    # --pre (for apache-tvm) lives in optional.txt itself.
+    python3 -m pip install --break-system-packages --no-cache-dir --no-binary=mpi4py -r /requirements/optional.txt
 
 %environment
     export LC_ALL=C

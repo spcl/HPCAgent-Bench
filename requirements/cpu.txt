@@ -1,6 +1,7 @@
 # optarena dependency list (hand-maintained).
-# --pre required for: apache-tvm
---pre
+# The two framework baselines with platform-install friction (apache-tvm, mpi4py) live
+# in requirements/optional.txt so this file installs cleanly everywhere, incl. macOS
+# arm64. The container images install optional.txt on top (see containers/cpu.def).
 numpy>=2,<3
 scipy
 pandas
@@ -22,8 +23,5 @@ dace
 numba
 pythran
 jax
-apache-tvm
 xgboost
 torch
-# mpi4py: the MPI-track SPMD Python driver; built against the image's MPICH (MPICC pin in cpu.def)
-mpi4py

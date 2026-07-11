@@ -5,6 +5,7 @@
 ```bash
 pip install -e .                                  # optarena + the numpyto_* translators
 pip install -r requirements/cpu.txt               # numeric deps for the hardware target
+pip install -r requirements/optional.txt          # apache-tvm + mpi4py baselines (optional; see Platforms)
 pip install -r requirements/harbor.txt            # harbor + udocker (only to run the benchmark)
 optarena-install-apptainer                         # Apptainer, unprivileged, into ~/.local (optional)
 ```
@@ -13,6 +14,29 @@ Everything is pip-installable except Apptainer itself (a Go binary). `udocker` i
 pip-installable; `optarena-install-apptainer` runs Apptainer's official unprivileged
 installer for the rootless case. There is no pip package that bundles the Apptainer
 binary (`spython` only wraps the CLI).
+
+## Platforms (Linux / macOS / WSL2)
+
+Linux and WSL2 (a real Linux kernel) run the harness as-is. macOS runs the **native,
+no-container path** — Apptainer/Singularity have no macOS build (they run a Linux VM,
+whose timings are neither native-mac nor bare-Linux, so they are not comparable). The
+build + runtime layer is OS-aware (`optarena/osinfo.py`): the isolated native call uses
+`spawn` instead of `fork` (forking after numpy/BLAS/Accelerate threads aborts the child
+on macOS), `ru_maxrss` is scaled per-OS, and the glibc-only compiler flags are dropped —
+clang `-fopenmp=libgomp` / `-fveclib=libmvec` become plain `-fopenmp`, and `-march=native`
+becomes `-mcpu=native` on Apple Silicon.
+
+macOS needs a real GCC toolchain for the C/C++/Fortran baselines (Apple clang ships no
+gfortran and no bundled OpenMP):
+
+```bash
+brew install gcc libomp mpich          # real gcc/g++/gfortran, OpenMP runtime, MPI (MPI track)
+pip install -r requirements/cpu.txt    # installs clean on arm64 -- the friction deps are in optional.txt
+pip install -r requirements/optional.txt   # apache-tvm + mpi4py -- only if you want those baselines
+```
+
+A missing compiler is a scored build failure, not a crash, so a partial toolchain
+degrades gracefully rather than taking down the sweep.
 
 ## Container backends (`runtime.backend`)
 
