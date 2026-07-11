@@ -256,7 +256,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     Returns immediately only when the DB is already at :data:`SCHEMA_VERSION` AND
     the tables actually exist -- so the threaded judge skips the DDL on the hot
     path, but a DB where ``user_version`` was stamped by some other tool sharing
-    the file (the legacy ``results``/``lcounts`` live here too) is still created
+    the file (the legacy ``results```` live here too) is still created
     correctly rather than failing later with ``no such table``. ``user_version``
     is the hook a future versioned migration keys off."""
     versioned = conn.execute("PRAGMA user_version").fetchone()[0] >= SCHEMA_VERSION

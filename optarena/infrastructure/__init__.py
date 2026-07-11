@@ -3,7 +3,6 @@
 from .errors import NotSupportedByFramework
 from .benchmark import *
 from .framework import *
-from .line_count import *
 from .test import *
 from .utilities import *
 
