@@ -6,6 +6,7 @@ import numpy as np
 
 from sqlmodel import Session
 
+from optarena import config
 from optarena.infrastructure import (Benchmark, Framework, timeout_decorator as tout, utilities as util)
 from optarena.infrastructure.errors import NotSupportedByFramework
 from optarena.infrastructure.schema import Result, results_engine
@@ -292,6 +293,10 @@ class Test(object):
         # None on this direct-framework path (they are set when an agent produced the
         # optimization).
         timestamp = int(time.time())
+        # Where this framework baseline was measured (native vs container); default
+        # native, a containerized collector sets OPTARENA_RECORD_EXECUTION so its
+        # numbers are never compared against native ones unknowingly.
+        execution = str(config.get("record.execution", "native"))
         engine = results_engine("optarena.db")
         with Session(engine) as session:
             for d in bvalues:
@@ -307,7 +312,8 @@ class Test(object):
                            native_time=d.get("native_time"),
                            datatype=datatype if datatype is not None else 'float64',
                            variant=variant,
-                           prompt_hash=None))
+                           prompt_hash=None,
+                           execution=execution))
             session.commit()
 
         # Return per-impl timing dict so the CLI can persist it as JSONL.

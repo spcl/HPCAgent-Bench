@@ -11,7 +11,9 @@ and could drift out of sync. ``SQLModel.metadata.create_all`` derives the DDL an
 The perf record is deliberately lean -- who/what produced a runtime and the runtime
 itself, nothing more: benchmark, framework, agent, an optional content-addressed
 prompt hash, preset, the two runtimes (host ``time`` and framework-internal
-``native_time``, both milliseconds), the validation verdict, datatype and variant.
+``native_time``, both milliseconds), the validation verdict, datatype, variant, and
+the ``execution`` provenance (``native`` vs ``container`` -- so a containerized number
+is never compared against a native one unknowingly).
 ``timestamp`` groups the rows of one run; ``id`` is the rowid. The old
 provenance-only columns (kind / dwarf / version / details / mode / cpu) were pruned:
 no reader consumed them (kind/dwarf/version are dropped verbatim by the heatmap plot,
@@ -40,6 +42,7 @@ class Result(SQLModel, table=True):
     datatype: Optional[str] = None  # float32 | float64 | ... (None == legacy float64)
     variant: Optional[str] = None  # sparse storage/distribution axis (None == dense)
     prompt_hash: Optional[str] = None  # -> the content-addressed prompt store (None if no prompt)
+    execution: str = "native"  # native (no container) | container -- where the runtime was measured
 
 
 def results_engine(db_path: str):

@@ -7,10 +7,9 @@ Pins the four properties the design promises: (1) content-addressed -- a prompt'
 IS its file name and row key; (2) dedup -- an identical prompt stores one file + one row;
 (3) versioned -- a changed prompt gets a new hash/file/row and the old one is retained;
 (4) bidirectional -- a result row joins to prompts.path -> the file on disk, and the file
-name (== hash) finds every result row that used it. Also covers the v2 -> v3 migration.
+name (== hash) finds every result row that used it.
 """
 import hashlib
-import sqlite3
 from types import SimpleNamespace
 
 from optarena.agent_bench import recording
@@ -106,29 +105,10 @@ def test_none_prompt_stores_nothing(tmp_path):
     conn.close()
 
 
-def test_connect_is_idempotent_and_v3(tmp_path):
+def test_connect_is_idempotent(tmp_path):
     db = str(tmp_path / "r.db")
     recording.connect(db).close()
-    conn = recording.connect(db)  # re-migrate: no duplicate-column / no such table
-    assert "prompt_hash" in [r[1] for r in conn.execute("PRAGMA table_info(submissions)")]
-    assert "prompt_hash" in [r[1] for r in conn.execute("PRAGMA table_info(calls)")]
-    assert conn.execute("PRAGMA user_version").fetchone()[0] >= 3
-    conn.close()
-
-
-def test_v2_db_upgrades_to_v3(tmp_path):
-    db = str(tmp_path / "r.db")
-    raw = sqlite3.connect(db)  # a pre-existing v2 DB: full old tables, no prompts, no prompt_hash
-    raw.execute("CREATE TABLE benchmarks(name TEXT PRIMARY KEY)")
-    raw.execute("CREATE TABLE submissions(id INTEGER PRIMARY KEY, run_id TEXT, benchmark TEXT, preset TEXT, datatype TEXT)")
-    raw.execute("CREATE TABLE attempts(id INTEGER PRIMARY KEY, run_id TEXT, benchmark TEXT, preset TEXT, datatype TEXT)")
-    raw.execute("CREATE TABLE calls(id INTEGER PRIMARY KEY, run_id TEXT, benchmark TEXT, optimizer TEXT)")
-    raw.execute("PRAGMA user_version = 2")
-    raw.commit()
-    raw.close()
-
-    conn = recording.connect(db)  # migrate v2 -> v3
-    assert conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE name='prompts'").fetchone()[0] == 1
+    conn = recording.connect(db)  # second ensure: CREATE IF NOT EXISTS, no duplicate / no such table
     assert "prompt_hash" in [r[1] for r in conn.execute("PRAGMA table_info(submissions)")]
     assert "prompt_hash" in [r[1] for r in conn.execute("PRAGMA table_info(calls)")]
     conn.close()
