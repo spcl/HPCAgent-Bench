@@ -38,7 +38,9 @@ from typing import Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 
 import sympy
 
-from numpyto_common.ir import KernelIR
+from numpyto_common.ir import _COMPLEX_FOR_FLOAT, KernelIR
+from numpyto_common.lib_nodes import (MESHGRID_AXIS_KW, _iter_extent_of,
+                                      _scalarize_at_iters, expand_meshgrid)
 
 #: One-to-one rewrites: ``<module>.<name>`` -> bare C function name.
 #: All targets resolve through ``<math.h>``.
@@ -120,14 +122,73 @@ _METHOD_TO_NP: Dict[str, str] = {
 }
 
 
-class _MethodCallRewriter(ast.NodeTransformer):
+class _StmtHoister(ast.NodeTransformer):
+    """Base for rewriters that must lift a sub-expression into a fresh temp
+    assignment emitted immediately before the statement that contains it.
+
+    A subclass calls :meth:`_spill` from its expression visitor to swap an
+    inline sub-expression for a fresh Name and stage ``<temp> = <expr>`` in
+    :attr:`pre_stmts`; this base flushes the staged assignments into the
+    enclosing block right before the current statement. Mirrors the
+    ``pre_stmts`` lift ``_ScalarTimesMatmulRewriter`` uses -- generalised so the
+    splice happens inline (``NodeTransformer`` flattens a returned statement
+    list into the parent body) rather than at the top-level driver, so a spill
+    inside a loop / branch body lands in that same body at any nesting depth.
+
+    The per-statement save/restore of :attr:`pre_stmts` keeps a spill from a
+    compound statement's header (``if`` test / ``for`` iter) separate from
+    spills produced by its body statements: the header's temps flush before the
+    compound statement, each body statement's temps flush before that body
+    statement.
+    """
+
+    def __init__(self):
+        #: Temp assignments staged for the statement currently being flushed.
+        self.pre_stmts: List[ast.stmt] = []
+        #: Monotonic id for unique hoist-temp names across the whole body.
+        self._hoist_ctr: List[int] = [0]
+
+    def _spill(self, expr: ast.expr, prefix: str) -> ast.Name:
+        """Stage ``<prefix><n> = <expr>`` and return a Load Name for the temp."""
+        self._hoist_ctr[0] += 1
+        name = f"{prefix}{self._hoist_ctr[0]}"
+        self.pre_stmts.append(
+            ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=expr))
+        return ast.Name(id=name, ctx=ast.Load())
+
+    def _flush(self, node: ast.stmt):
+        saved = self.pre_stmts
+        self.pre_stmts = []
+        self.generic_visit(node)
+        pre = self.pre_stmts
+        self.pre_stmts = saved
+        if not pre:
+            return node
+        for s in pre:
+            ast.copy_location(s, node)
+            ast.fix_missing_locations(s)
+        return pre + [node]
+
+    visit_Assign = _flush
+    visit_AugAssign = _flush
+    visit_Expr = _flush
+    visit_Return = _flush
+    visit_If = _flush
+    visit_While = _flush
+    visit_For = _flush
+
+
+class _MethodCallRewriter(_StmtHoister):
     """Translate ``a.copy()``, ``A.max()`` etc. into their ``np.``
     counterparts so the LibNodeRewriter picks them up uniformly.
 
-    Only fires when the receiver is a bare Name (a parameter or
-    declared local) AND that name is not a module-like identifier
-    (``np``, ``math``, ``numpy``) -- otherwise ``np.max(x)`` would
-    be wrongly rewritten to ``np.max(np, x)``.
+    Fires when the receiver is a bare Name (a parameter or declared local) or a
+    Subscript of one -- neither a module-like identifier (``np`` / ``numpy`` /
+    ``math`` / ``scipy``), else ``np.max(x)`` would wrongly become
+    ``np.max(np, x)``. A Call receiver (``np.abs(rho_in - rho_out).sum()``) is
+    hoisted to a fresh temp first (:class:`_StmtHoister`), so the method operates
+    on a bare Name -- the reduction expanders and backends never accept an
+    inline sub-expression receiver.
     """
 
     _MODULE_NAMES = frozenset({"np", "numpy", "math", "scipy"})
@@ -154,11 +215,16 @@ class _MethodCallRewriter(ast.NodeTransformer):
         # fresh local). Both lower through the same ``np.<fn>`` expanders, which
         # scalarize Subscript operands. A module identifier (``np.max(x)``) is
         # never a receiver here -- that ``x`` is the argument, not the receiver.
-        ok = ((isinstance(recv, ast.Name) and recv.id not in self._MODULE_NAMES)
-              or (isinstance(recv, ast.Subscript)
-                  and isinstance(recv.value, ast.Name)
-                  and recv.value.id not in self._MODULE_NAMES))
-        if not ok:
+        if isinstance(recv, ast.Call):
+            # Call receiver (``np.abs(rho_in - rho_out).sum()``): materialise the
+            # inner Call into a fresh temp emitted before this statement, then
+            # reduce over the bare Name. The reduction expanders / backends only
+            # accept a Name or Subscript receiver, never an inline Call.
+            recv = self._spill(recv, "__mc")
+        elif not ((isinstance(recv, ast.Name) and recv.id not in self._MODULE_NAMES)
+                  or (isinstance(recv, ast.Subscript)
+                      and isinstance(recv.value, ast.Name)
+                      and recv.value.id not in self._MODULE_NAMES)):
             return node
         return ast.Call(
             func=ast.Attribute(
@@ -166,6 +232,71 @@ class _MethodCallRewriter(ast.NodeTransformer):
                 attr=_METHOD_TO_NP[func.attr], ctx=ast.Load()),
             args=[recv] + list(node.args),
             keywords=node.keywords)
+
+
+class _ComputedIndexCallHoister(_StmtHoister):
+    """Hoist a Call used as a subscript index into a fresh temp Name assignment
+    emitted before the statement, so the index is a bare Name the backends emit.
+
+    ``U[np.argmax(absU[:, j]), j]`` / ``v[np.argmax(np.abs(v))]`` -- a library
+    Call sitting in index position -- becomes ``__ix = np.argmax(...)`` staged
+    before the statement and the subscript indexes with ``__ix``. Structural, not
+    argmax-specific: any Call index (single-index or ANY position of a tuple
+    subscript) is spilled EXCEPT the scalar builtins the emitters already render
+    inline as an index expression (``int`` / ``abs`` / ``min`` / ``max`` /
+    ``len`` / ``round``), which need no pre-statement.
+
+    ``argmax`` / ``argmin`` index calls need one extra step: their expander
+    requires a bare-Name operand, but the LibNode call-hoister only materialises a
+    non-Name first arg for the VALUE reductions (max / min / sum / ...), never for
+    argmax / argmin. So when the hoisted index call is an argmax / argmin over a
+    non-Name operand -- a slice (``absU[:, j]``) or a nested Call
+    (``np.abs(w)``) -- that operand is materialised into its own temp Name first
+    (a whole-array copy the later lift lowers), so the reduction reaches its
+    expander with a Name operand.
+    """
+
+    #: Scalar builtins each backend renders inline in index position -- left in
+    #: place so a plain ``hist[int(x)]`` does not gain a needless spill temp.
+    _INLINE_INDEX_BUILTINS = frozenset({"int", "abs", "min", "max", "len", "round"})
+
+    #: ``np`` arg-reductions whose expander needs a bare-Name operand (the
+    #: LibNode call-hoister leaves their non-Name first arg unmaterialised).
+    _ARG_REDUCTIONS = frozenset({"argmax", "argmin"})
+
+    def _should_hoist(self, e: ast.expr) -> bool:
+        if not isinstance(e, ast.Call):
+            return False
+        f = e.func
+        if isinstance(f, ast.Name) and f.id in self._INLINE_INDEX_BUILTINS:
+            return False
+        return True
+
+    def _is_arg_reduction(self, call: ast.Call) -> bool:
+        f = call.func
+        return (isinstance(f, ast.Attribute) and f.attr in self._ARG_REDUCTIONS
+                and isinstance(f.value, ast.Name) and f.value.id in ("np", "numpy"))
+
+    def _hoist_index(self, e: ast.Call) -> ast.Name:
+        """Spill index Call ``e`` to a fresh Name. For an argmax / argmin over a
+        non-Name operand, materialise that operand into its own temp Name first so
+        the reduction expander (which needs a Name operand) can lower it."""
+        if (self._is_arg_reduction(e) and e.args
+                and not isinstance(e.args[0], ast.Name)):
+            e.args[0] = self._spill(e.args[0], "__ixa")
+        return self._spill(e, "__ix")
+
+    def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        self.generic_visit(node)
+        sl = node.slice
+        is_tuple = isinstance(sl, ast.Tuple)
+        elts = list(sl.elts) if is_tuple else [sl]
+        new_elts = [self._hoist_index(e) if self._should_hoist(e) else e
+                    for e in elts]
+        if new_elts != elts:
+            node.slice = (ast.Tuple(elts=new_elts, ctx=ast.Load()) if is_tuple
+                          else new_elts[0])
+        return node
 
 
 class _AstypeRewriter(ast.NodeTransformer):
@@ -1491,6 +1622,14 @@ def _harvest_local_shapes(tree: ast.AST,
                         src = shape_table.get(shape_arg.value.id)
                         if src is not None:
                             shape_table[target.id] = tuple(src)
+                elif isinstance(shape_arg, (ast.Subscript, ast.BinOp)):
+                    # A scalar ``arr.shape[i]`` (or arithmetic over it) 1-D extent --
+                    # ``np.zeros(M.shape[0], np.float64)``, the eigh eigenvalue vector
+                    # over a LOCAL operand. Register it (resolving the token the same
+                    # way a shape-TUPLE element is) so the 1-D temp lands in the table
+                    # like its 2-D siblings instead of being dropped; without it the
+                    # ``w = __eigh0_wa`` alias never learns ``w`` is an array.
+                    shape_table[target.id] = (_resolve_shape_token(shape_arg, shape_table),)
         # ``np.eye(M)`` -> ``(M, M)``; ``np.eye(M, N)`` -> ``(M, N)``.
         elif attr == "eye" and rhs.args:
             first = rhs.args[0]
@@ -1748,6 +1887,13 @@ def _shape_from_ast(node, shape_table=None) -> Tuple[str, ...]:
         src = shape_table.get(node.value.id)
         if src is not None:
             return tuple(src)
+    # A single scalar shape arg (``np.zeros(M.shape[0], np.float64)`` -- the eigh
+    # eigenvalue vector's 1-D extent over a LOCAL operand): resolve an
+    # ``arr.shape[i]`` token the same way a shape-TUPLE element already is, so the
+    # local's ``.shape[0]`` folds to its dimension symbol instead of surviving as an
+    # unlowerable ``M.shape[0]`` malloc / allocate extent.
+    if shape_table is not None:
+        return (_resolve_shape_token(node, shape_table),)
     return (ast.unparse(node),)
 
 
@@ -1870,10 +2016,45 @@ def _binop(left: ast.AST, op, right: ast.AST) -> ast.BinOp:
     return ast.BinOp(left=left, op=op, right=right)
 
 
+class _ChainedSubscriptFlattener(ast.NodeTransformer):
+    """Flatten a chained subscript ``A[i0, i1, ...][rest]`` into the single
+    combined subscript ``A[i0, i1, ..., rest]`` -- but ONLY when the inner
+    index is entirely SCALAR (int / Name), so each inner index consumes a
+    leading source axis and the outer index continues on the remaining axes
+    (exactly numpy combined basic indexing). ``psi_frag[f][..., 0]`` ->
+    ``psi_frag[f, ..., 0]``. A ``Slice``/``Ellipsis``/``newaxis`` inner index is
+    NOT flattened -- ``A[1:3][0]`` != ``A[1:3, 0]`` -- so those are left intact.
+    Runs before the ellipsis/scalarize passes so they only ever see a subscript
+    whose base is a Name."""
+
+    def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        self.generic_visit(node)  # collapse nested chains bottom-up first
+        inner = node.value
+        if not isinstance(inner, ast.Subscript):
+            return node
+        inner_elts = list(inner.slice.elts) if isinstance(inner.slice, ast.Tuple) else [inner.slice]
+        if not all(_is_scalar_index(e) for e in inner_elts):
+            return node
+        outer_elts = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
+        combined = inner_elts + outer_elts
+        return ast.copy_location(
+            ast.Subscript(value=inner.value, slice=ast.Tuple(elts=combined, ctx=ast.Load()), ctx=node.ctx), node)
+
+
+def _is_scalar_index(elt: ast.expr) -> bool:
+    """A subscript element that selects (consumes) a single source axis: an int
+    Constant or a bare Name (loop iter / symbol) -- NOT a Slice, Ellipsis, or
+    newaxis (``None``)."""
+    if isinstance(elt, ast.Constant):
+        return elt.value is not Ellipsis and elt.value is not None
+    return isinstance(elt, ast.Name)
+
+
 class _EllipsisExpander(ast.NodeTransformer):
     """Replace ``...`` (Ellipsis) in a subscript with the explicit full slices
     it stands for, using the array's rank: ``a[..., 0]`` on a 3-D array ->
-    ``a[:, :, 0]``. Only fires on a subscript of a known-shape Name."""
+    ``a[:, :, 0]``. Only fires on a subscript of a known-shape Name (chained
+    subscripts are flattened to this form first by _ChainedSubscriptFlattener)."""
 
     def __init__(self, array_shapes: Dict[str, List[str]]):
         self.array_shapes = array_shapes
@@ -3383,6 +3564,53 @@ def _infer_complex_dtype(expr: ast.AST,
     return _walk_complex(expr, local_dtypes.get)
 
 
+#: The real element type underlying each complex width -- the inverse of the IR's
+#: real->complex precision map, so a ``.real`` / ``.imag`` / ``abs`` / ``hypot``
+#: scalar temp derived from a complex array is retagged to the matching real
+#: width (never hardcoded: derived from ``ir._COMPLEX_FOR_FLOAT``, first real per
+#: complex, so complex128->float64, complex64->float32, complex256->float128).
+_REAL_FOR_COMPLEX: Dict[str, str] = {}
+for _flt, _cplx in _COMPLEX_FOR_FLOAT.items():
+    _REAL_FOR_COMPLEX.setdefault(_cplx, _flt)
+
+
+def _is_conj_call(node: ast.AST) -> Optional[ast.expr]:
+    """If ``node`` is a conjugation -- ``np.conj(x)`` / ``np.conjugate(x)`` (free
+    function) or ``x.conjugate()`` (method) -- return its single operand ``x``;
+    else ``None``. The operand is the value whose conjugate is taken."""
+    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+        return None
+    f = node.func
+    if (f.attr in ("conj", "conjugate") and isinstance(f.value, ast.Name)
+            and f.value.id in ("np", "numpy") and len(node.args) == 1):
+        return node.args[0]
+    if f.attr == "conjugate" and not node.args:
+        return f.value
+    return None
+
+
+class _RealConjDropper(ast.NodeTransformer):
+    """Drop a conjugation applied to a provably-REAL operand: ``conj(x) -> x``
+    when :func:`_walk_complex` classifies ``x`` real.
+
+    numpy ``conj`` of a real is the identity, but Fortran ``CONJG`` requires a
+    COMPLEX argument, so ``CONJG(<real>)`` is a compile error (the eigh /
+    eigvalsh cyclic-Jacobi's ``ephi`` is real -- ``np.float64(apq) / m`` -- yet is
+    wrapped in ``np.conj`` for the general Hermitian form). Removing the no-op
+    conjugation on a real operand keeps both native backends valid; a genuinely
+    complex operand keeps its conjugation."""
+
+    def __init__(self, local_dtypes: Dict[str, str]):
+        self.local_dtypes = local_dtypes
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        self.generic_visit(node)
+        operand = _is_conj_call(node)
+        if operand is not None and _walk_complex(operand, self.local_dtypes.get) is None:
+            return operand
+        return node
+
+
 def _ctor_complex_tag(call: ast.Call, local_dtypes: Dict[str, str]) -> Optional[str]:
     """``np.zeros/ones/empty/eye(shape, <dtype>)`` -> a ``complexNN`` tag when the
     constructor's dtype arg is a complex array's ``Y.dtype`` or a bare
@@ -4044,6 +4272,22 @@ def _has_index_array(node: ast.Subscript, shape_table) -> bool:
     return False
 
 
+def _np_func_call(value: ast.AST, name: str) -> Optional[ast.Call]:
+    """Return ``value`` when it is ``np.<name>(...)`` / ``numpy.<name>(...)``,
+    else ``None`` -- used to recognise ``np.ix_`` / ``np.meshgrid`` calls."""
+    if (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
+            and value.func.attr == name and isinstance(value.func.value, ast.Name)
+            and value.func.value.id in ("np", "numpy")):
+        return value
+    return None
+
+
+def _ix_call_args(value: ast.AST) -> Optional[List[ast.expr]]:
+    """The open-mesh index arrays of an ``np.ix_(a, b, c)`` call, else ``None``."""
+    call = _np_func_call(value, "ix_")
+    return list(call.args) if call is not None else None
+
+
 class _WholeArrayAssignRewriter(ast.NodeTransformer):
     """Turn whole-array Assign / AugAssign between named arrays into
     per-element loops.
@@ -4085,6 +4329,12 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         # a whole-array alias is not in this set we register it as a
         # fresh local for the emitter to declare.
         self._known_arrays = set(real_arrays) if real_arrays else set(shape_table.keys())
+        #: ``grid = np.ix_(a, b, c)`` bindings: grid name -> the open-mesh index
+        #: arrays, resolved at each ``A[grid]`` gather / ``A[grid] (+)= rhs``
+        #: scatter use site (numpy advanced open-mesh indexing).
+        self._ix_grids: Dict[str, List[ast.expr]] = {}
+        #: Monotonic id for open-mesh (``np.ix_``) gather / scatter loop iters.
+        self._ix_ctr = 0
 
     def _expand(self, target: ast.Name, value: ast.expr,
                 op: Optional[ast.AST] = None,
@@ -4249,11 +4499,201 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
             ast.fix_missing_locations(s)
         return out
 
+    def _resolve_ix_operands(self, sub: ast.Subscript) -> Optional[List[ast.expr]]:
+        """The open-mesh index arrays of a ``A[grid]`` / ``A[np.ix_(...)]``
+        subscript -- resolving a bound ``grid = np.ix_(...)`` (recorded in
+        :attr:`_ix_grids`) or an inline call -- else ``None``."""
+        idx = sub.slice
+        if isinstance(idx, ast.Name) and idx.id in self._ix_grids:
+            return self._ix_grids[idx.id]
+        return _ix_call_args(idx)
+
+    def _ix_dims(self, ops: List[ast.expr]) -> Optional[List[ast.expr]]:
+        """Per-operand length for a list of 1-D index arrays (the open-mesh /
+        meshgrid axis extents), or ``None`` when any operand's shape is unknown
+        or not rank-1."""
+        dims: List[ast.expr] = []
+        for op in ops:
+            ext = _iter_extent_of(op, self.shape_table)
+            if ext is None or len(ext) != 1:
+                return None
+            dims.append(ext[0])
+        return dims
+
+    def _empty_alloc(self, name: str, dims: List[ast.expr]) -> ast.Assign:
+        """``name = np.empty((d0, d1, ...))`` marker so the zeros harvest declares
+        the fresh gather / meshgrid output; its element type rides on
+        :attr:`local_dtypes`."""
+        shape_tuple = ast.Tuple(elts=[copy.deepcopy(d) for d in dims], ctx=ast.Load())
+        return ast.Assign(
+            targets=[ast.Name(id=name, ctx=ast.Store())],
+            value=ast.Call(
+                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()),
+                                   attr="empty", ctx=ast.Load()),
+                args=[shape_tuple], keywords=[]))
+
+    def _ix_iters(self, prefix: str, k: int) -> List[str]:
+        self._ix_ctr += 1
+        return [f"{prefix}{self._ix_ctr}_{d}" for d in range(k)]
+
+    def _expand_ix_gather(self, target: ast.Name, arr: ast.Name,
+                          ops: List[ast.expr]) -> Optional[List[ast.stmt]]:
+        """``vloc = A[np.ix_(a, b, c)]`` -> ``vloc[i,j,k] = A[a[i], b[j], c[k]]``.
+
+        The result has shape ``(len(a), len(b), len(c))`` (open-mesh gather);
+        ``A`` is read at the Cartesian product of the index arrays."""
+        dims = self._ix_dims(ops)
+        if dims is None:
+            return None
+        k = len(ops)
+        iters = self._ix_iters("__ixg", k)
+        read = [_scalarize_at_iters(copy.deepcopy(op), [ast.Name(id=it, ctx=ast.Load())],
+                                    self.shape_table)
+                for op, it in zip(ops, iters)]
+        read_slot = read[0] if k == 1 else ast.Tuple(elts=read, ctx=ast.Load())
+        src = ast.Subscript(value=ast.Name(id=arr.id, ctx=ast.Load()),
+                            slice=read_slot, ctx=ast.Load())
+        out_slot = (ast.Name(id=iters[0], ctx=ast.Load()) if k == 1
+                    else ast.Tuple(elts=[ast.Name(id=it, ctx=ast.Load()) for it in iters],
+                                   ctx=ast.Load()))
+        store = ast.Subscript(value=ast.Name(id=target.id, ctx=ast.Load()),
+                              slice=out_slot, ctx=ast.Store())
+        body: List[ast.stmt] = [ast.Assign(targets=[store], value=src)]
+        for it, dim in zip(reversed(iters), reversed(dims)):
+            body = [ast.For(
+                target=ast.Name(id=it, ctx=ast.Store()),
+                iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()),
+                              args=[copy.deepcopy(dim)], keywords=[]),
+                body=body, orelse=[])]
+        self.shape_table[target.id] = tuple(ast.unparse(d) for d in dims)
+        dt = self.local_dtypes.get(arr.id)
+        if dt is not None:
+            self.local_dtypes[target.id] = dt
+        out: List[ast.stmt] = [self._empty_alloc(target.id, dims)] + body
+        for s in out:
+            ast.fix_missing_locations(s)
+        return out
+
+    def _expand_ix_scatter(self, arr: ast.Name, ops: List[ast.expr],
+                           value: ast.expr, op: Optional[ast.AST]) -> Optional[List[ast.stmt]]:
+        """``A[np.ix_(a, b, c)] (op)= rhs`` -> a nested loop
+        ``A[a[i], b[j], c[k]] (op)= rhs[i, j, k]`` over the Cartesian product of
+        the index arrays. The index arrays are distinct per axis (the LS3DF
+        periodic fragment-box placement), so every scattered cell is unique and a
+        plain accumulate matches numpy's buffered ``A[ix_] += rhs`` bit-for-bit."""
+        dims = self._ix_dims(ops)
+        if dims is None:
+            return None
+        k = len(ops)
+        iters = self._ix_iters("__ixs", k)
+        lhs_idx = [_scalarize_at_iters(copy.deepcopy(o), [ast.Name(id=it, ctx=ast.Load())],
+                                       self.shape_table)
+                   for o, it in zip(ops, iters)]
+        lhs_slot = lhs_idx[0] if k == 1 else ast.Tuple(elts=lhs_idx, ctx=ast.Load())
+        lhs = ast.Subscript(value=ast.Name(id=arr.id, ctx=ast.Load()),
+                            slice=lhs_slot, ctx=ast.Store())
+        rhs = _SubscriptifyNames(self.shape_table, iters).visit(copy.deepcopy(value))
+        stmt: ast.stmt = (ast.Assign(targets=[lhs], value=rhs) if op is None
+                          else ast.AugAssign(target=lhs, op=op, value=rhs))
+        body: List[ast.stmt] = [stmt]
+        for it, dim in zip(reversed(iters), reversed(dims)):
+            body = [ast.For(
+                target=ast.Name(id=it, ctx=ast.Store()),
+                iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()),
+                              args=[copy.deepcopy(dim)], keywords=[]),
+                body=body, orelse=[])]
+        for s in body:
+            ast.fix_missing_locations(s)
+        return body
+
+    def _expand_meshgrid_unpack(self, target: ast.Tuple,
+                                value: ast.expr) -> Optional[List[ast.stmt]]:
+        """``g0, ..., g_{k-1} = np.meshgrid(a0, ..., a_{k-1}, indexing=...)`` ->
+        per-output allocator + broadcast-copy loop nest (via
+        :func:`expand_meshgrid`). Each output is a fresh local of its input's
+        dtype whose shape follows the ``ij`` / ``xy`` convention."""
+        call = _np_func_call(value, "meshgrid")
+        if call is None:
+            return None
+        names = [e.id for e in target.elts if isinstance(e, ast.Name)]
+        if len(names) != len(target.elts):
+            return None
+        args = list(call.args)
+        if not args or len(args) != len(names):
+            return None
+        in_dims = self._ix_dims(args)
+        if in_dims is None:
+            return None
+        indexing = "xy"
+        for kw in call.keywords:
+            if kw.arg == "indexing" and isinstance(kw.value, ast.Constant):
+                indexing = kw.value.value
+        if indexing not in ("ij", "xy"):
+            return None
+        k = len(args)
+        # perm maps an output axis to the input axis whose length it takes: a
+        # single 0<->1 swap for 'xy', identity for 'ij'.
+        perm = list(range(k))
+        if indexing == "xy" and k >= 2:
+            perm[0], perm[1] = 1, 0
+        out_dims = [in_dims[perm[p]] for p in range(k)]
+        out_shape_tokens = tuple(ast.unparse(d) for d in out_dims)
+        out_stmts: List[ast.stmt] = []
+        for d, gname in enumerate(names):
+            # Output d carries input d's element type (numpy meshgrid preserves
+            # per-input dtype); shape follows the indexing convention.
+            if isinstance(args[d], ast.Name):
+                dt = self.local_dtypes.get(args[d].id)
+                if dt is not None:
+                    self.local_dtypes[gname] = dt
+            self.shape_table[gname] = out_shape_tokens
+            kwargs = [ast.keyword(arg="indexing", value=ast.Constant(value=indexing)),
+                      ast.keyword(arg=MESHGRID_AXIS_KW, value=ast.Constant(value=d))]
+            loops = expand_meshgrid(ast.Name(id=gname, ctx=ast.Store()),
+                                    [copy.deepcopy(a) for a in args],
+                                    self.shape_table, kwargs=kwargs)
+            out_stmts.append(self._empty_alloc(gname, out_dims))
+            out_stmts.extend(loops)
+        for s in out_stmts:
+            ast.fix_missing_locations(s)
+        return out_stmts
+
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         self.generic_visit(node)
         if len(node.targets) != 1:
             return node
         target = node.targets[0]
+        # ``g0, g1, ... = np.meshgrid(a0, a1, ..., indexing=...)`` multi-output
+        # tuple unpack -> one broadcast-copy loop nest per output.
+        if isinstance(target, ast.Tuple):
+            meshed = self._expand_meshgrid_unpack(target, node.value)
+            if meshed is not None:
+                return meshed
+            return node
+        # ``grid = np.ix_(a, b, c)`` open-mesh index binding: record the operands
+        # and drop the statement (resolved at each ``A[grid]`` use site below).
+        if isinstance(target, ast.Name):
+            ix_ops = _ix_call_args(node.value)
+            if ix_ops is not None:
+                self._ix_grids[target.id] = ix_ops
+                return None
+        # ``vloc = A[grid]`` (or ``A[np.ix_(...)]``) open-mesh GATHER.
+        if (isinstance(target, ast.Name)
+                and isinstance(node.value, ast.Subscript)
+                and isinstance(node.value.value, ast.Name)):
+            ops = self._resolve_ix_operands(node.value)
+            if ops is not None:
+                gathered = self._expand_ix_gather(target, node.value.value, ops)
+                if gathered is not None:
+                    return gathered
+        # ``A[grid] = rhs`` open-mesh scatter store (plain, no accumulate).
+        if (isinstance(target, ast.Subscript)
+                and isinstance(target.value, ast.Name)):
+            ops = self._resolve_ix_operands(target)
+            if ops is not None:
+                scattered = self._expand_ix_scatter(target.value, ops, node.value, None)
+                if scattered is not None:
+                    return scattered
         # Fancy-index scatter store ``A[idx, c] = rhs`` (idx an index array):
         # a per-element loop. Runs first so the sliced-RHS form the emitter
         # rejects (vexx ``tg[nl, 0] = psi[:, i]``) is lowered here.
@@ -4558,6 +4998,17 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
             expanded = self._expand(node.target, node.value, node.op)
             if expanded:
                 return expanded
+        # ``A[grid] += rhs`` open-mesh SCATTER-ADD (grid = np.ix_(a, b, c), or an
+        # inline ``A[np.ix_(...)] += rhs``): a nested accumulate loop over the
+        # Cartesian product of the (distinct-per-axis) index arrays.
+        if (isinstance(node.target, ast.Subscript)
+                and isinstance(node.target.value, ast.Name)):
+            ops = self._resolve_ix_operands(node.target)
+            if ops is not None:
+                scattered = self._expand_ix_scatter(
+                    node.target.value, ops, node.value, node.op)
+                if scattered is not None:
+                    return scattered
         # Fancy-index scatter ``A[idx, c] += rhs`` (idx an index array): lowered by
         # ``_expand_fancy_scatter_store`` to a snapshot-gather + store pair, matching
         # numpy's BUFFERED fancy ``+=`` (old value, last-write-wins on a duplicate
@@ -5162,9 +5613,10 @@ def _lp_seed_shape_table(ctx: LoweringContext) -> None:
         if _sd.logical_shape:
             ctx.arrays_shapes.setdefault(_sname, list(_sd.logical_shape))
     _ShapeMidExpressionRewriter(ctx.arrays_shapes).visit(ctx.tree)
-    # Expand ``...`` (Ellipsis) to explicit full slices using each array's rank
-    # before any slice-aware pass runs (lulesh ``a[..., k]``).
-    _EllipsisExpander(ctx.arrays_shapes).visit(ctx.tree)
+    # Index-access normalisation (chained-flatten / ellipsis-expand / trailing-slice
+    # pad) is deferred to the single ``normalize-index-access`` phase, which runs
+    # AFTER the harvest/inlined-shape resolution so post-inline locals' ranks are
+    # known (breaking the harvest<->ellipsis circular dependency for ls3df_scf).
 
 
 def _lp_normalize_calls(ctx: LoweringContext) -> None:
@@ -5186,6 +5638,10 @@ def _lp_normalize_calls(ctx: LoweringContext) -> None:
     _TransposeRewriter(set(ctx.original_kir.sparse or {})).visit(tree)
     _AstypeRewriter({a.name: a.dtype for a in ctx.kir.arrays if a.dtype}).visit(tree)
     _MethodCallRewriter().visit(tree)
+    # A Call in subscript-index position (``v[np.argmax(np.abs(v))]``) is hoisted
+    # to a fresh temp so the index is a bare Name the backends emit; the spilled
+    # ``__ix = np.argmax(...)`` is expanded by the later LibNode reduction pass.
+    _ComputedIndexCallHoister().visit(tree)
     ctx.iter_rewriter = _ArrayIterRewriter(ash)
     ctx.iter_rewriter.visit(tree)
     _EnumerateZipRewriter(ash).visit(tree)
@@ -5364,6 +5820,36 @@ def _lp_resolve_inlined_shapes(ctx: LoweringContext) -> None:
                 tree.body[idx:idx] = sm.pre_stmts
 
 
+def _lp_normalize_index_access(ctx: LoweringContext) -> None:
+    """Consolidated index-access normalisation, run once AFTER every array shape is
+    known (post ``resolve-inlined-shapes``).
+
+    Three structural rewrites, in order:
+
+    1. :class:`_ChainedSubscriptFlattener` -- collapse a scalar-chained subscript
+       ``A[f][..., 0]`` -> ``A[f, ..., 0]`` so the base is always a Name.
+    2. :class:`_EllipsisExpander` -- replace ``...`` with the explicit full slices
+       its array's rank implies (``a[..., 0]`` on a 3-D array -> ``a[:, :, 0]``).
+    3. :class:`_PadImplicitTrailingSlices` -- make numpy's implicit trailing full
+       slices explicit (``A[i, j]`` on a 3-D array -> ``A[i, j, :]``).
+
+    Placing this after the harvest / inlined-shape resolution breaks the
+    harvest<->ellipsis circular dependency: post-inline locals (``hx``, ``vloc``,
+    ``psi_frag[f][..., 0]``) only acquire a shape at the harvest, and the ellipsis /
+    trailing-slice rewrites need that shape to know each array's rank -- so both must
+    run after it, not at parse-shape time. The shape source is
+    :attr:`ctx.lib_shape_table`, the harvest / inlined-resolve table that carries
+    BOTH the signature arrays and every derived local (the raw
+    :attr:`ctx.arrays_shapes` still holds only the declared arrays at this point,
+    so an ellipsis on a post-inline local would not resolve against it)."""
+    tree = ctx.tree
+    shapes = ctx.lib_shape_table
+    _ChainedSubscriptFlattener().visit(tree)
+    _EllipsisExpander(shapes).visit(tree)
+    _PadImplicitTrailingSlices(shapes).visit(tree)
+    ast.fix_missing_locations(tree)
+
+
 def _lp_libnode_expand(ctx: LoweringContext) -> None:
     """FFT-grid + reshape normalisation, then the LibNode expander (reductions /
     matmul / linalg); a second free-name promotion for structural scalars."""
@@ -5394,6 +5880,55 @@ def _lp_libnode_expand(ctx: LoweringContext) -> None:
     # they're treated as locals and excluded; only genuinely free Load names get
     # promoted.
     _promote_free_names_to_params(ctx.kir)
+    _fix_real_scalar_dtypes(ctx)
+
+
+def _fix_real_scalar_dtypes(ctx: LoweringContext) -> None:
+    """Re-derive the dtype of a scalar temp that LibNodeRewriter tagged COMPLEX
+    from a complex source but whose value is actually REAL.
+
+    ``LibNodeRewriter`` propagates a complex source array's element type onto
+    every derived scalar, but a ``.real`` / ``.imag`` accessor, an ``abs`` /
+    ``hypot`` magnitude, or a ``np.float64(...)`` cast produces a REAL value --
+    the eigh / eigvalsh cyclic-Jacobi's ``app = A[p, p].real`` / ``aqq`` / ``m =
+    hypot(...)`` / ``tau = (aqq - app) / (2 * m)``. Left complex, the emitter
+    declares them complex and ``tau >= 0.0`` (a complex comparison) and
+    ``conjg(<real>)`` fail to compile. Route each through the file's existing
+    :func:`_walk_complex` predicate (which already classifies those forms real)
+    and, when it disagrees with a complex tag, retag to the matching real width.
+    A fixpoint resolves the cascade (``tau`` is real only once ``app`` / ``aqq`` /
+    ``m`` are). Then drop any conjugation left on a now-real operand
+    (:class:`_RealConjDropper`), so ``conj(ephi)`` on the real ``ephi`` is not
+    emitted as ``CONJG(<real>)``. Same class as the ``abs(complex) -> double``
+    root fix -- a real-returning op of a complex operand is REAL."""
+    tree = ctx.tree
+    ld = ctx.local_dtypes
+    scalars = {n for n, dt in ld.items()
+               if dt in _REAL_FOR_COMPLEX and n not in ctx.lib_shape_table}
+    # Every value WRITTEN to a candidate scalar (an ``Assign`` value or an
+    # ``AugAssign`` increment). A scalar is real only if EVERY write is real:
+    # a reduction accumulator (``acc = 0.0`` then ``acc = acc + a * b`` on complex
+    # operands) has a real INIT but a complex UPDATE, so it must stay complex.
+    writes: Dict[str, List[ast.expr]] = {}
+    for stmt in ast.walk(tree):
+        if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1
+                and isinstance(stmt.targets[0], ast.Name) and stmt.targets[0].id in scalars):
+            writes.setdefault(stmt.targets[0].id, []).append(stmt.value)
+        elif isinstance(stmt, ast.AugAssign) and isinstance(stmt.target, ast.Name) and stmt.target.id in scalars:
+            writes.setdefault(stmt.target.id, []).append(stmt.value)
+    changed = True
+    while changed and scalars:
+        changed = False
+        for name in list(scalars):
+            vals = writes.get(name)
+            # Fixpoint: ``tau = (aqq - app) / (2 * m)`` reads real only once ``app``
+            # / ``aqq`` / ``m`` have themselves been retagged real (this pass).
+            if vals and all(_walk_complex(v, ld.get) is None for v in vals):
+                ld[name] = _REAL_FOR_COMPLEX[ld[name]]
+                scalars.discard(name)
+                changed = True
+    _RealConjDropper(ld).visit(tree)
+    ast.fix_missing_locations(tree)
 
 
 def _lp_whole_array_and_zeros(ctx: LoweringContext) -> None:
@@ -5464,13 +5999,11 @@ def _lp_slice_normalize_and_lift(ctx: LoweringContext) -> None:
     # ``box = tabxx_box[ia]`` / ``qr = tabxx_qr[ia][:, k]`` (QE ultrasoft
     # augmentation) is materialised into a rank-1 local the fancy scatter / gather
     # can index. Flatten chained subscripts ``B[inner][outer]`` into one combined
-    # index, fold scalar-prefix sub-array aliases (``low = A[i, j]; low[k]`` -> ``A[i,
-    # j, k]``, xsbench -- runs before padding so its bare ``A[i]`` def is dropped and
-    # not lifted into a copy), then make numpy's implicit trailing axes explicit
-    # (``tabxx_box[ia]`` -> ``[ia, :]``).
+    # index, then fold scalar-prefix sub-array aliases (``low = A[i, j]; low[k]`` ->
+    # ``A[i, j, k]``, xsbench). Trailing-slice padding is done once, earlier, in the
+    # ``normalize-index-access`` phase.
     _FlattenChainedSubscripts(shapes).visit(tree)
     _fold_subarray_aliases(tree, shapes)
-    _PadImplicitTrailingSlices(shapes).visit(tree)
     # Lift array-valued RHS (slice-bearing BinOp / Call / etc) on a bare-Name LHS to
     # a ``Name = np.zeros(extent); Name[:] = expr`` pair so slice fusion can lower
     # the per-element loop. Computes the shape from the iteration extent of the RHS,
@@ -5500,6 +6033,49 @@ def _lp_slice_normalize_and_lift(ctx: LoweringContext) -> None:
     if ctx.inl_defs:
         ctx.resolve_inl_table(ctx.zeros_locals)
         ctx.resolve_inl_table(shapes)
+
+
+def _fold_local_shape_attr_tokens(tuple_tables: List[Dict[str, object]],
+                                  reassign_shapes: Optional[Dict[str, List]]) -> None:
+    """Fold surviving ``arr.shape[i]`` STRING tokens in the finalised shape tables
+    against the now-resolved shapes of the LOCAL arrays they name.
+
+    The inl resolver (:meth:`LoweringContext.resolve_inl_table`) only resolves a
+    ``.shape[i]`` token against PARAMETER shapes, so a token naming a LOCAL survives
+    it. That happens when a temp is derived from a local operand whose shape is
+    itself resolved LATE -- the eigh eigenvector temps aliased off
+    ``M = Linv @ h_sub @ Linv.T``: the ``M.shape[0]`` token is recorded before the
+    chained-matmul shape of ``M`` is known, and the AST ``_ResolveArrShape`` pass
+    rewrites body Attributes, not the malloc / row-major-stride TABLES the emitter
+    reads. By this final phase every local's shape is known, so a token-level fold
+    turns ``M.shape[0]`` into ``k`` in both the allocation extents and the subscript
+    strides. Reuses the frontend's token substituter (it operates on shape tokens,
+    never on source). Iterated to a bounded fixpoint so a temp whose dimension names
+    ANOTHER temp still converges; never-worse (a token whose base is unknown is
+    left untouched)."""
+    from numpyto_common.frontend import _resolve_shape_attr_tokens
+    tables = [t for t in tuple_tables if t is not None]
+    for _ in range(4):
+        seed: Dict[str, Tuple[str, ...]] = {}
+        for t in tables:
+            for nm, shp in t.items():
+                seed[nm] = tuple(shp)
+        changed = False
+        for t in tables:
+            for nm in list(t):
+                new = _resolve_shape_attr_tokens(tuple(t[nm]), seed)
+                if new != tuple(t[nm]):
+                    t[nm] = list(new) if isinstance(t[nm], list) else new
+                    changed = True
+        if reassign_shapes:
+            for nm in list(reassign_shapes):
+                new_list = [tuple(_resolve_shape_attr_tokens(tuple(s), seed))
+                            for s in reassign_shapes[nm]]
+                if new_list != [tuple(s) for s in reassign_shapes[nm]]:
+                    reassign_shapes[nm] = new_list
+                    changed = True
+        if not changed:
+            break
 
 
 def _lp_slice_fusion_and_resolve(ctx: LoweringContext) -> None:
@@ -5555,6 +6131,11 @@ def _lp_slice_fusion_and_resolve(ctx: LoweringContext) -> None:
             _dt = ctx.local_dtypes.get(_nm)
             if not (_dt and _dt.startswith(("int", "uint"))):
                 ctx.local_dtypes[_nm] = "int64"
+    # Resolve any ``arr.shape[i]`` token left in the malloc / stride tables against
+    # the now-fully-known LOCAL shapes (M => (k, k)), so eigh temps aliased off a
+    # late-resolved chained-matmul operand allocate + index with concrete extents.
+    _fold_local_shape_attr_tokens([ctx.arrays_shapes, shapes, ctx.zeros_locals],
+                                  ctx.kir.reassign_shapes)
 
 
 def _lp_promote_true_division(ctx: LoweringContext) -> None:
@@ -5592,6 +6173,7 @@ _LOWER_PHASES: List[Tuple[str, Callable[["LoweringContext"], None]]] = [
     ("seed-dtypes-and-harvest", _lp_seed_dtypes_and_harvest),
     ("promote-true-division", _lp_promote_true_division),
     ("resolve-inlined-shapes", _lp_resolve_inlined_shapes),
+    ("normalize-index-access", _lp_normalize_index_access),
     ("libnode-expand", _lp_libnode_expand),
     ("whole-array-and-zeros", _lp_whole_array_and_zeros),
     ("slice-normalize-and-lift", _lp_slice_normalize_and_lift),
@@ -5766,6 +6348,15 @@ def _detect_output_and_index_arrays(kir: KernelIR) -> None:
                 and node.func.attr == "take" and len(node.args) >= 2
                 and isinstance(node.args[1], ast.Name) and node.args[1].id in name_to_arr):
             index_arrays.add(node.args[1].id)
+        # ``np.ix_(a, b, c)`` -- each operand is an open-mesh index array (used
+        # to index another array), so a param operand must be integer, even
+        # though the ``A[ix_]`` gather / scatter is not expanded yet.
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy")
+                and node.func.attr == "ix_"):
+            for arg in node.args:
+                if isinstance(arg, ast.Name) and arg.id in name_to_arr:
+                    index_arrays.add(arg.id)
         for child in ast.iter_child_nodes(node):
             _walk(child)
 

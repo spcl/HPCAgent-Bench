@@ -70,20 +70,25 @@ def _upper_bound(vloc, proj_f, dij_f, half_inv_h2, v):
     # unwanted subspace instead of damping it.
     v = v / (np.linalg.norm(v) + 1.0e-30)
     v_prev = np.zeros_like(v)
-    alphas, betas = [], []
+    alphas = np.zeros(_NLANC)          # tridiagonal diagonal, one entry per Lanczos step taken
+    betas = np.zeros(_NLANC)           # tridiagonal off-diagonal, one per non-terminal step
+    na = 0                             # number of Lanczos steps taken (order of T)
+    nb = 0                             # number of off-diagonal entries recorded
     beta = 0.0
     for _ in range(_NLANC):
         w = _hpsi(v[..., None], vloc, proj_f, dij_f, half_inv_h2)[..., 0]
         alpha = float(v.ravel() @ w.ravel())
         w = w - alpha * v - beta * v_prev
         beta = float(np.linalg.norm(w))
-        alphas.append(alpha)
+        alphas[na] = alpha
+        na += 1
         if beta < 1.0e-12:
             break
         v_prev, v = v, w / beta
-        betas.append(beta)
-    off = np.asarray(betas[:len(alphas) - 1])
-    T = np.diag(np.asarray(alphas))
+        betas[nb] = beta
+        nb += 1
+    off = betas[:na - 1]
+    T = np.diag(alphas[:na])
     if off.size:
         T = T + np.diag(off, 1) + np.diag(off, -1)
     return float(np.linalg.eigvalsh(T).max()) + beta   # theta_max + residual = upper bound
@@ -164,7 +169,8 @@ def kernel(dvol, half_inv_h2, tol, nscf, mix, m, offsets, alpha, occ, V_ion, pro
     rho_in = rho.copy()
     nelec = float(rho_in.sum()) * dvol                 # electrons to conserve while patching
     V_tot[:] = _genpot(rho_in, V_ion, h)               # potential of the seed density
-    b_frag = [None] * nfrag                            # per-fragment upper bound (set once)
+    b_frag = np.zeros(nfrag)                           # per-fragment upper bound (set once)
+    b_frag_valid = np.zeros(nfrag, dtype=bool)         # True once a fragment's bound is frozen
 
     for _ in range(int(nscf)):
         rho_out = np.zeros((N, N, N), dtype=rho.dtype)
@@ -176,8 +182,9 @@ def kernel(dvol, half_inv_h2, tol, nscf, mix, m, offsets, alpha, occ, V_ion, pro
             vloc = V_tot[grid]                         # Gen_VF: gather V_tot onto the fragment
             pf, df = proj_flat[f], dij[f]
             # PEtot_F: one CheFSI filter + Rayleigh-Ritz sweep of the fragment KS problem.
-            if b_frag[f] is None:
+            if not b_frag_valid[f]:
                 b_frag[f] = 1.2 * _upper_bound(vloc, pf, df, half_inv_h2, psi_frag[f][..., 0])
+                b_frag_valid[f] = True
             X, w = _rayleigh_ritz(vloc, pf, df, half_inv_h2, psi_frag[f])
             # Keep the damping window strictly above the current wanted band so the
             # Chebyshev half-width e = (b - a)/2 stays positive even if the frozen

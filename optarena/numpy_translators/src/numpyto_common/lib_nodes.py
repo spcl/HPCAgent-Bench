@@ -247,6 +247,85 @@ def _slice_axes(node: ast.AST) -> List[ast.AST]:
     return [sl]
 
 
+def _is_special_axis(elt: ast.expr) -> bool:
+    """A rank-shifting subscript entry: numpy newaxis (``None``) or ``...``
+    (Ellipsis). Neither consumes exactly one source axis the ordinary way -- a
+    newaxis inserts a size-1 result axis; an Ellipsis fills the un-consumed
+    source axes."""
+    return isinstance(elt, ast.Constant) and (elt.value is None or elt.value is Ellipsis)
+
+
+def _is_scalar_axis(elt: ast.expr) -> bool:
+    """A subscript entry that consumes ONE source axis as a scalar index -- an
+    int Constant or a bare Name (loop iter / symbol), never a Slice, Ellipsis or
+    newaxis."""
+    if isinstance(elt, ast.Constant):
+        return elt.value is not Ellipsis and elt.value is not None
+    return isinstance(elt, ast.Name)
+
+
+def _operand_token_shape(node: ast.expr, shape_table):
+    """Residual shape TOKENS of an einsum/contraction operand.
+
+    A bare ``Name(A)`` -> A's declared shape. A ``Subscript(A, ...)`` -> A's
+    shape with each scalar-indexed axis dropped and every ``Slice`` / trailing
+    un-indexed axis kept (numpy advanced-index rank reduction), e.g. ``psi[f]``
+    on shape ``(F, X, Y, Z, K)`` -> ``(X, Y, Z, K)``. Returns tokens (not
+    ast nodes) so callers stay consistent with the shape table. ``None`` when
+    unresolvable (unknown base, or an Ellipsis whose axis count is ambiguous)."""
+    nm = _name_id(node)
+    if nm:
+        return shape_table.get(nm)
+    if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
+        base = shape_table.get(node.value.id)
+        if base is None:
+            return None
+        sl = node.slice
+        elts = list(sl.elts) if isinstance(sl, ast.Tuple) else [sl]
+        # Source axes consumed by the explicit (non-Ellipsis, non-newaxis)
+        # entries -- an Ellipsis fills the rest with their full extents.
+        n_src = sum(1 for e in elts if not _is_special_axis(e))
+        kept: List[str] = []
+        axis = 0
+        for elt in elts:
+            if isinstance(elt, ast.Constant) and elt.value is None:
+                kept.append("1")  # newaxis -- inserted size-1 result axis
+                continue
+            if isinstance(elt, ast.Constant) and elt.value is Ellipsis:
+                for _ in range(max(len(base) - n_src, 0)):
+                    if axis >= len(base):
+                        return None
+                    kept.append(base[axis])
+                    axis += 1
+                continue
+            if axis >= len(base):
+                return None
+            if isinstance(elt, ast.Slice):
+                kept.append(base[axis])
+            # else: scalar index (int / Name / Constant) drops this axis
+            axis += 1
+        kept.extend(base[axis:])  # trailing un-indexed axes are full slices
+        return tuple(kept)
+    return None
+
+
+def _chained_base_shape(node: ast.expr, shape_table):
+    """Residual token-shape of a SCALAR-chained subscript base ``A[i, j][...]``.
+
+    Only when every inner index is a single-axis scalar (int Constant / bare
+    Name) -- numpy combined-basic-indexing, so each scalar drops one leading
+    axis (``psi_frag[f]`` on ``(F, X, Y, Z, K)`` -> ``(X, Y, Z, K)``). This lets
+    :func:`_iter_extent_of` size a chained access ``psi_frag[f][..., 0]`` whose
+    base is not yet textually flattened to a single Name subscript. Returns
+    ``None`` for a non-Name base or a Slice / Ellipsis / newaxis inner index
+    (whose residual shape is not a simple axis drop)."""
+    if not (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name)):
+        return None
+    if not all(_is_scalar_axis(e) for e in _slice_axes(node)):
+        return None
+    return _operand_token_shape(node, shape_table)
+
+
 def _contraction_result_extent(expr: ast.Call, shape_table):
     """Output iter-extent of an ``np.einsum`` / ``tensordot`` / ``inner`` call.
 
@@ -295,8 +374,7 @@ def _contraction_result_extent(expr: ast.Call, shape_table):
         operand_nodes = [a, b]
     letter_extent: Dict[str, str] = {}
     for spec, node in zip(inputs, operand_nodes):
-        nm = _name_id(node)
-        shape = shape_table.get(nm) if nm else None
+        shape = _operand_token_shape(node, shape_table)
         if shape is None or len(shape) != len(spec):
             return None
         for letter, dim in zip(spec, shape):
@@ -518,6 +596,28 @@ def _iter_extent_of(expr: ast.expr,
             if attr == "diagonal" and expr.args:
                 base = _iter_extent_of(expr.args[0], shape_table)
                 return (base[0],) if base else None
+            # ``np.diag(v [, k])`` -- a 1-D operand builds an ``(n+|k|, n+|k|)``
+            # matrix (single source of truth for the constructed shape); a 2-D
+            # operand extracts the main diagonal (length of its first axis).
+            if attr == "diag" and expr.args:
+                base = _iter_extent_of(expr.args[0], shape_table)
+                if base is None:
+                    return None
+                if len(base) == 2:
+                    return (base[0],)
+                if len(base) != 1:
+                    return None
+                k_node = _kwarg_or_pos(expr.args, expr.keywords, 1, "k")
+                if k_node is None:
+                    off = 0
+                else:
+                    kc = _const_int(k_node)
+                    if kc is None:
+                        return None  # non-const offset can't size the result
+                    off = abs(kc)
+                side = (base[0] if off == 0 else
+                        ast.BinOp(left=base[0], op=ast.Add(), right=_const(off)))
+                return (side, copy.deepcopy(side))
             # ``np.pad(src, pad_width, ...)`` -> each source axis grown by its
             # ``before + after`` width (scalar R or per-axis tuple). The stencil
             # ghost cells / the vector variants' unpadded component axis.
@@ -570,11 +670,20 @@ def _iter_extent_of(expr: ast.expr,
         return _broadcast_children(expr.values, shape_table)
     if isinstance(expr, ast.Subscript):
         name = _name_id(expr.value)
-        shape = shape_table.get(name) if name else None
+        if name:
+            shape = shape_table.get(name)
+        else:
+            # Chained scalar-indexed base ``A[i, j][outer]`` -- resolve the
+            # base's residual shape so the outer axes below index it (the base
+            # is not yet flattened to a single Name subscript at harvest time).
+            shape = _chained_base_shape(expr.value, shape_table)
         axes = _slice_axes(expr)
         ext: List[ast.expr] = []
         src_axis = 0  # source-axis pointer -- advances on Slice / scalar
         # axes, NOT on ``None`` (newaxis -- pure result-axis insertion).
+        # Source axes consumed by the explicit (non-Ellipsis, non-newaxis)
+        # entries -- an Ellipsis fills the rest with their full extents.
+        n_src_consumers = sum(1 for ax in axes if not _is_special_axis(ax))
         # numpy ADVANCED indexing: when several integer-ARRAY indices appear
         # together, they broadcast into a SINGLE group of result axes (not one
         # per array). ``u2[q, r, s]`` with q/r/s all (J,) -> (J,), not (J,J,J)
@@ -587,6 +696,18 @@ def _iter_extent_of(expr: ast.expr,
                 # numpy newaxis -- inserts a length-1 result axis without
                 # consuming a source axis.
                 ext.append(_const(1))
+                continue
+            if isinstance(ax, ast.Constant) and ax.value is Ellipsis:
+                # numpy Ellipsis -- expands to the full slices of every source
+                # axis the other (explicit) entries do not consume, each
+                # contributing that axis's full extent. Needs the source rank.
+                if not shape:
+                    return None
+                for _ in range(max(len(shape) - n_src_consumers, 0)):
+                    if src_axis >= len(shape):
+                        return None
+                    ext.append(_const_or_name(shape[src_axis]))
+                    src_axis += 1
                 continue
             if isinstance(ax, ast.Slice):
                 axis_len = (_const_or_name(shape[src_axis])
@@ -1816,6 +1937,35 @@ def expand_ifft(target, args, shape_table, kwargs=None):
     return _expand_dftn(target, args, shape_table, inverse=True, is_n=False, kwargs=kwargs)
 
 
+def expand_fftfreq(target, args, shape_table, kwargs=None) -> List[ast.stmt]:
+    """``np.fft.fftfreq(n, d=1.0)`` -> the DFT sample frequencies (length ``n``).
+
+    ``out[i] = (i if i <= (n - 1) // 2 else i - n) / (n * d)`` -- indices up to
+    ``(n - 1) // 2`` are the non-negative frequencies, the rest wrap to the
+    negative frequencies, all scaled by the sample spacing ``d`` (default 1.0).
+    The denominator ``n * d`` is real, so ``/`` is a real division (not integer
+    truncation). Matches ``numpy.fft.fftfreq`` for even and odd ``n``."""
+    if not args:
+        raise NotImplementedError("np.fft.fftfreq needs the sample count n")
+    n = args[0]
+    d_node = _kwarg_or_pos(args, kwargs, 1, "d")
+    if d_node is None:
+        d_node = _const(1.0)
+    it = "__ff"
+    half = ast.BinOp(
+        left=ast.BinOp(left=copy.deepcopy(n), op=ast.Sub(), right=_const(1)),
+        op=ast.FloorDiv(), right=_const(2))
+    numer = ast.IfExp(
+        test=ast.Compare(left=_name(it), ops=[ast.LtE()], comparators=[half]),
+        body=_name(it),
+        orelse=ast.BinOp(left=_name(it), op=ast.Sub(), right=copy.deepcopy(n)))
+    denom = ast.BinOp(left=copy.deepcopy(n), op=ast.Mult(), right=copy.deepcopy(d_node))
+    body = [ast.Assign(
+        targets=[ast.Subscript(value=_name(target.id), slice=_name(it), ctx=ast.Store())],
+        value=ast.BinOp(left=numer, op=ast.Div(), right=denom))]
+    return _wrap_for_loops([it], [copy.deepcopy(n)], body)
+
+
 def expand_copy(target: ast.expr, args: List[ast.expr],
                 shape_table: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     """``out = np.copy(a)`` -> elementwise copy loop into the LHS.
@@ -2399,6 +2549,70 @@ def expand_fromfunction(target: ast.expr, args: List[ast.expr],
         targets=[ast.Subscript(value=_name(target.id), slice=slot, ctx=ast.Store())],
         value=body_expr)]
     return _wrap_for_loops(iters, shape_elts, body)
+
+
+#: Synthetic keyword the multi-output tuple-unpack (in lowering.py) attaches to
+#: each split ``np.meshgrid`` call so this expander knows WHICH output array of
+#: the tuple it is building. numpy's ``meshgrid`` has no such keyword, so the
+#: name is unambiguous as an internal marker.
+MESHGRID_AXIS_KW = "__meshgrid_axis__"
+
+
+def expand_meshgrid(target: ast.expr, args: List[ast.expr],
+                    shape_table: Dict[str, Tuple[str, ...]],
+                    kwargs=None) -> List[ast.stmt]:
+    """Emit ONE broadcast output of ``np.meshgrid(a0, a1, ..., a_{k-1})``.
+
+    Given 1-D inputs of lengths ``(N0, N1, ..., N_{k-1})``:
+
+    * ``indexing='ij'`` -- every output has shape ``(N0, N1, ..., N_{k-1})`` and
+      output ``d`` is ``out_d[i0, ..., i_{k-1}] = a_d[i_d]`` (broadcast along
+      axis ``d``).
+    * ``indexing='xy'`` (numpy's Cartesian default) -- axes 0 and 1 are swapped,
+      so the output shape is ``(N1, N0, N2, ...)`` and output ``d`` varies with
+      input axis ``perm[d]`` where ``perm`` swaps 0 and 1.
+
+    A meshgrid call returns a TUPLE of arrays; the lowering-side unpack splits it
+    into one call per output and marks each with :data:`MESHGRID_AXIS_KW` so this
+    expander builds that output's broadcast-copy loop nest. Each input must be a
+    1-D array of known length."""
+    kwargs = kwargs or []
+    indexing = "xy"
+    axis: Optional[int] = None
+    for kw in kwargs:
+        if kw.arg == "indexing" and isinstance(kw.value, ast.Constant):
+            indexing = kw.value.value
+        elif kw.arg == MESHGRID_AXIS_KW and isinstance(kw.value, ast.Constant):
+            axis = kw.value.value
+    if indexing not in ("ij", "xy"):
+        raise NotImplementedError(f"np.meshgrid indexing={indexing!r} not supported")
+    k = len(args)
+    if axis is None or not (0 <= axis < k):
+        raise NotImplementedError("np.meshgrid: output axis unresolved")
+    # Length of each 1-D input array.
+    lengths: List[ast.expr] = []
+    for a in args:
+        ext = _iter_extent_of(a, shape_table)
+        if ext is None or len(ext) != 1:
+            raise NotImplementedError("np.meshgrid needs 1-D inputs of known length")
+        lengths.append(ext[0])
+    # perm maps an OUTPUT axis to the INPUT axis whose length it takes; it is a
+    # single swap of 0 and 1 for 'xy' (and its own inverse), identity for 'ij'.
+    perm = list(range(k))
+    if indexing == "xy" and k >= 2:
+        perm[0], perm[1] = 1, 0
+    out_dims = [lengths[perm[p]] for p in range(k)]
+    iters = [f"__mgi{p}" for p in range(k)]
+    # This output varies with input ``axis`` -> along output axis ``perm[axis]``
+    # (perm is self-inverse, so the read iterator is ``iters[perm[axis]]``).
+    read_iter = _name(iters[perm[axis]])
+    src = _scalarize_at_iters(copy.deepcopy(args[axis]), [read_iter], shape_table)
+    out_slot = (_name(iters[0]) if k == 1
+                else ast.Tuple(elts=[_name(v) for v in iters], ctx=ast.Load()))
+    body = [ast.Assign(
+        targets=[ast.Subscript(value=_name(target.id), slice=out_slot, ctx=ast.Store())],
+        value=src)]
+    return _wrap_for_loops(iters, [copy.deepcopy(d) for d in out_dims], body)
 
 
 def expand_eye(target: ast.expr, args: List[ast.expr],
@@ -3049,8 +3263,15 @@ def _expand_einsum_ellipsis(spec: str, ranks: List[int]) -> str:
     return ",".join(new_ins) + "->" + rhs.replace("...", ell)
 
 
+#: Monotone counter for the scratch buffers ``expand_einsum`` spills a
+#: non-Name operand into. Global so every materialised temp across a kernel's
+#: einsum calls gets a unique name (two distinct-shape operands must not alias).
+_EINSUM_OP_TEMP = [0]
+
+
 def expand_einsum(target: ast.expr, args: List[ast.expr],
-                  shape_table: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
+                  shape_table: Dict[str, Tuple[str, ...]],
+                  local_dtypes=None, fresh_local_allocs=None) -> List[ast.stmt]:
     """Lower ``np.einsum(subscripts, *operands)`` to a nested loop nest.
 
     Output indices become nested loops over the result; indices summed away
@@ -3061,11 +3282,50 @@ def expand_einsum(target: ast.expr, args: List[ast.expr],
     repeated within ONE operand (``ii`` -> a diagonal ``A[i, i]``). This one
     path subsumes matmul ``ij,jk->ik``, transpose ``ij->ji``, trace ``ii->``,
     diagonal ``ii->i``, outer ``i,j->ij`` and sum ``ij->``.
+
+    A non-Name operand (a Subscript / Call / BinOp such as ``psi_frag[f]``) is
+    first spilled into a fresh scratch buffer -- the copy-into-local pattern
+    ``expand_copy`` / ``expand_median`` use -- so the bare-Name expansion below
+    contracts the buffer.
     """
     if not args or not isinstance(args[0], ast.Constant) or not isinstance(args[0].value, str):
         raise NotImplementedError("einsum needs a literal subscript string")
     spec = args[0].value
     operands = args[1:]
+    # Materialize any non-Name operand into a fresh local so the bare-Name
+    # expansion (and the ellipsis rank lookup) sees a Name. The buffer is
+    # registered in ``fresh_local_allocs`` so the emit declares it, and its
+    # dtype is inherited from the source array (never hardcoded).
+    prelude: List[ast.stmt] = []
+    materialized: List[ast.expr] = []
+    for op in operands:
+        if isinstance(op, ast.Name):
+            materialized.append(op)
+            continue
+        op_ext = _iter_extent_of(op, shape_table)
+        if op_ext is None:
+            materialized.append(op)  # unresolved -- the bare-Name check raises below
+            continue
+        _EINSUM_OP_TEMP[0] += 1
+        tmp = f"__es_op{_EINSUM_OP_TEMP[0]}"
+        tmp_shape = tuple(_CallHoister._extent_to_shape_token(e) for e in op_ext)
+        shape_table[tmp] = tmp_shape
+        if fresh_local_allocs is not None:
+            fresh_local_allocs[tmp] = tmp_shape
+        if local_dtypes is not None:
+            base = op.value if isinstance(op, ast.Subscript) else op
+            base_name = _name_id(base)
+            if base_name and local_dtypes.get(base_name):
+                local_dtypes[tmp] = local_dtypes[base_name]
+        cp_iters = [f"__es_c{i}" for i in range(len(op_ext))]
+        cp_nodes = [_name(c) for c in cp_iters]
+        cp_slot = cp_nodes[0] if len(cp_nodes) == 1 else ast.Tuple(elts=cp_nodes, ctx=ast.Load())
+        cp_src = _scalarize_at_iters(op, cp_nodes, shape_table)
+        cp_dst = ast.Subscript(value=_name(tmp), slice=cp_slot, ctx=ast.Store())
+        prelude.extend(_wrap_for_loops(cp_iters, list(tmp_shape),
+                                       [ast.Assign(targets=[cp_dst], value=cp_src)]))
+        materialized.append(_name(tmp))
+    operands = materialized
     if "..." in spec:
         # Expand ``...`` to explicit letters from each operand's rank (needs the
         # shape table), then lower the plain form; the parser stays ellipsis-free.
@@ -3125,9 +3385,9 @@ def expand_einsum(target: ast.expr, args: List[ast.expr],
         inner = [ast.Assign(targets=[copy.deepcopy(out_store)], value=product)]
 
     if out_letters:
-        return _wrap_for_loops([var_of[c] for c in out_letters],
-                               [letter_extent[c] for c in out_letters], inner)
-    return inner
+        return prelude + _wrap_for_loops([var_of[c] for c in out_letters],
+                                         [letter_extent[c] for c in out_letters], inner)
+    return prelude + inner
 
 
 def expand_tensordot(target: ast.expr, args: List[ast.expr],
@@ -3498,6 +3758,64 @@ def expand_diagonal(target: ast.expr, args: List[ast.expr],
         targets=[ast.Subscript(value=_name(target.id), slice=_name(it), ctx=ast.Store())],
         value=diag)]
     return _wrap_for_loops([it], [shape[0]], body)
+
+
+def expand_diag(target: ast.expr, args: List[ast.expr],
+                shape_table: Dict[str, Tuple[str, ...]],
+                kwargs=None) -> List[ast.stmt]:
+    """``np.diag(v [, k])`` -- construct a diagonal matrix, or extract a diagonal.
+
+    1-D operand ``v`` of shape ``(n,)`` -> an ``(n+|k|, n+|k|)`` matrix that is
+    all zeros except ``out[i, i+k] = v[i]`` for ``k >= 0`` (``out[i-k, i] = v[i]``
+    for ``k < 0``), matching ``numpy.diag``. 2-D operand -> extract the main
+    diagonal (delegates to :func:`expand_diagonal`). ``k`` must be a constant int
+    -- it sizes the result. The matrix is zeroed first, then the diagonal is
+    written, so no out-of-range read occurs (the value is never a masked ternary
+    branch)."""
+    if not args:
+        raise NotImplementedError("np.diag needs an operand")
+    v = args[0]
+    ext = _iter_extent_of(v, shape_table)
+    if ext is None:
+        raise NotImplementedError("np.diag: operand shape unknown")
+    if len(ext) == 2:
+        return expand_diagonal(target, args, shape_table)   # extract-diagonal
+    if len(ext) != 1:
+        raise NotImplementedError("np.diag: only 1-D / 2-D operands supported")
+    k_node = _kwarg_or_pos(args, kwargs, 1, "k")
+    if k_node is None:
+        k = 0
+    else:
+        k = _const_int(k_node)
+        if k is None:
+            raise NotImplementedError("np.diag: offset k must be a constant int")
+    n_tok = _CallHoister._extent_to_shape_token(ext[0])
+    side_tok = n_tok if k == 0 else f"({n_tok}) + {abs(k)}"
+    # Zero the whole (side x side) matrix.
+    zero_body = [ast.Assign(
+        targets=[ast.Subscript(
+            value=_name(target.id),
+            slice=ast.Tuple(elts=[_name("__dg_zi"), _name("__dg_zj")], ctx=ast.Load()),
+            ctx=ast.Store())],
+        value=_const(0.0))]
+    zero_loops = _wrap_for_loops(["__dg_zi", "__dg_zj"], [side_tok, side_tok], zero_body)
+    # Write v along the k-th diagonal.
+    it = "__dg_i"
+    v_elem = _scalarize_at_iters(v, [_name(it)], shape_table)
+    if k >= 0:
+        row: ast.expr = _name(it)
+        col: ast.expr = (_name(it) if k == 0 else
+                         ast.BinOp(left=_name(it), op=ast.Add(), right=_const(k)))
+    else:
+        row = ast.BinOp(left=_name(it), op=ast.Add(), right=_const(-k))
+        col = _name(it)
+    set_body = [ast.Assign(
+        targets=[ast.Subscript(
+            value=_name(target.id),
+            slice=ast.Tuple(elts=[row, col], ctx=ast.Load()),
+            ctx=ast.Store())],
+        value=v_elem)]
+    return zero_loops + _wrap_for_loops([it], [n_tok], set_body)
 
 
 def _scan_target_offsets(target, ndim):
@@ -5246,6 +5564,7 @@ NP_CALL_EXPANDERS: Dict[Tuple[str, str], Callable] = {
     ("np", "vdot"):      expand_vdot,
     ("np", "trace"):     expand_trace,
     ("np", "diagonal"):  expand_diagonal,
+    ("np", "diag"):      expand_diag,
     ("np", "cumsum"):    expand_cumsum,
     ("np", "cumprod"):   expand_cumprod,
     ("np", "median"):    expand_median,
@@ -5265,6 +5584,7 @@ NP_CALL_EXPANDERS: Dict[Tuple[str, str], Callable] = {
     ("np", "fft.ifftn"): expand_ifftn,
     ("np", "fft.fft"): expand_fft,
     ("np", "fft.ifft"): expand_ifft,
+    ("np", "fft.fftfreq"): expand_fftfreq,
     ("np", "var"):       expand_var,
     ("np", "argmax"):    expand_argmax,
     ("np", "argmin"):    expand_argmin,
@@ -5286,6 +5606,7 @@ NP_CALL_EXPANDERS: Dict[Tuple[str, str], Callable] = {
     ("np", "take"):      expand_take,
     ("np", "repeat"):    expand_repeat,
     ("np", "eye"):       expand_eye,
+    ("np", "meshgrid"):  expand_meshgrid,
     ("np", "triu"):      expand_triu,
     ("np", "hstack"):    expand_hstack,
     ("np", "concatenate"): expand_concatenate,
@@ -6278,12 +6599,20 @@ class _CallHoister(ast.NodeTransformer):
         # Hoist a non-Name first arg of an array reduction (sum / max /
         # min / mean / prod / std) into a fresh temp. ``np.mean(a * b)``
         # -> ``__cb<n> = a * b; np.mean(__cb<n>)`` so the reduction
-        # expander sees a Name operand.
+        # expander sees a Name operand. The shape-preserving index ops
+        # (``roll`` / ``flip`` / ``transpose`` / ``reshape``) join the set
+        # so a nested ``np.roll(psi_frag[f], m, axis)`` -- the periodic
+        # finite-difference stencil applied to a slice (ls3df _hpsi) --
+        # spills ``psi_frag[f]`` to ``__cb<n>`` and then hoists as
+        # ``np.roll(__cb<n>, m, axis)``. Without this the whole-array roll
+        # is left buried in the broadcast BinOp and the per-element
+        # scalarizer mangles it into ``np.roll(<scalar element>, ...)``.
         key = self._key_of(node)
         if (key in ({("np", k) for k in {"sum", "max", "min", "mean", "prod",
                                          "std", "var", "median", "any", "all",
                                          "count_nonzero", "repeat", "transpose",
-                                         "reshape", "triu", "tril", "flip", "copy"}}
+                                         "reshape", "triu", "tril", "flip", "roll",
+                                         "copy"}}
                     | {("np", "fft.fftn"), ("np", "fft.ifftn"),
                        ("np", "fft.fft"), ("np", "fft.ifft")})
                 and node.args and not isinstance(node.args[0], ast.Name)):
@@ -6488,6 +6817,21 @@ class _CallHoister(ast.NodeTransformer):
             shape = self.shape_table.get(args[0].id)
             if shape:
                 return tuple(shape)
+        # ``np.fft.fftfreq(n, d=...)`` -> a 1-D frequency array of length ``n``
+        # (the first positional arg is the sample count, not an array operand).
+        if op == "fft.fftfreq" and args:
+            return (self._extent_to_shape_token(args[0]),)
+        # ``np.diag(v [, k])`` -- 1-D operand builds an ``(n+|k|, n+|k|)`` matrix,
+        # 2-D operand extracts the diagonal. Reuse the ``_iter_extent_of`` rule so
+        # the constructed-shape logic lives in one place; a Lanczos
+        # ``T = np.diag(alphas) + np.diag(betas[1:], 1) + np.diag(betas[1:], -1)``
+        # hoists each ``np.diag`` out of the BinOp into a correctly sized temp.
+        if op == "diag" and args:
+            call = _attr_call("np", "diag", list(args))
+            call.keywords = list(keywords or [])
+            ext = _iter_extent_of(call, self.shape_table)
+            if ext is not None:
+                return tuple(self._extent_to_shape_token(e) for e in ext)
         # ``np.roll`` / ``np.linalg.cholesky`` / ``np.tril`` / ``np.triu`` all
         # return an array with the FIRST operand's shape -- so an inline
         # ``acc + np.roll(x, m, axis)`` (the periodic-stencil idiom) can be
@@ -6738,7 +7082,8 @@ _ELEMENT_WRITE_EXPANDERS = {
     ("np", "linalg.solve"), ("np", "linalg.lstsq"),
     # Contraction / scan / indexing ops that write element-wise to a fresh LHS.
     ("np", "einsum"), ("np", "tensordot"), ("np", "inner"),
-    ("np", "trace"), ("np", "diagonal"),
+    ("np", "trace"), ("np", "diagonal"), ("np", "diag"),
+    ("np", "fft.fftfreq"),
     ("np", "cumsum"), ("np", "cumprod"), ("np", "roll"), ("np", "tril"),
     ("np", "pad"),
 }

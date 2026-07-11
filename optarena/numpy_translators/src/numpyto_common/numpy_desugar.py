@@ -2534,7 +2534,8 @@ def _eigh_stmts(w: str,
     return lines
 
 
-def _eigh_c_stmts(w: str, v: str, a: str, b: Optional[str], lo: str, hi: str, p: str) -> List[str]:
+def _eigh_c_stmts(w: str, v: Optional[str], a: str, b: Optional[str], lo: str, hi: str, p: str,
+                  eigenvalues_only: bool = False) -> List[str]:
     """Fully self-contained loop lowering of standard/generalized complex-Hermitian
     ``eigh`` for the C/Fortran backends, which have no ``np.linalg`` and no matmul
     lowering for the ``L⁻ᴴ`` conjugate-transpose operand. Emits explicit loops
@@ -2542,7 +2543,12 @@ def _eigh_c_stmts(w: str, v: str, a: str, b: Optional[str], lo: str, hi: str, p:
     ``L⁻¹`` by forward substitution, the two matmuls ``C = L⁻¹ a L⁻ᴴ``, the cyclic
     complex Jacobi, and the back-transform ``x = L⁻ᴴ y``. Matmul outputs are
     pre-zeroed and ``+=``-accumulated (no complex literal needed); a complex zero
-    is ``z - z``. Validated vs scipy ~1e-15."""
+    is ``z - z``. Validated vs scipy ~1e-15.
+
+    ``eigenvalues_only`` (``np.linalg.eigvalsh``) binds only the ascending eigenvalue
+    vector ``w`` into a single Name target: the same Jacobi sweep runs, but the
+    ``L⁻ᴴ`` back-transform and the ``v`` eigenvector output are dropped (``v`` is
+    ``None``). numpy has no generalized eigvalsh, so this path always has ``b`` None."""
     n = f"{a}.shape[0]"
     lines: List[str] = []
     if b is not None:
@@ -2579,9 +2585,15 @@ def _eigh_c_stmts(w: str, v: str, a: str, b: Optional[str], lo: str, hi: str, p:
         ]
         cname = C
     else:
-        cname = f"{p}_C"
+        # ``Cm`` (not ``C``): Fortran is case-insensitive, so a matrix named ``C``
+        # collides with the Jacobi cosine scalar ``c`` -- the emitter would reject
+        # the second declaration. (The generalized branch above uses ``Cm`` too.)
+        cname = f"{p}_Cm"
         lines += [f"{cname} = np.ascontiguousarray({a})"]
     lines += _eigh_jacobi_lines(f"{p}_wa", f"{p}_ya", cname, n, p)
+    if eigenvalues_only:  # eigvalsh: only the eigenvalue vector, no back-transform / U output
+        lines.append(f"{w} = {p}_wa" if lo == "None" else f"{w} = {p}_wa[{lo}:{hi}]")
+        return lines
     if b is not None:
         X = f"{p}_X"
         lines += [  # back-transform x = Li^H @ ya
@@ -2617,14 +2629,19 @@ class _EighLoopRewriter(ast.NodeTransformer):
         self.generic_visit(node)
         if len(node.targets) != 1:
             return node
-        hit = _eigh_call_ab(node.value, self.alias_names)
+        hit = _eigh_call_kind(node.value, self.alias_names)
         if hit is None:
             return node
-        a_node, b_node, kw = hit
+        kind, a_node, b_node, kw = hit
         tgt = node.targets[0]
-        if not (isinstance(tgt, ast.Tuple) and len(tgt.elts) == 2 and all(isinstance(e, ast.Name) for e in tgt.elts)):
+        # ``w, v = eigh(...)`` (eigenpair) or ``w = eigvalsh(...)`` (a single Name
+        # target -- eigenvalues only, no eigenvector back-transform / U output).
+        if isinstance(tgt, ast.Tuple) and len(tgt.elts) == 2 and all(isinstance(e, ast.Name) for e in tgt.elts):
+            w, v = tgt.elts[0].id, tgt.elts[1].id
+        elif kind == "eigvalsh" and isinstance(tgt, ast.Name):
+            w, v = tgt.id, None
+        else:
             return node
-        w, v = tgt.elts[0].id, tgt.elts[1].id
         p = f"__eigh{self._ctr}"
         self._ctr += 1
         pre: List[str] = []
@@ -2642,7 +2659,7 @@ class _EighLoopRewriter(ast.NodeTransformer):
             lo, hi = ast.unparse(s.elts[0]), f"({ast.unparse(s.elts[1])}) + 1"
         else:
             lo, hi = "None", "None"
-        lines = pre + _eigh_c_stmts(w, v, aname, bname, lo, hi, p)
+        lines = pre + _eigh_c_stmts(w, v, aname, bname, lo, hi, p, eigenvalues_only=(v is None))
         return [ast.copy_location(st, node) for st in ast.parse("\n".join(lines)).body]
 
 
@@ -2660,22 +2677,38 @@ def _eigh_alias_names(tree: ast.AST) -> set:
     return out
 
 
-def _eigh_call_ab(node: ast.AST, alias_names: set):
-    """``eigh(a[, b], ...)`` -> ``(a_node, b_node_or_None, kwargs)`` for a matching
-    eigh call (``np.linalg.eigh`` / ``scipy.linalg.eigh`` / an imported alias),
-    else None."""
+def _eigh_call_kind(node: ast.AST, alias_names: set):
+    """``eigh(a[, b], ...)`` / ``eigvalsh(a, ...)`` -> ``(kind, a_node,
+    b_node_or_None, kwargs)`` for a matching call (``np.linalg`` / ``scipy.linalg``
+    / an imported ``eigh`` alias), else None. ``kind`` is ``"eigh"`` (returns an
+    eigenpair ``(w, U)``) or ``"eigvalsh"`` (returns only the eigenvalue vector).
+    numpy has no generalized ``eigvalsh``, so an ``eigvalsh`` call carries no metric
+    ``b`` -- its second positional argument, if any, is ``UPLO`` not an operand."""
     if not isinstance(node, ast.Call) or not node.args:
         return None
     f = node.func
-    is_eigh = (_np_linalg_attr(node) == "eigh" or (isinstance(f, ast.Name) and f.id in alias_names) or
-               (isinstance(f, ast.Attribute) and f.attr == "eigh" and isinstance(f.value, ast.Attribute)
-                and f.value.attr == "linalg" and isinstance(f.value.value, ast.Name) and f.value.value.id == "scipy"))
-    if not is_eigh:
+    linalg_attr = _np_linalg_attr(node)
+    scipy_attr = (f.attr if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Attribute)
+                  and f.value.attr == "linalg" and isinstance(f.value.value, ast.Name)
+                  and f.value.value.id == "scipy" else None)
+    if linalg_attr == "eigvalsh" or scipy_attr == "eigvalsh":
+        kind = "eigvalsh"
+    elif linalg_attr == "eigh" or scipy_attr == "eigh" or (isinstance(f, ast.Name) and f.id in alias_names):
+        kind = "eigh"
+    else:
         return None
     kw = {k.arg: k.value for k in node.keywords}
     a = node.args[0]
-    b = node.args[1] if len(node.args) > 1 else kw.get("b")
-    return a, b, kw
+    b = None if kind == "eigvalsh" else (node.args[1] if len(node.args) > 1 else kw.get("b"))
+    return kind, a, b, kw
+
+
+def _eigh_call_ab(node: ast.AST, alias_names: set):
+    """``eigh(a[, b], ...)`` -> ``(a_node, b_node_or_None, kwargs)`` for a matching
+    eigh/eigvalsh call, else None. A thin :func:`_eigh_call_kind` wrapper for callers
+    that only need the operands (the jax rewriter, which lowers eigenpairs only)."""
+    hit = _eigh_call_kind(node, alias_names)
+    return None if hit is None else hit[1:]
 
 
 class _EighInline(ast.NodeTransformer):
@@ -2683,9 +2716,10 @@ class _EighInline(ast.NodeTransformer):
     generalized complex-Hermitian ``eigh`` (numpy or scipy, incl. an imported
     alias) -- to a Cholesky-reduced complex Jacobi loop nest (see
     :func:`_eigh_stmts`). Handles the tuple-target eigenpair form and the
-    ``eigvals_only=True`` single-target form; a non-``Name`` operand is
-    materialised first. Runs BEFORE :class:`_LinalgInline` so the cholesky/inv it
-    emits are themselves lowered for pythran."""
+    eigenvalues-only single-target form (``np.linalg.eigvalsh`` or
+    ``eigh(..., eigvals_only=True)``); a non-``Name`` operand is materialised first.
+    Runs BEFORE :class:`_LinalgInline` so the cholesky/inv it emits are themselves
+    lowered for pythran."""
 
     def __init__(self, ranks: Dict[str, int], alias_names: set):
         self.ranks = ranks
@@ -2704,14 +2738,16 @@ class _EighInline(ast.NodeTransformer):
     def visit_Assign(self, node: ast.Assign):
         if len(node.targets) != 1:
             return node
-        hit = _eigh_call_ab(node.value, self.alias_names)
+        hit = _eigh_call_kind(node.value, self.alias_names)
         if hit is None:
             return node
-        a_node, b_node, kw = hit
+        kind, a_node, b_node, kw = hit
         tgt = node.targets[0]
         evo = kw.get("eigvals_only")
-        eigvals_only = isinstance(evo, ast.Constant) and evo.value is True
-        # Target: ``w, v = eigh(...)`` (tuple) or ``w = eigh(..., eigvals_only=True)``.
+        # ``eigvalsh`` (a distinct eigenvalues-only op) and ``eigh(..., eigvals_only=True)``
+        # (scipy's flag) both bind a single eigenvalue vector -- no eigenvectors.
+        eigvals_only = kind == "eigvalsh" or (isinstance(evo, ast.Constant) and evo.value is True)
+        # Target: ``w, v = eigh(...)`` (tuple) or ``w = eigvalsh(...)`` / ``w = eigh(..., eigvals_only=True)``.
         if isinstance(tgt, ast.Tuple) and len(tgt.elts) == 2 and all(isinstance(e, ast.Name) for e in tgt.elts):
             w, v = tgt.elts[0].id, tgt.elts[1].id
         elif isinstance(tgt, ast.Name) and eigvals_only:
