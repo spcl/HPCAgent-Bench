@@ -21,6 +21,8 @@ import traceback
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
+from optarena import osinfo
+
 #: Grace period (seconds) to drain the result queue after the child has exited
 #: cleanly -- the process is done but the queue feeder thread may still be flushing.
 _DRAIN_S = 5.0
@@ -83,7 +85,10 @@ def run_forked(fn: Callable,
     is preserved in ``RunResult.result`` EVEN when the child is later killed by the
     timeout or a signal -- so an overrun still yields its best-so-far (the online-exam
     snapshot) instead of nothing."""
-    ctx = multiprocessing.get_context("fork")
+    # fork on Linux/WSL2 (cheap -- the child inherits the parent's inputs); spawn on
+    # macOS, where forking after numpy/BLAS/Accelerate threads can abort the child
+    # (osinfo.mp_context resolves the OS default, honouring a config/env override).
+    ctx = multiprocessing.get_context(osinfo.mp_context())
     q = ctx.Queue()
     progress_q = ctx.Queue() if stream_progress else None
     if progress_q is not None:

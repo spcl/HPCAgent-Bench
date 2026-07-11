@@ -22,7 +22,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 from cffi import FFI
 
-from optarena import config
+from optarena import config, osinfo
 from optarena.bindings.contract import Binding, WORKSPACE_DTYPE
 from optarena.dtypes import c_type
 from optarena.fuzz import _safe_eval
@@ -30,6 +30,10 @@ from optarena.fuzz import _safe_eval
 #: Scratch-workspace buffers are aligned to this many bytes (ABI §11) so a kernel
 #: may assume an aligned base for vector loads/stores.
 WORKSPACE_ALIGN = 256
+
+#: ``ru_maxrss`` is KILOBYTES on Linux but BYTES on macOS/BSD; scale the raw value to
+#: bytes per platform so the memory metric (MU/NMU) is not 1024x inflated on macOS.
+_RSS_TO_BYTES = 1 if osinfo.IS_MACOS else 1024
 
 
 def _ptr_cdecl(dtype) -> str:
@@ -340,9 +344,13 @@ def _native_call_worker(device, lib_path, binding, data, lang, memory_bytes, wor
     capture never changes ``native_ns``. The child reports both the raw peak and the
     kernel-attributable increment (peak minus entry) on ``q`` next to ``outputs``/``ns``."""
     import resource
-    entry_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss  # inherited footprint (Linux KB)
+    entry_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss  # inherited footprint (raw ru_maxrss)
     try:
-        if memory_bytes and memory_bytes > 0:
+        # The RLIMIT_AS cap is additive over the harness's current virtual size, which
+        # comes from /proc (Linux only) -- on macOS there is no /proc (vmsize reads 0, so
+        # the cap would lose its baseline) AND RLIMIT_AS is not reliably enforced, so the
+        # cap is Linux-only. Elsewhere the fork/spawn isolation still contains a crash.
+        if memory_bytes and memory_bytes > 0 and osinfo.IS_LINUX:
             cap = _current_vmsize_bytes() + memory_bytes
             resource.setrlimit(resource.RLIMIT_AS, (cap, cap))
         if lang == "python":
@@ -350,9 +358,9 @@ def _native_call_worker(device, lib_path, binding, data, lang, memory_bytes, wor
         else:
             fn = _call_native_device if device else _call_native
             outputs, ns = fn(lib_path, binding, data, lang, workspace_bytes)
-        peak_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss  # post-kernel high-water mark (Linux KB)
-        peak_bytes = int(peak_kb) * 1024
-        increment_bytes = max(0, int(peak_kb) - int(entry_kb)) * 1024  # kernel-attributable additional memory
+        peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss  # post-kernel high-water mark
+        peak_bytes = int(peak_rss) * _RSS_TO_BYTES  # ru_maxrss is KB on Linux, bytes on macOS
+        increment_bytes = max(0, int(peak_rss) - int(entry_rss)) * _RSS_TO_BYTES  # kernel-attributable
         q.put(("ok", outputs, ns, peak_bytes, increment_bytes))
     except BaseException as exc:  # noqa: BLE001 -- surfaced to the parent as a scored error
         q.put(("err", repr(exc), 0, 0, 0))
@@ -389,12 +397,13 @@ def _call_isolated(lib_path,
     # Memory cap is host-only: RLIMIT_AS would trip CUDA's large virtual
     # reservations on the device path.
     memory_bytes = int(memory_gb * (1024**3)) if (memory_gb and not use_device) else 0
-    # Host default is "fork" (cheap -- inputs inherited; right for the single-
-    # threaded CLI sweep). The THREADED judge service overrides
-    # runtime.mp_context to "forkserver" (config.set_override), since fork() from
-    # a multi-threaded process can deadlock on a lock held by another thread.
+    # Host default is OS-derived (osinfo.mp_context): "fork" on Linux (cheap -- inputs
+    # inherited; right for the single-threaded CLI sweep), "spawn" on macOS (fork after
+    # numpy/BLAS/Accelerate threads can abort the child). The THREADED judge service
+    # overrides runtime.mp_context to "forkserver" (config.set_override), since fork()
+    # from a multi-threaded process can deadlock on a lock held by another thread.
     # device uses spawn (a CUDA context does not survive fork).
-    ctx_name = "spawn" if use_device else config.get("runtime.mp_context", "fork")
+    ctx_name = "spawn" if use_device else osinfo.mp_context()
     ctx = mp.get_context(ctx_name)
     q = ctx.Queue()
     proc = ctx.Process(target=_native_call_worker,

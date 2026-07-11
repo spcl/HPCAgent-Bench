@@ -24,6 +24,8 @@ import os
 import re
 from typing import Dict, Optional
 
+from optarena import osinfo
+
 
 class Mode(enum.Enum):
     """The four evaluation modes per kernel."""
@@ -50,15 +52,26 @@ class Mode(enum.Enum):
 # often-absent default libomp; gcc/icpx/flang keep plain -fopenmp (own runtime present).
 _FP_RELAX = "-fno-math-errno -fno-trapping-math -fno-signed-zeros"
 
-#: Clang baseline: -O3 + native arch + OpenMP + vectorized libm (no fast-math). OpenMP is
-#: pinned to GNU ``libgomp`` (like POLLY_PAR/PLUTO_PAR) because clang's default ``libomp``
-#: is a separate, frequently-absent package (``cannot find -lomp``) while ``libgomp`` is
-#: ubiquitous (ships with gcc).
-CPU_BASELINE_CLANG = (f"-O3 -march=native -fopenmp=libgomp {_FP_RELAX} -fstrict-aliasing -fPIC "
-                      "-fveclib=libmvec")
+# OS/arch-aware pieces of the CPU baselines, so the matrix is correct on Linux, macOS,
+# and WSL2 (== Linux) instead of assuming glibc + x86. (1) ``-march=native`` everywhere
+# except Apple-Silicon macOS, where Apple clang rejects it for arm64 and wants
+# ``-mcpu=native``. (2) clang's OpenMP runtime: GNU ``libgomp`` is a glibc/Linux package
+# (ubiquitous there, ships with gcc) that does NOT exist on macOS, where Homebrew ships
+# ``libomp``; on macOS the portable ``-fopenmp`` resolves to whatever the compiler carries
+# (brew gcc's libgomp, or a libomp-equipped clang). (3) ``-fveclib=libmvec`` is glibc's
+# vector libm -- Linux only (macOS libSystem has none).
+_ARCH_NATIVE = "-mcpu=native" if (osinfo.IS_MACOS and osinfo.is_arm()) else "-march=native"
+_OPENMP_CLANG = "-fopenmp=libgomp" if osinfo.IS_LINUX else "-fopenmp"
+_VECLIB = " -fveclib=libmvec" if osinfo.IS_LINUX else ""
+
+#: Clang baseline: -O3 + native arch + OpenMP + vectorized libm (no fast-math). On Linux
+#: OpenMP is pinned to GNU ``libgomp`` (like POLLY_PAR/PLUTO_PAR -- clang's default
+#: ``libomp`` is a separate, frequently-absent package) and glibc's ``libmvec`` is added;
+#: on macOS both are dropped (neither exists there -- see the OS-aware pieces above).
+CPU_BASELINE_CLANG = (f"-O3 {_ARCH_NATIVE} {_OPENMP_CLANG} {_FP_RELAX} -fstrict-aliasing -fPIC{_VECLIB}")
 
 #: GCC baseline: -O3 + native arch + OpenMP (no fast-math; libmvec implicit on glibc).
-CPU_BASELINE_GCC = (f"-O3 -march=native -fopenmp {_FP_RELAX} -fstrict-aliasing -fPIC")
+CPU_BASELINE_GCC = (f"-O3 {_ARCH_NATIVE} -fopenmp {_FP_RELAX} -fstrict-aliasing -fPIC")
 
 #: Intel icpx (LLVM-based oneAPI) baseline: -O3 + xHost + OpenMP + ZMM hint (no fast-math).
 CPU_BASELINE_ICPX = (f"-O3 -xHost -fopenmp {_FP_RELAX} -fPIC -qopt-zmm-usage=high")
@@ -69,13 +82,13 @@ CPU_BASELINE_ICPX = (f"-O3 -xHost -fopenmp {_FP_RELAX} -fPIC -qopt-zmm-usage=hig
 #: NO ``-ffast-math`` (its reassociation/finite-math rewrites diverge from NumPy).
 #: Kept here in the matrix so no framework string-literals the optimization
 #: flags itself (the no-literal invariant this module documents).
-PYTHRAN_BASELINE = f"-DUSE_XSIMD -fopenmp -march=native {_FP_RELAX}"
+PYTHRAN_BASELINE = f"-DUSE_XSIMD -fopenmp {_ARCH_NATIVE} {_FP_RELAX}"
 
 #: LLVM Fortran (``flang`` / ``flang-new``) baseline -- LLVM's Fortran front end,
 #: the Fortran companion to the clang C/C++ baseline (``CPU_BASELINE_CLANG``).
 #: Mirrors the clang intent (O3 + native arch + OpenMP + PIC; no fast-math -- see the
 #: CPU baseline note); flang does not accept every gcc FP-relax spelling.
-FLANG_BASELINE = "-O3 -march=native -fopenmp -fPIC"
+FLANG_BASELINE = f"-O3 {_ARCH_NATIVE} -fopenmp -fPIC"
 
 # ---------------------------------------------------------------------------
 # Multi-core autopar deltas. Each is appended on top of the CPU baseline.
@@ -87,7 +100,7 @@ FLANG_BASELINE = "-O3 -march=native -fopenmp -fPIC"
 #: ``-fopenmp=libgomp`` pins clang to GNU's OpenMP runtime (shipped with gcc)
 #: instead of its default ``libomp`` -- the latter is a separate package that is
 #: frequently absent (``cannot find -lomp``), while ``libgomp`` is ubiquitous.
-POLLY_PAR = "-mllvm -polly -mllvm -polly-parallel -fopenmp=libgomp"
+POLLY_PAR = f"-mllvm -polly -mllvm -polly-parallel {_OPENMP_CLANG}"
 
 #: GCC ``-ftree-parallelize-loops=N -floop-parallelize-all``.
 GCC_AUTOPAR = "-ftree-parallelize-loops={n} -floop-parallelize-all -fopenmp"
@@ -95,7 +108,7 @@ GCC_AUTOPAR = "-ftree-parallelize-loops={n} -floop-parallelize-all -fopenmp"
 #: Pluto pre-processes the source; only OpenMP is added at compile time.
 #: ``-fopenmp=libgomp`` for the same reason as ``POLLY_PAR`` -- both build with
 #: clang, whose default ``libomp`` is often missing on CI; GNU ``libgomp`` is not.
-PLUTO_PAR = "-fopenmp=libgomp"
+PLUTO_PAR = _OPENMP_CLANG
 
 #: NVHPC pure-source CPU auto-parallelization (analogue of GCC ``-ftree-parallelize-loops``).
 NVHPC_CONCUR = "-Mconcur"

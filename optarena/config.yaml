@@ -235,11 +235,13 @@ runtime:
   # Harbor can also run offline if the images are local and the agent is local (see
   # docs/RUNTIME.md). Defaults to sudoless local apptainer.
   backend: apptainer       # apptainer | udocker (local/offline) | singularity | docker (Harbor)
-  # multiprocessing start method for the scorer's isolated native call (host
-  # path). "fork" is cheap (inputs inherited) and right for the single-threaded
-  # CLI sweep; the THREADED judge service overrides this to "forkserver" via
-  # config.set_override (fork() from a thread can deadlock). device always spawns.
-  mp_context: fork
+  # multiprocessing start method for the isolated native call + the forked run.
+  # "auto" resolves per-OS (osinfo.mp_context): "fork" on Linux/WSL2 (cheap -- inputs
+  # inherited, right for the single-threaded CLI sweep), "spawn" on macOS (fork after
+  # numpy/BLAS/Accelerate threads can abort the child). A concrete value wins: the
+  # THREADED judge service overrides to "forkserver" via config.set_override (fork()
+  # from a thread can deadlock). device always spawns.
+  mp_context: auto
 
 # Numerical-correctness oracle / per-kernel sweep runner (tests/numerical_oracle.py).
 # Subsumes the old tests/oracle_config.yaml. Per-kernel overrides under
