@@ -4,8 +4,11 @@ import time
 import traceback
 import numpy as np
 
+from sqlmodel import Session
+
 from optarena.infrastructure import (Benchmark, Framework, timeout_decorator as tout, utilities as util)
 from optarena.infrastructure.errors import NotSupportedByFramework
+from optarena.infrastructure.schema import Result, results_engine
 from typing import Any, Callable, Dict, Sequence, Tuple, Optional
 
 #: The SINGLE source of validation tolerances, keyed by datatype string in BOTH
@@ -191,17 +194,11 @@ class Test(object):
             validate = False
             np_out = None
 
-        # Extra information
-        kind = ""
-        if "kind" in self.bench.info.keys():
-            kind = self.bench.info["kind"]
+        # Extra information: the taxonomy `domain` is the only kernel-info field the
+        # results table still carries (the heatmap plot groups on it).
         domain = ""
         if "domain" in self.bench.info.keys():
             domain = self.bench.info["domain"]
-        dwarf = ""
-        if "dwarf" in self.bench.info.keys():
-            dwarf = self.bench.info["dwarf"]
-        version = self.frmwrk.version()
 
         @tout.exit_after(timeout)
         def first_execution(impl, impl_name):
@@ -289,45 +286,29 @@ class Test(object):
                     "validated": valid,
                 }
 
-        # create a database connection
-        database = r"optarena.db"
-        conn = util.create_connection(database)
-
-        # create tables
-        if conn is not None:
-            # create results table
-            util.create_table(conn, util.sql_create_results_table)
-            util.ensure_datatype_column(conn)
-            util.ensure_variant_column(conn)
-            util.ensure_native_time_column(conn)
-            util.ensure_cpu_column(conn)
-        else:
-            print("Error! cannot create the database connection.")
-
-        # Write data
+        # Persist the run through the typed SQLModel schema (the single source of
+        # truth for the results-table DDL + inserts). The pruned perf record carries
+        # the framework runtime and its provenance only; `agent`/`prompt_hash` are
+        # None on this direct-framework path (they are set when an agent produced the
+        # optimization).
         timestamp = int(time.time())
-        cpu = util.cpu_model()  # reproducibility provenance for native-arch builds
-        for d in bvalues:
-            new_d = {
-                'timestamp': timestamp,
-                'benchmark': self.bench.info["short_name"],
-                'kind': kind,
-                'domain': domain,
-                'dwarf': dwarf,
-                'preset': preset,
-                'mode': "main",
-                'framework': self.frmwrk.info["simple_name"],
-                'version': version,
-                'details': d["details"],
-                'validated': d["validated"],
-                'time': d["time"],
-                'native_time': d.get("native_time"),
-                'datatype': datatype if datatype is not None else 'float64',
-                'variant': variant,
-                'cpu': cpu
-            }
-            result = tuple(new_d.values())
-            util.create_result(conn, util.sql_insert_into_results_table, result)
+        engine = results_engine("optarena.db")
+        with Session(engine) as session:
+            for d in bvalues:
+                session.add(
+                    Result(timestamp=timestamp,
+                           benchmark=self.bench.info["short_name"],
+                           domain=domain,
+                           preset=preset,
+                           framework=self.frmwrk.info["simple_name"],
+                           agent=None,
+                           validated=d["validated"],
+                           time=d["time"],
+                           native_time=d.get("native_time"),
+                           datatype=datatype if datatype is not None else 'float64',
+                           variant=variant,
+                           prompt_hash=None))
+            session.commit()
 
         # Return per-impl timing dict so the CLI can persist it as JSONL.
         return per_impl_timings

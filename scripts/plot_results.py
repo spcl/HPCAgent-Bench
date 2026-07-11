@@ -112,8 +112,8 @@ database = r"optarena.db"
 conn = util.create_connection(database)
 data = pd.read_sql_query("SELECT * FROM results", conn)
 
-# get rid of kind and dwarf, we don't use them
-data = data.drop(['timestamp', 'kind', 'dwarf', 'version'], axis=1).reset_index(drop=True)
+# timestamp only groups the rows of one run; the plot does not use it
+data = data.drop(['timestamp'], axis=1).reset_index(drop=True)
 
 # Selector: restrict to a kernel / track / dwarf / @level selection (reuses the
 # KERNELS.select grammar, keyed on the short_name in the benchmark column).
@@ -154,16 +154,12 @@ if 'variant' in data.columns:
 data = data[data['preset'] == args['preset']]
 data = data.drop(['preset'], axis=1).reset_index(drop=True)
 
-# for each framework and benchmark, choose only the best details,mode (based on median runtime), then get rid of those
-aggdata = data.groupby(["benchmark", "domain", "framework", "mode", "details"], dropna=False).agg({
-    "time": "median"
-}).reset_index()
-best = aggdata.sort_values("time").groupby(["benchmark", "domain", "framework", "mode"],
-                                           dropna=False).first().reset_index()
+# for each (framework, benchmark) take the median runtime across its samples
+aggdata = data.groupby(["benchmark", "domain", "framework"], dropna=False).agg({"time": "median"}).reset_index()
+best = aggdata.sort_values("time").groupby(["benchmark", "domain", "framework"], dropna=False).first().reset_index()
 bestgroup = best.drop(["time"], axis=1)  # remove time, we don't need it and it is actually a median
-data = pd.merge(left=bestgroup, right=data, on=["benchmark", "domain", "framework", "mode", "details"],
+data = pd.merge(left=bestgroup, right=data, on=["benchmark", "domain", "framework"],
                 how="inner")  # do a join on data and best
-data = data.drop(['mode', 'details'], axis=1).reset_index(drop=True)
 
 frmwrks = list(data['framework'].unique())
 print(frmwrks)

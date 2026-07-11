@@ -12,6 +12,9 @@ pygount
 pyyaml
 jsonschema
 setuptools
+# Typed results-DB schema layer: the `results` table is one SQLModel model
+# (optarena/infrastructure/schema.py) that derives its CREATE TABLE + INSERT.
+sqlmodel
 # formatting / lint -- the CI `format-check` job and `scripts/check_format.py`
 # (column limit 120): yapf for Python, fprettify for Fortran, clang-format for C/C++.
 # pre-commit drives the same script as a git hook (.pre-commit-config.yaml).

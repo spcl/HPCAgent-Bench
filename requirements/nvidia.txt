@@ -10,6 +10,8 @@ pygount
 pyyaml
 jsonschema
 setuptools
+# Typed results-DB schema layer (optarena/infrastructure/schema.py).
+sqlmodel
 jinja2
 cffi
 tree-sitter-language-pack
