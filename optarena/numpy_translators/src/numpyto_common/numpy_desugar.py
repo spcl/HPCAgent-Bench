@@ -2711,6 +2711,87 @@ def _eigh_call_ab(node: ast.AST, alias_names: set):
     return None if hit is None else hit[1:]
 
 
+def _is_eigh_assign_target(node: ast.AST, alias_names: set) -> bool:
+    """``True`` when ``node`` is an assignment :class:`_EighLoopRewriter` lowers
+    directly -- ``w, v = eigh(...)`` (eigenpair) or ``w = eigvalsh(...)`` (a single
+    Name target). Such an assign must NOT have its RHS call hoisted out first, or the
+    rewriter would no longer see the eigh/eigvalsh call as the statement's RHS."""
+    if not (isinstance(node, ast.Assign) and len(node.targets) == 1):
+        return False
+    hit = _eigh_call_kind(node.value, alias_names)
+    if hit is None:
+        return False
+    tgt = node.targets[0]
+    if isinstance(tgt, ast.Tuple) and len(tgt.elts) == 2 and all(isinstance(e, ast.Name) for e in tgt.elts):
+        return True
+    return hit[0] == "eigvalsh" and isinstance(tgt, ast.Name)
+
+
+class _EighCallHoister(ast.NodeTransformer):
+    """Materialise an ``eigh`` / ``eigvalsh`` call that appears NESTED in an
+    expression -- ``float(np.linalg.eigvalsh(T).max()) + beta`` in LS3DF's Lanczos
+    upper-bound -- into its own ``__eigv<k> = <call>`` statement, so the direct-assign
+    :class:`_EighLoopRewriter` can lower it. A call that is already the RHS of an
+    eligible eigh-assign (:func:`_is_eigh_assign_target`) is left in place. Runs on the
+    whole module (helpers included) BEFORE the loop rewriter, mirroring its scope."""
+
+    def __init__(self, alias_names: set):
+        self.alias_names = alias_names
+        self.pre: List[ast.stmt] = []
+        self._ctr = 0
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        self.generic_visit(node)
+        if _eigh_call_kind(node, self.alias_names) is None:
+            return node
+        self._ctr += 1
+        name = f"__eigv{self._ctr}"
+        self.pre.append(ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=node))
+        return ast.Name(id=name, ctx=ast.Load())
+
+    def _flush(self, node: ast.stmt):
+        # An eligible direct eigh-assign stays whole -- descending would hoist its own
+        # RHS call and hide it from the loop rewriter.
+        if _is_eigh_assign_target(node, self.alias_names):
+            return node
+        saved = self.pre
+        self.pre = []
+        self.generic_visit(node)
+        pre = self.pre
+        self.pre = saved
+        if not pre:
+            return node
+        for s in pre:
+            ast.copy_location(s, node)
+            ast.fix_missing_locations(s)
+        return pre + [node]
+
+    def _visit_stmts(self, stmts: List[ast.stmt]) -> List[ast.stmt]:
+        out: List[ast.stmt] = []
+        for s in stmts:
+            r = self.visit(s)
+            if r is None:
+                continue
+            out.extend(r if isinstance(r, list) else [r])
+        return out
+
+    def visit_While(self, node: ast.While) -> ast.AST:
+        # Do NOT hoist an eigh call out of the loop CONDITION: a ``__eigv`` temp
+        # emitted before the loop would freeze a value the ``while`` test must
+        # recompute each iteration (``while eigvalsh(A).max() > tol: A = update(A)``).
+        # Leave ``node.test`` unvisited; only the body / else statements hoist locally.
+        node.body = self._visit_stmts(node.body)
+        node.orelse = self._visit_stmts(node.orelse)
+        return node
+
+    visit_Assign = _flush
+    visit_AugAssign = _flush
+    visit_Expr = _flush
+    visit_Return = _flush
+    visit_If = _flush
+    visit_For = _flush
+
+
 class _EighInline(ast.NodeTransformer):
     """Lower ``w, v = eigh(a[, b], subset_by_index=[lo, hi])`` -- standard or
     generalized complex-Hermitian ``eigh`` (numpy or scipy, incl. an imported

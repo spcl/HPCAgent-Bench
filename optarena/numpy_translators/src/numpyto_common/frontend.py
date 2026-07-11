@@ -141,8 +141,14 @@ def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optio
     # ``_sci_eigh`` alias) to a self-contained complex-Hermitian eigh loop nest
     # BEFORE helper inlining, so the module-level alias import is still in scope
     # and the eigh in a helper (cegterg's ``_diaghg``) is lowered before it inlines.
-    from numpyto_common.numpy_desugar import _EighLoopRewriter, _eigh_alias_names
-    _EighLoopRewriter(_eigh_alias_names(tree)).visit(tree)
+    from numpyto_common.numpy_desugar import _EighCallHoister, _EighLoopRewriter, _eigh_alias_names
+    _eigh_aliases = _eigh_alias_names(tree)
+    # A nested eigh/eigvalsh call (``float(np.linalg.eigvalsh(T).max()) + beta``)
+    # must be materialised into its own ``__eigv = <call>`` assign first, so the
+    # direct-assign loop rewriter below can lower it.
+    _EighCallHoister(_eigh_aliases).visit(tree)
+    ast.fix_missing_locations(tree)
+    _EighLoopRewriter(_eigh_aliases).visit(tree)
     # Canonicalise IEEE inf / nan spellings (``math.inf``, ``float('inf')`` ...) to
     # ``np.inf`` / ``np.nan`` -- the one form every backend lowers -- across the
     # whole module so kernel + helpers are covered for native AND python backends.
@@ -1465,12 +1471,35 @@ def _collect_inlined_scalar_defs(fn: ast.FunctionDef) -> Dict[str, str]:
     is the inlined local array itself, not a dimension, and is left alone.
     Returns ``{name: ast.unparse(rhs)}`` for first assignments only.
     """
+    # Names REASSIGNED anywhere (a second ``=`` or any ``+=`` / tuple-unpack) are
+    # mutable runtime values -- a Lanczos step counter ``na = 0; ...; na += 1`` --
+    # not a fixed inlined dimension. Freezing such a name at its FIRST value inside a
+    # shape token (``off = betas[:na - 1]`` -> ``betas[:0 - 1]``, a NEGATIVE
+    # allocation; the eigh of the ``na x na`` tridiagonal collapsing to ``0 x 0``)
+    # is wrong, so collect only single-assignment scalars.
+    rebind_counts: Dict[str, int] = {}
+
+    def _count_target(tgt: ast.AST, inc: int) -> None:
+        if isinstance(tgt, ast.Name):
+            rebind_counts[tgt.id] = rebind_counts.get(tgt.id, 0) + inc
+        elif isinstance(tgt, (ast.Tuple, ast.List)):
+            for e in tgt.elts:
+                _count_target(e, inc)
+
+    for stmt in ast.walk(fn):
+        if isinstance(stmt, ast.AugAssign):
+            _count_target(stmt.target, 2)  # in-place update -- always mutable
+        elif isinstance(stmt, ast.Assign):
+            for t in stmt.targets:
+                _count_target(t, 1)
     defs: Dict[str, str] = {}
     for stmt in ast.walk(fn):
         if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
             continue
         name = stmt.targets[0].id
         if not name.startswith("__inl") or name in defs:
+            continue
+        if rebind_counts.get(name, 0) > 1:
             continue
         if not _is_scalar_dim_rhs(stmt.value):
             continue
@@ -2540,20 +2569,35 @@ class _InlineHelpers(ast.NodeTransformer):
 
 def _collect_assigned_names(stmts):
     """Return the set of Name targets assigned in any of ``stmts``,
-    recursing into For / If bodies."""
+    recursing into For / If bodies.
+
+    A TUPLE / LIST target contributes every Name it binds: a for-loop over
+    ``enumerate`` / ``zip`` (``for m, w in enumerate(_CW)``) or an unpacking
+    assign (``a, b = ...``). Missing these let an inlined helper's loop index
+    escape the ``__inl<k>_`` rename and clobber a caller symbol of the same name
+    -- chebyshev_filter_subspace's ``_hpsi`` stencil loop var ``m`` vs the
+    kernel's Chebyshev-degree parameter ``m`` (the inlined loop overwrote ``m``
+    to len(_CW), truncating the degree loop)."""
     out = set()
+
+    def _bind(target):
+        if isinstance(target, ast.Name):
+            out.add(target.id)
+        elif isinstance(target, ast.Starred):
+            _bind(target.value)
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for elt in target.elts:
+                _bind(elt)
+
     for s in stmts:
         for sub in ast.walk(s):
             if isinstance(sub, ast.Assign):
                 for t in sub.targets:
-                    if isinstance(t, ast.Name):
-                        out.add(t.id)
+                    _bind(t)
             elif isinstance(sub, ast.AugAssign):
-                if isinstance(sub.target, ast.Name):
-                    out.add(sub.target.id)
+                _bind(sub.target)
             elif isinstance(sub, ast.For):
-                if isinstance(sub.target, ast.Name):
-                    out.add(sub.target.id)
+                _bind(sub.target)
     return out
 
 

@@ -384,6 +384,18 @@ def _contraction_result_extent(expr: ast.Call, shape_table):
     return tuple(_const_or_name(letter_extent[c]) for c in output)
 
 
+def _np_fft_attr(call: ast.Call) -> Optional[str]:
+    """The ``<name>`` of an ``np.fft.<name>(...)`` / ``numpy.fft.<name>(...)`` call,
+    else ``None``. ``np.fft.*`` is a two-level attribute (``func.value`` is the
+    ``np.fft`` attribute), which the single-level ``np.<attr>`` matchers miss."""
+    f = call.func
+    if (isinstance(f, ast.Attribute) and isinstance(f.value, ast.Attribute)
+            and f.value.attr == "fft" and isinstance(f.value.value, ast.Name)
+            and f.value.value.id in ("np", "numpy")):
+        return f.attr
+    return None
+
+
 def _iter_extent_of(expr: ast.expr,
                     shape_table: Dict[str, Tuple[str, ...]]
                     ) -> Optional[Tuple[ast.expr, ...]]:
@@ -457,6 +469,49 @@ def _iter_extent_of(expr: ast.expr,
     if isinstance(expr, ast.UnaryOp):
         return _iter_extent_of(expr.operand, shape_table)
     if isinstance(expr, ast.Call):
+        # ``np.fft.*`` is a TWO-level attribute (``func.value`` is ``np.fft``), so
+        # the single-level ``np.<attr>`` matcher below never sees it. ``fftfreq(n)``
+        # builds a length-``n`` 1-D array; the COMPLEX transforms and the shifts are
+        # shape-preserving. Sizing them here lets the harvest resolve a
+        # ``kx = 2*pi*np.fft.fftfreq(N)`` -> ``np.meshgrid`` -> ``gsq`` chain (LS3DF's
+        # reciprocal-space Poisson) before the per-element expander scalarizes it.
+        # The REAL-FFT variants change the transformed-axis length (``rfftfreq(n)`` ->
+        # ``n//2+1``; ``rfftn`` / ``irfftn`` resize the last axis), so they are NOT
+        # sized here -- bail to None rather than emit a wrong extent.
+        _fft = _np_fft_attr(expr)
+        if _fft is not None:
+            if _fft == "fftfreq" and expr.args:
+                return (copy.deepcopy(expr.args[0]), )
+            if _fft in ("fftn", "ifftn", "fft", "ifft", "fft2", "ifft2",
+                        "fftshift", "ifftshift") and expr.args:
+                return _iter_extent_of(expr.args[0], shape_table)
+            return None
+        # Method-form ``<expr>.reshape(newshape...)`` -- receiver ``func.value`` is
+        # the operand, not the ``np`` module, so the ``np.reshape`` branch below (and
+        # the harvest, which runs BEFORE the method->function normaliser) misses it.
+        # A reshape TARGET local ``X = (Yf @ C).reshape(shp)`` would otherwise go
+        # unsized and poison every shape derived from it (LS3DF's Rayleigh-Ritz).
+        if (isinstance(expr.func, ast.Attribute) and expr.func.attr == "reshape"
+                and not (isinstance(expr.func.value, ast.Name)
+                         and expr.func.value.id in ("np", "numpy"))
+                and expr.args):
+            if len(expr.args) == 1 and isinstance(expr.args[0], (ast.Tuple, ast.List)):
+                elts = list(expr.args[0].elts)
+            elif len(expr.args) == 1 and isinstance(expr.args[0], (ast.Name, ast.Constant, ast.BinOp, ast.UnaryOp)):
+                elts = [expr.args[0]]
+            else:
+                elts = list(expr.args)  # varargs ``.reshape(a, b, c)``
+            neg1 = [i for i, e in enumerate(elts) if _const_int(e) == -1]
+            if len(neg1) == 1:
+                base = _iter_extent_of(expr.func.value, shape_table)
+                if base is None:
+                    return None
+                others = [e for j, e in enumerate(elts) if j != neg1[0]]
+                denom = _mul_exts(others) if others else _const(1)
+                elts[neg1[0]] = ast.BinOp(left=_mul_exts(base), op=ast.Div(), right=denom)
+            elif neg1:
+                return None
+            return tuple(elts)
         # Axis-aware reduction: ``np.sum(operand, axis=k)`` -> the operand's
         # (broadcast) extent with axis k removed (size 1 if keepdims). A full
         # reduction (axis=None) collapses to a scalar (None). This makes a

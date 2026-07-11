@@ -1039,16 +1039,33 @@ class _TransposeRewriter(ast.NodeTransformer):
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
         self.generic_visit(node)
-        if (node.attr == "T"
-                and isinstance(node.value, ast.Name)
-                and node.value.id not in self.sparse_names):
-            return ast.Call(
-                func=ast.Attribute(
-                    value=ast.Name(id="np", ctx=ast.Load()),
-                    attr="transpose", ctx=ast.Load()),
-                args=[node.value],
-                keywords=[])
-        return node
+        if node.attr != "T":
+            return node
+        base = node.value
+        # Bare Name -- the original path (a sparse buffer keeps its ``.T`` for the
+        # sparse matmul hoister, which lowers ``A.T @ x`` on A's own CSR/CSC buffers).
+        if isinstance(base, ast.Name):
+            if base.id in self.sparse_names:
+                return node
+        elif isinstance(base, ast.Subscript):
+            # A subscript of a sparse buffer likewise keeps its transpose.
+            if isinstance(base.value, ast.Name) and base.value.id in self.sparse_names:
+                return node
+        elif not isinstance(base, (ast.BinOp, ast.Call)):
+            # ``.T`` on a matmul result (``(Yf.T @ Wf).T`` -- the LS3DF generalized
+            # Rayleigh-Ritz symmetriser) or another array-valued call. Anything else
+            # (a scalar attribute chain) is left intact.
+            return node
+        # ``<array-expr>.T`` -> ``np.transpose(<array-expr>)``. The call hoister
+        # materialises a non-Name argument (the matmul) into a temp before
+        # ``expand_transpose`` lowers it, so the transpose never survives as an
+        # attribute the per-element scalarizer would misapply.
+        return ast.Call(
+            func=ast.Attribute(
+                value=ast.Name(id="np", ctx=ast.Load()),
+                attr="transpose", ctx=ast.Load()),
+            args=[base],
+            keywords=[])
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
@@ -1071,6 +1088,19 @@ class _TransposeRewriter(ast.NodeTransformer):
                      args=args, keywords=[]), node)
 
 
+def _const_int_index(node: ast.AST) -> Optional[int]:
+    """Return the integer value of a constant subscript index (``arr[3]`` /
+    ``arr[-1]``), or ``None`` for a non-constant one. Numpy spells a negative
+    literal index as ``UnaryOp(USub, Constant)``, not a signed ``Constant``."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, int):
+        return node.value
+    if (isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub)
+            and isinstance(node.operand, ast.Constant)
+            and isinstance(node.operand.value, int)):
+        return -node.operand.value
+    return None
+
+
 class _ShapeMidExpressionRewriter(ast.NodeTransformer):
     """Replace ``arr.shape[k]`` (and bare ``arr.shape``) anywhere in
     the body with the matching shape symbol from the IR's shape table.
@@ -1081,6 +1111,13 @@ class _ShapeMidExpressionRewriter(ast.NodeTransformer):
     at the AST level to the names declared on the array's shape tuple
     (parsed from ``bench_info.init.shapes`` or recovered via
     ``_shapes_from_initialize``).
+
+    A ``.shape`` / ``.shape[k]`` read whose base is a rank-shifting
+    SUBSCRIPT rather than a bare Name (``v[..., None].shape[-1]`` in an
+    inlined ``X.reshape(-1, X.shape[-1])``) resolves via
+    :func:`_iter_extent_of`, which is Ellipsis / newaxis-aware -- so a
+    broadcast subscript's static extent folds the same way a declared
+    array's does. The Name-base path is unchanged.
     """
 
     def __init__(self, arrays_shapes):
@@ -1099,6 +1136,17 @@ class _ShapeMidExpressionRewriter(ast.NodeTransformer):
             shape = self.arrays_shapes.get(node.value.value.id)
             if shape and 0 <= node.slice.value < len(shape):
                 return _token_to_ast(shape[node.slice.value])
+        # ``<array-expr>.shape[k]`` on a Subscript base (``v[..., None]``):
+        # resolve the base's static extent (newaxis / Ellipsis aware) and pick
+        # axis ``k`` (negative indices allowed). Unresolvable -> left intact.
+        if (isinstance(node.value, ast.Attribute)
+                and node.value.attr == "shape"
+                and isinstance(node.value.value, ast.Subscript)):
+            k = _const_int_index(node.slice)
+            if k is not None:
+                ext = _iter_extent_of(node.value.value, self.arrays_shapes)
+                if ext is not None and -len(ext) <= k < len(ext):
+                    return copy.deepcopy(ext[k])
         self.generic_visit(node)
         return node
 
@@ -1119,26 +1167,32 @@ class _ShapeMidExpressionRewriter(ast.NodeTransformer):
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
         self.generic_visit(node)
         if not isinstance(node.value, ast.Name):
+            # Bare ``<array-expr>.shape`` on a Subscript base (``Y.shape`` where
+            # ``Y`` inlined to ``psi_frag[f]``, or ``v[..., None].shape``) -> the
+            # tuple of static extents from :func:`_iter_extent_of`. Downstream
+            # tuple-subscript / reshape folding then consumes the literal tuple.
+            if node.attr == "shape" and isinstance(node.value, ast.Subscript):
+                ext = _iter_extent_of(node.value, self.arrays_shapes)
+                if ext is not None:
+                    return ast.Tuple(elts=[copy.deepcopy(e) for e in ext], ctx=ast.Load())
             return node
         shape = self.arrays_shapes.get(node.value.id)
         if not shape:
             return node
         if node.attr == "shape":
-            return ast.Tuple(
-                elts=[ast.Name(id=s, ctx=ast.Load()) for s in shape],
-                ctx=ast.Load())
+            # ``_token_to_ast`` (not a bare ``Name(id=token)``) so a COMPOUND shape
+            # token -- a slice extent like ``"__inl2_na - 1"`` (LS3DF's Lanczos
+            # ``off = betas[:na - 1]``) -- re-parses into a real BinOp rather than a
+            # malformed Name whose id is source text (which the int-context / logical
+            # analyses then misclassify).
+            return ast.Tuple(elts=[_token_to_ast(s) for s in shape], ctx=ast.Load())
         if node.attr == "size":
-            # ``arr.size`` -> product of shape symbols.
+            # ``arr.size`` -> product of shape symbols (each token re-parsed).
             if len(shape) == 1:
-                s = shape[0]
-                return (ast.Constant(value=int(s)) if s.isdigit()
-                        else ast.Name(id=s, ctx=ast.Load()))
-            expr = ast.Name(id=shape[0], ctx=ast.Load()) if not shape[0].isdigit() \
-                else ast.Constant(value=int(shape[0]))
+                return _token_to_ast(shape[0])
+            expr = _token_to_ast(shape[0])
             for s in shape[1:]:
-                rhs = (ast.Constant(value=int(s)) if s.isdigit()
-                       else ast.Name(id=s, ctx=ast.Load()))
-                expr = ast.BinOp(left=expr, op=ast.Mult(), right=rhs)
+                expr = ast.BinOp(left=expr, op=ast.Mult(), right=_token_to_ast(s))
             return expr
         if node.attr == "ndim":
             return ast.Constant(value=len(shape))
@@ -1583,8 +1637,12 @@ def _harvest_local_shapes(tree: ast.AST,
             # downstream slice-fusion / boolean-mask rewriter / gather
             # scalarizer can resolve ``arr[nb]`` to ``arr[nb[i]]`` instead of
             # treating the index array ``nb`` as a bare scalar.
+            # ``ast.Call`` covers a method-form shape op the pre-normalise harvest
+            # sees before it becomes ``np.<fn>`` -- notably ``X = (Yf @ C).reshape(
+            # shp)`` (LS3DF Rayleigh-Ritz), whose target must be sized here or every
+            # downstream local derived from ``X`` inherits a wrong extent.
             if isinstance(rhs, (ast.BinOp, ast.UnaryOp, ast.Compare,
-                                ast.BoolOp, ast.Subscript)) \
+                                ast.BoolOp, ast.Subscript, ast.Call)) \
                     and target.id not in shape_table:
                 ext = _iter_extent_of(rhs, shape_table)
                 if ext is not None:
@@ -1748,6 +1806,35 @@ class _FullLikeRewriter(ast.NodeTransformer):
         ast.fix_missing_locations(alloc)
         ast.fix_missing_locations(fill)
         return [alloc, fill]
+
+
+class _EyeCallHoister(_StmtHoister):
+    """Materialise a nested ``np.eye(...)`` / ``np.identity(...)`` call into its own
+    ``__eye<k> = <call>`` statement, so the direct-assign :class:`_EyeToZerosDiagonal`
+    can lower it to a zeros + diagonal fill.
+
+    LS3DF's generalized Rayleigh-Ritz adds an identity jitter inline --
+    ``s_sub = 0.5 * (...) + 1.0e-12 * np.eye(k)`` -- where ``np.eye`` is buried in an
+    expression, not a standalone assignment. A call that is already the direct RHS of
+    an assignment is left in place for the diagonal rewriter to consume."""
+
+    @staticmethod
+    def _is_eye_call(v: ast.AST) -> bool:
+        return (isinstance(v, ast.Call) and isinstance(v.func, ast.Attribute)
+                and v.func.attr in ("eye", "identity") and isinstance(v.func.value, ast.Name)
+                and v.func.value.id in ("np", "numpy") and bool(v.args))
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        self.generic_visit(node)
+        if self._is_eye_call(node):
+            return self._spill(node, "__eye")
+        return node
+
+    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+        if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                and self._is_eye_call(node.value)):
+            return node
+        return self._flush(node)
 
 
 class _EyeToZerosDiagonal(ast.NodeTransformer):
@@ -3714,6 +3801,101 @@ class _TupleSubscriptFolder(ast.NodeTransformer):
         return node
 
 
+_BLOCK_STMT_TYPES = (ast.For, ast.AsyncFor, ast.While, ast.If, ast.With, ast.AsyncWith,
+                     ast.FunctionDef, ast.AsyncFunctionDef)
+
+
+def _fill_empty_blocks(tree: ast.AST) -> None:
+    """Back-fill a ``pass`` into any compound-statement ``body`` emptied by
+    statement removal -- an empty ``for`` / ``while`` / ``if`` body is invalid
+    Python and fails the next parse / compile. An empty ``orelse`` (no ``else``
+    clause) is left as-is; only the primary body must be non-empty."""
+    for node in ast.walk(tree):
+        if isinstance(node, _BLOCK_STMT_TYPES):
+            body = vars(node).get("body")
+            if isinstance(body, list) and not body:
+                filler = ast.Pass()
+                ast.copy_location(filler, node)
+                node.body = [filler]
+
+
+class _TupleLocalPropagator(ast.NodeTransformer):
+    """Forward-substitute a local bound exactly once to a Tuple literal into its
+    uses, then drop the now-dead assignment.
+
+    A native backend has no runtime tuple: a ``shp = Y.shape`` that
+    :class:`_ShapeMidExpressionRewriter` folded to ``shp = (Lb, Lb, Lb, nstate)`` is
+    a shape descriptor, and left as a bare Tuple assignment the emitter cannot lower
+    it (and a ``np.reshape(x, shp)`` reading the bare Name would size ``x`` as a
+    spurious 1-D ``(shp,)``). Inlining the tuple into ``shp[-1]`` and
+    ``np.reshape(x, shp)`` -- which the tuple-subscript folder and reshape expander
+    already lower -- resolves both.
+
+    The substitution REPLAYS the element expressions (not a captured value) at each
+    use site, so it is sound only when every name they read is stable. Three guards
+    enforce that: (1) the tuple's own target is assigned exactly once; (2) every
+    element is an integer-shape expression -- a Name, an ``int`` literal, or ``+ - *
+    //`` arithmetic over those (a float / str constant or a Call is a genuine runtime
+    value, not a shape, and is left alone); (3) every Name the elements read is itself
+    assigned at most once in the scope (single-static-assign, hence one fixed value --
+    a reassigned dim would make the replay pick up the wrong value). Dropping the dead
+    assign never leaves an empty block: :func:`_fill_empty_blocks` back-fills a
+    ``pass`` if the tuple assign was a block's sole statement.
+    """
+
+    def __init__(self):
+        self.tuples: Dict[str, ast.Tuple] = {}
+
+    @classmethod
+    def _is_dim(cls, elt: ast.expr) -> bool:
+        if isinstance(elt, ast.Name):
+            return True
+        if isinstance(elt, ast.Constant):
+            # A bool is an int subclass but not a dimension; exclude it.
+            return isinstance(elt.value, int) and not isinstance(elt.value, bool)
+        if isinstance(elt, ast.UnaryOp):
+            return cls._is_dim(elt.operand)
+        if isinstance(elt, ast.BinOp):
+            return cls._is_dim(elt.left) and cls._is_dim(elt.right)
+        return False
+
+    def run(self, tree: ast.AST) -> "_TupleLocalPropagator":
+        store_counts: Dict[str, int] = {}
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
+                store_counts[n.id] = store_counts.get(n.id, 0) + 1
+        for stmt in ast.walk(tree):
+            if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1
+                    and isinstance(stmt.targets[0], ast.Name)
+                    and isinstance(stmt.value, ast.Tuple)
+                    and store_counts.get(stmt.targets[0].id) == 1
+                    and stmt.value.elts and all(self._is_dim(e) for e in stmt.value.elts)):
+                continue
+            target = stmt.targets[0].id
+            reads = {n.id for e in stmt.value.elts for n in ast.walk(e) if isinstance(n, ast.Name)}
+            # A reassigned element name is unstable; a self-referential tuple would
+            # inline a Name whose defining assign we are about to drop.
+            if target in reads or any(store_counts.get(name, 0) > 1 for name in reads):
+                continue
+            self.tuples[target] = stmt.value
+        if self.tuples:
+            self.visit(tree)
+            _fill_empty_blocks(tree)
+        return self
+
+    def visit_Assign(self, node: ast.Assign) -> Optional[ast.AST]:
+        self.generic_visit(node)
+        if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id in self.tuples):
+            return None
+        return node
+
+    def visit_Name(self, node: ast.Name) -> ast.AST:
+        if isinstance(node.ctx, ast.Load) and node.id in self.tuples:
+            return copy.deepcopy(self.tuples[node.id])
+        return node
+
+
 def _collect_bool_names(tree: ast.AST, arrays) -> Set[str]:
     """Names known to hold a boolean array.
 
@@ -4306,6 +4488,11 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         # source order. Use a local copy so the caller's table is not
         # repeatedly clobbered when an alias gets reassigned.
         self.shape_table = dict(shape_table)
+        #: Keys present in the caller's table at entry -- anything the pass adds
+        #: beyond these (a meshgrid output, a ``gsq = gx**2 + ...`` broadcast local)
+        #: is a genuinely NEW local whose shape the later slice-fusion pass needs;
+        #: see :attr:`discovered_shapes`.
+        self._input_keys = set(shape_table)
         #: Shared dtype tag table. Alias / BinOp expansions propagate
         #: dtype here so the emitter sees the right C type for a
         #: complex-RHS local that was never directly declared.
@@ -4335,6 +4522,15 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         self._ix_grids: Dict[str, List[ast.expr]] = {}
         #: Monotonic id for open-mesh (``np.ix_``) gather / scatter loop iters.
         self._ix_ctr = 0
+
+    @property
+    def discovered_shapes(self) -> Dict[str, Tuple[str, ...]]:
+        """Shapes the pass inferred for locals the caller's table did not yet know
+        (meshgrid outputs, broadcast-BinOp locals such as ``gsq``). Merged back into
+        the shared table so the downstream slice-fusion scalarizer sizes them, rather
+        than treating a shapeless denominator (``rho_g / gsq``) as a bare pointer."""
+        return {k: tuple(v) for k, v in self.shape_table.items()
+                if k not in self._input_keys and v}
 
     def _expand(self, target: ast.Name, value: ast.expr,
                 op: Optional[ast.AST] = None,
@@ -5631,7 +5827,10 @@ def _lp_normalize_calls(ctx: LoweringContext) -> None:
     _ConditionalNoneAllocRewriter().visit(tree)
     _FullLikeRewriter().visit(tree)
     # ``np.eye`` / ``np.identity`` -> zeros + diagonal fill, BEFORE the zeros
-    # harvest so the resulting ``np.zeros((n, n))`` is picked up normally.
+    # harvest so the resulting ``np.zeros((n, n))`` is picked up normally. A nested
+    # ``... + 1e-12 * np.eye(k)`` (LS3DF's RR jitter) is spilled to a temp first so
+    # the direct-assign diagonal rewriter sees it.
+    _EyeCallHoister().visit(tree)
     _EyeToZerosDiagonal().visit(tree)
     _MatmulCallRewriter().visit(tree)
     _ScatterAtRewriter(ash).visit(tree)
@@ -5693,6 +5892,12 @@ def _lp_pre_libnode_normalize(ctx: LoweringContext) -> None:
     # Pre-pass: rewrite ``x.shape = expr`` -> ``x = np.reshape(x, expr)``. Handles
     # chained ``Xi.shape = Yi.shape = expr`` too. Mandelbrot2 canonical uses this.
     _ShapeAttrToReshape().visit(tree)
+    ast.fix_missing_locations(tree)
+    # Forward-substitute a shape-tuple local (``shp = (Lb, Lb, Lb, nstate)`` --
+    # the seed-time fold of a declared-array-based ``shp = Y.shape``) into its uses
+    # BEFORE the harvest, so ``np.reshape(x, shp)`` is sized from the concrete tuple
+    # (not a spurious 1-D ``(shp,)``) when the harvest records the reshape target.
+    _TupleLocalPropagator().run(tree)
     ast.fix_missing_locations(tree)
     # Fold ``(a, b, c)[K]`` Tuple subscripts -- comes from ``arr.shape[-2]`` when
     # the shape is a tuple literal.
@@ -5847,6 +6052,16 @@ def _lp_normalize_index_access(ctx: LoweringContext) -> None:
     _ChainedSubscriptFlattener().visit(tree)
     _EllipsisExpander(shapes).visit(tree)
     _PadImplicitTrailingSlices(shapes).visit(tree)
+    # Re-fold ``<array-expr>.shape`` / ``.shape[k]`` now that every post-inline
+    # local's shape is harvested: the seed-time pass only had the DECLARED-array
+    # shapes, so a ``.shape`` read on an inlined local (``v[..., None].shape[-1]``
+    # in ``_hpsi``'s ``X.reshape(-1, X.shape[-1])``, or the eigh helper's
+    # ``a.shape[0]``) could not resolve then. With the full table the newaxis /
+    # subscript base folds to concrete dims BEFORE the reshape / LibNode expander
+    # bakes the (otherwise unresolved) token into a loop bound.
+    _ShapeMidExpressionRewriter(shapes).visit(tree)
+    _TupleLocalPropagator().run(tree)
+    _TupleSubscriptFolder().visit(tree)
     ast.fix_missing_locations(tree)
 
 
@@ -5949,6 +6164,13 @@ def _lp_whole_array_and_zeros(ctx: LoweringContext) -> None:
     ctx.wa_rewriter = _WholeArrayAssignRewriter(ctx.lib_shape_table, real_arrays,
                                                 local_dtypes=ctx.local_dtypes)
     ctx.wa_rewriter.visit(tree)
+    # Fold the shapes the whole-array pass inferred for genuinely-new locals
+    # (meshgrid ``gx``/``gy``/``gz``, the broadcast ``gsq``) back into the shared
+    # table, so the zeros harvest and slice-fusion scalarizer below size them --
+    # otherwise a shapeless ``gsq`` denominator stays a bare pointer in ``v_g =
+    # rho_g / gsq`` and the C division is ``complex / double *``.
+    for _nm, _shp in ctx.wa_rewriter.discovered_shapes.items():
+        ctx.lib_shape_table.setdefault(_nm, _shp)
     ctx.zeros = _ZerosRewriter(ctx.lib_shape_table)
     ctx.zeros.visit(tree)
     # Merge matmul-hoisted temps with the np.zeros locals -- both become C stack
