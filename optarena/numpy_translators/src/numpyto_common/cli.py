@@ -40,7 +40,16 @@ _TARGETS = {
     "cupy": "numpyto_cupy.cli",
     "numba": "numpyto_numba.cli",
     "pythran": "numpyto_pythran.cli",
+    # OpenMP parallel-scope variants: same backend, ``--parallel`` injected. One C
+    # emit produces both the C and C++ OpenMP sources, so ``c_omp`` and ``cpp_omp``
+    # share the C backend (like ``c``/``polly``/``pluto``).
+    "c_omp": "numpyto_c.cli",
+    "cpp_omp": "numpyto_c.cli",
+    "fortran_omp": "numpyto_fortran.cli",
 }
+
+#: Targets that inject ``--parallel`` into the backend emit (OpenMP variants).
+_PARALLEL_TARGETS = {"c_omp", "cpp_omp", "fortran_omp"}
 
 
 def main(argv=None) -> int:
@@ -52,6 +61,8 @@ def main(argv=None) -> int:
                     help="output language / framework")
     args, rest = ap.parse_known_args(argv)
     mod = importlib.import_module(_TARGETS[args.target])
+    if args.target in _PARALLEL_TARGETS and "--parallel" not in rest:
+        rest = ["--parallel", *rest]
     return mod.main(["emit", *rest])
 
 

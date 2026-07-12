@@ -18,7 +18,7 @@ import sys
 from numpyto_c.frontend import parse_kernel
 from numpyto_c.ir import apply_precision
 from numpyto_c.lowering import lower
-from numpyto_fortran.emit import emit_fortran
+from numpyto_fortran.emit import emit_fortran, emit_fortran_omp
 from numpyto_common.emit_io import write_generated
 from numpyto_common.naming import native_base
 
@@ -34,6 +34,15 @@ def cmd_emit(args: argparse.Namespace) -> int:
     short = args.kernel.stem.removesuffix("_numpy")
     # Canonical native name: <short>[_<sparse>]_<fptype>, file == bind(C) symbol.
     base = native_base(short, precision=args.precision, sparse=args.config)
+    if args.parallel:
+        # OpenMP variant: ``<base>_omp.f90`` with ``!$omp parallel do`` on each
+        # outermost independent / reduction loop (same bind(C) symbol as the
+        # sequential emit; compile with -fopenmp). Raises UnsupportedParallelError
+        # (nonzero exit) for a kernel with no sound parallel form.
+        write_generated(args.out / f"{base}_omp.f90", emit_fortran_omp(kir, fn_name=base),
+                        line_comment="! ", source=f"{short}_numpy.py")
+        print(f"numpyto_fortran: emitted {base}_omp.f90 (OpenMP)")
+        return 0
     src = emit_fortran(kir, fn_name=base)
     write_generated(args.out / f"{base}.f90", src, line_comment="! ",
                     source=f"{short}_numpy.py")
@@ -48,6 +57,10 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--kernel", type=pathlib.Path, required=True)
     e.add_argument("--bench-info", type=pathlib.Path, required=True)
     e.add_argument("--out", type=pathlib.Path, required=True)
+    e.add_argument("--parallel", action="store_true",
+                   help="emit the OpenMP variant (<base>_omp.f90, ``!$omp parallel "
+                        "do``) instead of the sequential source; compile with -fopenmp. "
+                        "Refuses (nonzero exit) a kernel with no sound parallel form.")
     e.add_argument("--config", default=None,
                    help="sparse layout tag for the emitted name (dense: omit)")
     e.add_argument("--precision", default="",

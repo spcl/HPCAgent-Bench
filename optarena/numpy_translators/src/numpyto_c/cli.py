@@ -18,7 +18,7 @@ import pathlib
 import sys
 
 from numpyto_c.bindings import emit_binding, emit_pluto_binding
-from numpyto_c.emit import emit_c, emit_cpp, emit_pluto
+from numpyto_c.emit import emit_c, emit_c_omp, emit_cpp, emit_cpp_omp, emit_pluto
 from numpyto_c.frontend import parse_kernel
 from numpyto_c.ir import apply_precision
 from numpyto_c.lowering import lower
@@ -44,6 +44,16 @@ def cmd_emit(args: argparse.Namespace) -> int:
     # variant builds its own lib<short>_<framework>.so from this one source).
     base = native_base(short, precision=args.precision, sparse=args.config)
     src = f"{short}_numpy.py"
+    if args.parallel:
+        # OpenMP variant: a drop-in ``<base>_omp.{c,cpp}`` with the SAME symbol as the
+        # sequential emit (compile with ``-fopenmp``). No Pluto here (Pluto is the
+        # sequential polyhedral track). ``emit_c_omp`` raises UnsupportedParallelError
+        # for a kernel with no sound parallel form -- propagated as a nonzero exit.
+        write_generated(out / f"{base}_omp.c", emit_c_omp(kir, fn_name=base), line_comment="// ", source=src)
+        write_generated(out / f"{base}_omp.cpp", emit_cpp_omp(kir, fn_name=base), line_comment="// ", source=src)
+        emit_binding(kir, out / f"{base}_omp_binding.json", base_name=base)
+        print(f"numpyto_c: emitted {base}_omp.{{c,cpp}} (OpenMP) + {base}_omp_binding.json")
+        return 0
     write_generated(out / f"{base}.c", emit_c(kir, fn_name=base), line_comment="// ", source=src)
     write_generated(out / f"{base}.cpp", emit_cpp(kir, fn_name=base), line_comment="// ", source=src)
     write_generated(out / f"{base}_pluto_input.c", emit_pluto(kir, fn_name=base),
@@ -66,6 +76,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="path to bench_info/<short>.json")
     e.add_argument("--out", type=pathlib.Path, required=True,
                    help="output cpp_backend/ directory")
+    e.add_argument("--parallel", action="store_true",
+                   help="emit the OpenMP variant (<base>_omp.{c,cpp}, "
+                        "``#pragma omp parallel for``) instead of the sequential "
+                        "source; compile with -fopenmp. Refuses (nonzero exit) a "
+                        "kernel with no sound parallel form (colliding scatter).")
     e.add_argument("--precision", default="",
                    help="floating precision override (e.g. ``float32`` / "
                         "``float16``). Remaps ONLY float/complex arrays, "
