@@ -23,7 +23,7 @@ import re
 from typing import Dict, List, Optional, Set, Tuple
 
 from numpyto_c.ir import ArrayDesc, KernelIR
-from numpyto_common import dtypes, operators
+from numpyto_common import dtypes, operators, parallelism
 from numpyto_common.emitter import BaseEmitter
 from numpyto_common.frontend import _names_used_as_int
 
@@ -167,6 +167,13 @@ class _CBodyEmitter(BaseEmitter):
         #: ``return <expr>;``; an out-param array name -> copy the returned array
         #: into that param, then ``return;``.
         self.return_mode: Optional[str] = None
+        #: Parallel emit variant (emit_c_omp / emit_cpp_omp): annotate each
+        #: outermost independent / reduction loop with ``#pragma omp parallel
+        #: for``. Off for the plain sequential emitters.
+        self.parallel: bool = False
+        #: Set while emitting the body of a loop already marked parallel, so
+        #: nested loops are NOT also tagged (no nested parallel regions).
+        self.parallel_active: bool = False
         #: Pluto only: ``name -> "[d1][d2]"`` trailing-dim string for a local
         #: array declared as a pointer-to-array (so its deferred-malloc marker
         #: casts to the matching multidimensional pointer type).
@@ -207,9 +214,27 @@ class _CBodyEmitter(BaseEmitter):
         else:
             raise NotImplementedError("range() needs 1-3 args")
 
+        # OpenMP parallel-scope decision (parallel variant only). Tag the
+        # OUTERMOST eligible loop of a nest: an independent map -> ``#pragma omp
+        # parallel for``; a single-scalar reduction -> add ``reduction(op:acc)``.
+        # A colliding scatter is already refused up front (emit_c_omp), so a
+        # not-parallel-safe loop here is a carried dependence and stays serial.
+        omp_prefix = ""
+        if self.parallel and not self.parallel_active and not parallelism.is_timestep_loop(node):
+            red = parallelism.loop_reduction(node)
+            if red is not None:
+                op, acc = red
+                omp_prefix = f"{indent}#pragma omp parallel for reduction({op}:{acc})\n"
+            elif parallelism.loop_is_parallel_safe(node):
+                omp_prefix = f"{indent}#pragma omp parallel for\n"
+        entered_parallel = bool(omp_prefix)
+        if entered_parallel:
+            self.parallel_active = True
         self._loop_iter_names.add(var)
         body = self.emit_block(node.body, indent + "  ")
         self._loop_iter_names.discard(var)
+        if entered_parallel:
+            self.parallel_active = False
         # Negative step -> reverse loop, condition must be ``i > hi``.
         # Detect the sign from the AST (the emitted text may be ``(-1)``
         # from a UnaryOp, which ``startswith("-")`` would miss).
@@ -232,7 +257,7 @@ class _CBodyEmitter(BaseEmitter):
         # Loop iterators are the int64 ABI integer (canonical ``int``), matching
         # the size symbols they range over -- a 32-bit iterator would overflow a
         # large extent and mix widths with int64 bounds.
-        return (f"{indent}for ({_c_type('int')} {var} = {lo}; {var} {cmp} {hi}; {inc}) {{\n"
+        return (f"{omp_prefix}{indent}for ({_c_type('int')} {var} = {lo}; {var} {cmp} {hi}; {inc}) {{\n"
                 f"{body}\n"
                 f"{indent}}}")
 
@@ -1113,10 +1138,12 @@ def _emit_body(kir: KernelIR,
                multidim_arrays: Optional[Set[str]] = None,
                pluto: bool = False,
                return_parts: bool = False,
-               return_mode: Optional[str] = None):
+               return_mode: Optional[str] = None,
+               parallel: bool = False):
     emitter = _CBodyEmitter(kir, multidim_arrays=multidim_arrays)
     emitter.pluto = pluto
     emitter.return_mode = return_mode
+    emitter.parallel = parallel
     zeros = kir.zeros_locals
     zeros_fills = kir.zeros_fills
     int_locals = kir.int_locals
@@ -1547,6 +1574,45 @@ def emit_cpp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     # so the same body string serves both targets.
     signature = signature.replace("*restrict ", "*__restrict__ ")
     body = _emit_body(kir, indent="        ")
+    return (f"{_CPP_HEADER}\n{helpers}{signature} {{\n{_CPP_PRELUDE}{body}\n"
+            f"{_CPP_EPILOGUE}}}\n{_CPP_FOOTER}")
+
+
+def _require_parallelizable(kir: KernelIR) -> None:
+    """Refuse a kernel the parallel variant cannot soundly emit: a colliding
+    scatter (``A[perm[i]] += ...`` -- would need an atomic, which we do not emit)
+    or no parallelizable loop at all. The caller falls back to the sequential
+    emit_c / emit_cpp, which is always valid."""
+    if parallelism.has_indirect_scatter(kir.tree):
+        raise parallelism.UnsupportedParallelError(
+            f"{kir.kernel_name}: data-dependent scatter write needs an atomic; no parallel variant")
+    if not parallelism.any_parallelizable_loop(kir.tree):
+        raise parallelism.UnsupportedParallelError(
+            f"{kir.kernel_name}: no iteration-independent or reduction loop to parallelize")
+
+
+def emit_c_omp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
+    """C99 with OpenMP ``#pragma omp parallel for`` on each outermost independent
+    / reduction loop (a ``reduction(op:acc)`` clause for a single-scalar
+    accumulator). Same signature and symbol as :func:`emit_c`; compile with
+    ``-fopenmp`` -- single-core stays fair via ``OMP_NUM_THREADS=1``. Raises
+    :class:`~numpyto_common.parallelism.UnsupportedParallelError` for a kernel
+    with no sound parallel form (colliding scatter, or nothing to parallelize)."""
+    _require_parallelizable(kir)
+    name = fn_name or f"{kir.kernel_name}_d_c"
+    helpers = "".join(_emit_c_helper(h) for h in kir.helpers)
+    signature = _emit_signature(kir, name)
+    body = _emit_body(kir, indent="        ", parallel=True)
+    return f"{_C_HEADER}\n{helpers}{signature} {{\n{_C_PRELUDE}{body}\n{_C_EPILOGUE}}}\n"
+
+
+def emit_cpp_omp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
+    """C++ counterpart of :func:`emit_c_omp` (see it); same symbol as :func:`emit_cpp`."""
+    _require_parallelizable(kir)
+    name = fn_name or f"{kir.kernel_name}_d"
+    helpers = "".join(_emit_c_helper(h, cpp=True) for h in kir.helpers)
+    signature = _emit_signature(kir, name).replace("*restrict ", "*__restrict__ ")
+    body = _emit_body(kir, indent="        ", parallel=True)
     return (f"{_CPP_HEADER}\n{helpers}{signature} {{\n{_CPP_PRELUDE}{body}\n"
             f"{_CPP_EPILOGUE}}}\n{_CPP_FOOTER}")
 
