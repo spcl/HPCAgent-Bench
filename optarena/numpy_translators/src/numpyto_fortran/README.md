@@ -2,7 +2,7 @@
 
 Python (numpy-numeric subset) → Fortran 2008 emitter. Reuses
 NumpyToC's IR + frontend + lowering passes; only the body walker
-and the timing prelude differ.
+differs.
 
 Why Fortran is the smallest delta from NumpyToC's IR:
 
@@ -17,28 +17,23 @@ Why Fortran is the smallest delta from NumpyToC's IR:
 | `np.exp(A)`            | `EXP(A)` (ELEMENTAL)         |
 | `A[1:N-1] = expr`      | `A(2:N-1) = expr`            |
 
-Every kernel emits a thin timing wrapper:
+Every kernel emits a thin `bind(C)` wrapper. The kernel carries no
+in-kernel timer; the harness times the call externally:
 
 ```fortran
-subroutine s111_d_auto(iterations, len_1d, a, b, time_ns)
+subroutine s111_d_auto(iterations, len_1d, a, b)
     use, intrinsic :: iso_c_binding
-    use, intrinsic :: iso_fortran_env, only: int64
     integer, intent(in) :: iterations, len_1d
     real(c_double), intent(inout) :: a(len_1d)
     real(c_double), intent(in)    :: b(len_1d)
-    integer(int64), intent(out) :: time_ns
 
-    integer(int64) :: t1, t2, rate
     integer :: nl, i
 
-    call system_clock(t1, rate)
     do nl = 0, 2*iterations - 1
         do i = 1, len_1d - 1, 2
             a(i+1) = a(i) + b(i+1)
         end do
     end do
-    call system_clock(t2)
-    time_ns = (t2 - t1) * 1000000000_int64 / rate
 end subroutine
 ```
 

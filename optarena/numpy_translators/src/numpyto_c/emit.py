@@ -1302,9 +1302,7 @@ def _emit_body(kir: KernelIR,
     return "\n".join(d for d in (*decls, body, *frees) if d)
 
 
-_C_HEADER = ("#define _POSIX_C_SOURCE 199309L\n"
-             "#define _USE_MATH_DEFINES\n"
-             "#include <time.h>\n"
+_C_HEADER = ("#define _USE_MATH_DEFINES\n"
              "#include <stdint.h>\n"
              "#include <stdlib.h>\n"
              "#include <stdbool.h>\n"
@@ -1394,7 +1392,7 @@ _C_HEADER = ("#define _POSIX_C_SOURCE 199309L\n"
 # permitting runtime use. ``<complex.h>`` is dropped (its C99 ``creal`` / ``cabs``
 # / ... declarations would clash with our own definitions); ``double _Complex``
 # is a GCC/Clang extension available without it.
-_CPP_HEADER = ('#include <chrono>\n#include <cstdint>\n#include <cmath>\n'
+_CPP_HEADER = ('#include <cstdint>\n#include <cmath>\n'
                '#include <cstring>\n#include <cstdlib>\n'
                '// Math constants as typed constexpr values. ``<cmath>`` may\n'
                '// predefine M_PI / M_E as macros (glibc __USE_MISC); undefine\n'

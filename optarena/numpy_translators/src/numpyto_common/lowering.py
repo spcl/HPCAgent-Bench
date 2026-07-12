@@ -6063,6 +6063,16 @@ def _lp_normalize_index_access(ctx: LoweringContext) -> None:
     _TupleLocalPropagator().run(tree)
     _TupleSubscriptFolder().visit(tree)
     ast.fix_missing_locations(tree)
+    # Re-resolve inlined-scalar dims now that the folds above concretised the
+    # reshape-shape locals (``__inl5_k = shp[-1]`` -> ``= nstate``). The earlier
+    # resolve-inlined-shapes phase ran BEFORE that fold, so a size local defined only
+    # in a LATER inlined solve (``w`` / ``X`` reassigned across the two Rayleigh-Ritz
+    # inlines) kept its ``__inl<k>_`` token and drove a use-before-def allocation
+    # (garbage size). Recollect and reapply against the now-fuller table.
+    from numpyto_common.frontend import _collect_inlined_scalar_defs
+    ctx.inl_defs = _collect_inlined_scalar_defs(tree)
+    if ctx.inl_defs and ctx.resolve_inl_table is not None:
+        ctx.resolve_inl_table(ctx.lib_shape_table)
 
 
 def _lp_libnode_expand(ctx: LoweringContext) -> None:
@@ -6099,48 +6109,91 @@ def _lp_libnode_expand(ctx: LoweringContext) -> None:
 
 
 def _fix_real_scalar_dtypes(ctx: LoweringContext) -> None:
-    """Re-derive the dtype of a scalar temp that LibNodeRewriter tagged COMPLEX
-    from a complex source but whose value is actually REAL.
+    """Re-derive the dtype of a LOCAL (scalar OR array temp) that LibNodeRewriter
+    tagged COMPLEX from a complex source but whose value is actually REAL.
 
     ``LibNodeRewriter`` propagates a complex source array's element type onto
-    every derived scalar, but a ``.real`` / ``.imag`` accessor, an ``abs`` /
+    every derived local, but a ``.real`` / ``.imag`` accessor, an ``abs`` /
     ``hypot`` magnitude, or a ``np.float64(...)`` cast produces a REAL value --
     the eigh / eigvalsh cyclic-Jacobi's ``app = A[p, p].real`` / ``aqq`` / ``m =
-    hypot(...)`` / ``tau = (aqq - app) / (2 * m)``. Left complex, the emitter
-    declares them complex and ``tau >= 0.0`` (a complex comparison) and
-    ``conjg(<real>)`` fail to compile. Route each through the file's existing
-    :func:`_walk_complex` predicate (which already classifies those forms real)
-    and, when it disagrees with a complex tag, retag to the matching real width.
-    A fixpoint resolves the cascade (``tau`` is real only once ``app`` / ``aqq`` /
-    ``m`` are). Then drop any conjugation left on a now-real operand
+    hypot(...)`` / ``tau = (aqq - app) / (2 * m)``; equally the LS3DF GENPOT
+    ``v = ifftn(v_g).real + V_ion + xc`` array (``.real`` result plus real
+    operands) and its ``v.mean()`` temp. Left complex, the emitter declares them
+    complex and ``tau >= 0.0`` (a complex comparison), ``conjg(<real>)``, or a
+    real ``V_tot[...] = v[...] - v.mean()`` narrowing all fail to compile under
+    C++ (C silently drops the zero imaginary part). Route each through the file's
+    existing :func:`_walk_complex` predicate (which already classifies those forms
+    real) and, when it disagrees with a complex tag, retag to the matching real
+    width -- for an array this flips its C/C++ declaration from ``double _Complex
+    *`` to ``double *``, so downstream reads, ``.mean()`` and the ``V_tot`` write
+    are all real.
+
+    A fixpoint resolves the cascade: ``tau`` is real only once ``app`` / ``aqq`` /
+    ``m`` are; the GENPOT ``v`` array is real only once the ``.real`` poisson
+    result is, and its mean temp only once ``v`` is. An accumulator's own
+    self-reference (``acc = acc + real[...]``) carries the running value and is
+    neutral -- resolved REAL -- so a mean/sum of a real array narrows, while a
+    genuinely COMPLEX injected value (``acc = acc + a * b`` on complex ``a`` /
+    ``b``) keeps it complex. Kernel parameter arrays are never candidates (their
+    declaration is the ABI contract), but their dtypes DO resolve names on a
+    candidate's RHS so a complex input cannot mis-read as real and unsoundly
+    narrow. Then drop any conjugation left on a now-real operand
     (:class:`_RealConjDropper`), so ``conj(ephi)`` on the real ``ephi`` is not
     emitted as ``CONJG(<real>)``. Same class as the ``abs(complex) -> double``
     root fix -- a real-returning op of a complex operand is REAL."""
     tree = ctx.tree
     ld = ctx.local_dtypes
-    scalars = {n for n, dt in ld.items()
-               if dt in _REAL_FOR_COMPLEX and n not in ctx.lib_shape_table}
-    # Every value WRITTEN to a candidate scalar (an ``Assign`` value or an
-    # ``AugAssign`` increment). A scalar is real only if EVERY write is real:
-    # a reduction accumulator (``acc = 0.0`` then ``acc = acc + a * b`` on complex
-    # operands) has a real INIT but a complex UPDATE, so it must stay complex.
+    # Kernel-parameter array dtypes live outside ``local_dtypes``; resolve names
+    # through both so a complex INPUT read on a candidate's RHS is seen as complex
+    # (else the walk would call it real and unsoundly narrow the candidate).
+    array_dtypes = {a.name: a.dtype for a in ctx.kir.arrays}
+
+    def name_dtype(nm: str) -> Optional[str]:
+        dt = ld.get(nm)
+        return dt if dt is not None else array_dtypes.get(nm)
+
+    # Every complex-tagged LOCAL of known real width is a candidate -- scalars and
+    # local temp arrays alike (an array's ``lib_shape_table`` shape is orthogonal
+    # to its element dtype). Kernel input/output arrays are excluded: narrowing
+    # their declaration would break the marshalled ABI.
+    candidates = {n for n, dt in ld.items()
+                  if dt in _REAL_FOR_COMPLEX and n not in array_dtypes}
+    # Every value WRITTEN to a candidate -- a whole-name ``x = e`` / ``x += e`` or
+    # a per-element ``x[i] = e`` / ``x[i] += e`` (an array is written elementwise).
+    # A candidate is real only if EVERY write is real.
     writes: Dict[str, List[ast.expr]] = {}
     for stmt in ast.walk(tree):
-        if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1
-                and isinstance(stmt.targets[0], ast.Name) and stmt.targets[0].id in scalars):
-            writes.setdefault(stmt.targets[0].id, []).append(stmt.value)
-        elif isinstance(stmt, ast.AugAssign) and isinstance(stmt.target, ast.Name) and stmt.target.id in scalars:
-            writes.setdefault(stmt.target.id, []).append(stmt.value)
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+            tgt: ast.AST = stmt.targets[0]
+        elif isinstance(stmt, ast.AugAssign):
+            tgt = stmt.target
+        else:
+            continue
+        base = (tgt.id if isinstance(tgt, ast.Name)
+                else tgt.value.id if isinstance(tgt, ast.Subscript) and isinstance(tgt.value, ast.Name) else None)
+        if base in candidates:
+            writes.setdefault(base, []).append(stmt.value)
+
+    def all_writes_real(name: str, vals: List[ast.expr]) -> bool:
+        # The candidate's own self-reference is neutral (resolved real): it carries
+        # the running accumulator value, so a mean / sum of a real array is real,
+        # yet every OTHER operand must resolve real for the write to be real.
+        def resolve(nm: str) -> Optional[str]:
+            return None if nm == name else name_dtype(nm)
+
+        return all(_walk_complex(v, resolve) is None for v in vals)
+
     changed = True
-    while changed and scalars:
+    while changed and candidates:
         changed = False
-        for name in list(scalars):
+        for name in list(candidates):
             vals = writes.get(name)
-            # Fixpoint: ``tau = (aqq - app) / (2 * m)`` reads real only once ``app``
-            # / ``aqq`` / ``m`` have themselves been retagged real (this pass).
-            if vals and all(_walk_complex(v, ld.get) is None for v in vals):
+            # Fixpoint: ``tau = (aqq - app) / (2 * m)`` -- or the GENPOT ``v`` array
+            # and its ``v.mean()`` temp -- read real only once the locals they
+            # derive from have themselves been retagged real (this pass).
+            if vals and all_writes_real(name, vals):
                 ld[name] = _REAL_FOR_COMPLEX[ld[name]]
-                scalars.discard(name)
+                candidates.discard(name)
                 changed = True
     _RealConjDropper(ld).visit(tree)
     ast.fix_missing_locations(tree)

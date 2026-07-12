@@ -282,7 +282,7 @@ wrap_kernel` dlopens. Flags resolve from :mod:`optarena.flags` via
 
     # Pick the link driver that pulls in the right runtime: a forced compiler
     # wins (Polly/Pluto link with clang); else gfortran for Fortran objects
-    # (libgfortran -- e.g. system_clock in the self-timing), else the C++ driver
+    # (libgfortran), else the C++ driver
     # when any C++ object is present, else the C driver.
     if forced is not None:
         link_block = forced

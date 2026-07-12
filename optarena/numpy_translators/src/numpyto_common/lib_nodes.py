@@ -2037,6 +2037,14 @@ def expand_copy(target: ast.expr, args: List[ast.expr],
     shape = _iter_extent_of(src, shape_table)
     if not shape:
         raise NotImplementedError("np.copy: source shape unknown")
+    # Register + allocate the fresh target, mirroring the matmul / linalg expanders.
+    # Without the ``__optarena_zeros__`` marker a copy target with a RUNTIME (symbolic)
+    # shape -- ``Cm = np.ascontiguousarray(a)`` in the eigh Jacobi, or the
+    # ``__eigh<k>_a = np.ascontiguousarray(Linv @ h_sub @ Linv.T)`` operand
+    # materialisation -- is declared as a null pointer and never malloc'd, so the copy
+    # loop writes through NULL. The emitter treats a static-shape target's marker as a
+    # plain stack declaration, so this is safe for both.
+    shape_table.setdefault(target.id, tuple(ast.unparse(e) for e in shape))
     iters = [f"__r{i}" for i in range(len(shape))]
     iter_nodes = [_name(i) for i in iters]
     idx = (iter_nodes[0] if len(iters) == 1 else
@@ -2044,7 +2052,9 @@ def expand_copy(target: ast.expr, args: List[ast.expr],
     sub_src = _scalarize_at_iters(src, iter_nodes, shape_table)
     sub_dst = ast.Subscript(value=_name(target.id), slice=idx, ctx=ast.Store())
     body = [ast.Assign(targets=[sub_dst], value=sub_src)]
-    return _wrap_for_loops(iters, shape, body)
+    alloc = ast.Assign(targets=[_store(target.id)],
+                       value=ast.Call(func=_name("__optarena_zeros__"), args=[], keywords=[]))
+    return [alloc] + _wrap_for_loops(iters, shape, body)
 
 
 def expand_outer(target: ast.expr, args: List[ast.expr],
@@ -5258,6 +5268,15 @@ def expand_linalg_solve(target: ast.expr, args: List[ast.expr],
     return out
 
 
+#: Monotone counter for the ``inv`` scratch working-copy buffer. A fixed name
+#: (``__inv_aw``) aliases across call sites, so when a kernel inverts two
+#: DIFFERENT-shaped matrices (LS3DF's Rayleigh-Ritz runs ``np.linalg.inv`` once per
+#: SCF sub-solve, each sized from its own ``__inl<k>_k``) the second call's shape
+#: overwrites the first's declaration and the first inversion mallocs from an
+#: as-yet-uninitialised dimension. A per-call suffix keeps each buffer distinct.
+_LINALG_AW = [0]
+
+
 def expand_linalg_inv(target: ast.expr, args: List[ast.expr],
                       shape_table: Dict[str, Tuple[str, ...]],
                       kwargs=None,
@@ -5289,24 +5308,26 @@ def expand_linalg_inv(target: ast.expr, args: List[ast.expr],
             "np.linalg.inv: only 2-D square input supported")
     n = shape[0]
     n_ast = _const_or_name(n)
+    aw_name = f"__inv_aw{_LINALG_AW[0]}"
+    _LINALG_AW[0] += 1
     out: List[ast.stmt] = []
     # Publish the working buffer's shape so the emit flattens
     # ``__inv_aw[i, j]`` as ``i*n + j`` instead of chained ``[i][j]``.
     # Register dtype + fresh-local-alloc so the emit declares it with
     # the right element type (e.g. ``double _Complex __inv_aw[n*n]``).
-    shape_table["__inv_aw"] = (n, n)
+    shape_table[aw_name] = (n, n)
     a_dt = None
     if local_dtypes is not None:
         a_dt = local_dtypes.get(a.id)
         if a_dt is not None:
-            local_dtypes["__inv_aw"] = a_dt
+            local_dtypes[aw_name] = a_dt
             # Scalar swap / pivot temps carry A's dtype too.
             for nm in ("__inv_tmp", "__inv_factor"):
                 local_dtypes.setdefault(nm, a_dt)
     if fresh_local_allocs is not None:
-        fresh_local_allocs["__inv_aw"] = (n, n)
+        fresh_local_allocs[aw_name] = (n, n)
     out.append(ast.Assign(
-        targets=[_store("__inv_aw")],
+        targets=[_store(aw_name)],
         value=ast.Call(func=_name("__optarena_zeros__"), args=[], keywords=[])))
     # Copy A to a working buffer ``__inv_aw[i, j]``; initialise target
     # as the identity I[i, j].
@@ -5319,7 +5340,7 @@ def expand_linalg_inv(target: ast.expr, args: List[ast.expr],
             body=[
                 ast.Assign(
                     targets=[ast.Subscript(
-                        value=_name("__inv_aw"),
+                        value=_name(aw_name),
                         slice=ast.Tuple(elts=[_name("__inv_i"),
                                                 _name("__inv_j")],
                                            ctx=ast.Load()),
@@ -5353,10 +5374,10 @@ def expand_linalg_inv(target: ast.expr, args: List[ast.expr],
     # 4) for r != k: factor = aw[r, k]; aw[r, :] -= factor * aw[k, :];
     #                target[r, :] -= factor * target[k, :]
     aw = lambda r, c: ast.Subscript(
-        value=_name("__inv_aw"),
+        value=_name(aw_name),
         slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Load())
     aw_store = lambda r, c: ast.Subscript(
-        value=_name("__inv_aw"),
+        value=_name(aw_name),
         slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Store())
     tgt = lambda r, c: ast.Subscript(
         value=_name(target.id),

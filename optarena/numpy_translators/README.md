@@ -7,10 +7,10 @@ A Python → C99 / C++ / Pluto-input emitter, deliberately narrow:
   numeric primitives that already appear in the Foundation corpus,
   no slicing, no broadcasting, no objects).
 * **Output**: three sibling source files plus an auto-generated
-  ctypes binding. The C version uses ``clock_gettime``; the C++
-  version uses ``<chrono>``; the Pluto input wraps the loop nest in
-  ``#pragma scop`` / ``#pragma endscop`` and survives ``polycc --pet
-  --tile`` for the affine subset.
+  ctypes binding. The emitted kernels carry no in-kernel timing —
+  the harness times each call externally. The Pluto input wraps the
+  loop nest in ``#pragma scop`` / ``#pragma endscop`` and survives
+  ``polycc --pet --tile`` for the affine subset.
 
 The tool is one of a planned family. Each target lives in its own
 top-level directory so the dependency surface stays per-target:
@@ -90,9 +90,9 @@ For one Python kernel ``s111(a, b, ITERATIONS, LEN_1D)`` with
 
 ```
 out/<short>/cpp_backend/
-  <short>_d.c                  # C99 + clock_gettime
+  <short>_d.c                  # C99
   <short>_f.c                  # C99, single precision
-  <short>_d.cpp                # C++ wrapping the same body in <chrono>
+  <short>_d.cpp                # C++ wrapping the same body
   <short>_f.cpp                # C++, single precision
   <short>_pluto_input.c        # C99 + #pragma scop markers
   CMakeLists.txt

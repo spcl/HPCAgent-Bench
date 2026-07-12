@@ -2589,7 +2589,16 @@ def _eigh_c_stmts(w: str, v: Optional[str], a: str, b: Optional[str], lo: str, h
         # collides with the Jacobi cosine scalar ``c`` -- the emitter would reject
         # the second declaration. (The generalized branch above uses ``Cm`` too.)
         cname = f"{p}_Cm"
-        lines += [f"{cname} = np.ascontiguousarray({a})"]
+        # Explicit ``np.zeros`` allocation + element copy (NOT ``np.ascontiguousarray``,
+        # whose copy-loop lowering leaves the fresh RUNTIME-shaped target unallocated --
+        # a NULL write in the Jacobi). Mirrors the generalized branch's ``np.zeros``
+        # temps. The Jacobi mutates ``Cm`` in place, so the input ``a`` must not alias it.
+        lines += [
+            f"{cname} = np.zeros(({n}, {n}), {a}.dtype)",
+            f"for {p}_ci in range({n}):",
+            f"    for {p}_cj in range({n}):",
+            f"        {cname}[{p}_ci, {p}_cj] = {a}[{p}_ci, {p}_cj]",
+        ]
     lines += _eigh_jacobi_lines(f"{p}_wa", f"{p}_ya", cname, n, p)
     if eigenvalues_only:  # eigvalsh: only the eigenvalue vector, no back-transform / U output
         lines.append(f"{w} = {p}_wa" if lo == "None" else f"{w} = {p}_wa[{lo}:{hi}]")
