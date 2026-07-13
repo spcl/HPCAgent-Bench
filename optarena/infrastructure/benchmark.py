@@ -87,28 +87,16 @@ class Benchmark(object):
         for k, v in parameters.items():
             data[k] = v
         if datatype is not None:
-            import ml_dtypes
-            # Both the numpy-style ("float16") and Precision-enum ("fp16")
-            # spellings map to the same realization; reduced precisions use
-            # ml_dtypes. Validation tolerances for each live in
+            # Resolve the datatype spelling through the SINGLE canonical mapping in
+            # ``optarena.precision`` rather than a parallel table: both the numpy-style
+            # ("float16") and Precision-enum ("fp16") spellings resolve, reduced
+            # precisions realize via ml_dtypes. Validation tolerances for each live in
             # ``Test.run`` (the per-precision ``_TOL`` table).
-            all_datatypes = {
-                "float64": np.float64,
-                "fp64": np.float64,
-                "float32": np.float32,
-                "fp32": np.float32,
-                "float16": np.float16,
-                "fp16": np.float16,
-                "bfloat16": ml_dtypes.bfloat16,
-                "bf16": ml_dtypes.bfloat16,
-                "float8_e4m3": ml_dtypes.float8_e4m3fn,
-                "fp8_e4m3": ml_dtypes.float8_e4m3fn,
-                "float8_e5m2": ml_dtypes.float8_e5m2,
-                "fp8_e5m2": ml_dtypes.float8_e5m2,
-            }
-            if datatype not in all_datatypes:
-                raise NotImplementedError("Datatype {} is not supported.".format(datatype))
-            data["datatype"] = all_datatypes[datatype]
+            from optarena.precision import numpy_dtype, precision_from_datatype
+            try:
+                data["datatype"] = numpy_dtype(precision_from_datatype(datatype))
+            except (KeyError, ValueError) as exc:
+                raise NotImplementedError("Datatype {} is not supported.".format(datatype)) from exc
         # Resolve a variant spec if the bench advertises any.
         variant_spec = None
         if "variants" in self.info and self.info["variants"]:
