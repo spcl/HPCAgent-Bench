@@ -7,10 +7,12 @@ variant) and emits one JSONL row per cell. Unsupported cells (precision
 not in the framework's :attr:`Framework.SUPPORTED_PRECISIONS`) are
 recorded with ``status="skip"`` rather than treated as failures.
 
-The actual per-framework execution still flows through the legacy
-:class:`optarena.infrastructure.Test` harness; the new registry is
-consulted only for metadata (precision support, mode, etc.). Migration
-of each framework off the legacy harness happens incrementally.
+Both the per-framework metadata (name list, supported precisions) and
+the execution come from the :mod:`optarena.infrastructure` harness:
+:data:`~optarena.infrastructure.framework.FRAMEWORK_META` is the
+descriptor table and
+:func:`~optarena.infrastructure.generate_framework` builds the runnable
+adapter, which also advertises its :attr:`Framework.SUPPORTED_PRECISIONS`.
 """
 import argparse
 import json
@@ -19,7 +21,6 @@ import time
 from typing import Any, Dict, List, Tuple
 
 from optarena.flags import Mode
-from optarena.framework import FRAMEWORKS
 from optarena.precision import DATATYPE_CHOICES, Precision
 from optarena.spec import BenchSpec, KERNELS, PRESET_CHOICES, preset_arg, resolve_preset, selector_slug
 
@@ -31,8 +32,14 @@ def _resolve_benchmarks(arg: str) -> List[str]:
 
 
 def _resolve_frameworks(arg: str) -> List[str]:
-    """Resolve the ``--framework`` argument against the registry."""
-    return sorted(FRAMEWORKS) if arg == "all" else [arg]
+    """Resolve the ``--framework`` argument against the descriptor table
+    (``all`` -> every known framework, else the single named one). The
+    ``FRAMEWORK_META`` import is deferred so ``--help`` never pays for the
+    heavy infrastructure package import."""
+    if arg != "all":
+        return [arg]
+    from optarena.infrastructure.framework import FRAMEWORK_META
+    return sorted(FRAMEWORK_META)
 
 
 def _resolve_precisions(arg: str, spec: BenchSpec) -> List[Precision]:
@@ -57,17 +64,16 @@ def _run_cell(short_name: str, framework_name: str, precision: Precision, varian
     execution. Records ``status="skip"`` when the precision is not in
     the framework's supported set.
     """
-    cls = FRAMEWORKS[framework_name]
-    fw = cls()
-    if not fw.supports(precision):
-        return dict(status="skip", reason=f"precision {precision.value} not supported")
-
     # Defer the heavy imports until execution to keep ``--help`` fast.
     from optarena.infrastructure import Benchmark, Test, generate_framework
     try:
         legacy_fw = generate_framework(framework_name)
     except Exception as exc:
         return dict(status="error", reason=f"framework load failed: {exc}")
+    # Precision-skip: the framework advertises the precisions it can execute
+    # (SUPPORTED_PRECISIONS); a request outside that set is a skip, not a failure.
+    if not legacy_fw.supports(precision):
+        return dict(status="skip", reason=f"precision {precision.value} not supported")
     try:
         np_fw = generate_framework("numpy")
     except Exception as exc:

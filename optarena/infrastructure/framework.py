@@ -9,9 +9,26 @@ import time
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 from optarena.infrastructure import Benchmark
+from optarena.precision import Precision
 
 np_float = None
 np_complex = None
+
+#: The IEEE floating-point pair every native / non-ml_dtypes-aware framework can
+#: execute. Frameworks whose type system does not recognise the ``ml_dtypes``
+#: extension dtypes (the C/C++/Fortran backends, Numba, Pythran, APPy) stay here.
+IEEE_PRECISIONS = frozenset({Precision.FP32, Precision.FP64})
+
+#: The full precision matrix (IEEE + fp16/bf16/fp8), executed by the frameworks
+#: that carry the low-precision dtypes end to end (numpy reference, JAX, TVM).
+ALL_PRECISIONS = frozenset({
+    Precision.FP64,
+    Precision.FP32,
+    Precision.FP16,
+    Precision.BF16,
+    Precision.FP8_E4M3,
+    Precision.FP8_E5M2,
+})
 
 
 class TimingResult(NamedTuple):
@@ -107,51 +124,61 @@ class Timer:
 #: Per-framework descriptors (replaces the old ``framework_info/*.json`` corpus
 #: -- internal infrastructure config, so it lives in code, not data files).
 #: ``arch`` is cpu/gpu; ``postfix`` selects the ``<module>_<postfix>.py`` impl
-#: file; ``prefix`` is the conventional import alias. The Framework subclass is
-#: resolved by :func:`_framework_class` (by name, NOT stored here) so there is
-#: no string-class dispatch.
-FRAMEWORK_META: Dict[str, Dict[str, str]] = {
+#: file; ``prefix`` is the conventional import alias; ``precisions`` is the set
+#: of :class:`~optarena.precision.Precision` values the framework can execute
+#: (the sweep driver records ``status="skip"`` for any precision not in it, via
+#: :meth:`Framework.supports`). The Framework subclass is resolved by
+#: :func:`_framework_class` (by name, NOT stored here) so there is no
+#: string-class dispatch.
+FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
     "numpy": {
         "full_name": "NumPy",
         "prefix": "np",
         "postfix": "numpy",
-        "arch": "cpu"
+        "arch": "cpu",
+        "precisions": ALL_PRECISIONS,
     },
     "numba": {
         "full_name": "Numba",
         "prefix": "nb",
         "postfix": "numba",
-        "arch": "cpu"
+        "arch": "cpu",
+        "precisions": IEEE_PRECISIONS,
     },
     "cupy": {
         "full_name": "CuPy",
         "prefix": "cp",
         "postfix": "cupy",
-        "arch": "gpu"
+        "arch": "gpu",
+        "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16, Precision.BF16}),
     },
     "jax": {
         "full_name": "Jax",
         "prefix": "jax",
         "postfix": "jax",
-        "arch": "cpu"
+        "arch": "cpu",
+        "precisions": ALL_PRECISIONS,
     },
     "pythran": {
         "full_name": "Pythran",
         "prefix": "pt",
         "postfix": "pythran",
-        "arch": "cpu"
+        "arch": "cpu",
+        "precisions": IEEE_PRECISIONS,
     },
     "dace_cpu": {
         "full_name": "DaCe CPU",
         "prefix": "dc",
         "postfix": "dace",
-        "arch": "cpu"
+        "arch": "cpu",
+        "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
     },
     "dace_gpu": {
         "full_name": "DaCe GPU",
         "prefix": "dc",
         "postfix": "dace",
-        "arch": "gpu"
+        "arch": "gpu",
+        "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
     },
     # Native frameworks: ONE source per (kernel, language, precision), generated
     # on demand from the numpy reference + gitignored; each builds its own
@@ -160,19 +187,22 @@ FRAMEWORK_META: Dict[str, Dict[str, str]] = {
         "full_name": "C (gcc)",
         "prefix": "cc",
         "postfix": "cpp",
-        "arch": "cpu"
+        "arch": "cpu",
+        "precisions": IEEE_PRECISIONS,
     },
     "llvm": {
         "full_name": "C++ (clang)",
         "prefix": "llvm",
         "postfix": "cpp",
-        "arch": "cpu"
+        "arch": "cpu",
+        "precisions": IEEE_PRECISIONS,
     },
     "fortran": {
         "full_name": "Fortran (gfortran)",
         "prefix": "fortran",
         "postfix": "cpp",
-        "arch": "cpu"
+        "arch": "cpu",
+        "precisions": IEEE_PRECISIONS,
     },
     # Polyhedral flag presets on the same generated C++ source (clang++ +
     # Polly / Pluto-OpenMP delta from optarena.flags).
@@ -180,37 +210,50 @@ FRAMEWORK_META: Dict[str, Dict[str, str]] = {
         "full_name": "C++ Polly (clang)",
         "prefix": "polly",
         "postfix": "cpp",
-        "arch": "cpu"
+        "arch": "cpu",
+        "precisions": IEEE_PRECISIONS,
     },
     "pluto": {
         "full_name": "C++ Pluto (clang)",
         "prefix": "pluto",
         "postfix": "cpp",
-        "arch": "cpu"
+        "arch": "cpu",
+        "precisions": IEEE_PRECISIONS,
     },
     "triton": {
         "full_name": "Triton",
         "prefix": "tr",
         "postfix": "triton",
-        "arch": "gpu"
+        "arch": "gpu",
+        # Triton has no fp64 path; it runs the low-precision matrix instead.
+        "precisions": frozenset({
+            Precision.FP32,
+            Precision.FP16,
+            Precision.BF16,
+            Precision.FP8_E4M3,
+            Precision.FP8_E5M2,
+        }),
     },
     "tvm": {
         "full_name": "tvm",
         "prefix": "tvm",
         "postfix": "tvm",
-        "arch": "gpu"
+        "arch": "gpu",
+        "precisions": ALL_PRECISIONS,
     },
     "tvm_cpu": {
         "full_name": "tvm_cpu",
         "prefix": "tvm_cpu",
         "postfix": "tvm_cpu",
-        "arch": "cpu"
+        "arch": "cpu",
+        "precisions": ALL_PRECISIONS,
     },
     "appy": {
         "full_name": "APPy",
         "prefix": "ap",
         "postfix": "appy",
-        "arch": "gpu"
+        "arch": "gpu",
+        "precisions": IEEE_PRECISIONS,
     },
 }
 
@@ -256,6 +299,17 @@ class Framework(object):
         # ``self.info`` keeps the legacy shape (simple_name + descriptor fields);
         # ``class`` is derived from the actual type for back-compat.
         self.info = {"simple_name": fname, "class": type(self).__name__, **FRAMEWORK_META[fname]}
+
+    @property
+    def SUPPORTED_PRECISIONS(self):
+        """The set of :class:`~optarena.precision.Precision` values this framework
+        can execute, read from its :data:`FRAMEWORK_META` descriptor. The sweep
+        driver skips any precision not in this set (``status="skip"``)."""
+        return self.info["precisions"]
+
+    def supports(self, precision: Precision) -> bool:
+        """``True`` when ``precision`` is in :attr:`SUPPORTED_PRECISIONS`."""
+        return precision in self.info["precisions"]
 
     def version(self) -> str:
         """ Returns the framework version. """
