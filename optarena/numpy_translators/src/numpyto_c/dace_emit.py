@@ -177,6 +177,131 @@ class _DesugarTernary(ast.NodeTransformer):
         return node
 
 
+class _DesugarOuter(ast.NodeTransformer):
+    """dace's frontend has no ``np.outer`` -- it treats the call as an untyped
+    Python callback (``Trying to operate on a callback return value with an
+    undefined type``). For 1-D operands ``np.outer(a, b)`` is exactly the
+    broadcast product, which dace lowers, so rewrite it to ``a[:, None] * b[None,
+    :]`` (gemver's rank-1 updates). The ufunc form ``np.add.outer`` is already
+    handled upstream by the shared python-backend desugar; this covers the bare
+    ``np.outer`` it leaves untouched."""
+
+    def visit_Call(self, node: ast.Call):
+        self.generic_visit(node)
+        if (isinstance(node.func, ast.Attribute) and node.func.attr == "outer"
+                and isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy")
+                and len(node.args) == 2 and not node.keywords):
+            a, b = ast.unparse(node.args[0]), ast.unparse(node.args[1])
+            new = ast.parse(f"({a})[:, None] * ({b})[None, :]", mode="eval").body
+            return ast.copy_location(new, node)
+        return node
+
+
+class _DesugarReverseSlice(ast.NodeTransformer):
+    """dace rejects a negative-stride subscript (``Negative strides are not
+    supported in subscripts. Please use a Map scope``). A full reverse
+    ``x[::-1]`` is exactly ``np.flip(x)``, which dace lowers (even on a dynamic
+    slice, ``np.flip(r[:k])``), so rewrite it. durbin's ``r[:k][::-1]`` /
+    ``y[:k][::-1]``. Runs AFTER the shared python-backend desugar, which lowers
+    ``np.flip`` back to ``x[::-1]`` for pythran -- so this re-lifts every reverse
+    (original or desugar-introduced) to the form dace accepts."""
+
+    @staticmethod
+    def _is_neg_one(node: ast.AST) -> bool:
+        # ``-1`` parses to ``UnaryOp(USub, Constant(1))``, not ``Constant(-1)``.
+        if isinstance(node, ast.Constant):
+            return node.value == -1
+        return (isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub)
+                and isinstance(node.operand, ast.Constant) and node.operand.value == 1)
+
+    def visit_Subscript(self, node: ast.Subscript):
+        self.generic_visit(node)
+        sl = node.slice
+        if isinstance(sl, ast.Slice) and sl.lower is None and sl.upper is None and self._is_neg_one(sl.step):
+            flip = ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="flip", ctx=ast.Load()),
+                            args=[node.value],
+                            keywords=[])
+            return ast.copy_location(flip, node)
+        return node
+
+
+class _DesugarBroadcastAugAssign(ast.NodeTransformer):
+    """An in-place augmented assign that BROADCASTS a lower-rank operand into a
+    whole array (``data -= mean``: ``data`` is ``[N, M]``, ``mean`` is ``[M]``)
+    parses, but dace builds an invalid SDFG -- the reduction edge subset ``[0:M]``
+    cannot map onto ``data[0:N, 0:M]`` (``Dimensionality mismatch between src/dst
+    subsets``). The equivalent out-of-place binop written back through a full-array
+    store lowers cleanly (covariance2's ``centered = data - mean`` builds), so
+    rewrite ``A <op>= b`` -> ``A[:] = A <op> b`` for a whole-array (bare Name)
+    target. Semantically identical for a same-rank operand too, so it is safe to
+    apply to every array-target augassign (covariance / correlation ``data -=
+    mean``)."""
+
+    def __init__(self, array_names: set):
+        self.array_names = set(array_names)
+
+    def visit_AugAssign(self, node: ast.AugAssign):
+        self.generic_visit(node)
+        if not (isinstance(node.target, ast.Name) and node.target.id in self.array_names):
+            return node
+        load = ast.Name(id=node.target.id, ctx=ast.Load())
+        binop = ast.BinOp(left=load, op=node.op, right=node.value)
+        store = ast.Subscript(value=ast.Name(id=node.target.id, ctx=ast.Load()),
+                              slice=ast.Slice(lower=None, upper=None, step=None),
+                              ctx=ast.Store())
+        return ast.copy_location(ast.Assign(targets=[store], value=binop), node)
+
+
+class _DesugarChainedAssign(ast.NodeTransformer):
+    """dace cannot codegen a multi-target assignment whose targets are slices
+    (``cov[i:M, i] = cov[i, i:M] = rhs`` -> ``Write slicing not implemented``).
+    Split it into a single evaluation of ``rhs`` into a temp followed by one
+    assignment per target (covariance / correlation's symmetric fill). Semantics
+    are preserved: Python evaluates the chained RHS once and assigns left-to-right,
+    which is exactly ``t = rhs; a = t; b = t`` -- and on any overlap the last
+    target still wins."""
+
+    def __init__(self):
+        self.ctr = 0
+
+    def visit_Assign(self, node: ast.Assign):
+        self.generic_visit(node)
+        if len(node.targets) <= 1:
+            return node
+        tmp = f"__optarena_chain{self.ctr}"
+        self.ctr += 1
+        stmts: List[ast.stmt] = [ast.Assign(targets=[ast.Name(id=tmp, ctx=ast.Store())], value=node.value)]
+        for tgt in node.targets:
+            stmts.append(ast.Assign(targets=[tgt], value=ast.Name(id=tmp, ctx=ast.Load())))
+        for s in stmts:
+            ast.copy_location(s, node)
+        return stmts
+
+
+class _SubstituteNames(ast.NodeTransformer):
+    """Replace every load of a name in ``mapping`` with a copy of its expression."""
+
+    def __init__(self, mapping: Dict[str, ast.AST]):
+        self.mapping = mapping
+
+    def visit_Name(self, node: ast.Name):
+        if isinstance(node.ctx, ast.Load) and node.id in self.mapping:
+            return ast.copy_location(copy.deepcopy(self.mapping[node.id]), node)
+        return node
+
+
+class _DropAliasAssign(ast.NodeTransformer):
+    """Drop ``<name> = ...`` for each inlined alias name (its uses are substituted)."""
+
+    def __init__(self, names):
+        self.names = set(names)
+
+    def visit_Assign(self, node: ast.Assign):
+        if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in self.names:
+            return None
+        return node
+
+
 #: numpy allocators whose FIRST argument is a shape tuple (so the identifiers inside it
 #: are array DIMENSIONS that dace requires to be symbolic, not runtime scalars).
 _ALLOC_FUNCS = frozenset({"zeros", "empty", "ones"})
@@ -228,6 +353,39 @@ def _scan_size_assigns(fn_ast: ast.AST, targets: set):
                     order.append(nm)
     reassigned = {nm for nm, c in counts.items() if c > 1}
     return first_rhs, order, reassigned
+
+
+def _inline_symbol_aliases(fn_ast: ast.AST, symbols: set, known: set) -> ast.AST:
+    """Inline a shape scalar that is defined as a pure SYMBOLIC expression over the
+    already-declared dc.symbols, instead of promoting it to a fresh symbol.
+
+    A column reduction lowers ``data.mean(axis=0)`` to an accumulator sized by a
+    fresh dim ``__rd0_d1``, with a body def ``__rd0_d1 = M`` (after
+    :class:`_ShapeToSymbol` resolves ``data.shape[1]``). If that name is promoted
+    to its OWN ``dc.symbol``, the frontend cannot prove ``__rd0_d1 == M``, so the
+    later ``data -= mean`` (``mean`` shaped ``[__rd0_d1]``) fails to broadcast into
+    ``[N, M]`` (covariance / covariance2 / correlation). Substituting the RHS makes
+    the transient ``np.empty((M,))`` -- expressed in the arrays' OWN symbols -- and
+    the broadcast is provable. Only single-assignment shape idents whose def is a
+    pure symbol expression qualify; a runtime-derived size (gmres
+    ``m = min(max_iter, n)`` with a scalar ``max_iter``) is not pure-symbolic, so it
+    is left for :func:`_plan_size_promotion` to bind as a symbol."""
+    shape_idents = _shape_ident_candidates(fn_ast, known)
+    if not shape_idents:
+        return fn_ast
+    first_rhs, order, reassigned = _scan_size_assigns(fn_ast, shape_idents)
+    alias: Dict[str, ast.AST] = {}
+    for nm in order:
+        if nm in reassigned:
+            continue
+        if _is_symbol_expr(first_rhs[nm], symbols | set(alias)):
+            alias[nm] = _SubstituteNames(alias).visit(copy.deepcopy(first_rhs[nm]))
+    if not alias:
+        return fn_ast
+    fn_ast = _SubstituteNames(alias).visit(fn_ast)
+    fn_ast = _DropAliasAssign(alias).visit(fn_ast)
+    ast.fix_missing_locations(fn_ast)
+    return fn_ast
 
 
 def _plan_size_promotion(fn_ast: ast.AST, known: set):
@@ -364,6 +522,19 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
     # dace's frontend has no conditional-expression RHS: lower ``t = A if C else B`` to
     # an if/else statement (the divide-by-zero guards in the lowered solves).
     fn_ast = _DesugarTernary().visit(fn_ast)
+    # dace has no ``np.outer`` (untyped callback) and rejects a negative-stride
+    # subscript. Rewrite ``np.outer(a, b)`` -> ``a[:, None] * b[None, :]`` (gemver) and
+    # ``x[::-1]`` -> ``np.flip(x)`` (durbin). Runs after the shared python-backend
+    # desugar, which lowers np.flip BACK to ``x[::-1]`` for pythran.
+    fn_ast = _DesugarOuter().visit(fn_ast)
+    fn_ast = _DesugarReverseSlice().visit(fn_ast)
+    # dace cannot codegen a chained slice assignment (``a[s1] = a[s2] = rhs``):
+    # evaluate rhs into a temp, then assign each target (covariance symmetric fill).
+    fn_ast = _DesugarChainedAssign().visit(fn_ast)
+    # A broadcasting in-place augassign into a whole array (``data -= mean``) builds an
+    # invalid SDFG; rewrite it to an explicit write-back binop (covariance/correlation).
+    fn_ast = _DesugarBroadcastAugAssign(set(arrays)).visit(fn_ast)
+    ast.fix_missing_locations(fn_ast)
     # A logical sparse ``A @ x`` lowered to CSR loops leaves ``<acc> =
     # __optarena_zeros__()`` markers for its fixed-shape accumulators -- turn them into
     # ``np.zeros`` / ``np.ones`` (per the recorded fill kind) so the @dc.program
@@ -377,6 +548,12 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
     # ``arr.shape[k]`` to the symbolic dimension and drop any recompute of a size
     # symbol (``M = A_indptr.shape[0] - 1``), which is redundant + illegal in dace.
     fn_ast = _ShapeToSymbol(arr_shapes).visit(fn_ast)
+    # A shape scalar that is just a pure symbolic alias of an existing dc.symbol (a
+    # reduction's ``__rd0_d1 = M``) is INLINED to that symbol, so the transient it sizes
+    # is expressed in the arrays' own symbols and the frontend can prove the broadcast
+    # (covariance ``data -= mean``) -- rather than promoting it to a fresh symbol dace
+    # cannot prove equal to ``M``.
+    fn_ast = _inline_symbol_aliases(fn_ast, set(symbol_names), set(arrays) | set(scalars) | set(symbol_names))
     # dace forbids a data-dependent (runtime-scalar) array shape, but the lowered Krylov
     # workspaces have body-computed dims (gmres ``Q = zeros((n, m + 1))`` with
     # ``m = min(max_iter, n)``). Promote those size scalars to dc.symbols the caller

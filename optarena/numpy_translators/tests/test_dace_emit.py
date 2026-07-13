@@ -279,17 +279,19 @@ def test_split_reassigned_size_keeps_symbol_in_alloc_scalar_elsewhere():
 
 
 def test_gmres_emits_promoted_symbols_ternary_and_split():
-    """End-to-end: the lowered gmres emit declares n / m as dc.symbols, records their
+    """End-to-end: the lowered gmres emit declares m as a dc.symbol, records its
     binding recipe, seeds the m_iter runtime count, keeps the symbol in the workspace
-    allocation, and carries no residual conditional-expression RHS."""
+    allocation, and carries no residual conditional-expression RHS. ``n`` is a pure
+    alias of ``N`` (``n = N``), so it is INLINED to ``N`` rather than promoted to its
+    own symbol -- only the genuinely-derived ``m = min(max_iter, N)`` is promoted."""
     try:
         src = emit_dace(kir_for("gmres", config="csr", do_lower=True))
     except Exception as exc:  # noqa: BLE001 -- gmres/lowering unavailable in this checkout
         pytest.skip(f"gmres lowering unavailable: {exc}")
-    assert "nnz, N, max_iter, n, m = " in src  # n, m promoted to symbols
-    assert "__optarena_symbol_defs__ = [('n', 'N'), ('m', 'min(max_iter, n)')]" in src
+    assert "nnz, N, max_iter, m = " in src  # m promoted; n inlined to N
+    assert "__optarena_symbol_defs__ = [('m', 'min(max_iter, N)')]" in src
     assert "m_iter = m" in src  # runtime count seeded
-    assert "np.zeros((n, m + 1), dtype=dc_float)" in src  # workspace keeps the symbol
+    assert "np.zeros((N, m + 1), dtype=dc_float)" in src  # workspace keeps the symbol
     assert "for k in range(m_iter):" in src  # iteration uses the runtime count
     ast.parse(src)  # emitted module is valid Python
     prog = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef))
