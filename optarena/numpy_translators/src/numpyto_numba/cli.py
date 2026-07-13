@@ -24,7 +24,7 @@ def cmd_emit(args: argparse.Namespace) -> int:
     # without bench_info we fall back to a pure verbatim emit.
     kir = None
     if args.bench_info is not None:
-        from numpyto_c.frontend import parse_kernel
+        from numpyto_common.frontend import parse_kernel
         kir = parse_kernel(args.kernel, args.bench_info, config=args.config)
     out_src = emit_numba(src, flavor=flavor, fastmath=args.fastmath, kir=kir)
     if args.sanitize:

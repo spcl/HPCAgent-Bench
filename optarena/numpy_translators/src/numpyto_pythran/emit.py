@@ -10,7 +10,7 @@ import ast
 import copy
 from typing import Dict, List
 
-from numpyto_c.ir import ArrayDesc, KernelIR
+from numpyto_common.ir import ArrayDesc, KernelIR
 
 
 class _SubstitutePrecisionGlobals(ast.NodeTransformer):
@@ -283,7 +283,7 @@ def emit_pythran(numpy_source: str, kir: KernelIR) -> str:
     """Translate one numpy kernel source into its Pythran sibling.
 
     :param numpy_source: contents of ``<short>_numpy.py``.
-    :param kir: parsed :class:`numpyto_c.ir.KernelIR` (used to build
+    :param kir: parsed :class:`numpyto_common.ir.KernelIR` (used to build
         the ``#pythran export`` argument-type list).
     :returns: Python source with the ``#pythran export`` magic
         comment prepended.

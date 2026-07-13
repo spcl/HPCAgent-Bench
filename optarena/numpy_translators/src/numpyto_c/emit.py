@@ -22,7 +22,7 @@ import math
 import re
 from typing import Dict, List, Optional, Set, Tuple
 
-from numpyto_c.ir import ArrayDesc, KernelIR
+from numpyto_common.ir import ArrayDesc, KernelIR
 from numpyto_common import dtypes, operators, parallelism
 from numpyto_common.emitter import BaseEmitter
 from numpyto_common.frontend import _names_used_as_int

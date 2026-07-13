@@ -8,7 +8,7 @@ import ast
 
 import numpy as np
 
-from numpyto_c import lib_nodes as ln
+from numpyto_common import lib_nodes as ln
 
 
 def _is_alloc_marker(s):

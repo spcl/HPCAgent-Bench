@@ -16,7 +16,7 @@ import ast
 
 import pytest
 
-from numpyto_c.lib_nodes import _read_axis_keepdims, expand_sum
+from numpyto_common.lib_nodes import _read_axis_keepdims, expand_sum
 
 
 def _call_args(src: str):

@@ -146,8 +146,8 @@ def test_any_parallelizable_false_for_scatter_only():
 
 # --- emit_c_omp (end to end: parse -> lower -> emit) -----------------------------------------------
 def _kir(src, args, shapes, dtypes=None, params=None):
-    from numpyto_c.frontend import parse_kernel
-    from numpyto_c.lowering import lower
+    from numpyto_common.frontend import parse_kernel
+    from numpyto_common.lowering import lower
     d = pathlib.Path(tempfile.mkdtemp())
     (d / "k_numpy.py").write_text(src)
     bi = {

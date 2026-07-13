@@ -1,6 +1,6 @@
 """Fortran 2008 emitter built on NumpyToC's IR.
 
-Walks the same :class:`numpyto_c.ir.KernelIR` that NumpyToC produces
+Walks the same :class:`numpyto_common.ir.KernelIR` that NumpyToC produces
 and emits a self-contained Fortran subroutine + timing prelude. The
 subroutine is exported with ``bind(C, name=...)`` so the harness
 ctypes call links straight against it -- same convention as the C
@@ -23,7 +23,7 @@ import math
 import re
 from typing import Dict, List, Optional, Set, Tuple
 
-from numpyto_c.ir import ArrayDesc, KernelIR
+from numpyto_common.ir import ArrayDesc, KernelIR
 from numpyto_common import dtypes, operators, parallelism
 from numpyto_common.emitter import BaseEmitter
 from numpyto_common.frontend import pure_int_arith
@@ -2032,7 +2032,7 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, parallel: bool = 
     # Fortran requires integer parameters used inside array bounds to
     # appear declared BEFORE the array declarations -- reorder the
     # declaration block (NOT the parameter list itself, which the C
-    # ABI fixes via :func:`numpyto_c.frontend.parse_kernel`) so symbols
+    # ABI fixes via :func:`numpyto_common.frontend.parse_kernel`) so symbols
     # and integer scalars come first.
     sym_decls: List[str] = []
     sca_int_decls: List[str] = []

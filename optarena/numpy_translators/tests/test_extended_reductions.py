@@ -11,7 +11,7 @@ import ast
 
 import pytest
 
-from numpyto_c.lib_nodes import (
+from numpyto_common.lib_nodes import (
     expand_var, expand_any, expand_all, expand_count_nonzero,
     expand_argmax, expand_argmin, expand_linalg_norm,
 )

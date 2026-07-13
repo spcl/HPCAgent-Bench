@@ -1,6 +1,6 @@
 """Numerical validation of every sparse matvec / matmul dispatcher.
 
-Each dispatcher in ``numpyto_c.sparse_emit`` emits a numpy-style loop
+Each dispatcher in ``numpyto_common.sparse_emit`` emits a numpy-style loop
 nest (``for`` loops + subscripts). We exec that AST directly against
 numpy/scipy buffers and compare to scipy's reference product. This
 validates the dispatcher ALGORITHM independent of the C/Fortran emit
@@ -16,7 +16,7 @@ import pytest
 
 sp = pytest.importorskip("scipy.sparse")
 
-from numpyto_c import sparse_emit as se
+from numpyto_common import sparse_emit as se
 
 
 def _run(stmts, scope):

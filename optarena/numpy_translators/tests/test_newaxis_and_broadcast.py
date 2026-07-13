@@ -14,7 +14,7 @@ points straight at the failing rule.
 import ast
 
 
-from numpyto_c.lib_nodes import _iter_extent_of, _scalarize_at_iters
+from numpyto_common.lib_nodes import _iter_extent_of, _scalarize_at_iters
 
 
 def _expr(src: str) -> ast.expr:

@@ -15,7 +15,7 @@ import tempfile
 
 import pytest
 
-from numpyto_c.frontend import parse_kernel
+from numpyto_common.frontend import parse_kernel
 from numpyto_common.lowering import (LoweringContext, _assert_lowering_invariants, _INVARIANT_ENV, lower)
 
 _SRC = ("import numpy as np\n"

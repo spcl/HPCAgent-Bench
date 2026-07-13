@@ -19,9 +19,9 @@ import sys
 
 from numpyto_c.bindings import emit_binding, emit_pluto_binding
 from numpyto_c.emit import emit_c, emit_c_omp, emit_cpp, emit_cpp_omp, emit_pluto
-from numpyto_c.frontend import parse_kernel
-from numpyto_c.ir import apply_precision
-from numpyto_c.lowering import lower
+from numpyto_common.frontend import parse_kernel
+from numpyto_common.ir import apply_precision
+from numpyto_common.lowering import lower
 from numpyto_common.emit_io import write_generated
 from numpyto_common.naming import native_base
 

@@ -16,7 +16,7 @@ import json
 import pathlib
 from typing import Any, Dict, List
 
-from numpyto_c.ir import KernelIR
+from numpyto_common.ir import KernelIR
 from numpyto_common import dtypes
 
 

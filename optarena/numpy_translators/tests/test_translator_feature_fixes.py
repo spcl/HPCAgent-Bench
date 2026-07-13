@@ -22,7 +22,7 @@ import ast
 import numpy as np
 import pytest
 
-from numpyto_c.lib_nodes import expand_arange, expand_fromfunction
+from numpyto_common.lib_nodes import expand_arange, expand_fromfunction
 from numpyto_common.frontend import _shape_from_constructor
 from numpyto_common.lowering import (_AstypeRewriter, _NpAliasRewriter, _ScatterAtRewriter, _SubscriptifyNames)
 
@@ -166,7 +166,7 @@ def test_var_is_scalar_reduction():
     """``np.var`` must be hoistable as a SCALAR temp (srad nests it in a
     division). Mirrors ``np.std`` -- both go through ``_expand_var_or_std``."""
     import inspect
-    from numpyto_c.lib_nodes import _CallHoister
+    from numpyto_common.lib_nodes import _CallHoister
     src = inspect.getsource(_CallHoister.visit_Call)
     # The scalar-classification set lists var alongside std/mean/sum.
     assert '"var"' in src and '"std"' in src
@@ -308,7 +308,7 @@ def test_plain_array_still_subscripts_iter():
 
 
 def _ext(src, table):
-    from numpyto_c.lib_nodes import _iter_extent_of
+    from numpyto_common.lib_nodes import _iter_extent_of
     e = _iter_extent_of(ast.parse(src, mode="eval").body, table)
     return None if e is None else tuple(ast.unparse(x) for x in e)
 
@@ -510,7 +510,7 @@ def test_method_copy_on_bare_name_still_lowers():
 
 
 def test_expand_copy_accepts_subscript_source():
-    from numpyto_c.lib_nodes import expand_copy
+    from numpyto_common.lib_nodes import expand_copy
     stmts = expand_copy(ast.Name(id="dp", ctx=ast.Store()), [_expr("grid[0]")], {"grid": ("R", "C"), "dp": ("C", )})
     mod = ast.fix_missing_locations(ast.Module(body=stmts, type_ignores=[]))
     body = ast.unparse(mod).replace(" ", "")
@@ -1355,7 +1355,7 @@ def test_issubdtype_folds_from_known_dtype(dtype, category, vanishes):
 def test_asarray_lowers_like_copy_for_c():
     """``np.asarray`` / ``np.ascontiguousarray`` of a materialised array lower like
     ``np.copy`` (a shape-preserving copy) in the C pipeline (dbcsr / minife)."""
-    from numpyto_c.lib_nodes import NP_CALL_EXPANDERS, expand_copy
+    from numpyto_common.lib_nodes import NP_CALL_EXPANDERS, expand_copy
     assert NP_CALL_EXPANDERS[("np", "asarray")] is expand_copy
     assert NP_CALL_EXPANDERS[("np", "ascontiguousarray")] is expand_copy
 

@@ -24,7 +24,7 @@ import copy
 import re
 from typing import Dict, List
 
-from numpyto_c.ir import KernelIR
+from numpyto_common.ir import KernelIR
 from numpyto_common.numpy_desugar import desugar_for_python_backend
 
 _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
