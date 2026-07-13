@@ -206,6 +206,86 @@ class _EllipsisToSlice(ast.NodeTransformer):
         return node
 
 
+class DeadCodePrune(ast.NodeTransformer):
+    """Drop every top-level function NOT reachable from the exported kernel entry.
+
+    Pythran compiles the WHOLE module (every ``def``), so a helper the kernel
+    never calls still has to satisfy pythran's subset. The fv3_dycore port keeps
+    the full FV3 call tree in one file (118 functions) but exports only the
+    ``finite_volume_transport`` leaf (21 reachable): the unexported drivers
+    (``dyn_core_gt4`` / ``fv_dynamics_gt4``) use ``**dyn_params`` keyword-unpacking
+    and string-keyed dict state that pythran flatly rejects (``Call with kwargs
+    not supported``) -- dead code that never runs in the export's closure.
+
+    Reachability is computed over ANY ``Name`` reference (not just ``Call``
+    targets), so a helper passed as a first-class value is still kept -- only a
+    function whose name never appears in the live closure is removed. Non-function
+    module statements (imports, the ``P1``/``A1`` PPM constants) are always kept.
+    A no-op when the entry is absent from the module or the whole module is
+    already reachable."""
+
+    def __init__(self, entry: str):
+        self.entry = entry
+
+    def visit_Module(self, node: ast.Module) -> ast.AST:
+        funcs = {n.name: n for n in node.body if isinstance(n, ast.FunctionDef)}
+        if self.entry not in funcs:
+            return node
+        reachable: set = set()
+        stack = [self.entry]
+        while stack:
+            name = stack.pop()
+            if name in reachable:
+                continue
+            reachable.add(name)
+            for sub in ast.walk(funcs[name]):
+                if isinstance(sub, ast.Name) and sub.id in funcs and sub.id not in reachable:
+                    stack.append(sub.id)
+        node.body = [n for n in node.body if not (isinstance(n, ast.FunctionDef) and n.name not in reachable)]
+        return node
+
+
+class KwargsToPositional(ast.NodeTransformer):
+    """Rewrite a keyword-argument call to a LOCAL helper into a purely positional
+    call (pythran: ``Call with kwargs not supported``).
+
+    Every other backend accepts keyword args; only pythran needs the flattening.
+    The callee's def signature orders the keyword VALUES and fills any skipped
+    default parameter (fv3's ``fx_calc_full(..., neg=True)`` -> ``fx_calc_full(...,
+    True)``). Calls that cannot be resolved statically are left untouched for
+    pythran to report rather than mis-lowered: a ``**dict`` / ``*seq`` unpacking
+    (dict contents are runtime), an unknown keyword, or a required parameter left
+    unfilled. Only calls whose target is a module-local ``def`` are considered --
+    ``np.zeros(..., dtype=...)`` and other library calls keep their keywords."""
+
+    def __init__(self, signatures: Dict[str, tuple]):
+        # name -> (param_names, {param_name: default_ast})
+        self.signatures = signatures
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        self.generic_visit(node)
+        f = node.func
+        if not (isinstance(f, ast.Name) and f.id in self.signatures and node.keywords):
+            return node
+        if any(k.arg is None for k in node.keywords) or any(isinstance(a, ast.Starred) for a in node.args):
+            return node  # ``**dict`` / ``*seq`` -- not statically resolvable
+        params, defaults = self.signatures[f.id]
+        provided = {k.arg: k.value for k in node.keywords}
+        new_args = list(node.args)
+        for p in params[len(node.args):]:
+            if p in provided:
+                new_args.append(provided.pop(p))
+            elif p in defaults:
+                new_args.append(copy.deepcopy(defaults[p]))
+            else:
+                return node  # a positional-or-keyword param with no value -> leave as-is
+        if provided:
+            return node  # leftover keyword(s) not in the signature -> leave for pythran
+        node.args = new_args
+        node.keywords = []
+        return node
+
+
 def _clean_for_pythran(source: str, kir: KernelIR) -> str:
     """Make a verbatim kernel module pythran-compilable: DROP imports pythran
     cannot resolve (``optarena.infrastructure.framework``, ``scipy.*`` -- the
@@ -228,11 +308,25 @@ def _clean_for_pythran(source: str, kir: KernelIR) -> str:
         return False
 
     tree.body = [n for n in tree.body if not _unresolvable(n)]
+    # Drop functions the exported kernel never reaches BEFORE the remaining passes
+    # run -- the fv3_dycore drivers pythran cannot parse (``**dyn_params``,
+    # string-keyed dict state) are dead code relative to the export entry.
+    tree = DeadCodePrune(kir.kernel_name).visit(tree)
     tree = _SubstitutePrecisionGlobals(subs).visit(tree)
     local_funcs = {n.name for n in tree.body if isinstance(n, ast.FunctionDef)}
     tree = _PythranMaterialize(local_funcs).visit(tree)
     tree = _NanAwareMinMaxSign().visit(tree)
     tree = _EllipsisToSlice({a.name: len(a.shape) for a in kir.arrays}).visit(tree)
+    # Flatten keyword-argument calls to the surviving local helpers into positional
+    # form (pythran rejects call kwargs); library calls keep their keywords.
+    signatures = {}
+    for n in tree.body:
+        if isinstance(n, ast.FunctionDef):
+            params = [a.arg for a in n.args.args]
+            da = n.args.defaults
+            defaults = {p: d for p, d in zip(params[len(params) - len(da):], da)} if da else {}
+            signatures[n.name] = (params, defaults)
+    tree = KwargsToPositional(signatures).visit(tree)
     _rename_reserved_params(tree, kir.kernel_name)
     ast.fix_missing_locations(tree)
     src = ast.unparse(tree)
