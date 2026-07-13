@@ -17,10 +17,8 @@ All three are :class:`Optimizer`\\s under one contract, so the leaderboard treat
 timed bracket -- the analogue of the wall-clock an agent spends producing C++.
 
 * :class:`OptimizeBudget` -- the single source of "how much search", resolved from
-  ``OPTARENA_OPTIMIZE_BUDGET`` (a scale name or an integer; the legacy
-  ``OPTARENA_TUNE_BUDGET`` is still honoured) and exposing the per-backend caps
-  (TVM trials, Triton config cap). The legacy per-framework env vars remain
-  honoured as overrides for back-compat.
+  ``OPTARENA_OPTIMIZE_BUDGET`` (a scale name or an integer) and exposing the
+  per-backend caps (TVM trials, Triton config cap).
 * :class:`Optimizer` -- ``optimize(program, budget) -> optimized program``. A
   framework that does not search inherits the identity optimizer
   (:meth:`optarena.infrastructure.framework.Framework.optimize` default).
@@ -54,11 +52,9 @@ class OptimizeBudget:
 
     @classmethod
     def from_env(cls, scale: Optional[str] = None) -> "OptimizeBudget":
-        """Resolve the budget from ``scale`` or ``$OPTARENA_OPTIMIZE_BUDGET`` (the
-        legacy ``$OPTARENA_TUNE_BUDGET`` is still honoured) -- a named scale, or a
-        bare integer that caps both backends explicitly."""
-        raw = scale or os.environ.get("OPTARENA_OPTIMIZE_BUDGET") or os.environ.get(
-            "OPTARENA_TUNE_BUDGET", DEFAULT_SCALE)
+        """Resolve the budget from ``scale`` or ``$OPTARENA_OPTIMIZE_BUDGET`` -- a
+        named scale, or a bare integer that caps both backends explicitly."""
+        raw = scale or os.environ.get("OPTARENA_OPTIMIZE_BUDGET") or DEFAULT_SCALE
         if raw in SCALES:
             trials, configs = SCALES[raw]
             return cls(scale=raw, trials=trials, configs=configs)
@@ -70,25 +66,12 @@ class OptimizeBudget:
             return cls(scale=DEFAULT_SCALE, trials=trials, configs=configs)
 
     def tvm_trials(self) -> int:
-        """MetaSchedule trial count. The legacy
-        ``OPTARENA_TVM_METASCHEDULE_TRIALS`` wins when set (back-compat)."""
-        raw = os.environ.get("OPTARENA_TVM_METASCHEDULE_TRIALS")
-        if raw in SCALES:
-            return SCALES[raw][0]
-        if raw and raw.lstrip("-").isdigit():
-            return int(raw)
+        """MetaSchedule trial count (the ``trials`` field of this budget)."""
         return self.trials
 
     def triton_config_cap(self) -> int:
-        """Triton autotune-config cap. The legacy
-        ``OPTARENA_TRITON_AUTOTUNE_SIZE`` / ``OPTARENA_TRITON_AUTOTUNE_N`` win when
-        set (back-compat); ``full`` removes the cap."""
-        size = os.environ.get("OPTARENA_TRITON_AUTOTUNE_SIZE")
-        if size in SCALES:
-            return SCALES[size][1]
-        cap = os.environ.get("OPTARENA_TRITON_AUTOTUNE_N")
-        if cap and cap.isdigit():
-            return int(cap)
+        """Triton autotune-config cap (the ``configs`` field of this budget);
+        the ``full`` scale removes the cap."""
         return self.configs
 
 

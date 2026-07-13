@@ -37,10 +37,8 @@ def metaschedule_trials() -> int:
     """How many tuning trials to give ``tune_tir`` per task.
 
     Delegates to the unified optimize budget (:class:`optarena.optimize.\
-OptimizeBudget`) so TVM and Triton share ONE knob (``$OPTARENA_OPTIMIZE_BUDGET``);
-    the legacy ``$OPTARENA_TVM_METASCHEDULE_TRIALS`` is still honoured by the
-    budget for back-compat and is read on every call (so a test can change it
-    mid-process)."""
+OptimizeBudget`) so TVM and Triton share ONE knob (``$OPTARENA_OPTIMIZE_BUDGET``),
+    read on every call so a test can change it mid-process."""
     from optarena.optimize import OptimizeBudget
     return OptimizeBudget.from_env().tvm_trials()
 

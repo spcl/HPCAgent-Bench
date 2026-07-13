@@ -24,37 +24,22 @@ def test_budget_scales():
 
 def test_env_default(monkeypatch):
     monkeypatch.delenv("OPTARENA_OPTIMIZE_BUDGET", raising=False)
-    monkeypatch.delenv("OPTARENA_TUNE_BUDGET", raising=False)
     assert OptimizeBudget.from_env().scale == "small"
     monkeypatch.setenv("OPTARENA_OPTIMIZE_BUDGET", "full")
     assert OptimizeBudget.from_env().scale == "full"
 
 
-def test_legacy_tune_budget_env_still_honoured(monkeypatch):
-    # The old $OPTARENA_TUNE_BUDGET keeps working (back-compat) when the new one
-    # is unset; the new name wins when both are set.
-    monkeypatch.delenv("OPTARENA_OPTIMIZE_BUDGET", raising=False)
-    monkeypatch.setenv("OPTARENA_TUNE_BUDGET", "full")
-    assert OptimizeBudget.from_env().scale == "full"
-    monkeypatch.setenv("OPTARENA_OPTIMIZE_BUDGET", "small")
-    assert OptimizeBudget.from_env().scale == "small"
-
-
-def test_legacy_env_overrides(monkeypatch):
-    # The legacy per-framework knobs still win over the unified default.
-    b = OptimizeBudget.from_env("small")
-    monkeypatch.setenv("OPTARENA_TVM_METASCHEDULE_TRIALS", "200")
-    assert b.tvm_trials() == 200
-    monkeypatch.setenv("OPTARENA_TVM_METASCHEDULE_TRIALS", "full")
-    assert b.tvm_trials() == SCALES["full"][0]
-    monkeypatch.delenv("OPTARENA_TVM_METASCHEDULE_TRIALS", raising=False)
-    assert b.tvm_trials() == SCALES["small"][0]
-
-    monkeypatch.setenv("OPTARENA_TRITON_AUTOTUNE_SIZE", "full")
-    assert b.triton_config_cap() == SCALES["full"][1]
-    monkeypatch.delenv("OPTARENA_TRITON_AUTOTUNE_SIZE", raising=False)
-    monkeypatch.setenv("OPTARENA_TRITON_AUTOTUNE_N", "7")
-    assert b.triton_config_cap() == 7
+def test_backend_caps_delegate_to_budget_fields():
+    # tvm_trials() / triton_config_cap() report the budget's own fields -- the ONE
+    # knob drives both backends, with no per-framework env overrides.
+    small = OptimizeBudget.from_env("small")
+    assert small.tvm_trials() == small.trials == SCALES["small"][0]
+    assert small.triton_config_cap() == small.configs == SCALES["small"][1]
+    full = OptimizeBudget.from_env("full")
+    assert full.tvm_trials() == SCALES["full"][0]
+    assert full.triton_config_cap() == SCALES["full"][1]
+    custom = OptimizeBudget(scale="custom", trials=42, configs=9)
+    assert custom.tvm_trials() == 42 and custom.triton_config_cap() == 9
 
 
 def test_identity_optimizer_returns_program_unchanged():
@@ -91,7 +76,6 @@ def test_tvm_and_triton_are_optimizers():
 
 def test_metaschedule_trials_delegates_to_budget(monkeypatch):
     from optarena.infrastructure.tvm_cpu_framework import metaschedule_trials
-    monkeypatch.delenv("OPTARENA_TVM_METASCHEDULE_TRIALS", raising=False)
     monkeypatch.setenv("OPTARENA_OPTIMIZE_BUDGET", "full")
     assert metaschedule_trials() == SCALES["full"][0]
     monkeypatch.setenv("OPTARENA_OPTIMIZE_BUDGET", "small")

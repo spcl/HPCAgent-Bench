@@ -18,8 +18,7 @@ def _apply_autotune_subset_once():
     explode to 32-60 configs; running the full sweep on every S-preset run dwarfs
     the per-call work, so the default ``small`` budget caps it. The cap comes
     from the ONE shared knob (:class:`optarena.optimize.OptimizeBudget`, driven by
-    ``$OPTARENA_OPTIMIZE_BUDGET``); the legacy ``OPTARENA_TRITON_AUTOTUNE_SIZE=full`` /
-    ``OPTARENA_TRITON_AUTOTUNE_N`` still override it.
+    ``$OPTARENA_OPTIMIZE_BUDGET``); the ``full`` budget runs the whole sweep.
 
     The implementation monkey-patches triton.runtime.autotuner.Autotuner so
     every autotuned kernel sees only the first N configs. Must run before any

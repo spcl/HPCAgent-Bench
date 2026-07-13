@@ -1,20 +1,7 @@
 # optarena dependency list (hand-maintained).
-# numpy 2.x required: `np.long` was removed in numpy 1.24-1.26 and re-added in 2.0;
-# scipy.sparse (_sputils) references it, so a 1.26 resolution breaks the sparse path
-# (test_sparse_layout_is_a_subbenchmark). Pinning >=2 keeps the resolver out of that
-# window and matches jax (numpy>=2) + numba (numpy<2.5).
-numpy>=2,<3
-scipy
-pandas
-matplotlib
-ml_dtypes
-pygount
-pyyaml
-jsonschema
-setuptools
-# Typed results-DB schema layer: the `results` table is one SQLModel model
-# (optarena/infrastructure/schema.py) that derives its CREATE TABLE + INSERT.
-sqlmodel
+# The runtime deps live in requirements/cpu.txt; this file pulls them in and adds
+# only the DEV-ONLY formatting/lint tools on top.
+-r requirements/cpu.txt
 # formatting / lint -- the CI `format-check` job and `scripts/check_format.py`
 # (column limit 120): yapf for Python, fprettify for Fortran, clang-format for C/C++.
 # pre-commit drives the same script as a git hook (.pre-commit-config.yaml).
