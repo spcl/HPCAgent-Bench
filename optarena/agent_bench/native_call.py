@@ -16,6 +16,7 @@ import math
 import multiprocessing as mp
 import queue
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
@@ -35,6 +36,27 @@ WORKSPACE_ALIGN = 256
 #: ``ru_maxrss`` is KILOBYTES on Linux but BYTES on macOS/BSD; scale the raw value to
 #: bytes per platform so the memory metric (MU/NMU) is not 1024x inflated on macOS.
 _RSS_TO_BYTES = 1 if osinfo.IS_MACOS else 1024
+
+#: Per-thread GPU assignment for the multi-device judge (see
+#: :mod:`optarena.agent_bench.judge_scheduler`). A judge worker thread pins its
+#: slot's GPU index here BEFORE it drives a score; :func:`_call_isolated` reads it
+#: (when its own ``device_id`` is unset) and forwards it to the spawned device
+#: child, which selects that physical GPU with ``cp.cuda.Device(index)``. Thread-
+#: local, so concurrent worker threads each target a DIFFERENT GPU with no
+#: ``CUDA_VISIBLE_DEVICES`` env race. ``None`` = the default device (unchanged
+#: single-device behaviour).
+_assigned = threading.local()
+
+
+def set_assigned_device(index: Optional[int]) -> None:
+    """Pin the calling judge thread's device-resident scores to GPU ``index``
+    (``None`` restores the default device)."""
+    _assigned.index = index
+
+
+def assigned_device() -> Optional[int]:
+    """The calling thread's pinned GPU index, or ``None`` if unset."""
+    return vars(_assigned).get("index")
 
 
 def _ptr_cdecl(dtype) -> str:
@@ -183,7 +205,8 @@ def _call_native_device(lib_path,
                         binding: Binding,
                         data: Dict,
                         lang: str,
-                        workspace_bytes: Optional[str] = None) -> Tuple[Dict[str, np.ndarray], int]:
+                        workspace_bytes: Optional[str] = None,
+                        device_id: Optional[int] = None) -> Tuple[Dict[str, np.ndarray], int]:
     """Device-resident call: array buffers live on the GPU.
 
     Inputs are copied to the device ONCE, outside the timed region (cupy H2D);
@@ -191,11 +214,17 @@ def _call_native_device(lib_path,
     harness measures pure kernel time with GPU events; outputs are copied back
     (D2H) for grading. Requires ``cupy`` + a GPU -- raises a clear error
     otherwise (the runner records it as a scored ``score_error``).
+
+    ``device_id`` (when set) selects the physical GPU -- the multi-device judge
+    hands each concurrent child a different index so kernels run one-per-GPU
+    without a ``CUDA_VISIBLE_DEVICES`` env race. ``None`` uses the default GPU.
     """
     try:
         import cupy as cp
     except ImportError as e:
         raise RuntimeError("device residency requires cupy + a GPU") from e
+    if device_id is not None:
+        cp.cuda.Device(device_id).use()
 
     ffi = FFI()
     sym = binding.symbols[lang]
@@ -329,7 +358,16 @@ class MemoryUsage:
     increment_bytes: int = 0
 
 
-def _native_call_worker(device, lib_path, binding, data, lang, memory_bytes, workspace_bytes, q, py_meta=None):
+def _native_call_worker(device,
+                        lib_path,
+                        binding,
+                        data,
+                        lang,
+                        memory_bytes,
+                        workspace_bytes,
+                        q,
+                        py_meta=None,
+                        device_id=None):
     """Child-process entry: run the native call and put the result on ``q``. A
     SIGSEGV here kills only this child (non-zero exitcode), never the parent.
 
@@ -356,9 +394,10 @@ def _native_call_worker(device, lib_path, binding, data, lang, memory_bytes, wor
             resource.setrlimit(resource.RLIMIT_AS, (cap, cap))
         if lang == "python":
             outputs, ns = _call_python(lib_path, py_meta, data)
+        elif device:
+            outputs, ns = _call_native_device(lib_path, binding, data, lang, workspace_bytes, device_id=device_id)
         else:
-            fn = _call_native_device if device else _call_native
-            outputs, ns = fn(lib_path, binding, data, lang, workspace_bytes)
+            outputs, ns = _call_native(lib_path, binding, data, lang, workspace_bytes)
         peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss  # post-kernel high-water mark
         peak_bytes = int(peak_rss) * _RSS_TO_BYTES  # ru_maxrss is KB on Linux, bytes on macOS
         increment_bytes = max(0, int(peak_rss) - int(entry_rss)) * _RSS_TO_BYTES  # kernel-attributable
@@ -376,7 +415,8 @@ def _call_isolated(lib_path,
                    timeout: float,
                    memory_gb: float = 0.0,
                    workspace_bytes: Optional[str] = None,
-                   py_meta=None) -> Tuple[Dict[str, np.ndarray], int, MemoryUsage]:
+                   py_meta=None,
+                   device_id: Optional[int] = None) -> Tuple[Dict[str, np.ndarray], int, MemoryUsage]:
     """Run a native call in a CHILD PROCESS so an agent kernel that segfaults,
     hangs, or over-allocates is a SCORED failure, not a death of the whole runner.
 
@@ -405,8 +445,12 @@ def _call_isolated(lib_path,
     ctx_name = "spawn" if use_device else osinfo.mp_context()
     ctx = mp.get_context(ctx_name)
     q = ctx.Queue()
+    # The judge's per-thread GPU pin (assigned_device) applies only when the caller
+    # did not pass an explicit device_id; None keeps the default single-device path.
+    dev_id = device_id if device_id is not None else assigned_device()
     proc = ctx.Process(target=_native_call_worker,
-                       args=(use_device, lib_path, binding, data, lang, memory_bytes, workspace_bytes, q, py_meta))
+                       args=(use_device, lib_path, binding, data, lang, memory_bytes, workspace_bytes, q, py_meta,
+                             dev_id))
     proc.start()
     try:
         start = time.perf_counter()
