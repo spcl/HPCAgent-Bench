@@ -233,13 +233,18 @@ mpi:
                                                # containerized mpiexec; harmless on a cluster
 
 runtime:
-  # Container backend for running the OptArena images.
-  #   OFFLINE (default; HPC / air-gapped): run a prebuilt LOCAL image, sudoless, no
-  #     daemon, no registry -- `apptainer` (preferred) or `udocker` (pip, pure user space).
-  #   ONLINE: orchestrate with Harbor (its --env) -- `docker` (daemon) or `singularity`.
-  # Harbor can also run offline if the images are local and the agent is local (see
-  # docs/RUNTIME.md). Defaults to sudoless local apptainer.
-  backend: apptainer       # apptainer | udocker (local/offline) | singularity | docker (Harbor)
+  # THE canonical container backend selector (optarena/containers.py resolve_backend):
+  # apptainer | docker | podman | udocker | ce. Drives the exec-wrapper launch factory and,
+  # via containers.harbor_env_for, the Harbor --env provider name (apptainer->singularity,
+  # docker->docker). `singularity` is NO LONGER a backend value -- it is only Harbor's
+  # provider spelling for apptainer (see container_backends.txt). `ce` = the CSCS Container
+  # Engine (Alps), launched by containers.ce_launcher.
+  #   OFFLINE (default; HPC / air-gapped): sudoless LOCAL image -- apptainer (preferred) or
+  #     udocker (pip, pure user space). ONLINE via Harbor: docker (daemon).
+  # Override with $OPTARENA_RUNTIME_BACKEND (honored by BOTH the Python path and the bash
+  # launcher). The bash-only $OPTARENA_CONTAINER_RUNTIME is a legacy alias the shell still
+  # reads; the Python path deliberately ignores it (else a Harbor run would crash on it).
+  backend: apptainer       # apptainer | docker | podman | udocker | ce
   # multiprocessing start method for the isolated native call + the forked run.
   # "auto" resolves per-OS (osinfo.mp_context): "fork" on Linux/WSL2 (cheap -- inputs
   # inherited, right for the single-threaded CLI sweep), "spawn" on macOS (fork after

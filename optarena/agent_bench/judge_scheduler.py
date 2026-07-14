@@ -47,7 +47,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Tuple
 
-from optarena import config
+from optarena import config, containers
 from optarena.agent_bench import native_call
 
 
@@ -74,10 +74,11 @@ class DeviceSlot:
 JUDGE_NODES_ENV = "OPTARENA_JUDGE_NODES_EXPANDED"
 AGENT_NODES_ENV = "OPTARENA_AGENT_NODES_EXPANDED"
 
-#: Default srun template for a REMOTE judge slot (``{node}`` substituted per slot).
-#: On Alps the campaign overrides ``judge.launcher`` to add ``--environment <edf>`` so the
-#: remote grade runs INSIDE the Container-Engine image (else it runs outside the toolchain).
-DEFAULT_JUDGE_LAUNCHER = ("srun", "--nodelist", "{node}", "--gpus", "1", "-n", "1")
+#: Default srun template for a REMOTE judge slot (``{node}`` substituted per slot). Built by
+#: the one CE-launcher factory so the srun-prefix spelling lives in a single place; on Alps the
+#: campaign overrides ``judge.launcher`` to add ``--environment <edf>`` so the remote grade runs
+#: INSIDE the Container-Engine image (else it runs outside the toolchain).
+DEFAULT_JUDGE_LAUNCHER = containers.ce_launcher()
 
 #: Shared frozen fallback slots (a pool with no configured slot runs one local slot).
 LOCAL_CPU_SLOT = DeviceSlot("cpu", 0, None)

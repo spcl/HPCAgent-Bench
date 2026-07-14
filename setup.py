@@ -40,6 +40,7 @@ setup(
     package_data={
         'optarena': [
             'config.yaml',
+            'container_backends.txt',
             'envs/*.yaml',
         ],
     },

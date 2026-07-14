@@ -36,6 +36,11 @@ set -euo pipefail
 
 REPO="${OPTARENA_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}"
 ENV_TOML="${OPTARENA_ENV_TOML:-${REPO}/env.toml}"   # enroot/CXI env (see docs/RUNTIME.md)
+# Per-role EDFs: each defaults to ENV_TOML, so an unset role var = today's single-EDF behavior.
+# Split them (per-role EDF copies) to point each tier at a different Container-Engine image.
+VLLM_ENV_TOML="${OPTARENA_VLLM_ENV_TOML:-${ENV_TOML}}"    # inference tier image (e.g. Lorenzo's vLLM EDF)
+AGENT_ENV_TOML="${OPTARENA_AGENT_ENV_TOML:-${ENV_TOML}}"  # agent (think) tier image
+JUDGE_ENV_TOML="${OPTARENA_JUDGE_ENV_TOML:-${ENV_TOML}}"  # judge (measure) tier image
 
 MODEL_ID="${MODEL_ID:-Qwen/Qwen3-Coder-30B}"
 TP_SIZE="${TP_SIZE:-4}"                 # tensor-parallel width = GPUs on the vLLM head node
@@ -62,7 +67,11 @@ VLLM_URL="http://${VLLM_HEAD}:${VLLM_PORT}/v1"
 # Remote judge grades srun back onto a judge node. Carry --environment so the grade runs
 # INSIDE the CE image (its frameworks/toolchain), and --overlap so it shares the step; {node}
 # is substituted per slot by judge_scheduler.resolve_launcher. Override with OPTARENA_JUDGE_LAUNCHER.
-JUDGE_LAUNCHER="${OPTARENA_JUDGE_LAUNCHER:-srun --nodelist {node} --gpus 1 -n 1 --overlap --environment ${ENV_TOML}}"
+# Build the default in a PLAIN var first: a `{node}` literal inside a ${VAR:-...} default is
+# mangled by bash brace-matching (the `}` closes the expansion early), which would corrupt the
+# per-slot substitution. Assigning the default separately keeps `{node}` intact.
+DEFAULT_JUDGE_LAUNCHER="srun --nodelist {node} --gpus 1 -n 1 --overlap --environment ${JUDGE_ENV_TOML}"
+JUDGE_LAUNCHER="${OPTARENA_JUDGE_LAUNCHER:-$DEFAULT_JUDGE_LAUNCHER}"
 
 echo "agent=${AGENT_NODE}  vllm=${VLLM_HOSTS[*]} (head ${VLLM_HEAD})  judge=${JUDGE_HOSTS[*]}"
 echo "vLLM URL=${VLLM_URL}  judge nodes=${#JUDGE_HOSTS[@]} x ${JUDGE_GPUS_PER_NODE} GPU"
@@ -81,17 +90,17 @@ trap cleanup EXIT
 SERVE="vllm serve '${MODEL_ID}' --host 0.0.0.0 --port '${VLLM_PORT}' --tensor-parallel-size '${TP_SIZE}'"
 if (( VLLM_NODES == 1 )); then
   srun --nodes=1 --ntasks=1 --nodelist="${VLLM_HEAD}" --gpus-per-node="${TP_SIZE}" \
-    --environment="${ENV_TOML}" bash -lc "cd '${REPO}' && ${SERVE}" &
+    --environment="${VLLM_ENV_TOML}" bash -lc "cd '${REPO}' && ${SERVE}" &
   VLLM_PID=$!
 else
   srun --nodes=1 --ntasks=1 --nodelist="${VLLM_HEAD}" --gpus-per-node="${TP_SIZE}" \
-    --environment="${ENV_TOML}" bash -lc "ray start --head --port='${RAY_PORT}' --block" &
+    --environment="${VLLM_ENV_TOML}" bash -lc "ray start --head --port='${RAY_PORT}' --block" &
   for host in "${VLLM_HOSTS[@]:1}"; do
     srun --nodes=1 --ntasks=1 --nodelist="${host}" --gpus-per-node="${TP_SIZE}" \
-      --environment="${ENV_TOML}" bash -lc "ray start --address='${VLLM_HEAD}:${RAY_PORT}' --block" &
+      --environment="${VLLM_ENV_TOML}" bash -lc "ray start --address='${VLLM_HEAD}:${RAY_PORT}' --block" &
   done
   sleep 20   # let the ray head + workers register before serve attaches
-  srun --nodes=1 --ntasks=1 --nodelist="${VLLM_HEAD}" --overlap --environment="${ENV_TOML}" \
+  srun --nodes=1 --ntasks=1 --nodelist="${VLLM_HEAD}" --overlap --environment="${VLLM_ENV_TOML}" \
     bash -lc "cd '${REPO}' && ${SERVE} --pipeline-parallel-size '${VLLM_NODES}' \
       --distributed-executor-backend ray" &
   VLLM_PID=$!
@@ -112,7 +121,7 @@ done
 # --- run the agent + multi-node judge on the agent node ---
 # Agent pool -> vLLM over HTTP (OpenAIAgent); judge -> the judge-node GPU pool.
 # TwoStageScheduler pipelines think (agent pool) -> grade (judge pool).
-srun --nodes=1 --ntasks=1 --nodelist="${AGENT_NODE}" --environment="${ENV_TOML}" \
+srun --nodes=1 --ntasks=1 --nodelist="${AGENT_NODE}" --environment="${AGENT_ENV_TOML}" \
   bash -lc "
     set -euo pipefail
     cd '${REPO}'

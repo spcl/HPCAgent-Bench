@@ -29,6 +29,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from optarena import containers
 from optarena.harbor_adapter import generate, images_for
 from optarena.languages import LANG_EXT
 from optarena.spec import selector_slug
@@ -106,6 +107,19 @@ def main(argv=None) -> int:
         return 0
 
     jobs_dir = Path(args.jobs_dir) if args.jobs_dir else (_ADAPTER_DIR / "runs")
+    # Harbor drives docker + apptainer/singularity only (its --env has no enroot/CSCS
+    # Container-Engine backend), so map the resolved runtime.backend to Harbor's provider
+    # name. For the CE (Alps), Harbor cannot launch it -- use the script-based campaign
+    # (scripts/cscs/run_campaign.sbatch) instead; guide the user rather than emit a bad --env.
+    try:
+        harbor_env = containers.harbor_env_for()
+    except ValueError as exc:
+        print(
+            f"\n{exc}\nHarbor runs docker + apptainer/singularity only. For the CSCS Container "
+            f"Engine on Alps, use the script-based campaign:\n"
+            f"  sbatch -A <account> --nodes=<N> scripts/cscs/run_campaign.sbatch\n",
+            file=sys.stderr)
+        return 3
     # `harbor run -p <dir>` loads the generated task dirs as a dataset directly, so no
     # hand-written JobConfig is needed -- job name / results dir / backend / attempts are
     # all native flags (harbor/cli/jobs.py); --agent/--model/--n-concurrent ride in via
@@ -113,7 +127,7 @@ def main(argv=None) -> int:
     cmd = [
         "harbor", "run", "-p",
         str(out_dir), "-o",
-        str(jobs_dir), "--job-name", f"optarena-{selector_slug(args.selector)}", "--env", "singularity", "-k", "1",
+        str(jobs_dir), "--job-name", f"optarena-{selector_slug(args.selector)}", "--env", harbor_env, "-k", "1",
         *harbor_extra
     ]
     if shutil.which("harbor") is None:

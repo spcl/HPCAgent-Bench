@@ -1,0 +1,55 @@
+# Container backend spellings -- the SINGLE source of truth for how each runtime
+# spells its launch flags. Read by BOTH optarena/containers.py (Python) and
+# scripts/run_agent_in_container.sh (pure bash, for a host with no Python), so the
+# two launch paths cannot drift. Format: `<backend>.<field>=<value>`, one per line
+# (a .properties/.env shape -- deliberately NOT JSON/YAML so bash can read it with a
+# three-line `while IFS='=' read` loop). Blank lines and `#` comments are ignored.
+#
+# INVARIANT: every value is a whitespace-separated TOKEN LIST with no intra-token
+# spaces (`run --rm --network host` is three tokens; a path/env value with a space
+# would break both splitters -- those are computed at runtime, never stored here).
+# Env ordering is pinned identically on both sides (OPTARENA_IMAGE first, then this
+# passthrough list in order, then the remaining OPTARENA_* vars sorted under LC_ALL=C
+# == Python's default str sort) so the assembled argv is byte-identical.
+
+global.passthrough=OPTARENA_OLLAMA_HOST OLLAMA_HOST OPTARENA_OLLAMA_MODEL ANTHROPIC_API_KEY OPTARENA_LOCAL_MODEL
+
+apptainer.verb=exec
+apptainer.bind=--bind
+apptainer.workdir=--pwd
+apptainer.env=--env
+apptainer.gpu.nvidia=--nv
+apptainer.gpu.amd=--rocm
+apptainer.image_form=sif
+apptainer.image_default=optarena-{hw}.sif
+apptainer.harbor_env=singularity
+
+docker.verb=run --rm --network host
+docker.bind=-v
+docker.workdir=-w
+docker.env=-e
+docker.gpu.nvidia=--gpus all
+docker.gpu.amd=--device /dev/kfd --device /dev/dri --group-add video
+docker.image_form=tag
+docker.image_default=optarena:{hw}
+docker.harbor_env=docker
+
+podman.verb=run --rm --network host
+podman.bind=-v
+podman.workdir=-w
+podman.env=-e
+podman.gpu.nvidia=--device nvidia.com/gpu=all
+podman.gpu.amd=--device /dev/kfd --device /dev/dri --group-add keep-groups
+podman.image_form=tag
+podman.image_default=optarena:{hw}
+podman.harbor_env=
+
+udocker.verb=run --rm
+udocker.bind=-v
+udocker.workdir=-w
+udocker.env=-e
+udocker.gpu.nvidia=
+udocker.gpu.amd=
+udocker.image_form=tag
+udocker.image_default=optarena:{hw}
+udocker.harbor_env=

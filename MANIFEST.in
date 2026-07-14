@@ -7,3 +7,4 @@
 # deterministic across environments.
 recursive-include optarena *.yaml
 recursive-include optarena *.schema.yaml
+include optarena/container_backends.txt
