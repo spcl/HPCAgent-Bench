@@ -71,3 +71,60 @@ serial path, for local testing.
 
 Job submission (allocating the nodes, starting the three roles, forming any ray cluster) is
 owned by the cluster's submission scripts, not by this repo.
+
+## CSCS Alps (aarch64 GH200) — a worked recipe
+
+Alps compute nodes are **4×GH200** (aarch64, GPU stack preinstalled). The **judge** and **agent**
+roles run the same `containers/optarena.Dockerfile` image; the **inference** role is a *separate,
+site-provided vLLM deployment* (the optarena image ships no vLLM — the agents only ever see its
+URL). All roles launch as single-node containers under `srun`; node allocation and the `srun`
+submission itself are **external** (owned by the CSCS/site submission scripts — Lorenzo / CSCS —
+not this repo).
+
+**1. Build the arm64 SIF (on a build box, then copy it over).** Unprivileged image builds are
+unreliable on HPC (see the HPC notes in [docs/RUNTIME.md](RUNTIME.md)), so build the `.sif` where
+you control the box and hand it over. Build for `linux/arm64` on the CSCS public GPU base:
+
+```
+podman build --platform linux/arm64 --build-arg HW=nvidia \
+    --build-arg BASE_IMAGE=<cscs-public-gpu-base> \
+    -f containers/optarena.Dockerfile -t optarena:nvidia .
+podman save optarena:nvidia -o optarena-nvidia.tar                     # daemon-agnostic hand-off
+apptainer build optarena-nvidia.sif docker-archive:optarena-nvidia.tar # SIF from the SAME OCI
+```
+
+On the CSCS GPU base the CUDA/NCCL stack is preinstalled, so the image's own nvidia apt packages
+may be redundant — drop or version-pin them if they conflict (see the Dockerfile pre-merge checklist).
+
+**2. Fabric (Slingshot/CXI).** The site provides the interconnect hook — on Alps the CSCS
+Container Engine's EDF carries `com.hooks.cxi.enabled = "true"`, consumed by
+`srun --environment=<edf>.toml`; consult the CSCS docs for the exact launcher on your allocation.
+The MPI track ([docs/RUNTIME.md](RUNTIME.md)) uses the same hook. This matters only for the
+multi-node MPI / inference paths, not single-node grading.
+
+**3. Launch the three roles under `srun`** — one single-node container each; `--nv` passes the
+GPUs through (as in [docs/RUNTIME.md](RUNTIME.md)). The container commands are exactly the ones
+from **Launch order** above; only the `srun` allocation flags (owned by the site submission) wrap them:
+
+```
+# judge node(s): the HTTP oracle
+srun ... apptainer exec --nv optarena-nvidia.sif \
+    optarena serve --host 0.0.0.0 --port 8800
+
+# inference node(s): the SITE's vLLM deployment (a SEPARATE vLLM image, NOT the optarena image --
+# which ships no vLLM), exposing http://<nid>:8000/v1. A model too big for one node is a ray
+# cluster of single-node vLLM containers behind ONE URL (see "Multi-node inference" above); the
+# agents only ever see the URL.
+srun ... <site vLLM launch>          # e.g. the standard `vllm serve <model> --port 8000`
+
+# agent workers: statically round-robin over the endpoint lists
+export OPTARENA_VLLM_URLS="http://nid002:8000/v1,http://nid005:8000/v1"
+export OPTARENA_JUDGE_URLS="http://nid003:8800,http://nid006:8800"
+export OPTARENA_AGENT_WORKERS=8
+srun ... apptainer exec --nv optarena-nvidia.sif \
+    optarena agent openai --kernels gemm,gesummv --baseline numpy --preset S
+```
+
+Each of the `W` agent workers is bound once to `vllm_urls[w % V]` (think) and `judge_urls[w % J]`
+(grade); no container spans nodes. Standing up the nodes, the `srun` allocation, and any ray
+cluster is job submission's responsibility (Lorenzo / CSCS), not this repo.
