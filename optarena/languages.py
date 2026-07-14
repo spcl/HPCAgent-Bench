@@ -109,23 +109,14 @@ def _resolve_baseline(block: dict, mode: Mode) -> str:
     return flags.compose_autopar(baseline, autopar, mode)
 
 
-def _compiler_for_lang(compilers: Dict[str, dict], lang: str) -> Tuple[str, dict]:
-    """Pick the first NON-MPI compiler block whose ``lang`` matches ``lang`` (the single-node
-    path; the MPI wrapper blocks are ``mpi: true`` and picked only by
-    :func:`_mpi_compiler_for_lang`)."""
+def _compiler_for_lang(compilers: Dict[str, dict], lang: str, *, mpi: bool = False) -> Tuple[str, dict]:
+    """Pick the first compiler block matching ``lang``. ``mpi=False`` (default) picks a
+    single-node block; ``mpi=True`` picks the ``mpi: true`` wrapper block (``mpicc.mpich`` ...),
+    so the single-node and MPI lang lookups never cross."""
     for cname, block in compilers.items():
-        if block.get("lang") == lang and not block.get("mpi"):
+        if block.get("lang") == lang and bool(block.get("mpi")) == mpi:
             return cname, block
-    raise KeyError(f"no compiler in compilers.yaml emits lang {lang!r}")
-
-
-def _mpi_compiler_for_lang(compilers: Dict[str, dict], lang: str) -> Tuple[str, dict]:
-    """Pick the ``mpi: true`` compiler block for ``lang`` (the MPI wrapper: ``mpicc.mpich`` ...).
-    Distinct from :func:`_compiler_for_lang` so the single-node lang lookup is unaffected."""
-    for cname, block in compilers.items():
-        if block.get("lang") == lang and block.get("mpi"):
-            return cname, block
-    raise KeyError(f"no MPI compiler in compilers.yaml for lang {lang!r}")
+    raise KeyError(f"no {'MPI ' if mpi else ''}compiler in compilers.yaml for lang {lang!r}")
 
 
 def _render_argv(tokens: List[str], subst: Dict[str, str]) -> List[str]:
@@ -381,7 +372,7 @@ def build_mpi_executable_commands(
     objs: List[str] = []
     langs_present = set()
     for lang, src in sources:
-        _, block = _mpi_compiler_for_lang(compilers, lang)
+        _, block = _compiler_for_lang(compilers, lang, mpi=True)
         src = pathlib.Path(src)
         obj = build_dir / f"{src.name}.o"
         subst = {
@@ -411,7 +402,7 @@ def build_mpi_executable_commands(
         link_lang = "cpp"
     else:
         link_lang = "c"
-    _, link_block = _mpi_compiler_for_lang(compilers, link_lang)
+    _, link_block = _compiler_for_lang(compilers, link_lang, mpi=True)
     link_subst = {
         "cc": cc_override.get(link_lang, link_block["cc"]),
         "baseline": "",
