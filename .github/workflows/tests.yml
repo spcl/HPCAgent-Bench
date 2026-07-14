@@ -310,15 +310,18 @@ jobs:
 
       - name: Phase 6a -- build + smoke-test the cpu agent-bench image (unified OCI -> SIF, gating)
         # GATES now. UNIFIED build: one OCI Dockerfile (containers/optarena.Dockerfile, HW=cpu) is the
-        # single recipe; apptainer builds the SIF FROM that OCI image (docker-daemon://), no .def. The
-        # docker daemon on the ubuntu-latest runner holds the built image; the SIF conversion runs no
-        # %post so it needs no --fakeroot. Gates so a broken image reds the build.
-        # UNVERIFIED: swapped from `apptainer build --fakeroot optarena-cpu.sif containers/cpu.def`;
-        # verify the OCI->SIF path on the runner before relying on it (revert = restore that one line).
+        # single recipe; apptainer builds the SIF FROM that OCI image, no .def, no --fakeroot (the
+        # conversion runs no %post). We go through a `docker save` TAR + `docker-archive:` rather than
+        # `docker-daemon://` so apptainer never needs Docker-daemon/socket access -- the archive path is
+        # daemon-agnostic and the robust way to hand a locally-built OCI image to apptainer.
+        # UNVERIFIED end-to-end on the heavy image; the docker-save -> docker-archive -> SIF -> exec
+        # MECHANISM is validated locally with a minimal image. Revert = `apptainer build --fakeroot
+        # optarena-cpu.sif containers/cpu.def`.
         if: ${{ !cancelled() }}
         run: |
           docker build -f containers/optarena.Dockerfile --build-arg HW=cpu -t optarena:cpu .
-          apptainer build optarena-cpu.sif docker-daemon://optarena:cpu
+          docker save optarena:cpu -o optarena-cpu.tar
+          apptainer build optarena-cpu.sif docker-archive:optarena-cpu.tar
           # The cpu image must import its numeric deps and carry the CPU-only torch build: a
           # bare ``torch`` would drag in the ~2 GB CUDA stack (see cpu.def). Assert the ``+cpu``
           # local version.

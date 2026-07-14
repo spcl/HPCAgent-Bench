@@ -40,7 +40,7 @@ BACKENDS_FILE="${OPTARENA_BACKENDS_FILE:-${REPO_ROOT}/optarena/container_backend
 # --- read the single-source spelling file into associative arrays ---------------------
 declare -A SPELL
 PASSTHROUGH=""
-while IFS='=' read -r key value; do
+while IFS='=' read -r key value || [ -n "$key" ]; do
   case "$key" in
     ''|'#'*) continue ;;
   esac

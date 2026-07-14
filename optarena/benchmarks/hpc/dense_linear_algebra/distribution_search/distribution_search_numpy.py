@@ -93,6 +93,9 @@ def distribution_search(forward_target, backward_target, p):
         if best is not None and best[0] <= tol:
             break
 
+    if best is None:  # no (count_a, count_b, count_c) partition met the KL constraints
+        raise ValueError(f"distribution_search: no grid solution for forward={target_f}, "
+                         f"backward={target_b}, size={size}")
     err, sel_a, sel_b, sel_c, pv = best
     p[:sel_a] = pv[0]
     p[sel_a:sel_a + sel_b] = pv[1]
