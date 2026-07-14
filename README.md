@@ -33,7 +33,8 @@ An agent reaches its model over an **inference endpoint** -- a hosted API (Claud
 self-hosted vLLM server -- and grades over the **judge** (`optarena serve`). On a cluster this is a
 **static, round-robin** deployment: three single-node container roles (inference / judge / agent),
 no dynamic load balancing, an agent worker `w` pinned once to `vllm_urls[w % V]` + `judge_urls[w % J]`.
-Full cluster contract: [docs/LAUNCH.md](docs/LAUNCH.md).
+Full cluster contract: [docs/LAUNCH.md](docs/LAUNCH.md) (CSCS Alps submit quickstart:
+[docs/LAUNCH.md#quickstart--submit-a-run](docs/LAUNCH.md#quickstart--submit-a-run)).
 
 ---
 
