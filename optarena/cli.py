@@ -48,11 +48,8 @@ def _resolve_precisions(arg: str, spec: BenchSpec) -> List[Precision]:
     explicit request (e.g. ``fp16``) is taken as given -- it OVERRIDES the declared set,
     not intersects it (the framework-level precision-skip in ``_run_cell`` still gates
     what actually runs)."""
-    if arg == "all":
-        requested = [Precision.from_str(p) for p in spec.precisions]
-    else:
-        requested = [Precision.from_str(arg)]
-    return requested
+    sources = spec.precisions if arg == "all" else [arg]
+    return [Precision.from_str(p) for p in sources]
 
 
 def _resolve_variants(arg: str, spec: BenchSpec) -> List[str]:
