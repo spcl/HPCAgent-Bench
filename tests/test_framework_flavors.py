@@ -6,8 +6,8 @@ Pins the consolidated registry: one Framework subclass per ``base`` flavor famil
 the native backend split into its base languages (+ polly) vs Pluto as its own
 toolchain, and APPy fully removed.
 """
-from optarena.infrastructure import NativeFramework, PlutoFramework
-from optarena.infrastructure.framework import FRAMEWORK_META, framework_flavors, generate_framework
+from optarena.frameworks import NativeFramework, PlutoFramework
+from optarena.frameworks.framework import FRAMEWORK_META, framework_flavors, generate_framework
 
 
 def test_native_family_is_the_base_languages_plus_polly():
@@ -47,5 +47,5 @@ def test_arch_families_share_one_class():
 
 def test_appy_removed():
     assert "appy" not in FRAMEWORK_META
-    import optarena.infrastructure as infra
+    import optarena.frameworks as infra
     assert not hasattr(infra, "APPyFramework")

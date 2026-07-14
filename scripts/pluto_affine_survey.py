@@ -4,7 +4,7 @@
 """Thin shim -- the logic now lives in the ``optarena`` CLI.
 
 ``python scripts/pluto_affine_survey.py`` is equivalent to ``optarena pluto-survey``
-(dispatched to :func:`optarena.collect.pluto_survey.survey`). Run from the repo root so
+(dispatched to :func:`optarena.support.collect.pluto_survey.survey`). Run from the repo root so
 the ``tests.numerical_oracle`` package the survey imports is on the path. Kept so the
 documented script path keeps working after the fold into the package CLI.
 """

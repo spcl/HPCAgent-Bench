@@ -1,6 +1,6 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Canonical C-ABI binding generation (``optarena/bindings/``).
+"""Canonical C-ABI binding generation (``optarena/support/bindings/``).
 
 Pins the load-bearing guarantees of ``optarena/docs/abi_contract.md`` for one
 dense kernel (``gemm``) and one sparse kernel (``spmv``):
@@ -18,13 +18,13 @@ dense kernel (``gemm``) and one sparse kernel (``spmv``):
 """
 import pytest
 
-from optarena.bindings import (
+from optarena.support.bindings import (
     PackedGroup,
     binding_from_spec,
     gen_call_stub,
     gen_host_glue,
 )
-from optarena.bindings.stubs import LANGS
+from optarena.support.bindings.stubs import LANGS
 from optarena.spec import BenchSpec
 
 

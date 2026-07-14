@@ -2721,7 +2721,7 @@ _NP_DTYPE_NAMES: Dict[str, str] = {
     "complex256": "complex256",
     "bool_": "bool",
     "bool": "bool",
-    # ``optarena.infrastructure.framework`` aliases that the legacy
+    # ``optarena.frameworks.framework`` aliases that the legacy
     # mandelbrot kernels import (``np_complex``, ``np_float``). Both are
     # precision-following: resolve to the natural float64 / complex128 here
     # and let the precision pass narrow them to float32 / complex64 for an

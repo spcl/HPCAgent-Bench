@@ -288,7 +288,7 @@ class KwargsToPositional(ast.NodeTransformer):
 
 def _clean_for_pythran(source: str, kir: KernelIR) -> str:
     """Make a verbatim kernel module pythran-compilable: DROP imports pythran
-    cannot resolve (``optarena.infrastructure.framework``, ``scipy.*`` -- the
+    cannot resolve (``optarena.frameworks.framework``, ``scipy.*`` -- the
     latter's sparse branch is folded to a dead ``False`` by the desugar),
     substitute the ``np_float`` / ``np_complex`` precision globals with concrete
     dtypes (fp32 vs fp64 recovered from the kir arrays), and materialize the lazy

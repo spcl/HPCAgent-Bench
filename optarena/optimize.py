@@ -21,7 +21,7 @@ timed bracket -- the analogue of the wall-clock an agent spends producing C++.
   per-backend caps (TVM trials, Triton config cap).
 * :class:`Optimizer` -- ``optimize(program, budget) -> optimized program``. A
   framework that does not search inherits the identity optimizer
-  (:meth:`optarena.infrastructure.framework.Framework.optimize` default).
+  (:meth:`optarena.frameworks.framework.Framework.optimize` default).
 """
 from __future__ import annotations
 

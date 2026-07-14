@@ -1,8 +1,8 @@
 """Single source for repo-relative paths.
 
 Previously the path math :code:`__file__.parent.absolute() / ".." / ".."`
-was triplicated across :mod:`optarena.infrastructure.benchmark`,
-:mod:`optarena.infrastructure.framework`, and the top-level
+was triplicated across :mod:`optarena.frameworks.benchmark`,
+:mod:`optarena.frameworks.framework`, and the top-level
 ``run_*.py`` drivers. Consolidate here so a layout change touches one file."""
 import pathlib
 

@@ -12,7 +12,7 @@ return each caller's default.
 """
 import optarena.config as config
 from optarena import fuzz
-from optarena.agent_bench import service, timing
+from optarena.harness import service, timing
 
 
 def _defaults_only(monkeypatch):

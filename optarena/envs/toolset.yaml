@@ -1,4 +1,4 @@
-# Host-tool DISCOVERY wishlist -- what `optarena/agent_bench/discover_tools.py` probes for on
+# Host-tool DISCOVERY wishlist -- what `optarena/harness/discover_tools.py` probes for on
 # a user's machine (Linux / WSL / macOS; ubuntu / fedora / opensuse). Distinct
 # from optarena/envs/compilers.yaml, which is the BUILD table (how to compile);
 # this is the FIND table (what exists + how to detect + whether it is required).

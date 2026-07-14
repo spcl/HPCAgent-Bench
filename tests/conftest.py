@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from optarena.agent_bench.service import make_server
+from optarena.harness.service import make_server
 
 
 def pytest_configure(config):

@@ -25,10 +25,10 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 import pytest
 
-from optarena.agent_bench import native
-from optarena.agent_bench.agent import reference_source
-from optarena.agent_bench.envelope import Submission
-from optarena.agent_bench.task import Task
+from optarena.harness import native
+from optarena.harness.agent import reference_source
+from optarena.harness.envelope import Submission
+from optarena.harness.task import Task
 
 TASK = Task("gemm", "restricted", "c")
 
@@ -56,8 +56,8 @@ def _grade_worker(item):
     ``spawn`` start method (clean workers, safe even under pytest-xdist)."""
     index, kernel, source, sleep_s = item
     from optarena import api
-    from optarena.agent_bench.agent import ScriptedAgent
-    from optarena.agent_bench.task import Task as _Task
+    from optarena.harness.agent import ScriptedAgent
+    from optarena.harness.task import Task as _Task
     task = _Task(kernel, "restricted", "c")
     agent = ScriptedAgent([source, source], cost=(1, 1))  # the scripted move, replayed twice
     handle = api.init(kernel, language="c", repeat=1)
@@ -116,8 +116,8 @@ def test_concurrent_judge_keeps_each_agents_result_separate(make_judge):
     if not _emitter_and_gcc():
         pytest.skip("NumpyToC emitter or gcc absent")
     from optarena import config
-    from optarena.agent_bench import tools
-    from optarena.agent_bench.service import ServiceConfig
+    from optarena.harness import tools
+    from optarena.harness.service import ServiceConfig
 
     config.set_override("runtime.mp_context", "forkserver")
     try:

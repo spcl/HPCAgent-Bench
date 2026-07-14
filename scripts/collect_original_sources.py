@@ -20,7 +20,7 @@ The collector is a single provenance map dispatched to per-family handlers:
   7. tsvc_cpp      -- Vectra Artifacts per-kernel C++ ``_d`` microkernels, timing removed.
   8. tsvc_cpp_emitted -- for a foundation kernel with NO Vectra microkernel, the C++
      BASELINE emitted by OptArena's own NumpyToX C++ translator (the baseline the score
-     divides by), read back from :func:`optarena.agent_bench.agent.reference_source`.
+     divides by), read back from :func:`optarena.harness.agent.reference_source`.
 
 Family 8 is the exact complement of family 7 within the foundation track: it fires only for
 a foundation kernel whose Vectra ``_d.cpp`` is missing, so the two never target the same
@@ -181,7 +181,7 @@ FAMILY_META: Dict[str, Dict[str, str]] = {
     },
     "tsvc_cpp_emitted": {
         "upstream": "OptArena NumpyToX C++ translator (numpyto_cpp), emitted from the numpy reference "
-        "via optarena.agent_bench.agent.reference_source(Task(<kernel>, language='cpp'))",
+        "via optarena.harness.agent.reference_source(Task(<kernel>, language='cpp'))",
         "license": "OptArena, GPL-3.0-or-later",
     },
 }
@@ -535,13 +535,13 @@ def strip_dead_chrono(text: str, stem: str) -> str:
 
 def emit_cpp_baseline(kernel_key: str, stem: str) -> str:
     """Emit the C++ BASELINE for ``kernel_key`` via OptArena's NumpyToX C++ translator and
-    return the timing-stripped body. Reuses :func:`optarena.agent_bench.agent.reference_source`
+    return the timing-stripped body. Reuses :func:`optarena.harness.agent.reference_source`
     -- the same read-back the repo-level layout and the restricted-mode StubAgent use -- so
     the args are in canonical C-ABI order and the exported symbol is named canonically
     (``<short>_fp64``). A translator gap propagates as an exception (the caller records a
     skip); a leaked timing token raises out of :func:`strip_dead_chrono`."""
-    from optarena.agent_bench.agent import reference_source
-    from optarena.agent_bench.task import Task
+    from optarena.harness.agent import reference_source
+    from optarena.harness.task import Task
     return strip_dead_chrono(reference_source(Task(kernel_key, language="cpp")), stem)
 
 

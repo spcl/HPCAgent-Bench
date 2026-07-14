@@ -9,7 +9,7 @@ import types
 
 import numpy as np
 
-from optarena.agent_bench.grading import _grade
+from optarena.harness.grading import _grade
 from optarena.fuzz import resolve_ranges
 
 

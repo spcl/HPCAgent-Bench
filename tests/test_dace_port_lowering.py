@@ -60,7 +60,7 @@ def _to_sdfg_worker(queue, rel, mod, fn):
         # until configured; the port's ``from ... import dc_float`` binds the value
         # at import, so configure BEFORE importing the port (fp64 for this gate).
         import dace
-        import optarena.infrastructure.dace_framework as dfw
+        import optarena.frameworks.dace_framework as dfw
         dfw.dc_float = dace.float64
         dfw.dc_complex_float = dace.complex128
         pkg = "optarena.benchmarks." + rel.replace("/", ".") + f".{mod}_dace"

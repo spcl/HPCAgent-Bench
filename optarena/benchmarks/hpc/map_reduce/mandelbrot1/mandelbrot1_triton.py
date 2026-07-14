@@ -2,7 +2,7 @@ import torch
 import triton
 import triton.language as tl
 import itertools
-from optarena.infrastructure.triton_framework import tl_float
+from optarena.frameworks.triton_framework import tl_float
 
 
 def get_configs():

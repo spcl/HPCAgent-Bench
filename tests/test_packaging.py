@@ -35,8 +35,8 @@ def test_wheel_is_pip_installable_and_complete(tmp_path):
     whl = list(tmp_path.glob("optarena-*.whl"))
     assert whl, "no wheel produced"
     names = zipfile.ZipFile(whl[0]).namelist()
-    for mod in ("optarena/harbor_adapter.py", "optarena/containers.py", "optarena/agent_bench/harbor_grade.py",
-                "optarena/bindings/__init__.py", "optarena/config.yaml"):
+    for mod in ("optarena/harbor_adapter.py", "optarena/containers.py", "optarena/harness/harbor_grade.py",
+                "optarena/support/bindings/__init__.py", "optarena/config.yaml"):
         assert mod in names, f"{mod} missing from the wheel"
     ep = next(n for n in names if n.endswith("entry_points.txt"))
     assert "optarena-install-apptainer" in zipfile.ZipFile(whl[0]).read(ep).decode()

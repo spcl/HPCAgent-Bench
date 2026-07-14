@@ -1,9 +1,9 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Fuzzing conditioning/stability regimes (optarena.distributions.conditioning)."""
+"""Fuzzing conditioning/stability regimes (optarena.support.distributions.conditioning)."""
 import numpy as np
 
-from optarena import distributions
+from optarena.support import distributions
 from optarena.precision import Precision
 
 

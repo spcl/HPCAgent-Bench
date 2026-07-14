@@ -27,14 +27,14 @@ def test_fp16_dtype_and_tolerance():
     assert numpy_dtype(Precision.FP16) is np.float16
     assert DTYPES[Precision.FP16] is np.float16
     # The LIVE validation-tolerance table (the one Test.run actually uses).
-    from optarena.infrastructure.test import TOLERANCES
+    from optarena.frameworks.test import TOLERANCES
     assert "fp16" in TOLERANCES and "float16" in TOLERANCES  # has its own looser band
 
 
 @pytest.mark.parametrize("dist", ["uniform", "normal"])
 def test_fp16_data_generation_is_finite(dist):
     """A generator at fp16 yields finite float16 (clamped to the safe range)."""
-    from optarena.distributions import generate
+    from optarena.support.distributions import generate
     arr = generate(dist, (64, 64), Precision.FP16, {"rng": np.random.default_rng(0)})
     assert arr.dtype == np.float16
     assert np.isfinite(arr).all(), "fp16 cast produced inf/nan -- safe-range clamp failed"
@@ -42,8 +42,8 @@ def test_fp16_data_generation_is_finite(dist):
 
 def test_fp16_precision_matrix():
     """Only fp16-capable frameworks advertise FP16, so the sweep skips the rest."""
-    from optarena.infrastructure import generate_framework
-    from optarena.infrastructure.framework import FRAMEWORK_META
+    from optarena.frameworks import generate_framework
+    from optarena.frameworks.framework import FRAMEWORK_META
     # numpy is always registered; assert it so the test can never pass vacuously
     # (e.g. an empty table would otherwise skip every case).
     assert "numpy" in FRAMEWORK_META, "framework descriptor table failed to populate"
@@ -65,7 +65,7 @@ def test_fp16_precision_matrix():
 def test_fp16_kernel_executes_via_jax(kernel):
     """An fp16-safe kernel runs at float16 through JAX and validates vs numpy."""
     pytest.importorskip("jax")
-    from optarena.infrastructure import Benchmark, Test, generate_framework
+    from optarena.frameworks import Benchmark, Test, generate_framework
     try:
         res = Test(Benchmark(kernel), generate_framework("jax"), generate_framework("numpy")).run(preset="S",
                                                                                                   validate=True,

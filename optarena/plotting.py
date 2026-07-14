@@ -3,7 +3,7 @@
 """Render the framework-benchmark ``results`` table as a speedup heatmap PDF.
 
 Reads the ``results`` table from the SQLite results DB (``optarena.db`` by default,
-written by the collection sweeps in :mod:`optarena.collect`), keeps the best
+written by the collection sweeps in :mod:`optarena.support.collect`), keeps the best
 (median-fastest) implementation per (framework, benchmark), normalises every
 framework's runtime to NumPy's, and lays the result out as a ``RdYlGn_r`` heatmap
 with per-cell bootstrap-CI superscripts and a geomean ``Total`` row. NumPy's own

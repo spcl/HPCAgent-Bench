@@ -6,7 +6,7 @@ import os
 import signal
 import time
 
-from optarena.infrastructure.forked import forked_failure_reason, run_forked
+from optarena.frameworks.forked import forked_failure_reason, run_forked
 
 
 def _ok():

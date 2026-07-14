@@ -29,7 +29,7 @@ from typing import Any, Dict, Tuple
 
 import numpy as np
 
-from optarena import distributions
+from optarena.support import distributions
 from optarena.precision import Precision, numpy_dtype
 
 

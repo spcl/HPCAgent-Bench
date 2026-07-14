@@ -2,7 +2,7 @@ import torch
 import triton
 import triton.language as tl
 
-from optarena.infrastructure.triton_utilities import grid_sync
+from optarena.frameworks.triton_utilities import grid_sync
 
 
 def get_configs():

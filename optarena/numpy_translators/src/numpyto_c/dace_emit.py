@@ -160,7 +160,7 @@ def _array_annotation(arr) -> str:
 
 
 #: The numpy reference imports the framework's precision-driven dtype globals
-#: (``from optarena.infrastructure.framework import np_float, np_complex``) and uses
+#: (``from optarena.frameworks.framework import np_float, np_complex``) and uses
 #: them as ``dtype=`` / ``.astype(...)`` arguments. The shared python-backend desugar
 #: carries those tokens through verbatim (e.g. ``np.linspace(a, b, n, dtype=np_float)``
 #: -> ``np.linspace(a, b, n).astype(np_float)``), but the dace module binds the *dace*
@@ -897,7 +897,7 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
     out.append("import numpy as np")
     out.append("import dace as dc")
     imp = "dc_float, dc_complex_float" if (needs_complex or framework_dtype.used_complex) else "dc_float"
-    out.append(f"from optarena.infrastructure.dace_framework import {imp}")
+    out.append(f"from optarena.frameworks.dace_framework import {imp}")
     out.append("from math import sin, cos, log, exp, pow, sqrt")
     out.append("")
     if symbol_names:

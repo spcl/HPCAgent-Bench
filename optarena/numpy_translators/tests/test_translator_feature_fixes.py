@@ -1042,7 +1042,7 @@ def test_pythran_clean_strips_imports_and_substitutes_precision():
     """The pythran module drops imports it cannot resolve (optarena framework,
     scipy) and substitutes the np_float / np_complex precision globals."""
     from numpyto_pythran.emit import _clean_for_pythran
-    src = ("from optarena.infrastructure.framework import np_float, np_complex\n"
+    src = ("from optarena.frameworks.framework import np_float, np_complex\n"
            "import scipy.sparse as sp\n"
            "import numpy as np\n"
            "def k(x, out):\n"

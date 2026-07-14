@@ -2,7 +2,7 @@ import torch
 import triton
 import triton.language as tl
 
-from optarena.infrastructure.triton_utilities import derive_launch_arguments, get_2d_tile_offsets, get_6d_tile_offsets, \
+from optarena.frameworks.triton_utilities import derive_launch_arguments, get_2d_tile_offsets, get_6d_tile_offsets, \
     complex_matmul2, complex_mul2, use_grid
 
 

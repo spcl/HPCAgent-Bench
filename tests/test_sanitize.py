@@ -1,4 +1,4 @@
-"""Tests for optarena.sanitize (Workstream J).
+"""Tests for optarena.support.sanitize (Workstream J).
 
 Covers comment-stripping + name-mangling for a small C snippet and a small
 Python snippet:
@@ -18,7 +18,7 @@ import tempfile
 
 import pytest
 
-from optarena.sanitize import build_name_map, mangle, strip_comments, tree_sitter_available
+from optarena.support.sanitize import build_name_map, mangle, strip_comments, tree_sitter_available
 
 TREE_SITTER = tree_sitter_available()
 

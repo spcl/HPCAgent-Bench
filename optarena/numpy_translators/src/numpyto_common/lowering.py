@@ -6556,7 +6556,7 @@ _BUILTIN_NAMES: Set[str] = {
     # at C emit time, so they should NOT be promoted to scalar
     # function parameters.
     "M_PI", "M_E", "INFINITY", "NAN",
-    # ``optarena.infrastructure.framework`` dtype aliases the legacy mandelbrot
+    # ``optarena.frameworks.framework`` dtype aliases the legacy mandelbrot
     # kernels import (``from ... import np_float, np_complex``) and pass as
     # ``dtype=np_float``. The dtype harvest reads them for the local's element
     # type and the zeros/linspace expander then consumes the kwarg, so they

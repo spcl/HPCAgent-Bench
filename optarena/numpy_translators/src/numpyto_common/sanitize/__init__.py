@@ -1,5 +1,5 @@
 """Source sanitization -- the single canonical implementation, shared by the
-standalone numpytranslators package and (re-exported through ``optarena.sanitize``)
+standalone numpytranslators package and (re-exported through ``optarena.support.sanitize``)
 the optarena application.
 
 * :func:`strip_comments` (comments.py) -- multi-language comment removal across the
