@@ -142,7 +142,9 @@ substitution (`judge_scheduler.py:177`). With no args it returns exactly today's
 in the live sbatch — space form `--environment ${ENV_TOML}` (`:65`) and glued
 `--environment=${ENV_TOML}` (`:84,115`) — so `require_ce_environment` (the fail-loud graft)
 accepts BOTH and raises only when a CE launch carries neither the token nor an explicit
-image. It never touches the plain-srun `DEFAULT_JUDGE_LAUNCHER` (legitimately no
+image. It is invoked in `pipeline.grade_remote` **gated on `resolve_backend() == "ce"`** —
+the campaign exports `OPTARENA_RUNTIME_BACKEND=ce`, so the graft fires on Alps but never
+touches the plain-srun `DEFAULT_JUDGE_LAUNCHER` of a non-CE remote judge (legitimately no
 `--environment`).
 
 **Harbor — orchestrator.** Stays outside the wrapper factory; we hand it a backend NAME.
@@ -210,15 +212,17 @@ changes; if false nothing breaks. Recorded assumption, not a bet.
   the CSCS public GPU base is the ONLY image recipe. Build it once, consume it four ways:
   ```
   podman build -f containers/<role>.Dockerfile -t optarena:<role> .   # OCI image (--platform linux/arm64 for Alps)
-  apptainer build optarena-<role>.sif docker-daemon://optarena:<role> # SIF from the SAME OCI (no .def)
+  docker save optarena:<role> -o optarena-<role>.tar                  # daemon-agnostic hand-off (as CI)
+  apptainer build optarena-<role>.sif docker-archive:optarena-<role>.tar # SIF from the SAME OCI (no .def)
   enroot import -o optarena-<role>.sqsh dockerd://optarena:<role>      # CE squashfs (or EDF points at a registry ref)
   docker/podman run optarena:<role> ...                               # run OCI directly
   ```
   The apptainer `.def` files (`containers/*.def`) are **retired** — apptainer builds from the OCI
   image, so there is no second build recipe to keep in sync. **CI impact:** the `e2e-container`
   job's `apptainer build --fakeroot optarena-cpu.sif containers/cpu.def` step
-  (`.github/workflows/tests.yml:317`) changes to build the SIF from the OCI image
-  (`podman build … && apptainer build … docker-daemon://…`), keeping the same gated smoke test.
+  (`.github/workflows/tests.yml:317`) changes to build the SIF from the OCI image via a
+  `docker save` TAR + `docker-archive:` (so apptainer never needs Docker-daemon access), keeping
+  the same gated smoke test.
 - **Run:** `run_campaign.sbatch` currently threads a single `ENV_TOML` into every `srun`. Add
   three role variables — `VLLM_ENV_TOML` / `AGENT_ENV_TOML` / `JUDGE_ENV_TOML`, each defaulting
   to `ENV_TOML` — and pass the matching one to each tier's `srun --environment`. Inference →

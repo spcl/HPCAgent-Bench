@@ -16,7 +16,8 @@
 #   podman build -f containers/optarena.Dockerfile --build-arg HW=nvidia -t optarena:nvidia .
 #   podman build -f containers/optarena.Dockerfile --build-arg HW=amd    -t optarena:amd    .
 #   # Alps (aarch64 GH200): add --platform linux/arm64 --build-arg BASE_IMAGE=<CSCS public GPU base>
-#   apptainer build optarena-cpu.sif docker-daemon://optarena:cpu       # SIF from the SAME OCI (no .def)
+#   docker save optarena:cpu -o optarena-cpu.tar                        # then, daemon-agnostic (as CI):
+#   apptainer build optarena-cpu.sif docker-archive:optarena-cpu.tar    # SIF from the SAME OCI (no .def)
 #   enroot import -o optarena-cpu.sqsh dockerd://optarena:cpu           # CE squashfs from the SAME OCI
 #
 # UNVERIFIED: not build-run in this dev env (no podman/apptainer). Build on real infra before merge;
@@ -153,7 +154,8 @@ WORKDIR /work
 #         import torch; assert '+cpu' in torch.__version__" (CPU torch pin held, no CUDA stack).
 #   [ ] cpu image native libs: /usr/local/lib/libhptt.so + hwy/sleef/hwloc/lapacke via ldconfig;
 #         perf tools present (perf numactl heaptrack likwid papi strace pprof objdump).
-#   [ ] apptainer build optarena-cpu.sif docker-daemon://optarena:cpu -> the two CI smoke asserts pass.
+#   [ ] docker save optarena:cpu -o optarena-cpu.tar && apptainer build optarena-cpu.sif \
+#         docker-archive:optarena-cpu.tar (the daemon-agnostic path CI uses) -> the two smoke asserts pass.
 #   [ ] mpi4py links THIS image's MPICH (mpicc.mpich), NOT OpenMPI.
 #   [ ] Alps: --platform linux/arm64 --build-arg BASE_IMAGE=<CSCS GPU base>; confirm the nvidia GPU
 #         apt packages don't conflict with the base's preinstalled CUDA (drop them if redundant).

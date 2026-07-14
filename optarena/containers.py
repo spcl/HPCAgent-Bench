@@ -120,11 +120,13 @@ def default_image(backend: str, hardware: str = "cpu", repo_root: Optional[str] 
     return os.environ.get("OPTARENA_DOCKER_IMAGE") or spelling.image_default.format(hw=hardware)
 
 
-def collect_env(hardware: str, extra: Optional[Mapping[str, str]] = None) -> List[Tuple[str, str]]:
+def collect_env(hardware: str) -> List[Tuple[str, str]]:
     """The ``(key, value)`` env pairs to forward into the image, in a PINNED order so the
     bash fold matches byte-for-byte: ``OPTARENA_IMAGE=<hw>`` first, then
     :data:`PASSTHROUGH_ENV` (present, in file order), then every other ``OPTARENA_*`` var
-    sorted (Python's str sort == ``LC_ALL=C sort``), then ``extra``."""
+    sorted (Python's str sort == ``LC_ALL=C sort``). Reads only the environment -- there is no
+    caller-supplied extra, because the bash fold has no such channel and any divergence would
+    silently break the byte-for-byte parity."""
     pairs: List[Tuple[str, str]] = [("OPTARENA_IMAGE", hardware)]
     seen = {"OPTARENA_IMAGE"}
     for key in PASSTHROUGH_ENV:
@@ -137,8 +139,13 @@ def collect_env(hardware: str, extra: Optional[Mapping[str, str]] = None) -> Lis
         if value:
             pairs.append((key, value))
             seen.add(key)
-    if extra:
-        pairs.extend(extra.items())
+    # Invariant (container_backends.txt): the fold is newline-delimited on the bash side, so a
+    # value with a newline would split into extra argv tokens there while staying one token here
+    # -- a silent parity break. Fail loud rather than emit a corrupt launch.
+    for key, value in pairs:
+        if "\n" in value:
+            raise ValueError(f"env {key!r} contains a newline; the launch fold is newline-delimited "
+                             f"and cannot forward it (container_backends.txt token-list invariant)")
     return pairs
 
 
@@ -147,7 +154,6 @@ def local_run_command(inner: Sequence[str],
                       backend: Optional[str] = None,
                       hardware: str = "cpu",
                       image: Optional[str] = None,
-                      env: Optional[Mapping[str, str]] = None,
                       repo_root: Optional[str] = None) -> List[str]:
     """THE factory: the full launch argv for running ``inner`` inside the image under an
     exec-wrapper backend -- ``prefix + [image] + inner`` in the fixed fold order the bash
@@ -159,7 +165,7 @@ def local_run_command(inner: Sequence[str],
     spelling = SPELLINGS[chosen]
     repo = repo_root or os.getcwd()
     argv: List[str] = [chosen, *spelling.verb, *spelling.gpu.get(hardware, ())]
-    for key, value in collect_env(hardware, env):
+    for key, value in collect_env(hardware):
         argv += [spelling.env_flag, f"{key}={value}"]
     argv += [spelling.bind_flag, f"{repo}:{repo}", spelling.workdir_flag, repo]
     argv.append(image or default_image(chosen, hardware, repo))
