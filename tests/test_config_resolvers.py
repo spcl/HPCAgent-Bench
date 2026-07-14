@@ -22,9 +22,9 @@ def _defaults_only(monkeypatch):
     monkeypatch.setattr(config, "get", lambda dotted, default=None: default)
 
 
-def test_measurement_baseline_code_default_matches_yaml_track(monkeypatch):
+def test_measurement_baseline_code_default_is_auto(monkeypatch):
     _defaults_only(monkeypatch)
-    assert timing.measurement_baseline() == "track"
+    assert timing.measurement_baseline() == "auto"
 
 
 def test_correctness_size_cap_code_default_matches_yaml_1024(monkeypatch):

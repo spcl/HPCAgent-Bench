@@ -182,18 +182,20 @@ AUTOPAR_BASELINES: Dict[str, Tuple[str, str]] = {
 }
 
 #: Concrete speedup-denominator kinds the timing path understands: ``numpy`` (always
-#: available), ``c`` (sequential C reference), ``both`` (each), and the three
-#: ``*-autopar`` kinds (the auto-parallelized compiled reference).
-BASELINE_CHOICES = ("numpy", "c", "both") + tuple(AUTOPAR_BASELINES)
+#: available), ``c`` (sequential C reference), and the three ``*-autopar`` kinds (the
+#: auto-parallelized compiled reference). A denominator is ONE reference, never "both".
+BASELINE_CHOICES = ("numpy", "c") + tuple(AUTOPAR_BASELINES)
 
-#: The sentinel a caller passes to mean "resolve the baseline from the kernel's
-#: track" -- the user-facing default. NOT a concrete kind: :func:`resolve_baseline`
-#: maps it to one via :data:`TRACK_DEFAULT_BASELINE` before any timing.
-TRACK_BASELINE = "track"
+#: The boundary token (CLI / config / wire) a caller passes to mean "resolve the baseline
+#: from the kernel's track" -- the user-facing default. NOT a Baseline enum member and NOT
+#: a concrete kind: :func:`resolve_baseline` maps it (or ``None``) to a concrete kind via
+#: :data:`TRACK_DEFAULT_BASELINE` before any timing. Named ``auto`` (not ``track``) so it
+#: does not collide with the kernel-taxonomy ``track`` field.
+AUTO_BASELINE = "auto"
 
 #: Everything the CLI / config / API / service accept for the baseline knob: the
-#: concrete :data:`BASELINE_CHOICES` plus the :data:`TRACK_BASELINE` sentinel.
-BASELINE_OPTIONS = BASELINE_CHOICES + (TRACK_BASELINE, )
+#: concrete :data:`BASELINE_CHOICES` plus the :data:`AUTO_BASELINE` sentinel.
+BASELINE_OPTIONS = BASELINE_CHOICES + (AUTO_BASELINE, )
 
 #: Per-track DEFAULT speedup baseline, applied when the user does not override the
 #: baseline. Foundation kernels (single-op vectorization puzzles) are timed against
@@ -218,11 +220,11 @@ def default_baseline_for_track(track: Optional[str]) -> str:
 def resolve_baseline(baseline: Optional[str], spec: BenchSpec) -> str:
     """Resolve a baseline selection to a concrete kind for ``spec``.
 
-    ``None`` or the :data:`TRACK_BASELINE` sentinel resolve from the kernel's track
+    ``None`` or the :data:`AUTO_BASELINE` sentinel resolve from the kernel's track
     (:data:`TRACK_DEFAULT_BASELINE`); any concrete kind is an explicit override that
     passes through unchanged. Raises ``ValueError`` on an unknown concrete kind.
     """
-    if baseline is None or baseline == TRACK_BASELINE:
+    if baseline is None or baseline == AUTO_BASELINE:
         return default_baseline_for_track(spec.track)
     if baseline not in BASELINE_CHOICES:
         raise ValueError(f"baseline must be one of {BASELINE_OPTIONS}; got {baseline!r}")
@@ -230,8 +232,8 @@ def resolve_baseline(baseline: Optional[str], spec: BenchSpec) -> str:
 
 
 def baseline_uses_numpy(baseline: str) -> bool:
-    """Whether the resolved ``baseline`` times the numpy reference (``numpy`` / ``both``)."""
-    return baseline in ("numpy", "both")
+    """Whether the resolved ``baseline`` times the numpy reference."""
+    return baseline == "numpy"
 
 
 def baseline_compiled(baseline: str) -> Optional[Tuple[str, str, str, Mode]]:
@@ -239,11 +241,11 @@ def baseline_compiled(baseline: str) -> Optional[Tuple[str, str, str, Mode]]:
     ``(label, language, compilers.yaml block, mode)`` -- or ``None`` for a
     numpy-only baseline.
 
-    ``c`` / ``both`` -> the sequential C reference (single-core, the language's
-    default compiler, so ``block`` is ``""``); a ``*-autopar`` kind -> its language's
-    forced compiler + :attr:`~optarena.flags.Mode.MULTI_CORE` (the autopar flags).
+    ``c`` -> the sequential C reference (single-core, the language's default compiler,
+    so ``block`` is ``""``); a ``*-autopar`` kind -> its language's forced compiler +
+    :attr:`~optarena.flags.Mode.MULTI_CORE` (the autopar flags).
     """
-    if baseline in ("c", "both"):
+    if baseline == "c":
         return ("c", "c", "", Mode.SINGLE_CORE)
     if baseline in AUTOPAR_BASELINES:
         lang, compiler = AUTOPAR_BASELINES[baseline]
