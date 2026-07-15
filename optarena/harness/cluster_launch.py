@@ -30,6 +30,7 @@ placement, it does not provision vLLM. The pure planning helpers (:func:`plan_ro
 :func:`assemble_urls`) carry no MPI dependency so they unit-test without a cluster;
 :func:`launch` imports ``mpi4py`` lazily.
 """
+import math
 import socket
 import subprocess
 import sys
@@ -44,9 +45,10 @@ JUDGE = "judge"
 
 RAY_PORT = 6379
 
-#: Grace before the driver checks for servers that already died, so a doomed spawn (bad --model /
-#: a taken port / an import error) fast-fails instead of burning the whole ``ready_timeout``.
-STARTUP_SETTLE = 10.0
+#: Poll cadence for the collective readiness/liveness loop -- every ``POLL_INTERVAL`` seconds each
+#: rank re-reports whether its own server has bound its port or died, so a death at ANY point in
+#: startup (not just a fixed settle window) aborts the run within one round.
+POLL_INTERVAL = 5.0
 
 
 @dataclass(frozen=True)
@@ -223,6 +225,47 @@ def teardown(procs: Sequence[subprocess.Popen], me: RankRole, nodes_per_vllm: in
         log(f"[launch] teardown error (ignored): {exc}")
 
 
+def settle_rounds(ready_timeout: float, poll_interval: float = POLL_INTERVAL) -> int:
+    """How many readiness rounds the collective settle loop runs for a ``ready_timeout``.
+
+    Derived purely from the (rank-identical) timeout so every rank agrees on the count. A non-finite
+    timeout -- ``argparse``'s ``type=float`` accepts ``inf`` / ``nan``, a natural way to say "wait
+    forever" -- is normalized to a long finite wait rather than crashing ``int()``. Floored at 2 so
+    there is always at least one poll AFTER a grace sleep: a server that dies a few ms after spawn is
+    still alive at the first (immediate) probe and is only caught as dead on the round that follows.
+    """
+    if not math.isfinite(ready_timeout):
+        ready_timeout = 24 * 3600.0
+    return max(2, int(ready_timeout // poll_interval))
+
+
+def rank_status(me: RankRole, procs: Sequence[subprocess.Popen], vllm_port: int, judge_port: int, hostname: str,
+                rank: int) -> Dict[str, str]:
+    """This rank's state for the collective settle loop, as ``{"kind", "detail"}``:
+
+    * ``dead``    -- one of its server processes exited non-zero (fatal: abort the whole run).
+    * ``ready``   -- its serving port accepts a local connection (a ray WORKER has no serving
+      port of its own, so it is ready as soon as it is alive; its head's port gates the endpoint).
+    * ``pending`` -- still coming up.
+
+    Each rank probes its OWN ``127.0.0.1`` port, so readiness needs no cross-node name resolution
+    and a process that dies mid-startup is caught the very next round -- not only in a fixed
+    initial window.
+    """
+    for proc in procs:
+        rc = proc.poll()
+        if rc not in (None, 0):
+            return {"kind": "dead", "detail": f"rank {rank} ({me.role}) on {hostname}: server exited rc={rc}"}
+    if me.role == VLLM_WORKER:
+        return {"kind": "ready", "detail": ""}
+    port = judge_port if me.role == JUDGE else vllm_port
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=5).close()
+        return {"kind": "ready", "detail": ""}
+    except OSError:
+        return {"kind": "pending", "detail": f"rank {rank} ({me.role}) on {hostname}: port {port} not bound yet"}
+
+
 def launch(*, inference_endpoints: int, nodes_per_vllm: int, judge_nodes: int, model: str,
            run_driver: Callable[[List[str], List[str]], int], vllm_port: int = 8000,
            judge_port: int = 8800, gpus_per_node: int = 4, ready_timeout: float = 1800.0,
@@ -265,17 +308,34 @@ def launch(*, inference_endpoints: int, nodes_per_vllm: int, judge_nodes: int, m
         spawn_error = f"rank {rank} ({me.role}) on {hostname}: {exc}"
         log(f"[launch] {spawn_error}")
 
-    failures = [e for e in comm.allgather(spawn_error) if e]  # collective: also syncs all ranks
-    if not failures:
-        # Popen returns for a command that execs then dies 1 ms later (bad --model / a port already
-        # bound / a vllm import error), so a clean spawn is not a live server. Let such a server fail
-        # fast, then allgather the early exits so the driver aborts NOW instead of polling a port that
-        # will never bind for the whole ready_timeout. Collective + guarded by the identical `failures`,
-        # so every rank runs this or none does.
-        time.sleep(min(STARTUP_SETTLE, ready_timeout))
-        early = next((f"rank {rank} ({me.role}) on {hostname}: server exited early rc={proc.poll()}"
-                      for proc in procs if proc.poll() not in (None, 0)), "")
-        failures = [e for e in comm.allgather(early) if e]
+    # Collective readiness + liveness loop. Every round each rank reports its OWN state (server port
+    # bound / a server process died / still coming up) and allgathers it, so a death ANYWHERE and at
+    # ANY time -- not just inside a fixed settle window -- aborts the run fast (a Popen that execs
+    # then dies 1 ms later, an OOM 90 s into model load: both caught the next round). The loop exits
+    # on the SAME round for every rank because the decision reads only the shared allgather result,
+    # so no rank can skip a collective and strand the others. ``spawn_error`` counts as dead.
+    # Bound the wait by a ROUND COUNT, not each rank's wall clock: a per-rank ``time.monotonic()``
+    # deadline could trip on one rank a round before another, so that rank would leave the loop while
+    # the others block forever in the next ``allgather``. The budget is derived from the shared
+    # ``ready_timeout`` arg (settle_rounds normalizes a non-finite timeout and floors at 2), so every
+    # rank runs the identical number of rounds and breaks together.
+    rounds_budget = settle_rounds(ready_timeout)
+    failures: List[str] = []
+    pending: List[str] = []
+    for attempt in range(rounds_budget):
+        if attempt:
+            time.sleep(POLL_INTERVAL)
+        mine = ({"kind": "dead", "detail": spawn_error} if spawn_error else
+                rank_status(me, procs, vllm_port, judge_port, hostname, rank))
+        statuses = comm.allgather(mine)
+        failures = [s["detail"] for s in statuses if s["kind"] == "dead"]
+        pending = [s["detail"] for s in statuses if s["kind"] == "pending"]
+        if failures or not pending:
+            break
+        if me.is_driver:
+            log(f"[launch] waiting on {len(pending)}/{len(statuses)} rank(s) "
+                f"(round {attempt + 1}/{rounds_budget})...")
+
     rc = 0
     try:
         if me.is_driver:
@@ -284,16 +344,25 @@ def launch(*, inference_endpoints: int, nodes_per_vllm: int, judge_nodes: int, m
                 for err in failures:
                     log(f"  {err}")
                 rc = 4
+            elif pending:
+                log(f"[launch] {len(pending)} rank(s) not ready within {ready_timeout:.0f}s; aborting:")
+                for stuck in pending:
+                    log(f"  {stuck}")
+                rc = 3
             else:
                 vllm_urls, judge_urls = assemble_urls(gathered, vllm_port, judge_port)
                 log(f"[launch] {inference_endpoints} vLLM endpoint(s) x {nodes_per_vllm} node(s), "
                     f"{judge_nodes} judge(s)")
                 log(f"[launch] vllm_urls={vllm_urls}")
                 log(f"[launch] judge_urls={judge_urls}")
-                if wait_ready(vllm_urls + judge_urls, ready_timeout, log):
+                # Every port is bound on its own node; confirm the driver can REACH each across the
+                # fabric (a bound-but-unreachable node = a DNS / Slingshot problem) before the run.
+                # Bounded + driver-local (no collective), so a fixed budget can't skew any barrier.
+                # Constant first in min() so a non-finite ready_timeout still yields 60.0, not inf/nan.
+                if wait_ready(vllm_urls + judge_urls, min(60.0, ready_timeout), log):
                     rc = run_driver(vllm_urls, judge_urls) or 0
                 else:
-                    log(f"[launch] endpoints not all reachable within {ready_timeout:.0f}s; aborting")
+                    log("[launch] endpoints bound but not reachable from the driver; aborting")
                     rc = 3
     except BaseException as exc:  # noqa: BLE001 -- a driver crash must still reach the barrier + release the servers
         log(f"[launch] driver failed: {exc}")

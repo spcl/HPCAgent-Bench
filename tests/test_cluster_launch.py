@@ -6,10 +6,27 @@ Covers the rank->role partition, the URL assembly, and the vLLM argv -- the part
 decide the deployment shape; the MPI orchestration + subprocess lifecycle are exercised
 only on a real allocation.
 """
+import socket
+
 import pytest
 
-from optarena.harness.cluster_launch import (JUDGE, VLLM_HEAD, VLLM_WORKER, assemble_urls, endpoint_hostport,
-                                             expected_world, plan_roles, vllm_command)
+from optarena.harness.cluster_launch import (JUDGE, RankRole, VLLM_HEAD, VLLM_WORKER, assemble_urls,
+                                             endpoint_hostport, expected_world, plan_roles, rank_status,
+                                             settle_rounds, vllm_command)
+
+
+class FakeProc:
+    """Stand-in for a subprocess.Popen: poll() returns the fixed code (None = still running)."""
+
+    def __init__(self, code):
+        self.code = code
+
+    def poll(self):
+        return self.code
+
+
+HEAD = RankRole(VLLM_HEAD, 0, 0, is_driver=True)
+WORKER = RankRole(VLLM_WORKER, 0, 0, is_driver=False)
 
 
 def test_expected_world_is_inference_plus_judge():
@@ -81,3 +98,44 @@ def test_vllm_command_multinode_turns_on_ray_pipeline():
 def test_endpoint_hostport_parses_v1_suffix_and_bare():
     assert endpoint_hostport("http://nid00:8000/v1") == ("nid00", 8000)
     assert endpoint_hostport("nid07:8800") == ("nid07", 8800)
+
+
+def test_settle_rounds_normal_and_floored_at_two():
+    assert settle_rounds(1800.0, poll_interval=5.0) == 360
+    # a sub-2*interval timeout must still get >= 2 rounds (>= 1 poll AFTER a grace sleep), never 1/0,
+    # else a spawn that dies just after Popen is misreported pending instead of dead
+    assert settle_rounds(8.0, poll_interval=5.0) == 2
+    assert settle_rounds(0.0, poll_interval=5.0) == 2
+    assert settle_rounds(-3.0, poll_interval=5.0) == 2
+
+
+@pytest.mark.parametrize("bad", [float("inf"), float("-inf"), float("nan")])
+def test_settle_rounds_non_finite_does_not_crash(bad):
+    # argparse's type=float accepts 'inf'/'nan'; these must NOT crash int(), just cap to a long wait
+    assert settle_rounds(bad, poll_interval=5.0) == 24 * 3600 // 5
+
+
+def test_rank_status_dead_when_a_server_exited_nonzero():
+    # a server process that exited with a non-zero code is fatal -> the settle loop aborts the run
+    st = rank_status(HEAD, [FakeProc(1)], vllm_port=8000, judge_port=8800, hostname="nid00", rank=0)
+    assert st["kind"] == "dead" and "rc=1" in st["detail"]
+
+
+def test_rank_status_worker_ready_while_alive_needs_no_port():
+    # a ray worker has no serving port of its own -> ready as soon as its join process is alive
+    st = rank_status(WORKER, [FakeProc(None)], vllm_port=8000, judge_port=8800, hostname="nid01", rank=1)
+    assert st["kind"] == "ready"
+
+
+def test_rank_status_pending_until_port_binds_then_ready():
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))  # reserve a free port but do NOT listen yet
+    port = listener.getsockname()[1]
+    try:
+        pending = rank_status(HEAD, [FakeProc(None)], vllm_port=port, judge_port=8800, hostname="nid00", rank=0)
+        assert pending["kind"] == "pending"  # nothing accepting -> connection refused -> pending
+        listener.listen(1)
+        ready = rank_status(HEAD, [FakeProc(None)], vllm_port=port, judge_port=8800, hostname="nid00", rank=0)
+        assert ready["kind"] == "ready"  # port now accepts -> ready
+    finally:
+        listener.close()
