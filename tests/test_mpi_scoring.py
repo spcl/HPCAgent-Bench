@@ -8,9 +8,10 @@ loop over each rank's owned tile -- C source OR the mpi4py twin) plus a 1-D bloc
 The test drives the full path: build the MPI artifact, launch R ranks, scatter, run, gather, and
 grade the reconstructed whole-domain output against the NumPy reference -- asserting the
 submission is scored SOLVED (reference == baseline, so a positive speed-up near 1x), for BOTH the
-C (``bench`` executable) and python (mpi4py) deliveries. Gated on a working MPICH toolchain (the
-config default); skips cleanly where none bootstraps, like the other MPI-launch tests. Importing
-the launch helpers sets the hwloc anti-hang env.
+C (``bench`` executable) and python (mpi4py) deliveries. The C tests take the ``mpi_c`` fixture,
+which gates on an MPI that REALLY compiles + launches a 2-rank job here (MPICH first, then OpenMPI)
+and pins both toolchain halves to it; only a host where no MPI bootstraps skips. Importing the
+launch helpers sets the hwloc anti-hang env.
 """
 import math
 import shutil
@@ -27,8 +28,33 @@ from optarena.support.bindings import binding_from_spec
 from optarena.support.bindings.mpi_driver import gen_kernel_mpi_stub
 from optarena.spec import BenchSpec
 from tests import mpi_launch_helpers  # noqa: F401 -- import sets HWLOC_COMPONENTS process-wide
+from tests.mpi_launch_helpers import c_toolchain, cc_override_for
 
 _BLOCK0 = {"axes": [{"grid_dim": 0, "scheme": "block"}]}
+
+
+@pytest.fixture
+def mpi_c():
+    """The discovered C MPI toolchain, wired into the config the scoring path reads.
+
+    Gates on a REAL 2-rank launch here -- :func:`~tests.mpi_launch_helpers.c_toolchain` compiles and
+    runs a hello under each candidate (MPICH first, then OpenMPI) and demands two DISTINCT ranks --
+    rather than probing for the MPICH binaries by name, which self-skipped this whole file on an
+    OpenMPI-only host even though the C driver is MPI-portable. BOTH toolchain halves are pinned to
+    that one MPI (``mpi.launcher`` + ``mpi.compilers``), since a bench built by an OpenMPI wrapper
+    does not bootstrap under ``mpiexec.mpich``. Only a host where NO MPI bootstraps skips.
+    """
+    tc = c_toolchain()
+    if tc is None:
+        pytest.skip("no MPI toolchain compiles + launches a real 2-rank job here")
+    cc, launch = tc
+    config.set_override("mpi.launcher", list(launch))
+    config.set_override("mpi.compilers", cc_override_for(cc))
+    try:
+        yield tc
+    finally:
+        config.clear_override("mpi.launcher")
+        config.clear_override("mpi.compilers")
 
 
 def _noop_submission(language: str = "c") -> Submission:
@@ -39,11 +65,9 @@ def _noop_submission(language: str = "c") -> Submission:
     return NoOpMPIOptimizer().solve(Task(kernel="scaled_add", language=language, residency="distributed"))
 
 
-def test_distributed_scaled_add_scores_solved():
-    if shutil.which("mpiexec.mpich") is None or shutil.which("mpicc.mpich") is None:
-        pytest.skip("MPICH toolchain (mpicc.mpich + mpiexec.mpich) unavailable")
-    # The config defaults (mpi.ranks=4, mode=strong, launcher=[mpiexec.mpich,-n]) match the
-    # grid and the MPICH build wrapper, so no override is needed; a small preset keeps it fast.
+def test_distributed_scaled_add_scores_solved(mpi_c):
+    # The remaining config defaults (mpi.ranks=4, mode=strong) match the grid; the fixture pins the
+    # launcher + build wrapper to the discovered MPI. A small preset keeps it fast.
     task = Task(kernel="scaled_add", language="c", residency="distributed")
     result = scoring.score(_noop_submission(), task, preset="S")
 
@@ -71,9 +95,7 @@ def test_distributed_scaled_add_python_delivery_scores_solved():
     assert result.build_ok and result.native_ns >= 0 and result.speedup > 0
 
 
-def test_distributed_independent_verify_passes_for_reference():
-    if shutil.which("mpiexec.mpich") is None or shutil.which("mpicc.mpich") is None:
-        pytest.skip("MPICH toolchain unavailable")
+def test_distributed_independent_verify_passes_for_reference(mpi_c):
     sub = _noop_submission()
     task = Task(kernel="scaled_add", language="c", residency="distributed")
     result = scoring.score(sub, task, preset="S")
@@ -85,12 +107,10 @@ def test_distributed_independent_verify_passes_for_reference():
     assert not verdict.dual_oracle_applied  # the C dual-oracle does not apply to the MPI path
 
 
-def test_distributed_leaderboard_routing_scores_solved():
+def test_distributed_leaderboard_routing_scores_solved(mpi_c):
     # The ranked metric (score_task_fuzzed) must route a distributed task through the MPI scaling
     # protocol, not the single-node configs x shapes sweep (which would grade the <base>_mpi export
     # as a failed build). One measured, verified iteration; s_i >= 1 for the reference == baseline.
-    if shutil.which("mpiexec.mpich") is None or shutil.which("mpicc.mpich") is None:
-        pytest.skip("MPICH toolchain unavailable")
     from optarena.harness.metric import score_task_fuzzed
     task = Task(kernel="scaled_add", language="c", residency="distributed")
     # The leaderboard base is XL (268M elems); pin S so the test's build + 4 MPI launches stay fast.
@@ -105,9 +125,7 @@ def test_distributed_leaderboard_routing_scores_solved():
     assert ts.perf_mode.startswith("mpi:")
 
 
-def test_distributed_bad_kernel_is_a_scored_failure_not_a_crash():
-    if shutil.which("mpiexec.mpich") is None or shutil.which("mpicc.mpich") is None:
-        pytest.skip("MPICH toolchain unavailable")
+def test_distributed_bad_kernel_is_a_scored_failure_not_a_crash(mpi_c):
     # A kernel that does not compile -> a scored Score(correct=False), never a runner death.
     binding = binding_from_spec(BenchSpec.load("scaled_add"))
     stub = gen_kernel_mpi_stub(binding)
@@ -126,9 +144,7 @@ _STENCILS = ["jacobi_2d", "heat_3d"]
 
 
 @pytest.mark.parametrize("kernel", _STENCILS)
-def test_distributed_stencil_scores_solved(kernel):
-    if shutil.which("mpiexec.mpich") is None or shutil.which("mpicc.mpich") is None:
-        pytest.skip("MPICH toolchain (mpicc.mpich + mpiexec.mpich) unavailable")
+def test_distributed_stencil_scores_solved(kernel, mpi_c):
     # build_mpi -> block-row scatter of owned interiors -> R ranks (each derives its slab from the
     # comm + exchanges the halo) -> gather -> grade vs the whole-domain NumPy reference. The C kernel
     # disables FMA contraction, so the gathered field is bit-exact and scores correct.
@@ -156,14 +172,12 @@ def test_distributed_stencil_python_delivery_scores_solved(kernel):
     assert result.build_ok and result.native_ns >= 0 and result.speedup > 0
 
 
-def test_distributed_stencil_leaderboard_routing_scores_solved():
+def test_distributed_stencil_leaderboard_routing_scores_solved(mpi_c):
     # jacobi_2d through the ranked-leaderboard path: score_task_fuzzed must route a distributed task
     # through the MPI scaling protocol (one timed iteration, gated by a fresh-build MPI re-verify) --
     # NOT the single-node configs x shapes sweep, which would grade the <base>_mpi export as a failed
     # build. ``solved`` folds in the independent re-verify, so a haloed stencil passing here proves it
     # survives the persistence gate the recorder runs, exactly like scaled_add.
-    if shutil.which("mpiexec.mpich") is None or shutil.which("mpicc.mpich") is None:
-        pytest.skip("MPICH toolchain unavailable")
     from optarena.harness.metric import score_task_fuzzed
     task = Task(kernel="jacobi_2d", language="c", residency="distributed")
     config.set_override("mpi.leaderboard_preset", "S")  # XL (16383^2) would be multi-GB; S keeps it fast
@@ -186,9 +200,7 @@ def test_distributed_stencil_leaderboard_routing_scores_solved():
 # the DISTINCT-per-axis symbols (M, N each size one grid dim) end to end.
 
 
-def test_distributed_block_cyclic_2d_scores_solved():
-    if shutil.which("mpiexec.mpich") is None or shutil.which("mpicc.mpich") is None:
-        pytest.skip("MPICH toolchain (mpicc.mpich + mpiexec.mpich) unavailable")
+def test_distributed_block_cyclic_2d_scores_solved(mpi_c):
     task = Task(kernel="mat_scaled_add", language="c", residency="distributed")
     sub = NoOpMPIOptimizer().solve(task)
     assert sub.distribution["grid"] == [2, 2]  # the equal-edge 2-D hypercube for R=4
@@ -283,8 +295,6 @@ def test_distributed_scaled_add_device_cuda_source_scores_solved():
         pytest.skip("no CUDA device / cupy")
     if not _nvcc_available():
         pytest.skip("no nvcc")
-    if shutil.which("mpiexec.mpich") is None or shutil.which("mpicc.mpich") is None:
-        pytest.skip("MPICH toolchain unavailable")
     sub = Submission(language="cuda", source=_CUDA_SCALED_ADD, distribution=_noop_submission("c").distribution)
     task = Task(kernel="scaled_add", language="cuda", residency="distributed")
     config.set_override("mpi.residency", "device")
@@ -341,8 +351,6 @@ def test_distributed_scaled_add_mixed_host_device_scores_solved():
         pytest.skip("no CUDA device / cupy")
     if not _nvcc_available():
         pytest.skip("no nvcc")
-    if shutil.which("mpiexec.mpich") is None or shutil.which("mpicc.mpich") is None:
-        pytest.skip("MPICH toolchain unavailable")
     distribution = {
         "grid": [4],
         "arrays": {
@@ -464,6 +472,11 @@ def test_score_scaling_strong_times_anchor_once_and_notes_failures(monkeypatch):
     monkeypatch.setattr(S.Descriptor, "from_submission",
                         classmethod(lambda cls, *a, **k: types.SimpleNamespace(any_device=lambda binding: False)))
     monkeypatch.setattr(S.config, "get", lambda key, default=None: "strong" if key == "mpi.mode" else default)
+    # Disable warmup so the anchor's _call_isolated count is exactly its distinct-size count: the
+    # anchor is genuinely warmed in production (warmup_count() default 1 -> warmup + repeat calls per
+    # size), which is timing.warmup_count()'s own config, not the S.config alias patched above. With
+    # warmup 0, "timed ONCE and reused across P" reads as calls == 1 rather than == (warmup + 1).
+    monkeypatch.setattr(S.timing, "warmup_count", lambda: 0)
 
     block = {"axes": [{"grid_dim": 0, "scheme": "block"}]}
     sub = Submission(language="c", source="mpi", distribution={"grid": [1], "arrays": {"x": block}})
@@ -482,13 +495,11 @@ def test_score_scaling_strong_times_anchor_once_and_notes_failures(monkeypatch):
     assert runs.mode == "strong"
 
 
-def test_distributed_scaling_curve_e2e():
+def test_distributed_scaling_curve_e2e(mpi_c):
     """END-TO-END P-sweep: the reference MPI scaled_add is timed at P in {1,2,4} with the reference
     single-node submission as the T_i(1) anchor, producing a strong-scaling curve. Each P re-grids
     the 1-D block distribution to [P]; every point runs, grades correct, and carries the ideal
     strong speed-up sigma* = P. The scalar S_i is untouched by the curve."""
-    if shutil.which("mpiexec.mpich") is None or shutil.which("mpicc.mpich") is None:
-        pytest.skip("MPICH toolchain unavailable")
     import importlib.util
     if importlib.util.find_spec("numpyto_c") is None or shutil.which("gcc") is None:
         pytest.skip("single-node C anchor needs the NumpyToC emitter + gcc")
