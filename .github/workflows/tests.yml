@@ -378,9 +378,22 @@ jobs:
         # optarena-cpu.sif containers/cpu.def`.
         if: ${{ !cancelled() }}
         run: |
+          # Reclaim disk FIRST. The unified image (torch + dace + jax + the HPC stack) is multi-GB
+          # and this step keeps THREE copies live at once -- the docker layers, the `docker save`
+          # tar, and the converted SIF -- while a stock runner has only ~14 GB free. Without this
+          # the build itself succeeds and `docker save` dies on "no space left on device". These
+          # preinstalled toolchains are never used by this job.
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup || true
+          df -h / | tail -1
           docker build -f containers/optarena.Dockerfile --build-arg HW=cpu -t optarena:cpu .
           docker save optarena:cpu -o optarena-cpu.tar
+          # The docker layers are dead once the tar exists; drop them before the SIF (a third copy).
+          docker image rm optarena:cpu >/dev/null 2>&1 || true
+          docker builder prune -af >/dev/null 2>&1 || true
           apptainer build optarena-cpu.sif docker-archive:optarena-cpu.tar
+          # ...and the tar is dead once the SIF exists; Phase 6b only needs the SIF.
+          rm -f optarena-cpu.tar
+          df -h / | tail -1
           # The cpu image must import its numeric deps and carry the CPU-only torch build: a
           # bare ``torch`` would drag in the ~2 GB CUDA stack (see cpu.def). Assert the ``+cpu``
           # local version.
