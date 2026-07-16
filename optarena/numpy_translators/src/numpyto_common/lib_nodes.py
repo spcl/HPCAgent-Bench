@@ -535,6 +535,21 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
         if (isinstance(expr.func, ast.Attribute) and isinstance(expr.func.value, ast.Name)
                 and expr.func.value.id == "np"):
             attr = expr.func.attr
+            # An array CONSTRUCTOR states its extent outright in its shape argument, so
+            # read it from there -- an INLINE constructor is never assigned to a Name,
+            # so the harvest never sizes it and the shape-table lookup cannot resolve
+            # it. Without this the triu / tril first-arg hoist in ``_CallHoister`` (which
+            # only fires on a resolvable extent) leaves the constructor buried and the
+            # bare-Name expander then rejects it -- gpt2_block's causal mask,
+            # ``np.triu(np.ones((seq, seq), np.float32), 1)``. The ``*_like`` aliases take
+            # an ARRAY rather than a shape, so mirror that operand's extent instead.
+            if attr in NP_ZEROS_ALIASES and expr.args:
+                if attr.endswith("_like"):
+                    return _iter_extent_of(expr.args[0], shape_table)
+                shape_arg = expr.args[0]
+                if isinstance(shape_arg, (ast.Tuple, ast.List)):
+                    return tuple(copy.deepcopy(e) for e in shape_arg.elts)
+                return (copy.deepcopy(shape_arg), )
             if attr == "reshape" and len(expr.args) >= 2:
                 newshape = expr.args[1]
                 elts: Optional[List[ast.expr]] = None
@@ -6967,9 +6982,13 @@ class _CallHoister(ast.NodeTransformer):
             ranks = [len(self.shape_table.get(a.id, ())) for a in node.args if isinstance(a, ast.Name)]
             if any(r > 1 for r in ranks):
                 is_scalar = False
-        # Axis-aware reductions with axis specified return an array.
+        # Axis-aware reductions with axis specified return an array. ``var`` belongs
+        # here for the same reason ``std`` does -- they are ONE op (``_expand_var_or_std``,
+        # std is var plus a sqrt), so an axis-aware ``np.var`` is equally array-valued.
+        # Omitting it left gpt2_block's layer-norm ``np.var(z, axis=-1, keepdims=True)``
+        # classified scalar, so its temp was never sized or declared as an array.
         if (is_scalar and key[1] in {
-                "sum", "max", "min", "mean", "prod", "std", "argmax", "argmin", "any", "all", "count_nonzero",
+                "sum", "max", "min", "mean", "prod", "std", "var", "argmax", "argmin", "any", "all", "count_nonzero",
                 "linalg.norm"
         } and self._cur_axis is not None):
             is_scalar = False
@@ -7234,7 +7253,8 @@ class _CallHoister(ast.NodeTransformer):
         # ``argmax``/``argmin`` with an axis return the index array over the
         # kept axes (same kept-axes shape as a value reduction). An axis-aware
         # ``linalg.norm`` is a per-line L2 reduction with the same kept-axes shape.
-        if op in {"sum", "max", "min", "mean", "prod", "std", "argmax", "argmin", "linalg.norm"}:
+        # ``var`` sizes exactly like ``std`` (one op -- std is var plus a sqrt).
+        if op in {"sum", "max", "min", "mean", "prod", "std", "var", "argmax", "argmin", "linalg.norm"}:
             if args and isinstance(args[0], ast.Name):
                 src_shape = self.shape_table.get(args[0].id)
                 if src_shape:

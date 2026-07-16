@@ -349,6 +349,14 @@ _INT_RETURNING_CALLS = {
 }
 _INT_CALLS_ARGDEP = {"max", "min", "int_floor", "python_mod"}
 
+#: Fortran intrinsics whose argument the standard requires to be REAL / COMPLEX -- an
+#: INTEGER is rejected outright ("'x' argument of 'sqrt' intrinsic must be REAL or
+#: COMPLEX"). numpy promotes an integer operand to float for exactly these, so mirror
+#: that with an explicit REAL() instead of emitting ``SQRT(<int>)``: gpt2_block scales
+#: attention by ``np.sqrt(dh)`` on the integer head dimension. ABS / MOD / MAX / MIN /
+#: SIGN are excluded -- they accept an integer and must keep their integer result.
+_REAL_ARG_INTRINSICS = frozenset({"exp", "sqrt", "log", "sin", "cos", "tgamma", "lgamma"})
+
 _SYMBOL_INT_TAG = next((t for t in ("int64", "int32", "int16", "int8") if _fortran_type(t) == _fortran_type("int")),
                        "int64")
 
@@ -1420,6 +1428,16 @@ class _FortranBodyEmitter(BaseEmitter):
             return self._expr_is_real(e.left) or self._expr_is_real(e.right)
         return False
 
+    def _as_real_arg(self, node: ast.AST) -> str:
+        """Emit ``node`` as an argument to a REAL-only intrinsic.
+
+        An INTEGER expression is wrapped in ``real(.., kind)`` -- numpy promotes it
+        to float for these functions, and Fortran rejects it outright (see
+        :data:`_REAL_ARG_INTRINSICS`). Anything not PROVABLY integer is emitted as
+        is, so a real / complex operand is never needlessly retyped."""
+        text = self.emit_expr(node)
+        return f"real({text}, {self._rk})" if self._expr_is_integer(node) else text
+
     def _expr_is_integer(self, e: ast.AST) -> bool:
         """True if ``e`` is an integer-typed Fortran expression (so a merge()
         partner literal should be int-kinded, not real-promoted)."""
@@ -1733,7 +1751,10 @@ class _FortranBodyEmitter(BaseEmitter):
                 return f"{_INT_CONV_INTRINSIC[fn]}({a}, {self._int_kind_selector()})"
             up = FORTRAN_INTRINSICS.get(fn)
             if up is not None:
-                args = ", ".join(self.emit_expr(a) for a in node.args)
+                if fn in _REAL_ARG_INTRINSICS:
+                    args = ", ".join(self._as_real_arg(a) for a in node.args)
+                else:
+                    args = ", ".join(self.emit_expr(a) for a in node.args)
                 return f"{up}({args})"
             args = ", ".join(self.emit_expr(a) for a in node.args)
             return f"{fn}({args})"
