@@ -2950,7 +2950,7 @@ def expand_concatenate(target: ast.expr,
     if args and isinstance(args[0], (ast.Tuple, ast.List)):
         prelude, elts = _materialize_operands(args[0].elts,
                                               shape_table,
-                                              "__cc_op",
+                                              "__cc_",
                                               local_dtypes=local_dtypes,
                                               fresh_local_allocs=fresh_local_allocs)
         args = [ast.Tuple(elts=list(elts), ctx=ast.Load())] + list(args[1:])
@@ -3404,6 +3404,9 @@ def _materialize_operands(operands, shape_table, prefix: str, local_dtypes=None,
     local first lets the bare-Name expansion run unchanged, instead of teaching every
     expander to index arbitrary sub-expressions.
 
+    ``prefix`` is the caller's name STEM (``__es_`` / ``__cc_``): the buffer is
+    ``<prefix>op<N>`` and its copy-loop iterators ``<prefix>c<i>``.
+
     Returns ``(prelude_stmts, operand_exprs)``: the copy loops to emit first, and the
     operand list with each spill replaced by its buffer Name. The buffer is registered in
     ``shape_table`` + ``fresh_local_allocs`` so the emitter declares AND allocates it, and
@@ -3421,7 +3424,7 @@ def _materialize_operands(operands, shape_table, prefix: str, local_dtypes=None,
             out.append(op)  # unresolved -- the caller's bare-Name check raises
             continue
         _OP_SPILL_TEMP[0] += 1
-        tmp = f"{prefix}{_OP_SPILL_TEMP[0]}"
+        tmp = f"{prefix}op{_OP_SPILL_TEMP[0]}"
         tmp_shape = tuple(_CallHoister._extent_to_shape_token(e) for e in op_ext)
         shape_table[tmp] = tmp_shape
         if fresh_local_allocs is not None:
@@ -3431,7 +3434,7 @@ def _materialize_operands(operands, shape_table, prefix: str, local_dtypes=None,
             base_name = _name_id(base)
             if base_name and local_dtypes.get(base_name):
                 local_dtypes[tmp] = local_dtypes[base_name]
-        cp_iters = [f"{prefix}c{_OP_SPILL_TEMP[0]}_{i}" for i in range(len(op_ext))]
+        cp_iters = [f"{prefix}c{i}" for i in range(len(op_ext))]
         cp_nodes = [_name(c) for c in cp_iters]
         cp_slot = cp_nodes[0] if len(cp_nodes) == 1 else ast.Tuple(elts=cp_nodes, ctx=ast.Load())
         cp_src = _scalarize_at_iters(op, cp_nodes, shape_table)
@@ -3471,7 +3474,7 @@ def expand_einsum(target: ast.expr,
     # the ellipsis rank lookup) sees a Name.
     prelude, operands = _materialize_operands(operands,
                                               shape_table,
-                                              "__es_op",
+                                              "__es_",
                                               local_dtypes=local_dtypes,
                                               fresh_local_allocs=fresh_local_allocs)
     if "..." in spec:

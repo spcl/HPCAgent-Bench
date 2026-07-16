@@ -36,7 +36,12 @@ runs:
         # stock PyPI wheel. extended carries compiler.build_mode=native, which compiles each SDFG by
         # invoking the compiler directly and skips the per-SDFG cmake configure -- cutting the framework
         # + translator SDFG build time. Shallow clone keeps it fast; editable so the native codegen loads.
-        git clone --depth 1 --branch extended https://github.com/spcl/dace.git "$RUNNER_TEMP/dace"
+        # --recurse-submodules is REQUIRED: dace vendors its runtime headers as git submodules
+        # (external/moodycamel/blockingconcurrentqueue.h is included by dace/runtime/include/dace/
+        # stream.h), so a plain shallow clone builds an SDFG straight into
+        # "fatal error: ... blockingconcurrentqueue.h: No such file or directory".
+        git clone --depth 1 --recurse-submodules --shallow-submodules \
+          --branch extended https://github.com/spcl/dace.git "$RUNNER_TEMP/dace"
         pip_retry -e "$RUNNER_TEMP/dace"
         pip_retry "jax[cpu]" numba pythran pyarrow
         # Turn on native SDFG builds for every subsequent step in the job (no cmake per SDFG).
