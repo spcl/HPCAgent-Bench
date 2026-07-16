@@ -274,6 +274,17 @@ def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optio
     _alias_sub_post.collect(fn)
     _alias_sub_post.visit(fn)
     ast.fix_missing_locations(fn)
+    # Re-fold ``if <param> is None`` guards EXPOSED BY INLINING -- same reason the alias pass
+    # above re-runs. A helper carrying its own optional-default guard (lavamd's
+    # ``lavamd_kernel(.., fv=None)`` with ``if fv is None: fv = np.zeros(..)``) is spliced in
+    # after the first fold already passed, leaving an ``is None`` compare and a ``None`` literal
+    # no backend can lower (the Fortran emitter has no ast.Is at all). The parameter is always
+    # supplied across the ABI, so the guard is dead. Runs AFTER the alias substitution, not
+    # before: inlining renames the helper's param to ``__inlN_fv``, and only the alias fold maps
+    # it back onto the real parameter -- fold any earlier and the guard is still under its
+    # inlined alias and would not be recognised as a parameter.
+    _FoldParamNoneGuard(input_args).visit(fn)
+    ast.fix_missing_locations(fn)
     # Materialise module-level constant ARRAYS (lookup tables -- lulesh's
     # ``_VOLU_PERM = np.array([[...]], dtype=np.intp)``) into the kernel body as a
     # zeros local + element stores. Runs AFTER inlining so a table referenced only

@@ -6121,6 +6121,15 @@ def _lp_libnode_expand(ctx: LoweringContext) -> None:
                                        local_dtypes=ctx.local_dtypes,
                                        sparse=ctx.original_kir.sparse)
     ctx.lib_rewriter.visit(tree)
+    # Second math rename: an intrinsic whose argument only becomes a SCALAR once the library
+    # nodes expand. ``np.sqrt(w @ (cov @ w))`` (portfolio_optimization) defers the rename in
+    # ``_lp_normalize_calls`` -- the arg reads arrays, so the elementwise expander gets first
+    # refusal -- but a 1-D x 1-D matmul lowers to a scalar dot temp, leaving ``np.sqrt(__mm2)``
+    # that no later pass renames and the backends reject as an unsupported call. Re-running the
+    # SAME rewriter (rather than special-casing the emitter) with the temps now known keeps the
+    # rule intact: an argument that is still array-valued -- a vector matmul temp, which IS in
+    # ``lib_shape_table`` -- keeps deferring; a scalar one renames to the math intrinsic.
+    _MathRewriter(set(ctx.arrays_shapes.keys()) | set(ctx.lib_shape_table.keys())).visit(tree)
     # Second free-name promotion: sparse matvec dispatchers introduce structural
     # scalar symbols that don't exist until the hoister runs (SELL-C-sigma's slice
     # height ``C``), so the first promotion at the top of lower() can't see them.
