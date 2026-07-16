@@ -6099,6 +6099,19 @@ def _lp_libnode_expand(ctx: LoweringContext) -> None:
     # single expand_reshape path serves lulesh's varargs spelling.
     _ReshapeMethodRewriter().visit(tree)
     ast.fix_missing_locations(tree)
+    # Seed the INTEGER/UINT element dtype of every kernel-parameter array into
+    # ``local_dtypes`` so the library-node hoister can see, e.g., that ``idx`` in
+    # ``int(np.max(idx))`` is int64 and tag the max-reduction temp int64 rather
+    # than the float default. Without this a value-preserving reduction over an
+    # int array declares a real accumulator, and the Fortran emit's ``merge(int,
+    # real)`` update is a kind mismatch (gfortran rejects it). Only int/uint tags
+    # are seeded: complex is handled by the dedicated complex-propagation pass, and
+    # a float tag would flip untagged-float-default code paths. Param arrays are
+    # declared from the ABI signature (not ``local_dtypes``), so tagging them here
+    # never redeclares them.
+    for arr in ctx.kir.arrays:
+        if arr.dtype.startswith(("int", "uint")):
+            ctx.local_dtypes.setdefault(arr.name, arr.dtype)
     # Library-node expansion -- reductions, matmul, etc. -- runs before
     # ``_ZerosRewriter`` so any matmul temps the rewriter introduces are picked up
     # by the zeros pass as local arrays.

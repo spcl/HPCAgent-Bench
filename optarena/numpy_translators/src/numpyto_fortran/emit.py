@@ -2346,18 +2346,55 @@ def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
         "float16": "c_float_complex"
     }.get(kir.float_precision or "float64", "c_double_complex")
     complex_t = f"complex({ck})"
-    # Scalar locals whose lowering-recorded dtype is complex must be
-    # declared complex, not real -- a real decl silently drops the
-    # imaginary part (contour_integral's ``zz`` and the linalg-solve
-    # working scalars ``__sol_factor`` / ``__sol_tmp``). ``local_dtypes``
-    # is keyed by the pre-rename name; index the fortran-safe rename too
-    # so the lookup also works once names are sanitised.
+    # The lowering records each local's dtype in ``local_dtypes``. Walk it ONCE
+    # and derive every consumer from that single pass instead of re-iterating the
+    # dict (and re-running ``_fortran_type``) per consumer:
+    #   * ``recorded_ftype`` -- the authoritative name -> Fortran-type map (PRIMARY
+    #     dtype source; outranks the usage-role heuristics below, which only guess a
+    #     class from a subscript / assignment shape and else fall to real(c_double)).
+    #     Complex / real map to the kernel-precision types (``complex_t`` /
+    #     ``real_t``, matching the rest of the emitter); integer / logical keep their
+    #     exact registry kind -- int32 vs int64 matters for ``-std=f2018`` kind
+    #     matching, so it comes from the registry (``_fortran_type``), never a
+    #     literal. A recorded integer still widens to int64 in ``_classify`` when a
+    #     bitwise / kind source demands it.
+    #   * ``complex_names`` -- complex locals, for the float-assign exclusion and the
+    #     classify fallback (contour_integral's ``zz`` / linalg-solve ``__sol_tmp``).
+    #     A real decl would silently drop the imaginary part. Kept ``startswith``-
+    #     based so a complex dtype outside the registry is still caught.
+    #   * ``recorded_int64_local`` / ``recorded_real_local`` -- local int64 / real
+    #     names that seed the int64 propagation and the real-assignment detection
+    #     further down (nqueens' int64 stack, azimint's real bounds).
+    # ``local_dtypes`` is keyed by the pre-rename name; every derived key is stored
+    # under both the raw and the fortran-safe name so lookups work before and after
+    # sanitising.
     _ldt = kir.local_dtypes
+    int64_kind = _fortran_type("int64")
     complex_names: Set[str] = set()
+    recorded_ftype: Dict[str, str] = {}
+    recorded_int64_local: Set[str] = set()
+    recorded_real_local: Set[str] = set()
     for _k, _v in _ldt.items():
-        if isinstance(_v, str) and _v.startswith("complex"):
+        if not isinstance(_v, str):
+            continue
+        _safe = _fortran_safe(_k)
+        if _v.startswith("complex"):
             complex_names.add(_k)
-            complex_names.add(_fortran_safe(_k))
+            complex_names.add(_safe)
+        if _v not in dtypes.REGISTRY:
+            continue
+        _ft = _fortran_type(_v)
+        if _ft.startswith("complex"):
+            _rt = complex_t
+        elif _ft.startswith("real"):
+            _rt = real_t
+            recorded_real_local.add(_k)
+        else:  # integer / logical: keep the exact registry kind
+            _rt = _ft
+            if _ft == int64_kind:
+                recorded_int64_local.add(_k)
+        recorded_ftype[_k] = _rt
+        recorded_ftype[_safe] = _rt
     declared: Set[str] = set()
     declared.update(kir.input_args)
     declared.update(kir.int_locals)
@@ -2463,7 +2500,7 @@ def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
     # not clash with the int64 dummies under ``-std=f2018``.
     # A name is int64 iff its dtype maps to the int64 Fortran kind (floats map
     # to ``real(...)`` and int32 to ``integer(c_int32_t)``, so neither matches).
-    int64_kind = _fortran_type("int64")
+    # ``int64_kind`` is computed with the single local_dtypes pass near the top.
     for s in kir.symbols:
         int64_names.add(s.name)
     for a in kir.arrays:
@@ -2474,12 +2511,9 @@ def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
             int64_names.add(s.name)
     # LOCAL int64 arrays/scalars (``np.zeros(N + 1, dtype=np.int64)`` -- the
     # nqueens backtracking stack) carry their dtype in ``local_dtypes``, not in
-    # ``kir.arrays``; seed them too so their elements/derived scalars stay int64
-    # and don't clash under -std=f2018. Dtype-derived, never a literal kind.
-    _local_dtypes_seed = kir.local_dtypes
-    for nm, dt in _local_dtypes_seed.items():
-        if isinstance(dt, str) and dt in dtypes.REGISTRY and _fortran_type(dt) == int64_kind:
-            int64_names.add(nm)
+    # ``kir.arrays``; seed them so their elements/derived scalars stay int64 and
+    # don't clash under -std=f2018 (collected in the single local_dtypes pass above).
+    int64_names |= recorded_int64_local
     # A ``x = np.<dtype>(...)`` scalar cast (``total = np.int64(0)``) types ``x``
     # by that dtype -- mark integer casts as int (and int64 when the kind
     # matches) so the local is declared integer, not the real(c_double) default.
@@ -2546,9 +2580,7 @@ def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
     # int. Assignment-from-real wins over the int-use heuristic, matching the C
     # backend (whose dtype inference is assignment-based).
     real_array_names = {a.name for a in kir.arrays if _fortran_type(a.dtype).startswith("real")}
-    for nm, dt in _local_dtypes_seed.items():
-        if (isinstance(dt, str) and dt in dtypes.REGISTRY and _fortran_type(dt).startswith("real")):
-            real_array_names.add(nm)
+    real_array_names |= recorded_real_local  # local reals from the single local_dtypes pass above
     float_assigned: Set[str] = set()
     for node in ast.walk(kir.tree):
         if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
@@ -2561,10 +2593,25 @@ def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
     # int32 kind (== Fortran default-integer kind), so the two only differ when
     # the inference says so.
     def _classify(name: str) -> str:
+        # 1. The lowering-recorded dtype is authoritative: it names the local's
+        #    class outright, so it outranks every usage-based guess below. A
+        #    recorded integer still widens to int64 when a bitwise / kind source
+        #    demands it (f2018 kind matching); real / complex / logical are final.
+        rec = recorded_ftype.get(name)
+        if rec is not None:
+            if rec.startswith("integer") and name in int64_uses:
+                return int64_kind
+            return rec
+        # 2. Value-based inference for untagged locals: a boolean-valued RHS is
+        #    logical; a scalar read from a real array element is real (this wins
+        #    over the int-use heuristic -- azimint's ``__hlo = radius[0]`` feeds an
+        #    INT()-truncated bin index but is itself real).
         if name in logical_uses:
             return _fortran_type("bool")  # logical(c_bool): 1-byte, matches C _Bool
         if name in float_assigned and name not in complex_names:
             return real_t
+        # 3. Usage-role inference (weakest): a name used as a subscript / range arg
+        #    or bitwise operand is integer, int64 when it meets an int64 source.
         if name in int64_uses and name in int_uses:
             return _fortran_type("int64")
         if name in int_uses:

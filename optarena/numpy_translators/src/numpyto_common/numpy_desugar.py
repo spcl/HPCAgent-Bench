@@ -2534,7 +2534,13 @@ def _eigh_stmts(w: str,
     return lines
 
 
-def _eigh_c_stmts(w: str, v: Optional[str], a: str, b: Optional[str], lo: str, hi: str, p: str,
+def _eigh_c_stmts(w: str,
+                  v: Optional[str],
+                  a: str,
+                  b: Optional[str],
+                  lo: str,
+                  hi: str,
+                  p: str,
                   eigenvalues_only: bool = False) -> List[str]:
     """Fully self-contained loop lowering of standard/generalized complex-Hermitian
     ``eigh`` for the C/Fortran backends, which have no ``np.linalg`` and no matmul
@@ -2697,9 +2703,9 @@ def _eigh_call_kind(node: ast.AST, alias_names: set):
         return None
     f = node.func
     linalg_attr = _np_linalg_attr(node)
-    scipy_attr = (f.attr if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Attribute)
-                  and f.value.attr == "linalg" and isinstance(f.value.value, ast.Name)
-                  and f.value.value.id == "scipy" else None)
+    scipy_attr = (f.attr
+                  if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Attribute) and f.value.attr == "linalg"
+                  and isinstance(f.value.value, ast.Name) and f.value.value.id == "scipy" else None)
     if linalg_attr == "eigvalsh" or scipy_attr == "eigvalsh":
         kind = "eigvalsh"
     elif linalg_attr == "eigh" or scipy_attr == "eigh" or (isinstance(f, ast.Name) and f.id in alias_names):
@@ -3071,6 +3077,49 @@ def _np_multi_call(fn: str, args: List[ast.expr]) -> ast.Call:
 def _cmp_zero(x: ast.expr, op: ast.cmpop) -> ast.Compare:
     """Build ``x <op> 0`` (heaviside's sign test against zero)."""
     return ast.Compare(left=x, ops=[op], comparators=[ast.Constant(value=0)])
+
+
+#: ``np.<ufunc>.reduce`` -> the plain reducer it equals. A DaCe ``Reduce`` library node re-emits
+#: reductions in ufunc form (``np.add.reduce(x, axis=k)``); the native backends have no ufunc
+#: dispatch, so canonicalise to the reducer the loop-lowering already handles.
+_UFUNC_REDUCE_TO_CALL = {
+    "add": "sum",
+    "multiply": "prod",
+    "maximum": "max",
+    "minimum": "min",
+    "logical_and": "all",
+    "logical_or": "any",
+}
+
+
+class _UfuncReduceToReducer(ast.NodeTransformer):
+    """``np.add.reduce(x, axis=k)`` -> ``np.sum(x, axis=k)`` (and the prod / max / min / all / any
+    ufuncs). ``ufunc.reduce`` defaults to ``axis=0`` while the reducer defaults to ``axis=None``
+    (a full reduction), so inject an explicit ``axis=0`` when the call gave none -- preserving the
+    ufunc semantics. Runs before the elementwise-ufunc desugars so ``np.add`` inside ``np.add.reduce``
+    is never mistaken for an elementwise add."""
+
+    def __init__(self):
+        self.changed = False
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        self.generic_visit(node)
+        f = node.func
+        if (isinstance(f, ast.Attribute) and f.attr == "reduce" and isinstance(f.value, ast.Attribute)
+                and isinstance(f.value.value, ast.Name) and f.value.value.id in ("np", "numpy")
+                and f.value.attr in _UFUNC_REDUCE_TO_CALL):
+            self.changed = True
+            has_axis = len(node.args) > 1 or any(k.arg == "axis" for k in node.keywords)
+            keywords = list(node.keywords)
+            if not has_axis:
+                keywords.append(ast.keyword(arg="axis", value=ast.Constant(value=0)))
+            return ast.copy_location(
+                ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()),
+                                            attr=_UFUNC_REDUCE_TO_CALL[f.value.attr],
+                                            ctx=ast.Load()),
+                         args=node.args,
+                         keywords=keywords), node)
+        return node
 
 
 class _ElementalUfuncToPrimitive(ast.NodeTransformer):

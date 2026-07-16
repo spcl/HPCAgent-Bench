@@ -27,7 +27,6 @@ import ctypes
 import json
 import os
 import pathlib
-import re
 import select
 import shutil
 import signal
@@ -73,6 +72,9 @@ from optarena import dtypes as _dtypes  # noqa: E402
 from optarena.spec import BenchSpec  # noqa: E402
 from optarena.initialize import auto_initialize  # noqa: E402
 from optarena.precision import Precision  # noqa: E402
+# The Pluto affine-index detector was lifted into the package so external consumers (the nest-forge
+# arena's Pluto lane) share ONE detector; kept under its historical private name for existing callers.
+from optarena.pluto_affine import scop_nonaffine_reason as _scop_nonaffine_reason  # noqa: E402,F401
 
 #: by-value scalar ``kind`` -> ctypes type, sourced from the shared dtype registry
 #: (the single source of truth the emitters marshal against) so a scalar's
@@ -912,10 +914,22 @@ def _jax_compute(short, info, by, syms, expected, compare, rtol, atol, emit_prec
     jax.config.update("jax_enable_x64", emit_prec != "float32")
     npy = (REPO / "optarena" / "benchmarks" / info["relative_path"] / f'{info["module_name"]}_numpy.py')
     func_name = info["func_name"]
+    # OPTARENA_JAX_JIT=1 validates the CLASSIFIER form (jit=True: H1 vectorize / H2
+    # lax.fori_loop / while_loop), i.e. the AoT-compiled artifact the framework times,
+    # instead of the verbatim eager form. Off by default (the eager form stays the
+    # validated one). When on, a kernel the classifier cannot express (EmitError)
+    # falls back to the eager emit so coverage is not lost.
+    jax_jit = os.environ.get("OPTARENA_JAX_JIT") == "1"
+    src_text = npy.read_text()
     try:
-        jax_src = emit_jax(npy.read_text(), func_name)
+        jax_src = emit_jax(src_text, func_name, jit=jax_jit)
     except Exception as exc:  # noqa: BLE001
-        return f"skip:unsupported:emit:{type(exc).__name__}"
+        if not jax_jit:
+            return f"skip:unsupported:emit:{type(exc).__name__}"
+        try:
+            jax_src = emit_jax(src_text, func_name)  # classifier can't express it -> eager
+        except Exception as exc2:  # noqa: BLE001
+            return f"skip:unsupported:emit:{type(exc2).__name__}"
     ns: Dict[str, object] = {}
     try:
         tree = ast.parse(jax_src)
@@ -1021,46 +1035,6 @@ def _run_bounded(cmd, timeout, cwd):
             pass
         proc.wait()
         raise
-
-
-def _scop_nonaffine_reason(scop_c: str) -> Optional[str]:
-    """Pluto is a polyhedral (affine) optimizer: an array access whose index is
-    non-affine is outside its model, and ``polycc`` may silently MISCOMPILE it
-    rather than reject it. Scan the scop's array subscripts and return the first
-    non-affine index pattern found -- ``indirection`` (``b[ip[i]]``), ``modulo``
-    (``a[i % k]``) or ``integer-division`` (``a[i / k]``) -- so pluto can be
-    deemed inapplicable (a clean skip) instead of trusting a transform it cannot
-    soundly make. Returns None when every subscript index is affine. (Value-side
-    ``/`` and ``%`` are ignored -- only the index inside ``[...]`` matters to the
-    polyhedral model; an affine program pluto merely miscompiles stays a tracked
-    FAIL, not a skip.)"""
-    m = re.search(r"#pragma scop(.*?)#pragma endscop", scop_c, re.S)
-    body = m.group(1) if m else scop_c
-    i, n = 0, len(body)
-    while i < n:
-        if body[i] != "[":
-            i += 1
-            continue
-        depth, j, inner = 1, i + 1, []
-        while j < n and depth:
-            c = body[j]
-            if c == "[":
-                depth += 1
-            elif c == "]":
-                depth -= 1
-                if depth == 0:
-                    break
-            inner.append(c)
-            j += 1
-        sub = "".join(inner)
-        if "[" in sub:
-            return "indirection"
-        if "%" in sub:
-            return "modulo"
-        if "/" in sub:
-            return "integer-division"
-        i = j + 1
-    return None
 
 
 def _run_pluto(tdp, short, fptype, binding, by, syms, expected, compare, rtol, atol, c_status) -> str:

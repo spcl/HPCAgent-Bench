@@ -41,7 +41,7 @@ def _file_for(module_name: str, target: str) -> str:
 
 
 def _emit_dace(numpy_py: pathlib.Path, bench_info: pathlib.Path, out: pathlib.Path) -> str:
-    from numpyto_c.frontend import parse_kernel
+    from numpyto_common.frontend import parse_kernel
     from numpyto_c.dace_emit import emit_dace
     from numpyto_common.emit_io import write_generated
     src = emit_dace(parse_kernel(numpy_py, bench_info))

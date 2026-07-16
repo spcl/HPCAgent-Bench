@@ -57,7 +57,8 @@ def native_desugar(fn: ast.FunctionDef) -> None:
       IfExp / if branches, so a backend never meets a bare None literal at emit.
     """
     from numpyto_common.numpy_desugar import (_ComplexAccessorToFunc, _DecomposeRollSlice, _DropValidationGuards,
-                                              _ElementalUfuncToPrimitive, _UfuncOutInline)
+                                              _ElementalUfuncToPrimitive, _UfuncOutInline, _UfuncReduceToReducer)
+    _UfuncReduceToReducer().visit(fn)  # np.add.reduce -> np.sum before the elementwise-ufunc desugars
     _NewaxisToNone().visit(fn)
     _UfuncOutInline().visit(fn)
     _DecomposeRollSlice().visit(fn)
@@ -768,8 +769,7 @@ def _inline_module_constants(tree: ast.Module, fn: ast.FunctionDef, input_args: 
         # _MathRewriter only lowers these inside the kernel BODY (np.pi -> M_PI);
         # at module-constant time they must fold to their value or the derived
         # constant leaks as a bogus free scalar parameter.
-        if (isinstance(v, ast.Attribute) and isinstance(v.value, ast.Name)
-                and v.value.id in ("np", "numpy", "math")):
+        if (isinstance(v, ast.Attribute) and isinstance(v.value, ast.Name) and v.value.id in ("np", "numpy", "math")):
             return {"pi": 3.141592653589793, "e": 2.718281828459045, "tau": 6.283185307179586}.get(v.attr)
         if isinstance(v, ast.UnaryOp) and isinstance(v.op, (ast.USub, ast.UAdd, ast.Invert)):
             x = _const_value(v.operand)
@@ -859,14 +859,15 @@ def _inline_module_constants(tree: ast.Module, fn: ast.FunctionDef, input_args: 
         if isinstance(v, (ast.Tuple, ast.List)) and v.elts and stmt.targets[0].id not in shadowed:
             folded = [_const_value(e) for e in v.elts]
             if all(f is not None for f in folded):
-                seq_consts[stmt.targets[0].id] = ast.Tuple(
-                    elts=[ast.Constant(value=f) for f in folded], ctx=ast.Load())
+                seq_consts[stmt.targets[0].id] = ast.Tuple(elts=[ast.Constant(value=f) for f in folded], ctx=ast.Load())
     # Module-level DTYPE constants (``FLOAT_DTYPE = np.float64``, ``INDEX_DTYPE =
     # np.int32``) -- substitute the dtype EXPRESSION so a ``dtype=FLOAT_DTYPE`` kwarg
     # resolves like a literal ``np.float64`` instead of leaking as a free parameter
     # (minife). Store the attr name and rebuild ``np.<attr>`` at each reference.
-    _DTYPE_ATTRS = {"float64", "float32", "float16", "int64", "int32", "int16", "int8", "uint64", "uint32", "uint16",
-                    "uint8", "complex128", "complex64", "bool_", "intp", "int_", "float_", "double"}
+    _DTYPE_ATTRS = {
+        "float64", "float32", "float16", "int64", "int32", "int16", "int8", "uint64", "uint32", "uint16", "uint8",
+        "complex128", "complex64", "bool_", "intp", "int_", "float_", "double"
+    }
     dtype_consts: Dict[str, str] = {}
     for stmt in tree.body:
         if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
@@ -888,7 +889,8 @@ def _inline_module_constants(tree: ast.Module, fn: ast.FunctionDef, input_args: 
                     return ast.copy_location(copy.deepcopy(seq_consts[node.id]), node)
                 if node.id in dtype_consts:
                     return ast.copy_location(
-                        ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=dtype_consts[node.id],
+                        ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()),
+                                      attr=dtype_consts[node.id],
                                       ctx=ast.Load()), node)
             return node
 
@@ -897,9 +899,16 @@ def _inline_module_constants(tree: ast.Module, fn: ast.FunctionDef, input_args: 
 
 
 _ARRAY_LITERAL_DTYPES = {
-    "intp": "int64", "int_": "int64", "int64": "int64", "int32": "int32",
-    "int8": "int8", "int16": "int16", "float64": "float64", "float32": "float32",
-    "float_": "float64", "double": "float64",
+    "intp": "int64",
+    "int_": "int64",
+    "int64": "int64",
+    "int32": "int32",
+    "int8": "int8",
+    "int16": "int16",
+    "float64": "float64",
+    "float32": "float32",
+    "float_": "float64",
+    "double": "float64",
 }
 
 
@@ -950,8 +959,8 @@ def _parse_array_literal(call: ast.Call):
     dtype = None
     for kw in call.keywords:
         if kw.arg == "dtype":
-            tag = kw.value.attr if isinstance(kw.value, ast.Attribute) else (
-                kw.value.id if isinstance(kw.value, ast.Name) else None)
+            tag = kw.value.attr if isinstance(
+                kw.value, ast.Attribute) else (kw.value.id if isinstance(kw.value, ast.Name) else None)
             dtype = _ARRAY_LITERAL_DTYPES.get(tag)
     if dtype is None:
         dtype = "int64" if all_int else "float64"
@@ -985,20 +994,26 @@ def _materialize_const_arrays(tree: ast.Module, fn: ast.FunctionDef, input_args:
         if name not in used or name in shadowed:
             continue
         shape_tuple = ast.Tuple(elts=[ast.Constant(value=d) for d in shape], ctx=ast.Load())
-        prelude.append(ast.Assign(
-            targets=[ast.Name(id=name, ctx=ast.Store())],
-            value=ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="zeros", ctx=ast.Load()),
-                           args=[shape_tuple],
-                           keywords=[ast.keyword(arg="dtype", value=ast.Attribute(
-                               value=ast.Name(id="np", ctx=ast.Load()), attr=dtype, ctx=ast.Load()))])))
+        prelude.append(
+            ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())],
+                       value=ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()),
+                                                         attr="zeros",
+                                                         ctx=ast.Load()),
+                                      args=[shape_tuple],
+                                      keywords=[
+                                          ast.keyword(arg="dtype",
+                                                      value=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()),
+                                                                          attr=dtype,
+                                                                          ctx=ast.Load()))
+                                      ])))
         # Row-major element stores ``NAME[i, j, ...] = const``.
         import itertools
         for idx, val in zip(itertools.product(*[range(d) for d in shape]), flat):
-            sl = (ast.Tuple(elts=[ast.Constant(value=i) for i in idx], ctx=ast.Load())
-                  if len(idx) > 1 else ast.Constant(value=idx[0]))
-            prelude.append(ast.Assign(
-                targets=[ast.Subscript(value=ast.Name(id=name, ctx=ast.Load()), slice=sl, ctx=ast.Store())],
-                value=ast.Constant(value=val)))
+            sl = (ast.Tuple(elts=[ast.Constant(value=i)
+                                  for i in idx], ctx=ast.Load()) if len(idx) > 1 else ast.Constant(value=idx[0]))
+            prelude.append(
+                ast.Assign(targets=[ast.Subscript(value=ast.Name(id=name, ctx=ast.Load()), slice=sl, ctx=ast.Store())],
+                           value=ast.Constant(value=val)))
     if prelude:
         fn.body = prelude + fn.body
         ast.fix_missing_locations(fn)
@@ -1325,10 +1340,11 @@ def _promote_scalar_returns(fn: ast.FunctionDef, names: List[str]) -> List[str]:
     out_names: List[str] = []
     for i, nm in enumerate(names):
         buf = f"optarena_ret{i}"  # distinct from the ``ret_arr`` array-synthesis temps
-        writes.append(ast.Assign(
-            targets=[ast.Subscript(value=ast.Name(id=buf, ctx=ast.Load()),
-                                   slice=ast.Constant(value=0), ctx=ast.Store())],
-            value=ast.Name(id=nm, ctx=ast.Load())))
+        writes.append(
+            ast.Assign(targets=[
+                ast.Subscript(value=ast.Name(id=buf, ctx=ast.Load()), slice=ast.Constant(value=0), ctx=ast.Store())
+            ],
+                       value=ast.Name(id=nm, ctx=ast.Load())))
         out_names.append(buf)
     fn.body = fn.body[:-1] + writes
     ast.fix_missing_locations(fn)
@@ -1734,14 +1750,16 @@ def _collect_called_helper_defs(tree: ast.Module, kernel_fn: ast.FunctionDef) ->
     must be emitted too. Returned in definition order (a callee defined above its
     caller emits first, so no forward declaration is needed)."""
     defs_by_name: Dict[str, ast.FunctionDef] = {
-        n.name: n for n in tree.body if isinstance(n, ast.FunctionDef) and n is not kernel_fn}
+        n.name: n
+        for n in tree.body if isinstance(n, ast.FunctionDef) and n is not kernel_fn
+    }
     captured: Dict[str, ast.FunctionDef] = {}
     frontier: List[ast.AST] = [kernel_fn]
     while frontier:
         node = frontier.pop()
         for sub in ast.walk(node):
-            if (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)
-                    and sub.func.id in defs_by_name and sub.func.id not in captured):
+            if (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name) and sub.func.id in defs_by_name
+                    and sub.func.id not in captured):
                 d = defs_by_name[sub.func.id]
                 captured[sub.func.id] = d
                 frontier.append(d)
@@ -1767,9 +1785,8 @@ def _local_array_def(fn: ast.FunctionDef, name: str):
     Used to size the out-param temp when an array-returning helper writes into a
     slice of a kernel-local array (``coulomb_fac[:, j] = h(...)``)."""
     for node in ast.walk(fn):
-        if not (isinstance(node, ast.Assign) and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name) and node.targets[0].id == name
-                and isinstance(node.value, ast.Call)):
+        if not (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == name and isinstance(node.value, ast.Call)):
             continue
         f = node.value.func
         fname = f.attr if isinstance(f, ast.Attribute) else f.id if isinstance(f, ast.Name) else None
@@ -1792,15 +1809,14 @@ def _resolve_local_array_arg(fn: ast.FunctionDef, name: str, arr_by):
     defaulted to a scalar double. Only a slice/alias of a KNOWN array is resolved
     (vexx_k's ``_g2_convolution`` ``xkq`` / ``xk`` (3,) q-vector args)."""
     for node in ast.walk(fn):
-        if not (isinstance(node, ast.Assign) and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name) and node.targets[0].id == name):
+        if not (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == name):
             continue
         rhs = node.value
         if isinstance(rhs, ast.Name) and rhs.id in arr_by:
             a = arr_by[rhs.id]
             return a.shape, a.dtype
-        if (isinstance(rhs, ast.Subscript) and isinstance(rhs.value, ast.Name)
-                and rhs.value.id in arr_by):
+        if (isinstance(rhs, ast.Subscript) and isinstance(rhs.value, ast.Name) and rhs.value.id in arr_by):
             a = arr_by[rhs.value.id]
             kept = _apply_subscript_axes(list(a.shape), rhs.slice)
             if kept:
@@ -1883,8 +1899,7 @@ def _mark_written_outputs(hfn: ast.FunctionDef, arrays: List[ArrayDesc]) -> None
     (drops ``const`` on the pointer)."""
     written: Set[str] = set()
     for n in ast.walk(hfn):
-        targets = (n.targets if isinstance(n, ast.Assign)
-                   else [n.target] if isinstance(n, ast.AugAssign) else [])
+        targets = (n.targets if isinstance(n, ast.Assign) else [n.target] if isinstance(n, ast.AugAssign) else [])
         for t in targets:
             if isinstance(t, ast.Name):
                 written.add(t.id)
@@ -1918,10 +1933,12 @@ def _rewrite_returns_to_outparam(hfn: ast.FunctionDef, hret: str) -> None:
         def visit_Return(self, n: ast.Return):
             if n.value is None:
                 return n
-            store = ast.Assign(
-                targets=[ast.Subscript(value=ast.Name(id=hret, ctx=ast.Load()),
-                                       slice=ast.Slice(lower=None, upper=None, step=None), ctx=ast.Store())],
-                value=n.value)
+            store = ast.Assign(targets=[
+                ast.Subscript(value=ast.Name(id=hret, ctx=ast.Load()),
+                              slice=ast.Slice(lower=None, upper=None, step=None),
+                              ctx=ast.Store())
+            ],
+                               value=n.value)
             bare = ast.Return(value=None)
             ast.copy_location(store, n)
             ast.copy_location(bare, n)
@@ -1977,9 +1994,10 @@ def _build_callsite_stmts(lhs, name, pnames, kept_args, extra_syms, param_info, 
         return ast.parse("\n".join(pre + [f"{name}({', '.join(call_srcs)})"])).body
     tmp = f"__hret_tmp_{hidx}"
     call_srcs.append(tmp)
-    lines = pre + [f"{tmp} = np.empty(({', '.join(hret_shape)},), dtype=np.{hret_dtype})",
-                   f"{name}({', '.join(call_srcs)})",
-                   f"{ast.unparse(lhs)} = {tmp}"]
+    lines = pre + [
+        f"{tmp} = np.empty(({', '.join(hret_shape)},), dtype=np.{hret_dtype})", f"{name}({', '.join(call_srcs)})",
+        f"{ast.unparse(lhs)} = {tmp}"
+    ]
     return ast.parse("\n".join(lines)).body
 
 
@@ -2052,10 +2070,16 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
             # SCALAR (by-value) return -- params inferred straight from the call.
             arrays, scalars, symbols = _infer_helper_params(pnames, call.args, arr_by, sca_by, sym_by, kernel_fn)
             _mark_written_outputs(hfn, arrays)
-            out.append(KernelIR(
-                tree=hfn, kernel_name=hdef.name, short_name=hdef.name, input_args=list(pnames),
-                symbols=symbols, arrays=arrays, scalars=scalars,
-                source_path=parent.source_path, return_kind="scalar"))
+            out.append(
+                KernelIR(tree=hfn,
+                         kernel_name=hdef.name,
+                         short_name=hdef.name,
+                         input_args=list(pnames),
+                         symbols=symbols,
+                         arrays=arrays,
+                         scalars=scalars,
+                         source_path=parent.source_path,
+                         return_kind="scalar"))
             continue
 
         # ARRAY return. Specialize the helper at its call site: fold every literal
@@ -2087,15 +2111,20 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
         extra_syms = sorted(s for s in _shape_symbols(arrays) if s not in set(pnames))
         symbols.extend(SymbolDesc(name=s) for s in extra_syms)
         _rewrite_returns_to_outparam(hfn, hret)
-        out.append(KernelIR(
-            tree=hfn, kernel_name=hdef.name, short_name=hdef.name,
-            input_args=list(pnames) + extra_syms + [hret],
-            symbols=symbols, arrays=arrays, scalars=scalars,
-            source_path=parent.source_path, return_kind=hret))
+        out.append(
+            KernelIR(tree=hfn,
+                     kernel_name=hdef.name,
+                     short_name=hdef.name,
+                     input_args=list(pnames) + extra_syms + [hret],
+                     symbols=symbols,
+                     arrays=arrays,
+                     scalars=scalars,
+                     source_path=parent.source_path,
+                     return_kind=hret))
         if assign is not None:
             param_info = {a.name: (a.shape, a.dtype) for a in arrays if a.name != hret}
-            callsite_rewrites[id(assign)] = _build_callsite_stmts(
-                lhs, hdef.name, pnames, kept_args, extra_syms, param_info, hret_shape, hret_dtype, hidx)
+            callsite_rewrites[id(assign)] = _build_callsite_stmts(lhs, hdef.name, pnames, kept_args, extra_syms,
+                                                                  param_info, hret_shape, hret_dtype, hidx)
     if callsite_rewrites:
         _ReplaceStmts(callsite_rewrites).visit(kernel_fn)
         ast.fix_missing_locations(kernel_fn)
@@ -2289,8 +2318,8 @@ def _unroll_const_list_loops(fn: ast.FunctionDef) -> None:
         class _DropBind(ast.NodeTransformer):
 
             def visit_Assign(self, node: ast.Assign):
-                if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
-                        and node.targets[0].id in consumed and _is_const_list_literal(node.value)):
+                if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in consumed
+                        and _is_const_list_literal(node.value)):
                     return None
                 return node
 
@@ -3144,8 +3173,8 @@ def pure_int_arith(n: ast.AST) -> bool:
     if isinstance(n, ast.Constant):
         return isinstance(n.value, int) and not isinstance(n.value, bool)
     if isinstance(n, ast.BinOp):
-        return (isinstance(n.op, (ast.Add, ast.Sub, ast.Mult, ast.FloorDiv, ast.Mod))
-                and pure_int_arith(n.left) and pure_int_arith(n.right))
+        return (isinstance(n.op, (ast.Add, ast.Sub, ast.Mult, ast.FloorDiv, ast.Mod)) and pure_int_arith(n.left)
+                and pure_int_arith(n.right))
     if isinstance(n, ast.UnaryOp):
         return isinstance(n.op, (ast.USub, ast.UAdd)) and pure_int_arith(n.operand)
     if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in ("min", "max", "abs")):
@@ -3248,8 +3277,7 @@ def _names_used_as_int(tree: ast.AST) -> Set[str]:
     # max / abs over Names and int literals) so it never crosses a float divide,
     # a transcendental call, or an ``int(...)`` truncation.
     assigns = [(node.targets[0].id, node.value) for node in ast.walk(tree)
-               if isinstance(node, ast.Assign) and len(node.targets) == 1
-               and isinstance(node.targets[0], ast.Name)]
+               if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)]
     changed = True
     while changed:
         changed = False

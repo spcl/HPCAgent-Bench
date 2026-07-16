@@ -36,6 +36,13 @@ class EmitError(Exception):
     """A numpy construct the prototype does not (yet) lower."""
 
 
+#: True while emitting the classifier (``jit=True``) form. Read by
+#: :func:`_np_to_jnp` to lower a data-dependent ternary ``a if cond else b`` to
+#: ``jnp.where`` (a traced Python ternary cannot yield a concrete bool); left
+#: verbatim in the eager form, whose concrete condition needs no rewrite.
+_JIT_MODE = False
+
+
 # ---------------------------------------------------------------------------
 # Small AST helpers
 # ---------------------------------------------------------------------------
@@ -48,19 +55,35 @@ def _names_loaded(node: ast.AST) -> Set[str]:
     return out
 
 
+def _store_target_names(t: ast.AST, out: Set[str]) -> None:
+    """Collect the names a single assignment target binds: a plain ``Name``, the
+    base array of a ``Subscript`` (``a[i] = ..`` mutates ``a``), each element of
+    a tuple/list unpack (``x, y, z = f(...)`` binds all three -- lulesh's per-step
+    ``x, y, z, .. = _lagrange_nodal(..)``), and a starred target."""
+    if isinstance(t, ast.Subscript):
+        base = t
+        while isinstance(base, ast.Subscript):
+            base = base.value
+        if isinstance(base, ast.Name):
+            out.add(base.id)
+    elif isinstance(t, ast.Name):
+        out.add(t.id)
+    elif isinstance(t, (ast.Tuple, ast.List)):
+        for e in t.elts:
+            _store_target_names(e, out)
+    elif isinstance(t, ast.Starred):
+        _store_target_names(t.value, out)
+
+
 def _names_stored(node: ast.AST) -> Set[str]:
-    """Names assigned (a plain ``Name`` target, incl. ``a[i] = ...`` whose
-    base array name is mutated, and augmented assigns)."""
+    """Names assigned (a plain ``Name`` target, incl. ``a[i] = ...`` whose base
+    array name is mutated, tuple-unpack targets, and augmented assigns)."""
     out: Set[str] = set()
     for n in ast.walk(node):
         if isinstance(n, (ast.Assign, ast.AugAssign)):
             targets = n.targets if isinstance(n, ast.Assign) else [n.target]
             for t in targets:
-                base = t
-                while isinstance(base, ast.Subscript):
-                    base = base.value
-                if isinstance(base, ast.Name):
-                    out.add(base.id)
+                _store_target_names(t, out)
     return out
 
 
@@ -123,6 +146,20 @@ def _np_to_jnp(tree: ast.AST) -> ast.AST:
             # constructor; ``jnp`` has no such call -- use ``jnp.empty``.
             if node.attr == "ndarray":
                 return ast.copy_location(ast.Attribute(value=node.value, attr="empty", ctx=node.ctx), node)
+            # jax arrays have no C/F memory-layout distinction and are always
+            # contiguous, so ``np.ascontiguousarray`` / ``np.asfortranarray`` (the
+            # latter inserted by ``_rewrite_eigh`` around a non-Name eigh operand,
+            # and used directly by gromacs_nbnxm) map to plain ``jnp.asarray``;
+            # ``jnp`` has no ``ascontiguousarray``.
+            if node.attr in ("ascontiguousarray", "asfortranarray"):
+                return ast.copy_location(ast.Attribute(value=node.value, attr="asarray", ctx=node.ctx), node)
+            # ``np.intp`` / ``np.uintp`` (the platform-word integer dtypes lulesh
+            # uses for gather-index arrays) have no ``jnp`` spelling; under x64
+            # they are the 64-bit integer types.
+            if node.attr in ("intp", "uintp"):
+                return ast.copy_location(
+                    ast.Attribute(value=node.value, attr="int64" if node.attr == "intp" else "uint64", ctx=node.ctx),
+                    node)
             return node
 
         def visit_Call(self, node):
@@ -134,14 +171,22 @@ def _np_to_jnp(tree: ast.AST) -> ast.AST:
             if (isinstance(node.func, ast.Attribute) and node.func.attr
                     in ("zeros", "ones", "empty", "full", "zeros_like", "ones_like", "empty_like", "full_like")):
                 node.keywords = [k for k in node.keywords if k.arg != "order"]
-            # Python builtins ``max``/``min`` over two (traced) arrays must use
-            # the elementwise jnp ufuncs.
-            if isinstance(node.func, ast.Name) and node.func.id in ("max", "min") and len(node.args) == 2:
+            # Python builtins ``max``/``min`` over two OR MORE (traced) scalar
+            # args fold into a left-nested chain of the elementwise jnp ufunc:
+            # ``max(0, a, b, c)`` -> ``jnp.maximum(jnp.maximum(jnp.maximum(0, a),
+            # b), c)`` (the DP recurrences' 3-/4-way ``max`` -- needleman_wunsch /
+            # smith_waterman -- whose traced scalars a Python ``max`` cannot
+            # compare). A single-iterable ``max(seq)`` (one arg) is left alone.
+            if isinstance(node.func, ast.Name) and node.func.id in ("max", "min") \
+                    and len(node.args) >= 2 and not node.keywords:
                 attr = "maximum" if node.func.id == "max" else "minimum"
-                return ast.copy_location(
-                    ast.Call(func=ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()), attr=attr, ctx=ast.Load()),
-                             args=node.args,
-                             keywords=node.keywords), node)
+                expr = node.args[0]
+                for rhs in node.args[1:]:
+                    expr = ast.Call(
+                        func=ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()), attr=attr, ctx=ast.Load()),
+                        args=[expr, rhs],
+                        keywords=[])
+                return ast.copy_location(expr, node)
             # Bare ``math`` functions (``sin(b)``, ``sqrt(b[jg])``) -> ``jnp``
             # ufuncs so a vectorised / traced argument works (see _MATH_TO_JNP).
             if isinstance(node.func, ast.Name) and node.func.id in _MATH_TO_JNP:
@@ -174,6 +219,29 @@ def _np_to_jnp(tree: ast.AST) -> ast.AST:
                              ],
                              keywords=[]), node)
             return node
+
+        def visit_IfExp(self, node):
+            self.generic_visit(node)
+            # A ternary ``a if cond else b`` whose condition is data-dependent
+            # (not a static jit arg / module constant) cannot yield a concrete
+            # Python bool under trace -- lower it to the value-select
+            # ``jnp.where(cond, a, b)`` (lulesh's Courant limit ``cand if cand <
+            # dtcourant else dtcourant``). A static-condition ternary
+            # (fv3_dycore's ``8 if hord == 10 else hord`` on a static ``hord``)
+            # stays a real Python ternary, so its arms may differ in shape. Only
+            # rewritten in the jit form; the eager form runs the concrete ternary.
+            # An identity test (``x if del6_v is not None else None``, fv3_dycore's
+            # optional damping) is trace-time concrete (a traced array is never
+            # ``None``) and may select ``None`` -- keep it a Python ternary, as
+            # ``_emit_if`` does for the statement form.
+            none_branch = any(isinstance(b, ast.Constant) and b.value is None for b in (node.body, node.orelse))
+            if not _JIT_MODE or _is_identity_test(node.test) or none_branch \
+                    or _names_loaded(node.test) <= (_EMIT_STATIC | _MODULE_CONSTS):
+                return node
+            where = ast.Call(func=ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()), attr="where", ctx=ast.Load()),
+                             args=[_bool_cond_ast(node.test), node.body, node.orelse],
+                             keywords=[])
+            return ast.copy_location(where, node)
 
         def visit_BoolOp(self, node):
             self.generic_visit(node)
@@ -350,6 +418,60 @@ def _carried_vars(body: List[ast.stmt], extra_live: Set[str], cond_names: Set[st
     return sorted(carried)
 
 
+def _definite_writes(stmts: List[ast.stmt]) -> Set[str]:
+    """Names DEFINITELY written by straight-line execution of ``stmts``. A write
+    inside a loop (may run zero times) is not definite; a write inside an ``if``
+    counts only when it happens on BOTH arms."""
+    out: Set[str] = set()
+    for s in stmts:
+        if isinstance(s, ast.If):
+            out |= (_definite_writes(s.body) & _definite_writes(s.orelse))
+        elif isinstance(s, (ast.For, ast.While)):
+            continue  # a zero-trip loop writes nothing
+        else:
+            out |= _names_stored(ast.Module(body=[s], type_ignores=[]))
+    return out
+
+
+def _upward_exposed(stmts: List[ast.stmt]) -> Set[str]:
+    """Names whose value ENTERING ``stmts`` is observable -- read before being
+    (definitely) written. This is the precise live-in of a straight-line block,
+    used to decide which vars a preceding loop must thread OUT: a plain
+    ``_names_loaded`` over the rest-of-body over-approximates, treating a var the
+    rest RE-derives before use (vadv/cloudsc's per-iteration scratch ``bcol`` /
+    ``zqadj``, read only inside a *later* loop that recomputes it first) as live,
+    which then pulls an undefined name into the earlier loop's carry tuple.
+
+    A loop body's writes are NOT definite (it may run zero times), so a var it
+    reads-before-writes is upward-exposed and a var it only writes stays exposed
+    for later reads -- both conservative (keeps a carry rather than dropping a
+    needed one)."""
+    read: Set[str] = set()
+    written: Set[str] = set()
+
+    def add_reads(names) -> None:
+        for nm in names:
+            if nm not in written:
+                read.add(nm)
+
+    for s in stmts:
+        if isinstance(s, ast.For):
+            add_reads(_names_loaded(s.iter))
+            add_reads(_upward_exposed(s.body))
+        elif isinstance(s, ast.While):
+            add_reads(_names_loaded(s.test))
+            add_reads(_upward_exposed(s.body))
+        elif isinstance(s, ast.If):
+            add_reads(_names_loaded(s.test))
+            add_reads(_upward_exposed(s.body))
+            add_reads(_upward_exposed(s.orelse))
+            written |= (_definite_writes(s.body) & _definite_writes(s.orelse))
+        else:
+            add_reads(_stmt_rhs_loads(s))
+            written |= _names_stored(ast.Module(body=[s], type_ignores=[]))
+    return read
+
+
 def _stmt_rhs_loads(s: ast.stmt) -> Set[str]:
     """Names read by a statement, *excluding* a bare ``Name`` assignment
     target (which is a pure write). Subscript-target container reads and all
@@ -509,10 +631,22 @@ def _u(node: ast.AST) -> str:
     return ast.unparse(_np_to_jnp(ast.fix_missing_locations(node)))
 
 
-def _emit_body(body: List[ast.stmt], live_out: Set[str], indent: str) -> List[str]:
-    """Emit a straight-line / looped statement list to JAX source lines."""
+def _emit_body(body: List[ast.stmt], live_out: Set[str], indent: str, defined: Set[str] = frozenset()) -> List[str]:
+    """Emit a straight-line / looped statement list to JAX source lines.
+
+    ``defined`` is the set of names already bound on entry to this body (params
+    for the function body, the carry tuple for a loop body). It grows over the
+    statements and is handed to each loop so the loop can verify its carry-tuple
+    init references only bound names -- see :func:`_emit_for`."""
     lines: List[str] = []
+    cur = set(defined)
     for k, s in enumerate(body):
+        if k:
+            # Every name STORED by a preceding statement (anywhere, incl. inside
+            # a branch/loop) is treated as bound here -- an over-approximation
+            # that never falsely flags a defined carry, while still catching a
+            # loop that threads a temp NO preceding statement writes.
+            cur |= _names_stored(ast.Module(body=[body[k - 1]], type_ignores=[]))
         if isinstance(s, (ast.For, ast.While, ast.If)):
             # A var assigned inside the construct and read by a *later*
             # statement here is live past it, so the loop/if must thread it
@@ -521,13 +655,13 @@ def _emit_body(body: List[ast.stmt], live_out: Set[str], indent: str) -> List[st
             # loop. Fold the rest-of-body reads into live_out for all three
             # (previously done for ``if`` only -- a ``for``/``while`` that
             # produced an after-loop value silently dropped it from the carry).
-            rest = _names_loaded(ast.Module(body=body[k + 1:], type_ignores=[]))
+            rest = _upward_exposed(body[k + 1:])
             if isinstance(s, ast.For):
-                lines += _emit_for(s, live_out | rest, indent)
+                lines += _emit_for(s, live_out | rest, indent, cur)
             elif isinstance(s, ast.While):
-                lines += _emit_while(s, live_out | rest, indent)
+                lines += _emit_while(s, live_out | rest, indent, cur)
             else:
-                lines += _emit_if(s, live_out | rest, indent)
+                lines += _emit_if(s, live_out | rest, indent, cur)
         elif isinstance(s, ast.Return):
             lines.append(indent + _u(s))
         elif isinstance(s, (ast.Assign, ast.AugAssign)):
@@ -541,7 +675,7 @@ def _emit_body(body: List[ast.stmt], live_out: Set[str], indent: str) -> List[st
             # it stays in scope for the calls that follow in this body.
             arglist = ", ".join(a.arg for a in s.args.args)
             lines.append(f"{indent}def {s.name}({arglist}):")
-            inner = _emit_body(s.body, set(), indent + "    ")
+            inner = _emit_body(s.body, set(), indent + "    ", {a.arg for a in s.args.args})
             lines += inner if inner else [indent + "    pass"]
         elif isinstance(s, ast.Expr):
             # A docstring/constant is a no-op; a bare call like
@@ -561,9 +695,78 @@ def _emit_body(body: List[ast.stmt], live_out: Set[str], indent: str) -> List[st
 
 _EMIT_STATIC: Set[str] = set()
 
+#: module-level constant names carried into the emitted module (weather
+#: stencils' ``BET_M``, ls3df's ``_CW``/``_C0``); populated per ``emit_jax``
+#: call and read by :func:`_is_static_iterable` to decide whether a non-``range``
+#: ``for`` iterates a compile-time-constant sequence and can be unrolled.
+_MODULE_CONSTS: Set[str] = set()
+
+#: module-level SCALAR constants mapped to their concrete Python value (a subset
+#: of :data:`_MODULE_CONSTS` -- only the int/float/bool/complex ones). Populated
+#: per ``emit_jax`` call and read by :func:`_fold_const_branches` to prune a
+#: branch whose test is fully determined by such constants (cloudsc's
+#: ``if yrecldp_nssopt == 0: .. elif == 1: ..`` with ``yrecldp_nssopt = 1``).
+_MODULE_CONST_VALUES: dict = {}
+
+#: FUNCTION-local names bound once to a constant-literal sequence (lulesh's
+#: ``faces = [(0, 1, 2, 3), ...]``). Reset per :func:`_emit_function` call and
+#: read by :func:`_is_static_iterable` so a ``for (a, b, d, e) in faces:`` over
+#: such a name unrolls as a literal Python loop (the ints index array columns)
+#: instead of being rejected as a non-``range`` iterable.
+_LOCAL_CONSTS: Set[str] = set()
+
 #: names that alias ``scipy.linalg.eigh`` in the current module (cegterg's
 #: ``_sci_eigh``); populated per ``emit_jax`` call and read by ``_rewrite_eigh``.
 _EIGH_ALIASES: Set[str] = set()
+
+
+def _is_static_iterable(node: ast.AST) -> bool:
+    """Is ``node`` a compile-time-constant iterable a jit trace can UNROLL --
+    a literal tuple/list of constants (``for axis in (0, 1, 2)``), a module
+    constant sequence (``_CW``), or an ``enumerate``/``zip``/``reversed`` over
+    such (ls3df's ``for m, w in enumerate(_CW, start=1)``)? Every free name it
+    reads must be a static jit arg or a module constant, so the emitted Python
+    ``for`` unrolls at trace time rather than needing a traced iterator."""
+    static = _EMIT_STATIC | _MODULE_CONSTS | _LOCAL_CONSTS
+    if isinstance(node, (ast.Tuple, ast.List)):
+        return all(_names_loaded(e) <= static for e in node.elts)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and \
+            node.func.id in ("enumerate", "zip", "reversed"):
+        return all(_is_static_iterable(a) or _names_loaded(a) <= static for a in node.args)
+    if isinstance(node, ast.Name):
+        return node.id in _MODULE_CONSTS or node.id in _LOCAL_CONSTS
+    return False
+
+
+def _is_const_literal(node: ast.AST) -> bool:
+    """A compile-time constant literal: a ``Constant``, a signed constant, or a
+    ``list``/``tuple`` nesting of such (lulesh's ``[(0, 1, 2, 3), (4, 5, 6, 7),
+    ...]`` face-index table)."""
+    if isinstance(node, ast.Constant):
+        return True
+    if isinstance(node, (ast.List, ast.Tuple)):
+        return all(_is_const_literal(e) for e in node.elts)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        return _is_const_literal(node.operand)
+    return False
+
+
+def _local_const_seq_names(fn: ast.FunctionDef) -> Set[str]:
+    """Function-local names bound EXACTLY ONCE to a constant-literal list/tuple
+    (lulesh's ``faces = [(0, 1, 2, 3), ...]``). Such a name is a concrete Python
+    sequence in the emitted function, so a ``for ... in <name>:`` over it unrolls
+    at trace time (see :func:`_is_static_iterable`)."""
+    counts: dict = {}
+    literal: Set[str] = set()
+    for s in ast.walk(fn):
+        if isinstance(s, ast.Assign):
+            for t in s.targets:
+                if isinstance(t, ast.Name):
+                    counts[t.id] = counts.get(t.id, 0) + 1
+                    if len(s.targets) == 1 and isinstance(s.value,
+                                                          (ast.List, ast.Tuple)) and _is_const_literal(s.value):
+                        literal.add(t.id)
+    return {n for n in literal if counts.get(n) == 1}
 
 
 def _rewrite_eigh(fn: ast.FunctionDef) -> None:
@@ -616,7 +819,7 @@ def _rewrite_eigh(fn: ast.FunctionDef) -> None:
     ast.fix_missing_locations(fn)
 
 
-def _emit_if(node: ast.If, live_out: Set[str], indent: str) -> List[str]:
+def _emit_if(node: ast.If, live_out: Set[str], indent: str, defined: Set[str] = frozenset()) -> List[str]:
     """Lower an ``if`` to ``jnp.where`` selects, or keep it as a real Python
     branch when the condition is static (concrete jit args only -- e.g.
     contour_integral's ``if NR == NM`` choosing ``inv`` vs ``solve``, whose
@@ -626,15 +829,15 @@ def _emit_if(node: ast.If, live_out: Set[str], indent: str) -> List[str]:
     * ``if c: return A`` ...      -> ``return jnp.where(c, A, B)``.
     * otherwise                  -> snapshot/restore/``where``-select per var.
     """
-    if _names_loaded(node.test) <= _EMIT_STATIC:
+    if _names_loaded(node.test) <= _EMIT_STATIC or _is_identity_test(node.test):
         cond = _u(node.test)
         lines = [f"{indent}if {cond}:"]
-        lines += _emit_body(node.body, live_out, indent + "    ") or [f"{indent}    pass"]
+        lines += _emit_body(node.body, live_out, indent + "    ", defined) or [f"{indent}    pass"]
         if node.orelse:
             lines.append(f"{indent}else:")
-            lines += _emit_body(node.orelse, live_out, indent + "    ") or [f"{indent}    pass"]
+            lines += _emit_body(node.orelse, live_out, indent + "    ", defined) or [f"{indent}    pass"]
         return lines
-    cond = _u(node.test)
+    cond = _cond_str(node.test)
     # if/else that simply returns -> a single selected return
     if _is_return_only(node.body) and _is_return_only(node.orelse):
         a = _u(node.body[0].value)
@@ -651,7 +854,7 @@ def _emit_if(node: ast.If, live_out: Set[str], indent: str) -> List[str]:
     if not select:
         # No escaping effect to gate: emit the then-branch as-is. (An else with
         # no live-out effect is a no-op.)
-        return _emit_body(node.body, live_out, indent)
+        return _emit_body(node.body, live_out, indent, defined)
     # Snapshot/restore temps must be unique *per if node*, not per depth: an
     # ``if``/``elif`` chain flattens to two ``If`` nodes emitted at the SAME
     # indent (the elif lands in the outer node's ``orelse``, recursed at the
@@ -662,21 +865,64 @@ def _emit_if(node: ast.If, live_out: Set[str], indent: str) -> List[str]:
     tag = f"{node.lineno}_{node.col_offset}"
     pre = {v: f"_pre{tag}_{v}" for v in select}
     then = {v: f"_then{tag}_{v}" for v in select}
+    # A snapshot ``_pre = v`` (and its restore before the else) is only needed
+    # when the INCOMING value of ``v`` is observable: either a branch reads ``v``
+    # before it writes it (so the incoming value feeds that read), or a branch
+    # does NOT assign ``v`` (so its side of the ``where`` keeps the incoming
+    # value). When ``v`` is assigned on BOTH branches and read by neither before
+    # it is written, the merge is fully determined by the two branch values and
+    # the incoming value is never used -- snapshotting it would be dead, and
+    # (worse) when ``v`` is FIRST bound inside the branches, ``_pre = v`` reads
+    # an unbound local and raises ``UnboundLocalError`` at trace time
+    # (contour_integral's ``X = inv(Tz)`` / ``X = solve(Tz, Y)`` in an
+    # ``if NR == NM`` with no prior ``X``). Emit the snapshot/restore only where
+    # the incoming value is genuinely live.
+    body_stored = _names_stored(ast.Module(body=node.body, type_ignores=[]))
+    orelse_stored = _names_stored(ast.Module(body=node.orelse, type_ignores=[]))
+
+    def _needs_pre(v: str) -> bool:
+        if not (v in body_stored and v in orelse_stored):
+            return True
+        return _reads_before_write(node.body, v) or _reads_before_write(node.orelse, v)
+
+    needs = {v: _needs_pre(v) for v in select}
     # Capture the condition *before* the branches run -- they may overwrite the
     # very variables it tests (crc16's ``if crc&1 ^ ...: crc = crc>>1 ^ poly``).
     lines = [f"{indent}_cond{tag} = ({cond})"]
-    lines += [f"{indent}{pre[v]} = {v}" for v in select]
-    lines += _emit_body(node.body, live_out, indent)
+    lines += [f"{indent}{pre[v]} = {v}" for v in select if needs[v]]
+    lines += _emit_body(node.body, live_out, indent, defined)
     lines += [f"{indent}{then[v]} = {v}" for v in select]
-    lines += [f"{indent}{v} = {pre[v]}" for v in select]
+    lines += [f"{indent}{v} = {pre[v]}" for v in select if needs[v]]
     if node.orelse:
-        lines += _emit_body(node.orelse, live_out, indent)
+        lines += _emit_body(node.orelse, live_out, indent, defined | body_stored)
     lines += [f"{indent}{v} = jnp.where(_cond{tag}, {then[v]}, {v})" for v in select]
     return lines
 
 
+def _reads_before_write(stmts: List[ast.stmt], v: str) -> bool:
+    """Does ``v`` appear as an input (RHS / container / index read) in ``stmts``
+    before any statement writes it? A nested compound statement is treated
+    conservatively -- any load of ``v`` inside it counts as a read."""
+    written: Set[str] = set()
+    for s in stmts:
+        if v in _stmt_rhs_loads(s) and v not in written:
+            return True
+        written |= _names_stored(ast.Module(body=[s], type_ignores=[]))
+    return False
+
+
 def _is_return_only(body: List[ast.stmt]) -> bool:
     return len(body) == 1 and isinstance(body[0], ast.Return) and body[0].value is not None
+
+
+def _is_identity_test(test: ast.AST) -> bool:
+    """A pure identity presence check (``x is None`` / ``x is not None``, e.g.
+    fv3_dycore's optional ``if del6_v is not None:`` damping). Its result is a
+    trace-time-concrete fact (an argument is None or it is not), never a value
+    on a traced array, so the ``if`` is a REAL Python branch -- ``jnp.where`` can
+    neither test nor select on ``None`` and would (worse) execute both arms."""
+    return isinstance(test, ast.Compare) and bool(test.ops) \
+        and all(isinstance(op, (ast.Is, ast.IsNot)) for op in test.ops)
 
 
 def _split_on_break(body: List[ast.stmt]):
@@ -734,11 +980,32 @@ def _parse_range(rng: ast.Call):
     raise EmitError("malformed range()")
 
 
-def _emit_for(node: ast.For, live_out: Set[str], indent: str) -> List[str]:
+def _emit_for(node: ast.For, live_out: Set[str], indent: str, defined: Set[str] = frozenset()) -> List[str]:
     kind = _classify_for(node)
     i = node.target.id if isinstance(node.target, ast.Name) else "_i"
     rng = node.iter
     if not (isinstance(rng, ast.Call) and isinstance(rng.func, ast.Name) and rng.func.id == "range"):
+        # A non-``range`` iterable that is a compile-time-constant sequence
+        # (ls3df's ``for axis in (0, 1, 2)`` / ``for m, w in enumerate(_CW,
+        # start=1)``) is emitted as a literal Python ``for`` the tracer unrolls
+        # -- a tiny static trip count, so any loop-carried rebind (``acc``) just
+        # threads as a normal Python value across the unrolled iterations. A
+        # non-constant iterable can't be traced and honestly raises.
+        # A literal tuple/list of Names (lulesh's ``for nk in (n0, n1, n2, n3):``
+        # over face-corner indices) ALWAYS has a static trip count and unrolls at
+        # trace time -- the element values need not be compile-time constants,
+        # only the LENGTH does. Emit it literally too, UNLESS a loop-target name
+        # feeds a shape (where the value must be concrete): then keep refusing so
+        # the eager path (which runs the sequence directly) takes over.
+        literal_seq = isinstance(rng, (ast.Tuple, ast.List)) and \
+            all(isinstance(e, (ast.Name, ast.Constant)) or _is_const_literal(e) for e in rng.elts)
+        if _is_static_iterable(rng) or literal_seq:
+            bound = {n.id for n in ast.walk(node.target) if isinstance(n, ast.Name)}
+            if literal_seq and not _is_static_iterable(rng) and any(_index_in_shape(node, b) for b in bound):
+                raise EmitError("literal-sequence loop index feeds a shape (needs concrete unroll)")
+            lines = [f"{indent}for {_u(node.target)} in {_u(rng)}:"]
+            lines += _emit_body(node.body, live_out, indent + "    ", defined | bound) or [f"{indent}    pass"]
+            return lines
         raise EmitError("only `for i in range(...)` is supported")
     lo, hi, backward, stride = _parse_range(rng)
 
@@ -751,7 +1018,7 @@ def _emit_for(node: ast.For, live_out: Set[str], indent: str) -> List[str]:
     if (_index_in_shape(node, i) and _range_args_static(rng) and not backward and stride == "1"
             and not _is_timestep_loop(node)):
         lines = [f"{indent}for {i} in range({lo}, {hi}):"]
-        lines += _emit_body(node.body, live_out, indent + "    ") or [f"{indent}    pass"]
+        lines += _emit_body(node.body, live_out, indent + "    ", defined | {i}) or [f"{indent}    pass"]
         return lines
 
     if kind == LoopKind.VECTORIZE:
@@ -776,6 +1043,16 @@ def _emit_for(node: ast.For, live_out: Set[str], indent: str) -> List[str]:
     carried = _carried_vars(node.body, live_out)
     if not carried:
         raise EmitError("loop carries no observable state")
+    # The carry-tuple init references each carried var by name, so every one must
+    # be bound BEFORE the loop. A var pulled into the carry that no preceding
+    # statement defines (cloudsc's ``zqe``: a per-iteration block-local temp only
+    # LOOKS carried because an ``if nssopt == 0: .. elif ..`` chain with no
+    # ``else`` reads as a conditional write) would make the init reference an
+    # unbound local -- an honest ``UnboundLocalError`` at trace time. Fall back
+    # to the eager emit rather than emit a module that cannot run.
+    missing = [v for v in carried if v not in defined]
+    if missing:
+        raise EmitError(f"loop carry not defined before the loop: {', '.join(missing)}")
     inner = indent + "    "
     st = _tup(carried)
     if kind == LoopKind.FORI:
@@ -792,7 +1069,7 @@ def _emit_for(node: ast.For, live_out: Set[str], indent: str) -> List[str]:
             recover = f"{inner}{i} = ({lo}) + _k * ({stride})"
         else:
             ctr, lo2, hi2, recover = i, lo, hi, None
-        body_inner = _emit_body(node.body, set(carried), inner)
+        body_inner = _emit_body(node.body, set(carried), inner, set(carried) | {i})
         lines = [f"{indent}def _body({ctr}, _c):", f"{inner}{st} = _c"]
         if recover:
             lines.append(recover)
@@ -805,10 +1082,35 @@ def _emit_for(node: ast.For, live_out: Set[str], indent: str) -> List[str]:
     return _emit_while_break(node, carried, lo, hi, i, indent)
 
 
+def _expand_parallel_assigns(stmts: List[ast.stmt]) -> List[ast.stmt]:
+    """Split a parallel Name-tuple assign ``a, b = e0, e1`` into ``__pa = (e0,
+    e1); a = __pa[0]; b = __pa[1]`` so each target becomes a single Name rebind
+    (ls3df's Lanczos ``v_prev, v = v, w / beta``). The temp snapshots the whole
+    RHS first, preserving numpy's simultaneous-assignment semantics under the
+    break-guard's per-var ``jnp.where`` freeze."""
+    out: List[ast.stmt] = []
+    for s in stmts:
+        if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], (ast.Tuple, ast.List)) \
+                and all(isinstance(e, ast.Name) for e in s.targets[0].elts):
+            _TUPLE_CTR[0] += 1
+            tmp = f"__pa{_TUPLE_CTR[0]}"
+            out.append(ast.Assign(targets=[ast.Name(id=tmp, ctx=ast.Store())], value=s.value))
+            for k, e in enumerate(s.targets[0].elts):
+                item = ast.Subscript(value=ast.Name(id=tmp, ctx=ast.Load()),
+                                     slice=ast.Constant(value=k),
+                                     ctx=ast.Load())
+                out.append(ast.Assign(targets=[ast.Name(id=e.id, ctx=ast.Store())], value=item))
+        else:
+            out.append(s)
+    return [ast.fix_missing_locations(x) for x in out]
+
+
 def _emit_while_break(node, carried, lo, hi, i, indent):
     before, cond, on_break, after = _split_on_break(node.body)
     if cond is None:
         raise EmitError("break loop without an `if cond: ... break` guard")
+    on_break = _expand_parallel_assigns(on_break)
+    after = _expand_parallel_assigns(after)
     full = [i] + carried + ["_done"]
     inner = indent + "    "
     st = _tup(full)
@@ -816,8 +1118,8 @@ def _emit_while_break(node, carried, lo, hi, i, indent):
         f"{indent}def _cond(_c):", f"{inner}{st} = _c", f"{inner}return ({i} < {hi}) & jnp.logical_not(_done)",
         f"{indent}def _body(_c):", f"{inner}{st} = _c"
     ]
-    lines += _emit_body(before, set(carried), inner)
-    lines.append(f"{inner}_conv = ({_u(cond)})")
+    lines += _emit_body(before, set(carried), inner, set(carried) | {i})
+    lines.append(f"{inner}_conv = ({_cond_str(cond)})")
     cset = set(carried)
 
     def _frozen(stmts, when_conv):
@@ -849,17 +1151,20 @@ def _emit_while_break(node, carried, lo, hi, i, indent):
     return lines
 
 
-def _emit_while(node: ast.While, live_out: Set[str], indent: str) -> List[str]:
+def _emit_while(node: ast.While, live_out: Set[str], indent: str, defined: Set[str] = frozenset()) -> List[str]:
     carried = _carried_vars(node.body, live_out, _names_loaded(node.test))
     if not carried:
         raise EmitError("while-loop carries no observable state")
+    missing = [v for v in carried if v not in defined]
+    if missing:
+        raise EmitError(f"while carry not defined before the loop: {', '.join(missing)}")
     inner = indent + "    "
     st = _tup(carried)
     lines = [
-        f"{indent}def _cond(_c):", f"{inner}{st} = _c", f"{inner}return ({_u(node.test)})", f"{indent}def _body(_c):",
-        f"{inner}{st} = _c"
+        f"{indent}def _cond(_c):", f"{inner}{st} = _c", f"{inner}return ({_cond_str(node.test)})",
+        f"{indent}def _body(_c):", f"{inner}{st} = _c"
     ]
-    lines += _emit_body(node.body, set(carried), inner)
+    lines += _emit_body(node.body, set(carried), inner, set(carried))
     lines += [f"{inner}return {st}", f"{indent}{st} = lax.while_loop(_cond, _body, {st})"]
     return lines
 
@@ -907,6 +1212,10 @@ def emit_jax(numpy_src: str, func_name: str, jit: bool = False) -> str:
     from numpyto_common.numpy_desugar import _eigh_alias_names
     _EIGH_ALIASES.clear()
     _EIGH_ALIASES.update(_eigh_alias_names(tree))
+    _MODULE_CONSTS.clear()
+    _MODULE_CONSTS.update(_module_constant_names(tree, func_name))
+    _MODULE_CONST_VALUES.clear()
+    _MODULE_CONST_VALUES.update(_module_const_values(tree, func_name))
     # Substitute whole-array ``local = param`` aliases with the param itself
     # (ICON velocity_tendencies aliases ~40 params: ``vt = p_diag_vt``). In
     # functional jax an in-place write through the alias rebinds the LOCAL, so
@@ -941,7 +1250,32 @@ def emit_jax(numpy_src: str, func_name: str, jit: bool = False) -> str:
         _reachable.add(nm)
         _frontier |= _called_names(_defined[nm])
     helpers = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in _reachable]
-    helper_mut = _helper_mutation_map(helpers)
+    # Fold each helper's OWN ``local = param`` aliases too (fv3_dycore's stencil
+    # helpers open with ``f = field`` then mutate ``f[i, j] = ..``): without this
+    # the in-place writes land on the local alias, the param is not seen as
+    # mutated, and its bare call site never functionalises to ``field = helper(
+    # field, ..)`` -- leaving a bare-expression statement the emitter rejects.
+    for h in helpers:
+        h_alias = _SubstituteParamAliases([a.arg for a in h.args.args])
+        h_alias.collect(h)
+        h_alias.visit(h)
+        ast.fix_missing_locations(h)
+    # Transitive in-place-mutation map over the kernel + every reachable helper,
+    # computed on the alias-folded source so a param mutated only through a bare
+    # sub-helper call is still recognised as an output at both the call site
+    # (functionalised) and the function's own return.
+    funcs = {func_name: fn}
+    funcs.update({h.name: h for h in helpers})
+    mut_map = _mutation_maps(funcs)
+    helper_mut = _helper_mutation_map(helpers, mut_map)
+    # Kernel static_argnames, computed transitively so a control param used only
+    # inside a called helper's branch (fv3_dycore's ``hord``) is still concrete.
+    kernel_static = _transitive_static(func_name, funcs) if jit else []
+    # Each HELPER's concrete (trace-time-known) params, flowed FORWARD from the
+    # kernel's static args -- so a helper branch on a genuinely static value
+    # (fv3_dycore's ``if mord == 5``) stays a Python branch, while one on traced
+    # data (nussinov's ``match(seq[i], seq[j])``) lowers to ``jnp.where``.
+    concrete = _concrete_params(funcs, func_name, kernel_static) if jit else {}
 
     head = [
         "import jax",
@@ -964,12 +1298,18 @@ def emit_jax(numpy_src: str, func_name: str, jit: bool = False) -> str:
         head += consts + [""]
     eager = not jit
     for h in helpers:
-        head += _emit_function(h, decorate=None, helper_mut=helper_mut, eager=eager) + ["", ""]
-    deco = _kernel_decorator(fn) if jit else None
-    return "\n".join(head + _emit_function(fn, decorate=deco, helper_mut=helper_mut, eager=eager)) + "\n"
+        head += _emit_function(h,
+                               decorate=None,
+                               helper_mut=helper_mut,
+                               eager=eager,
+                               mutated=mut_map.get(h.name),
+                               static=(sorted(concrete.get(h.name, ())) if jit else None)) + ["", ""]
+    deco = _kernel_decorator(fn, kernel_static) if jit else None
+    return "\n".join(head + _emit_function(fn, decorate=deco, helper_mut=helper_mut, eager=eager,
+                                           mutated=mut_map.get(func_name), static=kernel_static)) + "\n"
 
 
-def _helper_mutation_map(helpers: List[ast.FunctionDef]) -> dict:
+def _helper_mutation_map(helpers: List[ast.FunctionDef], mut_map: Optional[dict] = None) -> dict:
     """Map ``helper_name -> emitted-return rebind slots`` for every helper that
     mutates a param in place (jax arrays are immutable, so the mutation only
     survives if the call site captures it back).
@@ -989,7 +1329,7 @@ def _helper_mutation_map(helpers: List[ast.FunctionDef]) -> dict:
     out = {}
     for h in helpers:
         params = [a.arg for a in h.args.args]
-        muts = _mutated_params(h, params)
+        muts = mut_map[h.name] if mut_map is not None else _mutated_params(h, params)
         if not muts:
             continue
         slots = _emitted_return_slots(h, params, muts)
@@ -1078,9 +1418,10 @@ def _as_store(node: ast.AST) -> ast.AST:
     return n
 
 
-def _kernel_decorator(fn: ast.FunctionDef) -> str:
+def _kernel_decorator(fn: ast.FunctionDef, static: Optional[List[str]] = None) -> str:
     params = [a.arg for a in fn.args.args]
-    static = _static_params(fn, params)
+    if static is None:
+        static = _static_params(fn, params)
     if static:
         return "@partial(jax.jit, static_argnames=(" + ", ".join(f"{s!r}" for s in static) + ",))"
     return "@jax.jit"
@@ -1089,21 +1430,34 @@ def _kernel_decorator(fn: ast.FunctionDef) -> str:
 def _emit_function(fn: ast.FunctionDef,
                    decorate: Optional[str],
                    helper_mut: Optional[dict] = None,
-                   eager: bool = False) -> List[str]:
+                   eager: bool = False,
+                   mutated: Optional[List[str]] = None,
+                   static: Optional[List[str]] = None) -> List[str]:
     """Translate one function (kernel or helper) to JAX source lines."""
+    global _JIT_MODE
     if helper_mut:
         _rewrite_inplace_helper_calls(fn, helper_mut)
     if eager:
-        return _emit_function_eager(fn, decorate)
+        return _emit_function_eager(fn, decorate, mutated)
+    _JIT_MODE = True
     _rewrite_eigh(fn)
+    _LOCAL_CONSTS.clear()
+    _LOCAL_CONSTS.update(_local_const_seq_names(fn))
     _desugar_foreach(fn)
+    _fold_const_branches(fn)
     params = [a.arg for a in fn.args.args]
-    # Static jit args are concrete at trace time -- an ``if`` testing only them
-    # stays a real branch, and a loop whose index feeds a shape is unrolled.
+    # Static args are concrete at trace time -- an ``if``/ternary testing only
+    # them stays a real branch, and a loop whose index feeds a shape is unrolled.
     # Set before the slice transforms so they treat an unrolled index as
-    # concrete (its ``:R**i`` slices are static, not data-dependent).
+    # concrete (its ``:R**i`` slices are static, not data-dependent). The kernel
+    # uses the TRANSITIVE static set (matching its decorator's static_argnames);
+    # a HELPER falls back to its own per-function static params -- it too gets
+    # concrete values for those args from the (jitted) caller, so its
+    # ``ord_inner = 8 if hord == 10 else hord`` (fv3_dycore) must stay a Python
+    # ternary, not degrade to ``jnp.where`` on a 0-d array, and its ``if mord ==
+    # 5`` PPM-order branch must pick ONE arm rather than blend both.
     _EMIT_STATIC.clear()
-    _EMIT_STATIC.update(_static_params(fn, params) if decorate else [])
+    _EMIT_STATIC.update(static if static is not None else _static_params(fn, params))
 
     _expand_tuple_targets(fn)
     _expand_chained_assigns(fn)
@@ -1116,12 +1470,13 @@ def _emit_function(fn: ast.FunctionDef,
     _reject_dynamic_slices(fn)
 
     returns = _own_returns(fn)
-    mutated = _mutated_params(fn, params)
+    if mutated is None:
+        mutated = _mutated_params(fn, params)
     live_out: Set[str] = set(params)
 
     if returns and mutated:
         _augment_returns(fn, mutated)
-    body_lines = _emit_body(fn.body, live_out, "    ")
+    body_lines = _emit_body(fn.body, live_out, "    ", set(params) | _MODULE_CONSTS)
     if not returns:
         # numpy mutated in place + returned None -> return the mutated outputs.
         body_lines.append("    return " + ", ".join(mutated))
@@ -1131,11 +1486,14 @@ def _emit_function(fn: ast.FunctionDef,
     return head + body_lines
 
 
-def _emit_function_eager(fn: ast.FunctionDef, decorate: Optional[str]) -> List[str]:
+def _emit_function_eager(fn: ast.FunctionDef, decorate: Optional[str],
+                         mutated: Optional[List[str]] = None) -> List[str]:
     """Emit one function in **eager** mode: Python control flow verbatim, only
     in-place mutation made functional (jax arrays are immutable even eagerly).
     No loop classification, no masking -- eager JAX runs dynamic slices, boolean
     indexing and data-dependent breaks directly on concrete arrays."""
+    global _JIT_MODE
+    _JIT_MODE = False
     # Multi-target / tuple-of-subscript assigns still need splitting so each
     # subscript target functionalises to its own ``.at[..].set(..)``.
     _rewrite_eigh(fn)
@@ -1143,7 +1501,8 @@ def _emit_function_eager(fn: ast.FunctionDef, decorate: Optional[str]) -> List[s
     _expand_chained_assigns(fn)
     params = [a.arg for a in fn.args.args]
     returns = _own_returns(fn)
-    mutated = _mutated_params(fn, params)
+    if mutated is None:
+        mutated = _mutated_params(fn, params)
     if returns and mutated:
         _augment_returns(fn, mutated)
     body_lines = _emit_eager_body(fn.body, "    ")
@@ -1243,14 +1602,104 @@ def _extra_imports(tree: ast.Module) -> List[str]:
 def _module_constants(tree: ast.Module, func_name: str) -> List[str]:
     """Top-level ``NAME = <literal expr>`` assignments the kernel closes over
     (e.g. weather-stencil ``BET_M``/``BET_P``). Carried verbatim (np->jnp) so
-    the emitted module is self-contained."""
+    the emitted module is self-contained. A tuple-unpack constant
+    (``_GAMMA, _B1, _B2 = -0.1423, 1.0529, 0.3334`` -- lda_xc_potential's
+    Perdew-Zunger coefficients) is carried too, so every name it binds
+    resolves in the emitted module."""
     out: List[str] = []
     for s in tree.body:
-        if isinstance(s, ast.Assign) and len(s.targets) == 1 and \
-                isinstance(s.targets[0], ast.Name) and \
-                s.targets[0].id != func_name:
+        if not (isinstance(s, ast.Assign) and len(s.targets) == 1):
+            continue
+        tgt = s.targets[0]
+        if isinstance(tgt, ast.Name):
+            names = [tgt.id]
+        elif isinstance(tgt, ast.Tuple) and all(isinstance(e, ast.Name) for e in tgt.elts):
+            names = [e.id for e in tgt.elts]
+        else:
+            continue
+        if func_name not in names:
             out.append(_u(s))
     return out
+
+
+def _module_constant_names(tree: ast.Module, func_name: str) -> Set[str]:
+    """The names bound by the module-level constant assignments carried by
+    :func:`_module_constants` (single-Name or tuple-of-Names targets)."""
+    out: Set[str] = set()
+    for s in tree.body:
+        if not (isinstance(s, ast.Assign) and len(s.targets) == 1):
+            continue
+        tgt = s.targets[0]
+        if isinstance(tgt, ast.Name):
+            names = [tgt.id]
+        elif isinstance(tgt, ast.Tuple) and all(isinstance(e, ast.Name) for e in tgt.elts):
+            names = [e.id for e in tgt.elts]
+        else:
+            continue
+        if func_name not in names:
+            out.update(names)
+    return out
+
+
+def _module_const_values(tree: ast.Module, func_name: str) -> dict:
+    """Map each module-level ``NAME = <scalar literal expr>`` (and scalar
+    tuple-unpack) to its concrete Python value, evaluated top-to-bottom so a
+    constant defined from earlier ones (``LCG_M = 1 << 63``) resolves. Only
+    int/float/bool/complex results are kept; a constant that references numpy or
+    builds an array (``MATERIAL_PROBABILITIES = np.array([...])``) fails the
+    restricted eval and is skipped. Read by :func:`_fold_const_branches`."""
+    env: dict = {}
+    for s in tree.body:
+        if not (isinstance(s, ast.Assign) and len(s.targets) == 1):
+            continue
+        tgt = s.targets[0]
+        try:
+            val = eval(compile(ast.Expression(body=s.value), "<const>", "eval"), {"__builtins__": {}}, dict(env))
+        except Exception:  # noqa: BLE001 -- references np / an array / an unknown name
+            continue
+        if isinstance(tgt, ast.Name):
+            if isinstance(val, (int, float, complex)):  # bool is an int subclass
+                env[tgt.id] = val
+        elif isinstance(tgt, ast.Tuple) and all(isinstance(e, ast.Name) for e in tgt.elts) \
+                and isinstance(val, tuple) and len(val) == len(tgt.elts):
+            for e, v in zip(tgt.elts, val):
+                if isinstance(v, (int, float, complex)):
+                    env[e.id] = v
+    env.pop(func_name, None)
+    return env
+
+
+def _fold_const_branches(fn: ast.FunctionDef) -> None:
+    """Prune an ``if``/``elif`` whose test is fully determined by module-level
+    scalar constants (:data:`_MODULE_CONST_VALUES`) down to the taken branch --
+    exactly what Python would do, so it is semantics-preserving. This keeps a
+    constant-configured branch chain (cloudsc's ``if yrecldp_nssopt == 0: ..
+    elif == 1: zqe = .. elif == 2: ..`` with ``yrecldp_nssopt = 1``) from
+    reading as a *conditional* write of ``zqe`` -- which the carry analysis would
+    otherwise flag as loop-carried-but-undefined and refuse."""
+    # Drop any module constant SHADOWED by a param or local assignment here --
+    # inside this function that name is the local (traced) value, not the module
+    # constant, so folding on the module value would be a miscompile.
+    shadowed = {a.arg for a in fn.args.args} | _names_stored(fn)
+    usable = {k: v for k, v in _MODULE_CONST_VALUES.items() if k not in shadowed}
+    if not usable:
+        return
+
+    class _T(ast.NodeTransformer):
+
+        def visit_If(self, node):
+            self.generic_visit(node)  # fold inner elif chain first
+            if _names_loaded(node.test) <= set(usable):
+                try:
+                    truth = eval(compile(ast.Expression(body=node.test), "<fold>", "eval"), {"__builtins__": {}},
+                                 dict(usable))
+                except Exception:  # noqa: BLE001
+                    return node
+                return node.body if truth else node.orelse  # [] removes the dead branch entirely
+            return node
+
+    _T().visit(fn)
+    ast.fix_missing_locations(fn)
 
 
 def _signature(fn: ast.FunctionDef) -> str:
@@ -1296,6 +1745,11 @@ def _desugar_foreach(fn: ast.FunctionDef) -> None:
             self.generic_visit(node)
             it = node.iter
             if isinstance(it, ast.Call) and isinstance(it.func, ast.Name) and it.func.id == "range":
+                return node
+            # A constant-literal sequence (lulesh's ``faces``) is a concrete Python
+            # list in the emitted function -> leave the ``for`` literal so it
+            # unrolls at trace time, rather than indexing it like an array.
+            if isinstance(it, ast.Name) and (it.id in _MODULE_CONSTS or it.id in _LOCAL_CONSTS):
                 return node
             if not (isinstance(node.target, ast.Name) and isinstance(it, ast.Name)):
                 return node
@@ -1379,8 +1833,49 @@ _BOOL_FUNCS = ("logical_and", "logical_or", "logical_not", "logical_xor", "less"
 
 
 def _is_bool_expr(node: ast.AST) -> bool:
-    return isinstance(node, ast.Compare) or any(_is_np_attr(node.func, f) for f in _BOOL_FUNCS) \
-        if isinstance(node, (ast.Compare, ast.Call)) else False
+    """A provably-boolean array expression: a comparison, an ``np.logical_*`` /
+    predicate call, or a bitwise combination (``&``/``|``/``^``/``~``) of such
+    (force_lj's ``in_range = (rsq < cutoffsq) & (rsq > 0.0)`` -- a boolean mask
+    that ``_boolean_mask_transform`` must recognise to lower ``A[mask] = ..`` to
+    ``where`` rather than an untraceable dynamic-size boolean index)."""
+    if isinstance(node, ast.Compare):
+        return True
+    if isinstance(node, ast.Call):
+        return any(_is_np_attr(node.func, f) for f in _BOOL_FUNCS)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.BitAnd, ast.BitOr, ast.BitXor)):
+        return _is_bool_expr(node.left) and _is_bool_expr(node.right)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Invert):
+        return _is_bool_expr(node.operand)
+    return False
+
+
+def _bool_cond_ast(node: ast.AST) -> ast.AST:
+    """Coerce a Python-truthiness condition into an explicit boolean-array
+    expression a jit trace can evaluate directly: ``a and b`` -> ``mask(a) &
+    mask(b)``, ``a or b`` -> ``mask(a) | mask(b)``, ``not a`` -> ``~mask(a)``.
+    A non-boolean operand ``x`` (cloudsc's integer cumulus flag ``ldcum[jl-1]``,
+    mixed with comparisons in ``if ldcum[jl-1] and plude > rlmin: ...``) becomes
+    ``x != 0`` -- its numpy truthiness -- so the whole condition lowers to a
+    traceable mask instead of raising ``TracerBoolConversionError`` on the bare
+    Python ``and``. Already-boolean operands (comparisons / ``np.logical_*`` /
+    bitwise-of-bool) are left untouched, so an all-comparison condition emits the
+    same ``&``/``|`` mask as before."""
+    if isinstance(node, ast.BoolOp):
+        op = ast.BitAnd() if isinstance(node.op, ast.And) else ast.BitOr()
+        expr = _bool_cond_ast(node.values[0])
+        for v in node.values[1:]:
+            expr = ast.BinOp(left=expr, op=op, right=_bool_cond_ast(v))
+        return expr
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        return ast.UnaryOp(op=ast.Invert(), operand=_bool_cond_ast(node.operand))
+    if _is_bool_expr(node):
+        return node
+    return ast.Compare(left=node, ops=[ast.NotEq()], comparators=[ast.Constant(value=0)])
+
+
+def _cond_str(test: ast.AST) -> str:
+    """Unparse a condition (np->jnp) as a traceable boolean-array expression."""
+    return _u(_bool_cond_ast(test))
 
 
 def _boolean_mask_transform(fn: ast.FunctionDef) -> None:
@@ -1782,17 +2277,67 @@ def _dynamic_window_slices(fn: ast.FunctionDef) -> None:
     ast.fix_missing_locations(fn)
 
 
+def _for_is_unrolled(node: ast.For) -> bool:
+    """Will ``_emit_for`` UNROLL this ``for`` at trace time (its index/carry stay
+    concrete Python values), rather than lower it to a rolled ``fori_loop`` /
+    ``while_loop`` (its carry becomes a tracer)? True for a static-iterable /
+    literal-sequence loop and for a static-range loop whose index feeds a shape
+    (and is not a time-stepping loop). Used to decide which loop-written scalars
+    become tracers post-loop -- see :func:`_loop_index_tainted`."""
+    rng = node.iter
+    if not (isinstance(rng, ast.Call) and isinstance(rng.func, ast.Name) and rng.func.id == "range"):
+        return _is_static_iterable(rng) or isinstance(rng, (ast.Tuple, ast.List))
+    i = node.target.id if isinstance(node.target, ast.Name) else "_i"
+    return _index_in_shape(node, i) and _range_args_static(rng) and not _is_timestep_loop(node)
+
+
+def _rolled_loop_writes(fn: ast.FunctionDef) -> Set[str]:
+    """Names written inside a ROLLED loop body (a ``while`` or a non-unrolled
+    ``for``). Such a name is a loop CARRY -- a tracer once the loop is a
+    ``fori_loop`` / ``while_loop`` -- so slicing an array by it after the loop
+    (ls3df's Lanczos ``alphas[:na]`` with the step counter ``na += 1``) is just
+    as data-dependent as slicing by the index itself."""
+    out: Set[str] = set()
+    for n in ast.walk(fn):
+        if isinstance(n, ast.While):
+            out |= _names_stored(ast.Module(body=n.body, type_ignores=[]))
+        elif isinstance(n, ast.For) and not _for_is_unrolled(n):
+            out |= _names_stored(ast.Module(body=n.body, type_ignores=[]))
+    return out
+
+
+def _loop_index_tainted(fn: ast.FunctionDef) -> Set[str]:
+    """Loop-index vars, scalars carried through a rolled loop (:func:`_rolled_
+    loop_writes`), plus every scalar TRANSITIVELY derived from one by a plain
+    ``name = <expr(tainted)>`` assignment (dwt2d's ``s = n >> lvl`` with ``lvl``
+    the ``fori`` index). A slice bound built from such a name is just as
+    data-dependent as one naming the index directly."""
+    tainted = set(_loop_vars(fn)) | _rolled_loop_writes(fn)
+    changed = True
+    while changed:
+        changed = False
+        for n in ast.walk(fn):
+            if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name) \
+                    and n.targets[0].id not in tainted and (_names_loaded(n.value) & tainted):
+                tainted.add(n.targets[0].id)
+                changed = True
+    return tainted
+
+
 def _reject_dynamic_slices(fn: ast.FunctionDef) -> None:
     """Raise if any ``ast.Slice`` bound depends on a loop-index variable
     (e.g. cholesky's ``A[i, :j]`` with ``j`` a loop var). Such variable-length
     slices have no static shape, so they cannot be traced -- a hand-written
     JAX kernel would have to mask/pad. Honest fallback beats broken output.
-    Unrolled-loop indices are excluded (concrete -> their slices are static)."""
-    loop_vars = _loop_vars(fn)
+    Unrolled-loop indices are excluded (concrete -> their slices are static).
+    The taint is transitive so a slice bound built from a loop-index-derived
+    scalar (dwt2d's ``s = n >> lvl`` then ``out[:s, :s]``) is caught too, rather
+    than emitting a module that crashes with a traced slice at run time."""
+    tainted = _loop_index_tainted(fn)
     for n in ast.walk(fn):
         if isinstance(n, ast.Slice):
             for part in (n.lower, n.upper, n.step):
-                if part is not None and (_names_loaded(part) & loop_vars):
+                if part is not None and (_names_loaded(part) & tainted):
                     raise EmitError("data-dependent slice bound (needs masking/padding)")
 
 
@@ -1807,10 +2352,11 @@ _LEADING_DATA_FUNCS = ("reshape", "histogram", "tile", "repeat", "broadcast_to",
                        "empty_like", "full_like")
 
 
-def _static_params(fn: ast.FunctionDef, params) -> List[str]:
-    """Params requiring concreteness during tracing: those feeding a
-    ``range()`` bound or an array-shape dimension. An array param (ever
-    subscripted) is never static even if it also appears in such a slot."""
+def _static_want(fn: ast.FunctionDef, params) -> Set[str]:
+    """Params ``fn`` needs CONCRETE at trace time: those feeding a ``range()``
+    bound, an array-shape dimension, or an ``if``/``while``/ternary CONDITION.
+    (Array-likeness is NOT excluded here -- see :func:`_static_params`.)"""
+    pset = set(params)
     want: Set[str] = set()
     for n in ast.walk(fn):
         if isinstance(n, ast.Call):
@@ -1821,27 +2367,284 @@ def _static_params(fn: ast.FunctionDef, params) -> List[str]:
                 # histogram(a, bins), ...) -- skip arg 0; its dims live after.
                 scan = n.args[1:] if attr in _LEADING_DATA_FUNCS else n.args
                 for a in scan:
-                    want |= (_names_loaded(a) & set(params))
-    # A param that is ever used as an array value -- subscripted, or an
-    # operand of ``@`` -- is data, never a static dim (e.g. doitgen's C4
-    # appears in a reshape's argument *and* in ``... @ C4``).
+                    want |= (_names_loaded(a) & pset)
+        # A scalar param that drives an ``if``/``while``/ternary CONDITION is a
+        # control parameter that must be concrete at trace time: a data-dependent
+        # Python branch on a traced scalar cannot yield a bool, and
+        # (contour_integral's ``if NR == NM`` choosing ``inv`` vs ``solve``) the
+        # two arms may have INCOMPATIBLE shapes that no ``jnp.where`` can merge --
+        # only a static predicate picks a single arm. Such a param is an implicit
+        # dimension (``NM`` = ``Y.shape[1]``) even when it never feeds a shape.
+        # fv3_dycore's ``ord_inner = 8 if hord == 10 else hord`` makes ``hord``
+        # control-critical. (Excluded in _static_params if also used as data.)
+        elif isinstance(n, (ast.If, ast.While, ast.IfExp)):
+            want |= (_names_loaded(n.test) & pset)
+    return want
+
+
+def _array_like_params(fn: ast.FunctionDef, params) -> Set[str]:
+    """Params ever used as an ARRAY VALUE -- subscripted, accessed via an array
+    attribute/reduction (``x.shape``, ``x.max()``), or a whole-array ``@``
+    operand -- so they are data, never a static scalar dimension."""
     array_like: Set[str] = set()
     for n in ast.walk(fn):
         if isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name):
             array_like.add(n.value.id)
-        # ``conv1.shape[3]`` uses an array's (always-static) shape, so conv1 is
-        # data, not a static scalar -- exclude names accessed via an array
-        # attribute or reduction method (``radius.max()``).
         if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) and n.attr in _ARRAY_ATTRS:
             array_like.add(n.value.id)
         if isinstance(n, ast.BinOp) and isinstance(n.op, ast.MatMult):
-            # Only a *whole-array* operand (``A @ C4``) is data; names buried
-            # in a sub-expression (e.g. dims inside ``reshape(A, (NR, NQ))``)
-            # are not.
             for side in (n.left, n.right):
                 if isinstance(side, ast.Name) and side.id in params:
                     array_like.add(side.id)
+    return array_like
+
+
+def _static_params(fn: ast.FunctionDef, params) -> List[str]:
+    """Params requiring concreteness during tracing (``range`` bound, shape dim,
+    branch predicate), minus those ever used as array data."""
+    want = _static_want(fn, params)
+    array_like = _array_like_params(fn, params)
     return [p for p in params if p in want and p not in array_like]
+
+
+def _value_names(node: ast.AST, pset: Set[str]) -> Set[str]:
+    """Param names appearing in ``node`` as a VALUE -- EXCLUDING those that occur
+    only as the base of a ``.shape`` / ``.size`` / ``.ndim`` access (a statically
+    known dimension, not the array's data). So ``int(egrid.shape[0])`` yields
+    nothing, while ``int(num_nucs[mat])`` yields ``num_nucs`` (and ``mat``)."""
+    skip = {
+        id(n.value)
+        for n in ast.walk(node)
+        if isinstance(n, ast.Attribute) and n.attr in ("shape", "size", "ndim") and isinstance(n.value, ast.Name)
+    }
+    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and n.id in pset and id(n) not in skip}
+
+
+def _concrete_bound_want(fn: ast.FunctionDef, params) -> Set[str]:
+    """Params whose VALUE (or an element of it) feeds a ``range()`` bound or an
+    array SHAPE dimension -- positions that need a concrete Python int at trace
+    time. Unlike :func:`_static_want` this EXCLUDES branch predicates (a data-
+    dependent ``if`` / ternary lowers to ``jnp.where``, cloudsc's ``if
+    ldcum[jl-1]``) and ``.shape`` accesses (statically known), so only a
+    genuinely un-AoT-able array-as-a-bound (xsbench's ``num_nucs[mat]`` sizing
+    the nuclide loop) lands here."""
+    pset = set(params)
+    want: Set[str] = set()
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Call):
+            is_range = isinstance(n.func, ast.Name) and n.func.id == "range"
+            attr = n.func.attr if isinstance(n.func, ast.Attribute) else None
+            if is_range or attr in _SHAPE_FUNCS:
+                scan = n.args[1:] if attr in _LEADING_DATA_FUNCS else n.args
+                for a in scan:
+                    want |= _value_names(a, pset)
+    return want
+
+
+def _propagate_param_flow(funcs: dict, seed: dict) -> dict:
+    """Fix-point closure of a per-function param set over call edges: a caller
+    param that flows (via a call argument) into a callee param already in the set
+    joins the set. ``seed`` maps each function to a set of ITS OWN params; the
+    result maps each to that set grown transitively. Shared by the static-want,
+    concrete-bound-want and array-like passes (fv3_dycore's ``hord`` reaches
+    ``xppm_flux``'s ``if mord == 5`` only through the call chain)."""
+    params_of = {name: [a.arg for a in f.args.args] for name, f in funcs.items()}
+    out = {name: set(seed[name]) for name in funcs}
+    changed = True
+    while changed:
+        changed = False
+        for name, f in funcs.items():
+            pset = set(params_of[name])
+            for call in ast.walk(f):
+                if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id in funcs):
+                    continue
+                gparams = params_of[call.func.id]
+                for wp in out[call.func.id]:
+                    pos = gparams.index(wp)
+                    if pos < len(call.args):
+                        for nm in _names_loaded(call.args[pos]) & pset:
+                            if nm not in out[name]:
+                                out[name].add(nm)
+                                changed = True
+    return out
+
+
+def _transitive_array_like(funcs: dict) -> dict:
+    """``{func_name: array-like params}`` propagated FORWARD across calls: a param
+    passed DIRECTLY (as a plain Name) into a callee position that is array-like
+    there is itself array-like. gromacs/xsbench pass their integer index arrays
+    (``ci_cluster``, ``num_nucs``) straight through to helpers that subscript
+    them -- the kernel body never touches them, so a body-only check misses that
+    they are DATA, not static scalar dimensions."""
+    params_of = {name: [a.arg for a in f.args.args] for name, f in funcs.items()}
+    # Seed with array-like PARAMS only (``_array_like_params`` also reports local
+    # arrays and ``np`` from ``np.max`` -- neither is a callee param to trace).
+    al = {name: (set(_array_like_params(f, params_of[name])) & set(params_of[name])) for name, f in funcs.items()}
+    changed = True
+    while changed:
+        changed = False
+        for name, f in funcs.items():
+            pset = set(params_of[name])
+            for call in ast.walk(f):
+                if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id in funcs):
+                    continue
+                gparams = params_of[call.func.id]
+                for gp in al[call.func.id]:
+                    pos = gparams.index(gp)  # gp is a callee param -> always present
+                    if pos < len(call.args) and isinstance(call.args[pos], ast.Name) and call.args[pos].id in pset \
+                            and call.args[pos].id not in al[name]:
+                        al[name].add(call.args[pos].id)
+                        changed = True
+    return al
+
+
+#: builtins that return a concrete scalar from concrete args (so ``abs(iord)`` /
+#: ``int(x)`` stay static) -- read by :func:`_is_static_expr`.
+_STATIC_BUILTINS = {"abs", "int", "float", "min", "max", "round", "len", "bool", "sum"}
+
+
+def _is_static_expr(node: ast.AST, ctx: Set[str]) -> bool:
+    """Is ``node`` evaluable to a concrete Python value at trace time, given the
+    static names in ``ctx``? Literals, ``ctx`` names, arithmetic/compare/ternary
+    over such, a ``.shape``/``.size``/``.ndim`` access, and a pure builtin /
+    ``np.``/``math.`` call over static args all qualify -- so ``abs(iord)`` and
+    ``int(egrid.shape[0]) - 1`` are static while ``seq[i]`` (a traced array
+    element) and a user-helper call are not."""
+    if isinstance(node, ast.Constant):
+        return True
+    if isinstance(node, ast.Name):
+        return node.id in ctx
+    if isinstance(node, ast.BinOp):
+        return _is_static_expr(node.left, ctx) and _is_static_expr(node.right, ctx)
+    if isinstance(node, ast.UnaryOp):
+        return _is_static_expr(node.operand, ctx)
+    if isinstance(node, ast.BoolOp):
+        return all(_is_static_expr(v, ctx) for v in node.values)
+    if isinstance(node, ast.Compare):
+        return _is_static_expr(node.left, ctx) and all(_is_static_expr(c, ctx) for c in node.comparators)
+    if isinstance(node, ast.IfExp):
+        return all(_is_static_expr(x, ctx) for x in (node.test, node.body, node.orelse))
+    if isinstance(node, (ast.Tuple, ast.List)):
+        return all(_is_static_expr(e, ctx) for e in node.elts)
+    if isinstance(node, ast.Attribute):
+        return node.attr in ("shape", "size", "ndim")  # a statically-known dimension of any array
+    if isinstance(node, ast.Subscript):  # e.g. ``x.shape[0]``
+        return _is_static_expr(node.value, ctx) and _is_static_expr(node.slice, ctx)
+    if isinstance(node, ast.Call):
+        f = node.func
+        if isinstance(f, ast.Name) and f.id in _STATIC_BUILTINS:
+            return all(_is_static_expr(a, ctx) for a in node.args)
+        if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id in ("np", "jnp", "math"):
+            return all(_is_static_expr(a, ctx) for a in node.args)
+        return False
+    return False
+
+
+def _static_ctx(fn: ast.FunctionDef, base: Set[str]) -> Set[str]:
+    """``base`` (a function's concrete params + module constants) grown with its
+    static LOCALS -- a single-assignment ``name = <static expr>`` (fv3_dycore's
+    ``ord_inner = 8 if hord == 10 else hord``, ``nx = nhalo + ni + nhalo``). A
+    name assigned more than once is skipped (conservative)."""
+    counts: dict = {}
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    counts[t.id] = counts.get(t.id, 0) + 1
+    ctx = set(base)
+    changed = True
+    while changed:
+        changed = False
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                t = node.targets[0].id
+                if counts.get(t) == 1 and t not in ctx and _is_static_expr(node.value, ctx):
+                    ctx.add(t)
+                    changed = True
+    return ctx
+
+
+def _concrete_params(funcs: dict, kernel_name: str, kernel_static: List[str]) -> dict:
+    """``{func_name: params CONCRETE at trace time}`` computed FORWARD from the
+    kernel's static args: a callee param is concrete iff at EVERY call site it is
+    passed a value built only from the caller's concrete params, module constants
+    and literals (plus static locals derived from those). This is what a helper's
+    :data:`_EMIT_STATIC` must be -- fv3_dycore's ``hord`` reaches ``xppm_flux``'s
+    ``if mord == 5`` as a static value (real Python branch), whereas nussinov's
+    ``match(seq[i], seq[j])`` passes TRACED array elements, so ``match``'s
+    ``b1``/``b2`` are NOT concrete and its ``if b1 + b2 == 3`` must lower to
+    ``jnp.where`` rather than a Python branch on a tracer. Requiring ALL call
+    sites to agree keeps a helper shared between a static and a traced caller
+    correctly non-concrete."""
+    params_of = {name: [a.arg for a in f.args.args] for name, f in funcs.items()}
+    defaults_of: dict = {}
+    for name, f in funcs.items():
+        ps = params_of[name]
+        dflts = f.args.defaults
+        off = len(ps) - len(dflts)
+        defaults_of[name] = {ps[off + k]: d for k, d in enumerate(dflts)}
+    mc = set(_MODULE_CONSTS)
+    concrete = {name: set() for name in funcs}
+    concrete[kernel_name] = set(kernel_static)
+    changed = True
+    while changed:
+        changed = False
+        votes: dict = {name: {} for name in funcs}
+        for caller, f in funcs.items():
+            ctx = _static_ctx(f, set(concrete[caller]) | mc)
+            for call in ast.walk(f):
+                if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id in funcs):
+                    continue
+                callee = call.func.id
+                cps = params_of[callee]
+                passed: dict = {}
+                for pos, arg in enumerate(call.args):
+                    if pos < len(cps):
+                        passed[cps[pos]] = _is_static_expr(arg, ctx)
+                for kw in call.keywords:
+                    if kw.arg in cps:
+                        passed[kw.arg] = _is_static_expr(kw.value, ctx)
+                for p in cps:  # an omitted arg falls back to its default (evaluated in module scope)
+                    if p not in passed:
+                        d = defaults_of[callee].get(p)
+                        passed[p] = d is not None and _is_static_expr(d, mc)
+                for p, st in passed.items():
+                    votes[callee][p] = votes[callee].get(p, True) and st
+        for callee in funcs:
+            if callee == kernel_name:
+                continue
+            newset = {p for p, st in votes[callee].items() if st}
+            if newset != concrete[callee]:
+                concrete[callee] = newset
+                changed = True
+    return concrete
+
+
+def _transitive_static(kernel_name: str, funcs: dict) -> List[str]:
+    """The kernel's ``static_argnames``, computed TRANSITIVELY across calls: a
+    kernel param is static if it (or a value it flows into via a call argument)
+    feeds a ``range``/shape/branch anywhere in a reachable helper. fv3_dycore's
+    ``hord``/``grid_type`` never feed a branch in the KERNEL -- only deep inside
+    ``xppm_flux``'s ``if mord == 5`` and ``_fv_tp_2d``'s ``8 if hord == 10 else
+    hord`` -- so without propagation they stay traced and the Python branch on
+    them raises ``TracerBoolConversionError``."""
+    params_of = {name: [a.arg for a in f.args.args] for name, f in funcs.items()}
+    want = _propagate_param_flow(funcs, {n: _static_want(f, params_of[n]) for n, f in funcs.items()})
+    cwant = _propagate_param_flow(funcs, {n: _concrete_bound_want(f, params_of[n]) for n, f in funcs.items()})
+    kparams = params_of[kernel_name]
+    array_like = _transitive_array_like(funcs)[kernel_name]
+    # A param whose VALUE must be a CONCRETE int (a range bound / shape dim) yet
+    # is array DATA is a data-dependent bound (xsbench's ``num_nucs[mat]`` sizing
+    # the nuclide loop, gromacs' cluster arrays). It can be neither a
+    # ``static_argnames`` (an array is unhashable) nor traced into a ``range`` --
+    # the classifier can't express it, so refuse and let the eager form (which
+    # runs the concrete loop directly) take over. A mere branch on an array
+    # element is NOT a conflict (it lowers to ``jnp.where``), so ``cwant`` -- not
+    # the full ``want`` -- gates this.
+    conflict = [p for p in kparams if p in cwant[kernel_name] and p in array_like]
+    if conflict:
+        raise EmitError(f"data-dependent shape/bound from array data: {', '.join(conflict)}")
+    return [p for p in kparams if p in want[kernel_name] and p not in array_like]
 
 
 def _augment_returns(fn: ast.FunctionDef, mutated: List[str]) -> None:
@@ -1886,10 +2689,26 @@ def _mutated_params(fn: ast.FunctionDef, params) -> List[str]:
     ``output_args`` convention) rather than mutation-encounter order."""
     mutated: Set[str] = set()
     for s in ast.walk(fn):
-        if isinstance(s, (ast.Assign, ast.AugAssign)):
-            tgts = s.targets if isinstance(s, ast.Assign) else [s.target]
-            for t in tgts:
-                base = t
+        if isinstance(s, ast.AugAssign):
+            # ``p += x`` (whole array) and ``p[i] += x`` are both numpy in-place
+            # updates that DO propagate to the caller's buffer.
+            base = s.target
+            while isinstance(base, ast.Subscript):
+                base = base.value
+            if isinstance(base, ast.Name) and base.id in params:
+                mutated.add(base.id)
+        elif isinstance(s, ast.Assign):
+            for t in s.targets:
+                # Only a SUBSCRIPT target (``p[i] = ``, ``p[:] = ``) writes the
+                # caller's array in place. A plain ``p = <expr>`` merely REBINDS the
+                # local name -- numpy does not propagate that to the caller, so it
+                # is NOT an output. Treating it as one wrongly augments the emitted
+                # return (``_upper_bound``'s ``v = v / norm`` normalisation makes it
+                # return ``(theta, v)``, breaking the ``1.2 * _upper_bound(...)``
+                # call site with a ``tuple * float``).
+                if not isinstance(t, ast.Subscript):
+                    continue
+                base = t.value
                 while isinstance(base, ast.Subscript):
                     base = base.value
                 if isinstance(base, ast.Name) and base.id in params:
@@ -1907,3 +2726,40 @@ def _mutated_params(fn: ast.FunctionDef, params) -> List[str]:
                 if isinstance(base, ast.Name) and base.id in params:
                     mutated.add(base.id)
     return [p for p in params if p in mutated]
+
+
+def _mutation_maps(funcs: dict) -> dict:
+    """``{func_name: [mutated params, signature order]}`` computed TRANSITIVELY.
+
+    A param is an output if the function writes through it in place -- directly
+    (``p[i] = ..``, ``p += ..``, ``np.add.at(p, ..)``; :func:`_mutated_params`)
+    OR by passing it to a callee that mutates its argument at that position
+    (fv3_dycore's ``xppm`` mutates ``al``/``xflux`` only through its bare
+    ``compute_al_x(.., al, ..)`` / ``xppm_flux(.., al, xflux, ..)`` calls). The
+    fixpoint propagates callee outputs back to the caller's args so a helper that
+    merely orchestrates in-place sub-stencils is still recognised as mutating --
+    and its bare call site therefore functionalises to ``al, xflux = xppm(..)``
+    rather than surviving as a bare-expression statement.
+
+    A plain rebind ``p = <expr>`` is NOT a mutation (numpy does not propagate it),
+    so a helper that only normalises a param locally (``v = v / norm``) is not
+    wrongly turned into a tuple-returning output."""
+    params_of = {name: [a.arg for a in f.args.args] for name, f in funcs.items()}
+    muts = {name: set(_mutated_params(f, params_of[name])) for name, f in funcs.items()}
+    changed = True
+    while changed:
+        changed = False
+        for name, f in funcs.items():
+            pset = set(params_of[name])
+            for call in ast.walk(f):
+                if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id in funcs):
+                    continue
+                gparams = params_of[call.func.id]
+                for mp in muts[call.func.id]:
+                    pos = gparams.index(mp)
+                    if pos < len(call.args):
+                        base = _base_name(call.args[pos])
+                        if base in pset and base not in muts[name]:
+                            muts[name].add(base)
+                            changed = True
+    return {name: [p for p in params_of[name] if p in muts[name]] for name in funcs}

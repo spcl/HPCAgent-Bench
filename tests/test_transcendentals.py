@@ -22,8 +22,8 @@ import tempfile
 import numpy as np
 import pytest
 
-from numpyto_c.frontend import parse_kernel
-from numpyto_c.lowering import lower
+from numpyto_common.frontend import parse_kernel
+from numpyto_common.lowering import lower
 from numpyto_c.emit import emit_c, emit_cpp  # noqa: E402
 from numpyto_c.bindings import emit_binding  # noqa: E402
 from numpyto_fortran.emit import emit_fortran  # noqa: E402
