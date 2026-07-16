@@ -53,6 +53,24 @@ JAX_FORK_TIMEOUT_S = int(os.environ.get("OPTARENA_JAX_FORK_TIMEOUT_S", "180"))
 #: pythran's own per-kernel compile budget (``compile_timeout_s``), which reports its own
 #: skip first; this deadline is the outer backstop for a wedged JIT or a hung run.
 PY_FORK_TIMEOUT_S = int(os.environ.get("OPTARENA_PY_FORK_TIMEOUT_S", "600"))
+#: Address-space cap (GiB) on a backend COMPILE subprocess. pythran's template instantiation
+#: balloons to ~7 GB on a deeply-nested kernel, and concurrent ones took the 16 GB CI runner
+#: DOWN -- the VM is reclaimed ("runner has received a shutdown signal", exit 143), killing the
+#: whole job and its summary rather than just that kernel. Capping the compiler makes a runaway
+#: compile fail ITSELF: the compiler exits non-zero and the existing returncode branch reports
+#: ``skip:unsupported:compile`` -- the same verdict pythran already gets for a subset it cannot
+#: express. The memory analogue of ``compile_timeout_s``. Env-overridable for a bigger box.
+COMPILE_MEMORY_CAP_GB = int(os.environ.get("OPTARENA_COMPILE_MEMORY_CAP_GB", "8"))
+
+
+def _cap_compile_memory():
+    """Child preexec: bound the compiler's address space to :data:`COMPILE_MEMORY_CAP_GB`."""
+    import resource
+    cap = COMPILE_MEMORY_CAP_GB * 1024**3
+    try:
+        resource.setrlimit(resource.RLIMIT_AS, (cap, cap))
+    except (ValueError, OSError):  # pragma: no cover -- best effort
+        pass
 #: Wall-clock cap (seconds) on a forked native-invoke child (C/C++/Fortran/pluto). A
 #: miscompiled kernel can spin forever -- e.g. a Pluto transform that yields an
 #: unbounded loop -- and the parent otherwise blocks on the result pipe indefinitely.
@@ -802,6 +820,7 @@ def _py_backend_compute(backend, short, info, by, syms, expected, compare, rtol,
                     ["pythran", "-O2", str(modfile), "-o", str(so)],
                     capture_output=True,
                     text=True,
+                    preexec_fn=_cap_compile_memory,
                     timeout=_cfg("compile_timeout_s", short))
             except subprocess.TimeoutExpired:
                 # pythran's template instantiation blows up on some
