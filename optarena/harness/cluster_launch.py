@@ -45,9 +45,8 @@ JUDGE = "judge"
 
 RAY_PORT = 6379
 
-#: Poll cadence for the collective readiness/liveness loop -- every ``POLL_INTERVAL`` seconds each
-#: rank re-reports whether its own server has bound its port or died, so a death at ANY point in
-#: startup (not just a fixed settle window) aborts the run within one round.
+#: Poll cadence for the collective readiness/liveness loop: each round every rank re-reports whether
+#: its server bound its port or died, so a death at any point in startup aborts within one round.
 POLL_INTERVAL = 5.0
 
 
@@ -117,8 +116,11 @@ def vllm_command(model: str, port: int, tensor_parallel: int, pipeline_parallel:
     across a node's GPUs (intra-node); ``pipeline_parallel`` (= ``K``) splits layers across
     the endpoint's nodes (inter-node) and, when ``> 1``, turns on the ray executor -- the
     head + its workers must already have joined one ray cluster."""
-    cmd = ["vllm", "serve", model, "--host", "0.0.0.0", "--port", str(port),
-           "--tensor-parallel-size", str(tensor_parallel)]
+    cmd = [
+        "vllm", "serve", model, "--host", "0.0.0.0", "--port",
+        str(port), "--tensor-parallel-size",
+        str(tensor_parallel)
+    ]
     if pipeline_parallel > 1:
         cmd += ["--pipeline-parallel-size", str(pipeline_parallel), "--distributed-executor-backend", "ray"]
     return cmd + list(extra)
@@ -158,9 +160,8 @@ def popen(cmd: Sequence[str], log: Callable[[str], None]) -> subprocess.Popen:
     return subprocess.Popen(list(cmd))
 
 
-def start_inference(me: RankRole, nodes_per_vllm: int, model: str, vllm_port: int, gpus_per_node: int,
-                    head_host: str, vllm_extra: Sequence[str],
-                    log: Callable[[str], None]) -> List[subprocess.Popen]:
+def start_inference(me: RankRole, nodes_per_vllm: int, model: str, vllm_port: int, gpus_per_node: int, head_host: str,
+                    vllm_extra: Sequence[str], log: Callable[[str], None]) -> List[subprocess.Popen]:
     """Bring this inference rank up. For a single-node endpoint (``K == 1``) the head just
     runs ``vllm serve`` (tensor-parallel over its GPUs, no ray). For a multi-node endpoint
     the head starts a ray head and the workers retry-join it (``--block`` keeps ray attached
@@ -176,15 +177,18 @@ def start_inference(me: RankRole, nodes_per_vllm: int, model: str, vllm_port: in
         procs.append(popen(["bash", "-c", join], log))
         return procs
     if use_ray and me.role == VLLM_HEAD:
-        procs.append(popen(["ray", "start", "--head", f"--port={RAY_PORT}",
-                            f"--num-gpus={gpus_per_node}", "--block"], log))
+        procs.append(
+            popen(["ray", "start", "--head", f"--port={RAY_PORT}", f"--num-gpus={gpus_per_node}", "--block"], log))
         # 'ray start --block' backgrounds under Popen and returns at once, so the GCS may not
         # be up yet; wait for it before vllm's ray executor initializes against it.
         if not wait_ready([f"http://127.0.0.1:{RAY_PORT}"], 120.0, log):
             log("[launch] ray GCS not up after 120s; vllm serve may fail to attach")
     if me.role == VLLM_HEAD:
-        cmd = vllm_command(model, vllm_port, tensor_parallel=gpus_per_node,
-                           pipeline_parallel=nodes_per_vllm, extra=vllm_extra)
+        cmd = vllm_command(model,
+                           vllm_port,
+                           tensor_parallel=gpus_per_node,
+                           pipeline_parallel=nodes_per_vllm,
+                           extra=vllm_extra)
         procs.append(popen(cmd, log))
     return procs
 
@@ -196,8 +200,7 @@ def start_judge(judge_port: int, serve_extra: Sequence[str], log: Callable[[str]
     return popen(cmd + list(serve_extra), log)
 
 
-def teardown(procs: Sequence[subprocess.Popen], me: RankRole, nodes_per_vllm: int,
-             log: Callable[[str], None]) -> None:
+def teardown(procs: Sequence[subprocess.Popen], me: RankRole, nodes_per_vllm: int, log: Callable[[str], None]) -> None:
     """Stop this rank's server/ray processes: SIGTERM (reverse order), reap with a grace
     window, SIGKILL any straggler, then ``ray stop`` on a multi-node endpoint's nodes.
 
@@ -226,13 +229,10 @@ def teardown(procs: Sequence[subprocess.Popen], me: RankRole, nodes_per_vllm: in
 
 
 def settle_rounds(ready_timeout: float, poll_interval: float = POLL_INTERVAL) -> int:
-    """How many readiness rounds the collective settle loop runs for a ``ready_timeout``.
-
-    Derived purely from the (rank-identical) timeout so every rank agrees on the count. A non-finite
-    timeout -- ``argparse``'s ``type=float`` accepts ``inf`` / ``nan``, a natural way to say "wait
-    forever" -- is normalized to a long finite wait rather than crashing ``int()``. Floored at 2 so
-    there is always at least one poll AFTER a grace sleep: a server that dies a few ms after spawn is
-    still alive at the first (immediate) probe and is only caught as dead on the round that follows.
+    """Number of settle rounds for a ``ready_timeout``, from the rank-identical timeout so every rank
+    agrees. A non-finite timeout (argparse's ``type=float`` accepts ``inf``/``nan``) normalizes to a
+    long finite wait instead of crashing ``int()``. Floored at 2 so at least one poll runs AFTER a
+    grace sleep -- a server that dies just after spawn is still alive at the first (immediate) probe.
     """
     if not math.isfinite(ready_timeout):
         ready_timeout = 24 * 3600.0
@@ -241,16 +241,10 @@ def settle_rounds(ready_timeout: float, poll_interval: float = POLL_INTERVAL) ->
 
 def rank_status(me: RankRole, procs: Sequence[subprocess.Popen], vllm_port: int, judge_port: int, hostname: str,
                 rank: int) -> Dict[str, str]:
-    """This rank's state for the collective settle loop, as ``{"kind", "detail"}``:
-
-    * ``dead``    -- one of its server processes exited non-zero (fatal: abort the whole run).
-    * ``ready``   -- its serving port accepts a local connection (a ray WORKER has no serving
-      port of its own, so it is ready as soon as it is alive; its head's port gates the endpoint).
-    * ``pending`` -- still coming up.
-
-    Each rank probes its OWN ``127.0.0.1`` port, so readiness needs no cross-node name resolution
-    and a process that dies mid-startup is caught the very next round -- not only in a fixed
-    initial window.
+    """This rank's ``{"kind", "detail"}`` for the settle loop: ``dead`` (a server exited non-zero --
+    fatal, abort the run), ``ready`` (serving port accepts a local connection; a ray WORKER has no
+    port of its own so it is ready once alive), or ``pending`` (still coming up). Each rank probes its
+    OWN 127.0.0.1 port, so a mid-startup death is caught the next round with no cross-node lookup.
     """
     for proc in procs:
         rc = proc.poll()
@@ -266,10 +260,18 @@ def rank_status(me: RankRole, procs: Sequence[subprocess.Popen], vllm_port: int,
         return {"kind": "pending", "detail": f"rank {rank} ({me.role}) on {hostname}: port {port} not bound yet"}
 
 
-def launch(*, inference_endpoints: int, nodes_per_vllm: int, judge_nodes: int, model: str,
-           run_driver: Callable[[List[str], List[str]], int], vllm_port: int = 8000,
-           judge_port: int = 8800, gpus_per_node: int = 4, ready_timeout: float = 1800.0,
-           vllm_extra: Sequence[str] = (), serve_extra: Sequence[str] = (),
+def launch(*,
+           inference_endpoints: int,
+           nodes_per_vllm: int,
+           judge_nodes: int,
+           model: str,
+           run_driver: Callable[[List[str], List[str]], int],
+           vllm_port: int = 8000,
+           judge_port: int = 8800,
+           gpus_per_node: int = 4,
+           ready_timeout: float = 1800.0,
+           vllm_extra: Sequence[str] = (),
+           serve_extra: Sequence[str] = (),
            log: Callable[[str], None] = print) -> int:
     """Bootstrap the whole allocation and drive one run. Collective across all ranks.
 
@@ -292,10 +294,8 @@ def launch(*, inference_endpoints: int, nodes_per_vllm: int, judge_nodes: int, m
     hostname = socket.gethostname()
     gathered = comm.allgather({"rank": rank, "role": me.role, "endpoint": me.endpoint, "hostname": hostname})
 
-    # Spawn this rank's server INSIDE a guard: a spawn failure (e.g. vllm/optarena not on
-    # PATH raises FileNotFoundError) must NOT let this rank skip the collectives below and
-    # deadlock every other rank. Catch it, then allgather so the driver fast-fails instead
-    # of waiting the full readiness timeout on an endpoint that will never come up.
+    # Guard the spawn: a failure (e.g. vllm not on PATH) must NOT let this rank skip the collectives
+    # below and deadlock the others. Catch it; the loop's allgather then reports it as dead.
     procs: List[subprocess.Popen] = []
     spawn_error = ""
     try:
@@ -308,25 +308,22 @@ def launch(*, inference_endpoints: int, nodes_per_vllm: int, judge_nodes: int, m
         spawn_error = f"rank {rank} ({me.role}) on {hostname}: {exc}"
         log(f"[launch] {spawn_error}")
 
-    # Collective readiness + liveness loop. Every round each rank reports its OWN state (server port
-    # bound / a server process died / still coming up) and allgathers it, so a death ANYWHERE and at
-    # ANY time -- not just inside a fixed settle window -- aborts the run fast (a Popen that execs
-    # then dies 1 ms later, an OOM 90 s into model load: both caught the next round). The loop exits
-    # on the SAME round for every rank because the decision reads only the shared allgather result,
-    # so no rank can skip a collective and strand the others. ``spawn_error`` counts as dead.
-    # Bound the wait by a ROUND COUNT, not each rank's wall clock: a per-rank ``time.monotonic()``
-    # deadline could trip on one rank a round before another, so that rank would leave the loop while
-    # the others block forever in the next ``allgather``. The budget is derived from the shared
-    # ``ready_timeout`` arg (settle_rounds normalizes a non-finite timeout and floors at 2), so every
-    # rank runs the identical number of rounds and breaks together.
+    # Collective readiness + liveness loop: each round every rank allgathers its own state, so a
+    # death anywhere/anytime aborts fast and every rank breaks on the SAME round (the decision reads
+    # only the shared allgather result -- no rank skips a collective and strands the others).
+    # Bound by a round COUNT, not each rank's wall clock: a per-rank monotonic deadline could trip a
+    # round apart, leaving one rank blocked forever in the next allgather. settle_rounds derives the
+    # count from the shared ready_timeout so every rank runs identically. spawn_error counts as dead.
     rounds_budget = settle_rounds(ready_timeout)
     failures: List[str] = []
     pending: List[str] = []
     for attempt in range(rounds_budget):
         if attempt:
             time.sleep(POLL_INTERVAL)
-        mine = ({"kind": "dead", "detail": spawn_error} if spawn_error else
-                rank_status(me, procs, vllm_port, judge_port, hostname, rank))
+        mine = ({
+            "kind": "dead",
+            "detail": spawn_error
+        } if spawn_error else rank_status(me, procs, vllm_port, judge_port, hostname, rank))
         statuses = comm.allgather(mine)
         failures = [s["detail"] for s in statuses if s["kind"] == "dead"]
         pending = [s["detail"] for s in statuses if s["kind"] == "pending"]
@@ -355,10 +352,9 @@ def launch(*, inference_endpoints: int, nodes_per_vllm: int, judge_nodes: int, m
                     f"{judge_nodes} judge(s)")
                 log(f"[launch] vllm_urls={vllm_urls}")
                 log(f"[launch] judge_urls={judge_urls}")
-                # Every port is bound on its own node; confirm the driver can REACH each across the
-                # fabric (a bound-but-unreachable node = a DNS / Slingshot problem) before the run.
-                # Bounded + driver-local (no collective), so a fixed budget can't skew any barrier.
-                # Constant first in min() so a non-finite ready_timeout still yields 60.0, not inf/nan.
+                # Ports are bound on their own nodes; confirm the driver can REACH each across the
+                # fabric (bound-but-unreachable = a DNS/Slingshot problem). Driver-local, no
+                # collective. Constant first in min() so a non-finite ready_timeout still yields 60.0.
                 if wait_ready(vllm_urls + judge_urls, min(60.0, ready_timeout), log):
                     rc = run_driver(vllm_urls, judge_urls) or 0
                 else:
