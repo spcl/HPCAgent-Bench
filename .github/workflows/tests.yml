@@ -1,14 +1,15 @@
 name: CI
 
-# Five parallel CPU runners, each a self-contained slice of the pipeline (was one ~200-min
+# Seven parallel CPU runners, each a self-contained slice of the pipeline (was one ~200-min
 # sequential runner). Shared toolchain + base pip come from ./.github/actions/setup; each job
 # adds only the extra it needs, so ONLY frameworks-pluto pays for the Pluto build, ONLY
 # translators pays for gt4py, and ONLY mpi pays for the MPICH + mpi4py source build.
 #
 # The e2e sweep (tests/test_e2e_numerical.py) is partitioned by BACKEND via
 # OPTARENA_E2E_BACKENDS so no single runner carries all ~80 min of it and Pluto stays isolated:
-# numba+jax on unit, pluto on frameworks-pluto, c+cpp+fortran+pythran on e2e-container -- all
-# seven backends covered exactly once. Unset (a local run) still sweeps the full set.
+# numba+jax on unit, pluto on frameworks-pluto, c+cpp+fortran on e2e-native, pythran on
+# e2e-pythran (pythran isolated -- it is the memory/time pig) -- all seven backends covered
+# exactly once. Unset (a local run) still sweeps the full set.
 #
 # Within a job every phase after setup carries ``if: ${{ !cancelled() }}`` so one phase failing
 # still surfaces the rest (the job stays red). Phase 0 (format) and setup stay hard gates.
@@ -17,7 +18,9 @@ name: CI
 #   unit             format + structure + native emit + agent-bench + hf + e2e[numba,jax]
 #   translators      numpyto op suite + ports + benchmark refs (gt4py)
 #   frameworks-pluto codegen frameworks + fp16 + e2e[pluto]            (ONLY Pluto build)
-#   e2e-container    e2e[c,cpp,fortran,pythran] + agent-bench container image
+#   e2e-native       e2e[c,cpp,fortran]   (native heavy-compile slice, -n auto)
+#   e2e-pythran      e2e[pythran]         (pythran isolated -- ~7 GB/compile, -n 2)
+#   container-image  build + smoke-launch the agent-bench cpu container image
 #   mpi              the whole MPI/distributed track (descriptor + driver codegen + launch +
 #                    scoring + halo + sizing) on MPICH + a source-built mpi4py (ONLY MPI build)
 #
@@ -265,12 +268,71 @@ jobs:
           python -m pytest -q -p no:cacheprovider -n auto tests/test_e2e_numerical.py
 
   # ===========================================================================================
-  # e2e-container -- the native + pythran slice of the e2e sweep (the heavy-compile backends),
-  # plus building and smoke-launching the agent-bench container image.
+  # e2e-native -- the c/cpp/fortran slice of the e2e sweep (heavy-compile, but bounded). Split off
+  # from pythran: ubuntu-latest is 4 vCPU / 16 GB and the old combined job died at exit 143 ("runner
+  # has received a shutdown signal" -- the runner VM was reclaimed). c/cpp/fortran compiles each peak
+  # at a few hundred MB (vs a single pythran compile at ~7 GB / 11 min), so with pythran gone this
+  # slice runs at full -n auto (4) well under 16 GB. tests/test_e2e_numerical.py reads
+  # OPTARENA_E2E_BACKENDS and run_kernel(only_backends=...) emits ONLY the requested backends, so a
+  # job that omits pythran never invokes a pythran compile.
   # ===========================================================================================
-  e2e-container:
+  e2e-native:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: e2e[c,cpp,fortran,pythran] + container image
+    name: e2e[c,cpp,fortran]
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/setup
+
+      - name: Phase 5 -- e2e numerical sweep [c, cpp, fortran] @ S
+        if: ${{ !cancelled() }}
+        # pythran removed -> peak a few GB -> full -n auto (4) safe under 16 GB.
+        timeout-minutes: 60
+        env:
+          OPTARENA_E2E_BACKENDS: "c,cpp,fortran"
+        run: |
+          python -m pytest -q -p no:cacheprovider -n auto --timeout=600 tests/test_e2e_numerical.py
+
+  # ===========================================================================================
+  # e2e-pythran -- the pythran slice of the e2e sweep, isolated because pythran is the memory/time
+  # pig: a single pythran compile peaks ~7 GB / 11 min while c/cpp/fortran compiles are hundreds of
+  # MB. Folding it into the native job overran the 16 GB runner (exit 143). Same partition mechanism
+  # as e2e-native: OPTARENA_E2E_BACKENDS="pythran" so run_kernel(only_backends=...) emits pythran only.
+  # ===========================================================================================
+  e2e-pythran:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
+    name: e2e[pythran]
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/setup
+
+      - name: Phase 5 -- e2e numerical sweep [pythran] @ S
+        if: ${{ !cancelled() }}
+        # -n 2 is the max that survives two concurrent ~7 GB pythran compiles (14 GB < 16 GB);
+        # compile-timeout kernels self-skip so no worker hangs.
+        timeout-minutes: 60
+        env:
+          OPTARENA_E2E_BACKENDS: "pythran"
+        run: |
+          python -m pytest -q -p no:cacheprovider -n 2 --timeout=600 tests/test_e2e_numerical.py
+
+  # ===========================================================================================
+  # container-image -- build + smoke-launch the agent-bench CPU container image (docker build ->
+  # docker save -> apptainer build -> exec). Split off from the sweep so the heavy docker+apptainer
+  # build neither contends for the pythran runner's RAM nor serializes behind the native sweep.
+  # ===========================================================================================
+  container-image:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
+    name: agent-bench container image (build + launch)
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -300,22 +362,6 @@ jobs:
             echo "unprivileged userns blocked on this runner -- enabling for the job VM (provisioning only)"
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
-
-      - name: Phase 5 -- e2e numerical sweep [c, cpp, fortran, pythran] @ S
-        if: ${{ !cancelled() }}
-        # Per-test --timeout + a step cap (mirrors the numba/jax sibling): the heaviest slice was
-        # SIGTERM'd (exit 143) with no backstop, so a slow/hung native or in-process-pythran kernel
-        # dragged the whole step down and the summary never printed. Now a wedged kernel fails its
-        # own test and the run completes + lists real failures.
-        timeout-minutes: 90
-        env:
-          OPTARENA_E2E_BACKENDS: "c,cpp,fortran,pythran"
-        run: |
-          # -n 2 (not auto): the c/cpp/fortran/pythran slice is the heaviest -- each xdist worker
-          # forks a child per kernel (COW) and drives native compiles, so `-n auto` (4 on ubuntu-latest)
-          # peaks past the 16 GB runner and it gets OOM-SIGTERM'd (exit 143) mid-sweep. Two workers keep
-          # the sweep parallel while halving peak memory. Sizes are already the down-scaled S preset.
-          python -m pytest -q -p no:cacheprovider -n 2 --timeout=600 tests/test_e2e_numerical.py
 
       - name: Phase 6a -- build + smoke-test the cpu agent-bench image (unified OCI -> SIF, gating)
         # GATES now. UNIFIED build: one OCI Dockerfile (containers/optarena.Dockerfile, HW=cpu) is the
