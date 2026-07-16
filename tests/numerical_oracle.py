@@ -574,7 +574,14 @@ def run_kernel(short: str,
 
         _ext = {"c": ".c", "cpp": ".cpp", "fortran": ".f90"}
         for backend in BACKENDS:
-            if only_backends is not None and backend not in only_backends:
+            # _run_pluto classifies a polycc miscompile as skip-vs-FAIL against the plain ``c`` result
+            # (status["c"]); when pluto is requested WITHOUT ``c`` in the slice (the CI pluto runner:
+            # OPTARENA_E2E_BACKENDS="pluto") run ``c`` anyway as that reference. ``c`` stays out of the
+            # gated items (E2E_BACKENDS drives the test params), so this adds no ``c`` test -- it only
+            # feeds the guard, keeping pluto miscompiles as honest skips while a real emit regression
+            # (``c`` also fails) still reds the gate.
+            if (only_backends is not None and backend not in only_backends
+                    and not (backend == "c" and PLUTO in only_backends)):
                 continue
             if native_emit_error is not None:
                 status[backend] = native_emit_error
