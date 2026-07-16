@@ -3747,6 +3747,84 @@ def _scalar_expr_complex(expr: ast.AST, local_dtypes: Dict[str, str]) -> bool:
     return False
 
 
+def _seed_complex_work_dtypes(tree: ast.AST, local_dtypes: Dict[str, str]) -> None:
+    """Seed ``local_dtypes`` for the complex work-array temps and their directly
+    derived scalar reads, EARLY -- before the ``promote-true-division`` and
+    ``libnode-expand`` phases consume those dtypes.
+
+    The eigh / eigvalsh cyclic-Jacobi lowering allocates its complex work matrices
+    (``L`` / ``Li`` / ``Tm`` / ``Cm`` / ``X`` / ``jv``) with ``np.zeros((n, n),
+    b.dtype)`` and derives scalars off them (``apq = Cm[i, j]``, ``m =
+    hypot(apq.real, apq.imag)``, ``ephi = apq / m``). Those dtypes are otherwise
+    only recorded at the whole-array phase (:class:`_WholeArrayAssignRewriter`),
+    which runs AFTER two phases that already consume them:
+
+    * ``promote-true-division`` reads an untagged ``apq`` as an INTEGER (a non-array
+      Name defaults integer), so ``apq / m`` is wrongly promoted with a
+      ``np.float64(apq)`` cast -- truncating the complex Jacobi phase (and that cast
+      is what C++ rejects as ``(double)(complex)``);
+    * ``libnode-expand``'s :class:`_RealConjDropper` classifies the still-untyped
+      complex work arrays as REAL via :func:`_walk_complex` and DROPS every
+      ``np.conj`` on them, so the reduction computes the wrong eigenvalues.
+
+    Seeding here (phase 4) makes both later phases see the true dtypes. It reuses
+    the SAME predicates the whole-array rewriter uses (:func:`_ctor_complex_tag` /
+    :func:`_scalar_expr_complex` / :func:`_walk_complex`), iterated to a fixpoint
+    because a derived scalar's dtype depends on the temp it reads
+    (``m`` / ``ephi`` <- ``apq`` <- ``Cm``'s constructor)."""
+    assigns = [
+        s for s in ast.walk(tree)
+        if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name)
+    ]
+
+    def dtype_for(value: ast.expr) -> Optional[str]:
+        if isinstance(value, ast.Call):
+            # X = np.zeros/ones/empty/eye(shape, Y.dtype | np.complexNN)
+            ctag = _ctor_complex_tag(value, local_dtypes)
+            if ctag is not None:
+                return ctag
+            # X = Y.copy() / np.copy(Y) / np.ascontiguousarray(Y) -- inherit the complex source
+            if isinstance(value.func, ast.Attribute):
+                f = value.func
+                src = (f.value.id if f.attr == "copy" and isinstance(f.value, ast.Name) else
+                       value.args[0].id if f.attr in ("copy", "ascontiguousarray", "asarray", "array") and value.args
+                       and isinstance(value.args[0], ast.Name) else None)
+                sdt = local_dtypes.get(src) if src else None
+                if sdt and sdt.startswith("complex"):
+                    return sdt
+            # m = np.hypot/abs/real/imag(<complex ...>) -- a real-returning magnitude of a
+            # complex operand types to the MATCHING REAL width (so ``m`` is real, not complex).
+            fn = (value.func.attr if isinstance(value.func, ast.Attribute) else
+                  value.func.id if isinstance(value.func, ast.Name) else None)
+            if fn in _REAL_FROM_COMPLEX:
+                for sub in ast.walk(value):
+                    if isinstance(sub, ast.Name):
+                        bdt = local_dtypes.get(sub.id)
+                        if bdt and bdt.startswith("complex"):
+                            return _REAL_FOR_COMPLEX.get(bdt, "float64")
+            return None
+        # z = A[scalar-index] -- inherit a complex array's element dtype
+        if isinstance(value, ast.Subscript) and isinstance(value.value, ast.Name):
+            sdt = local_dtypes.get(value.value.id)
+            return sdt if sdt and sdt.startswith("complex") else None
+        # ephi = apq / m -- a scalar BinOp/UnaryOp over complex operands
+        if isinstance(value, (ast.BinOp, ast.UnaryOp)) and _scalar_expr_complex(value, local_dtypes):
+            return "complex128"
+        return None
+
+    changed = True
+    while changed:
+        changed = False
+        for s in assigns:
+            name = s.targets[0].id
+            if name in local_dtypes:
+                continue
+            dt = dtype_for(s.value)
+            if dt is not None:
+                local_dtypes[name] = dt
+                changed = True
+
+
 class _PromoteMixedComplexIfExp(ast.NodeTransformer):
     """Make a mixed real/complex conditional's two branches the SAME type.
 
@@ -5951,6 +6029,12 @@ def _lp_seed_dtypes_and_harvest(ctx: LoweringContext) -> None:
                 if ((isinstance(_dv, ast.Attribute) and _dv.attr in ("bool_", "bool"))
                         or (isinstance(_dv, ast.Name) and _dv.id == "bool")):
                     ctx.local_dtypes.setdefault(_s.targets[0].id, "bool_")
+    # Seed the complex work-array temps (and their directly-derived scalar reads)
+    # that the eigh / eigvalsh cyclic-Jacobi lowering allocates from a complex
+    # signature array's ``.dtype`` -- BEFORE the true-division and libnode-expand
+    # phases, which otherwise consume those still-untyped temps and mis-lower the
+    # complex divide (``apq / m``) and the ``np.conj`` on the reduction matrices.
+    _seed_complex_work_dtypes(tree, ctx.local_dtypes)
     # SSA-style rename for Names reassigned with different broadcast extents (hdiff
     # / vadv ``res = ...; res = ...`` with two distinct shapes). Runs BEFORE harvest
     # so each version registers under its own name and downstream passes (harvest /
