@@ -109,7 +109,11 @@ def _exec(sif, *cmd, env=None, background=False, log=None):
     # pip chatter goes to stderr, NOT /dev/null: this install gates the `&&`, so when it fails
     # the command after it never execs and the container dies silently -- discarding the only
     # evidence of why. stderr (not stdout) keeps the agent's stdout a clean single JSON line.
-    inner = (f"pip install --break-system-packages -e {shlex.quote(str(REPO))} >&2 && "
+    # --no-build-isolation: the repo carries a pyproject.toml, so a plain `pip install -e`
+    # spins up an isolated build env and fetches setuptools/wheel from PyPI -- at LAUNCH time,
+    # which timed the judge out before it could serve. The base image already ships
+    # setuptools>=64 (cpu.def), so reuse it and skip the network.
+    inner = (f"pip install --break-system-packages --no-build-isolation -e {shlex.quote(str(REPO))} >&2 && "
              "exec " + shlex.join(str(c) for c in cmd))
     argv += [sif, "sh", "-c", inner]
     if background:

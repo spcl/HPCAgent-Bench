@@ -38,7 +38,9 @@ From: optarena-cpu.sif
     # harness and the numpyto_* translators, and keeps the benchmark/config data
     # tree readable from the source layout. PEP 660 editable (forced by the shipped
     # pyproject.toml) so the translators' package_dir remap is honored.
-    pip install --break-system-packages -e /opt/optarena
+    # --no-build-isolation uses the setuptools>=64 baked into the base image (cpu.def) instead
+    # of fetching the backend from PyPI -- same reason the container-launch reinstall does.
+    pip install --break-system-packages --no-build-isolation -e /opt/optarena
 
 %environment
     export LC_ALL=C

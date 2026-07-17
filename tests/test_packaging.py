@@ -68,13 +68,18 @@ def test_container_defs_are_well_formed():
     assert "-e /opt/optarena" not in cpu and "/opt/optarena/optarena" not in cpu
 
     assert "From: optarena-cpu.sif" in judge  # layered on the agent image
-    assert "pip install --break-system-packages -e /opt/optarena" in judge  # the package (ships numpyto_* too)
+    assert "-e /opt/optarena" in judge  # the package is installed editable (ships numpyto_* too)
     assert "export PYTHONPATH" not in judge  # pip-managed, no hand-set path directive
     # pyproject.toml MUST ship beside setup.py, or `pip install -e` here falls back to legacy
     # `setup.py develop` and the package_dir-remapped numpyto_* translators are not importable
     # (numpyto_common ModuleNotFoundError at judge startup).
     assert "pyproject.toml /opt/optarena/pyproject.toml" in judge, \
         "judge.def copies setup.py but not pyproject.toml -> legacy develop -> numpyto_common unimportable"
+    # With a pyproject present, the editable install MUST skip build isolation, or pip fetches
+    # the build backend from PyPI at install time (slow; timed the judge out). The base image
+    # ships setuptools>=64 for exactly this.
+    assert "--no-build-isolation" in judge, \
+        "judge.def's editable install lacks --no-build-isolation -> PyPI fetch of the build backend"
 
     for spec in (cpu, judge):
         for line in spec.splitlines():
@@ -103,8 +108,8 @@ From: python:3.12-slim
     {_ROOT}/pyproject.toml /opt/optarena/pyproject.toml
     {_ROOT}/optarena /opt/optarena/optarena
 %post
-    pip install --no-cache-dir pyyaml
-    pip install --no-deps -e /opt/optarena
+    pip install --no-cache-dir 'setuptools>=64' wheel pyyaml
+    pip install --no-build-isolation --no-deps -e /opt/optarena
     python -c "import numpyto_common; print('import OK')"
 """)
     build = subprocess.run(["apptainer", "build", str(sif), str(deffile)], capture_output=True, text=True)
