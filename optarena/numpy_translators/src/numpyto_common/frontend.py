@@ -160,7 +160,10 @@ class _NonFiniteNormalizer(ast.NodeTransformer):
         return node
 
 
-def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optional[str] = None) -> KernelIR:
+def parse_kernel(numpy_py: pathlib.Path,
+                 bench_info: pathlib.Path,
+                 config: Optional[str] = None,
+                 precision: Optional[str] = None) -> KernelIR:
     """Build a :class:`KernelIR` from ``numpy_py`` + ``bench_info``.
 
     :param numpy_py: path to ``<short>_numpy.py``.
@@ -169,6 +172,11 @@ def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optio
         deterministic path; the harness passes ``ResolvedBench.config_key``).
         Falls back to ``$OPTARENA_SPARSE_CONFIG`` / the canonical default
         when ``None``.
+    :param precision: the working float precision, for the source-level desugars whose
+        output embeds a precision-dependent NUMERICAL CONSTANT -- currently only
+        curve_fit's finite-difference step. Dtypes are NOT set here: those stay with
+        ``ir.apply_precision`` after lowering, which is why this is a narrow extra rather
+        than a second precision channel. ``None`` keeps every constant at its fp64 rule.
     :raises ValueError: when the JSON is missing required fields or
         the Python file does not expose a function whose name matches
         ``bench_info.func_name``.
@@ -279,7 +287,7 @@ def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optio
     # can be rebound to the parameter ARRAY curve_fit conceptually passes it; the
     # LM's calls to the model are then inlined by the ordinary fixpoint below.
     from numpyto_common.numpy_desugar import rewrite_curve_fit
-    rewrite_curve_fit(tree, fn)
+    rewrite_curve_fit(tree, fn, precision)
 
     # Strip the give-up paths of every top-level HELPER -- an exception handler that
     # only bails (``except np.linalg.LinAlgError: return None``) and the

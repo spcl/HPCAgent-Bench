@@ -288,12 +288,31 @@ jobs:
           python-version: '3.12'
       - uses: ./.github/actions/setup
 
-      - name: Phase 5 -- e2e numerical sweep [c, cpp, fortran] @ S
+      - name: Phase 5 -- e2e numerical sweep [c, cpp, fortran] @ S, fp64
         if: ${{ !cancelled() }}
         # pythran removed -> peak a few GB -> full -n auto (4) safe under 16 GB.
         timeout-minutes: 60
         env:
           OPTARENA_E2E_BACKENDS: "c,cpp,fortran"
+        run: |
+          python -m pytest -q -p no:cacheprovider -n auto --timeout=600 tests/test_e2e_numerical.py
+
+      - name: Phase 5b -- e2e numerical sweep [c, cpp, fortran] @ S, fp32
+        # The SAME corpus at fp32. Not redundant with the fp64 phase above: fp64 emits with an empty
+        # precision string, which makes numpyto_common.ir.apply_precision a no-op, so the phase above
+        # never exercises the precision-lowering path at ALL -- the float dtype remap over arrays /
+        # scalars / locals, KernelIR.float_precision (the emitter's default for a temp missing from
+        # local_dtypes), and each backend's narrow-float spelling (C ``float``, Fortran ``real(4)``,
+        # whose kind matching -std=f2018 enforces strictly). This runner has the headroom: the fp64
+        # phase is ~8 min of the job's 75.
+        # fp32 ONLY: fp16 keeps ~3 decimal digits, so a whole-corpus fp16 sweep would fail on honest
+        # numeric drift rather than emit bugs -- fp16 stays a targeted, fp16-safe kernel list in
+        # tests/test_fp16.py. Verified green over all 349 kernels x c/cpp/fortran before gating.
+        if: ${{ !cancelled() }}
+        timeout-minutes: 60
+        env:
+          OPTARENA_E2E_BACKENDS: "c,cpp,fortran"
+          OPTARENA_E2E_PRECISION: "fp32"
         run: |
           python -m pytest -q -p no:cacheprovider -n auto --timeout=600 tests/test_e2e_numerical.py
 

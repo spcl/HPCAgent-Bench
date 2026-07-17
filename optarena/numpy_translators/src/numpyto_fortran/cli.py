@@ -24,7 +24,7 @@ from numpyto_common.naming import native_base
 
 
 def cmd_emit(args: argparse.Namespace) -> int:
-    kir = parse_kernel(args.kernel, args.bench_info)
+    kir = parse_kernel(args.kernel, args.bench_info, precision=args.precision)
     kir = lower(kir)
     # Precision applied on the IR -- the Fortran emitter reads each
     # array's dtype (float/complex remapped, ints unchanged).

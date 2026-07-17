@@ -1388,3 +1388,56 @@ def test_cholesky2_contour_pythran_e2e(kernel):
     if s == "skip:not-installed":
         pytest.skip("pythran not installed")
     assert s == "ok", f"{kernel} pythran: {s}"
+
+
+# --------------------------------------------------------------------------- #
+# J. the precision pass must reach EVERY IR it owns                            #
+# --------------------------------------------------------------------------- #
+# ``apply_precision`` narrows the top-level KernelIR, but a kernel whose helper could not be
+# inlined (early return / recursion) carries that helper as its own sub-KernelIR in
+# ``kir.helpers``, which the emitter writes as its own native function signature. Narrowing only
+# the caller leaves the callee declared at its stale fp64 and the emitted call does not typecheck
+# (``passed REAL(4) to REAL(8)``). Invisible at fp64, where apply_precision short-circuits.
+# The e2e fp32 leg catches this too (vexx_k), but these run in a second and name the cause.
+
+
+def _kir_with_helper():
+    """Parse a kernel whose helper survives inlining, and return its lowered IR."""
+    import pathlib
+    from optarena.emit_bridge import bench_info_tempfile, legacy_bench_info_dict
+    from optarena.spec import BenchSpec
+    from numpyto_common.frontend import parse_kernel
+    from numpyto_common.lowering import lower
+    spec = BenchSpec.load("vexx_k")
+    info = legacy_bench_info_dict(spec)["benchmark"]
+    npy = (pathlib.Path(__file__).resolve().parents[3] / "optarena" / "benchmarks" / info["relative_path"] /
+           f'{info["module_name"]}_numpy.py')
+    with bench_info_tempfile(spec) as bi:
+        return lower(parse_kernel(npy, pathlib.Path(bi)))
+
+
+def _float_dtypes(kir):
+    return ([a.dtype for a in kir.arrays] + [s.dtype for s in kir.scalars] + list(kir.local_dtypes.values()))
+
+
+def test_apply_precision_narrows_helper_sub_irs_too():
+    from numpyto_common.ir import apply_precision
+    kir = _kir_with_helper()
+    assert kir.helpers, "fixture kernel no longer carries a non-inlined helper -- pick another"
+    apply_precision(kir, "float32")
+    for helper in kir.helpers:
+        assert helper.float_precision == "float32", \
+            f"helper {helper.kernel_name!r} kept float_precision={helper.float_precision!r}: the caller " \
+            f"narrows to float32 but the callee's emitted signature would still say double"
+        stale = [d for d in _float_dtypes(helper) if d in ("float64", "complex128")]
+        assert not stale, f"helper {helper.kernel_name!r} kept fp64 dtypes {sorted(set(stale))} after apply_precision"
+
+
+def test_apply_precision_leaves_integers_alone_in_helpers():
+    """The narrow is float/complex only -- an index array inside a helper must stay integer."""
+    from numpyto_common.ir import apply_precision
+    kir = _kir_with_helper()
+    before = {h.kernel_name: [a.dtype for a in h.arrays if a.dtype.startswith(("int", "uint"))] for h in kir.helpers}
+    apply_precision(kir, "float32")
+    after = {h.kernel_name: [a.dtype for a in h.arrays if a.dtype.startswith(("int", "uint"))] for h in kir.helpers}
+    assert before == after, f"apply_precision changed integer dtypes inside a helper: {before} -> {after}"

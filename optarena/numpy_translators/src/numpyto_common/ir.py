@@ -54,10 +54,20 @@ def apply_precision(kir: "KernelIR", precision: Optional[str]) -> "KernelIR":
     The spelling is normalized to the canonical registry key first, so the
     enum-style ``fp8_e4m3`` and the numpy-style ``float8_e4m3`` are ONE leg and
     every downstream ``dtype.startswith("float")`` float test still fires.
+
+    Recurses into :attr:`KernelIR.helpers`. Each helper is a full KernelIR with its
+    own dtype tables that the emitter writes as its own native function signature, so
+    narrowing only the caller leaves every callee declared at its stale fp64 and the
+    emitted call does not typecheck (``passed REAL(4) to REAL(8)``; ``expected 'const
+    double * restrict' but argument is of type 'const float *'``). Recursion, not a flat
+    loop: helpers can nest inside helpers, and each one needs its own float_precision so
+    the emitter's default for an unlisted temp matches inside the helper body too.
     """
     if not precision:
         return kir
     precision = dtypes.canonical(precision)
+    for helper in kir.helpers:
+        apply_precision(helper, precision)
     for arr in kir.arrays:
         arr.dtype = _apply_precision(arr.dtype, precision)
     for sca in kir.scalars:

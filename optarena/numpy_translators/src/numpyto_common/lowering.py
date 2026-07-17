@@ -1255,6 +1255,35 @@ class _BuiltinCastRewriter(ast.NodeTransformer):
         return node
 
 
+class _ScalarFloatTagger(ast.NodeVisitor):
+    """Tag a local scalar float when its DEFINING expression is provably non-integer.
+
+    :func:`_is_integer_expr` reads an untagged non-array Name as INTEGER -- right for the
+    symbols (``N`` / ``k`` / ``m``) it exists to classify, wrong for a float scalar, which
+    reaches it untagged: ``local_dtypes`` carries the arrays, and a scalar derived in the
+    body (``e = 0.5 * (b - a)``) is in no table at all. Reading those as integer makes
+    :class:`_TrueDivisionPromoter` fire on a float ``/`` and bake in an fp64 cast.
+
+    Visits in source order so a tag is available to the statements that follow it, and only
+    ever ADDS float tags it can prove (an integer expression stays untagged and keeps the
+    old reading). So this can only turn a false promotion OFF -- never a new one on."""
+
+    def __init__(self, tags: Dict[str, str], array_names: Set[str]):
+        self.tags = tags
+        self.array_names = array_names
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        from numpyto_common.lib_nodes import _is_integer_expr
+        self.generic_visit(node)
+        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
+            return
+        name = node.targets[0].id
+        if name in self.tags or name in self.array_names:
+            return
+        if not _is_integer_expr(node.value, self.tags, self.array_names):
+            self.tags[name] = "float64"
+
+
 class _TrueDivisionPromoter(ast.NodeTransformer):
     """numpy ``/`` is TRUE division: int / int -> float64. C ``/`` and Fortran
     ``/`` do INTEGER division on integer operands, so wrap the left operand of an
@@ -1262,7 +1291,14 @@ class _TrueDivisionPromoter(ast.NodeTransformer):
     render as ``(double)(x)`` / ``REAL(x, kind=c_double)``) to force a floating
     divide -- matching numpy. Float / complex operands are left untouched (the
     surrounding arithmetic already promotes); ``//`` (FloorDiv) is a distinct op
-    handled by the emitters' integer floor macro and is NOT touched here."""
+    handled by the emitters' integer floor macro and is NOT touched here.
+
+    ``np.float64`` is deliberate and stays fp64 even on an fp32 emit: numpy's int/int
+    IS float64 regardless of the kernel's float precision, so this cast is faithful. It
+    is only correct while the operands really are integers, though -- hence the dtype
+    table this is handed must be complete (see :class:`_ScalarFloatTagger`). Firing on a
+    float divide silently promotes the surrounding expression to double, which fp64
+    cannot reveal because there double IS the precision."""
 
     def __init__(self, local_dtypes, array_names):
         self.local_dtypes = local_dtypes or {}
@@ -6581,9 +6617,19 @@ def _lp_promote_true_division(ctx: LoweringContext) -> None:
     generated index math. Array names come from the harvested shape tables so a
     float array element is not mistaken for an integer; a later scalarization of
     a whole-array ``np.float64(a) / b`` recurses into the cast operand
-    unchanged."""
+    unchanged.
+
+    The dtype table is ``local_dtypes`` (arrays) WIDENED with the declared scalar params
+    and the body's provable float scalars: neither is in ``local_dtypes``, and
+    ``_is_integer_expr`` reads an untagged non-array Name as integer, so without them a
+    float divide (chebyshev_filter_subspace's ``sigma1 / e``, over declared float64
+    params) is promoted as if it were int/int -- baking an fp64 cast into an otherwise
+    fp32 kernel."""
     array_names = set(ctx.lib_shape_table) | set(ctx.arrays_shapes)
-    _TrueDivisionPromoter(ctx.local_dtypes, array_names).visit(ctx.tree)
+    tags: Dict[str, str] = {s.name: s.dtype for s in ctx.kir.scalars}
+    tags.update(ctx.local_dtypes)  # the harvested tags win over the declaration
+    _ScalarFloatTagger(tags, array_names).visit(ctx.tree)
+    _TrueDivisionPromoter(tags, array_names).visit(ctx.tree)
     ast.fix_missing_locations(ctx.tree)
 
 

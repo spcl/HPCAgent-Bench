@@ -16,7 +16,12 @@ walk, which is all the batched-``@`` rewrite needs to tell a batched matmul
 """
 import ast
 import copy
+import math
 from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+
+from numpyto_common import dtypes
 
 
 class DesugarError(NotImplementedError):
@@ -2144,12 +2149,34 @@ class _DeadBranchElim(ast.NodeTransformer):
         return node
 
 
-#: ``sqrt(DBL_EPSILON)`` -- the forward-difference step scale MINPACK's ``fdjac2``
-#: uses (``h = sqrt(epsfcn) * |p_j|``, ``epsfcn`` defaulting to machine epsilon).
-#: :func:`_curve_fit_lm_lines` reuses the SAME rule so the emitted fit and the
-#: scipy reference share a Jacobian truncation error and converge to the same
-#: stationary point (see that function's docstring).
-_FD_STEP = "1.4901161193847656e-08"
+def _fd_step(precision: Optional[str] = None) -> str:
+    """``sqrt(machine epsilon)`` of the WORKING float type, as a source literal.
+
+    The forward-difference step scale MINPACK's ``fdjac2`` uses (``h = sqrt(epsfcn) *
+    |p_j|``, ``epsfcn`` defaulting to the machine epsilon OF THE WORKING TYPE).
+    :func:`_curve_fit_lm_lines` reuses the SAME rule so the emitted fit and the scipy
+    reference share a Jacobian truncation error and converge to the same stationary
+    point (see that function's docstring).
+
+    It MUST track ``precision``: this is emitted as source text, so the fp64 literal
+    ``sqrt(DBL_EPSILON) = 1.49e-08`` survives into an fp32 kernel unchanged (the desugar
+    is an AST rewrite and ``apply_precision`` only remaps dtype tables, never body
+    literals). There the step underflows -- raman_fitting fits an amplitude of ~1580,
+    and ``1580 + 1.49e-08*1580`` is exactly ``1580`` in fp32, whose ulp is ~1.9e-04 --
+    so every Jacobian column comes out identically zero, every LM trip is rejected, and
+    the fit returns its initial guess having never moved. sqrt(eps) is what balances
+    truncation against round-off; a merely representable step would still be swamped.
+
+    Read off the registry rather than hardcoded per dtype. A storage-only float (fp8)
+    has no numpy finfo, so it falls back to the fp64 rule -- curve_fit at fp8 is not a
+    thing we emit, and a wrong-but-fp64 step is the status quo, not a regression.
+    """
+    dtype = dtypes.canonical(precision) if precision else "float64"
+    try:
+        eps = float(np.finfo(np.dtype(dtype)).eps)
+    except TypeError:
+        eps = float(np.finfo(np.float64).eps)
+    return repr(math.sqrt(eps))
 
 
 def _list_display_elts(node: ast.AST) -> Optional[List[ast.expr]]:
@@ -2379,7 +2406,8 @@ def _fold_list_preludes(fn: ast.FunctionDef) -> None:
         ast.fix_missing_locations(fn)
 
 
-def _curve_fit_lm_lines(popt: str, f: str, x: str, y: str, p0: str, pfx: str, iters: int) -> List[str]:
+def _curve_fit_lm_lines(popt: str, f: str, x: str, y: str, p0: str, pfx: str, iters: int,
+                        precision: Optional[str] = None) -> List[str]:
     """Source lines for a naive Levenberg-Marquardt fit replacing ``curve_fit``.
 
     ``scipy.optimize.curve_fit(f, x, y, p0=...)`` with no bounds / sigma is an
@@ -2399,7 +2427,8 @@ def _curve_fit_lm_lines(popt: str, f: str, x: str, y: str, p0: str, pfx: str, it
     Two choices make the result agree with scipy's to the harness's 1e-9, rather
     than merely landing on the same optimum to fitting accuracy:
 
-    * The step ``h = sqrt(eps) * |p_j|`` is MINPACK's own (:data:`_FD_STEP`). A
+    * The step ``h = sqrt(eps) * |p_j|`` is MINPACK's own (:func:`_fd_step`, over the
+      WORKING precision -- an fp64 step silently vanishes at fp32). A
       finite-difference Jacobian shifts the stationary point from ``J^T r = 0``
       to ``J~^T r = 0``; sharing the step makes both solvers inherit the SAME
       shift instead of two different ones.
@@ -2436,9 +2465,9 @@ def _curve_fit_lm_lines(popt: str, f: str, x: str, y: str, p0: str, pfx: str, it
         f"    {pfx}_ssq = {pfx}_ssq + {pfx}_r[{i}] * {pfx}_r[{i}]",
         f"for {it} in range({iters}):",
         f"    for {c} in range({n}):",
-        f"        {pfx}_h = {_FD_STEP} * np.abs({popt}[{c}])",
+        f"        {pfx}_h = {_fd_step(precision)} * np.abs({popt}[{c}])",
         f"        if {pfx}_h == 0.0:",
-        f"            {pfx}_h = {_FD_STEP}",
+        f"            {pfx}_h = {_fd_step(precision)}",
         f"        for {i} in range({n}):",
         f"            {pfx}_pt[{i}] = {popt}[{i}]",
         f"        {pfx}_pt[{c}] = {popt}[{c}] + {pfx}_h",
@@ -2533,11 +2562,13 @@ class _CurveFitRewriter(ast.NodeTransformer):
     a silently-absent output.
     """
 
-    def __init__(self, tree: ast.Module, kernel: ast.FunctionDef):
+    def __init__(self, tree: ast.Module, kernel: ast.FunctionDef, precision: Optional[str] = None):
         self.tree = tree
         self.kernel = kernel
         self.ctr = 0
         self.changed = False
+        #: Working float precision, for the LM's finite-difference step (:func:`_fd_step`).
+        self.precision = precision
         #: ``(popt_name, parameter-count expression)`` per lowered fit.
         self.fitted: List[Tuple[str, str]] = []
 
@@ -2600,7 +2631,7 @@ class _CurveFitRewriter(ast.NodeTransformer):
         self._rebind_varargs(model, nexpr)
         self.fitted.append((popt, nexpr))
         self.changed = True
-        lines = _curve_fit_lm_lines(popt, f.id, x.id, y.id, p0.id, pfx, _CURVE_FIT_ITERS)
+        lines = _curve_fit_lm_lines(popt, f.id, x.id, y.id, p0.id, pfx, _CURVE_FIT_ITERS, self.precision)
         return ast.parse("\n".join(lines)).body
 
 
@@ -2626,12 +2657,17 @@ class _NegParamIndexFold(ast.NodeTransformer):
         return node
 
 
-def rewrite_curve_fit(tree: ast.Module, kernel: ast.FunctionDef) -> None:
+def rewrite_curve_fit(tree: ast.Module, kernel: ast.FunctionDef, precision: Optional[str] = None) -> None:
     """Lower every ``curve_fit`` in ``kernel`` to a naive LM loop nest, in place.
 
     Runs BEFORE helper inlining (like the eigh rewriter) so the model ``def`` is
     still a distinct function to rebind, and the LM's calls to it are inlined by
     the ordinary helper machinery afterwards.
+
+    ``precision`` is the working float type. It is needed HERE, at the source rewrite,
+    because the LM's finite-difference step is a numerical-method constant baked into
+    the emitted body -- the later ``apply_precision`` remaps dtype tables only and
+    cannot reach a literal. See :func:`_fd_step`. ``None`` keeps the fp64 rule.
     """
     fits = [n for n in ast.walk(kernel) if _curve_fit_call(n) is not None]
     if not fits:
@@ -2639,7 +2675,7 @@ def rewrite_curve_fit(tree: ast.Module, kernel: ast.FunctionDef) -> None:
     # The list preludes build the p0 vector this fit consumes, so they must be
     # arrays before the LM lines index them.
     _fold_list_preludes(kernel)
-    rw = _CurveFitRewriter(tree, kernel)
+    rw = _CurveFitRewriter(tree, kernel, precision)
     kernel.body = [s for stmt in kernel.body for s in _as_stmts(rw.visit(stmt))]
     if not rw.changed:
         return
