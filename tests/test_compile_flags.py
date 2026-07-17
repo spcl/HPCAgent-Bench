@@ -149,3 +149,37 @@ def test_a_cpp_flavor_names_its_compiler_explicitly():
                    if meta["base"] == "native" and FRAMEWORK_LANG.get(n) == "cpp" and n not in FRAMEWORK_COMPILER)
     assert not unset, (f"cpp flavor(s) {unset} name no compiler and would fall through to g++; "
                        f"declare them in cpp_runtime.FRAMEWORK_COMPILER")
+
+
+def test_gcc_autopar_carries_graphite_and_gcc_accepts_it():
+    """GCC_AUTOPAR pairs -ftree-parallelize-loops with Graphite (-fgraphite-identity
+    -floop-nest-optimize). A flag gcc merely tolerates today can become an error tomorrow, and
+    Graphite is a build option that may be configured out -- so this asserts gcc genuinely
+    ACCEPTS the composed line on a real compile, catching a rename/removal before a benchmark
+    run does. It does NOT assert the transform changes codegen: gcc 15.2 detects the SCoP
+    (``Adding SCoP``) but declines it at the dependence stage, and that is gcc's call, not a
+    property this suite should pin.
+    """
+    if shutil.which("gcc") is None:
+        pytest.fail("gcc is required for the native cc/cc_autopar flavors")
+    autopar = flags.GCC_AUTOPAR.format(n=flags.ncores())
+    assert "-fgraphite-identity" in autopar and "-floop-nest-optimize" in autopar
+    # Must NOT smuggle in the correctness-breaking escape hatch.
+    assert "graphite-allow-codegen-errors" not in autopar
+    with tempfile.TemporaryDirectory() as d:
+        src = os.path.join(d, "nest.c")
+        with open(src, "w") as fh:
+            fh.write("void f(double *restrict a,double *restrict b,long n){"
+                     "for(long i=0;i<n;i++)for(long j=0;j<n;j++)b[i]+=a[j];}\n")
+        cmd = ["gcc", *flags.CPU_BASELINE_GCC.split(), *autopar.split(), "-c", src, "-o", os.path.join(d, "nest.o")]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        assert proc.returncode == 0, f"gcc rejected the Graphite autopar line:\n$ {' '.join(cmd)}\n{proc.stderr}"
+
+
+def test_gcc_autopar_bakes_the_resolved_core_count():
+    """-ftree-parallelize-loops={n} must be substituted before it reaches gcc: gcc bakes N into
+    the generated GOMP_parallel(num_threads=N) call, so the literal '{n}' would both be rejected
+    and, if it slipped through, defeat the point of sizing to the core count."""
+    autopar = flags.GCC_AUTOPAR.format(n=flags.ncores())
+    assert "{n}" not in autopar
+    assert f"-ftree-parallelize-loops={flags.ncores()}" in autopar

@@ -25,7 +25,7 @@ import pathlib
 import re
 import shlex
 import subprocess
-from typing import Dict, Optional
+from typing import Dict, Optional, Set
 
 from optarena import osinfo, paths
 
@@ -134,8 +134,38 @@ FLANG_BASELINE = f"-O3 {_ARCH_NATIVE} -fopenmp -fPIC"
 #: frequently absent (``cannot find -lomp``), while ``libgomp`` is ubiquitous.
 POLLY_PAR = f"-mllvm -polly -mllvm -polly-parallel {_OPENMP_CLANG}"
 
-#: GCC ``-ftree-parallelize-loops=N -floop-parallelize-all``.
-GCC_AUTOPAR = "-ftree-parallelize-loops={n} -floop-parallelize-all -fopenmp"
+#: GCC autopar + Graphite, the gcc counterpart of POLLY_PAR.
+#:
+#: ``-ftree-parallelize-loops={n}`` is NOT a hint: gcc bakes N straight into the generated
+#: ``GOMP_parallel(fn, data, num_threads=N, flags)``, and an explicit num_threads OVERRIDES
+#: ``OMP_NUM_THREADS``. Measured, one source, three builds, each run with OMP_NUM_THREADS=1:
+#: N=2 -> pool of 2, N=4 -> 4, N=8 -> 8. So :func:`ncores` decides the RUN-time thread count
+#: at BUILD time and the environment cannot walk it back -- which is why ncores() must report
+#: this process's physical cores rather than the machine's hyperthreads (see its docstring).
+#:
+#: ``-floop-parallelize-all`` already runs on Graphite: its documented job is to use Graphite's
+#: data-dependence analysis to find parallelizable loops. ``-fgraphite-identity`` and
+#: ``-floop-nest-optimize`` turn on SCoP (Static Control Part) detection + the polyhedral
+#: TRANSFORMS -- gcc's answer to what Polly does for clang, so the two autopar columns differ
+#: by toolchain rather than by ambition.
+#:
+#: What was actually measured, so nobody re-derives it as a bug (``-fdump-tree-graphite-all``):
+#: SCoP detection FIRES. On a constant-bound matmul, a simple stencil, and a real emitted corpus
+#: kernel, gcc logs ``Adding SCoP`` with all loops of the nest inside it -- the auto-detection
+#: the flags exist for. gcc 15.2 then rejects each at the transform's dependence stage
+#: (``[scop-detection-fail] cannot handle dependences``), so the final ``number of SCoPs`` is 0
+#: and the object is byte-identical with and without the transforms. This is a gcc-Graphite
+#: limitation, not an env one: it reproduces identically against the distro isl 0.27 (what apt
+#: gcc-15 was built against) and a local isl 0.27, and even for a dependence-free elementwise
+#: map. ``--param graphite-allow-codegen-errors=1`` would force the SCoP through, but it does so
+#: by permitting INCORRECT codegen, so it is deliberately NOT set (correctness gates every run).
+#:
+#: The flags stay regardless: SCoP detection is the requested behaviour and it works, the
+#: transforms cost nothing when the scheduler declines, and they fire on gcc builds/kernels
+#: whose dependences its scheduler does accept. Assert only that gcc ACCEPTS the flags
+#: (tests/test_compile_flags.py), never that they change codegen on this host.
+GCC_AUTOPAR = ("-ftree-parallelize-loops={n} -floop-parallelize-all "
+               "-fgraphite-identity -floop-nest-optimize -fopenmp")
 
 #: Pluto pre-processes the source; only OpenMP is added at compile time.
 #: ``-fopenmp=libgomp`` for the same reason as ``POLLY_PAR`` -- both build with
@@ -200,20 +230,71 @@ HIP_BASELINE = (f"-O3 -march=native -ffast-math {_FP_RELAX} -fPIC")
 # ``nvidia-smi`` subprocess.
 # ---------------------------------------------------------------------------
 
+#: sysfs node listing the SMT siblings of a logical CPU, e.g. ``"0,8"`` for both halves of
+#: one physical core. Two logical CPUs on the same core report the SAME string, which is
+#: what makes it a physical-core key.
+SIBLINGS = "/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list"
+
+
+def physical_cores(cpus: Set[int]) -> int:
+    """The number of distinct PHYSICAL cores among the logical ``cpus``.
+
+    Counts distinct SMT sibling groups, so a hyperthreaded pair collapses to the one core it
+    really is. A cpu whose topology is unreadable (non-Linux, or a container that does not
+    mount sysfs) counts as its own core -- the conservative reading, since the alternative is
+    to merge cores that are actually distinct.
+    """
+    groups = set()
+    for cpu in cpus:
+        try:
+            with open(SIBLINGS.format(cpu=cpu)) as fh:
+                groups.add(fh.read().strip())
+        except OSError:
+            groups.add(str(cpu))
+    return len(groups)
+
 
 def ncores() -> int:
-    """Return the number of physical cores for OMP / autopar sizing.
+    """The number of physical cores available to THIS process, for OMP / autopar sizing.
 
-    Respects ``OPTARENA_NCORES`` env override; otherwise falls back to
-    :func:`os.cpu_count`. Never raises.
+    Three things this must get right, each of which it previously got wrong:
+
+    1. PHYSICAL, not logical. ``os.cpu_count()`` counts hyperthreads, so on a 16-thread /
+       8-core box it returned 16 and autopar was sized at 2x the real cores.
+    2. THIS PROCESS's share, not the machine's. ``os.cpu_count()`` is affinity-blind: under
+       ``taskset -c 0-3`` it still says 16. That matters most where it costs most -- one node
+       with 288 cores running 4 ranks gives each rank 72, and a rank that reads 288 oversubscribes
+       its cores 4x. ``sched_getaffinity`` sees the binding that SLURM/taskset/cgroups applied.
+    3. The SLURM allocation when there is no binding to read. If the rank IS bound, affinity is
+       exact and authoritative and SLURM is not consulted -- ``SLURM_CPUS_PER_TASK`` counts
+       LOGICAL cpus, so dividing it by the SMT factor undercounts an allocation made with
+       ``--hint=nomultithread``. It is used only when affinity still spans the whole machine,
+       i.e. we were allocated a share but not confined to it.
+
+    ``OMP_NUM_THREADS`` is deliberately NOT a source. It is a request rather than an
+    allocation, and it is the very variable :func:`cpu_env` sets: reading it would let a
+    parent's ``OMP_NUM_THREADS=1`` bake ``-ftree-parallelize-loops=1`` into a cached .so that
+    every later multi-core run would then reuse. Never raises.
     """
     env = os.environ.get("OPTARENA_NCORES")
     if env and env.isdigit():
         n = int(env)
         if n > 0:  # OPTARENA_NCORES=0 must NOT set OMP/autopar thread counts to 0
             return n
-    n = os.cpu_count()
-    return n if n else 1
+    total = os.cpu_count() or 1
+    try:
+        allowed = os.sched_getaffinity(0)
+    except AttributeError:  # macOS / Windows expose no affinity API
+        allowed = set(range(total))
+    n = physical_cores(allowed)
+    # Unbound: affinity tells us nothing about our share, so fall back to what SLURM says it
+    # gave us (converted to cores at the machine's SMT width).
+    if len(allowed) >= total:
+        slurm = os.environ.get("SLURM_CPUS_PER_TASK")
+        if slurm and slurm.isdigit() and int(slurm) > 0:
+            smt = max(1, total // max(1, physical_cores(set(range(total)))))
+            n = min(n, max(1, int(slurm) // smt))
+    return max(1, n)
 
 
 def detect_sm() -> str:
