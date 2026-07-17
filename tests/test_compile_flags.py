@@ -75,3 +75,77 @@ def test_fortran_baseline_compiles_and_runs(name, exe, baseline):
         assert proc.returncode == 0, (f"{name} rejected its matrix baseline:\n  {' '.join(cmd)}\n{proc.stderr}")
         run = subprocess.run([out_path], capture_output=True)
         assert run.returncode in (0, 1), f"{name} program crashed (rc={run.returncode})"
+
+
+# --------------------------------------------------------------------------- #
+# No dead config: every declaration must be reachable and agree                #
+# --------------------------------------------------------------------------- #
+# The cases above hardcode each (compiler, baseline) pair, so they assert the INTENDED
+# matrix while never reading compilers.yaml -- which is how the yaml drifted away from it
+# unnoticed: its flang block named CPU_BASELINE_CLANG (carrying -fveclib=libmvec and the
+# gcc FP-relax spellings flang rejects) while FLANG_BASELINE sat unreferenced, and flang is
+# not installed here so the pair above merely skipped. These read the real files.
+
+
+def _compiler_blocks():
+    from optarena.languages import _load_compilers
+    return _load_compilers()
+
+
+def test_every_compilers_yaml_ref_resolves():
+    """A baseline_ref / autopar_ref naming a nonexistent constant is dead config."""
+    flag_vars = vars(flags)
+    bad = []
+    for name, block in _compiler_blocks().items():
+        for key in ("baseline_ref", "autopar_ref"):
+            ref = block.get(key)
+            if ref is not None and ref not in flag_vars:
+                bad.append(f"{name}.{key} -> {ref!r}")
+    assert not bad, f"compilers.yaml names constants that do not exist in optarena.flags: {bad}"
+
+
+def test_flang_uses_the_flang_baseline_not_the_clang_one():
+    """flang must not inherit the C/C++ clang baseline.
+
+    CPU_BASELINE_CLANG carries -fveclib=libmvec and -fno-math-errno / -fno-trapping-math /
+    -fno-signed-zeros; FLANG_BASELINE exists precisely because flang does not accept those.
+    Pinned by name because the toolchain is absent here, so a compile check would skip and
+    prove nothing.
+    """
+    block = _compiler_blocks()["flang"]
+    assert block["baseline_ref"] == "FLANG_BASELINE", (
+        f"flang resolves {block['baseline_ref']}; FLANG_BASELINE exists for this compiler and is "
+        f"otherwise unreferenced")
+
+
+def test_every_native_flavor_is_wired_end_to_end():
+    """A FRAMEWORK_META native flavor must be registered in every table the build path reads.
+
+    Each of these omissions has already shipped: llvm was absent from FRAMEWORK_COMPILER and
+    silently compiled with g++ under a "C++ (clang)" label, and a flavor missing from
+    NATIVE_FRAMEWORKS raises KeyError only when someone runs it.
+    """
+    from optarena.autogen import NATIVE_FRAMEWORKS
+    from optarena.benchmarks.cpp_runtime import FRAMEWORK_LANG
+    from optarena.frameworks.framework import FRAMEWORK_META
+
+    native = {n for n, meta in FRAMEWORK_META.items() if meta["base"] == "native"}
+    assert native, "no native flavors discovered -- the check would pass vacuously"
+    assert not (native -
+                set(FRAMEWORK_LANG)), f"missing from cpp_runtime.FRAMEWORK_LANG: {native - set(FRAMEWORK_LANG)}"
+    assert not (native - set(NATIVE_FRAMEWORKS)), f"missing from autogen.NATIVE_FRAMEWORKS: " \
+                                                  f"{native - set(NATIVE_FRAMEWORKS)}"
+
+
+def test_a_cpp_flavor_names_its_compiler_explicitly():
+    """Any cpp flavor absent from FRAMEWORK_COMPILER silently gets the g++ default.
+
+    That is exactly how ``llvm`` -- declared "C++ (clang)" -- measured gcc in every cell.
+    """
+    from optarena.benchmarks.cpp_runtime import FRAMEWORK_COMPILER, FRAMEWORK_LANG
+    from optarena.frameworks.framework import FRAMEWORK_META
+
+    unset = sorted(n for n, meta in FRAMEWORK_META.items()
+                   if meta["base"] == "native" and FRAMEWORK_LANG.get(n) == "cpp" and n not in FRAMEWORK_COMPILER)
+    assert not unset, (f"cpp flavor(s) {unset} name no compiler and would fall through to g++; "
+                       f"declare them in cpp_runtime.FRAMEWORK_COMPILER")

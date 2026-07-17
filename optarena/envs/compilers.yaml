@@ -72,13 +72,19 @@ clangpp:
   link:    ["{cc}", "-shared", "{objs}", "-o", "{lib}", "-lm"]
 
 # LLVM Fortran. On recent LLVM (Ubuntu 26.04) the driver is `flang`; older
-# toolchains shipped it as `flang-new`. Reuses the LLVM baseline (flang accepts
-# -O3/-march); Polly autopar is clang-only, so none here.
+# toolchains shipped it as `flang-new`. Uses FLANG_BASELINE, not the C/C++ clang one:
+# CPU_BASELINE_CLANG carries -fveclib=libmvec and the gcc FP-relax spellings
+# (-fno-math-errno / -fno-trapping-math / -fno-signed-zeros) that flang does not accept --
+# which is exactly why flags.py defines FLANG_BASELINE, and tests/test_compile_flags.py
+# already pairs flang with it. This block said CPU_BASELINE_CLANG, so the two disagreed;
+# nothing caught it because that test hardcodes the pairing rather than reading this file,
+# it runs in no CI job, and flang is not installed on the dev box so it skips.
+# Polly autopar is clang-only, so none here.
 flang:
   lang: fortran
   install: {apt: flang, spack: llvm}
   cc: flang
-  baseline_ref: CPU_BASELINE_CLANG
+  baseline_ref: FLANG_BASELINE
   autopar_ref: null
   compile: ["{cc}", "{baseline}", "-fPIC", "-c", "{src}", "-o", "{obj}"]
   link:    ["{cc}", "-shared", "{objs}", "-o", "{lib}"]

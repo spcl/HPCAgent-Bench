@@ -212,25 +212,32 @@ def test_native_autopar_leg_validates(sweep):
         assert row["datatype"] == DATATYPE
 
 
-def test_native_leg_requests_autopar(tmp_path, monkeypatch):
+#: The autopar flavors and the flag each must actually reach the compiler with.
+#: ``cc_autopar`` is gcc's half of the axis; its GCC_AUTOPAR carries a ``{n}`` field that
+#: MUST be substituted -- gcc rejects a literal ``-ftree-parallelize-loops={n}``.
+AUTOPAR_FRAMEWORKS = [("polly", "-polly-parallel"), ("cc_autopar", "-ftree-parallelize-loops=")]
+
+
+@pytest.mark.parametrize("framework,want_flag", AUTOPAR_FRAMEWORKS, ids=[f for f, _ in AUTOPAR_FRAMEWORKS])
+def test_native_leg_requests_autopar(framework, want_flag, monkeypatch):
     """The autopar delta reaches the REAL compile, observed where the build path composes it.
 
     Asserted on the compile command rather than on a runtime speedup: clang accepts
-    ``-mllvm -polly`` with a warning even when its LLVM has no Polly, so a validated row
-    proves the pipeline works but NOT that parallelization was requested.
+    ``-mllvm -polly`` with a warning even when its LLVM has no Polly, and gcc's autopar may
+    decline every loop, so a validated row proves the pipeline works but NOT that
+    parallelization was requested.
 
-    It must be SPIED, not re-derived. Composing the command here with POLLY_PAR passed in
-    and asserting POLLY_PAR comes out is a tautology that never touches the build: with
-    that shape, deleting ``extra_flags`` from ``_ensure_built`` entirely -- so every polly
-    kernel compiles with zero autopar -- still passed. So this drives ``_ensure_built``
-    for real and captures the kwargs it actually hands the composer.
+    It must be SPIED, not re-derived. Composing the command here with the preset passed in
+    and asserting it comes back out is a tautology that never touches the build: with that
+    shape, deleting ``extra_flags`` from ``_ensure_built`` entirely -- so every autopar
+    kernel compiles with zero autopar -- still passed. So this drives ``_ensure_built`` for
+    real and captures the kwargs it actually hands the composer.
     """
-    assert cpp_runtime.FRAMEWORK_FLAGS[NATIVE_FRAMEWORK] == "POLLY_PAR"
+    assert framework in cpp_runtime.FRAMEWORK_FLAGS, f"{framework} has no autopar flag preset"
     spec = BenchSpec.load(sorted(KERNELS.select_keys(NATIVE_SELECTOR))[0].rsplit("/", 1)[-1])
     cpp_backend = pathlib.Path(optarena.__file__).parent / "benchmarks" / spec.relative_path / "cpp_backend"
 
     seen: List[Dict] = []
-    real_compose = cpp_runtime.build_kernel_lib_commands if hasattr(cpp_runtime, "build_kernel_lib_commands") else None
 
     def spy(sources, out_so, **kwargs):
         seen.append(dict(kwargs))
@@ -238,16 +245,18 @@ def test_native_leg_requests_autopar(tmp_path, monkeypatch):
 
     # _ensure_built imports the composer INSIDE the function, so patch it at its source module.
     monkeypatch.setattr("optarena.languages.build_kernel_lib_commands", spy)
-    so = cpp_backend / "build" / f"lib{spec.native_base()}_{NATIVE_FRAMEWORK}.so"
+    so = cpp_backend / "build" / f"lib{spec.native_base()}_{framework}.so"
     if so.exists():
         so.unlink()  # force a real compile; a cached .so would skip the composer entirely
-    cpp_runtime._ensure_built(cpp_backend, spec.native_base(), NATIVE_FRAMEWORK)
+    cpp_runtime._ensure_built(cpp_backend, spec.native_base(), framework)
 
     assert seen, ("_ensure_built never composed a compile command -- it cannot have built anything, "
                   "so this test would have been vacuous")
     extra = " ".join(str(k.get("extra_flags", "")) for k in seen)
-    assert "-polly-parallel" in extra, (f"the polly build did NOT request autopar; _ensure_built passed "
-                                        f"extra_flags={extra!r}")
+    assert want_flag in extra, (f"the {framework} build did NOT request autopar; _ensure_built passed "
+                                f"extra_flags={extra!r}")
+    # An unsubstituted field would be passed to the compiler verbatim and rejected.
+    assert "{n}" not in extra, f"{framework}: the core-count field was never substituted: {extra!r}"
 
 
 def test_speedup_against_numpy_is_computable(sweep):

@@ -80,6 +80,7 @@ jobs:
             tests/test_yaml_style.py \
             tests/test_tree_structure.py \
             tests/test_bindings.py \
+            tests/test_compile_flags.py \
             tests/test_firewall.py \
             tests/test_hf_export.py
 

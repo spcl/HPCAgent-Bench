@@ -245,6 +245,23 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "compiler": "gcc",
         "precisions": IEEE_PRECISIONS,
     },
+    # gcc's auto-parallelizer, the GCC half of the autopar axis clang already had via
+    # ``polly``. ``compilers.yaml`` declares gcc's ``autopar_ref: GCC_AUTOPAR``, but that route
+    # only fires at Mode.MULTI_CORE, which the framework build path never asks for -- so the
+    # flavor matrix had no auto-parallelized C at all. Adding it here rather than passing
+    # MULTI_CORE down the shared path is deliberate: clangpp's autopar_ref IS ``POLLY_PAR``, so
+    # a blanket mode change would silently turn ``llvm`` into a second ``polly`` column.
+    "cc_autopar": {
+        "base": "native",
+        "full_name": "C autopar (gcc)",
+        "prefix": "cc_autopar",
+        "postfix": "cpp",
+        "arch": "cpu",
+        "language": "c",
+        "compiler": "gcc",
+        "flags": "cc_autopar",
+        "precisions": IEEE_PRECISIONS,
+    },
     "llvm": {
         "base": "native",
         "full_name": "C++ (clang)",
@@ -263,6 +280,21 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "arch": "cpu",
         "language": "fortran",
         "compiler": "gfortran",
+        "precisions": IEEE_PRECISIONS,
+    },
+    # LLVM Fortran, the flang half of the gfortran/flang pair -- the Fortran counterpart of
+    # the cc/llvm (gcc/clang) split, which Fortran had no equivalent of. compilers.yaml has
+    # carried a full `flang` block all along, but no flavor named it, so the block was dead
+    # config. flang is not in the shared CI toolchain; the framework declines cleanly when
+    # the driver is absent, exactly as polly does without a Polly-enabled clang.
+    "flang": {
+        "base": "native",
+        "full_name": "Fortran (flang)",
+        "prefix": "flang",
+        "postfix": "cpp",
+        "arch": "cpu",
+        "language": "fortran",
+        "compiler": "flang",
         "precisions": IEEE_PRECISIONS,
     },
     "polly": {

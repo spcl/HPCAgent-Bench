@@ -43,8 +43,10 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 #: FRAMEWORK_FLAGS).
 FRAMEWORK_LANG: Dict[str, str] = {
     "cc": "c",
+    "cc_autopar": "c",
     "llvm": "cpp",
     "fortran": "fortran",
+    "flang": "fortran",
     "polly": "cpp",
     "pluto": "cpp",
 }
@@ -63,6 +65,7 @@ FRAMEWORK_LANG: Dict[str, str] = {
 #: it is pinned to clang++ only so the Pluto and Polly columns differ by the polyhedral
 #: toolchain rather than by the compiler underneath.
 FRAMEWORK_COMPILER: Dict[str, str] = {
+    "flang": "flang",
     "llvm": "clangpp",
     "polly": "clangpp",
     "pluto": "clangpp",
@@ -74,6 +77,7 @@ FRAMEWORK_COMPILER: Dict[str, str] = {
 #: needs (the source is the same reference C++; true Pluto pre-processing would
 #: be a polycc pass, intentionally out of scope for the flag preset).
 FRAMEWORK_FLAGS: Dict[str, str] = {
+    "cc_autopar": "GCC_AUTOPAR",
     "polly": "POLLY_PAR",
     "pluto": "PLUTO_PAR",
 }
@@ -129,11 +133,17 @@ def _native_sources(cpp_backend: pathlib.Path, short: str, lang: str) -> List[pa
 
 
 def _framework_extra_flags(framework: str) -> str:
-    """The framework's flag-preset delta (Polly/Pluto), or ``""``."""
+    """The framework's flag-preset delta (autopar / Polly / Pluto), or ``""``.
+
+    ``{n}`` is substituted with the core count, as :func:`flags.compose_autopar` does on the
+    mode-driven route: GCC_AUTOPAR is ``-ftree-parallelize-loops={n} ...``, and gcc rejects
+    the literal placeholder. POLLY_PAR / PLUTO_PAR carry no field, so format() is a no-op
+    there rather than a special case.
+    """
     if framework not in FRAMEWORK_FLAGS:
         return ""
     from optarena import flags
-    return vars(flags)[FRAMEWORK_FLAGS[framework]]
+    return vars(flags)[FRAMEWORK_FLAGS[framework]].format(n=flags.ncores())
 
 
 def _ensure_built(cpp_backend: pathlib.Path, short: str, framework: str) -> pathlib.Path:
