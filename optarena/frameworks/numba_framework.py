@@ -1,10 +1,12 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
+import contextlib
 import importlib
+import io
 import pathlib
 
 from optarena.frameworks import Benchmark, Framework
-from typing import Callable, Sequence, Tuple
+from typing import Any, Callable, Optional, Sequence, Tuple
 
 # NumpyToNumba auto-generated tracks only: serial ``@nb.njit`` (n) and parallel
 # ``@nb.njit(parallel=True)`` (np). The hand-authored object-mode / range
@@ -29,6 +31,86 @@ class NumbaFramework(Framework):
 
     def autogen_targets(self):
         return ("numba_n", "numba_np")
+
+    def _reportable(self, program: Any):
+        """``program`` as a numba Dispatcher that CAN still describe itself, else
+        ``None``.
+
+        Two conditions, and the second is the subtle one:
+
+        1. It is a Dispatcher. ``isinstance`` against the real class rather than
+           probing for the methods -- the repo forbids ``getattr``/``hasattr``, and a
+           duck-type check would accept anything that merely carries the name.
+        2. Its overloads were COMPILED IN THIS PROCESS. The generated kernels are
+           ``@nb.njit(..., cache=True)``, and every report numba can give (the
+           parallel diagnostics, the emitted assembly) is a by-product of compiling.
+           An overload restored from the on-disk cache is executable code with none
+           of those by-products: ``metadata`` is ``None``, ``parallel_diagnostics``
+           raises walking it, and -- the reason this check is not optional --
+           ``inspect_asm`` does NOT raise but returns a 59-char stub (a ``.file``
+           directive and nothing else), which would be written out as a perfectly
+           well-formed report containing no instructions. Detecting the cache hit
+           turns that silent lie into an honest "not supported".
+
+        So numba reports only on a COLD compile; clear the kernel's ``__pycache__``
+        to get one. Forcing a recompile here is not an option -- these hooks may not
+        rebuild the artifact that was just timed.
+
+        Imported HERE, not at module scope: ``optarena.frameworks.__init__`` imports
+        this module unconditionally, so a top-level numba import would make an
+        optional dependency mandatory for every framework.
+        """
+        from numba.core.dispatcher import Dispatcher
+        if not isinstance(program, Dispatcher):
+            return None
+        if any(program.overloads[sig].metadata is None for sig in program.signatures):
+            return None
+        return program
+
+    def opt_report(self, program: Any, bench: Benchmark) -> Optional[str]:
+        """Numba's PARALLEL-ACCELERATOR diagnostics: which loops it turned parallel,
+        and which it fused into which.
+
+        ``None`` (no report) in two cases, both structural rather than failures:
+
+        * The SERIAL track. These diagnostics are a ``parallel=True`` artifact; on a
+          plain ``@njit`` the diagnostics object is never set up and asking raises.
+        * A cache hit, i.e. anything :meth:`_reportable` rejects.
+
+        Note what this is NOT: a vectorization report. Numba does not plumb its LLVM
+        vectorizer remarks out to Python, so unlike the native flavors there is no
+        width / refusal-reason channel -- :meth:`lowered_code` is where numba's
+        vectorization is actually visible (count the ``zmm`` registers).
+        """
+        fn = self._reportable(program)
+        if fn is None or not fn.targetoptions.get("parallel"):
+            return None
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            fn.parallel_diagnostics(level=4)
+        text = buf.getvalue()
+        return text if text.strip() else None
+
+    def lowered_code(self, program: Any, bench: Benchmark) -> Optional[str]:
+        """The host assembly numba's LLVM backend emitted, per compiled signature.
+
+        Numba is an in-memory JIT (MCJIT): it never writes a ``.so``, so there is no
+        object file for the shared ``objdump`` path to read -- ``inspect_asm()`` is
+        the equivalent, and it is the reason this hook exists on the framework rather
+        than being a single objdump utility for everyone.
+
+        Keyed by signature because one ``@njit`` is many compiled functions; the dict
+        is empty until something has been called (nothing is compiled before that),
+        which reads as ``None`` -- as does a cache hit, whose asm would otherwise be
+        an instruction-free stub (see :meth:`_reportable`).
+        """
+        fn = self._reportable(program)
+        if fn is None:
+            return None
+        asm = fn.inspect_asm()
+        if not asm:
+            return None
+        return "\n".join(f"; ==== signature: {sig} ====\n{text}" for sig, text in asm.items())
 
     def impl_files(self, bench: Benchmark) -> Sequence[Tuple[str, str]]:
         """ Returns the framework's implementation files for a particular

@@ -180,6 +180,21 @@ record:
                                   # row so a container-measured number is never compared against a
                                   # native one unknowingly. Containers set OPTARENA_RECORD_EXECUTION.
 
+# Optional compiler diagnostics written under perf_reports/ (optarena/perf_reports.py),
+# mirroring the benchmark folder structure. Two INDEPENDENT knobs, both OFF: a report
+# is a debugging aid, and neither is free (the opt report costs one extra compile per
+# kernel x framework). Off, nothing runs; on, the reports are still produced OUTSIDE
+# the timed bracket -- the opt report from a separate compile-only run that never
+# touches the timed .so, the disassembly by reading the .so the run already built --
+# so a measured number is identical either way. Enable per run with
+# $OPTARENA_PERF_REPORTS_OPT_REPORT=1 / $OPTARENA_PERF_REPORTS_LOWERED_CODE=1.
+perf_reports:
+  opt_report: false        # vectorizer report: what vectorized (+ width), what did not (+ reason).
+                           # gcc -fopt-info-vec-*, clang -Rpass=loop-vectorize|slp-vectorizer.
+                           # Frameworks with no report channel return "not supported" (no file).
+  lowered_code: false      # the emitted machine code: objdump -d -C of the built .so
+                           # (a JIT with no .so -- numba -- dumps its own asm instead).
+
 timeouts:
   kernel_s: 300            # final fallback: per-kernel agent-run wall-clock budget (seconds)
   # Per-KernelBench-level defaults (BenchSpec.resolved_level 1/2/3). A kernel whose

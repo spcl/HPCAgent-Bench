@@ -6,7 +6,7 @@ import numpy as np
 
 from sqlmodel import Session
 
-from optarena import config
+from optarena import config, perf_reports
 from optarena.frameworks import (Benchmark, Framework, timeout_decorator as tout, utilities as util)
 from optarena.frameworks.errors import NotSupportedByFramework
 from optarena.frameworks.schema import Result, results_engine
@@ -57,6 +57,40 @@ class Test(object):
         self.bench = bench
         self.frmwrk = frmwrk
         self.numpy = npfrmwrk
+
+    def _write_perf_reports(self, frmwrk: Framework, impl: Any, impl_name: str) -> None:
+        """Write whichever optional reports are switched ON and this framework
+        supports, under ``perf_reports/`` (both OFF by default -- see
+        :mod:`optarena.perf_reports`).
+
+        Called only AFTER :meth:`Framework.measure` has returned, which is what makes
+        the reports free of the timed run in both directions: the measurement is
+        already taken, and the artifact is built, so :meth:`Framework.lowered_code`
+        has a real ``.so`` to read rather than having to trigger a build.
+
+        ``impl_name`` is part of the report's identity, not decoration: a framework's
+        implementations are DIFFERENT compiled artifacts (numba's ``nopython-mode``
+        and ``nopython-mode-parallel`` are two separate JIT compilations of one
+        kernel), and they are timed separately, so they must not overwrite each
+        other's report.
+
+        A report never breaks a run: the hooks answer ``None`` for "not supported"
+        (written as nothing), and a framework whose report machinery throws costs its
+        report, not the measurement that is already in hand.
+        """
+        info = self.bench.info
+        hooks = {"opt_report": frmwrk.opt_report, "lowered_code": frmwrk.lowered_code}
+        for kind, hook in hooks.items():
+            if not perf_reports.enabled(kind):
+                continue
+            try:
+                text = hook(impl, self.bench)
+            except Exception as e:  # noqa: BLE001 -- a diagnostic must not sink a measured run
+                print(f"WARNING: {kind} for {frmwrk.fname} ({impl_name}) failed: {e}")
+                continue
+            path = perf_reports.write(info["relative_path"], info["module_name"], frmwrk.fname, impl_name, kind, text)
+            if path is not None:
+                print(f"{kind}: {path}")
 
     def _execute(self, frmwrk: Framework, impl: Callable, impl_name: str, mode: str, bdata: Dict[str, Any], repeat: int,
                  ignore_errors: bool) -> Tuple[Any, Optional[Sequence[float]], Optional[Sequence[float]]]:
@@ -268,6 +302,11 @@ class Test(object):
             # Main execution
             _, timelist, native_times = self._execute(self.frmwrk, impl, impl_name, "median", context, repeat,
                                                       ignore_errors)
+            # Optional diagnostics, once per implementation and only now: the artifact
+            # is built and every timing is taken, so nothing here can reach a measured
+            # number. (Inside _execute it would run once per MODE -- paying for the
+            # opt-report compile twice to write the same file twice.)
+            self._write_perf_reports(self.frmwrk, impl, impl_name)
             if timelist:
                 natives = native_times if native_times else [None] * len(timelist)
                 for t, nt in zip(timelist, natives):

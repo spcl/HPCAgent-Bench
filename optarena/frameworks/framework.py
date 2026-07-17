@@ -338,7 +338,7 @@ def _framework_class(fname: str):
     per-framework modules import THIS module, so the import is done lazily to dodge
     the circular import."""
     from optarena.frameworks import (Framework, NumbaFramework, CupyFramework, JaxFramework, PythranFramework,
-                                         DaceFramework, NativeFramework, PlutoFramework, TritonFramework, TVMFramework)
+                                     DaceFramework, NativeFramework, PlutoFramework, TritonFramework, TVMFramework)
     base_class = {
         "numpy": Framework,
         "numba": NumbaFramework,
@@ -442,7 +442,10 @@ class Framework(object):
         targets = self.autogen_targets()
         if targets:
             from optarena.autogen import ensure
-            ensure(bench.info["short_name"], targets)
+            # bench.bname is the REGISTRY key the manifest was resolved with;
+            # bench.info["short_name"] is a free-form label 26 kernels spell
+            # differently from their stem, and no manifest is named after it.
+            ensure(bench.bname, targets)
 
     def implementations(self, bench: Benchmark) -> Sequence[Tuple[Callable, str]]:
         """ Returns the framework's implementations for a particular benchmark.
@@ -589,6 +592,43 @@ class Framework(object):
         lower against real shapes / dtypes -- e.g. JAX AoT
         ``jax.jit(fn).lower(*example_args).compile()``. The default ignores them."""
         return program
+
+    def opt_report(self, program: Any, bench: Benchmark) -> Optional[str]:
+        """The compiler's OPTIMIZATION REPORT for this kernel -- which loops
+        vectorized, at what width, and why the rest did not -- or ``None`` when this
+        framework has no report to give (the default).
+
+        ``None`` means NOT SUPPORTED, and is a normal answer: a framework may have no
+        compiler behind it (numpy), or one with no report channel wired
+        (``compilers.yaml``'s optional ``report_ref``). The caller writes nothing and
+        moves on, so a report knob can be switched on across a mixed sweep without
+        special-casing the frameworks that cannot answer.
+
+        Contract for an implementer: this may NOT change what gets timed. It is
+        called once, after :meth:`measure` has returned, and must not rebuild or
+        re-optimize the artifact that was measured -- produce the report from a
+        separate compile-only run instead (see
+        :func:`optarena.benchmarks.cpp_runtime.opt_report_text`). Returns the
+        compiler's own text: it is the stable, human-readable contract, and the
+        richer structured records (gcc's gzip-JSON, clang's YAML) cost multiples of
+        the compile time to produce and have no consumer here.
+        """
+        return None
+
+    def lowered_code(self, program: Any, bench: Benchmark) -> Optional[str]:
+        """The LOWERED CODE actually emitted for this kernel (disassembled), or
+        ``None`` when this framework cannot show any (the default).
+
+        The counterpart of :meth:`opt_report`: that one is the compiler's account of
+        what it did, this one is the evidence. Reads the artifact the run already
+        built -- for the compiled backends, ``objdump`` on the ``.so``
+        (:func:`optarena.perf_reports.objdump`); a JIT that never writes one (numba
+        compiles in-memory) dumps its own asm instead.
+
+        Same contract as :meth:`opt_report`: called after :meth:`measure`, and must
+        never rebuild -- it inspects the timed artifact, it does not produce a new one.
+        """
+        return None
 
     def create_timer(self, program: Any) -> "Timer":
         """Generate a timer for ``program`` (the framework-native handle: a

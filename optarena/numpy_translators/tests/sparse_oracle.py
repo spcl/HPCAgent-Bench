@@ -271,9 +271,14 @@ def _emit_c(short: str,
             config_name: Optional[str] = None) -> None:
     """Emit C for one (sub-)benchmark via the YAML bridge (synthesizes the
     transient bench_info + flattens a buffer-style sparse layout for the chosen
-    config). The canonical name carries the fp tag -- no _auto suffix."""
+    config). The canonical name carries the fp tag -- no _auto suffix.
+
+    ``short`` is a REGISTRY key here (``discover_sparse_kernels`` resolves it with
+    ``BenchSpec.load``), which is what names a manifest -- not the manifest's own
+    ``short_name`` field."""
     from optarena.emit_bridge import emit_kernel
-    rc = emit_kernel(short, numpy_py, out, target="c", config=config_name)
+    from optarena.spec import BenchSpec
+    rc = emit_kernel(BenchSpec.load(short), numpy_py, out, target="c", config=config_name)
     if rc != 0:
         raise RuntimeError(f"emit failed for {short} (config={config_name})")
 

@@ -24,6 +24,11 @@ from optarena import paths
 from optarena.spec import BenchSpec
 
 KERNEL = "tsvc_2_s212"  # 1-D: a,b outputs; c,d inputs; LEN_1D symbol
+#: A kernel whose manifest ``short_name`` is an ABBREVIATION of its registry stem
+#: (``arc_distance`` -> ``adist``); 26 of the corpus are like this. Nothing is
+#: registered or emitted under the abbreviation, so it is the shape that catches a
+#: short_name/stem mix-up -- ``KERNEL`` above cannot (its three names coincide).
+ABBREVIATED = "arc_distance"
 #: framework -> the compiler binary that must be present to build it. Polly/Pluto
 #: are flag presets on the C++ source, so they need clang(++) like llvm.
 _COMPILER = {"cc": "gcc", "llvm": "clang", "fortran": "gfortran", "polly": "clang", "pluto": "clang"}
@@ -31,6 +36,56 @@ _COMPILER = {"cc": "gcc", "llvm": "clang", "fortran": "gfortran", "polly": "clan
 
 def _emitter_present() -> bool:
     return importlib.util.find_spec("numpyto_c.cli") is not None
+
+
+def test_abbreviated_kernel_premise():
+    """Guard for the two tests below: they are only meaningful while this kernel's
+    short_name really does differ from the stem its manifest/reference are named
+    after. If the corpus ever renames it, they must move, not silently pass."""
+    spec = BenchSpec.load(ABBREVIATED)
+    assert spec.short_name != ABBREVIATED, "pick a kernel whose short_name abbreviates its stem"
+    assert spec.module_name == ABBREVIATED
+
+
+def test_native_base_follows_the_module_stem():
+    """The native stem is the ``<module>_numpy.py`` stem, NOT ``short_name``.
+
+    numpyto_c.cli derives the file/symbol base from the reference filename it is
+    handed, deliberately independent of the manifest's short_name abbreviation. A
+    short_name-keyed base desyncs the loader from the emitter for all 26
+    abbreviating kernels: the emitter writes arc_distance_fp64.c while the loader
+    hunts for adist_fp64.c and declares the sources ungenerated."""
+    spec = BenchSpec.load(ABBREVIATED)
+    assert spec.native_base() == "arc_distance"
+    assert spec.native_base("dense") == "arc_distance"
+    from optarena.autogen import _native_targets
+    assert _native_targets(spec) == [(None, "arc_distance")]
+
+
+@pytest.mark.skipif(not _emitter_present(), reason="translators absent")
+def test_emit_native_resolves_the_manifest_by_stem():
+    """emit_native must emit for a kernel whose short_name != stem.
+
+    Manifests are registered under their STEM, so resolving one by
+    ``spec.short_name`` looks up an ``adist`` that no manifest is named after and
+    every native target fails with a KeyError -- leaving only the wrapper, whose
+    import then SUCCEEDS and defers the damage to an unrelated build error."""
+    from optarena.autogen import emit_native
+    spec = BenchSpec.load(ABBREVIATED)
+    cppdir = paths.BENCHMARKS / spec.relative_path / "cpp_backend"
+    for stale in cppdir.glob("arc_distance_fp*.c"):
+        stale.unlink()
+
+    status = emit_native(spec, ["c"])
+
+    assert status, "emit_native reported nothing at all"
+    bad = {k: v for k, v in status.items() if v.startswith("fail")}
+    assert not bad, f"native emit failed: {bad}"
+    # The sources the loader will look for, under the name the loader derives.
+    for fptype in ("fp64", "fp32"):
+        src = cppdir / f"{spec.native_base()}_{fptype}.c"
+        assert src.exists(), f"{src.name} not emitted (status={status})"
+        assert f"{spec.native_base()}_{fptype}(" in src.read_text()  # symbol == file stem
 
 
 @pytest.mark.skipif(not _emitter_present(), reason="translators absent")
@@ -41,8 +96,8 @@ def test_emit_names_and_marker():
     numpy_py = paths.BENCHMARKS / spec.relative_path / f"{spec.module_name}_numpy.py"
     with tempfile.TemporaryDirectory() as d:
         out = pathlib.Path(d)
-        assert emit_kernel(KERNEL, numpy_py, out, target="c") == 0
-        assert emit_kernel(KERNEL, numpy_py, out, target="c", precision="float32") == 0
+        assert emit_kernel(spec, numpy_py, out, target="c") == 0
+        assert emit_kernel(spec, numpy_py, out, target="c", precision="float32") == 0
         for fptype in ("fp64", "fp32"):
             for ext in ("c", "cpp"):
                 src = out / f"{KERNEL}_{fptype}.{ext}"
@@ -73,7 +128,7 @@ def test_wrap_kernel_matches_numpy(framework, dtype, fptype):
         cpp.mkdir()
         for tgt in ("c", "fortran"):
             for prec in ("", "float32"):
-                assert emit_kernel(KERNEL, numpy_py, cpp, target=tgt, precision=prec) == 0
+                assert emit_kernel(spec, numpy_py, cpp, target=tgt, precision=prec) == 0
         wrapper = pathlib.Path(d) / f"{KERNEL}_cpp.py"
         wrapper.write_text("# test wrapper\n")
 
@@ -154,8 +209,8 @@ def test_symbols_and_iterators_are_int64():
     numpy_py = paths.BENCHMARKS / spec.relative_path / f"{spec.module_name}_numpy.py"
     with tempfile.TemporaryDirectory() as d:
         out = pathlib.Path(d)
-        assert emit_kernel("gemm", numpy_py, out, target="c") == 0
-        assert emit_kernel("gemm", numpy_py, out, target="fortran") == 0
+        assert emit_kernel(spec, numpy_py, out, target="c") == 0
+        assert emit_kernel(spec, numpy_py, out, target="fortran") == 0
         c = (out / "gemm_fp64.c").read_text()
         f = (out / "gemm_fp64.f90").read_text()
         # C: symbols are int64_t scalars; loop iterators are int64_t (not `int`).
@@ -181,7 +236,7 @@ def test_pluto_emits_multidim_for_rank2_arrays():
     numpy_py = paths.BENCHMARKS / spec.relative_path / f"{spec.module_name}_numpy.py"
     with tempfile.TemporaryDirectory() as d:
         out = pathlib.Path(d)
-        assert emit_kernel("gemm", numpy_py, out, target="c") == 0
+        assert emit_kernel(spec, numpy_py, out, target="c") == 0
         pluto = (out / "gemm_fp64_pluto_input.c").read_text()
         assert "#pragma scop" in pluto
         for arr in ("A", "B", "C"):
@@ -204,7 +259,7 @@ def test_pluto_keeps_rank1_arrays_flat():
     numpy_py = paths.BENCHMARKS / spec.relative_path / f"{spec.module_name}_numpy.py"
     with tempfile.TemporaryDirectory() as d:
         out = pathlib.Path(d)
-        assert emit_kernel(KERNEL, numpy_py, out, target="c") == 0
+        assert emit_kernel(spec, numpy_py, out, target="c") == 0
         pluto = (out / f"{KERNEL}_fp64_pluto_input.c").read_text()
         assert "*restrict a" in pluto, "rank-1 array must stay a flat pointer param"
         assert "[restrict " not in pluto, "rank-1 kernel must emit no VLA (multidim) param"

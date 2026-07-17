@@ -27,6 +27,8 @@ brackets the ctypes ``.so`` call, giving one wall-clock series. There is no
 import importlib
 import pathlib
 
+from optarena import paths, perf_reports
+from optarena.benchmarks import cpp_runtime
 from optarena.frameworks import Benchmark, Framework
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -82,12 +84,15 @@ class NativeFramework(Framework):
     def implementations(self, bench: Benchmark) -> Sequence[Tuple[Callable, str]]:
         # Generate the (gitignored) <module>_cpp.py wrapper + native sources on
         # demand from the numpy reference, so a fresh tree just works. A hand
-        # wrapper (no marker) is left untouched; a failed emit surfaces below.
-        try:
-            from optarena.autogen import ensure_native
-            ensure_native(bench.info["short_name"])
-        except Exception:  # noqa: BLE001
-            pass
+        # wrapper (no marker) is left untouched.
+        #
+        # ``bench.bname`` is the REGISTRY key Benchmark resolved its manifest with;
+        # ``bench.info["short_name"]`` is a free-form label 26 kernels spell
+        # differently (arc_distance -> "adist"), which no manifest is named after.
+        # Only this framework's own language is emitted, so a sibling language the
+        # translator cannot lower does not deny a working one.
+        from optarena.autogen import ensure_native, NATIVE_FRAMEWORKS
+        ensure_native(bench.bname, NATIVE_FRAMEWORKS[self.fname])
         module_str = "optarena.benchmarks.{r}.{m}_cpp".format(
             r=bench.info["relative_path"].replace('/', '.'),
             m=bench.info["module_name"],
@@ -98,6 +103,36 @@ class NativeFramework(Framework):
             raise AttributeError(f"{module_str} is missing {self.kernel_attr}(). Make sure "
                                  f"the wrapper exposes kernel_{{cc,llvm,fortran}}.")
         return [(impl, "default")]
+
+    def _cpp_backend(self, bench: Benchmark) -> pathlib.Path:
+        return paths.BENCHMARKS / bench.info["relative_path"] / "cpp_backend"
+
+    def _native_base(self, bench: Benchmark) -> str:
+        """The stem this framework's sources / symbols / ``.so`` share.
+
+        ``module_name``, never ``short_name``: the emitter derives the stem from the
+        ``<module>_numpy.py`` filename it is handed (``BenchSpec.native_base``), so
+        the 26 kernels whose manifest abbreviates (``arc_distance`` -> ``adist``)
+        would otherwise be looked up under a name nothing on disk is called.
+        """
+        return bench.info["module_name"]
+
+    def opt_report(self, program: Any, bench: Benchmark) -> Optional[str]:
+        """The compiler's vectorization report for this flavor's build, from a
+        separate compile-only run (:func:`cpp_runtime.opt_report_text`) that leaves
+        the timed ``.so`` alone. ``None`` when the sources are not emitted or the
+        compiler has no report channel."""
+        return cpp_runtime.opt_report_text(self._cpp_backend(bench), self._native_base(bench), self.fname)
+
+    def lowered_code(self, program: Any, bench: Benchmark) -> Optional[str]:
+        """``objdump`` of the ``lib<base>_<framework>.so`` this flavor built --
+        the machine code that was actually timed. ``None`` when nothing built it
+        yet (this never compiles: it reports on a timed artifact, it does not make
+        one)."""
+        so = cpp_runtime.built_so(self._cpp_backend(bench), self._native_base(bench), self.fname)
+        if so is None:
+            return None
+        return perf_reports.objdump(so)
 
     def _abi_order(self, bench: Benchmark) -> Optional[List[str]]:
         """Return the C-ABI argument names in canonical signature order, derived

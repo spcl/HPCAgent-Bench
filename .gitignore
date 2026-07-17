@@ -201,3 +201,13 @@ id_ecdsa*
 .ssh/
 *.p12
 *.pfx
+
+# Optional compiler diagnostics (optarena/perf_reports.py): vectorization reports +
+# objdump disassembly, produced only when $OPTARENA_PERF_REPORTS_* is switched on.
+# Build OUTPUT of a local run mirroring the benchmark tree -- regenerable from the
+# sources, host-specific (-march=native decides which loops vectorize and at what
+# width, so a committed report would describe someone else's CPU), and the tree is
+# created on demand per kernel. The directory itself is kept (.gitkeep) so an
+# enabled run has a root to write under without the first one having to mkdir it.
+perf_reports/**
+!perf_reports/.gitkeep

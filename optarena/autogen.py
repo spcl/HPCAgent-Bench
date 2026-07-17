@@ -105,25 +105,27 @@ def emit_targets(spec, targets: Iterable[str]) -> Dict[str, str]:
     return out
 
 
-def ensure(short_name: str, targets: Iterable[str]) -> None:
-    """Generate any of ``targets`` whose canonical file is MISSING for kernel
-    ``short_name``. Best-effort: a failed emit is swallowed so the caller's
-    own import raises the real, specific error. No-op when nothing is missing.
+def ensure(key: str, targets: Iterable[str]) -> None:
+    """Generate any of ``targets`` whose canonical file is MISSING for the kernel
+    registered under ``key``. No-op when nothing is missing.
+
+    ``key`` is a REGISTRY key (path-key or unambiguous bare stem) -- what
+    :meth:`BenchSpec.load` resolves -- never ``spec.short_name``, which is a
+    free-form label 26 kernels spell differently from their stem.
+
+    A per-target emit failure is reported by :func:`emit_targets` as a status and
+    left for the caller's own import to raise on: the caller imports the missing
+    ``<module>_<fw>.py`` immediately after, so a ModuleNotFoundError already names
+    the exact file. (The native path has no such tell -- see :func:`ensure_native`.)
     """
     targets = list(targets)
     if not targets:
         return
-    try:
-        spec = BenchSpec.load(short_name)
-    except Exception:
-        return
+    spec = BenchSpec.load(key)
     kdir = paths.BENCHMARKS / spec.relative_path
     missing = [t for t in targets if not (kdir / _file_for(spec.module_name, t)).exists()]
     if missing:
-        try:
-            emit_targets(spec, missing)
-        except Exception:
-            pass
+        emit_targets(spec, missing)
 
 
 # --- Native (C / C++ / Fortran) ---------------------------------------------
@@ -152,18 +154,19 @@ def _wrapper_path(spec) -> pathlib.Path:
 def _native_targets(spec) -> List[tuple]:
     """``[(config_or_None, native_base)]`` -- one entry per emit-distinct layout.
 
-    A dense kernel yields ``[(None, <short>)]``; a sparse kernel yields one
-    ``(<config>, <short>_<config>)`` per configuration (the layout IS the
+    A dense kernel yields ``[(None, <module>)]``; a sparse kernel yields one
+    ``(<config>, <module>_<config>)`` per configuration (the layout IS the
     sub-benchmark -- each is a full kernel with its own source / symbol / lib).
     Distributions sharing one configuration collapse to a single native source
-    (they differ only in runtime data), so the list is deduped by base."""
+    (they differ only in runtime data), so the list is deduped by base.
+
+    :meth:`BenchSpec.native_base` is the single source of truth for the stem (it
+    matches what the emitter derives from the reference filename)."""
     seen: set = set()
     out: List[tuple] = []
     for rb in spec.expand_layouts():
-        if rb.config_key == "dense":
-            cfg, base = None, spec.short_name
-        else:
-            cfg, base = rb.config_key, f"{spec.short_name}_{rb.config_key}"
+        cfg = None if rb.config_key == "dense" else rb.config_key
+        base = spec.native_base(rb.config_key)
         if base in seen:
             continue
         seen.add(base)
@@ -214,7 +217,7 @@ def emit_native(spec, langs: Iterable[str]) -> Dict[str, str]:
             for prec in _NATIVE_PRECISIONS:
                 key = f"{tgt}:{base}:{prec or 'fp64'}"
                 try:
-                    rc = emit_kernel(spec.short_name, numpy_py, cppdir, target=tgt, config=cfg, precision=prec)
+                    rc = emit_kernel(spec, numpy_py, cppdir, target=tgt, config=cfg, precision=prec)
                     out[key] = "ok" if rc == 0 else f"fail rc={rc}"
                 except Exception as exc:  # noqa: BLE001
                     out[key] = f"fail: {type(exc).__name__}: {exc}"
@@ -222,17 +225,29 @@ def emit_native(spec, langs: Iterable[str]) -> Dict[str, str]:
     return out
 
 
-def ensure_native(short_name: str, lang: Optional[str] = None) -> None:
-    """Generate the native sources (+ wrapper) for kernel ``short_name`` if
-    missing. ``lang`` restricts to one language (else all of NATIVE_FRAMEWORKS).
-    Best-effort: a failed emit is swallowed so the caller surfaces the real
-    error at build/import time."""
-    try:
-        spec = BenchSpec.load(short_name)
-    except Exception:
-        return
+def ensure_native(key: str, lang: Optional[str] = None) -> None:
+    """Generate the native sources (+ wrapper) for the kernel registered under
+    ``key``. ``lang`` restricts to one language (else all of NATIVE_FRAMEWORKS).
+
+    ``key`` is a REGISTRY key (path-key or unambiguous bare stem), never
+    ``spec.short_name`` -- see :func:`ensure`.
+
+    Raises ``RuntimeError`` naming the failed target(s) and the emitter's own
+    message when a requested source could not be emitted. Nothing here shells out
+    to a native toolchain -- the emit is a pure-Python numpyto subprocess, and
+    gcc/gfortran are only needed later, at build time -- so an absent compiler
+    cannot reach this and there is no toolchain tolerance to preserve. Swallowing
+    instead would strand the caller: the ``_cpp.py`` wrapper is emitted regardless,
+    so its import SUCCEEDS and the missing source only surfaces much later as a
+    ctypes build error disconnected from the cause.
+
+    ``lang`` is per-framework precisely so one language's emit failure does not
+    deny a working framework: a kernel the Fortran target cannot lower still
+    builds under ``-f cc``.
+    """
+    spec = BenchSpec.load(key)
     langs = [lang] if lang else sorted(set(NATIVE_FRAMEWORKS.values()))
-    try:
-        emit_native(spec, langs)
-    except Exception:
-        pass
+    failed = {t: s for t, s in emit_native(spec, langs).items() if s.startswith("fail")}
+    if failed:
+        detail = "; ".join(f"{t}: {s}" for t, s in sorted(failed.items()))
+        raise RuntimeError(f"{key}: native emit failed for {sorted(failed)} -- {detail}")

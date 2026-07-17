@@ -18,7 +18,8 @@ name: CI
 #   unit             format + structure + native emit + agent-bench + hf + e2e[numba,jax]
 #   translators      numpyto op suite + ports + benchmark refs (gt4py)
 #   frameworks-pluto codegen frameworks + fp16 + e2e[pluto]            (ONLY Pluto build)
-#   e2e-native       e2e[c,cpp,fortran]   (native heavy-compile slice, -n auto)
+#   e2e-native       integration sweep (CLI->DB->plot) + e2e[c,cpp,fortran]
+#                    (native heavy-compile slice, -n auto)
 #   e2e-pythran      e2e[pythran]         (pythran isolated -- ~7 GB/compile, -n 2)
 #   container-image  build + smoke-launch the agent-bench cpu container image
 #   mpi              the whole MPI/distributed track (descriptor + driver codegen + launch +
@@ -69,12 +70,16 @@ jobs:
 
       - uses: ./.github/actions/setup
 
-      - name: Phase 1 -- YAML + tree + hidden-test firewall + HF export completeness
+      - name: Phase 1 -- YAML + tree + ABI contract + hidden-test firewall + HF export completeness
         if: ${{ !cancelled() }}
+        # test_bindings.py ran in NO job until now, which is why the C ABI could type nbody's
+        # dt: 0.05 as int64 -- int(0.05) == 0, a zero timestep -- corpus-wide and unnoticed.
+        # It is seconds of pure-python assertions over the manifests; it belongs in the cheap phase.
         run: |
           python -m pytest -q -p no:cacheprovider --timeout=600 \
             tests/test_yaml_style.py \
             tests/test_tree_structure.py \
+            tests/test_bindings.py \
             tests/test_firewall.py \
             tests/test_hf_export.py
 
@@ -278,7 +283,7 @@ jobs:
   # ===========================================================================================
   e2e-native:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: e2e[c,cpp,fortran]
+    name: e2e[c,cpp,fortran] + integration sweep
     runs-on: ubuntu-latest
     timeout-minutes: 75
     steps:
@@ -287,6 +292,20 @@ jobs:
         with:
           python-version: '3.12'
       - uses: ./.github/actions/setup
+
+      - name: Phase 4b -- integration sweep (CLI -> DB -> plot, numpy + native autopar)
+        # Lands HERE, on the lightest native runner (~14 min of its 75), because this is the
+        # job that already owns the auto-generated native compile+validate path -- the same
+        # chain the sweep drives end to end -- and clang (the polly autopar leg) comes from
+        # the shared setup action, so the job pays no new setup. unit (23.5) and e2e-pythran
+        # (30.9, at budget) have no room; translators has no native toolchain rationale.
+        # ~25 s serial: 18 numpy kernels (~5 s) + 3 emitted+compiled polly kernels + one plot.
+        # -n1 (no xdist): the module-scoped fixture drives BOTH sweeps into ONE optarena.db,
+        # and splitting its tests across workers would re-run the whole fixture per worker.
+        if: ${{ !cancelled() }}
+        timeout-minutes: 15
+        run: |
+          python -m pytest -q -p no:cacheprovider --timeout=1800 tests/test_integration_sweep.py
 
       - name: Phase 5 -- e2e numerical sweep [c, cpp, fortran] @ S, fp64
         if: ${{ !cancelled() }}

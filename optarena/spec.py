@@ -972,11 +972,19 @@ class BenchSpec:
         return self.array_args[0] if self.array_args else None
 
     def native_base(self, config: Optional[str] = None) -> str:
-        """The native artifact stem for one layout: ``<short>`` (dense) or
-        ``<short>_<config>`` (a sparse configuration). The emitted source, the
+        """The native artifact stem for one layout: ``<module>`` (dense) or
+        ``<module>_<config>`` (a sparse configuration). The emitted source, the
         exported C symbol, and the per-framework ``lib<base>_<fw>.so`` all share
-        this stem -- so each sparse layout is a fully-independent kernel."""
-        return self.short_name if config in (None, "dense") else f"{self.short_name}_{config}"
+        this stem -- so each sparse layout is a fully-independent kernel.
+
+        Keyed on ``module_name`` because the emitter derives the stem from the
+        ``<module>_numpy.py`` filename it is handed, deliberately independent of
+        the manifest's ``short_name`` abbreviation (``numpyto_c.cli``). Using
+        ``short_name`` here desyncs for the 26 kernels that abbreviate: the
+        emitter writes ``arc_distance_fp64.c`` while the loader hunts for
+        ``adist_fp64.c`` and reports the sources as ungenerated.
+        """
+        return self.module_name if config in (None, "dense") else f"{self.module_name}_{config}"
 
 
 # ---------------------------------------------------------------------------

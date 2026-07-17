@@ -19,6 +19,8 @@ This module owns the second edit plus the runtime helpers:
   (the repo's no-``getattr`` rule), compose autopar / CUDA for the mode, and
   substitute the compile-command template. It returns the argv; it does NOT run
   it (the caller owns process launching).
+* :func:`report_flags` -- resolve a block's optional ``report_ref`` the same way,
+  giving the flags that make the compiler explain its vectorizer decisions.
 """
 import functools
 import pathlib
@@ -150,6 +152,33 @@ def baseline_flags(lang: str) -> str:
     """
     _, block = _compiler_for_lang(_load_compilers(), lang)
     return _resolve_baseline(block, Mode.SINGLE_CORE)
+
+
+def report_flags(lang: str, *, compiler: Optional[str] = None) -> str:
+    """The optimization-report flags for ``lang`` (or an explicit ``compiler`` block).
+
+    Resolved from ``compilers.yaml``'s ``report_ref`` -> a constant NAME in
+    :mod:`optarena.flags`, looked up via ``vars(flags)`` -- the same indirection
+    ``baseline_ref``/``autopar_ref`` use, so no caller string-literals a report flag.
+
+    Returns ``""`` for a compiler with no report channel wired (nvcc, the MPI
+    wrappers, ...): the caller then reports "not supported" rather than guessing a
+    flag its compiler may reject.
+    """
+    compilers = _load_compilers()
+    if compiler is not None:
+        if compiler not in compilers:
+            raise KeyError(f"no such compiler {compiler!r} in compilers.yaml")
+        block = compilers[compiler]
+    else:
+        _, block = _compiler_for_lang(compilers, lang)
+    ref = block.get("report_ref")
+    if ref is None:
+        return ""
+    flag_vars = vars(flags)
+    if ref not in flag_vars:
+        raise KeyError(f"report_ref {ref!r} is not a constant in optarena.flags")
+    return flag_vars[ref]
 
 
 def compile_variant(

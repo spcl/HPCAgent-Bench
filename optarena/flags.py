@@ -115,6 +115,39 @@ PLUTO_PAR = _OPENMP_CLANG
 NVHPC_CONCUR = "-Mconcur"
 
 # ---------------------------------------------------------------------------
+# Optimization-report flags -- what the vectorizer DID and did NOT do, to stderr.
+# Referenced by a compiler block's ``report_ref`` in ``compilers.yaml`` (the same
+# name-indirection as ``baseline_ref``/``autopar_ref``, so no framework
+# string-literals a report flag). OFF by default: they are added only when a
+# report is explicitly requested, and then only to the SEPARATE compile-only run
+# that :func:`optarena.benchmarks.cpp_runtime.opt_report_text` makes -- never to
+# the build whose artifact gets timed.
+#
+# Both compilers report to STDERR rather than to a file. GCC's ``=<file>`` form
+# APPENDS across compiles, so a stale file from an earlier run silently
+# contaminates the next, while clang's ``-foptimization-record-file=`` CLOBBERS,
+# losing every translation unit but the last. Stderr carries neither hazard and
+# makes the two compilers symmetric: one capture path, no unlink dance.
+# ---------------------------------------------------------------------------
+
+#: GCC / gfortran vectorization report. Both halves are wanted: ``optimized``
+#: carries the vector WIDTH, ``missed`` carries the refusal REASON (the actionable
+#: half). Deliberately NOT ``-fopt-info-all`` (12.4KB vs 3.7KB on arc_distance,
+#: the excess being non-vectorizer noise) and NOT ``-fsave-optimization-record``
+#: (gzip-JSON: 3.55x compile time and ~32MB uncompressed per source -- a structured
+#: record is only worth that to a machine consumer, and there is none here yet).
+GCC_OPT_REPORT = "-fopt-info-vec-optimized -fopt-info-vec-missed"
+
+#: Clang / clang++ vectorization report. ``-Rpass*`` regexes match against PASS
+#: names, so the vectorizer passes are named explicitly -- ``-Rpass=.*`` floods
+#: (162 remarks from 30 source lines, mostly asm-printer instruction-mix noise).
+#: ``-Rpass-analysis`` is clang's counterpart of gcc's ``missed:`` reason line.
+#: No ``-g`` is needed: the stderr diagnostics carry the frontend's own source
+#: location (only the serialized YAML record needs debug info for its DebugLoc).
+CLANG_OPT_REPORT = ("-Rpass=loop-vectorize|slp-vectorizer -Rpass-missed=loop-vectorize|slp-vectorizer "
+                    "-Rpass-analysis=loop-vectorize")
+
+# ---------------------------------------------------------------------------
 # GPU baselines. The arch suffix (``-arch=sm_<SM>`` / ``--offload-arch=<gfx>``)
 # is appended by the framework after :func:`detect_sm` / :func:`detect_gfx`.
 # ---------------------------------------------------------------------------

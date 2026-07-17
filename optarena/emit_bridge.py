@@ -195,7 +195,7 @@ def bench_info_tempfile(spec: BenchSpec, config: Optional[str] = None) -> Iterat
 _DRIVER = "numpyto_common.cli"
 
 
-def emit_kernel(name: str,
+def emit_kernel(spec: BenchSpec,
                 kernel_py: os.PathLike,
                 out_dir: os.PathLike,
                 *,
@@ -203,8 +203,15 @@ def emit_kernel(name: str,
                 config: Optional[str] = None,
                 precision: str = "",
                 extra_env: Optional[Dict[str, str]] = None) -> int:
-    """Emit ``name`` to ``target`` via the unified ``numpyto --target`` driver,
-    feeding it a transient bench_info JSON synthesized from the co-located YAML.
+    """Emit ``spec``'s kernel to ``target`` via the unified ``numpyto --target``
+    driver, feeding it a transient bench_info JSON synthesized from the co-located
+    YAML.
+
+    Takes the loaded :class:`BenchSpec`, NOT a name: a spec is addressed in the
+    registry by its PATH-KEY (``hpc/map_reduce/arc_distance/arc_distance``, or its
+    bare stem), while ``spec.short_name`` is a free-form label that need not match
+    (arc_distance's is ``adist``). Re-loading by any field of an already-loaded spec
+    can only reintroduce that confusion, so the caller passes the spec it has.
 
     ``target`` is a numpy_translators target (``c`` / ``polly`` / ``pluto`` /
     ``fortran`` / ``cupy`` / ``numba`` / ``pythran``); the C target writes the
@@ -213,7 +220,6 @@ def emit_kernel(name: str,
     (``<short>[_<sparse>]_<fptype>``); there is no symbol suffix. Returns the
     driver exit code.
     """
-    spec = BenchSpec.load(name)
     with bench_info_tempfile(spec, config=config) as bi:
         cmd = [
             sys.executable,

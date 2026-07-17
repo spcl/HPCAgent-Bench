@@ -5,16 +5,17 @@ Two paths share this module:
 * **Legacy nanobind wrappers** (a handful of hand-written HPC/ML kernels) call
   :func:`load_backend_module` to import a compiled ``<bench>_<backend>`` nanobind
   module from ``cpp_backend/build*``.
-* **Auto-generated native kernels** call :func:`wrap_kernel`, which:
+* **Auto-generated native kernels** call :func:`wrap_kernel`, which builds +
+  dlopens ``lib<short>_<framework>.so`` from the kernel's per-precision sources
+  (:func:`load_backend_so`) and returns a callable that maps numpy args to ctypes
+  and calls the C-ABI symbol. Timing is the judge's job -- it wraps this call (or
+  the Python call) with its own wall-clock bracket -- so the kernel carries no
+  timing side-channel.
 
-  1. ensures the kernel's per-precision sources exist (generated on demand by
-     :mod:`optarena.autogen` from ``<short>_numpy.py`` -- the repo commits none of
-     them), then builds + dlopens ``lib<short>_<framework>.so`` via
-     :func:`load_backend_so`;
-  2. returns a callable that maps numpy args to ctypes and calls the C-ABI
-     symbol. Timing is the judge's job -- it wraps this call (or the Python
-     call) with its own wall-clock bracket -- so the kernel carries no timing
-     side-channel.
+  Those sources are generated on demand from ``<short>_numpy.py`` (the repo
+  commits none of them) by :mod:`optarena.autogen`, driven by the framework
+  loader -- NOT here: generation is addressed by registry key, and this layer
+  only ever holds a native base (see :func:`_ensure_built`).
 
 Native files and symbols share ONE canonical name -- ``<short>[_<sparse>]_<fptype>``
 (see :func:`numpyto_common.naming.native_base`). There is no ``_auto`` suffix and
@@ -29,9 +30,10 @@ For sparse benchmarks, :func:`split_csr` extracts (data, indices, indptr) from a
 import ctypes
 import importlib
 import pathlib
+import shlex
 import subprocess
 import sys
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 #: framework name -> the source language it compiles. One ``.so`` per framework;
 #: the compiler is chosen per language by :mod:`optarena.languages` (gcc for c,
@@ -48,9 +50,20 @@ FRAMEWORK_LANG: Dict[str, str] = {
 }
 
 #: framework -> a forced ``compilers.yaml`` block (overrides the per-language
-#: default). Polly/Pluto are clang-only polyhedral passes, so they build the C++
-#: source with clang++ rather than the default g++.
+#: default, which for ``cpp`` is g++).
+#:
+#: EVERY cpp framework must name its compiler here. ``llvm`` is "C++ (clang)" in
+#: FRAMEWORK_META and was omitted, so it silently took the g++ default and every ``llvm``
+#: measurement in the suite was really gcc: the LLVM-vs-GCC axis the flavor exists to
+#: provide collapsed into C-vs-C++ of the SAME compiler, under a label saying otherwise.
+#:
+#: Only ``polly`` is clang-REQUIRED (Polly is an LLVM pass, so the flag has no g++
+#: equivalent). ``pluto`` is a CHOICE, not a requirement: polycc transforms the source
+#: offline and emits ordinary C++ with OpenMP pragmas, which any compiler can build --
+#: it is pinned to clang++ only so the Pluto and Polly columns differ by the polyhedral
+#: toolchain rather than by the compiler underneath.
 FRAMEWORK_COMPILER: Dict[str, str] = {
+    "llvm": "clangpp",
     "polly": "clangpp",
     "pluto": "clangpp",
 }
@@ -115,39 +128,41 @@ def _native_sources(cpp_backend: pathlib.Path, short: str, lang: str) -> List[pa
     return [cpp_backend / f"{short}_fp64.{ext}", cpp_backend / f"{short}_fp32.{ext}"]
 
 
-def _ensure_sources(cpp_backend: pathlib.Path, short: str, lang: str) -> None:
-    """Generate ``<short>_{fp64,fp32}.<ext>`` on demand if any is missing. The
-    repo commits no native sources; the framework loaders normally generate them
-    before import, this is the belt-and-suspenders path for a direct call."""
-    if all(p.exists() for p in _native_sources(cpp_backend, short, lang)):
-        return
-    try:
-        from optarena.autogen import ensure_native
-        ensure_native(short, lang)
-    except Exception:  # noqa: BLE001 -- a failed emit surfaces as the build error below
-        pass
+def _framework_extra_flags(framework: str) -> str:
+    """The framework's flag-preset delta (Polly/Pluto), or ``""``."""
+    if framework not in FRAMEWORK_FLAGS:
+        return ""
+    from optarena import flags
+    return vars(flags)[FRAMEWORK_FLAGS[framework]]
 
 
 def _ensure_built(cpp_backend: pathlib.Path, short: str, framework: str) -> pathlib.Path:
     """Lazily compile + link ``lib<short>_<framework>.so`` from the framework's
-    per-precision sources (matrix flags from ``compilers.yaml`` -> ``flags.py``)."""
+    per-precision sources (matrix flags from ``compilers.yaml`` -> ``flags.py``).
+
+    Sources are NOT generated here: ``short`` is a native base (``adist``,
+    ``spmv_csr``), which is neither a registry key nor recoverable into one, so
+    this layer cannot address a manifest. Generation belongs to the framework
+    loader, which holds the key (``NativeFramework.implementations`` ->
+    ``autogen.ensure_native``) and raises there with the emitter's own message.
+    """
     lang = FRAMEWORK_LANG[framework]
-    _ensure_sources(cpp_backend, short, lang)
+    so_name = f"lib{short}_{framework}.so"
     bd = cpp_backend / "build"
-    bd.mkdir(exist_ok=True)
-    so = bd / f"lib{short}_{framework}.so"
+    so = bd / so_name
     if so.exists():
         return so
     from optarena.languages import build_kernel_lib_commands
     sources: List[Tuple[str,
                         pathlib.Path]] = [(lang, p) for p in _native_sources(cpp_backend, short, lang) if p.exists()]
+    # Checked BEFORE the build dir is created: mkdir under a cpp_backend/ that the
+    # emitter never wrote reports a missing directory, burying the real cause (no
+    # sources) under a path that was only ever a symptom.
     if not sources:
         raise FileNotFoundError(f"{short}: no {lang} sources under {cpp_backend} to build "
-                                f"lib{short}_{framework}.so (generation from {short}_numpy.py failed)")
-    extra = ""
-    if framework in FRAMEWORK_FLAGS:
-        from optarena import flags
-        extra = vars(flags)[FRAMEWORK_FLAGS[framework]]
+                                f"{so_name} (generation from {short}_numpy.py did not run or failed)")
+    bd.mkdir(exist_ok=True)
+    extra = _framework_extra_flags(framework)
     for cmd in build_kernel_lib_commands(sources,
                                          so,
                                          build_dir=bd,
@@ -155,6 +170,66 @@ def _ensure_built(cpp_backend: pathlib.Path, short: str, framework: str) -> path
                                          extra_flags=extra):
         subprocess.check_call(cmd)
     return so
+
+
+def opt_report_text(cpp_backend: pathlib.Path, short: str, framework: str) -> Optional[str]:
+    """The compiler's vectorization report for ``short`` built as ``framework``, or
+    ``None`` when there is none to give.
+
+    Compiles the SAME sources with the SAME resolved flags the timed build uses
+    (:func:`optarena.languages.build_kernel_lib_commands`, so baseline + Polly/Pluto
+    preset come from the one flag matrix) plus that compiler's report flags, and
+    returns what it wrote to stderr.
+
+    This is a SEPARATE, compile-only run into ``build_dir``: the link step is
+    dropped and the objects land beside the report, so ``lib<short>_<framework>.so``
+    -- the library that was timed -- is neither rebuilt nor replaced. The report
+    therefore describes the timed build's flags without the timed build ever being
+    re-made under different ones.
+
+    ``None`` when the compiler has no ``report_ref`` in ``compilers.yaml``, when the
+    sources were never emitted, or when the report compile fails -- a report is a
+    diagnostic and must never break the run that produced the measurement.
+    """
+    from optarena.languages import build_kernel_lib_commands, report_flags
+    lang = FRAMEWORK_LANG[framework]
+    compiler = FRAMEWORK_COMPILER.get(framework)
+    rflags = report_flags(lang, compiler=compiler)
+    if not rflags:
+        return None
+    sources: List[Tuple[str,
+                        pathlib.Path]] = [(lang, p) for p in _native_sources(cpp_backend, short, lang) if p.exists()]
+    if not sources:
+        return None
+    build_dir = cpp_backend / "build" / f"opt-report-{framework}"
+    build_dir.mkdir(parents=True, exist_ok=True)
+    extra = f"{_framework_extra_flags(framework)} {rflags}".strip()
+    # [:-1] drops the LINK command: build_kernel_lib_commands' last argv is the one
+    # that produces the .so, and linking here would write a second copy of the timed
+    # library. The .so path handed in is consumed only by that dropped step.
+    cmds = build_kernel_lib_commands(sources,
+                                     build_dir / f"lib{short}_{framework}.so",
+                                     build_dir=build_dir,
+                                     compiler=compiler,
+                                     extra_flags=extra)[:-1]
+    chunks: List[str] = []
+    for cmd in cmds:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            return None
+        chunks.append(f"$ {shlex.join(cmd)}\n{proc.stderr}")
+    return "\n".join(chunks)
+
+
+def built_so(cpp_backend: pathlib.Path, short: str, framework: str) -> Optional[pathlib.Path]:
+    """The ``lib<short>_<framework>.so`` this framework builds, if it is ON DISK.
+
+    Never builds: this exists to INSPECT the artifact a timed run already made
+    (:meth:`Framework.lowered_code`), so a missing library means "nothing ran yet",
+    which is ``None`` -- not a reason to compile something no one timed.
+    """
+    so = cpp_backend / "build" / f"lib{short}_{framework}.so"
+    return so if so.is_file() else None
 
 
 def load_backend_so(wrapper_file: str, short: str, framework: str) -> ctypes.CDLL:
