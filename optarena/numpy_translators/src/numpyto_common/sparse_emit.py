@@ -1,48 +1,36 @@
-"""Per-format sparse-matmul dispatcher (Workstream 0 implementation).
+"""Per-format sparse-matmul dispatchers (Workstream 0).
 
-Each function in this module takes an AST snippet representing one
-sparse-matmul operation and returns the lowered loop nest that the
-existing emit walker can consume. The dispatchers are routed from
-:mod:`numpyto_common.lib_nodes`'s matmul hoister via :data:`SPARSE_MATMUL_DISPATCH`.
+Each function takes an AST snippet for one sparse-matmul op and returns the
+lowered loop nest (incl. output zero-init). Routed from
+:mod:`numpyto_common.lib_nodes`'s matmul hoister via
+:data:`SPARSE_MATMUL_DISPATCH`. Common shape::
 
-Each dispatcher follows the same shape::
+    def expand_matmul_<lhs_fmt>_<rhs_fmt>(target, lhs, rhs, shape_table) -> List[ast.stmt]
 
-    def expand_matmul_<lhs_fmt>_<rhs_fmt>(target, lhs, rhs, shape_table)
-        -> List[ast.stmt]
+* ``target`` -- ``ast.Name`` for the output array.
+* ``lhs``, ``rhs`` -- ``ast.Name`` for the operand arrays.
+* ``shape_table`` -- hoister's symbolic-dimension dict, passed through.
 
-* ``target`` -- ``ast.Name`` node for the output array.
-* ``lhs``, ``rhs`` -- ``ast.Name`` nodes referencing the operand arrays.
-* ``shape_table`` -- the lib_shape_table dict the hoister already
-  passes through; used for symbolic dimension lookups.
-
-Returns the list of loop nests + zero-initialization for the output.
-Raises :class:`NotImplementedError` for the unimplemented combinations
-so the hoister can fall through to the existing dense path or report
-an actionable error at emit time.
+Raises :class:`NotImplementedError` for unimplemented combinations so the
+hoister falls back to the dense path or reports an actionable error.
 """
 
 import ast
 from typing import Callable, Dict, List, Optional, Tuple
 
-# ---------------------------------------------------------------------------
-# Sparse-op result-layout rule (directive #3)
-# ---------------------------------------------------------------------------
-#: Result-layout sentinels.
+# Sparse-op result-layout rule (directive #3).
+#: Result-layout sentinel.
 DENSE = "dense"
 
-#: Per-target capability: can the framework produce a *sparse* result from a
-#: sparse-x-sparse op (SpGEMM into a sparse layout)? When False, such an op
-#: densifies. Keyed by target name.
+#: Per-target: can a sparse-x-sparse op (SpGEMM) produce a *sparse* result?
+#: False densifies. Keyed by target name.
 #:
-#: * The hand-loop imperative backends (C / Fortran) CAN emit a CSR-output
-#:   Gustavson SpGEMM, but the matmul hoister densifies sparse-x-sparse in the
-#:   canonical ``alpha * (A @ B) + beta * C`` accumulation context (the result
-#:   feeds a dense buffer), so for that lowering path the effective answer is
-#:   "dense". The CSR-output form is reached only by a dedicated pure-SpGEMM
-#:   path, not the hoister.
-#: * JAX has no sparse-x-sparse -> sparse: ``BCOO @ BCOO`` densifies. This is
-#:   exactly why ``spmm`` (CSR @ CSR at benchmark size) is a documented skip --
-#:   a *consequence of this rule*, not an ad-hoc refusal.
+#: * C/Fortran CAN emit CSR-output Gustavson SpGEMM, but the matmul hoister
+#:   always densifies sparse-x-sparse inside ``alpha*(A@B)+beta*C`` (feeds a
+#:   dense buffer) -- so here the answer is "dense". CSR-output is reached
+#:   only via a dedicated pure-SpGEMM path, not the hoister.
+#: * JAX has no sparse-x-sparse -> sparse (``BCOO @ BCOO`` densifies) -- why
+#:   ``spmm`` (CSR @ CSR) is a documented skip, not an ad-hoc refusal.
 FRAMEWORK_SPARSE_CAPS: Dict[str, bool] = {
     "c": False,
     "fortran": False,
@@ -55,25 +43,19 @@ FRAMEWORK_SPARSE_CAPS: Dict[str, bool] = {
 
 def result_layout(lhs_layout: Optional[str], rhs_layout: Optional[str],
                   target: str = "c") -> str:
-    """Layout of the result of ``lhs @ rhs`` given the operand layouts.
+    """Layout of ``lhs @ rhs``'s result given the operand layouts.
 
-    ``lhs_layout`` / ``rhs_layout`` is a sparse format name (``"csr"`` ...) or
-    ``None`` for a dense operand. Returns the sparse format of the result, or
-    :data:`DENSE`.
+    ``lhs_layout``/``rhs_layout``: sparse format name or ``None`` (dense).
+    Returns the result's sparse format, or :data:`DENSE`.
 
-    The rule (directive #3):
+    Rule (directive #3): ``sparse @ dense``/``dense @ sparse`` -> always
+    **dense** (matches scipy). ``sparse @ sparse`` -> lhs's layout iff the
+    target can produce a sparse result (:data:`FRAMEWORK_SPARSE_CAPS`), else
+    **dense**.
 
-    * ``sparse @ dense`` / ``dense @ sparse`` -> **dense**, always, every
-      framework (matches scipy: ``sparse @ dense -> dense``). The common case:
-      spmv, spmm-with-a-dense-operand.
-    * ``sparse @ sparse`` -> **same layout** (that of the lhs) iff the target
-      can produce a sparse result (:data:`FRAMEWORK_SPARSE_CAPS`); else
-      **dense**.
-
-    This is the single source for the layout algebra. Backends may still apply
-    a *context-specific* override -- e.g. the C/Fortran hoister always densifies
-    inside ``alpha*(A@B)+beta*C`` regardless of caps -- but the default any
-    backend (including JAX) should fall back to is what this returns.
+    Single source of truth for the layout algebra; backends may still apply a
+    context-specific override (e.g. C/Fortran always densifies inside
+    ``alpha*(A@B)+beta*C`` regardless of caps).
     """
     if lhs_layout is None or rhs_layout is None:
         return DENSE  # sparse x dense / dense x sparse -> dense, always
@@ -122,7 +104,6 @@ def _mul(a: ast.expr, b: ast.expr) -> ast.BinOp:
 
 
 def _zero_init_loop(target_id: str, iter_var: str, n_sym: str) -> ast.For:
-    """``for <iter_var> in range(<n_sym>): <target_id>[<iter_var>] = 0.0``."""
     return ast.For(
         target=_store(iter_var),
         iter=_range_call(None, _name(n_sym)),
@@ -131,11 +112,6 @@ def _zero_init_loop(target_id: str, iter_var: str, n_sym: str) -> ast.For:
             value=_const(0.0))],
         orelse=[])
 
-
-# ---------------------------------------------------------------------------
-# CSR x CSR -> Dense matrix  (spmm; result is dense because the
-# surrounding expression alpha*A@B + beta*C produces a dense C)
-# ---------------------------------------------------------------------------
 
 def expand_matmul_csr_csr_dense(
     target_id: str,                 # dense temp to fill, shape (NI, NJ)
@@ -157,12 +133,10 @@ def expand_matmul_csr_csr_dense(
                     k = B_indices[kk]
                     M[i, k] += v * B_data[kk]
 
-    This is the spmm form: scipy's ``alpha * A@B + beta * C`` returns a
-    DENSE result (sparse + dense -> dense), so the matmul temp is dense
-    ``(NI, NJ)`` and the surrounding ``alpha * M + beta * C`` lowers
-    through the existing dense elementwise path. Gustavson's row-by-row
-    accumulation but writing straight into the dense temp -- no symbolic
-    pass, no CSR output buffers.
+    spmm form: scipy's ``alpha*A@B + beta*C`` is dense (sparse+dense->dense),
+    so the temp is dense ``(NI, NJ)`` and the surrounding expression lowers
+    through the existing dense path. Gustavson row-by-row, writing straight
+    into the dense temp -- no symbolic pass, no CSR output buffers.
 
     Reference: Gustavson, ACM TOMS 4(3) 1978.
     """
@@ -220,10 +194,6 @@ def expand_matmul_csr_csr_dense(
     return [zero_loop, i_loop]
 
 
-# ---------------------------------------------------------------------------
-# CSR x Dense matrix -> Dense matrix  (sparse @ dense -> dense)
-# ---------------------------------------------------------------------------
-
 def expand_matmul_csr_dense_mat(
     target_id: str,                 # dense temp (NR, NC)
     lhs_buffers: Dict[str, str],    # A: indptr / indices / data  (NR x NK)
@@ -243,8 +213,8 @@ def expand_matmul_csr_dense_mat(
                 for c in range(NC):
                     M[i, c] += v * B[j, c]
 
-    Row-of-A times dense-B accumulation; one nonzero of A scales a whole
-    row of B into the result row. ``y`` zero-initialised first.
+    Row-of-A times dense-B: one nonzero of A scales a whole row of B into
+    the result row. Output zero-initialised first.
     """
     a_indptr = lhs_buffers["indptr"]
     a_indices = lhs_buffers["indices"]
@@ -288,10 +258,6 @@ def expand_matmul_csr_dense_mat(
     return [zero_loop, i_loop]
 
 
-# ---------------------------------------------------------------------------
-# CSR x Dense vector -> Dense vector  (canonical spmv)
-# ---------------------------------------------------------------------------
-
 def expand_matmul_csr_dense_vec(
     target: ast.Name,
     lhs_buffers: Dict[str, str],    # {"indptr": "A_indptr", "indices": "A_indices", "data": "A_data"}
@@ -305,9 +271,8 @@ def expand_matmul_csr_dense_vec(
             for k in range(A_indptr[i], A_indptr[i + 1]):
                 y[i] += A_data[k] * x[A_indices[k]]
 
-    Replaces today's fancy-gather hack which only worked because the
-    canonical spmv kernel happened to be written using `x[cols]`
-    indexing.
+    Replaces the old fancy-gather hack, which only worked because the
+    canonical spmv kernel happened to use ``x[cols]`` indexing.
     """
     yi = _subscript(target.id, _name("__i"), ctx=ast.Store())
     indptr = lhs_buffers["indptr"]
@@ -339,10 +304,6 @@ def expand_matmul_csr_dense_vec(
     return [outer]
 
 
-# ---------------------------------------------------------------------------
-# JDS x Dense vector -> Dense vector
-# ---------------------------------------------------------------------------
-
 def expand_matmul_jds_dense_vec(
     target: ast.Name,
     lhs_buffers: Dict[str, str],    # {"perm":..., "jd_ptr":..., "col_ind":..., "jdiag":...}
@@ -350,7 +311,7 @@ def expand_matmul_jds_dense_vec(
     n_rows_sym: str,
     n_jds_sym: str,                 # number of jagged diagonals
 ) -> List[ast.stmt]:
-    """``y = A @ x`` for JDS-A and dense-x -> dense-y, ~35 LOC of emit::
+    """``y = A @ x`` for JDS-A and dense-x -> dense-y::
 
         for i in range(NR):
             y_perm[i] = 0
@@ -362,10 +323,9 @@ def expand_matmul_jds_dense_vec(
         for i in range(NR):
             y[A_perm[i]] = y_perm[i]
 
-    JDS sorts rows by descending length, then stores the first nz of
-    each row (the "1st jagged diagonal"), then the second nz of each
-    row that has one, etc. The permutation array unscatters the
-    sorted-y back into original row order.
+    JDS sorts rows by descending length, then stores each row's first
+    nonzero (the "1st jagged diagonal"), then each row's second if it has
+    one, etc. The permutation unscatters sorted-y back to row order.
 
     Reference: Saad's SPARSKIT; `Netlib Templates
     <https://netlib.org/linalg/html_templates/node95.html>`_.
@@ -374,13 +334,11 @@ def expand_matmul_jds_dense_vec(
     jd_ptr = lhs_buffers["jd_ptr"]
     col_ind = lhs_buffers["col_ind"]
     jdiag = lhs_buffers["jdiag"]
-    # Scratch ``y_perm`` (sorted-order accumulator); the lift to a
-    # fresh local happens at the caller via the existing zeros_locals
-    # machinery in lowering.py. We emit the name here; the lift code
-    # is added by the dispatcher's caller.
+    # Scratch ``y_perm`` (sorted-order accumulator); caller lifts it to a
+    # fresh local via lowering.py's zeros_locals machinery.
     y_perm = "__jds_y_perm"
 
-    # Init: y_perm[i] = 0 for all i.
+    # y_perm[i] = 0 for all i.
     init_loop = ast.For(
         target=_store("__i"),
         iter=_range_call(None, _name(n_rows_sym)),
@@ -389,7 +347,6 @@ def expand_matmul_jds_dense_vec(
             value=_const(0.0))],
         orelse=[])
 
-    # Inner: accumulate over each jagged diagonal.
     # jd_len = A_jd_ptr[jd + 1] - A_jd_ptr[jd]
     jd_next = _subscript(jd_ptr,
                               ast.BinOp(left=_name("__jd"),
@@ -429,10 +386,6 @@ def expand_matmul_jds_dense_vec(
     return [init_loop, jd_loop, unscatter]
 
 
-# ---------------------------------------------------------------------------
-# SELL-C-σ x Dense vector -> Dense vector
-# ---------------------------------------------------------------------------
-
 def expand_matmul_sell_c_sigma_dense_vec(
     target: ast.Name,
     lhs_buffers: Dict[str, str],
@@ -441,7 +394,7 @@ def expand_matmul_sell_c_sigma_dense_vec(
     n_slices_sym: str,
     slice_height_sym: str,   # C parameter
 ) -> List[ast.stmt]:
-    """``y = A @ x`` for SELL-C-σ-A and dense-x -> dense-y, ~45 LOC::
+    """``y = A @ x`` for SELL-C-σ-A and dense-x -> dense-y::
 
         for s in range(nslices):
             sl_start = slice_ptr[s]
@@ -457,19 +410,13 @@ def expand_matmul_sell_c_sigma_dense_vec(
                         acc += val[e] * x[col_idx[e]]
                 y[perm[global_r]] = acc
 
-    SELL-C-σ stores each slice column-major so SIMD lanes (of width C)
-    can load contiguously. `row_len` lets the kernel skip padded zeros.
-    The `perm` unscatters the sorted-y back into original row order.
+    SELL-C-σ stores each slice column-major so SIMD lanes (width C) load
+    contiguously. ``row_len`` skips padded zeros; ``perm`` unscatters the
+    sorted-y back to original row order.
 
-    SELL-C-σ stores each slice column-major so SIMD lanes (of width C)
-    can load contiguously. ``row_len`` lets the kernel skip padded zeros.
-    The ``perm`` unscatters the sorted-y back into original row order.
-
-    Emitted form avoids ``break`` (not expressible in the per-element
-    C / Fortran emit) by guarding the trailing rows of the final slice
-    with ``if global_r < NR``. Slice width comes from the slice_ptr
-    delta divided by C (the slice height); the per-row ``row_len`` mask
-    skips this row's padding.
+    Emitted form avoids ``break`` (not expressible in the per-element C/
+    Fortran emit) by guarding trailing rows of the final slice with
+    ``if global_r < NR`` instead.
 
     Reference: Kreutzer et al. SIAM SISC 36(5) 2014; `arXiv:1307.6209
     <https://arxiv.org/abs/1307.6209>`_.
@@ -536,10 +483,6 @@ def expand_matmul_sell_c_sigma_dense_vec(
     return [slice_loop]
 
 
-# ---------------------------------------------------------------------------
-# CSC x Dense vector -> Dense vector  (column-major scatter-add spmv)
-# ---------------------------------------------------------------------------
-
 def expand_matmul_csc_dense_vec(
     target: ast.Name,
     lhs_buffers: Dict[str, str],    # {"indptr": ..., "indices": ..., "data": ...}
@@ -554,9 +497,9 @@ def expand_matmul_csc_dense_vec(
             for k in range(A_indptr[j], A_indptr[j + 1]):
                 y[A_indices[k]] += A_data[k] * x[j]
 
-    CSC stores by column; each column ``j`` contributes ``A[:, j] * x[j]``.
-    Scatter-add into ``y`` (data-dependent row index), so ``y`` needs a
-    zero-init pass first. Equivalent to a CSR-transpose spmv.
+    CSC stores by column: column ``j`` contributes ``A[:, j] * x[j]``, a
+    scatter-add into ``y`` (data-dependent row index) needing zero-init
+    first. Equivalent to a CSR-transpose spmv.
 
     Reference: `scipy.sparse.csc_matrix
     <https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.csc_matrix.html>`_.
@@ -584,10 +527,6 @@ def expand_matmul_csc_dense_vec(
     return [init_loop, col_loop]
 
 
-# ---------------------------------------------------------------------------
-# COO x Dense vector -> Dense vector  (single-pass scatter-add spmv)
-# ---------------------------------------------------------------------------
-
 def expand_matmul_coo_dense_vec(
     target: ast.Name,
     lhs_buffers: Dict[str, str],    # {"row": ..., "col": ..., "data": ...}
@@ -595,15 +534,15 @@ def expand_matmul_coo_dense_vec(
     n_rows_sym: str,
     nnz_sym: str,
 ) -> List[ast.stmt]:
-    """``y = A @ x`` for COO-A and dense-x -> dense-y, one nnz pass::
+    """``y = A @ x`` for COO-A and dense-x -> dense-y::
 
         for i in range(NR): y[i] = 0
         for k in range(nnz):
             y[A_row[k]] += A_data[k] * x[A_col[k]]
 
-    Flat list of ``(row, col, val)`` triples; each scatter-adds one
-    product into ``y[row]`` (so ``y`` needs zero-init). Order-independent;
-    duplicate coordinates accumulate (scipy summed-duplicates semantics).
+    Flat ``(row, col, val)`` triples; each scatter-adds one product into
+    ``y[row]`` (needs zero-init first). Order-independent; duplicate
+    coordinates accumulate (scipy summed-duplicates semantics).
 
     Reference: `scipy.sparse.coo_matrix
     <https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.coo_matrix.html>`_.
@@ -626,10 +565,6 @@ def expand_matmul_coo_dense_vec(
     return [init_loop, nnz_loop]
 
 
-# ---------------------------------------------------------------------------
-# DIA x Dense vector -> Dense vector  (diagonal-major spmv)
-# ---------------------------------------------------------------------------
-
 def expand_matmul_dia_dense_vec(
     target: ast.Name,
     lhs_buffers: Dict[str, str],    # {"data": ..., "offsets": ...}
@@ -648,11 +583,10 @@ def expand_matmul_dia_dense_vec(
                 if 0 <= j < NK:
                     y[i] += A_data[d, j] * x[j]
 
-    ``A_offsets[d]`` is the diagonal's offset from the main (scipy/LAPACK
-    convention: ``o > 0`` super-diagonal, ``o < 0`` sub-diagonal). scipy
-    keys the data column by the *destination* column ``j``, so the read
-    is ``A_data[d, j]`` (NOT ``A_data[d, i]``). The ``0 <= j < NK`` guard
-    masks off-matrix padding.
+    ``A_offsets[d]`` is the diagonal's offset from the main (scipy/LAPACK:
+    ``o > 0`` super-diagonal, ``o < 0`` sub-diagonal). scipy keys the data
+    column by the *destination* column ``j`` -- read is ``A_data[d, j]``,
+    NOT ``A_data[d, i]``. ``0 <= j < NK`` guards off-matrix padding.
 
     Reference: `scipy.sparse.dia_matrix
     <https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.dia_matrix.html>`_.
@@ -686,10 +620,6 @@ def expand_matmul_dia_dense_vec(
     return [init_loop, diag_loop]
 
 
-# ---------------------------------------------------------------------------
-# BCSR x Dense vector -> Dense vector  (block-CSR spmv)
-# ---------------------------------------------------------------------------
-
 def expand_matmul_bcsr_dense_vec(
     target: ast.Name,
     lhs_buffers: Dict[str, str],    # {"indptr": ..., "indices": ..., "data": ...}
@@ -709,14 +639,11 @@ def expand_matmul_bcsr_dense_vec(
                     for c in range(C):
                         y[bi*R + r] += A_data[k, r, c] * x[bj*C + c]
 
-    BCSR is CSR over a grid of dense ``R x C`` blocks; ``indptr`` /
-    ``indices`` index *block*-rows/columns, ``data`` is 3-D
-    ``[nnz_blocks, R, C]``. ``y`` (length ``NR = n_block_rows * R``, the
-    matrix's logical row count) is zero-initialized first. ``NR`` is passed
-    as its own symbol -- it equals ``nbrows * R`` for any valid BCSR, but
-    ``n_block_rows_sym`` may be a derived compound expression (``len(indptr)
-    - 1``) that cannot be safely multiplied, whereas the logical row count is
-    an atomic dimension symbol.
+    BCSR is CSR over a grid of dense ``R x C`` blocks: ``indptr``/``indices``
+    index *block* rows/columns, ``data`` is 3-D ``[nnz_blocks, R, C]``. ``y``
+    (length ``NR = n_block_rows * R``) is zero-initialized first. ``NR`` is
+    its own symbol rather than ``n_block_rows_sym * R`` because the latter
+    may be a compound expression (``len(indptr) - 1``) unsafe to multiply.
 
     Reference: `scipy.sparse.bsr_matrix
     <https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.bsr_matrix.html>`_.
@@ -760,10 +687,6 @@ def expand_matmul_bcsr_dense_vec(
     return [init_loop, brow_loop]
 
 
-# ---------------------------------------------------------------------------
-# BCOO x Dense vector -> Dense vector  (block-COO spmv)
-# ---------------------------------------------------------------------------
-
 def expand_matmul_bcoo_dense_vec(
     target: ast.Name,
     lhs_buffers: Dict[str, str],    # {"row": ..., "col": ..., "data": ...}
@@ -783,14 +706,13 @@ def expand_matmul_bcoo_dense_vec(
                 for c in range(C):
                     y[bi*R + r] += A_data[k, r, c] * x[bj*C + c]
 
-    BCOO is COO over a grid of dense ``R x C`` blocks: ``row`` / ``col``
-    hold the *block* coordinates of each stored block (one entry per
-    block), ``data`` is 3-D ``[n_blocks, R, C]``. One scatter-add pass
-    over the block list; ``y`` (length ``NR = n_block_rows * R``) is
-    zero-initialized first. Order-independent; duplicate block
-    coordinates accumulate (COO summed-duplicates semantics). The
-    block analogue of :func:`expand_matmul_coo_dense_vec`, sharing the
-    ``R x C`` block layout of :func:`expand_matmul_bcsr_dense_vec`.
+    BCOO is COO over a grid of dense ``R x C`` blocks: ``row``/``col`` hold
+    each stored block's *block* coordinates, ``data`` is 3-D ``[n_blocks, R,
+    C]``. One scatter-add pass; ``y`` (length ``NR = n_block_rows * R``) is
+    zero-initialized first. Order-independent; duplicates accumulate (COO
+    summed-duplicates semantics). Block analogue of
+    :func:`expand_matmul_coo_dense_vec`, sharing the block layout of
+    :func:`expand_matmul_bcsr_dense_vec`.
 
     Reference: block generalization of `scipy.sparse.coo_matrix
     <https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.coo_matrix.html>`_
@@ -828,10 +750,6 @@ def expand_matmul_bcoo_dense_vec(
     return [init_loop, k_loop]
 
 
-# ---------------------------------------------------------------------------
-# ELL x Dense vector -> Dense vector  (padded ELLPACK spmv)
-# ---------------------------------------------------------------------------
-
 def expand_matmul_ell_dense_vec(
     target: ast.Name,
     lhs_buffers: Dict[str, str],    # {"indices": ..., "data": ...}
@@ -848,10 +766,9 @@ def expand_matmul_ell_dense_vec(
                 if col >= 0:
                     y[i] += A_data[i, s] * x[col]
 
-    Both ``A_indices`` / ``A_data`` are rectangular ``[NR, maxnz]``;
-    padding slots carry sentinel column ``-1`` (data ``0``); the
-    ``col >= 0`` mask skips them. Per-row reduction, so ``y[i]`` resets
-    inside the outer loop.
+    ``A_indices``/``A_data`` are rectangular ``[NR, maxnz]``; padding slots
+    carry sentinel column ``-1`` (data ``0``), masked by ``col >= 0``.
+    Per-row reduction, so ``y[i]`` resets inside the outer loop.
 
     Reference: `cusparse ELL / ELLPACK
     <https://docs.nvidia.com/cuda/cusparse/index.html#ellpack-ell>`_.
@@ -886,10 +803,6 @@ def expand_matmul_ell_dense_vec(
     return [row_loop]
 
 
-# ---------------------------------------------------------------------------
-# CSR x CSR -> CSR  (Gustavson spmm, two-pass; LHS-format-wins -> CSR out)
-# ---------------------------------------------------------------------------
-
 def expand_matmul_csr_csr(
     target: ast.Name,
     lhs_buffers: Dict[str, str],    # A: indptr / indices / data
@@ -902,7 +815,7 @@ def expand_matmul_csr_csr(
 
     Gustavson's row-by-row SpGEMM, scipy's two-pass ``csr_matmul``.
 
-    PASS 1 (symbolic, fill ``C_indptr``)::
+    PASS 1 (symbolic, fills ``C_indptr``)::
 
         for i in range(NR):
             for k in range(NK): __mark[k] = -1
@@ -915,18 +828,17 @@ def expand_matmul_csr_csr(
                         __mark[k] = i; __nnz += 1
             C_indptr[i+1] = C_indptr[i] + __nnz
 
-    PASS 2 (numeric, fill ``C_indices`` / ``C_data``) uses a dense
-    accumulator ``__acc`` (size NK) and an intrusive linked-list in
-    ``__mark`` of the touched columns so output columns drain without a
+    PASS 2 (numeric, fills ``C_indices``/``C_data``) uses a dense
+    accumulator ``__acc`` (size NK) and an intrusive linked list in
+    ``__mark`` over the touched columns, so output columns drain without a
     per-row sort.
 
     LHS-format-wins: CSR @ CSR -> CSR. Worst-case output nnz is
-    ``sum_i sum_{j in A[i]} nnz(B[j])``; the caller sizes the
-    ``C_indices`` / ``C_data`` buffers to that bound. ``__csr_mark``
-    (int, NK) and ``__csr_acc`` (float, NK) are scratch the caller lifts
-    to fresh locals via the existing zeros_locals machinery. Output
-    columns come out unsorted within each row (linked-list pop order);
-    downstream code that needs sorted CSR must sort per row.
+    ``sum_i sum_{j in A[i]} nnz(B[j])``; the caller sizes ``C_indices``/
+    ``C_data`` to that bound. ``__csr_mark`` (int, NK) and ``__csr_acc``
+    (float, NK) are scratch the caller lifts to fresh locals via
+    zeros_locals. Output columns are unsorted within each row (linked-list
+    pop order) -- downstream code needing sorted CSR must sort per row.
 
     Reference: Gustavson, ACM TOMS 4(3) 1978; scipy ``csr_matmul``.
     """
@@ -942,7 +854,7 @@ def expand_matmul_csr_csr(
     mark = "__csr_mark"
     acc = "__csr_acc"
 
-    # ----- PASS 1 (symbolic) -----
+    # PASS 1 (symbolic).
     reset_mark = ast.For(
         target=_store("__k"),
         iter=_range_call(None, _name(n_cols_sym)),
@@ -989,7 +901,7 @@ def expand_matmul_csr_csr(
               p1_jj, set_indptr],
         orelse=[])
 
-    # ----- PASS 2 (numeric) -----
+    # PASS 2 (numeric).
     reset_both = ast.For(
         target=_store("__k"),
         iter=_range_call(None, _name(n_cols_sym)),
@@ -1077,12 +989,9 @@ def expand_matmul_csr_csr(
     return [init_indptr0, pass1, pass2]
 
 
-# ---------------------------------------------------------------------------
-# Dispatch table — hoister calls into here when one operand has a
-# non-dense layout. NotImplementedError signals the layout/op combo
-# isn't supported and the caller should emit a clear error at parse
-# time (before reaching the C/Fortran walker).
-# ---------------------------------------------------------------------------
+# Dispatch table: hoister calls in here when an operand has a non-dense
+# layout. NotImplementedError means the combo isn't supported -> the caller
+# reports a clear error at parse time, before reaching the C/Fortran walker.
 
 DispatchKey = Tuple[str, str, str]     # (lhs_format, rhs_format, op)
 

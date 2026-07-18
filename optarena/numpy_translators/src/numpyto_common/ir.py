@@ -1,13 +1,10 @@
 """In-memory representation: the Python AST + a layout side-table.
 
-The IR follows the same pattern as :mod:`affinepython.ir` -- the AST
-is the canonical form (round-trips via :func:`ast.unparse` for free),
-and three small dataclasses carry the layout / shape information the
-backends need to emit typed C signatures and resolve subscripts.
-
-The design is deliberately reusable: when ``NumpyToDaCe`` and friends
-land, this module hoists to ``numpyto_common.ir`` unchanged. Until
-then, NumpyToC consumes it locally.
+Follows :mod:`affinepython.ir`'s pattern: the AST is the canonical form
+(round-trips via :func:`ast.unparse`), and three small dataclasses carry
+the layout / shape info backends need for typed C signatures and
+subscript resolution. Reusable as-is once ``NumpyToDaCe`` lands; only
+NumpyToC consumes it for now.
 """
 
 import ast
@@ -16,9 +13,8 @@ from typing import Dict, List, Optional, Tuple
 
 from numpyto_common import dtypes
 
-#: Float / complex dtypes a precision sweep remaps; everything else
-#: (int / uint / bool) keeps its dtype so a mixed kernel's index arrays
-#: stay integer when the floating precision changes.
+#: Float/complex dtypes a precision sweep remaps; int/uint/bool keep
+#: their own dtype so index arrays in a mixed kernel stay integer.
 _FLOAT_DTYPES = frozenset({"float64", "float32", "float16", "float128", "double", "float8_e4m3", "float8_e5m2"})
 _COMPLEX_DTYPES = frozenset({"complex128", "complex64", "complex256"})
 _COMPLEX_FOR_FLOAT = {"float64": "complex128", "float32": "complex64",
@@ -26,11 +22,10 @@ _COMPLEX_FOR_FLOAT = {"float64": "complex128", "float32": "complex64",
 
 
 def _apply_precision(dtype: str, precision: Optional[str]) -> str:
-    """Selectively remap a single dtype to the target floating ``precision``.
+    """Remap one dtype to floating ``precision``; int/uint/bool pass through.
 
-    Float and complex dtypes become ``precision`` (and its complex
-    counterpart); int / uint / bool are left unchanged. A blanket remap
-    would turn an int32 index array into ``float`` (s4114's ``ip``).
+    A blanket remap would turn an int32 index array into ``float``
+    (s4114's ``ip``).
     """
     if not precision:
         return dtype
@@ -42,26 +37,21 @@ def _apply_precision(dtype: str, precision: Optional[str]) -> str:
 
 
 def apply_precision(kir: "KernelIR", precision: Optional[str]) -> "KernelIR":
-    """Set the kernel's floating precision ON THE IR, so every emitter
-    just reads ``arr.dtype`` -- no per-emit override. Remaps float/complex
-    array, scalar and local dtypes to ``precision`` (ints untouched) and
-    records :attr:`KernelIR.float_precision` so the emitter's default for a
-    temp not listed in ``local_dtypes`` (e.g. a matmul scratch) matches.
+    """Set the kernel's floating precision on the IR so every emitter just
+    reads ``arr.dtype`` instead of taking a per-emit override.
 
-    ``precision`` of ``None``/empty is a no-op (each dtype keeps its
-    declared value -- the natural fp64 path).
+    Remaps float/complex array, scalar and local dtypes to ``precision``
+    (ints untouched) and records :attr:`KernelIR.float_precision` as the
+    emitter's default for temps not in ``local_dtypes`` (e.g. matmul
+    scratch). ``None``/empty ``precision`` is a no-op (natural fp64 path).
 
-    The spelling is normalized to the canonical registry key first, so the
-    enum-style ``fp8_e4m3`` and the numpy-style ``float8_e4m3`` are ONE leg and
-    every downstream ``dtype.startswith("float")`` float test still fires.
+    Spelling is normalized to the canonical registry key first, so
+    ``fp8_e4m3`` and ``float8_e4m3`` are one leg and every
+    ``dtype.startswith("float")`` test still fires.
 
-    Recurses into :attr:`KernelIR.helpers`. Each helper is a full KernelIR with its
-    own dtype tables that the emitter writes as its own native function signature, so
-    narrowing only the caller leaves every callee declared at its stale fp64 and the
-    emitted call does not typecheck (``passed REAL(4) to REAL(8)``; ``expected 'const
-    double * restrict' but argument is of type 'const float *'``). Recursion, not a flat
-    loop: helpers can nest inside helpers, and each one needs its own float_precision so
-    the emitter's default for an unlisted temp matches inside the helper body too.
+    Recurses into :attr:`KernelIR.helpers`: each helper is its own KernelIR
+    with its own dtype tables, so narrowing only the caller would leave
+    callees at stale fp64 with emitted calls that don't typecheck.
     """
     if not precision:
         return kir
@@ -141,15 +131,11 @@ class SparseArrayDesc:
 class KernelIR:
     """The full kernel: function-def AST + parameter tables.
 
-    Field order matches the way every emitter walks the program --
-    backend code never needs to ask anything else about the source.
-
-    :ivar tree: the function-def's AST node (the body is what we
-        lower and emit).
+    :ivar tree: the function-def's AST node (the body is lowered/emitted).
     :ivar kernel_name: function-symbol the backends use (``"s111"``).
-    :ivar input_args: ordered parameter names exactly as
-        :data:`bench_info.input_args` lists them. The C signature is
-        emitted in this order so positional ctypes calls line up.
+    :ivar input_args: ordered parameter names, matching
+        :data:`bench_info.input_args`; the C signature emits in this
+        order so positional ctypes calls line up.
     :ivar symbols: per-name lookup for shape / iteration-count params.
     :ivar arrays: per-name lookup for array params.
     :ivar scalars: per-name lookup for non-shape, non-array scalars.
@@ -157,39 +143,33 @@ class KernelIR:
     """
     tree: ast.FunctionDef
     kernel_name: str
-    #: Stable short name used for file paths and symbol prefixes.
-    #: Equal to ``kernel_name`` for Foundation kernels (which all
-    #: have distinct ``func_name``) and to ``bench_info.short_name``
-    #: for legacy kernels (where every kernel has ``func_name = 'kernel'``
-    #: and the short name disambiguates).
+    #: Stable short name for file paths / symbol prefixes. Equals
+    #: ``kernel_name`` for Foundation kernels (each has a distinct
+    #: ``func_name``); for legacy kernels (``func_name`` is always
+    #: ``'kernel'``) it's ``bench_info.short_name`` instead.
     short_name: str = ""
     input_args: List[str] = field(default_factory=list)
     symbols: List[SymbolDesc] = field(default_factory=list)
     arrays: List[ArrayDesc] = field(default_factory=list)
     scalars: List[ScalarDesc] = field(default_factory=list)
     source_path: Optional[str] = None
-    #: Logical-name -> SparseArrayDesc for arrays carrying a sparse
-    #: layout (CSR / CSC / ...). Empty for dense kernels. Consumed by
-    #: the matmul hoister to route ``A @ B`` through the sparse path.
+    #: Logical name -> SparseArrayDesc for sparse-layout (CSR/CSC/...) arrays;
+    #: empty for dense kernels. Consumed by the matmul hoister to route
+    #: ``A @ B`` through the sparse path.
     sparse: Dict[str, "SparseArrayDesc"] = field(default_factory=dict)
-    #: One sub-:class:`KernelIR` per top-level helper that is CALLED in the kernel
-    #: body but could not be inlined (an early ``return`` / recursion). Built by
-    #: :func:`parse_kernel` (params inferred from the call site) and lowered by
-    #: :func:`lower`; every emitter emits each as its own native function, so the
-    #: early ``return`` is just a native ``return``.
+    #: One sub-:class:`KernelIR` per top-level helper called in the kernel body
+    #: that couldn't be inlined (early ``return`` / recursion). Built by
+    #: :func:`parse_kernel`, lowered by :func:`lower`; each emitter emits it as
+    #: its own native function, so the early return becomes a native return.
     helpers: List["KernelIR"] = field(default_factory=list)
-    #: When this KernelIR IS a helper: how its value comes back --
-    #: ``None`` for a void/in-place helper, ``"scalar"`` for a by-value return
-    #: (the return dtype is the sole :attr:`scalars` entry marked ``is_output``),
-    #: or the out-parameter array name for an array return.
+    #: When this KernelIR is a helper: how its value comes back --
+    #: ``None`` (void/in-place), ``"scalar"`` (by-value; dtype = the sole
+    #: :attr:`scalars` entry marked ``is_output``), or the out array name.
     return_kind: Optional[str] = None
-    # ------------------------------------------------------------------
-    # Lowering side-tables. Populated by :func:`numpyto_common.lowering.lower`
-    # (empty on a freshly-parsed IR) and consumed by every emitter. They live
-    # on the IR -- not monkey-patched onto ``tree.__dict__`` -- so a reader is a
-    # typed field access (``kir.local_dtypes``) with a sane empty default, never
-    # a ``getattr(kir.tree, ...)`` with a hand-repeated fallback.
-    # ------------------------------------------------------------------
+    # Lowering side-tables: populated by :func:`numpyto_common.lowering.lower`
+    # (empty on a fresh parse), consumed by every emitter. Live on the IR, not
+    # monkey-patched onto ``tree.__dict__``, so access is a typed field
+    # (``kir.local_dtypes``) with a sane default, never a hand-rolled getattr.
     #: Loop-index / tuple-unpack integer locals the emitter must declare ``int``.
     int_locals: List[str] = field(default_factory=list)
     #: Local-name -> numpy dtype tag for body locals (``"complex128"``, ``"int64"``,
@@ -214,17 +194,15 @@ class KernelIR:
     def param_order(self) -> List[str]:
         """Return the argument names in **ABI order**.
 
-        The ABI convention (one source of truth for the emitted C / Fortran
-        signature *and* the binding JSON the harness calls through): all
-        **references** (array / pointer params) sorted alphabetically, then
-        all **scalars** (everything passed by value -- the integer shape
-        ``symbols`` and the value ``scalars``) sorted alphabetically.
+        One source of truth for both the emitted C/Fortran signature and the
+        binding JSON the harness calls through: all **references** (array /
+        pointer params) sorted alphabetically, then all **scalars** (shape
+        ``symbols`` + value ``scalars``) sorted alphabetically.
 
-        This deliberately ignores ``input_args`` for *ordering* (it still
-        defines membership): the order is derived purely from each param's
-        ABI kind so it is stable and caller-independent. The caller side
-        (:meth:`Framework.call_args` for the C/C++ backends) reads the same
-        binding order, so the positional ctypes call always lines up.
+        Ignores ``input_args`` for ordering (it still defines membership), so
+        order depends only on each param's ABI kind -- stable and
+        caller-independent. :meth:`Framework.call_args` reads the same order,
+        keeping the positional ctypes call aligned.
         """
         refs = sorted(a.name for a in self.arrays)
         scalars = sorted([s.name for s in self.symbols] + [s.name for s in self.scalars])

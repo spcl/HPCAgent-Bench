@@ -144,9 +144,9 @@ data-dependent (mandelbrot2's compaction, gmres's break) can't be traced and
 **falls back to eager execution** — the `(aot)`/`(eager)` tag on each result
 line says which happened. `--no-aot` runs everything eagerly.
 
-One thing that would otherwise force the fallback is Python's `float()` builtin:
-the TSVC argmax kernels close with `result = maxv + float(index)`, and in the
-rolled body `index` is a *traced* carry — `float()` must return a host Python
+Python's `float()` builtin would otherwise force the fallback: the TSVC argmax
+kernels close with `result = maxv + float(index)`, and in the rolled body
+`index` is a *traced* carry — `float()` must return a host Python
 float, which a tracer can't provide, so the whole kernel would drop to eager.
 The emitter rewrites `float(x)` to a traceable `jnp.asarray(x, jnp.float64)`
 (safe because a float result only ever feeds arithmetic, never a `range`/shape
@@ -154,8 +154,8 @@ that needs a concrete int), so those kernels AOT-compile as `(aot-jit)`. `int()`
 is deliberately left alone — it *can* feed `range(int(x))`, which needs the
 concrete value.
 
-The flip side is the user's own warning: AOT-compiling a *huge* unrolled loop
-(seidel/adi-style `TSTEPS × N²`) can take a long time and a lot of memory. The
+The flip side: AOT-compiling a *huge* unrolled loop (seidel/adi-style
+`TSTEPS × N²`) can take a long time and a lot of memory. The
 rolled (`jit=True`) emission already lowers such loops to `lax.fori_loop` so
 they don't unroll; the eager-AOT *fallback* (taken only when the rolled
 emission is unavailable) is guarded against the blow-up two ways:
@@ -166,8 +166,7 @@ emission is unavailable) is guarded against the blow-up two ways:
   list of bound symbols (`TIMESTEP_SYMBOLS` = `TSTEPS`, `TSTEP`, `TMAX`,
   `NITER`, `NSTEPS`, … — matched case-insensitively as a substring of a
   loop-bound name; add a suite's own spelling there). Any kernel with such a
-  loop skips eager-AOT and runs eagerly. This is the size-independent signal,
-  reliable enough in practice.
+  loop skips eager-AOT and runs eagerly — the size-independent signal.
 * **Trip-count estimate** — `_unroll_estimate` resolves each `range()` bound
   against the concrete preset sizes (and array shapes) and multiplies the
   loop nest; a product over the budget (`UNROLL_LIMIT`, 20 k) likewise skips
@@ -176,7 +175,7 @@ emission is unavailable) is guarded against the blow-up two ways:
 
 ### Robust sweeps (memory- and time-bounded)
 
-So each bench runs in a **forked child watched by the parent**: the parent polls
+Each bench runs in a **forked child watched by the parent**: the parent polls
 the child's RSS and wall-clock and `SIGKILL`s it on breach, recording
 `[OOM ]`/`[SLOW]` and moving on — a runaway compile takes down only that child,
 never the sweep or the machine (via the kernel OOM-killer).

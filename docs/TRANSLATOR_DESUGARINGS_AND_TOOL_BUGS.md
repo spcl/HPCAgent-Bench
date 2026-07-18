@@ -125,9 +125,9 @@ backend. All **landed**.
 
 **Pluto verdict (root-caused live):** for every `::pluto` failure our emitted C is **bit-exact vs
 numpy** (`run_kernel(..., only_backends={'c'})` → `ok`). `polycc` accepts the affine scop (RC=0)
-then silently miscompiles. So *pluto is not failing because of our lowering.* Of 45 pairs: 3 are
-correct non-affine skips, ~8–12 are sidesteppable by an emit-shape change (§1c), and the rest are
-irreducible tool defects that now auto-classify as `skip:unsupported:pluto-miscompile` (c-ok guarded).
+then silently miscompiles. Of 45 pairs: 3 are correct non-affine skips, ~8–12 are sidesteppable by
+an emit-shape change (§1c), and the rest are irreducible tool defects that now auto-classify as
+`skip:unsupported:pluto-miscompile` (c-ok guarded).
 
 | Signature | Representative kernels | Root cause | Verdict | Disposition |
 |---|---|---|---|---|
@@ -155,7 +155,7 @@ an emit-shape fix (§1c) remain flagged there; landing one turns the skip back i
 
 ## 3. Gate semantics (strict-green) & the former LS3DF slice
 
-There is no xfail file. Each `(kernel, backend)` pair resolves to exactly one of:
+Each `(kernel, backend)` pair resolves to exactly one of:
 
 - **`ok`** — translated + bit-exact vs the kernel's numpy → passes.
 - **`skip:*`** — the backend/tool legitimately can't express this kernel → skipped, not counted

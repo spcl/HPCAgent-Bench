@@ -1,8 +1,8 @@
 # Contributing: add a benchmark, a container, or a language
 
-The detailed how-tos moved out of the root README. For contributor conventions
-(pip-first, no literal compiler flags, YAML house style, no hand-editing generated
-siblings) see the top-level [CONTRIBUTING.md](../CONTRIBUTING.md).
+For contributor conventions (pip-first, no literal compiler flags, YAML house
+style, no hand-editing generated siblings) see the top-level
+[CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## Add a benchmark
 

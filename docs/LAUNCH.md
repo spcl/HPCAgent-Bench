@@ -1,8 +1,8 @@
 # Launching OptArena on a cluster
 
-OptArena runs as **single-node containers** wired together by static, round-robin
-assignment — no container spans nodes, nothing does dynamic load balancing, and there is
-no MPI between containers. Three roles, all from the ONE universal OCI image
+OptArena runs as **single-node containers** wired by static, round-robin
+assignment — no container spans nodes, no dynamic load balancing, no MPI between
+containers. Three roles, all from the ONE universal OCI image
 (`containers/optarena.Dockerfile`):
 
 | Role | What runs in the container | How many |
@@ -46,9 +46,9 @@ the distributed static path automatically (`--pipeline auto`).
 A 4×GH200 node has ~384 GB HBM, so anything up to ~70 B dense (bf16) fits on one node;
 405 B / 671 B-class models do not. For those, an inference endpoint is a **ray cluster of
 single-node containers** exposing **one URL** — the ray head + workers each run in their own
-single-node container and connect over the network (no container spans nodes). The agents
-neither know nor care how many nodes back a URL; they just call the URL. Standing up that ray
-cluster is the job submission's concern.
+single-node container and connect over the network (no container spans nodes). Agents don't
+know or care how many nodes back a URL — they just call it. Standing up that ray cluster is
+the job submission's concern.
 
 ## Launch order
 
@@ -152,8 +152,8 @@ recipe below fills in the SIF build, the Slingshot fabric hook, and multi-endpoi
 ### Worked recipe
 
 **1. Build the arm64 SIF (on a build box, then copy it over).** Unprivileged image builds are
-unreliable on HPC (see the HPC notes in [docs/RUNTIME.md](RUNTIME.md)), so build the `.sif` where
-you control the box and hand it over. Build for `linux/arm64` on the CSCS public GPU base:
+unreliable on HPC (see the HPC notes in [docs/RUNTIME.md](RUNTIME.md)). Build for `linux/arm64`
+on the CSCS public GPU base:
 
 ```
 podman build --platform linux/arm64 --build-arg HW=nvidia \

@@ -355,8 +355,7 @@ for i in range(M):
 
 ## 5. What CNF Lets the Translator Delete
 
-With CNF guaranteed, these `lowering.py` mechanisms become unnecessary and can be
-retired:
+With CNF guaranteed, these `lowering.py` mechanisms can be retired:
 
 - **`_ssa_rename_reassigned`** (lowering.py:558) — invented fresh names for variables
   reassigned with a new shape. Invariant 1 means a name never changes shape, so there
@@ -414,7 +413,7 @@ A non-grandfathered kernel that violates these is rewritten before it lands (§7
 ## 7. Migration Policy
 
 - **Failing kernels are rewritten into CNF now.** A kernel that does not currently
-  lower is the one we fix, using the cookbook in §4.
+  lower gets fixed via the §4 cookbook.
 - **Passing kernels are grandfathered.** Kernels that already translate are left
   as-is and exempt from the validator for now; we do not churn working benchmarks.
   (Many of them — `gemm`, `jacobi_2d`, `atax`, `doitgen` — are already CNF or close to

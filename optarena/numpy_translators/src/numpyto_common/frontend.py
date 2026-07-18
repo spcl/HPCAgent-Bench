@@ -36,30 +36,27 @@ from numpyto_common.ir import ArrayDesc, KernelIR, ScalarDesc, SymbolDesc
 def native_desugar(fn: ast.FunctionDef) -> None:
     """Apply the native-backend AST desugars to ``fn`` in place.
 
-    These rewrites strip constructs the C/Fortran emitters cannot lower and
-    canonicalise the ones they can to a single form. Runs identically on the
-    kernel body (in :func:`parse_kernel`) and on every non-inlined helper (in
-    :func:`_build_helper_kirs`) -- a helper that survives inlining otherwise
-    keeps un-emittable ``np.newaxis`` / ufunc-``out=`` / roll-on-slice /
-    ``.real`` / ``.ndim``-guard forms the kernel body had already shed.
+    Strips constructs the C/Fortran emitters cannot lower and canonicalises
+    the rest to one form. Runs on the kernel body (:func:`parse_kernel`) and
+    on every non-inlined helper (:func:`_build_helper_kirs`), so a surviving
+    helper never keeps forms the kernel body already shed.
 
     * ``np.newaxis`` -> ``None``.
-    * ``np.multiply(a, b, out=c)`` and the other binary-ufunc ``out=`` forms ->
-      ``c = a <op> b`` (the native backends have no ufunc dispatch; minife axpby).
-    * ``X[..] = np.roll(X[..], shift, axis)`` on a sliced operand/target -> bare-name
-      temps so the native roll expander applies and a self-roll snapshots its input.
-    * Complex accessors to their function form so the native emitter has ONE
-      handler per op: ``z.real`` -> ``np.real(z)``, ``z.imag`` -> ``np.imag(z)``,
-      ``z.conjugate()`` / ``z.conj()`` -> ``np.conj(z)``.
-    * Drop input-validation guards (``if array.ndim != 1: raise ...``) whole, so
-      their unemittable ``.ndim`` / ``.flags`` conditions never reach an emitter.
-    * Fold static ``None is None`` / ``None is not None`` comparisons (an inlined
-      helper's unsupplied optional parameter defaults to None) and DCE the dead
-      IfExp / if branches, so a backend never meets a bare None literal at emit.
-    * Materialise ``np.array([<scalar exprs>])`` literals into a zeros local plus
-      element stores (the native emitters have no ``np.array`` constructor).
-    * Unwrap ``try: <body> except: <give-up>`` to ``<body>`` -- the static backends
-      have no exceptions and the handler is an error path that cannot fire.
+    * ufunc ``out=`` forms (``np.multiply(a, b, out=c)``) -> ``c = a <op> b``
+      (native backends have no ufunc dispatch).
+    * ``X[..] = np.roll(X[..], shift, axis)`` on a sliced operand/target ->
+      bare-name temps, so the roll expander applies and a self-roll snapshots
+      its input.
+    * ``z.real``/``z.imag``/``z.conjugate()``/``z.conj()`` -> ``np.real``/
+      ``np.imag``/``np.conj`` calls -- one handler per op.
+    * Drop input-validation guards whole (their ``.ndim``/``.flags`` checks
+      are unemittable).
+    * Fold static ``None is [not] None`` compares and DCE the dead branch --
+      an inlined helper's unsupplied optional arg defaults to ``None``.
+    * ``np.array([<scalar exprs>])`` -> zeros local + element stores (no
+      native ``np.array`` constructor).
+    * ``try: <body> except: <give-up>`` -> ``<body>`` (static backends have
+      no exceptions; the handler can't fire).
     """
     from numpyto_common.numpy_desugar import (_ComplexAccessorToFunc, _DecomposeRollSlice, _DropValidationGuards,
                                               _ElementalUfuncToPrimitive, _UfuncOutInline,
@@ -76,8 +73,8 @@ def native_desugar(fn: ast.FunctionDef) -> None:
 
 
 def _is_scalar_leaf(node: ast.expr) -> bool:
-    """True when ``node`` is a scalar-valued element expression -- the leaf form
-    :class:`_MaterializeArrayLiterals` can lower to a single element store."""
+    """True when ``node`` is a scalar leaf :class:`_MaterializeArrayLiterals`
+    can lower to a single element store."""
     if isinstance(node, ast.Constant):
         return isinstance(node.value, (int, float)) and not isinstance(node.value, bool)
     if isinstance(node, ast.UnaryOp):
@@ -87,13 +84,10 @@ def _is_scalar_leaf(node: ast.expr) -> bool:
     # ``int(round(fr * size))`` / ``float(x)`` -- a scalar-returning builtin cast.
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _SCALAR_CASTS:
         return all(_is_scalar_leaf(a) for a in node.args)
-    # A bare Name is ASSUMED scalar. It may in principle bind a whole row
-    # (``np.array([row0, row1])`` stacking two 1-D arrays), which this scalar-store
-    # lowering would mis-shape -- the frontend has no rank info this early. Accepted
-    # because ``np.array`` over expression elements reached NO emitter before this
-    # pass (it raised ``call to np.array not supported``), so the only kernels in
-    # scope are ones that already hard-failed, and a mis-shape surfaces as a numeric
-    # FAIL against the numpy oracle rather than as silent corruption.
+    # A bare Name is assumed scalar (it could bind a whole row -- stacked 1-D
+    # arrays -- and mis-shape here, but such kernels already hard-failed before
+    # this pass existed, so a mis-shape now surfaces as a numpy-oracle FAIL,
+    # not silent corruption).
     if isinstance(node, ast.Name):
         return True
     # ``pv[0]`` / ``a[i, j]`` -- an integer-indexed element is a scalar; a Slice is not.
@@ -104,8 +98,8 @@ def _is_scalar_leaf(node: ast.expr) -> bool:
     return False
 
 def _has_loop_control(body: List[ast.stmt]) -> bool:
-    """True when ``body`` carries a ``break``/``continue`` bound to ITS OWN loop --
-    i.e. not nested inside a further For/While (whose own loop would capture it)."""
+    """True when ``body`` has a ``break``/``continue`` bound to its own loop
+    (not one nested inside a further For/While, which would capture it)."""
 
     def _walk(stmts: List[ast.stmt]) -> bool:
         for s in stmts:
@@ -125,14 +119,14 @@ def _has_loop_control(body: List[ast.stmt]) -> bool:
     return _walk(body)
 
 class _NonFiniteNormalizer(ast.NodeTransformer):
-    """Canonicalise the alternate spellings of IEEE infinity / NaN to ``np.inf`` /
-    ``np.nan`` -- the single form every backend already lowers (native emitters map
-    it to ``INFINITY`` / ``NAN`` / ``ieee_value``; python backends keep it verbatim).
+    """Canonicalise IEEE infinity/NaN spellings to ``np.inf``/``np.nan``, the one
+    form every backend lowers (native maps it to ``INFINITY``/``NAN``/
+    ``ieee_value``; python backends keep it verbatim).
 
-    Covers ``math.inf`` / ``math.nan`` and ``float('inf')`` / ``float('-inf')`` /
-    ``float('nan')`` (any casing / ``'infinity'`` spelling). Without this, a bare
-    ``inf`` reaches the C / Fortran constant emitters (an invalid literal) or a
-    string cast trips the ``literal 'inf'`` guard on every backend.
+    Covers ``math.inf``/``math.nan`` and ``float('inf'|'-inf'|'nan')`` (any
+    casing, ``'infinity'`` spelling too). Without this a bare ``inf`` reaches
+    the C/Fortran constant emitters as an invalid literal, or a string cast
+    trips the ``literal 'inf'`` guard.
     """
 
     @staticmethod
@@ -172,14 +166,12 @@ def parse_kernel(numpy_py: pathlib.Path,
         deterministic path; the harness passes ``ResolvedBench.config_key``).
         Falls back to ``$OPTARENA_SPARSE_CONFIG`` / the canonical default
         when ``None``.
-    :param precision: the working float precision, for the source-level desugars whose
-        output embeds a precision-dependent NUMERICAL CONSTANT -- currently only
-        curve_fit's finite-difference step. Dtypes are NOT set here: those stay with
-        ``ir.apply_precision`` after lowering, which is why this is a narrow extra rather
-        than a second precision channel. ``None`` keeps every constant at its fp64 rule.
-    :raises ValueError: when the JSON is missing required fields or
-        the Python file does not expose a function whose name matches
-        ``bench_info.func_name``.
+    :param precision: working float precision, for source-level desugars whose
+        output embeds a precision-dependent constant (currently only
+        curve_fit's finite-difference step). Dtypes aren't set here -- that's
+        ``ir.apply_precision`` after lowering. ``None`` keeps constants at fp64.
+    :raises ValueError: when the JSON is missing required fields, or no
+        function in the Python file matches ``bench_info.func_name``.
     """
     info = _load_bench_info(bench_info)
     func_name = info["func_name"]
@@ -189,14 +181,11 @@ def parse_kernel(numpy_py: pathlib.Path,
     shapes_raw = info.get("init", {}).get("shapes", {})
     parameters = info.get("parameters", {})
     preset_symbols = _collect_symbols(parameters)
-    # Preset names whose value is a non-integer (e.g. a solver ``tol``
-    # of 1e-6) are float SCALARS, not integer sizing symbols. Without
-    # this split they'd be declared ``int`` and truncate to 0. Scan all
-    # presets + init.scalars for a float value per name.
+    # Preset names with a non-integer value (e.g. solver ``tol``=1e-6) are float
+    # SCALARS, not integer symbols -- else they'd declare ``int`` and truncate to 0.
     _float_preset_names = _collect_float_preset_names(parameters, info.get("init", {}).get("scalars", {}) or {})
-    # Preset names whose value is a boolean are runtime CONFIG FLAGS (typed bool),
-    # not integer size symbols -- so Fortran declares them ``logical`` and the
-    # ``if (flag)`` / ``.not. flag`` conditionals type-check.
+    # Preset names with a boolean value are CONFIG FLAGS, not integer symbols --
+    # so Fortran declares them ``logical`` and ``if (flag)``/``.not. flag`` type-check.
     _bool_preset_names = _collect_bool_preset_names(parameters)
 
     src = numpy_py.read_text()
@@ -213,35 +202,29 @@ def parse_kernel(numpy_py: pathlib.Path,
     _EighCallHoister(_eigh_aliases).visit(tree)
     ast.fix_missing_locations(tree)
     _EighLoopRewriter(_eigh_aliases).visit(tree)
-    # Canonicalise IEEE inf / nan spellings (``math.inf``, ``float('inf')`` ...) to
-    # ``np.inf`` / ``np.nan`` -- the one form every backend lowers -- across the
-    # whole module so kernel + helpers are covered for native AND python backends.
+    # Canonicalise inf/nan spellings module-wide (see _NonFiniteNormalizer) so
+    # both kernel and helpers are covered.
     _NonFiniteNormalizer().visit(tree)
     ast.fix_missing_locations(tree)
     fn = _find_function(tree, func_name)
     if fn is None:
         raise ValueError(f"{numpy_py}: no function named {func_name!r}")
-    # Inline any top-level helper defined ABOVE the kernel whose body
-    # is a single ``return expr`` -- substitute calls with the body
-    # expression (parameters renamed to the call's arguments). Lets
-    # NumpyToC handle e.g. nussinov's ``match(b1, b2)`` helper without
-    # emitting a C/Fortran function definition.
-    # bench_info.input_args is positional -- when the names there
-    # disagree with the kernel signature (e.g. mandelbrot lists
-    # ``XN`` / ``YN`` but the function is ``def mandelbrot(..., xn,
-    # yn, ...)``), the OptArena harness pairs by position. NumpyToC
-    # has to emit a C signature whose parameter names match the body,
-    # so align ``input_args`` to the kernel's actual parameter names
-    # and update ``array_args`` / ``output_args`` accordingly.
+    # Inline top-level helpers ABOVE the kernel whose body is a single
+    # ``return expr`` by substituting the call with that expression (params
+    # renamed to the call's args) -- lets NumpyToC handle e.g. nussinov's
+    # ``match(b1, b2)`` without emitting a C/Fortran function for it.
+    # bench_info.input_args is positional; when its names disagree with the
+    # kernel signature (mandelbrot lists ``XN``/``YN`` for ``xn``/``yn``),
+    # the harness still pairs by position, so align ``input_args`` to the
+    # kernel's real parameter names and update ``array_args``/``output_args``.
     fn_param_names = [a.arg for a in fn.args.args]
     if len(input_args) == len(fn_param_names) and input_args != fn_param_names:
         rename = dict(zip(input_args, fn_param_names))
         input_args = list(fn_param_names)
         array_args = [rename.get(a, a) for a in array_args]
         output_args = [rename.get(a, a) for a in output_args]
-        # ``parameters`` (the bench_info preset block) feeds into
-        # ``preset_symbols`` -- rename there too so the size symbols
-        # still resolve as integer params.
+        # ``parameters`` feeds ``preset_symbols`` -- rename here too so size
+        # symbols still resolve as integer params.
         new_parameters: Dict[str, Dict] = {}
         for preset, vals in parameters.items():
             new_parameters[preset] = {rename.get(k, k): v for k, v in vals.items()}
@@ -250,24 +233,20 @@ def parse_kernel(numpy_py: pathlib.Path,
         # init.shapes also keys on the original names.
         shapes_raw = {rename.get(k, k): v for k, v in shapes_raw.items()}
 
-    # Inline module-level numeric constants (``BET_M = 0.5`` in vadv) into
-    # the kernel body. Without this they read as free Names -> emitted as
-    # bogus kernel parameters the harness can't resolve. Only top-level
-    # ``NAME = <number>`` assignments that the kernel neither takes as a
-    # parameter nor reassigns locally are inlined.
+    # Inline module-level numeric constants (``BET_M = 0.5`` in vadv); left as
+    # free Names they'd emit as bogus kernel parameters the harness can't
+    # resolve. Only top-level ``NAME = <number>`` assigns the kernel neither
+    # takes as a parameter nor reassigns locally are inlined.
     _inline_module_constants(tree, fn, input_args)
-    # Fold kernel params that carry a DEFAULT and are not supplied via
-    # input_args into body constants. The harness calls the numpy kernel with
-    # only its input_args, so such params keep their defaults -- e.g. the sp_*
-    # solvers' ``max_iter=100`` / ``tol=np.float64(1e-6)`` are fixed values,
-    # not runtime parameters. Folding them avoids emitting bogus free scalar
-    # params (a float ``tol`` mis-synthesized as int would never trip the
-    # convergence break, leaving the solver to iterate past convergence -> nan).
+    # Fold kernel params that carry a DEFAULT and aren't in input_args into
+    # body constants -- the harness only passes input_args, so e.g. the sp_*
+    # solvers' ``max_iter=100``/``tol=1e-6`` stay fixed, not runtime params.
+    # Otherwise a float ``tol`` mis-synthesized as int would never trip the
+    # convergence break, so the solver iterates past convergence -> nan.
     _fold_default_args(fn, input_args)
-    # Drop the scipy-sparse dispatch branch -- the static backends are dense-
-    # only, so ``sp.issparse(x)`` is statically False and the guarded sparse
-    # path (banded_mmt's ``if sp.issparse(A) and sp.issparse(B): ...``) is dead
-    # code. Removing it leaves the dense packed-band path.
+    # Drop the scipy-sparse dispatch branch: static backends are dense-only,
+    # so ``sp.issparse(x)`` is statically False and the guarded path
+    # (banded_mmt's sparse branch) is dead code; this leaves the dense path.
     _PruneSparseDispatch().visit(fn)
     # Fold ``if <param> is None`` optional-default guards (params are always
     # supplied across the C ABI) -- drops the unlowerable ``None`` literal.
@@ -281,41 +260,39 @@ def parse_kernel(numpy_py: pathlib.Path,
     ast.fix_missing_locations(fn)
 
     # Rewrite ``popt, _ = curve_fit(model, x, y, p0=guess)`` to a naive
-    # Levenberg-Marquardt loop nest (and the Python list preludes that build its
-    # p0 vector to arrays). Like the eigh rewriter above this runs BEFORE helper
-    # inlining, so the model ``def`` is still a distinct function whose varargs
-    # can be rebound to the parameter ARRAY curve_fit conceptually passes it; the
-    # LM's calls to the model are then inlined by the ordinary fixpoint below.
+    # Levenberg-Marquardt loop nest (plus the list preludes that build p0 into
+    # arrays). Runs BEFORE helper inlining, like the eigh rewriter above, so
+    # the model ``def`` is still distinct and its varargs can rebind to the
+    # array curve_fit conceptually passes; the fixpoint below then inlines
+    # the LM's calls to the model.
     from numpyto_common.numpy_desugar import rewrite_curve_fit
     rewrite_curve_fit(tree, fn, precision)
 
-    # Strip the give-up paths of every top-level HELPER -- an exception handler that
-    # only bails (``except np.linalg.LinAlgError: return None``) and the
-    # ``if <diverged>: return None`` failure sentinels. Runs BEFORE the inline
-    # fixpoint below, not with the rest of native_desugar (which runs after it):
-    # those early returns are exactly what disqualifies a routine from Form-3
-    # (single-tail-return) inlining, and a helper that returns a TUPLE -- as
-    # distribution_search's ``solve_three_levels`` returns ``(kl_f, kl_b, pv)`` --
-    # has no emittable ABI unless it is inlined into its caller.
+    # Strip every top-level helper's give-up paths: bail-only exception
+    # handlers (``except np.linalg.LinAlgError: return None``) and
+    # ``if <diverged>: return None`` sentinels. Runs BEFORE the inline
+    # fixpoint, not with native_desugar (which runs after): these early
+    # returns disqualify Form-3 (single-tail-return) inlining, and a
+    # tuple-returning helper (distribution_search's ``solve_three_levels``)
+    # has no emittable ABI unless inlined into its caller.
 
 
-    # Flatten helpers NESTED inside other top-level helpers first (lulesh's
-    # per-helper ``def c(a, i): return a[:, i]`` column shorthand). A helper that
-    # contains a nested def is rejected by _collect_inlinable_helpers (a
-    # FunctionDef is not an allowed mid statement) and would never inline -- a
-    # deadlock, since its nested def is only "exposed" by inlining the parent.
+    # Flatten helpers NESTED inside other helpers first (lulesh's per-helper
+    # ``def c(a, i): return a[:, i]`` shorthand): a helper containing a nested
+    # def is rejected by _collect_inlinable_helpers (FunctionDef isn't an
+    # allowed mid statement) and would never inline -- its nested def is only
+    # exposed by inlining the parent, a deadlock otherwise.
     _flatten_nested_helpers(tree)
-    # Inline helper calls to a FIXPOINT: a single pass only inlines the
-    # outermost level (NodeTransformer does not re-visit freshly spliced-in
-    # bodies), so a helper that itself calls helpers -- lulesh's
-    # ``_lagrange_nodal`` -> ``_calc_force_for_nodes`` -> ``_integrate_stress``
-    # -> ``_calc_shape_fn_derivatives`` chain -- needs repeated passes. Each
-    # round re-collects (so a helper-local ``def c`` exposed by inlining its
-    # parent becomes collectable) and re-inlines module constants (their
-    # references now living in the spliced-in helper bodies).
-    # Counters shared across all fixpoint iterations so the ``__inl<N>_`` /
-    # ``__hcall<N>`` prefixes stay globally unique (a per-iteration reset would
-    # let a nested helper inlined later collide with an outer one inlined earlier).
+    # Inline helper calls to a FIXPOINT: one pass only inlines the outermost
+    # level (NodeTransformer doesn't re-visit spliced-in bodies), so a chain of
+    # helpers calling helpers (lulesh's ``_lagrange_nodal`` -> ``_calc_force_
+    # for_nodes`` -> ... -> ``_calc_shape_fn_derivatives``) needs repeated
+    # passes. Each round re-collects (exposing a helper-local ``def`` freed by
+    # inlining its parent) and re-inlines module constants now living in
+    # spliced-in bodies.
+    # Counters are shared across iterations so ``__inl<N>_``/``__hcall<N>``
+    # prefixes stay globally unique -- a per-iteration reset could collide a
+    # later-inlined nested helper with an earlier outer one.
     inl_counter: List[int] = [0]
     hcall_counter: List[int] = [0]
     for _ in range(64):
@@ -323,14 +300,13 @@ def parse_kernel(numpy_py: pathlib.Path,
         if not helpers:
             break
         names = set(helpers)
-        # Hoist Form-3 (multi-statement-with-Return) helper calls that appear
-        # nested inside expressions to standalone Assigns first.
-        # ``relu(conv2d(input, w) + b)`` becomes
-        # ``__hcall0 = conv2d(input, w); relu(__hcall0 + b)``; the _InlineHelpers
-        # pass then inlines the hoisted call via its visit_Assign path.
+        # Hoist Form-3 (multi-statement-return) helper calls nested inside
+        # expressions to standalone Assigns first (``relu(conv2d(input, w) + b)``
+        # -> ``__hcall0 = conv2d(input, w); relu(__hcall0 + b)``), so
+        # _InlineHelpers can inline via its visit_Assign path.
         # Unroll ``for x in [<const tuples>]: body`` (lulesh face-node loops)
-        # BEFORE inlining so the per-iteration void-helper calls (``_sum_face_normal
-        # (.., *f)``) become concrete statements the inliner can splice.
+        # BEFORE inlining, so per-iteration void-helper calls become concrete
+        # statements the inliner can splice.
         _unroll_const_list_loops(fn)
         _HoistMultiStmtHelpers(helpers, hcall_counter).visit(fn)
         _InlineHelpers(helpers, inl_counter).visit(fn)
@@ -346,25 +322,23 @@ def parse_kernel(numpy_py: pathlib.Path,
     _unroll_const_list_loops(fn)
     ast.fix_missing_locations(fn)
     # Re-fold ``local = param`` aliases EXPOSED BY INLINING. fv3_dycore's
-    # copy_corners(field) is ``f = field; f[corner] = f[...]`` -- an in-place
-    # corner fill THROUGH the alias. Inlining turns it into ``__inlN_f = q;
-    # __inlN_f[corner] = ...``; the first alias pass (which ran BEFORE inlining)
-    # never saw it, so the backend copies q into a fresh __inlN_f buffer and the
-    # corner writes are lost (q's halo stays stale -> the PPM stencils read garbage
-    # -> wrong fluxes). Re-running here folds __inlN_f -> q so the writes land on q.
+    # copy_corners(field) (``f = field; f[corner] = f[...]``) becomes ``__inlN_f
+    # = q; __inlN_f[corner] = ...`` after inlining; the earlier alias pass never
+    # saw it, so a backend would copy q into a fresh buffer and lose the corner
+    # writes (stale halo -> PPM reads garbage -> wrong fluxes). Re-running here
+    # folds __inlN_f -> q so writes land on q.
     _alias_sub_post = _SubstituteParamAliases(input_args)
     _alias_sub_post.collect(fn)
     _alias_sub_post.visit(fn)
     ast.fix_missing_locations(fn)
-    # Re-fold ``if <param> is None`` guards EXPOSED BY INLINING -- same reason the alias pass
-    # above re-runs. A helper carrying its own optional-default guard (lavamd's
-    # ``lavamd_kernel(.., fv=None)`` with ``if fv is None: fv = np.zeros(..)``) is spliced in
-    # after the first fold already passed, leaving an ``is None`` compare and a ``None`` literal
-    # no backend can lower (the Fortran emitter has no ast.Is at all). The parameter is always
-    # supplied across the ABI, so the guard is dead. Runs AFTER the alias substitution, not
-    # before: inlining renames the helper's param to ``__inlN_fv``, and only the alias fold maps
-    # it back onto the real parameter -- fold any earlier and the guard is still under its
-    # inlined alias and would not be recognised as a parameter.
+    # Re-fold ``if <param> is None`` guards EXPOSED BY INLINING (same reason as
+    # the alias re-fold above). A helper's own optional-default guard (lavamd's
+    # ``lavamd_kernel(.., fv=None)`` -> ``if fv is None: fv = np.zeros(..)``) is
+    # spliced in after the first fold already ran, leaving an unlowerable
+    # ``None``/``is`` compare (params are always supplied across the ABI, so
+    # it's dead). Must run AFTER the alias substitution: inlining renames the
+    # param to ``__inlN_fv``, and only the alias fold maps that back onto the
+    # real parameter for this pass to recognise it.
     _FoldParamNoneGuard(input_args).visit(fn)
     ast.fix_missing_locations(fn)
     # Materialise module-level constant ARRAYS (lookup tables -- lulesh's
@@ -387,18 +361,14 @@ def parse_kernel(numpy_py: pathlib.Path,
     _fold_tuples.visit(fn)
     ast.fix_missing_locations(fn)
 
-    # Kernels may declare their outputs through a final ``return X``
-    # or ``return X, Y`` statement instead of via in-place writes to
-    # input arrays (the mandelbrot / numpy-book style). Extract the
-    # returned Name list, derive each one's shape + dtype, and only
-    # promote to output arrays when every returned Name has a
-    # derivable shape -- otherwise the kernel would gain a bogus
-    # parameter (the older slice-LHS-without-allocation pattern, e.g.
-    # deriche's ``imgOut[:] = ...; return imgOut``, has its outputs
-    # declared via bench_info instead and must not be promoted here).
-    # Input-array shape expressions, so a returned ``Q = np.zeros_like(A)``
-    # (A is a parameter, not a prior local) can mirror A's shape. Computed
-    # here once and reused for the dense-array pass below.
+    # Kernels may declare outputs via a final ``return X``/``return X, Y``
+    # instead of in-place writes (mandelbrot / numpy-book style). Promote a
+    # returned Name to an output array only when its shape is derivable --
+    # otherwise the kernel would gain a bogus parameter (deriche's older
+    # ``imgOut[:] = ...; return imgOut`` already declares its output via
+    # bench_info and must not be promoted here).
+    # Seed shapes from input arrays, so ``Q = np.zeros_like(A)`` (A a
+    # parameter) mirrors A's shape; computed once, reused below.
     legacy_shapes = _shapes_from_initialize(numpy_py, info)
     _input_array_shapes: Dict[str, str] = {}
     for _a in array_args:
@@ -427,17 +397,17 @@ def parse_kernel(numpy_py: pathlib.Path,
             _strip_trailing_return(fn)
             ast.fix_missing_locations(fn)
         elif not returned_shapes and not output_args:
-            # SCALAR-only return (no array shape derivable) AND no other output --
-            # the value would be silently dropped. Promote each scalar return to a
-            # 1-element float output buffer (grid_search's binary-search index).
+            # SCALAR-only return with no other output would be silently dropped --
+            # promote each to a 1-element float output buffer (grid_search's
+            # binary-search index).
             for out in _promote_scalar_returns(fn, returned_outputs):
                 input_args.append(out)
                 array_args.append(out)
                 output_args.append(out)
-                # Route the shape through ``shapes_raw`` (the bench-info output path,
-                # which runs ``_parse_shape_expression``) rather than ``returned_shapes``
-                # so the 1-element buffer parses to the ``('1',)`` dim tuple the
-                # multidim subscript lowering expects (a raw ``"(1,)"`` mis-tokenizes).
+                # Route through ``shapes_raw`` (runs ``_parse_shape_expression``),
+                # not ``returned_shapes``, so this parses to the ``('1',)`` dim
+                # tuple the multidim subscript lowering expects (raw ``"(1,)"``
+                # mis-tokenizes).
                 shapes_raw[out] = "(1,)"
             ast.fix_missing_locations(fn)
         else:
@@ -514,26 +484,21 @@ def parse_kernel(numpy_py: pathlib.Path,
             # Fortran ``logical(c_bool)``), NOT an integer dimension.
             scalars.append(ScalarDesc(name=arg, dtype="bool", is_output=arg in output_args))
         else:
-            # Plain scalar input (e.g. ``alpha`` in gemm). Type comes
-            # from the JSON's ``init.scalars`` block when present --
-            # integer defaults imply an integer C parameter, float
-            # defaults imply double. Otherwise fall back to double.
+            # Plain scalar input (e.g. ``alpha`` in gemm): dtype comes from
+            # ``init.scalars`` when present (int default -> int param, float
+            # default -> double); otherwise falls back to double.
             inferred_dt = _infer_scalar_dtype(scalar_defaults.get(arg))
-            # Promote to int when the kernel uses the scalar in an
-            # integer-only context (``range(arg)`` / array subscript /
-            # constructor or reshape shape -> array dimension). Mirrors
-            # the implicit-local ``needs_int`` detection in the C emit.
-            # Lets nbody's ``Nt`` and lenet's ``C_before_fc1`` declare as
-            # ``int`` even though bench_info doesn't pin their dtype. Use
-            # plain ``int`` (not ``int64``) so the kind matches the shape
-            # symbols (``N``/``M`` -> ``int``) and the loop iterators --
-            # Fortran's ``-std=f2018`` rejects mixed-kind integer
-            # arithmetic such as ``int32_iter * int64_scalar``.
-            # An array DIMENSION symbol is always integral, even when the kernel
-            # body never references it (vexx's ``npw`` is only ``psi``/``nl``'s
-            # leading extent). Without this it defaults to a real scalar and the
-            # Fortran emit declares it ``real(c_double)`` while the array decl
-            # forces ``integer`` -- a basic-type clash.
+            # Promote to int when the kernel uses the scalar in an integer-only
+            # context (``range(arg)`` / subscript / shape -- mirrors the C emit's
+            # ``needs_int`` check), so e.g. nbody's ``Nt`` and lenet's
+            # ``C_before_fc1`` declare ``int`` despite bench_info not pinning
+            # their dtype. Plain ``int``, not ``int64``: must match the shape
+            # symbols' kind, since Fortran's ``-std=f2018`` rejects mixed-kind
+            # integer arithmetic (``int32_iter * int64_scalar``).
+            # An array DIMENSION symbol is always integral even if the kernel
+            # body never references it (vexx's ``npw`` only sizes ``psi``/``nl``):
+            # otherwise it defaults to real and clashes with the array decl's
+            # ``integer``.
             is_array_dim = any(re.search(rf"\b{re.escape(arg)}\b", str(tok)) for a in arrays for tok in a.shape)
             if inferred_dt in {"float64", "double", "float32"} \
                     and (arg in _names_used_as_int(fn) or is_array_dim):
@@ -647,12 +612,11 @@ def _fold_default_args(fn: ast.FunctionDef, input_args: List[str]) -> None:
     ast.fix_missing_locations(fn)
 
 
-#: Standard physical-buffer layout per sparse format, mirroring the explicit
-#: ``sparse_layouts`` blocks of the new-model kernels (see spmv.yaml). Shapes
-#: are symbolic: ``D`` is the (square) matrix dimension and ``nnz`` its nonzero
-#: count; the derived counts (``ND`` diagonals, ``NBR``/``nnz_blk``/``R``/``C``
-#: blocking, ``MAXNZ``/``NBLK``) are bare identifiers the harness resolves from
-#: the materialized buffers' actual shapes -- exactly as for declared layouts.
+#: Standard physical-buffer layout per sparse format, mirroring the
+#: ``sparse_layouts`` blocks of the new-model kernels (see spmv.yaml). ``D`` is
+#: the (square) matrix dimension, ``nnz`` its nonzero count; the derived counts
+#: (``ND``, ``NBR``/``nnz_blk``/``R``/``C``, ``MAXNZ``/``NBLK``) are bare
+#: identifiers the harness resolves from the buffers' actual shapes.
 def _standard_sparse_buffers(matrix: str, fmt: str, dim: str, nnz: str):
     intk, fltk = "int64", "float64"
 
@@ -738,12 +702,11 @@ def _legacy_chosen_formats(info: Dict, config: Optional[str]) -> Dict[str, str]:
     ``--config`` (a variant name like ``csr_uniform``) to its declared
     ``format``, defaulting to the FIRST declared variant when unspecified.
 
-    The first variant is the kernel's canonical default -- the one its body is
-    written for. For the Krylov solvers that is ``csr_uniform`` (their ``A @ x``
-    routes through the sparse-matvec dispatch); for banded_mmt it is
-    ``packed_banded`` (a DENSE packed-band storage the body unpacks inline, NOT
-    a sparse format), so A must stay a dense 2-D array rather than being CSR-
-    expanded into buffers the body never references."""
+    The first variant is the kernel's canonical default. For the Krylov
+    solvers that's ``csr_uniform`` (``A @ x`` routes through the sparse-matvec
+    dispatch); for banded_mmt it's ``packed_banded`` (DENSE packed-band
+    storage the body unpacks inline, NOT sparse), so A must stay a dense 2-D
+    array rather than being CSR-expanded into buffers the body never uses."""
     variants = info.get("variants") or {}
     matrix = _legacy_sparse_matrix_name(info)
     if matrix is None:
@@ -1185,18 +1148,16 @@ class _FoldParamNoneGuard(ast.NodeTransformer):
 class _SubstituteParamAliases(ast.NodeTransformer):
     """Replace whole-array ``local = <param>`` aliases with the parameter.
 
-    numpy ``vt = p_diag_vt`` makes ``vt`` ANOTHER NAME for the same buffer, so a
-    later ``vt[:, jk, :] = ...`` writes THROUGH to the output parameter. A
-    backend that instead copies ``p_diag_vt`` into a fresh ``vt`` buffer loses
-    those writes (the output stays at its input values) -- and even a read-only
-    alias wastes a full copy. Substituting every use of the alias with the
-    parameter (and dropping the ``local = param`` statement) preserves the
-    shared-buffer semantics on every backend. ICON velocity_tendencies aliases
-    ~40 parameters this way (``vn = p_prog_vn``, ``vt = p_diag_vt`` ...).
+    numpy ``vt = p_diag_vt`` makes ``vt`` another name for the same buffer, so
+    a later ``vt[:, jk, :] = ...`` writes through to the output parameter. A
+    backend that instead copies ``p_diag_vt`` into a fresh ``vt`` loses those
+    writes, and even a read-only alias wastes a full copy. Substituting every
+    use of the alias with the parameter preserves shared-buffer semantics on
+    every backend. ICON velocity_tendencies aliases ~40 parameters this way.
 
-    Conservative: only fires when the RHS is a parameter, the LHS is not itself
-    a parameter, and the LHS is bound exactly once (never rebound to a different
-    value -- a genuine reassignment would make the substitution unsound)."""
+    Conservative: only fires when the RHS is a parameter, the LHS isn't itself
+    a parameter, and the LHS is bound exactly once (a genuine reassignment
+    would make the substitution unsound)."""
 
     def __init__(self, params) -> None:
         self.params = set(params)
@@ -1249,20 +1210,18 @@ class _NewaxisToNone(ast.NodeTransformer):
 
 
 class _FoldStaticNoneBranches(ast.NodeTransformer):
-    """Constant-fold ``None is None`` / ``None is not None`` and eliminate the
-    now-dead ``IfExp`` / ``if`` branches.
+    """Constant-fold ``None is [not] None`` and eliminate the now-dead
+    ``IfExp``/``if`` branches.
 
-    When a helper with an OPTIONAL parameter (``def f(a, mask=None): ... if mask
-    is not None: ...``) is inlined at a call site that omits the argument, the
-    parameter is substituted with the literal ``None`` -- leaving
-    ``if None is not None:`` and ``x if None is None else None`` in the body
-    (fv3_dycore's FiniteVolumeTransport). These are statically decidable dead
-    code; without folding them a backend meets a bare ``None`` literal at emit.
+    Inlining a helper with an OPTIONAL parameter (``def f(a, mask=None): ...
+    if mask is not None: ...``) at a call site that omits the argument
+    substitutes the literal ``None`` for it, leaving statically-dead compares
+    like ``if None is not None:`` (fv3_dycore's FiniteVolumeTransport) that a
+    backend can't emit.
 
-    Only the both-operands-static-``None`` shape is folded -- a genuine runtime
-    ``mask is None`` (the arg WAS passed) keeps one non-None operand and is left
-    untouched. ``None`` used as a subscript index (``np.newaxis``) is never an
-    ``is`` operand, so axis insertion is unaffected.
+    Only the both-operands-static-``None`` shape is folded -- a genuine
+    runtime ``mask is None`` (the arg WAS passed) is left untouched. ``None``
+    as a subscript index (``np.newaxis``) is never an ``is`` operand.
     """
 
     @staticmethod
@@ -1366,24 +1325,20 @@ def _resolve_call_args(call: ast.Call, helper: ast.FunctionDef) -> Optional[List
 
 
 def _synthesize_return_temps(fn: ast.FunctionDef):
-    """Rewrite a trailing ``return <expr>`` into ``ret_arr0 = <expr>;
-    return ret_arr0`` so a computed (non-Name) return can flow through
-    the same output-promotion path as ``return X``.
+    """Rewrite a trailing ``return <expr>`` into ``ret_arr0 = <expr>; return
+    ret_arr0`` so a computed (non-Name) return flows through the same
+    output-promotion path as ``return X``.
 
-    The temp name has NO leading underscore on purpose: it becomes a public
-    output PARAMETER (it appears in the binding JSON and every emitted
-    signature), and a leading ``__`` is both a reserved identifier in C/C++
-    and illegal in Fortran -- forcing a per-backend rename that can desync the
-    positional ABI from the binding. ``ret_arr<i>`` is a valid, collision-
-    resistant identifier in every target, so no backend has to rename it.
+    No leading underscore on the temp name on purpose: it becomes a public
+    output PARAMETER, and a leading ``__`` is a reserved/illegal identifier in
+    C/C++/Fortran -- forcing a per-backend rename that could desync the
+    positional ABI from the binding.
 
-    ``return (A @ x) @ A`` -> ``ret_arr0 = (A @ x) @ A; return ret_arr0``;
-    ``return histw / histu`` -> ``ret_arr0 = histw / histu; ...``;
-    ``return r @ A, A @ p`` -> two temps. Name elements are left alone
-    (``return Q, R`` is unchanged). Returns ``(names, revert)`` where
-    ``revert()`` restores the original body -- the caller calls it when
-    a synthesised temp's shape can't be derived, so a kernel that can't
-    be promoted is left exactly as it was (no orphan assignment).
+    ``return (A @ x) @ A`` -> ``ret_arr0 = (A @ x) @ A; return ret_arr0``; a
+    tuple return gets one temp per non-Name element (``return Q, R`` is
+    unchanged). Returns ``(names, revert)``: ``revert()`` restores the
+    original body when a synthesised temp's shape can't be derived, so an
+    un-promotable kernel is left exactly as it was.
     """
     noop = (lambda: None)
     if not fn.body or not isinstance(fn.body[-1], ast.Return):
@@ -1426,16 +1381,15 @@ def _strip_trailing_return(fn: ast.FunctionDef) -> None:
 
 
 def _promote_scalar_returns(fn: ast.FunctionDef, names: List[str]) -> List[str]:
-    """Rewrite a trailing ``return x[, y]`` of SCALAR values into 1-element output
-    buffer writes ``optarena_ret<i>[0] = x`` and drop the return.
+    """Rewrite a trailing ``return x[, y]`` of SCALAR values into 1-element
+    output buffer writes ``optarena_ret<i>[0] = x`` and drop the return.
 
-    A kernel whose only result is a scalar (xsbench ``grid_search`` returns the
-    binary-search index) has no array to promote, so without this the value is
-    silently dropped -- the emitter turns a bare ``return`` in a void kernel into
-    a no-op and the computed answer is lost. The buffer is declared at the run
-    float width (the framework compares every output as float64, and an index /
-    step-count is exact in a double), so no per-return dtype inference is needed.
-    Returns the synthesised output names."""
+    A kernel whose only result is a scalar (xsbench ``grid_search`` returns a
+    binary-search index) has no array to promote, so without this the value
+    is silently dropped (a bare ``return`` in a void kernel becomes a no-op).
+    The buffer is declared at float64 (the framework compares every output as
+    float64, and an index/step-count is exact in a double), so no per-return
+    dtype inference is needed. Returns the synthesised output names."""
     if not fn.body or not isinstance(fn.body[-1], ast.Return):
         return []
     writes: List[ast.stmt] = []
@@ -1521,15 +1475,13 @@ def _derive_returned_array_metadata(
                     dtypes[target] = dt
         return shape_strs, dtypes
 
-    # Two passes. The CONSERVATIVE pass (first-assignment, no Call routing)
-    # reproduces the pre-existing behaviour and decides WHICH returns are
-    # derivable -- i.e. which promote to output params. The IMPROVED pass
+    # Two passes: CONSERVATIVE (first-assignment, no Call routing) decides
+    # WHICH returns are promotable, reproducing prior behaviour; IMPROVED
     # (latest-wins + Call routing) tracks a reassigned local's shape at the
-    # return point (lenet's ``x``: reshape -> matmul -> matmul) and supplies
-    # the corrected VALUE. Gating the promote decision on the conservative
-    # pass keeps kernels that never promoted before (softmax/mlp/resnet ->
-    # bench_info outputs) unpromoted, while fixing the shape of those that
-    # already promoted with a wrong shape (lenet: ``(10,)`` -> ``(N, 10)``).
+    # return point (lenet's ``x``: reshape -> matmul -> matmul) for the
+    # corrected VALUE. Gating promotion on the conservative pass keeps
+    # never-promoted kernels (softmax/mlp/resnet) unpromoted while fixing
+    # wrong shapes on ones already promoted (lenet: ``(10,)`` -> ``(N, 10)``).
     cons_strs, _ = _pass(latest_wins=False, route_calls=False)
     imp_strs, dtypes = _pass(latest_wins=True, route_calls=True)
     shapes = {n: _parse_shape_expression(imp_strs.get(n, cons_strs[n])) for n in names if n in cons_strs}
@@ -1574,27 +1526,24 @@ _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 def _collect_inlined_scalar_defs(fn: ast.FunctionDef) -> Dict[str, str]:
     """Map each inliner-introduced SCALAR-dimension local to its RHS.
 
-    Helper inlining (see :class:`_InlineHelpers`) lifts a helper's body
-    locals into the kernel body under an ``__inl<k>_`` prefix. The
-    *scalar* ones are dimension definitions -- ``__inl1_N = input.shape[0]``,
-    ``__inl1_H_out = (input.shape[1] - __inl1_K) + 1`` -- and they end up
-    inside the inlined output array's shape (``np.empty((__inl1_N, ...))``).
-    Left unresolved these become un-bindable shape symbols; substituting
-    them away (see :func:`_substitute_inlined_scalar_defs`) turns the
-    shape back into a pure function of real kernel parameters.
+    Helper inlining (:class:`_InlineHelpers`) lifts a helper's body locals
+    into the kernel under an ``__inl<k>_`` prefix. The scalar ones are
+    dimension definitions (``__inl1_N = input.shape[0]``) that end up inside
+    the inlined output array's shape (``np.empty((__inl1_N, ...))``); left
+    unresolved they're un-bindable shape symbols. Substituting them away
+    (:func:`_substitute_inlined_scalar_defs`) makes the shape a pure function
+    of real kernel parameters again.
 
-    Only ``__inl<k>_`` targets whose RHS is a *scalar* expression
-    (Name / Constant / BinOp / ``arr.shape[i]`` / ``arr.dtype`` etc.) are
-    collected -- an array-valued RHS (``np.empty(...)``, a slice, a call)
-    is the inlined local array itself, not a dimension, and is left alone.
-    Returns ``{name: ast.unparse(rhs)}`` for first assignments only.
+    Only scalar-expression RHS (Name/Constant/BinOp/``arr.shape[i]``/etc.) is
+    collected -- an array-valued RHS is the inlined local array itself, not
+    a dimension. Returns ``{name: ast.unparse(rhs)}`` for first assignments.
     """
-    # Names REASSIGNED anywhere (a second ``=`` or any ``+=`` / tuple-unpack) are
-    # mutable runtime values -- a Lanczos step counter ``na = 0; ...; na += 1`` --
-    # not a fixed inlined dimension. Freezing such a name at its FIRST value inside a
-    # shape token (``off = betas[:na - 1]`` -> ``betas[:0 - 1]``, a NEGATIVE
-    # allocation; the eigh of the ``na x na`` tridiagonal collapsing to ``0 x 0``)
-    # is wrong, so collect only single-assignment scalars.
+    # Names REASSIGNED anywhere (``+=`` / a second ``=`` / tuple-unpack) are
+    # mutable runtime values (a step counter ``na = 0; ...; na += 1``), not a
+    # fixed inlined dimension. Freezing one at its FIRST value inside a shape
+    # token (``off = betas[:na - 1]`` -> ``betas[:0 - 1]``) allocates a
+    # NEGATIVE size -- the eigh's ``na x na`` tridiagonal collapsing to
+    # ``0 x 0`` -- so collect only single-assignment scalars.
     rebind_counts: Dict[str, int] = {}
 
     def _count_target(tgt: ast.AST, inc: int) -> None:
@@ -2184,12 +2133,12 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
                          return_kind="scalar"))
             continue
 
-        # ARRAY return. Specialize the helper at its call site: fold every literal
-        # arg into the body (``x_gamma_extrapolation`` -> ``False``) and prune the
-        # now-dead branches, so config-only paths (the vcut / gamma branches whose
-        # tuples & sibling-helper calls don't lower) disappear. Then drop the
-        # params left unused -- their args (incl. a bare ``None``) are dropped from
-        # the call too, so signature and call site stay aligned.
+        # ARRAY return: specialize the helper at its call site by folding every
+        # literal arg into the body (``x_gamma_extrapolation`` -> ``False``) and
+        # pruning the now-dead branches this exposes (config-only vcut/gamma
+        # paths whose tuples & sibling-helper calls don't lower). Params left
+        # unused are then dropped along with their call-site args, keeping
+        # signature and call site aligned.
         call_consts = {pn: a for pn, a in zip(pnames, call.args) if isinstance(a, ast.Constant)}
         if call_consts:
             _substitute_names(hfn, call_consts)
@@ -2295,14 +2244,14 @@ def _collect_inlinable_helpers(tree: ast.Module, kernel_fn: ast.FunctionDef) -> 
 def _flatten_nested_helpers(tree: ast.Module) -> None:
     """Inline helpers NESTED inside other top-level helpers, in place.
 
-    lulesh's compute helpers each carry a one-line column shorthand
-    ``def c(a, i): return a[:, i]`` and call it (``x0 = c(x, 0)``). That nested
-    ``def`` makes the OUTER helper un-inlinable (a FunctionDef is not an allowed
-    mid statement in :func:`_collect_inlinable_helpers`), and it is never
-    "exposed" to the kernel-level fixpoint because the parent never inlines --
-    a deadlock. Inlining the nested defs INTO their parent (then dropping them)
-    leaves each outer helper nested-def-free, so the kernel-level fixpoint can
-    inline it normally. Iterated for helpers nested more than one level deep."""
+    lulesh's compute helpers carry a one-line column shorthand ``def c(a, i):
+    return a[:, i]`` and call it. That nested ``def`` makes the OUTER helper
+    un-inlinable (a FunctionDef isn't an allowed mid statement in
+    :func:`_collect_inlinable_helpers`) and it's never exposed to the
+    kernel-level fixpoint, since the parent never inlines -- a deadlock.
+    Inlining the nested defs into their parent (then dropping them) leaves
+    each outer helper nested-def-free. Iterated for helpers nested more than
+    one level deep."""
     for _ in range(16):
         changed = False
         for h in list(tree.body):
@@ -2444,15 +2393,13 @@ class _HoistMultiStmtHelpers(ast.NodeTransformer):
     """Lift Form-3 helper Calls out of expression contexts so the
     multi-statement inliner can consume them via Assign-level visits.
 
-    A Form-3 helper is a multi-statement body ending in
-    ``return expr``. Single-return / void helpers are NOT hoisted --
-    those forms are already substituted at expression / statement
-    level by ``_InlineHelpers``.
+    A Form-3 helper is a multi-statement body ending in ``return expr``.
+    Single-return/void helpers aren't hoisted -- those are already
+    substituted at expression/statement level by ``_InlineHelpers``.
 
-    Operates per-statement: each top-level statement is rewritten in
-    place; helper Calls found anywhere inside non-Assign-of-Call
-    expressions are replaced by fresh ``__hcall<n>`` temps and their
-    Assigns are prepended.
+    Operates per-statement: each top-level statement is rewritten in place;
+    helper Calls inside non-Assign-of-Call expressions are replaced by fresh
+    ``__hcall<n>`` temps, with their Assigns prepended.
     """
 
     def __init__(self, helpers: Dict[str, ast.FunctionDef], counter: Optional[List[int]] = None) -> None:
@@ -2567,11 +2514,11 @@ class _InlineHelpers(ast.NodeTransformer):
     def __init__(self, helpers: Dict[str, ast.FunctionDef], counter: Optional[List[int]] = None):
         self.helpers = helpers
         # The ``__inl<N>_`` prefix counter MUST persist across the parse_kernel
-        # inline fixpoint -- a nested helper exposed in a later iteration would
-        # otherwise reuse a prefix already taken by an outer helper inlined in an
-        # earlier iteration (lulesh ``_integrate_stress``'s local ``b`` colliding
-        # with the nested ``_calc_shape_fn_derivatives``'s ``b`` -> ``__inl1_b``
-        # for both, crossing their shapes). A shared counter keeps prefixes unique.
+        # inline fixpoint: a nested helper exposed in a later iteration would
+        # otherwise reuse a prefix an outer helper already took in an earlier
+        # one (lulesh ``_integrate_stress``'s local ``b`` colliding with the
+        # nested ``_calc_shape_fn_derivatives``'s ``b`` -- both becoming
+        # ``__inl1_b``, crossing their shapes).
         self._counter = counter if counter is not None else [0]
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
@@ -2594,12 +2541,11 @@ class _InlineHelpers(ast.NodeTransformer):
                 local_names = _collect_assigned_names(body[:-1])
                 arg_map = dict(zip(param_names, node.value.args))
                 rename: Dict[str, ast.AST] = dict(arg_map)
-                # A parameter that is REASSIGNED in the body (lulesh _phi's
-                # ``delvm = delvm * normd``) becomes a fresh prefixed local. It
-                # MUST be initialised from the call argument first, otherwise the
-                # first read is of the uninitialised local -- a heap-garbage read
-                # the native backends inherit (numba/cupy use a real Python var
-                # and are unaffected). Value semantics: a fresh local copy, so the
+                # A parameter REASSIGNED in the body (lulesh _phi's ``delvm =
+                # delvm * normd``) becomes a fresh prefixed local, initialised
+                # from the call argument first -- otherwise its first read is
+                # uninitialised heap garbage (native backends only; numba/cupy
+                # use a real Python var). Value semantics: a fresh copy, so the
                 # caller's argument array is never mutated by the rebind.
                 reassigned_params: List[str] = []
                 for ln in local_names:
@@ -2722,13 +2668,12 @@ def _collect_assigned_names(stmts):
     """Return the set of Name targets assigned in any of ``stmts``,
     recursing into For / If bodies.
 
-    A TUPLE / LIST target contributes every Name it binds: a for-loop over
-    ``enumerate`` / ``zip`` (``for m, w in enumerate(_CW)``) or an unpacking
-    assign (``a, b = ...``). Missing these let an inlined helper's loop index
-    escape the ``__inl<k>_`` rename and clobber a caller symbol of the same name
-    -- chebyshev_filter_subspace's ``_hpsi`` stencil loop var ``m`` vs the
-    kernel's Chebyshev-degree parameter ``m`` (the inlined loop overwrote ``m``
-    to len(_CW), truncating the degree loop)."""
+    A TUPLE/LIST target contributes every Name it binds (a for-loop over
+    ``enumerate``/``zip``, or an unpacking assign). Missing these lets an
+    inlined helper's loop index escape the ``__inl<k>_`` rename and clobber a
+    caller symbol of the same name -- chebyshev_filter_subspace's ``_hpsi``
+    stencil loop var ``m`` vs the kernel's Chebyshev-degree ``m`` (the
+    inlined loop overwrote ``m`` to len(_CW), truncating the degree loop)."""
     out = set()
 
     def _bind(target):
@@ -2966,20 +2911,16 @@ def _dtypes_from_initialize(numpy_py: pathlib.Path, info: Dict) -> Dict[str, str
             dtypes[name] = dt
     # Map the harness's per-local dtypes onto the kernel's parameters when the
     # two names DIFFER (a kernel whose signature renames the harness locals).
-    #
-    # ``dtypes`` is already keyed by the ``initialize`` LOCAL name (= return-tuple
-    # name); a kernel arg with that SAME name is resolved by the caller's by-name
-    # lookup, so the only thing left to do here is the renamed case via the
-    # positional correspondence ``kernel arg i <- return target i``.
-    #
-    # That zip is ONLY sound when the two lists describe the same arrays in the
-    # same order -- i.e. their LENGTHS are equal. cloudsc's ``initialize`` returns
-    # 58 values while the kernel takes 53 array args in a DIFFERENT order, so an
-    # unconditional zip mis-assigned ``ktype``/``ldcum``'s int32 onto unrelated
-    # float arrays (``pfsqrf``/``pfsqltur``/``pvfi``), truncating their tiny flux
-    # values to 0 via a spurious ``(int64_t)`` cast. Gating on equal lengths keeps
-    # the mapping for genuine 1:1-renamed harnesses while skipping the misaligned
-    # case (the explicit ``init.dtypes`` block remains the authoritative source).
+    # ``dtypes`` is keyed by the ``initialize`` LOCAL name; a same-named kernel
+    # arg is resolved by the caller's by-name lookup, so only the renamed case
+    # needs the positional zip ``kernel arg i <- return target i`` -- sound
+    # only when the two lists have EQUAL length. cloudsc's ``initialize``
+    # returns 58 values against the kernel's 53 array args in a different
+    # order; an unconditional zip mis-assigned ``ktype``/``ldcum``'s int32
+    # onto unrelated float arrays, truncating their flux values to 0 via a
+    # spurious ``(int64_t)`` cast. Gating on equal lengths keeps the mapping
+    # for genuine 1:1-renamed harnesses and skips the misaligned case (the
+    # explicit ``init.dtypes`` block is the authoritative source there).
     return_targets: List[str] = []
     for stmt in reversed(init_fn.body):
         if isinstance(stmt, ast.Return) and stmt.value is not None:
@@ -3009,8 +2950,8 @@ def _shapes_from_initialize(numpy_py: pathlib.Path, info: Dict) -> Dict[str, str
 
     Pre-Foundation OptArena kernels carry a sibling Python file (e.g.
     ``gemm/gemm.py``) that defines an ``initialize`` callable returning
-    every array the kernel needs. We parse that function and pick out
-    the shape argument from each array's construction expression:
+    every array the kernel needs. Parses that function and picks out each
+    array's shape argument from its construction expression:
 
     * ``np.empty((N, M))`` / ``np.zeros((N, M))`` / ``np.ones((N, M))``
       / ``np.empty_like(other)``
@@ -3189,12 +3130,11 @@ def _shape_from_constructor(node: ast.AST, so_far: Dict[str, str]) -> Optional[s
             and node.args and isinstance(node.args[0], ast.Name):
         return so_far.get(node.args[0].id)
     if attr in _SHAPE_FIRST_ARG:
-        # A ``size=`` kwarg always wins: the numpy.random generators
-        # (``uniform(low, high, size=(M, N))`` / ``random(size=...)``)
-        # carry the shape there, NOT in the positional args -- which are
-        # distribution parameters (low/high). Missing this read the
-        # ``(0, 1000)`` of ``rng.uniform(0, 1000, size=(M, N))`` as the
-        # shape (compute's zero-row output).
+        # A ``size=`` kwarg always wins: numpy.random generators
+        # (``uniform(low, high, size=(M, N))``) carry the shape there, not in
+        # the positional distribution params (low/high) -- missing this read
+        # ``rng.uniform(0, 1000, size=(M, N))``'s ``(0, 1000)`` as the shape
+        # (compute's zero-row output).
         for kw in node.keywords:
             if kw.arg == "size":
                 return _unparse_shape_arg(kw.value)
@@ -3204,13 +3144,12 @@ def _shape_from_constructor(node: ast.AST, so_far: Dict[str, str]) -> Optional[s
         if attr in _DIST_FUNCS:
             return (_unparse_shape_arg(node.args[2]) if len(node.args) >= 3 else None)
         if node.args:
-            # Only ``np.random.rand(M, N)`` / ``randn(M, N)`` spread the axis
-            # lengths across separate positional args. Every OTHER constructor
-            # here takes the shape as a SINGLE first arg, with later positionals
-            # being non-shape params: ``np.full(N, fill)`` (fill value),
-            # ``np.zeros(N, dtype)`` (dtype). Reading those as extra axes turned
-            # ``np.full(N, INF)`` into a bogus 2-D ``(N, INF)`` (INF leaked in as
-            # a phantom dimension symbol).
+            # Only ``np.random.rand(M, N)``/``randn(M, N)`` spread axis lengths
+            # across separate positional args -- every other constructor here
+            # takes a SINGLE first-arg shape, with later positionals as
+            # non-shape params (``np.full(N, fill)``, ``np.zeros(N, dtype)``).
+            # Reading those as extra axes turned ``np.full(N, INF)`` into a
+            # bogus 2-D ``(N, INF)`` (INF as a phantom dimension).
             if attr in _AXES_AS_ARGS and len(node.args) >= 2 and all(
                     isinstance(a, (ast.Constant, ast.Name)) for a in node.args):
                 inner = ", ".join(ast.unparse(a) for a in node.args)
@@ -3243,13 +3182,11 @@ def _unparse_shape_arg(node: ast.AST) -> Optional[str]:
 def _fallback_shape_for_legacy(preset_symbols: List[str]) -> Optional[str]:
     """Return a 1-D shape expression using the first non-iteration symbol.
 
-    Legacy OptArena bench_info JSONs declare arrays via an
-    ``init.initialize`` callable and omit the per-array ``shapes`` block
-    NumpyToC normally consults. When NumpyToC is run against such a
-    kernel we synthesise a 1-D fallback ``"(N,)"`` so emission can
-    still proceed; the resulting source may not match the original
-    multi-D array shape but at least the harness gets a syntactically
-    valid file.
+    Legacy OptArena bench_info JSONs declare arrays via an ``init.initialize``
+    callable and omit the per-array ``shapes`` block NumpyToC normally
+    consults. Synthesise a 1-D fallback ``"(N,)"`` so emission can still
+    proceed -- the result may not match the original multi-D shape, but the
+    harness at least gets a syntactically valid file.
     """
     skip = {"ITERATIONS", "TSTEPS", "nl"}
     for sym in preset_symbols:
@@ -3277,18 +3214,17 @@ def _infer_scalar_dtype(default_value) -> str:
 # both the frontend (helper-inlining int check) and the C int-typing pass.
 def pure_int_arith(n: ast.AST) -> bool:
     """True when ``n`` is a value-preserving integer computation over Names
-    and int literals -- ``+ - * // %`` (binary), unary ``+ -``, and
-    ``min`` / ``max`` / ``abs`` (which preserve the operand type: int in ->
-    int out). Used to bound the backward int-ness closure in
+    and int literals: ``+ - * // %``, unary ``+ -``, and ``min``/``max``/
+    ``abs`` (int in -> int out). Bounds the backward int-ness closure in
     :func:`_names_used_as_int` so it never crosses a float divide, a
-    transcendental call, or -- critically -- an ``int(...)`` TRUNCATION.
+    transcendental call, or -- critically -- an ``int(...)`` truncation.
 
-    ``int(...)`` is a value-CHANGING truncation, not a pass-through: the
-    result being integer says nothing about the argument's type. Treating
-    it as pure-int lets int-ness flow BACKWARD from an index into a float
-    source (GROMACS ``ri = int(rs)`` with ``rs = rsq * rinv *
-    tab_coul_scale`` mistyped the whole distance chain int and truncated
-    every force to zero). So ``int`` is a BARRIER here, not a pass-through.
+    ``int(...)`` is value-CHANGING, not a pass-through: the result being
+    integer says nothing about the argument's type. Treating it as pure-int
+    would let int-ness flow BACKWARD into a float source (GROMACS ``ri =
+    int(rs)`` with ``rs = rsq * rinv * tab_coul_scale`` mistyped the whole
+    distance chain int, truncating every force to zero) -- so ``int`` is a
+    BARRIER here, not a pass-through.
     """
     if isinstance(n, ast.Name):
         return True
@@ -3348,14 +3284,12 @@ def _names_used_as_int(tree: ast.AST) -> Set[str]:
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "range"):
             for arg in node.args:
                 collect(arg)
-        # Array-shape positions are integer-only: a Name flowing into a
-        # constructor shape (``np.zeros/empty/ones/full``) or the new-shape
-        # argument of a reshape is an array dimension and must be ``int``.
-        # In the un-lowered source these are the only place a pure sizing
-        # scalar like lenet's ``C_before_fc1`` (``np.reshape(x, (N,
-        # C_before_fc1))``) appears, so without this it stays ``double``
-        # and the flattened subscript ``(__r0)*C_before_fc1 + __r1`` is a
-        # float -- a hard C error.
+        # Array-shape positions are integer-only: a Name in a constructor
+        # shape (``np.zeros/empty/ones/full``) or reshape's new-shape arg is
+        # an array dimension and must be ``int``. This is the only place a
+        # pure sizing scalar like lenet's ``C_before_fc1`` appears in the
+        # un-lowered source; without it, it stays ``double`` and the
+        # flattened subscript is a float -- a hard C error.
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
             attr = node.func.attr
             shape_args: List[ast.AST] = []
@@ -3393,11 +3327,10 @@ def _names_used_as_int(tree: ast.AST) -> Set[str]:
             collect(node.right)
 
     # Transitive closure: a Name feeding an int-used local through PURE integer
-    # arithmetic is itself integer. ``buf = jbnd - all_start_tmp + iexx_start - 1``
-    # (buf later indexes ``exxbuff``) promotes its additive index offsets; the
-    # propagation is bounded by :func:`pure_int_arith` (``+ - * // %`` / min /
-    # max / abs over Names and int literals) so it never crosses a float divide,
-    # a transcendental call, or an ``int(...)`` truncation.
+    # arithmetic is itself integer (``buf = jbnd - all_start_tmp + iexx_start -
+    # 1`` promotes its additive offsets before indexing ``exxbuff``), bounded
+    # by :func:`pure_int_arith` so it never crosses a float divide, a
+    # transcendental call, or an ``int(...)`` truncation.
     assigns = [(node.targets[0].id, node.value) for node in ast.walk(tree)
                if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)]
     changed = True

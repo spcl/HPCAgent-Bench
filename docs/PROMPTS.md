@@ -113,7 +113,7 @@ optarena prompt gemm --all-variants            # render the prompt under EVERY v
 ```
 
 The **super-easy path** to a new variant is ONE entry under `prompt.variants` in
-`config.yaml` -- no Python edit, no fork. A config entry adds a new variant (or overrides a
+`config.yaml` -- no Python edit, no fork. It adds a new variant (or overrides a
 built-in of the same name); explicit CLI flags still win over it:
 
 ```yaml

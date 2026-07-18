@@ -10,10 +10,10 @@ pip install -r requirements/harbor.txt            # harbor / container tooling (
 optarena-install-apptainer                         # Apptainer, unprivileged, into ~/.local (optional)
 ```
 
-Everything is pip-installable except the container runtimes themselves. Apptainer is a
+Everything is pip-installable except the container runtimes. Apptainer is a
 Go binary — `optarena-install-apptainer` runs Apptainer's official unprivileged
 installer for the rootless case; `podman` is the rootless alternative, installed as a
-system package. There is no pip package that bundles the Apptainer binary (`spython`
+system package. No pip package bundles the Apptainer binary (`spython`
 only wraps the CLI).
 
 ## Platforms (Linux / macOS / WSL2)
@@ -143,11 +143,10 @@ freely (e.g. 80 agents at once: raise `n_concurrent_trials`). Only **performance
 timing** needs all of the CPU, so it must run one-at-a-time, or contention corrupts the
 measurement.
 
-Set `measurement.timing_lock` to a shared path and the grader `flock`s it around the
-timing section: agents solve in parallel while exactly one performance measurement runs
-at a time. The clean separation — parallel correctness, serial timing — needs the timing
-core to split verify (parallel) from measure (serial). Until then the lock
-serializes the whole grade, which still lets agents run in parallel and keeps every
+Set `measurement.timing_lock` to a shared path; the grader `flock`s it around the
+timing section, so agents solve in parallel while exactly one performance measurement
+runs at a time. Full separation needs the timing core to split verify (parallel) from
+measure (serial); until then the lock serializes the whole grade but still keeps every
 measurement contention-free.
 
 ## Distributed run (cluster) — static agent / judge / inference

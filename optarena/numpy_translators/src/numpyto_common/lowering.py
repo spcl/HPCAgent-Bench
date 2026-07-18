@@ -89,7 +89,6 @@ MATH_BUILTINS[("np", "absolute")] = "fabs"
 MATH_BUILTINS[("np", "power")] = "pow"
 MATH_BUILTINS[("np", "maximum")] = "fmax"  # 2-arg scalar form falls here
 MATH_BUILTINS[("np", "minimum")] = "fmin"
-# Bessel functions renamed to avoid kernel-name collisions.
 for _orig, _renamed in _BESSEL_INTRINSICS.items():
     MATH_BUILTINS[("math", _orig)] = _renamed
     MATH_BUILTINS[("np", _orig)] = _renamed
@@ -2547,34 +2546,27 @@ class SliceFusion(ast.NodeTransformer):
                 continue
             iter_vars.append(ast.Name(id=_iter_var_name(axis), ctx=ast.Load()))
 
-        # 1) Rewrite the LHS so every slice dim becomes the iter var (plus
-        #    the LHS slice's own start when we choose to index relative
-        #    to zero; here we index absolute so the LHS subscript is
-        #    just the iter var).
+        # LHS subscript: iter var per slice axis, indexed absolute (not
+        # relative to the slice's own start).
         new_lhs = ast.Subscript(
             value=target.value,
             slice=self._scalar_slice(lhs_dims, iter_vars, ranges, lhs_name),
             ctx=ast.Store(),
         )
 
-        # 2) Rewrite the RHS in-place: every Subscript with a Slice gets
-        #    replaced by a Subscript whose index is the iter var + offset.
         rhs_rewriter = _SliceToScalarRewriter(self.array_shapes,
                                               iter_vars, ranges, lhs_name, lhs_dims)
         new_rhs = rhs_rewriter.visit(copy.deepcopy(value))
-        # Top-level RHS Name (e.g. ``corr[i+1:M, i] = __mm4`` where
-        # __mm4 is a 1-D temp matching the LHS slice extents) -- the
-        # NodeTransformer doesn't dispatch into a bare Name unless we
-        # ask it to, so do the subscriptify on the new top-level node.
+        # A top-level RHS Name (``corr[i+1:M, i] = __mm4``) isn't visited by
+        # NodeTransformer unless asked -- subscriptify it explicitly.
         new_rhs = rhs_rewriter._maybe_subscriptify(new_rhs)
 
-        # 3) Emit Assign or AugAssign per element.
         if aug_op is None:
             inner: ast.stmt = ast.Assign(targets=[new_lhs], value=new_rhs)
         else:
             inner = ast.AugAssign(target=new_lhs, op=aug_op, value=new_rhs)
 
-        # 4) Wrap with one ``for`` per slice axis (skip the scalar dims).
+        # One ``for`` per slice axis (scalar dims are skipped).
         body: List[ast.stmt] = [inner]
         for axis in reversed(range(len(lhs_dims))):
             if not isinstance(lhs_dims[axis], ast.Slice):
@@ -2891,16 +2883,14 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
         lhs_slice_iters = [(iv, rng[0]) for iv, dim, rng in
                            zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
                            if isinstance(dim, ast.Slice) and iv is not None]
-        # numpy broadcasting aligns operand axes from the RIGHT. The RHS's
-        # *result* axes (each Slice or newaxis contributes one; a scalar index
-        # removes an axis) map onto the LHS slice iters right-aligned -- so a
-        # row vector ``A[k, k:]`` (one result axis, the columns) inside a
-        # 2-slice-axis LHS ``A[k+1:, k:]`` reads from the COLUMN iter ``si1``,
-        # not the row iter ``si0`` (gaussian's rank-1 update). ``align`` shifts
-        # the per-axis consumption by the rank difference.
-        # A Slice / newaxis contributes one result axis; an ADVANCED index (a Name
-        # whose own shape is in the table, e.g. lulesh ``x1[:, _VOLU_PERM]`` with
-        # _VOLU_PERM (8,6)) contributes its RANK; a scalar index contributes none.
+        # numpy broadcasting aligns operand axes from the RIGHT: a Slice or
+        # newaxis contributes one result axis, an ADVANCED index (a Name whose
+        # own shape is known, e.g. lulesh ``x1[:, _VOLU_PERM]``) contributes its
+        # RANK, a scalar index contributes none. Those result axes map onto the
+        # LHS slice iters right-aligned -- so a row vector ``A[k, k:]`` (one
+        # result axis) inside a 2-slice-axis LHS ``A[k+1:, k:]`` reads the COLUMN
+        # iter ``si1``, not the row iter ``si0`` (gaussian's rank-1 update).
+        # ``align`` shifts the per-axis consumption by the rank difference.
         rhs_result_axes = sum(
             (len(self.array_shapes[d.id]) if isinstance(d, ast.Name) and self.array_shapes.get(d.id) else
              1 if (isinstance(d, ast.Slice) or (isinstance(d, ast.Constant) and d.value is None)) else 0)
@@ -3160,22 +3150,17 @@ class _BooleanMaskRewriter(ast.NodeTransformer):
         idx = (ast.Name(id=iters[0], ctx=ast.Load()) if len(iters) == 1 else
                ast.Tuple(elts=[ast.Name(id=i, ctx=ast.Load()) for i in iters],
                          ctx=ast.Load()))
-        # Scalarise the mask at iter indices.
         mask_scalar = _SubscriptifyNames(self.shape_table, iters).visit(
             copy.deepcopy(mask_expr))
-        # Strip out ``arr[mask_name]`` boolean-mask reads on the RHS:
-        # the read produces a bool-masked slice in numpy, but inside
-        # the guarded per-element body the access reduces to
-        # ``arr[iters]``. Keep the original ``mask_name`` only on the
-        # mask check itself.
+        # ``arr[mask_name]`` on the RHS reads a bool-masked slice in numpy, but
+        # inside the guarded per-element body it reduces to ``arr[iters]`` --
+        # keep the original ``mask_name`` only on the mask check itself.
         rhs_clean = _strip_mask_subscripts(
             copy.deepcopy(value),
             mask_names=_mask_names(mask_expr),
             mask_expr=mask_expr)
-        # Scalarise the RHS at iter indices.
         rhs_scalar = _SubscriptifyNames(self.shape_table, iters).visit(
             rhs_clean)
-        # Build LHS subscript at iter vars.
         lhs_sub = ast.Subscript(
             value=ast.Name(id=arr_name, ctx=ast.Load()),
             slice=idx, ctx=ast.Store())
@@ -3184,7 +3169,6 @@ class _BooleanMaskRewriter(ast.NodeTransformer):
         else:
             inner = ast.AugAssign(target=lhs_sub, op=aug_op, value=rhs_scalar)
         guarded = ast.If(test=mask_scalar, body=[inner], orelse=[])
-        # Wrap in loops.
         out: List[ast.stmt] = [guarded]
         for var, bound in zip(reversed(iters), reversed(list(shape))):
             out = [ast.For(
@@ -3408,13 +3392,11 @@ class _ResolveArrShape(ast.NodeTransformer):
                 self.current[target] = fresh
                 self.zeros_locals[target] = fresh
                 return
-        # Bare Name alias.
         if isinstance(rhs, ast.Name):
             src = self.current.get(rhs.id)
             if src is not None:
                 self.current[target] = src
             return
-        # np.zeros / empty / ones / linspace / arange.
         from numpyto_common.lib_nodes import NP_ZEROS_ALIASES, _iter_extent_of
         if (isinstance(rhs, ast.Call)
                 and isinstance(rhs.func, ast.Attribute)
@@ -3444,7 +3426,7 @@ class _ResolveArrShape(ast.NodeTransformer):
                 tok = ast.unparse(rhs.args[2])
                 self.current[target] = (tok,)
                 return
-        # BinOp / UnaryOp / IfExp -- broadcast. An all-size-1 result is a scalar (see extent_is_scalar).
+        # An all-size-1 result is a scalar, not a broadcast shape (see extent_is_scalar).
         from numpyto_common.lib_nodes import extent_is_scalar
         if isinstance(rhs, (ast.BinOp, ast.UnaryOp, ast.IfExp)):
             ext = _iter_extent_of(rhs, self.current)
@@ -3452,8 +3434,6 @@ class _ResolveArrShape(ast.NodeTransformer):
                 self.current[target] = tuple(
                     ast.unparse(e) for e in ext)
             return
-        # Elementwise call (np.maximum, np.add, etc.) -- propagate first
-        # array operand's broadcast extent.
         if isinstance(rhs, ast.Call):
             ext = _iter_extent_of(rhs, self.current)
             if ext is not None and not extent_is_scalar(ext):
@@ -3826,30 +3806,28 @@ def _scalar_expr_complex(expr: ast.AST, local_dtypes: Dict[str, str]) -> bool:
 
 
 def _seed_complex_work_dtypes(tree: ast.AST, local_dtypes: Dict[str, str]) -> None:
-    """Seed ``local_dtypes`` for the complex work-array temps and their directly
-    derived scalar reads, EARLY -- before the ``promote-true-division`` and
-    ``libnode-expand`` phases consume those dtypes.
+    """Seed ``local_dtypes`` for complex work-array temps and their directly
+    derived scalar reads, before ``promote-true-division`` and ``libnode-expand``
+    consume those dtypes.
 
-    The eigh / eigvalsh cyclic-Jacobi lowering allocates its complex work matrices
-    (``L`` / ``Li`` / ``Tm`` / ``Cm`` / ``X`` / ``jv``) with ``np.zeros((n, n),
+    The eigh / eigvalsh cyclic-Jacobi lowering allocates complex work matrices
+    (``L`` / ``Li`` / ``Tm`` / ``Cm`` / ``X`` / ``jv``) via ``np.zeros((n, n),
     b.dtype)`` and derives scalars off them (``apq = Cm[i, j]``, ``m =
     hypot(apq.real, apq.imag)``, ``ephi = apq / m``). Those dtypes are otherwise
     only recorded at the whole-array phase (:class:`_WholeArrayAssignRewriter`),
-    which runs AFTER two phases that already consume them:
+    which runs after two phases that already consume them:
 
-    * ``promote-true-division`` reads an untagged ``apq`` as an INTEGER (a non-array
-      Name defaults integer), so ``apq / m`` is wrongly promoted with a
-      ``np.float64(apq)`` cast -- truncating the complex Jacobi phase (and that cast
-      is what C++ rejects as ``(double)(complex)``);
+    * ``promote-true-division`` reads an untagged ``apq`` as integer, wrongly
+      promoting ``apq / m`` with a ``np.float64(apq)`` cast -- truncating the
+      complex Jacobi phase (and C++ rejects the cast as ``(double)(complex)``);
     * ``libnode-expand``'s :class:`_RealConjDropper` classifies the still-untyped
-      complex work arrays as REAL via :func:`_walk_complex` and DROPS every
-      ``np.conj`` on them, so the reduction computes the wrong eigenvalues.
+      complex arrays as REAL via :func:`_walk_complex` and drops every
+      ``np.conj`` on them, computing the wrong eigenvalues.
 
-    Seeding here (phase 4) makes both later phases see the true dtypes. It reuses
-    the SAME predicates the whole-array rewriter uses (:func:`_ctor_complex_tag` /
+    Reuses the whole-array rewriter's own predicates (:func:`_ctor_complex_tag` /
     :func:`_scalar_expr_complex` / :func:`_walk_complex`), iterated to a fixpoint
-    because a derived scalar's dtype depends on the temp it reads
-    (``m`` / ``ephi`` <- ``apq`` <- ``Cm``'s constructor)."""
+    since a derived scalar's dtype depends on the temp it reads (``m`` / ``ephi``
+    <- ``apq`` <- ``Cm``'s constructor)."""
     assigns = [
         s for s in ast.walk(tree)
         if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name)
@@ -4457,7 +4435,6 @@ class _MgridLowering(ast.NodeTransformer):
                 and rhs.value.value.id == "np"
                 and rhs.value.attr == "mgrid"):
             return node
-        # Collect target Names and slice axes.
         targets = node.targets[0].elts
         if not all(isinstance(t, ast.Name) for t in targets):
             return node
@@ -4469,7 +4446,6 @@ class _MgridLowering(ast.NodeTransformer):
         if len(axes) != len(targets) or not all(
                 isinstance(a, ast.Slice) for a in axes):
             return node
-        # Compute shape tuple: (b0 - a0, b1 - a1, ...).
         shape_elts: List[ast.expr] = []
         for ax in axes:
             lo = ax.lower if ax.lower is not None else ast.Constant(value=0)
@@ -4478,16 +4454,10 @@ class _MgridLowering(ast.NodeTransformer):
                 return node
             shape_elts.append(ast.BinOp(left=hi, op=ast.Sub(), right=lo))
         shape_tuple = ast.Tuple(elts=shape_elts, ctx=ast.Load())
-        # For each target, emit:
-        #   Tk = np.empty(shape, dtype=np.int64)
-        #   for i0 in range(b0 - a0):
-        #       ...
-        #         Tk[i0, i1, ...] = ik + ak
         out: List[ast.stmt] = []
         iters = [ast.Name(id=f"__mg{k}", ctx=ast.Load())
                  for k in range(len(targets))]
         for k, tgt in enumerate(targets):
-            # Allocator: ``Tk = np.empty(shape, dtype=np.int64)``.
             out.append(ast.Assign(
                 targets=[ast.Name(id=tgt.id, ctx=ast.Store())],
                 value=ast.Call(
@@ -4499,7 +4469,6 @@ class _MgridLowering(ast.NodeTransformer):
                         value=ast.Attribute(
                             value=ast.Name(id="np", ctx=ast.Load()),
                             attr="int64", ctx=ast.Load()))])))
-            # Init body: ``Tk[iters] = iter[k] + axis[k].lower``.
             lo_k = axes[k].lower if axes[k].lower is not None \
                 else ast.Constant(value=0)
             idx_expr: ast.expr = ast.Name(id=iters[k].id, ctx=ast.Load())
@@ -6198,10 +6167,8 @@ def _lp_resolve_inlined_shapes(ctx: LoweringContext) -> None:
 
 
 def _lp_normalize_index_access(ctx: LoweringContext) -> None:
-    """Consolidated index-access normalisation, run once AFTER every array shape is
-    known (post ``resolve-inlined-shapes``).
-
-    Three structural rewrites, in order:
+    """Consolidated index-access normalisation, run once after every array shape is
+    known (post ``resolve-inlined-shapes``). Three rewrites, in order:
 
     1. :class:`_ChainedSubscriptFlattener` -- collapse a scalar-chained subscript
        ``A[f][..., 0]`` -> ``A[f, ..., 0]`` so the base is always a Name.
@@ -6210,15 +6177,13 @@ def _lp_normalize_index_access(ctx: LoweringContext) -> None:
     3. :class:`_PadImplicitTrailingSlices` -- make numpy's implicit trailing full
        slices explicit (``A[i, j]`` on a 3-D array -> ``A[i, j, :]``).
 
-    Placing this after the harvest / inlined-shape resolution breaks the
+    Runs after the harvest / inlined-shape resolution to break the
     harvest<->ellipsis circular dependency: post-inline locals (``hx``, ``vloc``,
-    ``psi_frag[f][..., 0]``) only acquire a shape at the harvest, and the ellipsis /
-    trailing-slice rewrites need that shape to know each array's rank -- so both must
-    run after it, not at parse-shape time. The shape source is
-    :attr:`ctx.lib_shape_table`, the harvest / inlined-resolve table that carries
-    BOTH the signature arrays and every derived local (the raw
-    :attr:`ctx.arrays_shapes` still holds only the declared arrays at this point,
-    so an ellipsis on a post-inline local would not resolve against it)."""
+    ``psi_frag[f][..., 0]``) only get a shape at the harvest, which the ellipsis /
+    trailing-slice rewrites need for each array's rank. Shape source is
+    :attr:`ctx.lib_shape_table` (harvest + inlined-resolve table, covering both
+    signature arrays and derived locals) -- not the raw :attr:`ctx.arrays_shapes`,
+    which at this point holds only the declared arrays."""
     tree = ctx.tree
     shapes = ctx.lib_shape_table
     _ChainedSubscriptFlattener().visit(tree)
@@ -6303,38 +6268,28 @@ def _lp_libnode_expand(ctx: LoweringContext) -> None:
 
 
 def _fix_real_scalar_dtypes(ctx: LoweringContext) -> None:
-    """Re-derive the dtype of a LOCAL (scalar OR array temp) that LibNodeRewriter
-    tagged COMPLEX from a complex source but whose value is actually REAL.
+    """Re-derive the dtype of a local (scalar or array) that LibNodeRewriter
+    tagged complex from a complex source but whose value is actually real.
 
-    ``LibNodeRewriter`` propagates a complex source array's element type onto
-    every derived local, but a ``.real`` / ``.imag`` accessor, an ``abs`` /
-    ``hypot`` magnitude, or a ``np.float64(...)`` cast produces a REAL value --
-    the eigh / eigvalsh cyclic-Jacobi's ``app = A[p, p].real`` / ``aqq`` / ``m =
-    hypot(...)`` / ``tau = (aqq - app) / (2 * m)``; equally the LS3DF GENPOT
-    ``v = ifftn(v_g).real + V_ion + xc`` array (``.real`` result plus real
-    operands) and its ``v.mean()`` temp. Left complex, the emitter declares them
-    complex and ``tau >= 0.0`` (a complex comparison), ``conjg(<real>)``, or a
-    real ``V_tot[...] = v[...] - v.mean()`` narrowing all fail to compile under
-    C++ (C silently drops the zero imaginary part). Route each through the file's
-    existing :func:`_walk_complex` predicate (which already classifies those forms
-    real) and, when it disagrees with a complex tag, retag to the matching real
-    width -- for an array this flips its C/C++ declaration from ``double _Complex
-    *`` to ``double *``, so downstream reads, ``.mean()`` and the ``V_tot`` write
-    are all real.
+    LibNodeRewriter propagates a complex source's element type onto every
+    derived local, but ``.real``/``.imag``, ``abs``/``hypot``, or a
+    ``np.float64(...)`` cast produce a real value (eigh/eigvalsh cyclic-Jacobi's
+    ``app = A[p, p].real`` / ``m = hypot(...)`` chain; LS3DF GENPOT's ``v =
+    ifftn(v_g).real + ...`` and its ``.mean()`` temp). Left complex, the emitter
+    declares them complex and a comparison, ``conjg(<real>)``, or a real
+    narrowing store fails to compile under C++ (C silently drops the imaginary
+    part). Reuse :func:`_walk_complex` (already classifies these forms real);
+    retag to the matching real width when it disagrees with a complex tag.
 
-    A fixpoint resolves the cascade: ``tau`` is real only once ``app`` / ``aqq`` /
-    ``m`` are; the GENPOT ``v`` array is real only once the ``.real`` poisson
-    result is, and its mean temp only once ``v`` is. An accumulator's own
-    self-reference (``acc = acc + real[...]``) carries the running value and is
-    neutral -- resolved REAL -- so a mean/sum of a real array narrows, while a
-    genuinely COMPLEX injected value (``acc = acc + a * b`` on complex ``a`` /
-    ``b``) keeps it complex. Kernel parameter arrays are never candidates (their
-    declaration is the ABI contract), but their dtypes DO resolve names on a
-    candidate's RHS so a complex input cannot mis-read as real and unsoundly
-    narrow. Then drop any conjugation left on a now-real operand
-    (:class:`_RealConjDropper`), so ``conj(ephi)`` on the real ``ephi`` is not
-    emitted as ``CONJG(<real>)``. Same class as the ``abs(complex) -> double``
-    root fix -- a real-returning op of a complex operand is REAL."""
+    Iterates to a fixpoint: the cascade is transitive (``tau`` is real only once
+    ``app``/``aqq``/``m`` are; GENPOT's ``v`` only once its ``.real`` result is).
+    An accumulator's self-reference (``acc = acc + real[...]``) is neutral and
+    resolves real; a genuinely complex injected value keeps it complex. Kernel
+    parameter dtypes (outside ``local_dtypes``) still resolve names on a
+    candidate's RHS, so a complex input is never misread as real. Finally drops
+    stale conjugation on a now-real operand (:class:`_RealConjDropper`). Same
+    class of fix as ``abs(complex) -> double``: a real-returning op on a
+    complex operand is real."""
     tree = ctx.tree
     ld = ctx.local_dtypes
     # Kernel-parameter array dtypes live outside ``local_dtypes``; resolve names

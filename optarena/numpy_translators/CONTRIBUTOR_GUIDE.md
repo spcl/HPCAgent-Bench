@@ -130,8 +130,7 @@ emit targets)
 ## 4. Tips for translators (PyTorch → numpy → NumpyToC)
 
 * **Tensor reshape → `np.reshape`**. The `x.view(N, M)` PyTorch idiom
-  maps directly. Avoid `.shape = ...` -- use `np.reshape` even though
-  the pipeline rewrites it.
+  maps directly.
 * **Tensor transpose → `np.transpose` or `arr.T`**. The 2-D form is
   fully supported.
 * **Tensor permute (>2D) → write the loop**. NumpyToC supports

@@ -1,18 +1,17 @@
 """Desugar numpy ops the verbatim Python backends (numba / pythran) cannot
 compile into the equivalent plain-numpy loops they CAN.
 
-The C / Fortran backends lower these constructs through the full IR pipeline,
-but ``numpyto_numba`` and ``numpyto_pythran`` emit the kernel body verbatim --
-so a kernel using a batched (>=3-D) ``@`` / ``np.matmul``, ``np.pad`` or
-``np.einsum`` fails to type (numba) or template-instantiate (pythran). This
-module rewrites those constructs at the source-AST level into framework-
-compatible numpy, preserving semantics, so both backends emit a valid variant.
+C / Fortran lower these constructs through the full IR pipeline, but
+``numpyto_numba`` / ``numpyto_pythran`` emit the kernel body verbatim -- so a
+batched (>=3-D) ``@`` / ``np.matmul``, ``np.pad``, or ``np.einsum`` fails to
+type (numba) or template-instantiate (pythran). This module rewrites those
+constructs at the source-AST level into framework-compatible numpy, so both
+backends emit a valid variant.
 
-Entry point: :func:`desugar_for_python_backend` -- parse the kernel source,
-expand the unsupported ops, return the rewritten source. Shape ranks come from
-the parsed :class:`KernelIR` (declared arrays) plus a light local-allocation
-walk, which is all the batched-``@`` rewrite needs to tell a batched matmul
-(operand rank > 2) from an ordinary 2-D one (which numba / pythran handle).
+Entry point: :func:`desugar_for_python_backend`. Shape ranks come from the
+parsed :class:`KernelIR` (declared arrays) plus a light local-allocation walk
+-- enough for the batched-``@`` rewrite to tell a batched matmul (operand
+rank > 2) from an ordinary 2-D one (which numba / pythran handle).
 """
 import ast
 import copy
@@ -236,11 +235,9 @@ def _expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
                 isinstance(a, (ast.Name, ast.Constant)) for a in value.args) else None)
             if n is not None:
                 return n
-        # Fallback for any other ``np.<fn>(...)``: the remaining numpy functions
-        # reaching here are elementwise / broadcasting ufuncs (abs, sqrt, exp,
-        # less, greater, minimum, maximum, where, conj, ...), so the result rank
-        # is the max of the argument ranks. (Rank-changing np.* -- constructors,
-        # reductions, reshape, matmul -- returned above.)
+        # Fallback: remaining np.<fn>(...) are elementwise/broadcasting ufuncs
+        # (abs, sqrt, exp, less, minimum, where, conj, ...) -> max of arg ranks.
+        # Rank-changing ops (constructors, reductions, reshape, matmul) return above.
         if attr is not None:
             rs = [_expr_rank(a, ranks) for a in value.args]
             return max([r for r in rs if r is not None], default=None)
@@ -1312,16 +1309,18 @@ class _ScalarizeMask(ast.NodeTransformer):
 
 
 class _MaskedAssignToLoop(ast.NodeTransformer):
-    """``T[mask] = rhs`` -> a guarded loop nest ``for i,j: if mask[i,j]:
-    T[i,j] = rhs[i,j]``. numba rejects multi-dimensional boolean-mask indexing
-    (``r2inv[in_range]``, mandelbrot's ``Z[abs(Z) < h]``). A loop -- NOT
-    ``np.where`` -- because the masked form computes the RHS ONLY on selected
-    elements: mandelbrot freezes diverged points precisely so the squared term
-    never overflows, and force_lj divides only where ``rsq > 0``. ``np.where``
-    would evaluate the RHS everywhere and change those results. Restricted to a
-    >=2-D mask that is a bool-array Name of the target's rank or an inline
-    Compare / ``& | ^ ~`` logical combo of that rank. A same-rank INTEGER index
-    Name is a fancy index, not a mask, so it is left verbatim (a clean skip)."""
+    """``T[mask] = rhs`` -> a guarded loop ``for i,j: if mask[i,j]: T[i,j] =
+    rhs[i,j]``. numba rejects multi-dimensional boolean-mask indexing
+    (``r2inv[in_range]``, mandelbrot's ``Z[abs(Z) < h]``).
+
+    A loop, NOT ``np.where``: the masked form computes RHS only on selected
+    elements (mandelbrot freezes diverged points so the squared term never
+    overflows; force_lj divides only where ``rsq > 0``) -- ``np.where`` would
+    evaluate RHS everywhere, changing the result.
+
+    Restricted to a >=2-D mask: a bool-array Name of the target's rank, or an
+    inline Compare/``& | ^ ~`` combo of that rank. A same-rank INTEGER index
+    Name is a fancy index, not a mask -- left verbatim (clean skip)."""
 
     def __init__(self, ranks: Dict[str, int], dtypes: Dict[str, str]):
         self.ranks = ranks
@@ -1968,19 +1967,16 @@ class _NormalizeNegativeAxis(ast.NodeTransformer):
     """Rewrite a NEGATIVE ``axis=`` literal to the positive index it denotes --
     ``np.flip(a, axis=-1)`` -> ``np.flip(a, axis=1)`` for a rank-2 ``a``.
 
-    numpy counts a negative axis back from the last (``-1`` == ``rank - 1``), but
-    some backend runtimes mishandle it: pythran's ``np.flip`` / ``np.stack`` with
-    ``axis=-1`` silently return the wrong result. The native C/Fortran lowering
-    and the reduction desugar already normalize the axis, so only the
-    verbatim-body python backends (pythran especially) are affected; rewriting the
-    literal to ``rank + axis`` makes every backend agree.
+    numpy counts a negative axis from the last (``-1`` == ``rank - 1``), but
+    pythran's ``np.flip``/``np.stack`` with ``axis=-1`` silently return the
+    wrong result. C/Fortran and the reduction desugar already normalize the
+    axis, so only the verbatim-body python backends need this rewrite.
 
-    The axis-space rank is the first array operand's rank for an axis-preserving
-    op and that rank + 1 for an axis-ADDING op (``stack``/``expand_dims``, whose
-    result has one more dimension than the operand). A negative axis whose op or
-    operand rank cannot be determined is left verbatim (never guessed). Only the
-    ``axis=`` keyword form is normalized -- a positional axis position differs per
-    op (``np.roll``'s second positional arg is the shift, not the axis)."""
+    Axis-space rank is the first operand's rank for an axis-preserving op, or
+    that rank + 1 for an axis-ADDING op (``stack``/``expand_dims``). A negative
+    axis whose rank cannot be determined is left verbatim (never guessed).
+    Only the ``axis=`` keyword form is normalized -- positional axis position
+    differs per op (``np.roll``'s 2nd positional arg is the shift, not axis)."""
 
     def __init__(self, ranks: Dict[str, int]):
         self.ranks = ranks
@@ -2086,13 +2082,14 @@ _ISSUBDTYPE_CATEGORY: Dict[str, set] = {
 
 
 class _IssubdtypeFold(ast.NodeTransformer):
-    """Fold ``np.issubdtype(<expr>.dtype, np.<category>)`` -- and a bare concrete
-    ``np.issubdtype(np.int32, np.integer)`` -- to a ``True``/``False`` constant from
-    the known dtype KIND of the operand (bool/int/float/complex). numba/pythran/dace
-    cannot evaluate ``np.issubdtype``, but the answer is a compile-time property of
-    the (statically known) dtype, so the guard/branch it feeds resolves and (with
-    dead-branch elim) disappears -- the isinstance-style check the C++/C backends
-    would do. Left verbatim when the operand kind or the category is unknown."""
+    """Fold ``np.issubdtype(<expr>.dtype, np.<category>)`` -- and the bare
+    ``np.issubdtype(np.int32, np.integer)`` -- to a ``True``/``False`` constant
+    from the operand's known dtype KIND (bool/int/float/complex). numba/pythran/
+    dace cannot evaluate ``np.issubdtype``, but the answer is a compile-time
+    property of a statically known dtype, so the branch it feeds resolves and
+    (with dead-branch elim) disappears -- the isinstance-style check C/C++
+    backends would do natively. Left verbatim when the kind or category is
+    unknown."""
 
     def __init__(self, dtypes: Dict[str, str]):
         self.dtypes = dtypes
@@ -2152,24 +2149,24 @@ class _DeadBranchElim(ast.NodeTransformer):
 def _fd_step(precision: Optional[str] = None) -> str:
     """``sqrt(machine epsilon)`` of the WORKING float type, as a source literal.
 
-    The forward-difference step scale MINPACK's ``fdjac2`` uses (``h = sqrt(epsfcn) *
-    |p_j|``, ``epsfcn`` defaulting to the machine epsilon OF THE WORKING TYPE).
-    :func:`_curve_fit_lm_lines` reuses the SAME rule so the emitted fit and the scipy
-    reference share a Jacobian truncation error and converge to the same stationary
-    point (see that function's docstring).
+    MINPACK's ``fdjac2`` forward-difference step (``h = sqrt(epsfcn) * |p_j|``,
+    ``epsfcn`` defaulting to the working type's machine epsilon).
+    :func:`_curve_fit_lm_lines` reuses this rule so the emitted fit shares
+    scipy's Jacobian truncation error and converges to the same stationary
+    point. sqrt(eps) balances truncation against round-off -- a merely
+    representable step would still be swamped by it.
 
-    It MUST track ``precision``: this is emitted as source text, so the fp64 literal
-    ``sqrt(DBL_EPSILON) = 1.49e-08`` survives into an fp32 kernel unchanged (the desugar
-    is an AST rewrite and ``apply_precision`` only remaps dtype tables, never body
-    literals). There the step underflows -- raman_fitting fits an amplitude of ~1580,
-    and ``1580 + 1.49e-08*1580`` is exactly ``1580`` in fp32, whose ulp is ~1.9e-04 --
-    so every Jacobian column comes out identically zero, every LM trip is rejected, and
-    the fit returns its initial guess having never moved. sqrt(eps) is what balances
-    truncation against round-off; a merely representable step would still be swamped.
+    MUST track ``precision``: this is emitted as source text (the desugar is
+    an AST rewrite; ``apply_precision`` only remaps dtype tables, never body
+    literals), so an fp64 literal ``sqrt(DBL_EPSILON) = 1.49e-08`` surviving
+    into an fp32 kernel underflows -- raman_fitting fits an amplitude of ~1580,
+    and ``1580 + 1.49e-08*1580`` rounds to exactly ``1580`` in fp32 (ulp
+    ~1.9e-04), zeroing every Jacobian column so the fit never moves off its
+    initial guess.
 
-    Read off the registry rather than hardcoded per dtype. A storage-only float (fp8)
-    has no numpy finfo, so it falls back to the fp64 rule -- curve_fit at fp8 is not a
-    thing we emit, and a wrong-but-fp64 step is the status quo, not a regression.
+    Read off the registry, not hardcoded: a storage-only float (fp8) has no
+    numpy finfo and falls back to the fp64 rule -- curve_fit at fp8 isn't
+    emitted, so a wrong-but-fp64 step is the status quo, not a regression.
     """
     dtype = dtypes.canonical(precision) if precision else "float64"
     try:
@@ -2260,12 +2257,12 @@ def _range_bound(node: ast.AST) -> Optional[ast.expr]:
 def _plan_list_build(body: List[ast.stmt], start: int, name: str):
     """Plan the fold of the list variable ``name`` built from ``body[start]``.
 
-    Returns ``(stmts, next_index)`` -- the replacement statements and the index
-    one past the last statement consumed -- or ``None`` to leave the build
-    verbatim (an unrecognised mutation; the emitter's ``List`` guard then fails
-    loudly, exactly as before this pass existed).
+    Returns ``(stmts, next_index)`` (replacement statements, index past the
+    last statement consumed) or ``None`` to leave the build verbatim (an
+    unrecognised mutation -- the emitter's ``List`` guard then fails loudly,
+    same as without this pass).
 
-    Recognised build shape (raman_fitting's peak-centre and initial-guess
+    Recognised build shape (raman_fitting's peak-centre / initial-guess
     preludes), in order::
 
         name = [<scalar>, ...]              # seed display (possibly empty)
@@ -2276,11 +2273,10 @@ def _plan_list_build(body: List[ast.stmt], start: int, name: str):
         name = name[:E]                     # truncate to the final length
         name += [<scalar>, ...]
 
-    Each element's destination index is tracked as a symbolic offset, so the
-    result is a plain ``np.zeros`` + indexed stores whose length is an
-    expression in the kernel's size symbols -- ``npeaks`` is ``params.shape[0]``
-    (a RUNTIME argument in the emitted C, not a compile-time constant), so a
-    fixed-length literal array would be wrong for any preset with a different K.
+    Each element's destination index is a symbolic offset, so the result is a
+    plain ``np.zeros`` + indexed stores whose length is an expression in the
+    kernel's size symbols -- ``npeaks`` is ``params.shape[0]``, a RUNTIME
+    argument, so a fixed-length literal array would be wrong for a different K.
     """
     seed = _list_display_elts(body[start].value)
     if seed is None:
@@ -2378,13 +2374,13 @@ def _plan_list_build(body: List[ast.stmt], start: int, name: str):
 def _fold_list_preludes(fn: ast.FunctionDef) -> None:
     """Fold kernel-body Python list builds into ``np.zeros`` + indexed stores.
 
-    The native emitters have no list type -- a surviving ``List`` display is a
-    hard ``NotImplementedError`` at emit -- and a list whose length is a size
-    SYMBOL cannot be spelled as a fixed literal array either. Only top-level
-    statements of ``fn`` are considered: that is where the corpus builds its
-    parameter vectors, and it keeps the offset bookkeeping (which must see the
-    statements in execution order) straightforward. An unrecognised build is
-    left untouched, so this pass can only turn an emit failure into a success.
+    Native emitters have no list type (a surviving ``List`` display is a hard
+    ``NotImplementedError`` at emit), and a symbolic-length list can't be a
+    fixed literal array either. Only top-level statements of ``fn`` are
+    considered -- where the corpus builds parameter vectors, keeping the
+    offset bookkeeping (must see statements in execution order) simple. An
+    unrecognised build is left untouched, so this pass can only turn an emit
+    failure into a success.
     """
     out: List[ast.stmt] = []
     i = 0
@@ -2410,39 +2406,38 @@ def _curve_fit_lm_lines(popt: str, f: str, x: str, y: str, p0: str, pfx: str, it
                         precision: Optional[str] = None) -> List[str]:
     """Source lines for a naive Levenberg-Marquardt fit replacing ``curve_fit``.
 
-    ``scipy.optimize.curve_fit(f, x, y, p0=...)`` with no bounds / sigma is an
+    ``scipy.optimize.curve_fit(f, x, y, p0=...)`` with no bounds/sigma is an
     unconstrained nonlinear least-squares fit; MINPACK's ``lmdif`` (what scipy
-    calls) is a trust-region LM over a forward-difference Jacobian. This emits
-    the textbook damped-normal-equations form of the same thing::
+    calls) is a trust-region LM over a forward-difference Jacobian. Emits the
+    textbook damped-normal-equations form::
 
         r = f(x, p) - y                       # residual
         J[:, c] = (f(x, p + h e_c) - f(x, p)) / h   # forward-difference Jacobian
         (J^T J + lam * diag(J^T J)) dp = -J^T r
         accept dp if it lowers ||r||^2 (lam /= 10), else keep p (lam *= 10)
 
-    A rejected step is not retried within the trip: the next trip simply re-solves
-    at the same p with a larger lam (costing one redundant Jacobian), which keeps
-    the emitted nest a flat fixed-trip loop with no inner convergence search.
+    A rejected step isn't retried within the trip -- the next trip re-solves at
+    the same p with a larger lam, keeping the nest a flat fixed-trip loop with
+    no inner convergence search.
 
-    Two choices make the result agree with scipy's to the harness's 1e-9, rather
-    than merely landing on the same optimum to fitting accuracy:
+    Two choices make the result agree with scipy's to the harness's 1e-9, not
+    just the same optimum to fitting accuracy:
 
-    * The step ``h = sqrt(eps) * |p_j|`` is MINPACK's own (:func:`_fd_step`, over the
-      WORKING precision -- an fp64 step silently vanishes at fp32). A
-      finite-difference Jacobian shifts the stationary point from ``J^T r = 0``
-      to ``J~^T r = 0``; sharing the step makes both solvers inherit the SAME
-      shift instead of two different ones.
-    * A fixed trip count, iterating well past convergence, rather than a
-      dynamic break -- the static backends want a static trip count, and the
-      extra trips are no-ops once the step is rejected at ``lam`` ceiling.
+    * Step ``h = sqrt(eps) * |p_j|`` is MINPACK's own (:func:`_fd_step`, over
+      the WORKING precision -- an fp64 step vanishes at fp32). A
+      finite-difference Jacobian shifts the stationary point from ``J^T r=0``
+      to ``J~^T r=0``; sharing the step makes both solvers inherit the SAME
+      shift.
+    * A fixed trip count well past convergence, not a dynamic break -- static
+      backends want a static trip count, and surplus trips are no-ops once the
+      step is rejected at the ``lam`` ceiling.
 
-    ``np.linalg.solve`` is left for the existing solve expander (Gauss-Jordan
-    with partial pivoting) to lower; the damping keeps the system positive
-    definite, so the pivoting never meets a singular column in practice.
+    ``np.linalg.solve`` is left to the existing Gauss-Jordan expander; the
+    damping keeps the system positive definite, so pivoting never meets a
+    singular column in practice.
 
-    Every generated name differs from every other by more than CASE: Fortran
-    identifiers are case-insensitive, so a ``_J`` Jacobian beside a ``_j`` loop
-    index would collide into one symbol in the emitted module.
+    Generated names differ by more than case: Fortran identifiers are
+    case-insensitive, so ``_J`` beside ``_j`` would collide into one symbol.
     """
     n, m = f"{p0}.shape[0]", f"{y}.shape[0]"
     i, c, a, b, it = f"{pfx}_i", f"{pfx}_c", f"{pfx}_a", f"{pfx}_b", f"{pfx}_it"
@@ -2514,16 +2509,16 @@ def _curve_fit_lm_lines(popt: str, f: str, x: str, y: str, p0: str, pfx: str, it
 
 
 #: ``curve_fit`` keywords the LM lowering reproduces exactly. ``maxfev`` bounds
-#: MINPACK's function-evaluation budget; the emitted fit uses a fixed trip count
-#: that converges far inside it, so honouring the number is meaningless -- but a
-#: keyword that CHANGES the objective (bounds / sigma / absolute_sigma) or the
-#: derivative (jac) would silently fit something else, so it is refused.
+#: MINPACK's eval budget; the fixed trip count converges far inside it, so
+#: honouring the number is meaningless. A keyword that CHANGES the objective
+#: (bounds/sigma/absolute_sigma) or derivative (jac) is refused instead of
+#: silently fitting something else.
 _CURVE_FIT_IGNORED_KW = frozenset({"maxfev", "p0", "method", "full_output"})
 
-#: Fixed LM trip count. The corpus fit is converged well inside it -- raising the
-#: count to 200 reproduces the 100-trip parameters bit-for-bit -- and each surplus
-#: trip is a rejected step (lambda pinned at its ceiling), so the margin costs
-#: time rather than accuracy and buys insensitivity to the starting guess.
+#: Fixed LM trip count. The fit converges well inside it -- 200 trips reproduce
+#: the 100-trip parameters bit-for-bit, each surplus trip a rejected step (lambda
+#: at ceiling) -- so the margin costs time, not accuracy, and buys insensitivity
+#: to the starting guess.
 _CURVE_FIT_ITERS = 100
 
 
@@ -2543,23 +2538,22 @@ def _curve_fit_call(node: ast.AST) -> Optional[ast.Call]:
 class _CurveFitRewriter(ast.NodeTransformer):
     """``popt, pcov = curve_fit(f, x, y, p0=g)`` -> a naive LM loop nest.
 
-    The static backends have no scipy; the fit is an unconstrained nonlinear
+    Static backends have no scipy; the fit is an unconstrained nonlinear
     least-squares problem over a smooth analytic model, so it lowers to plain
-    loops + arithmetic (:func:`_curve_fit_lm_lines`) with the linear solve left
+    loops + arithmetic (:func:`_curve_fit_lm_lines`), leaving the linear solve
     to the existing ``np.linalg.solve`` expander.
 
-    The model ``f`` is a nested / module-level ``def f(grid, *p)``: curve_fit
-    calls it as ``f(x, *popt)``, so its varargs tuple IS the parameter vector.
-    Rebinding ``*p`` to a single ndarray parameter is therefore exactly
-    curve_fit's own contract, and turns ``f`` into an ordinary one-array-in,
-    one-array-out helper the existing inliner already handles (its free
-    ``npeaks`` resolves in the kernel scope it inlines into). Negative constant
-    indices into ``p`` (``p[-1]`` -- the shared baseline) are rewritten against
-    the now-known parameter count, which the emitters cannot fold themselves.
+    Model ``f`` is a nested/module-level ``def f(grid, *p)``: curve_fit calls
+    it as ``f(x, *popt)``, so its varargs tuple IS the parameter vector.
+    Rebinding ``*p`` to a single ndarray parameter matches curve_fit's own
+    contract, turning ``f`` into an ordinary one-array-in-one-array-out helper
+    the inliner already handles (``npeaks`` resolves free in the inlined-into
+    scope). Negative constant indices into ``p`` (``p[-1]``, the shared
+    baseline) are rewritten against the now-known parameter count, which the
+    emitters cannot fold themselves.
 
-    ``pcov`` (the covariance estimate) is NOT computed: the corpus kernel binds
-    it to ``_`` and never reads it. A live ``pcov`` raises rather than emitting
-    a silently-absent output.
+    ``pcov`` is NOT computed: the corpus kernel binds it to ``_`` and never
+    reads it. A live ``pcov`` raises rather than silently emitting nothing.
     """
 
     def __init__(self, tree: ast.Module, kernel: ast.FunctionDef, precision: Optional[str] = None):
@@ -2660,14 +2654,14 @@ class _NegParamIndexFold(ast.NodeTransformer):
 def rewrite_curve_fit(tree: ast.Module, kernel: ast.FunctionDef, precision: Optional[str] = None) -> None:
     """Lower every ``curve_fit`` in ``kernel`` to a naive LM loop nest, in place.
 
-    Runs BEFORE helper inlining (like the eigh rewriter) so the model ``def`` is
-    still a distinct function to rebind, and the LM's calls to it are inlined by
-    the ordinary helper machinery afterwards.
+    Runs BEFORE helper inlining (like the eigh rewriter) so the model ``def``
+    is still distinct to rebind; the LM's calls to it are inlined afterwards by
+    the ordinary helper machinery.
 
-    ``precision`` is the working float type. It is needed HERE, at the source rewrite,
-    because the LM's finite-difference step is a numerical-method constant baked into
-    the emitted body -- the later ``apply_precision`` remaps dtype tables only and
-    cannot reach a literal. See :func:`_fd_step`. ``None`` keeps the fp64 rule.
+    ``precision`` is the working float type, needed HERE at the source rewrite
+    because the LM's finite-difference step is a numerical constant baked into
+    the emitted body -- ``apply_precision`` later remaps dtype tables only and
+    cannot reach a literal (see :func:`_fd_step`). ``None`` keeps the fp64 rule.
     """
     fits = [n for n in ast.walk(kernel) if _curve_fit_call(n) is not None]
     if not fits:
@@ -2787,16 +2781,16 @@ def _np_linalg_attr(node: ast.AST) -> Optional[str]:
 
 def _cholesky_lines(temp: str, a: str, n: str, p: str, hermitian: bool = False) -> List[str]:
     """Source lines computing ``np.linalg.cholesky(a)`` into a freshly zeroed
-    ``temp`` via the Cholesky-Banachiewicz triple loop (the same O(n^3) form the
-    C/Fortran backends lower in :func:`lib_nodes.expand_cholesky`). ``temp`` is a
-    fresh buffer, so a strict-upper-triangle of zeros (numpy's convention) comes
-    for free from the ``np.zeros`` init.
+    ``temp`` via the Cholesky-Banachiewicz triple loop (same O(n^3) form the
+    C/Fortran backends use in :func:`lib_nodes.expand_cholesky`). ``temp`` is
+    fresh, so the strict-upper-triangle of zeros (numpy's convention) comes
+    free from the ``np.zeros`` init.
 
-    ``hermitian`` (a complex-Hermitian positive-definite ``a``, e.g. the metric
+    ``hermitian`` (complex-Hermitian positive-definite ``a``, e.g. the metric
     ``b`` in a generalized eigenproblem) conjugates the second factor of every
-    inner product (``a = L Lᴴ``) and takes the real part of the diagonal argument
-    to ``sqrt`` (Hermitian diagonals are real up to roundoff); for a real ``a``
-    both reduce to the plain form."""
+    inner product (``a = L Lᴴ``) and takes the real part before ``sqrt``
+    (Hermitian diagonals are real up to roundoff); a real ``a`` reduces to the
+    plain form."""
     cj = "np.conj({0})" if hermitian else "{0}"
     diag = f"np.sqrt({p}_s.real)" if hermitian else f"np.sqrt({p}_s)"
     jk, ik = f"{temp}[{p}_j, {p}_k]", f"{temp}[{p}_i, {p}_k]"
@@ -2816,16 +2810,16 @@ def _cholesky_lines(temp: str, a: str, n: str, p: str, hermitian: bool = False) 
 
 
 def _gauss_jordan_lines(aw: str, o: str, n: str, m: Optional[str], p: str) -> List[str]:
-    """Source lines for Gauss-Jordan elimination with partial pivoting reducing
+    """Source lines for Gauss-Jordan elimination with partial pivoting, reducing
     ``(aw | o)`` in place so ``aw`` -> identity and ``o`` -> ``aw^-1 @ o``. ``m``
-    marks a 2-D ``o`` (whole-row ops on it) vs ``None`` for a 1-D vector ``o``
-    (scalar ops). This is the shared core of both ``np.linalg.solve`` (``o`` = a
-    copy of ``b``) and ``np.linalg.inv`` (``o`` = the identity).
+    marks a 2-D ``o`` (whole-row ops) vs ``None`` for a 1-D ``o`` (scalar ops).
+    Shared core of both ``np.linalg.solve`` (``o`` = copy of ``b``) and
+    ``np.linalg.inv`` (``o`` = identity).
 
-    Row-vectorized (``aw[r] -= g * aw[k]`` etc.) rather than an inner column loop:
+    Row-vectorized (``aw[r] -= g * aw[k]``) rather than an inner column loop:
     the per-element form is arithmetically identical but leaves a scalar temp
-    aliasing an array element, which pythran mis-types as an ndarray in a larger
-    function. Whole-row ops sidestep that and match numpy's LU-with-partial-pivot
+    aliasing an array element, which pythran mis-types as an ndarray in a
+    larger function. Whole-row ops match numpy's LU-with-partial-pivot
     solve/inv to rounding for well-conditioned systems (validated ~1e-17)."""
     k, r = f"{p}_k", f"{p}_r"
     # A 2-D ``o`` swaps whole rows (a fresh row .copy()); a 1-D ``o`` swaps a scalar.
@@ -2979,15 +2973,15 @@ class _LinalgInline(ast.NodeTransformer):
 
 
 def _eigh_jacobi_lines(w: str, y: str, c: str, n: str, p: str) -> List[str]:
-    """Source lines diagonalising the ``n``-by-``n`` Hermitian matrix ``c`` by
-    cyclic complex Jacobi into eigenvalues ``w`` (ascending real, shape ``(n,)``)
-    and eigenvectors ``y`` (unitary columns). Each sweep rotates every off-diagonal
-    pair ``(pp, qq)`` to zero with a unitary ``J`` (phase ``apq/|apq|`` then a real
-    symmetric Jacobi angle); the two-sided update ``A = Jᴴ A J`` runs as explicit
-    column/row loops. Selection-sort ascending at the end (numpy.linalg.eigh's
-    order). ``n`` is passed explicitly (not ``c.shape[0]``) so the C/Fortran
-    backends see the resolved dimension symbol, not a temp's ``.shape``. Validated
-    against numpy to ~5e-15."""
+    """Source lines diagonalising Hermitian ``n``x``n`` matrix ``c`` by cyclic
+    complex Jacobi into eigenvalues ``w`` (ascending real, shape ``(n,)``) and
+    eigenvectors ``y`` (unitary columns). Each sweep rotates every off-diagonal
+    pair ``(pp, qq)`` to zero with a unitary ``J`` (phase ``apq/|apq|`` then a
+    real symmetric Jacobi angle); the two-sided update ``A = Jᴴ A J`` runs as
+    explicit column/row loops. Selection-sort ascending at the end (matches
+    numpy.linalg.eigh's order). ``n`` is explicit (not ``c.shape[0]``) so
+    C/Fortran see the resolved dimension symbol, not a temp's ``.shape``.
+    Validated against numpy to ~5e-15."""
     # Diagonalise ``c`` IN PLACE -- the caller always passes a fresh, disposable
     # matrix (the reduced ``L⁻¹ a L⁻ᴴ`` or an ``ascontiguousarray`` copy), so no
     # extra working copy is needed (and the C/Fortran backends need not infer a
@@ -3065,16 +3059,17 @@ def _eigh_stmts(w: str,
                 hi: str,
                 p: str,
                 native_std: bool = False) -> List[str]:
-    """Source lines for ``w, v = eigh(a[, b])[subset lo:hi]`` (ascending). The
-    generalized Hermitian problem ``a x = w b x`` is reduced to standard form via
-    the Cholesky factor of ``b`` (``b = L Lᴴ``): ``C = L⁻¹ a L⁻ᴴ`` is Hermitian
-    with the same eigenvalues, and its eigenvectors back-transform as ``x = L⁻ᴴ
-    y``. ``cholesky``/``inv``/``@`` are left as ``np.linalg``/matmul for the native
-    backends (numba/dace) and lowered by :class:`_LinalgInline` for pythran; the
-    standard eigh is the self-contained Jacobi above, unless ``native_std`` (used
-    by backends whose ``np.linalg.eigh`` handles the standard complex-Hermitian
-    case natively -- jax's ``jnp.linalg.eigh``), in which case a single
-    ``np.linalg.eigh`` call is emitted for it. Validated vs scipy ~1e-15."""
+    """Source lines for ``w, v = eigh(a[, b])[subset lo:hi]`` (ascending).
+
+    The generalized Hermitian problem ``a x = w b x`` reduces to standard form
+    via the Cholesky factor of ``b`` (``b = L Lᴴ``): ``C = L⁻¹ a L⁻ᴴ`` is
+    Hermitian with the same eigenvalues, and its eigenvectors back-transform
+    as ``x = L⁻ᴴ y``. ``cholesky``/``inv``/``@`` stay ``np.linalg``/matmul for
+    native backends (numba/dace) and are lowered by :class:`_LinalgInline` for
+    pythran. The standard eigh is the self-contained Jacobi above, unless
+    ``native_std`` (backends whose ``np.linalg.eigh`` handles standard
+    complex-Hermitian natively -- jax), which emits a single
+    ``np.linalg.eigh`` call instead. Validated vs scipy ~1e-15."""
     if b is not None:
         pre = [
             f"{p}_L = np.linalg.cholesky({b})",
@@ -3106,19 +3101,20 @@ def _eigh_c_stmts(w: str,
                   hi: str,
                   p: str,
                   eigenvalues_only: bool = False) -> List[str]:
-    """Fully self-contained loop lowering of standard/generalized complex-Hermitian
-    ``eigh`` for the C/Fortran backends, which have no ``np.linalg`` and no matmul
-    lowering for the ``L⁻ᴴ`` conjugate-transpose operand. Emits explicit loops
-    only: complex-Hermitian Cholesky ``b = L Lᴴ``, the lower-triangular inverse
-    ``L⁻¹`` by forward substitution, the two matmuls ``C = L⁻¹ a L⁻ᴴ``, the cyclic
-    complex Jacobi, and the back-transform ``x = L⁻ᴴ y``. Matmul outputs are
-    pre-zeroed and ``+=``-accumulated (no complex literal needed); a complex zero
-    is ``z - z``. Validated vs scipy ~1e-15.
+    """Fully self-contained loop lowering of standard/generalized complex-
+    Hermitian ``eigh`` for the C/Fortran backends, which have no ``np.linalg``
+    and no matmul lowering for the ``L⁻ᴴ`` conjugate-transpose operand. Emits
+    explicit loops only: complex-Hermitian Cholesky ``b = L Lᴴ``, the lower-
+    triangular inverse ``L⁻¹`` by forward substitution, the two matmuls
+    ``C = L⁻¹ a L⁻ᴴ``, the cyclic complex Jacobi, and the back-transform
+    ``x = L⁻ᴴ y``. Matmul outputs are pre-zeroed and ``+=``-accumulated; a
+    complex zero is ``z - z``. Validated vs scipy ~1e-15.
 
-    ``eigenvalues_only`` (``np.linalg.eigvalsh``) binds only the ascending eigenvalue
-    vector ``w`` into a single Name target: the same Jacobi sweep runs, but the
-    ``L⁻ᴴ`` back-transform and the ``v`` eigenvector output are dropped (``v`` is
-    ``None``). numpy has no generalized eigvalsh, so this path always has ``b`` None."""
+    ``eigenvalues_only`` (``np.linalg.eigvalsh``) binds only the ascending
+    eigenvalue vector ``w``: the same Jacobi sweep runs, but the ``L⁻ᴴ``
+    back-transform and eigenvector output ``v`` are dropped (``v`` is
+    ``None``). numpy has no generalized eigvalsh, so this path always has
+    ``b`` None."""
     n = f"{a}.shape[0]"
     lines: List[str] = []
     if b is not None:
@@ -3586,17 +3582,17 @@ class _DecomposeRollSlice(ast.NodeTransformer):
 
 
 class _ComplexAccessorToFunc(ast.NodeTransformer):
-    """Canonicalise every complex-accessor spelling to its ``np.*`` function form:
-    ``z.real`` -> ``np.real(z)``, ``z.imag`` -> ``np.imag(z)``, ``z.conjugate()`` /
-    ``z.conj()`` -> ``np.conj(z)``. One canonical spelling means one native emit
-    handler per op (``creal`` / ``cimag`` / ``conj``) instead of parallel attribute,
-    method, and function paths, and the Python backends run the standard ``np.*``
-    ufuncs. Only the three complex accessors are rewritten -- ``.shape`` / ``.size``
-    / ``.T`` / ``.dtype`` and every other attribute pass through untouched.
+    """Canonicalise every complex-accessor spelling to its ``np.*`` function
+    form: ``z.real`` -> ``np.real(z)``, ``z.imag`` -> ``np.imag(z)``,
+    ``z.conjugate()``/``z.conj()`` -> ``np.conj(z)``. One canonical spelling
+    means one native emit handler per op (``creal``/``cimag``/``conj``)
+    instead of parallel attribute/method/function paths, and the Python
+    backends run the standard ``np.*`` ufuncs. Only these three accessors are
+    rewritten -- ``.shape``/``.size``/``.T``/``.dtype`` pass through untouched.
 
-    ``conjugate_only`` restricts the rewrite to the ``.conjugate()`` / ``.conj()``
-    method (used for the Python backends, which already run ``.real`` / ``.imag``
-    verbatim but whose pythran path lacks the ``.conjugate()`` method)."""
+    ``conjugate_only`` restricts the rewrite to ``.conjugate()``/``.conj()``
+    (for Python backends that already run ``.real``/``.imag`` verbatim, but
+    whose pythran path lacks the ``.conjugate()`` method)."""
 
     def __init__(self, conjugate_only: bool = False):
         self.changed = False
@@ -3657,11 +3653,12 @@ _UFUNC_REDUCE_TO_CALL = {
 
 
 class _UfuncReduceToReducer(ast.NodeTransformer):
-    """``np.add.reduce(x, axis=k)`` -> ``np.sum(x, axis=k)`` (and the prod / max / min / all / any
-    ufuncs). ``ufunc.reduce`` defaults to ``axis=0`` while the reducer defaults to ``axis=None``
-    (a full reduction), so inject an explicit ``axis=0`` when the call gave none -- preserving the
-    ufunc semantics. Runs before the elementwise-ufunc desugars so ``np.add`` inside ``np.add.reduce``
-    is never mistaken for an elementwise add."""
+    """``np.add.reduce(x, axis=k)`` -> ``np.sum(x, axis=k)`` (and prod/max/min/
+    all/any). ``ufunc.reduce`` defaults to ``axis=0``, the reducer to
+    ``axis=None`` (full reduction) -- inject an explicit ``axis=0`` when the
+    call gave none, preserving ufunc semantics. Runs before the
+    elementwise-ufunc desugars so ``np.add`` inside ``np.add.reduce`` is never
+    mistaken for an elementwise add."""
 
     def __init__(self):
         self.changed = False
@@ -3687,24 +3684,24 @@ class _UfuncReduceToReducer(ast.NodeTransformer):
 
 
 class _ElementalUfuncToPrimitive(ast.NodeTransformer):
-    """Rewrite the two-argument elemental numpy ufuncs that lack a direct native /
-    JIT lowering into equivalent expressions over already-supported primitives, so
-    every backend (C / C++ / Fortran + numba / pythran / jax) lowers them uniformly
-    and the array / slice forms scalarise through the normal elementwise expander:
+    """Rewrite two-argument elemental numpy ufuncs with no direct native/JIT
+    lowering into equivalent expressions over already-supported primitives, so
+    every backend (C/C++/Fortran + numba/pythran/jax) lowers them uniformly
+    through the normal elementwise expander:
 
-      * ``np.mod(a, b)`` / ``np.remainder(a, b)`` -> ``a % b`` -- numpy's floored
-        modulo is exactly the ``%`` operator (result takes the sign of the divisor).
+      * ``np.mod(a, b)``/``np.remainder(a, b)`` -> ``a % b`` -- numpy's floored
+        modulo is exactly the ``%`` operator (sign of the divisor).
       * ``np.logaddexp(a, b)`` -> ``np.maximum(a, b) + np.log(1.0 + np.exp(-np.abs(a - b)))``
-        -- numpy's stable log-sum-exp (``npy_logaddexp``). ``log1p`` would be the exact
-        spelling but has no Fortran intrinsic; here ``exp(-|a-b|)`` is in ``(0, 1]`` so
-        ``log(1 + .)`` is well-conditioned and agrees with numpy to a few ulp.
+        -- numpy's stable log-sum-exp. ``log1p`` would be the exact spelling but
+        has no Fortran intrinsic; ``exp(-|a-b|)`` is in ``(0, 1]`` so
+        ``log(1 + .)`` is well-conditioned, agreeing with numpy to a few ulp.
       * ``np.heaviside(a, b)`` -> ``np.where(a < 0, 0.0, np.where(a == 0, b, 1.0))``
-        -- 0 below zero, the second arg exactly at zero, 1 above.
+        -- 0 below zero, ``b`` exactly at zero, 1 above.
 
-    numba has no ``np.heaviside`` and pythran no ``np.logaddexp``; expanding to the
-    shared primitives every backend supports is the single uniform lowering, with no
-    per-backend special-casing. Reused operands are deep-copied so no AST node is
-    shared between two positions."""
+    numba has no ``np.heaviside``, pythran no ``np.logaddexp``; expanding to
+    shared primitives is one uniform lowering with no per-backend special-
+    casing. Reused operands are deep-copied so no AST node is shared between
+    two positions."""
 
     def __init__(self):
         self.changed = False
@@ -3736,21 +3733,21 @@ class _ElementalUfuncToPrimitive(ast.NodeTransformer):
 
 
 def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) -> str:
-    """Rewrite ``source`` so numba / pythran / dace can compile it: expand the
-    numpy ops they do not support (batched ``@`` / ``np.matmul``, ``np.pad``,
+    """Rewrite ``source`` so numba/pythran/dace can compile it: expand numpy
+    ops they don't support (batched ``@``/``np.matmul``, ``np.pad``,
     ``np.einsum``, ``np.fft.*``, ``np.mgrid``, axis reductions, ufunc.outer,
-    multi-array fancy gather, 2-D boolean-mask assignment, ``np.ndarray`` /
-    ``np.linspace(dtype=)`` / ``abs(array)``) into plain loops / broadcasts /
-    ``np.where``. EVERY function in the module is processed (helpers too -- nbody's
-    masked updates live in getAcc/getEnergy), each with its own rank table seeded
-    from the kernel arrays (kir) or inferred call-site param ranks. Every pass is
-    pattern-guarded and the original ``source`` is returned byte-for-byte when none
-    fire, so a kernel that needs no rewrite keeps its verbatim body.
+    multi-array fancy gather, 2-D boolean-mask assignment, ``np.ndarray``/
+    ``np.linspace(dtype=)``/``abs(array)``) into plain loops/broadcasts/
+    ``np.where``. EVERY function in the module is processed (helpers too --
+    nbody's masked updates live in getAcc/getEnergy), each with its own rank
+    table seeded from the kernel arrays (kir) or inferred call-site param
+    ranks. Every pass is pattern-guarded; ``source`` returns byte-for-byte
+    unchanged when none fire.
 
-    ``backend`` selects the target's native-``np.linalg`` capability: an op the
-    backend implements natively (numba / dace do cholesky/solve/inv) is left
-    verbatim; one it lacks (pythran has no np.linalg) is lowered to explicit loops.
-    ``None`` (the default) lowers no linalg -- the safe backwards-compatible base."""
+    ``backend`` selects the target's native-``np.linalg`` capability: an op it
+    implements natively (numba/dace do cholesky/solve/inv) is left verbatim;
+    one it lacks (pythran has no np.linalg) is lowered to explicit loops.
+    ``None`` (default) lowers no linalg -- the safe backwards-compatible base."""
     lower_linalg = _LINALG_LOWERABLE - _NATIVE_LINALG.get(backend, _LINALG_LOWERABLE)
     tree = ast.parse(source)
     all_funcs = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
