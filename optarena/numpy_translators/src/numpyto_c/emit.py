@@ -323,6 +323,13 @@ class _CBodyEmitter(BaseEmitter):
         return _fp8_fns(self._name_dtype(base.id) or "")
 
     def _emit_augassign(self, node: ast.AugAssign, indent: str) -> str:
+        # // and % have no C compound operator with numpy semantics (// needs int_floor,
+        # % needs python_mod's divisor sign). Expand ``t //= v`` / ``t %= v`` to ``t = t <op> v``
+        # and route the RHS through the BinOp emitter, which applies the right helper (and any
+        # fp8 re-rounding) -- otherwise ``//=`` raises and ``%=`` emits raw C dividend-sign modulo.
+        if isinstance(node.op, (ast.FloorDiv, ast.Mod)):
+            rhs = self.emit_expr(ast.BinOp(left=node.target, op=node.op, right=node.value))
+            return f"{indent}{self.emit_expr(node.target)} = {rhs};"
         op = _BINOP.get(type(node.op))
         if op is None:
             raise NotImplementedError(f"augmented op {type(node.op).__name__}")
@@ -999,7 +1006,9 @@ def _emit_body(kir: KernelIR,
     decls: List[str] = []
     frees: List[str] = []
     for name in int_locals:
-        decls.append(f"{indent}int {name};")
+        # canonical int is int64_t everywhere else (see _c_type / the int(x) cast); a bare 32-bit
+        # int here overflows on a literal grid unpack like nx, ny = 46341, 46341 (nx*ny > 2^31).
+        decls.append(f"{indent}{_c_type('int')} {name};")
     for name, ctype in implicit:
         decls.append(f"{indent}{ctype} {name};")
     # Fresh np.zeros/np.ones locals need an initial fill; zeros_refill lets an in-loop reset re-zero each iteration.

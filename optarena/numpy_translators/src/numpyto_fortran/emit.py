@@ -759,6 +759,12 @@ class _FortranBodyEmitter(BaseEmitter):
             # numpy >> on a signed integer is arithmetic (sign-preserving); ISHFT is
             # logical (zero-fill). SHIFTA replicates the sign bit.
             return f"{indent}{lhs} = SHIFTA({lhs}, {rhs})"
+        # // and % have no Fortran compound form with numpy semantics: BINOP maps FloorDiv->'/'
+        # (integer truncation / real division, not floor) and Mod->'MOD' (a function, so ``x MOD y``
+        # is invalid infix). Expand ``t //= v`` / ``t %= v`` to ``t = t <op> v`` through the BinOp
+        # emitter, which applies the floor formula / python_mod.
+        if isinstance(node.op, (ast.FloorDiv, ast.Mod)):
+            return f"{indent}{lhs} = {self.emit_expr(ast.BinOp(left=node.target, op=node.op, right=node.value))}"
         op = _BINOP.get(type(node.op))
         if op is None:
             raise NotImplementedError(f"augmented op {type(node.op).__name__}")
@@ -915,11 +921,16 @@ class _FortranBodyEmitter(BaseEmitter):
                     b = f"INT({self.emit_expr(node.right)}, {ik})"
                     return (f"({a} / {b} - MERGE(1_{ik}, 0_{ik}, MOD({a}, {b}) /= 0_{ik} "
                             f".AND. ({a} < 0_{ik}) .NEQV. ({b} < 0_{ik})))")
-                # Float operands: a bare REAL(x) is default single precision (drops
-                # mantissa bits); force the divide into double before the floor.
+                # Float //: numpy floor_divide returns a FLOAT floor, not an integer -- FLOOR(...)
+                # here truncated to int64, which is undefined for NaN/Inf/|x|>2^63 (numpy gives
+                # NaN/NaN/5e19). ``(a - MODULO(a, b)) / b`` is the real-valued floor and, because
+                # Fortran real MODULO is divisor-signed like numpy's mod, matches numpy on sign and
+                # propagates NaN/Inf (MODULO(Inf, b) = NaN -> NaN, as numpy's Inf // b). REAL(.., dk)
+                # forces double first so a bare single REAL does not drop mantissa bits.
                 dk = _double_kind()
-                return (f"FLOOR(REAL({self.emit_expr(node.left)}, {dk}) / "
-                        f"REAL({self.emit_expr(node.right)}, {dk}), {self._int_kind_selector()})")
+                a = f"REAL({self.emit_expr(node.left)}, {dk})"
+                b = f"REAL({self.emit_expr(node.right)}, {dk})"
+                return f"(({a}) - MODULO({a}, {b})) / ({b})"
             # Bitwise ops: Fortran uses IAND/IOR/IEOR/NOT for integer bit ops (both
             # args must share a kind, so a bare literal takes the other side's suffix).
             # & / | on LOGICAL operands (numpy's elementwise boolean AND/OR) must be
