@@ -180,9 +180,17 @@ class _CBodyEmitter(BaseEmitter):
         else:
             raise NotImplementedError("range() needs 1-3 args")
 
+        # A loop whose step SIGN is only known at runtime is emitted with a ternary controlling
+        # predicate below, which is not an OpenMP canonical loop form -- `#pragma omp parallel for`
+        # over it fails to compile with `invalid controlling predicate`. The direction has to be
+        # fixed at compile time for the pragma to be legal, so a runtime-sign loop cannot be
+        # parallelised at all; it still runs correctly in serial.
+        step_node = args[2] if len(args) == 3 else None
+        sign = self.static_step_sign(step_node)
+
         # OpenMP: tag the outermost eligible loop -- independent map -> parallel for; reduction -> add reduction(op:acc).
         omp_prefix = ""
-        if self.parallel and not self.parallel_active and not parallelism.is_timestep_loop(node):
+        if self.parallel and sign is not None and not self.parallel_active and not parallelism.is_timestep_loop(node):
             red = parallelism.loop_reduction(node)
             if red is not None:
                 op, acc = red
@@ -198,10 +206,8 @@ class _CBodyEmitter(BaseEmitter):
         if entered_parallel:
             self.parallel_active = False
         # Negative step -> reverse loop (i > hi). When the sign is only known at RUNTIME neither
-        # direction can be baked in, so the guard picks one per evaluation; the step is loop-
-        # invariant, so this costs nothing after hoisting.
-        step_node = args[2] if len(args) == 3 else None
-        sign = self.static_step_sign(step_node)
+        # direction can be baked in, so the guard picks one per evaluation (and the loop above was
+        # kept out of OpenMP, since this ternary is not a canonical parallel-for predicate).
         if sign is None:
             cond = f"(({step}) > 0 ? {var} < {hi} : {var} > {hi})"
         else:

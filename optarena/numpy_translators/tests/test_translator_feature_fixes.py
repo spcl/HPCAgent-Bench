@@ -537,7 +537,8 @@ def test_body_local_dim_alias_excluded_from_params():
     from optarena.emit_bridge import legacy_bench_info_dict
     info = legacy_bench_info_dict(BenchSpec.load("smith_waterman"))["benchmark"]
     with tempfile.TemporaryDirectory() as td:
-        assert no._emit("smith_waterman", info, pathlib.Path(td))
+        ok, diag = no._emit("smith_waterman", info, pathlib.Path(td))
+        assert ok, f"smith_waterman emit failed{diag}"
         binding = json.loads(next(pathlib.Path(td).glob("*_binding.json")).read_text())
         names = [a["name"] for a in binding["args"]]
     assert "M" not in names, f"M leaked as a parameter: {names}"
@@ -634,7 +635,8 @@ def test_fortran_abi_param_order_matches_binding():
     from optarena.emit_bridge import legacy_bench_info_dict
     info = legacy_bench_info_dict(BenchSpec.load("gesummv"))["benchmark"]
     with tempfile.TemporaryDirectory() as td:
-        assert no._emit("gesummv", info, pathlib.Path(td))
+        ok, diag = no._emit("gesummv", info, pathlib.Path(td))
+        assert ok, f"gesummv emit failed{diag}"
         # The fp64 C/Fortran binding -- NOT the pluto sidecar
         # (``*_fp64_pluto_binding.json``), which carries its own symbols-first arg
         # order and is marshalled via its own binding (see numerical_oracle
@@ -674,8 +676,8 @@ def test_fp16_emission_compiles_c_cpp(kernel):
     info = legacy_bench_info_dict(BenchSpec.load(kernel))["benchmark"]
     with tempfile.TemporaryDirectory() as td:
         tdp = pathlib.Path(td)
-        assert no._emit(kernel, info, tdp, precision="float16"), \
-            f"{kernel}: fp16 emit failed"
+        ok, diag = no._emit(kernel, info, tdp, precision="float16")
+        assert ok, f"{kernel}: fp16 emit failed{diag}"
         for backend, ext in (("c", ".c"), ("cpp", ".cpp")):
             src = next(tdp.glob(f"*_fp16{ext}"))
             # Output width comes from the IR precision pass -> the half C type.
@@ -699,7 +701,8 @@ def test_fp16_signature_uses_half_not_double():
     info = legacy_bench_info_dict(BenchSpec.load("gemm"))["benchmark"]
     with tempfile.TemporaryDirectory() as td:
         tdp = pathlib.Path(td)
-        assert no._emit("gemm", info, tdp, precision="float16")
+        ok, diag = no._emit("gemm", info, tdp, precision="float16")
+        assert ok, f"gemm fp16 emit failed{diag}"
         c_src = next(tdp.glob("*_fp16.c")).read_text()
         sig = c_src.split("gemm_fp16(", 1)[1].split(")", 1)[0]
         # gemm's C / alpha / beta are floats -> half; none may be ``double``.
