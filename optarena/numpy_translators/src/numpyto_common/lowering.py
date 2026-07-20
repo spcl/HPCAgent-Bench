@@ -1451,7 +1451,15 @@ def _read_in(name: str, blocks: "Tuple[List[ast.stmt], ...]") -> bool:
     for block in blocks:
         for stmt in block:
             for sub in ast.walk(stmt):
-                if isinstance(sub, ast.Name) and sub.id == name and isinstance(sub.ctx, ast.Load):
+                if not (isinstance(sub, ast.Name) and sub.id == name):
+                    continue
+                # Load is the obvious read. An AugAssign target and a `del` also READ the binding
+                # they act on, but both carry ctx=Store/Del -- so a whole-array `e += 1.0` was
+                # neither a kill (correctly) nor a read (wrongly), and liveness answered "dead".
+                if isinstance(sub.ctx, (ast.Load, ast.Del)):
+                    return True
+                if isinstance(sub.ctx, ast.Store) and any(
+                        isinstance(anc, ast.AugAssign) and anc.target is sub for anc in ast.walk(stmt)):
                     return True
     return False
 
@@ -1466,14 +1474,27 @@ def _rebinds(stmt: ast.stmt, name: str) -> bool:
     """
     if isinstance(stmt, ast.Assign):
         for tgt in stmt.targets:
-            if isinstance(tgt, ast.Name) and tgt.id == name:
+            if _binds_name(tgt, name):
                 return True
-            # Tuple unpacking (``X, Y = Y, Z``) re-binds every element it names.
-            if isinstance(tgt, ast.Tuple):
-                if any(isinstance(e, ast.Name) and e.id == name for e in tgt.elts):
-                    return True
-    if isinstance(stmt, ast.For) and isinstance(stmt.target, ast.Name):
-        return stmt.target.id == name
+    # A For target is NOT a kill: `for e in range(k)` with a runtime k == 0 never binds it, so the
+    # previous binding survives the loop. Treating it as one dropped every read before it from the
+    # liveness scan (may-define, not must-define).
+    return False
+
+
+def _binds_name(target: ast.AST, name: str) -> bool:
+    """True when an assignment TARGET binds ``name``, through any nesting.
+
+    Covers ``x``, ``a, x = ...``, ``a, *x = ...`` and ``(a, (x, b)) = ...``. Missing a form here is
+    not symmetric: an unrecognised target means the kill is not seen, the prefix is not truncated,
+    extra reads are counted, and a working kernel is REFUSED.
+    """
+    if isinstance(target, ast.Name):
+        return target.id == name
+    if isinstance(target, ast.Starred):
+        return _binds_name(target.value, name)
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return any(_binds_name(el, name) for el in target.elts)
     return False
 
 
@@ -1494,7 +1515,10 @@ def _live_on_loop_reentry(stmts: List[ast.stmt], i: int, name: str) -> "Tuple[Li
     prefix = stmts[:i]
     for j, stmt in enumerate(prefix):
         if _rebinds(stmt, name):
-            return (prefix[:j], )
+            # Stop AT the kill, not before it: the killing statement's own RHS still reads the old
+            # binding (`X = X * 2.0`, `X, Y = Y, X`) and that read happens on re-entry. Dropping the
+            # whole statement skipped it, so a genuinely ambiguous rebinding was accepted.
+            return (prefix[:j], [stmt.value] if isinstance(stmt, ast.Assign) else [])
     return (prefix, )
 
 
@@ -1566,7 +1590,8 @@ def _ssa_rename_reassigned(tree: ast.AST, arrays_shapes: Dict[str, List[str]]) -
               version: Dict[str, int],
               nested: bool = False,
               live_after: Tuple[List[ast.stmt], ...] = (),
-              loop_body: bool = False) -> None:
+              loop_body: bool = False,
+              reentry: Tuple[Tuple[List[ast.stmt], int], ...] = ()) -> None:
         # Single function-scope rename_map / shape map -- Python does
         # not have block scope for assignments, so a ``bcol = ...``
         # inside sibling for-loops at function scope is the SAME local
@@ -1632,7 +1657,12 @@ def _ssa_rename_reassigned(tree: ast.AST, arrays_shapes: Dict[str, List[str]]) -
                             # independent temporaries in sibling loop nests) is unambiguous.
                             # Inside a loop body the statements BEFORE this one also run after it,
                             # on the next iteration, so a read there sees the previous binding.
-                            after = live_after + (_live_on_loop_reentry(stmts, i, orig) if loop_body else ())
+                            after = live_after
+                            # Every enclosing loop re-enters, not just the innermost one.
+                            for blk, idx in reentry:
+                                after = after + _live_on_loop_reentry(blk, idx, orig)
+                            if loop_body:
+                                after = after + _live_on_loop_reentry(stmts, i, orig)
                             if nested and _read_in(orig, after):
                                 raise NotImplementedError(
                                     f"{orig!r} (line {stmt.lineno}) is re-bound to a different shape "
@@ -1661,9 +1691,21 @@ def _ssa_rename_reassigned(tree: ast.AST, arrays_shapes: Dict[str, List[str]]) -
                 # block plus whatever follows the enclosing blocks; a loop also re-enters its own
                 # body, so a read at the top sees the previous iteration's binding.
                 inner_after = (stmts[i + 1:], ) + live_after
+                # A While re-tests its condition and both loop forms may run an `else` after the
+                # body, so both execute AFTER anything the body binds.
+                if isinstance(stmt, ast.While):
+                    inner_after = ([ast.Expr(value=stmt.test)], ) + inner_after
+                if stmt.orelse and isinstance(stmt, (ast.For, ast.While)):
+                    inner_after = (stmt.orelse, ) + inner_after
                 is_loop = isinstance(stmt, (ast.For, ast.While))
+                # Carry the enclosing loops' RE-ENTRY POINTS down, not a pre-truncated prefix: the
+                # truncation depends on the name being minted, which is not known until the mint
+                # site. Without this a rebinding nested one level below a loop body escaped the
+                # guard entirely -- the same miscompile, just deeper.
+                inner_reentry = (reentry + ((stmts, i), )) if loop_body else reentry
                 for branch, in_loop in ((stmt.body, is_loop), (stmt.orelse, False)):
-                    _walk(branch, dict(rename_map), dict(last_shape), version, True, inner_after, in_loop)
+                    _walk(branch, dict(rename_map), dict(last_shape), version, True, inner_after, in_loop,
+                          inner_reentry)
 
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef):

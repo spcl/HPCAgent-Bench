@@ -175,3 +175,112 @@ def test_rebinding_confined_to_a_loop_body_does_not_escape():
            "            t[j] = a[i]\n"
            "        out[i] = t[0]\n")
     _assert_ok(_run(src))
+
+
+# --- holes found by review of the first fix; each was CONFIRMED before being closed -------------
+# These drive the PASS directly instead of emitting and running. The property under test belongs to
+# the lowering pass, and going end-to-end is actively unsafe here: the while-loop case below is a
+# non-terminating kernel whenever the guard fails, so a regression would HANG the suite for minutes
+# per backend instead of failing in milliseconds.
+import ast  # noqa: E402
+
+import pytest  # noqa: E402
+
+from numpyto_common.lowering import _ssa_rename_reassigned  # noqa: E402
+
+_SHAPES = {"a": ["n"], "out": ["n"]}
+
+
+def _lower(body):
+    _ssa_rename_reassigned(ast.parse("import numpy as np\n" + body), dict(_SHAPES))
+
+
+def _assert_refused(body):
+    with pytest.raises(NotImplementedError, match="conditional control flow"):
+        _lower(body)
+
+
+def test_rebinding_nested_below_the_loop_body_is_refused():
+    """The guard consulted only the IMMEDIATELY enclosing block, so a rebinding one level deeper
+    escaped it -- the same miscompile the guard exists for, just nested. Every enclosing loop's
+    re-entry POINT is carried down now and truncated per name at the mint site (the truncation
+    depends on the name, so a pre-truncated prefix cannot be passed down)."""
+    _assert_refused("""
+def k(a, out, n, m, iters):
+    e = np.zeros((n,))
+    for it in range(iters):
+        out[it] = e[0]
+        for j in range(m):
+            e = np.zeros((m,))
+            e[j] = 1.0
+""")
+
+
+def test_the_killing_statement_own_rhs_read_still_counts():
+    # `X = np.zeros(n) + X[0]` kills X, but its RHS reads the previous binding FIRST. Truncating
+    # the prefix before the whole statement skipped that read.
+    _assert_refused("""
+def k(a, out, n, m, T):
+    X = np.zeros((n,))
+    for t in range(T):
+        X = np.zeros((n,)) + X[0]
+        out[t] = X[0]
+        X = np.zeros((m,))
+        X[0] = 1.0
+""")
+
+
+def test_augmented_assignment_counts_as_a_read():
+    # `e += 1.0` reads and writes the SAME buffer, but its bare-Name target carries ctx=Store, so
+    # it was neither a kill (correctly) nor a read (wrongly) and liveness answered "dead".
+    _assert_refused("""
+def k(a, out, n, m):
+    e = np.zeros((n,))
+    if n > 0:
+        e = np.zeros((m,))
+        e[0] = 2.0
+    e += 1.0
+""")
+
+
+def test_a_zero_trip_for_target_is_not_a_kill():
+    """`for e in range(k)` with a runtime k == 0 never binds e, so the previous binding survives --
+    may-define, not must-define. Treating it as a kill dropped every read before it."""
+    _assert_refused("""
+def k(a, out, n, m, iters):
+    e = np.zeros((n,))
+    for it in range(iters):
+        for e in range(0):
+            pass
+        out[it] = e[0]
+        e = np.zeros((m,))
+        e[0] = 1.0
+""")
+
+
+def test_while_test_runs_after_the_body():
+    # A While re-tests its condition after the body, so the test is live-after code too.
+    _assert_refused("""
+def k(a, out, n, m):
+    x = np.zeros((n,))
+    c = 0
+    while x[0] < 1.0:
+        x = np.zeros((m,))
+        c = c + 1
+""")
+
+
+def test_starred_and_nested_unpacking_are_recognised_as_kills():
+    """A target form the kill scan does not recognise is not symmetric: the prefix is not truncated,
+    extra reads are counted, and a WORKING kernel is refused -- the regression class this whole
+    guard has already caused once."""
+    for target in ("first, *e = a", "(first, (e, second)) = a", "[e, second] = a"):
+        _lower(f"""
+def k(a, out, n, m, T):
+    e = np.zeros((n,))
+    for t in range(T):
+        {target}
+        out[t] = e[0]
+        e = np.zeros((m,))
+        e[0] = 1.0
+""")
