@@ -72,3 +72,55 @@ def test_c_division_helpers_match_python():
 @have_gpp
 def test_cpp_division_helpers_match_python():
     _check(cpp=True)
+
+
+# --- the _Generic association list must cover every dtype the corpus can reach ------------------
+# `default:` is a silent catch-all: a type absent from the list does not fail to compile, it picks
+# the INTEGER helper. Two dtypes fell through -- see each test for what that cost.
+_F16_DRIVER = """#include <stdio.h>
+int main(void) {
+    _Float16 a = 0.5f16, b = 0.25f16;
+    printf("%.6f\\n", (double)int_floor(a, b));
+    printf("%.6f\\n", (double)python_mod((_Float16)3.5f16, (_Float16)2.0f16));
+    return 0;
+}
+"""
+
+_U64_DRIVER = """#include <stdio.h>
+int main(void) {
+    uint64_t a = (1ULL << 63) + 5, b = 2;
+    printf("%llu\\n", (unsigned long long)int_floor(a, b));
+    printf("%llu\\n", (unsigned long long)python_mod(a, b));
+    printf("%llu\\n", (unsigned long long)int_ceil(a, b));
+    return 0;
+}
+"""
+
+
+@pytest.mark.skipif(not have_gcc(), reason="gcc not installed")
+def test_float16_operands_take_the_floating_helper():
+    """GCC does not promote _Float16 in arithmetic, so `_Float16 + _Float16` is _Float16 and hit
+    `default:` -- the integer helper. 0.5 // 0.25 became int_floor(0, 0) and died with SIGFPE
+    (exit 136), and any non-zero pair truncated silently. C++ was unaffected (is_integral_v sends
+    it to the floating branch), so the two backends disagreed on the same kernel.
+    """
+    run = build_run_c(_C_HEADER, _F16_DRIVER)
+    # Assert the exit code first: the original defect KILLED the process (SIGFPE, rc 136), and a
+    # test that only parsed stdout would report a confusing IndexError instead of the real failure.
+    assert run.returncode == 0, f"exit {run.returncode} (136 = SIGFPE):\n{run.stderr}"
+    out = run.stdout.splitlines()
+    assert float(out[0]) == 2.0, f"0.5 // 0.25 -> {out[0]}, expected numpy's 2.0"
+    assert float(out[1]) == 1.5, f"3.5 % 2.0 -> {out[1]}, expected numpy's 1.5"
+
+
+@pytest.mark.skipif(not have_gcc(), reason="gcc not installed")
+def test_unsigned_operands_above_int64_max_are_not_reinterpreted_as_negative():
+    """uint64 is integral, so the integer helper was type-correct but SIGNED: any value above
+    INT64_MAX arrived negative. (2**63 + 5) // 2 returned -4611686018427387902."""
+    a = (1 << 63) + 5
+    run = build_run_c(_C_HEADER, _U64_DRIVER)
+    assert run.returncode == 0, f"exit {run.returncode}:\n{run.stderr}"
+    out = run.stdout.splitlines()
+    assert int(out[0]) == a // 2, f"floor -> {out[0]}, expected {a // 2}"
+    assert int(out[1]) == a % 2, f"mod -> {out[1]}, expected {a % 2}"
+    assert int(out[2]) == -(-a // 2), f"ceil -> {out[2]}, expected {-(-a // 2)}"
