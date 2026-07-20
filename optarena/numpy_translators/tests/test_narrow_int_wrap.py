@@ -1,16 +1,23 @@
-"""Narrow-int arithmetic wraps at the ELEMENT width, per op, like numpy.
+"""Narrow-int arithmetic and the element width: what the backends do and do NOT reproduce.
 
-C, C++ and Fortran all promote narrow reads (int8/16/32, uint8/16/32) to int64 and compute wide, so an
-INTERMEDIATE that overflows the element width never wrapped. numpy evaluates the op at the operand
-dtype and wraps there, so results diverged whenever an intermediate overflowed before a non-linear
-step: for int8 ``a = b = 100``, numpy's ``a + b`` wraps to -56 and ``// 2`` gives -28, while the
-wide form computes 200 // 2 = 100.
+C, C++ and Fortran promote narrow reads (int8/16/32, uint8/16/32) to int64 and compute wide, so an
+INTERMEDIATE that overflows the element width does not wrap. numpy evaluates the op at the operand
+dtype and wraps there, so results diverge when an intermediate overflows before a non-linear step:
+for int8 ``a = b = 100``, numpy's ``a + b`` wraps to -56 and ``// 2`` gives -28, while the wide form
+computes 200 // 2 = 100. That gap is real and currently UNFIXED -- see the xfail below.
 
-Each result is now wrapped back to the element type -- a cast in C/C++, a contained ``npb_wrap_*``
-procedure in Fortran, which has no truncating cast. The negative half of the suite is the important one: mixed or wider dtypes must NOT be
-wrapped, because numpy promotes those and wrapping would introduce the very divergence this fixes.
+A per-op re-wrap was attempted and reverted: casting every narrow-int result back to its element
+width broke more than it fixed (integer true division truncated in C/C++, int8-times-float truncated
+in Fortran, ``**`` casting a libm double into a narrow int, and an undefined ``npb_wrap_*`` when a
+non-inlined Fortran helper needed one), because "which numpy dtype does this subtree compute in" was
+answered by two divergent hand-rolled oracles rather than one shared, differentially-tested one.
+
+Everything below the xfail pins behaviour that must hold either way: no wrap where numpy PROMOTES,
+and no truncation of results that are not integers at all. Those are the regression guards for a
+future re-implementation.
 """
 import numpy as np
+import pytest
 from _op_oracle import run_op
 
 _NATIVE = ("c", "cpp", "fortran")
@@ -33,8 +40,15 @@ def _run(src, ins, outs, dtypes, n):
                   backends=_NATIVE)
 
 
+@pytest.mark.xfail(strict=True,
+                   reason="per-op narrow-int wrap reverted; the backends compute wide, so an "
+                   "intermediate that overflows the element width does not wrap. Re-implement in "
+                   "numpyto_common with one shared oracle and a C/Fortran/numpy differential test.")
 def test_int8_intermediate_overflow_wraps():
-    # a + b overflows int8 (200 -> -56) BEFORE the floor-div, so the wrap changes the result.
+    # a + b overflows int8 (200 -> -56) BEFORE the floor-div, so wrapping changes the result. This
+    # is the ONLY case in this file that distinguishes a per-op wrap from wrapping at the store --
+    # the ring ops below compose identically either way, which is why they stayed green when the
+    # feature was deleted and why they never protected it.
     src = ("import numpy as np\n"
            "def f(a, b, out):\n"
            "    for i in range(a.shape[0]):\n"
