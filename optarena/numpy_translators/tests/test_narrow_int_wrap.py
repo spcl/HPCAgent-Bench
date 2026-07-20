@@ -139,6 +139,91 @@ def test_logical_negation_is_not_wrapped():
     _assert_ok(res)
 
 
+def test_integer_true_division_is_not_truncated():
+    """``/`` on ints is REAL division in numpy, and the wrap must not cast the quotient back.
+
+    Integer ``a / b`` is desugared to ``np.float64(a) / b``, whose subtree reads only int arrays.
+    The C wrap oracle saw int32 operands and no float, so it cast the double quotient to int32:
+    7 / 2 emitted 3 where numpy says 3.5 -- a silent wrong ANSWER, not an overflow edge case, on
+    every integer true division in every C and C++ kernel. Fortran was correct only because it
+    already bailed on any call in the subtree.
+    """
+    src = ("import numpy as np\n"
+           "def f(a, b, out):\n"
+           "    for i in range(a.shape[0]):\n"
+           "        out[i] = a[i] / b[i]\n")
+    a = np.array([7, 9, 1, 5], dtype=np.int32)
+    b = np.array([2, 2, 2, 2], dtype=np.int32)
+    assert np.array_equal(a / b, np.array([3.5, 4.5, 0.5, 2.5]))  # numpy anchor: REAL division
+    res = run_op(src,
+                 "f", {
+                     "a": a,
+                     "b": b
+                 }, {"out": (4, )}, {"N": 4},
+                 shapes={
+                     "a": "(N,)",
+                     "b": "(N,)",
+                     "out": "(N,)"
+                 },
+                 dtypes={
+                     "a": "int32",
+                     "b": "int32",
+                     "out": "float64"
+                 },
+                 backends=_NATIVE)
+    _assert_ok(res)
+
+
+def test_narrow_true_division_is_not_truncated():
+    # Same defect at int8, where the wrap is otherwise legitimately active.
+    src = ("import numpy as np\n"
+           "def f(a, b, out):\n"
+           "    for i in range(a.shape[0]):\n"
+           "        out[i] = a[i] / b[i]\n")
+    a = np.array([7, 100, 3], dtype=np.int8)
+    b = np.array([2, 8, 4], dtype=np.int8)
+    _assert_ok(
+        run_op(src,
+               "f", {
+                   "a": a,
+                   "b": b
+               }, {"out": (3, )}, {"N": 3},
+               shapes={
+                   "a": "(N,)",
+                   "b": "(N,)",
+                   "out": "(N,)"
+               },
+               dtypes={
+                   "a": "int8",
+                   "b": "int8",
+                   "out": "float64"
+               },
+               backends=_NATIVE))
+
+
+def test_call_result_is_not_wrapped():
+    """A call's result dtype is not derivable from the operand dtypes below it, so the wrap must
+    not fire through one. ``int(...)`` yields a Python int that numpy does NOT wrap at int8."""
+    src = ("import numpy as np\n"
+           "def f(a, out):\n"
+           "    for i in range(a.shape[0]):\n"
+           "        out[i] = int(a[i]) * 3\n")
+    a = np.array([100, 50, -100], dtype=np.int8)
+    assert np.array_equal(np.array([int(x) * 3 for x in a]), np.array([300, 150, -300]))  # no wrap
+    _assert_ok(
+        run_op(src,
+               "f", {"a": a}, {"out": (3, )}, {"N": 3},
+               shapes={
+                   "a": "(N,)",
+                   "out": "(N,)"
+               },
+               dtypes={
+                   "a": "int8",
+                   "out": "int64"
+               },
+               backends=_NATIVE))
+
+
 def test_float_operand_disables_the_int_wrap():
     # An int8 array combined with a float must compute (and stay) in floating point.
     src = ("import numpy as np\n"

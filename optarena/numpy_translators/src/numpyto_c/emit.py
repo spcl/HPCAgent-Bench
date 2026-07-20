@@ -395,11 +395,21 @@ class _CBodyEmitter(BaseEmitter):
         """The single narrow-int element dtype this subtree computes in, else None.
 
         None whenever the result is not narrow-int-typed in numpy either: any float/complex
-        operand, no array read at all, or a MIX of element dtypes (numpy promotes those to the
-        wider type, so the narrow wrap must not apply). Loop indices are ignored -- only element
-        reads carry the dtype that the arithmetic wraps at.
+        operand, an unresolved CALL, no array read at all, or a MIX of element dtypes (numpy
+        promotes those to the wider type, so the narrow wrap must not apply). Loop indices are
+        ignored -- only element reads carry the dtype that the arithmetic wraps at.
+
+        The call bail is load-bearing and must stay in step with the Fortran emitter's copy: a
+        call's result dtype is not derivable from the operand dtypes below it. Integer ``a / b``
+        is desugared to ``np.float64(a) / b`` (lowering), whose subtree reads only int arrays --
+        so without this the quotient was wrapped back to the element type and C/C++ TRUNCATED
+        every integer true division (7 / 2 -> 3, numpy says 3.5) while Fortran, which already
+        bailed on calls, stayed correct. ``int(a[i]) + 1`` is the mirror case: the cast yields a
+        Python int that numpy does NOT wrap, so wrapping it is equally wrong.
         """
         if self._is_float_operand(node) or self._is_complex_operand(node):
+            return None
+        if any(isinstance(sub, ast.Call) for sub in ast.walk(node)):
             return None
         seen = {
             self._dtype_for_name(sub.value.id)
