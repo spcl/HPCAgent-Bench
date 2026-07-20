@@ -553,8 +553,15 @@ class _CBodyEmitter(BaseEmitter):
             return self._promote_read(node, access)
         shape = self.array_shapes.get(base_node.id)
         if shape is None or len(shape) != len(indices):
-            # Fall back to chained [][]... if we have no shape info.
-            return self._promote_read(node, base + "".join(f"[{i}]" for i in indices))
+            # A flat C pointer cannot be multi-subscripted: `w_box[i][j]` on `double *w_box` is a
+            # hard compile error, not a slower-but-correct access. Reaching here with 2+ indices
+            # means the array's rank is unknown or disagrees with the index count -- almost always a
+            # missing/incorrect init.shapes declaration (conv_2d's w_box was inferred 1D but indexed
+            # 2D). Emitting the chained form silently shipped uncompilable C; fail loudly instead.
+            raise NotImplementedError(
+                f"cannot flatten a {len(indices)}-D index of {base_node.id!r}: its shape is "
+                f"{'unknown' if shape is None else shape} (rank {0 if shape is None else len(shape)}). "
+                f"Declare init.shapes[{base_node.id!r}] with the matching rank.")
         # Pluto: keep the access multidimensional so polycc sees an affine reference; only declared-view names qualify.
         if base_node.id in self.multidim_arrays:
             return self._promote_read(node, base + "".join(f"[{i}]" for i in indices))
