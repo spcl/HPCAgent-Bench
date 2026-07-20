@@ -551,6 +551,12 @@ class _CBodyEmitter(BaseEmitter):
         if len(indices) == 1 or not isinstance(base_node, ast.Name):
             access = base + "".join(f"[{i}]" for i in indices)
             return self._promote_read(node, access)
+        # Pluto declares rank>=2 arrays as true VLA params (`T w[D0][D1]`), where chained `w[i][j]` IS
+        # the correct and only valid C -- so a declared-view name keeps its multidimensional access,
+        # decided BEFORE the flat-pointer guard below (a VLA partially indexed has rank != index count
+        # and must NOT be mistaken for the uncompilable flat-pointer case).
+        if base_node.id in self.multidim_arrays:
+            return self._promote_read(node, base + "".join(f"[{i}]" for i in indices))
         shape = self.array_shapes.get(base_node.id)
         if shape is None or len(shape) != len(indices):
             # A flat C pointer cannot be multi-subscripted: `w_box[i][j]` on `double *w_box` is a
@@ -562,9 +568,6 @@ class _CBodyEmitter(BaseEmitter):
                 f"cannot flatten a {len(indices)}-D index of {base_node.id!r}: its shape is "
                 f"{'unknown' if shape is None else shape} (rank {0 if shape is None else len(shape)}). "
                 f"Declare init.shapes[{base_node.id!r}] with the matching rank.")
-        # Pluto: keep the access multidimensional so polycc sees an affine reference; only declared-view names qualify.
-        if base_node.id in self.multidim_arrays:
-            return self._promote_read(node, base + "".join(f"[{i}]" for i in indices))
         flat = indices[0]
         for k in range(1, len(indices)):
             # Parenthesise the stride: a compound extent like J+3-1 used bare would mis-associate (the hdiff 3-D-stencil OOB).

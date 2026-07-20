@@ -49,6 +49,8 @@ array_args:
 - mass
 - pos
 - vel
+- KE
+- PE
 output_args:
 - KE
 - PE

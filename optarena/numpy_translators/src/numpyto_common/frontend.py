@@ -3137,9 +3137,13 @@ def _shape_from_constructor(node: ast.AST, so_far: Dict[str, str]) -> Optional[s
             # takes a SINGLE first-arg shape, with later positionals as
             # non-shape params (``np.full(N, fill)``, ``np.zeros(N, dtype)``).
             # Reading those as extra axes turned ``np.full(N, INF)`` into a
-            # bogus 2-D ``(N, INF)`` (INF as a phantom dimension).
+            # bogus 2-D ``(N, INF)`` (INF as a phantom dimension). A computed
+            # extent is still an axis, so accept expression args too (the same
+            # node kinds ``_unparse_shape_arg`` treats as one axis) -- else
+            # ``rand(2*R+1, 2*R+1)`` collapsed to a rank-1 ``(2*R+1,)``.
             if attr in _AXES_AS_ARGS and len(node.args) >= 2 and all(
-                    isinstance(a, (ast.Constant, ast.Name)) for a in node.args):
+                    isinstance(a, (ast.Constant, ast.Name, ast.BinOp, ast.Subscript, ast.Call, ast.UnaryOp))
+                    for a in node.args):
                 inner = ", ".join(ast.unparse(a) for a in node.args)
                 return f"({inner})"
             return _unparse_shape_arg(node.args[0])
