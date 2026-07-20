@@ -265,10 +265,7 @@ def _load_numpy_fn(numpy_py: pathlib.Path, func_name: str) -> Callable:
     return getattr(mod, func_name)
 
 
-def _emit_c(short: str,
-            numpy_py: pathlib.Path,
-            out: pathlib.Path,
-            config_name: Optional[str] = None) -> None:
+def _emit_c(short: str, numpy_py: pathlib.Path, out: pathlib.Path, config_name: Optional[str] = None) -> None:
     """Emit C for one (sub-)benchmark via the YAML bridge (synthesizes the
     transient bench_info + flattens a buffer-style sparse layout for the chosen
     config). The canonical name carries the fp tag -- no _auto suffix.
@@ -376,8 +373,9 @@ def run_kernel(k: SparseKernel,
     import inspect
     fn = _load_numpy_fn(k.numpy_py, info["func_name"])
     sig_defaults = {name: p.default for name, p in inspect.signature(fn).parameters.items()}
-    scalar_names = [a for a in info["input_args"]
-                    if a not in sparse_logical and a not in dense_inputs and a not in phys]
+    scalar_names = [
+        a for a in info["input_args"] if a not in sparse_logical and a not in dense_inputs and a not in phys
+    ]
     scalars: Dict[str, Any] = {}
     for i, s in enumerate(scalar_names):
         dflt = sig_defaults.get(s, inspect.Parameter.empty)
@@ -403,7 +401,7 @@ def run_kernel(k: SparseKernel,
     for a in info["input_args"]:
         if a in sparse_logical:
             oracle_args.append(sparse_logical[a])
-        elif a in phys:                       # buffer-style ref (spmv) takes
+        elif a in phys:  # buffer-style ref (spmv) takes
             oracle_args.append(phys[a].copy())  # the unpacked CSR buffers
         elif a in oracle_dense:
             oracle_args.append(oracle_dense[a])
@@ -436,7 +434,7 @@ def run_kernel(k: SparseKernel,
     out = workdir or pathlib.Path(ctx.name)
     _emit_c(k.short, k.numpy_py, out, config_name=config_name)
     from numpyto_common.naming import native_base
-    base = native_base(k.short, sparse=config_name)   # <short>_<config>_fp64
+    base = native_base(k.short, sparse=config_name)  # <short>_<config>_fp64
     binding = json.loads((out / f"{base}_binding.json").read_text())
     csrc = out / f"{base}.c"
     so = out / f"lib{base}.so"
@@ -453,11 +451,10 @@ def run_kernel(k: SparseKernel,
     # buffer -- i.e. a return-promoted output (spmv's ``y``, which the numpy ref
     # returns and the emitted C writes through a trailing pointer). Map the
     # ref's returned arrays onto those names (binding order).
-    ptr_shape = {a["name"]: a.get("shape") or [] for a in binding["args"]
-                 if str(a.get("kind", "")).startswith("ptr")}
+    ptr_shape = {a["name"]: a.get("shape") or [] for a in binding["args"] if str(a.get("kind", "")).startswith("ptr")}
     out_names = list(info["output_args"]) + [
-        n for n in ptr_shape
-        if n not in info["input_args"] and n not in info["output_args"] and n not in phys]
+        n for n in ptr_shape if n not in info["input_args"] and n not in info["output_args"] and n not in phys
+    ]
     ret_i = 0
     for n in out_names:
         if n not in expected:
@@ -558,10 +555,12 @@ def _run_module_backend(backend: str, k: SparseKernel, info: Dict[str, Any], spa
         ret = fn(*args)
     except Exception as exc:  # noqa: BLE001
         return OracleResult(k.short, False, float("nan"), f"jax run failed: {type(exc).__name__}: {exc}")
-    rets = ret if isinstance(ret, tuple) else (ret,)
+    rets = ret if isinstance(ret, tuple) else (ret, )
     ret_arrays = [np.asarray(r) for r in rets if r is not None and np.ndim(r) > 0]
-    got = {info["output_args"][j]: np.asarray(ret_arrays[j], dtype=np.float64)
-           for j in range(min(len(info["output_args"]), len(ret_arrays)))}
+    got = {
+        info["output_args"][j]: np.asarray(ret_arrays[j], dtype=np.float64)
+        for j in range(min(len(info["output_args"]), len(ret_arrays)))
+    }
     return _compare_outputs(k, "jax", info["output_args"], got, expected, rtol, atol)
 
 
@@ -663,7 +662,7 @@ def _run_dace(k: SparseKernel, info: Dict[str, Any], sparse_logical: Dict[str, A
         ret = compiled(**call, **syms)
     except Exception as exc:  # noqa: BLE001
         return OracleResult(k.short, False, float("nan"), f"dace run failed: {type(exc).__name__}: {exc}")
-    rets = ret if isinstance(ret, tuple) else (ret,)
+    rets = ret if isinstance(ret, tuple) else (ret, )
     ret_arrays = [np.asarray(r) for r in rets if r is not None and np.ndim(r) > 0]
     got: Dict[str, np.ndarray] = {}
     ri = 0

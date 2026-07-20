@@ -36,8 +36,10 @@ def test_scalar_real_imag_in_real_arithmetic():
            " for i in range(z.shape[0]):\n"
            "  out[i] = z[i].real * z[i].imag + z[i].real - z[i].imag\n")
     ok, res = _all_ok(
-        run_op(src, "k", {"z": _z()}, {"out": (6, )}, {"N": 6},
-               shapes={"z": "(N,)", "out": "(N,)"}, backends=_ALL))
+        run_op(src, "k", {"z": _z()}, {"out": (6, )}, {"N": 6}, shapes={
+            "z": "(N,)",
+            "out": "(N,)"
+        }, backends=_ALL))
     assert ok, res
 
 
@@ -48,8 +50,10 @@ def test_whole_array_real_and_imag():
                "def k(z, out):\n"
                f"  out[:] = z.{accessor}\n")
         ok, res = _all_ok(
-            run_op(src, "k", {"z": _z()}, {"out": (6, )}, {"N": 6},
-                   shapes={"z": "(N,)", "out": "(N,)"}, backends=_ALL))
+            run_op(src, "k", {"z": _z()}, {"out": (6, )}, {"N": 6}, shapes={
+                "z": "(N,)",
+                "out": "(N,)"
+            }, backends=_ALL))
         assert ok, (accessor, res)
 
 
@@ -60,8 +64,14 @@ def test_complex_elementwise_output():
            " for i in range(z.shape[0]):\n"
            "  out[i] = z[i] * z[i].imag + z[i]\n")
     ok, res = _all_ok(
-        run_op(src, "k", {"z": _z()}, {"out": (6, )}, {"N": 6},
-               shapes={"z": "(N,)", "out": "(N,)"}, dtypes={"out": "complex128"}, backends=_ALL))
+        run_op(src,
+               "k", {"z": _z()}, {"out": (6, )}, {"N": 6},
+               shapes={
+                   "z": "(N,)",
+                   "out": "(N,)"
+               },
+               dtypes={"out": "complex128"},
+               backends=_ALL))
     assert ok, res
 
 
@@ -75,8 +85,14 @@ def test_mixed_real_complex_conditional():
            "  d = z[i].real if z[i].real > 0.0 else z[i]\n"
            "  out[i] = d + 1.0\n")
     ok, res = _all_ok(
-        run_op(src, "k", {"z": _z()}, {"out": (6, )}, {"N": 6},
-               shapes={"z": "(N,)", "out": "(N,)"}, dtypes={"out": "complex128"}, backends=_ALL))
+        run_op(src,
+               "k", {"z": _z()}, {"out": (6, )}, {"N": 6},
+               shapes={
+                   "z": "(N,)",
+                   "out": "(N,)"
+               },
+               dtypes={"out": "complex128"},
+               backends=_ALL))
     assert ok, res
 
 
@@ -88,8 +104,10 @@ def test_np_real_imag_function_form():
            " for i in range(z.shape[0]):\n"
            "  out[i] = np.real(z[i]) * np.imag(z[i]) - np.real(z[i])\n")
     ok, res = _all_ok(
-        run_op(src, "k", {"z": _z()}, {"out": (6, )}, {"N": 6},
-               shapes={"z": "(N,)", "out": "(N,)"}, backends=_ALL))
+        run_op(src, "k", {"z": _z()}, {"out": (6, )}, {"N": 6}, shapes={
+            "z": "(N,)",
+            "out": "(N,)"
+        }, backends=_ALL))
     assert ok, res
 
 
@@ -102,8 +120,14 @@ def test_conjugate_method_and_np_conj():
                " for i in range(z.shape[0]):\n"
                f"  out[i] = {expr} * z[i]\n")
         ok, res = _all_ok(
-            run_op(src, "k", {"z": _z()}, {"out": (6, )}, {"N": 6},
-                   shapes={"z": "(N,)", "out": "(N,)"}, dtypes={"out": "complex128"}, backends=_ALL))
+            run_op(src,
+                   "k", {"z": _z()}, {"out": (6, )}, {"N": 6},
+                   shapes={
+                       "z": "(N,)",
+                       "out": "(N,)"
+                   },
+                   dtypes={"out": "complex128"},
+                   backends=_ALL))
         assert ok, (expr, res)
 
 
@@ -116,7 +140,14 @@ def test_real_imag_preserve_complex64():
            " for i in range(z.shape[0]):\n"
            "  out[i] = z[i].real - z[i].imag\n")
     ok, res = _all_ok(
-        run_op(src, "k", {"z": z}, {"out": (6, )}, {"N": 6},
-               shapes={"z": "(N,)", "out": "(N,)"}, dtypes={"out": "float32"},
-               rtol=1e-5, atol=1e-5, backends=_ALL))
+        run_op(src,
+               "k", {"z": z}, {"out": (6, )}, {"N": 6},
+               shapes={
+                   "z": "(N,)",
+                   "out": "(N,)"
+               },
+               dtypes={"out": "float32"},
+               rtol=1e-5,
+               atol=1e-5,
+               backends=_ALL))
     assert ok, res

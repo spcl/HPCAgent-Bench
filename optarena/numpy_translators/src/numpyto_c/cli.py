@@ -35,8 +35,7 @@ def cmd_emit(args: argparse.Namespace) -> int:
         return 0
     write_generated(out / f"{base}.c", emit_c(kir, fn_name=base), line_comment="// ", source=src)
     write_generated(out / f"{base}.cpp", emit_cpp(kir, fn_name=base), line_comment="// ", source=src)
-    write_generated(out / f"{base}_pluto_input.c", emit_pluto(kir, fn_name=base),
-                    line_comment="// ", source=src)
+    write_generated(out / f"{base}_pluto_input.c", emit_pluto(kir, fn_name=base), line_comment="// ", source=src)
     emit_binding(kir, out / f"{base}_binding.json", base_name=base)
     # Pluto's VLA-param signature reorders args (symbols first), so it needs its own binding.
     emit_pluto_binding(kir, out / f"{base}_pluto_binding.json", base_name=base)
@@ -48,29 +47,29 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="numpyto_c", description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
     e = sub.add_parser("emit", help="emit one kernel")
-    e.add_argument("--kernel", type=pathlib.Path, required=True,
-                   help="path to <short>_numpy.py")
-    e.add_argument("--bench-info", type=pathlib.Path, required=True,
-                   help="path to bench_info/<short>.json")
-    e.add_argument("--out", type=pathlib.Path, required=True,
-                   help="output cpp_backend/ directory")
-    e.add_argument("--parallel", action="store_true",
+    e.add_argument("--kernel", type=pathlib.Path, required=True, help="path to <short>_numpy.py")
+    e.add_argument("--bench-info", type=pathlib.Path, required=True, help="path to bench_info/<short>.json")
+    e.add_argument("--out", type=pathlib.Path, required=True, help="output cpp_backend/ directory")
+    e.add_argument("--parallel",
+                   action="store_true",
                    help="emit the OpenMP variant (<base>_omp.{c,cpp}, "
-                        "``#pragma omp parallel for``) instead of the sequential "
-                        "source; compile with -fopenmp. Refuses (nonzero exit) a "
-                        "kernel with no sound parallel form (colliding scatter).")
-    e.add_argument("--precision", default="",
+                   "``#pragma omp parallel for``) instead of the sequential "
+                   "source; compile with -fopenmp. Refuses (nonzero exit) a "
+                   "kernel with no sound parallel form (colliding scatter).")
+    e.add_argument("--precision",
+                   default="",
                    help="floating precision override (e.g. ``float32`` / "
-                        "``float16``). Remaps ONLY float/complex arrays, "
-                        "scalars and locals; int index arrays are unchanged. "
-                        "Empty = use each array's declared dtype (fp64).")
-    e.add_argument("--config", default=None,
+                   "``float16``). Remaps ONLY float/complex arrays, "
+                   "scalars and locals; int index arrays are unchanged. "
+                   "Empty = use each array's declared dtype (fp64).")
+    e.add_argument("--config",
+                   default=None,
                    help="sparse configuration key to emit (one of the "
-                        "kernel's ``configurations``, i.e. a "
-                        "``ResolvedBench.config_key``). Deterministic "
-                        "per-sub-benchmark emission; overrides the "
-                        "$OPTARENA_SPARSE_CONFIG fallback. Ignored for "
-                        "dense kernels.")
+                   "kernel's ``configurations``, i.e. a "
+                   "``ResolvedBench.config_key``). Deterministic "
+                   "per-sub-benchmark emission; overrides the "
+                   "$OPTARENA_SPARSE_CONFIG fallback. Ignored for "
+                   "dense kernels.")
     e.set_defaults(func=cmd_emit)
     return p
 

@@ -26,19 +26,24 @@ def _run(src, ins, outs, syms, shapes):
 _X = np.linspace(-2.0, 2.0, 6)
 _A = np.arange(24, dtype=np.float64).reshape(4, 6)
 
-
 # --- np.inf / np.nan (Fortran ieee_value) --------------------------------- #
 
 
 def test_neg_inf_masking():
-    ok, res = _run("import numpy as np\ndef f(x, out):\n out[:] = np.where(x > 0.0, x, -np.inf)\n",
-                   {"x": _X}, {"out": (6, )}, {"N": 6}, {"x": "(N,)", "out": "(N,)"})
+    ok, res = _run("import numpy as np\ndef f(x, out):\n out[:] = np.where(x > 0.0, x, -np.inf)\n", {"x": _X},
+                   {"out": (6, )}, {"N": 6}, {
+                       "x": "(N,)",
+                       "out": "(N,)"
+                   })
     assert ok, res
 
 
 def test_nan_fill():
-    ok, res = _run("import numpy as np\ndef f(x, out):\n out[:] = np.where(x > 5.0, np.nan, x)\n",
-                   {"x": _X}, {"out": (6, )}, {"N": 6}, {"x": "(N,)", "out": "(N,)"})
+    ok, res = _run("import numpy as np\ndef f(x, out):\n out[:] = np.where(x > 5.0, np.nan, x)\n", {"x": _X},
+                   {"out": (6, )}, {"N": 6}, {
+                       "x": "(N,)",
+                       "out": "(N,)"
+                   })
     assert ok, res
 
 
@@ -47,14 +52,25 @@ def test_nan_fill():
 
 def test_flip_axis0_and_axis1():
     for axis in (0, 1, -1):
-        ok, res = _run(f"import numpy as np\ndef f(a, out):\n out[:] = np.flip(a, axis={axis})\n",
-                       {"a": _A}, {"out": (4, 6)}, {"M": 4, "N": 6}, {"a": "(M, N)", "out": "(M, N)"})
+        ok, res = _run(f"import numpy as np\ndef f(a, out):\n out[:] = np.flip(a, axis={axis})\n", {"a": _A},
+                       {"out": (4, 6)}, {
+                           "M": 4,
+                           "N": 6
+                       }, {
+                           "a": "(M, N)",
+                           "out": "(M, N)"
+                       })
         assert ok, (axis, res)
 
 
 def test_flip_all_axes():
-    ok, res = _run("import numpy as np\ndef f(a, out):\n out[:] = np.flip(a)\n",
-                   {"a": _A}, {"out": (4, 6)}, {"M": 4, "N": 6}, {"a": "(M, N)", "out": "(M, N)"})
+    ok, res = _run("import numpy as np\ndef f(a, out):\n out[:] = np.flip(a)\n", {"a": _A}, {"out": (4, 6)}, {
+        "M": 4,
+        "N": 6
+    }, {
+        "a": "(M, N)",
+        "out": "(M, N)"
+    })
     assert ok, res
 
 
@@ -75,8 +91,14 @@ def test_reshape_row_neg1():
 def test_reshape_neg1_on_intermediate_local():
     """``t.reshape(-1)`` where t is a computed local -- the shape is resolved from t's
     inferred extent, not just a parameter's."""
-    ok, res = _run("import numpy as np\ndef f(a, out):\n t = a * 2.0\n b = t.reshape(-1)\n out[:] = b\n",
-                   {"a": _A}, {"out": (24, )}, {"M": 4, "N": 6}, {"a": "(M, N)", "out": "(M*N,)"})
+    ok, res = _run("import numpy as np\ndef f(a, out):\n t = a * 2.0\n b = t.reshape(-1)\n out[:] = b\n", {"a": _A},
+                   {"out": (24, )}, {
+                       "M": 4,
+                       "N": 6
+                   }, {
+                       "a": "(M, N)",
+                       "out": "(M*N,)"
+                   })
     assert ok, res
 
 
@@ -85,5 +107,8 @@ def test_reshape_neg1_on_intermediate_local():
 
 def test_ones_like():
     ok, res = _run("import numpy as np\ndef f(a, out):\n b = np.ones_like(a)\n out[:] = a + b\n",
-                   {"a": np.arange(6, dtype=np.float64)}, {"out": (6, )}, {"N": 6}, {"a": "(N,)", "out": "(N,)"})
+                   {"a": np.arange(6, dtype=np.float64)}, {"out": (6, )}, {"N": 6}, {
+                       "a": "(N,)",
+                       "out": "(N,)"
+                   })
     assert ok, res

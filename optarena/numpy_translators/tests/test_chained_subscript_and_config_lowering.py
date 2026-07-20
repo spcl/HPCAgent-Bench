@@ -94,8 +94,21 @@ def test_collapse_bails_on_ellipsis_inner():
 
 def test_bool_preset_names_picks_boolean_flags_not_int_symbols():
     params = {
-        "S": {"N": 6, "okvan": False, "tqr": False, "negrp": 1},
-        "fuzzed": {"N": [6, 16], "okvan": {"set": [False, True]}, "negrp": {"set": [1, 2]}},
+        "S": {
+            "N": 6,
+            "okvan": False,
+            "tqr": False,
+            "negrp": 1
+        },
+        "fuzzed": {
+            "N": [6, 16],
+            "okvan": {
+                "set": [False, True]
+            },
+            "negrp": {
+                "set": [1, 2]
+            }
+        },
     }
     # ``okvan`` is boolean everywhere it is pinned; ``N`` / ``negrp`` are integers.
     assert _collect_bool_preset_names(params) == {"okvan", "tqr"}
@@ -119,9 +132,23 @@ def test_chained_column_dot_matches_numpy():
     A = rng.standard_normal((nat, K, ncol))
     box = np.stack([np.sort(rng.choice(N, K, replace=False)) for _ in range(nat)]).astype(np.int64)
     v = rng.standard_normal(N)
-    res = run_op(src, "f", {"A": A, "box": box, "v": v}, {"out": (nat, )},
-                 {"nat": nat, "K": K, "ncol": ncol, "N": N},
-                 shapes={"A": "(nat,K,ncol)", "box": "(nat,K)", "v": "(N,)", "out": "(nat,)"},
+    res = run_op(src,
+                 "f", {
+                     "A": A,
+                     "box": box,
+                     "v": v
+                 }, {"out": (nat, )}, {
+                     "nat": nat,
+                     "K": K,
+                     "ncol": ncol,
+                     "N": N
+                 },
+                 shapes={
+                     "A": "(nat,K,ncol)",
+                     "box": "(nat,K)",
+                     "v": "(N,)",
+                     "out": "(nat,)"
+                 },
                  backends=_ALL)
     ok, r = _ok(res)
     assert ok, r
@@ -140,9 +167,21 @@ def test_slice_assign_gather_offset_matches_numpy():
     rng = np.random.default_rng(1)
     r = rng.standard_normal(M)
     idx = rng.integers(0, M, size=n).astype(np.int64)
-    res = run_op(src, "f", {"r": r, "idx": idx}, {"out": (P, )},
-                 {"n": n, "M": M, "P": P},
-                 shapes={"r": "(M,)", "idx": "(n,)", "out": "(P,)"}, backends=_ALL)
+    res = run_op(src,
+                 "f", {
+                     "r": r,
+                     "idx": idx
+                 }, {"out": (P, )}, {
+                     "n": n,
+                     "M": M,
+                     "P": P
+                 },
+                 shapes={
+                     "r": "(M,)",
+                     "idx": "(n,)",
+                     "out": "(P,)"
+                 },
+                 backends=_ALL)
     ok, rr = _ok(res)
     assert ok, rr
 
@@ -159,8 +198,7 @@ def test_shape_of_complex_array_is_integer_bound():
     N = 6
     rng = np.random.default_rng(2)
     z = (rng.standard_normal(N) + 1j * rng.standard_normal(N)).astype(np.complex128)
-    res = run_op(src, "f", {"z": z}, {"out": (N, )},
-                 {"N": N}, shapes={"z": "(N,)", "out": "(N,)"}, backends=_ALL)
+    res = run_op(src, "f", {"z": z}, {"out": (N, )}, {"N": N}, shapes={"z": "(N,)", "out": "(N,)"}, backends=_ALL)
     ok, r = _ok(res)
     assert ok, r
 

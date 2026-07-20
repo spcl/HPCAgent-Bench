@@ -40,8 +40,9 @@ def _plot_script_path():
 
 
 def _skip_unless_plot_toolchain():
-    missing_pkgs = [m for m in ("matplotlib", "pandas", "numpy", "scipy", "sqlmodel")
-                    if importlib.util.find_spec(m) is None]
+    missing_pkgs = [
+        m for m in ("matplotlib", "pandas", "numpy", "scipy", "sqlmodel") if importlib.util.find_spec(m) is None
+    ]
     if missing_pkgs:
         pytest.skip("plotting packages absent: " + ", ".join(missing_pkgs))
     missing_tools = [t for t in ("latex", "dvipng") if shutil.which(t) is None]

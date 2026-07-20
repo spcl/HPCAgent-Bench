@@ -63,10 +63,10 @@ def test_diag_1d_builds_offset_matrix():
     # k = +1: an (N+1)x(N+1) matrix zeroed, then v placed on the super-diagonal
     # ``out[i, i+1] = v[i]``.
     out = _unparse(expand_diag(_name("out"), [_name("v"), ast.Constant(1)], {"v": ("N", )}))
-    assert "range(N + 1)" in out          # side = N + |k|
-    assert "= 0.0" in out                 # matrix zeroed first
+    assert "range(N + 1)" in out  # side = N + |k|
+    assert "= 0.0" in out  # matrix zeroed first
     assert "out[__dg_i, __dg_i + 1] = v[__dg_i]" in out
-    assert "range(N)" in out              # the diagonal loop is over v's length
+    assert "range(N)" in out  # the diagonal loop is over v's length
 
 
 def test_diag_negative_offset_lowers_the_row():
@@ -79,7 +79,7 @@ def test_diag_negative_offset_lowers_the_row():
 def test_diag_k0_main_diagonal():
     out = _unparse(expand_diag(_name("out"), [_name("v")], {"v": ("N", )}))
     assert "out[__dg_i, __dg_i] = v[__dg_i]" in out
-    assert "range(N)" in out              # no |k| growth for k == 0
+    assert "range(N)" in out  # no |k| growth for k == 0
 
 
 def test_diag_2d_extracts_diagonal():
@@ -112,8 +112,7 @@ def test_fftfreq_formula_default_spacing():
 
 
 def test_fftfreq_uses_d_kwarg():
-    out = _unparse(expand_fftfreq(_name("out"), [_name("N")], {},
-                                  kwargs=[ast.keyword(arg="d", value=_name("h"))]))
+    out = _unparse(expand_fftfreq(_name("out"), [_name("N")], {}, kwargs=[ast.keyword(arg="d", value=_name("h"))]))
     assert "N * h" in out
 
 
@@ -127,11 +126,13 @@ def test_einsum_materializes_subscript_operand():
     allocs = {}
     out = _unparse(
         expand_einsum(_name("res"),
-                      [ast.Constant("ij,ij->i"), _sub_const("A", 1), _sub_const("A", 1)],
-                      st, fresh_local_allocs=allocs))
+                      [ast.Constant("ij,ij->i"), _sub_const("A", 1),
+                       _sub_const("A", 1)],
+                      st,
+                      fresh_local_allocs=allocs))
     # Each Subscript operand is spilled into a fresh scratch buffer via a copy loop.
     assert "A[1, __es_c0, __es_c1]" in out
-    assert any(k.startswith("__es_op") for k in allocs)   # buffers registered for decl
+    assert any(k.startswith("__es_op") for k in allocs)  # buffers registered for decl
     # The contraction then runs over the materialised temps.
     assert "res[__es_i] +=" in out
 
@@ -157,22 +158,46 @@ def test_diag_tridiagonal_e2e():
            "def f(v, u, out):\n"
            "    out[:] = np.diag(v) + np.diag(u, 1) + np.diag(u, -1)\n")
     v, u = rng.random(5), rng.random(4)
-    res = run_op(src, "f", {"v": v, "u": u}, {"out": (5, 5)}, {"N": 5, "M": 4},
-                 shapes={"v": "(N,)", "u": "(M,)", "out": "(N, N)"},
-                 rtol=1e-6, atol=1e-6, backends=_NATIVE)
+    res = run_op(src,
+                 "f", {
+                     "v": v,
+                     "u": u
+                 }, {"out": (5, 5)}, {
+                     "N": 5,
+                     "M": 4
+                 },
+                 shapes={
+                     "v": "(N,)",
+                     "u": "(M,)",
+                     "out": "(N, N)"
+                 },
+                 rtol=1e-6,
+                 atol=1e-6,
+                 backends=_NATIVE)
     _assert_ok(res, "diag-tridiagonal")
 
 
-@pytest.mark.parametrize("n", [6, 7])   # even + odd exercise the negative-frequency wrap
+@pytest.mark.parametrize("n", [6, 7])  # even + odd exercise the negative-frequency wrap
 def test_fftfreq_e2e(n):
     _oracle_available()
     src = ("import numpy as np\n"
            "def f(nbuf, h, out):\n"
            "    out[:] = np.fft.fftfreq(nbuf[0], d=h[0])\n")
     nbuf, h = np.array([n], dtype=np.int64), np.array([0.25])
-    res = run_op(src, "f", {"nbuf": nbuf, "h": h}, {"out": (n, )}, {"N": n},
-                 shapes={"nbuf": "(1,)", "h": "(1,)", "out": "(N,)"},
-                 dtypes={"nbuf": "int64"}, rtol=1e-6, atol=1e-6, backends=_NATIVE)
+    res = run_op(src,
+                 "f", {
+                     "nbuf": nbuf,
+                     "h": h
+                 }, {"out": (n, )}, {"N": n},
+                 shapes={
+                     "nbuf": "(1,)",
+                     "h": "(1,)",
+                     "out": "(N,)"
+                 },
+                 dtypes={"nbuf": "int64"},
+                 rtol=1e-6,
+                 atol=1e-6,
+                 backends=_NATIVE)
     _assert_ok(res, f"fftfreq-{n}")
 
 
@@ -184,7 +209,17 @@ def test_einsum_subscript_operand_e2e():
            "def f(A, out):\n"
            "    out[:] = np.einsum('ij,ij->i', A[1], A[1])\n")
     A = rng.random((2, 3, 4))
-    res = run_op(src, "f", {"A": A}, {"out": (3, )}, {"K": 2, "M": 3, "N": 4},
-                 shapes={"A": "(K, M, N)", "out": "(M,)"},
-                 rtol=1e-6, atol=1e-6, backends=_NATIVE)
+    res = run_op(src,
+                 "f", {"A": A}, {"out": (3, )}, {
+                     "K": 2,
+                     "M": 3,
+                     "N": 4
+                 },
+                 shapes={
+                     "A": "(K, M, N)",
+                     "out": "(M,)"
+                 },
+                 rtol=1e-6,
+                 atol=1e-6,
+                 backends=_NATIVE)
     _assert_ok(res, "einsum-subscript-operand")

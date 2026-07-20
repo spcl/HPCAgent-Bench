@@ -31,8 +31,11 @@ sys.path.insert(0, str(_REPO / "tests"))
 import numerical_oracle as _no  # noqa: E402
 
 
-def _bench_info(func: str, inputs: List[str], outputs: List[str],
-                shapes: Dict[str, str], syms: Dict[str, int],
+def _bench_info(func: str,
+                inputs: List[str],
+                outputs: List[str],
+                shapes: Dict[str, str],
+                syms: Dict[str, int],
                 dtypes: Dict[str, str] = None) -> Dict:
     """Synthesize the legacy bench_info the translator front end consumes.
 
@@ -48,11 +51,18 @@ def _bench_info(func: str, inputs: List[str], outputs: List[str],
         init["dtypes"] = dict(dtypes)
     return {
         "benchmark": {
-            "name": func, "short_name": func, "relative_path": "",
-            "module_name": func, "func_name": func,
-            "parameters": {"S": dict(syms)},
-            "input_args": all_args, "array_args": array_args,
-            "output_args": outputs, "init": init,
+            "name": func,
+            "short_name": func,
+            "relative_path": "",
+            "module_name": func,
+            "func_name": func,
+            "parameters": {
+                "S": dict(syms)
+            },
+            "input_args": all_args,
+            "array_args": array_args,
+            "output_args": outputs,
+            "init": init,
         }
     }
 
@@ -73,10 +83,14 @@ def _emit_native(npy: pathlib.Path, bi: pathlib.Path, out: pathlib.Path, base: s
     return True
 
 
-def run_op(src: str, func: str, inputs: Dict[str, np.ndarray],
-           outputs: Dict[str, tuple], syms: Dict[str, int],
+def run_op(src: str,
+           func: str,
+           inputs: Dict[str, np.ndarray],
+           outputs: Dict[str, tuple],
+           syms: Dict[str, int],
            shapes: Dict[str, str] = None,
-           rtol: float = 1e-9, atol: float = 1e-9,
+           rtol: float = 1e-9,
+           atol: float = 1e-9,
            backends=("c", "cpp", "fortran", "numba", "pythran", "jax"),
            skip_backends: Dict[str, str] = None,
            dtypes: Dict[str, str] = None) -> Dict[str, str]:
@@ -106,8 +120,8 @@ def run_op(src: str, func: str, inputs: Dict[str, np.ndarray],
     # drop the imaginary part of a complex result). ``.real`` / ``.imag`` accessors
     # are only meaningful when the operand is declared with its true complex type.
     eff_dtypes: Dict[str, str] = {
-        n: str(v.dtype) for n, v in inputs.items()
-        if isinstance(v, np.ndarray) and np.iscomplexobj(v)
+        n: str(v.dtype)
+        for n, v in inputs.items() if isinstance(v, np.ndarray) and np.iscomplexobj(v)
     }
     eff_dtypes.update(dtypes or {})
 
@@ -177,8 +191,10 @@ def run_op(src: str, func: str, inputs: Dict[str, np.ndarray],
                     status[b] = "skip:no-compiler"
                     continue
                 so = tdp / f"lib{base}_{b}.so"
-                cc = subprocess.run(_no.COMPILE[b] + [str(tdp / f"{base}{ext[b]}"), "-o", str(so)],
-                                    capture_output=True, text=True)
+                cc = subprocess.run(_no.COMPILE[b] +
+                                    [str(tdp / f"{base}{ext[b]}"), "-o", str(so)],
+                                    capture_output=True,
+                                    text=True)
                 if cc.returncode:
                     status[b] = f"FAIL:compile:{cc.stderr[-300:]}"
                     continue
@@ -452,10 +468,14 @@ def _map_returns(ret, out_names: List[str]):
     return got
 
 
-def run_return_op(src: str, func: str, inputs: Dict[str, np.ndarray],
-                  returns: Dict[str, tuple], syms: Dict[str, int],
+def run_return_op(src: str,
+                  func: str,
+                  inputs: Dict[str, np.ndarray],
+                  returns: Dict[str, tuple],
+                  syms: Dict[str, int],
                   shapes: Dict[str, str] = None,
-                  rtol: float = 1e-9, atol: float = 1e-9,
+                  rtol: float = 1e-9,
+                  atol: float = 1e-9,
                   backends=("c", "cpp", "fortran", "numba", "pythran", "jax"),
                   skip_backends: Dict[str, str] = None) -> Dict[str, str]:
     """Validate a RETURN-style kernel (``def f(x): return <expr>``) across backends.
@@ -497,17 +517,25 @@ def run_return_op(src: str, func: str, inputs: Dict[str, np.ndarray],
     array_args = [a for a in inputs if a in shapes]
     bi_dict = {
         "benchmark": {
-            "name": func, "short_name": func, "relative_path": "",
-            "module_name": func, "func_name": func,
-            "parameters": {"S": dict(syms)},
-            "input_args": list(inputs), "array_args": array_args,
-            "output_args": [], "init": {"shapes": shapes},
+            "name": func,
+            "short_name": func,
+            "relative_path": "",
+            "module_name": func,
+            "func_name": func,
+            "parameters": {
+                "S": dict(syms)
+            },
+            "input_args": list(inputs),
+            "array_args": array_args,
+            "output_args": [],
+            "init": {
+                "shapes": shapes
+            },
         }
     }
     by = {**inputs}
     for nm in returns:
-        by[nm] = np.zeros(expected[nm].shape,
-                          dtype=(np.complex128 if np.iscomplexobj(expected[nm]) else np.float64))
+        by[nm] = np.zeros(expected[nm].shape, dtype=(np.complex128 if np.iscomplexobj(expected[nm]) else np.float64))
 
     with tempfile.TemporaryDirectory() as td:
         tdp = pathlib.Path(td)
@@ -532,8 +560,10 @@ def run_return_op(src: str, func: str, inputs: Dict[str, np.ndarray],
                     status[b] = "skip:no-compiler"
                     continue
                 so = tdp / f"lib{base}_{b}.so"
-                cc = subprocess.run(_no.COMPILE[b] + [str(tdp / f"{base}{ext[b]}"), "-o", str(so)],
-                                    capture_output=True, text=True)
+                cc = subprocess.run(_no.COMPILE[b] +
+                                    [str(tdp / f"{base}{ext[b]}"), "-o", str(so)],
+                                    capture_output=True,
+                                    text=True)
                 if cc.returncode:
                     status[b] = f"FAIL:compile:{cc.stderr[-300:]}"
                     continue
@@ -544,7 +574,16 @@ def run_return_op(src: str, func: str, inputs: Dict[str, np.ndarray],
             elif b == "numba":
                 status[b] = _run_numba(npy, bi, func, inputs, returns, syms, expected, rtol, atol, capture_return=True)
             elif b == "pythran":
-                status[b] = _run_pythran(npy, bi, func, inputs, returns, syms, expected, rtol, atol, tdp,
+                status[b] = _run_pythran(npy,
+                                         bi,
+                                         func,
+                                         inputs,
+                                         returns,
+                                         syms,
+                                         expected,
+                                         rtol,
+                                         atol,
+                                         tdp,
                                          capture_return=True)
             elif b == "jax":
                 status[b] = _run_jax(src, func, inputs, returns, syms, expected, rtol, atol, capture_return=True)

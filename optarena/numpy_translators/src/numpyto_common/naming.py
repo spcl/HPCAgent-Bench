@@ -16,8 +16,12 @@ from typing import Optional
 
 #: numpy / precision dtype NAME -> the short fp tag used in file + symbol names.
 _FPTYPE = {
-    "": "fp64", "float64": "fp64", "float": "fp64",
-    "float32": "fp32", "float16": "fp16", "bfloat16": "bf16",
+    "": "fp64",
+    "float64": "fp64",
+    "float": "fp64",
+    "float32": "fp32",
+    "float16": "fp16",
+    "bfloat16": "bf16",
 }
 
 

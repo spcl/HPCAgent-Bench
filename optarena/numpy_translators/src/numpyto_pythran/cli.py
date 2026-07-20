@@ -43,9 +43,10 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--bench-info", type=pathlib.Path, required=True)
     e.add_argument("--out", type=pathlib.Path, required=True)
     e.add_argument("--config", default=None, help="sparse layout config (e.g. csr); tags the emitted filename")
-    e.add_argument("--precision", default="",
+    e.add_argument("--precision",
+                   default="",
                    help="floating precision override (e.g. ``float32``) for "
-                        "the dtype-specific #pythran export signature.")
+                   "the dtype-specific #pythran export signature.")
     e.set_defaults(func=cmd_emit)
     return p
 

@@ -10,9 +10,8 @@ import socket
 
 import pytest
 
-from optarena.harness.cluster_launch import (JUDGE, RankRole, VLLM_HEAD, VLLM_WORKER, assemble_urls,
-                                             endpoint_hostport, expected_world, plan_roles, rank_status,
-                                             settle_rounds, vllm_command)
+from optarena.harness.cluster_launch import (JUDGE, RankRole, VLLM_HEAD, VLLM_WORKER, assemble_urls, endpoint_hostport,
+                                             expected_world, plan_roles, rank_status, settle_rounds, vllm_command)
 
 
 class FakeProc:
@@ -69,16 +68,46 @@ def test_plan_rejects_nonpositive_counts(endpoints, k, judge):
 def test_assemble_urls_orders_by_endpoint_then_rank():
     # deliberately out of rank order to prove the sort keys, K=2 (rank 1/3 are workers -> no URL)
     gathered = [
-        {"rank": 4, "role": JUDGE, "endpoint": -1, "hostname": "nid04"},
-        {"rank": 2, "role": VLLM_HEAD, "endpoint": 1, "hostname": "nid02"},
-        {"rank": 0, "role": VLLM_HEAD, "endpoint": 0, "hostname": "nid00"},
-        {"rank": 1, "role": VLLM_WORKER, "endpoint": 0, "hostname": "nid01"},
-        {"rank": 3, "role": VLLM_WORKER, "endpoint": 1, "hostname": "nid03"},
-        {"rank": 5, "role": JUDGE, "endpoint": -1, "hostname": "nid05"},
+        {
+            "rank": 4,
+            "role": JUDGE,
+            "endpoint": -1,
+            "hostname": "nid04"
+        },
+        {
+            "rank": 2,
+            "role": VLLM_HEAD,
+            "endpoint": 1,
+            "hostname": "nid02"
+        },
+        {
+            "rank": 0,
+            "role": VLLM_HEAD,
+            "endpoint": 0,
+            "hostname": "nid00"
+        },
+        {
+            "rank": 1,
+            "role": VLLM_WORKER,
+            "endpoint": 0,
+            "hostname": "nid01"
+        },
+        {
+            "rank": 3,
+            "role": VLLM_WORKER,
+            "endpoint": 1,
+            "hostname": "nid03"
+        },
+        {
+            "rank": 5,
+            "role": JUDGE,
+            "endpoint": -1,
+            "hostname": "nid05"
+        },
     ]
     vllm_urls, judge_urls = assemble_urls(gathered, vllm_port=8000, judge_port=8800)
     assert vllm_urls == ["http://nid00:8000/v1", "http://nid02:8000/v1"]  # heads only, by endpoint
-    assert judge_urls == ["http://nid04:8800", "http://nid05:8800"]       # judges by rank
+    assert judge_urls == ["http://nid04:8800", "http://nid05:8800"]  # judges by rank
 
 
 def test_vllm_command_single_node_has_no_pipeline_or_ray():

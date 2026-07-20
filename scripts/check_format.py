@@ -34,11 +34,17 @@ FORT_EXT = {".f", ".f90", ".f03", ".f08", ".f95", ".for"}  # matched case-insens
 
 # Ported / generated sources are not hand-formatted (faithfulness over style),
 # matching the .yapfignore policy. A path is skipped when it sits under one of
-# these prefixes or its name marks it as generated. numpy_translators is now folded
-# into the optarena distribution (no separate pyproject or style config), but its
-# sources predate this gate and most are not yet yapf-clean at 120, so it stays
-# skipped until a coordinated reformat can drop it from SKIP_PREFIXES.
-SKIP_PREFIXES = ("optarena/benchmarks/", "optarena/numpy_translators/")
+# these prefixes or its name marks it as generated.
+#
+# optarena/benchmarks stays skipped on purpose: those kernels are transcribed from
+# upstream Fortran / C, and reformatting them breaks the line-level correspondence
+# with the source they were ported from. That is provenance, not a style backlog.
+#
+# numpy_translators was skipped pending "a coordinated reformat"; that reformat has
+# happened, so the prefix is gone and the gate now holds those 122 files to the same
+# 120-column yapf style as the rest. Without this the reformat would decay on the
+# first translator edit.
+SKIP_PREFIXES = ("optarena/benchmarks/", )
 SKIP_NAME_MARKERS = ("_generated.", )
 
 

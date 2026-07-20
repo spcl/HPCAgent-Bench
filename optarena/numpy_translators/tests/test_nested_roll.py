@@ -82,10 +82,16 @@ def test_subscript_operand_roll_is_hoisted():
     src = ("import numpy as np\n"
            "def f(a, b, out):\n"
            "    out[:] = a[..., None] * np.roll(b[1], 1, axis=0)\n")
-    lowered = _lower_source(
-        src, "f",
-        {"a": "(X, Y)", "b": "(K, X, Y, Z)", "out": "(X, Y, Z)"},
-        {"K": 3, "X": 4, "Y": 5, "Z": 6})
+    lowered = _lower_source(src, "f", {
+        "a": "(X, Y)",
+        "b": "(K, X, Y, Z)",
+        "out": "(X, Y, Z)"
+    }, {
+        "K": 3,
+        "X": 4,
+        "Y": 5,
+        "Z": 6
+    })
     assert "np.roll(" not in lowered, lowered
 
 
@@ -102,10 +108,24 @@ def test_nested_roll_subscript_operand_e2e():
            "def f(a, b, out):\n"
            "    out[:] = a[..., None] * np.roll(b[1], 1, axis=0)\n")
     a, b = rng.random((4, 5)), rng.random((3, 4, 5, 6))
-    res = run_op(src, "f", {"a": a, "b": b}, {"out": (4, 5, 6)},
-                 {"K": 3, "X": 4, "Y": 5, "Z": 6},
-                 shapes={"a": "(X, Y)", "b": "(K, X, Y, Z)", "out": "(X, Y, Z)"},
-                 rtol=1e-6, atol=1e-6, backends=_NATIVE)
+    res = run_op(src,
+                 "f", {
+                     "a": a,
+                     "b": b
+                 }, {"out": (4, 5, 6)}, {
+                     "K": 3,
+                     "X": 4,
+                     "Y": 5,
+                     "Z": 6
+                 },
+                 shapes={
+                     "a": "(X, Y)",
+                     "b": "(K, X, Y, Z)",
+                     "out": "(X, Y, Z)"
+                 },
+                 rtol=1e-6,
+                 atol=1e-6,
+                 backends=_NATIVE)
     _assert_ok(res, "nested-roll-subscript")
 
 
@@ -117,10 +137,24 @@ def test_nested_roll_negative_shift_e2e():
            "def f(a, b, out):\n"
            "    out[:] = a[..., None] * (np.roll(b[1], 2, axis=2) + np.roll(b[1], -2, axis=2))\n")
     a, b = rng.random((4, 5)), rng.random((3, 4, 5, 6))
-    res = run_op(src, "f", {"a": a, "b": b}, {"out": (4, 5, 6)},
-                 {"K": 3, "X": 4, "Y": 5, "Z": 6},
-                 shapes={"a": "(X, Y)", "b": "(K, X, Y, Z)", "out": "(X, Y, Z)"},
-                 rtol=1e-6, atol=1e-6, backends=_NATIVE)
+    res = run_op(src,
+                 "f", {
+                     "a": a,
+                     "b": b
+                 }, {"out": (4, 5, 6)}, {
+                     "K": 3,
+                     "X": 4,
+                     "Y": 5,
+                     "Z": 6
+                 },
+                 shapes={
+                     "a": "(X, Y)",
+                     "b": "(K, X, Y, Z)",
+                     "out": "(X, Y, Z)"
+                 },
+                 rtol=1e-6,
+                 atol=1e-6,
+                 backends=_NATIVE)
     _assert_ok(res, "nested-roll-negative-shift")
 
 
@@ -132,10 +166,24 @@ def test_nested_roll_positional_axis_e2e():
            "def f(a, b, out):\n"
            "    out[:] = a[..., None] * np.roll(b[2], 1, 1)\n")
     a, b = rng.random((4, 5)), rng.random((3, 4, 5, 6))
-    res = run_op(src, "f", {"a": a, "b": b}, {"out": (4, 5, 6)},
-                 {"K": 3, "X": 4, "Y": 5, "Z": 6},
-                 shapes={"a": "(X, Y)", "b": "(K, X, Y, Z)", "out": "(X, Y, Z)"},
-                 rtol=1e-6, atol=1e-6, backends=_NATIVE)
+    res = run_op(src,
+                 "f", {
+                     "a": a,
+                     "b": b
+                 }, {"out": (4, 5, 6)}, {
+                     "K": 3,
+                     "X": 4,
+                     "Y": 5,
+                     "Z": 6
+                 },
+                 shapes={
+                     "a": "(X, Y)",
+                     "b": "(K, X, Y, Z)",
+                     "out": "(X, Y, Z)"
+                 },
+                 rtol=1e-6,
+                 atol=1e-6,
+                 backends=_NATIVE)
     _assert_ok(res, "nested-roll-positional-axis")
 
 
@@ -148,8 +196,21 @@ def test_nested_roll_name_operand_e2e():
            "def f(a, b, out):\n"
            "    out[:] = a[..., None] * np.roll(b, 1, axis=0)\n")
     a, b = rng.random((4, 5)), rng.random((4, 5, 6))
-    res = run_op(src, "f", {"a": a, "b": b}, {"out": (4, 5, 6)},
-                 {"X": 4, "Y": 5, "Z": 6},
-                 shapes={"a": "(X, Y)", "b": "(X, Y, Z)", "out": "(X, Y, Z)"},
-                 rtol=1e-6, atol=1e-6, backends=_NATIVE)
+    res = run_op(src,
+                 "f", {
+                     "a": a,
+                     "b": b
+                 }, {"out": (4, 5, 6)}, {
+                     "X": 4,
+                     "Y": 5,
+                     "Z": 6
+                 },
+                 shapes={
+                     "a": "(X, Y)",
+                     "b": "(X, Y, Z)",
+                     "out": "(X, Y, Z)"
+                 },
+                 rtol=1e-6,
+                 atol=1e-6,
+                 backends=_NATIVE)
     _assert_ok(res, "nested-roll-name-operand")

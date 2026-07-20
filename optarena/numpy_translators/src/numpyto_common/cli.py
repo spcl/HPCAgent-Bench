@@ -54,11 +54,9 @@ _PARALLEL_TARGETS = {"c_omp", "cpp_omp", "fortran_omp"}
 
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    ap = argparse.ArgumentParser(
-        prog="numpyto",
-        description="Unified NumpyToX emitter: emit a numpy kernel to a target language.")
-    ap.add_argument("--target", "-t", required=True, choices=sorted(_TARGETS),
-                    help="output language / framework")
+    ap = argparse.ArgumentParser(prog="numpyto",
+                                 description="Unified NumpyToX emitter: emit a numpy kernel to a target language.")
+    ap.add_argument("--target", "-t", required=True, choices=sorted(_TARGETS), help="output language / framework")
     args, rest = ap.parse_known_args(argv)
     mod = importlib.import_module(_TARGETS[args.target])
     if args.target in _PARALLEL_TARGETS and "--parallel" not in rest:

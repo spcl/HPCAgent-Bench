@@ -75,7 +75,6 @@ _FP8_FNS = {
     "float8_e5m2": _Fp8Fns("__npb_e5m2_to_f32", "__npb_f32_to_e5m2", "__npb_rn_e5m2"),
 }
 
-
 #: BinOp ops that are never fp8 arithmetic (bit/shift work is integer); the fp8 round-to-grid wrap skips them.
 _FP8_NON_ARITH_OPS = (ast.BitAnd, ast.BitOr, ast.BitXor, ast.LShift, ast.RShift)
 
@@ -1397,7 +1396,6 @@ _C_EPILOGUE = ""
 _CPP_PRELUDE = ""
 _CPP_EPILOGUE = ""
 
-
 #: Per-fp8-format prelude (storage typedef + promote/round/demote conversions), verified bit-exact against ml_dtypes.
 _FP8_HELPERS = {
     "float8_e4m3":
@@ -1487,8 +1485,9 @@ _FP8_HELPERS = {
 def _fp8_dtypes_used(kir: KernelIR) -> List[str]:
     """The canonical storage-only (fp8) dtypes this kernel mentions, deduped; drives prelude injection + promote/demote."""
     seen: List[str] = []
-    for dt in (*(a.dtype for a in kir.arrays), *(s.dtype for s in kir.scalars), *kir.local_dtypes.values(),
-               kir.float_precision or ""):
+    for dt in (*(a.dtype for a in kir.arrays), *(s.dtype
+                                                 for s in kir.scalars), *kir.local_dtypes.values(), kir.float_precision
+               or ""):
         if dt and dtypes.is_storage_only(dt):
             canon = dtypes.canonical(dt)
             if canon not in seen:

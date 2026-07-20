@@ -30,8 +30,20 @@ def _stack3d(axis, out_shape, out_sym, n_operands=2):
            "        for j in range(out.shape[1]):\n"
            "            for l in range(out.shape[2]):\n"
            "                out[i, j, l] = c[i, j, l]\n")
-    return run_op(src, "k", {"a": _A, "b": _B}, {"out": out_shape}, {"M": 2, "N": 3},
-                  shapes={"a": "(M, N)", "b": "(M, N)", "out": out_sym}, backends=_ALL)
+    return run_op(src,
+                  "k", {
+                      "a": _A,
+                      "b": _B
+                  }, {"out": out_shape}, {
+                      "M": 2,
+                      "N": 3
+                  },
+                  shapes={
+                      "a": "(M, N)",
+                      "b": "(M, N)",
+                      "out": out_sym
+                  },
+                  backends=_ALL)
 
 
 def test_stack_axis0():
@@ -68,8 +80,20 @@ def _concat(axis, out_shape, out_sym, n_operands=2):
            "    for i in range(out.shape[0]):\n"
            "        for j in range(out.shape[1]):\n"
            "            out[i, j] = c[i, j]\n")
-    return run_op(src, "k", {"a": _A, "b": _B}, {"out": out_shape}, {"M": 2, "N": 3},
-                  shapes={"a": "(M, N)", "b": "(M, N)", "out": out_sym}, backends=_ALL)
+    return run_op(src,
+                  "k", {
+                      "a": _A,
+                      "b": _B
+                  }, {"out": out_shape}, {
+                      "M": 2,
+                      "N": 3
+                  },
+                  shapes={
+                      "a": "(M, N)",
+                      "b": "(M, N)",
+                      "out": out_sym
+                  },
+                  backends=_ALL)
 
 
 def test_concatenate_axis0():

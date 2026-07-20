@@ -49,7 +49,6 @@ _FP8_FNS = {
     "float8_e5m2": _Fp8Fns("npb_e5m2_to_f32", "npb_f32_to_e5m2", "npb_rn_e5m2"),
 }
 
-
 #: BinOp ops that are never fp8 arithmetic (bit/shift work is integer); the fp8 round-to-grid wrap skips them.
 _FP8_NON_ARITH_OPS = (ast.BitAnd, ast.BitOr, ast.BitXor, ast.LShift, ast.RShift)
 
@@ -64,8 +63,9 @@ def _fp8_fns(dtype: str):
 def _fp8_dtypes_used(kir: KernelIR) -> List[str]:
     """The canonical storage-only (fp8) dtypes this kernel mentions, deduped."""
     seen: List[str] = []
-    for dt in (*(a.dtype for a in kir.arrays), *(s.dtype for s in kir.scalars), *kir.local_dtypes.values(),
-               kir.float_precision or ""):
+    for dt in (*(a.dtype for a in kir.arrays), *(s.dtype
+                                                 for s in kir.scalars), *kir.local_dtypes.values(), kir.float_precision
+               or ""):
         if dt and dtypes.is_storage_only(dt):
             canon = dtypes.canonical(dt)
             if canon not in seen:
@@ -457,18 +457,17 @@ class _FortranBodyEmitter(BaseEmitter):
         }
         #: Arrays whose shape is entirely size-1, scalarised to x(1) when read bare
         #: (mirrors the C emitter's x[0] scalarisation).
-        self._size1_arrays: Set[str] = {
-            a.name
-            for a in kir.arrays if a.shape and all(str(s) == "1" for s in a.shape)
-        }
-        self._size1_arrays.update(
-            name for name, shape in self.local_arrays.items() if all(str(s) == "1" for s in shape))
+        self._size1_arrays: Set[str] = {a.name for a in kir.arrays if a.shape and all(str(s) == "1" for s in a.shape)}
+        self._size1_arrays.update(name for name, shape in self.local_arrays.items() if all(
+            str(s) == "1" for s in shape))
         self._loop_iter_names: Set[str] = set()
         # ISO_C_BINDING real kind for float literals. Fortran is strict about kind
         # mixing, so literals must match the kernel's float precision; resolved through
         # compute_dtype so an fp8 kernel (held in real(c_float)) suffixes _c_float.
-        self._rk = {"float32": "c_float", "float16": "c_float"}.get(
-            dtypes.compute_dtype(kir.float_precision or "float64"), "c_double")
+        self._rk = {
+            "float32": "c_float",
+            "float16": "c_float"
+        }.get(dtypes.compute_dtype(kir.float_precision or "float64"), "c_double")
         # libm functions Fortran lacks an intrinsic for, called through a bind(C)
         # interface so the result is bit-identical to the C backend/numpy.
         self._used_libm: Set[Tuple[str, str]] = set()
@@ -1241,8 +1240,8 @@ class _FortranBodyEmitter(BaseEmitter):
             return self._expr_is_integer(e.left) and self._expr_is_integer(e.right)
         if isinstance(e, ast.Call):
             # An int-returning call is INTEGER -- the same rule the min/max operand typing uses.
-            fn = (e.func.id if isinstance(e.func, ast.Name) else (e.func.attr if isinstance(e.func, ast.Attribute)
-                                                                  else ""))
+            fn = (e.func.id if isinstance(e.func, ast.Name) else
+                  (e.func.attr if isinstance(e.func, ast.Attribute) else ""))
             if fn in _INT_RETURNING_CALLS:
                 if fn in _INT_CALLS_ARGDEP:
                     return all(self._expr_is_integer(a) for a in e.args)
@@ -2382,8 +2381,10 @@ def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
     """Return (name, fortran_type) for scalar locals needing a decl; subscript/range uses promote to integer."""
     # Float locals follow the kernel's precision (real(c_float) at fp32),
     # else a double local clashes with float32 arrays/values.
-    rk = {"float32": "c_float", "float16": "c_float"}.get(
-            dtypes.compute_dtype(kir.float_precision or "float64"), "c_double")
+    rk = {
+        "float32": "c_float",
+        "float16": "c_float"
+    }.get(dtypes.compute_dtype(kir.float_precision or "float64"), "c_double")
     real_t = f"real({rk})"
     ck = {
         "float32": "c_float_complex",
@@ -2785,8 +2786,10 @@ def _emit_fortran_helper(hkir: KernelIR) -> str:
     # Local arrays the lowering harvested inside the helper need explicit
     # fixed-shape declarations -- a contained subroutine has no enclosing scope
     # to inherit them from. Shapes are reversed to match _array_decl.
-    rk = {"float32": "c_float", "float16": "c_float"}.get(
-        dtypes.compute_dtype(hkir.float_precision or "float64"), "c_double")
+    rk = {
+        "float32": "c_float",
+        "float16": "c_float"
+    }.get(dtypes.compute_dtype(hkir.float_precision or "float64"), "c_double")
     default_real = f"real({rk})"
     ldt = hkir.local_dtypes
     param_set = set(hkir.input_args)

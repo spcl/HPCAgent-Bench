@@ -36,12 +36,20 @@ def test_negative_literal_ternary_matches_int64_partner():
     tab = np.linspace(10.0, 20.0, 4, dtype=np.float64)
     out = np.zeros(8, dtype=np.float64)
     ok, res = _all_ok(
-        run_op(_SRC, "f", {"idx": idx, "tab": tab}, {"out": (8, )}, {"N": 8, "T": 4},
+        run_op(_SRC,
+               "f", {
+                   "idx": idx,
+                   "tab": tab
+               }, {"out": (8, )}, {
+                   "N": 8,
+                   "T": 4
+               },
                shapes={
                    "idx": "(N,)",
                    "tab": "(T,)",
                    "out": "(N,)"
-               }, backends=_ALL))
+               },
+               backends=_ALL))
     assert ok, res
     _ = out
 

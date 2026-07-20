@@ -48,14 +48,23 @@ def test_extent_is_scalar_helper():
     assert extent_is_scalar((ast.parse("1").body[0].value, ast.parse("1").body[0].value))  # (1, 1) -> scalar
     assert extent_is_scalar(())  # rank-0 is already scalar
     assert not extent_is_scalar(None)  # unknown extent is NOT asserted scalar
-    assert not extent_is_scalar((ast.parse("N").body[0].value,))  # (N,) is a real array
+    assert not extent_is_scalar((ast.parse("N").body[0].value, ))  # (N,) is a real array
 
 
 def test_scalar_local_from_size1_broadcast_all_backends():
     a = np.array([0.2, 0.9, 0.5, 0.7, 0.1, 0.95, 0.3], dtype=np.float64)
     ok, res = _all_ok(
-        run_op(_SRC, "f", {"a": a, "x": np.array([0.0])}, {"out": (1, )}, {"N": len(a)},
-               shapes={"a": "(N,)", "x": "(1,)", "out": "(1,)"}, backends=_ALL))
+        run_op(_SRC,
+               "f", {
+                   "a": a,
+                   "x": np.array([0.0])
+               }, {"out": (1, )}, {"N": len(a)},
+               shapes={
+                   "a": "(N,)",
+                   "x": "(1,)",
+                   "out": "(1,)"
+               },
+               backends=_ALL))
     assert ok, res
 
 
@@ -66,9 +75,27 @@ def _kir(src):
     (d / "k_numpy.py").write_text(src)
     bi = {
         "benchmark": {
-            "name": "k", "short_name": "k", "relative_path": "", "module_name": "k", "func_name": "f",
-            "parameters": {"S": {"N": 8}}, "input_args": ["a", "x", "out"], "array_args": ["a", "x", "out"],
-            "output_args": ["out"], "init": {"shapes": {"a": "(N,)", "x": "(1,)", "out": "(1,)"}, "dtypes": {}},
+            "name": "k",
+            "short_name": "k",
+            "relative_path": "",
+            "module_name": "k",
+            "func_name": "f",
+            "parameters": {
+                "S": {
+                    "N": 8
+                }
+            },
+            "input_args": ["a", "x", "out"],
+            "array_args": ["a", "x", "out"],
+            "output_args": ["out"],
+            "init": {
+                "shapes": {
+                    "a": "(N,)",
+                    "x": "(1,)",
+                    "out": "(1,)"
+                },
+                "dtypes": {}
+            },
         }
     }
     (d / "bi.json").write_text(json.dumps(bi))

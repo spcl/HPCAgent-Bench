@@ -18,10 +18,8 @@ These are pure AST transforms, so no compiler is needed.
 import ast
 
 from numpyto_common.frontend import _collect_inlined_scalar_defs
-from numpyto_common.lib_nodes import (_iter_extent_of, expand_copy,
-                                      expand_linalg_inv)
-from numpyto_common.lowering import (_ShapeMidExpressionRewriter,
-                                     _TupleLocalPropagator)
+from numpyto_common.lib_nodes import (_iter_extent_of, expand_copy, expand_linalg_inv)
+from numpyto_common.lowering import (_ShapeMidExpressionRewriter, _TupleLocalPropagator)
 
 
 def _expr(src):
@@ -104,8 +102,8 @@ def test_tuple_local_propagator_inlines_and_drops_assignment():
                      "y = np.reshape(mm, shp)\n")
     _TupleLocalPropagator().run(tree)
     out = _unparse(tree)
-    assert "shp = " not in out                       # dead assignment dropped
-    assert "(Lb, Lb, Lb, nstate)[-1]" in out         # inlined into the subscript
+    assert "shp = " not in out  # dead assignment dropped
+    assert "(Lb, Lb, Lb, nstate)[-1]" in out  # inlined into the subscript
     assert "np.reshape(mm, (Lb, Lb, Lb, nstate))" in out
 
 
@@ -128,7 +126,7 @@ def test_collect_inlined_scalar_defs_excludes_augassigned_counter():
                    " for _ in range(6):\n"
                    "  __inl2_na += 1\n").body[0]
     defs = _collect_inlined_scalar_defs(fn)
-    assert "__inl2_na" not in defs        # mutated counter -- not a fixed dim
+    assert "__inl2_na" not in defs  # mutated counter -- not a fixed dim
     assert defs.get("__inl2_n") == "a.shape[0]"
 
 
@@ -148,7 +146,7 @@ def test_size_of_compound_token_reparses_to_binop():
     tree = ast.parse("y = off.size")
     _ShapeMidExpressionRewriter({"off": ["na - 1"]}).visit(tree)
     val = tree.body[0].value
-    assert isinstance(val, ast.BinOp)                 # not ast.Name(id="na - 1")
+    assert isinstance(val, ast.BinOp)  # not ast.Name(id="na - 1")
     assert _unparse(val) == "na - 1"
 
 
@@ -173,15 +171,22 @@ def test_expand_copy_emits_allocation_marker():
 
 
 def _inv_buffer_names(stmts):
-    return {n.id for n in ast.walk(ast.Module(body=stmts, type_ignores=[]))
-            if isinstance(n, ast.Name) and n.id.startswith("__inv_aw")}
+    return {
+        n.id
+        for n in ast.walk(ast.Module(body=stmts, type_ignores=[]))
+        if isinstance(n, ast.Name) and n.id.startswith("__inv_aw")
+    }
 
 
 def test_inv_working_buffer_is_unique_per_call():
     st = {"A": ("__inl3_k", "__inl3_k"), "B": ("__inl5_k", "__inl5_k")}
-    s1 = expand_linalg_inv(ast.Name(id="X1", ctx=ast.Store()),
-                           [ast.Name(id="A", ctx=ast.Load())], st, local_dtypes={}, fresh_local_allocs={})
-    s2 = expand_linalg_inv(ast.Name(id="X2", ctx=ast.Store()),
-                           [ast.Name(id="B", ctx=ast.Load())], st, local_dtypes={}, fresh_local_allocs={})
+    s1 = expand_linalg_inv(ast.Name(id="X1", ctx=ast.Store()), [ast.Name(id="A", ctx=ast.Load())],
+                           st,
+                           local_dtypes={},
+                           fresh_local_allocs={})
+    s2 = expand_linalg_inv(ast.Name(id="X2", ctx=ast.Store()), [ast.Name(id="B", ctx=ast.Load())],
+                           st,
+                           local_dtypes={},
+                           fresh_local_allocs={})
     b1, b2 = _inv_buffer_names(s1), _inv_buffer_names(s2)
     assert b1 and b2 and b1.isdisjoint(b2), f"inv buffers collide: {b1} vs {b2}"

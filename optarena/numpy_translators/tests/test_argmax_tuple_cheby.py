@@ -59,9 +59,21 @@ def test_argmax_call_in_tuple_subscript():
         "def f(v, w, out):\n"
         "    col = 1\n"
         "    out[0] = v[np.argmax(np.abs(w)), col]\n",
-        "f", {"v": v, "w": w}, {"out": (1, )}, {"NR": 5, "NC": 4},
-        shapes={"v": "(NR, NC)", "w": "(NR,)", "out": "(1,)"},
-        rtol=1e-6, atol=1e-6, backends=_NATIVE)
+        "f", {
+            "v": v,
+            "w": w
+        }, {"out": (1, )}, {
+            "NR": 5,
+            "NC": 4
+        },
+        shapes={
+            "v": "(NR, NC)",
+            "w": "(NR,)",
+            "out": "(1,)"
+        },
+        rtol=1e-6,
+        atol=1e-6,
+        backends=_NATIVE)
     _assert_native_ok(status, "v[argmax(abs(w)), col]")
 
 
@@ -88,10 +100,24 @@ def test_inloop_three_way_array_scalar_swap():
         "    oav[:] = av\n"
         "    obv[:] = bv\n"
         "    ocs[0] = acc\n",
-        "f", {"av": av, "bv": bv},
-        {"oav": (4, ), "obv": (4, ), "ocs": (1, )}, {"NR": 4},
-        shapes={"av": "(NR,)", "bv": "(NR,)", "oav": "(NR,)", "obv": "(NR,)", "ocs": "(1,)"},
-        rtol=1e-6, atol=1e-6, backends=_NATIVE)
+        "f", {
+            "av": av,
+            "bv": bv
+        }, {
+            "oav": (4, ),
+            "obv": (4, ),
+            "ocs": (1, )
+        }, {"NR": 4},
+        shapes={
+            "av": "(NR,)",
+            "bv": "(NR,)",
+            "oav": "(NR,)",
+            "obv": "(NR,)",
+            "ocs": "(1,)"
+        },
+        rtol=1e-6,
+        atol=1e-6,
+        backends=_NATIVE)
     _assert_native_ok(status, "av, bv, acc = bv, av+bv, 2*acc+1")
 
 

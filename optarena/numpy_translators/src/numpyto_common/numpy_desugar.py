@@ -958,8 +958,8 @@ def _reduce_axis_stmts(tname: str,
     # wraps instead: int32 columns summing past 2^31 came back negative on numba.
     # min/max/argmin/argmax pick an ELEMENT, so they keep the input dtype.
     acc_res = "np.int64" if (op in ("sum", "prod") and elem_kind in ("int", "bool")) else f"{sname}.dtype"
-    dtype = ("np.int64" if is_arg else
-             "np.bool_" if op in ("any", "all") else float_res if op in ("mean", "std", "var") else acc_res)
+    dtype = ("np.int64" if is_arg else "np.bool_" if op in ("any", "all") else float_res if op in ("mean", "std",
+                                                                                                   "var") else acc_res)
     shape_dims = [(d[i] if i in out_axes else "1") for i in range(rank)] if keepdims else [d[i] for i in out_axes]
     lines.append(f"{tname} = np.empty(({''.join(s + ', ' for s in shape_dims)}), {dtype})")
     o = {i: f"{p}_k{i}" for i in out_axes}
@@ -2063,14 +2063,6 @@ class _DropValidationGuards(ast.NodeTransformer):
         return node
 
 
-
-
-
-
-
-
-
-
 def _strip_docstring_stmts(body: List[ast.stmt]) -> List[ast.stmt]:
     return [
         s for s in body
@@ -2233,18 +2225,16 @@ def _appended_elts(stmt: ast.stmt, name: str) -> Optional[List[ast.expr]]:
     Accepts ``name.append(e)``, ``name += [e...]`` and ``name = name + [e...]``
     -- the three spellings the corpus uses to build a parameter vector.
     """
-    if (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)
-            and isinstance(stmt.value.func, ast.Attribute) and stmt.value.func.attr == "append"
-            and isinstance(stmt.value.func.value, ast.Name) and stmt.value.func.value.id == name
-            and len(stmt.value.args) == 1):
+    if (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call) and isinstance(stmt.value.func, ast.Attribute)
+            and stmt.value.func.attr == "append" and isinstance(stmt.value.func.value, ast.Name)
+            and stmt.value.func.value.id == name and len(stmt.value.args) == 1):
         return [stmt.value.args[0]]
     if (isinstance(stmt, ast.AugAssign) and isinstance(stmt.op, ast.Add) and isinstance(stmt.target, ast.Name)
             and stmt.target.id == name):
         return _list_display_elts(stmt.value)
     if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
-            and stmt.targets[0].id == name and isinstance(stmt.value, ast.BinOp)
-            and isinstance(stmt.value.op, ast.Add) and isinstance(stmt.value.left, ast.Name)
-            and stmt.value.left.id == name):
+            and stmt.targets[0].id == name and isinstance(stmt.value, ast.BinOp) and isinstance(stmt.value.op, ast.Add)
+            and isinstance(stmt.value.left, ast.Name) and stmt.value.left.id == name):
         return _list_display_elts(stmt.value.right)
     return None
 
@@ -2297,8 +2287,8 @@ def _plan_list_build(body: List[ast.stmt], start: int, name: str):
     segs: List[Tuple[str, str, object]] = [("lit", "0", seed)]
     off = _off_add("0", str(len(seed)))
     trunc: Optional[str] = None
-    all_int = all(isinstance(e, ast.Constant) and isinstance(e.value, int) and not isinstance(e.value, bool)
-                  for e in seed)
+    all_int = all(
+        isinstance(e, ast.Constant) and isinstance(e.value, int) and not isinstance(e.value, bool) for e in seed)
     j = start + 1
     while j < len(body):
         stmt = body[j]
@@ -2343,10 +2333,9 @@ def _plan_list_build(body: List[ast.stmt], start: int, name: str):
             nxt = body[j + 1] if j + 1 < len(body) else None
             if not (isinstance(nxt, ast.Assign) and len(nxt.targets) == 1 and isinstance(nxt.targets[0], ast.Name)
                     and nxt.targets[0].id == name and isinstance(nxt.value, ast.Subscript)
-                    and isinstance(nxt.value.value, ast.Name) and nxt.value.value.id == name
-                    and isinstance(nxt.value.slice, ast.Slice) and nxt.value.slice.lower is None
-                    and nxt.value.slice.step is None and nxt.value.slice.upper is not None
-                    and ast.unparse(nxt.value.slice.upper) == bound):
+                    and isinstance(nxt.value.value, ast.Name) and nxt.value.value.id == name and isinstance(
+                        nxt.value.slice, ast.Slice) and nxt.value.slice.lower is None and nxt.value.slice.step is None
+                    and nxt.value.slice.upper is not None and ast.unparse(nxt.value.slice.upper) == bound):
                 return None
             segs.append(("while", off, (bound, got[0])))
             trunc = bound
@@ -2414,7 +2403,13 @@ def _fold_list_preludes(fn: ast.FunctionDef) -> None:
         ast.fix_missing_locations(fn)
 
 
-def _curve_fit_lm_lines(popt: str, f: str, x: str, y: str, p0: str, pfx: str, iters: int,
+def _curve_fit_lm_lines(popt: str,
+                        f: str,
+                        x: str,
+                        y: str,
+                        p0: str,
+                        pfx: str,
+                        iters: int,
                         precision: Optional[str] = None) -> List[str]:
     """Source lines for a naive Levenberg-Marquardt fit replacing ``curve_fit``.
 
@@ -2655,9 +2650,8 @@ class _NegParamIndexFold(ast.NodeTransformer):
 
     def visit_Subscript(self, node: ast.Subscript):
         self.generic_visit(node)
-        if (isinstance(node.value, ast.Name) and node.value.id == self.name
-                and isinstance(node.slice, ast.UnaryOp) and isinstance(node.slice.op, ast.USub)
-                and isinstance(node.slice.operand, ast.Constant)):
+        if (isinstance(node.value, ast.Name) and node.value.id == self.name and isinstance(node.slice, ast.UnaryOp)
+                and isinstance(node.slice.op, ast.USub) and isinstance(node.slice.operand, ast.Constant)):
             node.slice = ast.parse(f"{self.nexpr} - {node.slice.operand.value}", mode="eval").body
             ast.fix_missing_locations(node)
         return node

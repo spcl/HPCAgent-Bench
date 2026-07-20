@@ -172,11 +172,10 @@ class _DesugarTernary(ast.NodeTransformer):
                 continue
             if isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.IfExp) and len(stmt.targets) == 1:
                 tgt = stmt.targets[0]
-                new_if = ast.If(test=stmt.value.test,
-                                body=self._process_body(
-                                    [ast.Assign(targets=[copy.deepcopy(tgt)], value=stmt.value.body)]),
-                                orelse=self._process_body(
-                                    [ast.Assign(targets=[copy.deepcopy(tgt)], value=stmt.value.orelse)]))
+                new_if = ast.If(
+                    test=stmt.value.test,
+                    body=self._process_body([ast.Assign(targets=[copy.deepcopy(tgt)], value=stmt.value.body)]),
+                    orelse=self._process_body([ast.Assign(targets=[copy.deepcopy(tgt)], value=stmt.value.orelse)]))
                 out.append(ast.copy_location(new_if, stmt))
                 continue
             prelude: List[ast.stmt] = []
@@ -434,8 +433,11 @@ def _shape_ident_candidates(fn_ast: ast.AST, known: set) -> set:
                 and node.args):
             shape_arg = node.args[0]
             # <x>.shape[k] is x's own dimension, not a scalar dim identifier -- exclude base x.
-            shape_bases = {id(a.value) for a in ast.walk(shape_arg)
-                           if isinstance(a, ast.Attribute) and a.attr == "shape" and isinstance(a.value, ast.Name)}
+            shape_bases = {
+                id(a.value)
+                for a in ast.walk(shape_arg)
+                if isinstance(a, ast.Attribute) and a.attr == "shape" and isinstance(a.value, ast.Name)
+            }
             for sub in ast.walk(shape_arg):
                 if isinstance(sub, ast.Name) and id(sub) not in shape_bases and sub.id not in known:
                     names.add(sub.id)
@@ -479,8 +481,7 @@ def _inline_symbol_aliases(fn_ast: ast.AST, symbols: set, known: set) -> ast.AST
 
 def _is_shape_subscript(node: ast.AST) -> bool:
     """True iff node is <expr>.shape[k] -- a residual .shape read of a body-local transient's dimension."""
-    return (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Attribute)
-            and node.value.attr == "shape")
+    return (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Attribute) and node.value.attr == "shape")
 
 
 def _inline_transient_shape_scalars(fn_ast: ast.AST, known: set) -> ast.AST:

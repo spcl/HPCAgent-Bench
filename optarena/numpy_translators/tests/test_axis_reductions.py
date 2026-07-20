@@ -41,6 +41,7 @@ def _count_for_loops(stmts) -> int:
 # A. ``_read_axis_keepdims`` parsing                                          #
 # --------------------------------------------------------------------------- #
 
+
 def test_read_axis_none_no_keepdims():
     args, kws = _call_args("np.sum(arr)")
     assert _read_axis_keepdims(args, kws) == (None, False)
@@ -80,6 +81,7 @@ def test_read_axis_positional_tuple():
 # B. Loop structure for axis=int                                              #
 # --------------------------------------------------------------------------- #
 
+
 def test_sum_axis_0_emits_two_loops_for_2d():
     """``np.sum(arr, axis=0)`` with arr:(N, M) -> outer over M
     (kept axis), inner over N (reduction axis)."""
@@ -99,12 +101,12 @@ def test_sum_axis_1_emits_two_loops_for_3d():
 # C. Axis-tuple reductions                                                    #
 # --------------------------------------------------------------------------- #
 
+
 def test_sum_axis_tuple_2_of_4_emits_correct_loop_count():
     """``np.sum(arr, axis=(1, 2))`` on a 4-D array -> 2 outer kept
     axes + 2 inner reduction axes = 4 loops total."""
     args, kws = _call_args("np.sum(arr, axis=(1, 2))")
-    stmts = expand_sum(_target("out"),
-                       args, {"arr": ("N", "H", "W", "C")}, kws)
+    stmts = expand_sum(_target("out"), args, {"arr": ("N", "H", "W", "C")}, kws)
     assert _count_for_loops(stmts) == 4
 
 
@@ -112,8 +114,7 @@ def test_sum_axis_tuple_3_of_4_collapses_to_one_kept_axis():
     """conv2d-style: ``np.sum(arr, axis=(1, 2, 3))`` on a 4-D array
     keeps only axis 0 -> 1 outer loop + 3 inner reduction loops."""
     args, kws = _call_args("np.sum(arr, axis=(1, 2, 3))")
-    stmts = expand_sum(_target("out"),
-                       args, {"arr": ("N", "H", "W", "C")}, kws)
+    stmts = expand_sum(_target("out"), args, {"arr": ("N", "H", "W", "C")}, kws)
     assert _count_for_loops(stmts) == 4
 
 
@@ -131,15 +132,13 @@ def test_sum_axis_tuple_with_keepdims_writes_to_const_zero():
     axes with constant 0. Structural check: a Subscript whose slice
     contains ``Constant(0)`` shows up on the LHS."""
     args, kws = _call_args("np.sum(arr, axis=(1, 2), keepdims=True)")
-    stmts = expand_sum(_target("out"),
-                       args, {"arr": ("N", "H", "W", "C")}, kws)
+    stmts = expand_sum(_target("out"), args, {"arr": ("N", "H", "W", "C")}, kws)
     # Walk for any Subscript on Store side that has Constant(0) in
     # its slice -- the keepdims-zero positions.
     has_const_zero = False
     for stmt in stmts:
         for sub in ast.walk(stmt):
-            if (isinstance(sub, ast.Subscript)
-                    and isinstance(sub.slice, ast.Tuple)):
+            if (isinstance(sub, ast.Subscript) and isinstance(sub.slice, ast.Tuple)):
                 for elt in sub.slice.elts:
                     if isinstance(elt, ast.Constant) and elt.value == 0:
                         has_const_zero = True
@@ -149,16 +148,14 @@ def test_sum_axis_tuple_with_keepdims_writes_to_const_zero():
 def test_sum_axis_list_equivalent_to_tuple():
     """``axis=[1, 2]`` parses the same as ``axis=(1, 2)``."""
     args, kws = _call_args("np.sum(arr, axis=[1, 2])")
-    stmts = expand_sum(_target("out"),
-                       args, {"arr": ("N", "H", "W", "C")}, kws)
+    stmts = expand_sum(_target("out"), args, {"arr": ("N", "H", "W", "C")}, kws)
     assert _count_for_loops(stmts) == 4
 
 
 def test_sum_axis_tuple_with_negative_axis():
     """``axis=(-1,)`` resolves against the operand rank."""
     args, kws = _call_args("np.sum(arr, axis=(-1,))")
-    stmts = expand_sum(_target("out"),
-                       args, {"arr": ("N", "M")}, kws)
+    stmts = expand_sum(_target("out"), args, {"arr": ("N", "M")}, kws)
     # 2-D - 1 reduction axis = 1 outer + 1 inner = 2 loops.
     assert _count_for_loops(stmts) == 2
 
@@ -169,5 +166,4 @@ def test_sum_axis_tuple_rejects_duplicates():
     NotImplementedError so the outer fallback path can take over."""
     args, kws = _call_args("np.sum(arr, axis=(1, 1))")
     with pytest.raises(NotImplementedError, match="duplicate"):
-        expand_sum(_target("out"),
-                   args, {"arr": ("N", "M", "K")}, kws)
+        expand_sum(_target("out"), args, {"arr": ("N", "M", "K")}, kws)

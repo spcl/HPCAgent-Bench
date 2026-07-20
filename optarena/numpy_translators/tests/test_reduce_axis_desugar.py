@@ -38,6 +38,7 @@ def test_const_int_handles_negation():
 
 
 def test_axis_list_normalizes_negative_and_tuple():
+
     def parse(s):
         return ast.parse(s, mode="eval").body
 
@@ -58,7 +59,7 @@ def test_negative_axis_now_reduces():
     # Before the fix ``axis=-1`` was left verbatim (parsed as a UnaryOp, not a
     # constant), so numba/pythran saw the unsupported axis form.
     src = "def k(x, out):\n out[:] = np.max(x, axis=-1)\n"
-    kir = _kir("k", x=("M", "N"), out=("M",))
+    kir = _kir("k", x=("M", "N"), out=("M", ))
     got = desugar_for_python_backend(src, kir, backend="numba")
     assert "np.max(" not in got and "for " in got
 
@@ -74,7 +75,7 @@ def test_keepdims_keeps_a_size_one_dim():
 
 def test_sum_axis_desugars_with_accumulator():
     src = "def k(x, out):\n out[:] = np.sum(x, axis=1)\n"
-    kir = _kir("k", x=("M", "N"), out=("M",))
+    kir = _kir("k", x=("M", "N"), out=("M", ))
     got = desugar_for_python_backend(src, kir, backend="numba")
     assert "np.sum(" not in got and "+=" in got
 
@@ -93,14 +94,14 @@ def test_full_reduction_without_keepdims_left_verbatim():
     # every axis reduced -> a scalar; the backend's own full ``np.sum(x)`` handles
     # it, and emitting ``tmp[] = ...`` would be a syntax error.
     src = "def k(x, out):\n out[0] = np.sum(x, axis=(0, 1))\n"
-    kir = _kir("k", x=("M", "N"), out=("one",))
+    kir = _kir("k", x=("M", "N"), out=("one", ))
     assert desugar_for_python_backend(src, kir, backend="numba") == src
 
 
 def test_tuple_axis_argmax_refused():
     # numpy itself rejects a tuple axis for argmin/argmax -> leave verbatim.
     src = "def k(x, out):\n out[:] = np.argmax(x, axis=(1, 2))\n"
-    kir = _kir("k", x=("A", "B", "C"), out=("A",))
+    kir = _kir("k", x=("A", "B", "C"), out=("A", ))
     assert desugar_for_python_backend(src, kir, backend="numba") == src
 
 
@@ -135,7 +136,7 @@ def test_body_evidence_overrides_poisoned_callsite_rank():
            "    y = pool(img)\n"
            "    z = np.reshape(y, (y.shape[0] * y.shape[1],))\n"
            "    out[:] = z\n")
-    kir = _kir("kernel", img=("N", "H", "W", "C"), out=("P",))
+    kir = _kir("kernel", img=("N", "H", "W", "C"), out=("P", ))
     got = desugar_for_python_backend(src, kir, backend="numba")
     assert "np.max(" not in got  # the pooling reduce lowered (rank not poisoned to 2)
     assert "[]" not in got  # no scalar-index over-reduction was emitted
@@ -151,7 +152,7 @@ def test_body_evidence_overrides_poisoned_callsite_rank():
 
 def _numba(src, ins, outs, syms, shapes):
     from _op_oracle import run_op
-    res = run_op(src, "f", ins, outs, syms, shapes=shapes, backends=("numba",))
+    res = run_op(src, "f", ins, outs, syms, shapes=shapes, backends=("numba", ))
     return res["numba"]
 
 
@@ -170,5 +171,12 @@ def test_tuple_axis_pool_matches_numpy_on_numba():
            "def f(x, out):\n"
            " out[:] = np.sum(x, axis=(1, 2))\n")
     x = np.arange(2 * 3 * 3 * 5, dtype=np.float64).reshape(2, 3, 3, 5)
-    assert _numba(src, {"x": x}, {"out": (2, 5)}, {"A": 2, "B": 3, "C": 3, "D": 5},
-                  {"x": "(A, B, C, D)", "out": "(A, D)"}) == "ok"
+    assert _numba(src, {"x": x}, {"out": (2, 5)}, {
+        "A": 2,
+        "B": 3,
+        "C": 3,
+        "D": 5
+    }, {
+        "x": "(A, B, C, D)",
+        "out": "(A, D)"
+    }) == "ok"

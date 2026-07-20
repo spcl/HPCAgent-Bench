@@ -33,8 +33,19 @@ def test_array_return_slice_target():
            "  out[i, :] = clamp_row(x[i, :], thr)\n")
     x = np.linspace(-2.0, 2.0, 20).reshape(4, 5).astype(np.float64)
     ok, res = _all_ok(
-        run_op(src, "f", {"x": x, "thr": 0.5}, {"out": (4, 5)}, {"M": 4, "n": 5},
-               shapes={"x": "(M,n)", "out": "(M,n)"}, backends=_ALL))
+        run_op(src,
+               "f", {
+                   "x": x,
+                   "thr": 0.5
+               }, {"out": (4, 5)}, {
+                   "M": 4,
+                   "n": 5
+               },
+               shapes={
+                   "x": "(M,n)",
+                   "out": "(M,n)"
+               },
+               backends=_ALL))
     assert ok, res
 
 
@@ -49,8 +60,16 @@ def test_array_return_bare_target():
            " out[:] = screen(x, s)\n")
     x = np.linspace(-3.0, 3.0, 12).astype(np.float64)
     ok, res = _all_ok(
-        run_op(src, "f", {"x": x, "s": 2.0}, {"out": (12, )}, {"n": 12},
-               shapes={"x": "(n,)", "out": "(n,)"}, backends=_ALL))
+        run_op(src,
+               "f", {
+                   "x": x,
+                   "s": 2.0
+               }, {"out": (12, )}, {"n": 12},
+               shapes={
+                   "x": "(n,)",
+                   "out": "(n,)"
+               },
+               backends=_ALL))
     assert ok, res
 
 
@@ -77,9 +96,22 @@ def test_array_return_specialized_config_flag():
     g = rng.standard_normal((3, ngm))
     xk = rng.standard_normal((3, K))
     ok, res = _all_ok(
-        run_op(src, "f", {"g": g, "xk": xk, "scale": 2.0}, {"out": (ngm, K)},
-               {"ngm": ngm, "K": K, "three": 3},
-               shapes={"g": "(three,ngm)", "xk": "(three,K)", "out": "(ngm,K)"}, backends=_ALL))
+        run_op(src,
+               "f", {
+                   "g": g,
+                   "xk": xk,
+                   "scale": 2.0
+               }, {"out": (ngm, K)}, {
+                   "ngm": ngm,
+                   "K": K,
+                   "three": 3
+               },
+               shapes={
+                   "g": "(three,ngm)",
+                   "xk": "(three,K)",
+                   "out": "(ngm,K)"
+               },
+               backends=_ALL))
     assert ok, res
 
 
@@ -104,8 +136,19 @@ def test_array_return_helper_native_desugar_bug3():
            "  out[i, :] = scale_row(x[i, :], s)\n")
     x = np.linspace(-2.0, 2.0, 20).reshape(4, 5).astype(np.float64)
     ok, res = _all_ok(
-        run_op(src, "f", {"x": x, "s": 1.5}, {"out": (4, 5)}, {"M": 4, "n": 5},
-               shapes={"x": "(M,n)", "out": "(M,n)"}, backends=_ALL))
+        run_op(src,
+               "f", {
+                   "x": x,
+                   "s": 1.5
+               }, {"out": (4, 5)}, {
+                   "M": 4,
+                   "n": 5
+               },
+               shapes={
+                   "x": "(M,n)",
+                   "out": "(M,n)"
+               },
+               backends=_ALL))
     assert ok, res
 
 
@@ -131,10 +174,29 @@ def test_array_helper_emitted_as_outparam_c_function():
     (d / "k_numpy.py").write_text(src)
     bi = {
         "benchmark": {
-            "name": "k", "short_name": "k", "relative_path": "", "module_name": "k", "func_name": "f",
-            "parameters": {"S": {"M": 4, "n": 5}}, "input_args": ["x", "thr", "out"],
-            "array_args": ["x", "out"], "output_args": ["out"],
-            "init": {"shapes": {"x": "(M,n)", "out": "(M,n)"}}, "scalars": {"thr": 0.5}
+            "name": "k",
+            "short_name": "k",
+            "relative_path": "",
+            "module_name": "k",
+            "func_name": "f",
+            "parameters": {
+                "S": {
+                    "M": 4,
+                    "n": 5
+                }
+            },
+            "input_args": ["x", "thr", "out"],
+            "array_args": ["x", "out"],
+            "output_args": ["out"],
+            "init": {
+                "shapes": {
+                    "x": "(M,n)",
+                    "out": "(M,n)"
+                }
+            },
+            "scalars": {
+                "thr": 0.5
+            }
         }
     }
     (d / "bi.json").write_text(json.dumps(bi))

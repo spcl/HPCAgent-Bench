@@ -26,7 +26,7 @@ AUTO_MARKER = "optarena-autogen"
 #: file carrying one of these is still recognised as auto-generated -- so the
 #: migration to the canonical name refreshes it instead of mistaking it for a
 #: hand override. (DaCe's ``dace_emit`` stamps its own docstring marker.)
-_LEGACY_MARKERS = ("auto-generated from the numpy reference",)
+_LEGACY_MARKERS = ("auto-generated from the numpy reference", )
 
 
 def _first_line(path: pathlib.Path) -> str:
@@ -68,11 +68,7 @@ def is_override(out_path: Union[str, pathlib.Path]) -> bool:
     return p.exists() and not is_generated(p)
 
 
-def write_generated(out_path: Union[str, pathlib.Path],
-                    src: str,
-                    *,
-                    line_comment: str = "# ",
-                    source: str = "") -> str:
+def write_generated(out_path: Union[str, pathlib.Path], src: str, *, line_comment: str = "# ", source: str = "") -> str:
     """Write ``src`` to ``out_path`` with the auto marker prepended, unless
     a hand-written override already occupies that name.
 

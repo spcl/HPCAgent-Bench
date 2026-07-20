@@ -35,14 +35,13 @@ FRAMEWORK_SPARSE_CAPS: Dict[str, bool] = {
     "c": False,
     "fortran": False,
     "jax": False,
-    "numba": True,     # follows the numpy/scipy source (scipy CSR@CSR -> CSR)
+    "numba": True,  # follows the numpy/scipy source (scipy CSR@CSR -> CSR)
     "pythran": True,
     "cupy": True,
 }
 
 
-def result_layout(lhs_layout: Optional[str], rhs_layout: Optional[str],
-                  target: str = "c") -> str:
+def result_layout(lhs_layout: Optional[str], rhs_layout: Optional[str], target: str = "c") -> str:
     """Layout of ``lhs @ rhs``'s result given the operand layouts.
 
     ``lhs_layout``/``rhs_layout``: sparse format name or ``None`` (dense).
@@ -85,10 +84,8 @@ def _range_call(start, stop) -> ast.Call:
 def _subscript(base: str, *axes: ast.expr, ctx=None) -> ast.Subscript:
     if not axes:
         raise ValueError(f"_subscript: empty axes for {base}")
-    sl = (axes[0] if len(axes) == 1 else
-          ast.Tuple(elts=list(axes), ctx=ast.Load()))
-    return ast.Subscript(value=_name(base), slice=sl,
-                            ctx=(ctx or ast.Load()))
+    sl = (axes[0] if len(axes) == 1 else ast.Tuple(elts=list(axes), ctx=ast.Load()))
+    return ast.Subscript(value=_name(base), slice=sl, ctx=(ctx or ast.Load()))
 
 
 def _add(a: ast.expr, b: ast.expr) -> ast.BinOp:
@@ -107,18 +104,16 @@ def _zero_init_loop(target_id: str, iter_var: str, n_sym: str) -> ast.For:
     return ast.For(
         target=_store(iter_var),
         iter=_range_call(None, _name(n_sym)),
-        body=[ast.Assign(
-            targets=[_subscript(target_id, _name(iter_var), ctx=ast.Store())],
-            value=_const(0.0))],
+        body=[ast.Assign(targets=[_subscript(target_id, _name(iter_var), ctx=ast.Store())], value=_const(0.0))],
         orelse=[])
 
 
 def expand_matmul_csr_csr_dense(
-    target_id: str,                 # dense temp to fill, shape (NI, NJ)
-    lhs_buffers: Dict[str, str],    # A: indptr / indices / data  (NI x NK)
-    rhs_buffers: Dict[str, str],    # B: indptr / indices / data  (NK x NJ)
-    n_rows_sym: str,                # NI
-    n_cols_sym: str,                # NJ (output columns)
+        target_id: str,  # dense temp to fill, shape (NI, NJ)
+        lhs_buffers: Dict[str, str],  # A: indptr / indices / data  (NI x NK)
+        rhs_buffers: Dict[str, str],  # B: indptr / indices / data  (NK x NJ)
+        n_rows_sym: str,  # NI
+        n_cols_sym: str,  # NJ (output columns)
 ) -> List[ast.stmt]:
     """``M = A @ B`` for CSR-A, CSR-B accumulated into a DENSE ``M``::
 
@@ -148,58 +143,46 @@ def expand_matmul_csr_csr_dense(
     b_data = rhs_buffers["data"]
 
     # Zero-init the dense temp: for i: for k: M[i, k] = 0.0
-    zero_inner = ast.For(
-        target=_store("__zk"),
-        iter=_range_call(None, _name(n_cols_sym)),
-        body=[ast.Assign(
-            targets=[_subscript(target_id, _name("__zi"), _name("__zk"),
-                                   ctx=ast.Store())],
-            value=_const(0.0))],
-        orelse=[])
-    zero_loop = ast.For(
-        target=_store("__zi"),
-        iter=_range_call(None, _name(n_rows_sym)),
-        body=[zero_inner], orelse=[])
+    zero_inner = ast.For(target=_store("__zk"),
+                         iter=_range_call(None, _name(n_cols_sym)),
+                         body=[
+                             ast.Assign(targets=[_subscript(target_id, _name("__zi"), _name("__zk"), ctx=ast.Store())],
+                                        value=_const(0.0))
+                         ],
+                         orelse=[])
+    zero_loop = ast.For(target=_store("__zi"), iter=_range_call(None, _name(n_rows_sym)), body=[zero_inner], orelse=[])
 
     # M[i, k] += v * B_data[kk]
-    accum = ast.AugAssign(
-        target=_subscript(target_id, _name("__i"), _name("__k"),
-                             ctx=ast.Store()),
-        op=ast.Add(),
-        value=_mul(_name("__v"), _subscript(b_data, _name("__kk"))))
-    kk_loop = ast.For(
-        target=_store("__kk"),
-        iter=_range_call(_subscript(b_indptr, _name("__j")),
-                         _subscript(b_indptr, _add(_name("__j"), _const(1)))),
-        body=[
-            ast.Assign(targets=[_store("__k")],
-                       value=_subscript(b_indices, _name("__kk"))),
-            accum,
-        ], orelse=[])
-    jj_loop = ast.For(
-        target=_store("__jj"),
-        iter=_range_call(_subscript(a_indptr, _name("__i")),
-                         _subscript(a_indptr, _add(_name("__i"), _const(1)))),
-        body=[
-            ast.Assign(targets=[_store("__j")],
-                       value=_subscript(a_indices, _name("__jj"))),
-            ast.Assign(targets=[_store("__v")],
-                       value=_subscript(a_data, _name("__jj"))),
-            kk_loop,
-        ], orelse=[])
-    i_loop = ast.For(
-        target=_store("__i"),
-        iter=_range_call(None, _name(n_rows_sym)),
-        body=[jj_loop], orelse=[])
+    accum = ast.AugAssign(target=_subscript(target_id, _name("__i"), _name("__k"), ctx=ast.Store()),
+                          op=ast.Add(),
+                          value=_mul(_name("__v"), _subscript(b_data, _name("__kk"))))
+    kk_loop = ast.For(target=_store("__kk"),
+                      iter=_range_call(_subscript(b_indptr, _name("__j")),
+                                       _subscript(b_indptr, _add(_name("__j"), _const(1)))),
+                      body=[
+                          ast.Assign(targets=[_store("__k")], value=_subscript(b_indices, _name("__kk"))),
+                          accum,
+                      ],
+                      orelse=[])
+    jj_loop = ast.For(target=_store("__jj"),
+                      iter=_range_call(_subscript(a_indptr, _name("__i")),
+                                       _subscript(a_indptr, _add(_name("__i"), _const(1)))),
+                      body=[
+                          ast.Assign(targets=[_store("__j")], value=_subscript(a_indices, _name("__jj"))),
+                          ast.Assign(targets=[_store("__v")], value=_subscript(a_data, _name("__jj"))),
+                          kk_loop,
+                      ],
+                      orelse=[])
+    i_loop = ast.For(target=_store("__i"), iter=_range_call(None, _name(n_rows_sym)), body=[jj_loop], orelse=[])
     return [zero_loop, i_loop]
 
 
 def expand_matmul_csr_dense_mat(
-    target_id: str,                 # dense temp (NR, NC)
-    lhs_buffers: Dict[str, str],    # A: indptr / indices / data  (NR x NK)
-    rhs_name: str,                  # dense B (NK x NC)
-    n_rows_sym: str,                # NR
-    n_cols_sym: str,                # NC (columns of dense B / result)
+        target_id: str,  # dense temp (NR, NC)
+        lhs_buffers: Dict[str, str],  # A: indptr / indices / data  (NR x NK)
+        rhs_name: str,  # dense B (NK x NC)
+        n_rows_sym: str,  # NR
+        n_cols_sym: str,  # NC (columns of dense B / result)
 ) -> List[ast.stmt]:
     """``M = A @ B`` for CSR-A and DENSE-B -> dense ``M`` (NR x NC)::
 
@@ -220,47 +203,34 @@ def expand_matmul_csr_dense_mat(
     a_indices = lhs_buffers["indices"]
     a_data = lhs_buffers["data"]
     # zero-init
-    zero_inner = ast.For(
-        target=_store("__zc"),
-        iter=_range_call(None, _name(n_cols_sym)),
-        body=[ast.Assign(
-            targets=[_subscript(target_id, _name("__zi"), _name("__zc"),
-                                   ctx=ast.Store())],
-            value=_const(0.0))], orelse=[])
-    zero_loop = ast.For(
-        target=_store("__zi"),
-        iter=_range_call(None, _name(n_rows_sym)),
-        body=[zero_inner], orelse=[])
-    accum = ast.AugAssign(
-        target=_subscript(target_id, _name("__i"), _name("__c"),
-                             ctx=ast.Store()),
-        op=ast.Add(),
-        value=_mul(_name("__v"),
-                   _subscript(rhs_name, _name("__j"), _name("__c"))))
-    c_loop = ast.For(target=_store("__c"),
-                     iter=_range_call(None, _name(n_cols_sym)),
-                     body=[accum], orelse=[])
-    jj_loop = ast.For(
-        target=_store("__jj"),
-        iter=_range_call(_subscript(a_indptr, _name("__i")),
-                         _subscript(a_indptr, _add(_name("__i"), _const(1)))),
-        body=[
-            ast.Assign(targets=[_store("__j")],
-                       value=_subscript(a_indices, _name("__jj"))),
-            ast.Assign(targets=[_store("__v")],
-                       value=_subscript(a_data, _name("__jj"))),
-            c_loop,
-        ], orelse=[])
-    i_loop = ast.For(
-        target=_store("__i"),
-        iter=_range_call(None, _name(n_rows_sym)),
-        body=[jj_loop], orelse=[])
+    zero_inner = ast.For(target=_store("__zc"),
+                         iter=_range_call(None, _name(n_cols_sym)),
+                         body=[
+                             ast.Assign(targets=[_subscript(target_id, _name("__zi"), _name("__zc"), ctx=ast.Store())],
+                                        value=_const(0.0))
+                         ],
+                         orelse=[])
+    zero_loop = ast.For(target=_store("__zi"), iter=_range_call(None, _name(n_rows_sym)), body=[zero_inner], orelse=[])
+    accum = ast.AugAssign(target=_subscript(target_id, _name("__i"), _name("__c"), ctx=ast.Store()),
+                          op=ast.Add(),
+                          value=_mul(_name("__v"), _subscript(rhs_name, _name("__j"), _name("__c"))))
+    c_loop = ast.For(target=_store("__c"), iter=_range_call(None, _name(n_cols_sym)), body=[accum], orelse=[])
+    jj_loop = ast.For(target=_store("__jj"),
+                      iter=_range_call(_subscript(a_indptr, _name("__i")),
+                                       _subscript(a_indptr, _add(_name("__i"), _const(1)))),
+                      body=[
+                          ast.Assign(targets=[_store("__j")], value=_subscript(a_indices, _name("__jj"))),
+                          ast.Assign(targets=[_store("__v")], value=_subscript(a_data, _name("__jj"))),
+                          c_loop,
+                      ],
+                      orelse=[])
+    i_loop = ast.For(target=_store("__i"), iter=_range_call(None, _name(n_rows_sym)), body=[jj_loop], orelse=[])
     return [zero_loop, i_loop]
 
 
 def expand_matmul_csr_dense_vec(
     target: ast.Name,
-    lhs_buffers: Dict[str, str],    # {"indptr": "A_indptr", "indices": "A_indices", "data": "A_data"}
+    lhs_buffers: Dict[str, str],  # {"indptr": "A_indptr", "indices": "A_indices", "data": "A_data"}
     rhs_name: str,
     n_rows_sym: str,
 ) -> List[ast.stmt]:
@@ -280,36 +250,31 @@ def expand_matmul_csr_dense_vec(
     data = lhs_buffers["data"]
     # ``range(A_indptr[i], A_indptr[i + 1])``
     inner_start = _subscript(indptr, _name("__i"))
-    inner_stop = _subscript(indptr,
-                                 ast.BinOp(left=_name("__i"), op=ast.Add(),
-                                              right=_const(1)))
-    inner_body = [ast.AugAssign(
-        target=yi, op=ast.Add(),
-        value=ast.BinOp(
-            left=_subscript(data, _name("__k")),
-            op=ast.Mult(),
-            right=_subscript(rhs_name,
-                                 _subscript(indices, _name("__k")))))]
-    inner_loop = ast.For(
-        target=_store("__k"),
-        iter=_range_call(inner_start, inner_stop),
-        body=inner_body, orelse=[])
-    outer = ast.For(
-        target=_store("__i"),
-        iter=_range_call(None, _name(n_rows_sym)),
-        body=[
-            ast.Assign(targets=[yi], value=_const(0.0)),
-            inner_loop,
-        ], orelse=[])
+    inner_stop = _subscript(indptr, ast.BinOp(left=_name("__i"), op=ast.Add(), right=_const(1)))
+    inner_body = [
+        ast.AugAssign(target=yi,
+                      op=ast.Add(),
+                      value=ast.BinOp(left=_subscript(data, _name("__k")),
+                                      op=ast.Mult(),
+                                      right=_subscript(rhs_name, _subscript(indices, _name("__k")))))
+    ]
+    inner_loop = ast.For(target=_store("__k"), iter=_range_call(inner_start, inner_stop), body=inner_body, orelse=[])
+    outer = ast.For(target=_store("__i"),
+                    iter=_range_call(None, _name(n_rows_sym)),
+                    body=[
+                        ast.Assign(targets=[yi], value=_const(0.0)),
+                        inner_loop,
+                    ],
+                    orelse=[])
     return [outer]
 
 
 def expand_matmul_jds_dense_vec(
-    target: ast.Name,
-    lhs_buffers: Dict[str, str],    # {"perm":..., "jd_ptr":..., "col_ind":..., "jdiag":...}
-    rhs_name: str,
-    n_rows_sym: str,
-    n_jds_sym: str,                 # number of jagged diagonals
+        target: ast.Name,
+        lhs_buffers: Dict[str, str],  # {"perm":..., "jd_ptr":..., "col_ind":..., "jdiag":...}
+        rhs_name: str,
+        n_rows_sym: str,
+        n_jds_sym: str,  # number of jagged diagonals
 ) -> List[ast.stmt]:
     """``y = A @ x`` for JDS-A and dense-x -> dense-y::
 
@@ -342,57 +307,42 @@ def expand_matmul_jds_dense_vec(
     init_loop = ast.For(
         target=_store("__i"),
         iter=_range_call(None, _name(n_rows_sym)),
-        body=[ast.Assign(
-            targets=[_subscript(y_perm, _name("__i"), ctx=ast.Store())],
-            value=_const(0.0))],
+        body=[ast.Assign(targets=[_subscript(y_perm, _name("__i"), ctx=ast.Store())], value=_const(0.0))],
         orelse=[])
 
     # jd_len = A_jd_ptr[jd + 1] - A_jd_ptr[jd]
-    jd_next = _subscript(jd_ptr,
-                              ast.BinOp(left=_name("__jd"),
-                                            op=ast.Add(), right=_const(1)))
-    jd_len = ast.BinOp(left=jd_next, op=ast.Sub(),
-                            right=_subscript(jd_ptr, _name("__jd")))
-    inner_idx = ast.BinOp(left=_subscript(jd_ptr, _name("__jd")),
-                              op=ast.Add(), right=_name("__r"))
-    inner_body = [ast.AugAssign(
-        target=_subscript(y_perm, _name("__r"), ctx=ast.Store()),
-        op=ast.Add(),
-        value=ast.BinOp(
-            left=_subscript(jdiag, inner_idx),
-            op=ast.Mult(),
-            right=_subscript(rhs_name,
-                                 _subscript(col_ind, inner_idx))))]
-    inner_loop = ast.For(
-        target=_store("__r"),
-        iter=_range_call(None, jd_len),
-        body=inner_body, orelse=[])
-    jd_loop = ast.For(
-        target=_store("__jd"),
-        iter=_range_call(None, _name(n_jds_sym)),
-        body=[inner_loop], orelse=[])
+    jd_next = _subscript(jd_ptr, ast.BinOp(left=_name("__jd"), op=ast.Add(), right=_const(1)))
+    jd_len = ast.BinOp(left=jd_next, op=ast.Sub(), right=_subscript(jd_ptr, _name("__jd")))
+    inner_idx = ast.BinOp(left=_subscript(jd_ptr, _name("__jd")), op=ast.Add(), right=_name("__r"))
+    inner_body = [
+        ast.AugAssign(target=_subscript(y_perm, _name("__r"), ctx=ast.Store()),
+                      op=ast.Add(),
+                      value=ast.BinOp(left=_subscript(jdiag, inner_idx),
+                                      op=ast.Mult(),
+                                      right=_subscript(rhs_name, _subscript(col_ind, inner_idx))))
+    ]
+    inner_loop = ast.For(target=_store("__r"), iter=_range_call(None, jd_len), body=inner_body, orelse=[])
+    jd_loop = ast.For(target=_store("__jd"), iter=_range_call(None, _name(n_jds_sym)), body=[inner_loop], orelse=[])
 
     # Unscatter: y[A_perm[i]] = y_perm[i]
-    unscatter = ast.For(
-        target=_store("__i"),
-        iter=_range_call(None, _name(n_rows_sym)),
-        body=[ast.Assign(
-            targets=[_subscript(target.id,
-                                       _subscript(perm, _name("__i")),
-                                       ctx=ast.Store())],
-            value=_subscript(y_perm, _name("__i")))],
-        orelse=[])
+    unscatter = ast.For(target=_store("__i"),
+                        iter=_range_call(None, _name(n_rows_sym)),
+                        body=[
+                            ast.Assign(targets=[_subscript(target.id, _subscript(perm, _name("__i")), ctx=ast.Store())],
+                                       value=_subscript(y_perm, _name("__i")))
+                        ],
+                        orelse=[])
 
     return [init_loop, jd_loop, unscatter]
 
 
 def expand_matmul_sell_c_sigma_dense_vec(
-    target: ast.Name,
-    lhs_buffers: Dict[str, str],
-    rhs_name: str,
-    n_rows_sym: str,
-    n_slices_sym: str,
-    slice_height_sym: str,   # C parameter
+        target: ast.Name,
+        lhs_buffers: Dict[str, str],
+        rhs_name: str,
+        n_rows_sym: str,
+        n_slices_sym: str,
+        slice_height_sym: str,  # C parameter
 ) -> List[ast.stmt]:
     """``y = A @ x`` for SELL-C-sigma-A and dense-x -> dense-y::
 
@@ -434,58 +384,46 @@ def expand_matmul_sell_c_sigma_dense_vec(
     # sl_start = slice_ptr[s]; sl_width = (slice_ptr[s+1] - sl_start) / C
     sl_start = _subscript(slice_ptr, _name("__s"))
     sl_next = _subscript(slice_ptr, _add(_name("__s"), _const(1)))
-    sl_width = ast.BinOp(left=_sub(sl_next, sl_start), op=ast.FloorDiv(),
-                            right=_name(C))
+    sl_width = ast.BinOp(left=_sub(sl_next, sl_start), op=ast.FloorDiv(), right=_name(C))
     # e = sl_start + col * C + r
-    e_expr = _add(_add(_subscript(slice_ptr, _name("__s")),
-                          _mul(_name("__col"), _name(C))),
-                     _name("__r"))
+    e_expr = _add(_add(_subscript(slice_ptr, _name("__s")), _mul(_name("__col"), _name(C))), _name("__r"))
     # acc += val[e] * x[col_idx[e]]   guarded by col < row_len[global_r]
-    accum = ast.AugAssign(
-        target=_store(acc), op=ast.Add(),
-        value=_mul(_subscript(val, _name("__e")),
-                   _subscript(rhs_name, _subscript(col_idx, _name("__e")))))
-    col_guard = ast.If(
-        test=ast.Compare(left=_name("__col"), ops=[ast.Lt()],
-                            comparators=[_subscript(row_len, _name("__gr"))]),
-        body=[
-            ast.Assign(targets=[_store("__e")], value=e_expr),
-            accum,
-        ], orelse=[])
-    col_loop = ast.For(
-        target=_store("__col"),
-        iter=_range_call(None, sl_width),
-        body=[col_guard], orelse=[])
+    accum = ast.AugAssign(target=_store(acc),
+                          op=ast.Add(),
+                          value=_mul(_subscript(val, _name("__e")),
+                                     _subscript(rhs_name, _subscript(col_idx, _name("__e")))))
+    col_guard = ast.If(test=ast.Compare(left=_name("__col"),
+                                        ops=[ast.Lt()],
+                                        comparators=[_subscript(row_len, _name("__gr"))]),
+                       body=[
+                           ast.Assign(targets=[_store("__e")], value=e_expr),
+                           accum,
+                       ],
+                       orelse=[])
+    col_loop = ast.For(target=_store("__col"), iter=_range_call(None, sl_width), body=[col_guard], orelse=[])
     # if global_r < NR: <compute + write y[perm[gr]]>
-    row_guard = ast.If(
-        test=ast.Compare(left=_name("__gr"), ops=[ast.Lt()],
-                            comparators=[_name(n_rows_sym)]),
-        body=[
-            ast.Assign(targets=[_store(acc)], value=_const(0.0)),
-            col_loop,
-            ast.Assign(
-                targets=[_subscript(target.id,
-                                       _subscript(perm, _name("__gr")),
-                                       ctx=ast.Store())],
-                value=_name(acc)),
-        ], orelse=[])
-    r_loop = ast.For(
-        target=_store("__r"),
-        iter=_range_call(None, _name(C)),
-        body=[
-            ast.Assign(targets=[_store("__gr")], value=global_r),
-            row_guard,
-        ], orelse=[])
-    slice_loop = ast.For(
-        target=_store("__s"),
-        iter=_range_call(None, _name(n_slices_sym)),
-        body=[r_loop], orelse=[])
+    row_guard = ast.If(test=ast.Compare(left=_name("__gr"), ops=[ast.Lt()], comparators=[_name(n_rows_sym)]),
+                       body=[
+                           ast.Assign(targets=[_store(acc)], value=_const(0.0)),
+                           col_loop,
+                           ast.Assign(targets=[_subscript(target.id, _subscript(perm, _name("__gr")), ctx=ast.Store())],
+                                      value=_name(acc)),
+                       ],
+                       orelse=[])
+    r_loop = ast.For(target=_store("__r"),
+                     iter=_range_call(None, _name(C)),
+                     body=[
+                         ast.Assign(targets=[_store("__gr")], value=global_r),
+                         row_guard,
+                     ],
+                     orelse=[])
+    slice_loop = ast.For(target=_store("__s"), iter=_range_call(None, _name(n_slices_sym)), body=[r_loop], orelse=[])
     return [slice_loop]
 
 
 def expand_matmul_csc_dense_vec(
     target: ast.Name,
-    lhs_buffers: Dict[str, str],    # {"indptr": ..., "indices": ..., "data": ...}
+    lhs_buffers: Dict[str, str],  # {"indptr": ..., "indices": ..., "data": ...}
     rhs_name: str,
     n_rows_sym: str,
     n_cols_sym: str,
@@ -508,28 +446,24 @@ def expand_matmul_csc_dense_vec(
     indices = lhs_buffers["indices"]
     data = lhs_buffers["data"]
     init_loop = _zero_init_loop(target.id, "__i", n_rows_sym)
-    scatter_target = _subscript(target.id,
-                                   _subscript(indices, _name("__k")),
-                                   ctx=ast.Store())
-    inner_body = [ast.AugAssign(
-        target=scatter_target, op=ast.Add(),
-        value=_mul(_subscript(data, _name("__k")),
-                   _subscript(rhs_name, _name("__j"))))]
-    inner_loop = ast.For(
-        target=_store("__k"),
-        iter=_range_call(_subscript(indptr, _name("__j")),
-                         _subscript(indptr, _add(_name("__j"), _const(1)))),
-        body=inner_body, orelse=[])
-    col_loop = ast.For(
-        target=_store("__j"),
-        iter=_range_call(None, _name(n_cols_sym)),
-        body=[inner_loop], orelse=[])
+    scatter_target = _subscript(target.id, _subscript(indices, _name("__k")), ctx=ast.Store())
+    inner_body = [
+        ast.AugAssign(target=scatter_target,
+                      op=ast.Add(),
+                      value=_mul(_subscript(data, _name("__k")), _subscript(rhs_name, _name("__j"))))
+    ]
+    inner_loop = ast.For(target=_store("__k"),
+                         iter=_range_call(_subscript(indptr, _name("__j")),
+                                          _subscript(indptr, _add(_name("__j"), _const(1)))),
+                         body=inner_body,
+                         orelse=[])
+    col_loop = ast.For(target=_store("__j"), iter=_range_call(None, _name(n_cols_sym)), body=[inner_loop], orelse=[])
     return [init_loop, col_loop]
 
 
 def expand_matmul_coo_dense_vec(
     target: ast.Name,
-    lhs_buffers: Dict[str, str],    # {"row": ..., "col": ..., "data": ...}
+    lhs_buffers: Dict[str, str],  # {"row": ..., "col": ..., "data": ...}
     rhs_name: str,
     n_rows_sym: str,
     nnz_sym: str,
@@ -551,23 +485,19 @@ def expand_matmul_coo_dense_vec(
     col = lhs_buffers["col"]
     data = lhs_buffers["data"]
     init_loop = _zero_init_loop(target.id, "__i", n_rows_sym)
-    scatter_target = _subscript(target.id,
-                                   _subscript(row, _name("__k")),
-                                   ctx=ast.Store())
-    nnz_body = [ast.AugAssign(
-        target=scatter_target, op=ast.Add(),
-        value=_mul(_subscript(data, _name("__k")),
-                   _subscript(rhs_name, _subscript(col, _name("__k")))))]
-    nnz_loop = ast.For(
-        target=_store("__k"),
-        iter=_range_call(None, _name(nnz_sym)),
-        body=nnz_body, orelse=[])
+    scatter_target = _subscript(target.id, _subscript(row, _name("__k")), ctx=ast.Store())
+    nnz_body = [
+        ast.AugAssign(target=scatter_target,
+                      op=ast.Add(),
+                      value=_mul(_subscript(data, _name("__k")), _subscript(rhs_name, _subscript(col, _name("__k")))))
+    ]
+    nnz_loop = ast.For(target=_store("__k"), iter=_range_call(None, _name(nnz_sym)), body=nnz_body, orelse=[])
     return [init_loop, nnz_loop]
 
 
 def expand_matmul_dia_dense_vec(
     target: ast.Name,
-    lhs_buffers: Dict[str, str],    # {"data": ..., "offsets": ...}
+    lhs_buffers: Dict[str, str],  # {"data": ..., "offsets": ...}
     rhs_name: str,
     n_rows_sym: str,
     n_cols_sym: str,
@@ -595,39 +525,36 @@ def expand_matmul_dia_dense_vec(
     offsets = lhs_buffers["offsets"]
     init_loop = _zero_init_loop(target.id, "__i", n_rows_sym)
     j_expr = _add(_name("__i"), _name("__o"))
-    accum = ast.AugAssign(
-        target=_subscript(target.id, _name("__i"), ctx=ast.Store()),
-        op=ast.Add(),
-        value=_mul(_subscript(data, _name("__d"), _name("__j")),
-                   _subscript(rhs_name, _name("__j"))))
-    guard = ast.If(
-        test=ast.Compare(left=_const(0), ops=[ast.LtE(), ast.Lt()],
-                            comparators=[_name("__j"), _name(n_cols_sym)]),
-        body=[accum], orelse=[])
-    row_loop = ast.For(
-        target=_store("__i"),
-        iter=_range_call(None, _name(n_rows_sym)),
-        body=[ast.Assign(targets=[_store("__j")], value=j_expr), guard],
-        orelse=[])
-    diag_loop = ast.For(
-        target=_store("__d"),
-        iter=_range_call(None, _name(n_diags_sym)),
-        body=[
-            ast.Assign(targets=[_store("__o")],
-                       value=_subscript(offsets, _name("__d"))),
-            row_loop,
-        ], orelse=[])
+    accum = ast.AugAssign(target=_subscript(target.id, _name("__i"), ctx=ast.Store()),
+                          op=ast.Add(),
+                          value=_mul(_subscript(data, _name("__d"), _name("__j")), _subscript(rhs_name, _name("__j"))))
+    guard = ast.If(test=ast.Compare(left=_const(0),
+                                    ops=[ast.LtE(), ast.Lt()],
+                                    comparators=[_name("__j"), _name(n_cols_sym)]),
+                   body=[accum],
+                   orelse=[])
+    row_loop = ast.For(target=_store("__i"),
+                       iter=_range_call(None, _name(n_rows_sym)),
+                       body=[ast.Assign(targets=[_store("__j")], value=j_expr), guard],
+                       orelse=[])
+    diag_loop = ast.For(target=_store("__d"),
+                        iter=_range_call(None, _name(n_diags_sym)),
+                        body=[
+                            ast.Assign(targets=[_store("__o")], value=_subscript(offsets, _name("__d"))),
+                            row_loop,
+                        ],
+                        orelse=[])
     return [init_loop, diag_loop]
 
 
 def expand_matmul_bcsr_dense_vec(
-    target: ast.Name,
-    lhs_buffers: Dict[str, str],    # {"indptr": ..., "indices": ..., "data": ...}
-    rhs_name: str,
-    n_block_rows_sym: str,
-    block_r_sym: str,               # R: rows per block
-    block_c_sym: str,               # C: cols per block
-    n_rows_sym: str,                # total scalar rows = n_block_rows * R
+        target: ast.Name,
+        lhs_buffers: Dict[str, str],  # {"indptr": ..., "indices": ..., "data": ...}
+        rhs_name: str,
+        n_block_rows_sym: str,
+        block_r_sym: str,  # R: rows per block
+        block_c_sym: str,  # C: cols per block
+        n_rows_sym: str,  # total scalar rows = n_block_rows * R
 ) -> List[ast.stmt]:
     """``y = A @ x`` for BCSR-A (block R x C) and dense-x -> dense-y::
 
@@ -654,47 +581,39 @@ def expand_matmul_bcsr_dense_vec(
     init_loop = ast.For(
         target=_store("__i"),
         iter=_range_call(None, _name(n_rows_sym)),
-        body=[ast.Assign(
-            targets=[_subscript(target.id, _name("__i"), ctx=ast.Store())],
-            value=_const(0.0))],
+        body=[ast.Assign(targets=[_subscript(target.id, _name("__i"), ctx=ast.Store())], value=_const(0.0))],
         orelse=[])
     out_row = _add(_mul(_name("__bi"), _name(block_r_sym)), _name("__r"))
     x_col = _add(_mul(_name("__bj"), _name(block_c_sym)), _name("__c"))
-    accum = ast.AugAssign(
-        target=_subscript(target.id, out_row, ctx=ast.Store()),
-        op=ast.Add(),
-        value=_mul(_subscript(data, _name("__k"), _name("__r"), _name("__c")),
-                   _subscript(rhs_name, x_col)))
-    c_loop = ast.For(target=_store("__c"),
-                     iter=_range_call(None, _name(block_c_sym)),
-                     body=[accum], orelse=[])
-    r_loop = ast.For(target=_store("__r"),
-                     iter=_range_call(None, _name(block_r_sym)),
-                     body=[c_loop], orelse=[])
-    k_loop = ast.For(
-        target=_store("__k"),
-        iter=_range_call(_subscript(indptr, _name("__bi")),
-                         _subscript(indptr, _add(_name("__bi"), _const(1)))),
-        body=[
-            ast.Assign(targets=[_store("__bj")],
-                       value=_subscript(indices, _name("__k"))),
-            r_loop,
-        ], orelse=[])
-    brow_loop = ast.For(
-        target=_store("__bi"),
-        iter=_range_call(None, _name(n_block_rows_sym)),
-        body=[k_loop], orelse=[])
+    accum = ast.AugAssign(target=_subscript(target.id, out_row, ctx=ast.Store()),
+                          op=ast.Add(),
+                          value=_mul(_subscript(data, _name("__k"), _name("__r"), _name("__c")),
+                                     _subscript(rhs_name, x_col)))
+    c_loop = ast.For(target=_store("__c"), iter=_range_call(None, _name(block_c_sym)), body=[accum], orelse=[])
+    r_loop = ast.For(target=_store("__r"), iter=_range_call(None, _name(block_r_sym)), body=[c_loop], orelse=[])
+    k_loop = ast.For(target=_store("__k"),
+                     iter=_range_call(_subscript(indptr, _name("__bi")),
+                                      _subscript(indptr, _add(_name("__bi"), _const(1)))),
+                     body=[
+                         ast.Assign(targets=[_store("__bj")], value=_subscript(indices, _name("__k"))),
+                         r_loop,
+                     ],
+                     orelse=[])
+    brow_loop = ast.For(target=_store("__bi"),
+                        iter=_range_call(None, _name(n_block_rows_sym)),
+                        body=[k_loop],
+                        orelse=[])
     return [init_loop, brow_loop]
 
 
 def expand_matmul_bcoo_dense_vec(
-    target: ast.Name,
-    lhs_buffers: Dict[str, str],    # {"row": ..., "col": ..., "data": ...}
-    rhs_name: str,
-    n_rows_sym: str,                # total scalar rows = n_block_rows * R
-    n_blocks_sym: str,              # number of stored R x C blocks
-    block_r_sym: str,               # R: rows per block
-    block_c_sym: str,               # C: cols per block
+        target: ast.Name,
+        lhs_buffers: Dict[str, str],  # {"row": ..., "col": ..., "data": ...}
+        rhs_name: str,
+        n_rows_sym: str,  # total scalar rows = n_block_rows * R
+        n_blocks_sym: str,  # number of stored R x C blocks
+        block_r_sym: str,  # R: rows per block
+        block_c_sym: str,  # C: cols per block
 ) -> List[ast.stmt]:
     """``y = A @ x`` for BCOO-A (block R x C) and dense-x -> dense-y::
 
@@ -726,36 +645,29 @@ def expand_matmul_bcoo_dense_vec(
     init_loop = _zero_init_loop(target.id, "__i", n_rows_sym)
     out_row = _add(_mul(_name("__bi"), _name(block_r_sym)), _name("__r"))
     x_col = _add(_mul(_name("__bj"), _name(block_c_sym)), _name("__c"))
-    accum = ast.AugAssign(
-        target=_subscript(target.id, out_row, ctx=ast.Store()),
-        op=ast.Add(),
-        value=_mul(_subscript(data, _name("__k"), _name("__r"), _name("__c")),
-                   _subscript(rhs_name, x_col)))
-    c_loop = ast.For(target=_store("__c"),
-                     iter=_range_call(None, _name(block_c_sym)),
-                     body=[accum], orelse=[])
-    r_loop = ast.For(target=_store("__r"),
-                     iter=_range_call(None, _name(block_r_sym)),
-                     body=[c_loop], orelse=[])
-    k_loop = ast.For(
-        target=_store("__k"),
-        iter=_range_call(None, _name(n_blocks_sym)),
-        body=[
-            ast.Assign(targets=[_store("__bi")],
-                       value=_subscript(row, _name("__k"))),
-            ast.Assign(targets=[_store("__bj")],
-                       value=_subscript(col, _name("__k"))),
-            r_loop,
-        ], orelse=[])
+    accum = ast.AugAssign(target=_subscript(target.id, out_row, ctx=ast.Store()),
+                          op=ast.Add(),
+                          value=_mul(_subscript(data, _name("__k"), _name("__r"), _name("__c")),
+                                     _subscript(rhs_name, x_col)))
+    c_loop = ast.For(target=_store("__c"), iter=_range_call(None, _name(block_c_sym)), body=[accum], orelse=[])
+    r_loop = ast.For(target=_store("__r"), iter=_range_call(None, _name(block_r_sym)), body=[c_loop], orelse=[])
+    k_loop = ast.For(target=_store("__k"),
+                     iter=_range_call(None, _name(n_blocks_sym)),
+                     body=[
+                         ast.Assign(targets=[_store("__bi")], value=_subscript(row, _name("__k"))),
+                         ast.Assign(targets=[_store("__bj")], value=_subscript(col, _name("__k"))),
+                         r_loop,
+                     ],
+                     orelse=[])
     return [init_loop, k_loop]
 
 
 def expand_matmul_ell_dense_vec(
-    target: ast.Name,
-    lhs_buffers: Dict[str, str],    # {"indices": ..., "data": ...}
-    rhs_name: str,
-    n_rows_sym: str,
-    max_nnz_sym: str,               # max nonzeros per row (slot count)
+        target: ast.Name,
+        lhs_buffers: Dict[str, str],  # {"indices": ..., "data": ...}
+        rhs_name: str,
+        n_rows_sym: str,
+        max_nnz_sym: str,  # max nonzeros per row (slot count)
 ) -> List[ast.stmt]:
     """``y = A @ x`` for ELL-A (NR x maxnz padded) and dense-x -> dense-y::
 
@@ -775,41 +687,36 @@ def expand_matmul_ell_dense_vec(
     """
     indices = lhs_buffers["indices"]
     data = lhs_buffers["data"]
-    col_assign = ast.Assign(
-        targets=[_store("__col")],
-        value=_subscript(indices, _name("__i"), _name("__s")))
-    accum = ast.AugAssign(
-        target=_subscript(target.id, _name("__i"), ctx=ast.Store()),
-        op=ast.Add(),
-        value=_mul(_subscript(data, _name("__i"), _name("__s")),
-                   _subscript(rhs_name, _name("__col"))))
-    guard = ast.If(
-        test=ast.Compare(left=_name("__col"), ops=[ast.GtE()],
-                            comparators=[_const(0)]),
-        body=[accum], orelse=[])
-    slot_loop = ast.For(
-        target=_store("__s"),
-        iter=_range_call(None, _name(max_nnz_sym)),
-        body=[col_assign, guard], orelse=[])
-    row_loop = ast.For(
-        target=_store("__i"),
-        iter=_range_call(None, _name(n_rows_sym)),
-        body=[
-            ast.Assign(
-                targets=[_subscript(target.id, _name("__i"), ctx=ast.Store())],
-                value=_const(0.0)),
-            slot_loop,
-        ], orelse=[])
+    col_assign = ast.Assign(targets=[_store("__col")], value=_subscript(indices, _name("__i"), _name("__s")))
+    accum = ast.AugAssign(target=_subscript(target.id, _name("__i"), ctx=ast.Store()),
+                          op=ast.Add(),
+                          value=_mul(_subscript(data, _name("__i"), _name("__s")), _subscript(rhs_name,
+                                                                                              _name("__col"))))
+    guard = ast.If(test=ast.Compare(left=_name("__col"), ops=[ast.GtE()], comparators=[_const(0)]),
+                   body=[accum],
+                   orelse=[])
+    slot_loop = ast.For(target=_store("__s"),
+                        iter=_range_call(None, _name(max_nnz_sym)),
+                        body=[col_assign, guard],
+                        orelse=[])
+    row_loop = ast.For(target=_store("__i"),
+                       iter=_range_call(None, _name(n_rows_sym)),
+                       body=[
+                           ast.Assign(targets=[_subscript(target.id, _name("__i"), ctx=ast.Store())],
+                                      value=_const(0.0)),
+                           slot_loop,
+                       ],
+                       orelse=[])
     return [row_loop]
 
 
 def expand_matmul_csr_csr(
-    target: ast.Name,
-    lhs_buffers: Dict[str, str],    # A: indptr / indices / data
-    rhs_buffers: Dict[str, str],    # B: indptr / indices / data
-    out_buffers: Dict[str, str],    # C: indptr / indices / data
-    n_rows_sym: str,                # NR  = rows(A) = rows(C)
-    n_cols_sym: str,                # NK  = cols(B) = cols(C)
+        target: ast.Name,
+        lhs_buffers: Dict[str, str],  # A: indptr / indices / data
+        rhs_buffers: Dict[str, str],  # B: indptr / indices / data
+        out_buffers: Dict[str, str],  # C: indptr / indices / data
+        n_rows_sym: str,  # NR  = rows(A) = rows(C)
+        n_cols_sym: str,  # NK  = cols(B) = cols(C)
 ) -> List[ast.stmt]:
     """``C = A @ B`` for CSR-A (NR x NM), CSR-B (NM x NK) -> CSR-C (NR x NK).
 
@@ -855,137 +762,100 @@ def expand_matmul_csr_csr(
     acc = "__csr_acc"
 
     # PASS 1 (symbolic).
-    reset_mark = ast.For(
-        target=_store("__k"),
-        iter=_range_call(None, _name(n_cols_sym)),
-        body=[ast.Assign(
-            targets=[_subscript(mark, _name("__k"), ctx=ast.Store())],
-            value=_const(-1))], orelse=[])
-    p1_if = ast.If(
-        test=ast.Compare(left=_subscript(mark, _name("__k")),
-                            ops=[ast.NotEq()], comparators=[_name("__i")]),
-        body=[
-            ast.Assign(
-                targets=[_subscript(mark, _name("__k"), ctx=ast.Store())],
-                value=_name("__i")),
-            ast.AugAssign(target=_store("__nnz"), op=ast.Add(),
-                          value=_const(1)),
-        ], orelse=[])
-    p1_kk = ast.For(
-        target=_store("__kk"),
-        iter=_range_call(_subscript(b_indptr, _name("__j")),
-                         _subscript(b_indptr, _add(_name("__j"), _const(1)))),
-        body=[
-            ast.Assign(targets=[_store("__k")],
-                       value=_subscript(b_indices, _name("__kk"))),
-            p1_if,
-        ], orelse=[])
-    p1_jj = ast.For(
-        target=_store("__jj"),
-        iter=_range_call(_subscript(a_indptr, _name("__i")),
-                         _subscript(a_indptr, _add(_name("__i"), _const(1)))),
-        body=[
-            ast.Assign(targets=[_store("__j")],
-                       value=_subscript(a_indices, _name("__jj"))),
-            p1_kk,
-        ], orelse=[])
-    set_indptr = ast.Assign(
-        targets=[_subscript(c_indptr, _add(_name("__i"), _const(1)),
-                               ctx=ast.Store())],
-        value=_add(_subscript(c_indptr, _name("__i")), _name("__nnz")))
-    pass1 = ast.For(
-        target=_store("__i"),
-        iter=_range_call(None, _name(n_rows_sym)),
-        body=[reset_mark,
-              ast.Assign(targets=[_store("__nnz")], value=_const(0)),
-              p1_jj, set_indptr],
-        orelse=[])
+    reset_mark = ast.For(target=_store("__k"),
+                         iter=_range_call(None, _name(n_cols_sym)),
+                         body=[ast.Assign(targets=[_subscript(mark, _name("__k"), ctx=ast.Store())], value=_const(-1))],
+                         orelse=[])
+    p1_if = ast.If(test=ast.Compare(left=_subscript(mark, _name("__k")), ops=[ast.NotEq()], comparators=[_name("__i")]),
+                   body=[
+                       ast.Assign(targets=[_subscript(mark, _name("__k"), ctx=ast.Store())], value=_name("__i")),
+                       ast.AugAssign(target=_store("__nnz"), op=ast.Add(), value=_const(1)),
+                   ],
+                   orelse=[])
+    p1_kk = ast.For(target=_store("__kk"),
+                    iter=_range_call(_subscript(b_indptr, _name("__j")),
+                                     _subscript(b_indptr, _add(_name("__j"), _const(1)))),
+                    body=[
+                        ast.Assign(targets=[_store("__k")], value=_subscript(b_indices, _name("__kk"))),
+                        p1_if,
+                    ],
+                    orelse=[])
+    p1_jj = ast.For(target=_store("__jj"),
+                    iter=_range_call(_subscript(a_indptr, _name("__i")),
+                                     _subscript(a_indptr, _add(_name("__i"), _const(1)))),
+                    body=[
+                        ast.Assign(targets=[_store("__j")], value=_subscript(a_indices, _name("__jj"))),
+                        p1_kk,
+                    ],
+                    orelse=[])
+    set_indptr = ast.Assign(targets=[_subscript(c_indptr, _add(_name("__i"), _const(1)), ctx=ast.Store())],
+                            value=_add(_subscript(c_indptr, _name("__i")), _name("__nnz")))
+    pass1 = ast.For(target=_store("__i"),
+                    iter=_range_call(None, _name(n_rows_sym)),
+                    body=[reset_mark,
+                          ast.Assign(targets=[_store("__nnz")], value=_const(0)), p1_jj, set_indptr],
+                    orelse=[])
 
     # PASS 2 (numeric).
-    reset_both = ast.For(
-        target=_store("__k"),
-        iter=_range_call(None, _name(n_cols_sym)),
-        body=[
-            ast.Assign(
-                targets=[_subscript(acc, _name("__k"), ctx=ast.Store())],
-                value=_const(0.0)),
-            ast.Assign(
-                targets=[_subscript(mark, _name("__k"), ctx=ast.Store())],
-                value=_const(-1)),
-        ], orelse=[])
-    accum = ast.AugAssign(
-        target=_subscript(acc, _name("__k"), ctx=ast.Store()),
-        op=ast.Add(),
-        value=_mul(_name("__v"), _subscript(b_data, _name("__kk"))))
-    push_if = ast.If(
-        test=ast.Compare(left=_subscript(mark, _name("__k")),
-                            ops=[ast.Eq()], comparators=[_const(-1)]),
-        body=[
-            ast.Assign(
-                targets=[_subscript(mark, _name("__k"), ctx=ast.Store())],
-                value=_name("__head")),
-            ast.Assign(targets=[_store("__head")], value=_name("__k")),
-            ast.AugAssign(target=_store("__len"), op=ast.Add(),
-                          value=_const(1)),
-        ], orelse=[])
-    p2_kk = ast.For(
-        target=_store("__kk"),
-        iter=_range_call(_subscript(b_indptr, _name("__j")),
-                         _subscript(b_indptr, _add(_name("__j"), _const(1)))),
-        body=[
-            ast.Assign(targets=[_store("__k")],
-                       value=_subscript(b_indices, _name("__kk"))),
-            accum, push_if,
-        ], orelse=[])
-    p2_jj = ast.For(
-        target=_store("__jj"),
-        iter=_range_call(_subscript(a_indptr, _name("__i")),
-                         _subscript(a_indptr, _add(_name("__i"), _const(1)))),
-        body=[
-            ast.Assign(targets=[_store("__j")],
-                       value=_subscript(a_indices, _name("__jj"))),
-            ast.Assign(targets=[_store("__v")],
-                       value=_subscript(a_data, _name("__jj"))),
-            p2_kk,
-        ], orelse=[])
+    reset_both = ast.For(target=_store("__k"),
+                         iter=_range_call(None, _name(n_cols_sym)),
+                         body=[
+                             ast.Assign(targets=[_subscript(acc, _name("__k"), ctx=ast.Store())], value=_const(0.0)),
+                             ast.Assign(targets=[_subscript(mark, _name("__k"), ctx=ast.Store())], value=_const(-1)),
+                         ],
+                         orelse=[])
+    accum = ast.AugAssign(target=_subscript(acc, _name("__k"), ctx=ast.Store()),
+                          op=ast.Add(),
+                          value=_mul(_name("__v"), _subscript(b_data, _name("__kk"))))
+    push_if = ast.If(test=ast.Compare(left=_subscript(mark, _name("__k")), ops=[ast.Eq()], comparators=[_const(-1)]),
+                     body=[
+                         ast.Assign(targets=[_subscript(mark, _name("__k"), ctx=ast.Store())], value=_name("__head")),
+                         ast.Assign(targets=[_store("__head")], value=_name("__k")),
+                         ast.AugAssign(target=_store("__len"), op=ast.Add(), value=_const(1)),
+                     ],
+                     orelse=[])
+    p2_kk = ast.For(target=_store("__kk"),
+                    iter=_range_call(_subscript(b_indptr, _name("__j")),
+                                     _subscript(b_indptr, _add(_name("__j"), _const(1)))),
+                    body=[
+                        ast.Assign(targets=[_store("__k")], value=_subscript(b_indices, _name("__kk"))),
+                        accum,
+                        push_if,
+                    ],
+                    orelse=[])
+    p2_jj = ast.For(target=_store("__jj"),
+                    iter=_range_call(_subscript(a_indptr, _name("__i")),
+                                     _subscript(a_indptr, _add(_name("__i"), _const(1)))),
+                    body=[
+                        ast.Assign(targets=[_store("__j")], value=_subscript(a_indices, _name("__jj"))),
+                        ast.Assign(targets=[_store("__v")], value=_subscript(a_data, _name("__jj"))),
+                        p2_kk,
+                    ],
+                    orelse=[])
     drain_body = [
-        ast.Assign(
-            targets=[_subscript(c_indices, _name("__pos"), ctx=ast.Store())],
-            value=_name("__head")),
-        ast.Assign(
-            targets=[_subscript(c_data, _name("__pos"), ctx=ast.Store())],
-            value=_subscript(acc, _name("__head"))),
+        ast.Assign(targets=[_subscript(c_indices, _name("__pos"), ctx=ast.Store())], value=_name("__head")),
+        ast.Assign(targets=[_subscript(c_data, _name("__pos"), ctx=ast.Store())],
+                   value=_subscript(acc, _name("__head"))),
         ast.AugAssign(target=_store("__pos"), op=ast.Add(), value=_const(1)),
-        ast.Assign(targets=[_store("__next")],
-                   value=_subscript(mark, _name("__head"))),
-        ast.Assign(
-            targets=[_subscript(mark, _name("__head"), ctx=ast.Store())],
-            value=_const(-1)),
-        ast.Assign(
-            targets=[_subscript(acc, _name("__head"), ctx=ast.Store())],
-            value=_const(0.0)),
+        ast.Assign(targets=[_store("__next")], value=_subscript(mark, _name("__head"))),
+        ast.Assign(targets=[_subscript(mark, _name("__head"), ctx=ast.Store())], value=_const(-1)),
+        ast.Assign(targets=[_subscript(acc, _name("__head"), ctx=ast.Store())], value=_const(0.0)),
         ast.Assign(targets=[_store("__head")], value=_name("__next")),
     ]
-    drain_loop = ast.For(
-        target=_store("__d"),
-        iter=_range_call(None, _name("__len")),
-        body=drain_body, orelse=[])
-    pass2 = ast.For(
-        target=_store("__i"),
-        iter=_range_call(None, _name(n_rows_sym)),
-        body=[
-            reset_both,
-            ast.Assign(targets=[_store("__head")], value=_const(-2)),
-            ast.Assign(targets=[_store("__len")], value=_const(0)),
-            p2_jj,
-            ast.Assign(targets=[_store("__pos")],
-                       value=_subscript(c_indptr, _name("__i"))),
-            drain_loop,
-        ], orelse=[])
+    drain_loop = ast.For(target=_store("__d"), iter=_range_call(None, _name("__len")), body=drain_body, orelse=[])
+    pass2 = ast.For(target=_store("__i"),
+                    iter=_range_call(None, _name(n_rows_sym)),
+                    body=[
+                        reset_both,
+                        ast.Assign(targets=[_store("__head")], value=_const(-2)),
+                        ast.Assign(targets=[_store("__len")], value=_const(0)),
+                        p2_jj,
+                        ast.Assign(targets=[_store("__pos")], value=_subscript(c_indptr, _name("__i"))),
+                        drain_loop,
+                    ],
+                    orelse=[])
 
-    init_indptr0 = ast.Assign(
-        targets=[_subscript(c_indptr, _const(0), ctx=ast.Store())],
-        value=_const(0))
+    init_indptr0 = ast.Assign(targets=[_subscript(c_indptr, _const(0), ctx=ast.Store())], value=_const(0))
     return [init_indptr0, pass1, pass2]
 
 
@@ -993,23 +863,33 @@ def expand_matmul_csr_csr(
 # layout. NotImplementedError means the combo isn't supported -> the caller
 # reports a clear error at parse time, before reaching the C/Fortran walker.
 
-DispatchKey = Tuple[str, str, str]     # (lhs_format, rhs_format, op)
-
+DispatchKey = Tuple[str, str, str]  # (lhs_format, rhs_format, op)
 
 SPARSE_MATMUL_DISPATCH: Dict[DispatchKey, Callable] = {
     # <format> x dense vector -> dense vector  (spmv)
-    ("csr",          "dense", "matmul_vec"): expand_matmul_csr_dense_vec,
-    ("csc",          "dense", "matmul_vec"): expand_matmul_csc_dense_vec,
-    ("coo",          "dense", "matmul_vec"): expand_matmul_coo_dense_vec,
-    ("dia",          "dense", "matmul_vec"): expand_matmul_dia_dense_vec,
-    ("bcsr",         "dense", "matmul_vec"): expand_matmul_bcsr_dense_vec,
-    ("bcoo",         "dense", "matmul_vec"): expand_matmul_bcoo_dense_vec,
-    ("ell",          "dense", "matmul_vec"): expand_matmul_ell_dense_vec,
-    ("jds",          "dense", "matmul_vec"): expand_matmul_jds_dense_vec,
-    ("sell_c_sigma", "dense", "matmul_vec"): expand_matmul_sell_c_sigma_dense_vec,
+    ("csr", "dense", "matmul_vec"):
+    expand_matmul_csr_dense_vec,
+    ("csc", "dense", "matmul_vec"):
+    expand_matmul_csc_dense_vec,
+    ("coo", "dense", "matmul_vec"):
+    expand_matmul_coo_dense_vec,
+    ("dia", "dense", "matmul_vec"):
+    expand_matmul_dia_dense_vec,
+    ("bcsr", "dense", "matmul_vec"):
+    expand_matmul_bcsr_dense_vec,
+    ("bcoo", "dense", "matmul_vec"):
+    expand_matmul_bcoo_dense_vec,
+    ("ell", "dense", "matmul_vec"):
+    expand_matmul_ell_dense_vec,
+    ("jds", "dense", "matmul_vec"):
+    expand_matmul_jds_dense_vec,
+    ("sell_c_sigma", "dense", "matmul_vec"):
+    expand_matmul_sell_c_sigma_dense_vec,
     # <format> x <format> -> <format>  (spmm; CSR-output Gustavson)
-    ("csr",          "csr",   "matmul_mat"): expand_matmul_csr_csr,
+    ("csr", "csr", "matmul_mat"):
+    expand_matmul_csr_csr,
     # <format> x <format> -> dense  (spmm into a dense temp; the common
     # case when the surrounding expression scales/adds a dense matrix)
-    ("csr",          "csr",   "matmul_dense"): expand_matmul_csr_csr_dense,
+    ("csr", "csr", "matmul_dense"):
+    expand_matmul_csr_csr_dense,
 }

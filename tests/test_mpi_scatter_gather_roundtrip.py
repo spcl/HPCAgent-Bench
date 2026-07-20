@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from optarena.harness.mpi_descriptor import (ArrayDist, AxisDist, default_distribution, factor_grid, gather, Grid,
-                                                 is_partition, local_shape, owned_indices, scatter)
+                                             is_partition, local_shape, owned_indices, scatter)
 
 DTYPES = ["float64", "float32", "int64", "int32"]
 RANKS = [1, 2, 3, 4, 6, 8]
@@ -79,8 +79,9 @@ def test_scalapack_2d_block_cyclic_distinct_block_sizes():
     # ScaLAPACK's workhorse: 2-D block-cyclic with distinct MB, NB on a PxQ grid.
     grid = Grid((2, 3))
     a = _arr((10, 11), "float64")
-    dist = ArrayDist(axes=(AxisDist(grid_dim=0, scheme="block_cyclic", block_size=2),  # MB=2 over P=2
-                           AxisDist(grid_dim=1, scheme="block_cyclic", block_size=3)))  # NB=3 over Q=3
+    dist = ArrayDist(axes=(
+        AxisDist(grid_dim=0, scheme="block_cyclic", block_size=2),  # MB=2 over P=2
+        AxisDist(grid_dim=1, scheme="block_cyclic", block_size=3)))  # NB=3 over Q=3
     _check(a, dist, grid)
 
 
@@ -97,8 +98,7 @@ def test_3d_array_on_2d_grid_trailing_axis_replicated():
     grid = Grid((2, 2))
     a = _arr((5, 4, 3), "float64")
     dist = ArrayDist(axes=(AxisDist(grid_dim=0, scheme="block"),
-                           AxisDist(grid_dim=1, scheme="block_cyclic", block_size=2),
-                           AxisDist(grid_dim=None)))
+                           AxisDist(grid_dim=1, scheme="block_cyclic", block_size=2), AxisDist(grid_dim=None)))
     _check(a, dist, grid)
 
 

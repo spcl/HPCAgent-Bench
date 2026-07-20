@@ -34,16 +34,12 @@ def _arg_entry(name: str, sym_by_name, arr_by_name, sca_by_name) -> Dict[str, An
     return {"name": name, "kind": _scalar_kind(sca_by_name[name].dtype)}
 
 
-def emit_binding(kir: KernelIR,
-                 out_path: pathlib.Path,
-                 base_name: str = None) -> Dict[str, Any]:
+def emit_binding(kir: KernelIR, out_path: pathlib.Path, base_name: str = None) -> Dict[str, Any]:
     """Write ``<out_path>`` (the C-ABI arg list + symbol/source names per language) and return it."""
     sym_by_name = {s.name: s for s in kir.symbols}
     arr_by_name = {a.name: a for a in kir.arrays}
     sca_by_name = {s.name: s for s in kir.scalars}
-    args: List[Dict[str, Any]] = [
-        _arg_entry(name, sym_by_name, arr_by_name, sca_by_name) for name in kir.param_order()
-    ]
+    args: List[Dict[str, Any]] = [_arg_entry(name, sym_by_name, arr_by_name, sca_by_name) for name in kir.param_order()]
     # base_name must match the emitted file/symbol exactly; falls back if omitted.
     base = base_name or kir.short_name or kir.kernel_name
     payload = {
@@ -66,9 +62,7 @@ def emit_binding(kir: KernelIR,
     return payload
 
 
-def emit_pluto_binding(kir: KernelIR,
-                       out_path: pathlib.Path,
-                       base_name: str = None) -> Dict[str, Any]:
+def emit_pluto_binding(kir: KernelIR, out_path: pathlib.Path, base_name: str = None) -> Dict[str, Any]:
     """Binding for the Pluto backend: same schema as :func:`emit_binding`, args ordered symbols/arrays/scalars."""
     sym_by_name = {s.name: s for s in kir.symbols}
     arr_by_name = {a.name: a for a in kir.arrays}
@@ -82,8 +76,12 @@ def emit_pluto_binding(kir: KernelIR,
         "kernel": base,
         "abi": "c",
         "args": args,
-        "symbols": {"c": base},
-        "sources": {"c": f"{base}_pluto.c"},
+        "symbols": {
+            "c": base
+        },
+        "sources": {
+            "c": f"{base}_pluto.c"
+        },
     }
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(payload, indent=2))

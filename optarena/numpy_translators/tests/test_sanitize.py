@@ -28,8 +28,8 @@ def test_mangle_renames_bound_names_not_attribute_members():
     src = "import cupy as cp\ndef k(a):\n    t = cp.zeros(3)\n    return t + a\n"
     out = sanitize(src, name_registry={"t": "_v0", "a": "_a0", "k": "_k"})
     assert "_v0" in out and "_a0" in out and "def _k(" in out
-    assert "cp.zeros" in out          # attribute member NOT mangled
-    assert "\n    t " not in out      # original local gone
+    assert "cp.zeros" in out  # attribute member NOT mangled
+    assert "\n    t " not in out  # original local gone
 
 
 def test_output_is_valid_python():

@@ -11,16 +11,26 @@ from typing import Dict, Type
 #: AST binary-op type -> target operator string.
 BINOP: Dict[str, Dict[Type[ast.AST], str]] = {
     "c": {
-        ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/",
+        ast.Add: "+",
+        ast.Sub: "-",
+        ast.Mult: "*",
+        ast.Div: "/",
         ast.Mod: "%",
         # FloorDiv is intercepted earlier and emitted via the ``int_floor``
         # macro -- never reaches this table.
-        ast.BitOr: "|", ast.BitAnd: "&", ast.BitXor: "^",
-        ast.LShift: "<<", ast.RShift: ">>",
+        ast.BitOr: "|",
+        ast.BitAnd: "&",
+        ast.BitXor: "^",
+        ast.LShift: "<<",
+        ast.RShift: ">>",
     },
     "fortran": {
-        ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/",
-        ast.FloorDiv: "/", ast.Mod: "MOD",
+        ast.Add: "+",
+        ast.Sub: "-",
+        ast.Mult: "*",
+        ast.Div: "/",
+        ast.FloorDiv: "/",
+        ast.Mod: "MOD",
         ast.Pow: "**",
     },
 }
@@ -28,30 +38,56 @@ BINOP: Dict[str, Dict[Type[ast.AST], str]] = {
 #: AST compare-op type -> target operator string.
 CMPOP: Dict[str, Dict[Type[ast.AST], str]] = {
     "c": {
-        ast.Eq: "==", ast.NotEq: "!=",
-        ast.Lt: "<", ast.LtE: "<=", ast.Gt: ">", ast.GtE: ">=",
+        ast.Eq: "==",
+        ast.NotEq: "!=",
+        ast.Lt: "<",
+        ast.LtE: "<=",
+        ast.Gt: ">",
+        ast.GtE: ">=",
     },
     "fortran": {
-        ast.Eq: "==", ast.NotEq: "/=",
-        ast.Lt: "<", ast.LtE: "<=", ast.Gt: ">", ast.GtE: ">=",
+        ast.Eq: "==",
+        ast.NotEq: "/=",
+        ast.Lt: "<",
+        ast.LtE: "<=",
+        ast.Gt: ">",
+        ast.GtE: ">=",
     },
 }
 
 #: AST bool-op type -> target operator string.
 BOOLOP: Dict[str, Dict[Type[ast.AST], str]] = {
-    "c": {ast.And: "&&", ast.Or: "||"},
-    "fortran": {ast.And: ".AND.", ast.Or: ".OR."},
+    "c": {
+        ast.And: "&&",
+        ast.Or: "||"
+    },
+    "fortran": {
+        ast.And: ".AND.",
+        ast.Or: ".OR."
+    },
 }
 
 #: Fortran-only: libm function name -> Fortran intrinsic.
 FORTRAN_INTRINSICS: Dict[str, str] = {
-    "exp": "EXP", "sqrt": "SQRT", "log": "LOG",
-    "sin": "SIN", "cos": "COS", "pow": "**",
-    "fabs": "ABS", "abs": "ABS",
+    "exp": "EXP",
+    "sqrt": "SQRT",
+    "log": "LOG",
+    "sin": "SIN",
+    "cos": "COS",
+    "pow": "**",
+    "fabs": "ABS",
+    "abs": "ABS",
     # different spelling vs the C name:
-    "ceil": "CEILING", "trunc": "AINT", "rint": "ANINT", "round": "ANINT",
-    "fmod": "MOD", "fmax": "MAX", "fmin": "MIN",
-    "tgamma": "GAMMA", "lgamma": "LOG_GAMMA", "copysign": "SIGN",
+    "ceil": "CEILING",
+    "trunc": "AINT",
+    "rint": "ANINT",
+    "round": "ANINT",
+    "fmod": "MOD",
+    "fmax": "MAX",
+    "fmin": "MIN",
+    "tgamma": "GAMMA",
+    "lgamma": "LOG_GAMMA",
+    "copysign": "SIGN",
 }
 
 #: Fortran-only: libm unary funcs with no Fortran intrinsic -> expression of the arg.

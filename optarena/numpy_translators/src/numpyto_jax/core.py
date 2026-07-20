@@ -167,10 +167,11 @@ def _np_to_jnp(tree: ast.AST) -> ast.AST:
                 attr = "maximum" if node.func.id == "max" else "minimum"
                 expr = node.args[0]
                 for rhs in node.args[1:]:
-                    expr = ast.Call(
-                        func=ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()), attr=attr, ctx=ast.Load()),
-                        args=[expr, rhs],
-                        keywords=[])
+                    expr = ast.Call(func=ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()),
+                                                       attr=attr,
+                                                       ctx=ast.Load()),
+                                    args=[expr, rhs],
+                                    keywords=[])
                 return ast.copy_location(expr, node)
             # Bare math fns (sin(b), sqrt(b[jg])) -> jnp ufuncs so a vectorised/
             # traced arg works (see _MATH_TO_JNP).
@@ -1212,8 +1213,9 @@ def emit_jax(numpy_src: str, func_name: str, jit: bool = False) -> str:
                                mutated=mut_map.get(h.name),
                                static=(sorted(concrete.get(h.name, ())) if jit else None)) + ["", ""]
     deco = _kernel_decorator(fn, kernel_static) if jit else None
-    return "\n".join(head + _emit_function(fn, decorate=deco, helper_mut=helper_mut, eager=eager,
-                                           mutated=mut_map.get(func_name), static=kernel_static)) + "\n"
+    return "\n".join(head + _emit_function(
+        fn, decorate=deco, helper_mut=helper_mut, eager=eager, mutated=mut_map.get(func_name), static=kernel_static)
+                     ) + "\n"
 
 
 def _helper_mutation_map(helpers: List[ast.FunctionDef], mut_map: Optional[dict] = None) -> dict:
@@ -1387,7 +1389,8 @@ def _emit_function(fn: ast.FunctionDef,
     return head + body_lines
 
 
-def _emit_function_eager(fn: ast.FunctionDef, decorate: Optional[str],
+def _emit_function_eager(fn: ast.FunctionDef,
+                         decorate: Optional[str],
                          mutated: Optional[List[str]] = None) -> List[str]:
     """Emit one function in eager mode: Python control flow verbatim, only
     in-place mutation made functional (jax arrays are immutable even eagerly).

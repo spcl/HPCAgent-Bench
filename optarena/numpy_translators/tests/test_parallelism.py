@@ -12,8 +12,8 @@ import tempfile
 import pytest
 
 from numpyto_common.parallelism import (any_parallelizable_loop, has_indirect_scatter, is_timestep_loop,
-                                         loop_is_parallel_safe, loop_reduction, subscript_idx_safe,
-                                         UnsupportedParallelError)
+                                        loop_is_parallel_safe, loop_reduction, subscript_idx_safe,
+                                        UnsupportedParallelError)
 
 
 def _stmt(src):
@@ -152,10 +152,23 @@ def _kir(src, args, shapes, dtypes=None, params=None):
     (d / "k_numpy.py").write_text(src)
     bi = {
         "benchmark": {
-            "name": "k", "short_name": "k", "relative_path": "", "module_name": "k", "func_name": "f",
-            "parameters": {"S": params or {"N": 16}},
-            "input_args": args, "array_args": args, "output_args": [args[-1]],
-            "init": {"shapes": shapes, "dtypes": dtypes or {}},
+            "name": "k",
+            "short_name": "k",
+            "relative_path": "",
+            "module_name": "k",
+            "func_name": "f",
+            "parameters": {
+                "S": params or {
+                    "N": 16
+                }
+            },
+            "input_args": args,
+            "array_args": args,
+            "output_args": [args[-1]],
+            "init": {
+                "shapes": shapes,
+                "dtypes": dtypes or {}
+            },
         }
     }
     (d / "bi.json").write_text(json.dumps(bi))
@@ -164,8 +177,11 @@ def _kir(src, args, shapes, dtypes=None, params=None):
 
 def test_emit_c_omp_elementwise_parallel_for():
     from numpyto_c.emit import emit_c, emit_c_omp
-    kir = _kir("def f(x, y, out):\n    for i in range(N):\n        out[i] = y[i] + 2.0 * x[i]\n",
-               ["x", "y", "out"], {"x": "(N,)", "y": "(N,)", "out": "(N,)"})
+    kir = _kir("def f(x, y, out):\n    for i in range(N):\n        out[i] = y[i] + 2.0 * x[i]\n", ["x", "y", "out"], {
+        "x": "(N,)",
+        "y": "(N,)",
+        "out": "(N,)"
+    })
     c = emit_c_omp(kir, fn_name="f")
     assert "#pragma omp parallel for\n" in c
     assert "reduction(" not in c
@@ -175,14 +191,21 @@ def test_emit_c_omp_elementwise_parallel_for():
 def test_emit_c_omp_sum_reduction_clause():
     from numpyto_c.emit import emit_c_omp
     kir = _kir("def f(x, out):\n    s = 0.0\n    for i in range(N):\n        s = s + x[i]\n    out[0] = s\n",
-               ["x", "out"], {"x": "(N,)", "out": "(N,)"})
+               ["x", "out"], {
+                   "x": "(N,)",
+                   "out": "(N,)"
+               })
     assert "#pragma omp parallel for reduction(+:s)" in emit_c_omp(kir, fn_name="f")
 
 
 def test_emit_c_omp_nested_tags_outer_only():
     from numpyto_c.emit import emit_c_omp
-    kir = _kir("def f(a, out):\n    for i in range(N):\n        for j in range(N):\n            out[i, j] = a[i, j] * 2.0\n",
-               ["a", "out"], {"a": "(N, N)", "out": "(N, N)"})
+    kir = _kir(
+        "def f(a, out):\n    for i in range(N):\n        for j in range(N):\n            out[i, j] = a[i, j] * 2.0\n",
+        ["a", "out"], {
+            "a": "(N, N)",
+            "out": "(N, N)"
+        })
     c = emit_c_omp(kir, fn_name="f")
     assert c.count("#pragma omp parallel for") == 1  # only the outermost loop, no nested regions
 
@@ -190,15 +213,22 @@ def test_emit_c_omp_nested_tags_outer_only():
 def test_emit_c_omp_scatter_is_refused():
     from numpyto_c.emit import emit_c_omp
     kir = _kir("def f(idx, x, out):\n    for i in range(N):\n        out[idx[i]] = out[idx[i]] + x[i]\n",
-               ["idx", "x", "out"], {"idx": "(N,)", "x": "(N,)", "out": "(N,)"}, {"idx": "int64"})
+               ["idx", "x", "out"], {
+                   "idx": "(N,)",
+                   "x": "(N,)",
+                   "out": "(N,)"
+               }, {"idx": "int64"})
     with pytest.raises(UnsupportedParallelError):
         emit_c_omp(kir, fn_name="f")
 
 
 def test_emit_fortran_omp_elementwise_parallel_do():
     from numpyto_fortran.emit import emit_fortran, emit_fortran_omp
-    kir = _kir("def f(x, y, out):\n    for i in range(N):\n        out[i] = y[i] + 2.0 * x[i]\n",
-               ["x", "y", "out"], {"x": "(N,)", "y": "(N,)", "out": "(N,)"})
+    kir = _kir("def f(x, y, out):\n    for i in range(N):\n        out[i] = y[i] + 2.0 * x[i]\n", ["x", "y", "out"], {
+        "x": "(N,)",
+        "y": "(N,)",
+        "out": "(N,)"
+    })
     f = emit_fortran_omp(kir, fn_name="f")
     assert "!$omp parallel do" in f
     assert "reduction(" not in f
@@ -208,14 +238,21 @@ def test_emit_fortran_omp_elementwise_parallel_do():
 def test_emit_fortran_omp_sum_reduction_clause():
     from numpyto_fortran.emit import emit_fortran_omp
     kir = _kir("def f(x, out):\n    s = 0.0\n    for i in range(N):\n        s = s + x[i]\n    out[0] = s\n",
-               ["x", "out"], {"x": "(N,)", "out": "(N,)"})
+               ["x", "out"], {
+                   "x": "(N,)",
+                   "out": "(N,)"
+               })
     assert "!$omp parallel do reduction(+:s)" in emit_fortran_omp(kir, fn_name="f")
 
 
 def test_emit_fortran_omp_scatter_is_refused():
     from numpyto_fortran.emit import emit_fortran_omp
     kir = _kir("def f(idx, x, out):\n    for i in range(N):\n        out[idx[i]] = out[idx[i]] + x[i]\n",
-               ["idx", "x", "out"], {"idx": "(N,)", "x": "(N,)", "out": "(N,)"}, {"idx": "int64"})
+               ["idx", "x", "out"], {
+                   "idx": "(N,)",
+                   "x": "(N,)",
+                   "out": "(N,)"
+               }, {"idx": "int64"})
     with pytest.raises(UnsupportedParallelError):
         emit_fortran_omp(kir, fn_name="f")
 

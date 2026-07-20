@@ -59,8 +59,7 @@ def native_desugar(fn: ast.FunctionDef) -> None:
       no exceptions; the handler can't fire).
     """
     from numpyto_common.numpy_desugar import (_ComplexAccessorToFunc, _DecomposeRollSlice, _DropValidationGuards,
-                                              _ElementalUfuncToPrimitive, _UfuncOutInline,
-                                              _UfuncReduceToReducer)
+                                              _ElementalUfuncToPrimitive, _UfuncOutInline, _UfuncReduceToReducer)
     _UfuncReduceToReducer().visit(fn)  # np.add.reduce -> np.sum before the elementwise-ufunc desugars
     _NewaxisToNone().visit(fn)
     _UfuncOutInline().visit(fn)
@@ -97,6 +96,7 @@ def _is_scalar_leaf(node: ast.expr) -> bool:
         return not any(isinstance(e, ast.Slice) for e in elts)
     return False
 
+
 def _has_loop_control(body: List[ast.stmt]) -> bool:
     """True when ``body`` has a ``break``/``continue`` bound to its own loop
     (not one nested inside a further For/While, which would capture it)."""
@@ -117,6 +117,7 @@ def _has_loop_control(body: List[ast.stmt]) -> bool:
         return False
 
     return _walk(body)
+
 
 class _NonFiniteNormalizer(ast.NodeTransformer):
     """Canonicalise IEEE infinity/NaN spellings to ``np.inf``/``np.nan``, the one
@@ -275,7 +276,6 @@ def parse_kernel(numpy_py: pathlib.Path,
     # returns disqualify Form-3 (single-tail-return) inlining, and a
     # tuple-returning helper (distribution_search's ``solve_three_levels``)
     # has no emittable ABI unless inlined into its caller.
-
 
     # Flatten helpers NESTED inside other helpers first (lulesh's per-helper
     # ``def c(a, i): return a[:, i]`` shorthand): a helper containing a nested
@@ -1023,14 +1023,8 @@ def _parse_array_literal(call: ast.Call):
     return shape, dtype, flat
 
 
-
-
 #: Scalar-returning builtin casts accepted as a scalar leaf by :func:`_is_scalar_leaf`.
 _SCALAR_CASTS = ("int", "float", "round", "abs")
-
-
-
-
 
 
 def _materialize_const_arrays(tree: ast.Module, fn: ast.FunctionDef, input_args: List[str]) -> None:
@@ -2317,12 +2311,6 @@ class _LoopVarSubst(ast.NodeTransformer):
             if self.single is not None and node.id == self.single:
                 return copy.deepcopy(self.elt)
         return node
-
-
-
-
-
-
 
 
 def _unroll_const_list_loops(fn: ast.FunctionDef) -> None:

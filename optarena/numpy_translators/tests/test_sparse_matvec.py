@@ -37,9 +37,9 @@ def _dense(A):
 # matvec: <format> @ dense vector -> dense vector
 # ---------------------------------------------------------------------------
 
+
 def _make_csr(M, N, density=0.3, seed=0):
-    A = sp.random(M, N, density=density, format="csr",
-                  random_state=seed, dtype=np.float64)
+    A = sp.random(M, N, density=density, format="csr", random_state=seed, dtype=np.float64)
     A.sort_indices()
     return A
 
@@ -49,25 +49,28 @@ def test_csr_matvec():
     A = _make_csr(M, N, seed=1)
     x = np.random.default_rng(1).random(N)
     y = np.zeros(M)
-    stmts = se.expand_matmul_csr_dense_vec(
-        ast.Name(id="y", ctx=ast.Store()),
-        {"indptr": "ip", "indices": "ix", "data": "da"}, "x", "M")
-    _run(stmts, {"y": y, "ip": A.indptr, "ix": A.indices, "da": A.data,
-                 "x": x, "M": M})
+    stmts = se.expand_matmul_csr_dense_vec(ast.Name(id="y", ctx=ast.Store()), {
+        "indptr": "ip",
+        "indices": "ix",
+        "data": "da"
+    }, "x", "M")
+    _run(stmts, {"y": y, "ip": A.indptr, "ix": A.indices, "da": A.data, "x": x, "M": M})
     assert np.allclose(y, A @ x)
 
 
 def test_csc_matvec():
     M, N = 10, 11
     Acsr = _make_csr(M, N, seed=2)
-    A = Acsr.tocsc(); A.sort_indices()
+    A = Acsr.tocsc()
+    A.sort_indices()
     x = np.random.default_rng(2).random(N)
     y = np.zeros(M)
-    stmts = se.expand_matmul_csc_dense_vec(
-        ast.Name(id="y", ctx=ast.Store()),
-        {"indptr": "ip", "indices": "ix", "data": "da"}, "x", "M", "N")
-    _run(stmts, {"y": y, "ip": A.indptr, "ix": A.indices, "da": A.data,
-                 "x": x, "M": M, "N": N})
+    stmts = se.expand_matmul_csc_dense_vec(ast.Name(id="y", ctx=ast.Store()), {
+        "indptr": "ip",
+        "indices": "ix",
+        "data": "da"
+    }, "x", "M", "N")
+    _run(stmts, {"y": y, "ip": A.indptr, "ix": A.indices, "da": A.data, "x": x, "M": M, "N": N})
     assert np.allclose(y, Acsr @ x)
 
 
@@ -77,11 +80,12 @@ def test_coo_matvec():
     A = Acsr.tocoo()
     x = np.random.default_rng(3).random(N)
     y = np.zeros(M)
-    stmts = se.expand_matmul_coo_dense_vec(
-        ast.Name(id="y", ctx=ast.Store()),
-        {"row": "r", "col": "c", "data": "da"}, "x", "M", "NNZ")
-    _run(stmts, {"y": y, "r": A.row, "c": A.col, "da": A.data,
-                 "x": x, "M": M, "NNZ": A.nnz})
+    stmts = se.expand_matmul_coo_dense_vec(ast.Name(id="y", ctx=ast.Store()), {
+        "row": "r",
+        "col": "c",
+        "data": "da"
+    }, "x", "M", "NNZ")
+    _run(stmts, {"y": y, "r": A.row, "c": A.col, "da": A.data, "x": x, "M": M, "NNZ": A.nnz})
     assert np.allclose(y, Acsr @ x)
 
 
@@ -92,11 +96,11 @@ def test_dia_matvec():
     x = np.random.default_rng(4).random(N)
     y = np.zeros(M)
     ndiag = A.data.shape[0]
-    stmts = se.expand_matmul_dia_dense_vec(
-        ast.Name(id="y", ctx=ast.Store()),
-        {"data": "da", "offsets": "off"}, "x", "M", "N", "ND")
-    _run(stmts, {"y": y, "da": A.data, "off": A.offsets,
-                 "x": x, "M": M, "N": N, "ND": ndiag})
+    stmts = se.expand_matmul_dia_dense_vec(ast.Name(id="y", ctx=ast.Store()), {
+        "data": "da",
+        "offsets": "off"
+    }, "x", "M", "N", "ND")
+    _run(stmts, {"y": y, "da": A.data, "off": A.offsets, "x": x, "M": M, "N": N, "ND": ndiag})
     assert np.allclose(y, Acsr @ x)
 
 
@@ -109,12 +113,12 @@ def test_bcsr_matvec():
     x = np.random.default_rng(5).random(N)
     y = np.zeros(M)
     nbr = A.indptr.shape[0] - 1
-    stmts = se.expand_matmul_bcsr_dense_vec(
-        ast.Name(id="y", ctx=ast.Store()),
-        {"indptr": "ip", "indices": "ix", "data": "da"}, "x", "NBR", "R", "C",
-        "M")
-    _run(stmts, {"y": y, "ip": A.indptr, "ix": A.indices, "da": A.data,
-                 "x": x, "NBR": nbr, "R": R, "C": C, "M": M})
+    stmts = se.expand_matmul_bcsr_dense_vec(ast.Name(id="y", ctx=ast.Store()), {
+        "indptr": "ip",
+        "indices": "ix",
+        "data": "da"
+    }, "x", "NBR", "R", "C", "M")
+    _run(stmts, {"y": y, "ip": A.indptr, "ix": A.indices, "da": A.data, "x": x, "NBR": nbr, "R": R, "C": C, "M": M})
     assert np.allclose(y, Acsr @ x)
 
 
@@ -133,18 +137,20 @@ def test_bcoo_matvec():
     nblk = data.shape[0]
     x = np.random.default_rng(9).random(N)
     y = np.zeros(M)
-    stmts = se.expand_matmul_bcoo_dense_vec(
-        ast.Name(id="y", ctx=ast.Store()),
-        {"row": "r", "col": "c", "data": "da"}, "x", "M", "NBLK", "R", "C")
-    _run(stmts, {"y": y, "r": brow, "c": bcol, "da": data,
-                 "x": x, "M": M, "NBLK": nblk, "R": R, "C": C})
+    stmts = se.expand_matmul_bcoo_dense_vec(ast.Name(id="y", ctx=ast.Store()), {
+        "row": "r",
+        "col": "c",
+        "data": "da"
+    }, "x", "M", "NBLK", "R", "C")
+    _run(stmts, {"y": y, "r": brow, "c": bcol, "da": data, "x": x, "M": M, "NBLK": nblk, "R": R, "C": C})
     assert np.allclose(y, Acsr @ x)
 
 
 def _to_ell(A):
     """Build ELLPACK (indices[M, maxnz], data[M, maxnz]) from a CSR A.
     Padding: index -1, data 0."""
-    A = A.tocsr(); A.sort_indices()
+    A = A.tocsr()
+    A.sort_indices()
     M = A.shape[0]
     row_len = np.diff(A.indptr)
     maxnz = int(row_len.max()) if M else 0
@@ -164,11 +170,11 @@ def test_ell_matvec():
     indices, data, maxnz = _to_ell(Acsr)
     x = np.random.default_rng(6).random(N)
     y = np.zeros(M)
-    stmts = se.expand_matmul_ell_dense_vec(
-        ast.Name(id="y", ctx=ast.Store()),
-        {"indices": "ix", "data": "da"}, "x", "M", "MAXNZ")
-    _run(stmts, {"y": y, "ix": indices, "da": data, "x": x,
-                 "M": M, "MAXNZ": maxnz})
+    stmts = se.expand_matmul_ell_dense_vec(ast.Name(id="y", ctx=ast.Store()), {
+        "indices": "ix",
+        "data": "da"
+    }, "x", "M", "MAXNZ")
+    _run(stmts, {"y": y, "ix": indices, "da": data, "x": x, "M": M, "MAXNZ": maxnz})
     assert np.allclose(y, Acsr @ x)
 
 
@@ -178,7 +184,8 @@ def _to_jds(A):
     Rows sorted by DESCENDING length; jagged diagonals stored
     column-major (the d-th nonzero of every row that has one).
     """
-    A = A.tocsr(); A.sort_indices()
+    A = A.tocsr()
+    A.sort_indices()
     M = A.shape[0]
     row_len = np.diff(A.indptr)
     perm = np.argsort(-row_len, kind="stable").astype(np.int64)
@@ -193,11 +200,10 @@ def _to_jds(A):
                 col_ind.append(A.indices[lo + d])
                 jdiag.append(A.data[lo + d])
         jd_ptr.append(len(col_ind))
-    return (perm,
-            np.array(jd_ptr, dtype=np.int64),
-            np.array(col_ind, dtype=np.int64),
-            np.array(jdiag, dtype=np.float64),
-            len(jd_ptr) - 1)
+    return (perm, np.array(jd_ptr,
+                           dtype=np.int64), np.array(col_ind,
+                                                     dtype=np.int64), np.array(jdiag,
+                                                                               dtype=np.float64), len(jd_ptr) - 1)
 
 
 def test_jds_matvec():
@@ -206,21 +212,33 @@ def test_jds_matvec():
     perm, jd_ptr, col_ind, jdiag, njd = _to_jds(Acsr)
     x = np.random.default_rng(7).random(N)
     y = np.zeros(M)
-    stmts = se.expand_matmul_jds_dense_vec(
-        ast.Name(id="y", ctx=ast.Store()),
-        {"perm": "perm", "jd_ptr": "jdp", "col_ind": "ci", "jdiag": "jd"},
-        "x", "M", "NJD")
+    stmts = se.expand_matmul_jds_dense_vec(ast.Name(id="y", ctx=ast.Store()), {
+        "perm": "perm",
+        "jd_ptr": "jdp",
+        "col_ind": "ci",
+        "jdiag": "jd"
+    }, "x", "M", "NJD")
     # jds dispatcher uses a scratch accumulator ``__jds_y_perm`` (size M).
-    _run(stmts, {"y": y, "perm": perm, "jdp": jd_ptr, "ci": col_ind,
-                 "jd": jdiag, "x": x, "M": M, "NJD": njd,
-                 "__jds_y_perm": np.zeros(M)})
+    _run(
+        stmts, {
+            "y": y,
+            "perm": perm,
+            "jdp": jd_ptr,
+            "ci": col_ind,
+            "jd": jdiag,
+            "x": x,
+            "M": M,
+            "NJD": njd,
+            "__jds_y_perm": np.zeros(M)
+        })
     assert np.allclose(y, Acsr @ x)
 
 
 def _to_sell(A, C):
     """Build SELL-C-sigma (slice_ptr, col_idx, val, row_len, perm) with
     sigma = C (sort within each C-row slice). Column-major within slice."""
-    A = A.tocsr(); A.sort_indices()
+    A = A.tocsr()
+    A.sort_indices()
     M = A.shape[0]
     row_len_full = np.diff(A.indptr)
     # sort rows by descending length within each slice window of size C
@@ -252,10 +270,9 @@ def _to_sell(A, C):
                     col_idx.append(0)
                     val.append(0.0)
         slice_ptr.append(len(val))
-    return (np.array(slice_ptr, dtype=np.int64),
-            np.array(col_idx, dtype=np.int64),
-            np.array(val, dtype=np.float64),
-            row_len, perm, nslices)
+    return (np.array(slice_ptr,
+                     dtype=np.int64), np.array(col_idx,
+                                               dtype=np.int64), np.array(val, dtype=np.float64), row_len, perm, nslices)
 
 
 def test_sell_c_sigma_matvec():
@@ -264,15 +281,27 @@ def test_sell_c_sigma_matvec():
     slice_ptr, col_idx, val, row_len, perm, nslices = _to_sell(Acsr, C)
     x = np.random.default_rng(8).random(N)
     y = np.zeros(M)
-    stmts = se.expand_matmul_sell_c_sigma_dense_vec(
-        ast.Name(id="y", ctx=ast.Store()),
-        {"slice_ptr": "sp", "col_idx": "ci", "val": "v",
-         "row_len": "rl", "perm": "perm"},
-        "x", "M", "NSL", "C")
-    _run(stmts, {"y": y, "sp": slice_ptr, "ci": col_idx, "v": val,
-                 "rl": row_len, "perm": perm, "x": x,
-                 "M": M, "NSL": nslices, "C": C,
-                 "__sell_acc": 0.0})
+    stmts = se.expand_matmul_sell_c_sigma_dense_vec(ast.Name(id="y", ctx=ast.Store()), {
+        "slice_ptr": "sp",
+        "col_idx": "ci",
+        "val": "v",
+        "row_len": "rl",
+        "perm": "perm"
+    }, "x", "M", "NSL", "C")
+    _run(
+        stmts, {
+            "y": y,
+            "sp": slice_ptr,
+            "ci": col_idx,
+            "v": val,
+            "rl": row_len,
+            "perm": perm,
+            "x": x,
+            "M": M,
+            "NSL": nslices,
+            "C": C,
+            "__sell_acc": 0.0
+        })
     assert np.allclose(y, Acsr @ x)
 
 
@@ -280,19 +309,33 @@ def test_sell_c_sigma_matvec():
 # matmul: csr @ csr -> dense, csr @ dense-matrix -> dense
 # ---------------------------------------------------------------------------
 
+
 def test_csr_csr_dense():
     NI, NK, NJ = 7, 6, 5
     A = _make_csr(NI, NK, seed=10)
     B = _make_csr(NK, NJ, seed=11)
     M = np.zeros((NI, NJ))
-    stmts = se.expand_matmul_csr_csr_dense(
-        "M",
-        {"indptr": "aip", "indices": "aix", "data": "ad"},
-        {"indptr": "bip", "indices": "bix", "data": "bd"},
-        "NI", "NJ")
-    _run(stmts, {"M": M, "aip": A.indptr, "aix": A.indices, "ad": A.data,
-                 "bip": B.indptr, "bix": B.indices, "bd": B.data,
-                 "NI": NI, "NJ": NJ})
+    stmts = se.expand_matmul_csr_csr_dense("M", {
+        "indptr": "aip",
+        "indices": "aix",
+        "data": "ad"
+    }, {
+        "indptr": "bip",
+        "indices": "bix",
+        "data": "bd"
+    }, "NI", "NJ")
+    _run(
+        stmts, {
+            "M": M,
+            "aip": A.indptr,
+            "aix": A.indices,
+            "ad": A.data,
+            "bip": B.indptr,
+            "bix": B.indices,
+            "bd": B.data,
+            "NI": NI,
+            "NJ": NJ
+        })
     assert np.allclose(M, _dense(A @ B))
 
 
@@ -301,9 +344,6 @@ def test_csr_dense_mat():
     A = _make_csr(NI, NK, seed=12)
     B = np.random.default_rng(12).random((NK, NC))
     M = np.zeros((NI, NC))
-    stmts = se.expand_matmul_csr_dense_mat(
-        "M", {"indptr": "ip", "indices": "ix", "data": "da"}, "B",
-        "NI", "NC")
-    _run(stmts, {"M": M, "ip": A.indptr, "ix": A.indices, "da": A.data,
-                 "B": B, "NI": NI, "NC": NC})
+    stmts = se.expand_matmul_csr_dense_mat("M", {"indptr": "ip", "indices": "ix", "data": "da"}, "B", "NI", "NC")
+    _run(stmts, {"M": M, "ip": A.indptr, "ix": A.indices, "da": A.data, "B": B, "NI": NI, "NC": NC})
     assert np.allclose(M, _dense(A) @ B)

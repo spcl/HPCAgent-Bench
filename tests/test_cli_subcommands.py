@@ -28,9 +28,9 @@ NEW_SUBCOMMANDS = ("run-benchmark", "run-framework", "run-sparse", "plot", "quic
 #: subcommand -> (module dotted path, function name, trivial argv, expected cmd_* name).
 DISPATCH = {
     "run-benchmark": ("optarena.support.collect.sweep", "run_benchmark_sweep", ["run-benchmark", "-b",
-                                                                        "gemm"], "cmd_run_benchmark"),
+                                                                                "gemm"], "cmd_run_benchmark"),
     "run-framework": ("optarena.support.collect.sweep", "run_framework_sweep", ["run-framework", "-b",
-                                                                        "gemm"], "cmd_run_framework"),
+                                                                                "gemm"], "cmd_run_framework"),
     "run-sparse": ("optarena.support.collect.sweep", "run_sparse_sweep", ["run-sparse"], "cmd_run_sparse"),
     "plot": ("optarena.plotting", "plot_heatmap", ["plot"], "cmd_plot"),
     "quickstart": ("optarena.support.collect.quickstart", "quickstart", ["quickstart"], "cmd_quickstart"),
@@ -84,7 +84,8 @@ def test_subcommand_dispatches_to_module_function(subcommand, monkeypatch):
 def test_run_benchmark_resolves_preset_and_forwards_flags(monkeypatch):
     """`-p fuzzed:7` is resolved to base `fuzzed` and the selectors are forwarded."""
     calls = []
-    _stub_module(monkeypatch, "optarena.support.collect.sweep", "run_benchmark_sweep", lambda *a, **k: calls.append((a, k)))
+    _stub_module(monkeypatch, "optarena.support.collect.sweep", "run_benchmark_sweep", lambda *a, **k: calls.append(
+        (a, k)))
     try:
         assert main(["run-benchmark", "-b", "atax", "-f", "numba", "-p", "fuzzed:7"]) == 0
     finally:

@@ -55,8 +55,8 @@ def test_eigvalsh_lowers_to_eigenvalues_only_nest():
     """``w = np.linalg.eigvalsh(A)`` rewrites to the shared cyclic-Jacobi sweep
     bound to a single Name -- no ``L^-H`` back-transform, no eigenvector output."""
     txt = ast.unparse(ast.Module(body=_desugar_body(_EIGVALSH_SRC), type_ignores=[]))
-    assert "np.hypot" in txt                        # the Jacobi sweep is emitted
-    assert "_X" not in txt                          # no back-transform x = L^-H y
+    assert "np.hypot" in txt  # the Jacobi sweep is emitted
+    assert "_X" not in txt  # no back-transform x = L^-H y
     assert txt.rstrip().endswith("w = __eigh0_wa")  # binds ONLY the eigenvalue vector
 
 
@@ -68,7 +68,7 @@ def test_eigvalsh_desugar_matches_numpy():
     w = np.asarray(_exec_desugared(_EIGVALSH_SRC, {"A": A.copy()})["w"])
     ref = np.linalg.eigvalsh(A)
     assert np.allclose(w, ref, rtol=1e-6, atol=1e-6)
-    assert np.all(np.diff(w) >= -1e-9)              # ascending, like numpy
+    assert np.all(np.diff(w) >= -1e-9)  # ascending, like numpy
 
 
 @pytest.mark.xfail(
@@ -84,8 +84,12 @@ def test_eigvalsh_native_c_fortran_matches_numpy():
     A = _sym(n, 1)
     res = run_op("import numpy as np\ndef f(A, w):\n tmp = np.linalg.eigvalsh(A)\n w[:] = tmp\n",
                  "f", {"A": A}, {"w": (n, )}, {"N": n},
-                 shapes={"A": "(N, N)", "w": "(N,)"},
-                 rtol=1e-6, atol=1e-6,
+                 shapes={
+                     "A": "(N, N)",
+                     "w": "(N,)"
+                 },
+                 rtol=1e-6,
+                 atol=1e-6,
                  backends=("c", "fortran"))
     for b in ("c", "fortran"):
         assert res[b] == "ok", f"native {b} did not validate: {res}"

@@ -17,8 +17,7 @@ from numpyto_common import dtypes
 #: their own dtype so index arrays in a mixed kernel stay integer.
 _FLOAT_DTYPES = frozenset({"float64", "float32", "float16", "float128", "double", "float8_e4m3", "float8_e5m2"})
 _COMPLEX_DTYPES = frozenset({"complex128", "complex64", "complex256"})
-_COMPLEX_FOR_FLOAT = {"float64": "complex128", "float32": "complex64",
-                      "float16": "complex64", "float128": "complex256"}
+_COMPLEX_FOR_FLOAT = {"float64": "complex128", "float32": "complex64", "float16": "complex64", "float128": "complex256"}
 
 
 def _apply_precision(dtype: str, precision: Optional[str]) -> str:
