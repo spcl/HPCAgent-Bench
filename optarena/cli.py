@@ -216,6 +216,28 @@ def _csv_or_none(value: str):
     return None if value == "all" else [v for v in value.split(",") if v]
 
 
+def _resolve_prompt_variants(value: Optional[str]) -> List[Optional[str]]:
+    """``--prompt-variant`` -> the list of variants to run, one run each.
+
+    Variants are OPTIONAL. Unset -> ``[None]``: one run on the plain ``task.j2``, with no
+    variant recorded -- that is the default, not a variant named "default". ``"all"`` -> every
+    registered variant (every ``task_var<N>.j2`` on the search path, every ``prompt.variants``
+    config entry, and the built-in presets) EXCEPT ``default``, which renders the same
+    ``task.j2`` as the no-variant run and would only duplicate it. Otherwise a comma-separated
+    list, validated here so an unknown name is a clean CLI error rather than a traceback X runs
+    deep.
+    """
+    if not value:
+        return [None]
+    from optarena.harness.prompts import available_variants
+    known = available_variants()
+    names = sorted(set(known) - {"default"}) if value == "all" else [v for v in value.split(",") if v]
+    unknown = [n for n in names if n not in known]
+    if unknown:
+        raise SystemExit(f"unknown prompt variant(s) {unknown}; available: {', '.join(sorted(known))}")
+    return list(names)
+
+
 def _residencies(value: str):
     """Parse + validate ``--residency`` (host / device / 'host,device').
 
@@ -266,8 +288,14 @@ def make_agent_builder(registry: Dict[str, Any], agent_name: str) -> Callable[[O
     return agent_builder
 
 
-def run_static_and_write(agent_builder: Callable[[Optional[str]], Any], tasks, out: pathlib.Path, vllm_urls, judge_urls,
-                         workers: int, grade_params: dict):
+def run_static_and_write(agent_builder: Callable[[Optional[str]], Any],
+                         tasks,
+                         out: pathlib.Path,
+                         vllm_urls,
+                         judge_urls,
+                         workers: int,
+                         grade_params: dict,
+                         prompt_variants=None):
     """Run the static pipeline and append every graded row to ``out``; returns the rows. Single-sourced
     so ``optarena agent`` (distributed) and ``optarena launch`` can't drift on the grade/write contract.
     """
@@ -277,6 +305,7 @@ def run_static_and_write(agent_builder: Callable[[Optional[str]], Any], tasks, o
                       vllm_urls=vllm_urls,
                       judge_urls=judge_urls,
                       workers=workers,
+                      prompt_variants=prompt_variants,
                       **grade_params,
                       log=print)
     with out.open("a") as f:
@@ -327,6 +356,15 @@ def cmd_agent(args) -> int:
     tasks = expand_tasks(kernels=_csv_or_none(args.kernels),
                          languages=_csv_or_none(args.languages),
                          residencies=_residencies(args.residency))
+    # One prompt variant per run: X variants over a kernel = X runs of that kernel, each
+    # rendering its own prompt. `None` (no --prompt-variant) is the single default-prompt run.
+    # Expand the (task, variant) product ONCE: X variants over a kernel = X runs, and BOTH
+    # the serial and the distributed path consume the same expansion, so a variant sweep
+    # cannot silently collapse to one run on the pipeline path.
+    prompt_variant_names = _resolve_prompt_variants(args.prompt_variant)  # resolved ONCE, not per task
+    runs = [(t, v) for t in tasks for v in prompt_variant_names]
+    tasks = [t for t, _ in runs]
+    prompt_variants = [v for _, v in runs]
     out = pathlib.Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     save_dir = pathlib.Path(args.save_submissions) if args.save_submissions else None
@@ -341,7 +379,6 @@ def cmd_agent(args) -> int:
         # unaffected.
         config.set_override("record.execution", "native")
         config.set_override("prompt.native", True)
-    variant = "native" if args.native else None
 
     # The distributed static path (harness.pipeline.run_static): W agent workers, each
     # STATICALLY assigned (round-robin) to one vLLM endpoint (think) + one judge endpoint
@@ -356,13 +393,19 @@ def cmd_agent(args) -> int:
         if args.save_submissions or args.record:
             print("[static] --save-submissions / --record are not wired in the distributed path; "
                   "writing graded rows only")
-        rows = run_static_and_write(make_agent_builder(registry, args.agent), tasks, out, vllm_urls, judge_urls,
-                                    workers, grade_params)
+        rows = run_static_and_write(make_agent_builder(registry, args.agent),
+                                    tasks,
+                                    out,
+                                    vllm_urls,
+                                    judge_urls,
+                                    workers,
+                                    grade_params,
+                                    prompt_variants=prompt_variants)
     else:
         try:
             with out.open("a") as f:
-                for t in tasks:
-                    row, submission = solve_task(agent, t, **grade_params)
+                for t, prompt_variant in runs:
+                    row, submission = solve_task(agent, t, prompt_variant=prompt_variant, **grade_params)
                     rows.append(row)
                     write_agent_row(f, row)
                     # Native mode: stash the returned submission under its native_runs folder
@@ -373,6 +416,8 @@ def cmd_agent(args) -> int:
                     # Persist the per-call (tokens, score) trajectory to the results DB so the
                     # performance-vs-tokens history is queryable across runs (opt-in). The prompt
                     # shown to the agent is stored (content-addressed) and linked from every call row.
+                    # `variant` is the PROMPT variant only; a native run is already distinguished
+                    # by the `execution` column (record.execution above), not by this one.
                     if args.record:
                         from optarena.harness.recording import record_trajectory
                         record_trajectory(t,
@@ -384,12 +429,13 @@ def cmd_agent(args) -> int:
                                           language=t.language,
                                           source_mode=t.source_mode,
                                           baseline=row.baseline,
-                                          variant=variant,
+                                          variant=prompt_variant,
                                           prompt=(row.prompt or None))
                     # Persist the returned optimization (winning, else last attempt).
                     if save_dir and submission is not None and submission.source is not None:
                         ext = LANG_EXT.get(submission.language, submission.language)
-                        fname = f"{t.kernel}__{t.language}__{row.status}.{ext}"
+                        tag = f"__{prompt_variant}" if prompt_variant else ""
+                        fname = f"{t.kernel}__{t.language}{tag}__{row.status}.{ext}"
                         (save_dir / fname).write_text(submission.source)
         finally:
             if args.native:
@@ -747,9 +793,17 @@ def build_parser() -> argparse.ArgumentParser:
                    "ml/hpc->numpy; c = sequential C; *-autopar = the multi-core auto-parallelized reference)")
     a.add_argument("--repair-rounds",
                    type=int,
-                   default=1,
+                   default=None,
                    help="max propose->compile->validate->repair rounds per task "
-                   "(default 1 = single shot; >1 feeds the failure back to the agent)")
+                   "(unset = attempts.max_rounds from config.yaml, 1 = single shot; "
+                   ">1 feeds the failure back to the agent)")
+    a.add_argument("--prompt-variant",
+                   default=None,
+                   help="run each kernel once PER prompt variant: 'all', or a comma-separated list. "
+                   "X variants = X runs per kernel, each with its own single prompt, and the variant "
+                   "name is recorded on every row. Variants come from task_var<N>.j2 templates on the "
+                   "search path, prompt.variants in config.yaml, or the built-ins "
+                   "(see: optarena prompt --list-variants)")
     a.add_argument("--native",
                    action="store_true",
                    help="no-container run mode: run the agent + judge in-process (ZERO containers), "
@@ -836,8 +890,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="speedup denominator (default auto = the per-track default)")
     lc.add_argument("--repair-rounds",
                     type=int,
-                    default=1,
-                    help="max propose->compile->validate->repair rounds per task (default 1)")
+                    default=None,
+                    help="max propose->compile->validate->repair rounds per task "
+                    "(unset = attempts.max_rounds from config.yaml)")
     lc.add_argument("--output", default="results/agent_launch.jsonl", help="JSONL output file (appended)")
     lc.set_defaults(func=cmd_launch)
 
