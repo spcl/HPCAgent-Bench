@@ -23,6 +23,7 @@ This module owns the second edit plus the runtime helpers:
   giving the flags that make the compiler explain its vectorizer decisions.
 """
 import functools
+import os
 import pathlib
 import shlex
 import shutil
@@ -31,7 +32,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import yaml
 
-from optarena import flags, paths
+from optarena import config, flags, osinfo, paths
 from optarena.flags import Mode
 from optarena.spec import BenchSpec
 
@@ -127,11 +128,46 @@ def _compiler_for_lang(compilers: Dict[str, dict], lang: str, *, mpi: bool = Fal
     raise KeyError(f"no {'MPI ' if mpi else ''}compiler in compilers.yaml for lang {lang!r}")
 
 
-def _render_argv(tokens: List[str], subst: Dict[str, str]) -> List[str]:
+#: ``compilers.yaml`` languages whose compile step may go through ``ccache``. Deliberately
+#: narrow: ccache does not officially support Fortran (a cache hit skips the ``.mod``
+#: side-effect) and the CUDA/HIP drivers need their own configuration, so those keep
+#: compiling directly. C and C++ are where the harness spends its build time anyway.
+_CACHEABLE_LANGS = ("c", "cpp")
+
+
+@functools.lru_cache(maxsize=1, typed=True)
+def compiler_launcher() -> Tuple[str, ...]:
+    """``("ccache",)`` when a usable compiler cache is present, else ``()``.
+
+    Auto-detected: ccache is used when it is on ``PATH``, unless ``build.ccache`` is set
+    false. It only ever prefixes a COMPILE step -- a link is not cacheable -- and it changes
+    build TIME only: a hit replays the same object file the compiler would have produced.
+
+    The cache is namespaced by CPU model because the baseline flags carry ``-march=native``,
+    which ccache hashes literally. Without the namespace, two machines sharing a
+    ``CCACHE_DIR`` (a networked home directory) would serve each other objects built for the
+    wrong microarchitecture -- a silently mistuned kernel in a benchmark that exists to
+    measure tuning.
+    """
+    if not config.get("build.ccache", True):
+        return ()
+    exe = shutil.which("ccache")
+    if exe is None:
+        return ()
+    os.environ.setdefault("CCACHE_NAMESPACE", osinfo.cpu_model())
+    return (exe, )
+
+
+def _render_argv(tokens: List[str], subst: Dict[str, str], *, cacheable_lang: Optional[str] = None) -> List[str]:
     """Substitute a compile/link template into an argv. ``{baseline}`` and ``{objs}`` each
     expand to a space-joined string that must become several argv items (shell-split, keeping
-    quoted groups); every other token stays a single item."""
+    quoted groups); every other token stays a single item.
+
+    ``cacheable_lang`` marks this as a COMPILE step in that language, so a detected
+    :func:`compiler_launcher` prefixes the argv when the language supports it."""
     out: List[str] = []
+    if cacheable_lang in _CACHEABLE_LANGS:
+        out.extend(compiler_launcher())
     for tok in tokens:
         rendered = tok.format(**subst)
         if tok in ("{baseline}", "{objs}"):
@@ -234,7 +270,7 @@ def compile_variant(
         "lib": str(lib),
     }
 
-    return _render_argv(block["compile"], subst)
+    return _render_argv(block["compile"], subst, cacheable_lang=lang)
 
 
 def build_kernel_lib_commands(
@@ -303,7 +339,7 @@ wrap_kernel` dlopens. Flags resolve from :mod:`optarena.flags` via
             "objs": str(obj),
             "lib": str(out_so),
         }
-        cmds.append(_render_argv(block["compile"], subst))
+        cmds.append(_render_argv(block["compile"], subst, cacheable_lang=lang))
         objs.append(str(obj))
         has_cpp = has_cpp or lang == "cpp"
         has_fortran = has_fortran or lang == "fortran"
@@ -513,7 +549,7 @@ def build_shared_lib_commands(
         "lib": str(out_so),
     }
 
-    cmds: List[List[str]] = [_render_argv(block["compile"], subst)]
+    cmds: List[List[str]] = [_render_argv(block["compile"], subst, cacheable_lang=lang)]
     if extra_compile:
         cmds[0].extend(extra_compile)  # first argv compiles the source (sees -I/-D)
     link = block.get("link")

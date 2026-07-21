@@ -7,6 +7,11 @@ import pytest
 from optarena.harness import metric as M
 from optarena.harness import native_call
 from optarena.harness.metric import max_memory, norm_memory
+from optarena.spec import BenchSpec
+from optarena.support.bindings.contract import binding_from_spec
+
+#: A python delivery only needs the binding for its kernel name; any kernel's will do.
+_BINDING = binding_from_spec(BenchSpec.load("gemm"))
 
 
 def _ts(peak_bytes, baseline_peak_bytes, solved=True, s_i=1.0):
@@ -109,18 +114,43 @@ class _CaptureQueue:
         self.items.append(item)
 
 
-def test_child_reports_increment_below_absolute_peak(tmp_path):
-    """The isolation child reports both the raw ru_maxrss peak and the kernel-attributable increment."""
+def _hungry_kernel(tmp_path):
+    """A kernel whose ~64 MB scratch is freed before it returns -- ru_maxrss is a high-water
+    mark, so the allocation is still captured."""
     kernel = tmp_path / "mem_kernel.py"
-    # ru_maxrss is a high-water mark, so a freed ~64 MB scratch allocation is still captured.
     kernel.write_text("import numpy as np\n"
                       "def kern(x):\n"
                       "    scratch = np.ones(8_000_000, dtype=np.float64)  # ~64 MB\n"
                       "    return x + float(scratch.sum() > 0)\n")
+    return kernel
 
+
+def test_child_reports_increment_below_absolute_peak(tmp_path):
+    """The isolation child reports both the raw ru_maxrss peak and the kernel-attributable increment.
+
+    Driven through ``_call_isolated`` so the worker runs FORKED, the way production does. Calling
+    the worker in-process instead would measure the increment against pytest's own ru_maxrss
+    high-water mark, and any earlier test in the same worker that allocated more than the kernel
+    does would leave the increment at 0 -- an order-dependent failure that says nothing about the
+    code under test.
+    """
+    _, samples, mem = native_call._call_isolated(str(_hungry_kernel(tmp_path)),
+                                                 _BINDING, {"x": np.zeros(4, dtype=np.float64)},
+                                                 "python",
+                                                 device=False,
+                                                 timeout=60,
+                                                 py_meta=("kern", ("x", ), ("y", )))
+    assert len(samples) == 1
+    assert mem.increment_bytes > 16 * 1024 * 1024  # the ~64 MB allocation is a clear increment
+    assert mem.peak_bytes > mem.increment_bytes  # the raw peak additionally carries the inherited footprint
+
+
+def test_the_legacy_queue_channel_carries_the_worker_payload(tmp_path):
+    """``q`` lets the worker be driven in-process. It must deliver exactly what the forked path
+    returns -- status first, then outputs / samples / peak / increment."""
     q = _CaptureQueue()
     native_call._native_call_worker(False,
-                                    str(kernel),
+                                    str(_hungry_kernel(tmp_path)),
                                     None, {"x": np.zeros(4, dtype=np.float64)},
                                     "python",
                                     0,
@@ -129,11 +159,8 @@ def test_child_reports_increment_below_absolute_peak(tmp_path):
                                     py_meta=("kern", ("x", ), ("y", )))
 
     assert len(q.items) == 1
-    status, outputs, ns, peak_bytes, increment_bytes = q.items[0]
+    status, outputs, samples, peak_bytes, increment_bytes = q.items[0]
     assert status == "ok", outputs
-    assert increment_bytes > 16 * 1024 * 1024  # the ~64 MB allocation shows up as a clear increment
-    assert peak_bytes > increment_bytes  # the raw peak additionally carries the inherited footprint
-
-    # And _call_isolated packages the same pair into the MemoryUsage the metric reads.
-    mem = native_call.MemoryUsage(peak_bytes=peak_bytes, increment_bytes=increment_bytes)
-    assert mem.increment_bytes < mem.peak_bytes
+    assert set(outputs) == {"y"} and len(samples) == 1
+    # No increment assertion here: in-process, the baseline is pytest's own high-water mark.
+    assert peak_bytes > 0 and increment_bytes >= 0

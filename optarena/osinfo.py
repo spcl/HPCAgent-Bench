@@ -31,6 +31,27 @@ def is_arm() -> bool:
     return machine().lower() in ("arm64", "aarch64")
 
 
+def cpu_model() -> str:
+    """Best-effort CPU model string; honors ``$OPTARENA_CPU``, else falls back to platform info.
+
+    Identifies the host well enough to tell two machines apart, which is what the recording
+    tables' ``cpu`` column and the compiler-cache namespace both need -- ``-march=native``
+    means a cached object is only valid on the CPU that produced it.
+    """
+    import os
+    env = os.environ.get("OPTARENA_CPU")
+    if env:
+        return env
+    try:
+        with open("/proc/cpuinfo") as fh:
+            for line in fh:
+                if line.startswith("model name"):
+                    return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return platform.processor() or platform.machine() or "unknown"
+
+
 def default_mp_context() -> str:
     """The safe multiprocessing start method for this OS.
 
