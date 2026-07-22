@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict, List, NamedTuple, Optional, Sequence, Tu
 
 from hpcagent_bench import config
 from hpcagent_bench.frameworks import Benchmark
-from hpcagent_bench.precision import Precision
+from hpcagent_bench.precision import Precision, float_complex_for
 
 np_float = None
 np_complex = None
@@ -114,7 +114,7 @@ class TorchCudaEventTiming:
 
 #: Per-framework descriptors, in code (not data files). Each entry is one FLAVOR of a ``base`` backend
 #: (dace_cpu/dace_gpu share base "dace", cc/llvm/fortran/polly share "native"); the base selects the
-#: :class:`Framework` subclass via :func:`_framework_class`. ``arch`` is cpu/gpu; ``postfix`` selects the
+#: :class:`Framework` subclass via :func:`framework_class`. ``arch`` is cpu/gpu; ``postfix`` selects the
 #: impl file; ``precisions`` is the set the flavor can execute (else the sweep records status="skip").
 #: native/pluto flavors also carry ``language``/``compiler``, plus a ``flags`` preset for polly/pluto.
 FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
@@ -305,7 +305,7 @@ def framework_flavors(base: str) -> List[str]:
     return [name for name, meta in FRAMEWORK_META.items() if meta["base"] == base]
 
 
-def _framework_class(fname: str):
+def framework_class(fname: str):
     """Map a framework name to its :class:`Framework` subclass via its ``base`` (imported lazily to
     dodge the circular import)."""
     from hpcagent_bench.frameworks import (Framework, NumbaFramework, CupyFramework, JaxFramework, PythranFramework,
@@ -375,9 +375,9 @@ class Framework(object):
     def impl_files(self, bench: Benchmark) -> Sequence[Tuple[str, str]]:
         """Returns the framework's implementation files for ``bench``."""
 
-        parent_folder = pathlib.Path(__file__).parent.absolute()
-        pymod_path = parent_folder.joinpath("..", "..", "hpcagent_bench", "benchmarks", bench.info["relative_path"],
-                                            bench.info["module_name"] + "_" + self.info["postfix"] + ".py")
+        package_dir = pathlib.Path(__file__).parent.parent.absolute()  # hpcagent_bench/
+        pymod_path = package_dir.joinpath("benchmarks", bench.info["relative_path"],
+                                          f'{bench.info["module_name"]}_{self.info["postfix"]}.py')
         return [(pymod_path, 'default')]
 
     def autogen_targets(self) -> Sequence[str]:
@@ -400,10 +400,10 @@ class Framework(object):
         """Returns the framework's implementations for ``bench``."""
 
         self.ensure_impls(bench)
-        module_pypath = "hpcagent_bench.benchmarks.{r}.{m}".format(r=bench.info["relative_path"].replace('/', '.'),
-                                                                   m=bench.info["module_name"])
+        relative = bench.info["relative_path"].replace('/', '.')
+        module_pypath = f'hpcagent_bench.benchmarks.{relative}.{bench.info["module_name"]}'
         postfix = self.info["postfix"]
-        module_str = "{m}_{p}".format(m=module_pypath, p=postfix)
+        module_str = f"{module_pypath}_{postfix}"
         func_str = bench.info["func_name"]
 
         try:
@@ -455,7 +455,6 @@ class Framework(object):
         """Set the framework's working dtype globals from a datatype string (numpy or Precision-enum
         spelling, or None -> float64); a low-precision request is honored, never coerced to fp64."""
         global np_float, np_complex
-        from hpcagent_bench.precision import float_complex_for
         np_float, np_complex = float_complex_for(datatype)
 
     # ----- Timing: create/start/stop/free_timer are 4 overridable steps, default a host-side
@@ -542,7 +541,7 @@ class Framework(object):
 def generate_framework(fname: str, save_strict: bool = False, load_strict: bool = False) -> Framework:
     """Generates a framework object with the correct class (save/load_strict: dace_cpu/dace_gpu only)."""
 
-    cls = _framework_class(fname)
+    cls = framework_class(fname)
     if fname.startswith('dace'):
         return cls(fname, save_strict, load_strict)
     return cls(fname)
