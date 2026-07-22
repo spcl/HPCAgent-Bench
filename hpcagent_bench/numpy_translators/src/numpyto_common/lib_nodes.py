@@ -2465,9 +2465,9 @@ def arange_count(args: List[ast.expr]) -> ast.expr:
     declared with and the trip count the loop runs cannot disagree -- disagreeing is what turned
     a wrong count into an out-of-bounds write."""
     if len(args) == 1:
-        span, step = args[0], _const(1)
+        span, step = args[0], None
     elif len(args) == 2:
-        span, step = ast.BinOp(left=args[1], op=ast.Sub(), right=args[0]), _const(1)
+        span, step = ast.BinOp(left=args[1], op=ast.Sub(), right=args[0]), None
     elif len(args) == 3:
         span, step = ast.BinOp(left=args[1], op=ast.Sub(), right=args[0]), args[2]
     else:
@@ -2479,6 +2479,10 @@ def arange_count(args: List[ast.expr]) -> ast.expr:
         if istep == 0:
             raise NotImplementedError("np.arange step must be nonzero")
         return _const(max(0, -((start - stop) // istep)))
+    # Unit step (the 1- and 2-arg forms, or an explicit step of 1): the count IS the span, so keep
+    # the plain expression rather than wrapping it in the ceil form.
+    if step is None or _const_int(step) == 1:
+        return span
     # -((-span) // step): ceil for either sign, since // is emitted as the flooring int_floor.
     return ast.UnaryOp(op=ast.USub(),
                        operand=ast.BinOp(left=ast.UnaryOp(op=ast.USub(), operand=span), op=ast.FloorDiv(), right=step))
