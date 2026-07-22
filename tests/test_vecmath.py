@@ -11,7 +11,7 @@ import subprocess
 
 import pytest
 
-from optarena import flags, osinfo
+from optarena import flags, languages, osinfo
 from optarena.languages import _load_compilers
 
 #: Any libmvec entry point: _ZGV <isa> N <width> <v...> _ <fn>, e.g. _ZGVeN8v_exp.
@@ -136,7 +136,7 @@ def test_gcc_vectorizes_libm_at_the_baseline(tmp_path):
     if not osinfo.IS_LINUX:
         return
     assert shutil.which("gcc"), "gcc is required to build native C kernels"
-    obj = compile_object(tmp_path, C_LIBM_LOOP, ".c", "gcc", flags.CPU_BASELINE_GCC, "-std=c17")
+    obj = compile_object(tmp_path, C_LIBM_LOOP, ".c", "gcc", flags.CPU_BASELINE_GCC, languages.std_flag("c"))
     calls = libmvec_calls(obj)
     assert calls, "gcc emitted NO libmvec calls at CPU_BASELINE_GCC -- the vecmath.h -include is not reaching it"
     assert any("_exp" in s for s in calls) and any("_log" in s for s in calls), f"got {sorted(calls)}"
@@ -147,7 +147,7 @@ def test_gxx_vectorizes_libm_at_the_baseline(tmp_path):
     if not osinfo.IS_LINUX:
         return
     assert shutil.which("g++"), "g++ is required to build native C++ kernels"
-    obj = compile_object(tmp_path, CXX_LIBM_LOOP, ".cpp", "g++", flags.CPU_BASELINE_GCC, "-std=c++23")
+    obj = compile_object(tmp_path, CXX_LIBM_LOOP, ".cpp", "g++", flags.CPU_BASELINE_GCC, languages.std_flag("cpp"))
     assert libmvec_calls(obj), "g++ emitted NO libmvec calls at CPU_BASELINE_GCC"
 
 
@@ -158,7 +158,7 @@ def test_gfortran_vectorizes_libm_at_the_baseline(tmp_path):
         return
     assert shutil.which("gfortran"), "gfortran is required to build native Fortran kernels"
     obj = compile_object(tmp_path, FORTRAN_LIBM_LOOP, ".f90", "gfortran", flags.CPU_BASELINE_GFORTRAN, "-ffree-form",
-                         "-std=f2018")
+                         languages.std_flag("fortran"))
     assert libmvec_calls(obj), ("gfortran emitted NO libmvec calls at CPU_BASELINE_GFORTRAN -- this host's gcc spec "
                                 "does not pre-include glibc's math-vector-fortran.h, so Fortran needs an explicit "
                                 "-fpre-include that C does not")
@@ -172,7 +172,8 @@ def test_the_fortran_baseline_compiles_without_warnings(tmp_path):
     src = tmp_path / "warn.f90"
     src.write_text(FORTRAN_LIBM_LOOP)
     cmd = [
-        "gfortran", *flags.CPU_BASELINE_GFORTRAN.split(), "-ffree-form", "-std=f2018", "-c",
+        "gfortran", *flags.CPU_BASELINE_GFORTRAN.split(), "-ffree-form",
+        languages.std_flag("fortran"), "-c",
         str(src), "-o",
         str(tmp_path / "warn.o")
     ]
@@ -197,7 +198,7 @@ def test_the_header_does_not_leak_fast_math_into_libstdcxx(tmp_path):
                      "#error fast_math_leaked\n"
                      "#endif\n"
                      "int main() { return 0; }\n")
-    base = ["g++", "-std=c++23", "-fopenmp", "-fsyntax-only", str(probe)]
+    base = ["g++", languages.std_flag("cpp"), "-fopenmp", "-fsyntax-only", str(probe)]
     clean = subprocess.run(base, capture_output=True, text=True)
     assert clean.returncode == 0, f"vecmath.h leaked __FAST_MATH__ into libstdc++:\n{clean.stderr}"
     poisoned = subprocess.run([*base, "-ffast-math"], capture_output=True, text=True)
