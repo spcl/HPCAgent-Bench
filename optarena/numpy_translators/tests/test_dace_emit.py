@@ -93,10 +93,7 @@ def test_dace_keeps_native_linalg():
     lowers them to loops. Guards against the backend-capability gating regressing."""
     _, chol = _emit("cholesky2")
     assert "np.linalg.cholesky" in chol
-    try:
-        _, con = _emit("contour_integral")
-    except Exception as exc:  # noqa: BLE001 -- kernel absent from this checkout
-        pytest.skip(f"contour_integral unavailable: {exc}")
+    _, con = _emit("contour_integral")
     assert "np.linalg.solve" in con
 
 
@@ -106,10 +103,7 @@ def test_dace_feature_kernels_desugared(kernel):
     size symbols module-level (not parameters) and NO residual construct dace
     cannot trace -- the same np.fft / np.add.at / np.mgrid / np.histogram /
     ufunc.outer lowering numba and pythran get."""
-    try:
-        kir, src = _emit(kernel)
-    except Exception as exc:  # noqa: BLE001 -- kernel absent from this checkout
-        pytest.skip(f"{kernel} unavailable: {exc}")
+    kir, src = _emit(kernel)
     tree = ast.parse(src)  # must be valid Python
     progs = [
         n for n in ast.walk(tree)
@@ -284,10 +278,7 @@ def test_gmres_emits_promoted_symbols_ternary_and_split():
     allocation, and carries no residual conditional-expression RHS. ``n`` is a pure
     alias of ``N`` (``n = N``), so it is INLINED to ``N`` rather than promoted to its
     own symbol -- only the genuinely-derived ``m = min(max_iter, N)`` is promoted."""
-    try:
-        src = emit_dace(kir_for("gmres", config="csr", do_lower=True))
-    except Exception as exc:  # noqa: BLE001 -- gmres/lowering unavailable in this checkout
-        pytest.skip(f"gmres lowering unavailable: {exc}")
+    src = emit_dace(kir_for("gmres", config="csr", do_lower=True))
     assert "nnz, N, max_iter, m = " in src  # m promoted; n inlined to N
     assert "__optarena_symbol_defs__ = [('m', 'min(max_iter, N)')]" in src
     assert "m_iter = m" in src  # runtime count seeded
@@ -307,19 +298,12 @@ def test_gmres_emits_promoted_symbols_ternary_and_split():
 # --------------------------------------------------------------------------- #
 
 
-def _emit_or_skip(short):
-    try:
-        return _emit(short)
-    except Exception as exc:  # noqa: BLE001 -- kernel absent from this checkout
-        pytest.skip(f"{short} unavailable: {exc}")
-
-
 def test_nussinov_nested_ternary_hoisted_no_ifexp():
     """Bug A: nussinov inlines ``match(...)`` to a ternary nested as a VALUE
     (``table[i+1,j-1] + (1 if seq[i]+seq[j]==3 else 0)``) -- dace: 'Operator Add is
     not defined for types Scalar and IfExp'. The emitter must hoist every nested
     conditional to a guarded scalar temp, leaving NO ast.IfExp in the program."""
-    _, src = _emit_or_skip("nussinov")
+    _, src = _emit("nussinov")
     prog = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef))
     assert not any(isinstance(node, ast.IfExp) for node in ast.walk(prog)), \
         "nussinov: a conditional expression survived (dace cannot type Scalar + IfExp)"
@@ -329,7 +313,7 @@ def test_mandelbrot_no_leaked_framework_dtype_token():
     """Bug B: the emitter leaked the framework precision globals ``np_float`` /
     ``np_complex`` into ``.astype(...)`` / ``dtype=`` args -- dace: 'Use of undefined
     variable np_float'. They must be rewritten to the dace globals the module binds."""
-    _, src = _emit_or_skip("mandelbrot1")
+    _, src = _emit("mandelbrot1")
     assert "np_float" not in src and "np_complex" not in src, \
         "mandelbrot1: a framework precision-global dtype token leaked into the dace module"
     assert "dc_float" in src  # the dace precision global the module actually imports
@@ -353,7 +337,7 @@ def test_nbody_reduction_shape_scalar_inlined_no_descriptor_symbol_clash():
     ``np.empty((__rd0_d1,), ...)``) -- dace: 'Cannot create symbol __rd0_d1, the name is
     used by a data descriptor'. The .shape read must be inlined so no name used in an
     allocation shape is also a scalar assigned from ``<x>.shape[k]``."""
-    _, src = _emit_or_skip("nbody")
+    _, src = _emit("nbody")
     prog = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef))
     shape_names = _alloc_shape_names(prog)
     for node in ast.walk(prog):
@@ -368,7 +352,7 @@ def test_contour_integral_array_iteration_rewritten_to_indexed_range():
     """Bug D: contour_integral iterates an array by VALUE (``for z in int_pts``) -- dace:
     'Iterator of ast.For must be a function or a subscript'. It must be rewritten to the
     indexed range form (``for <idx> in range(...): z = int_pts[<idx>]``)."""
-    _, src = _emit_or_skip("contour_integral")
+    _, src = _emit("contour_integral")
     prog = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef))
     for node in ast.walk(prog):
         if isinstance(node, ast.For):
