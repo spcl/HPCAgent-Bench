@@ -36,7 +36,6 @@ Cartesian angular momenta up to l=2 on each Gaussian center.
 
 import numpy as np
 
-
 MAX_L = 2
 MAX_LP = 2 * MAX_L
 MAX_COSET = 10
@@ -95,11 +94,7 @@ def cp2k_grid_integrate(
 
         zetp = zeta[task] + zetb[task]
         f = zetb[task] / zetp
-        rab2 = (
-            rab[task, 0] * rab[task, 0]
-            + rab[task, 1] * rab[task, 1]
-            + rab[task, 2] * rab[task, 2]
-        )
+        rab2 = (rab[task, 0] * rab[task, 0] + rab[task, 1] * rab[task, 1] + rab[task, 2] * rab[task, 2])
         prefactor = np.exp(-zeta[task] * f * rab2)
 
         rp0 = ra[task, 0] + f * rab[task, 0]
@@ -187,11 +182,8 @@ def cp2k_grid_integrate(
                             for lyp in range(lp - lzp + 1):
                                 pyz = pz * pol[task, 1, lyp, jrel + MAX_CUBE_RADIUS]
                                 for lxp in range(lp - lzp - lyp + 1):
-                                    cxyz[task, lzp, lyp, lxp] += (
-                                        grid_value
-                                        * pyz
-                                        * pol[task, 0, lxp, irel + MAX_CUBE_RADIUS]
-                                    )
+                                    cxyz[task, lzp, lyp,
+                                         lxp] += (grid_value * pyz * pol[task, 0, lxp, irel + MAX_CUBE_RADIUS])
 
         for idir in range(3):
             if idir == 0:
@@ -213,9 +205,7 @@ def cp2k_grid_integrate(
                         b_power = 1.0
                         for l in range(lxb + 1):
                             ls = lxa - l + lxb - k
-                            alpha[task, idir, lxb, lxa, ls] += (
-                                binomial_k_lxa * binomial_l_lxb * a_power * b_power
-                            )
+                            alpha[task, idir, lxb, lxa, ls] += (binomial_k_lxa * binomial_l_lxb * a_power * b_power)
                             binomial_l_lxb *= float(lxb - l) / float(l + 1)
                             b_power *= drpb
                         binomial_k_lxa *= float(lxa - k) / float(k + 1)
@@ -238,34 +228,22 @@ def cp2k_grid_integrate(
                                 if la_total == 0:
                                     ico = 0
                                 else:
-                                    ico = (
-                                        la_total * (la_total + 1) * (la_total + 2) // 6
-                                        + (la_total - lxa) * (la_total - lxa + 1) // 2
-                                        + lza
-                                    )
+                                    ico = (la_total * (la_total + 1) * (la_total + 2) // 6 + (la_total - lxa) *
+                                           (la_total - lxa + 1) // 2 + lza)
 
                                 lb_total = lxb + lyb + lzb
                                 if lb_total == 0:
                                     jco = 0
                                 else:
-                                    jco = (
-                                        lb_total * (lb_total + 1) * (lb_total + 2) // 6
-                                        + (lb_total - lxb) * (lb_total - lxb + 1) // 2
-                                        + lzb
-                                    )
+                                    jco = (lb_total * (lb_total + 1) * (lb_total + 2) // 6 + (lb_total - lxb) *
+                                           (lb_total - lxb + 1) // 2 + lzb)
 
                                 for lzp in range(lza + lzb + 1):
                                     for lyp in range(lp - lza - lzb + 1):
                                         for lxp in range(lp - lza - lzb - lyp + 1):
-                                            transform = (
-                                                alpha[task, 0, lxb, lxa, lxp]
-                                                * alpha[task, 1, lyb, lya, lyp]
-                                                * alpha[task, 2, lzb, lza, lzp]
-                                                * prefactor
-                                            )
-                                            cab[task, jco, ico] += (
-                                                cxyz[task, lzp, lyp, lxp] * transform
-                                            )
+                                            transform = (alpha[task, 0, lxb, lxa, lxp] * alpha[task, 1, lyb, lya, lyp] *
+                                                         alpha[task, 2, lzb, lza, lzp] * prefactor)
+                                            cab[task, jco, ico] += (cxyz[task, lzp, lyp, lxp] * transform)
 
         for la in range(int(la_min[task]), lamax + 1):
             for ax in range(la + 1):
