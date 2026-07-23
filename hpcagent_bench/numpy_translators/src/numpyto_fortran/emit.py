@@ -8,7 +8,7 @@ import re
 from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 
 from numpyto_common.ir import ArrayDesc, KernelIR
-from numpyto_common import dtypes, operators, parallelism
+from numpyto_common import dtypes, narrow_int, operators, parallelism
 from numpyto_common.emitter import BaseEmitter
 from numpyto_common.frontend import _names_used_as_int
 
@@ -270,10 +270,6 @@ def _round_even_helper(rk: str) -> str:
             (abs(x - aint(x)) == 0.5_{rk}) .and. (mod(anint(x), 2.0_{rk}) /= 0.0_{rk}))
     end function npb_round_even
 """
-
-
-#: Integer element widths narrower than the int64 ABI integer. numpy wraps an elementwise op at
-#: these widths; Fortran computes wide after the promoting read, so each result is wrapped back.
 
 
 def _double_kind() -> str:
@@ -779,11 +775,23 @@ class _FortranBodyEmitter(BaseEmitter):
         return f"{indent}{lhs} = {lhs} {op} ({rhs})"
 
     def emit_expr(self, node: ast.AST) -> str:
-        """Emit an expression, rounding a float BinOp result back to the fp8 grid when the kernel computes in fp8."""
+        """Emit an expression, rounding a float BinOp result back to the fp8 grid when the kernel computes in fp8,
+        and re-wrapping a narrow-int +/-/* result back to its element width. INT(x, narrow_kind) two's-complement
+        wraps (verified: INT(200, c_int8_t) == -56), matching numpy's wrap; the wide compute otherwise would not."""
         text = self._emit_expr_inner(node)
         if isinstance(node, ast.BinOp):
             text = self._fp8_round(node, text)
+        wrap = narrow_int.wrap_dtype(node, self._wrap_name_dtype)
+        if wrap is not None:
+            text = f"INT(({text}), {self._int_kind_selector(self._int_tag(wrap))})"
         return text
+
+    def _wrap_name_dtype(self, name: str) -> Optional[str]:
+        """Name -> numpy dtype for the narrow-int wrap oracle; a shape symbol is the wide int64."""
+        for s in self.kir.symbols:
+            if s.name == name:
+                return "int64"
+        return self._name_dtype(name)
 
     def _fp8_round(self, node: ast.BinOp, text: str) -> str:
         """Wrap a float BinOp result in the fp8 round-to-grid procedure (per-op rounding is load-bearing, not decorative)."""

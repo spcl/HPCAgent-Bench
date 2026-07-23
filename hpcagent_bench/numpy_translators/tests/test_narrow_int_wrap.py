@@ -1,20 +1,23 @@
 """Narrow-int arithmetic and the element width: what the backends do and do NOT reproduce.
 
 C, C++ and Fortran promote narrow reads (int8/16/32, uint8/16/32) to int64 and compute wide, so an
-INTERMEDIATE that overflows the element width does not wrap. numpy evaluates the op at the operand
+INTERMEDIATE that overflows the element width would not wrap. numpy evaluates the op at the operand
 dtype and wraps there, so results diverge when an intermediate overflows before a non-linear step:
 for int8 ``a = b = 100``, numpy's ``a + b`` wraps to -56 and ``// 2`` gives -28, while the wide form
-computes 200 // 2 = 100. That gap is real and currently UNFIXED -- see the xfail below.
+would compute 200 // 2 = 100.
 
-A per-op re-wrap was attempted and reverted: casting every narrow-int result back to its element
-width broke more than it fixed (integer true division truncated in C/C++, int8-times-float truncated
-in Fortran, ``**`` casting a libm double into a narrow int, and an undefined ``npb_wrap_*`` when a
-non-inlined Fortran helper needed one), because "which numpy dtype does this subtree compute in" was
-answered by two divergent hand-rolled oracles rather than one shared, differentially-tested one.
+The fix (``numpyto_common.narrow_int``) re-wraps the wide result of every narrow-int ``+``/``-``/``*``
+(and unary ``-``) back to its element width: a ``(int8_t)`` cast in C/C++, ``INT(x, c_int8_t)`` (which
+two's-complement wraps) in Fortran. WHEN to wrap is decided by ONE shared oracle that infers the numpy
+result dtype of a subtree -- so integer true division and int*float stay FLOAT (no wrap), a call result
+and shape symbols stay non-narrow (no wrap), and only a subtree numpy would genuinely wrap is wrapped.
+This file is the C/Fortran/numpy differential test the re-implementation was gated on.
 
-Everything below the xfail pins behaviour that must hold either way: no wrap where numpy PROMOTES,
-and no truncation of results that are not integers at all. Those are the regression guards for a
-future re-implementation.
+An earlier per-op re-wrap was reverted because it answered "which numpy dtype does this subtree compute
+in" with two divergent hand-rolled oracles: it truncated integer true division in C/C++, int8-times-float
+in Fortran, cast a libm ``**`` double into a narrow int, and needed an undefined ``npb_wrap_*`` in a
+non-inlined Fortran helper. The tests below the wrap test pin the guards that keep those from recurring:
+no wrap where numpy PROMOTES, and no truncation of results that are not integers at all.
 """
 import numpy as np
 import pytest
@@ -40,10 +43,6 @@ def _run(src, ins, outs, dtypes, n):
                   backends=_NATIVE)
 
 
-@pytest.mark.xfail(strict=True,
-                   reason="per-op narrow-int wrap reverted; the backends compute wide, so an "
-                   "intermediate that overflows the element width does not wrap. Re-implement in "
-                   "numpyto_common with one shared oracle and a C/Fortran/numpy differential test.")
 def test_int8_intermediate_overflow_wraps():
     # a + b overflows int8 (200 -> -56) BEFORE the floor-div, so wrapping changes the result. This
     # is the ONLY case in this file that distinguishes a per-op wrap from wrapping at the store --

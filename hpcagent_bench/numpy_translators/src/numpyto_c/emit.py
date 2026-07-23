@@ -7,7 +7,7 @@ import re
 from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 
 from numpyto_common.ir import ArrayDesc, KernelIR
-from numpyto_common import dtypes, operators, parallelism
+from numpyto_common import dtypes, narrow_int, operators, parallelism
 from numpyto_common.emitter import BaseEmitter
 from numpyto_common.frontend import _names_used_as_int
 
@@ -365,11 +365,23 @@ class _CBodyEmitter(BaseEmitter):
     # ----- expression-level -----------------------------------------------
 
     def emit_expr(self, node: ast.AST) -> str:
-        """Emit an expression, re-rounding a float BinOp result to the fp8 grid (per-op in numpy)."""
+        """Emit an expression, re-rounding a float BinOp result to the fp8 grid (per-op in numpy)
+        and re-wrapping a narrow-int +/-/* result back to its element width (numpy wraps there;
+        the promoting read computes wide, so an intermediate that overflows would not)."""
         text = self._emit_expr_inner(node)
         if isinstance(node, ast.BinOp):
             text = self._fp8_round(node, text)
+        wrap = narrow_int.wrap_dtype(node, self._wrap_name_dtype)
+        if wrap is not None:
+            text = f"(({_c_type(wrap)})({text}))"
         return text
+
+    def _wrap_name_dtype(self, name: str) -> Optional[str]:
+        """Name -> numpy dtype for the narrow-int wrap oracle; a shape symbol is the wide int64."""
+        for s in self.kir.symbols:
+            if s.name == name:
+                return "int64"
+        return self._name_dtype(name)
 
     def _fp8_round(self, node: ast.BinOp, text: str) -> str:
         """Wrap a float BinOp result in the fp8 round-to-grid helper (per-op rounding is load-bearing, not decorative)."""
