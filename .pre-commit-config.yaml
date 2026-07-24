@@ -24,7 +24,10 @@ repos:
       # script: hpcagent_bench/ minus benchmarks/ + numpy_translators/, plus scripts/ tests/).
       - id: hpcagent_bench-headers
         name: copyright / SPDX header (core package)
-        entry: python scripts/check_headers.py
+        # --fix ADDS the header (as the first content line, after any shebang) rather than only
+        # failing -- the same auto-fix contract as the format hook. yapf leaves the header
+        # byte-for-byte (locked by tests/test_header_hook.py), so the two fixers never fight.
+        entry: python scripts/check_headers.py --fix
         language: system
         require_serial: true
         files: '\.py$'
