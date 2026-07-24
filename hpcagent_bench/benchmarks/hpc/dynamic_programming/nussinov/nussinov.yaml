@@ -18,6 +18,11 @@ init:
   output_args:
   - seq
   - table
+  - complement_sum
+  - pair_bonus
+  scalars:
+    complement_sum: 3
+    pair_bonus: 1
   dtypes:
     seq: int32
     table: int32
