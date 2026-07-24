@@ -1,3 +1,5 @@
+# Adapted from NPBench (github.com/spcl/npbench, BSD-3-Clause). Reimplemented in NumPy as the HPCAgent-Bench correctness reference.
+
 import numpy as np
 
 
