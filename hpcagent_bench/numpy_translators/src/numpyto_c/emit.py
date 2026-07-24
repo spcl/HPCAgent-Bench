@@ -4,19 +4,23 @@ import ast
 import math
 import pathlib
 import re
+from functools import lru_cache
 from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 
 from numpyto_common.ir import ArrayDesc, KernelIR
 from numpyto_common import dtypes, narrow_int, operators, parallelism
 from numpyto_common.emitter import BaseEmitter
 from numpyto_common.frontend import _names_used_as_int
+from numpyto_common.lowering import _walk_complex
 
 #: Whole-identifier matcher for scanning a shape-token string for the names it references.
 _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 
 
+@lru_cache(maxsize=None, typed=True)
 def _c_type(dtype: str) -> str:
-    # dtype -> C type mapping lives in numpyto_common.dtypes (canonical int is int64_t).
+    # dtype -> C type mapping lives in numpyto_common.dtypes (canonical int is int64_t);
+    # a fixed, module-level static table, so the mapping is pure -- cached per emitted kernel.
     try:
         return dtypes.c_type(dtype)
     except KeyError:
@@ -49,6 +53,17 @@ _FLOATABLE = frozenset({
 
 #: u?int{8,16,32}_t -- integer C types narrower than the int64 ABI integer.
 _NARROW_INT_CT = re.compile(r"u?int(8|16|32)_t")
+
+#: np.flip/copy/transpose on a scalar Subscript is a no-op in the _emit_call attr path.
+_NOOP_UNARY_ATTRS = frozenset({"flip", "copy", "transpose"})
+_CONJ_ATTRS = frozenset({"conj", "conjugate"})
+_REAL_IMAG_ATTRS = frozenset({"real", "imag"})
+
+#: math macros that are never integer-typed (see _is_int_operand).
+_FLOAT_MATH_MACROS = frozenset({"M_PI", "M_E", "INFINITY", "NAN"})
+
+#: integer dtypes recognized by _all_int_locals when scanning kir.scalars.
+_INT_SCALAR_DTYPES = frozenset({"int", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"})
 
 
 def _is_narrow_int(dtype: str) -> bool:
@@ -674,15 +689,15 @@ class _CBodyEmitter(BaseEmitter):
                 if key in dtypes.REGISTRY or key in dtypes.SCALAR_KINDS:
                     return f"(({dtypes.c_type(key)})({self.emit_expr(node.args[0])}))"
             # np.flip/copy/transpose on a scalar Subscript is a no-op (slice-fusion lifted it into a per-element loop).
-            if attr in {"flip", "copy", "transpose"} and len(node.args) == 1:
+            if attr in _NOOP_UNARY_ATTRS and len(node.args) == 1:
                 return self.emit_expr(node.args[0])
             # z.conjugate()/z.conj() never reaches emit (native_desugar rewrites it to np.conj(z), handled just below).
-            if (isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy")
-                    and attr in {"conj", "conjugate"} and len(node.args) == 1):
+            if (isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy") and attr in _CONJ_ATTRS
+                    and len(node.args) == 1):
                 return f"__npb_conj({self.emit_expr(node.args[0])})"
             # np.real(z)/np.imag(z): complex operand -> creal/cimag; a real operand is the value / 0.
             if (isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy")
-                    and attr in {"real", "imag"} and len(node.args) == 1):
+                    and attr in _REAL_IMAG_ATTRS and len(node.args) == 1):
                 x = self.emit_expr(node.args[0])
                 if self._is_complex_operand(node.args[0]):
                     return f"creal({x})" if attr == "real" else f"cimag({x})"
@@ -730,7 +745,7 @@ class _CBodyEmitter(BaseEmitter):
             if n in self._loop_iter_names:
                 return True
             # M_PI / M_E / INFINITY / NAN are math macros, not int.
-            if n in {"M_PI", "M_E", "INFINITY", "NAN"}:
+            if n in _FLOAT_MATH_MACROS:
                 return False
             # Implicit int scalar locals flagged via the needs_int promotion path.
             if n in self._all_int_locals():
@@ -749,7 +764,7 @@ class _CBodyEmitter(BaseEmitter):
             return cached
         out: Set[str] = set()
         for s in self.kir.scalars:
-            if s.dtype in {"int", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"}:
+            if s.dtype in _INT_SCALAR_DTYPES:
                 out.add(s.name)
         # needs_int: any Name used as an array subscript / range arg / bitwise operand.
         out.update(_names_used_as_int(self.kir.tree))
@@ -758,7 +773,6 @@ class _CBodyEmitter(BaseEmitter):
 
     def _is_complex_operand(self, node: ast.AST) -> bool:
         """True when node's element dtype is complex; delegates to _walk_complex so a real-returning accessor stays real."""
-        from numpyto_common.lowering import _walk_complex
         return _walk_complex(node, self._dtype_for_name) is not None
 
     def _is_float_operand(self, node: ast.AST, _scalars=None) -> bool:

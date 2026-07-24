@@ -19,6 +19,7 @@ import math
 from typing import Dict, List, Optional, Tuple
 
 from numpyto_common import dtypes
+from numpyto_common.lib_nodes import _parse_einsum_subscripts
 
 
 class DesugarError(NotImplementedError):
@@ -527,7 +528,6 @@ def _einsum_inline_stmts(subs: str, operands: List[str], ctr: int):
     indices inner-accumulate). Returns ``(stmts, temp_name)`` or ``(None, None)``
     when the form is unsupported (ellipsis / scalar output). numba and pythran
     compile this; neither supports ``np.einsum`` on these shapes."""
-    from numpyto_common.lib_nodes import _parse_einsum_subscripts
     try:
         in_subs, out_sub = _parse_einsum_subscripts(subs)
     except Exception:  # noqa: BLE001 -- ellipsis / malformed -> caller bails

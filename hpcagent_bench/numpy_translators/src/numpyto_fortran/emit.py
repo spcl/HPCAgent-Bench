@@ -11,6 +11,7 @@ from numpyto_common.ir import ArrayDesc, KernelIR
 from numpyto_common import dtypes, narrow_int, operators, parallelism
 from numpyto_common.emitter import BaseEmitter
 from numpyto_common.frontend import _names_used_as_int
+from numpyto_common.lowering import _walk_complex
 
 #: Whole-identifier matcher for scanning a shape-token string for the names it references.
 _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
@@ -294,6 +295,28 @@ _REAL_ARG_INTRINSICS = frozenset({"exp", "sqrt", "log", "sin", "cos", "tgamma", 
 
 _SYMBOL_INT_TAG = next((t for t in ("int64", "int32", "int16", "int8") if _fortran_type(t) == _fortran_type("int")),
                        "int64")
+
+#: Bare calls that extract an INTEGER regardless of their argument's dtype (is_int_expr's Call check).
+_INT_EXTRACTING_CALLS = frozenset({"len", "int", "range"})
+
+#: The __hpcagent_bench_zeros__ marker, plus its leading-underscore-stripped alias.
+_ZEROS_MARKER_NAMES = frozenset({"__hpcagent_bench_zeros__", "x_hpcagent_bench_zeros__"})
+
+#: numpy min/max family that needs int-literal-vs-real promotion before renaming to MAX/MIN.
+_MINMAX_CALL_NAMES = frozenset({"max", "min", "fmax", "fmin"})
+_MAX_CALL_NAMES = frozenset({"max", "fmax"})
+
+#: Elementwise math intrinsics/aliases handled verbatim in the np.<attr>(x) call path.
+_UNARY_MATH_ATTRS = frozenset({"sqrt", "exp", "log", "sin", "cos", "tanh"})
+_ABS_ATTRS = frozenset({"absolute", "fabs"})
+_CONJ_ATTRS = frozenset({"conj", "conjugate"})
+_REAL_IMAG_ATTRS = frozenset({"real", "imag"})
+
+#: Fortran intrinsics allowed to appear (unresolved) inside a shape-token expression.
+_SHAPE_TOKEN_INTRINSICS = frozenset({"min", "max", "abs"})
+
+#: Bitwise-integer intrinsics that propagate the int64 tag through the fixed-point ast.walk below.
+_BITWISE_INT_CALL_NAMES = frozenset({"IAND", "IOR", "IEOR", "ISHFT", "NOT"})
 
 
 def _array_decl(arr: ArrayDesc) -> str:
@@ -646,7 +669,7 @@ class _FortranBodyEmitter(BaseEmitter):
                 return is_int_expr(n.operand)
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
                 # IAND/IOR etc. are emitted from bitwise BinOps; bare int/len calls also return int.
-                if n.func.id in {"len", "int", "range"}:
+                if n.func.id in _INT_EXTRACTING_CALLS:
                     return True
             if isinstance(n, ast.Name):
                 return n.id in int_uses
@@ -671,7 +694,7 @@ class _FortranBodyEmitter(BaseEmitter):
         # The __hpcagent_bench_zeros__ marker may have been renamed by the
         # leading-underscore-strip pass to ``x_hpcagent_bench_zeros__``.
         if (isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
-                and node.value.func.id in {"__hpcagent_bench_zeros__", "x_hpcagent_bench_zeros__"}):
+                and node.value.func.id in _ZEROS_MARKER_NAMES):
             # For locals whose shape uses a loop iter, emit an ALLOCATE here (the
             # loop iter is now in scope); caller pre-populates inline_alloc_locals.
             if isinstance(target, ast.Name):
@@ -1324,7 +1347,6 @@ class _FortranBodyEmitter(BaseEmitter):
 
     def _operand_is_complex(self, node: ast.AST) -> bool:
         """True when node produces a COMPLEX value (so a rank-1 @ must avoid DOT_PRODUCT's implicit conjugation)."""
-        from numpyto_common.lowering import _walk_complex
         arr_dt = {a.name: a.dtype for a in self.kir.arrays}
         arr_dt.update(self.kir.local_dtypes)
         return _walk_complex(node, arr_dt.get) is not None
@@ -1358,9 +1380,9 @@ class _FortranBodyEmitter(BaseEmitter):
             # integer literal and another is real-typed, promote the literal to
             # real. fmax/fmin (relu's np.maximum(x, 0)) must go through the same
             # promotion before renaming to MAX/MIN, else the int literal clashes.
-            if fn in {"max", "min", "fmax", "fmin"}:
+            if fn in _MINMAX_CALL_NAMES:
                 all_int, arg_strs = self._minmax_arg_list(node.args)
-                is_max = fn in {"max", "fmax"}
+                is_max = fn in _MAX_CALL_NAMES
                 # numpy maximum/minimum PROPAGATE NaN; Fortran MAX/MIN NaN behaviour
                 # is processor-dependent, so floating operands use the NaN-propagating
                 # MERGE form; pure-integer min/max (index clamps) keep the plain intrinsic.
@@ -1567,19 +1589,18 @@ class _FortranBodyEmitter(BaseEmitter):
                 return f"({args_e[0]}) - ({args_e[1]})"
             if attr == "divide" and len(args_e) >= 2:
                 return f"({args_e[0]}) / ({args_e[1]})"
-            if attr in {"sqrt", "exp", "log", "sin", "cos", "tanh"} and args_e:
+            if attr in _UNARY_MATH_ATTRS and args_e:
                 return f"{attr.upper()}({args_e[0]})"
-            if attr in {"absolute", "fabs"} and args_e:
+            if attr in _ABS_ATTRS and args_e:
                 return f"ABS({args_e[0]})"
-            if attr in {"conj", "conjugate"} and len(args_e) == 1:
+            if attr in _CONJ_ATTRS and len(args_e) == 1:
                 return f"CONJG({args_e[0]})"
             # np.real(z)/np.imag(z): real(z, kind) is the real part. aimag REQUIRES
             # a complex operand (gfortran errors on a real), so guard it: a real
             # operand's imaginary part is 0, matching numpy np.imag(real).
-            if attr in {"real", "imag"} and len(args_e) == 1:
+            if attr in _REAL_IMAG_ATTRS and len(args_e) == 1:
                 if attr == "real":
                     return f"real({args_e[0]}, {self._rk})"
-                from numpyto_common.lowering import _walk_complex
                 arr_dt = {a.name: a.dtype for a in self.kir.arrays}
                 arr_dt.update(self.kir.local_dtypes)
                 if _walk_complex(node.args[0], arr_dt.get) is not None:
@@ -1860,7 +1881,7 @@ def _shape_token_uses_unknown(tok: str, allowed: Set[str]) -> bool:
     for m in _FORTRAN_TOKEN_RE.finditer(tok):
         ident = m.group(0)
         # Skip Fortran intrinsics that may appear in shape expressions.
-        if ident in {"min", "max", "abs"}:
+        if ident in _SHAPE_TOKEN_INTRINSICS:
             continue
         if ident in allowed:
             continue
@@ -2503,7 +2524,7 @@ def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
                             int64_uses.add(n)
                             changed = True
             if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                    and node.func.id in {"IAND", "IOR", "IEOR", "ISHFT", "NOT"}):
+                    and node.func.id in _BITWISE_INT_CALL_NAMES):
                 names = [n.id for n in ast.walk(node) if isinstance(n, ast.Name)]
                 if any(n in int64_uses for n in names):
                     for n in names:

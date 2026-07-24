@@ -26,11 +26,16 @@ import ast
 import copy
 import itertools
 import json
+import os
 import pathlib
 import re
 from typing import Dict, List, Optional, Set, Tuple
 
-from numpyto_common.ir import ArrayDesc, KernelIR, ScalarDesc, SymbolDesc
+from numpyto_common.ir import ArrayDesc, KernelIR, ScalarDesc, SparseArrayDesc, SymbolDesc
+from numpyto_common.lib_nodes import _iter_extent_of, _read_axis_keepdims
+from numpyto_common.numpy_desugar import (_ComplexAccessorToFunc, _DecomposeRollSlice, _DropValidationGuards,
+                                          _EighCallHoister, _EighLoopRewriter, _ElementalUfuncToPrimitive,
+                                          _UfuncOutInline, _UfuncReduceToReducer, _eigh_alias_names, rewrite_curve_fit)
 
 
 def native_desugar(fn: ast.FunctionDef) -> None:
@@ -58,8 +63,6 @@ def native_desugar(fn: ast.FunctionDef) -> None:
     * ``try: <body> except: <give-up>`` -> ``<body>`` (static backends have
       no exceptions; the handler can't fire).
     """
-    from numpyto_common.numpy_desugar import (_ComplexAccessorToFunc, _DecomposeRollSlice, _DropValidationGuards,
-                                              _ElementalUfuncToPrimitive, _UfuncOutInline, _UfuncReduceToReducer)
     _UfuncReduceToReducer().visit(fn)  # np.add.reduce -> np.sum before the elementwise-ufunc desugars
     _NewaxisToNone().visit(fn)
     _UfuncOutInline().visit(fn)
@@ -195,7 +198,6 @@ def parse_kernel(numpy_py: pathlib.Path,
     # ``_sci_eigh`` alias) to a self-contained complex-Hermitian eigh loop nest
     # BEFORE helper inlining, so the module-level alias import is still in scope
     # and the eigh in a helper (cegterg's ``_diaghg``) is lowered before it inlines.
-    from numpyto_common.numpy_desugar import _EighCallHoister, _EighLoopRewriter, _eigh_alias_names
     _eigh_aliases = _eigh_alias_names(tree)
     # A nested eigh/eigvalsh call (``float(np.linalg.eigvalsh(T).max()) + beta``)
     # must be materialised into its own ``__eigv = <call>`` assign first, so the
@@ -266,7 +268,6 @@ def parse_kernel(numpy_py: pathlib.Path,
     # the model ``def`` is still distinct and its varargs can rebind to the
     # array curve_fit conceptually passes; the fixpoint below then inlines
     # the LM's calls to the model.
-    from numpyto_common.numpy_desugar import rewrite_curve_fit
     rewrite_curve_fit(tree, fn, precision)
 
     # Strip every top-level helper's give-up paths: bail-only exception
@@ -567,7 +568,6 @@ def _choose_sparse_config(info: Dict, config: Optional[str] = None) -> Optional[
             raise ValueError(f"--config {config!r} is not a declared configuration; "
                              f"available: {sorted(configs)}")
         return config
-    import os
     env = os.environ.get("HPCAGENT_BENCH_SPARSE_CONFIG")
     if env and env in configs:
         return env
@@ -738,7 +738,6 @@ def _expand_sparse_arrays(info: Dict, config: Optional[str] = None):
     Dense entries in the configuration are left for the normal dense
     array path. Returns empty maps when no sparse_layouts block exists.
     """
-    from numpyto_common.ir import ArrayDesc, SparseArrayDesc
     sparse_layouts = info.get("sparse_layouts") or {}
     legacy_cfg: Optional[Dict[str, str]] = None
     if not sparse_layouts:
@@ -1644,7 +1643,6 @@ def _shape_from_iter_extent(node: ast.AST, known: Dict[str, str], route_calls: b
         toks = _parse_shape_expression(sstr)
         if toks:
             table[name] = toks
-    from numpyto_common.lib_nodes import _iter_extent_of
     ext = _iter_extent_of(node, table)
     if ext is None:
         return None
@@ -1672,7 +1670,6 @@ def _shape_from_reduction(node: ast.AST, known: Dict[str, str]) -> Optional[str]
     if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in _RETURN_REDUCTIONS
             and isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy") and node.args):
         return None
-    from numpyto_common.lib_nodes import _read_axis_keepdims, _iter_extent_of
     axes, keepdims = _read_axis_keepdims(node.args, node.keywords)
     if axes is None:
         return None  # full reduction -> scalar
@@ -1746,7 +1743,6 @@ def _shape_from_transpose(node: ast.AST, known: Dict[str, str]) -> Optional[str]
             tk = _parse_shape_expression(sstr)
             if tk:
                 table[name] = tk
-        from numpyto_common.lib_nodes import _iter_extent_of
         ext = _iter_extent_of(base, table)
         toks = [ast.unparse(e) for e in ext] if ext else None
     if not toks:

@@ -207,17 +207,27 @@ def _call_native_impl(lib_path,
     # The C signature is fixed by the binding's DECLARED types, so cdef/dlopen happen ONCE
     # for the whole measurement. Every language passes scalars BY VALUE (one uniform C-ABI --
     # fortran uses the ``value`` attribute, so there is no per-language marshalling here).
+    # ``ptr_cdecl`` / ``is_int`` cache each arg's cast type-string / register class by name: both
+    # are functions of the binding's DECLARED dtype alone, never the rep, so precomputing them
+    # here means once() (run every rep -- up to reps+warmup times per call) looks them up instead
+    # of re-deriving them (np.dtype(...)/np.issubdtype/_ptr_cdecl) on every single rep.
+    ptr_cdecl: Dict[str, str] = {}
+    is_int: Dict[str, bool] = {}
     params: List[str] = []
     for a in binding.args:
         if a.kind == "ptr":
-            params.append(_ptr_cdecl(np.asarray(data[a.name]).dtype))
+            cdecl = _ptr_cdecl(np.asarray(data[a.name]).dtype)
+            ptr_cdecl[a.name] = cdecl
+            params.append(cdecl)
         elif np.issubdtype(np.dtype(a.dtype), np.integer):
             # The C type comes from the binding's DECLARED dtype, not the runtime
             # value: a scalar declared double whose seeded value happens to be
             # whole-numbered must still be passed as double (the int/float
             # argument register classes differ in the x86-64 SysV ABI).
+            is_int[a.name] = True
             params.append("int64_t")
         else:
+            is_int[a.name] = False
             params.append("double")
     params.append(WORKSPACE_PTYPE)
     params.append("int64_t")
@@ -246,8 +256,8 @@ def _call_native_impl(lib_path,
             if a.kind == "ptr":
                 buf = xp.asarray(np.array(data[a.name], copy=True, order="C"))
                 buffers[a.name] = buf
-                c_args.append(ffi.cast(_ptr_cdecl(buf.dtype), _scratch_ptr(buf, xp)))
-            elif np.issubdtype(np.dtype(a.dtype), np.integer):
+                c_args.append(ffi.cast(ptr_cdecl[a.name], _scratch_ptr(buf, xp)))
+            elif is_int[a.name]:
                 c_args.append(int(data[a.name]))
             else:
                 c_args.append(float(data[a.name]))

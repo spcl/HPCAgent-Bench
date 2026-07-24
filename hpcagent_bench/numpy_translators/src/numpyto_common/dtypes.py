@@ -17,6 +17,7 @@ dtypes are not marshalled by the ctypes paths.
 """
 import ctypes
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Dict, Optional
 
 
@@ -106,8 +107,16 @@ _ALIASES = {
 }
 
 
+@lru_cache(maxsize=256, typed=True)
 def info(dtype: str) -> DTypeInfo:
-    """Look up a dtype (resolving aliases). Raises ``KeyError`` for unknown."""
+    """Look up a dtype (resolving aliases). Raises ``KeyError`` for unknown.
+
+    Cached: this is the base lookup every other function in this module goes
+    through (``canonical``, ``is_integer``, ``itemsize``, ...), and it is
+    called per-node / per-array-access by the narrow-int wrap oracle and the
+    lowering/emit passes. The registry + alias table are frozen module
+    constants, so the result is pure for the lifetime of the process.
+    """
     key = dtype if dtype in REGISTRY else _ALIASES.get(dtype, dtype)
     return REGISTRY[key]
 
