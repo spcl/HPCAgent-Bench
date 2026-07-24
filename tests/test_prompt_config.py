@@ -57,19 +57,19 @@ def test_language_track_adds_emphasis_for_restricted_single_language():
     assert "idiomatically in" not in no
 
 
-def test_original_paragraph_gated_on_the_sidecar_and_the_knob():
-    """The "ported from" offer is gated on include_original AND the sidecar existing.
-    Resilient to whether gemm ships a gemm_original.* (a benchmarks-side fixture that
-    may come or go): assert the biconditional against build_context's has_original."""
-    on = PromptConfig.from_config(include_original=True)
+def test_reference_paragraph_gated_on_the_sidecar_and_the_knob():
+    """The "ported from" offer is gated on include_reference AND the sidecar existing.
+    Resilient to whether gemm ships a gemm_reference.* (a benchmarks-side fixture that
+    may come or go): assert the biconditional against build_context's has_reference."""
+    on = PromptConfig.from_config(include_reference=True)
     ctx = build_context(TASK, prompt_config=on)
     p_on = build_prompt(TASK, prompt_config=on)
-    if ctx["has_original"]:
+    if ctx["has_reference"]:
         assert ctx["original_path"] and "ported from" in p_on
     else:
         assert ctx["original_path"] == "" and "ported from" not in p_on
     # With the knob OFF the offer is never rendered, sidecar or not.
-    off = build_prompt(TASK, prompt_config=PromptConfig.from_config(include_original=False))
+    off = build_prompt(TASK, prompt_config=PromptConfig.from_config(include_reference=False))
     assert "ported from" not in off
 
 
@@ -105,7 +105,7 @@ def test_config_declared_variant_resolves_and_overrides_builtin():
         {
             "my_exp": {
                 "strategy": "profile_first",
-                "include_original": True
+                "include_reference": True
             },
             "minimal": {
                 "inline_kernel": True
@@ -114,7 +114,7 @@ def test_config_declared_variant_resolves_and_overrides_builtin():
     try:
         assert "my_exp" in available_variants()
         cfg = PromptConfig.variant("my_exp")
-        assert cfg.strategy == "profile_first" and cfg.include_original is True
+        assert cfg.strategy == "profile_first" and cfg.include_reference is True
         # The config entry shadows the built-in "minimal" (built-in also flips
         # optimization_guidance off; the override only sets inline_kernel True).
         assert PromptConfig.variant("minimal").inline_kernel is True
@@ -151,7 +151,7 @@ def test_cli_list_variants_and_all_variants(capsys):
     variants = available_variants()
     assert rendered.count("=== prompt variant:") == len(variants)
     # Split on the header and dedupe the bodies: variants that actually change the
-    # prompt yield distinct blocks (default == with_original for gemm, which ships
+    # prompt yield distinct blocks (default == with_reference for gemm, which ships
     # no original file, so distinct < N but still the bulk of them).
     blocks = {b.strip() for b in rendered.split("=== prompt variant:") if b.strip()}
     assert len(blocks) >= 5

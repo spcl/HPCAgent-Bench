@@ -5,8 +5,8 @@
 
     foundation/adist.yaml
     foundation/adist_numpy.py         ->   foundation/adist/adist.yaml
-    foundation/adist_original.cpp            foundation/adist/adist_numpy.py
-    ...                                      foundation/adist/adist_original.cpp
+    foundation/adist_reference.cpp            foundation/adist/adist_numpy.py
+    ...                                      foundation/adist/adist_reference.cpp
 
 WHY THIS IS SAFE WITHOUT CODE CHANGES
 The kernel registry discovers manifests with ``base.rglob("*.yaml")`` (spec.py), so a
@@ -25,7 +25,7 @@ its numba/tvm siblings (``<stem>_numba_*.py``, ``<stem>_tvm.py``), and everythin
 need moving: the emitter re-derives their path from ``relative_path`` and regenerates them
 in the new subfolder on the next build (any stale flat copy left behind is a gitignored
 orphan). So the move set is the tracked artifacts: the manifest, the numpy reference, the
-``_original.*`` sources, an optional ``<stem>.py`` initializer, and any tracked ``_mpi.*``.
+``_reference.*`` sources, an optional ``<stem>.py`` initializer, and any tracked ``_mpi.*``.
 
 KERNEL IDENTITY AND THE ONE COLLISION
 A kernel is a ``<stem>.yaml`` manifest. A tracked sibling belongs to it when its name is
