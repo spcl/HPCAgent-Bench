@@ -23,6 +23,9 @@ init:
   - a
   - b
   - H
+  scalars:
+    match_score: 1
+    mismatch_penalty: -1
   func_name: initialize
 array_args:
 - a
