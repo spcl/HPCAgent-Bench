@@ -30,6 +30,8 @@ init:
   output_args:
   - img
   - out
+  scalars:
+    nbins: 256
   func_name: initialize
 array_args:
 - img
