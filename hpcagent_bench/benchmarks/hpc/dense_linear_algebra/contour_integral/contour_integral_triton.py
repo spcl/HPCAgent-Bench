@@ -308,7 +308,7 @@ def _linalg_solve(
     'NM': X_real.shape[1],
 })
 @triton.autotune(configs=generate_config_2d(), key=["NR", "NM"], cache_results=True)
-@triton.jit(do_not_specialize=['z_real', 'z_imag'])
+@triton.jit(do_not_specialize=['z_real', 'z_imag', 'contour_radius_sq'])
 def _post_process(
     X_real,  # (NR, NM)
     X_imag,  # (NR, NM)
@@ -316,6 +316,7 @@ def _post_process(
     P1,  # (NR, NM, 2)
     z_real: tl_float,
     z_imag: tl_float,
+    contour_radius_sq: tl_float,
     NR: tl.constexpr,
     NM: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
@@ -333,7 +334,7 @@ def _post_process(
     x_real = tl.load(X_real + tile, mask)
     x_imag = tl.load(X_imag + tile, mask)
     comp_abs = z_real * z_real + z_imag * z_imag
-    if comp_abs < 1.0:
+    if comp_abs < contour_radius_sq:
         x_real = -x_real
         x_imag = -x_imag
 
@@ -417,6 +418,7 @@ def contour_integral(
         Ham,  # (slab_per_bc + 1, NR, NR)[complex128]
         int_pts: torch.Tensor,  # (num_int_ptsm, )[complex128]
         Y,  # (NR, NM)[complex128]
+        contour_radius=1.0,
 ):
     dtype = Ham.dtype
     sdtype = torch.float32 if dtype == torch.complex64 else torch.float64
@@ -438,6 +440,7 @@ def contour_integral(
     Tz_imag = torch.empty((NR, NR), dtype=sdtype, device=Y.device)
     # Copy 'int_pts' to CPU once here; per-iteration access would trigger needless CUDA sync.
     ints = int_pts.tolist()
+    contour_radius_sq = float(contour_radius) * float(contour_radius)
     for z in ints:
         _calculate_tz(Tz_real, Tz_imag, Ham_real, Ham_imag, float(z.real), float(z.imag))
 
@@ -446,6 +449,6 @@ def contour_integral(
         _linalg_solve(Tz_real, Tz_imag, Y_real, Y_imag, X_real, X_imag, tmp_y_real, tmp_y_imag)
 
         # TODO: Consider fusing into backward row to save the X loads in '_post_process'; profile first.
-        _post_process(X_real, X_imag, P0_real, P1_real, float(z.real), float(z.imag))
+        _post_process(X_real, X_imag, P0_real, P1_real, float(z.real), float(z.imag), contour_radius_sq)
 
     return P0, P1
