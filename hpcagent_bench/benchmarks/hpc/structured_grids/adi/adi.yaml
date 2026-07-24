@@ -18,8 +18,13 @@ parameters:
 init:
   input_args:
   - N
+  scalars:
+    b1: 2.0
+    b2: 1.0
   output_args:
   - u
+  - b1
+  - b2
   func_name: initialize
 array_args:
 - u
