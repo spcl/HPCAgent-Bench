@@ -35,14 +35,21 @@ def _resolve_benchmarks(arg: str) -> List[str]:
 
 
 def _resolve_frameworks(arg: str) -> List[str]:
-    """Resolve the ``--framework`` argument against the descriptor table
-    (``all`` -> every known framework, else the single named one). The
-    ``FRAMEWORK_META`` import is deferred so ``--help`` never pays for the
-    heavy infrastructure package import."""
-    if arg != "all":
-        return [arg]
+    """Resolve the ``--framework`` argument against the descriptor table:
+    ``all`` -> every known framework; a comma-list (``dace,pluto,polly``) ->
+    those frameworks, in the given order, in one run; else the single named one.
+    Unknown names raise so a typo fails loudly instead of silently running one
+    bogus cell. The ``FRAMEWORK_META`` import is deferred to call time (run only,
+    never ``--help``) so the heavy infrastructure package is not paid for early."""
     from hpcagent_bench.frameworks.framework import FRAMEWORK_META
-    return sorted(FRAMEWORK_META)
+    if arg == "all":
+        return sorted(FRAMEWORK_META)
+    names = [n.strip() for n in arg.split(",") if n.strip()]
+    unknown = [n for n in names if n not in FRAMEWORK_META]
+    if unknown:
+        raise SystemExit(f"unknown framework(s): {', '.join(unknown)} "
+                         f"(known: {', '.join(sorted(FRAMEWORK_META))})")
+    return names
 
 
 def _resolve_precisions(arg: str, spec: BenchSpec) -> List[Precision]:
@@ -782,7 +789,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     r = sub.add_parser("run", help="run kernels under one or more frameworks")
     r.add_argument("--benchmark", default="all", help="benchmark short name or 'all' (default)")
-    r.add_argument("--framework", default="numpy", help="framework short name or 'all' (default: numpy)")
+    r.add_argument("--framework",
+                   default="numpy",
+                   help="framework short name, a comma-list to run several in one go "
+                   "(e.g. dace,pluto,polly), or 'all' (default: numpy)")
     r.add_argument("--precision", default="all", help="precision name (fp64/fp32/fp16/bf16/fp8_e4m3/...) or 'all'")
     r.add_argument("--variant", default="all", help="variant name or 'all'")
     r.add_argument("--preset",
