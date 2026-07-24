@@ -61,5 +61,3 @@ taxonomy:
   subtrack: sparse
   dwarf: sparse_linear_algebra
   domain: Sparse solver
-rtol: 0.001
-atol: 1.0e-05
