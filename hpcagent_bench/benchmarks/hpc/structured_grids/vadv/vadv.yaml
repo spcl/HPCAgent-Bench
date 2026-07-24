@@ -26,6 +26,8 @@ init:
   - K
   scalars:
     dtr_stage: 1.0
+    bet_m: 0.5
+    bet_p: 0.5
   arrays:
     utens_stage: (I, J, K)
     u_stage: (I, J, K)
