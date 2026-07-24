@@ -443,6 +443,8 @@ def parse_kernel(numpy_py: pathlib.Path,
     dtypes_raw = info.get("init", {}).get("dtypes", {}) or {}
     for k, v in dtypes_raw.items():
         legacy_dtypes[k] = v
+    # Invariant over the per-arg loop: one full-tree walk hoisted out of it.
+    int_names = _names_used_as_int(fn)
     for arg in input_args:
         # Logical sparse arrays are expanded into physical buffers
         # separately (see ``sparse_buffer_arrays`` injection below) --
@@ -501,7 +503,7 @@ def parse_kernel(numpy_py: pathlib.Path,
             # ``integer``.
             is_array_dim = any(re.search(rf"\b{re.escape(arg)}\b", str(tok)) for a in arrays for tok in a.shape)
             if inferred_dt in {"float64", "double", "float32"} \
-                    and (arg in _names_used_as_int(fn) or is_array_dim):
+                    and (arg in int_names or is_array_dim):
                 inferred_dt = "int"
             scalars.append(ScalarDesc(
                 name=arg,

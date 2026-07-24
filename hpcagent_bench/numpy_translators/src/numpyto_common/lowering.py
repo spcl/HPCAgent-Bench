@@ -32,16 +32,20 @@ The Foundation corpus exercises only ``math.exp``, ``math.sqrt`` and
 
 import ast
 import copy
+import math
 import os
 import re
 from typing import Callable, Dict, FrozenSet, List, Optional, Set, Tuple
-
-import sympy
 
 from numpyto_common import dtypes
 from numpyto_common.ir import _COMPLEX_FOR_FLOAT, KernelIR
 from numpyto_common.numpy_desugar import _np_linalg_attr
 from numpyto_common.lib_nodes import (MESHGRID_AXIS_KW, _iter_extent_of, _scalarize_at_iters, expand_meshgrid)
+
+#: ``np.pi`` / ``np.e`` folded to their double literals.  ``math`` gives the identical IEEE-754 value
+#: ``float(sympy.pi)`` / ``float(sympy.E)`` did, without dragging sympy (+mpmath, 100s of ms) onto the
+#: import path -- the translator stays fast and PyPy-clean.
+_NP_CONSTS = {"pi": math.pi, "e": math.e}
 
 #: One-to-one rewrites: ``<module>.<name>`` -> bare C function name.
 #: All targets resolve through ``<math.h>``.
@@ -1318,9 +1322,8 @@ class _MathRewriter(ast.NodeTransformer):
         """
         self.generic_visit(node)
         if (isinstance(node.value, ast.Name) and node.value.id == "np"):
-            const_values = {"pi": sympy.pi, "e": sympy.E}
-            if node.attr in const_values:
-                return ast.Constant(value=float(const_values[node.attr]))
+            if node.attr in _NP_CONSTS:
+                return ast.Constant(value=_NP_CONSTS[node.attr])
             mapping = {
                 "inf": "INFINITY",
                 "nan": "NAN",

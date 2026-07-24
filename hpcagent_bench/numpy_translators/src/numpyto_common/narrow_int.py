@@ -26,8 +26,6 @@ only their sub-expressions do, which the recursion already covers.
 import ast
 from typing import Callable, Optional
 
-import numpy as np
-
 from numpyto_common import dtypes
 
 #: Result-dtype categories the inference returns. A concrete integer carries its
@@ -59,7 +57,7 @@ def _narrow_width(dtype: str) -> Optional[int]:
     """Itemsize (bytes) of a NARROW integer dtype (< the 8-byte ABI int), else None."""
     if not dtypes.is_integer(dtype):
         return None
-    w = np.dtype(dtypes.canonical(dtype)).itemsize
+    w = dtypes.itemsize(dtype)
     return w if w < 8 else None
 
 
@@ -88,7 +86,7 @@ def _combine(a, b):
         return b
     if b == _WEAK_INT:
         return a
-    return np.promote_types(a, b).name  # both concrete integers
+    return dtypes.promote_integers(a, b)  # both concrete integers
 
 
 def _infer(node: ast.AST, name_dtype: NameDtype):

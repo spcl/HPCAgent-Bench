@@ -18,8 +18,6 @@ import copy
 import math
 from typing import Dict, List, Optional, Tuple
 
-import numpy as np
-
 from numpyto_common import dtypes
 
 
@@ -2173,11 +2171,7 @@ def _fd_step(precision: Optional[str] = None) -> str:
     emitted, so a wrong-but-fp64 step is the status quo, not a regression.
     """
     dtype = dtypes.canonical(precision) if precision else "float64"
-    try:
-        eps = float(np.finfo(np.dtype(dtype)).eps)
-    except TypeError:
-        eps = float(np.finfo(np.float64).eps)
-    return repr(math.sqrt(eps))
+    return repr(math.sqrt(dtypes.float_eps(dtype)))
 
 
 def _list_display_elts(node: ast.AST) -> Optional[List[ast.expr]]:
