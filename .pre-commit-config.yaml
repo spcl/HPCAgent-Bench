@@ -20,3 +20,16 @@ repos:
         require_serial: true
         # Extensions check_format can route; the skip policy lives in that script.
         files: '\.([cC]|cc|cpp|cxx|hpp|hh|hxx|[hH]|py|[fF]|[fF]90|[fF]03|[fF]08|[fF]95|[fF]or)$'
+      # Copyright / SPDX header on the CORE package (scope + skip policy live in the
+      # script: hpcagent_bench/ minus benchmarks/ + numpy_translators/, plus scripts/ tests/).
+      - id: hpcagent_bench-headers
+        name: copyright / SPDX header (core package)
+        entry: python scripts/check_headers.py
+        language: system
+        require_serial: true
+        files: '\.py$'
+      # Reject any staged file over 500 KiB (keep datasets / binaries / dumps out of git).
+      - id: hpcagent_bench-large-files
+        name: block files > 500 KiB
+        entry: python scripts/check_large_files.py
+        language: system
