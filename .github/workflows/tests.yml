@@ -149,6 +149,15 @@ jobs:
         run: |
           python -m pytest -q -p no:cacheprovider -n auto --timeout=600 tests/test_e2e_numerical.py
 
+      - name: Phase 6 -- integration-marked tests (build/run real artifacts)
+        if: ${{ !cancelled() }}
+        # -m integration auto-collects EVERY @pytest.mark.integration test (present and
+        # future), so a new one is covered the moment it is marked -- no CI edit needed.
+        # `make test` excludes this marker for a fast local loop; CI is where they must run.
+        timeout-minutes: 25
+        run: |
+          python -m pytest -q -p no:cacheprovider --timeout=900 -m integration tests/
+
       - name: Phase 7 -- export (+ publish on a main push) the HuggingFace dataset
         # Gated on success() (NOT !cancelled()): never build/publish a dataset from a run where
         # a phase went red. export-hf always writes the parquet artifact and PUBLISHES the same

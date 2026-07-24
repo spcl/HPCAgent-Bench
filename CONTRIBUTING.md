@@ -31,3 +31,9 @@ two-space structural indent, no tabs, no trailing whitespace, one final newline.
 `python tests/check_yaml_style.py` is the gate (`--fix` for the mechanical
 parts); GitHub Actions / docker-compose YAML follow their own schemas and are
 exempt.
+
+Dev tasks run through the `Makefile` (`make help` lists them): `make format`
+(yapf + clang-format + fprettify, in place), `make test` (fast suite; the
+`integration`-marked build/run tests are excluded locally but run in CI), and
+`make run BENCH=gemm FW=dace_cpu,pluto PRESET=S`. They are thin wrappers over
+`scripts/` and the `hpcagent-bench` CLI -- no logic lives in the Makefile.
