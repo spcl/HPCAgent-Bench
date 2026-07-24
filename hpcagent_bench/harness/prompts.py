@@ -102,12 +102,12 @@ class PromptConfig:
         """Resolve a named prompt VARIANT (a coarse preset) to a ``PromptConfig``.
 
         Three layers, weakest first: the ``prompt.*`` config defaults, then the
-        variant's field overrides, then any non-None ``overrides`` (explicit kwargs
-        win over the variant, the variant wins over config). The registry is the
-        merged :func:`available_variants` (built-in :data:`PROMPT_VARIANTS` plus any
-        ``prompt.variants`` declared in config.yaml), so a config-declared variant
-        needs no code edit. An unknown ``name`` is a hard error (this is a
-        user-facing selection, never a silent fallback) listing the known names.
+        variant's field overrides, then any non-None ``overrides`` (explicit kwargs win
+        over the variant, the variant wins over config). The registry is the merged
+        :func:`available_variants` (built-in
+        :data:`PROMPT_VARIANTS` plus any ``prompt.variants`` declared in config.yaml),
+        so a config-declared variant needs no code edit. An unknown ``name`` is a hard
+        error (a user-facing selection, never a silent fallback) listing the known names.
         """
         registry = available_variants()
         if name not in registry:

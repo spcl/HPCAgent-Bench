@@ -9,15 +9,14 @@ from typing import Any, Callable, Dict
 
 
 class CupyFramework(Framework):
-    """ A class for reading and processing framework information. """
+    """CuPy backend adapter: cupy.asarray copies, device-stream sync around setup/call, and CUDA-event
+    native timing."""
 
     def __init__(self, fname: str):
-        """Reads framework information."""
-
         super().__init__(fname)
 
     def version(self) -> str:
-        """ Return the framework version. """
+        """Return the framework version."""
         return next(d.version for d in importlib.metadata.distributions() if d.metadata["Name"].startswith("cupy"))
 
     def autogen_targets(self):

@@ -7,20 +7,21 @@ the `hpcagent_bench/numpy_translators/` translators (`numpyto_c` and its C++/For
 
 ## 1. Motivation
 
-The NumpyToC translator turns `*_numpy.py` kernels into C/C++/Fortran. Historically
-it chased *arbitrary* NumPy idioms -- chained subscripts, rank-changing reshapes,
-fancy indexing, whole-array reassignment -- through roughly two dozen interacting
-AST rewriter passes in `lowering.py`. Those passes share a fragile, mutable
-`shape_table`, and when one pass rewrites a statement in a way another pass did not
-anticipate, the shape table goes stale and emission produces wrong or
-non-compiling code. **Canonical NumPy Form (CNF) inverts the contract.** Instead of
-the translator bending to fit any kernel, we define a single, small NumPy subset
-that is *provably* lowerable, and we rewrite kernels into it. The payoff is a
-translator that can *delete* its riskiest passes (Sec. 5), plus benchmark authors who
-get a mechanical rulebook (Sec. 4) and a CI gate (Sec. 6).
+The NumpyToC translator turns `*_numpy.py` kernels into C/C++/Fortran. It used to
+chase *arbitrary* NumPy idioms -- chained subscripts, rank-changing reshapes, fancy
+indexing, whole-array reassignment -- through roughly two dozen interacting AST
+rewriter passes in `lowering.py`, all sharing one fragile mutable `shape_table`. One
+pass rewriting a statement another didn't anticipate leaves the table stale, and
+emission produces wrong or non-compiling code.
 
-CNF rests on **three invariants**, explained below with canonical-vs-non-canonical
-pairs from real kernels and a rewrite cookbook.
+**Canonical NumPy Form (CNF) inverts the contract:** instead of the translator
+bending to fit any kernel, we define a single, small NumPy subset that is
+*provably* lowerable and rewrite kernels into it. Payoff: the translator can
+*delete* its riskiest passes (Sec. 5), authors get a mechanical rulebook (Sec. 4),
+and CI gets a gate (Sec. 6).
+
+CNF rests on **three invariants** below, with canonical-vs-non-canonical pairs from
+real kernels and a rewrite cookbook.
 
 ---
 
@@ -77,7 +78,7 @@ Index arrays with **scalars or slices over their declared axes**. A row of a 3-D
 array is taken with a *full* index, never a chained/partial one. No fancy indexing
 (`a[index_array]`) in compute -- that routes only through the sparse layout system.
 
-**Non-canonical** -- `contour_integral_numpy.py`, line 13. `Ham` is 3-D, but `Ham[n]`
+**Non-canonical** -- `contour_integral_numpy.py:13`: `Ham` is 3-D, but `Ham[n]`
 takes a 2-D slab with a chained (rank-reducing) subscript that then participates in
 an array add:
 
@@ -103,11 +104,10 @@ for n in range(slab_per_bc + 1):
             Tz[i, j] += zz * Ham[n, i, j]   # every axis named
 ```
 
-(Or, if you keep array-level ops: `Tz[:, :] += zz * Ham[n, :, :]` -- the point is the
-`n` axis is written, not chained.)
+(Or, if you keep array-level ops: `Tz[:, :] += zz * Ham[n, :, :]` -- the `n` axis is
+written, not chained.)
 
-Contrast with the *already-canonical* `gemm_numpy.py`, which slices every axis it
-touches:
+Already-canonical `gemm_numpy.py` slices every axis it touches:
 
 ```python
 def kernel(alpha, beta, C, A, B):
@@ -138,7 +138,7 @@ for i in range(M):
     out[i, :] = compute_row(i)
 ```
 
-The already-canonical `jacobi_2d_numpy.py` is the model: every buffer is an input or
+`jacobi_2d_numpy.py` is the already-canonical model: every buffer is an input or
 declared, and updates are pure slice assignments --
 
 ```python

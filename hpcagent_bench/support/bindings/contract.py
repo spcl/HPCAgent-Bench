@@ -67,13 +67,9 @@ class Arg:
 
 @dataclass(frozen=True, slots=True)
 class PackedGroup:
-    """A sparse logical array unpacked into ordered member buffers (Sec. 3).
-
-    :ivar logical: logical array name (e.g. ``A``).
-    :ivar members: member pointer names in the order they sort into the flat
-        pointer block (member name ascending).
-    :ivar fmt: sparse format string (``csr``, ``coo``, ...).
-    """
+    """A sparse logical array unpacked into ordered member buffers (Sec. 3): ``logical`` is the array name
+    (e.g. ``A``), ``members`` are its member pointer names sorted ascending by name -- the same order they
+    take in the flat pointer block -- and ``fmt`` is the sparse format string (``csr``, ``coo``, ...)."""
     logical: str
     members: Tuple[str, ...]
     fmt: str

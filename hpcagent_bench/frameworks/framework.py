@@ -329,7 +329,8 @@ def framework_class(fname: str):
 
 
 class Framework(object):
-    """ A class for reading and processing framework information. """
+    """Base per-backend adapter: default implementations()/call_args()/timing hooks a subclass overrides
+    per flavor; used directly (unsubclassed) for the numpy flavor -- see :data:`FRAMEWORK_META`."""
 
     def __init__(self, fname: str):
         """Populate framework metadata from :data:`FRAMEWORK_META`."""

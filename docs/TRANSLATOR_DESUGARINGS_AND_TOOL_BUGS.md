@@ -142,14 +142,14 @@ an emit-shape change (Sec. 1c), and the rest are irreducible tool defects that n
 | transformed-C fails to compile | durbin | pluto emits invalid C | **pluto bug** | auto-skip (pluto-miscompile) |
 | loop-carried tsvc (not individually root-caused) | ~14 tsvc_2_* | provisional pluto miscompile | **pluto (provisional)** | auto-skip (pluto-miscompile); probe for stride/reduction shape (Sec. 1c) to recover `ok` |
 
-**pluto (Reading-B) irreducible set cannot be emptied by any lowering change** -- and no longer
-needs to be. With `e2e_known_failures.txt` gone, `_run_pluto` classifies every post-transform
-`FAIL:*` whose sibling `c` backend is `ok` as `skip:unsupported:pluto-miscompile:*` (the guard:
-our own C proves the affine scop bit-exact, so the fault is polycc's schedule). So the entire
-"pluto bug" **Disposition** column above collapses to that one automatic skip -- the table stays as
-the root-cause record, no per-kernel list to maintain. The guard keeps it honest: a genuine emit
-regression also reds `c`, so that pluto pair stays a real `FAIL:*`. The `*::pluto` rows still worth
-an emit-shape fix (Sec. 1c) remain flagged there; landing one turns the skip back into an `ok`.
+**Pluto's irreducible set can't shrink via any lowering change -- and no longer needs to.** With
+`e2e_known_failures.txt` gone, `_run_pluto` auto-classifies every post-transform `FAIL:*` whose
+sibling `c` backend is `ok` as `skip:unsupported:pluto-miscompile:*` (our own C proves the affine
+scop bit-exact, so the fault is polycc's schedule). The "pluto bug" **Disposition** column above
+collapses to that one automatic skip -- the table stays as the root-cause record, no per-kernel
+list to maintain. A genuine emit regression also reds `c`, so that pluto pair stays a real
+`FAIL:*` -- the guard keeps it honest. `*::pluto` rows still worth an emit-shape fix (Sec. 1c)
+remain flagged there; landing one turns the skip back into an `ok`.
 
 ---
 

@@ -263,8 +263,7 @@ def distribution_for_kernel(mpi_block: Optional[dict],
     block_size = int(decomp.get("block_size", 1))
     if decomp_scheme in ("block_cyclic", "cyclic") and grid_ndim > 1:
         # A multi-dim block-cyclic decomposition deals array-axis-d over grid-dim-d, so it needs
-        # each array's rank (axis count), not a named split axis. Read shapes from the manifest
-        # map or the binding's declarative shapes.
+        # each array's rank (axis count), not a named split axis.
         shapes = manifest_shapes or binding_shapes(binding)
         return blockcyclic_distribution_from_shapes(shapes, ranks, grid_ndim=grid_ndim, block_size=block_size)
     # 1-D grid: thread block_size, else a block_cyclic decomposition degrades to unit-block cyclic
