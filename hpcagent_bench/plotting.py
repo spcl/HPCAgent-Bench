@@ -35,7 +35,7 @@ import matplotlib.pyplot as plt  # noqa: E402 -- must follow the backend setup
 from scipy.stats.mstats import gmean  # noqa: E402
 
 from hpcagent_bench import stats  # noqa: E402
-from hpcagent_bench.reporting_order import BY_SUBTRACK, GroupSpan, order_rows, row_meta_for  # noqa: E402
+from hpcagent_bench.reporting_order import BY_DWARF, GroupSpan, order_rows, row_meta_for  # noqa: E402
 from hpcagent_bench.spec import select_short_names  # noqa: E402
 
 #: Seed for every per-cell bootstrap so the same DB yields the same published figure.
@@ -175,7 +175,7 @@ def plot_heatmap(benchmark="all",
                  preset="S",
                  datatype="float64",
                  variant=None,
-                 order: str = BY_SUBTRACK,
+                 order: str = BY_DWARF,
                  db="hpcagent_bench.db",
                  output="heatmap.pdf",
                  usetex: bool = True) -> str:
@@ -187,7 +187,7 @@ def plot_heatmap(benchmark="all",
     :param datatype: precision to plot; legacy NULL-datatype rows are treated float64.
     :param variant: restrict to a single sparse variant; ``None`` keeps every
         (benchmark, variant) as its own ``benchmark/variant`` row.
-    :param order: row ordering, ``by_subtrack`` (default) or ``by_level`` (see
+    :param order: row ordering, ``by_dwarf`` (default) or ``by_level`` (see
         :mod:`hpcagent_bench.reporting_order`).
     :param db: SQLite results DB path (default ``hpcagent_bench.db`` in the cwd).
     :param output: PDF path to write (default ``heatmap.pdf`` in the cwd).
@@ -324,7 +324,7 @@ def plot_distribution_grid(benchmark="all",
                            variant=None,
                            framework: Optional[str] = None,
                            kind: str = "violin",
-                           order: str = BY_SUBTRACK,
+                           order: str = BY_DWARF,
                            db="hpcagent_bench.db",
                            output="distribution.pdf",
                            col_width_in: float = 3.4,
@@ -347,7 +347,7 @@ def plot_distribution_grid(benchmark="all",
 
     :param framework: restrict to one framework, else every framework in scope.
     :param kind: ``violin`` (default) or ``box``.
-    :param order: ``by_subtrack`` (default) or ``by_level``.
+    :param order: ``by_dwarf`` (default) or ``by_level``.
     """
     if kind not in ("violin", "box"):
         raise ValueError(f"kind must be 'violin' or 'box' (got {kind!r})")

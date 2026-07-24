@@ -7,7 +7,7 @@ sections (HPC -> foundation -> ML) and return the group-label spans a figure dra
 separators / y-axis group text. Two modes, both documented in
 ``docs/measurement_statistics.md``:
 
-* ``by_subtrack`` (default) -- HPC grouped by its structural group, within a group by
+* ``by_dwarf`` (default) -- HPC grouped by its structural group, within a group by
   ``level``, within a level alphabetical; then foundation (the TSVC sets ``tsvc2`` /
   ``tsvc2_5`` and the other foundation sources), then ML (never ordered).
 * ``by_level`` -- primary group by ``level``; within a level HPC alphabetical (by group
@@ -17,8 +17,8 @@ separators / y-axis group text. Two modes, both documented in
 The HPC "group" is the kernel's **dwarf** -- that is the field whose value is the human
 label the methods doc gives as the example ("structured grids"); a kernel's ``subtrack``
 is often just its own name (``polybench`` for the stencils, ``hotspot`` for hotspot),
-which would scatter the rows into singletons. The mode keeps its documented name
-``by_subtrack`` for the CLI/docs, but the grouping key is the dwarf. Foundation groups by
+which would scatter the rows into singletons, so ``by_dwarf`` groups HPC by the dwarf.
+Foundation groups by
 its ``foundation.source`` (``tsvc_2`` / ``tsvc_2_5`` / ...). ML has no group and is left
 in the order the caller passed it.
 
@@ -32,9 +32,9 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
 #: Order-mode tokens (the CLI ``--order`` choices and the ``plot_*`` ``order`` param).
-BY_SUBTRACK: str = "by_subtrack"
+BY_DWARF: str = "by_dwarf"
 BY_LEVEL: str = "by_level"
-ORDER_MODES: Tuple[str, ...] = (BY_SUBTRACK, BY_LEVEL)
+ORDER_MODES: Tuple[str, ...] = (BY_DWARF, BY_LEVEL)
 
 #: Section tokens. Sections render in this order; ``other`` is a trailing bucket for a DB
 #: short_name whose manifest cannot be resolved, so a stray name never crashes a plot.
@@ -109,7 +109,7 @@ def _sort_key(rm: RowMeta, order: str) -> Tuple:
     if order == BY_LEVEL:
         # Primary by level, then group (so each group x level block is contiguous), then name.
         return (lvl, group, name)
-    # by_subtrack: primary by group, then level, then name.
+    # by_dwarf: primary by group, then level, then name.
     return (group, lvl, name)
 
 
@@ -140,7 +140,7 @@ def _spans(ordered: Sequence[RowMeta], order: str) -> List[GroupSpan]:
     return spans
 
 
-def order_rows(rows: Sequence[RowMeta], order: str = BY_SUBTRACK) -> Tuple[List[str], List[GroupSpan]]:
+def order_rows(rows: Sequence[RowMeta], order: str = BY_DWARF) -> Tuple[List[str], List[GroupSpan]]:
     """Order plotted rows and return ``(ordered_short_names, group_spans)``.
 
     Sections render HPC -> foundation -> ML -> other. HPC and foundation are sorted by
