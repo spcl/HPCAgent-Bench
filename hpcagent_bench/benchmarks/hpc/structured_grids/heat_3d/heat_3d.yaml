@@ -22,6 +22,9 @@ init:
   output_args:
   - A
   - B
+  - alpha
+  scalars:
+    alpha: 0.125
   func_name: initialize
 array_args:
 - A
