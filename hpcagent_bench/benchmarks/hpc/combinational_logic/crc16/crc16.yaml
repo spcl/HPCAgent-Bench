@@ -22,6 +22,9 @@ init:
     crc: int64
   scalars:
     poly: 4129
+    crc_init: 65535
+    xorout: 65535
+    reflect_out: 1
   func_name: initialize
 array_args:
 - data
