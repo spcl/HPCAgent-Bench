@@ -1,13 +1,15 @@
 name: CI
 
-# Nine parallel CPU runners (translators is a 3-shard matrix), each a self-contained slice of the
-# pipeline (was one ~200-min sequential runner). Shared toolchain + base pip come from
+# Seven parallel CPU runners, each a self-contained slice of the pipeline (was one ~200-min
+# sequential runner). Shared toolchain + base pip come from
 # ./.github/actions/setup; each job adds only the extra it needs, so ONLY frameworks-pluto pays for
 # the Pluto build, ONLY mpi pays for gt4py + the MPICH/mpi4py source build.
 #
-# BALANCE, measured on run 30288151626: translators 40m32s vs mpi 5m09s, and 34m41s of translators
-# was Phase 2a alone -- so the op suite is sharded three ways by file (round-robin over a sorted
-# listing) and the two small phases it also carried moved to the idle mpi runner.
+# BALANCE is measured, never assumed. Run 30288151626 had translators at 40m32s against mpi's
+# 5m09s, so its two small phases moved to the idle mpi runner. Run 30480407159 then measured the
+# three-way shard of what was left at 4m + 8m + 9m -- three runners and a splitting script to move
+# a 21m job off a critical path that e2e[pythran] holds at 31m, i.e. no wall clock bought and two
+# runners spent. Merged back to one; the script is gone. Shard only what is ON the critical path.
 #
 # The e2e sweep (tests/test_e2e_numerical.py) is partitioned by BACKEND via
 # HPCAGENT_BENCH_E2E_BACKENDS so no single runner carries all ~80 min of it and Pluto stays isolated:
@@ -20,7 +22,7 @@ name: CI
 #
 # Runners:
 #   unit             format + structure + native emit + agent-bench + hf + e2e[numba,jax]
-#   translators      numpyto op suite, sharded 3x by file
+#   translators      numpyto op suite
 #   frameworks-pluto codegen frameworks + fp16 + e2e[pluto]            (ONLY Pluto build)
 #   e2e-native       integration sweep (CLI->DB->plot) + e2e[c,cpp,fortran]
 #                    (native heavy-compile slice, -n auto)
@@ -115,8 +117,14 @@ jobs:
         # -- filenames typed into this workflow -- drifted badly: 144 test files existed, 44 were
         # named anywhere in CI, and 94 never ran, including the guards written for the regressions
         # they were meant to catch. tests/test_ci_coverage.py fails if the two ever disagree.
-        # -n auto because these are the cheap files: xdist balances them across the runner's cores
-        # dynamically, which beats any static split of a set whose costs span three orders.
+        # -n auto balances the files across the runner's cores at runtime, which beats any static
+        # split of a set whose costs span three orders of magnitude.
+        #
+        # CAPPED, like every other heavy phase. Uncapped, this is what killed run 30454516782: the
+        # sweep reached 91% with zero failures, the runner was then terminated, and because a job
+        # cancellation is not a step failure the FIVE phases below never ran at all. A step timeout
+        # is a failure, so `!cancelled()` keeps them running and the job reports what it knows.
+        timeout-minutes: 40
         run: |
           excl=$(mktemp)
           grep -vE '^\s*(#|$)' .github/dedicated_tests.txt > "$excl"
@@ -206,17 +214,12 @@ jobs:
   # ===========================================================================================
   translators:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: translators[${{ matrix.shard }}/3] (numpyto op suite)
+    name: translators (numpyto op suite)
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    # Phase 2a was 34m41s of this job's 40m32s and the whole workflow's critical path, while the
-    # mpi runner finished in 5m09s. Shard it by FILE across three runners -- round-robin over a
-    # sorted listing, so every file lands in exactly one shard and adding a file cannot silently
-    # drop it. File-level (not test-level) keeps the argument list small and the split reproducible.
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3]
+    # ONE runner. It was three, cost-sharded, until run 30480407159 measured the result: 4m + 8m +
+    # 9m. Three runners and a splitting mechanism to move a 21m job off a critical path set by
+    # e2e[pythran] at 31m -- so the sharding bought no wall clock at all and cost two runners.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -254,21 +257,17 @@ jobs:
         run: ccache --zero-stats
       - uses: ./.github/actions/setup
 
-      - name: Phase 2a -- numpy-translator op suite (shard ${{ matrix.shard }} of 3)
+      - name: Phase 2a -- numpy-translator op suite
         # ~640 tests: per-op faithfulness plus feature-fix and corpus kernels, each emitted to
         # C/C++/Fortran (+ numba/pythran/jax where the test opts in), compiled, validated vs
         # numpy. A couple of full-kernel cases (cloudsc, velocity_tendencies) run ~5 min, hence
-        # --timeout=900.
+        # --timeout=900. xdist balances the files across the runner's cores at runtime, which no
+        # static split can beat on a set whose per-file cost spans three orders of magnitude.
         if: ${{ !cancelled() }}
+        timeout-minutes: 60
         run: |
-          # An empty shard would make pytest collect the whole repo, so fail instead of over-running.
-          # Cost-balanced, not count-balanced: a level-3 kernel test is ~12x a level-1 one, so
-          # dealing files round-robin hands one shard the heavy end and idles the others.
-          files=$(python scripts/ci_shard.py --shard '${{ matrix.shard }}/3' \
-                    --files "$(ls hpcagent_bench/numpy_translators/tests/test_*.py)")
-          test -n "$files" || { echo 'shard ${{ matrix.shard }} selected no files'; exit 1; }
-          echo "$files"
-          python -m pytest -q -p no:cacheprovider -rfsxX -n auto --timeout=900 $files
+          python -m pytest -q -p no:cacheprovider -rfsxX -n auto --timeout=900 \
+            hpcagent_bench/numpy_translators/tests/
 
       # Hit rate is the whole point of the cache -- surface it so a regression to 0% is visible.
       - name: ccache statistics

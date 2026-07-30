@@ -90,11 +90,16 @@ def thread_env(mode: Mode = Mode.MULTI_CORE, ranks_per_node: int = 1) -> Dict[st
     ``ranks_per_node`` > 1 splits the node between co-resident ranks. Without it every rank claims
     every core, four ranks on a node oversubscribe it 4x, and the numbers are contention, not
     runtime -- silently, because each rank's own log still looks correct. Integer division, floor
-    of at least 1: leftover cores go unused rather than handed twice to different ranks."""
-    env = flags.cpu_env(mode)
+    of at least 1: leftover cores go unused rather than handed twice to different ranks.
+
+    The count goes through ``cpu_env(threads=...)`` rather than being divided back out of what it
+    returned: that is the one way to pin an explicit thread count, and re-parsing its values would
+    break the moment one of them stopped being a bare integer."""
     if ranks_per_node <= 1:
-        return env
-    return {name: str(max(1, int(value) // ranks_per_node)) for name, value in env.items()}
+        return flags.cpu_env(mode)
+    # SINGLE_CORE means one thread per rank however many ranks share the node.
+    share = 1 if mode is Mode.SINGLE_CORE else max(1, flags.ncores() // ranks_per_node)
+    return flags.cpu_env(mode, threads=share)
 
 
 def run(frameworks: Sequence[str],

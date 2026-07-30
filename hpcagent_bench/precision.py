@@ -38,6 +38,32 @@ class Precision(enum.Enum):
         raise ValueError(f"Unknown precision {name!r}; supported: "
                          f"{[p.value for p in cls]}")
 
+    @property
+    def mantissa_bits(self) -> int:
+        """Stored significand bits -- how finely this format resolves a value."""
+        return _MANTISSA_BITS[self]
+
+    def at_least(self, floor: "Precision") -> bool:
+        """Whether this format resolves at least as finely as ``floor``.
+
+        Compared on mantissa bits, NOT on declaration order: bf16 sits after fp16 in the enum yet
+        carries FEWER significand bits (7 vs 10), so a positional comparison is wrong for that pair
+        and silently inverts for every pair if the enum is ever reordered.
+        """
+        return self.mantissa_bits >= floor.mantissa_bits
+
+
+#: Stored significand bits per format (the implicit leading 1 excluded), the one ordering the
+#: harness compares precisions on. bf16 trades mantissa for exponent, so it is COARSER than fp16
+#: despite being the wider-range format -- which is exactly why this is a table and not an index.
+_MANTISSA_BITS: Dict["Precision", int] = {
+    Precision.FP64: 52,
+    Precision.FP32: 23,
+    Precision.FP16: 10,
+    Precision.BF16: 7,
+    Precision.FP8_E4M3: 3,
+    Precision.FP8_E5M2: 2,
+}
 
 #: CLI ``--datatype`` choices -- the numpy spellings ``float32`` / ``float64``
 #: (NOT the :class:`Precision` values ``fp32`` / ``fp64``), so this is an authored

@@ -32,6 +32,11 @@ from hpcagent_bench.support.sanitize import strip_comments
 from hpcagent_bench.spec import BenchSpec
 
 _PROMPTS_DIR = pathlib.Path(__file__).parent / "prompts"
+#: Package top-level (one level above harness/) -- where ``skills/`` and ``tools/`` ship from
+#: as pip package data (see setup.py ``package_data``), separate from the harness-internal
+#: templates in :data:`_PROMPTS_DIR`. The one constant :func:`discover` resolves both roots
+#: from: ``skills/*/SKILL.md`` and ``tools/*.md`` glob straight into the sibling dirs.
+_PACKAGE_DIR = pathlib.Path(__file__).parent.parent
 
 
 @dataclasses.dataclass(frozen=True)
@@ -154,16 +159,17 @@ PROMPT_VARIANTS: dict = {
 }
 
 
-def discover(search_dirs, pattern: str, name_of) -> dict:
+def discover(search_dirs, pattern: str, name_of, builtin_root: pathlib.Path = _PROMPTS_DIR) -> dict:
     """Files matching ``pattern`` across the search path, keyed by name; first root wins.
 
-    The ONE override rule the whole prompt tree follows: user roots in order, then the
-    built-in ``prompts/``, and the first file found for a name wins. Templates, skills,
-    variants and tool fragments all resolve this way, so an override behaves identically
-    whichever of them it is.
+    The ONE override rule the whole prompt tree follows: user roots in order, then
+    ``builtin_root``, and the first file found for a name wins. Templates, skills, variants
+    and tool fragments all resolve this way, so an override behaves identically whichever of
+    them it is. ``builtin_root`` defaults to the templates dir (:data:`_PROMPTS_DIR`); skills
+    and tools pass :data:`_PACKAGE_DIR` instead, since those ship from the package top level.
     """
     found: dict = {}
-    for root in [pathlib.Path(d) for d in search_dirs] + [_PROMPTS_DIR]:
+    for root in [pathlib.Path(d) for d in search_dirs] + [builtin_root]:
         for path in sorted(root.glob(pattern)):
             found.setdefault(name_of(path), path)
     return found
@@ -292,11 +298,17 @@ def prompt_env(prompt_config: "PromptConfig" = None) -> jinja2.Environment:
     ``sections/<name>.j2`` include) into a user root shadows the built-in with no code
     change. This is the simplest override level: edit one file. ``StrictUndefined`` keeps a
     custom template honest -- a missing variable fails loudly instead of rendering blank.
+
+    ``_PACKAGE_DIR`` is appended last so a tool fragment's ``{% include "tools/<name>.md" %}``
+    (the name :func:`tool_fragments` hands the template) resolves to the built-in ``tools/``
+    the same way :func:`discover` does; skills never go through this loader (they are read as
+    context strings, not included).
     """
     if prompt_config is None:
         prompt_config = PromptConfig.from_config()
     loaders = [jinja2.FileSystemLoader(d) for d in prompt_config.search_dirs()]
     loaders.append(jinja2.FileSystemLoader(str(_PROMPTS_DIR)))
+    loaders.append(jinja2.FileSystemLoader(str(_PACKAGE_DIR)))
     loader = RecordingLoader(loaders, annotate=prompt_config.debug)
     env = jinja2.Environment(loader=loader,
                              autoescape=False,
@@ -355,9 +367,9 @@ def parse_skill(text: str, path: pathlib.Path) -> Skill:
 def load_skills(search_dirs=()) -> Tuple[Optional[Skill], List[Skill]]:
     """Every ``skills/<name>/SKILL.md`` on the search path, as ``(general, others)``.
 
-    User roots are searched before the built-in ``prompts/``, and the FIRST file found for a
-    given skill name wins -- so a user root replaces a built-in skill by reusing its
-    directory name, and adds a new one by picking a fresh name. No code edit either way.
+    User roots are searched before the built-in ``hpcagent_bench/skills/``, and the FIRST file
+    found for a given skill name wins -- so a user root replaces a built-in skill by reusing
+    its directory name, and adds a new one by picking a fresh name. No code edit either way.
 
     The general skill is returned SEPARATELY rather than first-in-a-list: it is the contract
     the prompt always states, the others are guidance the prompt can drop, and picking it
@@ -365,7 +377,7 @@ def load_skills(search_dirs=()) -> Tuple[Optional[Skill], List[Skill]]:
     """
     # Keyed by DIRECTORY name: the directory is a skill's identity for overriding, so a user
     # root replaces a built-in by reusing its folder regardless of what its frontmatter says.
-    found = discover(search_dirs, "skills/*/SKILL.md", lambda p: p.parent.name)
+    found = discover(search_dirs, "skills/*/SKILL.md", lambda p: p.parent.name, builtin_root=_PACKAGE_DIR)
     skills = {name: parse_skill(path.read_text(), path) for name, path in found.items()}
     return skills.pop(GENERAL_SKILL, None), [skills[k] for k in sorted(skills)]
 
@@ -433,7 +445,7 @@ def collect_hints(spec, filename: str) -> List[pathlib.Path]:
     return found
 
 
-#: Lead order for the per-tool prompt fragments (``prompts/tools/<tool>.md``);
+#: Lead order for the per-tool prompt fragments (``hpcagent_bench/tools/<tool>.md``);
 #: any extra fragment is appended alphabetically. Each agent-facing tool documents
 #: itself in its own file -- drop a new ``tools/<name>.md`` and it is collected.
 #: ``task`` leads -- it is the entry point that hands the agent the signature, the
@@ -453,7 +465,7 @@ def tool_fragments(search_dirs=()) -> list:
     """
     by_stem = {
         name: f"tools/{path.name}"
-        for name, path in discover(search_dirs, "tools/*.md", lambda p: p.stem).items()
+        for name, path in discover(search_dirs, "tools/*.md", lambda p: p.stem, builtin_root=_PACKAGE_DIR).items()
     }
     ordered = [by_stem.pop(t) for t in _TOOL_ORDER if t in by_stem]
     return ordered + [by_stem[k] for k in sorted(by_stem)]
@@ -799,10 +811,10 @@ def build_context(task: Task,
         # and judge containers where the agent installs extra libs/headers; the
         # judge auto-adds its include/lib dirs to every build (sandbox.shared_dir).
         "shared_dir": shared_dir(),
-        # Per-tool prompt fragments (prompts/tools/<tool>.md), collected so the
+        # Per-tool prompt fragments (hpcagent_bench/tools/<tool>.md), collected so the
         # judge-facing prompt documents each agent tool from its own file.
         "tool_fragments": tool_fragments(prompt_config.search_dirs()),
-        # Skills (prompts/skills/<name>/SKILL.md). The general skill's body is repeated in
+        # Skills (hpcagent_bench/skills/<name>/SKILL.md). The general skill's body is repeated in
         # full -- it is the contract every run needs -- and the rest are indexed by name +
         # description so the prompt points at them without inlining all of them.
         "general_skill": general_skill,
@@ -970,7 +982,7 @@ def debug_markers(body: str, prompt_config: "PromptConfig") -> str:
     right for a prompt assembled from more than one render (a body plus its feedback block)
     and counts the skills, which arrive as context and never touch the loader.
     """
-    roots = [local_path(r) for r in prompt_config.search_dirs() + [str(_PROMPTS_DIR)]]
+    roots = [local_path(r) for r in prompt_config.search_dirs() + [str(_PROMPTS_DIR), str(_PACKAGE_DIR)]]
     header = [
         f"# Generated by: hpcagent_bench prompts ({prompt_config.template})",
         f"# Search path: {' | '.join(roots)}",

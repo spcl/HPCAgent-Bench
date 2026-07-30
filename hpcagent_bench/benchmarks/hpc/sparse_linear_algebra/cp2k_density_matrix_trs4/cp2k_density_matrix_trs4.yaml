@@ -117,5 +117,3 @@ taxonomy:
   - blocked_csr
 precisions:
 - fp64
-rtol: 2.0e-11
-atol: 2.0e-12

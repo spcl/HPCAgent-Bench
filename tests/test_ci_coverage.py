@@ -1,6 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Every test file runs somewhere in CI, and the shards stay balanced.
+"""Every test file runs somewhere in CI.
 
 This exists because the opposite was true and nothing said so: 144 test files, 44 named anywhere
 in the workflow, 94 that never executed -- including guards written for regressions they were
@@ -8,11 +8,8 @@ meant to catch. A hand-written file list drifts in one direction only, because a
 by default and inertness is silent.
 """
 import pathlib
-import subprocess
-import sys
-from typing import List, Set
-
-import pytest
+import re
+from typing import Set
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 WORKFLOW = REPO / ".github" / "workflows" / "tests.yml"
@@ -61,50 +58,25 @@ def test_the_sweep_is_discovered_not_enumerated() -> None:
     assert "ls tests/test_*.py" in workflow, "the sweep no longer discovers files with ls"
 
 
-def shard(index: int, total: int, files: List[str]) -> List[str]:
-    """One shard, as the workflow computes it."""
-    proc = subprocess.run(
-        [
-            sys.executable,
-            str(REPO / "scripts" / "ci_shard.py"), "--shard", f"{index}/{total}", "--files", " ".join(files)
-        ],
-        capture_output=True,
-        text=True,
-        cwd=str(REPO),
-        check=True,
-    )
-    return [line for line in proc.stdout.split() if line]
+def test_ci_never_asks_for_a_billed_runner() -> None:
+    """Standard GitHub-hosted runners are free on a public repo; LARGER runners bill per minute
+    even here. Self-hosted is our own hardware and bills nothing.
 
-
-@pytest.fixture(scope="module")
-def translator_files() -> List[str]:
-    root = REPO / "hpcagent_bench" / "numpy_translators" / "tests"
-    return [f"hpcagent_bench/numpy_translators/tests/{p.name}" for p in sorted(root.glob("test_*.py"))]
-
-
-def test_shards_partition_the_files_exactly(translator_files: List[str]) -> None:
-    """No file run twice (wasted runner) and none dropped (a silent hole in coverage)."""
-    shards = [shard(i, 3, translator_files) for i in range(3)]
-    flat = [f for s in shards for f in s]
-    assert sorted(flat) == sorted(translator_files)
-    assert len(flat) == len(set(flat)), "a file landed in more than one shard"
-
-
-def test_the_split_is_deterministic(translator_files: List[str]) -> None:
-    """Every runner computes its own shard with no coordination, so twice must give the same answer."""
-    assert shard(0, 3, translator_files) == shard(0, 3, translator_files)
-
-
-def test_heavy_files_do_not_pile_into_one_shard(translator_files: List[str]) -> None:
-    """The point of weighting: a round-robin deal balances the FILE COUNT and nothing else.
-
-    Costs here span orders of magnitude, so the check is on spread, not on equality -- a perfect
-    balance is not achievable and not required. What must not happen is one shard holding a
-    multiple of another's work."""
-    from scripts.ci_shard import pack, weight_of  # noqa: PLC0415 -- the module under test
-
-    paths = [REPO / f for f in translator_files]
-    packed = pack(paths, 3, {})
-    loads = [sum(weight_of(p, {}) for p in group) for group in packed]
-    assert min(loads) > 0, "a shard drew no work"
-    assert max(loads) / min(loads) < 1.5, f"shard loads are lopsided: {loads}"
+    A guard rather than a review habit: `runs-on: ubuntu-latest-8-cores` is one plausible edit away
+    from `ubuntu-latest`, reads as a harmless speedup, and the cost of getting it wrong arrives on
+    an invoice rather than in a test run."""
+    standard = {"ubuntu-latest", "ubuntu-24.04", "ubuntu-22.04", "windows-latest", "macos-latest"}
+    offenders = []
+    for workflow in sorted((REPO / ".github" / "workflows").glob("*.y*ml")):
+        for line in workflow.read_text().splitlines():
+            match = re.match(r"\s*runs-on:\s*(.+?)\s*$", line)
+            if not match:
+                continue
+            value = match.group(1)
+            if value.startswith("["):  # a label list -- self-hosted, i.e. our own machine
+                if "self-hosted" not in value:
+                    offenders.append(f"{workflow.name}: {value}")
+            elif value not in standard:
+                offenders.append(f"{workflow.name}: {value}")
+    assert not offenders, (f"non-standard, billed-per-minute runners requested: {offenders}. "
+                           f"Free on a public repo are {sorted(standard)}, plus self-hosted labels.")
