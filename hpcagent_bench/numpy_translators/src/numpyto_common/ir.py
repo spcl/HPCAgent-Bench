@@ -9,7 +9,7 @@ NumpyToC consumes it for now.
 
 import ast
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from numpyto_common import dtypes
 
@@ -103,6 +103,15 @@ class ScalarDesc:
     dtype: str
     is_output: bool = False
 
+    def __post_init__(self) -> None:
+        # Honour the storage contract :func:`dtypes.canonical` documents: the frontend records
+        # aliases (a plain ``int`` for anything integral, ``double`` from a precision remap), and
+        # an alias reaching the ABI reads as a DISAGREEMENT against the binding's canonical
+        # ``int64`` even though both lower to the same ``int64_t``. Normalising at the one place
+        # a scalar dtype is stored keeps every consumer -- signature, binding JSON, ABI gate --
+        # on a single spelling.
+        self.dtype = dtypes.canonical(self.dtype)
+
 
 @dataclass
 class SparseArrayDesc:
@@ -156,6 +165,12 @@ class KernelIR:
     #: empty for dense kernels. Consumed by the matmul hoister to route
     #: ``A @ B`` through the sparse path.
     sparse: Dict[str, "SparseArrayDesc"] = field(default_factory=dict)
+    #: Module-level constants the frontend FOLDED into the body and the shape
+    #: tokens (cloudsc's ``nclv = 5``). They are compile-time literals, not
+    #: parameters: re-promoting one as a shape symbol would append a parameter
+    #: the harness binding never passes, shifting every trailing scalar by one
+    #: slot in the positional call.
+    inlined_consts: Set[str] = field(default_factory=set)
     #: One sub-:class:`KernelIR` per top-level helper called in the kernel body
     #: that couldn't be inlined (early ``return`` / recursion). Built by
     #: :func:`parse_kernel`, lowered by :func:`lower`; each emitter emits it as

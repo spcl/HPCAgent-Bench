@@ -100,13 +100,12 @@ lib/
 lib64/
 local_settings.py
 nosetests.xml
-hpcagent_bench.db
+hpcagent_bench*.db
 parts/
 pip-delete-this-directory.txt
 pip-log.txt
 pip-wheel-metadata/
 profile_default/
-results/
 sdfg.sdfg
 sdist/
 share/python-wheels/
@@ -174,12 +173,23 @@ scripts/infer_output_args.py
 scripts/verify_tvm.py
 tools/pluto_affine_survey_results.txt
 
+# The filled-in Alps EDF: account-, image- and scratch-specific. Only the template is tracked.
+scripts/cscs/env.toml
+
 # Per-checkout agent / IDE config (Claude Code, etc.) -- machine-local, never committed.
 .claude/
 
 # Native (no-container) run scratch -- keep the folder, ignore its contents.
 hpcagent_bench/native_runs/*
 !hpcagent_bench/native_runs/.gitkeep
+
+# Run outputs -- results DB + its per-rank shards, JSONL logs, job stdout, figures. Both folders are
+# kept so a fresh clone can be written to without a mkdir; everything IN them is machine-generated.
+results/*
+!results/.gitkeep
+!results/plots/
+results/plots/*
+!results/plots/.gitkeep
 
 # --- Build / cache artifacts (machine-generated; never committed) -------------
 # GT4Py kernel cache, compiled Fortran modules, ruff cache.
@@ -212,5 +222,16 @@ id_ecdsa*
 # width, so a committed report would describe someone else's CPU), and the tree is
 # created on demand per kernel. The directory itself is kept (.gitkeep) so an
 # enabled run has a root to write under without the first one having to mkdir it.
+# The opt-report generation lands in its own .opt_reports/ root (report_root()).
 perf_reports/**
 !perf_reports/.gitkeep
+.opt_reports/**
+!.opt_reports/.gitkeep
+
+# Per-kernel framework-autogen + DaCe SDFG cache (hpcagent_bench.framework_cache) lives in each
+# kernel's `.cache/` and is already covered by the bare `.cache` rule near the top of this file --
+# deliberately, contents AND the .gitkeep. The tree is machine-generated and fingerprint-invalidated
+# (regenerated from <kernel>_numpy.py whenever it changes), and `kernel_cache_dir` mkdirs on demand,
+# so nothing has to be tracked to keep a directory alive. Re-including the .gitkeep instead would
+# put 356 empty files in the repo (one per kernel) and leave an untracked `.cache/` in `git status`
+# for every kernel ever run -- the same reason perf_reports/ is one root dir, not one per kernel.

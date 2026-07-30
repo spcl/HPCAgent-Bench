@@ -102,9 +102,11 @@ back to the model is the natural next step here.)
 
 ## 4. Sudoless containers with Apptainer
 
-On shared / HPC machines without Docker or root, **Apptainer** runs unprivileged
-and reuses the same image definitions Docker does -- build a SIF directly from a
-committed definition and run it:
+The default container path is the one OCI image (`containers/hpcagent_bench.Dockerfile`) built
+with Podman (the default -- rootless and daemonless) or Docker (a drop-in on a machine that
+already runs a daemon); see [docs/runtime.md](runtime.md). On a shared / HPC machine with
+neither, **Apptainer** still runs unprivileged, via the kept `cpu.def` recipe -- an
+Apptainer-native build straight from source, no OCI image needed:
 
 ```bash
 apptainer build hpcagent_bench-cpu.sif containers/cpu.def

@@ -24,7 +24,10 @@ repos:
       # script: hpcagent_bench/ minus benchmarks/ + numpy_translators/, plus scripts/ tests/).
       - id: hpcagent_bench-headers
         name: copyright / SPDX header (core package)
-        entry: python scripts/check_headers.py
+        # --fix ADDS the header (as the first content line, after any shebang) rather than only
+        # failing -- the same auto-fix contract as the format hook. yapf leaves the header
+        # byte-for-byte (locked by tests/test_header_hook.py), so the two fixers never fight.
+        entry: python scripts/check_headers.py --fix
         language: system
         require_serial: true
         files: '\.py$'
@@ -33,3 +36,30 @@ repos:
         name: block files > 500 KiB
         entry: python scripts/check_large_files.py
         language: system
+      # Co-located kernel reference sources must be canonically named <stem>_reference.<ext>
+      # (the prompt glob + test_<stem>_reference.py both key on it); ban _original/_orig/_golden/...
+      - id: hpcagent_bench-reference-naming
+        name: canonical <stem>_reference.<ext> reference sources
+        entry: python scripts/check_reference_naming.py
+        language: system
+        files: '^hpcagent_bench/benchmarks/.*\.([cC]|cc|cpp|cxx|hpp|[hH]|py|[fF]|[fF]90|cu)$'
+      # Repo-wide YAML house style (CONTRIBUTING.md "YAML house style"): '#' header, 2-space
+      # structural indent, no tabs, no trailing whitespace, one final newline. --fix only
+      # applies the lossless mechanical bits (whitespace/newline); an unfixable violation
+      # (missing header, tabs, odd indent) still fails the commit for a human to fix. The
+      # script owns its own skip policy (.github/, docker-compose -- foreign schemas).
+      - id: hpcagent_bench-yaml-style
+        name: YAML house style (header / 2-space indent / no tabs / final newline)
+        entry: python tests/check_yaml_style.py --fix
+        language: system
+        require_serial: true
+        files: '\.ya?ml$'
+      # Every co-located kernel manifest must satisfy the schema hpcagent_bench.spec.BenchSpec
+      # loads it against -- today that is only checked at BenchSpec.load() time (test / run
+      # time). This hook calls BenchSpec.from_yaml itself (ONE source of truth: no schema is
+      # re-declared here), so a broken manifest fails the commit instead.
+      - id: hpcagent_bench-manifest-structure
+        name: benchmark manifest structure (hpcagent_bench.spec.BenchSpec schema)
+        entry: python scripts/check_manifest_structure.py
+        language: system
+        files: '^hpcagent_bench/benchmarks/.*\.yaml$'

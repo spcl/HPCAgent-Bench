@@ -7,7 +7,7 @@ must stay rolled (never unrolled or vectorized). The imperative backends
 to ``lax.fori_loop`` / ``while_loop`` and never unrolls.
 """
 import ast
-from typing import Tuple
+from typing import Optional, Tuple
 
 #: Symbol-name fragments that mark a time-stepping loop bound (HPCAgent-Bench /
 #: polybench convention). Matched case-insensitively as a substring so
@@ -335,3 +335,71 @@ def any_parallelizable_loop(tree: ast.AST) -> bool:
     variant would emit at least one ``#pragma omp parallel for``."""
     return any(not is_timestep_loop(n) and (loop_is_parallel_safe(n) or loop_reduction(n) is not None)
                for n in ast.walk(tree) if isinstance(n, ast.For))
+
+
+def range_step_sign(step_node: Optional[ast.AST]) -> Optional[int]:
+    """+1 / -1 when a ``range()`` step's sign is decidable from the AST alone, else ``None``
+    (a runtime-only sign -- the emitted C/Fortran loop then needs a ternary-guarded direction,
+    which is not a canonical OpenMP loop form). Mirrors
+    :meth:`numpyto_common.emitter.BaseEmitter.static_step_sign` -- duplicated rather than
+    imported so this module stays a standalone AST-predicate library with no emitter dependency
+    (this file has none today; the backends import FROM here, never the reverse)."""
+    if step_node is None:
+        return 1
+    if isinstance(step_node, ast.UnaryOp) and isinstance(step_node.op, ast.USub):
+        inner = range_step_sign(step_node.operand)
+        return None if inner is None else -inner
+    if isinstance(step_node, ast.Constant) and isinstance(step_node.value, (int, float)):
+        return -1 if step_node.value < 0 else 1
+    return None
+
+
+def collapsible_depth(node: ast.For) -> int:
+    """How many loop levels starting at ``node`` (inclusive) may share ONE
+    ``#pragma omp ... collapse(k)`` -- the largest ``k`` for which flattening the first ``k``
+    levels into a single iteration space is still provably sound. Always >= 1 (``node`` alone,
+    no ``collapse`` clause needed). The CALLER must already have proven ``node`` itself safe
+    (``loop_is_parallel_safe(node)`` -- this function does not re-check level 0).
+
+    ``collapse`` lets the runtime interleave iterations of every collapsed level across threads
+    in ANY order, not just serialize the inner levels within one outer iteration. So each
+    additional level ``L`` is only folded in when ALL of the following hold:
+
+    * **Perfectly nested** (OpenMP's canonical loop-nest form): the loop wrapping ``L`` has
+      NOTHING in its body but ``L`` itself -- ``len(body) == 1``. A sibling statement between
+      two loop headers (an accumulator init, a second loop) is exactly what already stops the
+      walk at conv2d_bias's inner reduction and gemm's ``acc = 0.0`` init below.
+    * **Rectangular**: ``L``'s ``range(...)`` bounds do not reference any loop variable already
+      in the collapsed group -- a bound that depends on an outer index (``range(i)``, a
+      triangular solve) makes the iteration space a non-rectangle, which plain ``collapse``
+      cannot express.
+    * **Canonical step**: ``L``'s step sign is known at compile time (:func:`range_step_sign`),
+      matching the same requirement already enforced on ``node`` itself by the caller.
+    * **Not a timestep loop** (:func:`is_timestep_loop`) -- defensive; in practice a timestep
+      bound already fails one of the checks above.
+    * **Independently safe on ITS OWN index**: ``loop_is_parallel_safe(L)`` (not
+      :func:`loop_reduction` -- a level whose only safety comes from a reduction is deliberately
+      excluded, so ``collapse`` never has to reason about a reduction spanning more than one
+      dimension; the reduction loop still gets its own correct ``reduction(op:acc)`` clause,
+      just not folded into an outer ``collapse``). Checking the OUTER index alone is NOT
+      enough here: a write like ``A[i, i]`` is safe to reorder over ``i`` but not over an inner
+      ``j`` that never appears in it, and that hazard only shows up when ``j`` is checked as
+      its own index against the same body.
+    """
+    depth = 1
+    collapsed_names = {node.target.id}
+    cur = node
+    while len(cur.body) == 1 and isinstance(cur.body[0], ast.For):
+        nxt = cur.body[0]
+        if not is_range_for(nxt) or is_timestep_loop(nxt):
+            break
+        if range_step_sign(nxt.iter.args[2] if len(nxt.iter.args) == 3 else None) is None:
+            break
+        if any(reads_name(arg, name) for arg in nxt.iter.args for name in collapsed_names):
+            break  # a bound depends on an already-collapsed index -- not rectangular.
+        if loop_reduction(nxt) is not None or not loop_is_parallel_safe(nxt):
+            break
+        collapsed_names.add(nxt.target.id)
+        depth += 1
+        cur = nxt
+    return depth

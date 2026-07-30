@@ -8,12 +8,14 @@ This product is licensed under the GNU General Public License v3.0 or later
 Upstream: NPBench
 ================================================================================
 
-HPCAgent-Bench builds on and incorporates code from NPBench, a benchmarking suite for
+HPCAgent-Bench is influenced by NPBench, a benchmarking suite for
 high-performance NumPy (A. N. Ziogas et al., "NPBench: A Benchmarking Suite for
 High-Performance NumPy", ICS '21, https://doi.org/10.1145/3447818.3460360).
 
-NPBench is distributed under the BSD 3-Clause License; that notice is retained
-below as required, and applies to the portions of HPCAgent-Bench derived from NPBench.
+Several HPCAgent-Bench kernels were adapted from their original upstream sources via an
+intermediate NumPy port in NPBench (see the per-kernel list below). NPBench is distributed
+under the BSD 3-Clause License; that notice is retained below and applies to those
+NPBench-intermediated adaptations.
 
     BSD 3-Clause License
 
@@ -96,3 +98,247 @@ The model-extraction-relu-logits task (author: Nicholas Carlini) was evaluated b
 not ported: its black-box ReLU weight-recovery attack does not reduce to a clean,
 deterministic, reliably-correct numeric kernel at the required tolerance, so the
 pytorch-model-cli MNIST inference task was ported in its place (as mnist_infer).
+
+================================================================================
+Per-kernel upstream sources
+================================================================================
+
+Individual HPCAgent-Bench kernels are adapted (reimplemented in NumPy, and for some a frozen
+reference copy retained for provenance) from the upstream projects below. Every upstream license
+is compatible with GPL-3.0-or-later, under which HPCAgent-Bench as a whole is distributed. The
+bundled *_reference.* copies are not the scoring oracle -- the HPCAgent-Bench NumPy reimplementation is.
+
+* Barba, Lorena A. & Forsyth, Gilbert F. — CFD Python: 12 Steps to Navier-Stokes (barbagroup/CFDPython), https://github.com/barbagroup/CFDPython
+  License: BSD-3-Clause (code); CC-BY (instructional text/notebooks)
+  cavity_flow and channel_flow reimplement numerical routines (build_up_b, pressure_poisson,
+  the cavity/channel time-stepping loops) from CFD Python: 12 Steps to Navier-Stokes, an open
+  educational project by Lorena A. Barba and Gilbert F. Forsyth (barbagroup/CFDPython,
+  https://github.com/barbagroup/CFDPython; see also Barba & Forsyth, Journal of Open Source
+  Education, 1(9), 21, 2018, https://doi.org/10.21105/jose.00021). The code is BSD-3-Clause
+  licensed (the accompanying instructional notebooks are separately CC-BY). HPCAgent-Bench
+  adapted this code via an intermediate NumPy port in SPCL's NPBench and reimplements it here
+  under GPL-3.0-or-later; the bundled reference copy documents the original provenance and is
+  not used as the scoring oracle.
+
+* CP2K (src/grid/cpu grid-integration backend)
+  License: BSD-3-Clause
+  HPCAgent-Bench's cp2k_grid_integrate kernel is adapted from CP2K's separately BSD-licensed
+  real-space grid-integration backend (src/grid/cpu/grid_cpu_integrate.c and associated
+  grid_cpu_collint.h, grid_cpu_task_list.c, grid_process_vab.h, grid_common.h,
+  grid_constants.h), developed by the CP2K developer group,
+  https://github.com/cp2k/cp2k/blob/master/src/grid/cpu/grid_cpu_integrate.c, licensed under
+  BSD-3-Clause. HPCAgent-Bench reimplements the Gaussian-product/Cab/Cxyz orthorhombic
+  integration path as a standalone NumPy port; the NumPy port is not the scoring oracle (the
+  numpy reference remains the correctness oracle). BSD-3-Clause is compatible with
+  redistribution under GPL-3.0-or-later for the combined work.
+
+* CRC-16-CCITT gist by Øystein Sture ('oysstu')
+  License: not stated upstream (public GitHub Gist, no LICENSE/SPDX header)
+  crc16 is adapted from Øystein Sture's ('oysstu') public gist 'Implementation of crc16
+  (CRC-16-CCITT) in python' (gist.github.com/oysstu/68072c44c02879a2abf94ef350d1c7c6), via
+  NPBench (github.com/spcl/npbench, BSD-3-Clause). No license is stated on the upstream gist;
+  HPCAgent-Bench reimplements the algorithm in NumPy for benchmarking purposes, and the numpy
+  reference (not this frozen copy) is the correctness oracle.
+
+* Cython project documentation ("Cython for NumPy users" tutorial)
+  License: Apache-2.0 (Cython project overall); the tutorial page itself states no separate code license
+  The compute kernel is adapted from the Cython project's "Cython for NumPy users" tutorial
+  (cython.readthedocs.io/en/latest/src/userguide/numpy_tutorial.html). The Cython project as a
+  whole is licensed Apache-2.0; the tutorial page carries no separate code-license notice of
+  its own. HPCAgent-Bench reimplements this kernel in NumPy (via an intermediate NPBench
+  port), compatible with and distributed under HPCAgent-Bench's GPL-3.0-or-later license.
+
+* Dan Goodman, "Fast fractals with Python and numpy" (The Samovar blog, 2009-03-22, thesamovar.wordpress.com) -- used by kernel mandelbrot2
+  License: not stated upstream (blog post carries no license notice)
+  HPCAgent-Bench's mandelbrot2 kernel adapts the vectorized-with-shrinking-array Mandelbrot
+  algorithm from Dan Goodman's 2009-03-22 blog post "Fast fractals with Python and numpy" on
+  The Samovar (https://thesamovar.wordpress.com/2009/03/22/fast-fractals-with-python-and-
+  numpy/), reaching HPCAgent-Bench via SPCL's NPBench (BSD-3-Clause, github.com/spcl/npbench).
+  The blog post states no license; HPCAgent-Bench treats it as an unlicensed reimplementation
+  with no SPDX identifier claimed for it. The code has been reimplemented in NumPy for
+  HPCAgent-Bench (GPL-3.0-or-later).
+
+* ECMWF dwarf-p-cloudsc
+  License: Apache-2.0
+  HPCAgent-Bench's cloudsc kernel is adapted from dwarf-p-cloudsc, the IFS cloud-microphysics
+  parameterization mini-app maintained by ECMWF (European Centre for Medium-Range Weather
+  Forecasts), https://github.com/ecmwf-ifs/dwarf-p-cloudsc, licensed under Apache License 2.0.
+  HPCAgent-Bench reimplements the kernel's physical constants, cloud-species indexing, and
+  computational structure as a standalone NumPy reference and port; the NumPy port is not the
+  scoring oracle for the benchmark (the numpy reference file itself remains the correctness
+  oracle). Apache-2.0 is compatible with redistribution under GPL-3.0-or-later for the
+  combined work.
+
+* Gabriel Bengtsson, "Development of Stockham Fast Fourier Transform using Data-Centric Parallel Programming" (MSc thesis, KTH Royal Institute of Technology, School of Electrical Engineering and Computer Science, 2020) -- used by kernel stockham_fft
+  License: unclear/not stated (KTH DiVA record marks the thesis "Open Access"/freely readable, but states no explicit code-reuse or open-source license; treated as standard academic copyright pending any license found inside the PDF itself)
+  HPCAgent-Bench's stockham_fft kernel adapts the Stockham FFT algorithm from Gabriel
+  Bengtsson's 2020 MSc thesis "Development of Stockham Fast Fourier Transform using Data-
+  Centric Parallel Programming" (KTH Royal Institute of Technology; https://kth.diva-
+  portal.org/smash/record.jsf?pid=diva2:1511982), reaching HPCAgent-Bench via SPCL's NPBench
+  (BSD-3-Clause, github.com/spcl/npbench). The thesis is open-access/freely readable but
+  states no explicit code-reuse license; HPCAgent-Bench treats it as an unlicensed
+  reimplementation and claims no SPDX identifier for it. The code has been reimplemented in
+  NumPy for HPCAgent-Bench (GPL-3.0-or-later).
+
+* GridTools/gt4py, stencil_definitions.py test suite, https://github.com/GridTools/gt4py
+  License: BSD-3-Clause
+  hdiff and vadv reimplement finite-difference weather-stencil kernels (horizontal diffusion
+  and vertical advection) from GridTools/gt4py's stencil_definitions.py integration test suite
+  (https://github.com/GridTools/gt4py/blob/1caca893034a18d5df1522ed251486659f846589/tests/test
+  _integration/stencil_definitions.py), maintained by ETH Zurich / CSCS and licensed
+  BSD-3-Clause. HPCAgent-Bench adapted these stencils via an intermediate NumPy port in SPCL's
+  NPBench (npbench/benchmarks/weather_stencils/) and reimplements them here under GPL-3.0-or-
+  later; the bundled reference copy documents the original provenance and is not used as the
+  scoring oracle.
+
+* ICON dynamical core (mo_velocity_advection)
+  License: BSD-3-Clause
+  HPCAgent-Bench's velocity_tendencies kernel is adapted from the ICON dynamical core's
+  mo_velocity_advection.velocity_tendencies subroutine, developed by the ICON partnership
+  (DWD, MPI-M, DKRZ, KIT, C2SM and collaborators), https://gitlab.dkrz.de/icon/icon-model
+  (project site icon-model.org), licensed under BSD-3-Clause. HPCAgent-Bench reimplements
+  every Fortran branch/switch of the subroutine as a standalone in-place NumPy port; the NumPy
+  port is not the scoring oracle (the numpy reference remains the correctness oracle).
+  BSD-3-Clause is compatible with redistribution under GPL-3.0-or-later for the combined work.
+
+* Jean-Francois Puget ("jfp"), "How To Quickly Compute The Mandelbrot Set In Python" (IBM developerWorks blog, ~2017; original post now dead, mirrored at github.com/jfpuget/60e07a82dece69b011bb) -- used by kernel mandelbrot1
+  License: not stated upstream (personal blog post; no LICENSE/SPDX found in the original post or its gist mirror)
+  HPCAgent-Bench's mandelbrot1 kernel adapts the Mandelbrot-set computation from Jean-Francois
+  Puget's ("jfp") 2017 IBM developerWorks blog post "How To Quickly Compute The Mandelbrot Set
+  In Python" (original URL now dead; mirrored by the author at
+  https://gist.github.com/jfpuget/60e07a82dece69b011bb), reaching HPCAgent-Bench via SPCL's
+  NPBench (BSD-3-Clause, github.com/spcl/npbench). No license was ever stated for the original
+  blog post/gist; HPCAgent-Bench treats it as an unlicensed reimplementation and does not
+  claim any SPDX identifier for it. The code has been reimplemented in NumPy for HPCAgent-
+  Bench (GPL-3.0-or-later), consistent with this ambiguous-license status.
+
+* LULESH (Livermore Unstructured Lagrangian Explicit Shock Hydrodynamics)
+  License: BSD-3-Clause (New BSD)
+  HPCAgent-Bench's lulesh kernel is adapted from LULESH, the Lagrangian shock-hydrodynamics
+  proxy application originally developed at Lawrence Livermore National Laboratory (LLNL),
+  https://github.com/LLNL/LULESH, licensed under the BSD-3-Clause (New BSD) license. HPCAgent-
+  Bench reimplements the full Sedov-blast Lagrange-leapfrog algorithm as a standalone NumPy
+  SoA port; the NumPy port is not the scoring oracle (the numpy reference remains the
+  correctness oracle). BSD-3-Clause is compatible with redistribution under GPL-3.0-or-later
+  for the combined work.
+
+* nbody-python by Philip Mocz (Princeton University)
+  License: GPL-3.0
+  nbody is adapted from Philip Mocz's 'Create Your Own N-body Simulation (With Python)'
+  (github.com/pmocz/nbody-python), licensed GPL-3.0, via NPBench (github.com/spcl/npbench,
+  BSD-3-Clause). HPCAgent-Bench reimplements it in NumPy for benchmarking; GPL-3.0 is
+  compatible with HPCAgent-Bench's own GPL-3.0-or-later licensing. The numpy reference remains
+  the correctness oracle, not this frozen copy.
+
+* Nicolas P. Rougier, "From Python to Numpy" (github.com/rougier/from-python-to-numpy, formerly numpy-book) -- code/mandelbrot.py, the shared intermediary embedded verbatim as a header in both mandelbrot1 and mandelbrot2's reference/numpy files
+  License: BSD-2-Clause (code; per the repo's LICENSE-code.txt, Copyright (c) 2017 Nicolas P. Rougier; the book prose itself is separately CC-BY-NC-SA 4.0 and does not apply to the code)
+  The mandelbrot1 and mandelbrot2 kernels both pass through Nicolas P. Rougier's "From Python
+  to Numpy" project (code/mandelbrot.py), which sits between the original blog-post authors
+  and NPBench in the provenance chain. Rougier's code is BSD-2-Clause licensed (Copyright (c)
+  2017 Nicolas P. Rougier); HPCAgent-Bench preserves Rougier's original copyright/license
+  header verbatim in both the mandelbrot1 and mandelbrot2 reference and numpy source files,
+  and reimplements the algorithm in NumPy for HPCAgent-Bench (GPL-3.0-or-later), which is
+  compatible with the permissive BSD-2-Clause terms.
+
+* NPBench (SPCL, ETH Zurich) -- github.com/spcl/npbench -- shared intermediary for mandelbrot1, mandelbrot2, and stockham_fft (mandelbrot1_numpy.py, mandelbrot2_numpy.py, stockham_fft_numpy.py)
+  License: BSD-3-Clause
+  All three kernels in this batch (mandelbrot1, mandelbrot2, stockham_fft) were carried into
+  HPCAgent-Bench via SPCL's NPBench project (github.com/spcl/npbench), BSD-3-Clause licensed,
+  ETH Zurich Scalable Parallel Computing Lab. NPBench itself is not the ultimate origin for
+  any of these three kernels (each has its own external original author cited above); NPBench
+  served only as the intermediary from which the reference sources were collected. HPCAgent-
+  Bench's NumPy files are reimplementations for HPCAgent-Bench (GPL-3.0-or-later), compatible
+  with NPBench's permissive BSD-3-Clause terms; the frozen *_reference.py files remain
+  unmodified copies (not the scoring oracle).
+
+* Numba project documentation ("A ~5 minute guide to Numba")
+  License: BSD-2-Clause (Numba project overall); the docs page itself states no separate code license
+  The go_fast kernel is adapted from the Numba project's "A ~5 minute guide to Numba"
+  documentation page (numba.readthedocs.io/en/stable/user/5minguide.html). The Numba project
+  as a whole is licensed BSD-2-Clause; the docs page carries no separate code-license notice
+  of its own. HPCAgent-Bench reimplements this kernel in NumPy (via an intermediate NPBench
+  port), compatible with and distributed under HPCAgent-Bench's GPL-3.0-or-later license.
+
+* numpy-benchmarks (Serge Guelton / HPCProject)
+  License: BSD-3-Clause
+  The arc_distance kernel is adapted from numpy-benchmarks (github.com/serge-sans-
+  paille/numpy-benchmarks/blob/master/numpy_benchmarks/benchmarks/arc_distance.py), a
+  benchmark suite by Serge Guelton ("HPCProject") used to test the Pythran compiler, Copyright
+  (c) 2019 Serge Guelton, licensed under the 3-Clause BSD License. HPCAgent-Bench reimplements
+  this kernel in NumPy (via an intermediate NPBench port); the frozen reference copy in
+  arc_distance_reference.py retains the original BSD-3-Clause license text in full. This
+  reimplementation is compatible with and distributed under HPCAgent-Bench's GPL-3.0-or-later
+  license.
+
+* OMEN quantum transport simulator (ETH Zurich, Integrated Systems Laboratory / Nano-TCAD group, PI Mathieu Luisier)
+  License: not publicly released / no OSS license found
+  contour_integral and scattering_self_energies are adapted from kernels of the OMEN quantum
+  transport simulator (ETH Zurich Integrated Systems Laboratory / Nano-TCAD group, PI Mathieu
+  Luisier), as documented in Stieger, Szabo, Bunjaku & Luisier, 'Ab-initio quantum transport
+  simulation of self-heating in single-layer 2-D materials,' J. Appl. Phys. 122, 045708 (2017)
+  and Ziogas, Ben-Nun, Fernández, Schneider, Luisier & Hoefler, 'A Data-Centric Approach to
+  Extreme-Scale Ab Initio Dissipative Quantum Transport Simulations,' SC'19 -- both via
+  NPBench (github.com/spcl/npbench, BSD-3-Clause). OMEN is an internal research code with no
+  public repository or OSS license found; HPCAgent-Bench reimplements these two kernels in
+  NumPy for benchmarking, and the numpy reference remains the correctness oracle.
+
+* Piotr Skalski, ILearnDeepLearning.py (numpy_convolutional_neural_net / convolutional.py) -- used by conv2d_bias, lenet, resnet
+  License: MIT
+  HPCAgent-Bench's conv2d_bias, lenet, and resnet kernels adapt the stride-1 2D-convolution
+  loop structure from Piotr Skalski's ILearnDeepLearning.py project
+  (numpy_convolutional_neural_net/convolutional.py,
+  https://github.com/SkalskiP/ILearnDeepLearning.py), licensed under the MIT License. That
+  convolution routine was carried into SPCL NPBench's deep_learning benchmarks (BSD-3-Clause)
+  and is further reimplemented in NumPy here for HPCAgent-Bench; the HPCAgent-Bench numpy
+  reference, not this frozen copy, is the correctness oracle. GPL-3.0-or-later compatible.
+
+* PolyBench/C 4.2.1 (Louis-Noel Pouchet & Tomofumi Yuki, Ohio State University)
+  License: permissive (PolyBench license)
+  The PolyBench stencil / linear-algebra kernels (heat_3d, jacobi_1d/2d, seidel_2d, adi,
+  fdtd_2d, gemm, and the other polybench-derived kernels) are adapted from PolyBench/C 4.2.1
+  (github.com/MatthiasJReisinger/PolyBenchC-4.2.1; originally Louis-Noel Pouchet, later
+  maintained by Tomofumi Yuki, Ohio State University), distributed under the permissive
+  PolyBench license. The frozen C reference beside each kernel retains PolyBench's own header;
+  HPCAgent-Bench reimplements the kernels in NumPy and distributes them under GPL-3.0-or-
+  later.
+
+* pyFAI (Jerome Kieffer & Giannis Ashiotis, ESRF)
+  License: CC BY 3.0 (cited code excerpt); MIT (pyFAI project overall)
+  The azimint_hist and azimint_naive kernels are adapted from pyFAI (github.com/silx-
+  kit/pyFAI), the azimuthal-integration library authored by Jerome Kieffer and Giannis
+  Ashiotis at ESRF, Copyright 2014. The specific code excerpt used cites the Creative Commons
+  Attribution 3.0 license in its own header (from Kieffer & Ashiotis, "PyFAI: a python library
+  for high performance azimuthal integration on GPU", EuroSciPy 2014); the pyFAI project as a
+  whole is MIT-licensed (ESRF, 2011-2017). HPCAgent-Bench reimplements both kernels in NumPy
+  (via an intermediate NPBench port); the original CC BY 3.0 notice is retained verbatim in
+  azimint_hist_reference.py and azimint_naive_reference.py. This reimplementation is
+  compatible with and distributed under HPCAgent-Bench's GPL-3.0-or-later license.
+
+* SPCL NPBench (github.com/spcl/npbench) -- used by mlp, softmax, and as the direct carrier for conv2d_bias/lenet/resnet
+  License: BSD-3-Clause
+  HPCAgent-Bench's mlp and softmax kernels are adapted directly from SPCL NPBench's
+  deep_learning benchmarks (mlp_numpy.py, softmax_numpy.py; https://github.com/spcl/npbench),
+  licensed under the BSD-3-Clause License; NPBench also serves as the intermediary carrier of
+  the Skalski-derived conv2d_bias/lenet/resnet convolution code. All are reimplemented in
+  NumPy for HPCAgent-Bench and are not the scoring oracle (the HPCAgent-Bench numpy reference
+  remains the correctness oracle). GPL-3.0-or-later compatible.
+
+* TSVC_2 -- Test Suite for Vectorizing Compilers (Maleki, Gao, Garzaran, Wong, Padua)
+  License: NCSA/MIT (University of Illinois at Urbana-Champaign)
+  The foundation microkernels (the tsvc_2 / tsvc_2_5 families) are adapted from TSVC_2 -- the
+  Test Suite for Vectorizing Compilers (github.com/UoB-HPC/TSVC_2; S. Maleki, Y. Gao, M. J.
+  Garzaran, T. Wong, D. A. Padua, 'An Evaluation of Vectorizing Compilers', PACT 2011),
+  NCSA/MIT-licensed (University of Illinois at Urbana-Champaign). The .c references are
+  adapted from the TSVC_2 C source; the .cpp references are HPCAgent-Bench's own C++
+  adaptations of those microkernels. HPCAgent-Bench reimplements them in NumPy and distributes
+  them under GPL-3.0-or-later.
+
+* XSBench
+  License: MIT
+  HPCAgent-Bench's xsbench kernel is adapted from XSBench, the Monte Carlo macroscopic neutron
+  cross-section lookup proxy application developed by Argonne National Laboratory / DOE-CESAR,
+  https://github.com/ANL-CESAR/XSBench, licensed under the MIT License. HPCAgent-Bench
+  reimplements the history-based unionized-grid lookup (calculate_macro_xs,
+  calculate_micro_xs, grid_search) as a standalone NumPy port; the NumPy port is not the
+  scoring oracle (the numpy reference remains the correctness oracle). MIT is compatible with
+  redistribution under GPL-3.0-or-later for the combined work.

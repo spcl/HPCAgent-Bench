@@ -5,10 +5,84 @@
 # (a .properties/.env shape -- deliberately NOT JSON/YAML so bash can read it with a
 # three-line `while IFS='=' read` loop). Blank lines and `#` comments are ignored.
 #
-# Only apptainer + podman are supported: both are what CSCS launches, and both consume
-# the ONE universal OCI image (apptainer builds a SIF from it; podman runs the OCI tag
-# directly). A multi-node inference endpoint (a vLLM behind >1 node) is a ray cluster of
-# these single-node containers exposing ONE URL -- no container ever spans nodes.
+# OCI IS A STANDARD, NOT A RUNTIME. Docker and podman are both implementations of it; neither
+# one IS it. So `oci` below is an ALIAS a caller may select to mean "any OCI-compliant runtime
+# this machine has", and it resolves to a concrete implementation. It is not a runtime itself
+# and nothing is ever launched as `oci`.
+#
+# There is ONE distributed image per hardware target (cpu / nvidia / amd) and it is OCI. That
+# choice is forced by the direction of the conversions: an OCI image converts INTO SquashFS
+# (Alps' engine) or a SIF (apptainer), and neither converts back. Ship a SIF and a docker user
+# has nothing to run.
+#
+# NOTHING has to be converted by hand. Each backend pulls the OCI reference from the registry
+# and does its own conversion:
+#
+#   apptainer pull docker://<registry>/hpcagent_bench:<hw>     -> SIF, built on the spot
+#   EDF:  image = "<registry>#hpcagent_bench:<hw>"             -> SquashFS, pulled and cached by CE
+#   docker/podman run <registry>/hpcagent_bench:<hw>           -> no conversion at all
+#
+# A pre-imported .sqsh or a prebuilt .sif is an OPTIMISATION (it skips the per-job pull), never a
+# requirement. Sites convert because pulling an OCI image over a parallel filesystem is slow,
+# which is the whole reason SquashFS and SIF exist.
+#
+# One TAG can still cover both CPU architectures: a multi-arch manifest list built with
+# `docker buildx build --platform linux/amd64,linux/arm64 --push` lets the registry hand each
+# host the right manifest. GH200 nodes are aarch64, so an amd64-only image fails there at exec
+# time -- the tag must contain an arm64 manifest, not merely exist.
+#
+# CAVEAT, and it is the reason this benchmark cannot promise a container is enough: one COMPILED
+# image is portable, not performance-portable. MPI (Open MPI vs MPICH), BLAS/LAPACK and Fortran
+# have no common ABI, and vectorisation and GPU codegen are baked in at build time -- see XaaS
+# (Hoefler et al., IEEE CiSE 2024, arXiv:2401.04552; Copik et al., SC'25, arXiv:2509.17914). On a
+# site whose fabric or math library differs, the image runs and the NUMBER is wrong. That is what
+# the Cray hooks below exist to paper over, and why a distributed run must enable them.
+#
+# NATIVE is a first-class member, not the absence of one. A site with no container runtime at
+# all still has to be able to run the benchmark, and saying so as a backend keeps that path on
+# the same launch seam as the others instead of in a special case at every call site.
+#
+# Docker leads within the `oci` alias, because it is the implementation most users have. But the
+# LAST-RESORT fallback, when nothing at all is detected on PATH, stays podman: a fallback has to
+# membership, which no HPC login node grants. Podman is the OCI implementation that is rootless
+# and daemonless, so it is the one that actually runs in both places.
+#
+# Each row declares a FAMILY and a KIND. The family is the image form and contract; the row is
+# one IMPLEMENTATION of it.
+#
+#   family=oci     -- consumes the shipped OCI image unconverted. docker and podman are two
+#                     implementations of one standard: same verb, same bind/workdir/env flags,
+#                     same tag. They differ in exactly two ways, both recorded below -- the
+#                     NVIDIA flag spelling, and whether a daemon plus a root-equivalent group
+#                     is required.
+#   family=sif     -- a SIF converted from that same OCI image (apptainer). One-way: a SIF
+#                     cannot be handed back to docker, which is why it is never the artifact
+#                     we distribute.
+#   family=ce      -- CSCS Alps' container engine. Podman underneath, with a SquashFS layer
+#                     format (converted from the OCI image, again one-way) and pre-defined Cray
+#                     OCI hooks that are what actually give the container correct, fast access
+#                     to the GPU and the NIC. Kept SEPARATE from `oci` on purpose: selecting an
+#                     OCI runtime must never silently resolve to the one implementation that
+#                     cannot be launched locally and that fails without an EDF. Same runtime,
+#                     different contract -- and the contract is what a caller has to get right.
+#   family=native  -- no container. The command runs on the host as-is. For a site with no
+#                     runtime installed, and for a developer who wants the harness on bare
+#                     metal; it consumes no image and converts nothing.
+#
+#   kind=exec      -- the backend WRAPS the command:  <backend> <verb> ... <image> <cmd...>
+#   kind=srun_env  -- the backend is selected by a SLURM FLAG and there is no wrapper at all:
+#                     `srun --environment=<edf.toml> <cmd...>`. The EDF file declares the image,
+#                     the mounts, the workdir and the env, so every flag field below is empty
+#                     for such a row and reading one would be a category error.
+#   kind=none      -- no wrapper and no flag: the command is already the launch. Same empty
+#                     flag fields, same reason.
+#
+# `rootless=1` marks a runtime an unprivileged user can invoke with no daemon and no
+# root-equivalent group membership. That is the property that decides what may be a DEFAULT,
+# because a default has to work on an HPC login node as well as a laptop.
+#
+# A multi-node inference endpoint (a vLLM behind >1 node) is a ray cluster of these
+# single-node containers exposing ONE URL -- no container ever spans nodes.
 #
 # INVARIANT: every value is a whitespace-separated TOKEN LIST with no intra-token
 # spaces (`run --rm --network host` is three tokens; a path/env value with a space
@@ -19,6 +93,40 @@
 
 global.passthrough=HPCAGENT_BENCH_OLLAMA_HOST OLLAMA_HOST HPCAGENT_BENCH_OLLAMA_MODEL ANTHROPIC_API_KEY HPCAGENT_BENCH_LOCAL_MODEL
 
+# Rootless, daemonless OCI: the default, and the only exec wrapper that runs unprivileged on
+# both a laptop and an HPC login node.
+podman.family=oci
+podman.rootless=1
+podman.kind=exec
+podman.verb=run --rm --network host
+podman.bind=-v
+podman.workdir=-w
+podman.env=-e
+podman.gpu.nvidia=--device nvidia.com/gpu=all
+podman.gpu.amd=--device /dev/kfd --device /dev/dri --group-add keep-groups
+podman.image_form=tag
+podman.image_default=hpcagent_bench:{hw}
+podman.harbor_env=
+
+# The same OCI image under a daemon. Needs dockerd and a root-equivalent group, so it is the
+# laptop / cloud-VM path, never the HPC one.
+docker.family=oci
+docker.rootless=0
+docker.kind=exec
+docker.verb=run --rm --network host
+docker.bind=-v
+docker.workdir=-w
+docker.env=-e
+docker.gpu.nvidia=--gpus all
+docker.gpu.amd=--device /dev/kfd --device /dev/dri --group-add video
+docker.image_form=tag
+docker.image_default=hpcagent_bench:{hw}
+docker.harbor_env=docker
+
+# SIF conversion of the same OCI image (`apptainer build ... docker-archive:...`).
+apptainer.family=sif
+apptainer.rootless=1
+apptainer.kind=exec
 apptainer.verb=exec
 apptainer.bind=--bind
 apptainer.workdir=--pwd
@@ -29,12 +137,24 @@ apptainer.image_form=sif
 apptainer.image_default=hpcagent_bench-{hw}.sif
 apptainer.harbor_env=singularity
 
-podman.verb=run --rm --network host
-podman.bind=-v
-podman.workdir=-w
-podman.env=-e
-podman.gpu.nvidia=--device nvidia.com/gpu=all
-podman.gpu.amd=--device /dev/kfd --device /dev/dri --group-add keep-groups
-podman.image_form=tag
-podman.image_default=hpcagent_bench:{hw}
-podman.harbor_env=
+# CSCS Alps container engine: podman under a SquashFS layer format with Cray-tuned OCI hooks,
+# so family=oci -- the same runtime, reached differently. What IS different is the LAUNCH: there
+# is no wrapper argv, the container comes from the EDF passed to srun and the command runs
+# unwrapped, so this row carries no verb/bind/workdir/env. Set $HPCAGENT_BENCH_EDF or pass the
+# path explicitly; there is no default, because an EDF names a site-specific image on scratch.
+ce.family=ce
+ce.rootless=1
+ce.kind=srun_env
+ce.srun_flag=--environment
+ce.image_form=edf
+ce.harbor_env=
+
+# No container. Not a degraded mode -- a supported one: a site with no runtime installed still
+# has to be able to run the benchmark, and a developer on bare metal is the common local case.
+# It consumes no image, so image_form is empty and asking it for one is an error, exactly as it
+# is for ce.
+native.family=native
+native.rootless=1
+native.kind=none
+native.image_form=
+native.harbor_env=

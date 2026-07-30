@@ -547,6 +547,57 @@ def expand_matmul_dia_dense_vec(
     return [init_loop, diag_loop]
 
 
+def expand_matmul_dia_t_dense_vec(
+    target: ast.Name,
+    lhs_buffers: Dict[str, str],  # {"data": ..., "offsets": ...}
+    rhs_name: str,
+    n_rows_sym: str,  # NR: rows of A (NOT of A.T)
+    n_cols_sym: str,  # NK: cols of A == rows of A.T == len(y)
+    n_diags_sym: str,
+) -> List[ast.stmt]:
+    """``y = A.T @ x`` for DIA-A (NR x NK) and dense-x -> dense-y (length NK)::
+
+        for j in range(NK): y[j] = 0
+        for d in range(ndiag):
+            o = A_offsets[d]
+            for i in range(NR):
+                j = i + o
+                if 0 <= j < NK:
+                    y[j] += A_data[d, j] * x[i]
+
+    A DIA transpose is NOT a relabelling: negating the offsets also re-keys the
+    data columns, so unlike CSR<->CSC there is no dual descriptor over the same
+    buffers. Transpose the ACCESS instead -- walk the identical ``(d, i)`` space
+    the forward SpMV walks and swap which index reads and which accumulates,
+    which is the same scatter form :func:`expand_matmul_csc_dense_vec` uses.
+    ``A_data[d, j]`` is unchanged: scipy keys the data column by the destination
+    column ``j`` either way.
+    """
+    data = lhs_buffers["data"]
+    offsets = lhs_buffers["offsets"]
+    init_loop = _zero_init_loop(target.id, "__j", n_cols_sym)
+    accum = ast.AugAssign(target=_subscript(target.id, _name("__j"), ctx=ast.Store()),
+                          op=ast.Add(),
+                          value=_mul(_subscript(data, _name("__d"), _name("__j")), _subscript(rhs_name, _name("__i"))))
+    guard = ast.If(test=ast.Compare(left=_const(0),
+                                    ops=[ast.LtE(), ast.Lt()],
+                                    comparators=[_name("__j"), _name(n_cols_sym)]),
+                   body=[accum],
+                   orelse=[])
+    row_loop = ast.For(target=_store("__i"),
+                       iter=_range_call(None, _name(n_rows_sym)),
+                       body=[ast.Assign(targets=[_store("__j")], value=_add(_name("__i"), _name("__o"))), guard],
+                       orelse=[])
+    diag_loop = ast.For(target=_store("__d"),
+                        iter=_range_call(None, _name(n_diags_sym)),
+                        body=[
+                            ast.Assign(targets=[_store("__o")], value=_subscript(offsets, _name("__d"))),
+                            row_loop,
+                        ],
+                        orelse=[])
+    return [init_loop, diag_loop]
+
+
 def expand_matmul_bcsr_dense_vec(
         target: ast.Name,
         lhs_buffers: Dict[str, str],  # {"indptr": ..., "indices": ..., "data": ...}
@@ -589,6 +640,58 @@ def expand_matmul_bcsr_dense_vec(
                           op=ast.Add(),
                           value=_mul(_subscript(data, _name("__k"), _name("__r"), _name("__c")),
                                      _subscript(rhs_name, x_col)))
+    c_loop = ast.For(target=_store("__c"), iter=_range_call(None, _name(block_c_sym)), body=[accum], orelse=[])
+    r_loop = ast.For(target=_store("__r"), iter=_range_call(None, _name(block_r_sym)), body=[c_loop], orelse=[])
+    k_loop = ast.For(target=_store("__k"),
+                     iter=_range_call(_subscript(indptr, _name("__bi")),
+                                      _subscript(indptr, _add(_name("__bi"), _const(1)))),
+                     body=[
+                         ast.Assign(targets=[_store("__bj")], value=_subscript(indices, _name("__k"))),
+                         r_loop,
+                     ],
+                     orelse=[])
+    brow_loop = ast.For(target=_store("__bi"),
+                        iter=_range_call(None, _name(n_block_rows_sym)),
+                        body=[k_loop],
+                        orelse=[])
+    return [init_loop, brow_loop]
+
+
+def expand_matmul_bcsr_t_dense_vec(
+        target: ast.Name,
+        lhs_buffers: Dict[str, str],  # {"indptr": ..., "indices": ..., "data": ...}
+        rhs_name: str,
+        n_block_rows_sym: str,
+        block_r_sym: str,  # R: rows per block
+        block_c_sym: str,  # C: cols per block
+        n_cols_sym: str,  # total scalar cols of A == rows of A.T == len(y)
+) -> List[ast.stmt]:
+    """``y = A.T @ x`` for BCSR-A (block R x C) and dense-x -> dense-y (length NC)::
+
+        for i in range(NC): y[i] = 0
+        for bi in range(nbrows):
+            for k in range(A_indptr[bi], A_indptr[bi + 1]):
+                bj = A_indices[k]
+                for r in range(R):
+                    for c in range(C):
+                        y[bj*C + c] += A_data[k, r, c] * x[bi*R + r]
+
+    Transposing BCSR would mean rebuilding indptr/indices over block COLUMNS and
+    transposing every stored block, so -- as for DIA -- the transpose is applied
+    to the ACCESS, not the layout: the same block traversal, with the block's row
+    and column roles exchanged on the two vectors. Note ``A_data[k, r, c]`` keeps
+    its forward index order; it is the vector subscripts that swap.
+    """
+    indptr = lhs_buffers["indptr"]
+    indices = lhs_buffers["indices"]
+    data = lhs_buffers["data"]
+    init_loop = _zero_init_loop(target.id, "__i", n_cols_sym)
+    out_col = _add(_mul(_name("__bj"), _name(block_c_sym)), _name("__c"))
+    x_row = _add(_mul(_name("__bi"), _name(block_r_sym)), _name("__r"))
+    accum = ast.AugAssign(target=_subscript(target.id, out_col, ctx=ast.Store()),
+                          op=ast.Add(),
+                          value=_mul(_subscript(data, _name("__k"), _name("__r"), _name("__c")),
+                                     _subscript(rhs_name, x_row)))
     c_loop = ast.For(target=_store("__c"), iter=_range_call(None, _name(block_c_sym)), body=[accum], orelse=[])
     r_loop = ast.For(target=_store("__r"), iter=_range_call(None, _name(block_r_sym)), body=[c_loop], orelse=[])
     k_loop = ast.For(target=_store("__k"),
@@ -877,6 +980,12 @@ SPARSE_MATMUL_DISPATCH: Dict[DispatchKey, Callable] = {
     expand_matmul_dia_dense_vec,
     ("bcsr", "dense", "matmul_vec"):
     expand_matmul_bcsr_dense_vec,
+    # ``A.T @ x`` for the two formats with no dual descriptor (CSR<->CSC and COO
+    # transpose by relabelling buffers, so they need no entry here).
+    ("dia", "dense", "matmul_vec_t"):
+    expand_matmul_dia_t_dense_vec,
+    ("bcsr", "dense", "matmul_vec_t"):
+    expand_matmul_bcsr_t_dense_vec,
     ("bcoo", "dense", "matmul_vec"):
     expand_matmul_bcoo_dense_vec,
     ("ell", "dense", "matmul_vec"):

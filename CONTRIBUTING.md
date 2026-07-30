@@ -1,16 +1,15 @@
 # Contributing to HPCAgent-Bench
 
-The contributor guide lives in the **[README](README.md)** -- it is the single
-document. Jump to:
+Contributor guide: **[README](README.md)** (the single doc). Jump to:
 
-- [**Add a benchmark**](docs/CONTRIBUTING.md#add-a-benchmark) -- the two files you
+- [**Add a benchmark**](docs/adding_benchmarks_containers_languages.md#add-a-benchmark) -- the two files you
   write; the C/C++/Fortran/... baselines are generated for you.
-- [**Add a container**](docs/CONTRIBUTING.md#add-a-container) -- one Dockerfile +
-  Apptainer `.def` per hardware (cpu/nvidia/amd).
-- [**Add a language**](docs/CONTRIBUTING.md#add-a-language) -- two edits (incl. a
+- [**Add a container**](docs/adding_benchmarks_containers_languages.md#add-a-container) -- one Dockerfile (built with
+  podman by default, docker a drop-in) + Apptainer `.def` per hardware (cpu/nvidia/amd).
+- [**Add a language**](docs/adding_benchmarks_containers_languages.md#add-a-language) -- two edits (incl. a
   Rust example).
 - [**The optimizer loop & scoring**](README.md#the-optimizer-loop--scoring) and
-  [**how the prompt is generated**](docs/PROMPTS.md).
+  [**how the prompt is generated**](docs/prompts.md).
 
 Normative reference specs:
 
@@ -32,3 +31,9 @@ two-space structural indent, no tabs, no trailing whitespace, one final newline.
 `python tests/check_yaml_style.py` is the gate (`--fix` for the mechanical
 parts); GitHub Actions / docker-compose YAML follow their own schemas and are
 exempt.
+
+Dev tasks run through the `Makefile` (`make help` lists them): `make format`
+(yapf + clang-format + fprettify, in place), `make test` (fast suite; the
+`integration`-marked build/run tests are excluded locally but run in CI), and
+`make run BENCH=gemm FW=dace_cpu,pluto PRESET=S`. They are thin wrappers over
+`scripts/` and the `hpcagent-bench` CLI -- no logic lives in the Makefile.

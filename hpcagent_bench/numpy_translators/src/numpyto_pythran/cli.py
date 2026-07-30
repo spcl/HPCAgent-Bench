@@ -9,6 +9,7 @@ import pathlib
 import sys
 
 from numpyto_common.frontend import parse_kernel
+from numpyto_common.naming import short_for
 from numpyto_common.ir import apply_precision
 from numpyto_pythran.emit import emit_pythran
 from numpyto_common.emit_io import write_generated
@@ -23,7 +24,7 @@ def cmd_emit(args: argparse.Namespace) -> int:
         kir = apply_precision(kir, args.precision)
     src = args.kernel.read_text()
     out_src = emit_pythran(src, kir)
-    short = args.kernel.stem.removesuffix("_numpy")
+    short = short_for(args.kernel)
     # A sparse config names a distinct sub-benchmark (spmv_csr vs spmv_csc); the
     # buffer-style body is identical to dense (pythran compiles the CSR loops +
     # gather), so tag the filename with the layout.

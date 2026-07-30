@@ -16,9 +16,11 @@ parameters:
   S:
     N: 64
   M:
-    N: 128
+    N: 800
   L:
-    N: 256
+    N: 2828
+  XL:
+    N: 10000
 init:
   input_args: [N]
   output_args: [a, wmax, vmax]

@@ -6,11 +6,11 @@ parameters:
   S:
     N: 10
   M:
-    N: 12
+    N: 15
   L:
-    N: 14
+    N: 17
   XL:
-    N: 16
+    N: 19
 init:
   arrays:
     count:

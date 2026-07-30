@@ -1,0 +1,71 @@
+# CSCS Alps Container Engine (EDF) template for the DISTRIBUTED (MPI) track -- the problem
+# decomposition shape, where P ranks collectively compute ONE kernel and the job's product is the
+# scaling curve.
+#
+#   cp scripts/cscs/mpi.toml.example $SCRATCH/mpi.toml        # then edit `image`
+#   EDF=$SCRATCH/mpi.toml RANK_COUNTS=1,2,4,8 RANKS_PER_NODE=4 \
+#       sbatch -A <account> -N 2 --ntasks-per-node=4 scripts/cscs/submit_mpi_scaling_alps.sbatch
+#
+# On Alps every `srun` must carry `--environment=<this file>` or the step runs outside the image.
+#
+# THE ONE DIFFERENCE FROM foundation.toml.example: the hooks. That file deliberately enables NONE,
+# and says so -- its ranks each run a single-node kernel shard and never talk to each other, so
+# there is no rank-to-rank traffic to accelerate and a fabric hook would buy nothing. Here the ranks
+# talk on every timestep, and the hooks are the entire reason this file exists.
+#
+# The image is the same OCI image every other track uses; CE pulls it, converts it to SquashFS and
+# caches it. Compute nodes are GH200, i.e. aarch64 -- an amd64-only image fails at exec time inside
+# the first step, not at submission.
+
+# EITHER a registry reference, in the engine's `[REGISTRY#]IMAGE[:TAG]` form:
+#   image = "quay.io#spcl/hpcagent_bench:cpu"
+# OR an absolute SquashFS path on scratch, when a pre-import is worth the setup:
+image = "${SCRATCH}/ce-images/hpcagent_bench-aarch64.sqsh"
+
+mounts = [
+    "/capstor",
+    "/iopsstor",
+    "${HPCAGENT_BENCH_REPO}:${HPCAGENT_BENCH_REPO}",
+]
+workdir = "${HPCAGENT_BENCH_REPO}"
+writable = true
+
+[annotations]
+# THE FABRIC HOOKS. WITHOUT THEM THE RUN STILL COMPLETES AND THE NUMBERS ARE WRONG.
+#
+# The container image carries no Slingshot/CXI provider and no libfabric tuned for this machine.
+# The hooks are what inject the host's, per EDF -- that is the "bind-mount" answer to the MPI ABI
+# problem (the alternative being an image whose own MPI matches the site's; see
+# hpcagent_bench/container_backends.txt and XaaS, arXiv:2401.04552 / arXiv:2509.17914).
+#
+# With no hook enabled, nothing errors. MPI and NCCL find no high-speed provider and fall back to
+# TCP over the MANAGEMENT network -- a slow, shared, not-for-data link. Every rank still computes
+# the right answer, every collective still completes, and the only visible effect is that T(P)
+# barely improves with P. The run then reads as a kernel that does not scale, when what it
+# measured was a misconfigured launch. A scaling curve is exactly the measurement that failure
+# corrupts, which is why scripts/cscs/submit_mpi_scaling_alps.sbatch refuses an EDF with no
+# `com.hooks.*.enabled = "true"` line at all rather than trusting this comment to be read.
+#
+# cxi: the Slingshot NIC. This is the one the MPI track needs, for host-resident ranks
+# (mpi.residency = host, the default) as much as for device-resident ones.
+com.hooks.cxi.enabled = "true"
+# aws_ofi_nccl: routes NCCL over libfabric/CXI instead of TCP. Needed once ranks move data
+# GPU-to-GPU -- mpi.residency = device, where each rank's tile lives on the GH200 and the kernel may
+# use NCCL/RCCL directly. Harmless for a host-resident run. `variant` tracks the image's CUDA major.
+com.hooks.aws_ofi_nccl.enabled = "true"
+com.hooks.aws_ofi_nccl.variant = "cuda12"
+
+[env]
+# hwloc's GL/OpenCL probes open a display and hang the topology probe inside a container; MPI_Init
+# then never returns and the rank dies of the launch timeout rather than of anything real.
+HWLOC_COMPONENTS = "-opencl,-levelzero,-gl"
+UCX_VFS_ENABLE = "n"
+# GPU-aware MPI off for the DEFAULT host-resident track: the ranks exchange host buffers, and
+# leaving it on costs a GPU-memory registration path nothing here uses. Flip to "1" together with
+# mpi.residency = device in hpcagent_bench/config.yaml, never on its own.
+MPICH_GPU_SUPPORT_ENABLED = "0"
+CUDA_CACHE_DISABLE = "1"
+# Name the fabric provider rather than letting libfabric rank them: with the cxi hook present this
+# is a no-op, and without it the run fails loudly instead of quietly selecting tcp. Comment it out
+# on a site whose provider is spelled differently.
+FI_PROVIDER = "cxi"

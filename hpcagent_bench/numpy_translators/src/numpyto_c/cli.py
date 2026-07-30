@@ -10,7 +10,7 @@ from numpyto_common.frontend import parse_kernel
 from numpyto_common.ir import apply_precision
 from numpyto_common.lowering import lower
 from numpyto_common.emit_io import write_generated
-from numpyto_common.naming import native_base
+from numpyto_common.naming import native_base, short_for
 
 
 def cmd_emit(args: argparse.Namespace) -> int:
@@ -19,7 +19,7 @@ def cmd_emit(args: argparse.Namespace) -> int:
     out = args.out
     out.mkdir(parents=True, exist_ok=True)
     # Kernel name from the input stem, independent of bench_info's short_name.
-    short = args.kernel.stem.removesuffix("_numpy")
+    short = short_for(args.kernel)
     # Precision applied on the IR so the emitted source is precision-monomorphic.
     if args.precision:
         kir = apply_precision(kir, args.precision)

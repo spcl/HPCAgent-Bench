@@ -13,6 +13,9 @@ from typing import Callable, Dict, List, Sequence, Tuple
 VLLM_HEAD = "vllm_head"
 VLLM_WORKER = "vllm_worker"
 JUDGE = "judge"
+#: A rank that runs the optimizer itself instead of serving a model -- the traditional
+#: (deterministic, no-vLLM) track. It hosts no server, so it is ready the moment it exists.
+OPTIMIZER = "optimizer"
 
 RAY_PORT = 6379
 
@@ -32,6 +35,34 @@ class RankRole:
 def expected_world(inference_endpoints: int, nodes_per_vllm: int, judge_nodes: int) -> int:
     """Nodes a launch needs: I*K inference + J judge (the driver co-locates on rank 0)."""
     return inference_endpoints * nodes_per_vllm + judge_nodes
+
+
+def expected_traditional_world(optimizer_nodes: int, judge_nodes: int) -> int:
+    """Nodes a traditional (no-vLLM) launch needs: O optimizer + J judge."""
+    return optimizer_nodes + judge_nodes
+
+
+def plan_traditional_roles(world_size: int, optimizer_nodes: int, judge_nodes: int) -> List[RankRole]:
+    """Per-rank roles for the TRADITIONAL track: O optimizer ranks then J judge ranks, no inference.
+
+    A deterministic optimizer emits the same artifact every run, so there is no model to serve --
+    but the judge still scores the result, so the judge role is kept exactly as the agent track has
+    it. Rank 0 is the driver, co-located on the first optimizer node.
+    """
+    if optimizer_nodes < 1 or judge_nodes < 1:
+        raise ValueError(f"optimizer_nodes ({optimizer_nodes}) and judge_nodes ({judge_nodes}) must both be >= 1")
+    need = expected_traditional_world(optimizer_nodes, judge_nodes)
+    if world_size != need:
+        raise ValueError(f"world size {world_size} != O + J = {need} (optimizer_nodes={optimizer_nodes} "
+                         f"+ judge_nodes={judge_nodes}); allocate exactly {need} nodes "
+                         f"(srun -N {need} --ntasks-per-node=1)")
+    roles: List[RankRole] = []
+    for r in range(world_size):
+        if r < optimizer_nodes:
+            roles.append(RankRole(OPTIMIZER, -1, -1, is_driver=(r == 0)))
+        else:
+            roles.append(RankRole(JUDGE, -1, -1, is_driver=False))
+    return roles
 
 
 def plan_roles(world_size: int, inference_endpoints: int, nodes_per_vllm: int, judge_nodes: int) -> List[RankRole]:
@@ -179,7 +210,9 @@ def rank_status(me: RankRole, procs: Sequence[subprocess.Popen], vllm_port: int,
         rc = proc.poll()
         if rc not in (None, 0):
             return {"kind": "dead", "detail": f"rank {rank} ({me.role}) on {hostname}: server exited rc={rc}"}
-    if me.role == VLLM_WORKER:
+    # Neither hosts a server of its own: a vLLM worker is driven by its head, and an optimizer rank
+    # runs the deterministic optimizer in-process. Probing a port would strand them as "pending".
+    if me.role in (VLLM_WORKER, OPTIMIZER):
         return {"kind": "ready", "detail": ""}
     port = judge_port if me.role == JUDGE else vllm_port
     try:
@@ -194,6 +227,7 @@ def launch(*,
            nodes_per_vllm: int,
            judge_nodes: int,
            model: str,
+           optimizer_nodes: int = 0,
            run_driver: Callable[[List[str], List[str]], int],
            vllm_port: int = 8000,
            judge_port: int = 8800,
@@ -207,8 +241,13 @@ def launch(*,
     comm = MPI.COMM_WORLD
     rank, world = comm.Get_rank(), comm.Get_size()
 
+    # ``inference_endpoints == 0`` selects the TRADITIONAL track: optimizer ranks instead of vLLM
+    # ranks, judge role unchanged. Everything downstream -- the allgather, the settle loop, the
+    # driver's rc broadcast, teardown -- is shared with the agent track rather than duplicated.
+    traditional = inference_endpoints == 0
     try:
-        roles = plan_roles(world, inference_endpoints, nodes_per_vllm, judge_nodes)
+        roles = (plan_traditional_roles(world, optimizer_nodes, judge_nodes) if traditional else plan_roles(
+            world, inference_endpoints, nodes_per_vllm, judge_nodes))
     except ValueError as exc:
         if rank == 0:
             log(f"[launch] bad allocation shape: {exc}")

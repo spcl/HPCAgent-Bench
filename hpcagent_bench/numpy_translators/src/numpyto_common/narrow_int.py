@@ -9,24 +9,29 @@ result feeds a NON-ring op: ``+``/``-``/``*`` compose as a ring homomorphism mod
 but ``//`` (floor-division) is not a homomorphism and reads the un-wrapped
 intermediate, so ``(a + b) // 2`` at int8 diverges (numpy -28, wide 100).
 
-The fix is to re-wrap the wide result of every narrow-int ``+``/``-``/``*`` (and
-unary ``-``) back to its element width. To decide WHEN, an emitter needs the numpy
-result dtype of a subtree; this module is the ONE differentially-tested definition
-of that inference. The first attempt used two divergent hand-rolled oracles, which
-truncated integer true division and int*float -- both FLOAT results this inference
-reports as non-integer, so no wrap fires on them.
+The fix is to re-wrap the wide result of every narrow-int ``+``/``-``/``*``/``**``/
+``<<`` (and unary ``-``) back to its element width. To decide WHEN, an emitter
+needs the numpy result dtype of a subtree; this module is the ONE
+differentially-tested definition of that inference. The first attempt used two
+divergent hand-rolled oracles, which truncated integer true division and int*float
+-- both FLOAT results this inference reports as non-integer, so no wrap fires on
+them.
 
 The inference is deliberately CONSERVATIVE: an operand it cannot resolve to a
 concrete dtype (a call result, an unknown name) makes the whole subtree UNKNOWN and
 no wrap fires -- matching today's behaviour for that subtree rather than risking a
-wrong wrap. Only ``+``/``-``/``*`` and unary ``-`` are wrapped: ``//``/``%``/``**``
-are bounded by their in-range operands, so they never overflow their own width --
-only their sub-expressions do, which the recursion already covers.
+wrong wrap. ``+``/``-``/``*``/``**``/``<<`` and unary ``-`` are wrapped because each
+can produce a magnitude exceeding its narrow operands (``**`` is exponential and
+``<<`` shifts set bits past the top of the width, exactly like ``*`` by a power of
+two -- int8 ``16 ** 2`` wraps 256 -> 0 and ``50 << 2`` wraps 200 -> -56 the same way
+``100 + 100`` wraps 200 -> -56). ``//``/``%`` are bounded by their in-range operands
+(a floor-divide or remainder cannot exceed the dividend's magnitude) so they never
+overflow their own width; ``&``/``|``/``^``/``>>`` only combine or drop bits already
+inside the width, so they cannot either. Only their sub-expressions can overflow,
+which the recursion already covers.
 """
 import ast
 from typing import Callable, Optional
-
-import numpy as np
 
 from numpyto_common import dtypes
 
@@ -42,7 +47,10 @@ _INT_PRESERVING = (ast.Add, ast.Sub, ast.Mult, ast.FloorDiv, ast.Mod, ast.Pow, a
                    ast.LShift, ast.RShift)
 
 #: The ops whose wide result is re-wrapped: a narrow intermediate overflows here.
-_WRAP_BINOPS = (ast.Add, ast.Sub, ast.Mult)
+#: ``**`` is exponential and ``<<`` shifts bits past the top of the width, so both
+#: can exceed a narrow operand's range exactly like ``*`` can -- unlike ``//``/``%``
+#: (bounded by the dividend) or ``&``/``|``/``^``/``>>`` (never grow past the width).
+_WRAP_BINOPS = (ast.Add, ast.Sub, ast.Mult, ast.Pow, ast.LShift)
 
 NameDtype = Callable[[str], Optional[str]]
 
@@ -59,7 +67,7 @@ def _narrow_width(dtype: str) -> Optional[int]:
     """Itemsize (bytes) of a NARROW integer dtype (< the 8-byte ABI int), else None."""
     if not dtypes.is_integer(dtype):
         return None
-    w = np.dtype(dtypes.canonical(dtype)).itemsize
+    w = dtypes.itemsize(dtype)
     return w if w < 8 else None
 
 
@@ -88,7 +96,7 @@ def _combine(a, b):
         return b
     if b == _WEAK_INT:
         return a
-    return np.promote_types(a, b).name  # both concrete integers
+    return dtypes.promote_integers(a, b)  # both concrete integers
 
 
 def _infer(node: ast.AST, name_dtype: NameDtype):

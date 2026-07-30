@@ -11,11 +11,10 @@ from typing import Callable, Sequence, Tuple
 
 
 class PythranFramework(Framework):
-    """A class for reading and processing framework information."""
+    """Pythran backend adapter: compiles the kernel to a native extension via ``pythran`` (flags from
+    :mod:`hpcagent_bench.flags`) and imports the compiled module (see :meth:`implementations`)."""
 
     def __init__(self, fname: str):
-        """Reads framework information."""
-
         super().__init__(fname)
 
     def autogen_targets(self):

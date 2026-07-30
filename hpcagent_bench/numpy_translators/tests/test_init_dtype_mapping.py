@@ -18,7 +18,11 @@ emit+compile+run numerical check of the fix lives in
 import pathlib
 import textwrap
 
-from numpyto_common.frontend import _dtypes_from_initialize
+import pytest
+
+from _bench_yaml import bench_info_for
+
+from numpyto_common.frontend import _dtypes_from_initialize, declared_dtypes, parse_kernel
 
 
 def _write_harness(tmp_path: pathlib.Path, body: str, short: str = "k") -> pathlib.Path:
@@ -86,3 +90,56 @@ def test_by_name_dtype_is_recorded(tmp_path):
     dtypes = _dtypes_from_initialize(numpy_py, info)
     assert dtypes.get("mask") == "int32"
     assert "val" not in dtypes  # float default, never recorded
+
+
+# --------------------------------------------------------------------------- #
+# The DECLARED half: a manifest states an array's element type on its           #
+# ``init.arrays`` entry, and the reader must pick it up from THAT spelling.     #
+# Reading only ``init.dtypes`` (the retired one, which now carries symbols)     #
+# silently defaulted every declared array to float64: complex buffers lost      #
+# their imaginary part and int index arrays emitted as doubles.                 #
+# --------------------------------------------------------------------------- #
+
+
+def test_declared_dtypes_reads_the_arrays_entry():
+    init = {
+        "arrays": {
+            "ip": {
+                "shape": "(N,)",
+                "dtype": "int32"
+            },
+            "z": {
+                "shape": "(N,)",
+                "dtype": "complex128"
+            },
+            "a": "(N,)",  # shorthand: shape only, no dtype to report
+        }
+    }
+    assert declared_dtypes(init) == {"ip": "int32", "z": "complex128"}
+
+
+def test_declared_dtypes_still_accepts_the_legacy_block():
+    # A bench_info JSON on disk may predate the move, and ``init.dtypes`` is also where a
+    # non-array name (a symbol / plain scalar) is typed -- both must come through.
+    init = {"arrays": {"a": {"shape": "(N,)", "dtype": "int32"}}, "dtypes": {"b": "float32", "n_iter": "int64"}}
+    assert declared_dtypes(init) == {"a": "int32", "b": "float32", "n_iter": "int64"}
+
+
+def test_declared_dtypes_prefers_the_arrays_entry_over_the_legacy_block():
+    init = {"arrays": {"a": {"shape": "(N,)", "dtype": "complex128"}}, "dtypes": {"a": "float64"}}
+    assert declared_dtypes(init) == {"a": "complex128"}, "the current spelling wins"
+
+
+@pytest.mark.parametrize("short,array,dtype", [
+    ("tsvc_2_s4114", "ip", "int32"),
+    ("fft_1d", "x", "complex128"),
+])
+def test_declared_array_dtype_reaches_the_ir(short, array, dtype):
+    """The whole seam, on real manifests: manifest -> emit_bridge export -> parse_kernel.
+
+    This is the assertion that was missing when the export moved to ``init.arrays``: each of
+    these arrays came back out of the frontend as the float default, which emits a complex
+    buffer as real (dropping the imaginary part) and an index array as a double."""
+    with bench_info_for(short) as (_, numpy_py, bi):
+        kir = parse_kernel(numpy_py, bi)
+    assert {a.name: a.dtype for a in kir.arrays}[array] == dtype

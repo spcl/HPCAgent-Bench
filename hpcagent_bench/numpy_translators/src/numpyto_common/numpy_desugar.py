@@ -18,9 +18,8 @@ import copy
 import math
 from typing import Dict, List, Optional, Tuple
 
-import numpy as np
-
 from numpyto_common import dtypes
+from numpyto_common.lib_nodes import _parse_einsum_subscripts
 
 
 class DesugarError(NotImplementedError):
@@ -128,7 +127,7 @@ def _is_ellipsis(e: ast.AST) -> bool:
 
 #: numpy reductions that take an ``axis`` (drops the reduced axes; no axis ->
 #: scalar). Used only for ndim propagation, not rewriting.
-_REDUCE_FNS = {"sum", "prod", "mean", "std", "var", "min", "max", "amin", "amax", "argmin", "argmax", "any", "all"}
+REDUCE_FNS = {"sum", "prod", "mean", "std", "var", "min", "max", "amin", "amax", "argmin", "argmax", "any", "all"}
 
 #: ufuncs whose result is always a boolean array (regardless of operand dtype).
 _BOOL_UFUNCS = {
@@ -137,14 +136,33 @@ _BOOL_UFUNCS = {
 }
 
 
-def _expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
+def _axis_count(args: List[ast.expr], keywords: List[ast.keyword]) -> Optional[int]:
+    """How many axes an ``axis=`` argument names. ``None`` when it is absent (numpy's "every
+    size-1 axis", which is not a compile-time count) or not a literal."""
+    kw = {k.arg: k.value for k in keywords}
+    axis = kw.get("axis") or (args[0] if args else None)
+    if axis is None:
+        return None
+    if isinstance(axis, (ast.Tuple, ast.List)):
+        return len(axis.elts)
+    return 1 if isinstance(axis, ast.Constant) and isinstance(axis.value, int) else None
+
+
+def expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
     """Best-effort ndim of an expression given the current rank table."""
     if isinstance(value, ast.Name):
         return ranks.get(value.id)
+    if isinstance(value, ast.Constant):
+        return 0 if isinstance(value.value, (bool, int, float, complex)) else None
+    # ``A.T`` reverses the axes, keeping the rank. Leaving it unknown silently mis-ranked every
+    # ``x = x @ w.T + b``: the matmul went undecided, and the enclosing ``+ b`` then reported the
+    # BIAS vector's rank 1 for a rank-2 result.
+    if isinstance(value, ast.Attribute) and value.attr == "T":
+        return expr_rank(value.value, ranks)
     if isinstance(value, ast.BinOp):
         if isinstance(value.op, ast.MatMult):
-            lr = _expr_rank(value.left, ranks)
-            rr = _expr_rank(value.right, ranks)
+            lr = expr_rank(value.left, ranks)
+            rr = expr_rank(value.right, ranks)
             if lr is None or rr is None:
                 return None
             # matmul: 1-D operands contract to a scalar; otherwise the result
@@ -152,19 +170,19 @@ def _expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
             if lr == 1 and rr == 1:
                 return 0
             return max(lr, rr)
-        lr = _expr_rank(value.left, ranks)
-        rr = _expr_rank(value.right, ranks)
+        lr = expr_rank(value.left, ranks)
+        rr = expr_rank(value.right, ranks)
         return max([r for r in (lr, rr) if r is not None], default=None)
     if isinstance(value, ast.UnaryOp):
-        return _expr_rank(value.operand, ranks)
+        return expr_rank(value.operand, ranks)
     if isinstance(value, ast.Compare):
-        rs = [_expr_rank(value.left, ranks)] + [_expr_rank(c, ranks) for c in value.comparators]
+        rs = [expr_rank(value.left, ranks)] + [expr_rank(c, ranks) for c in value.comparators]
         return max([r for r in rs if r is not None], default=None)  # bool mask keeps operand rank
     if isinstance(value, ast.BoolOp):
-        rs = [_expr_rank(v, ranks) for v in value.values]
+        rs = [expr_rank(v, ranks) for v in value.values]
         return max([r for r in rs if r is not None], default=None)
     if isinstance(value, ast.Subscript):
-        base = _expr_rank(value.value, ranks)
+        base = expr_rank(value.value, ranks)
         if base is None:
             return None
         sl = value.slice
@@ -190,17 +208,23 @@ def _expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
         return base - 1  # single integer/Name index
     if isinstance(value, ast.Call):
         if isinstance(value.func, ast.Name) and value.func.id == "abs" and value.args:
-            return _expr_rank(value.args[0], ranks)  # builtin abs is elementwise
+            return expr_rank(value.args[0], ranks)  # builtin abs is elementwise
         if _np_fft_attr(value) and value.args:
-            return _expr_rank(value.args[0], ranks)  # fft/ifft/fftn... preserve rank
+            return expr_rank(value.args[0], ranks)  # fft/ifft/fftn... preserve rank
         attr = _np_attr(value)
         if attr in ("arange", "linspace"):
             return 1  # always 1-D
-        if attr in _REDUCE_FNS and value.args:
-            base = _expr_rank(value.args[0], ranks)
+        if attr in REDUCE_FNS and value.args:
+            base = expr_rank(value.args[0], ranks)
             if base is None:
                 return None
             kw = {k.arg: k.value for k in value.keywords}
+            # keepdims=True keeps every reduced axis at extent 1, so the rank is unchanged. Ignoring
+            # it under-counted by one and made the following ``np.squeeze(y, axis=-1)`` resolve -1
+            # against the WRONG rank -- it squeezed a different axis.
+            keep = kw.get("keepdims")
+            if isinstance(keep, ast.Constant) and keep.value is True:
+                return base
             ax = kw.get("axis") or (value.args[1] if len(value.args) > 1 else None)
             if ax is None:
                 return 0  # full reduction -> scalar
@@ -213,57 +237,72 @@ def _expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
                 return n
             a0 = value.args[0]
             if (isinstance(a0, ast.Attribute) and a0.attr == "shape"):
-                return _expr_rank(a0.value, ranks)  # np.zeros(C.shape, ...) keeps C's rank
+                return expr_rank(a0.value, ranks)  # np.zeros(C.shape, ...) keeps C's rank
             if isinstance(a0, (ast.Name, ast.Constant)):
                 return 1  # 1-D length
         if attr in _LIKE_CTORS and value.args:
-            return _expr_rank(value.args[0], ranks)
+            return expr_rank(value.args[0], ranks)
         if attr in ("reshape", ) and len(value.args) >= 2:
             n = _tuple_len(value.args[1])
             if n is not None:
                 return n
         if attr in ("copy", "ascontiguousarray", "asarray", "array") and value.args:
-            return _expr_rank(value.args[0], ranks)
+            return expr_rank(value.args[0], ranks)
+        if attr in ("expand_dims", ) and value.args:
+            base = expr_rank(value.args[0], ranks)
+            return None if base is None else base + 1
+        if attr in ("squeeze", ) and value.args:
+            base = expr_rank(value.args[0], ranks)
+            axes = _axis_count(value.args[1:], value.keywords)
+            return None if base is None or axes is None else base - axes
         if attr == "matmul" and len(value.args) == 2:
-            return _expr_rank(ast.BinOp(left=value.args[0], op=ast.MatMult(), right=value.args[1]), ranks)
+            return expr_rank(ast.BinOp(left=value.args[0], op=ast.MatMult(), right=value.args[1]), ranks)
         # rank-preserving methods ``x.astype(dt)`` / ``x.copy()`` (receiver's rank).
         if (isinstance(value.func, ast.Attribute) and value.func.attr in ("astype", "copy", "ravel")):
-            return _expr_rank(value.func.value, ranks) if value.func.attr != "ravel" else 1
+            return expr_rank(value.func.value, ranks) if value.func.attr != "ravel" else 1
         # ``x.reshape((a, b))`` method form.
         if (isinstance(value.func, ast.Attribute) and value.func.attr == "reshape" and value.args):
-            n = _tuple_len(value.args[0]) or (len(value.args) if all(
-                isinstance(a, (ast.Name, ast.Constant)) for a in value.args) else None)
+            # Multi-arg spelling: ONE positional argument per dimension, so the rank is the
+            # argument count whatever each dimension expression looks like -- ``X.reshape(-1,
+            # X.shape[-1])`` (ls3df_scf) is rank 2, and neither ``-1`` (a UnaryOp) nor
+            # ``X.shape[-1]`` (a Subscript) is a bare Name. Requiring Name/Constant there read
+            # every such reshape as "rank unknown", which then reached np.linalg.cholesky as
+            # ndim 0. The single-arg spelling stays restricted: a lone Name may hold the whole
+            # shape TUPLE, which is a rank this cannot count.
+            n = _tuple_len(value.args[0])
+            if n is None and (len(value.args) > 1 or isinstance(value.args[0], (ast.Name, ast.Constant))):
+                n = len(value.args)
             if n is not None:
                 return n
         # Fallback: remaining np.<fn>(...) are elementwise/broadcasting ufuncs
         # (abs, sqrt, exp, less, minimum, where, conj, ...) -> max of arg ranks.
         # Rank-changing ops (constructors, reductions, reshape, matmul) return above.
         if attr is not None:
-            rs = [_expr_rank(a, ranks) for a in value.args]
+            rs = [expr_rank(a, ranks) for a in value.args]
             return max([r for r in rs if r is not None], default=None)
     return None
 
 
 def _call_return_rank(value: ast.AST, call_returns: Dict[str, int]) -> Optional[int]:
     """Rank of ``helper(...)`` when ``helper`` is a local function with a known
-    return rank -- ``_expr_rank`` alone returns None for a call to a non-numpy
+    return rank -- ``expr_rank`` alone returns None for a call to a non-numpy
     Name, so ``x = relu(a @ b)`` would leave ``x`` untracked."""
     if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
         return call_returns.get(value.func.id)
     return None
 
 
-def _rank_table(tree: ast.AST, seed: Dict[str, int], call_returns: Optional[Dict[str, int]] = None) -> Dict[str, int]:
+def rank_table(tree: ast.AST, seed: Dict[str, int], call_returns: Optional[Dict[str, int]] = None) -> Dict[str, int]:
     """Propagate ndim across straight-line assignments to a fixpoint. ``call_returns``
     (a ``{helper: return_ndim}`` map) lets a local bound to a helper call inherit
     that helper's return rank (the ML kernels thread arrays through relu/conv2d
-    helpers, which ``_expr_rank`` cannot see into)."""
+    helpers, which ``expr_rank`` cannot see into)."""
     ranks = dict(seed)
     for _ in range(8):
         changed = False
         for node in ast.walk(tree):
             if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
-                r = _expr_rank(node.value, ranks)
+                r = expr_rank(node.value, ranks)
                 if r is None and call_returns is not None:
                     r = _call_return_rank(node.value, call_returns)
                 if r is not None and ranks.get(node.targets[0].id) != r:
@@ -271,7 +310,32 @@ def _rank_table(tree: ast.AST, seed: Dict[str, int], call_returns: Optional[Dict
                     changed = True
         if not changed:
             break
+    _drop_rank_conflicts(tree, ranks, seed)
     return ranks
+
+
+def _drop_rank_conflicts(tree: ast.AST, ranks: Dict[str, int], seed: Dict[str, int]) -> None:
+    """Forget any name whose assignments do not AGREE on a rank.
+
+    The table is flow-insensitive, so a name reassigned to a differently-shaped value converges to
+    whichever assignment ran last -- and every consumer then reads that one rank at every program
+    point. ``x = x @ w.T + b`` followed by ``x = x + bias3d`` reported rank 3 for the rank-2 value at
+    the top, so ``x.shape`` expanded to three axes. One rank per name or none; a caller that needs
+    the value AT a statement has to track it itself.
+    """
+    per_name: Dict[str, Set[int]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            rank = expr_rank(node.value, ranks)
+            if rank is not None:
+                per_name.setdefault(node.targets[0].id, set()).add(rank)
+    for name, seen in per_name.items():
+        if len(seen) <= 1:
+            continue
+        if name in seed:
+            ranks[name] = seed[name]  # a declared array keeps its DECLARED rank, whatever a rebinding makes it
+        else:
+            ranks.pop(name, None)
 
 
 def _dtype_kind(value: ast.AST, dtypes: Dict[str, str]) -> Optional[str]:
@@ -405,7 +469,7 @@ class _BatchedMatmulToLoop(ast.NodeTransformer):
             a, b = _matmul_operands(mm)
             if not (isinstance(a, ast.Name) and isinstance(b, ast.Name)):
                 return False
-            ra, rb = _expr_rank(a, self.ranks), _expr_rank(b, self.ranks)
+            ra, rb = expr_rank(a, self.ranks), expr_rank(b, self.ranks)
             if (ra or 0) > 2 or (rb or 0) > 2:
                 return True
         return False
@@ -510,7 +574,7 @@ class _PadInline(ast.NodeTransformer):
         if not (isinstance(mode, ast.Constant) and mode.value == "edge") or not call.args:
             return node  # only edge mode, array as first positional
         arr = call.args[0]
-        rank = _expr_rank(arr, self.ranks)
+        rank = expr_rank(arr, self.ranks)
         if rank is None or rank < 1:
             return node
         pad_width = kw.get("pad_width") or (call.args[1] if len(call.args) > 1 else None)
@@ -529,7 +593,6 @@ def _einsum_inline_stmts(subs: str, operands: List[str], ctr: int):
     indices inner-accumulate). Returns ``(stmts, temp_name)`` or ``(None, None)``
     when the form is unsupported (ellipsis / scalar output). numba and pythran
     compile this; neither supports ``np.einsum`` on these shapes."""
-    from numpyto_common.lib_nodes import _parse_einsum_subscripts
     try:
         in_subs, out_sub = _parse_einsum_subscripts(subs)
     except Exception:  # noqa: BLE001 -- ellipsis / malformed -> caller bails
@@ -727,7 +790,7 @@ class _FftInline(ast.NodeTransformer):
         else:
             return node
         arg = node.value.args[0]
-        rank = _expr_rank(arg, self.ranks)
+        rank = expr_rank(arg, self.ranks)
         if rank is None or rank < 1:
             return node
         taxes, inverse = _fft_axes(fattr, node.value, rank)
@@ -822,7 +885,7 @@ class _FancyGatherHoister(ast.NodeTransformer):
         elts = node.slice.elts
         if not arank or len(elts) != arank:
             return node
-        elt_ranks = [_expr_rank(e, self.ranks) for e in elts]
+        elt_ranks = [expr_rank(e, self.ranks) for e in elts]
         arrs = [r for r in elt_ranks if r and r >= 1]
         if not arrs or any(r != arrs[0] for r in arrs):
             return node  # need >=1 index array; all arrays share the driver rank
@@ -1067,7 +1130,7 @@ class _ReduceAxisHoister(ast.NodeTransformer):
             ax = kw.get("axis") or (node.args[0] if node.args else None)
         else:
             return node
-        rank = _expr_rank(arg, self.ranks)
+        rank = expr_rank(arg, self.ranks)
         if rank is None or rank < 2:
             return node
         axes = _axis_list(ax, rank)
@@ -1149,7 +1212,7 @@ class _CallFixups(ast.NodeTransformer):
     def visit_Call(self, node: ast.Call):
         self.generic_visit(node)
         if (isinstance(node.func, ast.Name) and node.func.id == "abs" and len(node.args) == 1 and not node.keywords
-                and (_expr_rank(node.args[0], self.ranks) or 0) >= 1):
+                and (expr_rank(node.args[0], self.ranks) or 0) >= 1):
             self.changed = True
             npabs = ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="abs", ctx=ast.Load())
             return ast.copy_location(ast.Call(func=npabs, args=node.args, keywords=[]), node)
@@ -1196,7 +1259,7 @@ class _CallFixups(ast.NodeTransformer):
             x = node.args[0]
             kw = {k.arg: k.value for k in node.keywords}
             ax = kw.get("axis") or (node.args[1] if len(node.args) > 1 else None)
-            rank = _expr_rank(x, self.ranks)
+            rank = expr_rank(x, self.ranks)
             if rank is None:
                 return node
             if ax is None:
@@ -1239,7 +1302,7 @@ class _UfuncOuterHoister(ast.NodeTransformer):
         if op not in _OUTER_OPS or len(node.args) != 2:
             return node
         a, b = node.args
-        if _expr_rank(a, self.ranks) != 1 or _expr_rank(b, self.ranks) != 1:
+        if expr_rank(a, self.ranks) != 1 or expr_rank(b, self.ranks) != 1:
             return node  # only the 1-D x 1-D outer grid
         p = f"__ao{self.ctr}"
         self.ctr += 1
@@ -1355,7 +1418,7 @@ class _MaskedAssignToLoop(ast.NodeTransformer):
             if self.ranks.get(idx.id) != arank or _dtype_kind(idx, self.dtypes) in ("int", "float", "complex"):
                 return node
         elif struct_mask:
-            if _expr_rank(idx, self.ranks) != arank:
+            if expr_rank(idx, self.ranks) != arank:
                 return node
         else:
             return node
@@ -1423,8 +1486,8 @@ def _is_bool_mask(mask: ast.AST, a: ast.AST, ranks: Dict[str, int], dtypes: Dict
     select (not an integer fancy index or a scalar/slice index)."""
     if isinstance(mask, (ast.Tuple, ast.Slice)) or _is_newaxis(mask):
         return False
-    ar = _expr_rank(a, ranks)
-    if ar is None or _expr_rank(mask, ranks) != ar:
+    ar = expr_rank(a, ranks)
+    if ar is None or expr_rank(mask, ranks) != ar:
         return False
     return _dtype_kind(mask, dtypes) == "bool"
 
@@ -1470,7 +1533,7 @@ class _MaskedReduceHoister(ast.NodeTransformer):
         p = f"__mr{self.ctr}"
         self.ctr += 1
         temp = f"{p}_o"
-        lines = _masked_reduce_lines(temp, a.id, ast.unparse(mask), _expr_rank(a, self.ranks), op, p)
+        lines = _masked_reduce_lines(temp, a.id, ast.unparse(mask), expr_rank(a, self.ranks), op, p)
         self.pre.extend(ast.parse("\n".join(lines)).body)
         return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
 
@@ -1551,7 +1614,7 @@ class _AddAtInline(ast.NodeTransformer):
         A = call.args[0].id
         elts = call.args[1].elts if isinstance(call.args[1], ast.Tuple) else [call.args[1]]
         vals = call.args[2] if len(call.args) > 2 else None
-        driver_rank = next((r for e in elts if (r := _expr_rank(e, self.ranks)) and r >= 1), None)
+        driver_rank = next((r for e in elts if (r := expr_rank(e, self.ranks)) and r >= 1), None)
         if driver_rank is None:
             return node
         p = f"__sc{self._ctr}"
@@ -1564,7 +1627,7 @@ class _AddAtInline(ast.NodeTransformer):
         # for an already-contiguous array under numba.
         pre, idx_exprs, first_arr = [], [], None
         for j, e in enumerate(elts):
-            if (_expr_rank(e, self.ranks) or 0) >= 1:
+            if (expr_rank(e, self.ranks) or 0) >= 1:
                 t = f"{p}_x{j}"
                 pre.append(f"{t} = np.ascontiguousarray({ast.unparse(e)})")
                 idx_exprs.append(f"{t}[{it}]")
@@ -1576,7 +1639,7 @@ class _AddAtInline(ast.NodeTransformer):
         else:
             tv = f"{p}_v"
             pre.append(f"{tv} = np.ascontiguousarray({ast.unparse(vals)})")
-            vr = _expr_rank(vals, self.ranks)
+            vr = expr_rank(vals, self.ranks)
             if vr and vr not in (0, driver_rank):
                 # vals broadcasts against the index shape; only a scalar or a
                 # driver-shaped vals is unambiguous. Anything else would need
@@ -1763,7 +1826,7 @@ class _IntMatmulHoister(ast.NodeTransformer):
     def _lower(self, a: ast.expr, b: ast.expr):
         if _dtype_kind(a, self.dtypes) not in ("int", "bool") or _dtype_kind(b, self.dtypes) not in ("int", "bool"):
             return None  # not (definitely) an integer matmul -> leave for numba's float @
-        ra, rb = _expr_rank(a, self.ranks), _expr_rank(b, self.ranks)
+        ra, rb = expr_rank(a, self.ranks), expr_rank(b, self.ranks)
         if ra is None or rb is None:
             return None  # can't determine the shape -> leave verbatim (a clean skip),
             # NOT a raise: an unknown rank is an inference gap, not a known-unsupported shape.
@@ -1905,7 +1968,7 @@ class _RepeatAxisHoister(ast.NodeTransformer):
         if not (isinstance(ax, ast.Constant) and isinstance(ax.value, int)):
             return node  # no axis / non-constant -> leave verbatim (a clean skip)
         x, m = node.args[0], node.args[1]
-        rank = _expr_rank(x, self.ranks)
+        rank = expr_rank(x, self.ranks)
         if rank is None:
             return node
         k = ax.value % rank
@@ -2001,8 +2064,8 @@ class _NormalizeNegativeAxis(ast.NodeTransformer):
             return None
         a0 = node.args[0]
         if isinstance(a0, (ast.Tuple, ast.List)):
-            return _expr_rank(a0.elts[0], self.ranks) if a0.elts else None
-        return _expr_rank(a0, self.ranks)
+            return expr_rank(a0.elts[0], self.ranks) if a0.elts else None
+        return expr_rank(a0, self.ranks)
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
@@ -2173,11 +2236,7 @@ def _fd_step(precision: Optional[str] = None) -> str:
     emitted, so a wrong-but-fp64 step is the status quo, not a regression.
     """
     dtype = dtypes.canonical(precision) if precision else "float64"
-    try:
-        eps = float(np.finfo(np.dtype(dtype)).eps)
-    except TypeError:
-        eps = float(np.finfo(np.float64).eps)
-    return repr(math.sqrt(eps))
+    return repr(math.sqrt(dtypes.float_eps(dtype)))
 
 
 def _list_display_elts(node: ast.AST) -> Optional[List[ast.expr]]:
@@ -2746,14 +2805,14 @@ class _ReshapeMatmulInline(ast.NodeTransformer):
         if not inner or not isinstance(inner[0], ast.Name) or not isinstance(mm[1], ast.Name):
             return node
         X, Y, mid = inner[0], mm[1], inner[1]
-        rX = _expr_rank(X, self.ranks)
+        rX = expr_rank(X, self.ranks)
         # Fire only on the unit-dim-insertion batched form; other reshapes -> verbatim.
         if not (isinstance(mid, ast.Tuple) and rX and len(mid.elts) == rX + 1
                 and isinstance(mid.elts[-2], ast.Constant) and mid.elts[-2].value == 1):
             return node
-        if _expr_rank(Y, self.ranks) != 2 or rX < 2:
+        if expr_rank(Y, self.ranks) != 2 or rX < 2:
             raise DesugarError(f"reshape-batched matmul: unit-dim form needs a 2-D right operand and a >=2-D "
-                               f"left operand (got left ndim {rX}, right ndim {_expr_rank(Y, self.ranks)})")
+                               f"left operand (got left ndim {rX}, right ndim {expr_rank(Y, self.ranks)})")
         p = f"__dg{self._ctr}"
         self._ctr += 1
         batch = list(range(rX - 1))
@@ -2883,7 +2942,7 @@ class _LinalgHoister(ast.NodeTransformer):
 
     def _chol(self, node: ast.Call):
         a = node.args[0]
-        ra = _expr_rank(a, self.ranks)
+        ra = expr_rank(a, self.ranks)
         if ra is None:
             return node  # unknown rank -> verbatim (inference gap, not a raise)
         if ra != 2:
@@ -2899,7 +2958,7 @@ class _LinalgHoister(ast.NodeTransformer):
         if len(node.args) < 2:
             return node
         a, b = node.args[0], node.args[1]
-        ra, rb = _expr_rank(a, self.ranks), _expr_rank(b, self.ranks)
+        ra, rb = expr_rank(a, self.ranks), expr_rank(b, self.ranks)
         if ra is None or rb is None:
             return node
         if ra != 2:
@@ -2916,7 +2975,7 @@ class _LinalgHoister(ast.NodeTransformer):
 
     def _inv(self, node: ast.Call):
         a = node.args[0]
-        ra = _expr_rank(a, self.ranks)
+        ra = expr_rank(a, self.ranks)
         if ra is None:
             return node
         if ra != 2:
@@ -3416,8 +3475,8 @@ class _EighInline(ast.NodeTransformer):
             w, v = tgt.id, None
         else:
             return node
-        if _expr_rank(a_node, self.ranks) not in (2, None) or (b_node is not None
-                                                               and _expr_rank(b_node, self.ranks) not in (2, None)):
+        if expr_rank(a_node, self.ranks) not in (2, None) or (b_node is not None
+                                                              and expr_rank(b_node, self.ranks) not in (2, None)):
             return node
         p = f"__eigh{self._ctr}"
         self._ctr += 1
@@ -3489,7 +3548,7 @@ def _param_body_rank_evidence(fn: ast.FunctionDef) -> Dict[str, int]:
 def _return_rank(fn: ast.FunctionDef, ranks: Dict[str, int]) -> Optional[int]:
     """Rank of ``fn``'s returned value (the max over its ``return`` statements),
     given a rank table for its body -- so a caller can propagate it."""
-    rs = [_expr_rank(n.value, ranks) for n in ast.walk(fn) if isinstance(n, ast.Return) and n.value is not None]
+    rs = [expr_rank(n.value, ranks) for n in ast.walk(fn) if isinstance(n, ast.Return) and n.value is not None]
     rs = [r for r in rs if r is not None]
     return max(rs) if rs else None
 
@@ -3515,7 +3574,7 @@ def _infer_param_ranks(funcs: List[ast.FunctionDef], kernel_name: str,
             base = dict(seeds[fn.name])
             if fn.name == kernel_name:
                 base.update(kir_seed)
-            ranks = _rank_table(fn, base, call_returns=ret_rank)
+            ranks = rank_table(fn, base, call_returns=ret_rank)
             rr = _return_rank(fn, ranks)
             if rr is not None and ret_rank.get(fn.name) != rr:
                 ret_rank[fn.name] = rr
@@ -3526,7 +3585,7 @@ def _infer_param_ranks(funcs: List[ast.FunctionDef], kernel_name: str,
                     for i, arg in enumerate(node.args):
                         if i >= len(params[callee]):
                             break
-                        r = _expr_rank(arg, ranks)
+                        r = expr_rank(arg, ranks)
                         if r is None:
                             r = _call_return_rank(arg, ret_rank)
                         pname = params[callee][i]
@@ -3770,7 +3829,7 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
         seed = dict(param_ranks.get(vars(fn).get("name"), {}))
         if is_kernel:
             seed.update(kir_seed)
-        ranks = _rank_table(fn, seed)
+        ranks = rank_table(fn, seed)
         dtypes = _dtype_table(fn, kir_dtype_seed if is_kernel else {})
         noncontig = _noncontig_names(fn)
         masked_gathers = _masked_reduce_map(fn, ranks, dtypes)

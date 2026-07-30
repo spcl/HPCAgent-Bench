@@ -1,0 +1,62 @@
+# Test files a DEDICATED CI phase runs, and therefore the unit sweep must NOT.
+#
+# The unit sweep (`Phase 1` in tests.yml) discovers its work with `ls tests/test_*.py` minus this
+# list. That inversion is the point: the filesystem decides what runs, and an exception has to be
+# written down HERE, with a reason. The previous shape was the opposite -- fifteen filenames typed
+# into the workflow -- and it silently drifted: 144 test files existed, 44 were named anywhere in
+# CI, and 94 never executed at all. A new test file was inert by default and nothing said so.
+# tests/test_ci_coverage.py fails when a file is in neither the sweep nor this list.
+#
+# A file belongs here for exactly one reason: another phase already runs it, usually because it
+# needs a toolchain, a launcher or a service the cheap sweep job does not install. "It is slow"
+# alone is not a reason to exclude -- it is a reason to give it its own phase and list it here.
+#
+# Format: one path per line, `#` comments and blank lines ignored. Read by BOTH tests.yml and
+# tests/test_ci_coverage.py, so the workflow and the guard cannot disagree about what is claimed.
+
+# --- MPI: data distribution + descriptor (pure numpy, no launcher) ------------------------------
+tests/test_mpi_descriptor.py
+tests/test_mpi_prompt.py
+tests/test_mpi_scatter_gather_roundtrip.py
+tests/test_mpi_sizing.py
+tests/test_mpi_wire.py
+
+# --- MPI: driver / stub codegen (needs mpicc.mpich to compile) ----------------------------------
+tests/test_mpi_driver_codegen.py
+tests/test_mpi_halo.py
+
+# --- MPI: oversubscribed multi-rank launch (needs a working launcher) ---------------------------
+tests/test_mpi_call.py
+tests/test_mpi_correctness_oracle.py
+tests/test_mpi_drivers_launch.py
+tests/test_mpi_scoring.py
+tests/test_noop_mpi_optimizer.py
+
+# --- agent-bench: tools + optimizers + in-process judge -----------------------------------------
+tests/test_agent_bench.py
+tests/test_agent_service.py
+tests/test_agent_tools.py
+tests/test_blas_optimizer.py
+tests/test_harbor_adapter.py
+tests/test_noop_optimizer.py
+tests/test_optimizer_plugin.py
+tests/test_packaging.py
+tests/test_token_usage.py
+
+# --- codegen backends: need tvm / pluto / a full compiler matrix --------------------------------
+tests/test_default_datatype_tolerance.py
+tests/test_fp16.py
+tests/test_frameworks.py
+tests/test_native_autogen.py
+
+# --- the long sweeps: each is its own phase, several with a backend matrix ----------------------
+tests/test_e2e_numerical.py
+tests/test_integration_sweep.py
+tests/test_kernelbench_translation.py
+
+# --- containers: needs a rootless runtime on the runner -----------------------------------------
+tests/test_container_launch.py
+
+# --- QUARANTINE: not run anywhere, each needs a decision ----------------------------------------
+# Nothing is quarantined today. A file added below runs NOWHERE, so it needs a one-line reason and
+# an owner -- an unexplained entry here is the same silent inertness this file exists to end.

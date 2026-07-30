@@ -292,6 +292,16 @@ def _classify_for(node: ast.For) -> str:
                 return LoopKind.FORI
             if not _is_index_i(tgt.slice, i):
                 return LoopKind.FORI
+            # A rank-reducing reduction over the indexed row (``np.sum(a[i])``)
+            # can't devectorise by dropping ``[i]`` alone -- see
+            # ``_row_reduce_rewrite``. It rewrites the plain, no-extra-argument
+            # case into the equivalent axis reduction; anything it can't
+            # safely rewrite (an explicit ``axis=``, say) keeps this loop
+            # carried instead of risking a shape/value miscompile.
+            if any(
+                    _row_reduce_target(n, i) is not None and _row_reduce_rewrite(n, i) is None
+                    for n in ast.walk(s.value)):
+                return LoopKind.FORI
             if i in _names_loaded(_devectorize_index(s.value, i)):
                 return LoopKind.FORI
         else:
@@ -1088,11 +1098,77 @@ def _emit_while(node: ast.While, live_out: Set[str], indent: str, defined: Set[s
     return lines
 
 
+#: Whole-array reductions confirmed rank-reducing over an indexed row: ``f(a[i])``
+#: collapses ALL of the row's axes, not just the batch axis ``i`` -- naively
+#: dropping ``[i]`` (as for an elementwise read) turns a per-row VALUE into a
+#: full-array SCALAR. See ``_row_reduce_rewrite``.
+_ROW_REDUCE_FUNCS = frozenset({"sum", "max", "min", "mean", "prod"})
+
+
+def _row_reduce_target(node: ast.AST, i: str) -> Optional[ast.expr]:
+    """If ``node`` is a call to one of ``_ROW_REDUCE_FUNCS`` -- module form
+    ``np.f(a[i])``/``jnp.f(a[i])`` or method form ``a[i].f()`` -- whose reduced
+    row is exactly the bare-index subscript ``a[i]``, return the base array
+    Name (``a``). None otherwise (including a non-matching function/shape)."""
+    if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+        return None
+    if isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "jnp") \
+            and node.func.attr in _ROW_REDUCE_FUNCS and len(node.args) >= 1:
+        arg = node.args[0]
+    elif node.func.attr in _ROW_REDUCE_FUNCS:
+        arg = node.func.value
+    else:
+        return None
+    if isinstance(arg, ast.Subscript) and isinstance(arg.value, ast.Name) and _is_index_i(arg.slice, i):
+        return arg.value
+    return None
+
+
+def _row_reduce_rewrite(node: ast.AST, i: str) -> Optional[ast.expr]:
+    """Rewrite a plain row-reduction found by ``_row_reduce_target`` into the
+    equivalent whole-array axis reduction ``f(a, axis=tuple(range(1, a.ndim)))``
+    -- exactly the per-row scalar for ANY rank of ``a`` (an empty axis tuple at
+    rank 1 is a no-op, matching ``f(scalar) == scalar``). None when an extra
+    positional/keyword argument is present (an explicit ``axis=``, say) --
+    guessing how that interacts with the added batch axis would be guesswork,
+    so the caller refuses to vectorise instead of risking another miscompile."""
+    base = _row_reduce_target(node, i)
+    if base is None:
+        return None
+    is_method = not (isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "jnp"))
+    extra_args = node.args if is_method else node.args[1:]
+    if extra_args or node.keywords:
+        return None
+    axis = ast.Call(func=ast.Name(id="tuple", ctx=ast.Load()),
+                    args=[
+                        ast.Call(func=ast.Name(id="range", ctx=ast.Load()),
+                                 args=[
+                                     ast.Constant(value=1),
+                                     ast.Attribute(value=copy.deepcopy(base), attr="ndim", ctx=ast.Load())
+                                 ],
+                                 keywords=[])
+                    ],
+                    keywords=[])
+    call = ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=node.func.attr, ctx=ast.Load()),
+                    args=[copy.deepcopy(base)],
+                    keywords=[ast.keyword(arg="axis", value=axis)])
+    return ast.copy_location(call, node)
+
+
 def _devectorize_index(node: ast.AST, i: str) -> ast.AST:
     """Drop ``[i]`` subscripts so an independent elementwise loop body becomes
-    a whole-array expression."""
+    a whole-array expression. A row-reduction (``np.sum(a[i])``) is rewritten
+    to the equivalent axis reduction first (``_row_reduce_rewrite``) -- a bare
+    subscript-strip alone would collapse it to a full-array scalar."""
 
     class _R(ast.NodeTransformer):
+
+        def visit_Call(self, n):
+            rewritten = _row_reduce_rewrite(n, i)
+            if rewritten is not None:
+                return rewritten
+            self.generic_visit(n)
+            return n
 
         def visit_Subscript(self, n):
             self.generic_visit(n)

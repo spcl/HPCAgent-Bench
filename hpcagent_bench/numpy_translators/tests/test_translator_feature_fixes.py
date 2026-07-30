@@ -1441,3 +1441,24 @@ def test_apply_precision_leaves_integers_alone_in_helpers():
     apply_precision(kir, "float32")
     after = {h.kernel_name: [a.dtype for a in h.arrays if a.dtype.startswith(("int", "uint"))] for h in kir.helpers}
     assert before == after, f"apply_precision changed integer dtypes inside a helper: {before} -> {after}"
+
+
+# --------------------------------------------------------------------------- #
+# U. A `parameters:` preset entry used as a truth value is an INTEGER param     #
+# --------------------------------------------------------------------------- #
+
+
+def test_fortran_wraps_a_preset_symbol_used_as_a_condition():
+    """``if reflect_out:`` where reflect_out is a size-preset entry.
+
+    frontend.py routes every ``parameters:`` name to a SymbolDesc, never to ``kir.scalars``, so a
+    0/1 config toggle declared there was invisible to the int-flag check and emitted as a bare
+    ``if (reflect_out) then`` -- gfortran rejects that with 'IF clause requires a scalar LOGICAL
+    expression', making the whole kernel unbuildable.
+    """
+    from hpcagent_bench.autogen import ensure_native
+    from hpcagent_bench import paths
+    ensure_native("crc16", "fortran")
+    src = (paths.BENCHMARKS / "hpc/combinational_logic/crc16/cpp_backend/crc16_fp64.f90").read_text()
+    assert "if ((reflect_out) /= 0) then" in src, \
+        f"integer preset symbol emitted as a bare LOGICAL condition:\n{src}"

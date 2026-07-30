@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from hpcagent_bench import osinfo
+from hpcagent_bench.isolation import pause_openmp_pools
 
 #: Grace period (seconds) to drain the result queue after the child exits cleanly.
 _DRAIN_S = 5.0
@@ -68,6 +69,9 @@ def run_forked(fn: Callable,
     ``stream_progress=True`` preserves the child's last ``progress`` snapshot even if it is later killed."""
     # fork is cheap on Linux/WSL2; spawn on macOS, where forking after numpy/BLAS threads can abort the child.
     ctx = multiprocessing.get_context(mp_context if mp_context is not None else osinfo.mp_context())
+    # fork() duplicates only the calling thread, so a child entering a parallel region with the
+    # parent's pool live blocks forever -- libgomp installs no pthread_atfork handler. No-op under spawn.
+    pause_openmp_pools()
     q = ctx.Queue()
     progress_q = ctx.Queue() if stream_progress else None
     if progress_q is not None:

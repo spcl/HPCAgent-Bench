@@ -214,9 +214,11 @@ class _DesugarReverseSlice(ast.NodeTransformer):
         self.generic_visit(node)
         sl = node.slice
         if isinstance(sl, ast.Slice) and sl.lower is None and sl.upper is None and self._is_neg_one(sl.step):
+            # ``axis=0`` is not decoration: ``x[::-1]`` reverses the FIRST axis only, while a bare
+            # ``np.flip`` reverses every one of them. The two agree at rank 1 and diverge above it.
             flip = ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="flip", ctx=ast.Load()),
                             args=[node.value],
-                            keywords=[])
+                            keywords=[ast.keyword(arg="axis", value=ast.Constant(value=0))])
             return ast.copy_location(flip, node)
         return node
 

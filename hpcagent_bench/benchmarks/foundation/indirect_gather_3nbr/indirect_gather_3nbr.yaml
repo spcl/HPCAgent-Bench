@@ -6,11 +6,11 @@ parameters:
   S:
     N: 16
   M:
-    N: 64
+    N: 20971520
   L:
-    N: 256
+    N: 75029991
   XL:
-    N: 67108864
+    N: 268435456
 init:
   arrays:
     field: (N,)

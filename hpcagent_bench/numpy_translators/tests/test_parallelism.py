@@ -11,8 +11,8 @@ import tempfile
 
 import pytest
 
-from numpyto_common.parallelism import (any_parallelizable_loop, has_indirect_scatter, is_timestep_loop,
-                                        loop_is_parallel_safe, loop_reduction, subscript_idx_safe,
+from numpyto_common.parallelism import (any_parallelizable_loop, collapsible_depth, has_indirect_scatter,
+                                        is_timestep_loop, loop_is_parallel_safe, loop_reduction, subscript_idx_safe,
                                         UnsupportedParallelError)
 
 
@@ -121,6 +121,65 @@ def test_two_accumulators_is_not_a_single_reduction():
 def test_private_temp_is_not_a_reduction():
     # ``x`` is recomputed each iteration (not self-referential) -> not an accumulator.
     assert loop_reduction(_stmt("for i in range(N):\n    x = a[i] * 2.0\n    c[i] = x\n")) is None
+
+
+# --- collapsible_depth -----------------------------------------------------------------------------
+def test_collapse_depth_perfectly_nested_rectangular_map():
+    # 3 perfectly-nested, rectangular, independent levels -> the whole nest collapses.
+    node = _stmt("for i in range(N):\n"
+                 "    for j in range(M):\n"
+                 "        for k in range(K):\n"
+                 "            out[i, j, k] = a[i, j, k] * 2.0\n")
+    assert collapsible_depth(node) == 3
+
+
+def test_collapse_depth_single_loop_is_one():
+    assert collapsible_depth(_stmt("for i in range(N):\n    out[i] = a[i] * 2.0\n")) == 1
+
+
+def test_collapse_depth_stops_before_inner_reduction():
+    # gemm-shaped: i, j are independent (subscript accumulator, not a bare-Name reduction);
+    # the innermost k is a genuine reduction and must NOT be folded into the collapse.
+    node = _stmt("for i in range(N):\n"
+                 "    for j in range(M):\n"
+                 "        out[i, j] = 0.0\n"
+                 "        for k in range(K):\n"
+                 "            out[i, j] += a[i, k] * b[k, j]\n")
+    assert collapsible_depth(node) == 2
+
+
+def test_collapse_depth_stops_at_non_rectangular_bound():
+    # A triangular inner bound (range(i)) makes the iteration space non-rectangular --
+    # collapse must not fold it in, however independent the writes look.
+    node = _stmt("for i in range(N):\n"
+                 "    for j in range(i):\n"
+                 "        out[i, j] = a[i, j] * 2.0\n")
+    assert collapsible_depth(node) == 1
+
+
+def test_collapse_depth_stops_at_sibling_statement():
+    # A statement alongside the nested loop breaks OpenMP's canonical perfectly-nested form.
+    node = _stmt("for i in range(N):\n"
+                 "    total = 0.0\n"
+                 "    for j in range(N):\n"
+                 "        out[i, j] = a[i, j] * 2.0\n")
+    assert collapsible_depth(node) == 1
+
+
+def test_collapse_depth_stops_when_inner_index_absent_from_write():
+    # out[i] does not depend on j -- every j iteration of a fixed i overwrites the same cell,
+    # so the j level alone is unsafe to reorder even though the outer i level is fine.
+    node = _stmt("for i in range(N):\n"
+                 "    for j in range(M):\n"
+                 "        out[i] = a[i, j]\n")
+    assert collapsible_depth(node) == 1
+
+
+def test_collapse_depth_stops_at_timestep_bound():
+    node = _stmt("for i in range(N):\n"
+                 "    for t in range(TSTEPS):\n"
+                 "        out[i, t] = a[i, t]\n")
+    assert collapsible_depth(node) == 1
 
 
 # --- has_indirect_scatter / any_parallelizable_loop -----------------------------------------------

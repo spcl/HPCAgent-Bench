@@ -25,32 +25,23 @@ def test_enumerate_configs_none_yields_single_empty():
 
 
 def test_enumerate_configs_valid_list_verbatim():
-    configs = {"valid": [{"mode": "a"}, {"mode": "b"}]}
+    configs = [{"mode": "a"}, {"mode": "b"}]
     assert fuzz.enumerate_configs(configs) == [{"mode": "a"}, {"mode": "b"}]
-
-
-def test_enumerate_configs_sets_and_rules_cartesian_filtered():
-    configs = {"sets": {"x": [1, 2], "y": [10, 20]}, "rules": ["x == 1 or y == 10"]}
-    got = fuzz.enumerate_configs(configs, max_configs=10)
-    # full product is 4; the rule drops {x:2, y:20}
-    assert {"x": 2, "y": 20} not in got
-    assert len(got) == 3
-    assert all(c["x"] == 1 or c["y"] == 10 for c in got)
 
 
 def test_enumerate_configs_caps_at_max(caplog):
     # a valid list of 12 configs is capped to a deterministic seeded subset of 5
-    configs = {"valid": [{"i": i} for i in range(12)]}
+    configs = [{"i": i} for i in range(12)]
     got = fuzz.enumerate_configs(configs, max_configs=5)
     assert len(got) == 5
-    assert all(c in configs["valid"] for c in got)
+    assert all(c in configs for c in got)
     # the cap is deterministic (same seed -> same subset)
     assert fuzz.enumerate_configs(configs, max_configs=5) == got
 
 
 def test_enumerate_configs_no_cap_when_under_limit():
-    configs = {"valid": [{"i": 0}, {"i": 1}, {"i": 2}]}
-    assert fuzz.enumerate_configs(configs, max_configs=5) == configs["valid"]
+    configs = [{"i": 0}, {"i": 1}, {"i": 2}]
+    assert fuzz.enumerate_configs(configs, max_configs=5) == configs
 
 
 # --------------------------------------------------------------------------- #

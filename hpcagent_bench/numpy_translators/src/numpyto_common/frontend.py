@@ -12,8 +12,9 @@ Two inputs combine to give the IR every field it needs:
     Python signature,
   - ``array_args`` -- subset that should become array parameters,
   - ``output_args`` -- subset that the kernel mutates,
-  - ``init.shapes`` -- per-array shape expression in the form
-    ``"(N,K)"`` (parsed back into a tuple of symbol names),
+  - ``init.arrays`` -- one entry per declared array, carrying its shape
+    expression in the form ``"(N,K)"`` (parsed back into a tuple of
+    symbol names) and, optionally, its element ``dtype``,
   - ``parameters[<preset>]`` -- defines which names are symbols.
 
 We deliberately do not parse PEP-563 / typed shape annotations from
@@ -26,11 +27,20 @@ import ast
 import copy
 import itertools
 import json
+import os
 import pathlib
 import re
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 
-from numpyto_common.ir import ArrayDesc, KernelIR, ScalarDesc, SymbolDesc
+from numpyto_common import dtypes
+
+from numpyto_common.ir import ArrayDesc, KernelIR, ScalarDesc, SparseArrayDesc, SymbolDesc
+from numpyto_common.lib_nodes import _iter_extent_of, _read_axis_keepdims
+from numpyto_common.numpy_desugar import (_ComplexAccessorToFunc, _DecomposeRollSlice, _DropValidationGuards,
+                                          _EighCallHoister, _EighLoopRewriter, _ElementalUfuncToPrimitive,
+                                          _UfuncOutInline, _UfuncReduceToReducer, REDUCE_FNS, _eigh_alias_names,
+                                          expr_rank, rank_table, rewrite_curve_fit)
+from numpyto_common.tuple_desugar import desugar_tuples
 
 
 def native_desugar(fn: ast.FunctionDef) -> None:
@@ -57,9 +67,10 @@ def native_desugar(fn: ast.FunctionDef) -> None:
       native ``np.array`` constructor).
     * ``try: <body> except: <give-up>`` -> ``<body>`` (static backends have
       no exceptions; the handler can't fire).
+    * ``np.expand_dims(x, axis=k)`` -> ``x[:, ..., None, ...]`` and
+      ``np.swapaxes(x, i, j)`` -> ``np.transpose(x, <perm>)`` -- both are pure index rewrites
+      onto forms the pipeline already lowers.
     """
-    from numpyto_common.numpy_desugar import (_ComplexAccessorToFunc, _DecomposeRollSlice, _DropValidationGuards,
-                                              _ElementalUfuncToPrimitive, _UfuncOutInline, _UfuncReduceToReducer)
     _UfuncReduceToReducer().visit(fn)  # np.add.reduce -> np.sum before the elementwise-ufunc desugars
     _NewaxisToNone().visit(fn)
     _UfuncOutInline().visit(fn)
@@ -69,6 +80,141 @@ def native_desugar(fn: ast.FunctionDef) -> None:
     _DropValidationGuards().visit(fn)
     _FoldStaticNoneBranches().visit(fn)
     ast.fix_missing_locations(fn)
+
+
+class _AxisReshapeToIndexing(ast.NodeTransformer):
+    """``np.expand_dims`` / ``np.swapaxes`` -> indexing forms the pipeline already lowers.
+
+    Both need the operand's rank: ``expand_dims`` to place the newaxis (a negative axis counts from
+    the RESULT rank), ``swapaxes`` to spell the full permutation. Unknown rank leaves the call
+    alone, which surfaces as an unsupported-call error rather than a wrong axis.
+    """
+
+    def __init__(self, ranks: Dict[str, int], scalars: FrozenSet[str] = frozenset()) -> None:
+        self.ranks = ranks
+        #: Declared scalar parameters. ``expr_rank`` only tracks arrays, so without these a
+        #: ``np.array(constant_value)`` on a scalar knob reads as "rank unknown".
+        self.scalars = scalars
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        self.generic_visit(node)
+        name = _np_attr_name(node) if isinstance(node.func, ast.Attribute) else None
+        if name == "array" and len(node.args) == 1 and not isinstance(node.args[0], (ast.List, ast.Tuple)):
+            # ``np.array(0.0)`` is a 0-d array: the scalar itself. Only when the operand is already
+            # a scalar -- ``np.array(some_array)`` is a COPY, and dropping it would alias.
+            return node.args[0] if self._is_scalar(node.args[0]) else node
+        if name == "norm" and self._is_linalg(node.func) and node.args:
+            return self._axis_norm(node)
+        if name not in ("expand_dims", "swapaxes", "squeeze") or not node.args:
+            return node
+        rank = expr_rank(node.args[0], self.ranks)
+        axes = self._literal_axes(node)
+        if rank is None or axes is None:
+            return node
+        if name == "expand_dims":
+            axis = axes[0] % (rank + 1)
+            index = ", ".join(["None" if d == axis else ":" for d in range(rank + 1)])
+            return self._rewrite(f"({ast.unparse(node.args[0])})[{index}]", node)
+        if name == "squeeze":
+            axis = axes[0] % rank
+            index = ", ".join(["0" if d == axis else ":" for d in range(rank)])
+            return self._rewrite(f"({ast.unparse(node.args[0])})[{index}]", node)
+        i, j = (a % rank for a in axes[:2])
+        perm = list(range(rank))
+        perm[i], perm[j] = perm[j], perm[i]
+        return self._rewrite(f"np.transpose({ast.unparse(node.args[0])}, ({', '.join(map(str, perm))},))", node)
+
+    def _is_scalar(self, node: ast.expr) -> bool:
+        """Rank 0 for certain: a numeric literal or a declared scalar parameter."""
+        if isinstance(node, ast.Name):
+            return node.id in self.scalars
+        return expr_rank(node, self.ranks) == 0
+
+    def _is_linalg(self, func: ast.AST) -> bool:
+        """``np.linalg.norm``'s callee shape, so a user helper called ``norm`` is not caught."""
+        return (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Attribute)
+                and func.value.attr == "linalg")
+
+    def _axis_norm(self, node: ast.Call) -> ast.AST:
+        """``np.linalg.norm(v, axis=k)`` -> ``np.sqrt(np.sum(abs(v) ** 2, axis=k))``.
+
+        Only the default 2-norm; an explicit ``ord`` is a different reduction and is left alone.
+        ``abs(v) ** 2`` rather than ``v * v`` because the two disagree for a COMPLEX operand -- and
+        nothing downstream would have caught that, so the choice is made here where it is free.
+        """
+        kw = {k.arg: k.value for k in node.keywords}
+        if "ord" in kw or len(node.args) > 1 or "axis" not in kw:
+            return node
+        operand = ast.unparse(node.args[0])
+        # keepdims rides along: dropping it silently changed the result RANK, and l2_norm's
+        # ``x / np.linalg.norm(x, axis=1, keepdims=True)`` then broadcast against the wrong axis.
+        keep = f", keepdims={ast.unparse(kw['keepdims'])}" if "keepdims" in kw else ""
+        return self._rewrite(f"np.sqrt(np.sum(np.abs({operand}) ** 2, axis={ast.unparse(kw['axis'])}{keep}))", node)
+
+    def _literal_axes(self, node: ast.Call) -> Optional[List[int]]:
+        kw = {k.arg: k.value for k in node.keywords}
+        given = list(node.args[1:]) + ([kw["axis"]] if "axis" in kw else [])
+        out = []
+        for a in given:
+            if isinstance(a, ast.Constant) and isinstance(a.value, int) and not isinstance(a.value, bool):
+                out.append(a.value)
+            elif isinstance(a, ast.UnaryOp) and isinstance(a.op, ast.USub) and isinstance(a.operand, ast.Constant):
+                out.append(-a.operand.value)
+            else:
+                return None
+        return out or None
+
+    def _rewrite(self, source: str, node: ast.Call) -> ast.AST:
+        return ast.copy_location(ast.parse(source, mode="eval").body, node)
+
+
+def _rename_rebound_parameters(fn: ast.FunctionDef, inputs: frozenset) -> None:
+    """``x = <expr>`` on an INPUT array parameter rebinds a local; it never writes the caller's
+    buffer. Give it its own name so the emitter cannot alias the parameter.
+
+    Emitting into the parameter is wrong in both directions: when the new value is larger it runs
+    off the end of a caller-owned array (``x = x @ w.T + b`` with out > in stores past the row),
+    and when it is smaller it silently corrupts an input the caller may still read. ``x[:] = ...``
+    is untouched -- that IS an in-place write -- and an output parameter is excluded, since writing
+    it is the point.
+    """
+    # Only a TOP-LEVEL rebinding is handled: one inside a loop would need the rename to apply to
+    # reads from the previous iteration too, so those are left exactly as they are.
+    rebound = [
+        s.targets[0].id for s in fn.body if isinstance(s, ast.Assign) and len(s.targets) == 1
+        and isinstance(s.targets[0], ast.Name) and s.targets[0].id in inputs
+    ]
+    if not rebound:
+        return
+    renamed = {name: f"__rb_{name}" for name in rebound}
+    bound: set = set()
+
+    def rewrite_loads(node: ast.AST) -> None:
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Name) and sub.id in bound:
+                sub.id = renamed[sub.id]
+
+    for stmt in fn.body:
+        if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
+                and stmt.targets[0].id in renamed):
+            rewrite_loads(stmt.value)  # the RHS reads the OLD binding, renamed only if already rebound
+            bound.add(stmt.targets[0].id)
+            stmt.targets[0].id = renamed[stmt.targets[0].id]
+            continue
+        rewrite_loads(stmt)
+    ast.fix_missing_locations(fn)
+
+
+def _declared_ranks(shapes_raw: Dict[str, Any]) -> Dict[str, int]:
+    """``init.shapes`` -> ``{array: rank}``, counting top-level commas so ``(N, M * K)`` is rank 2."""
+    ranks: Dict[str, int] = {}
+    for name, shape in (shapes_raw or {}).items():
+        try:
+            parsed = ast.parse(str(shape).strip(), mode="eval").body
+        except SyntaxError:
+            continue
+        ranks[name] = len(parsed.elts) if isinstance(parsed, (ast.Tuple, ast.List)) else 1
+    return ranks
 
 
 def _is_scalar_leaf(node: ast.expr) -> bool:
@@ -179,7 +325,10 @@ def parse_kernel(numpy_py: pathlib.Path,
     array_args = list(info["array_args"])
     input_args = list(info["input_args"])
     output_args = list(info.get("output_args", []))
-    shapes_raw = info.get("init", {}).get("shapes", {})
+    shapes_raw = declared_shapes(info.get("init", {}) or {})
+    # The dtype half of the same declaration surface -- read here, beside the shapes, so both
+    # halves see the same ``rename`` fixup below (see :func:`declared_dtypes`).
+    dtypes_raw = declared_dtypes(info.get("init", {}) or {})
     parameters = info.get("parameters", {})
     preset_symbols = _collect_symbols(parameters)
     # Preset names with a non-integer value (e.g. solver ``tol``=1e-6) are float
@@ -195,7 +344,6 @@ def parse_kernel(numpy_py: pathlib.Path,
     # ``_sci_eigh`` alias) to a self-contained complex-Hermitian eigh loop nest
     # BEFORE helper inlining, so the module-level alias import is still in scope
     # and the eigh in a helper (cegterg's ``_diaghg``) is lowered before it inlines.
-    from numpyto_common.numpy_desugar import _EighCallHoister, _EighLoopRewriter, _eigh_alias_names
     _eigh_aliases = _eigh_alias_names(tree)
     # A nested eigh/eigvalsh call (``float(np.linalg.eigvalsh(T).max()) + beta``)
     # must be materialised into its own ``__eigv = <call>`` assign first, so the
@@ -231,14 +379,17 @@ def parse_kernel(numpy_py: pathlib.Path,
             new_parameters[preset] = {rename.get(k, k): v for k, v in vals.items()}
         parameters = new_parameters
         preset_symbols = _collect_symbols(parameters)
-        # init.shapes also keys on the original names.
+        # The init declarations also key on the original names.
         shapes_raw = {rename.get(k, k): v for k, v in shapes_raw.items()}
+        dtypes_raw = {rename.get(k, k): v for k, v in dtypes_raw.items()}
 
     # Inline module-level numeric constants (``BET_M = 0.5`` in vadv); left as
     # free Names they'd emit as bogus kernel parameters the harness can't
     # resolve. Only top-level ``NAME = <number>`` assigns the kernel neither
-    # takes as a parameter nor reassigns locally are inlined.
-    _inline_module_constants(tree, fn, input_args)
+    # takes as a parameter nor reassigns locally are inlined. The folded names
+    # are accumulated across every round below: shape tokens and the shape-symbol
+    # promotion in lowering must both see that they are no longer free symbols.
+    inlined_consts: Dict[str, Any] = dict(_inline_module_constants(tree, fn, input_args))
     # Fold kernel params that carry a DEFAULT and aren't in input_args into
     # body constants -- the harness only passes input_args, so e.g. the sp_*
     # solvers' ``max_iter=100``/``tol=1e-6`` stay fixed, not runtime params.
@@ -266,7 +417,6 @@ def parse_kernel(numpy_py: pathlib.Path,
     # the model ``def`` is still distinct and its varargs can rebind to the
     # array curve_fit conceptually passes; the fixpoint below then inlines
     # the LM's calls to the model.
-    from numpyto_common.numpy_desugar import rewrite_curve_fit
     rewrite_curve_fit(tree, fn, precision)
 
     # Strip every top-level helper's give-up paths: bail-only exception
@@ -283,6 +433,7 @@ def parse_kernel(numpy_py: pathlib.Path,
     # allowed mid statement) and would never inline -- its nested def is only
     # exposed by inlining the parent, a deadlock otherwise.
     _flatten_nested_helpers(tree)
+    _fuse_guarded_returns(tree)
     # Inline helper calls to a FIXPOINT: one pass only inlines the outermost
     # level (NodeTransformer doesn't re-visit spliced-in bodies), so a chain of
     # helpers calling helpers (lulesh's ``_lagrange_nodal`` -> ``_calc_force_
@@ -311,7 +462,7 @@ def parse_kernel(numpy_py: pathlib.Path,
         _HoistMultiStmtHelpers(helpers, hcall_counter).visit(fn)
         _InlineHelpers(helpers, inl_counter).visit(fn)
         ast.fix_missing_locations(fn)
-        _inline_module_constants(tree, fn, input_args)
+        inlined_consts.update(_inline_module_constants(tree, fn, input_args))
         # Done when no call to a (still-inlinable) helper survives in the body.
         if not any(
                 isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in names for n in ast.walk(fn)):
@@ -352,6 +503,36 @@ def parse_kernel(numpy_py: pathlib.Path,
     # AND, identically, to every non-inlined helper in ``_build_helper_kirs`` so a
     # helper that survives inlining is not left with un-emittable constructs.
     native_desugar(fn)
+
+    # Scalarize compile-time tuples AFTER inlining, so a tuple a helper built from its own
+    # parameters (every KernelBench conv/pool port normalises a knob to ``(s, s)``) is folded
+    # against the values the call site actually passed.
+    _scalar_names = frozenset(input_args) - frozenset(array_args)
+    # A structural constant becomes a literal BEFORE anything reads it: an axis, a repeat count and
+    # a slice bound all pick the loop nest, and none of them can be built from a runtime scalar.
+    _init_scalars = info.get("init", {}).get("scalars", {}) or {}
+    _FoldConstantSymbols(_structural_constants(parameters, _init_scalars, shapes_raw,
+                                               runtime_args=input_args)).apply(fn)
+    # A runtime argument keeps its name everywhere it can be evaluated at runtime, and folds only in
+    # the axis slot, where nothing else can be emitted.
+    _FoldStructuralUses(_structural_constants(parameters, _init_scalars, shapes_raw, keep_only=input_args)).visit(fn)
+    ast.fix_missing_locations(fn)
+    # expand_dims/swapaxes first: they become plain indexing, which the tuple pass can then rank.
+    _AxisReshapeToIndexing(rank_table(fn, _declared_ranks(shapes_raw)), _scalar_names).visit(fn)
+    ast.fix_missing_locations(fn)
+    desugar_tuples(fn,
+                   int_scalars=_scalar_names - frozenset(_float_preset_names),
+                   float_scalars=frozenset(_float_preset_names) & _scalar_names,
+                   arrays=frozenset(array_args),
+                   ranks=rank_table(fn, _declared_ranks(shapes_raw)))
+
+    # Whatever axis did not become a literal above has no emittable loop nest. Refuse it here rather
+    # than let a downstream reader mistake it for "no axis at all". A slice step and a negative
+    # slice start pick the nest the same way, so they are refused on the same pass.
+    _reject_symbolic_axis(fn)
+    _reject_unsupported_slices(fn)
+
+    _rename_rebound_parameters(fn, frozenset(array_args) - frozenset(output_args))
 
     # Inline tuple-valued shape locals and fold tuple concatenation AFTER
     # inlining so references inside inlined helper bodies (vexx's invfft/fwfft
@@ -430,19 +611,20 @@ def parse_kernel(numpy_py: pathlib.Path,
 
     scalar_defaults = info.get("init", {}).get("scalars", {}) or {}
     fallback_shape = _fallback_shape_for_legacy(preset_symbols)
-    # Legacy HPCAgent-Bench JSONs (``init.shapes`` missing) declare arrays
+    # Legacy HPCAgent-Bench JSONs (no array declarations at all) declare arrays
     # through an ``initialize`` function in a sibling Python module --
     # ``legacy_shapes`` was harvested above (reused here); recover dtypes
     # likewise before the 1-D fallback.
     legacy_dtypes = _dtypes_from_initialize(numpy_py, info)
-    # ``init.dtypes`` -- explicit per-array dtype override block in
-    # the bench_info JSON. Wins over the initialize-harvest so a
+    # The DECLARED dtypes (``init.arrays[<name>].dtype``, plus ``init.dtypes``
+    # for the names that are not arrays) win over the initialize-harvest, so a
     # kernel like stockham_fft that allocates the output via
     # ``rng_complex(...)`` (not recognised by the constructor parser)
     # can still declare its complex outputs correctly.
-    dtypes_raw = info.get("init", {}).get("dtypes", {}) or {}
     for k, v in dtypes_raw.items():
         legacy_dtypes[k] = v
+    # Invariant over the per-arg loop: one full-tree walk hoisted out of it.
+    int_names = _names_used_as_int(fn)
     for arg in input_args:
         # Logical sparse arrays are expanded into physical buffers
         # separately (see ``sparse_buffer_arrays`` injection below) --
@@ -487,7 +669,9 @@ def parse_kernel(numpy_py: pathlib.Path,
             # Plain scalar input (e.g. ``alpha`` in gemm): dtype comes from
             # ``init.scalars`` when present (int default -> int param, float
             # default -> double); otherwise falls back to double.
-            inferred_dt = _infer_scalar_dtype(scalar_defaults.get(arg))
+            # init.dtypes is authoritative for a scalar too, not only an array: srad's ROI
+            # bounds have no init.scalars default to infer from.
+            inferred_dt = dtypes_raw.get(arg) or _infer_scalar_dtype(scalar_defaults.get(arg))
             # Promote to int when the kernel uses the scalar in an integer-only
             # context (``range(arg)`` / subscript / shape -- mirrors the C emit's
             # ``needs_int`` check), so e.g. nbody's ``Nt`` and lenet's
@@ -501,7 +685,7 @@ def parse_kernel(numpy_py: pathlib.Path,
             # ``integer``.
             is_array_dim = any(re.search(rf"\b{re.escape(arg)}\b", str(tok)) for a in arrays for tok in a.shape)
             if inferred_dt in {"float64", "double", "float32"} \
-                    and (arg in _names_used_as_int(fn) or is_array_dim):
+                    and (arg in int_names or is_array_dim):
                 inferred_dt = "int"
             scalars.append(ScalarDesc(
                 name=arg,
@@ -523,6 +707,12 @@ def parse_kernel(numpy_py: pathlib.Path,
                 expanded_input.append(arg)
         input_args = expanded_input
 
+    # The manifest shape tokens were written against the SOURCE names, so an
+    # inlined module constant (cloudsc's ``nclv``) still spells the eliminated
+    # name; fold it to its literal here, before anything derives symbols from
+    # the shapes (helper params below, shape promotion in lowering).
+    _fold_consts_into_shapes(arrays, inlined_consts)
+
     short_name = info.get("short_name", func_name)
     kir = KernelIR(
         tree=fn,
@@ -534,6 +724,7 @@ def parse_kernel(numpy_py: pathlib.Path,
         scalars=scalars,
         source_path=str(numpy_py),
         sparse=sparse_descs,
+        inlined_consts=set(inlined_consts),
     )
     # Helpers that survived the inlining fixpoint as CALLS (an early ``return`` /
     # recursion blocks inlining) become their own native functions -- the early
@@ -546,6 +737,51 @@ def parse_kernel(numpy_py: pathlib.Path,
 def _load_bench_info(path: pathlib.Path) -> Dict:
     raw = json.loads(path.read_text())
     return raw.get("benchmark", raw)
+
+
+def declared_shapes(init: Dict) -> Dict[str, str]:
+    """``{array: shape expression}`` from an ``init`` block, whichever spelling it carries.
+
+    An array is declared under ``init.arrays``, either as a bare shape string or as a mapping
+    with a ``shape`` key. Reading ``init["shapes"]`` directly -- the retired spelling -- is what
+    silently reduced this emitter to ONE translating port out of 200: the key stopped being
+    exported, ``shapes_raw`` came back empty, and every kernel with a declaratively-initialised
+    >=2-D array was emitted against shapes the emitter had to guess instead of the ones its
+    manifest declared. Kernels initialising through ``init.func_name`` were unaffected, which is
+    why the polybench corpus looked fine throughout.
+
+    ``shapes`` is still accepted here, because a bench_info JSON on disk may predate the change
+    and this reader must not be a second place that decides what a manifest may say."""
+    arrays = init.get("arrays") or {}
+    out: Dict[str, str] = {name: entry if isinstance(entry, str) else entry["shape"] for name, entry in arrays.items()}
+    for name, shape in (init.get("shapes") or {}).items():
+        out.setdefault(name, shape)
+    return out
+
+
+def declared_dtypes(init: Dict) -> Dict[str, str]:
+    """``{name: dtype}`` from an ``init`` block, whichever spelling it carries.
+
+    The dtype half of :func:`declared_shapes`, and it has to be read the same way for the same
+    reason: an ARRAY's element type is declared on its ``init.arrays`` entry, while ``init.dtypes``
+    types the names that are not arrays (size symbols and plain scalars). Reading only
+    ``init["dtypes"]`` -- which is what this reader used to do -- dropped every declared array
+    dtype on the floor, so a complex128 buffer emitted as a real one (silently discarding the
+    imaginary part) and an int32 index array emitted as a double (an unemittable subscript).
+
+    One merged map, because every caller asks the same question -- "what was <name> declared as" --
+    and an array name cannot also be a scalar name. The array entry wins over a same-named
+    ``init.dtypes`` entry: it is the current spelling.
+
+    ``dtypes`` is still accepted here, because a bench_info JSON on disk may predate the change and
+    this reader must not be a second place that decides what a manifest may say."""
+    out: Dict[str, str] = {}
+    for name, entry in (init.get("arrays") or {}).items():
+        if not isinstance(entry, str) and "dtype" in entry:
+            out[name] = entry["dtype"]
+    for name, dtype in (init.get("dtypes") or {}).items():
+        out.setdefault(name, dtype)
+    return out
 
 
 def _choose_sparse_config(info: Dict, config: Optional[str] = None) -> Optional[str]:
@@ -565,7 +801,6 @@ def _choose_sparse_config(info: Dict, config: Optional[str] = None) -> Optional[
             raise ValueError(f"--config {config!r} is not a declared configuration; "
                              f"available: {sorted(configs)}")
         return config
-    import os
     env = os.environ.get("HPCAGENT_BENCH_SPARSE_CONFIG")
     if env and env in configs:
         return env
@@ -575,10 +810,20 @@ def _choose_sparse_config(info: Dict, config: Optional[str] = None) -> Optional[
 
 
 def _default_const(node: ast.expr) -> ast.expr:
-    """Unwrap a dtype-cast default (``np.float64(1e-6)``, ``int(8)``) to its
-    inner literal so it folds as a plain numeric constant; otherwise return the
-    default expression unchanged."""
-    if isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Constant):
+    """Unwrap a dtype-CAST default (``np.float64(1e-6)``, ``int(8)``) to its inner literal so it
+    folds as a plain numeric constant; otherwise return the default expression unchanged.
+
+    The callee must actually be a cast. Unwrapping any single-constant-arg call replaced the call
+    with its ARGUMENT, so a ``scale=math.sqrt(64.0)`` default folded to 64.0 -- an 8x error.
+    """
+    if not (isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Constant)):
+        return node
+    func = node.func
+    name = func.id if isinstance(func, ast.Name) else (func.attr if isinstance(func, ast.Attribute) else None)
+    if name is None:
+        return node
+    key = name[:-1] if name.endswith("_") else name
+    if key in ("int", "float", "complex", "bool") or key in dtypes.REGISTRY or key in dtypes.SCALAR_KINDS:
         return ast.copy_location(ast.Constant(value=node.args[0].value), node)
     return node
 
@@ -736,7 +981,6 @@ def _expand_sparse_arrays(info: Dict, config: Optional[str] = None):
     Dense entries in the configuration are left for the normal dense
     array path. Returns empty maps when no sparse_layouts block exists.
     """
-    from numpyto_common.ir import ArrayDesc, SparseArrayDesc
     sparse_layouts = info.get("sparse_layouts") or {}
     legacy_cfg: Optional[Dict[str, str]] = None
     if not sparse_layouts:
@@ -804,7 +1048,7 @@ def _find_function(tree: ast.Module, name: str) -> Optional[ast.FunctionDef]:
     return None
 
 
-def _inline_module_constants(tree: ast.Module, fn: ast.FunctionDef, input_args: List[str]) -> None:
+def _inline_module_constants(tree: ast.Module, fn: ast.FunctionDef, input_args: List[str]) -> Dict[str, Any]:
     """Substitute top-level numeric constants into the kernel body.
 
     A module-level ``NAME = <number>`` (vadv's ``BET_M = 0.5``) referenced
@@ -813,6 +1057,11 @@ def _inline_module_constants(tree: ast.Module, fn: ast.FunctionDef, input_args: 
     kernel takes as a parameter or reassigns locally (those shadow the
     module value). Handles a plain number, a unary-signed number, OR a
     constant numeric EXPRESSION (PPM coefficients like ``C1 = -2.0 / 14.0``).
+
+    Returns the ``{name: value}`` numeric constants it folded, so the caller
+    can fold them into the manifest-derived shape tokens too (see
+    :func:`_fold_consts_into_shapes`) -- the body substitution alone leaves
+    ``init.shapes`` spelling the eliminated name.
     """
 
     def _const_value(v: ast.AST):
@@ -933,7 +1182,7 @@ def _inline_module_constants(tree: ast.Module, fn: ast.FunctionDef, input_args: 
                 and v.attr in _DTYPE_ATTRS and stmt.targets[0].id not in shadowed):
             dtype_consts[stmt.targets[0].id] = v.attr
     if not consts and not dtype_consts and not seq_consts:
-        return
+        return {}
 
     class _Sub(ast.NodeTransformer):
 
@@ -952,6 +1201,31 @@ def _inline_module_constants(tree: ast.Module, fn: ast.FunctionDef, input_args: 
 
     _Sub().visit(fn)
     ast.fix_missing_locations(fn)
+    return consts
+
+
+def _fold_consts_into_shapes(arrays: List[ArrayDesc], consts: Dict[str, Any]) -> None:
+    """Fold inlined module constants into the manifest-derived shape tokens.
+
+    :func:`_inline_module_constants` folds ``nclv = 5`` into the kernel BODY,
+    but ``init.shapes`` still spells the name (cloudsc's ``pclv: (nclv, nlev,
+    klon)``). Left standing, the shape token is a symbol nothing declares, so
+    ``_promote_shape_symbols_to_params`` re-adds the eliminated constant as a
+    C parameter the harness binding never passes -- every trailing scalar then
+    shifts one slot (silent miscompile). Integer constants only: a float
+    module constant is never a valid array extent.
+    """
+    int_consts = {n: v for n, v in consts.items() if isinstance(v, int) and not isinstance(v, bool)}
+    if not int_consts:
+        return
+
+    def _sub(tok: str) -> str:
+        return _IDENT_RE.sub(lambda m: str(int_consts.get(m.group(0), m.group(0))), tok)
+
+    for arr in arrays:
+        new_shape = tuple(_sub(str(tok)) for tok in arr.shape)
+        if new_shape != tuple(arr.shape):
+            arr.shape = new_shape
 
 
 _ARRAY_LITERAL_DTYPES = {
@@ -1165,7 +1439,11 @@ class _SubstituteParamAliases(ast.NodeTransformer):
         for s in fn.body:
             if (isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name)
                     and isinstance(s.value, ast.Name) and s.value.id in self.params
-                    and s.targets[0].id not in self.params and bare_binds.get(s.targets[0].id) == 1):
+                    and s.targets[0].id not in self.params and bare_binds.get(s.targets[0].id) == 1
+                    # ...and the ALIASED parameter is never rebound either. Substituting an alias of
+                    # a rebound name re-reads it at the USE site instead of the BIND site:
+                    # ``original_x = x; x = x * s; x = x + original_x`` became ``x*s + x*s``.
+                    and not bare_binds.get(s.value.id)):
                 self.subst[s.targets[0].id] = s.value.id
 
     def visit_Assign(self, node: ast.Assign):
@@ -1204,30 +1482,58 @@ class _NewaxisToNone(ast.NodeTransformer):
 
 
 class _FoldStaticNoneBranches(ast.NodeTransformer):
-    """Constant-fold ``None is [not] None`` and eliminate the now-dead
+    """Constant-fold a decidable ``is [not] None`` compare and eliminate the now-dead
     ``IfExp``/``if`` branches.
 
     Inlining a helper with an OPTIONAL parameter (``def f(a, mask=None): ...
-    if mask is not None: ...``) at a call site that omits the argument
-    substitutes the literal ``None`` for it, leaving statically-dead compares
-    like ``if None is not None:`` (fv3_dycore's FiniteVolumeTransport) that a
-    backend can't emit.
+    if mask is not None: ...``) substitutes the call site's argument for that
+    parameter, so the guard becomes decidable either way:
 
-    Only the both-operands-static-``None`` shape is folded -- a genuine
-    runtime ``mask is None`` (the arg WAS passed) is left untouched. ``None``
-    as a subscript index (``np.newaxis``) is never an ``is`` operand.
+    * the argument was OMITTED -> the literal ``None`` is substituted, leaving
+      ``if None is not None:`` (fv3_dycore's FiniteVolumeTransport);
+    * the argument was SUPPLIED -> the expression passed is substituted, leaving
+      ``x.shape[0] if x.shape[0] is None else int(x.shape[0])`` (examinimd passes
+      ``n_local=x.shape[0]``), and an indexing expression is never ``None``.
+
+    Both fold, because a backend can emit neither: there is no ``is`` operator in
+    the C/Fortran comparison tables and no ``None`` literal to compare against.
+
+    What is NOT folded is a compare whose non-``None`` side is a bare NAME: a local
+    genuinely bound to ``None`` (``out = None`` ... ``if out is None:``) is a real
+    runtime question. A kernel PARAMETER name is decidable -- always supplied across
+    the C ABI -- and :class:`_FoldParamNoneGuard` folds that case, where the
+    parameter list is known. ``None`` as a subscript index (``np.newaxis``) is never
+    an ``is`` operand.
     """
+
+    #: Expression forms that cannot evaluate to ``None`` whatever their operands are bound to:
+    #: indexing/attribute access yields an element, arithmetic yields a number, a comparison
+    #: yields a bool, a display yields a container. Deliberately excludes ``Name`` (may be bound
+    #: to ``None``), ``Call`` (a helper may return it) and ``BoolOp`` (``a or None``).
+    _NEVER_NONE = (ast.Subscript, ast.Attribute, ast.BinOp, ast.UnaryOp, ast.Compare, ast.Tuple, ast.List)
 
     @staticmethod
     def _is_static_none(node: ast.AST) -> bool:
         return isinstance(node, ast.Constant) and node.value is None
 
+    @classmethod
+    def _never_none(cls, node: ast.AST) -> bool:
+        return isinstance(node, cls._NEVER_NONE) or (isinstance(node, ast.Constant) and node.value is not None)
+
     def visit_Compare(self, node: ast.Compare) -> ast.AST:
         self.generic_visit(node)
-        if (len(node.ops) == 1 and isinstance(node.ops[0], (ast.Is, ast.IsNot)) and self._is_static_none(node.left)
-                and self._is_static_none(node.comparators[0])):
-            return ast.copy_location(ast.Constant(value=isinstance(node.ops[0], ast.Is)), node)
-        return node
+        if not (len(node.ops) == 1 and isinstance(node.ops[0], (ast.Is, ast.IsNot))):
+            return node
+        left, right = node.left, node.comparators[0]
+        none_left, none_right = self._is_static_none(left), self._is_static_none(right)
+        if none_left == none_right:  # neither or both ``None`` -> nothing to decide against
+            if none_left:
+                return ast.copy_location(ast.Constant(value=isinstance(node.ops[0], ast.Is)), node)
+            return node
+        if not self._never_none(right if none_left else left):
+            return node
+        # ``<never None> is None`` -> False, ``is not None`` -> True.
+        return ast.copy_location(ast.Constant(value=isinstance(node.ops[0], ast.IsNot)), node)
 
     def visit_IfExp(self, node: ast.IfExp) -> ast.AST:
         self.generic_visit(node)
@@ -1299,23 +1605,26 @@ def _resolve_call_args(call: ast.Call, helper: ast.FunctionDef) -> Optional[List
     ``def batchnorm2d(x, eps=1e-5)`` called as ``batchnorm2d(arr)``
     yields ``[arr, Constant(1e-5)]``.
 
-    Returns ``None`` when the count cannot be reconciled (more call
-    args than params, or a missing param without a default) -- the
-    inliner falls back to leaving the Call untouched.
+    KEYWORD arguments bind by name. They used to be dropped in favour of the parameter's default,
+    which is silent whenever the two happen to agree -- ``_logsumexp(x, axis=1)`` on a rank-2 input
+    took the default ``axis=-1`` and only matched because -1 IS 1 there.
+
+    Returns ``None`` when the call cannot be reconciled (too many positional args, an unknown or
+    doubly-bound keyword, or a missing param without a default) -- the inliner then leaves the Call
+    untouched.
     """
     param_names = [a.arg for a in helper.args.args]
-    defaults = list(helper.args.defaults)
+    defaults = dict(zip(param_names[len(param_names) - len(helper.args.defaults):], helper.args.defaults))
     call_args = list(call.args)
-    if len(call_args) > len(param_names):
-        return None
-    missing = len(param_names) - len(call_args)
-    if missing == 0:
-        return call_args
-    # Defaults align to the trailing parameters; require enough to
-    # cover every missing param.
-    if missing > len(defaults):
-        return None
-    return call_args + defaults[-missing:]
+    if len(call_args) > len(param_names) or any(kw.arg is None for kw in call.keywords):
+        return None  # too many positionals, or a **kwargs splat we cannot resolve
+    bound = dict(zip(param_names, call_args))
+    for kw in call.keywords:
+        if kw.arg not in param_names or kw.arg in bound:
+            return None
+        bound[kw.arg] = kw.value
+    resolved = [bound.get(name, defaults.get(name)) for name in param_names]
+    return None if any(a is None for a in resolved) else resolved
 
 
 def _synthesize_return_temps(fn: ast.FunctionDef):
@@ -1517,8 +1826,8 @@ def _resolve_shape_attr_tokens(tokens: Tuple[str, ...], parsed_seed: Dict[str, T
 _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 
 
-def _collect_inlined_scalar_defs(fn: ast.FunctionDef) -> Dict[str, str]:
-    """Map each inliner-introduced SCALAR-dimension local to its RHS.
+def _collect_inlined_scalar_defs(fn: ast.FunctionDef, prefix: Optional[str] = "__inl") -> Dict[str, str]:
+    """Map each SCALAR-dimension local under ``fn`` to its RHS.
 
     Helper inlining (:class:`_InlineHelpers`) lifts a helper's body locals
     into the kernel under an ``__inl<k>_`` prefix. The scalar ones are
@@ -1527,6 +1836,12 @@ def _collect_inlined_scalar_defs(fn: ast.FunctionDef) -> Dict[str, str]:
     unresolved they're un-bindable shape symbols. Substituting them away
     (:func:`_substitute_inlined_scalar_defs`) makes the shape a pure function
     of real kernel parameters again.
+
+    ``prefix`` restricts collection to names starting with it (the default,
+    the inliner's own ``__inl`` prefix); pass ``None`` to collect every
+    single-assignment scalar-dim local regardless of name -- used to harvest
+    a legacy ``initialize()`` companion module's own derived locals (conv2d's
+    ``H_out = H - K + 1``, lulesh's ``NE = numElem``).
 
     Only scalar-expression RHS (Name/Constant/BinOp/``arr.shape[i]``/etc.) is
     collected -- an array-valued RHS is the inlined local array itself, not
@@ -1558,7 +1873,9 @@ def _collect_inlined_scalar_defs(fn: ast.FunctionDef) -> Dict[str, str]:
         if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
             continue
         name = stmt.targets[0].id
-        if not name.startswith("__inl") or name in defs:
+        if name in defs:
+            continue
+        if prefix is not None and not name.startswith(prefix):
             continue
         if rebind_counts.get(name, 0) > 1:
             continue
@@ -1642,7 +1959,6 @@ def _shape_from_iter_extent(node: ast.AST, known: Dict[str, str], route_calls: b
         toks = _parse_shape_expression(sstr)
         if toks:
             table[name] = toks
-    from numpyto_common.lib_nodes import _iter_extent_of
     ext = _iter_extent_of(node, table)
     if ext is None:
         return None
@@ -1670,7 +1986,6 @@ def _shape_from_reduction(node: ast.AST, known: Dict[str, str]) -> Optional[str]
     if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in _RETURN_REDUCTIONS
             and isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy") and node.args):
         return None
-    from numpyto_common.lib_nodes import _read_axis_keepdims, _iter_extent_of
     axes, keepdims = _read_axis_keepdims(node.args, node.keywords)
     if axes is None:
         return None  # full reduction -> scalar
@@ -1744,7 +2059,6 @@ def _shape_from_transpose(node: ast.AST, known: Dict[str, str]) -> Optional[str]
             tk = _parse_shape_expression(sstr)
             if tk:
                 table[name] = tk
-        from numpyto_common.lib_nodes import _iter_extent_of
         ext = _iter_extent_of(base, table)
         toks = [ast.unparse(e) for e in ext] if ext else None
     if not toks:
@@ -1847,26 +2161,45 @@ def _local_array_def(fn: ast.FunctionDef, name: str):
     return None
 
 
-def _resolve_local_array_arg(fn: ast.FunctionDef, name: str, arr_by):
-    """A helper call arg that is a kernel-LOCAL array (``xkq = xkq_collect[:, k]``
-    or a bare alias of a param) -- resolve its ``(shape, dtype)`` from the local's
-    FIRST definition, so the helper param is typed as an array rather than
-    defaulted to a scalar double. Only a slice/alias of a KNOWN array is resolved
-    (vexx_k's ``_g2_convolution`` ``xkq`` / ``xk`` (3,) q-vector args)."""
-    for node in ast.walk(fn):
-        if not (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
-                and node.targets[0].id == name):
-            continue
-        rhs = node.value
-        if isinstance(rhs, ast.Name) and rhs.id in arr_by:
-            a = arr_by[rhs.id]
-            return a.shape, a.dtype
-        if (isinstance(rhs, ast.Subscript) and isinstance(rhs.value, ast.Name) and rhs.value.id in arr_by):
-            a = arr_by[rhs.value.id]
-            kept = _apply_subscript_axes(list(a.shape), rhs.slice)
-            if kept:
-                return tuple(kept), a.dtype
-        return None  # first def is not a resolvable array-derived local
+def _resolve_array_ref(fn: ast.FunctionDef,
+                       node: ast.expr,
+                       arr_by: Dict[str, ArrayDesc],
+                       seen: Optional[Set[str]] = None) -> Optional[Tuple[Tuple[str, ...], str]]:
+    """``(shape, dtype)`` of an array-VALUED expression, or ``None`` when it is not resolvable.
+
+    Handles a declared param (``arr_by`` hit), a kernel-local ``np.zeros/empty/ones`` allocation
+    (:func:`_local_array_def`), a bare alias of either -- chased through the WHOLE alias chain, not
+    just one hop -- and a slice of any of those (``arr[:, k]``). A helper call's array arg or an
+    array-returning helper's assignment target can be ANY of these: helper inlining rebinds a
+    surviving helper's array arg through its own renamed local (``__rb_x = __inl1_out`` where
+    ``__inl1_out = np.zeros(...)`` is itself the inlined callee's renamed return buffer), so a
+    single-hop check stops one alias short and mistypes the arg/target as a scalar.
+    """
+    if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
+        base = _resolve_array_ref(fn, node.value, arr_by, seen)
+        if base is None:
+            return None
+        shape, dtype = base
+        kept = _apply_subscript_axes(list(shape), node.slice)
+        return (tuple(kept), dtype) if kept else None
+    if not isinstance(node, ast.Name):
+        return None
+    name = node.id
+    if name in arr_by:
+        a = arr_by[name]
+        return a.shape, a.dtype
+    seen = set(seen) if seen else set()
+    if name in seen:
+        return None  # alias cycle -- cannot happen from real source, just a guard
+    seen.add(name)
+    loc = _local_array_def(fn, name)  # a kernel-local array (np.zeros(...))
+    if loc is not None:
+        dims, dtype = loc
+        return tuple(ast.unparse(d) for d in dims), dtype
+    for stmt in ast.walk(fn):  # a bare alias (``__rb_x = __inl1_out``) -- chase its FIRST definition
+        if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
+                and stmt.targets[0].id == name):
+            return _resolve_array_ref(fn, stmt.value, arr_by, seen)
     return None
 
 
@@ -1882,18 +2215,20 @@ def _infer_param_desc(arg: ast.AST, pname: str, arr_by, sca_by, sym_by, fn=None)
         if arg.id in sym_by:
             return ("symbol", SymbolDesc(name=pname))
         if fn is not None:
-            res = _resolve_local_array_arg(fn, arg.id, arr_by)
+            res = _resolve_array_ref(fn, arg, arr_by)
             if res is not None:
                 shape, dtype = res
                 return ("array", ArrayDesc(name=pname, dtype=dtype, shape=shape, is_output=False))
-    if (isinstance(arg, ast.Subscript) and isinstance(arg.value, ast.Name) and arg.value.id in arr_by):
-        a = arr_by[arg.value.id]
-        # ``arr[:, k]`` -- a slice-bearing read is a (sub-shaped) array param;
-        # ``arr[i]`` / ``arr[i, j]`` -- a fully-indexed read is a scalar element.
-        kept = _apply_subscript_axes(list(a.shape), arg.slice)
-        if kept:
-            return ("array", ArrayDesc(name=pname, dtype=a.dtype, shape=tuple(kept), is_output=False))
-        return ("scalar", ScalarDesc(name=pname, dtype=a.dtype))
+    if isinstance(arg, ast.Subscript) and isinstance(arg.value, ast.Name):
+        res = _resolve_array_ref(fn, arg, arr_by) if fn is not None else None
+        if res is not None:
+            shape, dtype = res
+            return ("array", ArrayDesc(name=pname, dtype=dtype, shape=shape, is_output=False))
+        if arg.value.id in arr_by:
+            # A fully-indexed read (``arr[i]`` / ``arr[i, j]``) drops every axis -- a scalar element,
+            # not an unresolvable array (``_resolve_array_ref`` returning ``None`` for a subscript
+            # with no KEPT axis is exactly that case, not a failure to resolve).
+            return ("scalar", ScalarDesc(name=pname, dtype=arr_by[arg.value.id].dtype))
     if isinstance(arg, ast.Constant):
         if isinstance(arg.value, bool):
             return ("scalar", ScalarDesc(name=pname, dtype="bool"))
@@ -1908,23 +2243,17 @@ def _helper_return_array_shape(lhs, arr_by, fn):
     """When a captured helper's result is stored into an ARRAY target
     (``X = h(...)`` with X an array, or ``X[:, j] = h(...)``), return the returned
     array's ``(shape_strings, dtype)`` -- so the helper emits an out-param of that
-    shape. A scalar / non-array target returns ``(None, None)`` (by-value path)."""
-    if isinstance(lhs, ast.Name) and lhs.id in arr_by:
-        a = arr_by[lhs.id]
-        return list(a.shape), a.dtype
-    if isinstance(lhs, ast.Subscript) and isinstance(lhs.value, ast.Name):
-        base = lhs.value.id
-        if base in arr_by:
-            a = arr_by[base]
-            kept = _apply_subscript_axes(list(a.shape), lhs.slice)
-            return (kept, a.dtype) if kept else (None, None)
-        loc = _local_array_def(fn, base)  # a kernel-local array (np.zeros(...))
-        if loc is not None:
-            dims, dtype = loc
-            kept = _apply_subscript_axes(dims, lhs.slice)
-            if kept:
-                return [ast.unparse(e) for e in kept], dtype
-    return None, None
+    shape. A scalar / non-array target returns ``(None, None)`` (by-value path).
+
+    Delegates to :func:`_resolve_array_ref`, which chases the WHOLE alias chain -- a bare
+    ``X`` target is not always a declared param or a direct ``np.zeros`` local: inlining a
+    Form-3 helper rebinds its tail return through a renamed local (``X = __inl1_out`` where
+    ``__inl1_out = np.zeros(...)``), and a single-hop check stops one alias short, misreading
+    an array-returning helper's target as a scalar."""
+    if not isinstance(lhs, (ast.Name, ast.Subscript)):
+        return None, None
+    res = _resolve_array_ref(fn, lhs, arr_by)
+    return (list(res[0]), res[1]) if res is not None else (None, None)
 
 
 def _infer_helper_params(pnames, args, arr_by, sca_by, sym_by, fn=None):
@@ -1966,6 +2295,31 @@ def _substitute_names(node: ast.AST, consts: Dict[str, ast.expr]) -> None:
             return n
 
     _Sub().visit(node)
+
+
+def _drop_unreachable_after_return(stmts: List[ast.stmt]) -> List[ast.stmt]:
+    """Truncate ``stmts`` right after its first unconditional ``return``, recursing into every
+    nested block (``If``/``For``/``While`` body + orelse) so the same trim applies there too.
+
+    ``_FoldStaticNoneBranches`` replaces a statically-true ``if None is None: return y`` with
+    just its body (``[return y]``) -- but that only swaps the ``If`` NODE for its branch; the
+    ORIGINAL SIBLINGS after it (``conv2d_instance_norm_divide``'s ``shape = ...; return
+    y * None.reshape(shape) + None.reshape(shape)``, dead now that the guard is gone) are
+    untouched and still reach the emitter, which has no lowering for a call on a substituted
+    ``None``. A `return` appearing directly in a statement list is reached unconditionally
+    whenever that list runs, so anything after it there can never execute -- safe to drop
+    regardless of what runs before it.
+    """
+    out: List[ast.stmt] = []
+    for stmt in stmts:
+        for field in ("body", "orelse"):
+            value = vars(stmt).get(field)
+            if isinstance(value, list):
+                setattr(stmt, field, _drop_unreachable_after_return(value))
+        out.append(stmt)
+        if isinstance(stmt, ast.Return):
+            break
+    return out
 
 
 def _rewrite_returns_to_outparam(hfn: ast.FunctionDef, hret: str) -> None:
@@ -2062,6 +2416,22 @@ class _ReplaceStmts(ast.NodeTransformer):
         return repl
 
 
+def _desugar_helper_tuples(hfn: ast.FunctionDef, arrays: List[ArrayDesc], scalars: List[ScalarDesc]) -> None:
+    """Run :func:`desugar_tuples` on a helper that survived inlining, against ITS OWN param ranks.
+
+    The kernel body gets this pass once, inside ``parse_kernel`` (ranks from its declared array
+    args). A helper built here by :func:`_build_helper_kirs` is a second, separate ``KernelIR`` --
+    without its own call, ``axes = tuple(range(2, x.ndim))`` (the instance-norm idiom) never folds
+    and reaches the structural-axis guard below as a runtime ``Call``, not a literal tuple.
+    """
+    ranks = {a.name: len(a.shape) for a in arrays}
+    # ScalarDesc.dtype is already canonicalized (see ScalarDesc.__post_init__), so a plain name-shape
+    # check is exact here -- same split the emitters use, not a guess.
+    int_scalars = frozenset(s.name for s in scalars if dtypes.is_integer(s.dtype))
+    float_scalars = frozenset(s.name for s in scalars if s.dtype.startswith("float"))
+    desugar_tuples(hfn, int_scalars=int_scalars, float_scalars=float_scalars, arrays=frozenset(ranks), ranks=ranks)
+
+
 def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: KernelIR) -> List[KernelIR]:
     """One :class:`KernelIR` per non-inlinable called helper (see
     :func:`_collect_called_helper_defs`). Each helper param's type/shape is read
@@ -2104,7 +2474,9 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
         hret_shape, hret_dtype = _helper_return_array_shape(lhs, arr_by, kernel_fn)
         hfn = copy.deepcopy(hdef)
         pnames = [a.arg for a in hfn.args.args]
-        _inline_module_constants(tree, hfn, pnames)
+        # The parent's folded names carry over: this helper's array params reuse the
+        # parent's (already folded) shapes, so neither set may be re-promoted.
+        hconsts = set(parent.inlined_consts) | set(_inline_module_constants(tree, hfn, pnames))
         # Same native-backend desugars the kernel body already ran (BUG-3: a helper
         # that survives inlining kept its ``np.newaxis`` / ufunc-``out=`` / roll-on-
         # slice / ``.real`` / ``.ndim``-guard forms). Runs before ``_mark_written_
@@ -2114,6 +2486,19 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
         if hret_shape is None:
             # SCALAR (by-value) return -- params inferred straight from the call.
             arrays, scalars, symbols = _infer_helper_params(pnames, call.args, arr_by, sca_by, sym_by, kernel_fn)
+            # Fold this helper's OWN compile-time tuples (``tuple(range(2, x.ndim))`` and the
+            # rest of tuple_desugar.py) against ITS param ranks, same as the kernel body got at
+            # ``parse_kernel``'s own ``desugar_tuples`` call -- a surviving helper is its own
+            # KernelIR and never went through that call. Must run BEFORE the structural-axis
+            # guards below: an unfolded ``axes = tuple(range(2, x.ndim))`` is still a runtime
+            # Call at that point, which is exactly the "symbolic axis" the guard exists to catch.
+            _desugar_helper_tuples(hfn, arrays, scalars)
+            # A helper that survives inlining is emitted as its OWN kernel and lowered through the
+            # same expanders, so it needs the same structural guards the kernel body gets. Without
+            # them a symbolic axis inside a helper reached lowering and was read as "no axis" --
+            # the instance-norm helpers reduced over EVERY axis instead of the spatial ones.
+            _reject_symbolic_axis(hfn)
+            _reject_unsupported_slices(hfn)
             _mark_written_outputs(hfn, arrays)
             out.append(
                 KernelIR(tree=hfn,
@@ -2124,6 +2509,7 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
                          arrays=arrays,
                          scalars=scalars,
                          source_path=parent.source_path,
+                         inlined_consts=hconsts,
                          return_kind="scalar"))
             continue
 
@@ -2137,6 +2523,13 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
         if call_consts:
             _substitute_names(hfn, call_consts)
             _FoldStaticNoneBranches().visit(hfn)
+            # The fold above only swaps a statically-true ``if None is None: return y`` for its
+            # branch; its ORIGINAL siblings (conv2d_instance_norm_divide's dead
+            # ``shape = ...; return y * None.reshape(...) + ...``) are still in the body and
+            # still reference the substituted-away ``None`` -- prune them before anything reads
+            # ``hfn`` further (``used`` right below would otherwise still count ``weight``/``bias``
+            # as read here, keeping dead params alive).
+            hfn.body = _drop_unreachable_after_return(hfn.body)
             ast.fix_missing_locations(hfn)
         used = {n.id for n in ast.walk(hfn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
         keep = [(pn, a) for pn, a in zip(pnames, call.args) if pn in used]
@@ -2145,6 +2538,12 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
         hfn.args.args = [a for a in hfn.args.args if a.arg in used]
         hfn.args.defaults = []
         arrays, scalars, symbols = _infer_helper_params(pnames, kept_args, arr_by, sca_by, sym_by, kernel_fn)
+        # See the scalar-return branch above: fold this helper's own compile-time tuples against
+        # its param ranks BEFORE the structural-axis guards, and before ``hret`` (not yet a real
+        # body reference) is appended to ``arrays`` below.
+        _desugar_helper_tuples(hfn, arrays, scalars)
+        _reject_symbolic_axis(hfn)
+        _reject_unsupported_slices(hfn)
         _mark_written_outputs(hfn, arrays)
         # The returned array becomes a trailing out-param the body writes into.
         hret = f"__hret_{hidx}"
@@ -2165,6 +2564,7 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
                      arrays=arrays,
                      scalars=scalars,
                      source_path=parent.source_path,
+                     inlined_consts=hconsts,
                      return_kind=hret))
         if assign is not None:
             param_info = {a.name: (a.shape, a.dtype) for a in arrays if a.name != hret}
@@ -2233,6 +2633,284 @@ def _collect_inlinable_helpers(tree: ast.Module, kernel_fn: ast.FunctionDef) -> 
         if isinstance(node, ast.FunctionDef) and node is not kernel_fn and _classify(node):
             out[node.name] = node
     return out
+
+
+#: Calls whose ``axis`` selects WHICH loop the lowering writes -- a structural choice, so an axis
+#: that is not a compile-time integer has no emittable form.
+#:
+#: Every op here had a way to swallow an unreadable axis rather than refuse it: a reduction read it
+#: as "no axis" and reduced over ALL of them (``_read_axis_keepdims`` returns ``None`` for both),
+#: and an index op whose axis never resolved fell through to the emitter's scalar no-op path, which
+#: dropped it outright -- ``np.flip(x, axis=dim)`` emitted a plain copy.
+AXIS_STRUCTURAL_FNS = frozenset(REDUCE_FNS) | {
+    "cumsum", "cumprod", "median", "count_nonzero", "squeeze", "expand_dims", "flip", "roll", "take", "repeat", "diff",
+    "sort", "argsort", "swapaxes", "moveaxis", "concatenate", "stack", "split", "unique", "fft", "ifft", "fftn",
+    "ifftn", "rfft", "irfft"
+}
+
+#: Which POSITIONAL slot each call puts ``axis`` in. Most reductions take it second; the ops that
+#: take a count or an index first put it third. Reading the wrong slot let ``np.repeat(A, 2, ax)``
+#: past the guard entirely (slot 1 held the literal repeat count) and made ``np.take(A, idx, ax)``
+#: refuse with the INDEX ARRAY named as the offending axis.
+#: ``np.fft.*`` takes a transform LENGTH first, so its axis is third too.
+AXIS_POSITION: Dict[str, int] = {
+    "repeat": 2,
+    "roll": 2,
+    "take": 2,
+    "diff": 2,
+    "split": 2,
+    "swapaxes": 1,
+    "unique": 4,
+    "fft": 2,
+    "ifft": 2,
+    "rfft": 2,
+    "irfft": 2,
+    "fftn": 2,
+    "ifftn": 2
+}
+
+
+class _FoldStructuralUses(ast.NodeTransformer):
+    """Fold a RUNTIME argument's constant value, but only where it picks the loop nest.
+
+    ``max_iter`` and ``dim`` are declared the same way -- an ``init.scalars`` default that is also an
+    ABI argument -- so no rule about the DECLARATION can separate them. The USE does: gmres computes
+    ``m = min(max_iter, N)``, a plain expression a runtime value evaluates fine, and folding it pins
+    the iteration count to the manifest. ``np.argmax(x, axis=dim)`` chooses the loop nest, which has
+    no runtime form at all, so there the literal is the only thing that can be emitted.
+
+    So this folds ONLY the axis slot of a structural call. Everywhere else the name survives and
+    reaches the ABI, and an axis that is genuinely runtime still meets the refusal downstream.
+    """
+
+    def __init__(self, const_syms: Dict[str, int]) -> None:
+        self.const_syms = const_syms
+
+    def _fold(self, node: Optional[ast.expr]) -> Optional[ast.expr]:
+        if isinstance(node, ast.Name) and node.id in self.const_syms:
+            return ast.copy_location(ast.Constant(value=self.const_syms[node.id]), node)
+        return node
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        self.generic_visit(node)
+        name = _np_attr_name(node)
+        if name not in AXIS_STRUCTURAL_FNS:
+            return node
+        for kw in node.keywords:
+            if kw.arg in ("axis", "axes"):
+                kw.value = self._fold(kw.value)
+        slot = AXIS_POSITION.get(name, 1)
+        if len(node.args) > slot:
+            node.args[slot] = self._fold(node.args[slot])
+        return node
+
+
+def _preset_constant_symbols(parameters: Dict, scalars: Dict) -> Dict[str, int]:
+    """Symbols with the SAME integer value in every preset. Only those may be folded into a
+    structural position: one artifact serves all presets, so a symbol that varies across them would
+    bake preset S's choice into the code the others run."""
+    per_name: Dict[str, List[int]] = {}
+    for values in (*[v for v in parameters.values() if isinstance(v, dict)], scalars or {}):
+        for name, value in values.items():
+            # A plain int only. A manifest scalar may hold a list (a per-axis stride/padding), which
+            # is neither an axis nor hashable.
+            if isinstance(value, int) and not isinstance(value, bool):
+                per_name.setdefault(name, []).append(value)
+            else:
+                per_name.setdefault(name, []).append(None)
+    return {name: values[0] for name, values in per_name.items() if len(set(values)) == 1 and values[0] is not None}
+
+
+def _structural_constants(parameters: Dict,
+                          scalars: Dict,
+                          shapes_raw: Dict,
+                          runtime_args=(),
+                          keep_only=None) -> Dict[str, int]:
+    """Preset-constant integers that CANNOT be a size, so folding them into the body is safe.
+
+    "Cannot be a size" is decided structurally: the name is absent from every ``init.shapes``
+    expression. That matters because one emitted artifact serves every preset AND the harness may
+    scale the declared sizes at run time -- a symbol that reaches an extent must stay a runtime
+    argument. A symbol that reaches only an axis, a repeat count, or a slice bound has one value for
+    the life of the artifact, and the loop nest cannot be built until it is a literal.
+
+    A name in ``runtime_args`` is excluded whatever its manifest default says: it reaches the ABI, so
+    the harness passes a value that need not be the default, and baking the default in is a
+    miscompile. gmres declares ``max_iter`` in ``init.scalars`` AND takes it as an argument -- folding
+    it turned the derived symbol ``m = min(max_iter, N)`` into ``min(100, N)``, pinning the iteration
+    count to the manifest's value for every run. When such a name IS used as an axis, the honest
+    outcome is the refusal downstream, not a fold: a runtime axis has no static loop nest.
+    """
+    extent_names: Set[str] = set()
+    for shape in (shapes_raw or {}).values():
+        try:
+            parsed = ast.parse(str(shape).strip(), mode="eval")
+        except SyntaxError:
+            continue
+        extent_names.update(n.id for n in ast.walk(parsed) if isinstance(n, ast.Name))
+    runtime = frozenset(runtime_args)
+    wanted = None if keep_only is None else frozenset(keep_only)
+    return {
+        name: value
+        for name, value in _preset_constant_symbols(parameters, scalars).items()
+        if name not in extent_names and name not in runtime and (wanted is None or name in wanted)
+    }
+
+
+class _FoldConstantSymbols(ast.NodeTransformer):
+    """Replace a load of a structural constant with its literal value.
+
+    A name the body REBINDS is left alone. The conv ports normalise a scalar knob to a pair
+    (``if isinstance(stride, int): stride = (stride, stride)``) and then read ``stride[0]``;
+    folding the loads turned that read into ``1[0]``, since the rebinding is what makes it a tuple.
+    """
+
+    def __init__(self, const_syms: Dict[str, int]) -> None:
+        self.const_syms = const_syms
+
+    def apply(self, fn: ast.FunctionDef) -> None:
+        rebound = {
+            leaf.id
+            for node in ast.walk(fn) if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign, ast.For))
+            for tgt in (node.targets if isinstance(node, ast.Assign) else [node.target]) for leaf in ast.walk(tgt)
+            if isinstance(leaf, ast.Name)
+        }
+        self.const_syms = {k: v for k, v in self.const_syms.items() if k not in rebound}
+        self.visit(fn)
+
+    def visit_Name(self, node: ast.Name) -> ast.AST:
+        if not isinstance(node.ctx, ast.Load) or node.id not in self.const_syms:
+            return node
+        return ast.copy_location(ast.Constant(value=self.const_syms[node.id]), node)
+
+
+def _reject_symbolic_axis(fn: ast.FunctionDef) -> None:
+    """Refuse a reduction / scan whose axis is present but not a literal.
+
+    Not pedantry: ``_read_axis_keepdims`` reports an unreadable axis as ``None``, which is the SAME
+    value it reports for ``np.sum(x)`` -- so ``np.sum(x, axis=dim)`` used to lower as a FULL
+    reduction over every axis and compile cleanly. A wrong answer is worse than no answer.
+    """
+    for node in ast.walk(fn):
+        name = _np_attr_name(node) if isinstance(node, ast.Call) else None
+        if name not in AXIS_STRUCTURAL_FNS:
+            continue
+        kw = {k.arg: k.value for k in node.keywords}
+        slot = AXIS_POSITION.get(name, 1)
+        axis = kw.get("axis") or kw.get("axes") or (node.args[slot] if len(node.args) > slot else None)
+        if axis is not None and not _is_literal_axis(axis):
+            raise NotImplementedError(f"{ast.unparse(node)}: axis must be a compile-time integer "
+                                      f"(got {ast.unparse(axis)!r}); the emitted loop nest is chosen by it")
+        # keepdims decides the result RANK, and a non-literal one was read as False -- which then
+        # broadcast the reduction against the wrong axis.
+        keep = kw.get("keepdims")
+        if keep is not None and not (isinstance(keep, ast.Constant) and isinstance(keep.value, (bool, int))):
+            raise NotImplementedError(f"{ast.unparse(node)}: keepdims must be a compile-time constant "
+                                      f"(got {ast.unparse(keep)!r}); it decides the result rank")
+
+
+def _reject_unsupported_slices(fn: ast.FunctionDef) -> None:
+    """Refuse the two slice forms the index lowering silently ignores.
+
+    * a NON-LITERAL step: ``_slice_step_const`` returns ``None`` for it and for "no step at all",
+      and every consumer reads that as step 1 -- ``x[::s]`` emitted a contiguous copy, stride gone.
+    * a NEGATIVE lower bound: it is added to the iterator verbatim rather than resolved against the
+      axis length, so ``x[-3:]`` emitted ``x[i - 3]`` and read before the buffer. (A negative UPPER
+      bound is fine: it only shortens the trip count, which comes from the target's extent.)
+    """
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.Slice):
+            continue
+        if node.step is not None and not _is_literal_axis(node.step):
+            raise NotImplementedError(f"slice step {ast.unparse(node.step)!r} must be a compile-time integer; "
+                                      f"a symbolic step is read as 1 and the stride is lost")
+        if isinstance(node.lower, ast.UnaryOp) and isinstance(node.lower.op, ast.USub):
+            raise NotImplementedError(f"negative slice start {ast.unparse(node.lower)!r} is not resolved against "
+                                      f"the axis length; write it as an explicit extent instead")
+
+
+def _is_literal_axis(node: ast.expr) -> bool:
+    """A literal axis: an int, a negated int, ``None``, or a tuple/list of those."""
+    if isinstance(node, ast.Constant):
+        return node.value is None or (isinstance(node.value, int) and not isinstance(node.value, bool))
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        return _is_literal_axis(node.operand)
+    if isinstance(node, (ast.Tuple, ast.List)):
+        return all(_is_literal_axis(e) for e in node.elts)
+    return False
+
+
+def _np_attr_name(node: ast.Call) -> Optional[str]:
+    """``np.sum(...)`` / ``x.sum(...)`` -> ``"sum"``, else ``None``."""
+    return node.func.attr if isinstance(node.func, ast.Attribute) else None
+
+
+def _static_flag_params(tree: ast.Module) -> Dict[str, FrozenSet[str]]:
+    """Per helper, the parameters bound to a compile-time literal at EVERY call site.
+
+    Such a parameter is a configuration flag, not data: after inlining substitutes the literal, a
+    branch on it is statically decidable and folds away. A parameter that any call site binds to an
+    expression is excluded -- there its value is only known at run time.
+    """
+    defs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    literal: Dict[str, Dict[str, bool]] = {name: {} for name in defs}
+    for call in (n for n in ast.walk(tree) if isinstance(n, ast.Call)):
+        if not (isinstance(call.func, ast.Name) and call.func.id in defs):
+            continue
+        hdef = defs[call.func.id]
+        pnames = [a.arg for a in hdef.args.args]
+        # An unsupplied trailing parameter takes its default, which is itself a compile-time value
+        # when the default is a literal -- ``_logsumexp(x, axis=1)`` leaves keepdims=False.
+        bound: Dict[str, Optional[ast.expr]] = {}
+        offset = len(pnames) - len(hdef.args.defaults)
+        for i, default in enumerate(hdef.args.defaults):
+            bound[pnames[offset + i]] = default
+        for i, arg in enumerate(call.args):
+            if i < len(pnames):
+                bound[pnames[i]] = arg
+        for kw in call.keywords:
+            if kw.arg is not None:
+                bound[kw.arg] = kw.value
+        for pname in pnames:
+            value = bound.get(pname)
+            is_literal = isinstance(value, ast.Constant)
+            literal[call.func.id][pname] = literal[call.func.id].get(pname, True) and is_literal
+    return {name: frozenset(p for p, ok in flags.items() if ok) for name, flags in literal.items()}
+
+
+def _fuse_guarded_returns(tree: ast.Module) -> None:
+    """``if FLAG: return A`` immediately before a trailing ``return B`` -> ``return A if FLAG else B``.
+
+    What it buys is inlinability: an early return anywhere but the last statement disqualifies a
+    helper, so the KernelBench ``_logsumexp(x, axis, keepdims)`` was emitted as its OWN kernel --
+    whose ``axis`` and ``keepdims`` are not declared parameters. Once fused it inlines, and the call
+    site's literal ``keepdims=False`` folds the branch away entirely.
+
+    That fold is a PRECONDITION, not a bonus, so the guard must be a parameter every call site binds
+    to a literal (:func:`_static_flag_params`). A runtime guard would leave the IfExp standing, and
+    an IfExp over ARRAY branches has no target form: C's ``?:`` rejects the operand types outright,
+    and Fortran's ``merge`` is rank-strict (and evaluates BOTH branches, so a guarded division or
+    subscript would run on the values the guard exists to exclude).
+    """
+    flags_by_helper = _static_flag_params(tree)
+    for fn in (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)):
+        flags = flags_by_helper.get(fn.name, frozenset())
+        body = fn.body
+        while (len(body) >= 2 and isinstance(body[-1], ast.Return) and body[-1].value is not None
+               and isinstance(body[-2], ast.If) and not body[-2].orelse and len(body[-2].body) == 1
+               and isinstance(body[-2].body[0], ast.Return) and body[-2].body[0].value is not None
+               and _is_static_flag_test(body[-2].test, flags)):
+            guard = body[-2]
+            fused = ast.Return(value=ast.IfExp(test=guard.test, body=guard.body[0].value, orelse=body[-1].value))
+            body[-2:] = [ast.copy_location(fused, guard)]
+        ast.fix_missing_locations(fn)
+
+
+def _is_static_flag_test(test: ast.expr, flags: FrozenSet[str]) -> bool:
+    """``flag`` / ``not flag`` on a parameter that is a literal at every call site."""
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        return _is_static_flag_test(test.operand, flags)
+    return isinstance(test, ast.Name) and test.id in flags
 
 
 def _flatten_nested_helpers(tree: ast.Module) -> None:
@@ -2522,6 +3200,7 @@ class _InlineHelpers(ast.NodeTransformer):
                 if call_args is None:
                     return node
                 node.value.args = call_args
+                node.value.keywords = []
                 self._counter[0] += 1
                 prefix = f"__inl{self._counter[0]}_"
                 # Map params to call args; locals (assigned in body) get
@@ -2595,6 +3274,7 @@ class _InlineHelpers(ast.NodeTransformer):
         if call_args is None:
             return node
         node.value.args = call_args
+        node.value.keywords = []
         self._counter[0] += 1
         prefix = f"__inl{self._counter[0]}_"
         local_names = _collect_assigned_names(body)
@@ -2637,6 +3317,7 @@ class _InlineHelpers(ast.NodeTransformer):
         if call_args is None:
             return node
         node.args = call_args
+        node.keywords = []
         subst = dict(zip(param_names, node.args))
         body_stmts = _strip_docstrings(helper.body)
         if (len(body_stmts) == 1 and isinstance(body_stmts[0], ast.Return)):
@@ -2978,6 +3659,19 @@ def _shapes_from_initialize(numpy_py: pathlib.Path, info: Dict) -> Dict[str, str
             break
     if init_fn is None:
         return {}
+    # Fold the INITIALIZER module's own top-level numeric constants (cfd's
+    # ``NFACES = 4``, seissol's ``NQ = 9`` / ``NDIM = 3``) into its body first,
+    # same treatment the kernel module gets from ``_inline_module_constants``.
+    # Otherwise the constant's NAME survives into the harvested shape text
+    # below, is found in no scope by ``_promote_shape_symbols_to_params``, and
+    # gets promoted as a phantom C-ABI parameter the harness never passes.
+    _inline_module_constants(tree, init_fn, [])
+    # Then collect the init function's own single-assignment scalar-dim
+    # locals (conv2d's ``H_out = H - K + 1``, lulesh's alias ``NE = numElem``
+    # and derived ``enq = edgeNodes * edgeNodes``) so they substitute into the
+    # harvested shape text below, to a fixpoint, the same way an inlined
+    # helper's ``__inl<k>_`` scalar locals already do for the kernel body.
+    init_scalar_defs = _collect_inlined_scalar_defs(init_fn, prefix=None)
     # First pass: collect list literals (e.g. ``mlp_sizes = [S0, S1, S2]``)
     # so subscripts ``mlp_sizes[0]`` resolve to ``S0`` in a second-pass
     # shape-literal substitution.
@@ -3004,6 +3698,8 @@ def _shapes_from_initialize(numpy_py: pathlib.Path, info: Dict) -> Dict[str, str
             for lst_name, elts in list_locals.items():
                 for i, elt in enumerate(elts):
                     shape = shape.replace(f"{lst_name}[{i}]", elt)
+            if init_scalar_defs:
+                shape = _substitute_inlined_scalar_defs((shape, ), init_scalar_defs)[0]
             shapes[name] = shape
     # Map positional returns to kernel ``input_args`` so a kernel like
     # ``def go_fast(a):`` paired with ``def initialize(...): return x``
@@ -3232,6 +3928,10 @@ def pure_int_arith(n: ast.AST) -> bool:
     return False
 
 
+#: Int-in/int-out calls, so int context flows backward through them.
+INT_TRANSPARENT = frozenset({"min", "max", "abs"})
+
+
 def _names_used_as_int(tree: ast.AST) -> Set[str]:
     """Return the set of ``Name`` ids that flow into an integer-only
     position (array subscript, ``range()`` argument). The implicit-
@@ -3261,10 +3961,11 @@ def _names_used_as_int(tree: ast.AST) -> Set[str]:
             elts = sl.elts if isinstance(sl, ast.Tuple) else [sl]
             for e in elts:
                 collect(e)
-        elif isinstance(node, ast.Call):
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in INT_TRANSPARENT:
+            # int(x)/floor(x) CONVERT, so the argument is the float converted FROM, not an int.
             for arg in node.args:
                 collect(arg)
-        # Constants pass through.
+        # Constants and every other call pass through.
 
     BITWISE_OPS = (ast.BitOr, ast.BitAnd, ast.BitXor, ast.LShift, ast.RShift)
     for node in ast.walk(tree):

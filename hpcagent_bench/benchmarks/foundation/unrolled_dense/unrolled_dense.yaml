@@ -6,11 +6,11 @@ parameters:
   S:
     N: 16
   M:
-    N: 64
+    N: 125000000
   L:
-    N: 256
+    N: 366357377
   XL:
-    N: 268435455
+    N: 1073741824
 init:
   output_args:
   - alpha

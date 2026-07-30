@@ -41,7 +41,10 @@ def controlled_env(backend):
     return env
 
 
-@pytest.mark.parametrize("backend", ["apptainer", "podman"])
+# Driven off EXEC_BACKENDS, not a hand-written list: a wrapper backend added to the spelling
+# file without a parity check is exactly how the two folds drift. `ce` is excluded on
+# purpose -- it has no wrapper argv to compare, and the bash launcher rejects it outright.
+@pytest.mark.parametrize("backend", containers.EXEC_BACKENDS)
 @pytest.mark.parametrize("hardware", ["cpu", "nvidia", "amd"])
 def test_bash_and_python_fold_identical_argv(backend, hardware, monkeypatch):
     env = controlled_env(backend)

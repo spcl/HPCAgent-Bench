@@ -7,11 +7,11 @@ parameters:
   S:
     N: 16
   M:
-    N: 96
+    N: 512
   L:
-    N: 224
+    N: 724
   XL:
-    N: 416
+    N: 1023
   fuzzed:
     N: [12, 320]
 init:

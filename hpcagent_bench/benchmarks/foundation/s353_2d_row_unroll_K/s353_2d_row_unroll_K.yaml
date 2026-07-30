@@ -6,11 +6,11 @@ parameters:
   S:
     N: 128
   M:
-    N: 512
+    N: 10240
   L:
-    N: 2048
+    N: 16384
   XL:
-    N: 16383
+    N: 26214
 init:
   arrays:
     ip:

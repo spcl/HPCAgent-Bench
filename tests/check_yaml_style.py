@@ -16,16 +16,24 @@ vocabularies, the env/compiler config, the global config):
 
 Third-party-schema YAML is NOT ours to restyle and is skipped: GitHub Actions
 workflows (``.github/``) and docker-compose (``*compose*``). Benchmark manifests
-additionally have their canonical key order enforced by the manifest
-canonicalizer; this gate is the repo-wide style layer on top.
+additionally have their SCHEMA checked by ``scripts/check_manifest_structure.py``
+(which loads each one through ``BenchSpec.from_yaml``); this gate is the repo-wide
+style layer on top, and knows nothing about any file's schema.
 
-    python tests/check_yaml_style.py            # CI: report violations, exit 1
+    python tests/check_yaml_style.py            # CI / standalone: every tracked owned YAML
     python tests/check_yaml_style.py --fix       # auto-fix the mechanical ones
+    python tests/check_yaml_style.py --fix a.yaml b.yaml   # pre-commit: only the given files
 
 ``--fix`` only touches the safe, lossless bits (trailing whitespace, final
 newline) -- it never re-dumps a file, so inline comments and authored key order
 are preserved. Missing headers, tabs and odd indentation are reported for a
 human to fix (re-indenting or wording a header is not safe to automate).
+
+Wired into ``.pre-commit-config.yaml`` as ``hpcagent_bench-yaml-style``, which passes the
+staged files as positional args (already narrowed by the hook's broad ``\\.ya?ml$`` regex;
+:data:`SKIP` is what actually excludes third-party schemas, same as every other hook here
+whose script owns its own skip policy). With no files given -- standalone, or the pytest
+gate in ``tests/test_yaml_style.py`` -- it scans every tracked owned YAML instead.
 """
 from __future__ import annotations
 
@@ -42,14 +50,17 @@ SKIP = ("/.github/", "compose")
 
 
 def owned_yaml() -> list[pathlib.Path]:
-    """Every tracked ``*.yaml`` / ``*.yml`` that is hpcagent_bench's own to style."""
+    """Every tracked ``*.yaml`` / ``*.yml`` that is hpcagent_bench's own to style (the
+    standalone-scan fallback used when no explicit files are given)."""
     out = subprocess.run(["git", "ls-files", "*.yaml", "*.yml"], cwd=REPO, capture_output=True, text=True, check=True)
-    files = []
-    for rel in out.stdout.split():
-        if any(s in f"/{rel}" for s in SKIP):
-            continue
-        files.append(REPO / rel)
-    return files
+    return in_scope(out.stdout.split())
+
+
+def in_scope(rels: list[str]) -> list[pathlib.Path]:
+    """Filter candidate repo-relative paths down to the ones this gate owns (drops the
+    third-party-schema :data:`SKIP` list). Shared by :func:`owned_yaml`'s standalone
+    tree scan and ``main``'s pre-commit staged-file args, so both apply the same policy."""
+    return [REPO / rel for rel in rels if not any(s in f"/{rel}" for s in SKIP)]
 
 
 def violations(path: pathlib.Path) -> list[str]:
@@ -97,9 +108,16 @@ def fix(path: pathlib.Path) -> bool:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--fix", action="store_true", help="auto-fix trailing whitespace + final newline (lossless)")
+    ap.add_argument("files",
+                    nargs="*",
+                    help="files to check (default: every tracked owned YAML); "
+                    "pre-commit passes the staged files here")
     args = ap.parse_args(argv)
 
-    files = owned_yaml()
+    # A staged DELETION is still passed as a positional arg by pre-commit; drop paths that
+    # no longer exist (the standalone `git ls-files` scan never produces one, so this only
+    # matters on the explicit-files branch).
+    files = [p for p in in_scope(args.files) if p.is_file()] if args.files else owned_yaml()
     changed = 0
     bad: dict[pathlib.Path, list[str]] = {}
     for f in files:

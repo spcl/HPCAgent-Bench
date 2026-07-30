@@ -7,11 +7,11 @@ parameters:
   S:
     N: 20
   M:
-    N: 24
+    N: 27
   L:
-    N: 32
+    N: 31
   XL:
-    N: 40
+    N: 36
 init:
   input_args:
   - N

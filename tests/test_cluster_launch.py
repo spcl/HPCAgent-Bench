@@ -10,9 +10,10 @@ import socket
 
 import pytest
 
-from hpcagent_bench.harness.cluster_launch import (JUDGE, RankRole, VLLM_HEAD, VLLM_WORKER, assemble_urls,
-                                                   endpoint_hostport, expected_world, plan_roles, rank_status,
-                                                   settle_rounds, vllm_command)
+from hpcagent_bench.harness.cluster_launch import (JUDGE, OPTIMIZER, RankRole, VLLM_HEAD, VLLM_WORKER, assemble_urls,
+                                                   endpoint_hostport, expected_traditional_world, expected_world,
+                                                   plan_roles, plan_traditional_roles, rank_status, settle_rounds,
+                                                   vllm_command)
 
 
 class FakeProc:
@@ -169,3 +170,32 @@ def test_rank_status_pending_until_port_binds_then_ready():
         assert ready["kind"] == "ready"  # port now accepts -> ready
     finally:
         listener.close()
+
+
+def test_traditional_world_is_optimizer_plus_judge():
+    assert expected_traditional_world(4, 1) == 5
+    assert expected_traditional_world(1, 2) == 3
+
+
+def test_plan_traditional_puts_optimizers_first_and_driver_on_rank0():
+    roles = plan_traditional_roles(5, optimizer_nodes=4, judge_nodes=1)
+    assert [r.role for r in roles] == [OPTIMIZER] * 4 + [JUDGE]
+    assert [i for i, r in enumerate(roles) if r.is_driver] == [0]
+
+
+def test_plan_traditional_rejects_wrong_world_size():
+    with pytest.raises(ValueError, match="O \\+ J"):
+        plan_traditional_roles(6, optimizer_nodes=4, judge_nodes=1)
+
+
+@pytest.mark.parametrize("optimizers,judges", [(0, 1), (1, 0)])
+def test_plan_traditional_rejects_nonpositive_counts(optimizers, judges):
+    with pytest.raises(ValueError, match=">= 1"):
+        plan_traditional_roles(optimizers + judges, optimizer_nodes=optimizers, judge_nodes=judges)
+
+
+def test_optimizer_rank_is_ready_without_binding_a_port():
+    """An optimizer rank hosts no server, so probing a port would strand it as 'pending' forever."""
+    me = RankRole(OPTIMIZER, -1, -1, is_driver=True)
+    status = rank_status(me, [], vllm_port=8000, judge_port=8800, hostname="n0", rank=0)
+    assert status["kind"] == "ready"

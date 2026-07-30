@@ -11,7 +11,8 @@ output against a scipy reference:
 The harness is data-driven: it reads the ``sparse_layouts`` /
 ``configurations`` blocks to learn each logical array's format, the
 binding JSON (emitted alongside the C source) to learn the exact C
-argument order + per-arg kind, and ``init.shapes`` for the dense arrays.
+argument order + per-arg kind, and the manifest's declared-array surface
+(``numpyto_common.frontend.declared_shapes``) for the dense arrays.
 Nothing here is spmv/spmm-specific, so new sparse kernels are picked up
 automatically by :func:`discover_sparse_kernels`.
 
@@ -283,6 +284,11 @@ def _emit_c(short: str, numpy_py: pathlib.Path, out: pathlib.Path, config_name: 
 
 
 from numpyto_common.dtypes import SCALAR_KINDS, ctype_for_scalar_kind
+# The ONE reader of a manifest's declared arrays, shared with the translator front end: an
+# ``init`` block spells them under ``arrays`` (bare shape string or ``{"shape": ...}`` mapping),
+# and reading ``init["shapes"]`` here instead is what silently emptied ``dense_inputs`` -- every
+# solver's ``b``/``x`` then fell through to the scalar filler and scipy rejected ``A @ 2.0``.
+from numpyto_common.frontend import declared_shapes
 
 
 def run_kernel(k: SparseKernel,
@@ -359,9 +365,9 @@ def run_kernel(k: SparseKernel,
         if fmt == "sell_c_sigma":
             env.setdefault("C", int(roles["_C"]))
 
-    # 3. dense arrays from init.shapes (random; snapshot for both runs).
+    # 3. dense arrays declared by the manifest (random; snapshot for both runs).
     dense_inputs: Dict[str, np.ndarray] = {}
-    for name, shp in info.get("init", {}).get("shapes", {}).items():
+    for name, shp in declared_shapes(info.get("init", {}) or {}).items():
         toks = [t.strip() for t in shp.strip("()").split(",") if t.strip()]
         shape = tuple(_shape_val(t, env) for t in toks)
         dense_inputs[name] = rng.random(shape)
@@ -435,8 +441,11 @@ def run_kernel(k: SparseKernel,
     ctx = tempfile.TemporaryDirectory()
     out = workdir or pathlib.Path(ctx.name)
     _emit_c(k.short, k.numpy_py, out, config_name=config_name)
-    from numpyto_common.naming import native_base
-    base = native_base(k.short, sparse=config_name)  # <short>_<config>_fp64
+    from numpyto_common.naming import native_base, short_for
+    # Name the artifact off the numpy reference, the way the emitter does. ``k.short`` is a
+    # REGISTRY key: ``bicg_solvers`` and ``sp_bicg`` are two keys over one ``bicg_numpy.py``, so
+    # deriving the base from the key opened a file no emit ever wrote.
+    base = native_base(short_for(k.numpy_py), sparse=config_name)  # <short>_<config>_fp64
     binding = json.loads((out / f"{base}_binding.json").read_text())
     csrc = out / f"{base}.c"
     so = out / f"lib{base}.so"

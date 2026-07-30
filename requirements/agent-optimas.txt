@@ -1,0 +1,55 @@
+# HPCAgent-Bench dependency list (hand-maintained).
+#
+# UPSTREAM Optimas (Stanford), for driving the `optimas` baseline's prompt search with the published
+# package instead of the in-repo implementation of its method. OPT-IN: the import is guarded at one
+# edge (hpcagent_bench.harness.baselines.optimas_proposer), nothing else in the repo imports it, and
+# the baseline plus its whole test suite run unchanged with this file uninstalled. The in-repo
+# proposer stays the DEFAULT and the CI control -- zero dependencies, so no upstream pin can break it.
+#
+# THE DISTRIBUTION IS `optimas-ai`. `pip install optimas` gets a DIFFERENT project -- an
+# accelerator-physics optimizer (BSD-3-Clause-LBNL, libEnsemble-based) that has held the plain
+# `optimas` name on PyPI since 2023.
+#
+# ---------------------------------------------------------------------------------------------
+# INSTALL IT LIKE THIS -- into an ISOLATED venv, never the main environment:
+#
+#     python -m venv ~/.cache/optimas_venv
+#     ~/.cache/optimas_venv/bin/pip install --no-deps optimas-ai
+#     ~/.cache/optimas_venv/bin/pip install dspy litellm transformers tokenizers \
+#         huggingface-hub torch peft trl accelerate datasets wandb omegaconf tyro \
+#         python-dotenv rich networkx tqdm
+#
+# `--no-deps` is the point: optimas-ai==0.0.4 declares `transformers==4.46.1` (an EXACT pin on a
+# 2024-10-29 release). That pin is SPURIOUS. Verified 2026-07-28 in an isolated venv: with
+# transformers 5.14.1, tokenizers 0.22.2, litellm 1.93.0, trl 1.9.2 and huggingface_hub 1.25.1
+# installed over it, pip emits only a dependency-conflict WARNING and every optimas surface that
+# matters imports cleanly. Honouring the pin instead would drag this repo's environment backwards
+# (huggingface_hub 1.21 -> 0.36, tokenizers 0.23 -> 0.20, litellm 1.90 -> 1.83) and would contradict
+# requirements/agent-local.txt, which wants an unpinned modern transformers.
+# ---------------------------------------------------------------------------------------------
+#
+# WHAT WORKS AND WHAT DOES NOT on modern dependencies (each line verified by import, not assumed):
+#
+#   IMPORTS OK   optimas, optimas.arch, optimas.optim.opro, optimas.adapt.dspy, optimas.eval,
+#                optimas.reward_model, optimas.train.reward_trainer, optimas.train.finetune
+#   FAILS        optimas.optim.ppo, optimas.optim.optimizer, optimas.optim.cp_optimizer
+#                -> ImportError: cannot import name 'PPOTrainer' from 'trl'
+#
+# trl >= 1.0 removed `PPOTrainer`, and `optimizer` / `cp_optimizer` import `ppo` transitively. So the
+# ONE genuine incompatibility is trl, not transformers, and it costs exactly two surfaces: the
+# PPO/LoRA weight-tuning path and the `OptimasOptimizer` orchestrator that drives it. The PROMPT
+# surface this repo uses (`optimas.optim.opro.OPRO` + `optimas.arch.base.BaseComponent`) is
+# unaffected. Pin `trl<1.0` if you need the PPO path; nothing in this repo does.
+#
+# CAVEATS THAT STAND (upstream is a research artifact, not a maintained library):
+#   * 16 commits ever, no CI, no test suite; last PyPI release 2025-08-06.
+#   * The wheel ships the Apache-2.0 licence text while its metadata declares `License: MIT`.
+#     Resolve which one governs before redistributing anything built on it.
+#   * `optimas.utils.api.get_llm_output` calls litellm directly, so a proposal made through upstream
+#     OPRO does NOT pass through this repo's agent backends and is absent from the run's token
+#     accounting. That cost lands outside `RunRow.tokens`; the in-repo proposer has no such gap.
+#   * `optimas/__init__.py` calls `logging.basicConfig()` at import and imports `distutils`
+#     (removed from the stdlib in 3.12, reachable only via setuptools' deprecated shim).
+#
+# Paper: arXiv:2507.03041 (ICLR 2026). See hpcagent_bench/harness/baselines.py for how the seam works.
+optimas-ai

@@ -13,6 +13,7 @@ import sys
 
 from numpyto_numba.emit import emit_numba
 from numpyto_common.emit_io import write_generated
+from numpyto_common.naming import short_for
 
 
 def cmd_emit(args: argparse.Namespace) -> int:
@@ -30,7 +31,7 @@ def cmd_emit(args: argparse.Namespace) -> int:
     if args.sanitize:
         from numpyto_common.sanitize import sanitize
         out_src = sanitize(out_src)
-    short = args.kernel.stem.removesuffix("_numpy")
+    short = short_for(args.kernel)
     # A sparse configuration names a distinct sub-benchmark (spmv_csr vs spmv_csc):
     # the buffer-style body is identical to the dense one -- numba compiles the CSR
     # loops + gather natively -- but the emitted file carries the layout tag so the

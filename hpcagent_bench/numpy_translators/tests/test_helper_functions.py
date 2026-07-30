@@ -108,3 +108,40 @@ def test_helper_emitted_as_c_function():
     assert "static double classify(double v)" in c
     assert "return 2.0;" in c and "return 0.0;" in c
     assert "int64_t classify" not in c
+
+
+# AF1: a helper's OWN ``tuple(range(2, x.ndim))`` (the KernelBench instance-norm idiom) never
+# folded when the helper survives inlining -- an early ``if weight is None: return y`` disqualifies
+# Form-3 inlining (frontend.py's ``_collect_inlinable_helpers``), so ``_instance_norm`` here is
+# built as its own KernelIR by ``_build_helper_kirs``, which never ran ``desugar_tuples`` on it.
+# ``axes`` reached ``_reject_symbolic_axis`` as an unfolded runtime ``tuple(range(...))`` call and
+# NotImplementedError'd -- exactly the shape of ``conv2d_instance_norm_divide`` and
+# ``conv3d_multiply_instance_norm_clamp_multiply_max`` (both KernelBench level2 ports).
+_INSTANCE_NORM_HELPER_SRC = ("import numpy as np\n"
+                             "def _instance_norm(x, weight, bias, eps):\n"
+                             " axes = tuple(range(2, x.ndim))\n"
+                             " mean = np.mean(x, axis=axes, keepdims=True)\n"
+                             " var = np.var(x, axis=axes, keepdims=True)\n"
+                             " y = (x - mean) / np.sqrt(var + eps)\n"
+                             " if weight is None:\n"
+                             "  return y\n"
+                             " shape = (1, x.shape[1]) + (1,) * (x.ndim - 2)\n"
+                             " return y * weight.reshape(shape) + bias.reshape(shape)\n"
+                             "def f(x, eps, out):\n"
+                             " out[:] = _instance_norm(x, None, None, eps)\n")
+
+
+def test_surviving_helper_ndim_tuple_axis_folds():
+    x = (np.arange(2 * 3 * 4 * 5, dtype=np.float64).reshape(2, 3, 4, 5) - 60.0) / 7.0
+    ok, res = _all_ok(
+        run_op(_INSTANCE_NORM_HELPER_SRC,
+               "f", {
+                   "x": x,
+                   "eps": 1e-5
+               }, {"out": (2, 3, 4, 5)}, {},
+               shapes={
+                   "x": "(2, 3, 4, 5)",
+                   "out": "(2, 3, 4, 5)"
+               },
+               backends=_ALL))
+    assert ok, res

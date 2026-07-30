@@ -4,19 +4,23 @@ import ast
 import math
 import pathlib
 import re
+from functools import lru_cache
 from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 
 from numpyto_common.ir import ArrayDesc, KernelIR
 from numpyto_common import dtypes, narrow_int, operators, parallelism
 from numpyto_common.emitter import BaseEmitter
 from numpyto_common.frontend import _names_used_as_int
+from numpyto_common.lowering import _walk_complex
 
 #: Whole-identifier matcher for scanning a shape-token string for the names it references.
 _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 
 
+@lru_cache(maxsize=None, typed=True)
 def _c_type(dtype: str) -> str:
-    # dtype -> C type mapping lives in numpyto_common.dtypes (canonical int is int64_t).
+    # dtype -> C type mapping lives in numpyto_common.dtypes (canonical int is int64_t);
+    # a fixed, module-level static table, so the mapping is pure -- cached per emitted kernel.
     try:
         return dtypes.c_type(dtype)
     except KeyError:
@@ -43,12 +47,23 @@ def _is_int_cast(node: ast.AST) -> bool:
 #: libm functions with a <name>f single-precision variant, emitted in a float32 kernel (see _math_name).
 _FLOATABLE = frozenset({
     "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "exp", "exp2",
-    "expm1", "log", "log2", "log10", "log1p", "sqrt", "cbrt", "hypot", "atan2", "pow", "floor", "ceil", "round",
+    "expm1", "log", "log2", "log10", "log1p", "sqrt", "cbrt", "hypot", "atan2", "pow", "floor", "ceil", "round", "rint",
     "trunc", "fabs", "fmod", "copysign", "erf", "erfc", "tgamma", "lgamma"
 })
 
 #: u?int{8,16,32}_t -- integer C types narrower than the int64 ABI integer.
 _NARROW_INT_CT = re.compile(r"u?int(8|16|32)_t")
+
+#: np.flip/copy/transpose on a scalar Subscript is a no-op in the _emit_call attr path.
+_NOOP_UNARY_ATTRS = frozenset({"flip", "copy", "transpose"})
+_CONJ_ATTRS = frozenset({"conj", "conjugate"})
+_REAL_IMAG_ATTRS = frozenset({"real", "imag"})
+
+#: math macros that are never integer-typed (see _is_int_operand).
+_FLOAT_MATH_MACROS = frozenset({"M_PI", "M_E", "INFINITY", "NAN"})
+
+#: integer dtypes recognized by _all_int_locals when scanning kir.scalars.
+_INT_SCALAR_DTYPES = frozenset({"int", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"})
 
 
 def _is_narrow_int(dtype: str) -> bool:
@@ -197,7 +212,13 @@ class _CBodyEmitter(BaseEmitter):
                 op, acc = red
                 omp_prefix = f"{indent}#pragma omp parallel for reduction({op}:{acc})\n"
             elif parallelism.loop_is_parallel_safe(node):
-                omp_prefix = f"{indent}#pragma omp parallel for\n"
+                # A perfectly-nested, rectangular run of inner loops that are EACH independently
+                # safe on their own index can share this pragma via collapse(k) -- see
+                # collapsible_depth for the soundness criteria. Left at 1 (no clause) the moment
+                # any of that fails, e.g. conv2d_bias's inner reduction or an accumulator init.
+                depth = parallelism.collapsible_depth(node)
+                clause = f" collapse({depth})" if depth > 1 else ""
+                omp_prefix = f"{indent}#pragma omp parallel for{clause}\n"
         entered_parallel = bool(omp_prefix)
         if entered_parallel:
             self.parallel_active = True
@@ -462,12 +483,7 @@ class _CBodyEmitter(BaseEmitter):
                         return f"(({z})*({z}))"
                     return (f"cpow({self.emit_expr(node.left)}, "
                             f"{self.emit_expr(node.right)})")
-                # Integer-typed operands -> __npb_int_pow (int64 binary-exponentiation); falls back to double-precision pow.
-                if (self._is_int_operand(node.left) and self._is_int_operand(node.right)):
-                    return (f"__npb_int_pow({self.emit_expr(node.left)}, "
-                            f"{self.emit_expr(node.right)})")
-                return (f"{self._math_name('pow')}({self.emit_expr(node.left)}, "
-                        f"{self.emit_expr(node.right)})")
+                return self._emit_pow(node.left, node.right)
             # a // b and a % b ALWAYS go through the emitted helpers: neither C nor C++ has
             # numpy's floor-division or sign-of-divisor modulo natively, and the helpers pick
             # the integer vs floating form from the operand TYPE. Branching here on a dtype
@@ -477,8 +493,15 @@ class _CBodyEmitter(BaseEmitter):
                 return f"int_floor({self.emit_expr(node.left)}, {self.emit_expr(node.right)})"
             if isinstance(node.op, ast.Mod):
                 return f"python_mod({self.emit_expr(node.left)}, {self.emit_expr(node.right)})"
-            # scalar @ scalar: numpy treats 0-D @ as ordinary multiplication; reached when the matmul hoister rejected it.
+            # 0-D @ 0-D is ordinary multiplication -- but ONLY that. Emitting `*` for any surviving
+            # MatMult turned a batched matmul the hoister had silently declined into an elementwise
+            # product with no contraction at all, which compiles and returns wrong numbers.
             if isinstance(node.op, ast.MatMult):
+                for side in (node.left, node.right):
+                    if not self._is_scalar_operand(side):
+                        raise NotImplementedError(f"matmul {ast.unparse(node)} reached emit unlowered: "
+                                                  f"'{ast.unparse(side)}' is not a scalar, so '*' would drop "
+                                                  f"the contraction")
                 return (f"({self.emit_expr(node.left)} * "
                         f"{self.emit_expr(node.right)})")
             op = _BINOP.get(type(node.op))
@@ -647,6 +670,11 @@ class _CBodyEmitter(BaseEmitter):
                     return f"(({z})*({z}))"
                 z, w = (self.emit_expr(node.args[0]), self.emit_expr(node.args[1]))
                 return f"cpow({z}, {w})"
+            # Real pow(a, b): the SAME routing as the ``a ** b`` BinOp, so a pow call
+            # synthesized downstream of the promoter (np.power's expander) cannot slip
+            # past the integer helper into libm's double pow.
+            if fn == "pow" and len(node.args) == 2:
+                return self._emit_pow(node.args[0], node.args[1])
             # Python int(x) is a typecast to int64_t (a 32-bit cast would truncate past 2^31).
             if fn == "int" and len(node.args) == 1:
                 return f"(({_c_type('int')})({self.emit_expr(node.args[0])}))"
@@ -673,16 +701,21 @@ class _CBodyEmitter(BaseEmitter):
                 key = attr[:-1] if attr.endswith("_") else attr
                 if key in dtypes.REGISTRY or key in dtypes.SCALAR_KINDS:
                     return f"(({dtypes.c_type(key)})({self.emit_expr(node.args[0])}))"
-            # np.flip/copy/transpose on a scalar Subscript is a no-op (slice-fusion lifted it into a per-element loop).
-            if attr in {"flip", "copy", "transpose"} and len(node.args) == 1:
+            # np.flip/copy/transpose on a SCALAR is a no-op -- slice fusion already folded the index
+            # reversal into the subscript. On a whole array it is not: dropping it emitted a plain
+            # copy where the reversal or permutation belonged, silently and without a diagnostic.
+            if attr in _NOOP_UNARY_ATTRS and len(node.args) == 1:
+                if not self._is_scalar_operand(node.args[0]):
+                    raise NotImplementedError(f"np.{attr}({ast.unparse(node.args[0])}) reached emit on a whole "
+                                              f"array; treating it as a no-op would drop the operation")
                 return self.emit_expr(node.args[0])
             # z.conjugate()/z.conj() never reaches emit (native_desugar rewrites it to np.conj(z), handled just below).
-            if (isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy")
-                    and attr in {"conj", "conjugate"} and len(node.args) == 1):
+            if (isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy") and attr in _CONJ_ATTRS
+                    and len(node.args) == 1):
                 return f"__npb_conj({self.emit_expr(node.args[0])})"
             # np.real(z)/np.imag(z): complex operand -> creal/cimag; a real operand is the value / 0.
             if (isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy")
-                    and attr in {"real", "imag"} and len(node.args) == 1):
+                    and attr in _REAL_IMAG_ATTRS and len(node.args) == 1):
                 x = self.emit_expr(node.args[0])
                 if self._is_complex_operand(node.args[0]):
                     return f"creal({x})" if attr == "real" else f"cimag({x})"
@@ -712,10 +745,33 @@ class _CBodyEmitter(BaseEmitter):
                 return f"{self._math_name('hypot')}({self.emit_expr(node.args[0])}, {self.emit_expr(node.args[1])})"
         raise NotImplementedError(f"call to {ast.unparse(node.func)} not supported")
 
+    def _emit_pow(self, left: ast.AST, right: ast.AST) -> str:
+        """The ONE real-valued exponentiation route: integer operands take the exact
+        int64 binary-exponentiation helper, everything else libm's ``pow``.
+
+        libm ``pow`` is double-precision, so an integer power whose result exceeds 2**53
+        is rounded to the nearest double and then saturates (not wraps) on the way back
+        to int64 -- silently wrong for exactly the large-integer kernels that use it.
+        Both spellings (``a ** b`` and a synthesized ``pow(a, b)`` call) come here."""
+        if self._is_int_operand(left) and self._is_int_operand(right):
+            return f"__npb_int_pow({self.emit_expr(left)}, {self.emit_expr(right)})"
+        return f"{self._math_name('pow')}({self.emit_expr(left)}, {self.emit_expr(right)})"
+
     def _is_int_operand(self, node: ast.AST) -> bool:
-        """Conservative int-typed operand detection: int Constant, an int-typed Name, or a BinOp/UnaryOp of only those."""
+        """Conservative int-typed operand detection: int Constant, an int-typed Name or
+        array element, or a BinOp/UnaryOp of only those."""
         if isinstance(node, ast.Constant):
             return isinstance(node.value, int) and not isinstance(node.value, bool)
+        if isinstance(node, ast.Subscript):
+            # An element of an int-typed array is int -- without this ``a[i] ** b[i]``
+            # on int64 arrays fell through to the double pow.
+            base = node.value
+            while isinstance(base, ast.Subscript):
+                base = base.value
+            if isinstance(base, ast.Name):
+                dt = self._dtype_for_name(base.id)
+                return dt is not None and dtypes.is_integer(dt)
+            return False
         if isinstance(node, ast.Name):
             n = node.id
             # Kernel symbols are always int.
@@ -730,7 +786,7 @@ class _CBodyEmitter(BaseEmitter):
             if n in self._loop_iter_names:
                 return True
             # M_PI / M_E / INFINITY / NAN are math macros, not int.
-            if n in {"M_PI", "M_E", "INFINITY", "NAN"}:
+            if n in _FLOAT_MATH_MACROS:
                 return False
             # Implicit int scalar locals flagged via the needs_int promotion path.
             if n in self._all_int_locals():
@@ -749,16 +805,39 @@ class _CBodyEmitter(BaseEmitter):
             return cached
         out: Set[str] = set()
         for s in self.kir.scalars:
-            if s.dtype in {"int", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"}:
+            if s.dtype in _INT_SCALAR_DTYPES:
                 out.add(s.name)
         # needs_int: any Name used as an array subscript / range arg / bitwise operand.
         out.update(_names_used_as_int(self.kir.tree))
+        # Locals the decl pass declares int64 because every assignment is integer
+        # arithmetic -- the two must agree, else ``h ** k`` on an ``int64_t h`` would
+        # still route through the double pow.
+        out.update(_integer_valued_locals(self.kir))
         self._int_locals_cache = out
         return out
 
+    def _is_scalar_operand(self, node: ast.AST) -> bool:
+        """True when ``node`` reads a single VALUE, not a whole array: a literal, a scalar name, or
+        a fully-indexed element. A bare array Name or a slice-bearing subscript is not."""
+        if isinstance(node, ast.Constant):
+            return True
+        if isinstance(node, ast.Name):
+            return node.id not in self._array_names()
+        if isinstance(node, ast.Subscript):
+            index = node.slice
+            parts = index.elts if isinstance(index, ast.Tuple) else [index]
+            return not any(isinstance(p, ast.Slice) for p in parts)
+        if isinstance(node, ast.BinOp):
+            return self._is_scalar_operand(node.left) and self._is_scalar_operand(node.right)
+        if isinstance(node, ast.UnaryOp):
+            return self._is_scalar_operand(node.operand)
+        return isinstance(node, ast.Call)  # a lowered call returns a value
+
+    def _array_names(self) -> Set[str]:
+        return {a.name for a in self.kir.arrays} | set(self.kir.zeros_locals)
+
     def _is_complex_operand(self, node: ast.AST) -> bool:
         """True when node's element dtype is complex; delegates to _walk_complex so a real-returning accessor stays real."""
-        from numpyto_common.lowering import _walk_complex
         return _walk_complex(node, self._dtype_for_name) is not None
 
     def _is_float_operand(self, node: ast.AST, _scalars=None) -> bool:
@@ -921,6 +1000,82 @@ def _c_shape_token(tok: str) -> str:
     return out
 
 
+#: Operators that keep an integer result when both operands are integer. ``Div`` is
+#: absent on purpose -- numpy ``/`` is true division and lowering already casts it.
+_INT_PRESERVING_BINOPS: Tuple[type, ...] = (ast.Add, ast.Sub, ast.Mult, ast.Mod, ast.FloorDiv, ast.Pow, ast.LShift,
+                                            ast.RShift, ast.BitAnd, ast.BitOr, ast.BitXor)
+
+
+def _integer_valued_locals(kir: KernelIR) -> Set[str]:
+    """Body-computed scalar locals that provably hold an INTEGER value.
+
+    Without this a local absent from every dtype table falls back to ``double``, and an
+    integer accumulator that grows past 2**53 (``h = 1`` then ``h = h * 3`` for 35 rounds)
+    is silently rounded -- no cast, no warning, just the wrong last digits.
+
+    Greatest fixpoint: every unpinned assigned local starts ASSUMED integer, then any local
+    with an assignment whose right-hand side is not provably integer under the current
+    assumption is dropped, until nothing changes. The optimistic start is what lets a
+    self-referential accumulator hold (``h = h * 3`` needs ``h`` integer to prove ``h``
+    integer); the drop rule is what keeps ``x = 0.5`` and reads of float arrays out. Names
+    whose dtype is already pinned (params, arrays, ``local_dtypes``) are never candidates --
+    they only feed the right-hand-side test."""
+    pinned: Dict[str, bool] = {a.name: dtypes.is_integer(a.dtype) for a in kir.arrays}
+    pinned.update({s.name: dtypes.is_integer(s.dtype) for s in kir.scalars})
+    pinned.update({n: dtypes.is_integer(dt) for n, dt in kir.local_dtypes.items()})
+    for name in kir.int_locals:
+        pinned[name] = True
+    for sym in kir.symbols:
+        pinned[sym.name] = True
+    # Assignments per candidate; a for-loop target is emitted as an int64 counter.
+    assigns: Dict[str, List[ast.expr]] = {}
+    for node in ast.walk(kir.tree):
+        if isinstance(node, ast.For) and isinstance(node.target, ast.Name):
+            pinned[node.target.id] = True
+        elif isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name):
+                    assigns.setdefault(tgt.id, []).append(node.value)
+        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+            assigns.setdefault(node.target.id, []).append(ast.BinOp(left=node.target, op=node.op, right=node.value))
+    candidates = {n for n in assigns if n not in pinned}
+    assumed = candidates | {n for n, is_int in pinned.items() if is_int}
+    array_dtypes = {a.name: a.dtype for a in kir.arrays}
+
+    def provable(node: ast.AST) -> bool:
+        if isinstance(node, ast.Constant):
+            return isinstance(node.value, int) and not isinstance(node.value, bool)
+        if isinstance(node, ast.Name):
+            return node.id in assumed
+        if isinstance(node, ast.Subscript):
+            base = node.value
+            while isinstance(base, ast.Subscript):
+                base = base.value
+            if not isinstance(base, ast.Name):
+                return False
+            dt = kir.local_dtypes.get(base.id) or array_dtypes.get(base.id)
+            return dt is not None and dtypes.is_integer(dt)
+        if isinstance(node, ast.BinOp):
+            return (isinstance(node.op, _INT_PRESERVING_BINOPS) and provable(node.left) and provable(node.right))
+        if isinstance(node, ast.UnaryOp):
+            return isinstance(node.op, (ast.USub, ast.UAdd, ast.Invert)) and provable(node.operand)
+        if isinstance(node, ast.IfExp):
+            return provable(node.body) and provable(node.orelse)
+        # int(x) / len(x) are integer whatever the argument is.
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            return node.func.id in ("int", "len")
+        return False
+
+    changed = True
+    while changed:
+        changed = False
+        for name in sorted(candidates & assumed):
+            if not all(provable(v) for v in assigns[name]):
+                assumed.discard(name)
+                changed = True
+    return candidates & assumed
+
+
 def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
     """Return (name, c_type) pairs for implicit scalar locals needing a C decl, type inferred in priority order."""
     declared: Set[str] = set()
@@ -933,6 +1088,7 @@ def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
     seen: Set[str] = set(declared)
     # Per-array element-dtype map for Name = Subscript(arr, scalar) inheritance (x = data[i] where data is uint8).
     array_dtypes = {a.name: a.dtype for a in kir.arrays}
+    int_valued = _integer_valued_locals(kir)
 
     def _ctype_for(name: str, value: Optional[ast.AST] = None) -> str:
         # Highest priority: explicit dtype from the lowering pipeline.
@@ -947,6 +1103,10 @@ def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
             src_dt = array_dtypes.get(value.value.id) or local_dtypes.get(value.value.id)
             if src_dt is not None:
                 return _c_type(src_dt)
+        # Provably integer-valued (every assignment is integer arithmetic): declaring it
+        # double loses exactness above 2**53, and unlike a bitwise/`%` use it is silent.
+        if name in int_valued:
+            return _c_type("int")
         return "double"
 
     for node in ast.walk(kir.tree):
@@ -1285,10 +1445,14 @@ _CPP_ARITH = ('#include <cstdint>\n#include <cmath>\n'
               '// predefine M_PI / M_E as macros (glibc __USE_MISC); undefine\n'
               '// them so the names rebind to our constexpr values -- we emit no\n'
               '// macro DEFINITION, only remove the platform ones.\n'
+              '// [[maybe_unused]]: namespace-scope constexpr has internal linkage, so a\n'
+              '// kernel that references neither draws -Wunused-const-variable from clang\n'
+              '// (the C prelude spells these as macros and never does). They are prelude\n'
+              '// vocabulary offered to every kernel, which is exactly this attribute.\n'
               '#ifdef M_PI\n#undef M_PI\n#endif\n'
               '#ifdef M_E\n#undef M_E\n#endif\n'
-              'constexpr double M_PI = 3.14159265358979323846;\n'
-              'constexpr double M_E  = 2.71828182845904523536;\n'
+              '[[maybe_unused]] constexpr double M_PI = 3.14159265358979323846;\n'
+              '[[maybe_unused]] constexpr double M_E  = 2.71828182845904523536;\n'
               '// Complex support via the GCC/Clang ``double _Complex`` extension\n'
               '// (no <complex.h>, so no name clashes). The imaginary unit and\n'
               '// the C99-named helpers are constexpr/inline FUNCTIONS, not macros.\n'

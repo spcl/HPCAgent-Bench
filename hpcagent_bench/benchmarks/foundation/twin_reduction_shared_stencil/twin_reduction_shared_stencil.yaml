@@ -6,11 +6,11 @@ parameters:
   S:
     N: 16
   M:
-    N: 64
+    N: 20971520
   L:
-    N: 256
+    N: 67108864
   XL:
-    N: 53687092
+    N: 214748364
 init:
   arrays:
     mass_fl: (N,)

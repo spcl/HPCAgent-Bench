@@ -9,11 +9,11 @@ parameters:
   S:
     N: 16
   M:
-    N: 256
+    N: 8388608
   L:
-    N: 1024
+    N: 54794158
   XL:
-    N: 4096
+    N: 357913941
 init:
   input_args:
   - N

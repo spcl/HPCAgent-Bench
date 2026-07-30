@@ -7,11 +7,11 @@ parameters:
   S:
     N: 128
   M:
-    N: 256
+    N: 576
   L:
-    N: 512
+    N: 815
   XL:
-    N: 646
+    N: 1152
 init:
   input_args:
   - N

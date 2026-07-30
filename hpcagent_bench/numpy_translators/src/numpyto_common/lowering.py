@@ -32,16 +32,24 @@ The Foundation corpus exercises only ``math.exp``, ``math.sqrt`` and
 
 import ast
 import copy
+import math
 import os
 import re
 from typing import Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 
-import sympy
-
 from numpyto_common import dtypes
-from numpyto_common.ir import _COMPLEX_FOR_FLOAT, KernelIR
+from numpyto_common.ir import _COMPLEX_FOR_FLOAT, KernelIR, SymbolDesc
 from numpyto_common.numpy_desugar import _np_linalg_attr
-from numpyto_common.lib_nodes import (MESHGRID_AXIS_KW, _iter_extent_of, _scalarize_at_iters, expand_meshgrid)
+from numpyto_common.lib_nodes import (LibNodeRewriter, MESHGRID_AXIS_KW, NP_ZEROS_ALIASES, UNARY_C_MATH,
+                                      _broadcast_extents, _is_integer_expr, _iter_extent_of, _scalarize_at_iters,
+                                      _slice_step_const, expand_meshgrid, extent_is_scalar)
+from numpyto_common.frontend import (_collect_inlined_scalar_defs, _dtype_from_constructor, _resolve_shape_attr_tokens,
+                                     _substitute_inlined_scalar_defs)
+
+#: ``np.pi`` / ``np.e`` folded to their double literals.  ``math`` gives the identical IEEE-754 value
+#: ``float(sympy.pi)`` / ``float(sympy.E)`` did, without dragging sympy (+mpmath, 100s of ms) onto the
+#: import path -- the translator stays fast and PyPy-clean.
+_NP_CONSTS = {"pi": math.pi, "e": math.e}
 
 #: One-to-one rewrites: ``<module>.<name>`` -> bare C function name.
 #: All targets resolve through ``<math.h>``.
@@ -656,7 +664,6 @@ class _ScatterAtRewriter(ast.NodeTransformer):
         (Slice axes consume an iter; scalar axes pass through), then accumulate
         ``out[idx0, idx1, ...] op= val`` -- the only sequentially-correct form
         when distinct neighbours hit the same target (duplicate-index sum)."""
-        from numpyto_common.lib_nodes import _iter_extent_of, _scalarize_at_iters
         # The iteration plane: the value's broadcast extent (fall back to the
         # first array-valued index component if the value has no slice extent).
         ext = _iter_extent_of(vals, self.shapes)
@@ -1231,7 +1238,6 @@ class _ScalarFloatTagger(ast.NodeVisitor):
         self.array_names = array_names
 
     def visit_Assign(self, node: ast.Assign) -> None:
-        from numpyto_common.lib_nodes import _is_integer_expr
         self.generic_visit(node)
         if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
             return
@@ -1263,7 +1269,6 @@ class _TrueDivisionPromoter(ast.NodeTransformer):
         self.array_names = array_names or set()
 
     def visit_BinOp(self, node: ast.BinOp) -> ast.AST:
-        from numpyto_common.lib_nodes import _is_integer_expr
         self.generic_visit(node)
         if (isinstance(node.op, ast.Div) and _is_integer_expr(node.left, self.local_dtypes, self.array_names)
                 and _is_integer_expr(node.right, self.local_dtypes, self.array_names)):
@@ -1292,6 +1297,10 @@ class _MathRewriter(ast.NodeTransformer):
                 isinstance(node.func.value, ast.Name):
             mod = node.func.value.id
             name = node.func.attr
+            if mod in ("np", "numpy") and name == "clip" and len(node.args) == 3:
+                clipped = self._scalar_clip(node)
+                if clipped is not None:
+                    return clipped
             new_name = MATH_BUILTINS.get((mod, name))
             if new_name is not None:
                 # Skip the rename when the first arg involves an array
@@ -1318,9 +1327,8 @@ class _MathRewriter(ast.NodeTransformer):
         """
         self.generic_visit(node)
         if (isinstance(node.value, ast.Name) and node.value.id == "np"):
-            const_values = {"pi": sympy.pi, "e": sympy.E}
-            if node.attr in const_values:
-                return ast.Constant(value=float(const_values[node.attr]))
+            if node.attr in _NP_CONSTS:
+                return ast.Constant(value=_NP_CONSTS[node.attr])
             mapping = {
                 "inf": "INFINITY",
                 "nan": "NAN",
@@ -1330,6 +1338,21 @@ class _MathRewriter(ast.NodeTransformer):
             if replacement is not None:
                 return ast.Name(id=replacement, ctx=ast.Load())
         return node
+
+    def _scalar_clip(self, node: ast.Call) -> Optional[ast.expr]:
+        """``np.clip(a, lo, hi)`` on a SCALAR -> ``fmin(fmax(a, lo), hi)``. The array form is the
+        expander's job; this is the leftover after an enclosing expression was scalarized. ``fmax`` /
+        ``fmin`` (not the C macros) because numpy PROPAGATES NaN and both backends route those two
+        through their NaN-propagating helper. An open bound (``None``) drops its side."""
+        value, lo, hi = node.args
+        if self._refers_to_array(value):
+            return None
+        for bound, fn in ((lo, "fmax"), (hi, "fmin")):
+            if isinstance(bound, ast.Constant) and bound.value is None:
+                continue
+            value = ast.copy_location(ast.Call(func=ast.Name(id=fn, ctx=ast.Load()), args=[value, bound], keywords=[]),
+                                      node)
+        return value
 
     def _refers_to_array(self, expr: ast.expr) -> bool:
         """Return True if the expression reads any declared array as
@@ -1396,6 +1419,11 @@ _NP_ELEMENTWISE: Set[str] = {
     "logical_or",
     "logical_not",
 }
+
+# Every unary libm intrinsic is elementwise by construction, so take them from the table that
+# already routes them to C rather than restating the list -- a name present there but missing here
+# used to reach the emitter unlowered (``np.log1p(x) + np.maximum(x, 0)``, softplus).
+_NP_ELEMENTWISE |= set(UNARY_C_MATH)
 
 
 def _resolve_shape_token(node: ast.AST, shape_table: Dict[str, Tuple[str, ...]]) -> str:
@@ -1544,8 +1572,6 @@ def _ssa_rename_reassigned(tree: ast.AST, arrays_shapes: Dict[str, List[str]]) -
     reassigned twice with different shapes; without renaming the
     ``_LiftFreshArrayFromSlices`` lifter bails on the shape mismatch.
     """
-    from numpyto_common.lib_nodes import _iter_extent_of
-
     shapes: Dict[str, Tuple[str, ...]] = {name: tuple(shape) for name, shape in arrays_shapes.items()}
 
     def _maybe_register_alloc(target_id: str, rhs: ast.AST) -> None:
@@ -1743,8 +1769,6 @@ def _harvest_local_shapes(tree: ast.AST,
     declare ``X = np.zeros((N,), dtype=np.complex128)`` as
     ``double _Complex X[N]``.
     """
-    from numpyto_common.lib_nodes import NP_ZEROS_ALIASES, _iter_extent_of
-    from numpyto_common.frontend import _dtype_from_constructor
     for stmt in ast.walk(tree):
         if not isinstance(stmt, ast.Assign) or len(stmt.targets) != 1:
             continue
@@ -1808,7 +1832,6 @@ def _harvest_local_shapes(tree: ast.AST,
             if isinstance(rhs, (ast.BinOp, ast.UnaryOp, ast.Compare,
                                 ast.BoolOp, ast.Subscript, ast.Call)) \
                     and target.id not in shape_table:
-                from numpyto_common.lib_nodes import extent_is_scalar
                 ext = _iter_extent_of(rhs, shape_table)
                 # An all-size-1 broadcast (``t = a[i] > x`` with ``x`` shape ``(1,)``) is a SCALAR local:
                 # numpyto reads size-1 arrays as ``x[0]``, so sizing ``t`` as ``T t[1]`` would desync its
@@ -1895,7 +1918,6 @@ def _harvest_local_shapes(tree: ast.AST,
             for arg in rhs.args[1:]:
                 a_ext = _iter_extent_of(arg, shape_table)
                 if a_ext is not None and ext is not None:
-                    from numpyto_common.lib_nodes import _broadcast_extents
                     ext = _broadcast_extents(ext, a_ext)
                 elif a_ext is not None:
                     ext = a_ext
@@ -2107,7 +2129,6 @@ class _ZerosRewriter(ast.NodeTransformer):
     """
 
     def __init__(self, shape_table: Optional[Dict[str, Tuple[str, ...]]] = None):
-        from numpyto_common.lib_nodes import NP_ZEROS_ALIASES
         self.zeros: Dict[str, Tuple[str, ...]] = {}
         # Fill kind per harvested local, keyed by name: the constructor
         # attr (``zeros`` / ``ones`` / ``empty`` / ``zeros_like`` / ...).
@@ -2282,6 +2303,25 @@ def _name_of_subscript(node: ast.Subscript) -> Optional[str]:
 def _iter_var_name(axis: int) -> str:
     """Stable iter-var generator: ``si0``, ``si1``, ``si2``, ..."""
     return f"si{axis}"
+
+
+#: Spellings an elementwise ufunc has ALREADY been lowered to by the time the slice-to-scalar
+#: rewriter runs -- ``np.maximum`` becomes a bare ``fmax`` well before this pass.
+#: The POST-rename spellings of the elementwise intrinsics: ``_MathRewriter`` turns ``np.atan2``
+#: into a bare ``atan2``, and the per-element rewriter has to recognise the renamed form to
+#: subscriptify its arguments. Restating four of them left ``atan2``/``hypot``/``asin``/``pow`` with
+#: whole-array pointers inside a per-element store, which does not compile. Derived, not restated.
+_LOWERED_ELEMENTWISE: Set[str] = set(MATH_BUILTINS.values()) | {"max", "min"}
+
+
+def _np_func_name(func: ast.AST) -> Optional[str]:
+    """The elementwise function a call names, either spelling: ``np.maximum`` before lowering,
+    a bare ``fmax`` after it. ``None`` when the callee is neither."""
+    if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id in ("np", "numpy"):
+        return func.attr
+    if isinstance(func, ast.Name):
+        return func.id
+    return None
 
 
 def _const(value: int) -> ast.Constant:
@@ -2790,6 +2830,17 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
         node.operand = self._maybe_subscriptify(self.visit(node.operand))
         return node
 
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        # Same rule as BinOp/UnaryOp for the ARGUMENTS of an elementwise ufunc:
+        # ``out[:] = np.maximum(y, 0)`` on a whole-array ``y`` emitted
+        # ``__npb_fmax(y, 0)`` -- the array POINTER where the element belongs, which
+        # then picked the integer overload and failed to compile. Only elementwise
+        # names: a reduction (``np.sum(y)``) legitimately takes the whole array.
+        self.generic_visit(node)
+        if _np_func_name(node.func) in (_NP_ELEMENTWISE | _LOWERED_ELEMENTWISE):
+            node.args = [self._maybe_subscriptify(a) for a in node.args]
+        return node
+
     def _maybe_subscriptify(self, node: ast.AST) -> ast.AST:
         """If ``node`` is a bare Name(arr) whose shape rank fits the
         LHS iteration nest, return ``arr[iter_vars]``.
@@ -3008,7 +3059,6 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
             if not isinstance(d, ast.Slice):
                 idx_nodes.append(self._resolve_scalar_index(d, rhs_name, axis))
                 continue
-            from numpyto_common.lib_nodes import _slice_step_const
             step = _slice_step_const(d)
             if align + rhs_slice_idx >= len(lhs_slice_iters):
                 # More RHS slices than LHS slice axes -- keep the slice
@@ -3188,8 +3238,14 @@ class _BooleanMaskRewriter(ast.NodeTransformer):
     ``for i: if I[i]: Z[i] = Z[i]**2 + C[i]``).
     """
 
-    def __init__(self, shape_table):
+    def __init__(self, shape_table, bool_names):
         self.shape_table = shape_table
+        #: Names :func:`_collect_bool_names` proved boolean. A bare ``Name`` index is a mask ONLY
+        #: if it is in here: shape equality alone cannot tell ``arr[mask]`` from ``arr[int_idx]``,
+        #: and an index array whose declared shape happens to match the target then lowers to
+        #: ``if (idx[i])`` -- reading values as truth at the wrong positions, and off the end of
+        #: the buffer whenever the declared shape is an upper bound (lulesh's symmX/Y/Z).
+        self.bool_names = bool_names
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         self.generic_visit(node)
@@ -3239,7 +3295,6 @@ class _BooleanMaskRewriter(ast.NodeTransformer):
     def _is_mask_expr(self, expr, lhs_shape, lhs_name):
         """Return True when ``expr`` evaluates to a boolean array of
         ``lhs_shape``. Conservative: only the recognised shapes."""
-        from numpyto_common.lib_nodes import _iter_extent_of
 
         def _array_shaped(e):
             # A bare Name fast-path, then any array-valued EXPRESSION whose
@@ -3263,10 +3318,10 @@ class _BooleanMaskRewriter(ast.NodeTransformer):
             return (self._is_mask_expr(expr.left, lhs_shape, lhs_name)
                     and self._is_mask_expr(expr.right, lhs_shape, lhs_name))
         if isinstance(expr, ast.Name):
+            if expr.id not in self.bool_names:
+                return False
             shape = self.shape_table.get(expr.id)
-            if shape and tuple(shape) == tuple(lhs_shape):
-                return True
-            return False
+            return bool(shape) and tuple(shape) == tuple(lhs_shape)
         return False
 
 
@@ -3450,7 +3505,6 @@ class _ResolveArrShape(ast.NodeTransformer):
             if src is not None:
                 self.current[target] = src
             return
-        from numpyto_common.lib_nodes import NP_ZEROS_ALIASES, _iter_extent_of
         if (isinstance(rhs, ast.Call) and isinstance(rhs.func, ast.Attribute) and isinstance(rhs.func.value, ast.Name)
                 and rhs.func.value.id == "np"):
             attr = rhs.func.attr
@@ -3475,7 +3529,6 @@ class _ResolveArrShape(ast.NodeTransformer):
                 self.current[target] = (tok, )
                 return
         # An all-size-1 result is a scalar, not a broadcast shape (see extent_is_scalar).
-        from numpyto_common.lib_nodes import extent_is_scalar
         if isinstance(rhs, (ast.BinOp, ast.UnaryOp, ast.IfExp)):
             ext = _iter_extent_of(rhs, self.current)
             if ext is not None and not extent_is_scalar(ext):
@@ -3592,7 +3645,6 @@ class _LiftFreshArrayFromSlices(ast.NodeTransformer):
             return node
         if not (self._has_slice_subscript(node.value) or self._is_array_binop(node.value)):
             return node
-        from numpyto_common.lib_nodes import _iter_extent_of
         ext = _iter_extent_of(node.value, self.shapes)
         if ext is None:
             return node
@@ -3717,7 +3769,6 @@ def _walk_complex(node: ast.AST, name_dtype: "Callable[[str], Optional[str]]") -
         # write is its zero-init (vexx_k's ``deexx``) reads as real and the
         # complex->real narrowing pass unsoundly demotes it (compiles in C by
         # dropping the imaginary part, but C++ rejects the assignment).
-        from numpyto_common.frontend import _dtype_from_constructor
         ctor_dt = _dtype_from_constructor(node)
         if ctor_dt is not None and ctor_dt.startswith("complex"):
             return ctor_dt
@@ -4762,6 +4813,13 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
             return []
         p = arr_pos[0]
         idx_name = lead[p].id
+        # A GATHER needs integer indices. A boolean array in this position is a MASK, and the mask
+        # rewriter declines whenever it cannot prove the dtype -- ``m = flags.astype(bool);
+        # out[m] = 0`` then landed here and scattered through the 0/1 truth values, writing only
+        # out[0] and out[1]. Unknown dtype is unsafe for the same reason, so require integer.
+        if not dtypes.is_integer(self.local_dtypes.get(idx_name, "")):
+            raise NotImplementedError(f"{ast.unparse(target)}: index array {idx_name!r} is not a known integer "
+                                      f"dtype; a boolean here is a MASK, not a gather")
         extent = self.shape_table[idx_name][0]
         it = "__sc0"
         new_lead = list(lead)
@@ -5023,7 +5081,6 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         if (isinstance(target, ast.Name) and isinstance(node.value, (ast.BinOp, ast.UnaryOp, ast.IfExp, ast.Call))
                 and not (isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
                          and node.value.func.id == "__hpcagent_bench_zeros__")):
-            from numpyto_common.lib_nodes import _iter_extent_of, extent_is_scalar
             ext = _iter_extent_of(node.value, self.shape_table)
             # All-size-1 broadcast -> a scalar local, not a ``T x[1]`` array (see extent_is_scalar).
             if ext is not None and not extent_is_scalar(ext):
@@ -5069,7 +5126,6 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
                 and isinstance(node.value, (ast.BinOp, ast.UnaryOp, ast.IfExp))):
             shape = self.shape_table.get(target.value.id)
             lead = (list(target.slice.elts) if isinstance(target.slice, ast.Tuple) else [target.slice])
-            from numpyto_common.lib_nodes import _iter_extent_of
             if (shape and not any(isinstance(e, ast.Slice) for e in lead)
                     and not any(isinstance(e, ast.Name) and self.shape_table.get(e.id) for e in lead)):
                 n_trailing = len(shape) - len(lead)
@@ -5135,7 +5191,6 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         # misclassified as arrays.
         if (isinstance(target, ast.Name) and isinstance(node.value,
                                                         (ast.BinOp, ast.UnaryOp, ast.IfExp, ast.Compare, ast.BoolOp))):
-            from numpyto_common.lib_nodes import _iter_extent_of, extent_is_scalar
             ext = _iter_extent_of(node.value, self.shape_table)
             # An all-size-1 broadcast (``t = (a[i] > x)`` with ``x`` shape ``(1,)``) is a SCALAR, not a
             # ``T t[1]`` array: numpyto reads size-1 arrays element-wise as ``x[0]``, so registering ``t`` as
@@ -5174,7 +5229,6 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
                         # j is int64) stays integer -- so an index array derived
                         # from arange keeps its int dtype through the % / * chain
                         # (fft_3d's q/r/s gather indices).
-                        from numpyto_common.lib_nodes import _is_integer_expr
                         if (isinstance(node.value, ast.BinOp)
                                 and _is_integer_expr(node.value, self.local_dtypes, set(self.shape_table))):
                             self.local_dtypes[target.id] = "int64"
@@ -5477,7 +5531,6 @@ class _SubscriptifyNames(ast.NodeTransformer):
             if isinstance(sl, ast.Slice):
                 if (sl.lower is None and sl.upper is None and sl.step is None):
                     return self.visit_Name(node.value)
-                from numpyto_common.lib_nodes import _slice_step_const
                 step = _slice_step_const(sl)
                 if step is not None and step != 1 and self.iters:
                     # Strided / reverse lone slice ``arr[::k]`` / ``arr[lo::k]``: source
@@ -5809,6 +5862,11 @@ class LoweringContext:
         self.kir = lowered
         #: Shortcut to the function-body AST every pass rewrites in place.
         self.tree = lowered.tree
+        #: Boolean-array names, harvested HERE because the producer of a mask
+        #: (``I = np.less(...)``) is itself lowered to an explicit loop by an
+        #: earlier phase than the mask consumers -- collecting later sees only
+        #: ``I[i] = ...`` and cannot prove ``I`` boolean (mandelbrot1).
+        self.bool_names: Set[str] = _collect_bool_names(lowered.tree, lowered.arrays)
         # Shape / dtype tables built up across phases and consumed downstream.
         self.arrays_shapes: Dict[str, List[str]] = {}
         self.lib_shape_table: Dict[str, object] = {}
@@ -5945,7 +6003,7 @@ def _lp_pre_libnode_normalize(ctx: LoweringContext) -> None:
     # masked iteration so we avoid materialising the dynamic-length compacted view
     # from boolean fancy indexing. Seeded with the kernel-array shapes so the loop
     # bound is the right symbol.
-    _BooleanMaskReductionRewriter(ctx.arrays_shapes, _collect_bool_names(tree, ctx.kir.arrays)).visit(tree)
+    _BooleanMaskReductionRewriter(ctx.arrays_shapes, ctx.bool_names).visit(tree)
     ast.fix_missing_locations(tree)
 
 
@@ -6009,8 +6067,6 @@ def _lp_resolve_inlined_shapes(ctx: LoweringContext) -> None:
     # dim-local away (fixpoint) and concretises the resulting ``param.shape[i]``
     # against the real param shapes; applied later to the declaration / malloc sink
     # (``zeros_locals`` / ``shapes``).
-    from numpyto_common.frontend import (_collect_inlined_scalar_defs, _substitute_inlined_scalar_defs,
-                                         _resolve_shape_attr_tokens)
     ctx.inl_defs = _collect_inlined_scalar_defs(tree)
     ctx.param_seed = {n: tuple(s) for n, s in ctx.arrays_shapes.items()}
 
@@ -6106,7 +6162,6 @@ def _lp_normalize_index_access(ctx: LoweringContext) -> None:
     # in a LATER inlined solve (``w`` / ``X`` reassigned across the two Rayleigh-Ritz
     # inlines) kept its ``__inl<k>_`` token and drove a use-before-def allocation
     # (garbage size). Recollect and reapply against the now-fuller table.
-    from numpyto_common.frontend import _collect_inlined_scalar_defs
     ctx.inl_defs = _collect_inlined_scalar_defs(tree)
     if ctx.inl_defs and ctx.resolve_inl_table is not None:
         ctx.resolve_inl_table(ctx.lib_shape_table)
@@ -6142,7 +6197,6 @@ def _lp_libnode_expand(ctx: LoweringContext) -> None:
     # Library-node expansion -- reductions, matmul, etc. -- runs before
     # ``_ZerosRewriter`` so any matmul temps the rewriter introduces are picked up
     # by the zeros pass as local arrays.
-    from numpyto_common.lib_nodes import LibNodeRewriter
     ctx.lib_rewriter = LibNodeRewriter(ctx.lib_shape_table,
                                        known_arrays=set(ctx.arrays_shapes.keys()),
                                        local_dtypes=ctx.local_dtypes,
@@ -6261,7 +6315,7 @@ def _lp_whole_array_and_zeros(ctx: LoweringContext) -> None:
     # Boolean masking: ``arr[mask_expr] = value`` -> per-element loop with an ``if
     # mask_expr[i]:`` guard. Runs before the whole-array rewriter so the LHS is a
     # plain scalar subscript downstream.
-    _BooleanMaskRewriter(ctx.lib_shape_table).visit(tree)
+    _BooleanMaskRewriter(ctx.lib_shape_table, ctx.bool_names).visit(tree)
     ctx.wa_rewriter = _WholeArrayAssignRewriter(ctx.lib_shape_table, real_arrays, local_dtypes=ctx.local_dtypes)
     ctx.wa_rewriter.visit(tree)
     # Fold the shapes the whole-array pass inferred for genuinely-new locals
@@ -6375,7 +6429,6 @@ def _fold_local_shape_attr_tokens(tuple_tables: List[Dict[str, object]], reassig
     never on source). Iterated to a bounded fixpoint so a temp whose dimension names
     ANOTHER temp still converges; never-worse (a token whose base is unknown is
     left untouched)."""
-    from numpyto_common.frontend import _resolve_shape_attr_tokens
     tables = [t for t in tuple_tables if t is not None]
     for _ in range(4):
         seed: Dict[str, Tuple[str, ...]] = {}
@@ -6491,6 +6544,14 @@ def _lp_promote_true_division(ctx: LoweringContext) -> None:
     ast.fix_missing_locations(ctx.tree)
 
 
+def _lp_scalarized_math_rename(ctx: LoweringContext) -> None:
+    """Third and last math rename, once slice fusion has turned whole-array statements into
+    per-element ones. An intrinsic whose operand only becomes a scalar HERE (hardsigmoid's
+    ``np.clip((x + 3.0) / 6.0, 0, 1)`` -- array-valued at both earlier renames) has no later pass to
+    catch it and reaches the emitter as an unsupported call. Same rewriter, later state."""
+    _MathRewriter(set(ctx.arrays_shapes.keys()) | set(ctx.lib_shape_table.keys())).visit(ctx.tree)
+
+
 def _lp_lower_helpers(ctx: LoweringContext) -> None:
     """Lower each non-inlinable helper the same way -- it is a self-contained
     sub-kernel (own params + body). Its early ``return`` survives lowering (the
@@ -6515,6 +6576,7 @@ _LOWER_PHASES: List[Tuple[str, Callable[["LoweringContext"], None]]] = [
     ("whole-array-and-zeros", _lp_whole_array_and_zeros),
     ("slice-normalize-and-lift", _lp_slice_normalize_and_lift),
     ("slice-fusion-and-resolve", _lp_slice_fusion_and_resolve),
+    ("scalarized-math-rename", _lp_scalarized_math_rename),
     ("lower-helpers", _lp_lower_helpers),
 ]
 
@@ -6733,7 +6795,12 @@ def _detect_output_and_index_arrays(kir: KernelIR) -> None:
         # original ``dace.int32`` annotation). Only auto-promote arrays
         # still at a float default, so the heuristic stays a safety net
         # for undeclared kernels without overriding a declared width.
-        if dtypes.is_integer(str(vars(a).get("dtype") or "")):
+        dt = str(vars(a).get("dtype") or "")
+        # A declared bool array subscripting another is a MASK, not an index set. Retyping it to
+        # int64 loses that (``_collect_bool_names`` reads the array dtype, so the mask rewriter
+        # would then lower ``arr[mask] = v`` as a scatter through 0/1) and contradicts the
+        # binding, which still says bool -- a 1-byte buffer read back as int64_t*.
+        if dtypes.is_integer(dt) or dt in ("bool", "bool_"):
             continue
         a.dtype = "int64"  # type: ignore[misc]
 
@@ -6794,6 +6861,26 @@ def _promote_free_names_to_params(kir: KernelIR) -> None:
         elif isinstance(node, ast.For):
             for nm in _names_in_target(node.target):
                 declared.add(nm)
+        elif isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            # Comprehension loop vars are locals scoped to the comprehension,
+            # never free params (``[f(v) for v in ...]`` must not leak ``v``).
+            for gen in node.generators:
+                for nm in _names_in_target(gen.target):
+                    declared.add(nm)
+        elif isinstance(node, ast.Lambda):
+            args = node.args
+            for arg in args.posonlyargs + args.args + args.kwonlyargs:
+                declared.add(arg.arg)
+            if args.vararg is not None:
+                declared.add(args.vararg.arg)
+            if args.kwarg is not None:
+                declared.add(args.kwarg.arg)
+        elif isinstance(node, ast.NamedExpr):
+            for nm in _names_in_target(node.target):
+                declared.add(nm)
+        elif isinstance(node, ast.ExceptHandler):
+            if node.name is not None:
+                declared.add(node.name)
 
     free: List[str] = []
     seen: Set[str] = set()
@@ -6810,7 +6897,6 @@ def _promote_free_names_to_params(kir: KernelIR) -> None:
                 continue
             seen.add(n)
             free.append(n)
-    from numpyto_common.ir import SymbolDesc
     for name in free:
         kir.symbols.append(SymbolDesc(name=name))
         if name not in kir.input_args:
@@ -6833,8 +6919,7 @@ def _fold_shape_aliases(kir: KernelIR) -> None:
     Only a name assigned EXACTLY ONCE, to an expression built entirely from
     in-scope symbols / params (not itself, not another local), is folded -- a
     reassigned counter is left alone, so no semantics change."""
-    import re as _re
-    _IDENT = _re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+    _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
     in_scope = ({s.name for s in kir.symbols} | {s.name for s in kir.scalars} | {a.name for a in kir.arrays})
     # Dimension symbols (``N`` in ``a: (N,)``) are not yet promoted to the
     # symbol list when this runs, but they ARE valid scope for an alias RHS --
@@ -6897,7 +6982,7 @@ def _fold_shape_aliases(kir: KernelIR) -> None:
 
     def _sub(tok: str) -> str:
         for name, expr in aliases.items():
-            tok = _re.sub(rf"\b{_re.escape(name)}\b", f"({ast.unparse(expr)})", tok)
+            tok = re.sub(rf"\b{re.escape(name)}\b", f"({ast.unparse(expr)})", tok)
         return tok
 
     for arr in kir.arrays:
@@ -6939,8 +7024,7 @@ def _promote_shape_symbols_to_params(kir: KernelIR) -> None:
     The order preserves declaration order of the arrays so the param
     list looks natural (``LEN_1D, M, a, b``).
     """
-    import re as _re
-    _IDENT = _re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+    _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
     declared = {s.name for s in kir.symbols}
     # Names that are scalars / arrays already in scope must NOT be
     # re-promoted as shape symbols (e.g. a buffer whose own name appears
@@ -6960,7 +7044,13 @@ def _promote_shape_symbols_to_params(kir: KernelIR) -> None:
         # (from ``N = b.shape[0]`` where ``b`` is ``(N,)``) is NOT a
         # definition -- it just re-states the real dimension param, so
         # such names stay promotable.
-        | _body_defined_locals(kir.tree))
+        | _body_defined_locals(kir.tree)
+        # A module-level constant the frontend already FOLDED into the body and
+        # the shape tokens (cloudsc's ``nclv = 5``) is a compile-time literal,
+        # not a runtime input. Promoting it would append a parameter the harness
+        # binding never passes, shifting every trailing scalar one slot in the
+        # positional call -- a silent miscompile, not a compile error.
+        | kir.inlined_consts)
     shape_syms: List[str] = []
     seen: Set[str] = set()
     for arr in kir.arrays:
@@ -6977,7 +7067,6 @@ def _promote_shape_symbols_to_params(kir: KernelIR) -> None:
                     continue
                 shape_syms.append(sym)
                 seen.add(sym)
-    from numpyto_common.ir import SymbolDesc
     for sym in shape_syms:
         kir.symbols.insert(0, SymbolDesc(name=sym))
         if sym not in kir.input_args:

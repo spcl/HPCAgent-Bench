@@ -45,7 +45,6 @@ class TritonFramework(TorchCudaEventTiming, Framework):
     is_optimizer = True
 
     def __init__(self, fname: str):
-        """Reads framework information."""
         _apply_autotune_subset_once()
         super().__init__(fname)
 

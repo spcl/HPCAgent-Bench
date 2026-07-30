@@ -49,13 +49,19 @@ def _descriptor(locations=None) -> Descriptor:
                       locations=locations or {})
 
 
+def _driver(cmd) -> str:
+    """The compiler a command runs. resolve_compiler returns an ABSOLUTE path when the driver is
+    on PATH, so assert on the basename -- these tests are about WHICH wrapper, not how it is spelled."""
+    return Path(cmd[0]).name
+
+
 # --- build_mpi_executable_commands: pure command shape (no compiler needed) ---
 def test_build_commands_compile_each_source_and_link_executable():
     cmds = build_mpi_executable_commands([("c", Path("k.c"))], Path("d.c"), Path("bench"))
     assert len(cmds) == 3  # compile kernel, compile driver, link
     # the MPICH C wrapper is the default; each source compiles to an object.
-    assert cmds[0][0] == "mpicc.mpich" and "-c" in cmds[0] and str(Path("k.c")) in cmds[0]
-    assert cmds[1][0] == "mpicc.mpich" and str(Path("d.c")) in cmds[1]
+    assert _driver(cmds[0]) == "mpicc.mpich" and "-c" in cmds[0] and str(Path("k.c")) in cmds[0]
+    assert _driver(cmds[1]) == "mpicc.mpich" and str(Path("d.c")) in cmds[1]
     # the link produces an EXECUTABLE (never -shared) and names the exe.
     link = cmds[-1]
     assert "-shared" not in " ".join(link)
@@ -64,15 +70,15 @@ def test_build_commands_compile_each_source_and_link_executable():
 
 def test_build_commands_cc_override_swaps_wrapper():
     cmds = build_mpi_executable_commands([("c", Path("k.c"))], Path("d.c"), Path("bench"), cc_override={"c": "mpicc"})
-    assert all(argv[0] == "mpicc" for argv in cmds)  # OpenMPI wrapper for a matching launcher
+    assert all(_driver(argv) == "mpicc" for argv in cmds)  # OpenMPI wrapper for a matching launcher
 
 
 def test_build_commands_fortran_kernel_links_with_fortran_driver():
     # A Fortran kernel + the always-C driver -> link with the Fortran wrapper (pulls libgfortran).
     cmds = build_mpi_executable_commands([("fortran", Path("k.f90"))], Path("d.c"), Path("bench"))
-    assert cmds[0][0] == "mpifort.mpich"  # kernel compiled with the Fortran wrapper
-    assert cmds[1][0] == "mpicc.mpich"  # driver always C
-    assert cmds[-1][0] == "mpifort.mpich"  # link driver = Fortran
+    assert _driver(cmds[0]) == "mpifort.mpich"  # kernel compiled with the Fortran wrapper
+    assert _driver(cmds[1]) == "mpicc.mpich"  # driver always C
+    assert _driver(cmds[-1]) == "mpifort.mpich"  # link driver = Fortran
 
 
 def test_build_commands_baseline_flows_from_matrix_no_literal_flags():
@@ -89,9 +95,9 @@ def test_build_commands_empty_sources_raises():
 def test_build_commands_device_routes_driver_and_link_to_gpu_compiler():
     # Device residency: CUDA kernel + driver both compile with nvcc; the link is nvcc too, not the C wrapper.
     cmds = build_mpi_executable_commands([("cuda", Path("k.cu"))], Path("d.cu"), Path("bench"), driver_lang="cuda")
-    assert cmds[0][0] == "nvcc" and str(Path("k.cu")) in cmds[0]  # kernel via nvcc
-    assert cmds[1][0] == "nvcc" and str(Path("d.cu")) in cmds[1]  # driver via nvcc (not mpicc)
-    assert cmds[-1][0] == "nvcc" and "-shared" not in " ".join(cmds[-1])  # link exe with nvcc
+    assert _driver(cmds[0]) == "nvcc" and str(Path("k.cu")) in cmds[0]  # kernel via nvcc
+    assert _driver(cmds[1]) == "nvcc" and str(Path("d.cu")) in cmds[1]  # driver via nvcc (not mpicc)
+    assert _driver(cmds[-1]) == "nvcc" and "-shared" not in " ".join(cmds[-1])  # link exe with nvcc
 
 
 def test_mpi_wrapper_flags_extracts_include_and_link():
