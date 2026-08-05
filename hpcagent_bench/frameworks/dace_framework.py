@@ -132,8 +132,16 @@ def pin_single_stream() -> None:
 #: Defaults on spcl/dace@extended are already what we want. They are pinned anyway for the same
 #: reason :func:`pin_cpp_standard` pins the C++ standard: a user's ``~/.dace.conf`` must not be able
 #: to change what a graded baseline costs to build.
+#:
+#: NOT every key exists on every tree: ``build_mode`` is declared only by the FORK -- upstream
+#: spcl/dace@main has no such key anywhere in its ``config_schema.yml``. A pin is therefore a
+#: request, not an assumption; see :func:`pin_build_caching`.
 BUILD_CACHE_PINS = (("compiler", "build_mode", "cmake"), ("compiler", "configure_cache", True), ("compiler",
                                                                                                  "command_cache", True))
+
+#: Pins already reported absent, so the notice below is one line per process rather than one per
+#: kernel per variant (:func:`pin_build_caching` runs from ``optimize``, once per compiled kernel).
+_ABSENT_PINS_REPORTED: Set[Tuple[str, ...]] = set()
 
 
 def pin_build_caching() -> None:
@@ -152,7 +160,23 @@ def pin_build_caching() -> None:
     covers the build DaCe is about to run without touching DaCe.
     """
     for *key, value in BUILD_CACHE_PINS:
-        if dace.Config.get(*key) != value:
+        # A key the installed DaCe does not declare is SKIPPED, not fatal. `build_mode` exists only
+        # on the fork, so pinning it unconditionally made every dace column raise KeyError on
+        # upstream main -- which is the tree the `parallel` and `autoopt` columns are meant to run
+        # on, and whose numbers are the control the fork's canonicalize column is read against
+        # (samples/npbench_dace_flavors.sbatch). Reported rather than passed over in silence: a
+        # missing pin means this build is NOT configured the way a graded one is supposed to be,
+        # which is exactly the kind of difference a reader of the numbers has to know about.
+        try:
+            current = dace.Config.get(*key)
+        except KeyError:
+            if tuple(key) not in _ABSENT_PINS_REPORTED:
+                _ABSENT_PINS_REPORTED.add(tuple(key))
+                print(f"dace: this DaCe declares no '{'.'.join(key)}' config key; leaving it "
+                      f"unpinned (wanted {value!r}). Expected on upstream spcl/dace@main, which "
+                      f"has no such key; on spcl/dace@extended it means the checkout is stale.")
+            continue
+        if current != value:
             dace.Config.set(*key, value=value)
     if shutil.which("ninja") is None:
         print("dace: ninja not found -- CMake falls back to Make and compiler.command_cache "
