@@ -48,7 +48,7 @@ What is NOT data: what the RUN needs. That is spelled per site, by hand, in four
 places -- the GPU flag is picked from a hardware string, the mounts are typed into
 each EDF, the Cray fabric hook is typed into `[annotations]`, and the need for a host
 network is implicit in whoever remembered it. Four hand-edits that must agree, with
-nothing checking that they do. `foundation.toml.example` already carries a comment
+nothing checking that they do. `loop_level_reasoning.toml.example` already carries a comment
 warning that forgetting the fabric hook reads as poor scaling rather than as a
 misconfigured launch. That is the failure mode this design removes.
 
@@ -76,7 +76,7 @@ Backends render it three ways, and that split is the point:
   (mounts, network) or a refusal (a GPU the host does not have is the host's problem,
   not a flag to add).
 
-That second renderer is what kills the hand-written EDF: `foundation.toml.example`
+That second renderer is what kills the hand-written EDF: `loop_level_reasoning.toml.example`
 becomes the OUTPUT of `hpcagent-bench container edf --gpu=none --fabric=0`, not a
 file someone keeps in sync. The MPI track passes `--fabric=1` and the hook appears
 because it was asked for, not because it was remembered.
@@ -106,5 +106,5 @@ asked for produces a plausible, wrong number -- which is worse than a crash.
   spellings the file declares. This is the existing parity test, extended.
 - The generated EDF parses as TOML and, for `--fabric=1`, contains the hook; for
   `--fabric=0`, contains no `[annotations]` at all.
-- `hpcagent-bench container edf` output for the foundation track is byte-identical to
+- `hpcagent-bench container edf` output for the loop_level_reasoning track is byte-identical to
   the checked-in example, or the example is deleted in favour of generating it.

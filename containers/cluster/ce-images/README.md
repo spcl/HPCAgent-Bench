@@ -4,20 +4,28 @@ This directory contains generic Container Engine environments for running the sa
 base image as both judge and agent on CSCS Alps nodes.
 
 ```text
-containers/cluster/generic/
+containers/
   agent/
     start_run.sh
     tools/
-  amd/
-    Dockerfile
-    build_sqsh.sh
-    optarena-amd-mi300.toml
   judge/
     tools/web_search.py
-  nvidia/
-    Dockerfile
-    build_sqsh.sh
-    optarena-nvidia-gh200.toml
+  cluster/
+    ce-images/
+      amd/
+        Dockerfile
+        build_sqsh.sh
+        optarena-amd-mi300.toml
+      inference/
+        README.md
+        build/
+      nvidia/
+        Dockerfile
+        build_sqsh.sh
+        optarena-nvidia-gh200.toml
+    example-script/
+      beverin.sbatch
+      run_cluster.sh
 ```
 
 The image contains GPU SDKs, compilers, numeric libraries, Python frameworks, and
@@ -86,7 +94,7 @@ Then run the build from the repository root.
 AMD MI300A:
 
 ```bash
-containers/cluster/generic/amd/build_sqsh.sh
+containers/cluster/ce-images/amd/build_sqsh.sh
 ```
 
 This writes:
@@ -98,7 +106,7 @@ ${SCRATCH}/ce-images/optarena-ce-amd-mi300.sqsh
 NVIDIA GH200:
 
 ```bash
-containers/cluster/generic/nvidia/build_sqsh.sh
+containers/cluster/ce-images/nvidia/build_sqsh.sh
 ```
 
 This writes:
@@ -112,13 +120,13 @@ Override paths or base images with environment variables:
 ```bash
 OUTPUT_SQSH="${SCRATCH}/ce-images/my-amd.sqsh" \
 BASE_IMAGE="rocm/pytorch:latest-release" \
-containers/cluster/generic/amd/build_sqsh.sh
+containers/cluster/ce-images/amd/build_sqsh.sh
 ```
 
 ```bash
 OUTPUT_SQSH="${SCRATCH}/ce-images/my-nvidia.sqsh" \
 BASE_IMAGE="jfrog.svc.cscs.ch/docker-group-csstaff/alps-images/ngc-pytorch:26.02-py3-alps6" \
-containers/cluster/generic/nvidia/build_sqsh.sh
+containers/cluster/ce-images/nvidia/build_sqsh.sh
 ```
 
 ## Step 4: Install The EDF
@@ -126,8 +134,8 @@ containers/cluster/generic/nvidia/build_sqsh.sh
 Copy the EDF into `${HOME}/.edf`.
 
 ```bash
-cp containers/cluster/generic/amd/optarena-amd-mi300.toml "${HOME}/.edf/"
-cp containers/cluster/generic/nvidia/optarena-nvidia-gh200.toml "${HOME}/.edf/"
+cp containers/cluster/ce-images/amd/optarena-amd-mi300.toml "${HOME}/.edf/"
+cp containers/cluster/ce-images/nvidia/optarena-nvidia-gh200.toml "${HOME}/.edf/"
 ```
 
 If you changed `OUTPUT_SQSH`, edit the EDF `image` line to match.
@@ -240,22 +248,23 @@ MCP tools; Bash, web tools, and subagents are disabled by default.
 Ready-to-edit sbatch examples are included at:
 
 ```text
-containers/cluster/generic/amd/agent.sbatch.example
-containers/cluster/generic/nvidia/agent.sbatch.example
+containers/cluster/ce-images/amd/agent.sbatch.example
+containers/cluster/ce-images/nvidia/agent.sbatch.example
 ```
 
 ## Judge Placeholder
 
-The judge container is not implemented yet. The only prepared judge-side execution
-tool is:
+The generic AMD image includes the judge runtime. Its only implemented remote
+operation is currently:
 
 ```bash
-python3 containers/cluster/generic/judge/tools/web_search.py --query "..."
+python3 containers/judge/tools/web_search.py --query "..."
 ```
 
 It reads `.env`, calls SerpAPI, crawls result pages with Crawl4AI, and summarizes
-with a vLLM/OpenAI-compatible chat endpoint. It is designed to be called as a
-separate process by a later judge service.
+with a vLLM/OpenAI-compatible chat endpoint. The multi-role example under
+`containers/cluster/example-script/` exposes it through an HTTP service and
+leaves benchmark grading routes as explicit stubs.
 
 ## Notes
 

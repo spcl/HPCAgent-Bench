@@ -41,9 +41,10 @@ from numpyto_common import dtypes
 from numpyto_common.ir import _COMPLEX_FOR_FLOAT, KernelIR, SymbolDesc
 from numpyto_common.ordered import OrderedSet
 from numpyto_common.numpy_desugar import _np_linalg_attr
-from numpyto_common.lib_nodes import (LibNodeRewriter, MESHGRID_AXIS_KW, NP_ZEROS_ALIASES, UNARY_C_MATH,
-                                      _broadcast_extents, _is_integer_expr, _iter_extent_of, _scalarize_at_iters,
-                                      _slice_step_const, expand_meshgrid, extent_is_scalar, reset_temp_counters)
+from numpyto_common.lib_nodes import (DIM_IDENT_RE, SHAPE_READ_RE, LibNodeRewriter, MESHGRID_AXIS_KW, NP_ZEROS_ALIASES,
+                                      UNARY_C_MATH, _broadcast_extents, _is_integer_expr, _iter_extent_of,
+                                      _scalarize_at_iters, _slice_step_const, expand_meshgrid, extent_is_scalar,
+                                      reset_temp_counters)
 from numpyto_common.frontend import (_collect_inlined_scalar_defs, _dtype_from_constructor, _resolve_shape_attr_tokens,
                                      _substitute_inlined_scalar_defs)
 
@@ -1073,6 +1074,30 @@ def _const_int_index(node: ast.AST) -> Optional[int]:
     return None
 
 
+def _is_newaxis_result_axis(sub: ast.Subscript, k: int) -> bool:
+    """True when result axis ``k`` of ``sub`` is a ``np.newaxis``, whatever the base's rank.
+
+    ``X[:, None, :].shape[1]`` is 1 for every ``X``: a newaxis inserts a unit axis and consumes
+    no source axis. That makes the rank of an ``np.expand_dims`` operand irrelevant, which is
+    what lets the extent resolve before the operand's own shape is harvested.
+
+    Restricted to an all-``:``/newaxis subscript and a non-negative ``k``, so result axis ``k`` IS
+    element ``k``: a scalar index, a gather, an Ellipsis, or an unnamed trailing axis each shift
+    that correspondence by an amount only the base's rank fixes.
+    """
+    if k < 0:
+        return False
+    elts = list(sub.slice.elts) if isinstance(sub.slice, ast.Tuple) else [sub.slice]
+    if k >= len(elts) or not all(isinstance(e, ast.Slice) or _is_newaxis(e) for e in elts):
+        return False
+    return _is_newaxis(elts[k])
+
+
+def _is_newaxis(elt: ast.expr) -> bool:
+    """``np.newaxis`` in a subscript, which parses as a ``None`` constant."""
+    return isinstance(elt, ast.Constant) and elt.value is None
+
+
 class _ShapeMidExpressionRewriter(ast.NodeTransformer):
     """Replace ``arr.shape[k]`` (and bare ``arr.shape``) anywhere in
     the body with the matching shape symbol from the IR's shape table.
@@ -1116,6 +1141,10 @@ class _ShapeMidExpressionRewriter(ast.NodeTransformer):
                 ext = _iter_extent_of(node.value.value, self.arrays_shapes)
                 if ext is not None and -len(ext) <= k < len(ext):
                     return copy.deepcopy(ext[k])
+                # The base's own shape is not knowable everywhere this runs (the first pass
+                # has only the DECLARED arrays), but a newaxis is 1 at every rank.
+                if _is_newaxis_result_axis(node.value.value, k):
+                    return ast.Constant(value=1)
         self.generic_visit(node)
         return node
 
@@ -1168,6 +1197,40 @@ class _ShapeMidExpressionRewriter(ast.NodeTransformer):
         # ``arr.dtype`` -- leave intact; downstream emit drops the dtype
         # kwarg via the builtin-cast / math rewriters as appropriate.
         return node
+
+
+def _fold_shape_reads_in_table(shapes: Dict[str, object]) -> None:
+    """Fold ``<expr>.shape[k]`` inside the shape TABLE's own tokens, exactly as
+    :class:`_ShapeMidExpressionRewriter` folds them in the body.
+
+    Inlining substitutes a helper's argument EXPRESSION at every use, so an
+    ``np.expand_dims(x, 1)`` argument (already rewritten to ``x[:, None, :]``) leaves the
+    helper's output shape as ``('x[:, None, :].shape[0]', 'x[:, None, :].shape[1]', ...)``.
+    The regex resolver only matches a Name base, so those tokens survive; the body's copies
+    of them get folded but the table's do not, and the two then disagree. Anything reading
+    the table for a CONSTANT sees source text: ``expand_squeeze`` asked to drop axis 1 finds
+    ``'x[:, None, :].shape[1]'`` instead of ``'1'``, cannot prove the axis is a unit axis,
+    and declines -- leaving ``np.squeeze`` for the emitter to reject.
+
+    Never-worse: a token is replaced only when the fold resolves every ``.shape`` read in
+    it, so a self-referential or unknown base keeps the original text for the downstream
+    source-order resolvers.
+    """
+    rewriter = _ShapeMidExpressionRewriter(shapes)
+    for name in list(shapes):
+        tokens = shapes[name]
+        folded = []
+        for tok in tokens:
+            text = str(tok)
+            if ".shape" in text:
+                try:
+                    new = ast.unparse(rewriter.visit(ast.parse(text, mode="eval").body))
+                except SyntaxError:
+                    new = text
+                if ".shape" not in new:
+                    text = new
+            folded.append(text)
+        shapes[name] = folded if isinstance(tokens, list) else tuple(folded)
 
 
 class _BuiltinCastRewriter(ast.NodeTransformer):
@@ -1251,7 +1314,7 @@ class _ScalarFloatTagger(ast.NodeVisitor):
 
 class _TrueDivisionPromoter(ast.NodeTransformer):
     """numpy ``/`` is TRUE division: int / int -> float64. C ``/`` and Fortran
-    ``/`` do INTEGER division on integer operands, so wrap the left operand of an
+    ``/`` do INTEGER division on integer operands, so wrap BOTH operands of an
     all-integer division in an ``np.float64(...)`` cast (which both emitters
     render as ``(double)(x)`` / ``REAL(x, kind=c_double)``) to force a floating
     divide -- matching numpy. Float / complex operands are left untouched (the
@@ -1263,20 +1326,31 @@ class _TrueDivisionPromoter(ast.NodeTransformer):
     is only correct while the operands really are integers, though -- hence the dtype
     table this is handed must be complete (see :class:`_ScalarFloatTagger`). Firing on a
     float divide silently promotes the surrounding expression to double, which fp64
-    cannot reveal because there double IS the precision."""
+    cannot reveal because there double IS the precision.
+
+    Casting the RIGHT operand as well is what keeps this case distinguishable downstream:
+    the C emitter narrows an integer divisor to the KERNEL's float type (numpy's mixed
+    float/int rule), and a bare integer left here would read as that case and pull an
+    int/int divide down to float32 on an fp32 emit. It also leaves no implicit int -> double
+    for the conversion gate; the divide's value is unchanged either way."""
 
     def __init__(self, local_dtypes, array_names):
         self.local_dtypes = local_dtypes or {}
         self.array_names = array_names or set()
 
+    @staticmethod
+    def _as_f64(node: ast.expr) -> ast.expr:
+        return ast.copy_location(
+            ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="float64", ctx=ast.Load()),
+                     args=[node],
+                     keywords=[]), node)
+
     def visit_BinOp(self, node: ast.BinOp) -> ast.AST:
         self.generic_visit(node)
         if (isinstance(node.op, ast.Div) and _is_integer_expr(node.left, self.local_dtypes, self.array_names)
                 and _is_integer_expr(node.right, self.local_dtypes, self.array_names)):
-            node.left = ast.copy_location(
-                ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="float64", ctx=ast.Load()),
-                         args=[node.left],
-                         keywords=[]), node.left)
+            node.left = self._as_f64(node.left)
+            node.right = self._as_f64(node.right)
         return node
 
 
@@ -1955,6 +2029,36 @@ def _harvest_local_shapes(tree: ast.AST,
                 shape_table[target.id] = tuple(ast.unparse(e) for e in ext)
 
 
+class _FullCallHoister(_StmtHoister):
+    """Materialise a nested ``np.full(...)`` / ``np.full_like(...)`` call into its own
+    ``__full<k> = <call>`` statement, so the direct-assign :class:`_FullLikeRewriter`
+    can split it into an allocation plus a broadcast fill.
+
+    The causal-mask idiom builds its ``-inf`` band inline --
+    ``scores + np.triu(np.full((n, n), -np.inf, dtype=x.dtype), 1)`` -- where ``np.full``
+    is buried two calls deep. ``_CallHoister``'s triu first-arg spill is gated on a
+    resolvable extent, and an inline constructor is never sized by the harvest, so
+    without this the whole ``np.triu`` reaches the emitter unlowered. Mirrors
+    :class:`_EyeCallHoister`; a call already the direct RHS of an assignment is left
+    for :class:`_FullLikeRewriter` to consume."""
+
+    @staticmethod
+    def _is_full_call(v: ast.AST) -> bool:
+        return (isinstance(v, ast.Call) and isinstance(v.func, ast.Attribute) and v.func.attr in ("full", "full_like")
+                and isinstance(v.func.value, ast.Name) and v.func.value.id in ("np", "numpy") and len(v.args) >= 2)
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        self.generic_visit(node)
+        if self._is_full_call(node):
+            return self._spill(node, "__full")
+        return node
+
+    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+        if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and self._is_full_call(node.value)):
+            return node
+        return self._flush(node)
+
+
 class _FullLikeRewriter(ast.NodeTransformer):
     """``X = np.full_like(src, val)`` -> ``X = np.empty_like(src); X[:] = val`` and
     ``X = np.full(shape, val)`` -> ``X = np.empty(shape); X[:] = val``.
@@ -2238,10 +2342,16 @@ class _CollapseChainedSubscripts(ast.NodeTransformer):
     access uniformly, instead of mis-mapping a loop iterator onto the inner ``:``
     (which corrupts the fancy-scatter store and the dot-product operand).
 
-    Conservative: only collapses when the base is a known-shape array, every inner
-    index is a scalar or a FULL ``:`` slice, and the outer indices fit the
-    surviving (slice + trailing) axes -- any partial slice, strided slice, gather,
-    or ``newaxis`` in the inner subscript is left untouched.
+    Conservative: every inner index must be a scalar or a FULL ``:`` slice, and the
+    outer indices must fit the surviving (slice + trailing) axes -- any partial slice,
+    strided slice, gather, or ``newaxis`` in the inner subscript is left untouched.
+
+    The base's shape is only needed to count the axes the inner subscript did NOT name,
+    which the outer indices reach only after exhausting the inner ``:`` positions. When
+    they do not (``A[:, :, :, 0][:, :, 0]``, what a double ``np.squeeze(.., axis=-1)``
+    rewrites to), the mapping is the same at every rank, so an unknown base collapses too
+    -- which is what lets this run BEFORE the shape harvest, early enough for the SSA
+    rank-rebind rename to see the real result rank.
     """
 
     def __init__(self, shape_table: Dict[str, Tuple[str, ...]]):
@@ -2253,8 +2363,6 @@ class _CollapseChainedSubscripts(ast.NodeTransformer):
         if not isinstance(inner, ast.Subscript) or not isinstance(inner.value, ast.Name):
             return node
         base_shape = self.shape_table.get(inner.value.id)
-        if not base_shape:
-            return node
         inner_idx = _slice_dims(inner)
         outer_idx = _slice_dims(node)
         # A newaxis or ellipsis in either subscript shifts the axis alignment by an
@@ -2281,10 +2389,15 @@ class _CollapseChainedSubscripts(ast.NodeTransformer):
                 return node
             else:
                 new_idx.append(ix)
-        # Base axes the inner subscript did not name are trailing result axes.
-        trailing = len(base_shape) - len(new_idx)
-        if trailing < 0:
-            return node
+        # Base axes the inner subscript did not name are trailing result axes. Unknown base
+        # -> none can be named here; the outer indices then have to fit the inner's own ``:``
+        # positions, where the mapping does not depend on the rank.
+        if not base_shape:
+            trailing = 0
+        else:
+            trailing = len(base_shape) - len(new_idx)
+            if trailing < 0:
+                return node
         for _ in range(trailing):
             result_axes.append(len(new_idx))
             new_idx.append(ast.Slice())
@@ -2433,9 +2546,6 @@ class _PadImplicitTrailingSlices(ast.NodeTransformer):
         # :, :, :]`` on a 4-D array still leaves one trailing source axis
         # implicit (conv2d's ``weights[np.newaxis, :, :, :]`` -> 5-D result
         # over a 4-D operand). Count only source-axis-consuming positions.
-        def _is_newaxis(e):
-            return isinstance(e, ast.Constant) and e.value is None
-
         n_index = sum(1 for e in elts if not _is_newaxis(e))
         if n_index >= rank:
             return node
@@ -2630,6 +2740,29 @@ class _FlattenChainedSubscripts(ast.NodeTransformer):
             ast.Subscript(value=ast.Name(id=inner.value.id, ctx=ast.Load()), slice=sl, ctx=node.ctx), node)
 
 
+def _refuse_scalarising_a_contraction(value: ast.expr) -> None:
+    """Raise if ``value`` still holds an array-level ``@``.
+
+    Scalarising a contraction changes what it means: ``C[:] = A @ B`` becomes ``C[i, j] = A[i, j] *
+    B[i, j]``, which drops the sum over k entirely and reads both operands at the OUTPUT's extents.
+    It compiles, it runs, and it returns wrong numbers -- netvlad's
+    ``np.swapaxes(assignment, 1, 2) @ x`` did exactly that.
+
+    The emitter has a guard for a surviving ``@``, but it cannot catch this one: by the time it runs
+    the rewrite has already replaced both operands with scalar subscripts, so the guard's
+    "are the operands scalar" test passes and ``*`` is emitted. The only place the difference is
+    still visible is here, BEFORE the rewrite.
+
+    Reaching this means the matmul hoister declined -- normally a shape it could not resolve. That is
+    a gap to fix, and a refusal names it; the silent product does not.
+    """
+    for sub in ast.walk(value):
+        if isinstance(sub, ast.BinOp) and isinstance(sub.op, ast.MatMult):
+            raise NotImplementedError(f"matmul '{ast.unparse(sub)}' was not lowered before slice fusion; "
+                                      f"scalarising it would drop the contraction and silently "
+                                      f"compute an elementwise product")
+
+
 class SliceFusion(ast.NodeTransformer):
     """Rewrite slice-bearing assignments into a single fused loop.
 
@@ -2677,6 +2810,7 @@ class SliceFusion(ast.NodeTransformer):
             return None
         if not isinstance(target, ast.Subscript):
             return None
+        _refuse_scalarising_a_contraction(value)
         lhs_name = _name_of_subscript(target)
         if lhs_name is None:
             return None
@@ -3070,6 +3204,18 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
             rhs_slice_idx += 1
             rhs_start = self._resolve_bound(d.lower, rhs_name, axis, default=_const(0))
             ivar = ast.Name(id=ivar_node.id, ctx=ast.Load())
+            # numpy KEEPS an axis a slice produced even at length 1, and then BROADCASTS it: every
+            # result position along that axis reads the SAME source element. Advancing it with the
+            # iter var instead reads a whole row -- ``out[:, :] = a[:, 0:1] + b`` came out as
+            # ``a[i][j] + b[i][j]``, wrong numbers in C, C++ and Fortran alike and no diagnostic.
+            # (An INTEGER index is the other rule and is already handled: it drops the axis, so it
+            # never reaches here.) Emitting the start is right whichever extent the destination has:
+            # where the destination is also length 1 the iter var only ever takes that one value.
+            rhs_stop = (self._resolve_bound(d.upper, rhs_name, axis, default=_const(0))
+                        if d.upper is not None else None)
+            if _is_unit_extent(rhs_start, rhs_stop):
+                idx_nodes.append(rhs_start)
+                continue
             if step is not None and step != 1:
                 # Strided RHS slice ``a[lo:hi:k]``: the source index for the
                 # result position ``pos = ivar - lhs_start`` is ``lo + pos*k``.
@@ -3168,6 +3314,20 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
                 else ast.Name(id=shape[axis], ctx=ast.Load())
             return _binop(axis_len, ast.Sub(), _const(bound.operand.value))
         return bound
+
+
+def _is_unit_extent(start: ast.AST, stop: Optional[ast.AST]) -> bool:
+    """Is this slice exactly one element long -- ``[0:1]`` or the symbolic ``[k:k+1]``?
+
+    Length 1 is the case where numpy's two indexing rules visibly differ: the slice keeps its axis
+    and broadcasts along it, while the integer index would have removed the axis entirely.
+    """
+    if stop is None:
+        return False  # an open upper bound is the whole axis; length 1 only if the axis is
+    if _fold_offset(stop, start) == 1:
+        return True
+    return (isinstance(stop, ast.BinOp) and isinstance(stop.op, ast.Add) and isinstance(stop.right, ast.Constant)
+            and stop.right.value == 1 and ast.dump(stop.left) == ast.dump(start))
 
 
 def _fold_offset(rhs_start: ast.AST, lhs_start: ast.AST) -> Optional[int]:
@@ -5491,9 +5651,6 @@ class _SubscriptifyNames(ast.NodeTransformer):
             def _is_full(e):
                 return (isinstance(e, ast.Slice) and e.lower is None and e.upper is None and e.step is None)
 
-            def _is_newaxis(e):
-                return isinstance(e, ast.Constant) and e.value is None
-
             if (elts0 and all(_is_full(e) or _is_newaxis(e) for e in elts0) and any(_is_full(e) for e in elts0)
                     and len(elts0) <= len(self.iters)):
                 offset = len(self.iters) - len(elts0)
@@ -5876,6 +6033,9 @@ class LoweringContext:
         self.shapes: Dict[str, List[str]] = {}
         self.scalar_temps: Dict[str, Tuple[str, ...]] = {}
         self.inl_defs: Dict[str, object] = {}
+        #: Dimension local -> its definition (``channels`` -> ``embed_dim``), for the matmul
+        #: hoister's token comparison. See :func:`collect_dim_aliases`.
+        self.dim_aliases: Dict[str, str] = {}
         self.param_seed: Dict[str, Tuple[str, ...]] = {}
         #: Bound ``_resolve_inl_table`` closure, set in the resolve-inl phase and
         #: re-used by the slice-normalise phase (both resolve ``__inl`` tokens).
@@ -5922,6 +6082,9 @@ def _lp_normalize_calls(ctx: LoweringContext) -> None:
     # harvester runs, so the conditionally-allocated buffer is seen as a plain local
     # (the backends have no ``None``; reads are guarded by the same ``cond``).
     _ConditionalNoneAllocRewriter().visit(tree)
+    # A nested ``np.full`` (the causal mask's ``np.triu(np.full(..., -inf), 1)``) is spilled
+    # to a temp first, so the direct-assign rewriter below sees it.
+    _FullCallHoister().visit(tree)
     _FullLikeRewriter().visit(tree)
     # ``np.eye`` / ``np.identity`` -> zeros + diagonal fill, BEFORE the zeros
     # harvest so the resulting ``np.zeros((n, n))`` is picked up normally. A nested
@@ -6057,6 +6220,33 @@ def _lp_seed_dtypes_and_harvest(ctx: LoweringContext) -> None:
     _PromoteMixedComplexIfExp(ctx.local_dtypes).visit(tree)
 
 
+def collect_dim_aliases(tree: ast.AST, array_names: Set[str]) -> Dict[str, str]:
+    """Map each DIMENSION local to its definition, for :func:`lib_nodes.dims_agree`.
+
+    A kernel names its own dimensions off a parameter's shape -- ``batch, channels, h, w =
+    x.shape``, which the tuple desugar has already folded to ``batch = batch_size`` / ``channels =
+    embed_dim``. Those locals then spell shape tokens the ``init.shapes`` side spells with the
+    symbol, so two operands of one contraction disagree textually while denoting the same extent.
+
+    ``_collect_inlined_scalar_defs`` with no prefix over-collects for this purpose: its
+    scalar-vs-array test is structural (a BinOp of Names looks like a dimension), so an ARRAY
+    expression -- vision_attention's ``resid = attn_out + tokens`` -- comes back as a candidate.
+    Substituting one into a shape token would be nonsense, so a name is kept only when neither it
+    nor any identifier it reads is a known array.
+
+    A ``.shape[i]`` read is the exception the filter must not eat: ``__inl91_c =
+    __inl8_y.shape[3]`` names an array precisely to read a DIMENSION off it, and it is the only
+    form swin's inlined stages have. Those reads are masked out before the array test and resolved
+    later, against the then-current shape table, by :func:`lib_nodes.substitute_dim_aliases`.
+    """
+    candidates = _collect_inlined_scalar_defs(tree, None)
+    return {
+        name: rhs
+        for name, rhs in candidates.items()
+        if name not in array_names and not (array_names & set(DIM_IDENT_RE.findall(SHAPE_READ_RE.sub("", rhs))))
+    }
+
+
 def _lp_resolve_inlined_shapes(ctx: LoweringContext) -> None:
     """Resolve inlined-scalar dim tokens in the harvest table, inherit loop-var
     dtypes, and pre-lift ``alpha * A`` so the matmul hoister sees a bare Name."""
@@ -6070,6 +6260,7 @@ def _lp_resolve_inlined_shapes(ctx: LoweringContext) -> None:
     # (``zeros_locals`` / ``shapes``).
     ctx.inl_defs = _collect_inlined_scalar_defs(tree)
     ctx.param_seed = {n: tuple(s) for n, s in ctx.arrays_shapes.items()}
+    ctx.dim_aliases = collect_dim_aliases(tree, set(ctx.arrays_shapes) | set(ctx.lib_shape_table))
 
     def _resolve_inl(shape):
         """Substitute ``__inl<k>_`` dim-locals away then resolve
@@ -6154,6 +6345,18 @@ def _lp_normalize_index_access(ctx: LoweringContext) -> None:
     # subscript base folds to concrete dims BEFORE the reshape / LibNode expander
     # bakes the (otherwise unresolved) token into a loop bound.
     _ShapeMidExpressionRewriter(shapes).visit(tree)
+    # ...and fold the same reads inside the table's own tokens, so the table agrees with the
+    # body it describes. A shape an expander reads as a CONSTANT (squeeze's unit axis) is only
+    # a constant once this runs.
+    _fold_shape_reads_in_table(shapes)
+    # Re-run the tuple splitter for the same reason the fold above re-runs: its first pass
+    # (normalize-calls) only had the DECLARED-array shapes, so ``n, c, oh, ow = x.shape`` on an
+    # inlined local stayed a tuple and reached the emitter as a value -- "expression Tuple", the
+    # single largest emit failure in the corpus. Extends int_locals rather than replacing it; the
+    # first pass's names are still live.
+    tuple_rewriter = _TupleAssignRewriter(shapes)
+    tuple_rewriter.visit(tree)
+    ctx.kir.int_locals += [n for n in tuple_rewriter.int_locals if n not in ctx.kir.int_locals]
     _TupleLocalPropagator().run(tree)
     _TupleSubscriptFolder().visit(tree)
     ast.fix_missing_locations(tree)
@@ -6201,7 +6404,8 @@ def _lp_libnode_expand(ctx: LoweringContext) -> None:
     ctx.lib_rewriter = LibNodeRewriter(ctx.lib_shape_table,
                                        known_arrays=set(ctx.arrays_shapes.keys()),
                                        local_dtypes=ctx.local_dtypes,
-                                       sparse=ctx.original_kir.sparse)
+                                       sparse=ctx.original_kir.sparse,
+                                       dim_aliases=ctx.dim_aliases)
     ctx.lib_rewriter.visit(tree)
     # Second math rename: an intrinsic whose argument only becomes a SCALAR once the library
     # nodes expand. ``np.sqrt(w @ (cov @ w))`` (portfolio_optimization) defers the rename in

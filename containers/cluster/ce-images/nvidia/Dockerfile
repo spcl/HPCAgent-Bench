@@ -2,7 +2,7 @@
 #
 # Generic NVIDIA GH200/A100 CE base for CSCS Alps.
 # Build context must be the repository root:
-#   podman build -f containers/cluster/generic/nvidia/Dockerfile -t optarena-ce:nvidia-gh200 .
+#   podman build -f containers/cluster/ce-images/nvidia/Dockerfile -t optarena-ce:nvidia-gh200 .
 #
 # The default base is the CSCS Alps Extended NGC PyTorch image. On Alps, prefer the
 # jfrog mirror; outside Alps, override BASE_IMAGE with the matching GHCR URI.
@@ -60,7 +60,7 @@ RUN set -eux; \
 
 RUN npm install -g @anthropic-ai/claude-code
 
-COPY containers/cluster/generic/agent /opt/optarena-agent
+COPY containers/agent /opt/optarena-agent
 RUN chmod +x /opt/optarena-agent/start_agents.sh /opt/optarena-agent/start_run.sh
 
 RUN set -eux; \

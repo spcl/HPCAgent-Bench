@@ -2,7 +2,7 @@
 #
 # Generic AMD MI300A CE base for CSCS Alps.
 # Build context must be the repository root:
-#   podman build -f containers/cluster/generic/amd/Dockerfile -t optarena-ce:amd-mi300 .
+#   podman build -f containers/cluster/ce-images/amd/Dockerfile -t optarena-ce:amd-mi300 .
 #
 # The public CSCS docs do not currently list an Alps Extended ROCm/PyTorch image
 # equivalent to the NVIDIA NGC extended images. Start from AMD's ROCm PyTorch image
@@ -15,6 +15,7 @@ ARG ROCM_ARCH=gfx942
 ARG PYTHON_REQUIREMENTS=requirements/amd.txt
 
 ENV LC_ALL=C \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/playwright \
     ROCM_PATH=/opt/rocm \
     HIP_PATH=/opt/rocm \
     PYTORCH_ROCM_ARCH=${ROCM_ARCH} \
@@ -59,6 +60,13 @@ RUN set -eux; \
 RUN PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install --no-cache-dir \
       "litellm[proxy]" fastapi uvicorn httpx pydantic orjson tenacity rich typer
 
+COPY containers/judge/requirements.txt /opt/optarena-judge/requirements.txt
+RUN set -eux; \
+    PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install --no-cache-dir \
+      -r /opt/optarena-judge/requirements.txt; \
+    playwright install --with-deps chromium; \
+    chmod -R a+rX "${PLAYWRIGHT_BROWSERS_PATH}"
+
 RUN set -eux; \
     git clone --depth 1 --recurse-submodules --shallow-submodules \
       --branch extended https://github.com/spcl/dace.git /opt/dace; \
@@ -66,7 +74,8 @@ RUN set -eux; \
 
 RUN npm install -g @anthropic-ai/claude-code
 
-COPY containers/cluster/generic/agent /opt/optarena-agent
+COPY containers/agent /opt/optarena-agent
+COPY containers/judge /opt/optarena-judge
 RUN chmod +x /opt/optarena-agent/start_agents.sh /opt/optarena-agent/start_run.sh
 
 RUN set -eux; \

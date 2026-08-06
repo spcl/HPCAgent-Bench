@@ -9,11 +9,11 @@ import ast
 
 import pytest
 
-from numpyto_common.lib_nodes import (NP_CALL_EXPANDERS, _matmul_result_shape, _parse_einsum_subscripts, expand_cumprod,
-                                      expand_cumsum, expand_diagonal, expand_einsum, expand_inner, expand_linalg_norm,
-                                      expand_median, expand_reshape, expand_roll, expand_tensordot, expand_trace,
-                                      expand_tril, expand_triu, expand_vdot)
-from numpyto_common.lowering import (_EllipsisExpander, _MatmulCallRewriter, _ReshapeMethodRewriter)
+from numpyto_common.lib_nodes import (NP_CALL_EXPANDERS, _matmul_result_shape, _parse_einsum_subscripts, dims_agree,
+                                      expand_cumprod, expand_cumsum, expand_diagonal, expand_einsum, expand_inner,
+                                      expand_linalg_norm, expand_median, expand_reshape, expand_roll, expand_tensordot,
+                                      expand_trace, expand_tril, expand_triu, expand_vdot, substitute_dim_aliases)
+from numpyto_common.lowering import (_EllipsisExpander, _FullCallHoister, _MatmulCallRewriter, _ReshapeMethodRewriter)
 
 
 def _name(n):
@@ -62,6 +62,61 @@ def test_matmul_result_shape_one_sided_batched():
 def test_matmul_result_shape_batch_mismatch_is_none():
     # Different leading batch dims do not contract.
     assert _matmul_result_shape(("B", "M", "K"), ("C", "K", "N")) is None
+
+
+# --------------------------------------------------------------------------- #
+# A.2b shape tokens from two vocabularies still name one extent                #
+# --------------------------------------------------------------------------- #
+
+
+def test_dims_agree_needs_no_aliases_when_spelled_alike():
+    assert dims_agree("N", "N")
+    assert not dims_agree("N", "M")
+
+
+def test_dims_agree_through_a_dimension_alias():
+    # ``batch, channels, h, w = x.shape`` binds locals the init.shapes side spells with symbols.
+    aliases = {"batch": "batch_size", "channels": "embed_dim"}
+    assert dims_agree("channels", "embed_dim", aliases)
+    assert dims_agree("batch", "batch_size", aliases)
+    assert not dims_agree("channels", "batch_size", aliases)
+
+
+def test_dims_agree_symbolically_when_substitution_leaves_arithmetic():
+    # swin's patch-merge doubles a stage's channels: the two sides stay textually different
+    # after substitution, and only the symbolic rung settles them.
+    assert dims_agree("4 * c", "16 * embed_dim", {"c": "4 * embed_dim"})
+    assert not dims_agree("4 * c", "15 * embed_dim", {"c": "4 * embed_dim"})
+
+
+def test_dims_agree_resolves_a_shape_read_against_the_table():
+    # An inlined helper spells its dims as a read off a LOCAL array, which no alias resolves.
+    aliases = {"__inl91_c": "__inl8_y.shape[3]"}
+    table = {"__inl8_y": ("b", "h", "w", "embed_dim")}
+    assert dims_agree("__inl91_c", "embed_dim", aliases, table)
+    assert not dims_agree("__inl91_c", "h", aliases, table)
+
+
+def test_dims_agree_is_false_on_an_unparseable_token():
+    # Unresolvable must decline, never claim agreement: a wrong True contracts over two extents.
+    assert not dims_agree("a b c", "embed_dim", {"zz": "1"})
+
+
+def test_substitute_dim_aliases_stops_on_a_self_referential_def():
+    assert substitute_dim_aliases("n", {"n": "n + 1"}) == "(n + 1)"
+
+
+def test_matmul_result_shape_accepts_an_aliased_contraction_dim():
+    aliases = {"channels": "embed_dim"}
+    assert _matmul_result_shape(("seq", "batch", "channels"), ("embed_dim", "3 * embed_dim")) is None
+    assert _matmul_result_shape(("seq", "batch", "channels"), ("embed_dim", "3 * embed_dim"),
+                                aliases) == ("seq", "batch", "3 * embed_dim")
+
+
+def test_matmul_result_shape_aliased_batch_dim_still_checks_rank():
+    # An alias must not let a rank-3 operand contract with a rank-4 one.
+    aliases = {"batch": "batch_size"}
+    assert _matmul_result_shape(("batch", "M", "K"), ("batch_size", "H", "K", "N"), aliases) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -369,6 +424,29 @@ def test_triu_keeps_upper_triangle():
     assert "__j >= __i" in out
 
 
+def test_nested_full_is_spilled_so_triu_sees_a_name():
+    """The transformer causal mask buries ``np.full`` two calls deep. ``_CallHoister``'s
+    triu first-arg spill is gated on a resolvable extent, and an inline constructor is
+    never sized by the shape harvest, so without this spill the whole ``np.triu`` reached
+    the emitter unlowered ("call to np.triu not supported")."""
+    tree = ast.parse("s = s + np.triu(np.full((n, n), -np.inf), 1)")
+    _FullCallHoister().visit(tree)
+    assert len(tree.body) == 2, "the nested np.full must become its own statement"
+    spilled, rest = tree.body
+    assert isinstance(spilled, ast.Assign) and spilled.targets[0].id.startswith("__full")
+    assert ast.unparse(spilled.value).startswith("np.full(")
+    # triu's first argument is now the spilled Name, which every expander requires.
+    assert f"np.triu({spilled.targets[0].id}, 1)" in ast.unparse(rest)
+
+
+def test_direct_full_assign_is_left_for_the_full_rewriter():
+    """``X = np.full(...)`` is what ``_FullLikeRewriter`` consumes -- spilling it too
+    would interpose a pointless whole-array copy."""
+    tree = ast.parse("mask = np.full((n, n), -np.inf)")
+    _FullCallHoister().visit(tree)
+    assert len(tree.body) == 1 and ast.unparse(tree.body[0]) == "mask = np.full((n, n), -np.inf)"
+
+
 def test_linalg_norm_ord1_inf_vector_and_matrix():
     """np.linalg.norm ord=1 -> sum|v| (vector) / max column abs-sum (matrix),
     ord=inf -> max|v| / max row abs-sum, all without sqrt. A POSITIONAL ord must
@@ -416,10 +494,19 @@ def _oracle():
 # so jax lowers to a ``jnp.*`` library call, never a forked ``lax.while_loop`` -- no hang risk.
 _ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 
+#: Backends that must actually RUN an op, not skip it. A skip stays accepted -- a backend that
+#: cannot lower an op should not fail the op's test -- but accepting skips is also how a green
+#: test can mean NO backend ran the case: `np.triu` looked green here until the raw status dict
+#: was printed. These three are the reference lowering, so if none of them ran, nothing was graded.
+_MUST_NOT_ALL_SKIP = ("c", "cpp", "fortran")
+
 
 def _assert_ok(status, label):
     fails = {b: s for b, s in status.items() if s.startswith("FAIL")}
     assert not fails, f"{label}: {fails}"
+    native = {b: status.get(b) for b in _MUST_NOT_ALL_SKIP}
+    ran = [b for b, s in native.items() if s == "ok"]
+    assert ran, f"{label}: no native backend ran it, so this case graded NOTHING -- {native}"
 
 
 #: (id, numpy source, func, input shapes/arrays, output shape, syms, sym-shapes).
@@ -547,6 +634,30 @@ def test_contraction_indexing_ops_e2e(label, src, func, ins, out_shape, syms, sh
             inputs[nm] = rng.random(sh)
     status = no.run_op(src, func, inputs, {"out": out_shape}, syms, shapes=shapes, backends=_ALL)
     _assert_ok(status, label)
+
+
+def test_triu_of_inline_full_mask_e2e():
+    """The transformer causal mask verbatim: an inline ``np.full`` under an inline
+    ``np.triu``, inside a BinOp. Its own test rather than a row in the table above,
+    because adding a row reflows the whole parametrize literal under yapf.
+
+    ``exp`` turns the -inf band into an exact 0, so masking the WRONG triangle (or
+    none at all) is a whole-magnitude disagreement with numpy, not drift."""
+    import numpy as np
+    src = ("import numpy as np\n"
+           "def f(a,out):\n"
+           "    n = a.shape[0]\n"
+           "    out[:] = np.exp(a + np.triu(np.full((n, n), -np.inf), 1))\n")
+    inputs = {"a": np.random.default_rng(0).random((5, 5))}
+    status = _oracle().run_op(src,
+                              "f",
+                              inputs, {"out": (5, 5)}, {"M": 5},
+                              shapes={
+                                  "a": "(M, M)",
+                                  "out": "(M, M)"
+                              },
+                              backends=_ALL)
+    _assert_ok(status, "triu_of_inline_full_mask")
 
 
 # --------------------------------------------------------------------------- #

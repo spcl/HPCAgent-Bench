@@ -75,18 +75,38 @@ ROCPROF_CSVS = {
     '"MEMORY_COPY_HOST_TO_DEVICE",48,2411520,50240.0,71.40,49920,51200,320.1\n'
     '"MEMORY_COPY_DEVICE_TO_HOST",24,965632,40234.6,28.60,39936,41216,290.7\n',
     gpu_profiling.KERNEL_TRACE_CSV:
-    '"Kind","Agent_Id","Queue_Id","Kernel_Id","Kernel_Name","Correlation_Id","Start_Timestamp",'
-    '"End_Timestamp","Private_Segment_Size","Group_Segment_Size","Workgroup_Size_X","Workgroup_Size_Y",'
-    '"Workgroup_Size_Z","Grid_Size_X","Grid_Size_Y","Grid_Size_Z"\n'
-    '"KERNEL_DISPATCH",2,1,17,"gemm_fp64_kernel(double*, double*, int)",102,1000,444520,0,1024,256,1,1,16384,64,1\n'
-    '"KERNEL_DISPATCH",2,1,17,"gemm_fp64_kernel(double*, double*, int)",104,510000,953520,0,1024,256,1,1,16384,64,1\n'
-    '"KERNEL_DISPATCH",2,1,18,"scale_kernel(double*, int)",103,960000,1016512,0,0,100,1,1,3200,1,1\n',
+    '"Kind","Agent_Id","Queue_Id","Stream_Id","Thread_Id","Dispatch_Id","Kernel_Id","Kernel_Name",'
+    '"Correlation_Id","Start_Timestamp","End_Timestamp","LDS_Block_Size","Scratch_Size","VGPR_Count",'
+    '"Accum_VGPR_Count","SGPR_Count","Workgroup_Size_X","Workgroup_Size_Y","Workgroup_Size_Z",'
+    '"Grid_Size_X","Grid_Size_Y","Grid_Size_Z"\n'
+    '"KERNEL_DISPATCH",2,1,0,7777,1,17,"gemm_fp64_kernel(double*, double*, int)",102,1000,444520,'
+    '1024,0,64,0,32,256,1,1,16384,64,1\n'
+    '"KERNEL_DISPATCH",2,1,0,7777,2,17,"gemm_fp64_kernel(double*, double*, int)",104,510000,953520,'
+    '1024,0,64,0,32,256,1,1,16384,64,1\n'
+    '"KERNEL_DISPATCH",2,1,0,7777,3,18,"scale_kernel(double*, int)",103,960000,1016512,'
+    '0,0,32,0,16,100,1,1,3200,1,1\n',
     gpu_profiling.AGENT_INFO_CSV:
     '"Node_Id","Logical_Node_Id","Agent_Type","Cpu_Cores_Count","Simd_Count","Max_Waves_Per_Simd",'
     '"Lds_Size_In_Kb","Wave_Front_Size","Num_Xcc","Cu_Count","Name","Product_Name"\n'
     '0,0,"CPU",192,0,0,0,0,0,0,"AMD EPYC 9654","AMD EPYC 9654"\n'
     '1,1,"GPU",0,1216,8,64,64,8,304,"gfx942","AMD Instinct MI300X"\n',
 }
+
+#: The SAME kernel trace as rocprofiler-sdk wrote it BEFORE 1.1.0: `Group_Segment_Size` for the LDS
+#: size and no register columns at all. Kept as its own fixture because the reader has to satisfy
+#: both generations at once -- pinning only the current spelling is what turned a 1 KB workgroup
+#: into `0.0 B` on whichever install was not the one this was written against.
+LEGACY_KERNEL_TRACE = (
+    '"Kind","Agent_Id","Queue_Id","Kernel_Id","Kernel_Name","Correlation_Id","Start_Timestamp",'
+    '"End_Timestamp","Private_Segment_Size","Group_Segment_Size","Workgroup_Size_X","Workgroup_Size_Y",'
+    '"Workgroup_Size_Z","Grid_Size_X","Grid_Size_Y","Grid_Size_Z"\n'
+    '"KERNEL_DISPATCH",2,1,17,"gemm_fp64_kernel(double*, double*, int)",102,1000,444520,0,1024,256,1,1,16384,64,1\n')
+
+#: A kernel trace with NEITHER LDS spelling -- the case that must read as "not measured". Every
+#: other column is present, so a reader that reports 0 here is reporting a number nothing produced.
+NO_LDS_KERNEL_TRACE = ('"Kind","Kernel_Name","Workgroup_Size_X","Workgroup_Size_Y","Workgroup_Size_Z",'
+                       '"Grid_Size_X","Grid_Size_Y","Grid_Size_Z"\n'
+                       '"KERNEL_DISPATCH","gemm_fp64_kernel(double*, double*, int)",256,1,1,16384,64,1\n')
 
 #: Legacy `rocprof --stats` output: kernel totals and nothing else -- no min/max, no geometry, no
 #: memory report. The fixture that proves an absent column comes back absent.
@@ -559,13 +579,39 @@ def test_rocprof_launch_configs_emit_the_same_row_shape_the_nsys_reader_does():
 
 
 def test_rocprof_launch_configs_report_what_the_trace_never_carries_as_absent():
-    """No register count exists in a kernel trace (rocprof-compute reads VGPR/SGPR), and without an
-    agent report the wavefront width is unknown. Both come back null rather than 0."""
+    """Without an agent report the wavefront width is unknown, so it comes back null rather than
+    being guessed. What the trace DOES carry is reported alongside it."""
     parsed = rocprof_sections()
     configs = gpu_profiling.rocprof_launch_configs(parsed[gpu_profiling.KERNEL_TRACE_CSV], None)
-    assert configs[0]["registers_per_thread"] is None
     assert configs[0]["warps_per_block"] is None, "an unknown wavefront width must not be guessed at 32 or 64"
     assert configs[0]["threads_per_block"] == 256, "what the trace DOES carry is still reported"
+
+
+def test_rocprof_launch_configs_read_the_register_count_the_trace_carries():
+    """`VGPR_Count` is per work-item and it is in the trace: it was documented as unavailable while
+    the tool had been emitting it, so the occupancy story stopped one field short of a cause."""
+    parsed = rocprof_sections()
+    configs = gpu_profiling.rocprof_launch_configs(parsed[gpu_profiling.KERNEL_TRACE_CSV], 64)
+    assert configs[0]["registers_per_thread"] == 64
+    assert "VGPR" in gpu_profiling.AMD_OCCUPANCY_NOTE, "the payload note must not still call the register count absent"
+
+
+def test_rocprof_launch_configs_read_lds_under_either_column_spelling():
+    """rocprofiler-sdk renamed `Group_Segment_Size` to `LDS_Block_Size`. A reader pinned to one
+    spelling reads the other generation's 1 KB workgroup as 0 B -- a budget it says is free."""
+    modern = gpu_profiling.rocprof_launch_configs(rocprof_sections()[gpu_profiling.KERNEL_TRACE_CSV], 64)
+    legacy = gpu_profiling.rocprof_launch_configs(gpu_profiling.parse_csv(LEGACY_KERNEL_TRACE), 64)
+    assert (modern[0]["shared_memory"], modern[0]["shared_memory_unit"]) == (1024, "B")
+    assert (legacy[0]["shared_memory"], legacy[0]["shared_memory_unit"]) == (1024, "B")
+    assert legacy[0]["registers_per_thread"] is None, "the older trace has no register column, and none is not zero"
+
+
+def test_rocprof_launch_configs_report_a_missing_lds_column_as_absent_not_zero():
+    """A trace with neither LDS spelling has not measured LDS. Reporting 0 B says the workgroup used
+    none, and an agent then sizes a tile against a budget it has already spent."""
+    configs = gpu_profiling.rocprof_launch_configs(gpu_profiling.parse_csv(NO_LDS_KERNEL_TRACE), 64)
+    assert configs[0]["shared_memory"] is None
+    assert configs[0]["shared_memory_unit"] is None, "a unit on an absent quantity reads as a measurement"
 
 
 def test_wavefront_size_reads_the_gpu_agent_and_not_the_cpu_one():
@@ -747,7 +793,8 @@ def test_render_report_marks_the_amd_fields_that_have_no_counterpart():
     }
     text = gpu_profiling.render_report(payload)
     assert "traced by rocprofv3 (kernel,memory-copy)" in text
-    assert "-- reg/thread" in text and "-- warps/block" in text
+    assert "-- warps/block" in text, "an unknown wavefront width must render as absent, not as 32"
+    assert "64 reg/thread" in text, "VGPR_Count IS in the trace and must not render as absent"
     assert "h2d MEMORY_COPY_HOST_TO_DEVICE" in text and "--" in text, "an unmeasured volume is not 0 MB"
     assert "rocprof-compute" in text and "ncu" not in text
     assert "1 kernel(s) below 1% omitted" in text

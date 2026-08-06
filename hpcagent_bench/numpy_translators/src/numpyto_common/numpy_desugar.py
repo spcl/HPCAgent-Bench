@@ -205,6 +205,11 @@ def expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
                 else:
                     drop += 1
             return base - drop
+        if isinstance(sl, ast.Call) and isinstance(sl.func, ast.Name) and sl.func.id == "tuple":
+            # ``A[tuple(axes)]`` is the WHOLE index, one entry per axis -- not the single scalar
+            # index the fall-through below assumes. How many axes it drops depends on what the
+            # sequence holds, which is not visible here; reporting ``base - 1`` invented a rank.
+            return None
         return base - 1  # single integer/Name index
     if isinstance(value, ast.Call):
         if isinstance(value.func, ast.Name) and value.func.id == "abs" and value.args:
@@ -248,6 +253,13 @@ def expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
                 return n
         if attr in ("copy", "ascontiguousarray", "asarray", "array") and value.args:
             return expr_rank(value.args[0], ranks)
+        if attr == "take" and len(value.args) >= 2:
+            # ``np.take(a, idx, axis=k)`` replaces axis k by the INDEX's own rank, so a scalar
+            # index drops it. The elementwise fallback below reported a's rank, which made the
+            # enclosing ``np.expand_dims`` place its newaxis in a nest one dimension too deep.
+            base = expr_rank(value.args[0], ranks)
+            idx = expr_rank(value.args[1], ranks)
+            return None if base is None or idx is None else base - 1 + idx
         if attr in ("expand_dims", ) and value.args:
             base = expr_rank(value.args[0], ranks)
             return None if base is None else base + 1

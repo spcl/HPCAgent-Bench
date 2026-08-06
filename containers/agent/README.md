@@ -64,7 +64,7 @@ Inside the CE environment, use the one-shot runner:
 From a source checkout, the same script is available at:
 
 ```bash
-containers/cluster/generic/agent/start_run.sh
+containers/agent/start_run.sh
 ```
 
 `start_run.sh` starts a LiteLLM proxy when `START_LLM_PROXY=1`, routes Claude Code
@@ -93,8 +93,8 @@ srun --environment=optarena-nvidia-gh200 /opt/optarena-agent/start_run.sh
 Ready-to-edit examples live next to the EDFs:
 
 ```text
-containers/cluster/generic/amd/agent.sbatch.example
-containers/cluster/generic/nvidia/agent.sbatch.example
+containers/cluster/ce-images/amd/agent.sbatch.example
+containers/cluster/ce-images/nvidia/agent.sbatch.example
 ```
 
 ## Tool Payloads

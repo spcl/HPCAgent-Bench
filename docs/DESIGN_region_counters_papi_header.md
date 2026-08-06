@@ -14,6 +14,51 @@ Grounded in `hpcagent_bench/harness/papi.py`, `flags.py`, `languages.py`, `harne
 
 ## 0. The API (the whole surface)
 
+> **DECIDED 2026-08-02, supersedes the eleven-symbol surface below.** Four calls only:
+> `papi_init` / `papi_start` / `papi_stop` / `papi_finalize`.
+>
+> ```c
+> int  hpc_papi_init(void);      /* enumerate metrics, resolve the intersection, AND register
+>                                 * every OpenMP thread (opens its own parallel region) */
+> void hpc_papi_start(void);     /* begin the region on every thread */
+> void hpc_papi_stop(void);      /* end it */
+> int  hpc_papi_finalize(void);  /* write the report */
+> ```
+>
+> Cut: `hpc_papi_region` (no named regions -- start/stop delimit THE region),
+> `hpc_papi_cause` / `hpc_papi_passes` (report fields, not calls), `hpc_papi_sweep` and the three
+> `hpc_papi_fill_*` (the LIBRARY owns the loop, not a callback the agent wires up).
+>
+> `hpc_papi_init` does the thread registration for all threads itself, via OpenMP -- the caller
+> never opens a parallel region for it. Section 4's `#pragma omp critical` requirement moves into
+> `init`, which is where it belongs: the whole per-thread setup happens once, before any region.
+>
+> **OPEN (user, 2026-08-02): init/finalize may need to name the counter.**
+>
+> ```c
+> int  hpc_papi_init(const char *metric);      /* NULL -> the library picks the whole intersection */
+> int  hpc_papi_finalize(const char *metric);
+> ```
+>
+> This is a fork, not a detail, and it decides who owns the loop over metrics:
+> - **Name it** -- one `init` .. `finalize` cycle per metric, and the loop over the intersection is
+>   OUTSIDE the header (a driver, or the harness, re-running the whole program once per metric).
+>   Simplest header, one event set live at a time, and the metric is visible at the call site. Costs
+>   a process restart per metric, and the passes no longer share a run, so `cycles` /
+>   `instructions` are re-measured every time rather than being one shared denominator.
+> - **Do not name it** (NULL) -- the header enumerates the intersection and loops internally, which
+>   is what section 2 describes and what keeps `cycles` + `instructions` in every pass.
+>
+> Both can coexist: `metric == NULL` means "the whole intersection, library-driven", a non-NULL
+> name means "just this one". Section 2's pass packing then applies only to the NULL form. UNDECIDED
+> -- pick before implementing, because section 2's median-across-reps and the shared-denominator
+> rule only hold for the NULL form.
+>
+> The library finds the available metrics (section 1's intersection) and then RUNS THE KERNEL IN A
+> LOOP, once per metric group it could not fit in one pass (section 2). That loop is internal. Open
+> questions 5, 6 and 10 below are re-scoped by this: there is no region cap, and the fill/sweep
+> questions apply to the library's own loop rather than to an agent-supplied callback.
+
 ```c
 /* hpcagent_bench/envs/hpcagent_papi.h  -- GENERATED. Do not edit.
  * Source of truth: hpcagent_bench/harness/papi_header.py (tables from harness/papi.py).
@@ -499,7 +544,38 @@ predicate, never a swallowed exception, matching `test_papi_counters.py`.
 
 ---
 
-## 10. What the rewritten `profiling` SKILL.md must say
+## 10. The skills: TWO files, not one
+
+DECIDED 2026-08-02. The two ways to reach these counters have different call sites, different
+failure modes and different readers, and one page teaching both would be a page an agent has to
+disambiguate before it can act.
+
+**A. `hpcagent_bench/skills/papi-standalone/SKILL.md` -- instrument your own source, drive it
+yourself.** The generated `papi-init` / `papi-start` / `papi-stop` / `papi-finalize` fragments
+(section 8), the `-DHPC_PAPI` switch, the agent's own build line and its own driver. This is the
+path where the AGENT owns the loop and the inputs. Teaches: where to put start/stop (a region
+>= ~10 ms, never a loop body), how to build with the fragments on and off, that the off build is
+byte-identical, the Fortran restriction (standalone-only -- section 8), and reading
+`hpc_papi.json` through `--read`.
+
+**B. `hpcagent_bench/skills/papi-counters/SKILL.md` -- call it through the Python profiling API.**
+The harness drives it: the header enumerates the intersection and RUNS THE KERNEL IN A LOOP over
+all metrics (the `metric == NULL` form of the section-0 fork -- this path is the reason that form
+has to exist). The agent supplies no driver, no fill, no loop. Teaches: the one call and its
+arguments, that the loop costs one kernel run per pass and why that is not multiplexing, and how
+the returned report maps onto the same `papi.RATIOS` the `/profile` endpoint prints.
+
+The boundary, stated on both pages so neither becomes the default by accident: **A when you need to
+bracket a specific region of source you control; B when you want the whole metric intersection over
+the kernel as the harness runs it.** Same header, same report schema, same formula table -- only the
+driver differs.
+
+The existing `profiling` skill keeps the host instruments (`perf`, the call graph) and routes the
+counter question to A or B, exactly as it already routes the device question to `nsys` / `rocprof`.
+`tests/test_skill_content.py` needs the same class of pins for both new files that it already has
+for `profiling`: every metric, group, ratio, cause and formula named, checked against `papi.py`.
+
+Everything below applies to BOTH pages.
 
 Invocation is ~15 lines at the top. INTERPRETATION is the rest. The formula table is NOT restated in
 the skill -- the reader tool prints `formula` + `reading` with every value, and the skill says so.
@@ -514,6 +590,36 @@ read PER REGION:
    nest.
 3. `ipc` -> 4. memory / 5. branches / 6. dependence chain / 7. right work / 8. did the transform do
    what you think -- unchanged, per region.
+
+**ALWAYS RUN THE KERNEL. Stated first, because it is the failure that produces numbers.**
+A counter is a count of what executed. A region that was compiled but not entered, a pass whose
+`PAPI_start` failed, an input size that made the branch skip the nest -- each yields a report that is
+SHAPED like a measurement. The skill must say: check `reps_counted` and `threads_counted` against
+what you expect before reading a single ratio; a metric with `reps_counted: 0` is `count: null`, not
+a fast kernel; and never report a counter number from a run whose output you did not also check
+against the reference. The counted build is still a build that has to be correct.
+
+**HOW TO COMPARE TWO METRICS.** This is the arithmetic agents get wrong, and it has two distinct
+cases that must be named apart:
+
+- **Two metrics from the SAME pass** (both in `GROUPS[g]`, both counted in one armed set): directly
+  comparable, and their ratio is one of `papi.RATIOS`. Use the ratio the tool prints -- it carries
+  the `formula` and the `reading`. Do not hand-divide.
+- **Two metrics from DIFFERENT passes** -- the normal case, because the intersection does not fit in
+  the counter registers. These come from two different EXECUTIONS of the kernel. Their raw counts
+  are not comparable, and their raw ratio is meaningless. Compare them only through a denominator
+  that BOTH passes measured: `cycles` and `instructions` are forced into every pass for exactly this
+  reason. So `l3_cache_misses` from pass 2 and `branch_mispredictions` from pass 4 are compared as
+  `l3_misses_per_1k_instructions` vs `branch_mispredictions_per_1k_instructions`, never as
+  `l3_cache_misses / branch_mispredictions`.
+
+Two guards on top, both of which void a comparison outright:
+  - **Different `expression` strings void it.** The same metric name can resolve to a different
+    fallback rung on a different CPU -- `cache_hits` may be `PAPI_L1_DCH` on one box and
+    `PAPI_L1_DCA - PAPI_L1_DCM` on another. Those are different quantities. Read `expression`, not
+    just the value.
+  - **Different `randomized` flags void it.** A bracket-mode count (fixed harness inputs) and a
+    sweep-mode count (rerandomized per rep) describe different workloads.
 
 **New interpretation the region view enables and the whole-run view cannot:**
 
@@ -541,6 +647,110 @@ read PER REGION:
 
 ---
 
+## SETTLED since the first draft (2026-08-02)
+
+- **API is four calls**: `papi_init` / `papi_start` / `papi_stop` / `papi_finalize`. `hpc_papi_region`,
+  `hpc_papi_cause`, `hpc_papi_passes`, `hpc_papi_sweep` and the three `hpc_papi_fill_*` are cut.
+  `init` registers every OpenMP thread itself. -- kills old Q10 (no named regions, so no region cap).
+- **The library runs the kernel in a loop over the whole metric intersection.** The agent supplies
+  no driver, no fill callback, no loop. -- rewrites old Q6, which assumed an agent-supplied `fill`.
+- **Two skill files**, not one: `papi-standalone` (agent drives) and `papi-counters` (Python
+  profiling API drives). -- rewrites old Q9, which asked where the reader lives.
+- **The skills must teach: always run the kernel, and how to compare two metrics** -- with the
+  same-pass / different-pass split, since different-pass metrics come from different executions.
+
+## ANSWERED by the user, 2026-08-02
+
+1. **`.so` delivery goes to the agent-bench profile API.** MEASURED 2026-08-02 on this box
+   (Ryzen 7 8845HS, PAPI 7.2.0.0, `perf_event_paranoid=0`), against a `.so` verified clean
+   (`nm -D | grep -i papi` empty).
+
+   **An uninstrumented `.so` CAN be counted from the outside. An instrumented `.so` is NOT
+   required.** But by `PAPI_attach` (binds counters to TIDs), not by the pool-arming hypothesis
+   (binds them to OpenMP thread numbers). Four-way agreement on the matched case, `perf stat` as
+   truth: instructions 1.489e9 truth vs 1.476e9 attach (0.991) vs 1.486e9 register (0.998) vs
+   1.472e9 instrumented (0.988). Counting perturbs nothing: 0.0562 s uncounted vs 0.0560 s attached.
+   `papi.py`'s existing `open_counter` + `thread_ids()` inversion is already the right design --
+   do NOT switch it to a register/OMPT scheme.
+
+   **The five conditions that produce a WRONG count, four of them silently:**
+   - **Raw `pthread_create` workers: 0.2% of truth** (3.0M reported for 1.53e9 executed), every
+     PAPI return `PAPI_OK`. Worst of all, `papi.py`'s `appeared` guard does NOT fire -- the threads
+     are created and joined inside the call, so `thread_ids()` before and after are identical.
+   - **Nested parallelism: exactly 24.8%** (2 armed outer threads x 1/4 of each inner team). The
+     magnitude is entirely plausible. `appeared` fired only by luck.
+   - **Cross-runtime `.so`** (judge gcc/libgomp, agent clang/libomp): register counts 13.3%,
+     plausible, no error. `attach` survives. Also, two OpenMP runtimes in one process fight over
+     affinity -- the judge's `OMP_PROC_BIND=close` confined libomp's workers to one core and made
+     the parallel kernel SLOWER than serial.
+   - **Idle barrier spin inflates cycles 4.01x** under `OMP_WAIT_POLICY=active` on an imbalanced
+     kernel (8.55e9 outside-in vs 2.13e9 inside-out). Outside-in is not wrong -- it matches
+     `perf stat` -- it is counting spin as kernel work. Exclusive to the outside-in bracket. This is
+     the DEFAULT for LLVM `libomp` (`KMP_BLOCKTIME=200ms`), so it will fire on real submissions.
+   - **Register mode only**: `PAPI_stop` from a non-owning thread returns `PAPI_OK` with `k * 2^47`
+     garbage, and IPC comes out ~1.000 for those slots, so an IPC sanity check does not catch it.
+
+   **Runtime checks the judge must add** (without the first, a raw-pthread submission silently
+   reports 0.2% of its counts):
+   - **Sample `/proc/self/task` DURING the call** (0.2 ms interval watcher thread). The only check
+     that caught every failure: `unarmed_tids_seen` was 0 for every correct case and 6-17 for every
+     wrong one. `counted_run`'s before/after `appeared` check is necessary but NOT sufficient.
+   - **Implied clock bound**: `sum(cycles) / threads_counted / elapsed_s <= ~2x CPU max MHz`.
+     Catches the `2^47` garbage (1.23e15 Hz vs 5.1 GHz nominal).
+   - Compare `threads_counted` against the PEAK task count, not the pre-call count.
+   - **Add `OMP_WAIT_POLICY=passive` (and `KMP_BLOCKTIME=0`) to `PINNED_ENV`** for counted runs, or
+     label every cycle count as including barrier spin. `PINNED_ENV` currently sets only
+     `OMP_PLACES` and `OMP_PROC_BIND`.
+   - Cheap corroboration: the same call under `perf stat -e instructions`, required to agree within
+     a few percent. It caught every case, because it counts the whole process and needs no thread
+     attribution.
+2. **A failed collection returns all zeros plus an error message**, not a partial report.
+   CAUTION, and both skill drafts already carry it: a zero is otherwise a legitimate measurement --
+   `fma_instructions` really does read 0 for gemm on Zen4 -- and `papi.missing()` deliberately
+   distinguishes `count: null` (absent) from `0` (counted zero). So the rule has to be: zeros ONLY
+   ever accompany a non-empty error string, and a reader checks the error field FIRST. All-zeros
+   with no error must remain impossible.
+3. **Helpers live at `hpcagent_bench/helpers/papi/`.** Header `helpers/papi/hpc_papi.h`, reader
+   `python -m hpcagent_bench.helpers.papi --read`. Include path is `-I<repo>/hpcagent_bench/helpers`.
+4. **Modern PAPI API only.** `PAPI_num_cmp_hwctrs`, `PAPI_add_named_event`,
+   `PAPI_query_named_event`, `PAPI_event_name_to_code`. No `PAPI_num_counters` and no other legacy
+   alias.
+5. **One run per counter by default.** `R = 1`. That removes the median-across-reps machinery from
+   section 2 -- there is nothing to reduce. Repetition becomes an opt-in, not the default.
+6. **Names resolve to codes once, at `init`.** `PAPI_event_name_to_code` /
+   `PAPI_query_named_event` run during `hpc_papi_init` only; `start` and `stop` touch no strings.
+7. (was: what the loop feeds the kernel -- restated below, it was unclear.)
+8. **Enable `-cpp` for Fortran.** Do not restrict it. `split_build` must accept `-cpp`, and the
+   Fortran baseline should carry it, which REMOVES the restricted-mode Fortran limitation entirely
+   -- section 8's "standalone-only" conclusion no longer holds and that section needs rewriting.
+9. (was: aarch64 fence -- restated below.)
+10. **The `papi-counters` entry point lives at the judge.** It is the judge that runs the loop over
+    metrics and returns the report.
+
+## Restated, because the first wording did not land
+
+**Q7 -- what does the library feed the kernel across its runs?** The library runs the kernel once
+per metric (answer 5). The question is whether the INPUT DATA changes between those runs.
+- Hold it FIXED: every metric saw the same work, so `l3_cache_misses` from run 2 and
+  `branch_mispredictions` from run 4 are about the same execution and comparing them through
+  `instructions` is meaningful.
+- Re-randomize between runs: each metric saw a different problem, and no cross-metric comparison is
+  valid -- but you learn how much the counters move with the data, which is the whole point for a
+  data-dependent kernel.
+These are opposite goals and the library cannot have both in one pass. PROPOSED: inputs FIXED across
+the metric loop (so the report is internally comparable), with input re-randomization as a separate
+OUTER loop that repeats the whole metric sweep. Confirm.
+
+**Q9 -- why a fence at all, and why call out aarch64?** The fence is not an aarch64 feature; it is
+needed on every target. Its job is to stop the helper's OWN memory traffic and any buffered stores
+from drifting across the start/stop boundary and landing inside the counted region -- without it the
+counters absorb the instrumentation. The reason aarch64 gets named is that the DaCe reference this
+design borrows from emits a fence for x86-64 and for Windows and NOTHING otherwise, so on aarch64 --
+which is in our target set (CSCS is Neoverse, Apple arm64) -- it silently has no fence at all. And
+aarch64's weaker memory ordering permits MORE reordering across that boundary than x86-64's, so
+"no fence" is exactly backwards there. The only open part is which instruction to emit:
+`__atomic_thread_fence(__ATOMIC_SEQ_CST)` or an explicit `dmb ish`.
+
 ## Open questions -- UNANSWERED, decide before implementing
 
 1. **`any`-delivery enforcement.** A prebuilt `.so` is never recompiled, so section 6's three layers
@@ -555,16 +765,20 @@ read PER REGION:
    alias). Design used the former, for consistency with `papi.py`.
 5. **`R = 7` repetitions, median.** Confirm the default and the reduction. `min` (best-of-reps) is
    the alternative; the design argues against it because a COUNT has no "best".
-6. **Sweep-mode input distribution.** `hpc_papi_fill_f64` is uniform `[0,1)`. The harness generates
-   inputs through `hpcagent_bench.initialize` / `_data_seeded`, which is NOT uniform for every kernel
-   (index arrays, SPD matrices, sparsity patterns). For a data-dependent kernel the two produce
-   different counter profiles. Should the fill mirror the harness's distributions (much bigger
-   header), or should the agent be told plainly that sweep-mode counts describe uniform inputs?
-7. **Fortran restricted mode.** Confirm that leaving restricted-mode Fortran uninstrumented is
-   acceptable, given `-cpp` is not a legal `build` token and only one source file is written.
-8. **aarch64 fence.** `__atomic_thread_fence(__ATOMIC_SEQ_CST)` vs an explicit `dmb ish`. Not
+6. **Does `init`/`finalize` take the counter name?** The section-0 fork, and the biggest one left. A
+   non-NULL `metric` means one init..finalize cycle per metric with the loop OUTSIDE the header;
+   NULL means the header enumerates and loops internally. The `papi-counters` path needs the NULL
+   form. Does the `papi-standalone` path also need the named form, or is NULL the only form?
+7. **What does the library's loop feed the kernel?** No agent `fill` callback survives, so this is
+   now about the library's own repetitions. In the `papi-counters` path the harness owns the inputs
+   (`hpcagent_bench.initialize` / `_data_seeded`, NOT uniform -- index arrays, SPD matrices,
+   sparsity patterns). In `papi-standalone` the agent's buffers are whatever the agent built. Does
+   the library rerandomize between reps at all, and if so from which distribution?
+8. **Fortran restricted mode.** Confirm that leaving restricted-mode Fortran uninstrumented is
+   acceptable, given `-cpp` is not a legal `build` token and only one source file is written. This
+   makes `papi-standalone` the only Fortran path.
+9. **aarch64 fence.** `__atomic_thread_fence(__ATOMIC_SEQ_CST)` vs an explicit `dmb ish`. Not
    measured on Neoverse.
-9. **Reader surface.** `python -m hpcagent_bench.harness.papi_header --read` (chosen) vs a
-   `hpcagent-bench counters` CLI subcommand (more discoverable, more surface).
-10. **Region cap.** Design assumed a fixed `HPC_PAPI_MAXREG` (say 32) so region storage is static and
-    `begin`/`end` allocate nothing. Confirm 32, or name a number.
+10. **Where the `papi-counters` Python entry point lives.** On `JudgeClient` next to `.profile()`,
+    as a new argument to the existing `/profile` endpoint, or as its own call? The two skills'
+    boundary is only as clean as this answer.

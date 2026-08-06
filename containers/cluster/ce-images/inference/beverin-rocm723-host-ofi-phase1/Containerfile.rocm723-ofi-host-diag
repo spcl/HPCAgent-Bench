@@ -1,0 +1,97 @@
+# Phase 1: validate the Beverin host Slingshot/CXI stack with ROCm 7.2.3.
+# This deliberately excludes vLLM. First prove loader compatibility and
+# one-rank RCCL initialization; add vLLM only after those gates pass.
+
+ARG BASE_IMAGE=rocm/pytorch:rocm7.2.3_ubuntu24.04_py3.12_pytorch_release_2.9.1
+ARG AWS_OFI_NCCL_REF=v1.20.0
+
+FROM ${BASE_IMAGE} AS ofi-builder
+ARG BASE_IMAGE
+ARG AWS_OFI_NCCL_REF
+
+USER root
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      autoconf automake binutils build-essential ca-certificates git \
+      libhwloc-dev libnuma-dev libtool make patchelf pkg-config \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY beverin-host-sdk.tar.gz /tmp/beverin-host-sdk.tar.gz
+RUN tar -C / -xzf /tmp/beverin-host-sdk.tar.gz \
+ && rm /tmp/beverin-host-sdk.tar.gz \
+ && test -f /opt/beverin-sdk/include/rdma/fabric.h \
+ && test -e /opt/beverin-sdk/lib64/libfabric.so.1 \
+ && test -x /opt/beverin-sdk/bin/fi_info
+
+WORKDIR /tmp/build
+RUN git clone --branch "${AWS_OFI_NCCL_REF}" --depth 1 \
+      https://github.com/aws/aws-ofi-nccl.git aws-ofi-nccl \
+ && cd aws-ofi-nccl \
+ && git rev-parse HEAD | tee /tmp/aws-ofi-nccl.commit \
+ && ./autogen.sh \
+ && env \
+      PKG_CONFIG_PATH=/opt/beverin-sdk/lib64/pkgconfig \
+      LD_LIBRARY_PATH=/opt/beverin-sdk/lib64:/opt/rocm/lib \
+      CPPFLAGS='-I/opt/beverin-sdk/include' \
+      LDFLAGS='-L/opt/beverin-sdk/lib64 -Wl,-rpath-link,/opt/beverin-sdk/lib64' \
+      CFLAGS='-O0 -g3 -fno-omit-frame-pointer' \
+      CXXFLAGS='-O0 -g3 -fno-omit-frame-pointer' \
+      ./configure \
+        --prefix=/opt/aws-ofi-nccl \
+        --with-libfabric=/opt/beverin-sdk \
+        --with-rocm=/opt/rocm \
+        --enable-trace \
+        --disable-tests \
+ && make -j"$(nproc)" V=1 \
+ && make install
+
+RUN set -eux; \
+    test -e /opt/aws-ofi-nccl/lib/librccl-net.so; \
+    ln -sfn librccl-net.so /opt/aws-ofi-nccl/lib/libnccl-net.so; \
+    find /opt/aws-ofi-nccl/lib -maxdepth 1 -type f -name '*.so*' \
+      -exec patchelf --remove-rpath {} \;; \
+    ! readelf -d /opt/aws-ofi-nccl/lib/librccl-net.so | \
+      grep -E 'RPATH|RUNPATH.*beverin-sdk'; \
+    ! readelf --version-info /opt/aws-ofi-nccl/lib/librccl-net.so | \
+      grep -E 'FABRIC_1\.(9|[1-9][0-9])|FABRIC_[2-9]'; \
+    env LD_LIBRARY_PATH=/opt/beverin-sdk/lib64:/opt/rocm/lib \
+      ldd -r /opt/aws-ofi-nccl/lib/librccl-net.so | tee /tmp/plugin-builder-ldd.txt; \
+    ! grep -E 'not found|undefined symbol' /tmp/plugin-builder-ldd.txt
+
+RUN { \
+      echo "base_image=${BASE_IMAGE:-unknown}"; \
+      echo "aws_ofi_nccl_ref=${AWS_OFI_NCCL_REF}"; \
+      printf 'aws_ofi_nccl_commit='; cat /tmp/aws-ofi-nccl.commit; \
+      echo 'compile_libfabric=2.3.1'; \
+      echo 'compile_fabric_symbol_ceiling=FABRIC_1.8'; \
+      echo 'runtime_libfabric=provided_by_CSCS_host_hook'; \
+    } > /opt/aws-ofi-nccl/BUILD-MANIFEST.txt
+
+FROM ${BASE_IMAGE} AS final
+USER root
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      bash binutils ca-certificates gdb iproute2 iputils-ping jq less \
+      libhwloc15 libnuma1 numactl pciutils procps strace \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ofi-builder /opt/aws-ofi-nccl /opt/aws-ofi-nccl
+# Diagnostic executable only; its libfabric/libcxi dependencies are not copied.
+COPY --from=ofi-builder /opt/beverin-sdk/bin/fi_info /usr/local/bin/fi_info-host
+COPY host-loader-gate.sh /usr/local/bin/host-loader-gate
+COPY torch-dist-allreduce-mi300.py /usr/local/bin/torch-dist-allreduce-mi300.py
+RUN chmod 0755 \
+      /usr/local/bin/fi_info-host \
+      /usr/local/bin/host-loader-gate \
+      /usr/local/bin/torch-dist-allreduce-mi300.py \
+ && test -e /opt/aws-ofi-nccl/lib/librccl-net.so \
+ && ! find /opt/aws-ofi-nccl -name 'libfabric.so*' -o -name 'libcxi.so*' | grep .
+
+ENV HSA_ENABLE_IPC_MODE_LEGACY=1 \
+    SAFETENSORS_FAST_GPU=1 \
+    HIP_FORCE_DEV_KERNARG=1 \
+    TOKENIZERS_PARALLELISM=false \
+    LD_LIBRARY_PATH=/opt/aws-ofi-nccl/lib:/opt/rocm/lib
+
+WORKDIR /workspace
+CMD ["/bin/bash"]

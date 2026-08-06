@@ -74,6 +74,7 @@
 .venv
 .webassets-cache
 /site
+BACKLOG*.md
 ENV/
 MANIFEST
 __pycache__/

@@ -54,6 +54,10 @@ installed by default.
 
 HPTT is built **scalar** (the portable, non-AVX target) so the library runs on any CPU
 the agent or judge lands on. Installed to `/usr/local` -> `-lhptt`, `#include <hptt.h>`.
+It is the one library fetched from source at build time, pinned to
+`942538649b51ff14403a0c73a35d9825eab2d7de` and fetched with backoff: an unauthenticated clone from a
+CI runner shares an egress pool GitHub throttles with **403**, which reads as a missing repository
+while the repo is public. Override with `HPTT_REF` / `HPTT_REPO` / `HPTT_CLONE_TRIES`.
 
 ## SIMD / vectorization helpers
 

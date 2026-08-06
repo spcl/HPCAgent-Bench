@@ -5,7 +5,7 @@ must never grow. See ``hpcagent_bench/flags.py:WARNINGS_BASIC`` and the ``warnin
 wiring in ``hpcagent_bench/envs/compilers.yaml`` -- deliberately no ``-Werror``, so a
 regression here is a number moving, not a build breaking.
 
-Builds a small, fast foundation sample through the SAME path the real native corpus
+Builds a small, fast loop_level_reasoning sample through the SAME path the real native corpus
 build uses (``hpcagent_bench.benchmarks.cpp_runtime._ensure_built`` calls
 :func:`hpcagent_bench.languages.build_kernel_lib_commands`), but into an isolated
 ``tmp_path`` build dir instead of the tracked ``cpp_backend/build/`` directories.
@@ -24,12 +24,12 @@ from hpcagent_bench.flags import Mode
 from hpcagent_bench.languages import build_kernel_lib_commands
 from hpcagent_bench.spec import BenchSpec
 
-#: REGISTRY keys of the 10 small foundation kernels the ratchet count below was measured
+#: REGISTRY keys of the 10 small loop_level_reasoning kernels the ratchet count below was measured
 #: against. The sample is interchangeable: the ratchet asserts ZERO warnings, so swapping one
 #: small kernel for another cannot move the expected count, only the build tally guarded by
 #: :data:`_MIN_BUILDS`. (``argmax_value`` replaced ``iv_additive`` when the induction-variable
 #: kernels were retired.) Keys, not paths: ``BenchSpec`` owns both the kernel directory and the artifact
-#: stem, so the sample cannot drift onto the pre-flatten ``foundation/cpp_backend/``
+#: stem, so the sample cannot drift onto the pre-flatten ``loop_level_reasoning/cpp_backend/``
 #: leftovers that no emit refreshes -- which is how the first count came out too high.
 _KERNELS: Tuple[str, ...] = (
     "disjoint_halves_gather",
@@ -75,22 +75,48 @@ _WARNING_RE = re.compile(r"warning:", re.IGNORECASE)
 _REQUIRED_COMPILERS: Tuple[str, ...] = ("gcc", "g++", "clang", "clang++", "gfortran")
 
 
-def _run_build(cmds: List[List[str]], cwd: pathlib.Path) -> Tuple[bool, int]:
-    """Run a compile/link argv sequence, returning ``(ok, warning_count)`` summed over every
-    step's stderr. ``ok`` is False on the first nonzero exit -- the new -Wall -Wextra flags
-    being REJECTED is a build break, not a warning to count, and must fail loudly."""
+def toolchain_versions() -> str:
+    """First ``--version`` line of each required compiler, for the failure message.
+
+    The count this ratchet pins is a property of a specific toolchain, not of the sources: the
+    same tree measures 0 here and 20 on a CI runner. Naming the compilers in the failure is what
+    makes the two numbers comparable instead of contradictory.
+    """
+    out: List[str] = []
+    for name in _REQUIRED_COMPILERS:
+        path = shutil.which(name)
+        if path is None:
+            continue
+        proc = subprocess.run([path, "--version"], capture_output=True, text=True)
+        first = proc.stdout.splitlines()[0] if proc.stdout else "?"
+        out.append(f"{name}={first}")
+    return "; ".join(out)
+
+
+def _run_build(cmds: List[List[str]], cwd: pathlib.Path) -> Tuple[bool, int, List[str]]:
+    """Run a compile/link argv sequence, returning ``(ok, warning_count, warning_lines)`` summed
+    over every step's stderr. ``ok`` is False on the first nonzero exit -- the new -Wall -Wextra
+    flags being REJECTED is a build break, not a warning to count, and must fail loudly.
+
+    The lines come back alongside the count because the count alone is unactionable: this ratchet
+    is toolchain-sensitive (it builds with ``-march=native`` under whichever gcc/clang the host
+    has), so it can be zero on a dev box and nonzero on a CI runner. A failure that reports only
+    a number leaves the CI log with nothing to fix -- the text is the whole diagnostic.
+    """
     warnings = 0
+    lines: List[str] = []
     for argv in cmds:
         proc = subprocess.run(argv, cwd=str(cwd), capture_output=True, text=True)
         if proc.returncode != 0:
-            return False, warnings
+            return False, warnings, lines
         warnings += len(_WARNING_RE.findall(proc.stderr))
-    return True, warnings
+        lines += [ln.strip() for ln in proc.stderr.splitlines() if _WARNING_RE.search(ln)]
+    return True, warnings, lines
 
 
 @pytest.mark.integration
 def test_warnings_ratchet(tmp_path: pathlib.Path) -> None:
-    """-Wall -Wextra warning count on a representative foundation sample must not exceed
+    """-Wall -Wextra warning count on a representative loop_level_reasoning sample must not exceed
     the known-bad count above; lower it here whenever a fix reduces the real count."""
     missing = [c for c in _REQUIRED_COMPILERS if shutil.which(c) is None]
     if missing:
@@ -98,6 +124,7 @@ def test_warnings_ratchet(tmp_path: pathlib.Path) -> None:
 
     total_warnings = 0
     total_builds = 0
+    seen: List[str] = []
     for key in _KERNELS:
         spec = BenchSpec.load(key)
         backend = paths.BENCHMARKS / spec.relative_path / "cpp_backend"
@@ -118,13 +145,16 @@ def test_warnings_ratchet(tmp_path: pathlib.Path) -> None:
                                              build_dir=build_dir,
                                              mode=Mode.SINGLE_CORE,
                                              compiler=compiler)
-            ok, warnings = _run_build(cmds, build_dir)
+            ok, warnings, lines = _run_build(cmds, build_dir)
             assert ok, f"{short} ({framework}): the new -Wall -Wextra flags broke the build"
             total_builds += 1
             total_warnings += warnings
+            seen += [f"{short} ({framework}): {ln}" for ln in lines]
 
     assert total_builds >= _MIN_BUILDS, (f"only {total_builds} (kernel, flavor) pairs built -- "
                                          f"the ratchet sample is broken, not clean")
     assert total_warnings <= _KNOWN_BAD_COUNT, (
         f"-Wall -Wextra warning count grew to {total_warnings} (ratchet: {_KNOWN_BAD_COUNT}); fix the "
-        f"new warning(s), or lower the ratchet constant if the count instead went down")
+        f"new warning(s), or lower the ratchet constant if the count instead went down.\n"
+        f"Toolchain: {toolchain_versions()}\n"
+        f"Warnings:\n  " + "\n  ".join(seen))
