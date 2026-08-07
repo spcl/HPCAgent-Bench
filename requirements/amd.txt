@@ -24,8 +24,14 @@ GPUtil
 numba
 pythran
 # No floor, matching the NVIDIA leg: the RawModule hash kernel that floor existed for is unwritten.
-cupy-rocm
-jax[rocm]
+# Left OUT, not pinned: ``cupy-rocm`` is not a PyPI name (ROCm cupy has no wheel and needs a source
+# build against the image's ROCm), so naming it fails the whole ``-r`` install, and the
+# loop_level_reasoning campaign does not use cupy on the AMD leg.
+# cupy-rocm
+# CPU-only jax on this leg. The ``jax[rocm]`` extra does not exist on PyPI: pip resolves it to
+# plain CPU jax without a word, so the file states what is actually installed. Wiring the ROCm
+# backend (the separate jax-rocm plugin package) is a follow-up.
+jax
 apache-tvm
 xgboost
 torch

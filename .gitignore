@@ -245,3 +245,4 @@ perf_reports/**
 # so nothing has to be tracked to keep a directory alive. Re-including the .gitkeep instead would
 # put 356 empty files in the repo (one per kernel) and leave an untracked `.cache/` in `git status`
 # for every kernel ever run -- the same reason perf_reports/ is one root dir, not one per kernel.
+containers/cluster/example-script/problems-*.jsonl

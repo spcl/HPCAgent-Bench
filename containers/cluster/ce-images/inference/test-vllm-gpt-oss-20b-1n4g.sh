@@ -28,7 +28,8 @@ fi
 
 MASTER_ADDR="${NODES[0]}"
 
-RUN_DIR="${ROOT}/logs/vllm/2n8g.${SLURM_JOB_ID}"
+RUN_LABEL="$(basename "${BASH_SOURCE[0]}" .sh)"
+RUN_DIR="${ROOT}/logs/vllm/${RUN_LABEL}.${SLURM_JOB_ID}"
 SERVER_LOG="${RUN_DIR}/node-${NODE_RANK}.$(hostname).log"
 
 MODEL_PATH_FILE="${RUN_DIR}/model.path"
@@ -284,11 +285,15 @@ minimum_gib = float(os.environ.get("MIN_MODEL_GIB", "1"))
 assert total_bytes >= minimum_gib * 1024**3
 PY_VALIDATE
 
+TP_EFFECTIVE="${TP_SIZE:-4}"
+PP_EFFECTIVE="${PP_SIZE:-2}"
+WORLD_SIZE=$(( TP_EFFECTIVE * PP_EFFECTIVE ))
+
 echo "===== launch configuration ====="
 echo "model path:       $MODEL_PATH"
-echo "tensor parallel:  4"
-echo "pipeline parallel: 2"
-echo "world size:       8"
+echo "tensor parallel:  ${TP_EFFECTIVE}"
+echo "pipeline parallel: ${PP_EFFECTIVE}"
+echo "world size:       ${WORLD_SIZE}"
 
 COMMON_ARGS=(
     "$MODEL_PATH"
