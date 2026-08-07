@@ -21,6 +21,7 @@ A materialised-bytes regression closes the loop against the real corpus: :func:`
 must resolve a hand-initialized kernel by its canonical path-key, not by ``spec.short_name`` --
 the two diverge for a couple dozen real kernels, and the old code silently reported "unknown"
 for every one of them (script is loaded from its file path -- ``scripts/`` is not a package)."""
+import dataclasses
 import importlib.util
 import pathlib
 import types
@@ -116,9 +117,15 @@ def test_fit_exponent_needs_two_usable_points():
 
 class FakeSpec:
 
-    def __init__(self, parameters: Dict[str, Dict[str, object]], config_names: frozenset = frozenset()):
+    def __init__(self,
+                 parameters: Dict[str, Dict[str, object]],
+                 config_names: frozenset = frozenset(),
+                 track: str = "scientific_computing"):
         self.parameters = parameters
         self.config_names = config_names
+        # The projection caps on the TRACK's own XL ceiling, so a spec without a track is not a
+        # spec this code can be handed.
+        self.track = track
 
 
 def test_extrapolate_is_time_bound_when_the_projection_fits_memory():
@@ -243,13 +250,19 @@ def test_measured_points_uses_native_when_every_point_has_it(monkeypatch):
 
 
 def test_materialised_bytes_resolves_hand_initialized_kernel_by_path_key():
-    """Find a real corpus kernel whose init is hand-written (no declared shapes) AND whose
-    short_name diverges from its path-key stem -- exactly the case that used to crash inside
-    Benchmark(spec.short_name) and get silently swallowed into "unknown"."""
+    """A kernel the declared shapes cannot size must be materialised through its PATH-KEY -- exactly
+    the case that used to crash inside Benchmark(spec.short_name) and get swallowed into "unknown".
+
+    Every hand-written initializer in the corpus has since had its shapes measured and declared
+    (``scripts/declare_init_shapes.py``), so ``working_bytes`` answers for all of them and the
+    fallback is no longer reachable from a shipped manifest. It is still the answer for the kernels
+    whose declared shapes do not EVALUATE, and for the next manifest someone writes, so the shapes
+    are cleared here on a real spec whose short_name diverges from its stem."""
     specs = KERNELS.specs()
     candidates = [(key, spec) for key, spec in specs.items()
-                  if not spec.init.shapes and spec.init.func_name and key.rsplit("/", 1)[-1] != spec.short_name]
+                  if spec.init.func_name and key.rsplit("/", 1)[-1] != spec.short_name]
     assert candidates, "expected at least one hand-initialized kernel with short_name != stem in the corpus"
-    key, spec = candidates[0]
+    key, real = candidates[0]
+    spec = dataclasses.replace(real, init=dataclasses.replace(real.init, shapes={}))
     nbytes = ex.materialised_bytes(spec, key, "S")
     assert nbytes is not None and nbytes > 0

@@ -185,12 +185,15 @@ def derived_band(precision: Precision) -> ToleranceBand:
     ``rtol = sqrt(eps)`` is the classic "keep half the mantissa digits" floor for an
     accumulated result (fp64 -> ~1e-8, fp32 -> ~3e-4, fp16 -> ~3e-2), clamped to
     ``[1e-11, 0.25]`` so a very coarse format never asks for a meaningless > O(1)
-    band; ``atol`` is two decimal orders tighter. :data:`TOLERANCE_MATRIX` pins the
+    band; ``atol`` is two decimal orders tighter, but never below one ULP of the
+    format -- an absolute tolerance finer than the format's own resolution is
+    unsatisfiable (see :data:`_BAND_OVERRIDES`), and two decimal orders is a lot to
+    give away when the whole mantissa is three bits. :data:`TOLERANCE_MATRIX` pins the
     corpus-validated band over this default where a format's real kernels need a
-    different floor (see :data:`_BAND_OVERRIDES`).
+    different floor.
     """
     rtol = min(0.25, max(1e-11, machine_eps(precision)**0.5))
-    return ToleranceBand(rtol, rtol * 1e-2)
+    return ToleranceBand(rtol, max(rtol * 1e-2, machine_eps(precision)))
 
 
 #: Corpus-validated bands that OVERRIDE the eps-derived default of
@@ -198,14 +201,40 @@ def derived_band(precision: Precision) -> ToleranceBand:
 #: gemm-validated ``1e-3`` (its derived ~3e-4 is too tight for a deep fp32
 #: reduction); the low-precision formats keep the bands the fp16/bf16/fp8 kernels
 #: were tuned against. A precision NOT listed here takes its derived band.
+#:
+#: Every ``atol`` here is at least one ULP of its own format, and that is not decoration --
+#: it is the floor :func:`atol_below_one_ulp` pins. A reference value of exactly 0.0 has no
+#: relative neighbourhood, so ``rtol`` cannot reach it and ``atol`` is the only term that
+#: can; set below the format's own resolution it demands agreement finer than the format can
+#: represent, which no pair of correct implementations can deliver. The fp8 rows used to do
+#: exactly that (``1e-2`` against an eps of ``0.125``, ``1e-1`` against ``0.25``), and
+#: arc_distance at fp8 failed on ~9% of its elements with numpy and jax both correct and
+#: agreeing to 0 ULP at the median. Raising the two atols to their eps -- rtol untouched --
+#: takes that to 0 failing of 100000. fp16 (atol 1.02x eps) and bf16 (1.28x eps) already sat
+#: on this rule; only fp8 was written as a round decimal.
 _BAND_OVERRIDES: Dict[Precision, ToleranceBand] = {
     Precision.FP64: ToleranceBand(1e-9, 1e-11),
     Precision.FP32: ToleranceBand(1e-3, 1e-5),
     Precision.FP16: ToleranceBand(1e-2, 1e-3),
     Precision.BF16: ToleranceBand(3e-2, 1e-2),
-    Precision.FP8_E4M3: ToleranceBand(1e-1, 1e-2),
-    Precision.FP8_E5M2: ToleranceBand(2e-1, 1e-1),
+    Precision.FP8_E4M3: ToleranceBand(1e-1, 0.125),
+    Precision.FP8_E5M2: ToleranceBand(2e-1, 0.25),
 }
+
+
+def atol_below_one_ulp() -> Dict[Precision, Tuple[float, float]]:
+    """``{precision: (atol, eps)}`` for every format whose band demands agreement finer than
+    the format can represent -- empty when the matrix is sound.
+
+    Exposed as a function rather than written out in the test so the invariant travels with
+    the matrix it constrains: a precision added to :class:`Precision` is covered the moment
+    it exists, without anyone remembering to extend a list.
+    """
+    return {
+        precision: (band.atol, machine_eps(precision))
+        for precision, band in TOLERANCE_MATRIX.items() if band.atol < machine_eps(precision)
+    }
+
 
 #: THE single source of validation tolerances: one :class:`ToleranceBand` per
 #: supported :class:`Precision`. Each band is the eps-derived default, overridden

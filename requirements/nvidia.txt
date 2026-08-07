@@ -23,6 +23,8 @@ GPUtil
 # editable with submodules, mirroring .github/actions/setup. See the Dockerfile.
 numba
 pythran
+# No floor: the RawModule hash kernel and MemoryAsyncPool this once pinned 14.0.1 for are not
+# written yet, and pinning a major nobody depends on fails resolution for the whole NVIDIA image.
 cupy-cuda13x
 jax[cuda12]
 apache-tvm

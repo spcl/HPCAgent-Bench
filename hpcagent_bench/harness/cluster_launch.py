@@ -25,7 +25,11 @@ POLL_INTERVAL = 5.0
 
 @dataclass(frozen=True)
 class RankRole:
-    """The role a single rank plays: endpoint index (-1 for judge), and this endpoint's head rank."""
+    """The role a single rank plays: endpoint index, and this endpoint's head rank.
+
+    For a :data:`JUDGE` rank ``endpoint`` is its JUDGE RANK -- its index into the ``judge_urls``
+    the driver assembles, which is what an agent worker names when it grades there. Judges are
+    ordered by MPI rank in both places, so the two agree by construction."""
     role: str
     endpoint: int
     head_rank: int
@@ -61,7 +65,7 @@ def plan_traditional_roles(world_size: int, optimizer_nodes: int, judge_nodes: i
         if r < optimizer_nodes:
             roles.append(RankRole(OPTIMIZER, -1, -1, is_driver=(r == 0)))
         else:
-            roles.append(RankRole(JUDGE, -1, -1, is_driver=False))
+            roles.append(RankRole(JUDGE, r - optimizer_nodes, -1, is_driver=False))
     return roles
 
 
@@ -85,12 +89,16 @@ def plan_roles(world_size: int, inference_endpoints: int, nodes_per_vllm: int, j
             role = VLLM_HEAD if r == head_rank else VLLM_WORKER
             roles.append(RankRole(role, endpoint, head_rank, is_driver=(r == 0)))
         else:
-            roles.append(RankRole(JUDGE, -1, -1, is_driver=False))
+            roles.append(RankRole(JUDGE, r - vllm_total, -1, is_driver=False))
     return roles
 
 
 def assemble_urls(gathered: Sequence[dict], vllm_port: int, judge_port: int) -> Tuple[List[str], List[str]]:
-    """Build the ordered (vllm_urls, judge_urls) from the allgathered rank identities."""
+    """Build the ordered (vllm_urls, judge_urls) from the allgathered rank identities.
+
+    ``judge_urls`` is in MPI-rank order, which is exactly the ``endpoint`` index
+    :func:`plan_roles` handed each judge -- so ``judge_urls[j]`` is the judge running with
+    ``serve --rank j``, and a worker's round-robin index is the rank that judge expects."""
     heads = sorted((g for g in gathered if g["role"] == VLLM_HEAD), key=lambda g: g["endpoint"])
     judges = sorted((g for g in gathered if g["role"] == JUDGE), key=lambda g: g["rank"])
     vllm_urls = [f"http://{g['hostname']}:{vllm_port}/v1" for g in heads]
@@ -168,9 +176,20 @@ def start_inference(me: RankRole, nodes_per_vllm: int, model: str, vllm_port: in
     return procs
 
 
-def start_judge(judge_port: int, serve_extra: Sequence[str], log: Callable[[str], None]) -> subprocess.Popen:
-    """Run hpcagent-bench serve through THIS interpreter, so the judge subprocess uses the launcher's venv/image."""
-    cmd = [sys.executable, "-m", "hpcagent_bench", "serve", "--host", "0.0.0.0", "--port", str(judge_port)]
+def start_judge(judge_port: int, judge_rank: int, serve_extra: Sequence[str], log: Callable[[str],
+                                                                                            None]) -> subprocess.Popen:
+    """Run hpcagent-bench serve through THIS interpreter, so the judge subprocess uses the launcher's venv/image.
+
+    ``--rank`` is passed EXPLICITLY rather than left for the judge to read out of ``$PMI_RANK`` /
+    ``$SLURM_PROCID``: the judge's identity is its index into ``judge_urls`` (0..J-1), which is NOT
+    the MPI world rank (the vLLM ranks come first), and a server that infers its own identity from
+    whatever the environment happens to hold is the ambient-configuration bug this check exists to
+    catch. The launcher owns the mapping; the judge is told."""
+    cmd = [
+        sys.executable, "-m", "hpcagent_bench", "serve", "--host", "0.0.0.0", "--port",
+        str(judge_port), "--rank",
+        str(judge_rank)
+    ]
     return popen(cmd + list(serve_extra), log)
 
 
@@ -264,7 +283,7 @@ def launch(*,
             head_host = next(g["hostname"] for g in gathered if g["rank"] == me.head_rank)
             procs = start_inference(me, nodes_per_vllm, model, vllm_port, gpus_per_node, head_host, vllm_extra, log)
         elif me.role == JUDGE:
-            procs = [start_judge(judge_port, serve_extra, log)]
+            procs = [start_judge(judge_port, me.endpoint, serve_extra, log)]
     except BaseException as exc:  # noqa: BLE001 -- a spawn failure must NOT skip the collectives below and deadlock
         spawn_error = f"rank {rank} ({me.role}) on {hostname}: {exc}"
         log(f"[launch] {spawn_error}")

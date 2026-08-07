@@ -6,7 +6,7 @@ import numpy as np
 
 from sqlmodel import Session
 
-from hpcagent_bench import config, perf_reports
+from hpcagent_bench import config, osinfo, perf_reports
 from hpcagent_bench.frameworks import (Benchmark, Framework, timeout_decorator as tout, utilities as util)
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework
 from hpcagent_bench.frameworks.framework import split_flavor
@@ -81,11 +81,18 @@ class Test(object):
         report_str = frmwrk.info["full_name"] + " - " + impl_name
         # Structured failure reason for the caller to record (no silent drop).
         self._last_failure: Optional[str] = None
+        # The handle that was actually MEASURED, published for the report hooks. ``optimize``
+        # below rebinds the local ``impl``, which the caller never sees, so without this the
+        # diagnostics would describe the PRE-optimize handle: for DaCe that is the parsed
+        # @dace.program, which has no compiled artifact to report on at all. Set here rather
+        # than returned because every existing caller unpacks a fixed 3-tuple.
+        self._measured_impl: Any = impl
         try:
             # Optimizer seam (no-op by default): optimize ONCE before the runner +
             # timer are built, so the optimized program is what gets run AND
             # measured, and the optimize cost stays outside the timed bracket.
             impl = frmwrk.optimize(impl, self.bench, bdata)
+            self._measured_impl = impl
             plan = frmwrk.build_call(self.bench, impl, bdata)
         except Exception as e:
             print("Failed to load the {} implementation.".format(report_str))
@@ -164,6 +171,16 @@ class Test(object):
             # Fresh dict: bdata may be a cached object owned by get_data; mutating in place would
             # corrupt the cache for every later caller.
             bdata = {k: (detected_dtype(v) if type(v) is float else v) for k, v in bdata.items()}
+            # No --datatype was requested, so set_datatype(None) above bound the framework to fp64
+            # (see precision_from_datatype) while a legacy initialize() is free to default to
+            # something else -- arc_distance's is np.float32. Harmless for a dynamically-typed
+            # framework (numpy/numba dispatch on the array it is actually handed), but a compiled
+            # backend (DaCe) parses its @dace.program's fixed-width buffer types from this global
+            # BEFORE it ever sees bdata; left at fp64 it binds a float64 kernel to float32 buffers,
+            # a real ABI mismatch (undersized reads/writes) rather than a validation failure. Resync
+            # to what the data actually is, ahead of the implementations()/optimize() call below.
+            if datatype is None:
+                self.frmwrk.set_datatype(detected_dtype.__name__)
 
         # Run NumPy for validation
         if validate and self.frmwrk.fname != "numpy" and self.numpy:
@@ -250,7 +267,9 @@ class Test(object):
             _, timelist, native_times = self._execute(self.frmwrk, impl, impl_name, "median", context, repeat,
                                                       ignore_errors)
             # Diagnostics only now, once per impl: the artifact is built and every timing is taken.
-            self._write_perf_reports(self.frmwrk, impl, impl_name)
+            # The MEASURED handle, not the loop's -- see _execute; for a framework whose optimize()
+            # returns a compiled artifact (DaCe) they are different objects.
+            self._write_perf_reports(self.frmwrk, self._measured_impl, impl_name)
             if timelist:
                 natives = native_times if native_times else [None] * len(timelist)
                 for t, nt in zip(timelist, natives):
@@ -281,21 +300,26 @@ class Test(object):
         with Session(engine) as session:
             for d in bvalues:
                 session.add(
-                    Result(timestamp=timestamp,
-                           benchmark=self.bench.info["short_name"],
-                           domain=domain,
-                           preset=preset,
-                           framework=column,
-                           flavor=flavor,
-                           agent=None,
-                           validated=d["validated"],
-                           time=d["time"],
-                           native_time=d.get("native_time"),
-                           datatype=datatype if datatype is not None else 'float64',
-                           variant=variant,
-                           build=build,
-                           prompt_hash=None,
-                           execution=execution))
+                    Result(
+                        timestamp=timestamp,
+                        benchmark=self.bench.info["short_name"],
+                        domain=domain,
+                        preset=preset,
+                        framework=column,
+                        flavor=flavor,
+                        agent=None,
+                        validated=d["validated"],
+                        time=d["time"],
+                        native_time=d.get("native_time"),
+                        # The contract -d selects and speedups group by, not the width the buffers came out at.
+                        # ``or`` not ``is not None``: an empty -d is absent, not a datatype named "".
+                        datatype=datatype or 'float64',
+                        variant=variant,
+                        build=build,
+                        prompt_hash=None,
+                        execution=execution,
+                        cpu=osinfo.cpu_model(),
+                        gpu=osinfo.gpu_model() if self.frmwrk.info["arch"] == "gpu" else None))
             session.commit()
 
         # Return per-impl timing dict so the CLI can persist it as JSONL.

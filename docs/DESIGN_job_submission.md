@@ -5,7 +5,7 @@ things are being distributed, not because three scripts drifted apart.
 
 | shape | what is distributed | ranks talk? | script |
 |---|---|---|---|
-| **corpus sweep** | the KERNEL LIST across ranks | no | `submit_deterministic.sbatch`, `cscs/submit_foundation_alps.sbatch` |
+| **corpus sweep** | the KERNEL LIST across ranks | no | `submit_deterministic.sbatch`, `cscs/submit_loop_level_reasoning_alps.sbatch` |
 | **role deployment** | ROLES (inference / judge / optimizer) across nodes | via the launcher, not MPI | `submit_launch.sbatch` |
 | **problem decomposition** | ONE KERNEL across ranks | yes, MPI | `submit_mpi_scaling.sbatch`, `cscs/submit_mpi_scaling_alps.sbatch` |
 
@@ -75,7 +75,7 @@ ABI-compatible with the site's PMI and fabric. It is not automatic:
 - Two ways out, and a site picks one: **hybrid** (the image carries a matching MPI and uses the
   host's PMI), or **bind-mount** (the site's MPI and libfabric are injected into the container).
   On Alps the second is what the Cray OCI hooks do, which is why the MPI track must enable the
-  fabric hook in its EDF `[annotations]` and the foundation track deliberately does not.
+  fabric hook in its EDF `[annotations]` and the loop_level_reasoning track deliberately does not.
 - The failure is quiet: without the hook, ranks fall back to TCP and the result reads as poor
   scaling. A scaling curve is exactly the measurement that failure corrupts, so this must be
   asserted, not assumed.

@@ -10,10 +10,11 @@ import socket
 
 import pytest
 
+from hpcagent_bench.harness import cluster_launch
 from hpcagent_bench.harness.cluster_launch import (JUDGE, OPTIMIZER, RankRole, VLLM_HEAD, VLLM_WORKER, assemble_urls,
                                                    endpoint_hostport, expected_traditional_world, expected_world,
                                                    plan_roles, plan_traditional_roles, rank_status, settle_rounds,
-                                                   vllm_command)
+                                                   start_judge, vllm_command)
 
 
 class FakeProc:
@@ -39,7 +40,7 @@ def test_expected_world_is_inference_plus_judge():
 def test_plan_single_node_endpoints():
     roles = plan_roles(3, inference_endpoints=2, nodes_per_vllm=1, judge_nodes=1)
     assert [r.role for r in roles] == [VLLM_HEAD, VLLM_HEAD, JUDGE]
-    assert [r.endpoint for r in roles] == [0, 1, -1]
+    assert [r.endpoint for r in roles] == [0, 1, 0]  # judges carry their JUDGE rank, not -1
     assert roles[0].is_driver and not roles[1].is_driver and not roles[2].is_driver
     # every single-node endpoint is its own head
     assert [r.head_rank for r in roles[:2]] == [0, 1]
@@ -49,7 +50,7 @@ def test_plan_multinode_endpoints_group_by_k():
     # I=2 endpoints x K=2 nodes + J=1 judge = 5 nodes
     roles = plan_roles(5, inference_endpoints=2, nodes_per_vllm=2, judge_nodes=1)
     assert [r.role for r in roles] == [VLLM_HEAD, VLLM_WORKER, VLLM_HEAD, VLLM_WORKER, JUDGE]
-    assert [r.endpoint for r in roles] == [0, 0, 1, 1, -1]
+    assert [r.endpoint for r in roles] == [0, 0, 1, 1, 0]  # judges carry their JUDGE rank, not -1
     # each worker points at its endpoint's head rank so it can join that ray cluster
     assert [r.head_rank for r in roles] == [0, 0, 2, 2, -1]
     assert roles[0].is_driver
@@ -73,7 +74,7 @@ def test_assemble_urls_orders_by_endpoint_then_rank():
         {
             "rank": 4,
             "role": JUDGE,
-            "endpoint": -1,
+            "endpoint": 0,
             "hostname": "nid04"
         },
         {
@@ -103,13 +104,35 @@ def test_assemble_urls_orders_by_endpoint_then_rank():
         {
             "rank": 5,
             "role": JUDGE,
-            "endpoint": -1,
+            "endpoint": 1,
             "hostname": "nid05"
         },
     ]
     vllm_urls, judge_urls = assemble_urls(gathered, vllm_port=8000, judge_port=8800)
     assert vllm_urls == ["http://nid00:8000/v1", "http://nid02:8000/v1"]  # heads only, by endpoint
     assert judge_urls == ["http://nid04:8800", "http://nid05:8800"]  # judges by rank
+
+
+def test_a_judges_endpoint_is_its_index_into_judge_urls():
+    """A judge's ``endpoint`` is the rank it is served with (``serve --rank``) AND its position in
+    the driver's ``judge_urls`` -- both are the judges in MPI-rank order. If they could differ,
+    every worker bound to a judge would address it by the wrong rank and be refused."""
+    for judge_nodes in (1, 3):
+        roles = plan_roles(2 + judge_nodes, inference_endpoints=2, nodes_per_vllm=1, judge_nodes=judge_nodes)
+        assert [r.endpoint for r in roles if r.role == JUDGE] == list(range(judge_nodes))
+    roles = plan_traditional_roles(5, optimizer_nodes=2, judge_nodes=3)
+    assert [r.endpoint for r in roles if r.role == JUDGE] == [0, 1, 2]
+
+
+def test_start_judge_tells_the_judge_its_rank(monkeypatch):
+    """The launcher owns the mapping and passes --rank EXPLICITLY; a judge never infers its own
+    identity from the ambient MPI/SLURM environment (which holds the WORLD rank, not this)."""
+    seen = []
+    monkeypatch.setattr(cluster_launch, "popen", lambda cmd, log: seen.append(list(cmd)))
+    start_judge(8800, 2, ["--oracle", "numpy"], print)
+    cmd = seen[0]
+    assert cmd[cmd.index("--rank") + 1] == "2"
+    assert cmd[-2:] == ["--oracle", "numpy"]  # passthrough still last
 
 
 def test_vllm_command_single_node_has_no_pipeline_or_ray():

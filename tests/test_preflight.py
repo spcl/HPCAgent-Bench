@@ -23,7 +23,7 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 #: The submission scripts that must delegate rather than re-implement.
 SUBMIT_SCRIPTS = (
     REPO / "scripts" / "submit_deterministic.sbatch",
-    REPO / "scripts" / "cscs" / "submit_foundation_alps.sbatch",
+    REPO / "scripts" / "cscs" / "submit_loop_level_reasoning_alps.sbatch",
 )
 
 

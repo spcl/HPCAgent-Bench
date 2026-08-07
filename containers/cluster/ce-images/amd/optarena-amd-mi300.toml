@@ -1,0 +1,25 @@
+# CSCS Container Engine EDF for the generic AMD MI300A image.
+# Keep this image path in sync with build_sqsh.sh OUTPUT_SQSH.
+image = "${SCRATCH}/ce-images/optarena-ce-amd-mi300.sqsh"
+mounts = [
+    "/capstor/:/capstor/",
+    "/iopsstor/:/iopsstor/",
+    "${SCRATCH}:${SCRATCH}",
+]
+workdir = "${SCRATCH}"
+writable = true
+entrypoint = false
+
+[env]
+LC_ALL = "C"
+ROCM_PATH = "/opt/rocm"
+HIP_PATH = "/opt/rocm"
+PYTORCH_ROCM_ARCH = "gfx942"
+HCC_AMDGPU_TARGET = "gfx942"
+PATH = "/opt/rocm/bin:${PATH}"
+LD_LIBRARY_PATH = "/opt/rocm/lib:/opt/rocm/lib64:${LD_LIBRARY_PATH:-}"
+PMIX_MCA_psec = "native"
+
+[annotations]
+# Generic ROCm image: use the CE CXI hook so libfabric-aware MPI/RCCL can see Slingshot.
+com.hooks.cxi.enabled = "true"

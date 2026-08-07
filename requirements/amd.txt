@@ -23,6 +23,7 @@ GPUtil
 # editable with submodules, mirroring .github/actions/setup. See the Dockerfile.
 numba
 pythran
+# No floor, matching the NVIDIA leg: the RawModule hash kernel that floor existed for is unwritten.
 cupy-rocm
 jax[rocm]
 apache-tvm

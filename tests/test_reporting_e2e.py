@@ -143,7 +143,8 @@ def _build_synthetic(db: pathlib.Path) -> None:
                                datatype="float64",
                                variant=None,
                                prompt_hash=None,
-                               execution="native"))
+                               execution="native",
+                               cpu="test-cpu"))
         session.commit()
 
 
@@ -169,23 +170,35 @@ def test_reporting_pipeline_end_to_end(tmp_path, capsys) -> None:
     violin = work / "dist_violin.pdf"
     box = work / "dist_box.pdf"
 
-    plot_heatmap(benchmark="all", preset="S", datatype="float64", db=str(db), output=str(heatmap), usetex=False)
-    plot_distribution_grid(benchmark="all",
+    # Each call returns ONE path per machine in the DB, and the paths are what is asserted on --
+    # the figures are named after the hardware, so a hardcoded `heatmap.pdf` would only pass by
+    # accident. This run records a single machine, so each family is one file.
+    written = plot_heatmap(benchmark="all",
                            preset="S",
                            datatype="float64",
-                           kind="violin",
                            db=str(db),
-                           output=str(violin),
+                           output=str(heatmap),
                            usetex=False)
-    plot_distribution_grid(benchmark="all",
-                           preset="S",
-                           datatype="float64",
-                           kind="box",
-                           db=str(db),
-                           output=str(box),
-                           usetex=False)
+    written += plot_distribution_grid(benchmark="all",
+                                      preset="S",
+                                      datatype="float64",
+                                      kind="violin",
+                                      db=str(db),
+                                      output=str(violin),
+                                      usetex=False)
+    written += plot_distribution_grid(benchmark="all",
+                                      preset="S",
+                                      datatype="float64",
+                                      kind="box",
+                                      db=str(db),
+                                      output=str(box),
+                                      usetex=False)
 
-    for pdf in (heatmap, violin, box):
+    assert len(written) == 3, f"one machine should give one figure per family, got {written}"
+    for stem in (heatmap, violin, box):
+        assert not stem.exists(), f"{stem} is the family name, never a written file"
+    for path in written:
+        pdf = pathlib.Path(path)
         assert pdf.exists(), pdf
         assert pdf.stat().st_size > 1000, f"{pdf} looks empty ({pdf.stat().st_size} bytes)"
         assert pdf.read_bytes()[:4] == b"%PDF"

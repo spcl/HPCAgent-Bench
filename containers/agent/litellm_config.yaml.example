@@ -1,0 +1,14 @@
+model_list:
+  - model_name: optarena-llm
+    litellm_params:
+      # Replace with the actual backend. Examples:
+      #   openai/gpt-4o
+      #   hosted_vllm/my-model
+      #   ollama/deepseek-coder-v2
+      model: openai/gpt-4o
+      # api_base: http://my-llm-server:8000/v1
+      # api_key: os.environ/LITELLM_API_KEY
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false

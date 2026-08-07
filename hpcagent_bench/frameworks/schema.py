@@ -39,6 +39,17 @@ class Result(SQLModel, table=True):
     build: Optional[str] = None
     prompt_hash: Optional[str] = None  # -> the content-addressed prompt store (None if no prompt)
     execution: str = "native"  # native (no container) | container -- where the runtime was measured
+    # WHICH MACHINE measured it. Two nodes are two experiments: a baseline timed on one CPU against
+    # a candidate timed on another is a hardware comparison wearing a software label, and nothing
+    # downstream can tell, because both rows look perfectly normal. REQUIRED, unlike every other
+    # axis here -- a row that cannot name its host cannot be checked for that, so it must not be
+    # expressible. Stamped from the machine (osinfo.cpu_model) rather than an env knob like `build`,
+    # because the one thing that must never be forgotten is the one nobody has to remember.
+    cpu: str
+    # The DEVICE the measurement ran on; NULL for a CPU-only column. Not "the GPU in this box": a
+    # device that took no part in the run must not split the figure for it, or the same CPU
+    # measurement lands in two plots because someone swapped a card that was never used.
+    gpu: Optional[str] = None
 
 
 def add_missing_columns(engine) -> None:

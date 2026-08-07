@@ -40,13 +40,14 @@ import numpy as np
 from scipy.stats import binom, bootstrap, false_discovery_control, kurtosis, mannwhitneyu, norm, shapiro
 from scipy.stats import skew, t, wilcoxon
 
+from hpcagent_bench.stats import DEFAULT_CONFIDENCE, DEFAULT_RESAMPLES
+
 #: Default two-sided error rate for every test and interval here.
 DEFAULT_ALPHA: float = 0.05
-DEFAULT_CONFIDENCE: float = 0.95
-
-#: Bootstrap replicate count. 9999 matches :mod:`hpcagent_bench.stats` so the two modules quote
-#: intervals of the same resolution.
-DEFAULT_RESAMPLES: int = 9999
+#: The confidence level and bootstrap replicate count come from :mod:`hpcagent_bench.stats`, not
+#: restated here. Both modules quote intervals of the same resolution BY CONSTRUCTION -- a second
+#: copy of the number is a second thing to keep in step, and the comment that used to sit here said
+#: exactly that while still holding a copy.
 
 #: Every bootstrap seeds from here, so a published figure is reproducible from the same DB.
 DEFAULT_SEED: int = 0

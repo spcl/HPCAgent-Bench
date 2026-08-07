@@ -31,10 +31,11 @@ gcc:
   compile: ["{cc}", "{baseline}", "-std=c17", "-D_POSIX_C_SOURCE=199309L", "-fPIC", "-c", "{src}", "-o", "{obj}"]
   link:    ["{cc}", "-shared", "{objs}", "-o", "{lib}", "-lm"]
 
-# C++20 everywhere, C++23 nowhere: it is what dace's own codegen defaults to
-# (compiler.cpp_standard), so a dace-compiled baseline and an agent's C++ submission are
-# built to the SAME standard. Every other -std= in the tree (test oracles, the ported
-# applications) is this value, reached through languages.std_flag.
+# C++23 everywhere. Parity with dace's own codegen is kept by dace_framework.pin_cpp_standard,
+# which pushes THIS value into compiler.cpp_standard, so a dace-compiled baseline and an agent's
+# C++ submission are still built to the same standard -- and a user's ~/.dace.conf cannot change
+# that. Every other -std= in the tree (test oracles, the ported applications) is this value,
+# reached through languages.std_flag.
 gpp:
   lang: cpp
   install: {apt: g++, spack: gcc}
@@ -43,7 +44,12 @@ gpp:
   autopar_ref: GCC_AUTOPAR
   report_ref: GCC_OPT_REPORT
   warnings_ref: WARNINGS_BASIC
-  compile: ["{cc}", "{baseline}", "-std=c++20", "-D_POSIX_C_SOURCE=199309L", "-fPIC", "-c", "{src}", "-o", "{obj}"]
+  # Link-side runtime for <execution> policies, appended ONLY when building a source that uses
+  # them (the cpp_isopar emit) AND only when this toolchain's parallel backend is really TBB --
+  # languages.stdpar_link_flags decides that by asking the compiler. The compile/link lines below
+  # are the plain C++ build and are unchanged by it.
+  stdpar_link_ref: STDPAR_LINK_TBB
+  compile: ["{cc}", "{baseline}", "-std=c++23", "-D_POSIX_C_SOURCE=199309L", "-fPIC", "-c", "{src}", "-o", "{obj}"]
   link:    ["{cc}", "-shared", "{objs}", "-o", "{lib}", "-lm"]
 
 # CPU_BASELINE_GFORTRAN, not CPU_BASELINE_GCC: the C/C++ one carries the libmvec decl
@@ -84,7 +90,36 @@ clangpp:
   autopar_ref: POLLY_PAR
   report_ref: CLANG_OPT_REPORT
   warnings_ref: WARNINGS_BASIC
-  compile: ["{cc}", "{baseline}", "-std=c++20", "-D_POSIX_C_SOURCE=199309L", "-fPIC", "-c", "{src}", "-o", "{obj}"]
+  # See the gpp block: clang++ against libstdc++ resolves the same __has_include, and against
+  # libc++ resolves it to false and links nothing extra.
+  stdpar_link_ref: STDPAR_LINK_TBB
+  compile: ["{cc}", "{baseline}", "-std=c++23", "-D_POSIX_C_SOURCE=199309L", "-fPIC", "-c", "{src}", "-o", "{obj}"]
+  link:    ["{cc}", "-shared", "{objs}", "-o", "{lib}", "-lm"]
+
+# The Pluto column's driver: same LLVM toolchain as `clang`, two deliberate differences.
+#
+# (1) `clang`, not `clang++`. What this column compiles is polycc's OUTPUT, which is C and only
+#     C: rank>=2 arrays arrive as VLA parameters (`const double A[restrict NI][NK]`) -- neither
+#     variably-modified types nor the `restrict` KEYWORD exist in C++ -- and polycc prepends its
+#     own `#define min(x,y)`, which detonates inside libstdc++ (`max_size_type.h:800: too few
+#     arguments provided to function-like macro invocation`). Measured both ways: clang -std=c17
+#     compiles it clean, clang++ -std=c++23 does not compile it at all.
+# (2) CPU_BASELINE_CLANG_PLUTO, not CPU_BASELINE_CLANG -- identical except the OpenMP spelling,
+#     which here has to be one clang actually generates code for. See flags.PLUTO_PAR for the
+#     measurement; the short version is that the shared baseline's `-fopenmp=libgomp` makes
+#     `polycc --parallel`'s `#pragma omp parallel for` compile to a serial loop, in silence.
+#
+# No autopar_ref: Pluto's parallelism is already IN the source by the time clang sees it, so
+# there is no autopar delta to append -- flags.pluto_capability gates on the pragma surviving.
+clang-pluto:
+  lang: c
+  install: {apt: clang, spack: llvm}
+  cc: clang
+  baseline_ref: CPU_BASELINE_CLANG_PLUTO
+  autopar_ref: null
+  report_ref: CLANG_OPT_REPORT
+  warnings_ref: WARNINGS_BASIC
+  compile: ["{cc}", "{baseline}", "-std=c17", "-D_POSIX_C_SOURCE=199309L", "-fPIC", "-c", "{src}", "-o", "{obj}"]
   link:    ["{cc}", "-shared", "{objs}", "-o", "{lib}", "-lm"]
 
 # LLVM Fortran. On recent LLVM (Ubuntu 26.04) the driver is `flang`; older
@@ -158,7 +193,7 @@ mpicxx:
   install: {apt: libmpich-dev, spack: mpich}
   cc: mpicxx.mpich
   baseline_ref: CPU_BASELINE_GCC
-  compile: ["{cc}", "{baseline}", "-std=c++20", "-c", "{src}", "-o", "{obj}"]
+  compile: ["{cc}", "{baseline}", "-std=c++23", "-c", "{src}", "-o", "{obj}"]
   link:    ["{cc}", "{objs}", "-o", "{exe}"]
   link_extra: ["-lm"]
 
