@@ -74,12 +74,18 @@
 .venv
 .webassets-cache
 /site
+BACKLOG*.md
 ENV/
 MANIFEST
 __pycache__/
 __pypackages__/
 _dacegraphs/
 build/
+# The bare rule above is Python boilerplate and matches a directory named `build` at ANY depth --
+# including the CE image's build scripts, which are sources, not artifacts. Without this negation
+# `git add` skips all 7 of them in silence. Re-included as a DIRECTORY: git never descends into an
+# excluded directory, so a pattern matching only the files inside it would never be consulted.
+!containers/cluster/ce-images/inference/build/
 celerybeat-schedule
 celerybeat.pid
 coverage.xml
@@ -196,6 +202,13 @@ results/plots/*
 .gt_cache/
 *.mod
 .ruff_cache/
+
+# Enroot squashfs container images: multi-GB build output. The amd/ and nvidia/
+# builders write them to ${SCRATCH}/ce-images/, but the inference/ build root
+# defaults to the script's own directory, so `enroot export` lands them inside
+# the tree. The .sqsh.sha256 provenance records next to them stay tracked --
+# this pattern only matches names ending in .sqsh.
+*.sqsh
 
 # Paper draft (working artifact, not part of the repo)
 paper/

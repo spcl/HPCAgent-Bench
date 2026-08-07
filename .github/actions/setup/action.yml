@@ -10,18 +10,63 @@ runs:
     - name: Native toolchain + OpenBLAS + FFTW
       shell: bash
       run: |
-        # build-essential: make + gcc + g++ (C/C++ backends). gfortran/clang: Fortran backend
-        # + judge. flang: the LLVM Fortran backend (tests/test_compile_flags.py's flang case).
-        # libomp-dev: the SECOND OpenMP runtime. tests/test_fork_openmp_safety.py asserts on it
-        # rather than skipping -- libgomp deadlocks across fork() and libomp recovers, so a
-        # suite that only ever sees libgomp cannot tell the fix from the forgiving runtime.
-        # It is a METAPACKAGE (same shape as flang): it pulls libomp-<major>-dev, which puts the
-        # LINKER name under /usr/lib/llvm-<major>/lib while only the runtime libomp.so.N lands on
-        # the default path -- hence `ld: cannot find -lomp` with the package installed.
-        # pkg-config + libopenblas-dev: the BLAS optimizer links cblas_*. libfftw3-dev:
-        # the vexx port oracle links -lfftw3.
+        # build-essential: make + gcc + g++ (C/C++ backends). gfortran: the GNU Fortran backend.
+        # The LLVM half comes from apt.llvm.org in the next step, NOT from the distro -- see there.
+        # pkg-config + libopenblas-dev: the BLAS optimizer links cblas_*. libfftw3-dev: the vexx
+        # and cegterg port oracles link -lfftw3 and #include <fftw3.h>. Without it cegterg's
+        # toolchain probe fails and 17 port-fidelity cases SKIP; verify_toolchain.py checks the
+        # fftw3 pkg-config module so that provisioning gap is a red setup step, not a quiet skip.
+        # ninja + ccache are BUILD-SPEED dependencies, and both fail SILENTLY when absent rather
+        # than erroring, so they belong here rather than in whichever job noticed first:
+        #   ninja  -- DaCe picks its CMake generator with `shutil.which('ninja')` and only replays
+        #             recorded compile commands when it picked Ninja (codegen/compiler.py). Without
+        #             it, `compiler.command_cache` still reads True, CMake falls back to Make, and
+        #             every SDFG pays a full configure. Nothing reports it; the build is just slow.
+        #   ccache -- DaCe knows nothing about ccache. It helps only through a compiler launcher or
+        #             a PATH shim, so the package has to exist before either can point at it.
         sudo apt-get update
-        sudo apt-get install -y build-essential gfortran clang flang libomp-dev pkg-config libopenblas-dev libfftw3-dev
+        sudo apt-get install -y build-essential gfortran pkg-config libopenblas-dev libfftw3-dev \
+          ninja-build ccache
+
+    - name: LLVM toolchain (clang / clang++ / flang / libomp)
+      shell: bash
+      run: |
+        # ubuntu-latest ships LLVM 18, whose Fortran driver is still spelled `flang-new`. The
+        # harness is developed and measured against LLVM 21 (flags.POLLY_PAR's Polly findings, the
+        # clang OpenMP-spelling measurements behind flags.PLUTO_PAR), so CI runs the same major --
+        # a CI-only LLVM is how a count comes out 0 on a dev box and nonzero on a runner with
+        # nothing in the log to say the toolchains differed.
+        #
+        # libomp-21-dev is the SECOND OpenMP runtime, required rather than optional:
+        # tests/test_fork_openmp_safety.py asserts on it because libgomp deadlocks across fork()
+        # and libomp recovers, so a suite that only ever sees libgomp cannot tell the fix from the
+        # forgiving runtime. It puts the LINKER name under /usr/lib/llvm-21/lib while only the
+        # runtime libomp.so.N lands on the default path -- hence `ld: cannot find -lomp` with the
+        # package installed, which languages.LLVM_LIB_GLOBS is what resolves.
+        #
+        # The symlinks are NOT cosmetic. languages.resolve_compiler falls back to the highest
+        # `<name>-<major>` on PATH, but flags.polly_capability probes bare `shutil.which("clang")`
+        # and compilers.yaml names the drivers unversioned -- so without these, a distro clang left
+        # on the box would keep winning and the LLVM columns would silently stay on 18.
+        # /usr/local/bin precedes /usr/bin on the runner's PATH.
+        set -euo pipefail
+        LLVM_MAJOR=21
+        for attempt in 1 2 3; do
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null && break
+          echo "apt.llvm.org key fetch attempt $attempt failed; retrying in $((attempt * 5))s" >&2
+          sleep $((attempt * 5))
+        done
+        codename=$(lsb_release -cs)
+        echo "deb http://apt.llvm.org/${codename}/ llvm-toolchain-${codename}-${LLVM_MAJOR} main" \
+          | sudo tee /etc/apt/sources.list.d/llvm.list > /dev/null
+        sudo apt-get update
+        sudo apt-get install -y "clang-${LLVM_MAJOR}" "flang-${LLVM_MAJOR}" "libomp-${LLVM_MAJOR}-dev"
+        for driver in clang clang++ flang; do
+          sudo ln -sf "/usr/bin/${driver}-${LLVM_MAJOR}" "/usr/local/bin/${driver}"
+        done
+        clang --version | head -1
+        flang --version | head -1
 
     - name: Base Python deps (translators + the frameworks every phase shares)
       shell: bash
@@ -40,9 +85,7 @@ runs:
           pytest pytest-timeout pytest-xdist pytest-cov sympy jinja2 cffi tree-sitter-language-pack psutil py-cpuinfo
         pip_retry -e .
         # DaCe: editable install of spcl/dace @ extended (the branch HPCAgent-Bench develops against), NOT the
-        # stock PyPI wheel. extended carries compiler.build_mode=native, which compiles each SDFG by
-        # invoking the compiler directly and skips the per-SDFG cmake configure -- cutting the framework
-        # + translator SDFG build time. Shallow clone keeps it fast; editable so the native codegen loads.
+        # stock PyPI wheel. Shallow clone keeps it fast; editable so the codegen loads.
         # --recurse-submodules is REQUIRED: dace vendors its runtime headers as git submodules
         # (external/moodycamel/blockingconcurrentqueue.h is included by dace/runtime/include/dace/
         # stream.h), so a plain shallow clone builds an SDFG straight into
@@ -51,8 +94,14 @@ runs:
           --branch extended https://github.com/spcl/dace.git "$RUNNER_TEMP/dace"
         pip_retry -e "$RUNNER_TEMP/dace"
         pip_retry "jax[cpu]" numba pythran pyarrow
-        # Turn on native SDFG builds for every subsequent step in the job (no cmake per SDFG).
-        echo "DACE_compiler_build_mode=native" >> "$GITHUB_ENV"
+        # DELIBERATELY no `DACE_compiler_build_mode=native` here. It used to be exported for speed
+        # (native skips the per-SDFG cmake configure), and it silently DEFEATED the build cache the
+        # framework pins: a DACE_* environment variable outranks Config.set, so
+        # dace_framework.BUILD_CACHE_PINS asked for `cmake` on every job and got `native` -- which
+        # writes per-object .o.cmd files, produces no compile_commands.json, and therefore makes
+        # `compiler.command_cache` inert while still reporting True. The two optimizations are
+        # mutually exclusive and only one of them is the framework's stated design, so the env var
+        # goes and the pin decides. tests/test_dace_flavors.py fails if that inverts again.
 
     - name: Verify common toolchain (fail fast on a missing dependency)
       shell: bash

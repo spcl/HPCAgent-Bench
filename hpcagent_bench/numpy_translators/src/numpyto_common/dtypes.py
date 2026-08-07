@@ -145,6 +145,20 @@ def compute_dtype(dtype: str) -> str:
         return dtype
 
 
+def accumulator_dtype(dtype: str) -> str:
+    """The float dtype an emitted scalar accumulator (a reduction temp) is computed in.
+
+    numpy reduces a float32 array in float32 and returns float32, so a float32 kernel must
+    accumulate in float32 too -- a double accumulator computes something the reference never
+    computed. float16 is the exception: numpy's half-precision ufunc loops accumulate at SINGLE
+    precision and cast the result back, and a genuine ``_Float16`` accumulator saturates a sum
+    numpy carries fine (a 4096-element half sum came out 4096 instead of 6148). So this narrows
+    with the kernel's precision but never below float32.
+    """
+    dt = compute_dtype(dtype)
+    return "float32" if dt == "float16" else dt
+
+
 def is_storage_only(dtype: str) -> bool:
     """True for a format that is 1-byte STORAGE and cannot be computed in
     directly (the fp8 pair) -- reads promote, writes demote."""

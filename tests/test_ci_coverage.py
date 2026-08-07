@@ -149,3 +149,96 @@ def test_asking_for_skip_reasons_does_not_hide_the_failures() -> None:
     ]
     assert not offenders, (f"tests.yml lines {offenders} ask for skip reasons without keeping failures in the "
                            "report set; use -rfEs so a failing test is still named in the short summary")
+
+
+def test_the_combined_total_is_built_from_every_job_not_one_of_them() -> None:
+    """Seven jobs each upload their coverage data as a file literally named ``.coverage``.
+    ``merge-multiple: true`` flattens them into ONE directory, so seven artifacts race for one
+    path: six are discarded and whichever wins becomes the published "total".
+
+    That is measured, not theorised. Two consecutive GREEN runs reported ``Combined 1 file`` and a
+    total of 59.96% and 13.44% -- the same repo, the swing being purely which job won. The defect
+    only ever announced itself when two extractions interleaved and left a torn SQLite file, which
+    surfaced as ``database disk image is malformed`` against the repo-root path (coverage's
+    ATTACH-based combine misattributes the error to the main db, so the message names the wrong
+    file). A wrong total that stays green is the worse half of this bug.
+
+    Two things have to hold: artifacts land in per-artifact subdirectories, and the combine
+    REFUSES a partial merge rather than reporting a plausible fraction of the project.
+    """
+    text = WORKFLOW.read_text()
+    combine = [i + 1 for i, line in enumerate(text.splitlines()) if "coverage combine" in line]
+    assert combine, "no `coverage combine` step -- the combined total is not being built at all"
+    assert "merge-multiple: true" not in text, (
+        "an artifact download uses merge-multiple: true; every job's data file is named `.coverage`, "
+        "so flattening them makes six of seven silently disappear into one contested path")
+    assert "coverage-data/*/.coverage*" in text, (
+        "the combine glob must reach into the per-artifact subdirectories that dropping "
+        "merge-multiple creates, or it finds nothing at all")
+    assert 'Combined ${#files[@]} file' in text, (
+        "nothing checks that combine consumed every uploaded file; a partial combine prints a "
+        "perfectly plausible percentage and stays green, which is how this went unnoticed")
+
+
+def test_the_corpus_reference_phase_is_not_instrumented() -> None:
+    """Phase 2c runs ``hpcagent_bench/benchmarks/``. Every file it measures is inside the
+    ``[tool.coverage.run] omit`` pattern, so instrumenting it produces no report data at all --
+    it is pure cost.
+
+    And the cost is not small. ``omit`` stops LINE tracing, not the per-call dispatch: sys.settrace
+    fires on every call event even for a file it will never record. This phase is call-dominated
+    (one cloudsc test makes 4.4M calls), so it pays that dispatch millions of times to discard the
+    result. Measured: 8.28 s bare against >1500 s instrumented (killed, not finished -- >181x), and in
+    CI the same 745 tests went
+    183.57 s -> 736 s when coverage landed, which is what pushed the heaviest test past
+    ``--timeout=600`` and made the job red for three consecutive runs.
+
+    ``COVERAGE_CORE=sysmon`` is not an escape: coverage refuses it while ``branch = true`` on
+    Python < 3.14 and again for ``concurrency=``, warns, and falls back to the C tracer -- so it
+    looks like a fix and changes nothing.
+    """
+    text = WORKFLOW.read_text()
+    phase = text.index("Phase 2c -- benchmark reference validation")
+    nxt = text.index("- name: ", phase)
+    step = text[phase:nxt]
+    assert 'PYTEST_ADDOPTS: ""' in step, (
+        "Phase 2c must clear PYTEST_ADDOPTS: it runs only corpus files, every one of which the "
+        "coverage config omits, so instrumenting it costs the job and yields nothing")
+
+
+def test_the_coverage_omit_list_and_the_uninstrumented_phase_agree() -> None:
+    """The phase above is only safe to leave uninstrumented BECAUSE its tree is omitted. If the
+    omit pattern is ever narrowed, that phase silently starts being the one place a real library
+    path went unmeasured -- so pin the two together rather than leaving the link in a comment.
+    """
+    import tomllib
+
+    pyproject = tomllib.loads((REPO / "pyproject.toml").read_text())
+    omit = pyproject["tool"]["coverage"]["run"]["omit"]
+    assert any(
+        pattern.startswith("hpcagent_bench/benchmarks")
+        for pattern in omit), ("coverage no longer omits hpcagent_bench/benchmarks/, but Phase 2c still runs that tree "
+                               "with coverage disabled -- either re-instrument the phase or restore the omit")
+
+
+def test_ci_installs_the_tools_that_fail_silently_when_absent() -> None:
+    """ninja and ccache do not error when missing -- the build just gets slower, which reads as
+    "CI is sluggish" rather than as a defect, so nothing surfaces it.
+
+    ninja is the sharper of the two: DaCe chooses its CMake generator with
+    ``shutil.which('ninja')`` and replays recorded compile commands ONLY when it picked Ninja, so
+    without the package ``compiler.command_cache`` still reports True while every SDFG pays a full
+    CMake configure. A config that reads enabled and does nothing is the same failure shape as a
+    guard that checks one direction of a two-directional error.
+    """
+    setup = (REPO / ".github" / "actions" / "setup" / "action.yml").read_text()
+    # The INSTALL lines, not the whole file: the comment block right above them explains why each
+    # tool is there and names both, so a substring search over the file passes on its own prose
+    # after the package is dropped -- the same silent-absence failure this test exists to catch.
+    joined = re.sub(r"\\\n\s*", " ", setup)  # the package list wraps with a backslash continuation
+    installs = [line for line in joined.splitlines() if "apt-get install" in line]
+    installed = " ".join(installs)
+    assert installs, "no apt-get install line in .github/actions/setup/action.yml"
+    for tool in ("ninja-build", "ccache"):
+        assert tool in installed, (f"{tool} is not installed by .github/actions/setup/action.yml; without it the "
+                                   f"build silently loses its cache instead of failing")

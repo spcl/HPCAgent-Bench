@@ -41,10 +41,10 @@ One sample per mode, kept minimal so the mode itself is what you read:
 
 The four samples below are the second mode with a specific comparison already wired up.
 
-## `hpc_dace_main_vs_pluto.sbatch` — one node, two optimizers, reports on
+## `scientific_computing_dace_main_vs_pluto.sbatch` — one node, two optimizers, reports on
 
 Mode 2 on a **single** node: `#SBATCH --nodes=1 --ntasks-per-node=4`, so four kernel shards each
-measuring on a quarter of the node, over every kernel in the `hpc` track.
+measuring on a quarter of the node, over every kernel in the `scientific_computing` track.
 
 | column | what it is |
 |---|---|
@@ -60,7 +60,7 @@ separate compile-only run into a scratch directory, so the timed `.so` is untouc
 number is identical with the reports on or off — but each costs one extra compile per kernel ×
 column, which is why they are off by default.
 
-    DACE_MAIN=~/src/dace-main sbatch -A <account> samples/hpc_dace_main_vs_pluto.sbatch
+    DACE_MAIN=~/src/dace-main sbatch -A <account> samples/scientific_computing_dace_main_vs_pluto.sbatch
 
 The branch check is the same `ensure_branch` the flavors job uses, now shared from
 `scripts/dace_branch.sh` rather than copied — two copies is how the two would drift into disagreeing
@@ -131,15 +131,15 @@ measure contention while every rank's own log still looks correct. `GPU=1` swaps
 flavors.
 
 `BENCH=all@npbench` is **every** kernel tagged `npbench`, across tracks — 54 of them. Not
-`hpc@npbench`: NPBench is not an HPC-only suite, and lenet, resnet, mlp, conv2d and softmax came
-from it too and live under `ml/` here. Selecting by track would quietly make "the NPBench
+`scientific_computing@npbench`: NPBench is not an HPC-only suite, and lenet, resnet, mlp, conv2d and softmax came
+from it too and live under `machine_learning/` here. Selecting by track would quietly make "the NPBench
 corpus" mean 49 of 54.
 
 ## Native on CSCS Daint/Alps — no container
 
 Two samples run the same mode-2 sweep on Alps with **no container**: no EDF, no `--environment`, no
 `ce.srun_flag`. They keep the site knowledge from
-[`scripts/cscs/submit_foundation_alps.sbatch`](../scripts/cscs/submit_foundation_alps.sbatch) — `-A
+[`scripts/cscs/submit_loop_level_reasoning_alps.sbatch`](../scripts/cscs/submit_loop_level_reasoning_alps.sbatch) — `-A
 <account>` mandatory, aarch64 GH200 nodes, the DaCe build folder off `/tmp` (tmpfs on these nodes),
 results in the repo rather than node-local — and drop its container plumbing entirely.
 
@@ -150,7 +150,7 @@ results in the repo rather than node-local — and drop its container plumbing e
 
 The first isolates the **tree**: one optimizer, two DaCes, so whatever differs between the two
 `autoopt` cells is the DaCe underneath. The second is the full pipeline grid, with the four shared
-cells as the control for the fifth — same reasoning as `npbench_dace_flavors.sbatch`, over the `hpc`
+cells as the control for the fifth — same reasoning as `npbench_dace_flavors.sbatch`, over the `scientific_computing`
 track instead of NPBench.
 
 Native means **nothing comes from an image**, so all three must exist on the compute node, and each
@@ -170,7 +170,7 @@ is refused by name at submission rather than discovered on rank 3 of an allocati
 [`scripts/cscs/native_env.sh`](../scripts/cscs/native_env.sh), shared by both, for the same reason
 `ensure_branch` lives in `scripts/dace_branch.sh`: a second copy is how the two would drift.
 
-`BENCH=hpc` is **132** kernels. That is the number to size `--time` against — the defaults here are
+`BENCH=scientific_computing` is **132** kernels. That is the number to size `--time` against — the defaults here are
 12 h over 4 nodes (three-way) and 8 nodes (pipelines), at `PRESET=L`, and are a starting point, not a
 measurement.
 
@@ -183,7 +183,7 @@ frmwrks)` fails — no speedup table, after the whole sweep. Both native samples
 tree-independent columns (`numpy`, and `pluto` in the three-way job) in their own **unstamped**
 stage, so the baseline stays `numpy` and is still measured exactly once.
 
-> The two older DaCe samples above do **not** do this: `hpc_dace_main_vs_pluto.sbatch` exports
+> The two older DaCe samples above do **not** do this: `scientific_computing_dace_main_vs_pluto.sbatch` exports
 > `HPCAGENT_BENCH_RECORD_BUILD=main` for its whole run, and `npbench_dace_flavors.sbatch` puts
 > `numpy` in its `main` stage. Both stamp the baseline and their final `plot` step trips that
 > assert. Not fixed here — it is a change to files this section does not own.
@@ -199,7 +199,7 @@ parses with its own frontend; a miss is just a rebuild.
 
 ### Unverified
 
-Carried over from `submit_foundation_alps.sbatch`, which says the same of itself: **none of this has
+Carried over from `submit_loop_level_reasoning_alps.sbatch`, which says the same of itself: **none of this has
 been checked against the site's own submission scripts.** The partition name, the account and the
 scratch layout are the three things most likely to need a local edit — no `--partition` line is set
 for that reason. `$SCRATCH` on Alps is still the parallel FS; `/iopsstor` (flash) suits thousands of
@@ -225,17 +225,19 @@ Merging is automatic — no step to forget:
 The aggregate is always rebuilt from scratch, so merging twice cannot double the rows.
 
 Both DaCe samples end by forcing the merge (`hpcagent-bench aggregate-db`, so the one file to copy
-off the cluster exists whether or not anything reads it) and then rendering the **speedup table**
-with `hpcagent-bench plot` — the CLI verb, not `scripts/plot_results.py`, which is a shim over the
-same verb and on its way out. `plot` folds `flavor` and `build` back into one series name
-(`dace_cpu/autoopt/main`) exactly as it folds `variant` into the benchmark name, and it re-runs the
-merge itself if a shard moved, so the two steps cannot disagree.
+off the cluster exists whether or not anything reads it) and then rendering the **speed-up chart**
+with `scripts/plot_speedup.py` — signed relative change, banded by order of magnitude. The old
+NPBench-style **table** is opt-in (`hpcagent-bench plot`) and no job runs it for you: on its ratio
+axis a 0.5x regression reads as a smaller event than a 1.5x win. Both go through the one loader, so
+both fold `flavor` and `build` back into one series name (`dace_cpu/autoopt/main`) exactly as
+`variant` folds into the benchmark name, and both re-run the merge if a shard moved, so the two
+steps cannot disagree.
 
 ## Submitting
 
     sbatch -A <account> samples/agentic_container.sbatch
     sbatch -A <account> samples/deterministic_kernels_to_ranks.sbatch
-    DACE_MAIN=... sbatch -A <account> samples/hpc_dace_main_vs_pluto.sbatch
+    DACE_MAIN=... sbatch -A <account> samples/scientific_computing_dace_main_vs_pluto.sbatch
     DACE_MAIN=... DACE_EXTENDED=... sbatch -A <account> -N 8 samples/npbench_dace_flavors.sbatch
     HPCAGENT_BENCH_ENV=... DACE_MAIN=... DACE_EXTENDED=... \
         sbatch -A <account> samples/cscs_alps_native_three_way.sbatch

@@ -508,6 +508,7 @@ static void hpc_papi_select(void) {
 
 int hpc_papi_init(void) {
   size_t bytes;
+  const char *want_budget;
   int m, th, failed = -1;
 
   if (hpc_papi_live)
@@ -537,8 +538,19 @@ int hpc_papi_init(void) {
   }
 
   hpc_papi_budget = hpc_papi.num_cmp_hwctrs(0);
-  if (getenv("HPC_PAPI_BUDGET"))
-    hpc_papi_budget = atoi(getenv("HPC_PAPI_BUDGET"));
+  want_budget = getenv("HPC_PAPI_BUDGET");
+  if (want_budget && *want_budget) {
+    /* strtol with the end pointer checked, not atoi: atoi turns a typo into 0, which then falls
+     * into the branch below and reports "PAPI reports 0 counter register(s) on this CPU" -- so a
+     * mistyped variable is diagnosed as a property of the hardware. */
+    char *end;
+    long asked = strtol(want_budget, &end, 10);
+    if (*end || asked <= 0) {
+      hpc_papi_fail(HPC_C_events_unsupported, "HPC_PAPI_BUDGET=%s is not a positive integer", want_budget);
+      return -1;
+    }
+    hpc_papi_budget = (int)asked;
+  }
   if (hpc_papi_budget > HPC_PAPI_MAXEV)
     hpc_papi_budget = HPC_PAPI_MAXEV;
   if (hpc_papi_budget <= 0) {
@@ -622,13 +634,19 @@ void hpc_papi_start(void) {
     return;
   }
   hpc_papi_open = 1;
-  clock_gettime(CLOCK_MONOTONIC, &hpc_papi_t0);
 #pragma omp parallel num_threads(hpc_papi_nthread)
   {
     hpc_papi_slot *slot = &hpc_papi_slots[omp_get_thread_num()];
     HPC_PAPI_FENCE; /* drain this thread's own stores BEFORE the counters arm */
     slot->rc = hpc_papi.start(slot->eventset);
   }
+  /* AFTER the arming region, to match hpc_papi_stop, which stamps BEFORE its own. The bracket has
+   * to be symmetric or it is not a bracket: taking t0 first charged every rep one thread-team fork
+   * plus one PAPI_start to the wall clock while the counters saw none of it, so every derived rate
+   * (instructions/ns, bytes/ns) came out low by a fixed per-rep constant -- worst on exactly the
+   * short regions where a rate matters most, and an empty bracket would report time against no
+   * work. */
+  clock_gettime(CLOCK_MONOTONIC, &hpc_papi_t0);
   for (t = 0; t < hpc_papi_nthread; t++)
     if (hpc_papi_slots[t].rc != HPC_PAPI_OK)
       hpc_papi_fail(HPC_C_events_unsupported, "PAPI_start failed on thread %d: %s", t,

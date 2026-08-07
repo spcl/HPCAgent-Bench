@@ -67,10 +67,10 @@ def _bench_info(func: str,
     }
 
 
-def _emit_native(npy: pathlib.Path, bi: pathlib.Path, out: pathlib.Path, base: str) -> bool:
+def _emit_native(npy: pathlib.Path, bi: pathlib.Path, out: pathlib.Path, base: str, isopar: bool = False) -> bool:
     from numpyto_common.frontend import parse_kernel
     from numpyto_common.lowering import lower
-    from numpyto_c.emit import emit_c, emit_cpp
+    from numpyto_c.emit import emit_c, emit_cpp, emit_cpp_isopar
     from numpyto_c.bindings import emit_binding
     from numpyto_fortran.emit import emit_fortran
     out.mkdir(parents=True, exist_ok=True)
@@ -78,6 +78,8 @@ def _emit_native(npy: pathlib.Path, bi: pathlib.Path, out: pathlib.Path, base: s
     (out / f"{base}.c").write_text(emit_c(kir, fn_name=base))
     (out / f"{base}.cpp").write_text(emit_cpp(kir, fn_name=base))
     emit_binding(kir, out / f"{base}_binding.json", base_name=base)
+    if isopar:
+        (out / f"{base}_isopar.cpp").write_text(emit_cpp_isopar(kir, fn_name=base))
     fkir = lower(parse_kernel(npy, bi))
     (out / f"{base}.f90").write_text(emit_fortran(fkir, fn_name=base))
     return True
@@ -177,22 +179,24 @@ def run_op(src: str,
         bi.write_text(json.dumps(bi_dict))
         base = func
         try:
-            _emit_native(npy, bi, tdp, base)
+            _emit_native(npy, bi, tdp, base, isopar=_no.ISOPAR in backends)
         except Exception as exc:  # noqa: BLE001
             return {b: f"FAIL:emit:{type(exc).__name__}:{exc}" for b in backends}
         binding = json.loads((tdp / f"{base}_binding.json").read_text())
-        ext = {"c": ".c", "cpp": ".cpp", "fortran": ".f90"}
+        # cpp_isopar is the same symbol and binding as cpp, compiled from the ISO-algorithm source.
+        ext = {"c": ".c", "cpp": ".cpp", "fortran": ".f90", _no.ISOPAR: "_isopar.cpp"}
         for b in backends:
             if b in skip_backends:
                 status[b] = f"skip:{skip_backends[b]}"
                 continue
-            if b in ("c", "cpp", "fortran"):
+            if b in ext:
                 if b == "fortran" and not shutil.which("gfortran"):
                     status[b] = "skip:no-compiler"
                     continue
                 so = tdp / f"lib{base}_{b}.so"
-                cc = subprocess.run(_no.COMPILE[b] +
-                                    [str(tdp / f"{base}{ext[b]}"), "-o", str(so)],
+                link = _no._ISOPAR_LINK if b == _no.ISOPAR else []
+                cc = subprocess.run(_no.COMPILE["cpp" if b == _no.ISOPAR else b] +
+                                    [str(tdp / f"{base}{ext[b]}"), "-o", str(so)] + link,
                                     capture_output=True,
                                     text=True)
                 if cc.returncode:
@@ -203,7 +207,8 @@ def run_op(src: str,
                     # heap in the ctypes call, which a bare in-process ``_invoke``
                     # would let take down the whole pytest worker. ``_invoke_isolated``
                     # runs it in a child and reports the crash as a ``FAIL`` string.
-                    status[b] = _no._invoke_isolated(b, binding, so, by, syms, expected, list(outputs), rtol, atol)
+                    status[b] = _no._invoke_isolated("cpp" if b == _no.ISOPAR else b, binding, so, by, syms, expected,
+                                                     list(outputs), rtol, atol)
                 except Exception as exc:  # noqa: BLE001
                     status[b] = f"FAIL:{type(exc).__name__}:{exc}"
             elif b == "numba":

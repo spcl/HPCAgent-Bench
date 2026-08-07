@@ -15,11 +15,14 @@ entitled to anything. **Style class, never gate:** unused variable, shadowed nam
 
 ## Gate 1: the compiler you already run
 ```sh
-g++ -c -o /dev/null -O2 -Wall -Wextra -std=c++17 \
+g++ -c -o /dev/null -O2 -Wall -Wextra -std=c++23 \
     -Werror=uninitialized -Werror=maybe-uninitialized -Werror=array-bounds \
     -Werror=stringop-overflow -Werror=free-nonheap-object -Werror=nonnull \
     -Werror=return-type -Werror=sizeof-pointer-memaccess kernel.cpp
 ```
+
+**The `-std=` is the harness's, not a habit.** `c++23` and `c17`, from `hpcagent_bench/envs/compilers.yaml`
+-- analysing at a standard the build never selects analyses a translation unit that never ships.
 
 Clang spells a subset: drop `maybe-uninitialized`, `stringop-overflow`, `free-nonheap-object`, add
 `-Werror=sometimes-uninitialized`. An unknown `-W` name is only a warning to clang, so an unpruned
@@ -37,7 +40,7 @@ drops the diagnostic and the run reads clean.
 gcc build gets `-fanalyzer`, clang build gets the LLVM analyzer, so the analysis matches the
 toolchain that made the binary -- the other one's model of your flags is a guess.
 ```sh
-gcc -c -o /dev/null -fanalyzer -std=c11 -Werror=analyzer-use-of-uninitialized-value \
+gcc -c -o /dev/null -fanalyzer -std=c17 -Werror=analyzer-use-of-uninitialized-value \
     -Werror=analyzer-possible-null-dereference -Werror=analyzer-out-of-bounds \
     -Werror=analyzer-malloc-leak kernel.c   # also: -use-after-free, -double-free
 ```
@@ -54,7 +57,7 @@ identical findings, but `--analyze` exits 0 with findings and clang-tidy can be 
 ```sh
 clang-tidy --quiet --header-filter= --system-headers=false --warnings-as-errors='*' \
   --checks='-*,clang-analyzer-core.*,clang-analyzer-unix.*,clang-analyzer-deadcode.*,bugprone-integer-division,bugprone-misplaced-widening-cast,bugprone-sizeof-expression,bugprone-undefined-memory-manipulation' \
-  kernel.cpp -- -std=c++17 -O2
+  kernel.cpp -- -std=c++23 -O2
 ```
 
 **The compile database is where people get stuck.** Everything after `--` is the compile line for

@@ -1,0 +1,40 @@
+# Replace the image path after building/importing the Phase 1 diagnostic image.
+image = "${VLLM_BUILD_ROOT}/containers/rocm723-ofi-vllm-0.23.0.sqsh"
+
+mounts = [
+  "/capstor:/capstor",
+  "/iopsstor:/iopsstor"
+]
+
+workdir = "${SCRATCH}"
+
+[annotations]
+com.hooks.cxi.enabled = "true"
+com.hooks.netstack.source = "host"
+
+[env]
+HSA_ENABLE_IPC_MODE_LEGACY = "1"
+SAFETENSORS_FAST_GPU = "1"
+HIP_FORCE_DEV_KERNARG = "1"
+TOKENIZERS_PARALLELISM = "false"
+
+NCCL_NET_PLUGIN = "ofi"
+NCCL_NET = "AWS Libfabric"
+LD_LIBRARY_PATH = "/opt/aws-ofi-nccl/lib:/opt/rocm/lib"
+FI_PROVIDER = "cxi"
+
+NCCL_SOCKET_IFNAME = "hsn0,hsn1,hsn2,hsn3"
+GLOO_SOCKET_IFNAME = "hsn0"
+
+# The current Beverin kernel lacks the required DMA-BUF options. Keep this
+# disabled for the initialization gate; it can be revisited for performance.
+NCCL_DMABUF_ENABLE = "0"
+OFI_NCCL_DISABLE_DMABUF = "1"
+
+NCCL_DEBUG = "INFO"
+NCCL_DEBUG_SUBSYS = "INIT,NET"
+FI_LOG_LEVEL = "info"
+FI_LOG_PROV = "cxi"
+
+VIRTUAL_ENV = "/opt/vllm-venv"
+PATH = "/opt/vllm-venv/bin:/opt/venv/bin:/opt/rocm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"

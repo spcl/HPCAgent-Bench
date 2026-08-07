@@ -23,7 +23,7 @@ arrays op-by-op, so **Python control flow is kept verbatim** -- `for`/`while`/
 `if`/`break`, *any* `range` step (`range(1, N, 2)`), data-dependent slices
 (`A[i, :j]`), boolean indexing (`A[m]`), and shrinking-array compaction
 (`Z = Z[I]`) all just run. No loop classification, no masking, no rejection --
-this is what lets eager cover the strided / data-dependent foundation kernels
+this is what lets eager cover the strided / data-dependent loop_level_reasoning kernels
 and shape-changing kernels (mandelbrot2) that the `jit` path must refuse.
 
 Bare in-place ufuncs are rebound to their out arg (`np.multiply(Z, Z, Z)` ->

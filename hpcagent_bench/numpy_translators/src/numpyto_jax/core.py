@@ -1189,7 +1189,7 @@ def emit_jax(numpy_src: str, func_name: str, jit: bool = False) -> str:
     function is not ``jax.jit``-decorated. Eager JAX runs concrete arrays
     op-by-op, so it supports dynamic shapes/boolean indexing/breaks a traced
     ``jit`` kernel can't -- the most faithful 1:1 translation, covering the
-    widest kernel set (notably strided/data-dependent foundation loops).
+    widest kernel set (notably strided/data-dependent loop_level_reasoning loops).
 
     With ``jit=True`` the loop-lowering classifier kicks in (vectorise/
     ``fori_loop``/``while_loop`` + masking transforms) and the kernel is

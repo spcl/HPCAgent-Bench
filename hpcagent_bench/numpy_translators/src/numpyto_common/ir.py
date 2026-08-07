@@ -95,6 +95,18 @@ class ArrayDesc:
     shape: Tuple[str, ...]
     is_output: bool = False
 
+    def __post_init__(self) -> None:
+        # Same storage contract :class:`ScalarDesc` honours, for the same reason: normalise the
+        # spelling once, where the dtype is STORED, so signature / binding JSON / ABI gate cannot
+        # disagree over ``double`` vs ``float64``. And REFUSE a token that is not a dtype at all --
+        # every emitter's dtype table falls back to ``double`` on a miss, so an unvalidated token
+        # (``dtype=x.dtype`` once read as the literal ``"dtype"``) emitted a double buffer inside
+        # an fp32 kernel instead of failing. A refusal beats a silently wrong emit.
+        try:
+            self.dtype = dtypes.canonical(self.dtype)
+        except KeyError:
+            raise ValueError(f"array {self.name!r}: {self.dtype!r} is not a known dtype") from None
+
 
 @dataclass
 class ScalarDesc:
@@ -205,19 +217,45 @@ class KernelIR:
     #: default dtype for a temp not in ``local_dtypes``. ``None`` = natural fp64.
     float_precision: Optional[str] = None
 
-    def param_order(self) -> List[str]:
+    def param_order(self, extra_ref: Optional[str] = None) -> List[str]:
         """Return the argument names in **ABI order**.
 
-        One source of truth for both the emitted C/Fortran signature and the
-        binding JSON the harness calls through: all **references** (array /
-        pointer params) sorted alphabetically, then all **scalars** (shape
-        ``symbols`` + value ``scalars``) sorted alphabetically.
+        One source of truth for the emitted C/Fortran signature, the binding
+        JSON the harness calls through, AND the emitted call to an internal
+        helper: all **references** (array / pointer params) sorted
+        alphabetically, then all **scalars** (shape ``symbols`` + value
+        ``scalars``) sorted alphabetically. No parameter has a reserved
+        position -- a result buffer sorts by its own name like any other
+        pointer.
 
         Ignores ``input_args`` for ordering (it still defines membership), so
         order depends only on each param's ABI kind -- stable and
         caller-independent. :meth:`Framework.call_args` reads the same order,
         keeping the positional ctypes call aligned.
+
+        ``extra_ref`` is a reference param the descriptor lists do not carry
+        (Fortran's synthesized scalar-helper result dummy); it joins the ref
+        sort so that case obeys the same one rule.
         """
-        refs = sorted(a.name for a in self.arrays)
+        names = [a.name for a in self.arrays]
+        if extra_ref is not None:
+            names.append(extra_ref)
+        refs = sorted(names)
         scalars = sorted([s.name for s in self.symbols] + [s.name for s in self.scalars])
         return refs + scalars
+
+    def abi_param_order(self) -> List[str]:
+        """:meth:`param_order` when it accounts for every declared parameter, else declaration order.
+
+        A helper can take a parameter that is neither an array, a scalar nor a symbol -- kl_div's
+        ``reduction`` is a config flag carried in ``input_args`` alone. ``param_order`` is built from
+        the typed descriptor lists, so it cannot see such a name: it would drop ``reduction`` from the
+        signature while the body still reads it.
+
+        Reordering only buys one consistent spelling. Losing a parameter is a miscompile. So a helper
+        the canonical order cannot fully describe keeps the order it was declared in -- and since the
+        call site reads this same method, both sides still agree, which is the property that has to
+        hold.
+        """
+        order = self.param_order()
+        return order if set(order) == set(self.input_args) else list(self.input_args)

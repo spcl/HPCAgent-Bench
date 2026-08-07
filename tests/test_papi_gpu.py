@@ -583,17 +583,25 @@ def raising_worker(*args, **kwargs):
     raise RuntimeError("PAPI_start failed: CUPTI_ERROR_INSUFFICIENT_PRIVILEGES")
 
 
+#: Patience for the two forked-child tests below, in the ``rep_timeout`` unit ``count_gpu_metric``
+#: multiplies (here x3: warmup 0 + 1 rep + 2). Both children answer in milliseconds, so this is not
+#: a measurement budget -- it is how long the child may wait to be SCHEDULED. At 5 s it lost on a
+#: loaded CI runner and the segfault came back as ``counted run failed (TIMEOUT)``: the assertion
+#: was right and the box was busy, which is a flake, not a finding.
+SCHEDULING_PATIENCE_S = 30.0
+
+
 def test_a_segfaulting_device_count_costs_one_metric_not_the_process(monkeypatch) -> None:
     """CUPTI segfaulting is a normal way for it to fail; it must cost metric k's number, name the
     signal, and leave the parent alive to run metric k+1."""
     monkeypatch.setattr(papi, "gpu_counting_worker", segfaulting_worker)
-    row = papi.count_gpu_metric("/nonexistent.so", None, {}, "cuda", "occupancy", rep_timeout=5.0)
+    row = papi.count_gpu_metric("/nonexistent.so", None, {}, "cuda", "occupancy", rep_timeout=SCHEDULING_PATIENCE_S)
     assert row["count"] is None and "SIGSEGV" in row["missing"]
 
 
 def test_a_papi_failure_inside_the_device_child_is_that_metric_s_reason(monkeypatch) -> None:
     monkeypatch.setattr(papi, "gpu_counting_worker", raising_worker)
-    row = papi.count_gpu_metric("/nonexistent.so", None, {}, "cuda", "l2_hit_rate", rep_timeout=5.0)
+    row = papi.count_gpu_metric("/nonexistent.so", None, {}, "cuda", "l2_hit_rate", rep_timeout=SCHEDULING_PATIENCE_S)
     assert row["metric"] == "l2_hit_rate" and row["count"] is None
     assert "CUPTI_ERROR_INSUFFICIENT_PRIVILEGES" in row["missing"]
 

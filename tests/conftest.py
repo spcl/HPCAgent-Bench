@@ -17,6 +17,9 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "integration: end-to-end test that builds/runs a real artifact (native compile, "
         "heavier + slower than a unit test); still collected and run by default, not skipped.")
+    config.addinivalue_line(
+        "markers", "dace_frontend: parses the whole generated corpus through the DaCe python "
+        "frontend, one subprocess per kernel. Needs dace importable; minutes, not seconds.")
 
 
 @pytest.fixture(autouse=True)

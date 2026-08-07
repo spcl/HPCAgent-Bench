@@ -5,7 +5,7 @@ import pathlib
 import sys
 
 from numpyto_c.bindings import emit_binding, emit_pluto_binding
-from numpyto_c.emit import emit_c, emit_c_omp, emit_cpp, emit_cpp_omp, emit_pluto
+from numpyto_c.emit import emit_c, emit_c_omp, emit_cpp, emit_cpp_isopar, emit_cpp_omp, emit_pluto
 from numpyto_common.frontend import parse_kernel
 from numpyto_common.ir import apply_precision
 from numpyto_common.lowering import lower
@@ -26,6 +26,12 @@ def cmd_emit(args: argparse.Namespace) -> int:
     # Canonical native name: <short>[_<sparse>]_<fptype>, for both file and symbol.
     base = native_base(short, precision=args.precision, sparse=args.config)
     src = f"{short}_numpy.py"
+    if args.isopar:
+        # ISO standard-algorithm variant: C++ only (C has no <algorithm>), same symbol as sequential.
+        write_generated(out / f"{base}_isopar.cpp", emit_cpp_isopar(kir, fn_name=base), line_comment="// ", source=src)
+        emit_binding(kir, out / f"{base}_isopar_binding.json", base_name=base)
+        print(f"numpyto_c: emitted {base}_isopar.cpp (ISO algorithms) + {base}_isopar_binding.json")
+        return 0
     if args.parallel:
         # OpenMP variant, same symbol as sequential; no Pluto (sequential-only track).
         write_generated(out / f"{base}_omp.c", emit_c_omp(kir, fn_name=base), line_comment="// ", source=src)
@@ -50,12 +56,23 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--kernel", type=pathlib.Path, required=True, help="path to <short>_numpy.py")
     e.add_argument("--bench-info", type=pathlib.Path, required=True, help="path to bench_info/<short>.json")
     e.add_argument("--out", type=pathlib.Path, required=True, help="output cpp_backend/ directory")
-    e.add_argument("--parallel",
-                   action="store_true",
-                   help="emit the OpenMP variant (<base>_omp.{c,cpp}, "
-                   "``#pragma omp parallel for``) instead of the sequential "
-                   "source; compile with -fopenmp. Refuses (nonzero exit) a "
-                   "kernel with no sound parallel form (colliding scatter).")
+    # One variant per emit: each writes its own source set, so asking for two is a mistake, not a mix.
+    variant = e.add_mutually_exclusive_group()
+    variant.add_argument("--parallel",
+                         action="store_true",
+                         help="emit the OpenMP variant (<base>_omp.{c,cpp}, "
+                         "``#pragma omp parallel for``) instead of the sequential "
+                         "source; compile with -fopenmp. Refuses (nonzero exit) a "
+                         "kernel with no sound parallel form (colliding scatter).")
+    variant.add_argument("--isopar",
+                         action="store_true",
+                         help="emit the ISO standard-algorithm C++ variant "
+                         "(<base>_isopar.cpp): every loop with a faithful "
+                         "<algorithm>/<numeric> spelling becomes that call (map -> "
+                         "transform, reduction -> reduce/transform_reduce, prefix -> "
+                         "inclusive_scan), the rest stay loops. No execution policy is "
+                         "emitted: the source states the structure and leaves the "
+                         "schedule to the toolchain. Never refuses a kernel.")
     e.add_argument("--precision",
                    default="",
                    help="floating precision override (e.g. ``float32`` / "

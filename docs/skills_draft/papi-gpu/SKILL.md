@@ -10,14 +10,39 @@ the answer is attributed to a region you chose rather than to a symbol.
 Everything you need is here. Paste the code into your `.cu`, compile with `-lpapi -lcudart`, run
 it. Run `nsys` first anyway -- a counter on the wrong kernel is a perfectly measured 4% of the run.
 
-## What on this page was run, and what was not
+## Start and stop the event set per region -- a read-delta does NOT attribute
 
-The box this was written on has the NVIDIA profiling gate ON and no root, so `PAPI_start` returns
--14 and NO COUNTER VALUE was ever produced here. Verified here: the component list, the compile
-line, every event name and qualifier below (`PAPI_add_named_event` runs before `PAPI_start`, so
-name resolution IS testable under the gate), every error code, and the gate's own behaviour. NOT
-verified here: any counter value, any delta, and every threshold in "Reading the numbers" -- those
-come from the vendor docs at the bottom. Treat them as untested.
+This is the whole page. `PAPI_read` leaves the set counting and looks like it brackets a region;
+on the cuda component it does not, because the counter value is flushed ASYNCHRONOUSLY and
+`cudaDeviceSynchronize` does not flush it. A read-delta therefore returns whatever happened to be
+flushed between the two reads, which has no relationship to what ran between them.
+
+Measured here, RTX 4050 / driver 595.84 / PAPI 7.2.0.0, four kernels of deliberately different
+shape, `cuda:::dram__bytes_read:stat=sum`, 25 regions each. "Truth" is the algorithm's compulsory
+traffic -- every input read once:
+
+| region | truth / rep | `PAPI_start`/`PAPI_stop` | read-delta |
+| --- | --- | --- | --- |
+| streams b and c into a | 128 MiB | **134.26 MB** | 128.4 MB |
+| touches 64 KB, 64 launches | 64 KB | **77.9 KB** | 93.5 MB |
+| reads a, 64 FMAs, writes a | 64 MiB | **67.08 MB** | 111.1 MB |
+| reads a and c, divergent | 128 MiB | **134.27 MB** | 126.0 MB |
+
+Start/stop lands on the compulsory traffic to within **0.05% at MiB scale**; the 64 KB row reads
+77.9 KB against 64 KB, which is +18.9% and is the launch overhead of 64 separate dispatches showing
+up at a scale where it is no longer negligible. The read-delta is wrong on every row and wrong by
+**1300x** on that same 64 KB one -- and note what that does to a comparison: the
+true spread across these four kernels is 2100x, and the read-delta reports 1.2x. It does not merely
+add noise, it FLATTENS the ranking you are profiling to find.
+
+The same holds on the SM side: `cuda:::smsp__inst_executed:stat=sum` start/stop gives 22528 for the
+64 KB kernel and 161480704 for the FMA chain, a ratio of **7168x**, matching 512 warps x 11
+instructions against 524288 x 77 exactly. The read-delta reports those two as 1.66x apart.
+
+Start/stop costs about 2x wall clock here (2.37 s against 1.22 s over 20 regions) -- re-arming the
+CUPTI set per region is real. Spend it. You are reading COUNTS, and a counted run's wall clock
+already belongs to no comparison (see below), so the only thing that cost buys back is a number
+that means what it says.
 
 ## Two checks before you write any code
 
@@ -49,6 +74,12 @@ the AVERAGE across hardware unit instances and `sum` is the total, so bare
 `cuda:::dram__bytes_read` is bytes per DRAM partition -- low by the instance count, and nothing in
 the output says so. Write `:stat=sum` on every count.
 
+Measured on the same region here: `:stat=sum` 537,323,136 against `:stat=avg` 179,049,812, a ratio
+of **3.001**. This part has a 96-bit bus, which is 3 x 32-bit partitions -- so the instance count
+is exactly the number you would have to already know to spot that the default was wrong. The bare
+name returned 179,004,500, confirming it resolves to `avg`. `min` and `max` came back at 179.0M
+too, i.e. the partitions are evenly loaded, which is why nothing in the number itself looks off.
+
 Rate events take a different qualifier set, and their default is worse than wrong: bare
 `cuda:::l1tex__t_sector_hit_rate` resolves to `:stat=max_rate` and is then REJECTED at
 `PAPI_add_named_event` with -14 -- the same code the permission gate returns. `:stat=pct` and
@@ -68,7 +99,7 @@ off by the ratio of those counts.
 #include <string.h>
 
 static int gpu_es = PAPI_NULL;
-static long long gpu_total = 0, gpu_before = 0;
+static long long gpu_total = 0;
 static const char *gpu_event = NULL;
 static int gpu_ok = 0, gpu_regions = 0;
 
@@ -85,12 +116,20 @@ static int gpu_papi_init(const char *event_name)
         if (ci && !strcmp(ci->name, "cuda")) { cid = i; break; }
     }
     if (cid < 0) { fprintf(stderr, "papi-gpu: PAPI has no 'cuda' component\n"); return -1; }
-    int rc;
+    int rc; long long probe = 0;
     /* A GPU event set must be bound to the cuda component; the default (0) is the CPU. */
     if ((rc = PAPI_create_eventset(&gpu_es)) != PAPI_OK) goto fail;
     if ((rc = PAPI_assign_eventset_component(gpu_es, cid)) != PAPI_OK) goto fail;
     if ((rc = PAPI_add_named_event(gpu_es, event_name)) != PAPI_OK) goto fail;
+    /* Arm and disarm once around NOTHING. Two jobs: it surfaces the permission gate here
+       instead of at the first region, and the value it returns must be ~0. If an empty
+       bracket reports real traffic, the counter is not attributing -- stop and read below. */
     if ((rc = PAPI_start(gpu_es)) != PAPI_OK) goto fail;
+    if ((rc = PAPI_stop(gpu_es, &probe)) != PAPI_OK) goto fail;
+    if (probe > 4096) {
+        fprintf(stderr, "papi-gpu: EMPTY BRACKET READ %lld, not ~0 -- not attributing\n", probe);
+        return -1;
+    }
     gpu_ok = 1;
     return 0;
 fail:
@@ -98,21 +137,19 @@ fail:
     return -1;
 }
 
-/* The syncs are the measurement. A launch is ASYNCHRONOUS: without them you count the launch. */
+/* START and STOP per region. PAPI_stop is what forces the counter to be attributed;
+   a PAPI_read delta across the same span is not a measurement of that span. */
 static void gpu_region_begin(void)
 {
-    if (!gpu_ok) return;
-    cudaDeviceSynchronize();                       /* drain EARLIER work out of the delta */
-    if (PAPI_read(gpu_es, &gpu_before) != PAPI_OK) gpu_ok = 0;
+    if (gpu_ok && PAPI_start(gpu_es) != PAPI_OK) gpu_ok = 0;
 }
 
 static void gpu_region_end(void)
 {
     if (!gpu_ok) return;
-    cudaDeviceSynchronize();                       /* the launch returned; the kernel may not have */
-    long long after = 0;
-    if (PAPI_read(gpu_es, &after) != PAPI_OK) { gpu_ok = 0; return; }
-    gpu_total += after - gpu_before;               /* ACCUMULATES across every visit */
+    long long v = 0;
+    if (PAPI_stop(gpu_es, &v) != PAPI_OK) { gpu_ok = 0; return; }
+    gpu_total += v;                                /* ACCUMULATES across every visit */
     ++gpu_regions;
 }
 
@@ -120,15 +157,17 @@ static void gpu_papi_report(void)
 {
     if (!gpu_ok) { printf("%s = ERROR (not counted)\n", gpu_event ? gpu_event : "?"); return; }
     printf("%s = %lld   (regions: %d)\n", gpu_event, gpu_total, gpu_regions);
-    long long sink = 0;
-    PAPI_stop(gpu_es, &sink);
     PAPI_cleanup_eventset(gpu_es); PAPI_destroy_eventset(&gpu_es);
 }
 ```
 
-Arm ONCE, then read a delta per region: `PAPI_read` copies the counters and leaves them counting,
-so consecutive reads bracket a region. `PAPI_start`/`PAPI_stop` per launch re-arms the CUPTI event
-set every time, which is instrumentation cost landing inside the region you are measuring.
+`PAPI_stop` is the call that makes the number yours. It ends the CUPTI profiling range, which is
+what forces the counter to be flushed and attributed to the work inside it; `PAPI_start` reopens a
+fresh one. `gpu_total` accumulates across visits, so a 20 us kernel called 500 times is measurable
+without changing what you measured.
+
+Verified here at 25 regions per kernel, and note that `PAPI_start` after a `PAPI_stop` is a
+supported re-arm, not a leak -- the event set is created once and destroyed once.
 
 ## How it runs
 
@@ -151,7 +190,11 @@ check_results();                            /* ALWAYS verify -- a wrong answer m
 nvcc -O2 -arch=native -o probe probe.cu -lpapi -lcudart
 ```
 
-One counter per run, for the reason below. Loop outside the program:
+One counter per run, for the reason below. The last three exist because the reading steps below
+CONSUME them: step 6 divides by `gpu__dram_throughput...`, and the lane-efficiency ratio needs
+`sm__sass_thread_inst_executed` over `smsp__inst_executed`. Collect a counter a later step needs or
+that step has nothing to read. All eleven verified to resolve here with `papi_native_avail -e`.
+Loop outside the program:
 
 ```sh
 for ev in cuda:::sm__cycles_elapsed:stat=sum \
@@ -161,28 +204,30 @@ for ev in cuda:::sm__cycles_elapsed:stat=sum \
           cuda:::smsp__warps_active:stat=sum \
           cuda:::l1tex__t_sector_hit_rate:stat=pct \
           cuda:::lts__t_sectors_lookup_hit:stat=sum \
-          cuda:::lts__t_sectors:stat=sum; do
+          cuda:::lts__t_sectors:stat=sum \
+          cuda:::gpu__dram_throughput.pct_of_peak_sustained_elapsed:stat=avg \
+          cuda:::sm__sass_thread_inst_executed:stat=sum \
+          cuda:::smsp__inst_executed:stat=sum; do
   ./probe "$ev"
 done
 ```
 
-## One region per kernel, synced on both sides
+## One region per kernel, and no sync of your own
 
-A kernel launch returns immediately. A bracket without a device synchronise measures the LAUNCH:
-the read after `your_kernel<<<>>>` lands while the kernel is still running. The two syncs do
-different jobs. The one BEFORE the first read drains earlier work out of your delta; the one
-BEFORE the second read is what makes the delta the kernel's.
+A kernel launch returns immediately, so under a read-delta you would need a device synchronise to
+have any hope of bracketing the kernel -- and, as the table above shows, it still would not work.
+Under `PAPI_start`/`PAPI_stop` you do not need one: `PAPI_stop` closes the profiling range and
+synchronises to collect it. Adding `cudaDeviceSynchronize` on both sides changed the answer here by
+**0.008%** (536,976,512 against 536,934,656 bytes), which is to say it did nothing. Leave it out;
+it is a line that looks load-bearing and is not.
 
-**The syncs are part of the measurement, not neutral scaffolding.** A synchronised run removes
-exactly the kernel/copy and kernel/kernel overlap a real run depends on. So a counted run's wall
-clock belongs to no comparison at all -- not to a timed run, not to another counted run. Read the
-COUNTS; take every speedup from the uninstrumented build.
+**A counted run's wall clock still belongs to no comparison.** Profiling serialises the queue and
+re-arms the CUPTI set per region, which removes exactly the kernel/copy and kernel/kernel overlap a
+real run depends on -- about 2x here. Read the COUNTS; take every speedup from the uninstrumented
+build.
 
 One kernel per region: two kernels in one bracket give you their sum, and a sum cannot be
-attributed. Move the bracket and run again.
-
-Bracket INSIDE the timestep loop, not around it. The delta accumulates, so a 20 us kernel called
-500 times becomes measurable without changing what you measured.
+attributed. Move the bracket and run again. Bracket INSIDE the timestep loop, not around it.
 
 ## One counter per run
 
@@ -225,12 +270,12 @@ Ask a QUESTION, then find the event that answers it on THIS device. "How much DR
 different name on every vendor and often on every generation, so a hard-coded event list is a list
 that stops working. NVIDIA events come through the `cuda` component; AMD through `rocm`.
 
-## Reading the numbers -- none of this was measured here
+## Reading the numbers
 
-The gate meant no value was ever collected here, so the order below and every number in it are
-vendor-doc reasoning, not observation. Calibrate on your own kernel before trusting a threshold.
-Counters do not name a bottleneck. They eliminate candidates, in this order -- stop at the first
-step that fires, because the later numbers are consequences of the earlier ones.
+The counts above were measured here; the THRESHOLDS below still come from the vendor docs, so
+calibrate them on your own kernel before trusting one. Counters do not name a bottleneck. They
+eliminate candidates, in this order -- stop at the first step that fires, because the later numbers
+are consequences of the earlier ones.
 
 **1. Was the device even the problem?** If `nsys` already showed device time well under the wall
 clock, stop. Launch gaps and copies are host findings and no counter below moves them.
@@ -351,7 +396,15 @@ driver R565). No code change works around it.
 ## Traps
 
 - **A count of 0 is a measurement; ERROR is not.** The code above prints `ERROR (not counted)` when
-  setup failed, and stops counting if a read fails mid-run. Read that line before the numbers.
+  setup failed, and stops counting if a stop fails mid-run. Read that line before the numbers.
+- **Check an empty bracket before you believe a full one.** `gpu_papi_init` does this for you and
+  refuses to run if it fails. It is the one self-test that catches a counter which is accumulating
+  device-wide instead of attributing -- the failure mode that produces confident, plausible, wrong
+  numbers on every region at once, with no error anywhere.
+- **A cache-resident working set reports near-zero DRAM traffic, and that is CORRECT.** This part
+  has 24 MB of L2; a 6 MB buffer set never reaches DRAM, and `dram__bytes_read` duly returned 640
+  bytes for a kernel touching 4 MB. Before calling a DRAM counter broken, scale the working set
+  past L2 (`cudaDeviceGetAttribute` with `cudaDevAttrL2CacheSize`) and check the number tracks.
 - **`regions:` must be the launch count you expect.** Fewer means brackets were skipped and the
   total is short.
 - **The counted binary is not your submission.** `cudaDeviceSynchronize` inside a graded region

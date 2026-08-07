@@ -38,52 +38,14 @@ Measured on this dev box (RTX 4050 Laptop, AD107, 20 SMs, driver 595.84): `ncu` 
 `/opt/nvidia/hpc_sdk/Linux_x86_64/26.3/compilers/bin/ncu`, version 2025.4.1.0, and a newer
 standalone sits at `/opt/nvidia/nsight-compute/2026.2.1/ncu`, version 2026.2.1.0.
 
-**And every collecting run on it fails.** `/proc/driver/nvidia/params` publishes
-`RmProfilingAdminOnly: 1`, so both binaries answer `ERR_NVGPUCTRPERM` and exit 1 -- on `--metrics`,
-on `--set full`, on a single `--section LaunchStats`. Confirm the gate with:
+Counter collection is driver-gated: `grep -E 'RmProfilingAdminOnly|RestrictProfilingToAdminUsers'
+/proc/driver/nvidia/params` -- `0` is open, `1` needs root plus a driver reload, and both spellings
+name the same setting. This box reads `0`, and every number below was collected through it.
 
-```sh
-grep RmProfilingAdminOnly /proc/driver/nvidia/params      # 1 = locked
-grep -rs NVreg_RestrictProfilingToAdminUsers /etc/modprobe.d
-```
-
-Both names are the same driver setting. Clearing it needs root plus a driver reload, which is not a
-fix you can apply from inside a job. The gate blocks COUNTER collection, not activity tracing, so a
-tracer still gets kernel names and durations where `ncu` gets nothing.
-
-**Three traps in the failure mode.** First, the child still runs: `ncu` refuses to collect, then
-lets the program execute and print its normal output, so stdout looks like a healthy run and only
-the exit code and the `==ERROR==` line say the profile is empty. Second, **`-o` writes no file** --
-measured on both binaries, `-o probe -f` plus `ERR_NVGPUCTRPERM` leaves zero `.ncu-rep` on disk and
-exits 1, so the profile-once-read-many loop below is unreachable in this failure case. Third, the
-gate is not uniform: `--query-metrics` prints the same `==ERROR==` line but exits **0**, and
-`ncu --query-metrics --chips ad107` succeeds outright and needs no GPU (measured: 4606 lines /
-**3001 metric names** on 2025.4.1, 4652 lines / 3034 on 2026.2.1 -- the line count is not the metric
-count). So exit 0 is necessary and not sufficient: check the report contains a kernel.
-
-**When counters are blocked, `cuobjdump` still answers the divergence question.** It reads the
-binary, needs no driver, no counter permission and no run:
-
-```sh
-cuobjdump -sass ./app \
-  | awk '/Function : /{k=$3} /[ ;](BRA|BRX|BSSY|BSYNC)[ .]/{n[k]++} END{for (f in n) print n[f], f}' \
-  | sort -rn
-```
-
-Measured on a four-kernel fixture, exit 0 under the closed gate: the deliberately divergent kernel
-counts **11** control-flow instructions, the other three **1** each -- and that 1 is the trailing
-self-branch every kernel ends with, so the floor is 1, not 0. Counting predicated instructions
-(`/@!?P[0-9]/`) instead separates them the same way: 20 against 1, 1 and 0. **This proves
-divergence EXISTS in the SASS, never what it cost** -- a branch on a warp-uniform condition costs
-nothing and still counts here. The metrics that price it (`Branch Efficiency`,
-`Avg. Divergent Branches`, `Avg. Active Threads Per Warp`) all need counters.
-
-**Everything below this line is UNVERIFIED ON THIS BOX** -- the gate refused before any kernel
-number was collected. Two things below are still checked rather than remembered: command shapes
-come from `ncu --help` on these binaries, and every metric name, report row LABEL and **numeric
-threshold** comes from this install's own `<install>/sections/*.section` and `*.py` -- NVIDIA's
-shipped rules, grep-able at the paths named below, and identical across both installed versions.
-What is unverified is what a real kernel READS against them.
+Command shapes come from `ncu --help` on these binaries, and every metric name, report row LABEL
+and **numeric threshold** below comes from this install's own `<install>/sections/*.section` and
+`*.py` -- NVIDIA's shipped rules, grep-able at the paths named below, and identical across both
+installed versions. What a real kernel READS against those thresholds was collected here.
 
 ## Target ONE kernel
 
@@ -107,7 +69,7 @@ ncu -k regex:jacobi -c 1 -s 20 --set basic -o prof -f -- ./app input
   several streams with different shapes. The optional operator field takes `regex:`, so
   `--kernel-id :7:regex:^foo:` is "any kernel in stream 7 starting with foo".
 - **`-o` / `--export`** writes a `.ncu-rep` you can re-read offline without re-running. `-f` to
-  overwrite. Nothing is written if collection fails -- see the gate section.
+  overwrite. A run that fails to collect writes NO file at all, whatever `-o` said.
 
 ## Sets and sections -- the cost knob
 
@@ -168,6 +130,41 @@ binding. `Waves Per SM` is waves, with 1.0 the floor below which the grid cannot
 every change that cuts DRAM bytes buys nothing. Read the Memory Throughput Breakdown, which exists
 to name the contributor, before you touch a single access.
 
+## ncu FLUSHES the caches, so a cache-resident kernel reads as DRAM-bound
+
+`--cache-control` defaults to `all`, which invalidates L1 and L2 before EVERY replay pass. The
+point is reproducibility -- pass 3 must see what pass 1 saw -- and the cost is that the kernel is
+measured cold, which is not how it runs.
+
+That is invisible until the working set fits in cache, and then it dominates the headline number.
+Same kernel, same binary, 6 MB of buffers against this part's 24 MB of L2:
+
+| `--cache-control` | `dram__bytes_read` | `DRAM Throughput` |
+| --- | --- | --- |
+| `all` (the DEFAULT) | 4.20 MB | **90.04%** |
+| `none` | 2.05 MB | **0.14%** |
+
+A 640x swing in the one number that decides whether you are memory-bound, from a flag nobody sets.
+Scale the same kernel to a 96 MB working set and the two agree (94.53% against 94.33%), because
+then the data genuinely does not fit and the flush changes nothing.
+
+So: **a high `DRAM Throughput` on a kernel whose working set fits in L2 is an artefact of the
+default.** It is the common shape in a timestep loop, where the same arrays are revisited every
+step and are hot by the second iteration. Re-run with `--cache-control none` before you spend a day
+cutting DRAM traffic that the real run never moves.
+
+**`--cache-control none` is only valid on a SINGLE-PASS collection.** NVIDIA: valid "if only a
+single kernel replay pass is necessary", otherwise it "can lead to inconsistent and out-of-bounds
+metric values" -- because passes 2..N then see whatever pass 1 left in cache. `--set basic` is 8
+passes on this box, so do NOT pair it with `none`. Source the uncached reading from an explicit
+one-pass `--metrics` run (the table above was collected that way) and print `Duration` beside it so
+a replay count that grew is visible.
+
+This also reconciles ncu against an in-situ counter. PAPI's cuda component does not touch the
+caches, so on that same 6 MB kernel it reported near-zero DRAM traffic while ncu reported 90% of
+peak. Neither is broken. They answer different questions -- cold-start cost against steady-state
+cost -- and which one you want depends on whether your kernel is called once or a thousand times.
+
 ## Read it in this order
 
 NVIDIA ships its own ordering and it is not in prose: each rule in `<install>/sections/*.py`
@@ -182,9 +179,10 @@ Each step RULES OUT the ones it does not branch into:
    occupancy work on a kernel without one full wave of blocks cannot pay.
 3. **`Issued Warp Per Scheduler`** (SchedulerStats), ceiling 1.0, idle below 0.6. Then one branch
    decides the rest: `Active Warps Per Scheduler` / `Theoretical Warps Per Scheduler`. Below 0.8,
-   fewer warps are resident than occupancy allows -- go to 4 and 5. At or above 0.8 the launch
-   already has nearly every warp it is entitled to, so occupancy is not the gap and NVIDIA's rule
-   names load imbalance first, stalls only after.
+   warps are allocated but not ELIGIBLE -- they are stalled, so go to step 5's stall table. At or
+   above 0.8 the launch already has nearly every warp it is entitled to, so occupancy is not the gap
+   either and NVIDIA's rule names load imbalance first, stalls only after. Occupancy (step 4) is
+   what you reach for when the ISSUE rate is fine and the warp count is not.
 4. **Occupancy**, only if step 3 sent you. `Theoretical` (a static property of the launch) before
    the gap to `Achieved` (a measured one); they fail for different reasons and take different fixes.
 5. **WarpStateStats**, last. A stall reason means nothing until step 3 has shown issue slots are
@@ -195,8 +193,8 @@ Each step RULES OUT the ones it does not branch into:
 Thresholds are NVIDIA's own, read out of the shipped rules on this box: `SpeedOfLight.py`
 (80 / 60 / 10), `TheoreticalOccupancy.py` (80), `AchievedOccupancy.py` (10),
 `IssueSlotUtilization.py` (0.6 / 0.8), `CPIStall.py` (0.8 / 0.3), `ThreadDivergence.py` (24),
-`SharedMemoryConflicts.py` (10), `LocalMemoryUsage.py` (10), `SlowPipeLimiter.py` (80 / 20 / 25).
-They are where NVIDIA's rule text fires, not laws.
+`SharedMemoryConflicts.py` (10), `LocalMemoryUsage.py` (10), `SlowPipeLimiter.py` (80 / 20 / 25),
+`LaunchStatistics.py` (20). They are where NVIDIA's rule text fires, not laws.
 
 | you read | it means | you change |
 | --- | --- | --- |
@@ -208,14 +206,14 @@ They are where NVIDIA's rule text fires, not laws.
 | `Compute (SM)` >= 80%, average pipe utilisation < 20%, max-minus-avg > 25 points | one slow pipe holds the SM busy while the rest idle | move math off it: fp64 -> fp32 or int |
 | `Issued Warp Per Scheduler` < 0.6 AND active/theoretical < 0.8 | warps are allocated but not eligible -- they are stalled | the stall table below |
 | `Issued Warp Per Scheduler` < 0.6 AND active/theoretical >= 0.8 | nearly every warp occupancy allows is resident, so occupancy is not the gap | load imbalance first; stalls only after |
-| `Achieved Occupancy` HIGH and both throughputs LOW | occupancy was never the problem | go to the stall reasons; changing block size here is motion, not progress |
+| `Achieved Occupancy` HIGH and both throughputs LOW | occupancy was never the problem | go to the stall reasons. Block size is not banned -- NVIDIA names it first when a LIMITER binds (the rows below) -- but changing it to raise an already-high occupancy is motion, not progress |
 | `Theoretical Occupancy` < 80%, smallest limiter `Block Limit Registers` | register count caps resident blocks | `__launch_bounds__`, `-maxrregcount`, fewer live values |
 | ... smallest is `Block Limit Shared Mem` | shared memory caps resident blocks | smaller tile, or `cudaFuncAttributePreferredSharedMemoryCarveout` |
 | ... smallest is `Block Limit Warps` | BLOCK SIZE caps it, and it binds from both ends: too large strands warps, too small wastes block slots | resize, then re-read the limiter |
 | ... smallest is `Block Limit SM` | the hardware blocks-per-SM ceiling, nothing you allocated | only MORE warps per block moves it |
 | ... smallest is `Block Limit Barriers` | too many barriers per block | fewer `__syncthreads()` |
-| `Theoretical - Achieved` > 10 points | the launch could fill the SM and did not: scheduling overhead, tail, imbalance | even work per block, hunt an early `return` |
-| `Avg. Active Threads Per Warp` < 24 (of 32) | divergence or early thread completion | fix the BRANCH, not the occupancy. `cuobjdump -sass` above localises it without counters |
+| `Theoretical - Achieved` > 10 points | the launch could fill the SM and did not: scheduling overhead, tail, imbalance | even work per block, hunt an early `return`. **Re-read `Waves Per SM` first**: inside `1 <= Waves Per SM < 5` NVIDIA attributes the gap to the TAIL (its rule prices a partial wave at `1/(1 + whole waves)` and fires at 20%, which is where the 5 comes from), and the fix is more, smaller waves -- not load balancing |
+| `Avg. Active Threads Per Warp` < 24 (of 32) | divergence or early thread completion | fix the BRANCH, not the occupancy. Source Counters names the lines |
 | `Average Bytes Per Sector For Global Loads` far below its `Maximum` | uncoalesced: consecutive threads touch scattered addresses | transpose the layout, or stage via shared |
 | shared bank conflicts >= 10% of shared wavefronts | shared-memory bank conflicts | pad the leading dimension, or change the access stride |
 | `L1TEX Hit Rate` / `L2 Hit Rate` low where you expected reuse | the working set exceeds that level | smaller tile, different loop order, block the loop |

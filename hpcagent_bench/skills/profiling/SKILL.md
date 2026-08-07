@@ -3,9 +3,11 @@ name: profiling
 description: CPU profiling -- where the time went (perf) and what the machine did there (PAPI counters, per-thread CPI and imbalance).
 ---
 
-This is the CPU skill: `perf` sampling and the PAPI counter wrappers, on the host. A kernel that
-runs on a device is profiled by its vendor's GPU skill instead -- `nsys` on NVIDIA, `rocprof` on
-AMD. Nothing on this page attaches to a device, and a host call graph of a device kernel shows
+This is the JUDGE's CPU route: the call graph `/profile` returns, the counter groups it will run
+for you, and the per-thread report. Running an instrument yourself is a page each -- `linuxperf`
+for a `perf` call graph you record, `papi-cpu` for hardware counters around one bracket in your own
+source. A kernel that runs on a device belongs to its vendor's page instead: `nsys` on NVIDIA,
+`rocprof` on AMD. Nothing here attaches to a device, and a host call graph of a device kernel shows
 the launch and the wait, not the kernel.
 
 Measure before you edit, and again after. A change you cannot measure is a change you cannot
@@ -14,7 +16,7 @@ defend. Four questions, in order -- each one narrows what the next has to look a
 | question | tool | what you get |
 | --- | --- | --- |
 | where does the time go? | `perf record` + the folded call graph | a ranked call graph |
-| what is the machine doing there? | PAPI counters (`/profile` `counters:true`) | instructions, misses, flops |
+| what is the machine doing there? | PAPI counters (`/profile` `counters:true`, or `tool:"papi"` alone) | instructions, misses, flops |
 | do all the threads do the same amount of it? | the per-thread report (`papi.count_per_thread`) | CPI and cycles per thread |
 | why does *this loop* behave that way? | `objdump -d`, cachegrind, the compiler's vector report | the emitted code |
 
@@ -22,7 +24,8 @@ Never start at the last one. A perfectly analysed loop that owns 4% of the run i
 
 ## Build for profiling
 
-Add `-g`. Nothing else.
+Add `-g`. Nothing else, and keep the release optimization level -- profiling a `-O0` build tells
+you about a program nobody runs.
 
 `-g` emits DWARF beside the code; it changes no instruction, so a profiled build times
 identically to the scored one and its hotspots are the scored run's hotspots. Without it perf
@@ -31,11 +34,8 @@ names addresses, and an address-only profile is unreadable.
 Do **not** add `-fno-omit-frame-pointer`. It costs a general-purpose register in every function
 -- real slowdown on a register-hungry inner loop -- and buys nothing here, because a
 frame-pointer unwind is only correct when *every* frame kept its frame pointer, which CPython
-and the BLAS libraries do not. Unwind with `--call-graph=dwarf` instead: it reads `.eh_frame`,
-works on untouched release builds, and costs only a bigger `perf.data`.
-
-Keep the release optimization level. Profiling a `-O0` build tells you about a program nobody
-runs.
+and the BLAS libraries do not. The harness unwinds with `--call-graph=dwarf`, which reads
+`.eh_frame` and works on untouched release builds; `linuxperf` compares the three unwind modes.
 
 ## Take a profile
 
@@ -59,25 +59,16 @@ consequences you will see in the output: a recursive frame is counted ONCE per s
 outermost occurrence (otherwise an interpreter loop reports more than 100%), and a sample perf
 could not unwind survives as `[unknown]` instead of vanishing.
 
-By hand, in the container, `perf report --stdio --no-children` (self time) and `perf report
---stdio` (cumulative) read the same `perf.data`, and `perf stat -- <cmd>` gives a quick
-event summary. Note what `perf stat` is NOT: the harness's counter numbers come from PAPI, one
-metric per run, not from `perf stat` -- so a `perf stat` line with eight events on it is
+Reading a `perf.data` by hand -- self against cumulative, the folded stacks, the unwind failures
+-- is `linuxperf`. One contrast belongs here: the harness's counter numbers come from PAPI, one
+metric per run, never from `perf stat` -- so a `perf stat` line with eight events on it is
 multiplexed and its counts are estimates, while the harness's are not.
 
-## Read a call graph
+## Read the harness's call graph
 
-Two columns, two different findings:
-
-- **self%** -- time in this frame's own instructions. Ranks *what to optimize*.
-- **total%** (children in `perf report`) -- time in this frame and everything it called. Traces
-  *who is responsible*.
-
-A frame with high total% and near-zero self% is a caller, not a bottleneck; walk down. A leaf
-with high self% inside `libopenblas` is not your kernel, it is a library call -- your decision is
-about the call, not the loop inside it. Walk up from the hottest leaf until you reach the first
-frame whose body *is* the algorithm rather than dispatching, packing or reducing. That frame is
-what you optimize.
+Self time ranks what to optimize and cumulative time traces who is responsible; `linuxperf` is the
+page that reads a call graph, including a flat kernel with one symbol, sampling skid, and how few
+samples a 1% entry really is. Three things are the harness's own payload and belong here.
 
 Percentages are shares of the WHOLE recording -- interpreter start, input generation, then the
 timed reps. `kernel_pct` is the share under your submitted symbol, and it is the number that
@@ -230,8 +221,9 @@ that is merely empty would read as a balanced kernel; none of these ever does.
 Run it in order and stop at the first branch that fires. Every step names the number, not the
 feeling.
 
-1. **Is this loop worth it?** `kernel_pct` from the call graph. Below ~30%, go find the frame
-   that owns the rest -- no counter reading changes that arithmetic.
+1. **Is this loop worth it?** `kernel_pct` from the call graph. Below ~30% the best possible
+   outcome is a 1.4x speedup even if you delete the loop, so go find the frame that owns the rest
+   -- no counter reading changes that arithmetic.
 2. **Is it parallel-limited?** `imbalance.max_over_mean`. Above ~1.15, fix the schedule first:
    `wasted_fraction` is free speed that no single-thread transform can reach.
 3. **Is the machine issuing?** `ipc`. At 2-4 it is; skip to step 7. Below 1 it is stalling, and
@@ -298,11 +290,12 @@ cross-level ratio, which is why one arrives with a `caveat` instead of pretendin
 `expressions` a ratio was built from before you compare its value with a published threshold,
 and never carry a number across machines without carrying its expression too.
 
-**Counters can be gated off entirely.** No PAPI, `kernel.perf_event_paranoid` above 2, a
-container without `CAP_PERFMON`, or a python submission with no native call to bracket: all of
-them are an explicit failure with a named `cause`, never an empty result. A profiler that
+**Counters can be gated off entirely.** No PAPI, or a python submission with no native call to
+bracket: both are an explicit failure with a named `cause`, never an empty result. A profiler that
 reports nothing looks exactly like a fast kernel, so treat a 503 as "not measured" and go fix
-the environment -- never as a measurement.
+the environment -- never as a measurement. `kernel.perf_event_paranoid` above 2 and a container
+without `CAP_PERFMON` gate the SAMPLER, not the counts: ask `/profile` for `tool: "papi"` and the
+counts come back with no `perf` attached, at one thread count instead of a sweep.
 
 **A multiplexed number is an estimate wearing a count's clothes.** The harness never multiplexes
 a group (one run per metric is exactly why), and the per-thread path needs two events, which fits
@@ -352,6 +345,6 @@ form from it and then measure.
 | --- | --- |
 | exact cache behaviour of one nest (slow, simulated, deterministic) | `valgrind --tool=cachegrind` |
 | exact call counts and call paths | `valgrind --tool=callgrind`, `pprof` (gperftools) |
-| achieved memory bandwidth | `likwid-perfctr`, PAPI |
 | where are the allocations | `heaptrack` |
-| did it actually vectorize | `objdump -d` on the symbol (look for `%zmm`/`%ymm`), or the compiler's vector report |
+| counters over a region you bracket yourself, bandwidth included | the `papi-cpu` skill, `likwid-perfctr` |
+| did it actually vectorize | the `opt-reports` skill, or `objdump -d` on the symbol (`%zmm`/`%ymm`) |

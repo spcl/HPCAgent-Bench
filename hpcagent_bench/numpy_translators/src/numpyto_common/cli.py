@@ -10,9 +10,17 @@ passed straight through to that backend's ``emit`` sub-command. So
     numpyto --target cupy     --kernel ... --out ... [--sanitize]
     numpyto --target numba    --kernel ... --out ... --suffix n [--fastmath] [--sanitize]
     numpyto --target pythran  --kernel ... --bench-info ... --out ... [--precision ...]
+    numpyto --target cpp_isopar --kernel ... --bench-info ... --out ...
 
 are equivalent to invoking each per-package CLI directly. The per-package CLIs
 remain (the regen scripts call them); this is the single front door over them.
+
+``cpp_isopar`` is the C++ backend spelled over ``<algorithm>``/``<numeric>``: a
+map is a ``std::transform``, a reduction a ``std::reduce``, a prefix recurrence
+a ``std::inclusive_scan``, and anything with no faithful algorithm stays the
+loop it already was. Same symbol and same ABI as ``c``/``cpp`` -- only the body
+differs, so the source states the STRUCTURE and the toolchain picks the
+schedule.
 
 ``polly`` and ``pluto`` are the C-family polyhedral targets: a single
 ``numpyto_c`` emit already writes the C source, the C++ source, AND the
@@ -46,10 +54,17 @@ _TARGETS = {
     "c_omp": "numpyto_c.cli",
     "cpp_omp": "numpyto_c.cli",
     "fortran_omp": "numpyto_fortran.cli",
+    # ISO standard-algorithm C++: same backend, ``--isopar`` injected.
+    "cpp_isopar": "numpyto_c.cli",
 }
 
 #: Targets that inject ``--parallel`` into the backend emit (OpenMP variants).
 _PARALLEL_TARGETS = {"c_omp", "cpp_omp", "fortran_omp"}
+
+#: Targets that inject ``--isopar``: C++ over <algorithm>/<numeric> instead of hand-written loops,
+#: so the SOURCE states the map / reduce / scan and the toolchain picks the schedule. No execution
+#: policy is emitted, so this is a statement of structure, not a request for threads.
+_ISOPAR_TARGETS = {"cpp_isopar"}
 
 
 def main(argv=None) -> int:
@@ -61,6 +76,8 @@ def main(argv=None) -> int:
     mod = importlib.import_module(_TARGETS[args.target])
     if args.target in _PARALLEL_TARGETS and "--parallel" not in rest:
         rest = ["--parallel", *rest]
+    if args.target in _ISOPAR_TARGETS and "--isopar" not in rest:
+        rest = ["--isopar", *rest]
     return mod.main(["emit", *rest])
 
 

@@ -12,14 +12,19 @@
  *
  * Plus one H2D and one D2H copy per rep so the transfer reports are non-empty.
  *
- * Sized at 4 MB per buffer (~12 MB device) -- small enough for a 6 GB laptop GPU shared with a
- * desktop session, and small enough that the build artifact is a few hundred KB.
+ * Sized at 32 MB per buffer (96 MB device). The size is a MEASUREMENT DECISION, not a convenience:
+ * this part has 24 MB of L2, so the 6 MB working set this fixture used to have was entirely
+ * L2-resident and k_stream was never memory-bound -- `dram__bytes_read` correctly reported ~0 and
+ * read as a broken counter. 96 MB is 4x L2, so the stream kernel misses to DRAM as intended.
+ * Check yours rather than copying the number:
+ *   cudaDeviceGetAttribute(&l2, cudaDevAttrL2CacheSize, 0)
+ * Costs 0.44 s for 20 reps here against 0.22 s at the old size; the binary is unchanged at ~1 MB.
  *   nvcc -O2 -arch=native -o gpu_phases gpu_phases.cu
  */
 #include <cstdio>
 #include <cstdlib>
 
-#define N (1 << 19)  /* 524288 floats = 2 MB */
+#define N (1 << 23)  /* 8388608 floats = 32 MB per buffer, 96 MB working set, 4x the 24 MB L2 */
 #define TINY_LAUNCHES 64
 
 __global__ void k_stream(float *__restrict__ a, const float *__restrict__ b,
