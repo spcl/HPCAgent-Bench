@@ -259,7 +259,7 @@ def test_instance_norm_over_expanded_operand():
 
 
 # --------------------------------------------------------------------------- #
-# E. Blocked accumulation -- a full float sum is partial sums, not one chain.   #
+# E. Full-reduction accumulation -- one chain in source order, no blocking.     #
 # --------------------------------------------------------------------------- #
 
 
@@ -268,46 +268,46 @@ def _full_sum_stmts(shape):
     return expand_sum(_target("s"), args, {"a": shape}, kwargs=kws, local_dtypes={})
 
 
-def test_full_float_sum_accumulates_in_blocks():
+def test_full_float_sum_is_one_chain():
     txt = ast.unparse(ast.fix_missing_locations(ast.Module(body=_full_sum_stmts(("N", )), type_ignores=[])))
-    # A block loop over N // 128 with its own accumulator, then the leftover elements.
-    assert "range(N // 128)" in txt, txt
-    assert "range(128)" in txt, txt
-    assert "range(N // 128 * 128, N)" in txt, txt
+    # No block-index division: it is what pet reads as a data-dependent bound (POLYCC-008), and
+    # the block accumulator is the scop-external scalar pet then drops (POLYCC-009).
+    assert "range(N)" in txt, txt
+    assert "//" not in txt, txt
+    assert "128" not in txt, txt
 
 
-def test_blocked_sum_keeps_the_outer_axes_as_plain_loops():
-    # Only the innermost axis is blocked -- an outer axis stays a plain nest, which is what the
-    # parallelism and isopar recognisers walk.
+def test_full_sum_over_two_axes_is_a_plain_nest():
     txt = ast.unparse(ast.fix_missing_locations(ast.Module(body=_full_sum_stmts(("M", "N")), type_ignores=[])))
     assert "range(M)" in txt, txt
-    assert "range(N // 128)" in txt, txt
+    assert "range(N)" in txt, txt
+    assert "//" not in txt, txt
 
 
-def test_integer_sum_is_not_blocked():
-    # Integer addition is exact and associative, so blocking buys nothing and only adds code.
+def test_integer_sum_keeps_an_integer_seed():
     args, kws = _call_args("np.sum(a)")
     stmts = expand_sum(_target("s"), args, {"a": ("N", )}, kwargs=kws, local_dtypes={"a": "int64"})
     txt = ast.unparse(ast.fix_missing_locations(ast.Module(body=stmts, type_ignores=[])))
-    assert "128" not in txt, txt
+    assert "s = 0\n" in txt + "\n", txt
     assert "range(N)" in txt, txt
 
 
-def test_axis_sum_is_not_blocked():
-    # Blocking is the full-reduction chain only; an axis reduction keeps its per-element loop.
+def test_axis_sum_keeps_its_per_element_loop():
     args, kws = _call_args("np.sum(a, axis=1)")
     stmts = expand_sum(_target("s"), args, {"a": ("M", "N")}, kwargs=kws, local_dtypes={})
     txt = ast.unparse(ast.fix_missing_locations(ast.Module(body=stmts, type_ignores=[])))
-    assert "128" not in txt, txt
+    assert "range(M)" in txt, txt
+    assert "range(N)" in txt, txt
+    assert "//" not in txt, txt
 
 
-def test_blocked_sum_adds_initial_exactly_once():
-    """``initial=`` seeds the WHOLE sum, not each block.
+def test_sum_adds_initial_exactly_once():
+    """``initial=`` seeds the WHOLE sum, not one seed per partial accumulator.
 
-    The first version of the blocked path initialised every block accumulator to the reduction's
+    The blocked lowering this replaced once initialised every block accumulator to the reduction's
     ``init``, which with ``initial=`` is the caller's seed -- so the answer gained one seed per
-    block, silently and only for arrays long enough to have more than one. The block accumulator
-    starts at zero; the seed stays on the outer accumulator.
+    block, silently and only for arrays long enough to have more than one. The single chain cannot
+    reproduce that, and this stays as the numerical consumer of the ``initial=`` path.
     """
     n = 1000
     a = np.random.default_rng(0).random(n)
@@ -325,17 +325,18 @@ def test_blocked_sum_adds_initial_exactly_once():
     assert any(v == "ok" for v in res.values()), f"no backend ran it: {res}"
 
 
-def test_large_fp32_sum_agrees_with_numpy_pairwise():
-    """The reason blocking exists, at a tolerance a serial chain does NOT meet.
+def test_large_fp32_sum_stays_within_the_reassociation_band():
+    """A long float32 sum against numpy's pairwise one, at a REASSOCIATION tolerance.
 
-    numpy sums pairwise, so its error grows with log(n) while a naive chain's grows with n. A/B
-    measured through this very harness on this seeded data, n = 2**22, emitted float32, gcc -O2
-    (which does not reassociate): the emitted sum differs from numpy's by **5.2e-05** relative with
-    one accumulator and **1.9e-06** blocked. ``rtol`` below sits at 1e-05, a factor ~5 on each
-    side, so a regression to a single accumulator FAILS here rather than drifting silently until
-    some future large-N kernel disagrees.
+    Reassociating a reduction is sanctioned, so the emitted single chain and numpy's pairwise sum
+    are both right answers and only a tolerance separates them. The data is deliberately well
+    conditioned -- uniform [0, 1), one sign, so no catastrophic cancellation and the sum's
+    condition number is 1; what is left is chain-length rounding alone. Measured through this
+    harness on this seeded data, n = 2**22, emitted float32, gcc -O2: **5.2e-05** relative
+    (gfortran, which vectorizes the chain, lands near numpy). ``rtol`` sits a factor ~4 above the
+    worse of the two, so a real defect -- a missed element, a wrong bound -- still fails loudly.
 
-    ``dtypes=`` is not optional: without it the harness emits float64, whose naive error is ~1e-11
+    ``dtypes=`` is not optional: without it the harness emits float64, whose chain error is ~1e-11
     and which therefore passes whatever the accumulation does -- a green test proving nothing.
     """
     n = 1 << 22
@@ -349,7 +350,7 @@ def test_large_fp32_sum_agrees_with_numpy_pairwise():
                      "a": "(N,)",
                      "out": "(1,)"
                  },
-                 rtol=1e-5,
+                 rtol=2e-4,
                  atol=0.0,
                  dtypes={
                      "a": "float32",

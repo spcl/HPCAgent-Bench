@@ -1,0 +1,21 @@
+# CSCS Container Engine EDF for the generic NVIDIA GH200/A100 image.
+# Keep this image path in sync with build_sqsh.sh OUTPUT_SQSH.
+image = "${SCRATCH}/ce-images/optarena-ce-nvidia-gh200.sqsh"
+mounts = [
+    "/capstor/:/capstor/",
+    "/iopsstor/:/iopsstor/",
+    "${SCRATCH}:${SCRATCH}",
+]
+workdir = "${SCRATCH}"
+writable = true
+entrypoint = true
+
+[env]
+LC_ALL = "C"
+NVIDIA_VISIBLE_DEVICES = "all"
+NVIDIA_DRIVER_CAPABILITIES = "compute,utility,profiler"
+PMIX_MCA_psec = "native"
+
+[annotations]
+# Required by CSCS for Alps Extended Images: the image-provided network stack wins.
+com.hooks.cxi.enabled = "false"

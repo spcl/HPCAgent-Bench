@@ -38,29 +38,9 @@ Measured on this dev box (RTX 4050 Laptop, AD107, 20 SMs, driver 595.84): `ncu` 
 `/opt/nvidia/hpc_sdk/Linux_x86_64/26.3/compilers/bin/ncu`, version 2025.4.1.0, and a newer
 standalone sits at `/opt/nvidia/nsight-compute/2026.2.1/ncu`, version 2026.2.1.0.
 
-**Check the profiling gate before anything else.** Counter collection is permission-gated by the
-driver, and the failure is not obvious: `ncu` refuses to collect, then lets the program run and
-print its normal output, so stdout looks healthy and only the exit code and an `==ERROR==` line say
-the profile is empty.
-
-```sh
-grep -E 'RmProfilingAdminOnly|RestrictProfilingToAdminUsers' /proc/driver/nvidia/params
-```
-
-`0` is open, `1` is locked. Both spellings are the same driver setting -- older drivers publish
-`NVreg_RestrictProfilingToAdminUsers`, the open kernel module publishes `RmProfilingAdminOnly`, and
-grepping only one reports "no gate" on a gated box. Clearing it needs root plus a driver reload
-(`options nvidia NVreg_RestrictProfilingToAdminUsers=0` in `/etc/modprobe.d`, then
-`update-initramfs -u` and reboot, because the module loads from the initrd).
-
-On a LOCKED box the gate blocks counter collection, not activity tracing, so `nsys` still gets
-kernel names and durations where `ncu` gets nothing -- profile there instead of working around this
-page. Two further traps if you meet it: `-o` writes NO file (measured: `-o probe -f` plus
-`ERR_NVGPUCTRPERM` leaves zero `.ncu-rep` on disk and exits 1), and `--query-metrics` prints the
-same `==ERROR==` line but exits **0**, so exit 0 is necessary and not sufficient -- check the report
-contains a kernel.
-
-This box is OPEN (`RmProfilingAdminOnly: 0`) and every number below was collected through it.
+Counter collection is driver-gated: `grep -E 'RmProfilingAdminOnly|RestrictProfilingToAdminUsers'
+/proc/driver/nvidia/params` -- `0` is open, `1` needs root plus a driver reload, and both spellings
+name the same setting. This box reads `0`, and every number below was collected through it.
 
 Command shapes come from `ncu --help` on these binaries, and every metric name, report row LABEL
 and **numeric threshold** below comes from this install's own `<install>/sections/*.section` and
@@ -89,7 +69,7 @@ ncu -k regex:jacobi -c 1 -s 20 --set basic -o prof -f -- ./app input
   several streams with different shapes. The optional operator field takes `regex:`, so
   `--kernel-id :7:regex:^foo:` is "any kernel in stream 7 starting with foo".
 - **`-o` / `--export`** writes a `.ncu-rep` you can re-read offline without re-running. `-f` to
-  overwrite. Nothing is written if collection fails -- see the gate section.
+  overwrite. A run that fails to collect writes NO file at all, whatever `-o` said.
 
 ## Sets and sections -- the cost knob
 
@@ -213,8 +193,8 @@ Each step RULES OUT the ones it does not branch into:
 Thresholds are NVIDIA's own, read out of the shipped rules on this box: `SpeedOfLight.py`
 (80 / 60 / 10), `TheoreticalOccupancy.py` (80), `AchievedOccupancy.py` (10),
 `IssueSlotUtilization.py` (0.6 / 0.8), `CPIStall.py` (0.8 / 0.3), `ThreadDivergence.py` (24),
-`SharedMemoryConflicts.py` (10), `LocalMemoryUsage.py` (10), `SlowPipeLimiter.py` (80 / 20 / 25).
-They are where NVIDIA's rule text fires, not laws.
+`SharedMemoryConflicts.py` (10), `LocalMemoryUsage.py` (10), `SlowPipeLimiter.py` (80 / 20 / 25),
+`LaunchStatistics.py` (20). They are where NVIDIA's rule text fires, not laws.
 
 | you read | it means | you change |
 | --- | --- | --- |
@@ -232,7 +212,7 @@ They are where NVIDIA's rule text fires, not laws.
 | ... smallest is `Block Limit Warps` | BLOCK SIZE caps it, and it binds from both ends: too large strands warps, too small wastes block slots | resize, then re-read the limiter |
 | ... smallest is `Block Limit SM` | the hardware blocks-per-SM ceiling, nothing you allocated | only MORE warps per block moves it |
 | ... smallest is `Block Limit Barriers` | too many barriers per block | fewer `__syncthreads()` |
-| `Theoretical - Achieved` > 10 points | the launch could fill the SM and did not: scheduling overhead, tail, imbalance | even work per block, hunt an early `return`. **Re-read `Waves Per SM` first**: inside `1 <= Waves Per SM < 5` NVIDIA attributes the gap to the TAIL (the last partial wave), and the fix is more, smaller waves -- not load balancing |
+| `Theoretical - Achieved` > 10 points | the launch could fill the SM and did not: scheduling overhead, tail, imbalance | even work per block, hunt an early `return`. **Re-read `Waves Per SM` first**: inside `1 <= Waves Per SM < 5` NVIDIA attributes the gap to the TAIL (its rule prices a partial wave at `1/(1 + whole waves)` and fires at 20%, which is where the 5 comes from), and the fix is more, smaller waves -- not load balancing |
 | `Avg. Active Threads Per Warp` < 24 (of 32) | divergence or early thread completion | fix the BRANCH, not the occupancy. Source Counters names the lines |
 | `Average Bytes Per Sector For Global Loads` far below its `Maximum` | uncoalesced: consecutive threads touch scattered addresses | transpose the layout, or stage via shared |
 | shared bank conflicts >= 10% of shared wavefronts | shared-memory bank conflicts | pad the leading dimension, or change the access stride |

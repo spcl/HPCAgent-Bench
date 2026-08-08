@@ -32,6 +32,42 @@ def _c_type(dtype: str) -> str:
 _INT_CAST_NAMES = frozenset({"int", "len"})
 
 
+def pluto_floordiv(lhs: str, rhs: str) -> str:
+    """Integer floor division as pet's named quasi-affine ``floord`` builtin (POLYCC-008's guard)."""
+    return f"floord({lhs}, {rhs})"
+
+
+def pluto_ceildiv(lhs: str, rhs: str) -> str:
+    """``ceild``, pet's named quasi-affine ceiling-division counterpart to ``floord``."""
+    return f"ceild({lhs}, {rhs})"
+
+
+#: Prelude helper -> the ``_C_HEADER`` macro spelling the SAME semantics with no call. ``max``/``min``
+#: propagate NaN exactly as ``__npb_fmax``/``__npb_fmin`` do (see the header's own guard pair), so
+#: this is a spelling, not a second definition.
+_PLUTO_MACRO_SPELLING = {"__npb_fmax": "max", "__npb_fmin": "min"}
+
+
+def pluto_call_free(name: str, args: str, hoisted: Optional[Dict[str, str]] = None) -> str:
+    """``name(args)`` with the CALL removed, for a pluto scop (POLYCC-010's guard).
+
+    pet outlines a ``static inline`` call inside a scop into a return temporary ``__pet_ret_0`` it
+    never declares, so polycc exits 0 and its output does not compile. Two routes remove the call:
+    a prelude helper that has a macro twin is spelled as the macro, which pet expands away; anything
+    else is INTERNED in ``hoisted`` (call text -> scop-external temp) and replaced by that temp,
+    which the caller declares above ``#pragma scop``. Interning needs the call to be scop-invariant,
+    which only the caller can know, so a caller that cannot prove it passes no ``hoisted`` and the
+    call text comes back unchanged.
+    """
+    macro = _PLUTO_MACRO_SPELLING.get(name)
+    if macro is not None:
+        return f"{macro}({args})"
+    call = f"{name}({args})"
+    if hoisted is None:
+        return call
+    return hoisted.setdefault(call, f"__pl{len(hoisted)}")
+
+
 def _is_int_cast(node: ast.AST) -> bool:
     """True for a call whose result is an integer regardless of its argument dtype
     (``int(x)``, ``len(x)``, ``np.int32(x)``), so float-ness must not propagate out of it."""
@@ -306,6 +342,10 @@ class _CBodyEmitter(BaseEmitter):
         self.isopar_counts: int = 0
         #: Pluto: name -> "[d1][d2]" trailing-dim string for a pointer-to-array local's deferred-malloc cast.
         self.md_trailing: Dict[str, str] = {}
+        #: Pluto: scop-invariant call text -> the scop-external temp that replaces it (:func:`pluto_call_free`).
+        self.pluto_hoisted: Dict[str, str] = {}
+        #: Nesting depth of the subscript INDEX currently being emitted; 0 outside one.
+        self._index_depth: int = 0
         #: Branch-scoped local -> (size, C type, fill kind): declared + malloc'd at its marker inside
         #: the one branch that uses it, freed at that branch's end (see :func:`_branch_scoped_locals`).
         self.branch_local_decls: Dict[str, Tuple[str, str, Optional[str]]] = {}
@@ -314,6 +354,13 @@ class _CBodyEmitter(BaseEmitter):
         #: Branch-scoped locals whose declaration has actually been emitted, so a free is only ever
         #: appended for a pointer that exists on that path.
         self._branch_declared: Set[str] = set()
+        #: Function-top heap locals, in declaration order: what every exit from this body must free.
+        self.heap_locals: List[str] = []
+        #: id() of each branch statement-list currently being emitted, outermost first, so a return
+        #: inside a branch can also release what that branch allocated.
+        self.branch_stack: List[int] = []
+        #: C return type of a scalar-returning helper, for the temporary an early return latches into.
+        self.return_ctype: str = _c_type("float64")
         self.array_shapes: Dict[str, List[str]] = {a.name: list(a.shape) for a in kir.arrays}
         zeros = kir.zeros_locals
         for name, shape in zeros.items():
@@ -720,14 +767,49 @@ class _CBodyEmitter(BaseEmitter):
                 f"{body}\n"
                 f"{indent}}}")
 
+    def live_heap_locals(self) -> List[str]:
+        """Heap buffers alive at this point, innermost branch first -- what an exit here must release.
+
+        The frees a function ends with sit AFTER its body, so a return in the middle jumps over all
+        of them. Only helpers can return at all (the kernel is void and its returns are dropped),
+        which is why this leaked quietly: a helper that allocates a workspace and returns early
+        leaks it once per call, and the caller is a benchmark loop.
+        """
+        in_branch = [
+            name for frame in reversed(self.branch_stack) for name, branch in self.branch_local_owner.items()
+            if branch == frame and name in self._branch_declared
+        ]
+        return in_branch + list(self.heap_locals)
+
     def _emit_return(self, node: ast.Return, indent: str) -> str:
         # In the (void) kernel a return is dropped; in a HELPER function it's a real C return.
         mode = self.return_mode
         if mode is None:
             return ""
+        live = self.live_heap_locals()
+        frees = [f"{indent}free({name});" for name in live]
         if node.value is None or mode == "scalar":
-            val = "" if node.value is None else f" {self.emit_expr(node.value)}"
-            return f"{indent}return{val};"
+            if node.value is None:
+                return "\n".join([*frees, f"{indent}return;"])
+            if isinstance(node.value, ast.Name) and node.value.id in live:
+                # Returning a heap local BY VALUE from a scalar-typed function: the C is already
+                # ill-typed (a pointer where a double is declared), and freeing it here would hand
+                # back a dangling one. An array return is supposed to reach _rewrite_returns_to_outparam
+                # instead, so this is a misclassified helper -- say which, rather than emit either.
+                raise NotImplementedError(f"helper returns heap buffer {node.value.id!r} from a scalar "
+                                          "return; an array return must go through the out-param path")
+            val = self.emit_expr(node.value)
+            if not live:
+                return f"{indent}return {val};"
+            # The returned expression may read a buffer this exit releases (``return t[n - 1];``),
+            # so latch the value into a temporary before any free runs.
+            return "\n".join([
+                f"{indent}{{",
+                f"{indent}  {self.return_ctype} __ret = {val};",
+                *[f"{indent}  free({name});" for name in live],
+                f"{indent}  return __ret;",
+                f"{indent}}}",
+            ])
         # Array return: write the value into the out-param (whole-array assign), then return void.
         assign = ast.Assign(targets=[
             ast.Subscript(value=ast.Name(id=mode, ctx=ast.Load()),
@@ -737,7 +819,7 @@ class _CBodyEmitter(BaseEmitter):
                             value=node.value)
         ast.copy_location(assign, node)
         ast.fix_missing_locations(assign)
-        return f"{self._emit_assign(assign, indent)}\n{indent}return;"
+        return "\n".join([self._emit_assign(assign, indent), *frees, f"{indent}return;"])
 
     def _emit_if(self, node: ast.If, indent: str) -> str:
         then = self._branch_block(node.body, indent + "  ")
@@ -767,7 +849,11 @@ class _CBodyEmitter(BaseEmitter):
         nor frees, and nothing is freed twice. Only a name whose declaration was actually emitted is
         freed -- an empty branch the emitter drops has no pointer to release.
         """
-        body = self.emit_block(stmts, indent)
+        self.branch_stack.append(id(stmts))
+        try:
+            body = self.emit_block(stmts, indent)
+        finally:
+            self.branch_stack.pop()
         owned = [
             name for name, branch in self.branch_local_owner.items()
             if branch == id(stmts) and name in self._branch_declared
@@ -802,11 +888,13 @@ class _CBodyEmitter(BaseEmitter):
                         if is_reassign or fill is None:
                             return ""
                         return _zero_fill_stmt(t, size, c_type, fill, indent)
-                    realloc = prev is not None
                     sizes[t] = size
-                    lines = []
-                    if realloc:
-                        lines.append(f"{indent}free({t});")
+                    # Free before EVERY deferred allocation, not only where a second marker made the
+                    # reallocation visible in the emitted text. A marker whose one occurrence sits
+                    # inside a loop is emitted once and runs per iteration, so every iteration but
+                    # the last overwrote a pointer nothing had freed. The declaration
+                    # NULL-initialises the name and free(NULL) is a no-op, so the first pass is safe.
+                    lines = [f"{indent}free({t});"]
                     # Pluto: cast to the multidimensional pointer-to-array type matching the declaration; else flat T*.
                     cast = (f"({c_type} (*){self.md_trailing[t]})" if t in self.md_trailing else f"({c_type} *)")
                     lines.append(f"{indent}{t} = {cast}malloc({_byte_count(size, c_type)});")
@@ -985,7 +1073,7 @@ class _CBodyEmitter(BaseEmitter):
             # inferred from the AST is what silently truncated ``int(a[i]) // 2`` instead of
             # flooring it -- the compiler knows the type exactly, this pass does not.
             if isinstance(node.op, ast.FloorDiv):
-                return f"int_floor({self.emit_expr(node.left)}, {self.emit_expr(node.right)})"
+                return self.emit_floordiv(node.left, node.right)
             if isinstance(node.op, ast.Mod):
                 return f"python_mod({self.emit_expr(node.left)}, {self.emit_expr(node.right)})"
             if isinstance(node.op, ast.Div):
@@ -1030,13 +1118,18 @@ class _CBodyEmitter(BaseEmitter):
         """Collapse a subscript chain a[i][j]... into (base_node, [i, j, ...]) for row-major flattening."""
         chain: List[str] = []
         cur: ast.AST = node
-        while isinstance(cur, ast.Subscript):
-            sl = cur.slice
-            if isinstance(sl, ast.Tuple):
-                chain = [self.emit_expr(e) for e in sl.elts] + chain
-            else:
-                chain = [self.emit_expr(sl)] + chain
-            cur = cur.value
+        # Index texts are marked so a pluto scop can hoist a call out of one (see pluto_call_free).
+        self._index_depth += 1
+        try:
+            while isinstance(cur, ast.Subscript):
+                sl = cur.slice
+                if isinstance(sl, ast.Tuple):
+                    chain = [self.emit_expr(e) for e in sl.elts] + chain
+                else:
+                    chain = [self.emit_expr(sl)] + chain
+                cur = cur.value
+        finally:
+            self._index_depth -= 1
         return cur, chain
 
     def _dim_minus_k(self, dim_token: str, k: int, orig: ast.AST) -> ast.AST:
@@ -1192,7 +1285,17 @@ class _CBodyEmitter(BaseEmitter):
             # np.maximum/np.minimum lower to fmax/fmin, but libm's suppress NaN while numpy propagates it.
             if fn in ("fmax", "fmin") and len(node.args) == 2:
                 helper = "__npb_fmax" if fn == "fmax" else "__npb_fmin"
-                return f"{helper}({self.emit_expr(node.args[0])}, {self.emit_expr(node.args[1])})"
+                args = f"{self.emit_expr(node.args[0])}, {self.emit_expr(node.args[1])}"
+                return pluto_call_free(helper, args) if self.pluto else f"{helper}({args})"
+            # floor(a/b) on int/int IS floor-division: route through emit_floordiv/emit_ceildiv
+            # (POLYCC-008's pluto floord/ceild, else the exact int_floor/int_ceil _Generic macro)
+            # instead of C's truncating int64_t / int64_t, which a forward-substituted int/int
+            # divide can reach here past _emit_true_divide (only sees a bare top-level Div).
+            if (fn in ("floor", "ceil") and len(node.args) == 1 and isinstance(node.args[0], ast.BinOp)
+                    and isinstance(node.args[0].op, ast.Div) and self._floor_ceil_div_operand_is_int(node.args[0].left)
+                    and self._floor_ceil_div_operand_is_int(node.args[0].right)):
+                emit_div = self.emit_floordiv if fn == "floor" else self.emit_ceildiv
+                return emit_div(node.args[0].left, node.args[0].right)
             args = ", ".join(self.emit_expr(a) for a in node.args)
             return f"{self._math_name(fn)}({args})"
         # np.X(arg) / arr.X(...): handle passthrough/identity intrinsics that survived lowering.
@@ -1282,6 +1385,40 @@ class _CBodyEmitter(BaseEmitter):
             return f"__npb_int_pow({self.emit_expr(left)}, {self.emit_expr(right)})"
         return f"{self._math_name('pow')}({self.emit_expr(left)}, {self.emit_expr(right)})"
 
+    def emit_floordiv(self, left: ast.AST, right: ast.AST) -> str:
+        """``a // b``: ``floord`` in a pluto scop over provably signed ints, else ``int_floor``."""
+        lhs, rhs = self.emit_expr(left), self.emit_expr(right)
+        if self.pluto and self._is_signed_int_operand(left) and self._is_signed_int_operand(right):
+            # pet name-matches floord in a loop BOUND, but outlines it in an INDEX (POLYCC-010); a
+            # symbol-only divisor is scop-invariant, so hoisting it keeps the index affine.
+            if self._index_depth and self._reads_symbols_only(left) and self._reads_symbols_only(right):
+                return pluto_call_free("floord", f"{lhs}, {rhs}", self.pluto_hoisted)
+            return pluto_floordiv(lhs, rhs)
+        return f"int_floor({lhs}, {rhs})"
+
+    def emit_ceildiv(self, left: ast.AST, right: ast.AST) -> str:
+        """``emit_floordiv``'s ceiling counterpart: ``ceild`` in a pluto scop, else ``int_ceil``."""
+        lhs, rhs = self.emit_expr(left), self.emit_expr(right)
+        if self.pluto and self._is_signed_int_operand(left) and self._is_signed_int_operand(right):
+            if self._index_depth and self._reads_symbols_only(left) and self._reads_symbols_only(right):
+                return pluto_call_free("ceild", f"{lhs}, {rhs}", self.pluto_hoisted)
+            return pluto_ceildiv(lhs, rhs)
+        return f"int_ceil({lhs}, {rhs})"
+
+    def _reads_symbols_only(self, node: ast.AST) -> bool:
+        """Every Name read by ``node`` is a kernel SYMBOL -- so the expression is scop-invariant."""
+        symbols = {s.name for s in self.kir.symbols}
+        return all(n.id in symbols for n in ast.walk(node) if isinstance(n, ast.Name))
+
+    def _is_signed_int_operand(self, node: ast.AST) -> bool:
+        """Provably a SIGNED integer built from Python ints -- no arrays, no unsigned scalar."""
+        if not self._is_int_operand(node, allow_array=False):
+            return False
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Name) and (self._name_dtype(sub.id) or "").startswith("uint"):
+                return False
+        return True
+
     def _is_int_operand(self, node: ast.AST, *, allow_array: bool = True) -> bool:
         """Conservative int-typed operand detection: int Constant, an int-typed Name or
         array element, or a BinOp/UnaryOp of only those.
@@ -1336,6 +1473,16 @@ class _CBodyEmitter(BaseEmitter):
         if isinstance(node, ast.UnaryOp):
             return self._is_int_operand(node.operand, allow_array=allow_array)
         return False
+
+    def _floor_ceil_div_operand_is_int(self, node: ast.AST) -> bool:
+        """``_is_int_operand`` plus ``int(x)``-cast Calls, scoped to the floor/ceil divide above."""
+        if _is_int_cast(node):
+            return True
+        if isinstance(node, ast.BinOp) and not isinstance(node.op, ast.Div):
+            return (self._floor_ceil_div_operand_is_int(node.left) and self._floor_ceil_div_operand_is_int(node.right))
+        if isinstance(node, ast.UnaryOp):
+            return self._floor_ceil_div_operand_is_int(node.operand)
+        return self._is_int_operand(node)
 
     def _all_int_locals(self) -> Set[str]:
         """Cached set of all locals known to be int: int kernel scalars + tuple-unpack int_locals + needs_int promotions."""
@@ -1779,10 +1926,13 @@ def _emit_body(kir: KernelIR,
                return_parts: bool = False,
                return_mode: Optional[str] = None,
                parallel: bool = False,
-               isopar: bool = False):
+               isopar: bool = False,
+               return_ctype: Optional[str] = None):
     emitter = _CBodyEmitter(kir, multidim_arrays=multidim_arrays)
     emitter.pluto = pluto
     emitter.return_mode = return_mode
+    if return_ctype is not None:
+        emitter.return_ctype = return_ctype
     emitter.parallel = parallel
     emitter.isopar = isopar
     zeros = kir.zeros_locals
@@ -1873,7 +2023,8 @@ def _emit_body(kir: KernelIR,
         },
     }
     decls: List[str] = []
-    frees: List[str] = []
+    # Names, not statements: every exit needs this list too, at whatever indent it sits on.
+    heap: List[str] = []
     for name in int_locals:
         # canonical int is int64_t everywhere else (see _c_type / the int(x) cast); a bare 32-bit
         # int here overflows on a literal grid unpack like nx, ny = 46341, 46341 (nx*ny > 2^31).
@@ -1893,11 +2044,11 @@ def _emit_body(kir: KernelIR,
             tr = emitter.md_trailing[name]
             decls.append(f"{indent}{c_type} (*{name}){tr} = "
                          f"({c_type} (*){tr})malloc({_byte_count(size, c_type)});")
-            frees.append(f"{indent}free({name});")
+            heap.append(name)
         elif any(c.isalpha() for c in size):
             decls.append(f"{indent}{c_type} *{name} = "
                          f"({c_type} *)malloc({_byte_count(size, c_type)});")
-            frees.append(f"{indent}free({name});")
+            heap.append(name)
         else:
             decls.append(f"{indent}{c_type} {name}[{size}];")
         # Only fill locals explicitly built by a zeros/ones constructor; empty-kind/scratch temps are skipped.
@@ -1933,7 +2084,7 @@ def _emit_body(kir: KernelIR,
             decls.append(f"{indent}{c_type} (*{name}){emitter.md_trailing[name]} = NULL;")
         else:
             decls.append(f"{indent}{c_type} *{name} = NULL;")
-        frees.append(f"{indent}free({name});")
+        heap.append(name)
         kind = zeros_fills.get(name)
         fill = None if (kind is None or kind in ("empty", "empty_like", "ndarray")) else kind
         deferred_specs[name] = (size, c_type, fill)
@@ -1953,7 +2104,14 @@ def _emit_body(kir: KernelIR,
                          f"{name}[__i] = 1;")
         else:  # zeros / zeros_like / default
             decls.append(f"{indent}memset({name}, 0, {_byte_count(size, c_type)});")
+    emitter.heap_locals = heap
     body = emitter.emit_block(kir.tree.body, indent)
+    # Calls hoisted out of a scop index read symbols only, so they sit with the other pre-scop decls.
+    decls += [f"{indent}{_c_type('int')} {tmp} = {call};" for call, tmp in emitter.pluto_hoisted.items()]
+    # A body ending in a return already freed everything on that path, so the closing frees would be
+    # unreachable -- emit them only where control can actually fall out of the body.
+    falls_through = not (return_mode is not None and kir.tree.body and isinstance(kir.tree.body[-1], ast.Return))
+    frees = [f"{indent}free({name});" for name in heap] if falls_through else []
     if return_parts:
         # Pluto: keep allocations/frees out of the loop body so the caller can place them outside #pragma scop.
         return ("\n".join(d for d in decls if d), body, "\n".join(f for f in frees if f))
@@ -2079,6 +2237,18 @@ _C_HEADER = ("#define _USE_MATH_DEFINES\n"
              "    __NPB_UNSIGNED_ASSOC(__npb_ceildiv_u) \\\n"
              "    float: __npb_ceildiv_f, double: __npb_ceildiv_f, long double: __npb_ceildiv_f, \\\n"
              "    default: __npb_ceildiv_i)((a), (b))\n"
+             "#endif\n"
+             "/* pet's named quasi-affine builtins (POLYCC-008); guarded because polycc prepends\n"
+             " * its own #define floord/ceild, which would expand these declarators (POLYCC-004). */\n"
+             "#ifndef floord\n"
+             "static inline int64_t floord(int64_t a, int64_t b) {\n"
+             "    return __npb_floordiv_i(a, b);\n"
+             "}\n"
+             "#endif\n"
+             "#ifndef ceild\n"
+             "static inline int64_t ceild(int64_t a, int64_t b) {\n"
+             "    return __npb_ceildiv_i(a, b);\n"
+             "}\n"
              "#endif\n"
              "/* Python ``%`` returns sign of divisor; C returns sign of dividend. Same\n"
              " * type-dispatch as int_floor: integer operands use the exact integer form,\n"
@@ -2443,7 +2613,7 @@ def _emit_c_helper(hkir: KernelIR, cpp: bool = False, isopar: bool = False) -> s
     signature = _emit_signature(hkir, hkir.kernel_name, order=hkir.abi_param_order()).replace("void ", f"{rettype} ", 1)
     if cpp:
         signature = signature.replace("*restrict ", "*__restrict__ ")
-    body = _emit_body(hkir, indent="    ", return_mode=hkir.return_kind, isopar=isopar)
+    body = _emit_body(hkir, indent="    ", return_mode=hkir.return_kind, isopar=isopar, return_ctype=rettype)
     return f"static {signature} {{\n{body}\n}}\n\n"
 
 

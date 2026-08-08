@@ -20,9 +20,9 @@ silence a warning to pass.
 House conventions: **single-TU free-form `.f90` sources, line length 120.**
 If a `.fprettify.rc` sits at or above the file, it wins (typical: `indent=2`,
 `line-length=120`). Tools: `fprettify`, `gfortran` (primary gate -- needs a recent
-version, 13+/15+, for full F2018 + `-fanalyzer` + sanitizers), and `flang-new`
+version, 13+/15+, for full F2018 + `-fanalyzer` + sanitizers), and `flang`
 (optional second front-end, only if installed). Probe availability first; run the
-flang gate only where `flang-new` exists.
+flang gate only where a flang driver exists.
 
 ## A. The gates (run in this order)
 
@@ -53,10 +53,14 @@ flag every implicit type/kind conversion (mixed-mode `real`/`integer` arithmetic
 `kind` promotions) -- with `-Werror` they are build failures; fix them with an
 explicit intrinsic conversion, never by widening the warning set down.
 
-LLVM flang (`flang-new`), only if installed -- weaker warnings today, but a useful
-second front-end opinion and the path to LLVM sanitizers for `bind(c)` code:
+LLVM flang, only if installed -- weaker warnings today, but a useful second
+front-end opinion and the path to LLVM sanitizers for `bind(c)` code. LLVM 20
+renamed the driver `flang-new` -> `flang`, so probe the new name first and fall
+back, the way `hpcagent_bench/languages.py::resolve_compiler` does -- probing only
+`flang-new` means the gate never runs on a current toolchain:
 ```bash
-command -v flang-new >/dev/null && flang-new -std=f2018 -Wall -c <file>.f90 -o /tmp/fq_flang.o
+FLANG="$(command -v flang || command -v flang-new)"
+[ -n "$FLANG" ] && "$FLANG" -std=f2018 -Wall -c <file>.f90 -o /tmp/fq_flang.o
 ```
 
 ### 3. gfortran static analyzer (`-fanalyzer`, syntax-only, no link)
@@ -64,9 +68,12 @@ command -v flang-new >/dev/null && flang-new -std=f2018 -Wall -c <file>.f90 -o /
 gfortran -std=f2018 -fsyntax-only -fanalyzer -Wall -Wextra -Wconversion -Wconversion-extra <file>.f90
 ```
 `-fanalyzer` enables the `-Wanalyzer-*` path-sensitive family (double-free,
-use-after-free, null/leak). It is **C-focused** -- on Fortran it catches less than
-on C, but it is cheap and any `-Wanalyzer-*` line is a real defect. Add `-Werror`
-to hard-fail. This does not replace gate 4; it complements it.
+use-after-free, null/leak). **Advisory, not a gate, and it does not count toward
+"clean".** GCC documents it as "only suitable for use on C code in this release":
+on pure Fortran it fires on nothing, so a zero-finding run is the tool declining to
+look, not evidence the file is sound. Run it only where the file has a `bind(c)`
+surface whose C side you compile too, and there any `-Wanalyzer-*` line is a real
+defect. Do not add `-Werror` here. Gate 4 is what actually decides.
 
 ### 4. Runtime-checked build + RUN (gfortran) -- the real Fortran gate
 Static checks are not enough: the file must actually run with checks armed.

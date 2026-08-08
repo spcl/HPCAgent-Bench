@@ -317,7 +317,7 @@ _INT32_BENCH = {
             }
         },
     },
-    "track": "foundation",
+    "track": "loop_level_reasoning",
     "precisions": ["fp64"],
 }
 

@@ -100,6 +100,8 @@ class _AxisReshapeToIndexing(ast.NodeTransformer):
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
         name = _np_attr_name(node) if isinstance(node.func, ast.Attribute) else None
+        if name in AXIS_STRUCTURAL_FNS or name == "norm":
+            self._drop_noop_keepdims(node)
         if name == "array" and len(node.args) == 1 and not isinstance(node.args[0], (ast.List, ast.Tuple)):
             # ``np.array(0.0)`` is a 0-d array: the scalar itself. Only when the operand is already
             # a scalar -- ``np.array(some_array)`` is a COPY, and dropping it would alias.
@@ -125,6 +127,26 @@ class _AxisReshapeToIndexing(ast.NodeTransformer):
         perm[i], perm[j] = perm[j], perm[i]
         return self._rewrite(f"np.transpose({ast.unparse(node.args[0])}, ({', '.join(map(str, perm))},))", node)
 
+    @staticmethod
+    def _drop_noop_keepdims(node: ast.Call) -> None:
+        """Delete a literal ``keepdims=False`` from a reduction call -- it is numpy's OWN default, so
+        every reader here already reads its absence as False (:func:`_read_axis_keepdims`) and the
+        result rank is unchanged either way.
+
+        Not cosmetic: dace's reductions declare no ``keepdims`` parameter at all
+        (``_sum(pv, sdfg, state, a, axis=None)``), so forwarding the no-op refused the whole program
+        with ``_sum() got an unexpected keyword argument 'keepdims'``.
+
+        A TRUE one is deliberately left in place. It sets the result RANK, and restoring the reduced
+        axis needs the operand's shape TOKENS, which this pass does not carry -- it knows ranks only.
+        An unrestored axis broadcasts against the wrong one, which is a wrong answer rather than a
+        refusal, and the native lowering consumes ``keepdims`` directly.
+        """
+        node.keywords = [
+            k for k in node.keywords if not (k.arg == "keepdims" and isinstance(k.value, ast.Constant)
+                                             and isinstance(k.value.value, (bool, int)) and not k.value.value)
+        ]
+
     def _is_scalar(self, node: ast.expr) -> bool:
         """Rank 0 for certain: a numeric literal or a declared scalar parameter."""
         if isinstance(node, ast.Name):
@@ -147,8 +169,9 @@ class _AxisReshapeToIndexing(ast.NodeTransformer):
         if "ord" in kw or len(node.args) > 1 or "axis" not in kw:
             return node
         operand = ast.unparse(node.args[0])
-        # keepdims rides along: dropping it silently changed the result RANK, and l2_norm's
+        # A TRUE keepdims rides along: dropping it silently changed the result RANK, and l2_norm's
         # ``x / np.linalg.norm(x, axis=1, keepdims=True)`` then broadcast against the wrong axis.
+        # A false one is already gone -- :meth:`_drop_noop_keepdims` takes it before this runs.
         keep = f", keepdims={ast.unparse(kw['keepdims'])}" if "keepdims" in kw else ""
         return self._rewrite(f"np.sqrt(np.sum(np.abs({operand}) ** 2, axis={ast.unparse(kw['axis'])}{keep}))", node)
 

@@ -39,8 +39,13 @@ COMPILERS: Tuple[str, ...] = ("gcc", "g++", "gfortran", "clang", "clang++", "fla
 #: Plain executables -- one spelling each, no versioned variants to fall back to.
 TOOLS: Tuple[str, ...] = ("make", "pkg-config")
 
-#: Libraries reachable only via pkg-config: the BLAS optimizer links ``cblas_*``.
-PKG_CONFIG_MODULES: Tuple[str, ...] = ("openblas", )
+#: Libraries reachable only via pkg-config: the BLAS optimizer links ``cblas_*``, and the
+#: cegterg / vexx port oracles link ``-lfftw3``. fftw3 is checked here rather than as a link
+#: row because the header is what goes missing: ``libfftw3-double3`` (a transitive dependency of
+#: half the desktop) makes ``-lfftw3`` resolve while ``fftw3.h`` is absent, and
+#: ``cegterg_reference_ctypes.toolchain_available`` compiles against the header -- so a link-only
+#: probe reports present on exactly the box where 17 cegterg cases skip.
+PKG_CONFIG_MODULES: Tuple[str, ...] = ("openblas", "fftw3")
 
 #: Runtimes linked by ``-l<name>``. Both OpenMP runtimes are required, not optional:
 #: test_fork_openmp_safety asserts on libomp because libgomp deadlocks across fork() and libomp

@@ -8,7 +8,11 @@ The two things that make this column not-a-flag-preset, and that live here rathe
 native path: polycc's output has its OWN signature (VLA parameters force symbols to the front, so the
 positional ctypes call needs a different argument order -- see :meth:`PlutoFramework.call_args`), and
 polycc has to actually run before anything is compiled (``benchmarks.cpp_runtime._native_sources`` ->
-:func:`hpcagent_bench.pluto_transform.transformed_sources`)."""
+:func:`hpcagent_bench.pluto_transform.transformed_sources`).
+
+A third: this is the only column whose tool can accept a kernel and silently return different numbers
+for it, so it is the only one that asks the numerical oracle for a verdict before it will be timed
+(:meth:`PlutoFramework.measure`)."""
 
 import json
 import shlex
@@ -18,12 +22,41 @@ from hpcagent_bench import pluto_transform
 from hpcagent_bench.benchmarks import cpp_runtime
 from hpcagent_bench.frameworks import Benchmark
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework
+from hpcagent_bench.frameworks.framework import CallPlan
 from hpcagent_bench.frameworks.native_framework import NativeFramework
 
 
 class PlutoFramework(NativeFramework):
     """The Pluto polyhedral native backend (base ``pluto``); a NativeFramework subclass that compiles
     polycc's OUTPUT rather than the translator's, and calls it through polycc's own signature."""
+
+    #: Kernel :meth:`measure` gates on, stamped by :meth:`build_call` -- ``measure``'s signature
+    #: carries no benchmark and the gate needs a name to ask the oracle about.
+    gate_kernel: str = ""
+
+    def build_call(self, bench: Benchmark, impl: Callable, bdata: Dict[str, Any]) -> CallPlan:
+        """The base plan, plus the kernel name :meth:`measure` needs; the last hook before timing
+        that still sees the benchmark."""
+        self.gate_kernel = self._native_base(bench)
+        return super().build_call(bench, impl, bdata)
+
+    def measure(self,
+                impl: Any,
+                runner: Callable[[], Any],
+                repeat: int,
+                before_each: Optional[Callable[[], None]] = None,
+                warmup: Optional[int] = None) -> Dict[str, Optional[List[float]]]:
+        """Time the column only once the oracle has graded its transformed binary ``ok``.
+
+        The gate runs HERE, before ``create_timer``: a verdict fetched from inside the timed bracket
+        would land its (seconds-long, once-per-kernel) cost in a kept sample whenever ``warmup`` is
+        0. Declining through :class:`NotSupportedByFramework` is what makes ``Test._execute`` record
+        this as a deliberate skip with no timings rather than a measurement -- see
+        :func:`hpcagent_bench.pluto_transform.assert_numeric_agreement` for what it catches that
+        ``assert_affine`` cannot.
+        """
+        pluto_transform.assert_numeric_agreement(self.gate_kernel)
+        return super().measure(impl, runner, repeat, before_each=before_each, warmup=warmup)
 
     def call_args(self, bench: Benchmark, impl: Callable, resolved: Dict[str, Any],
                   bdata: Dict[str, Any]) -> Tuple[Sequence[Any], Dict[str, Any]]:

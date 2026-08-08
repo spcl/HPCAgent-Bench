@@ -163,7 +163,8 @@ The rest, which C23 would not have changed anyway:
 - **`static inline` functions over function-like macros** -- no double-evaluation, real
   types. Reserve macros for token pasting, `X`-macros, conditional compilation.
 - **Check every return code** (`malloc`, `realloc`, `fopen`, `snprintf`, `pthread_*`);
-  mark the APIs `[[nodiscard]]`.
+  mark the APIs `__attribute__((warn_unused_result))` -- `[[nodiscard]]` is C23 syntax
+  and does not compile at the `-std=c17` this harness builds with.
 - **`sizeof(*ptr)` in allocations**, not the type name: `p = malloc(n * sizeof(*p));`
   (or `calloc(n, sizeof(*p))` for overflow-safe zeroing).
 - **No VLAs in headers / public interfaces**, and avoid VLAs generally.

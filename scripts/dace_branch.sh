@@ -8,7 +8,7 @@
 #   ensure_branch "${DACE_MAIN}" main || ...
 #
 # Its own file because two samples need it (samples/npbench_dace_flavors.sbatch measures main against
-# extended; samples/hpc_dace_main_vs_pluto.sbatch measures main against a non-DaCe optimizer) and a
+# extended; samples/scientific_computing_dace_main_vs_pluto.sbatch measures main against a non-DaCe optimizer) and a
 # second copy is exactly how the two would drift into disagreeing about what "measured on main" means.
 
 # A stage measures the branch it CLAIMS to measure, or it does not run. Getting this wrong produces

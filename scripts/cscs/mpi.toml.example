@@ -8,7 +8,7 @@
 #
 # On Alps every `srun` must carry `--environment=<this file>` or the step runs outside the image.
 #
-# THE ONE DIFFERENCE FROM foundation.toml.example: the hooks. That file deliberately enables NONE,
+# THE ONE DIFFERENCE FROM loop_level_reasoning.toml.example: the hooks. That file deliberately enables NONE,
 # and says so -- its ranks each run a single-node kernel shard and never talk to each other, so
 # there is no rank-to-rank traffic to accelerate and a fabric hook would buy nothing. Here the ranks
 # talk on every timestep, and the hooks are the entire reason this file exists.

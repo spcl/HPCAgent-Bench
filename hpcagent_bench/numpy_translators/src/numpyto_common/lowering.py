@@ -3204,6 +3204,18 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
             rhs_slice_idx += 1
             rhs_start = self._resolve_bound(d.lower, rhs_name, axis, default=_const(0))
             ivar = ast.Name(id=ivar_node.id, ctx=ast.Load())
+            # numpy KEEPS an axis a slice produced even at length 1, and then BROADCASTS it: every
+            # result position along that axis reads the SAME source element. Advancing it with the
+            # iter var instead reads a whole row -- ``out[:, :] = a[:, 0:1] + b`` came out as
+            # ``a[i][j] + b[i][j]``, wrong numbers in C, C++ and Fortran alike and no diagnostic.
+            # (An INTEGER index is the other rule and is already handled: it drops the axis, so it
+            # never reaches here.) Emitting the start is right whichever extent the destination has:
+            # where the destination is also length 1 the iter var only ever takes that one value.
+            rhs_stop = (self._resolve_bound(d.upper, rhs_name, axis, default=_const(0))
+                        if d.upper is not None else None)
+            if _is_unit_extent(rhs_start, rhs_stop):
+                idx_nodes.append(rhs_start)
+                continue
             if step is not None and step != 1:
                 # Strided RHS slice ``a[lo:hi:k]``: the source index for the
                 # result position ``pos = ivar - lhs_start`` is ``lo + pos*k``.
@@ -3302,6 +3314,20 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
                 else ast.Name(id=shape[axis], ctx=ast.Load())
             return _binop(axis_len, ast.Sub(), _const(bound.operand.value))
         return bound
+
+
+def _is_unit_extent(start: ast.AST, stop: Optional[ast.AST]) -> bool:
+    """Is this slice exactly one element long -- ``[0:1]`` or the symbolic ``[k:k+1]``?
+
+    Length 1 is the case where numpy's two indexing rules visibly differ: the slice keeps its axis
+    and broadcasts along it, while the integer index would have removed the axis entirely.
+    """
+    if stop is None:
+        return False  # an open upper bound is the whole axis; length 1 only if the axis is
+    if _fold_offset(stop, start) == 1:
+        return True
+    return (isinstance(stop, ast.BinOp) and isinstance(stop.op, ast.Add) and isinstance(stop.right, ast.Constant)
+            and stop.right.value == 1 and ast.dump(stop.left) == ast.dump(start))
 
 
 def _fold_offset(rhs_start: ast.AST, lhs_start: ast.AST) -> Optional[int]:
@@ -5931,7 +5957,11 @@ class _TupleAssignRewriter(ast.NodeTransformer):
             shape = self.arrays_shapes.get(arr_name)
             if shape is None or len(shape) != len(names):
                 return node
-            self.int_locals.extend(names)
+            # A self-copy (``H = H``, the shape symbol resolving to the target's own
+            # name) needs no int declaration: it is promoted to a shape PARAMETER, and
+            # ``_integer_valued_locals`` pins every ``kir.symbols`` name int anyway.
+            # Declaring it would shadow the parameter with an uninitialised local.
+            self.int_locals.extend(n for n, sym in zip(names, shape) if n != sym)
             text = "\n".join(f"{n} = {sym}" for n, sym in zip(names, shape))
             return ast.parse(text).body
 
@@ -5944,11 +5974,15 @@ class _TupleAssignRewriter(ast.NodeTransformer):
                 self.int_locals.extend(names)
                 text = "\n".join(f"{n} = {ast.unparse(v)}" for n, v in zip(names, elts))
                 return ast.parse(text).body
-            # Positional self-copies (``x = x``) never race, and drop out of the
+            # Positional self-copies (``x = x``) never race, so they drop out of the
             # hazard test. They are common after shape-symbol resolution rewrites
-            # ``n, m = arr.shape`` into ``n, m = n, m``: those must stay plain
-            # ``n = n`` splits so the promote-params pass keeps seeing n / m as
-            # scalar parameters (temping them would demote them to locals).
+            # ``n, m = arr.shape`` into ``n, m = n, m``. Splitting them plainly (rather
+            # than staging them through a temp) is what keeps promote-params seeing
+            # n / m as scalar parameters -- a temp would make them body-defined locals.
+            # The resulting ``n = n`` statements are then deleted outright by
+            # :class:`_SelfAssignDropper` at the end of this phase; promotion is
+            # unaffected because ``_body_defined_locals`` already ignores an assign
+            # whose target appears in its own RHS.
             changed = [i for i, v in enumerate(elts) if not (isinstance(v, ast.Name) and v.id == names[i])]
             written = {names[i] for i in changed}
             read = {nd.id for i in changed for nd in ast.walk(elts[i]) if isinstance(nd, ast.Name)}
@@ -5968,6 +6002,217 @@ class _TupleAssignRewriter(ast.NodeTransformer):
             return ast.parse(text).body
 
         return node
+
+
+class _SelfAssignDropper(ast.NodeTransformer):
+    """Delete a tautological ``X = X`` scalar statement.
+
+    Shape resolution mints these: ``_ShapeMidExpressionRewriter`` rewrites the RHS of
+    ``N = rank.shape[0]`` to the shape symbol ``N``, and the tuple split turns
+    ``H, W = image.shape`` into ``H = H; W = W``. They compute nothing, and in the C
+    pluto input they WRITE a signature parameter inside ``#pragma scop`` -- pet models
+    that as a data-dependent condition and aborts polycc on an isl assert (POLYCC-003
+    in :mod:`hpcagent_bench.pluto_affine`). Every other backend just carries dead text.
+
+    Two names are never dropped. A kernel ARRAY (``a = a``) is a whole-array write that
+    ``_detect_output_and_index_arrays`` reads to flip ``is_output``, so deleting it would
+    change the emitted signature. A name with a recorded shape reassignment is an SSA
+    version marker the shape FIFO counts off. Only a bare ``Name = Name`` pair qualifies:
+    ``A[i] = A[i]`` is a real store and drives the same output detection.
+    """
+
+    def __init__(self, keep: Set[str]) -> None:
+        self.keep = keep
+
+    def visit_Assign(self, node: ast.Assign) -> Optional[ast.AST]:
+        self.generic_visit(node)
+        if len(node.targets) != 1:
+            return node
+        tgt = node.targets[0]
+        if (isinstance(tgt, ast.Name) and isinstance(node.value, ast.Name) and tgt.id == node.value.id
+                and tgt.id not in self.keep):
+            return None
+        return node
+
+
+#: Expression nodes a substituted RHS may use; ``Slice`` is absent (that is an array).
+_FWD_SUBST_NODES: Tuple[type, ...] = (ast.Constant, ast.Name, ast.Subscript, ast.Tuple, ast.BinOp, ast.UnaryOp,
+                                      ast.IfExp, ast.Compare, ast.BoolOp)
+
+#: Callees that recompute the same value wherever they are replayed.
+_FWD_SUBST_PURE_CALLS: Set[str] = _MATH_INTRINSIC_NAMES | {
+    "min", "max", "abs", "int", "float", "int_floor", "python_mod"
+}
+
+#: Caps on the already-grown expression, so they bound a chain (conv_2d needs 1 / 9).
+_FWD_SUBST_MAX_SUBSCRIPTS = 3
+_FWD_SUBST_MAX_NODES = 20
+
+
+def _stmt_exprs_by_depth(stmts: List[ast.stmt], depth: int):
+    """Yield ``(expr, loop_depth)`` per expression; a loop header sits OUTSIDE its own body."""
+    for stmt in stmts:
+        if isinstance(stmt, (ast.For, ast.While)):
+            yield (stmt.iter if isinstance(stmt, ast.For) else stmt.test), depth
+            yield from _stmt_exprs_by_depth(stmt.body, depth + 1)
+            yield from _stmt_exprs_by_depth(stmt.orelse, depth)
+        elif isinstance(stmt, ast.If):
+            yield stmt.test, depth
+            yield from _stmt_exprs_by_depth(stmt.body, depth)
+            yield from _stmt_exprs_by_depth(stmt.orelse, depth)
+        else:
+            for child in ast.iter_child_nodes(stmt):
+                if isinstance(child, ast.expr):
+                    yield child, depth
+
+
+def _fwd_subst_is_pure(expr: ast.expr) -> bool:
+    """True when ``expr`` recomputes the same value wherever it is replayed."""
+    for node in ast.walk(expr):
+        if isinstance(node, ast.Call):
+            if not (isinstance(node.func, ast.Name) and node.func.id in _FWD_SUBST_PURE_CALLS and not node.keywords):
+                return False
+        elif isinstance(node, ast.expr) and not isinstance(node, _FWD_SUBST_NODES):
+            return False
+    return True
+
+
+class _ForwardSubstituteInvariantScalars(ast.NodeTransformer):
+    """Replay a loop-invariant scalar's RHS at its deeper use sites and delete the assign.
+
+    pet drops the assign and its deeper consumers then read an uninitialised value: conv_2d's
+    ``w = w_box[di + R, dj + R]`` (POLYCC-001 in :mod:`hpcagent_bench.pluto_affine`). Two things
+    fall out -- laundered indirection becomes literal, so the detector declines lavamd
+    (POLYCC-006), and the OpenMP column loses a scalar ``--parallel`` never privatises (C-001).
+    An AST copy keeps the grouping the assign had, so floating point stays bit-identical.
+    ``_qualifies`` carries the guards; one name is substituted per round against the CURRENT
+    tree, so a chain (``first_i`` -> ``ai`` -> ``rv[...]``) resolves with no read left dangling.
+    """
+
+    def __init__(self, array_names: Set[str], params: Set[str]) -> None:
+        self.array_names = array_names
+        self.params = params
+        #: Substituted name -> the replayed expression, in substitution order.
+        self.substituted: Dict[str, str] = {}
+        self._stmt: Optional[ast.Assign] = None
+        self._name: str = ""
+        self._expr: Optional[ast.expr] = None
+
+    def run(self, fn: ast.FunctionDef) -> "_ForwardSubstituteInvariantScalars":
+        """Substitute every qualifying scalar in ``fn``; one assign leaves per round."""
+        for _ in range(sum(1 for n in ast.walk(fn) if isinstance(n, ast.Assign))):
+            found = self._first_candidate(fn)
+            if found is None:
+                break
+            self._stmt, self._name, self._expr = found
+            self.substituted[self._name] = ast.unparse(self._expr)
+            self.visit(fn)
+            _fill_empty_blocks(fn)
+        self._stmt, self._name, self._expr = None, "", None
+        ast.fix_missing_locations(fn)
+        return self
+
+    def visit_Assign(self, node: ast.Assign) -> Optional[ast.AST]:
+        if node is self._stmt:
+            return None
+        self.generic_visit(node)
+        return node
+
+    def visit_Name(self, node: ast.Name) -> ast.AST:
+        if self._expr is not None and node.id == self._name and isinstance(node.ctx, ast.Load):
+            return copy.deepcopy(self._expr)
+        return node
+
+    def _first_candidate(self, fn: ast.FunctionDef) -> Optional[Tuple[ast.Assign, str, ast.expr]]:
+        """The first ``(assign, name, rhs-copy)`` in source order that meets every condition."""
+        store_counts: Dict[str, int] = {}
+        for_targets: Set[str] = set()
+        written: Set[str] = set()
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                store_counts[node.id] = store_counts.get(node.id, 0) + 1
+                written.add(node.id)
+            elif isinstance(node, ast.For):
+                for tgt in ast.walk(node.target):
+                    if isinstance(tgt, ast.Name):
+                        for_targets.add(tgt.id)
+            elif isinstance(node, (ast.Assign, ast.AugAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for tgt in targets:
+                    base = _target_base_name(tgt)
+                    if base is not None:
+                        written.add(base)
+        # One pass, so the depth test is O(1) and gates the costly liveness walk.
+        deepest: Dict[str, int] = {}
+        for expr, depth in _stmt_exprs_by_depth(fn.body, 0):
+            for node in ast.walk(expr):
+                if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and depth > deepest.get(node.id, -1):
+                    deepest[node.id] = depth
+        found: List[Tuple[ast.Assign, str, ast.expr]] = []
+
+        def _qualifies(name: str, expr: ast.expr, depth: int, loop_vars: FrozenSet[str]) -> bool:
+            # Scalar, in a loop, single-assigned, and read deeper than it is written. A
+            # function-level assign is a whole-kernel constant, not the measured defect --
+            # replaying deriche's exp() coefficients only pushes work down a nest.
+            if not depth or name in self.array_names or name in self.params or name in for_targets:
+                return False
+            if store_counts.get(name, 0) != 1 or deepest.get(name, -1) <= depth:
+                return False
+            nodes = [n for n in ast.walk(expr) if isinstance(n, ast.expr)]
+            subscripts = [n for n in nodes if isinstance(n, ast.Subscript)]
+            if len(subscripts) > _FWD_SUBST_MAX_SUBSCRIPTS or len(nodes) > _FWD_SUBST_MAX_NODES:
+                return False
+            if not _fwd_subst_is_pure(expr):
+                return False
+            for sub in subscripts:  # aliasing: a replayed read must not cross its own store
+                base = _target_base_name(sub)
+                if base is None or base in written:
+                    return False
+            for node in ast.walk(expr):  # every operand stable between the assign and the reads
+                if not (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)):
+                    continue
+                count = store_counts.get(node.id, 0)
+                if count == 0 or node.id in loop_vars:
+                    continue
+                if not (count == 1 and node.id not in for_targets):
+                    return False
+            return True
+
+        def _scan(stmts: List[ast.stmt], depth: int, after: Tuple[List[ast.stmt], ...],
+                  reentry: Tuple[Tuple[List[ast.stmt], int], ...], loop_vars: FrozenSet[str]) -> None:
+            for i, stmt in enumerate(stmts):
+                if found:
+                    return
+                if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
+                    name = stmt.targets[0].id
+                    if _qualifies(name, stmt.value, depth, loop_vars):
+                        # Condition 6 last: it walks every block that runs after this one.
+                        outside = after
+                        for blk, idx in reentry:
+                            outside = outside + _live_on_loop_reentry(blk, idx, name)
+                        if depth:
+                            outside = outside + _live_on_loop_reentry(stmts, i, name)
+                        if not _read_in(name, outside):
+                            found.append((stmt, name, copy.deepcopy(stmt.value)))
+                            return
+                if not isinstance(stmt, (ast.For, ast.While, ast.If)):
+                    continue
+                tail = (stmts[i + 1:], ) + after
+                # A block nested in a loop re-runs its own prefix on the next iteration.
+                inner_reentry = (reentry + ((stmts, i), )) if depth else reentry
+                if isinstance(stmt, ast.If):
+                    # Counting the sibling branch as "after" only declines more.
+                    _scan(stmt.body, depth, (stmt.orelse, ) + tail, inner_reentry, loop_vars)
+                    _scan(stmt.orelse, depth, (stmt.body, ) + tail, inner_reentry, loop_vars)
+                    continue
+                body_vars = loop_vars
+                if isinstance(stmt, ast.For):
+                    body_vars = loop_vars | frozenset(n.id for n in ast.walk(stmt.target) if isinstance(n, ast.Name))
+                _scan(stmt.body, depth + 1, ((stmt.orelse, ) + tail) if stmt.orelse else tail, inner_reentry, body_vars)
+                _scan(stmt.orelse, depth, tail, inner_reentry, loop_vars)
+
+        _scan(fn.body, 0, (), (), frozenset())
+        return found[0] if found else None
 
 
 #: Matches a residual inlined-scalar token (``__inl3_N``) or an unresolved
@@ -6086,6 +6331,10 @@ def _lp_normalize_calls(ctx: LoweringContext) -> None:
     tuple_rewriter.visit(tree)
     # Stash the int-locals so the emitter can declare them.
     ctx.kir.int_locals = tuple_rewriter.int_locals
+    # Last: delete the ``X = X`` statements the shape rewrites above leave behind, while
+    # the arrays / shape tables that say which names must survive are still exact. Runs
+    # before promote-params, which is indifferent to them either way.
+    _SelfAssignDropper(set(ctx.arrays_shapes) | set(ctx.kir.reassign_shapes)).visit(tree)
 
 
 def _lp_promote_params(ctx: LoweringContext) -> None:
@@ -6725,6 +6974,28 @@ def _lp_promote_true_division(ctx: LoweringContext) -> None:
     ast.fix_missing_locations(ctx.tree)
 
 
+def _lp_forward_substitute_invariant_scalars(ctx: LoweringContext) -> None:
+    """Replay loop-invariant scalars deeper (POLYCC-001/006); slice fusion made them deep."""
+    tables = (ctx.arrays_shapes, ctx.shapes, ctx.zeros_locals, ctx.lib_shape_table, ctx.kir.reassign_shapes)
+    # Owning a shape means array; appearing in one sizes a declaration (dwt2d's ``s``).
+    blocked = set(ctx.kir.sparse or {}) | {a.name for a in ctx.kir.arrays}
+    for table in tables:
+        blocked |= set(table)
+        for value in table.values():
+            for token in (value if isinstance(value, (list, tuple)) else [value]):
+                for tok in (token if isinstance(token, (list, tuple)) else [token]):
+                    blocked |= set(DIM_IDENT_RE.findall(str(tok)))
+    subst = _ForwardSubstituteInvariantScalars(blocked, set(ctx.kir.input_args)).run(ctx.tree)
+    if not subst.substituted:
+        return
+    # Its declaration would now be an unused local, and unused is a warning is an error.
+    gone = subst.substituted
+    ctx.kir.int_locals = [n for n in ctx.kir.int_locals if n not in gone]
+    ctx.kir.scalar_call_temps = [n for n in ctx.kir.scalar_call_temps if n not in gone]
+    for name in gone:
+        ctx.local_dtypes.pop(name, None)
+
+
 def _lp_scalarized_math_rename(ctx: LoweringContext) -> None:
     """Third and last math rename, once slice fusion has turned whole-array statements into
     per-element ones. An intrinsic whose operand only becomes a scalar HERE (hardsigmoid's
@@ -6757,6 +7028,7 @@ _LOWER_PHASES: List[Tuple[str, Callable[["LoweringContext"], None]]] = [
     ("whole-array-and-zeros", _lp_whole_array_and_zeros),
     ("slice-normalize-and-lift", _lp_slice_normalize_and_lift),
     ("slice-fusion-and-resolve", _lp_slice_fusion_and_resolve),
+    ("forward-substitute-invariant-scalars", _lp_forward_substitute_invariant_scalars),
     ("scalarized-math-rename", _lp_scalarized_math_rename),
     ("lower-helpers", _lp_lower_helpers),
 ]

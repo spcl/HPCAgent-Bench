@@ -99,8 +99,12 @@ script rather than an importable module.
 
 ### 5. pre-commit -- the user runs this on EVERY touched file
 ```bash
-[ -f "$(git -C "$(dirname <file>.py)" rev-parse --show-toplevel 2>/dev/null)/.pre-commit-config.yaml" ] \
-  && pre-commit run --files <file>.py
+root=$(git -C "$(dirname <file>.py)" rev-parse --show-toplevel 2>/dev/null)
+if [ -f "$root/.pre-commit-config.yaml" ]; then
+  pre-commit run --files <file>.py
+else                                             # silence here would read as a green gate
+  echo "pre-commit: DEFERRED (no config)" >&2
+fi
 ```
 Standing mandate: yapf + pre-commit on every file you touch, no exceptions. If a
 new import was added, ensure the dep is declared (e.g. `setup.py`/`pyproject.toml`)

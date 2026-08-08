@@ -1,0 +1,37 @@
+# Replace both placeholders as described in README.md before registering this EDF.
+image = "@ROOT@/containers/rocm723-vllm-0.23.0-pytorch211-ofi.sqsh"
+
+mounts = [
+  "/capstor:/capstor",
+  "/iopsstor:/iopsstor"
+]
+
+workdir = "@WORKDIR@"
+
+[annotations]
+com.hooks.cxi.enabled = "true"
+com.hooks.netstack.source = "host"
+
+[env]
+HSA_ENABLE_IPC_MODE_LEGACY = "1"
+SAFETENSORS_FAST_GPU = "1"
+HIP_FORCE_DEV_KERNARG = "1"
+TOKENIZERS_PARALLELISM = "false"
+
+NCCL_NET_PLUGIN = "ofi"
+NCCL_NET = "AWS Libfabric"
+LD_LIBRARY_PATH = "/opt/aws-ofi-nccl/lib:/opt/rocm/lib:/opt/rocm/lib64"
+FI_PROVIDER = "cxi"
+
+NCCL_SOCKET_IFNAME = "hsn0,hsn1,hsn2,hsn3"
+GLOO_SOCKET_IFNAME = "hsn0"
+
+# Beverin's current kernel lacks the DMA-BUF options needed by this stack.
+NCCL_DMABUF_ENABLE = "0"
+OFI_NCCL_DISABLE_DMABUF = "1"
+
+NCCL_DEBUG = "INFO"
+NCCL_DEBUG_SUBSYS = "INIT,NET"
+
+VIRTUAL_ENV = "/opt/pytorch211"
+PATH = "/opt/pytorch211/bin:/opt/rocm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"

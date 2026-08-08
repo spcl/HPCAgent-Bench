@@ -1,0 +1,21 @@
+# CPU-only PyTorch, for the port-fidelity CI job's torch-agreement phase ONLY.
+#
+#     pip install -r requirements/torch-cpu.txt
+#
+# WHAT NEEDS IT: tests/test_kernelbench_torch_agreement.py runs each of the 250 machine_learning
+# ports beside the upstream KernelBench model it was ported from. The numpy reference is the
+# correctness oracle for every backend, so a port that drifted from its original grades every
+# submission against the wrong answer while staying green -- torch is what makes that visible.
+# Nothing in hpcagent_bench imports torch; the tests self-skip loudly without it.
+#
+# ITS OWN FILE, deliberately, and NOT requirements/optional.txt: containers/cpu.def installs
+# optional.txt on top of cpu.txt, so an entry there would pull torch into the agent image (and
+# from there the judge image, which layers on it). The agent and judge images have no use for it
+# and the download is the largest in the tree.
+#
+# THE INDEX LINE IS THE POINT. Bare `torch` from PyPI resolves to the CUDA build and drags the
+# ~2 GB nvidia-* stack onto a runner with no GPU (the same reason containers/cpu.def pins +cpu).
+# Scoping --index-url to a file that contains only torch keeps that override off every other
+# package, which is what an --index-url in a shared requirements file would not do.
+--index-url https://download.pytorch.org/whl/cpu
+torch

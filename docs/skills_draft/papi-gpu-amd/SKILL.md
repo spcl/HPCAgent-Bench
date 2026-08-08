@@ -1,6 +1,6 @@
 ---
 name: papi-gpu-amd
-description: Count what an AMD GPU did inside ONE of your kernels with PAPI's rocp_sdk component -- start/stop per region, the empty-bracket self-test, and the two environment traps that return silent zeros.
+description: Count what an AMD GPU did inside ONE of your kernels with PAPI's rocp_sdk component -- start/stop per region, the two-sided empty/live self-test, and the environment traps that return silent zeros.
 ---
 
 `rocprof` answers WHICH kernel owns device time. This page answers WHAT THE DEVICE DID while one
@@ -13,14 +13,16 @@ identical; the component, the event names and the environment traps are not.
 ## What was measured here, and what was not
 
 **There is no AMD GPU on the box this was written on.** Nothing below was executed against ROCm.
-Every command, event name, environment variable and limitation comes from the upstream PAPI and
-ROCm documentation cited at the bottom, and you should treat all of it as unverified.
+So every AMD claim here is a quote from a named upstream file with that file's URL beside it --
+PAPI's `rocp_sdk` sources and README, ROCm's `counter_defs.yaml`, rocprof-compute's `gfx942`
+panels. What could not be quoted was DELETED rather than fenced: a warning label at the top does
+not tell you which fenced line was right.
 
-What IS carried over from measurement is the METHOD, and that part is not vendor folklore: the
-start/stop-versus-read-delta result in the first section below was measured on NVIDIA hardware
-here, against known ground truth, and PAPI's own `rocp_sdk` README documents the same underlying
-behaviour on AMD in its own words. The self-test in `gpu_papi_init` is what makes that portable --
-it fails loudly on a box this page could not be tested on. **Run it before you believe a number.**
+What IS carried over from measurement is the METHOD: the start/stop-versus-read-delta result below
+was measured on NVIDIA hardware here, against known ground truth. The MECHANISM behind it is a
+different one on AMD -- see the end of that section -- which is why the self-test in
+`gpu_papi_init` is what makes the method portable: it fails loudly on a box this page could not be
+tested on. **Run it before you believe a number.**
 
 ## Start and stop the event set per region -- a read-delta does NOT attribute
 
@@ -44,12 +46,39 @@ every row and wrong by **1300x** on the 64 KB one. Note what that does to a comp
 spread across those four kernels is 2100x and the read-delta reports 1.2x. It does not add noise,
 it FLATTENS the ranking you are profiling to find.
 
-**PAPI's `rocp_sdk` README documents the same behaviour on AMD**, and its wording is the tell:
-dispatch mode "may read zeros immediately after kernel returns due to buffer flushing delays",
-with the recommendation to "add delays between kernel return and `PAPI_read()`/`PAPI_stop()`
-calls". A delay is a race you cannot see losing -- too short and you read zero, slightly longer and
-you read a number that looks fine and is not yours. Do not tune a sleep. Close the range with
-`PAPI_stop`, which is the call that forces the flush, and verify with the empty bracket.
+**PAPI's `rocp_sdk` README documents an asynchrony on AMD too**, in its own words: in dispatch mode
+"PAPI may read zeros if reading takes place immediately after the return of a GPU kernel", because
+"calls such as hipDeviceSynchronize() do not guarantee that ROCprofiler has been called and all
+counter buffers have been flushed", so "it is recommended that the user code adds a delay between
+the return of a kernel and calls to PAPI_read(), PAPI_stop(), etc"
+(https://github.com/icl-utk-edu/papi/blob/master/src/components/rocp_sdk/README.md). A delay is a
+race you cannot see losing -- too short and you read zero, slightly longer and you read a number
+that looks fine and is not yours. Do not tune a sleep.
+
+**`PAPI_stop` does NOT force that flush**, so do not port the NVIDIA sentence. `PAPI_stop` calls
+`_papi_hwi_read()` and only then the component's `stop`
+(https://github.com/icl-utk-edu/papi/blob/master/src/papi.c), and `rocp_sdk_stop` calls
+`rocprofiler_sdk_stop` and drops the vendor context without reading anything
+(https://github.com/icl-utk-edu/papi/blob/master/src/components/rocp_sdk/rocp_sdk.c) -- the value
+you get at stop was read exactly the way `PAPI_read` reads it.
+
+What start/stop buys on this component is a WINDOW WITH AN ORIGIN. `rocp_sdk_stop` sets
+`vendor_ctx = NULL`, so the next `rocp_sdk_start` re-opens the vendor context, and
+`rocprofiler_sdk_start` then zeroes `ctx->counters[i]` for every event before counting resumes
+(https://github.com/icl-utk-edu/papi/blob/master/src/components/rocp_sdk/sdk_class.cpp). A
+read-delta has no origin: it subtracts two snapshots of a buffer that `record_callback()` fills
+ASYNCHRONOUSLY, so a record that lands late is charged to whichever read it beat. Close the range
+with `PAPI_stop`, treat a zero as unproven rather than as a measurement, and check the region count.
+
+Which failure you are exposed to depends on the MODE, and the default is not the kernel-attributed
+one: `rocp_sdk` defaults to device sampling and dispatch mode is opt-in through
+`PAPI_ROCP_SDK_DISPATCH_MODE=1` (README, above). ROCprofiler-SDK defines them as different
+questions -- dispatch counting collects "on a per-kernel launch basis", device counting collects
+"on a device level ... not tied to a specific kernel execution, which encompasses collecting
+counter values for a specific time range"
+(https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/api-reference/counter_collection_services.html).
+In the default mode your bracket is a TIME RANGE over the whole device, so anything else running on
+that device lands inside it. That is what the empty half of the self-test below is checking for.
 
 ## Two components, and the old one is deprecated
 
@@ -62,10 +91,12 @@ papi_component_avail | grep -A2 -E 'Name:[[:space:]]+(rocm|rocp_sdk)'
 | `rocp_sdk` | `./configure --with-components="rocp_sdk"` | **default.** Sits on ROCprofiler-SDK |
 | `rocm` | `./configure --with-components="rocm"` | pre-MI300 only, and only if `rocp_sdk` is absent |
 
-`rocm` is DEPRECATED from AMD Instinct MI300A onward. Do not configure both for an older device --
-upstream calls them mutually exclusive there. Neither is built by default: like the `cuda`
-component, a distribution PAPI on a box with a perfectly good GPU usually has neither, and
-rebuilding is the only fix.
+Upstream: "The `rocm` component is deprecated starting at the AMD Instinct MI300A and will continue
+to be for any future AMD device releases. Please instead use the `rocp_sdk` component", and "For AMD
+devices older than the AMD Instinct MI300A, PAPI should not be configured with both `rocm` and
+`rocp_sdk`" (https://github.com/icl-utk-edu/papi/blob/master/src/components/rocm/README.md). Neither
+is built by default: like the `cuda` component, a distribution PAPI on a box with a perfectly good
+GPU usually has neither, and rebuilding is the only fix.
 
 Set `PAPI_ROCP_SDK_ROOT` (or `PAPI_ROCM_ROOT` for the old component) to the ROCm install, at BOTH
 compile and run time. `PAPI_ROCP_SDK_LIB` gives the full path to `librocprofiler-sdk.so` when the
@@ -76,14 +107,26 @@ install is not where PAPI expects.
 Both produce a counter of 0 with no error anywhere, which reads exactly like a kernel that did no
 work. This is the failure this whole page exists to prevent.
 
-- **`AQLPROFILE_READ_API=0`** applies to INTERCEPT mode on ROCm >= 6.2.0 (`0` for intercept, `1`
-  or unset for sampling). Intercept is opt-in via `ROCP_HSA_INTERCEPT` and the variable has no
-  effect on `rocp_sdk`, so do NOT export it unconditionally -- set it only if you have deliberately
-  selected intercept mode on the older `rocm` component and are reading zeros.
-- **`PAPI_library_init()` must run BEFORE any HIP call.** The AMD runtime reads its environment
-  once, at the first HIP call; initialise PAPI after that and the counter configuration never
-  takes. With a statically linked `libpapi.a` this is mandatory and upstream says so explicitly;
-  dynamically linked it is documented as unconstrained, but the ordering costs nothing, so keep it.
+- **`AQLPROFILE_READ_API=0` is CONDITIONAL -- do not export it blind.** Upstream: "For ROCm >=
+  6.2.0, the environment variable `AQLPROFILE_READ_API` should be set to 0 for intercept mode and 1
+  (or unset) for sampling mode. Otherwise, counter values in intercept mode will return 0"
+  (https://github.com/icl-utk-edu/papi/blob/master/src/components/rocm/README.md). Intercept mode is
+  opt-in: the `rocm` component reads `ROCP_HSA_INTERCEPT` and falls back to sampling mode when it is
+  unset (`roc_profiler.c`,
+  https://github.com/icl-utk-edu/papi/blob/master/src/components/rocm/roc_profiler.c), and
+  rocprofiler documents that variable as "if set then HSA dispatches intercepting is enabled"
+  (https://rocm.docs.amd.com/projects/rocprofiler/en/latest/reference/rocprofiler_spec.html). The
+  string does not appear anywhere in the `rocp_sdk` sources. Set it only if you deliberately chose
+  intercept mode on the old component and are reading zeros.
+- **`PAPI_library_init()` must run BEFORE any HIP call.** Upstream: "If an application is linked
+  against the static PAPI library libpapi.a, then the application must call PAPI_library_init()
+  through PAPI_add_named_event()/PAPI_add_event()/PAPI_enum_cmp_event() before calling any hip
+  routines ... If the application is linked against the dynamic library libpapi.so, then the order
+  of operations does not matter"
+  (https://github.com/icl-utk-edu/papi/blob/master/src/components/rocp_sdk/README.md). The `rocm`
+  component states the WHY: its environment exports "are read once by AMD with the first HIP
+  function call, and if HIP sets up without them, PAPI may not read counters correctly." Static or
+  not, the ordering costs nothing, so keep it.
 
 That last one fights the CUDA rule, so do not port the ordering across: on NVIDIA you arm AFTER a
 warmup launch because the component profiles through a live context. On AMD you initialise PAPI
@@ -98,21 +141,49 @@ papi_native_avail -e rocp_sdk:::SQ_CYCLES   # ONE event, resolved, defaults fill
 ```
 
 **The prefix is the component name, and the two components do not share one.** `rocp_sdk.c`
-declares `.name = "rocp_sdk"`, so events are `rocp_sdk:::EVENT_NAME:device=N`; the older component
-uses `rocm:::`. Copying a `rocm:::` example onto a `rocp_sdk` build resolves nothing. Enumerate
-first and use whatever prefix comes back.
+declares `.name = "rocp_sdk"`
+(https://github.com/icl-utk-edu/papi/blob/master/src/components/rocp_sdk/rocp_sdk.c), so events are
+`rocp_sdk:::EVENT_NAME:device=N` -- upstream's own test runner spells them
+`rocp_sdk:::SQ_CYCLES:device=0`
+(https://github.com/icl-utk-edu/papi/blob/master/src/components/rocp_sdk/tests/run_rocp_sdk_tests.sh).
+The deprecated component answers to `rocm:::`, so copying a `rocm:::` example onto a `rocp_sdk`
+build resolves nothing. Enumerate first and use whatever prefix comes back.
 
 Device indices run `[0, N-1]` over VISIBLE devices, so `ROCR_VISIBLE_DEVICES` renumbers them and a
-resource manager that hands you a subset changes what `device=0` means. Where the mapping matters,
-resolve it by UUID (`hipDeviceGetUuid`) rather than trusting the index. `rocp_sdk` also takes
-`DIMENSION_*=` qualifiers to select a specific instance of a multi-instance counter; enumerate to
-see which ones an event accepts.
+resource manager that hands you a subset changes what `device=0` means. The `rocm` README says to
+map it "Preferably the UUID of the device ... (see hipDeviceGetUuid and HSA_AMD_AGENT_INFO_UUID)"
+rather than trusting the index; the same isolation applies here.
 
-Only single-pass metric sets are supported. How a fractional metric survives the `long long` return
-differs BY COMPONENT, so check which one you are on: the older `rocm` component keeps "the binary
-image of a `double`" intact, while `rocp_sdk` accumulates into `long long int` and TRUNCATES. Under
-`rocp_sdk`, never bit-reinterpret the value -- a percentage really is an integer there, and a
-fractional one is already lost.
+**`DIMENSION_*=` picks ONE instance of a multi-instance counter, and omitting it SUMS.** That is
+the qualifier most examples leave off, and it silently changes the quantity. Upstream states the
+rule in the component, of the records whose dimensions match your qualifiers: "This means that if a
+qualifier is missing, we will get the sum"
+(`sdk_class.cpp`,
+https://github.com/icl-utk-edu/papi/blob/master/src/components/rocp_sdk/sdk_class.cpp). Upstream's
+test runner shows the spelling, in either order:
+
+```sh
+rocp_sdk:::SQ_BUSY_CYCLES:DIMENSION_INSTANCE=0:DIMENSION_SHADER_ENGINE=0:device=0
+rocp_sdk:::TCC_CYCLE:device=0:DIMENSION_INSTANCE=2
+rocp_sdk:::SQ_BUSY_CYCLES:DIMENSION_INSTANCE=0   # no device= -- the component appends :device=0
+```
+
+Which dimensions an event HAS is per event, so enumerate rather than guess. The counter definitions
+say the same thing from the hardware side: `SQ_WAVES` "Returns one value per-SE (aggregates of SIMD
+values)"
+(https://github.com/ROCm/rocprofiler-sdk/blob/amd-staging/source/share/rocprofiler-sdk/counter_defs.yaml),
+so an unqualified `SQ_WAVES` is the sum over shader engines -- right for a total, wrong for a
+per-SE comparison.
+
+**A fractional value does not survive this component.** `record_callback()` sums the matching
+records into a `double` and then accumulates that into `long long int *_counter_values` with `+=`
+(`sdk_class.cpp`, above), and the comment there explains why it accumulates at all: "Rocprofiler-SDK
+default behavior in dispatch mode is to only report the value of the counters since the dispatch of
+the kernel. However, PAPI semantics dictate that counter values are only reset by PAPI_reset(), etc,
+not by kernel invocations." Two consequences, both for derived metrics: a percentage is SUMMED over
+the dispatches inside your bracket rather than averaged, and its fraction is truncated. Never
+bracket a derived metric under `rocp_sdk`, and never bit-reinterpret the return as a `double` --
+there is no `double` in there to recover.
 
 Ask a QUESTION, then find the event that answers it on THIS device. A hard-coded event list is a
 list that stops working: the names differ by generation, and CDNA and RDNA do not even agree on
@@ -149,9 +220,11 @@ static int gpu_papi_init(const char *event_name)
     if ((rc = PAPI_create_eventset(&gpu_es)) != PAPI_OK) goto fail;
     if ((rc = PAPI_assign_eventset_component(gpu_es, cid)) != PAPI_OK) goto fail;
     if ((rc = PAPI_add_named_event(gpu_es, event_name)) != PAPI_OK) goto fail;
-    /* Arm and disarm once around NOTHING. Two jobs: it surfaces a refusal HERE rather than at
-       the first region, and the value must come back ~0. If an empty bracket reports real
-       work, the counter is accumulating device-wide instead of attributing -- STOP. */
+    /* HALF ONE of the self-test: arm and disarm around NOTHING. It surfaces a refusal HERE rather
+       than at the first region, and the value must come back ~0. In device-sampling mode the
+       bracket is a time range over the whole device, so an empty bracket reporting real work means
+       you are counting the device, not your region -- STOP. Half two is in the caller: 0 over
+       an empty bracket is the RIGHT answer, so this half cannot catch a dead counter. */
     if ((rc = PAPI_start(gpu_es)) != PAPI_OK) goto fail;
     if ((rc = PAPI_stop(gpu_es, &probe)) != PAPI_OK) goto fail;
     if (probe > 4096) {
@@ -165,26 +238,37 @@ fail:
     return -1;
 }
 
-/* START and STOP per region. PAPI_stop is what forces the counter to be attributed;
-   a PAPI_read delta across the same span is not a measurement of that span. */
+/* START and STOP per region. PAPI_start opens the window -- it re-opens the vendor context and
+   zeroes the counters -- and PAPI_stop reads it and closes it. A PAPI_read delta across the same
+   span has no such origin and is not a measurement of that span. */
 static void gpu_region_begin(void)
 {
     if (gpu_ok && PAPI_start(gpu_es) != PAPI_OK) gpu_ok = 0;
 }
 
-static void gpu_region_end(void)
+/* Returns THIS region's value. Read a percentage from here, per region; never from gpu_total. */
+static long long gpu_region_end(void)
 {
-    if (!gpu_ok) return;
+    if (!gpu_ok) return 0;
     long long v = 0;
-    if (PAPI_stop(gpu_es, &v) != PAPI_OK) { gpu_ok = 0; return; }
-    gpu_total += v;                                /* ACCUMULATES across every visit */
+    if (PAPI_stop(gpu_es, &v) != PAPI_OK) { gpu_ok = 0; return 0; }
+    gpu_total += v;                                /* ACCUMULATES -- only meaningful for a COUNT */
     ++gpu_regions;
+    return v;
+}
+
+static void gpu_papi_forget(void)                  /* drop the self-test region from the totals */
+{
+    gpu_total = 0; gpu_regions = 0;
 }
 
 static void gpu_papi_report(void)
 {
     if (!gpu_ok) { printf("%s = ERROR (not counted)\n", gpu_event ? gpu_event : "?"); return; }
-    printf("%s = %lld   (regions: %d)\n", gpu_event, gpu_total, gpu_regions);
+    if (gpu_regions > 0 && gpu_total == 0)         /* known work, nothing counted: not a quiet kernel */
+        printf("%s = SILENT ZERO over %d regions (not a measurement)\n", gpu_event, gpu_regions);
+    else
+        printf("%s = %lld   (regions: %d)\n", gpu_event, gpu_total, gpu_regions);
     PAPI_cleanup_eventset(gpu_es); PAPI_destroy_eventset(&gpu_es);
 }
 ```
@@ -193,17 +277,22 @@ static void gpu_papi_report(void)
 changing what you measured. A `PAPI_start` after a `PAPI_stop` is a supported re-arm, not a leak:
 the event set is created once and destroyed once.
 
-**Accumulate COUNTS only.** A sum of percentages is not a percentage, and half the metrics worth
-asking for on this vendor (`GPUBusy`, `L2CacheHit`, `VALUBusy`, `VALUUtilization`, `MemUnitStalled`)
-are described upstream as "the percentage of...". Sum `SQ_WAVES`, `FetchSize`, `WriteSize`,
-`GRBM_GUI_ACTIVE`; read the ratios per region instead.
+**Accumulate EXTENSIVE counters only** -- `SQ_WAVES`, `FetchSize`, `WriteSize`, and cycle counts
+like `GRBM_GUI_ACTIVE`. A sum of percentages is not a percentage, and the metrics you most want to
+ask for are percentages upstream: `GPUBusy` is "The percentage of time GPU was busy", `L2CacheHit`
+"The percentage of fetch, write, atomic, and other instructions that hit the data in L2 cache",
+`VALUBusy` "The percentage of GPUTime vector ALU instructions are processed", `MemUnitStalled` "The
+percentage of GPUTime the memory unit is stalled", `VALUUtilization` "The percentage of active
+vector ALU threads in a wave"
+(https://github.com/ROCm/rocprofiler-sdk/blob/amd-staging/source/share/rocprofiler-sdk/counter_defs.yaml).
+Under this component they are worse than a bad average -- the component sums them across dispatches
+and truncates (see "Event names") -- so do not bracket them at all. Take derived metrics from
+`rocprofv3 --pmc <name>` and read raw ratios per region from what `gpu_region_end` returns.
 
 **What makes the bracket work on AMD was NOT verified here.** The start/stop result above was
-measured on NVIDIA. PAPI's own `rocp_sdk` README says dispatch mode "may read zeros immediately
-after kernel returns due to buffer flushing delays" and suggests adding a delay before
-`PAPI_read`/`PAPI_stop` -- and `rocp_sdk_stop` performs no read of its own, so the NVIDIA mechanism
-("stop forces the flush") is the wrong story here even though start/stop is still the right shape.
-Treat a zero as unproven rather than as a measurement, and check the region count.
+measured on NVIDIA; on `rocp_sdk` the mechanism is the re-opened, re-zeroed window described in the
+first section, not a flush at `PAPI_stop`. Treat a zero as unproven rather than as a measurement,
+and check the region count.
 
 ## How it runs
 
@@ -211,27 +300,38 @@ Use it:
 
 ```c
 if (gpu_papi_init(argv[1]) != 0) return 2;  /* BEFORE any hip call -- see the traps */
+gpu_region_begin();                         /* HALF TWO of the self-test: bracket KNOWN work */
 your_kernel<<<grid, block>>>(...);          /* warmup */
 hipDeviceSynchronize();
+if (gpu_region_end() == 0) {                /* 0 over work that ran = silent zero, so refuse */
+    fprintf(stderr, "papi-gpu-amd: LIVE BRACKET READ 0 -- not counting\n"); return 2;
+}
+gpu_papi_forget();                          /* the warmup is a probe, not a measurement */
 for (int step = 0; step < nt; ++step) {
     gpu_region_begin();
     your_kernel<<<grid, block>>>(...);      /* ONE kernel per region */
+    hipDeviceSynchronize();                 /* the kernel must have RUN -- and upstream says even
+                                               this does not guarantee the buffers are flushed */
     gpu_region_end();
 }
 gpu_papi_report();
 check_results();                            /* ALWAYS verify -- a wrong answer measures nothing */
 ```
 
+Both halves matter and each catches what the other cannot: the empty bracket catches a counter
+running device-wide, the live bracket catches a dead one. A guard that only fires when the number
+is too BIG passes the silent zero this page exists to prevent -- pick an event your warmup kernel
+must move, or the live half proves nothing.
+
 ```sh
 hipcc -O2 -o probe probe.cpp -lpapi
-export AQLPROFILE_READ_API=0                /* ROCm >= 6.2.0, or every count is zero */
 ```
 
 One counter per run. Loop outside the program:
 
 ```sh
-# COUNTS only -- gpu_total accumulates across regions, and a sum of percentages is not a
-# percentage. Collect the ratio metrics one region at a time and read them per region.
+# EXTENSIVE counters only -- gpu_total accumulates across regions, and a sum of percentages is not
+# a percentage. Derived metrics come from rocprofv3, not from this bracket.
 for ev in rocp_sdk:::SQ_WAVES \
           rocp_sdk:::FetchSize \
           rocp_sdk:::WriteSize \
@@ -244,12 +344,16 @@ done
 
 A kernel launch returns immediately, so under a read-delta you would need a device synchronise to
 have any hope of bracketing the kernel -- and, as the table above shows, it still would not work.
-Under `PAPI_start`/`PAPI_stop` you do not need one: `PAPI_stop` closes the range and collects it.
+Under `PAPI_start`/`PAPI_stop` the WINDOW does not need the synchronise; the kernel HAVING RUN does,
+which is why one sits inside the bracket. Do NOT port the NVIDIA page's "no sync of your own": there
+it was measured to change nothing, here upstream says the sync is not even sufficient.
 
-**A counted run's wall clock belongs to no comparison.** Profiling serialises the queue and re-arms
-the counter set per region, which removes exactly the kernel/copy and kernel/kernel overlap a real
-run depends on -- about 2x on the NVIDIA twin. Read the COUNTS; take every speedup from the
-uninstrumented build.
+**A counted run's wall clock belongs to no comparison.** Upstream is explicit that the tooling
+changes the schedule: "Counter collection in dispatch counting mode requires serialized execution
+of kernels on a target device"
+(https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/api-reference/counter_collection_services.html),
+which removes exactly the kernel/copy and kernel/kernel overlap a real run depends on -- about 2x on
+the NVIDIA twin. Read the COUNTS; take every speedup from the uninstrumented build.
 
 One kernel per region: two kernels in one bracket give you their sum, and a sum cannot be
 attributed. Move the bracket and run again. Bracket INSIDE the timestep loop, not around it.
@@ -263,20 +367,32 @@ first step that fires, because the later numbers are consequences of the earlier
 **1. Was the device even the problem?** If `rocprof` already showed device time well under the
 wall clock, stop. Launch gaps and copies are host findings and no counter below moves them.
 
-**2. Occupancy -- against the part, not against a number you remember.** AMD occupancy is waves
-resident on a SIMD over the maximum that SIMD holds (8), or scaled to the CU (32 waves on CDNA).
-The wavefront width is the thing you must not assume: **CDNA is 64 lanes; RDNA is 32, with an
-optional 64-lane mode.** Every "threads per block for full occupancy" number you know from NVIDIA
-is wrong here by that factor -- CDNA needs 256 threads to fill a CU with one wave per SIMD, RDNA
-needs 128. `rocprof`'s agent report prints `Wave_Front_Size`, `Simd_Count`, `Max_Waves_Per_Simd`
-and `Cu_Count` for the actual part; read it rather than assuming.
+**2. Occupancy -- against the part, not against a number you remember.** The wavefront width is
+the thing you must not assume. HIP: "The size of a warp is architecture dependent and always fixed:
+64 threads for CDNA architectures [and] 32 threads for RDNA architectures"
+(https://rocm.docs.amd.com/projects/HIP/en/latest/understand/programming_model.html), and
+rocprof-compute repeats it where the counters are defined: "On AMD Instinct CDNA accelerators and
+GCN GPUs, the wavefront size is always 64 work-items. Thus, the total number of wavefronts should be
+equivalent to the ceiling of grid size divided by 64"
+(https://github.com/ROCm/rocprofiler-compute/blob/develop/src/rocprof_compute_soc/analysis_configs/gfx942/0700_wavefront.yaml).
+Every "threads per block for full occupancy" number you know from NVIDIA is off by that factor.
+
+The wave-slot ceiling is per-architecture and this page will not guess it: gpuopen publishes "In
+RDNA1, each SIMD has 20 slots available for assigned wavefronts" and "RDNA 2 and RDNA 3 have 16
+slots per SIMD" (https://gpuopen.com/learn/occupancy-explained/) and no CDNA figure. Read your
+part's from the agent listing, `rocprofv3 --list-avail`
+(https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/how-to/using-rocprofv3.html), and
+read residency as rocprof-compute defines it -- "The time-averaged number of wavefronts resident on
+the accelerator over the lifetime of the kernel" (gfx942 wavefront panel, above).
 
 High occupancy is not a goal. Occupancy counts waves PARKED, not waves working -- a kernel with
 enough memory work in flight per wave runs at peak with half the slots empty.
 
-**3. Memory stall, read WITH the traffic.** `MemUnitStalled` is the percentage of GPU time the
-memory unit was stalled; read it against `FetchSize` + `WriteSize` (both KILOBYTES, not bytes --
-the one unit trap on this vendor).
+**3. Memory stall, read WITH the traffic.** `MemUnitStalled` is "The percentage of GPUTime the
+memory unit is stalled"; read it against `FetchSize` + `WriteSize`, which upstream defines as "The
+total kilobytes fetched from the video memory" and "The total kilobytes written to the video
+memory" -- KILOBYTES, not bytes, and that is the one unit trap on this vendor (`counter_defs.yaml`,
+above).
 
 | stall | traffic | what it is | what to change |
 | --- | --- | --- | --- |
@@ -290,41 +406,52 @@ peak: work out how many bytes the kernel MUST move -- every input read once, eve
 once -- and divide the measured `FetchSize + WriteSize` by it.
 
 - ratio near 1 -- compulsory. Tiling buys nothing; only a different algorithm does.
-- ratio well above 1 -- you are re-reading data that should have stayed in cache. Check
-  `L2CacheHit` next. This is what a tiling or fusion change is for, and the ratio checks it worked.
+- ratio well above 1 -- you are re-reading data that should have stayed in cache. Check the L2 hit
+  rate next (step 5). This is what a tiling or fusion change is for, and the ratio checks it worked.
 - write bytes far above the output size -- uncoalesced stores, or a read-modify-write the source
   does not show.
 
-**5. `L2CacheHit`** -- `100*reduce(TCC_HIT,sum)/(reduce(TCC_HIT,sum)+reduce(TCC_MISS,sum))` on
-CDNA, verified against `counter_defs.yaml`. WARNING: On RDNA (gfx10+) the same metric counts `GL2C_HIT` /
-`GL2C_MISS` instead: a different cache block with different counter names, so a `TCC_*` request
-returns nothing there rather than a wrong number. Read it as the EXPLANATION of step 4, never on
-its own: a rising hit rate with unchanged fetch bytes means you added accesses, not locality.
+**5. L2 hit rate -- and check your PART is in the definition.** `counter_defs.yaml` defines
+`L2CacheHit` as `100*reduce(TCC_HIT,sum)/(reduce(TCC_HIT,sum)+reduce(TCC_MISS,sum))` for
+gfx9/gfx900/gfx906/gfx908/gfx90a, and as the same shape over `GL2C_HIT`/`GL2C_MISS` for gfx10,
+gfx11 and gfx12 -- a different cache block with different counter names, so a `TCC_*` request
+returns nothing on RDNA rather than a wrong number. WARNING: that file lists NO `L2CacheHit`
+definition for gfx940/gfx941/gfx942/gfx950, so on MI300 the derived metric does not exist; the raw
+`TCC_HIT` and `TCC_MISS` do have gfx942 definitions there, so collect those two and divide, per
+region. Read the ratio as the EXPLANATION of step 4, never on its own: a rising hit rate with
+unchanged fetch bytes means you added accesses, not locality.
 
-**6. Which pipe, last.** Ask for the DERIVED metric BY NAME and let the tool compute it --
-`rocprofv3 --pmc VALUBusy` gives you the number the vendor stands behind. The expressions are in
-ROCm's `counter_defs.yaml` and are architecture-specific, so a formula copied for one part is wrong
-on the next. For gfx942 (MI300), verified against that file:
+**6. Which pipe, last -- ask by NAME, never transcribe a formula.** `rocprofv3 --pmc VALUBusy --
+./your_app` gives you the number the vendor stands behind: "The derived metrics are the counters
+derived from the basic counters using mathematical expressions" and the tool evaluates them for the
+part it is running on
+(https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/how-to/using-rocprofv3.html).
 
-| metric | expression on gfx942 |
-| --- | --- |
-| `VALUBusy` | `100*reduce(SQ_ACTIVE_INST_VALU,sum)/CU_NUM/reduce(GRBM_GUI_ACTIVE,max)` |
-| `SALUBusy` | `100*reduce(SQ_INST_CYCLES_SALU,sum)/CU_NUM/reduce(GRBM_GUI_ACTIVE,max)` |
-| `MemUnitStalled` | `100*TCP_TCP_TA_DATA_STALL_CYCLES_max/reduce(GRBM_GUI_ACTIVE,max)/SE_NUM` |
-| `VALUUtilization` | `100*reduce(SQ_THREAD_CYCLES_VALU,sum)/(reduce(SQ_ACTIVE_INST_VALU,sum)*MAX_WAVE_SIZE)` |
-| `LDSBankConflict` | `100*reduce(SQ_LDS_BANK_CONFLICT,sum)/reduce(GRBM_GUI_ACTIVE,max)/CU_NUM` |
-
-The normaliser is `GRBM_GUI_ACTIVE` scaled by a part constant, never `SQ_BUSY_CU_CYCLES`. On gfx10
-`LDSBankConflict` is `SQC_LDS_BANK_CONFLICT / SQC_LDS_IDX_ACTIVE` instead -- a different pair of
-counters, not a rescaled one.
+This page prints no expressions, and neither should your notes: a copied formula is wrong in two
+directions at once, and the counter NAMES resolve either way, so a wrong denominator returns a
+plausible wrong number in silence. The expressions are per-ARCHITECTURE -- `VALUBusy` has one
+definition for gfx9 through gfx950 and a different one for gfx12; `LDSBankConflict` is
+`SQ_LDS_BANK_CONFLICT` over `GRBM_GUI_ACTIVE` on gfx9/gfx942 and `SQC_LDS_BANK_CONFLICT` over
+`SQC_LDS_IDX_ACTIVE` on gfx10+ (`counter_defs.yaml`, above). And they are per-SOURCE: the legacy
+`metrics.xml` still shipping with the old rocprofiler carries its own variants of the same names,
+including one block that normalises `MemUnitStalled` by `GRBM_GUI_ACTIVE` and another that
+normalises it by `ACTIVE_CYCLES`
+(https://github.com/ROCm/rocprofiler/blob/amd-master/test/tool/metrics.xml). Pick the tool, not the
+formula.
 
 Two readings to be careful with, both of which invite an NVIDIA habit that does not transfer:
 
-- `VALUUtilization` on this component is lane occupancy within a wave -- the DIVERGENCE number.
-  Note that `rocprof-compute` prints something spelled almost identically, `VALU Utilization`, which
-  means the opposite thing (what fraction of the kernel the VALU was BUSY); its divergence metric is
-  `VALU Active Threads`. Two tools, near-identical spellings, different quantities.
-- Whatever it is called, it is scaled by the wavefront width, so the SAME source branch reads
+- `VALUUtilization` in `counter_defs.yaml` is lane occupancy within a wave -- "The percentage of
+  active vector ALU threads in a wave. A lower number can mean either more thread divergence in a
+  wave or that the work-group size is not a multiple of 64" -- the DIVERGENCE number.
+  `rocprof-compute` prints something spelled almost identically, `VALU Utilization`, and defines it
+  as the opposite quantity: "Indicates what percent of the kernel's duration the VALU was busy
+  executing instructions." Its divergence metric is `VALU Active Threads`, "the average level of
+  divergence within a wavefront over the lifetime of the kernel", in units of threads with peak
+  `$wave_size`
+  (https://github.com/ROCm/rocprofiler-compute/blob/develop/src/rocprof_compute_soc/analysis_configs/gfx942/1100_compute_units_compute_pipeline.yaml).
+  Two tools, near-identical spellings, different quantities.
+- Whichever you read, it is scaled by the wavefront width, so the SAME source branch reads
   differently on CDNA (64 lanes) and RDNA (32). Never compare it across parts.
 
 ## Comparing two counters -- they always came from different runs
@@ -335,9 +462,12 @@ every run, and divide each raw count by its OWN run's value before comparing. It
 it is a normaliser and not evidence the two runs did the same work: a run that got slower has more
 of them.
 
-WARNING: Not `GPUBusy`. Upstream defines it as `100*reduce(GRBM_GUI_ACTIVE,max)/reduce(GRBM_COUNT,max)` --
-a PERCENTAGE of time, not a cycle count -- so dividing by it inverts the normalisation instead of
-applying it.
+WARNING: Not `GPUBusy`. Upstream describes it as "The percentage of time GPU was busy" and defines
+it as `100*reduce(GRBM_GUI_ACTIVE,max)/reduce(GRBM_COUNT,max)` -- a PERCENTAGE of time, not a cycle
+count -- so dividing by it inverts the normalisation instead of applying it. Note also that its
+architecture list stops at gfx90a and gfx12: on gfx940/gfx941/gfx942/gfx950 the identical expression
+is published under the name `GPU_UTIL` instead (`counter_defs.yaml`, above). `GRBM_GUI_ACTIVE`
+itself is a raw counter with a gfx942 definition, which is why it is the one to collect.
 
 Same binary, same input, same grid is what makes two runs comparable. With all three held, an
 active-cycle count that still moves by more than a few percent means something outside the code
@@ -352,37 +482,55 @@ Two rules override all of it:
 ## Traps
 
 - **A count of 0 is a measurement; ERROR is not.** The code prints `ERROR (not counted)` when setup
-  failed. Read that line before the numbers. On this vendor a silent 0 is also what both
-  environment traps produce, which is why the empty-bracket check refuses to continue.
-- **Check an empty bracket before you believe a full one.** `gpu_papi_init` does it for you, and it
-  catches ONE of the two failures: a counter accumulating device-wide instead of attributing, which
-  reads back large. WARNING: It does NOT catch a dead counter -- a component returning 0 for everything
-  passes an empty-bracket probe, because 0 is the right answer for an empty bracket. That is why the
-  region loop checks the TOTAL as well: an all-zero run with the expected region count is the
-  silent-zero failure, not a kernel that moved nothing.
+  failed. Read that line before the numbers. On this vendor a silent 0 is also what the environment
+  traps produce, which is why the self-test refuses to continue.
+- **The self-test has TWO halves and needs both.** `gpu_papi_init`'s empty bracket catches a counter
+  running device-wide instead of attributing -- it reads back large. It cannot catch a dead counter,
+  because 0 IS the right answer for an empty bracket, so the live bracket around the warmup catches
+  that one by refusing a 0 over work that provably ran. `gpu_papi_report` repeats the check over the
+  whole run: an all-zero total with the expected region count is the silent-zero failure, not a
+  kernel that moved nothing.
 - **A cache-resident working set reports near-zero HBM traffic, and that is CORRECT.** Before
   calling a traffic counter broken, scale the working set past the last-level cache and check the
   number tracks. On a part with a large MALL/Infinity Cache this bites at sizes that feel big.
 - **`regions:` must be the launch count you expect.** Fewer means brackets were skipped.
 - **The counted binary is not your submission.** Build the probe separately; submit the clean
   source.
-- **Never run the probe under `rocprofv3` or `rocprof-compute`.** They are the same profiling
-  client the component needs, and two subscribers do not share it.
+- **Never run the probe under `rocprofv3` or `rocprof-compute`.** They are the same profiling client
+  the component needs, and upstream does not share it: "There may only be one counting service
+  configured per agent in a context and can be only one active context that is profiling a single
+  agent at a time"
+  (https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/_doxygen/rocprofiler-sdk/html/group__device__counting__service.html).
 - **Do not port NVIDIA thresholds.** Wavefront width, LDS banking and the cache hierarchy all
   differ. A number that means "bad" on an SM does not mean it on a CU.
 
 ## Documentation
 
 - PAPI project home -- https://icl.utk.edu/papi/
-- PAPI `rocp_sdk` component: build flags, env vars, dispatch mode -- https://github.com/icl-utk-edu/papi/blob/master/src/components/rocp_sdk/README.md
-- PAPI `rocm` component (deprecated from MI300A) -- https://github.com/icl-utk-edu/papi/blob/master/src/components/rocm/README.md
-- ROCprofiler-SDK, which `rocp_sdk` sits on -- https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/
-- MI300/MI200 counter DEFINITIONS and units (note: this page gives no expressions) -- https://rocm.docs.amd.com/en/latest/reference/gpu-arch/mi300-mi200-performance-counters.html
-- The derived-counter EXPRESSIONS, per architecture -- the authority for every formula above:
+- PAPI `rocp_sdk` component: build flags, env vars, dispatch mode, the flushing-delay limitation --
+  https://github.com/icl-utk-edu/papi/blob/master/src/components/rocp_sdk/README.md
+- `rocp_sdk.c`: the component name, and what `start`/`stop` actually call --
+  https://github.com/icl-utk-edu/papi/blob/master/src/components/rocp_sdk/rocp_sdk.c
+- `sdk_class.cpp`: counter zeroing at start, the `+=` into `long long`, dimension-qualifier semantics --
+  https://github.com/icl-utk-edu/papi/blob/master/src/components/rocp_sdk/sdk_class.cpp
+- The component's own test runner -- the authority for event-name and `DIMENSION_*=` spelling:
+  https://github.com/icl-utk-edu/papi/blob/master/src/components/rocp_sdk/tests/run_rocp_sdk_tests.sh
+- `papi.c`: `PAPI_stop` reads before it stops -- https://github.com/icl-utk-edu/papi/blob/master/src/papi.c
+- PAPI `rocm` component (deprecated from MI300A), `AQLPROFILE_READ_API` -- https://github.com/icl-utk-edu/papi/blob/master/src/components/rocm/README.md
+- `roc_profiler.c`: intercept mode is selected by `ROCP_HSA_INTERCEPT`, sampling is the fallback --
+  https://github.com/icl-utk-edu/papi/blob/master/src/components/rocm/roc_profiler.c
+- ROCprofiler-SDK counter collection services: dispatch versus device counting, kernel serialisation --
+  https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/api-reference/counter_collection_services.html
+- `rocprofv3`: `--list-avail`, `--pmc`, and what a derived metric is --
+  https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/how-to/using-rocprofv3.html
+- Counter and derived-metric DEFINITIONS with their per-architecture expressions -- the authority
+  for every counter description quoted above:
   https://github.com/ROCm/rocprofiler-sdk/blob/amd-staging/source/share/rocprofiler-sdk/counter_defs.yaml
+- The legacy `metrics.xml`, which spells some of the same names differently --
+  https://github.com/ROCm/rocprofiler/blob/amd-master/test/tool/metrics.xml
 - rocprof-compute's per-panel metric definitions and UNITS, per part (`gfx942/*.yaml`) --
   https://github.com/ROCm/rocprofiler-compute/tree/develop/src/rocprof_compute_soc/analysis_configs
-- Occupancy on AMD: 8 wavefront slots per SIMD, 32 per CU on CDNA -- https://gpuopen.com/learn/occupancy-explained/
+- MI300/MI200 counter definitions and units (note: this page gives no expressions) -- https://rocm.docs.amd.com/en/latest/reference/gpu-arch/mi300-mi200-performance-counters.html
+- Occupancy on AMD: wave slots per SIMD, RDNA1 and RDNA2/3 only -- https://gpuopen.com/learn/occupancy-explained/
 - AMD Instinct MI300 (CDNA3) ISA reference, for the hardware numbers -- https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-mi300-cdna3-instruction-set-architecture.pdf
-- Occupancy on AMD, wave-per-SIMD arithmetic -- https://gpuopen.com/learn/occupancy-explained/
-- HIP programming model: wavefront, CU, LDS -- https://rocm.docs.amd.com/projects/HIP/en/latest/understand/programming_model.html
+- HIP programming model: wavefront size per architecture -- https://rocm.docs.amd.com/projects/HIP/en/latest/understand/programming_model.html

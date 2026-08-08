@@ -114,16 +114,24 @@ got no clang-tidy coverage.
 hipcc --offload-arch=<gfx>:xnack+ -fsanitize=address -shared-libasan -g -O1 \
   <file>.hip -o /tmp/hipq_asan
 
-HSA_XNACK=1 \
-LD_PRELOAD=$(clang -print-file-name=libclang_rt.asan-x86_64.so) \
-ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 /tmp/hipq_asan
+# -print-file-name echoes the bare NAME back when the runtime is not installed, and
+# LD_PRELOAD of a non-path silently no-ops -- the run would then pass uninstrumented.
+ASAN_RT=$(clang -print-file-name=libclang_rt.asan-x86_64.so)
+if [ ! -f "$ASAN_RT" ]; then
+  echo "FAIL: no asan runtime ($ASAN_RT) -- gate did not run" >&2
+else
+  HSA_XNACK=1 \
+  LD_PRELOAD="$ASAN_RT" \
+  ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 /tmp/hipq_asan
+fi
 ```
 All three parts are required and each fails differently if dropped: `xnack+` in the
 offload arch, `HSA_XNACK=1` at run time (a mismatch aborts at load with a target-ID
-error), and the `LD_PRELOAD` when `-shared-libasan` is used. If a report lands
-inside rocBLAS rather than your kernel, put `$(hipconfig --rocmpath)/lib/asan` first
-on `LD_LIBRARY_PATH` -- ROCm ships instrumented copies of its own libraries there,
-when the install has them at all.
+error), and the `LD_PRELOAD` when `-shared-libasan` is used. A missing runtime FAILS
+the gate -- it never passes as a clean run. If a report lands inside rocBLAS rather
+than your kernel, put `$(hipconfig --rocmpath)/lib/asan` first on `LD_LIBRARY_PATH`
+-- ROCm ships instrumented copies of its own libraries there, when the install has
+them at all.
 
 ### 5. Serialized-dispatch run
 ```bash

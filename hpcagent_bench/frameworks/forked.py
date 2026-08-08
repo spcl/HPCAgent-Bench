@@ -98,6 +98,13 @@ def run_forked(fn: Callable,
                 p.join()
             if progress_q is not None:
                 last_progress = _drain(progress_q, last_progress)
+            # The child can die of its OWN fatal signal in the window between the deadline check
+            # and terminate() -- a segfaulting vendor runtime on a loaded box is exactly that race.
+            # Reporting it as TIMEOUT hides the cause the caller is trying to attribute, so the
+            # exit code decides: anything other than the signal we just sent is the child's own.
+            ec = p.exitcode
+            if ec is not None and ec < 0 and -ec not in (signal.SIGTERM, signal.SIGKILL):
+                break
             msg = f"{tag}timed out after {timeout}s"
             sys.stdout.write(msg + "\n")
             sys.stdout.flush()

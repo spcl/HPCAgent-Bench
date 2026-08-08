@@ -25,10 +25,14 @@ and masked lanes reaching an output fail the same gate.
 **Measure before you choose.** A transform on a loop that owns 5% of the time buys 5% at best:
 profile, rank by self time, work on the frame that owns the run. **Check what the compiler already
 did** before hand-writing what it was going to emit -- gcc `-fopt-info-vec-optimized
--fopt-info-vec-missed` (or `-fopt-info-all` for every pass); clang `-Rpass=loop-vectorize
--Rpass-missed=loop-vectorize -Rpass-analysis=loop-vectorize`, the analysis one carrying the reason
+-fopt-info-vec-missed` (or `-fopt-info-all` for every pass); clang
+`-Rpass=loop-vectorize|slp-vectorizer -Rpass-missed=loop-vectorize|slp-vectorizer
+-Rpass-analysis=loop-vectorize`, the analysis one carrying the reason
 (or `-fsave-optimization-record` for every pass as YAML); icx/ifx `-qopt-report=3
--qopt-report-phase=vec`; nvc `-Minfo=vect`. A report is meaningless without the `-O` level and ISA
+-qopt-report-phase=vec`; nvc `-Minfo=vect`. That clang line is
+`hpcagent_bench/flags.py::CLANG_OPT_REPORT` verbatim: the `|slp-vectorizer` alternation is
+load-bearing, and a report quoting only `loop-vectorize` says nothing about straight-line
+vectorization. A report is meaningless without the `-O` level and ISA
 that produced it: gcc vectorizes at `-O2` as well as `-O3`, and an x86-64 build with no `-march`
 vectorizes to 16-byte SSE2 whatever the machine has. Fix the flags before you read the verdict.
 

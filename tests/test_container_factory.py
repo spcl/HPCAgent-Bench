@@ -119,7 +119,7 @@ def test_ce_contributes_an_srun_flag_and_refuses_to_be_silent_without_one():
     """On Alps a step without --environment runs OUTSIDE the image, on the bare node, which
     looks like a broken environment rather than a missing flag. So a missing EDF raises."""
     assert containers.srun_container_flags(
-        "ce", edf="/scratch/foundation.toml") == ["--environment=/scratch/foundation.toml"]
+        "ce", edf="/scratch/loop_level_reasoning.toml") == ["--environment=/scratch/loop_level_reasoning.toml"]
     assert containers.srun_container_flags("podman") == []  # an exec wrapper needs no srun flag
     with pytest.raises(ValueError, match="HPCAGENT_BENCH_EDF"):
         containers.srun_container_flags("ce")
@@ -370,7 +370,7 @@ def test_the_alps_script_reads_the_ce_flag_from_the_spelling_file():
     """``--environment`` is declared once, in container_backends.txt. The Alps submission script
     derives it from there rather than spelling it again, so a change to how CE is invoked cannot
     leave the cluster path behind."""
-    script = pathlib.Path(__file__).resolve().parents[1] / "scripts/cscs/submit_foundation_alps.sbatch"
+    script = pathlib.Path(__file__).resolve().parents[1] / "scripts/cscs/submit_loop_level_reasoning_alps.sbatch"
     text = script.read_text()
     assert "ce.srun_flag" in text, "the Alps script must derive the flag from the spelling file"
     launches = [line for line in text.splitlines() if line.lstrip().startswith(("srun ", 'eval "$(srun '))]

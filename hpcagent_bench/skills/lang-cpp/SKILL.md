@@ -32,8 +32,9 @@ AND whether Section B applies:**
   emitted code trips every style rule and even `bugprone-*` is ~all false positives
   (200+ lines of noise). **Section B does NOT apply** (do not "modernize" generated
   output; fix its generator instead). The path-sensitive analyzer is the only useful
-  compile-time gate; the **ASan run is the real gate**. See
-  `dace-fortran/scripts/lint_generated_kernel.py`.
+  compile-time gate; the **ASan run is the real gate**. The whole check set is the
+  GENERATED-code variant under gate 2 below (`--checks='-*,clang-analyzer-*'`,
+  `--header-filter='$^'`) plus the sanitizer runs in gates 5 and 6.
 
 Rule of thumb: if the agent wrote it (or would edit it by hand), it's self-written --
 full gates + Section B. If a generator emitted it, it's machine-generated -- analyzer

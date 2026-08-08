@@ -19,6 +19,10 @@ that run. What was NOT verified here is anything CDNA-specific -- an iGPU has no
 Infinity Fabric, and the MI300 counter expressions are a different architecture's -- so treat the
 tool MECHANICS as measured and the MI300 numbers as documentation.
 
+Everything NOT measured here is quoted from upstream with its URL, in place. A claim on this page
+with no run behind it and no link behind it would be indistinguishable from an invented one, so
+there are none: what could not be sourced was deleted rather than hedged.
+
 WARNING: `rocprofv3` needs `hsa-amd-aqlprofile` and does not pull it in. Without it the run dies
 with `error while loading shared libraries: libhsa-amd-aqlprofile64.so.1` -- prefixed with **YOUR
 program's name**, not the profiler's, because the library is injected into the child. The binary
@@ -27,7 +31,7 @@ hsa-amd-aqlprofile`.
 
 The COUNTER half could not be exercised here at all -- see "Counters" below for why, which is a
 measured result rather than a gap. Everything this page says about `--pmc` SEMANTICS (pass
-splitting, the budget, cross-pass ratios) is read from the rocprofv3 source, not run.
+splitting, the budget, cross-pass ratios) is read from the rocprofv3 source and docs, not run.
 
 The READING RULE in "rank by the right column" is not vendor folklore -- it was measured on the
 NVIDIA twin of this page, where the fixture's launch-bound kernel owns **67.3%** of device time by
@@ -41,8 +45,13 @@ total and ranks **DEAD LAST** by mean. That arithmetic is vendor-independent.
 | `omniperf` | `rocprof-compute` | kernel-level analysis, SOL, roofline |
 | `omnitrace` | `rocprof-sys` | whole-application CPU+GPU timeline |
 
-Older tuning guides use the left column throughout. A host with only the deprecated v1 takes a
-DIFFERENT command line and produces a different schema -- see the bottom of this page.
+Upstream keeps the first row itself -- rocprofiler-sdk publishes a rocprof/rocprofv2/rocprofv3
+option-by-option comparison
+(https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/conceptual/comparing-with-legacy-tools.html)
+-- and the second is in the successor's own title, "ROCm Compute Profiler (formerly Omniperf)"
+(https://rocm.docs.amd.com/projects/rocprofiler-compute/en/latest/). Older tuning guides use the
+left column throughout. A host with only the deprecated v1 takes a DIFFERENT command line and
+produces a different schema -- see the bottom of this page.
 
 ## How it runs
 
@@ -58,9 +67,12 @@ rocprofv3 --kernel-trace --memory-copy-trace --stats --output-format csv \
           --output-directory <dir> --output-file gpu-profile -- <command>
 ```
 
-That is the whole trace: `kernel,memory-copy` and nothing else. The build gets NO extra flags --
-kernel names come out of the code object, and the device-debug switch would disable device
-optimisation, so the traced `.so` is byte-identical to the one the judge times.
+That is the whole trace: `kernel,memory-copy` and nothing else. **`--output-format csv` is the
+judge's choice, and it is the one that costs you the copy volume**: the byte count is in the record
+and in every other emitter (see "Copies carry no byte volume in the CSV"), so when you need it, run
+the tool yourself with `--output-format csv json`. The build gets NO extra flags -- kernel names
+come out of the code object, and the device-debug switch would disable device optimisation, so the
+traced `.so` is byte-identical to the one the judge times.
 
 A host with only the deprecated v1 falls back to a different command and a different schema:
 
@@ -68,16 +80,19 @@ A host with only the deprecated v1 falls back to a different command and a diffe
 rocprof --stats --timestamp on -o <dir>/gpu-profile.csv <command>
 ```
 
-No `--` (its wrapper stops at the first non-option token), one `*.stats.csv`, and no per-kernel
-min/max, no launch geometry, no memory report at all. **The payload's `tool` field says which one
-ran**; if it says `rocprof`, half the fields below are absent for that reason alone and not
-because your kernel did nothing.
+No `--`, and one `*.stats.csv`. **The payload's `tool` field says which one ran**; if it says
+`rocprof`, the launch rows and the per-kernel min/max are absent for that reason alone and not
+because your kernel did nothing. Note where that loss actually is: v1 DOES print launch geometry on
+its dispatch lines (`grd`, `wgr`, `lds`, `scr`, `arch_vgpr`, `sgpr`, `wave_size` -- see the bottom
+of this page), but the judge reads only the stats file on that path, so the geometry never reaches
+the payload.
 
 What comes back, and what comes back `null`:
 
 - Kernel rows: `name`, `instances`, `total_ns`, `mean_ns`, `min_ns`, `max_ns`, `time_pct`.
 - Memory rows: `operation`, `direction` (`h2d`/`d2h`/`d2d`/`memset`, normalised from
-  `MEMORY_COPY_HOST_TO_DEVICE`), `count`, `total_ns`, `mean_ns`, `total`, `unit`.
+  `MEMORY_COPY_HOST_TO_DEVICE`), `count`, `total_ns`, `mean_ns`, `total`, `unit`. The last two are
+  `null` on AMD, for the CSV reason above.
 - Launch rows: `name`, `grid` (converted to BLOCKS -- the CSV's work-item counts are divided for
   you), `block`, `threads_per_block`, `blocks`, `warps_per_block`, `registers_per_thread`,
   `shared_memory`, `shared_memory_unit`, `launches`.
@@ -94,23 +109,49 @@ They answer different questions:
 | report | file | what it answers |
 | --- | --- | --- |
 | kernel stats | `*_kernel_stats.csv` | per kernel: `Name`, `Calls`, `TotalDurationNs`, `AverageNs`, `Percentage`, `MinNs`, `MaxNs`, `StdDev` |
-| memory copy stats | `*_memory_copy_stats.csv` | per operation: how long H2D / D2H took. **NO byte volume** |
-| kernel trace | `*_kernel_trace.csv` | per dispatch: `Workgroup_Size_{X,Y,Z}`, `Grid_Size_{X,Y,Z}` (in WORK-ITEMS), `LDS_Block_Size` (LDS bytes, rounded UP to the allocation granule -- so an upper bound on what the kernel asked for, and `Group_Segment_Size` on releases before rocprofiler-sdk 1.1.0), `Scratch_Size`, **`VGPR_Count`**, `Accum_VGPR_Count`, **`SGPR_Count`**, `Start_Timestamp`, `End_Timestamp` |
-| agent info | `*_agent_info.csv` | the PART: `Wave_Front_Size`, `Num_Xcc`, `Cu_Count`, `Simd_Count`, `Max_Waves_Per_Simd`, `Lds_Size_In_Kb` |
+| memory copy stats | `*_memory_copy_stats.csv` | per operation: how long H2D / D2H took. **No byte volume in CSV** -- see below |
+| kernel trace | `*_kernel_trace.csv` | per dispatch: `Workgroup_Size_{X,Y,Z}`, `Grid_Size_{X,Y,Z}` (in WORK-ITEMS), `LDS_Block_Size`, `Scratch_Size`, **`VGPR_Count`**, `Accum_VGPR_Count`, **`SGPR_Count`**, `Start_Timestamp`, `End_Timestamp` |
+| agent info | `*_agent_info.csv` | the PART: `Wave_Front_Size`, `Num_Xcc`, `Cu_Count`, `Simd_Count`, `Max_Waves_Per_Simd`, `Max_Waves_Per_Cu`, `Lds_Size_In_Kb` |
 | domain stats | `*_domain_stats.csv` | per API/dispatch DOMAIN totals -- the top-level split before you rank within one |
 
+Those column lists are the writer's own: the eight-name stats header and the kernel-trace header
+are the literal arguments to the CSV files' constructors, and the `_kernel_stats` / `_memory_copy_stats`
+/ `_domain_stats` suffixes come from the domain table next to them
+(https://github.com/ROCm/rocprofiler-sdk/blob/amd-staging/source/lib/output/generateCSV.cpp,
+https://github.com/ROCm/rocprofiler-sdk/blob/amd-staging/source/lib/output/domain_type.cpp). The
+agent columns are in the tool docs, which print the header verbatim
+(https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/how-to/using-rocprofv3.html).
+
 Find them RECURSIVELY. Measured on rocprofiler-sdk 1.1.0 the layout is FLAT --
-`<dir>/<prefix>_kernel_stats.csv` and friends, no subdirectories -- but other releases write under
-`<hostname>/<pid>/`, and a glob that assumes one layout silently finds nothing on the other.
+`<dir>/<prefix>_kernel_stats.csv` and friends, no subdirectories -- but the default output path is
+`%hostname%/%pid%` when `--output-directory` is not given
+(https://github.com/ROCm/rocprofiler-sdk/blob/amd-staging/source/bin/rocprofv3.py), and a glob that
+assumes one layout silently finds nothing on the other.
+
+**`LDS_Block_Size` is an UPPER BOUND, not the request.** The writer rounds the dispatch's
+`group_segment_size` up to the LDS allocation granule --
+`(group_segment_size + (lds_block_size - 1)) & ~(lds_block_size - 1)` (generateCSV.cpp, above) --
+and rocprof-compute says the same of its own `LDS Allocation`: "This may also be larger than what
+was requested at compile time due to both allocation granularity and dynamic per-dispatch LDS
+allocations"
+(https://github.com/ROCm/rocprofiler-compute/blob/develop/src/rocprof_compute_soc/analysis_configs/gfx942/0700_wavefront.yaml).
+The column was named `Group_Segment_Size` on ROCm 6.2, and carried the RAW value with no rounding
+(https://github.com/ROCm/rocprofiler-sdk/blob/docs/6.2.0/source/lib/rocprofiler-sdk-tool/generateCSV.cpp),
+so a reader that matches only one of the two names reports a 16 KB workgroup as 0 B on whichever
+generation it was not pinned to -- a budget reported free and then spent twice.
 
 The REGISTER COUNTS are the reason to read the kernel trace even when you already have the stats:
 `VGPR_Count` and `SGPR_Count` are what turn "occupancy is low" into a cause, and they are per
 dispatch rather than per kernel.
 
 **Read `*_agent_info.csv` first.** It is the part's geometry, measured, and it is what makes every
-occupancy sentence arithmetic instead of folklore. `Grid_Size_*` is in WORK-ITEMS, not workgroups
--- divide by `Workgroup_Size_*` to get the block count, or every occupancy number you derive is
-wrong by the block size.
+occupancy sentence arithmetic instead of folklore -- `Max_Waves_Per_Cu` is the denominator, so you
+never have to guess it. `Grid_Size_*` is in WORK-ITEMS -- "The total number of work-items (or,
+threads) launched as a part of the kernel dispatch. In HIP, this is equivalent to the total grid
+size multiplied by the total workgroup (or, block) size"
+(https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/how-to/using-rocprofv3.html) -- so
+divide by `Workgroup_Size_*` to get the block count, or every occupancy number you derive is wrong
+by the block size.
 
 ## Rank by the right column
 
@@ -120,9 +161,11 @@ launched thousands of times can own most of the run while ranking last by mean. 
 fixture built for this, the 64-launches-per-rep kernel owns 67.3% of device time and has the
 smallest mean of the four. Sorting that table by mean picks the wrong kernel with a real number.
 
-`Percentage` is that ranking already done for you. Use it, then check `Calls` -- a high percentage
-with a high call count is a LAUNCH problem (batch, fuse, or use a graph), and a high percentage
-with a low call count is a KERNEL problem (go to `rocprof-compute`).
+`Percentage` is that ranking already done for you -- but it is each row's duration over the
+DOMAIN's total, not over the wall clock (generateCSV.cpp, above), so it answers "which kernel" and
+never "was the GPU busy". Use it, then check `Calls`: a high percentage with a high call count is a
+LAUNCH problem (batch, fuse, or use a graph), and a high percentage with a low call count is a
+KERNEL problem (go to `rocprof-compute`).
 
 ## Was the device busy at all?
 
@@ -151,17 +194,35 @@ Kind, Direction, Stream_Id, Source_Agent_Id, Destination_Agent_Id,
 Correlation_Id, Start_Timestamp, End_Timestamp
 ```
 
--- and no size field of any kind. The underlying buffer-tracing record does define a `bytes`
-member, so a NON-CSV emitter may still carry it: the same
-`rocprofv3 --memory-copy-trace -- ./your_app` run under `--output-format json` (or the `rocpd`
-database, or `pftrace` read in Perfetto) is where to look before giving up on it. What is measured
-here is only that `--output-format csv` has no such column, so **do not plan on getting it out of
-CSV**, and check your own emitter before believing a page (including this one) either way.
+-- and that is the whole header the CSV writer is constructed with, eight names with no size among
+them (https://github.com/ROCm/rocprofiler-sdk/blob/amd-staging/source/lib/output/generateCSV.cpp).
 
-Failing that, the achieved rate has to come from transfer sizes you know from your own source,
-divided by the reported duration. Then compare against the link: a PCIe-attached part and an Infinity-Fabric-
-attached one differ by an order of magnitude, and an integrated GPU has neither -- it shares the
-host memory controller, so a "copy" there is not the same operation at all.
+**The RECORD has the number; only the CSV emitter drops it.** The buffer-tracing record declares
+`uint64_t bytes; ///< bytes copied`
+(https://github.com/ROCm/rocprofiler-sdk/blob/amd-staging/source/include/rocprofiler-sdk/buffer_tracing.h),
+and the other emitters write it: JSON serialises the field by name
+(https://github.com/ROCm/rocprofiler-sdk/blob/amd-staging/source/include/rocprofiler-sdk/cxx/serialization/save.hpp),
+Perfetto attaches it to the copy slice as `copy_bytes`
+(https://github.com/ROCm/rocprofiler-sdk/blob/amd-staging/source/lib/output/generatePerfetto.cpp),
+and the rocpd database stores it as the copy's `size`
+(https://github.com/ROCm/rocprofiler-sdk/blob/amd-staging/source/lib/output/generateRocpd.cpp).
+
+So ask for both. `--output-format` takes a LIST (`csv`, `json`, `pftrace`, `otf2`, `rocpd`)
+(https://github.com/ROCm/rocprofiler-sdk/blob/amd-staging/source/bin/rocprofv3.py), and one run
+writes both files:
+
+```sh
+rocprofv3 --kernel-trace --memory-copy-trace --stats --output-format csv json \
+          --output-directory prof --output-file run -- ./your_app <args>
+```
+
+Read the ranking off the CSV and `bytes` off the JSON, joined on `correlation_id`. The achieved
+rate is then `bytes` over that record's own `end_timestamp - start_timestamp` -- no guessing from
+the source, and no unit to convert, because the field is bytes.
+
+Then compare against the link: a PCIe-attached part and an Infinity-Fabric-attached one differ by
+an order of magnitude, and an integrated GPU has neither -- it shares the host memory controller,
+so a "copy" there is not the same operation at all.
 
 The actionable findings are almost always structural rather than rate-related: a copy inside the
 timestep loop that could be hoisted, a H2D of data the device already had, or pageable host memory
@@ -210,19 +271,28 @@ where the support is.
 rocprofv3 --pmc SQ_WAVES GRBM_GUI_ACTIVE TCC_HIT_sum TCC_MISS_sum -- ./your_app
 ```
 
-Results land in `pmc_<n>/<pid>_counter_collection.csv`, one directory per pass. The file is PID-prefixed, so glob (`pmc_*/*_counter_collection.csv`) rather than naming it.
+Results land in one directory per pass, and the file inside is PID-prefixed: counter collection
+"generates a `./pmc_n/counter_collection.csv` file prefixed with the process ID. For each `pmc`
+row, a directory `pmc_n` containing a `counter_collection.csv` file is generated, where n = 1 for
+the first row and so on"
+(https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/how-to/using-rocprofv3.html). So glob
+`pmc_*/*_counter_collection.csv` rather than naming it.
 
 **The counter budget is hardware, and exceeding it FAILS THE JOB -- it does not replay.** From
 rocprofv3's own `--pmc` help: *"job will fail if entire set of counters cannot be collected in
-single pass"*. This is the opposite of `ncu`, which quietly replays the kernel until it has every
+single pass"*
+(https://github.com/ROCm/rocprofiler-sdk/blob/amd-staging/source/bin/rocprofv3.py), repeated in the
+docs as "Job fails if the entire set of counters can't be collected in a single pass" (same tool
+page as above). This is the opposite of `ncu`, which quietly replays the kernel until it has every
 metric, and the opposite of rocprof v1. So an over-long counter list costs you the run rather than
 the wall-clock, and the remedy is yours to apply: split the list across passes yourself, using the
 input file below. Never grow a `--pmc` list hoping the tool will cope.
 
-**Repeating `--pmc` does NOT give you two passes -- it silently DISCARDS the first.** The option
-is declared `nargs="*"` with no `append` action, so the second occurrence overwrites the first and
-only the survivor is collected. Nothing warns. Multi-pass comes from an INPUT FILE with one `pmc`
-row per pass:
+**Repeating `--pmc` does NOT give you two passes -- it silently DISCARDS the first.** The option is
+declared `nargs="*"` with no `append` action, and the launcher then joins the ONE survivor into a
+single row, `"pmc: {}".format(" ".join(args.pmc))` (rocprofv3.py, above). Nothing warns. Multi-pass
+comes from an INPUT FILE: "For multi-pass execution, include multiple `pmc` rows in the input file.
+Counters in each `pmc` row can be collected in each application run" (tool page, above).
 
 ```
 pmc: SQ_WAVES SQ_BUSY_CU_CYCLES
@@ -238,9 +308,12 @@ passes came from two different executions of your kernel.** A ratio across passe
 legitimate through a denominator both passes measured (`GRBM_GUI_ACTIVE` is the usual one), and it
 is only meaningful at all if the application is deterministic.
 
-Name a counter without a dimension specifier (`TCC_MISS`, not a per-channel form) and rocprofv3
-aggregates across all instances for you -- the AMD equivalent of the `:stat=sum` problem on
-NVIDIA, resolved in the opposite direction: here the aggregate is the default.
+Name a counter without a dimension specifier and rocprofv3 aggregates for you: "Specify the counter
+name without dimension specifiers (e.g., `pmc: TCC_MISS`). The `rocprofv3` tool will automatically
+collect accumulated values across all instances", and per-instance values need "JSON output format,
+which includes detailed dimension information for individual counter instances" (tool page, above).
+That is the AMD equivalent of the `:stat=sum` problem on NVIDIA, resolved in the opposite
+direction: here the aggregate is the default and the breakdown is the thing you ask for.
 
 ## The deprecated v1, if that is all the host has
 
@@ -248,31 +321,55 @@ NVIDIA, resolved in the opposite direction: here the aggregate is the default.
 rocprof --stats --timestamp on -o prof/run.csv ./your_app
 ```
 
-No `--` (its wrapper stops at the first non-option token), and one `*.stats.csv` with no per-kernel
-min/max and no memory report. It DOES print launch geometry (`grd`, `wgr`, `lds`, `scr`,
-`arch_vgpr`, `sgpr`, `wave_size`), so that column survives the fallback even though most do not. If
-half the fields above are missing, this is why -- check which binary you actually ran before
-concluding the data is broken.
+No `--`: the documented synopsis is `rocprof [-h] ... [-o <output CSV file>] <app command line>`,
+with the workload following the options directly, `--stats` writes one `<output name>.stats.csv`,
+and `--timestamp <on|off>` is what puts `dispatch/begin/end/complete` on each row
+(https://github.com/ROCm/rocprofiler/blob/amd-master/doc/rocprof_tool.md).
+
+It DOES print launch geometry, so that column survives the fallback even though the schema does
+not. The dispatch line is `grd(%u), wgr(%u), lds(%u), scr(%u), arch_vgpr(%u), accum_vgpr(%u),
+sgpr(%u), wave_size(%u)`
+(https://github.com/ROCm/rocprofiler/blob/amd-master/test/tool/tool.cpp), and its `lds` is rounded
+up to the same LDS granule v3's `LDS_Block_Size` is.
+
+Two more v1 facts before you compare anything to a v3 run, both from the tool doc above: its text
+input file is read "automatically rerun application for every pmc line", so a pass there is a whole
+extra execution of your program, and "profiling has limitation of serializing submitted kernels".
+Check which binary you actually ran before concluding the data is broken.
 
 ## Traps
 
 - **`--` before the application.** Missing it turns your app's first argument into a tool flag.
-- **Find the CSVs recursively.** Flat or `<hostname>/<pid>/`, depending on the release.
+- **Find the CSVs recursively.** Flat, or under the default `%hostname%/%pid%`.
 - **`Grid_Size_*` is WORK-ITEMS.** Divide by workgroup size for blocks.
 - **A traced run's wall clock is not a timed run's.** Take every speed-up from an uninstrumented
   build.
-- **One profiling client at a time.** `rocprofv3`, `rocprof-compute` and a PAPI GPU component all
-  want the same subscriber; nested, one of them silently gets nothing.
+- **`--pmc` SERIALIZES dispatches; the trace does not.** "Counter collection in *dispatch counting*
+  mode requires serialized execution of kernels on a target device", and for co-dependent kernels
+  that must run simultaneously "kernel serialization leads to deadlock"
+  (https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/api-reference/counter_collection_services.html).
+  A hang under `--pmc` on an application that runs clean is this, not your kernel.
 - **The build gets no extra flags.** Kernel names come from the code object, and the device-debug
   switch would disable device optimisation -- so the traced binary is the one you timed.
-- **Which device is measured.** `ROCR_VISIBLE_DEVICES` renumbers devices, so `device 0` in the
-  report is not necessarily the one you think. Check `*_agent_info.csv` against the part you meant.
+- **Which device is measured.** `ROCR_VISIBLE_DEVICES` is "a list of device indices or UUIDs that
+  will be exposed to applications"
+  (https://rocm.docs.amd.com/en/docs-7.2.4/conceptual/gpu-isolation.html), so `device 0` in the
+  report is the first EXPOSED one and not necessarily the one you think. Check `*_agent_info.csv`
+  against the part you meant.
 - **Verify the answer.** A kernel that got faster and wrong measures nothing.
 
 ## Documentation
 
 - Application tracing and profiling with rocprofv3 -- https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/how-to/using-rocprofv3.html
 - ROCprofiler-SDK -- https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/
+- Counter collection services, for the serialization rule -- https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/api-reference/counter_collection_services.html
+- rocprof / rocprofv2 / rocprofv3, option by option -- https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/conceptual/comparing-with-legacy-tools.html
+- The CSV writer -- every column name and the LDS rounding -- https://github.com/ROCm/rocprofiler-sdk/blob/amd-staging/source/lib/output/generateCSV.cpp
+- The report file names, per domain -- https://github.com/ROCm/rocprofiler-sdk/blob/amd-staging/source/lib/output/domain_type.cpp
+- The memory-copy record, where `bytes` lives -- https://github.com/ROCm/rocprofiler-sdk/blob/amd-staging/source/include/rocprofiler-sdk/buffer_tracing.h
+- The JSON serialiser that emits it -- https://github.com/ROCm/rocprofiler-sdk/blob/amd-staging/source/include/rocprofiler-sdk/cxx/serialization/save.hpp
+- The rocprofv3 launcher, for `--pmc` and `--output-format` -- https://github.com/ROCm/rocprofiler-sdk/blob/amd-staging/source/bin/rocprofv3.py
+- The deprecated v1's own doc and dispatch line -- https://github.com/ROCm/rocprofiler/blob/amd-master/doc/rocprof_tool.md and https://github.com/ROCm/rocprofiler/blob/amd-master/test/tool/tool.cpp
 - MI300/MI200 counters, for the `--pmc` names -- https://rocm.docs.amd.com/en/latest/reference/gpu-arch/mi300-mi200-performance-counters.html
 - AMD's profiling walkthrough -- https://rocm.blogs.amd.com/software-tools-optimization/profiling-guide/novice/README.html
 - ROCm Compute Profiler, where a slow kernel goes next -- https://rocm.docs.amd.com/projects/rocprofiler-compute/en/latest/
