@@ -183,6 +183,7 @@ BUILD_CACHE_PINS = (("compiler", "build_mode", "cmake"), ("compiler", "configure
 #: Pins already reported absent, so the notice below is one line per process rather than one per
 #: kernel per variant (:func:`pin_build_caching` runs from ``optimize``, once per compiled kernel).
 _ABSENT_PINS_REPORTED: Set[Tuple[str, ...]] = set()
+
 #: Where each MPI launcher publishes this process's rank, most specific first; a launcher that sets
 #: none of them is a single-process run. Must stay a SUPERSET of DaCe's own ``LAUNCHER_RANK_VARS``
 #: (``dace/sdfg/sdfg.py``): DaCe splits the build folder on any name it knows, so one we do not probe
