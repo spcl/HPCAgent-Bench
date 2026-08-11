@@ -179,9 +179,28 @@ def _short_name_index() -> Dict[str, "object"]:
     Keyed on the manifest's ``short_name`` (the value the results ``benchmark`` column
     stores), NOT the directory stem the selector grammar uses -- the two differ for kernels
     like ``heat_3d`` (stem) / ``heat3d`` (short_name). Memoized; ~1s to parse every manifest.
+
+    A manifest that fails to parse is SKIPPED rather than propagated, which is what makes
+    :func:`row_meta_for`'s "never crashes a plot" promise true. It was not: this used to call
+    ``KERNELS.specs()``, which is all-or-nothing, so ONE malformed manifest anywhere in the corpus
+    killed every plot -- including plots of a selection that does not contain it. Measured: a
+    density-matrix kernel readded under the pre-rename ``benchmarks/hpc/`` path carries
+    ``track: hpc`` with a ``scale:``, ``validate_scale`` rejects the pair, and an NPBench lvl2
+    heatmap that references no CP2K kernel at all died in row ORDERING.
+
+    Same policy, and the same reasoning, as ``spec._safe_level`` / ``spec._safe_labels``. Scoped to
+    this index on purpose: ``KERNELS.specs()`` stays strict for the tools that must not silently
+    skip a kernel (``apply_sizes``, ``size_audit``, ``cli`` corpus listing).
     """
-    from hpcagent_bench.spec import KERNELS
-    return {spec.short_name: spec for spec in KERNELS.specs().values()}
+    from hpcagent_bench.spec import KERNELS, BenchSpec
+    index: Dict[str, "object"] = {}
+    for key in KERNELS.keys():
+        try:
+            spec = BenchSpec.load(key)
+        except Exception:  # noqa: BLE001 -- a broken manifest just orders as `other`
+            continue
+        index[spec.short_name] = spec
+    return index
 
 
 def row_meta_for(short_names: Sequence[str]) -> List[RowMeta]:
