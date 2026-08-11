@@ -1,6 +1,6 @@
 name: CI
 
-# Eight parallel CPU runners, each a self-contained slice of the pipeline (was one ~200-min
+# Seven parallel CPU runners, each a self-contained slice of the pipeline (was one ~200-min
 # sequential runner). Shared toolchain + base pip come from
 # ./.github/actions/setup; each job adds only the extra it needs, so ONLY frameworks-pluto pays for
 # the Pluto build, ONLY mpi pays for gt4py + the MPICH/mpi4py source build.
@@ -10,6 +10,20 @@ name: CI
 # three-way shard of what was left at 4m + 8m + 9m -- three runners and a splitting script to move
 # a 21m job off a critical path that e2e[pythran] holds at 31m, i.e. no wall clock bought and two
 # runners spent. Merged back to one; the script is gone. Shard only what is ON the critical path.
+#
+# 2026-08-11: mpi + dace-numeric + hf-export fused into one job (see the mpi section below). Run
+# 31478271044 measured mpi at 11m51s, dace-numeric at 16m18s -- run 31023526869 last measured
+# hf-export, when it runs, at 2m37s -- ~31m sequential, none of the three on the critical path. The
+# same run measured something sharper than any one leg's own time: of eleven jobs, only THREE start
+# when the run is created (integration, frameworks-pluto, mpi, all at 09:34:06); dace-numeric queued
+# 22m for a free slot, port-fidelity 33m, container-image 61m, unit 102m, translators 105m -- three
+# concurrent slots, not eleven, so past three, job COUNT drives total wall clock more than any one
+# job's own duration. Fusing three short/idle legs into one drops a whole queue wave
+# (ceil(11/3)=4 -> ceil(9/3)=3). frameworks-pluto stays separate: its own range is 15m05s-28m18s
+# across the same two runs, it is the only runner building Pluto from source (its own LLVM-17
+# toolchain, unrelated to MPI/OpenMPI or DaCe's per-kernel C++ builds), and a bad day on both sides
+# of that union risks the same 45m+ single-runner budget this fusion exists to avoid -- reversing an
+# isolation the file already chose once (see e2e-native/e2e-pythran above) for a saving this size.
 #
 # The e2e sweep (tests/test_e2e_numerical.py) is partitioned by BACKEND via
 # HPCAGENT_BENCH_E2E_BACKENDS so no single runner carries all ~80 min of it and Pluto stays isolated:
@@ -28,11 +42,11 @@ name: CI
 #                    (native heavy-compile slice, -n auto)
 #   e2e-pythran      e2e[pythran]         (pythran isolated -- ~7 GB/compile, -n 2)
 #   container-image  build + smoke-launch the agent-bench cpu container image
-#   dace-numeric     the generated DaCe corpus lowered, compiled and RUN vs numpy (a C++ build per
-#                    kernel, one subprocess each, -n 4)
 #   mpi              the whole MPI/distributed track (descriptor + driver codegen + launch +
 #                    scoring + halo + sizing) on MPICH + a source-built mpi4py (ONLY MPI build),
-#                    plus port fidelity + benchmark reference validation (gt4py)
+#                    plus port fidelity + benchmark reference validation (gt4py), plus (fused,
+#                    2026-08-11) the DaCe corpus vs numpy (dace-numeric, a C++ build per kernel, one
+#                    subprocess each, -n 4) and the HF dataset build/publish (hf-export)
 #
 # GPU frameworks (triton, tvm-gpu) self-skip here and run in agentbench-gpu.yml.
 
@@ -218,7 +232,7 @@ jobs:
   # failures. Splitting gives it the whole job budget instead of the tail of somebody else's.
   #
   # Deliberately NOT `needs: [unit]`: a Phase 1 unit failure must not hide what the integration
-  # tests would have said. Only the PUBLISH step is gated on both (see hf-export).
+  # tests would have said. Only the PUBLISH step is gated on both (see the hf-export phase in mpi).
   # ===========================================================================================
   integration:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
@@ -297,51 +311,6 @@ jobs:
           name: coverage-integration
           path: .coverage*
           include-hidden-files: true
-          if-no-files-found: ignore
-
-  # ===========================================================================================
-  # hf-export -- build (and, on a main push, publish) the HuggingFace dataset.
-  #
-  # A job rather than a step so its success() gate still means what it said when Phase 6 lived
-  # beside it: never publish a dataset from a run where a phase went red. `needs` both test jobs,
-  # so a red in either skips this entirely -- which is the same guarantee `if: success()` gave
-  # inside the single job, restored across the split rather than quietly narrowed to `unit`.
-  # ===========================================================================================
-  hf-export:
-    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: hf-export (HuggingFace dataset)
-    needs: [unit, integration]
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - uses: ./.github/actions/setup
-
-      - name: Phase 7 -- export (+ publish on a main push) the HuggingFace dataset
-        # export-hf always writes the parquet artifact and PUBLISHES the same rows only on a push
-        # to main with HF_TOKEN + HF_DATASET_REPO set.
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_DATASET_REPO: ${{ vars.HF_DATASET_REPO }}
-        run: |
-          pip install -r requirements/hf.txt
-          PUSH=""
-          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ] \
-              && [ -n "$HF_DATASET_REPO" ] && [ -n "$HF_TOKEN" ]; then
-            PUSH="--push $HF_DATASET_REPO"
-          fi
-          python -m hpcagent_bench.cli export-hf --selector all --out hpcagent_bench_hf.parquet $PUSH
-
-      - name: Phase 7 -- upload the HF dataset as a workflow artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: hpcagent_bench-hf-dataset
-          path: hpcagent_bench_hf.parquet
           if-no-files-found: ignore
 
   # ===========================================================================================
@@ -432,86 +401,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-port-fidelity
-          path: .coverage*
-          include-hidden-files: true
-          if-no-files-found: ignore
-
-  # ===========================================================================================
-  # dace-numeric -- does the DaCe column still COMPUTE what numpy computes? port-fidelity's
-  # Phase 8 proves the frontend READS the generated corpus, which is a different question: a
-  # program can parse, lower, compile and still return a different answer, and every one of those
-  # states grades submissions against a DaCe baseline nobody checked. Measured on landing: of the
-  # 331 gated kernels, 311 agree with numpy and 19 do not -- wrong numbers (channel_flow), C++ that
-  # does not build (fft_1d), a call that cannot be made (nbody). Phase 8 is green for all 19.
-  #
-  # Its own runner because it is the only phase that pays a C++ BUILD PER KERNEL, and it needs a
-  # per-kernel build directory the cheap sweep's runner has neither the disk nor the time for.
-  # scientific_computing + loop_level_reasoning only -- see GATED_TRACKS in the test.
-  # ===========================================================================================
-
-  dace-numeric:
-    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: dace-numeric (generated DaCe corpus vs numpy)
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    env:
-      PYTEST_ADDOPTS: "--cov=hpcagent_bench --cov-append --cov-report="
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - uses: ./.github/actions/setup
-
-      - name: The generated DaCe corpus still computes what numpy computes @ S
-        if: ${{ !cancelled() }}
-        # One subprocess per kernel: DaCe's parse state is process-global, and a kernel whose
-        # frontend wedges or whose generated code segfaults must cost that kernel a verdict rather
-        # than take the sweep with it.
-        #
-        # -n 4, not auto: every worker forks a C++ build, so the limit is memory rather than cores.
-        # Each worker gets its own per-kernel build folder (keys are unique) and they SHARE one
-        # build cache -- measured, a cold cmake configure is 5.06s against 0.72s warm, which is the
-        # difference between a ten-minute job and a forty-minute one.
-        #
-        # --maxfail=20 so a translator-wide break reports twenty named kernels, not three hundred.
-        timeout-minutes: 30
-        env:
-          # NOT /tmp: it is tmpfs, and exhausting it fails builds in a way that reads as a kernel defect.
-          HPCAGENT_BENCH_DACE_BUILD_ROOT: ${{ runner.temp }}/dace_numeric
-        run: |
-          rm -rf "$HPCAGENT_BENCH_DACE_BUILD_ROOT"
-          # Regenerate ONCE, before xdist starts. *_dace.py is gitignored, so collection emits what
-          # a fresh checkout lacks -- and every worker would do that independently, four processes
-          # writing the same files through one fingerprint cache. Doing it here leaves the workers'
-          # own autogen.ensure a pure cache hit, so there is no race to reason about.
-          python -c "from tests.test_dace_frontend_validity import generated_programs; \
-            print(len(generated_programs()), 'dace programs ready')"
-          python -m pytest -q -p no:cacheprovider -rfEs -n 4 -m dace_numeric \
-            --maxfail=20 --timeout=900 tests/test_dace_numeric_agreement.py
-
-      # Hit rate is the whole point of the cache -- surface it so a regression to 0% is visible.
-      - name: ccache statistics
-        if: always()
-        run: ccache --show-stats
-
-      - name: Upload the generated DaCe corpus
-        # Same reason as port-fidelity's copy: the corpus this runner emitted is the only way to tell
-        # a generator difference from an environment difference when a kernel is red here and green
-        # locally at the same dace SHA.
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: dace-corpus-numeric
-          path: hpcagent_bench/benchmarks/**/*_dace.py
-          retention-days: 7
-          if-no-files-found: ignore
-
-      - name: Upload coverage data
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-dace-numeric
           path: .coverage*
           include-hidden-files: true
           if-no-files-found: ignore
@@ -1075,6 +964,13 @@ jobs:
   # replacement on Ault; only libfabric/CXI injected on Alps), and mpi4py is source-built against
   # it. The launch/e2e tests ``mpirun --oversubscribe`` on the CI cores and self-skip cleanly when
   # MPI_Init cannot bootstrap; the GPU-device e2e tests self-skip with no CUDA/nvcc.
+  #
+  # Fused here 2026-08-11 (see the top-of-file note for the measurement): dace-numeric (the
+  # generated DaCe corpus vs numpy, a C++ build per kernel) and hf-export (build, and on a main
+  # push publish, the HuggingFace dataset) run as trailing phases on this same runner. `needs:
+  # [unit, integration]` is hf-export's own gate, carried over unchanged in effect: it decides the
+  # PUBLISH sub-step only -- the mpi and dace-numeric phases above run regardless, on `!cancelled()`
+  # like every other phase here, same as they did as their own ungated jobs.
   # ===========================================================================================
 
       # if: always() -- a job that went red still covered lines on the way, and the total is more
@@ -1089,10 +985,19 @@ jobs:
           if-no-files-found: ignore
 
   mpi:
-    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: mpi (distributed track -- descriptor + codegen + launch + scoring)
+    # !cancelled(): the mpi/dace-numeric phases below must still run and report even when unit or
+    # integration went red (they did before this fusion, as independent jobs with no needs at all).
+    # needs: [unit, integration]: schedules this job only after both finish -- unavoidable once
+    # their `result` has to gate the hf-export PUBLISH sub-step below -- and is the same wait
+    # hf-export's own job already paid as its own job.
+    if: ${{ !cancelled() && !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
+    needs: [unit, integration]
+    name: mpi + dace-numeric + hf-export (distributed track, DaCe-vs-numpy corpus, HF dataset)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # ~11m51s (mpi) + ~16m18s (dace-numeric) + ~2m37s (hf-export), measured on runs 31478271044 /
+    # 31023526869 -- ~31m sequential. 75 leaves more than 2x that, with room above the two explicit
+    # phase caps below (30 + 30) on a bad day for either.
+    timeout-minutes: 75
     env:
       # OpenMPI on a GH-Actions runner has no high-speed fabric (no InfiniBand / UCX device), so pin
       # the simple self + shared-memory transports and disable UCX's VFS probe -- otherwise MPI_Init
@@ -1104,10 +1009,15 @@ jobs:
       OMPI_MCA_rmaps_base_oversubscribe: "1"
       UCX_VFS_ENABLE: "n"
       # Job-level so every pytest here collects; --cov-report= suppresses the per-job
-      # render (the combine job owns the only report).
+      # render (the combine job owns the only report). hf-export's phase runs no pytest, so this
+      # is simply unused there, same as it already is during every non-pytest setup step above.
       PYTEST_ADDOPTS: "--cov=hpcagent_bench --cov-append --cov-report="
     steps:
       - uses: actions/checkout@v4
+        with:
+          # hf-export's phase needs this (KernelBench provenance); harmless extra for the mpi and
+          # dace-numeric phases, which never checked submodules out on their own.
+          submodules: recursive
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -1231,10 +1141,81 @@ jobs:
           python -m pytest -q -p no:cacheprovider -rfEs --import-mode=importlib -n auto --timeout=600 \
             hpcagent_bench/benchmarks/
 
+      # --- dace-numeric phase (fused 2026-08-11; formerly its own job -- see the banner above) ---
+      - name: The generated DaCe corpus still computes what numpy computes @ S
+        if: ${{ !cancelled() }}
+        # One subprocess per kernel: DaCe's parse state is process-global, and a kernel whose
+        # frontend wedges or whose generated code segfaults must cost that kernel a verdict rather
+        # than take the sweep with it.
+        #
+        # -n 4, not auto: every worker forks a C++ build, so the limit is memory rather than cores.
+        # Each worker gets its own per-kernel build folder (keys are unique) and they SHARE one
+        # build cache -- measured, a cold cmake configure is 5.06s against 0.72s warm, which is the
+        # difference between a ten-minute job and a forty-minute one.
+        #
+        # --maxfail=20 so a translator-wide break reports twenty named kernels, not three hundred.
+        timeout-minutes: 30
+        env:
+          # NOT /tmp: it is tmpfs, and exhausting it fails builds in a way that reads as a kernel defect.
+          HPCAGENT_BENCH_DACE_BUILD_ROOT: ${{ runner.temp }}/dace_numeric
+        run: |
+          rm -rf "$HPCAGENT_BENCH_DACE_BUILD_ROOT"
+          # Regenerate ONCE, before xdist starts. *_dace.py is gitignored, so collection emits what
+          # a fresh checkout lacks -- and every worker would do that independently, four processes
+          # writing the same files through one fingerprint cache. Doing it here leaves the workers'
+          # own autogen.ensure a pure cache hit, so there is no race to reason about.
+          python -c "from tests.test_dace_frontend_validity import generated_programs; \
+            print(len(generated_programs()), 'dace programs ready')"
+          python -m pytest -q -p no:cacheprovider -rfEs -n 4 -m dace_numeric \
+            --maxfail=20 --timeout=900 tests/test_dace_numeric_agreement.py
+
       # Hit rate is the whole point of the cache -- surface it so a regression to 0% is visible.
+      # One combined step now: it reports the mpi phases' + dace-numeric's compiles together, same
+      # ~/.ccache dir either way, since both used to print it only for their own half.
       - name: ccache statistics
         if: always()
         run: ccache --show-stats
+
+      - name: Upload the generated DaCe corpus
+        # Same reason as port-fidelity's copy: the corpus this runner emitted is the only way to tell
+        # a generator difference from an environment difference when a kernel is red here and green
+        # locally at the same dace SHA.
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dace-corpus-numeric
+          path: hpcagent_bench/benchmarks/**/*_dace.py
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # --- hf-export phase (fused 2026-08-11; formerly its own job -- see the banner above) ---
+      - name: Phase 7 -- export (+ publish on a main push) the HuggingFace dataset
+        # export-hf always writes the parquet artifact -- unconditionally, like every other phase in
+        # this job, on `!cancelled()` rather than on the mpi/dace-numeric phases above succeeding.
+        # PUBLISH is the one thing that still keeps hf-export's original all-or-nothing gate: it
+        # fires only on a push to main with HF_TOKEN + HF_DATASET_REPO set AND both `needs` green --
+        # never publish a dataset from a run where unit or integration went red.
+        if: ${{ !cancelled() }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ vars.HF_DATASET_REPO }}
+        run: |
+          pip install -r requirements/hf.txt
+          PUSH=""
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ] \
+              && [ -n "$HF_DATASET_REPO" ] && [ -n "$HF_TOKEN" ] \
+              && [ "${{ needs.unit.result }}" = "success" ] && [ "${{ needs.integration.result }}" = "success" ]; then
+            PUSH="--push $HF_DATASET_REPO"
+          fi
+          python -m hpcagent_bench.cli export-hf --selector all --out hpcagent_bench_hf.parquet $PUSH
+
+      - name: Phase 7 -- upload the HF dataset as a workflow artifact
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: hpcagent_bench-hf-dataset
+          path: hpcagent_bench_hf.parquet
+          if-no-files-found: ignore
   # ===========================================================================================
   # gpu -- DISABLED extra runner (blocked). GPU codegen tests (tvm-gpu / triton) belong on a real
   # GPU box; this job is the home for them but stays OFF (if: false) until one is provisioned.
@@ -1300,8 +1281,8 @@ jobs:
   coverage:
     if: ${{!cancelled()}}
     name: coverage (combined total)
-    needs: [unit, integration, translators, frameworks-pluto, e2e-native, e2e-pythran, container-image, mpi, port-fidelity,
-            dace-numeric]
+    # dace-numeric folded into mpi (2026-08-11); its coverage rides mpi's single combined upload now.
+    needs: [unit, integration, translators, frameworks-pluto, e2e-native, e2e-pythran, container-image, mpi, port-fidelity]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

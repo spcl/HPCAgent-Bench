@@ -18,7 +18,7 @@ dtypes are not marshalled by the ctypes paths.
 import ctypes
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -34,10 +34,30 @@ class DTypeInfo:
     #: performed in. ``None`` means the dtype computes in itself (every other
     #: row). See :func:`compute_dtype` / :func:`is_storage_only`.
     compute: Optional[str] = None
+    #: For a SUB-BYTE dtype (int4): the dtype one element is physically stored as
+    #: -- what numpy allocates and what a C buffer element is. ``None`` means the
+    #: dtype stores as itself (every other row). See :func:`storage_dtype`.
+    storage: Optional[str] = None
+    #: Logical ``(lo, hi)`` when the dtype's range is NARROWER than its storage's
+    #: (int4 in an int8 byte); ``None`` = the storage type's own full range.
+    value_range: Optional[Tuple[int, int]] = None
+    #: Element-count granularity an array of this dtype must respect: two int4
+    #: nibbles pack per byte, so an int4 array holds an even number of elements.
+    #: 1 (every other row) = no constraint. Enforced by the manifest schema.
+    size_multiple: int = 1
 
 
-def _row(numpy, c, fortran, scalar_kind, ptr_kind, ctype, compute=None):
-    return DTypeInfo(numpy, c, fortran, scalar_kind, ptr_kind, ctype, compute)
+def _row(numpy,
+         c,
+         fortran,
+         scalar_kind,
+         ptr_kind,
+         ctype,
+         compute=None,
+         storage=None,
+         value_range=None,
+         size_multiple=1):
+    return DTypeInfo(numpy, c, fortran, scalar_kind, ptr_kind, ctype, compute, storage, value_range, size_multiple)
 
 
 #: canonical dtype -> info. Keyed by numpy name; aliases handled in :func:`info`.
@@ -72,6 +92,25 @@ REGISTRY: Dict[str, DTypeInfo] = {
     _row("int16", "int16_t", "integer(c_int16_t)", "int16", "ptr_int16", ctypes.c_int16),
     "int8":
     _row("int8", "int8_t", "integer(c_int8_t)", "int8", "ptr_int8", ctypes.c_int8),
+    # int4 is a SEMANTIC dtype, not a distinct buffer layout: storage is one value per
+    # BYTE (numpy int8 / C int8_t) and nothing in the harness packs nibbles. What "int4"
+    # declares is (a) the logical range [-8, 7] and (b) the packing contract a real int4
+    # kernel needs -- two nibbles per byte, so an array's element count is even
+    # (``size_multiple``, enforced on the innermost extent by the manifest schema).
+    # It shares int8's binding kinds ON PURPOSE: the ABI/wire form of an int4 array IS an
+    # int8 buffer, so every emitter, marshaller and oracle keeps working unchanged. The
+    # reverse kind -> dtype maps below skip storage-backed rows, so ``ptr_int8`` still
+    # resolves back to int8.
+    "int4":
+    _row("int4",
+         "int8_t",
+         "integer(c_int8_t)",
+         "int8",
+         "ptr_int8",
+         ctypes.c_int8,
+         storage="int8",
+         value_range=(-8, 7),
+         size_multiple=2),
     "uint64":
     _row("uint64", "uint64_t", "integer(c_int64_t)", "uint64", "ptr_uint64", ctypes.c_uint64),
     "uint32":
@@ -166,6 +205,39 @@ def is_storage_only(dtype: str) -> bool:
         return info(dtype).compute is not None
     except KeyError:
         return False
+
+
+def storage_dtype(dtype: str) -> str:
+    """The dtype one element is physically STORED as -- what numpy allocates and what a
+    C buffer element is.
+
+    Sub-byte int4 stores one value per int8 byte; every other dtype stores as itself. Any
+    caller turning a DECLARED manifest dtype into a numpy dtype goes through here, because
+    ``numpy.dtype("int4")`` does not exist. Unknown dtypes pass through unchanged.
+    """
+    try:
+        row = info(dtype)
+    except KeyError:
+        return dtype
+    return row.storage or row.numpy
+
+
+def value_range(dtype: str) -> Optional[Tuple[int, int]]:
+    """Logical ``(lo, hi)`` of a dtype whose range is narrower than its storage's
+    (``int4`` -> ``(-8, 7)``); ``None`` when the dtype uses its storage's full range."""
+    try:
+        return info(dtype).value_range
+    except KeyError:
+        return None
+
+
+def size_multiple(dtype: str) -> int:
+    """Element-count granularity an array of ``dtype`` must respect (``int4`` -> 2, two
+    nibbles per byte); 1 when the dtype constrains nothing."""
+    try:
+        return info(dtype).size_multiple
+    except KeyError:
+        return 1
 
 
 def is_integer(dtype: str) -> bool:
@@ -270,8 +342,10 @@ def ctype_for(dtype: str) -> type:
 
 
 #: reverse lookup from a binding-JSON scalar ``kind`` back to the dtype info, for
-#: consumers that only have the emitted ``kind`` (e.g. the sparse oracle).
-_BY_SCALAR_KIND: Dict[str, DTypeInfo] = {v.scalar_kind: v for v in REGISTRY.values()}
+#: consumers that only have the emitted ``kind`` (e.g. the sparse oracle). A
+#: storage-backed row (int4) BORROWS its storage dtype's kinds, so it is skipped
+#: here: ``int8`` must resolve back to int8, never to the borrower.
+_BY_SCALAR_KIND: Dict[str, DTypeInfo] = {v.scalar_kind: v for v in REGISTRY.values() if v.storage is None}
 
 #: the set of binding ``kind`` tokens that denote a by-value scalar (vs a
 #: ``ptr_*`` pointer) -- lets a consumer classify an arg by its kind.
@@ -289,7 +363,7 @@ def ctype_for_scalar_kind(kind: str) -> type:
 
 #: reverse lookup from a pointer ``kind`` (``ptr_*``) back to info, for consumers
 #: (the numerical oracle) that allocate a buffer from an emitted array kind.
-_BY_PTR_KIND: Dict[str, DTypeInfo] = {v.ptr_kind: v for v in REGISTRY.values()}
+_BY_PTR_KIND: Dict[str, DTypeInfo] = {v.ptr_kind: v for v in REGISTRY.values() if v.storage is None}
 
 
 def info_for_kind(kind: str) -> DTypeInfo:

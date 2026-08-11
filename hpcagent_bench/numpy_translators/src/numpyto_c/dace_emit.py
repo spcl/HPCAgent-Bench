@@ -794,7 +794,21 @@ class ResolveShapeReads(ast.NodeTransformer):
             return self.transposed(args)
         if name in _ELEMENTWISE_CALLS:
             return self.broadcast(args)
+        if name == "dot" and len(args) == 2:
+            return self.dotted(args)
         return None
+
+    def dotted(self, args: List[ast.expr]) -> Optional[List[str]]:
+        """``np.dot`` of two rank-1 operands is rank 0 -- numpy's inner product.
+
+        Every other rank combination is declined rather than guessed: rank-2 ``dot`` is a matmul and
+        a rank-0 operand is a broadcast, and an invented rank is a miscompile. Rank 0 is what
+        :class:`_CopyScalarAlias` needs to see: minife's ``rtrans = float(np.dot(r, r))`` left the
+        name rankless, so ``oldrtrans = rtrans`` was not recognised as a scalar alias, dace issue
+        05 aliased the container, and ``beta = rtrans / oldrtrans`` was 1.0 on every CG trip.
+        """
+        ranks = [self.infer(a) for a in args]
+        return [] if all(r is not None and len(r) == 1 for r in ranks) else None
 
     def sliced(self, node: ast.Subscript) -> Optional[List[str]]:
         """A subscript's extents by numpy's rank rules: a slice KEEPS an axis, an integer index

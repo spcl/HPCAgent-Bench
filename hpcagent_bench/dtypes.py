@@ -19,6 +19,9 @@ from numpyto_common.dtypes import (
     numpy_for_kind,
     ptr_kind,
     scalar_kind,
+    size_multiple,
+    storage_dtype,
+    value_range,
 )
 
 __all__ = [
@@ -34,4 +37,7 @@ __all__ = [
     "ptr_kind",
     "ctype_for",
     "ctype_for_scalar_kind",
+    "storage_dtype",
+    "value_range",
+    "size_multiple",
 ]

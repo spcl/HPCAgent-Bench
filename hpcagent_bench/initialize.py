@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from hpcagent_bench.dtypes import storage_dtype
 from hpcagent_bench.support import distributions
 from hpcagent_bench.support.distributions import domain as domain_mod
 from hpcagent_bench.support.distributions import hidden
@@ -49,9 +50,10 @@ def fill_index_array(shape: Tuple[int, ...], dtype_str: str, rng=None) -> np.nda
     arrays; cf. TSVC ``common.c`` block-of-5 ``ip``). Higher-rank
     integer arrays fall back to uniform indices in ``[0, min(shape))``.
     The dtype is the declared override (``int32`` / ``int64`` / ...),
-    NOT the run precision -- an index has no float precision.
+    NOT the run precision -- an index has no float precision. A declared dtype is
+    materialised at its STORAGE width (numpy has no sub-byte integer).
     """
-    npdt = np.dtype(dtype_str)
+    npdt = np.dtype(storage_dtype(dtype_str))
     if rng is None:
         rng = np.random.default_rng()
     if len(shape) == 1:
@@ -185,7 +187,7 @@ def auto_initialize(
         # but its own (rare) thing, so leave it to the precision dtype.
         ov = init_dtypes.get(name)
         if ov is not None:
-            materialized[name] = np.dtype(ov).type(default)
+            materialized[name] = np.dtype(storage_dtype(ov)).type(default)
         elif isinstance(default, int) and not isinstance(default, bool):
             materialized[name] = np.int64(default)
         else:
@@ -202,7 +204,7 @@ def auto_initialize(
         # FIXED dtype, ignoring the run precision. Integer overrides get
         # valid-subscript fills; everything else uses the distribution.
         override = init_dtypes.get(name)
-        if override is not None and np.dtype(override).kind in "iu":
+        if override is not None and np.dtype(storage_dtype(override)).kind in "iu":
             tasks.append(functools.partial(fill_index_array, shape, override, rng=rngs[index]))
         else:
             # Per-array distribution from the unified ``init.arrays`` surface

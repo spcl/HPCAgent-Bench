@@ -127,6 +127,11 @@ PY
     export NCCL_DEBUG="${NCCL_DEBUG:-INFO}"
     export NCCL_DEBUG_FILE="${log_dir}/nccl.%h.%p.log"
 
+    # vLLM reads env VLLM_PORT as the BASE for its internal ZMQ ports, not the HTTP port
+    # (that is --port above). On a headless rank two internal sockets race for it ->
+    # "Address already in use" worker crash after the full checkpoint load (589170).
+    unset VLLM_PORT
+
     printf 'vLLM mode=%s rank=%s host=%s master=%s:%s\n' \
         "${INFERENCE_MODE}" "${node_rank}" "$(hostname)" "${VLLM_MASTER_HOST}" "${VLLM_MASTER_PORT}"
     exec "${command[@]}"

@@ -206,15 +206,22 @@ def publish_text(dst: pathlib.Path, text: str) -> bool:
     Unchanged content is left strictly alone rather than rewritten with identical bytes, because
     :func:`transformed_sources` decides whether to re-run polycc by comparing mtimes: a rewrite
     per build would bump the input's mtime past its own transform and re-transform every kernel,
-    every time. The write goes through the same reserve-then-:func:`os.replace` as
-    :func:`run_polycc`, so a reader never sees a half-written scop and two ranks materializing the
-    same file cannot interleave into one.
+    every time.
+
+    Same publish discipline as :func:`run_polycc` -- write a unique temporary in the destination's
+    own directory, then one :func:`os.replace` -- so a reader never sees a half-written scop and
+    two ranks materializing the same file cannot interleave. It does NOT need that function's
+    reserve-the-name-then-unlink step: the writer here is this process, not a subprocess that has
+    to create the file itself.
     """
     if dst.is_file() and dst.read_text() == text:
         return False
-    tmp = _reserve_output_name(dst)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=dst.parent, prefix=f".{dst.name}.", suffix=".tmp")
+    tmp = pathlib.Path(tmp_name)
     try:
-        tmp.write_text(text)
+        with os.fdopen(fd, "w") as handle:
+            handle.write(text)
         os.replace(tmp, dst)
     finally:
         tmp.unlink(missing_ok=True)
@@ -365,27 +372,6 @@ def dedupe_scratch_declarations(transformed_c: str) -> str:
     return "\n".join(out)
 
 
-def _reserve_output_name(out: pathlib.Path) -> pathlib.Path:
-    """A unique, currently-nonexistent path in ``out``'s directory for polycc to write instead.
-
-    Same directory because :func:`os.replace` is only atomic within one filesystem, and ``out``
-    lives in a gitignored ``cpp_backend`` whose parent may well be a different mount than the
-    system temp dir. Dot-prefixed so a stray temporary cannot be mistaken for a source; suffixed
-    ``.c`` because it IS the C polycc is asked to emit and clang-format is run on it.
-
-    :func:`tempfile.mkstemp` picks the name -- it is the only unguessable-and-exclusive one in the
-    stdlib -- and the file it creates is removed immediately: polycc must find the path absent, the
-    way it found the destination absent before, or "did polycc write anything" stops being
-    answerable. Removing it does not reopen the race mkstemp closed, because the name it chose is
-    random and no other writer is looking for it.
-    """
-    fd, name = tempfile.mkstemp(dir=out.parent, prefix=f".{out.stem}.", suffix=".polycc-tmp.c")
-    os.close(fd)
-    tmp = pathlib.Path(name)
-    tmp.unlink()
-    return tmp
-
-
 def run_polycc(scop: pathlib.Path,
                out: pathlib.Path,
                args: Sequence[str] = POLYCC_ARGS,
@@ -393,33 +379,28 @@ def run_polycc(scop: pathlib.Path,
     """Transform one scop with ``polycc``, writing ``out``. Returns ``(argv, result)``.
 
     Runs in a throwaway cwd because polycc drops a ``<stem>.pluto.cloog`` intermediate beside
-    the working directory; the output path is absolute, so only the litter is confined.
+    the working directory; ``out`` is absolute, so only the litter is confined.
 
-    ATOMIC PUBLICATION. polycc never writes ``out``. It writes a uniquely-named temporary in
-    ``out``'s OWN directory, the dedupe pass rewrites that temporary, and only a complete,
-    post-processed transform is moved onto ``out`` with :func:`os.replace` -- one rename, atomic on
-    POSIX, so no reader ever observes a partial file and no two writers can interleave into one.
+    polycc is told to write a UNIQUE ``-o`` path next to ``out`` (a name ``tempfile.mkstemp``
+    reserved), never ``out`` itself, and a success is published into ``out`` with one
+    ``os.replace`` at the end. ``out`` is a fixed, shared path -- for an :func:`override_source`
+    scop it is a tracked file's sibling in the real ``cpp_backend``, not a caller's private temp
+    dir -- so two overlapping callers (the timed build and the numerical oracle, or two test
+    workers) used to hand polycc the SAME ``-o`` argument and race truncating it: measured, six
+    concurrent runs of one scop through the OLD direct-write path came back with FIVE different
+    outputs, including a 0-byte file, from otherwise-identical inputs and otherwise-deterministic
+    polycc (a serial repeat of the same run is always byte-identical). ``os.replace`` on the same
+    filesystem is atomic, so a concurrent reader now only ever observes a complete ``out`` -- the
+    one before this call or the one after it, never a torn write from either.
 
-    Letting polycc write ``out`` directly is what made the Pluto survey nondeterministic. polycc
-    emits as it goes and several consumers share one destination (the timed build, the report and
-    the oracle all resolve to the same :func:`transformed_path`), so a run that died mid-emit --
-    or two runs overlapping -- left a truncated or DOUBLED translation unit whose mtime was newer
-    than the scop's, which is exactly the "fresh enough, reuse it" condition
-    :func:`transformed_sources` tests. The next build then compiled a file with content past the
-    end of the kernel, failing on identifiers spliced out of the middle of a duplicated line. The
-    same 23 overrides scored 10 to 14 passes across six runs of unchanged code.
-
-    A failed, timed-out or killed run therefore leaves ``out`` BYTE-IDENTICAL, where it used to
-    delete it: with the write confined to the temporary there is no partial ``out`` to clean up,
-    and what is there is the previous run's complete output for this same scop. The temporary is
-    removed on every path, success or failure.
+    A FAILED run leaves ``out`` untouched -- there is nothing partial to clean up there any more,
+    since polycc never wrote to it -- so a stale-but-complete previous transform survives a
+    transient failure instead of being thrown away.
 
     The argv is RETURNED rather than reconstructed by the caller: the transformation report echoes
     the command it ran, and a second copy built from a second ``shutil.which`` can print something
-    that was never executed. It is returned in PUBLISHED form -- ``-o <out>``, the destination the
-    build compiles -- which differs from the executed argv in that one operand and nothing else, so
-    it stays copy-pasteable and reproduces this transform. Echoing the temporary instead would
-    print a path that no longer exists by the time the report is read.
+    that was never executed. It names ``out`` as the ``-o`` target (what the caller asked for and
+    what now sits there on success), not the internal scratch name polycc actually wrote to.
 
     Runs under :func:`pet_parse_env`, so the timed build and the report get the aarch64 pet-parse
     shim from the same place they get everything else about this invocation. Wiring it here rather
@@ -427,27 +408,29 @@ def run_polycc(scop: pathlib.Path,
     the scop differently from the build could describe a transform the build never managed to run.
 
     ``timeout`` (seconds, ``None`` = unbounded) bounds a WEDGED polycc through :func:`run_bounded`;
-    the expiry raises :class:`subprocess.TimeoutExpired`, having discarded the temporary.
+    the expiry raises :class:`subprocess.TimeoutExpired`, having deleted only the scratch output.
     """
     exe = polycc_exe()
     if exe is None:
         raise NotSupportedByFramework(FRAMEWORK, scop.stem, "polycc is not installed on this host")
-    cmd = [exe, *args, str(scop), "-o", str(out)]
-    out.parent.mkdir(parents=True, exist_ok=True)
-    tmp = _reserve_output_name(out)
-    try:
-        with tempfile.TemporaryDirectory(prefix="pluto_transform_") as scratch:
-            argv = [exe, *args, str(scop), "-o", str(tmp)]
-            proc = run_bounded(argv, cwd=scratch, timeout=timeout, env=pet_parse_env(pathlib.Path(scratch)))
-        # `tmp.is_file()` is the "polycc produced a transform" test the destination used to answer,
-        # which is why the name is reserved UNCREATED: an empty file pre-made by mkstemp would read
-        # as output and publish nothing over a good destination.
-        if proc.returncode == 0 and tmp.is_file():
-            tmp.write_text(dedupe_scratch_declarations(tmp.read_text()))
-            os.replace(tmp, out)   # the single atomic step; after it `tmp` is gone
-    finally:
-        tmp.unlink(missing_ok=True)
-    return cmd, proc
+    argv = [exe, *args, str(scop), "-o", str(out)]
+    fd, tmp_name = tempfile.mkstemp(dir=out.parent, prefix=f".{out.name}.", suffix=".tmp")
+    os.close(fd)
+    tmp_out = pathlib.Path(tmp_name)
+    tmp_out.unlink()  # only the unique NAME is wanted -- polycc must create the file itself
+    with tempfile.TemporaryDirectory(prefix="pluto_transform_") as scratch:
+        cmd = [exe, *args, str(scop), "-o", str(tmp_out)]
+        try:
+            proc = run_bounded(cmd, cwd=scratch, timeout=timeout, env=pet_parse_env(pathlib.Path(scratch)))
+        except subprocess.TimeoutExpired:
+            tmp_out.unlink(missing_ok=True)
+            raise
+    if proc.returncode != 0 or not tmp_out.is_file():
+        tmp_out.unlink(missing_ok=True)
+    else:
+        tmp_out.write_text(dedupe_scratch_declarations(tmp_out.read_text()))
+        os.replace(tmp_out, out)
+    return argv, proc
 
 
 def assert_affine(scop: pathlib.Path, kernel: str) -> None:
@@ -464,6 +447,25 @@ def assert_affine(scop: pathlib.Path, kernel: str) -> None:
         raise NotSupportedByFramework(
             FRAMEWORK, kernel, f"{scop.name} is outside Pluto's affine model ({reason}); polycc may "
             f"silently miscompile such a scop rather than reject it")
+
+
+def polycc_report_timeout_s() -> float:
+    """The bound :meth:`frameworks.pluto_framework.PlutoFramework.polycc_report` runs ``polycc``
+    under -- the SAME knob the numerical oracle already bounds its own :func:`run_polycc` call
+    with (``tests.numerical_oracle``'s ``oracle.polycc_timeout_s``, 360s by default: Pluto's
+    schedule search is not a compiler hang and some kernels legitimately need minutes there, where
+    the shorter general compile timeout would only ever catch a wedged build).
+
+    Read through the oracle's own config accessor -- via the same lazy ``sys.path``/import
+    :func:`oracle_pluto_status` already uses to reach ``tests.numerical_oracle`` from here, since a
+    module-level import would be circular (``tests.numerical_oracle`` imports this module) -- rather
+    than a second constant, so a ``config.yaml`` or per-kernel override change is honoured on both
+    the report path and the oracle's own without two numbers to keep in step by hand.
+    """
+    if str(paths.ROOT) not in sys.path:
+        sys.path.insert(0, str(paths.ROOT))
+    from tests.numerical_oracle import _cfg
+    return _cfg("polycc_timeout_s")
 
 
 @lru_cache(maxsize=None, typed=True)
