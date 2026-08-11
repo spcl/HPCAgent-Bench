@@ -10,6 +10,7 @@ WSL2 is a real Linux kernel, so it is ``IS_LINUX`` and needs no special casing.
 """
 import platform
 import sys
+from functools import lru_cache
 
 from hpcagent_bench import config
 
@@ -50,6 +51,30 @@ def cpu_model() -> str:
     except OSError:
         pass
     return platform.processor() or platform.machine() or "unknown"
+
+
+@lru_cache(maxsize=1, typed=True)
+def gpu_model() -> str:
+    """Best-effort GPU model string; honors ``$HPCAGENT_BENCH_GPU``, else asks ``nvidia-smi``.
+
+    ``""`` when the host has no discoverable device -- not an error, just a CPU-only box.
+
+    Pairs with :func:`cpu_model` to name the NODE a measurement came from. Two nodes are two
+    experiments: a baseline timed on one machine against a candidate timed on another is a hardware
+    comparison wearing a software label. Cached, because this is read once per recorded row and a
+    subprocess per row would cost more than the measurement.
+    """
+    import os
+    import subprocess
+    env = os.environ.get("HPCAGENT_BENCH_GPU")
+    if env:
+        return env
+    try:
+        out = subprocess.check_output(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                                      timeout=10).decode().strip().splitlines()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return out[0].strip() if out else ""
 
 
 def default_mp_context() -> str:

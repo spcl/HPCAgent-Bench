@@ -1,0 +1,158 @@
+name: dace-canary
+
+# Why this exists: the main CI (tests.yml) pins dace to DACE_SHA in .github/actions/setup so
+# corpus verdicts are attributable to HPCAgent-Bench commits, never to dace drift. The cost is
+# that the pin goes stale SILENTLY: on 2026-08-08 it sat ~a week behind spcl/dace@extended,
+# kernels were flipped off the NUMERIC_BAD excuse list against a local (newer) dace, and CI went
+# red for a day. This canary reruns the two corpus gates (port-fidelity Phase 8 + dace-numeric)
+# against the CURRENT TIP of spcl/dace@extended on a schedule, so a needed DACE_SHA bump (and
+# the ratchet-list moves it implies) is found by a bot run instead of by a red push.
+#
+# Deliberately NO continue-on-error: a green checkmark would hide the one finding this workflow
+# exists to make. Nothing depends on these jobs, so a red blocks nobody -- a red canary IS the
+# signal.
+#
+# The pytest commands and env are copied from tests.yml verbatim, so a canary red means "the
+# dace tip moved the verdicts", never "the canary is wired differently". Dropped on purpose:
+# Phase 8b (ports vs their PyTorch models -- about the ports, not dace-sensitive) and the
+# reporting-only steps (coverage upload, ccache stats).
+#
+# Override mechanism: the setup action spells the pin DACE_SHA="${DACE_SHA:-<pin>}", so a
+# job-level DACE_SHA env var wins. resolve-tip turns the ref into ONE sha per run, so both legs
+# test the same dace even if extended moves mid-run.
+
+on:
+  schedule:
+    # Mondays 03:17 UTC -- off-peak, and off the top of the hour where GitHub sheds scheduled
+    # load. Weekly matches how fast the pin actually rots (about a week, measured the hard way).
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+    inputs:
+      dace_ref:
+        description: spcl/dace branch or SHA to canary (default = the branch the pin tracks)
+        required: false
+        default: extended
+        type: string
+
+concurrency:
+  # One group for the whole workflow: a manual dispatch cancels a stale scheduled run, because
+  # only the newest answer about the tip is worth having.
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  resolve-tip:
+    name: resolve dace ref to one SHA
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      dace_sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - name: Resolve the ref
+        id: resolve
+        env:
+          # inputs is empty on a schedule run, hence the fallback.
+          DACE_REF: ${{ inputs.dace_ref || 'extended' }}
+        run: |
+          sha=$(git ls-remote https://github.com/spcl/dace.git "refs/heads/$DACE_REF" | cut -f1)
+          # A dispatch may hand a SHA rather than a branch; ls-remote then returns nothing, so
+          # pass the ref through and let the setup action's fetch fail loudly on garbage.
+          [ -n "$sha" ] || sha="$DACE_REF"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "canary target: spcl/dace $DACE_REF @ $sha" >> "$GITHUB_STEP_SUMMARY"
+
+  # =============================================================================================
+  # canary-port-fidelity -- tests.yml's port-fidelity job, Phase 8 only. Phase 8b compares the
+  # ML ports against their PyTorch models, which does not move when dace does, so it stays out.
+  # No submodules on checkout: KernelBench was Phase 8b's dependency.
+  # =============================================================================================
+  canary-port-fidelity:
+    name: canary-port-fidelity (dace tip reads the generated corpus)
+    needs: resolve-tip
+    runs-on: ubuntu-latest
+    # tests.yml gives this leg 100, of which Phase 8b (25) + its torch install (~10) are dropped
+    # here; 65 keeps the same arithmetic for what remains.
+    timeout-minutes: 65
+    env:
+      DACE_SHA: ${{ needs.resolve-tip.outputs.dace_sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/setup
+
+      - name: Record the dace actually under test
+        # rev-parse from the clone, not from resolve-tip: what was CHECKED OUT is the only sha a
+        # triage reader can trust.
+        run: |
+          echo "canary-port-fidelity tested dace @ $(git -C "$RUNNER_TEMP/dace" rev-parse HEAD)" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Phase 8 -- the DaCe frontend still reads what the generator emits
+        # Copied from tests.yml port-fidelity verbatim; see there for the no -n / PARSE_WORKERS /
+        # 50-minute rationale.
+        timeout-minutes: 50
+        run: |
+          python -m pytest -q -p no:cacheprovider -rfsxX -m dace_frontend \
+            --timeout=2400 tests/test_dace_frontend_validity.py
+
+      - name: On red, say what the fix is
+        if: failure()
+        run: |
+          {
+            echo "Canary red: the spcl/dace tip moved the frontend verdicts."
+            echo "Fix: bump DACE_SHA in .github/actions/setup/action.yml and move the ratchet"
+            echo "lists with it -- per that action's convention: 'Bump DACE_SHA in its own"
+            echo "commit and expect NUMERIC_BAD to move with it.'"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # =============================================================================================
+  # canary-dace-numeric -- tests.yml's dace-numeric job against the tip: same regeneration step,
+  # same env, same -n 4, same NOT-/tmp build root.
+  # =============================================================================================
+  canary-dace-numeric:
+    name: canary-dace-numeric (dace tip vs numpy on the generated corpus)
+    needs: resolve-tip
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      DACE_SHA: ${{ needs.resolve-tip.outputs.dace_sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/setup
+
+      - name: Record the dace actually under test
+        run: |
+          echo "canary-dace-numeric tested dace @ $(git -C "$RUNNER_TEMP/dace" rev-parse HEAD)" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: The generated DaCe corpus still computes what numpy computes @ S
+        # Copied from tests.yml dace-numeric verbatim; see there for the one-subprocess-per-
+        # kernel, -n 4 (memory, not cores) and --maxfail=20 rationale.
+        timeout-minutes: 30
+        env:
+          # NOT /tmp: it is tmpfs, and exhausting it fails builds in a way that reads as a
+          # kernel defect.
+          HPCAGENT_BENCH_DACE_BUILD_ROOT: ${{ runner.temp }}/dace_numeric
+        run: |
+          rm -rf "$HPCAGENT_BENCH_DACE_BUILD_ROOT"
+          # Regenerate ONCE, before xdist starts: the workers' own autogen.ensure then stays a
+          # pure cache hit, so there is no four-way race through one fingerprint cache.
+          python -c "from tests.test_dace_frontend_validity import generated_programs; \
+            print(len(generated_programs()), 'dace programs ready')"
+          python -m pytest -q -p no:cacheprovider -rfEs -n 4 -m dace_numeric \
+            --maxfail=20 --timeout=900 tests/test_dace_numeric_agreement.py
+
+      - name: On red, say what the fix is
+        if: failure()
+        run: |
+          {
+            echo "Canary red: the spcl/dace tip moved the numeric verdicts."
+            echo "Fix: bump DACE_SHA in .github/actions/setup/action.yml and move the ratchet"
+            echo "lists with it -- per that action's convention: 'Bump DACE_SHA in its own"
+            echo "commit and expect NUMERIC_BAD to move with it.'"
+          } >> "$GITHUB_STEP_SUMMARY"

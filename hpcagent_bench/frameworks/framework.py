@@ -158,7 +158,10 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "arch": "cpu",
         "precisions": IEEE_PRECISIONS,
     },
-    # DaCe: one base, two hardware flavors (same postfix/impl file, arch differs).
+    # DaCe: one base, two hardware flavors that SEARCH (fastest of several SDFG pipelines), plus one
+    # flavor per individual pipeline for the runs that want a named optimizer rather than a winner.
+    # ``pipelines`` names the SDFG pipelines the flavor compiles/verifies/scores; absent means
+    # dace_framework.DEFAULT_PIPELINES. See dace_framework.DACE_PIPELINES for what each one does.
     "dace_cpu": {
         "base": "dace",
         "full_name": "DaCe CPU",
@@ -173,6 +176,86 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "prefix": "dc",
         "postfix": "dace",
         "arch": "gpu",
+        # GPU searches upstream ``autoopt``, not ``canonicalize``: it is the pipeline this column
+        # has always been scored on, and the canonicalize GPU path is its own flavor below.
+        "pipelines": ("strict", "parallel", "autoopt"),
+        "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
+    },
+    # ONE pipeline each. A search reports the winner, which is the right answer for "how fast is
+    # DaCe" and the wrong one for "how fast is THIS optimizer" -- comparing pipelines needs each to
+    # be measured on every kernel, including the ones where it loses.
+    #
+    # ``dace_cpu_parallel`` is the portable one: LoopToMap/MapCollapse/MapFusion are upstream
+    # transformations, so this flavor runs on stock DaCe as well as on spcl/dace@extended, and is
+    # the only column that can be measured on both to separate "the fork's optimizer is better"
+    # from "the fork's DaCe is different".
+    "dace_cpu_parallel": {
+        "base": "dace",
+        "full_name": "DaCe CPU parallel",
+        "prefix": "dc",
+        "postfix": "dace",
+        "arch": "cpu",
+        "pipelines": ("parallel", ),
+        "column": "dace_cpu",
+        "flavor": "parallel",
+        "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
+    },
+    "dace_cpu_autoopt": {
+        "base": "dace",
+        "full_name": "DaCe CPU auto_optimize",
+        "prefix": "dc",
+        "postfix": "dace",
+        "arch": "cpu",
+        "pipelines": ("autoopt", ),
+        "column": "dace_cpu",
+        "flavor": "autoopt",
+        "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
+    },
+    "dace_cpu_canonicalize": {
+        "base": "dace",
+        "full_name": "DaCe CPU canonicalize",
+        "prefix": "dc",
+        "postfix": "dace",
+        "arch": "cpu",
+        "pipelines": ("canonicalize", ),
+        "column": "dace_cpu",
+        "flavor": "canonicalize",
+        "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
+    },
+    # GPU counterparts. The offload is part of the pipeline, not a flag on top of it: ``autoopt``
+    # offloads inside ``auto_optimize``, ``canonicalize`` offloads between canonicalize and
+    # finalize, and ``parallel`` is offloaded by the generic tail in DaceFramework._prepare_gpu.
+    "dace_gpu_parallel": {
+        "base": "dace",
+        "full_name": "DaCe GPU parallel",
+        "prefix": "dc",
+        "postfix": "dace",
+        "arch": "gpu",
+        "pipelines": ("parallel", ),
+        "column": "dace_gpu",
+        "flavor": "parallel",
+        "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
+    },
+    "dace_gpu_autoopt": {
+        "base": "dace",
+        "full_name": "DaCe GPU auto_optimize",
+        "prefix": "dc",
+        "postfix": "dace",
+        "arch": "gpu",
+        "column": "dace_gpu",
+        "flavor": "autoopt",
+        "pipelines": ("autoopt", ),
+        "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
+    },
+    "dace_gpu_canonicalize": {
+        "base": "dace",
+        "full_name": "DaCe GPU canonicalize",
+        "prefix": "dc",
+        "postfix": "dace",
+        "arch": "gpu",
+        "pipelines": ("canonicalize", ),
+        "column": "dace_gpu",
+        "flavor": "canonicalize",
         "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
     },
     # Native backend: one base, one flavor per (language, compiler); each builds its own .so.
@@ -303,6 +386,50 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
 def framework_flavors(base: str) -> List[str]:
     """The flat framework names that are flavors of ``base`` (e.g. "native" -> ["cc", "llvm", ...])."""
     return [name for name, meta in FRAMEWORK_META.items() if meta["base"] == base]
+
+
+def split_flavor(fname: str) -> Tuple[str, Optional[str]]:
+    """``"dace_cpu_parallel"`` -> ``("dace_cpu", "parallel")``; a column with no flavor -> ``(name, None)``.
+
+    One flat name on the command line, two columns in the DB. Stored apart because they answer
+    different questions: ``GROUP BY framework`` should still gather every DaCe row, and ``flavor``
+    says which optimizer inside it produced this one. Stored as ONE name on the CLI because that is
+    what you type, and a second ``--flavor`` flag would be a second way to say the same thing.
+
+    The split is DECLARED (``column`` + ``flavor``), never parsed out of the name.
+    ``dace_cpu_parallel`` could be read as ``dace_cpu`` + ``parallel`` or as ``dace`` +
+    ``cpu_parallel``, and an underscore cannot tell you which: "split at the last underscore"
+    mangles ``cpu_parallel``, and "the longest prefix that is a registered framework" changes its
+    answer the day someone registers ``dace``. So the entry states both halves, and
+    :func:`check_flavor_registry` checks at import that they compose back into the key. Nothing
+    here infers anything.
+    """
+    meta = FRAMEWORK_META[fname]
+    flavor = meta.get("flavor")
+    if flavor is None:
+        return fname, None
+    return meta["column"], flavor
+
+
+def check_flavor_registry() -> None:
+    """Validate every ``column`` / ``flavor`` declaration at import, so a bad one cannot reach a DB.
+
+    Three ways an entry can lie, all silent at runtime and permanent in the results: a ``flavor``
+    with no ``column`` (the split is then unknowable), a ``column`` that is not itself a framework
+    (a grouping key matching nothing), and a pair that does not compose back into the flat name (the
+    CLI name and the stored name drift apart). Checked at import because the alternative is
+    discovering it in a finished sweep whose rows group wrongly."""
+    for name, meta in FRAMEWORK_META.items():
+        flavor, column = meta.get("flavor"), meta.get("column")
+        if flavor is None and column is None:
+            continue
+        if flavor is None or column is None:
+            raise KeyError(f"framework {name!r} declares only one of column/flavor; a flavor entry needs both")
+        if column not in FRAMEWORK_META:
+            raise KeyError(f"framework {name!r} names column {column!r}, which is not a registered framework")
+        if name != f"{column}_{flavor}":
+            raise KeyError(f"framework {name!r} must be named {column}_{flavor} so the CLI name and the stored "
+                           "(framework, flavor) pair cannot drift apart")
 
 
 def framework_class(fname: str):
@@ -563,3 +690,8 @@ def generate_framework(fname: str, save_strict: bool = False, load_strict: bool 
     if fname.startswith('dace'):
         return cls(fname, save_strict, load_strict)
     return cls(fname)
+
+
+# A malformed flavor entry is a wrong GROUP BY key on every row it writes, and the rows outlive the
+# run. Checked once, here, at import -- there is no later moment at which noticing still helps.
+check_flavor_registry()

@@ -105,7 +105,10 @@ def mpi4py_launcher():
     """The launcher prefix that runs mpi4py (its OWN MPI), or ``None`` if none bootstraps here."""
     try:
         import mpi4py  # noqa: F401
-    except ImportError:
+    except (ImportError, OSError):
+        # ImportError: mpi4py not installed. OSError: mpi4py IS installed but its compiled
+        # extension can't dlopen the MPI library it was built against (ABI/soname mismatch) --
+        # same class of broken wheel as the tvm CI break; either way there is no launcher here.
         return None
     # Check-and-init like the real driver (mpi_py_driver.run), so this probe -- and hence the gated
     # launch tests -- do not silently skip under an ambient MPI4PY_RC_INITIALIZE=0 (the rc attribute

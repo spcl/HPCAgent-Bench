@@ -1,0 +1,82 @@
+# Test files a DEDICATED CI phase runs, and therefore the unit sweep must NOT.
+#
+# The unit sweep (`Phase 1` in tests.yml) discovers its work with `ls tests/test_*.py` minus this
+# list. That inversion is the point: the filesystem decides what runs, and an exception has to be
+# written down HERE, with a reason. The previous shape was the opposite -- fifteen filenames typed
+# into the workflow -- and it silently drifted: 144 test files existed, 44 were named anywhere in
+# CI, and 94 never executed at all. A new test file was inert by default and nothing said so.
+# tests/test_ci_coverage.py fails when a file is in neither the sweep nor this list.
+#
+# A file belongs here for exactly one reason: another phase already runs it, usually because it
+# needs a toolchain, a launcher or a service the cheap sweep job does not install. "It is slow"
+# alone is not a reason to exclude -- it is a reason to give it its own phase and list it here.
+#
+# Format: one path per line, `#` comments and blank lines ignored. Read by BOTH tests.yml and
+# tests/test_ci_coverage.py, so the workflow and the guard cannot disagree about what is claimed.
+
+# --- MPI: data distribution + descriptor (pure numpy, no launcher) ------------------------------
+tests/test_mpi_descriptor.py
+tests/test_mpi_prompt.py
+tests/test_mpi_scatter_gather_roundtrip.py
+tests/test_mpi_sizing.py
+tests/test_mpi_wire.py
+
+# --- MPI: driver / stub codegen (needs mpicc.mpich to compile) ----------------------------------
+tests/test_mpi_driver_codegen.py
+tests/test_mpi_halo.py
+
+# --- MPI: oversubscribed multi-rank launch (needs a working launcher) ---------------------------
+tests/test_mpi_call.py
+tests/test_mpi_correctness_oracle.py
+tests/test_mpi_drivers_launch.py
+tests/test_mpi_scoring.py
+tests/test_noop_mpi_optimizer.py
+
+# --- agent-bench: tools + optimizers + in-process judge -----------------------------------------
+tests/test_agent_bench.py
+tests/test_agent_service.py
+tests/test_agent_tools.py
+tests/test_blas_optimizer.py
+tests/test_harbor_adapter.py
+tests/test_noop_optimizer.py
+tests/test_optimizer_plugin.py
+tests/test_packaging.py
+tests/test_token_usage.py
+
+# --- codegen backends: need tvm / pluto / a full compiler matrix --------------------------------
+tests/test_default_datatype_tolerance.py
+tests/test_fp16.py
+tests/test_frameworks.py
+tests/test_native_autogen.py
+
+# --- the long sweeps: each is its own phase, several with a backend matrix ----------------------
+tests/test_e2e_numerical.py
+tests/test_integration_sweep.py
+tests/test_kernelbench_translation.py
+# Phase 5d on frameworks-pluto: needs polycc AND dace in one process, and that is the only runner
+# with both. Excluded from the unit sweep because the sweep's runner has neither Pluto nor the
+# headroom -- it would skip there, and a skip that looks like a pass is what this file prevents.
+tests/test_opt_reports_e2e.py
+
+# --- containers: needs a rootless runtime on the runner -----------------------------------------
+tests/test_container_launch.py
+
+# --- QUARANTINE: not run anywhere, each needs a decision ----------------------------------------
+# Nothing is quarantined today. A file added below runs NOWHERE, so it needs a one-line reason and
+# an owner -- an unexplained entry here is the same silent inertness this file exists to end.
+
+# --- port fidelity: the corpus vs what it was ported from ---------------------------------------
+# Needs the whole DaCe frontend over 576 generated programs -- minutes, one subprocess each --
+# which the cheap unit sweep's runner has neither the time nor the dependency for.
+tests/test_dace_frontend_validity.py
+# The dace-numeric runner: lowers, compiles and RUNS each generated DaCe program against numpy.
+# Its own job because it is the only phase paying a C++ build PER KERNEL -- in the cheap unit
+# sweep that is minutes of compiling per shard, on a runner with no per-kernel build directory.
+tests/test_dace_numeric_agreement.py
+# Builds OpenBLAS from source with make/gfortran, which the unit sweep's runner does not install.
+tests/test_dace_openblas_link.py
+# Phase 8b on the same runner: needs CPU torch plus the third_party/KernelBench submodule, neither
+# of which the unit sweep's runner has -- there it would `importorskip` torch and pass without
+# comparing anything. Its helper (tests/kernelbench_agreement.py) is not listed: this file names
+# only test_*.py files, which is the set the sweep's `ls` and tests/test_ci_coverage.py both use.
+tests/test_kernelbench_torch_agreement.py

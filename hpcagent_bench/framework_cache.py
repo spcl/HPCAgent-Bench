@@ -3,12 +3,13 @@
 """Per-kernel cache for the framework-autogen artifacts.
 
 Two things get regenerated every run and are pure functions of a kernel's
-``<module>_numpy.py`` reference (+ the bench_info synthesized from its YAML, +,
-for a DaCe SDFG, the run precision): the framework SIBLING sources the loaders
-emit on demand (``*_dace.py`` / ``*_jax.py`` / ...) and the parsed DaCe base
-SDFG. This module persists both under a ``.cache/`` directory SYMMETRIC to the
-kernel folder (``<kernel_dir>/.cache/``) and loads them back instead of
-re-emitting / re-parsing.
+``<module>_numpy.py`` reference (+ the bench_info synthesized from its YAML, +
+the ``numpy_translators/src`` emitter sources themselves, +, for a DaCe SDFG,
+the run precision and which DaCe tree parsed it): the framework SIBLING sources
+the loaders emit on demand (``*_dace.py`` / ``*_jax.py`` / ...) and the parsed
+DaCe base SDFG. This module persists both under a ``.cache/`` directory
+SYMMETRIC to the kernel folder (``<kernel_dir>/.cache/``) and loads them back
+instead of re-emitting / re-parsing.
 
 The whole risk of a cache is a STALE entry silently feeding wrong code into a
 graded run, so every load is fingerprint-guarded: the ``sha256`` of the source
@@ -25,9 +26,11 @@ SDFG helpers so importing this module stays cheap and dependency-free.
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import os
 import pathlib
+import subprocess
 from typing import Any, Optional
 
 
@@ -49,12 +52,57 @@ def fingerprint_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+@functools.lru_cache(maxsize=None, typed=True)
+def translator_fingerprint() -> str:
+    """The sha256 over every ``*.py`` file (relative path + bytes, sorted) under
+    ``numpy_translators/src`` -- the emitter itself, so a translator edit invalidates the output
+    it produced. Computed once per process (memoized) since the corpus calls this per kernel.
+    An absent tree (translators not installed) contributes nothing rather than raising."""
+    root = pathlib.Path(__file__).resolve().parent / "numpy_translators" / "src"
+    if not root.is_dir():
+        return fingerprint_bytes(b"")
+    blob = bytearray()
+    for path in sorted(root.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        blob += path.relative_to(root).as_posix().encode() + b"\x00" + path.read_bytes() + b"\x00"
+    return fingerprint_bytes(bytes(blob))
+
+
+@functools.lru_cache(maxsize=None, typed=True)
+def dace_tree_fingerprint() -> str:
+    """Which DaCe tree parsed a cached SDFG: its git commit (+ a dirty flag) when the installed
+    ``dace`` is a checkout, else its resolved install path and ``__version__``. A base SDFG is a
+    parse of the DaCe *library*, not just the kernel source, so switching DaCe trees (or updating
+    one in place) must miss the cache even though the kernel's own files never changed. Computed
+    once per process (memoized)."""
+    import dace
+    root = pathlib.Path(dace.__file__).resolve().parent.parent
+    try:
+        sha = subprocess.run(["git", "rev-parse", "HEAD"],
+                             cwd=root,
+                             capture_output=True,
+                             text=True,
+                             check=True,
+                             timeout=5).stdout.strip()
+        dirty = subprocess.run(["git", "status", "--porcelain"],
+                               cwd=root,
+                               capture_output=True,
+                               text=True,
+                               check=True,
+                               timeout=5).stdout != ""
+        return fingerprint_bytes(f"{sha}\x00{dirty}".encode())
+    except (OSError, subprocess.SubprocessError):
+        return fingerprint_bytes(f"{root}\x00{getattr(dace, '__version__', '')}".encode())
+
+
 def source_fingerprint(numpy_py: pathlib.Path, extra: bytes = b"") -> str:
-    """Fingerprint a generated sibling's inputs: the ``<module>_numpy.py`` bytes plus ``extra``
-    (the bench_info JSON that also steers emission). A missing reference hashes as empty so the
-    key is still well-defined."""
+    """Fingerprint a generated sibling's inputs: the ``<module>_numpy.py`` bytes, ``extra`` (the
+    bench_info JSON that also steers emission), and the translator sources that do the emitting
+    (:func:`translator_fingerprint`) -- so an emitter change is itself a cache miss. A missing
+    reference hashes as empty so the key is still well-defined."""
     body = numpy_py.read_bytes() if numpy_py.exists() else b""
-    return fingerprint_bytes(body + b"\x00" + extra)
+    return fingerprint_bytes(body + b"\x00" + extra + b"\x00" + translator_fingerprint().encode())
 
 
 def sidecar_path(artifact: pathlib.Path) -> pathlib.Path:

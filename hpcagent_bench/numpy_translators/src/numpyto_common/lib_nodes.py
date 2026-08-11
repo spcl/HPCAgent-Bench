@@ -16,7 +16,8 @@ Registry keys are the POST-``_MathRewriter`` call shape: ``np.sum`` is still
 
 import ast
 import copy
-from typing import Callable, Dict, List, Optional, Set, Tuple
+import re
+from typing import Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 
 from numpyto_common import dtypes
 
@@ -574,9 +575,23 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
                 return tuple(out) if out else (_const(1), )
             if attr == "take" and len(expr.args) >= 2:
                 base = _iter_extent_of(expr.args[0], shape_table)
-                idx_ext = _iter_extent_of(expr.args[1], shape_table)
-                if base is None or idx_ext is None or len(idx_ext) != 1:
+                # A LITERAL index takes one element off the axis, so numpy drops that axis
+                # entirely -- distinct from an unresolvable index, which is what ``None`` from
+                # ``_iter_extent_of`` otherwise means. Conflating the two left the enclosing
+                # ``np.expand_dims`` / ``np.concatenate`` unsized and refused.
+                lit_index = _const_int(expr.args[1])
+                idx_ext = None if lit_index is not None else _iter_extent_of(expr.args[1], shape_table)
+                if base is None or (lit_index is None and (idx_ext is None or len(idx_ext) != 1)):
                     return None
+                if lit_index is not None:
+                    axis_node = _kwarg_or_pos(expr.args, expr.keywords, 2, "axis")
+                    if axis_node is None:
+                        return None  # flat take on an N-D source: numpy ravels first
+                    axis = _const_axis(axis_node, len(base))
+                    if axis is None:
+                        return None
+                    out = [e for k, e in enumerate(base) if k != axis]
+                    return tuple(out) or None
                 axis_node = _kwarg_or_pos(expr.args, expr.keywords, 2, "axis")
                 if axis_node is None:
                     return idx_ext if len(base) == 1 else None  # flat take on a 1-D source
@@ -694,6 +709,13 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
             # residual shape so the outer axes below index it -- not yet flattened
             # to a single Name subscript at harvest time.
             shape = _chained_base_shape(expr.value, shape_table)
+            if shape is None:
+                # Any other sized base: a CALL result indexed directly, which is what
+                # ``np.expand_dims(np.take(x, 0, axis=k), axis=k)`` becomes once the frontend
+                # rewrites expand_dims to a newaxis index. Its own extent is the shape the
+                # axes below index against.
+                base_ext = _iter_extent_of(expr.value, shape_table)
+                shape = tuple(ast.unparse(e) for e in base_ext) if base_ext is not None else None
         axes = _slice_axes(expr)
         ext: List[ast.expr] = []
         src_axis = 0  # source-axis pointer -- advances on Slice / scalar
@@ -1167,12 +1189,57 @@ def _scalarize_at_iters(expr: ast.expr, iters: List[ast.expr], shape_table: Dict
                          body=_scalarize_at_iters(expr.body, iters, shape_table),
                          orelse=_scalarize_at_iters(expr.orelse, iters, shape_table))
     if isinstance(expr, ast.Call):
+        # An array CONSTRUCTOR is not elementwise: every element of ``np.zeros_like(a)`` is 0,
+        # whatever ``a`` is. Recursing into the args instead emitted a per-element call to the
+        # constructor itself (``__t[i, j] = np.zeros_like(...)``), which no backend can render.
+        fill = _ctor_fill_element(expr)
+        if fill is not None:
+            return fill
         # Math intrinsics on array values fall through; the args are
         # array expressions to scalarize.
         return ast.Call(func=expr.func,
                         args=[_scalarize_at_iters(a, iters, shape_table) for a in expr.args],
                         keywords=expr.keywords)
     return expr
+
+
+#: Element value of an array constructor, for the constructors whose fill is DEFINED. ``empty`` /
+#: ``empty_like`` / ``ndarray`` are absent on purpose: their contents are whatever the allocation
+#: held, and naming a value for them would put an invented number into the emitted kernel.
+_CTOR_FILL: Dict[str, float] = {"zeros": 0.0, "zeros_like": 0.0, "ones": 1.0, "ones_like": 1.0}
+
+
+def _ctor_fill_element(expr: ast.Call) -> Optional[ast.expr]:
+    """The scalar every element of ``np.zeros(...)`` / ``np.ones_like(...)`` / ``np.full(...)``
+    holds, or ``None`` when the call is not such a constructor."""
+    if not (isinstance(expr.func, ast.Attribute) and isinstance(expr.func.value, ast.Name)
+            and expr.func.value.id in ("np", "numpy")):
+        return None
+    attr = expr.func.attr
+    if attr in ("full", "full_like") and len(expr.args) >= 2:
+        return copy.deepcopy(expr.args[1])
+    value = _CTOR_FILL.get(attr)
+    return None if value is None else _const(value)
+
+
+def _eval_axes(node) -> Optional[List[int]]:
+    """``[k]`` / ``[k1, k2, ...]`` for a literal axis spec, ``None`` when it is not one.
+
+    ``None`` here means UNREADABLE, which is not the same as "no axis given" -- callers have to
+    keep the two apart themselves, because only they know whether the slot they read is an axis.
+    """
+    value = _const_int(node)
+    if value is not None:
+        return [value]
+    if isinstance(node, (ast.Tuple, ast.List)):
+        out = []
+        for elt in node.elts:
+            element = _const_int(elt)
+            if element is None:
+                return None
+            out.append(element)
+        return out
+    return None
 
 
 def _read_axis_keepdims(args, kwargs):
@@ -1182,41 +1249,34 @@ def _read_axis_keepdims(args, kwargs):
     multi-axis (``axis=(1, 2, 3)``/``axis=[1, 2, 3]``, order preserved for the
     reduction loop nest, though kept-axes ordering follows the source array).
     """
-
-    def _eval_int(node):
-        if isinstance(node, ast.Constant) and isinstance(node.value, int):
-            return node.value
-        if (isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub) and isinstance(node.operand, ast.Constant)
-                and isinstance(node.operand.value, int)):
-            return -node.operand.value
-        return None
-
-    def _eval_axes(node):
-        v = _eval_int(node)
-        if v is not None:
-            return [v]
-        if isinstance(node, (ast.Tuple, ast.List)):
-            out = []
-            for elt in node.elts:
-                ev = _eval_int(elt)
-                if ev is None:
-                    return None
-                out.append(ev)
-            return out
-        return None
-
+    # ``axes = None`` means "reduce over EVERY axis" downstream, so it may only ever come from an
+    # ABSENT argument. An ``axis=`` KEYWORD that is present but unreadable is refused instead:
+    # reading it as None turned ``np.sum(x, axis=dim)`` into a full reduction that compiled clean.
+    #
+    # The POSITIONAL slot stays best-effort here on purpose. This reader is shared with calls whose
+    # second positional argument is not an axis at all -- ``np.logaddexp(a, b)``, ``np.heaviside(a,
+    # b)``, ``np.isclose(a, b, 1e-12)`` -- so refusing on it rejects the second OPERAND. A caller
+    # that knows its slot 1 really is an axis checks it itself; see ``_expand_axis_reduction``.
     axes = None
-    keepdims = False
     if len(args) >= 2:
         axes = _eval_axes(args[1])
     for kw in kwargs or []:
         if kw.arg == "axis":
-            v = _eval_axes(kw.value)
-            if v is not None:
-                axes = v
-        elif kw.arg == "keepdims":
-            if isinstance(kw.value, ast.Constant):
-                keepdims = bool(kw.value.value)
+            if isinstance(kw.value, ast.Constant) and kw.value.value is None:
+                axes = None
+                continue
+            axes = _eval_axes(kw.value)
+            if axes is None:
+                raise NotImplementedError(f"axis {ast.unparse(kw.value)!r} must be a compile-time integer or "
+                                          f"tuple of them (it selects the loop nest)")
+    keepdims = False
+    for kw in kwargs or []:
+        if kw.arg == "keepdims":
+            # Same rule: a non-literal keepdims changes the RESULT RANK, so it cannot default to False.
+            if not isinstance(kw.value, ast.Constant):
+                raise NotImplementedError(f"keepdims {ast.unparse(kw.value)!r} must be a compile-time "
+                                          f"constant (it selects the result rank)")
+            keepdims = bool(kw.value.value)
     return axes, keepdims
 
 
@@ -1233,9 +1293,19 @@ def _expand_axis_reduction(target, args, kwargs, shape_table, init, op_fn, post_
         default ``store = op_fn(load, src)``; used by if-guarded boolean
         reductions (any/all/count_nonzero), which can't rely on C's
         bool-as-int arithmetic (invalid in Fortran).
+
+    A float sum accumulates in ONE chain, matching the source order rather than numpy's pairwise
+    blocking: reassociation is sanctioned, so the extra block loop bought only a scop that pet
+    refuses (POLYCC-008) and a scop-external block accumulator it silently drops (POLYCC-009).
     """
     arr = args[0]
     shape = _resolve_shape(arr, shape_table)
+    # Here slot 1 REALLY is the axis (``np.sum(a, 1)``), unlike the shared reader's general case, so
+    # an unreadable one is refused rather than silently becoming a reduction over every axis.
+    if len(args) >= 2 and not (isinstance(args[1], ast.Constant) and args[1].value is None):
+        if _eval_axes(args[1]) is None:
+            raise NotImplementedError(f"axis {ast.unparse(args[1])!r} must be a compile-time integer or tuple "
+                                      f"of them (it selects the loop nest)")
     axes, keepdims = _read_axis_keepdims(args, kwargs)
     n_dim = len(shape)
 
@@ -1246,6 +1316,14 @@ def _expand_axis_reduction(target, args, kwargs, shape_table, init, op_fn, post_
     initial = _read_kwarg(kwargs, "initial")
     if initial is not None:
         init = initial
+
+    # ``where=`` masks which elements take part and ``dtype=`` pins the ACCUMULATOR type (the
+    # classic case being a float64 accumulator over a float32 operand, which changes the result,
+    # not just its storage). Neither is honoured by the loop below, so neither may be ignored.
+    for dropped in ("where", "dtype", "out"):
+        if _read_kwarg(kwargs, dropped) is not None:
+            raise NotImplementedError(f"reduction {dropped}= is not lowered; it changes the result, "
+                                      f"so it cannot be dropped")
 
     if axes is None:
         # Full reduction -- scalar target.
@@ -2868,15 +2946,15 @@ def _concat_operands_axis(args, kwargs, shape_table):
     seq = args[0]
     if not isinstance(seq, (ast.Tuple, ast.List)):
         raise NotImplementedError("np.concatenate: sequence must be a tuple/list")
-    axis = 0
     # ``axis`` may be a plain or negated literal (``axis=-1`` parses as
     # ``UnaryOp(USub, Constant(1))``, not ``Constant(-1)``); ``_const_int``
     # accepts both, and the ``axis < 0`` fixup below resolves it mod rank.
-    if len(args) >= 2 and _const_int(args[1]) is not None:
-        axis = _const_int(args[1])
-    for kw in kwargs:
-        if kw.arg == "axis" and _const_int(kw.value) is not None:
-            axis = _const_int(kw.value)
+    # ``axis=None`` is not "no axis": numpy FLATTENS every operand and concatenates the results,
+    # which is a different output rank. Refuse rather than fall through to the axis-0 default.
+    axis_node = _kwarg_or_pos(args, kwargs, 1, "axis")
+    if isinstance(axis_node, ast.Constant) and axis_node.value is None:
+        raise NotImplementedError("np.concatenate(axis=None) flattens every operand first; not lowered")
+    axis = _axis_literal_or_refuse(axis_node, "np.concatenate", 0)
     names: List[Optional[str]] = []
     shapes: List[Tuple[str, ...]] = []
     for op in seq.elts:
@@ -2962,6 +3040,25 @@ def _const_int(node: Optional[ast.expr]) -> Optional[int]:
     return None
 
 
+def _axis_literal_or_refuse(node: Optional[ast.expr], what: str, default: Optional[int] = None) -> int:
+    """The literal axis in ``node``; ``default`` when the argument is ABSENT; a refusal otherwise.
+
+    The distinction is the whole point. Reading an axis as ``default`` when it is merely
+    UNREADABLE is how ``np.concatenate((a, b), axis=dim)`` came to concatenate along axis 0 and
+    compile clean. An axis chooses the loop nest, so a static emitter has exactly two honest
+    answers: the literal, or a refusal.
+    """
+    if node is None:
+        if default is None:
+            raise NotImplementedError(f"{what}: axis is required")
+        return default
+    axis = _const_int(node)
+    if axis is None:
+        raise NotImplementedError(f"{what}: axis {ast.unparse(node)!r} must be a compile-time integer "
+                                  f"(it selects the loop nest, so there is no runtime form for it)")
+    return axis
+
+
 def _mul_exts(exprs) -> ast.expr:
     """Left-folded product of the given extent expressions (``1`` when empty) -- used to
     size a ``reshape(-1)`` dimension from the source extent and the other target dims."""
@@ -2978,12 +3075,7 @@ def _stack_axis(args, kwargs, rank: int) -> int:
     """The (possibly negative) NEW-axis position for ``np.stack``, normalized to
     ``[0, rank]`` (an insert position, so ``rank`` -- append -- is valid, unlike
     concatenate's ``[0, rank)``)."""
-    axis = 0
-    if len(args) >= 2 and _const_int(args[1]) is not None:
-        axis = _const_int(args[1])
-    for kw in (kwargs or []):
-        if kw.arg == "axis" and _const_int(kw.value) is not None:
-            axis = _const_int(kw.value)
+    axis = _axis_literal_or_refuse(_kwarg_or_pos(args, kwargs, 1, "axis"), "np.stack", 0)
     if axis < 0:
         axis += rank + 1
     if not (0 <= axis <= rank):
@@ -3342,6 +3434,7 @@ def _expand_einsum_ellipsis(spec: str, ranks: List[int]) -> str:
 
 
 #: Counter for the scratch buffers :func:`_materialize_operands` spills non-Name operands into.
+#: Reset per translation unit by :func:`reset_temp_counters`.
 _OP_SPILL_TEMP = [0]
 
 
@@ -3682,10 +3775,11 @@ def expand_pad(target: ast.expr,
     component axis ``(0, 0)``). Source may be a bare array or a
     leading-scalar-indexed sub-array (``in_grid[b]``). Two modes: ``edge``
     takes the nearest source edge value (``padded[i...] = src[clamp(i - before,
-    0, d - 1)...]``, clamp emitted as scalar ``__ps<k>`` locals with guard
-    ``if``s, no min/max in subscript position); ``constant`` (numpy default)
-    zeroes the buffer then copies the interior ``padded[i + before...] =
-    src[i...]``. The halo-exchange idiom of the structured-grid stencils."""
+    0, d - 1)...]``, clamp emitted as one conditional-expression assign to a
+    scalar ``__ps<k>`` local, no min/max in subscript position); ``constant``
+    (numpy default) zeroes the buffer then copies the interior ``padded[i +
+    before...] = src[i...]``. The halo-exchange idiom of the structured-grid
+    stencils."""
     if not args:
         raise NotImplementedError("np.pad needs a source operand")
     base = _pad_src_base_and_lead(args[0])
@@ -3737,6 +3831,8 @@ def expand_pad(target: ast.expr,
     # mode-specific remap of ``q = out_iter - before`` back into ``[0, d-1]``
     # (edge = clamp, wrap = periodic, reflect/symmetric = mirror), emitted as
     # scalar ``__ps<k>`` locals so no min/max/mod sits in subscript position.
+    # edge clamps in ONE conditional expression (see _remap); the fold/mod modes
+    # keep their statement sequence, which reads sv back.
     out_iters = [f"__pp{k}" for k in range(rank)]
     src_idx_vars = [f"__ps{k}" for k in range(rank)]
 
@@ -3754,16 +3850,22 @@ def expand_pad(target: ast.expr,
                       body=[ast.Assign(targets=[_store(sv)], value=ast.BinOp(left=hi, op=ast.Sub(), right=_name(sv)))],
                       orelse=[])
 
-    def _remap(sv: str, d: ast.expr, pv: str) -> List[ast.stmt]:
+    def _remap(sv: str, d: ast.expr, pv: str, raw: ast.expr) -> List[ast.stmt]:
         if mode == "edge":
-            lo = ast.If(test=ast.Compare(left=_name(sv), ops=[ast.Lt()], comparators=[_const(0)]),
-                        body=[ast.Assign(targets=[_store(sv)], value=_const(0))],
-                        orelse=[])
+            # ONE conditional-expression assign, not two guard ifs: a polyhedral
+            # extractor (pluto/pet) reads data-dependent control flow inside the
+            # loop body as a statement it cannot schedule and drops the body.
+            # Every arm recomputes the PRE-clamp ``raw``; reading sv back would
+            # add a RAW dependence on top of the WAW the assign already carries.
             upper = ast.BinOp(left=copy.deepcopy(d), op=ast.Sub(), right=_const(1))
-            hi = ast.If(test=ast.Compare(left=_name(sv), ops=[ast.Gt()], comparators=[upper]),
-                        body=[ast.Assign(targets=[_store(sv)], value=copy.deepcopy(upper))],
-                        orelse=[])
-            return [lo, hi]
+            hi = ast.IfExp(test=ast.Compare(left=copy.deepcopy(raw), ops=[ast.Gt()],
+                                            comparators=[copy.deepcopy(upper)]),
+                           body=copy.deepcopy(upper),
+                           orelse=copy.deepcopy(raw))
+            clamp = ast.IfExp(test=ast.Compare(left=copy.deepcopy(raw), ops=[ast.Lt()], comparators=[_const(0)]),
+                              body=_const(0),
+                              orelse=hi)
+            return [ast.Assign(targets=[_store(sv)], value=clamp)]
         if mode == "wrap":  # periodic tiling: src[q mod d]
             return [ast.Assign(targets=[_store(sv)], value=_floor_mod(_name(sv), d))]
         # symmetric/reflect: mirror with period 2d (incl. edge) or 2(d-1) (excl.
@@ -3811,9 +3913,12 @@ def expand_pad(target: ast.expr,
     pre: List[ast.stmt] = []
     for k in range(rank):
         sv = src_idx_vars[k]
-        pre.append(
-            ast.Assign(targets=[_store(sv)], value=ast.BinOp(left=_name(out_iters[k]), op=ast.Sub(), right=_before(k))))
-        pre.extend(_remap(sv, _dim(k), f"__pm{k}"))
+        raw = ast.BinOp(left=_name(out_iters[k]), op=ast.Sub(), right=_before(k))
+        # edge folds the raw index into its clamp expression; the fold/mod modes
+        # read sv back, so they need the plain seeding assign first.
+        if mode != "edge":
+            pre.append(ast.Assign(targets=[_store(sv)], value=raw))
+        pre.extend(_remap(sv, _dim(k), f"__pm{k}", raw))
     body = pre + [
         ast.Assign(targets=[_store_target([_name(v) for v in out_iters])],
                    value=_src_read([_name(v) for v in src_idx_vars]))
@@ -4074,6 +4179,11 @@ def expand_median(target, args, shape_table, kwargs=None, local_dtypes=None, fre
     copy so the input is not mutated."""
     if not args or not isinstance(args[0], ast.Name):
         raise NotImplementedError("np.median needs a bare-Name array")
+    # ONLY the full flattened median. An axis was silently ignored: the expander flattened every
+    # element and returned one scalar, so ``np.median(A, axis=1)`` computed a whole-array median
+    # and reported no error at all.
+    if _read_axis_keepdims(args, kwargs or [])[0] is not None:
+        raise NotImplementedError("np.median(axis=...) is not implemented; only the flattened median is")
     a = args[0]
     shape = shape_table.get(a.id)
     if shape is None:
@@ -4288,7 +4398,11 @@ def expand_reshape(target: ast.expr,
     flat_parts: List[str] = []
     for i, it in enumerate(tgt_iters):
         stride = _stride(tgt_shape, i)
-        flat_parts.append(it if stride == "1" else f"({it}) * {stride}")
+        # Parenthesise the STRIDE too: it is re-parsed from text, and a single compound factor came
+        # back unbracketed, so ``(i) * (w - k) / 1 + 1`` re-associated as ``(i*(w-k))/1 + 1``. Only
+        # the second-to-last axis of a reshape is ever a lone compound factor, which is why square
+        # 2-D cases were right and every conv shape gathered 75% of its elements from the wrong slot.
+        flat_parts.append(it if stride == "1" else f"({it}) * ({stride})")
     flat_expr = " + ".join(flat_parts) if flat_parts else "0"
 
     # Decode the source multi-index from the flat index via div/mod on the source
@@ -4359,15 +4473,13 @@ def expand_repeat(target: ast.expr,
     if len(args) < 2:
         raise NotImplementedError("np.repeat needs repetitions arg")
     k_arg = args[1]
-    # ``axis`` -- positional [2] or kwarg.
+    # ``axis`` -- positional [2] or kwarg. An ABSENT axis means numpy's flat repeat; an axis that is
+    # merely unreadable must NOT fall into that branch, because flat repeat is a different output
+    # shape and a different loop nest, not a degraded version of the same one.
+    axis_node = _kwarg_or_pos(args, kwargs, 2, "axis")
     axis: Optional[int] = None
-    if len(args) >= 3:
-        if (isinstance(args[2], ast.Constant) and isinstance(args[2].value, int)):
-            axis = args[2].value
-    for kw in (kwargs or []):
-        if kw.arg == "axis":
-            if (isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, int)):
-                axis = kw.value.value
+    if not (axis_node is None or (isinstance(axis_node, ast.Constant) and axis_node.value is None)):
+        axis = _axis_literal_or_refuse(axis_node, "np.repeat")
     n_dim = len(a_shape)
     if axis is None:
         # Flat repeat: each scalar element repeated K times.
@@ -5313,8 +5425,20 @@ def expand_linalg_solve(target: ast.expr,
 #: ``np.linalg.inv`` once per SCF sub-solve, each a different size, so the
 #: second call's shape would overwrite the first's declaration and the first
 #: inversion would malloc from an uninitialised dimension. A per-call suffix
-#: keeps each buffer distinct.
+#: keeps each buffer distinct. Reset per translation unit by :func:`reset_temp_counters`.
 _LINALG_AW = [0]
+
+
+def reset_temp_counters() -> None:
+    """Zero the scratch-buffer name counters at the start of a translation unit.
+
+    They only have to be unique WITHIN one kernel, but they are module state, so left
+    running they number the second kernel emitted in a process from wherever the first
+    stopped -- the emitted text then depends on what else the process translated, and
+    re-emitting the same kernel twice yields two different sources. Called by
+    :func:`numpyto_common.lowering.lower`, the single entry point of a translation unit."""
+    _OP_SPILL_TEMP[0] = 0
+    _LINALG_AW[0] = 0
 
 
 def expand_linalg_inv(target: ast.expr,
@@ -5867,7 +5991,7 @@ def _unary_expr_expander(make: Callable[[ast.expr], ast.expr]) -> Callable:
 #: handled by ``MATH_BUILTINS``; this registers the ARRAY form so ``out =
 #: np.tan(arr)`` lowers to a loop. ``round``/``around`` map to ``rint``
 #: (round-half-to-even, matching numpy; C ``round`` is half-away-from-zero).
-_UNARY_C_MATH: Dict[str, str] = {
+UNARY_C_MATH: Dict[str, str] = {
     "tan": "tan",
     "sinh": "sinh",
     "cosh": "cosh",
@@ -5895,7 +6019,7 @@ _UNARY_C_MATH: Dict[str, str] = {
     "tgamma": "tgamma",
     "lgamma": "lgamma",
 }
-for _np_name, _c_name in _UNARY_C_MATH.items():
+for _np_name, _c_name in UNARY_C_MATH.items():
     NP_CALL_EXPANDERS[("np", _np_name)] = _unary_call_expander(_c_name)
 
 # Inline-expression ufuncs valid in both C and Fortran: square -> x*x,
@@ -6017,13 +6141,124 @@ def _call_to_str(node):
     return ast.unparse(node)
 
 
-def _matmul_result_shape(a_shape: Tuple[str, ...], b_shape: Tuple[str, ...]) -> Optional[Tuple[str, ...]]:
+#: Single identifier inside a shape-token string, matched on word boundaries so substituting ``c``
+#: never hits ``channels`` or ``__inl6_c``.
+DIM_IDENT_RE = re.compile(r"[A-Za-z_]\w*")
+
+#: ``arr.shape[i]`` inside a shape token -- a DIMENSION read, resolvable against the shape table.
+SHAPE_READ_RE = re.compile(r"(\w+)\.shape\[(\d+)\]")
+
+#: Cap on alternating alias/shape-read expansion rounds. Each round can expose new names, so the
+#: two rewrites do not reach a joint fixpoint in one pass; a chain deeper than this is pathological
+#: and stopping early only costs a declined matmul.
+DIM_EXPAND_ROUNDS: int = 8
+
+
+def substitute_dim_aliases(token: str,
+                           aliases: Dict[str, str],
+                           shape_table: Optional[Dict[str, Tuple[str, ...]]] = None) -> str:
+    """Rewrite one shape token into the kernel's PARAMETER vocabulary, to a fixpoint.
+
+    A kernel names its own dimensions (``batch, channels, h, w = x.shape``), so the SAME extent
+    reaches a comparison spelled two ways: ``channels`` from a body local, ``embed_dim`` from
+    ``init.shapes``. ``aliases`` maps each dimension local to its definition; expanding both sides
+    puts them in one vocabulary. Cycle-guarded on the active substitution chain, so a
+    self-referential def stops expanding instead of recursing forever.
+
+    An inlined helper spells its dims as a read off a LOCAL array (``__inl91_c =
+    __inl8_y.shape[3]``), which no alias can resolve on its own -- hence ``shape_table``, and hence
+    the rounds: resolving a shape read exposes fresh names to alias-expand, and vice versa.
+    """
+
+    def expand(text: str, active: Tuple[str, ...]) -> str:
+
+        def repl(m: "re.Match") -> str:
+            ident = m.group(0)
+            if ident not in aliases or ident in active:
+                return ident
+            return "(" + expand(aliases[ident], active + (ident, )) + ")"
+
+        return DIM_IDENT_RE.sub(repl, text)
+
+    def resolve_shape_reads(text: str) -> str:
+
+        def repl(m: "re.Match") -> str:
+            shape = shape_table.get(m.group(1))
+            idx = int(m.group(2))
+            if shape is None or idx >= len(shape):
+                return m.group(0)
+            return "(" + str(shape[idx]) + ")"
+
+        return SHAPE_READ_RE.sub(repl, text)
+
+    # Each round is "aliases to a fixpoint, then resolve shape reads", and a round only REPEATS
+    # when a shape read actually resolved -- that is the only thing that can expose a name the
+    # alias pass has not seen. Looping on any change instead would restart the per-chain cycle
+    # guard, and a self-referential def would grow one level per round instead of stopping.
+    text = str(token)
+    for _ in range(DIM_EXPAND_ROUNDS):
+        grown = expand(text, ())
+        if not shape_table:
+            return grown
+        resolved = resolve_shape_reads(grown)
+        if resolved == grown:
+            return grown
+        text = resolved
+    return text
+
+
+def dims_agree(a: str,
+               b: str,
+               aliases: Optional[Dict[str, str]] = None,
+               shape_table: Optional[Dict[str, Tuple[str, ...]]] = None) -> bool:
+    """``True`` when two shape tokens denote the same extent.
+
+    Three rungs, cheapest first, because the first answers nearly every call: literal string
+    equality; equality after :func:`substitute_dim_aliases` puts both in the parameter vocabulary;
+    and only then a symbolic compare, for the case where substitution leaves arithmetically-equal
+    but textually different expressions (swin's ``4 * (4 * embed_dim)`` against ``16 * embed_dim``).
+
+    Unresolvable is FALSE, never True: a wrong ``True`` here contracts over two different extents,
+    which is a miscompile, while a wrong ``False`` only declines a matmul the hoister then refuses.
+    """
+    if a == b:
+        return True
+    if not aliases and not shape_table:
+        return False
+    sa = substitute_dim_aliases(a, aliases or {}, shape_table)
+    sb = substitute_dim_aliases(b, aliases or {}, shape_table)
+    if sa == sb:
+        return True
+    # Deferred: sympy costs ~100s of ms to import and the two rungs above settle the common case.
+    import sympy
+    try:
+        return bool(sympy.simplify(sympy.sympify(sa) - sympy.sympify(sb)) == 0)
+    except (SyntaxError, TypeError, AttributeError, ValueError, sympy.SympifyError):
+        return False
+
+
+def _matmul_result_shape(a_shape: Tuple[str, ...],
+                         b_shape: Tuple[str, ...],
+                         dim_aliases: Optional[Dict[str, str]] = None,
+                         shape_table: Optional[Dict[str, Tuple[str, ...]]] = None) -> Optional[Tuple[str, ...]]:
     """``A @ B``'s result shape under numpy broadcasting rules. Supports 1-D x
     2-D / 2-D x 1-D / 2-D x 2-D; batched ``(*batch, m, k) @ (k, n) -> (*batch,
     m, n)`` (rank(a) >= 3, rank(b) == 2) and its mirror (rank(a) == 2, rank(b)
     >= 3); and both-batched ``(*batch, m, k) @ (*batch, k, n) -> (*batch, m,
     n)`` when both ranks are >= 3 and share the same leading batch dims.
+
+    Dimension agreement goes through :func:`dims_agree` rather than ``==``: the two operands'
+    tokens come from different vocabularies (a body local vs an ``init.shapes`` symbol), so string
+    identity declines contractions whose extents match. ``dim_aliases`` is what reconciles them.
     """
+    # Normalise first: a PARAMETER's shape arrives as a list and a hoisted temp's as a tuple, so the
+    # ``a_shape[:-2] == b_shape[:-2]`` batch test below was comparing a list against a tuple and
+    # always answering False -- every batched matmul mixing the two was silently declined.
+    a_shape, b_shape = tuple(a_shape), tuple(b_shape)
+
+    def agree(x: str, y: str) -> bool:
+        return dims_agree(str(x), str(y), dim_aliases, shape_table)
+
     if len(a_shape) == 2 and len(b_shape) == 2:
         return (a_shape[0], b_shape[1])
     if len(a_shape) == 2 and len(b_shape) == 1:
@@ -6032,22 +6267,26 @@ def _matmul_result_shape(a_shape: Tuple[str, ...], b_shape: Tuple[str, ...]) -> 
         return (b_shape[1], )
     if len(a_shape) >= 3 and len(b_shape) >= 3:
         # (*batch, m, k) @ (*batch, k, n) -> (*batch, m, n): identical batch.
-        if a_shape[:-2] == b_shape[:-2] and a_shape[-1] == b_shape[-2]:
+        batch_ok = (len(a_shape) == len(b_shape) and all(agree(x, y) for x, y in zip(a_shape[:-2], b_shape[:-2])))
+        if batch_ok and agree(a_shape[-1], b_shape[-2]):
             return tuple(a_shape[:-2]) + (a_shape[-2], b_shape[-1])
         return None
     if len(a_shape) >= 3 and len(b_shape) == 2:
         # (*batch, m, k) @ (k, n) -> (*batch, m, n)
-        if a_shape[-1] == b_shape[0]:
+        if agree(a_shape[-1], b_shape[0]):
             return tuple(a_shape[:-1]) + (b_shape[1], )
     if len(a_shape) == 2 and len(b_shape) >= 3:
         # (m, k) @ (*batch, k, n) -> (*batch, m, n)
-        if a_shape[1] == b_shape[-2]:
+        if agree(a_shape[1], b_shape[-2]):
             return tuple(b_shape[:-2]) + (a_shape[0], b_shape[-1])
     return None
 
 
-def _hoist_matmul(matmul: ast.BinOp, shape_table: Dict[str, Tuple[str, ...]], temp_arrays: Dict[str, Tuple[str, ...]],
-                  temp_counter: List[int]) -> Tuple[Optional[str], List[ast.stmt]]:
+def _hoist_matmul(matmul: ast.BinOp,
+                  shape_table: Dict[str, Tuple[str, ...]],
+                  temp_arrays: Dict[str, Tuple[str, ...]],
+                  temp_counter: List[int],
+                  dim_aliases: Optional[Dict[str, str]] = None) -> Tuple[Optional[str], List[ast.stmt]]:
     """Hoist a ``lhs @ rhs`` subexpression to a fresh temp array. Returns
     ``(temp_name, pre_stmts)``: caller substitutes ``temp_name`` for the matmul
     expression and prepends ``pre_stmts`` before the enclosing assignment.
@@ -6200,7 +6439,7 @@ def _hoist_matmul(matmul: ast.BinOp, shape_table: Dict[str, Tuple[str, ...]], te
     b_shape = shape_table.get(b_name)
     if not a_shape or not b_shape:
         return None, []
-    result_shape = _matmul_result_shape(a_shape, b_shape)
+    result_shape = _matmul_result_shape(a_shape, b_shape, dim_aliases, shape_table)
     if result_shape is None:
         return None, []
 
@@ -6385,11 +6624,14 @@ class _MatmulHoister(ast.NodeTransformer):
     each get their own temp (chained ``A @ B @ C`` lifts to two temps fused
     left-to-right)."""
 
-    def __init__(self, shape_table, temp_arrays, temp_counter, local_dtypes=None, sparse=None):
+    def __init__(self, shape_table, temp_arrays, temp_counter, local_dtypes=None, sparse=None, dim_aliases=None):
         self.shape_table = shape_table
         self.temp_arrays = temp_arrays
         self.temp_counter = temp_counter
         self.local_dtypes: Dict[str, str] = (local_dtypes if local_dtypes is not None else {})
+        #: Dimension local -> its definition, so a contraction whose operands spell the same extent
+        #: two ways (``channels`` vs ``embed_dim``) is recognised instead of declined.
+        self.dim_aliases: Dict[str, str] = dim_aliases or {}
         #: Logical-name -> SparseArrayDesc (from KernelIR.sparse). When
         #: a matmul's operands are sparse, route to the sparse emitter.
         self.sparse: Dict[str, object] = sparse or {}
@@ -6404,7 +6646,8 @@ class _MatmulHoister(ast.NodeTransformer):
                 temp, stmts = sp
                 self.pre_stmts.extend(self._prepend_alloc_markers(stmts))
                 return ast.Name(id=temp, ctx=ast.Load())
-            temp, stmts = _hoist_matmul(node, self.shape_table, self.temp_arrays, self.temp_counter)
+            node = self._materialise_call_operands(node)
+            temp, stmts = _hoist_matmul(node, self.shape_table, self.temp_arrays, self.temp_counter, self.dim_aliases)
             if temp is not None:
                 self.pre_stmts.extend(self._prepend_alloc_markers(stmts))
                 # Propagate complex dtype across the matmul: if
@@ -6422,6 +6665,41 @@ class _MatmulHoister(ast.NodeTransformer):
                             break
                 return ast.Name(id=temp, ctx=ast.Load())
         return node
+
+    def _materialise_call_operands(self, node: ast.BinOp) -> ast.BinOp:
+        """Spill a CALL-valued matmul operand to a temp array, so the hoister sees a bare Name.
+
+        ``relu_self_attention`` writes ``np.maximum(scores, 0.0) @ v``. The elementwise call has a
+        perfectly well-defined extent, but the loop nest below indexes its operands by name, so the
+        matmul was declined -- and a declined matmul reaches slice fusion, where scalarising it
+        would drop the contraction. Materialising is what numpy does anyway; the guard downstream
+        stays exactly as strict.
+
+        Two things are deliberately left alone, on the same principle -- do not reroute what
+        already lowers. A ``Subscript`` operand has its own slice-aware path, and a RANK-1 operand
+        reaches the scalar dot-product form, which reads a call operand happily via
+        ``_iter_extent_of``; spilling either would trade a working lowering for an extra temp
+        array and a copy loop.
+        """
+        left, right = node.left, node.right
+        for side in ("left", "right"):
+            operand = left if side == "left" else right
+            if not isinstance(operand, ast.Call):
+                continue
+            ext = _iter_extent_of(operand, self.shape_table)
+            if ext is None or len(ext) < 2:
+                continue
+            nm, stmts = self._materialise_dense_operand(operand)
+            if nm is None:
+                continue
+            self.pre_stmts.extend(self._prepend_alloc_markers(stmts))
+            if side == "left":
+                left = _name(nm)
+            else:
+                right = _name(nm)
+        if left is node.left and right is node.right:
+            return node
+        return ast.BinOp(left=left, op=ast.MatMult(), right=right)
 
     def _prepend_alloc_markers(self, stmts: List[ast.stmt]) -> List[ast.stmt]:
         """Prepend a ``__hpcagent_bench_zeros__()`` allocation marker for each array
@@ -6498,13 +6776,13 @@ class _MatmulHoister(ast.NodeTransformer):
         if not (l_sparse or r_sparse):
             return None  # neither operand is a sparse Name -- dense path
         if l_sparse and not isinstance(node.right, ast.Name):
-            nm, stmts = self._materialise_dense_operand(node.right)
+            nm, stmts = self._materialise_dense_operand(node.right, max_rank=1)
             if nm is None:
                 return None
             pre.extend(stmts)
             node = ast.BinOp(left=node.left, op=ast.MatMult(), right=_name(nm))
         elif r_sparse and not isinstance(node.left, ast.Name):
-            nm, stmts = self._materialise_dense_operand(node.left)
+            nm, stmts = self._materialise_dense_operand(node.left, max_rank=1)
             if nm is None:
                 return None
             pre.extend(stmts)
@@ -6566,21 +6844,21 @@ class _MatmulHoister(ast.NodeTransformer):
         raise NotImplementedError(f"sparse @ dense for format {sp_desc.format} with dense rank "
                                   f"{rank} not supported ({node.left.id} @ {node.right.id}).")
 
-    def _materialise_dense_operand(self, expr: ast.expr):
-        """Copy a non-Name dense operand of a sparse matmul -- e.g. the column
-        slice ``Q[:, k]`` in ``A @ Q[:, k]`` -- into a fresh temp array so the
-        SpMV/SpMM expanders (which require a *declared* dense array) can
-        consume it. Returns ``(temp_name, stmts)`` filling the temp, or
-        ``(None, [])`` when the operand's extent isn't statically a 1-D
-        vector.
+    def _materialise_dense_operand(self, expr: ast.expr, max_rank: Optional[int] = None):
+        """Copy a non-Name dense matmul operand into a fresh temp array, so the consumer -- which
+        requires a *declared* array -- sees a bare Name. Two callers want this: the SpMV/SpMM
+        expanders, for a column slice like ``Q[:, k]`` in ``A @ Q[:, k]``, and the dense hoister,
+        for a call-valued operand like ``np.maximum(scores, 0.0) @ v``. Returns ``(temp_name,
+        stmts)`` filling the temp, or ``(None, [])`` when the extent doesn't resolve.
 
-        Only the 1-D case is materialised (the SpMV operand GMRES needs); a
-        2-D dense slice on the sparse side (SpMM with a sliced RHS) falls
-        through so an unsupported pattern fails loudly rather than emitting
-        wrong shapes.
+        ``max_rank`` bounds what is accepted. The sparse path passes 1 on purpose: a 2-D dense
+        slice on the sparse side (SpMM with a sliced RHS) must fall through and fail loudly rather
+        than emit wrong shapes.
         """
         ext = _iter_extent_of(expr, self.shape_table)
-        if ext is None or len(ext) != 1:
+        if not ext:
+            return None, []
+        if max_rank is not None and len(ext) > max_rank:
             return None, []
         self.temp_counter[0] += 1
         n = self.temp_counter[0]
@@ -6593,19 +6871,20 @@ class _MatmulHoister(ast.NodeTransformer):
                 if dt and dt.startswith("complex"):
                     self.local_dtypes[temp] = "complex128"
                     break
-        shape = (_static_shape_of(expr, 0, self.shape_table) or _call_to_str(ext[0]), )
+        shape = tuple((_static_shape_of(expr, ax, self.shape_table) or _call_to_str(e)) for ax, e in enumerate(ext))
         self.temp_arrays[temp] = shape
         self.shape_table[temp] = shape
-        it = _name(f"__spvi{n}")
-        elem = _scalarize_at_iters(expr, [it], self.shape_table)
-        stmts = [
-            ast.For(
-                target=_store(it.id),
-                iter=ast.Call(func=_name("range"), args=[ext[0]], keywords=[]),
-                body=[ast.Assign(targets=[ast.Subscript(value=_name(temp), slice=it, ctx=ast.Store())], value=elem)],
-                orelse=[])
-        ]
-        return temp, stmts
+        iters = [_name(f"__spvi{n}_{ax}") for ax in range(len(ext))]
+        elem = _scalarize_at_iters(expr, iters, self.shape_table)
+        sub_slice = (ast.Tuple(elts=list(iters), ctx=ast.Load()) if len(iters) > 1 else iters[0])
+        body: ast.stmt = ast.Assign(targets=[ast.Subscript(value=_name(temp), slice=sub_slice, ctx=ast.Store())],
+                                    value=elem)
+        for it, extent in zip(reversed(iters), reversed(list(ext))):
+            body = ast.For(target=_store(it.id),
+                           iter=ast.Call(func=_name("range"), args=[extent], keywords=[]),
+                           body=[body],
+                           orelse=[])
+        return temp, [body]
 
     def _transpose_sparse_desc(self, operand):
         """If ``operand`` is ``A.T`` for a sparse ``A``, return ``(desc, transposed)`` describing
@@ -6737,11 +7016,13 @@ class _CallHoister(ast.NodeTransformer):
     shape is inferred from its arguments.
     """
 
-    def __init__(self, shape_table, scalar_temps, array_temps, counter, local_dtypes=None):
+    def __init__(self, shape_table, scalar_temps, array_temps, counter, local_dtypes=None, dim_aliases=None):
         self.shape_table = shape_table
         self.scalar_temps = scalar_temps
         self.array_temps = array_temps
         self.counter = counter
+        #: Forwarded to the nested ``_MatmulHoister`` (see its docstring).
+        self.dim_aliases: Dict[str, str] = dim_aliases or {}
         # Side-effect dtype table (shared with the lowering pipeline)
         # so a ``__cb<n>`` whose RHS contains complex literals or
         # complex-typed Name references is tagged ``complex128``.
@@ -6772,7 +7053,8 @@ class _CallHoister(ast.NodeTransformer):
                             self.array_temps,
                             self.counter,
                             local_dtypes=self.local_dtypes,
-                            sparse=vars(self).get("sparse"))
+                            sparse=vars(self).get("sparse"),
+                            dim_aliases=self.dim_aliases)
         node.args = [mm.visit(a) for a in node.args]
         self.pre_stmts.extend(mm.pre_stmts)
         # Hoist a non-Name first arg of an array reduction (sum/max/min/mean/
@@ -6789,7 +7071,8 @@ class _CallHoister(ast.NodeTransformer):
         if (key in ({("np", k)
                      for k in {
                          "sum", "max", "min", "mean", "prod", "std", "var", "median", "any", "all", "count_nonzero",
-                         "argmax", "argmin", "repeat", "transpose", "reshape", "triu", "tril", "flip", "roll", "copy"
+                         "argmax", "argmin", "repeat", "transpose", "reshape", "triu", "tril", "flip", "roll", "copy",
+                         "cumsum", "cumprod", "swapaxes", "expand_dims", "squeeze"
                      }}
                     | {("np", "fft.fftn"), ("np", "fft.ifftn"), ("np", "fft.fft"), ("np", "fft.ifft")}) and node.args
                 and not isinstance(node.args[0], ast.Name)):
@@ -7031,6 +7314,17 @@ class _CallHoister(ast.NodeTransformer):
             shape = self.shape_table.get(args[0].id)
             if shape:
                 return tuple(shape)
+        # ``swapaxes`` / ``expand_dims`` / ``squeeze`` -- the operand's extent with axes swapped or a
+        # unit axis inserted / dropped. ``_iter_extent_of`` already computes all three, so route to
+        # it rather than restating the axis arithmetic; without a branch here they fall through to
+        # the elementwise case, which skips them (they are NON_ELEMENTWISE), and the None return
+        # silently DECLINES to hoist -- leaving ``q @ np.swapaxes(k, -1, -2)`` for the emitter.
+        if op in {"swapaxes", "expand_dims", "squeeze"} and args:
+            call = _attr_call("np", op, list(args))
+            call.keywords = list(keywords or [])
+            ext = _iter_extent_of(call, self.shape_table)
+            if ext is not None:
+                return tuple(self._extent_to_shape_token(e) for e in ext)
         # ``np.reshape(a, shape)`` -- output extents are the shape arg, with a
         # single ``-1`` resolved to prod(source) / prod(other dims). Lets the
         # flattened-dot idiom ``a.ravel() @ a.ravel()`` (lowered to reshape)
@@ -7063,28 +7357,7 @@ class _CallHoister(ast.NodeTransformer):
                 return tuple(base)
         # Elementwise unary / binary share the operand shape; first array
         # operand (Name or Subscript-with-Slice) wins.
-        ELEMENTWISE = {
-            "copy",
-            "abs",
-            "exp",
-            "log",
-            "sqrt",
-            "sin",
-            "cos",
-            "tanh",
-            "negative",
-            "minimum",
-            "maximum",
-            "add",
-            "subtract",
-            "multiply",
-            "divide",
-            "true_divide",
-            "power",
-            "clip",
-            "where",
-        }
-        if op in ELEMENTWISE and args:
+        if op in ELEMENTWISE_SHAPE_OPS and args:
             # Broadcast the extents of ALL operands, not just the first: the
             # hoisted temp for ``np.maximum(a(M,), B(N, M))`` must be the full
             # broadcast shape ``(N, M)``, matching the elementwise expander's own
@@ -7238,6 +7511,27 @@ def _call_expander(expander, target, args, keywords, shape_table, local_dtypes=N
 #: full-slice form is canonicalised to a Name in ``visit_Assign``; only a
 #: shifted slice reaches here, and only the cumulative scans honour the
 #: lower-bound offset (via :func:`_scan_target_offsets`).
+#: Registered ops whose result shape is NOT the broadcast of its operands -- reductions,
+#: constructors, shape-changers and contractions. Everything else that has an expander IS
+#: elementwise, which is how :data:`ELEMENTWISE_SHAPE_OPS` below is derived.
+#:
+#: Derived, not restated, and computed AFTER every registration: the previous hand-written list was
+#: missing `square`, `reciprocal`, `degrees`, `radians`, `asarray`, the comparison ufuncs and the
+#: binary libm ufuncs, and each omission made ``_derive_output_shape`` return None -- which does not
+#: fail, it silently DECLINES to hoist and leaves a bare ``np.square(...)`` for the emitter.
+NON_ELEMENTWISE_SHAPE_OPS: Set[str] = set(_REDUCTION_NAMES) | {
+    "reshape", "repeat", "transpose", "flip", "roll", "triu", "tril", "concatenate", "stack", "pad", "diag", "diagonal",
+    "trace", "einsum", "tensordot", "inner", "outer", "dot", "vdot", "matmul", "cumsum", "cumprod", "linspace",
+    "arange", "zeros", "ones", "empty", "full", "eye", "identity", "fromfunction", "meshgrid", "mgrid", "sort",
+    "argsort", "histogram", "unique", "take", "interp", "searchsorted", "nonzero", "kron", "cross", "split",
+    "expand_dims", "squeeze", "swapaxes", "moveaxis", "ravel", "flatten", "tile", "broadcast_to", "atleast_1d",
+    "atleast_2d", "append", "insert", "delete"
+}
+
+ELEMENTWISE_SHAPE_OPS: FrozenSet[str] = frozenset(
+    name for module, name in NP_CALL_EXPANDERS
+    if module == "np" and "." not in name and name not in NON_ELEMENTWISE_SHAPE_OPS) | {"copy", "where", "clip"}
+
 _SLICE_TARGET_EXPANDERS = {("np", "cumsum"), ("np", "cumprod")}
 
 #: Expander keys that write element-wise to ``target`` (no allocation);
@@ -7261,6 +7555,7 @@ _ELEMENT_WRITE_EXPANDERS = {
     ("np", "logical_and"),
     ("np", "logical_or"),
     ("np", "logical_not"),
+    *(("np", _name) for _name in UNARY_C_MATH),
     ("np", "maximum"),
     ("np", "minimum"),
     ("np", "add"),
@@ -7302,6 +7597,134 @@ _ELEMENT_WRITE_EXPANDERS = {
 }
 
 
+def _index_axes(sub: ast.Subscript) -> Optional[Tuple[str, ...]]:
+    """Per-axis index expressions of a fully scalar subscript, or ``None`` when
+    any axis is a slice (no single cell to reason about)."""
+    elts = sub.slice.elts if isinstance(sub.slice, ast.Tuple) else [sub.slice]
+    if any(isinstance(e, (ast.Slice, ast.Starred)) for e in elts):
+        return None
+    return tuple(ast.unparse(e) for e in elts)
+
+
+def _reduction_misses_target(target: ast.Subscript, loop: ast.For, body: ast.expr) -> bool:
+    """True when moving the reduction onto ``target`` cannot change what ``body``
+    reads: either ``body`` never touches the target's array, or every read of it
+    provably misses ``target``'s cell for all iterations of ``loop``.
+
+    ``trmm``'s ``B[i, j] += sum_k A[k, i] * B[k, j]`` needs the second rung: ``k``
+    runs from ``i + 1``, so the accumulating cell is never read back. ``symm``
+    takes the first (``temp2`` is write-only in the body).
+    """
+    base = target.value.id
+    mentions = [n for n in ast.walk(body) if isinstance(n, ast.Name) and n.id == base]
+    if not mentions:
+        return True
+    reads = [n for n in ast.walk(body) if isinstance(n, ast.Subscript) and n.value in mentions]
+    if len(reads) != len(mentions):
+        return False  # a bare-Name (whole-array) mention -- no cell to compare
+    axes = _index_axes(target)
+    if axes is None:
+        return False
+    # The nonnegativity below is what proves the miss, so demand the 0-based
+    # ``range(n)`` that makes it true rather than assuming every hoist emits one.
+    if not (isinstance(loop.iter, ast.Call) and isinstance(loop.iter.func, ast.Name) and loop.iter.func.id == "range"
+            and len(loop.iter.args) == 1):
+        return False
+    # Deferred: sympy import costs ~100s of ms and only this narrow shape needs it.
+    import sympy
+    iter_name = loop.target.id
+    it = sympy.Symbol(iter_name, nonnegative=True)
+    for read in reads:
+        read_axes = _index_axes(read)
+        if read_axes is None or len(read_axes) != len(axes):
+            return False
+        try:
+            diffs = [
+                sympy.sympify(r, locals={iter_name: it}) - sympy.sympify(t, locals={iter_name: it})
+                for r, t in zip(read_axes, axes)
+            ]
+        except (SyntaxError, TypeError, AttributeError, ValueError, sympy.SympifyError):
+            return False
+        if not any(d.is_zero is False for d in diffs):
+            return False
+    return True
+
+
+def _accumulation_addend(step: ast.stmt, scalar: str) -> Optional[ast.expr]:
+    """What one ``+=`` step of ``scalar`` adds, in either spelling the lowerings emit
+    (``s += x`` from the matmul hoist, ``s = s + x`` from the reduction expanders), else ``None``."""
+    if isinstance(step, ast.AugAssign):
+        if isinstance(step.op, ast.Add) and isinstance(step.target, ast.Name) and step.target.id == scalar:
+            return step.value
+        return None
+    if (isinstance(step, ast.Assign) and len(step.targets) == 1 and isinstance(step.targets[0], ast.Name)
+            and step.targets[0].id == scalar and isinstance(step.value, ast.BinOp)
+            and isinstance(step.value.op, ast.Add) and isinstance(step.value.left, ast.Name)
+            and step.value.left.id == scalar):
+        return step.value.right
+    return None
+
+
+def _retarget_scalar_accumulator(node: ast.stmt, prelude: List[ast.stmt]) -> Optional[List[ast.stmt]]:
+    """Fold ``s = 0.0; for k: s += f(k); T[idx] (+)= s`` into an in-place
+    reduction on ``T[idx]``, dropping the scalar. Returns ``None`` when the
+    statement is not that shape.
+
+    ``emit_pluto`` hoists every scalar declaration above ``#pragma scop``, so
+    ``s`` models to pet as a one-element array live across the whole iteration
+    domain: the false WAW/WAR fragments the schedule, and Pluto's ``--parallel``
+    privatises only its own tile counters, leaving ``s`` shared in the parallel
+    band -- a race. An array cell carries the same reduction with no
+    scop-external state, which is why ``syrk`` (reducing into ``C[i, si1]``) was
+    never affected.
+
+    pet goes further than racing on that scalar: a statement whose only write is one drops out of
+    the transformed output entirely (POLYCC-009), so the same fold is what keeps a full
+    ``np.sum`` into an array cell computing at all.
+    """
+    if len(prelude) < 2 or not isinstance(node.value, ast.Name):
+        return None
+    augmented = isinstance(node, ast.AugAssign)
+    if augmented:
+        if not isinstance(node.op, ast.Add):
+            return None
+        target = node.target
+    else:
+        if len(node.targets) != 1:
+            return None
+        target = node.targets[0]
+    # A single cell is the whole point: a slice destination is a different lowering
+    # (slice fusion) and would not give pet the affine reduction carrier we are after.
+    if not (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)
+            and _index_axes(target) is not None):
+        return None
+    scalar = node.value.id
+    init, loop = prelude[-2], prelude[-1]
+    if not (isinstance(init, ast.Assign) and len(init.targets) == 1 and isinstance(init.targets[0], ast.Name)
+            and init.targets[0].id == scalar and isinstance(init.value, ast.Constant) and init.value.value == 0.0):
+        return None
+    if not (isinstance(loop, ast.For) and not loop.orelse and len(loop.body) == 1
+            and isinstance(loop.target, ast.Name)):
+        return None
+    addend = _accumulation_addend(loop.body[0], scalar)
+    if addend is None:
+        return None
+    if any(isinstance(n, ast.Name) and n.id == scalar for n in ast.walk(addend)):
+        return None  # self-referential accumulation -- not a plain reduction
+    if not _reduction_misses_target(target, loop, addend):
+        return None
+    store = copy.deepcopy(target)
+    store.ctx = ast.Store()
+    loop.body = [ast.AugAssign(target=store, op=ast.Add(), value=addend)]
+    # An ``AugAssign`` target already holds the running value: zero-initialising
+    # it would drop what the reduction must add to.
+    if augmented:
+        return prelude[:-2] + [loop]
+    zero = copy.deepcopy(target)
+    zero.ctx = ast.Store()
+    return prelude[:-2] + [ast.Assign(targets=[zero], value=_const(0.0)), loop]
+
+
 class LibNodeRewriter(ast.NodeTransformer):
     """Single-pass rewriter for the library-node registry. Consumes
     :class:`KernelIR`'s array-shape table so reduction expanders know how many
@@ -7318,8 +7741,12 @@ class LibNodeRewriter(ast.NodeTransformer):
                  shape_table: Dict[str, Tuple[str, ...]],
                  known_arrays: Optional[Set[str]] = None,
                  local_dtypes: Optional[Dict[str, str]] = None,
-                 sparse: Optional[Dict[str, object]] = None):
+                 sparse: Optional[Dict[str, object]] = None,
+                 dim_aliases: Optional[Dict[str, str]] = None):
         self.shape_table = shape_table
+        #: Dimension local -> its definition in parameter terms, threaded to the matmul hoister so
+        #: a contraction dim spelled two ways still matches. See :func:`dims_agree`.
+        self.dim_aliases: Dict[str, str] = dim_aliases or {}
         #: Logical-name -> SparseArrayDesc, threaded to the matmul hoister so
         #: ``A @ B`` on sparse operands routes to the per-format sparse emitter.
         self.sparse: Dict[str, object] = sparse or {}
@@ -7355,7 +7782,8 @@ class LibNodeRewriter(ast.NodeTransformer):
                                     self.scalar_call_temps,
                                     self.matmul_temps,
                                     self._counter,
-                                    local_dtypes=self.local_dtypes)
+                                    local_dtypes=self.local_dtypes,
+                                    dim_aliases=self.dim_aliases)
         call_hoister.sparse = self.sparse
         value = call_hoister.visit(value)
         pre = list(call_hoister.pre_stmts)
@@ -7364,7 +7792,8 @@ class LibNodeRewriter(ast.NodeTransformer):
                                     self.matmul_temps,
                                     self._counter,
                                     local_dtypes=self.local_dtypes,
-                                    sparse=self.sparse)
+                                    sparse=self.sparse,
+                                    dim_aliases=self.dim_aliases)
         new_value = mm_hoister.visit(value)
         pre.extend(mm_hoister.pre_stmts)
         return new_value, pre
@@ -7475,13 +7904,6 @@ class LibNodeRewriter(ast.NodeTransformer):
                 and isinstance(node.targets[0].value, ast.Name) and _is_full_slice_subscript(node.targets[0])
                 and isinstance(node.value, ast.Call) and self._lookup(node.value) in NP_CALL_EXPANDERS):
             node.targets[0] = ast.Name(id=node.targets[0].value.id, ctx=ast.Store())
-        # Per-statement shape-table update for reassigned locals: when the LHS
-        # is a bare Name and the RHS has a derivable broadcast extent (BinOp,
-        # np.maximum, etc.), refresh shape_table[target] before hoisting so the
-        # hoister sees the current shape (lenet's ``x = relu(conv2d(x))`` chain
-        # needs each reassignment visible at the next call site).
-        if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
-            self._update_shape_for_assign(node.targets[0].id, node.value)
         # ``y = np.linalg.lstsq(A, b, rcond=...)[0]`` canonicalisation: strip
         # the trailing ``[0]`` subscript on a tuple-returning call so the
         # registered call expander fires on the bare call. Only lstsq/histogram
@@ -7495,6 +7917,13 @@ class LibNodeRewriter(ast.NodeTransformer):
         node.value, prelude = self._hoist_value(node.value)
         # Lower any prelude assigns that are themselves registered calls.
         prelude = self._lower_prelude_calls(prelude)
+        # Reassigned local (lenet's ``x = relu(conv2d(x))`` chain): refresh shape_table[target] so
+        # the NEXT statement sees the new shape. Strictly AFTER hoisting this RHS -- Python evaluates
+        # the RHS against the OLD binding, and refreshing first made ``x = x @ w.T + b`` contract over
+        # the RESULT's extent: out_features instead of in_features, silently dropping terms when
+        # in > out and reading past the row when in < out.
+        if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
+            self._update_shape_for_assign(node.targets[0].id, node.value)
         # Whole-array alias propagation: ``x = <Name>`` where the RHS is a Name
         # with a known shape gives ``x`` the same shape, so downstream visits
         # see ``x`` as an array. Also propagate ``local_dtypes``, else a
@@ -7566,6 +7995,9 @@ class LibNodeRewriter(ast.NodeTransformer):
                     return prelude + expanded
                 except NotImplementedError:
                     pass
+        retargeted = _retarget_scalar_accumulator(node, prelude)
+        if retargeted is not None:
+            return retargeted
         if prelude:
             return prelude + [node]
         return node
@@ -7644,6 +8076,9 @@ class LibNodeRewriter(ast.NodeTransformer):
         self.generic_visit(node)
         node.value, prelude = self._hoist_value(node.value)
         prelude = self._lower_prelude_calls(prelude)
+        retargeted = _retarget_scalar_accumulator(node, prelude)
+        if retargeted is not None:
+            return retargeted
         if prelude:
             return prelude + [node]
         return node

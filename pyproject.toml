@@ -14,3 +14,33 @@
 [build-system]
 requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
+
+# ---------------------------------------------------------------------------------------------
+# Coverage. Collected in CI by setting PYTEST_ADDOPTS at the JOB level rather than editing each of
+# the 21 pytest invocations -- so an invocation added later is covered without anyone remembering.
+#
+# `relative_files` is not optional here: the jobs do not share a filesystem layout (one runs inside
+# a container, the rest on the runner), and `coverage combine` discards data whose paths do not
+# match. `parallel` + the multiprocessing/thread concurrency set are needed because the suite runs
+# under xdist AND forks children (tests/numerical_oracle.py runs kernels behind os.fork).
+# ---------------------------------------------------------------------------------------------
+[tool.coverage.run]
+source = ["hpcagent_bench"]
+branch = true
+parallel = true
+relative_files = true
+concurrency = ["multiprocessing", "thread"]
+omit = [
+    # Corpus, not library: 581 kernels' numpy/dace/jax siblings would swamp the signal, and their
+    # correctness is asserted by the e2e oracle rather than by reaching a line.
+    "hpcagent_bench/benchmarks/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]

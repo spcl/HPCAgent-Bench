@@ -10,13 +10,23 @@ Each test parses the source AST, drives ``_expand_axis_reduction``
 through ``expand_sum`` (a thin wrapper that supplies the addition
 op_fn and 0.0 init), and inspects the resulting statement list for the
 expected loop structure -- iteration count and inner ``+=`` form.
+
+Section D covers the OPERAND side of the same reductions: an instance norm reduces over
+``np.expand_dims(np.expand_dims(z, 1), 1)``, whose newaxis rewrite used to leave a chained
+subscript no shape resolver could size.
 """
 
 import ast
+from typing import Dict
 
+import numpy as np
 import pytest
+from _op_oracle import run_op
 
+from numpyto_common.frontend import _AxisReshapeToIndexing
 from numpyto_common.lib_nodes import _read_axis_keepdims, expand_sum
+
+_ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 
 
 def _call_args(src: str):
@@ -167,3 +177,185 @@ def test_sum_axis_tuple_rejects_duplicates():
     args, kws = _call_args("np.sum(arr, axis=(1, 1))")
     with pytest.raises(NotImplementedError, match="duplicate"):
         expand_sum(_target("out"), args, {"arr": ("N", "M", "K")}, kws)
+
+
+# --------------------------------------------------------------------------- #
+# D. Reducing over an expand_dims / squeeze operand                           #
+# --------------------------------------------------------------------------- #
+
+
+def _reshape_to_index(src: str, ranks: Dict[str, int]) -> str:
+    tree = _AxisReshapeToIndexing(ranks).visit(ast.parse(src, mode="eval").body)
+    return ast.unparse(ast.fix_missing_locations(tree))
+
+
+def test_nested_expand_dims_is_one_subscript():
+    """Two ``expand_dims`` merge into ONE newaxis subscript, not ``z[:, None, :][:, None, :, :]``.
+
+    The chain is what broke the reduction over it: ``_iter_extent_of`` sizes a subscript of a
+    NAME, so a subscript of a subscript came back unsized, the reduction operand was never
+    hoisted to a temp, and ``np.mean`` reached the emitter unlowered.
+    """
+    assert _reshape_to_index("np.expand_dims(np.expand_dims(z, axis=1), axis=1)", {"z": 2}) == "z[:, None, None, :]"
+
+
+def test_nested_squeeze_is_one_subscript():
+    """The undo side merges the same way: two ``squeeze`` calls index one subscript."""
+    assert _reshape_to_index("np.squeeze(np.squeeze(t, axis=1), axis=1)", {"t": 4}) == "t[:, 0, 0, :]"
+
+
+def test_expand_dims_of_a_partial_slice_is_left_chained():
+    """A partial slice keeps an offset an outer index would drop, so it is NOT merged."""
+    assert _reshape_to_index("np.expand_dims(a[1:3], axis=0)", {"a": 1}) == "a[1:3][None, :]"
+
+
+def test_mean_over_nested_expand_dims():
+    """``np.mean(np.expand_dims(np.expand_dims(z, 1), 1), axis=(2, 3), keepdims=True)`` --
+    the instance-norm operand shape, reduced over a tuple axis."""
+    z = np.linspace(-3.0, 5.0, 12).reshape(3, 4)
+    src = ("import numpy as np\n"
+           "def f(z, out):\n"
+           "    t = np.expand_dims(np.expand_dims(z, axis=1), axis=1)\n"
+           "    m = np.mean(t, axis=(2, 3), keepdims=True)\n"
+           "    out[:] = np.squeeze(np.squeeze(m, axis=1), axis=1)\n")
+    res = run_op(src,
+                 "f", {"z": z}, {"out": (3, 1)}, {
+                     "NB": 3,
+                     "NC": 4
+                 },
+                 shapes={
+                     "z": "(NB, NC)",
+                     "out": "(NB, 1)"
+                 },
+                 backends=_ALL)
+    assert all(v == "ok" or v.startswith("skip") for v in res.values()), res
+
+
+def test_instance_norm_over_expanded_operand():
+    """The whole idiom the ML corpus writes: mean + var over the expanded axes, then squeeze back.
+
+    ``np.var`` shares the reduction operand path with ``np.mean``, and the division by the
+    reduction count is what makes a wrong count show up as a wrong value rather than a wrong shape.
+    """
+    z = np.linspace(-2.0, 6.0, 12).reshape(3, 4)
+    src = ("import numpy as np\n"
+           "def f(z, out):\n"
+           "    t = np.expand_dims(np.expand_dims(z, axis=1), axis=1)\n"
+           "    m = np.mean(t, axis=(2, 3), keepdims=True)\n"
+           "    v = np.var(t, axis=(2, 3), keepdims=True)\n"
+           "    n = (t - m) / np.sqrt(v + 1e-05)\n"
+           "    out[:] = np.squeeze(np.squeeze(n, axis=1), axis=1)\n")
+    res = run_op(src,
+                 "f", {"z": z}, {"out": (3, 4)}, {
+                     "NB": 3,
+                     "NC": 4
+                 },
+                 shapes={
+                     "z": "(NB, NC)",
+                     "out": "(NB, NC)"
+                 },
+                 backends=_ALL)
+    assert all(v == "ok" or v.startswith("skip") for v in res.values()), res
+
+
+# --------------------------------------------------------------------------- #
+# E. Full-reduction accumulation -- one chain in source order, no blocking.     #
+# --------------------------------------------------------------------------- #
+
+
+def _full_sum_stmts(shape):
+    args, kws = _call_args("np.sum(a)")
+    return expand_sum(_target("s"), args, {"a": shape}, kwargs=kws, local_dtypes={})
+
+
+def test_full_float_sum_is_one_chain():
+    txt = ast.unparse(ast.fix_missing_locations(ast.Module(body=_full_sum_stmts(("N", )), type_ignores=[])))
+    # No block-index division: it is what pet reads as a data-dependent bound (POLYCC-008), and
+    # the block accumulator is the scop-external scalar pet then drops (POLYCC-009).
+    assert "range(N)" in txt, txt
+    assert "//" not in txt, txt
+    assert "128" not in txt, txt
+
+
+def test_full_sum_over_two_axes_is_a_plain_nest():
+    txt = ast.unparse(ast.fix_missing_locations(ast.Module(body=_full_sum_stmts(("M", "N")), type_ignores=[])))
+    assert "range(M)" in txt, txt
+    assert "range(N)" in txt, txt
+    assert "//" not in txt, txt
+
+
+def test_integer_sum_keeps_an_integer_seed():
+    args, kws = _call_args("np.sum(a)")
+    stmts = expand_sum(_target("s"), args, {"a": ("N", )}, kwargs=kws, local_dtypes={"a": "int64"})
+    txt = ast.unparse(ast.fix_missing_locations(ast.Module(body=stmts, type_ignores=[])))
+    assert "s = 0\n" in txt + "\n", txt
+    assert "range(N)" in txt, txt
+
+
+def test_axis_sum_keeps_its_per_element_loop():
+    args, kws = _call_args("np.sum(a, axis=1)")
+    stmts = expand_sum(_target("s"), args, {"a": ("M", "N")}, kwargs=kws, local_dtypes={})
+    txt = ast.unparse(ast.fix_missing_locations(ast.Module(body=stmts, type_ignores=[])))
+    assert "range(M)" in txt, txt
+    assert "range(N)" in txt, txt
+    assert "//" not in txt, txt
+
+
+def test_sum_adds_initial_exactly_once():
+    """``initial=`` seeds the WHOLE sum, not one seed per partial accumulator.
+
+    The blocked lowering this replaced once initialised every block accumulator to the reduction's
+    ``init``, which with ``initial=`` is the caller's seed -- so the answer gained one seed per
+    block, silently and only for arrays long enough to have more than one. The single chain cannot
+    reproduce that, and this stays as the numerical consumer of the ``initial=`` path.
+    """
+    n = 1000
+    a = np.random.default_rng(0).random(n)
+    src = ("import numpy as np\n"
+           "def f(a, out):\n"
+           "    out[0] = np.sum(a, initial=7.0)\n")
+    res = run_op(src,
+                 "f", {"a": a}, {"out": (1, )}, {"N": n},
+                 shapes={
+                     "a": "(N,)",
+                     "out": "(1,)"
+                 },
+                 backends=("c", "cpp", "fortran"))
+    assert all(v == "ok" or v.startswith("skip") for v in res.values()), res
+    assert any(v == "ok" for v in res.values()), f"no backend ran it: {res}"
+
+
+def test_large_fp32_sum_stays_within_the_reassociation_band():
+    """A long float32 sum against numpy's pairwise one, at a REASSOCIATION tolerance.
+
+    Reassociating a reduction is sanctioned, so the emitted single chain and numpy's pairwise sum
+    are both right answers and only a tolerance separates them. The data is deliberately well
+    conditioned -- uniform [0, 1), one sign, so no catastrophic cancellation and the sum's
+    condition number is 1; what is left is chain-length rounding alone. Measured through this
+    harness on this seeded data, n = 2**22, emitted float32, gcc -O2: **5.2e-05** relative
+    (gfortran, which vectorizes the chain, lands near numpy). ``rtol`` sits a factor ~4 above the
+    worse of the two, so a real defect -- a missed element, a wrong bound -- still fails loudly.
+
+    ``dtypes=`` is not optional: without it the harness emits float64, whose chain error is ~1e-11
+    and which therefore passes whatever the accumulation does -- a green test proving nothing.
+    """
+    n = 1 << 22
+    a = np.random.default_rng(0).random(n, dtype=np.float32)
+    src = ("import numpy as np\n"
+           "def f(a, out):\n"
+           "    out[0] = np.sum(a)\n")
+    res = run_op(src,
+                 "f", {"a": a}, {"out": (1, )}, {"N": n},
+                 shapes={
+                     "a": "(N,)",
+                     "out": "(1,)"
+                 },
+                 rtol=2e-4,
+                 atol=0.0,
+                 dtypes={
+                     "a": "float32",
+                     "out": "float32"
+                 },
+                 backends=("c", "cpp", "fortran"))
+    assert all(v == "ok" or v.startswith("skip") for v in res.values()), res
+    assert any(v == "ok" for v in res.values()), f"no backend ran it: {res}"

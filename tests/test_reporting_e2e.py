@@ -26,7 +26,8 @@ import numpy as np
 import pytest
 
 from hpcagent_bench import stats
-from hpcagent_bench.plotting import cell_summary, load_results, plot_distribution_grid, plot_heatmap
+from hpcagent_bench.plotting import (cell_summary, load_results, machine_groups, machine_output, plot_distribution_grid,
+                                     plot_heatmap)
 
 #: Known-good simple stencil that builds + validates under native dace (verified on this box).
 _NATIVE_KERNEL_STEM = "heat_3d"  # directory stem; recorded under short_name "heat3d"
@@ -49,7 +50,17 @@ def _native_env(cwd: pathlib.Path) -> dict:
         OMPI_MCA_btl="^openib",
         MPICH_NO_LOCAL="1",
         PMIX_MCA_gds="hash",
+        # The results DB is anchored to the REPO, not the CWD; point it at this test's work dir so a
+        # sweep does not write into the working tree.
+        HPCAGENT_BENCH_RECORD_DB_PATH=str(cwd / "hpcagent_bench.db"),
+        # tmp_path is tmpfs on many hosts and base_db_path refuses memory-backed storage outright.
+        # Without this the child dies before writing a row and the sweep silently reports "no native
+        # toolchain" instead of a failure.
+        HPCAGENT_BENCH_RECORD_ALLOW_MEMORY_DB="1",
     )
+    # Shard 0 rather than an inherited rank, so the assertions know which file to aggregate.
+    for rank_var in ("HPCAGENT_BENCH_DB_SHARD", "SLURM_PROCID", "OMPI_COMM_WORLD_RANK", "PMI_RANK"):
+        env.pop(rank_var, None)
     return env
 
 
@@ -63,9 +74,11 @@ def _capped(argv: List[str]) -> List[str]:
 
 def _db_has_validated(db: pathlib.Path, frameworks: List[str]) -> bool:
     """True iff ``db`` holds >= 1 validated preset-S row for every named framework."""
-    if not db.exists():
+    from hpcagent_bench.harness import recording
+    # The sweep filled its own shard; the base file is the aggregate built on read.
+    if not recording.shard_paths(str(db)) and not db.exists():
         return False
-    con = sqlite3.connect(db)
+    con = sqlite3.connect(recording.ensure_aggregated(str(db)))
     try:
         for fw in frameworks:
             n = con.execute("SELECT COUNT(*) FROM results WHERE framework=? AND validated=1 AND preset='S'",
@@ -97,6 +110,25 @@ def _attempt_native(work: pathlib.Path) -> bool:
     return _db_has_validated(db, ["numpy", "dace_cpu"])
 
 
+def _clean_native_leftovers(db: pathlib.Path) -> None:
+    """Remove any shard DB (+ -wal/-shm + prompt store) a partial :func:`_attempt_native` left
+    beside ``db``, plus ``db`` itself if that partial run already got aggregated into it.
+
+    ``_attempt_native`` can write real-hostname rows into a shard and even build ``db`` as their
+    aggregate before ``_db_has_validated`` decides the run does not count. Leaving the shard on
+    disk means the next ``ensure_aggregated`` call (``load_results`` / ``plot_*`` both make one)
+    re-merges those real rows into the synthetic DB we are about to write -- two machines instead
+    of one."""
+    from hpcagent_bench.harness import recording
+
+    for stale in recording.shard_paths(str(db)) + [str(db)]:
+        store = recording.prompt_store_dir(stale)
+        if store.is_dir():
+            shutil.rmtree(store)
+        for suffix in ("", "-wal", "-shm"):
+            pathlib.Path(str(stale) + suffix).unlink(missing_ok=True)
+
+
 def _build_synthetic(db: pathlib.Path) -> None:
     """Write a small SYNTHETIC results DB with the real schema: two structured-grid kernels x
     (numpy, dace_cpu, numba), a handful of jittered samples each plus a slow outlier on one cell
@@ -105,6 +137,7 @@ def _build_synthetic(db: pathlib.Path) -> None:
 
     from hpcagent_bench.frameworks.schema import Result, results_engine
 
+    _clean_native_leftovers(db)
     rng = np.random.default_rng(0)
     engine = results_engine(str(db))
     # (kernel short_name, domain) -- real short_names so the ordering resolves them to HPC.
@@ -131,7 +164,8 @@ def _build_synthetic(db: pathlib.Path) -> None:
                                datatype="float64",
                                variant=None,
                                prompt_hash=None,
-                               execution="native"))
+                               execution="native",
+                               cpu="test-cpu"))
         session.commit()
 
 
@@ -157,29 +191,49 @@ def test_reporting_pipeline_end_to_end(tmp_path, capsys) -> None:
     violin = work / "dist_violin.pdf"
     box = work / "dist_box.pdf"
 
-    plot_heatmap(benchmark="all", preset="S", datatype="float64", db=str(db), output=str(heatmap), usetex=False)
-    plot_distribution_grid(benchmark="all",
+    # Each call returns ONE path per machine in the DB, and the paths are what is asserted on --
+    # the figures are named after the hardware, so a hardcoded `heatmap.pdf` would only pass by
+    # accident. How many machines that is (and what they are called) is derived below, not assumed.
+    written = plot_heatmap(benchmark="all",
                            preset="S",
                            datatype="float64",
-                           kind="violin",
                            db=str(db),
-                           output=str(violin),
+                           output=str(heatmap),
                            usetex=False)
-    plot_distribution_grid(benchmark="all",
-                           preset="S",
-                           datatype="float64",
-                           kind="box",
-                           db=str(db),
-                           output=str(box),
-                           usetex=False)
+    written += plot_distribution_grid(benchmark="all",
+                                      preset="S",
+                                      datatype="float64",
+                                      kind="violin",
+                                      db=str(db),
+                                      output=str(violin),
+                                      usetex=False)
+    written += plot_distribution_grid(benchmark="all",
+                                      preset="S",
+                                      datatype="float64",
+                                      kind="box",
+                                      db=str(db),
+                                      output=str(box),
+                                      usetex=False)
 
-    for pdf in (heatmap, violin, box):
+    # Machine set straight from the reporting layer's own grouping key (plotting.machine_groups
+    # partitions on (cpu, gpu); no CPU name or machine count baked in here -- a DB with a real
+    # hostname, "test-cpu", or two machines must all pass the same way).
+    data = load_results(str(db), "all", "S", "float64")
+    machines = sorted({label for label, _ in machine_groups(data)})
+    assert machines, "no machine identity found in the results DB"
+
+    families = [str(heatmap), str(violin), str(box)]
+    expected = {machine_output(family, label) for family in families for label in machines}
+    assert {str(path) for path in written} == expected, f"got {sorted(written)}, expected {sorted(expected)}"
+    for stem in (heatmap, violin, box):
+        assert not stem.exists(), f"{stem} is the family name, never a written file"
+    for path in written:
+        pdf = pathlib.Path(path)
         assert pdf.exists(), pdf
         assert pdf.stat().st_size > 1000, f"{pdf} looks empty ({pdf.stat().st_size} bytes)"
         assert pdf.read_bytes()[:4] == b"%PDF"
 
     # --- the stats path: cleaned median + finite bootstrap CI --------------------------
-    data = load_results(str(db), "all", "S", "float64")
     assert not data.empty and "numpy" in set(data["framework"])
 
     summary = cell_summary(data)

@@ -16,6 +16,7 @@ rank > 2) from an ordinary 2-D one (which numba / pythran handle).
 import ast
 import copy
 import math
+from collections.abc import Sequence
 from typing import Dict, List, Optional, Tuple
 
 from numpyto_common import dtypes
@@ -127,7 +128,7 @@ def _is_ellipsis(e: ast.AST) -> bool:
 
 #: numpy reductions that take an ``axis`` (drops the reduced axes; no axis ->
 #: scalar). Used only for ndim propagation, not rewriting.
-_REDUCE_FNS = {"sum", "prod", "mean", "std", "var", "min", "max", "amin", "amax", "argmin", "argmax", "any", "all"}
+REDUCE_FNS = {"sum", "prod", "mean", "std", "var", "min", "max", "amin", "amax", "argmin", "argmax", "any", "all"}
 
 #: ufuncs whose result is always a boolean array (regardless of operand dtype).
 _BOOL_UFUNCS = {
@@ -136,14 +137,33 @@ _BOOL_UFUNCS = {
 }
 
 
-def _expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
+def _axis_count(args: List[ast.expr], keywords: List[ast.keyword]) -> Optional[int]:
+    """How many axes an ``axis=`` argument names. ``None`` when it is absent (numpy's "every
+    size-1 axis", which is not a compile-time count) or not a literal."""
+    kw = {k.arg: k.value for k in keywords}
+    axis = kw.get("axis") or (args[0] if args else None)
+    if axis is None:
+        return None
+    if isinstance(axis, (ast.Tuple, ast.List)):
+        return len(axis.elts)
+    return 1 if isinstance(axis, ast.Constant) and isinstance(axis.value, int) else None
+
+
+def expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
     """Best-effort ndim of an expression given the current rank table."""
     if isinstance(value, ast.Name):
         return ranks.get(value.id)
+    if isinstance(value, ast.Constant):
+        return 0 if isinstance(value.value, (bool, int, float, complex)) else None
+    # ``A.T`` reverses the axes, keeping the rank. Leaving it unknown silently mis-ranked every
+    # ``x = x @ w.T + b``: the matmul went undecided, and the enclosing ``+ b`` then reported the
+    # BIAS vector's rank 1 for a rank-2 result.
+    if isinstance(value, ast.Attribute) and value.attr == "T":
+        return expr_rank(value.value, ranks)
     if isinstance(value, ast.BinOp):
         if isinstance(value.op, ast.MatMult):
-            lr = _expr_rank(value.left, ranks)
-            rr = _expr_rank(value.right, ranks)
+            lr = expr_rank(value.left, ranks)
+            rr = expr_rank(value.right, ranks)
             if lr is None or rr is None:
                 return None
             # matmul: 1-D operands contract to a scalar; otherwise the result
@@ -151,19 +171,19 @@ def _expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
             if lr == 1 and rr == 1:
                 return 0
             return max(lr, rr)
-        lr = _expr_rank(value.left, ranks)
-        rr = _expr_rank(value.right, ranks)
+        lr = expr_rank(value.left, ranks)
+        rr = expr_rank(value.right, ranks)
         return max([r for r in (lr, rr) if r is not None], default=None)
     if isinstance(value, ast.UnaryOp):
-        return _expr_rank(value.operand, ranks)
+        return expr_rank(value.operand, ranks)
     if isinstance(value, ast.Compare):
-        rs = [_expr_rank(value.left, ranks)] + [_expr_rank(c, ranks) for c in value.comparators]
+        rs = [expr_rank(value.left, ranks)] + [expr_rank(c, ranks) for c in value.comparators]
         return max([r for r in rs if r is not None], default=None)  # bool mask keeps operand rank
     if isinstance(value, ast.BoolOp):
-        rs = [_expr_rank(v, ranks) for v in value.values]
+        rs = [expr_rank(v, ranks) for v in value.values]
         return max([r for r in rs if r is not None], default=None)
     if isinstance(value, ast.Subscript):
-        base = _expr_rank(value.value, ranks)
+        base = expr_rank(value.value, ranks)
         if base is None:
             return None
         sl = value.slice
@@ -186,20 +206,31 @@ def _expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
                 else:
                     drop += 1
             return base - drop
+        if isinstance(sl, ast.Call) and isinstance(sl.func, ast.Name) and sl.func.id == "tuple":
+            # ``A[tuple(axes)]`` is the WHOLE index, one entry per axis -- not the single scalar
+            # index the fall-through below assumes. How many axes it drops depends on what the
+            # sequence holds, which is not visible here; reporting ``base - 1`` invented a rank.
+            return None
         return base - 1  # single integer/Name index
     if isinstance(value, ast.Call):
         if isinstance(value.func, ast.Name) and value.func.id == "abs" and value.args:
-            return _expr_rank(value.args[0], ranks)  # builtin abs is elementwise
+            return expr_rank(value.args[0], ranks)  # builtin abs is elementwise
         if _np_fft_attr(value) and value.args:
-            return _expr_rank(value.args[0], ranks)  # fft/ifft/fftn... preserve rank
+            return expr_rank(value.args[0], ranks)  # fft/ifft/fftn... preserve rank
         attr = _np_attr(value)
         if attr in ("arange", "linspace"):
             return 1  # always 1-D
-        if attr in _REDUCE_FNS and value.args:
-            base = _expr_rank(value.args[0], ranks)
+        if attr in REDUCE_FNS and value.args:
+            base = expr_rank(value.args[0], ranks)
             if base is None:
                 return None
             kw = {k.arg: k.value for k in value.keywords}
+            # keepdims=True keeps every reduced axis at extent 1, so the rank is unchanged. Ignoring
+            # it under-counted by one and made the following ``np.squeeze(y, axis=-1)`` resolve -1
+            # against the WRONG rank -- it squeezed a different axis.
+            keep = kw.get("keepdims")
+            if isinstance(keep, ast.Constant) and keep.value is True:
+                return base
             ax = kw.get("axis") or (value.args[1] if len(value.args) > 1 else None)
             if ax is None:
                 return 0  # full reduction -> scalar
@@ -212,57 +243,79 @@ def _expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
                 return n
             a0 = value.args[0]
             if (isinstance(a0, ast.Attribute) and a0.attr == "shape"):
-                return _expr_rank(a0.value, ranks)  # np.zeros(C.shape, ...) keeps C's rank
+                return expr_rank(a0.value, ranks)  # np.zeros(C.shape, ...) keeps C's rank
             if isinstance(a0, (ast.Name, ast.Constant)):
                 return 1  # 1-D length
         if attr in _LIKE_CTORS and value.args:
-            return _expr_rank(value.args[0], ranks)
+            return expr_rank(value.args[0], ranks)
         if attr in ("reshape", ) and len(value.args) >= 2:
             n = _tuple_len(value.args[1])
             if n is not None:
                 return n
         if attr in ("copy", "ascontiguousarray", "asarray", "array") and value.args:
-            return _expr_rank(value.args[0], ranks)
+            return expr_rank(value.args[0], ranks)
+        if attr == "take" and len(value.args) >= 2:
+            # ``np.take(a, idx, axis=k)`` replaces axis k by the INDEX's own rank, so a scalar
+            # index drops it. The elementwise fallback below reported a's rank, which made the
+            # enclosing ``np.expand_dims`` place its newaxis in a nest one dimension too deep.
+            base = expr_rank(value.args[0], ranks)
+            idx = expr_rank(value.args[1], ranks)
+            return None if base is None or idx is None else base - 1 + idx
+        if attr in ("expand_dims", ) and value.args:
+            base = expr_rank(value.args[0], ranks)
+            return None if base is None else base + 1
+        if attr in ("squeeze", ) and value.args:
+            base = expr_rank(value.args[0], ranks)
+            axes = _axis_count(value.args[1:], value.keywords)
+            return None if base is None or axes is None else base - axes
         if attr == "matmul" and len(value.args) == 2:
-            return _expr_rank(ast.BinOp(left=value.args[0], op=ast.MatMult(), right=value.args[1]), ranks)
+            return expr_rank(ast.BinOp(left=value.args[0], op=ast.MatMult(), right=value.args[1]), ranks)
         # rank-preserving methods ``x.astype(dt)`` / ``x.copy()`` (receiver's rank).
         if (isinstance(value.func, ast.Attribute) and value.func.attr in ("astype", "copy", "ravel")):
-            return _expr_rank(value.func.value, ranks) if value.func.attr != "ravel" else 1
+            return expr_rank(value.func.value, ranks) if value.func.attr != "ravel" else 1
         # ``x.reshape((a, b))`` method form.
         if (isinstance(value.func, ast.Attribute) and value.func.attr == "reshape" and value.args):
-            n = _tuple_len(value.args[0]) or (len(value.args) if all(
-                isinstance(a, (ast.Name, ast.Constant)) for a in value.args) else None)
+            # Multi-arg spelling: ONE positional argument per dimension, so the rank is the
+            # argument count whatever each dimension expression looks like -- ``X.reshape(-1,
+            # X.shape[-1])`` (ls3df_scf) is rank 2, and neither ``-1`` (a UnaryOp) nor
+            # ``X.shape[-1]`` (a Subscript) is a bare Name. Requiring Name/Constant there read
+            # every such reshape as "rank unknown", which then reached np.linalg.cholesky as
+            # ndim 0. The single-arg spelling stays restricted: a lone Name may hold the whole
+            # shape TUPLE, which is a rank this cannot count.
+            n = _tuple_len(value.args[0])
+            if n is None and (len(value.args) > 1 or isinstance(value.args[0], (ast.Name, ast.Constant))):
+                n = len(value.args)
             if n is not None:
                 return n
         # Fallback: remaining np.<fn>(...) are elementwise/broadcasting ufuncs
         # (abs, sqrt, exp, less, minimum, where, conj, ...) -> max of arg ranks.
         # Rank-changing ops (constructors, reductions, reshape, matmul) return above.
         if attr is not None:
-            rs = [_expr_rank(a, ranks) for a in value.args]
+            rs = [expr_rank(a, ranks) for a in value.args]
             return max([r for r in rs if r is not None], default=None)
     return None
 
 
 def _call_return_rank(value: ast.AST, call_returns: Dict[str, int]) -> Optional[int]:
     """Rank of ``helper(...)`` when ``helper`` is a local function with a known
-    return rank -- ``_expr_rank`` alone returns None for a call to a non-numpy
+    return rank -- ``expr_rank`` alone returns None for a call to a non-numpy
     Name, so ``x = relu(a @ b)`` would leave ``x`` untracked."""
     if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
         return call_returns.get(value.func.id)
     return None
 
 
-def _rank_table(tree: ast.AST, seed: Dict[str, int], call_returns: Optional[Dict[str, int]] = None) -> Dict[str, int]:
+def rank_table(tree: ast.AST, seed: Dict[str, int], call_returns: Optional[Dict[str, int]] = None) -> Dict[str, int]:
     """Propagate ndim across straight-line assignments to a fixpoint. ``call_returns``
     (a ``{helper: return_ndim}`` map) lets a local bound to a helper call inherit
     that helper's return rank (the ML kernels thread arrays through relu/conv2d
-    helpers, which ``_expr_rank`` cannot see into)."""
+    helpers, which ``expr_rank`` cannot see into)."""
     ranks = dict(seed)
     for _ in range(8):
         changed = False
         for node in ast.walk(tree):
             if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
-                r = _expr_rank(node.value, ranks)
+                r = expr_rank(node.value, ranks)
                 if r is None and call_returns is not None:
                     r = _call_return_rank(node.value, call_returns)
                 if r is not None and ranks.get(node.targets[0].id) != r:
@@ -270,7 +323,32 @@ def _rank_table(tree: ast.AST, seed: Dict[str, int], call_returns: Optional[Dict
                     changed = True
         if not changed:
             break
+    _drop_rank_conflicts(tree, ranks, seed)
     return ranks
+
+
+def _drop_rank_conflicts(tree: ast.AST, ranks: Dict[str, int], seed: Dict[str, int]) -> None:
+    """Forget any name whose assignments do not AGREE on a rank.
+
+    The table is flow-insensitive, so a name reassigned to a differently-shaped value converges to
+    whichever assignment ran last -- and every consumer then reads that one rank at every program
+    point. ``x = x @ w.T + b`` followed by ``x = x + bias3d`` reported rank 3 for the rank-2 value at
+    the top, so ``x.shape`` expanded to three axes. One rank per name or none; a caller that needs
+    the value AT a statement has to track it itself.
+    """
+    per_name: Dict[str, Set[int]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            rank = expr_rank(node.value, ranks)
+            if rank is not None:
+                per_name.setdefault(node.targets[0].id, set()).add(rank)
+    for name, seen in per_name.items():
+        if len(seen) <= 1:
+            continue
+        if name in seed:
+            ranks[name] = seed[name]  # a declared array keeps its DECLARED rank, whatever a rebinding makes it
+        else:
+            ranks.pop(name, None)
 
 
 def _dtype_kind(value: ast.AST, dtypes: Dict[str, str]) -> Optional[str]:
@@ -404,7 +482,7 @@ class _BatchedMatmulToLoop(ast.NodeTransformer):
             a, b = _matmul_operands(mm)
             if not (isinstance(a, ast.Name) and isinstance(b, ast.Name)):
                 return False
-            ra, rb = _expr_rank(a, self.ranks), _expr_rank(b, self.ranks)
+            ra, rb = expr_rank(a, self.ranks), expr_rank(b, self.ranks)
             if (ra or 0) > 2 or (rb or 0) > 2:
                 return True
         return False
@@ -422,6 +500,22 @@ class _BatchedMatmulToLoop(ast.NodeTransformer):
                                  ctx=ast.Store())
         return None
 
+    def _allocation(self, name: str, value: ast.AST) -> Optional[ast.stmt]:
+        """The ``np.empty`` that BINDS a bare-Name target, or None when its extents are not exact:
+        the loop form only WRITES the target, so nothing would bind it (dace: "ctx used before
+        definition"). Exact means equal-rank operands -- ``A``'s extents with ``B``'s last."""
+        pairs = _matmul_pairs(value)
+        if len(pairs) != 1 or pairs[0] is not value:
+            return None  # the matmul is nested in a larger expression: its result extents are not this one's
+        a, b = _matmul_operands(value)
+        rank = expr_rank(a, self.ranks)
+        if not (isinstance(a, ast.Name) and isinstance(b, ast.Name)) or rank != expr_rank(b, self.ranks):
+            return None
+        if rank is None or rank < 3:
+            return None
+        dims = [f"{a.id}.shape[{k}]" for k in range(rank - 1)] + [f"{b.id}.shape[{rank - 1}]"]
+        return ast.parse(f"{name} = np.empty(({', '.join(dims)}), {a.id}.dtype)").body[0]
+
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         self.generic_visit(node)
         if len(node.targets) != 1 or not self._is_batched(node.value):
@@ -432,6 +526,13 @@ class _BatchedMatmulToLoop(ast.NodeTransformer):
         new_target = self._index_target(node.targets[0], "")  # probe form first
         if new_target is None:
             return node  # target not a recognised batched whole-array write
+        # A bare-Name target is a BINDING, not a write into an existing array: it needs its own
+        # allocation, and without an exact shape for it the statement stays verbatim.
+        alloc = None
+        if isinstance(node.targets[0], ast.Name):
+            alloc = self._allocation(node.targets[0].id, node.value)
+            if alloc is None:
+                return node
         bv = f"__bm{self._ctr}"
         self._ctr += 1
         self.changed = True
@@ -446,7 +547,8 @@ class _BatchedMatmulToLoop(ast.NodeTransformer):
                        iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[extent], keywords=[]),
                        body=[ast.Assign(targets=[new_target], value=new_value)],
                        orelse=[])
-        return ast.copy_location(loop, node)
+        ast.copy_location(loop, node)
+        return [ast.copy_location(alloc, node), loop] if alloc is not None else loop
 
 
 def _const_pair_widths(pad_width: ast.AST, rank: int):
@@ -509,7 +611,7 @@ class _PadInline(ast.NodeTransformer):
         if not (isinstance(mode, ast.Constant) and mode.value == "edge") or not call.args:
             return node  # only edge mode, array as first positional
         arr = call.args[0]
-        rank = _expr_rank(arr, self.ranks)
+        rank = expr_rank(arr, self.ranks)
         if rank is None or rank < 1:
             return node
         pad_width = kw.get("pad_width") or (call.args[1] if len(call.args) > 1 else None)
@@ -725,7 +827,7 @@ class _FftInline(ast.NodeTransformer):
         else:
             return node
         arg = node.value.args[0]
-        rank = _expr_rank(arg, self.ranks)
+        rank = expr_rank(arg, self.ranks)
         if rank is None or rank < 1:
             return node
         taxes, inverse = _fft_axes(fattr, node.value, rank)
@@ -820,7 +922,7 @@ class _FancyGatherHoister(ast.NodeTransformer):
         elts = node.slice.elts
         if not arank or len(elts) != arank:
             return node
-        elt_ranks = [_expr_rank(e, self.ranks) for e in elts]
+        elt_ranks = [expr_rank(e, self.ranks) for e in elts]
         arrs = [r for r in elt_ranks if r and r >= 1]
         if not arrs or any(r != arrs[0] for r in arrs):
             return node  # need >=1 index array; all arrays share the driver rank
@@ -1065,7 +1167,7 @@ class _ReduceAxisHoister(ast.NodeTransformer):
             ax = kw.get("axis") or (node.args[0] if node.args else None)
         else:
             return node
-        rank = _expr_rank(arg, self.ranks)
+        rank = expr_rank(arg, self.ranks)
         if rank is None or rank < 2:
             return node
         axes = _axis_list(ax, rank)
@@ -1132,6 +1234,73 @@ class _ReduceAxisInline(ast.NodeTransformer):
         return self._hoist(node)
 
 
+def _keepdims_index(axes: list[int]) -> list[ast.expr] | None:
+    """Subscript entries putting a length-1 axis back at each of ``axes`` -- the shape
+    ``keepdims=True`` produces -- WITHOUT knowing the operand's rank.
+
+    An ``...`` absorbs every axis the reduction left alone, so only the entries out to the
+    outermost reduced axis have to be spelled: all-non-negative axes anchor at the FRONT
+    (``axis=1`` -> ``[:, None, ...]``), all-negative ones at the BACK (``axis=-1`` ->
+    ``[..., None]``, ``axis=-2`` -> ``[..., None, :]``). Mixed signs place two axes against
+    opposite ends and only the rank says how they interleave, so those get ``None``.
+
+    An index DROPS an axis, a slice KEEPS it and a ``None`` INSERTS one, so every entry
+    here is a slice or a ``None``: the reduced axis comes back AT ITS OWN position, not
+    appended -- ``np.sum(x, axis=1, keepdims=True)`` on ``(N, M, K)`` is ``(N, 1, K)``.
+    """
+    if all(a >= 0 for a in axes):
+        entries: list[ast.expr] = [ast.Constant(value=None) if i in axes else ast.Slice() for i in range(max(axes) + 1)]
+        return entries + [ast.Constant(value=Ellipsis)]
+    if all(a < 0 for a in axes):
+        return [ast.Constant(value=Ellipsis)
+                ] + [ast.Constant(value=None) if i in axes else ast.Slice() for i in range(min(axes), 0)]
+    return None
+
+
+class _KeepdimsToNewaxis(ast.NodeTransformer):
+    """``np.sum(x, axis=1, keepdims=True)`` -> ``np.sum(x, axis=1)[:, None, ...]``.
+
+    dace's reductions declare no ``keepdims`` parameter at all (``_sum(pv, sdfg, state, a,
+    axis=None)`` in ``dace/frontend/python/replacements/reduction.py``), so the kwarg
+    refuses the whole program with ``_sum() got an unexpected keyword argument
+    'keepdims'``. The newaxis subscript restores exactly what the kwarg asked for.
+
+    Second in line behind :class:`_ReduceAxisInline`, which lowers the same call to an
+    explicit loop nest whenever it knows the operand's rank; this takes only what that
+    declined -- a reduction over a name the flow-insensitive rank table had to forget
+    (every ML port rebinds one ``x`` through differently-shaped stages). Hence the
+    rank-free spelling in :func:`_keepdims_index`.
+
+    Left alone: ``axis=None`` or no axis at all (numpy then keeps EVERY axis, and how many
+    that is is exactly the rank this does not have), a non-constant or mixed-sign axis, the
+    ``x.sum(...)`` method form, and any ``keepdims`` that is not a literal ``True`` -- a
+    literal ``False`` is numpy's own default and the frontend drops it before this runs."""
+
+    def __init__(self) -> None:
+        self.changed = False
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        self.generic_visit(node)
+        kw = next((k for k in node.keywords if k.arg == "keepdims"), None)
+        if kw is None or not node.args or _np_attr(node) not in _REDUCE_AXIS_OPS:
+            return node
+        if not (isinstance(kw.value, ast.Constant) and kw.value.value is True):
+            return node
+        ax = next(
+            (k.value for k in node.keywords if k.arg == "axis"), None) or (node.args[1] if len(node.args) > 1 else None)
+        given = ax.elts if isinstance(ax, (ast.Tuple, ast.List)) else ([ax] if ax is not None else [])
+        axes = [_const_int(e) for e in given]
+        if not axes or None in axes:
+            return node
+        entries = _keepdims_index(sorted(axes))
+        if entries is None:
+            return node
+        node.keywords = [k for k in node.keywords if k.arg != "keepdims"]
+        self.changed = True
+        index = ast.Tuple(elts=entries, ctx=ast.Load())
+        return ast.copy_location(ast.Subscript(value=node, slice=index, ctx=ast.Load()), node)
+
+
 class _CallFixups(ast.NodeTransformer):
     """Small call-form fixups for numba's narrower numpy surface:
     ``np.ndarray(shape, dtype=D)`` -> ``np.empty(shape, D)`` (numba has no
@@ -1147,7 +1316,7 @@ class _CallFixups(ast.NodeTransformer):
     def visit_Call(self, node: ast.Call):
         self.generic_visit(node)
         if (isinstance(node.func, ast.Name) and node.func.id == "abs" and len(node.args) == 1 and not node.keywords
-                and (_expr_rank(node.args[0], self.ranks) or 0) >= 1):
+                and (expr_rank(node.args[0], self.ranks) or 0) >= 1):
             self.changed = True
             npabs = ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="abs", ctx=ast.Load())
             return ast.copy_location(ast.Call(func=npabs, args=node.args, keywords=[]), node)
@@ -1194,7 +1363,7 @@ class _CallFixups(ast.NodeTransformer):
             x = node.args[0]
             kw = {k.arg: k.value for k in node.keywords}
             ax = kw.get("axis") or (node.args[1] if len(node.args) > 1 else None)
-            rank = _expr_rank(x, self.ranks)
+            rank = expr_rank(x, self.ranks)
             if rank is None:
                 return node
             if ax is None:
@@ -1206,6 +1375,19 @@ class _CallFixups(ast.NodeTransformer):
             slices = ", ".join("::-1" if d in axes else ":" for d in range(rank))
             self.changed = True
             return ast.copy_location(ast.parse(f"({ast.unparse(x)})[{slices}]", mode="eval").body, node)
+        if attr == "swapaxes" and len(node.args) == 3 and not node.keywords:
+            # np.swapaxes -> np.transpose: no backend implements swapaxes, dace makes it a callback.
+            rank = expr_rank(node.args[0], self.ranks)
+            axes = [a.value for a in node.args[1:] if isinstance(a, ast.Constant) and isinstance(a.value, int)]
+            if rank is None or len(axes) != 2:
+                return node
+            perm = list(range(rank))
+            i, j = axes[0] % rank, axes[1] % rank
+            perm[i], perm[j] = perm[j], perm[i]
+            self.changed = True
+            order = ", ".join(str(p) for p in perm)
+            return ast.copy_location(
+                ast.parse(f"np.transpose({ast.unparse(node.args[0])}, ({order}))", mode="eval").body, node)
         return node
 
 
@@ -1237,7 +1419,7 @@ class _UfuncOuterHoister(ast.NodeTransformer):
         if op not in _OUTER_OPS or len(node.args) != 2:
             return node
         a, b = node.args
-        if _expr_rank(a, self.ranks) != 1 or _expr_rank(b, self.ranks) != 1:
+        if expr_rank(a, self.ranks) != 1 or expr_rank(b, self.ranks) != 1:
             return node  # only the 1-D x 1-D outer grid
         p = f"__ao{self.ctr}"
         self.ctr += 1
@@ -1353,7 +1535,7 @@ class _MaskedAssignToLoop(ast.NodeTransformer):
             if self.ranks.get(idx.id) != arank or _dtype_kind(idx, self.dtypes) in ("int", "float", "complex"):
                 return node
         elif struct_mask:
-            if _expr_rank(idx, self.ranks) != arank:
+            if expr_rank(idx, self.ranks) != arank:
                 return node
         else:
             return node
@@ -1421,8 +1603,8 @@ def _is_bool_mask(mask: ast.AST, a: ast.AST, ranks: Dict[str, int], dtypes: Dict
     select (not an integer fancy index or a scalar/slice index)."""
     if isinstance(mask, (ast.Tuple, ast.Slice)) or _is_newaxis(mask):
         return False
-    ar = _expr_rank(a, ranks)
-    if ar is None or _expr_rank(mask, ranks) != ar:
+    ar = expr_rank(a, ranks)
+    if ar is None or expr_rank(mask, ranks) != ar:
         return False
     return _dtype_kind(mask, dtypes) == "bool"
 
@@ -1468,7 +1650,7 @@ class _MaskedReduceHoister(ast.NodeTransformer):
         p = f"__mr{self.ctr}"
         self.ctr += 1
         temp = f"{p}_o"
-        lines = _masked_reduce_lines(temp, a.id, ast.unparse(mask), _expr_rank(a, self.ranks), op, p)
+        lines = _masked_reduce_lines(temp, a.id, ast.unparse(mask), expr_rank(a, self.ranks), op, p)
         self.pre.extend(ast.parse("\n".join(lines)).body)
         return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
 
@@ -1549,7 +1731,7 @@ class _AddAtInline(ast.NodeTransformer):
         A = call.args[0].id
         elts = call.args[1].elts if isinstance(call.args[1], ast.Tuple) else [call.args[1]]
         vals = call.args[2] if len(call.args) > 2 else None
-        driver_rank = next((r for e in elts if (r := _expr_rank(e, self.ranks)) and r >= 1), None)
+        driver_rank = next((r for e in elts if (r := expr_rank(e, self.ranks)) and r >= 1), None)
         if driver_rank is None:
             return node
         p = f"__sc{self._ctr}"
@@ -1562,7 +1744,7 @@ class _AddAtInline(ast.NodeTransformer):
         # for an already-contiguous array under numba.
         pre, idx_exprs, first_arr = [], [], None
         for j, e in enumerate(elts):
-            if (_expr_rank(e, self.ranks) or 0) >= 1:
+            if (expr_rank(e, self.ranks) or 0) >= 1:
                 t = f"{p}_x{j}"
                 pre.append(f"{t} = np.ascontiguousarray({ast.unparse(e)})")
                 idx_exprs.append(f"{t}[{it}]")
@@ -1574,7 +1756,7 @@ class _AddAtInline(ast.NodeTransformer):
         else:
             tv = f"{p}_v"
             pre.append(f"{tv} = np.ascontiguousarray({ast.unparse(vals)})")
-            vr = _expr_rank(vals, self.ranks)
+            vr = expr_rank(vals, self.ranks)
             if vr and vr not in (0, driver_rank):
                 # vals broadcasts against the index shape; only a scalar or a
                 # driver-shaped vals is unambiguous. Anything else would need
@@ -1761,7 +1943,7 @@ class _IntMatmulHoister(ast.NodeTransformer):
     def _lower(self, a: ast.expr, b: ast.expr):
         if _dtype_kind(a, self.dtypes) not in ("int", "bool") or _dtype_kind(b, self.dtypes) not in ("int", "bool"):
             return None  # not (definitely) an integer matmul -> leave for numba's float @
-        ra, rb = _expr_rank(a, self.ranks), _expr_rank(b, self.ranks)
+        ra, rb = expr_rank(a, self.ranks), expr_rank(b, self.ranks)
         if ra is None or rb is None:
             return None  # can't determine the shape -> leave verbatim (a clean skip),
             # NOT a raise: an unknown rank is an inference gap, not a known-unsupported shape.
@@ -1903,7 +2085,7 @@ class _RepeatAxisHoister(ast.NodeTransformer):
         if not (isinstance(ax, ast.Constant) and isinstance(ax.value, int)):
             return node  # no axis / non-constant -> leave verbatim (a clean skip)
         x, m = node.args[0], node.args[1]
-        rank = _expr_rank(x, self.ranks)
+        rank = expr_rank(x, self.ranks)
         if rank is None:
             return node
         k = ax.value % rank
@@ -1999,8 +2181,8 @@ class _NormalizeNegativeAxis(ast.NodeTransformer):
             return None
         a0 = node.args[0]
         if isinstance(a0, (ast.Tuple, ast.List)):
-            return _expr_rank(a0.elts[0], self.ranks) if a0.elts else None
-        return _expr_rank(a0, self.ranks)
+            return expr_rank(a0.elts[0], self.ranks) if a0.elts else None
+        return expr_rank(a0, self.ranks)
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
@@ -2146,6 +2328,69 @@ class _DeadBranchElim(ast.NodeTransformer):
             self.changed = True
             return node.orelse or [ast.copy_location(ast.Pass(), node)]
         return node
+
+
+#: An ``or`` rewrite CLONES the body once per operand, so a wide disjunction trades one
+#: frontend refusal for a source blow-up; the runtime-axis dispatch that needs it has two.
+_BOOLOP_CLONE_MAX = 4
+
+
+def _symbolic_eq_test(node: ast.expr) -> bool:
+    """A single-comparator ``==`` / ``!=`` -- the one shape dace replaces with a bare
+    sympy object, and so the only one that has to leave a ``BoolOp`` list field."""
+    return (isinstance(node, ast.Compare) and len(node.comparators) == 1
+            and isinstance(node.ops[0], (ast.Eq, ast.NotEq)))
+
+
+class _BoolOpIfToChain(ast.NodeTransformer):
+    """``if A or B: body`` -> ``if A: body elif B: body``; ``if A and B: body`` ->
+    ``if A: (if B: body)``.
+
+    dace's ``RewriteSympyEquality.visit_Compare`` returns a bare ``sympy.Eq``/``Ne`` for a
+    comparison with a SYMBOL operand, which breaks the ``ast.NodeTransformer`` contract:
+    stock ``generic_visit`` reads a non-AST return from a LIST field as a list of
+    replacement nodes and ``.extend()``s it, so a symbolic ``==`` inside ``BoolOp.values``
+    refuses the program with ``'Equality' object is not iterable``. The SAME comparison as
+    ``If.test`` -- a single field -- is a plain ``setattr`` and works. The rewrite is
+    therefore exactly "no such comparison stays a direct child of a ``BoolOp`` list", which
+    is what the frontend's runtime-axis dispatch (``if dim == 0 or dim == -2:``) needs.
+
+    Both forms preserve short-circuit evaluation EXACTLY -- every operand is evaluated at
+    most once, in source order, under the same condition as before -- so an operand with a
+    side effect stays safe. Only the BODY is cloned, into branches that are mutually
+    exclusive, so at most one copy ever runs and the tests all stay symbolic (a scalar
+    flag would have turned a branch dace specialises at compile time into a
+    data-dependent one).
+
+    Left alone: an ``and`` carrying an ``else`` (that one would have to clone the ELSE into
+    every level), a disjunction too wide to clone, and a test with no bare ``==``/``!=`` in
+    it -- nothing there trips the dace bug, and splitting one would cost
+    :class:`_DeadBranchElim` its whole-BoolOp constant fold."""
+
+    def __init__(self) -> None:
+        self.changed = False
+
+    def visit_If(self, node: ast.If) -> ast.AST:
+        self.generic_visit(node)
+        test = node.test
+        if not isinstance(test, ast.BoolOp) or not any(_symbolic_eq_test(v) for v in test.values):
+            return node
+        if isinstance(test.op, ast.And):
+            if node.orelse:
+                return node
+            inner: List[ast.stmt] = node.body
+            for value in reversed(test.values):
+                inner = [ast.If(test=value, body=inner, orelse=[])]
+        else:
+            if len(test.values) > _BOOLOP_CLONE_MAX:
+                return node
+            inner = node.orelse
+            for value in reversed(test.values):
+                inner = [ast.If(test=value, body=copy.deepcopy(node.body), orelse=inner)]
+        self.changed = True
+        # A rebuilt test may itself be a BoolOp (``(a or b) and c``); each rewrite strictly
+        # shrinks the test's nesting, so re-visiting terminates.
+        return ast.copy_location(self.visit(inner[0]), node)
 
 
 def _fd_step(precision: Optional[str] = None) -> str:
@@ -2740,14 +2985,14 @@ class _ReshapeMatmulInline(ast.NodeTransformer):
         if not inner or not isinstance(inner[0], ast.Name) or not isinstance(mm[1], ast.Name):
             return node
         X, Y, mid = inner[0], mm[1], inner[1]
-        rX = _expr_rank(X, self.ranks)
+        rX = expr_rank(X, self.ranks)
         # Fire only on the unit-dim-insertion batched form; other reshapes -> verbatim.
         if not (isinstance(mid, ast.Tuple) and rX and len(mid.elts) == rX + 1
                 and isinstance(mid.elts[-2], ast.Constant) and mid.elts[-2].value == 1):
             return node
-        if _expr_rank(Y, self.ranks) != 2 or rX < 2:
+        if expr_rank(Y, self.ranks) != 2 or rX < 2:
             raise DesugarError(f"reshape-batched matmul: unit-dim form needs a 2-D right operand and a >=2-D "
-                               f"left operand (got left ndim {rX}, right ndim {_expr_rank(Y, self.ranks)})")
+                               f"left operand (got left ndim {rX}, right ndim {expr_rank(Y, self.ranks)})")
         p = f"__dg{self._ctr}"
         self._ctr += 1
         batch = list(range(rX - 1))
@@ -2877,7 +3122,7 @@ class _LinalgHoister(ast.NodeTransformer):
 
     def _chol(self, node: ast.Call):
         a = node.args[0]
-        ra = _expr_rank(a, self.ranks)
+        ra = expr_rank(a, self.ranks)
         if ra is None:
             return node  # unknown rank -> verbatim (inference gap, not a raise)
         if ra != 2:
@@ -2893,7 +3138,7 @@ class _LinalgHoister(ast.NodeTransformer):
         if len(node.args) < 2:
             return node
         a, b = node.args[0], node.args[1]
-        ra, rb = _expr_rank(a, self.ranks), _expr_rank(b, self.ranks)
+        ra, rb = expr_rank(a, self.ranks), expr_rank(b, self.ranks)
         if ra is None or rb is None:
             return node
         if ra != 2:
@@ -2910,7 +3155,7 @@ class _LinalgHoister(ast.NodeTransformer):
 
     def _inv(self, node: ast.Call):
         a = node.args[0]
-        ra = _expr_rank(a, self.ranks)
+        ra = expr_rank(a, self.ranks)
         if ra is None:
             return node
         if ra != 2:
@@ -3410,8 +3655,8 @@ class _EighInline(ast.NodeTransformer):
             w, v = tgt.id, None
         else:
             return node
-        if _expr_rank(a_node, self.ranks) not in (2, None) or (b_node is not None
-                                                               and _expr_rank(b_node, self.ranks) not in (2, None)):
+        if expr_rank(a_node, self.ranks) not in (2, None) or (b_node is not None
+                                                              and expr_rank(b_node, self.ranks) not in (2, None)):
             return node
         p = f"__eigh{self._ctr}"
         self._ctr += 1
@@ -3483,7 +3728,7 @@ def _param_body_rank_evidence(fn: ast.FunctionDef) -> Dict[str, int]:
 def _return_rank(fn: ast.FunctionDef, ranks: Dict[str, int]) -> Optional[int]:
     """Rank of ``fn``'s returned value (the max over its ``return`` statements),
     given a rank table for its body -- so a caller can propagate it."""
-    rs = [_expr_rank(n.value, ranks) for n in ast.walk(fn) if isinstance(n, ast.Return) and n.value is not None]
+    rs = [expr_rank(n.value, ranks) for n in ast.walk(fn) if isinstance(n, ast.Return) and n.value is not None]
     rs = [r for r in rs if r is not None]
     return max(rs) if rs else None
 
@@ -3509,7 +3754,7 @@ def _infer_param_ranks(funcs: List[ast.FunctionDef], kernel_name: str,
             base = dict(seeds[fn.name])
             if fn.name == kernel_name:
                 base.update(kir_seed)
-            ranks = _rank_table(fn, base, call_returns=ret_rank)
+            ranks = rank_table(fn, base, call_returns=ret_rank)
             rr = _return_rank(fn, ranks)
             if rr is not None and ret_rank.get(fn.name) != rr:
                 ret_rank[fn.name] = rr
@@ -3520,7 +3765,7 @@ def _infer_param_ranks(funcs: List[ast.FunctionDef], kernel_name: str,
                     for i, arg in enumerate(node.args):
                         if i >= len(params[callee]):
                             break
-                        r = _expr_rank(arg, ranks)
+                        r = expr_rank(arg, ranks)
                         if r is None:
                             r = _call_return_rank(arg, ret_rank)
                         pname = params[callee][i]
@@ -3732,13 +3977,444 @@ class _ElementalUfuncToPrimitive(ast.NodeTransformer):
         return node
 
 
+def _ix_vectors(node: ast.AST) -> Optional[List[ast.expr]]:
+    """``np.ix_(i, j, k)`` call -> its index vectors, else None."""
+    if _np_attr(node) == "ix_" and node.args and not node.keywords:
+        return list(node.args)
+    return None
+
+
+#: augmented-assignment op -> its source spelling (the scatter loop is emitted as text).
+_AUG_OP_SRC = {
+    ast.Add: "+=",
+    ast.Sub: "-=",
+    ast.Mult: "*=",
+    ast.Div: "/=",
+    ast.FloorDiv: "//=",
+    ast.Mod: "%=",
+    ast.Pow: "**=",
+    ast.BitAnd: "&=",
+    ast.BitOr: "|=",
+    ast.BitXor: "^=",
+    ast.LShift: "<<=",
+    ast.RShift: ">>="
+}
+
+
+class _IxWriteToLoop(ast.NodeTransformer):
+    """``A[np.ix_(i, j, k)] = / += rhs`` -> an explicit loop nest over the index
+    vectors. ``np.ix_`` selects the OUTER PRODUCT of its vectors -- element
+    ``(p, q, r)`` of the selection is ``A[i[p], j[q], k[r]]``, never the zip-style
+    point-wise gather -- so one loop per vector, each vector read by its OWN
+    iterator, is the exact lowering. The DaCe frontend otherwise lowers ``np.ix_``
+    to a CALLBACK, which is opaque to the SDFG; numba and pythran have no
+    ``np.ix_`` at all.
+
+    Only the WRITE form with one vector per array axis is lowered. Left verbatim:
+    a partial ``np.ix_`` (fewer vectors than axes -- it whole-slices the trailing
+    ones), a boolean vector (it selects through ``nonzero``, so its extent is not
+    its length), and a read-position ``np.ix_`` (a gather, needing its own
+    allocation). A repeated value inside one index vector ACCUMULATES here where
+    numpy's gather-add-scatter applies the update once -- undetectable statically,
+    and no kernel builds an ``ix_`` grid with duplicates."""
+
+    def __init__(self, ranks: Dict[str, int], dtypes: Dict[str, str]):
+        self.ranks = ranks
+        self.dtypes = dtypes
+        self.changed = False
+        self._ctr = 0
+
+    def _lower(self, node: ast.stmt, target: ast.expr, op: str) -> ast.AST:
+        if not (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)):
+            return node
+        vecs = _ix_vectors(target.slice)
+        if vecs is None or self.ranks.get(target.value.id) != len(vecs):
+            return node
+        if any(_dtype_kind(v, self.dtypes) == "bool" for v in vecs):
+            return node
+        p = f"__ix{self._ctr}"
+        self._ctr += 1
+        lines: List[str] = []
+
+        def hoist(e: ast.expr, tmp: str) -> str:
+            """Bind ``e`` to ``tmp`` once, before the nest; a bare Name is already
+            a binding. numpy evaluates the whole right-hand side before the
+            scattered store, and an in-loop array expression would materialise
+            once per element."""
+            if isinstance(e, ast.Name):
+                return e.id
+            lines.append(f"{tmp} = {ast.unparse(e)}")
+            return tmp
+
+        xs = [hoist(v, f"{p}_x{k}") for k, v in enumerate(vecs)]
+        val = hoist(node.value, f"{p}_v")
+        iters = [f"{p}_i{k}" for k in range(len(vecs))]
+        indent = ""
+        for k in range(len(vecs)):
+            lines.append(f"{indent}for {iters[k]} in range({xs[k]}.shape[0]):")
+            indent += "    "
+        # A rank-0 rhs is that same scalar at every grid point; anything else carries one
+        # element per point. The rhs rank itself is NOT trusted for the split (expr_rank
+        # over-counts an np.einsum result), so a genuinely broadcasting rhs fails loudly.
+        rhs = val if expr_rank(node.value, self.ranks) == 0 else f"{val}[{', '.join(iters)}]"
+        idx = ", ".join(f"{xs[k]}[{iters[k]}]" for k in range(len(vecs)))
+        lines.append(f"{indent}{target.value.id}[{idx}] {op} {rhs}")
+        self.changed = True
+        return [ast.copy_location(s, node) for s in ast.parse("\n".join(lines)).body]
+
+    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+        self.generic_visit(node)
+        if len(node.targets) != 1:
+            return node
+        return self._lower(node, node.targets[0], "=")
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST:
+        self.generic_visit(node)
+        op = _AUG_OP_SRC.get(type(node.op))
+        return node if op is None else self._lower(node, node.target, op)
+
+
+#: builtins a constant comprehension may call: pure, side-effect free, and identical
+#: at desugar time and at runtime.
+_CONST_BUILTINS = {
+    "abs": abs,
+    "bool": bool,
+    "divmod": divmod,
+    "enumerate": enumerate,
+    "float": float,
+    "int": int,
+    "len": len,
+    "list": list,
+    "max": max,
+    "min": min,
+    "pow": pow,
+    "range": range,
+    "reversed": reversed,
+    "round": round,
+    "sorted": sorted,
+    "str": str,
+    "sum": sum,
+    "tuple": tuple,
+    "zip": zip
+}
+
+
+def _const_name_values(fn: ast.AST) -> Dict[str, object]:
+    """Names bound EXACTLY once inside ``fn``, to a literal -> that literal's value.
+    A name stored anywhere else (a second assignment, a loop target, a parameter)
+    is dropped: this table is flow-insensitive, so it may only hold values that are
+    the same at every program point."""
+    stores: Dict[str, int] = {}
+    values: Dict[str, object] = {}
+    if isinstance(fn, ast.FunctionDef):
+        for a in fn.args.posonlyargs + fn.args.args + fn.args.kwonlyargs:
+            stores[a.arg] = stores.get(a.arg, 0) + 1
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            stores[node.id] = stores.get(node.id, 0) + 1
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            try:
+                values[node.targets[0].id] = ast.literal_eval(node.value)
+            except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+                continue
+    return {n: v for n, v in values.items() if stores.get(n) == 1}
+
+
+def _const_literal_ast(value: object) -> Optional[ast.expr]:
+    """A folded python value -> its literal AST, or None when it has no literal
+    spelling (an empty set, a non-scalar leaf such as a range/generator)."""
+    if value is None or isinstance(value, (bool, int, float, complex, str, bytes)):
+        return ast.Constant(value=value)
+    if isinstance(value, (list, tuple, set, frozenset)):
+        if isinstance(value, (set, frozenset)):
+            try:
+                value = sorted(value)  # set iteration is hash order -- the emitted source must not vary
+            except TypeError:
+                return None
+            elts = [_const_literal_ast(v) for v in value]
+            return ast.Set(elts=elts) if elts and all(e is not None for e in elts) else None
+        elts = [_const_literal_ast(v) for v in value]
+        if any(e is None for e in elts):
+            return None
+        if isinstance(value, list):
+            return ast.List(elts=elts, ctx=ast.Load())
+        return ast.Tuple(elts=elts, ctx=ast.Load())
+    if isinstance(value, dict):
+        keys = [_const_literal_ast(k) for k in value]
+        vals = [_const_literal_ast(v) for v in value.values()]
+        if any(e is None for e in keys + vals):
+            return None
+        return ast.Dict(keys=keys, values=vals)
+    return None
+
+
+class _ConstComprehensionFold(ast.NodeTransformer):
+    """``[int(round(fr * 4)) for fr in (0.5, 1.0)]`` -> the literal ``[2, 4]``. The
+    DaCe frontend refuses every comprehension (``Keyword "ListComp" disallowed``),
+    and a comprehension reading only constants has no runtime part to keep.
+
+    A comprehension touching ANY value the runtime supplies (a parameter, an array
+    element, a symbol) is left ALONE -- unrolling it would pin a trip count only the
+    runtime knows, and a loud refusal downstream beats a wrong unroll. Attribute and
+    subscript reads, lambdas, and calls to anything but a whitelisted pure builtin
+    all count as runtime. Inner comprehensions fold first, so a nested one is a
+    literal by the time the outer is tested."""
+
+    def __init__(self, consts: Dict[str, object]):
+        self.consts = consts
+        self.changed = False
+
+    def _foldable(self, node: ast.expr) -> bool:
+        bound = {n.id for g in node.generators for n in ast.walk(g.target) if isinstance(n, ast.Name)}
+        for n in ast.walk(node):
+            if isinstance(n, (ast.Attribute, ast.Subscript, ast.Lambda, ast.Starred, ast.NamedExpr, ast.Await,
+                              ast.Yield, ast.YieldFrom, ast.JoinedStr)):
+                return False
+            if isinstance(n, ast.Call) and not (isinstance(n.func, ast.Name) and n.func.id in _CONST_BUILTINS):
+                return False
+            if isinstance(n, ast.Name) and not (n.id in bound or n.id in self.consts or n.id in _CONST_BUILTINS):
+                return False
+            if isinstance(n, ast.comprehension) and n.is_async:
+                return False
+        return True
+
+    def _fold(self, node: ast.expr) -> ast.AST:
+        if not self._foldable(node):
+            return node
+        expr = ast.Expression(body=copy.deepcopy(node))
+        ast.fix_missing_locations(expr)
+        # A comprehension body runs in its own scope and resolves free names through
+        # GLOBALS, so the constant table goes in as globals, not as locals.
+        env = {"__builtins__": {}, **_CONST_BUILTINS, **self.consts}
+        try:
+            value = eval(compile(expr, "<desugar>", "eval"), env)  # noqa: S307 -- every name is a proven constant
+        except Exception:  # noqa: BLE001 -- any failure to evaluate just means "not foldable"
+            return node
+        if isinstance(node, ast.GeneratorExp):
+            value = tuple(value)  # a genexp yields once; a tuple literal is the constant form of that
+        lit = _const_literal_ast(value)
+        if lit is None:
+            return node
+        self.changed = True
+        return ast.copy_location(lit, node)
+
+    def visit_ListComp(self, node: ast.ListComp) -> ast.AST:
+        self.generic_visit(node)
+        return self._fold(node)
+
+    def visit_SetComp(self, node: ast.SetComp) -> ast.AST:
+        self.generic_visit(node)
+        return self._fold(node)
+
+    def visit_DictComp(self, node: ast.DictComp) -> ast.AST:
+        self.generic_visit(node)
+        return self._fold(node)
+
+    def visit_GeneratorExp(self, node: ast.GeneratorExp) -> ast.AST:
+        self.generic_visit(node)
+        return self._fold(node)
+
+
+#: An unrolled comprehension copies its body once per element, so a long iterable trades one
+#: frontend refusal for a source blow-up (and a matching SDFG); no constant grid comes close.
+_UNROLL_MAX = 64
+
+
+def _const_iterable(node: ast.expr, consts: dict[str, object]) -> Sequence[object] | None:
+    """A comprehension iterable already fixed at desugar time -> its values, else None.
+    Covers a literal list/tuple, a ``range`` of literal bounds, and a name the const
+    table resolved."""
+    if isinstance(node, ast.Name):
+        value = consts.get(node.id)
+        return value if isinstance(value, (list, tuple)) else None
+    if isinstance(node, (ast.List, ast.Tuple)):
+        try:
+            return ast.literal_eval(node)
+        except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+            return None
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "range" and node.args
+            and len(node.args) < 4 and not node.keywords):
+        bounds = [_const_int(a) for a in node.args]
+        if None in bounds or bounds[2:] == [0]:
+            return None  # a zero step is a ValueError, not an iterable
+        return range(*bounds)
+    return None
+
+
+class _SubstConstName(ast.NodeTransformer):
+    """Every LOAD of ``name`` -> ``value`` (one unrolled comprehension iteration)."""
+
+    def __init__(self, name: str, value: ast.expr) -> None:
+        self.name = name
+        self.value = value
+
+    def visit_Name(self, node: ast.Name) -> ast.AST:
+        if node.id != self.name or not isinstance(node.ctx, ast.Load):
+            return node
+        return ast.copy_location(copy.deepcopy(self.value), node)
+
+
+class _ListCompUnroll(ast.NodeTransformer):
+    """``[f(x, i) for i in range(3)]`` -> ``[f(x, 0), f(x, 1), f(x, 2)]``.
+
+    The DaCe frontend refuses every comprehension. ``_ConstComprehensionFold`` already
+    folds the ones that are constant END TO END; this takes the next case -- a CONSTANT
+    iterable driving a RUNTIME body (distribution_search's ``a_grid`` row). Only the loop
+    goes away, the body stays verbatim, so nothing runtime is evaluated early.
+
+    Left alone: a non-constant iterable (its trip count is a runtime value), ANY ``if``
+    guard (a runtime guard has no unrolled form, and folding a constant one buys a case
+    no kernel has), more than one ``for`` clause, a non-Name target, an element the
+    literal spelling cannot express, and a body that REBINDS the target -- a lambda
+    parameter or an inner comprehension of the same name would capture the substituted
+    literal instead of shadowing it."""
+
+    def __init__(self, consts: dict[str, object]) -> None:
+        self.consts = consts
+        self.changed = False
+
+    def visit_ListComp(self, node: ast.ListComp) -> ast.AST:
+        self.generic_visit(node)  # an inner comprehension folds/unrolls first
+        if len(node.generators) != 1:
+            return node
+        gen = node.generators[0]
+        if gen.ifs or gen.is_async or not isinstance(gen.target, ast.Name):
+            return node
+        values = _const_iterable(gen.iter, self.consts)
+        if values is None or len(values) > _UNROLL_MAX:
+            return node
+        name = gen.target.id
+        shadowed = any(
+            isinstance(n, ast.Lambda) or (isinstance(n, ast.Name) and n.id == name and not isinstance(n.ctx, ast.Load))
+            for n in ast.walk(node.elt))
+        if shadowed:
+            return node
+        elts: list[ast.expr] = []
+        for v in values:
+            lit = _const_literal_ast(v)
+            if lit is None:
+                return node
+            elts.append(_SubstConstName(name, lit).visit(copy.deepcopy(node.elt)))
+        self.changed = True
+        return ast.copy_location(ast.List(elts=elts, ctx=ast.Load()), node)
+
+
+#: The lowering's allocation-site marker. Its dace expansion is keyed BY NAME
+#: (``zeros_locals``) and DROPS an allocation whose target it cannot find there, so a
+#: marker-bound name has to keep the name the lowering recorded.
+_ZEROS_MARKER = "__hpcagent_bench_zeros__"
+
+#: Version suffix. Distinct from the lowering pass's ``__v<n>`` (that one renames the
+#: C/Fortran IR tree), so a name that went through both carries two readable versions.
+_SSA_SUFFIX = "__ssa"
+
+
+def _store_root(target: ast.expr) -> str | None:
+    """The name a store target ultimately writes into (``x``, ``x[i]``, ``x.f[i]``)."""
+    while isinstance(target, (ast.Subscript, ast.Attribute)):
+        target = target.value
+    return target.id if isinstance(target, ast.Name) else None
+
+
+def _ssa_versionable(fn: ast.AST, pinned: set[str]) -> set[str]:
+    """Names a straight-line SSA rename may re-version: bound MORE THAN ONCE by a plain
+    ``name = ...`` at the TOP level of ``fn``, and touched no other way.
+
+    Every other binding or escape blocks the name outright. Merging two versions across
+    an ``if`` / loop body needs a phi this pass does not build; an element write
+    (``x[i] = ...``) mutates the buffer the CURRENT version is bound to; and a parameter,
+    a ``return``, a ``global``/``nonlocal``, a closure read or a ``pinned`` kir name is
+    read by something outside this body, which would still spell the original name."""
+    if not isinstance(fn, ast.FunctionDef):
+        return set()  # module scope: these are globals, and a rename escapes the scope
+    args = fn.args
+    blocked = {p.arg for p in args.posonlyargs + args.args + args.kwonlyargs} | pinned
+    blocked.update(v.arg for v in (args.vararg, args.kwarg) if v is not None)
+    counts: dict[str, int] = {}
+    plain: set[int] = set()
+    for stmt in fn.body:
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
+            counts[stmt.targets[0].id] = counts.get(stmt.targets[0].id, 0) + 1
+            plain.add(id(stmt.targets[0]))
+            if (isinstance(stmt.value, ast.Call) and isinstance(stmt.value.func, ast.Name)
+                    and stmt.value.func.id == _ZEROS_MARKER):
+                blocked.add(stmt.targets[0].id)
+    used: set[str] = set()
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Name):
+            used.add(node.id)
+            if not isinstance(node.ctx, ast.Load) and id(node) not in plain:
+                blocked.add(node.id)  # a nested-block, loop-target, unpack or del binding
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            blocked.update(node.names)
+        elif isinstance(node, ast.ExceptHandler) and node.name is not None:
+            blocked.add(node.name)  # ``except E as e`` binds through a str field, not a Name node
+        elif isinstance(node, (ast.Return, ast.Lambda)) or (isinstance(node, ast.FunctionDef) and node is not fn):
+            blocked.update(n.id for n in ast.walk(node) if isinstance(n, ast.Name))
+        elif isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+            for target in (node.targets if isinstance(node, ast.Assign) else [node.target]):
+                for sub in ast.walk(target):
+                    root = _store_root(sub) if isinstance(sub, (ast.Subscript, ast.Attribute)) else None
+                    if root is not None:
+                        blocked.add(root)
+    return {
+        n
+        for n, c in counts.items()
+        if c > 1 and n not in blocked and not any(u.startswith(n + _SSA_SUFFIX) for u in used)
+    }
+
+
+class _SsaRename(ast.NodeTransformer):
+    """``x = a`` ... ``x = b`` -> ``x = a`` ... ``x__ssa1 = b``, with every read up to the
+    next rebinding following the new name.
+
+    DaCe refuses a second ``x = <array>`` whose shape/dtype differs from the first
+    (``Cannot reassign value to variable "x"``); one name per value removes the refusal
+    without changing what the program computes. Only a name :func:`_ssa_versionable`
+    cleared is touched, so a version never has to be merged across a branch, and a name
+    bound once keeps its spelling (no churn in the generated corpus)."""
+
+    def __init__(self, fn: ast.AST, pinned: set[str]) -> None:
+        self.fn = fn
+        self.pinned = pinned
+        self.versionable: set[str] | None = None
+        self.seen: dict[str, int] = {}
+        self.version: dict[str, str] = {}
+        self.changed = False
+
+    def visit_Name(self, node: ast.Name) -> ast.AST:
+        current = self.version.get(node.id)
+        if current is None or not isinstance(node.ctx, ast.Load):
+            return node
+        return ast.copy_location(ast.Name(id=current, ctx=node.ctx), node)
+
+    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+        if self.versionable is None:
+            # The driver rebinds ``fn.body`` after EVERY pass, so the scan has to see the body
+            # this pass is walking -- not the one that existed when the pass list was built.
+            self.versionable = _ssa_versionable(self.fn, self.pinned)
+        self.generic_visit(node)  # the rhs (and any x[i] base) reads the CURRENT version
+        target = node.targets[0] if len(node.targets) == 1 else None
+        if not isinstance(target, ast.Name) or target.id not in self.versionable:
+            return node
+        self.seen[target.id] = nth = self.seen.get(target.id, 0) + 1
+        if nth > 1:
+            fresh = f"{target.id}{_SSA_SUFFIX}{nth - 1}"
+            self.version[target.id] = fresh
+            target.id = fresh
+            self.changed = True
+        return node
+
+
 def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) -> str:
     """Rewrite ``source`` so numba/pythran/dace can compile it: expand numpy
     ops they don't support (batched ``@``/``np.matmul``, ``np.pad``,
     ``np.einsum``, ``np.fft.*``, ``np.mgrid``, axis reductions, ufunc.outer,
-    multi-array fancy gather, 2-D boolean-mask assignment, ``np.ndarray``/
-    ``np.linspace(dtype=)``/``abs(array)``) into plain loops/broadcasts/
-    ``np.where``. EVERY function in the module is processed (helpers too --
+    multi-array fancy gather, ``np.ix_`` writes, 2-D boolean-mask assignment,
+    ``np.ndarray``/``np.linspace(dtype=)``/``abs(array)``) into plain loops/
+    broadcasts/``np.where``, fold constant comprehensions to literals, unroll a
+    comprehension over a constant iterable, and SSA-rename a reassigned local
+    (dace refuses both). EVERY function in the module is processed (helpers too --
     nbody's masked updates live in getAcc/getEnergy), each with its own rank
     table seeded from the kernel arrays (kir) or inferred call-site param
     ranks. Every pass is pattern-guarded; ``source`` returns byte-for-byte
@@ -3764,13 +4440,21 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
         seed = dict(param_ranks.get(vars(fn).get("name"), {}))
         if is_kernel:
             seed.update(kir_seed)
-        ranks = _rank_table(fn, seed)
+        ranks = rank_table(fn, seed)
         dtypes = _dtype_table(fn, kir_dtype_seed if is_kernel else {})
         noncontig = _noncontig_names(fn)
         masked_gathers = _masked_reduce_map(fn, ranks, dtypes)
+        consts = _const_name_values(fn)
         passes = [
             _DropGuards(),
+            _ConstComprehensionFold(consts),
+            _ListCompUnroll(consts),
+            # Before every temp-minting pass below: an ``or`` clones its if-body, and two
+            # clones sharing one hoisted temp name would redeclare it per branch. After the
+            # const folds, whose "bound exactly once" table the clones would otherwise stale.
+            _BoolOpIfToChain(),
             _NormalizeNegativeAxis(ranks),
+            _IxWriteToLoop(ranks, dtypes),
             _EighInline(ranks, eigh_aliases),
             _LinalgInline(ranks, dtypes, lower_linalg),
             _ReshapeMatmulInline(ranks),
@@ -3781,6 +4465,9 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
             _MgridInline(),
             _FancyGatherInline(ranks),
             _ReduceAxisInline(ranks, dtypes),
+            # Directly behind it: takes only the keepdims reductions the loop lowering
+            # declined (an operand whose rank the table had to forget).
+            _KeepdimsToNewaxis(),
             _MaskedReduceInline(masked_gathers, ranks),
             _CallFixups(ranks),
             _IssubdtypeFold(dtypes),
@@ -3794,6 +4481,10 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
             _IntMatmulInline(ranks, dtypes),
             _ComplexAccessorToFunc(conjugate_only=True),
             _ElementalUfuncToPrimitive(),
+            # LAST: every pass above matches BY NAME through a table built before the loop
+            # (ranks / dtypes / consts / noncontig / masked_gathers), so a rename ahead of
+            # them turns every lookup into a miss and silently switches those passes off.
+            _SsaRename(fn, set(kir_seed)),
         ]
         for p in passes:
             # Process THIS scope's own statements only; a nested def is its own

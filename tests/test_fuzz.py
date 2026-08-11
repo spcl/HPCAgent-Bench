@@ -217,3 +217,90 @@ def test_sample_params_honors_size_cap(monkeypatch):
     assert capped["NI"] <= 256 and capped["NJ"] <= 256
     uncapped = fuzz.sample_params(_BIG, 0)  # no cap arg => full range
     assert uncapped["NI"] > 256
+
+
+# --- config_names: declared config knobs must never be fuzzed as sizes -----
+
+# Mirrors the corpus defect this module's docstring calls out: a config-shaped int
+# (RNG seed / block-recursion cutoff) sitting in the same flat preset dict as a
+# genuine size dimension, constant across every preset -- exactly dbcsr's
+# ``multrec_limit: 512`` / ``seed: 0`` beside its growing ``n_block_rows``, and
+# xsbench's ``seed: 7`` beside its growing ``n_samples``. No explicit ``fuzzed``
+# preset here: this is the default-branch path where the bug lives.
+CONFIG_AND_DIM_PARAMS = {
+    "S": {
+        "N": 8,
+        "seed": 7,
+        "multrec_limit": 512
+    },
+    "M": {
+        "N": 256,
+        "seed": 7,
+        "multrec_limit": 512
+    },
+    "L": {
+        "N": 1024,
+        "seed": 7,
+        "multrec_limit": 512
+    },
+    "XL": {
+        "N": 100000,
+        "seed": 7,
+        "multrec_limit": 512
+    },
+}
+CONFIG_NAMES = frozenset({"seed", "multrec_limit"})
+
+
+def test_fixture_carries_both_a_dimension_and_a_config_knob():
+    # Non-vacuity: if the fixture collapsed to all-fixed or all-ranged, every
+    # assertion below would pass trivially without exercising the fix.
+    r = fuzz.resolve_ranges(CONFIG_AND_DIM_PARAMS, config_names=CONFIG_NAMES)
+    assert fuzz.is_range(r["N"]) and r["N"][1] > r["N"][0]  # a genuine dimension range
+    assert r["seed"] == 7 and not fuzz.is_range(r["seed"])  # config scalar, untouched
+    assert r["multrec_limit"] == 512 and not fuzz.is_range(r["multrec_limit"])
+
+
+def test_config_names_absent_keeps_legacy_default_branch_behavior():
+    # Backward compat: omitting config_names must reproduce today's (pre-fix)
+    # resolution exactly -- a constant-across-presets int still collapses to a
+    # degenerate [v, v] "range" via the existing max(hi, value) floor.
+    r = fuzz.resolve_ranges(CONFIG_AND_DIM_PARAMS)
+    assert r["seed"] == [7, 7]
+    assert r["multrec_limit"] == [512, 512]
+
+
+def test_config_names_keep_the_declared_value_across_fuzz_iterations():
+    for it in range(20):
+        p = fuzz.sample_params(CONFIG_AND_DIM_PARAMS, iteration=it, config_names=CONFIG_NAMES)
+        assert p["seed"] == 7
+        assert p["multrec_limit"] == 512
+        assert 8 <= p["N"] <= 100000
+
+
+def test_edge_shapes_never_perturbs_a_declared_config_knob():
+    edges = fuzz.edge_shapes(CONFIG_AND_DIM_PARAMS, config_names=CONFIG_NAMES)
+    kinds_seen = set()
+    for kind, sample in edges:
+        assert sample["seed"] == 7
+        assert sample["multrec_limit"] == 512
+        kinds_seen.add(kind)
+    assert len(kinds_seen) > 1  # more than one structural edge actually probed
+
+
+def test_edge_shapes_without_config_names_corrupts_the_knob():
+    # Documents the LIVE bug the fix closes: absent config_names, a degenerate
+    # [512, 512] "range" reads as fuzzable to edge_shapes, so the structural size
+    # edge probe (1/3/5/6/7) overrides multrec_limit -- an algorithm-changing
+    # perturbation during a CORRECTNESS check, not a size probe.
+    edges = fuzz.edge_shapes(CONFIG_AND_DIM_PARAMS)
+    assert edges
+    assert all(sample["multrec_limit"] != 512 for _, sample in edges)
+
+
+def test_size_cap_does_not_clamp_a_declared_config_knob(monkeypatch):
+    monkeypatch.setenv("HPCAGENT_BENCH_FUZZ_SIZE_CAP", "10")  # far below multrec_limit's 512
+    capped = fuzz.resolve_ranges(CONFIG_AND_DIM_PARAMS, config_names=CONFIG_NAMES)
+    assert capped["multrec_limit"] == 512  # exempt from the size cap entirely
+    assert capped["seed"] == 7
+    assert capped["N"][1] <= 10  # the real dimension IS still capped

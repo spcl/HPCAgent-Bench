@@ -16,6 +16,7 @@ from hpcagent_bench import flags, perf_reports
 from hpcagent_bench.benchmarks import cpp_runtime
 from hpcagent_bench.frameworks import generate_framework
 from hpcagent_bench.languages import report_flags
+from tests.optional_imports import import_or_skip
 
 #: One kernel per precision: a loop that MUST vectorize followed by one that CANNOT (a dependence),
 #: so one report states both a width and a refusal. Symbol carries precision since both sources link
@@ -100,19 +101,28 @@ def test_report_flags_never_name_a_missing_constant():
 
 
 def test_report_path_mirrors_the_benchmark_tree():
-    p = perf_reports.report_path("hpc/map_reduce/arc_distance", "arc_distance", "cc", "default", "lowered_code")
-    assert p.parent == perf_reports.REPORTS / "hpc/map_reduce/arc_distance"
-    assert p.name == "arc_distance.cc.default.asm.txt"
+    p = perf_reports.report_path("scientific_computing/map_reduce/arc_distance", "arc_distance", "cc", "default",
+                                 "lowered_code")
+    assert p.parent == perf_reports.REPORTS / "lowered_code" / "scientific_computing/map_reduce/arc_distance"
+    assert p.name == "arc_distance.cc.default.lowered_code.txt"
 
 
-def test_opt_report_lands_under_its_own_root():
-    """The opt-report generation gets its own top-level .opt_reports/; the other dumps stay in perf_reports/."""
-    opt = perf_reports.report_path("hpc/map_reduce/arc_distance", "arc_distance", "cc", "default", "opt_report")
-    assert opt.parent == perf_reports.OPT_REPORTS / "hpc/map_reduce/arc_distance"
-    assert opt.name == "arc_distance.cc.default.opt-report.txt"
-    assert perf_reports.report_root("opt_report") == perf_reports.OPT_REPORTS
-    assert perf_reports.report_root("lowered_code") == perf_reports.REPORTS
-    assert perf_reports.report_root("generated_source") == perf_reports.REPORTS
+def test_every_kind_lands_under_its_own_subtree():
+    """One root, a subdirectory per kind, and the kind spelled the SAME way in both places.
+
+    The previous layout gave ``opt_report`` a second top-level root and wrote it as
+    ``opt-report.txt`` beside ``lowered_code``'s ``asm.txt`` -- three spellings of one concept. This
+    pins the invariant that replaced them: for every kind, root and suffix are the kind's own name.
+    """
+    opt = perf_reports.report_path("scientific_computing/map_reduce/arc_distance", "arc_distance", "cc", "default",
+                                   "opt_report")
+    assert opt.parent == perf_reports.REPORTS / "opt_report" / "scientific_computing/map_reduce/arc_distance"
+    assert opt.name == "arc_distance.cc.default.opt_report.txt"
+    roots = {kind: perf_reports.report_root(kind) for kind in perf_reports.KINDS}
+    assert roots == {kind: perf_reports.REPORTS / kind for kind in perf_reports.KINDS}
+    assert len(set(roots.values())) == len(perf_reports.KINDS), "two kinds share a subtree"
+    for kind, suffix in perf_reports.KINDS.items():
+        assert suffix == f"{kind}.txt", f"{kind} writes {suffix!r}; the suffix must be the kind's name"
 
 
 def test_write_none_means_not_supported_and_writes_nothing(tmp_path, monkeypatch):
@@ -124,7 +134,8 @@ def test_write_none_means_not_supported_and_writes_nothing(tmp_path, monkeypatch
 def test_write_creates_the_kernel_directory_on_demand(tmp_path, monkeypatch):
     """The kernel tree is never materialised up front -- the writer makes only the directory it needs."""
     monkeypatch.setattr(perf_reports, "REPORTS", tmp_path)
-    path = perf_reports.write("hpc/map_reduce/arc_distance", "arc_distance", "cc", "default", "lowered_code", "TEXT")
+    path = perf_reports.write("scientific_computing/map_reduce/arc_distance", "arc_distance", "cc", "default",
+                              "lowered_code", "TEXT")
     assert path is not None and path.read_text() == "TEXT"
     assert path.parent.is_dir()
 
@@ -269,7 +280,7 @@ def test_native_framework_generated_source_hook_dumps_the_input(backend, monkeyp
 def test_numba_lowered_code_dumps_real_instructions():
     """Numba never writes a ``.so``, so it answers with its own asm; compiled HERE (not cache-loaded)
     so the JIT has something to report."""
-    numba = pytest.importorskip("numba")
+    numba = import_or_skip("numba")
     numpy = pytest.importorskip("numpy")
 
     @numba.njit  # NOT cache=True: this must be compiled in-process to have asm
@@ -293,7 +304,7 @@ def test_numba_hooks_decline_a_plain_python_function():
 def test_numba_reports_nothing_for_a_cache_restored_function(tmp_path, monkeypatch):
     """A cache hit restores executable code with no compile-time by-products: ``inspect_asm`` returns
     an instruction-free stub rather than raising, so this must answer "not supported" instead."""
-    numba = pytest.importorskip("numba")
+    numba = import_or_skip("numba")
     src = tmp_path / "cached_kernel.py"
     src.write_text("import numba as nb\n\n@nb.njit(cache=True)\ndef k(x):\n    return x * 2.0 + 1.0\n")
     monkeypatch.syspath_prepend(str(tmp_path))

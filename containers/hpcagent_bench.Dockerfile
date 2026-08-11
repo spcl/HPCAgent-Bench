@@ -9,7 +9,7 @@
 # and subsumes the baked verifier containers/judge.def (see the ROLE note at the bottom).
 #
 # The OCI image is the single source of truth: apptainer builds its SIF FROM it and podman runs
-# it directly -- the only two supported backends (see docs/LAUNCH.md). One recipe, two ways:
+# it directly -- the only two supported backends (see docs/launch.md). One recipe, two ways:
 #
 #   podman build -f containers/hpcagent_bench.Dockerfile --build-arg HW=cpu    -t hpcagent_bench:cpu    .
 #   podman build -f containers/hpcagent_bench.Dockerfile --build-arg HW=nvidia -t hpcagent_bench:nvidia .
@@ -35,7 +35,7 @@
 
 # BASE_IMAGE: the default ubuntu:26.04 keeps the x86_64 CI cpu build + local builds byte-identical
 # to the retired cpu.Dockerfile. On Alps override with the CSCS public GPU base (aarch64 GH200,
-# CUDA/GPU stack preinstalled): --build-arg BASE_IMAGE=<cscs-public-gpu-base>. See docs/LAUNCH.md.
+# CUDA/GPU stack preinstalled): --build-arg BASE_IMAGE=<cscs-public-gpu-base>. See docs/launch.md.
 ARG BASE_IMAGE=ubuntu:26.04
 FROM ${BASE_IMAGE}
 
