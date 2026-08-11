@@ -134,21 +134,133 @@ def override_source(bench_dir: pathlib.Path, base: str) -> Optional[pathlib.Path
     return src if src.is_file() else None
 
 
+#: The precisions an override-backed kernel is specialized into. A CLOSED set, and deliberately not
+#: "whatever the translator emitted": ``cpp_runtime``'s ctypes dispatch resolves exactly
+#: ``<base>_fp64`` and ``<base>_fp32`` and nothing else, so these two are what a library has to
+#: export for every datatype the harness can ask a kernel to run at.
+OVERRIDE_PRECISIONS: Tuple[str, ...] = ("fp64", "fp32")
+
+#: Suffix of an override-derived scop input. Distinct from the translator's ``_pluto_input.c`` so
+#: the two families cannot overwrite each other in one ``cpp_backend`` -- an override REPLACES the
+#: generated set, and sharing a filename is how "replaces" quietly becomes "races with".
+OVERRIDE_INPUT_SUFFIX = "_pluto_override_input.c"
+
+#: Suffix of the transformed override. Also distinct from the generated ``_pluto.c``: the override
+#: used to publish its fp64 transform straight onto ``<base>_fp64_pluto.c``, the generated fp64
+#: name, so the two paths wrote one file.
+OVERRIDE_OUTPUT_SUFFIX = "_pluto_override.c"
+
+#: Double-precision libm spellings and their float counterparts, for the fp32 specialization. Every
+#: libm call in all 23 tracked overrides sits inside the preamble's ``#define <NAME>_FUN(...)``
+#: lines (measured: 21 each of ``sqrt(``/``exp(``/``pow(``, exactly one per preamble, none in any
+#: kernel body), which is why the rewrite below only has to touch those lines.
+_FP32_LIBM: Dict[str, str] = {"sqrt": "sqrtf", "exp": "expf", "pow": "powf"}
+
+
+def specialize_override(text: str, base: str, fptype: str) -> str:
+    """The canonical override retyped for ``fptype``. ``fp64`` is the override VERBATIM.
+
+    PolyBench/C ships one ``DATA_TYPE`` per kernel and the tracked overrides fix it to ``double``,
+    so the file answers an fp64 request and nothing else. The benchmarks it backs default to
+    ``float32`` (``initialize(..., datatype=np.float32)``), so the timed column asks for
+    ``<base>_fp32``, the library exports only ``<base>_fp64``, and the measurement dies with
+    ``no symbol for fp32`` -- job 4391506, four of four override-backed lvl1 kernels.
+
+    The specialization is a RETYPE of the canonical scop, never a reinterpretation of its memory:
+    the fp32 unit declares ``float`` parameters, so float32 buffers are read as float32 by a
+    genuinely float-typed kernel, and polycc transforms that unit itself rather than being handed
+    an fp64 one whose result is cast afterwards.
+
+    Three rewrites, all anchored to the uniform shape every tracked override has:
+
+    * the exported symbol ``<base>_fp64`` -> ``<base>_fp32``;
+    * every ``double`` token -> ``float``, which also retypes ``#define DATA_TYPE double``. Integer
+      payloads are spelled ``int32_t``/``int64_t`` (floyd_warshall's ``path``, nussinov's ``seq``)
+      and are untouched by construction;
+    * libm in the ``_FUN`` macro DEFINITIONS -> the float overloads, so an fp32 kernel does not
+      round-trip every ``sqrt`` through double.
+
+    Literal constants (``SCALAR_VAL(9.0)``) stay double literals, exactly as in PolyBench/C. C's
+    usual arithmetic conversions evaluate those one expression in double and store back to float,
+    which is the reference's own behaviour and no less accurate; the hot loops, whose operands are
+    all ``float``, are genuine float arithmetic.
+    """
+    if fptype == "fp64":
+        return text
+    if fptype != "fp32":
+        raise ValueError(f"no override specialization for {fptype!r} (known: {OVERRIDE_PRECISIONS})")
+    out = re.sub(rf"\b{re.escape(base)}_fp64\b", f"{base}_fp32", text)
+    out = re.sub(r"\bdouble\b", "float", out)
+    lines = out.split("\n")
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith("#define") and "_FUN" in line:
+            for dbl, flt in _FP32_LIBM.items():
+                line = re.sub(rf"\b{dbl}\s*\(", f"{flt}(", line)
+            lines[i] = line
+    return "\n".join(lines)
+
+
+def publish_text(dst: pathlib.Path, text: str) -> bool:
+    """Atomically place ``text`` at ``dst``; no-op when it is already there. True if written.
+
+    Unchanged content is left strictly alone rather than rewritten with identical bytes, because
+    :func:`transformed_sources` decides whether to re-run polycc by comparing mtimes: a rewrite
+    per build would bump the input's mtime past its own transform and re-transform every kernel,
+    every time. The write goes through the same reserve-then-:func:`os.replace` as
+    :func:`run_polycc`, so a reader never sees a half-written scop and two ranks materializing the
+    same file cannot interleave into one.
+    """
+    if dst.is_file() and dst.read_text() == text:
+        return False
+    tmp = _reserve_output_name(dst)
+    try:
+        tmp.write_text(text)
+        os.replace(tmp, dst)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return True
+
+
+def override_scop_inputs(cpp_backend: pathlib.Path, override: pathlib.Path, base: str) -> List[pathlib.Path]:
+    """The per-precision scops derived from one tracked override, materialized under ``cpp_backend``.
+
+    Derived from the OVERRIDE, never from the translator's generated scop: an override-backed
+    kernel gets its fp32 by retyping the canonical PolyBench source, not by falling back to the
+    emitter for the precision the override does not spell. The generated ``<base>_fp*_pluto_input.c``
+    family is neither read nor written here, and the names cannot collide with it.
+
+    Materializing at all is what changed: the override used to be handed to polycc as-is, which is
+    only expressible while one precision is enough.
+    """
+    cpp_backend.mkdir(parents=True, exist_ok=True)
+    text = override.read_text()
+    out: List[pathlib.Path] = []
+    for fptype in OVERRIDE_PRECISIONS:
+        dst = cpp_backend / f"{base}_{fptype}{OVERRIDE_INPUT_SUFFIX}"
+        publish_text(dst, specialize_override(text, base, fptype))
+        out.append(dst)
+    return sorted(out)
+
+
 def scop_inputs(cpp_backend: pathlib.Path, base: str, bench_dir: Optional[pathlib.Path] = None) -> List[pathlib.Path]:
     """The scops ``base``'s Pluto column transforms, sorted; ``[]`` when none were emitted.
 
     An :func:`override_source` under ``bench_dir`` (default ``cpp_backend``'s parent -- true for
     every caller except the numerical oracle, whose scop lives in a scratch dir instead) REPLACES
-    the whole generated set and is returned AS-IS: no translator run, no copy, no freshness check
-    against it, since PolyBench/C ships one ``DATA_TYPE`` per kernel rather than a precision
-    family the generated ``fp*`` scops are keyed on. The override file itself is never written to
-    by this module.
+    the whole generated set: no translator run, no freshness check against the generated family,
+    and the override file itself is never written to by this module.
+
+    It is returned as one scop PER PRECISION (:func:`override_scop_inputs`), retyped from the
+    canonical file, rather than as the single fp64 file it literally is. PolyBench/C ships one
+    ``DATA_TYPE`` per kernel while the harness runs these benchmarks at float32 by default, so an
+    override that answers only fp64 builds a library the timed call cannot use -- see
+    :func:`specialize_override`.
 
     A file that marks no region is not a scop input: polycc would hand it straight back and the
     column would time untransformed C (see :func:`hpcagent_bench.pluto_affine.has_scop`)."""
     override = override_source(bench_dir if bench_dir is not None else cpp_backend.parent, base)
     if override is not None:
-        return [override]
+        return override_scop_inputs(cpp_backend, override, base)
     return sorted(p for p in cpp_backend.glob(f"{base}_fp*_pluto_input.c") if has_scop(p.read_text()))
 
 
@@ -156,17 +268,26 @@ def transformed_path(scop: pathlib.Path) -> pathlib.Path:
     """Where ``scop``'s polycc output lands.
 
     A generated scop (``<base>_fpNN_pluto_input.c``) transforms in place, next to the input --
-    the name ``numpyto_c.bindings.emit_pluto_binding`` already declares as the Pluto source. A
-    tracked :func:`override_source` (``<base>_pluto_reference.c``) is STATIC and lives in the kernel's
-    source dir, so its transform is redirected into that kernel's gitignored ``cpp_backend``
-    instead -- writing polycc's output beside the override would dirty a tracked directory on
-    every build."""
+    the name ``numpyto_c.bindings.emit_pluto_binding`` already declares as the Pluto source.
+
+    An override-derived scop (``<base>_fpNN_pluto_override_input.c``,
+    :func:`override_scop_inputs`) transforms in place too, onto a name of its OWN family. It used
+    to land on ``<base>_fp64_pluto.c`` -- the generated fp64 output's name -- so the override path
+    and the translator path published to one file, and the fp32 and fp64 transforms of the same
+    override had nowhere to sit side by side.
+
+    A tracked :func:`override_source` (``<base>_pluto_reference.c``) handed in directly is STATIC
+    and lives in the kernel's source dir, so its transform is redirected into that kernel's
+    gitignored ``cpp_backend`` instead -- writing polycc's output beside the override would dirty a
+    tracked directory on every build."""
+    if scop.name.endswith(OVERRIDE_INPUT_SUFFIX):
+        return scop.with_name(f"{scop.name[:-len(OVERRIDE_INPUT_SUFFIX)]}{OVERRIDE_OUTPUT_SUFFIX}")
     if scop.name.endswith("_pluto_input.c"):
         return scop.with_name(f"{scop.name[:-len('_pluto_input.c')]}_pluto.c")
     build_dir = scop.parent / "cpp_backend"
     build_dir.mkdir(parents=True, exist_ok=True)
     base = scop.name.removesuffix("_pluto_reference.c")
-    return build_dir / f"{base}_fp64_pluto.c"
+    return build_dir / f"{base}_fp64{OVERRIDE_OUTPUT_SUFFIX}"
 
 
 def drop_core_dumps() -> None:  # pragma: no cover -- runs in the forked child
@@ -244,6 +365,27 @@ def dedupe_scratch_declarations(transformed_c: str) -> str:
     return "\n".join(out)
 
 
+def _reserve_output_name(out: pathlib.Path) -> pathlib.Path:
+    """A unique, currently-nonexistent path in ``out``'s directory for polycc to write instead.
+
+    Same directory because :func:`os.replace` is only atomic within one filesystem, and ``out``
+    lives in a gitignored ``cpp_backend`` whose parent may well be a different mount than the
+    system temp dir. Dot-prefixed so a stray temporary cannot be mistaken for a source; suffixed
+    ``.c`` because it IS the C polycc is asked to emit and clang-format is run on it.
+
+    :func:`tempfile.mkstemp` picks the name -- it is the only unguessable-and-exclusive one in the
+    stdlib -- and the file it creates is removed immediately: polycc must find the path absent, the
+    way it found the destination absent before, or "did polycc write anything" stops being
+    answerable. Removing it does not reopen the race mkstemp closed, because the name it chose is
+    random and no other writer is looking for it.
+    """
+    fd, name = tempfile.mkstemp(dir=out.parent, prefix=f".{out.stem}.", suffix=".polycc-tmp.c")
+    os.close(fd)
+    tmp = pathlib.Path(name)
+    tmp.unlink()
+    return tmp
+
+
 def run_polycc(scop: pathlib.Path,
                out: pathlib.Path,
                args: Sequence[str] = POLYCC_ARGS,
@@ -251,17 +393,33 @@ def run_polycc(scop: pathlib.Path,
     """Transform one scop with ``polycc``, writing ``out``. Returns ``(argv, result)``.
 
     Runs in a throwaway cwd because polycc drops a ``<stem>.pluto.cloog`` intermediate beside
-    the working directory; ``out`` is absolute, so only the litter is confined.
+    the working directory; the output path is absolute, so only the litter is confined.
 
-    A FAILED run's partial ``out`` is deleted. polycc writes as it goes, so a run that dies
-    mid-emit leaves a truncated translation unit whose mtime is NEWER than the scop's -- which is
-    exactly the "fresh enough, reuse it" condition :func:`transformed_sources` tests, so the next
-    build would compile half a kernel and time it. Removing it here rather than in each caller is
-    what keeps that true for both of them.
+    ATOMIC PUBLICATION. polycc never writes ``out``. It writes a uniquely-named temporary in
+    ``out``'s OWN directory, the dedupe pass rewrites that temporary, and only a complete,
+    post-processed transform is moved onto ``out`` with :func:`os.replace` -- one rename, atomic on
+    POSIX, so no reader ever observes a partial file and no two writers can interleave into one.
+
+    Letting polycc write ``out`` directly is what made the Pluto survey nondeterministic. polycc
+    emits as it goes and several consumers share one destination (the timed build, the report and
+    the oracle all resolve to the same :func:`transformed_path`), so a run that died mid-emit --
+    or two runs overlapping -- left a truncated or DOUBLED translation unit whose mtime was newer
+    than the scop's, which is exactly the "fresh enough, reuse it" condition
+    :func:`transformed_sources` tests. The next build then compiled a file with content past the
+    end of the kernel, failing on identifiers spliced out of the middle of a duplicated line. The
+    same 23 overrides scored 10 to 14 passes across six runs of unchanged code.
+
+    A failed, timed-out or killed run therefore leaves ``out`` BYTE-IDENTICAL, where it used to
+    delete it: with the write confined to the temporary there is no partial ``out`` to clean up,
+    and what is there is the previous run's complete output for this same scop. The temporary is
+    removed on every path, success or failure.
 
     The argv is RETURNED rather than reconstructed by the caller: the transformation report echoes
     the command it ran, and a second copy built from a second ``shutil.which`` can print something
-    that was never executed.
+    that was never executed. It is returned in PUBLISHED form -- ``-o <out>``, the destination the
+    build compiles -- which differs from the executed argv in that one operand and nothing else, so
+    it stays copy-pasteable and reproduces this transform. Echoing the temporary instead would
+    print a path that no longer exists by the time the report is read.
 
     Runs under :func:`pet_parse_env`, so the timed build and the report get the aarch64 pet-parse
     shim from the same place they get everything else about this invocation. Wiring it here rather
@@ -269,22 +427,26 @@ def run_polycc(scop: pathlib.Path,
     the scop differently from the build could describe a transform the build never managed to run.
 
     ``timeout`` (seconds, ``None`` = unbounded) bounds a WEDGED polycc through :func:`run_bounded`;
-    the expiry raises :class:`subprocess.TimeoutExpired` and deletes the partial output first.
+    the expiry raises :class:`subprocess.TimeoutExpired`, having discarded the temporary.
     """
     exe = polycc_exe()
     if exe is None:
         raise NotSupportedByFramework(FRAMEWORK, scop.stem, "polycc is not installed on this host")
-    with tempfile.TemporaryDirectory(prefix="pluto_transform_") as scratch:
-        cmd = [exe, *args, str(scop), "-o", str(out)]
-        try:
-            proc = run_bounded(cmd, cwd=scratch, timeout=timeout, env=pet_parse_env(pathlib.Path(scratch)))
-        except subprocess.TimeoutExpired:
-            out.unlink(missing_ok=True)
-            raise
-    if proc.returncode != 0:
-        out.unlink(missing_ok=True)
-    elif out.is_file():
-        out.write_text(dedupe_scratch_declarations(out.read_text()))
+    cmd = [exe, *args, str(scop), "-o", str(out)]
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _reserve_output_name(out)
+    try:
+        with tempfile.TemporaryDirectory(prefix="pluto_transform_") as scratch:
+            argv = [exe, *args, str(scop), "-o", str(tmp)]
+            proc = run_bounded(argv, cwd=scratch, timeout=timeout, env=pet_parse_env(pathlib.Path(scratch)))
+        # `tmp.is_file()` is the "polycc produced a transform" test the destination used to answer,
+        # which is why the name is reserved UNCREATED: an empty file pre-made by mkstemp would read
+        # as output and publish nothing over a good destination.
+        if proc.returncode == 0 and tmp.is_file():
+            tmp.write_text(dedupe_scratch_declarations(tmp.read_text()))
+            os.replace(tmp, out)   # the single atomic step; after it `tmp` is gone
+    finally:
+        tmp.unlink(missing_ok=True)
     return cmd, proc
 
 

@@ -20,7 +20,9 @@ import pathlib
 import shutil
 import subprocess
 import types
-from typing import Any, Dict, List
+import threading
+import time
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pytest
@@ -97,6 +99,71 @@ def failing_polycc(cmd: Any, **kwargs: Any) -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(cmd, 1, "", "pet: data dependent conditions not supported")
 
 
+def emitted_to(cmd: List[str]) -> pathlib.Path:
+    """Where the polycc invocation ``cmd`` was told to write -- the operand of its ``-o``.
+
+    The stand-ins below honour it instead of assuming the destination, which is the whole point:
+    a stand-in that wrote the destination directly would pass against the bug being pinned.
+    """
+    return pathlib.Path(cmd[cmd.index("-o") + 1])
+
+
+def partial_then_failing_polycc(cmd: List[str], **kwargs: Any) -> subprocess.CompletedProcess:
+    """polycc's real failure shape: emit part of a translation unit, then die non-zero.
+
+    ``failing_polycc`` writes nothing, so it cannot tell an atomic publish from a lucky one. This
+    leaves a half-written file behind exactly where the real driver would.
+    """
+    emitted_to(cmd).write_text("void mm_fp64(const int64_t N, double (*restrict A)[N]) {\n  for (t1")
+    return subprocess.CompletedProcess(cmd, 1, "", "pet: data dependent conditions not supported")
+
+
+def timing_out_polycc(cmd: List[str], **kwargs: Any) -> subprocess.CompletedProcess:
+    """A polycc wedged mid-emit: partial output on disk, then killed by the bound."""
+    emitted_to(cmd).write_text("void mm_fp64(const int64_t N) {\n  int t1, t2;\n  for (t1")
+    raise subprocess.TimeoutExpired(cmd, 1.0)
+
+
+#: What a stand-in polycc "transforms" the scop into. Two scratch declarations of ``t1`` in one
+#: scope, so the dedupe pass has something to do and the published file is provably POST-processed
+#: rather than the raw emission.
+TRANSFORMED = ("void mm_fp64(const int64_t N, double (*restrict C)[N]) {\n"
+               "  int t1, t2;\n"
+               "  int t1;\n"
+               "#pragma omp parallel for\n"
+               "  for (t1 = 0; t1 < N; t1++) C[t1][t1] = 1.0;\n"
+               "}\n")
+
+#: The same text after ``dedupe_scratch_declarations`` -- what a correct publish must land.
+PUBLISHED = pluto_transform.dedupe_scratch_declarations(TRANSFORMED)
+
+
+def writing_polycc(text: str = TRANSFORMED,
+                   watch: Optional[pathlib.Path] = None,
+                   seen: Optional[List[Optional[str]]] = None) -> Any:
+    """A polycc that emits ``text`` in two steps, sampling ``watch`` between them.
+
+    The sample is the evidence for "the destination is never exposed mid-transform": it is taken at
+    the one instant a half-written translation unit exists on disk.
+    """
+
+    def run(cmd: List[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        dst = emitted_to(cmd)
+        head, tail = text[:len(text) // 2], text[len(text) // 2:]
+        dst.write_text(head)
+        if seen is not None and watch is not None:
+            seen.append(watch.read_text() if watch.exists() else None)
+        dst.write_text(head + tail)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    return run
+
+
+def polycc_temporaries(directory: pathlib.Path) -> List[pathlib.Path]:
+    """Every temporary this module could have left behind in ``directory``."""
+    return sorted(directory.glob(".*polycc-tmp.c"))
+
+
 # --------------------------------------------------------------------------------------------------
 # Decline, never fall back. Each of these has a tempting "just build the C++ instead" answer, and
 # taking it is how the column reported clang numbers under Pluto's name for as long as it did.
@@ -146,17 +213,167 @@ def test_polycc_rejection_declines_and_surfaces_its_own_diagnostic(tmp_path, mon
 def test_a_failed_polycc_leaves_no_partial_output_to_be_compiled(tmp_path, monkeypatch) -> None:
     """polycc writes as it goes. A truncated translation unit whose mtime is newer than the scop's is
     exactly the "fresh enough, reuse it" condition the next build tests, so it would compile half a
-    kernel and time it."""
+    kernel and time it.
+
+    Pinned at the DESTINATION, which is the property that matters: whatever polycc did to its own
+    temporary, no partial output is reachable under the name the build compiles. This used to be
+    spelled "run_polycc deletes ``out``" and could only be honoured after the damage was done --
+    see ``test_a_failed_polycc_cannot_damage_an_existing_destination`` for what replaced it."""
     scop = write_scop(tmp_path)
     out = pluto_transform.transformed_path(scop)
-    out.write_text("/* half a kernel */\n")
     monkeypatch.setattr(pluto_transform, "polycc_exe", lambda: "/usr/bin/polycc")
-    monkeypatch.setattr(pluto_transform, "run_bounded", failing_polycc)
+    monkeypatch.setattr(pluto_transform, "run_bounded", partial_then_failing_polycc)
 
     _cmd, proc = pluto_transform.run_polycc(scop, out)
 
     assert proc.returncode == 1
-    assert not out.exists(), "a partial polycc output survived a failed run"
+    assert not out.exists(), "a partial polycc output was published to the path the build compiles"
+
+
+# --------------------------------------------------------------------------------------------------
+# Atomic publication. polycc emits as it goes and several consumers share ONE destination per scop
+# (the timed build, the transformation report and the numerical oracle all resolve to the same
+# `transformed_path`), so letting it write that destination directly made the Pluto column's own
+# correctness survey nondeterministic: the same 23 static PolyBench overrides scored between 10 and
+# 14 passes across six runs of unchanged code, on a tree where polycc itself was measured
+# byte-deterministic. The failures were compile errors past the end of the good file -- content
+# duplicated into it, not truncated out of it. These pin the publish, not the transform.
+# --------------------------------------------------------------------------------------------------
+
+
+def test_the_destination_is_never_exposed_mid_transform(tmp_path, monkeypatch) -> None:
+    """A. While polycc is half-way through emitting, the path the build compiles still holds the
+    previous COMPLETE output -- never the partial one. A reader that arrives at the wrong instant is
+    the whole failure mode, and it cannot be fixed by cleaning up afterwards."""
+    scop = write_scop(tmp_path)
+    out = pluto_transform.transformed_path(scop)
+    out.write_text(PUBLISHED)
+    seen: List[Optional[str]] = []
+    monkeypatch.setattr(pluto_transform, "polycc_exe", lambda: "/usr/bin/polycc")
+    monkeypatch.setattr(pluto_transform, "run_bounded", writing_polycc(watch=out, seen=seen))
+
+    pluto_transform.run_polycc(scop, out)
+
+    assert seen == [PUBLISHED], "the destination held a half-written translation unit mid-transform"
+
+
+def test_a_successful_transform_publishes_the_whole_post_processed_result(tmp_path, monkeypatch) -> None:
+    """B. What lands is the COMPLETE transform after the dedupe pass -- not the raw emission, and not
+    a prefix of either. The returned argv keeps naming the destination, because the report echoes it
+    as the command a reader can re-run."""
+    scop = write_scop(tmp_path)
+    out = pluto_transform.transformed_path(scop)
+    executed: List[List[str]] = []
+
+    def recording(cmd: List[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        executed.append(list(cmd))
+        return writing_polycc()(cmd, **kwargs)
+
+    monkeypatch.setattr(pluto_transform, "polycc_exe", lambda: "/usr/bin/polycc")
+    monkeypatch.setattr(pluto_transform, "run_bounded", recording)
+
+    cmd, proc = pluto_transform.run_polycc(scop, out)
+
+    assert proc.returncode == 0
+    assert out.read_text() == PUBLISHED
+    assert cmd[cmd.index("-o") + 1] == str(out), "the echoed command must name the published path"
+    assert emitted_to(executed[0]) != out, "polycc wrote the destination directly"
+    assert emitted_to(executed[0]).parent == out.parent, "os.replace is only atomic within one filesystem"
+
+
+@pytest.mark.parametrize("polycc,expected", [(partial_then_failing_polycc, subprocess.CompletedProcess),
+                                             (timing_out_polycc, subprocess.TimeoutExpired)])
+def test_a_failed_polycc_cannot_damage_an_existing_destination(tmp_path, monkeypatch, polycc, expected) -> None:
+    """C. A run that fails, times out or is killed leaves a good destination BYTE-IDENTICAL.
+
+    Its content is the previous run's complete output for this same scop, so keeping it is not the
+    stale-reuse hazard deleting it used to guard against -- and deleting it was never a guard in the
+    first place, since the file it removed was one this function had just corrupted itself."""
+    scop = write_scop(tmp_path)
+    out = pluto_transform.transformed_path(scop)
+    out.write_text(PUBLISHED)
+    before = out.read_bytes(), out.stat().st_mtime_ns
+    monkeypatch.setattr(pluto_transform, "polycc_exe", lambda: "/usr/bin/polycc")
+    monkeypatch.setattr(pluto_transform, "run_bounded", polycc)
+
+    if expected is subprocess.TimeoutExpired:
+        with pytest.raises(subprocess.TimeoutExpired):
+            pluto_transform.run_polycc(scop, out, timeout=1.0)
+    else:
+        _cmd, proc = pluto_transform.run_polycc(scop, out)
+        assert proc.returncode == 1
+
+    assert (out.read_bytes(), out.stat().st_mtime_ns) == before, "a failed run damaged a good destination"
+
+
+@pytest.mark.parametrize("polycc", [writing_polycc(), partial_then_failing_polycc, timing_out_polycc,
+                                    failing_polycc])
+def test_no_temporary_survives_any_outcome(tmp_path, monkeypatch, polycc) -> None:
+    """D. Success, rejection and expiry all clean up. A build directory that accumulates half-written
+    ``.c`` files per run is how a shared destination gets recreated one level down."""
+    scop = write_scop(tmp_path)
+    out = pluto_transform.transformed_path(scop)
+    monkeypatch.setattr(pluto_transform, "polycc_exe", lambda: "/usr/bin/polycc")
+    monkeypatch.setattr(pluto_transform, "run_bounded", polycc)
+
+    try:
+        pluto_transform.run_polycc(scop, out, timeout=1.0)
+    except subprocess.TimeoutExpired:
+        pass
+
+    assert polycc_temporaries(tmp_path) == [], "a polycc temporary survived the run"
+
+
+def test_concurrent_transforms_cannot_interleave_into_one_file(tmp_path, monkeypatch) -> None:
+    """E. Two transforms racing on one destination leave exactly ONE complete output there.
+
+    This is the observed bug, not a hypothetical: the survey's flaky kernels failed to compile at
+    line numbers PAST the end of the known-good file, on identifiers spliced out of the middle of a
+    duplicated one. Both writers here emit line by line into the same destination name, so a direct
+    write would produce precisely that -- doubled or interleaved content that is neither output.
+    """
+    scop = write_scop(tmp_path)
+    out = pluto_transform.transformed_path(scop)
+
+    def variant(tag: str, lines: int) -> str:
+        """Two outputs that share NO body line and differ in length.
+
+        Both properties are load-bearing. Same-length near-twins would let a byte-level mix land
+        back on one of them and pass; the length gap is what leaves the short writer's file with
+        the long writer's tail still attached past its end, which is the signature the survey's
+        flaky compiles actually showed."""
+        body = "".join(f"  C[t1][{i}] = {tag}{i}.0;\n" for i in range(lines))
+        return ("void mm_fp64(const int64_t N, double (*restrict C)[N]) {\n"
+                "  int t1, t2;\n  int t1;\n#pragma omp parallel for\n" + body + "}\n")
+
+    variants = {"A": variant("a", 4), "B": variant("b", 60)}
+    start = threading.Barrier(len(variants))
+
+    def slow_polycc(cmd: List[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        text = variants[threading.current_thread().name]
+        dst = emitted_to(cmd)
+        start.wait(timeout=10)
+        with dst.open("w") as fh:      # line at a time, so a shared destination WOULD interleave
+            for line in text.splitlines(keepends=True):
+                fh.write(line)
+                fh.flush()
+                time.sleep(0.001)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(pluto_transform, "polycc_exe", lambda: "/usr/bin/polycc")
+    monkeypatch.setattr(pluto_transform, "run_bounded", slow_polycc)
+
+    threads = [threading.Thread(target=pluto_transform.run_polycc, args=(scop, out), name=name)
+               for name in variants]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    landed = out.read_text()
+    expected = {pluto_transform.dedupe_scratch_declarations(v) for v in variants.values()}
+    assert landed in expected, "the destination holds an interleaved or doubled translation unit"
+    assert polycc_temporaries(tmp_path) == [], "a racing transform left a temporary behind"
 
 
 def test_call_args_declines_when_the_binding_is_absent(tmp_path, monkeypatch) -> None:
