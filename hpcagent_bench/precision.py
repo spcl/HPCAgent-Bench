@@ -91,10 +91,15 @@ def numpy_dtype(precision: Precision) -> type:
 #: fp32 exponent range) need no clip; the narrow formats round just under their
 #: true finite max (fp16 65504, fp8_e4m3 448, fp8_e5m2 57344). This is the ONE
 #: table every distribution clips against -- see :func:`safe_max`.
+#: Every entry is FINITE. ``inf`` here means "never clip", which made the ceiling a no-op for the
+#: three wide formats -- a manifest asking for a large ``sigma``/``scale`` then overflowed the cast
+#: to ``inf`` (measured: lognormal at sigma=90 goes non-finite at fp32 and bf16, and numpy raises
+#: "overflow encountered in cast" doing it). bf16 carries fp32's exponent range with fewer mantissa
+#: bits, so its ceiling is its own largest normal, not fp32's.
 _SAFE_MAGNITUDE: Dict[Precision, float] = {
-    Precision.FP64: float("inf"),
-    Precision.FP32: float("inf"),
-    Precision.BF16: float("inf"),
+    Precision.FP64: 1.7976931348623157e308,
+    Precision.FP32: 3.4028234663852886e38,
+    Precision.BF16: 3.3895313892515355e38,
     Precision.FP16: 6.5e4,
     Precision.FP8_E4M3: 4.0e2,
     Precision.FP8_E5M2: 5.0e4,
@@ -103,8 +108,8 @@ _SAFE_MAGNITUDE: Dict[Precision, float] = {
 
 def safe_max(precision: Precision) -> float:
     """The magnitude ceiling a value may reach before casting to ``precision``
-    overflows to ``inf``. Distributions clip to ``[-safe_max, safe_max]`` before
-    casting so a narrow format never yields ``inf``/``nan``."""
+    overflows to ``inf``. Distributions clip to ``[-safe_max, safe_max]`` before casting, so NO
+    format -- narrow or wide -- ever yields ``inf``/``nan`` from generated data."""
     return _SAFE_MAGNITUDE[precision]
 
 

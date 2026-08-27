@@ -7,31 +7,54 @@ def _as_tuple(value, dims):
     return tuple(value for _ in range(dims))
 
 
+def _tap_range(dim_in, dim_out, k, stride, padding, dilation):
+    """Valid input indices i s.t. o = i*stride - padding + k*dilation lands in [0, dim_out)."""
+    lo = max(0, -(-(padding - k * dilation) // stride))
+    hi_inclusive = min(dim_in - 1, (dim_out - 1 - k * dilation + padding) // stride)
+    if hi_inclusive < lo:
+        return None
+    return lo, hi_inclusive + 1
+
+
 def _conv_transpose2d(x, weight, bias, stride, padding, output_padding, dilation, groups):
-    if isinstance(stride, (int, np.integer)): stride = (stride, stride)
-    if isinstance(padding, (int, np.integer)): padding = (padding, padding)
-    if isinstance(output_padding, (int, np.integer)): output_padding = (output_padding, output_padding)
-    if isinstance(dilation, (int, np.integer)): dilation = (dilation, dilation)
+    stride = _as_tuple(stride, 2)
+    padding = _as_tuple(padding, 2)
+    output_padding = _as_tuple(output_padding, 2)
+    dilation = _as_tuple(dilation, 2)
     n, c_in, h, w = x.shape
     _, c_out_per_group, kh, kw = weight.shape
     c_out = c_out_per_group * groups
+    in_per_group = c_in // groups
     oh = (h - 1) * stride[0] - 2 * padding[0] + dilation[0] * (kh - 1) + output_padding[0] + 1
     ow = (w - 1) * stride[1] - 2 * padding[1] + dilation[1] * (kw - 1) + output_padding[1] + 1
     out = np.zeros((n, c_out, oh, ow), dtype=x.dtype)
-    in_per_group = c_in // groups
-    for b in range(n):
-        for ic in range(c_in):
-            g = ic // in_per_group
-            for iy in range(h):
-                for ix in range(w):
-                    for ky in range(kh):
-                        oy = iy * stride[0] - padding[0] + ky * dilation[0]
-                        if 0 <= oy < oh:
-                            for kx in range(kw):
-                                ox = ix * stride[1] - padding[1] + kx * dilation[1]
-                                if 0 <= ox < ow:
-                                    for ocg in range(c_out_per_group):
-                                        out[b, g * c_out_per_group + ocg, oy, ox] += x[b, ic, iy, ix] * weight[ic, ocg, ky, kx]
+    # transposed conv is a scatter: each kernel tap sends a strided, channel-mixed slice of x
+    # into the output, and overlapping taps must accumulate -- so this stays a tap loop
+    # (kh*kw iterations) over strided slice views, never a single sliced assignment.
+    for ky in range(kh):
+        ry = _tap_range(h, oh, ky, stride[0], padding[0], dilation[0])
+        if ry is None:
+            continue
+        iy_lo, iy_hi = ry
+        oy_lo = iy_lo * stride[0] - padding[0] + ky * dilation[0]
+        for kx in range(kw):
+            rx = _tap_range(w, ow, kx, stride[1], padding[1], dilation[1])
+            if rx is None:
+                continue
+            ix_lo, ix_hi = rx
+            ox_lo = ix_lo * stride[1] - padding[1] + kx * dilation[1]
+
+            x_sub = x[:, :, iy_lo:iy_hi, ix_lo:ix_hi]
+            dyv, dxv = x_sub.shape[2], x_sub.shape[3]
+            oy_slice = slice(oy_lo, oy_lo + dyv * stride[0], stride[0])
+            ox_slice = slice(ox_lo, ox_lo + dxv * stride[1], stride[1])
+            for g in range(groups):
+                xg = x_sub[:, g * in_per_group:(g + 1) * in_per_group]
+                weight_tap = weight[g * in_per_group:(g + 1) * in_per_group, :, ky, kx]
+                # channel mixing at every spatial position of this tap -- a matmul over the
+                # channel axis, dispatched through @ to reach BLAS.
+                contribution = np.moveaxis(np.moveaxis(xg, 1, -1) @ weight_tap, -1, 1)
+                out[:, g * c_out_per_group:(g + 1) * c_out_per_group, oy_slice, ox_slice] += contribution
     out += bias.reshape(1, -1, 1, 1)
     return out
 

@@ -12,7 +12,9 @@ import subprocess
 import tempfile
 
 import numpy as np
+import pytest
 
+from numpyto_common.lib_nodes import expand_transpose
 from numpyto_common.lowering import _TransposeRewriter
 
 
@@ -155,7 +157,7 @@ def _validate_native(src, x, expected, out_shape, shapes, syms):
         so = d / f"l_{b}.so"
         cc = subprocess.run(no.COMPILE[b] + [str(d / f"f{ext}"), "-o", str(so)], capture_output=True, text=True)
         assert cc.returncode == 0, f"{b} compile: {cc.stderr[-200:]}"
-        st = no._invoke_isolated(b, binding, so, by, syms, exp, ["ret_arr0"], 1e-9, 1e-9)
+        st = no._invoke_isolated(b, binding, so, by, syms, exp, ["ret_arr0"], 1e-9, 1e-9, frozenset())
         assert st == "ok", f"{b}: {st}"
 
 
@@ -171,3 +173,25 @@ def test_return_method_transpose_matches_numpy_native():
                          "M": 3,
                          "N": 4
                      })
+
+
+# --------------------------------------------------------------------------- #
+# a permutation may not write into the buffer it reads                         #
+# --------------------------------------------------------------------------- #
+
+
+def test_transpose_into_its_own_source_is_refused() -> None:
+    """``tap = np.moveaxis(tap, -1, 1)`` reaches the expander as a transpose whose target IS its
+    source. The expansion is an element-by-element copy through a permuted index map, so writing it
+    back into the same buffer overwrites source cells before they are read: the result is neither
+    the input nor its permutation. The SSA pass normally renames the target first -- this is the
+    guard for when it does not, because the failure mode is a kernel that compiles and returns
+    wrong numbers rather than one that refuses.
+    """
+    target = ast.Name(id="tap", ctx=ast.Store())
+    args = [
+        ast.Name(id="tap", ctx=ast.Load()),
+        ast.Tuple(elts=[ast.Constant(value=i) for i in (0, 2, 1)], ctx=ast.Load())
+    ]
+    with pytest.raises(NotImplementedError, match="into itself"):
+        expand_transpose(target, args, {"tap": ("A", "B", "C")})

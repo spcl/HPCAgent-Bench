@@ -8,9 +8,14 @@ free -- and the CLI plus its MCP servers are real processes, not just sockets wa
 
 The share is dealt round-robin. These tests pin the three properties that makes it worth having:
 the shares are disjoint, they use the whole node, and they stay even. They also pin the refusal --
-with fewer CPUs than workers there is no share to give, and crowding several agents onto one CPU
+with fewer CPUs than agents there is no share to give, and crowding several agents onto one CPU
 would be worse than leaving the scheduler to it.
+
+And they pin the DIVISOR, which is where this first went wrong: dealing over ``AGENTS_PER_NODE``
+rather than the agents the node actually runs gave each of 40 agents two CPUs of 192 and left 112
+idle, with every property above still holding.
 """
+import ast
 import importlib.util
 import os
 import pathlib
@@ -131,3 +136,33 @@ def test_no_cpus_means_no_syscall_and_no_log_noise(driver, tmp_path):
     with open(log_path, "w") as log:
         driver.pin(Dead(), [], log)
     assert log_path.read_text() == ""
+
+
+def test_the_node_is_dealt_over_the_agents_it_runs_not_the_pool_it_declares():
+    """The bug every other test in this file passed through.
+
+    ``AGENTS_PER_NODE`` sizes the thread pool for the BIGGEST arm; a node is handed only the
+    problems striped onto it, which is fewer. Dealing over the pool size gave each of 40 agents
+    ``cpus[i::120]`` -- two CPUs of 192, 112 idle -- and the shares were still disjoint, still even,
+    still spread, so nothing here caught it. Read at the call site because that is where the
+    divisor is chosen; ``agent_cpus`` itself was always correct for whatever it was given."""
+    tree = ast.parse((EXAMPLE / "agent_driver.py").read_text())
+    submits = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "submit"
+        and node.args and isinstance(node.args[0], ast.Name) and node.args[0].id == "run_agent"
+    ]
+    assert len(submits) == 1, f"expected one run_agent submit, found {len(submits)}"
+    divisor = submits[0].args[-1]
+    assert (isinstance(divisor, ast.Call) and isinstance(divisor.func, ast.Name) and divisor.func.id == "len"
+            and isinstance(divisor.args[0], ast.Name) and divisor.args[0].id == "local_problems"), (
+                f"run_agent's agent count is {ast.unparse(divisor)}; it must be len(local_problems) -- "
+                "AGENTS_PER_NODE is the pool size, not the number of agents this node runs")
+
+
+@pytest.mark.parametrize(("agents", "share"), [(40, 4), (12, 16), (120, 1)])
+def test_a_shipped_arm_gets_the_node_divided_by_its_own_agent_count(driver, node, agents, share):
+    """The three shapes the campaign actually submits: 40 focus40 agents, a 12-worker kimi batch,
+    and the full 120 pool. Each agent holds at least the floor of the division -- 4 CPUs, not 2."""
+    node(192)
+    assert min(len(driver.agent_cpus(i, agents)) for i in range(agents)) == share

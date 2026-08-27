@@ -80,13 +80,31 @@ def test_threaded_fill_matches_sequential(monkeypatch):
     assert all(np.array_equal(x, y) for x, y in zip(sequential, threaded))
 
 
+#: A spec far outside anything a real manifest asks for. The point of the ceiling is that it holds
+#: for the arguments a manifest CAN pass, not only for the defaults -- fp32 and bf16 carried an
+#: ``inf`` ceiling (i.e. no clip at all) and went non-finite here, raising numpy's "overflow
+#: encountered in cast" on the way.
+EXTREME = {"sigma": 90.0, "scale": 1e30, "loc": 1e30}
+
+
 @pytest.mark.parametrize("name", STANDARD)
-@pytest.mark.parametrize("precision", [Precision.FP64, Precision.FP32])
-def test_standard_distributions_stay_in_the_safe_range(name, precision):
-    got = distributions.generate(name, (2048, ), precision, {"rng": np.random.default_rng(5)})
+@pytest.mark.parametrize("precision", list(Precision))
+@pytest.mark.parametrize("spec", [{}, EXTREME], ids=["default", "extreme"])
+def test_standard_distributions_stay_in_the_safe_range(name, precision, spec):
+    """EVERY precision, not just the two wide ones: the narrow formats are where the clip does the
+    work, and the wide ones are where its absence went unnoticed."""
+    got = distributions.generate(name, (2048, ), precision, {"rng": np.random.default_rng(5), **spec})
     assert got.dtype == numpy_dtype(precision)
-    assert np.isfinite(got).all(), f"{name} produced a non-finite value at {precision}"
-    assert np.abs(got.astype(np.float64)).max() <= safe_max(precision)
+    as_f64 = np.asarray(got, dtype=np.float64)
+    assert np.isfinite(as_f64).all(), f"{name} produced a non-finite value at {precision} ({spec})"
+    assert np.abs(as_f64).max() <= safe_max(precision)
+
+
+def test_no_precision_has_an_unbounded_ceiling():
+    """``inf`` in the table reads as "wide enough not to worry" and silently disables the clip.
+    Every format has a largest finite value, so every entry has to be one."""
+    unbounded = [p.value for p in Precision if not np.isfinite(safe_max(p))]
+    assert not unbounded, f"safe_max is inf for {unbounded}, which makes clip_to_precision a no-op"
 
 
 @pytest.mark.parametrize("name", STANDARD)

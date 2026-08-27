@@ -132,9 +132,20 @@ RUN set -eu; \
 # so a plain clone builds an SDFG straight into "fatal error: ... blockingconcurrentqueue.h: No such
 # file or directory". This is why the fork cannot be a ``git+https`` line in the requirement files:
 # pip does not recurse submodules.
+# DACE_COMMIT defaults to the branch, so the documented build line still gets the tip. Pass a
+# resolved sha to REBUILD against a newer dace: the layer cache keys on the command string, so with
+# the bare branch name every later build reuses the first clone and the image ages into a pin
+# nothing records (one tree reached 10,748 commits behind that way). /opt/dace.commit says which.
+#   podman build --build-arg DACE_COMMIT="$(git ls-remote https://github.com/spcl/dace.git \
+#     refs/heads/extended | cut -f1)" ...
+ARG DACE_COMMIT=extended
 RUN set -eu; \
-    git clone --depth 1 --recurse-submodules --shallow-submodules \
-      --branch extended https://github.com/spcl/dace.git /opt/dace; \
+    git init -q /opt/dace; \
+    git -C /opt/dace remote add origin https://github.com/spcl/dace.git; \
+    git -C /opt/dace fetch -q --depth 1 origin "${DACE_COMMIT}"; \
+    git -C /opt/dace checkout -q FETCH_HEAD; \
+    git -C /opt/dace submodule update --init --recursive --depth 1 -q; \
+    git -C /opt/dace rev-parse HEAD > /opt/dace.commit; \
     python3 -m pip install --break-system-packages --no-cache-dir -e /opt/dace
 
 # DIVERGENCE PICKS for the tail:

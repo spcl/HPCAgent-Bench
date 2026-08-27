@@ -16,6 +16,8 @@ wholesale if a target ever needs a different dispatch.
 import ast
 from typing import List, Optional
 
+from numpyto_common.ir import numpy_origin
+
 
 class BaseEmitter:
     """Target-agnostic statement walk. Subclasses provide the per-form emit
@@ -28,6 +30,8 @@ class BaseEmitter:
     #: ``break`` / ``continue`` rendered for the target.
     _KW_BREAK: str = "break"
     _KW_CONTINUE: str = "continue"
+    #: How the target opens and closes a one-line comment. Empty disables provenance notes.
+    _COMMENT: tuple = ()
 
     @staticmethod
     def static_step_sign(step_node: Optional[ast.AST]) -> Optional[int]:
@@ -48,8 +52,34 @@ class BaseEmitter:
             return -1 if step_node.value < 0 else 1
         return None
 
+    def numpy_note(self, node: ast.stmt, indent: str) -> str:
+        """The comment line naming the numpy expression ``node`` was lowered from, or ``""``.
+
+        Emitted only where the operation became an explicit loop nest, so the generated source says
+        what it is doing. Where a target renders the operation as a named intrinsic instead
+        (Fortran's ``MATMUL``, ``SUM``) no note is attached, because the intrinsic never reaches
+        this path -- the name is already the documentation.
+        """
+        if not self._COMMENT:
+            return ""
+        text = numpy_origin(node)
+        if not text:
+            return ""
+        open_, close = self._COMMENT
+        return f"{indent}{open_} numpy: {text}{' ' + close if close else ''}\n"
+
+    def emit_stmt_with_note(self, node: ast.stmt, indent: str) -> str:
+        """``emit_stmt`` prefixed by its numpy provenance note, when it has one.
+
+        Read the note only after the statement emits to something: a dropped statement (a bare
+        return temp, an input-validation raise) would otherwise leave its comment behind with
+        nothing under it.
+        """
+        text = self.emit_stmt(node, indent)
+        return (self.numpy_note(node, indent) + text) if text else text
+
     def emit_block(self, stmts: List[ast.stmt], indent: str) -> str:
-        out = [self.emit_stmt(s, indent) for s in stmts]
+        out = [self.emit_stmt_with_note(s, indent) for s in stmts]
         return "\n".join(line for line in out if line)
 
     def emit_stmt(self, node: ast.stmt, indent: str) -> str:

@@ -911,30 +911,36 @@ def await_mcp(log_path: pathlib.Path, process: subprocess.Popen[bytes], deadline
     return mcp_failed(log_path)
 
 
-def agent_cpus(worker_index: int, workers: int) -> list[int]:
-    """The CPUs worker ``worker_index`` of ``workers`` is pinned to, dealt round-robin.
+def agent_cpus(worker_index: int, agents: int) -> list[int]:
+    """The CPUs agent ``worker_index`` of ``agents`` is pinned to, dealt round-robin.
+
+    ``agents`` is how many agents this node ACTUALLY runs, never ``AGENTS_PER_NODE``. The pool is
+    sized for the biggest arm and a node usually gets fewer problems than that -- dealing over the
+    declared size gave each of 40 agents ``cpus[i::120]``, two CPUs of 192, and left 112 idle on a
+    node the arm had already paid for. Two CPUs of 192 is the shape that has twice cost this
+    project a measurement: the inference wedge and the judge that could not be threaded.
 
     The step owns the whole agent node, and without this every agent inherited that full mask, so
     where 40 of them ran was entirely the scheduler's guess -- and the thing being measured on the
     other side of the run is wall clock. Dealing the node's CPUs out round-robin
-    (``cpus[i::workers]``) gives each worker a disjoint share, uses every CPU, and keeps the shares
-    within one of each other however badly ``workers`` divides the node.
+    (``cpus[i::agents]``) gives each agent a disjoint share, uses every CPU, and keeps the shares
+    within one of each other however badly ``agents`` divides the node.
 
     Round-robin rather than contiguous blocks on purpose: consecutive CPU ids are siblings and
     same-socket neighbours, so a block would pack a worker onto one socket and leave whole sockets
     to the workers that happen to sort last. An agent is a CLI process waiting on HTTP, not a timed
     kernel -- spreading it is right, and unlike the judge it has no locality to protect.
 
-    Returns [] when the mask cannot be read or there are fewer CPUs than workers to deal from, and
-    the caller then leaves the process unpinned rather than crowding several workers onto one CPU.
+    Returns [] when the mask cannot be read or there are fewer CPUs than agents to deal from, and
+    the caller then leaves the process unpinned rather than crowding several agents onto one CPU.
     """
     try:
         cpus = sorted(os.sched_getaffinity(0))
     except (AttributeError, OSError):  # not Linux, or the mask is unreadable
         return []
-    if workers < 1 or len(cpus) < workers:
+    if agents < 1 or len(cpus) < agents:
         return []
-    return cpus[worker_index::workers]
+    return cpus[worker_index::agents]
 
 
 def pin(process: subprocess.Popen[bytes], cpus: list[int], log) -> None:
@@ -1065,7 +1071,7 @@ def watch_token_budget(process: subprocess.Popen[bytes], log_path: pathlib.Path,
 
 
 def run_agent(problem: dict[str, Any], worker_index: int, node_dir: pathlib.Path, judges: list[str], problem_index: int,
-              workers: int) -> int:
+              agents: int) -> int:
     # Every agent spawns its own stdio MCP server (python3 tools/mcp_server.py), and the pool
     # submits all AGENTS_PER_NODE of them at once, so ~120 interpreters start within milliseconds
     # and the client's init handshake times out on the losers. Measured on 604479: 72 of 121 agents
@@ -1074,8 +1080,8 @@ def run_agent(problem: dict[str, Any], worker_index: int, node_dir: pathlib.Path
     if AGENT_START_STAGGER_SECONDS > 0:
         time.sleep(min(worker_index * AGENT_START_STAGGER_SECONDS, AGENT_START_STAGGER_MAX_SECONDS))
 
-    # This worker's share of the node, dealt round-robin; every process the agent spawns inherits it.
-    cpus = agent_cpus(worker_index, workers)
+    # This agent's share of the node, dealt round-robin; every process the agent spawns inherits it.
+    cpus = agent_cpus(worker_index, agents)
 
     runtime = pathlib.Path("/opt/optarena-agent")
     if not runtime.is_dir():
@@ -1370,7 +1376,10 @@ def main() -> int:
     failures = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
-            executor.submit(run_agent, problem, worker_index, node_dir, judges, problem_index, workers): problem
+            # len(local_problems), NOT workers: the pool is sized for the biggest arm, and dealing
+            # the node over that size starves every agent of the CPUs the smaller arm left free.
+            executor.submit(run_agent, problem, worker_index, node_dir, judges, problem_index, len(local_problems)):
+            problem
             for worker_index, (problem_index, problem) in enumerate(local_problems)
         }
         for future in concurrent.futures.as_completed(futures):

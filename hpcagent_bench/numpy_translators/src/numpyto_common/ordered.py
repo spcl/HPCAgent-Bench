@@ -10,9 +10,10 @@ emitted text the translator stops being reproducible: the same kernel emits two 
 sources, and every downstream diff, cache key, and A/B measurement picks up the noise.
 
 ``OrderedSet`` is a thin wrapper over ``dict``, whose insertion order is guaranteed by the
-language. Use it wherever names are COLLECTED and later ITERATED. A set used only for
-membership (``x in seen``) has no order to leak and is fine as a plain ``set`` -- swapping
-those is churn, and ``set`` has the faster membership path.
+language. Use it for EVERY set in the translators, membership-only ones included. A set
+that is only probed today becomes an iterated one after one edit, and that edit is where
+the non-reproducibility lands -- far from the line that introduced it. The membership path
+costs a dict lookup either way, so there is nothing to trade.
 
 Where the emitted order should not depend on collection order at all (a declaration block,
 a symbol list), ``sorted()`` at the point of emission is the stronger answer and is used
@@ -23,7 +24,8 @@ from typing import Any, Dict, Iterable, Iterator
 
 class OrderedSet:
     """A ``set`` that iterates in insertion order. Only the operations the translators
-    actually use are implemented -- add / discard / membership / iteration / length."""
+    actually use are implemented; add the one you need here rather than reaching for a
+    plain ``set`` at the call site."""
 
     __slots__ = ("items", )
 
@@ -44,6 +46,19 @@ class OrderedSet:
 
     def __len__(self) -> int:
         return len(self.items)
+
+    def update(self, iterable: Iterable[Any]) -> None:
+        for item in iterable:
+            self.items[item] = None
+
+    def __or__(self, other: Iterable[Any]) -> "OrderedSet":
+        merged = OrderedSet(self.items)
+        merged.update(other)
+        return merged
+
+    def __ior__(self, other: Iterable[Any]) -> "OrderedSet":
+        self.update(other)
+        return self
 
     def __eq__(self, other: Any) -> bool:
         # Compares equal to a plain set of the same members: callers and their tests treat

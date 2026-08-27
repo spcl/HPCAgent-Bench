@@ -21,6 +21,7 @@ from typing import Dict, List, Optional, Tuple
 
 from numpyto_common import dtypes
 from numpyto_common.lib_nodes import _parse_einsum_subscripts
+from numpyto_common.ordered import OrderedSet
 
 
 class DesugarError(NotImplementedError):
@@ -176,6 +177,10 @@ def expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
         return max([r for r in (lr, rr) if r is not None], default=None)
     if isinstance(value, ast.UnaryOp):
         return expr_rank(value.operand, ranks)
+    if isinstance(value, ast.List):
+        # ``np.array([a, b])`` -- a list literal's rank is its nesting depth. Left unknown, the
+        # index vector fv3 builds this way was untracked, and every pass keyed on rank skipped it.
+        return 1 + max((expr_rank(e, ranks) or 0) for e in value.elts) if value.elts else 1
     if isinstance(value, ast.Compare):
         rs = [expr_rank(value.left, ranks)] + [expr_rank(c, ranks) for c in value.comparators]
         return max([r for r in rs if r is not None], default=None)  # bool mask keeps operand rank
@@ -211,6 +216,17 @@ def expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
             # index the fall-through below assumes. How many axes it drops depends on what the
             # sequence holds, which is not visible here; reporting ``base - 1`` invented a rank.
             return None
+        # A single Name index is USUALLY a scalar (a loop iterator), which drops one axis. But it may
+        # be an index ARRAY or a boolean MASK -- azimint's ``bin_id = bin_id[valid]`` -- and calling
+        # that rank 0 made the scatter desugar see no driver axis and leave ``np.add.at`` standing.
+        # Report a rank only where the array and mask readings AGREE; where they differ, say nothing
+        # rather than invent one (see _drop_rank_conflicts for what a wrong rank costs).
+        if isinstance(sl, ast.Name):
+            idx_rank = ranks.get(sl.id)
+            if idx_rank is not None and idx_rank >= 1:
+                as_gather = base - 1 + idx_rank  # integer index array
+                as_mask = base - idx_rank + 1  # boolean mask consumes idx_rank axes, yields one
+                return as_gather if as_gather == as_mask else None
         return base - 1  # single integer/Name index
     if isinstance(value, ast.Call):
         if isinstance(value.func, ast.Name) and value.func.id == "abs" and value.args:
@@ -336,12 +352,12 @@ def _drop_rank_conflicts(tree: ast.AST, ranks: Dict[str, int], seed: Dict[str, i
     the top, so ``x.shape`` expanded to three axes. One rank per name or none; a caller that needs
     the value AT a statement has to track it itself.
     """
-    per_name: Dict[str, Set[int]] = {}
+    per_name: Dict[str, OrderedSet] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
             rank = expr_rank(node.value, ranks)
             if rank is not None:
-                per_name.setdefault(node.targets[0].id, set()).add(rank)
+                per_name.setdefault(node.targets[0].id, OrderedSet()).add(rank)
     for name, seen in per_name.items():
         if len(seen) <= 1:
             continue
@@ -982,6 +998,10 @@ class _FancyGatherHoister(ast.NodeTransformer):
         arank = self.ranks.get(arr)
         elts = node.slice.elts
         if not arank or len(elts) != arank:
+            return node
+        if any(isinstance(e, ast.Slice) or _is_newaxis(e) or _is_ellipsis(e) for e in elts):
+            # Point-wise only. A ``:`` axis survives into the RESULT, so the rank-1 temp this
+            # allocates could not hold it -- the loop would store a plane into a scalar slot.
             return node
         elt_ranks = [expr_rank(e, self.ranks) for e in elts]
         arrs = [r for r in elt_ranks if r and r >= 1]
@@ -1770,6 +1790,167 @@ def _ufunc_at_op(node: ast.AST) -> Optional[str]:
     return None
 
 
+class _DiffToSliceDifference(ast.NodeTransformer):
+    """``np.diff(p)`` -> ``p[1:] - p[:-1]``.
+
+    The identity numpy documents, and every python backend traces the slice form natively -- dace
+    otherwise falls back to a Python callback for the whole enclosing program, which is not a
+    lowering at all. Only the single-argument form: an ``n``/``axis``/``prepend`` argument is a
+    different computation, left standing for the caller to see.
+    """
+
+    def __init__(self) -> None:
+        self.changed = False
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        self.generic_visit(node)
+        if _np_attr(node) != "diff" or len(node.args) != 1 or node.keywords:
+            return node
+        base = node.args[0]
+        self.changed = True
+        tail = ast.Subscript(value=copy.deepcopy(base),
+                             slice=ast.Slice(lower=ast.Constant(value=1), upper=None, step=None),
+                             ctx=ast.Load())
+        head = ast.Subscript(value=copy.deepcopy(base),
+                             slice=ast.Slice(lower=None, upper=ast.Constant(value=-1), step=None),
+                             ctx=ast.Load())
+        return ast.copy_location(ast.BinOp(left=tail, op=ast.Sub(), right=head), node)
+
+
+class _StripAstypeCopyKwarg(ast.NodeTransformer):
+    """``x.astype(dt, copy=False)`` -> ``x.astype(dt)``.
+
+    ``copy`` is a hint about whether numpy may return the input unchanged when the dtype already
+    matches; the VALUE is the same either way. dace's astype replacement takes no such argument and
+    fails the build outright (``_ndarray_astype() got an unexpected keyword argument 'copy'``).
+    """
+
+    def __init__(self) -> None:
+        self.changed = False
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        self.generic_visit(node)
+        if (isinstance(node.func, ast.Attribute) and node.func.attr == "astype"
+                and any(k.arg == "copy" for k in node.keywords)):
+            node.keywords = [k for k in node.keywords if k.arg != "copy"]
+            self.changed = True
+        return node
+
+
+class _RepeatCountsInline(ast.NodeTransformer):
+    """``np.repeat(src, np.diff(p))`` -> a prefix-sum fill loop.
+
+    A PER-ELEMENT repeat count is a different computation from the scalar one: the destination
+    offset is the running sum of the counts, not ``i * K``. numba and dace have no array-count
+    repeat, so the CSR row-index idiom fell back to a callback.
+
+    The output length is ``sum(counts)``, which is data -- except for a first difference, where it
+    TELESCOPES to ``p[-1] - p[0]``. That is the only form claimed here; any other per-element count
+    is left standing rather than sized by a guess.
+    """
+
+    def __init__(self, ranks: Dict[str, int]) -> None:
+        self.ranks = ranks
+        self.changed = False
+        self._ctr = 0
+
+    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+        self.generic_visit(node)
+        calls = [n for n in ast.walk(node.value) if _np_attr(n) == "repeat" and len(n.args) == 2 and not n.keywords]
+        pre: List[ast.stmt] = []
+        for call in calls:
+            counts = call.args[1]
+            if _np_attr(counts) != "diff" or len(counts.args) != 1:
+                continue  # scalar count, or a sum we cannot derive -- not ours
+            if (expr_rank(call.args[1], self.ranks) or 0) < 1 and not isinstance(counts, ast.Call):
+                continue
+            ptr = ast.unparse(counts.args[0])
+            name = f"__rp{self._ctr}"
+            self._ctr += 1
+            src, i, r, pos = f"{name}_src", f"{name}_i", f"{name}_r", f"{name}_pos"
+            lines = [
+                f"{src} = {ast.unparse(call.args[0])}",
+                f"{name} = np.zeros({ptr}[-1] - {ptr}[0], dtype={src}.dtype)",
+                f"{pos} = 0",
+                f"for {i} in range({src}.shape[0]):",
+                f"    for {r} in range({ptr}[{i} + 1] - {ptr}[{i}]):",
+                f"        {name}[{pos}] = {src}[{i}]",
+                f"        {pos} = {pos} + 1",
+            ]
+            pre.extend(ast.parse("\n".join(lines)).body)
+            _replace_call_with_name(node, call, name)
+        if not pre:
+            return node
+        self.changed = True
+        out = pre + [node]
+        for stmt in out:
+            ast.copy_location(stmt, node)
+            ast.fix_missing_locations(stmt)
+        return out
+
+
+class _BincountInline(ast.NodeTransformer):
+    """``np.bincount(idx, weights=w, minlength=M)`` -> zero M slots, then a scatter-add loop.
+
+    No python backend implements it: numba has no bincount at all, and dace routes it to a Python
+    callback that drags the whole program back into the interpreter. The loop is the definition --
+    duplicate indices ACCUMULATE, which is why it is ``+=`` and not a store.
+
+    ``minlength`` is required. numpy sizes the result ``max(minlength, idx.max() + 1)`` and the
+    second term is data; every corpus caller assigns the result into a buffer of exactly M, so an
+    index at or past M would make numpy return a LONGER array and the assignment itself would raise.
+    """
+
+    def __init__(self, ranks: Dict[str, int]) -> None:
+        self.ranks = ranks
+        self.changed = False
+        self._ctr = 0
+
+    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+        self.generic_visit(node)
+        calls = [n for n in ast.walk(node.value) if _np_attr(n) == "bincount" and n.args]
+        if not calls:
+            return node
+        pre: List[ast.stmt] = []
+        for call in calls:
+            kw = {k.arg: k.value for k in call.keywords}
+            minlength = kw.get("minlength") or (call.args[2] if len(call.args) > 2 else None)
+            weights = kw.get("weights") or (call.args[1] if len(call.args) > 1 else None)
+            if minlength is None:
+                return node  # data-dependent extent -- leave it standing rather than guess one
+            name = f"__bc{self._ctr}"
+            self._ctr += 1
+            idx, it = ast.unparse(call.args[0]), f"{name}_i"
+            dtype = f"{ast.unparse(weights)}.dtype" if weights is not None else "np.int64"
+            rhs = f"{ast.unparse(weights)}[{it}]" if weights is not None else "1"
+            lines = [
+                f"{name} = np.zeros({ast.unparse(minlength)}, dtype={dtype})",
+                f"for {it} in range({idx}.shape[0]):",
+                f"    {name}[{idx}[{it}]] += {rhs}",
+            ]
+            pre.extend(ast.parse("\n".join(lines)).body)
+            call.func = ast.Name(id="__bincount_result__", ctx=ast.Load())
+            _replace_call_with_name(node, call, name)
+        self.changed = True
+        out = pre + [node]
+        for stmt in out:
+            ast.copy_location(stmt, node)
+            ast.fix_missing_locations(stmt)
+        return out
+
+
+def _replace_call_with_name(root: ast.AST, target: ast.Call, name: str) -> None:
+    """Swap one already-lowered Call node for a Name reference, wherever it sits in ``root``."""
+
+    class Swap(ast.NodeTransformer):
+
+        def visit_Call(self, node: ast.Call) -> ast.AST:
+            self.generic_visit(node)
+            return ast.copy_location(ast.Name(id=name, ctx=ast.Load()), node) if node is target else node
+
+    Swap().visit(root)
+
+
 class _AddAtInline(ast.NodeTransformer):
     """``np.add.at(A, idx, vals)`` -> an explicit scatter loop. numba has no
     ufunc.at; a sequential ``+=`` loop reproduces its defining property --
@@ -1812,26 +1993,115 @@ class _AddAtInline(ast.NodeTransformer):
                 first_arr = first_arr or t
             else:
                 idx_exprs.append(ast.unparse(e))
+        trail_iters: List[str] = []
         if vals is None:
             rhs = "1"
         else:
             tv = f"{p}_v"
-            pre.append(f"{tv} = np.ascontiguousarray({ast.unparse(vals)})")
             vr = expr_rank(vals, self.ranks)
-            if vr and vr not in (0, driver_rank):
-                # vals broadcasts against the index shape; only a scalar or a
-                # driver-shaped vals is unambiguous. Anything else would need
-                # numpy broadcast alignment we do not model -> fail loudly.
+            if vr == 0:
+                # A SCALAR value stays a scalar: ``np.ascontiguousarray(1)`` is a 0-d ARRAY, and
+                # pythran then has no ``double += 0-d array``. The materialisation exists for a lazy
+                # numpy_expr operand, which a scalar is not.
+                tv = ast.unparse(vals)
+            else:
+                pre.append(f"{tv} = np.ascontiguousarray({ast.unparse(vals)})")
+            # ``A[idx]`` keeps the axes the index tuple does NOT address, so a rank-1 index into a
+            # rank-3 A selects rank-2 blocks and vals is legitimately rank 3 (cp2k_density_matrix_trs4's
+            # ``np.add.at(c_blocks, flat_c_pos, alpha * flat_prod)``). Those trailing axes get their
+            # own loops rather than a subarray ``+=``: scalar accumulation is what every backend
+            # supports, and it keeps the unbuffered duplicate-index order this lowering exists for.
+            trailing = vr - driver_rank if vr else 0
+            a_rank = self.ranks.get(A)
+            if vr and trailing and (trailing < 0 or a_rank is None or a_rank - len(elts) != trailing):
+                # Anything else would need numpy broadcast alignment we do not model -> fail loudly.
                 raise DesugarError(f"np.add.at values ndim {vr} != index ndim {driver_rank} "
-                                   "(only scalar or matching-shape values are lowered)")
-            rhs = f"{tv}[{it}]" if vr and vr >= 1 else tv
+                                   f"plus the {'unknown' if a_rank is None else a_rank - len(elts)} "
+                                   "axes the index leaves untouched (only scalar, matching-shape or "
+                                   "block-shaped values are lowered)")
+            trail_iters = [f"{p}_t{k}" for k in range(trailing)]
+            idx_exprs.extend(trail_iters)
+            rhs = f"{tv}[{', '.join(iters + trail_iters)}]" if vr and vr >= 1 else tv
         lines, deepen = list(pre), ""
         for k in range(driver_rank):
             lines.append(f"{deepen}for {iters[k]} in range({first_arr}.shape[{k}]):")
             deepen += "    "
+        for k, t in enumerate(trail_iters):
+            lines.append(f"{deepen}for {t} in range({tv}.shape[{driver_rank + k}]):")
+            deepen += "    "
         lines.append(f"{deepen}{A}[{', '.join(idx_exprs)}] {_AT_OPS[op]} {rhs}")
         self.changed = True
         return [ast.copy_location(s, node) for s in ast.parse("\n".join(lines)).body]
+
+
+class _SpliceErrstate(ast.NodeTransformer):
+    """``with np.errstate(<flags>): <body>`` -> ``<body>``.
+
+    ``errstate`` changes how numpy REPORTS an invalid operation (warn / raise / ignore); it never
+    changes the value produced -- azimint's empty bin still divides 0 by 0 and still yields nan.
+    The native backends do not report at all, so the context is already what ``ignore`` asks for,
+    and pythran refuses the statement outright ("With statements not supported").
+
+    Only ``np.errstate`` is spliced. Any other context manager is left standing: a ``with`` that
+    owns a resource is not a no-op, and silently dropping it would be a different program.
+    """
+
+    def __init__(self) -> None:
+        self.changed = False
+
+    def visit_With(self, node: ast.With) -> ast.AST:
+        self.generic_visit(node)
+        if len(node.items) != 1 or node.items[0].optional_vars is not None:
+            return node
+        call = node.items[0].context_expr
+        if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and call.func.attr == "errstate"
+                and isinstance(call.func.value, ast.Name) and call.func.value.id in ("np", "numpy")):
+            return node
+        self.changed = True
+        return node.body
+
+
+class _SearchsortedMaterialize(ast.NodeTransformer):
+    """``np.searchsorted(<expr>, v)`` -> ``np.searchsorted(np.ascontiguousarray(<expr>), v)``.
+
+    pythran keeps ``rmax * np.arange(npt + 1) / npt`` as a lazy ``numpy_expr`` whose iterator is
+    forward-only, and searchsorted needs to walk it backwards -- the g++ error is a missing
+    ``operator--`` on a numpy_expr_iterator, several template layers deep and nowhere near the line
+    that caused it. Materialising the sorted operand is a no-op for an array that is already
+    contiguous, which is what the other backends see.
+    """
+
+    def __init__(self) -> None:
+        self.changed = False
+        self._ctr = 0
+
+    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+        self.generic_visit(node)
+        calls = [
+            n for n in ast.walk(node.value) if isinstance(n, ast.Call) and _np_attr(n) == "searchsorted" and n.args
+        ]
+        if not calls:
+            return node
+        pre: List[ast.stmt] = []
+        for call in calls:
+            # A NAME is not enough: pythran binds a name to the lazy expression itself, so
+            # ``edges = rmax * np.arange(n) / npt`` stays an unmaterialised numpy_expr at the use.
+            tmp = f"__ss{self._ctr}"
+            self._ctr += 1
+            pre.append(
+                ast.Assign(targets=[ast.Name(id=tmp, ctx=ast.Store())],
+                           value=ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()),
+                                                             attr="ascontiguousarray",
+                                                             ctx=ast.Load()),
+                                          args=[call.args[0]],
+                                          keywords=[])))
+            call.args[0] = ast.Name(id=tmp, ctx=ast.Load())
+        self.changed = True
+        out = pre + [node]
+        for stmt in out:
+            ast.copy_location(stmt, node)
+            ast.fix_missing_locations(stmt)
+        return out
 
 
 class _HistogramHoister(ast.NodeTransformer):
@@ -1910,20 +2180,79 @@ _UFUNC_OUT_OPS = {
     "mod": ast.Mod,
 }
 
+#: binary ufuncs with no Python operator (``max``/``min`` are statements, not BinOps) whose ``out=``
+#: form keeps the call and only drops the keyword -- the plain (no ``out=``) call already lowers
+#: through the generic elementwise-Call path (densenet's pooling cores, once their ``acc = None``
+#: seed is peeled, reduce to exactly this shape).
+_UFUNC_OUT_CALLS = OrderedSet(("maximum", "minimum", "fmax", "fmin"))
+
+
+class _FillDiagonalInline(ast.NodeTransformer):
+    """``np.fill_diagonal(A, v)`` -> ``for __fd in range(min(A.shape[0], A.shape[1])): A[__fd, __fd] = v``.
+
+    numpy's rule for a 2-D target, written out. A higher-rank target keeps the call and is refused
+    downstream: numpy then fills ``A[i, i, ..., i]`` and requires every axis to be equal, and
+    ``wrap=True`` fills a different set of cells again, so neither may be assumed here.
+    """
+
+    def visit_Expr(self, node: ast.Expr) -> ast.AST:
+        call = node.value
+        if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                and isinstance(call.func.value, ast.Name) and call.func.value.id in ("np", "numpy")
+                and call.func.attr == "fill_diagonal"):
+            return node
+        if len(call.args) != 2 or call.keywords or not isinstance(call.args[0], ast.Name):
+            return node
+        arr, val = call.args[0], call.args[1]
+        it = "__fd0"
+
+        def axis(k: int) -> ast.expr:
+            return ast.Subscript(value=ast.Attribute(value=ast.Name(id=arr.id, ctx=ast.Load()),
+                                                     attr="shape",
+                                                     ctx=ast.Load()),
+                                 slice=ast.Constant(value=k),
+                                 ctx=ast.Load())
+
+        bound = ast.Call(func=ast.Name(id="min", ctx=ast.Load()), args=[axis(0), axis(1)], keywords=[])
+        store = ast.Assign(targets=[
+            ast.Subscript(value=ast.Name(id=arr.id, ctx=ast.Load()),
+                          slice=ast.Tuple(elts=[ast.Name(id=it, ctx=ast.Load()),
+                                                ast.Name(id=it, ctx=ast.Load())],
+                                          ctx=ast.Load()),
+                          ctx=ast.Store())
+        ],
+                           value=val)
+        loop = ast.For(target=ast.Name(id=it, ctx=ast.Store()),
+                       iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[bound], keywords=[]),
+                       body=[store],
+                       orelse=[])
+        return ast.fix_missing_locations(ast.copy_location(loop, node))
+
 
 class _UfuncOutInline(ast.NodeTransformer):
-    """``np.multiply(a, b, out=c)`` (and the other binary arithmetic ufuncs) -> the
-    explicit assignment ``c = a <op> b``. The C/Fortran backends have no ufunc
-    dispatch, so the ``out=`` form must be lowered to a store (minife's axpby).
-    ``c`` may be a slice (``wcoefs[:n]``) -- the assignment target is that slice."""
+    """``np.multiply(a, b, out=c)`` (the binary arithmetic ufuncs) -> the explicit assignment
+    ``c = a <op> b``; ``np.maximum(a, b, out=c)`` (and the other ``_UFUNC_OUT_CALLS`` members, which
+    have no BinOp form) -> ``c = np.maximum(a, b)``. The C/Fortran backends have no ufunc dispatch,
+    so the ``out=`` form must be lowered to a store (minife's axpby). ``c`` may be a slice
+    (``wcoefs[:n]``) -- the assignment target is that slice."""
 
     def _rewrite(self, call: ast.AST):
-        if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
-                and isinstance(call.func.value, ast.Name) and call.func.value.id in ("np", "numpy")):
+        if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and len(call.args) == 2):
             return None
-        op = _UFUNC_OUT_OPS.get(call.func.attr)
-        if op is None or len(call.args) != 2:
-            return None
+        # ``np.<ufunc>.outer(a, b, out=c)`` is the same store with a two-level name. There is no
+        # BinOp spelling for an outer product, so the call is kept and only the ``out=`` becomes a
+        # target -- floyd_warshall writes its whole relaxation step this way.
+        outer_form = (isinstance(call.func.value, ast.Attribute) and isinstance(call.func.value.value, ast.Name)
+                      and call.func.value.value.id in ("np", "numpy") and call.func.attr == "outer")
+        if outer_form:
+            op = None
+        else:
+            if not (isinstance(call.func.value, ast.Name) and call.func.value.id in ("np", "numpy")):
+                return None
+            attr = call.func.attr
+            op = _UFUNC_OUT_OPS.get(attr)
+            if op is None and attr not in _UFUNC_OUT_CALLS:
+                return None
         out = next((kw.value for kw in call.keywords if kw.arg == "out"), None)
         if out is None:
             return None
@@ -1931,8 +2260,11 @@ class _UfuncOutInline(ast.NodeTransformer):
         for n in ast.walk(target):
             if isinstance(n, (ast.Name, ast.Subscript, ast.Attribute)):
                 n.ctx = ast.Store()
-        return ast.copy_location(
-            ast.Assign(targets=[target], value=ast.BinOp(left=call.args[0], op=op(), right=call.args[1])), call)
+        if op is not None:
+            value: ast.expr = ast.BinOp(left=call.args[0], op=op(), right=call.args[1])
+        else:
+            value = ast.Call(func=copy.deepcopy(call.func), args=[call.args[0], call.args[1]], keywords=[])
+        return ast.copy_location(ast.Assign(targets=[target], value=value), call)
 
     def visit_Expr(self, node: ast.Expr):
         rw = self._rewrite(node.value)
@@ -4270,6 +4602,85 @@ _AUG_OP_SRC = {
 }
 
 
+class _FancySliceStoreToLoop(ast.NodeTransformer):
+    """``A[idx, :, :] (op)= rhs`` (one index array, the other axes sliced) -> a loop over ``idx``.
+
+    pythran compiles this store to the WRONG elements and says nothing: measured on a 3-D write
+    through a length-2 index array, every written plane disagreed with numpy. The read form
+    (``q[idx - 1, :, :]``) is correct there, so only the store is lowered.
+
+    numpy places a lone advanced index at result axis 0 whenever slices surround it -- in place
+    when it leads, moved to the FRONT when a slice precedes it -- so the hoisted right-hand side
+    is always indexed on its first axis. Two index arrays broadcast together and are left alone.
+    """
+
+    def __init__(self, ranks: Dict[str, int], dtypes: Dict[str, str]):
+        self.ranks = ranks
+        self.dtypes = dtypes
+        self.changed = False
+        self._ctr = 0
+
+    def _carrier(self, lead: List[ast.expr]) -> Optional[int]:
+        """Index of the one lead position holding a rank-1 index array, if the shape fits."""
+        if not any(isinstance(e, ast.Slice) for e in lead):
+            return None
+        found = None
+        for k, e in enumerate(lead):
+            if isinstance(e, ast.Slice):
+                continue
+            names = [n.id for n in ast.walk(e) if isinstance(n, ast.Name)]
+            arrs = [n for n in names if self.ranks.get(n) == 1 and _dtype_kind(ast.Name(id=n), self.dtypes) != "bool"]
+            if not arrs:
+                continue
+            if found is not None or len(set(arrs)) != 1:
+                return None
+            found = k
+        return found
+
+    def _lower(self, node: ast.stmt, target: ast.expr, value: ast.expr, op: str) -> ast.AST:
+        if not (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)):
+            return node
+        lead = list(target.slice.elts) if isinstance(target.slice, ast.Tuple) else [target.slice]
+        k = self._carrier(lead)
+        if k is None:
+            return node
+        p = f"__fs{self._ctr}"
+        self._ctr += 1
+        it = f"{p}_i"
+        idx_name = next(n.id for n in ast.walk(lead[k]) if isinstance(n, ast.Name) and self.ranks.get(n.id) == 1)
+        at_iter = _SubstituteName(idx_name, f"{idx_name}[{it}]").visit(copy.deepcopy(lead[k]))
+        new_lead = [ast.unparse(e) if j != k else ast.unparse(at_iter) for j, e in enumerate(lead)]
+        lines = [
+            f"{p}_v = {ast.unparse(value)}",
+            f"for {it} in range({idx_name}.shape[0]):",
+            f"    {target.value.id}[{', '.join(new_lead)}] {op} {p}_v[{it}]",
+        ]
+        self.changed = True
+        return [ast.copy_location(st, node) for st in ast.parse("\n".join(lines)).body]
+
+    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+        self.generic_visit(node)
+        if len(node.targets) != 1:
+            return node
+        return self._lower(node, node.targets[0], node.value, "=")
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST:
+        self.generic_visit(node)
+        op = _AUG_OP_SRC.get(type(node.op))
+        return node if op is None else self._lower(node, node.target, node.value, op)
+
+
+class _SubstituteName(ast.NodeTransformer):
+    """Replace bare ``name`` with the parsed ``text`` (used to index a gather array at a loop iter)."""
+
+    def __init__(self, name: str, text: str):
+        self.name = name
+        self.repl = ast.parse(text, mode="eval").body
+
+    def visit_Name(self, node: ast.Name) -> ast.AST:
+        return copy.deepcopy(self.repl) if node.id == self.name else node
+
+
 class _IxWriteToLoop(ast.NodeTransformer):
     """``A[np.ix_(i, j, k)] = / += rhs`` -> an explicit loop nest over the index
     vectors. ``np.ix_`` selects the OUTER PRODUCT of its vectors -- element
@@ -4724,6 +5135,9 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
         consts = _const_name_values(fn)
         passes = [
             _DropGuards(),
+            # First: it splices statements OUT of a ``with`` body, and every pass below walks only
+            # this scope's top-level statements.
+            _SpliceErrstate(),
             _ConstComprehensionFold(consts),
             _ListCompUnroll(consts),
             # Before every temp-minting pass below: an ``or`` clones its if-body, and two
@@ -4732,6 +5146,7 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
             _BoolOpIfToChain(),
             _NormalizeNegativeAxis(ranks),
             _IxWriteToLoop(ranks, dtypes),
+            _FancySliceStoreToLoop(ranks, dtypes),
             _EighInline(ranks, eigh_aliases, dtypes, kir_array_dtypes),
             _LinalgInline(ranks, dtypes, lower_linalg, lower_solve_rhs_ranks),
             _ReshapeMatmulInline(ranks),
@@ -4752,6 +5167,15 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
             _UfuncOuterInline(ranks),
             _MaskedAssignToLoop(ranks, dtypes),
             _AddAtInline(ranks),
+            _SearchsortedMaterialize(),
+            # Bincount BEFORE the diff rewrite: the repeat lowering below reads ``np.diff(p)``
+            # structurally to prove its output length telescopes.
+            _StripAstypeCopyKwarg(),
+            _RepeatCountsInline(ranks),
+            _BincountInline(ranks),
+            # LAST of the three: the repeat lowering above reads ``np.diff(p)`` structurally, so the
+            # slice rewrite has to come after it.
+            _DiffToSliceDifference(),
             _HistogramInline(ranks),
             _RepeatAxisInline(ranks),
             _ReshapeContiguousInline(noncontig),

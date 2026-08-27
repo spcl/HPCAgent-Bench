@@ -11,10 +11,19 @@ PLATFORM="${PLATFORM:-linux/arm64}"
 
 mkdir -p "$(dirname "${OUTPUT_SQSH}")"
 
+# DaCe: resolve the TIP of extended HERE, and pass the sha in. The Dockerfile cannot do this --
+# its layer cache keys on the command string, so a `--branch extended` clone is reused forever and
+# the image ages into a pin. Resolving outside makes the sha part of the cache key, so the layer
+# rebuilds exactly when extended moves and never otherwise.
+DACE_COMMIT="${DACE_COMMIT:-$(git ls-remote https://github.com/spcl/dace.git refs/heads/extended | cut -f1)}"
+[[ -n "${DACE_COMMIT}" ]] || { echo "could not resolve spcl/dace@extended" >&2; exit 2; }
+printf 'dace @ %s\n' "${DACE_COMMIT}"
+
 cd "${REPO_ROOT}"
 podman build \
   --platform "${PLATFORM}" \
   --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
+  --build-arg "DACE_COMMIT=${DACE_COMMIT}" \
   -f "${SCRIPT_DIR}/Dockerfile" \
   -t "${IMAGE_TAG}" \
   .

@@ -10,6 +10,7 @@ from typing import Callable, Dict, List, NamedTuple, Optional, Set, Tuple
 
 from numpyto_common.ir import ArrayDesc, KernelIR
 from numpyto_common import dtypes, narrow_int, operators, parallelism
+from numpyto_common.ordered import OrderedSet
 from numpyto_common.emitter import BaseEmitter
 from numpyto_common.frontend import _names_used_as_int
 from numpyto_common.lowering import _walk_complex
@@ -216,6 +217,24 @@ def _array_signature(arr: ArrayDesc) -> str:
     return f"{qual}{base} *restrict {arr.name}"
 
 
+def _assigned_names(tree: ast.AST) -> OrderedSet:
+    """Names the body writes to, so a by-value parameter it reuses as a local is not declared const.
+
+    A kernel may recompute a size symbol it also receives (spmv's ``M = ((M + 1) - 1)``), and C
+    rejects an assignment to a const parameter. Mirrors the Fortran emitter, which drops
+    ``intent(in)`` on exactly these -- see ``numpyto_fortran.emit._symbol_decl``. Top-level ``const``
+    on a by-value parameter is not part of C's function type, so the ABI is identical either way and
+    the two backends stay in step.
+    """
+    names = OrderedSet()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Assign):
+            names.update(t.id for t in n.targets if isinstance(t, ast.Name))
+        elif isinstance(n, ast.AugAssign) and isinstance(n.target, ast.Name):
+            names.add(n.target.id)
+    return names
+
+
 def _emit_signature(kir: KernelIR, fn_name: str, order: Optional[List[str]] = None) -> str:
     """Emit the C signature in ABI (``kir.param_order()``) order -- kernels and internal helpers alike.
 
@@ -226,15 +245,20 @@ def _emit_signature(kir: KernelIR, fn_name: str, order: Optional[List[str]] = No
     sym_by_name = {s.name: s for s in kir.symbols}
     arr_by_name = {a.name: a for a in kir.arrays}
     sca_by_name = {s.name: s for s in kir.scalars}
+    assigned = _assigned_names(kir.tree)
     for name in (kir.param_order() if order is None else order):
         if name in sym_by_name:
-            parts.append(f"{dtypes.c_type('int')} {name}")  # int64_t (canonical)
+            # int64_t (canonical); const per abi_contract Sec. 5 unless the body reuses the symbol
+            # as a local -- see _assigned_names.
+            qual = "" if name in assigned else "const "
+            parts.append(f"{qual}{dtypes.c_type('int')} {name}")
         elif name in arr_by_name:
             parts.append(_array_signature(arr_by_name[name]))
         elif name in sca_by_name:
             sca = sca_by_name[name]
             c_ty = _c_type(sca.dtype)
-            parts.append(f"{c_ty} {name}")
+            qual = "" if name in assigned else "const "
+            parts.append(f"{qual}{c_ty} {name}")
         else:
             raise ValueError(f"unknown parameter {name!r} in kernel {kir.kernel_name}")
     return f"void {fn_name}({', '.join(parts)})"
@@ -378,6 +402,7 @@ class _CBodyEmitter(BaseEmitter):
 
     _STMT_TERM = ";"
     _KW_BREAK = "break;"
+    _COMMENT = ("/*", "*/")
     _KW_CONTINUE = "continue;"
 
     def __init__(self, kir: KernelIR, multidim_arrays: Optional[Set[str]] = None):
@@ -431,9 +456,19 @@ class _CBodyEmitter(BaseEmitter):
 
     # ----- statement-level ------------------------------------------------
 
+    def numpy_note(self, node: ast.stmt, indent: str) -> str:
+        """No provenance note in the ISO-parallel C++ form.
+
+        The note exists because a loop nest is anonymous where a Fortran intrinsic names itself.
+        ``cpp_isopar`` spells the same operation as a named ``<algorithm>`` / ``<numeric>`` call --
+        ``std::reduce``, ``std::transform_reduce`` -- so the name is already the documentation and
+        the comment is noise. Plain C keeps it: it has no named form to fall back on.
+        """
+        return "" if self.isopar else super().numpy_note(node, indent)
+
     def emit_block(self, stmts: List[ast.stmt], indent: str) -> str:
         """The base walk, plus (pluto only) a ``#pragma scop`` around each scopable run of the block."""
-        texts = [t for t in (self.emit_stmt(s, indent) for s in stmts) if t]
+        texts = [t for t in (self.emit_stmt_with_note(s, indent) for s in stmts) if t]
         if not self.pluto:
             return "\n".join(texts)
         return pluto_scop_regions(texts, indent, self._pluto_unscopable)
@@ -1737,8 +1772,60 @@ def _is_newaxis_or_ellipsis(e: ast.AST) -> bool:
     return isinstance(e, ast.Attribute) and e.attr == "newaxis"
 
 
+#: Python binary operators with a direct C spelling. ``FloorDiv``/``Mod``/``Pow`` are deliberately
+#: absent -- each needs a helper, see :func:`_render_c_shape`.
+_C_SHAPE_BINOPS = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/"}
+
+
+def _render_c_shape(node: ast.AST) -> Optional[str]:
+    """One shape token's AST as a C integer expression, or ``None`` if it holds something this
+    cannot render exactly."""
+    if isinstance(node, ast.Expression):
+        return _render_c_shape(node.body)
+    if isinstance(node, ast.Constant) and isinstance(node.value, int) and not isinstance(node.value, bool):
+        return str(node.value)
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        operand = _render_c_shape(node.operand)
+        return None if operand is None else f"({'-' if isinstance(node.op, ast.USub) else '+'}{operand})"
+    if isinstance(node, ast.BinOp):
+        left, right = _render_c_shape(node.left), _render_c_shape(node.right)
+        if left is None or right is None:
+            return None
+        if isinstance(node.op, ast.FloorDiv):
+            return f"int_floor({left}, {right})"
+        if isinstance(node.op, ast.Mod):
+            return f"python_mod({left}, {right})"
+        if isinstance(node.op, ast.Pow):
+            return f"__npb_int_pow({left}, {right})"
+        op = _C_SHAPE_BINOPS.get(type(node.op))
+        return None if op is None else f"({left} {op} {right})"
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and not node.keywords:
+        args = [_render_c_shape(a) for a in node.args]
+        return None if any(a is None for a in args) else f"{node.func.id}({', '.join(args)})"
+    return None
+
+
 def _c_shape_token(tok: str) -> str:
-    """Translate a Python shape token to a C-valid integer expression (// -> /, a ** b -> __npb_int_pow(a, b))."""
+    """Translate a Python shape token to a C-valid integer expression.
+
+    ``//`` becomes ``int_floor``, never ``/``: C division truncates toward zero while Python's
+    floors, and the ceiling idiom every padded extent is built from -- ``-(-length // w)`` -- has a
+    negative numerator, which is exactly where the two disagree. Emitted as ``/`` it sized
+    max_filter's padded buffer one block short while the fill loop, which does use ``int_floor``,
+    wrote the full block and ran off the end of it. ``%`` is the same story (Python takes the sign
+    of the divisor), and ``a ** b`` has no C operator at all.
+
+    Falls back to the textual rewrite for a token that is not a parseable Python expression.
+    """
+    rendered = None
+    try:
+        rendered = _render_c_shape(ast.parse(str(tok), mode="eval"))
+    except SyntaxError:
+        rendered = None
+    if rendered is not None:
+        return rendered
     out = str(tok).replace("//", "/")
     # ** -> __npb_int_pow(a, b), matched textually left-to-right (nested a**b**c stays right-assoc via the recursion).
     while "**" in out:
@@ -2241,11 +2328,12 @@ _C_HEADER = ("#define _USE_MATH_DEFINES\n"
              "#include <string.h>\n"
              "#include <math.h>\n"
              "#include <complex.h>\n"
-             "/* ``z.conjugate()`` -- portable complex-conjugate scalar\n"
-             " * helper. Inline static so callers see the same signature\n"
-             " * in C and C++. */\n"
+             "/* ``z.conjugate()`` -- named helper so the C and C++ preludes\n"
+             " * offer the same spelling. C has the standard one: ``conj``\n"
+             " * from <complex.h>. The C++ prelude, which has no <complex.h>,\n"
+             " * writes its own. */\n"
              "static inline double _Complex __npb_conj(double _Complex z) {\n"
-             "    return __builtin_complex(__real__ z, -__imag__ z);\n"
+             "    return conj(z);\n"
              "}\n"
              "/* M_PI / M_E etc. are POSIX/GNU extensions -- ensure they\n"
              " * are defined even on strict-C builds (glibc 2.27+ /\n"

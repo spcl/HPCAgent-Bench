@@ -1,8 +1,9 @@
-"""A slice STEP is a structural slot, so a manifest-constant runtime argument folds into it.
+"""A slice STEP the ABI supplies keeps its name: it lowers as ``lo + pos * step``, it is never folded.
 
-``_reject_unsupported_slices`` refuses a non-literal step because ``_slice_step_const`` returns
-``None`` for it and every consumer reads that as step 1 -- ``x[::s]`` emitted a contiguous copy and
-the stride was silently gone. The guard is right; what was wrong was the INPUT to it.
+``_reject_unsupported_slices`` refuses a non-literal step only when the slice has no UPPER BOUND --
+there the step's sign is unconstrained and the two signs walk the axis in opposite directions. A
+bounded step lowers symbolically on every backend, so the stride reaches the emitted code as the
+argument the harness passed.
 
 The KernelBench conv/pool ports (``resnet_basic_block``, ``efficientnet_mb_conv``) declare the
 stride as an ``init.scalars`` value that is ALSO an ABI argument, then slice with it inside a helper
@@ -10,13 +11,13 @@ that inlines into the body::
 
     padded[:, :, ky:ky + (oh - 1) * stride + 1:stride, kx:...]
 
-``_FoldStructuralUses`` already folded such an argument in a reduction's AXIS slot -- the same class
-of slot, refused by the sibling guard for the same reason -- but not in a slice step, so both ports
-were refused outright. It now folds there too, and only there: the BOUNDS keep the name and reach
-the ABI, because a bound is an ordinary integer expression a runtime value evaluates fine.
+That step was once folded to its manifest value, because ``_slice_step_const`` read a non-literal
+step as 1 and the stride was silently lost. The symbolic lowering removed that premise, so the fold
+was removed with it: a signature that takes ``stride`` and ignores it is the failure the ABI
+ratchets exist to catch, and it is the same reason the AXIS slot was never folded.
 
-The guard is not weakened. A step whose value is not preset-constant (absent from the manifest, or
-present but reachable as an EXTENT, which the harness may scale at run time) is still refused.
+A manifest-constant symbol that is NOT an ABI argument still folds -- ``_FoldConstantSymbols`` --
+because nothing passes it at run time. Only names the binding passes are excluded.
 """
 import ast
 import json
@@ -80,27 +81,31 @@ def steps(kir) -> List[Optional[object]]:
     return out
 
 
-# ---- structural: the manifest value reaches the step slot, and only that slot ---- #
+# ---- structural: an ABI step stays a name, whatever the manifest says it equals ---- #
 
 
-def test_manifest_scalar_step_folds_to_its_literal() -> None:
+def test_manifest_scalar_step_stays_symbolic() -> None:
+    """The manifest says ``stride`` is 2 in every preset, and the step STILL keeps the name.
+
+    Folding it would compile and run -- and would ignore whatever the harness passed, which is the
+    one failure the caller cannot see.
+    """
     src = ("import numpy as np\n"
            "def pool(v, k):\n"
            "    return v[:(6 - 1) * k + 1:k] * 1.0\n"
            "def f(x, stride, out):\n"
            "    out[:] = pool(x, stride)\n")
     kir = parse(src, ["x", "stride", "out"], ["x", "out"], {"x": "(N,)", "out": "(6,)"}, {"N": 12, "stride": 2})
-    assert steps(kir) == [2]
-    # The BOUND keeps the name: it is an ordinary integer expression, so the argument still reaches
-    # the ABI and the harness may pass a value other than the manifest default.
+    assert steps(kir) == [None], steps(kir)
     assert "stride" in kir.param_order(), kir.param_order()
 
 
 def test_two_distinct_manifest_steps_do_not_collapse() -> None:
-    """Two structural constants in one kernel each fold to their OWN value.
+    """Two manifest-constant strides in one kernel each keep their OWN name.
 
     Collapsing them is the failure mode that produces a wrong answer rather than a refusal: both
-    slices would compile, and the second would silently walk the first's stride.
+    slices would compile, and the second would silently walk the first's stride. The numbers, not
+    the exit code, are what decide it -- see the numeric sibling below.
     """
     src = ("import numpy as np\n"
            "def f(x, stride_a, stride_b, out_a, out_b):\n"
@@ -115,40 +120,128 @@ def test_two_distinct_manifest_steps_do_not_collapse() -> None:
         "stride_a": 2,
         "stride_b": 3
     })
-    assert steps(kir) == [2, 3]
+    assert steps(kir) == [None, None], steps(kir)
+    assert [p for p in kir.param_order() if p.startswith("stride")] == ["stride_a", "stride_b"], kir.param_order()
+
+
+def test_two_distinct_manifest_steps_walk_their_own_stride() -> None:
+    """out_a reads 1 3 5 7 9 11 and out_b reads 1 4 7 10; a collapse fills one of them with the
+    other's stride and still compiles."""
+    src = ("import numpy as np\n"
+           "def f(x, stride_a, stride_b, out_a, out_b):\n"
+           "    out_a[:] = x[:(6 - 1) * stride_a + 1:stride_a] * 1.0\n"
+           "    out_b[:] = x[:(4 - 1) * stride_b + 1:stride_b] * 1.0\n")
+    assert_ok(
+        run_op(src,
+               "f", {
+                   "x": A12,
+                   "stride_a": 2,
+                   "stride_b": 3
+               }, {
+                   "out_a": (6, ),
+                   "out_b": (4, )
+               }, {
+                   "N": 12,
+                   "stride_a": 2,
+                   "stride_b": 3
+               },
+               shapes={
+                   "x": "(N,)",
+                   "out_a": "(6,)",
+                   "out_b": "(4,)"
+               },
+               backends=NATIVE))
 
 
 # ---- the guard still fires on a step that is genuinely not compile-time ---- #
 
 
-def test_a_step_absent_from_the_manifest_is_still_refused() -> None:
+def test_a_bounded_step_absent_from_the_manifest_lowers_symbolically() -> None:
+    """No manifest value to fold, but the slice is BOUNDED, so the stride lowers as an expression.
+
+    The fold is what needs a compile-time value; the index ``lo + pos * step`` does not. Nothing
+    here may become a literal -- the step is an ABI argument the harness passes.
+    """
     src = ("import numpy as np\n"
            "def f(x, step, out):\n"
            "    out[:] = x[:(6 - 1) * step + 1:step] * 1.0\n")
-    with pytest.raises(NotImplementedError, match="must be a compile-time integer"):
-        parse(src, ["x", "step", "out"], ["x", "out"], {"x": "(N,)", "out": "(6,)"}, {"N": 12})
+    kir = parse(src, ["x", "step", "out"], ["x", "out"], {"x": "(N,)", "out": "(6,)"}, {"N": 12})
+    assert steps(kir) == [None], steps(kir)
+    assert "step" in kir.param_order(), kir.param_order()
+
+
+def test_a_bounded_step_absent_from_the_manifest_matches_numpy() -> None:
+    """A lost stride reads 1..6 instead of 1 3 5 7 9 11 -- the discriminating output."""
+    src = ("import numpy as np\n"
+           "def f(x, step, out):\n"
+           "    out[:] = x[:(6 - 1) * step + 1:step] * 1.0\n")
+    assert_ok(
+        run_op(src,
+               "f", {
+                   "x": A12,
+                   "step": 2
+               }, {"out": (6, )}, {"N": 12},
+               shapes={
+                   "x": "(N,)",
+                   "out": "(6,)"
+               },
+               backends=NATIVE))
 
 
 def test_a_rebound_step_name_is_not_folded() -> None:
     """Once the body assigns to it, the manifest default is no longer what the slice reads.
 
-    Folding there is the worse outcome of the two: a wrong stride that compiles, rather than the
-    refusal. Same rule ``_FoldConstantSymbols`` already applies to its own substitution.
+    Folding is still refused -- a wrong stride that compiles is the worst outcome of the three, and
+    the same rule ``_FoldConstantSymbols`` applies to its own substitution. What changed is the
+    fallback: the step is now carried symbolically instead of refusing the kernel outright, so the
+    slice reads the REBOUND value.
     """
     src = ("import numpy as np\n"
            "def f(x, stride, out):\n"
            "    stride = stride + 1\n"
-           "    out[:] = x[:(6 - 1) * stride + 1:stride] * 1.0\n")
-    with pytest.raises(NotImplementedError, match="must be a compile-time integer"):
-        parse(src, ["x", "stride", "out"], ["x", "out"], {"x": "(N,)", "out": "(6,)"}, {"N": 12, "stride": 2})
+           "    out[:] = x[:(4 - 1) * stride + 1:stride] * 1.0\n")
+    kir = parse(src, ["x", "stride", "out"], ["x", "out"], {"x": "(N,)", "out": "(4,)"}, {"N": 12, "stride": 2})
+    assert steps(kir) == [None], steps(kir)
 
 
-def test_a_step_that_is_also_an_extent_is_still_refused() -> None:
-    """An extent may be SCALED at run time, so its manifest value is not the artifact's value."""
+def test_a_rebound_step_walks_the_rebound_stride_on_every_backend() -> None:
+    """``stride`` arrives as 2 and is rebound to 3, so the read is 1 4 7 10.
+
+    Had the manifest's 2 been folded in, the same kernel would fill ``out`` with 1 3 5 7 -- it
+    compiles either way, which is why the numbers rather than the exit code decide it.
+    """
+    src = ("import numpy as np\n"
+           "def f(x, stride, out):\n"
+           "    stride = stride + 1\n"
+           "    out[:] = x[:(4 - 1) * stride + 1:stride] * 1.0\n")
+    assert_ok(
+        run_op(src,
+               "f", {
+                   "x": A12,
+                   "stride": 2
+               }, {"out": (4, )}, {
+                   "N": 12,
+                   "stride": 2
+               },
+               shapes={
+                   "x": "(N,)",
+                   "out": "(4,)"
+               },
+               backends=NATIVE))
+
+
+def test_an_unbounded_symbolic_step_is_still_refused() -> None:
+    """``x[::s]`` has no upper bound, so the step's SIGN is unconstrained and undecidable here.
+
+    Both signs produce a full-length axis, and they walk it in opposite directions; emitting the
+    forward index would silently be the wrong one half the time. The bounded form is what makes the
+    positive stride the only reading that has a run to preserve. ``N`` is also an EXTENT, which the
+    harness may scale at run time -- the reason the manifest fold declines it too.
+    """
     src = ("import numpy as np\n"
            "def f(x, out):\n"
            "    out[:] = x[::N] * 1.0\n")
-    with pytest.raises(NotImplementedError, match="must be a compile-time integer"):
+    with pytest.raises(NotImplementedError, match="needs an upper bound"):
         parse(src, ["x", "out"], ["x", "out"], {"x": "(N,)", "out": "(1,)"}, {"N": 12})
 
 
@@ -156,7 +249,7 @@ def test_a_step_that_is_also_an_extent_is_still_refused() -> None:
 
 
 def test_manifest_step_matches_numpy_on_every_backend() -> None:
-    # Step folded to 2, bound left symbolic: a lost stride reads 1..6 instead of 1 3 5 7 9 11.
+    # The stride arrives across the ABI: a lost one reads 1..6 instead of 1 3 5 7 9 11.
     src = ("import numpy as np\n"
            "def pool(v, k):\n"
            "    return v[:(6 - 1) * k + 1:k] * 1.0\n"

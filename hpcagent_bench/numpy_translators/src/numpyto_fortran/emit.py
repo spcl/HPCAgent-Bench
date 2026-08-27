@@ -7,6 +7,7 @@ import math
 import re
 from typing import Callable, Dict, List, NamedTuple, Optional, Set, Tuple
 
+from numpyto_fortran.intrinsics import literal_axis, reshape_dims
 from numpyto_common.ir import ArrayDesc, KernelIR
 from numpyto_common import dtypes, narrow_int, operators, parallelism
 from numpyto_common.emitter import BaseEmitter
@@ -389,9 +390,23 @@ _UNARY_MATH_ATTRS = frozenset({"sqrt", "exp", "log", "sin", "cos", "tanh"})
 #: Emitted as a Fortran intrinsic that reduces the WHOLE array, so none of them can honour an axis.
 _WHOLE_ARRAY_REDUCTIONS = frozenset(
     {"mean", "sum", "prod", "max", "min", "argmax", "argmin", "any", "all", "count_nonzero", "median"})
+#: numpy reduction -> the Fortran intrinsic that takes a ``dim=`` and reduces exactly one axis.
+#: ``mean`` and ``count_nonzero`` are composites built from these in ``_dim_reduction``.
+_DIM_REDUCTION_INTRINSICS = {
+    "sum": "SUM",
+    "prod": "PRODUCT",
+    "max": "MAXVAL",
+    "min": "MINVAL",
+    "any": "ANY",
+    "all": "ALL",
+}
+
 _ABS_ATTRS = frozenset({"absolute", "fabs"})
 _CONJ_ATTRS = frozenset({"conj", "conjugate"})
 _REAL_IMAG_ATTRS = frozenset({"real", "imag"})
+
+#: Identifier occurrences inside a shape token, for the case-collision rewrite.
+_SHAPE_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z_0-9]*")
 
 #: Fortran intrinsics allowed to appear (unresolved) inside a shape-token expression.
 _SHAPE_TOKEN_INTRINSICS = frozenset({"min", "max", "abs"})
@@ -683,6 +698,7 @@ class _FortranBodyEmitter(BaseEmitter):
 
     _STMT_TERM = ""
     _KW_BREAK = "exit"
+    _COMMENT = ("!", "")
     _KW_CONTINUE = "cycle"
 
     def emit_stmt(self, node: ast.stmt, indent: str) -> str:
@@ -1470,6 +1486,14 @@ class _FortranBodyEmitter(BaseEmitter):
                             and b.value == 0 and not isinstance(b.value, bool):
                         le = self.emit_expr(a)
                         return le if isinstance(node.ops[0], ast.NotEq) else f".not. ({le})"
+            # LOGICAL vs LOGICAL uses .eqv. / .neqv.; gfortran rejects == between two of them
+            # outright ("Logicals at (1) must be compared with .eqv. instead of =="). Reached by any
+            # kernel that compares two masks -- bitonic_sort's ``ascending == (idx < partner)``.
+            if len(node.ops) == 1 and isinstance(node.ops[0], (ast.Eq, ast.NotEq)):
+                left, right = node.left, node.comparators[0]
+                if self._is_logical_node(left) and self._is_logical_node(right):
+                    op = ".eqv." if isinstance(node.ops[0], ast.Eq) else ".neqv."
+                    return f"({self.emit_expr(left)} {op} {self.emit_expr(right)})"
             # Python chained comparison a < b < c == (a<b) and (b<c); Fortran has
             # no chaining, so emit an explicit .and. join.
             operands = [self.emit_expr(node.left)] + [self.emit_expr(c) for c in node.comparators]
@@ -1727,6 +1751,48 @@ class _FortranBodyEmitter(BaseEmitter):
         self._used_sign = True
         return f"npb_sign({x})"
 
+    def _operand_shape(self, node: ast.expr):
+        """Declared shape of a bare array operand -- a signature array or an allocatable local."""
+        if not isinstance(node, ast.Name):
+            return None
+        for arr in self.kir.arrays:
+            if arr.name == node.id:
+                return arr.shape
+        return self.kir.zeros_locals.get(node.id)
+
+    def _reduction_dim(self, node: ast.Call):
+        """numpy ``axis`` -> Fortran ``dim`` for ``node``'s operand, or ``None`` when unmappable.
+
+        The two count opposite ways. An array whose numpy shape is ``(d0, d1, d2)`` is DECLARED
+        ``(d2, d1, d0)`` here (the declaration emitter reverses it, because Fortran is
+        column-major), so numpy axis ``k`` of a rank-``n`` array is Fortran ``dim = n - k``.
+        Passing numpy's number straight through reduces a different axis, which compiles and
+        returns a wrong array of the right shape.
+        """
+        axis = literal_axis(node)
+        if axis is None or not node.args:
+            return None
+        shape = self._operand_shape(node.args[0])
+        if not shape:
+            return None
+        rank = len(shape)
+        if axis < 0:
+            axis += rank
+        if not 0 <= axis < rank:
+            return None
+        return rank - axis
+
+    def _dim_reduction(self, attr: str, operand: str, dim: int):
+        """The per-axis intrinsic for ``attr``, or ``None`` when Fortran has none."""
+        intrinsic = _DIM_REDUCTION_INTRINSICS.get(attr)
+        if intrinsic is not None:
+            return f"{intrinsic}({operand}, dim={dim})"
+        if attr == "mean":
+            return f"(SUM({operand}, dim={dim}) / SIZE({operand}, {dim}))"
+        if attr == "count_nonzero":
+            return f"COUNT({operand} /= 0, dim={dim})"
+        return None
+
     def _emit_call(self, node: ast.Call) -> str:
         if isinstance(node.func, ast.Name):
             fn = node.func.id
@@ -1806,7 +1872,11 @@ class _FortranBodyEmitter(BaseEmitter):
                     # A numeric cast of a LOGICAL-valued operand is invalid in Fortran
                     # (INT(logical) is rejected); numpy maps True/False to 1/0, so
                     # emit a MERGE in the target kind instead.
-                    if intrinsic in ("INT", "REAL") and _produces_logical(node.args[0]):
+                    # Through the backend's own oracle, not the module-level predicate: a mask that
+                    # is only known logical from the side tables (``smt5(i) .or. smt5_m1(i)``, whose
+                    # operands are declared locals) scored non-logical here and emitted REAL() of a
+                    # LOGICAL, which gfortran rejects outright.
+                    if intrinsic in ("INT", "REAL") and self._is_logical_node(node.args[0]):
                         one = f"1_{kind}" if intrinsic == "INT" else f"1.0_{kind}"
                         zero = f"0_{kind}" if intrinsic == "INT" else f"0.0_{kind}"
                         return f"merge({one}, {zero}, {args_e[0]})"
@@ -1823,9 +1893,19 @@ class _FortranBodyEmitter(BaseEmitter):
                 if axis_arg is None and len(node.args) > 1:
                     axis_arg = node.args[1]
                 if axis_arg is not None and not (isinstance(axis_arg, ast.Constant) and axis_arg.value is None):
+                    dim = self._reduction_dim(node)
+                    per_axis = None if dim is None else self._dim_reduction(attr, args_e[0], dim)
+                    if per_axis is not None:
+                        return per_axis
                     raise NotImplementedError(f"np.{attr} carries axis={ast.unparse(axis_arg)!r} but reached emit "
                                               f"unlowered; the Fortran intrinsic reduces the WHOLE array")
             if attr == "transpose" and args_e:
+                # ``TRANSPOSE`` is the rank-2 swap and nothing else. An explicit ``axes`` names some
+                # OTHER permutation, and emitting the swap for it answered a different question with
+                # no diagnostic -- so a call that carries one is declined here and lowers to loops.
+                if len(node.args) > 1 or any(k.arg == "axes" for k in node.keywords):
+                    raise NotImplementedError(f"np.transpose carries an explicit axes= "
+                                              f"({ast.unparse(node)}); TRANSPOSE is the rank-2 swap only")
                 # Only apply when the operand is a bare Name -- a subscripted operand would produce nonsense.
                 if node.args and isinstance(node.args[0], ast.Name):
                     return f"TRANSPOSE({args_e[0]})"
@@ -1839,10 +1919,12 @@ class _FortranBodyEmitter(BaseEmitter):
                 return f"MAXVAL({args_e[0]})"
             if attr == "min" and args_e:
                 return f"MINVAL({args_e[0]})"
+            # MAXLOC/MINLOC index from 1, numpy from 0. Without the shift every answer is one
+            # too high -- and it is an INDEX, so the caller reads the neighbouring element.
             if attr == "argmax" and args_e:
-                return f"MAXLOC({args_e[0]}, 1)"
+                return f"(MAXLOC({args_e[0]}, 1) - 1)"
             if attr == "argmin" and args_e:
-                return f"MINLOC({args_e[0]}, 1)"
+                return f"(MINLOC({args_e[0]}, 1) - 1)"
             if attr == "abs" and args_e:
                 return f"ABS({args_e[0]})"
             if attr == "copy" and args_e:
@@ -1899,7 +1981,20 @@ class _FortranBodyEmitter(BaseEmitter):
                 if ord_arg is not None and not (isinstance(ord_arg, ast.Constant) and ord_arg.value in (None, 2)):
                     raise NotImplementedError(f"np.linalg.norm(ord={ast.unparse(ord_arg)!r}) reached emit; only the "
                                               f"2-norm is emitted here")
-                return f"SQRT(SUM({args_e[0]} ** 2))"
+                # NORM2 is the 2-norm and scales its operand internally, so a vector whose squares
+                # overflow the element type still gets an answer where SQRT(SUM(x**2)) returns inf.
+                return f"NORM2({args_e[0]})"
+            # np.reshape(src, (d0, d1, ...)) -- Fortran RESHAPE. The dims REVERSE: every array here
+            # is declared with reversed extents, so the result's Fortran shape is the numpy
+            # newshape read back to front. Reached only for the cases intrinsics.renders_natively
+            # admits (C order, explicit extents, counts agree), so nothing is re-checked here.
+            if attr == "reshape" and len(node.args) == 2:
+                dims = reshape_dims(node)
+                if dims is not None:
+                    # int64 throughout: extents reach the ABI as c_int64_t and gfortran rejects a
+                    # mixed-kind array constructor under -std=f2018.
+                    rev = ", ".join(f"int({self.emit_expr(d)}, c_int64_t)" for d in reversed(dims))
+                    return f"RESHAPE({args_e[0]}, [{rev}])"
             # np.where(cond, a, b) -- Fortran MERGE(a, b, cond). MERGE requires a
             # and b to share type+kind, so promote an integer constant when the
             # other branch is non-integer (the typical np.where(cond, expr, 0)).
@@ -2232,14 +2327,25 @@ _FORTRAN_TOKEN_RE = __import__("re").compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 def _to_fortran_shape_token(tok: str) -> str:
-    """Translate a shape token from Python idioms to Fortran syntax (// -> /, arr[i] -> arr(i + 1))."""
+    """Translate a shape token from Python idioms to Fortran syntax (``arr[i]`` -> ``arr(i + 1)``).
+
+    Every token is reparsed, not just the ones carrying a subscript or a MIN/MAX. Two reasons, both
+    of them wrong answers rather than cosmetics:
+
+    * ``//`` is FLOOR division and Fortran's ``/`` truncates toward zero. They agree only for
+      operands of the same sign, and the ceiling idiom every padded extent is built from,
+      ``-(-length // w)``, is exactly where they do not -- it sized max_filter's halo buffer one
+      block short.
+    * the textual form leaves Python's unary minus sitting straight after an operator
+      (``... + -(...)``), which gfortran rejects under ``-std=f2018``.
+
+    Falls back to the original text when the token is not a parseable Python expression.
+    """
     if not isinstance(tok, str):
         return tok
-    tok = tok.replace("//", "/")
-    if "[" not in tok:
-        return tok
-    # Reparse and emit subscripts with +1 adjustment; falls back to the original
-    # text if the token is not a valid Python expression.
+    # A bare integer literal inside MIN/MAX is DEFAULT kind, and gfortran rejects a mixed-kind
+    # MIN/MAX under -std=f2018 ("Different type kinds"). Extents reach the ABI as c_int64_t, so a
+    # shape token spelling ``max(nflatlev_jg - 1, 0)`` needs its literal suffixed to match.
     try:
         tree = ast.parse(tok, mode="eval").body
     except SyntaxError:
@@ -2255,11 +2361,31 @@ def _to_fortran_shape_token(tok: str) -> str:
                 idxs.reverse()
                 return f"{base}({', '.join(idxs)})"
             return f"{base}({emit(sl)} + 1)"
+
+        def kinded(node) -> str:
+            """An operand for a kind-strict intrinsic (MIN/MAX/MODULO). A bare integer literal is
+            DEFAULT kind and gfortran rejects mixing it with the c_int64_t extents under
+            ``-std=f2018``, so literals carry the kind explicitly."""
+            value = node
+            sign = ""
+            if isinstance(value, ast.UnaryOp) and isinstance(value.op, ast.USub):
+                value, sign = value.operand, "-"
+            if isinstance(value, ast.Constant) and isinstance(value.value, int) and not isinstance(value.value, bool):
+                return f"({sign}{value.value}_c_int64_t)"
+            return emit(node)
+
         if isinstance(n, ast.BinOp):
-            ops = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/", ast.FloorDiv: "/", ast.Mod: "MOD"}
-            op = ops.get(type(n.op))
-            if op == "MOD":
-                return f"MOD({emit(n.left)}, {emit(n.right)})"
+            if isinstance(n.op, ast.FloorDiv):
+                # ``(a - MODULO(a, b)) / b`` -- an exact integer floor with no helper to depend on:
+                # the numerator is divisible by ``b``, so which way Fortran's ``/`` truncates stops
+                # mattering. MODULO (not MOD) takes the sign of the divisor, as Python does.
+                a, b = kinded(n.left), kinded(n.right)
+                return f"(({a}) - MODULO({a}, {b})) / ({b})"
+            if isinstance(n.op, ast.Mod):
+                return f"MODULO({kinded(n.left)}, {kinded(n.right)})"
+            op = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/"}.get(type(n.op))
+            if op is None:
+                return ast.unparse(n)
             return f"({emit(n.left)} {op} {emit(n.right)})"
         if isinstance(n, ast.UnaryOp) and isinstance(n.op, ast.USub):
             return f"(-({emit(n.operand)}))"
@@ -2267,6 +2393,9 @@ def _to_fortran_shape_token(tok: str) -> str:
             return n.id
         if isinstance(n, ast.Constant):
             return str(n.value)
+        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in ("max", "min")
+                and not n.keywords):
+            return f"{n.func.id}({', '.join(kinded(a) for a in n.args)})"
         # Fallback: textual unparse (may leak Python syntax but preserves the user-visible form).
         return ast.unparse(n)
 
@@ -2562,15 +2691,40 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, parallel: bool = 
             return case_map[s.lower()]
         return s
 
+    def _rename_shape_token(tok: str) -> str:
+        """The same rewrite applied to identifiers INSIDE a shape token.
+
+        A token is emitted verbatim, so a name the case map moved keeps naming whatever won the
+        fold. max_filter's window ``w`` lost to the width symbol ``W`` -- Fortran folds them to one
+        identifier -- and every extent built from ``w`` silently became an extent built from the
+        image width, which allocated the halo buffer at the wrong size.
+        """
+        if not isinstance(tok, str):
+            return tok
+        return _SHAPE_IDENT_RE.sub(lambda m: _safe_with_case(m.group(0)), tok)
+
+    def _rename_shapes(shape) -> Tuple[str, ...]:
+        return tuple(_rename_shape_token(t) for t in shape)
+
     renamed_input_args = [_safe_with_case(n) for n in kir.input_args]
     renamed_kir_symbols = [dataclasses.replace(s, name=_safe_with_case(s.name)) for s in kir.symbols]
-    renamed_kir_arrays = [dataclasses.replace(a, name=_safe_with_case(a.name)) for a in kir.arrays]
+    renamed_kir_arrays = [
+        dataclasses.replace(a, name=_safe_with_case(a.name), shape=_rename_shapes(a.shape)) for a in kir.arrays
+    ]
     renamed_kir_scalars = [dataclasses.replace(s, name=_safe_with_case(s.name)) for s in kir.scalars]
     kir = dataclasses.replace(kir,
                               symbols=renamed_kir_symbols,
                               arrays=renamed_kir_arrays,
                               scalars=renamed_kir_scalars,
-                              input_args=renamed_input_args)
+                              input_args=renamed_input_args,
+                              zeros_locals={
+                                  _safe_with_case(n): _rename_shapes(sh)
+                                  for n, sh in kir.zeros_locals.items()
+                              },
+                              reassign_shapes={
+                                  _safe_with_case(n): [_rename_shapes(sh) for sh in shapes]
+                                  for n, shapes in kir.reassign_shapes.items()
+                              })
     kir_tree = copy.deepcopy(kir.tree)
     # Fortran-only: lower every IfExp to an if/else-over-a-temp BEFORE the rename pass, so a fresh
     # ``__ifexp<N>`` temp gets the SAME leading-underscore-strip every other compiler temp gets.
@@ -3285,20 +3439,47 @@ def _emit_fortran_helper(hkir: KernelIR, parent: Optional["_FortranBodyEmitter"]
     default_real = f"real({rk})"
     ldt = hkir.local_dtypes
     param_set = set(hkir.input_args)
+    # A local array's bound may name a scalar the helper COMPUTES rather than one it is passed
+    # (``oh = (h + 2 * padding - 1) // stride + 1``). Fortran evaluates an automatic array's bounds
+    # on entry to the scope, before any of the body runs, so such an array is sized from an
+    # undefined value -- and the declaration also precedes the integer's own, which implicitly types
+    # it REAL and fails the build outright. Same rule and same machinery as the top-level kernel:
+    # declare it allocatable and allocate at its marker site, which follows the assignment.
+    allowed_bound_names: Set[str] = set()
+    for sym in hkir.symbols:
+        allowed_bound_names.add(sym.name)
+    for sca in hkir.scalars:
+        if sca.dtype in ("int", "int32", "int64"):
+            allowed_bound_names.add(sca.name)
     local_arr_decls: List[str] = []
+    helper_inline_alloc: Dict[str, Tuple[List[str], str]] = {}
     for lname, lshape in hkir.zeros_locals.items():
         if lname in param_set:
             continue
         rev = [_to_fortran_shape_token(s) for s in reversed(lshape)] if lshape else ["1"]
         dt = ldt.get(lname)
         ftype = _fortran_type(dt) if dt else default_real
-        local_arr_decls.append(f"{ftype} :: {lname}({', '.join(rev)})")
+        if any(_shape_token_uses_unknown(tok, allowed_bound_names) for tok in rev):
+            colons = ", ".join(":" for _ in rev)
+            local_arr_decls.append(f"{ftype}, allocatable :: {lname}({colons})")
+            helper_inline_alloc[lname] = (rev, ftype)
+        else:
+            local_arr_decls.append(f"{ftype} :: {lname}({', '.join(rev)})")
     implicit = _collect_implicit_locals(hkir)
     local_decls = local_arr_decls + [f"{ft} :: {nm}" for nm, ft in implicit]
     iter_vars = _collect_for_targets(hkir.tree.body)
     iter_decls = [f"{_fortran_type('int')} :: " + ", ".join(sorted(iter_vars))] if iter_vars else []
     be = _FortranBodyEmitter(hkir)
     be.return_mode = ret_name
+    be.inline_alloc_locals = helper_inline_alloc
+    # The same name -> int-kind map the top-level kernel builds. Without it a helper's implicit
+    # integer local is untyped here, so ``(h + 2 * padding - 1) // stride`` took the REAL floor-div
+    # path: a real-valued bound assigned to an integer, which is a deleted feature as a DO end
+    # expression and a silent truncation everywhere else.
+    be._int_kinds = {
+        nm: ("int64" if ft == "integer(c_int64_t)" else "int32")
+        for nm, ft in implicit if ft.startswith("integer(c_int")
+    }
     body = be.emit_block(hkir.tree.body, indent="            ")
     if parent is not None:
         # The shared procedures a helper body needs are emitted ONCE, by the host, and reached by

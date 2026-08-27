@@ -85,8 +85,7 @@ def test_override_replaces_the_generated_scop_and_never_touches_it(tmp_path) -> 
 
     resolved = pluto_transform.scop_inputs(cpp_backend, "kern", bench_dir=bench_dir)
 
-    assert [p.name for p in resolved] == ["kern_fp32_pluto_override_input.c",
-                                          "kern_fp64_pluto_override_input.c"]
+    assert [p.name for p in resolved] == ["kern_fp32_pluto_override_input.c", "kern_fp64_pluto_override_input.c"]
     assert all("y = 2;" in p.read_text() for p in resolved), "a resolved scop did not come from the override"
     assert generated not in resolved, "the generated scop was mixed into the override's set"
     assert generated.stat().st_mtime == before_mtime, "the generated scop was rewritten"
@@ -154,7 +153,7 @@ def test_classify_affine_never_invokes_the_emitter_for_an_override_backed_kernel
 
 @pytest.mark.parametrize("fptype,expect_symbol", [("fp64", "gemm_fp64"), ("fp32", "gemm_fp32")])
 def test_oracle_pluto_leg_transforms_the_override_path_not_a_generated_copy(tmp_path, monkeypatch, fptype,
-                                                                           expect_symbol) -> None:
+                                                                            expect_symbol) -> None:
     """The numerical oracle's pluto leg feeds polycc a scop derived from the OVERRIDE -- captured off
     the real ``run_polycc`` call -- never the translator's generated one, at either precision.
 
@@ -181,7 +180,7 @@ def test_oracle_pluto_leg_transforms_the_override_path_not_a_generated_copy(tmp_
     monkeypatch.setattr(oracle.pluto_transform, "run_polycc", capture)
     monkeypatch.setattr(oracle.pluto_transform, "polycc_exe", lambda: "/nonexistent/polycc")
 
-    oracle._run_pluto(tmp_path, "gemm", fptype, {}, {}, {}, {}, (), 0.0, 0.0, "ok", bench_dir, "gemm")
+    oracle._run_pluto(tmp_path, "gemm", fptype, {}, {}, {}, {}, (), 0.0, 0.0, "ok", bench_dir, "gemm", frozenset())
 
     scop = seen["scop"]
     assert scop.name == f"gemm_{fptype}_pluto_override_input.c"
@@ -292,7 +291,7 @@ def test_a_kernel_without_an_override_is_unaffected(tmp_path) -> None:
 
 
 @pytest.mark.parametrize("fptype,ctype,npdtype,rtol", [("fp64", ctypes.c_double, np.float64, 1e-12),
-                                                      ("fp32", ctypes.c_float, np.float32, 1e-4)])
+                                                       ("fp32", ctypes.c_float, np.float32, 1e-4)])
 def test_an_override_backed_library_exports_and_computes_both_precisions(tmp_path, fptype, ctype, npdtype, rtol):
     """The end-to-end claim, with nothing faked: an override-backed kernel builds ONE library that
     exports both `mm_fp64` and `mm_fp32`, and each symbol -- called with buffers of its own dtype --
@@ -314,7 +313,7 @@ def test_an_override_backed_library_exports_and_computes_both_precisions(tmp_pat
     assert "#pragma scop" not in transformed, "this is the untransformed input, not polycc's output"
 
     lib = ctypes.CDLL(str(so_path))
-    kernel = lib[f"mm_{fptype}"]          # AttributeError here IS the 4391506 failure
+    kernel = lib[f"mm_{fptype}"]  # AttributeError here IS the 4391506 failure
     ptr = ctypes.POINTER(ctype)
     kernel.argtypes = [ctypes.c_int64, ptr, ptr, ptr]
     kernel.restype = None
@@ -355,7 +354,7 @@ def test_the_production_dispatch_path_resolves_both_precisions(tmp_path, npdtype
     b = np.ascontiguousarray(rng.random((n, n)), dtype=npdtype)
     c = np.zeros((n, n), dtype=npdtype)
 
-    call(np.int64(n), a, b, c)      # RuntimeError("no symbol for fp32") lived here
+    call(np.int64(n), a, b, c)  # RuntimeError("no symbol for fp32") lived here
 
     np.testing.assert_allclose(c, a.astype(np.float64) @ b.astype(np.float64), rtol=rtol, atol=rtol)
 

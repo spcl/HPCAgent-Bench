@@ -202,7 +202,8 @@ def test_array_helper_emitted_as_outparam_c_function():
     c = emit_c(kir, fn_name="f")
     # Helper ABI == kernel ABI (abi_contract.md Sec. 4): pointers by name, then scalars by name,
     # the out buffer sorting like any other pointer (``__hret_0`` < ``v``).
-    assert "static void clamp_row(double *restrict __hret_0, const double *restrict v, double lo, int64_t n)" in c
+    assert ("static void clamp_row(double *restrict __hret_0, const double *restrict v, "
+            "const double lo, const int64_t n)") in c
     # a single call statement, not ``__hret_tmp_0[..] = clamp_row(..)`` per element
     assert "clamp_row(__hret_tmp_0, __harg_0_0, thr, n);" in c
 
@@ -276,9 +277,11 @@ def test_array_return_helper_buffers_follow_kernel_precision():
     from numpyto_fortran.emit import emit_fortran
     kir = _helper_kir(_DTYPE_OF_SRC, "float32")
     assert [(a.name, a.dtype) for a in kir.helpers[0].arrays] == [("v", "float32"), ("__hret_0", "float32")]
-    assert "static void scale_up(float *restrict __hret_0, const float *restrict v, int64_t n, float s)" \
+    assert ("static void scale_up(float *restrict __hret_0, const float *restrict v, "
+            "const int64_t n, const float s)") \
         in emit_c(kir, fn_name="f")
-    assert "static void scale_up(float *__restrict__ __hret_0, const float *__restrict__ v, int64_t n, float s)" \
+    assert ("static void scale_up(float *__restrict__ __hret_0, const float *__restrict__ v, "
+            "const int64_t n, const float s)") \
         in emit_cpp(kir, fn_name="f")
     f90 = emit_fortran(kir, fn_name="f")
     assert "real(c_float), intent(in) :: v(8)" in f90
@@ -291,9 +294,11 @@ def test_fp64_helper_buffers_are_unchanged():
     from numpyto_fortran.emit import emit_fortran
     kir = _helper_kir(_DTYPE_OF_SRC, "")
     assert [(a.name, a.dtype) for a in kir.helpers[0].arrays] == [("v", "float64"), ("__hret_0", "float64")]
-    assert "static void scale_up(double *restrict __hret_0, const double *restrict v, int64_t n, double s)" \
+    assert ("static void scale_up(double *restrict __hret_0, const double *restrict v, "
+            "const int64_t n, const double s)") \
         in emit_c(kir, fn_name="f")
-    assert "static void scale_up(double *__restrict__ __hret_0, const double *__restrict__ v, int64_t n, double s)" \
+    assert ("static void scale_up(double *__restrict__ __hret_0, const double *__restrict__ v, "
+            "const int64_t n, const double s)") \
         in emit_cpp(kir, fn_name="f")
     f90 = emit_fortran(kir, fn_name="f")
     assert "real(c_double), intent(in) :: v(8)" in f90

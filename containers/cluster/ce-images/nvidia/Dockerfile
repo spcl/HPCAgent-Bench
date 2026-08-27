@@ -172,9 +172,25 @@ RUN set -eux; \
 RUN PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install --no-cache-dir \
       "litellm[proxy]==1.94.0" fastapi uvicorn httpx pydantic orjson tenacity rich typer
 
+# DaCe is the TIP of spcl/dace@extended, never a pin (scripts/install_dace_extended.sh says the
+# same thing for a local tree). `git clone --branch extended` looks like it says that, but the layer
+# cache keys on the command STRING: it never changes, so every later rebuild reuses the first clone
+# and the image quietly ages into a pin nothing records. One tree ended up 10,748 commits behind
+# that way, reporting frontend refusals the branch had already fixed.
+#
+# So the builder resolves the tip and passes it in: DACE_COMMIT changes whenever extended moves,
+# which is what busts this layer, and the resolved sha is written into the image so a run can say
+# which dace graded it. Fetch the sha rather than the branch -- a shallow clone of `extended` can
+# race the resolve, and GitHub serves a reachable sha directly.
+ARG DACE_COMMIT
 RUN set -eux; \
-    git clone --depth 1 --recurse-submodules --shallow-submodules \
-      --branch extended https://github.com/spcl/dace.git /opt/dace; \
+    test -n "${DACE_COMMIT}" || { echo "DACE_COMMIT build-arg is required (build_sqsh.sh resolves it)" >&2; exit 2; }; \
+    git init -q /opt/dace; \
+    git -C /opt/dace remote add origin https://github.com/spcl/dace.git; \
+    git -C /opt/dace fetch -q --depth 1 origin "${DACE_COMMIT}"; \
+    git -C /opt/dace checkout -q FETCH_HEAD; \
+    git -C /opt/dace submodule update --init --recursive --depth 1 -q; \
+    git -C /opt/dace rev-parse HEAD > /opt/dace.commit; \
     PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install --no-cache-dir -e /opt/dace
 
 # Node 20 from nodesource, NOT the distro nodejs/npm: the Ubuntu base ships a node far older than

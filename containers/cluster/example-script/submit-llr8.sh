@@ -22,7 +22,9 @@
 #
 # Node count comes from arm_nodes, which reads the same .env the launcher does, so the two can
 # never disagree: an llr8 arm is 1 inference + 1 agent + JUDGE_NODES, and JUDGE_NODES is sized from
-# the measured grading rate (6 for qwen30b, 8 for oss120b) -- see README, "Tasks per node".
+# the measured grading rate -- see README, "Campaign llr8". One judge NODE is 4 ranks and covers 40
+# agents with 2-8x headroom, so an arm is 3 nodes. The 6 and 8 that used to stand here read the
+# old per-node grading rate as a per-rank one, back when a node ran a single judge.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 # beverin.sbatch writes --output=results/... relative to here; slurm DROPS the file when the

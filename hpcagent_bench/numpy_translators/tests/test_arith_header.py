@@ -93,3 +93,26 @@ def test_header_is_guarded_and_written_under_its_documented_name(tmp_path):
 def test_unknown_language_names_the_ones_that_exist():
     with pytest.raises(KeyError, match="fortran"):
         arith_header_source("fortran")  # Fortran needs no header: MIN/MAX/SQRT are intrinsics
+
+
+#: GNU-only spellings. Reserved identifiers, so `-std=c23 -pedantic-errors` does NOT reject them
+#: (verified on gcc 15 and clang 21) -- nothing but this test keeps them out of the C prelude.
+_GNU_SPELLINGS = ("__builtin_", "__real__", "__imag__", "__restrict__", "__attribute__", "__typeof__")
+
+
+def test_c_header_uses_no_gnu_only_spellings():
+    """The C prelude is standard C23. It includes ``<complex.h>``, so the conjugate helper is
+    ``conj``; it used to be hand-rolled out of ``__builtin_complex(__real__ z, -__imag__ z)``, which
+    is portable to exactly gcc and clang and compiles clean under every gate we run."""
+    src = arith_header_source("c")
+    found = [name for name in _GNU_SPELLINGS if name in src]
+    assert not found, f"GNU-only spellings in the C prelude: {found}"
+
+
+def test_cpp_header_keeps_the_complex_extension_deliberately():
+    """The C++ prelude is the exception, and stays one: C++ has no ``<complex.h>`` and no
+    ``_Complex`` of its own, so ``__real__`` / ``__imag__`` are how it reaches the members at all.
+    Pinned so the C-side rule above is never applied here by analogy."""
+    src = arith_header_source("cpp")
+    assert "__real__" in src and "__imag__" in src
+    assert "__builtin_complex" not in src, "even in C++ the value is built from creal/cimag"

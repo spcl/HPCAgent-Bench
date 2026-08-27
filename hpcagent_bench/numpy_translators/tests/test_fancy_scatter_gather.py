@@ -235,3 +235,153 @@ def test_chained_scalar_index_is_still_flattened():
     tree = _ast.parse("y = psi[f][..., 0]")
     _ChainedSubscriptFlattener({"psi": ("F", "X", "Y", "K")}).visit(tree)
     assert _ast.unparse(tree).strip() == "y = psi[f, ..., 0]"
+
+
+# --------------------------------------------------------------------------- #
+# Broadcast gather: several advanced indices in ONE subscript numpy-broadcast  #
+# instead of summing their ranks (icon_gather's A[idx, lev, blk] regression)   #
+# --------------------------------------------------------------------------- #
+
+
+def test_gather_two_broadcast_arrays_plus_scalar_axis():
+    """``t = A[r, c, 0]``: r (nrow,1) and c (1,ncol) BROADCAST to (nrow,ncol);
+    the trailing literal ``0`` is a scalar axis that numpy still counts as
+    "advanced" (so it stays adjacent to r/c) but adds neither its own axis
+    nor rank -- the icon_gather ``A[idx, lev, 0]`` shape in miniature."""
+    src = ("import numpy as np\n"
+           "def gather3(A, r, c, out):\n"
+           " nrow, ncol, nblk = A.shape\n"
+           " t = np.zeros((nrow, ncol), A.dtype)\n"
+           " t = A[r, c, 0]\n"
+           " out[:, :] = t\n")
+    nrow, ncol, nblk = 5, 4, 3
+    rng = np.random.default_rng(0)
+    A = rng.standard_normal((nrow, ncol, nblk))
+    r = rng.integers(0, nrow, size=(nrow, 1)).astype(np.int64)
+    c = rng.integers(0, ncol, size=(1, ncol)).astype(np.int64)
+    ok, res = _all_ok(
+        run_op(src,
+               "gather3", {
+                   "A": A,
+                   "r": r,
+                   "c": c
+               }, {"out": (nrow, ncol)}, {
+                   "nrow": nrow,
+                   "ncol": ncol,
+                   "nblk": nblk
+               },
+               shapes={
+                   "A": "(nrow,ncol,nblk)",
+                   "r": "(nrow,1)",
+                   "c": "(1,ncol)",
+                   "out": "(nrow,ncol)"
+               },
+               backends=("c", "cpp", "fortran")))
+    assert ok, res
+
+
+def test_gather_index_array_mixed_with_real_slice():
+    """``t = A[r, :]``: a rank-1 index array on axis 0 next to a real ``:``
+    slice on axis 1 -- the slice keeps its own axis, the array replaces its
+    own axis with its own rank (a single-array adjacent broadcast group)."""
+    src = ("import numpy as np\n"
+           "def gather_slice(A, r, out):\n"
+           " nrow, ncol = A.shape\n"
+           " t = np.zeros((nrow, ncol), A.dtype)\n"
+           " t = A[r, :]\n"
+           " out[:, :] = t\n")
+    nrow, ncol = 5, 4
+    rng = np.random.default_rng(1)
+    A = rng.standard_normal((nrow, ncol))
+    r = rng.integers(0, nrow, size=(nrow, )).astype(np.int64)
+    ok, res = _all_ok(
+        run_op(src,
+               "gather_slice", {
+                   "A": A,
+                   "r": r
+               }, {"out": (nrow, ncol)}, {
+                   "nrow": nrow,
+                   "ncol": ncol
+               },
+               shapes={
+                   "A": "(nrow,ncol)",
+                   "r": "(nrow,)",
+                   "out": "(nrow,ncol)"
+               },
+               backends=("c", "cpp", "fortran")))
+    assert ok, res
+
+
+def test_gather_broadcast_axis_extent_one_reads_index_zero():
+    """``t = A[r, c]``: r (nrow,1) and c (1,ncol) broadcast to (nrow,ncol) --
+    each operand's OWN size-1 axis must read index 0, not the (larger) shared
+    iter, or it runs off its length-1 allocation."""
+    src = ("import numpy as np\n"
+           "def gather_bcast(A, r, c, out):\n"
+           " nrow, ncol = A.shape\n"
+           " t = np.zeros((nrow, ncol), A.dtype)\n"
+           " t = A[r, c]\n"
+           " out[:, :] = t\n")
+    nrow, ncol = 5, 4
+    rng = np.random.default_rng(2)
+    A = rng.standard_normal((nrow, ncol))
+    r = rng.integers(0, nrow, size=(nrow, 1)).astype(np.int64)
+    c = rng.integers(0, ncol, size=(1, ncol)).astype(np.int64)
+    ok, res = _all_ok(
+        run_op(src,
+               "gather_bcast", {
+                   "A": A,
+                   "r": r,
+                   "c": c
+               }, {"out": (nrow, ncol)}, {
+                   "nrow": nrow,
+                   "ncol": ncol
+               },
+               shapes={
+                   "A": "(nrow,ncol)",
+                   "r": "(nrow,1)",
+                   "c": "(1,ncol)",
+                   "out": "(nrow,ncol)"
+               },
+               backends=("c", "cpp", "fortran")))
+    assert ok, res
+
+
+def test_gather_front_placed_broadcast_separated_by_real_slice():
+    """``t = A[blk[:, :, 0], :, idx[:, :, 0]]``: two COMPOUND array-valued
+    advanced indices with a real slice sitting BETWEEN them in the source
+    text. numpy moves their broadcast result to the FRONT -- result shape
+    (NB, NPROMA, NLEV) -- instead of the in-place layout the C emit used to
+    read the index arrays at (a segfaulting off-by-one-axis misalignment).
+    zekin_gather's ``z_kin_hor_e[edge_blk[:, :, e], :, edge_idx[:, :, e]]``
+    in miniature."""
+    src = ("import numpy as np\n"
+           "def gather_front(A, blk, idx, out):\n"
+           " NPROMA, NLEV, NB = A.shape\n"
+           " t = np.zeros((NB, NPROMA, NLEV), A.dtype)\n"
+           " t = A[blk[:, :, 0], :, idx[:, :, 0]]\n"
+           " out[:, :, :] = t\n")
+    NPROMA, NLEV, NB = 4, 3, 5
+    rng = np.random.default_rng(3)
+    A = rng.standard_normal((NPROMA, NLEV, NB))
+    blk = rng.integers(0, NPROMA, size=(NB, NPROMA, 1)).astype(np.int64)
+    idx = rng.integers(0, NB, size=(NB, NPROMA, 1)).astype(np.int64)
+    ok, res = _all_ok(
+        run_op(src,
+               "gather_front", {
+                   "A": A,
+                   "blk": blk,
+                   "idx": idx
+               }, {"out": (NB, NPROMA, NLEV)}, {
+                   "NPROMA": NPROMA,
+                   "NLEV": NLEV,
+                   "NB": NB
+               },
+               shapes={
+                   "A": "(NPROMA,NLEV,NB)",
+                   "blk": "(NB,NPROMA,1)",
+                   "idx": "(NB,NPROMA,1)",
+                   "out": "(NB,NPROMA,NLEV)"
+               },
+               backends=("c", "cpp", "fortran")))
+    assert ok, res

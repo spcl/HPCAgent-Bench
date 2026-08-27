@@ -229,10 +229,13 @@ def test_the_pin_moves_the_baseline_flags_the_agent_is_shown(_reset_pin):
     assert flags.CPU_BASELINE_CLANG in languages.baseline_flags("cpp")
 
 
-def test_a_pin_naming_a_family_this_image_lacks_is_an_error(_reset_pin):
-    assert languages.compiler_for_family("fortran", "nvhpc") is None
-    config.set_override("build.compiler.fortran", "nvhpc")
-    with pytest.raises(KeyError, match="nvhpc"):
+def test_a_pin_naming_a_family_this_image_lacks_is_an_error(_reset_pin, monkeypatch):
+    """Named against a SYNTHETIC family rather than whichever real one happens to be unwired: this
+    used to pin nvhpc, and stopped testing anything the day nvhpc got its blocks."""
+    monkeypatch.setitem(languages.COMPILER_FAMILIES, "unbuilt", "no-such-spack-package")
+    assert languages.compiler_for_family("fortran", "unbuilt") is None
+    config.set_override("build.compiler.fortran", "unbuilt")
+    with pytest.raises(KeyError, match="unbuilt"):
         languages._compiler_for_lang(languages._load_compilers(), "fortran")
 
 
@@ -268,51 +271,189 @@ def test_dace_builds_with_the_compiler_the_cpp_column_resolves():
         "compiler than the submission is not a baseline.")
 
 
-# --- Task G: offload flag selection ----------------------------------------
+# --- Task G: offload model forcing and arch probing -------------------------
 
 
-def test_gcc_is_the_only_openacc_path_on_the_amd_leg():
-    assert languages.offload_flags("gcc", "amd", "openacc")
-    assert languages.offload_flags("llvm", "amd", "openacc") == ""
-    assert languages.offload_flags("nvhpc", "amd", "openacc") == ""
+def test_each_model_is_forced_to_one_toolchain():
+    """A caller does not get to pick the offload compiler. LLVM owns OpenMP, NVHPC owns OpenACC,
+    and nothing else appears in the table -- so an arm cannot select a toolchain whose offload
+    silently runs on the host."""
+    assert languages.offload_family("openmp") == "llvm"
+    assert languages.offload_family("openacc") == "nvhpc"
+    families = {family for family, _ in languages.OFFLOAD_REFS}
+    assert families == {"llvm", "nvhpc"}
+    for (family, _), models in languages.OFFLOAD_REFS.items():
+        for model in models:
+            assert languages.OFFLOAD_FAMILY[model] == family
 
 
-def test_the_amd_leg_targets_mi300a():
-    for family in ("gcc", "llvm"):
-        assert flags.OFFLOAD_ARCH_AMD in languages.offload_flags(family, "amd", "openmp")
-    assert flags.OFFLOAD_ARCH_AMD == "gfx942"
+def test_gcc_has_no_offload_path_left():
+    """gcc offloads both models on paper. Built ``--enable-offload-defaulted`` -- which is how the
+    distributions ship it -- it LINKS and RUNS a target region on the host with no diagnostic, so a
+    gcc arm reports a plausible wrong number. Removed rather than deprecated."""
+    assert not [family for family, _ in languages.OFFLOAD_REFS if family == "gcc"]
+    leftovers = [name for name in vars(flags) if "GCC" in name and ("OMP_TARGET" in name or "OPENACC" in name)]
+    assert not leftovers, f"gcc offload flag sets still present: {leftovers}"
 
 
-def test_gcc_caps_the_nvidia_leg_below_the_other_families():
-    assert "sm_89" in languages.offload_flags("gcc", "nvidia", "openmp")
-    assert "sm_90" not in languages.offload_flags("gcc", "nvidia", "openmp")
-    assert "sm_90" in languages.offload_flags("llvm", "nvidia", "openmp")
+def test_no_offload_arch_is_a_constant():
+    """The arch comes from the probe or from nowhere. ``OFFLOAD_ARCH_NVIDIA = 'sm_90'`` was already
+    wrong for an sm_89 host, which is what a hardcoded ceiling always becomes."""
+    hardcoded = [name for name in vars(flags) if name.startswith("OFFLOAD_ARCH")]
+    assert not hardcoded, f"offload arch constants survive: {hardcoded}"
+
+
+def test_the_nvidia_ladder_descends_and_amd_has_none():
+    """NVIDIA may be clamped DOWN because PTX is forward-compatible; AMD may not, because gfx1103
+    code does not run on gfx942. So there is a ladder for one vendor and deliberately not the other."""
+    caps = [int(entry.removeprefix("sm_")) for entry in flags.SM_LADDER]
+    assert caps == sorted(caps, reverse=True), f"SM_LADDER is not descending: {flags.SM_LADDER}"
+    assert len(set(caps)) == len(caps)
+    assert not [name for name in vars(flags) if "GFX" in name and "LADDER" in name]
+
+
+def test_the_nvidia_probe_clamps_down_to_what_the_compiler_takes(monkeypatch):
+    monkeypatch.setattr(flags, "detect_sm", lambda: "sm_89")
+    monkeypatch.setattr(languages, "offload_probe", lambda model, vendor, arch, *, run: arch == "sm_70")
+    languages.offload_arch.cache_clear()
+    assert languages.offload_arch("openmp", "nvidia") == "sm_70"
+    languages.offload_arch.cache_clear()
+
+
+def test_a_capability_off_the_ladder_clamps_down_and_never_up(monkeypatch):
+    """A device whose capability names no rung must clamp to the newest rung AT OR BELOW it, and a
+    device below every rung must yield nothing. Selecting an arch ABOVE the device links fine --
+    ptxas accepts any capability it knows -- and then ships a fatbin the GPU has no image in."""
+    monkeypatch.setattr(languages, "offload_probe", lambda model, vendor, arch, *, run: True)
+
+    monkeypatch.setattr(flags, "detect_sm", lambda: "sm_61")
+    languages.offload_arch.cache_clear()
+    assert languages.offload_arch("openmp", "nvidia") == "sm_60"
+
+    seen = []
+    monkeypatch.setattr(flags, "detect_sm", lambda: "sm_35")
+    monkeypatch.setattr(languages, "offload_probe", lambda model, vendor, arch, *, run: seen.append(arch) or True)
+    languages.offload_arch.cache_clear()
+    assert languages.offload_arch("openmp", "nvidia") == ""
+    assert not seen, f"probed an arch newer than the device: {seen}"
+    languages.offload_arch.cache_clear()
+
+
+def test_the_amd_probe_never_substitutes_another_target(monkeypatch):
+    """A rejected AMD target means the leg is unusable here. Answering with a DIFFERENT gfx would
+    build a code object the device cannot dispatch."""
+    monkeypatch.setattr(flags, "detect_gfx", lambda: "gfx1103")
+    seen = []
+
+    def probe(model, vendor, arch, *, run):
+        seen.append(arch)
+        return False
+
+    monkeypatch.setattr(languages, "offload_probe", probe)
+    languages.offload_arch.cache_clear()
+    assert languages.offload_arch("openmp", "amd") == ""
+    assert seen == ["gfx1103"], f"the amd leg probed more than its own target: {seen}"
+    languages.offload_arch.cache_clear()
+
+
+def test_only_the_link_probe_walks_the_ladder(monkeypatch):
+    """A device that is busy, wedged or absent is not a reason to try an older capability. Walking on
+    a run failure costs one run timeout per rung and answers with a clamp that fixes nothing."""
+    monkeypatch.setattr(flags, "detect_sm", lambda: "sm_89")
+    runs = []
+
+    def probe(model, vendor, arch, *, run):
+        runs.append((arch, run))
+        return not run
+
+    monkeypatch.setattr(languages, "offload_probe", probe)
+    languages.offload_arch.cache_clear()
+    assert languages.offload_arch("openmp", "nvidia") == ""
+    assert runs == [("sm_89", False), ("sm_89", True)], f"the ladder kept walking after a run failure: {runs}"
+    languages.offload_arch.cache_clear()
+
+
+def test_a_leg_driver_is_pinned_by_path_not_by_path_order(monkeypatch, tmp_path):
+    """Putting a toolchain on PATH to reach one leg leaks it into every other build on the box."""
+    pin = tmp_path / "amdclang"
+    pin.write_text("#!/bin/sh\nexit 0\n")
+    pin.chmod(0o755)
+    monkeypatch.setenv("HPCAGENT_BENCH_OFFLOAD_CC_LLVM_AMD", str(pin))
+    assert languages.offload_driver("openmp", "amd") == str(pin)
+    monkeypatch.setenv("HPCAGENT_BENCH_OFFLOAD_CC_LLVM_AMD", str(tmp_path / "absent"))
+    assert languages.offload_driver("openmp", "amd") == ""
+
+
+def test_the_probe_asks_the_device_and_not_the_compiler():
+    """Linking is not the question. A missing device compiler fails at LINK and a host fallback fails
+    only at RUN, so each probe TU reports where the region actually executed."""
+    assert "omp_is_initial_device" in languages.OFFLOAD_PROBE["openmp"]
+    assert "acc_on_device" in languages.OFFLOAD_PROBE["openacc"]
+    for source in languages.OFFLOAD_PROBE.values():
+        assert "int main(" in source and "on_device" in source
 
 
 def test_nvhpc_uses_its_own_arch_spelling():
-    assert languages.offload_flags("nvhpc", "nvidia", "openmp") == "-mp=gpu -gpu=cc90"
-    assert languages.offload_flags("nvhpc", "nvidia", "openacc") == "-acc -gpu=cc90"
+    assert languages.offload_arch_spelling("nvhpc", "sm_89") == "cc89"
+    assert languages.offload_arch_spelling("llvm", "sm_89") == "sm_89"
+    assert languages.offload_arch_spelling("nvhpc", "gfx942") == "gfx942"
+    assert languages.offload_flags("openacc", "nvidia", arch="sm_89") == "-acc -gpu=cc89"
 
 
-def test_an_explicit_arch_overrides_the_default():
-    assert "gfx90a" in languages.offload_flags("gcc", "amd", "openmp", arch="gfx90a")
+def test_a_pinned_toolchain_carries_its_own_runtime_path(monkeypatch, tmp_path):
+    """A leg pinned outside the loader's search path must bake in an rpath. Without it the probe
+    LINKS and the binary then dies on `libomptarget.so: cannot open shared object file`, which reads
+    as a missing GPU rather than as a prefix ld.so was never told about."""
+    prefix = tmp_path / "llvm"
+    (prefix / "bin").mkdir(parents=True)
+    (prefix / "lib").mkdir()
+    driver = prefix / "bin" / "clang"
+    driver.write_text("#!/bin/sh\nexit 0\n")
+    driver.chmod(0o755)
+    monkeypatch.setenv("HPCAGENT_BENCH_OFFLOAD_CC_LLVM_NVIDIA", str(driver))
+    assert languages.offload_runtime_rpath("openmp", "nvidia") == f"-Wl,-rpath,{prefix / 'lib'}"
+    assert languages.offload_flags("openmp", "nvidia", arch="sm_89").endswith(f"-Wl,-rpath,{prefix / 'lib'}")
+
+
+def test_a_system_toolchain_gets_no_rpath(monkeypatch, tmp_path):
+    """ld.so already searches /usr/lib, so an rpath there is noise that also pins the leg to one
+    prefix. Only a driver the loader cannot find on its own earns one."""
+    driver = tmp_path / "clang"
+    driver.write_text("#!/bin/sh\nexit 0\n")
+    driver.chmod(0o755)
+    monkeypatch.setenv("HPCAGENT_BENCH_OFFLOAD_CC_LLVM_NVIDIA", str(driver))
+    # No sibling lib/ next to a bare driver, so nothing to point at.
+    assert languages.offload_runtime_rpath("openmp", "nvidia") == ""
+    monkeypatch.setenv("HPCAGENT_BENCH_OFFLOAD_CC_LLVM_NVIDIA", "/usr/bin/clang")
+    assert languages.offload_runtime_rpath("openmp", "nvidia") == ""
+    monkeypatch.delenv("HPCAGENT_BENCH_OFFLOAD_CC_LLVM_NVIDIA")
+    assert languages.offload_runtime_rpath("openmp", "nvidia") == "", "an unpinned driver earned an rpath"
+
+
+def test_an_explicit_arch_overrides_the_probe():
+    assert "sm_80" in languages.offload_flags("openmp", "nvidia", arch="sm_80")
+    assert "gfx90a" in languages.offload_flags("openmp", "amd", arch="gfx90a")
+
+
+def test_an_unsupported_leg_renders_nothing():
+    assert languages.offload_flags("openacc", "amd", arch="gfx942") == ""
 
 
 def test_no_offload_flag_set_is_left_unrendered():
     for (family, vendor), models in languages.OFFLOAD_REFS.items():
         for model in models:
-            rendered = languages.offload_flags(family, vendor, model)
+            rendered = languages.offload_flags(model, vendor, arch="sm_80" if vendor == "nvidia" else "gfx942")
             assert rendered and "{arch}" not in rendered
+            assert languages.OFFLOAD_FAMILY[model] == family
 
 
-@pytest.mark.parametrize("family,vendor,model", [
-    ("intel", "nvidia", "openmp"),
-    ("gcc", "intel", "openmp"),
-    ("gcc", "nvidia", "openmpi"),
+@pytest.mark.parametrize("vendor,model", [
+    ("nvidia", "openmpi"),
+    ("intel", "openmp"),
 ])
-def test_an_unknown_offload_selector_is_rejected(family, vendor, model):
+def test_an_unknown_offload_selector_is_rejected(vendor, model):
     with pytest.raises(KeyError):
-        languages.offload_flags(family, vendor, model)
+        languages.offload_flags(model, vendor, arch="sm_80")
 
 
 def test_offload_is_not_active_in_the_default_cpu_builds():
@@ -344,6 +485,22 @@ def test_the_stdpar_runtime_is_never_linked_twice(_tbb_backend, tmp_path):
     src.write_text("int main() { return 0; }")
     link = languages.build_kernel_lib_commands([("cpp", src)], tmp_path / "libk.so")[-1]
     assert link.count(flags.STDPAR_LINK_TBB) == 1
+
+
+def test_a_non_tbb_stdpar_runtime_is_linked_without_asking_the_tbb_probe(monkeypatch):
+    """The probe asks `__has_include(<tbb/tbb.h>)`, which says nothing about nvhpc. nvc++ compiles
+    with `-stdpar` unconditionally, so gating its LINK on that answer produced a .so that built
+    clean and then failed to dlopen on `__acc_compiled`."""
+    monkeypatch.setattr(languages, "_stdpar_backend_is_tbb", lambda cc: False)
+    blocks = languages._load_compilers()
+    nvhpc = [b for b in blocks.values() if b.get("stdpar_link_ref") == "STDPAR_LINK_NVHPC"]
+    assert nvhpc, "no compilers.yaml block declares STDPAR_LINK_NVHPC"
+    for block in nvhpc:
+        assert languages._stdpar_link_for_block(block) == ("-stdpar=multicore", )
+    tbb = [b for b in blocks.values() if b.get("stdpar_link_ref") == "STDPAR_LINK_TBB"]
+    assert tbb, "no compilers.yaml block declares STDPAR_LINK_TBB"
+    for block in tbb:
+        assert languages._stdpar_link_for_block(block) == ()
 
 
 def test_the_stdpar_probe_resolves_the_driver_first(monkeypatch):

@@ -73,6 +73,7 @@ def _emit_native(npy: pathlib.Path, bi: pathlib.Path, out: pathlib.Path, base: s
     from numpyto_c.emit import emit_c, emit_cpp, emit_cpp_isopar
     from numpyto_c.bindings import emit_binding
     from numpyto_fortran.emit import emit_fortran
+    from numpyto_fortran.intrinsics import renders_natively as fortran_renders_natively
     out.mkdir(parents=True, exist_ok=True)
     kir = lower(parse_kernel(npy, bi))
     (out / f"{base}.c").write_text(emit_c(kir, fn_name=base))
@@ -80,7 +81,7 @@ def _emit_native(npy: pathlib.Path, bi: pathlib.Path, out: pathlib.Path, base: s
     emit_binding(kir, out / f"{base}_binding.json", base_name=base)
     if isopar:
         (out / f"{base}_isopar.cpp").write_text(emit_cpp_isopar(kir, fn_name=base))
-    fkir = lower(parse_kernel(npy, bi))
+    fkir = lower(parse_kernel(npy, bi), native_call=fortran_renders_natively)
     (out / f"{base}.f90").write_text(emit_fortran(fkir, fn_name=base))
     return True
 
@@ -207,8 +208,10 @@ def run_op(src: str,
                     # heap in the ctypes call, which a bare in-process ``_invoke``
                     # would let take down the whole pytest worker. ``_invoke_isolated``
                     # runs it in a child and reports the crash as a ``FAIL`` string.
+                    # frozenset(): these kernels are ad-hoc numpy source with no manifest, so no
+                    # buffer is tagged index_array and nothing is rebased at the seam.
                     status[b] = _no._invoke_isolated("cpp" if b == _no.ISOPAR else b, binding, so, by, syms, expected,
-                                                     list(outputs), rtol, atol)
+                                                     list(outputs), rtol, atol, frozenset())
                 except Exception as exc:  # noqa: BLE001
                     status[b] = f"FAIL:{type(exc).__name__}:{exc}"
             elif b == "numba":
@@ -239,7 +242,7 @@ def _run_numba(npy, bi, func, inputs, outputs, syms, expected, rtol, atol, captu
     try:
         nb_src = emit_numba(npy.read_text(), kir=lower(parse_kernel(npy, bi)))
     except Exception as exc:  # noqa: BLE001
-        return f"skip:unsupported:emit:{type(exc).__name__}"
+        return f"FAIL:emit:{type(exc).__name__}: {exc}"
     # Write + import (not exec-from-string): emit_numba decorates with
     # ``njit(cache=True)`` and numba's cache locator needs a real ``__file__``.
     mod = npy.parent / f"{func}_numba.py"
@@ -276,7 +279,7 @@ def _run_pythran(npy, bi, func, inputs, outputs, syms, expected, rtol, atol, tdp
     try:
         py_src = emit_pythran(npy.read_text(), lower(parse_kernel(npy, bi)))
     except Exception as exc:  # noqa: BLE001
-        return f"skip:unsupported:emit:{type(exc).__name__}"
+        return f"FAIL:emit:{type(exc).__name__}: {exc}"
     mod = tdp / f"{func}_pythran.py"
     mod.write_text(py_src)
     so = tdp / f"{func}_pythran.so"
@@ -394,7 +397,7 @@ def _jax_child(src, func, inputs, outputs, expected, rtol, atol, capture_return=
     try:
         jsrc = emit_jax(src, func)
     except Exception as exc:  # noqa: BLE001
-        return f"skip:unsupported:emit:{type(exc).__name__}"
+        return f"FAIL:emit:{type(exc).__name__}: {exc}"
     ns: Dict[str, object] = {}
     tree = ast.parse(jsrc)
     try:
@@ -571,7 +574,9 @@ def run_return_op(src: str,
                     status[b] = f"FAIL:compile:{cc.stderr[-300:]}"
                     continue
                 try:
-                    status[b] = _no._invoke_isolated(b, binding, so, by, syms, expected, out_names, rtol, atol)
+                    # frozenset(): ad-hoc numpy source, no manifest, so no buffer is index_array-tagged.
+                    status[b] = _no._invoke_isolated(b, binding, so, by, syms, expected, out_names, rtol, atol,
+                                                     frozenset())
                 except Exception as exc:  # noqa: BLE001
                     status[b] = f"FAIL:{type(exc).__name__}:{exc}"
             elif b == "numba":

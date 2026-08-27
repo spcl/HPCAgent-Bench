@@ -24,7 +24,8 @@ import pytest
 
 from numpyto_common.lib_nodes import expand_arange, expand_fromfunction
 from numpyto_common.frontend import _shape_from_constructor
-from numpyto_common.lowering import (_AstypeRewriter, _NpAliasRewriter, _ScatterAtRewriter, _SubscriptifyNames)
+from numpyto_common.lowering import (_AstypeRewriter, _NpAliasRewriter, _ScatterAtRewriter, _SliceToScalarRewriter,
+                                     _SubscriptifyNames)
 
 
 def _expr(src):
@@ -286,6 +287,184 @@ def test_at_unknown_index_extent_refused():
         _scatter("np.add.at(Lx, src, flux)", {})  # no shape for src
 
 
+def test_add_at_flattened_2d_index_and_value():
+    """``np.add.at(deexx, ikb.reshape(-1), delta.reshape(-1))`` (vexx_k's
+    ``_newdxx_g``/``_newdxx_r``/``_paw_newdxx``): a ``.reshape(-1)`` flatten of a
+    2-D index array is peeled back to its OWN (nat, nh) axes -- a 2-D loop nest,
+    not a demand for a bare Name -- and the value's matching flatten is peeled
+    and scalarised the same way."""
+    out = _scatter("np.add.at(deexx, ikb.reshape(-1), delta.reshape(-1))", {
+        "ikb": ["nat", "nh"],
+        "delta": ["nat", "nh"]
+    })
+    assert "for __sat1_0 in range(nat):" in out
+    assert "for __sat1_1 in range(nh):" in out
+    assert "deexx[ikb[__sat1_0, __sat1_1]] += delta[__sat1_0, __sat1_1]" in out
+
+
+def test_add_at_scalar_value_broadcasts():
+    """``np.add.at(counts, bin_id, 1)`` (azimint_naive): a scalar value is not an
+    array name or its negation -- it broadcasts the SAME literal to every
+    scatter iteration (a counting histogram), not a per-element gather."""
+    out = _scatter("np.add.at(counts, bin_id, 1)", {"bin_id": ["E"]})
+    assert "for __sat1 in range(E):" in out
+    assert "counts[bin_id[__sat1]] += 1" in out
+
+
+def test_add_at_broadcast_to_value_peeled():
+    """``np.add.at(out, idx, np.broadcast_to(val, (E,)))``: the wrapper carries
+    no information ``_scalarize_at_iters`` needs once ``val`` is scalarised
+    structurally, so it is peeled to ``val`` rather than reaching the emitter
+    as a raw (unlowered) ``np.broadcast_to`` call."""
+    out = _scatter("np.add.at(out, idx, np.broadcast_to(val, (E,)))", {"idx": ["E"], "val": ["E"]})
+    assert "out[idx[__sat1]] += val[__sat1]" in out
+    assert "broadcast_to" not in out
+
+
+def test_add_at_boolean_index_refused_not_mislowered():
+    """A boolean array in the index slot is a MASK, not a gather -- refusing it
+    (rather than scattering through its 0/1 truth values) needs the boolean
+    names the real pipeline harvests; this rewriter accepts them explicitly."""
+    with pytest.raises(NotImplementedError, match="MASK"):
+        _ScatterAtRewriter({"mask": ["E"]}, bool_names={"mask"}).visit(ast.parse("np.add.at(out, mask, v)"))
+
+
+def test_add_at_lowered_output_is_not_rewrapped_by_fancy_scatter_store():
+    """Regression: ``_ScatterAtRewriter``'s OWN output -- ``Lx[src[__sat1]] +=
+    flux[__sat1]`` -- must never be re-matched by ``_expand_fancy_scatter_store``
+    as an un-lowered fancy scatter (``src`` is already indexed by ``__sat1``,
+    not a bare array still needing its own iteration); double-wrapping it as
+    ``Lx[src[__sc0][__sat1]]`` broke edge_laplacian when the scatter-at phase
+    moved to run after ``_expand_fancy_scatter_store``'s sibling passes."""
+    from numpyto_common.lowering import _WholeArrayAssignRewriter
+    already_lowered = ast.parse("Lx[src[__sat1]] += flux[__sat1]").body[0]
+    rewriter = _WholeArrayAssignRewriter({"Lx": ("N", ), "src": ("E", ), "flux": ("E", )})
+    scattered = rewriter._expand_fancy_scatter_store(already_lowered.target, already_lowered.value, already_lowered.op)
+    assert scattered == []
+
+
+def test_add_at_flatten_numeric_agreement():
+    """Numeric oracle: a 2-D int64 index array (with GUARANTEED duplicate
+    entries) and its matching value array, both flattened, must accumulate
+    exactly like numpy's ``np.add.at`` on every native backend."""
+    from _op_oracle import run_op
+    rng = np.random.default_rng(3)
+    nat, nh, n = 3, 4, 5
+    ikb = rng.integers(0, n, size=(nat, nh)).astype(np.int64)
+    delta = rng.standard_normal((nat, nh))
+    assert len(set(ikb.ravel().tolist())) < ikb.size, "fixture must exercise a repeated index"
+    status = run_op(
+        "import numpy as np\n"
+        "def scatter_flat(ikb, delta, out):\n"
+        "    np.add.at(out, ikb.reshape(-1), delta.reshape(-1))\n",
+        "scatter_flat", {
+            "ikb": ikb,
+            "delta": delta
+        }, {"out": (n, )}, {
+            "nat": nat,
+            "nh": nh,
+            "N": n
+        },
+        shapes={
+            "ikb": "(nat, nh)",
+            "delta": "(nat, nh)",
+            "out": "(N,)"
+        },
+        dtypes={"ikb": "int64"},
+        backends=("c", "cpp", "fortran"))
+    assert all(v == "ok" for v in status.values()), status
+
+
+def test_add_at_scalar_value_numeric_agreement():
+    """Numeric oracle: ``np.add.at(counts, idx, 1)`` with duplicate ``idx``
+    entries must count occurrences exactly like numpy on every native backend."""
+    from _op_oracle import run_op
+    rng = np.random.default_rng(7)
+    e, n = 10, 4
+    idx = rng.integers(0, n, size=e).astype(np.int64)
+    assert len(set(idx.tolist())) < e, "fixture must exercise a repeated index"
+    status = run_op("import numpy as np\n"
+                    "def scatter_count(idx, counts):\n"
+                    "    np.add.at(counts, idx, 1)\n",
+                    "scatter_count", {"idx": idx}, {"counts": (n, )}, {
+                        "E": e,
+                        "N2": n
+                    },
+                    shapes={
+                        "idx": "(E,)",
+                        "counts": "(N2,)"
+                    },
+                    dtypes={"idx": "int64"},
+                    backends=("c", "cpp", "fortran"))
+    assert all(v == "ok" for v in status.values()), status
+
+
+def test_add_at_slice_view_target():
+    """``np.add.at(deexx[:, ii], ikb.reshape(-1), delta.reshape(-1))`` (vexx_k's
+    ``_newdxx_g``/``_newdxx_r``/``_paw_newdxx`` after inlining ``deexx[:, ii]``
+    for the callee's ``deexx`` parameter): the TARGET is a slice VIEW, not a
+    bare Name. numpy writes a scatter through a view straight to the
+    underlying buffer, so the full-slice axis takes the scattered index and
+    the scalar axis (``ii``) passes through unchanged."""
+    out = _scatter("np.add.at(deexx[:, ii], ikb.reshape(-1), delta.reshape(-1))", {
+        "ikb": ["nat", "nh"],
+        "delta": ["nat", "nh"]
+    })
+    assert "for __sat1_0 in range(nat):" in out
+    assert "for __sat1_1 in range(nh):" in out
+    assert "deexx[ikb[__sat1_0, __sat1_1], ii] += delta[__sat1_0, __sat1_1]" in out
+
+
+@pytest.mark.parametrize(
+    "bad_target",
+    [
+        "deexx[1:, ii]",  # a BOUNDED slice, not a full one
+        "deexx[:, :]",  # two full slices -- which axis does the index write?
+        "deexx[mask, ii]",  # a fancy index, not a slice
+    ])
+def test_add_at_view_target_non_full_slice_refused(bad_target):
+    with pytest.raises(NotImplementedError, match="full-slice axis"):
+        _scatter(f"np.add.at({bad_target}, idx, v)", {"idx": ["E"]})
+
+
+def test_add_at_slice_view_target_numeric_agreement():
+    """Numeric oracle: scattering through a slice VIEW of a 2-D output (a
+    fixed column, the vexx_k ``deexx[:, ii]`` shape) with a flattened 2-D
+    index/value pair must accumulate exactly like numpy's ``np.add.at`` on
+    every native backend."""
+    from _op_oracle import run_op
+    rng = np.random.default_rng(11)
+    nat, nh, nkb, mycols = 3, 4, 5, 2
+    ikb = rng.integers(0, nkb, size=(nat, nh)).astype(np.int64)
+    delta = rng.standard_normal((nat, nh))
+    assert len(set(ikb.ravel().tolist())) < ikb.size, "fixture must exercise a repeated index"
+    status = run_op(
+        "import numpy as np\n"
+        "def scatter_view(ikb, delta, ii, deexx):\n"
+        "    np.add.at(deexx[:, ii], ikb.reshape(-1), delta.reshape(-1))\n",
+        "scatter_view", {
+            "ikb": ikb,
+            "delta": delta,
+            "ii": 1
+        }, {"deexx": (nkb, mycols)}, {
+            "nat": nat,
+            "nh": nh,
+            "nkb": nkb,
+            "mycols": mycols
+        },
+        shapes={
+            "ikb": "(nat, nh)",
+            "delta": "(nat, nh)",
+            "deexx": "(nkb, mycols)"
+        },
+        dtypes={
+            "ikb": "int64",
+            "ii": "int64"
+        },
+        backends=("c", "cpp", "fortran"))
+    assert all(v == "ok" for v in status.values()), status
+
+
 # --------------------------------------------------------------------------- #
 # J. fancy-index gather  arr[idx] -> arr[idx[k]]                               #
 # --------------------------------------------------------------------------- #
@@ -304,6 +483,88 @@ def test_plain_array_still_subscripts_iter():
     tree = ast.parse("w", mode="eval").body
     out = _SubscriptifyNames({"w": ("E", )}, ["__w0"]).visit(tree)
     assert ast.unparse(out) == "w[__w0]"
+
+
+def test_fancy_gather_broadcasts_not_sums_rank():
+    """Several ADJACENT index arrays BROADCAST into one shared result-axis
+    block, not the SUM of their own ranks. icon_gather's ``A[idx, lev, blk]``
+    with idx/blk (nproma,1,nblks) and lev (1,nlev,1) broadcasts to
+    (nproma,nlev,nblks) -- rank 3, never the wrong rank-9 flatten a naive sum
+    of the three operands' own ranks would ask the C emitter for. Each
+    operand right-aligns against the SAME shared iters, pinning its own
+    size-1 axis to 0 (the existing broadcast rule, reused here)."""
+    tree = ast.parse("A[idx, lev, blk]", mode="eval").body
+    shapes = {
+        "A": ("nproma", "nlev", "nblks"),
+        "idx": ("nproma", "1", "nblks"),
+        "lev": ("1", "nlev", "1"),
+        "blk": ("nproma", "1", "nblks"),
+    }
+    out = _SubscriptifyNames(shapes, ["__w0", "__w1", "__w2"]).visit(tree)
+    assert ast.unparse(out) == "A[idx[__w0, 0, __w2], lev[0, __w1, 0], blk[__w0, 0, __w2]]"
+
+
+def test_fancy_gather_broadcast_with_trailing_scalar_axis():
+    """A literal scalar axis (``0``) sitting in the SAME adjacent advanced
+    group (numpy counts a bare integer as advanced too) consumes an A axis
+    but adds no rank of its own and no iter."""
+    tree = ast.parse("A[idx, lev, 0]", mode="eval").body
+    shapes = {
+        "A": ("nproma", "nlev", "nblks"),
+        "idx": ("nproma", "1", "nblks"),
+        "lev": ("1", "nlev", "1"),
+    }
+    out = _SubscriptifyNames(shapes, ["__w0", "__w1", "__w2"]).visit(tree)
+    assert ast.unparse(out) == "A[idx[__w0, 0, __w2], lev[0, __w1, 0], 0]"
+
+
+def test_fancy_gather_broadcast_adjacent_to_real_slice():
+    """A rank-2 index array ADJACENT to a scalar, followed by a real ``:``
+    slice: the array's own rank replaces its axis, the slice keeps its own
+    (right-aligned after the group)."""
+    tree = ast.parse("A[idx, jk, :]", mode="eval").body
+    shapes = {"A": ("nproma", "nlev", "nblks"), "idx": ("nproma", "nblks")}
+    out = _SubscriptifyNames(shapes, ["__w0", "__w1", "__w2"]).visit(tree)
+    assert ast.unparse(out) == "A[idx[__w0, __w1], jk, __w2]"
+
+
+def test_fancy_gather_separated_advanced_indices_refused():
+    """``_SubscriptifyNames`` (the whole-array path taken when the RHS carries
+    no raw slice token of its own -- icon_gather's pre-extracted ``idx``/
+    ``blk`` locals) still refuses advanced indices SEPARATED by a real slice:
+    it has no front-placement implementation of its own. ``_SliceToScalarRewriter``
+    (the path a literal ``:`` in the RHS actually takes, e.g. zekin_gather's
+    ``z_kin_hor_e[edge_blk[:, :, e], :, edge_idx[:, :, e]]``) now implements
+    front placement -- see ``test_front_placed_gather_separated_by_real_slice``."""
+    tree = ast.parse("A[idx, :, blk]", mode="eval").body
+    shapes = {"A": ("nproma", "nlev", "nblks"), "idx": ("nproma", ), "blk": ("nproma", )}
+    with pytest.raises(NotImplementedError):
+        _SubscriptifyNames(shapes, ["__w0", "__w1"]).visit(tree)
+
+
+def test_front_placed_gather_separated_by_real_slice():
+    """Advanced indices SEPARATED by a real slice move their broadcast result
+    to the FRONT (numpy rule): each operand consumes the SAME leading iters
+    as one shared block, and the slice consumes the iter after that block --
+    zekin_gather's ``z_kin_hor_e[edge_blk[:, :, e], :, edge_idx[:, :, e]]``,
+    whose C emit used to read the index arrays at the wrong (trailing)
+    iters and segfault."""
+    z = ast.Constant(value=0)
+    iv0, iv1, iv2 = (ast.Name(id=f"__w{i}", ctx=ast.Load()) for i in range(3))
+    rw = _SliceToScalarRewriter(
+        array_shapes={
+            "z_kin_hor_e": ("NPROMA", "NLEV", "NBLKS"),
+            "edge_blk": ("NB", "NPROMA", "3"),
+            "edge_idx": ("NB", "NPROMA", "3"),
+        },
+        iter_vars=[iv0, iv1, iv2],
+        lhs_ranges=[(z, z), (z, z), (z, z)],
+        lhs_name="gathered",
+        lhs_dims=[ast.Slice(lower=None, upper=None, step=None) for _ in range(3)],
+    )
+    tree = ast.parse("z_kin_hor_e[edge_blk[:, :, e], :, edge_idx[:, :, e]]", mode="eval").body
+    out = rw.visit(tree)
+    assert ast.unparse(out) == "z_kin_hor_e[edge_blk[__w0, __w1, e], __w2, edge_idx[__w0, __w1, e]]"
 
 
 # --------------------------------------------------------------------------- #

@@ -263,3 +263,45 @@ class KernelIR:
         """
         order = self.param_order()
         return order if set(order) == set(self.input_args) else list(self.input_args)
+
+
+#: AST-node attribute carrying the numpy expression a lowered statement came from.
+NUMPY_NOTE = "npb_numpy_note"
+
+#: Longest note rendered, so an emitted comment cannot push a line past the 120-column budget.
+NUMPY_NOTE_CHARS = 96
+
+
+def _is_alloc_marker(stmt: ast.stmt) -> bool:
+    """``<name> = __hpcagent_bench_zeros__()`` -- the allocation-site marker :func:`lib_nodes._alloc_marker`
+    emits ahead of a spilled operand's copy loop. A statically-shaped target's marker renders to
+    nothing (the malloc moves to the function top), so tagging it would silently drop the note."""
+    return (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
+            and isinstance(stmt.value, ast.Call) and isinstance(stmt.value.func, ast.Name)
+            and stmt.value.func.id == "__hpcagent_bench_zeros__")
+
+
+def tag_numpy_origin(stmts: List[ast.stmt], text: str) -> None:
+    """Record on the first of ``stmts`` which numpy expression they were lowered from.
+
+    A named intrinsic documents itself -- Fortran's ``MATMUL`` says what it is. A loop nest does
+    not, and C has no intrinsic to fall back on, so the operation's numpy spelling is the only thing
+    a reader of the generated source has. The note is attached where the numpy call is replaced by
+    statements, which is the one place that still knows both halves.
+
+    Skips past any leading allocation-site markers (a materialized operand's spill, e.g.
+    ``expand_tensordot``'s ``__td_op1 = __hpcagent_bench_zeros__()``) to the first statement that
+    actually renders, else the note would land on a line the emitter drops.
+    """
+    if not stmts:
+        return
+    target = next((s for s in stmts if not _is_alloc_marker(s)), stmts[0])
+    text = " ".join(text.split())
+    if len(text) > NUMPY_NOTE_CHARS:
+        text = text[:NUMPY_NOTE_CHARS - 3] + "..."
+    vars(target)[NUMPY_NOTE] = text
+
+
+def numpy_origin(stmt: ast.stmt) -> Optional[str]:
+    """The numpy expression ``stmt`` was lowered from, or ``None`` when it was not."""
+    return vars(stmt).get(NUMPY_NOTE)

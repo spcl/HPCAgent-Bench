@@ -30,7 +30,7 @@ import shutil
 import subprocess
 import tempfile
 from functools import lru_cache
-from typing import Dict, List, NamedTuple, Optional, Set
+from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 
 from hpcagent_bench import osinfo, paths
 
@@ -115,6 +115,21 @@ CPU_BASELINE_GCC = (f"-O3 {ARCH_NATIVE} -fopenmp {_FP_RELAX} -fstrict-aliasing -
 #: something we can assert from here: tests/test_vecmath.py checks gfortran really does
 #: vectorize libm, and fails loudly on a host whose spec omits it.
 CPU_BASELINE_GFORTRAN = (f"-O3 {ARCH_NATIVE} -fopenmp {_FP_RELAX} -fstrict-aliasing -fPIC")
+
+#: NVHPC baseline for C / C++ / Fortran. ``_FP_RELAX`` has no nvc spelling and needs none: nvc
+#: relaxes errno, trapping and signed zeros by default, and ``-Kieee`` is the flag that would turn
+#: that OFF. ``-tp=native`` is its ``-march=native``, ``-mp`` its host ``-fopenmp``.
+CPU_BASELINE_NVHPC = "-O3 -tp=native -mp -fPIC"
+
+#: nvc++ implements ``<execution>`` itself -- ``-stdpar=multicore`` is what makes ``par`` parallel,
+#: and it is needed at COMPILE as well as at link. Without it ``par`` silently takes the sequential
+#: overloads, the same failure ``STDPAR_LINK_TBB`` guards against on libstdc++.
+CPU_BASELINE_NVCXX = f"{CPU_BASELINE_NVHPC} -stdpar=multicore"
+STDPAR_LINK_NVHPC = "-stdpar=multicore"
+
+#: nvhpc's optimization report. `-Minfo=all` covers vectorization, inlining and, on an offload
+#: build, the `accel` channel that says which loops became kernels and which were refused.
+NVHPC_OPT_REPORT = "-Minfo=all"
 
 #: icx defaults to fp-model=fast; precise must come first (last spelling wins over _FP_RELAX).
 CPU_BASELINE_ICPX = (f"-O3 -xHost -fp-model=precise -fopenmp {_FP_RELAX} -fPIC -qopt-zmm-usage=high")
@@ -569,22 +584,24 @@ CUDA_BASELINE = (f"-O3 --use_fast_math -Xcompiler='-O3 -march=native -ffast-math
 #: <gfx>`` is appended per-host by :func:`compose_hip` after :func:`detect_gfx`.
 HIP_BASELINE = (f"-O3 -march=native -ffast-math {_FP_RELAX} -fPIC")
 
-# Directive-offload flag sets, per toolchain family and GPU leg; {arch} filled by offload_flags().
+# Directive-offload flag sets; ``{arch}`` filled by :func:`languages.offload_flags` from the arch
+# :func:`languages.offload_arch` PROBED, never from a constant. One toolchain owns each model:
+# LLVM offloads OpenMP on both vendor legs, NVHPC offloads OpenACC. The gcc legs are gone --
+# a gcc built ``--enable-offload-defaulted`` links and runs a target region entirely on the HOST
+# with no diagnostic, which is a wrong measurement rather than a failed one.
 
-#: gcc nvptx offload compiler has no sm_90; sm_89 is its ceiling.
-OFFLOAD_ARCH_NVIDIA = "sm_90"
-OFFLOAD_ARCH_NVIDIA_GCC = "sm_89"
-OFFLOAD_ARCH_NVIDIA_NVHPC = "cc90"
-OFFLOAD_ARCH_AMD = "gfx942"
+#: CUDA compute capabilities, newest first. A VOCABULARY, not a per-compiler ceiling:
+#: :func:`languages.offload_arch` walks DOWN it from the device's own capability until the compiler
+#: accepts one, so a stale entry costs nothing and a new toolchain needs no edit.
+#: Only NVIDIA gets a ladder. PTX is forward-compatible, so a lower ``sm_`` still runs on a higher
+#: device; AMD has no such property (gfx1103 code does not run on gfx942), so an AMD offload arch is
+#: matched EXACTLY or the leg is unsupported.
+SM_LADDER: Tuple[str, ...] = ("sm_121", "sm_120", "sm_110", "sm_103", "sm_100", "sm_90", "sm_89", "sm_87", "sm_86",
+                              "sm_80", "sm_75", "sm_70", "sm_62", "sm_60", "sm_53")
 
-OMP_TARGET_GCC_NVIDIA = "-fopenmp -foffload=nvptx-none -foffload-options=nvptx-none=-march={arch}"
-OMP_TARGET_GCC_AMD = "-fopenmp -foffload=amdgcn-amdhsa -foffload-options=amdgcn-amdhsa=-march={arch}"
 OMP_TARGET_LLVM_NVIDIA = "-fopenmp --offload-arch={arch}"
 OMP_TARGET_LLVM_AMD = "-fopenmp --offload-arch={arch}"
-OMP_TARGET_NVHPC_NVIDIA = "-mp=gpu -gpu={arch}"
 
-OPENACC_GCC_NVIDIA = "-fopenacc -foffload=nvptx-none -foffload-options=nvptx-none=-march={arch}"
-OPENACC_GCC_AMD = "-fopenacc -foffload=amdgcn-amdhsa -foffload-options=amdgcn-amdhsa=-march={arch}"
 OPENACC_NVHPC_NVIDIA = "-acc -gpu={arch}"
 
 # ---------------------------------------------------------------------------
