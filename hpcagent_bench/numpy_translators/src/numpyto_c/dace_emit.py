@@ -5,7 +5,7 @@ import copy
 import dataclasses
 import functools
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from numpyto_common import dtypes
 from numpyto_common.frontend import fold_shape_expr
@@ -148,6 +148,36 @@ class _ResolveZeros(ast.NodeTransformer):
         dtype = _dace_dtype(self.local_dtypes.get(name) or self.default_dtype)
         elts = ", ".join(str(s) for s in shape) + ("," if len(shape) == 1 else "")
         return ast.copy_location(ast.parse(f"{name} = {ctor}(({elts}), dtype={dtype})").body[0], node)
+
+
+def _declare_unallocated_zeros_locals(fn: ast.FunctionDef, zeros_locals: Dict[str, tuple], allocated: Dict[str, tuple],
+                                      zeros_fills: Dict[str, str], local_dtypes: Dict[str, str], default_dtype: str,
+                                      params: Set[str]) -> None:
+    """Allocate a lowered local that carries no ``__hpcagent_bench_zeros__`` marker.
+
+    :class:`_ResolveZeros` rewrites markers, but not every expander leaves one: ``np.stack``
+    writes its temp straight into a per-operand copy nest and leaves the allocation to the
+    emitter's locals table. C and Fortran declare EVERY ``zeros_locals`` entry from that table, so
+    both were correct; dace only ever saw the marker rewrite, so the program reached the frontend
+    reading a name nothing defines. That is a PARSE-time "Use of undefined variable", raised long
+    after emit reported success -- the emit is what has to change.
+
+    Declared at the top of the body, which is where the C and Fortran locals are declared too, so a
+    shape expressed in the kernel's symbols is in scope wherever the first write happens.
+    """
+    used = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)}
+    missing = [nm for nm in zeros_locals if nm in used and nm not in allocated and nm not in params]
+    if not missing:
+        return
+    decls: List[ast.stmt] = []
+    for nm in missing:
+        shape = zeros_locals[nm] or ("1", )
+        ctor = "np.ones" if zeros_fills.get(nm) in ("ones", "ones_like") else "np.zeros"
+        dtype = _dace_dtype(local_dtypes.get(nm) or default_dtype)
+        elts = ", ".join(str(s) for s in shape) + ("," if len(shape) == 1 else "")
+        decls.append(ast.parse(f"{nm} = {ctor}(({elts}), dtype={dtype})").body[0])
+    fn.body[:0] = decls
+    ast.fix_missing_locations(fn)
 
 
 class _AnnotateEmptyDtype(ast.NodeTransformer):
@@ -1880,7 +1910,16 @@ def freeze_pinned_extent_scalars(kir):
     it is simply no longer read. Floats are excluded: an extent is an integer, and a float scalar
     reached through the chain is a tolerance or a scale, not a size.
 
-    Two names are never substituted, and both were caught as regressions rather than predicted:
+    Only a scalar that reaches an extent INDIRECTLY, through a chain of local assignments, is
+    frozen. One the body spells DIRECTLY in a shape or a slice bound is promoted to a dc.symbol by
+    the scan in :func:`emit_dace` instead, and the manifest value is test DATA there, not a
+    compile-time constant: cloudsc's ``za_col = za[jk - 1, kidia - 1:kfdia]`` became
+    ``za[jk - 1, 1 - 1:0]``, an empty range that builds, runs and computes nothing. The measured
+    conv case below needs the fold precisely because it is indirect -- no shape argument names the
+    scalar, only the ``//``-derived locals do, and nothing can fold those back to the declaration.
+
+    Two further names are never substituted, and both were caught as regressions rather than
+    predicted:
 
     * one a DECLARED ARRAY SHAPE mentions. nbody declares ``KE: (Nt + 1,)`` and also lists ``Nt``
       under scalars, so ``Nt`` has to be a dc.symbol -- the existing direct scan promotes it. Give
@@ -1908,7 +1947,7 @@ def freeze_pinned_extent_scalars(kir):
             seeds.update(n.id for n in ast.walk(element) if isinstance(n, ast.Name))
     frozen = {
         name: scalars[name].value
-        for name in shape_reaching_names(probe, seeds)
+        for name in shape_reaching_names(probe, seeds) - seeds
         if name in scalars and name not in declared and scalars[name].dtype.startswith((
             "int", "uint")) and type(scalars[name].value) is int
     }
@@ -2391,7 +2430,10 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
     zeros_fills = kir.zeros_fills
     local_dtypes = kir.local_dtypes
     default_dtype = kir.float_precision or "float64"
-    fn_ast = _ResolveZeros(zeros_locals, zeros_fills, local_dtypes, default_dtype).visit(fn_ast)
+    resolve_zeros = _ResolveZeros(zeros_locals, zeros_fills, local_dtypes, default_dtype)
+    fn_ast = resolve_zeros.visit(fn_ast)
+    _declare_unallocated_zeros_locals(fn_ast, zeros_locals, resolve_zeros.allocated, zeros_fills, local_dtypes,
+                                      default_dtype, set(kir.input_args))
     # np.empty's dace replacement has no dtype default (unlike zeros/ones/full): a bare call means
     # numpy's own float64 default, so fill in the precision-driven float global explicitly.
     fn_ast = _AnnotateEmptyDtype(_dace_dtype(default_dtype)).visit(fn_ast)

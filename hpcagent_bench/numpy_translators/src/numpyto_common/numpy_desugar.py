@@ -18,11 +18,16 @@ import re
 import copy
 import math
 from collections.abc import Sequence
-from typing import Dict, FrozenSet, Iterator, List, Optional, Tuple
+from typing import Dict, FrozenSet, Iterator, List, Optional, Set, Tuple
 
 from numpyto_common import dtypes
 from numpyto_common.lib_nodes import _const_int, _iter_extent_of, _parse_einsum_subscripts, extent_is_scalar
 from numpyto_common.ordered import OrderedSet
+
+#: Tuple-shape lengths currently known to :func:`expr_rank`. Set by
+# :func:`rank_table` while it is iterating so ``.reshape(name)`` can report the
+# tuple's actual rank instead of the rank-1 guess a bare Name gets.
+_active_tuple_lengths: Optional[Dict[str, int]] = None
 
 
 class DesugarError(NotImplementedError):
@@ -330,6 +335,8 @@ def expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
             # ndim 0. The single-arg spelling stays restricted: a lone Name may hold the whole
             # shape TUPLE, which is a rank this cannot count.
             n = _tuple_len(value.args[0])
+            if n is None and len(value.args) == 1 and isinstance(value.args[0], ast.Name):
+                n = (_active_tuple_lengths or {}).get(value.args[0].id)
             if n is None and (len(value.args) > 1 or isinstance(value.args[0], (ast.Name, ast.Constant))):
                 n = len(value.args)
             if n is not None:
@@ -488,9 +495,11 @@ def rank_table(tree: ast.AST, seed: Dict[str, int], call_returns: Optional[Dict[
     (a ``{helper: return_ndim}`` map) lets a local bound to a helper call inherit
     that helper's return rank (the ML kernels thread arrays through relu/conv2d
     helpers, which ``expr_rank`` cannot see into)."""
+    global _active_tuple_lengths
     ranks = dict(seed)
     for _ in range(8):
         changed = False
+        _active_tuple_lengths = _build_tuple_lengths(tree, ranks, seed_ranks=seed)
         for node in ast.walk(tree):
             if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
                 r = expr_rank(node.value, ranks)
@@ -501,7 +510,9 @@ def rank_table(tree: ast.AST, seed: Dict[str, int], call_returns: Optional[Dict[
                     changed = True
         if not changed:
             break
+    _active_tuple_lengths = _build_tuple_lengths(tree, ranks, seed_ranks=seed)
     _drop_rank_conflicts(tree, ranks, seed)
+    _active_tuple_lengths = None
     return ranks
 
 
@@ -527,6 +538,116 @@ def _drop_rank_conflicts(tree: ast.AST, ranks: Dict[str, int], seed: Dict[str, i
             ranks[name] = seed[name]  # a declared array keeps its DECLARED rank, whatever a rebinding makes it
         else:
             ranks.pop(name, None)
+
+
+def _int_expr(value: ast.AST,
+              ranks: Dict[str, int],
+              seed_ranks: Optional[Dict[str, int]] = None) -> Optional[int]:
+    """Evaluate a small integer expression used as a tuple length or repeat
+    count. Supports constants, names (array rank), ``arr.ndim``, and the four
+    basic integer operations. Used to size tuple-shaped locals without running
+    the full numpy interpreter.
+
+    ``seed_ranks`` is the immutable rank seed (declared array ranks / helper
+    param evidence). It is used for ``arr.ndim`` queries so a circular
+    flow-insensitive inference cannot inflate a local's rank through its own
+    tuple-shape expression (gemm_group_norm_min_bias_add's
+    ``shape = (1, c) + (1,) * (x.ndim - 2)``).
+    """
+    if isinstance(value, ast.Constant) and isinstance(value.value, int):
+        return value.value
+    if isinstance(value, ast.Name):
+        return ranks.get(value.id)
+    if isinstance(value, ast.Attribute) and value.attr == "ndim" and isinstance(value.value, ast.Name):
+        if seed_ranks is not None and value.value.id in seed_ranks:
+            return seed_ranks[value.value.id]
+        return ranks.get(value.value.id)
+    if isinstance(value, ast.UnaryOp) and isinstance(value.op, ast.USub):
+        v = _int_expr(value.operand, ranks, seed_ranks)
+        return None if v is None else -v
+    if isinstance(value, ast.BinOp):
+        lv = _int_expr(value.left, ranks, seed_ranks)
+        rv = _int_expr(value.right, ranks, seed_ranks)
+        if lv is None or rv is None:
+            return None
+        if isinstance(value.op, ast.Add):
+            return lv + rv
+        if isinstance(value.op, ast.Sub):
+            return lv - rv
+        if isinstance(value.op, ast.Mult):
+            return lv * rv
+        if isinstance(value.op, (ast.Div, ast.FloorDiv)):
+            return None if rv == 0 else lv // rv
+    return None
+
+
+def _tuple_expr_len(value: ast.AST,
+                    ranks: Dict[str, int],
+                    tree: ast.AST,
+                    visited: Optional[Set[str]] = None,
+                    seed_ranks: Optional[Dict[str, int]] = None) -> Optional[int]:
+    """Length of a tuple-valued expression, if statically known.
+
+    Covers tuple/list literals, ``arr.shape``, tuple concatenation ``A + B``,
+    and repetition ``(1,) * n``. This is intentionally narrower than full
+    constant folding; it only needs to answer the cases that reach
+    ``.reshape(name)`` in the corpus.
+    """
+    if visited is None:
+        visited = set()
+    if isinstance(value, (ast.Tuple, ast.List)):
+        return len(value.elts)
+    if isinstance(value, ast.Attribute) and value.attr == "shape" and isinstance(value.value, ast.Name):
+        return ranks.get(value.value.id)
+    if isinstance(value, ast.Name) and value.id not in visited:
+        visited.add(value.id)
+        for node in _iter_function_bodies(tree):
+            if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                    and node.targets[0].id == value.id):
+                return _tuple_expr_len(node.value, ranks, tree, visited, seed_ranks)
+        return None
+    if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Add):
+        lv = _tuple_expr_len(value.left, ranks, tree, visited, seed_ranks)
+        rv = _tuple_expr_len(value.right, ranks, tree, visited, seed_ranks)
+        if lv is not None and rv is not None:
+            return lv + rv
+        return None
+    if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Mult):
+        # Tuple * int or int * tuple.
+        lt = _tuple_expr_len(value.left, ranks, tree, visited, seed_ranks)
+        rt = _tuple_expr_len(value.right, ranks, tree, visited, seed_ranks)
+        li = _int_expr(value.left, ranks, seed_ranks)
+        ri = _int_expr(value.right, ranks, seed_ranks)
+        if lt is not None and ri is not None:
+            return lt * ri
+        if rt is not None and li is not None:
+            return rt * li
+        return None
+    return None
+
+
+def _iter_function_bodies(node: ast.AST):
+    """Yield every Assign-bearing body under ``node`` (module or function)."""
+    for child in ast.walk(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module, ast.ClassDef)):
+            yield from child.body
+
+
+def _build_tuple_lengths(tree: ast.AST,
+                         ranks: Dict[str, int],
+                         seed_ranks: Optional[Dict[str, int]] = None) -> Dict[str, int]:
+    """Map each local bound to a statically-known tuple shape to its length.
+
+    Used by :func:`expr_rank` while ``rank_table`` is iterating, so
+    ``.reshape(name)`` reports the tuple's rank rather than guessing 1.
+    """
+    lengths: Dict[str, int] = {}
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
+            length = _tuple_expr_len(node.value, ranks, tree, seed_ranks=seed_ranks)
+            if length is not None:
+                lengths[node.targets[0].id] = length
+    return lengths
 
 
 def _dtype_kind(value: ast.AST, dtypes: Dict[str, str]) -> Optional[str]:
@@ -4578,12 +4699,20 @@ def _param_body_rank_evidence(fn: ast.FunctionDef) -> Dict[str, int]:
     return ev
 
 
-def _return_rank(fn: ast.FunctionDef, ranks: Dict[str, int]) -> Optional[int]:
+def _return_rank(fn: ast.FunctionDef,
+                 ranks: Dict[str, int],
+                 seed_ranks: Optional[Dict[str, int]] = None) -> Optional[int]:
     """Rank of ``fn``'s returned value (the max over its ``return`` statements),
     given a rank table for its body -- so a caller can propagate it."""
-    rs = [expr_rank(n.value, ranks) for n in ast.walk(fn) if isinstance(n, ast.Return) and n.value is not None]
-    rs = [r for r in rs if r is not None]
-    return max(rs) if rs else None
+    global _active_tuple_lengths
+    prev = _active_tuple_lengths
+    _active_tuple_lengths = _build_tuple_lengths(fn, ranks, seed_ranks=seed_ranks)
+    try:
+        rs = [expr_rank(n.value, ranks) for n in ast.walk(fn) if isinstance(n, ast.Return) and n.value is not None]
+        rs = [r for r in rs if r is not None]
+        return max(rs) if rs else None
+    finally:
+        _active_tuple_lengths = prev
 
 
 def _infer_param_ranks(funcs: List[ast.FunctionDef], kernel_name: str,
@@ -4608,7 +4737,7 @@ def _infer_param_ranks(funcs: List[ast.FunctionDef], kernel_name: str,
             if fn.name == kernel_name:
                 base.update(kir_seed)
             ranks = rank_table(fn, base, call_returns=ret_rank)
-            rr = _return_rank(fn, ranks)
+            rr = _return_rank(fn, ranks, seed_ranks=base)
             if rr is not None and ret_rank.get(fn.name) != rr:
                 ret_rank[fn.name] = rr
                 changed = True

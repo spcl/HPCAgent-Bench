@@ -508,6 +508,32 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
         return _broadcast_extents(l_ext, r_ext)
     if isinstance(expr, ast.UnaryOp):
         return _iter_extent_of(expr.operand, shape_table)
+    if isinstance(expr, ast.Compare):
+        ext = _iter_extent_of(expr.left, shape_table)
+        for operand in expr.comparators:
+            other = _iter_extent_of(operand, shape_table)
+            if ext is None:
+                ext = other
+            elif other is not None:
+                ext = _broadcast_extents(ext, other)
+        return ext
+    if isinstance(expr, ast.BoolOp):
+        ext = None
+        for operand in expr.values:
+            other = _iter_extent_of(operand, shape_table)
+            if ext is None:
+                ext = other
+            elif other is not None:
+                ext = _broadcast_extents(ext, other)
+        return ext
+    if isinstance(expr, ast.IfExp):
+        body_ext = _iter_extent_of(expr.body, shape_table)
+        orelse_ext = _iter_extent_of(expr.orelse, shape_table)
+        if body_ext is None:
+            return orelse_ext
+        if orelse_ext is None:
+            return body_ext
+        return _broadcast_extents(body_ext, orelse_ext)
     if isinstance(expr, ast.Call):
         # ``np.fft.*`` is a two-level attribute (``func.value`` is ``np.fft``),
         # missed by the single-level ``np.<attr>`` matcher below. ``fftfreq(n)``
@@ -961,12 +987,16 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
                 if isinstance(step, ast.expr):
                     # Symbolic stride: ceil(raw / step) with the divisor carried as an expression.
                     # No abs() -- a bounded slice's step is positive or the numpy source is empty.
-                    ext.append(
-                        ast.BinOp(left=ast.BinOp(left=ast.BinOp(left=raw, op=ast.Add(), right=step),
-                                                 op=ast.Sub(),
-                                                 right=_const(1)),
-                                  op=ast.FloorDiv(),
-                                  right=step))
+                    exact = span_multiple_of(raw, step)
+                    if exact is not None:
+                        ext.append(exact)
+                    else:
+                        ext.append(
+                            ast.BinOp(left=ast.BinOp(left=ast.BinOp(left=raw, op=ast.Add(), right=step),
+                                                     op=ast.Sub(),
+                                                     right=_const(1)),
+                                      op=ast.FloorDiv(),
+                                      right=step))
                 elif step is not None and step != 1:
                     # Element count is ceil(raw / |step|) -- a full-axis negative step
                     # (reverse) spans the same number of elements as its positive
@@ -1294,6 +1324,36 @@ def _strided_index(ivar: ast.expr, start: Optional[ast.expr], step) -> ast.expr:
     return ast.BinOp(left=pos, op=ast.Add(), right=start)
 
 
+def _subscript_result_rank(expr: ast.Subscript, axes: List[ast.expr], shape, shape_table) -> int:
+    """Result-axis count of a subscript, counted by the SAME rules that consume iters below.
+
+    A slice or a newaxis contributes one axis; an advanced-index group contributes its shared
+    broadcast rank once; a scalar index contributes none but eats a source axis; and any source
+    axis the subscript never mentions is an implicit trailing full slice.
+    """
+    rank = 0
+    src = 0
+    grouped = False
+    for ax in axes:
+        if isinstance(ax, ast.Constant) and ax.value is None:
+            rank += 1
+            continue
+        if isinstance(ax, ast.Slice):
+            rank += 1
+            src += 1
+            continue
+        adv = (len(shape_table[ax.id]) if isinstance(ax, ast.Name) and shape_table.get(ax.id) else _advanced_index_rank(
+            ax, shape_table))
+        if adv:
+            if not grouped:
+                rank += adv
+                grouped = True
+            src += 1
+            continue
+        src += 1
+    return rank + max(0, (len(shape) if shape else 0) - src)
+
+
 def _scalarize_at_iters(expr: ast.expr, iters: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]]) -> ast.expr:
     """Render an array-valued expression at the given iter indices. Recursive
     structural lowering, independent of any one numpy op: ``Name(A)`` ->
@@ -1323,8 +1383,28 @@ def _scalarize_at_iters(expr: ast.expr, iters: List[ast.expr], shape_table: Dict
         name = _name_id(expr.value)
         shape = shape_table.get(name) if name else None
         axes = _slice_axes(expr)
+        # A subscript on a COMPUTED base (``(reduce_shape != 0)[:, None]``) has no name to index --
+        # the BASE is the array. When the subscript is a pure broadcast-reshape (only full slices
+        # and newaxis), render it by scalarising the base at the iters its full-slice axes map to;
+        # the newaxis axes consume an iter and contribute nothing. Left to the axis walk below the
+        # base stayed whole-array under a scalar subscript and reached C as ``(ptr != 0)[i]``, which
+        # C++ rejects outright and C compiles into a pointer read. The two sibling rewriters
+        # (``_SliceToScalarRewriter.visit_Subscript``, ``_SubscriptifyNames.visit_Subscript``)
+        # already apply this rule to the same spelling; np.where's cond reached neither.
+        full = [isinstance(a, ast.Slice) and a.lower is None and a.upper is None and a.step is None for a in axes]
+        newax = [isinstance(a, ast.Constant) and a.value is None for a in axes]
+        if name is None and axes and all(f or n for f, n in zip(full, newax)) and any(full) \
+                and len(axes) <= len(iters):
+            offset = len(iters) - len(axes)
+            base_iters = [iters[offset + k] for k, f in enumerate(full) if f]
+            return _scalarize_at_iters(expr.value, base_iters, shape_table)
         new_axes: List[ast.expr] = []
-        iter_idx = 0
+        # numpy broadcasts RIGHT-aligned: an operand whose result rank is below the nest's reads
+        # the TRAILING iters. The bare-Name branch above already offsets for that; this one started
+        # at iter 0, so ``np.where(cond4d, cxyz[:a, :b, :c], 0)`` read cxyz at the OUTER three loops
+        # and every element came from the wrong plane. Equal ranks give offset 0, which is the
+        # arithmetic that was already happening.
+        iter_idx = max(0, len(iters) - _subscript_result_rank(expr, axes, shape, shape_table))
         src_axis = 0  # source-axis pointer (see _iter_extent_of).
         group_iters: Optional[List[ast.expr]] = None  # shared advanced-index iters
         for ax in axes:
@@ -2968,6 +3048,24 @@ def expand_linspace(target: ast.expr, args: List[ast.expr], shape_table: Dict[st
     ]
 
 
+def span_multiple_of(span: ast.expr, step: ast.expr) -> Optional[ast.expr]:
+    """The other factor when ``span`` is syntactically ``<expr> * step``, else ``None``.
+
+    ``ceil(A * s / s) == A`` exactly, for every positive ``s``, so a strided slice whose span is a
+    multiple of its stride has a plain extent. The pooling kernels slice
+    ``padded[kz:kz + out * stride:stride]``; unfolded that extent reads
+    ``(out * stride + stride - 1) // stride`` -- the same number as ``out``, spelled so that no
+    token comparison can see it.
+    """
+    if not (isinstance(span, ast.BinOp) and isinstance(span.op, ast.Mult)):
+        return None
+    step_txt = ast.unparse(step)
+    for factor, other in ((span.left, span.right), (span.right, span.left)):
+        if ast.unparse(factor) == step_txt:
+            return copy.deepcopy(other)
+    return None
+
+
 def arange_count(args: List[ast.expr]) -> ast.expr:
     """Element count of ``np.arange(*args)``: ``ceil(span / step)``, clamped at zero.
 
@@ -3448,9 +3546,17 @@ def expand_stack(target: ast.expr,
     rank = len(shapes[0])
     axis = _stack_axis(args, kwargs, rank)
     iters = [_make_iter_name("__st", d) for d in range(rank)]
-    src_slot = (_name(iters[0]) if rank == 1 else ast.Tuple(elts=[_name(i) for i in iters], ctx=ast.Load()))
     out: List[ast.stmt] = []
     for s_idx, (nm, s) in enumerate(zip(names, shapes)):
+        # A FRESH source slot per operand, never one hoisted out of this loop. Sharing a single
+        # Subscript slice object across the operands made every copy loop read the SAME nodes, and
+        # the Fortran emitter -- which must uniquify DO variables, Fortran having no block scope --
+        # renamed them under the FIRST loop's bindings and then found an already-renamed name under
+        # the second, which matches nothing on its stack and is left alone. Operand 1's nest then
+        # read operand 0's iterators, whose values are whatever the first loop exited with: one
+        # stale element copied over the whole slice. C never saw it -- its per-loop ``__st0`` is
+        # block-scoped, so the alias is harmless there and only Fortran came out wrong.
+        src_slot = (_name(iters[0]) if rank == 1 else ast.Tuple(elts=[_name(i) for i in iters], ctx=ast.Load()))
         tgt_elts = [_name(iters[d]) for d in range(rank)]
         tgt_elts.insert(axis, _const(s_idx))
         tgt_slot = tgt_elts[0] if len(tgt_elts) == 1 else ast.Tuple(elts=tgt_elts, ctx=ast.Load())
@@ -5662,18 +5768,19 @@ def expand_cholesky(target: ast.expr,
                     shape_table: Dict[str, Tuple[str, ...]],
                     local_dtypes: Optional[Dict[str, str]] = None) -> List[ast.stmt]:
     """``L = np.linalg.cholesky(A)`` -> Cholesky-Banachiewicz triple loop.
-    Computes ``L`` such that ``L @ L.T == A`` for symmetric positive-definite
-    ``A``. Naive O(n^3), no blocking::
+    Computes ``L`` such that ``L @ L.conj().T == A`` for Hermitian positive-
+    definite ``A`` (the conjugate is a no-op for real matrices). Naive O(n^3),
+    no blocking::
 
         for j in range(n):
             s = A[j, j]
             for k in range(j):
-                s -= L[j, k] * L[j, k]
+                s -= L[j, k] * conj(L[j, k])
             L[j, j] = sqrt(s)
             for i in range(j + 1, n):
                 s = A[i, j]
                 for k in range(j):
-                    s -= L[i, k] * L[j, k]
+                    s -= L[i, k] * conj(L[j, k])
                 L[i, j] = s / L[j, j]
     """
     if not args_one_name(args):
@@ -5697,11 +5804,13 @@ def expand_cholesky(target: ast.expr,
                                                                          ctx=ast.Load()),
                                                          ctx=ast.Load()),
                                       op=ast.Mult(),
-                                      right=ast.Subscript(value=_name(target.id),
-                                                          slice=ast.Tuple(elts=[_name("__j"),
-                                                                                _name("__k")],
-                                                                          ctx=ast.Load()),
-                                                          ctx=ast.Load()))),
+                                      right=_attr_call("np", "conj", [
+                                          ast.Subscript(value=_name(target.id),
+                                                        slice=ast.Tuple(elts=[_name("__j"),
+                                                                              _name("__k")],
+                                                                        ctx=ast.Load()),
+                                                        ctx=ast.Load())
+                                      ]))),
     ]
     inner_i = [
         ast.Assign(targets=[_store("__s")],
@@ -5719,11 +5828,13 @@ def expand_cholesky(target: ast.expr,
                                                                                      ctx=ast.Load()),
                                                                      ctx=ast.Load()),
                                                   op=ast.Mult(),
-                                                  right=ast.Subscript(value=_name(target.id),
-                                                                      slice=ast.Tuple(elts=[_name("__j"),
-                                                                                            _name("__k")],
-                                                                                      ctx=ast.Load()),
-                                                                      ctx=ast.Load())))
+                                                  right=_attr_call("np", "conj", [
+                                                      ast.Subscript(value=_name(target.id),
+                                                                    slice=ast.Tuple(elts=[_name("__j"),
+                                                                                          _name("__k")],
+                                                                                    ctx=ast.Load()),
+                                                                    ctx=ast.Load())
+                                                  ])))
                 ],
                 orelse=[]),
         ast.Assign(targets=[
@@ -6019,10 +6130,52 @@ def expand_linalg_solve(target: ast.expr,
                         local_dtypes: Optional[Dict[str, str]] = None,
                         fresh_local_allocs: Optional[Dict[str, Tuple[str, ...]]] = None) -> List[ast.stmt]:
     """``x = np.linalg.solve(A, b)`` solves ``Ax = b`` for square A. Implemented
-    as Gauss-Jordan elimination on the augmented [A | b] matrix. Conservative: A
-    must be Name (N, N), b must be Name (N,) or (N, K); x is written into
-    target with the same shape as b.
+    as Gauss-Jordan elimination on the augmented [A | b] matrix. Non-Name
+    arguments are materialised into fresh locals first, so callers can write
+    ``np.linalg.solve(normal + damping * np.diag(scale), -gradient)``. A must
+    be 2-D and b 1-D or 2-D; x is written into target with the same shape as b.
     """
+
+    def _temp_name() -> str:
+        name = f"__sol_arg{_LINALG_AW[0]}"
+        _LINALG_AW[0] += 1
+        return name
+
+    def _infer_expr_dtype(expr: ast.expr) -> Optional[str]:
+        if local_dtypes is None:
+            return None
+        if _reads_complex(expr, local_dtypes):
+            return "complex128"
+        for node in ast.walk(expr):
+            if isinstance(node, ast.Name):
+                dt = local_dtypes.get(node.id)
+                if dt:
+                    return dt
+        return None
+
+    out: List[ast.stmt] = []
+    materialized = list(args)
+    for i, arg in enumerate(materialized):
+        if isinstance(arg, ast.Name):
+            continue
+        ext = _iter_extent_of(arg, shape_table)
+        if ext is None:
+            raise NotImplementedError("np.linalg.solve: argument shape not inferable")
+        tmp = _temp_name()
+        shape_tokens = tuple(ast.unparse(e) for e in ext)
+        shape_table[tmp] = shape_tokens
+        if fresh_local_allocs is not None:
+            fresh_local_allocs[tmp] = shape_tokens
+        arg_dt = _infer_expr_dtype(arg)
+        if arg_dt is not None and local_dtypes is not None:
+            local_dtypes[tmp] = arg_dt
+        out.append(
+            ast.Assign(targets=[_store(tmp)],
+                       value=ast.Call(func=_name("__hpcagent_bench_zeros__"), args=[], keywords=[])))
+        out.append(ast.Assign(targets=[_store(tmp)], value=arg))
+        materialized[i] = _name(tmp)
+    args = materialized
+
     if len(args) < 2 or not isinstance(args[0], ast.Name) \
             or not isinstance(args[1], ast.Name):
         raise NotImplementedError("np.linalg.solve needs Name args")
@@ -6042,7 +6195,6 @@ def expand_linalg_solve(target: ast.expr,
     # different sizes, so number it like ``expand_linalg_inv`` does.
     aw_name = f"__sol_aw{_LINALG_AW[0]}"
     _LINALG_AW[0] += 1
-    out: List[ast.stmt] = []
     aw = lambda r, c: ast.Subscript(value=_name(aw_name), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Load())
     aw_store = lambda r, c: ast.Subscript(
         value=_name(aw_name), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Store())

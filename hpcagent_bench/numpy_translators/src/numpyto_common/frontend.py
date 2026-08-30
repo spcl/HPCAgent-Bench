@@ -3935,8 +3935,49 @@ def _infer_param_desc(arg: ast.AST, pname: str, arr_by, sca_by, sym_by, fn=None)
         if res is not None:
             shape, dtype = res
             return ("array", ArrayDesc(name=pname, dtype=dtype, shape=shape, is_output=False))
+    if integer_valued_argument(arg, fn, sca_by, sym_by):
+        return ("scalar", ScalarDesc(name=pname, dtype="int"))
     # A negated / arithmetic scalar expression -- default to double.
     return ("scalar", ScalarDesc(name=pname, dtype="float64"))
+
+
+def integer_valued_argument(arg: ast.AST, fn, sca_by, sym_by, depth: int = 0) -> bool:
+    """Whether ``arg`` is integer arithmetic over shape symbols, int scalars and int literals.
+
+    An EXTENT passed into a shape-generic helper is exactly this shape -- ``4 * cells_per_dim *
+    cells_per_dim * cells_per_dim``, or a local bound to one. Without this it falls to the float64
+    default below, and the helper declares ``const double max_neighs`` while its body subscripts
+    with it: "array subscript is not an integer" in C, ``bool*[double]`` in C++, "Legacy Extension:
+    REAL array index" in Fortran. Deliberately narrow -- ``/`` is excluded, since true division of
+    two integers is a float in numpy too.
+    """
+    if depth > 8:
+        return False
+    if isinstance(arg, ast.Constant):
+        return isinstance(arg.value, int) and not isinstance(arg.value, bool)
+    if isinstance(arg, ast.Name):
+        if arg.id in sym_by:
+            return True
+        scalar = sca_by.get(arg.id)
+        if scalar is not None:
+            return str(scalar.dtype).startswith("int")
+        if fn is None:
+            return False
+        # A local bound once to an integer expression: resolve through that binding.
+        bound = [
+            s.value for s in ast.walk(fn)
+            if isinstance(s, ast.Assign) and any(isinstance(t, ast.Name) and t.id == arg.id for t in s.targets)
+        ]
+        return len(bound) == 1 and integer_valued_argument(bound[0], fn, sca_by, sym_by, depth + 1)
+    if isinstance(arg, ast.BinOp) and isinstance(arg.op, (ast.Add, ast.Sub, ast.Mult, ast.FloorDiv, ast.Mod)):
+        return (integer_valued_argument(arg.left, fn, sca_by, sym_by, depth + 1)
+                and integer_valued_argument(arg.right, fn, sca_by, sym_by, depth + 1))
+    if isinstance(arg, ast.UnaryOp) and isinstance(arg.op, (ast.UAdd, ast.USub)):
+        return integer_valued_argument(arg.operand, fn, sca_by, sym_by, depth + 1)
+    # ``int(...)`` says so outright.
+    if isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name) and arg.func.id == "int" and len(arg.args) == 1:
+        return True
+    return False
 
 
 def _helper_return_array_shape(lhs, arr_by, fn):
@@ -5999,6 +6040,15 @@ class _HoistMultiStmtHelpers(ast.NodeTransformer):
                     and isinstance(stmt.value.func, ast.Name) and stmt.value.func.id in self.multi_stmt):
                 out.append(stmt)
                 continue
+            # Same skip for a helper called as a bare STATEMENT: its value is discarded, so
+            # hoisting it to ``__hcall<n> = helper(..)`` invents a consumer that does not exist.
+            # The temp then dead-stores away and its remaining ``Expr(__hcall<n>)`` folds back to
+            # the helper's return expression -- a stranded ``(ux, uy, uz)`` no backend can render.
+            # ``_InlineHelpers.visit_Expr`` splices this form and drops the dead return instead.
+            if (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)
+                    and isinstance(stmt.value.func, ast.Name) and stmt.value.func.id in self.multi_stmt):
+                out.append(stmt)
+                continue
             # Recurse into nested control flow first.
             stmt = self.visit(stmt)
             if isinstance(stmt, ast.Assign):
@@ -6150,10 +6200,18 @@ class _InlineHelpers(ast.NodeTransformer):
             return node
         helper = self.helpers[node.value.func.id]
         body = _strip_docstrings(helper.body)
-        # Skip non-void forms -- those are handled by visit_Assign /
-        # visit_Call.
+        # A helper called as a bare STATEMENT has its value discarded: the helper mutates its array
+        # parameters and the caller ignores what it hands back (WarpX's Boris pusher returns the
+        # three momentum arrays it just updated in place). So a trailing ``return`` is dead HERE,
+        # whatever it means at an Assign call site. Declining left the tail expression stranded as
+        # a bare ``(ux, uy, uz)`` statement, which no backend can render. An early return elsewhere
+        # in the body IS control flow, so that form still declines.
         if body and isinstance(body[-1], ast.Return):
-            return node
+            if any(isinstance(n, ast.Return) for s in body[:-1] for n in ast.walk(s)):
+                return node
+            body = body[:-1]
+            if not body:
+                return node
         param_names = [a.arg for a in helper.args.args]
         call_args = _resolve_call_args(node.value, helper)
         if call_args is None:
