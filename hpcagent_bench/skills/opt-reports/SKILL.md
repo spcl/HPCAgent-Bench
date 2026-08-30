@@ -65,8 +65,9 @@ both compilers.
 | gcc, g++, gfortran | `-fopt-info-vec-optimized -fopt-info-vec-missed` | yes |
 | clang, clang++ | the three `-Rpass` flags above | yes |
 | flang (LLVM Fortran) | same `-Rpass` family | no |
-| ifx, icx (oneAPI) | `-qopt-report=3`, which writes `*.optrpt` files rather than stderr | no |
-| nvc, nvfortran (NVHPC) | `-Minfo=vect,loop` (`-Minfo=all` for every pass) | no |
+| icx, icpx (oneAPI) | `-qopt-report=3 -qopt-report-phase=par,vec`, which writes `*.optrpt` files rather than stderr | yes |
+| ifx (oneAPI Fortran) | the same flags, but no `report_ref` in `compilers.yaml` | no |
+| nvc, nvc++, nvfortran (NVHPC) | `-Minfo=all` (`-Minfo=vect,loop` for the two passes alone) | yes |
 | nvcc | no vectorizer report at all; `--ptxas-options=-v` gives registers and spills instead | no |
 | hipcc | clang underneath, so the `-Rpass` flags work | no |
 
