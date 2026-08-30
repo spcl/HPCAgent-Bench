@@ -100,7 +100,9 @@ def test_record_submission_links_prompt(tmp_path):
                             native_ns=25.0,
                             speedup=4.0,
                             detail="")
-    submission = SimpleNamespace(language="c")
+    # A real Submission always carries these three (they default to None); a stand-in that omits
+    # them is not the shape recording.py is handed in production.
+    submission = SimpleNamespace(language="c", source=None, source_file=None, library=None)
     task = SimpleNamespace(kernel="gemm", source_mode="restricted")
     table, _ = recording.record(score, submission, task, run_id="t1", preset="S", prompt="the winning prompt", path=db)
     assert table == "submission"
