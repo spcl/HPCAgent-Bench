@@ -26,6 +26,49 @@ from hpcagent_bench.frameworks.forked import forked_failure_reason, run_forked, 
 from hpcagent_bench.harness import recording
 from hpcagent_bench.spec import BenchSpec, KERNELS
 
+#: Launcher variables that make DaCe call ``MPI_Init`` the moment it is imported, and that are set
+#: by srun whether or not the step is an MPI program.
+#:
+#: HARDCODED, not imported from ``dace.sdfg.sdfg.MPI_RANK_VARS``, and that is the whole point:
+#: reading the list from DaCe would import DaCe, which is the import this exists to make safe. Strip
+#: first, import second.
+#:
+#: SLURM_PROCID is deliberately ABSENT. DaCe excludes it too ("enough to name a build folder, not
+#: enough to call MPI_Init on"), and the sweep needs it for shard indices and per-rank build folders.
+MPI_LAUNCHER_VARS = (
+    "OMPI_COMM_WORLD_RANK",
+    "MV2_COMM_WORLD_RANK",
+    "PMIX_RANK",
+    "PMI_RANK",
+    "PMI_ID",
+    "FLUX_TASK_RANK",
+    "PALS_RANKID",
+    "ALPS_APP_PE",
+)
+
+
+def drop_mpi_launcher_vars() -> List[str]:
+    """Unset the MPI launcher variables in THIS process; returns the names removed.
+
+    WHY THIS EXISTS. ``dace/frontend/python/parser.py`` calls ``ensure_mpi_initialized()`` at import
+    time, which returns early only when no launcher variable is set. Slurm's pmix plugin exports
+    ``PMIX_RANK`` for EVERY step, MPI or not -- so a per-kernel child of this sweep imported DaCe,
+    called ``MPI_Init``, and deadlocked. Measured: the faulthandler stack stands in importlib under
+    ``dace/__init__.py`` line 20, a pure-Python import with no device call in it, because MPI_Init in
+    a forked child whose parent already holds an MPI library is the fork-unsafe case.
+
+    ``MPI4PY_RC_INITIALIZE=0`` does NOT cover this. It suppresses mpi4py's automatic init, and DaCe
+    then calls MPI_Init itself; the environment switch it names is exactly the one DaCe overrides.
+
+    The framework sweep is not an MPI program -- its ranks are independent shards that never call a
+    collective -- so removing these is a statement of fact, not a workaround. The MPI residency
+    reaches its ranks through a different path and never calls this.
+    """
+    removed = [var for var in MPI_LAUNCHER_VARS if var in os.environ]
+    for var in removed:
+        del os.environ[var]
+    return removed
+
 
 def run_one(benchname: str,
             framework_names: Sequence[str],
@@ -45,6 +88,8 @@ def run_one(benchname: str,
         series, validated, failure reason). Picklable, so it survives the ``run_forked`` queue and lets
         a sharded sweep's CSV record WHICH pipeline/impl validated, not just whether the child survived.
     """
+    # BEFORE the first framework import, which is what pulls DaCe in. See drop_mpi_launcher_vars.
+    drop_mpi_launcher_vars()
     results: Dict[str, Dict[str, Any]] = {}
     for name in framework_names:
         frmwrk = generate_framework(name, save_strict, load_strict)
@@ -216,22 +261,6 @@ def shard_names(names: List[str],
     return sizing.pack_lpt(names, costs, total, ranks_per_node, node_ram_bytes)[index]
 
 
-#: Frameworks whose child must be SPAWNED rather than forked. Measured on the GPU track: the forked
-#: child deadlocked inside importlib -- `dace/__init__.py` line 20, a pure-Python import with no
-#: device call in it -- because fork() copies only the calling thread, so a module lock another
-#: parent thread was holding arrives in the child held by a thread that does not exist. The parent
-#: of a GPU sweep has more of those threads loaded (mpi4py, jaxlib and friends appear in its
-#: extension list), which is why the CPU arms fork cleanly against the same code path. spawn starts
-#: a fresh interpreter and inherits no locks; it costs a re-import per kernel, which is the price of
-#: the arm running at all.
-GPU_FRAMEWORK_MARKER = "gpu"
-
-
-def start_method_for(framework_names: List[str]) -> Optional[str]:
-    """``"spawn"`` when any framework is a GPU one, else ``None`` to keep the platform default."""
-    return "spawn" if any(GPU_FRAMEWORK_MARKER in name for name in framework_names) else None
-
-
 def run_framework_sweep(benchmark: str,
                         framework: str,
                         preset: str,
@@ -281,8 +310,7 @@ def run_framework_sweep(benchmark: str,
                        load_strict,
                        datatype,
                        variant=variant,
-                       label=benchname,
-                       mp_context=start_method_for(framework_names))
+                       label=benchname)
         if not r.ok:
             why = forked_failure_reason(r)
             print(f"[FAIL] {benchname}: {why}")
