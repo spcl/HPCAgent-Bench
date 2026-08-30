@@ -89,12 +89,16 @@ submit_arm() {
 # arms is 12 on top of whatever else is running, and more importantly an A/B is only readable if
 # both arms met the same machine -- a judge's timings move with what else is on the node.
 SUBMITTED_JID=""
-# DEPEND_ON chains this whole submission behind an existing job -- beverin allows 36 nodes at once
-# and an arm that starts over that ceiling is an arm that never starts.
+# DEPEND_ON chains this whole submission behind existing jobs (colon-separated) -- beverin allows 36
+# nodes at once and an arm that starts over that ceiling is an arm that never starts.
 chain="${DEPEND_ON:-}"
 for model in ${MODELS:-oss120b qwen38}; do
+    pair=""
     for layout in kernel repo; do
         submit_arm "${model}" "${layout}" "${chain}"
+        pair="${pair:+${pair}:}${SUBMITTED_JID}"
     done
-    chain="${SUBMITTED_JID}"   # the next model waits on this one's last arm
+    # BOTH of this model's arms, not just the last one: they finish at their own pace, and waiting
+    # on one of a pair leaves the other still holding its nodes when the next pair starts.
+    chain="${pair}"
 done
