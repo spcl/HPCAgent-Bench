@@ -893,11 +893,18 @@ jobs:
       # what those 250 ports lower to. It asserts a floor on the COUNT, not per kernel -- so the
       # floor being STALE is the same blind spot: it sat at 121 while 192 actually lowered, leaving
       # 71 kernels free to regress green. Raise it whenever a measurement says it moved.
-      - name: Phase 5c -- kernelbench translation ratchet [c] @ S
+      #
+      # ``-m "not integration"`` because the ratchet itself is @pytest.mark.integration and the
+      # integration job ALREADY collects it (``-m integration tests/ ...``). Naming the file by
+      # PATH here ignores markers, so the 250-port emit+compile+run sweep ran twice per CI run for
+      # no extra coverage: measured at 872s (14m32s) of this job's wall clock in run 33320330731,
+      # against 441s for the whole c/cpp/fortran e2e sweep above it. What stays is the cheap
+      # corpus-size pin, which is what makes a ratchet over a shrinking set meaningful.
+      - name: Phase 5c -- kernelbench corpus size pin (the ratchet runs in the integration job)
         if: ${{ !cancelled() }}
-        timeout-minutes: 45
+        timeout-minutes: 10
         run: |
-          python -m pytest -q -p no:cacheprovider -rfEs --timeout=2400 \
+          python -m pytest -q -p no:cacheprovider -rfEs --timeout=2400 -m "not integration" \
             tests/test_kernelbench_translation.py
 
       # Every loop_level_reasoning kernel EMITS a reference in all three languages, and the agent
