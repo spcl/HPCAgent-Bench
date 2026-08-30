@@ -2262,11 +2262,18 @@ class _FortranBodyEmitter(BaseEmitter):
 
         Folds through the CONTAINED helper, never inline: the inline merge form names each operand
         four times, so nesting it (relu6, hardswish) multiplies the emitted string by four per level.
+
+        The helper is ELEMENTAL with the kernel's computation kind (``self._rk``), but an operand can
+        come from a narrower array (e.g. a float32 input used in an fp64 kernel). Fortran does not
+        promote actual arguments by kind the way C does, so every argument is coerced to the dummy's
+        kind before the call.
         """
         self._used_nan_minmax.add(is_max)
         fn = "npb_max2" if is_max else "npb_min2"
-        acc = arg_strs[0]
-        for nxt in arg_strs[1:]:
+        rk = self._rk
+        args = [f"real({a}, {rk})" for a in arg_strs]
+        acc = args[0]
+        for nxt in args[1:]:
             acc = f"{fn}({acc}, {nxt})"
         return acc
 

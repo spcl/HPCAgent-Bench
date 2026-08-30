@@ -508,6 +508,32 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
         return _broadcast_extents(l_ext, r_ext)
     if isinstance(expr, ast.UnaryOp):
         return _iter_extent_of(expr.operand, shape_table)
+    if isinstance(expr, ast.Compare):
+        ext = _iter_extent_of(expr.left, shape_table)
+        for operand in expr.comparators:
+            other = _iter_extent_of(operand, shape_table)
+            if ext is None:
+                ext = other
+            elif other is not None:
+                ext = _broadcast_extents(ext, other)
+        return ext
+    if isinstance(expr, ast.BoolOp):
+        ext = None
+        for operand in expr.values:
+            other = _iter_extent_of(operand, shape_table)
+            if ext is None:
+                ext = other
+            elif other is not None:
+                ext = _broadcast_extents(ext, other)
+        return ext
+    if isinstance(expr, ast.IfExp):
+        body_ext = _iter_extent_of(expr.body, shape_table)
+        orelse_ext = _iter_extent_of(expr.orelse, shape_table)
+        if body_ext is None:
+            return orelse_ext
+        if orelse_ext is None:
+            return body_ext
+        return _broadcast_extents(body_ext, orelse_ext)
     if isinstance(expr, ast.Call):
         # ``np.fft.*`` is a two-level attribute (``func.value`` is ``np.fft``),
         # missed by the single-level ``np.<attr>`` matcher below. ``fftfreq(n)``
@@ -5742,18 +5768,19 @@ def expand_cholesky(target: ast.expr,
                     shape_table: Dict[str, Tuple[str, ...]],
                     local_dtypes: Optional[Dict[str, str]] = None) -> List[ast.stmt]:
     """``L = np.linalg.cholesky(A)`` -> Cholesky-Banachiewicz triple loop.
-    Computes ``L`` such that ``L @ L.T == A`` for symmetric positive-definite
-    ``A``. Naive O(n^3), no blocking::
+    Computes ``L`` such that ``L @ L.conj().T == A`` for Hermitian positive-
+    definite ``A`` (the conjugate is a no-op for real matrices). Naive O(n^3),
+    no blocking::
 
         for j in range(n):
             s = A[j, j]
             for k in range(j):
-                s -= L[j, k] * L[j, k]
+                s -= L[j, k] * conj(L[j, k])
             L[j, j] = sqrt(s)
             for i in range(j + 1, n):
                 s = A[i, j]
                 for k in range(j):
-                    s -= L[i, k] * L[j, k]
+                    s -= L[i, k] * conj(L[j, k])
                 L[i, j] = s / L[j, j]
     """
     if not args_one_name(args):
@@ -5777,11 +5804,13 @@ def expand_cholesky(target: ast.expr,
                                                                          ctx=ast.Load()),
                                                          ctx=ast.Load()),
                                       op=ast.Mult(),
-                                      right=ast.Subscript(value=_name(target.id),
-                                                          slice=ast.Tuple(elts=[_name("__j"),
-                                                                                _name("__k")],
-                                                                          ctx=ast.Load()),
-                                                          ctx=ast.Load()))),
+                                      right=_attr_call("np", "conj", [
+                                          ast.Subscript(value=_name(target.id),
+                                                        slice=ast.Tuple(elts=[_name("__j"),
+                                                                              _name("__k")],
+                                                                        ctx=ast.Load()),
+                                                        ctx=ast.Load())
+                                      ]))),
     ]
     inner_i = [
         ast.Assign(targets=[_store("__s")],
@@ -5799,11 +5828,13 @@ def expand_cholesky(target: ast.expr,
                                                                                      ctx=ast.Load()),
                                                                      ctx=ast.Load()),
                                                   op=ast.Mult(),
-                                                  right=ast.Subscript(value=_name(target.id),
-                                                                      slice=ast.Tuple(elts=[_name("__j"),
-                                                                                            _name("__k")],
-                                                                                      ctx=ast.Load()),
-                                                                      ctx=ast.Load())))
+                                                  right=_attr_call("np", "conj", [
+                                                      ast.Subscript(value=_name(target.id),
+                                                                    slice=ast.Tuple(elts=[_name("__j"),
+                                                                                          _name("__k")],
+                                                                                    ctx=ast.Load()),
+                                                                    ctx=ast.Load())
+                                                  ])))
                 ],
                 orelse=[]),
         ast.Assign(targets=[
@@ -6099,10 +6130,52 @@ def expand_linalg_solve(target: ast.expr,
                         local_dtypes: Optional[Dict[str, str]] = None,
                         fresh_local_allocs: Optional[Dict[str, Tuple[str, ...]]] = None) -> List[ast.stmt]:
     """``x = np.linalg.solve(A, b)`` solves ``Ax = b`` for square A. Implemented
-    as Gauss-Jordan elimination on the augmented [A | b] matrix. Conservative: A
-    must be Name (N, N), b must be Name (N,) or (N, K); x is written into
-    target with the same shape as b.
+    as Gauss-Jordan elimination on the augmented [A | b] matrix. Non-Name
+    arguments are materialised into fresh locals first, so callers can write
+    ``np.linalg.solve(normal + damping * np.diag(scale), -gradient)``. A must
+    be 2-D and b 1-D or 2-D; x is written into target with the same shape as b.
     """
+
+    def _temp_name() -> str:
+        name = f"__sol_arg{_LINALG_AW[0]}"
+        _LINALG_AW[0] += 1
+        return name
+
+    def _infer_expr_dtype(expr: ast.expr) -> Optional[str]:
+        if local_dtypes is None:
+            return None
+        if _reads_complex(expr, local_dtypes):
+            return "complex128"
+        for node in ast.walk(expr):
+            if isinstance(node, ast.Name):
+                dt = local_dtypes.get(node.id)
+                if dt:
+                    return dt
+        return None
+
+    out: List[ast.stmt] = []
+    materialized = list(args)
+    for i, arg in enumerate(materialized):
+        if isinstance(arg, ast.Name):
+            continue
+        ext = _iter_extent_of(arg, shape_table)
+        if ext is None:
+            raise NotImplementedError("np.linalg.solve: argument shape not inferable")
+        tmp = _temp_name()
+        shape_tokens = tuple(ast.unparse(e) for e in ext)
+        shape_table[tmp] = shape_tokens
+        if fresh_local_allocs is not None:
+            fresh_local_allocs[tmp] = shape_tokens
+        arg_dt = _infer_expr_dtype(arg)
+        if arg_dt is not None and local_dtypes is not None:
+            local_dtypes[tmp] = arg_dt
+        out.append(
+            ast.Assign(targets=[_store(tmp)],
+                       value=ast.Call(func=_name("__hpcagent_bench_zeros__"), args=[], keywords=[])))
+        out.append(ast.Assign(targets=[_store(tmp)], value=arg))
+        materialized[i] = _name(tmp)
+    args = materialized
+
     if len(args) < 2 or not isinstance(args[0], ast.Name) \
             or not isinstance(args[1], ast.Name):
         raise NotImplementedError("np.linalg.solve needs Name args")
@@ -6122,7 +6195,6 @@ def expand_linalg_solve(target: ast.expr,
     # different sizes, so number it like ``expand_linalg_inv`` does.
     aw_name = f"__sol_aw{_LINALG_AW[0]}"
     _LINALG_AW[0] += 1
-    out: List[ast.stmt] = []
     aw = lambda r, c: ast.Subscript(value=_name(aw_name), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Load())
     aw_store = lambda r, c: ast.Subscript(
         value=_name(aw_name), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Store())
