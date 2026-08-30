@@ -5999,6 +5999,15 @@ class _HoistMultiStmtHelpers(ast.NodeTransformer):
                     and isinstance(stmt.value.func, ast.Name) and stmt.value.func.id in self.multi_stmt):
                 out.append(stmt)
                 continue
+            # Same skip for a helper called as a bare STATEMENT: its value is discarded, so
+            # hoisting it to ``__hcall<n> = helper(..)`` invents a consumer that does not exist.
+            # The temp then dead-stores away and its remaining ``Expr(__hcall<n>)`` folds back to
+            # the helper's return expression -- a stranded ``(ux, uy, uz)`` no backend can render.
+            # ``_InlineHelpers.visit_Expr`` splices this form and drops the dead return instead.
+            if (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)
+                    and isinstance(stmt.value.func, ast.Name) and stmt.value.func.id in self.multi_stmt):
+                out.append(stmt)
+                continue
             # Recurse into nested control flow first.
             stmt = self.visit(stmt)
             if isinstance(stmt, ast.Assign):
@@ -6150,10 +6159,18 @@ class _InlineHelpers(ast.NodeTransformer):
             return node
         helper = self.helpers[node.value.func.id]
         body = _strip_docstrings(helper.body)
-        # Skip non-void forms -- those are handled by visit_Assign /
-        # visit_Call.
+        # A helper called as a bare STATEMENT has its value discarded: the helper mutates its array
+        # parameters and the caller ignores what it hands back (WarpX's Boris pusher returns the
+        # three momentum arrays it just updated in place). So a trailing ``return`` is dead HERE,
+        # whatever it means at an Assign call site. Declining left the tail expression stranded as
+        # a bare ``(ux, uy, uz)`` statement, which no backend can render. An early return elsewhere
+        # in the body IS control flow, so that form still declines.
         if body and isinstance(body[-1], ast.Return):
-            return node
+            if any(isinstance(n, ast.Return) for s in body[:-1] for n in ast.walk(s)):
+                return node
+            body = body[:-1]
+            if not body:
+                return node
         param_names = [a.arg for a in helper.args.args]
         call_args = _resolve_call_args(node.value, helper)
         if call_args is None:

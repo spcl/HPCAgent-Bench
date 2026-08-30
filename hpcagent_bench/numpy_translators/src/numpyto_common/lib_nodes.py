@@ -1298,6 +1298,36 @@ def _strided_index(ivar: ast.expr, start: Optional[ast.expr], step) -> ast.expr:
     return ast.BinOp(left=pos, op=ast.Add(), right=start)
 
 
+def _subscript_result_rank(expr: ast.Subscript, axes: List[ast.expr], shape, shape_table) -> int:
+    """Result-axis count of a subscript, counted by the SAME rules that consume iters below.
+
+    A slice or a newaxis contributes one axis; an advanced-index group contributes its shared
+    broadcast rank once; a scalar index contributes none but eats a source axis; and any source
+    axis the subscript never mentions is an implicit trailing full slice.
+    """
+    rank = 0
+    src = 0
+    grouped = False
+    for ax in axes:
+        if isinstance(ax, ast.Constant) and ax.value is None:
+            rank += 1
+            continue
+        if isinstance(ax, ast.Slice):
+            rank += 1
+            src += 1
+            continue
+        adv = (len(shape_table[ax.id]) if isinstance(ax, ast.Name) and shape_table.get(ax.id) else _advanced_index_rank(
+            ax, shape_table))
+        if adv:
+            if not grouped:
+                rank += adv
+                grouped = True
+            src += 1
+            continue
+        src += 1
+    return rank + max(0, (len(shape) if shape else 0) - src)
+
+
 def _scalarize_at_iters(expr: ast.expr, iters: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]]) -> ast.expr:
     """Render an array-valued expression at the given iter indices. Recursive
     structural lowering, independent of any one numpy op: ``Name(A)`` ->
@@ -1327,8 +1357,28 @@ def _scalarize_at_iters(expr: ast.expr, iters: List[ast.expr], shape_table: Dict
         name = _name_id(expr.value)
         shape = shape_table.get(name) if name else None
         axes = _slice_axes(expr)
+        # A subscript on a COMPUTED base (``(reduce_shape != 0)[:, None]``) has no name to index --
+        # the BASE is the array. When the subscript is a pure broadcast-reshape (only full slices
+        # and newaxis), render it by scalarising the base at the iters its full-slice axes map to;
+        # the newaxis axes consume an iter and contribute nothing. Left to the axis walk below the
+        # base stayed whole-array under a scalar subscript and reached C as ``(ptr != 0)[i]``, which
+        # C++ rejects outright and C compiles into a pointer read. The two sibling rewriters
+        # (``_SliceToScalarRewriter.visit_Subscript``, ``_SubscriptifyNames.visit_Subscript``)
+        # already apply this rule to the same spelling; np.where's cond reached neither.
+        full = [isinstance(a, ast.Slice) and a.lower is None and a.upper is None and a.step is None for a in axes]
+        newax = [isinstance(a, ast.Constant) and a.value is None for a in axes]
+        if name is None and axes and all(f or n for f, n in zip(full, newax)) and any(full) \
+                and len(axes) <= len(iters):
+            offset = len(iters) - len(axes)
+            base_iters = [iters[offset + k] for k, f in enumerate(full) if f]
+            return _scalarize_at_iters(expr.value, base_iters, shape_table)
         new_axes: List[ast.expr] = []
-        iter_idx = 0
+        # numpy broadcasts RIGHT-aligned: an operand whose result rank is below the nest's reads
+        # the TRAILING iters. The bare-Name branch above already offsets for that; this one started
+        # at iter 0, so ``np.where(cond4d, cxyz[:a, :b, :c], 0)`` read cxyz at the OUTER three loops
+        # and every element came from the wrong plane. Equal ranks give offset 0, which is the
+        # arithmetic that was already happening.
+        iter_idx = max(0, len(iters) - _subscript_result_rank(expr, axes, shape, shape_table))
         src_axis = 0  # source-axis pointer (see _iter_extent_of).
         group_iters: Optional[List[ast.expr]] = None  # shared advanced-index iters
         for ax in axes:
