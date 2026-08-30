@@ -1910,7 +1910,16 @@ def freeze_pinned_extent_scalars(kir):
     it is simply no longer read. Floats are excluded: an extent is an integer, and a float scalar
     reached through the chain is a tolerance or a scale, not a size.
 
-    Two names are never substituted, and both were caught as regressions rather than predicted:
+    Only a scalar that reaches an extent INDIRECTLY, through a chain of local assignments, is
+    frozen. One the body spells DIRECTLY in a shape or a slice bound is promoted to a dc.symbol by
+    the scan in :func:`emit_dace` instead, and the manifest value is test DATA there, not a
+    compile-time constant: cloudsc's ``za_col = za[jk - 1, kidia - 1:kfdia]`` became
+    ``za[jk - 1, 1 - 1:0]``, an empty range that builds, runs and computes nothing. The measured
+    conv case below needs the fold precisely because it is indirect -- no shape argument names the
+    scalar, only the ``//``-derived locals do, and nothing can fold those back to the declaration.
+
+    Two further names are never substituted, and both were caught as regressions rather than
+    predicted:
 
     * one a DECLARED ARRAY SHAPE mentions. nbody declares ``KE: (Nt + 1,)`` and also lists ``Nt``
       under scalars, so ``Nt`` has to be a dc.symbol -- the existing direct scan promotes it. Give
@@ -1938,7 +1947,7 @@ def freeze_pinned_extent_scalars(kir):
             seeds.update(n.id for n in ast.walk(element) if isinstance(n, ast.Name))
     frozen = {
         name: scalars[name].value
-        for name in shape_reaching_names(probe, seeds)
+        for name in shape_reaching_names(probe, seeds) - seeds
         if name in scalars and name not in declared and scalars[name].dtype.startswith((
             "int", "uint")) and type(scalars[name].value) is int
     }

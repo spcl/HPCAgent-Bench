@@ -3935,8 +3935,49 @@ def _infer_param_desc(arg: ast.AST, pname: str, arr_by, sca_by, sym_by, fn=None)
         if res is not None:
             shape, dtype = res
             return ("array", ArrayDesc(name=pname, dtype=dtype, shape=shape, is_output=False))
+    if integer_valued_argument(arg, fn, sca_by, sym_by):
+        return ("scalar", ScalarDesc(name=pname, dtype="int"))
     # A negated / arithmetic scalar expression -- default to double.
     return ("scalar", ScalarDesc(name=pname, dtype="float64"))
+
+
+def integer_valued_argument(arg: ast.AST, fn, sca_by, sym_by, depth: int = 0) -> bool:
+    """Whether ``arg`` is integer arithmetic over shape symbols, int scalars and int literals.
+
+    An EXTENT passed into a shape-generic helper is exactly this shape -- ``4 * cells_per_dim *
+    cells_per_dim * cells_per_dim``, or a local bound to one. Without this it falls to the float64
+    default below, and the helper declares ``const double max_neighs`` while its body subscripts
+    with it: "array subscript is not an integer" in C, ``bool*[double]`` in C++, "Legacy Extension:
+    REAL array index" in Fortran. Deliberately narrow -- ``/`` is excluded, since true division of
+    two integers is a float in numpy too.
+    """
+    if depth > 8:
+        return False
+    if isinstance(arg, ast.Constant):
+        return isinstance(arg.value, int) and not isinstance(arg.value, bool)
+    if isinstance(arg, ast.Name):
+        if arg.id in sym_by:
+            return True
+        scalar = sca_by.get(arg.id)
+        if scalar is not None:
+            return str(scalar.dtype).startswith("int")
+        if fn is None:
+            return False
+        # A local bound once to an integer expression: resolve through that binding.
+        bound = [
+            s.value for s in ast.walk(fn)
+            if isinstance(s, ast.Assign) and any(isinstance(t, ast.Name) and t.id == arg.id for t in s.targets)
+        ]
+        return len(bound) == 1 and integer_valued_argument(bound[0], fn, sca_by, sym_by, depth + 1)
+    if isinstance(arg, ast.BinOp) and isinstance(arg.op, (ast.Add, ast.Sub, ast.Mult, ast.FloorDiv, ast.Mod)):
+        return (integer_valued_argument(arg.left, fn, sca_by, sym_by, depth + 1)
+                and integer_valued_argument(arg.right, fn, sca_by, sym_by, depth + 1))
+    if isinstance(arg, ast.UnaryOp) and isinstance(arg.op, (ast.UAdd, ast.USub)):
+        return integer_valued_argument(arg.operand, fn, sca_by, sym_by, depth + 1)
+    # ``int(...)`` says so outright.
+    if isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name) and arg.func.id == "int" and len(arg.args) == 1:
+        return True
+    return False
 
 
 def _helper_return_array_shape(lhs, arr_by, fn):

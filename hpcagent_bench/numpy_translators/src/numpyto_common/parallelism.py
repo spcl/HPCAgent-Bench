@@ -167,6 +167,26 @@ def has_carried_scalar(node: ast.For) -> bool:
     return _reads_before_write(node.body, scalars, {node.target.id})
 
 
+def assigns_a_live_out_scalar(node: ast.For) -> bool:
+    """True if the body assigns a bare scalar it never READS back.
+
+    Such a store cannot be a private temp -- nothing in the loop consumes it -- so it exists only
+    to be read AFTER the loop, and the value that must survive is the one the LAST iteration wrote.
+    A parallel schedule keeps an arbitrary thread's instead. This is the max/argmax pair (``if c: m
+    = a[i]; idx = i``, read once past the loop): :func:`has_carried_scalar` sees no read-before-write
+    inside the body and passed it, and numba's prange then returned the seed value.
+
+    Loop targets are excluded -- an iterator is rebound from its own range every iteration, so it
+    carries nothing even when the body never reads it.
+    """
+    body = ast.Module(body=list(node.body), type_ignores=[])
+    iterators = {node.target.id} if isinstance(node.target, ast.Name) else _bare_store_names(node.target)
+    for n in ast.walk(body):
+        if isinstance(n, (ast.For, ast.AsyncFor, ast.comprehension)):
+            iterators |= _bare_store_names(n.target)
+    return bool(_bare_store_names(body) - iterators - _load_names(body))
+
+
 def _bare_axes(sub: ast.Subscript, idx: str) -> set:
     """Axis positions where ``idx`` appears as a BARE index in ``sub``."""
     return {k for k, e in enumerate(index_exprs(sub)) if isinstance(e, ast.Name) and e.id == idx}
@@ -202,6 +222,8 @@ def loop_is_parallel_safe(node: ast.AST) -> bool:
             return False  # scalar reduction / accumulator (``s += ...``).
     if has_carried_scalar(node):
         return False  # a scalar read before write across iterations (``b[i] = s; s = a[i]``).
+    if assigns_a_live_out_scalar(node):
+        return False  # a scalar written for a reader PAST the loop -- only the last iteration's counts.
     written = written_arrays(body)
     for n in ast.walk(body):
         if isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name) and n.value.id in written:
