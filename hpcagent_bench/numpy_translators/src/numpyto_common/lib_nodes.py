@@ -961,12 +961,16 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
                 if isinstance(step, ast.expr):
                     # Symbolic stride: ceil(raw / step) with the divisor carried as an expression.
                     # No abs() -- a bounded slice's step is positive or the numpy source is empty.
-                    ext.append(
-                        ast.BinOp(left=ast.BinOp(left=ast.BinOp(left=raw, op=ast.Add(), right=step),
-                                                 op=ast.Sub(),
-                                                 right=_const(1)),
-                                  op=ast.FloorDiv(),
-                                  right=step))
+                    exact = span_multiple_of(raw, step)
+                    if exact is not None:
+                        ext.append(exact)
+                    else:
+                        ext.append(
+                            ast.BinOp(left=ast.BinOp(left=ast.BinOp(left=raw, op=ast.Add(), right=step),
+                                                     op=ast.Sub(),
+                                                     right=_const(1)),
+                                      op=ast.FloorDiv(),
+                                      right=step))
                 elif step is not None and step != 1:
                     # Element count is ceil(raw / |step|) -- a full-axis negative step
                     # (reverse) spans the same number of elements as its positive
@@ -2966,6 +2970,24 @@ def expand_linspace(target: ast.expr, args: List[ast.expr], shape_table: Dict[st
                body=[ast.Assign(targets=[last], value=copy.deepcopy(stop))],
                orelse=[]),
     ]
+
+
+def span_multiple_of(span: ast.expr, step: ast.expr) -> Optional[ast.expr]:
+    """The other factor when ``span`` is syntactically ``<expr> * step``, else ``None``.
+
+    ``ceil(A * s / s) == A`` exactly, for every positive ``s``, so a strided slice whose span is a
+    multiple of its stride has a plain extent. The pooling kernels slice
+    ``padded[kz:kz + out * stride:stride]``; unfolded that extent reads
+    ``(out * stride + stride - 1) // stride`` -- the same number as ``out``, spelled so that no
+    token comparison can see it.
+    """
+    if not (isinstance(span, ast.BinOp) and isinstance(span.op, ast.Mult)):
+        return None
+    step_txt = ast.unparse(step)
+    for factor, other in ((span.left, span.right), (span.right, span.left)):
+        if ast.unparse(factor) == step_txt:
+            return copy.deepcopy(other)
+    return None
 
 
 def arange_count(args: List[ast.expr]) -> ast.expr:
