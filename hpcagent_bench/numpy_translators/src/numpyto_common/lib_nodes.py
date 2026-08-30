@@ -5799,18 +5799,16 @@ def expand_cholesky(target: ast.expr,
     inner_k = [
         ast.AugAssign(target=_store("__s"),
                       op=ast.Sub(),
-                      value=ast.BinOp(left=ast.Subscript(value=_name(target.id),
-                                                         slice=ast.Tuple(elts=[_name("__j"), _name("__k")],
-                                                                         ctx=ast.Load()),
-                                                         ctx=ast.Load()),
-                                      op=ast.Mult(),
-                                      right=_attr_call("np", "conj", [
-                                          ast.Subscript(value=_name(target.id),
-                                                        slice=ast.Tuple(elts=[_name("__j"),
-                                                                              _name("__k")],
-                                                                        ctx=ast.Load()),
-                                                        ctx=ast.Load())
-                                      ]))),
+                      value=ast.BinOp(
+                          left=ast.Subscript(value=_name(target.id),
+                                             slice=ast.Tuple(elts=[_name("__j"), _name("__k")], ctx=ast.Load()),
+                                             ctx=ast.Load()),
+                          op=ast.Mult(),
+                          right=_attr_call("np", "conj", [
+                              ast.Subscript(value=_name(target.id),
+                                            slice=ast.Tuple(elts=[_name("__j"), _name("__k")], ctx=ast.Load()),
+                                            ctx=ast.Load())
+                          ]))),
     ]
     inner_i = [
         ast.Assign(targets=[_store("__s")],
@@ -5820,21 +5818,19 @@ def expand_cholesky(target: ast.expr,
         ast.For(target=_store("__k"),
                 iter=ast.Call(func=_name("range"), args=[_name("__j")], keywords=[]),
                 body=[
-                    ast.AugAssign(target=_store("__s"),
-                                  op=ast.Sub(),
-                                  value=ast.BinOp(left=ast.Subscript(value=_name(target.id),
-                                                                     slice=ast.Tuple(elts=[_name("__i"),
-                                                                                           _name("__k")],
-                                                                                     ctx=ast.Load()),
-                                                                     ctx=ast.Load()),
-                                                  op=ast.Mult(),
-                                                  right=_attr_call("np", "conj", [
-                                                      ast.Subscript(value=_name(target.id),
-                                                                    slice=ast.Tuple(elts=[_name("__j"),
-                                                                                          _name("__k")],
-                                                                                    ctx=ast.Load()),
-                                                                    ctx=ast.Load())
-                                                  ])))
+                    ast.AugAssign(
+                        target=_store("__s"),
+                        op=ast.Sub(),
+                        value=ast.BinOp(
+                            left=ast.Subscript(value=_name(target.id),
+                                               slice=ast.Tuple(elts=[_name("__i"), _name("__k")], ctx=ast.Load()),
+                                               ctx=ast.Load()),
+                            op=ast.Mult(),
+                            right=_attr_call("np", "conj", [
+                                ast.Subscript(value=_name(target.id),
+                                              slice=ast.Tuple(elts=[_name("__j"), _name("__k")], ctx=ast.Load()),
+                                              ctx=ast.Load())
+                            ])))
                 ],
                 orelse=[]),
         ast.Assign(targets=[

@@ -19,13 +19,34 @@ SHAPES = (
     # xhigh. So a request WITHOUT output_config leaves the field unset and lets the server's
     # --default-chat-template-kwargs supply the level instead. These shapes separate the two.
     ("bare", {}),
-    ("thinking-32768", {"thinking": {"type": "enabled", "budget_tokens": 32768}}),
-    ("output_config-xhigh", {"output_config": {"effort": "xhigh"}}),
-    ("output_config-high", {"output_config": {"effort": "high"}}),
-    ("output_config-medium", {"output_config": {"effort": "medium"}}),
-    ("thinking+no-output-config", {"thinking": {"type": "enabled", "budget_tokens": 8192}}),
+    ("thinking-32768", {
+        "thinking": {
+            "type": "enabled",
+            "budget_tokens": 32768
+        }
+    }),
+    ("output_config-xhigh", {
+        "output_config": {
+            "effort": "xhigh"
+        }
+    }),
+    ("output_config-high", {
+        "output_config": {
+            "effort": "high"
+        }
+    }),
+    ("output_config-medium", {
+        "output_config": {
+            "effort": "medium"
+        }
+    }),
+    ("thinking+no-output-config", {
+        "thinking": {
+            "type": "enabled",
+            "budget_tokens": 8192
+        }
+    }),
 )
-
 
 
 def post(base: str, model: str, name: str, extra: dict, timeout: int) -> None:

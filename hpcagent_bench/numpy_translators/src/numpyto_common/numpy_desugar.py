@@ -540,9 +540,7 @@ def _drop_rank_conflicts(tree: ast.AST, ranks: Dict[str, int], seed: Dict[str, i
             ranks.pop(name, None)
 
 
-def _int_expr(value: ast.AST,
-              ranks: Dict[str, int],
-              seed_ranks: Optional[Dict[str, int]] = None) -> Optional[int]:
+def _int_expr(value: ast.AST, ranks: Dict[str, int], seed_ranks: Optional[Dict[str, int]] = None) -> Optional[int]:
     """Evaluate a small integer expression used as a tuple length or repeat
     count. Supports constants, names (array rank), ``arr.ndim``, and the four
     basic integer operations. Used to size tuple-shaped locals without running

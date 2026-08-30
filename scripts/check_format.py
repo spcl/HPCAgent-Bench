@@ -15,13 +15,17 @@ job and a local run agree. ``--all`` checks every tracked source file.
 Kernel ports / generated references are NOT style-gated (they are faithful ports
 or machine-emitted): anything under ``hpcagent_bench/benchmarks/`` or matching
 ``*_generated.*`` is skipped (the ``.yapfignore`` policy). ``numpy_translators/``
-is also skipped -- it is a separate distribution with its own style policy.
+is NOT skipped any more -- see :data:`SKIP_PREFIXES`.
+
+One formatter process per file, run ``--jobs`` at a time (default: one per core).
+Serially this took 105s over the 664 in-scope files, which timed pre-commit out.
 
 Exit status: 0 when every checked file is already formatted; 1 when one or more
 need reformatting (the offenders and the fix command are printed); 2 on a setup
 error (a needed formatter is missing). ``--fix`` reformats in place instead.
 """
 import argparse
+import concurrent.futures
 import os
 import shutil
 import subprocess
@@ -137,6 +141,10 @@ def main(argv=None):
     ap.add_argument("--all", action="store_true", help="check every tracked source file, not just changed ones")
     ap.add_argument("--fix", action="store_true", help="reformat offending files in place instead of failing")
     ap.add_argument("files", nargs="*", help="explicit files to check (overrides --base/--all)")
+    ap.add_argument("--jobs",
+                    type=int,
+                    default=min(32, (os.cpu_count() or 1) + 4),
+                    help="formatter processes to run at once (default: one per core, capped)")
     args = ap.parse_args(argv)
 
     if args.files:
@@ -166,12 +174,23 @@ def main(argv=None):
             file=sys.stderr)
         return 2
 
+    # One formatter PROCESS per file, so the cost is process spawns, not python: 664 in-scope files
+    # took 105s serially and timed out pre-commit runs outright. Threads, not processes -- every
+    # worker is blocked in subprocess.run with the GIL released, and a thread pool needs no pickling
+    # and keeps the offender list in one address space. Each file is independent: the formatters
+    # read and rewrite one path, so concurrent workers never touch the same file.
+    work = [(lang, rel) for lang, files in by_lang.items() for rel in files]
     offenders = []
-    for lang, files in by_lang.items():
-        check, tool = CHECKERS[lang]
-        for rel in files:
-            if check(str(REPO_ROOT / rel), args.fix):
-                offenders.append((rel, tool))
+    if work:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
+            futures = {
+                pool.submit(CHECKERS[lang][0], str(REPO_ROOT / rel), args.fix): (lang, rel)
+                for lang, rel in work
+            }
+            hits = {futures[f] for f in concurrent.futures.as_completed(futures) if f.result()}
+        # Report in the deterministic language-then-path order the serial loop produced, NOT in
+        # completion order, so the same tree always prints the same list.
+        offenders = [(rel, CHECKERS[lang][1]) for lang, rel in work if (lang, rel) in hits]
 
     n_checked = sum(len(f) for f in by_lang.values())
     if not offenders:

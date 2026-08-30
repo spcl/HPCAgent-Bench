@@ -10,10 +10,10 @@ import pathlib
 import re
 import sys
 
-EXTRA_KNOBS = ("TRITON_CACHE_DIR", "TRITON_HOME", "TORCHINDUCTOR_CACHE_DIR", "TORCH_HOME",
-               "TORCH_EXTENSIONS_DIR", "XDG_CACHE_HOME", "HF_HOME", "HUGGINGFACE_HUB_CACHE",
-               "AITER_JIT_DIR", "AITER_ASM_DIR", "AMD_COMGR_CACHE_DIR", "CUDA_CACHE_PATH",
-               "SGLANG_CACHE_DIR", "OUTLINES_CACHE_DIR", "FLASHINFER_WORKSPACE_DIR")
+EXTRA_KNOBS = ("TRITON_CACHE_DIR", "TRITON_HOME", "TORCHINDUCTOR_CACHE_DIR", "TORCH_HOME", "TORCH_EXTENSIONS_DIR",
+               "XDG_CACHE_HOME", "HF_HOME", "HUGGINGFACE_HUB_CACHE", "AITER_JIT_DIR", "AITER_ASM_DIR",
+               "AMD_COMGR_CACHE_DIR", "CUDA_CACHE_PATH", "SGLANG_CACHE_DIR", "OUTLINES_CACHE_DIR",
+               "FLASHINFER_WORKSPACE_DIR")
 
 CACHE_HINT = re.compile(r"[^\n]*(?:AITER_[A-Z0-9_]*(?:DIR|HOME|ROOT|CACHE)|home\(\)|expanduser"
                         r"|\.aiter)[^\n]*")
@@ -64,8 +64,8 @@ def resolved_defaults() -> None:
 
 def main() -> int:
     for title, fn in (("where aiter puts its caches", aiter_cache_sites),
-                      ("cache/dir env knobs these libraries read", env_knobs),
-                      ("resolved defaults with nothing set", resolved_defaults)):
+                      ("cache/dir env knobs these libraries read", env_knobs), ("resolved defaults with nothing set",
+                                                                                resolved_defaults)):
         print(f"\n=== {title} ===", flush=True)
         fn()
     return 0
