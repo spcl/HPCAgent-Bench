@@ -132,7 +132,7 @@ def _calc_elem_char_length(x, y, z, volume):
         return a[:, i]
 
     faces = [(0, 1, 2, 3), (4, 5, 6, 7), (0, 1, 5, 4), (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7)]
-    charl = np.zeros(volume.shape, dtype=volume.dtype)
+    charl = np.zeros_like(volume)
     for (a, b, d, e) in faces:
         ar = _area_face(c(x, a), c(x, b), c(x, d), c(x, e), c(y, a), c(y, b), c(y, d), c(y, e), c(z, a), c(z, b),
                         c(z, d), c(z, e))
@@ -140,7 +140,7 @@ def _calc_elem_char_length(x, y, z, volume):
     return 4.0 * volume / np.sqrt(charl)
 
 
-def _calc_shape_fn_derivatives(x, y, z):
+def _calc_shape_fn_derivatives(x, y, z, numElem):
     """CalcElemShapeFunctionDerivatives, vectorised. x/y/z (numelem, 8); returns (b, volume), b is (numelem, 8, 3)."""
 
     def c(a, i):
@@ -170,8 +170,7 @@ def _calc_shape_fn_derivatives(x, y, z):
     cjzet = -(fjxxi * fjyze) + (fjyxi * fjxze)
     cjzze = (fjxxi * fjyet) - (fjyxi * fjxet)
 
-    n = x.shape[0]
-    b = np.empty((n, 8, 3), dtype=x.dtype)
+    b = np.empty((numElem, 8, 3), dtype=x.dtype)
     # Per-direction derivative columns; the Fortran `for dim` loop unrolled so no tuple iteration survives to emit.
     b[:, 0, 0] = -cjxxi - cjxet - cjxze
     b[:, 1, 0] = cjxxi - cjxet - cjxze
@@ -224,10 +223,9 @@ def _sum_face_normal(normal, ix, x, y, z, n0, n1, n2, n3):
     normal[:, corners, 2] += areaZ[:, None]
 
 
-def _calc_elem_node_normals(x, y, z):
+def _calc_elem_node_normals(x, y, z, numElem):
     """CalcElemNodeNormals, vectorised. Returns pf (numelem, 8, 3)."""
-    n = x.shape[0]
-    pf = np.zeros((n, 8, 3), dtype=x.dtype)
+    pf = np.zeros((numElem, 8, 3), dtype=x.dtype)
     faces = [(0, 1, 2, 3), (0, 4, 5, 1), (1, 5, 6, 2), (2, 6, 7, 3), (3, 7, 4, 0), (4, 7, 6, 5)]
     for f in faces:
         _sum_face_normal(pf, None, x, y, z, *f)
@@ -257,13 +255,13 @@ def _calc_volume_derivative(x, y, z):
 
 
 # Nodal force phase.
-def _integrate_stress(nodelist, x, y, z, fx, fy, fz, sigxx, sigyy, sigzz):
+def _integrate_stress(nodelist, x, y, z, fx, fy, fz, sigxx, sigyy, sigzz, numElem):
     """IntegrateStressForElems: shape-fn derivatives -> node normals (B) -> stress*B scatter-added onto nodes."""
     xl = x[nodelist]  # (numelem, 8)
     yl = y[nodelist]
     zl = z[nodelist]
-    _, determ = _calc_shape_fn_derivatives(xl, yl, zl)
-    b = _calc_elem_node_normals(xl, yl, zl)  # (numelem, 8, 3)
+    _, determ = _calc_shape_fn_derivatives(xl, yl, zl, numElem)
+    b = _calc_elem_node_normals(xl, yl, zl, numElem)  # (numelem, 8, 3)
     # SumElemStressesToNodeForces: f = -stress * B  (per corner).
     sfx = -(sigxx[:, None] * b[:, :, 0])  # (numelem, 8)
     sfy = -(sigyy[:, None] * b[:, :, 1])
@@ -319,17 +317,17 @@ def _calc_hourglass_control(nodelist, x, y, z, xd, yd, zd, fx, fy, fz, ss, elemM
                                  hgcoef)
 
 
-def _calc_volume_force(p, q, nodelist, x, y, z, xd, yd, zd, fx, fy, fz, ss, elemMass, volo, v):
+def _calc_volume_force(p, q, nodelist, x, y, z, xd, yd, zd, fx, fy, fz, ss, elemMass, volo, v, numElem):
     sig = -p - q  # InitStressTermsForElems (sigxx=sigyy=sigzz)
-    determ = _integrate_stress(nodelist, x, y, z, fx, fy, fz, sig, sig, sig)
+    determ = _integrate_stress(nodelist, x, y, z, fx, fy, fz, sig, sig, sig, numElem)
     _calc_hourglass_control(nodelist, x, y, z, xd, yd, zd, fx, fy, fz, ss, elemMass, volo, v, determ, _HGCOEF)
 
 
-def _calc_force_for_nodes(p, q, nodelist, x, y, z, xd, yd, zd, fx, fy, fz, ss, elemMass, volo, v):
+def _calc_force_for_nodes(p, q, nodelist, x, y, z, xd, yd, zd, fx, fy, fz, ss, elemMass, volo, v, numElem):
     fx[:] = 0.0
     fy[:] = 0.0
     fz[:] = 0.0
-    _calc_volume_force(p, q, nodelist, x, y, z, xd, yd, zd, fx, fy, fz, ss, elemMass, volo, v)
+    _calc_volume_force(p, q, nodelist, x, y, z, xd, yd, zd, fx, fy, fz, ss, elemMass, volo, v, numElem)
 
 
 def _calc_accel_for_nodes(xdd, ydd, zdd, fx, fy, fz, nodalMass):
@@ -360,8 +358,8 @@ def _calc_position_for_nodes(x, y, z, xd, yd, zd, dt):
 
 
 def _lagrange_nodal(deltatime, nodelist, x, y, z, xd, yd, zd, xdd, ydd, zdd, fx, fy, fz, nodalMass, ss, elemMass, volo,
-                    v, p, q, symmX, symmY, symmZ):
-    _calc_force_for_nodes(p, q, nodelist, x, y, z, xd, yd, zd, fx, fy, fz, ss, elemMass, volo, v)
+                    v, p, q, symmX, symmY, symmZ, numElem):
+    _calc_force_for_nodes(p, q, nodelist, x, y, z, xd, yd, zd, fx, fy, fz, ss, elemMass, volo, v, numElem)
     _calc_accel_for_nodes(xdd, ydd, zdd, fx, fy, fz, nodalMass)
     _apply_accel_bc(xdd, ydd, zdd, symmX, symmY, symmZ)
     _calc_velocity_for_nodes(xd, yd, zd, xdd, ydd, zdd, deltatime)
@@ -369,7 +367,7 @@ def _lagrange_nodal(deltatime, nodelist, x, y, z, xd, yd, zd, xdd, ydd, zdd, fx,
 
 
 # Element (Lagrange) phase.
-def _calc_elem_velocity_gradient(xv, yv, zv, b, detJ):
+def _calc_elem_velocity_gradient(xv, yv, zv, b, detJ, numElem):
     """CalcElemVelocityGrandient, vectorised. xv/yv/zv (numelem,8); b (numelem,8,3); returns d (numelem, 6)."""
     inv = 1.0 / detJ
     pfx, pfy, pfz = b[:, :, 0], b[:, :, 1], b[:, :, 2]
@@ -378,8 +376,7 @@ def _calc_elem_velocity_gradient(xv, yv, zv, b, detJ):
         return (pf[:, 0] * (v[:, 0] - v[:, 6]) + pf[:, 1] * (v[:, 1] - v[:, 7]) + pf[:, 2] * (v[:, 2] - v[:, 4]) +
                 pf[:, 3] * (v[:, 3] - v[:, 5]))
 
-    n = xv.shape[0]
-    d = np.empty((n, 6), dtype=xv.dtype)
+    d = np.empty((numElem, 6), dtype=xv.dtype)
     d[:, 0] = inv * dot(pfx, xv)
     d[:, 1] = inv * dot(pfy, yv)
     d[:, 2] = inv * dot(pfz, zv)
@@ -395,7 +392,7 @@ def _calc_elem_velocity_gradient(xv, yv, zv, b, detJ):
     return d
 
 
-def _calc_kinematics(deltatime, nodelist, x, y, z, xd, yd, zd, volo, v, vnew, delv, arealg, dxx, dyy, dzz):
+def _calc_kinematics(deltatime, nodelist, x, y, z, xd, yd, zd, volo, v, vnew, delv, arealg, dxx, dyy, dzz, numElem):
     xl = x[nodelist].copy()
     yl = y[nodelist].copy()
     zl = z[nodelist].copy()
@@ -412,15 +409,16 @@ def _calc_kinematics(deltatime, nodelist, x, y, z, xd, yd, zd, volo, v, vnew, de
     xl = xl - dt2 * xdl
     yl = yl - dt2 * ydl
     zl = zl - dt2 * zdl
-    b, detJ = _calc_shape_fn_derivatives(xl, yl, zl)
-    d = _calc_elem_velocity_gradient(xdl, ydl, zdl, b, detJ)
+    b, detJ = _calc_shape_fn_derivatives(xl, yl, zl, numElem)
+    d = _calc_elem_velocity_gradient(xdl, ydl, zdl, b, detJ, numElem)
     dxx[:] = d[:, 0]
     dyy[:] = d[:, 1]
     dzz[:] = d[:, 2]
 
 
-def _calc_lagrange_elements(deltatime, nodelist, x, y, z, xd, yd, zd, volo, v, vnew, delv, arealg, dxx, dyy, dzz, vdov):
-    _calc_kinematics(deltatime, nodelist, x, y, z, xd, yd, zd, volo, v, vnew, delv, arealg, dxx, dyy, dzz)
+def _calc_lagrange_elements(deltatime, nodelist, x, y, z, xd, yd, zd, volo, v, vnew, delv, arealg, dxx, dyy, dzz, vdov,
+                            numElem):
+    _calc_kinematics(deltatime, nodelist, x, y, z, xd, yd, zd, volo, v, vnew, delv, arealg, dxx, dyy, dzz, numElem)
     vd = dxx + dyy + dzz
     vdovthird = vd / 3.0
     vdov[:] = vd
@@ -488,11 +486,11 @@ def _calc_monotonic_q_gradients(nodelist, x, y, z, xd, yd, zd, volo, vnew, delx_
     delv_eta[:] = axn * dxv + ayn * dyv + azn * dzv
 
 
-def _neighbor_delv(delv, neigh, ielem, bcmask, mask_all, mask_symm, mask_free):
+def _neighbor_delv(delv, neigh, ielem, bcmask, mask_all, mask_symm, mask_free, numElem):
     """Select the minus/plus neighbour delv per the BC mask (one face axis); delv/neigh are (numelem,)."""
     sel = bcmask & mask_all
     # sel==0 -> neighbour value, SYMM -> self, FREE -> 0; clamp first so the gather (always evaluated) never reads OOB.
-    neigh_safe = np.clip(neigh, 0, delv.shape[0] - 1)
+    neigh_safe = np.clip(neigh, 0, numElem - 1)
     out = delv[neigh_safe]
     out = np.where(sel == mask_symm, delv[ielem], out)
     out = np.where(sel == mask_free, 0.0, out)
@@ -521,18 +519,18 @@ def _calc_monotonic_q_region(numElem, elemBC, delv_xi, delv_eta, delv_zeta, delx
     maxslope = _MONOQ_MAX_SLOPE
 
     norm = 1.0 / (delv_xi + _PTINY)
-    dm = _neighbor_delv(delv_xi, lxim, ielem, bcmask, XI_M, XI_M_SYMM, XI_M_FREE)
-    dp = _neighbor_delv(delv_xi, lxip, ielem, bcmask, XI_P, XI_P_SYMM, XI_P_FREE)
+    dm = _neighbor_delv(delv_xi, lxim, ielem, bcmask, XI_M, XI_M_SYMM, XI_M_FREE, numElem)
+    dp = _neighbor_delv(delv_xi, lxip, ielem, bcmask, XI_P, XI_P_SYMM, XI_P_FREE, numElem)
     phixi = _phi(dm, dp, norm, limiter, maxslope)
 
     norm = 1.0 / (delv_eta + _PTINY)
-    dm = _neighbor_delv(delv_eta, letam, ielem, bcmask, ETA_M, ETA_M_SYMM, ETA_M_FREE)
-    dp = _neighbor_delv(delv_eta, letap, ielem, bcmask, ETA_P, ETA_P_SYMM, ETA_P_FREE)
+    dm = _neighbor_delv(delv_eta, letam, ielem, bcmask, ETA_M, ETA_M_SYMM, ETA_M_FREE, numElem)
+    dp = _neighbor_delv(delv_eta, letap, ielem, bcmask, ETA_P, ETA_P_SYMM, ETA_P_FREE, numElem)
     phieta = _phi(dm, dp, norm, limiter, maxslope)
 
     norm = 1.0 / (delv_zeta + _PTINY)
-    dm = _neighbor_delv(delv_zeta, lzetam, ielem, bcmask, ZETA_M, ZETA_M_SYMM, ZETA_M_FREE)
-    dp = _neighbor_delv(delv_zeta, lzetap, ielem, bcmask, ZETA_P, ZETA_P_SYMM, ZETA_P_FREE)
+    dm = _neighbor_delv(delv_zeta, lzetam, ielem, bcmask, ZETA_M, ZETA_M_SYMM, ZETA_M_FREE, numElem)
+    dp = _neighbor_delv(delv_zeta, lzetap, ielem, bcmask, ZETA_P, ZETA_P_SYMM, ZETA_P_FREE, numElem)
     phizeta = _phi(dm, dp, norm, limiter, maxslope)
 
     delvxxi = np.minimum(delv_xi * delx_xi, 0.0)
@@ -667,7 +665,8 @@ def _update_volumes(v, vnew):
 def _lagrange_elements(deltatime, numElem, elemBC, nodelist, x, y, z, xd, yd, zd, e, p, q, ql, qq, v, volo, vnew, delv,
                        vdov, arealg, ss, elemMass, dxx, dyy, dzz, delv_xi, delv_eta, delv_zeta, delx_xi, delx_eta,
                        delx_zeta, lxim, lxip, letam, letap, lzetam, lzetap):
-    _calc_lagrange_elements(deltatime, nodelist, x, y, z, xd, yd, zd, volo, v, vnew, delv, arealg, dxx, dyy, dzz, vdov)
+    _calc_lagrange_elements(deltatime, nodelist, x, y, z, xd, yd, zd, volo, v, vnew, delv, arealg, dxx, dyy, dzz, vdov,
+                            numElem)
     _calc_q_for_elems(numElem, elemBC, nodelist, x, y, z, xd, yd, zd, volo, vnew, vdov, delv_xi, delv_eta, delv_zeta,
                       delx_xi, delx_eta, delx_zeta, lxim, lxip, letam, letap, lzetam, lzetap, elemMass, ql, qq)
     _apply_material_properties(e, p, q, ql, qq, delv, ss, v, vnew)
@@ -732,7 +731,7 @@ def lulesh(e, p, q, ql, qq, v, volo, vnew, delv, vdov, arealg, ss, elemMass, dxx
         cycle = cycle + 1
         # --- LagrangeLeapFrog ------------------------------------------------
         _lagrange_nodal(deltatime, nodelist, x, y, z, xd, yd, zd, xdd, ydd, zdd, fx, fy, fz, nodalMass, ss, elemMass,
-                        volo, v, p, q, symmX, symmY, symmZ)
+                        volo, v, p, q, symmX, symmY, symmZ, numElem)
         _lagrange_elements(deltatime, numElem, elemBC, nodelist, x, y, z, xd, yd, zd, e, p, q, ql, qq, v, volo, vnew,
                            delv, vdov, arealg, ss, elemMass, dxx, dyy, dzz, delv_xi, delv_eta, delv_zeta, delx_xi,
                            delx_eta, delx_zeta, lxim, lxip, letam, letap, lzetam, lzetap)

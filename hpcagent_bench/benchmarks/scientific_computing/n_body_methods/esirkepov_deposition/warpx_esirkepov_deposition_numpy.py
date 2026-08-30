@@ -156,7 +156,7 @@ def warpx_esirkepov_deposition(
     uxp, uyp, uzp, wp, xp, yp, zp,
     dinv, xyzmin, lo,
     dt, relative_time, q,
-    depos_order, n_rz_azimuthal_modes, geom, do_ionization, enable_reduced_shape,
+    depos_order, n_rz_azimuthal_modes, geom, do_ionization, enable_reduced_shape, np_particles,
 ):
     """Deposit the charge-conserving Esirkepov current of every particle into the
     Jx/Jy/Jz grid arrays, in place. `geom` (and every other config knob) is a
@@ -186,7 +186,7 @@ def warpx_esirkepov_deposition(
     invdtd_y = (1.0 / dt) * dinvx * dinvz
     invdtd_z = (1.0 / dt) * dinvx * dinvy
 
-    p = wp.shape[0]
+    p = np_particles
     gaminv = 1.0 / np.sqrt(1.0 + (uxp * uxp + uyp * uyp + uzp * uzp) * INV_C2)
     wq = q * wp
     if do_ion != 0:
@@ -321,32 +321,32 @@ def warpx_esirkepov_deposition(
     sx_new = sx_old = sy_new = sy_old = sz_new = sz_old = None
 
     if geom != GEOM_1D_Z:
-        sx_new, i_new = shape_factor_vec(x_new, o, 1, width)
-        sx_old, i_old = shifted_shape_factor_vec(x_old, o, 0, width, i_new)
+        sx_new, i_new = shape_factor_vec(x_new, o, 1, width, p)
+        sx_old, i_old = shifted_shape_factor_vec(x_old, o, 0, width, i_new, p)
         # The reduced-shape override is written INTO the factor buffer, not re-bound: it is the
         # same shape either way, and a re-binding inside the guard reads as a second buffer for a
         # name every branch below goes on to use.
         if reduce_enabled:
-            ov_new, _ = shifted_shape_factor_vec(x_new, 1, half, width, i_new + half)
-            ov_old, _ = shifted_shape_factor_vec(x_old, 1, half, width, i_new + half)
+            ov_new, _ = shifted_shape_factor_vec(x_new, 1, half, width, i_new + half, p)
+            ov_old, _ = shifted_shape_factor_vec(x_old, 1, half, width, i_new + half, p)
             sx_new[:] = np.where((reduce_shape_new != 0)[:, None], ov_new, sx_new)
             sx_old[:] = np.where((reduce_shape_old != 0)[:, None], ov_old, sx_old)
 
     if geom == GEOM_3D:
-        sy_new, j_new = shape_factor_vec(y_new, o, 1, width)
-        sy_old, j_old = shifted_shape_factor_vec(y_old, o, 0, width, j_new)
+        sy_new, j_new = shape_factor_vec(y_new, o, 1, width, p)
+        sy_old, j_old = shifted_shape_factor_vec(y_old, o, 0, width, j_new, p)
         if reduce_enabled:
-            ov_new, _ = shifted_shape_factor_vec(y_new, 1, half, width, j_new + half)
-            ov_old, _ = shifted_shape_factor_vec(y_old, 1, half, width, j_new + half)
+            ov_new, _ = shifted_shape_factor_vec(y_new, 1, half, width, j_new + half, p)
+            ov_old, _ = shifted_shape_factor_vec(y_old, 1, half, width, j_new + half, p)
             sy_new[:] = np.where((reduce_shape_new != 0)[:, None], ov_new, sy_new)
             sy_old[:] = np.where((reduce_shape_old != 0)[:, None], ov_old, sy_old)
 
     if geom not in (GEOM_RCYLINDER, GEOM_RSPHERE):
-        sz_new, k_new = shape_factor_vec(z_new, o, 1, width)
-        sz_old, k_old = shifted_shape_factor_vec(z_old, o, 0, width, k_new)
+        sz_new, k_new = shape_factor_vec(z_new, o, 1, width, p)
+        sz_old, k_old = shifted_shape_factor_vec(z_old, o, 0, width, k_new, p)
         if reduce_enabled:
-            ov_new, _ = shifted_shape_factor_vec(z_new, 1, half, width, k_new + half)
-            ov_old, _ = shifted_shape_factor_vec(z_old, 1, half, width, k_new + half)
+            ov_new, _ = shifted_shape_factor_vec(z_new, 1, half, width, k_new + half, p)
+            ov_old, _ = shifted_shape_factor_vec(z_old, 1, half, width, k_new + half, p)
             sz_new[:] = np.where((reduce_shape_new != 0)[:, None], ov_new, sz_new)
             sz_old[:] = np.where((reduce_shape_old != 0)[:, None], ov_old, sz_old)
 
@@ -465,12 +465,11 @@ def warpx_esirkepov_deposition(
             Jz[lox + ib + i0:lox + ib + i1, 0, 0, 0] += wqi * vz[ip] * invvol * xavg
 
 
-def shape_factor_vec(xmid, order, base, width):
+def shape_factor_vec(xmid, order, base, width, p):
     """Vectorized port of Compute_shape_factor<order> (ShapeFactors.H): xmid is
     (P,), returns a (P, width) array with the order+1 taps written at columns
     base..base+order, and the (P,) leftmost-grid-index array. Every particle
     writes only its own row, so plain column assignment is safe."""
-    p = xmid.shape[0]
     sx = np.zeros((p, width), dtype=xmid.dtype)
     if order == 0:
         j = np.trunc(xmid + 0.5).astype(np.int64)
@@ -511,13 +510,12 @@ def shape_factor_vec(xmid, order, base, width):
     return sx, idx
 
 
-def shifted_shape_factor_vec(x_old, order, base, width, i_new):
+def shifted_shape_factor_vec(x_old, order, base, width, i_new, p):
     """Vectorized port of Compute_shifted_shape_factor<order>: the tap column is
     base + 1 + i_shift + k with i_shift = i - i_new varying per particle, so each
     tap is a 2D fancy-index assignment (row=particle, col=per-particle offset)
     instead of a fixed column. Rows are unique (np.arange), so plain assignment
     -- not .at -- is the correct op: this is a bijective per-row scatter."""
-    p = x_old.shape[0]
     sx = np.zeros((p, width), dtype=x_old.dtype)
     rows = np.arange(p)
     if order == 0:
