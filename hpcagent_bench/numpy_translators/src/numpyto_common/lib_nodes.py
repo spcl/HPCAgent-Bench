@@ -3520,9 +3520,17 @@ def expand_stack(target: ast.expr,
     rank = len(shapes[0])
     axis = _stack_axis(args, kwargs, rank)
     iters = [_make_iter_name("__st", d) for d in range(rank)]
-    src_slot = (_name(iters[0]) if rank == 1 else ast.Tuple(elts=[_name(i) for i in iters], ctx=ast.Load()))
     out: List[ast.stmt] = []
     for s_idx, (nm, s) in enumerate(zip(names, shapes)):
+        # A FRESH source slot per operand, never one hoisted out of this loop. Sharing a single
+        # Subscript slice object across the operands made every copy loop read the SAME nodes, and
+        # the Fortran emitter -- which must uniquify DO variables, Fortran having no block scope --
+        # renamed them under the FIRST loop's bindings and then found an already-renamed name under
+        # the second, which matches nothing on its stack and is left alone. Operand 1's nest then
+        # read operand 0's iterators, whose values are whatever the first loop exited with: one
+        # stale element copied over the whole slice. C never saw it -- its per-loop ``__st0`` is
+        # block-scoped, so the alias is harmless there and only Fortran came out wrong.
+        src_slot = (_name(iters[0]) if rank == 1 else ast.Tuple(elts=[_name(i) for i in iters], ctx=ast.Load()))
         tgt_elts = [_name(iters[d]) for d in range(rank)]
         tgt_elts.insert(axis, _const(s_idx))
         tgt_slot = tgt_elts[0] if len(tgt_elts) == 1 else ast.Tuple(elts=tgt_elts, ctx=ast.Load())

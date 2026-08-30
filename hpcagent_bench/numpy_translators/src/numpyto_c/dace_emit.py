@@ -5,7 +5,7 @@ import copy
 import dataclasses
 import functools
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from numpyto_common import dtypes
 from numpyto_common.frontend import fold_shape_expr
@@ -148,6 +148,36 @@ class _ResolveZeros(ast.NodeTransformer):
         dtype = _dace_dtype(self.local_dtypes.get(name) or self.default_dtype)
         elts = ", ".join(str(s) for s in shape) + ("," if len(shape) == 1 else "")
         return ast.copy_location(ast.parse(f"{name} = {ctor}(({elts}), dtype={dtype})").body[0], node)
+
+
+def _declare_unallocated_zeros_locals(fn: ast.FunctionDef, zeros_locals: Dict[str, tuple], allocated: Dict[str, tuple],
+                                      zeros_fills: Dict[str, str], local_dtypes: Dict[str, str], default_dtype: str,
+                                      params: Set[str]) -> None:
+    """Allocate a lowered local that carries no ``__hpcagent_bench_zeros__`` marker.
+
+    :class:`_ResolveZeros` rewrites markers, but not every expander leaves one: ``np.stack``
+    writes its temp straight into a per-operand copy nest and leaves the allocation to the
+    emitter's locals table. C and Fortran declare EVERY ``zeros_locals`` entry from that table, so
+    both were correct; dace only ever saw the marker rewrite, so the program reached the frontend
+    reading a name nothing defines. That is a PARSE-time "Use of undefined variable", raised long
+    after emit reported success -- the emit is what has to change.
+
+    Declared at the top of the body, which is where the C and Fortran locals are declared too, so a
+    shape expressed in the kernel's symbols is in scope wherever the first write happens.
+    """
+    used = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)}
+    missing = [nm for nm in zeros_locals if nm in used and nm not in allocated and nm not in params]
+    if not missing:
+        return
+    decls: List[ast.stmt] = []
+    for nm in missing:
+        shape = zeros_locals[nm] or ("1", )
+        ctor = "np.ones" if zeros_fills.get(nm) in ("ones", "ones_like") else "np.zeros"
+        dtype = _dace_dtype(local_dtypes.get(nm) or default_dtype)
+        elts = ", ".join(str(s) for s in shape) + ("," if len(shape) == 1 else "")
+        decls.append(ast.parse(f"{nm} = {ctor}(({elts}), dtype={dtype})").body[0])
+    fn.body[:0] = decls
+    ast.fix_missing_locations(fn)
 
 
 class _AnnotateEmptyDtype(ast.NodeTransformer):
@@ -2391,7 +2421,10 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
     zeros_fills = kir.zeros_fills
     local_dtypes = kir.local_dtypes
     default_dtype = kir.float_precision or "float64"
-    fn_ast = _ResolveZeros(zeros_locals, zeros_fills, local_dtypes, default_dtype).visit(fn_ast)
+    resolve_zeros = _ResolveZeros(zeros_locals, zeros_fills, local_dtypes, default_dtype)
+    fn_ast = resolve_zeros.visit(fn_ast)
+    _declare_unallocated_zeros_locals(fn_ast, zeros_locals, resolve_zeros.allocated, zeros_fills, local_dtypes,
+                                      default_dtype, set(kir.input_args))
     # np.empty's dace replacement has no dtype default (unlike zeros/ones/full): a bare call means
     # numpy's own float64 default, so fill in the precision-driven float global explicitly.
     fn_ast = _AnnotateEmptyDtype(_dace_dtype(default_dtype)).visit(fn_ast)
