@@ -13,6 +13,7 @@ gamma branches carry un-lowerable tuples) reduces to its live path.
 from typing import Dict, Optional
 
 import numpy as np
+import pytest
 
 from _op_oracle import run_op
 
@@ -314,6 +315,22 @@ def test_an_unresolvable_buffer_dtype_refuses():
         _helper_kir(src, "float32")
 
 
+def test_a_helper_local_resolves_its_dtype_against_the_helpers_own_params():
+    # ``np.zeros(..., dtype=v.dtype)`` inside a HELPER names that helper's parameter, so the
+    # parameter table is the scope it resolves against. ``_build_helper_kirs`` asked with an EMPTY
+    # one while classifying the return, which turned a perfectly resolvable dtype into a hard
+    # "does not resolve to a known dtype" refusal -- reported instead of the real reason the
+    # helper could not be emitted (conv_transpose3d_scale_batch_norm_global_avg_pool).
+    import ast
+    from numpyto_common.frontend import _local_array_def
+    from numpyto_common.ir import ArrayDesc
+    hfn = ast.parse("def widen(v, s):\n w = np.zeros(8, dtype=v.dtype)\n return w\n").body[0]
+    params = {"v": ArrayDesc(name="v", dtype="float32", shape=("n", ), is_output=False)}
+    assert _local_array_def(hfn, "w", params)[1] == "float32"
+    with pytest.raises(NotImplementedError, match="does not resolve to a known dtype"):
+        _local_array_def(hfn, "w", {})
+
+
 #: ``t = h(t, s)``: the target IS the first argument, so the helper reads and writes ONE buffer.
 _INOUT_SRC = ("import numpy as np\n"
               "def scale_in_place(v, s):\n"
@@ -436,3 +453,93 @@ def test_an_array_valued_expression_argument_is_passed_as_a_buffer():
                },
                backends=_ALL))
     assert ok, res
+
+
+#: A LEVEL-3 kernel: its helpers are kept as their own native functions rather than inlined, which
+#: is the only shape where a helper ARGUMENT temp exists to be mis-sized.
+_KEPT_HELPER_BENCH = {
+    "name": "k",
+    "short_name": "k",
+    "relative_path": "",
+    "module_name": "k",
+    "func_name": "f",
+    "level": 3,
+    "parameters": {
+        "S": {
+            "N": 4,
+            "K": 3,
+            "M": 5,
+            "P": 2
+        }
+    },
+    "input_args": ["x", "w1", "w2", "b2", "out"],
+    "array_args": ["x", "w1", "w2", "b2", "out"],
+    "output_args": ["out"],
+    "init": {
+        "shapes": {
+            "x": "(N, K)",
+            "w1": "(K, M)",
+            "w2": "(M, P)",
+            "b2": "(P,)",
+            "out": "(N, P)"
+        }
+    },
+}
+
+#: ``h`` is a kernel LOCAL, so the second call's argument ``h @ w2 + b2`` has one operand the
+#: declared-array table does not carry -- mlp's shape, with the layer count cut to two.
+_LOCAL_OPERAND_SRC = ("import numpy as np\n"
+                      "def relu(v):\n"
+                      " return np.maximum(v, 0.0)\n"
+                      "def f(x, w1, w2, b2, out):\n"
+                      " h = relu(x @ w1)\n"
+                      " out[:] = relu(h @ w2 + b2)\n")
+
+
+def _kept_helper_c(src: str) -> str:
+    import json
+    import pathlib
+    import tempfile
+    from numpyto_c.emit import emit_c
+    from numpyto_common.frontend import parse_kernel
+    from numpyto_common.lowering import lower
+    d = pathlib.Path(tempfile.mkdtemp())
+    (d / "k_numpy.py").write_text(src)
+    (d / "bi.json").write_text(json.dumps({"benchmark": _KEPT_HELPER_BENCH}))
+    return emit_c(lower(parse_kernel(d / "k_numpy.py", d / "bi.json")), fn_name="f")
+
+
+def test_a_helper_argument_temp_keeps_the_axes_of_its_local_operand():
+    """The broadcast join does not FAIL on an operand it cannot resolve -- it drops that operand's
+    axes.
+
+    ``relu(h @ w2 + b2)`` measured only ``b2``, so the argument temp was allocated rank-1 ``(P,)``
+    instead of ``(N, P)`` and the loop that fills it read the matmul buffer BARE: gcc rejected
+    ``__mm2 + b2[i]`` as ``double * + double``, and mlp did not build on any native backend. The
+    local's own shape is resolvable through the same chase the caller already uses.
+    """
+    c = _kept_helper_c(_LOCAL_OPERAND_SRC)
+    temp = "__harg_1_0"
+    decl = next((ln for ln in c.splitlines() if f"*{temp} =" in ln), None)
+    assert decl is not None, f"the second call's argument temp is gone:\n{c}"
+    assert "(N) * (P)" in decl, f"the argument temp lost the local operand's leading axis: {decl}"
+    # The fill loop must SUBSCRIPT the matmul buffer, which is the half a rank-1 temp cannot do.
+    fill = [ln for ln in c.splitlines() if f"{temp}[" in ln and "malloc" not in ln]
+    assert fill and all("__mm2[" in ln for ln in fill), f"the argument temp is filled from a bare pointer:\n{fill}"
+
+
+def test_the_kept_helper_kernel_is_a_legal_translation_unit():
+    """A mis-sized temp is not a wrong number here, it is a type error -- so the compiler is the
+    assertion that matters, and it has to be a real one."""
+    import pathlib
+    import shutil
+    import subprocess
+    import tempfile
+    import pytest
+    if shutil.which("gcc") is None:  # pragma: no cover -- toolchain gate
+        pytest.skip("gcc not installed")
+    d = pathlib.Path(tempfile.mkdtemp())
+    src = d / "k.c"
+    src.write_text(_kept_helper_c(_LOCAL_OPERAND_SRC))
+    r = subprocess.run(["gcc", "-O2", "-std=c23", "-fsyntax-only", str(src)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr

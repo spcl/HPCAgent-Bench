@@ -2002,6 +2002,57 @@ def _integer_valued_locals(kir: KernelIR) -> Set[str]:
     return candidates & assumed
 
 
+def _tuple_element(node: ast.AST, i: int, n: int) -> Optional[ast.expr]:
+    """Element ``i`` of an ``n``-wide tuple-valued expression, or None when it is not one.
+
+    A conditional over tuples is projected by pushing the index through it, so the guards are
+    duplicated and the tuples disappear.
+    """
+    if isinstance(node, ast.Tuple):
+        return copy.deepcopy(node.elts[i]) if len(node.elts) == n else None
+    if isinstance(node, ast.IfExp):
+        body = _tuple_element(node.body, i, n)
+        orelse = _tuple_element(node.orelse, i, n)
+        if body is None or orelse is None:
+            return None
+        return ast.IfExp(test=copy.deepcopy(node.test), body=body, orelse=orelse)
+    return None
+
+
+class _TupleTargetSplitter(ast.NodeTransformer):
+    """Rewrite ``a, b, c = <tuple-valued expr>`` into one scalar assignment per element.
+
+    C has no tuple. The frontend splices a tuple-returning helper into its call site as a SINGLE
+    expression -- a conditional selecting between tuple literals -- so the only tuple reaching emit
+    is the one that conditional yields, and the lowering splitter (which matches a bare tuple RHS)
+    leaves it alone. Every element repeats the guards; the compiler CSEs them back.
+
+    Declines when a target name is read by the RHS: the split would then bind from an already
+    updated value, and python binds every target from the old ones.
+    """
+
+    def visit_Assign(self, node: ast.Assign) -> object:
+        self.generic_visit(node)
+        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Tuple):
+            return node
+        targets = node.targets[0].elts
+        if not all(isinstance(t, ast.Name) for t in targets):
+            return node
+        names = {t.id for t in targets}
+        if any(isinstance(sub, ast.Name) and sub.id in names for sub in ast.walk(node.value)):
+            return node
+        parts = [_tuple_element(node.value, i, len(targets)) for i in range(len(targets))]
+        if any(p is None for p in parts):
+            return node
+        out: List[ast.stmt] = []
+        for target, part in zip(targets, parts):
+            stmt = ast.Assign(targets=[copy.deepcopy(target)], value=part)
+            ast.copy_location(stmt, node)
+            ast.fix_missing_locations(stmt)
+            out.append(stmt)
+        return out
+
+
 def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
     """Return (name, c_type) pairs for implicit scalar locals needing a C decl, type inferred in priority order."""
     declared: Set[str] = set()
@@ -2201,6 +2252,8 @@ def _emit_body(kir: KernelIR,
         emitter.return_ctype = return_ctype
     emitter.parallel = parallel
     emitter.isopar = isopar
+    # Tuple targets carry no declaration and no C form; split before the locals are harvested.
+    _TupleTargetSplitter().visit(kir.tree)
     zeros = kir.zeros_locals
     zeros_fills = kir.zeros_fills
     int_locals = kir.int_locals
@@ -2900,17 +2953,24 @@ def pinned_const_block(kir: KernelIR) -> str:
     lines = []
     for name in sorted(kir.pinned_consts):
         value = kir.pinned_consts[name]
-        lines.append(f"constexpr {type_of.get(name, _c_type('float64'))} {name} = {c_literal(value)};")
+        ctype = type_of.get(name, _c_type("float64"))
+        lines.append(f"constexpr {ctype} {name} = {c_literal(value, ctype)};")
     return "\n".join(lines) + "\n\n"
 
 
-def c_literal(value) -> str:
-    """A pinned knob's value as a C literal of its own kind (``true`` / ``100`` / ``1e-06``)."""
+#: C literal suffix per narrower-than-double floating ctype. A C23 ``constexpr`` initializer must be
+#: EXACTLY representable in the declared type, and a bare ``1e-10`` is a double that is not a float,
+#: so the suffix is what makes the declaration legal rather than a rounding convenience.
+_FLOAT_LITERAL_SUFFIX = {"float": "f", "_Float16": "f16"}
+
+
+def c_literal(value, ctype: str = "double") -> str:
+    """A pinned knob's value as a C literal of its own kind (``true`` / ``100`` / ``1e-06f``)."""
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, int):
         return str(value)
-    return repr(float(value))
+    return repr(float(value)) + _FLOAT_LITERAL_SUFFIX.get(ctype, "")
 
 
 def emit_c(kir: KernelIR, fn_name: Optional[str] = None) -> str:

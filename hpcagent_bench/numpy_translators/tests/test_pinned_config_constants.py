@@ -76,6 +76,41 @@ def test_pinned_knobs_leave_the_abi_and_are_declared_as_constants():
     assert "subroutine f(out, x, n)" in f90
 
 
+def test_a_narrowed_pinned_float_carries_the_literal_suffix_of_its_own_type():
+    """A C23 ``constexpr`` initializer must be EXACTLY representable in the declared type.
+
+    ``1e-10`` is a DOUBLE literal and no float holds it exactly, so ``constexpr float tol = 1e-10;``
+    is not a rounding convenience gcc performs -- it is rejected outright ("initializer not
+    representable in type of object"), and minife stopped building the moment the fp32 leg narrowed
+    its knob. The suffix is what makes the declaration legal; the value is unchanged either way.
+    """
+    from numpyto_common.ir import apply_precision
+    kir = apply_precision(_kir(), "float32")
+    c = emit_c(kir, fn_name="f")
+    assert "constexpr float tol = 1e-06f;" in c, c
+    # The integer knob has no float suffix to gain, and must not grow one.
+    assert "constexpr int64_t max_iter = 100;" in c, c
+    assert "constexpr float tol = 1e-06f;" in emit_cpp(kir, fn_name="f")
+    # fp64 is the control: a double literal in a double is exact, so nothing is appended.
+    assert "constexpr double tol = 1e-06;" in emit_c(_kir(), fn_name="f")
+
+
+def test_a_narrowed_pinned_float_still_compiles_as_c23():
+    """The suffix rule is only worth anything if the compiler agrees -- and the C23 constexpr
+    diagnostic is the whole reason this test exists, so it has to be a real compile."""
+    import shutil
+    import subprocess
+    from numpyto_common.ir import apply_precision
+    if shutil.which("gcc") is None:  # pragma: no cover -- toolchain gate
+        import pytest
+        pytest.skip("gcc not installed")
+    d = pathlib.Path(tempfile.mkdtemp())
+    src = d / "k.c"
+    src.write_text(emit_c(apply_precision(_kir(), "float32"), fn_name="f"))
+    r = subprocess.run(["gcc", "-O2", "-std=c23", "-fsyntax-only", str(src)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+
+
 def test_without_the_pinned_declaration_the_same_knobs_stay_parameters():
     # The control: identical source and identical `parameters`, only the manifest's `config:` block
     # differs. Without it the knobs are ordinary by-value scalars, which is what a `domain:` knob

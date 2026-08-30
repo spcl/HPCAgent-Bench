@@ -8907,10 +8907,17 @@ class LibNodeRewriter(ast.NodeTransformer):
             if rhs_dt and target_id not in self.local_dtypes:
                 self.local_dtypes[target_id] = rhs_dt
             return
-        # np.zeros / empty / etc constructor -- the ZerosRewriter
-        # already handles this in a separate pass; nothing to do here.
+        # np.zeros / empty / etc constructor -- the ZerosRewriter owns the ALLOCATION, and it
+        # runs in a later phase. The _like forms still have to publish their EXTENT here: the
+        # source array's shape may only become known during this pass (eigh_test's ``scaled =
+        # np.zeros_like(bu)``, where ``bu`` is an eigh output this same rewriter expands), and a
+        # local with no shape declines every matmul it feeds -- which slice fusion then refuses.
         if (isinstance(rhs, ast.Call) and isinstance(rhs.func, ast.Attribute) and isinstance(rhs.func.value, ast.Name)
                 and rhs.func.value.id == "np" and rhs.func.attr in NP_ZEROS_ALIASES):
+            if rhs.func.attr.endswith("_like") and rhs.args and isinstance(rhs.args[0], ast.Name):
+                src = self.shape_table.get(rhs.args[0].id)
+                if src is not None:
+                    self.shape_table[target_id] = tuple(src)
             return
         # Shape-CHANGING ops (reshape/repeat/transpose) aren't elementwise, but
         # the generic ``_iter_extent_of`` Call branch would treat them as such

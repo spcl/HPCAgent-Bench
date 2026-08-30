@@ -537,6 +537,61 @@ def pipeline_canonicalize(sdfg: Any, ctx: Dict[str, Any]) -> None:
     finalize_for_target(sdfg, target=target)
 
 
+#: Storage classes that put the bytes in device memory, which is what a cupy argument IS. Everything
+#: else -- ``Default``, ``CPU_Heap``, ``CPU_Pinned``, ``Register`` -- is a host address, and pinned
+#: host memory is a host address too however cheaply the device can reach it.
+GPU_RESIDENT_STORAGE: Tuple[Any, ...] = (dace_dtypes.StorageType.GPU_Global, dace_dtypes.StorageType.GPU_Shared)
+
+
+def enforce_gpu_residency(sdfg: Any) -> None:
+    """The GPU residency contract at the ABI boundary: every non-transient ARRAY is device-resident,
+    every SCALAR stays on the host.
+
+    This is the same rule ``docs/abi_contract.md`` Sec. 10 states for the native GPU languages, and
+    it has to hold here for the same reason: the harness stages every array argument to the device
+    once, outside the timed region (``DaceFramework.copy_func`` is ``cupy.asarray``), and passes
+    every scalar and every free symbol by value on the host. What the caller delivers is fixed, so a
+    descriptor that disagrees with it is not a slower variant -- it is the wrong pointer.
+
+    Nothing downstream catches that. ``CompiledSDFG`` does not compare an argument's residency
+    against its descriptor's storage, so a host-storage array handed a device pointer compiles,
+    links, runs, and reads device addresses as host memory: a segfault on a good day and a wrong
+    answer on a bad one.
+
+    ``apply_gpu_storage`` gets most of the way there but deliberately stops short in two places, and
+    both are load-bearing for IT rather than for us. It only promotes ``Default`` storage, so an
+    array some earlier pass gave an explicit host storage stays host; and it skips any container an
+    interstate edge reads, because inside DaCe that read is host code and moving the bytes to the
+    device would make the graph invalid. The first is ours to finish. The second is a genuine
+    conflict with the contract -- the graph wants a host read of a container the caller only ever
+    delivers on the device -- so it is REFUSED by name here rather than run as a host/device mix.
+
+    Scalars go the other way: any that a pass moved to device storage is put back, because it is
+    passed by value and there is no buffer to place.
+    """
+    from dace import data as dace_data
+
+    host_read = dace_auto_opt.interstate_read_names(sdfg)
+    stranded: List[str] = []
+    for name, desc in sdfg.arrays.items():
+        if desc.transient:
+            continue
+        if isinstance(desc, dace_data.Scalar):
+            if desc.storage in GPU_RESIDENT_STORAGE:
+                desc.storage = dace_dtypes.StorageType.Default
+            continue
+        if desc.storage in GPU_RESIDENT_STORAGE:
+            continue
+        if name in host_read:
+            stranded.append(name)
+            continue
+        desc.storage = dace_dtypes.StorageType.GPU_Global
+    if stranded:
+        raise ValueError("GPU residency contract: {names} must be device-resident (the harness passes "
+                         "device pointers) but {verb} read by an interstate edge, which is host "
+                         "code".format(names=", ".join(stranded), verb="is" if len(stranded) == 1 else "are"))
+
+
 #: THREE optimizers x TWO targets, and nothing else. All three are device-aware and all three
 #: offload LAST, after every CPU-side optimization, so a GPU column is its CPU column's map
 #: structure moved to the device rather than a differently-optimized graph.
@@ -775,6 +830,10 @@ class DaceFramework(Framework):
                 sdfg = copy.deepcopy(parent)
                 sdfg._name = pipe.name
                 pipe.transform(sdfg, ctx)
+                # One place, after every GPU pipeline: each of the three offloads through its own
+                # route, and the boundary they all have to land on is the same one.
+                if self.info["arch"] == "gpu":
+                    enforce_gpu_residency(sdfg)
                 produced[pipe.name] = sdfg
             except Exception as exc:
                 print(f"DaCe {pipe.name} pipeline failed: {exc}")
