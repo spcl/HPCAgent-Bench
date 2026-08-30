@@ -23,6 +23,8 @@ PY=/capstor/scratch/cscs/ybudanaz/x86_64/venv-optarena-314/bin/python
 OPTARENA=/capstor/scratch/cscs/ybudanaz/x86_64/optarena
 export PYTHONPATH="${OPTARENA}:${OPTARENA}/hpcagent_bench/numpy_translators/src${PYTHONPATH:+:${PYTHONPATH}}"
 EXPERIMENT=${EXPERIMENT:-git-scicomp}
+#: Dates the run tree, the way every campaign family here is dated.
+STAMP=${STAMP:-$(date +%Y%m%d)}
 TIME_LIMIT=${TIME_LIMIT:-06:00:00}
 PROBLEMS=problems-git-scicomp.jsonl
 
@@ -43,8 +45,13 @@ declare -A BASE_ENV=([oss120b]=llr8w7-oss120b-c [qwen38]=llr8w6-qwen38-c)
 submit_arm() {
     local model="$1" layout="$2" dep="${3:-}"
     local arm="${EXPERIMENT}-${model}-${layout}" env=".env.${EXPERIMENT}-${model}-${layout}"
+    # RUN_ROOT too, not just the arm name: it is inherited from the base env and still named for
+    # the llr8 wave that env belongs to, so these runs would land inside that campaign's family
+    # directory and be swept up by a collection that globs it. The experiment column separates the
+    # ROWS; this separates the run tree they are collected from.
     sed -e "s|^PROBLEMS_FILE=.*|PROBLEMS_FILE=${PROBLEMS}|" \
         -e "s|^CAMPAIGN_ARM=.*|CAMPAIGN_ARM=${arm}|" \
+        -e "s|^RUN_ROOT=.*|RUN_ROOT=\${SCRATCH:-/iopsstor/scratch/cscs/\$USER}/hpcagent-bench-runs/${EXPERIMENT}-${STAMP}|" \
         ".env.${BASE_ENV[${model}]}" >"${env}"
     {
         echo "HPCAGENT_BENCH_RECORD_EXPERIMENT=${EXPERIMENT}"
@@ -72,7 +79,9 @@ submit_arm() {
 # arms is 12 on top of whatever else is running, and more importantly an A/B is only readable if
 # both arms met the same machine -- a judge's timings move with what else is on the node.
 SUBMITTED_JID=""
-chain=""
+# DEPEND_ON chains this whole submission behind an existing job -- beverin allows 36 nodes at once
+# and an arm that starts over that ceiling is an arm that never starts.
+chain="${DEPEND_ON:-}"
 for model in ${MODELS:-oss120b qwen38}; do
     for layout in kernel repo; do
         submit_arm "${model}" "${layout}" "${chain}"
