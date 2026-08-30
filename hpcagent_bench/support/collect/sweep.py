@@ -216,6 +216,22 @@ def shard_names(names: List[str],
     return sizing.pack_lpt(names, costs, total, ranks_per_node, node_ram_bytes)[index]
 
 
+#: Frameworks whose child must be SPAWNED rather than forked. Measured on the GPU track: the forked
+#: child deadlocked inside importlib -- `dace/__init__.py` line 20, a pure-Python import with no
+#: device call in it -- because fork() copies only the calling thread, so a module lock another
+#: parent thread was holding arrives in the child held by a thread that does not exist. The parent
+#: of a GPU sweep has more of those threads loaded (mpi4py, jaxlib and friends appear in its
+#: extension list), which is why the CPU arms fork cleanly against the same code path. spawn starts
+#: a fresh interpreter and inherits no locks; it costs a re-import per kernel, which is the price of
+#: the arm running at all.
+GPU_FRAMEWORK_MARKER = "gpu"
+
+
+def start_method_for(framework_names: List[str]) -> Optional[str]:
+    """``"spawn"`` when any framework is a GPU one, else ``None`` to keep the platform default."""
+    return "spawn" if any(GPU_FRAMEWORK_MARKER in name for name in framework_names) else None
+
+
 def run_framework_sweep(benchmark: str,
                         framework: str,
                         preset: str,
@@ -265,7 +281,8 @@ def run_framework_sweep(benchmark: str,
                        load_strict,
                        datatype,
                        variant=variant,
-                       label=benchname)
+                       label=benchname,
+                       mp_context=start_method_for(framework_names))
         if not r.ok:
             why = forked_failure_reason(r)
             print(f"[FAIL] {benchname}: {why}")
