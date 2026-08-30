@@ -80,16 +80,23 @@ def run_one(benchname: str,
             save_strict: bool,
             load_strict: bool,
             datatype: Optional[str],
-            variant: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+            variant: Optional[str] = None,
+            distributed: bool = False) -> Dict[str, Dict[str, Any]]:
     """Run ``benchname`` under each framework in ``framework_names`` (against NumPy); the unit of work
     forked per-kernel by the framework/sparse sweeps.
+
+    :param distributed: this process IS a rank of an MPI job, so leave the launcher variables alone
+        and let MPI come up. Default ``False`` -- the single-node residency, whose ranks are
+        independent shards -- because that is the case that DEADLOCKS if it guesses wrong, and a
+        default should fail safe rather than fail silently. The MPI residency passes ``True``.
 
     :returns: ``{framework_name: per_impl_timings}`` from :meth:`Test.run` (impl name -> python/native
         series, validated, failure reason). Picklable, so it survives the ``run_forked`` queue and lets
         a sharded sweep's CSV record WHICH pipeline/impl validated, not just whether the child survived.
     """
     # BEFORE the first framework import, which is what pulls DaCe in. See drop_mpi_launcher_vars.
-    drop_mpi_launcher_vars()
+    if not distributed:
+        drop_mpi_launcher_vars()
     results: Dict[str, Dict[str, Any]] = {}
     for name in framework_names:
         frmwrk = generate_framework(name, save_strict, load_strict)
@@ -274,9 +281,16 @@ def run_framework_sweep(benchmark: str,
                         variant: Optional[str] = None,
                         skip_existing: bool = False,
                         shard: Tuple[int, int] = (0, 1),
-                        csv_path: Optional[str] = None) -> List[str]:
+                        csv_path: Optional[str] = None,
+                        distributed: bool = False) -> List[str]:
     """Run the ``benchmark`` selection under ``framework``, forking EACH kernel; returns the list of
     kernels whose child failed. ``skip_existing`` drops kernels already fully recorded in the DB.
+
+    ``distributed`` names the RESIDENCY and is passed to every child: ``False`` (the default) is the
+    single-node sweep, whose ranks are independent shards and which must not let a forked child
+    bring MPI up; ``True`` is the MPI residency, where the process really is a rank and MPI is what
+    the launcher already prepared. Nothing infers this -- a wrong guess deadlocks in one direction
+    and aborts a collective in the other, so it is stated by the caller.
 
     ``shard=(index, count)`` restricts the selection to this rank's slice (see :func:`shard_names`),
     so a batch job can fan a selector ("all" / a track / a dwarf) out over ranks with no separate
@@ -310,6 +324,7 @@ def run_framework_sweep(benchmark: str,
                        load_strict,
                        datatype,
                        variant=variant,
+                       distributed=distributed,
                        label=benchname)
         if not r.ok:
             why = forked_failure_reason(r)

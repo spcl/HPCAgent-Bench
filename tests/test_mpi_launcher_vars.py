@@ -62,3 +62,25 @@ def test_the_list_still_covers_what_dace_triggers_on():
     missing = sorted(set(MPI_RANK_VARS) - set(MPI_LAUNCHER_VARS))
     assert not missing, (f"DaCe initializes MPI on {missing}, which the sweep no longer strips; "
                          f"add them to MPI_LAUNCHER_VARS")
+
+
+def test_the_distributed_residency_keeps_its_launcher_variables(launcher_env, monkeypatch):
+    """An MPI rank must NOT be stripped: MPI is what the launcher already prepared for it.
+
+    The two residencies fail in opposite directions -- a single-node child that lets MPI come up
+    deadlocks, and an MPI rank that does not aborts on its first collective with no traceback -- so
+    the switch is stated by the caller and defaults to the one that fails safe.
+    """
+    import hpcagent_bench.support.collect.sweep as sweep
+
+    called = []
+    monkeypatch.setattr(sweep, "drop_mpi_launcher_vars", lambda: called.append(True) or [])
+    monkeypatch.setattr(sweep, "generate_framework", lambda *a, **k: None)
+    monkeypatch.setattr(sweep, "Benchmark", lambda *a, **k: None)
+    monkeypatch.setattr(sweep, "Test", lambda *a, **k: type("T", (), {"run": lambda *_, **__: {}})())
+
+    sweep.run_one("k", [], "S", False, 1, 1.0, True, False, False, None, distributed=True)
+    assert called == [], "an MPI rank had its launcher variables stripped"
+
+    sweep.run_one("k", [], "S", False, 1, 1.0, True, False, False, None)
+    assert called == [True], "the single-node default did not strip"
