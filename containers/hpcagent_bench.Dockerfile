@@ -104,6 +104,11 @@ RUN set -eu; \
 COPY containers/build-hptt.sh /build-hptt.sh
 RUN sh /build-hptt.sh
 
+# TBLIS (tensor contraction): also unpackaged. Sits beside HPTT rather than replacing it -- HPTT
+# permutes, TBLIS contracts without permuting into a BLAS call. Reached by `request_tblis`.
+COPY containers/build-tblis.sh /build-tblis.sh
+RUN sh /build-tblis.sh
+
 # Python deps. requirements/<HW>.txt drives each variant. requirements/optional.txt (apache-tvm +
 # mpi4py) is CPU-ONLY here: cpu.txt keeps those two out so it installs on macOS arm64, while the
 # nvidia/amd requirement files fold apache-tvm + mpi4py inline. mpi4py MUST source-build against THIS
