@@ -188,7 +188,7 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "prefix": "dc",
         "postfix": "dace",
         "arch": "cpu",
-        "pipelines": ("strict_cpu", ),
+        "pipelines": ("parallel_cpu", ),
         "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
     },
     "dace_gpu": {
@@ -199,50 +199,31 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "arch": "gpu",
         # GPU searches upstream ``autoopt``, not ``canonicalize``: it is the pipeline this column
         # has always been scored on, and the canonicalize GPU path is its own flavor below.
-        "pipelines": ("strict", "parallel", "autoopt"),
+        "pipelines": ("parallel_gpu", ),
         "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
     },
-    # ONE pipeline each. A search reports the winner, which is the right answer for "how fast is
-    # DaCe" and the wrong one for "how fast is THIS optimizer" -- comparing pipelines needs each to
-    # be measured on every kernel, including the ones where it loses.
-    #
-    # ``dace_cpu_parallel`` is the portable one: LoopToMap/MapCollapse/MapFusion are upstream
-    # transformations, so this flavor runs on stock DaCe as well as on spcl/dace@extended, and is
-    # the only column that can be measured on both to separate "the fork's optimizer is better"
-    # from "the fork's DaCe is different".
-    # ``simplify`` alone, no optimizer. Isolates the one question "does every SDFG in the track
-    # survive simplification with its numbers intact" from every later pipeline that could mask a
-    # simplify defect by rewriting the same graph again.
-    "dace_cpu_simplify": {
-        "base": "dace",
-        "full_name": "DaCe CPU simplify",
-        "prefix": "dc",
-        "postfix": "dace",
-        "arch": "cpu",
-        "pipelines": ("strict", ),
-        "column": "dace_cpu",
-        "flavor": "simplify",
-        "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
-    },
-    "dace_cpu_parallel": {
-        "base": "dace",
-        "full_name": "DaCe CPU parallel",
-        "prefix": "dc",
-        "postfix": "dace",
-        "arch": "cpu",
-        "pipelines": ("parallel", ),
-        "column": "dace_cpu",
-        "flavor": "parallel",
-        "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
-    },
+    # Upstream DaCe's own auto_optimize. The only columns that run unchanged on a stock PyPI/main
+    # DaCe as well as on spcl/dace@extended, which is what separates "the fork's optimizer is
+    # better" from "the fork's DaCe is different".
     "dace_cpu_autoopt": {
         "base": "dace",
         "full_name": "DaCe CPU auto_optimize",
         "prefix": "dc",
         "postfix": "dace",
         "arch": "cpu",
-        "pipelines": ("autoopt", ),
+        "pipelines": ("autoopt_cpu", ),
         "column": "dace_cpu",
+        "flavor": "autoopt",
+        "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
+    },
+    "dace_gpu_autoopt": {
+        "base": "dace",
+        "full_name": "DaCe GPU auto_optimize",
+        "prefix": "dc",
+        "postfix": "dace",
+        "arch": "gpu",
+        "pipelines": ("autoopt_gpu", ),
+        "column": "dace_gpu",
         "flavor": "autoopt",
         "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
     },
@@ -252,34 +233,9 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "prefix": "dc",
         "postfix": "dace",
         "arch": "cpu",
-        "pipelines": ("canonicalize", ),
+        "pipelines": ("canon_cpu", ),
         "column": "dace_cpu",
         "flavor": "canonicalize",
-        "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
-    },
-    # GPU counterparts. The offload is part of the pipeline, not a flag on top of it: ``autoopt``
-    # offloads inside ``auto_optimize``, ``canonicalize`` offloads between canonicalize and
-    # finalize, and ``parallel`` is offloaded by the generic tail in DaceFramework._prepare_gpu.
-    "dace_gpu_parallel": {
-        "base": "dace",
-        "full_name": "DaCe GPU parallel",
-        "prefix": "dc",
-        "postfix": "dace",
-        "arch": "gpu",
-        "pipelines": ("parallel", ),
-        "column": "dace_gpu",
-        "flavor": "parallel",
-        "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
-    },
-    "dace_gpu_autoopt": {
-        "base": "dace",
-        "full_name": "DaCe GPU auto_optimize",
-        "prefix": "dc",
-        "postfix": "dace",
-        "arch": "gpu",
-        "column": "dace_gpu",
-        "flavor": "autoopt",
-        "pipelines": ("autoopt", ),
         "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
     },
     "dace_gpu_canonicalize": {
@@ -288,7 +244,7 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "prefix": "dc",
         "postfix": "dace",
         "arch": "gpu",
-        "pipelines": ("canonicalize", ),
+        "pipelines": ("canon_gpu", ),
         "column": "dace_gpu",
         "flavor": "canonicalize",
         "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),

@@ -25,9 +25,6 @@ init:
   - w
   - x
   - Lx
-  scalars:
-    dst: 0
-    src: 0
   dtypes:
     dst: int64
     src: int64

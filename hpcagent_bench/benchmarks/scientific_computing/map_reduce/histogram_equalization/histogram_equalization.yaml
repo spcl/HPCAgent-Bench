@@ -32,7 +32,6 @@ init:
   - out
   scalars:
     nbins: 256
-    img: 0
   dtypes:
     img: uint8
   func_name: initialize

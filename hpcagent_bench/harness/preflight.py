@@ -24,9 +24,9 @@ from hpcagent_bench.flags import AutoparVerdict, Mode
 #: model in the loop. An agent column needs the inference and judge roles such a job has no
 #: allocation for, so naming one here is a submission error, not a runtime one.
 DETERMINISTIC_FRAMEWORKS: Tuple[str, ...] = ("numpy", "polly", "pluto", "cc", "cc_autopar", "llvm", "fortran",
-                                             "fortran_autopar", "flang", "dace_cpu", "dace_cpu_parallel",
-                                             "dace_cpu_autoopt", "dace_cpu_canonicalize", "dace_gpu",
-                                             "dace_gpu_parallel", "dace_gpu_autoopt", "dace_gpu_canonicalize")
+                                             "fortran_autopar", "flang", "dace_cpu", "dace_cpu_autoopt",
+                                             "dace_cpu_canonicalize", "dace_gpu", "dace_gpu_autoopt",
+                                             "dace_gpu_canonicalize")
 
 #: Autopar column -> the capability probe that decides whether it is one in fact as well as name.
 #:
@@ -60,7 +60,10 @@ def needs_canonicalize(frameworks: Sequence[str]) -> List[str]:
         meta = FRAMEWORK_META.get(name, {})
         if meta.get("base") != "dace":
             continue
-        if "canonicalize" in meta.get("pipelines", DEFAULT_PIPELINES):
+        # ``canon_cpu`` / ``canon_gpu``, by prefix: the pipelines are named per target now, so an
+        # equality test against "canonicalize" silently matched nothing and every canonicalize
+        # column skipped its fork probe.
+        if any(p.startswith("canon") for p in meta.get("pipelines", DEFAULT_PIPELINES)):
             out.append(name)
     return out
 
@@ -96,8 +99,8 @@ def check_dace_pipeline() -> str:
     Canonicalize + finalize exists only on spcl/dace@extended. Checked here so a job dies with the
     cause named, rather than hundreds of kernels deep with a canonicalize column silently scored on
     the weaker upstream ``auto_optimize``. Only columns that ASK for canonicalize are gated:
-    ``dace_cpu_parallel`` is upstream transformations end to end and is meant to run on stock DaCe,
-    which is exactly how the fork's optimizer gets an honest same-corpus comparison."""
+    ``dace_cpu_autoopt`` IS upstream ``auto_optimize`` and is meant to run on stock DaCe, which is
+    exactly how the fork's optimizer gets an honest same-corpus comparison."""
     try:
         __import__("dace.transformation.passes.canonicalize.pipeline", fromlist=["canonicalize"])
     except ImportError as exc:

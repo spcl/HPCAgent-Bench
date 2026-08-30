@@ -32,8 +32,6 @@ init:
   - res_density
   - res_momentum
   - res_energy
-  scalars:
-    neigh: 0
   dtypes:
     neigh: int64
   func_name: initialize

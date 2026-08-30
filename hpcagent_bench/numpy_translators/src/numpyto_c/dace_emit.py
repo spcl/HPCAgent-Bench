@@ -1879,10 +1879,24 @@ def freeze_pinned_extent_scalars(kir):
     The scalar stays a PARAMETER of the emitted program, so the binding and the ABI are unchanged;
     it is simply no longer read. Floats are excluded: an extent is an integer, and a float scalar
     reached through the chain is a tolerance or a scale, not a size.
+
+    Two names are never substituted, and both were caught as regressions rather than predicted:
+
+    * one a DECLARED ARRAY SHAPE mentions. nbody declares ``KE: (Nt + 1,)`` and also lists ``Nt``
+      under scalars, so ``Nt`` has to be a dc.symbol -- the existing direct scan promotes it. Give
+      the body the literal instead and the declaration still says ``Nt + 1`` while the body says
+      ``1``; the frontend answers "Cannot reassign value to variable KE".
+    * one that IS a declared array. cfd lists ``neigh`` under scalars AND under arrays with shape
+      ``(ncells, 4)``. It is an array; substituting a scalar's value for it replaces the array with
+      an integer, and a local derived from it becomes an undefined name.
     """
     scalars = {s.name: s for s in kir.scalars}
     if not scalars:
         return kir
+    declared = {a.name for a in kir.arrays}
+    for array in kir.arrays:
+        for token in array.shape:
+            declared.update(_IDENT_RE.findall(str(token)))
     probe = NormalizeReshape().visit(copy.deepcopy(kir.tree))
     seeds: set = set()
     for node in ast.walk(probe):
@@ -1895,7 +1909,8 @@ def freeze_pinned_extent_scalars(kir):
     frozen = {
         name: scalars[name].value
         for name in shape_reaching_names(probe, seeds)
-        if name in scalars and scalars[name].dtype.startswith(("int", "uint")) and type(scalars[name].value) is int
+        if name in scalars and name not in declared and scalars[name].dtype.startswith((
+            "int", "uint")) and type(scalars[name].value) is int
     }
     if not frozen:
         return kir

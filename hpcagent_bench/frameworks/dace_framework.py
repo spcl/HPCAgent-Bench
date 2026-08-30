@@ -423,80 +423,84 @@ class SdfgPipeline:
     parent: Optional[str]
     transform: Callable[[Any, Dict[str, Any]], None]
     finalized: bool = False
-
-
-def pipeline_strict(sdfg: Any, ctx: Dict[str, Any]) -> None:
-    """Phase 1 -- ``simplify`` and nothing else.
-
-    ``apply_strict_transformations`` was the old spelling and forwards to ``simplify`` with a
-    DeprecationWarning; call the real name. A wrong number from THIS pipeline is in the emitted
-    DaCe program or in simplify, since no optimizer has run.
-    """
-    sdfg.simplify()
-
-
-def pipeline_fusion(sdfg: Any, ctx: Dict[str, Any]) -> None:
-    """Phase 2 -- repeated MapFusion + strict cleanup."""
-    sdfg.apply_transformations_repeated([ctx["MapFusion"]])
-    sdfg.apply_strict_transformations()
+    #: DaCe config overrides this pipeline compiles under, as ``{(section, ..., key): value}``. The
+    #: CODE GENERATOR is part of what a column measures, not an ambient setting: ``canon`` is scored
+    #: on the readable generator (which tree-reduces and lifts its own explicit copies), while
+    #: ``parallel`` is scored on the classic one with neither, which is the configuration whose
+    #: output is byte-identical to upstream and therefore comparable against it. Applied around the
+    #: transform AND the compile, since these decide codegen rather than the graph.
+    config: Tuple[Tuple[Tuple[str, ...], Any], ...] = ()
 
 
 def pipeline_parallel(sdfg: Any, ctx: Dict[str, Any]) -> None:
-    """Phase 3 -- LoopToMap / MapCollapse fixpoint + MapFusion cleanup."""
-    dace = ctx["dace"]
-    LoopToMap = ctx["LoopToMap"]
-    MapCollapse = ctx["MapCollapse"]
-    MapFusion = ctx["MapFusion"]
-    try:
-        strict_xforms = dace.transformation.simplification_transformations()
-    except Exception:
-        strict_xforms = None
-    for sd in sdfg.all_sdfgs_recursive():
-        propagation.propagate_states(sd)
-    if strict_xforms:
-        sdfg.apply_transformations_repeated([LoopToMap, MapCollapse] + strict_xforms)
-    else:
-        num = 1
-        while num > 0:
-            num = sdfg.apply_transformations_repeated([LoopToMap, MapCollapse])
-            sdfg.simplify()
-    sdfg.apply_transformations_repeated([MapFusion])
+    """The parallelization pipeline, CPU or GPU.
 
+    The stage list is the one CloudSC is driven with, which dace-fortran arrived at first. What
+    stood here before was a strict subset of it: no ``UniqueLoopIterators``, no scalar fission, no
+    length-one-array conversion, plain vertical ``MapFusion`` instead of ``FullMapFusion``, and
+    ``simplify`` ahead of the unroll rather than after it. The column therefore reported DaCe as
+    WEAKER than that pipeline actually drives it -- durbin fuses to 3 maps under this list and
+    reported 5 under the old one.
 
-def pipeline_auto_opt(sdfg: Any, ctx: Dict[str, Any]) -> None:
-    """Upstream DaCe's ``auto_optimize``: LICM + MapFusion + tiling + vectorize, plus the GPU
-    offload when the target is GPU. Available on every DaCe, fork or not."""
-    opt = ctx["opt"]
-    opt.auto_optimize(sdfg, ctx["device"], symbols=ctx.get("symbols", {}), use_gpu_storage=True)
+    ``UniqueLoopIterators`` is the one whose absence changes the answer rather than the speed:
+    shared iterator names make ``LoopToMap`` refuse merged siblings, so loops that should have
+    become parallel maps stayed sequential.
 
+    On GPU the offload runs LAST, after every CPU-side optimization: the maps are formed, collapsed
+    and fused on the host graph first, and only the finished map structure is moved to the device.
 
-#: Rounds of (MapCollapse, MapFusion, StateFusionExtended) the strict-CPU pipeline runs. Two, not a
-#: fixed point: the three feed each other (a fusion exposes a collapse, a collapse exposes a state
-#: fusion), and the second round is where that settles on this corpus.
-STRICT_CPU_FUSION_ROUNDS = 2
+    WRITTEN OUT HERE, with no dependency on dace-fortran. Sharing the code would mean taking its
+    ``dace @ git+...@FaCe`` pin, which would replace the spcl/dace@extended install every other
+    column runs on; and this list has to be free to follow THIS corpus anyway, which is a different
+    workload from CloudSC. Only the idea is borrowed.
 
-
-def pipeline_strict_cpu(sdfg: Any, ctx: Dict[str, Any]) -> None:
-    """The numerical-correctness gate: the parallelization pipeline CloudSC is driven with.
-
-    ``simplify`` -> ``ShortLoopUnroll`` -> ``LoopToMap`` -> (``MapCollapse`` + ``MapFusion`` +
-    ``StateFusionExtended``) x :data:`STRICT_CPU_FUSION_ROUNDS`.
-
-    Separate from :func:`pipeline_strict` rather than a change to it: ``strict`` is the parent of
-    ``fusion``/``parallel``/``autoopt`` and the control the other columns are read against, so
-    editing it would move every column at once. Wrong numbers HERE are in the emitted DaCe program
-    or in simplify -- no optimizer has run yet -- which is what separates a translator bug from an
-    optimizer bug.
+    Two stages of that pipeline are deliberately not here. Its scalar-fission wrapper exists to
+    spare Fortran ABI-proxy transients, which a Python-frontend SDFG does not have, so the bare
+    ``ScalarFission`` pipeline is the whole content; and ``MakeTransientsPersistent`` does not exist
+    on extended at all.
     """
     from dace.transformation.interstate.state_fusion_with_happens_before import StateFusionExtended
+    from dace.transformation.pass_pipeline import Pipeline
+    from dace.transformation.passes.full_map_fusion import FullMapFusion
+    from dace.transformation.passes.length_one_array_scalar_conversion import ConvertLengthOneArraysToScalars
     from dace.transformation.passes.parallelization_prep import ShortLoopUnroll
-    sdfg.simplify()
+    from dace.transformation.passes.scalar_fission import ScalarFission
+    from dace.transformation.passes.unique_loop_iterators import UniqueLoopIterators
+
+    ConvertLengthOneArraysToScalars(preserve_abi=True).apply_pass(sdfg, {})
     # Before LoopToMap, not after: a constant-trip loop that is still a loop is not a Map candidate,
     # and unrolling it first is what lets the fusion rounds see one flat body.
     ShortLoopUnroll().apply_pass(sdfg, {})
+    UniqueLoopIterators().apply_pass(sdfg, {})
+    # ScalarFission needs its ScalarWriteShadowScopes analysis; a bare apply_pass gets an empty
+    # pipeline_results and KeyErrors, so the Pipeline is what resolves depends_on() first.
+    Pipeline([ScalarFission()]).apply_pass(sdfg, {})
+    sdfg.simplify()
+    sdfg.apply_transformations_repeated(StateFusionExtended)
     sdfg.apply_transformations_repeated([ctx["LoopToMap"]])
-    for _ in range(STRICT_CPU_FUSION_ROUNDS):
-        sdfg.apply_transformations_repeated([ctx["MapCollapse"], ctx["MapFusion"], StateFusionExtended])
+    sdfg.apply_transformations_repeated(StateFusionExtended)
+    for _ in range(PARALLEL_FUSION_ROUNDS):
+        # FullMapFusion, not ctx["MapFusion"]: vertical AND horizontal to a fixed point. Horizontal
+        # fuses maps that only share an INPUT, with no producer/consumer edge between them, which
+        # vertical fusion cannot see at all.
+        FullMapFusion().apply_pass(sdfg, {})
+        sdfg.apply_transformations_repeated([ctx["MapCollapse"]])
+    if ctx["device"] is dace_dtypes.DeviceType.GPU:
+        from dace.transformation.passes.canonicalize.finalize import offload_to_gpu
+        offload_to_gpu(sdfg)
+
+
+def pipeline_auto_opt(sdfg: Any, ctx: Dict[str, Any]) -> None:
+    """Upstream DaCe's ``auto_optimize``: LICM + MapFusion + tiling + vectorize, plus the GPU offload
+    when the target is GPU. Available on every DaCe, fork or not, which is what makes it the column
+    that separates "the fork's optimizer is better" from "the fork's DaCe is different"."""
+    ctx["opt"].auto_optimize(sdfg, ctx["device"], symbols=ctx.get("symbols", {}), use_gpu_storage=True)
+
+
+#: Rounds of (FullMapFusion, MapCollapse) the parallel pipeline runs. Two, not a fixed point: the
+#: two feed each other (a fusion exposes a collapse, a collapse exposes a fusion), and the second
+#: round is where that settles on this corpus.
+PARALLEL_FUSION_ROUNDS = 2
 
 
 def pipeline_canonicalize(sdfg: Any, ctx: Dict[str, Any]) -> None:
@@ -533,20 +537,61 @@ def pipeline_canonicalize(sdfg: Any, ctx: Dict[str, Any]) -> None:
     finalize_for_target(sdfg, target=target)
 
 
+#: THREE optimizers x TWO targets, and nothing else. All three are device-aware and all three
+#: offload LAST, after every CPU-side optimization, so a GPU column is its CPU column's map
+#: structure moved to the device rather than a differently-optimized graph.
+#:
+#: What used to be here also had ``strict`` (simplify alone) and ``fusion``, which were RUNGS of a
+#: search rather than optimizers -- and a search reports its winner, which answers "how fast is
+#: DaCe" and not "how fast is THIS optimizer". Each pipeline is now named and scored on every
+#: kernel, including the ones where it loses. ``autoopt`` stays because it is upstream DaCe's own
+#: optimizer and runs on a stock install, so it is the only column that separates a better optimizer
+#: in the fork from a different DaCe in the fork.
+#:
+#: Every entry is ``finalized``: each ends in a graph ready for codegen, with no later rung to
+#: inherit a finalization from.
+#: ``parallel`` and ``autoopt`` are scored on the CLASSIC generator with tree reductions and the
+#: explicit-copy lift both off -- the configuration DaCe documents as byte-identical to upstream,
+#: which is what makes those two columns comparable against a stock install. ``canon`` is scored on
+#: the readable generator, which tree-reduces and lifts its own copies regardless of the flags.
+CLASSIC_CODEGEN: Tuple[Tuple[Tuple[str, ...], Any], ...] = ((("compiler", "cpu", "implementation"),
+                                                             "legacy"), (("compiler", "emit_tree_reductions"), False),
+                                                            (("compiler", "cpu", "explicit_copy"), False))
+READABLE_CODEGEN: Tuple[Tuple[Tuple[str, ...], Any],
+                        ...] = ((("compiler", "cpu", "implementation"), "experimental_readable"), )
+
+
+def apply_pipeline_config(pipe: "SdfgPipeline") -> None:
+    """Set the pipeline's codegen configuration GLOBALLY, for the rest of the process.
+
+    Deliberately not scoped to the transform. The generator is chosen at CODEGEN time, which happens
+    later and elsewhere (compile, and the replay a report reruns), so a context manager around the
+    transform would set the flag exactly where it is not read. Each flavor names one pipeline, so a
+    single run has one configuration and nothing to interleave; running two configurations in one
+    process is the caller's business to sequence, not this function's to defend against.
+
+    ``Config.set`` and not ``set_temporary``: an environment variable still wins over both, so a
+    DACE_compiler_cpu_implementation in the environment overrides the column's own choice.
+    """
+    for path, value in pipe.config:
+        dace.Config.set(*path, value=value)
+
+
 DACE_PIPELINES: Tuple[SdfgPipeline, ...] = (
-    SdfgPipeline("strict", parent=None, transform=pipeline_strict),
-    SdfgPipeline("strict_cpu", parent=None, transform=pipeline_strict_cpu, finalized=True),
-    SdfgPipeline("fusion", parent="strict", transform=pipeline_fusion),
-    SdfgPipeline("parallel", parent="fusion", transform=pipeline_parallel),
-    SdfgPipeline("autoopt", parent="strict", transform=pipeline_auto_opt, finalized=True),
-    SdfgPipeline("canonicalize", parent="strict", transform=pipeline_canonicalize, finalized=True),
+    SdfgPipeline("parallel_cpu", None, pipeline_parallel, finalized=True, config=CLASSIC_CODEGEN),
+    SdfgPipeline("parallel_gpu", None, pipeline_parallel, finalized=True, config=CLASSIC_CODEGEN),
+    SdfgPipeline("canon_cpu", None, pipeline_canonicalize, finalized=True, config=READABLE_CODEGEN),
+    SdfgPipeline("canon_gpu", None, pipeline_canonicalize, finalized=True, config=READABLE_CODEGEN),
+    SdfgPipeline("autoopt_cpu", None, pipeline_auto_opt, finalized=True, config=CLASSIC_CODEGEN),
+    SdfgPipeline("autoopt_gpu", None, pipeline_auto_opt, finalized=True, config=CLASSIC_CODEGEN),
 )
 
 PIPELINES_BY_NAME: Dict[str, SdfgPipeline] = {p.name: p for p in DACE_PIPELINES}
 
-#: Flavors that do not name their own ``pipelines`` score these. ``fusion`` is only ``parallel``'s
-#: intermediate and is never scored on its own.
-DEFAULT_PIPELINES: Tuple[str, ...] = ("strict", "parallel", "canonicalize")
+#: Flavors that do not name their own ``pipelines`` score this. Every dace flavor names exactly one
+#: of the four, so this is the fallback for a flavor that forgot to -- CPU parallel, the closest
+#: thing to a plain "run DaCe" answer.
+DEFAULT_PIPELINES: Tuple[str, ...] = ("parallel_cpu", )
 
 
 def needed_pipelines(scored: Sequence[str]) -> List[str]:
@@ -725,6 +770,7 @@ class DaceFramework(Framework):
         for name in needed_pipelines(self.scored_pipelines()):
             pipe = PIPELINES_BY_NAME[name]
             try:
+                apply_pipeline_config(pipe)
                 parent = produced.get(pipe.parent, base_sdfg) if pipe.parent else base_sdfg
                 sdfg = copy.deepcopy(parent)
                 sdfg._name = pipe.name

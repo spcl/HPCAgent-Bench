@@ -42,11 +42,12 @@ from numpyto_common import dtypes
 from numpyto_common.ir import _COMPLEX_FOR_FLOAT, KernelIR, SymbolDesc
 from numpyto_common.ordered import OrderedSet
 from numpyto_common.numpy_desugar import _np_linalg_attr
-from numpyto_common.lib_nodes import (ArrayMethodRewriter, DIM_IDENT_RE, SHAPE_READ_RE, LibNodeRewriter,
-                                      MESHGRID_AXIS_KW, NP_ZEROS_ALIASES, UNARY_C_MATH, _broadcast_extents, _const_int,
-                                      _is_integer_expr, _iter_extent_of, _scalarize_at_iters, _slice_step_any,
-                                      _step_is_negative, _step_node, expand_meshgrid, extent_is_scalar,
-                                      reset_temp_counters, shape_exprs_equal, substitute_dim_aliases)
+from numpyto_common.lib_nodes import (ARRAY_METHOD_SHAPE_OPS, ArrayMethodRewriter, DIM_IDENT_RE, SHAPE_READ_RE,
+                                      LibNodeRewriter, MESHGRID_AXIS_KW, NP_ZEROS_ALIASES, UNARY_C_MATH,
+                                      _broadcast_extents, _const_int, _is_integer_expr, _iter_extent_of,
+                                      _scalarize_at_iters, _slice_step_any, _step_is_negative, _step_node,
+                                      expand_meshgrid, extent_is_scalar, reset_temp_counters, shape_exprs_equal,
+                                      substitute_dim_aliases)
 from numpyto_common.frontend import (_collect_inlined_scalar_defs, _dtype_from_constructor, _resolve_shape_attr_tokens,
                                      _substitute_inlined_scalar_defs, fold_shape_expr)
 
@@ -5086,6 +5087,44 @@ class _LiftFreshArrayFromSlices(ast.NodeTransformer):
 #: intrinsic router (``csqrt`` on a real, wrong for a negative operand).
 _REAL_FROM_COMPLEX: FrozenSet[str] = frozenset({"real", "imag", "abs", "absolute", "angle", "hypot", "sign"})
 
+#: Array METHODS that carry their operand's element type through: the value being typed is the
+#: RECEIVER, which is nowhere in ``node.args``. ``ARRAY_METHOD_SHAPE_OPS`` is the shared list of
+#: methods whose numpy twin means the same thing; the reshaping trio is not in it (each has its own
+#: emit branch) and is just as dtype-preserving.
+_DTYPE_PRESERVING_METHODS: FrozenSet[str] = ARRAY_METHOD_SHAPE_OPS | frozenset({"reshape", "ravel", "flatten"})
+
+#: The same rearrange-don't-convert ops in their ``np.<name>(x)`` spelling, where the value being
+#: typed is the FIRST ARGUMENT instead of the receiver. The ``*_like`` allocators belong here for
+#: the same reason -- they take their element type from the PROTOTYPE -- and they matter because
+#: the whole-array pass rewrites ``Y.copy()`` into ``np.empty_like(Y)`` plus a copy loop before
+#: any of this runs, so ``copy`` alone never sees the source again.
+_DTYPE_PRESERVING_FUNCS: FrozenSet[str] = frozenset({
+    "copy", "ascontiguousarray", "asarray", "array", "transpose", "conj", "conjugate", "empty_like", "zeros_like",
+    "ones_like", "full_like"
+})
+
+
+def _dtype_carrying_operands(call: ast.Call) -> Tuple[str, ...]:
+    """The array NAMES whose element dtype ``call`` could carry, best first.
+
+    The METHOD spelling holds the value in its RECEIVER (``Y.copy()``, ``Y[:, j].reshape(p, q)``)
+    and the FUNCTION spelling in its first argument (``np.copy(Y)``, ``np.empty_like(Y)``); a
+    SLICED receiver still has Y's element type. Both are offered because ``copy`` is spelled both
+    ways -- ``np.copy(Y)`` resolves the ``np`` receiver to nothing and falls through to ``Y``.
+    Empty for a call that CONVERTS (an explicit ``dtype=``, ``astype``) or is neither.
+    """
+    func = call.func
+    if not isinstance(func, ast.Attribute) or any(kw.arg == "dtype" for kw in call.keywords):
+        return ()
+    out: List[str] = []
+    for node in ([func.value] if func.attr in _DTYPE_PRESERVING_METHODS else
+                 []) + ([call.args[0]] if func.attr in _DTYPE_PRESERVING_FUNCS and call.args else []):
+        while isinstance(node, ast.Subscript):
+            node = node.value
+        if isinstance(node, ast.Name):
+            out.append(node.id)
+    return tuple(out)
+
 
 def _walk_complex(node: ast.AST, name_dtype: "Callable[[str], Optional[str]]") -> Optional[str]:
     """Return a complex dtype string if ``node`` produces a complex value, else
@@ -5124,12 +5163,20 @@ def _walk_complex(node: ast.AST, name_dtype: "Callable[[str], Optional[str]]") -
         # complex->real narrowing pass unsoundly demotes it (compiles in C by
         # dropping the imaginary part, but C++ rejects the assignment).
         ctor_dt = _dtype_from_constructor(node)
-        if ctor_dt is not None and ctor_dt.startswith("complex"):
-            return ctor_dt
+        if ctor_dt is not None:
+            # An explicit dtype DECIDES, both ways: ``z.astype(np.float64)`` is real however
+            # complex ``z`` is, so this must return rather than fall through to the receiver.
+            return ctor_dt if ctor_dt.startswith("complex") else None
         for a in node.args:
             r = _walk_complex(a, name_dtype)
             if r:
                 return r
+        # A dtype-preserving METHOD holds its value in the receiver, not in the arguments:
+        # ``exxbuff.copy()`` / ``w[:, j].reshape(p, q)`` walked to None here, so the local they
+        # bind read REAL and _RealConjDropper deleted the ``np.conj`` around it -- vexx_k's
+        # exchange term, computed without its conjugate and wrong on every native backend.
+        if isinstance(node.func, ast.Attribute) and fn in _DTYPE_PRESERVING_METHODS:
+            return _walk_complex(node.func.value, name_dtype)
         return None
     # Unhandled node type -- fall back to a conservative whole-subtree scan.
     for sub in ast.walk(node):
@@ -5249,7 +5296,9 @@ def _scalar_expr_complex(expr: ast.AST, local_dtypes: Dict[str, str]) -> bool:
     return False
 
 
-def _seed_complex_work_dtypes(tree: ast.AST, local_dtypes: Dict[str, str]) -> None:
+def _seed_complex_work_dtypes(tree: ast.AST,
+                              local_dtypes: Dict[str, str],
+                              array_dtypes: Optional[Dict[str, str]] = None) -> None:
     """Seed ``local_dtypes`` for complex work-array temps and their directly
     derived scalar reads, before ``promote-true-division`` and ``libnode-expand``
     consume those dtypes.
@@ -5277,6 +5326,17 @@ def _seed_complex_work_dtypes(tree: ast.AST, local_dtypes: Dict[str, str]) -> No
         if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name)
     ]
 
+    def known(name: Optional[str]) -> Optional[str]:
+        """The recorded element dtype of ``name`` -- a local, else a declared KERNEL array.
+
+        A parameter's dtype lives outside ``local_dtypes``, so a local taken off one
+        (``exxbuff_w = exxbuff.copy()``) resolved to nothing and stayed untyped, which
+        :class:`_RealConjDropper` reads as REAL."""
+        if name is None:
+            return None
+        dt = local_dtypes.get(name)
+        return dt if dt is not None else (array_dtypes or {}).get(name)
+
     def dtype_for(value: ast.expr) -> Optional[str]:
         if isinstance(value, ast.Call):
             # X = np.zeros/ones/empty/eye(shape, Y.dtype | np.complexNN)
@@ -5292,16 +5352,14 @@ def _seed_complex_work_dtypes(tree: ast.AST, local_dtypes: Dict[str, str]) -> No
             # rotation and returned zeros.
             if isinstance(value.func, ast.Attribute):
                 f = value.func
-                one_operand = ("copy", "ascontiguousarray", "asarray", "array", "transpose", "conj", "conjugate")
-                src = (f.value.id if f.attr == "copy" and isinstance(f.value, ast.Name) else value.args[0].id
-                       if f.attr in one_operand and value.args and isinstance(value.args[0], ast.Name) else None)
-                sdt = local_dtypes.get(src) if src else None
-                if sdt and sdt.startswith("complex"):
-                    return sdt
+                for src in _dtype_carrying_operands(value):
+                    sdt = known(src)
+                    if sdt and sdt.startswith("complex"):
+                        return sdt
                 if f.attr == "where" and len(value.args) == 3:
                     # Either arm decides it -- numpy promotes, so one complex arm is enough.
                     for arm in value.args[1:]:
-                        adt = local_dtypes.get(arm.id) if isinstance(arm, ast.Name) else None
+                        adt = known(arm.id) if isinstance(arm, ast.Name) else None
                         if adt and adt.startswith("complex"):
                             return adt
             # m = np.hypot/abs/real/imag(<complex ...>) -- a real-returning magnitude of a
@@ -5311,13 +5369,13 @@ def _seed_complex_work_dtypes(tree: ast.AST, local_dtypes: Dict[str, str]) -> No
             if fn in _REAL_FROM_COMPLEX:
                 for sub in ast.walk(value):
                     if isinstance(sub, ast.Name):
-                        bdt = local_dtypes.get(sub.id)
+                        bdt = known(sub.id)
                         if bdt and bdt.startswith("complex"):
                             return _REAL_FOR_COMPLEX.get(bdt, "float64")
             return None
         # z = A[scalar-index] -- inherit a complex array's element dtype
         if isinstance(value, ast.Subscript) and isinstance(value.value, ast.Name):
-            sdt = local_dtypes.get(value.value.id)
+            sdt = known(value.value.id)
             return sdt if sdt and sdt.startswith("complex") else None
         # ephi = apq / m -- a scalar BinOp/UnaryOp over complex operands
         if isinstance(value, (ast.BinOp, ast.UnaryOp)) and _scalar_expr_complex(value, local_dtypes):
@@ -6791,10 +6849,11 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
                 and isinstance(node.value.func, ast.Attribute)):
             f = node.value.func
             args = node.value.args
-            src = (f.value.id if f.attr == "copy" and isinstance(f.value, ast.Name) else
-                   args[0].id if f.attr in ("copy", "ascontiguousarray", "asarray", "array", "transpose", "conj",
-                                            "conjugate") and args and isinstance(args[0], ast.Name) else None)
-            dt = self.local_dtypes.get(src) if src else None
+            dt = None
+            for src in _dtype_carrying_operands(node.value):
+                dt = self.local_dtypes.get(src)
+                if dt:
+                    break
             if dt is None and f.attr == "where" and len(args) == 3:
                 # Either arm decides it: numpy promotes, so one complex arm makes the result complex.
                 for arm in args[1:]:
@@ -8043,7 +8102,7 @@ def _lp_seed_dtypes_and_harvest(ctx: LoweringContext) -> None:
     # signature array's ``.dtype`` -- BEFORE the true-division and libnode-expand
     # phases, which otherwise consume those still-untyped temps and mis-lower the
     # complex divide (``apq / m``) and the ``np.conj`` on the reduction matrices.
-    _seed_complex_work_dtypes(tree, ctx.local_dtypes)
+    _seed_complex_work_dtypes(tree, ctx.local_dtypes, {a.name: a.dtype for a in ctx.kir.arrays})
     # SSA-style rename for Names reassigned with different broadcast extents (hdiff
     # / vadv ``res = ...; res = ...`` with two distinct shapes). Runs BEFORE harvest
     # so each version registers under its own name and downstream passes (harvest /
