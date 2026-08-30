@@ -62,19 +62,20 @@ submit_arm() {
         echo "prepared ${arm} (${nodes} nodes)${dep:+ after ${dep}} -- not submitted"
         return
     fi
-    local jid
-    jid=$(sbatch --parsable ${dep:+--dependency="afterany:${dep}"} --nodes="${nodes}" \
+    SUBMITTED_JID=$(sbatch --parsable ${dep:+--dependency="afterany:${dep}"} --nodes="${nodes}" \
         --time="${TIME_LIMIT}" --job-name="${arm}" \
         --export=ALL,CLUSTER_ENV_FILE="${PWD}/${env}" beverin.sbatch)
-    echo "submitted ${arm} -> ${jid} (${nodes} nodes)"
-    printf '%s' "${jid}" >"/tmp/.gitscicomp-${model}-${layout}.jid"
+    echo "submitted ${arm} -> ${SUBMITTED_JID} (${nodes} nodes)"
 }
 
-first=""
-for layout in kernel repo; do
-    submit_arm oss120b "${layout}"
-    [[ -f "/tmp/.gitscicomp-oss120b-${layout}.jid" ]] && first="$(cat "/tmp/.gitscicomp-oss120b-${layout}.jid")"
-done
-for layout in kernel repo; do
-    submit_arm qwen38 "${layout}" "${first}"
+# One model's pair goes out together; the other chains behind it. Beverin allows 36 nodes and four
+# arms is 12 on top of whatever else is running, and more importantly an A/B is only readable if
+# both arms met the same machine -- a judge's timings move with what else is on the node.
+SUBMITTED_JID=""
+chain=""
+for model in ${MODELS:-oss120b qwen38}; do
+    for layout in kernel repo; do
+        submit_arm "${model}" "${layout}" "${chain}"
+    done
+    chain="${SUBMITTED_JID}"   # the next model waits on this one's last arm
 done
