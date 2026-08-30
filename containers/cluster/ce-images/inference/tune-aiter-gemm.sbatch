@@ -28,6 +28,9 @@ ulimit -c 0
 
 SCRATCH="${SCRATCH:-/capstor/scratch/cscs/ybudanaz/x86_64}"
 INFERENCE_EDF="${INFERENCE_EDF:-sglang-rocm-mi30x}"
+# The image's PATH omits its venv, so a bare python3 there has neither torch nor aiter --
+# name the interpreter, the same way run_cluster.sh does for the server itself.
+ENGINE_PYTHON="${SGLANG_PYTHON:-/opt/venv/bin/python3}"
 TUNE_DIR="${TUNE_DIR:-${SCRATCH}/aiter-tune}"
 UNTUNED="${UNTUNED:-${TUNE_DIR}/bf16_untuned_gemm.csv}"
 TUNED="${TUNED:-${TUNE_DIR}/bf16_tuned_gemm.csv}"
@@ -43,6 +46,15 @@ printf 'job:     %s\nshapes:  %s (%s rows)\nout:     %s\n\n' \
 srun --nodes=1 --ntasks=1 --exclusive --export=ALL --environment="${INFERENCE_EDF}" \
      --cpus-per-task="${SLURM_CPUS_ON_NODE:-64}" bash -c "
     set -Eeuo pipefail
+    ENGINE_PYTHON='${ENGINE_PYTHON}'
+    # Fall back rather than die if the venv moves in a later image: an interpreter that cannot
+    # import torch is the actual failure, so test for that, not for a path.
+    if ! \${ENGINE_PYTHON} -c 'import torch' >/dev/null 2>&1; then
+        for cand in /opt/venv/bin/python3 /usr/local/bin/python3 /usr/bin/python3 python3; do
+            if \${cand} -c 'import torch' >/dev/null 2>&1; then ENGINE_PYTHON=\${cand}; break; fi
+        done
+    fi
+    echo \"interpreter: \${ENGINE_PYTHON} (\$(\${ENGINE_PYTHON} -V 2>&1))\"
     export HOME='${CACHE_ROOT}/home' XDG_CACHE_HOME='${CACHE_ROOT}/xdg'
     export AITER_JIT_DIR='${CACHE_ROOT}/aiter' TOKENIZERS_PARALLELISM=false
     # The CE hands the step ROCR_VISIBLE_DEVICES; aiter's tuner reads HIP_VISIBLE_DEVICES, and
@@ -51,7 +63,7 @@ srun --nodes=1 --ntasks=1 --exclusive --export=ALL --environment="${INFERENCE_ED
         export HIP_VISIBLE_DEVICES=\"\${HIP_VISIBLE_DEVICES:-\${ROCR_VISIBLE_DEVICES}}\"
         unset ROCR_VISIBLE_DEVICES
     fi
-    root=\$(python3 -c 'import aiter, pathlib; print(pathlib.Path(aiter.__file__).resolve().parents[1])')
+    root=\$(\${ENGINE_PYTHON} -c 'import aiter, pathlib; print(pathlib.Path(aiter.__file__).resolve().parents[1])')
     echo \"aiter checkout: \${root}\"
     tuner=\"\${root}/csrc/gemm_a16w16/gemm_a16w16_tune.py\"
     # The tuner has moved between aiter releases; find it rather than pin a path that silently
@@ -62,7 +74,7 @@ srun --nodes=1 --ntasks=1 --exclusive --export=ALL --environment="${INFERENCE_ED
     [[ -n \"\${tuner}\" && -f \"\${tuner}\" ]] || { echo 'no gemm_a16w16_tune.py in this aiter build' >&2; exit 3; }
     echo \"tuner: \${tuner}\"
     cd \"\${root}\"
-    python3 \"\${tuner}\" --input_file '${UNTUNED}' --tuned_file '${TUNED}' 2>&1 | tail -40
+    \${ENGINE_PYTHON} \"\${tuner}\" --input_file '${UNTUNED}' --tuned_file '${TUNED}' 2>&1 | tail -40
 "
 if [[ -s "${TUNED}" ]]; then
     printf '\ntuned rows: %s\n' "$(($(wc -l <"${TUNED}") - 1))"

@@ -29,6 +29,9 @@ ulimit -c 0
 
 SCRATCH="${SCRATCH:-/capstor/scratch/cscs/ybudanaz/x86_64}"
 INFERENCE_EDF="${INFERENCE_EDF:-sglang-rocm-mi30x}"
+# The image's PATH omits its venv, so a bare python3 there has neither torch nor aiter --
+# name the interpreter, the same way run_cluster.sh does for the server itself.
+ENGINE_PYTHON="${SGLANG_PYTHON:-/opt/venv/bin/python3}"
 PREFIX="${FLYDSL_PREFIX:-${SCRATCH}/pyprefix/${INFERENCE_EDF}}"
 CACHE_ROOT="${JIT_CACHE_ROOT:-${SCRATCH}/.jit-cache}/${INFERENCE_EDF}"
 mkdir -p "${PREFIX}" "${CACHE_ROOT}/home" "${CACHE_ROOT}/xdg"
@@ -37,6 +40,15 @@ printf 'job:    %s\nprefix: %s\n\n' "${SLURM_JOB_ID}" "${PREFIX}"
 srun --nodes=1 --ntasks=1 --exclusive --export=ALL --environment="${INFERENCE_EDF}" \
      --cpus-per-task="${SLURM_CPUS_ON_NODE:-64}" bash -c "
     set -Eeuo pipefail
+    ENGINE_PYTHON='${ENGINE_PYTHON}'
+    # Fall back rather than die if the venv moves in a later image: an interpreter that cannot
+    # import torch is the actual failure, so test for that, not for a path.
+    if ! \${ENGINE_PYTHON} -c 'import torch' >/dev/null 2>&1; then
+        for cand in /opt/venv/bin/python3 /usr/local/bin/python3 /usr/bin/python3 python3; do
+            if \${cand} -c 'import torch' >/dev/null 2>&1; then ENGINE_PYTHON=\${cand}; break; fi
+        done
+    fi
+    echo \"interpreter: \${ENGINE_PYTHON} (\$(\${ENGINE_PYTHON} -V 2>&1))\"
     export HOME='${CACHE_ROOT}/home' XDG_CACHE_HOME='${CACHE_ROOT}/xdg'
     export PIP_CACHE_DIR='${CACHE_ROOT}/pip'
     if [[ -n \"\${ROCR_VISIBLE_DEVICES:-}\" ]]; then
@@ -44,17 +56,17 @@ srun --nodes=1 --ntasks=1 --exclusive --export=ALL --environment="${INFERENCE_ED
         unset ROCR_VISIBLE_DEVICES
     fi
     echo '=== interpreter and torch the wheel must match'
-    python3 -VV
-    python3 -c 'import torch; print(\"torch\", torch.__version__, \"hip\", torch.version.hip)'
+    \${ENGINE_PYTHON} -VV
+    \${ENGINE_PYTHON} -c 'import torch; print(\"torch\", torch.__version__, \"hip\", torch.version.hip)'
 
     echo '=== pip install flydsl'
     # No --upgrade of anything already in the image: a wheel that drags a different torch or
     # numpy into the prefix would shadow the image's and break serving in a way that looks like
     # a model bug. --no-deps first, then report what is missing rather than pulling it blind.
-    python3 -m pip install --no-cache-dir --target '${PREFIX}' --no-deps flydsl 2>&1 | tail -20
+    \${ENGINE_PYTHON} -m pip install --no-cache-dir --target '${PREFIX}' --no-deps flydsl 2>&1 | tail -20
 
     echo '=== import check'
-    PYTHONPATH='${PREFIX}':\${PYTHONPATH:-} python3 - <<'PY'
+    PYTHONPATH='${PREFIX}':\${PYTHONPATH:-} \${ENGINE_PYTHON} - <<'PY'
 import importlib, sys
 try:
     m = importlib.import_module('flydsl')
@@ -65,7 +77,7 @@ print('flydsl', getattr(m, '__version__', '(no __version__)'), 'at', m.__file__)
 PY
 
     echo '=== does aiter see a FlyDSL MoE path?'
-    PYTHONPATH='${PREFIX}':\${PYTHONPATH:-} AITER_USE_FLYDSL_MOE=1 python3 - <<'PY'
+    PYTHONPATH='${PREFIX}':\${PYTHONPATH:-} AITER_USE_FLYDSL_MOE=1 \${ENGINE_PYTHON} - <<'PY'
 import os
 try:
     import aiter
