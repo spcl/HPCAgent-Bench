@@ -865,7 +865,11 @@ def parse_kernel(numpy_py: pathlib.Path,
     if not HELPERS_KEPT_DISABLED:
         try:
             return build_kernel_ir(numpy_py, bench_info, config, precision, keep_helpers=True)
-        except Exception:  # noqa: BLE001 -- the un-inlined form is an optimisation; any refusal retries
+        except NotImplementedError:
+            # ONLY a declared refusal falls back. Catching everything is what hid a guaranteed
+            # NameError in _build_helper_kirs' shape-symbol branch: every kernel reaching it
+            # reported success while quietly emitting the inlined form. Anything other than a
+            # refusal is a bug in this path and has to be seen.
             pass
     return build_kernel_ir(numpy_py, bench_info, config, precision, keep_helpers=False)
 
