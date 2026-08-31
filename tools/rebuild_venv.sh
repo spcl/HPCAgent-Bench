@@ -25,8 +25,11 @@ printf 'interpreter: %s (%s)\nvenv:        %s\n\n' "${PY}" "$("${PY}" --version 
 "${VENV}/bin/python3" -m pip install --upgrade pip setuptools wheel
 
 # Tier 1 -- everything the login-side tooling and the format gates actually import.
+# islpy and z3-solver are tier 1, not tier 2: dace's analyses gate on them and every gate fails
+# CLOSED, so a venv without them silently canonicalizes to sequential loops instead of erroring.
 CORE=(numpy scipy pandas matplotlib ml_dtypes pyyaml jsonschema sympy blake3 sqlmodel jinja2
       cffi psutil py-cpuinfo GPUtil pygount ordered-set tree-sitter-language-pack
+      islpy z3-solver
       yapf fprettify clang-format pre-commit pytest)
 echo "=== tier 1: core + format gates ==="
 "${VENV}/bin/python3" -m pip install "${CORE[@]}"
@@ -46,7 +49,7 @@ echo "=== import check ==="
 "${VENV}/bin/python3" - <<'PY'
 import importlib
 mods = ["jinja2", "yaml", "numpy", "sympy", "jsonschema", "sqlmodel", "blake3",
-        "ordered_set", "psutil", "cpuinfo", "pygount", "yapf", "pytest"]
+        "ordered_set", "psutil", "cpuinfo", "pygount", "yapf", "pytest", "islpy", "z3"]
 bad = []
 for m in mods:
     try:

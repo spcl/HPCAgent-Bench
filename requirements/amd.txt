@@ -49,3 +49,14 @@ mpi4py
 # asserts must be a dep this file states.
 h5py
 netCDF4
+# islpy + z3-solver -- the solver backends dace's analyses gate on. Both ARE declared in
+# dace@extended's pyproject, so a fresh editable clone resolves them; an image built from an
+# older clone, or a tree used off PYTHONPATH, does not. Declared here so neither depends on the
+# clone's vintage. The failure mode is silent and one-directional -- every gate fails closed:
+# without islpy ``WavefrontSkew.apply_pass`` returns None on its first line, and without z3
+# ``smt_dependence.has_z3()`` is False so LoopToMap, BreakAntiDependence and LoopFission all
+# answer "cannot prove". Canonicalization then just emits sequential loops, with no diagnostic
+# anywhere. Measured 2026-08-31: islpy turns wavefront2d, wf_triangular and wf_north_west from
+# ``maps=0 loops=2`` into a skewed parallel Map, all three still numerically exact.
+islpy
+z3-solver
