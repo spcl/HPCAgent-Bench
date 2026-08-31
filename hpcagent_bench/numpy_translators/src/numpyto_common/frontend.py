@@ -4915,10 +4915,17 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
                 # ``calls`` pairs every call with the scope its arguments resolve against. A caller
                 # can only pass a shape symbol it holds itself, so a sibling that does not declare
                 # one cannot reach this helper -- refuse rather than emit a call naming an
-                # identifier that is not in scope there.
+                # identifier that is not in scope there. A caller holds a symbol its OWN array
+                # shapes name even when its signature never declared it: those become parameters
+                # of the emitted function by this very rule (conv2d_bias holds ``N``/``C_in``/
+                # ``C_out`` only through ``input``'s ``(N, H, W, C_in)``).
                 for owner, _ in calls:
                     oa, osc, osy = scope_of.get(id(owner), default_scope)
-                    held = {sy.name for sy in osy} | {a.name for a in oa} | {sc.name for sc in osc}
+                    held = ({sy.name
+                             for sy in osy} | {a.name
+                                               for a in oa} | {sc.name
+                                                               for sc in osc}
+                            | set(_shape_symbols(oa)))
                     absent = [sy for sy in extra_syms if sy not in held]
                     if absent:
                         raise NotImplementedError(
@@ -5012,7 +5019,11 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
         # declared symbol; a SIBLING helper holds only what its own signature received, so one
         # missing name would emit a call naming an identifier that is not in scope there.
         if extra_syms and owner_fn is not kernel_fn:
-            held = {sy.name for sy in osymbols} | {a.name for a in oarrays} | {sc.name for sc in oscalars}
+            held = ({sy.name
+                     for sy in osymbols} | {a.name
+                                            for a in oarrays} | {sc.name
+                                                                 for sc in oscalars}
+                    | set(_shape_symbols(oarrays)))
             absent = [sy for sy in extra_syms if sy not in held]
             if absent:
                 raise NotImplementedError(f"helper {hdef.name!r} needs shape symbols {absent}, which its calling "
