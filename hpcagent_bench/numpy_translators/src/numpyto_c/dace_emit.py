@@ -2592,7 +2592,9 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
         for sym_name in symbol_names:
             desc = desc_of.get(sym_name)
             dtype = _dace_dtype(desc.dtype) if desc else "dc.int64"
-            sign = "positive" if sym_name in dims else (desc.assumption if desc else "")
+            # A promoted scalar has no descriptor; its sign comes from the manifest binding
+            # the frontend carried over (``conv_padding: 0`` -> nonnegative).
+            sign = "positive" if sym_name in dims else (desc.assumption if desc else kir.symbol_signs.get(sym_name, ""))
             assumption = f", {sign}=True" if sign else ""
             out.append(f"{sym_name} = dc.symbol('{sym_name}', dtype={dtype}{assumption})")
         out.append("")

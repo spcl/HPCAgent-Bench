@@ -216,6 +216,10 @@ class KernelIR:
     #: the harness binding never passes, shifting every trailing scalar by one
     #: slot in the positional call.
     inlined_consts: Set[str] = field(default_factory=set)
+    #: Manifest-bound integer name -> proven sign (see
+    #: :func:`numpyto_common.frontend.symbol_sign_from_bindings`). Covers names that never
+    #: become a :class:`SymbolDesc` -- a scalar the emitter promotes because it sizes an array.
+    symbol_signs: Dict[str, str] = field(default_factory=dict)
     #: One sub-:class:`KernelIR` per top-level helper called in the kernel body
     #: that couldn't be inlined (early ``return`` / recursion). Built by
     #: :func:`parse_kernel`, lowered by :func:`lower`; each emitter emits it as

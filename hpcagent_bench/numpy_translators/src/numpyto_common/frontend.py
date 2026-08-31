@@ -980,6 +980,10 @@ def build_kernel_ir(numpy_py: pathlib.Path,
     # Preset names with a boolean value are CONFIG FLAGS, not integer symbols --
     # so Fortran declares them ``logical`` and ``if (flag)``/``.not. flag`` type-check.
     _bool_preset_names = _collect_bool_preset_names(parameters)
+    # The manifest's fixed scalar bindings -- the convolution knobs (``conv_padding``,
+    # ``conv_stride``, ``*_groups``) live here, not in the presets. Evidence for
+    # :func:`symbol_sign_from_bindings`, and for the promoted names the emitter declares.
+    _manifest_scalars = info.get("init", {}).get("scalars", {}) or {}
 
     src = numpy_py.read_text()
     tree = ast.parse(src, filename=str(numpy_py))
@@ -1380,7 +1384,7 @@ def build_kernel_ir(numpy_py: pathlib.Path,
                     # routed to scalars above), so a declared non-integer dtype describes
                     # something else and must not narrow the binding's int64.
                     dtype=declared_dt if declared_dt and dtypes.is_integer(declared_dt) else "int64",
-                    assumption=symbol_sign_from_presets(arg, parameters),
+                    assumption=symbol_sign_from_bindings(arg, parameters, _manifest_scalars),
                 ))
         elif arg in _bool_preset_names:
             # A boolean config flag: a runtime ``bool`` scalar (C ``bool`` /
@@ -1467,6 +1471,16 @@ def build_kernel_ir(numpy_py: pathlib.Path,
     stamp_symbol_assumptions(kir)
     for helper in kir.helpers:
         stamp_symbol_assumptions(helper)
+    # A scalar that sizes an array is PROMOTED to a dc.symbol by the emitter, which owns no
+    # descriptor for it and so had no sign to declare. Carry the evidence for every bound name
+    # instead of re-deriving it there, where the manifest is out of scope.
+    bound = set(_manifest_scalars) | {n for preset in parameters.values() for n in preset}
+    kir.symbol_signs = {
+        n: sign
+        for n in sorted(bound) if (sign := symbol_sign_from_bindings(n, parameters, _manifest_scalars))
+    }
+    for helper in kir.helpers:
+        helper.symbol_signs = kir.symbol_signs
     return kir
 
 
@@ -6493,16 +6507,25 @@ class _SubstNames(ast.NodeTransformer):
 _PRESET_FALLBACK = "S"
 
 
-def symbol_sign_from_presets(name: str, parameters: Dict) -> str:
-    """What every preset's declared value proves about ``name``'s sign.
+def symbol_sign_from_bindings(name: str, parameters: Dict, scalars: Optional[Dict] = None) -> str:
+    """What the manifest's declared values prove about ``name``'s sign.
 
-    The presets ARE the bindings: a benchmark only ever runs at S/M/L/XL, so a symbol positive in
-    all of them cannot reach the emitted program as zero. Evidence, not a house convention -- a
-    name absent from the presets, or bound to a mix of signs, gets nothing rather than a guess.
-    ``bool`` is excluded explicitly: it is an ``int`` subtype, and ``True > 0`` would stamp a
-    config flag ``positive``.
+    The manifest IS the binding: a benchmark only ever runs at the presets it declares, so a name
+    positive in all of them cannot reach the emitted program as zero. Evidence, not a house
+    convention -- a name the manifest never binds, or binds to a mix of signs, gets nothing rather
+    than a guess. ``bool`` is excluded explicitly: it is an ``int`` subtype, and ``True > 0`` would
+    stamp a config flag ``positive``.
+
+    ``init.scalars`` counts as evidence beside the presets, and is where the convolution knobs
+    live: ``conv_padding: 0``, ``conv_stride: 1``, ``conv_dilation: 1``, ``*_groups: 1``. A scalar
+    there is a SINGLE fixed binding for every preset, so it is stronger evidence than a sweep, not
+    weaker -- reading only ``parameters`` left every one of those names undeclared. Note this
+    proves ``stride`` POSITIVE rather than merely nonnegative, which is both true and more useful:
+    a stride of zero indexes nothing.
     """
     values = [preset[name] for preset in parameters.values() if name in preset]
+    if scalars and name in scalars:
+        values.append(scalars[name])
     if not values or any(isinstance(v, bool) or not isinstance(v, int) for v in values):
         return ""
     if all(v > 0 for v in values):

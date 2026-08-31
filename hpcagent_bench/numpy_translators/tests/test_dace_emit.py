@@ -30,7 +30,7 @@ from numpyto_c.dace_emit import (BindMethodReceiver, DesugarChainedCompare, Drop
 from numpyto_common.frontend import (
     emit_with_inline_fallback,
     parse_kernel,  # noqa: E402
-    symbol_sign_from_presets)
+    symbol_sign_from_bindings)
 from numpyto_common.ir import ArrayDesc, KernelIR, SymbolDesc, stamp_symbol_assumptions  # noqa: E402
 
 _KERNELS = foundation_kernels()
@@ -131,11 +131,19 @@ def test_symbol_sign_only_claims_what_the_presets_prove():
     what they actually show: a sign-mixed name, and a bool config flag whose ``True`` would
     otherwise read as positive, both come back with nothing declared."""
     presets = {"S": {"N": 8, "P": 0, "Q": -1, "F": True}, "L": {"N": 64, "P": 4, "Q": 3, "F": False}}
-    assert symbol_sign_from_presets("N", presets) == "positive"
-    assert symbol_sign_from_presets("P", presets) == "nonnegative"
-    assert symbol_sign_from_presets("Q", presets) == ""
-    assert symbol_sign_from_presets("F", presets) == ""
-    assert symbol_sign_from_presets("absent", presets) == ""
+    assert symbol_sign_from_bindings("N", presets) == "positive"
+    assert symbol_sign_from_bindings("P", presets) == "nonnegative"
+    assert symbol_sign_from_bindings("Q", presets) == ""
+    assert symbol_sign_from_bindings("F", presets) == ""
+    assert symbol_sign_from_bindings("absent", presets) == ""
+    # init.scalars is evidence beside the presets: it is where the convolution knobs are bound,
+    # and a name bound in BOTH must satisfy both.
+    knobs = {"conv_padding": 0, "conv_stride": 1, "conv_groups": 1, "eps": 1e-05, "flag": True}
+    assert symbol_sign_from_bindings("conv_padding", {}, knobs) == "nonnegative"
+    assert symbol_sign_from_bindings("conv_stride", {}, knobs) == "positive"
+    assert symbol_sign_from_bindings("eps", {}, knobs) == ""
+    assert symbol_sign_from_bindings("flag", {}, knobs) == ""
+    assert symbol_sign_from_bindings("P", presets, {"P": 4}) == "nonnegative"
 
 
 def test_promoted_shape_symbol_is_positive_without_a_manifest():
