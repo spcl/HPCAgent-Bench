@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Set
 
 from numpyto_common import dtypes
 from numpyto_common.frontend import fold_shape_expr
-from numpyto_common.ir import KernelIR
+from numpyto_common.ir import KernelIR, shape_dimension_symbols
 from numpyto_common.lowering import lower
 from numpyto_common.numpy_desugar import _AUG_OP_SRC, desugar_for_python_backend, expr_rank, rank_table
 from numpyto_common.ordered import OrderedSet
@@ -2580,13 +2580,21 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
     if pinned:
         out.append("")
     if symbol_names:
-        names = ", ".join(symbol_names)
-        srcs = ", ".join(f"'{s}'" for s in symbol_names)
-        if len(symbol_names) == 1:
-            out.append(f"{names} = dc.symbol({srcs}, dtype=dc.int64)")
-        else:
-            out.append(f"{names} = (dc.symbol(s, dtype=dc.int64) "
-                       f"for s in ({srcs}))")
+        # One declaration per symbol: dtype and sign are per-symbol facts the generator spelling
+        # this replaced could carry neither of. The assumption reaches sympy through
+        # dace.symbol's ``**assumptions`` and decides comparisons the solver would otherwise
+        # leave symbolic -- so only what is proven is declared, never what is merely likely.
+        desc_of = {s.name: s for s in kir.symbols}
+        # Re-derived rather than read off the descriptor: the promotions above append emit-local
+        # names no :func:`stamp_symbol_assumptions` pass has seen.
+        dims = shape_dimension_symbols(kir.arrays)
+        # NOT ``name``: this function binds the emitted def's identifier under that spelling.
+        for sym_name in symbol_names:
+            desc = desc_of.get(sym_name)
+            dtype = _dace_dtype(desc.dtype) if desc else "dc.int64"
+            sign = "positive" if sym_name in dims else (desc.assumption if desc else "")
+            assumption = f", {sign}=True" if sign else ""
+            out.append(f"{sym_name} = dc.symbol('{sym_name}', dtype={dtype}{assumption})")
         out.append("")
     if symbol_defs:
         # Per-dimension binding recipe: caller evaluates these in order at call time. See sparse_oracle._run_dace.

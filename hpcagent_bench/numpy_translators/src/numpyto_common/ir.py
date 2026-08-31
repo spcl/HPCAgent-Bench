@@ -67,13 +67,35 @@ def apply_precision(kir: "KernelIR", precision: Optional[str]) -> "KernelIR":
     return kir
 
 
+#: What a symbol's sign is known to be. ``""`` = nothing proven, so nothing is declared.
+SYMBOL_ASSUMPTIONS = ("", "nonnegative", "positive")
+
+
 @dataclass
 class SymbolDesc:
     """One scalar shape / scale parameter (always integer-typed).
 
     :ivar name: source-level name (``"N"``, ``"LEN_1D"``, ``"ITERATIONS"``).
+    :ivar dtype: integer width this symbol is bound at. The manifest's declared dtype when it
+        gives one, else the ``int64`` every harness binding passes. Emitters that mint a typed
+        symbol (``dc.symbol(..., dtype=...)``) read it instead of hardcoding a width: a DaCe
+        symbol's dtype is part of its cache identity, so a re-mint at the wrong width hands back
+        an expression rebuilt around a foreign symbol.
+    :ivar assumption: what is PROVEN about the sign -- see :data:`SYMBOL_ASSUMPTIONS`. Left ``""``
+        unless :func:`stamp_symbol_assumptions` or the manifest evidence establishes it; an
+        assumption that is merely likely is worse than none, because a solver silently keeps the
+        wrong branch of a comparison it can now decide.
     """
     name: str
+    dtype: str = "int64"
+    assumption: str = ""
+
+    def __post_init__(self) -> None:
+        # Same storage contract :class:`ScalarDesc` honours: normalise where the dtype is STORED so
+        # signature, binding JSON and ABI gate cannot disagree over ``int`` vs ``int64``.
+        self.dtype = dtypes.canonical(self.dtype)
+        if self.assumption not in SYMBOL_ASSUMPTIONS:
+            raise ValueError(f"symbol {self.name!r}: {self.assumption!r} is not one of {SYMBOL_ASSUMPTIONS}")
 
 
 @dataclass
@@ -278,6 +300,31 @@ class KernelIR:
         order = self.param_order()
         declared = [n for n in self.input_args if n not in self.pinned_consts]
         return order if set(order) == set(declared) else declared
+
+
+def shape_dimension_symbols(arrays: List[ArrayDesc]) -> Set[str]:
+    """Names spelled as a WHOLE dimension of some array -- see :func:`stamp_symbol_assumptions`."""
+    return {tok for arr in arrays for tok in arr.shape if tok.isidentifier()}
+
+
+def stamp_symbol_assumptions(kir: "KernelIR") -> None:
+    """Mark every symbol spelled as a WHOLE array dimension ``positive``.
+
+    An array with a dimension of zero or less cannot be allocated, so a symbol standing alone as
+    one is positive whatever the manifest's presets happen to bind it to -- and this is the only
+    rule that reaches a symbol the lowering promoted out of a body shape, which never passed the
+    manifest at all. Deliberately confined to a dimension that IS the bare identifier: ``K`` in
+    ``H - K + 1`` is bounded by the expression, not by itself, and only its own appearance as
+    ``weights``' first dimension proves anything about it.
+
+    Never downgrades: a manifest-derived ``positive`` survives, and a structural ``positive``
+    overrides a preset-derived ``nonnegative`` (the presets are a sample, the allocation is a
+    contract).
+    """
+    dims = shape_dimension_symbols(kir.arrays)
+    for sym in kir.symbols:
+        if sym.name in dims:
+            sym.assumption = "positive"
 
 
 #: AST-node attribute carrying the numpy expression a lowered statement came from.

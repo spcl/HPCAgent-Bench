@@ -36,7 +36,7 @@ from typing import Any, Callable, Dict, FrozenSet, Iterator, List, Optional, Seq
 
 from numpyto_common import dtypes
 
-from numpyto_common.ir import ArrayDesc, KernelIR, ScalarDesc, SparseArrayDesc, SymbolDesc
+from numpyto_common.ir import (ArrayDesc, KernelIR, ScalarDesc, SparseArrayDesc, SymbolDesc, stamp_symbol_assumptions)
 from numpyto_common.lib_nodes import (_const_int, _is_full_slice_elt, _iter_extent_of, _read_axis_keepdims, _slice_axes)
 from numpyto_common.ordered import OrderedSet
 from numpyto_common.numpy_desugar import (_ComplexAccessorToFunc, _DecomposeRollSlice, _DropValidationGuards,
@@ -1372,7 +1372,16 @@ def build_kernel_ir(numpy_py: pathlib.Path,
                     is_index=arg in index_names,
                 ))
         elif arg in preset_symbols and arg not in _float_preset_names and arg not in _bool_preset_names:
-            symbols.append(SymbolDesc(name=arg))
+            declared_dt = legacy_dtypes.get(arg)
+            symbols.append(
+                SymbolDesc(
+                    name=arg,
+                    # A symbol is an integer by construction (the float and bool presets are
+                    # routed to scalars above), so a declared non-integer dtype describes
+                    # something else and must not narrow the binding's int64.
+                    dtype=declared_dt if declared_dt and dtypes.is_integer(declared_dt) else "int64",
+                    assumption=symbol_sign_from_presets(arg, parameters),
+                ))
         elif arg in _bool_preset_names:
             # A boolean config flag: a runtime ``bool`` scalar (C ``bool`` /
             # Fortran ``logical(c_bool)``), NOT an integer dimension.
@@ -1453,6 +1462,11 @@ def build_kernel_ir(numpy_py: pathlib.Path,
     # return is then just a native ``return``. Each helper param's type/shape is
     # inferred from the call site; :func:`lower` lowers every helper body too.
     kir.helpers = _build_helper_kirs(tree, fn, kir)
+    # After the arrays exist: a symbol standing alone as a dimension is positive by allocation,
+    # which is a stronger fact than the presets can give and applies to a helper's symbols too.
+    stamp_symbol_assumptions(kir)
+    for helper in kir.helpers:
+        stamp_symbol_assumptions(helper)
     return kir
 
 
@@ -4915,10 +4929,17 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
                 # ``calls`` pairs every call with the scope its arguments resolve against. A caller
                 # can only pass a shape symbol it holds itself, so a sibling that does not declare
                 # one cannot reach this helper -- refuse rather than emit a call naming an
-                # identifier that is not in scope there.
+                # identifier that is not in scope there. A caller holds a symbol its OWN array
+                # shapes name even when its signature never declared it: those become parameters
+                # of the emitted function by this very rule (conv2d_bias holds ``N``/``C_in``/
+                # ``C_out`` only through ``input``'s ``(N, H, W, C_in)``).
                 for owner, _ in calls:
                     oa, osc, osy = scope_of.get(id(owner), default_scope)
-                    held = {sy.name for sy in osy} | {a.name for a in oa} | {sc.name for sc in osc}
+                    held = ({sy.name
+                             for sy in osy} | {a.name
+                                               for a in oa} | {sc.name
+                                                               for sc in osc}
+                            | set(_shape_symbols(oa)))
                     absent = [sy for sy in extra_syms if sy not in held]
                     if absent:
                         raise NotImplementedError(
@@ -5012,7 +5033,11 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
         # declared symbol; a SIBLING helper holds only what its own signature received, so one
         # missing name would emit a call naming an identifier that is not in scope there.
         if extra_syms and owner_fn is not kernel_fn:
-            held = {sy.name for sy in osymbols} | {a.name for a in oarrays} | {sc.name for sc in oscalars}
+            held = ({sy.name
+                     for sy in osymbols} | {a.name
+                                            for a in oarrays} | {sc.name
+                                                                 for sc in oscalars}
+                    | set(_shape_symbols(oarrays)))
             absent = [sy for sy in extra_syms if sy not in held]
             if absent:
                 raise NotImplementedError(f"helper {hdef.name!r} needs shape symbols {absent}, which its calling "
@@ -6466,6 +6491,23 @@ class _SubstNames(ast.NodeTransformer):
 
 
 _PRESET_FALLBACK = "S"
+
+
+def symbol_sign_from_presets(name: str, parameters: Dict) -> str:
+    """What every preset's declared value proves about ``name``'s sign.
+
+    The presets ARE the bindings: a benchmark only ever runs at S/M/L/XL, so a symbol positive in
+    all of them cannot reach the emitted program as zero. Evidence, not a house convention -- a
+    name absent from the presets, or bound to a mix of signs, gets nothing rather than a guess.
+    ``bool`` is excluded explicitly: it is an ``int`` subtype, and ``True > 0`` would stamp a
+    config flag ``positive``.
+    """
+    values = [preset[name] for preset in parameters.values() if name in preset]
+    if not values or any(isinstance(v, bool) or not isinstance(v, int) for v in values):
+        return ""
+    if all(v > 0 for v in values):
+        return "positive"
+    return "nonnegative" if all(v >= 0 for v in values) else ""
 
 
 def _collect_symbols(parameters: Dict) -> List[str]:
