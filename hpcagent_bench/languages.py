@@ -889,7 +889,11 @@ def _stdpar_link_for_block(block: Dict[str, Any]) -> Tuple[str, ...]:
 #: OpenMP driver flags a compile baseline may carry. A shared library whose objects reference the
 #: OpenMP runtime needs the SAME flag on the link driver, which is what pulls that toolchain's
 #: runtime in -- ``-lgomp`` by hand would be a gcc-only spelling of one entry here.
-OPENMP_BASELINE_FLAGS: Tuple[str, ...] = ("-fopenmp=libgomp", "-fopenmp", "-qopenmp", "-mp")
+#: Every ``=<lib>`` spelling comes BEFORE the bare flag: the match is by exact token, so a baseline
+#: pinning a runtime whose spelling is missing here matches nothing at all and links with no OpenMP
+#: flag, leaving a .so that builds and dies at ``dlopen``. That is what the clang baseline's move
+#: from ``libgomp`` to ``libomp`` did.
+OPENMP_BASELINE_FLAGS: Tuple[str, ...] = ("-fopenmp=libomp", "-fopenmp=libgomp", "-fopenmp", "-qopenmp", "-mp")
 
 
 def openmp_link_for_block(block: Dict[str, Any], mode: Mode) -> Tuple[str, ...]:
