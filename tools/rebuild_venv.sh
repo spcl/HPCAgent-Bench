@@ -30,7 +30,7 @@ printf 'interpreter: %s (%s)\nvenv:        %s\n\n' "${PY}" "$("${PY}" --version 
 CORE=(numpy scipy pandas matplotlib ml_dtypes pyyaml jsonschema sympy blake3 sqlmodel jinja2
       cffi psutil py-cpuinfo GPUtil pygount ordered-set tree-sitter-language-pack
       islpy z3-solver
-      yapf fprettify clang-format pre-commit pytest)
+      yapf fprettify clang-format pre-commit pytest pytest-xdist)
 echo "=== tier 1: core + format gates ==="
 "${VENV}/bin/python3" -m pip install "${CORE[@]}"
 
@@ -49,7 +49,7 @@ echo "=== import check ==="
 "${VENV}/bin/python3" - <<'PY'
 import importlib
 mods = ["jinja2", "yaml", "numpy", "sympy", "jsonschema", "sqlmodel", "blake3",
-        "ordered_set", "psutil", "cpuinfo", "pygount", "yapf", "pytest", "islpy", "z3"]
+        "ordered_set", "psutil", "cpuinfo", "pygount", "yapf", "pytest", "xdist", "islpy", "z3"]
 bad = []
 for m in mods:
     try:
