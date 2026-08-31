@@ -34,6 +34,30 @@ CORE=(numpy scipy pandas matplotlib ml_dtypes pyyaml jsonschema sympy blake3 sql
 echo "=== tier 1: core + format gates ==="
 "${VENV}/bin/python3" -m pip install "${CORE[@]}"
 
+# Tier 1b -- dace's OWN declared dependencies, read from its pyproject rather than copied here.
+# dace is never pip-installed (it resolves off PYTHONPATH), so nothing ever resolves that list and
+# a hand-maintained copy drifts silently: this venv was missing fparser, dill and pytest-xdist for
+# exactly that reason, which loses the Fortran frontend and makes a sharded suite run die at
+# argument parsing. The pyproject stays the single source of truth. Two extras are excluded on
+# purpose: gpu names CUDA wheels and this machine is AMD, and mpi installs an mpi4py with no MPI
+# to load here -- which turns 12 honest skips into 12 failures that say nothing about the code.
+DACE_TREE="${DACE_TREE:-${SCRATCH}/dace}"
+if [[ -f "${DACE_TREE}/pyproject.toml" ]]; then
+    echo "=== tier 1b: dace declared deps (core + testing + fastgraph) ==="
+    "${VENV}/bin/python3" - "${DACE_TREE}/pyproject.toml" <<'DACEREQS' >"${TMPDIR}/dace-reqs.txt"
+import sys, tomllib
+with open(sys.argv[1], 'rb') as f:
+    proj = tomllib.load(f)['project']
+reqs = list(proj['dependencies'])
+for extra in ('testing', 'fastgraph'):
+    reqs += proj.get('optional-dependencies', {}).get(extra, [])
+print('\n'.join(reqs))
+DACEREQS
+    "${VENV}/bin/python3" -m pip install -r "${TMPDIR}/dace-reqs.txt"
+else
+    echo "=== tier 1b SKIPPED: no dace tree at ${DACE_TREE} ==="
+fi
+
 # Tier 2 -- heavy/optional. Installed one at a time so one missing 3.14 wheel does not abort
 # the rest, and so the report says exactly which are unavailable.
 echo "=== tier 2: heavy, best effort ==="
@@ -49,7 +73,7 @@ echo "=== import check ==="
 "${VENV}/bin/python3" - <<'PY'
 import importlib
 mods = ["jinja2", "yaml", "numpy", "sympy", "jsonschema", "sqlmodel", "blake3",
-        "ordered_set", "psutil", "cpuinfo", "pygount", "yapf", "pytest", "xdist", "islpy", "z3"]
+        "ordered_set", "psutil", "cpuinfo", "pygount", "yapf", "pytest", "xdist", "islpy", "z3", "fparser", "dill"]
 bad = []
 for m in mods:
     try:
