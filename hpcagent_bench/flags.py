@@ -55,8 +55,8 @@ class Mode(enum.Enum):
 # FP-relax knobs below (no errno, no FP traps, no signed-zero preservation) are kept alongside it --
 # GCC requires the last two before it will honour -fassociative-math at all. (2) -fopenmp is ON: OpenMP is always available to the kernel; single-core
 # timing stays fair because flags.cpu_env pins OMP_NUM_THREADS=1 (parallelism only when
-# the mode is MULTI_CORE). clang pins the GNU runtime (-fopenmp=libgomp) to avoid its
-# often-absent default libomp; gcc/icpx/flang keep plain -fopenmp (own runtime present).
+# the mode is MULTI_CORE). clang pins LLVM's own runtime (-fopenmp=libomp), the one whose calls
+# it generates; gcc/icpx/flang keep plain -fopenmp (own runtime present).
 _FP_RELAX = "-fno-math-errno -fno-trapping-math -fno-signed-zeros"
 
 #: Reassociation, pinned rather than left to each front end. This is a SCICOMP licence, not a
@@ -129,10 +129,10 @@ _FP_CONTRACT_NVHPC = "-Mfma"
 # OS/arch-aware pieces of the CPU baselines, so the matrix is correct on Linux, macOS,
 # and WSL2 (== Linux) instead of assuming glibc + x86. (1) ``-march=native`` everywhere
 # except Apple-Silicon macOS, where Apple clang rejects it for arm64 and wants
-# ``-mcpu=native``. (2) clang's OpenMP runtime: GNU ``libgomp`` is a glibc/Linux package
-# (ubiquitous there, ships with gcc) that does NOT exist on macOS, where Homebrew ships
-# ``libomp``; on macOS the portable ``-fopenmp`` resolves to whatever the compiler carries
-# (brew gcc's libgomp, or a libomp-equipped clang). (3) libmvec is glibc's vector libm --
+# ``-mcpu=native``. (2) clang's OpenMP runtime: LLVM's ``libomp`` is pinned on Linux, since
+# that is the runtime clang emits calls into; on macOS the portable ``-fopenmp`` resolves to
+# whatever the compiler carries (brew gcc's libgomp, or a libomp-equipped clang), so the pin is
+# dropped there rather than naming a package that may not exist. (3) libmvec is glibc's vector libm --
 # Linux only (macOS libSystem has none), and reached by a DIFFERENT knob per compiler
 # family; see the libmvec block below.
 ARCH_NATIVE = "-mcpu=native" if (osinfo.IS_MACOS and osinfo.is_arm()) else "-march=native"
@@ -164,8 +164,8 @@ _VECLIB_GCC = f" -include {shlex.quote(str(VECMATH_H))}" if osinfo.IS_LINUX else
 OPT_LEVEL = "-O3"
 
 #: Clang baseline: -O3 + native arch + OpenMP + vectorized libm (no fast-math). On Linux
-#: OpenMP is pinned to GNU ``libgomp`` (like POLLY_PAR/PLUTO_PAR -- clang's default
-#: ``libomp`` is a separate, frequently-absent package) and glibc's ``libmvec`` is added;
+#: OpenMP is pinned to LLVM's ``libomp`` (like POLLY_PAR -- the runtime clang's own codegen
+#: calls into) and glibc's ``libmvec`` is added;
 #: on macOS both are dropped (neither exists there -- see the OS-aware pieces above).
 CPU_BASELINE_CLANG = (f"-O3 {ARCH_NATIVE} {_OPENMP_CLANG} {_FP_RELAX} {_FP_ASSOC} {_FP_CONTRACT} "
                       f"-fstrict-aliasing -fPIC{_VECLIB_CLANG}")
@@ -309,9 +309,8 @@ LINK_MIMALLOC = "-lmimalloc"
 # ---------------------------------------------------------------------------
 
 #: LLVM Polly + OpenMP -- ``clang -mllvm -polly -mllvm -polly-parallel``.
-#: ``-fopenmp=libgomp`` pins clang to GNU's OpenMP runtime (shipped with gcc)
-#: instead of its default ``libomp`` -- the latter is a separate package that is
-#: frequently absent (``cannot find -lomp``), while ``libgomp`` is ubiquitous.
+#: ``-fopenmp=libomp`` pins clang to LLVM's own OpenMP runtime, the one its codegen emits calls
+#: into. The GNU spelling was measured inert here -- see :data:`PLUTO_PAR` for the numbers.
 #:
 #: ⚠ WHETHER THIS PARALLELIZES ANYTHING IS A PROPERTY OF THE CLANG BUILD, not of the flags, and a
 #: clang that does nothing with them still accepts them SILENTLY -- the same failure mode as
@@ -325,8 +324,8 @@ LINK_MIMALLOC = "-lmimalloc"
 #: The one-line check, on the node that will run the job -- an autoparallelized object references
 #: the OpenMP runtime and a serial one does not::
 #:
-#:     clang++ $BASE -mllvm -polly -mllvm -polly-parallel -fopenmp=libgomp -c k.cpp -o k.o
-#:     nm -u k.o | grep -c GOMP     # 0 => Polly parallelized nothing
+#:     clang++ $BASE -mllvm -polly -mllvm -polly-parallel -fopenmp=libomp -c k.cpp -o k.o
+#:     nm -u k.o | grep -c kmpc     # 0 => Polly parallelized nothing
 #:
 #: ``scripts/submit_deterministic.sbatch`` runs exactly that before an autopar column and prints
 #: the verdict into the job log, so a serial-in-disguise result is visible in the run that

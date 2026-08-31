@@ -49,18 +49,19 @@ def test_is_arm_matches_the_machine_string(monkeypatch):
 # flag matrix: glibc-only pieces gated to Linux, arch flag per-arch
 # --------------------------------------------------------------------------- #
 def test_clang_baseline_glibc_pieces_are_linux_only():
-    # `libgomp` (GNU OpenMP) and `libmvec` (glibc vector libm) exist only on Linux;
-    # the clang baseline must carry them iff we are on Linux.
-    assert ("libgomp" in flags.CPU_BASELINE_CLANG) == osinfo.IS_LINUX
+    # The OpenMP-runtime pin and `libmvec` (glibc vector libm) are Linux-only; the clang baseline
+    # must carry them iff we are on Linux. Whole token, never the bare library name: `libomp` is a
+    # SUBSTRING of `libgomp`, so a name-only test passes on either runtime and pins neither.
+    assert ("-fopenmp=libomp" in flags.CPU_BASELINE_CLANG) == osinfo.IS_LINUX
     assert ("-fveclib=libmvec" in flags.CPU_BASELINE_CLANG) == osinfo.IS_LINUX
     # polly's autopar delta shares that OpenMP-runtime pin
-    assert ("libgomp" in flags.POLLY_PAR) == osinfo.IS_LINUX
+    assert ("-fopenmp=libomp" in flags.POLLY_PAR) == osinfo.IS_LINUX
     # PLUTO_PAR deliberately does NOT, on any platform: measured, `clang -fopenmp=libgomp` accepts
     # the flag, parses the pragma and emits no OpenMP call at all, and pluto is the ONE clang column
     # whose sources carry `#pragma omp parallel for` -- so the runtime pin that is inert everywhere
     # else silently serialises exactly this column. See flags.PLUTO_PAR.
     assert flags.PLUTO_PAR == "-fopenmp", "the pluto leg must keep the spelling that emits OpenMP"
-    assert "libgomp" not in flags.CPU_BASELINE_CLANG_PLUTO, "the pluto baseline must not restore the inert pin"
+    assert "-fopenmp=" not in flags.CPU_BASELINE_CLANG_PLUTO, "the pluto baseline must not restore the inert pin"
 
 
 def test_arch_flag_is_mcpu_on_apple_silicon_march_elsewhere():
