@@ -29,6 +29,10 @@ clone_pinned() {
     git init -q "$SRC"
     git -C "$SRC" fetch -q --depth 1 "$REPO" "$REF"
     git -C "$SRC" checkout -q FETCH_HEAD
+    # TBLIS vendors MArray, TCI and stl_ext as submodules, and its CMakeLists aborts on the first
+    # of them with "MArray not found". Inside the retry loop, not after it: these are three more
+    # anonymous fetches and throttling hits them the same way it hits the one above.
+    git -C "$SRC" submodule update --init --recursive --depth 1
 }
 
 attempt=1
