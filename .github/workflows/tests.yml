@@ -582,14 +582,21 @@ jobs:
         # 60 -> 85 -> 110: run 33261681823 reached 85% in 60 minutes and died on the step timeout;
         # run 33283870554 then filled the 85-minute cap with every test green. Two single tests ate
         # 20 minutes each there (measured from the progress line timestamps), which is what
-        # --timeout=1500 costs when a test wedges -- the budget has to clear two of those plus the
-        # 1294 s ABI test, or a wedge anywhere reports as "the suite is too slow". No -q, so the
-        # failures arrive with names instead of as bare F characters, and --durations names them.
+        # --timeout=1500 costs when a test wedges. No -q, so the failures arrive with names instead
+        # of as bare F characters, and --durations names them.
+        #
+        # ``-m "not integration"`` for the same reason Phase 5c carries it: naming the directory by
+        # PATH ignores markers, and the integration job ALREADY collects every
+        # @pytest.mark.integration test under it (``-m integration tests/
+        # hpcagent_bench/numpy_translators/tests/``). The two corpus-wide ABI sweeps are marked
+        # integration and were the top TWO entries in this job's duration table at 1500 s each --
+        # both of them the timeout cap, not real work -- so this job paid ~50 minutes for coverage
+        # the integration job already provides.
         if: ${{ !cancelled() }}
         timeout-minutes: 110
         run: |
           python -m pytest -p no:cacheprovider -rfsxX -n auto --durations=25 --timeout=1500 \
-            hpcagent_bench/numpy_translators/tests/
+            -m "not integration" hpcagent_bench/numpy_translators/tests/
 
       # Hit rate is the whole point of the cache -- surface it so a regression to 0% is visible.
       - name: ccache statistics
