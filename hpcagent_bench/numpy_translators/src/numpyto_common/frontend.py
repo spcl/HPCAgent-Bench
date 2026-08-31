@@ -4639,6 +4639,72 @@ class _InlineTupleHelperCalls(ast.NodeTransformer):
         return ast.copy_location(substituted, node)
 
 
+def _helper_call_sites(fn: ast.FunctionDef):
+    """Helper call sites inside ONE scope: the first call of each name, its enclosing assignment
+    (``X = h(...)`` / ``X[:, j] = h(...)`` -- the LHS classifies the return, array out-param vs
+    by-value scalar, and sizes it), and EVERY ``X = h(...)`` site.
+
+    Rewriting only the first left the others spelling the helper's ORIGINAL signature while the
+    definition had moved to the out-param ABI; the arity happened to still match, so the reorder
+    permuted unrelated slots and emitted a call that does not compile (vgg16's
+    ``_maxpool2d(2, h[...], 2)``)."""
+    call_of: Dict[str, ast.Call] = {}
+    assign_of: Dict[str, ast.Assign] = {}
+    assigns_of: Dict[str, List[ast.Assign]] = {}
+    for node in ast.walk(fn):
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Name)):
+            assigns_of.setdefault(node.value.func.id, []).append(node)
+            if node.value.func.id not in call_of:
+                call_of[node.value.func.id] = node.value
+                assign_of[node.value.func.id] = node
+    for node in ast.walk(fn):  # plain-call fallback (scalar helper in an expression)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id not in call_of:
+            call_of[node.func.id] = node
+    return call_of, assign_of, assigns_of
+
+
+def _helpers_callers_first(helper_defs: List[ast.FunctionDef], kernel_fn: ast.FunctionDef) -> List[ast.FunctionDef]:
+    """``helper_defs`` reordered so a helper is visited before every helper it calls.
+
+    A helper's parameters are inferred from a call site, and when the only site sits in a SIBLING
+    that sibling's descriptor tables are the resolution scope -- which exist only once the sibling
+    itself has been built. Independent helpers keep definition order. The emission order the C
+    backend needs (callee defined above its caller, so no forward declaration) is a property of
+    ``out``, restored by sorting it back at the end of :func:`_build_helper_kirs`."""
+    names = {h.name: h for h in helper_defs}
+    calls = {
+        h.name:
+        sorted({
+            n.func.id
+            for n in ast.walk(h)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in names and n.func.id != h.name
+        })
+        for h in helper_defs
+    }
+    ordered: List[ast.FunctionDef] = []
+    placed: OrderedSet = OrderedSet()
+
+    def visit(h: ast.FunctionDef) -> None:
+        if h.name in placed:
+            return
+        placed.add(h.name)
+        ordered.append(h)
+        for callee in calls[h.name]:
+            visit(names[callee])
+
+    # Seeded from what the KERNEL calls, not from definition order: helpers are conventionally
+    # written callee-above-caller, so walking definition order visits a sibling-only callee before
+    # the caller whose tables resolve it, and it is skipped for having no reachable call site --
+    # which is the very refusal this ordering exists to remove.
+    for node in ast.walk(kernel_fn):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in names:
+            visit(names[node.func.id])
+    for h in helper_defs:
+        visit(h)
+    return ordered
+
+
 def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: KernelIR) -> List[KernelIR]:
     """One :class:`KernelIR` per non-inlinable called helper (see
     :func:`_collect_called_helper_defs`). Each helper param's type/shape is read
@@ -4664,43 +4730,39 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
     ast.fix_missing_locations(kernel_fn)
     if _specialise_helpers_by_call_signature(tree, kernel_fn, helper_defs, arr_by):
         helper_defs = _collect_called_helper_defs(tree, kernel_fn)
-    sca_by = {s.name: s for s in parent.scalars}
-    sym_by = {s.name: s for s in parent.symbols}
-    # First call site of each helper in the KERNEL body, plus its enclosing
-    # assignment (``X = h(...)`` / ``X[:, j] = h(...)``) -- the LHS classifies the
-    # return (array vs scalar) and sizes the out-param.
-    call_of: Dict[str, ast.Call] = {}
-    assign_of: Dict[str, ast.Assign] = {}
-    #: EVERY ``X = h(...)`` site, not just the first. Rewriting only the first left the others
-    #: spelling the helper's ORIGINAL signature while the definition had moved to the out-param
-    #: ABI; the arity happened to still match, so the reorder below permuted unrelated slots and
-    #: emitted a call that does not compile (vgg16's ``_maxpool2d(2, h[...], 2)``).
-    assigns_of: Dict[str, List[ast.Assign]] = {}
-    for node in ast.walk(kernel_fn):
-        if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.value, ast.Call)
-                and isinstance(node.value.func, ast.Name)):
-            assigns_of.setdefault(node.value.func.id, []).append(node)
-            if node.value.func.id not in call_of:
-                call_of[node.value.func.id] = node.value
-                assign_of[node.value.func.id] = node
-    for node in ast.walk(kernel_fn):  # plain-call fallback (scalar helper in an expression)
-        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id not in call_of):
-            call_of[node.func.id] = node
     out: List[KernelIR] = []
-    callsite_rewrites: Dict[int, List[ast.stmt]] = {}  # {id(Assign): replacement stmts}
-    for hidx, hdef in enumerate(helper_defs):
-        call = call_of.get(hdef.name)
-        if call is None:
-            # Called only from another helper -- resolve in a later pass.
+    #: {id(owner tree): {id(Assign): replacement stmts}} -- applied per owner, because a helper's
+    #: call sites are not all in the kernel body.
+    callsite_rewrites: Dict[int, Dict[int, List[ast.stmt]]] = {}
+    #: Every scope a helper call can live in, paired with the descriptors its arguments resolve
+    #: against: the kernel body, then each helper as it is built. A helper reached only from a
+    #: SIBLING (lulesh's ``_calc_force_for_nodes``, called from ``_lagrange_nodal``) has no
+    #: kernel-body call at all, and resolving its arguments against the kernel's tables would read
+    #: the wrong scope. Helpers are visited callers-first, so the owner is already registered.
+    scopes: List[Tuple[ast.FunctionDef, List, List,
+                       List]] = [(kernel_fn, parent.arrays, parent.scalars, parent.symbols)]
+    hidx_of = {id(h): i for i, h in enumerate(helper_defs)}
+    for hdef in _helpers_callers_first(helper_defs, kernel_fn):
+        hidx = hidx_of[id(hdef)]
+        for owner_fn, oarrays, oscalars, osymbols in scopes:
+            call_of, assign_of, assigns_of = _helper_call_sites(owner_fn)
+            if hdef.name in call_of:
+                break
+        else:
+            # Not called from the kernel or from any helper built so far -- nothing reaches it.
             continue
+        oarr_by = {a.name: a for a in oarrays}
+        osca_by = {s.name: s for s in oscalars}
+        osym_by = {s.name: s for s in osymbols}
+        call = call_of[hdef.name]
         assign = assign_of.get(hdef.name)
         lhs = assign.targets[0] if assign is not None else None
-        hret_shape, hret_dtype = _helper_return_array_shape(lhs, arr_by, kernel_fn)
+        hret_shape, hret_dtype = _helper_return_array_shape(lhs, oarr_by, owner_fn)
         # Every extent this helper is built from comes off the first call site, so a call-site
         # array whose name is rebound to a different shape elsewhere in the body makes the whole
         # inference unsound -- see :func:`conflicting_rebind_shapes`.
         for node in ([lhs] if lhs is not None else []) + list(call.args):
-            clash = conflicting_rebind_shapes(kernel_fn, node, arr_by, ignore=assign)
+            clash = conflicting_rebind_shapes(owner_fn, node, oarr_by, ignore=assign)
             if clash is not None:
                 raise NotImplementedError(
                     f"helper {hdef.name!r} is called on {node.id!r}, which is rebound to both {clash[0]} and "
@@ -4727,8 +4789,8 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
             # an array return as by-value: no out-param is added, the returns stay as
             # ``return <expr>``, and every shape-changing call inside one reaches the emitter
             # unlowered, because the expanders only ever see assignments.
-            hret_shape, hret_dtype = _helper_return_shape_from_body(hfn, pnames, call.args, arr_by, sca_by, sym_by,
-                                                                    kernel_fn)
+            hret_shape, hret_dtype = _helper_return_shape_from_body(hfn, pnames, call.args, oarr_by, osca_by, osym_by,
+                                                                    owner_fn)
 
         if hret_shape is None:
             # SCALAR (by-value) return -- params inferred straight from the call. A compile-time
@@ -4745,11 +4807,11 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
                 if isinstance(a, ast.Constant):
                     call_consts[pn] = a
                     continue
-                folded = _fold_call_arg_constant(a, parent.arrays, parent.scalars, parent.symbols)
+                folded = _fold_call_arg_constant(a, oarrays, oscalars, osymbols)
                 if folded is not None:
                     call_consts[pn] = folded
             _bind_call_constants(hfn, call_consts)
-            arrays, scalars, symbols = _infer_helper_params(pnames, call.args, arr_by, sca_by, sym_by, kernel_fn)
+            arrays, scalars, symbols = _infer_helper_params(pnames, call.args, oarr_by, osca_by, osym_by, owner_fn)
             # Fold this helper's OWN compile-time tuples (``tuple(range(2, x.ndim))`` and the
             # rest of tuple_desugar.py) against ITS param ranks, same as the kernel body got at
             # ``parse_kernel``'s own ``desugar_tuples`` call -- a surviving helper is its own
@@ -4773,28 +4835,38 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
             # ``_conv_transpose3d``, never from the kernel body, which is the whole of why three
             # conv_transpose kernels refused. The owner is the resolution scope and not
             # ``kernel_fn``: at a sibling's call site the arguments are that sibling's own locals.
-            owners = [kernel_fn] + [h for h in helper_defs if h is not hdef]
+            # A sibling ALREADY built is represented by its DEEPCOPY, not by the original node in
+            # ``helper_defs``: splicing into the original lands in a tree nothing emits.
+            built = {ir.kernel_name: ir.tree for ir in out}
+            owners = [kernel_fn] + [built.get(h.name, h) for h in helper_defs if h is not hdef]
+            scope_of = {id(fn): (a, sc, sy) for fn, a, sc, sy in scopes}
+            default_scope = (parent.arrays, parent.scalars, parent.symbols)
             calls = [(owner, n) for owner in owners for n in ast.walk(owner)
                      if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == hdef.name]
             templates: Dict[int, ast.expr] = {}
             if calls and all(not c.keywords and len(c.args) == len(pnames) for _, c in calls):
                 for owner, site in calls:
-                    template = _tuple_template_for_call(hdef, site, tree, parent, arr_by, sca_by, sym_by, owner)
+                    oa, osc, osy = scope_of.get(id(owner), default_scope)
+                    template = _tuple_template_for_call(hdef, site, tree, parent, {a.name: a
+                                                                                   for a in oa},
+                                                        {s.name: s
+                                                         for s in osc}, {s.name: s
+                                                                         for s in osy}, owner)
                     if template is None:
                         templates.clear()
                         break
                     templates[id(site)] = template
             if templates:
-                # A sibling owner is spliced in place: it is the tree node ``helper_defs`` holds, and
-                # its own pass through this loop deep-copies it afterwards, so it desugars the
-                # spliced tuples against its OWN inferred tables rather than the kernel's.
                 for owner in {id(o): o for o, _ in calls}.values():
                     _InlineTupleHelperCalls(pnames, templates).visit(owner)
+                    # An owner already BUILT never passes through this loop again, so the tuples
+                    # just spliced into it are folded here or not at all; one not yet built folds
+                    # them against its own tables on its own pass, as it always did.
+                    oa, osc, osy = scope_of.get(id(owner), default_scope)
+                    _desugar_helper_tuples(owner, oa, osc, osy)
+                    _reject_symbolic_axis(owner)
+                    _reject_unsupported_slices(owner)
                     ast.fix_missing_locations(owner)
-                _desugar_helper_tuples(kernel_fn, parent.arrays, parent.scalars, parent.symbols)
-                _reject_symbolic_axis(kernel_fn)
-                _reject_unsupported_slices(kernel_fn)
-                ast.fix_missing_locations(kernel_fn)
                 continue
             # The splice above declined, so this helper has to become a real function -- and a
             # helper that returns SEVERAL values cannot: C has one return slot and nothing here
@@ -4840,16 +4912,22 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
             # permutes definition and call into the same ABI order as for any other parameter.
             extra_syms = sorted(s for s in _shape_symbols(arrays) if s not in set(pnames))
             if extra_syms:
-                # ``calls`` pairs every call with the scope its arguments resolve against, so a
-                # call owned by anything but the kernel body is a sibling helper's.
-                if any(owner is not kernel_fn for owner, _ in calls):
-                    raise NotImplementedError(
-                        f"helper {hdef.name!r} needs shape symbols {extra_syms} and is also called from a sibling "
-                        f"helper, whose call this pass cannot reach; it must be inlined into its caller")
+                # ``calls`` pairs every call with the scope its arguments resolve against. A caller
+                # can only pass a shape symbol it holds itself, so a sibling that does not declare
+                # one cannot reach this helper -- refuse rather than emit a call naming an
+                # identifier that is not in scope there.
+                for owner, _ in calls:
+                    oa, osc, osy = scope_of.get(id(owner), default_scope)
+                    held = {sy.name for sy in osy} | {a.name for a in oa} | {sc.name for sc in osc}
+                    absent = [sy for sy in extra_syms if sy not in held]
+                    if absent:
+                        raise NotImplementedError(
+                            f"helper {hdef.name!r} needs shape symbols {absent}, which its caller does not hold; "
+                            f"it must be inlined into its caller")
                 symbols.extend(SymbolDesc(name=s) for s in extra_syms)
-                for _, site in calls:
+                for owner, site in calls:
                     site.args.extend(ast.Name(id=s, ctx=ast.Load()) for s in extra_syms)
-                ast.fix_missing_locations(kernel_fn)
+                    ast.fix_missing_locations(owner)
             out.append(
                 KernelIR(
                     tree=hfn,
@@ -4869,6 +4947,7 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
                     # parameter in the definition that no call site passes.
                     return_kind="scalar" if any(
                         isinstance(n, ast.Return) and n.value is not None for n in ast.walk(hfn)) else None))
+            scopes.append((hfn, arrays, scalars, symbols))
             continue
 
         # ARRAY return: specialize the helper at its call site by folding every
@@ -4891,7 +4970,7 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
         kept_args = [a for _, a in keep]
         hfn.args.args = [a for a in hfn.args.args if a.arg in used]
         hfn.args.defaults = []
-        arrays, scalars, symbols = _infer_helper_params(pnames, kept_args, arr_by, sca_by, sym_by, kernel_fn)
+        arrays, scalars, symbols = _infer_helper_params(pnames, kept_args, oarr_by, osca_by, osym_by, owner_fn)
         # See the scalar-return branch above: fold this helper's own compile-time tuples against
         # its param ranks BEFORE the structural-axis guards, and before ``hret`` (not yet a real
         # body reference) is appended to ``arrays`` below.
@@ -4929,6 +5008,15 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
         # declare them here (so they are not re-promoted) and thread them into the
         # call in a fixed order.
         extra_syms = sorted(s for s in _shape_symbols(arrays) if s not in set(pnames))
+        # A caller can only pass a shape symbol it holds itself. The kernel body holds every
+        # declared symbol; a SIBLING helper holds only what its own signature received, so one
+        # missing name would emit a call naming an identifier that is not in scope there.
+        if extra_syms and owner_fn is not kernel_fn:
+            held = {sy.name for sy in osymbols} | {a.name for a in oarrays} | {sc.name for sc in oscalars}
+            absent = [sy for sy in extra_syms if sy not in held]
+            if absent:
+                raise NotImplementedError(f"helper {hdef.name!r} needs shape symbols {absent}, which its calling "
+                                          f"helper does not hold; it must be inlined into its caller")
         symbols.extend(SymbolDesc(name=s) for s in extra_syms)
         _rewrite_returns_to_outparam(hfn, hret)
         out.append(
@@ -4942,6 +5030,7 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
                      source_path=parent.source_path,
                      inlined_consts=hconsts,
                      return_kind=hret))
+        scopes.append((hfn, arrays, scalars, symbols))
         if assign is not None:
             param_info = {a.name: (a.shape, a.dtype) for a in arrays if a.name != hret}
             for sidx, site in enumerate(assigns_of.get(hdef.name, [assign])):
@@ -4967,26 +5056,29 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
                 for pn, first_a, site_a in zip(pnames, kept_args, site_kept):
                     if not (isinstance(first_a, ast.Name) and isinstance(site_a, ast.Name)):
                         continue
-                    first_d, site_d = arr_by.get(first_a.id), arr_by.get(site_a.id)
+                    first_d, site_d = oarr_by.get(first_a.id), oarr_by.get(site_a.id)
                     if first_d is not None and site_d is not None and tuple(first_d.shape) != tuple(site_d.shape):
                         raise NotImplementedError(
                             f"helper {hdef.name!r} is specialized on {first_a.id}{tuple(first_d.shape)} but another "
                             f"call site passes {site_a.id}{tuple(site_d.shape)}; a helper cannot serve two shapes "
                             f"while its dimensions are emitted as constants")
-                callsite_rewrites[id(site)] = _build_callsite_stmts(site.targets[0],
-                                                                    hdef.name,
-                                                                    pnames,
-                                                                    site_kept,
-                                                                    extra_syms,
-                                                                    param_info,
-                                                                    hret_shape,
-                                                                    hret_dtype,
-                                                                    f"{hidx}_{sidx}" if sidx else hidx,
-                                                                    inout=inout_param is not None,
-                                                                    live_buffers=frozenset(arr_by))
-    if callsite_rewrites:
-        _ReplaceStmts(callsite_rewrites).visit(kernel_fn)
-        ast.fix_missing_locations(kernel_fn)
+                callsite_rewrites.setdefault(id(owner_fn),
+                                             {})[id(site)] = _build_callsite_stmts(site.targets[0],
+                                                                                   hdef.name,
+                                                                                   pnames,
+                                                                                   site_kept,
+                                                                                   extra_syms,
+                                                                                   param_info,
+                                                                                   hret_shape,
+                                                                                   hret_dtype,
+                                                                                   f"{hidx}_{sidx}" if sidx else hidx,
+                                                                                   inout=inout_param is not None,
+                                                                                   live_buffers=frozenset(oarr_by))
+    for owner_fn, _, _, _ in scopes:
+        rewrites = callsite_rewrites.get(id(owner_fn))
+        if rewrites:
+            _ReplaceStmts(rewrites).visit(owner_fn)
+            ast.fix_missing_locations(owner_fn)
     # A surviving helper may CALL a sibling helper, and a helper reached only that way got no
     # KernelIR above ("called only from another helper -- resolve in a later pass"). Nothing then
     # emits it, and the call reaches a function that does not exist: lulesh's `_lagrange_nodal`
@@ -5006,6 +5098,11 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
     # Last, so every helper KernelIR (hence every param_order()) is final and the rewritten
     # call sites above are in the tree. Helper bodies too: a helper may call a sibling helper.
     _reorder_helper_call_args([kernel_fn] + [h.tree for h in out], out)
+    # Back to DEFINITION order: helpers are BUILT callers-first (see :func:`_helpers_callers_first`)
+    # but must be EMITTED callee-first, so a C caller sees a definition and not an implicit
+    # declaration.
+    defn_order = {h.name: i for i, h in enumerate(helper_defs)}
+    out.sort(key=lambda ir: defn_order[ir.kernel_name])
     return out
 
 
