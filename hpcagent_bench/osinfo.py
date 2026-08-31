@@ -9,6 +9,7 @@ helper (:func:`mp_context`) is the exception and reads the runtime config.
 WSL2 is a real Linux kernel, so it is ``IS_LINUX`` and needs no special casing.
 """
 import platform
+import signal
 import sys
 from functools import lru_cache
 
@@ -95,3 +96,23 @@ def mp_context() -> str:
     service pins ``forkserver`` (fork-from-a-thread is unsafe)."""
     value = config.get("runtime.mp_context", "auto")
     return default_mp_context() if value == "auto" else value
+
+
+def unblock_sigchld() -> None:
+    """Let a build see its own children exit.
+
+    srun/mpirun start their tasks with SIGCHLD blocked; the mask survives fork AND exec, and CPython
+    does NOT reset it for a subprocess -- so cmake inherits the block, and KWSys, which learns that
+    the helpers it spawns during configure have exited by receiving SIGCHLD, waits for it in
+    ``select()`` forever. Measured: cmake 4.3.4 configure times out with SIGCHLD blocked and exits 0
+    without it. Doing it in-process rather than in a launcher wrapper covers every way the job is
+    started (``srun python -m ...`` execs the interpreter directly, so no shell is around to clear
+    the mask).
+
+    Masks are per-THREAD and a child inherits the FORKING thread's, so the one call has to happen
+    before anything that builds -- and before any thread that might: a thread starts with the
+    creating thread's mask. :func:`hpcagent_bench.cli.main` is that point for every verb, which is
+    why this is called there and nowhere else; a per-framework call would leave ``preflight``, the
+    judge service and the native/pluto columns spawning cmake under the inherited block.
+    """
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGCHLD})

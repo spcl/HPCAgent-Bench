@@ -14,9 +14,25 @@ through a leaky hook surface. A subclass is free to override ``emit_stmt``
 wholesale if a target ever needs a different dispatch.
 """
 import ast
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 from numpyto_common.ir import numpy_origin
+
+
+def index_rank_error(name: str, shape: Optional[Sequence[str]], n_indices: int) -> str:
+    """The one diagnostic both backends raise for an index the target cannot express.
+
+    WHEN to raise it is language-specific and stays in the backend: C flattens row-major onto a
+    flat pointer, so the axis count must MATCH the declared rank; Fortran emits a genuine
+    multidimensional reference, where fewer axes is a valid array section but more is not. WHAT
+    to say is not -- both mean the array's rank is unknown or disagrees with the source, almost
+    always a missing ``init.shapes`` declaration or a numpy construct with no static rank (a
+    boolean-mask gather). Neither may emit anyway: the result does not compile.
+    """
+    rank = "unknown" if shape is None else list(shape)
+    return (f"cannot index {name!r} with {n_indices} axes: its shape is {rank} "
+            f"(rank {0 if shape is None else len(shape)}). "
+            f"Declare init.shapes[{name!r}] with the matching rank.")
 
 
 class BaseEmitter:

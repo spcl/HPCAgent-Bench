@@ -9,6 +9,11 @@ things are being distributed, not because three scripts drifted apart.
 | **role deployment** | ROLES (inference / judge / optimizer) across nodes | via the launcher, not MPI | `submit_launch.sbatch` |
 | **problem decomposition** | ONE KERNEL across ranks | yes, MPI | `submit_mpi_scaling.sbatch`, `cscs/submit_mpi_scaling_alps.sbatch` |
 
+`submit_xl.sbatch` is not a fourth shape: it is the corpus sweep at the `XL` rung, with both
+native tracks run back to back in one allocation under distinct `RUN_TAG`s. It resolves every
+selector before spending allocation time and refuses a non-`XL` preset, because the four-ranks-
+per-node reasoning below is about `XL` specifically.
+
 ## 1. Corpus sweep -- static round-robin, no coordination
 
 `sbatch -N 8` gives a nodelist. One task per node. Each rank reads `SLURM_PROCID` and takes
@@ -24,9 +29,16 @@ Container: one per rank, `--environment=$EDF` on every `srun` step (Alps) or the
 locally. A step without it silently runs on the bare node, which reads as a broken environment
 rather than a missing flag — so the factory refuses instead.
 
+**Ranks per node.** Non-agent mode runs NATIVE, so one rank is one deterministic optimizer that
+compiles, runs and validates its own output -- no inference endpoint, no judge, nothing to place
+beside it. Four per node is what the memory allows: `sizing.TRACK_XL_CEILING` caps an `XL` working
+set at 4 GB for both `loop_level_reasoning` and `scientific_computing`, so four ranks hold ~16 GB
+of live data. The 20 GB `sizing.kernel_memory_gb` floor each rank imposes on its children is a
+`RLIMIT_AS` limit, not a reservation, and the ceiling that sized the data is five times tighter,
+so four caps cannot bind at once.
+
 **Planned change** (`DESIGN_static_workload_distribution.md`): replace the stride with an LPT
-bin-pack now that per-kernel cost is known, subject to a per-node memory cap, since XL is 16 GB
-and four ranks on one node is 64 GB.
+bin-pack now that per-kernel cost is known, subject to a per-node memory cap.
 
 ## 2. Role deployment -- rank number IS the role
 

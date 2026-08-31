@@ -26,7 +26,6 @@ init:
   scalars:
     match_score: 1
     mismatch_penalty: -1
-    H: 0
   dtypes:
     H: int32
   func_name: initialize

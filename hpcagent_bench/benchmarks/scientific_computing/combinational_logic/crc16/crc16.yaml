@@ -31,8 +31,6 @@ init:
     poly: 4129
     crc_init: 65535
     xorout: 65535
-    crc: 0
-    data: 0
   dtypes:
     crc: int64
     data: int64

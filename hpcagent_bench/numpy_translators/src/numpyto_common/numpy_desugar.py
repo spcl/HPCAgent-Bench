@@ -14,14 +14,20 @@ parsed :class:`KernelIR` (declared arrays) plus a light local-allocation walk
 rank > 2) from an ordinary 2-D one (which numba / pythran handle).
 """
 import ast
+import re
 import copy
 import math
 from collections.abc import Sequence
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, FrozenSet, Iterator, List, Optional, Set, Tuple
 
 from numpyto_common import dtypes
-from numpyto_common.lib_nodes import _parse_einsum_subscripts
+from numpyto_common.lib_nodes import _const_int, _iter_extent_of, _parse_einsum_subscripts, extent_is_scalar
 from numpyto_common.ordered import OrderedSet
+
+#: Tuple-shape lengths currently known to :func:`expr_rank`. Set by
+# :func:`rank_table` while it is iterating so ``.reshape(name)`` can report the
+# tuple's actual rank instead of the rank-1 guess a bare Name gets.
+_active_tuple_lengths: Optional[Dict[str, int]] = None
 
 
 class DesugarError(NotImplementedError):
@@ -199,17 +205,32 @@ def expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
         if _is_ellipsis(sl):
             return base  # a[...] keeps every axis
         if isinstance(sl, ast.Tuple):
-            # slices keep a dim, newaxis adds one, an integer/array index removes
-            # one, and an ellipsis (``a[..., i]``) expands to full slices over
-            # all otherwise-unindexed axes -- it drops NOTHING.
+            # slices keep a dim, newaxis adds one, a SCALAR index removes one, and an ellipsis
+            # (``a[..., i]``) expands to full slices over all otherwise-unindexed axes -- it drops
+            # NOTHING. A 1-D fancy index amid slices is neither: it consumes the base axis and
+            # reinserts its own (``suffix[:, idx]`` with ``idx = np.arange(W)`` stays rank 2, one
+            # axis in, one out), so its net drop is ``1 - its own rank``, not the flat ``1`` a
+            # scalar loop index costs. Unknown-rank index defaults to the scalar reading, same as
+            # every kernel that reached this line before a fancy index needed distinguishing.
+            # Advanced indices BROADCAST against each other rather than each contributing their own
+            # axes: ``A[ia, ib]`` with both rank 2 is rank 2, not 4. Summing them per index made
+            # field_gather's ``ey_arr[:, :, 0, 0][ia_b, ib_b]`` rank 4, the product it feeds rank 4
+            # too, and the reduction over it emitted a nest reading ``.shape[5]`` off it. So the
+            # whole advanced block consumes one base axis per index and gives back ONE broadcast
+            # shape -- ``n_adv - max(rank)``. An integer index is the rank-0 case of the same
+            # formula, and an unknown rank keeps reading as one, exactly as before.
             drop = 0
+            adv_ranks = []
             for e in sl.elts:
                 if isinstance(e, ast.Slice) or _is_ellipsis(e):
                     continue
                 if _is_newaxis(e):
                     drop -= 1
-                else:
-                    drop += 1
+                    continue
+                idx_rank = expr_rank(e, ranks)
+                adv_ranks.append(0 if idx_rank is None else idx_rank)
+            if adv_ranks:
+                drop += len(adv_ranks) - max(adv_ranks)
             return base - drop
         if isinstance(sl, ast.Call) and isinstance(sl.func, ast.Name) and sl.func.id == "tuple":
             # ``A[tuple(axes)]`` is the WHOLE index, one entry per axis -- not the single scalar
@@ -268,6 +289,14 @@ def expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
             n = _tuple_len(value.args[1])
             if n is not None:
                 return n
+        if attr == "diag" and value.args:
+            # The one numpy call whose rank moves in BOTH directions: 2-D in extracts the diagonal
+            # (1-D out), 1-D in builds the matrix (2-D out). The elementwise fallback below reports
+            # the operand's rank, so raman_fitting's ``scale = np.diag(normal).copy()`` came back
+            # rank 2 and ``scale[scale <= 0] = 1.0`` was lowered as a two-deep nest reading
+            # ``scale.shape[1]`` off a vector.
+            base = expr_rank(value.args[0], ranks)
+            return {1: 2, 2: 1}.get(base)
         if attr in ("copy", "ascontiguousarray", "asarray", "array") and value.args:
             return expr_rank(value.args[0], ranks)
         if attr == "take" and len(value.args) >= 2:
@@ -286,6 +315,13 @@ def expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
             return None if base is None or axes is None else base - axes
         if attr == "matmul" and len(value.args) == 2:
             return expr_rank(ast.BinOp(left=value.args[0], op=ast.MatMult(), right=value.args[1]), ranks)
+        if attr == "tensordot" and len(value.args) >= 2:
+            # A contraction, not a broadcast: the fallback below reported ``max(operand ranks)``,
+            # which read ls3df's ``tensordot(row, X)`` (2 and 4, one axis contracted) as rank 2 and
+            # built a 2-entry ``moveaxis`` permutation for a rank-4 result. Unknown stays unknown.
+            la, lb = expr_rank(value.args[0], ranks), expr_rank(value.args[1], ranks)
+            n = _tensordot_contracted(value)
+            return None if la is None or lb is None or n is None else la + lb - 2 * n
         # rank-preserving methods ``x.astype(dt)`` / ``x.copy()`` (receiver's rank).
         if (isinstance(value.func, ast.Attribute) and value.func.attr in ("astype", "copy", "ravel")):
             return expr_rank(value.func.value, ranks) if value.func.attr != "ravel" else 1
@@ -299,6 +335,8 @@ def expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
             # ndim 0. The single-arg spelling stays restricted: a lone Name may hold the whole
             # shape TUPLE, which is a rank this cannot count.
             n = _tuple_len(value.args[0])
+            if n is None and len(value.args) == 1 and isinstance(value.args[0], ast.Name):
+                n = (_active_tuple_lengths or {}).get(value.args[0].id)
             if n is None and (len(value.args) > 1 or isinstance(value.args[0], (ast.Name, ast.Constant))):
                 n = len(value.args)
             if n is not None:
@@ -312,6 +350,24 @@ def expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
     return None
 
 
+def _tensordot_contracted(value: ast.Call) -> Optional[int]:
+    """Axes each operand of ``np.tensordot`` contracts: an integer ``axes`` contracts that many, a
+    pair of axis sequences contracts one per listed axis, a pair of bare ints contracts one."""
+    kw = {k.arg: k.value for k in value.keywords}
+    axes = kw["axes"] if "axes" in kw else (value.args[2] if len(value.args) > 2 else None)
+    if axes is None:
+        return 2  # numpy's own default
+    n = _const_int(axes)
+    if n is not None:
+        return n
+    if isinstance(axes, (ast.Tuple, ast.List)) and len(axes.elts) == 2:
+        first = axes.elts[0]
+        if isinstance(first, (ast.Tuple, ast.List)):
+            return len(first.elts)
+        return None if _const_int(first) is None else 1
+    return None
+
+
 def _call_return_rank(value: ast.AST, call_returns: Dict[str, int]) -> Optional[int]:
     """Rank of ``helper(...)`` when ``helper`` is a local function with a known
     return rank -- ``expr_rank`` alone returns None for a call to a non-numpy
@@ -321,14 +377,129 @@ def _call_return_rank(value: ast.AST, call_returns: Dict[str, int]) -> Optional[
     return None
 
 
+#: An identifier inside a shape token, so a declared extent can be told from an array name.
+IDENT_RE = r"[A-Za-z_][A-Za-z0-9_]*"
+
+
+def name_value_pairs(tree: ast.AST) -> Iterator[Tuple[str, ast.expr]]:
+    """Every ``name = <expr>`` binding, including the elements of a parallel tuple assignment.
+
+    ``X, Y, sigma = Y, Ynew, sigma_new`` is three bindings, not none. Skipping it left ls3df_scf's
+    CheFSI recurrence with no forward edge from ``Y`` back to ``X``, so the loop-carried block never
+    took an extent and every shape read against it fell through to a backward walk that answers a
+    rebound name from whichever definition it reaches first.
+    """
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if isinstance(target, ast.Name):
+            yield target.id, node.value
+        elif (isinstance(target, ast.Tuple) and isinstance(node.value, ast.Tuple)
+              and len(target.elts) == len(node.value.elts)):
+            for t, v in zip(target.elts, node.value.elts):
+                if isinstance(t, ast.Name):
+                    yield t.id, v
+
+
+def extent_tokens(
+    value: ast.AST,
+    table: Dict[str, Tuple[str, ...]],
+    tuple_locals: FrozenSet[str] = frozenset(),
+    arrays: FrozenSet[str] = frozenset()
+) -> Optional[Tuple[str, ...]]:
+    """``value``'s shape as unparsed tokens, or ``None`` when this round cannot say.
+
+    An extent still spelled through a ``.shape`` read is reported as unknown rather than recorded:
+    it is the SAME extent as the declared one under a different name, and recording it would make
+    the two bindings of one local look like a disagreement and drop the local entirely. The joint
+    fixpoint in :func:`resolve_shape_reads` re-reads it once the read has been rewritten.
+
+    ``tuple_locals`` names the locals bound to a tuple. A shape argument spelled as a bare name --
+    ``x.reshape(shp)`` -- is read as a single dimension, which is right for a scalar and a whole
+    rank off for a tuple, and a rank-1 answer here is worse than no answer: it propagates. The
+    fold inlines those tuples, so this only catches one that could not be.
+    """
+    # An operand this round cannot size makes the whole expression unsized. The oracle does not say
+    # so: a broadcast with one unknown side reports the KNOWN side's extent, which is right for
+    # ``x * 2.0`` and a whole wrong shape for ``vloc[..., None] * X`` while ``X`` is still unknown.
+    # Only ARRAY operands count -- a scalar contributes no axis and is unknown to the table by
+    # nature, so requiring it here would refuse every array-scalar expression in the corpus.
+    if any(n.id in arrays and n.id not in table for n in ast.walk(value) if isinstance(n, ast.Name)):
+        return None
+    ext = _iter_extent_of(value, table)
+    if ext is None or extent_is_scalar(ext):
+        return None
+    toks = tuple(ast.unparse(e) for e in ext)
+    if any(".shape" in t for t in toks):
+        return None
+    return None if any(t in tuple_locals for t in toks) else toks
+
+
+def shape_table(tree: ast.AST, seed: Dict[str, Tuple[str, ...]]) -> Dict[str, Tuple[str, ...]]:
+    """Propagate full shapes across straight-line assignments to a fixpoint.
+
+    The rank table's twin, and the reason it exists: resolving a shape by walking BACKWARD from the
+    read to the definition cannot answer a name that is rebound, and cannot answer a cycle at all.
+    ls3df_scf's CheFSI loop carries ``X, Y, sigma = Y, Ynew, sigma_new``, so ``X`` is defined in
+    terms of ``Y`` and ``Y`` in terms of ``X``; a backward walk hits its own visit guard and reports
+    nothing, while a forward pass takes the extent in from the call site and closes the cycle on the
+    next round.
+
+    A name whose bindings do not AGREE is dropped, the same discipline as
+    :func:`_drop_rank_conflicts` -- the table is flow-insensitive, so keeping the last writer would
+    hand every consumer one shape at every program point. A declared array keeps its declared shape
+    whatever a rebinding makes it.
+    """
+    tuple_locals = frozenset(
+        node.targets[0].id for node in ast.walk(tree) if isinstance(node, ast.Assign) and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name) and isinstance(node.value, (ast.Tuple, ast.List)))
+    pairs = list(name_value_pairs(tree))
+    # Which names are ARRAYS, from the rank table -- the only question asked of it here, and the one
+    # it answers without needing an extent. A name it cannot rank counts as an array: refusing to
+    # size an expression that reads it costs a resolution, reporting the other operand's shape for
+    # it costs a wrong one.
+    ranks = rank_table(tree, {k: len(v) for k, v in seed.items()})
+    # A name the rank table cannot rank counts as an array -- refusing to size an expression that
+    # reads it costs a resolution, reporting the other operand's shape for it costs a wrong one, and
+    # the names that matter here are exactly the ones the rank table DROPPED for disagreeing.
+    # Manifest symbols are the exception: ``Lb`` is a declared extent, never an array, and treating
+    # it as one refused every allocation spelled with it.
+    symbols = {ident for shape in seed.values() for tok in shape for ident in re.findall(IDENT_RE, str(tok))}
+    arrays = (frozenset(n for n, _ in pairs if ranks.get(n, 1) >= 1) | frozenset(seed)) - symbols
+    table: Dict[str, Tuple[str, ...]] = {k: tuple(v) for k, v in seed.items()}
+    for _ in range(8):
+        changed = False
+        for name, value in pairs:
+            if name in seed:
+                continue
+            ext = extent_tokens(value, table, tuple_locals, arrays)
+            if ext is not None and table.get(name) != ext:
+                table[name] = ext
+                changed = True
+        if not changed:
+            break
+    per_name: Dict[str, OrderedSet] = {}
+    for name, value in pairs:
+        ext = extent_tokens(value, table, tuple_locals, arrays)
+        if ext is not None:
+            per_name.setdefault(name, OrderedSet()).add(ext)
+    for name, seen in per_name.items():
+        if len(seen) > 1 and name not in seed:
+            table.pop(name, None)
+    return table
+
+
 def rank_table(tree: ast.AST, seed: Dict[str, int], call_returns: Optional[Dict[str, int]] = None) -> Dict[str, int]:
     """Propagate ndim across straight-line assignments to a fixpoint. ``call_returns``
     (a ``{helper: return_ndim}`` map) lets a local bound to a helper call inherit
     that helper's return rank (the ML kernels thread arrays through relu/conv2d
     helpers, which ``expr_rank`` cannot see into)."""
+    global _active_tuple_lengths
     ranks = dict(seed)
     for _ in range(8):
         changed = False
+        _active_tuple_lengths = _build_tuple_lengths(tree, ranks, seed_ranks=seed)
         for node in ast.walk(tree):
             if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
                 r = expr_rank(node.value, ranks)
@@ -339,7 +510,9 @@ def rank_table(tree: ast.AST, seed: Dict[str, int], call_returns: Optional[Dict[
                     changed = True
         if not changed:
             break
+    _active_tuple_lengths = _build_tuple_lengths(tree, ranks, seed_ranks=seed)
     _drop_rank_conflicts(tree, ranks, seed)
+    _active_tuple_lengths = None
     return ranks
 
 
@@ -365,6 +538,114 @@ def _drop_rank_conflicts(tree: ast.AST, ranks: Dict[str, int], seed: Dict[str, i
             ranks[name] = seed[name]  # a declared array keeps its DECLARED rank, whatever a rebinding makes it
         else:
             ranks.pop(name, None)
+
+
+def _int_expr(value: ast.AST, ranks: Dict[str, int], seed_ranks: Optional[Dict[str, int]] = None) -> Optional[int]:
+    """Evaluate a small integer expression used as a tuple length or repeat
+    count. Supports constants, names (array rank), ``arr.ndim``, and the four
+    basic integer operations. Used to size tuple-shaped locals without running
+    the full numpy interpreter.
+
+    ``seed_ranks`` is the immutable rank seed (declared array ranks / helper
+    param evidence). It is used for ``arr.ndim`` queries so a circular
+    flow-insensitive inference cannot inflate a local's rank through its own
+    tuple-shape expression (gemm_group_norm_min_bias_add's
+    ``shape = (1, c) + (1,) * (x.ndim - 2)``).
+    """
+    if isinstance(value, ast.Constant) and isinstance(value.value, int):
+        return value.value
+    if isinstance(value, ast.Name):
+        return ranks.get(value.id)
+    if isinstance(value, ast.Attribute) and value.attr == "ndim" and isinstance(value.value, ast.Name):
+        if seed_ranks is not None and value.value.id in seed_ranks:
+            return seed_ranks[value.value.id]
+        return ranks.get(value.value.id)
+    if isinstance(value, ast.UnaryOp) and isinstance(value.op, ast.USub):
+        v = _int_expr(value.operand, ranks, seed_ranks)
+        return None if v is None else -v
+    if isinstance(value, ast.BinOp):
+        lv = _int_expr(value.left, ranks, seed_ranks)
+        rv = _int_expr(value.right, ranks, seed_ranks)
+        if lv is None or rv is None:
+            return None
+        if isinstance(value.op, ast.Add):
+            return lv + rv
+        if isinstance(value.op, ast.Sub):
+            return lv - rv
+        if isinstance(value.op, ast.Mult):
+            return lv * rv
+        if isinstance(value.op, (ast.Div, ast.FloorDiv)):
+            return None if rv == 0 else lv // rv
+    return None
+
+
+def _tuple_expr_len(value: ast.AST,
+                    ranks: Dict[str, int],
+                    tree: ast.AST,
+                    visited: Optional[Set[str]] = None,
+                    seed_ranks: Optional[Dict[str, int]] = None) -> Optional[int]:
+    """Length of a tuple-valued expression, if statically known.
+
+    Covers tuple/list literals, ``arr.shape``, tuple concatenation ``A + B``,
+    and repetition ``(1,) * n``. This is intentionally narrower than full
+    constant folding; it only needs to answer the cases that reach
+    ``.reshape(name)`` in the corpus.
+    """
+    if visited is None:
+        visited = set()
+    if isinstance(value, (ast.Tuple, ast.List)):
+        return len(value.elts)
+    if isinstance(value, ast.Attribute) and value.attr == "shape" and isinstance(value.value, ast.Name):
+        return ranks.get(value.value.id)
+    if isinstance(value, ast.Name) and value.id not in visited:
+        visited.add(value.id)
+        for node in _iter_function_bodies(tree):
+            if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                    and node.targets[0].id == value.id):
+                return _tuple_expr_len(node.value, ranks, tree, visited, seed_ranks)
+        return None
+    if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Add):
+        lv = _tuple_expr_len(value.left, ranks, tree, visited, seed_ranks)
+        rv = _tuple_expr_len(value.right, ranks, tree, visited, seed_ranks)
+        if lv is not None and rv is not None:
+            return lv + rv
+        return None
+    if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Mult):
+        # Tuple * int or int * tuple.
+        lt = _tuple_expr_len(value.left, ranks, tree, visited, seed_ranks)
+        rt = _tuple_expr_len(value.right, ranks, tree, visited, seed_ranks)
+        li = _int_expr(value.left, ranks, seed_ranks)
+        ri = _int_expr(value.right, ranks, seed_ranks)
+        if lt is not None and ri is not None:
+            return lt * ri
+        if rt is not None and li is not None:
+            return rt * li
+        return None
+    return None
+
+
+def _iter_function_bodies(node: ast.AST):
+    """Yield every Assign-bearing body under ``node`` (module or function)."""
+    for child in ast.walk(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module, ast.ClassDef)):
+            yield from child.body
+
+
+def _build_tuple_lengths(tree: ast.AST,
+                         ranks: Dict[str, int],
+                         seed_ranks: Optional[Dict[str, int]] = None) -> Dict[str, int]:
+    """Map each local bound to a statically-known tuple shape to its length.
+
+    Used by :func:`expr_rank` while ``rank_table`` is iterating, so
+    ``.reshape(name)`` reports the tuple's rank rather than guessing 1.
+    """
+    lengths: Dict[str, int] = {}
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
+            length = _tuple_expr_len(node.value, ranks, tree, seed_ranks=seed_ranks)
+            if length is not None:
+                lengths[node.targets[0].id] = length
+    return lengths
 
 
 def _dtype_kind(value: ast.AST, dtypes: Dict[str, str]) -> Optional[str]:
@@ -638,13 +919,44 @@ def _pad_inline_stmts(target: str, arr: ast.AST, widths, rank: int, ctr: int) ->
     return ast.parse("\n".join(src)).body
 
 
+def _widths_all_literal(widths) -> bool:
+    """True iff every (lo, hi) pair is a compile-time int -- the form dace's own ``np.pad``
+    replacement already lowers natively."""
+    return all(_const_int(lo) is not None and _const_int(hi) is not None for lo, hi in widths)
+
+
+def _pad_constant_inline_stmts(target: str, arr: ast.AST, widths, fill: ast.AST, ctr: int) -> List[ast.stmt]:
+    """Inline ``<target> = np.pad(arr, ..., mode="constant")`` as allocate-then-copy, for a
+    SYMBOLIC pad width dace's own replacement cannot take: it casts every width through
+    ``int()`` before using it in an f-string that would have accepted a symbolic expression just
+    as well, so a runtime-only width (this kernel's padded-out-to-a-block-boundary tail) raises
+    ``TypeError: Cannot convert symbols to int`` instead of compiling. ``np.full`` and a slice
+    assignment both already take symbolic extents (dace compiles the edge-mode loop nest above
+    with the same kind of bound), so this performs the identical fill-then-copy with no cast."""
+    p = f"__pdc{ctr}"
+    xv = f"{p}_x"
+    src = [f"{xv} = {ast.unparse(arr)}"]
+    dims = [f"{xv}.shape[{i}] + {ast.unparse(lo)} + {ast.unparse(hi)}" for i, (lo, hi) in enumerate(widths)]
+    src.append(f"{target} = np.full(({', '.join(dims)},), {ast.unparse(fill)}, {xv}.dtype)")
+    interior = ", ".join(f"{ast.unparse(lo)}:{ast.unparse(lo)} + {xv}.shape[{i}]" for i, (lo, _) in enumerate(widths))
+    src.append(f"{target}[{interior}] = {xv}")
+    return ast.parse("\n".join(src)).body
+
+
 class _PadInline(ast.NodeTransformer):
     """Replace ``name = np.pad(x, pad_width=..., mode="edge")`` with an inline
     edge-pad loop nest. Only the bare-assign form is handled; np.pad nested in a
-    larger expression is left verbatim (no misfire)."""
+    larger expression is left verbatim (no misfire).
 
-    def __init__(self, ranks: Dict[str, int]):
+    ``mode="constant"`` is left to the backend's own ``np.pad`` EXCEPT for dace with a
+    non-literal width (:data:`lower_symbolic_constant`): numba/pythran/dace all compile a
+    literal-width constant pad already, and dace compiles a symbolic-width one everywhere except
+    its own ``np.pad`` -- see :func:`_pad_constant_inline_stmts`.
+    """
+
+    def __init__(self, ranks: Dict[str, int], lower_symbolic_constant: bool = False):
         self.ranks = ranks
+        self.lower_symbolic_constant = lower_symbolic_constant
         self.changed = False
         self._ctr = 0
 
@@ -655,8 +967,9 @@ class _PadInline(ast.NodeTransformer):
         call = node.value
         kw = {k.arg: k.value for k in call.keywords}
         mode = kw.get("mode")
-        if not (isinstance(mode, ast.Constant) and mode.value == "edge") or not call.args:
-            return node  # only edge mode, array as first positional
+        mode_value = mode.value if isinstance(mode, ast.Constant) else None
+        if mode_value not in ("edge", "constant") or not call.args:
+            return node  # array as first positional, mode this pass knows how to lower
         arr = call.args[0]
         rank = expr_rank(arr, self.ranks)
         if rank is None or rank < 1:
@@ -665,8 +978,16 @@ class _PadInline(ast.NodeTransformer):
         widths = _const_pair_widths(pad_width, rank) if pad_width is not None else None
         if widths is None:
             return node
+        if mode_value == "edge":
+            self.changed = True
+            stmts = _pad_inline_stmts(node.targets[0].id, arr, widths, rank, self._ctr)
+            self._ctr += 1
+            return stmts
+        if not self.lower_symbolic_constant or _widths_all_literal(widths):
+            return node  # a literal-width constant pad compiles through dace's own np.pad
         self.changed = True
-        stmts = _pad_inline_stmts(node.targets[0].id, arr, widths, rank, self._ctr)
+        fill = kw.get("constant_values", ast.Constant(value=0))
+        stmts = _pad_constant_inline_stmts(node.targets[0].id, arr, widths, fill, self._ctr)
         self._ctr += 1
         return stmts
 
@@ -2107,8 +2428,9 @@ class _SearchsortedMaterialize(ast.NodeTransformer):
 class _HistogramHoister(ast.NodeTransformer):
     """Replace ``np.histogram(a, bins[, lo, hi][, weights=w])[0]`` with a fresh
     temp Name, emitting the numpy-histogram loop into ``self.pre``: a min/max scan
-    for the default range, then per-element binning ``b = int((a-lo)*bins/(hi-lo))``
-    clamped to ``[0, bins-1]`` accumulating ``1`` (or ``w[i]``). numba has no
+    for the default range, the ``np.linspace(lo, hi, bins + 1)`` edge array, then per-element
+    binning ``b = int((a-lo)*bins/(hi-lo))`` clamped to ``[0, bins-1]``, walked one step against
+    those edges (numpy's own correction) and accumulating ``1`` (or ``w[i]``). numba has no
     np.histogram; this is the same loop the C/Fortran backends lower (azimint_hist)."""
 
     def __init__(self, ctr: int):
@@ -2153,6 +2475,22 @@ class _HistogramHoister(ast.NodeTransformer):
             if not isinstance(weights, ast.Name):
                 lines.append(f"{wname} = {ast.unparse(weights)}")
             wdtype, add = f"{wname}.dtype", f"{wname}[{p}_i]"
+        # numpy's bin is defined by its EDGE ARRAY, not by the closed form below: it truncates
+        # the same index and then walks it one step against linspace's edges. The two round
+        # apart, and without the walk 6 of azimint_hist's 400000 fp32 samples land one bin over
+        # -- 0.2% on a bin ratio, past the fp32 band. So the edges are rebuilt with linspace's
+        # own arithmetic and, crucially, in the SAMPLE dtype, one rounding per statement: half
+        # an ulp of edge is worth ~20 misbinned samples at this count. Only edges 0..bins-1 are
+        # read (the walk up stops at bins-1), hence ``bins`` entries and no top edge.
+        edges = f"{p}_e"
+        lines += [
+            f"{edges} = np.zeros({bins}, {a}.dtype)",
+            f"{edges}[0] = ({hi_s} - {lo_s}) / {bins}",
+            f"{p}_st = {edges}[0]",
+            f"for {p}_j in range({bins}):",
+            f"    {edges}[{p}_j] = {p}_j * {p}_st",
+            f"    {edges}[{p}_j] = {edges}[{p}_j] + {lo_s}",
+        ]
         # numpy drops samples outside [lo, hi] (only the last bin is closed); the clamp alone
         # would fold them into bin 0 / bin-1 instead. Guard the increment. For an auto lo/hi
         # (a.min()/a.max()) every element is in range, so the guard is a no-op there.
@@ -2161,6 +2499,8 @@ class _HistogramHoister(ast.NodeTransformer):
             f"    if {lo_s} <= {a}[{p}_i] and {a}[{p}_i] <= {hi_s}:",
             f"        {p}_b = int(({a}[{p}_i] - {lo_s}) * {bins} / ({hi_s} - {lo_s}))",
             f"        if {p}_b < 0: {p}_b = 0", f"        if {p}_b > {bins} - 1: {p}_b = {bins} - 1",
+            f"        if {a}[{p}_i] < {edges}[{p}_b]: {p}_b = {p}_b - 1",
+            f"        if {p}_b < {bins} - 1 and {a}[{p}_i] >= {edges}[{p}_b + 1]: {p}_b = {p}_b + 1",
             f"        {temp}[{p}_b] += {add}"
         ]
         self.pre.extend(ast.parse("\n".join(lines)).body)
@@ -2834,6 +3174,37 @@ def _fd_step(precision: Optional[str] = None) -> str:
     emitted, so a wrong-but-fp64 step is the status quo, not a regression.
     """
     return repr(math.sqrt(dtypes.float_eps(_working_float_dtype(precision))))
+
+
+class _FinfoEpsFold(ast.NodeTransformer):
+    """``np.finfo(<anything>).eps`` -> the machine epsilon of the WORKING float dtype, as a literal.
+
+    A round-off BOUND (MINPACK's ftol/xtol at sqrt(eps), a finite-difference step) states "no better
+    than round-off is possible", so it has to follow the precision the kernel is lowered to. An
+    accuracy REQUIREMENT (a solver's ``tol=1e-6``) states what the solve must achieve and is a fixed
+    number at every width -- it must NOT go through here.
+
+    Folded rather than lowered because the emitters write source text: there is no ``finfo`` at
+    native run time, and the value is known once the precision is. Same reasoning and same registry
+    as :func:`_fd_step`.
+    """
+
+    def __init__(self, precision: Optional[str] = None):
+        self.eps = dtypes.float_eps(_working_float_dtype(precision))
+
+    def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
+        self.generic_visit(node)
+        call = node.value
+        if (node.attr == "eps" and isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "finfo" and isinstance(call.func.value, ast.Name)
+                and call.func.value.id in ("np", "numpy")):
+            return ast.copy_location(ast.Constant(value=self.eps), node)
+        return node
+
+
+def fold_finfo_eps(tree: ast.Module, precision: Optional[str] = None) -> None:
+    """Fold every ``np.finfo(...).eps`` in ``tree`` to the working precision's epsilon."""
+    _FinfoEpsFold(precision).visit(tree)
 
 
 def _working_float_dtype(precision: Optional[str] = None) -> str:
@@ -4326,12 +4697,20 @@ def _param_body_rank_evidence(fn: ast.FunctionDef) -> Dict[str, int]:
     return ev
 
 
-def _return_rank(fn: ast.FunctionDef, ranks: Dict[str, int]) -> Optional[int]:
+def _return_rank(fn: ast.FunctionDef,
+                 ranks: Dict[str, int],
+                 seed_ranks: Optional[Dict[str, int]] = None) -> Optional[int]:
     """Rank of ``fn``'s returned value (the max over its ``return`` statements),
     given a rank table for its body -- so a caller can propagate it."""
-    rs = [expr_rank(n.value, ranks) for n in ast.walk(fn) if isinstance(n, ast.Return) and n.value is not None]
-    rs = [r for r in rs if r is not None]
-    return max(rs) if rs else None
+    global _active_tuple_lengths
+    prev = _active_tuple_lengths
+    _active_tuple_lengths = _build_tuple_lengths(fn, ranks, seed_ranks=seed_ranks)
+    try:
+        rs = [expr_rank(n.value, ranks) for n in ast.walk(fn) if isinstance(n, ast.Return) and n.value is not None]
+        rs = [r for r in rs if r is not None]
+        return max(rs) if rs else None
+    finally:
+        _active_tuple_lengths = prev
 
 
 def _infer_param_ranks(funcs: List[ast.FunctionDef], kernel_name: str,
@@ -4356,7 +4735,7 @@ def _infer_param_ranks(funcs: List[ast.FunctionDef], kernel_name: str,
             if fn.name == kernel_name:
                 base.update(kir_seed)
             ranks = rank_table(fn, base, call_returns=ret_rank)
-            rr = _return_rank(fn, ranks)
+            rr = _return_rank(fn, ranks, seed_ranks=base)
             if rr is not None and ret_rank.get(fn.name) != rr:
                 ret_rank[fn.name] = rr
                 changed = True
@@ -5151,7 +5530,7 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
             _LinalgInline(ranks, dtypes, lower_linalg, lower_solve_rhs_ranks),
             _ReshapeMatmulInline(ranks),
             _BatchedMatmulToLoop(ranks),
-            _PadInline(ranks),
+            _PadInline(ranks, lower_symbolic_constant=backend == "dace"),
             _EinsumInline(),
             _FftInline(ranks, kir_array_dtypes),
             _MgridInline(),

@@ -106,6 +106,10 @@ VECLIB_ROUTE = {
     "CPU_BASELINE_ICPX": "builtin",
     "CUDA_BASELINE": "device",
     "HIP_BASELINE": "device",
+    # NVHPC ships its own vector math library and has no libmvec knob -- there is nothing to
+    # classify beyond "needs none", which is what this guard asks each baseline to declare.
+    "CPU_BASELINE_NVHPC": "builtin",
+    "CPU_BASELINE_NVCXX": "builtin",
 }
 
 

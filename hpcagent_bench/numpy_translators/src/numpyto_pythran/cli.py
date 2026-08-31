@@ -8,14 +8,14 @@ import argparse
 import pathlib
 import sys
 
-from numpyto_common.frontend import parse_kernel
+from numpyto_common.frontend import emit_with_inline_fallback, parse_kernel
 from numpyto_common.naming import short_for
 from numpyto_common.ir import apply_precision
 from numpyto_pythran.emit import emit_pythran
 from numpyto_common.emit_io import write_generated
 
 
-def cmd_emit(args: argparse.Namespace) -> int:
+def emit_once(args: argparse.Namespace) -> int:
     kir = parse_kernel(args.kernel, args.bench_info, config=args.config, precision=args.precision)
     # pythran's ``#pythran export`` is dtype-SPECIFIC (unlike numba/cupy
     # which infer at runtime), so the export must match the input
@@ -34,6 +34,16 @@ def cmd_emit(args: argparse.Namespace) -> int:
     status = write_generated(args.out / name, out_src, source=f"{short}_numpy.py")
     print(f"numpyto_pythran: {status} {name}")
     return 0
+
+
+def cmd_emit(args: argparse.Namespace) -> int:
+    """Emit, retrying once with helper inlining forced on.
+
+    A level-3 kernel is parsed with its helpers KEPT as their own functions; when that form has no
+    emittable shape the failure lands here, in an emitter, not in the parse the frontend can retry
+    for itself. See :func:`numpyto_common.frontend.emit_with_inline_fallback`.
+    """
+    return emit_with_inline_fallback(lambda: emit_once(args))
 
 
 def build_parser() -> argparse.ArgumentParser:

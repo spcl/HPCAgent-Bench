@@ -245,6 +245,29 @@ def test_the_column_compiles_c_with_a_c_driver() -> None:
     assert cpp_runtime.FRAMEWORK_LANG["pluto"] != cpp_runtime.FRAMEWORK_LANG["llvm"]
 
 
+def test_the_ppcg_column_follows_the_local_gpu_toolchain(monkeypatch) -> None:
+    """PPCG has no AMD target, so on a ROCm box its CUDA is hipified and built by hipcc. Both halves
+    of that -- the language the build compiles and the extension ppcg's output is handed over with --
+    have to move together, and compilers.yaml turns the language into the compiler, so a hardcoded
+    ``cuda``/``nvcc`` was a column that could only ever run on one vendor."""
+    from hpcagent_bench import languages, ppcg_transform
+    scop = pathlib.Path("/tmp/x_fp64_pluto_input.c")
+    for backend, ext, compiler in (("hip", "hip", "hipcc"), ("cuda", "cu", "nvcc")):
+        monkeypatch.setattr(languages, "gpu_backend", lambda backend=backend: backend)
+        monkeypatch.setattr(ppcg_transform, "gpu_backend", lambda backend=backend: backend)
+        assert [p.name for p in ppcg_transform.transformed_paths(scop)
+                ] == [f"x_fp64_pluto_input_host.{ext}", f"x_fp64_pluto_input_kernel.{ext}"]
+        assert languages._compiler_for_lang(languages._load_compilers(), backend)[0] == compiler
+
+
+def test_ppcg_only_ever_asks_for_cuda() -> None:
+    """The ``--target`` is not vendor-derived and must not become so: ppcg takes c/cuda/opencl and
+    has no AMD target at all, so ``cuda`` is what it is asked for on every host and the translation
+    happens after (:func:`ppcg_transform.hipify`)."""
+    from hpcagent_bench import ppcg_transform
+    assert "--target=cuda" in ppcg_transform.PPCG_ARGS
+
+
 def test_polycc_is_invoked_with_pet_and_the_report_only_adds_verbosity() -> None:
     """``--pet`` because the emitted scop uses ``int64_t`` counters the default clan extractor
     rejects. The report's args are defined as an EXTENSION of the build's so the two are structurally

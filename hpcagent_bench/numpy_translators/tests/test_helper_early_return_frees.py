@@ -97,9 +97,18 @@ RETURNS_BUFFER = ("import numpy as np\n\n\n"
 
 def test_returning_a_heap_local_by_value_is_refused_by_name():
     """Freeing on the way out must never hand back a dangling pointer. Emitting the free would; NOT
-    emitting it leaks; the emitted C does not even typecheck. So it is refused, naming the buffer."""
-    with pytest.raises(NotImplementedError, match="heap buffer"):
+    emitting it leaks; the emitted C does not even typecheck. So it is refused, naming the buffer.
+
+    The refusal is raised while the helper is CLASSIFIED, not while its return is emitted: the C
+    emitter's own guard fires per backend, and Fortran had none -- it emitted a subroutine gfortran
+    rejects outright ("VALUE attribute conflicts with FUNCTION attribute"). Refusing once, in the
+    frontend, covers every backend from one place; the name of the buffer is still in the message.
+    """
+    with pytest.raises(NotImplementedError, match=r"returns its own array 't' by value"):
         emitted(cpp=False, source=RETURNS_BUFFER)
+    # Same refusal for C++ and Fortran, which is what moving it upstream buys.
+    with pytest.raises(NotImplementedError, match=r"returns its own array 't' by value"):
+        emitted(cpp=True, source=RETURNS_BUFFER)
 
 
 #: A local whose EXTENT is computed in the loop body, so its allocation is deferred to a marker

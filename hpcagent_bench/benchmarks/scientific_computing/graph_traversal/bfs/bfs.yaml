@@ -18,9 +18,6 @@ init:
   output_args:
   - graph
   - level
-  scalars:
-    graph: 0
-    level: 0
   dtypes:
     graph: int64
     level: int64

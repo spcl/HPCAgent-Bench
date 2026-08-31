@@ -2,10 +2,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """One DaCe flavor per SDFG pipeline, and the two things that make them meaningful.
 
+THREE optimizers -- ``parallel``, ``autoopt``, ``canon`` -- times TWO targets, and nothing else.
+There are no ``strict``/``fusion`` rungs any more: those were stages of a search, and a search
+reports its winner, which answers "how fast is DaCe" rather than "how fast is THIS optimizer".
+
 A flavor that scores one pipeline is only useful if it scores THAT pipeline and pays for nothing
 else, and if the columns that need spcl/dace@extended are exactly the ones that ask for it --
-``dace_cpu_parallel`` exists to be runnable on upstream DaCe, and a gate that fires on every
-``dace_*`` name would make that impossible while the column still looked fine locally.
+the ``autoopt`` columns are upstream DaCe's own optimizer and must stay runnable on a stock
+install, so a fork gate that fired on every ``dace_*`` name would make that impossible while the
+column still looked fine locally.
 """
 import json
 import shlex
@@ -17,22 +22,34 @@ from hpcagent_bench.frameworks.dace_framework import (DACE_PIPELINES, DEFAULT_PI
 from hpcagent_bench.frameworks.framework import (FRAMEWORK_META, check_flavor_registry, framework_flavors, split_flavor)
 from hpcagent_bench.harness import preflight
 
-#: (flavor, what it scores, what it must BUILD to get there).
+#: (flavor, what it scores, what it must BUILD to get there). THREE optimizers x TWO targets, and
+#: every pipeline is parentless now: there are no intermediate rungs left to build through, so what
+#: a flavor scores and what it builds are the same one-element list.
 EXPECTED = (
-    ("dace_cpu_parallel", ("parallel", ), ["strict", "fusion", "parallel"]),
-    ("dace_cpu_autoopt", ("autoopt", ), ["strict", "autoopt"]),
-    ("dace_cpu_canonicalize", ("canonicalize", ), ["strict", "canonicalize"]),
-    ("dace_gpu_parallel", ("parallel", ), ["strict", "fusion", "parallel"]),
-    ("dace_gpu_autoopt", ("autoopt", ), ["strict", "autoopt"]),
-    ("dace_gpu_canonicalize", ("canonicalize", ), ["strict", "canonicalize"]),
+    ("dace_cpu", ("parallel_cpu", ), ["parallel_cpu"]),
+    ("dace_gpu", ("parallel_gpu", ), ["parallel_gpu"]),
+    ("dace_cpu_autoopt", ("autoopt_cpu", ), ["autoopt_cpu"]),
+    ("dace_gpu_autoopt", ("autoopt_gpu", ), ["autoopt_gpu"]),
+    ("dace_cpu_canonicalize", ("canon_cpu", ), ["canon_cpu"]),
+    ("dace_gpu_canonicalize", ("canon_gpu", ), ["canon_gpu"]),
 )
 
 
 @pytest.mark.parametrize("flavor,scored,build", EXPECTED)
 def test_a_flavor_scores_its_pipeline_and_builds_only_its_parents(flavor, scored, build):
-    """``fusion`` is ``parallel``'s intermediate, so a canonicalize-only column must not run it."""
+    """A column pays for its own pipeline and nothing else. With the search rungs gone there is no
+    parent to inherit, so anything extra in the build list is work no column asked for."""
     assert FRAMEWORK_META[flavor]["pipelines"] == scored
     assert needed_pipelines(scored) == build
+
+
+def test_every_pipeline_is_scored_by_exactly_one_flavor():
+    """Six pipelines, six columns, one each. A pipeline no flavor names is measured by nothing; a
+    pipeline two flavors name makes two columns report the same number under different titles."""
+    scored = [p for meta in FRAMEWORK_META.values() if meta.get("base") == "dace" for p in meta["pipelines"]]
+    assert sorted(scored) == sorted(
+        p.name
+        for p in DACE_PIPELINES), (f"pipelines {sorted(p.name for p in DACE_PIPELINES)} vs scored {sorted(scored)}")
 
 
 def test_parents_come_before_children():
@@ -55,10 +72,12 @@ def test_only_canonicalize_columns_need_the_fork():
     every = framework_flavors("dace")
     gated = set(preflight.needs_canonicalize(every))
     for name in every:
-        wants = "canonicalize" in FRAMEWORK_META[name].get("pipelines", DEFAULT_PIPELINES)
+        # By PREFIX: the pipelines are named per target (``canon_cpu`` / ``canon_gpu``), so an
+        # equality test against "canonicalize" matches nothing and the gate reads as empty.
+        wants = any(p.startswith("canon") for p in FRAMEWORK_META[name].get("pipelines", DEFAULT_PIPELINES))
         assert (name in gated) is wants, f"{name}: fork gate does not match its pipelines"
-    assert "dace_cpu_parallel" not in gated, (
-        "dace_cpu_parallel is upstream transformations end to end; gating it on the fork removes "
+    assert "dace_cpu_autoopt" not in gated, (
+        "dace_cpu_autoopt is upstream auto_optimize end to end; gating it on the fork removes "
         "the only column that can be measured on both trees")
     assert "dace_cpu_canonicalize" in gated
 
@@ -69,9 +88,9 @@ def test_every_dace_flavor_is_a_deterministic_column():
 
 
 @pytest.mark.parametrize("flavor,expected", [
-    ("dace_cpu_parallel", ("dace_cpu", "parallel")),
+    ("dace_cpu_autoopt", ("dace_cpu", "autoopt")),
     ("dace_cpu_canonicalize", ("dace_cpu", "canonicalize")),
-    ("dace_gpu_parallel", ("dace_gpu", "parallel")),
+    ("dace_gpu_autoopt", ("dace_gpu", "autoopt")),
     ("dace_cpu", ("dace_cpu", None)),
     ("numpy", ("numpy", None)),
 ])
@@ -82,18 +101,18 @@ def test_the_flat_name_splits_into_framework_and_flavor(flavor, expected):
 
 
 def test_the_split_is_declared_not_parsed():
-    """``dace_cpu_parallel`` reads equally well as ``dace_cpu`` + ``parallel`` or ``dace`` +
+    """``dace_cpu_autoopt`` reads equally well as ``dace_cpu`` + ``autoopt`` or ``dace`` +
     ``cpu_parallel``; no underscore rule can tell them apart, so the entry states both halves.
 
     Pinned because the tempting shortcut -- derive the column by stripping the flavor suffix -- is
     only unambiguous while no framework named ``dace`` exists, and it would start returning a
     different answer on the day one is registered."""
-    meta = FRAMEWORK_META["dace_cpu_parallel"]
-    assert (meta["column"], meta["flavor"]) == ("dace_cpu", "parallel")
-    assert split_flavor("dace_cpu_parallel") == ("dace_cpu", "parallel")
+    meta = FRAMEWORK_META["dace_cpu_autoopt"]
+    assert (meta["column"], meta["flavor"]) == ("dace_cpu", "autoopt")
+    assert split_flavor("dace_cpu_autoopt") == ("dace_cpu", "autoopt")
     # The alternative reading composes to the same flat name, which is exactly why parsing cannot
     # decide between them -- and why declaring is the only safe answer.
-    assert "dace_cpu_parallel" == "dace" + "_" + "cpu_parallel"
+    assert "dace_cpu_autoopt" == "dace" + "_" + "cpu_autoopt"
 
 
 @pytest.mark.parametrize("broken,why", [
@@ -110,14 +129,14 @@ def test_the_split_is_declared_not_parsed():
         "column": "not_a_framework"
     }, "column is not registered"),
     ({
-        "flavor": "cpu_parallel",
+        "flavor": "cpu_autoopt",
         "column": "dace_cpu"
     }, "pair does not compose into the name"),
 ])
 def test_a_malformed_flavor_entry_is_rejected_at_import(monkeypatch, broken, why):
     """Each of these writes a wrong GROUP BY key onto every row of a finished sweep."""
-    entry = {k: v for k, v in {**FRAMEWORK_META["dace_cpu_parallel"], **broken}.items() if v is not None}
-    monkeypatch.setitem(FRAMEWORK_META, "dace_cpu_parallel", entry)
+    entry = {k: v for k, v in {**FRAMEWORK_META["dace_cpu_autoopt"], **broken}.items() if v is not None}
+    monkeypatch.setitem(FRAMEWORK_META, "dace_cpu_autoopt", entry)
     with pytest.raises(KeyError):
         check_flavor_registry()
 

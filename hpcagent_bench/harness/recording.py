@@ -138,6 +138,11 @@ CREATE TABLE IF NOT EXISTS submissions (
     native_ns   REAL,
     speedup     REAL,
     suspect     INTEGER CHECK(suspect IN (0,1)),   -- implausible speedup, flagged
+    -- WHICH EXPERIMENT these rows belong to, so two campaigns sharing a results DB can be told
+    -- apart without parsing run_id. run_id already carries the arm as a dotted prefix, but that is
+    -- a convention no writer enforces and an arm is not an experiment: a repo-vs-kernel A/B is two
+    -- arms of ONE experiment. NULL = the writer named none (every row written before this column).
+    experiment  TEXT,
     cpu         TEXT,
     commit_sha  TEXT,
     prompt_hash TEXT,                        -- -> prompts(hash) / the stored prompt file
@@ -163,6 +168,11 @@ CREATE TABLE IF NOT EXISTS attempts (
     correct     INTEGER CHECK(correct IN (0,1)),
     reason      TEXT,                          -- which gate failed
     detail      TEXT,
+    -- WHICH EXPERIMENT these rows belong to, so two campaigns sharing a results DB can be told
+    -- apart without parsing run_id. run_id already carries the arm as a dotted prefix, but that is
+    -- a convention no writer enforces and an arm is not an experiment: a repo-vs-kernel A/B is two
+    -- arms of ONE experiment. NULL = the writer named none (every row written before this column).
+    experiment  TEXT,
     cpu         TEXT,
     commit_sha  TEXT,
     prompt_hash TEXT,                        -- -> prompts(hash) / the stored prompt file
@@ -208,6 +218,11 @@ CREATE TABLE IF NOT EXISTS calls (
     -- did not resolve one.
     compiler    TEXT,
     baseline    TEXT,
+    -- WHICH EXPERIMENT these rows belong to, so two campaigns sharing a results DB can be told
+    -- apart without parsing run_id. run_id already carries the arm as a dotted prefix, but that is
+    -- a convention no writer enforces and an arm is not an experiment: a repo-vs-kernel A/B is two
+    -- arms of ONE experiment. NULL = the writer named none (every row written before this column).
+    experiment  TEXT,
     cpu         TEXT,
     commit_sha  TEXT,
     prompt_hash TEXT,                        -- -> prompts(hash) / the stored prompt file
@@ -520,6 +535,16 @@ def connect(path: Optional[str] = None) -> sqlite3.Connection:
     return conn
 
 
+def experiment_tag() -> Optional[str]:
+    """The experiment these rows belong to (``record.experiment``), or None when unset.
+
+    Set it per campaign, not per arm: the point is to filter one experiment's rows out of a results
+    DB that several campaigns write to, and the arms of one A/B share the experiment they are arms
+    of. Env-overridable as ``$HPCAGENT_BENCH_RECORD_EXPERIMENT`` like every other config key."""
+    tag = str(config.get("record.experiment", "") or "").strip()
+    return tag or None
+
+
 def _ensure_schema(conn: sqlite3.Connection) -> None:
     """Create the ONE current schema -- tables + indexes -- idempotently (``CREATE ... IF NOT EXISTS``)."""
     cur = conn.cursor()
@@ -532,6 +557,13 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     cur.execute(_CALLS_DDL)
     for stmt in _INDEXES:
         cur.execute(stmt)
+    # CREATE TABLE IF NOT EXISTS is a no-op on a DB that predates a column, so an added one has to
+    # be applied by ALTER. Additive and nullable, so old rows stay readable and old shards still
+    # merge (_columns takes the intersection).
+    for table in ("submissions", "attempts", "calls"):
+        have = {r[1] for r in cur.execute(f"PRAGMA table_info({table})")}
+        if "experiment" not in have:
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN experiment TEXT")
     conn.commit()
 
 
@@ -797,11 +829,12 @@ def record(score: Score,
             conn.execute(
                 """INSERT INTO submissions(
                     run_id, ts, benchmark, preset, datatype, language, source_mode, optimizer,
-                    baseline, baseline_ns, native_ns, speedup, suspect, cpu, commit_sha, prompt_hash, execution)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    baseline, baseline_ns, native_ns, speedup, suspect, experiment, cpu, commit_sha,
+                    prompt_hash, execution)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (run_id, ts, spec.short_name, preset, datatype, language, source_mode, optimizer, score.baseline,
                  float(score.baseline_ns), float(score.native_ns), float(
-                     score.speedup), suspect, cpu, sha, prompt_hash, execution))
+                     score.speedup), suspect, experiment_tag(), cpu, sha, prompt_hash, execution))
             conn.commit()
             return "submission", ("suspect" if suspect else "clean")
 
@@ -811,16 +844,18 @@ def record(score: Score,
         # condition runner.status_of uses, kept local here to avoid a recording->runner import.
         overfit = score.public_correct and not score.hidden_correct
         reason = (verify.reason if (verify is not None and not verify.ok) else
-                  ("score_error" if score.harness_fault else ("build" if not score.build_ok else
-                                                              ("timeout" if score.timed_out else
-                                                               ("overfit" if overfit else "incorrect")))))
+                  ("score_error" if score.harness_fault else
+                   ("build" if not score.build_ok else
+                    ("too_slow" if score.too_slow else "timeout" if score.timed_out else
+                     ("overfit" if overfit else "incorrect")))))
         conn.execute(
             """INSERT INTO attempts(
                 run_id, ts, benchmark, preset, datatype, language, source_mode, optimizer,
-                build_ok, correct, reason, detail, cpu, commit_sha, prompt_hash, execution)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (run_id, ts, spec.short_name, preset, datatype, language, source_mode, optimizer, int(score.build_ok),
-             int(score.correct), reason, cap_detail(score.detail or ""), cpu, sha, prompt_hash, execution))
+                build_ok, correct, reason, detail, experiment, cpu, commit_sha, prompt_hash, execution)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (run_id, ts, spec.short_name, preset, datatype, language, source_mode, optimizer, int(
+                score.build_ok), int(score.correct), reason, cap_detail(
+                    score.detail or ""), experiment_tag(), cpu, sha, prompt_hash, execution))
         conn.commit()
         return "attempts", reason
     finally:
@@ -865,11 +900,12 @@ def record_trajectory(task: Task,
         conn.executemany(
             """INSERT INTO calls(
                 run_id, ts, benchmark, preset, datatype, language, delivered_language, source_mode, optimizer,
-                round, tokens, speedup, correct, status, baseline, cpu, commit_sha, prompt_hash, execution)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                round, tokens, speedup, correct, status, baseline, experiment, cpu, commit_sha, prompt_hash,
+                execution)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             [(run_id, ts, spec.short_name, preset, datatype, language, delivered_language, source_mode, optimizer,
               int(p.round), int(p.tokens), float(p.speedup), int(
-                  p.correct), p.status, baseline, cpu, sha, prompt_hash, execution) for p in points])
+                  p.correct), p.status, baseline, experiment_tag(), cpu, sha, prompt_hash, execution) for p in points])
         conn.commit()
         return len(points)
     finally:
@@ -926,13 +962,13 @@ def record_call(score: Optional[Score],
         conn.execute(
             """INSERT INTO calls(
                 run_id, ts, benchmark, preset, datatype, language, delivered_language, source_mode, optimizer,
-                round, tokens, speedup, correct, status, route, compiler, baseline, cpu, commit_sha, prompt_hash,
-                execution, detail)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                round, tokens, speedup, correct, status, route, compiler, baseline, experiment, cpu, commit_sha,
+                prompt_hash, execution, detail)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (run_id, ts, spec.short_name, preset, datatype, task.language, delivered_language, task.source_mode,
              optimizer, int(prior) + 1, int(tokens), float(score.speedup if score is not None else 0.0),
              int(bool(score.correct) if score is not None else 0), status, route, compiler,
-             (score.baseline if score is not None else None), cpu, sha, prompt_hash, execution,
+             (score.baseline if score is not None else None), experiment_tag(), cpu, sha, prompt_hash, execution,
              cap_detail(detail or (score.detail if score is not None else "") or "")))
         conn.commit()
         return int(prior) + 1

@@ -6,14 +6,14 @@ import sys
 
 from numpyto_c.bindings import emit_binding, emit_pluto_binding
 from numpyto_c.emit import emit_c, emit_c_omp, emit_cpp, emit_cpp_isopar, emit_cpp_omp, emit_pluto
-from numpyto_common.frontend import parse_kernel
+from numpyto_common.frontend import emit_with_inline_fallback, parse_kernel
 from numpyto_common.ir import apply_precision
 from numpyto_common.lowering import lower
 from numpyto_common.emit_io import write_generated
 from numpyto_common.naming import entry_symbol, native_base, short_for
 
 
-def cmd_emit(args: argparse.Namespace) -> int:
+def emit_once(args: argparse.Namespace) -> int:
     kir = parse_kernel(args.kernel, args.bench_info, config=args.config, precision=args.precision)
     kir = lower(kir)
     out = args.out
@@ -49,6 +49,16 @@ def cmd_emit(args: argparse.Namespace) -> int:
     emit_pluto_binding(kir, out / f"{base}_pluto_binding.json", base_name=base, symbol=sym)
     print(f"numpyto_c: emitted {base}.{{c,cpp}} + {base}_pluto_input.c + {base}_binding.json")
     return 0
+
+
+def cmd_emit(args: argparse.Namespace) -> int:
+    """Emit, retrying once with helper inlining forced on.
+
+    A level-3 kernel is parsed with its helpers KEPT as their own functions; when that form has no
+    emittable shape the failure lands here, in an emitter, not in the parse the frontend can retry
+    for itself. See :func:`numpyto_common.frontend.emit_with_inline_fallback`.
+    """
+    return emit_with_inline_fallback(lambda: emit_once(args))
 
 
 def build_parser() -> argparse.ArgumentParser:

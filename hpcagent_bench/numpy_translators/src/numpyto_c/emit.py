@@ -11,7 +11,7 @@ from typing import Callable, Dict, List, NamedTuple, Optional, Set, Tuple
 from numpyto_common.ir import ArrayDesc, KernelIR
 from numpyto_common import dtypes, narrow_int, operators, parallelism
 from numpyto_common.ordered import OrderedSet
-from numpyto_common.emitter import BaseEmitter
+from numpyto_common.emitter import BaseEmitter, index_rank_error
 from numpyto_common.frontend import _names_used_as_int
 from numpyto_common.lowering import _walk_complex
 
@@ -936,6 +936,7 @@ class _CBodyEmitter(BaseEmitter):
         return "\n".join([self._emit_assign(assign, indent), *frees, f"{indent}return;"])
 
     def _emit_if(self, node: ast.If, indent: str) -> str:
+        hoisted = self._declare_inline_locals_before(node, indent)
         then = self._branch_block(node.body, indent + "  ")
         chained = bool(node.orelse) and len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If)
         else_str = ""
@@ -946,7 +947,7 @@ class _CBodyEmitter(BaseEmitter):
         if not then.strip() and not else_str.strip():
             return ""
         cond = self.emit_expr(node.test)
-        out = [f"{indent}if ({cond}) {{", then, f"{indent}}}"]
+        out = ([hoisted] if hoisted else []) + [f"{indent}if ({cond}) {{", then, f"{indent}}}"]
         if node.orelse:
             if chained:
                 out.append(f"{indent}else " + else_str.lstrip())
@@ -955,6 +956,32 @@ class _CBodyEmitter(BaseEmitter):
                 out.append(else_str)
                 out.append(f"{indent}}}")
         return "\n".join(out)
+
+    def _declare_inline_locals_before(self, node: ast.If, indent: str) -> str:
+        """Declare, ahead of the ``if``, any inline VLA local one of its branches allocates.
+
+        The declaration is otherwise emitted wherever the allocation marker happens to sit, which
+        for a once-only guard is inside the ``if`` branch -- so the ``else`` branch, and everything
+        after the ``if``, referenced a name out of scope and the C would not build. Moving it to the
+        enclosing block keeps every loop variable its extent names in scope, since the ``if`` sits
+        inside those loops already.
+        """
+        inline_locals = vars(self).get("inline_local_decls", {})
+        if not inline_locals:
+            return ""
+        decls = []
+        for stmt in ast.walk(node):
+            if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
+                    and stmt.targets[0].id in inline_locals):
+                continue
+            name = stmt.targets[0].id
+            shape = inline_locals.pop(name)
+            local_dtypes = vars(self).get("local_dtypes_for_inline", {})
+            size_tokens = [f"({_c_shape_token(s)})" for s in shape] if shape else []
+            size = " * ".join(size_tokens) if size_tokens else "1"
+            c_type = _c_type(local_dtypes.get(name, _default_float_dtype(self.kir)))
+            decls.append(f"{indent}{c_type} {name}[{size}];")
+        return "\n".join(decls)
 
     def _branch_block(self, stmts: List[ast.stmt], indent: str) -> str:
         """Emit one ``if`` branch, then free the buffers that branch declared.
@@ -992,6 +1019,11 @@ class _CBodyEmitter(BaseEmitter):
             # Per-statement shape update: each marker for a reassigned local advances the FIFO of shapes.
             is_reassign = bool(node.value.args) and (isinstance(node.value.args[0], ast.Constant)
                                                      and node.value.args[0].value == "__reassign__")
+            # Second marker arg (see lowering._WholeArrayAssignRewriter._expand): the RHS reads the
+            # target's OWN old values, so the loop needs them still standing -- never force a fresh
+            # allocation for this one, symbolic size or not.
+            self_ref = (len(node.value.args) > 1 and isinstance(node.value.args[1], ast.Constant)
+                        and bool(node.value.args[1].value))
             if isinstance(target, ast.Name):
                 t = target.id
                 fifo = self._reassign_shapes.get(t)
@@ -1001,10 +1033,16 @@ class _CBodyEmitter(BaseEmitter):
                 deferred = vars(self).get("deferred_malloc_decls", {})
                 if t in deferred:
                     size, c_type, fill = deferred[t]
-                    # Reallocate only when the buffer doesn't exist or its size changed; a same-size __reassign__ must reuse in place.
+                    # Reallocate only when the buffer doesn't exist or its size changed; a same-size
+                    # __reassign__ may reuse in place only when the size is a literal constant. When the
+                    # size is symbolic (e.g. ``kdim * nbase`` and ``nbase`` grows in a loop), the textual
+                    # size stays the same while the runtime footprint changes, so force a fresh allocation
+                    # -- UNLESS the reassign is self-referential (``U = U * sign(...)``): its loop reads
+                    # the OLD buffer at every index, which a free+malloc here hands back uninitialised.
                     sizes = vars(self).setdefault("_deferred_alloc_size", {})
                     prev = sizes.get(t)
-                    if prev == size:
+                    symbolic_size = any(c.isalpha() for c in size)
+                    if prev == size and not (is_reassign and symbolic_size and not self_ref):
                         # Reuse in place: a reassign reads its own old values (no refill); a genuine reset still refills.
                         if is_reassign or fill is None:
                             return ""
@@ -1236,7 +1274,15 @@ class _CBodyEmitter(BaseEmitter):
                                   f"(line {vars(node).get('lineno', '?')}): {ast.unparse(node)[:120]}")
 
     def _unchain_subscript(self, node: ast.Subscript) -> Tuple[ast.AST, List[str]]:
-        """Collapse a subscript chain a[i][j]... into (base_node, [i, j, ...]) for row-major flattening."""
+        """Collapse a subscript chain a[i][j]... into (base_node, [i, j, ...]) for row-major flattening.
+
+        Concatenating the levels is numpy's combined basic indexing only while every index BELOW
+        the outermost is scalar. A surviving slice there makes the outer index relative to the
+        sliced range -- ``a[1:3][0]`` is ``a[1]``, not ``a[1:3, 0]`` -- so concatenating it drops
+        the offset and returns the wrong row from code that compiles clean. The bare-``:`` case is
+        composed upstream (``_ChainedSubscriptFlattener``); anything still chained here is refused
+        rather than guessed at.
+        """
         chain: List[str] = []
         cur: ast.AST = node
         # Index texts are marked so a pluto scop can hoist a call out of one (see pluto_call_free).
@@ -1244,10 +1290,12 @@ class _CBodyEmitter(BaseEmitter):
         try:
             while isinstance(cur, ast.Subscript):
                 sl = cur.slice
-                if isinstance(sl, ast.Tuple):
-                    chain = [self.emit_expr(e) for e in sl.elts] + chain
-                else:
-                    chain = [self.emit_expr(sl)] + chain
+                elts = list(sl.elts) if isinstance(sl, ast.Tuple) else [sl]
+                if cur is not node and any(isinstance(e, ast.Slice) for e in elts):
+                    raise NotImplementedError(f"chained subscript {ast.unparse(node)[:80]} slices an inner level, "
+                                              f"so the outer index is relative to that slice and cannot be "
+                                              f"concatenated onto it")
+                chain = [self.emit_expr(e) for e in elts] + chain
                 cur = cur.value
         finally:
             self._index_depth -= 1
@@ -1311,10 +1359,7 @@ class _CBodyEmitter(BaseEmitter):
             # means the array's rank is unknown or disagrees with the index count -- almost always a
             # missing/incorrect init.shapes declaration (conv_2d's w_box was inferred 1D but indexed
             # 2D). Emitting the chained form silently shipped uncompilable C; fail loudly instead.
-            raise NotImplementedError(
-                f"cannot flatten a {len(indices)}-D index of {base_node.id!r}: its shape is "
-                f"{'unknown' if shape is None else shape} (rank {0 if shape is None else len(shape)}). "
-                f"Declare init.shapes[{base_node.id!r}] with the matching rank.")
+            raise NotImplementedError(index_rank_error(base_node.id, shape, len(indices)))
         return self._promote_read(node, f"{base}[{self._flatten_indices(shape, indices)}]")
 
     @staticmethod
@@ -1394,6 +1439,9 @@ class _CBodyEmitter(BaseEmitter):
             # Python int(x) is a typecast to int64_t (a 32-bit cast would truncate past 2^31).
             if fn == "int" and len(node.args) == 1:
                 return f"(({_c_type('int')})({self.emit_expr(node.args[0])}))"
+            # Python bool(x) is a typecast to C bool (_Bool via stdbool.h).
+            if fn == "bool" and len(node.args) == 1:
+                return f"(({_c_type('bool')})({self.emit_expr(node.args[0])}))"
             # np.sign: numpy sign(nan) == nan (the naive form gives 0 and double-evaluates) -> the __npb_sign helper.
             if fn == "__npb_sign" and len(node.args) == 1:
                 return f"__npb_sign({self.emit_expr(node.args[0])})"
@@ -1803,7 +1851,15 @@ def _render_c_shape(node: ast.AST) -> Optional[str]:
         return None if op is None else f"({left} {op} {right})"
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and not node.keywords:
         args = [_render_c_shape(a) for a in node.args]
-        return None if any(a is None for a in args) else f"{node.func.id}({', '.join(args)})"
+        if any(a is None for a in args):
+            return None
+        # ``int(x)`` is a no-op on an already-integral extent in Python and a SYNTAX ERROR in C --
+        # ``int`` is a type, not a function, so it reached the compiler as "expected ')' before
+        # 'group_norm_num_groups'". A defensive ``int()`` around a manifest scalar is how it gets
+        # into a shape. The cast IS the same operation: both truncate toward zero.
+        if node.func.id == "int" and len(args) == 1:
+            return f"(int64_t)({args[0]})"
+        return f"{node.func.id}({', '.join(args)})"
     return None
 
 
@@ -1954,6 +2010,57 @@ def _integer_valued_locals(kir: KernelIR) -> Set[str]:
     return candidates & assumed
 
 
+def _tuple_element(node: ast.AST, i: int, n: int) -> Optional[ast.expr]:
+    """Element ``i`` of an ``n``-wide tuple-valued expression, or None when it is not one.
+
+    A conditional over tuples is projected by pushing the index through it, so the guards are
+    duplicated and the tuples disappear.
+    """
+    if isinstance(node, ast.Tuple):
+        return copy.deepcopy(node.elts[i]) if len(node.elts) == n else None
+    if isinstance(node, ast.IfExp):
+        body = _tuple_element(node.body, i, n)
+        orelse = _tuple_element(node.orelse, i, n)
+        if body is None or orelse is None:
+            return None
+        return ast.IfExp(test=copy.deepcopy(node.test), body=body, orelse=orelse)
+    return None
+
+
+class _TupleTargetSplitter(ast.NodeTransformer):
+    """Rewrite ``a, b, c = <tuple-valued expr>`` into one scalar assignment per element.
+
+    C has no tuple. The frontend splices a tuple-returning helper into its call site as a SINGLE
+    expression -- a conditional selecting between tuple literals -- so the only tuple reaching emit
+    is the one that conditional yields, and the lowering splitter (which matches a bare tuple RHS)
+    leaves it alone. Every element repeats the guards; the compiler CSEs them back.
+
+    Declines when a target name is read by the RHS: the split would then bind from an already
+    updated value, and python binds every target from the old ones.
+    """
+
+    def visit_Assign(self, node: ast.Assign) -> object:
+        self.generic_visit(node)
+        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Tuple):
+            return node
+        targets = node.targets[0].elts
+        if not all(isinstance(t, ast.Name) for t in targets):
+            return node
+        names = {t.id for t in targets}
+        if any(isinstance(sub, ast.Name) and sub.id in names for sub in ast.walk(node.value)):
+            return node
+        parts = [_tuple_element(node.value, i, len(targets)) for i in range(len(targets))]
+        if any(p is None for p in parts):
+            return node
+        out: List[ast.stmt] = []
+        for target, part in zip(targets, parts):
+            stmt = ast.Assign(targets=[copy.deepcopy(target)], value=part)
+            ast.copy_location(stmt, node)
+            ast.fix_missing_locations(stmt)
+            out.append(stmt)
+        return out
+
+
 def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
     """Return (name, c_type) pairs for implicit scalar locals needing a C decl, type inferred in priority order."""
     declared: Set[str] = set()
@@ -2057,27 +2164,38 @@ def _alloc_marker_target(stmt: ast.stmt) -> Optional[str]:
 def _branch_scoped_locals(tree: ast.FunctionDef, candidates: Set[str]) -> Dict[str, int]:
     """``name -> id()`` of the ``if`` branch that OWNS each local, for the locals one branch owns.
 
-    A local qualifies when every reference to it in the function is inside that one branch AND the
-    branch carries its allocation marker -- then its declaration, its malloc and its free all fit
-    there, and the branches it does not belong to allocate nothing. A runtime-axis dispatch emits
-    one nest per axis and runs exactly one, so at function top it would allocate ``rank`` buffers
-    per call to use one; C99 onward allows the declaration at any point in a block.
+    A local qualifies when every reference to it in the function is inside that one branch AND every
+    allocation marker for it is a direct statement of that branch -- then its declaration, its malloc
+    and its free all fit there, and the branches it does not belong to allocate nothing. A runtime
+    axis dispatch emits one nest per axis and runs exactly one, so at function top it would allocate
+    ``rank`` buffers per call to use one of them; C99 onward allows the declaration at any point in a
+    block.
 
     Two exclusions, both about not trading memory for something worse:
 
     * a branch under a LOOP -- allocating per iteration puts a malloc in the hot path;
     * the ``orelse`` of an ``elif`` chain, which is emitted by recursing into the inner ``if``:
-      there is no statement list of its own to append the free to, so a local owned there would
-      leak.
+      there is no statement list of its own to append the free to, so a local owned there would leak.
     """
     total: Dict[str, int] = {}
-    markers_total: Dict[str, int] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and node.id in candidates:
             total[node.id] = total.get(node.id, 0) + 1
-        marked = _alloc_marker_target(node) if isinstance(node, ast.stmt) else None
-        if marked is not None:
-            markers_total[marked] = markers_total.get(marked, 0) + 1
+
+    # Map each candidate's allocation markers to the id of the statement list that owns them.
+    marker_parent: Dict[str, List[int]] = {}
+
+    def collect_markers(stmts: List[ast.stmt], parent_id: int) -> None:
+        for stmt in stmts:
+            marker = _alloc_marker_target(stmt)
+            if marker is not None and marker in candidates:
+                marker_parent.setdefault(marker, []).append(parent_id)
+            if isinstance(stmt, (ast.If, ast.For, ast.While)):
+                collect_markers(stmt.body, id(stmt.body))
+                collect_markers(stmt.orelse, id(stmt.orelse))
+
+    collect_markers(tree.body, id(tree.body))
+
     branches: List[List[ast.stmt]] = []
 
     def collect(stmts: List[ast.stmt], in_loop: bool) -> None:
@@ -2098,6 +2216,7 @@ def _branch_scoped_locals(tree: ast.FunctionDef, candidates: Set[str]) -> Dict[s
 
     owner: Dict[str, Tuple[int, int]] = {}
     for stmts in branches:
+        branch_id = id(stmts)
         counts: Dict[str, int] = {}
         markers: Set[str] = set()
         size = 0
@@ -2110,15 +2229,18 @@ def _branch_scoped_locals(tree: ast.FunctionDef, candidates: Set[str]) -> Dict[s
                 if isinstance(sub, ast.Name) and sub.id in candidates:
                     counts[sub.id] = counts.get(sub.id, 0) + 1
         for name, seen in counts.items():
-            # ONE marker, and it is a statement of this branch: a second marker nested in a loop
-            # inside it would be reached first and put the declaration in a scope that ends before
-            # the free.
-            if seen != total.get(name) or name not in markers or markers_total.get(name) != 1:
+            # Every reference must live in this branch, and every allocation marker for the name must
+            # be a direct statement of this branch.  A marker nested in a loop or sub-branch is NOT
+            # direct: it would declare the pointer in a scope that ends before the appended free.
+            if seen != total.get(name) or name not in markers:
+                continue
+            parents = marker_parent.get(name, [])
+            if not parents or any(pid != branch_id for pid in parents):
                 continue
             # Innermost wins: an enclosing branch contains every use too, but the tighter scope
             # frees the buffer sooner.
             if name not in owner or size < owner[name][1]:
-                owner[name] = (id(stmts), size)
+                owner[name] = (branch_id, size)
     return {name: branch_id for name, (branch_id, _) in owner.items()}
 
 
@@ -2138,6 +2260,8 @@ def _emit_body(kir: KernelIR,
         emitter.return_ctype = return_ctype
     emitter.parallel = parallel
     emitter.isopar = isopar
+    # Tuple targets carry no declaration and no C form; split before the locals are harvested.
+    _TupleTargetSplitter().visit(kir.tree)
     zeros = kir.zeros_locals
     zeros_fills = kir.zeros_fills
     int_locals = kir.int_locals
@@ -2821,12 +2945,49 @@ def _emit_c_helper(hkir: KernelIR, cpp: bool = False, isopar: bool = False) -> s
     return f"static {signature} {{\n{body}\n}}\n\n"
 
 
+def pinned_const_block(kir: KernelIR) -> str:
+    """File-scope ``constexpr`` for each config knob the manifest pinned to one value.
+
+    A pinned knob has the same value for every preset and every fuzz draw, so passing it in would
+    be spelling a compile-time constant as a runtime argument: the loop bound, the stride and the
+    padding are all knowable while the kernel is being compiled, and only a constant lets the
+    compiler unroll on them. It is declared here, by NAME, rather than folded into a literal at
+    every use, so the emitted code still reads like the reference it came from.
+    """
+    if not kir.pinned_consts:
+        return ""
+    type_of = {s.name: dtypes.c_type("int") for s in kir.symbols}
+    type_of.update({s.name: _c_type(s.dtype) for s in kir.scalars})
+    lines = []
+    for name in sorted(kir.pinned_consts):
+        value = kir.pinned_consts[name]
+        ctype = type_of.get(name, _c_type("float64"))
+        lines.append(f"constexpr {ctype} {name} = {c_literal(value, ctype)};")
+    return "\n".join(lines) + "\n\n"
+
+
+#: C literal suffix per narrower-than-double floating ctype. A C23 ``constexpr`` initializer must be
+#: EXACTLY representable in the declared type, and a bare ``1e-10`` is a double that is not a float,
+#: so the suffix is what makes the declaration legal rather than a rounding convenience.
+_FLOAT_LITERAL_SUFFIX = {"float": "f", "_Float16": "f16"}
+
+
+def c_literal(value, ctype: str = "double") -> str:
+    """A pinned knob's value as a C literal of its own kind (``true`` / ``100`` / ``1e-06f``)."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    return repr(float(value)) + _FLOAT_LITERAL_SUFFIX.get(ctype, "")
+
+
 def emit_c(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     name = fn_name or f"{kir.kernel_name}_d_c"
     helpers = "".join(_emit_c_helper(h) for h in kir.helpers)
     signature = _emit_signature(kir, name)
     body = _emit_body(kir, indent="        ")
-    return f"{_C_HEADER}{_fp8_prelude(kir)}\n{helpers}{signature} {{\n{_C_PRELUDE}{body}\n{_C_EPILOGUE}}}\n"
+    return (f"{_C_HEADER}{_fp8_prelude(kir)}\n{pinned_const_block(kir)}{helpers}{signature} {{\n"
+            f"{_C_PRELUDE}{body}\n{_C_EPILOGUE}}}\n")
 
 
 def emit_cpp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
@@ -2836,8 +2997,8 @@ def emit_cpp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     # restrict is a C99 keyword; C++ accepts it as __restrict__, so rewrite it for the C++ output.
     signature = signature.replace("*restrict ", "*__restrict__ ")
     body = _emit_body(kir, indent="        ")
-    return (f"{_CPP_HEADER}{_fp8_prelude(kir)}\n{helpers}{signature} {{\n{_CPP_PRELUDE}{body}\n"
-            f"{_CPP_EPILOGUE}}}\n{_CPP_FOOTER}")
+    return (f"{_CPP_HEADER}{_fp8_prelude(kir)}\n{pinned_const_block(kir)}{helpers}{signature} {{\n"
+            f"{_CPP_PRELUDE}{body}\n{_CPP_EPILOGUE}}}\n{_CPP_FOOTER}")
 
 
 def emit_cpp_isopar(kir: KernelIR, fn_name: Optional[str] = None) -> str:
@@ -2878,8 +3039,9 @@ def emit_cpp_isopar(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     helpers = "".join(_emit_c_helper(h, cpp=True, isopar=True) for h in kir.helpers)
     signature = _emit_signature(kir, name).replace("*restrict ", "*__restrict__ ")
     body = _emit_body(kir, indent="        ", isopar=True)
-    return (f"{_CPP_ISOPAR_HEADER}{_fp8_prelude(kir)}\n{helpers}{signature} {{\n{_CPP_PRELUDE}{body}\n"
-            f"{_CPP_EPILOGUE}}}\n{_CPP_FOOTER}")
+    return (
+        f"{_CPP_ISOPAR_HEADER}{_fp8_prelude(kir)}\n{pinned_const_block(kir)}{helpers}{signature} {{\n{_CPP_PRELUDE}{body}\n"
+        f"{_CPP_EPILOGUE}}}\n{_CPP_FOOTER}")
 
 
 def _require_parallelizable(kir: KernelIR) -> None:
@@ -2949,5 +3111,5 @@ def emit_pluto(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     # inside, and the body already carries its own scop markers (see _CBodyEmitter.emit_block).
     decl_block = (decls + "\n") if decls else ""
     free_block = (frees + "\n") if frees else ""
-    return (f"{_C_HEADER}{_fp8_prelude(kir)}\n{signature} {{\n{_C_PRELUDE}"
+    return (f"{_C_HEADER}{_fp8_prelude(kir)}\n{pinned_const_block(kir)}{signature} {{\n{_C_PRELUDE}"
             f"{decl_block}{body}\n{free_block}{_C_EPILOGUE}}}\n")

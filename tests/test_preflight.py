@@ -26,6 +26,13 @@ SUBMIT_SCRIPTS = (
     REPO / "scripts" / "cscs" / "submit_loop_level_reasoning_alps.sbatch",
 )
 
+#: Every accepted spelling of the harness entry point, and the ONLY ones. Both resolve to
+#: ``hpcagent_bench.cli:main`` -- the console script when the harness is pip-installed, and
+#: ``python -m`` when it is reached over PYTHONPATH, which is what a container image needs because
+#: it carries the toolchain and not the harness. Enumerated here so a script cannot invent a third
+#: way in: a spelling absent from this tuple fails the delegation check below.
+HARNESS_ENTRY_POINTS = ("hpcagent-bench", "python -m hpcagent_bench")
+
 
 def script_texts() -> List[str]:
     return [path.read_text() for path in SUBMIT_SCRIPTS if path.is_file()]
@@ -70,9 +77,27 @@ def test_print_env_off_emits_nothing_to_eval() -> None:
 
 @pytest.mark.parametrize("path", [p for p in SUBMIT_SCRIPTS], ids=lambda p: p.name)
 def test_the_submission_scripts_delegate_the_checks(path: pathlib.Path) -> None:
-    """Both scripts must CALL the preflight, so a change to what a job checks lands in one place."""
+    """Both scripts must CALL the preflight, so a change to what a job checks lands in one place.
+
+    Matched on the ENTRY POINT plus the verb rather than one literal command, because a script that
+    runs inside a container reaches the same ``cli:main`` as a module. The set of entry points is
+    closed (:data:`HARNESS_ENTRY_POINTS`), so this still refuses a script that hand-rolls the check
+    or invents a third invocation -- it accepts a second spelling, not any spelling.
+    """
     assert path.is_file(), path
-    assert "hpcagent-bench preflight" in path.read_text(), f"{path.name} does not call the library preflight"
+    text = path.read_text()
+    # Every way the script could name the preflight: the entry point directly, or a shell variable
+    # BOUND to one of them and then expanded. The binding has to be resolved rather than assumed --
+    # checking only that the words appear somewhere passes a script whose preflight is gone and
+    # whose comments still mention it (verified: that is what a looser form of this test did).
+    invocations = [f"{entry} preflight" for entry in HARNESS_ENTRY_POINTS]
+    for name in re.findall(r"^\s*([A-Za-z_][A-Za-z0-9_]*)=\((.*?)\)\s*$", text, re.M):
+        var, value = name
+        if value.strip() in HARNESS_ENTRY_POINTS:
+            invocations += [f'"${{{var}[@]}}" preflight', f'\'"${{{var}[*]}}"\' preflight']
+    assert any(
+        call in text
+        for call in invocations), (f"{path.name} does not call the library preflight; expected one of {invocations}")
 
 
 def test_no_script_hand_rolls_the_autopar_probe() -> None:

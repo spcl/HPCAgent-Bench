@@ -28,10 +28,6 @@ init:
   - trans
   - symbols
   - counts
-  scalars:
-    counts: 0
-    symbols: 0
-    trans: 0
   dtypes:
     counts: int64
     symbols: int64

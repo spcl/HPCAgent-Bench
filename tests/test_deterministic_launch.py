@@ -44,6 +44,13 @@ def _job_env(work: pathlib.Path) -> dict:
     shim.write_text(SRUN_SHIM)
     shim.chmod(0o755)
 
+    # The script locates the repo by looking for hpcagent_bench/container_backends.txt.  Without the
+    # marker it falls back to BASH_SOURCE and writes results into the working tree instead of the
+    # test's isolated tmp_path.
+    marker = work / "hpcagent_bench" / "container_backends.txt"
+    marker.parent.mkdir()
+    shutil.copy(SCRIPT.parent.parent / "hpcagent_bench" / "container_backends.txt", marker)
+
     env.update(
         PATH=str(bindir) + os.pathsep + env["PATH"],
         # REPO is where the job cds and writes its results/ and dace cache; point it at the test's
@@ -64,8 +71,11 @@ def _job_env(work: pathlib.Path) -> dict:
         PMIX_MCA_gds="hash",
     )
     # Inherited scheduler state would make the script plan for an allocation that is not there.
+    # RUN_TAG is in this list for the same reason as SLURM_JOB_ID: both are interpolated into the
+    # script's RUNDIR, so an inherited one moves the results under a name this test does not look in
+    # and the finding becomes "no CSV" rather than whatever really happened.
     for name in ("SLURM_JOB_ID", "SLURM_JOB_NUM_NODES", "SLURM_PROCID", "HPCAGENT_BENCH_DB_SHARD",
-                 "OMPI_COMM_WORLD_RANK", "PMI_RANK", "HPCAGENT_BENCH_EDF"):
+                 "OMPI_COMM_WORLD_RANK", "PMI_RANK", "HPCAGENT_BENCH_EDF", "RUN_TAG"):
         env.pop(name, None)
     return env
 
@@ -100,7 +110,14 @@ def test_one_rank_job_shards_by_rank_and_rolls_up(tmp_path):
 
     rundir = tmp_path / "results" / "deterministic-local"
     csv = rundir / "shard-0.csv"
-    assert csv.exists(), f"no per-shard CSV in {sorted(p.name for p in rundir.iterdir())}"
+    # iterdir() only when the directory EXISTS. Listing a missing one raises FileNotFoundError from
+    # inside the assertion message, which replaces the finding with a pathlib traceback and prints
+    # none of the script output that would say why -- measured in CI, where this failed with the
+    # whole results/ tree absent and nothing to show for it.
+    assert csv.exists(), ("no per-shard CSV: {found}\n--- stdout ---\n{out}\n--- stderr ---\n{err}".format(
+        found=(sorted(p.name for p in rundir.iterdir()) if rundir.is_dir() else f"{rundir} does not exist"),
+        out=done.stdout[-3000:],
+        err=done.stderr[-3000:]))
     assert KERNEL in csv.read_text()
 
     # SLURM_PROCID reached recording.db_shard(), so the rank wrote hpcagent_bench0.db and NOT the

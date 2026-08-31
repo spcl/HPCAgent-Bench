@@ -3,7 +3,7 @@
 """Auto-generate framework sibling files from the numpy reference.
 
 ONE canonical file per (kernel, framework): ``<module>_<fw>.py``
-``fw`` in :data:`TARGETS` (``dace`` / ``cupy`` / ``numba_n`` / ``numba_np`` /
+``fw`` in :data:`TARGETS` (``dace`` / ``cupy`` / ``numba_np`` /
 ``pythran`` / ``jax``). A file already present that does NOT carry the
 ``hpcagent_bench-autogen`` marker is a hand-written OVERRIDE and is never overwritten
 (so the committed microbench ``*_jax.py`` overrides win over autogen).
@@ -36,7 +36,7 @@ from hpcagent_bench.languages import LANG_TARGET
 #: Auto-generatable Python targets and the canonical filename each produces
 #: (``{m}`` = the kernel's module_name). dace and jax are generated in-process;
 #: the rest shell out to their per-package CLI (which writes the canonical name).
-TARGETS = ("dace", "cupy", "numba_n", "numba_np", "pythran", "jax")
+TARGETS = ("dace", "cupy", "numba_np", "pythran", "jax")
 
 
 def _file_for(module_name: str, target: str) -> str:
@@ -44,12 +44,18 @@ def _file_for(module_name: str, target: str) -> str:
 
 
 def _emit_dace(numpy_py: pathlib.Path, bench_info: pathlib.Path, out: pathlib.Path) -> str:
-    from numpyto_common.frontend import parse_kernel
+    from numpyto_common.frontend import emit_with_inline_fallback, parse_kernel
     from numpyto_c.dace_emit import emit_dace
     from numpyto_common.emit_io import write_generated
-    src = emit_dace(parse_kernel(numpy_py, bench_info))
-    ast.parse(src)  # syntactic self-check before writing
-    return write_generated(out, src, source=numpy_py.name)
+
+    def render() -> str:
+        rendered = emit_dace(parse_kernel(numpy_py, bench_info))
+        ast.parse(rendered)  # syntactic self-check before writing
+        return rendered
+
+    # A level-3 kernel keeps its helpers; if that form has no emittable shape the failure lands in
+    # the emitter, so the whole render is repeated once with inlining forced back on.
+    return write_generated(out, emit_with_inline_fallback(render), source=numpy_py.name)
 
 
 def _emit_jax(numpy_py: pathlib.Path, bench_info: pathlib.Path, out: pathlib.Path) -> str:
@@ -83,9 +89,8 @@ def _emit_target(target: str, numpy_py: pathlib.Path, kdir: pathlib.Path, bench_
         return _emit_jax(numpy_py, bench_info, kdir / _file_for(numpy_py.stem.removesuffix("_numpy"), "jax"))
     if target == "cupy":
         return _emit_cli("numpyto_cupy.cli", numpy_py, kdir, [])
-    if target in ("numba_n", "numba_np"):
-        suffix = target.split("_", 1)[1]
-        return _emit_cli("numpyto_numba.cli", numpy_py, kdir, ["--bench-info", str(bench_info), "--suffix", suffix])
+    if target == "numba_np":
+        return _emit_cli("numpyto_numba.cli", numpy_py, kdir, ["--bench-info", str(bench_info)])
     if target == "pythran":
         return _emit_cli("numpyto_pythran.cli", numpy_py, kdir, ["--bench-info", str(bench_info)])
     raise ValueError(f"unknown auto-gen target {target!r}; known: {TARGETS}")
@@ -184,6 +189,12 @@ def ensure(key: str, targets: Iterable[str]) -> None:
 NATIVE_FRAMEWORKS = {
     "cc": "c",
     "cc_autopar": "c",  # same emitted C as ``cc``; the delta is gcc's autopar flags
+    # Same emitted C as ``cc`` for all five; the delta is the vendor driver and its autopar flags.
+    "cc_llvm": "c",
+    "cc_llvm_autopar": "c",
+    "cc_oneapi": "c",
+    "cc_nvhpc": "c",
+    "cc_nvhpc_autopar": "c",
     "llvm": "cpp",
     "fortran": "fortran",
     "fortran_autopar": "fortran",  # same emitted Fortran as ``fortran``; delta is autopar
@@ -236,10 +247,10 @@ def _wrapper_src(spec) -> str:
         default_attr = None
         for cfg, base in targets:
             if cfg is None:
-                lines.append(f'kernel_{fw} = wrap_kernel(__file__, "{base}", "{fw}")')
+                lines.append(f'kernel_{fw} = wrap_kernel(__file__, "{base}", "{fw}", "{spec.short_name}")')
             else:
                 attr = f"kernel_{fw}_{cfg}"
-                lines.append(f'{attr} = wrap_kernel(__file__, "{base}", "{fw}")')
+                lines.append(f'{attr} = wrap_kernel(__file__, "{base}", "{fw}", "{spec.short_name}")')
                 if default_attr is None:
                     default_attr = attr
         if default_attr is not None:

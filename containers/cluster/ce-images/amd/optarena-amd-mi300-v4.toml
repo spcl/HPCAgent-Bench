@@ -19,7 +19,25 @@ HCC_AMDGPU_TARGET = "gfx942"
 # Absolute, never inherited: host SLES/spack binaries leak in through ${PATH} otherwise
 # (a host curl needing libldap_r-2.4 broke the container; compilers would be next).
 PATH = "/opt/venv/bin:/opt/rocm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-LD_LIBRARY_PATH = "/opt/rocm/lib:/opt/rocm/lib64"
+# ORDER IS LOAD-BEARING, both ways. The image carries a stale SLES libcurl.so.4 in /usr/lib64
+# (owner nobody, wanting the openldap 2.4 soname Ubuntu 24.04 does not ship). Ubuntu's own
+# libcurl4t64 IS installed and complete -- 8.5.0-2ubuntu10.11, md5sums verify, 33 deps all
+# resolvable -- so nothing needs installing; what puts the stale one first is the CXI hook
+# enabled below, whose /etc/ld.so.conf.d/enroot-cxi-hook.conf adds /lib64 + /usr/lib64 and so
+# lands /lib64/libcurl.so.4 AHEAD of the multiarch one in the ldconfig cache. Without cmake --
+# and so every DaCe compile -- is unrunnable ("cannot open libldap_r-2.4.so.2"). LD_LIBRARY_PATH
+# is searched before that cache, so naming the distro libdir at all is what beats it. But the
+# distro libdir ALSO holds an ancient libhsa-runtime64.so.1.11, and putting it ahead of ROCm
+# leaves every ROCR_1 symbol in libamdhip64.so.7 undefined at link. So: ROCm first, distro last,
+# default search never.
+LD_LIBRARY_PATH = "/opt/rocm/lib:/opt/rocm/lib64:/usr/lib/x86_64-linux-gnu"
+# The image carries gcc 16 in /usr/local and the distro gcc 13 in /usr; a bare "c++" finds the
+# latter, whose auto-vectorizer mislowers a masked select and silently returns zeros for the
+# upper half of each vector (DaCe warns about exactly this version). Name the compilers so
+# nothing has to guess which one a build picked up.
+CC = "/usr/local/bin/gcc"
+CXX = "/usr/local/bin/g++"
+FC = "/usr/local/bin/gfortran"
 PMIX_MCA_psec = "native"
 # Stated here as well as in the image: the EDF pins the rest of the environment absolutely, so
 # the allocator should not be the one variable that depends on image ENV surviving the CE.

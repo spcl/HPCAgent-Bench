@@ -765,3 +765,10 @@ def test_reshape_f_order_column_major_index():
 def test_reshape_default_is_c_order():
     # No order= kwarg defaults to C (matches numpy + prior behaviour).
     assert _reshape_src_index(None) == _reshape_src_index("C")
+
+
+def test_sympify_shape_declines_a_read_past_the_end_of_a_tuple_token():
+    # sympify EVALUATES the token, so an out-of-range read arrives as a bare IndexError from
+    # inside sympy's parser -- uncaught, it aborted the whole reshape expander.
+    assert sympify_shape("(out_channels, 1, 1)[3]") is None
+    assert str(sympify_shape("(out_channels, 1, 1)[0]")) == "out_channels"

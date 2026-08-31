@@ -26,6 +26,49 @@ from hpcagent_bench.frameworks.forked import forked_failure_reason, run_forked, 
 from hpcagent_bench.harness import recording
 from hpcagent_bench.spec import BenchSpec, KERNELS
 
+#: Launcher variables that make DaCe call ``MPI_Init`` the moment it is imported, and that are set
+#: by srun whether or not the step is an MPI program.
+#:
+#: HARDCODED, not imported from ``dace.sdfg.sdfg.MPI_RANK_VARS``, and that is the whole point:
+#: reading the list from DaCe would import DaCe, which is the import this exists to make safe. Strip
+#: first, import second.
+#:
+#: SLURM_PROCID is deliberately ABSENT. DaCe excludes it too ("enough to name a build folder, not
+#: enough to call MPI_Init on"), and the sweep needs it for shard indices and per-rank build folders.
+MPI_LAUNCHER_VARS = (
+    "OMPI_COMM_WORLD_RANK",
+    "MV2_COMM_WORLD_RANK",
+    "PMIX_RANK",
+    "PMI_RANK",
+    "PMI_ID",
+    "FLUX_TASK_RANK",
+    "PALS_RANKID",
+    "ALPS_APP_PE",
+)
+
+
+def drop_mpi_launcher_vars() -> List[str]:
+    """Unset the MPI launcher variables in THIS process; returns the names removed.
+
+    WHY THIS EXISTS. ``dace/frontend/python/parser.py`` calls ``ensure_mpi_initialized()`` at import
+    time, which returns early only when no launcher variable is set. Slurm's pmix plugin exports
+    ``PMIX_RANK`` for EVERY step, MPI or not -- so a per-kernel child of this sweep imported DaCe,
+    called ``MPI_Init``, and deadlocked. Measured: the faulthandler stack stands in importlib under
+    ``dace/__init__.py`` line 20, a pure-Python import with no device call in it, because MPI_Init in
+    a forked child whose parent already holds an MPI library is the fork-unsafe case.
+
+    ``MPI4PY_RC_INITIALIZE=0`` does NOT cover this. It suppresses mpi4py's automatic init, and DaCe
+    then calls MPI_Init itself; the environment switch it names is exactly the one DaCe overrides.
+
+    The framework sweep is not an MPI program -- its ranks are independent shards that never call a
+    collective -- so removing these is a statement of fact, not a workaround. The MPI residency
+    reaches its ranks through a different path and never calls this.
+    """
+    removed = [var for var in MPI_LAUNCHER_VARS if var in os.environ]
+    for var in removed:
+        del os.environ[var]
+    return removed
+
 
 def run_one(benchname: str,
             framework_names: Sequence[str],
@@ -37,14 +80,23 @@ def run_one(benchname: str,
             save_strict: bool,
             load_strict: bool,
             datatype: Optional[str],
-            variant: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+            variant: Optional[str] = None,
+            distributed: bool = False) -> Dict[str, Dict[str, Any]]:
     """Run ``benchname`` under each framework in ``framework_names`` (against NumPy); the unit of work
     forked per-kernel by the framework/sparse sweeps.
+
+    :param distributed: this process IS a rank of an MPI job, so leave the launcher variables alone
+        and let MPI come up. Default ``False`` -- the single-node residency, whose ranks are
+        independent shards -- because that is the case that DEADLOCKS if it guesses wrong, and a
+        default should fail safe rather than fail silently. The MPI residency passes ``True``.
 
     :returns: ``{framework_name: per_impl_timings}`` from :meth:`Test.run` (impl name -> python/native
         series, validated, failure reason). Picklable, so it survives the ``run_forked`` queue and lets
         a sharded sweep's CSV record WHICH pipeline/impl validated, not just whether the child survived.
     """
+    # BEFORE the first framework import, which is what pulls DaCe in. See drop_mpi_launcher_vars.
+    if not distributed:
+        drop_mpi_launcher_vars()
     results: Dict[str, Dict[str, Any]] = {}
     for name in framework_names:
         frmwrk = generate_framework(name, save_strict, load_strict)
@@ -229,9 +281,16 @@ def run_framework_sweep(benchmark: str,
                         variant: Optional[str] = None,
                         skip_existing: bool = False,
                         shard: Tuple[int, int] = (0, 1),
-                        csv_path: Optional[str] = None) -> List[str]:
+                        csv_path: Optional[str] = None,
+                        distributed: bool = False) -> List[str]:
     """Run the ``benchmark`` selection under ``framework``, forking EACH kernel; returns the list of
     kernels whose child failed. ``skip_existing`` drops kernels already fully recorded in the DB.
+
+    ``distributed`` names the RESIDENCY and is passed to every child: ``False`` (the default) is the
+    single-node sweep, whose ranks are independent shards and which must not let a forked child
+    bring MPI up; ``True`` is the MPI residency, where the process really is a rank and MPI is what
+    the launcher already prepared. Nothing infers this -- a wrong guess deadlocks in one direction
+    and aborts a collective in the other, so it is stated by the caller.
 
     ``shard=(index, count)`` restricts the selection to this rank's slice (see :func:`shard_names`),
     so a batch job can fan a selector ("all" / a track / a dwarf) out over ranks with no separate
@@ -252,7 +311,6 @@ def run_framework_sweep(benchmark: str,
 
     # Fork EACH kernel so a crash or framework exception in one cannot take down the sweep.
     failed = []
-    rows: List[Dict[str, str]] = []
     for benchname in benchnames:
         r = run_forked(run_one,
                        benchname,
@@ -266,16 +324,17 @@ def run_framework_sweep(benchmark: str,
                        load_strict,
                        datatype,
                        variant=variant,
+                       distributed=distributed,
                        label=benchname)
         if not r.ok:
             why = forked_failure_reason(r)
             print(f"[FAIL] {benchname}: {why}")
             failed.append(benchname)
+        # Flushed PER KERNEL, not accumulated: a sweep over the corpus runs for hours, and holding
+        # every row until the end means an interrupt -- or an OOM kill -- loses the whole run rather
+        # than the kernel it died on. write_csv_rows appends and writes the header only when new.
         if csv_path:
-            rows.extend(sweep_rows(benchname, framework_names, preset, datatype or "float64", r))
-
-    if csv_path:
-        write_csv_rows(rows, csv_path)
+            write_csv_rows(sweep_rows(benchname, framework_names, preset, datatype or "float64", r), csv_path)
 
     if failed:
         print(f"Failed: {len(failed)} out of {len(benchnames)}")

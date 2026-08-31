@@ -57,6 +57,7 @@ on:
     branches: [ main, extended, ci-fix ]
   merge_group:
     branches: [ main, extended, ci-fix ]
+  workflow_dispatch:
 
 concurrency:
   group: ${{github.workflow}}-${{github.ref}}
@@ -74,9 +75,18 @@ jobs:
   # ===========================================================================================
   unit:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: unit (format + structure + agent-bench + e2e[numba,jax])
+    name: unit (format + structure + agent-bench)
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # Phase 1 (90) + Phase 3 (25) + Phase 0/2/setup, which is ~15 on a warm cache. The e2e[numba,jax]
+    # sweep that used to be Phase 5 here is its own job now: at 40 + 25 + 55 the STEP budgets came to
+    # 120 minutes inside a 90-minute JOB, so this job could not finish even with every test passing,
+    # and the job cancellation that followed is not a step failure -- the run reported a timeout with
+    # no summary and named nothing. A job budget must exceed the sum of its steps.
+    # 110 -> 140: run 33283870554 hit the 60-minute Phase 1 cap with zero test failures; the suite
+    # is simply growing. Sharding was measured and abandoned (three runners, no wall-clock win), and
+    # the dominant costs are dace_port_lowering timeouts and a single slow determinism witness, so
+    # the honest fix is more budget rather than dropped coverage.
+    timeout-minutes: 140
     env:
       # Job-level so every pytest here collects; --cov-report= suppresses the per-job
       # render (the combine job owns the only report).
@@ -152,7 +162,12 @@ jobs:
         # sweep reached 91% with zero failures, the runner was then terminated, and because a job
         # cancellation is not a step failure the FIVE phases below never ran at all. A step timeout
         # is a failure, so `!cancelled()` keeps them running and the job reports what it knows.
-        timeout-minutes: 40
+        #
+        # 40 -> 60 -> 90: the sweep reached 69% in 40 minutes on run 33261681823 and died on the
+        # step timeout; run 33283870554 then filled the 60-minute cap. --durations names what it
+        # spends the time on, and no -q, because a step timeout prints no summary: under -q the
+        # failures had no test names at all, so the log said only that the budget had passed.
+        timeout-minutes: 90
         run: |
           excl=$(mktemp)
           grep -vE '^\s*(#|$)' .github/dedicated_tests.txt > "$excl"
@@ -172,7 +187,8 @@ jobs:
           # default method arms SIGALRM, and this suite forks and waits on subprocesses, where the
           # signal never lands. The thread method owns its own timer, so a wedge dumps the stack of
           # the test that is actually hanging instead of costing the whole job.
-          python -m pytest -q -p no:cacheprovider -rfEs -n auto --timeout=600 --timeout-method=thread $files
+          python -m pytest -p no:cacheprovider -rfEs -n auto --durations=25 \
+            --timeout=600 --timeout-method=thread $files
 
       - name: Phase 2 -- translations (C / C++ / Fortran emit + compile + validate)
         if: ${{ !cancelled() }}
@@ -182,8 +198,8 @@ jobs:
       - name: Phase 3 -- agent-bench (tools + no-op/BLAS optimizers, both modes, in-proc judge)
         if: ${{ !cancelled() }}
         # Per-step cap: a hung/slow phase fails THIS step (a step timeout is a failure,
-        # not a job cancellation), so the ``!cancelled()`` phases below still run instead
-        # of the whole job dying at the 90-min job timeout and skipping 5 + 7.
+        # not a job cancellation), so the ``!cancelled()`` steps below still run instead
+        # of the whole job dying at the job timeout and skipping the coverage upload.
         timeout-minutes: 25
         run: |
           python -m pytest -q -p no:cacheprovider -rfEs --timeout=600 \
@@ -197,11 +213,52 @@ jobs:
             tests/test_optimizer_plugin.py \
             tests/test_agent_bench.py
 
+      # Hit rate is the whole point of the cache -- surface it so a regression to 0% is visible.
+      - name: ccache statistics
+        if: always()
+        run: ccache --show-stats
+
+      # if: always() -- a job that went red still covered lines on the way, and the total is more
+      # honest with them than without. if-no-files-found: ignore for a job that failed before pytest.
+      - name: Upload coverage data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-unit
+          path: .coverage*
+          include-hidden-files: true
+          if-no-files-found: ignore
+
+  # ===========================================================================================
+  # e2e-numba-jax -- the numba and jax legs of the e2e numerical sweep.
+  #
+  # Its own job for the reason `integration` is: as a step of `unit` its 55-minute budget sat on
+  # top of Phase 1's 40 and Phase 3's 25, so the three steps alone asked for 120 minutes of a
+  # 90-minute job. The job died on its own ceiling every run, and a job cancellation is not a step
+  # failure, so nothing downstream of it reported either.
+  # ===========================================================================================
+  e2e-numba-jax:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
+    name: e2e[numba, jax] (numerical sweep @ S)
+    runs-on: ubuntu-latest
+    # Phase 5 (75) + setup, ~10 on a warm cache. Must exceed the sum of its steps.
+    timeout-minutes: 95
+    env:
+      PYTEST_ADDOPTS: "--cov=hpcagent_bench --cov-append --cov-report="
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/setup
+
       - name: Phase 5 -- e2e numerical sweep [numba, jax] @ S
         if: ${{ !cancelled() }}
-        # Bounded like Phase 3 so a wedged worker fails this step (leaving Phase 7 to run),
-        # not the job. --timeout is the per-test backstop; the oracle already SIGKILLs its
-        # own forked jax/native children, so this only catches an in-process numba hang.
+        # Bounded so a wedged worker fails this step rather than the job. --timeout is the per-test
+        # backstop; the oracle already SIGKILLs its own forked jax/native children, so this only
+        # catches an in-process numba hang.
         #
         # --timeout MUST stay above numerical_oracle.PY_FORK_TIMEOUT_S (600), or the backstop fires
         # first and the oracle's own SIGKILL never runs: at 600 == 600 the cloudsc numba leg (618s,
@@ -215,16 +272,19 @@ jobs:
         # 26:01; it reached 93% before the runner killed it at 35:00. This is a budget correction
         # for work that was added on purpose, not headroom for a hang -- the per-test --timeout=600
         # is still what catches that.
-        timeout-minutes: 55
+        #
+        # 55 -> 75: runs 33283870554 and 33308713526 both filled the 55-minute cap, the second at
+        # 96% with no test failure of its own. A sweep dying nine tests from the end reports a step
+        # timeout and NO summary, so it also hides whatever those last tests would have said. The
+        # job budget moves with it (75 -> 95): a job budget under the sum of its steps turns a step
+        # timeout into a job cancellation, which reports nothing at all.
+        timeout-minutes: 75
         env:
           HPCAGENT_BENCH_E2E_BACKENDS: "numba,jax"
+          HPCAGENT_BENCH_E2E_SUBSET: ${{ github.event_name == 'pull_request' && '1' || '0' }}
         run: |
-          python -m pytest -q -p no:cacheprovider -rfEs -n auto --timeout=900 tests/test_e2e_numerical.py
-
-      # Hit rate is the whole point of the cache -- surface it so a regression to 0% is visible.
-      - name: ccache statistics
-        if: always()
-        run: ccache --show-stats
+          python -m pytest -p no:cacheprovider -rfEs -n auto --durations=25 \
+            --timeout=900 tests/test_e2e_numerical.py
 
       # if: always() -- a job that went red still covered lines on the way, and the total is more
       # honest with them than without. if-no-files-found: ignore for a job that failed before pytest.
@@ -232,7 +292,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-unit
+          name: coverage-e2e-numba-jax
           path: .coverage*
           include-hidden-files: true
           if-no-files-found: ignore
@@ -253,7 +313,8 @@ jobs:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
     name: integration (build/run real artifacts)
     runs-on: ubuntu-latest
-    timeout-minutes: 105
+    # Phase 6 (105) + the OpenBLAS build and setup steps above it, ~15 warm.
+    timeout-minutes: 125
     env:
       PYTEST_ADDOPTS: "--cov=hpcagent_bench --cov-append --cov-report="
       # tests/test_dace_openblas_link.py builds a pinned OpenBLAS with USE_OPENMP=1 (~10 min at
@@ -322,9 +383,12 @@ jobs:
         # phase hung for 38 minutes past its last line with the 900 s timeout never firing, because
         # the default method arms SIGALRM and the wedge was below a fork/subprocess wait. The
         # thread method reports the hanging test instead of losing the phase to the step cap.
-        timeout-minutes: 85
+        #
+        # 85 -> 105: run 33261681823 spent the whole 85 and died on the cap, so the phase has never
+        # reported a duration table -- the --durations below only prints on a run that finishes.
+        timeout-minutes: 105
         run: |
-          python -m pytest -q -p no:cacheprovider -rfEs --timeout=1500 --timeout-method=thread --durations=25 \
+          python -m pytest -p no:cacheprovider -rfEs --timeout=1500 --timeout-method=thread --durations=25 \
             -m integration tests/ hpcagent_bench/numpy_translators/tests/
 
       - name: ccache statistics
@@ -446,7 +510,12 @@ jobs:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
     name: translators (numpyto op suite)
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # Phase 2a (110) + setup/ccache, ~10 warm. A job budget under the sum of its steps turns a step
+    # failure into a job cancellation, which reports nothing.
+    # 105 -> 130: Phase 2a hit its 85-minute cap in run 33283870554 with every inner test passing.
+    # The dominant cost is the corpus-wide ABI agreement test (~20 min) plus per-kernel emit/compile
+    # growth; raising the budget is the honest fix rather than dropping ABI coverage or sharding.
+    timeout-minutes: 130
     # ONE runner. It was three, cost-sharded, until run 30480407159 measured the result: 4m + 8m +
     # 9m. Three runners and a splitting mechanism to move a 21m job off a critical path set by
     # e2e[pythran] at 31m -- so the sharding bought no wall clock at all and cost two runners.
@@ -502,10 +571,17 @@ jobs:
         # loaded 16-core box after the shape-compare cache, hence --timeout=1500. xdist balances
         # the files across the runner's cores at runtime, which no static split can beat on a set
         # whose per-file cost spans three orders of magnitude.
+        #
+        # 60 -> 85 -> 110: run 33261681823 reached 85% in 60 minutes and died on the step timeout;
+        # run 33283870554 then filled the 85-minute cap with every test green. Two single tests ate
+        # 20 minutes each there (measured from the progress line timestamps), which is what
+        # --timeout=1500 costs when a test wedges -- the budget has to clear two of those plus the
+        # 1294 s ABI test, or a wedge anywhere reports as "the suite is too slow". No -q, so the
+        # failures arrive with names instead of as bare F characters, and --durations names them.
         if: ${{ !cancelled() }}
-        timeout-minutes: 60
+        timeout-minutes: 110
         run: |
-          python -m pytest -q -p no:cacheprovider -rfsxX -n auto --timeout=1500 \
+          python -m pytest -p no:cacheprovider -rfsxX -n auto --durations=25 --timeout=1500 \
             hpcagent_bench/numpy_translators/tests/
 
       # Hit rate is the whole point of the cache -- surface it so a regression to 0% is visible.
@@ -679,6 +755,7 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           HPCAGENT_BENCH_E2E_BACKENDS: "pluto"
+          HPCAGENT_BENCH_E2E_SUBSET: ${{ github.event_name == 'pull_request' && '1' || '0' }}
         run: |
           python -m pytest -q -p no:cacheprovider -rfEs -n auto tests/test_e2e_numerical.py
 
@@ -787,6 +864,7 @@ jobs:
         timeout-minutes: 60
         env:
           HPCAGENT_BENCH_E2E_BACKENDS: "c,cpp,fortran"
+          HPCAGENT_BENCH_E2E_SUBSET: ${{ github.event_name == 'pull_request' && '1' || '0' }}
         run: |
           python -m pytest -q -p no:cacheprovider -rfEs -n auto --timeout=600 tests/test_e2e_numerical.py
 
@@ -805,6 +883,7 @@ jobs:
         timeout-minutes: 60
         env:
           HPCAGENT_BENCH_E2E_BACKENDS: "c,cpp,fortran"
+          HPCAGENT_BENCH_E2E_SUBSET: ${{ github.event_name == 'pull_request' && '1' || '0' }}
           HPCAGENT_BENCH_E2E_PRECISION: "fp32"
         run: |
           python -m pytest -q -p no:cacheprovider -rfEs -n auto --timeout=600 tests/test_e2e_numerical.py
@@ -814,11 +893,18 @@ jobs:
       # what those 250 ports lower to. It asserts a floor on the COUNT, not per kernel -- so the
       # floor being STALE is the same blind spot: it sat at 121 while 192 actually lowered, leaving
       # 71 kernels free to regress green. Raise it whenever a measurement says it moved.
-      - name: Phase 5c -- kernelbench translation ratchet [c] @ S
+      #
+      # ``-m "not integration"`` because the ratchet itself is @pytest.mark.integration and the
+      # integration job ALREADY collects it (``-m integration tests/ ...``). Naming the file by
+      # PATH here ignores markers, so the 250-port emit+compile+run sweep ran twice per CI run for
+      # no extra coverage: measured at 872s (14m32s) of this job's wall clock in run 33320330731,
+      # against 441s for the whole c/cpp/fortran e2e sweep above it. What stays is the cheap
+      # corpus-size pin, which is what makes a ratchet over a shrinking set meaningful.
+      - name: Phase 5c -- kernelbench corpus size pin (the ratchet runs in the integration job)
         if: ${{ !cancelled() }}
-        timeout-minutes: 45
+        timeout-minutes: 10
         run: |
-          python -m pytest -q -p no:cacheprovider -rfEs --timeout=2400 \
+          python -m pytest -q -p no:cacheprovider -rfEs --timeout=2400 -m "not integration" \
             tests/test_kernelbench_translation.py
 
       # Every loop_level_reasoning kernel EMITS a reference in all three languages, and the agent
@@ -916,6 +1002,7 @@ jobs:
         timeout-minutes: 60
         env:
           HPCAGENT_BENCH_E2E_BACKENDS: "pythran"
+          HPCAGENT_BENCH_E2E_SUBSET: ${{ github.event_name == 'pull_request' && '1' || '0' }}
         run: |
           python -m pytest -q -p no:cacheprovider -rfEs -n 1 --timeout=600 tests/test_e2e_numerical.py
 
@@ -1370,7 +1457,8 @@ jobs:
     if: ${{!cancelled()}}
     name: coverage (combined total)
     # dace-numeric folded into mpi (2026-08-11); its coverage rides mpi's single combined upload now.
-    needs: [unit, integration, translators, frameworks-pluto, e2e-native, e2e-pythran, container-image, mpi, port-fidelity]
+    needs: [unit, e2e-numba-jax, integration, translators, frameworks-pluto, e2e-native, e2e-pythran, container-image, mpi,
+            port-fidelity]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

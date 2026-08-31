@@ -11,7 +11,6 @@ import os
 import pathlib
 import shlex
 import shutil
-import signal
 import subprocess
 import tempfile
 import time
@@ -26,13 +25,16 @@ import importlib.metadata
 
 # Imported at module level so a broken/absent DaCe is a real import error, not a silent skip.
 import dace
+from dace.codegen import common as dace_common
+
+from hpcagent_bench.frameworks.errors import NotSupportedByFramework
 import dace.dtypes as dace_dtypes
 import dace.transformation.auto.auto_optimize as dace_auto_opt
 from dace.sdfg import propagation
 from dace.transformation.dataflow import MapCollapse, MapFusion
 from dace.transformation.interstate import LoopToMap
 
-from hpcagent_bench import languages, perf_reports
+from hpcagent_bench import flags as bench_flags, languages, perf_reports
 from hpcagent_bench.frameworks import Benchmark, Framework
 from hpcagent_bench.frameworks import utilities as util
 from hpcagent_bench.frameworks.framework import TimingResult, Timer
@@ -139,10 +141,69 @@ def report_flags_for(compiler: str) -> str:
     return languages.report_flags("cpp", compiler=family)
 
 
-def pin_cpp_standard() -> None:
+#: Environment override naming the toolchain FAMILY dace's host build uses -- one of
+#: ``languages.family_names()`` (gcc / llvm / nvhpc / oneapi). Unset means
+#: :func:`languages.default_family`, which is gcc, matching the native ``cc`` column's default.
+#: A family rather than a driver, because the family is what selects the ``compilers.yaml`` block,
+#: and the BLOCK is what carries the flags -- so "dace built with llvm" and the native ``cc_llvm``
+#: column really do mean the same compiler and the same flag string.
+DACE_FAMILY_ENV = "OPTARENA_DACE_COMPILER_FAMILY"
+
+#: Flags dace supplies itself, stripped from the baseline before it reaches ``compiler.cpu.args``.
+#: Its config schema documents both exclusions: the optimization level is the sole property of
+#: ``compiler.build_type`` (Release -> -O3), and position independence comes from CMake's
+#: ``CMAKE_POSITION_INDEPENDENT_CODE``. Passing them again is at best redundant and at worst
+#: fights what CMake already put on the line.
+DACE_SUPPLIED_FLAGS = (bench_flags.OPT_LEVEL, "-fPIC")
+
+
+def pin_host_compiler(family: Optional[str] = None) -> Optional[str]:
+    """Build dace's generated C++ with the SAME driver and flags a native arm of ``family`` uses.
+
+    Half of every dace-vs-native comparison is the same kernel compiled two ways, so a dace arm
+    whose host compiler is not the one the native arm names measures the compiler rather than the
+    pipeline. Both halves are pinned here:
+
+    * ``compiler.cpu.executable`` -- the resolved driver for the family's C++ block.
+    * ``compiler.cpu.args``       -- that block's baseline, minus :data:`DACE_SUPPLIED_FLAGS`.
+
+    This is not cosmetic. Dace's DEFAULT ``compiler.cpu.args`` carries ``-freciprocal-math``, which
+    the harness baselines deliberately do NOT (see ``flags._FP_RELAX``): unpinned, the dace arm was
+    compiled under a wider FP licence than the native arm it is divided by. ``-ffp-contract`` is
+    the same class of divergence and reaches the dace build through the baseline for the same
+    reason.
+
+    Same override discipline as :func:`pin_cpp_standard`: the value set here wins over a user's
+    ``~/.dace.conf``, so a stray config cannot silently regrade an experiment.
+
+    :returns: the ``compilers.yaml`` block name pinned, or ``None`` when this image wires no C++
+        block for the family (the build is then left on dace's own resolution, unchanged).
+    """
+    family = family or os.environ.get(DACE_FAMILY_ENV) or languages.default_family()
+    block = languages.compiler_for_family("cpp", family)
+    if block is None:
+        return None
+    driver = languages.resolve_compiler(languages.compiler_driver(block))
+    if driver is None:
+        return None
+    if dace.Config.get("compiler", "cpu", "executable") != driver:
+        dace.Config.set("compiler", "cpu", "executable", value=driver)
+    baseline = languages.baseline_flags_for_block(block)
+    args = " ".join(tok for tok in baseline.split() if tok not in DACE_SUPPLIED_FLAGS)
+    if dace.Config.get("compiler", "cpu", "args") != args:
+        dace.Config.set("compiler", "cpu", "args", value=args)
+    return block
+
+
+def pin_cpp_standard(arch: str = "cpu") -> None:
     """Build dace's C++ to the standard compilers.yaml names, so a user's ~/.dace.conf cannot
-    grade a dace baseline against an agent submission compiled to a different C++."""
-    std = languages.std_flag("cpp").removeprefix("-std=c++")
+    grade a dace baseline against an agent submission compiled to a different C++.
+
+    A GPU build reads the CUDA block, not the C++ one: dace passes this single value through as
+    ``CMAKE_CUDA_STANDARD`` as well, and nvcc rejects the c++23 the host blocks ask for, so every
+    dace GPU column died in CMake's compiler-ABI probe before emitting a line of code.
+    """
+    std = languages.std_flag("cuda" if arch == "gpu" else "cpp").removeprefix("-std=c++")
     if std and dace.Config.get("compiler", "cpp_standard") != std:
         dace.Config.set("compiler", "cpp_standard", value=std)
 
@@ -202,6 +263,57 @@ def mpi_rank() -> Optional[str]:
     return None
 
 
+def pin_gpu_toolchain() -> None:
+    """Point DaCe's GPU build at the ROCm install this host actually has.
+
+    DaCe's generated CMake does ``find_package(HIP REQUIRED)``, which resolves through
+    ``CMAKE_PREFIX_PATH`` / ``HIP_DIR``. ROCm keeps its bin off ``PATH`` (that directory holds a
+    ``clang`` that would shadow every other build's compiler), so on a bare node nothing points
+    CMake at it and the configure step fails with "Add the installation prefix of HIP to
+    CMAKE_PREFIX_PATH" -- measured: every ``dace_gpu`` kernel declined for that reason alone. The
+    container image exports these; a node outside it does not, and the harness should not need one.
+
+    Only ever ADDS: an operator who set ``ROCM_PATH`` or ``CMAKE_PREFIX_PATH`` keeps their value,
+    and a host with no ROCm is left untouched so the CUDA path is unaffected.
+    """
+    root = pathlib.Path(os.environ.get("ROCM_PATH") or "/opt/rocm")
+    if not (root / "lib" / "cmake" / "hip").is_dir():
+        return  # no ROCm here: a CUDA box, or a node without the SDK
+    os.environ.setdefault("ROCM_PATH", str(root))
+    os.environ.setdefault("HIP_PATH", str(root))
+    prefix = os.environ.get("CMAKE_PREFIX_PATH", "")
+    if str(root) not in prefix.split(os.pathsep):
+        os.environ["CMAKE_PREFIX_PATH"] = os.pathsep.join([str(root), prefix]) if prefix else str(root)
+    if dace.Config.get("compiler", "cuda", "backend") == "auto":
+        dace.Config.set("compiler", "cuda", "backend", value="hip")
+    if not dace.Config.get("compiler", "cuda", "hip_arch"):
+        arch = local_gpu_arch(root)
+        if arch:
+            dace.Config.set("compiler", "cuda", "hip_arch", value=arch)
+
+
+def local_gpu_arch(rocm_root: pathlib.Path) -> str:
+    """The AMD ISA this node compiles for, as a comma list, or ``""`` when nothing answers.
+
+    DaCe's CMake detects this by compiling and RUNNING a probe with hipcc, and on a node whose
+    visible devices are masked -- which is every rank here, since each takes one GPU -- that probe
+    comes back empty and CMake fails outright with "HIP_ARCHITECTURES is empty". Asked instead of
+    hardcoded: ``amdgpu-arch`` is the ROCm tool that answers it, and the two environment variables
+    below are what a ROCm image already declares, so no gfx number is written down in this repo.
+    """
+    probe = rocm_root / "llvm" / "bin" / "amdgpu-arch"
+    if probe.is_file():
+        try:
+            out = subprocess.run([str(probe)], capture_output=True, text=True, timeout=30, check=False).stdout
+        except (OSError, subprocess.SubprocessError):
+            out = ""
+        found = sorted({line.strip() for line in out.splitlines() if line.strip()})
+        if found:
+            return ",".join(found)
+    declared = os.environ.get("HCC_AMDGPU_TARGET") or os.environ.get("PYTORCH_ROCM_ARCH") or ""
+    return ",".join(part for part in (p.strip() for p in declared.replace(";", ",").split(",")) if part)
+
+
 def pin_per_rank_build_dirs() -> None:
     """Give every rank its own build folder and its own precompiled-header cache.
 
@@ -251,22 +363,6 @@ def pin_per_rank_build_dirs() -> None:
         base = (shm / f"dace_build_cache_{getpass.getuser()}"
                 if shm.is_dir() and os.access(shm, os.W_OK) else pathlib.Path.home() / ".cache/dace/build_cache")
         os.environ["DACE_BUILD_CACHE_DIR"] = str(base / f"rank{rank}")
-
-
-def unblock_sigchld() -> None:
-    """Let the build see its own children exit.
-
-    srun/mpirun start their tasks with SIGCHLD blocked; the mask survives fork AND exec, and CPython
-    does NOT reset it for a subprocess -- so cmake inherits the block, and KWSys, which learns that
-    the helpers it spawns during configure have exited by receiving SIGCHLD, waits for it in
-    ``select()`` forever. Measured: cmake 4.3.4 configure times out with SIGCHLD blocked and exits 0
-    without it. Doing it here rather than in a launcher wrapper covers every way the job is started
-    (``srun python -m ...`` execs the interpreter directly, so no shell is around to clear the mask).
-
-    Masks are per-THREAD and a child inherits the FORKING thread's, so this must run on the thread
-    that goes on to build -- which is why it sits with the other pins in ``optimize``.
-    """
-    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGCHLD})
 
 
 def pin_build_caching() -> None:
@@ -327,46 +423,84 @@ class SdfgPipeline:
     parent: Optional[str]
     transform: Callable[[Any, Dict[str, Any]], None]
     finalized: bool = False
-
-
-def pipeline_strict(sdfg: Any, ctx: Dict[str, Any]) -> None:
-    """Phase 1 -- baseline strict transformations."""
-    sdfg.apply_strict_transformations()
-
-
-def pipeline_fusion(sdfg: Any, ctx: Dict[str, Any]) -> None:
-    """Phase 2 -- repeated MapFusion + strict cleanup."""
-    sdfg.apply_transformations_repeated([ctx["MapFusion"]])
-    sdfg.apply_strict_transformations()
+    #: DaCe config overrides this pipeline compiles under, as ``{(section, ..., key): value}``. The
+    #: CODE GENERATOR is part of what a column measures, not an ambient setting: ``canon`` is scored
+    #: on the readable generator (which tree-reduces and lifts its own explicit copies), while
+    #: ``parallel`` is scored on the classic one with neither, which is the configuration whose
+    #: output is byte-identical to upstream and therefore comparable against it. Applied around the
+    #: transform AND the compile, since these decide codegen rather than the graph.
+    config: Tuple[Tuple[Tuple[str, ...], Any], ...] = ()
 
 
 def pipeline_parallel(sdfg: Any, ctx: Dict[str, Any]) -> None:
-    """Phase 3 -- LoopToMap / MapCollapse fixpoint + MapFusion cleanup."""
-    dace = ctx["dace"]
-    LoopToMap = ctx["LoopToMap"]
-    MapCollapse = ctx["MapCollapse"]
-    MapFusion = ctx["MapFusion"]
-    try:
-        strict_xforms = dace.transformation.simplification_transformations()
-    except Exception:
-        strict_xforms = None
-    for sd in sdfg.all_sdfgs_recursive():
-        propagation.propagate_states(sd)
-    if strict_xforms:
-        sdfg.apply_transformations_repeated([LoopToMap, MapCollapse] + strict_xforms)
-    else:
-        num = 1
-        while num > 0:
-            num = sdfg.apply_transformations_repeated([LoopToMap, MapCollapse])
-            sdfg.simplify()
-    sdfg.apply_transformations_repeated([MapFusion])
+    """The parallelization pipeline, CPU or GPU.
+
+    The stage list is the one CloudSC is driven with, which dace-fortran arrived at first. What
+    stood here before was a strict subset of it: no ``UniqueLoopIterators``, no scalar fission, no
+    length-one-array conversion, plain vertical ``MapFusion`` instead of ``FullMapFusion``, and
+    ``simplify`` ahead of the unroll rather than after it. The column therefore reported DaCe as
+    WEAKER than that pipeline actually drives it -- durbin fuses to 3 maps under this list and
+    reported 5 under the old one.
+
+    ``UniqueLoopIterators`` is the one whose absence changes the answer rather than the speed:
+    shared iterator names make ``LoopToMap`` refuse merged siblings, so loops that should have
+    become parallel maps stayed sequential.
+
+    On GPU the offload runs LAST, after every CPU-side optimization: the maps are formed, collapsed
+    and fused on the host graph first, and only the finished map structure is moved to the device.
+
+    WRITTEN OUT HERE, with no dependency on dace-fortran. Sharing the code would mean taking its
+    ``dace @ git+...@FaCe`` pin, which would replace the spcl/dace@extended install every other
+    column runs on; and this list has to be free to follow THIS corpus anyway, which is a different
+    workload from CloudSC. Only the idea is borrowed.
+
+    Two stages of that pipeline are deliberately not here. Its scalar-fission wrapper exists to
+    spare Fortran ABI-proxy transients, which a Python-frontend SDFG does not have, so the bare
+    ``ScalarFission`` pipeline is the whole content; and ``MakeTransientsPersistent`` does not exist
+    on extended at all.
+    """
+    from dace.transformation.interstate.state_fusion_with_happens_before import StateFusionExtended
+    from dace.transformation.pass_pipeline import Pipeline
+    from dace.transformation.passes.full_map_fusion import FullMapFusion
+    from dace.transformation.passes.length_one_array_scalar_conversion import ConvertLengthOneArraysToScalars
+    from dace.transformation.passes.parallelization_prep import ShortLoopUnroll
+    from dace.transformation.passes.scalar_fission import ScalarFission
+    from dace.transformation.passes.unique_loop_iterators import UniqueLoopIterators
+
+    ConvertLengthOneArraysToScalars(preserve_abi=True).apply_pass(sdfg, {})
+    # Before LoopToMap, not after: a constant-trip loop that is still a loop is not a Map candidate,
+    # and unrolling it first is what lets the fusion rounds see one flat body.
+    ShortLoopUnroll().apply_pass(sdfg, {})
+    UniqueLoopIterators().apply_pass(sdfg, {})
+    # ScalarFission needs its ScalarWriteShadowScopes analysis; a bare apply_pass gets an empty
+    # pipeline_results and KeyErrors, so the Pipeline is what resolves depends_on() first.
+    Pipeline([ScalarFission()]).apply_pass(sdfg, {})
+    sdfg.simplify()
+    sdfg.apply_transformations_repeated(StateFusionExtended)
+    sdfg.apply_transformations_repeated([ctx["LoopToMap"]])
+    sdfg.apply_transformations_repeated(StateFusionExtended)
+    for _ in range(PARALLEL_FUSION_ROUNDS):
+        # FullMapFusion, not ctx["MapFusion"]: vertical AND horizontal to a fixed point. Horizontal
+        # fuses maps that only share an INPUT, with no producer/consumer edge between them, which
+        # vertical fusion cannot see at all.
+        FullMapFusion().apply_pass(sdfg, {})
+        sdfg.apply_transformations_repeated([ctx["MapCollapse"]])
+    if ctx["device"] is dace_dtypes.DeviceType.GPU:
+        from dace.transformation.passes.canonicalize.finalize import offload_to_gpu
+        offload_to_gpu(sdfg)
 
 
 def pipeline_auto_opt(sdfg: Any, ctx: Dict[str, Any]) -> None:
-    """Upstream DaCe's ``auto_optimize``: LICM + MapFusion + tiling + vectorize, plus the GPU
-    offload when the target is GPU. Available on every DaCe, fork or not."""
-    opt = ctx["opt"]
-    opt.auto_optimize(sdfg, ctx["device"], symbols=ctx.get("symbols", {}), use_gpu_storage=True)
+    """Upstream DaCe's ``auto_optimize``: LICM + MapFusion + tiling + vectorize, plus the GPU offload
+    when the target is GPU. Available on every DaCe, fork or not, which is what makes it the column
+    that separates "the fork's optimizer is better" from "the fork's DaCe is different"."""
+    ctx["opt"].auto_optimize(sdfg, ctx["device"], symbols=ctx.get("symbols", {}), use_gpu_storage=True)
+
+
+#: Rounds of (FullMapFusion, MapCollapse) the parallel pipeline runs. Two, not a fixed point: the
+#: two feed each other (a fusion exposes a collapse, a collapse exposes a fusion), and the second
+#: round is where that settles on this corpus.
+PARALLEL_FUSION_ROUNDS = 2
 
 
 def pipeline_canonicalize(sdfg: Any, ctx: Dict[str, Any]) -> None:
@@ -403,19 +537,116 @@ def pipeline_canonicalize(sdfg: Any, ctx: Dict[str, Any]) -> None:
     finalize_for_target(sdfg, target=target)
 
 
+#: Storage classes that put the bytes in device memory, which is what a cupy argument IS. Everything
+#: else -- ``Default``, ``CPU_Heap``, ``CPU_Pinned``, ``Register`` -- is a host address, and pinned
+#: host memory is a host address too however cheaply the device can reach it.
+GPU_RESIDENT_STORAGE: Tuple[Any, ...] = (dace_dtypes.StorageType.GPU_Global, dace_dtypes.StorageType.GPU_Shared)
+
+
+def enforce_gpu_residency(sdfg: Any) -> None:
+    """The GPU residency contract at the ABI boundary: every non-transient ARRAY is device-resident,
+    every SCALAR stays on the host.
+
+    This is the same rule ``docs/abi_contract.md`` Sec. 10 states for the native GPU languages, and
+    it has to hold here for the same reason: the harness stages every array argument to the device
+    once, outside the timed region (``DaceFramework.copy_func`` is ``cupy.asarray``), and passes
+    every scalar and every free symbol by value on the host. What the caller delivers is fixed, so a
+    descriptor that disagrees with it is not a slower variant -- it is the wrong pointer.
+
+    Nothing downstream catches that. ``CompiledSDFG`` does not compare an argument's residency
+    against its descriptor's storage, so a host-storage array handed a device pointer compiles,
+    links, runs, and reads device addresses as host memory: a segfault on a good day and a wrong
+    answer on a bad one.
+
+    ``apply_gpu_storage`` gets most of the way there but deliberately stops short in two places, and
+    both are load-bearing for IT rather than for us. It only promotes ``Default`` storage, so an
+    array some earlier pass gave an explicit host storage stays host; and it skips any container an
+    interstate edge reads, because inside DaCe that read is host code and moving the bytes to the
+    device would make the graph invalid. The first is ours to finish. The second is a genuine
+    conflict with the contract -- the graph wants a host read of a container the caller only ever
+    delivers on the device -- so it is REFUSED by name here rather than run as a host/device mix.
+
+    Scalars go the other way: any that a pass moved to device storage is put back, because it is
+    passed by value and there is no buffer to place.
+    """
+    from dace import data as dace_data
+
+    host_read = dace_auto_opt.interstate_read_names(sdfg)
+    stranded: List[str] = []
+    for name, desc in sdfg.arrays.items():
+        if desc.transient:
+            continue
+        if isinstance(desc, dace_data.Scalar):
+            if desc.storage in GPU_RESIDENT_STORAGE:
+                desc.storage = dace_dtypes.StorageType.Default
+            continue
+        if desc.storage in GPU_RESIDENT_STORAGE:
+            continue
+        if name in host_read:
+            stranded.append(name)
+            continue
+        desc.storage = dace_dtypes.StorageType.GPU_Global
+    if stranded:
+        raise ValueError("GPU residency contract: {names} must be device-resident (the harness passes "
+                         "device pointers) but {verb} read by an interstate edge, which is host "
+                         "code".format(names=", ".join(stranded), verb="is" if len(stranded) == 1 else "are"))
+
+
+#: THREE optimizers x TWO targets, and nothing else. All three are device-aware and all three
+#: offload LAST, after every CPU-side optimization, so a GPU column is its CPU column's map
+#: structure moved to the device rather than a differently-optimized graph.
+#:
+#: What used to be here also had ``strict`` (simplify alone) and ``fusion``, which were RUNGS of a
+#: search rather than optimizers -- and a search reports its winner, which answers "how fast is
+#: DaCe" and not "how fast is THIS optimizer". Each pipeline is now named and scored on every
+#: kernel, including the ones where it loses. ``autoopt`` stays because it is upstream DaCe's own
+#: optimizer and runs on a stock install, so it is the only column that separates a better optimizer
+#: in the fork from a different DaCe in the fork.
+#:
+#: Every entry is ``finalized``: each ends in a graph ready for codegen, with no later rung to
+#: inherit a finalization from.
+#: ``parallel`` and ``autoopt`` are scored on the CLASSIC generator with tree reductions and the
+#: explicit-copy lift both off -- the configuration DaCe documents as byte-identical to upstream,
+#: which is what makes those two columns comparable against a stock install. ``canon`` is scored on
+#: the readable generator, which tree-reduces and lifts its own copies regardless of the flags.
+CLASSIC_CODEGEN: Tuple[Tuple[Tuple[str, ...], Any], ...] = ((("compiler", "cpu", "implementation"),
+                                                             "legacy"), (("compiler", "emit_tree_reductions"), False),
+                                                            (("compiler", "cpu", "explicit_copy"), False))
+READABLE_CODEGEN: Tuple[Tuple[Tuple[str, ...], Any],
+                        ...] = ((("compiler", "cpu", "implementation"), "experimental_readable"), )
+
+
+def apply_pipeline_config(pipe: "SdfgPipeline") -> None:
+    """Set the pipeline's codegen configuration GLOBALLY, for the rest of the process.
+
+    Deliberately not scoped to the transform. The generator is chosen at CODEGEN time, which happens
+    later and elsewhere (compile, and the replay a report reruns), so a context manager around the
+    transform would set the flag exactly where it is not read. Each flavor names one pipeline, so a
+    single run has one configuration and nothing to interleave; running two configurations in one
+    process is the caller's business to sequence, not this function's to defend against.
+
+    ``Config.set`` and not ``set_temporary``: an environment variable still wins over both, so a
+    DACE_compiler_cpu_implementation in the environment overrides the column's own choice.
+    """
+    for path, value in pipe.config:
+        dace.Config.set(*path, value=value)
+
+
 DACE_PIPELINES: Tuple[SdfgPipeline, ...] = (
-    SdfgPipeline("strict", parent=None, transform=pipeline_strict),
-    SdfgPipeline("fusion", parent="strict", transform=pipeline_fusion),
-    SdfgPipeline("parallel", parent="fusion", transform=pipeline_parallel),
-    SdfgPipeline("autoopt", parent="strict", transform=pipeline_auto_opt, finalized=True),
-    SdfgPipeline("canonicalize", parent="strict", transform=pipeline_canonicalize, finalized=True),
+    SdfgPipeline("parallel_cpu", None, pipeline_parallel, finalized=True, config=CLASSIC_CODEGEN),
+    SdfgPipeline("parallel_gpu", None, pipeline_parallel, finalized=True, config=CLASSIC_CODEGEN),
+    SdfgPipeline("canon_cpu", None, pipeline_canonicalize, finalized=True, config=READABLE_CODEGEN),
+    SdfgPipeline("canon_gpu", None, pipeline_canonicalize, finalized=True, config=READABLE_CODEGEN),
+    SdfgPipeline("autoopt_cpu", None, pipeline_auto_opt, finalized=True, config=CLASSIC_CODEGEN),
+    SdfgPipeline("autoopt_gpu", None, pipeline_auto_opt, finalized=True, config=CLASSIC_CODEGEN),
 )
 
 PIPELINES_BY_NAME: Dict[str, SdfgPipeline] = {p.name: p for p in DACE_PIPELINES}
 
-#: Flavors that do not name their own ``pipelines`` score these. ``fusion`` is only ``parallel``'s
-#: intermediate and is never scored on its own.
-DEFAULT_PIPELINES: Tuple[str, ...] = ("strict", "parallel", "canonicalize")
+#: Flavors that do not name their own ``pipelines`` score this. Every dace flavor names exactly one
+#: of the four, so this is the fallback for a flavor that forgot to -- CPU parallel, the closest
+#: thing to a plain "run DaCe" answer.
+DEFAULT_PIPELINES: Tuple[str, ...] = ("parallel_cpu", )
 
 
 def needed_pipelines(scored: Sequence[str]) -> List[str]:
@@ -480,6 +711,10 @@ class DaceFramework(Framework):
         self._native_cursor: int = 0
         # Datatype selected via set_datatype; read by verify() for the tolerance band.
         self.datatype: Optional[str] = None
+        #: Why each pipeline died this optimize() call -- the reason the decline carries when none
+        #: of them yields a compilable SDFG. Reset per call, declared here so the attribute always
+        #: exists whatever order the build helpers run in.
+        self._pipeline_errors: List[str] = []
 
     #: DaCe searches for the fastest SDFG in optimize(), so it is an Optimizer.
     is_optimizer = True
@@ -493,8 +728,15 @@ class DaceFramework(Framework):
 
     def copy_func(self) -> Callable:
         # Every GPU flavor needs the device copy, not just the one originally named ``dace_gpu``.
+        #
+        # Through import_device_array_module, never a bare ``import cupy``: on ROCm the first HIPRTC
+        # compile dies inside <initializer_list> until repair_hiprtc_include_path has run, and that
+        # repair is what this entry point exists to apply. Importing cupy directly here is what made
+        # every dace_gpu kernel a load_error while the two native device paths worked -- 242 of 242,
+        # twice, on an image whose cupy was fine.
         if self.info["arch"] == "gpu":
-            import cupy
+            from hpcagent_bench.harness.native_call import import_device_array_module
+            cupy = import_device_array_module()
 
             def cp_copy_func(arr):
                 darr = cupy.asarray(arr)
@@ -583,13 +825,19 @@ class DaceFramework(Framework):
         for name in needed_pipelines(self.scored_pipelines()):
             pipe = PIPELINES_BY_NAME[name]
             try:
+                apply_pipeline_config(pipe)
                 parent = produced.get(pipe.parent, base_sdfg) if pipe.parent else base_sdfg
                 sdfg = copy.deepcopy(parent)
                 sdfg._name = pipe.name
                 pipe.transform(sdfg, ctx)
+                # One place, after every GPU pipeline: each of the three offloads through its own
+                # route, and the boundary they all have to land on is the same one.
+                if self.info["arch"] == "gpu":
+                    enforce_gpu_residency(sdfg)
                 produced[pipe.name] = sdfg
             except Exception as exc:
                 print(f"DaCe {pipe.name} pipeline failed: {exc}")
+                self._pipeline_errors.append(f"{pipe.name}: {type(exc).__name__}: {exc}")
         return produced
 
     def _prepare_gpu(self, sdfg: Any, ctx: Dict[str, Any]) -> None:
@@ -613,20 +861,33 @@ class DaceFramework(Framework):
     def optimize(self, program: Any, bench: Benchmark, bdata: Dict[str, Any]) -> Any:
         """Build this flavor's pipelines, verify + score each, and return the fastest correct compiled variant."""
         ctx = self._build_context()
-        pin_cpp_standard()
+        pin_cpp_standard(self.info["arch"])
+        pin_host_compiler()
         pin_per_rank_build_dirs()
-        unblock_sigchld()
         pin_build_caching()
         if self.info["arch"] == "gpu":
+            pin_gpu_toolchain()
             if dace.Config.get('library', 'blas', 'default_implementation') != "pure":
-                dace.Config.set('library', 'blas', 'default_implementation', value='cuBLAS')
+                # The vendor BLAS is named per BACKEND: a hardcoded 'cuBLAS' on an AMD node names an
+                # expansion whose environment is not installed, and every BLAS node falls through to
+                # the serial 'pure' loop while the log still says the fast library was selected.
+                backend = dace_common.get_gpu_backend()
+                dace.Config.set('library',
+                                'blas',
+                                'default_implementation',
+                                value='rocBLAS' if backend == 'hip' else 'cuBLAS')
             pin_single_stream()
 
+        self._pipeline_errors = []
         sdfgs = self._build_sdfgs(program, ctx, bench)
         compiled = self.compile_variants(sdfgs, ctx)
         if not compiled:
-            print("DaCe optimize: no variant compiled; returning the unoptimized program")
-            return program
+            # Returning ``program`` here timed the UNOPTIMIZED SDFG and recorded the median under
+            # this column's name -- a wrong measurement, not a failed one, and indistinguishable in
+            # the results from a pipeline that worked and won nothing. Decline instead: the run
+            # records the kernel as unsupported, with the pipeline's own error as the reason.
+            why = "; ".join(self._pipeline_errors) or "every pipeline produced no compilable SDFG"
+            raise NotSupportedByFramework(self.fname, bench.info.get("short_name", "?"), why)
 
         reference = self.reference_outputs(bench, bdata)
         return self.select_fastest(compiled, reference, bench, bdata)
@@ -703,14 +964,26 @@ class DaceFramework(Framework):
         return sorted(series)[len(series) // 2]
 
     def reference_outputs(self, bench: Benchmark, bdata: Dict[str, Any]) -> Optional[List[Any]]:
-        """Compute the NumPy reference outputs for ``bdata``, or ``None`` if unavailable (skips the gate)."""
+        """Compute the NumPy reference outputs for ``bdata``, or ``None`` if unavailable (skips the gate).
+
+        On a GPU flavor the reference is staged to the device ONCE here, not per variant. The oracle
+        is still numpy on the host -- only its result crosses -- so what is graded is unchanged; what
+        changes is that a flavor searching three pipelines pays one H2D instead of three D2H, and the
+        comparison itself runs at device bandwidth over arrays that are already there.
+        """
         try:
             numpy_fw = Framework("numpy")
             np_impl, _ = numpy_fw.implementations(bench)[0]
-            return self.collect_outputs(numpy_fw, np_impl, bench, bdata)
+            reference = self.collect_outputs(numpy_fw, np_impl, bench, bdata)
         except Exception as exc:
             print(f"DaCe optimize: numpy reference unavailable ({exc}); verification skipped")
             return None
+        if self.info["arch"] != "gpu":
+            return reference
+        to_device = self.copy_func()
+        # Only a dense ndarray has a device form here; a scipy sparse output or a python scalar stays
+        # on the host and compare_arrays moves it, which is one small operand rather than the buffers.
+        return [to_device(a) if isinstance(a, np.ndarray) else a for a in reference]
 
     def collect_outputs(self, frmwrk: Framework, impl: Callable, bench: Benchmark, bdata: Dict[str, Any]) -> List[Any]:
         """Run ``impl`` once and collect its outputs (returns, else the in-place mutated output buffers)."""
@@ -718,7 +991,7 @@ class DaceFramework(Framework):
         plan.before_each()
         plan.run()
         ret = plan.result
-        return util.resolve_outputs(ret, plan.inout_values(), bench.info.get("output_args", []))
+        return util.resolve_outputs(ret, plan.inout_values(), bench.info.get("output_args", []), plan.inout_names())
 
     # ----- Reports ---------------------------------------------------------
     #
@@ -871,7 +1144,19 @@ class DaceFramework(Framework):
     def call_args(self, bench: Benchmark, impl: Callable, resolved, bdata):
         """DaCe compiled programs take the inputs AND the symbol params as keywords (``A=..., NI=...``)."""
         renames = self.arg_renames(bench)
-        kwargs = {renames.get(a, a): resolved[a] for a in bench.info["input_args"]}
+        # The compiled signature takes a sparse array as its expanded buffers, never the logical name.
+        # ``resolved`` is keyed by the MANIFEST's input_args, so it holds the logical entry and none
+        # of the buffers; it still wins where it has a name, since it carries the per-run mutable copy.
+        from hpcagent_bench.initialize import abi_input_args
+        source = {**bdata, **resolved}
+        # The SDFG's own arglist is the authority on what the signature takes: abi_input_args adds
+        # declared OUTPUT buffers, which a program that returns them instead does not accept.
+        declared = set(impl.sdfg.arglist()) if isinstance(impl, TimedCompiledSDFG) else None
+        wanted = [
+            a for a in abi_input_args(bench.spec, bdata)
+            if a in source and (declared is None or renames.get(a, a) in declared)
+        ]
+        kwargs = {renames.get(a, a): source[a] for a in wanted}
         for p in self.params(bench, impl):
             kwargs[renames.get(p, p)] = bdata[p]
         kwargs.update(self.shape_symbols(impl, bench, resolved, kwargs))

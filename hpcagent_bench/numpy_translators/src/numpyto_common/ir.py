@@ -9,7 +9,7 @@ NumpyToC consumes it for now.
 
 import ast
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from numpyto_common import dtypes
 
@@ -118,6 +118,13 @@ class ScalarDesc:
     name: str
     dtype: str
     is_output: bool = False
+    #: The manifest's value for this scalar, when it declares one. A benchmark pins every scalar to a
+    #: single value across all of S/M/L/XL, so a scalar reaching an EXTENT is a compile-time constant
+    #: however the reference spells it -- conv2d_instance_norm_divide derives its output extents from
+    #: stride, padding and dilation, and its declared ``out`` shape is that formula already evaluated
+    #: at the pinned values. Emitters that need static shapes read it; the rest ignore it and keep
+    #: taking the scalar as a runtime argument, so the ABI is the same either way.
+    value: Optional[Union[int, float]] = None
 
     def __post_init__(self) -> None:
         # Honour the storage contract :func:`dtypes.canonical` documents: the frontend records
@@ -220,6 +227,12 @@ class KernelIR:
     #: Floating precision the sweep pinned (``"float32"`` / ...); the emitter's
     #: default dtype for a temp not in ``local_dtypes``. ``None`` = natural fp64.
     float_precision: Optional[str] = None
+    #: ``{name: value}`` for each ``config:`` knob the manifest pinned to ONE value. These have the
+    #: same value for every preset and every fuzz draw, so they are compile-time constants: the
+    #: native emitters declare them (C ``constexpr`` / Fortran ``parameter``) and leave them OUT of
+    #: the ABI, which is why :meth:`param_order` drops them. They stay in ``symbols`` / ``scalars``
+    #: so lowering still resolves every body reference to them by name.
+    pinned_consts: Dict[str, Any] = field(default_factory=dict)
 
     def param_order(self, extra_ref: Optional[str] = None) -> List[str]:
         """Return the argument names in **ABI order**.
@@ -245,7 +258,8 @@ class KernelIR:
         if extra_ref is not None:
             names.append(extra_ref)
         refs = sorted(names)
-        scalars = sorted([s.name for s in self.symbols] + [s.name for s in self.scalars])
+        scalars = sorted(n for n in ([s.name for s in self.symbols] + [s.name for s in self.scalars])
+                         if n not in self.pinned_consts)
         return refs + scalars
 
     def abi_param_order(self) -> List[str]:
@@ -262,7 +276,8 @@ class KernelIR:
         hold.
         """
         order = self.param_order()
-        return order if set(order) == set(self.input_args) else list(self.input_args)
+        declared = [n for n in self.input_args if n not in self.pinned_consts]
+        return order if set(order) == set(declared) else declared
 
 
 #: AST-node attribute carrying the numpy expression a lowered statement came from.

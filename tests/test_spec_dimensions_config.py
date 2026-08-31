@@ -322,3 +322,44 @@ def test_fuzz_configs_is_rejected_with_a_pointer_to_the_new_block() -> None:
     is how a kernel gets graded on a space it did not declare."""
     with pytest.raises(ValueError, match="fuzz.configs"):
         BenchSpec.from_dict(_raw(parameters={"S": {"N": 16}}, fuzz={"configs": {"valid": [{"a": 1}]}}), source="<test>")
+
+
+def test_a_pinned_knob_is_a_compile_time_constant_a_fuzzed_one_is_not() -> None:
+    """``pinned_config`` is what the native emitters declare as ``constexpr`` / ``parameter``.
+
+    A knob with one ``value:`` has that value for every preset and every fuzz draw, so passing it
+    across the ABI spells a compile-time constant as a runtime argument -- and the compiler cannot
+    unroll a loop whose trip count it is only handed at run time. A knob with a ``domain:`` is a
+    real axis the harness varies, so it stays a parameter."""
+    spec = BenchSpec.from_dict(_raw(dimensions={"S": {
+        "N": 16
+    }},
+                                    config={
+                                        "max_iter": {
+                                            "value": 100
+                                        },
+                                        "mode": {
+                                            "domain": [0, 1]
+                                        }
+                                    }),
+                               source="<test>")
+    assert spec.pinned_config == {"max_iter": 100}
+    # Both still reach every existing consumer through the merged parameters view.
+    assert spec.parameters["S"]["max_iter"] == 100 and spec.parameters["S"]["mode"] == 0
+
+
+def test_a_curated_config_list_pins_nothing() -> None:
+    """A curated list is a SPACE the harness picks a row from, so no member is a constant --
+    even though each row states one value, the next row states a different one."""
+    spec = BenchSpec.from_dict(_raw(dimensions={"S": {
+        "N": 16
+    }},
+                                    config=[{
+                                        "mode": 0,
+                                        "tile": 32
+                                    }, {
+                                        "mode": 1,
+                                        "tile": 64
+                                    }]),
+                               source="<test>")
+    assert spec.pinned_config == {}

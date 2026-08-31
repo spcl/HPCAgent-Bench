@@ -1,0 +1,3 @@
+# gap for oss120b/c/skills: 2 of 40 unsolved
+loop_level_reasoning/tsvc_2_s2233/tsvc_2_s2233
+loop_level_reasoning/tsvc_2_s3111/tsvc_2_s3111

@@ -24,6 +24,7 @@ init:
     out_index:
       shape: (1,)
       dtype: int64
+      index_array: true
     out_value: (1,)
   func_name: initialize
 output_args:

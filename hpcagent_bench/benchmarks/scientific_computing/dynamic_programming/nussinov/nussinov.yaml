@@ -23,8 +23,6 @@ init:
   scalars:
     complement_sum: 3
     pair_bonus: 1
-    seq: 0
-    table: 0
   dtypes:
     seq: int32
     table: int32

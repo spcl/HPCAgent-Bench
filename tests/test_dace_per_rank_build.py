@@ -15,9 +15,6 @@ probe reads.
 """
 import getpass
 import pathlib
-import signal
-import subprocess
-import sys
 
 import pytest
 
@@ -150,25 +147,3 @@ def test_rank_env_covers_every_launcher_dace_knows() -> None:
     dace_sdfg = import_or_skip("dace.sdfg.sdfg")
     missing = sorted(set(dace_sdfg.LAUNCHER_RANK_VARS) - set(dace_framework.RANK_ENV))
     assert not missing, f"DaCe learned launcher variables we do not probe: {missing}"
-
-
-def test_unblock_sigchld_clears_an_inherited_block() -> None:
-    """A launcher hands its tasks a blocked SIGCHLD, the mask survives fork AND exec, and CPython
-    does not reset it for a subprocess -- so without this cmake inherits the block and KWSys waits
-    in select() for a signal that can never arrive. Asserting on the CHILD, not just this thread,
-    because inheritance is the whole failure."""
-
-    def child_sigblk() -> int:
-        argv = [sys.executable, "-c", "print(open('/proc/self/status').read().split('SigBlk:')[1].split()[0])"]
-        return int(subprocess.run(argv, capture_output=True, text=True).stdout.strip(), 16)
-
-    chld = 1 << (signal.SIGCHLD - 1)
-    saved = signal.pthread_sigmask(signal.SIG_BLOCK, set())
-    try:
-        signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGCHLD})
-        assert child_sigblk() & chld, "a child should inherit the block -- otherwise this test proves nothing"
-        dace_framework.unblock_sigchld()
-        assert not signal.pthread_sigmask(signal.SIG_BLOCK, set()) & {signal.SIGCHLD}
-        assert not child_sigblk() & chld, "the child still inherits a blocked SIGCHLD"
-    finally:
-        signal.pthread_sigmask(signal.SIG_SETMASK, saved)

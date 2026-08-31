@@ -44,9 +44,19 @@ from typing import Dict, List, Optional
 
 import yaml
 
-from hpcagent_bench import paths
-
 REPO_ROOT: Path = Path(__file__).resolve().parent.parent
+
+# pre-commit runs this hook on the AMBIENT interpreter (``language: system``), which is not
+# required to have the package installed -- it passes here only because this checkout happens to
+# carry an editable install. Without the repo root on the path the import below is a bare
+# ModuleNotFoundError, and the hook fails on every commit rather than on a bad manifest.
+# Two roots, not one: ``hpcagent_bench.dtypes`` imports ``numpyto_common``, which is a SEPARATE
+# package root under the translators.
+for root in (REPO_ROOT, REPO_ROOT / "hpcagent_bench" / "numpy_translators" / "src"):
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+
+from hpcagent_bench import paths  # noqa: E402  -- needs the sys.path bootstrap above
 
 
 def is_manifest(rel: str) -> bool:

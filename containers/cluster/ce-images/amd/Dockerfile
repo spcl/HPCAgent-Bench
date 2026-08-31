@@ -34,8 +34,12 @@ ARG LLVM_MAJOR=22
 # NVIDIA HPC SDK -- nvfortran/nvc++ for the OpenACC + `-stdpar` methods. OFF by default: the SDK
 # layer measures ~10-25 GB unpacked (the multi-arch CUDA payload dominates), which is several times
 # the rest of this image, and it is only reachable from a submission that requests `compiler: nvhpc`.
-# Turn on with --build-arg INSTALL_NVHPC=1 for an arm that grades those methods.
-ARG INSTALL_NVHPC=0
+# On by default: nvc / nvc++ are graded here as HOST CPU auto-parallelizers (-Mconcur,
+# -stdpar=multicore, -acc=multicore), which needs no GPU leg on this machine. Without the SDK the
+# x86 leg has three vendors instead of four. Costs ~10-25 GB unpacked, the multi-arch CUDA payload
+# dominating -- see containers/install-extra-toolchains.sh. Turn off with --build-arg
+# INSTALL_NVHPC=0 for an image that does not grade those methods.
+ARG INSTALL_NVHPC=1
 ARG NVHPC_APT_VERSION=25-7
 
 ENV LC_ALL=C \
@@ -66,7 +70,7 @@ RUN set -eux; \
       libopenblas-dev liblapack-dev liblapacke-dev libfftw3-dev libfftw3-mpi-dev \
       libhdf5-dev libnetcdf-dev libgsl-dev libeigen3-dev libsuitesparse-dev libmetis-dev \
       libsuperlu-dev libmumps-seq-dev libhypre-dev libsundials-dev libboost-all-dev \
-      libblis-dev libucx-dev libomp-dev libtbb-dev libsleef-dev libxsimd-dev libhwy-dev \
+      libucx-dev libomp-dev libtbb-dev libsleef-dev libxsimd-dev libhwy-dev \
       libnuma-dev libhwloc-dev libarmadillo-dev libfabric-dev libfabric-bin \
       mpich libmpich-dev libscalapack-mpich-dev libpetsc-real-dev \
       make cmake ninja-build pkg-config; \
@@ -138,6 +142,9 @@ RUN set -eux; \
     if [ -n "${llvm_major}" ]; then \
       apt-get install -y --no-install-recommends \
         "clang-${llvm_major}" "flang-${llvm_major}" "libomp-${llvm_major}-dev" \
+        "libpolly-${llvm_major}-dev" \
+      || apt-get install -y --no-install-recommends \
+        "clang-${llvm_major}" "libomp-${llvm_major}-dev" "libpolly-${llvm_major}-dev" \
       || apt-get install -y --no-install-recommends \
         "clang-${llvm_major}" "libomp-${llvm_major}-dev"; \
       ln -sf "$(command -v clang-${llvm_major})" /usr/local/bin/clang; \
@@ -171,7 +178,25 @@ COPY containers/build-hptt.sh /build-hptt.sh
 RUN sh /build-hptt.sh
 
 # Run in the final verification step below, not here: it must gate the toolchain the image SHIPS.
+# uv, for artifacts that ship a committed uv.lock and run `uv sync --locked` into their own venv.
+# A single static binary; it changes NOTHING about how this image installs its own dependencies --
+# requirements/*.txt and pip stay exactly as they are.
+RUN set -eux; \
+    arch="$(uname -m)"; \
+    url="https://github.com/astral-sh/uv/releases/latest/download/uv-${arch}-unknown-linux-gnu.tar.gz"; \
+    wget -qO /tmp/uv.tar.gz "${url}"; \
+    tar -xzf /tmp/uv.tar.gz -C /tmp; \
+    install -m 0755 /tmp/uv-${arch}-unknown-linux-gnu/uv /usr/local/bin/uv; \
+    install -m 0755 /tmp/uv-${arch}-unknown-linux-gnu/uvx /usr/local/bin/uvx; \
+    rm -rf /tmp/uv.tar.gz /tmp/uv-${arch}-unknown-linux-gnu; \
+    uv --version
+
 COPY containers/stdpar-gate.sh /stdpar-gate.sh
+# Same reason as the stdpar gate, for the auto-parallelizers: a clang without Polly accepts
+# -mllvm -polly -polly-parallel in silence and emits plain -O3, so the arm publishes -O3 numbers
+# under an auto-parallelizer's name. Also proves every graded C/C++ block compiles its own
+# standard, which is what catches an icpx that cannot resolve <vector>.
+COPY containers/parallelizer-gate.sh /parallelizer-gate.sh
 
 # Intel oneAPI (icx/icpx/ifx) and, when INSTALL_NVHPC=1, the NVIDIA HPC SDK (nvc/nvc++/nvfortran).
 # Its own layer because these are the two biggest and the two most optional things in the image --
@@ -189,6 +214,34 @@ RUN set -eux; \
 
 RUN PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install --no-cache-dir \
       "litellm[proxy]==1.94.0" fastapi uvicorn httpx pydantic orjson tenacity rich typer
+
+# cupy is the GPU track's array module: every ``arch == "gpu"`` flavor stages its arrays through it,
+# so without cupy the GPU legs die at import in copy_func and no dace_gpu column can exist at all.
+#
+# Built from source, because there is no ROCm wheel -- the cupy-rocm-4-3/5-0 lines are dead and PyPI
+# carries only the sdist. cupy documents ROCm 7.x with these three variables, and the 13 ROCm
+# libraries it wants (hipblas hipsparse rocsparse rocrand hiprand rocthrust rocsolver rocfft hipfft
+# hipcub rocprim rccl roctracer) are all in the rocm/pytorch base, so no apt layer goes with this.
+#
+# numpy is CONSTRAINED to whatever is already installed, and the build fails if it moved. The sdist
+# would otherwise pull its own numpy, and numpy is what computes every CPU reference -- moving it
+# here would move the oracle the GPU results are graded against, silently.
+#
+# NOT verified at build time beyond the import: the first HIPRTC compile needs
+# ``repair_hiprtc_include_path`` (cupy flattens hipcc's include list and loses the -internal-isystem
+# kinds, so device code dies inside <initializer_list>). The harness applies that on the one path it
+# imports cupy through; a bare device op here would fail for that reason and prove nothing.
+ARG CUPY_VERSION=14.2.0
+RUN set -eux; \
+    NUMPY_BEFORE="$(python3 -c 'import numpy; print(numpy.__version__)')"; \
+    printf 'numpy==%s\n' "${NUMPY_BEFORE}" > /tmp/cupy-constraint.txt; \
+    CUPY_INSTALL_USE_HIP=1 ROCM_HOME=/opt/rocm HCC_AMDGPU_TARGET="${ROCM_ARCH}" \
+    CUPY_NUM_BUILD_JOBS=32 PIP_BREAK_SYSTEM_PACKAGES=1 PIP_CONSTRAINT=/tmp/cupy-constraint.txt \
+      python3 -m pip install --no-cache-dir "cupy==${CUPY_VERSION}"; \
+    rm -f /tmp/cupy-constraint.txt; \
+    test "$(python3 -c 'import numpy; print(numpy.__version__)')" = "${NUMPY_BEFORE}" \
+      || { echo "cupy moved numpy off ${NUMPY_BEFORE}; the CPU reference oracle would change" >&2; exit 2; }; \
+    python3 -c 'import cupy; print("cupy", cupy.__version__)'
 
 COPY containers/judge/requirements.txt /opt/optarena-judge/requirements.txt
 RUN set -eux; \
@@ -286,6 +339,7 @@ RUN set -eux; \
     man -w gcc >/dev/null \
       || { echo "manpages missing: unminimize did not take" >&2; exit 1; }; \
     sh /stdpar-gate.sh; \
+    sh /parallelizer-gate.sh; \
     python3 -c "import importlib; [importlib.import_module(name) for name in ('numpy', 'scipy', 'numba', 'pythran', 'torch', 'dace', 'mpi4py')]"; \
     LD_PRELOAD=/usr/local/lib/libmimalloc.so /bin/true \
       || { echo "LD_PRELOAD=libmimalloc.so failed to run /bin/true" >&2; exit 1; }; \

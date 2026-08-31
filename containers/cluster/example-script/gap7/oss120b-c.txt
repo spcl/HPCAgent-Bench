@@ -1,0 +1,3 @@
+# gap for oss120b/c: 2 of 40 unsolved
+loop_level_reasoning/quasi_affine_reduce_odd/quasi_affine_reduce_odd
+loop_level_reasoning/tsvc_2_s2233/tsvc_2_s2233

@@ -180,3 +180,52 @@ def test_tuple_axis_pool_matches_numpy_on_numba():
         "x": "(A, B, C, D)",
         "out": "(A, D)"
     }) == "ok"
+
+
+# --------------------------------------------------------------------------- #
+# method-form reductions on an EXPRESSION receiver                            #
+# --------------------------------------------------------------------------- #
+# ``X.sum(...)`` only ever reached the expanders when X was a bare Name. An
+# expression receiver walked through to the emitter and died there as "call to
+# ((data - mean) ** 2).sum not supported" (correlation, nbody, vgg16, srad and
+# six more). Lowering now normalises every such method to np.<op>(X, ...).
+
+
+def _lowered_c(src, func, arrays, shapes):
+    """The C source lowering emits for ``src``; raises the emitter's own error on a refusal."""
+    from _op_oracle import run_op
+    return run_op(src, func, arrays, shapes[0], shapes[1], shapes=shapes[2], backends=("c", "fortran"))
+
+
+def test_expression_receiver_sum_lowers_and_matches_numpy():
+    src = ("import numpy as np\n"
+           "def f(data, mean, out):\n"
+           "    out[:] = ((data - mean) ** 2).sum(axis=0)\n")
+    data = np.arange(12.0).reshape(4, 3)
+    mean = np.array([1.0, 2.0, 3.0])
+    st = _lowered_c(src, "f", {
+        "data": data,
+        "mean": mean
+    }, ({
+        "out": (3, )
+    }, {
+        "M": 4,
+        "N": 3
+    }, {
+        "data": "(M, N)",
+        "mean": "(N,)",
+        "out": "(N,)"
+    }))
+    assert st == {"c": "ok", "fortran": "ok"}, st
+
+
+def test_expression_receiver_max_and_all_lower():
+    """Not just ``sum``: every method with a same-meaning numpy twin is normalised."""
+    src = ("import numpy as np\n"
+           "def f(a, b, out):\n"
+           "    out[0] = (a * b).max()\n"
+           "    out[1] = (a - b).min()\n")
+    a = np.array([1.0, 5.0, 2.0])
+    b = np.array([3.0, 1.0, 4.0])
+    st = _lowered_c(src, "f", {"a": a, "b": b}, ({"out": (2, )}, {"N": 3}, {"a": "(N,)", "b": "(N,)", "out": "(2,)"}))
+    assert st == {"c": "ok", "fortran": "ok"}, st

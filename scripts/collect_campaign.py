@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import collections
 import glob
+import math
 import os
 import pathlib
 import statistics
@@ -28,9 +29,14 @@ import sys
 
 from hpcagent_bench.harness import recording
 
-# Speed-up is a ratio, so the typical arm is described by its MEDIAN: one 40x kernel would drag a
-# mean far past anything the arm actually achieves on a normal problem.
-SUMMARY_COLUMNS = ("arm", "model", "language", "skills", "runs", "subs", "bench", "median_su", "suspect")
+# Speed-up is a RATIO, so the arm is summarised by its GEOMETRIC mean. An arithmetic mean is wrong
+# for ratios in the obvious way -- one 40x kernel drags it past anything the arm achieves normally --
+# but the median is wrong too, and less visibly: it discards the size of every win and loss, so an
+# arm that doubled half its kernels and an arm that barely moved them report the same number. The
+# geomean is the ratio whose product over the set matches, it is symmetric in speed-up and slowdown
+# (2x and 0.5x cancel), and it is the figure the campaign is reported on. The median is kept
+# alongside only as a spread cue, never as the headline.
+SUMMARY_COLUMNS = ("arm", "model", "language", "skills", "runs", "subs", "bench", "geomean_su", "median_su", "suspect")
 
 
 def shards_under(run_dir: str) -> list[str]:
@@ -87,6 +93,23 @@ def collect(run_dirs: list[str], out_dir: pathlib.Path) -> dict:
     return {"arms": per_arm, "empty": empty}
 
 
+def geomean(speedups: list[float]) -> float | None:
+    """Geometric mean of a speed-up set, or ``None`` when it has none.
+
+    Non-positive values are DROPPED rather than clamped: a speed-up of zero or below is not a slow
+    ratio, it is a missing measurement, and clamping one to a small epsilon would drag the geomean
+    toward zero and read as a catastrophic regression that never happened.
+    """
+    usable = [s for s in speedups if s > 0]
+    if not usable:
+        return None
+    return round(math.exp(statistics.fmean(math.log(s) for s in usable)), 3)
+
+
+def median(speedups: list[float]) -> float | None:
+    return round(statistics.median(speedups), 3) if speedups else None
+
+
 def summary_rows(per_arm: dict) -> list[tuple]:
     """One tuple per arm, in SUMMARY_COLUMNS order, sorted by arm name."""
     rows = []
@@ -99,9 +122,8 @@ def summary_rows(per_arm: dict) -> list[tuple]:
         rest = parts[:-1] if skills == "on" else parts
         language = rest[-1] if len(rest) > 1 else "?"
         model = "-".join(rest[1:-1]) if len(rest) > 2 else "?"
-        median = round(statistics.median(entry["speedups"]), 3) if entry["speedups"] else None
         rows.append((arm, model, language, skills, entry["runs"], len(entry["speedups"]), len(entry["benchmarks"]),
-                     median, entry["suspect"]))
+                     geomean(entry["speedups"]), median(entry["speedups"]), entry["suspect"]))
     return rows
 
 

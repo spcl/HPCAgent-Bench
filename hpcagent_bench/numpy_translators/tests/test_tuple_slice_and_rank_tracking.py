@@ -77,7 +77,11 @@ def test_a_symbolic_slice_bound_declines():
                   ranks={"x": 3},
                   int_scalars=frozenset({"k"}),
                   arrays=frozenset({"x"}))
-    assert "x.shape[k:]" in source_of(interp)
+    # ``x.shape`` still expands to its per-axis tuple -- that part is rank-3 knowledge, not a guess.
+    # The SLICE is what must survive: a ``[k:]`` left standing is the decline, and any fixed-length
+    # tuple in its place would be a length invented from a runtime scalar.
+    src = source_of(interp)
+    assert "(x.shape[0], x.shape[1], x.shape[2])[k:]" in src, src
     assert "y" not in interp.ranks
 
 

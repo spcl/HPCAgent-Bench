@@ -258,3 +258,4 @@ core.[0-9]*
 # Per-run job logs written beside the launcher, one pair per SLURM id
 containers/cluster/example-script/results/
 containers/cluster/example-script/*.err
+containers/cluster/example-script/gap/

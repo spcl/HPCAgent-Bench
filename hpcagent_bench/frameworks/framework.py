@@ -10,10 +10,14 @@ from typing import Any, Callable, Dict, List, NamedTuple, Optional, Sequence, Tu
 
 from hpcagent_bench import config
 from hpcagent_bench.frameworks import Benchmark
+from hpcagent_bench.languages import gpu_backend
 from hpcagent_bench.precision import Precision, float_complex_for
 
-np_float = None
-np_complex = None
+# The fp64 pair set_datatype resolves for a datatype of None, so a kernel that reads these before
+# any framework has set them computes at the default precision instead of at dtype None -- which
+# numpy resolves to float64 for a real array and, for a COMPLEX one, silently to a real array
+# whose stores discard the imaginary part.
+np_float, np_complex = float_complex_for(None)
 
 #: The IEEE pair every non-ml_dtypes-aware framework can execute (C/C++/Fortran, Numba, Pythran).
 IEEE_PRECISIONS = frozenset({Precision.FP32, Precision.FP64})
@@ -62,13 +66,24 @@ class CallPlan:
         self.f.after_setup()
 
     def _resolved(self) -> Dict[str, Any]:
-        return {a: (self._mutable[a] if a in self._mutable else self.bdata[a]) for a in self.input_args}
+        resolved = {a: (self._mutable[a] if a in self._mutable else self.bdata[a]) for a in self.input_args}
+        # An OUTPUT buffer is not an input_arg, so it never picked up the per-run copy made above --
+        # and on a GPU flavor that copy IS the device allocation. Without this the kernel is handed
+        # host memory for a container its own signature declares device-resident, which is where
+        # nbody's KE/PE landed once they stopped being staged back to the host.
+        resolved.update({a: self._mutable[a] for a in self.output_args if a in self._mutable})
+        return resolved
 
     def run(self) -> Any:
         """One kernel call, inside the timed bracket: resolve args, invoke the impl, apply post_call."""
         args, kwargs = self.f.call_args(self.bench, self.impl, self._resolved(), self.bdata)
         self.result = self.f.post_call(self.impl(*args, **kwargs))
         return self.result
+
+    def inout_names(self) -> List[str]:
+        """Names behind :meth:`inout_values`, same order -- what a caller needs to bind a partial
+        return value to the outputs the kernel did NOT write through a buffer."""
+        return [a for a in self.output_args if a in self._mutable]
 
     def inout_values(self) -> List[Any]:
         """Mutated array outputs read back after :meth:`run`, in ``output_args`` order."""
@@ -162,12 +177,18 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
     # flavor per individual pipeline for the runs that want a named optimizer rather than a winner.
     # ``pipelines`` names the SDFG pipelines the flavor compiles/verifies/scores; absent means
     # dace_framework.DEFAULT_PIPELINES. See dace_framework.DACE_PIPELINES for what each one does.
+    # The numerical-correctness gate, and the parent every other CPU column is read against:
+    # simplify -> ShortLoopUnroll -> LoopToMap -> (MapCollapse+MapFusion+StateFusionExtended) x2,
+    # the pipeline CloudSC is driven with. Not a search over pipelines -- a single defined one, so a
+    # wrong number here is in the emitted DaCe program or in simplify rather than in some optimizer
+    # the column happened to pick.
     "dace_cpu": {
         "base": "dace",
         "full_name": "DaCe CPU",
         "prefix": "dc",
         "postfix": "dace",
         "arch": "cpu",
+        "pipelines": ("parallel_cpu", ),
         "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
     },
     "dace_gpu": {
@@ -178,36 +199,31 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "arch": "gpu",
         # GPU searches upstream ``autoopt``, not ``canonicalize``: it is the pipeline this column
         # has always been scored on, and the canonicalize GPU path is its own flavor below.
-        "pipelines": ("strict", "parallel", "autoopt"),
+        "pipelines": ("parallel_gpu", ),
         "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
     },
-    # ONE pipeline each. A search reports the winner, which is the right answer for "how fast is
-    # DaCe" and the wrong one for "how fast is THIS optimizer" -- comparing pipelines needs each to
-    # be measured on every kernel, including the ones where it loses.
-    #
-    # ``dace_cpu_parallel`` is the portable one: LoopToMap/MapCollapse/MapFusion are upstream
-    # transformations, so this flavor runs on stock DaCe as well as on spcl/dace@extended, and is
-    # the only column that can be measured on both to separate "the fork's optimizer is better"
-    # from "the fork's DaCe is different".
-    "dace_cpu_parallel": {
-        "base": "dace",
-        "full_name": "DaCe CPU parallel",
-        "prefix": "dc",
-        "postfix": "dace",
-        "arch": "cpu",
-        "pipelines": ("parallel", ),
-        "column": "dace_cpu",
-        "flavor": "parallel",
-        "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
-    },
+    # Upstream DaCe's own auto_optimize. The only columns that run unchanged on a stock PyPI/main
+    # DaCe as well as on spcl/dace@extended, which is what separates "the fork's optimizer is
+    # better" from "the fork's DaCe is different".
     "dace_cpu_autoopt": {
         "base": "dace",
         "full_name": "DaCe CPU auto_optimize",
         "prefix": "dc",
         "postfix": "dace",
         "arch": "cpu",
-        "pipelines": ("autoopt", ),
+        "pipelines": ("autoopt_cpu", ),
         "column": "dace_cpu",
+        "flavor": "autoopt",
+        "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
+    },
+    "dace_gpu_autoopt": {
+        "base": "dace",
+        "full_name": "DaCe GPU auto_optimize",
+        "prefix": "dc",
+        "postfix": "dace",
+        "arch": "gpu",
+        "pipelines": ("autoopt_gpu", ),
+        "column": "dace_gpu",
         "flavor": "autoopt",
         "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
     },
@@ -217,34 +233,9 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "prefix": "dc",
         "postfix": "dace",
         "arch": "cpu",
-        "pipelines": ("canonicalize", ),
+        "pipelines": ("canon_cpu", ),
         "column": "dace_cpu",
         "flavor": "canonicalize",
-        "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
-    },
-    # GPU counterparts. The offload is part of the pipeline, not a flag on top of it: ``autoopt``
-    # offloads inside ``auto_optimize``, ``canonicalize`` offloads between canonicalize and
-    # finalize, and ``parallel`` is offloaded by the generic tail in DaceFramework._prepare_gpu.
-    "dace_gpu_parallel": {
-        "base": "dace",
-        "full_name": "DaCe GPU parallel",
-        "prefix": "dc",
-        "postfix": "dace",
-        "arch": "gpu",
-        "pipelines": ("parallel", ),
-        "column": "dace_gpu",
-        "flavor": "parallel",
-        "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
-    },
-    "dace_gpu_autoopt": {
-        "base": "dace",
-        "full_name": "DaCe GPU auto_optimize",
-        "prefix": "dc",
-        "postfix": "dace",
-        "arch": "gpu",
-        "column": "dace_gpu",
-        "flavor": "autoopt",
-        "pipelines": ("autoopt", ),
         "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
     },
     "dace_gpu_canonicalize": {
@@ -253,7 +244,7 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "prefix": "dc",
         "postfix": "dace",
         "arch": "gpu",
-        "pipelines": ("canonicalize", ),
+        "pipelines": ("canon_gpu", ),
         "column": "dace_gpu",
         "flavor": "canonicalize",
         "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
@@ -281,6 +272,67 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "language": "c",
         "compiler": "gcc",
         "flags": "cc_autopar",
+        "precisions": IEEE_PRECISIONS,
+    },
+    # The C family across the four graded vendors. Named `cc_<vendor>` rather than the bare vendor
+    # name because `llvm` and `polly` already mean the C++/clang and C++/clang-Polly columns; taking
+    # those names for C would silently change what every historical row of them means. Flat names,
+    # like `cc_autopar`, so the DB grouping of the existing C rows does not move either.
+    #
+    # There is deliberately no `cc_oneapi_autopar`: icx has no auto-parallelizer (icc-classic's
+    # `-parallel` is accepted with warning #10430 and outlines nothing -- measured; see the note in
+    # flags.py where ICX_AUTOPAR would live), so the arm would publish serial numbers under a
+    # parallel name. Seven variants, not eight, and the methodology says why.
+    "cc_llvm": {
+        "base": "native",
+        "full_name": "C (clang)",
+        "prefix": "cc_llvm",
+        "postfix": "cpp",
+        "arch": "cpu",
+        "language": "c",
+        "compiler": "clang",
+        "precisions": IEEE_PRECISIONS,
+    },
+    "cc_llvm_autopar": {
+        "base": "native",
+        "full_name": "C Polly (clang)",
+        "prefix": "cc_llvm_autopar",
+        "postfix": "cpp",
+        "arch": "cpu",
+        "language": "c",
+        "compiler": "clang",
+        "flags": "cc_llvm_autopar",
+        "precisions": IEEE_PRECISIONS,
+    },
+    "cc_oneapi": {
+        "base": "native",
+        "full_name": "C (icx)",
+        "prefix": "cc_oneapi",
+        "postfix": "cpp",
+        "arch": "cpu",
+        "language": "c",
+        "compiler": "icx",
+        "precisions": IEEE_PRECISIONS,
+    },
+    "cc_nvhpc": {
+        "base": "native",
+        "full_name": "C (nvc)",
+        "prefix": "cc_nvhpc",
+        "postfix": "cpp",
+        "arch": "cpu",
+        "language": "c",
+        "compiler": "nvc",
+        "precisions": IEEE_PRECISIONS,
+    },
+    "cc_nvhpc_autopar": {
+        "base": "native",
+        "full_name": "C autopar (nvc)",
+        "prefix": "cc_nvhpc_autopar",
+        "postfix": "cpp",
+        "arch": "cpu",
+        "language": "c",
+        "compiler": "nvc",
+        "flags": "cc_nvhpc_autopar",
         "precisions": IEEE_PRECISIONS,
     },
     "llvm": {
@@ -337,15 +389,33 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "flags": "polly",
         "precisions": IEEE_PRECISIONS,
     },
+    # Pluto and PPCG are the polyhedral pair -- same pet/isl front end and the same ``#pragma scop``
+    # input, tiled OpenMP C out of one and CUDA out of the other. Kept as SEPARATE columns, not one
+    # merged "polyhedral" column: they run on different hardware, so a merged row would average a
+    # CPU number with a GPU one.
     "pluto": {
         "base": "pluto",
-        "full_name": "C++ Pluto (clang)",
+        "full_name": "Polyhedral CPU (Pluto)",
         "prefix": "pluto",
         "postfix": "cpp",
         "arch": "cpu",
         "language": "cpp",
         "compiler": "clang",
         "flags": "pluto",
+        "precisions": IEEE_PRECISIONS,
+    },
+    "ppcg": {
+        "base": "pluto",
+        "full_name": "Polyhedral GPU (PPCG)",
+        "prefix": "ppcg",
+        "postfix": "cpp",
+        "arch": "gpu",
+        # ppcg only ever emits CUDA; which language this column COMPILES is the local GPU
+        # toolchain's (hipify runs in between on ROCm -- see hpcagent_bench.ppcg_transform).
+        # The compiler is not restated: compilers.yaml already maps the language to its block
+        # (cuda -> nvcc, hip -> hipcc), and restating it is what left this entry saying nvcc on
+        # an AMD node.
+        "language": gpu_backend(),
         "precisions": IEEE_PRECISIONS,
     },
     "triton": {
