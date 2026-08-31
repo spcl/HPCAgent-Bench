@@ -21,6 +21,7 @@ tests are the numerical consumers -- symm and trmm have no other c/cpp coverage.
 """
 import ast
 import importlib.util
+import re
 import tempfile
 
 import numpy as np
@@ -54,6 +55,19 @@ def _emit_fortran(short):
     with tempfile.TemporaryDirectory() as d:
         return tu.emit_source(short, DLA / short / f"{short}_numpy.py", "fortran", d)
 
+
+def _joined(src):
+    """Fortran free-form continuations (``... &\\n    &...``) split one statement across lines, so a
+    statement only matches after they are rejoined. Which statements wrap depends on identifier
+    length, which the DO-variable uniquifier below changes."""
+    return re.sub(r"&\s*\n\s*&", "", src)
+
+
+#: A local scalar ``real`` declaration -- ``real(c_double) :: x_mm1``. An array local carries its
+#: extent (``:: temp2(N)``) and a dummy argument its attributes (``, intent(in) ::``), so neither
+#: matches. One of these surviving IS the un-retargeted accumulator, whatever it happens to be
+#: named, which is what the C leg spells ``__mm1``/``__cb1``.
+LOCAL_SCALAR_REAL = re.compile(r"^\s*real\(c_\w+\) :: (\w+)\s*$", re.MULTILINE)
 
 # --------------------------------------------------------------------------- #
 # A  the rewrite                                                               #
@@ -190,13 +204,24 @@ def test_syrk_already_reduced_into_an_array_cell():
 def test_fortran_carries_the_same_retarget():
     # The rewrite lands in the shared AST lowering, so every backend must see it --
     # a scalar left behind here would race under the Fortran OpenMP leg just the same.
-    symm = _emit_fortran("symm")
-    assert "temp2((j) + 1) = 0.0_c_double" in symm
-    assert "temp2((j) + 1) = temp2((j) + 1) + ((B((j) + 1, (x_mml1) + 1) * A((x_mml1) + 1, (i) + 1)))" in symm
-    assert "real(c_double) :: x_mm1" not in symm
-    trmm = _emit_fortran("trmm")
-    assert "B((j) + 1, (i) + 1) = B((j) + 1, (i) + 1) + " in trmm
-    assert "real(c_double) :: x_cb1" not in trmm
+    # Fortran rejects two DO variables sharing an identifier in one subroutine scope, so the
+    # backend uniquifies every one of them (``j`` -> ``j_l3``, ``x_mml1`` -> ``x_mml1_5``) with a
+    # counter that shifts whenever loop structure changes anywhere in the kernel. Match the
+    # suffix and tie the cells to ONE capture instead of pinning a spelling: that asserts what
+    # the retarget actually promises -- init and accumulation name the SAME cell -- and does not
+    # go stale the next time the counter moves.
+    symm = _joined(_emit_fortran("symm"))
+    init = re.search(r"temp2\(\((j\w*)\) \+ 1\) = 0\.0_c_double", symm)
+    assert init, symm
+    j = re.escape(init.group(1))
+    cell = rf"temp2\(\({j}\) \+ 1\)"
+    assert re.search(
+        rf"{cell} = {cell} \+ \(\(B\(\({j}\) \+ 1, \((x_mml1\w*)\) \+ 1\) \* "
+        rf"A\(\(\1\) \+ 1, \(i\w*\) \+ 1\)\)\)", symm), symm
+    assert not LOCAL_SCALAR_REAL.findall(symm), LOCAL_SCALAR_REAL.findall(symm)
+    trmm = _joined(_emit_fortran("trmm"))
+    assert re.search(r"(B\(\(j\w*\) \+ 1, \(i\w*\) \+ 1\)) = \1 \+ ", trmm), trmm
+    assert not LOCAL_SCALAR_REAL.findall(trmm), LOCAL_SCALAR_REAL.findall(trmm)
 
 
 # --------------------------------------------------------------------------- #
