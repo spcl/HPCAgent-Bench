@@ -34,26 +34,19 @@ CORE=(numpy scipy pandas matplotlib ml_dtypes pyyaml jsonschema sympy blake3 sql
 echo "=== tier 1: core + format gates ==="
 "${VENV}/bin/python3" -m pip install "${CORE[@]}"
 
-# Tier 1b -- dace's OWN declared dependencies, read from its pyproject rather than copied here.
-# dace is never pip-installed (it resolves off PYTHONPATH), so nothing ever resolves that list and
-# a hand-maintained copy drifts silently: this venv was missing fparser, dill and pytest-xdist for
-# exactly that reason, which loses the Fortran frontend and makes a sharded suite run die at
-# argument parsing. The pyproject stays the single source of truth. Two extras are excluded on
-# purpose: gpu names CUDA wheels and this machine is AMD, and mpi installs an mpi4py with no MPI
-# to load here -- which turns 12 honest skips into 12 failures that say nothing about the code.
+# Tier 1b -- dace itself, EDITABLE, with the two extras this box can satisfy.
+# dace was never pip-installed here (it resolved off PYTHONPATH), so nothing ever resolved its
+# dependency list and the venv silently lacked fparser, dill and pytest-xdist -- which loses the
+# Fortran frontend and makes a sharded suite run die at argument parsing. An editable install lets
+# pip read the pyproject that already declares them, instead of a copy here that drifts. It does not
+# pin or shadow the tree: dace has no build step, and setuptools appends its finder AFTER PathFinder
+# in sys.meta_path, so PYTHONPATH still wins and this only supplies a fallback and the metadata.
+# Two extras are excluded on purpose: gpu names CUDA wheels and this box is AMD, and mpi installs an
+# mpi4py with no MPI to load here -- which turns 12 honest skips into 12 failures about nothing.
 DACE_TREE="${DACE_TREE:-${SCRATCH}/dace}"
 if [[ -f "${DACE_TREE}/pyproject.toml" ]]; then
-    echo "=== tier 1b: dace declared deps (core + testing + fastgraph) ==="
-    "${VENV}/bin/python3" - "${DACE_TREE}/pyproject.toml" <<'DACEREQS' >"${TMPDIR}/dace-reqs.txt"
-import sys, tomllib
-with open(sys.argv[1], 'rb') as f:
-    proj = tomllib.load(f)['project']
-reqs = list(proj['dependencies'])
-for extra in ('testing', 'fastgraph'):
-    reqs += proj.get('optional-dependencies', {}).get(extra, [])
-print('\n'.join(reqs))
-DACEREQS
-    "${VENV}/bin/python3" -m pip install -r "${TMPDIR}/dace-reqs.txt"
+    echo "=== tier 1b: dace editable (testing + fastgraph extras) ==="
+    "${VENV}/bin/python3" -m pip install -e "${DACE_TREE}[testing,fastgraph]"
 else
     echo "=== tier 1b SKIPPED: no dace tree at ${DACE_TREE} ==="
 fi
