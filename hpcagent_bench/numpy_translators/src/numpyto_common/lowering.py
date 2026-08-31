@@ -39,7 +39,7 @@ import re
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Set, Tuple, Union
 
 from numpyto_common import dtypes
-from numpyto_common.ir import _COMPLEX_FOR_FLOAT, KernelIR, SymbolDesc
+from numpyto_common.ir import _COMPLEX_FOR_FLOAT, KernelIR, SymbolDesc, stamp_symbol_assumptions
 from numpyto_common.ordered import OrderedSet
 from numpyto_common.numpy_desugar import _np_linalg_attr
 from numpyto_common.lib_nodes import (ARRAY_METHOD_SHAPE_OPS, ArrayMethodRewriter, DIM_IDENT_RE, SHAPE_READ_RE,
@@ -9024,6 +9024,10 @@ def lower(
         _phase(ctx)
         if check is not None:
             check(_name, ctx)
+    # The phases promote body shape names to symbols (:func:`_promote_free_names_to_params`,
+    # :func:`_promote_shape_symbols_to_params`), which the manifest never saw. Re-stamp so a
+    # promoted dimension carries the same positivity as a declared one.
+    stamp_symbol_assumptions(ctx.kir)
     return ctx.kir
 
 
