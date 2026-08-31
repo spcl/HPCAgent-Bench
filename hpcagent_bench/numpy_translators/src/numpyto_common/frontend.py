@@ -851,14 +851,18 @@ def parse_kernel(numpy_py: pathlib.Path,
                  precision: Optional[str] = None) -> KernelIR:
     """Build a :class:`KernelIR` from ``numpy_py`` + ``bench_info``.
 
-    A LEVEL-3 kernel is a whole application, and flattening its helpers into one body loses
-    exactly what makes it one: the emitted code is a single enormous function, and a profile of
-    it reports one symbol instead of the convolution / pooling / solve the reference names. So a
-    level-3 kernel is built once with its helpers KEPT as their own static functions, and only
-    falls back to inlining when that form has no emittable ABI -- a helper returning a tuple, or
-    one whose extents cannot be resolved, still has to be spliced into its caller.
+    Flattening helpers into one body loses exactly what the reference spells out: the emitted code
+    becomes a single enormous function, and a profile of it reports one symbol instead of the
+    convolution / pooling / solve the source names. The emitted structure should follow the
+    reference's, so EVERY kernel is built with its helpers KEPT as their own static functions,
+    whatever its level.
+
+    Inlining stays as the fallback, not the default: some helper forms have no standalone ABI --
+    a tuple return, a ``None`` early-exit sentinel, a closure over caller locals -- and still have
+    to be spliced into the caller. A kernel whose kept-helper form refuses is built inlined rather
+    than failing, so this is a change of default and not a narrowing of what lowers.
     """
-    if not HELPERS_KEPT_DISABLED and _load_bench_info(bench_info).get("level") == 3:
+    if not HELPERS_KEPT_DISABLED:
         try:
             return build_kernel_ir(numpy_py, bench_info, config, precision, keep_helpers=True)
         except Exception:  # noqa: BLE001 -- the un-inlined form is an optimisation; any refusal retries
@@ -3433,14 +3437,32 @@ def _ctor_dtype_tag(fn: ast.FunctionDef, node: ast.expr, arr_by: Dict[str, Array
                               f"does not resolve to a known dtype, so the buffer's width is unknown")
 
 
-def _local_array_def(fn: ast.FunctionDef, name: str, arr_by: Dict[str, ArrayDesc], seen: Optional[Set[str]] = None):
+def _assigns_to(fn: ast.FunctionDef, name: str) -> List[ast.Assign]:
+    """Every ``name = <value>`` in ``fn``, in walk order.
+
+    Collected ONCE per name: :func:`_resolve_array_ref` used to walk the whole function twice for
+    it -- once here for the allocation, once again for the alias chase -- and it recurses down the
+    alias chain, so a chain of depth d cost 2*d full walks of the kernel.
+    """
+    return [
+        node for node in ast.walk(fn) if isinstance(node, ast.Assign) and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name) and node.targets[0].id == name
+    ]
+
+
+def _local_array_def(fn: ast.FunctionDef,
+                     name: str,
+                     arr_by: Dict[str, ArrayDesc],
+                     seen: Optional[Set[str]] = None,
+                     assigns: Optional[List[ast.Assign]] = None):
     """Shape (list of AST exprs) and dtype string of a local array from its
     ``name = np.zeros/empty/ones(<shape>, dtype=...)`` definition, or ``None``.
     Used to size the out-param temp when an array-returning helper writes into a
-    slice of a kernel-local array (``coulomb_fac[:, j] = h(...)``)."""
-    for node in ast.walk(fn):
-        if not (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
-                and node.targets[0].id == name and isinstance(node.value, ast.Call)):
+    slice of a kernel-local array (``coulomb_fac[:, j] = h(...)``).
+
+    ``assigns`` is this name's assignments when the caller already collected them."""
+    for node in (_assigns_to(fn, name) if assigns is None else assigns):
+        if not isinstance(node.value, ast.Call):
             continue
         f = node.value.func
         fname = f.attr if isinstance(f, ast.Attribute) else f.id if isinstance(f, ast.Name) else None
@@ -3558,14 +3580,13 @@ def _resolve_array_ref(fn: ast.FunctionDef,
     if name in seen:
         return None  # alias cycle -- cannot happen from real source, just a guard
     seen.add(name)
-    loc = _local_array_def(fn, name, arr_by, seen)  # a kernel-local array (np.zeros(...))
+    assigns = _assigns_to(fn, name)  # one walk; the allocation and the alias chase both read it
+    loc = _local_array_def(fn, name, arr_by, seen, assigns)  # a kernel-local array (np.zeros(...))
     if loc is not None:
         dims, dtype = loc
         return tuple(ast.unparse(d) for d in dims), dtype
-    for stmt in ast.walk(fn):  # a bare alias (``__rb_x = __inl1_out``) -- chase its FIRST definition
-        if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
-                and stmt.targets[0].id == name):
-            return _resolve_array_ref(fn, stmt.value, arr_by, seen)
+    if assigns:  # a bare alias (``__rb_x = __inl1_out``) -- chase its FIRST definition
+        return _resolve_array_ref(fn, assigns[0].value, arr_by, seen)
     return None
 
 
@@ -4029,13 +4050,18 @@ def _specialise_helpers_by_call_signature(tree: ast.Module, kernel_fn: ast.Funct
     nothing to key on. Returns whether anything was cloned.
     """
     existing = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    # One walk, bucketed by callee, instead of re-walking the kernel for EVERY helper. Cloning
+    # below renames a site's func.id in place and appends the clone to ``tree``, so it neither adds
+    # nor removes Call nodes under ``kernel_fn`` -- the buckets stay valid across the loop, and a
+    # rename only ever touches the bucket of the helper being processed.
+    calls_by_name: Dict[str, List[ast.Call]] = {}
+    for node in ast.walk(kernel_fn):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            calls_by_name.setdefault(node.func.id, []).append(node)
     cloned = False
     for hdef in helper_defs:
         pnames = [a.arg for a in hdef.args.args]
-        sites = [
-            node for node in ast.walk(kernel_fn)
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == hdef.name
-        ]
+        sites = calls_by_name.get(hdef.name, [])
         by_key: Dict[Tuple, List[ast.Call]] = {}
         for site in sites:
             if len(site.args) != len(pnames) or site.keywords:
@@ -4810,12 +4836,14 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
             # permutes definition and call into the same ABI order as for any other parameter.
             extra_syms = sorted(s for s in _shape_symbols(arrays) if s not in set(pnames))
             if extra_syms:
-                if sibling_calls:
+                # ``calls`` pairs every call with the scope its arguments resolve against, so a
+                # call owned by anything but the kernel body is a sibling helper's.
+                if any(owner is not kernel_fn for owner, _ in calls):
                     raise NotImplementedError(
                         f"helper {hdef.name!r} needs shape symbols {extra_syms} and is also called from a sibling "
                         f"helper, whose call this pass cannot reach; it must be inlined into its caller")
                 symbols.extend(SymbolDesc(name=s) for s in extra_syms)
-                for site in calls:
+                for _, site in calls:
                     site.args.extend(ast.Name(id=s, ctx=ast.Load()) for s in extra_syms)
                 ast.fix_missing_locations(kernel_fn)
             out.append(
