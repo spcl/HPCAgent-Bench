@@ -54,13 +54,13 @@ def _core(exxbuff, facb, temppsic, result, occ, omega_inv, nqs_inv):
 
 def _vcut_spheric_get(q, vcut_a):
     """QE vcut_spheric_get: spherically-truncated Coulomb v(q) = 4pi e2/|q|^2 (1 - cos(rcut|q|))."""
-    rcut = 0.5 * np.sqrt(np.sum(vcut_a**2, axis=0)).min()
-    rcut = rcut - rcut / 50.0
+    rcut1 = 0.5 * np.sqrt(np.sum(vcut_a**2, axis=0)).min()
+    rcut2 = rcut1 - rcut1 / 50.0
     kg2 = np.sum(q**2, axis=0)
     limit = kg2 < 1.0e-6  # eps6
     kg2s = np.where(limit, 1.0, kg2)
-    res = _FPI * _E2 / kg2s * (1.0 - np.cos(rcut * np.sqrt(np.where(limit, 0.0, kg2))))
-    return np.where(limit, _FPI * _E2 * rcut**2 / 2.0, res)
+    res = _FPI * _E2 / kg2s * (1.0 - np.cos(rcut2 * np.sqrt(np.where(limit, 0.0, kg2))))
+    return np.where(limit, _FPI * _E2 * rcut2**2 / 2.0, res)
 
 
 def _vcut_init(a, cutoff, security=6.0):
@@ -82,9 +82,9 @@ def _vcut_init(a, cutoff, security=6.0):
     F = (np.stack(np.meshgrid(np.arange(m1) / m1, np.arange(m2) / m2, np.arange(m3) / m3, indexing="ij"),
                   axis=-1).reshape(-1, 3))
     rtmp = F @ a.T  # cartesian a.frac  (Nr,3)
-    rc = (rtmp @ b) / tpi  # (b^T r)/2pi
-    rc = rc - _nint(rc)  # minimal image (orthorhombic)
-    r = rc @ a.T  # a.rc              (Nr,3)
+    rc1 = (rtmp @ b) / tpi  # (b^T r)/2pi
+    rc2 = rc1 - _nint(rc1)  # minimal image (orthorhombic)
+    r = rc2 @ a.T  # a.rc              (Nr,3)
     modr = np.sqrt(np.sum(r**2, axis=1))
     small = modr * sigma < 1.0e-6
     tmp = np.where(small,
@@ -239,10 +239,10 @@ def _addusxx_g(rhoc, nl, qgm, becphi, becpsi, ijtoh, nat, nh, ofsbeta, eigqts, s
     becphi_r = becphi[ikb]
     becpsi_r = becpsi[ikb]
     q_pairs = qgm[:, ijtoh]  # (ngm, nh, nh) -- [g, ih, jh]
-    inner = np.einsum('gij,aj->gai', q_pairs, becpsi_r)  # sum over jh
-    inner = np.einsum('gai,ai->ga', inner, np.conj(becphi_r))  # sum over ih
+    inner1 = np.einsum('gij,aj->gai', q_pairs, becpsi_r)  # sum over jh
+    inner2 = np.einsum('gai,ai->ga', inner1, np.conj(becphi_r))  # sum over ih
     sf = sfac * eigqts[None, :]  # (ngm, nat)
-    rhoc[nl] += np.sum(sf * inner, axis=1)
+    rhoc[nl] += np.sum(sf * inner2, axis=1)
     return rhoc
 
 
