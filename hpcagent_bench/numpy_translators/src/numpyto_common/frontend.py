@@ -1461,7 +1461,7 @@ def build_kernel_ir(numpy_py: pathlib.Path,
     # recursion blocks inlining) become their own native functions -- the early
     # return is then just a native ``return``. Each helper param's type/shape is
     # inferred from the call site; :func:`lower` lowers every helper body too.
-    kir.helpers = _build_helper_kirs(tree, fn, kir)
+    kir.helpers = _build_helper_kirs(tree, fn, kir, keep_helpers)
     # After the arrays exist: a symbol standing alone as a dimension is positive by allocation,
     # which is a stronger fact than the presets can give and applies to a helper's symbols too.
     stamp_symbol_assumptions(kir)
@@ -4719,7 +4719,30 @@ def _helpers_callers_first(helper_defs: List[ast.FunctionDef], kernel_fn: ast.Fu
     return ordered
 
 
-def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: KernelIR) -> List[KernelIR]:
+def abi_hostile_arguments(tree: ast.Module, hname: str) -> List[str]:
+    """Constants a call site binds to ``hname`` that no C or Fortran parameter table has a type for.
+
+    ``None`` is not a value in either language and neither is a string selector, so a helper called
+    as ``_reduce(v, mode='total')`` or ``_default_stride(None, k)`` has no standalone ABI however
+    well its body lowers -- the argument only exists to be resolved at the call site. Both forms are
+    decidable exactly BECAUSE the site pins them to a literal, which is what the inline path does
+    with them; refusing here hands the kernel to that path rather than emitting a signature naming a
+    parameter the caller cannot pass.
+    """
+    seen: List[str] = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == hname):
+            continue
+        for arg in list(node.args) + [kw.value for kw in node.keywords]:
+            if isinstance(arg, ast.Constant) and (arg.value is None or isinstance(arg.value, str)):
+                spelling = repr(arg.value)
+                if spelling not in seen:
+                    seen.append(spelling)
+    return seen
+
+
+def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: KernelIR,
+                       keep_helpers: bool) -> List[KernelIR]:
     """One :class:`KernelIR` per non-inlinable called helper (see
     :func:`_collect_called_helper_defs`). Each helper param's type/shape is read
     off the FIRST call site's argument via :func:`_infer_param_desc`; module
@@ -4765,6 +4788,13 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
         else:
             # Not called from the kernel or from any helper built so far -- nothing reaches it.
             continue
+        # Only while BUILDING the kept form: this runs again on the inlined pass, over whatever
+        # resisted inlining, and there a refusal has no fallback left to reach -- it would turn a
+        # kernel that used to emit into a hard failure rather than routing it somewhere better.
+        hostile = abi_hostile_arguments(tree, hdef.name) if keep_helpers else []
+        if hostile:
+            raise NotImplementedError(f"helper {hdef.name!r} is called with {hostile}, which no ABI carries; "
+                                      f"it must be inlined into its caller")
         oarr_by = {a.name: a for a in oarrays}
         osca_by = {s.name: s for s in oscalars}
         osym_by = {s.name: s for s in osymbols}
