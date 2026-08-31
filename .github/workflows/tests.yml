@@ -31,6 +31,13 @@ name: CI
 # e2e-pythran (pythran isolated -- it is the memory/time pig) -- all seven backends covered
 # exactly once. Unset (a local run) still sweeps the full set.
 #
+# Every xdist run of that sweep adds ``--dist loadgroup``, which the per-stem ``xdist_group`` marker
+# in _params() keys on. _result() builds EVERY backend in one call and memoises per PROCESS, so
+# under the default per-test distribution a stem's backend tests scatter across workers and each one
+# rebuilds all of them -- one stem compiled up to len(E2E_BACKENDS) times, and two workers building
+# it concurrently. loadgroup pins a stem to one worker: the cache hits, and the duplicate concurrent
+# builds go away.
+#
 # Within a job every phase after setup carries ``if: ${{ !cancelled() }}`` so one phase failing
 # still surfaces the rest (the job stays red). Phase 0 (format) and setup stay hard gates.
 #
@@ -281,9 +288,9 @@ jobs:
         timeout-minutes: 75
         env:
           HPCAGENT_BENCH_E2E_BACKENDS: "numba,jax"
-          HPCAGENT_BENCH_E2E_SUBSET: ${{ github.event_name == 'pull_request' && '1' || '0' }}
+          HPCAGENT_BENCH_E2E_SUBSET: ${{ github.event_name == 'workflow_dispatch' && '0' || '1' }}
         run: |
-          python -m pytest -p no:cacheprovider -rfEs -n auto --durations=25 \
+          python -m pytest -p no:cacheprovider -rfEs -n auto --dist loadgroup --durations=25 \
             --timeout=900 tests/test_e2e_numerical.py
 
       # if: always() -- a job that went red still covered lines on the way, and the total is more
@@ -575,14 +582,21 @@ jobs:
         # 60 -> 85 -> 110: run 33261681823 reached 85% in 60 minutes and died on the step timeout;
         # run 33283870554 then filled the 85-minute cap with every test green. Two single tests ate
         # 20 minutes each there (measured from the progress line timestamps), which is what
-        # --timeout=1500 costs when a test wedges -- the budget has to clear two of those plus the
-        # 1294 s ABI test, or a wedge anywhere reports as "the suite is too slow". No -q, so the
-        # failures arrive with names instead of as bare F characters, and --durations names them.
+        # --timeout=1500 costs when a test wedges. No -q, so the failures arrive with names instead
+        # of as bare F characters, and --durations names them.
+        #
+        # ``-m "not integration"`` for the same reason Phase 5c carries it: naming the directory by
+        # PATH ignores markers, and the integration job ALREADY collects every
+        # @pytest.mark.integration test under it (``-m integration tests/
+        # hpcagent_bench/numpy_translators/tests/``). The two corpus-wide ABI sweeps are marked
+        # integration and were the top TWO entries in this job's duration table at 1500 s each --
+        # both of them the timeout cap, not real work -- so this job paid ~50 minutes for coverage
+        # the integration job already provides.
         if: ${{ !cancelled() }}
         timeout-minutes: 110
         run: |
           python -m pytest -p no:cacheprovider -rfsxX -n auto --durations=25 --timeout=1500 \
-            hpcagent_bench/numpy_translators/tests/
+            -m "not integration" hpcagent_bench/numpy_translators/tests/
 
       # Hit rate is the whole point of the cache -- surface it so a regression to 0% is visible.
       - name: ccache statistics
@@ -755,9 +769,9 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           HPCAGENT_BENCH_E2E_BACKENDS: "pluto"
-          HPCAGENT_BENCH_E2E_SUBSET: ${{ github.event_name == 'pull_request' && '1' || '0' }}
+          HPCAGENT_BENCH_E2E_SUBSET: ${{ github.event_name == 'workflow_dispatch' && '0' || '1' }}
         run: |
-          python -m pytest -q -p no:cacheprovider -rfEs -n auto tests/test_e2e_numerical.py
+          python -m pytest -q -p no:cacheprovider -rfEs -n auto --dist loadgroup tests/test_e2e_numerical.py
 
       # Phase 5d -- the optimization-report e2e. HERE and nowhere else: this is the ONLY runner that
       # builds Pluto, and the test needs polycc AND dace in one process (dace comes from the shared
@@ -864,9 +878,9 @@ jobs:
         timeout-minutes: 60
         env:
           HPCAGENT_BENCH_E2E_BACKENDS: "c,cpp,fortran"
-          HPCAGENT_BENCH_E2E_SUBSET: ${{ github.event_name == 'pull_request' && '1' || '0' }}
+          HPCAGENT_BENCH_E2E_SUBSET: ${{ github.event_name == 'workflow_dispatch' && '0' || '1' }}
         run: |
-          python -m pytest -q -p no:cacheprovider -rfEs -n auto --timeout=600 tests/test_e2e_numerical.py
+          python -m pytest -q -p no:cacheprovider -rfEs -n auto --dist loadgroup --timeout=600 tests/test_e2e_numerical.py
 
       - name: Phase 5b -- e2e numerical sweep [c, cpp, fortran] @ S, fp32
         # The SAME corpus at fp32. Not redundant with the fp64 phase above: fp64 emits with an empty
@@ -883,10 +897,10 @@ jobs:
         timeout-minutes: 60
         env:
           HPCAGENT_BENCH_E2E_BACKENDS: "c,cpp,fortran"
-          HPCAGENT_BENCH_E2E_SUBSET: ${{ github.event_name == 'pull_request' && '1' || '0' }}
+          HPCAGENT_BENCH_E2E_SUBSET: ${{ github.event_name == 'workflow_dispatch' && '0' || '1' }}
           HPCAGENT_BENCH_E2E_PRECISION: "fp32"
         run: |
-          python -m pytest -q -p no:cacheprovider -rfEs -n auto --timeout=600 tests/test_e2e_numerical.py
+          python -m pytest -q -p no:cacheprovider -rfEs -n auto --dist loadgroup --timeout=600 tests/test_e2e_numerical.py
 
       # The KernelBench subtrack is EXCLUDED from the sweep above (test_e2e_numerical's
       # UNGATED_SUBTRACKS), so without this nothing in CI would notice a translator change halving
@@ -1002,7 +1016,7 @@ jobs:
         timeout-minutes: 60
         env:
           HPCAGENT_BENCH_E2E_BACKENDS: "pythran"
-          HPCAGENT_BENCH_E2E_SUBSET: ${{ github.event_name == 'pull_request' && '1' || '0' }}
+          HPCAGENT_BENCH_E2E_SUBSET: ${{ github.event_name == 'workflow_dispatch' && '0' || '1' }}
         run: |
           python -m pytest -q -p no:cacheprovider -rfEs -n 1 --timeout=600 tests/test_e2e_numerical.py
 

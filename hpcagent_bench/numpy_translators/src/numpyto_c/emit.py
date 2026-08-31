@@ -1851,7 +1851,15 @@ def _render_c_shape(node: ast.AST) -> Optional[str]:
         return None if op is None else f"({left} {op} {right})"
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and not node.keywords:
         args = [_render_c_shape(a) for a in node.args]
-        return None if any(a is None for a in args) else f"{node.func.id}({', '.join(args)})"
+        if any(a is None for a in args):
+            return None
+        # ``int(x)`` is a no-op on an already-integral extent in Python and a SYNTAX ERROR in C --
+        # ``int`` is a type, not a function, so it reached the compiler as "expected ')' before
+        # 'group_norm_num_groups'". A defensive ``int()`` around a manifest scalar is how it gets
+        # into a shape. The cast IS the same operation: both truncate toward zero.
+        if node.func.id == "int" and len(args) == 1:
+            return f"(int64_t)({args[0]})"
+        return f"{node.func.id}({', '.join(args)})"
     return None
 
 

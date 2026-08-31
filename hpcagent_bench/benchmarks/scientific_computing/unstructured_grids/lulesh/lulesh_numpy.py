@@ -393,23 +393,23 @@ def _calc_elem_velocity_gradient(xv, yv, zv, b, detJ, numElem):
 
 
 def _calc_kinematics(deltatime, nodelist, x, y, z, xd, yd, zd, volo, v, vnew, delv, arealg, dxx, dyy, dzz, numElem):
-    xl = x[nodelist].copy()
-    yl = y[nodelist].copy()
-    zl = z[nodelist].copy()
-    volume = _calc_elem_volume(xl, yl, zl)
+    xl1 = x[nodelist].copy()
+    yl1 = y[nodelist].copy()
+    zl1 = z[nodelist].copy()
+    volume = _calc_elem_volume(xl1, yl1, zl1)
     relvol = volume / volo
     vnew[:] = relvol
     delv[:] = relvol - v
-    arealg[:] = _calc_elem_char_length(xl, yl, zl, volume)
+    arealg[:] = _calc_elem_char_length(xl1, yl1, zl1, volume)
 
     xdl = xd[nodelist]
     ydl = yd[nodelist]
     zdl = zd[nodelist]
     dt2 = 0.5 * deltatime
-    xl = xl - dt2 * xdl
-    yl = yl - dt2 * ydl
-    zl = zl - dt2 * zdl
-    b, detJ = _calc_shape_fn_derivatives(xl, yl, zl, numElem)
+    xl2 = xl1 - dt2 * xdl
+    yl2 = yl1 - dt2 * ydl
+    zl2 = zl1 - dt2 * zdl
+    b, detJ = _calc_shape_fn_derivatives(xl2, yl2, zl2, numElem)
     d = _calc_elem_velocity_gradient(xdl, ydl, zdl, b, detJ, numElem)
     dxx[:] = d[:, 0]
     dyy[:] = d[:, 1]
@@ -453,37 +453,37 @@ def _calc_monotonic_q_gradients(nodelist, x, y, z, xd, yd, zd, volo, vnew, delx_
     dzk = 0.25 * ((c(zn, 4) + c(zn, 5) + c(zn, 6) + c(zn, 7)) - (c(zn, 0) + c(zn, 1) + c(zn, 2) + c(zn, 3)))
 
     # zeta ( i cross j )
-    ax = dyi * dzj - dzi * dyj
-    ay = dzi * dxj - dxi * dzj
-    az = dxi * dyj - dyi * dxj
-    delx_zeta[:] = vol / np.sqrt(ax * ax + ay * ay + az * az + _PTINY)
-    axn, ayn, azn = ax * norm, ay * norm, az * norm
-    dxv = 0.25 * ((c(xv, 4) + c(xv, 5) + c(xv, 6) + c(xv, 7)) - (c(xv, 0) + c(xv, 1) + c(xv, 2) + c(xv, 3)))
-    dyv = 0.25 * ((c(yv, 4) + c(yv, 5) + c(yv, 6) + c(yv, 7)) - (c(yv, 0) + c(yv, 1) + c(yv, 2) + c(yv, 3)))
-    dzv = 0.25 * ((c(zv, 4) + c(zv, 5) + c(zv, 6) + c(zv, 7)) - (c(zv, 0) + c(zv, 1) + c(zv, 2) + c(zv, 3)))
-    delv_zeta[:] = axn * dxv + ayn * dyv + azn * dzv
+    ax1 = dyi * dzj - dzi * dyj
+    ay1 = dzi * dxj - dxi * dzj
+    az1 = dxi * dyj - dyi * dxj
+    delx_zeta[:] = vol / np.sqrt(ax1 * ax1 + ay1 * ay1 + az1 * az1 + _PTINY)
+    axn, ayn, azn = ax1 * norm, ay1 * norm, az1 * norm
+    dxv1 = 0.25 * ((c(xv, 4) + c(xv, 5) + c(xv, 6) + c(xv, 7)) - (c(xv, 0) + c(xv, 1) + c(xv, 2) + c(xv, 3)))
+    dyv1 = 0.25 * ((c(yv, 4) + c(yv, 5) + c(yv, 6) + c(yv, 7)) - (c(yv, 0) + c(yv, 1) + c(yv, 2) + c(yv, 3)))
+    dzv1 = 0.25 * ((c(zv, 4) + c(zv, 5) + c(zv, 6) + c(zv, 7)) - (c(zv, 0) + c(zv, 1) + c(zv, 2) + c(zv, 3)))
+    delv_zeta[:] = axn * dxv1 + ayn * dyv1 + azn * dzv1
 
     # xi ( j cross k )
-    ax = dyj * dzk - dzj * dyk
-    ay = dzj * dxk - dxj * dzk
-    az = dxj * dyk - dyj * dxk
-    delx_xi[:] = vol / np.sqrt(ax * ax + ay * ay + az * az + _PTINY)
-    axn, ayn, azn = ax * norm, ay * norm, az * norm
-    dxv = 0.25 * ((c(xv, 1) + c(xv, 2) + c(xv, 6) + c(xv, 5)) - (c(xv, 0) + c(xv, 3) + c(xv, 7) + c(xv, 4)))
-    dyv = 0.25 * ((c(yv, 1) + c(yv, 2) + c(yv, 6) + c(yv, 5)) - (c(yv, 0) + c(yv, 3) + c(yv, 7) + c(yv, 4)))
-    dzv = 0.25 * ((c(zv, 1) + c(zv, 2) + c(zv, 6) + c(zv, 5)) - (c(zv, 0) + c(zv, 3) + c(zv, 7) + c(zv, 4)))
-    delv_xi[:] = axn * dxv + ayn * dyv + azn * dzv
+    ax2 = dyj * dzk - dzj * dyk
+    ay2 = dzj * dxk - dxj * dzk
+    az2 = dxj * dyk - dyj * dxk
+    delx_xi[:] = vol / np.sqrt(ax2 * ax2 + ay2 * ay2 + az2 * az2 + _PTINY)
+    axn, ayn, azn = ax2 * norm, ay2 * norm, az2 * norm
+    dxv2 = 0.25 * ((c(xv, 1) + c(xv, 2) + c(xv, 6) + c(xv, 5)) - (c(xv, 0) + c(xv, 3) + c(xv, 7) + c(xv, 4)))
+    dyv2 = 0.25 * ((c(yv, 1) + c(yv, 2) + c(yv, 6) + c(yv, 5)) - (c(yv, 0) + c(yv, 3) + c(yv, 7) + c(yv, 4)))
+    dzv2 = 0.25 * ((c(zv, 1) + c(zv, 2) + c(zv, 6) + c(zv, 5)) - (c(zv, 0) + c(zv, 3) + c(zv, 7) + c(zv, 4)))
+    delv_xi[:] = axn * dxv2 + ayn * dyv2 + azn * dzv2
 
     # eta ( k cross i )
-    ax = dyk * dzi - dzk * dyi
-    ay = dzk * dxi - dxk * dzi
-    az = dxk * dyi - dyk * dxi
-    delx_eta[:] = vol / np.sqrt(ax * ax + ay * ay + az * az + _PTINY)
-    axn, ayn, azn = ax * norm, ay * norm, az * norm
-    dxv = -0.25 * ((c(xv, 0) + c(xv, 1) + c(xv, 5) + c(xv, 4)) - (c(xv, 3) + c(xv, 2) + c(xv, 6) + c(xv, 7)))
-    dyv = -0.25 * ((c(yv, 0) + c(yv, 1) + c(yv, 5) + c(yv, 4)) - (c(yv, 3) + c(yv, 2) + c(yv, 6) + c(yv, 7)))
-    dzv = -0.25 * ((c(zv, 0) + c(zv, 1) + c(zv, 5) + c(zv, 4)) - (c(zv, 3) + c(zv, 2) + c(zv, 6) + c(zv, 7)))
-    delv_eta[:] = axn * dxv + ayn * dyv + azn * dzv
+    ax3 = dyk * dzi - dzk * dyi
+    ay3 = dzk * dxi - dxk * dzi
+    az3 = dxk * dyi - dyk * dxi
+    delx_eta[:] = vol / np.sqrt(ax3 * ax3 + ay3 * ay3 + az3 * az3 + _PTINY)
+    axn, ayn, azn = ax3 * norm, ay3 * norm, az3 * norm
+    dxv3 = -0.25 * ((c(xv, 0) + c(xv, 1) + c(xv, 5) + c(xv, 4)) - (c(xv, 3) + c(xv, 2) + c(xv, 6) + c(xv, 7)))
+    dyv3 = -0.25 * ((c(yv, 0) + c(yv, 1) + c(yv, 5) + c(yv, 4)) - (c(yv, 3) + c(yv, 2) + c(yv, 6) + c(yv, 7)))
+    dzv3 = -0.25 * ((c(zv, 0) + c(zv, 1) + c(zv, 5) + c(zv, 4)) - (c(zv, 3) + c(zv, 2) + c(zv, 6) + c(zv, 7)))
+    delv_eta[:] = axn * dxv3 + ayn * dyv3 + azn * dzv3
 
 
 def _neighbor_delv(delv, neigh, ielem, bcmask, mask_all, mask_symm, mask_free, numElem):
@@ -491,23 +491,23 @@ def _neighbor_delv(delv, neigh, ielem, bcmask, mask_all, mask_symm, mask_free, n
     sel = bcmask & mask_all
     # sel==0 -> neighbour value, SYMM -> self, FREE -> 0; clamp first so the gather (always evaluated) never reads OOB.
     neigh_safe = np.clip(neigh, 0, numElem - 1)
-    out = delv[neigh_safe]
-    out = np.where(sel == mask_symm, delv[ielem], out)
-    out = np.where(sel == mask_free, 0.0, out)
-    return out
+    out1 = delv[neigh_safe]
+    out2 = np.where(sel == mask_symm, delv[ielem], out1)
+    out3 = np.where(sel == mask_free, 0.0, out2)
+    return out3
 
 
 def _phi(delvm, delvp, normd, limiter, maxslope):
-    delvm = delvm * normd
-    delvp = delvp * normd
-    phi = 0.5 * (delvm + delvp)
-    delvm = delvm * limiter
-    delvp = delvp * limiter
-    phi = np.minimum(phi, delvm)
-    phi = np.minimum(phi, delvp)
-    phi = np.where(phi < 0.0, 0.0, phi)
-    phi = np.where(phi > maxslope, maxslope, phi)
-    return phi
+    delvm1 = delvm * normd
+    delvp1 = delvp * normd
+    phi1 = 0.5 * (delvm1 + delvp1)
+    delvm2 = delvm1 * limiter
+    delvp2 = delvp1 * limiter
+    phi2 = np.minimum(phi1, delvm2)
+    phi3 = np.minimum(phi2, delvp2)
+    phi4 = np.where(phi3 < 0.0, 0.0, phi3)
+    phi5 = np.where(phi4 > maxslope, maxslope, phi4)
+    return phi5
 
 
 def _calc_monotonic_q_region(numElem, elemBC, delv_xi, delv_eta, delv_zeta, delx_xi, delx_eta, delx_zeta, lxim, lxip,
@@ -518,20 +518,20 @@ def _calc_monotonic_q_region(numElem, elemBC, delv_xi, delv_eta, delv_zeta, delx
     limiter = _MONOQ_LIMITER_MULT
     maxslope = _MONOQ_MAX_SLOPE
 
-    norm = 1.0 / (delv_xi + _PTINY)
-    dm = _neighbor_delv(delv_xi, lxim, ielem, bcmask, XI_M, XI_M_SYMM, XI_M_FREE, numElem)
-    dp = _neighbor_delv(delv_xi, lxip, ielem, bcmask, XI_P, XI_P_SYMM, XI_P_FREE, numElem)
-    phixi = _phi(dm, dp, norm, limiter, maxslope)
+    norm1 = 1.0 / (delv_xi + _PTINY)
+    dm1 = _neighbor_delv(delv_xi, lxim, ielem, bcmask, XI_M, XI_M_SYMM, XI_M_FREE, numElem)
+    dp1 = _neighbor_delv(delv_xi, lxip, ielem, bcmask, XI_P, XI_P_SYMM, XI_P_FREE, numElem)
+    phixi = _phi(dm1, dp1, norm1, limiter, maxslope)
 
-    norm = 1.0 / (delv_eta + _PTINY)
-    dm = _neighbor_delv(delv_eta, letam, ielem, bcmask, ETA_M, ETA_M_SYMM, ETA_M_FREE, numElem)
-    dp = _neighbor_delv(delv_eta, letap, ielem, bcmask, ETA_P, ETA_P_SYMM, ETA_P_FREE, numElem)
-    phieta = _phi(dm, dp, norm, limiter, maxslope)
+    norm2 = 1.0 / (delv_eta + _PTINY)
+    dm2 = _neighbor_delv(delv_eta, letam, ielem, bcmask, ETA_M, ETA_M_SYMM, ETA_M_FREE, numElem)
+    dp2 = _neighbor_delv(delv_eta, letap, ielem, bcmask, ETA_P, ETA_P_SYMM, ETA_P_FREE, numElem)
+    phieta = _phi(dm2, dp2, norm2, limiter, maxslope)
 
-    norm = 1.0 / (delv_zeta + _PTINY)
-    dm = _neighbor_delv(delv_zeta, lzetam, ielem, bcmask, ZETA_M, ZETA_M_SYMM, ZETA_M_FREE, numElem)
-    dp = _neighbor_delv(delv_zeta, lzetap, ielem, bcmask, ZETA_P, ZETA_P_SYMM, ZETA_P_FREE, numElem)
-    phizeta = _phi(dm, dp, norm, limiter, maxslope)
+    norm3 = 1.0 / (delv_zeta + _PTINY)
+    dm3 = _neighbor_delv(delv_zeta, lzetam, ielem, bcmask, ZETA_M, ZETA_M_SYMM, ZETA_M_FREE, numElem)
+    dp3 = _neighbor_delv(delv_zeta, lzetap, ielem, bcmask, ZETA_P, ZETA_P_SYMM, ZETA_P_FREE, numElem)
+    phizeta = _phi(dm3, dp3, norm3, limiter, maxslope)
 
     delvxxi = np.minimum(delv_xi * delx_xi, 0.0)
     delvxeta = np.minimum(delv_eta * delx_eta, 0.0)
@@ -558,55 +558,55 @@ def _calc_pressure(e_old, compression, vnewc):
     c1s = 2.0 / 3.0
     bvc = c1s * (compression + 1.0)
     pbvc = np.full_like(bvc, c1s)
-    p_new = bvc * e_old
-    p_new = np.where(np.abs(p_new) < _P_CUT, 0.0, p_new)
-    p_new = np.where(vnewc >= _EOSVMAX, 0.0, p_new)
-    p_new = np.where(p_new < _PMIN, _PMIN, p_new)
-    return p_new, bvc, pbvc
+    p_new1 = bvc * e_old
+    p_new2 = np.where(np.abs(p_new1) < _P_CUT, 0.0, p_new1)
+    p_new3 = np.where(vnewc >= _EOSVMAX, 0.0, p_new2)
+    p_new4 = np.where(p_new3 < _PMIN, _PMIN, p_new3)
+    return p_new4, bvc, pbvc
 
 
 def _calc_energy(e_old, delvc, p_old, q_old, compression, compHalfStep, vnewc, work, qq, ql):
     rho0 = _REFDENS
     emin = _EMIN
-    e_new = e_old - 0.5 * delvc * (p_old + q_old) + 0.5 * work
-    e_new = np.maximum(e_new, emin)
+    e_new1 = e_old - 0.5 * delvc * (p_old + q_old) + 0.5 * work
+    e_new2 = np.maximum(e_new1, emin)
 
-    pHalfStep, bvc, pbvc = _calc_pressure(e_new, compHalfStep, vnewc)
+    pHalfStep, bvc, pbvc = _calc_pressure(e_new2, compHalfStep, vnewc)
 
     vhalf = 1.0 / (1.0 + compHalfStep)
-    ssc = (pbvc * e_new + vhalf * vhalf * bvc * pHalfStep) / rho0
-    ssc = np.where(ssc <= _TINY1, _TINY3, np.sqrt(np.where(ssc <= _TINY1, 1.0, ssc)))
-    q_new = np.where(delvc > 0.0, 0.0, ssc * ql + qq)
-    e_new = e_new + 0.5 * delvc * (3.0 * (p_old + q_old) - 4.0 * (pHalfStep + q_new))
+    ssc1 = (pbvc * e_new2 + vhalf * vhalf * bvc * pHalfStep) / rho0
+    ssc2 = np.where(ssc1 <= _TINY1, _TINY3, np.sqrt(np.where(ssc1 <= _TINY1, 1.0, ssc1)))
+    q_new = np.where(delvc > 0.0, 0.0, ssc2 * ql + qq)
+    e_new3 = e_new2 + 0.5 * delvc * (3.0 * (p_old + q_old) - 4.0 * (pHalfStep + q_new))
 
-    e_new = e_new + 0.5 * work
-    e_new = np.where(np.abs(e_new) < _E_CUT, 0.0, e_new)
-    e_new = np.maximum(e_new, emin)
+    e_new4 = e_new3 + 0.5 * work
+    e_new5 = np.where(np.abs(e_new4) < _E_CUT, 0.0, e_new4)
+    e_new6 = np.maximum(e_new5, emin)
 
-    p_new, bvc, pbvc = _calc_pressure(e_new, compression, vnewc)
+    p_new, bvc, pbvc = _calc_pressure(e_new6, compression, vnewc)
 
-    ssc = (pbvc * e_new + vnewc * vnewc * bvc * p_new) / rho0
-    ssc = np.where(ssc <= _TINY1, _TINY3, np.sqrt(np.where(ssc <= _TINY1, 1.0, ssc)))
-    q_tilde = np.where(delvc > 0.0, 0.0, ssc * ql + qq)
-    e_new = e_new - (7.0 * (p_old + q_old) - 8.0 * (pHalfStep + q_new) + (p_new + q_tilde)) * delvc * _SIXTH
-    e_new = np.where(np.abs(e_new) < _E_CUT, 0.0, e_new)
-    e_new = np.maximum(e_new, emin)
+    ssc3 = (pbvc * e_new6 + vnewc * vnewc * bvc * p_new) / rho0
+    ssc4 = np.where(ssc3 <= _TINY1, _TINY3, np.sqrt(np.where(ssc3 <= _TINY1, 1.0, ssc3)))
+    q_tilde = np.where(delvc > 0.0, 0.0, ssc4 * ql + qq)
+    e_new7 = e_new6 - (7.0 * (p_old + q_old) - 8.0 * (pHalfStep + q_new) + (p_new + q_tilde)) * delvc * _SIXTH
+    e_new8 = np.where(np.abs(e_new7) < _E_CUT, 0.0, e_new7)
+    e_new9 = np.maximum(e_new8, emin)
 
-    p_new, bvc, pbvc = _calc_pressure(e_new, compression, vnewc)
+    p_new, bvc, pbvc = _calc_pressure(e_new9, compression, vnewc)
 
-    ssc = (pbvc * e_new + vnewc * vnewc * bvc * p_new) / rho0
-    ssc = np.where(ssc <= _TINY1, _TINY3, np.sqrt(np.where(ssc <= _TINY1, 1.0, ssc)))
-    q_new2 = ssc * ql + qq
-    q_new2 = np.where(np.abs(q_new2) < _Q_CUT, 0.0, q_new2)
-    q_new = np.where(delvc <= 0.0, q_new2, q_new)
-    return p_new, e_new, q_new, bvc, pbvc
+    ssc5 = (pbvc * e_new9 + vnewc * vnewc * bvc * p_new) / rho0
+    ssc6 = np.where(ssc5 <= _TINY1, _TINY3, np.sqrt(np.where(ssc5 <= _TINY1, 1.0, ssc5)))
+    q_new21 = ssc6 * ql + qq
+    q_new22 = np.where(np.abs(q_new21) < _Q_CUT, 0.0, q_new21)
+    q_new = np.where(delvc <= 0.0, q_new22, q_new)
+    return p_new, e_new9, q_new, bvc, pbvc
 
 
 def _calc_sound_speed(ss, vnewc, enewc, pnewc, pbvc, bvc):
     rho0 = _REFDENS
-    ssc = (pbvc * enewc + vnewc * vnewc * bvc * pnewc) / rho0
-    ssc = np.where(ssc <= _TINY1, _TINY3, np.sqrt(np.where(ssc <= _TINY1, 1.0, ssc)))
-    ss[:] = ssc
+    ssc1 = (pbvc * enewc + vnewc * vnewc * bvc * pnewc) / rho0
+    ssc2 = np.where(ssc1 <= _TINY1, _TINY3, np.sqrt(np.where(ssc1 <= _TINY1, 1.0, ssc1)))
+    ss[:] = ssc2
 
 
 def _eval_eos(e, p, q, ql, qq, delv, ss, vnewc):
@@ -657,9 +657,9 @@ def _apply_material_properties(e, p, q, ql, qq, delv, ss, v, vnew):
 
 
 def _update_volumes(v, vnew):
-    tmpV = vnew
-    tmpV = np.where(np.abs(tmpV - 1.0) < _V_CUT, 1.0, tmpV)
-    v[:] = tmpV
+    tmpV1 = vnew
+    tmpV2 = np.where(np.abs(tmpV1 - 1.0) < _V_CUT, 1.0, tmpV1)
+    v[:] = tmpV2
 
 
 def _lagrange_elements(deltatime, numElem, elemBC, nodelist, x, y, z, xd, yd, zd, e, p, q, ql, qq, v, volo, vnew, delv,
@@ -676,20 +676,20 @@ def _lagrange_elements(deltatime, numElem, elemBC, nodelist, x, y, z, xd, yd, zd
 # Time constraints.
 def _calc_courant_constraint(ss, arealg, vdov, dtcourant):
     qqc2 = 64.0 * _QQC * _QQC
-    dtf = ss * ss
-    dtf = np.where(vdov < 0.0, dtf + qqc2 * arealg * arealg * vdov * vdov, dtf)
-    dtf = np.sqrt(dtf)
-    dtf = arealg / dtf
+    dtf1 = ss * ss
+    dtf2 = np.where(vdov < 0.0, dtf1 + qqc2 * arealg * arealg * vdov * vdov, dtf1)
+    dtf3 = np.sqrt(dtf2)
+    dtf4 = arealg / dtf3
     # inactive (vdov==0) elements get a large sentinel dtf so whole-array np.min matches masked np.min(dtf[active]).
-    dtf = np.where(vdov != 0.0, dtf, 1.0e20)
-    cand = np.min(dtf)
+    dtf5 = np.where(vdov != 0.0, dtf4, 1.0e20)
+    cand = np.min(dtf5)
     return cand if cand < dtcourant else dtcourant
 
 
 def _calc_hydro_constraint(vdov, dthydro):
-    dtdvov = _DVOVMAX / (np.abs(vdov) + 1.0e-20)
-    dtdvov = np.where(vdov != 0.0, dtdvov, 1.0e20)
-    cand = np.min(dtdvov)
+    dtdvov1 = _DVOVMAX / (np.abs(vdov) + 1.0e-20)
+    dtdvov2 = np.where(vdov != 0.0, dtdvov1, 1.0e20)
+    cand = np.min(dtdvov2)
     return cand if cand < dthydro else dthydro
 
 

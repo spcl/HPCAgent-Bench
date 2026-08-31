@@ -1547,8 +1547,17 @@ class _MathRewriter(ast.NodeTransformer):
     loop). Scalar args fall through to the renamed math intrinsic.
     """
 
-    def __init__(self, array_names=None):
+    #: Renamed to a 2-arg libm call ONLY when both operands are scalars; on arrays the LibNode
+    #: expander owns them instead. They are the ufuncs whose scalar and array forms differ.
+    ARRAY_CAPABLE = frozenset({"maximum", "minimum"})
+
+    def __init__(self, array_names=None, defer_array_capable: bool = False):
         self.array_names = array_names or set()
+        # Local array shapes are not known yet on the FIRST pass, so an inlined helper's temps are
+        # indistinguishable from scalars there. Renaming on that incomplete picture is what emitted
+        # __npb_fmax(double *, double *); the later passes run with the locals in hand and decide
+        # correctly, so leave these two alone until then.
+        self.defer_array_capable = defer_array_capable
 
     def visit_Call(self, node: ast.Call):
         self.generic_visit(node)
@@ -1560,13 +1569,15 @@ class _MathRewriter(ast.NodeTransformer):
                 clipped = self._scalar_clip(node)
                 if clipped is not None:
                     return clipped
+            if self.defer_array_capable and name in self.ARRAY_CAPABLE:
+                return node
             new_name = MATH_BUILTINS.get((mod, name))
             if new_name is not None:
-                # Skip the rename when the first arg involves an array
-                # reference (Name or Subscript with slice) -- the LibNode
-                # expander emits the per-element form. Pure-scalar
-                # arguments fall through to the math intrinsic rename.
-                if node.args and self._refers_to_array(node.args[0]):
+                # Skip the rename when ANY arg involves an array reference (Name or Subscript
+                # with slice) -- the LibNode expander emits the per-element form. Pure-scalar
+                # arguments fall through to the math intrinsic rename. Testing only the FIRST arg
+                # let np.maximum(0.0, arr) through as a scalar fmax on a pointer.
+                if any(self._refers_to_array(a) for a in node.args):
                     return node
                 node.func = ast.Name(id=new_name, ctx=ast.Load())
         return node
@@ -8048,7 +8059,10 @@ def _lp_normalize_calls(ctx: LoweringContext) -> None:
     ctx.iter_rewriter.visit(tree)
     _EnumerateZipRewriter(ash).visit(tree)
     _BuiltinCastRewriter().visit(tree)
-    _MathRewriter(set(ash.keys())).visit(tree)
+    # The LOCAL array shapes too, exactly as the two later _MathRewriter sites do. With only
+    # the declared arrays, an inlined helper's temps look like scalars, and np.maximum on two
+    # of them took the scalar rename: __npb_fmax(double *, double *).
+    _MathRewriter(set(ash.keys()) | set(ctx.lib_shape_table.keys()), defer_array_capable=True).visit(tree)
     _DaceMapRewriter().visit(tree)
     _ChainedAssignRewriter().visit(tree)
     tuple_rewriter = _TupleAssignRewriter(ash)

@@ -10,6 +10,9 @@ the checkers THEMSELVES the way ``tests/test_header_hook.py`` pins ``check_heade
 a deliberately good fixture passes, a deliberately bad one is caught with a clear message.
 """
 import importlib.util
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -125,3 +128,37 @@ def test_manifest_structure_catches_malformed_yaml(tmp_path: Path, monkeypatch: 
     p = make_kernel(module, tmp_path, monkeypatch, "parameters: [1, 2\n", "kern_yaml")
     probs = violations_of(module, p)
     assert probs is not None and "parse" in probs[0]
+
+
+def test_manifest_hook_bootstraps_its_own_path(tmp_path: Path) -> None:
+    """The hook must run on an interpreter that has NEVER installed the package.
+
+    It is wired ``language: system``, so pre-commit hands it the ambient interpreter -- which is
+    not required to have ``hpcagent_bench`` importable. This checkout carries an editable install,
+    so a plain run cannot tell the difference; the driver below drops that install's finder to
+    expose the real dependency. Two roots have to be bootstrapped, not one: ``hpcagent_bench``
+    itself, and ``numpyto_common`` under the translators, which ``hpcagent_bench.dtypes`` imports.
+    """
+    manifest = load_check_manifest_structure().tracked_manifests()[0]
+    driver = tmp_path / "no_install.py"
+    driver.write_text(
+        textwrap.dedent("""
+        import runpy, sys
+
+        def owns(finder):
+            mod = finder.__module__ if isinstance(finder, type) else type(finder).__module__
+            return "hpcagent_bench" in mod or "numpyto" in mod
+
+        sys.meta_path = [m for m in sys.meta_path if not owns(m)]
+        sys.path = [p for p in sys.path if "optarena" not in p and p not in ("", ".")]
+        sys.argv = sys.argv[1:]
+        runpy.run_path(sys.argv[0], run_name="__main__")
+        """))
+    proc = subprocess.run(
+        [sys.executable, str(driver),
+         str(REPO / "scripts" / "check_manifest_structure.py"), manifest],
+        cwd=REPO,
+        capture_output=True,
+        text=True)
+    assert "ModuleNotFoundError" not in proc.stderr, proc.stderr
+    assert proc.returncode == 0, proc.stderr

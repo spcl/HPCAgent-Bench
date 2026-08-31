@@ -581,7 +581,7 @@ def _int_expr(value: ast.AST, ranks: Dict[str, int], seed_ranks: Optional[Dict[s
 
 def _tuple_expr_len(value: ast.AST,
                     ranks: Dict[str, int],
-                    tree: ast.AST,
+                    assigns: Dict[str, ast.expr],
                     visited: Optional[Set[str]] = None,
                     seed_ranks: Optional[Dict[str, int]] = None) -> Optional[int]:
     """Length of a tuple-valued expression, if statically known.
@@ -599,21 +599,20 @@ def _tuple_expr_len(value: ast.AST,
         return ranks.get(value.value.id)
     if isinstance(value, ast.Name) and value.id not in visited:
         visited.add(value.id)
-        for node in _iter_function_bodies(tree):
-            if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
-                    and node.targets[0].id == value.id):
-                return _tuple_expr_len(node.value, ranks, tree, visited, seed_ranks)
-        return None
+        bound = assigns.get(value.id)
+        if bound is None:
+            return None
+        return _tuple_expr_len(bound, ranks, assigns, visited, seed_ranks)
     if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Add):
-        lv = _tuple_expr_len(value.left, ranks, tree, visited, seed_ranks)
-        rv = _tuple_expr_len(value.right, ranks, tree, visited, seed_ranks)
+        lv = _tuple_expr_len(value.left, ranks, assigns, visited, seed_ranks)
+        rv = _tuple_expr_len(value.right, ranks, assigns, visited, seed_ranks)
         if lv is not None and rv is not None:
             return lv + rv
         return None
     if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Mult):
         # Tuple * int or int * tuple.
-        lt = _tuple_expr_len(value.left, ranks, tree, visited, seed_ranks)
-        rt = _tuple_expr_len(value.right, ranks, tree, visited, seed_ranks)
+        lt = _tuple_expr_len(value.left, ranks, assigns, visited, seed_ranks)
+        rt = _tuple_expr_len(value.right, ranks, assigns, visited, seed_ranks)
         li = _int_expr(value.left, ranks, seed_ranks)
         ri = _int_expr(value.right, ranks, seed_ranks)
         if lt is not None and ri is not None:
@@ -639,10 +638,18 @@ def _build_tuple_lengths(tree: ast.AST,
     Used by :func:`expr_rank` while ``rank_table`` is iterating, so
     ``.reshape(name)`` reports the tuple's rank rather than guessing 1.
     """
+    # Indexed ONCE. Resolving a Name used to re-walk the whole tree to find its assignment, and it
+    # recurses, so a chain of tuple locals cost assigns x depth x nodes -- 564s of densenet121's
+    # 729s lowering sat under this one call. setdefault keeps the same first-in-body binding the
+    # scan returned.
+    assigns: Dict[str, ast.expr] = {}
+    for node in _iter_function_bodies(tree):
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
+            assigns.setdefault(node.targets[0].id, node.value)
     lengths: Dict[str, int] = {}
     for node in ast.walk(tree):
         if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
-            length = _tuple_expr_len(node.value, ranks, tree, seed_ranks=seed_ranks)
+            length = _tuple_expr_len(node.value, ranks, assigns, seed_ranks=seed_ranks)
             if length is not None:
                 lengths[node.targets[0].id] = length
     return lengths

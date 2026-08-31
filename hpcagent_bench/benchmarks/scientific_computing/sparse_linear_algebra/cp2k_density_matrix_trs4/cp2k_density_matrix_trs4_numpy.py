@@ -42,9 +42,11 @@ def blocked_csr_multiply(
 ):
     """Compute fixed-pattern ``C = alpha*A*B + beta*C``, fully vectorized."""
 
-    # The blocked-CSR pattern is a fixed circulant: every block row has the same fanout, so nnz
-    # (col_idx's length) and n_c (c_blocks' length) are both 3 * n_block_rows -- see the module
-    # docstring point 1.
+    # The blocked-CSR pattern is a fixed circulant: every block row has the same fanout, so
+    # col_idx's length and c_blocks' length are the SAME extent, 3 * n_block_rows -- see the
+    # module docstring point 1. It is spelled nnz throughout: a second name for one extent is a
+    # second symbol the emitters have to resolve, and the one they picked was bound below the
+    # loop that reads it.
     nnz = 3 * n_block_rows
     fanout = nnz // n_block_rows
 
@@ -90,22 +92,21 @@ def blocked_csr_multiply(
     # np.add.at applies contributions one at a time in index order (unbuffered), and that is what
     # keeps repeated c_pos targets bit-exact against the reference's sequential accumulation.
     flat_valid = valid.ravel()
-    n_c = nnz
-    sink = np.zeros((n_c + 1, block_size, block_size), dtype=c_blocks.dtype)
-    sink[0:n_c] = c_blocks
-    flat_c_pos = np.where(flat_valid, c_pos.ravel(), n_c)
+    sink = np.zeros((nnz + 1, block_size, block_size), dtype=c_blocks.dtype)
+    sink[0:nnz] = c_blocks
+    flat_c_pos = np.where(flat_valid, c_pos.ravel(), nnz)
     flat_prod = prod.reshape(nnz * fanout, block_size, block_size)
     np.add.at(sink, flat_c_pos, alpha * flat_prod)
-    c_blocks[:] = sink[0:n_c]
+    c_blocks[:] = sink[0:nnz]
 
     filter_eps_sq = filter_eps * filter_eps
     # The scan is its own named buffer, and its last column is read by index rather than by ``-1``.
     # Inline, the scan is scalarised along with the read that consumes it, and a per-element scan is
     # no scan. Which column is last is spelled out because the extent has to be static.
     inner = block_size * block_size
-    flat = c_blocks.reshape(n_c, inner)
-    prefix = np.zeros((n_c, inner), dtype=c_blocks.dtype)
-    for _cp_row in range(n_c):
+    flat = c_blocks.reshape(nnz, inner)
+    prefix = np.zeros((nnz, inner), dtype=c_blocks.dtype)
+    for _cp_row in range(nnz):
         _cp_acc = 0.0
         for _cp_col in range(inner):
             _cp_acc += flat[_cp_row, _cp_col] * flat[_cp_row, _cp_col]
