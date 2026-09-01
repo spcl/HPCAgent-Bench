@@ -3988,10 +3988,53 @@ def _infer_param_desc(arg: ast.AST, pname: str, arr_by, sca_by, sym_by, fn=None)
         if res is not None:
             shape, dtype = res
             return ("array", ArrayDesc(name=pname, dtype=dtype, shape=shape, is_output=False))
+    if boolean_valued_argument(arg, fn, sca_by):
+        return ("scalar", ScalarDesc(name=pname, dtype="bool"))
     if integer_valued_argument(arg, fn, sca_by, sym_by):
         return ("scalar", ScalarDesc(name=pname, dtype="int"))
     # A negated / arithmetic scalar expression -- default to double.
     return ("scalar", ScalarDesc(name=pname, dtype="float64"))
+
+
+def boolean_valued_argument(arg: ast.AST, fn, sca_by, depth: int = 0) -> bool:
+    """Whether ``arg`` is a PREDICATE -- a comparison, an and/or/not, or a local bound to one.
+
+    Without this such an argument falls to the float64 default and the helper declares a real dummy
+    for a flag its own body branches on. In C that compiles (any nonzero double is true) and only
+    reads wrong; Fortran says so outright -- gromacs_nbnxm's ``_inner_4x4`` took
+    ``(ci_flags[e] & 2) != 0`` into ``real(c_double) :: do_coul``, then ``if (do_coul) then``:
+    "IF clause requires a scalar LOGICAL expression", and the call itself "passed LOGICAL(4) to
+    REAL(8)".
+
+    Checked BEFORE :func:`integer_valued_argument` so a predicate is never read as an int: numpy
+    lets a bool do arithmetic, but the dummy's DECLARED kind is what the branch is compiled against.
+    Deliberately narrow -- only what is a predicate by construction, never a value that merely
+    happens to be 0 or 1.
+    """
+    if depth > 8:
+        return False
+    if isinstance(arg, ast.Constant):
+        return isinstance(arg.value, bool)
+    if isinstance(arg, (ast.Compare, ast.BoolOp)):
+        return True
+    if isinstance(arg, ast.UnaryOp) and isinstance(arg.op, ast.Not):
+        return True
+    if isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name) and arg.func.id == "bool":
+        return True
+    if isinstance(arg, ast.Name):
+        scalar = sca_by.get(arg.id)
+        if scalar is not None:
+            return str(scalar.dtype) == "bool"
+        if fn is None:
+            return False
+        # A local bound once to a predicate: resolve through that binding, the same single-binding
+        # rule the integer probe uses -- more than one and the value is not decided here.
+        bound = [
+            st.value for st in ast.walk(fn)
+            if isinstance(st, ast.Assign) and any(isinstance(t, ast.Name) and t.id == arg.id for t in st.targets)
+        ]
+        return len(bound) == 1 and boolean_valued_argument(bound[0], fn, sca_by, depth + 1)
+    return False
 
 
 def integer_valued_argument(arg: ast.AST, fn, sca_by, sym_by, depth: int = 0) -> bool:
@@ -4155,6 +4198,31 @@ def _extent_operands_resolved(value: ast.expr, hfn: ast.FunctionDef, table: Dict
         elif isinstance(node, ast.Subscript):
             operands.append(node.value)
     return not any(isinstance(op, ast.Name) and op.id not in table for op in operands)
+
+
+def target_shape_is_the_call_itself(fn: ast.FunctionDef, lhs, arr_by: Dict[str, ArrayDesc], name: str) -> bool:
+    """Whether ``lhs``'s only definition is the very call whose result shape is being asked for.
+
+    :func:`_resolve_array_ref` chases a local to its first binding, and when that binding IS the
+    helper call it falls through to a broadcast join over the call's ARGUMENTS. For an elementwise
+    helper that join is the answer; for one that changes shape it is a guess, and a wrong one:
+    nbody's ``acc = _acc_from_sep(dx, dy, dz, dist2, mass, G, softening)`` returns
+    ``np.hstack((ax, ay, az))``, ``(N, 3)``, and the join over the ``(N, N)`` separations sized the
+    out-param ``(N, N)``. The helper then wrote 3 columns into a buffer the caller read at stride
+    ``N`` -- every read past the first row was another row's data, and the energies came out wrong
+    with nothing failing to compile.
+
+    Where this is true the callee's own body is the authority instead (see
+    :func:`_helper_return_shape_from_body`). A declared array, an allocation, or a subscript target
+    all say something the call does not, and none of them answer True here.
+    """
+    if not isinstance(lhs, ast.Name) or lhs.id in arr_by:
+        return False
+    if _local_array_def(fn, lhs.id, arr_by) is not None:
+        return False
+    assigns = _assigns_to(fn, lhs.id)
+    return bool(assigns) and isinstance(assigns[0].value, ast.Call) and isinstance(
+        assigns[0].value.func, ast.Name) and assigns[0].value.func.id == name
 
 
 def _helper_return_shape_from_body(hfn, pnames, args, arr_by, sca_by, sym_by, fn=None):
@@ -4849,6 +4917,12 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
             # unlowered, because the expanders only ever see assignments.
             hret_shape, hret_dtype = _helper_return_shape_from_body(hfn, pnames, call.args, oarr_by, osca_by, osym_by,
                                                                     owner_fn)
+        elif target_shape_is_the_call_itself(owner_fn, lhs, oarr_by, hdef.name):
+            # The target told us nothing the call did not; ask the body, which knows what it writes.
+            body_shape, body_dtype = _helper_return_shape_from_body(hfn, pnames, call.args, oarr_by, osca_by, osym_by,
+                                                                    owner_fn)
+            if body_shape is not None:
+                hret_shape, hret_dtype = body_shape, body_dtype
 
         if hret_shape is None:
             # SCALAR (by-value) return -- params inferred straight from the call. A compile-time

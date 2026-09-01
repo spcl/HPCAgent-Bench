@@ -446,6 +446,55 @@ def _np_call_attr(func: ast.expr) -> Optional[str]:
     return None
 
 
+def concat_extent(attr: str, expr: ast.Call, shape_table: Dict[str, Tuple[str, ...]]):
+    """Extent of a concatenation call, or ``None`` when the operands do not agree on one.
+
+    Every operand must size, share a rank, and agree on every axis but the joined one, whose
+    extents are summed. Anything else -- a mixed rank, an unresolved operand, an axis numpy would
+    broadcast -- returns ``None`` rather than a shape that is merely plausible.
+    """
+    operands = list(expr.args[0].elts) if (len(expr.args) == 1
+                                           and isinstance(expr.args[0], (ast.Tuple, ast.List))) else list(expr.args)
+    extents = [_iter_extent_of(operand, shape_table) for operand in operands]
+    if not extents or any(e is None for e in extents):
+        return None
+    rank = len(extents[0])
+    if any(len(e) != rank for e in extents):
+        return None
+    if attr == "vstack" and rank == 1:
+        return None  # vstack STACKS 1-D operands into a new leading axis; that is a rank change
+    axis = 0 if rank == 1 or attr == "vstack" else 1
+    if attr == "concatenate":
+        node = _kwarg_or_pos(expr.args[1:], expr.keywords, 0, "axis")
+        axis = 0 if node is None else _const_axis(node, rank)
+        if axis is None:
+            return None
+    if axis >= rank:
+        return None
+    kept = [ast.unparse(e) for k, e in enumerate(extents[0]) if k != axis]
+    if any([ast.unparse(e) for k, e in enumerate(extent) if k != axis] != kept for extent in extents[1:]):
+        return None  # the untouched axes are spelled differently; nothing here can prove them equal
+    widths = [extent[axis] for extent in extents]
+    literals = [_const_int(w) for w in widths]
+    if all(v is not None for v in literals):
+        joined: ast.expr = _const(sum(literals))  # ``3``, not ``1 + 1 + 1``: this becomes a stride
+    else:
+        joined = widths[0]
+        for width in widths[1:]:
+            joined = ast.BinOp(left=joined, op=ast.Add(), right=width)
+    return tuple(joined if k == axis else extents[0][k] for k in range(rank))
+
+
+def sum_width_tokens(tokens) -> str:
+    """The concatenated width of ``tokens``, folded when every one of them is a literal.
+
+    ``"3"``, not ``"1+1+1"``: this token becomes a stride in the emitted index arithmetic, and the
+    same buffer is sized through a second path that folds. One buffer spelled two ways reads as two.
+    """
+    values = [int(tok) for tok in tokens if str(tok).lstrip("-").isdigit()]
+    return str(sum(values)) if len(values) == len(tokens) else "+".join(str(tok) for tok in tokens)
+
+
 def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> Optional[Tuple[ast.expr, ...]]:
     """Iteration extent of an array-valued expression. ``Name(A)`` -> A's full
     shape; ``Subscript(A, axes)`` -> upper-minus-lower per Slice axis in order
@@ -659,6 +708,13 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
                     expr.args) >= 2 and not _const_int(expr.args[1]) is None else (n, copy.deepcopy(n))
             if attr == "arange" and len(expr.args) == 1:
                 return (copy.deepcopy(expr.args[0]), )
+            if attr in ("hstack", "vstack", "concatenate") and expr.args:
+                # Concatenation is the one shape-changing form a helper's RETURN commonly takes
+                # (nbody's ``return np.hstack((ax, ay, az))``), and an unsized one leaves the
+                # caller's own broadcast join over the ARGUMENTS as the only answer -- ``(N, N)``
+                # for a result that is ``(N, 3)``. Axis 1 for 2-D under hstack, axis 0
+                # for 1-D and for vstack; ``concatenate`` reads its own ``axis``.
+                return concat_extent(attr, expr, shape_table)
             if attr in ("linalg.inv", "linalg.cholesky") and expr.args:
                 return _iter_extent_of(expr.args[0], shape_table)
             if attr == "linalg.solve" and len(expr.args) >= 2:
@@ -8564,11 +8620,9 @@ class _CallHoister(ast.NodeTransformer):
                 return None
             rank = len(shapes[0])
             if rank == 1:
-                widths = "+".join(s[0] for s in shapes)
-                return (widths, )
+                return (sum_width_tokens([s[0] for s in shapes]), )
             if rank == 2:
-                widths = "+".join(s[1] for s in shapes)
-                return (shapes[0][0], widths)
+                return (shapes[0][0], sum_width_tokens([s[1] for s in shapes]))
             return None
         if op == "diff" and args and isinstance(args[0], ast.Name):
             shape = self.shape_table.get(args[0].id)

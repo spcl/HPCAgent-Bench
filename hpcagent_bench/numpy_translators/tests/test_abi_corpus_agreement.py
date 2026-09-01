@@ -47,9 +47,11 @@ from _bench_yaml import kir_for
 from hpcagent_bench.spec import KERNELS, BenchSpec
 from hpcagent_bench.support.bindings import binding_from_spec
 
-#: Symbols carry no dtype in the IR -- :class:`SymbolDesc` is "always integer-typed" -- so the
-#: emitted side reports them as this, matching ``contract.DEFAULT_SYMBOL_DTYPE``.
-SYMBOL_DTYPE = "int64"
+#: What a symbol is bound at when the manifest declares nothing -- :class:`SymbolDesc`'s own
+#: default, and ``contract.DEFAULT_SYMBOL_DTYPE`` on the binding side. It is the DEFAULT only: a
+#: manifest that declares an integer width gives that symbol its own dtype on both sides, so the
+#: comparison below reads each symbol's rather than assuming this one.
+DEFAULT_SYMBOL_DTYPE_HERE = "int64"
 
 #: Kernels whose LOWERING alone outruns this phase's budget, excluded from the sweep by name.
 #:
@@ -71,7 +73,7 @@ def emitted_abi(kir) -> List[Tuple[str, str]]:
     scalars sorted (``abi_contract.md`` Sec. 4), which is what ``param_order`` encodes."""
     dtypes = {a.name: a.dtype for a in kir.arrays}
     dtypes.update({s.name: s.dtype for s in kir.scalars})
-    dtypes.update({s.name: SYMBOL_DTYPE for s in kir.symbols})
+    dtypes.update({s.name: s.dtype for s in kir.symbols})
     return [(n, dtypes[n]) for n in kir.param_order()]
 
 
@@ -193,10 +195,17 @@ def test_the_gate_can_actually_detect_a_shift() -> None:
 
 
 def test_symbols_report_the_dtype_the_emitter_uses() -> None:
-    """Premise of :data:`SYMBOL_DTYPE`: the IR gives shape symbols no dtype of their own, so this
-    file supplies one. If ``SymbolDesc`` ever grows a dtype field that assumption is silently
-    wrong for every kernel -- fail here instead of quietly comparing a fabricated type."""
+    """A symbol's width comes from the IR, never from a constant in this file.
+
+    :class:`SymbolDesc` carries its own ``dtype`` -- the manifest's declared integer width where it
+    gives one -- so a comparison against a hardcoded ``int64`` would pass a kernel whose symbol the
+    emitter mints ``int32`` and the binding passes as 8 bytes. Assert the field EXISTS and that its
+    default is the one both sides fall back to; if it is ever dropped again, ``emitted_abi`` breaks
+    here rather than silently comparing a fabricated type.
+    """
     from numpyto_common.ir import SymbolDesc
     from hpcagent_bench.support.bindings.contract import DEFAULT_SYMBOL_DTYPE
-    assert [f.name for f in dataclasses.fields(SymbolDesc)] == ["name"]
-    assert SYMBOL_DTYPE == DEFAULT_SYMBOL_DTYPE
+    fields = {f.name: f for f in dataclasses.fields(SymbolDesc)}
+    assert "dtype" in fields, "SymbolDesc lost its dtype; emitted_abi would have nothing to read"
+    assert fields["dtype"].default == DEFAULT_SYMBOL_DTYPE_HERE
+    assert DEFAULT_SYMBOL_DTYPE_HERE == DEFAULT_SYMBOL_DTYPE

@@ -4995,9 +4995,11 @@ class _FancySliceStoreToLoop(ast.NodeTransformer):
     through a length-2 index array, every written plane disagreed with numpy. The read form
     (``q[idx - 1, :, :]``) is correct there, so only the store is lowered.
 
-    numpy places a lone advanced index at result axis 0 whenever slices surround it -- in place
-    when it leads, moved to the FRONT when a slice precedes it -- so the hoisted right-hand side
-    is always indexed on its first axis. Two index arrays broadcast together and are left alone.
+    A LONE advanced index keeps its own axis position: ``q[:, ja, :nk]`` is ``[dim0, len(ja), nk]``,
+    not ``[len(ja), dim0, nk]``. Only two or more advanced indices split by a slice move to the
+    front, and those broadcast together and are left alone here. So the hoisted right-hand side is
+    indexed at the CARRIER's axis, with a full slice for every axis before it; reading axis 0
+    unconditionally took the wrong plane and, where the extents differed, failed to broadcast.
     """
 
     def __init__(self, ranks: Dict[str, int], dtypes: Dict[str, str]):
@@ -5039,7 +5041,7 @@ class _FancySliceStoreToLoop(ast.NodeTransformer):
         lines = [
             f"{p}_v = {ast.unparse(value)}",
             f"for {it} in range({idx_name}.shape[0]):",
-            f"    {target.value.id}[{', '.join(new_lead)}] {op} {p}_v[{it}]",
+            f"    {target.value.id}[{', '.join(new_lead)}] {op} {p}_v[{', '.join([':'] * k + [it])}]",
         ]
         self.changed = True
         return [ast.copy_location(st, node) for st in ast.parse("\n".join(lines)).body]

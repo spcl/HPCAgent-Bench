@@ -730,13 +730,24 @@ class _FortranBodyEmitter(BaseEmitter):
     _KW_CONTINUE = "cycle"
 
     def emit_stmt(self, node: ast.stmt, indent: str) -> str:
-        # A bare helper-subroutine call statement (array-returning helper's out-param
-        # call) emits as call h(args, out); a scalar helper's X = h(...) still routes
-        # through _emit_assign.
+        # A bare helper-subroutine call statement (an out-param call, or a VOID helper that writes
+        # only through its array dummies) emits as call h(args); a scalar helper's X = h(...) still
+        # routes through _emit_assign.
+        #
+        # _fortran_safe on the LOOKUP, not just the emitted name: _helper_out is keyed by the
+        # gfortran-accepted spelling, and a helper the tree still calls ``_inner_4x4`` misses a dict
+        # keyed ``x_inner_4x4``. The statement then fell through to the generic expression path,
+        # which drops the ``call`` and emits a bare name -- "Unclassifiable statement" (gromacs_nbnxm).
         if (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
-                and node.value.func.id in self._helper_out):
-            args = ", ".join(self.emit_expr(a) for a in node.value.args)
-            return f"{indent}call {node.value.func.id}({args})"
+                and _fortran_safe(node.value.func.id) in self._helper_out):
+            name = _fortran_safe(node.value.func.id)
+            call_args = [self.emit_expr(a) for a in node.value.args]
+            # Coerced for the same reason the X = h(...) path coerces: the dummy's declared KIND is
+            # the authority, and a predicate actual is LOGICAL(4) against a logical(c_bool) dummy.
+            types = self._helper_param_types.get(name)
+            if types is not None:
+                call_args = [_coerce_to_fortran_type(a, t) for a, t in zip(call_args, types)]
+            return f"{indent}call {name}({', '.join(call_args)})"
         return super().emit_stmt(node, indent)
 
     def _emit_return(self, node: ast.Return, indent: str) -> str:
@@ -1028,9 +1039,11 @@ class _FortranBodyEmitter(BaseEmitter):
         # ``X = helper(args)`` where helper is emitted as a subroutine taking its result through
         # an out-param -> ``call helper(...)`` with X spliced into the result dummy's ABI slot
         # (it sorts among the pointer params, it is not pinned last).
+        # _fortran_safe on the lookup for the same reason emit_stmt does it: _helper_out is keyed by
+        # the gfortran-accepted spelling, which differs from the tree's for an underscore-led helper.
         if (isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
-                and node.value.func.id in self._helper_out):
-            name = node.value.func.id
+                and _fortran_safe(node.value.func.id) in self._helper_out):
+            name = _fortran_safe(node.value.func.id)
             slot = self._helper_ret_slot[name]
             call_args = [self.emit_expr(a) for a in node.value.args]
             call_args.insert(slot, self.emit_expr(target))
@@ -2390,6 +2403,33 @@ class _FortranBodyEmitter(BaseEmitter):
         return all_int, out
 
 
+def _record_helper_call_shapes(emitter: "_FortranBodyEmitter", helpers: List[KernelIR]) -> None:
+    """Teach ``emitter`` how to CALL each helper: return kind, result slot, and dummy types.
+
+    Non-inlinable helpers -> a subroutine call at each ``X = helper(args)`` site, X going into the
+    result dummy's ABI slot. Same ``_helper_abi_order`` the subroutine itself is emitted from.
+
+    Every body that can reach a helper needs this, the HELPER bodies included: gromacs_nbnxm's
+    ``_nbnxm_4x4_qstab_lj_force_arrays`` calls ``_inner_4x4``, and with these maps empty that call
+    emitted as a bare name with no ``call`` -- "Unclassifiable statement".
+    """
+    emitter._helper_out = {_fortran_safe(h.kernel_name): h.return_kind for h in helpers}
+    for h in helpers:
+        h_order, h_ret = _helper_abi_order(h)
+        # A VOID helper (writes through its array params, returns nothing) has no result dummy, so
+        # there is no slot to record. It is called as a bare statement, never as ``X = h(...)``,
+        # which is the only site that reads the slot.
+        if h_ret is not None:
+            emitter._helper_ret_slot[_fortran_safe(h.kernel_name)] = h_order.index(h_ret)
+        # Only SCALAR dummies are coerced: an array actual must stay the bare array (a wrapped one
+        # would be a temporary, so a helper writing through it would write into the temporary).
+        h_sca = {sc.name: _fortran_type(sc.dtype) for sc in h.scalars}
+        h_sym = {sy.name for sy in h.symbols}
+        emitter._helper_param_types[_fortran_safe(
+            h.kernel_name)] = [h_sca.get(pn,
+                                         _fortran_type("int64") if pn in h_sym else None) for pn in h_order]
+
+
 def _fortran_safe(name: str) -> str:
     """Map a Python identifier to a gfortran-accepted name: strip leading underscores and prepend x_."""
     if not name:
@@ -3005,23 +3045,7 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, parallel: bool = 
 
     body_emitter = _FortranBodyEmitter(kir)
     body_emitter.parallel = parallel
-    # Non-inlinable helpers -> a subroutine call at each X = helper(args) site, X going into the
-    # result dummy's ABI slot. Same _helper_abi_order the subroutine itself is emitted from.
-    body_emitter._helper_out = {_fortran_safe(h.kernel_name): h.return_kind for h in kir.helpers}
-    for h in kir.helpers:
-        h_order, h_ret = _helper_abi_order(h)
-        # A VOID helper (writes through its array params, returns nothing) has no result dummy, so
-        # there is no slot to record. It is called as a bare statement, never as ``X = h(...)``,
-        # which is the only site that reads the slot.
-        if h_ret is not None:
-            body_emitter._helper_ret_slot[_fortran_safe(h.kernel_name)] = h_order.index(h_ret)
-        # Only SCALAR dummies are coerced: an array actual must stay the bare array (a wrapped one
-        # would be a temporary, so a helper writing through it would write into the temporary).
-        h_sca = {sc.name: _fortran_type(sc.dtype) for sc in h.scalars}
-        h_sym = {sy.name for sy in h.symbols}
-        body_emitter._helper_param_types[_fortran_safe(
-            h.kernel_name)] = [h_sca.get(pn,
-                                         _fortran_type("int64") if pn in h_sym else None) for pn in h_order]
+    _record_helper_call_shapes(body_emitter, kir.helpers)
     # Pre-compute implicit-local int kinds before emit_block so the body emitter
     # can apply kind-matched bitwise literal suffixes.
     _pre_implicit = _collect_implicit_locals(kir)
@@ -3224,7 +3248,7 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, parallel: bool = 
     # only user of npb_max2 in clamp_row, and reading the flags off the kernel body alone left the
     # call with no definition -- no `implicit none`, so gfortran typed it as an external function,
     # compiled clean, and the .so failed to dlopen on an undefined symbol.
-    helpers_src = "".join(_emit_fortran_helper(h, parent=body_emitter) for h in kir.helpers)
+    helpers_src = "".join(_emit_fortran_helper(h, parent=body_emitter, siblings=kir.helpers) for h in kir.helpers)
 
     # bind(C) interface block for any libm functions Fortran lacks, so the
     # body's cbrt(x) etc. resolve to the C library, bit-identical to numpy.
@@ -3571,6 +3595,10 @@ def _coerce_to_fortran_type(expr: str, ftype: Optional[str]) -> str:
         return f"INT({expr}, {ftype[len('integer('):-1]})"
     if ftype.startswith("real(") and ftype.endswith(")"):
         return f"REAL({expr}, {ftype[len('real('):-1]})"
+    if ftype.startswith("logical(") and ftype.endswith(")"):
+        # A comparison yields default LOGICAL(4); an interoperable dummy is logical(c_bool),
+        # LOGICAL(1). Fortran matches kinds here too -- "passed LOGICAL(4) to LOGICAL(1)".
+        return f"LOGICAL({expr}, {ftype[len('logical('):-1]})"
     return expr
 
 
@@ -3695,11 +3723,16 @@ def _rename_helper_to_fortran_safe(hkir: KernelIR) -> KernelIR:
     return renamed
 
 
-def _emit_fortran_helper(hkir: KernelIR, parent: Optional["_FortranBodyEmitter"] = None) -> str:
+def _emit_fortran_helper(hkir: KernelIR,
+                         parent: Optional["_FortranBodyEmitter"] = None,
+                         siblings: Optional[List[KernelIR]] = None) -> str:
     """Emit a non-inlinable helper as a CONTAINED subroutine whose return value comes back through an out-param.
 
     ``parent`` is the host's body emitter; the helper's own emitter merges what it used into it so the
     host emits the shared contained procedures and libm interface the helper body calls.
+
+    ``siblings`` is every helper contained in the same host, this one included -- a helper is free to
+    call another, and its body emitter needs their call shapes to spell that as a ``call``.
     """
     abi_order, ret_orig = _helper_abi_order(hkir)
     hkir = _rename_helper_to_fortran_safe(hkir)
@@ -3793,6 +3826,9 @@ def _emit_fortran_helper(hkir: KernelIR, parent: Optional["_FortranBodyEmitter"]
     iter_vars = _collect_for_targets(hkir.tree.body)
     iter_decls = [f"{_fortran_type('int')} :: " + ", ".join(sorted(iter_vars))] if iter_vars else []
     be = _FortranBodyEmitter(hkir)
+    # A helper may call its SIBLINGS (they are all contained in the same host), so its body needs the
+    # same call shapes the kernel body has.
+    _record_helper_call_shapes(be, siblings or [])
     be.return_mode = ret_name
     be.inline_alloc_locals = helper_inline_alloc
     be._logical_array_locals = _logical_locals(hkir)

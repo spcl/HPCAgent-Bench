@@ -636,8 +636,14 @@ def _emit_body(body: List[ast.stmt], live_out: Set[str], indent: str, defined: S
         elif isinstance(s, ast.FunctionDef):
             # Nested helper def (velocity_tendencies' ``gat``) -- emit as a
             # real nested function (np->jnp applied); stays in scope after.
-            arglist = ", ".join(a.arg for a in s.args.args)
-            lines.append(f"{indent}def {s.name}({arglist}):")
+            #
+            # ast.unparse over the whole ``arguments`` node, not a join of parameter NAMES: the
+            # names alone drop every default, and vexx_k's ``def fwfft(col, batch=None)`` then
+            # refuses its own one-argument call site with "missing 1 required positional argument".
+            # It also carries keyword-only and positional-only markers, which a name join cannot
+            # spell at all. Defaults are unparsed from the already np->jnp-rewritten tree, so an
+            # expression default is rewritten like any other.
+            lines.append(f"{indent}def {s.name}({ast.unparse(s.args)}):")
             inner = _emit_body(s.body, set(), indent + "    ", {a.arg for a in s.args.args})
             lines += inner if inner else [indent + "    pass"]
         elif isinstance(s, ast.Expr):
@@ -1535,9 +1541,11 @@ def _emit_eager_body(body: List[ast.stmt], indent: str) -> List[str]:
             continue  # input-validation guards never fire on oracle-valid inputs
         elif isinstance(s, ast.FunctionDef):
             # Nested helper def (velocity_tendencies' ``gat``) -- emit as a
-            # nested function, in scope for later calls.
-            arglist = ", ".join(a.arg for a in s.args.args)
-            lines.append(f"{indent}def {s.name}({arglist}):")
+            # nested function, in scope for later calls. ast.unparse over the whole ``arguments``
+            # node for the same reason the jit path does it: a join of parameter NAMES drops every
+            # default, and vexx_k's ``def fwfft(col, batch=None)`` then refuses its own
+            # one-argument call site.
+            lines.append(f"{indent}def {s.name}({ast.unparse(s.args)}):")
             lines += _emit_eager_body(s.body, inner) or [inner + "pass"]
         else:
             raise EmitError(f"unsupported statement: {type(s).__name__}")

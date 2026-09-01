@@ -2933,16 +2933,37 @@ def _helper_return_ctype(hkir: KernelIR) -> str:
     return _c_type("float64")
 
 
-def _emit_c_helper(hkir: KernelIR, cpp: bool = False, isopar: bool = False) -> str:
-    """Emit one non-inlinable helper as a static C/C++ function; an array return becomes a void fn with an out-param."""
+def _c_helper_signature(hkir: KernelIR, cpp: bool) -> Tuple[str, str]:
+    """``(return type, "static <signature>")`` for one helper -- shared by its prototype and its body."""
     rettype = "void" if hkir.return_kind != "scalar" else _helper_return_ctype(hkir)
     # abi_param_order: a helper the canonical order cannot fully describe keeps declaration
     # order, matching what _rewrite_helper_callsites did to its call.
     signature = _emit_signature(hkir, hkir.kernel_name, order=hkir.abi_param_order()).replace("void ", f"{rettype} ", 1)
     if cpp:
         signature = signature.replace("*restrict ", "*__restrict__ ")
+    return rettype, f"static {signature}"
+
+
+def _emit_c_helper(hkir: KernelIR, cpp: bool = False, isopar: bool = False) -> str:
+    """Emit one non-inlinable helper as a static C/C++ function; an array return becomes a void fn with an out-param."""
+    rettype, signature = _c_helper_signature(hkir, cpp)
     body = _emit_body(hkir, indent="    ", return_mode=hkir.return_kind, isopar=isopar, return_ctype=rettype)
-    return f"static {signature} {{\n{body}\n}}\n\n"
+    return f"{signature} {{\n{body}\n}}\n\n"
+
+
+def emit_c_helpers(kir: KernelIR, cpp: bool = False, isopar: bool = False) -> str:
+    """Every helper as PROTOTYPES first, then bodies.
+
+    ``kir.helpers`` is in declaration order, and a helper is free to call another one: gromacs_nbnxm
+    reaches ``_inner_4x4`` from the helper declared above it, so bodies alone put the call before the
+    definition. C calls that an implicit declaration (a warning this suite compiles as an error, and
+    the implicit ``int`` return is wrong anyway), C++ calls it "not declared in this scope". Prototypes
+    make the order of ``kir.helpers`` stop mattering, mutual recursion included.
+    """
+    if not kir.helpers:
+        return ""
+    prototypes = "".join(f"{_c_helper_signature(h, cpp)[1]};\n" for h in kir.helpers)
+    return prototypes + "\n" + "".join(_emit_c_helper(h, cpp=cpp, isopar=isopar) for h in kir.helpers)
 
 
 def pinned_const_block(kir: KernelIR) -> str:
@@ -2983,7 +3004,7 @@ def c_literal(value, ctype: str = "double") -> str:
 
 def emit_c(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     name = fn_name or f"{kir.kernel_name}_d_c"
-    helpers = "".join(_emit_c_helper(h) for h in kir.helpers)
+    helpers = emit_c_helpers(kir)
     signature = _emit_signature(kir, name)
     body = _emit_body(kir, indent="        ")
     return (f"{_C_HEADER}{_fp8_prelude(kir)}\n{pinned_const_block(kir)}{helpers}{signature} {{\n"
@@ -2992,7 +3013,7 @@ def emit_c(kir: KernelIR, fn_name: Optional[str] = None) -> str:
 
 def emit_cpp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     name = fn_name or f"{kir.kernel_name}_d"
-    helpers = "".join(_emit_c_helper(h, cpp=True) for h in kir.helpers)
+    helpers = emit_c_helpers(kir, cpp=True)
     signature = _emit_signature(kir, name)
     # restrict is a C99 keyword; C++ accepts it as __restrict__, so rewrite it for the C++ output.
     signature = signature.replace("*restrict ", "*__restrict__ ")
@@ -3036,7 +3057,7 @@ def emit_cpp_isopar(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     the same code emit_cpp does.
     """
     name = fn_name or f"{kir.kernel_name}_d"
-    helpers = "".join(_emit_c_helper(h, cpp=True, isopar=True) for h in kir.helpers)
+    helpers = emit_c_helpers(kir, cpp=True, isopar=True)
     signature = _emit_signature(kir, name).replace("*restrict ", "*__restrict__ ")
     body = _emit_body(kir, indent="        ", isopar=True)
     return (
@@ -3058,7 +3079,7 @@ def emit_c_omp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     """C99 with OpenMP #pragma omp parallel for on each outermost independent/reduction loop; same symbol as emit_c."""
     _require_parallelizable(kir)
     name = fn_name or f"{kir.kernel_name}_d_c"
-    helpers = "".join(_emit_c_helper(h) for h in kir.helpers)
+    helpers = emit_c_helpers(kir)
     signature = _emit_signature(kir, name)
     body = _emit_body(kir, indent="        ", parallel=True)
     return f"{_C_HEADER}{_fp8_prelude(kir)}\n{helpers}{signature} {{\n{_C_PRELUDE}{body}\n{_C_EPILOGUE}}}\n"
@@ -3068,7 +3089,7 @@ def emit_cpp_omp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     """C++ counterpart of :func:`emit_c_omp` (see it); same symbol as :func:`emit_cpp`."""
     _require_parallelizable(kir)
     name = fn_name or f"{kir.kernel_name}_d"
-    helpers = "".join(_emit_c_helper(h, cpp=True) for h in kir.helpers)
+    helpers = emit_c_helpers(kir, cpp=True)
     signature = _emit_signature(kir, name).replace("*restrict ", "*__restrict__ ")
     body = _emit_body(kir, indent="        ", parallel=True)
     return (f"{_CPP_HEADER}{_fp8_prelude(kir)}\n{helpers}{signature} {{\n{_CPP_PRELUDE}{body}\n"
