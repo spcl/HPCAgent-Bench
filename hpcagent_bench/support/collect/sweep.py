@@ -351,6 +351,11 @@ def run_framework_sweep(benchmark: str,
 CSV_FIELDS = ('framework', 'preset', 'datatype', 'kernel', 'impl', 'status', 'validated', 'median_ms', 'failure',
               'error')
 
+#: :func:`summarize_csv` sentinel: no data row was ever seen (CSV missing, unreadable, or header-only).
+#: A failure COUNT is always >= 0, so a negative return can never collide with one -- callers tell
+#: "ran with known failures" apart from "produced nothing" by comparing against this, not against 0/1.
+NO_ROWS = -1
+
 
 def best_ms(native: Optional[Sequence[float]], python: Optional[Sequence[float]]) -> Optional[float]:
     """The best (min) timed sample in ms: the compiled ``native`` series when present, else
@@ -437,9 +442,11 @@ def summarize_csv(paths: Sequence[str]) -> int:
     validation genuinely ran and disagreed with NumPy. Conflating ``failed`` into ``wrong`` would
     misreport "canonicalize crashed on this kernel" as "canonicalize silently miscompiled it".
 
-    :returns: the number of rows that crashed, failed, OR miscompiled -- the batch job's exit
-              status, so a shard whose kernels stopped compiling (or silently miscompiled) fails
-              the job instead of scrolling past in the log.
+    :returns: the number of rows that crashed, failed, OR miscompiled, so a shard whose kernels
+              stopped compiling (or silently miscompiled) fails the job instead of scrolling past
+              in the log -- OR :data:`NO_ROWS` when there is no data row to count at all (CSV
+              missing, unreadable, or header-only). The two must not collapse into each other: a
+              caller that tolerates known failures must still refuse a sweep that measured nothing.
     """
     # A shard CSV that is not there is the LOUDEST result this function can report: the rank died
     # before writing a row, or wrote somewhere else. The caller passes a shell glob, which bash
@@ -455,11 +462,14 @@ def summarize_csv(paths: Sequence[str]) -> int:
     for path in paths:
         if path in missing:
             continue
-        with open(path, newline='') as fh:
-            rows.extend(csv.DictReader(fh))
+        try:
+            with open(path, newline='') as fh:
+                rows.extend(csv.DictReader(fh))
+        except OSError as exc:
+            print(f"summarize: {path} could not be read: {exc}")
     if not rows:
-        print("summarize: no rows in any shard CSV; nothing was measured.")
-        return max(len(missing), 1)
+        print("summarize: no rows in any shard CSV -- the sweep produced nothing.")
+        return NO_ROWS
 
     def is_crash(row: Dict[str, str]) -> bool:
         return row['status'] == 'crash'

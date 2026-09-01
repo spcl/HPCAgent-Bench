@@ -12,8 +12,10 @@ the ``autoopt`` columns are upstream DaCe's own optimizer and must stay runnable
 install, so a fork gate that fired on every ``dace_*`` name would make that impossible while the
 column still looked fine locally.
 """
+import csv
 import json
 import shlex
+import types
 
 import pytest
 
@@ -162,13 +164,87 @@ def test_absent_shard_csvs_report_instead_of_tracebacking(tmp_path, capsys):
     """The rollup is handed a shell GLOB, which bash passes through verbatim when nothing matches.
 
     So "every rank died before writing a row" arrives as a path containing a `*`. It must say that
-    and stay non-zero -- an empty summary read as a clean run is the failure mode this guards."""
-    from hpcagent_bench.support.collect.sweep import summarize_csv
+    and return NO_ROWS -- an empty summary read as a clean run, or as an ordinary failure count of
+    zero-or-more, is the failure mode this guards."""
+    from hpcagent_bench.support.collect.sweep import NO_ROWS, summarize_csv
 
     missing = str(tmp_path / "shard-*.csv")
-    assert summarize_csv([missing]) > 0
+    assert summarize_csv([missing]) == NO_ROWS
     out = capsys.readouterr().out
-    assert "absent" in out and "nothing was measured" in out
+    assert "absent" in out
+    assert "no rows in any shard CSV" in out and "produced nothing" in out
+
+
+def _sweep_row(**overrides):
+    """One CSV_FIELDS-shaped row for the summarize_csv tests below, all-green unless overridden."""
+    from hpcagent_bench.support.collect.sweep import CSV_FIELDS
+    row = dict.fromkeys(CSV_FIELDS, "")
+    row.update(framework="dace_cpu",
+               preset="p",
+               datatype="float64",
+               kernel="k",
+               impl="parallel_cpu",
+               status="ok",
+               validated="True",
+               median_ms="1.0")
+    row.update(overrides)
+    return row
+
+
+def test_summarize_csv_separates_no_rows_from_a_real_failure_count(tmp_path, capsys):
+    """A missing/header-only CSV and a CSV with known failures must land on DIFFERENT signals: the
+    caller has to tolerate "56 kernels ran, 3 are known-broken" (a real count) without also
+    tolerating "the CSV does not exist because nothing ran" (NO_ROWS) -- collapsing both into the
+    same value is exactly the bug this fixes."""
+    from hpcagent_bench.support.collect.sweep import NO_ROWS, CSV_FIELDS, summarize_csv, write_csv_rows
+
+    header_only = tmp_path / "header-only.csv"
+    with open(header_only, "w", newline="") as fh:
+        csv.writer(fh).writerow(CSV_FIELDS)
+    assert summarize_csv([str(header_only)]) == NO_ROWS
+    out = capsys.readouterr().out
+    assert "no rows in any shard CSV" in out and "produced nothing" in out
+
+    all_green = tmp_path / "all-green.csv"
+    write_csv_rows([_sweep_row()], str(all_green))
+    assert summarize_csv([str(all_green)]) == 0
+
+    one_crash = tmp_path / "one-crash.csv"
+    write_csv_rows([_sweep_row(), _sweep_row(kernel="k2", status="crash", error="signal 11")], str(one_crash))
+    result = summarize_csv([str(one_crash)])
+    assert result == 1
+    out = capsys.readouterr().out
+    assert "1 CRASHES" in out
+
+
+def test_cmd_run_framework_summarize_maps_to_the_0_1_2_contract(tmp_path, monkeypatch, capsys):
+    """The CLI must not collapse summarize_csv's verdict into a plain 0/1: 0 all green, 1 a real
+    measurement with known failures, 2 the sweep produced nothing (missing or header-only CSV). A
+    CI gate that tolerates case 1 must never also tolerate case 2 landing on the same exit code."""
+    from hpcagent_bench import cli
+    from hpcagent_bench.harness import recording
+    from hpcagent_bench.support.collect.sweep import CSV_FIELDS, write_csv_rows
+
+    monkeypatch.setattr(recording, "aggregate", lambda *a, **k: 0)
+
+    missing = tmp_path / "missing.csv"
+    assert cli.cmd_run_framework(types.SimpleNamespace(summarize=[str(missing)])) == 2
+    assert "produced nothing" in capsys.readouterr().out
+
+    header_only = tmp_path / "header-only.csv"
+    with open(header_only, "w", newline="") as fh:
+        csv.writer(fh).writerow(CSV_FIELDS)
+    assert cli.cmd_run_framework(types.SimpleNamespace(summarize=[str(header_only)])) == 2
+    assert "produced nothing" in capsys.readouterr().out
+
+    one_crash = tmp_path / "one-crash.csv"
+    write_csv_rows([_sweep_row(), _sweep_row(kernel="k2", status="crash", error="signal 11")], str(one_crash))
+    assert cli.cmd_run_framework(types.SimpleNamespace(summarize=[str(one_crash)])) == 1
+    assert "CRASHES" in capsys.readouterr().out
+
+    all_green = tmp_path / "all-green.csv"
+    write_csv_rows([_sweep_row()], str(all_green))
+    assert cli.cmd_run_framework(types.SimpleNamespace(summarize=[str(all_green)])) == 0
 
 
 def test_both_build_modes_expose_the_commands_the_opt_report_replays(tmp_path):
