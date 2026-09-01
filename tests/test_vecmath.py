@@ -10,6 +10,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+import tomllib
 
 import pytest
 
@@ -75,13 +76,18 @@ def declared_functions() -> list:
 
 
 def test_the_vecmath_header_ships_with_the_package():
-    """flags.py -include's this path on every gcc/g++ compile; setup.py + MANIFEST.in must list it."""
+    """flags.py -include's this path on every gcc/g++ compile; pyproject + MANIFEST.in must list it."""
     assert flags.VECMATH_H.is_file(), f"{flags.VECMATH_H} is missing"
     root = pathlib.Path(flags.__file__).resolve().parents[1]
     manifest = (root / "MANIFEST.in").read_text()
     assert "envs/vecmath.h" in manifest, "vecmath.h is not listed in MANIFEST.in; wheels will drop it"
-    setup_py = (root / "setup.py").read_text()
-    assert "envs/vecmath.h" in setup_py, "vecmath.h is not in setup.py package_data; wheels will drop it"
+    # ``[tool.setuptools.package-data]``, where setup.py's ``package_data`` went. An sdist takes the
+    # file from MANIFEST.in; a WHEEL is built from the package data table and ignores the manifest,
+    # so both have to name it or one of the two distributions ships a header the compile -include's.
+    declared = tomllib.loads((root / "pyproject.toml").read_text())
+    package_data = declared["tool"]["setuptools"]["package-data"]
+    assert any("envs/vecmath.h" in entry for entries in package_data.values() for entry in entries), \
+        "vecmath.h is not in [tool.setuptools.package-data]; wheels will drop it"
 
 
 #: Every CPU baseline constant, and the route by which it reaches libmvec. Enumerated so that

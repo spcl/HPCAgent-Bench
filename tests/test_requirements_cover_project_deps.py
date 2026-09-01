@@ -1,27 +1,27 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""setup.py's ``install_requires`` must be a subset of every container requirements file.
+"""pyproject's ``[project] dependencies`` must be a subset of every container requirements file.
 
 The judge runs from a repo MOUNTED into the CE image, so nothing installs the package's own
-declared deps at container-build time -- only ``pip install -r requirements/<hw>.txt`` does
+declared deps at container-build time -- only the ``-r requirements/<hw>.txt`` install does
 (see containers/cluster/ce-images/amd/Dockerfile and .../nvidia/Dockerfile, each installing
-exactly one requirements/<hw>.txt with no setup.py step). A name in install_requires that is
+exactly one requirements/<hw>.txt and never the project itself). A declared dependency that is
 missing from a hardware requirements file is a ModuleNotFoundError waiting inside the judge
-container. Stdlib only: setup.py is parsed with ast, not imported or run through setuptools.
+container. Stdlib only: pyproject is read with tomllib, never through setuptools.
 """
-import ast
 import pathlib
 import re
+import tomllib
 from typing import FrozenSet, List
 
 from hpcagent_bench import paths
 
 REQUIREMENTS_DIR = paths.ROOT / "requirements"
 
-#: setup.py names that are intentionally never pip-installed from a requirements file. dace is
+#: Declared names that are intentionally never installed from a requirements file. dace is
 #: git-cloned editable in the Dockerfile (see requirements/*.txt's own comment on this), so it
 #: has no PyPI-style entry to match; exempted here, not silently dropped, so the exemption is
-#: visible and setup.py adding a REAL new dep named "dace" would still need a second look.
+#: visible and a REAL new dependency named "dace" would still need a second look.
 DACE_EXEMPT = frozenset({"dace"})
 
 
@@ -41,24 +41,13 @@ def package_name(requirement: str) -> str:
     return match.group(0) if match else ""
 
 
-def parse_install_requires(setup_py: pathlib.Path) -> List[str]:
-    """The ``install_requires=[...]`` list literal out of setup.py, via ast (no import/exec).
+def project_dependencies(pyproject: pathlib.Path) -> List[str]:
+    """``[project] dependencies`` out of pyproject.toml.
 
-    setup.py's list is plain string literals (no f-strings, no computed entries), so the
-    keyword's value node is ast.literal_eval-able directly once found.
+    tomllib, not setuptools: this test asserts what the file DECLARES, and building the metadata
+    would let a backend default or a plugin supply a name the file itself does not.
     """
-    tree = ast.parse(setup_py.read_text())
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        func_name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
-        if func_name != "setup":
-            continue
-        for keyword in node.keywords:
-            if keyword.arg == "install_requires":
-                return list(ast.literal_eval(keyword.value))
-    raise ValueError(f"no install_requires= found in {setup_py}")
+    return list(tomllib.loads(pyproject.read_text())["project"]["dependencies"])
 
 
 def parse_requirements(path: pathlib.Path) -> FrozenSet[str]:
@@ -78,17 +67,17 @@ def parse_requirements(path: pathlib.Path) -> FrozenSet[str]:
     return frozenset(names)
 
 
-SETUP_PY = paths.ROOT / "setup.py"
-INSTALL_REQUIRES = parse_install_requires(SETUP_PY)
+PYPROJECT = paths.ROOT / "pyproject.toml"
+DEPENDENCIES = project_dependencies(PYPROJECT)
 
 
-def test_install_requires_parses_the_known_deps():
+def test_dependencies_parse_to_the_known_deps():
     """Sanity check on the ast parse itself, independent of the subset assertion below --
     if this list came back empty or truncated, the coverage test would pass for the wrong
     reason (nothing left to check)."""
-    normalized = {normalize(package_name(r)) for r in INSTALL_REQUIRES}
+    normalized = {normalize(package_name(r)) for r in DEPENDENCIES}
     assert {"numpy", "scipy", "jinja2", "sqlmodel", "cffi"} <= normalized
-    assert len(INSTALL_REQUIRES) >= 8
+    assert len(DEPENDENCIES) >= 8
 
 
 def test_package_name_strips_specifiers_extras_and_markers():
@@ -115,14 +104,14 @@ def test_parse_requirements_skips_comments_and_pip_options(tmp_path):
     assert parse_requirements(path) == frozenset({"numpy", "mpi4py"})
 
 
-def test_install_requires_is_a_subset_of_amd_and_nvidia_requirements():
-    """The real gate: every runtime import setup.py declares must be preinstalled in the
+def test_dependencies_are_a_subset_of_amd_and_nvidia_requirements():
+    """The real gate: every runtime import pyproject declares must be preinstalled in the
     hardware requirements file the CE image actually installs (amd.txt / nvidia.txt), since
-    the judge never runs ``pip install -e .`` inside the mounted-repo container."""
-    setup_names = {normalize(package_name(r)) for r in INSTALL_REQUIRES} - DACE_EXEMPT
+    the judge never installs the project inside the mounted-repo container."""
+    declared = {normalize(package_name(r)) for r in DEPENDENCIES} - DACE_EXEMPT
     for filename in ("amd.txt", "nvidia.txt"):
         req_names = parse_requirements(REQUIREMENTS_DIR / filename)
-        missing = sorted(setup_names - req_names)
-        assert not missing, (f"setup.py install_requires names missing from requirements/{filename}: {missing} "
-                             f"-- the judge mounts the repo into the CE image and never runs `pip install -e .`, "
+        missing = sorted(declared - req_names)
+        assert not missing, (f"[project] dependencies missing from requirements/{filename}: {missing} "
+                             f"-- the judge mounts the repo into the CE image and never installs the project, "
                              f"so a name absent here is a ModuleNotFoundError inside that container")

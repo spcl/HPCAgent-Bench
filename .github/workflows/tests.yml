@@ -144,13 +144,15 @@ jobs:
         run: ccache --zero-stats
 
       # Phase 0 runs BEFORE the heavy setup so a formatting slip fails in seconds. yapf /
-      # fprettify / clang-format are pip wheels (the clang-format wheel ships the binary).
+      # fprettify / clang-format ship as wheels (the clang-format wheel carries the binary), and
+      # `--group linting` with no project argument installs those THREE and nothing else -- the
+      # point of running this phase first is lost if it first resolves torch.
       - name: Phase 0 -- format check (changed files @ 120 cols)
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install yapf fprettify clang-format
           base="${{ github.event.pull_request.base.ref || 'main' }}"
           git fetch --no-tags origin "$base"
+          python -m pip install --upgrade pip
+          python -m pip install --group linting
           python scripts/check_format.py --base "origin/$base"
 
       - uses: ./.github/actions/setup
@@ -436,17 +438,6 @@ jobs:
           python-version: '3.12'
       - uses: ./.github/actions/setup
 
-      - name: Setup -- CPU torch (the models Phase 8b compares against)
-        # The dep is DECLARED, in requirements/torch-cpu.txt, rather than spelled inline here --
-        # that file carries the CPU index and the reason it is not in optional.txt (which
-        # containers/cpu.def installs, so an entry there would pull torch into the agent image).
-        # Retried like every other install here: runners hit transient PyPI read errors on wheels
-        # this size, and the phase self-skips without torch, so a network blip would otherwise turn
-        # 215 comparisons into skips. `-m torch_agreement` below plus -rfEs makes that loud.
-        run: |
-          pip_retry() { for i in 1 2 3 4 5; do python -m pip install "$@" && return 0; echo "pip attempt $i failed; retrying in $((i*5))s"; sleep $((i*5)); done; return 1; }
-          pip_retry -r requirements/torch-cpu.txt
-
       - name: Phase 8 -- the DaCe frontend still reads what the generator emits
         # Parse only: to_sdfg(simplify=False) never invokes a C++ compiler, so the whole corpus is
         # affordable on a runner with no toolchain beyond python. The gate is a RATCHET on the
@@ -668,14 +659,9 @@ jobs:
       - name: Setup -- reset the ccache counters
         run: ccache --zero-stats
       - uses: ./.github/actions/setup
-
-      - name: Setup -- apache-tvm (tvm_cpu framework)
-        # apache-tvm's libtvm_runtime.so resolves tvm::ffi::* out of the SEPARATE apache-tvm-ffi
-        # wheel. Installing only apache-tvm loads to
-        # "undefined symbol: _ZN3tvm3ffi4json9StringifyE...", which the suite then reports as
-        # "tvm import failed" and SKIPS -- a broken install wearing an absent one's clothes.
-        # Both pinned to the pair this repo develops against.
-        run: python -m pip install apache-tvm==0.25.0rc0 apache-tvm-ffi==0.1.12
+        with:
+          # the tvm_cpu framework column
+          extras: "tvm"
 
       - name: Setup -- build Pluto (polyhedral source-to-source) against LLVM/clang 17
         # HARD step (proven recipe -- containers/pluto.Dockerfile builds the same way): a build
@@ -1242,20 +1228,30 @@ jobs:
       # would make the end-of-job stats cumulative instead of this run's hit rate.
       - name: Setup -- reset the ccache counters
         run: ccache --zero-stats
-      - uses: ./.github/actions/setup
-
-      - name: Setup -- OpenMPI + a source-built mpi4py (real multi-rank on the CI runner)
+      - name: Setup -- OpenMPI (real multi-rank on the CI runner)
+        # BEFORE the install, so the install below is what builds mpi4py against this OpenMPI. It
+        # used to come after and re-install mpi4py over the wheel the previous step had just fetched.
+        #
         # OpenMPI, not MPICH: MPICH's Hydra bootstraps as SINGLETON worlds on a GH-Actions runner
         # (PMI/hwloc can't come up), so `mpiexec -n 4` yields four world-size-1 jobs and every
         # multi-rank launch/scoring/correctness test could only self-skip or fail. OpenMPI's
         # `mpirun --oversubscribe -n R` launches R REAL ranks on the 2 CI cores, so those tests
         # actually RUN and pass -- no capability-gap skip. (cray-mpich ABI parity is for the Alps
         # deployment, orthogonal to CI test correctness.) libopenmpi-dev ships mpicc + mpirun;
-        # python3-dev + --no-binary source-build mpi4py against THIS OpenMPI so its ABI matches the
-        # mpicc-built C driver.
+        # python3-dev is what mpi4py compiles against.
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends openmpi-bin libopenmpi-dev python3-dev
-          MPICC=mpicc python -m pip install --no-binary=mpi4py mpi4py
+
+      - uses: ./.github/actions/setup
+        with:
+          # the fused mpi runner also grades the fv3 gt4py reference and builds the HF export
+          extras: "gt4py hf mpi"
+          # mpi4py from SOURCE against the OpenMPI installed above, so its ABI matches the
+          # mpicc-built C driver the launch tests exercise. The wheel is built against a different
+          # MPI and the mismatch does not surface until a rank aborts.
+          pip-args: "--no-binary mpi4py"
+        env:
+          MPICC: mpicc
 
       - name: Phase 1 -- data distribution + descriptor (pure numpy, no launcher)
         if: ${{ !cancelled() }}
@@ -1290,10 +1286,6 @@ jobs:
 
       # Moved off the translators runner, which was the workflow's critical path at 40m32s while
       # this one finished in 5m09s. Neither phase needs MPI; they need a runner with headroom.
-      - name: Setup -- gt4py (Phase 2c fv3 reference DSL)
-        if: ${{ !cancelled() }}
-        run: python -m pip install gt4py
-
       - name: Phase 2b -- port fidelity (numpy port vs original C/C++/Fortran reference)
         if: ${{ !cancelled() }}
         run: |
@@ -1389,7 +1381,6 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_DATASET_REPO: ${{ vars.HF_DATASET_REPO }}
         run: |
-          pip install -r requirements/hf.txt
           PUSH=""
           if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ] \
               && [ -n "$HF_DATASET_REPO" ] && [ -n "$HF_TOKEN" ] \
@@ -1438,8 +1429,9 @@ jobs:
         with:
           python-version: '3.12'
       - uses: ./.github/actions/setup
-      - name: Setup -- GPU codegen frameworks (tvm + triton)
-        run: python -m pip install apache-tvm==0.25.0rc0 apache-tvm-ffi==0.1.12 triton
+        with:
+          # the GPU codegen columns
+          extras: "tvm triton"
       - name: GPU frameworks + fp16 (tvm-gpu / triton targets)
         run: |
           python -m pytest -q -p no:cacheprovider -rfEs --timeout=1500 \
@@ -1480,8 +1472,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install coverage
-        run: python -m pip install coverage
+      # coverage alone -- this job combines artifacts and never imports the package, so naming the
+      # group WITHOUT the project keeps it off torch and dace and makes it the fastest job in the
+      # run.
+      - name: Setup -- the coverage tool, and nothing else
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --group testing
       - name: Download every job's coverage data
         uses: actions/download-artifact@v4
         with:

@@ -117,20 +117,27 @@ def test_every_pytest_plugin_the_workflow_asks_for_is_installed() -> None:
     every phase of every job dies before collecting a single test.
 
     That is not hypothetical. Setting ``PYTEST_ADDOPTS: --cov=hpcagent_bench`` job-wide without
-    adding pytest-cov to the setup action turned six green jobs red at once, each with
+    adding pytest-cov to what CI installs turned six green jobs red at once, each with
     ``ERROR: usage: python -m pytest [options]`` and nothing else -- a failure that looks like a
     test failure and is not one. The flags and the install list have to agree.
+
+    Read from the ``testing`` dependency group in pyproject.toml, which is what the setup action
+    installs (``pip install --group testing``). Grepping the action's own text was the same check
+    while the plugin names were written out there; once they moved into the project metadata that
+    grep could only ever answer "missing", and the invariant lives wherever the names now are.
     """
     import re
+    import tomllib
 
-    setup = (REPO / ".github" / "actions" / "setup" / "action.yml").read_text()
+    groups = tomllib.loads((REPO / "pyproject.toml").read_text())["dependency-groups"]
+    installed = " ".join(str(entry) for entries in groups.values() for entry in entries)
     text = WORKFLOW.read_text()
     # option prefix -> the distribution that provides it
     plugins = {"--cov": "pytest-cov", "--timeout": "pytest-timeout", "-n ": "pytest-xdist", "--dist": "pytest-xdist"}
     asked = {dist for opt, dist in plugins.items() if re.search(rf"PYTEST_ADDOPTS:.*{re.escape(opt.strip())}", text)}
-    missing = sorted(d for d in asked if d not in setup)
-    assert not missing, (f"PYTEST_ADDOPTS asks for {missing}, which .github/actions/setup/action.yml "
-                         f"does not install -- every pytest call in CI would fail on an unrecognized argument")
+    missing = sorted(d for d in asked if d not in installed)
+    assert not missing, (f"PYTEST_ADDOPTS asks for {missing}, which no pyproject.toml dependency group "
+                         f"installs -- every pytest call in CI would fail on an unrecognized argument")
 
 
 def test_asking_for_skip_reasons_does_not_hide_the_failures() -> None:

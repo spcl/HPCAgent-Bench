@@ -4,6 +4,27 @@ description: >
   Python deps every CI runner shares. Job-specific extras (tvm, Pluto, gt4py, Apptainer) stay in
   the job so only the runner that needs one pays for it.
 
+  Every Python install goes through pip against pyproject.toml, in ONE resolution per job rather
+  than a base install followed by job-specific top-ups. The caller provisions the interpreter
+  (actions/setup-python), as this action has always assumed.
+
+inputs:
+  extras:
+    description: >
+      Space-separated pyproject extras this job needs ON TOP of cpu + dace, e.g. "tvm gt4py".
+      A job names what it grades and pays for nothing else. Passing them here rather than adding a
+      second install step is not cosmetic: a later `install` cannot revise a version the first one
+      already chose, so a job that tops up its own extras can end up with a resolution no single
+      run of the resolver would have produced.
+    required: false
+    default: ""
+  pip-args:
+    description: >
+      Extra raw flags for the install, e.g. "--no-binary mpi4py" where a job needs a package BUILT
+      against a library it installed itself rather than taken as a wheel.
+    required: false
+    default: ""
+
 runs:
   using: composite
   steps:
@@ -157,64 +178,68 @@ runs:
     - name: Base Python deps (translators + the frameworks every phase shares)
       shell: bash
       run: |
-        # requirements.txt (numpy 2.x + core) + the translator stack + numba/pythran/jax/dace,
-        # which co-resolve with numpy 2.x. tvm/gt4py/pluto/apptainer are job-specific and added
-        # by the job that needs them. pytest-xdist gives every runner its own -n auto.
+        # ONE resolution for the whole job. Every framework this suite grades a kernel through --
+        # numba/pythran/jax/torch/dace + the translator stack -- is an extra or a dependency group
+        # in pyproject.toml, so a job asks for names in a single install and pip decides versions
+        # once. A second install cannot revise what the first already chose, which is how a job ends
+        # up with a set no single resolver run would produce.
         #
-        # Retry every install: CI runners hit transient PyPI IncompleteRead/ProtocolError on
-        # large sdists (dace). CRUCIAL: ``pip install -e .`` (which installs numpyto_common --
-        # without it every tests/conftest import dies) runs BEFORE the flaky framework downloads,
-        # in its own retried call, so a framework network blip can never skip the editable install.
+        # There is deliberately NO lockfile. A lock demands one resolution valid across every extra
+        # at once, which this project cannot have: agent-aider hard-pins numpy==1.26.x against the
+        # project's numpy>=2, and dace must track a branch tip rather than a commit. pyproject.toml
+        # is the whole of the dependency metadata; pip resolves it per job.
+        #
+        # tvm/gt4py/triton/apptainer/Pluto stay job-specific and are added by the job that needs
+        # one, so only that runner pays.
+        set -euo pipefail
+        # Retried: runners hit transient PyPI IncompleteRead/ProtocolError on wheels this size.
         pip_retry() { for i in 1 2 3 4 5; do python -m pip install "$@" && return 0; echo "pip attempt $i failed; retrying in $((i*5))s"; sleep $((i*5)); done; return 1; }
+
+        # `--group` is pip 25.1 and newer; the runner image ships whatever it ships.
         python -m pip install --upgrade pip
-        pip_retry -r requirements.txt \
-          pytest pytest-timeout pytest-xdist pytest-cov sympy jinja2 cffi tree-sitter-language-pack psutil py-cpuinfo
-        pip_retry -e .
-        # DaCe: editable install of spcl/dace @ extended (the branch HPCAgent-Bench develops against), NOT the
-        # stock PyPI wheel. Shallow clone keeps it fast; editable so the codegen loads.
-        # --recurse-submodules is REQUIRED: dace vendors its runtime headers as git submodules
-        # (external/moodycamel/blockingconcurrentqueue.h is included by dace/runtime/include/dace/
-        # stream.h), so a plain shallow clone builds an SDFG straight into
-        # "fatal error: ... blockingconcurrentqueue.h: No such file or directory".
-        #
-        # TRACKS THE extended BRANCH TIP, deliberately unpinned: this suite grades kernels through
-        # dace, and the emitters target what extended actually supports today (np.where and
-        # np.broadcast_to reach the Merge/Broadcast library nodes there, so the emitter does not
-        # desugar them). A pin froze that capability set and made the emitter work around gaps the
-        # branch had already closed.
+
+        # torch BEFORE the project, and from PyTorch's CPU index. An index cannot be written into a
+        # PEP 508 requirement, so this is the only place it can be said; the project install below
+        # then finds `torch` already satisfied and leaves it alone. Without it the default PyPI
+        # wheel is the CUDA build and drags ~2.5 GB of nvidia-* wheels onto a runner with no GPU.
+        # requirements/torch-cpu.txt said the same thing by hand, on one job.
+        pip_retry --index-url https://download.pytorch.org/whl/cpu torch
+
+        # DaCe TRACKS THE extended BRANCH TIP. The `dace` extra is a direct git reference to the
+        # branch, so every run of this step re-resolves it; nothing here freezes it and nothing
+        # should. The suite grades kernels through dace and the emitters target what extended
+        # supports TODAY (np.where and np.broadcast_to reach the Merge/Broadcast library nodes
+        # there, so the emitter does not desugar them); a frozen dace made the emitter work around
+        # gaps the branch had already closed.
         #
         # The cost is real: tests/test_dace_numeric_agreement.py ratchets NUMERIC_BAD in BOTH
         # directions, so a dace commit landing between two runs is attributed to whichever optarena
         # commit was in flight, and a "healed" kernel forces a deletion the next dace commit may
         # undo. A shared dace moving mid-run has faked ~40 failures here before. When a red is not
-        # explained by the optarena diff, compare the resolved sha echoed below across the two runs
-        # BEFORE touching a ratchet list.
+        # explained by the optarena diff, compare the sha echoed below across the two runs BEFORE
+        # touching a ratchet list.
         #
         # There is NO override. A DACE_SHA escape hatch used to sit here "for a bisect", and it is
         # how run 32571640992 came to grade the corpus against a dace a week old and report four
         # symbol-propagation failures that the tip had already fixed -- a whole triage spent on
-        # dead bugs. Bisect by checking out the dace commit locally, not by teaching CI to freeze.
-        # A --depth 1 fetch takes a branch name, hence init + fetch of that one ref.
-        # --recurse-submodules stays MANDATORY: dace vendors its runtime headers as submodules
-        # (external/moodycamel/blockingconcurrentqueue.h is included by
-        # dace/runtime/include/dace/stream.h), so without them every SDFG build dies on a missing header.
-        DACE_REF=extended
-        mkdir -p "$RUNNER_TEMP/dace"
-        git -C "$RUNNER_TEMP/dace" init -q
-        git -C "$RUNNER_TEMP/dace" remote add origin https://github.com/spcl/dace.git
-        git -C "$RUNNER_TEMP/dace" fetch -q --depth 1 origin "$DACE_REF"
-        git -C "$RUNNER_TEMP/dace" checkout -q FETCH_HEAD
-        git -C "$RUNNER_TEMP/dace" submodule update --init --recursive --depth 1
-        pip_retry -e "$RUNNER_TEMP/dace"
-        # Echo the RESOLVED sha: a job that grades against dace must say which dace, or a triage
-        # reader has to guess from the run date.
-        echo "dace @ $(git -C "$RUNNER_TEMP/dace" rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
-        # pythran IS pinned, unlike dace: it is a third-party compiler this suite GRADES
-        # kernels through, and it moved under the gate. 0.19.0 landed between run 31842426040
-        # (08-14) and 32065774711 (08-17) and turned subset_sum from green into a >600 s hang,
-        # then a SIG11 -- the kernel itself unchanged and still green here on 0.18.1. Bump this in
-        # its own commit, and expect the e2e statuses to move with it.
-        pip_retry "jax[cpu]" numba pythran==0.18.1 pyarrow
+        # dead bugs. Bisect by installing a dace commit locally, not by teaching CI to freeze.
+        extras="cpu,dace"
+        for extra in ${{ inputs.extras }}; do
+          extras="${extras},${extra}"
+        done
+        # shellcheck disable=SC2086 -- pip-args is a flag list, word splitting is the point
+        pip_retry --group testing -e ".[${extras}]" ${{ inputs.pip-args }}
+
+        # Echo the RESOLVED dace commit: a job that grades against dace must say which dace, or a
+        # triage reader has to guess from the run date. A git install records it in direct_url.json.
+        dace_rev=$(python - <<'PYEOF'
+        import importlib.metadata, json
+        info = json.loads(importlib.metadata.distribution("dace").read_text("direct_url.json"))
+        print(info["vcs_info"]["commit_id"])
+        PYEOF
+        )
+        echo "dace @ ${dace_rev}" >> "$GITHUB_STEP_SUMMARY"
+
         # DELIBERATELY no `DACE_compiler_build_mode=native` here. It used to be exported for speed
         # (native skips the per-SDFG cmake configure), and it silently DEFEATED the build cache the
         # framework pins: a DACE_* environment variable outranks Config.set, so

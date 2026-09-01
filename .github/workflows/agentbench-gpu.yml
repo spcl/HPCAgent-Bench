@@ -23,12 +23,18 @@ jobs:
           gcc --version | head -1
           gfortran --version | head -1
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Install
+        # The nvidia extra is what requirements/nvidia.txt was: cupy + jax[cuda12] + triton +
+        # apache-tvm on top of the shared framework stack. ONE install, so the accelerator wheels
+        # and the framework stack are resolved against each other rather than in sequence. No CPU
+        # torch index here -- nvidia wants the default PyPI wheel, which IS the CUDA build.
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements/nvidia.txt
-          python -m pip install jinja2 tree-sitter tree-sitter-languages pytest
-          python -m pip install -e .
+          python -m pip install --group testing -e ".[nvidia,dace,tvm]"
 
       - name: cupy runs on the GPU
         # Not just device presence: allocate + reduce on the device and check the
@@ -48,7 +54,7 @@ jobs:
         run: python -m pytest tests/test_agent_bench.py -v
 
       - name: Codegen frameworks on the GPU (Triton + TVM-GPU execute for real)
-        # requirements/nvidia.txt installs triton + apache-tvm; with a real GPU
+        # The nvidia + tvm extras install triton + apache-tvm; with a real GPU
         # present the triton / tvm (cuda) framework tests run instead of skipping.
         env:
           HPCAGENT_BENCH_TVM_NOTUNE: "1"

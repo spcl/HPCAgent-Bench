@@ -1,4 +1,4 @@
-# Ship the library's data files inside the wheel. setup.py sets
+# Ship the library's data files inside the wheel. pyproject.toml sets
 # include_package_data=True, which -- WITHOUT this manifest -- only picks up data
 # files when setuptools' VCS file-finder happens to be active (true in a local git
 # checkout with an egg-info cache, FALSE in CI's `pip wheel --no-build-isolation`).

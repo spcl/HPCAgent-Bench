@@ -1,19 +1,213 @@
-# Build-system declaration ONLY. The package's metadata still lives in setup.py
-# (setuptools.build_meta reads it), so this is a minimal migration, not a rewrite.
+# Project metadata. setup.py is GONE: metadata split across both files is metadata setuptools
+# refuses ("cannot be declared in both"), and everything setup.py computed at import -- the
+# translator package_dir remap included -- is spelled statically below, so a resolver can read it
+# without executing code.
 #
-# Why it must exist: without a pyproject.toml, `pip install -e .` falls back to the
-# legacy `setup.py develop` path, which puts only the project ROOT on sys.path and
-# does NOT honor setup.py's `package_dir` remapping. hpcagent_bench maps the numpyto_*
-# translator packages to hpcagent_bench/numpy_translators/src via package_dir, so under
-# legacy develop `import numpyto_common` fails (ModuleNotFoundError) -- which is
-# exactly what broke the judge container, where pip fell back to legacy develop.
-# Declaring a build-system makes pip use a PEP 517/660 editable install, and
-# setuptools' PEP 660 backend honors package_dir, so the translators import.
+# There is NO lockfile, deliberately. A lock demands one resolution valid across every extra at
+# once, and two things here make that impossible: agent-aider hard-pins numpy==1.26.x against this
+# project's numpy>=2, and dace must track a moving branch tip rather than a commit. Installs
+# therefore resolve fresh (`pip install -e ".[<hw>,dace]"`), which is also what keeps dace current.
+# This file is the whole of the dependency metadata; pip is the installer.
 #
-# setuptools>=64 is the first release with the PEP 660 editable backend.
+# Why package-dir matters: the numpyto_* translators live under
+# hpcagent_bench/numpy_translators/src but keep their top-level import names, so each is mapped to
+# its src location. Without the mapping (the legacy `setup.py develop` path, which ignores it)
+# `import numpyto_common` raises ModuleNotFoundError -- which is exactly what broke the judge
+# container once already.
 [build-system]
 requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "hpcagent_bench"
+version = "0.1"
+description = "HPCAgent-Bench"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "GPL-3.0-or-later"
+authors = [{ name = "SPCL @ ETH Zurich", email = "yakupkoray.budanaz@inf.ethz.ch" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+
+# What the LIBRARY itself needs to import -- every module-level third-party import under
+# hpcagent_bench/ outside benchmarks/ and tests/. The FRAMEWORK MATRIX (torch/jax/tvm/triton/
+# numba/pythran/xgboost + the hdf5/netcdf bindings) is hardware-dependent and chosen per platform,
+# so it lives in the extras below rather than here.
+#
+# Without this, an install of hpcagent_bench yields an unimportable package: it resolves ZERO
+# dependencies. That was survivable only because every in-repo consumer installed a platform
+# extra first; a downstream consumer doing the plain install gets ModuleNotFoundError one dep at
+# a time (sqlmodel, via hpcagent_bench/frameworks/schema.py, is how this surfaced).
+#
+# dace is deliberately ABSENT here and is an extra instead: the PyPI wheel is an old release that
+# imports the numpy-2-removed ``np.int``, so it is sourced from spcl/dace@extended.
+dependencies = [
+    "numpy>=2,<3",  # the array type of every benchmark + translator signature
+    "scipy",  # hpcagent_bench/support/helpers/sparse/generators.py, plotting
+    "pandas",  # hpcagent_bench/plotting.py
+    "matplotlib",  # hpcagent_bench/plotting.py
+    "ml_dtypes",  # hpcagent_bench/precision.py -- the low-precision dtypes
+    "pyyaml",  # hpcagent_bench/config.py + languages.py, read at import
+    "sqlmodel",  # hpcagent_bench/frameworks/schema.py -- the typed results-DB schema
+    "jinja2",  # hpcagent_bench/harness/prompts.py
+    "cffi",  # hpcagent_bench/harness/native_call.py
+    "sympy",  # numpyto_common/lowering.py -- symbolic shape lowering
+    # The judge's reference digests. Keyed (the secret an agent must not hold), and its chunk tree
+    # parallelises on CPU and maps onto a GPU kernel -- measured 8.4 GB/s over 16 threads against
+    # stdlib blake2s's 0.29, because hashlib's blake2 is the plain-C reference. Pure-CPU with
+    # wheels on every platform, unlike cupy.
+    "blake3",
+]
+
+[project.urls]
+Homepage = "https://github.com/spcl/HPCAgent-Bench"
+
+[project.scripts]
+# The main CLI (serve / run / agent / ...). Without this the documented `hpcagent-bench
+# <subcommand>` is unreachable after an install.
+hpcagent-bench = "hpcagent_bench.cli:main"
+hpcagent-bench-install-apptainer = "hpcagent_bench.containers:install_apptainer_main"
+# The numpyto_* translator CLIs (folded in from the former standalone dist).
+numpyto = "numpyto_common.cli:main"
+numpyto_c = "numpyto_c.cli:main"
+numpyto_fortran = "numpyto_fortran.cli:main"
+numpyto_cupy = "numpyto_cupy.cli:main"
+numpyto_numba = "numpyto_numba.cli:main"
+numpyto_pythran = "numpyto_pythran.cli:main"
+
+# ---------------------------------------------------------------------------------------------
+# Extras. These WERE requirements/<hw>.txt, and they still say the same thing: the framework
+# matrix is hardware-dependent, so a platform picks one of cpu/nvidia/amd and never two. Stating
+# them here rather than in a requirements file is what makes them installable as ONE resolution
+# per job -- a resolver cannot see a constraint it is handed in a second, later `pip install`.
+#
+# cpu / nvidia / amd are mutually exclusive by construction: they carry different builds of the
+# same torch. Nothing enforces that mechanically now that there is no lock, so a job asks for
+# exactly one.
+# ---------------------------------------------------------------------------------------------
+[project.optional-dependencies]
+# The shared stack every platform grades through, with NOTHING whose build differs per accelerator.
+# torch, cupy, tvm and triton are deliberately absent: those are what make cpu/nvidia/amd different
+# from one another, and factoring them out is what lets the three extras below share one resolution
+# of everything else.
+frameworks = [
+    "pygount",
+    "jsonschema",
+    "setuptools",
+    "tree-sitter-language-pack",
+    "psutil",
+    "py-cpuinfo",
+    "GPUtil",
+    "ordered-set>=4.0.0",
+    "numba",
+    # pythran IS pinned, unlike dace: it is a third-party compiler this suite GRADES kernels
+    # through, and it moved under the gate. 0.19.0 landed between run 31842426040 (08-14) and
+    # 32065774711 (08-17) and turned subset_sum from green into a >600 s hang, then a SIG11 -- the
+    # kernel itself unchanged and still green on 0.18.1. Bump this in its own commit, and expect
+    # the e2e statuses to move with it.
+    "pythran==0.18.1",
+    "xgboost",
+    "h5py",
+    "netCDF4",
+    "islpy",
+    "z3-solver",
+]
+# A CPU box. torch must come from PyTorch's CPU index -- the default PyPI wheel is the CUDA build
+# and drags ~2.5 GB of nvidia-* wheels onto a runner with no GPU to use them on. An index cannot be
+# expressed in a PEP 508 requirement, so CPU jobs install torch from that index FIRST and this
+# extra then finds it already satisfied (see .github/actions/setup/action.yml).
+cpu = ["hpcagent_bench[frameworks]", "torch", "jax"]
+nvidia = [
+    "hpcagent_bench[frameworks]",
+    "torch",
+    "jax[cuda12]",
+    "cupy-cuda13x",
+    "apache-tvm>=0.25.0rc0",
+    "triton",
+    "mpi4py",
+]
+amd = [
+    "hpcagent_bench[frameworks]",
+    "torch",
+    "jax",
+    "apache-tvm>=0.25.0rc0",
+    "triton",
+    "mpi4py",
+]
+# The DaCe column. A direct reference to the BRANCH, never the PyPI wheel (that release imports
+# the numpy-2-removed ``np.int``) and never a commit: this suite grades kernels through dace and
+# the emitters target what extended supports TODAY, so every install re-resolves the branch tip.
+# A frozen capability set previously made the emitters work around gaps the branch had closed.
+#
+# The cost is real: tests/test_dace_numeric_agreement.py ratchets NUMERIC_BAD in BOTH directions,
+# so a dace commit landing between two runs is attributed to whichever optarena commit was in
+# flight. When a red is not explained by the optarena diff, compare the dace commit the two runs
+# reported in their job summary BEFORE touching a ratchet list.
+dace = ["dace @ git+https://github.com/spcl/dace.git@extended"]
+# The distributed track: the descriptor/driver codegen tests and their launcher.
+mpi = ["mpi4py", "pytest-mpi"]
+# Backends only the one job that grades that column wants.
+tvm = ["apache-tvm>=0.25.0rc0", "apache-tvm-ffi>=0.1.12"]
+triton = ["triton"]
+gt4py = ["gt4py"]
+# The HF dataset export.
+hf = ["pyarrow", "datasets>=2.17", "huggingface_hub"]
+# Agent backends. One per provider, so a run only installs the one it drives.
+agent-anthropic = ["anthropic"]
+agent-local = ["transformers", "huggingface-hub", "accelerate"]
+agent-aider = ["aider-chat"]
+agent-optimas = ["optimas-ai"]
+harbor = ["harbor"]
+
+# ---------------------------------------------------------------------------------------------
+# Dependency groups (PEP 735). Not extras: nothing that INSTALLS hpcagent_bench needs a test
+# runner, and a group is never published with the distribution. `pip install --group linting`
+# installs one WITHOUT the project, which is what keeps the format gate from resolving torch.
+# ---------------------------------------------------------------------------------------------
+[dependency-groups]
+testing = ["pytest", "pytest-timeout", "pytest-xdist", "pytest-cov", "coverage"]
+# The format gate. clang-format ships its binary in the wheel, which is why it is a python dep.
+linting = ["yapf", "fprettify", "clang-format", "pre-commit"]
+dev = [{ include-group = "testing" }, { include-group = "linting" }]
+
+[tool.setuptools]
+# The translators ship as part of THIS distribution (not a separate project) and keep their
+# top-level import names, so each maps to its location under numpy_translators/src.
+package-dir = { "" = ".", numpyto_c = "hpcagent_bench/numpy_translators/src/numpyto_c", numpyto_common = "hpcagent_bench/numpy_translators/src/numpyto_common", numpyto_cupy = "hpcagent_bench/numpy_translators/src/numpyto_cupy", numpyto_fortran = "hpcagent_bench/numpy_translators/src/numpyto_fortran", numpyto_jax = "hpcagent_bench/numpy_translators/src/numpyto_jax", numpyto_numba = "hpcagent_bench/numpy_translators/src/numpyto_numba", numpyto_pythran = "hpcagent_bench/numpy_translators/src/numpyto_pythran" }
+include-package-data = true
+
+[tool.setuptools.packages.find]
+# TWO roots: the repo itself and the translator src tree. setup.py called find_packages twice for
+# exactly this and concatenated the results.
+where = [".", "hpcagent_bench/numpy_translators/src"]
+include = ["hpcagent_bench*", "numpyto_*"]
+exclude = ["hpcagent_bench.numpy_translators*"]
+
+[tool.setuptools.package-data]
+# Ship the library's data files. include-package-data alone is not enough for a wheel build:
+# without an active VCS file-finder it silently drops these (config.yaml is loaded at import by
+# config.py; the schema/taxonomy/env specs by spec.py / languages.py).
+hpcagent_bench = [
+    "config.yaml",
+    "container_backends.txt",
+    "envs/*.yaml",
+    # A build input, not data: CPU_BASELINE_GCC -include's it on every gcc/g++ compile, so without
+    # it native C/C++ kernels do not compile from a wheel.
+    "envs/vecmath.h",
+    # GENERATED headers an agent compiles into its own source, reached with
+    # -I<prefix>/hpcagent_bench/helpers. Data from this package's point of view, a build input from
+    # the agent's: without it the documented include line does not resolve from a wheel.
+    "helpers/*/*.h",
+    # Skills + tool fragments injected into the agent prompt (harness/prompts.py load_skills /
+    # tool_fragments). Top-level package data, not source.
+    "skills/*/SKILL.md",
+    # Scripts a skill page tells the reader to RUN (opt-reports/loop_report.py). Data from the
+    # package's point of view; without them the page documents a missing command.
+    "skills/*/*.py",
+    "tools/*.md",
+]
 
 # ---------------------------------------------------------------------------------------------
 # Coverage. Collected in CI by setting PYTEST_ADDOPTS at the JOB level rather than editing each of
