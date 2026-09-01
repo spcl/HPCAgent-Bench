@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Set
 from numpyto_common import dtypes
 from numpyto_common.frontend import fold_shape_expr
 from numpyto_common.ir import KernelIR, shape_dimension_symbols
+from numpyto_common.lib_nodes import shape_exprs_equal
 from numpyto_common.lowering import lower
 from numpyto_common.numpy_desugar import _AUG_OP_SRC, desugar_for_python_backend, expr_rank, rank_table
 from numpyto_common.ordered import OrderedSet
@@ -1451,7 +1452,16 @@ class ResolveShapeReads(ast.NodeTransformer):
             return None if base is None else list(reversed(base))
         if isinstance(node, ast.Subscript):
             return self.sliced(node)
-        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+        if not isinstance(node, ast.Call):
+            return None
+        if isinstance(node.func, ast.Name):
+            # A scalar builtin over rank-0 arguments is rank 0. cp2k_grid_integrate reads its
+            # angular momenta as ``lamax = int(la_max[task])``, and leaving that rankless poisoned
+            # every extent downstream of it -- lp, nlp, and the index grids built from nlp.
+            if node.func.id not in _SCALAR_BUILTINS or not all(self.infer(a) == [] for a in node.args):
+                return None
+            return []
+        if not isinstance(node.func, ast.Attribute):
             return None
         name, args = node.func.attr, node.args
         if name in _ALLOC_FUNCS and args:
@@ -1464,6 +1474,23 @@ class ResolveShapeReads(ast.NodeTransformer):
             return self.broadcast(args)
         if name == "dot" and len(args) == 2:
             return self.dotted(args)
+        if name == "arange":
+            return self.aranged(args)
+        return None
+
+    def aranged(self, args: List[ast.expr]) -> Optional[List[str]]:
+        """``np.arange`` is rank 1 and its extent is EXACT: the stop for one argument, the span for
+        two. A step makes it a ceiling division this declines to spell rather than guess.
+
+        Without this an index grid poisons every expression it reaches. cp2k_grid_integrate builds
+        its degree masks as ``np.arange(nlp)[:, None, None]``; the ``arange`` was rankless, so the
+        whole ``(zi <= si) & (yi + xi <= lp - si)`` condition was, and the fill that
+        :class:`BroadcastScalarWhere` exists to apply never fired.
+        """
+        if len(args) == 1:
+            return [ast.unparse(args[0])]
+        if len(args) == 2:
+            return [f"({ast.unparse(args[1])}) - ({ast.unparse(args[0])})"]
         return None
 
     def dotted(self, args: List[ast.expr]) -> Optional[List[str]]:
@@ -1543,11 +1570,16 @@ class ResolveShapeReads(ast.NodeTransformer):
     def broadcast(self, operands: List[ast.expr]) -> Optional[List[str]]:
         """The broadcast shape of an elementwise operand list, or None when it is not certain.
 
-        Certain means: every operand's shape is known, and the widest one carries every extent --
-        an extent contributed by a shorter operand (``[bs, 1]`` against ``[bs, n]``) is refused
-        rather than worked out, since only the widest is read as the result. One unknown operand
-        poisons the result: taking the known side instead would adopt its RANK, and a rank-1 shape
-        read as a rank-2 value's is a miscompile rather than a refusal.
+        Numpy's own rule, applied exactly: align right, and each axis takes whichever operand
+        carries a non-1 extent there. Two operands disagreeing on a non-1 axis is refused -- numpy
+        raises on it too, so there is no answer to give. One unknown operand poisons the result:
+        taking the known side instead would adopt its RANK, and a rank-1 shape read as a rank-2
+        value's is a miscompile rather than a refusal.
+
+        Reading the widest operand alone -- what this did before -- is not the same thing and cost
+        cp2k_grid_integrate its rank: ``zi <= si`` pairs a ``[nlp, 1, 1]`` grid with a
+        ``[nlp, 1, 1, 1]`` one, so axis 1's extent lives only on the SHORTER side and the whole
+        condition came back unknown.
         """
         shapes: List[List[str]] = []
         for operand in operands:
@@ -1555,13 +1587,17 @@ class ResolveShapeReads(ast.NodeTransformer):
             if shape is None:
                 return None
             shapes.append(shape)
-        widest: List[str] = max(shapes, key=len, default=[])
+        result: List[str] = list(max(shapes, key=len, default=[]))
         for shape in shapes:
-            tail = widest[len(widest) - len(shape):]
-            # Canonically: an extent reached two ways is spelled two ways.
-            if any(extent != "1" and self.canon(extent) != self.canon(wide) for extent, wide in zip(shape, tail)):
-                return None
-        return widest
+            offset = len(result) - len(shape)
+            for axis, extent in enumerate(shape):
+                standing = result[offset + axis]
+                if standing == "1":
+                    result[offset + axis] = extent
+                # Canonically: an extent reached two ways is spelled two ways.
+                elif extent != "1" and self.canon(extent) != self.canon(standing):
+                    return None
+        return result
 
 
 _ALLOC_FUNCS = frozenset({"zeros", "empty", "ones", "full"})
@@ -1579,12 +1615,14 @@ def is_scalar_literal(node: ast.AST) -> bool:
 
 
 class BroadcastScalarWhere(ResolveShapeReads):
-    """Fill one branch of ``np.where(cond, -1.0, 1.0)`` to the condition's shape.
+    """Fill a scalar branch of ``np.where`` to the condition's shape where the branches under-size it.
 
-    DaCe sizes a ``where`` from its BRANCHES only, so two scalar branches leave the result shapeless
-    and it refuses with "Both x and y cannot be scalars in numpy.where". Filling the first branch to
-    the condition's own extents keeps numpy's answer exactly -- numpy broadcasts all three operands,
-    and the fill contributes the extents the condition already had.
+    DaCe sizes a ``where`` from its BRANCHES only. Two scalar branches leave the result shapeless and
+    it refuses outright ("Both x and y cannot be scalars in numpy.where"); one scalar branch beside a
+    NARROWER array branch is worse, because it answers -- with a result a rank short of numpy's, and
+    the refusal lands later, on whatever reads the missing axis. Filling the scalar branch to the
+    condition's own extents keeps numpy's answer exactly: numpy broadcasts all three operands, and
+    the fill contributes the extents the condition already had.
 
     Inference is the base class's, which poisons on an unknown operand: ``x @ w + bias`` taking
     ``bias``'s rank-1 shape is a miscompile for a fill and for a ``.shape`` read alike.
@@ -1596,13 +1634,26 @@ class BroadcastScalarWhere(ResolveShapeReads):
                 and isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy")
                 and len(node.args) == 3 and not node.keywords):
             return node
-        if not (is_scalar_literal(node.args[1]) and is_scalar_literal(node.args[2])):
+        scalars = [k for k in (1, 2) if is_scalar_literal(node.args[k])]
+        if not scalars:
             return node
         shape = self.infer(node.args[0])
         if not shape:
             return node  # unknown, or a scalar condition: an invented extent would be a miscompile
+        if len(scalars) == 1:
+            # One array branch: dace sizes the result from it alone, so a WIDER condition comes out
+            # a rank short of what numpy gives. cp2k_grid_integrate's
+            # ``np.where(<4-D mask>, cxyz[:nlp, :nlp, :nlp], 0.0)`` became rank 3, and the
+            # ``np.tensordot(gated, ..., axes=([3], [2]))`` that reads it said only "Axes for left
+            # tensor are out-of-bounds" -- the rank was already lost two statements earlier. Filled
+            # only where the condition is WIDER: at equal rank the branches already carry it, and
+            # materialising a fill there costs a temp the size of the result for nothing.
+            other = self.infer(node.args[3 - scalars[0]])
+            if not other or len(shape) <= len(other):
+                return node
         extents = ", ".join(shape) + ("," if len(shape) == 1 else "")
-        node.args[1] = ast.parse(f"np.full(({extents}), {ast.unparse(node.args[1])})", mode="eval").body
+        fill = scalars[0]
+        node.args[fill] = ast.parse(f"np.full(({extents}), {ast.unparse(node.args[fill])})", mode="eval").body
         return ast.fix_missing_locations(node)
 
 
@@ -1988,6 +2039,45 @@ def _scan_size_assigns(fn_ast: ast.AST, targets: set):
     return first_rhs, order, reassigned
 
 
+def once_bound_locals(fn_ast: ast.AST, known: set) -> set:
+    """Body locals bound EXACTLY once and never written through a subscript.
+
+    One binding is what makes a name substitutable at all: a second one, or an ``x[...] = ...``,
+    makes the name data whose value depends on where in the body it is read.
+    """
+    bindings: dict[str, int] = {}
+    stored: set[str] = set()
+    for node in ast.walk(fn_ast):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            bindings[node.id] = bindings.get(node.id, 0) + 1  # every rebinding: assign, augassign, for, walrus
+        elif isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Store) and isinstance(node.value, ast.Name):
+            stored.add(node.value.id)  # ``x[...] = ...`` is data, and a name cannot be both data and symbol
+    return {nm for nm, count in bindings.items() if count == 1 and nm not in stored and nm not in known}
+
+
+def constant_int_locals(fn_ast: ast.AST, known: set) -> set:
+    """Body locals bound ONCE to a CONSTANT integer expression -- inlinable as that constant.
+
+    dace folds such a local inside arithmetic, but NOT in a slice bound: sw4_rhs4sg's ``IC = 2``
+    reaches ``strx[IC:N_I - 2]`` as data and the frontend mints ``__sym_IC`` for it, which it then
+    cannot prove equal to the ``__sym_IM2`` minted for the ``IM2 = 0`` two lines above -- two
+    windows of one array that differ by a constant come out as unrelated extents. Substituting the
+    literal is what the numpy reference already means, and leaves the frontend one expression.
+
+    Distinct from :func:`mintable_int_locals`, which requires the definition to READ a symbol:
+    minting a dc.symbol for a constant only adds one the caller then has to bind, while inlining it
+    adds nothing at all.
+    """
+    once = once_bound_locals(fn_ast, known)
+    first_rhs, order, _ = _scan_size_assigns(fn_ast, once)
+    return {
+        nm
+        for nm in order if _is_symbol_expr(first_rhs[nm], set()) and not any(
+            isinstance(sub, ast.Name) or (isinstance(sub, ast.Constant) and isinstance(sub.value, bool))
+            for sub in ast.walk(first_rhs[nm]))
+    }
+
+
 def mintable_int_locals(fn_ast: ast.AST, symbols: set, known: set) -> set:
     """Body locals bound ONCE to an integer expression over declared symbols -- mintable as dc.symbols.
 
@@ -2000,15 +2090,7 @@ def mintable_int_locals(fn_ast: ast.AST, symbols: set, known: set) -> set:
     scalar (``c = 2 * alpha``) both read as integer symbol expressions against ``known``, and either
     one minted as an int64 symbol is a wrong answer rather than a refusal.
     """
-    bindings: dict[str, int] = {}
-    stored: set[str] = set()
-    for node in ast.walk(fn_ast):
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
-            bindings[node.id] = bindings.get(node.id, 0) + 1  # every rebinding: assign, augassign, for, walrus
-        elif isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Store) and isinstance(node.value, ast.Name):
-            stored.add(node.value.id)  # ``x[...] = ...`` is data, and a name cannot be both data and symbol
-    once = {nm for nm, count in bindings.items() if count == 1 and nm not in stored and nm not in known}
-    first_rhs, order, _ = _scan_size_assigns(fn_ast, once)
+    first_rhs, order, _ = _scan_size_assigns(fn_ast, once_bound_locals(fn_ast, known))
     cand: set[str] = set()
     while True:  # least fixed point: a name qualifies once every name its definition reads does
         atoms = symbols | cand
@@ -2080,16 +2162,429 @@ def fold_expr(node: ast.AST) -> ast.AST:
         return node
 
 
+#: Calls the DaCe frontend has no replacement for. Reaching one makes it a CALLBACK -- an opaque
+#: Python call whose return type it cannot infer ("Trying to operate on a callback return value with
+#: an undefined type"), so the parse fails and, where it does not, the kernel is no longer a kernel.
+#: Every entry here is lowered by :class:`LowerCallsDaceCannotReplace` into forms dace does have:
+#: its ufuncs, its BLAS ``Dot`` node, plain subscripts, or an explicit loop.
+CALLS_WITHOUT_A_DACE_REPLACEMENT = ("take", "round", "searchsorted", "linalg.norm", "fft.fftfreq", "ufunc.at")
+
+
+def np_call_name(node: ast.AST) -> Optional[str]:
+    """``np.take`` -> ``"take"``, ``np.linalg.norm`` -> ``"linalg.norm"``, else None."""
+    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+        return None
+    base = node.func.value
+    if isinstance(base, ast.Name) and base.id in ("np", "numpy"):
+        return node.func.attr
+    if isinstance(base, ast.Attribute) and isinstance(base.value, ast.Name) and base.value.id in ("np", "numpy"):
+        return f"{base.attr}.{node.func.attr}"
+    return None
+
+
+def kwarg_value(node: ast.Call, name: str, position: int) -> Optional[ast.expr]:
+    """The argument bound to ``name``, whether it was passed by keyword or at ``position``."""
+    for kw in node.keywords:
+        if kw.arg == name:
+            return kw.value
+    return node.args[position] if len(node.args) > position else None
+
+
+def parse_expr(text: str) -> ast.expr:
+    """One expression, parsed. The lowerings below are clearer written out than built node by node."""
+    return ast.parse(text, mode="eval").body
+
+
+#: Calls that hand back their operand's shape unchanged, so a rank propagates straight through one.
+RANK_PRESERVING_CALLS = ("copy", "asarray", "ascontiguousarray", "array", "ravel", "conj", "conjugate")
+
+
+def ranks_including_aliases(fn_ast: ast.AST, declared: Dict[str, int]) -> Dict[str, int]:
+    """Ranks of the declared arrays, carried across the aliases the desugars mint.
+
+    ``np.searchsorted``'s sorted operand is materialised into ``__ss0 = np.ascontiguousarray(egrid)``
+    before this ever runs, and a lowering that only knows the DECLARED names sees a rank it cannot
+    read and declines -- leaving the very callback it exists to remove.
+    """
+    ranks = dict(declared)
+    assigns = [
+        node for node in ast.walk(fn_ast)
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+    ]
+    for _ in range(len(assigns) + 1):
+        grown = False
+        for node in assigns:
+            name = node.targets[0].id
+            if name in ranks:
+                continue
+            rank = rank_of(node.value, ranks)
+            if rank is not None:
+                ranks[name] = rank
+                grown = True
+        if not grown:
+            break
+    return ranks
+
+
+def rank_of(source: ast.expr, ranks: Dict[str, int]) -> Optional[int]:
+    """Rank of one right-hand side, when a reshape, a subscript or a pass-through decides it."""
+    if isinstance(source, ast.Name):
+        return ranks.get(source.id)
+    if isinstance(source, ast.Subscript):
+        return rank_of_subscript(source, ranks)
+    if isinstance(source, ast.UnaryOp):
+        return rank_of(source.operand, ranks)
+    if isinstance(source, ast.BinOp):  # broadcast: the wider operand decides
+        left, right = rank_of(source.left, ranks), rank_of(source.right, ranks)
+        return max(left, right) if left is not None and right is not None else None
+    if not isinstance(source, ast.Call):
+        return None
+    if np_call_name(source) in RANK_PRESERVING_CALLS and source.args:
+        return rank_of(source.args[0], ranks)
+    if np_call_name(source) == "reshape" and len(source.args) == 2:
+        return len(source.args[1].elts) if isinstance(source.args[1], ast.Tuple) else 1
+    if not isinstance(source.func, ast.Attribute):
+        return None
+    attr = source.func.attr
+    if attr in ("ravel", "flatten"):
+        return 1
+    if attr == "reshape" and source.args:
+        return len(source.args[0].elts) if isinstance(source.args[0], ast.Tuple) else len(source.args)
+    if attr in RANK_PRESERVING_CALLS or attr == "astype":
+        return rank_of(source.func.value, ranks)
+    return None
+
+
+def rank_of_subscript(node: ast.Subscript, ranks: Dict[str, int]) -> Optional[int]:
+    """Rank a subscript leaves: a slice keeps its axis, an integer drops it, ``None`` adds one.
+
+    ls3df reaches ``np.linalg.norm`` through ``psi_frag[f][..., 0]``, so a rank map that stops at
+    the declared arrays cannot tell whether the operand is the vector the norm is defined for.
+    An index that is itself an ARRAY replaces the axis with its own rank, which is why a known
+    index rank is read rather than assumed to be a scalar.
+    """
+    base = rank_of(node.value, ranks)
+    if base is None:
+        return None
+    elements = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
+    kept, consumed = 0, 0
+    for element in elements:
+        if isinstance(element, ast.Constant) and element.value is Ellipsis:
+            continue  # stands for the axes nothing else indexes, which the tail below already keeps
+        if isinstance(element, ast.Constant) and element.value is None:
+            kept += 1  # np.newaxis consumes no axis of the operand
+            continue
+        consumed += 1
+        if isinstance(element, ast.Slice):
+            kept += 1
+        elif isinstance(element, ast.Name):
+            kept += max(ranks.get(element.id, 0), 0)  # an index ARRAY puts its own rank in place
+    if consumed > base:
+        return None
+    return kept + base - consumed  # every axis no element indexes stays, ellipsis written or not
+
+
+class LowerCallsDaceCannotReplace(ast.NodeTransformer):
+    """Rewrite every call in :data:`CALLS_WITHOUT_A_DACE_REPLACEMENT` into something dace replaces.
+
+    dace covers 90 numpy ufuncs and ~150 named functions; what it does not cover it turns into a
+    callback, and a callback is not a kernel -- it is a Python call the code generator cannot see
+    into, schedule, or type. Six spellings in the corpus land there, and each has an exact
+    equivalent dace does implement:
+
+    ``np.take``          a plain subscript -- dace already lowers an index-array gather
+    ``np.add.at``        the scatter loop it is defined as; sequential, because the indices repeat
+    ``np.searchsorted``  the binary search, NOT a scan: xsbench looks up tens of thousands of edges
+    ``np.linalg.norm``   ``sqrt(dot(v, v))``, which reaches the BLAS ``Dot`` library node
+    ``np.fft.fftfreq``   its closed form; it is a frequency ladder, not a transform
+    ``np.round``         floor-and-correct, keeping numpy's round-HALF-TO-EVEN
+
+    A form outside what each handler proves is left alone rather than guessed at: the parse then
+    fails on the callback, which is the honest outcome. Runs before the ``.shape`` passes so the
+    extents these emit are resolved with every other one.
+    """
+
+    def __init__(self, ranks: Dict[str, int], complex_arrays: Optional[Set[str]] = None):
+        self.ranks = ranks
+        self.complex_arrays = complex_arrays or set()
+        self.counter = 0
+        self.prelude: List[ast.stmt] = []
+        self.changed = False
+
+    def temp(self, stem: str) -> str:
+        self.counter += 1
+        return f"__{stem}{self.counter - 1}"
+
+    def bind(self, stem: str, value: ast.expr) -> ast.Name:
+        """Evaluate ``value`` once into a fresh name -- these lowerings read their operand twice."""
+        name = self.temp(stem)
+        self.prelude.append(ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=value))
+        return ast.Name(id=name, ctx=ast.Load())
+
+    def block(self, stmts: List[ast.stmt]) -> List[ast.stmt]:
+        """Visit one statement list, splicing each statement's prelude in above it."""
+        out: List[ast.stmt] = []
+        for stmt in stmts:
+            outer, self.prelude = self.prelude, []
+            lowered = self.scatter_loop(stmt)
+            lowered = self.visit(stmt) if lowered is None else lowered
+            out.extend(self.prelude)
+            out.extend(lowered if isinstance(lowered, list) else [lowered])
+            self.prelude = outer
+        for stmt in out:
+            ast.fix_missing_locations(stmt)
+        return out
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
+        node.body = self.block(node.body)
+        return node
+
+    def visit_For(self, node: ast.For) -> ast.AST:
+        node.iter = self.visit(node.iter)
+        node.body, node.orelse = self.block(node.body), self.block(node.orelse)
+        return node
+
+    def visit_While(self, node: ast.While) -> ast.AST:
+        node.test = self.visit(node.test)
+        node.body, node.orelse = self.block(node.body), self.block(node.orelse)
+        return node
+
+    def visit_If(self, node: ast.If) -> ast.AST:
+        node.test = self.visit(node.test)
+        node.body, node.orelse = self.block(node.body), self.block(node.orelse)
+        return node
+
+    def scatter_loop(self, stmt: ast.stmt) -> Optional[List[ast.stmt]]:
+        """``np.add.at(a, idx, v)`` -> the loop nest it is defined as, or None if not one.
+
+        A statement, never an expression: ``add.at`` returns nothing and exists precisely because
+        ``a[idx] += v`` drops every repeat. The indices DO repeat here -- lulesh scatters element
+        forces onto shared nodes -- so the loop stays sequential and accumulates each one.
+        """
+        if not (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)):
+            return None
+        call = stmt.value
+        func = call.func
+        if not (isinstance(func, ast.Attribute) and func.attr == "at" and isinstance(func.value, ast.Attribute)):
+            return None
+        base = func.value
+        if not (isinstance(base.value, ast.Name) and base.value.id in ("np", "numpy") and base.attr == "add"):
+            return None
+        if len(call.args) != 3 or not isinstance(call.args[1], ast.Name):
+            return None
+        target, index, value = call.args
+        rank = self.ranks.get(index.id)
+        if rank is None or rank < 1:
+            return None
+        stem = self.temp("scatter")
+        iters = [f"{stem}_{k}" for k in range(rank)]
+        at = ", ".join(iters)
+        body = (f"{ast.unparse(target)}[{ast.unparse(index)}[{at}]] += {ast.unparse(value)}[{at}]")
+        for depth in reversed(range(rank)):
+            body = f"for {iters[depth]} in range({ast.unparse(index)}.shape[{depth}]):\n" + indent_block(body)
+        self.changed = True
+        return [ast.copy_location(new, stmt) for new in ast.parse(body).body]
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        self.generic_visit(node)
+        name = np_call_name(node)
+        handler = {
+            "take": self.take,
+            "round": self.round_half_to_even,
+            "searchsorted": self.searchsorted,
+            "linalg.norm": self.norm,
+            "fft.fftfreq": self.fftfreq,
+        }.get(name)
+        if handler is None:
+            return node
+        lowered = handler(node)
+        if lowered is None:
+            return node
+        self.changed = True
+        return ast.copy_location(lowered, node)
+
+    def take(self, node: ast.Call) -> Optional[ast.expr]:
+        """``np.take(a, i, axis=k)`` -> ``a[:, .., i]``. dace lowers an index-array gather already.
+
+        An absent axis flattens ``a`` first, so it is only the same subscript when ``a`` is already
+        rank 1 -- otherwise this leaves the call alone rather than silently gathering a wrong axis.
+        """
+        if len(node.args) < 2:
+            return None
+        source, index = node.args[0], node.args[1]
+        axis = kwarg_value(node, "axis", 2)
+        if axis is None:
+            if not (isinstance(source, ast.Name) and self.ranks.get(source.id) == 1):
+                return None
+            leading = 0
+        elif isinstance(axis, ast.Constant) and isinstance(axis.value, int) and axis.value >= 0:
+            leading = axis.value
+        else:
+            return None
+        return parse_expr(f"{ast.unparse(source)}[{', '.join([':'] * leading + [ast.unparse(index)])}]")
+
+    def round_half_to_even(self, node: ast.Call) -> Optional[ast.expr]:
+        """``np.round(x)`` -> floor-and-correct. numpy rounds a HALF to the EVEN neighbour.
+
+        ``floor(x + 0.5)`` alone disagrees on every exact half -- 2.5 goes to 3 where numpy gives 2 --
+        and histogram_equalization feeds the result to a lookup table the oracle compares elementwise.
+        """
+        if len(node.args) != 1 or node.keywords:
+            return None
+        value = self.bind("round_x", node.args[0])
+        up = self.bind("round_up", parse_expr(f"np.floor({ast.unparse(value)} + 0.5)"))
+        return parse_expr(f"np.where(({ast.unparse(up)} - {ast.unparse(value)} == 0.5) & "
+                          f"(np.mod({ast.unparse(up)}, 2.0) != 0.0), {ast.unparse(up)} - 1.0, {ast.unparse(up)})")
+
+    def norm(self, node: ast.Call) -> Optional[ast.expr]:
+        """``np.linalg.norm(v)`` -> the 2-norm of the flattened operand, which is what it is defined as.
+
+        With neither ``ord`` nor ``axis`` numpy returns the 2-norm of ``v.ravel()`` at ANY rank, so
+        the lowering holds for the rank-3 fragment ls3df passes as much as for a vector. A rank-1
+        operand goes through ``np.dot``, which dace expands to its BLAS ``Dot`` library node -- but only
+        when it is PROVABLY real. Everything else takes ``sum(abs(v) ** 2)``, numpy's own definition
+        and the only form that also holds for a complex operand: ``v * v`` and ``dot(v, v)`` both drop
+        the conjugate there and return a different number.
+
+        Anything with an ``ord`` or an ``axis`` asks for a different quantity and is left alone.
+        """
+        if len(node.args) != 1 or node.keywords or not isinstance(node.args[0], ast.Name):
+            return None
+        name = node.args[0].id
+        if self.ranks.get(name) == 1 and name not in self.complex_arrays:
+            return parse_expr(f"np.sqrt(np.dot({name}, {name}))")
+        return parse_expr(f"np.sqrt(np.sum(np.abs({name}) ** 2))")
+
+    def fftfreq(self, node: ast.Call) -> Optional[ast.expr]:
+        """``np.fft.fftfreq(n, d)`` -> its closed form: a frequency ladder, not a transform.
+
+        The second half of the ladder is NEGATIVE -- bin ``k`` past the midpoint stands for ``k - n``
+        -- which is the whole content of the function and the part a naive ``arange / (n * d)` drops.
+        """
+        if not node.args:
+            return None
+        count = ast.unparse(node.args[0])
+        spacing = kwarg_value(node, "d", 1)
+        step = "1.0" if spacing is None else ast.unparse(spacing)
+        ladder = self.bind("fftfreq_k", parse_expr(f"np.arange({count})"))
+        k = ast.unparse(ladder)
+        return parse_expr(f"np.where({k} < ({count} + 1) // 2, {k}, {k} - {count}) / ({count} * {step})")
+
+    def searchsorted(self, node: ast.Call) -> Optional[ast.expr]:
+        """``np.searchsorted(a, v, side)`` -> a binary search per element of ``v``.
+
+        A binary search, not a linear count: numpy's is O(log n) per element and xsbench looks up a
+        unionized grid of tens of thousands of edges. Counting would return the same indices and
+        change the kernel's complexity class, which is the one thing a benchmark may not do.
+
+        ``side='left'`` counts the entries STRICTLY below the value, ``'right'`` those at or below --
+        one comparison apart, and that difference is exactly what a bin lookup's ``- 1`` relies on.
+        """
+        if len(node.args) < 2 or not all(isinstance(a, ast.Name) for a in node.args[:2]):
+            return None
+        table, values = ast.unparse(node.args[0]), ast.unparse(node.args[1])
+        if self.ranks.get(node.args[0].id) != 1 or self.ranks.get(node.args[1].id) != 1:
+            return None
+        side_node = kwarg_value(node, "side", 2)
+        side = "left" if side_node is None else (side_node.value if isinstance(side_node, ast.Constant) else None)
+        if side not in ("left", "right"):
+            return None
+        stem = self.temp("bisect")
+        below = "<=" if side == "right" else "<"
+        self.prelude.extend(
+            ast.parse(f"{stem} = np.zeros({values}.shape[0], dtype=np.int64)\n"
+                      f"for {stem}_i in range({values}.shape[0]):\n"
+                      f"    {stem}_lo = 0\n"
+                      f"    {stem}_hi = {table}.shape[0]\n"
+                      f"    while {stem}_lo < {stem}_hi:\n"
+                      f"        {stem}_mid = ({stem}_lo + {stem}_hi) // 2\n"
+                      f"        if {table}[{stem}_mid] {below} {values}[{stem}_i]:\n"
+                      f"            {stem}_lo = {stem}_mid + 1\n"
+                      f"        else:\n"
+                      f"            {stem}_hi = {stem}_mid\n"
+                      f"    {stem}[{stem}_i] = {stem}_lo\n").body)
+        return ast.Name(id=stem, ctx=ast.Load())
+
+
+def indent_block(text: str) -> str:
+    """Indent every line of a generated body by one level."""
+    return "\n".join("    " + line for line in text.splitlines())
+
+
+def names_a_clamp(node: ast.AST) -> bool:
+    """Whether ``node`` contains a ``min``/``max`` -- an expression dace does not fold.
+
+    Inlining one is what CREATES the second spelling this pass exists to remove. banded_mmt's
+    reference already names its bounds (``a_start = max(i - a_lbound, 0)``), and inlining them put
+    the clamp in two slices, where dace minted ``__sym_A_dense_slice`` and
+    ``__sym_A_dense_slice_0`` -- two opaque symbols for one bound, which it then cannot prove equal
+    to the ``__sym_expr_minus_expr`` it minted for the same difference on the other side. A name
+    left standing becomes ONE minted symbol every occurrence shares. Plain arithmetic is different:
+    dace evaluates it, so an inlined ``+``/``-``/``*`` chain folds to the same expression wherever
+    it lands.
+    """
+    return any(
+        isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name) and sub.func.id in ("min", "max")
+        for sub in ast.walk(node))
+
+
+def spell_aranges_with_named_lengths(fn_ast: ast.AST, known: set) -> None:
+    """``np.arange(lo, hi)`` -> ``np.arange(<n>) + lo`` where a local already NAMES ``hi - lo``.
+
+    dace hoists each data-dependent slice/arange bound into its own opaque symbol, one per
+    EXPRESSION: cp2k_grid_integrate's ``rel = np.arange(-span, span + 1)`` became
+    ``__sym_span_plus_1 - __sym_neg_span`` while the buffer it feeds, ``np.empty((lp + 1, nrel))``
+    with ``nrel = 2 * span + 1``, became ``__sym_nrel``. Both are the same length and dace has no
+    way to know it. Spelling the arange with the name the kernel already computed leaves ONE
+    symbol, and the write it feeds matches without anything having to be proved.
+
+    Only where the name is bound EARLIER IN THE SAME BLOCK: a binding in another branch does not
+    reach this arange, and one after it is not yet the length.
+    """
+    lengths: Dict[str, ast.expr] = {}
+    for name in once_bound_locals(fn_ast, known):
+        rhs = _scan_size_assigns(fn_ast, {name})[0].get(name)
+        if rhs is not None and _is_symbol_expr(rhs, {n.id for n in ast.walk(rhs) if isinstance(n, ast.Name)}):
+            lengths[name] = rhs
+    if not lengths:
+        return
+    for block in statement_lists(fn_ast):
+        seen: Dict[str, ast.expr] = {}
+        for stmt in block:
+            for node in ast.walk(stmt):
+                call = node.value if isinstance(node, ast.Assign) else None
+                if not (isinstance(call, ast.Call) and np_call_name(call) == "arange" and len(call.args) == 2
+                        and not call.keywords):
+                    continue
+                extent = f"({ast.unparse(call.args[1])}) - ({ast.unparse(call.args[0])})"
+                match = next((nm for nm, rhs in seen.items() if shape_exprs_equal(extent, ast.unparse(rhs))), None)
+                if match is None:
+                    continue
+                lo = call.args[0]
+                call.args = [ast.Name(id=match, ctx=ast.Load())]
+                # ``arange(n) - span``, not ``arange(n) + -span``: the negation is one more node for
+                # every consumer to carry, and dace spells the offset into every memlet that reads it.
+                if isinstance(lo, ast.UnaryOp) and isinstance(lo.op, ast.USub):
+                    node.value = ast.BinOp(left=call, op=ast.Sub(), right=lo.operand)
+                else:
+                    node.value = ast.BinOp(left=call, op=ast.Add(), right=lo)
+            bound = stmt.targets[0] if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 else None
+            if isinstance(bound, ast.Name) and bound.id in lengths:
+                seen[bound.id] = lengths[bound.id]
+    ast.fix_missing_locations(fn_ast)
+
+
 def _inline_symbol_aliases(fn_ast: ast.AST, symbols: set, known: set) -> ast.AST:
     """Inline a scalar that is a pure symbolic expression over existing dc.symbols rather than
     promoting it: a minted second name for one quantity is one dace cannot prove equal."""
-    shape_idents = _shape_ident_candidates(fn_ast, known) | mintable_int_locals(fn_ast, symbols, known)
+    shape_idents = (_shape_ident_candidates(fn_ast, known) | mintable_int_locals(fn_ast, symbols, known)
+                    | constant_int_locals(fn_ast, known))
     if not shape_idents:
         return fn_ast
     first_rhs, order, reassigned = _scan_size_assigns(fn_ast, shape_idents)
     alias: Dict[str, ast.AST] = {}
     for nm in order:
-        if nm in reassigned:
+        if nm in reassigned or names_a_clamp(first_rhs[nm]):
             continue
         if _is_symbol_expr(first_rhs[nm], symbols | set(alias)):
             # Folded at every splice, or a deep net nests one layer's extent inside the next until
@@ -2447,6 +2942,12 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
     # Tuple assignment first, so the shape passes below see the subscript spelling they resolve.
     fn_ast = SplitTupleAssign().visit(fn_ast)
     ast.fix_missing_locations(fn_ast)
+    # Before every .shape pass: what dace has no replacement for becomes a callback, and the
+    # lowerings below spell their extents as .shape reads for those passes to resolve like any other.
+    declared_ranks = {nm: len(dims) for nm, dims in arr_shapes.items()}
+    complex_arrays = {nm for nm, dt in arr_dtypes.items() if "complex" in dt}
+    fn_ast = LowerCallsDaceCannotReplace(ranks_including_aliases(fn_ast, declared_ranks), complex_arrays).visit(fn_ast)
+    ast.fix_missing_locations(fn_ast)
     fn_ast = _ShapeToSymbol(arr_shapes).visit(fn_ast)
     # ... and every remaining .shape read, including on a transient: one unresolved read makes the
     # enclosing size expression non-symbolic, and promotion is all-or-nothing.
@@ -2466,6 +2967,8 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
     # the whole point of the inliner is that one quantity keeps one spelling.
     fn_ast = StripIdentityIntCasts(set(symbol_names) | loop_syms).visit(fn_ast)
     ast.fix_missing_locations(fn_ast)
+    # Before any inlining: the length name this reads has to still be standing.
+    spell_aranges_with_named_lengths(fn_ast, set(arrays) | set(scalars) | set(symbol_names))
     fn_ast = _inline_symbol_aliases(fn_ast,
                                     set(symbol_names) | loop_syms,
                                     set(arrays) | set(scalars) | set(symbol_names))
