@@ -299,14 +299,59 @@ def ratchet_findings(items: Iterable[Tuple[str, dict]]) -> Tuple[List[str], Set[
     return regressions, fixed
 
 
+def corpus_kernels() -> Set[str]:
+    """Every kernel in the registry that HAS a numpy reference, keyed the way :data:`REFUSED` is."""
+    from hpcagent_bench import paths
+    from hpcagent_bench.spec import KERNELS, BenchSpec
+    out: Set[str] = set()
+    for key in sorted(KERNELS):
+        spec = BenchSpec.load(key)
+        kdir = paths.BENCHMARKS / spec.relative_path
+        if (kdir / f"{spec.module_name}_numpy.py").exists():
+            out.add(str(spec.relative_path))
+    return out
+
+
 @pytest.mark.dace_frontend
 def test_the_refusal_list_names_kernels_that_exist() -> None:
     """A stale entry would silently excuse a kernel that no longer exists, and hide a real
-    regression behind a name nothing generates any more."""
-    generated = {kernel_of(p) for p in generated_programs()}
-    unknown = sorted(set(REFUSED) - generated)
-    assert not unknown, (f"REFUSED names kernels with no generated DaCe program: {unknown}. "
+    regression behind a name nothing generates any more.
+
+    Against the REGISTRY, not against what generated. Those are two different questions, and asking
+    the second silently answered the first wrong: a kernel whose dace EMIT fails writes no
+    ``*_dace.py`` at all, so it looked exactly like a deleted kernel and this test demanded its
+    removal -- which would have dropped the only record that it is refused. Measured 2026-09-01,
+    conv_transpose2d_add_min_gelu_multiply and conv_transpose3d_max_max_sum are both in that state.
+    :func:`test_every_kernel_emits_a_dace_program` is where that class is judged now.
+    """
+    unknown = sorted(set(REFUSED) - corpus_kernels())
+    assert not unknown, (f"REFUSED names kernels that are not in the corpus: {unknown}. "
                          "Remove them -- an entry that matches nothing excuses nothing.")
+
+
+@pytest.mark.dace_frontend
+def test_every_kernel_emits_a_dace_program() -> None:
+    """A kernel the EMITTER cannot render has no program to parse, and so cannot be judged by the
+    ratchet at all -- it is absent from the sweep rather than failing it.
+
+    That is a strictly worse failure than a refusal: a refused kernel is on :data:`REFUSED` with a
+    cause, while an unemittable one is silent, because ``autogen.ensure`` reports a per-target emit
+    failure as a STATUS its callers are free to ignore. The two cases this gate was written against
+    both rendered an ``if`` with an empty body -- ``_SplitReassignedSize`` dropped what it took for
+    a size symbol's defining assignment while that assignment was in fact one of two conditional
+    bindings, and a branch with no statements is not valid Python -- and died in the emitter's own
+    ``ast.parse`` self-check, silently.
+    """
+    from hpcagent_bench import autogen
+    from hpcagent_bench.spec import BenchSpec
+    # generated_programs() is fingerprint-cached and the ratchet runs it anyway; a corpus kernel it
+    # does not return is one whose emit failed. Only THOSE are re-emitted, for the reason.
+    missing = sorted(corpus_kernels() - {kernel_of(p) for p in generated_programs()})
+    failures = [
+        f"{key}: {autogen.emit_targets(BenchSpec.load(key), ['dace']).get('dace', 'no status')}" for key in missing
+    ]
+    assert not failures, ("kernels whose DaCe program does not EMIT, so the ratchet never sees them:\n  " +
+                          "\n  ".join(failures))
 
 
 @pytest.mark.dace_frontend

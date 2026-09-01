@@ -694,6 +694,83 @@ class _DesugarReverseSlice(ast.NodeTransformer):
         return node
 
 
+class DivisibleStridedSpan(ast.NodeTransformer):
+    """Respell a strided slice's stop so its length is DIVISIBLE by the step.
+
+    The tap-loop idiom every pooling and convolution port uses takes one wide strided slice per
+    kernel tap: ``padded[..., ky:ky + span:stride]`` with ``span = (out_len - 1) * stride + 1``. That
+    span is the tight one -- it stops exactly on the last element -- and it is what makes dace refuse
+    the write. dace sizes the slice as ``ceiling(span / stride)``, which for ``A * stride + 1``
+    simplifies to ``A + ceiling(1/stride)`` and no further: ``stride`` is a runtime scalar, so sympy
+    cannot rule out 0 and will not fold ``ceiling(1/stride)`` to 1. The accumulator it is added into
+    is ``A + 1`` long, spelled directly, and the two shapes then fail to broadcast even though they
+    are the same number.
+
+    Spelling the span ``(A + 1) * stride`` instead makes ``ceiling((A + 1) * stride / stride)`` fold
+    to ``A + 1`` exactly, matching the target with no assumption about ``stride`` at all. The slice
+    selects the SAME elements either way -- both yield ``A + 1`` of them for any ``stride >= 1``; only
+    the stop moves, from the last element to one full step past it, which a slice clamps.
+
+    Measured 2026-09-01 on average_pooling_2d: the tap accumulate went from the ``broadcast`` refusal
+    to parsed. This is the single largest cause on ``REFUSED`` (108 of 141 entries).
+    """
+
+    def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        self.generic_visit(node)
+        elements = node.slice.elts if isinstance(node.slice, ast.Tuple) else [node.slice]
+        for element in elements:
+            if isinstance(element, ast.Slice):
+                self.respell(element)
+        return node
+
+    def respell(self, element: ast.Slice) -> None:
+        """Rewrite ``lower : lower + (A * step + 1) : step`` in place to ``lower : lower + (A + 1) * step``."""
+        if element.step is None or element.upper is None:
+            return
+        step = ast.unparse(element.step)
+        span = self.span_expr(element)
+        if span is None:
+            return
+        # ``A * step + 1``: the multiplier must be the step ITSELF, or the rewrite changes which
+        # elements the slice picks rather than only where it stops.
+        if not (isinstance(span, ast.BinOp) and isinstance(span.op, ast.Add) and is_literal_one(span.right)):
+            return
+        product = span.left
+        if not (isinstance(product, ast.BinOp) and isinstance(product.op, ast.Mult)):
+            return
+        if ast.unparse(product.right) == step:
+            count = product.left
+        elif ast.unparse(product.left) == step:
+            count = product.right
+        else:
+            return
+        wider = ast.BinOp(op=ast.Mult(),
+                          left=ast.BinOp(left=count, op=ast.Add(), right=ast.Constant(value=1)),
+                          right=copy.deepcopy(element.step))
+        element.upper = wider if element.lower is None else ast.BinOp(
+            left=copy.deepcopy(element.lower), op=ast.Add(), right=wider)
+        ast.fix_missing_locations(element)
+
+    @staticmethod
+    def span_expr(element: ast.Slice) -> Optional[ast.expr]:
+        """The span out of ``upper``: ``upper`` itself when the slice starts at 0, else what is added
+        to ``lower``. A stop that is not ``lower + <span>`` is not this idiom."""
+        upper = element.upper
+        if element.lower is None:
+            return upper
+        lower = ast.unparse(element.lower)
+        if isinstance(upper, ast.BinOp) and isinstance(upper.op, ast.Add):
+            if ast.unparse(upper.left) == lower:
+                return upper.right
+            if ast.unparse(upper.right) == lower:
+                return upper.left
+        return None
+
+
+def is_literal_one(node: ast.AST) -> bool:
+    return isinstance(node, ast.Constant) and node.value == 1 and not isinstance(node.value, bool)
+
+
 class _DesugarArrayIteration(ast.NodeTransformer):
     """Rewrite 'for x in array' to an indexed range form -- dace's frontend rejects element iteration over an array."""
 
@@ -2675,11 +2752,35 @@ class _SplitReassignedSize(ast.NodeTransformer):
         self.names = set(names)
         self._defined = set()  # first assignment per name = the (dropped) def
         self._in_alloc_shape = False
+        self._droppable: Set[int] = set()
+
+    def visit_FunctionDef(self, node: ast.FunctionDef):
+        """Record which assignments are droppable BEFORE rewriting anything.
+
+        Only a statement of the function body itself is the symbol's definition. One inside an
+        ``if``/``for`` is a CONDITIONAL binding -- one of several -- and dropping it does two wrong
+        things: it loses the value on that path, and when it is the branch's only statement it
+        leaves an empty block, which is not valid Python. The emitter's own ``ast.parse`` self-check
+        then fails and the kernel gets no program at all, so the ratchet never even sees it
+        (conv_transpose2d_add_min_gelu_multiply, conv_transpose3d_max_max_sum -- both a
+        ``(0 if k - pad >= 0 else ...)`` ternary desugared into a two-branch assignment).
+
+        A conditional binding renames to ``<name>_iter`` like any reassignment instead; the prologue
+        seeds ``<name>_iter = <name>`` from the caller-bound symbol, so an unassigned path still
+        reads the value it read before.
+        """
+        self._droppable = {
+            id(stmt)
+            for stmt in node.body if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], ast.Name) and stmt.targets[0].id in self.names
+        }
+        self.generic_visit(node)
+        return node
 
     def visit_Assign(self, node: ast.Assign):
         if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in self.names:
             nm = node.targets[0].id
-            if nm not in self._defined:
+            if nm not in self._defined and id(node) in self._droppable:
                 self._defined.add(nm)
                 return None  # drop the defining assignment; the symbol value is caller-bound
         self.generic_visit(node)  # a reassignment: target + rhs uses rename to <name>_iter
@@ -2987,6 +3088,10 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
             break  # nothing new was exposed: another round would substitute the same names again
         previous = set(promotable)
         fn_ast = _inline_symbol_aliases(fn_ast, set(symbol_names) | set(promotable) | loop_syms, known)
+    # AFTER the alias inliner: the tap-loop span reaches here as the name ``span_h``, and only the
+    # inlining above turns it into the ``A * stride + 1`` this matches on.
+    fn_ast = DivisibleStridedSpan().visit(fn_ast)
+    ast.fix_missing_locations(fn_ast)
     # dace forbids a data-dependent array shape; promote body-computed size scalars to dc.symbols the caller binds.
     promoted, symbol_defs, reassigned = _plan_size_promotion(fn_ast,
                                                              set(arrays) | set(scalars) | set(symbol_names),

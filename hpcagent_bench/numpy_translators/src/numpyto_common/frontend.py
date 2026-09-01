@@ -4397,11 +4397,138 @@ def _shape_symbols(arrays: List[ArrayDesc]) -> Set[str]:
     return syms
 
 
+#: How far :func:`_caller_side_symbol` chases a shape symbol through the helper's own locals before
+#: giving up. A shape scalar built from one or two extents is the whole population; a deeper chain is
+#: a helper doing real work in its dimensions, which wants shape-generic parameters, not a longer
+#: substitution.
+EXTRA_SYM_DEPTH = 4
+
+
+def _sole_local_binding(hfn: ast.FunctionDef, name: str) -> Optional[ast.expr]:
+    """The one expression ``name`` is bound to in ``hfn``, or ``None`` if it is not bound exactly once.
+
+    By a plain ``name = <expr>``, and to ONE value: a name a loop rebinds, or two branches give
+    genuinely different values, has nothing the caller could compute ahead of the call. Several
+    bindings that FOLD to the same expression are one value, though -- resnet101's ``_conv2d`` binds
+    ``oh`` as ``(h + 6 - 7) // 2 + 1`` on one path and ``(h - 1) // 2 + 1`` on the other, which
+    :func:`fold_shape_expr` shows are the same extent written twice.
+
+    ``hfn``'s OWN scope only. A nested def is a separate scope that may reuse the name -- resnet101
+    binds ``oh`` in ``_conv2d`` and again in the 1x1 helper nested inside it -- and an ``ast.walk``
+    counts both, calls the name ambiguous, and refuses a call the caller could make.
+    """
+    found: List[ast.expr] = []
+    for node in scope_nodes(hfn):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if isinstance(target, ast.Name) and target.id == name:
+                found.append(node.value)
+        elif isinstance(node, (ast.AugAssign, ast.For)):
+            bound = node.target
+            if isinstance(bound, ast.Name) and bound.id == name:
+                return None
+    if not found:
+        return None
+    if len({fold_shape_expr(ast.unparse(value)) for value in found}) != 1:
+        return None
+    return found[0]
+
+
+def scope_nodes(fn: ast.FunctionDef) -> Iterator[ast.AST]:
+    """Every node in ``fn``'s own scope: like :func:`ast.walk`, but never descending into a nested
+    ``def``/``lambda``, whose names belong to a different scope."""
+    stack: List[ast.AST] = list(ast.iter_child_nodes(fn))
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        yield node
+        stack.extend(ast.iter_child_nodes(node))
+
+
+def _caller_side_symbol(sym: str,
+                        held: Set[str],
+                        decl_pnames: List[str],
+                        site_args: List[ast.expr],
+                        hfn: ast.FunctionDef,
+                        hname: str,
+                        depth: int = 0) -> str:
+    """The source ONE call site passes for a shape symbol the helper receives but the caller never named.
+
+    ``extra_syms`` is the helper's own vocabulary: a parameter the constant-fold pruned
+    (``_maxpool1d``'s ``c``, passed ``1`` at its only site) or a local its body binds (``out_len``).
+    Emitting one by NAME put an identifier into the CALLER that nothing there declares, and
+    ``_promote_free_names_to_params`` then rescued it exactly as it rescues a genuine free parameter
+    -- as a scalar int in the ABI. Four kernels shipped an emitted signature carrying ``n`` / ``c`` /
+    ``out_len`` slots the harness binding never passes, and a positional call cannot notice: every
+    argument after the first extra slot was read from the wrong register.
+
+    So the symbol is translated into caller vocabulary here instead. Most need no translation:
+    ``_infer_helper_params`` reads a helper's extents off its CALL SITE, so the majority of them are
+    already the caller's own names (``batch_size``) and pass straight through -- ``held`` is what
+    distinguishes those from the helper-only ones, and getting that backwards refuses a call the
+    caller could make perfectly well.
+    """
+    if sym in held:
+        return sym
+    if depth > EXTRA_SYM_DEPTH:
+        raise NotImplementedError(f"helper {hname!r} defines shape symbol {sym!r} through more than "
+                                  f"{EXTRA_SYM_DEPTH} of its own locals; it needs shape-generic parameters")
+    by_param = dict(zip(decl_pnames, site_args))
+    if sym in by_param:
+        return ast.unparse(by_param[sym])
+
+    binding = _sole_local_binding(hfn, sym)
+    if binding is None:
+        raise NotImplementedError(f"helper {hname!r} needs shape symbol {sym!r}, which is neither one of its "
+                                  f"parameters nor bound exactly once in its body; the caller has no expression "
+                                  f"to pass for it")
+    expr = _substitute_names(ast.Expression(body=copy.deepcopy(binding)), by_param).body
+    # Whatever is still a helper-local after that substitution is another link in the same chain.
+    locals_bound = _collect_assigned_names(hfn.body)
+    leftover = sorted({n.id
+                       for n in ast.walk(expr) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+                      & set(locals_bound))
+    if leftover:
+        nested = {
+            nm: ast.parse(_caller_side_symbol(nm, held, decl_pnames, site_args, hfn, hname, depth + 1),
+                          mode="eval").body
+            for nm in leftover
+        }
+        expr = _substitute_names(ast.Expression(body=expr), nested).body
+    if isinstance(expr, (ast.Tuple, ast.List, ast.Dict, ast.Set)):
+        raise NotImplementedError(f"helper {hname!r} needs shape symbol {sym!r}, but the caller would have to pass "
+                                  f"{ast.unparse(expr)} -- a shape slot takes one integer, not a sequence")
+    return ast.unparse(expr)
+
+
+def _caller_side_shape(tokens, held: Set[str], decl_pnames: List[str], site_args: List[ast.expr], hfn: ast.FunctionDef,
+                       hname: str) -> List[str]:
+    """``tokens`` -- one helper descriptor's shape -- respelled in the CALLER's vocabulary.
+
+    The call is not the only place a helper's names reach the caller. :func:`_build_callsite_stmts`
+    also ALLOCATES the argument temps and the return buffer there, and it sized them straight off the
+    helper's own descriptors: ``__hcall1 = np.empty((n, c, out_len))`` put three helper-only names
+    into the caller's body, where ``_promote_free_names_to_params`` rescued each as a scalar int
+    parameter. Fixing only the argument list left this route open and the ABI still wrong -- the
+    emitted signature grew the same slots, one statement later.
+    """
+    out: List[str] = []
+    for token in tokens:
+        expr = ast.parse(str(token), mode="eval").body
+        subst = {
+            n.id: ast.parse(_caller_side_symbol(n.id, held, decl_pnames, site_args, hfn, hname), mode="eval").body
+            for n in ast.walk(expr) if isinstance(n, ast.Name) and n.id not in held
+        }
+        out.append(ast.unparse(_substitute_names(ast.Expression(body=expr), subst).body) if subst else str(token))
+    return out
+
+
 def _build_callsite_stmts(lhs,
                           name,
                           pnames,
                           kept_args,
-                          extra_syms,
+                          extra_srcs,
                           param_info,
                           hret_shape,
                           hret_dtype,
@@ -4412,8 +4539,10 @@ def _build_callsite_stmts(lhs,
 
     Slice / non-bare array args are first materialised into contiguous temps (a
     strided column ``xk[:, k]`` cannot be passed as a flat pointer, and a slice in
-    the call would otherwise trip the per-element slice lowering). Shape symbols
-    are appended by name. A bare-array target is then filled in place (the emitter
+    the call would otherwise trip the per-element slice lowering). ``extra_srcs`` are the
+    helper's extra shape symbols already rendered in CALLER vocabulary by
+    :func:`_caller_side_symbol` -- appending the helper's own names here is what leaked them
+    into the emitted ABI. A bare-array target is then filled in place (the emitter
     appends it as the out-param); a slice target fills a temp, then copies it in.
 
     ``inout`` says the target buffer is ALREADY one of ``kept_args``: the helper reads and
@@ -4442,7 +4571,7 @@ def _build_callsite_stmts(lhs,
             call_srcs.append(atmp)
         else:
             call_srcs.append(ast.unparse(arg))
-    call_srcs.extend(extra_syms)
+    call_srcs.extend(extra_srcs)
     # Built in ``input_args`` order; :func:`_reorder_helper_call_args` permutes the whole call into
     # ABI order once every helper KernelIR exists. A BARE call statement (not ``tmp = h(...)``,
     # which would be seen as a whole-array reassignment and lowered element-wise). A bare-array
@@ -5205,14 +5334,33 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
                             f"helper {hdef.name!r} is specialized on {first_a.id}{tuple(first_d.shape)} but another "
                             f"call site passes {site_a.id}{tuple(site_d.shape)}; a helper cannot serve two shapes "
                             f"while its dimensions are emitted as constants")
+                # What the CALLER can name -- see :func:`_caller_side_symbol`. Resolved per SITE: two
+                # sites can pass different extents for the same helper symbol.
+                owner_held = ({sy.name
+                               for sy in osymbols} | {a.name
+                                                      for a in oarrays}
+                              | {sc.name
+                                 for sc in oscalars} | set(_shape_symbols(oarrays))
+                              | {a.arg
+                                 for a in owner_fn.args.args})
+                extra_srcs = [
+                    _caller_side_symbol(sy, owner_held, decl_pnames, site_args, hfn, hdef.name) for sy in extra_syms
+                ]
+                # The temps and the return buffer are allocated in the caller too, and were sized off
+                # the helper's descriptors: same leak, one statement later. See _caller_side_shape.
+                site_param_info = {
+                    pn: (_caller_side_shape(shp, owner_held, decl_pnames, site_args, hfn, hdef.name), dt)
+                    for pn, (shp, dt) in param_info.items()
+                }
+                site_hret_shape = _caller_side_shape(hret_shape, owner_held, decl_pnames, site_args, hfn, hdef.name)
                 callsite_rewrites.setdefault(id(owner_fn),
                                              {})[id(site)] = _build_callsite_stmts(site.targets[0],
                                                                                    hdef.name,
                                                                                    pnames,
                                                                                    site_kept,
-                                                                                   extra_syms,
-                                                                                   param_info,
-                                                                                   hret_shape,
+                                                                                   extra_srcs,
+                                                                                   site_param_info,
+                                                                                   site_hret_shape,
                                                                                    hret_dtype,
                                                                                    f"{hidx}_{sidx}" if sidx else hidx,
                                                                                    inout=inout_param is not None,

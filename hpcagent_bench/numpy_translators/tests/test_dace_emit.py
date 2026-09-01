@@ -20,13 +20,13 @@ import pytest
 
 from _bench_yaml import bench_info_for, foundation_kernels, kir_for
 from numpyto_c.dace_emit import (
-    BindMethodReceiver, DesugarChainedCompare, DropIdentityAsarray, LowerCallsDaceCannotReplace, NormalizeReshape,
-    PointwiseScatterToLoop, ResolveInferredReshape, ResolveShapeReads, RewriteBuiltinDtype, rank_of_subscript,
-    ranks_including_aliases, _AnnotateEmptyDtype, _CopyScalarAlias, _DesugarChainedAssign, _DesugarTernary,
-    _DesugarUnreplacedCalls, _ResolveZeros, _RewriteFrameworkDtype, _SplitReassignedSize, _dace_dtype, _float_names,
-    _inline_symbol_aliases, _plan_size_promotion, _widen_int_seeds, emit_dace, copy_view_bindings, loop_target_ranks,
-    mixed_view_names, names_logical_sparse, shape_argument, value_binding, version_reallocations, version_rebound_names,
-    version_rebound_views)  # noqa: E402
+    BindMethodReceiver, DesugarChainedCompare, DivisibleStridedSpan, DropIdentityAsarray, LowerCallsDaceCannotReplace,
+    NormalizeReshape, PointwiseScatterToLoop, ResolveInferredReshape, ResolveShapeReads, RewriteBuiltinDtype,
+    rank_of_subscript, ranks_including_aliases, _AnnotateEmptyDtype, _CopyScalarAlias, _DesugarChainedAssign,
+    _DesugarTernary, _DesugarUnreplacedCalls, _ResolveZeros, _RewriteFrameworkDtype, _SplitReassignedSize, _dace_dtype,
+    _float_names, _inline_symbol_aliases, _plan_size_promotion, _widen_int_seeds, emit_dace, copy_view_bindings,
+    loop_target_ranks, mixed_view_names, names_logical_sparse, shape_argument, value_binding, version_reallocations,
+    version_rebound_names, version_rebound_views)  # noqa: E402
 from numpyto_common.frontend import (
     emit_with_inline_fallback,
     parse_kernel,  # noqa: E402
@@ -1600,3 +1600,53 @@ def test_an_axis_no_element_indexes_survives_whether_an_ellipsis_is_written_or_n
                       ("psi[:, ja, 0]", 4)):
         node = ast.parse(src).body[0].value
         assert rank_of_subscript(node, ranks) == want, f"{src}: {rank_of_subscript(node, ranks)} != {want}"
+
+
+def respelled(src: str) -> str:
+    return ast.unparse(DivisibleStridedSpan().visit(ast.parse(src)))
+
+
+def test_a_tap_loop_span_is_respelled_to_a_step_divisible_one():
+    """The ``broadcast`` refusal class, 108 of 141 REFUSED entries. ``(A * st + 1)`` sizes to
+    ``A + ceiling(1/st)`` in dace and stops there -- ``st`` is a runtime scalar, so sympy cannot rule
+    out 0 -- while the accumulator it is added into is spelled ``A + 1``. ``(A + 1) * st`` sizes to
+    ``A + 1`` exactly, with no assumption about ``st`` at all."""
+    got = respelled("acc += p[:, :, ky:ky + ((h + 2 * pad - k) // st * st + 1):st]")
+    assert got == "acc += p[:, :, ky:ky + ((h + 2 * pad - k) // st + 1) * st:st]"
+
+
+def test_the_respelled_slice_picks_exactly_the_same_elements():
+    """The rewrite moves the STOP a step past the last element; a slice clamps, so the elements are
+    the same. Executed rather than argued: an off-by-one here is a silently wrong reduction, not a
+    parse error."""
+    for length in range(1, 40):
+        for st in range(1, 6):
+            for a in range(0, 8):
+                tight = slice(0, a * st + 1, st)
+                wide = slice(0, (a + 1) * st, st)
+                data = np.arange(length)
+                assert np.array_equal(data[tight], data[wide]), f"{length=} {st=} {a=}"
+
+
+def test_a_span_whose_multiplier_is_not_the_step_is_left_alone():
+    """The rewrite is only sound because the span is a multiple of the STEP. A ``* 2`` beside a
+    ``:st`` would select different elements, so it must not match."""
+    src = "acc += p[ky:ky + (a * 2 + 1):st]"
+    assert respelled(src) == src
+
+
+def test_a_slice_with_no_step_or_no_stop_is_left_alone():
+    for src in ("acc += p[ky:ky + (a * st + 1)]", "acc += p[ky::st]", "acc += p[:]"):
+        assert respelled(src) == src
+
+
+def test_a_span_that_does_not_start_at_the_slice_lower_is_left_alone():
+    """``upper`` has to be ``lower + <span>``; anything else is not this idiom and the span the
+    rewrite would compute is not the one the slice uses."""
+    src = "acc += p[ky:kx + (a * st + 1):st]"
+    assert respelled(src) == src
+
+
+def test_a_zero_based_tap_slice_is_respelled_too():
+    """The idiom also appears with no lower bound at all, where ``upper`` IS the span."""
+    assert respelled("acc += p[:(a * st + 1):st]") == "acc += p[:(a + 1) * st:st]"
