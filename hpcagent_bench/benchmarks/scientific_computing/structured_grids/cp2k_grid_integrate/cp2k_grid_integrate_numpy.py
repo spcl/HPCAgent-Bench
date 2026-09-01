@@ -91,13 +91,17 @@ def cp2k_grid_integrate(
         lamax = int(la_max[task])
         lbmax = int(lb_max[task])
         lp = lamax + lbmax
+        # One name for the degree count. Spelled ``lp + 1`` at each of its 21 uses, dace mints a
+        # FRESH symbol per slice bound -- ``__sym_lp_plus_1``, ``_0``, ``_1`` for the three axes of
+        # one cube -- and then cannot broadcast that cube against anything sized from ``lp``.
+        nlp = lp + 1
 
         # Per-task scratch: dies at the end of this iteration, never read by another task.
         # One polynomial table per axis, NOT one (3, ...) table indexed by ``idir``. Both the
         # write and the three reads pair a slice with an index array, and a leading scalar in
         # front of them is a numpy ADVANCED index separated from the gather by that slice, so
-        # ``pol[2][:lp + 1, idx]`` (shape (lp + 1, len(idx))) and the flattened
-        # ``pol[2, :lp + 1, idx]`` (shape (len(idx), lp + 1)) are different arrays.
+        # ``pol[2][:nlp, idx]`` (shape (nlp, len(idx))) and the flattened
+        # ``pol[2, :nlp, idx]`` (shape (len(idx), nlp)) are different arrays.
         pol_x = np.zeros((MAX_LP + 1, 2 * MAX_CUBE_RADIUS + 1), dtype=zeta.dtype)
         pol_y = np.zeros((MAX_LP + 1, 2 * MAX_CUBE_RADIUS + 1), dtype=zeta.dtype)
         pol_z = np.zeros((MAX_LP + 1, 2 * MAX_CUBE_RADIUS + 1), dtype=zeta.dtype)
@@ -158,7 +162,7 @@ def cp2k_grid_integrate(
             # power_icoef = gaussian * displacement**icoef, built by the same repeated multiply
             # as the scalar loop: np.cumprod is a strict left-to-right scan, not a reassociated
             # reduction, so this is bit-identical -- the closed-form ``**`` power is not.
-            seed = np.empty((lp + 1, nrel), dtype=zeta.dtype)
+            seed = np.empty((nlp, nrel), dtype=zeta.dtype)
             seed[0] = np.exp(-zetp * displacement * displacement)
             seed[1:] = displacement
             # The scan is materialised into its own local before the scatter: left inside the
@@ -166,11 +170,11 @@ def cp2k_grid_integrate(
             # single-element operand, which is no scan at all.
             scan = np.cumprod(seed, axis=0)
             if idir == 0:
-                pol_x[:lp + 1, rel + MAX_CUBE_RADIUS] = scan
+                pol_x[:nlp, rel + MAX_CUBE_RADIUS] = scan
             elif idir == 1:
-                pol_y[:lp + 1, rel + MAX_CUBE_RADIUS] = scan
+                pol_y[:nlp, rel + MAX_CUBE_RADIUS] = scan
             else:
-                pol_z[:lp + 1, rel + MAX_CUBE_RADIUS] = scan
+                pol_z[:nlp, rel + MAX_CUBE_RADIUS] = scan
 
         radius2 = radius[task] * radius[task]
         # Three axes, three names. A Python list of arrays is not a value this IR has, and the
@@ -203,20 +207,23 @@ def cp2k_grid_integrate(
         offset = (dz[:, None, None] * dz[:, None, None] + dy[None, :, None] * dy[None, :, None] +
                   dx[None, None, :] * dx[None, None, :])
         keep = (inside_z[:, None, None] & inside_y[None, :, None] & inside_x[None, None, :]) & (offset <= radius2)
-        weights = np.where(keep, values, np.zeros((), dtype=zeta.dtype))
-        pz = pol_z[:lp + 1, rel_z + MAX_CUBE_RADIUS]
-        py = pol_y[:lp + 1, rel_y + MAX_CUBE_RADIUS]
-        px = pol_x[:lp + 1, rel_x + MAX_CUBE_RADIUS]
+        # ``0.0``, not ``np.zeros((), dtype=zeta.dtype)``: a rank-0 array is a tensor with no
+        # axes, which nothing downstream has a shape for, and a python float is weak under
+        # NEP 50 -- it takes ``values``' precision instead of forcing float64 on it.
+        weights = np.where(keep, values, 0.0)
+        pz = pol_z[:nlp, rel_z + MAX_CUBE_RADIUS]
+        py = pol_y[:nlp, rel_y + MAX_CUBE_RADIUS]
+        px = pol_x[:nlp, rel_x + MAX_CUBE_RADIUS]
         contribution = np.einsum("kji,zk,yj,xi->zyx", weights, pz, py, px, optimize=True)
         # Only the lzp + lyp + lxp <= lp corner is ever read back; the reference's bounded
         # ranges leave the rest at zero.
         # Broadcast aranges, not ``np.indices``: the same three index grids, without materialising
         # the leading axis that only exists to be summed away.
-        deg_z = np.arange(lp + 1)[:, None, None]
-        deg_y = np.arange(lp + 1)[None, :, None]
-        deg_x = np.arange(lp + 1)[None, None, :]
+        deg_z = np.arange(nlp)[:, None, None]
+        deg_y = np.arange(nlp)[None, :, None]
+        deg_x = np.arange(nlp)[None, None, :]
         degree = deg_z + deg_y + deg_x
-        cxyz[:lp + 1, :lp + 1, :lp + 1] = np.where(degree <= lp, contribution, np.zeros((), dtype=zeta.dtype))
+        cxyz[:nlp, :nlp, :nlp] = np.where(degree <= lp, contribution, 0.0)
 
         for idir in range(3):
             if idir == 0:
@@ -251,15 +258,14 @@ def cp2k_grid_integrate(
 
         # The lzp/lyp/lxp bounds depend on lza + lzb alone, so one gated copy of cxyz per value
         # of that sum covers every (lza, lzb) pair, and the three alpha factors separate.
-        zi = np.arange(lp + 1)[:, None, None]
-        yi = np.arange(lp + 1)[None, :, None]
-        xi = np.arange(lp + 1)[None, None, :]
-        si = np.arange(lp + 1)[:, None, None, None]
-        gated = np.where((zi <= si) & (yi + xi <= lp - si), cxyz[:lp + 1, :lp + 1, :lp + 1],
-                         np.zeros((), dtype=zeta.dtype))
-        contracted = np.tensordot(gated, alpha[0][:, :, :lp + 1], axes=([3], [2]))
-        contracted = np.tensordot(contracted, alpha[1][:, :, :lp + 1], axes=([2], [2]))
-        contracted = np.tensordot(contracted, alpha[2][:, :, :lp + 1], axes=([1], [2]))
+        zi = np.arange(nlp)[:, None, None]
+        yi = np.arange(nlp)[None, :, None]
+        xi = np.arange(nlp)[None, None, :]
+        si = np.arange(nlp)[:, None, None, None]
+        gated = np.where((zi <= si) & (yi + xi <= lp - si), cxyz[:nlp, :nlp, :nlp], 0.0)
+        contracted = np.tensordot(gated, alpha[0][:, :, :nlp], axes=([3], [2]))
+        contracted = np.tensordot(contracted, alpha[1][:, :, :nlp], axes=([2], [2]))
+        contracted = np.tensordot(contracted, alpha[2][:, :, :nlp], axes=([1], [2]))
 
         # Scalar pair loop, for the same reason the angular-momentum nests above are one: MAX_L is
         # 2, so this is at most 10x10 trips and a numpy call per pair would cost more than the

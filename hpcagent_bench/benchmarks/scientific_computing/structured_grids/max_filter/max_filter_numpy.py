@@ -15,7 +15,13 @@ import numpy as np
 
 def _running_max(padded, w, out_len, axis, padded_len, perp_len):
     length = padded_len
-    nblocks = -(-length // w)
+    # Ceiling division spelled with a NONNEGATIVE numerator. ``-(-length // w)`` is the same value
+    # in Python and the wrong one once lowered: an integer floor-divide becomes C ``/``, which
+    # truncates toward zero, so the negated numerator rounds the wrong way -- at length=10, w=3 the
+    # block count came out 3 instead of 4 and the padded buffer below was allocated a quarter short.
+    # ``length`` is a padded extent and ``w`` is 2r+1, so both sides here are positive and the two
+    # divisions agree.
+    nblocks = (length + w - 1) // w
     tail = nblocks * w - length
     # Padded unconditionally, into its OWN name. A zero-width pad is a plain copy, so the values are
     # the same either way -- but re-binding ``padded`` to a second shape inside the guard leaves the

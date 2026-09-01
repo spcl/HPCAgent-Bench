@@ -88,6 +88,24 @@ def bind_free_symbols(sdfg: Any, symbol_recipes: Sequence[Tuple[str, str]], inpu
     return extra
 
 
+def bind_closure_arrays(program: Any, declared: Set[str]) -> Dict[str, Any]:
+    """Value the closure arrays DaCe lifted out of the program and into its SIGNATURE.
+
+    A numpy expression over constants only is evaluated at parse time and becomes a program
+    ARGUMENT rather than an SDFG constant: cp2k_density_matrix_trs4's ``np.arange(3,
+    dtype=np.int64)`` arrives as ``__g_numpy_arange_3__dtype_np_int64__None____``. Nothing in the
+    manifest names it, so a caller that builds keywords from the manifest dies on "Missing program
+    argument". The resolver that lifted it is the only thing that can value it.
+
+    Filtered by the arglist, for the same reason every other binding here is: an optimized variant
+    may have folded the array away, and a keyword the signature does not take is an error too.
+    """
+    resolver = vars(program).get("resolver")
+    if resolver is None:
+        return {}
+    return {name: spec[2]() for name, spec in resolver.closure_arrays.items() if name in declared}
+
+
 def strip_output_args(argv: Sequence[str]) -> List[str]:
     """``argv`` without its output/depfile arguments (see :data:`OUTPUT_ARGS`)."""
     kept: List[str] = []
@@ -1160,6 +1178,8 @@ class DaceFramework(Framework):
         for p in self.params(bench, impl):
             kwargs[renames.get(p, p)] = bdata[p]
         kwargs.update(self.shape_symbols(impl, bench, resolved, kwargs))
+        if declared is not None:
+            kwargs.update(bind_closure_arrays(self._import_kernel(bench), declared))
         return [], kwargs
 
     def arg_renames(self, bench: Benchmark) -> Dict[str, str]:
