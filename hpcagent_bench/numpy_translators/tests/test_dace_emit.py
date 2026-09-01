@@ -20,13 +20,13 @@ import pytest
 
 from _bench_yaml import bench_info_for, foundation_kernels, kir_for
 from numpyto_c.dace_emit import (
-    BindMethodReceiver, DesugarChainedCompare, DivisibleStridedSpan, DropIdentityAsarray, LowerCallsDaceCannotReplace,
-    NormalizeReshape, PointwiseScatterToLoop, ResolveInferredReshape, ResolveShapeReads, RewriteBuiltinDtype,
-    rank_of_subscript, ranks_including_aliases, _AnnotateEmptyDtype, _CopyScalarAlias, _DesugarChainedAssign,
-    _DesugarTernary, _DesugarUnreplacedCalls, _ResolveZeros, _RewriteFrameworkDtype, _SplitReassignedSize, _dace_dtype,
-    _float_names, _inline_symbol_aliases, _plan_size_promotion, _widen_int_seeds, emit_dace, copy_view_bindings,
-    loop_target_ranks, mixed_view_names, names_logical_sparse, shape_argument, value_binding, version_reallocations,
-    version_rebound_names, version_rebound_views)  # noqa: E402
+    BindMethodReceiver, DesugarChainedCompare, DivisibleStridedSpan, DropIdentityAsarray, negative_step,
+    LowerCallsDaceCannotReplace, NormalizeReshape, PointwiseScatterToLoop, ResolveInferredReshape, ResolveShapeReads,
+    RewriteBuiltinDtype, rank_of_subscript, ranks_including_aliases, _AnnotateEmptyDtype, _CopyScalarAlias,
+    _DesugarChainedAssign, _DesugarTernary, _DesugarUnreplacedCalls, _ResolveZeros, _RewriteFrameworkDtype,
+    _SplitReassignedSize, _dace_dtype, _float_names, _inline_symbol_aliases, _plan_size_promotion, _widen_int_seeds,
+    emit_dace, copy_view_bindings, loop_target_ranks, mixed_view_names, names_logical_sparse, shape_argument,
+    value_binding, version_reallocations, version_rebound_names, version_rebound_views)  # noqa: E402
 from numpyto_common.frontend import (
     emit_with_inline_fallback,
     parse_kernel,  # noqa: E402
@@ -1650,3 +1650,20 @@ def test_a_span_that_does_not_start_at_the_slice_lower_is_left_alone():
 def test_a_zero_based_tap_slice_is_respelled_too():
     """The idiom also appears with no lower bound at all, where ``upper`` IS the span."""
     assert respelled("acc += p[:(a * st + 1):st]") == "acc += p[:(a + 1) * st:st]"
+
+
+def test_a_reverse_slice_is_never_respelled():
+    """The respelling is an identity only for a POSITIVE step. Measured over lengths 1..24 and steps
+    -1..-3, the two spellings disagree on 635 (length, step, count, start) combinations -- with a
+    negative step ``A * st + 1`` is at most 1, so the tight slice is empty and the wide one is not.
+    ``_DesugarReverseSlice`` rewrites the literal reverse slices earlier, but a rewrite that is only
+    correct because another pass ran first is one pass reorder away from a silently wrong result."""
+    for src in ("acc += p[ky:ky + (a * -2 + 1):-2]", "acc += p[ky:ky + (a * st + 1):-st]"):
+        assert respelled(src) == src
+
+
+def test_the_negative_step_guard_reads_both_spellings_of_a_negative():
+    assert negative_step(ast.parse("-2", mode="eval").body)
+    assert negative_step(ast.parse("-st", mode="eval").body)
+    assert not negative_step(ast.parse("2", mode="eval").body)
+    assert not negative_step(ast.parse("st", mode="eval").body)

@@ -725,7 +725,7 @@ class DivisibleStridedSpan(ast.NodeTransformer):
 
     def respell(self, element: ast.Slice) -> None:
         """Rewrite ``lower : lower + (A * step + 1) : step`` in place to ``lower : lower + (A + 1) * step``."""
-        if element.step is None or element.upper is None:
+        if element.step is None or element.upper is None or negative_step(element.step):
             return
         step = ast.unparse(element.step)
         span = self.span_expr(element)
@@ -769,6 +769,25 @@ class DivisibleStridedSpan(ast.NodeTransformer):
 
 def is_literal_one(node: ast.AST) -> bool:
     return isinstance(node, ast.Constant) and node.value == 1 and not isinstance(node.value, bool)
+
+
+def negative_step(step: ast.expr) -> bool:
+    """True when ``step`` is negative on its face.
+
+    The respelling is only an identity for a POSITIVE step: ``ceiling((A*s + 1)/s)`` and
+    ``ceiling((A + 1)*s/s)`` are both ``A + 1`` for ``s >= 1``, and disagree for every ``s <= -1``
+    (measured: 635 disagreements over lengths 1..24, steps -1..-3). A reverse slice never carries
+    this idiom -- ``A*s + 1`` is at most 1 with a negative ``s``, so the tight slice is empty -- and
+    ``_DesugarReverseSlice`` has already rewritten the literal ones by the time this pass runs. The
+    guard is here so the rewrite does not depend on that ordering.
+
+    A symbolic step is treated as positive: it is a stride, positive by construction, and it is the
+    same assumption dace's own nonnegative symbol canonicalization makes. A step that is zero is
+    rejected by the slice itself, under either spelling.
+    """
+    if isinstance(step, ast.UnaryOp) and isinstance(step.op, ast.USub):
+        return True
+    return isinstance(step.value, (int, float)) and step.value < 0 if isinstance(step, ast.Constant) else False
 
 
 class _DesugarArrayIteration(ast.NodeTransformer):
