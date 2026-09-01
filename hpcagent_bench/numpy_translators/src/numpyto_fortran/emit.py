@@ -746,7 +746,7 @@ class _FortranBodyEmitter(BaseEmitter):
             # the authority, and a predicate actual is LOGICAL(4) against a logical(c_bool) dummy.
             types = self._helper_param_types.get(name)
             if types is not None:
-                call_args = [_coerce_to_fortran_type(a, t) for a, t in zip(call_args, types)]
+                call_args = [_coerce_to_fortran_type(a, t, self._own_scalar_types) for a, t in zip(call_args, types)]
             return f"{indent}call {name}({', '.join(call_args)})"
         return super().emit_stmt(node, indent)
 
@@ -778,6 +778,10 @@ class _FortranBodyEmitter(BaseEmitter):
         #: name -> per-ABI-slot Fortran type each scalar dummy is DECLARED with, so every call site
         #: coerces its argument to the dummy's own kind (see :func:`_coerce_to_fortran_type`).
         self._helper_param_types: Dict[str, List[Optional[str]]] = {}
+        #: What THIS body declares each scalar name as, so a call argument that already carries the
+        #: dummy's kind is passed bare instead of wrapped in an identity conversion.
+        self._own_scalar_types: Dict[str, str] = {sc.name: _fortran_type(sc.dtype) for sc in kir.scalars}
+        self._own_scalar_types.update({sy.name: _fortran_type(sy.dtype) for sy in kir.symbols})
         self.array_names: Set[str] = {a.name for a in kir.arrays}
         #: Arrays whose ELEMENTS are subscripts (``init.arrays[name].index_array``). The harness
         #: hands Fortran these buffers already rebased to 1 (see
@@ -1052,7 +1056,8 @@ class _FortranBodyEmitter(BaseEmitter):
             types = self._helper_param_types.get(name)
             if types is not None:
                 call_args = [
-                    a if i == slot else _coerce_to_fortran_type(a, t) for i, (a, t) in enumerate(zip(call_args, types))
+                    a if i == slot else _coerce_to_fortran_type(a, t, self._own_scalar_types)
+                    for i, (a, t) in enumerate(zip(call_args, types))
                 ]
             return f"{indent}call {name}({', '.join(call_args)})"
         # The __hpcagent_bench_zeros__ marker may have been renamed by the
@@ -3581,15 +3586,23 @@ def _helper_abi_order(hkir: KernelIR) -> Tuple[List[str], str]:
     return hkir.abi_param_order(), hkir.return_kind
 
 
-def _coerce_to_fortran_type(expr: str, ftype: Optional[str]) -> str:
+def _coerce_to_fortran_type(expr: str, ftype: Optional[str], actual_types: Optional[Dict[str, str]] = None) -> str:
     """Wrap a call argument in the KIND its helper dummy is declared with.
 
     Fortran matches dummy and actual by kind, not just by class, and the body emitter promotes
     integer reads to ``c_int64_t`` on its own -- so an ``integer(c_int32_t)`` dummy fed a promoted
     subscript is rejected outright (``Type mismatch in argument 'b1'``). The helper's declaration
     is the authority, so the argument is converted to it here rather than the dummy widened.
+
+    An actual already DECLARED with the dummy's own kind is passed bare. The conversion is for a
+    MISMATCH -- a LOGICAL(4) comparison into a ``logical(c_bool)`` dummy, a promoted subscript into
+    an ``integer(c_int32_t)`` one -- and wrapping a matching argument only buries the call under
+    ``REAL(thr, c_double)``. ``actual_types`` is what the CALLER declares, so the identity case is
+    recognised rather than guessed at.
     """
     if ftype is None:
+        return expr
+    if actual_types is not None and actual_types.get(expr) == ftype:
         return expr
     if ftype.startswith("integer(") and ftype.endswith(")"):
         return f"INT({expr}, {ftype[len('integer('):-1]})"

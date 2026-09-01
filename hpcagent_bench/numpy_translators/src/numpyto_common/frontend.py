@@ -4502,6 +4502,25 @@ def _caller_side_symbol(sym: str,
     return ast.unparse(expr)
 
 
+def _held_before(owner_fn: ast.FunctionDef, site: ast.stmt) -> Set[str]:
+    """Names the caller has BOUND by the time ``site`` runs.
+
+    A local the caller computes is a perfectly good thing to pass -- squeezenet's kernel binds
+    ``oh0`` itself and its ``_conv2d__s5`` descriptor is sized by that name -- so a ``held`` set of
+    only parameters and descriptors refuses a call the caller could make.
+
+    Strictly BEFORE, though. A name bound later in the body is not available at the call, and
+    passing it reads it before it is written: the extent silently becomes whatever the buffer held,
+    which is a wrong answer rather than an error.
+    """
+    held: Set[str] = set()
+    for stmt in owner_fn.body:
+        if stmt is site or any(node is site for node in ast.walk(stmt)):
+            break
+        held |= set(_collect_assigned_names([stmt]))
+    return held
+
+
 def _caller_side_shape(tokens, held: Set[str], decl_pnames: List[str], site_args: List[ast.expr], hfn: ast.FunctionDef,
                        hname: str) -> List[str]:
     """``tokens`` -- one helper descriptor's shape -- respelled in the CALLER's vocabulary.
@@ -5342,7 +5361,7 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
                               | {sc.name
                                  for sc in oscalars} | set(_shape_symbols(oarrays))
                               | {a.arg
-                                 for a in owner_fn.args.args})
+                                 for a in owner_fn.args.args} | _held_before(owner_fn, site))
                 extra_srcs = [
                     _caller_side_symbol(sy, owner_held, decl_pnames, site_args, hfn, hdef.name) for sy in extra_syms
                 ]
