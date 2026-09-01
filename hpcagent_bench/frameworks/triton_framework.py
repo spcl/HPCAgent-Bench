@@ -44,9 +44,17 @@ class TritonFramework(TorchCudaEventTiming, Framework):
 
     is_optimizer = True
 
-    def __init__(self, fname: str):
+    def implementations(self, bench):
+        """Cap the autotune sweep, then load the kernel module exactly as the base class does.
+
+        The patch has to land before the first ``*_triton.py`` import and this is where that import
+        happens -- doing it in ``__init__`` instead put ``import triton`` behind CONSTRUCTION, so
+        asking a descriptor question that needs no runtime at all (``supports(Precision.FP16)``,
+        read straight out of :data:`FRAMEWORK_META`) raised ``ModuleNotFoundError`` wherever triton
+        is not installed.
+        """
         _apply_autotune_subset_once()
-        super().__init__(fname)
+        return super().implementations(bench)
 
     def version(self) -> str:
         """Return the framework version."""

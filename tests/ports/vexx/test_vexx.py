@@ -206,3 +206,26 @@ def test_oracle_matches_numpy(name):
     Knp.vexx_all_paths(*a_np)
     O.vexx_all_paths(*a_or)
     np.testing.assert_allclose(a_or[_IDX["hpsi"]], a_np[_IDX["hpsi"]], rtol=0, atol=1e-9)
+
+
+def test_every_preset_names_the_box_and_pair_extents_its_own_sizes_imply():
+    """``maxbox`` and ``nij`` are what ``initialize()`` computes -- ``max(1, nrxxs // 8)`` and
+    ``nh * (nh + 1) // 2`` -- and the manifest now NAMES them instead of respelling the arithmetic
+    in three array shapes. A name is what dace can fold; ``nrxxs // 8`` reaches it as an
+    ``int_floor`` that unifies with nothing.
+
+    The cost of naming is that nothing structurally ties the two back to ``nrxxs``/``nh`` any more,
+    and ``tabxx_box`` holds INDICES into the length-``nrxxs`` grid (``rng.choice(nrxxs,
+    size=maxbox)``). A preset that drifts is therefore a silent out-of-bounds read, not an error --
+    so the relation is asserted here rather than trusted.
+    """
+    import yaml
+    manifest = yaml.safe_load((_BENCH / "vexx_k.yaml").read_text())
+    checked = 0
+    for preset, values in manifest["parameters"].items():
+        if "nrxxs" not in values:  # ``fuzzed`` draws its sizes at run time and pins no derived one
+            continue
+        assert values["maxbox"] == max(1, values["nrxxs"] // 8), f"{preset}: maxbox drifted from nrxxs"
+        assert values["nij"] == values["nh"] * (values["nh"] + 1) // 2, f"{preset}: nij drifted from nh"
+        checked += 1
+    assert checked == 4, f"expected the four fixed presets to pin both extents, checked {checked}"
