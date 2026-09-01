@@ -38,7 +38,7 @@ def _conv_transpose2d(x, weight, bias, stride, padding, output_padding, dilation
 
     out1 = padded[:, :, padding:padding + oh, padding:padding + ow]
     out2 = out1 + bias.reshape(1, -1, 1, 1)
-    return out2.astype(x.dtype, copy=False)
+    return out2.astype(x.dtype)
 
 
 def _group_norm(x, num_groups, weight, bias, eps, n, c, h, w):
