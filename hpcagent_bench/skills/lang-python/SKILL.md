@@ -107,7 +107,7 @@ else                                             # silence here would read as a 
 fi
 ```
 Standing mandate: yapf + pre-commit on every file you touch, no exceptions. If a
-new import was added, ensure the dep is declared (e.g. `setup.py`/`pyproject.toml`)
+new import was added, ensure the dep is declared (e.g. `pyproject.toml`)
 so the hooks and CI resolve it. A failing hook is a failing gate -- fix the code,
 do not `--no-verify`.
 

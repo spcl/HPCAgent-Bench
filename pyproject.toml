@@ -100,6 +100,10 @@ frameworks = [
     "psutil",
     "py-cpuinfo",
     "GPUtil",
+    # A dace runtime import (dace/sdfg/graph.py et al). dace@extended added the import before
+    # declaring it in install_requires, so a fresh editable clone briefly shipped without it and
+    # every dace-importing job died on ModuleNotFoundError. Declared here too, so a gap in dace's
+    # own dep list can never silently drop it again.
     "ordered-set>=4.0.0",
     "numba",
     # pythran IS pinned, unlike dace: it is a third-party compiler this suite GRADES kernels
@@ -109,8 +113,22 @@ frameworks = [
     # the e2e statuses to move with it.
     "pythran==0.18.1",
     "xgboost",
+    # HDF5 / netCDF bindings for the apt libhdf5-dev + libnetcdf-dev the images install. Declared
+    # EXPLICITLY: they used to arrive only as a transitive dep of the stock PyPI dace, so pinning
+    # dace to the fork (which does not depend on them) silently dropped them and the image smoke
+    # test -- which imports both -- broke. A dep the smoke test asserts must be a dep this file
+    # states.
     "h5py",
     "netCDF4",
+    # The solver backends dace's analyses gate on. Both ARE declared in dace@extended's pyproject,
+    # so a fresh editable clone resolves them; an image built from an older clone, or a tree used
+    # off PYTHONPATH, does not. Declared here so neither depends on the clone's vintage. The
+    # failure mode is silent and one-directional -- every gate fails closed: without islpy
+    # ``WavefrontSkew.apply_pass`` returns None on its first line, and without z3
+    # ``smt_dependence.has_z3()`` is False so LoopToMap, BreakAntiDependence and LoopFission all
+    # answer "cannot prove". Canonicalization then just emits sequential loops, with no
+    # diagnostic anywhere. Measured 2026-08-31: islpy turns wavefront2d, wf_triangular and
+    # wf_north_west from ``maps=0 loops=2`` into a skewed parallel Map, all three still exact.
     "islpy",
     "z3-solver",
 ]
@@ -153,7 +171,11 @@ tvm = ["apache-tvm>=0.25.0rc0", "apache-tvm-ffi>=0.1.12"]
 triton = ["triton"]
 gt4py = ["gt4py"]
 # The HF dataset export.
-hf = ["pyarrow", "datasets>=2.17", "huggingface_hub"]
+hf = [
+    "pyarrow",
+    "datasets>=2.17",  # config_name= on push_to_hub, i.e. multi-config datasets
+    "huggingface_hub",
+]
 # Agent backends. One per provider, so a run only installs the one it drives.
 agent-anthropic = ["anthropic"]
 agent-local = ["transformers", "huggingface-hub", "accelerate"]

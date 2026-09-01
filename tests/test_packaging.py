@@ -71,9 +71,10 @@ def test_container_defs_are_well_formed():
     assert "From: hpcagent_bench-cpu.sif" in judge  # layered on the agent image
     assert "-e /opt/hpcagent_bench" in judge  # the package is installed editable (ships numpyto_* too)
     assert "export PYTHONPATH" not in judge  # pip-managed, no hand-set path directive
-    # pyproject.toml must ship beside setup.py or numpyto_common is unimportable (legacy develop fallback).
+    # pyproject.toml is the only build definition left, and it carries package_dir; an image without it
+    # falls back to legacy develop, which ignores package_dir and leaves numpyto_common unimportable.
     assert "pyproject.toml /opt/hpcagent_bench/pyproject.toml" in judge, \
-        "judge.def copies setup.py but not pyproject.toml -> legacy develop -> numpyto_common unimportable"
+        "judge.def does not copy pyproject.toml -> legacy develop -> numpyto_common unimportable"
     # Must skip build isolation, or pip fetches the build backend from PyPI at install time (timed out).
     assert "--no-build-isolation" in judge, \
         "judge.def's editable install lacks --no-build-isolation -> PyPI fetch of the build backend"
@@ -81,7 +82,7 @@ def test_container_defs_are_well_formed():
     for spec in (cpu, judge):
         for line in spec.splitlines():
             line = line.strip()
-            if line.startswith(("requirements/", "hpcagent_bench ", "setup.py", "pyproject.toml")):
+            if line.startswith(("requirements/", "hpcagent_bench ", "pyproject.toml")):
                 src = line.split()[0]
                 assert (_ROOT / src).exists(), f"%files source {src!r} does not exist"
 
@@ -96,7 +97,6 @@ def test_apptainer_builds_and_imports(tmp_path):
     deffile.write_text(f"""Bootstrap: docker
 From: python:3.12-slim
 %files
-    {_ROOT}/setup.py /opt/hpcagent_bench/setup.py
     {_ROOT}/pyproject.toml /opt/hpcagent_bench/pyproject.toml
     {_ROOT}/hpcagent_bench /opt/hpcagent_bench/hpcagent_bench
 %post
