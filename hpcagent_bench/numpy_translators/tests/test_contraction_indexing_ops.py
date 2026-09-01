@@ -772,3 +772,30 @@ def test_sympify_shape_declines_a_read_past_the_end_of_a_tuple_token():
     # inside sympy's parser -- uncaught, it aborted the whole reshape expander.
     assert sympify_shape("(out_channels, 1, 1)[3]") is None
     assert str(sympify_shape("(out_channels, 1, 1)[0]")) == "out_channels"
+
+
+def test_a_floordiv_extent_equals_the_int_floor_spelling_of_itself():
+    """``a // b`` and ``int_floor(a, b)`` are one quantity in two vocabularies -- ``//`` is what a
+    manifest and a numpy reference write, ``int_floor`` is what the C and dace sides name it. Left
+    unnormalised, sympify makes the first a ``floor`` and the second an opaque Function, and a
+    compare across the two declines for extents that are the same number."""
+    shape_exprs_equal.cache_clear()
+    assert shape_exprs_equal("int_floor(a, b)", "a // b")
+    assert shape_exprs_equal("(h + 2 * p - k) // s + 1", "int_floor(h + 2 * p - k, s) + 1")
+
+
+def test_the_normalised_floor_still_cancels_against_a_bare_extent():
+    """Why the normalisation goes TOWARD sympy's ``floor`` and not toward ``int_floor``: an integer
+    symbol lets sympy cancel ``floor(2 * oh / 2)`` to ``oh``, and an opaque ``int_floor`` never
+    cancels against anything. Normalising the other way would trade one missed pair for many."""
+    shape_exprs_equal.cache_clear()
+    assert shape_exprs_equal("int_floor(2 * oh, 2)", "oh")
+    assert shape_exprs_equal("(2 * oh) // 2", "oh")
+
+
+def test_a_floordiv_by_a_different_divisor_is_still_unequal():
+    """The negative control. Collapsing both spellings onto one head must not collapse the operands
+    with them -- a wrong True here contracts over two different extents, which is a miscompile."""
+    shape_exprs_equal.cache_clear()
+    assert not shape_exprs_equal("int_floor(a, b)", "a // c")
+    assert not shape_exprs_equal("int_floor(a, b)", "a // (b + 1)")

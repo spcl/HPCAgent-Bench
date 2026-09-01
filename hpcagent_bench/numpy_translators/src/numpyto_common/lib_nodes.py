@@ -7261,7 +7261,16 @@ def sympify_shape(text: str):
     # every compare naming one answered False. It is a fixed extent, not arithmetic: fold it to an
     # atom. Both sides mangle the same way, so the surrounding arithmetic still cancels.
     text = SHAPE_READ_RE.sub(lambda m: f"__shp_{m.group(1)}_{m.group(2)}", text)
-    names = {}
+    # ``a // b`` and ``int_floor(a, b)`` are ONE quantity in two spellings -- ``//`` is what a
+    # manifest and a numpy source write, ``int_floor`` is what the C/dace side names it. sympify
+    # turns the first into ``floor(a/b)`` and leaves the second an opaque Function, so a compare
+    # across the two answered "not equal" for extents that are the same number. Normalise onto
+    # sympy's own head, never the other way: ``floor`` over integer symbols CANCELS
+    # (``floor(2*oh/2)`` is ``oh``), and an opaque ``int_floor`` does not -- measured both ways.
+    names = {
+        "int_floor": lambda a, b: sympy.floor(a / b),
+        "int_ceil": lambda a, b: sympy.ceiling(a / b),
+    }
     for m in DIM_IDENT_RE.finditer(text):
         if text[m.end():m.end() + 1] != "(":  # a call target is a function, not a dimension
             names[m.group()] = sympy.Symbol(m.group(), integer=True, nonnegative=True)

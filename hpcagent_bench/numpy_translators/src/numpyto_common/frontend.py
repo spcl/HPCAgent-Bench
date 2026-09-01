@@ -4267,6 +4267,91 @@ def _helper_return_shape_from_body(hfn, pnames, args, arr_by, sca_by, sym_by, fn
     return shape, arrays[0].dtype
 
 
+def value_names(node: ast.AST) -> Set[str]:
+    """Every name an expression reads as a VALUE -- a call's callee is not one of them.
+
+    ``int`` in ``(height - 1) // int(conv_stride) + 1`` is the builtin, not an extent the caller
+    has to hold; counting it made an otherwise fully-resolved shape look unresolvable.
+    """
+    names: Set[str] = set()
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, ast.Name):
+            names.add(child.id)
+        elif isinstance(child, ast.Call):
+            for arg in list(child.args) + [kw.value for kw in child.keywords]:
+                names |= value_names(ast.Expression(body=arg)) | ({arg.id} if isinstance(arg, ast.Name) else set())
+        else:
+            names |= value_names(child)
+    return names
+
+
+def helper_call_local_arrays(owner_fn: ast.FunctionDef, helper_defs, arr_by, sca_by, sym_by) -> Dict[str, ArrayDesc]:
+    """``{local: ArrayDesc}`` for every one of ``owner_fn``'s locals bound to a USER-HELPER call.
+
+    The shape is the CALLEE's own return, respelled in the caller's names. Nothing else resolves
+    one: the local is not a declared array and not an allocation, so ``_resolve_array_ref`` falls
+    to ``_shape_from_expression``, which reads an unresolved Call as ELEMENTWISE and answers with
+    the broadcast join of its ARGUMENTS. ``h1 = _conv2d(x, w, ...)`` therefore came back with
+    ``x``'s own ``(batch_size, in_channels, height, width)`` instead of the convolution's
+    ``(batch_size, out_channels, oh, ow)`` -- and the two agree at preset S only because
+    ``in_channels == out_channels`` there, so the batch-norm tail read a 6x6 buffer at 8x8 strides
+    and returned a wrong number rather than failing.
+
+    Bindings are read in SOURCE order and each resolved one joins the table the next resolves
+    against, so a chain (``h2 = _batch_norm(h1, ...)``) settles in a single pass. A local bound
+    more than once, a call whose arity does not match, and a return whose extents do not respell
+    into names the caller holds are all left OUT: absent is what every consumer already handles,
+    a guess is what this exists to stop.
+    """
+    hdefs = {h.name: h for h in helper_defs}
+    if not hdefs:
+        return {}
+    bindings: Dict[str, int] = {}
+    for node in ast.walk(owner_fn):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    bindings[target.id] = bindings.get(target.id, 0) + 1
+    held = ({s.name
+             for s in sym_by.values()} | {a.name
+                                          for a in arr_by.values()} | {s.name
+                                                                       for s in sca_by.values()}
+            | set(_shape_symbols(arr_by.values())) | {a.arg
+                                                      for a in owner_fn.args.args})
+    sites = sorted((n for n in ast.walk(owner_fn) if isinstance(n, ast.Assign)), key=lambda n: (n.lineno, n.col_offset))
+    known = dict(arr_by)
+    found: Dict[str, ArrayDesc] = {}
+    for site in sites:
+        if len(site.targets) != 1 or not isinstance(site.targets[0], ast.Name):
+            continue
+        name = site.targets[0].id
+        call = site.value
+        if (name in known or bindings.get(name) != 1 or not isinstance(call, ast.Call)
+                or not isinstance(call.func, ast.Name) or call.func.id not in hdefs or call.keywords):
+            continue
+        hfn = hdefs[call.func.id]
+        pnames = [a.arg for a in hfn.args.args]
+        if len(call.args) != len(pnames):
+            continue
+        shape, dtype = _helper_return_shape_from_body(hfn, pnames, call.args, known, sca_by, sym_by, owner_fn)
+        if shape is None:
+            continue
+        site_held = held | _held_before(owner_fn, site)
+        try:
+            tokens = _caller_side_shape(shape, site_held, pnames, call.args, hfn, call.func.id)
+        except NotImplementedError:
+            continue  # the callee sizes itself through more of its own locals than the chase follows
+        free = set()
+        for token in tokens:
+            free |= value_names(ast.parse(str(token), mode="eval"))
+        if not free <= site_held:
+            continue  # an extent the caller cannot name is not a shape the caller can be told
+        desc = ArrayDesc(name=name, dtype=dtype, shape=tuple(tokens), is_output=False)
+        known[name] = desc
+        found[name] = desc
+    return found
+
+
 def _infer_helper_params(pnames, args, arr_by, sca_by, sym_by, fn=None):
     """Split a helper's (param, call-arg) pairs into array / scalar / symbol
     descriptors inferred from each call-site argument."""
@@ -5028,6 +5113,12 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
         oarr_by = {a.name: a for a in oarrays}
         osca_by = {s.name: s for s in oscalars}
         osym_by = {s.name: s for s in osymbols}
+        # A local this scope binds from ANOTHER helper's call carries a shape too, and only the
+        # callee's return says what it is -- see :func:`helper_call_local_arrays`. Resolution only:
+        # these never join ``oarrays``, which is the emitted ABI, and never ``live_buffers``, which
+        # is what says a target already HAS a buffer -- one of these does not yet, and suppressing
+        # its allocation is what put an unbound name into the ABI as a scalar int.
+        oarr_by.update(helper_call_local_arrays(owner_fn, helper_defs, oarr_by, osca_by, osym_by))
         call = call_of[hdef.name]
         assign = assign_of.get(hdef.name)
         lhs = assign.targets[0] if assign is not None else None
@@ -5372,18 +5463,18 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
                     for pn, (shp, dt) in param_info.items()
                 }
                 site_hret_shape = _caller_side_shape(hret_shape, owner_held, decl_pnames, site_args, hfn, hdef.name)
-                callsite_rewrites.setdefault(id(owner_fn),
-                                             {})[id(site)] = _build_callsite_stmts(site.targets[0],
-                                                                                   hdef.name,
-                                                                                   pnames,
-                                                                                   site_kept,
-                                                                                   extra_srcs,
-                                                                                   site_param_info,
-                                                                                   site_hret_shape,
-                                                                                   hret_dtype,
-                                                                                   f"{hidx}_{sidx}" if sidx else hidx,
-                                                                                   inout=inout_param is not None,
-                                                                                   live_buffers=frozenset(oarr_by))
+                callsite_rewrites.setdefault(id(owner_fn), {})[id(site)] = _build_callsite_stmts(
+                    site.targets[0],
+                    hdef.name,
+                    pnames,
+                    site_kept,
+                    extra_srcs,
+                    site_param_info,
+                    site_hret_shape,
+                    hret_dtype,
+                    f"{hidx}_{sidx}" if sidx else hidx,
+                    inout=inout_param is not None,
+                    live_buffers=frozenset(a.name for a in oarrays))
     for owner_fn, _, _, _ in scopes:
         rewrites = callsite_rewrites.get(id(owner_fn))
         if rewrites:

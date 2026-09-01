@@ -543,3 +543,41 @@ def test_the_kept_helper_kernel_is_a_legal_translation_unit():
     src.write_text(_kept_helper_c(_LOCAL_OPERAND_SRC))
     r = subprocess.run(["gcc", "-O2", "-std=c23", "-fsyntax-only", str(src)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+
+
+def test_a_local_bound_from_a_helper_takes_the_callee_return_shape():
+    """A local a helper call binds is sized by the CALLEE'S RETURN, never by joining the call's args.
+
+    Nothing else resolves such a local: it is neither a declared array nor an allocation, so the
+    resolver fell through to the elementwise route and answered with the broadcast join of the
+    ARGUMENTS. ``shrink`` returns two columns fewer than it is given, so the join reported ``x``'s
+    own ``(M, N)`` -- and ``scale``, reading a 4x3 buffer at 4x5 strides, ran off the end of it and
+    into whatever followed. conv2d_batch_norm_scaling failed exactly this way, silently, because
+    at preset S its two disagreeing extents happened to hold the same number.
+    """
+    src = ("import numpy as np\n"
+           "def shrink(v, k):\n"
+           " return v[:, k:] + v[:, :-k]\n"
+           "def scale(u, s):\n"
+           " return u * s\n"
+           "def f(x, s, out):\n"
+           " h = shrink(x, 2)\n"
+           " g = scale(h, s)\n"
+           " out[:] = g\n")
+    M, N = 4, 5
+    x = np.arange(M * N, dtype=np.float64).reshape(M, N) + 1.0
+    ok, res = _all_ok(
+        run_op(src,
+               "f", {
+                   "x": x,
+                   "s": 3.0
+               }, {"out": (M, N - 2)}, {
+                   "M": M,
+                   "N": N
+               },
+               shapes={
+                   "x": "(M,N)",
+                   "out": "(M,N-2)"
+               },
+               backends=_ALL))
+    assert ok, res

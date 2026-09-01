@@ -20,13 +20,14 @@ import pytest
 
 from _bench_yaml import bench_info_for, foundation_kernels, kir_for
 from numpyto_c.dace_emit import (
-    BindMethodReceiver, DesugarChainedCompare, DivisibleStridedSpan, DropIdentityAsarray, negative_step,
-    LowerCallsDaceCannotReplace, NormalizeReshape, PointwiseScatterToLoop, ResolveInferredReshape, ResolveShapeReads,
-    RewriteBuiltinDtype, rank_of_subscript, ranks_including_aliases, _AnnotateEmptyDtype, _CopyScalarAlias,
-    _DesugarChainedAssign, _DesugarTernary, _DesugarUnreplacedCalls, _ResolveZeros, _RewriteFrameworkDtype,
-    _SplitReassignedSize, _dace_dtype, _float_names, _inline_symbol_aliases, _plan_size_promotion, _widen_int_seeds,
-    emit_dace, copy_view_bindings, loop_target_ranks, mixed_view_names, names_logical_sparse, shape_argument,
-    value_binding, version_reallocations, version_rebound_names, version_rebound_views)  # noqa: E402
+    BindMethodReceiver, BroadcastScalarWhere, DesugarChainedCompare, DivisibleStridedSpan, DropIdentityAsarray,
+    inline_slice_only_extents, negative_step, LowerCallsDaceCannotReplace, NormalizeReshape, PointwiseScatterToLoop,
+    ResolveInferredReshape, ResolveShapeReads, RewriteBuiltinDtype, rank_of_subscript, ranks_including_aliases,
+    _AnnotateEmptyDtype, _CopyScalarAlias, _DesugarChainedAssign, _DesugarTernary, _DesugarUnreplacedCalls,
+    _ResolveZeros, _RewriteFrameworkDtype, _SplitReassignedSize, _dace_dtype, _float_names, _inline_symbol_aliases,
+    _plan_size_promotion, _widen_int_seeds, emit_dace, copy_view_bindings, loop_target_ranks, mixed_view_names,
+    names_logical_sparse, shape_argument, value_binding, version_reallocations, version_rebound_names,
+    version_rebound_views)  # noqa: E402
 from numpyto_common.frontend import (
     emit_with_inline_fallback,
     parse_kernel,  # noqa: E402
@@ -764,6 +765,23 @@ def test_an_array_alias_is_not_promoted_to_an_int64_symbol():
            "    oh = (h.shape[2] + 2) // 1\n    acc = np.zeros((oh, 8), h.dtype)\n")
     order, defs, _ = _plan_size_promotion(ast.parse(src).body[0], {"x"}, set())
     assert "h" not in order and not any(nm == "h" for nm, _ in defs)
+
+
+def _where_filled(shapes, body):
+    return ast.unparse(BroadcastScalarWhere(shapes).visit(ast.parse(f"def k():\n    {body}\n"))).splitlines()[1:]
+
+
+def test_where_of_two_scalar_parameters_gets_one_branch_broadcast_to_the_condition():
+    """needleman_wunsch/smith_waterman: ``np.where(a[:, None] == b[None, :], match_score,
+    mismatch_penalty)`` has both branches a scalar PARAMETER, not a literal -- dace sizes a where
+    from its branches and refused with a memlet dimensionality mismatch on the later ``sub[i, j]``
+    read. ``is_scalar_literal`` alone missed a named rank-0 argument; the fix also checks infer()
+    against the shapes table, which already carries every declared scalar as ``[]``."""
+    shapes = {"a": ["N"], "b": ["N"], "match_score": [], "mismatch_penalty": []}
+    body = "sub = np.where(a[:, None] == b[None, :], match_score, mismatch_penalty)"
+    assert _where_filled(
+        shapes,
+        body)[-1] == ("    sub = np.where(a[:, None] == b[None, :], np.full((N, N), match_score), mismatch_penalty)")
 
 
 # Refusal classes the 2026-08-07 re-sweep pinned.
@@ -1604,6 +1622,66 @@ def test_an_axis_no_element_indexes_survives_whether_an_ellipsis_is_written_or_n
 
 def respelled(src: str) -> str:
     return ast.unparse(DivisibleStridedSpan().visit(ast.parse(src)))
+
+
+def spliced(src: str, symbols=("st", "lo", "hi"), known=()) -> str:
+    return ast.unparse(inline_slice_only_extents(ast.parse(src), set(symbols), set(known)))
+
+
+def test_a_bound_only_a_slice_reads_is_spliced_into_the_slice():
+    """dace mints ONE opaque symbol per data-dependent slice-bound NAME. A tap loop names three of
+    them for one span -- ``lo``, ``hi``, and the ``d = hi - lo`` it writes with -- and then cannot
+    see that ``ceiling(d * st / st)`` is the extent of the gather spelled ``hi - lo``. Splicing the
+    third one back in leaves the two dace already shares, so both sides fold to one difference."""
+    got = spliced("d = hi - lo\nout[o:o + d * st:st] += x[lo:hi]")
+    assert "d = hi - lo" not in got, "the definition must go, or dace still mints a symbol for it"
+    assert got.splitlines()[-1] == "out[o:o + (hi - lo) * st:st] += x[lo:hi]"
+
+
+def test_a_bound_a_shape_also_reads_is_left_alone():
+    """The guard that makes the wider atom set safe. Splicing a name an ALLOCATION or a contraction
+    axis also reads changes a rank, not a stop: an earlier draft that inlined those turned
+    conv2d_mish_mish from a clean parse into ``contracting modes must have the same length``."""
+    src = "d = hi - lo\nacc = np.zeros((n, d))\nout[o:o + d * st:st] += acc"
+    assert "d = hi - lo" in spliced(src)
+
+
+def test_a_clamped_bound_is_left_standing_to_stay_one_minted_symbol():
+    """Inlining a min/max is what CREATES a second spelling -- dace does not fold one, so each copy
+    becomes its own opaque symbol. Left standing it is one name every reader shares."""
+    src = "d = min(hi, n) - lo\nout[o:o + d * st:st] += x[lo:hi]"
+    assert "d = min(hi, n) - lo" in spliced(src)
+
+
+def test_a_reassigned_bound_is_left_standing():
+    """The first RHS is not the value at the second use, so splicing it would silently pick the
+    wrong elements rather than refuse."""
+    src = "d = hi - lo\nout[o:o + d * st:st] += x[lo:hi]\nd = hi + lo\nout[o:o + d * st:st] += x[lo:hi]"
+    assert "d = hi - lo" in spliced(src)
+
+
+def test_the_spliced_program_computes_what_the_named_one_did():
+    """Executed rather than argued: the splice is an identity only if the definition is still the
+    value at every read. Both spellings are compiled and RUN over a sweep of bounds -- an off-by-one
+    here is a silently wrong reduction, not a parse error."""
+    src = ("def f(out, x, lo, hi, o, st):\n"
+           "    d = hi - lo\n"
+           "    out[o:o + d * st:st] += x[lo:hi]\n"
+           "    return out\n")
+    tree = ast.parse(src)
+    after = ast.unparse(inline_slice_only_extents(ast.parse(src), {"st", "lo", "hi"}, set()))
+    assert "d = hi - lo" not in after, "the pass did not fire, so this proves nothing"
+    before_ns: dict = {}
+    after_ns: dict = {}
+    exec(compile(tree, "<before>", "exec"), before_ns)  # noqa: S102 -- the source is built above
+    exec(compile(ast.parse(after), "<after>", "exec"), after_ns)  # noqa: S102
+    for st in range(1, 5):
+        for lo in range(0, 5):
+            for hi in range(lo, lo + 6):
+                x = np.arange(hi + 1, dtype=np.float64)
+                want = before_ns["f"](np.zeros(64), x, lo, hi, 3, st)
+                got = after_ns["f"](np.zeros(64), x, lo, hi, 3, st)
+                assert np.array_equal(want, got), f"st={st} lo={lo} hi={hi}"
 
 
 def test_a_tap_loop_span_is_respelled_to_a_step_divisible_one():

@@ -1730,7 +1730,10 @@ class BroadcastScalarWhere(ResolveShapeReads):
                 and isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy")
                 and len(node.args) == 3 and not node.keywords):
             return node
-        scalars = [k for k in (1, 2) if is_scalar_literal(node.args[k])]
+        # A scalar PARAMETER (match_score in needleman_wunsch) is rank 0 exactly like a literal --
+        # infer() already resolves it via value_shapes -- but is_scalar_literal alone missed it,
+        # so a where(cond, scalar_param, scalar_param) passed through unfilled and dace refused.
+        scalars = [k for k in (1, 2) if is_scalar_literal(node.args[k]) or self.infer(node.args[k]) == []]
         if not scalars:
             return node
         shape = self.infer(node.args[0])
@@ -2694,6 +2697,62 @@ def _inline_symbol_aliases(fn_ast: ast.AST, symbols: set, known: set) -> ast.AST
     return fn_ast
 
 
+def slice_bound_only_locals(fn_ast: ast.AST) -> set:
+    """Names every one of whose READS sits in a slice bound -- never in a shape, reshape or axis.
+
+    Inlining one cannot change any array's rank or extent, only where a view starts and stops, so
+    the wider atom set below is safe here in a way it is not for a name a shape reads.
+    """
+    inside: set = set()
+    outside: set = set()
+
+    def visit(node: ast.AST, in_slice: bool) -> None:
+        if isinstance(node, ast.Name):
+            if isinstance(node.ctx, ast.Load):
+                (inside if in_slice else outside).add(node.id)
+            return
+        for field, value in ast.iter_fields(node):
+            here = in_slice or (isinstance(node, ast.Slice) and field in ("lower", "upper", "step"))
+            for child in (value if isinstance(value, list) else [value]):
+                if isinstance(child, ast.AST):
+                    visit(child, here)
+
+    visit(fn_ast, False)
+    return inside - outside
+
+
+def inline_slice_only_extents(fn_ast: ast.AST, symbols: set, known: set) -> ast.AST:
+    """Splice a slice bound's definition into the slice, so two spans that ARE one quantity share
+    a spelling.
+
+    dace hoists every data-dependent slice bound into an opaque symbol of its own, one per NAME. A
+    tap loop names three of them for one span -- ``lo``, ``hi`` and the ``dyv = hi - lo`` it writes
+    with -- and dace then has no way to see that ``ceiling(dyv * stride / stride)`` is the extent of
+    the gather spelled ``hi - lo``. Splicing ``dyv`` back in leaves ``lo`` and ``hi`` as the only
+    minted symbols, and both sides fold to the same difference.
+
+    Deliberately narrower than :func:`_inline_symbol_aliases`: only names read NOWHERE but in a
+    slice bound, so a spliced expression can never reach an allocation or a contraction axis.
+    """
+    cand = slice_bound_only_locals(fn_ast) & once_bound_locals(fn_ast, known)
+    if not cand:
+        return fn_ast
+    first_rhs, order, reassigned = _scan_size_assigns(fn_ast, cand)
+    atoms = symbols | mintable_int_locals(fn_ast, symbols, known)
+    alias: Dict[str, ast.AST] = {}
+    for nm in order:
+        if nm in reassigned or names_a_clamp(first_rhs[nm]):
+            continue
+        if _is_symbol_expr(first_rhs[nm], atoms | set(alias)):
+            alias[nm] = fold_expr(_SubstituteNames(alias).visit(copy.deepcopy(first_rhs[nm])))
+    if not alias:
+        return fn_ast
+    fn_ast = _SubstituteNames(alias).visit(fn_ast)
+    fn_ast = _DropAliasAssign(alias).visit(fn_ast)
+    ast.fix_missing_locations(fn_ast)
+    return fn_ast
+
+
 def _is_shape_subscript(node: ast.AST) -> bool:
     """True iff node is <expr>.shape[k] -- a residual .shape read of a body-local transient's dimension."""
     return (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Attribute) and node.value.attr == "shape")
@@ -3109,6 +3168,7 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
         fn_ast = _inline_symbol_aliases(fn_ast, set(symbol_names) | set(promotable) | loop_syms, known)
     # AFTER the alias inliner: the tap-loop span reaches here as the name ``span_h``, and only the
     # inlining above turns it into the ``A * stride + 1`` this matches on.
+    fn_ast = inline_slice_only_extents(fn_ast, set(symbol_names) | loop_syms, known)
     fn_ast = DivisibleStridedSpan().visit(fn_ast)
     ast.fix_missing_locations(fn_ast)
     # dace forbids a data-dependent array shape; promote body-computed size scalars to dc.symbols the caller binds.

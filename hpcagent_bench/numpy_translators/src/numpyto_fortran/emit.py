@@ -2518,6 +2518,11 @@ def _to_fortran_shape_token(tok: str) -> str:
         if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in ("max", "min")
                 and not n.keywords):
             return f"{n.func.id}({', '.join(kinded(a) for a in n.args)})"
+        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "int" and len(n.args) == 1
+                and not n.keywords):
+            # Python's ``int(x)`` unparsed verbatim is a DEFAULT-kind Fortran ``int(x)``, mismatched
+            # against the c_int64_t extents it sits beside in MODULO/arithmetic -- kind it explicitly.
+            return f"INT(({emit(n.args[0])}), c_int64_t)"
         # Fallback: textual unparse (may leak Python syntax but preserves the user-visible form).
         return ast.unparse(n)
 
@@ -2543,11 +2548,17 @@ def _shape_token_uses_unknown(tok: str, allowed: Set[str]) -> bool:
     return False
 
 
-def _fortran_safe_token(tok: str) -> str:
-    """Rewrite embedded identifiers in a shape/expression token string so __name maps to x_name."""
+def _fortran_safe_token(tok: str, case_map: Optional[Dict[str, str]] = None) -> str:
+    """Rewrite embedded identifiers in a shape/expression token string so __name maps to x_name.
+
+    ``case_map``, when given, also folds a case-insensitive collision the way :func:`_case_safe_name`
+    does -- a shape token can name a scalar that a helper's own case-collision rewrite retargeted.
+    """
     if not isinstance(tok, str):
         return tok
-    return _FORTRAN_TOKEN_RE.sub(lambda m: _fortran_safe(m.group(0)), tok)
+    if case_map is None:
+        return _FORTRAN_TOKEN_RE.sub(lambda m: _fortran_safe(m.group(0)), tok)
+    return _FORTRAN_TOKEN_RE.sub(lambda m: _case_safe_name(m.group(0), case_map), tok)
 
 
 def rebind_loop_tokens(tok: str, scope: Optional[List[Tuple[str, str]]]) -> str:
@@ -2717,6 +2728,60 @@ def _record_ifexp_temp_dtypes(emitter: "_FortranBodyEmitter", temps: Dict[str, T
         local_dtypes[rename(name)] = dtype
 
 
+def _fortran_case_map(kir: KernelIR) -> Dict[str, str]:
+    """Case-insensitive collision map for one KernelIR (top-level kernel or a single helper).
+
+    Fortran folds identifiers by case; Python does not, so a caller-facing ``N`` and an internal
+    ``n`` -- both legitimate, distinct Python names -- land on the same dummy and gfortran rejects
+    the duplicate. Descriptor names (symbols/arrays/scalars) are reserved first and keep their
+    spelling: a shape token references them verbatim, and renaming one would leave the token
+    naming an undeclared identifier. Any other name folding to an already-reserved (or
+    already-seen local) spelling is routed to ``f_<lower>`` instead.
+    """
+    reserved: Set[str] = set()
+    reserved_ordered: List[str] = []
+    for descs in (kir.symbols, kir.arrays, kir.scalars):
+        for d in descs:
+            if d.name not in reserved:
+                reserved.add(d.name)
+                reserved_ordered.append(d.name)
+    case_map: Dict[str, str] = {}
+    for r in reserved_ordered:
+        case_map.setdefault(r.lower(), "f_" + r.lower())
+        case_map.setdefault(r.lower() + "_reserved", r)
+    # ALSO scan the AST body for local-vs-local case clashes (a loop iterator i and a boolean
+    # local I collapse to the same identifier). Keep the first occurrence reserved, route the rest.
+    locals_by_lc: Dict[str, List[str]] = {}
+    for node in ast.walk(kir.tree):
+        n = None
+        if isinstance(node, ast.Name):
+            n = node.id
+        elif isinstance(node, ast.For) and isinstance(node.target, ast.Name):
+            n = node.target.id
+        if n is None or n in reserved or n.startswith("_"):
+            continue
+        lc = n.lower()
+        if lc in case_map:
+            continue
+        bucket = locals_by_lc.setdefault(lc, [])
+        if n not in bucket:
+            bucket.append(n)
+    for lc, members in locals_by_lc.items():
+        if len(members) < 2:
+            continue
+        case_map[lc] = "f_" + lc
+        case_map[lc + "_reserved"] = members[0]
+    return case_map
+
+
+def _case_safe_name(name: str, case_map: Dict[str, str]) -> str:
+    """``_fortran_safe`` plus the case-collision rewrite from :func:`_fortran_case_map`."""
+    s = _fortran_safe(name)
+    if s.lower() in case_map and case_map.get(s.lower() + "_reserved") != s:
+        return case_map[s.lower()]
+    return s
+
+
 class _FortranRenameTemps(ast.NodeTransformer):
     """Rewrite every leading-underscore Name/For-target to a Fortran-safe form, case-insensitive collisions to f_<name>,
     and give each For-loop iterator a unique Fortran name so nested loops do not reuse the same DO variable."""
@@ -2869,64 +2934,18 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, parallel: bool = 
     # ORIGINAL names, before the Fortran identifier rename below can shift a
     # renamed param to a different sort slot and desync the positional ABI.
     abi_param_order = kir.param_order()
-    # Strip leading underscores from every Name (Fortran forbids them). Also
-    # handle case-insensitive collisions: Fortran folds K and k to one
-    # identifier, so a symbol K and a loop iter k would clash; case_map routes
-    # the offender to an f_-prefixed rewrite. Size SYMBOLS claim the reserved
-    # slot first (via setdefault) since they're referenced by array shape
-    # tokens emitted verbatim -- renaming a symbol would leave those tokens
-    # dangling as an undeclared (implicitly REAL) name.
-    reserved: Set[str] = set()
-    reserved_ordered: List[str] = []
-    for _descs in (kir.symbols, kir.arrays, kir.scalars):
-        for _d in _descs:
-            if _d.name not in reserved:
-                reserved.add(_d.name)
-                reserved_ordered.append(_d.name)
-    case_map: Dict[str, str] = {}
-    for r in reserved_ordered:
-        case_map.setdefault(r.lower(), "f_" + r.lower())
-        case_map.setdefault(r.lower() + "_reserved", r)
-    # ALSO scan the AST body for local-vs-local case clashes (an i loop iter and
-    # an I boolean local collapse to the same identifier). For each lowercase
-    # form with multiple distinct cased members, keep the first occurrence
-    # reserved and route every other to f_<name>.
-    locals_by_lc: Dict[str, List[str]] = {}
-    for node in ast.walk(kir.tree):
-        n = None
-        if isinstance(node, ast.Name):
-            n = node.id
-        elif isinstance(node, ast.For) and isinstance(node.target, ast.Name):
-            n = node.target.id
-        if n is None:
-            continue
-        if n in reserved:
-            continue
-        # Skip leading-underscore names; _fortran_safe renames them before they reach the case map.
-        if n.startswith("_"):
-            continue
-        lc = n.lower()
-        if lc in case_map:
-            continue
-        bucket = locals_by_lc.setdefault(lc, [])
-        if n not in bucket:
-            bucket.append(n)
-    for lc, members in locals_by_lc.items():
-        if len(members) < 2:
-            continue
-        # Keep the first observed cased form; rewrite the rest.
-        keep = members[0]
-        case_map[lc] = "f_" + lc
-        case_map[lc + "_reserved"] = keep
+    # Strip leading underscores from every Name (Fortran forbids them). Also handle
+    # case-insensitive collisions: Fortran folds K and k to one identifier, so a symbol K and a
+    # loop iter k would clash; case_map (see _fortran_case_map) routes the offender to an
+    # f_-prefixed rewrite instead of dropping either name.
+    case_map = _fortran_case_map(kir)
+
     # Rename parameter/symbol/array/scalar descriptors with the same
     # underscore-strip + case-collision rewrite the AST-Name rename applies to
     # the body, so e.g. a symbol NP and a scratch scalar np don't both appear
     # in the signature (Fortran rejects the duplicate).
     def _safe_with_case(n: str) -> str:
-        s = _fortran_safe(n)
-        if s.lower() in case_map and case_map.get(s.lower() + "_reserved") != s:
-            return case_map[s.lower()]
-        return s
+        return _case_safe_name(n, case_map)
 
     def _rename_shape_token(tok: str) -> str:
         """The same rewrite applied to identifiers INSIDE a shape token.
@@ -3691,20 +3710,30 @@ def hoist_nested_helper_calls(stmts: List[ast.stmt], helper_names, counter: List
     return out
 
 
-def _rename_helper_to_fortran_safe(hkir: KernelIR) -> KernelIR:
-    """Fortran-safe rename of a captured helper KIR, mirroring the kernel-level rename so body and decl names match."""
+def _rename_helper_to_fortran_safe(hkir: KernelIR) -> Tuple[KernelIR, Dict[str, str]]:
+    """Fortran-safe rename of a captured helper KIR, mirroring the kernel-level rename so body and decl names match.
+
+    Returns the renamed KIR alongside its case_map: a helper's ABI order and result name are read
+    from the ORIGINAL (pre-rename) KIR by :func:`_helper_abi_order`, so :func:`_emit_fortran_helper`
+    needs the same map to fold them the identical way the body and decls below were folded.
+    """
+    case_map = _fortran_case_map(hkir)
     htree = copy.deepcopy(hkir.tree)
     # Fortran-only IfExp->if/else hoist (see _hoist_ifexp_stmts), same as the top-level kernel tree.
     htree.body, ifexp_temps = _hoist_ifexp(htree.body)
-    _FortranRenameTemps().visit(htree)
+    _FortranRenameTemps(case_map=case_map).visit(htree)
     ast.fix_missing_locations(htree)
+
+    def safe(n: str) -> str:
+        return _case_safe_name(n, case_map)
+
     r_arrays = [
-        dataclasses.replace(a, name=_fortran_safe(a.name), shape=tuple(_fortran_safe_token(t) for t in a.shape))
+        dataclasses.replace(a, name=safe(a.name), shape=tuple(_fortran_safe_token(t, case_map) for t in a.shape))
         for a in hkir.arrays
     ]
-    r_scalars = [dataclasses.replace(s, name=_fortran_safe(s.name)) for s in hkir.scalars]
-    r_symbols = [dataclasses.replace(s, name=_fortran_safe(s.name)) for s in hkir.symbols]
-    r_return = (_fortran_safe(hkir.return_kind) if hkir.return_kind not in (None, "scalar") else hkir.return_kind)
+    r_scalars = [dataclasses.replace(s, name=safe(s.name)) for s in hkir.scalars]
+    r_symbols = [dataclasses.replace(s, name=safe(s.name)) for s in hkir.symbols]
+    r_return = (safe(hkir.return_kind) if hkir.return_kind not in (None, "scalar") else hkir.return_kind)
     # The harvested side-tables are typed KernelIR fields; rename their keys and
     # embedded __name shape tokens the same way and carry them on the replace.
     renamed = dataclasses.replace(hkir,
@@ -3712,28 +3741,28 @@ def _rename_helper_to_fortran_safe(hkir: KernelIR) -> KernelIR:
                                   arrays=r_arrays,
                                   scalars=r_scalars,
                                   symbols=r_symbols,
-                                  input_args=[_fortran_safe(p) for p in hkir.input_args],
+                                  input_args=[safe(p) for p in hkir.input_args],
                                   return_kind=r_return,
                                   zeros_locals={
-                                      _fortran_safe(k): tuple(_fortran_safe_token(t) for t in v) if v else v
+                                      safe(k): tuple(_fortran_safe_token(t, case_map) for t in v) if v else v
                                       for k, v in hkir.zeros_locals.items()
                                   },
                                   zeros_fills={
-                                      _fortran_safe(k): v
+                                      safe(k): v
                                       for k, v in hkir.zeros_fills.items()
                                   },
                                   reassign_shapes={
-                                      _fortran_safe(k): [tuple(_fortran_safe_token(t) for t in sh) for sh in v]
+                                      safe(k): [tuple(_fortran_safe_token(t, case_map) for t in sh) for sh in v]
                                       for k, v in hkir.reassign_shapes.items()
                                   },
                                   local_dtypes={
-                                      _fortran_safe(k): v
+                                      safe(k): v
                                       for k, v in hkir.local_dtypes.items()
                                   })
     # Same branch-type join as the kernel tree, on the helper's own (fresh) local_dtypes dict --
     # _emit_fortran_helper calls _collect_implicit_locals on this KernelIR to declare its locals.
-    _record_ifexp_temp_dtypes(_FortranBodyEmitter(renamed), ifexp_temps, _fortran_safe)
-    return renamed
+    _record_ifexp_temp_dtypes(_FortranBodyEmitter(renamed), ifexp_temps, safe)
+    return renamed, case_map
 
 
 def _emit_fortran_helper(hkir: KernelIR,
@@ -3748,14 +3777,17 @@ def _emit_fortran_helper(hkir: KernelIR,
     call another, and its body emitter needs their call shapes to spell that as a ``call``.
     """
     abi_order, ret_orig = _helper_abi_order(hkir)
-    hkir = _rename_helper_to_fortran_safe(hkir)
+    hkir, case_map = _rename_helper_to_fortran_safe(hkir)
     name = _fortran_safe(hkir.kernel_name)
     sym_by = {s.name: s for s in hkir.symbols}
     arr_by = {a.name: a for a in hkir.arrays}
     sca_by = {s.name: s for s in hkir.scalars}
-    # One order for definition and call; only the SPELLING is Fortran-specific.
-    ret_name = _fortran_safe(ret_orig) if ret_orig is not None else None
-    param_names = [_fortran_safe(p) for p in abi_order]
+    # One order for definition and call; only the SPELLING is Fortran-specific. abi_order/ret_orig
+    # are read on the PRE-rename KIR (see _helper_abi_order's docstring), so they fold through the
+    # same case_map the body and decls above were folded with -- a caller symbol N and a
+    # helper-local n differ only by case, and Fortran folds the two dummies to one identifier.
+    ret_name = _case_safe_name(ret_orig, case_map) if ret_orig is not None else None
+    param_names = [_case_safe_name(p, case_map) for p in abi_order]
     ret_decl = None
     if hkir.return_kind == "scalar":
         # A real result follows the KERNEL's float precision, exactly as _collect_implicit_locals
