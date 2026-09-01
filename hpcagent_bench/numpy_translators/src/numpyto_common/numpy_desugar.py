@@ -731,6 +731,17 @@ def _dtype_kind(value: ast.AST, dtypes: Dict[str, str]) -> Optional[str]:
         # imaginary part.
         if attr in ("sqrt", "exp", "sin", "cos", "conj", "conjugate", "sum", "prod", "transpose") and value.args:
             return _dtype_kind(value.args[0], dtypes)
+        # ``mean``/``std``/``var`` always land on a float (numpy upcasts an integer input to
+        # float64 and keeps a float input's own width); only ``mean`` carries a complex through,
+        # ``std``/``var`` measure a REAL spread. Missing them typed everything downstream of a
+        # batchnorm UNKNOWN, and unknown is what makes :func:`_reduce_axis_stmts` fall back to a
+        # hardcoded ``np.float64`` accumulator -- an fp32 kernel then grows a float64 half that
+        # the library nodes downstream refuse outright.
+        if attr in ("mean", "std", "var") and value.args:
+            inner = _dtype_kind(value.args[0], dtypes)
+            if inner is None:
+                return None
+            return "complex" if (attr == "mean" and inner == "complex") else "float"
     return None
 
 
