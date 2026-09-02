@@ -6,7 +6,7 @@
 # scripts/check_format.py drive. Equivalent to `pip install -e '.[cpu]' --group linting`, kept
 # because a bare `pip install -r requirements.txt` is what a first-time reader reaches for.
 -r requirements/cpu.txt
-yapf
+ruff
 fprettify
 clang-format
 pre-commit
