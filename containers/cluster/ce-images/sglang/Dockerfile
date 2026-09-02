@@ -329,7 +329,14 @@ import triton
 print("torch", torch.__version__, "triton", triton.__version__, file=sys.stderr)
 print("flydsl", flydsl.__version__, "hf_hub", huggingface_hub.__version__, file=sys.stderr)
 assert torch.version.hip is not None, "not a ROCm torch"
-assert sglang.__file__.startswith("/sgl-workspace/sglang/"), sglang.__file__
+# __path__, not __file__: sglang imports as a namespace/editable package here, so __file__ is None
+# and the old check died on NoneType rather than on a wrong location (job 619990). __path__ answers
+# the question that was actually being asked -- which tree this import resolves to -- for a regular
+# package, a namespace package and a PEP 660 editable install alike. Printed as well as asserted,
+# so a future move shows the path instead of only the failure.
+sglang_paths = [str(p) for p in sglang.__path__]
+print("sglang", sglang_paths, file=sys.stderr)
+assert any(p.startswith("/sgl-workspace/sglang/") for p in sglang_paths), sglang_paths
 subprocess.run([sys.executable, "-m", "sglang.launch_server", "--help"], check=True,
                stdout=subprocess.DEVNULL)
 
