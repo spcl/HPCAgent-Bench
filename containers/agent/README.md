@@ -114,8 +114,8 @@ srun --environment=optarena-nvidia-gh200 /opt/optarena-agent/start_run.sh
 Ready-to-edit examples live next to the EDFs:
 
 ```text
-containers/cluster/ce-images/amd/agent.sbatch.example
-containers/cluster/ce-images/nvidia/agent.sbatch.example
+containers/cluster/ce-images/judge-agent-amd/build.sbatch
+containers/cluster/ce-images/judge-agent-cuda/build.sbatch
 ```
 
 ## Tool Payloads
