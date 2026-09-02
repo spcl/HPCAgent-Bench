@@ -143,6 +143,27 @@ jobs:
       - name: Setup -- reset the ccache counters
         run: ccache --zero-stats
 
+      # PAPI -- tests/test_papi_counters.py's `requires_papi`-gated tests otherwise always skip
+      # in THIS job: libpapi-dev was never apt-installed anywhere pytest runs (only the
+      # container-image build installs it, and only for a `papi_avail` smoke check that never
+      # runs this file). A skip that always fires reads as green forever -- it let a `timed_call`
+      # arity regression sit undetected in the counted closures until someone ran the suite
+      # locally (edab86fa7). Mirrors containers/cluster/ce-images/{amd,nvidia}/Dockerfile.
+      #
+      # The paranoid sysctl is best-effort (`|| true`): GitHub's own hosted-runner hypervisor is
+      # widely reported to not expose hardware PMU counters to the guest AT ALL, independent of
+      # this sysctl (actions/runner-images#4974, #11789), so lowering it may buy nothing. Because
+      # of that, `requires_papi` also gates on `papi.perf_event_reason()` (paranoid > 2, or no
+      # perf_event subsystem at all) -- these tests may still legitimately skip here, and that is
+      # an honest environment limit this step cannot force open. CI_EXPECTS_PAPI below only
+      # asserts the LIBRARY installed, which is the half this step actually controls.
+      - name: Setup -- PAPI (tests/test_papi_counters.py's requires_papi gate)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libpapi-dev
+          sudo sysctl -w kernel.perf_event_paranoid=1 >/dev/null 2>&1 || true
+          echo "HPCAGENT_BENCH_CI_PAPI_INSTALLED=1" >> "$GITHUB_ENV"
+
       # Phase 0 runs BEFORE the heavy setup so a formatting slip fails in seconds. yapf /
       # fprettify / clang-format ship as wheels (the clang-format wheel carries the binary), and
       # `--group linting` with no project argument installs those THREE and nothing else -- the
