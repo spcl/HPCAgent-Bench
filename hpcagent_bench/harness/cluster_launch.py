@@ -1,6 +1,7 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Single-job cluster launcher: ONE SLURM allocation, MPI rank -> role (vLLM head/worker, judge, driver)."""
+
 import math
 import socket
 import subprocess
@@ -30,6 +31,7 @@ class RankRole:
     For a :data:`JUDGE` rank ``endpoint`` is its JUDGE RANK -- its index into the ``judge_urls``
     the driver assembles, which is what an agent worker names when it grades there. Judges are
     ordered by MPI rank in both places, so the two agree by construction."""
+
     role: str
     endpoint: int
     head_rank: int
@@ -57,9 +59,11 @@ def plan_traditional_roles(world_size: int, optimizer_nodes: int, judge_nodes: i
         raise ValueError(f"optimizer_nodes ({optimizer_nodes}) and judge_nodes ({judge_nodes}) must both be >= 1")
     need = expected_traditional_world(optimizer_nodes, judge_nodes)
     if world_size != need:
-        raise ValueError(f"world size {world_size} != O + J = {need} (optimizer_nodes={optimizer_nodes} "
-                         f"+ judge_nodes={judge_nodes}); allocate exactly {need} nodes "
-                         f"(srun -N {need} --ntasks-per-node=1)")
+        raise ValueError(
+            f"world size {world_size} != O + J = {need} (optimizer_nodes={optimizer_nodes} "
+            f"+ judge_nodes={judge_nodes}); allocate exactly {need} nodes "
+            f"(srun -N {need} --ntasks-per-node=1)"
+        )
     roles: List[RankRole] = []
     for r in range(world_size):
         if r < optimizer_nodes:
@@ -72,14 +76,18 @@ def plan_traditional_roles(world_size: int, optimizer_nodes: int, judge_nodes: i
 def plan_roles(world_size: int, inference_endpoints: int, nodes_per_vllm: int, judge_nodes: int) -> List[RankRole]:
     """The per-rank role table for the whole allocation; raises ValueError on a bad shape or size mismatch."""
     if inference_endpoints < 1 or nodes_per_vllm < 1 or judge_nodes < 1:
-        raise ValueError(f"inference_endpoints ({inference_endpoints}), nodes_per_vllm ({nodes_per_vllm}) and "
-                         f"judge_nodes ({judge_nodes}) must all be >= 1")
+        raise ValueError(
+            f"inference_endpoints ({inference_endpoints}), nodes_per_vllm ({nodes_per_vllm}) and "
+            f"judge_nodes ({judge_nodes}) must all be >= 1"
+        )
     need = expected_world(inference_endpoints, nodes_per_vllm, judge_nodes)
     if world_size != need:
-        raise ValueError(f"world size {world_size} != I*K + J = {need} "
-                         f"(inference_endpoints={inference_endpoints} x nodes_per_vllm={nodes_per_vllm} "
-                         f"+ judge_nodes={judge_nodes}); allocate exactly {need} nodes "
-                         f"(srun -N {need} --ntasks-per-node=1)")
+        raise ValueError(
+            f"world size {world_size} != I*K + J = {need} "
+            f"(inference_endpoints={inference_endpoints} x nodes_per_vllm={nodes_per_vllm} "
+            f"+ judge_nodes={judge_nodes}); allocate exactly {need} nodes "
+            f"(srun -N {need} --ntasks-per-node=1)"
+        )
     vllm_total = inference_endpoints * nodes_per_vllm
     roles: List[RankRole] = []
     for r in range(world_size):
@@ -106,13 +114,20 @@ def assemble_urls(gathered: Sequence[dict], vllm_port: int, judge_port: int) -> 
     return vllm_urls, judge_urls
 
 
-def vllm_command(model: str, port: int, tensor_parallel: int, pipeline_parallel: int,
-                 extra: Sequence[str]) -> List[str]:
+def vllm_command(
+    model: str, port: int, tensor_parallel: int, pipeline_parallel: int, extra: Sequence[str]
+) -> List[str]:
     """The vllm serve argv for an endpoint head; pipeline_parallel > 1 turns on the ray executor."""
     cmd = [
-        "vllm", "serve", model, "--host", "0.0.0.0", "--port",
-        str(port), "--tensor-parallel-size",
-        str(tensor_parallel)
+        "vllm",
+        "serve",
+        model,
+        "--host",
+        "0.0.0.0",
+        "--port",
+        str(port),
+        "--tensor-parallel-size",
+        str(tensor_parallel),
     ]
     if pipeline_parallel > 1:
         cmd += ["--pipeline-parallel-size", str(pipeline_parallel), "--distributed-executor-backend", "ray"]
@@ -150,8 +165,16 @@ def popen(cmd: Sequence[str], log: Callable[[str], None]) -> subprocess.Popen:
     return subprocess.Popen(list(cmd))
 
 
-def start_inference(me: RankRole, nodes_per_vllm: int, model: str, vllm_port: int, gpus_per_node: int, head_host: str,
-                    vllm_extra: Sequence[str], log: Callable[[str], None]) -> List[subprocess.Popen]:
+def start_inference(
+    me: RankRole,
+    nodes_per_vllm: int,
+    model: str,
+    vllm_port: int,
+    gpus_per_node: int,
+    head_host: str,
+    vllm_extra: Sequence[str],
+    log: Callable[[str], None],
+) -> List[subprocess.Popen]:
     """Bring this inference rank up: vllm serve alone for K==1, else ray head/workers then vllm serve over ray."""
     procs: List[subprocess.Popen] = []
     use_ray = nodes_per_vllm > 1
@@ -162,22 +185,22 @@ def start_inference(me: RankRole, nodes_per_vllm: int, model: str, vllm_port: in
         return procs
     if use_ray and me.role == VLLM_HEAD:
         procs.append(
-            popen(["ray", "start", "--head", f"--port={RAY_PORT}", f"--num-gpus={gpus_per_node}", "--block"], log))
+            popen(["ray", "start", "--head", f"--port={RAY_PORT}", f"--num-gpus={gpus_per_node}", "--block"], log)
+        )
         # Popen returns once 'ray start --block' backgrounds; wait for the GCS before vllm attaches
         if not wait_ready([f"http://127.0.0.1:{RAY_PORT}"], 120.0, log):
             log("[launch] ray GCS not up after 120s; vllm serve may fail to attach")
     if me.role == VLLM_HEAD:
-        cmd = vllm_command(model,
-                           vllm_port,
-                           tensor_parallel=gpus_per_node,
-                           pipeline_parallel=nodes_per_vllm,
-                           extra=vllm_extra)
+        cmd = vllm_command(
+            model, vllm_port, tensor_parallel=gpus_per_node, pipeline_parallel=nodes_per_vllm, extra=vllm_extra
+        )
         procs.append(popen(cmd, log))
     return procs
 
 
-def start_judge(judge_port: int, judge_rank: int, serve_extra: Sequence[str], log: Callable[[str],
-                                                                                            None]) -> subprocess.Popen:
+def start_judge(
+    judge_port: int, judge_rank: int, serve_extra: Sequence[str], log: Callable[[str], None]
+) -> subprocess.Popen:
     """Run hpcagent-bench serve through THIS interpreter, so the judge subprocess uses the launcher's venv/image.
 
     ``--rank`` is passed EXPLICITLY rather than left for the judge to read out of ``$PMI_RANK`` /
@@ -186,9 +209,16 @@ def start_judge(judge_port: int, judge_rank: int, serve_extra: Sequence[str], lo
     whatever the environment happens to hold is the ambient-configuration bug this check exists to
     catch. The launcher owns the mapping; the judge is told."""
     cmd = [
-        sys.executable, "-m", "hpcagent_bench", "serve", "--host", "0.0.0.0", "--port",
-        str(judge_port), "--rank",
-        str(judge_rank)
+        sys.executable,
+        "-m",
+        "hpcagent_bench",
+        "serve",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        str(judge_port),
+        "--rank",
+        str(judge_rank),
     ]
     return popen(cmd + list(serve_extra), log)
 
@@ -222,8 +252,9 @@ def settle_rounds(ready_timeout: float, poll_interval: float = POLL_INTERVAL) ->
     return max(2, int(ready_timeout // poll_interval))
 
 
-def rank_status(me: RankRole, procs: Sequence[subprocess.Popen], vllm_port: int, judge_port: int, hostname: str,
-                rank: int) -> Dict[str, str]:
+def rank_status(
+    me: RankRole, procs: Sequence[subprocess.Popen], vllm_port: int, judge_port: int, hostname: str, rank: int
+) -> Dict[str, str]:
     """This rank's {"kind", "detail"} for the settle loop: dead / ready / pending, probed locally."""
     for proc in procs:
         rc = proc.poll()
@@ -241,22 +272,25 @@ def rank_status(me: RankRole, procs: Sequence[subprocess.Popen], vllm_port: int,
         return {"kind": "pending", "detail": f"rank {rank} ({me.role}) on {hostname}: port {port} not bound yet"}
 
 
-def launch(*,
-           inference_endpoints: int,
-           nodes_per_vllm: int,
-           judge_nodes: int,
-           model: str,
-           optimizer_nodes: int = 0,
-           run_driver: Callable[[List[str], List[str]], int],
-           vllm_port: int = 8000,
-           judge_port: int = 8800,
-           gpus_per_node: int = 4,
-           ready_timeout: float = 1800.0,
-           vllm_extra: Sequence[str] = (),
-           serve_extra: Sequence[str] = (),
-           log: Callable[[str], None] = print) -> int:
+def launch(
+    *,
+    inference_endpoints: int,
+    nodes_per_vllm: int,
+    judge_nodes: int,
+    model: str,
+    optimizer_nodes: int = 0,
+    run_driver: Callable[[List[str], List[str]], int],
+    vllm_port: int = 8000,
+    judge_port: int = 8800,
+    gpus_per_node: int = 4,
+    ready_timeout: float = 1800.0,
+    vllm_extra: Sequence[str] = (),
+    serve_extra: Sequence[str] = (),
+    log: Callable[[str], None] = print,
+) -> int:
     """Bootstrap the whole allocation and drive one run (collective across all ranks); rc broadcast from rank 0."""
     from mpi4py import MPI
+
     comm = MPI.COMM_WORLD
     rank, world = comm.Get_rank(), comm.Get_size()
 
@@ -265,8 +299,11 @@ def launch(*,
     # driver's rc broadcast, teardown -- is shared with the agent track rather than duplicated.
     traditional = inference_endpoints == 0
     try:
-        roles = (plan_traditional_roles(world, optimizer_nodes, judge_nodes) if traditional else plan_roles(
-            world, inference_endpoints, nodes_per_vllm, judge_nodes))
+        roles = (
+            plan_traditional_roles(world, optimizer_nodes, judge_nodes)
+            if traditional
+            else plan_roles(world, inference_endpoints, nodes_per_vllm, judge_nodes)
+        )
     except ValueError as exc:
         if rank == 0:
             log(f"[launch] bad allocation shape: {exc}")
@@ -296,18 +333,18 @@ def launch(*,
     for attempt in range(rounds_budget):
         if attempt:
             time.sleep(POLL_INTERVAL)
-        mine = ({
-            "kind": "dead",
-            "detail": spawn_error
-        } if spawn_error else rank_status(me, procs, vllm_port, judge_port, hostname, rank))
+        mine = (
+            {"kind": "dead", "detail": spawn_error}
+            if spawn_error
+            else rank_status(me, procs, vllm_port, judge_port, hostname, rank)
+        )
         statuses = comm.allgather(mine)
         failures = [s["detail"] for s in statuses if s["kind"] == "dead"]
         pending = [s["detail"] for s in statuses if s["kind"] == "pending"]
         if failures or not pending:
             break
         if me.is_driver:
-            log(f"[launch] waiting on {len(pending)}/{len(statuses)} rank(s) "
-                f"(round {attempt + 1}/{rounds_budget})...")
+            log(f"[launch] waiting on {len(pending)}/{len(statuses)} rank(s) (round {attempt + 1}/{rounds_budget})...")
 
     rc = 0
     try:
@@ -324,8 +361,10 @@ def launch(*,
                 rc = 3
             else:
                 vllm_urls, judge_urls = assemble_urls(gathered, vllm_port, judge_port)
-                log(f"[launch] {inference_endpoints} vLLM endpoint(s) x {nodes_per_vllm} node(s), "
-                    f"{judge_nodes} judge(s)")
+                log(
+                    f"[launch] {inference_endpoints} vLLM endpoint(s) x {nodes_per_vllm} node(s), "
+                    f"{judge_nodes} judge(s)"
+                )
                 log(f"[launch] vllm_urls={vllm_urls}")
                 log(f"[launch] judge_urls={judge_urls}")
                 # confirm the driver can reach each endpoint across the fabric (bound != reachable)

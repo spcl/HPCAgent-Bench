@@ -12,13 +12,27 @@ structure-preserving rounding, a non-size symbol surviving untouched, ``S`` neve
 pin that :func:`hpcagent_bench.sizing.rewrite_parameters` edits a manifest's scalars without
 disturbing the provenance comments the corpus keeps around them.
 """
+
 import dataclasses
 
 import pytest
 
-from hpcagent_bench.sizing import (PRESETS, XL_BYTE_CEILING, build_ladder, derive_ladder, fit_to_ceiling,
-                                   footprint_symbols, interpolate, interpolate_symbol, ladder_violations,
-                                   parameters_span, problem_size, rewrite_parameters, working_bytes, xl_ceiling)
+from hpcagent_bench.sizing import (
+    PRESETS,
+    XL_BYTE_CEILING,
+    build_ladder,
+    derive_ladder,
+    fit_to_ceiling,
+    footprint_symbols,
+    interpolate,
+    interpolate_symbol,
+    ladder_violations,
+    parameters_span,
+    problem_size,
+    rewrite_parameters,
+    working_bytes,
+    xl_ceiling,
+)
 from hpcagent_bench.spec import KERNELS
 
 MANIFEST = """\
@@ -61,19 +75,11 @@ def test_s_is_kept_verbatim_and_never_sized_for_measurement():
 
 def test_a_symbol_the_two_ends_agree_on_is_not_a_size():
     """A stride, a flag, a kernel width: equal at both ends, so it is carried through verbatim."""
-    ladder = build_ladder({
-        "N": 8,
-        "stride": 2,
-        "bias": False
-    }, {
-        "N": 512,
-        "stride": 2,
-        "bias": False
-    }, {
-        "N": 4096,
-        "stride": 2,
-        "bias": False
-    })
+    ladder = build_ladder(
+        {"N": 8, "stride": 2, "bias": False},
+        {"N": 512, "stride": 2, "bias": False},
+        {"N": 4096, "stride": 2, "bias": False},
+    )
     for preset in PRESETS:
         assert ladder[preset]["stride"] == 2
         assert ladder[preset]["bias"] is False
@@ -141,8 +147,11 @@ def test_rewriting_keeps_every_comment_and_touches_only_the_scalars():
     would delete them, so the rewrite is line-level and the diff is the numbers alone."""
     ladder = build_ladder({"nproma": 32, "nlev": 20}, {"nproma": 64, "nlev": 30}, {"nproma": 81920, "nlev": 90})
     out = rewrite_parameters(MANIFEST, ladder)
-    for comment in ("# Provenance: nlev is 90", "# nproma is the horizontal block width",
-                    "# Shape fuzzing derives the block counts"):
+    for comment in (
+        "# Provenance: nlev is 90",
+        "# nproma is the horizontal block width",
+        "# Shape fuzzing derives the block counts",
+    ):
         assert comment in out
     assert "  fuzzed:\n    nproma: [16, 64]\n" in out  # the fuzz block is not a preset; untouched
     assert "init:\n  func_name: initialize\n" in out
@@ -160,8 +169,10 @@ def test_rewriting_inserts_a_preset_the_manifest_was_missing():
     them: ``4 -> 64`` with both ends powers of two snaps the middle to ``8`` and ``32``."""
     text = "parameters:\n  S:\n    N: 4\n  XL:\n    N: 64\ninit:\n  func_name: initialize\n"
     out = rewrite_parameters(text, build_ladder({"N": 4}, {"N": 8}, {"N": 64}))
-    assert out == ("parameters:\n  S:\n    N: 4\n  M:\n    N: 8\n  L:\n    N: 16\n"
-                   "  XL:\n    N: 64\ninit:\n  func_name: initialize\n")
+    assert out == (
+        "parameters:\n  S:\n    N: 4\n  M:\n    N: 8\n  L:\n    N: 16\n"
+        "  XL:\n    N: 64\ninit:\n  func_name: initialize\n"
+    )
 
 
 def test_an_inserted_preset_lands_before_a_trailing_fuzz_block():
@@ -297,8 +308,9 @@ def test_working_bytes_is_unknown_not_zero_for_a_hand_written_initializer():
     shapes MEASURED and declared alongside ``init.func_name`` (``scripts/declare_init_shapes.py``),
     which is what made the ceiling violations below visible in the first place. The rule still has
     to hold for the next manifest someone writes, so it is asserted against a spec built here."""
-    spec = dataclasses.replace(spec_for("argmax_value"),
-                               init=dataclasses.replace(spec_for("argmax_value").init, shapes={}))
+    spec = dataclasses.replace(
+        spec_for("argmax_value"), init=dataclasses.replace(spec_for("argmax_value").init, shapes={})
+    )
     assert not spec.init.shapes
     assert working_bytes(spec, spec.parameters["S"]) is None
 
@@ -338,8 +350,7 @@ def test_every_kernel_declares_the_whole_ladder():
     it silently opts out of the fuzzer's ``[L, XL]`` interval, so the gap is invisible in every
     aggregate it appears in."""
     incomplete = {
-        key: [preset for preset in PRESETS if preset not in spec.parameters]
-        for key, spec in KERNELS.specs().items()
+        key: [preset for preset in PRESETS if preset not in spec.parameters] for key, spec in KERNELS.specs().items()
     }
     assert {k: v for k, v in incomplete.items() if v} == {}
 
@@ -347,6 +358,7 @@ def test_every_kernel_declares_the_whole_ladder():
 def test_the_single_core_rung_fits_one_core_of_an_ordinary_machine():
     """M is what an agent iterates on. A multi-gigabyte M is not a dev loop, it is a cluster job."""
     from hpcagent_bench.sizing import S_BYTE_CEILING
+
     over = {}
     for key, spec in KERNELS.specs().items():
         nbytes = working_bytes(spec, spec.parameters.get("M", {}))
@@ -442,10 +454,10 @@ def test_the_derived_rung_is_moved_until_the_manifest_constraints_hold():
     constraint rejects is not a rung, so the derivation searches outward from the midpoint."""
     spec = spec_for("dwt2d")
     small, large = dict(spec.parameters["M"]), dict(spec.parameters["XL"])
-    assert round((small["N"] * large["N"])**0.5) % 2**small["nlevels"] != 0
+    assert round((small["N"] * large["N"]) ** 0.5) % 2 ** small["nlevels"] != 0
     ladder, problems = derive_ladder(spec, small, large)
     assert problems == []
-    assert ladder["L"]["N"] % 2**ladder["L"]["nlevels"] == 0
+    assert ladder["L"]["N"] % 2 ** ladder["L"]["nlevels"] == 0
     assert small["N"] < ladder["L"]["N"] < large["N"]
 
 

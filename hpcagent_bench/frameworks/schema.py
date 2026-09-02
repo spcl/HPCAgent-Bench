@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Typed SQLModel schema for the framework-benchmark ``results`` table: the single Result model derives
 both the DDL (``create_all``) and row inserts, replacing the old hand-written CREATE TABLE/INSERT pair."""
+
 from typing import Optional
 
 from sqlmodel import Field, SQLModel, create_engine
@@ -74,8 +75,10 @@ def add_missing_columns(engine) -> None:
             if name in present:
                 continue
             if not column.nullable:
-                raise RuntimeError(f"results table lacks the NOT NULL column {name!r} and no value can be "
-                                   f"backfilled for existing rows; migrate {engine.url.database} by hand")
+                raise RuntimeError(
+                    f"results table lacks the NOT NULL column {name!r} and no value can be "
+                    f"backfilled for existing rows; migrate {engine.url.database} by hand"
+                )
             sql_type = column.type.compile(engine.dialect)
             conn.exec_driver_sql(f"ALTER TABLE {table.name} ADD COLUMN {name} {sql_type}")
         conn.commit()

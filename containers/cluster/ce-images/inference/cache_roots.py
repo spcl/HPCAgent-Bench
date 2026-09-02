@@ -5,18 +5,34 @@ set. It is not: 610165 compiled an aiter TEMPLATE op into ~/.aiter/build, which 
 not govern, in a HOME whose quota is inodes. This enumerates the rest before they are found the
 same way, so the campaign can point all of them at one root.
 """
+
 import os
 import pathlib
 import re
 import sys
 
-EXTRA_KNOBS = ("TRITON_CACHE_DIR", "TRITON_HOME", "TORCHINDUCTOR_CACHE_DIR", "TORCH_HOME", "TORCH_EXTENSIONS_DIR",
-               "XDG_CACHE_HOME", "HF_HOME", "HUGGINGFACE_HUB_CACHE", "AITER_JIT_DIR", "AITER_ASM_DIR",
-               "AMD_COMGR_CACHE_DIR", "CUDA_CACHE_PATH", "SGLANG_CACHE_DIR", "OUTLINES_CACHE_DIR",
-               "FLASHINFER_WORKSPACE_DIR")
+EXTRA_KNOBS = (
+    "TRITON_CACHE_DIR",
+    "TRITON_HOME",
+    "TORCHINDUCTOR_CACHE_DIR",
+    "TORCH_HOME",
+    "TORCH_EXTENSIONS_DIR",
+    "XDG_CACHE_HOME",
+    "HF_HOME",
+    "HUGGINGFACE_HUB_CACHE",
+    "AITER_JIT_DIR",
+    "AITER_ASM_DIR",
+    "AMD_COMGR_CACHE_DIR",
+    "CUDA_CACHE_PATH",
+    "SGLANG_CACHE_DIR",
+    "OUTLINES_CACHE_DIR",
+    "FLASHINFER_WORKSPACE_DIR",
+)
 
-CACHE_HINT = re.compile(r"[^\n]*(?:AITER_[A-Z0-9_]*(?:DIR|HOME|ROOT|CACHE)|home\(\)|expanduser"
-                        r"|\.aiter)[^\n]*")
+CACHE_HINT = re.compile(
+    r"[^\n]*(?:AITER_[A-Z0-9_]*(?:DIR|HOME|ROOT|CACHE)|home\(\)|expanduser"
+    r"|\.aiter)[^\n]*"
+)
 
 
 def aiter_cache_sites() -> None:
@@ -39,6 +55,7 @@ def env_knobs() -> None:
     names = set(EXTRA_KNOBS)
     try:
         from vllm import envs as vllm_envs
+
         names |= {n for n in dir(vllm_envs) if "CACHE" in n or n.endswith("_DIR")}
     except Exception as exc:  # noqa: BLE001
         print("  vllm envs unavailable:", type(exc).__name__)
@@ -52,20 +69,24 @@ def resolved_defaults() -> None:
         print(f"  {probe:20s} exists={pathlib.Path(probe).expanduser().exists()}")
     try:
         import triton.runtime.cache as triton_cache
+
         print("  triton default cache =", triton_cache.default_cache_dir())
     except Exception as exc:  # noqa: BLE001
         print("  triton default cache : unavailable", type(exc).__name__)
     try:
         from torch._inductor import config as inductor_config
+
         print("  inductor cache_dir   =", vars(inductor_config).get("cache_dir", "UNSET"))
     except Exception as exc:  # noqa: BLE001
         print("  inductor             : unavailable", type(exc).__name__)
 
 
 def main() -> int:
-    for title, fn in (("where aiter puts its caches", aiter_cache_sites),
-                      ("cache/dir env knobs these libraries read", env_knobs), ("resolved defaults with nothing set",
-                                                                                resolved_defaults)):
+    for title, fn in (
+        ("where aiter puts its caches", aiter_cache_sites),
+        ("cache/dir env knobs these libraries read", env_knobs),
+        ("resolved defaults with nothing set", resolved_defaults),
+    ):
         print(f"\n=== {title} ===", flush=True)
         fn()
     return 0

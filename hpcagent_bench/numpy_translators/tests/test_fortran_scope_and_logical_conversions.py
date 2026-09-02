@@ -26,6 +26,7 @@ Every case is asserted on the emitted TEXT and then compiled with ``-fimplicit-n
 the gate the emitted source does not carry: it turns "a name that does not exist" from a silent
 retype into a diagnostic, so a regression cannot pass by being merely well-formed.
 """
+
 import json
 import pathlib
 import re
@@ -48,7 +49,12 @@ from numpyto_fortran.intrinsics import renders_natively
 
 #: ``-fimplicit-none`` is the point of this compile, not a style flag -- see the module docstring.
 _GFORTRAN_IMPLICIT_NONE = [
-    "gfortran", "-fsyntax-only", "-ffree-form", "-ffree-line-length-none", "-std=f2018", "-fimplicit-none"
+    "gfortran",
+    "-fsyntax-only",
+    "-ffree-form",
+    "-ffree-line-length-none",
+    "-std=f2018",
+    "-fimplicit-none",
 ]
 
 #: An ALLOCATE statement and everything inside its parentheses.
@@ -93,11 +99,13 @@ def compiles_with_implicit_none(text: str) -> str:
 
 #: ``r[:k]`` inside the ``k`` loop spills into a temp whose ONLY extent is the loop variable --
 #: durbin's shape, reduced to the one statement that carries it.
-_ITER_SIZED = ("import numpy as np\n"
-               "def f(r, y, out):\n"
-               " n = r.shape[0]\n"
-               " for k in range(1, n):\n"
-               "  out[k] = np.dot(np.flip(r[:k]), y[:k])\n")
+_ITER_SIZED = (
+    "import numpy as np\n"
+    "def f(r, y, out):\n"
+    " n = r.shape[0]\n"
+    " for k in range(1, n):\n"
+    "  out[k] = np.dot(np.flip(r[:k]), y[:k])\n"
+)
 
 _ITER_SHAPES = {"r": "(N,)", "y": "(N,)", "out": "(N,)"}
 _ITER_SYMS = {"N": 8}
@@ -113,10 +121,12 @@ def test_an_iterator_sized_temp_allocates_against_the_renamed_do_variable():
     assert allocs, f"the iterator-sized temp no longer allocates at all:\n{text}"
     # The rename pass uniquifies the target, so the extent must name THAT spelling, never the
     # Python-level ``k`` -- which is exactly the name no declaration in the subroutine carries.
-    assert any(re.fullmatch(r"k_l\d+", extent) for _name, extent in allocs), \
+    assert any(re.fullmatch(r"k_l\d+", extent) for _name, extent in allocs), (
         f"no ALLOCATE is sized by the renamed loop iterator; extents were {[e for _, e in allocs]}:\n{text}"
-    assert not any(extent.strip() == "k" for _name, extent in allocs), \
+    )
+    assert not any(extent.strip() == "k" for _name, extent in allocs), (
         f"an ALLOCATE is still sized by the pre-rename ``k``, which no declaration binds:\n{text}"
+    )
 
 
 def test_an_iterator_sized_temp_allocates_inside_the_loop_not_at_the_top():
@@ -125,8 +135,9 @@ def test_an_iterator_sized_temp_allocates_inside_the_loop_not_at_the_top():
     text = _iter_sized_fortran()
     body = text.split("do k_l", 1)
     assert len(body) == 2, f"the k loop is gone from the emitted body:\n{text}"
-    assert "allocate(" not in body[0], \
+    assert "allocate(" not in body[0], (
         f"a temp sized by the loop iterator is allocated BEFORE the loop it is sized by:\n{text}"
+    )
     assert "allocate(" in body[1], f"the temp never allocates inside the loop:\n{text}"
 
 
@@ -140,14 +151,15 @@ def test_every_allocate_extent_names_something_the_subroutine_declares():
 
 def test_the_iterator_sized_temp_computes_the_reference_numbers():
     rng = np.random.default_rng(0)
-    status = run_op(_ITER_SIZED,
-                    "f", {
-                        "r": rng.standard_normal(8),
-                        "y": rng.standard_normal(8)
-                    }, {"out": (8, )},
-                    _ITER_SYMS,
-                    shapes=_ITER_SHAPES,
-                    backends=("c", "fortran"))
+    status = run_op(
+        _ITER_SIZED,
+        "f",
+        {"r": rng.standard_normal(8), "y": rng.standard_normal(8)},
+        {"out": (8,)},
+        _ITER_SYMS,
+        shapes=_ITER_SHAPES,
+        backends=("c", "fortran"),
+    )
     assert status["fortran"] == "ok", status
     assert status["c"] == "ok", status
 
@@ -158,15 +170,17 @@ def test_the_iterator_sized_temp_computes_the_reference_numbers():
 
 #: nussinov's shape: a kept helper returning a non-literal scalar, so the result dummy takes the
 #: float path rather than the all-integer-literals one.
-_HELPER_RET = ("import numpy as np\n"
-               "def pick(a, b, bonus):\n"
-               " if a > b:\n"
-               "  return bonus\n"
-               " else:\n"
-               "  return 0.0\n"
-               "def f(x, y, bonus, out):\n"
-               " for i in range(x.shape[0]):\n"
-               "  out[i] = pick(x[i], y[i], bonus)\n")
+_HELPER_RET = (
+    "import numpy as np\n"
+    "def pick(a, b, bonus):\n"
+    " if a > b:\n"
+    "  return bonus\n"
+    " else:\n"
+    "  return 0.0\n"
+    "def f(x, y, bonus, out):\n"
+    " for i in range(x.shape[0]):\n"
+    "  out[i] = pick(x[i], y[i], bonus)\n"
+)
 
 _HELPER_SHAPES = {"x": "(N,)", "y": "(N,)", "out": "(N,)"}
 _HELPER_SYMS = {"N": 6}
@@ -176,12 +190,9 @@ _RESULT_KIND = {None: "real(c_double)", "float32": "real(c_float)"}
 
 
 def _helper_ret_fortran(precision) -> str:
-    return fortran(_HELPER_RET,
-                   "f", ["x", "y", "bonus"], ["out"],
-                   _HELPER_SHAPES,
-                   _HELPER_SYMS,
-                   precision=precision,
-                   level=3)
+    return fortran(
+        _HELPER_RET, "f", ["x", "y", "bonus"], ["out"], _HELPER_SHAPES, _HELPER_SYMS, precision=precision, level=3
+    )
 
 
 @pytest.mark.parametrize("precision", [None, "float32"])
@@ -190,8 +201,9 @@ def test_the_helper_result_dummy_carries_the_kernels_float_kind(precision):
     if "intent(out) :: hret_" not in text:
         pytest.skip("the fixture helper is no longer kept as a contained subroutine")
     want = _RESULT_KIND[precision]
-    assert f"{want}, intent(out) :: hret_" in text, \
+    assert f"{want}, intent(out) :: hret_" in text, (
         f"the result dummy does not follow the kernel's float precision ({precision}):\n{text}"
+    )
     # The caller's hoisted temp is what it has to agree WITH, so the other spelling must be absent.
     other = _RESULT_KIND[None if precision else "float32"]
     assert f"{other}, intent(out) :: hret_" not in text, f"both float kinds are declared at once:\n{text}"
@@ -216,13 +228,15 @@ def test_the_kernel_float_precision_is_where_the_kind_comes_from():
 # --------------------------------------------------------------------------- #
 
 #: ``m[i] = <int>`` stores a number into a bool; ``a[i] + m[i]`` reads a bool as a number.
-_LOGICAL_BOTH_WAYS = ("import numpy as np\n"
-                      "def f(a, out):\n"
-                      " m = np.zeros(a.shape[0], dtype=np.bool_)\n"
-                      " for i in range(a.shape[0]):\n"
-                      "  m[i] = 1 if a[i] > 0.0 else 0\n"
-                      " for i in range(a.shape[0]):\n"
-                      "  out[i] = a[i] + m[i]\n")
+_LOGICAL_BOTH_WAYS = (
+    "import numpy as np\n"
+    "def f(a, out):\n"
+    " m = np.zeros(a.shape[0], dtype=np.bool_)\n"
+    " for i in range(a.shape[0]):\n"
+    "  m[i] = 1 if a[i] > 0.0 else 0\n"
+    " for i in range(a.shape[0]):\n"
+    "  out[i] = a[i] + m[i]\n"
+)
 
 _LOGICAL_SHAPES = {"a": "(N,)", "out": "(N,)"}
 _LOGICAL_SYMS = {"N": 8}
@@ -235,16 +249,18 @@ def _logical_fortran() -> str:
 def test_a_number_stored_into_a_logical_converts_by_truthiness():
     text = _logical_fortran()
     assert "logical(c_bool) :: m(" in text, f"the mask local is no longer LOGICAL:\n{text}"
-    assert re.search(r"m\(\(i_l\d+\) \+ 1\) = \(x_ifexp\d+\) /= 0", text), \
+    assert re.search(r"m\(\(i_l\d+\) \+ 1\) = \(x_ifexp\d+\) /= 0", text), (
         f"the integer store into the LOGICAL mask is not converted:\n{text}"
+    )
 
 
 def test_a_logical_read_in_arithmetic_promotes_to_zero_or_one():
     """numpy's bool -> 0/1 promotion, spelled as the MERGE Fortran needs; ``a + m`` is a type
     error without it, so the alternative is not a wrong number but no kernel at all."""
     text = _logical_fortran()
-    assert re.search(r"\+ merge\(1_c_int64_t, 0_c_int64_t, m\(", text), \
+    assert re.search(r"\+ merge\(1_c_int64_t, 0_c_int64_t, m\(", text), (
         f"the LOGICAL operand is not promoted inside the arithmetic:\n{text}"
+    )
 
 
 def test_the_logical_conversions_compile_and_compute_the_reference_numbers():
@@ -252,11 +268,15 @@ def test_the_logical_conversions_compile_and_compute_the_reference_numbers():
     assert not diag, diag
     rng = np.random.default_rng(1)
     a = rng.standard_normal(8)
-    status = run_op(_LOGICAL_BOTH_WAYS,
-                    "f", {"a": a}, {"out": (8, )},
-                    _LOGICAL_SYMS,
-                    shapes=_LOGICAL_SHAPES,
-                    backends=("c", "fortran"))
+    status = run_op(
+        _LOGICAL_BOTH_WAYS,
+        "f",
+        {"a": a},
+        {"out": (8,)},
+        _LOGICAL_SYMS,
+        shapes=_LOGICAL_SHAPES,
+        backends=("c", "fortran"),
+    )
     assert status["fortran"] == "ok", status
     assert status["c"] == "ok", status
 
@@ -264,14 +284,16 @@ def test_the_logical_conversions_compile_and_compute_the_reference_numbers():
 def test_a_logical_operand_of_a_comparison_is_left_alone():
     """The promotion is for ARITHMETIC only -- a mask feeding ``.and.`` / a condition must stay
     LOGICAL, or the same fix that lets ``a + m`` compile stops ``if (m(i))`` from compiling."""
-    src = ("import numpy as np\n"
-           "def f(a, out):\n"
-           " m = np.zeros(a.shape[0], dtype=np.bool_)\n"
-           " for i in range(a.shape[0]):\n"
-           "  m[i] = a[i] > 0.0\n"
-           " for i in range(a.shape[0]):\n"
-           "  if m[i]:\n"
-           "   out[i] = a[i]\n")
+    src = (
+        "import numpy as np\n"
+        "def f(a, out):\n"
+        " m = np.zeros(a.shape[0], dtype=np.bool_)\n"
+        " for i in range(a.shape[0]):\n"
+        "  m[i] = a[i] > 0.0\n"
+        " for i in range(a.shape[0]):\n"
+        "  if m[i]:\n"
+        "   out[i] = a[i]\n"
+    )
     text = fortran(src, "f", ["a"], ["out"], _LOGICAL_SHAPES, _LOGICAL_SYMS)
     assert "merge(1_c_int64_t" not in text, f"a condition was wrapped in the numeric promotion:\n{text}"
     assert not compiles_with_implicit_none(text)
@@ -280,14 +302,16 @@ def test_a_logical_operand_of_a_comparison_is_left_alone():
 #: A helper that is KEPT (the early return blocks inlining) and builds a boolean mask of its own,
 #: so the mask is declared by the helper's own declaration pass and used by the helper's own body
 #: emitter -- two tables that have to say the same thing.
-_HELPER_MASK = ("import numpy as np\n"
-                "def masked(v, lo):\n"
-                " if lo < 0.0:\n"
-                "  return -v\n"
-                " nz = v > lo\n"
-                " return np.where(nz, v, 0.0)\n"
-                "def f(x, thr, out):\n"
-                " out[:] = masked(x, thr)\n")
+_HELPER_MASK = (
+    "import numpy as np\n"
+    "def masked(v, lo):\n"
+    " if lo < 0.0:\n"
+    "  return -v\n"
+    " nz = v > lo\n"
+    " return np.where(nz, v, 0.0)\n"
+    "def f(x, thr, out):\n"
+    " out[:] = masked(x, thr)\n"
+)
 
 
 def test_a_kept_helpers_mask_is_logical_to_its_own_body_too():
@@ -312,9 +336,7 @@ def test_a_kept_helpers_mask_is_logical_to_its_own_body_too():
 #: ``np.linalg.solve`` lowers to a Gauss-Jordan nest that reuses ONE Python loop name (``__sol_c``)
 #: across six sibling loops -- legal in Python and in C, where each ``for`` scopes its own
 #: declaration, and the reason the Fortran backend uniquifies every DO variable in the first place.
-_SOLVE = ("import numpy as np\n"
-          "def f(A, B, out):\n"
-          " out[:] = np.linalg.solve(A, B)\n")
+_SOLVE = "import numpy as np\ndef f(A, B, out):\n out[:] = np.linalg.solve(A, B)\n"
 
 _SOLVE_SHAPES = {"A": "(N, N)", "B": "(N, M)", "out": "(N, M)"}
 _SOLVE_SYMS = {"N": 5, "M": 3}
@@ -339,8 +361,10 @@ def test_every_do_variable_is_read_by_the_body_it_controls():
     heads = _DO_HEADER.findall(text)
     assert len(heads) >= 6, f"the solve lowering no longer emits its loop nest:\n{text}"
     dead = [v for v in heads if len(re.findall(rf"\b{re.escape(v)}\b", text)) < 3]
-    assert not dead, (f"DO variable(s) {dead} are declared and opened but never read -- their loop "
-                      f"bodies are indexing a sibling's variable:\n{text}")
+    assert not dead, (
+        f"DO variable(s) {dead} are declared and opened but never read -- their loop "
+        f"bodies are indexing a sibling's variable:\n{text}"
+    )
 
 
 def test_no_two_sibling_loops_share_a_do_variable():
@@ -353,15 +377,16 @@ def test_no_two_sibling_loops_share_a_do_variable():
 def test_the_solve_lowering_computes_the_reference_numbers():
     rng = np.random.default_rng(7)
     a = rng.standard_normal((5, 5)) + 5.0 * np.eye(5)  # diagonally dominant: no pivot degeneracy
-    status = run_op(_SOLVE,
-                    "f", {
-                        "A": a,
-                        "B": rng.standard_normal((5, 3))
-                    }, {"out": (5, 3)},
-                    _SOLVE_SYMS,
-                    shapes=_SOLVE_SHAPES,
-                    rtol=1e-9,
-                    atol=1e-9,
-                    backends=("c", "fortran"))
+    status = run_op(
+        _SOLVE,
+        "f",
+        {"A": a, "B": rng.standard_normal((5, 3))},
+        {"out": (5, 3)},
+        _SOLVE_SYMS,
+        shapes=_SOLVE_SHAPES,
+        rtol=1e-9,
+        atol=1e-9,
+        backends=("c", "fortran"),
+    )
     assert status["fortran"] == "ok", status
     assert status["c"] == "ok", status

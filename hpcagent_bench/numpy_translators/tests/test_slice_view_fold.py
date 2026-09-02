@@ -10,6 +10,7 @@ j]``); this pass handles a Slice with real bounds/step at ANY axis position,
 including a chain of views (``window = x_g[...]`` where ``x_g`` is itself a
 view), and refuses to fold whenever it cannot prove the fold is sound.
 """
+
 import ast
 
 import numpy as np
@@ -36,9 +37,7 @@ def test_view_folds_into_a_plain_subscript():
     # use -- the untouched axes pass straight through, the offset axis composes
     # to ``g * ipg + 1``. This is the exact grouped-conv shape from
     # conv2d_batch_norm_scaling.
-    src = ("def f(padded, g, ipg, out):\n"
-           "    x_g = padded[:, g * ipg:(g + 1) * ipg]\n"
-           "    out[0] = x_g[0, 1, 2, 3]\n")
+    src = "def f(padded, g, ipg, out):\n    x_g = padded[:, g * ipg:(g + 1) * ipg]\n    out[0] = x_g[0, 1, 2, 3]\n"
     lowered = _fold(src, {"padded": ("N", "C", "H", "W")})
     assert "x_g" not in lowered
     assert "out[0] = padded[0, g * ipg + 1, 2, 3]" in lowered
@@ -50,11 +49,8 @@ def test_further_slice_composes_offset_and_stride():
     # the stride (``step_outer*step_inner``), not just reuse ``a:b:c`` verbatim.
     # ``win`` is passed bare to ``consume`` so it is not itself folded away,
     # leaving its RHS visible for inspection.
-    src = ("def f(arr, a, b, c, out):\n"
-           "    row = arr[0:20:2]\n"
-           "    win = row[a:b:c]\n"
-           "    consume(win)\n")
-    lowered = _fold(src, {"arr": ("N", )})
+    src = "def f(arr, a, b, c, out):\n    row = arr[0:20:2]\n    win = row[a:b:c]\n    consume(win)\n"
+    lowered = _fold(src, {"arr": ("N",)})
     assert "row" not in lowered
     assert "win = arr[2 * a:2 * b:2 * c]" in lowered
 
@@ -66,9 +62,7 @@ def test_integer_view_index_drops_the_axis():
     # does not touch this). ``row[j]`` composes to ``mat[i, a + j]``: the
     # dropped axis's original scalar index passes through unchanged, the kept
     # axis's offset composes.
-    src = ("def f(mat, i, a, b, j, out):\n"
-           "    row = mat[i, a:b]\n"
-           "    out[0] = row[j]\n")
+    src = "def f(mat, i, a, b, j, out):\n    row = mat[i, a:b]\n    out[0] = row[j]\n"
     lowered = _fold(src, {"mat": ("M", "N")})
     assert "row" not in lowered
     assert "out[0] = mat[i, a + j]" in lowered
@@ -78,9 +72,7 @@ def test_implicit_trailing_dimensions_are_padded():
     # ``arr[:, a:b]`` on a 4-D array means ``arr[:, a:b, :, :]`` -- the pass must
     # pad the missing trailing axes itself (this AST predates any external
     # padding pass) so a 4-index use still composes correctly.
-    src = ("def f(arr, a, b, out):\n"
-           "    view = arr[:, a:b]\n"
-           "    out[0] = view[0, 1, 2, 3]\n")
+    src = "def f(arr, a, b, out):\n    view = arr[:, a:b]\n    out[0] = view[0, 1, 2, 3]\n"
     lowered = _fold(src, {"arr": ("N", "C", "H", "W")})
     assert "view" not in lowered
     assert "out[0] = arr[0, a + 1, 2, 3]" in lowered
@@ -96,10 +88,7 @@ def test_view_written_through_is_not_folded():
     # private copy, so folding would silently redirect that store onto ``arr``
     # at the wrong composed offset instead of leaving the (correct) alias write
     # alone. The whole statement sequence must survive untouched.
-    src = ("def f(arr, i, out):\n"
-           "    view = arr[:, i:i + 2]\n"
-           "    view[0, 0] = 5\n"
-           "    out[0] = view[0, 1]\n")
+    src = "def f(arr, i, out):\n    view = arr[:, i:i + 2]\n    view[0, 0] = 5\n    out[0] = view[0, 1]\n"
     lowered = _fold(src, {"arr": ("N", "M")})
     assert lowered == ast.unparse(ast.parse(src))
 
@@ -110,10 +99,8 @@ def test_negative_step_view_is_not_folded():
     # step is provably wrong to compose (unlike a symbolic step, always emitted
     # positive per this file's own convention), so it must be refused, not folded
     # with the wrong (0-based) start.
-    src = ("def f(a, out):\n"
-           "    b = a[::-2]\n"
-           "    out[0] = b[0]\n")
-    lowered = _fold(src, {"a": ("N", )})
+    src = "def f(a, out):\n    b = a[::-2]\n    out[0] = b[0]\n"
+    lowered = _fold(src, {"a": ("N",)})
     assert lowered == ast.unparse(ast.parse(src))
 
 
@@ -122,10 +109,7 @@ def test_base_rewritten_between_bind_and_use_is_not_folded():
     # ``arr`` -- composing ``view[0, 1]`` against the (rebound) name ``arr``
     # would read whatever ``something_else`` returns, not the array ``view``
     # actually sliced. Must be left alone.
-    src = ("def f(arr, i, out):\n"
-           "    view = arr[:, i:i + 2]\n"
-           "    arr = something_else(arr)\n"
-           "    out[0] = view[0, 1]\n")
+    src = "def f(arr, i, out):\n    view = arr[:, i:i + 2]\n    arr = something_else(arr)\n    out[0] = view[0, 1]\n"
     lowered = _fold(src, {"arr": ("N", "M")})
     assert lowered == ast.unparse(ast.parse(src))
 
@@ -140,32 +124,32 @@ def test_grouped_slab_view_matches_numpy_through_c():
     # then a FURTHER strided sub-window of it (``window``) feeding an
     # accumulation -- the exact ``view-of-a-view`` chain conv2d_batch_norm_scaling
     # hits, run through the real C emitter and compared bit-for-bit to numpy.
-    src = ("import numpy as np\n"
-           "def f(x, out):\n"
-           "    groups = 2\n"
-           "    ipg = x.shape[1] // groups\n"
-           "    for g in range(groups):\n"
-           "        x_g = x[:, g * ipg:(g + 1) * ipg]\n"
-           "        window = x_g[:, :, 0:4:2]\n"
-           "        for n in range(x.shape[0]):\n"
-           "            for c in range(ipg):\n"
-           "                for k in range(2):\n"
-           "                    out[n, g * ipg + c, k] = window[n, c, k]\n")
+    src = (
+        "import numpy as np\n"
+        "def f(x, out):\n"
+        "    groups = 2\n"
+        "    ipg = x.shape[1] // groups\n"
+        "    for g in range(groups):\n"
+        "        x_g = x[:, g * ipg:(g + 1) * ipg]\n"
+        "        window = x_g[:, :, 0:4:2]\n"
+        "        for n in range(x.shape[0]):\n"
+        "            for c in range(ipg):\n"
+        "                for k in range(2):\n"
+        "                    out[n, g * ipg + c, k] = window[n, c, k]\n"
+    )
     N, C, H, groups = 2, 4, 6, 2
     ipg = C // groups
     rng = np.random.default_rng(3)
     x = rng.standard_normal((N, C, H))
-    res = run_op(src,
-                 "f", {"x": x}, {"out": (N, C, 2)}, {
-                     "N": N,
-                     "C": C,
-                     "H": H
-                 },
-                 shapes={
-                     "x": "(N,C,H)",
-                     "out": "(N,C,2)"
-                 },
-                 backends=("c", ))
+    res = run_op(
+        src,
+        "f",
+        {"x": x},
+        {"out": (N, C, 2)},
+        {"N": N, "C": C, "H": H},
+        shapes={"x": "(N,C,H)", "out": "(N,C,2)"},
+        backends=("c",),
+    )
     assert res["c"] == "ok", res
 
 
@@ -174,6 +158,7 @@ def test_conv2d_batch_norm_scaling_c_matches_numpy():
     # the fold is not just structurally plausible but numerically exact once
     # compiled and run.
     import numerical_oracle as no
+
     status = no.run_kernel("conv2d_batch_norm_scaling", preset="S", precision="fp64", seed=0, only_backends={"c"})
     assert status.get("c") == "ok", status
 
@@ -185,9 +170,7 @@ def test_a_folded_staging_local_is_reported_dead():
     # malloc/free pair for a buffer nothing writes or reads (and, with no use left to
     # place it against, hoisted to function top -- see
     # test_runtime_axis_dispatch.test_a_branch_allocates_only_its_own_buffers).
-    src = ("def f(x, out):\n"
-           "    __hcall1 = x[0:3, :]\n"
-           "    out[0] = __hcall1[1, 2]\n")
+    src = "def f(x, out):\n    __hcall1 = x[0:3, :]\n    out[0] = __hcall1[1, 2]\n"
     tree = ast.parse(src).body[0]
     dead = _fold_slice_view_aliases(tree, {"x": ["n", "m"], "__hcall1": ["3", "m"]})
     assert dead == {"__hcall1"}
@@ -197,10 +180,7 @@ def test_a_folded_staging_local_is_reported_dead():
 def test_a_declined_fold_reports_nothing_dead():
     # The write-through alias of test_view_written_through_is_not_folded: the name
     # stays live, so nothing may be pruned from the allocation table.
-    src = ("def f(x, out):\n"
-           "    v = x[0:3, :]\n"
-           "    v[1, 2] = 5.0\n"
-           "    out[0] = v[1, 2]\n")
+    src = "def f(x, out):\n    v = x[0:3, :]\n    v[1, 2] = 5.0\n    out[0] = v[1, 2]\n"
     tree = ast.parse(src).body[0]
     assert _fold_slice_view_aliases(tree, {"x": ["n", "m"], "v": ["3", "m"]}) == OrderedSet()
 
@@ -211,12 +191,13 @@ def test_chained_index_array_split_by_a_slice_is_not_flattened():
     # (3, 2) while the flattened ``A[2, :3, idx]`` has the pair SEPARATED and moves the broadcast
     # result to the front (2, 3). Flattening the chain would transpose the result silently.
     from numpyto_common.lowering import _ChainedSubscriptFlattener
+
     A = np.arange(3 * 5 * 7).reshape(3, 5, 7)
     idx = np.array([0, 2])
     assert A[2][:3, idx].shape == (3, 2) and A[2, :3, idx].shape == (2, 3)
     assert np.array_equal(A[2][:3, idx], A[2, :3, idx].T)  # a transpose, not the same array
 
-    shapes = {"A": ("F", "X", "Y"), "idx": ("P", )}
+    shapes = {"A": ("F", "X", "Y"), "idx": ("P",)}
     tree = ast.parse("def f(A, idx, out):\n    out[:] = A[2][:3, idx]\n")
     _ChainedSubscriptFlattener(shapes).visit(tree)
     ast.fix_missing_locations(tree)

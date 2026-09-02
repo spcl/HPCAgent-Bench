@@ -39,6 +39,7 @@ OUTFILE::
     counts   : n_out * nranks * int64                 # per-rank tile element counts
     payload  : for each output, the nranks gathered tiles concatenated in rank order (raw LE)
 """
+
 from __future__ import annotations
 
 import struct
@@ -86,6 +87,7 @@ def _read_scalar8(raw: bytes, type_code: int):
 @dataclass(frozen=True)
 class PtrPlan:
     """One pointer array's per-rank partition (the driver's view of an infile array)."""
+
     name: str
     dtype: str
     is_output: bool
@@ -97,6 +99,7 @@ class PtrPlan:
 @dataclass(frozen=True)
 class ParsedInfile:
     """The infile decoded for the mpi4py driver -- fully self-describing (no binding needed)."""
+
     nranks: int
     k_repeats: int
     ptrs: List[PtrPlan]
@@ -104,12 +107,14 @@ class ParsedInfile:
     workspace_bytes: List[int]  # per rank
 
 
-def pack_infile(binding: Binding,
-                descriptor,
-                data: Dict[str, np.ndarray],
-                scalars: Dict[str, float],
-                k_repeats: int,
-                workspace_expr: Optional[str] = None) -> bytes:
+def pack_infile(
+    binding: Binding,
+    descriptor,
+    data: Dict[str, np.ndarray],
+    scalars: Dict[str, float],
+    k_repeats: int,
+    workspace_expr: Optional[str] = None,
+) -> bytes:
     """Serialise the global problem into the per-rank infile the drivers scatter.
 
     ``data`` holds every pointer's global buffer (inputs and initial output buffers);
@@ -127,14 +132,17 @@ def pack_infile(binding: Binding,
     max_ndim = 1
     for a in ptrs:
         if a.dtype not in TYPE_CODES:
-            raise ValueError(f"array {a.name!r} dtype {a.dtype!r} is not wire-serialisable "
-                             f"(known: {sorted(TYPE_CODES)})")
+            raise ValueError(
+                f"array {a.name!r} dtype {a.dtype!r} is not wire-serialisable (known: {sorted(TYPE_CODES)})"
+            )
         # Assert the caller's dtype matches the binding rather than letting np.asarray(dtype=) cast
         # it silently -- a float64 array narrowed to a float32 binding would scatter wrong bytes.
         src = np.asarray(data[a.name])
         if src.dtype != np.dtype(a.dtype):
-            raise ValueError(f"array {a.name!r} was provided as {src.dtype} but the binding declares "
-                             f"{a.dtype!r}; refusing to silently cast the scattered payload")
+            raise ValueError(
+                f"array {a.name!r} was provided as {src.dtype} but the binding declares "
+                f"{a.dtype!r}; refusing to silently cast the scattered payload"
+            )
         arr = np.ascontiguousarray(src, dtype=a.dtype)
         tiles = [np.ascontiguousarray(t) for t in descriptor.scatter(a.name, arr)]
         ptr_tiles.append(tiles)
@@ -181,7 +189,7 @@ def unpack_infile(raw: bytes) -> ParsedInfile:
     off += 8 * n_scalar
     scalar_values: List[List] = []
     for _r in range(nranks):
-        row = [_read_scalar8(raw[off + 8 * s:], scal_codes[s]) for s in range(n_scalar)]
+        row = [_read_scalar8(raw[off + 8 * s :], scal_codes[s]) for s in range(n_scalar)]
         scalar_values.append(row)
         off += 8 * n_scalar
 
@@ -192,8 +200,9 @@ def unpack_infile(raw: bytes) -> ParsedInfile:
     off += 8 * 3 * n_ptr
 
     stride = 2 + max_ndim  # count, ndim, shape[max_ndim]
-    tile_meta = np.frombuffer(raw, dtype="<i8", count=stride * n_ptr * nranks,
-                              offset=off).reshape(n_ptr, nranks, stride)
+    tile_meta = np.frombuffer(raw, dtype="<i8", count=stride * n_ptr * nranks, offset=off).reshape(
+        n_ptr, nranks, stride
+    )
     off += 8 * stride * n_ptr * nranks
 
     ptrs: List[PtrPlan] = []
@@ -204,7 +213,7 @@ def unpack_infile(raw: bytes) -> ParsedInfile:
         for r in range(nranks):
             count = int(tile_meta[i, r, 0])
             ndim = int(tile_meta[i, r, 1])
-            shape = tuple(int(x) for x in tile_meta[i, r, 2:2 + ndim])
+            shape = tuple(int(x) for x in tile_meta[i, r, 2 : 2 + ndim])
             nbytes = count * elem_size
             tile = np.frombuffer(raw, dtype=np.dtype(dtype), count=count, offset=off).reshape(shape)
             off += nbytes
@@ -212,18 +221,18 @@ def unpack_infile(raw: bytes) -> ParsedInfile:
             shapes.append(shape)
             tiles.append(np.array(tile, copy=True))  # own the bytes (raw is read-only)
         ptrs.append(
-            PtrPlan(name=f"ptr{i}", dtype=dtype, is_output=bool(is_output), counts=counts, shapes=shapes, tiles=tiles))
+            PtrPlan(name=f"ptr{i}", dtype=dtype, is_output=bool(is_output), counts=counts, shapes=shapes, tiles=tiles)
+        )
     # The wire is positional (C ABI order); the driver re-attaches names from the binding, so
     # PtrPlan.name is a placeholder here.
-    return ParsedInfile(nranks=nranks,
-                        k_repeats=k_repeats,
-                        ptrs=ptrs,
-                        scalar_values=scalar_values,
-                        workspace_bytes=workspace_bytes)
+    return ParsedInfile(
+        nranks=nranks, k_repeats=k_repeats, ptrs=ptrs, scalar_values=scalar_values, workspace_bytes=workspace_bytes
+    )
 
 
-def pack_outfile(nranks: int, k_repeats: int, samples: Sequence[float],
-                 outputs: List[Tuple[str, str, List[np.ndarray]]]) -> bytes:
+def pack_outfile(
+    nranks: int, k_repeats: int, samples: Sequence[float], outputs: List[Tuple[str, str, List[np.ndarray]]]
+) -> bytes:
     """Serialise the gathered outputs + timing samples (written by rank 0 of either driver).
 
     ``outputs`` is ``[(name, dtype, per_rank_tiles)]`` in binding output order; each output is

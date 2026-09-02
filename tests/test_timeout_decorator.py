@@ -8,6 +8,7 @@ watchdog timer is always cancelled once the wrapped call returns or raises (a le
 later fire an unrelated ``KeyboardInterrupt`` into whatever runs next), and a call that truly
 overruns really does raise ``KeyboardInterrupt``.
 """
+
 import time
 import types
 

@@ -11,6 +11,7 @@ code), ``_as_list``'s scalar/list normalization, and the "absolutely nothing fou
 shared by every detector -- exercised with a name that cannot exist rather than mocked, so it stays
 true to what the real function does.
 """
+
 import types
 
 import pytest
@@ -143,18 +144,8 @@ def test_missing_for_target_on_an_empty_report_is_empty():
 def test_missing_for_target_scans_every_category_not_just_the_first(target):
     report = {
         "categories": {
-            "compilers": {
-                "gcc": {
-                    "found": True,
-                    "required_on": ["cpu"]
-                }
-            },
-            "numeric_libs": {
-                "cudnn": {
-                    "found": False,
-                    "required_on": [target]
-                }
-            },
+            "compilers": {"gcc": {"found": True, "required_on": ["cpu"]}},
+            "numeric_libs": {"cudnn": {"found": False, "required_on": [target]}},
         },
     }
     assert discover_tools.missing_for_target(report, target) == ["cudnn"]

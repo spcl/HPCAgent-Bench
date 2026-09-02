@@ -23,6 +23,7 @@ arguments and the checker falls back to ``git diff --cached`` to find them itsel
 Exit status: 0 when every checked file is within the limit, 1 when one or more
 exceed it (each offender and its size are printed).
 """
+
 import argparse
 import subprocess
 import sys
@@ -41,9 +42,9 @@ BYTES_PER_KB = 1024
 
 def staged_files():
     """Return the repo's currently-staged file paths (added / copied / modified)."""
-    out = subprocess.run(["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
-                         capture_output=True,
-                         text=True)
+    out = subprocess.run(
+        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"], capture_output=True, text=True
+    )
     if out.returncode != 0:
         return []
     return [ln for ln in out.stdout.splitlines() if ln.strip()]
@@ -82,10 +83,9 @@ def oversized(paths, max_bytes, max_text_bytes):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--max-kb", type=int, default=DEFAULT_MAX_KB, help="binary size limit in KiB (default: 500)")
-    ap.add_argument("--max-text-kb",
-                    type=int,
-                    default=DEFAULT_MAX_TEXT_KB,
-                    help="size limit in KiB for UTF-8 text (default: 1024)")
+    ap.add_argument(
+        "--max-text-kb", type=int, default=DEFAULT_MAX_TEXT_KB, help="size limit in KiB for UTF-8 text (default: 1024)"
+    )
     ap.add_argument("files", nargs="*", help="files to check (default: the staged set)")
     args = ap.parse_args(argv)
 

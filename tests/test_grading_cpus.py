@@ -7,6 +7,7 @@ three properties the measurement depends on: no SMT sibling pair is ever handed 
 concurrent slots get disjoint core sets, and every handed-out cpu really belongs to this
 process's affinity.
 """
+
 import os
 
 import pytest

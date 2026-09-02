@@ -10,6 +10,7 @@ This sends what an agent turn actually looks like -- a long prefix shared by eve
 skills packet and system prompt are, plus a unique tail -- and keeps sending for a set duration,
 because the EngineCore death we are chasing arrives at ~90 minutes, not inside a 6-minute burst.
 """
+
 import argparse
 import json
 import os
@@ -75,12 +76,14 @@ def main() -> int:
     print(
         f"streams={args.streams} approx_prompt_tokens={approx_tokens} "
         f"max_tokens={args.max_tokens} duration={args.duration}s",
-        flush=True)
+        flush=True,
+    )
 
     threads = [
-        threading.Thread(target=worker,
-                         args=(args.base, args.model, prompts[i], args.max_tokens, args.timeout),
-                         daemon=True) for i in range(args.streams)
+        threading.Thread(
+            target=worker, args=(args.base, args.model, prompts[i], args.max_tokens, args.timeout), daemon=True
+        )
+        for i in range(args.streams)
     ]
     for t in threads:
         t.start()
@@ -91,11 +94,12 @@ def main() -> int:
         with LOCK:
             ok, err, toks, first = STATS["ok"], STATS["err"], STATS["out_tokens"], STATS["first_err"]
         elapsed = time.time() - start
-        print(f"t={elapsed:6.0f}s ok={ok:<6} err={err:<5} out_tok={toks:<9} "
-              f"decode={toks / elapsed:6.1f} tok/s running={metric(args.base, 'vllm:num_requests_running'):.0f} "
-              f"waiting={metric(args.base, 'vllm:num_requests_waiting'):.0f}" +
-              (f" first_err={first}" if first else ""),
-              flush=True)
+        print(
+            f"t={elapsed:6.0f}s ok={ok:<6} err={err:<5} out_tok={toks:<9} "
+            f"decode={toks / elapsed:6.1f} tok/s running={metric(args.base, 'vllm:num_requests_running'):.0f} "
+            f"waiting={metric(args.base, 'vllm:num_requests_waiting'):.0f}" + (f" first_err={first}" if first else ""),
+            flush=True,
+        )
         if err and ok == 0:
             print("FAIL: every request errored", flush=True)
             STOP.set()
@@ -105,7 +109,8 @@ def main() -> int:
         print(
             f"FINAL ok={STATS['ok']} err={STATS['err']} out_tokens={STATS['out_tokens']} "
             f"mean_decode={STATS['out_tokens'] / max(1, time.time() - start):.1f} tok/s",
-            flush=True)
+            flush=True,
+        )
         return 1 if STATS["ok"] == 0 else 0
 
 

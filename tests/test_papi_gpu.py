@@ -13,6 +13,7 @@ The few assertions that genuinely need PAPI are gated on an EXPLICIT predicate
 (``find_library("papi")``), exactly as ``tests/test_papi_counters.py`` gates its own, so a skip
 here always means "this host has no PAPI" and never "the guard stopped noticing".
 """
+
 import ctypes
 import ctypes.util
 import faulthandler
@@ -31,7 +32,8 @@ PAPI_LIBRARY = ctypes.util.find_library("papi")
 requires_papi = pytest.mark.skipif(
     not (osinfo.IS_LINUX and PAPI_LIBRARY),
     reason="no libpapi on this host (ctypes.util.find_library('papi') found nothing), so PAPI's "
-    "component table cannot be read; install PAPI to exercise these")
+    "component table cannot be read; install PAPI to exercise these",
+)
 
 
 def component(name: str, *, index: int = 0, enabled: bool = True, reason: str = "", short: str = "") -> dict:
@@ -57,7 +59,7 @@ CUDA_ONLY: Tuple[dict, ...] = (
 )
 
 #: A stock distribution PAPI: every GPU component absent.
-CPU_ONLY: Tuple[dict, ...] = (component("perf_event", index=0, short="perf"), )
+CPU_ONLY: Tuple[dict, ...] = (component("perf_event", index=0, short="perf"),)
 
 #: PAPI 7's LAZY bring-up, verbatim: the component is built and reports itself disabled until
 #: something asks it for an event. Reading the flag and stopping calls a working component broken.
@@ -148,7 +150,8 @@ def test_every_candidate_names_a_component_the_probe_knows_how_to_report() -> No
             for candidate in candidates:
                 assert candidate.component in papi.GPU_COMPONENTS, f"{name}/{vendor}: {candidate.component}"
                 assert candidate.component in papi.VENDOR_COMPONENTS[vendor], (
-                    f"{name}: {candidate.component} is not a {vendor} component")
+                    f"{name}: {candidate.component} is not a {vendor} component"
+                )
                 assert candidate.component in papi.COMPONENT_BUILD, "no configure line for the not-built reason"
                 assert candidate.unit, f"{name}/{vendor}: {candidate.event} carries no unit"
 
@@ -215,8 +218,10 @@ def test_a_papi_built_without_the_component_says_so_and_names_the_rebuild(monkey
 def test_a_component_that_is_built_but_will_not_come_up_is_a_different_answer(monkeypatch) -> None:
     """Built-and-broken needs a driver or a permission; not-built needs a rebuild. One reason for
     both would send every reader to the wrong fix half the time."""
-    rows = (component("perf_event", index=0,
-                      short="perf"), component("rocm", index=1, enabled=False, reason="libhsa-runtime64.so not found"))
+    rows = (
+        component("perf_event", index=0, short="perf"),
+        component("rocm", index=1, enabled=False, reason="libhsa-runtime64.so not found"),
+    )
     install(monkeypatch, rows, {})
     reason = papi.component_reason("rocm")
     assert reason is not None
@@ -310,7 +315,7 @@ def test_a_blocked_component_is_skipped_and_the_block_is_the_reason() -> None:
 
 
 def test_an_event_the_component_does_not_expose_says_exactly_that() -> None:
-    row, why = resolved("l2_hit_rate", "nvidia", {"cuda": ("cuda:::dram__bytes_read", )})
+    row, why = resolved("l2_hit_rate", "nvidia", {"cuda": ("cuda:::dram__bytes_read",)})
     assert row is None and "enumerates no such event" in why
 
 
@@ -333,7 +338,7 @@ def test_matching_survives_the_qualifiers_each_component_spells_differently() ->
     assert papi.event_tokens("nvml:::NVIDIA_A100-SXM4-40GB:power") == ("NVIDIA_A100-SXM4-40GB", "power")
     row, _why = resolved("temperature", "amd", {"rocm_smi": ROCM_SMI_EVENTS})
     assert row["event"] == "rocm_smi:::temp_current:device=0:sensor=1" and row["unit"] == "millidegC"
-    row, _why = resolved("power", "nvidia", {"nvml": ("nvml:::NVIDIA_A100-SXM4-40GB:power", )})
+    row, _why = resolved("power", "nvidia", {"nvml": ("nvml:::NVIDIA_A100-SXM4-40GB:power",)})
     assert row["event"] == "nvml:::NVIDIA_A100-SXM4-40GB:power"
 
 
@@ -442,7 +447,7 @@ def test_the_vendor_is_the_one_whose_driver_node_is_here(monkeypatch, tmp_path) 
     without the component, and those two failures need different fixes."""
     (tmp_path / "kfd").write_text("")
     monkeypatch.setattr(papi, "VENDOR_DEVICES", {"nvidia": tmp_path / "absent", "amd": tmp_path / "kfd"})
-    assert papi.gpu_vendors() == ("amd", )
+    assert papi.gpu_vendors() == ("amd",)
     assert papi.gpu_vendor() == "amd"
     assert papi.gpu_vendor("nvidia") == "nvidia", "an explicit ask is answered, not overridden"
 
@@ -459,7 +464,7 @@ def test_the_feature_set_partitions_every_metric_into_supported_or_a_reason(monk
     which on a GPU matters more than on a CPU: the usual answer is 'never compiled in', and
     finding that out after a build and a measured sweep costs both."""
     install(monkeypatch, CUDA_ONLY, {"cuda": CUDA_EVENTS})
-    monkeypatch.setattr(papi, "gpu_vendors", lambda: ("nvidia", ))
+    monkeypatch.setattr(papi, "gpu_vendors", lambda: ("nvidia",))
     features = papi.gpu_feature_set()
     assert set(features["supported"]) | set(features["unsupported"]) == set(papi.GPU_METRICS)
     assert not set(features["supported"]) & set(features["unsupported"]), "a metric cannot be both"
@@ -475,7 +480,7 @@ def test_a_papi_with_no_gpu_components_produces_reasons_rather_than_an_empty_mea
     """The requirement in one test: every metric comes back with a sentence a reader can act on,
     and not one of them comes back as a number."""
     install(monkeypatch, CPU_ONLY, {})
-    monkeypatch.setattr(papi, "gpu_vendors", lambda: ("amd", ))
+    monkeypatch.setattr(papi, "gpu_vendors", lambda: ("amd",))
     features = papi.gpu_feature_set()
     assert features["supported"] == {}
     assert set(features["unsupported"]) == set(papi.GPU_METRICS)
@@ -490,9 +495,9 @@ def test_the_feature_set_only_enumerates_the_components_the_ask_needs(monkeypatc
     asked = []
     monkeypatch.setattr(papi, "components", lambda: CUDA_ONLY)
     monkeypatch.setattr(papi, "native_events", lambda name: asked.append(name) or ())
-    monkeypatch.setattr(papi, "gpu_vendors", lambda: ("nvidia", ))
+    monkeypatch.setattr(papi, "gpu_vendors", lambda: ("nvidia",))
     monkeypatch.setattr(papi, "component_report", dict)
-    papi.gpu_feature_set(metrics=("power", ))
+    papi.gpu_feature_set(metrics=("power",))
     assert "cuda" not in asked, f"asked {asked}: a power metric enumerated the kernel-counter component"
 
 
@@ -503,18 +508,18 @@ def worker(monkeypatch, *, supported=None, unsupported=None, permission=None, de
     Every early return this exercises happens BEFORE PAPI, the driver or the kernel is touched,
     which is what makes them testable on a host with none of the three.
     """
-    monkeypatch.setattr(papi,
-                        "gpu_feature_set",
-                        lambda vendor=None, metrics=(): {
-                            "supported": supported or {},
-                            "unsupported": unsupported or {},
-                            "permissions": {
-                                "nvidia": permission,
-                                "amd": permission
-                            },
-                        })
-    return papi.gpu_counting_worker("/nonexistent.so", None, {}, "cuda", None, "occupancy", vendor, device, None, 1, 0,
-                                    1.0, 0)
+    monkeypatch.setattr(
+        papi,
+        "gpu_feature_set",
+        lambda vendor=None, metrics=(): {
+            "supported": supported or {},
+            "unsupported": unsupported or {},
+            "permissions": {"nvidia": permission, "amd": permission},
+        },
+    )
+    return papi.gpu_counting_worker(
+        "/nonexistent.so", None, {}, "cuda", None, "occupancy", vendor, device, None, 1, 0, 1.0, 0
+    )
 
 
 #: A resolved metric, as :func:`papi.gpu_feature_set` hands one to the counting child.
@@ -569,9 +574,9 @@ def test_an_unsupported_metric_costs_a_fork_and_not_a_measured_run(monkeypatch) 
 def test_a_refused_permission_is_reported_instead_of_being_counted_around(monkeypatch) -> None:
     """The gate has to be checked where the count would happen: a resolved event on a device the
     driver will not open produces PAPI's own error, which reads like a broken install."""
-    row = worker(monkeypatch,
-                 supported=RESOLVED,
-                 permission="ERR_NVGPUCTRPERM: the driver restricts profiling to admin users")
+    row = worker(
+        monkeypatch, supported=RESOLVED, permission="ERR_NVGPUCTRPERM: the driver restricts profiling to admin users"
+    )
     assert row["count"] is None and "ERR_NVGPUCTRPERM" in row["missing"]
 
 
@@ -656,8 +661,11 @@ def test_a_built_gpu_component_resolves_at_least_one_metric_of_its_vendor() -> N
         if not set(names) & set(live):
             continue
         features = papi.gpu_feature_set(vendor=vendor)
-        assert features["supported"], (f"{vendor}: components {sorted(set(names) & set(live))} are up and enumerate "
-                                       f"events, yet no metric resolved: {features['unsupported']}")
+        assert features["supported"], (
+            f"{vendor}: components {sorted(set(names) & set(live))} are up and enumerate "
+            f"events, yet no metric resolved: {features['unsupported']}"
+        )
         for metric, row in features["supported"].items():
-            assert row["event"] in papi.native_events(
-                row["component"]), f"{metric}: resolved to a name PAPI never listed"
+            assert row["event"] in papi.native_events(row["component"]), (
+                f"{metric}: resolved to a name PAPI never listed"
+            )

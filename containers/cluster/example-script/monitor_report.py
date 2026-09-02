@@ -53,7 +53,7 @@ def parse_role_host(path: Path) -> tuple[str, str]:
     for role in ROLES:
         prefix = role + "-"
         if stem.startswith(prefix):
-            return role, stem[len(prefix):]
+            return role, stem[len(prefix) :]
     return "unknown", stem
 
 
@@ -128,15 +128,19 @@ def fmt(value: float | None, unit: str = "") -> str:
 
 
 def print_table(nodes: list[NodeStats]) -> None:
-    header = (f"{'role':<7} {'host':<20} {'n':>5} {'cpu_mean':>9} {'cpu_p95':>8} "
-              f"{'gpu_mean':>9} {'gpu_p95':>8} {'mem_peak':>10} {'vram_peak':>10}")
+    header = (
+        f"{'role':<7} {'host':<20} {'n':>5} {'cpu_mean':>9} {'cpu_p95':>8} "
+        f"{'gpu_mean':>9} {'gpu_p95':>8} {'mem_peak':>10} {'vram_peak':>10}"
+    )
     print(header)
     print("-" * len(header))
     for node in sorted(nodes, key=lambda n: (n.role, n.host)):
-        print(f"{node.role:<7} {node.host:<20} {node.samples:>5} "
-              f"{fmt(node.cpu_mean, '%'):>9} {fmt(node.cpu_p95, '%'):>8} "
-              f"{fmt(node.gpu_mean, '%'):>9} {fmt(node.gpu_p95, '%'):>8} "
-              f"{fmt(node.mem_peak_mib, 'M'):>10} {fmt(node.vram_peak_mib, 'M'):>10}")
+        print(
+            f"{node.role:<7} {node.host:<20} {node.samples:>5} "
+            f"{fmt(node.cpu_mean, '%'):>9} {fmt(node.cpu_p95, '%'):>8} "
+            f"{fmt(node.gpu_mean, '%'):>9} {fmt(node.gpu_p95, '%'):>8} "
+            f"{fmt(node.mem_peak_mib, 'M'):>10} {fmt(node.vram_peak_mib, 'M'):>10}"
+        )
 
 
 def print_gpu_balance(nodes: list[NodeStats]) -> None:

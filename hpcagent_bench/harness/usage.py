@@ -19,6 +19,7 @@ Pricing is intentionally NOT baked in here (it is provider- and caching-policy
 dependent and changes over time): :meth:`TokenUsage.cost_usd` takes an explicit
 price table so a report can be re-priced without re-running.
 """
+
 from dataclasses import dataclass
 from typing import Dict
 
@@ -29,6 +30,7 @@ class TokenUsage:
 
     ``cached_tokens`` is the cache-read subset of ``input_tokens`` (billed cheaper);
     it is tracked separately for cost, NOT added on top of the total."""
+
     input_tokens: int = 0
     output_tokens: int = 0
     cached_tokens: int = 0
@@ -39,8 +41,11 @@ class TokenUsage:
         return self.input_tokens + self.output_tokens
 
     def __add__(self, other: "TokenUsage") -> "TokenUsage":
-        return TokenUsage(self.input_tokens + other.input_tokens, self.output_tokens + other.output_tokens,
-                          self.cached_tokens + other.cached_tokens)
+        return TokenUsage(
+            self.input_tokens + other.input_tokens,
+            self.output_tokens + other.output_tokens,
+            self.cached_tokens + other.cached_tokens,
+        )
 
     def cost_usd(self, prices: Dict[str, float]) -> float:
         """Dollar cost given a ``{in,out,cache}`` price table in $/Mtoken.
@@ -59,5 +64,5 @@ class TokenUsage:
             "input": self.input_tokens,
             "output": self.output_tokens,
             "cached": self.cached_tokens,
-            "total": self.total
+            "total": self.total,
         }

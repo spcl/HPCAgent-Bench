@@ -12,6 +12,7 @@ The statement has no runtime meaning for a translated backend: ``np_float`` is r
 NAME by ``_NP_DTYPE_NAMES`` and narrowed to the run precision by the precision pass. So the shared
 frontend drops it for every backend at once.
 """
+
 import ast
 
 from numpyto_common.frontend import _strip_framework_dtype_rebinding
@@ -22,10 +23,12 @@ def _fn(src: str) -> ast.FunctionDef:
 
 
 def test_separate_rebindings_are_dropped():
-    fn = _fn("def k(a):\n"
-             "    np_float = framework.np_float\n"
-             "    np_complex = framework.np_complex\n"
-             "    return a.astype(np_float)\n")
+    fn = _fn(
+        "def k(a):\n"
+        "    np_float = framework.np_float\n"
+        "    np_complex = framework.np_complex\n"
+        "    return a.astype(np_float)\n"
+    )
     _strip_framework_dtype_rebinding(fn)
     body = ast.unparse(fn)
     assert "framework" not in body
@@ -34,9 +37,7 @@ def test_separate_rebindings_are_dropped():
 
 def test_a_tuple_rebinding_is_dropped():
     """The spelling mandelbrot uses."""
-    fn = _fn("def k(a):\n"
-             "    np_float, np_complex = framework.np_float, framework.np_complex\n"
-             "    return np_complex\n")
+    fn = _fn("def k(a):\n    np_float, np_complex = framework.np_float, framework.np_complex\n    return np_complex\n")
     _strip_framework_dtype_rebinding(fn)
     assert "framework" not in ast.unparse(fn)
 

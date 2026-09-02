@@ -16,6 +16,7 @@ which every dace import needs. The CE images installed exactly what those files 
 
 Stdlib only: pyproject is read with tomllib, never through setuptools.
 """
+
 import pathlib
 import re
 import sys
@@ -125,8 +126,10 @@ def test_generated_requirements_are_in_sync_with_pyproject():
     images as the OLD list, silently -- a container build is the only thing that would notice, hours
     later and on a different machine."""
     diffs = sync_requirements.check()
-    assert not diffs, ("requirements/*.txt are stale against pyproject.toml. Run "
-                       "`python scripts/sync_requirements.py`.\n" + "\n".join(diffs))
+    assert not diffs, (
+        "requirements/*.txt are stale against pyproject.toml. Run "
+        "`python scripts/sync_requirements.py`.\n" + "\n".join(diffs)
+    )
 
 
 def test_self_referencing_extras_expand():
@@ -152,8 +155,7 @@ def test_every_requirements_file_is_generated_or_declared_hand_maintained():
     on_disk = {str(p.relative_to(paths.ROOT)) for p in REQUIREMENTS_DIR.glob("*.txt")}
     on_disk.add("requirements.txt")
     unaccounted = sorted(on_disk - set(sync_requirements.GENERATED) - HAND_MAINTAINED)
-    assert not unaccounted, (f"requirements files that are neither generated nor declared "
-                             f"hand-maintained: {unaccounted}")
+    assert not unaccounted, f"requirements files that are neither generated nor declared hand-maintained: {unaccounted}"
 
 
 def test_dependencies_are_a_subset_of_amd_and_nvidia_requirements():
@@ -165,6 +167,8 @@ def test_dependencies_are_a_subset_of_amd_and_nvidia_requirements():
     for filename in ("amd.txt", "nvidia.txt"):
         req_names = parse_requirements(REQUIREMENTS_DIR / filename)
         missing = sorted(declared - req_names)
-        assert not missing, (f"[project] dependencies missing from requirements/{filename}: {missing} "
-                             f"-- the judge mounts the repo into the CE image and never installs the project, "
-                             f"so a name absent here is a ModuleNotFoundError inside that container")
+        assert not missing, (
+            f"[project] dependencies missing from requirements/{filename}: {missing} "
+            f"-- the judge mounts the repo into the CE image and never installs the project, "
+            f"so a name absent here is a ModuleNotFoundError inside that container"
+        )

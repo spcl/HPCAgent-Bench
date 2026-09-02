@@ -15,6 +15,7 @@ ladder whose M rung is its XL.
     python scripts/merge_size_proposals.py results/llr-sizes-<jobid>/proposal-*.json \
         --json results/llr-sizes-<jobid>/proposal.json
 """
+
 import argparse
 import json
 import pathlib
@@ -61,22 +62,18 @@ def merge(paths: list[pathlib.Path]) -> dict:
     measured_at = list(next(iter(measured)))
     rung = next(iter(rungs))
     return {
-        "target_ms":
-        next(iter(targets)),
-        "measured_at":
-        measured_at,
-        "apply_rung":
-        rung,
-        "apply_safe":
-        rung == APPLY_ANCHOR,
-        "apply_unsafe_reason":
-        "" if rung == APPLY_ANCHOR else
-        (f"shards declare apply_rung {rung!r}, not {APPLY_ANCHOR!r}: their S block is not the M rung "
-         f"carried over, so apply_sizes.py would install M := that preset."),
-        "shards":
-        len(docs),
-        "kernels":
-        sorted(kernels, key=lambda r: r["key"]),
+        "target_ms": next(iter(targets)),
+        "measured_at": measured_at,
+        "apply_rung": rung,
+        "apply_safe": rung == APPLY_ANCHOR,
+        "apply_unsafe_reason": ""
+        if rung == APPLY_ANCHOR
+        else (
+            f"shards declare apply_rung {rung!r}, not {APPLY_ANCHOR!r}: their S block is not the M rung "
+            f"carried over, so apply_sizes.py would install M := that preset."
+        ),
+        "shards": len(docs),
+        "kernels": sorted(kernels, key=lambda r: r["key"]),
     }
 
 

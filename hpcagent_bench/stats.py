@@ -18,6 +18,7 @@ Reported defaults (so a run's rigor is documented, not implicit):
   ``method`` :data:`DEFAULT_CI_METHOD` (``"percentile"`` -- the robust choice for a median,
   whose BCa acceleration estimate is unstable).
 """
+
 import warnings
 from typing import Sequence, Tuple
 
@@ -42,10 +43,9 @@ DEFAULT_RESAMPLES: int = 9999
 DEFAULT_CI_METHOD: str = "percentile"
 
 
-def drop_outliers(samples: Sequence[float],
-                  threshold: float = DEFAULT_MAD_Z,
-                  warn: bool = True,
-                  label: str = "") -> Tuple[np.ndarray, np.ndarray]:
+def drop_outliers(
+    samples: Sequence[float], threshold: float = DEFAULT_MAD_Z, warn: bool = True, label: str = ""
+) -> Tuple[np.ndarray, np.ndarray]:
     """Drop upper-tail outliers by robust modified z-score, one-sided (slow side only).
 
     ``modified_z = (x - median) / (1.4826 * MAD)``; a sample with ``modified_z > threshold``
@@ -82,18 +82,21 @@ def drop_outliers(samples: Sequence[float],
         warnings.warn(
             f"{prefix}dropped {dropped.size} slow outlier sample(s) "
             f"(modified z > {threshold}, median={med:.4g}): {np.round(dropped, 4).tolist()}",
-            stacklevel=2)
+            stacklevel=2,
+        )
     return kept, dropped
 
 
-def median_ci(samples: Sequence[float],
-              confidence: float = DEFAULT_CONFIDENCE,
-              n_resamples: int = DEFAULT_RESAMPLES,
-              method: str = DEFAULT_CI_METHOD,
-              drop: bool = True,
-              warn: bool = True,
-              label: str = "",
-              seed: int = 0) -> Tuple[float, float, float, int]:
+def median_ci(
+    samples: Sequence[float],
+    confidence: float = DEFAULT_CONFIDENCE,
+    n_resamples: int = DEFAULT_RESAMPLES,
+    method: str = DEFAULT_CI_METHOD,
+    drop: bool = True,
+    warn: bool = True,
+    label: str = "",
+    seed: int = 0,
+) -> Tuple[float, float, float, int]:
     """Median and a non-parametric bootstrap CI, after robust outlier rejection.
 
     Runs :func:`scipy.stats.bootstrap` on the median with the module defaults
@@ -112,11 +115,13 @@ def median_ci(samples: Sequence[float],
     med = float(np.median(x))
     if x.size < 3 or float(np.ptp(x)) == 0.0:
         return med, med, med, n_dropped
-    res = bootstrap((x, ),
-                    np.median,
-                    confidence_level=confidence,
-                    n_resamples=n_resamples,
-                    method=method,
-                    vectorized=True,
-                    random_state=np.random.default_rng(seed))
+    res = bootstrap(
+        (x,),
+        np.median,
+        confidence_level=confidence,
+        n_resamples=n_resamples,
+        method=method,
+        vectorized=True,
+        random_state=np.random.default_rng(seed),
+    )
     return med, float(res.confidence_interval.low), float(res.confidence_interval.high), n_dropped

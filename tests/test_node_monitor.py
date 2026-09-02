@@ -8,6 +8,7 @@ node_monitor.sh appends gpu0_pct..gpu(N-1)_pct after the original 8 columns, and
 monitor_report.py must keep reading both the old 8-column files (already on disk
 from past runs) and the new extended ones -- pinned here so neither format regresses.
 """
+
 import importlib.util
 import os
 import shutil
@@ -80,14 +81,18 @@ def run_monitor(tmp_path: Path, path_dirs: list[Path], interval: str = "0.2", ro
     return csv_files[0].read_text()
 
 
-ROCM_JSON = ('{"card0": {"GPU use (%)": "10", "VRAM Total Used Memory (B)": "1048576", '
-             '"VRAM Total Memory (B)": "10485760"}, '
-             '"card1": {"GPU use (%)": "90", "VRAM Total Used Memory (B)": "2097152", '
-             '"VRAM Total Memory (B)": "10485760"}}')
+ROCM_JSON = (
+    '{"card0": {"GPU use (%)": "10", "VRAM Total Used Memory (B)": "1048576", '
+    '"VRAM Total Memory (B)": "10485760"}, '
+    '"card1": {"GPU use (%)": "90", "VRAM Total Used Memory (B)": "2097152", '
+    '"VRAM Total Memory (B)": "10485760"}}'
+)
 
-AMDSMI_JSON = ('[{"gpu": 0, "usage": {"gfx_activity": {"value": 15}}}, '
-               '{"gpu": 1, "usage": {"gfx_activity": {"value": 55}}}, '
-               '{"gpu": 2, "usage": {"gfx_activity": {"value": 35}}}]')
+AMDSMI_JSON = (
+    '[{"gpu": 0, "usage": {"gfx_activity": {"value": 15}}}, '
+    '{"gpu": 1, "usage": {"gfx_activity": {"value": 55}}}, '
+    '{"gpu": 2, "usage": {"gfx_activity": {"value": 35}}}]'
+)
 
 
 def test_no_gpu_tool_keeps_the_old_8_column_header(tmp_path):
@@ -162,10 +167,14 @@ def write_csv(path: Path, header: str, rows: list[str]) -> None:
 
 
 def test_old_8_column_files_still_report_gpu_mean_and_no_balance_section(tmp_path, capsys):
-    write_csv(tmp_path / "agent-nid001.csv", OLD_HEADER, [
-        "2026-01-01T00:00:00Z,50.0,1.0,10000,20000,30.0,1000,10000",
-        "2026-01-01T00:00:05Z,90.0,1.5,10500,20000,35.0,1000,10000",
-    ])
+    write_csv(
+        tmp_path / "agent-nid001.csv",
+        OLD_HEADER,
+        [
+            "2026-01-01T00:00:00Z,50.0,1.0,10000,20000,30.0,1000,10000",
+            "2026-01-01T00:00:05Z,90.0,1.5,10500,20000,35.0,1000,10000",
+        ],
+    )
     mod = monitor_report()
     node = mod.compute_node_stats(tmp_path / "agent-nid001.csv")
     assert node.gpu_mean == pytest.approx(32.5)
@@ -177,10 +186,14 @@ def test_old_8_column_files_still_report_gpu_mean_and_no_balance_section(tmp_pat
 
 def test_extended_format_reports_per_gpu_mean_and_imbalance_spread(tmp_path, capsys):
     header = OLD_HEADER + ",gpu0_pct,gpu1_pct,gpu2_pct,gpu3_pct"
-    write_csv(tmp_path / "judge-nid002.csv", header, [
-        "2026-01-01T00:00:00Z,20.0,1.0,10000,20000,55.0,1000,10000,10.0,90.0,50.0,70.0",
-        "2026-01-01T00:00:05Z,25.0,1.1,10500,20000,60.0,1000,10000,20.0,100.0,60.0,60.0",
-    ])
+    write_csv(
+        tmp_path / "judge-nid002.csv",
+        header,
+        [
+            "2026-01-01T00:00:00Z,20.0,1.0,10000,20000,55.0,1000,10000,10.0,90.0,50.0,70.0",
+            "2026-01-01T00:00:05Z,25.0,1.1,10500,20000,60.0,1000,10000,20.0,100.0,60.0,60.0",
+        ],
+    )
     mod = monitor_report()
     node = mod.compute_node_stats(tmp_path / "judge-nid002.csv")
     assert node.per_gpu_mean == {
@@ -201,19 +214,30 @@ def test_gpu_columns_are_read_header_driven_not_by_position(tmp_path):
     """A file whose per-GPU columns are NOT contiguous with the fixed 8 (e.g. reordered
     by hand) still parses correctly -- gpu_columns() keys off the header, not offsets."""
     mod = monitor_report()
-    assert mod.gpu_columns(["ts", "gpu2_pct", "cpu_pct", "gpu0_pct",
-                            "gpu1_pct"]) == ["gpu0_pct", "gpu1_pct", "gpu2_pct"]
+    assert mod.gpu_columns(["ts", "gpu2_pct", "cpu_pct", "gpu0_pct", "gpu1_pct"]) == [
+        "gpu0_pct",
+        "gpu1_pct",
+        "gpu2_pct",
+    ]
     assert mod.gpu_columns(list(OLD_HEADER.split(","))) == []
 
 
 def test_report_cli_prints_gpu_balance_only_for_extended_files(tmp_path):
-    write_csv(tmp_path / "agent-old.csv", OLD_HEADER, [
-        "2026-01-01T00:00:00Z,50.0,1.0,10000,20000,30.0,1000,10000",
-    ])
+    write_csv(
+        tmp_path / "agent-old.csv",
+        OLD_HEADER,
+        [
+            "2026-01-01T00:00:00Z,50.0,1.0,10000,20000,30.0,1000,10000",
+        ],
+    )
     header = OLD_HEADER + ",gpu0_pct,gpu1_pct"
-    write_csv(tmp_path / "judge-new.csv", header, [
-        "2026-01-01T00:00:00Z,20.0,1.0,10000,20000,55.0,1000,10000,10.0,100.0",
-    ])
+    write_csv(
+        tmp_path / "judge-new.csv",
+        header,
+        [
+            "2026-01-01T00:00:00Z,20.0,1.0,10000,20000,55.0,1000,10000,10.0,100.0",
+        ],
+    )
     proc = subprocess.run([sys.executable, str(REPORT), str(tmp_path)], capture_output=True, text=True, check=True)
     assert "gpu balance" in proc.stdout
     assert "judge   new" in proc.stdout

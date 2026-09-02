@@ -70,10 +70,25 @@ def _rename_reserved_params(tree: ast.Module, kernel_name: str) -> None:
 #: Whole-array numpy reductions. pythran mis-materializes a lazy broadcast ``numpy_expr`` fed straight
 #: to one -- a column-vector broadcast like ``mass(N,1) * vel(N,3)`` reduces to uninitialized garbage
 #: (nbody KE) -- so a compound operand is forced concrete first (see _PythranMaterialize).
-_PYTHRAN_REDUCTIONS = frozenset({
-    "sum", "mean", "prod", "amax", "amin", "max", "min", "std", "var", "any", "all", "median", "ptp", "cumsum",
-    "cumprod"
-})
+_PYTHRAN_REDUCTIONS = frozenset(
+    {
+        "sum",
+        "mean",
+        "prod",
+        "amax",
+        "amin",
+        "max",
+        "min",
+        "std",
+        "var",
+        "any",
+        "all",
+        "median",
+        "ptp",
+        "cumsum",
+        "cumprod",
+    }
+)
 
 
 class _PythranMaterialize(ast.NodeTransformer):
@@ -106,13 +121,24 @@ class _PythranMaterialize(ast.NodeTransformer):
         self.generic_visit(node)
         f = node.func
         # np.reshape(X, shape) -> np.ascontiguousarray(X).reshape(shape)
-        if (isinstance(f, ast.Attribute) and f.attr == "reshape" and isinstance(f.value, ast.Name)
-                and f.value.id in ("np", "numpy") and len(node.args) >= 2):
+        if (
+            isinstance(f, ast.Attribute)
+            and f.attr == "reshape"
+            and isinstance(f.value, ast.Name)
+            and f.value.id in ("np", "numpy")
+            and len(node.args) >= 2
+        ):
             meth = ast.Attribute(value=self._ascontig(node.args[0]), attr="reshape", ctx=ast.Load())
             return ast.copy_location(ast.Call(func=meth, args=node.args[1:], keywords=node.keywords), node)
         # np.<reduction>(<compound broadcast>) -> np.<reduction>(np.ascontiguousarray(<compound>))
-        if (isinstance(f, ast.Attribute) and f.attr in _PYTHRAN_REDUCTIONS and isinstance(f.value, ast.Name)
-                and f.value.id in ("np", "numpy") and node.args and isinstance(node.args[0], (ast.BinOp, ast.UnaryOp))):
+        if (
+            isinstance(f, ast.Attribute)
+            and f.attr in _PYTHRAN_REDUCTIONS
+            and isinstance(f.value, ast.Name)
+            and f.value.id in ("np", "numpy")
+            and node.args
+            and isinstance(node.args[0], (ast.BinOp, ast.UnaryOp))
+        ):
             node.args = [self._ascontig(node.args[0]), *node.args[1:]]
             return node
         # local_helper(<compound expr>) -> local_helper(np.ascontiguousarray(<expr>))
@@ -160,8 +186,12 @@ class _NanAwareMinMaxSign(ast.NodeTransformer):
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
         f = node.func
-        if not (isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id in ("np", "numpy")
-                and not node.keywords):
+        if not (
+            isinstance(f, ast.Attribute)
+            and isinstance(f.value, ast.Name)
+            and f.value.id in ("np", "numpy")
+            and not node.keywords
+        ):
             return node
         if f.attr in self._BINARY and len(node.args) == 2:
             a, b = node.args
@@ -213,9 +243,11 @@ class _PythranSafeMatVec(ast.NodeTransformer):
         if expr_rank(node.left, self.ranks) != 2 or expr_rank(node.right, self.ranks) != 1:
             return node
         prod = ast.BinOp(left=node.left, op=ast.Mult(), right=node.right)
-        call = ast.Call(func=ast.Attribute(value=prod, attr="sum", ctx=ast.Load()),
-                        args=[],
-                        keywords=[ast.keyword(arg="axis", value=ast.Constant(value=-1))])
+        call = ast.Call(
+            func=ast.Attribute(value=prod, attr="sum", ctx=ast.Load()),
+            args=[],
+            keywords=[ast.keyword(arg="axis", value=ast.Constant(value=-1))],
+        )
         return ast.copy_location(call, node)
 
 
@@ -242,9 +274,11 @@ class _EllipsisToSlice(ast.NodeTransformer):
     def _is_newaxis(e: ast.AST) -> bool:
         """All three spellings: ``None``, ``np.newaxis``, bare ``newaxis``. The source keeps
         whichever the author wrote, and ``np.newaxis`` is an Attribute, not a Constant."""
-        return ((isinstance(e, ast.Constant) and e.value is None)
-                or (isinstance(e, ast.Attribute) and e.attr == "newaxis")
-                or (isinstance(e, ast.Name) and e.id == "newaxis"))
+        return (
+            (isinstance(e, ast.Constant) and e.value is None)
+            or (isinstance(e, ast.Attribute) and e.attr == "newaxis")
+            or (isinstance(e, ast.Name) and e.id == "newaxis")
+        )
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
         self.generic_visit(node)
@@ -333,7 +367,7 @@ class KwargsToPositional(ast.NodeTransformer):
         params, defaults = self.signatures[f.id]
         provided = {k.arg: k.value for k in node.keywords}
         new_args = list(node.args)
-        for p in params[len(node.args):]:
+        for p in params[len(node.args) :]:
             if p in provided:
                 new_args.append(provided.pop(p))
             elif p in defaults:
@@ -362,7 +396,7 @@ def _clean_for_pythran(source: str, kir: KernelIR) -> str:
     fp32 = any(a.dtype == "float32" for a in kir.arrays)
     subs = {
         "np_float": "np.float32" if fp32 else "np.float64",
-        "np_complex": "np.complex64" if fp32 else "np.complex128"
+        "np_complex": "np.complex64" if fp32 else "np.complex128",
     }
     ranks = {a.name: len(a.shape) for a in kir.arrays}
     tree = ast.parse(source)
@@ -392,7 +426,7 @@ def _clean_for_pythran(source: str, kir: KernelIR) -> str:
         if isinstance(n, ast.FunctionDef):
             params = [a.arg for a in n.args.args]
             da = n.args.defaults
-            defaults = {p: d for p, d in zip(params[len(params) - len(da):], da)} if da else {}
+            defaults = {p: d for p, d in zip(params[len(params) - len(da) :], da)} if da else {}
             signatures[n.name] = (params, defaults)
     tree = KwargsToPositional(signatures).visit(tree)
     _rename_reserved_params(tree, kir.kernel_name)
@@ -431,8 +465,10 @@ def _pythran_scalar_type(dtype: str, ctx: str) -> str:
     # export signature declares its STORAGE dtype.
     ptype = _DTYPE_TO_PYTHRAN.get(dtype) or _DTYPE_TO_PYTHRAN.get(dtypes.storage_dtype(dtype))
     if ptype is None:
-        raise ValueError(f"pythran export: cannot map dtype {dtype!r} for {ctx} "
-                         f"(not in _DTYPE_TO_PYTHRAN); refusing to default to float64")
+        raise ValueError(
+            f"pythran export: cannot map dtype {dtype!r} for {ctx} "
+            f"(not in _DTYPE_TO_PYTHRAN); refusing to default to float64"
+        )
     return ptype
 
 
@@ -459,13 +495,15 @@ def emit_pythran(numpy_source: str, kir: KernelIR) -> str:
     # (and free size symbols) into input_args for the C/Fortran ABI, but
     # pythran keeps the body functional (value RETURNED, not buffer-written).
     # Exporting the promoted ABI would declare more args than the def has.
-    kfn = next(n for n in ast.walk(ast.parse(numpy_source))
-               if isinstance(n, ast.FunctionDef) and n.name == kir.kernel_name)
+    kfn = next(
+        n for n in ast.walk(ast.parse(numpy_source)) if isinstance(n, ast.FunctionDef) and n.name == kir.kernel_name
+    )
     def_params = [a.arg for a in kfn.args.args]
 
     # Expand ops pythran cannot template-instantiate verbatim (batched >=3-D
     # ``@``) into plain loops; a no-op for kernels that do not use them.
     from numpyto_common.numpy_desugar import desugar_for_python_backend
+
     numpy_source = desugar_for_python_backend(numpy_source, kir, backend="pythran")
     numpy_source = _clean_for_pythran(numpy_source, kir)
 
@@ -496,10 +534,14 @@ def emit_pythran(numpy_source: str, kir: KernelIR) -> str:
             # A REQUIRED def param the frontend didn't classify has no known
             # dtype. Defaulting to float64 would silently type-pun a bool/int
             # argument in the oracle's positional call -- fail loudly instead.
-            raise ValueError(f"pythran export: parameter {arg!r} of {kir.kernel_name!r} is absent from the "
-                             f"kir symbol/array/scalar tables -- cannot resolve its dtype; refusing to "
-                             f"default to float64")
+            raise ValueError(
+                f"pythran export: parameter {arg!r} of {kir.kernel_name!r} is absent from the "
+                f"kir symbol/array/scalar tables -- cannot resolve its dtype; refusing to "
+                f"default to float64"
+            )
     export = f"#pythran export {kir.kernel_name}({', '.join(types)})\n"
-    header = ('"""Auto-generated by NumpyToPythran. ``#pythran export`` declaration '
-              'synthesised from bench_info; body preserved verbatim."""\n')
+    header = (
+        '"""Auto-generated by NumpyToPythran. ``#pythran export`` declaration '
+        'synthesised from bench_info; body preserved verbatim."""\n'
+    )
     return header + export + numpy_source

@@ -16,6 +16,7 @@ it means the run leg wrote nothing.
 This is the same class as the empty-selection guard in :func:`plotting.plot_heatmap`: both are
 places where an absent input used to look like a successful, empty result.
 """
+
 import pathlib
 
 import pytest
@@ -43,6 +44,7 @@ def test_reading_an_unwritten_db_names_the_run_leg(tmp_path):
     """The end this exists for: the error names the path, reports that no shard was found, and
     points at the run leg rather than the plot."""
     from hpcagent_bench import plotting
+
     db = tmp_path / "hpcagent_bench.db"
     with pytest.raises(RuntimeError) as excinfo:
         plotting.load_results(str(db))
@@ -64,20 +66,23 @@ def test_a_written_shard_is_aggregated_and_read(tmp_path):
     shard = pathlib.Path(recording.shard_db_path(0, str(base)))
     with Session(results_engine(str(shard))) as session:
         session.add(
-            Result(timestamp=0,
-                   benchmark="gemm",
-                   domain="LinAlg",
-                   preset="S",
-                   framework="numpy",
-                   agent=None,
-                   validated=True,
-                   cpu="test-cpu",
-                   time=1.0,
-                   native_time=None,
-                   datatype="float64",
-                   variant=None,
-                   prompt_hash=None,
-                   execution="native"))
+            Result(
+                timestamp=0,
+                benchmark="gemm",
+                domain="LinAlg",
+                preset="S",
+                framework="numpy",
+                agent=None,
+                validated=True,
+                cpu="test-cpu",
+                time=1.0,
+                native_time=None,
+                datatype="float64",
+                variant=None,
+                prompt_hash=None,
+                execution="native",
+            )
+        )
         session.commit()
 
     rows = plotting.load_results(str(base), benchmark="gemm", preset="S")
@@ -90,23 +95,27 @@ def write_row(shard: pathlib.Path, framework: str, build, time: float) -> None:
     from sqlmodel import Session
 
     from hpcagent_bench.frameworks.schema import Result, results_engine
+
     with Session(results_engine(str(shard))) as session:
         session.add(
-            Result(timestamp=0,
-                   benchmark="gemm",
-                   domain="LinAlg",
-                   preset="S",
-                   framework=framework,
-                   build=build,
-                   agent=None,
-                   validated=True,
-                   cpu="test-cpu",
-                   time=time,
-                   native_time=None,
-                   datatype="float64",
-                   variant=None,
-                   prompt_hash=None,
-                   execution="native"))
+            Result(
+                timestamp=0,
+                benchmark="gemm",
+                domain="LinAlg",
+                preset="S",
+                framework=framework,
+                build=build,
+                agent=None,
+                validated=True,
+                cpu="test-cpu",
+                time=time,
+                native_time=None,
+                datatype="float64",
+                variant=None,
+                prompt_hash=None,
+                execution="native",
+            )
+        )
         session.commit()
 
 
@@ -124,7 +133,10 @@ def test_the_baseline_survives_a_build_stamp(tmp_path):
     write_row(shard, "dace_cpu", "extended", 2.5)
 
     frameworks = set(plotting.load_results(str(base), benchmark="gemm", preset="S")["framework"])
-    assert plotting.BASELINE in frameworks, (f"the baseline was folded into {sorted(frameworks)} -- every speedup "
-                                             f"divides by {plotting.BASELINE!r} and can no longer find it")
+    assert plotting.BASELINE in frameworks, (
+        f"the baseline was folded into {sorted(frameworks)} -- every speedup "
+        f"divides by {plotting.BASELINE!r} and can no longer find it"
+    )
     assert {"dace_cpu/main", "dace_cpu/extended"} <= frameworks, (
-        f"the candidate columns must still fold, or two DaCe trees average into one line: {sorted(frameworks)}")
+        f"the candidate columns must still fold, or two DaCe trees average into one line: {sorted(frameworks)}"
+    )

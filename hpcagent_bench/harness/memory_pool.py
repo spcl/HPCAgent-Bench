@@ -20,6 +20,7 @@ hook to point it at an arena. So the host path VERIFIES instead of reserving -- 
 kernel reports as available and refuses to start when the plan does not fit. Same failure, same
 place, without pretending to a pooling it does not do.
 """
+
 import pathlib
 from typing import Optional, Tuple
 
@@ -59,17 +60,20 @@ def reserve_device(total_bytes: int, device: int = 0) -> Tuple[bool, str]:
     except Exception as exc:  # noqa: BLE001 -- cupy present, no driver: still a host-only judge
         return False, f"no usable GPU {device} ({type(exc).__name__}); serving from the host"
     if total_bytes > free:
-        raise MemoryError(f"judge needs {total_bytes / GB:.2f} GB on GPU {device} but only "
-                          f"{free / GB:.2f} GB of {total / GB:.2f} GB is free; plan a smaller preset, "
-                          f"a bigger device, or stop the co-tenant")
+        raise MemoryError(
+            f"judge needs {total_bytes / GB:.2f} GB on GPU {device} but only "
+            f"{free / GB:.2f} GB of {total / GB:.2f} GB is free; plan a smaller preset, "
+            f"a bigger device, or stop the co-tenant"
+        )
     pool = cp.cuda.MemoryPool()
     cp.cuda.set_allocator(pool.malloc)
     # Allocate the whole reservation once and drop it: the POOL keeps the arena (that is the
     # difference from the default allocator), so every later request is served without a cudaMalloc.
     block = pool.malloc(total_bytes)
     del block
-    return True, (f"GPU {device}: pooled {total_bytes / GB:.2f} GB of {total / GB:.2f} GB "
-                  f"({pool.total_bytes() / GB:.2f} GB held)")
+    return True, (
+        f"GPU {device}: pooled {total_bytes / GB:.2f} GB of {total / GB:.2f} GB ({pool.total_bytes() / GB:.2f} GB held)"
+    )
 
 
 def reserve_host(total_bytes: int) -> Tuple[bool, str]:
@@ -79,8 +83,10 @@ def reserve_host(total_bytes: int) -> Tuple[bool, str]:
     if available is None:
         return False, "host availability is unknown off Linux; the plan is not checked"
     if total_bytes > available:
-        raise MemoryError(f"judge needs {total_bytes / GB:.2f} GB of host memory but only "
-                          f"{available / GB:.2f} GB is available; plan a smaller preset or a bigger node")
+        raise MemoryError(
+            f"judge needs {total_bytes / GB:.2f} GB of host memory but only "
+            f"{available / GB:.2f} GB is available; plan a smaller preset or a bigger node"
+        )
     return False, f"host: {total_bytes / GB:.2f} GB of {available / GB:.2f} GB available, not pooled"
 
 

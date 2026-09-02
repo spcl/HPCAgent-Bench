@@ -16,6 +16,7 @@ clamp must lower to a conditional EXPRESSION, not to guard ``if``s. Guard ifs ar
 data-dependent control flow inside the loop body, which pet/pluto refuses to
 schedule -- measured, the whole scop came back with empty statement bodies.
 """
+
 import json
 import pathlib
 import re
@@ -41,20 +42,20 @@ def _assert_ok(res, label):
 @pytest.mark.parametrize("n,w", [(6, 2), (4, 5)])  # w > n exercises the multi-period remap
 @pytest.mark.parametrize("symbolic", [True, False])
 def test_pad_boundary_mode(mode, n, w, symbolic):
-    src = (f"import numpy as np\n"
-           f"def pad_op(a, out):\n"
-           f"    out[:] = np.pad(a, {w}, mode='{mode}')\n")
-    a = np.random.default_rng(0).random((n, ))
-    out_shape = (n + 2 * w, )
+    src = f"import numpy as np\ndef pad_op(a, out):\n    out[:] = np.pad(a, {w}, mode='{mode}')\n"
+    a = np.random.default_rng(0).random((n,))
+    out_shape = (n + 2 * w,)
     label = f"pad-{mode}-n{n}-w{w}-{'sym' if symbolic else 'lit'}"
     if symbolic:
-        res = run_op(src,
-                     "pad_op", {"a": a}, {"out": out_shape}, {"N": n},
-                     shapes={
-                         "a": "(N,)",
-                         "out": f"(N + {2 * w},)"
-                     },
-                     backends=_NATIVE)
+        res = run_op(
+            src,
+            "pad_op",
+            {"a": a},
+            {"out": out_shape},
+            {"N": n},
+            shapes={"a": "(N,)", "out": f"(N + {2 * w},)"},
+            backends=_NATIVE,
+        )
     else:
         res = run_op(src, "pad_op", {"a": a}, {"out": out_shape}, {}, backends=_NATIVE)
     _assert_ok(res, label)
@@ -65,20 +66,20 @@ def test_pad_reflect_size1_axis_repeats():
     # element; the lowering guards this (no modulo-by-zero) and returns index 0.
     src = "import numpy as np\ndef pad_op(a, out):\n    out[:] = np.pad(a, 2, mode='reflect')\n"
     a = np.array([7.0])
-    _assert_ok(run_op(src, "pad_op", {"a": a}, {"out": (5, )}, {}, backends=_NATIVE), "pad-reflect-size1")
+    _assert_ok(run_op(src, "pad_op", {"a": a}, {"out": (5,)}, {}, backends=_NATIVE), "pad-reflect-size1")
 
 
 def _emit_c(mode: str) -> str:
     """The C the minimal 1-D pad fixture emits, from ``void pad_op(`` on (the
     preamble's own helpers are full of ``if``s and are not what is asserted)."""
     d = pathlib.Path(tempfile.mkdtemp())
-    (d / "k_numpy.py").write_text("import numpy as np\n"
-                                  "def pad_op(a, out):\n"
-                                  f"    out[:] = np.pad(a, 2, mode='{mode}')\n")
+    (d / "k_numpy.py").write_text(
+        f"import numpy as np\ndef pad_op(a, out):\n    out[:] = np.pad(a, 2, mode='{mode}')\n"
+    )
     bi = _bench_info("pad_op", ["a"], ["out"], {"a": "(N,)", "out": "(N + 4,)"}, {"N": 6})
     (d / "bi.json").write_text(json.dumps(bi))
     text = emit_c(lower(parse_kernel(d / "k_numpy.py", d / "bi.json")), fn_name="pad_op")
-    return text[text.index("void pad_op("):]
+    return text[text.index("void pad_op(") :]
 
 
 def test_pad_edge_clamp_is_a_conditional_expression_not_control_flow():

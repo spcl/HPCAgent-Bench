@@ -5,6 +5,7 @@ function form (``_TransposeRewriter``); (2) a returned transpose promotes to an
 output buffer with the reversed / permuted shape (``_shape_from_transpose`` +
 the frontend return-promotion), and reproduces numpy bit-exact on c/cpp/fortran.
 """
+
 import ast
 import json
 import pathlib
@@ -65,6 +66,7 @@ def test_sparse_transpose_not_densified():
 def _parse(src, input_args, shapes, syms):
     from numpyto_common.frontend import parse_kernel
     from numpyto_common.lowering import lower
+
     d = pathlib.Path(tempfile.mkdtemp())
     npy = d / "k_numpy.py"
     npy.write_text(src)
@@ -75,15 +77,11 @@ def _parse(src, input_args, shapes, syms):
             "relative_path": "",
             "module_name": "k",
             "func_name": "f",
-            "parameters": {
-                "S": dict(syms)
-            },
+            "parameters": {"S": dict(syms)},
             "input_args": input_args,
             "array_args": [a for a in input_args if a in shapes],
             "output_args": [],
-            "init": {
-                "shapes": shapes
-            }
+            "init": {"shapes": shapes},
         }
     }
     p = d / "bi.json"
@@ -98,23 +96,23 @@ def test_return_transpose_promotes_reversed_shape():
 
 
 def test_return_transpose_axes_promotes_permuted_shape():
-    kir = _parse("import numpy as np\ndef f(x):\n return np.transpose(x, (0, 2, 1))\n", ["x"], {"x": "(A, B, C)"}, {
-        "A": 2,
-        "B": 3,
-        "C": 4
-    })
+    kir = _parse(
+        "import numpy as np\ndef f(x):\n return np.transpose(x, (0, 2, 1))\n",
+        ["x"],
+        {"x": "(A, B, C)"},
+        {"A": 2, "B": 3, "C": 4},
+    )
     outs = [a for a in kir.arrays if a.is_output]
     assert len(outs) == 1 and tuple(outs[0].shape) == ("A", "C", "B")
 
 
 def test_tuple_return_with_transpose_promotes_both_into_outputs():
-    kir = _parse("import numpy as np\ndef f(x, y):\n return x.T, y * 2\n", ["x", "y"], {
-        "x": "(M, N)",
-        "y": "(M, N)"
-    }, {
-        "M": 3,
-        "N": 4
-    })
+    kir = _parse(
+        "import numpy as np\ndef f(x, y):\n return x.T, y * 2\n",
+        ["x", "y"],
+        {"x": "(M, N)", "y": "(M, N)"},
+        {"M": 3, "N": 4},
+    )
     outs = {a.name: tuple(a.shape) for a in kir.arrays if a.is_output}
     assert len(outs) == 2 and ("N", "M") in outs.values() and ("M", "N") in outs.values()
 
@@ -127,6 +125,7 @@ def test_tuple_return_with_transpose_promotes_both_into_outputs():
 def _validate_native(src, x, expected, out_shape, shapes, syms):
     import _op_oracle as oo
     import numerical_oracle as no
+
     d = pathlib.Path(tempfile.mkdtemp())
     npy = d / "k_numpy.py"
     npy.write_text(src)
@@ -137,15 +136,11 @@ def _validate_native(src, x, expected, out_shape, shapes, syms):
             "relative_path": "",
             "module_name": "k",
             "func_name": "f",
-            "parameters": {
-                "S": dict(syms)
-            },
+            "parameters": {"S": dict(syms)},
             "input_args": ["x"],
             "array_args": ["x"],
             "output_args": [],
-            "init": {
-                "shapes": shapes
-            }
+            "init": {"shapes": shapes},
         }
     }
     (d / "bi.json").write_text(json.dumps(bi))
@@ -168,11 +163,14 @@ def test_return_dot_T_matches_numpy_native():
 
 def test_return_method_transpose_matches_numpy_native():
     x = np.arange(12, dtype=np.float64).reshape(3, 4)
-    _validate_native("import numpy as np\ndef f(x):\n return x.transpose(1, 0)\n", x, x.transpose(1, 0), (4, 3),
-                     {"x": "(M, N)"}, {
-                         "M": 3,
-                         "N": 4
-                     })
+    _validate_native(
+        "import numpy as np\ndef f(x):\n return x.transpose(1, 0)\n",
+        x,
+        x.transpose(1, 0),
+        (4, 3),
+        {"x": "(M, N)"},
+        {"M": 3, "N": 4},
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -191,7 +189,7 @@ def test_transpose_into_its_own_source_is_refused() -> None:
     target = ast.Name(id="tap", ctx=ast.Store())
     args = [
         ast.Name(id="tap", ctx=ast.Load()),
-        ast.Tuple(elts=[ast.Constant(value=i) for i in (0, 2, 1)], ctx=ast.Load())
+        ast.Tuple(elts=[ast.Constant(value=i) for i in (0, 2, 1)], ctx=ast.Load()),
     ]
     with pytest.raises(NotImplementedError, match="into itself"):
         expand_transpose(target, args, {"tap": ("A", "B", "C")})

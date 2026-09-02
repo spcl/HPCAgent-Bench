@@ -40,11 +40,14 @@ if submit.SINGLE_SUBMISSION:
 
 
 def tool_definitions() -> list[dict[str, Any]]:
-    return [{
-        "name": name,
-        "description": module.DESCRIPTION,
-        "inputSchema": module.INPUT_SCHEMA,
-    } for name, module in TOOLS.items()]
+    return [
+        {
+            "name": name,
+            "description": module.DESCRIPTION,
+            "inputSchema": module.INPUT_SCHEMA,
+        }
+        for name, module in TOOLS.items()
+    ]
 
 
 def result(content: Any, request_id: Any) -> dict[str, Any]:
@@ -65,12 +68,11 @@ def call_tool(module: ModuleType, arguments: dict[str, Any], request_id: Any) ->
         response = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     return result(
         {
-            "content": [{
-                "type": "text",
-                "text": json.dumps(response, indent=2, sort_keys=True)
-            }],
+            "content": [{"type": "text", "text": json.dumps(response, indent=2, sort_keys=True)}],
             "isError": response.get("ok") is False,
-        }, request_id)
+        },
+        request_id,
+    )
 
 
 def handle(request: dict[str, Any]) -> dict[str, Any] | None:
@@ -82,14 +84,11 @@ def handle(request: dict[str, Any]) -> dict[str, Any] | None:
         return result(
             {
                 "protocolVersion": "2024-11-05",
-                "capabilities": {
-                    "tools": {}
-                },
-                "serverInfo": {
-                    "name": "optarena",
-                    "version": "0.1.0"
-                },
-            }, request_id)
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "optarena", "version": "0.1.0"},
+            },
+            request_id,
+        )
 
     if method == "notifications/initialized":
         return None

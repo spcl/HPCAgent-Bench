@@ -8,12 +8,14 @@ that mattered.
 That leaves the CK / asm int4 kernels the model actually dispatches to. Find their tuners and
 their tuned tables, the same way the GEMM one was found.
 """
+
 import pathlib
 import sys
 
 
 def main() -> int:
     import aiter
+
     root = pathlib.Path(aiter.__file__).resolve().parents[1]
     print("aiter root:", root, "\n")
 
@@ -34,18 +36,20 @@ def main() -> int:
 
     print("=" * 74, "\nuntuned-collection env switches (the AITER_TUNE_* family)")
     import subprocess
-    out = subprocess.run(["grep", "-rhoE", r"AITER_[A-Z0-9_]*TUNE[A-Z0-9_]*",
-                          str(root)],
-                         capture_output=True,
-                         text=True).stdout.split()
+
+    out = subprocess.run(
+        ["grep", "-rhoE", r"AITER_[A-Z0-9_]*TUNE[A-Z0-9_]*", str(root)], capture_output=True, text=True
+    ).stdout.split()
     for name in sorted(set(out)):
         print("  ", name)
 
     print("=" * 74, "\nint4 / a16w4 MoE entry points")
     names = sorted(
-        n for n in dir(aiter)
-        if ("moe" in n.lower() or "fmoe" in n.lower()) and any(t in n.lower()
-                                                               for t in ("int4", "a16", "g1u1", "cktile", "ck_moe")))
+        n
+        for n in dir(aiter)
+        if ("moe" in n.lower() or "fmoe" in n.lower())
+        and any(t in n.lower() for t in ("int4", "a16", "g1u1", "cktile", "ck_moe"))
+    )
     for n in names:
         print("  ", n)
     return 0

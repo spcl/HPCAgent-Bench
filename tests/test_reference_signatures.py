@@ -25,6 +25,7 @@ Scope notes, both deliberate:
   signature to trim -- ``regnet`` takes 41 convolution and batch-norm tensors it never touches,
   which is why :mod:`tests.test_kernelbench_torch_agreement` pins it as ``shape_divergence``.
 """
+
 import ast
 from typing import List
 
@@ -50,14 +51,16 @@ def dead_preset_parameters(spec) -> List[str]:
         return []
     entry = next(
         (n for n in ast.parse(path.read_text()).body if isinstance(n, ast.FunctionDef) and n.name == spec.func_name),
-        None)
+        None,
+    )
     if entry is None:
         return []
     read = {n.id for n in ast.walk(entry) if isinstance(n, ast.Name)}
     declared = set(spec.parameters.get("S", {}))
     scalars = set(spec.init.scalars) if spec.init else set()
     return [
-        a.arg for a in entry.args.args + entry.args.kwonlyargs
+        a.arg
+        for a in entry.args.args + entry.args.kwonlyargs
         if a.arg not in read and a.arg in declared and a.arg not in scalars
     ]
 
@@ -65,9 +68,11 @@ def dead_preset_parameters(spec) -> List[str]:
 @pytest.mark.parametrize("spec", machine_learning_references(), ids=lambda s: s.module_name)
 def test_no_machine_learning_reference_declares_a_parameter_it_never_reads(spec) -> None:
     dead = dead_preset_parameters(spec)
-    assert not dead, (f"{spec.module_name} declares {dead}, which the body never reads. The def line is "
-                      "the ABI, so every backend passes them for nothing -- drop them from the signature. "
-                      "If the body SHOULD be using one, that is the bug: the knob is being ignored.")
+    assert not dead, (
+        f"{spec.module_name} declares {dead}, which the body never reads. The def line is "
+        "the ABI, so every backend passes them for nothing -- drop them from the signature. "
+        "If the body SHOULD be using one, that is the bug: the knob is being ignored."
+    )
 
 
 def test_the_check_reads_the_body_and_not_just_the_signature() -> None:

@@ -24,6 +24,7 @@ the outputs.
 Scope: prototype covering elementwise / reduction / matmul / solver shapes;
 unsupported constructs raise ``EmitError`` so the driver can fall back.
 """
+
 from __future__ import annotations
 
 import ast
@@ -119,7 +120,6 @@ def _np_to_jnp(tree: ast.AST) -> ast.AST:
     """Rewrite ``np.<x>`` -> ``jnp.<x>`` (and bare ``np`` -> ``jnp``)."""
 
     class _R(ast.NodeTransformer):
-
         def visit_Name(self, node):
             if node.id == "np":
                 return ast.copy_location(ast.Name(id="jnp", ctx=node.ctx), node)
@@ -127,10 +127,12 @@ def _np_to_jnp(tree: ast.AST) -> ast.AST:
             # 64-bit dtypes under the x64 config.
             if node.id == "np_float":
                 return ast.copy_location(
-                    ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()), attr="float64", ctx=node.ctx), node)
+                    ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()), attr="float64", ctx=node.ctx), node
+                )
             if node.id == "np_complex":
                 return ast.copy_location(
-                    ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()), attr="complex128", ctx=node.ctx), node)
+                    ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()), attr="complex128", ctx=node.ctx), node
+                )
             return node
 
         def visit_Attribute(self, node):
@@ -148,40 +150,57 @@ def _np_to_jnp(tree: ast.AST) -> ast.AST:
             if node.attr in ("intp", "uintp"):
                 return ast.copy_location(
                     ast.Attribute(value=node.value, attr="int64" if node.attr == "intp" else "uint64", ctx=node.ctx),
-                    node)
+                    node,
+                )
             return node
 
         def visit_Call(self, node):
             self.generic_visit(node)
             # jnp ctors reject numpy's order= (C/F layout; jax has none) -- drop
             # it from ctors only (jnp.reshape DOES honour order=, left intact).
-            if (isinstance(node.func, ast.Attribute) and node.func.attr
-                    in ("zeros", "ones", "empty", "full", "zeros_like", "ones_like", "empty_like", "full_like")):
+            if isinstance(node.func, ast.Attribute) and node.func.attr in (
+                "zeros",
+                "ones",
+                "empty",
+                "full",
+                "zeros_like",
+                "ones_like",
+                "empty_like",
+                "full_like",
+            ):
                 node.keywords = [k for k in node.keywords if k.arg != "order"]
             # max/min over 2+ scalar args (needleman_wunsch/smith_waterman's DP
             # recurrences) fold into a left-nested jnp.maximum/minimum chain --
             # traced scalars can't compare with Python max. A single-iterable
             # max(seq) is untouched.
-            if isinstance(node.func, ast.Name) and node.func.id in ("max", "min") \
-                    and len(node.args) >= 2 and not node.keywords:
+            if (
+                isinstance(node.func, ast.Name)
+                and node.func.id in ("max", "min")
+                and len(node.args) >= 2
+                and not node.keywords
+            ):
                 attr = "maximum" if node.func.id == "max" else "minimum"
                 expr = node.args[0]
                 for rhs in node.args[1:]:
-                    expr = ast.Call(func=ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()),
-                                                       attr=attr,
-                                                       ctx=ast.Load()),
-                                    args=[expr, rhs],
-                                    keywords=[])
+                    expr = ast.Call(
+                        func=ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()), attr=attr, ctx=ast.Load()),
+                        args=[expr, rhs],
+                        keywords=[],
+                    )
                 return ast.copy_location(expr, node)
             # Bare math fns (sin(b), sqrt(b[jg])) -> jnp ufuncs so a vectorised/
             # traced arg works (see _MATH_TO_JNP).
             if isinstance(node.func, ast.Name) and node.func.id in _MATH_TO_JNP:
                 return ast.copy_location(
-                    ast.Call(func=ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()),
-                                                attr=_MATH_TO_JNP[node.func.id],
-                                                ctx=ast.Load()),
-                             args=node.args,
-                             keywords=node.keywords), node)
+                    ast.Call(
+                        func=ast.Attribute(
+                            value=ast.Name(id="jnp", ctx=ast.Load()), attr=_MATH_TO_JNP[node.func.id], ctx=ast.Load()
+                        ),
+                        args=node.args,
+                        keywords=node.keywords,
+                    ),
+                    node,
+                )
             # float(x) forces host concretisation, which a traced value can't
             # give (TSVC argmax's checksum needs this) -- route through a
             # traceable jnp cast; safe since the result only ever feeds
@@ -190,14 +209,16 @@ def _np_to_jnp(tree: ast.AST) -> ast.AST:
             # Python int, which a traced cast would break.
             if isinstance(node.func, ast.Name) and node.func.id == "float" and len(node.args) == 1:
                 return ast.copy_location(
-                    ast.Call(func=ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()),
-                                                attr="asarray",
-                                                ctx=ast.Load()),
-                             args=[
-                                 node.args[0],
-                                 ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()), attr="float64", ctx=ast.Load())
-                             ],
-                             keywords=[]), node)
+                    ast.Call(
+                        func=ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()), attr="asarray", ctx=ast.Load()),
+                        args=[
+                            node.args[0],
+                            ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()), attr="float64", ctx=ast.Load()),
+                        ],
+                        keywords=[],
+                    ),
+                    node,
+                )
             return node
 
         def visit_IfExp(self, node):
@@ -209,12 +230,18 @@ def _np_to_jnp(tree: ast.AST) -> ast.AST:
             # test (``x if v is not None else None``) also stays Python --
             # jnp.where can't select None. jit-only; eager runs it as-is.
             none_branch = any(isinstance(b, ast.Constant) and b.value is None for b in (node.body, node.orelse))
-            if not _JIT_MODE or _is_identity_test(node.test) or none_branch \
-                    or _names_loaded(node.test) <= (_EMIT_STATIC | _MODULE_CONSTS):
+            if (
+                not _JIT_MODE
+                or _is_identity_test(node.test)
+                or none_branch
+                or _names_loaded(node.test) <= (_EMIT_STATIC | _MODULE_CONSTS)
+            ):
                 return node
-            where = ast.Call(func=ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()), attr="where", ctx=ast.Load()),
-                             args=[_bool_cond_ast(node.test), node.body, node.orelse],
-                             keywords=[])
+            where = ast.Call(
+                func=ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()), attr="where", ctx=ast.Load()),
+                args=[_bool_cond_ast(node.test), node.body, node.orelse],
+                keywords=[],
+            )
             return ast.copy_location(where, node)
 
         def visit_BoolOp(self, node):
@@ -299,8 +326,8 @@ def _classify_for(node: ast.For) -> str:
             # safely rewrite (an explicit ``axis=``, say) keeps this loop
             # carried instead of risking a shape/value miscompile.
             if any(
-                    _row_reduce_target(n, i) is not None and _row_reduce_rewrite(n, i) is None
-                    for n in ast.walk(s.value)):
+                _row_reduce_target(n, i) is not None and _row_reduce_rewrite(n, i) is None for n in ast.walk(s.value)
+            ):
                 return LoopKind.FORI
             if i in _names_loaded(_devectorize_index(s.value, i)):
                 return LoopKind.FORI
@@ -414,7 +441,7 @@ def _definite_writes(stmts: List[ast.stmt]) -> Set[str]:
     out: Set[str] = set()
     for s in stmts:
         if isinstance(s, ast.If):
-            out |= (_definite_writes(s.body) & _definite_writes(s.orelse))
+            out |= _definite_writes(s.body) & _definite_writes(s.orelse)
         elif isinstance(s, (ast.For, ast.While)):
             continue  # a zero-trip loop writes nothing
         else:
@@ -451,7 +478,7 @@ def _upward_exposed(stmts: List[ast.stmt]) -> Set[str]:
             add_reads(_names_loaded(s.test))
             add_reads(_upward_exposed(s.body))
             add_reads(_upward_exposed(s.orelse))
-            written |= (_definite_writes(s.body) & _definite_writes(s.orelse))
+            written |= _definite_writes(s.body) & _definite_writes(s.orelse)
         else:
             add_reads(_stmt_rhs_loads(s))
             written |= _names_stored(ast.Module(body=[s], type_ignores=[]))
@@ -468,8 +495,7 @@ def _stmt_rhs_loads(s: ast.stmt) -> Set[str]:
         reads.add(_base_name(s.target))
         return reads
     if isinstance(s, ast.Assign):
-        loads = set().union(*[_names_loaded(t) for t in s.targets]) \
-            if s.targets else set()
+        loads = set().union(*[_names_loaded(t) for t in s.targets]) if s.targets else set()
         # a plain ``x = ...`` target Name is a write, not a read
         for t in s.targets:
             if isinstance(t, ast.Name):
@@ -489,17 +515,22 @@ def _functionalize_stmt(s: ast.stmt) -> List[ast.stmt]:
         return _functionalize_stmt(ast.copy_location(assign, s))
     # arr.shape = newshape is numpy's in-place reshape; jax is immutable ->
     # arr = arr.reshape(newshape).
-    if isinstance(s, ast.Assign) and len(s.targets) == 1 and \
-            isinstance(s.targets[0], ast.Attribute) and s.targets[0].attr == "shape" and \
-            isinstance(s.targets[0].value, ast.Name):
+    if (
+        isinstance(s, ast.Assign)
+        and len(s.targets) == 1
+        and isinstance(s.targets[0], ast.Attribute)
+        and s.targets[0].attr == "shape"
+        and isinstance(s.targets[0].value, ast.Name)
+    ):
         name = s.targets[0].value
-        call = ast.Call(func=ast.Attribute(value=ast.Name(id=name.id, ctx=ast.Load()), attr="reshape", ctx=ast.Load()),
-                        args=[s.value],
-                        keywords=[])
+        call = ast.Call(
+            func=ast.Attribute(value=ast.Name(id=name.id, ctx=ast.Load()), attr="reshape", ctx=ast.Load()),
+            args=[s.value],
+            keywords=[],
+        )
         new = ast.Assign(targets=[ast.Name(id=name.id, ctx=ast.Store())], value=call)
         return [ast.copy_location(new, s)]
-    if isinstance(s, ast.Assign) and len(s.targets) == 1 and \
-            isinstance(s.targets[0], ast.Subscript):
+    if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Subscript):
         tgt = s.targets[0]
         # Flatten a chained target ``a[i][j]`` into one multi-axis index
         # ``a[i, j]`` (numpy-equivalent for basic indices): a naive
@@ -519,11 +550,11 @@ def _functionalize_stmt(s: ast.stmt) -> List[ast.stmt]:
             # rebind a to a SCALAR. jnp.full_like keeps a's shape/dtype
             # (edge_laplacian's ``Lx[:] = 0.0``).
             if isinstance(s.value, ast.Constant) and not isinstance(s.value.value, str):
-                fill = ast.Call(func=ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()),
-                                                   attr="full_like",
-                                                   ctx=ast.Load()),
-                                args=[ast.Name(id=arr_name, ctx=ast.Load()), s.value],
-                                keywords=[])
+                fill = ast.Call(
+                    func=ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()), attr="full_like", ctx=ast.Load()),
+                    args=[ast.Name(id=arr_name, ctx=ast.Load()), s.value],
+                    keywords=[],
+                )
                 new = ast.Assign(targets=[name], value=fill)
             else:
                 # a[:] = <expr> broadcasts RHS to a's shape and casts to a's
@@ -548,9 +579,15 @@ def _scatter_at_assign(call: ast.Call) -> Optional[ast.Assign]:
     ``add.at`` is scatter-accumulate (edge_laplacian's ``np.add.at(Lx, src,
     flux)``); ``subtract.at`` maps to ``.add(-vals)`` (jax has no ``.subtract``)."""
     f = call.func
-    if not (isinstance(f, ast.Attribute) and f.attr == "at" and isinstance(f.value, ast.Attribute)
-            and isinstance(f.value.value, ast.Name) and f.value.value.id in ("np", "numpy")
-            and f.value.attr in _SCATTER_AT_METHOD and len(call.args) >= 2):
+    if not (
+        isinstance(f, ast.Attribute)
+        and f.attr == "at"
+        and isinstance(f.value, ast.Attribute)
+        and isinstance(f.value.value, ast.Name)
+        and f.value.value.id in ("np", "numpy")
+        and f.value.attr in _SCATTER_AT_METHOD
+        and len(call.args) >= 2
+    ):
         return None
     op = f.value.attr
     target, idx = call.args[0], call.args[1]
@@ -558,9 +595,9 @@ def _scatter_at_assign(call: ast.Call) -> Optional[ast.Assign]:
     if op == "subtract":
         vals = ast.UnaryOp(op=ast.USub(), operand=vals)
     at = ast.Subscript(value=ast.Attribute(value=target, attr="at", ctx=ast.Load()), slice=idx, ctx=ast.Load())
-    rebind = ast.Call(func=ast.Attribute(value=at, attr=_SCATTER_AT_METHOD[op], ctx=ast.Load()),
-                      args=[vals],
-                      keywords=[])
+    rebind = ast.Call(
+        func=ast.Attribute(value=at, attr=_SCATTER_AT_METHOD[op], ctx=ast.Load()), args=[vals], keywords=[]
+    )
     return ast.copy_location(ast.Assign(targets=[ast.Name(id=_base_name(target), ctx=ast.Store())], value=rebind), call)
 
 
@@ -576,8 +613,7 @@ def _load(t: ast.AST) -> ast.AST:
 
 
 def _is_full_slice(sl: ast.AST) -> bool:
-    return isinstance(sl, ast.Slice) and sl.lower is None and sl.upper is None \
-        and sl.step is None
+    return isinstance(sl, ast.Slice) and sl.lower is None and sl.upper is None and sl.step is None
 
 
 def _broadcast_astype(arr: ast.AST, value: ast.expr) -> ast.Call:
@@ -586,9 +622,11 @@ def _broadcast_astype(arr: ast.AST, value: ast.expr) -> ast.Call:
     inferred from the live array, never hardcoded)."""
     name = _base_name(arr)
     shape = ast.Attribute(value=ast.Name(id=name, ctx=ast.Load()), attr="shape", ctx=ast.Load())
-    bcast = ast.Call(func=ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()), attr="broadcast_to", ctx=ast.Load()),
-                     args=[value, shape],
-                     keywords=[])
+    bcast = ast.Call(
+        func=ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()), attr="broadcast_to", ctx=ast.Load()),
+        args=[value, shape],
+        keywords=[],
+    )
     dtype = ast.Attribute(value=ast.Name(id=name, ctx=ast.Load()), attr="dtype", ctx=ast.Load())
     return ast.Call(func=ast.Attribute(value=bcast, attr="astype", ctx=ast.Load()), args=[dtype], keywords=[])
 
@@ -619,7 +657,7 @@ def _emit_body(body: List[ast.stmt], live_out: Set[str], indent: str, defined: S
             # it, so the construct must thread it out (contour_integral's
             # ``if ..: X = -X`` then ``P0 += X``; s318's argmax read after the
             # loop) -- fold rest-of-body reads into live_out for all three.
-            rest = _upward_exposed(body[k + 1:])
+            rest = _upward_exposed(body[k + 1 :])
             if isinstance(s, ast.For):
                 lines += _emit_for(s, live_out | rest, indent, cur)
             elif isinstance(s, ast.While):
@@ -651,7 +689,7 @@ def _emit_body(body: List[ast.stmt], live_out: Set[str], indent: str, defined: S
             # np.multiply(Z, Z, Z) has effects we can't safely drop.
             if isinstance(s.value, ast.Constant):
                 continue
-            sc = (_scatter_at_assign(s.value) if isinstance(s.value, ast.Call) else None)
+            sc = _scatter_at_assign(s.value) if isinstance(s.value, ast.Call) else None
             if sc is not None:  # np.add.at(...) -> a = a.at[idx].add(...)
                 lines.append(indent + _u(sc))
                 continue
@@ -694,8 +732,11 @@ def _is_static_iterable(node: ast.AST) -> bool:
     static = _EMIT_STATIC | _MODULE_CONSTS | _LOCAL_CONSTS
     if isinstance(node, (ast.Tuple, ast.List)):
         return all(_names_loaded(e) <= static for e in node.elts)
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and \
-            node.func.id in ("enumerate", "zip", "reversed"):
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in ("enumerate", "zip", "reversed")
+    ):
         return all(_is_static_iterable(a) or _names_loaded(a) <= static for a in node.args)
     if isinstance(node, ast.Name):
         return node.id in _MODULE_CONSTS or node.id in _LOCAL_CONSTS
@@ -727,8 +768,11 @@ def _local_const_seq_names(fn: ast.FunctionDef) -> Set[str]:
             for t in s.targets:
                 if isinstance(t, ast.Name):
                     counts[t.id] = counts.get(t.id, 0) + 1
-                    if len(s.targets) == 1 and isinstance(s.value,
-                                                          (ast.List, ast.Tuple)) and _is_const_literal(s.value):
+                    if (
+                        len(s.targets) == 1
+                        and isinstance(s.value, (ast.List, ast.Tuple))
+                        and _is_const_literal(s.value)
+                    ):
                         literal.add(t.id)
     return {n for n in literal if counts.get(n) == 1}
 
@@ -741,7 +785,6 @@ def _rewrite_eigh(fn: ast.FunctionDef) -> None:
     from numpyto_common.numpy_desugar import _eigh_call_ab, _eigh_stmts
 
     class _R(ast.NodeTransformer):
-
         def __init__(self):
             self.ctr = 0
 
@@ -753,8 +796,9 @@ def _rewrite_eigh(fn: ast.FunctionDef) -> None:
                 return node
             a_node, b_node, kw = hit
             tgt = node.targets[0]
-            if not (isinstance(tgt, ast.Tuple) and len(tgt.elts) == 2
-                    and all(isinstance(e, ast.Name) for e in tgt.elts)):
+            if not (
+                isinstance(tgt, ast.Tuple) and len(tgt.elts) == 2 and all(isinstance(e, ast.Name) for e in tgt.elts)
+            ):
                 return node
             w, v = tgt.elts[0].id, tgt.elts[1].id
             p = f"__eigh{self.ctr}"
@@ -871,8 +915,9 @@ def _is_identity_test(test: ast.AST) -> bool:
     optional ``if del6_v is not None:``). Trace-time-concrete (never a value on
     a traced array), so the ``if`` stays a REAL Python branch -- ``jnp.where``
     can't test/select on ``None`` and would execute both arms."""
-    return isinstance(test, ast.Compare) and bool(test.ops) \
-        and all(isinstance(op, (ast.Is, ast.IsNot)) for op in test.ops)
+    return (
+        isinstance(test, ast.Compare) and bool(test.ops) and all(isinstance(op, (ast.Is, ast.IsNot)) for op in test.ops)
+    )
 
 
 def _split_on_break(body: List[ast.stmt]):
@@ -889,7 +934,7 @@ def _split_on_break(body: List[ast.stmt]):
     """
     for k, s in enumerate(body):
         if isinstance(s, ast.If) and s.body and isinstance(s.body[-1], ast.Break) and not s.orelse:
-            return body[:k], s.test, s.body[:-1], body[k + 1:]
+            return body[:k], s.test, s.body[:-1], body[k + 1 :]
     return body, None, [], []
 
 
@@ -914,9 +959,12 @@ def _parse_range(rng: ast.Call):
         step = args[2]
         if isinstance(step, ast.Constant) and step.value == 1:
             return _u(args[0]), _u(args[1]), False, "1"
-        if isinstance(step, ast.UnaryOp) and isinstance(step.op, ast.USub) \
-                and isinstance(step.operand, ast.Constant) \
-                and step.operand.value == 1:
+        if (
+            isinstance(step, ast.UnaryOp)
+            and isinstance(step.op, ast.USub)
+            and isinstance(step.operand, ast.Constant)
+            and step.operand.value == 1
+        ):
             return _u(args[0]), _u(args[1]), True, "1"
         # A negative constant step other than -1 is unsupported; anything
         # else (a positive constant or symbol like ``W``) is a forward stride.
@@ -941,8 +989,9 @@ def _emit_for(node: ast.For, live_out: Set[str], indent: str, defined: Set[str] 
         # need be static, not the values -- unless a loop-target feeds a
         # shape, which needs a concrete value and keeps refusing (eager runs
         # the sequence directly instead).
-        literal_seq = isinstance(rng, (ast.Tuple, ast.List)) and \
-            all(isinstance(e, (ast.Name, ast.Constant)) or _is_const_literal(e) for e in rng.elts)
+        literal_seq = isinstance(rng, (ast.Tuple, ast.List)) and all(
+            isinstance(e, (ast.Name, ast.Constant)) or _is_const_literal(e) for e in rng.elts
+        )
         if _is_static_iterable(rng) or literal_seq:
             bound = {n.id for n in ast.walk(node.target) if isinstance(n, ast.Name)}
             if literal_seq and not _is_static_iterable(rng) and any(_index_in_shape(node, b) for b in bound):
@@ -957,8 +1006,13 @@ def _emit_for(node: ast.For, live_out: Set[str], indent: str, defined: Set[str] 
     # it must be concrete -- emit a real Python loop the tracer unrolls. Sound
     # only when the trip count is static AND the loop isn't a time-stepping
     # loop (those must stay rolled; the parallelism policy guarantees this).
-    if (_index_in_shape(node, i) and _range_args_static(rng) and not backward and stride == "1"
-            and not _is_timestep_loop(node)):
+    if (
+        _index_in_shape(node, i)
+        and _range_args_static(rng)
+        and not backward
+        and stride == "1"
+        and not _is_timestep_loop(node)
+    ):
         lines = [f"{indent}for {i} in range({lo}, {hi}):"]
         lines += _emit_body(node.body, live_out, indent + "    ", defined | {i}) or [f"{indent}    pass"]
         return lines
@@ -1027,15 +1081,19 @@ def _expand_parallel_assigns(stmts: List[ast.stmt]) -> List[ast.stmt]:
     break-guard's per-var ``jnp.where`` freeze."""
     out: List[ast.stmt] = []
     for s in stmts:
-        if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], (ast.Tuple, ast.List)) \
-                and all(isinstance(e, ast.Name) for e in s.targets[0].elts):
+        if (
+            isinstance(s, ast.Assign)
+            and len(s.targets) == 1
+            and isinstance(s.targets[0], (ast.Tuple, ast.List))
+            and all(isinstance(e, ast.Name) for e in s.targets[0].elts)
+        ):
             _TUPLE_CTR[0] += 1
             tmp = f"__pa{_TUPLE_CTR[0]}"
             out.append(ast.Assign(targets=[ast.Name(id=tmp, ctx=ast.Store())], value=s.value))
             for k, e in enumerate(s.targets[0].elts):
-                item = ast.Subscript(value=ast.Name(id=tmp, ctx=ast.Load()),
-                                     slice=ast.Constant(value=k),
-                                     ctx=ast.Load())
+                item = ast.Subscript(
+                    value=ast.Name(id=tmp, ctx=ast.Load()), slice=ast.Constant(value=k), ctx=ast.Load()
+                )
                 out.append(ast.Assign(targets=[ast.Name(id=e.id, ctx=ast.Store())], value=item))
         else:
             out.append(s)
@@ -1052,8 +1110,11 @@ def _emit_while_break(node, carried, lo, hi, i, indent):
     inner = indent + "    "
     st = _tup(full)
     lines = [
-        f"{indent}def _cond(_c):", f"{inner}{st} = _c", f"{inner}return ({i} < {hi}) & jnp.logical_not(_done)",
-        f"{indent}def _body(_c):", f"{inner}{st} = _c"
+        f"{indent}def _cond(_c):",
+        f"{inner}{st} = _c",
+        f"{inner}return ({i} < {hi}) & jnp.logical_not(_done)",
+        f"{indent}def _body(_c):",
+        f"{inner}{st} = _c",
     ]
     lines += _emit_body(before, set(carried), inner, set(carried) | {i})
     lines.append(f"{inner}_conv = ({_cond_str(cond)})")
@@ -1096,8 +1157,11 @@ def _emit_while(node: ast.While, live_out: Set[str], indent: str, defined: Set[s
     inner = indent + "    "
     st = _tup(carried)
     lines = [
-        f"{indent}def _cond(_c):", f"{inner}{st} = _c", f"{inner}return ({_cond_str(node.test)})",
-        f"{indent}def _body(_c):", f"{inner}{st} = _c"
+        f"{indent}def _cond(_c):",
+        f"{inner}{st} = _c",
+        f"{inner}return ({_cond_str(node.test)})",
+        f"{indent}def _body(_c):",
+        f"{inner}{st} = _c",
     ]
     lines += _emit_body(node.body, set(carried), inner, set(carried))
     lines += [f"{inner}return {st}", f"{indent}{st} = lax.while_loop(_cond, _body, {st})"]
@@ -1118,8 +1182,12 @@ def _row_reduce_target(node: ast.AST, i: str) -> Optional[ast.expr]:
     Name (``a``). None otherwise (including a non-matching function/shape)."""
     if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
         return None
-    if isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "jnp") \
-            and node.func.attr in _ROW_REDUCE_FUNCS and len(node.args) >= 1:
+    if (
+        isinstance(node.func.value, ast.Name)
+        and node.func.value.id in ("np", "jnp")
+        and node.func.attr in _ROW_REDUCE_FUNCS
+        and len(node.args) >= 1
+    ):
         arg = node.args[0]
     elif node.func.attr in _ROW_REDUCE_FUNCS:
         arg = node.func.value
@@ -1145,19 +1213,22 @@ def _row_reduce_rewrite(node: ast.AST, i: str) -> Optional[ast.expr]:
     extra_args = node.args if is_method else node.args[1:]
     if extra_args or node.keywords:
         return None
-    axis = ast.Call(func=ast.Name(id="tuple", ctx=ast.Load()),
-                    args=[
-                        ast.Call(func=ast.Name(id="range", ctx=ast.Load()),
-                                 args=[
-                                     ast.Constant(value=1),
-                                     ast.Attribute(value=copy.deepcopy(base), attr="ndim", ctx=ast.Load())
-                                 ],
-                                 keywords=[])
-                    ],
-                    keywords=[])
-    call = ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=node.func.attr, ctx=ast.Load()),
-                    args=[copy.deepcopy(base)],
-                    keywords=[ast.keyword(arg="axis", value=axis)])
+    axis = ast.Call(
+        func=ast.Name(id="tuple", ctx=ast.Load()),
+        args=[
+            ast.Call(
+                func=ast.Name(id="range", ctx=ast.Load()),
+                args=[ast.Constant(value=1), ast.Attribute(value=copy.deepcopy(base), attr="ndim", ctx=ast.Load())],
+                keywords=[],
+            )
+        ],
+        keywords=[],
+    )
+    call = ast.Call(
+        func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=node.func.attr, ctx=ast.Load()),
+        args=[copy.deepcopy(base)],
+        keywords=[ast.keyword(arg="axis", value=axis)],
+    )
     return ast.copy_location(call, node)
 
 
@@ -1168,7 +1239,6 @@ def _devectorize_index(node: ast.AST, i: str) -> ast.AST:
     subscript-strip alone would collapse it to a full-array scalar."""
 
     class _R(ast.NodeTransformer):
-
         def visit_Call(self, n):
             rewritten = _row_reduce_rewrite(n, i)
             if rewritten is not None:
@@ -1213,6 +1283,7 @@ def emit_jax(numpy_src: str, func_name: str, jit: bool = False) -> str:
     if fn is None:
         raise EmitError(f"function {func_name!r} not found")
     from numpyto_common.numpy_desugar import _eigh_alias_names
+
     _EIGH_ALIASES.clear()
     _EIGH_ALIASES.update(_eigh_alias_names(tree))
     _MODULE_CONSTS.clear()
@@ -1224,6 +1295,7 @@ def emit_jax(numpy_src: str, func_name: str, jit: bool = False) -> str:
     # through the alias would rebind the LOCAL, never surfacing as an output;
     # folding it onto the param mirrors the C/Fortran frontend's behavior.
     from numpyto_common.frontend import _SubstituteParamAliases
+
     _alias = _SubstituteParamAliases([a.arg for a in fn.args.args])
     _alias.collect(fn)
     _alias.visit(fn)
@@ -1293,16 +1365,29 @@ def emit_jax(numpy_src: str, func_name: str, jit: bool = False) -> str:
         head += consts + [""]
     eager = not jit
     for h in helpers:
-        head += _emit_function(h,
-                               decorate=None,
-                               helper_mut=helper_mut,
-                               eager=eager,
-                               mutated=mut_map.get(h.name),
-                               static=(sorted(concrete.get(h.name, ())) if jit else None)) + ["", ""]
+        head += _emit_function(
+            h,
+            decorate=None,
+            helper_mut=helper_mut,
+            eager=eager,
+            mutated=mut_map.get(h.name),
+            static=(sorted(concrete.get(h.name, ())) if jit else None),
+        ) + ["", ""]
     deco = _kernel_decorator(fn, kernel_static) if jit else None
-    return "\n".join(head + _emit_function(
-        fn, decorate=deco, helper_mut=helper_mut, eager=eager, mutated=mut_map.get(func_name), static=kernel_static)
-                     ) + "\n"
+    return (
+        "\n".join(
+            head
+            + _emit_function(
+                fn,
+                decorate=deco,
+                helper_mut=helper_mut,
+                eager=eager,
+                mutated=mut_map.get(func_name),
+                static=kernel_static,
+            )
+        )
+        + "\n"
+    )
 
 
 def _helper_mutation_map(helpers: List[ast.FunctionDef], mut_map: Optional[dict] = None) -> dict:
@@ -1349,7 +1434,7 @@ def _emitted_return_slots(h: ast.FunctionDef, params: List[str], muts: List[str]
     for r in top:
         elts = r.value.elts if isinstance(r.value, ast.Tuple) else [r.value]
         present = {e.id for e in elts if isinstance(e, ast.Name)}
-        slots = [("mut", mpos[e.id]) if (isinstance(e, ast.Name) and e.id in mpos) else ("val", ) for e in elts]
+        slots = [("mut", mpos[e.id]) if (isinstance(e, ast.Name) and e.id in mpos) else ("val",) for e in elts]
         slots += [("mut", mpos[m]) for m in muts if m not in present]
         slot_sets.add(tuple(slots))
     # Every return point must rebind identically for a single call-site rewrite.
@@ -1384,7 +1469,6 @@ def _rewrite_inplace_helper_calls(fn: ast.FunctionDef, helper_mut: dict) -> None
         return isinstance(c, ast.Call) and isinstance(c.func, ast.Name) and c.func.id in helper_mut
 
     class _T(ast.NodeTransformer):
-
         def visit_Expr(self, node):  # bare call: no captured return values
             return _rebind(node.value, [], node) if _is_mut_call(node.value) else node
 
@@ -1421,12 +1505,14 @@ def _kernel_decorator(fn: ast.FunctionDef, static: Optional[List[str]] = None) -
     return "@jax.jit"
 
 
-def _emit_function(fn: ast.FunctionDef,
-                   decorate: Optional[str],
-                   helper_mut: Optional[dict] = None,
-                   eager: bool = False,
-                   mutated: Optional[List[str]] = None,
-                   static: Optional[List[str]] = None) -> List[str]:
+def _emit_function(
+    fn: ast.FunctionDef,
+    decorate: Optional[str],
+    helper_mut: Optional[dict] = None,
+    eager: bool = False,
+    mutated: Optional[List[str]] = None,
+    static: Optional[List[str]] = None,
+) -> List[str]:
     """Translate one function (kernel or helper) to JAX source lines."""
     global _JIT_MODE
     if helper_mut:
@@ -1476,9 +1562,9 @@ def _emit_function(fn: ast.FunctionDef,
     return head + body_lines
 
 
-def _emit_function_eager(fn: ast.FunctionDef,
-                         decorate: Optional[str],
-                         mutated: Optional[List[str]] = None) -> List[str]:
+def _emit_function_eager(
+    fn: ast.FunctionDef, decorate: Optional[str], mutated: Optional[List[str]] = None
+) -> List[str]:
     """Emit one function in eager mode: Python control flow verbatim, only
     in-place mutation made functional (jax arrays are immutable even eagerly).
     No loop classification/masking -- eager JAX runs dynamic slices, boolean
@@ -1568,8 +1654,13 @@ def _functionalize_bare_expr(call: ast.AST) -> Optional[ast.Assign]:
             return ast.Assign(targets=[ast.Name(id=kw.value.id, ctx=ast.Store())], value=new)
     # Positional out: an np/jnp ufunc whose last positional arg is a Name (a
     # bare ufunc statement has no other observable effect).
-    if isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name) and \
-            call.func.value.id in ("np", "jnp") and call.args and isinstance(call.args[-1], ast.Name):
+    if (
+        isinstance(call.func, ast.Attribute)
+        and isinstance(call.func.value, ast.Name)
+        and call.func.value.id in ("np", "jnp")
+        and call.args
+        and isinstance(call.args[-1], ast.Name)
+    ):
         out = call.args[-1]
         new = ast.Call(func=call.func, args=call.args[:-1], keywords=call.keywords)
         return ast.Assign(targets=[ast.Name(id=out.id, ctx=ast.Store())], value=new)
@@ -1649,8 +1740,12 @@ def _module_const_values(tree: ast.Module, func_name: str) -> dict:
         if isinstance(tgt, ast.Name):
             if isinstance(val, (int, float, complex)):  # bool is an int subclass
                 env[tgt.id] = val
-        elif isinstance(tgt, ast.Tuple) and all(isinstance(e, ast.Name) for e in tgt.elts) \
-                and isinstance(val, tuple) and len(val) == len(tgt.elts):
+        elif (
+            isinstance(tgt, ast.Tuple)
+            and all(isinstance(e, ast.Name) for e in tgt.elts)
+            and isinstance(val, tuple)
+            and len(val) == len(tgt.elts)
+        ):
             for e, v in zip(tgt.elts, val):
                 if isinstance(v, (int, float, complex)):
                     env[e.id] = v
@@ -1673,13 +1768,13 @@ def _fold_const_branches(fn: ast.FunctionDef) -> None:
         return
 
     class _T(ast.NodeTransformer):
-
         def visit_If(self, node):
             self.generic_visit(node)  # fold inner elif chain first
             if _names_loaded(node.test) <= set(usable):
                 try:
-                    truth = eval(compile(ast.Expression(body=node.test), "<fold>", "eval"), {"__builtins__": {}},
-                                 dict(usable))
+                    truth = eval(
+                        compile(ast.Expression(body=node.test), "<fold>", "eval"), {"__builtins__": {}}, dict(usable)
+                    )
                 except Exception:  # noqa: BLE001
                     return node
                 return node.body if truth else node.orelse  # [] removes the dead branch entirely
@@ -1690,15 +1785,19 @@ def _fold_const_branches(fn: ast.FunctionDef) -> None:
 
 
 def _signature(fn: ast.FunctionDef) -> str:
-    return ast.unparse(_np_to_jnp(ast.fix_missing_locations(
-        ast.parse(f"def _({ast.unparse(fn.args)}): pass").body[0]))).split("(", 1)[1].rsplit(")", 1)[0]
+    return (
+        ast.unparse(_np_to_jnp(ast.fix_missing_locations(ast.parse(f"def _({ast.unparse(fn.args)}): pass").body[0])))
+        .split("(", 1)[1]
+        .rsplit(")", 1)[0]
+    )
 
 
 def _loop_vars(fn: ast.FunctionDef) -> Set[str]:
     # Exclude indices of loops that will be unrolled: those become concrete
     # Python ints, so their ``:R**i``-style slices are static, not dynamic.
-    return {n.target.id
-            for n in ast.walk(fn) if isinstance(n, ast.For) and isinstance(n.target, ast.Name)} - _unroll_loop_vars(fn)
+    return {
+        n.target.id for n in ast.walk(fn) if isinstance(n, ast.For) and isinstance(n.target, ast.Name)
+    } - _unroll_loop_vars(fn)
 
 
 def _unroll_loop_vars(fn: ast.FunctionDef) -> Set[str]:
@@ -1706,8 +1805,13 @@ def _unroll_loop_vars(fn: ast.FunctionDef) -> Set[str]:
     shape -- emitted as real Python loops the tracer unrolls (stockham_fft)."""
     out: Set[str] = set()
     for n in ast.walk(fn):
-        if isinstance(n, ast.For) and isinstance(n.target, ast.Name) and \
-                isinstance(n.iter, ast.Call) and isinstance(n.iter.func, ast.Name) and n.iter.func.id == "range":
+        if (
+            isinstance(n, ast.For)
+            and isinstance(n.target, ast.Name)
+            and isinstance(n.iter, ast.Call)
+            and isinstance(n.iter.func, ast.Name)
+            and n.iter.func.id == "range"
+        ):
             if _index_in_shape(n, n.target.id) and _range_args_static(n.iter):
                 out.add(n.target.id)
     return out
@@ -1727,7 +1831,6 @@ def _desugar_foreach(fn: ast.FunctionDef) -> None:
     Name iterable is handled."""
 
     class _T(ast.NodeTransformer):
-
         def visit_For(self, node):
             self.generic_visit(node)
             it = node.iter
@@ -1740,15 +1843,17 @@ def _desugar_foreach(fn: ast.FunctionDef) -> None:
             if not (isinstance(node.target, ast.Name) and isinstance(it, ast.Name)):
                 return node
             idx = "_fe_" + node.target.id
-            bind = ast.Assign(targets=[ast.Name(id=node.target.id, ctx=ast.Store())],
-                              value=ast.Subscript(value=ast.Name(id=it.id, ctx=ast.Load()),
-                                                  slice=ast.Name(id=idx, ctx=ast.Load()),
-                                                  ctx=ast.Load()))
-            shape0 = ast.Subscript(value=ast.Attribute(value=ast.Name(id=it.id, ctx=ast.Load()),
-                                                       attr="shape",
-                                                       ctx=ast.Load()),
-                                   slice=ast.Constant(value=0),
-                                   ctx=ast.Load())
+            bind = ast.Assign(
+                targets=[ast.Name(id=node.target.id, ctx=ast.Store())],
+                value=ast.Subscript(
+                    value=ast.Name(id=it.id, ctx=ast.Load()), slice=ast.Name(id=idx, ctx=ast.Load()), ctx=ast.Load()
+                ),
+            )
+            shape0 = ast.Subscript(
+                value=ast.Attribute(value=ast.Name(id=it.id, ctx=ast.Load()), attr="shape", ctx=ast.Load()),
+                slice=ast.Constant(value=0),
+                ctx=ast.Load(),
+            )
             node.target = ast.Name(id=idx, ctx=ast.Store())
             node.iter = ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[shape0], keywords=[])
             node.body = [bind] + node.body
@@ -1768,7 +1873,6 @@ def _expand_tuple_targets(fn: ast.FunctionDef) -> None:
     alone -- JAX unpacks tuples directly."""
 
     class _T(ast.NodeTransformer):
-
         def visit_Assign(self, node):
             self.generic_visit(node)
             if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Tuple):
@@ -1780,9 +1884,9 @@ def _expand_tuple_targets(fn: ast.FunctionDef) -> None:
             tup = f"__tup{_TUPLE_CTR[0]}"
             out = [ast.Assign(targets=[ast.Name(id=tup, ctx=ast.Store())], value=node.value)]
             for k, e in enumerate(elts):
-                item = ast.Subscript(value=ast.Name(id=tup, ctx=ast.Load()),
-                                     slice=ast.Constant(value=k),
-                                     ctx=ast.Load())
+                item = ast.Subscript(
+                    value=ast.Name(id=tup, ctx=ast.Load()), slice=ast.Constant(value=k), ctx=ast.Load()
+                )
                 out.append(ast.Assign(targets=[e], value=item))
             return [ast.copy_location(s, node) for s in out]
 
@@ -1799,7 +1903,6 @@ def _expand_chained_assigns(fn: ast.FunctionDef) -> None:
     correlation write the same row+column from one dot)."""
 
     class _T(ast.NodeTransformer):
-
         def visit_Assign(self, node):
             self.generic_visit(node)
             if len(node.targets) <= 1:
@@ -1814,8 +1917,21 @@ def _expand_chained_assigns(fn: ast.FunctionDef) -> None:
     ast.fix_missing_locations(fn)
 
 
-_BOOL_FUNCS = ("logical_and", "logical_or", "logical_not", "logical_xor", "less", "greater", "less_equal",
-               "greater_equal", "equal", "not_equal", "isfinite", "isnan", "isinf")
+_BOOL_FUNCS = (
+    "logical_and",
+    "logical_or",
+    "logical_not",
+    "logical_xor",
+    "less",
+    "greater",
+    "less_equal",
+    "greater_equal",
+    "equal",
+    "not_equal",
+    "isfinite",
+    "isnan",
+    "isinf",
+)
 
 
 def _is_bool_expr(node: ast.AST) -> bool:
@@ -1886,21 +2002,29 @@ def _boolean_mask_transform(fn: ast.FunctionDef) -> None:
     # rewrite below applies. Only single-assignment Names qualify.
     store_counts: dict = {}
     for s in ast.walk(fn):
-        for t in (s.targets if isinstance(s, ast.Assign) else []):
+        for t in s.targets if isinstance(s, ast.Assign) else []:
             if isinstance(t, ast.Name):
                 store_counts[t.id] = store_counts.get(t.id, 0) + 1
     subset_map = {}
     for s in ast.walk(fn):
-        if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name) and \
-                isinstance(s.value, ast.Subscript) and is_mask(s.value.slice) and store_counts.get(s.targets[0].id) == 1:
+        if (
+            isinstance(s, ast.Assign)
+            and len(s.targets) == 1
+            and isinstance(s.targets[0], ast.Name)
+            and isinstance(s.value, ast.Subscript)
+            and is_mask(s.value.slice)
+            and store_counts.get(s.targets[0].id) == 1
+        ):
             subset_map[s.targets[0].id] = s.value
     if subset_map:
 
         class _Sub(ast.NodeTransformer):
-
             def visit_Assign(self, node):
-                if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and \
-                        node.targets[0].id in subset_map:
+                if (
+                    len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and node.targets[0].id in subset_map
+                ):
                     return None  # drop the now-inlined definition
                 self.generic_visit(node)
                 return node
@@ -1916,7 +2040,6 @@ def _boolean_mask_transform(fn: ast.FunctionDef) -> None:
     def widen(node):
 
         class _W(ast.NodeTransformer):
-
             def visit_Subscript(self, n):
                 self.generic_visit(n)
                 return n.value if is_mask(n.slice) else n
@@ -1924,16 +2047,23 @@ def _boolean_mask_transform(fn: ast.FunctionDef) -> None:
         return _W().visit(_copy(node))
 
     class _T(ast.NodeTransformer):
-
         def visit_Call(self, node):
             self.generic_visit(node)
             # ``X[m].mean()`` / ``.sum()``  and ``np.sum(X[m])`` / ``np.mean``
             red = None
-            if isinstance(node.func, ast.Attribute) and node.func.attr in ("mean", "sum") and \
-                    isinstance(node.func.value, ast.Subscript) and is_mask(node.func.value.slice):
+            if (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr in ("mean", "sum")
+                and isinstance(node.func.value, ast.Subscript)
+                and is_mask(node.func.value.slice)
+            ):
                 red, sub = node.func.attr, node.func.value
-            elif (_is_np_attr(node.func, "sum") or _is_np_attr(node.func, "mean")) and len(node.args) == 1 and \
-                    isinstance(node.args[0], ast.Subscript) and is_mask(node.args[0].slice):
+            elif (
+                (_is_np_attr(node.func, "sum") or _is_np_attr(node.func, "mean"))
+                and len(node.args) == 1
+                and isinstance(node.args[0], ast.Subscript)
+                and is_mask(node.args[0].slice)
+            ):
                 red, sub = node.func.attr, node.args[0]
             if red is None:
                 return node
@@ -1946,8 +2076,7 @@ def _boolean_mask_transform(fn: ast.FunctionDef) -> None:
 
         def visit_Assign(self, node):
             self.generic_visit(node)
-            if len(node.targets) == 1 and isinstance(node.targets[0], ast.Subscript) and \
-                    is_mask(node.targets[0].slice):
+            if len(node.targets) == 1 and isinstance(node.targets[0], ast.Subscript) and is_mask(node.targets[0].slice):
                 tgt = node.targets[0]
                 m, arr = tgt.slice, tgt.value
                 new = _np_call("where", [_copy(m), widen(node.value), _copy(arr)])
@@ -1969,9 +2098,9 @@ def _boolean_mask_transform(fn: ast.FunctionDef) -> None:
 
 
 def _np_call(name: str, args: List[ast.AST]) -> ast.Call:
-    return ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=name, ctx=ast.Load()),
-                    args=args,
-                    keywords=[])
+    return ast.Call(
+        func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=name, ctx=ast.Load()), args=args, keywords=[]
+    )
 
 
 def _mask_reduction_slices(fn: ast.FunctionDef) -> None:
@@ -1986,7 +2115,6 @@ def _mask_reduction_slices(fn: ast.FunctionDef) -> None:
     lv = _loop_vars(fn)
 
     class _T(ast.NodeTransformer):
-
         def visit_BinOp(self, node):
             self.generic_visit(node)
             if isinstance(node.op, ast.MatMult):
@@ -2005,8 +2133,12 @@ def _mask_reduction_slices(fn: ast.FunctionDef) -> None:
 
 
 def _is_np_attr(node: ast.AST, name: str) -> bool:
-    return isinstance(node, ast.Attribute) and node.attr == name and \
-        isinstance(node.value, ast.Name) and node.value.id in ("np", "jnp")
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == name
+        and isinstance(node.value, ast.Name)
+        and node.value.id in ("np", "jnp")
+    )
 
 
 def _dyn_slice_info(node: ast.AST, lv: Set[str]):
@@ -2020,9 +2152,14 @@ def _dyn_slice_info(node: ast.AST, lv: Set[str]):
     elts = sl.elts if isinstance(sl, ast.Tuple) else [sl]
 
     def is_dyn(e):
-        return isinstance(e, ast.Slice) and e.step is None and \
-            ((e.lower is not None and bool(_names_loaded(e.lower) & lv)) or
-             (e.upper is not None and bool(_names_loaded(e.upper) & lv)))
+        return (
+            isinstance(e, ast.Slice)
+            and e.step is None
+            and (
+                (e.lower is not None and bool(_names_loaded(e.lower) & lv))
+                or (e.upper is not None and bool(_names_loaded(e.upper) & lv))
+            )
+        )
 
     dyn_positions = [k for k, e in enumerate(elts) if is_dyn(e)]
     if len(dyn_positions) != 1:
@@ -2040,12 +2177,14 @@ def _dyn_slice_info(node: ast.AST, lv: Set[str]):
 def _axis_mask(arr: ast.AST, p: int, lower: Optional[ast.AST], upper: Optional[ast.AST]) -> ast.AST:
     """``np.arange(arr.shape[p])`` constrained by the present bounds:
     ``(arange >= lower) & (arange < upper)``."""
-    shape_p = ast.Subscript(value=ast.Attribute(value=arr, attr="shape", ctx=ast.Load()),
-                            slice=ast.Constant(value=p),
-                            ctx=ast.Load())
-    arange = ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="arange", ctx=ast.Load()),
-                      args=[shape_p],
-                      keywords=[])
+    shape_p = ast.Subscript(
+        value=ast.Attribute(value=arr, attr="shape", ctx=ast.Load()), slice=ast.Constant(value=p), ctx=ast.Load()
+    )
+    arange = ast.Call(
+        func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="arange", ctx=ast.Load()),
+        args=[shape_p],
+        keywords=[],
+    )
     terms = []
     if lower is not None:
         terms.append(ast.Compare(left=arange, ops=[ast.GtE()], comparators=[_copy(lower)]))
@@ -2073,9 +2212,11 @@ def _maybe_mask(node: ast.AST, lv: Set[str]) -> ast.AST:
     arr, p, lower, upper = info
     full = _widen_to_full(node, p)
     mask = _axis_mask(arr, p, lower, upper)
-    where = ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="where", ctx=ast.Load()),
-                     args=[mask, full, ast.Constant(value=0)],
-                     keywords=[])
+    where = ast.Call(
+        func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="where", ctx=ast.Load()),
+        args=[mask, full, ast.Constant(value=0)],
+        keywords=[],
+    )
     return ast.copy_location(where, node)
 
 
@@ -2084,7 +2225,6 @@ def _widen_dynamic_slices(node: ast.AST, lv: Set[str]) -> ast.AST:
     mask does the truncation). Used on the RHS of a masked dynamic write."""
 
     class _W(ast.NodeTransformer):
-
         def visit_Subscript(self, n):
             self.generic_visit(n)
             info = _dyn_slice_info(n, lv)
@@ -2095,7 +2235,8 @@ def _widen_dynamic_slices(node: ast.AST, lv: Set[str]) -> ast.AST:
                 elts = list(n.slice.elts)
                 elts[p] = ast.Slice(lower=None, upper=None, step=None)
                 return ast.copy_location(
-                    ast.Subscript(value=n.value, slice=ast.Tuple(elts=elts, ctx=ast.Load()), ctx=ast.Load()), n)
+                    ast.Subscript(value=n.value, slice=ast.Tuple(elts=elts, ctx=ast.Load()), ctx=ast.Load()), n
+                )
             return n.value  # ``v[:k]`` -> ``v``
 
     return _W().visit(node)
@@ -2109,7 +2250,6 @@ def _mask_dynamic_writes(fn: ast.FunctionDef) -> None:
     lv = _loop_vars(fn)
 
     class _T(ast.NodeTransformer):
-
         def _rewrite(self, target, value):
             info = _dyn_slice_info(target, lv)
             if info is None:
@@ -2118,9 +2258,11 @@ def _mask_dynamic_writes(fn: ast.FunctionDef) -> None:
             full = _widen_dynamic_slices(target, lv)
             mask = _axis_mask(arr, p, lower, upper)
             keep = _widen_dynamic_slices(target, lv)
-            where = ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="where", ctx=ast.Load()),
-                             args=[mask, value, keep],
-                             keywords=[])
+            where = ast.Call(
+                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="where", ctx=ast.Load()),
+                args=[mask, value, keep],
+                keywords=[],
+            )
             return ast.Assign(targets=[full], value=where)
 
         def visit_AugAssign(self, node):
@@ -2155,28 +2297,38 @@ def _rewrite_flip_prefix(fn: ast.FunctionDef) -> None:
     lv = _loop_vars(fn)
 
     class _T(ast.NodeTransformer):
-
         def visit_Call(self, node):
             self.generic_visit(node)
             if not (_is_np_attr(node.func, "flip") and len(node.args) == 1):
                 return node
             arg = node.args[0]
-            if not (isinstance(arg, ast.Subscript) and isinstance(arg.value, ast.Name)
-                    and isinstance(arg.slice, ast.Slice) and arg.slice.lower is None and arg.slice.upper is not None and
-                    (_names_loaded(arg.slice.upper) & lv)):
+            if not (
+                isinstance(arg, ast.Subscript)
+                and isinstance(arg.value, ast.Name)
+                and isinstance(arg.slice, ast.Slice)
+                and arg.slice.lower is None
+                and arg.slice.upper is not None
+                and (_names_loaded(arg.slice.upper) & lv)
+            ):
                 return node
             arr, k = arg.value, arg.slice.upper
-            n = ast.Subscript(value=ast.Attribute(value=arr, attr="shape", ctx=ast.Load()),
-                              slice=ast.Constant(value=0),
-                              ctx=ast.Load())
+            n = ast.Subscript(
+                value=ast.Attribute(value=arr, attr="shape", ctx=ast.Load()),
+                slice=ast.Constant(value=0),
+                ctx=ast.Load(),
+            )
             arange = _np_call("arange", [n])
             km1 = ast.BinOp(left=_copy(k), op=ast.Sub(), right=ast.Constant(value=1))
             idx = ast.BinOp(left=km1, op=ast.Sub(), right=arange)
-            hi = ast.BinOp(left=ast.Subscript(value=ast.Attribute(value=arr, attr="shape", ctx=ast.Load()),
-                                              slice=ast.Constant(value=0),
-                                              ctx=ast.Load()),
-                           op=ast.Sub(),
-                           right=ast.Constant(value=1))
+            hi = ast.BinOp(
+                left=ast.Subscript(
+                    value=ast.Attribute(value=arr, attr="shape", ctx=ast.Load()),
+                    slice=ast.Constant(value=0),
+                    ctx=ast.Load(),
+                ),
+                op=ast.Sub(),
+                right=ast.Constant(value=1),
+            )
             clipped = _np_call("clip", [idx, ast.Constant(value=0), hi])
             return ast.copy_location(ast.Subscript(value=arr, slice=clipped, ctx=ast.Load()), node)
 
@@ -2192,11 +2344,14 @@ def _mask_slice_reads(fn: ast.FunctionDef) -> None:
     lv = _loop_vars(fn)
 
     class _T(ast.NodeTransformer):
-
         def visit_Assign(self, node):
             self.generic_visit(node)
-            if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and \
-                    isinstance(node.value, ast.Subscript) and _dyn_slice_info(node.value, lv) is not None:
+            if (
+                len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, ast.Subscript)
+                and _dyn_slice_info(node.value, lv) is not None
+            ):
                 node.value = _maybe_mask(node.value, lv)
             return node
 
@@ -2226,7 +2381,6 @@ def _dynamic_window_slices(fn: ast.FunctionDef) -> None:
         return None
 
     class _T(ast.NodeTransformer):
-
         def visit_Subscript(self, node):
             self.generic_visit(node)
             if not isinstance(node.value, ast.Name):
@@ -2238,11 +2392,13 @@ def _dynamic_window_slices(fn: ast.FunctionDef) -> None:
                 return node
             arr = node.value
             for k, (start, width) in wins:
-                arr = ast.Call(func=ast.Attribute(value=ast.Name(id="lax", ctx=ast.Load()),
-                                                  attr="dynamic_slice_in_dim",
-                                                  ctx=ast.Load()),
-                               args=[arr, start, width, ast.Constant(value=k)],
-                               keywords=[])
+                arr = ast.Call(
+                    func=ast.Attribute(
+                        value=ast.Name(id="lax", ctx=ast.Load()), attr="dynamic_slice_in_dim", ctx=ast.Load()
+                    ),
+                    args=[arr, start, width, ast.Constant(value=k)],
+                    keywords=[],
+                )
             resid = list(elts)
             for k, _ in wins:
                 resid[k] = ast.Slice(lower=None, upper=None, step=None)
@@ -2291,8 +2447,13 @@ def _loop_index_tainted(fn: ast.FunctionDef) -> Set[str]:
     while changed:
         changed = False
         for n in ast.walk(fn):
-            if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name) \
-                    and n.targets[0].id not in tainted and (_names_loaded(n.value) & tainted):
+            if (
+                isinstance(n, ast.Assign)
+                and len(n.targets) == 1
+                and isinstance(n.targets[0], ast.Name)
+                and n.targets[0].id not in tainted
+                and (_names_loaded(n.value) & tainted)
+            ):
                 tainted.add(n.targets[0].id)
                 changed = True
     return tainted
@@ -2313,15 +2474,60 @@ def _reject_dynamic_slices(fn: ast.FunctionDef) -> None:
                     raise EmitError("data-dependent slice bound (needs masking/padding)")
 
 
-_SHAPE_FUNCS = ("zeros", "ones", "empty", "full", "reshape", "arange", "zeros_like", "ones_like", "broadcast_to",
-                "tile", "repeat", "linspace", "histogram")
+_SHAPE_FUNCS = (
+    "zeros",
+    "ones",
+    "empty",
+    "full",
+    "reshape",
+    "arange",
+    "zeros_like",
+    "ones_like",
+    "broadcast_to",
+    "tile",
+    "repeat",
+    "linspace",
+    "histogram",
+)
 
-_ARRAY_ATTRS = ("shape", "size", "ndim", "T", "dtype", "real", "imag", "max", "min", "mean", "sum", "std", "var", "dot",
-                "copy", "flatten", "ravel", "reshape", "transpose", "conj", "prod", "argmax", "argmin")
+_ARRAY_ATTRS = (
+    "shape",
+    "size",
+    "ndim",
+    "T",
+    "dtype",
+    "real",
+    "imag",
+    "max",
+    "min",
+    "mean",
+    "sum",
+    "std",
+    "var",
+    "dot",
+    "copy",
+    "flatten",
+    "ravel",
+    "reshape",
+    "transpose",
+    "conj",
+    "prod",
+    "argmax",
+    "argmin",
+)
 
 # Shape/count funcs whose first positional arg is the data array, not a dim.
-_LEADING_DATA_FUNCS = ("reshape", "histogram", "tile", "repeat", "broadcast_to", "zeros_like", "ones_like",
-                       "empty_like", "full_like")
+_LEADING_DATA_FUNCS = (
+    "reshape",
+    "histogram",
+    "tile",
+    "repeat",
+    "broadcast_to",
+    "zeros_like",
+    "ones_like",
+    "empty_like",
+    "full_like",
+)
 
 
 def _static_want(fn: ast.FunctionDef, params) -> Set[str]:
@@ -2339,7 +2545,7 @@ def _static_want(fn: ast.FunctionDef, params) -> Set[str]:
                 # histogram(a, bins), ...) -- skip arg 0; its dims live after.
                 scan = n.args[1:] if attr in _LEADING_DATA_FUNCS else n.args
                 for a in scan:
-                    want |= (_names_loaded(a) & pset)
+                    want |= _names_loaded(a) & pset
         # A scalar controlling an if/while/ternary must be concrete: a
         # data-dependent branch can't yield a bool from a traced scalar, and
         # (contour_integral's ``if NR == NM`` picking ``inv`` vs ``solve``)
@@ -2348,7 +2554,7 @@ def _static_want(fn: ast.FunctionDef, params) -> Set[str]:
         # (fv3_dycore's ``hord`` via ``8 if hord == 10 else hord``); excluded
         # in ``_static_params`` if also used as data.
         elif isinstance(n, (ast.If, ast.While, ast.IfExp)):
-            want |= (_names_loaded(n.test) & pset)
+            want |= _names_loaded(n.test) & pset
     return want
 
 
@@ -2456,8 +2662,12 @@ def _transitive_array_like(funcs: dict) -> dict:
                 gparams = params_of[call.func.id]
                 for gp in al[call.func.id]:
                     pos = gparams.index(gp)  # gp is a callee param -> always present
-                    if pos < len(call.args) and isinstance(call.args[pos], ast.Name) and call.args[pos].id in pset \
-                            and call.args[pos].id not in al[name]:
+                    if (
+                        pos < len(call.args)
+                        and isinstance(call.args[pos], ast.Name)
+                        and call.args[pos].id in pset
+                        and call.args[pos].id not in al[name]
+                    ):
                         al[name].add(call.args[pos].id)
                         changed = True
     return al

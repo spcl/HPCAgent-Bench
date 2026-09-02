@@ -13,6 +13,7 @@ index set is shorter. That is what silently miscompiled lulesh's ``xdd[symmX] = 
 ``_collect_bool_names`` is the shared criterion; ``_BooleanMaskReductionRewriter`` already used
 it, ``_BooleanMaskRewriter`` did not.
 """
+
 import json
 import pathlib
 import tempfile
@@ -34,16 +35,11 @@ def _emit_c(src: str, inputs: List[str], shapes: Dict[str, str], syms: Dict[str,
             "relative_path": "",
             "module_name": "k",
             "func_name": "f",
-            "parameters": {
-                "S": dict(syms)
-            },
+            "parameters": {"S": dict(syms)},
             "input_args": inputs,
             "array_args": [a for a in inputs if a in shapes],
             "output_args": [],
-            "init": {
-                "shapes": shapes,
-                "dtypes": dtypes
-            },
+            "init": {"shapes": shapes, "dtypes": dtypes},
         }
     }
     (d / "bi.json").write_text(json.dumps(bi))
@@ -82,10 +78,7 @@ def test_a_mask_computed_in_the_kernel_is_still_a_mask():
     collected at the consumer sees only ``m[i] = ...`` and cannot prove ``m`` boolean. Harvest
     once, off the source-shaped tree (LoweringContext), or mandelbrot1's ``N[I] = n`` survives as
     a raw array subscript and the C will not compile."""
-    src = ("import numpy as np\n"
-           "def f(out, src, horizon):\n"
-           " m = np.less(src, horizon)\n"
-           " out[m] = 0.0\n")
+    src = "import numpy as np\ndef f(out, src, horizon):\n m = np.less(src, horizon)\n out[m] = 0.0\n"
     c = _emit_c(src, ["out", "src", "horizon"], {"out": "(N,)", "src": "(N,)"}, {"N": 8}, {})
     assert "if (m[" in c, f"a kernel-computed np.less mask did not lower to a guard:\n{c}"
     assert "out[m]" not in c, f"mask left as a raw array subscript (will not compile):\n{c}"

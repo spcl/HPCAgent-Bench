@@ -7,6 +7,7 @@ BLOCKS through a rank-1 index into a rank-3 target: ``A[idx]`` keeps ``A``'s tra
 rank-3 values array is the shape numpy itself demands. The scatter desugar read any rank mismatch
 as unmodelled broadcasting and refused, which took the kernel off every python backend.
 """
+
 import ast
 
 import numpy as np
@@ -37,10 +38,12 @@ def test_block_values_get_a_loop_per_untouched_axis():
 def test_matching_shape_scatter_is_untouched():
     # edge_laplacian's flat scatter: nothing trailing, so no extra loop may appear.
     out = _apply(_AddAtInline({"Lx": 1, "src": 1, "flux": 1}), "np.add.at(Lx, src, flux)")
-    assert out == ("__sc0_x0 = np.ascontiguousarray(src)\n"
-                   "__sc0_v = np.ascontiguousarray(flux)\n"
-                   "for __sc0_i0 in range(__sc0_x0.shape[0]):\n"
-                   "    Lx[__sc0_x0[__sc0_i0]] += __sc0_v[__sc0_i0]"), out
+    assert out == (
+        "__sc0_x0 = np.ascontiguousarray(src)\n"
+        "__sc0_v = np.ascontiguousarray(flux)\n"
+        "for __sc0_i0 in range(__sc0_x0.shape[0]):\n"
+        "    Lx[__sc0_x0[__sc0_i0]] += __sc0_v[__sc0_i0]"
+    ), out
 
 
 def test_a_genuine_broadcast_still_refuses():

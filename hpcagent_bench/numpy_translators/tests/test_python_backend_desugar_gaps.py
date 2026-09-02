@@ -11,6 +11,7 @@ The end-to-end gates are ``test_cholesky2_contour_pythran_e2e[azimint_naive]`` a
 ``test_dace_feature_kernels_desugared[azimint_naive]``; these pin the rewrites themselves, since a
 compile failure several template layers deep in pythran names none of them.
 """
+
 import ast
 
 from numpyto_common.numpy_desugar import _AddAtInline, _SpliceErrstate, expr_rank, rank_table

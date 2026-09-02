@@ -18,6 +18,7 @@ The source-level asserts verify the emitted code directly (they never import
 jax, so the fork-based ``run_op`` jax path below stays clean); the numerical
 asserts round-trip each idiom through the ``run_op`` oracle against numpy.
 """
+
 import numpy as np
 import pytest
 
@@ -62,6 +63,7 @@ def test_chained_subscript_store_preserves_full_array():
 # --------------------------------------------------------------------------- #
 def _oracle():
     import shutil
+
     if not (shutil.which("gcc") and shutil.which("gfortran") and shutil.which("g++")):
         pytest.skip("gcc/g++/gfortran needed for the native oracle emit step")
     try:
@@ -69,8 +71,10 @@ def _oracle():
     except ImportError:
         import importlib.util
         import pathlib
-        spec = importlib.util.spec_from_file_location("_op_oracle",
-                                                      pathlib.Path(__file__).resolve().parent / "_op_oracle.py")
+
+        spec = importlib.util.spec_from_file_location(
+            "_op_oracle", pathlib.Path(__file__).resolve().parent / "_op_oracle.py"
+        )
         _op_oracle = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(_op_oracle)
     return _op_oracle
@@ -88,13 +92,15 @@ def test_float64_precision_kernel():
     # (0.3333333333333333); without x64 the emitted module would silently
     # narrow and disagree with the numpy reference.
     no = _oracle()
-    st = no.run_op("import numpy as np\ndef f(a, out):\n    out[:] = a / 3.0\n",
-                   "f", {"a": np.ones(4)}, {"out": (4, )}, {"N": 4},
-                   shapes={
-                       "a": "(N,)",
-                       "out": "(N,)"
-                   },
-                   backends=("jax", ))
+    st = no.run_op(
+        "import numpy as np\ndef f(a, out):\n    out[:] = a / 3.0\n",
+        "f",
+        {"a": np.ones(4)},
+        {"out": (4,)},
+        {"N": 4},
+        shapes={"a": "(N,)", "out": "(N,)"},
+        backends=("jax",),
+    )
     _assert_jax_ok(st, "float64")
 
 
@@ -102,16 +108,15 @@ def test_or_default_idiom():
     # ``n = n or N`` with n=2 must yield 2 (Python truthiness); the old bitwise
     # rewrite ``n | N`` = 2 | 7 = 7 would be wrong.
     no = _oracle()
-    st = no.run_op("import numpy as np\ndef f(n, a, out):\n    n = n or a.shape[0]\n    out[0] = float(n)\n",
-                   "f", {
-                       "n": 2,
-                       "a": np.zeros(7)
-                   }, {"out": (1, )}, {"N": 7},
-                   shapes={
-                       "a": "(N,)",
-                       "out": "(1,)"
-                   },
-                   backends=("jax", ))
+    st = no.run_op(
+        "import numpy as np\ndef f(n, a, out):\n    n = n or a.shape[0]\n    out[0] = float(n)\n",
+        "f",
+        {"n": 2, "a": np.zeros(7)},
+        {"out": (1,)},
+        {"N": 7},
+        shapes={"a": "(N,)", "out": "(1,)"},
+        backends=("jax",),
+    )
     _assert_jax_ok(st, "or-idiom")
 
 
@@ -119,16 +124,15 @@ def test_full_slice_row_broadcast():
     # ``out[:] = row`` broadcasts the (N,) row across every row of the (M, N)
     # output buffer, keeping its declared shape.
     no = _oracle()
-    st = no.run_op("import numpy as np\ndef f(row, out):\n    out[:] = row\n",
-                   "f", {"row": np.arange(5.0)}, {"out": (4, 5)}, {
-                       "M": 4,
-                       "N": 5
-                   },
-                   shapes={
-                       "row": "(N,)",
-                       "out": "(M, N)"
-                   },
-                   backends=("jax", ))
+    st = no.run_op(
+        "import numpy as np\ndef f(row, out):\n    out[:] = row\n",
+        "f",
+        {"row": np.arange(5.0)},
+        {"out": (4, 5)},
+        {"M": 4, "N": 5},
+        shapes={"row": "(N,)", "out": "(M, N)"},
+        backends=("jax",),
+    )
     _assert_jax_ok(st, "row-broadcast")
 
 
@@ -136,16 +140,15 @@ def test_chained_subscript_2d_store():
     # ``a[1][2] = 9.0`` must set that one element and leave the rest of the 2-D
     # array intact (a row-collapse would shrink ``a`` to ``a[1]``).
     no = _oracle()
-    st = no.run_op("import numpy as np\ndef f(a, out):\n    a[1][2] = 9.0\n    out[:] = a\n",
-                   "f", {"a": np.zeros((3, 4))}, {"out": (3, 4)}, {
-                       "M": 3,
-                       "N": 4
-                   },
-                   shapes={
-                       "a": "(M, N)",
-                       "out": "(M, N)"
-                   },
-                   backends=("jax", ))
+    st = no.run_op(
+        "import numpy as np\ndef f(a, out):\n    a[1][2] = 9.0\n    out[:] = a\n",
+        "f",
+        {"a": np.zeros((3, 4))},
+        {"out": (3, 4)},
+        {"M": 3, "N": 4},
+        shapes={"a": "(M, N)", "out": "(M, N)"},
+        backends=("jax",),
+    )
     _assert_jax_ok(st, "chain-2d")
 
 
@@ -153,11 +156,13 @@ def test_partial_range_loop_is_not_whole_array_vectorized():
     # A ``for i in range(1, len)`` writes only the tail; lowering it to a whole-array rebind
     # (``a = b * 2.0``) clobbers a[0]. It must stay an index-preserving fori/.at form, while a
     # full-extent ``range(len)`` still vectorizes.
-    partial = ("import numpy as np\n"
-               "def f(a, b):\n"
-               "    for i in range(1, a.shape[0]):\n"
-               "        a[i] = b[i] * 2.0\n"
-               "    return a\n")
+    partial = (
+        "import numpy as np\n"
+        "def f(a, b):\n"
+        "    for i in range(1, a.shape[0]):\n"
+        "        a[i] = b[i] * 2.0\n"
+        "    return a\n"
+    )
     js = emit_jax(partial, "f", jit=True)
     assert "a = b * 2.0" not in js and ".at[" in js, js
     full = partial.replace("range(1, a.shape[0])", "range(a.shape[0])")
@@ -169,10 +174,7 @@ def test_row_reduction_over_indexed_row_uses_axis_not_full_reduce():
     # dropping ``[i]`` alone (the old bug) collapses it to a full-array
     # reduction ``jnp.sum(a)`` -- a scalar instead of one value per row.
     for fn in ("sum", "max", "min", "mean", "prod"):
-        src = ("import numpy as np\n"
-               f"def f(a, out):\n"
-               f"    for i in range(a.shape[0]):\n"
-               f"        out[i] = np.{fn}(a[i])\n")
+        src = f"import numpy as np\ndef f(a, out):\n    for i in range(a.shape[0]):\n        out[i] = np.{fn}(a[i])\n"
         out = emit_jax(src, "f", jit=True)
         assert f"jnp.{fn}(a, axis=tuple(range(1, a.ndim)))" in out, out
         assert f"jnp.{fn}(a)" not in out
@@ -184,13 +186,15 @@ def test_row_reduction_accidentally_safe_cases_unchanged():
     tuple_slice = emit_jax(
         "import numpy as np\ndef f(a, out):\n    for i in range(a.shape[0]):\n        out[i] = np.sum(a[i, :])\n",
         "f",
-        jit=True)
+        jit=True,
+    )
     assert "out.at[i].set(jnp.sum(a[i, :]))" in tuple_slice
     # np.dot(a[i], x) is accidentally correct: matvec(a, x)[i] == dot(a[i], x).
     dot = emit_jax(
         "import numpy as np\ndef f(a, x, out):\n    for i in range(a.shape[0]):\n        out[i] = np.dot(a[i], x)\n",
         "f",
-        jit=True)
+        jit=True,
+    )
     assert "out = jnp.dot(a, x)" in dot
 
 
@@ -204,12 +208,13 @@ def test_partial_range_preserves_head_end_to_end():
         "    out[0] = 100.0\n"
         "    for i in range(1, out.shape[0]):\n"
         "        out[i] = b[i] * 2.0\n",
-        "f", {"b": np.array([5.0, 2.0, 3.0, 4.0])}, {"out": (4, )}, {"N": 4},
-        shapes={
-            "b": "(N,)",
-            "out": "(N,)"
-        },
-        backends=("jax", ))
+        "f",
+        {"b": np.array([5.0, 2.0, 3.0, 4.0])},
+        {"out": (4,)},
+        {"N": 4},
+        shapes={"b": "(N,)", "out": "(N,)"},
+        backends=("jax",),
+    )
     _assert_jax_ok(st, "partial-range-head")
 
 
@@ -220,15 +225,12 @@ def test_row_reduction_matches_numpy_end_to_end():
     a = np.arange(12.0).reshape(3, 4)
     for fn in ("sum", "max", "min", "mean", "prod"):
         st = no.run_op(
-            f"import numpy as np\ndef f(a, out):\n    for i in range(a.shape[0]):\n"
-            f"        out[i] = np.{fn}(a[i])\n",
-            "f", {"a": a}, {"out": (3, )}, {
-                "M": 3,
-                "N": 4
-            },
-            shapes={
-                "a": "(M, N)",
-                "out": "(M,)"
-            },
-            backends=("jax", ))
+            f"import numpy as np\ndef f(a, out):\n    for i in range(a.shape[0]):\n        out[i] = np.{fn}(a[i])\n",
+            "f",
+            {"a": a},
+            {"out": (3,)},
+            {"M": 3, "N": 4},
+            shapes={"a": "(M, N)", "out": "(M,)"},
+            backends=("jax",),
+        )
         _assert_jax_ok(st, f"row-reduce-{fn}")

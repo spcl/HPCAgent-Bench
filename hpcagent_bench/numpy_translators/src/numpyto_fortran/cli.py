@@ -28,10 +28,12 @@ def emit_once(args: argparse.Namespace) -> int:
     sym = entry_symbol(base)
     if args.parallel:
         # OpenMP variant, same bind(C) symbol as sequential.
-        write_generated(args.out / f"{base}_omp.f90",
-                        emit_fortran_omp(kir, fn_name=sym),
-                        line_comment="! ",
-                        source=f"{short}_numpy.py")
+        write_generated(
+            args.out / f"{base}_omp.f90",
+            emit_fortran_omp(kir, fn_name=sym),
+            line_comment="! ",
+            source=f"{short}_numpy.py",
+        )
         print(f"numpyto_fortran: emitted {base}_omp.f90 (OpenMP)")
         return 0
     src = emit_fortran(kir, fn_name=sym)
@@ -57,16 +59,19 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--kernel", type=pathlib.Path, required=True)
     e.add_argument("--bench-info", type=pathlib.Path, required=True)
     e.add_argument("--out", type=pathlib.Path, required=True)
-    e.add_argument("--parallel",
-                   action="store_true",
-                   help="emit the OpenMP variant (<base>_omp.f90, ``!$omp parallel "
-                   "do``) instead of the sequential source; compile with -fopenmp. "
-                   "Refuses (nonzero exit) a kernel with no sound parallel form.")
+    e.add_argument(
+        "--parallel",
+        action="store_true",
+        help="emit the OpenMP variant (<base>_omp.f90, ``!$omp parallel "
+        "do``) instead of the sequential source; compile with -fopenmp. "
+        "Refuses (nonzero exit) a kernel with no sound parallel form.",
+    )
     e.add_argument("--config", default=None, help="sparse layout tag for the emitted name (dense: omit)")
-    e.add_argument("--precision",
-                   default="",
-                   help="floating precision override (e.g. ``float32``); "
-                   "remaps float/complex only, ints unchanged.")
+    e.add_argument(
+        "--precision",
+        default="",
+        help="floating precision override (e.g. ``float32``); remaps float/complex only, ints unchanged.",
+    )
     e.set_defaults(func=cmd_emit)
     return p
 

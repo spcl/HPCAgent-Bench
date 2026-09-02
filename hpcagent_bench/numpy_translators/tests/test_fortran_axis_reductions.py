@@ -17,6 +17,7 @@ The claim is decided in lowering, with the shape table in hand, because past tha
 nest is gone and there is nothing to fall back to. So the declines are pinned too: a runtime axis, a
 tuple axis, ``keepdims``, an operand of unknown rank.
 """
+
 import ast
 import json
 import pathlib
@@ -117,7 +118,7 @@ def test_the_claim_needs_a_known_rank() -> None:
     """
     node = ast.parse("np.sum(a, axis=1)", mode="eval").body
     assert not renders_natively(("np", "sum"), node, {}, _DTYPES)
-    assert not renders_natively(("np", "sum"), node, {"a": ("N", )}, _DTYPES)
+    assert not renders_natively(("np", "sum"), node, {"a": ("N",)}, _DTYPES)
     assert renders_natively(("np", "sum"), node, {"a": ("N", "M")}, _DTYPES)
 
 
@@ -137,15 +138,16 @@ def test_per_axis_reductions_match_numpy_on_every_backend() -> None:
     a = rng.standard_normal((6, 4, 3)) + 2.0
     for axis in (0, 1, 2, -1):
         src, _, _ = build(f"    c = np.sum(a, axis={axis})\n    out[:] = c[:, 0] * 2.0\n", _SHAPES3, _SYMS3)
-        out_shape = (4, ) if axis == 0 else (6, )
-        status = run_op(src,
-                        "f", {"a": a}, {"out": out_shape},
-                        _SYMS3,
-                        shapes={
-                            "a": "(N, M, K)",
-                            "out": "(M,)" if axis == 0 else "(N,)"
-                        },
-                        backends=NATIVE)
+        out_shape = (4,) if axis == 0 else (6,)
+        status = run_op(
+            src,
+            "f",
+            {"a": a},
+            {"out": out_shape},
+            _SYMS3,
+            shapes={"a": "(N, M, K)", "out": "(M,)" if axis == 0 else "(N,)"},
+            backends=NATIVE,
+        )
         assert status == {"c": "ok", "cpp": "ok", "fortran": "ok"}, (axis, status)
 
 
@@ -153,8 +155,8 @@ def test_the_mean_matches_numpy_on_every_backend() -> None:
     rng = np.random.default_rng(1)
     a = rng.standard_normal((6, 4, 3)) + 2.0
     src, _, _ = build("    c = np.mean(a, axis=1)\n    out[:] = c[:, 0] * 2.0\n", _SHAPES3, _SYMS3)
-    assert run_op(src, "f", {"a": a}, {"out": (6, )}, _SYMS3, shapes=_SHAPES3, backends=NATIVE) == {
+    assert run_op(src, "f", {"a": a}, {"out": (6,)}, _SYMS3, shapes=_SHAPES3, backends=NATIVE) == {
         "c": "ok",
         "cpp": "ok",
-        "fortran": "ok"
+        "fortran": "ok",
     }

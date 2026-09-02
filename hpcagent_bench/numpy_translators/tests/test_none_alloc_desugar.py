@@ -7,6 +7,7 @@ reads the buffer where it was allocated (reading the ``None`` branch would be a
 unit-test the rewrite in isolation plus the guard that leaves ``is None``-observed names
 alone, and a numerical end-to-end check that the always-allocated form still matches numpy.
 """
+
 import ast
 
 import numpy as np
@@ -38,10 +39,9 @@ def test_name_observed_via_is_none_is_not_forced():
     """When the buffer's None-ness is later observed (``x is not None``) the conditional
     is load-bearing, so the rewrite must NOT fire (else the guard would always take the
     allocated branch)."""
-    tree = ast.parse("def f(cond):\n"
-                     "    x = np.zeros((n,)) if cond else None\n"
-                     "    if x is not None:\n"
-                     "        x[0] = 1.0\n")
+    tree = ast.parse(
+        "def f(cond):\n    x = np.zeros((n,)) if cond else None\n    if x is not None:\n        x[0] = 1.0\n"
+    )
     _ConditionalNoneAllocRewriter().visit(tree)
     assert any(isinstance(node, ast.IfExp) for node in ast.walk(tree))  # IfExp preserved
 
@@ -66,15 +66,14 @@ def test_conditional_none_alloc_matches_numpy_end_to_end():
     """The always-allocated lowering runs + matches numpy on C/C++/Fortran (the backends
     that have no ``None``); the verbatim backends run the numpy form directly."""
     a = np.arange(6, dtype=np.float64)
-    res = run_op(_SRC,
-                 "condnone", {
-                     "a": a,
-                     "cond": 1
-                 }, {"out": (6, )}, {"N": 6},
-                 shapes={
-                     "a": "(N,)",
-                     "out": "(N,)"
-                 },
-                 backends=("c", "cpp", "fortran"))
+    res = run_op(
+        _SRC,
+        "condnone",
+        {"a": a, "cond": 1},
+        {"out": (6,)},
+        {"N": 6},
+        shapes={"a": "(N,)", "out": "(N,)"},
+        backends=("c", "cpp", "fortran"),
+    )
     for backend, status in res.items():
-        assert status in ("ok", ) or status.startswith("skip"), f"{backend}: {status}"
+        assert status in ("ok",) or status.startswith("skip"), f"{backend}: {status}"

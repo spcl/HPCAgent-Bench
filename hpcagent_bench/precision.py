@@ -12,6 +12,7 @@ Low-precision dtypes (``bf16``, ``fp8_*``) come from the
 registers them with numpy at import time so ``arr.astype(dtype)`` and
 ``np.allclose`` work uniformly.
 """
+
 import enum
 from dataclasses import dataclass
 from typing import Dict, Tuple
@@ -22,6 +23,7 @@ import numpy as np
 
 class Precision(enum.Enum):
     """Supported floating-point precisions for kernel inputs/outputs."""
+
     FP64 = "fp64"
     FP32 = "fp32"
     FP16 = "fp16"
@@ -35,8 +37,7 @@ class Precision(enum.Enum):
         for p in cls:
             if p.value == name:
                 return p
-        raise ValueError(f"Unknown precision {name!r}; supported: "
-                         f"{[p.value for p in cls]}")
+        raise ValueError(f"Unknown precision {name!r}; supported: {[p.value for p in cls]}")
 
     @property
     def mantissa_bits(self) -> int:
@@ -161,6 +162,7 @@ class ToleranceBand:
     ``rtol`` dominates for large values, ``atol`` for near-zero ones. Frozen so a
     band is a value, not mutable shared state.
     """
+
     rtol: float
     atol: float
 
@@ -197,7 +199,7 @@ def derived_band(precision: Precision) -> ToleranceBand:
     corpus-validated band over this default where a format's real kernels need a
     different floor.
     """
-    rtol = min(0.25, max(1e-11, machine_eps(precision)**0.5))
+    rtol = min(0.25, max(1e-11, machine_eps(precision) ** 0.5))
     return ToleranceBand(rtol, max(rtol * 1e-2, machine_eps(precision)))
 
 
@@ -237,7 +239,8 @@ def atol_below_one_ulp() -> Dict[Precision, Tuple[float, float]]:
     """
     return {
         precision: (band.atol, machine_eps(precision))
-        for precision, band in TOLERANCE_MATRIX.items() if band.atol < machine_eps(precision)
+        for precision, band in TOLERANCE_MATRIX.items()
+        if band.atol < machine_eps(precision)
     }
 
 

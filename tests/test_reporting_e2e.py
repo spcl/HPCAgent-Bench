@@ -13,6 +13,7 @@ skipped tests). Which path ran is logged.
 
 Rendered with ``usetex=False`` so the figures build without a LaTeX install (mathtext still renders
 the CI superscripts)."""
+
 import os
 import pathlib
 import shutil
@@ -26,8 +27,14 @@ import numpy as np
 import pytest
 
 from hpcagent_bench import stats
-from hpcagent_bench.plotting import (cell_summary, load_results, machine_groups, machine_output, plot_distribution_grid,
-                                     plot_heatmap)
+from hpcagent_bench.plotting import (
+    cell_summary,
+    load_results,
+    machine_groups,
+    machine_output,
+    plot_distribution_grid,
+    plot_heatmap,
+)
 
 #: Known-good simple stencil that builds + validates under native dace (verified on this box).
 _NATIVE_KERNEL_STEM = "heat_3d"  # directory stem; recorded under short_name "heat_3d"
@@ -37,6 +44,7 @@ def _native_env(cwd: pathlib.Path) -> dict:
     """Environment for the forked native sweep: isolated dace cache, single-threaded, MPI
     anti-hang vars, and the repo on PYTHONPATH so the child can import hpcagent_bench."""
     import hpcagent_bench
+
     repo_root = pathlib.Path(hpcagent_bench.__file__).resolve().parents[1]
     cache = cwd / "dacecache"
     env = dict(os.environ)
@@ -75,14 +83,16 @@ def _capped(argv: List[str]) -> List[str]:
 def _db_has_validated(db: pathlib.Path, frameworks: List[str]) -> bool:
     """True iff ``db`` holds >= 1 validated preset-S row for every named framework."""
     from hpcagent_bench.harness import recording
+
     # The sweep filled its own shard; the base file is the aggregate built on read.
     if not recording.shard_paths(str(db)) and not db.exists():
         return False
     con = sqlite3.connect(recording.ensure_aggregated(str(db)))
     try:
         for fw in frameworks:
-            n = con.execute("SELECT COUNT(*) FROM results WHERE framework=? AND validated=1 AND preset='S'",
-                            (fw, )).fetchone()[0]
+            n = con.execute(
+                "SELECT COUNT(*) FROM results WHERE framework=? AND validated=1 AND preset='S'", (fw,)
+            ).fetchone()[0]
             if not n:
                 return False
     except sqlite3.Error:
@@ -152,20 +162,23 @@ def _build_synthetic(db: pathlib.Path) -> None:
                     samples.append(base * 9.0)  # a slow OS-hiccup outlier: drop_outliers must catch it
                 for t in samples:
                     session.add(
-                        Result(timestamp=1_700_000_000,
-                               benchmark=kernel,
-                               domain=domain,
-                               preset="S",
-                               framework=fw,
-                               agent=None,
-                               validated=True,
-                               time=float(t),
-                               native_time=None,
-                               datatype="float64",
-                               variant=None,
-                               prompt_hash=None,
-                               execution="native",
-                               cpu="test-cpu"))
+                        Result(
+                            timestamp=1_700_000_000,
+                            benchmark=kernel,
+                            domain=domain,
+                            preset="S",
+                            framework=fw,
+                            agent=None,
+                            validated=True,
+                            time=float(t),
+                            native_time=None,
+                            datatype="float64",
+                            variant=None,
+                            prompt_hash=None,
+                            execution="native",
+                            cpu="test-cpu",
+                        )
+                    )
         session.commit()
 
 
@@ -194,26 +207,15 @@ def test_reporting_pipeline_end_to_end(tmp_path, capsys) -> None:
     # Each call returns ONE path per machine in the DB, and the paths are what is asserted on --
     # the figures are named after the hardware, so a hardcoded `heatmap.pdf` would only pass by
     # accident. How many machines that is (and what they are called) is derived below, not assumed.
-    written = plot_heatmap(benchmark="all",
-                           preset="S",
-                           datatype="float64",
-                           db=str(db),
-                           output=str(heatmap),
-                           usetex=False)
-    written += plot_distribution_grid(benchmark="all",
-                                      preset="S",
-                                      datatype="float64",
-                                      kind="violin",
-                                      db=str(db),
-                                      output=str(violin),
-                                      usetex=False)
-    written += plot_distribution_grid(benchmark="all",
-                                      preset="S",
-                                      datatype="float64",
-                                      kind="box",
-                                      db=str(db),
-                                      output=str(box),
-                                      usetex=False)
+    written = plot_heatmap(
+        benchmark="all", preset="S", datatype="float64", db=str(db), output=str(heatmap), usetex=False
+    )
+    written += plot_distribution_grid(
+        benchmark="all", preset="S", datatype="float64", kind="violin", db=str(db), output=str(violin), usetex=False
+    )
+    written += plot_distribution_grid(
+        benchmark="all", preset="S", datatype="float64", kind="box", db=str(db), output=str(box), usetex=False
+    )
 
     # Machine set straight from the reporting layer's own grouping key (plotting.machine_groups
     # partitions on (cpu, gpu); no CPU name or machine count baked in here -- a DB with a real

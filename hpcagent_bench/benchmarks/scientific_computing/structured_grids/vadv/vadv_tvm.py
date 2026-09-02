@@ -1,4 +1,5 @@
 """CPU/GPU TVM Thomas tridiagonal vadv solver; k-loop driven in Python, active plane k a runtime scalar."""
+
 import tvm
 from tvm import te
 
@@ -15,7 +16,7 @@ def _common_placeholders(I, J, K, dtype):
 
 
 def _dcol_rhs(dtr, u_pos, utens, utens_stage, corr, i, j, kk):
-    return (dtr * u_pos[i, j, kk] + utens[i, j, kk] + utens_stage[i, j, kk] + corr)
+    return dtr * u_pos[i, j, kk] + utens[i, j, kk] + utens_stage[i, j, kk] + corr
 
 
 def build_forward_first(I, J, K, dtype):
@@ -42,12 +43,12 @@ def build_forward_first(I, J, K, dtype):
         corr = -cs * (u_stage[i, j, kk + 1] - u_stage[i, j, kk])
         return _dcol_rhs(dtr, u_pos, utens, utens_stage, corr, i, j, kk) / bcol
 
-    ccol_out = te.compute((I, J, K),
-                          lambda i, j, kk: te.if_then_else(kk == k, cval(i, j, k), ccol_in[i, j, kk]),
-                          name="ccol_out")
-    dcol_out = te.compute((I, J, K),
-                          lambda i, j, kk: te.if_then_else(kk == k, dval(i, j, k), dcol_in[i, j, kk]),
-                          name="dcol_out")
+    ccol_out = te.compute(
+        (I, J, K), lambda i, j, kk: te.if_then_else(kk == k, cval(i, j, k), ccol_in[i, j, kk]), name="ccol_out"
+    )
+    dcol_out = te.compute(
+        (I, J, K), lambda i, j, kk: te.if_then_else(kk == k, dval(i, j, k), dcol_in[i, j, kk]), name="dcol_out"
+    )
     args = [utens_stage, u_stage, wcon, u_pos, utens, ccol_in, dcol_in, dtr, bet_m, bet_p, k, ccol_out, dcol_out]
     return te.create_prim_func(args).with_attr("global_symbol", "fwd_first")
 
@@ -82,17 +83,17 @@ def build_forward_mid(I, J, K, dtype):
         acol = gav * bet_p
         ccol_raw = gcv * bet_p
         bcol = dtr - acol - ccol_raw
-        corr = (-as_ * (u_stage[i, j, kk - 1] - u_stage[i, j, kk]) - cs * (u_stage[i, j, kk + 1] - u_stage[i, j, kk]))
+        corr = -as_ * (u_stage[i, j, kk - 1] - u_stage[i, j, kk]) - cs * (u_stage[i, j, kk + 1] - u_stage[i, j, kk])
         rhs = _dcol_rhs(dtr, u_pos, utens, utens_stage, corr, i, j, kk)
         divided = 1.0 / (bcol - ccol_in[i, j, kk - 1] * acol)
         return (rhs - dcol_in[i, j, kk - 1] * acol) * divided
 
-    ccol_out = te.compute((I, J, K),
-                          lambda i, j, kk: te.if_then_else(kk == k, cval(i, j, k), ccol_in[i, j, kk]),
-                          name="ccol_out")
-    dcol_out = te.compute((I, J, K),
-                          lambda i, j, kk: te.if_then_else(kk == k, dval(i, j, k), dcol_in[i, j, kk]),
-                          name="dcol_out")
+    ccol_out = te.compute(
+        (I, J, K), lambda i, j, kk: te.if_then_else(kk == k, cval(i, j, k), ccol_in[i, j, kk]), name="ccol_out"
+    )
+    dcol_out = te.compute(
+        (I, J, K), lambda i, j, kk: te.if_then_else(kk == k, dval(i, j, k), dcol_in[i, j, kk]), name="dcol_out"
+    )
     args = [utens_stage, u_stage, wcon, u_pos, utens, ccol_in, dcol_in, dtr, bet_m, bet_p, k, ccol_out, dcol_out]
     return te.create_prim_func(args).with_attr("global_symbol", "fwd_mid")
 
@@ -119,9 +120,9 @@ def build_forward_last(I, J, K, dtype):
 
     # ccol unchanged at plane K-1 (never written nor read there).
     ccol_out = te.compute((I, J, K), lambda i, j, kk: ccol_in[i, j, kk], name="ccol_out")
-    dcol_out = te.compute((I, J, K),
-                          lambda i, j, kk: te.if_then_else(kk == k, dval(i, j, k), dcol_in[i, j, kk]),
-                          name="dcol_out")
+    dcol_out = te.compute(
+        (I, J, K), lambda i, j, kk: te.if_then_else(kk == k, dval(i, j, k), dcol_in[i, j, kk]), name="dcol_out"
+    )
     args = [utens_stage, u_stage, wcon, u_pos, utens, ccol_in, dcol_in, dtr, bet_m, bet_p, k, ccol_out, dcol_out]
     return te.create_prim_func(args).with_attr("global_symbol", "fwd_last")
 
@@ -135,10 +136,11 @@ def build_backward_top(I, J, K, dtype):
     k = te.var("k", dtype="int32")
 
     data_col = te.compute((I, J), lambda i, j: dcol[i, j, k], name="data_col")
-    us_out = te.compute((I, J, K),
-                        lambda i, j, kk: te.if_then_else(kk == k, dtr *
-                                                         (dcol[i, j, k] - u_pos[i, j, k]), us_in[i, j, kk]),
-                        name="us_out")
+    us_out = te.compute(
+        (I, J, K),
+        lambda i, j, kk: te.if_then_else(kk == k, dtr * (dcol[i, j, k] - u_pos[i, j, k]), us_in[i, j, kk]),
+        name="us_out",
+    )
     args = [u_pos, dcol, us_in, dtr, k, data_col, us_out]
     return te.create_prim_func(args).with_attr("global_symbol", "bwd_top")
 
@@ -157,10 +159,11 @@ def build_backward_mid(I, J, K, dtype):
         return dcol[i, j, k] - ccol[i, j, k] * dc_in[i, j]
 
     data_col = te.compute((I, J), datacol, name="data_col")
-    us_out = te.compute((I, J, K),
-                        lambda i, j, kk: te.if_then_else(kk == k, dtr *
-                                                         (datacol(i, j) - u_pos[i, j, k]), us_in[i, j, kk]),
-                        name="us_out")
+    us_out = te.compute(
+        (I, J, K),
+        lambda i, j, kk: te.if_then_else(kk == k, dtr * (datacol(i, j) - u_pos[i, j, k]), us_in[i, j, kk]),
+        name="us_out",
+    )
     args = [u_pos, ccol, dcol, dc_in, us_in, dtr, k, data_col, us_out]
     return te.create_prim_func(args).with_attr("global_symbol", "bwd_mid")
 

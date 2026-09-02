@@ -31,6 +31,7 @@ PROVENANCE of the patterns:
     flagged in the returned arrays' provenance and in REFERENCES.md). The star
     pattern is exact for both orders. Order 7 is the headline / primary instance.
 """
+
 from pathlib import Path
 
 import numpy as np

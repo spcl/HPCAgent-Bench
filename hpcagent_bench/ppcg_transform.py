@@ -22,6 +22,7 @@ reader having to know what was installed on the node; bare ``ppcg`` names none a
 toolchain (:func:`hpcagent_bench.languages.gpu_backend`). A named column that the host cannot build
 declines through :class:`NotSupportedByFramework` rather than quietly measuring the other vendor.
 """
+
 import os
 import pathlib
 import re
@@ -102,8 +103,9 @@ def hipify(scratch: pathlib.Path, stem: str) -> None:
 #: C++, where ``restrict`` is not a keyword at all. Spelled as a define in the SOURCE rather than as
 #: a ``-Drestrict=`` in compilers.yaml because that file is shared with every other GPU column, and
 #: none of the others compiles C.
-CXX_COMPAT_PROLOGUE: str = ("/* hpcagent_bench: ppcg emits C and the GPU drivers compile it as C++. */\n"
-                            "#define restrict __restrict__\n")
+CXX_COMPAT_PROLOGUE: str = (
+    "/* hpcagent_bench: ppcg emits C and the GPU drivers compile it as C++. */\n#define restrict __restrict__\n"
+)
 
 #: The prelude's ``__npb_conj`` calls C99 ``conj`` on a ``double _Complex``. In C++ that name is
 #: ``std::conj``, a template over ``std::complex<T>`` which no ``_Complex`` argument matches, so the
@@ -149,7 +151,7 @@ def drop_const_params(scop_src: str, entry: str) -> str:
     match = re.search(rf"^(void\s+{re.escape(entry)}\s*\()([^)]*)(\))", scop_src, flags=re.MULTILINE)
     if match is None:
         return scop_src
-    return scop_src[:match.start(2)] + match.group(2).replace("const ", "") + scop_src[match.end(2):]
+    return scop_src[: match.start(2)] + match.group(2).replace("const ", "") + scop_src[match.end(2) :]
 
 
 def offloaded(kernel_src: str) -> bool:
@@ -164,10 +166,9 @@ def offloaded(kernel_src: str) -> bool:
     return "__global__" in kernel_src
 
 
-def run_ppcg(scop: pathlib.Path,
-             backend: Optional[str] = None,
-             args: Sequence[str] = PPCG_ARGS,
-             timeout: Optional[float] = None) -> Tuple[List[str], subprocess.CompletedProcess]:
+def run_ppcg(
+    scop: pathlib.Path, backend: Optional[str] = None, args: Sequence[str] = PPCG_ARGS, timeout: Optional[float] = None
+) -> Tuple[List[str], subprocess.CompletedProcess]:
     """Transform one scop with ``ppcg``. Returns ``(argv, result)``.
 
     ppcg names its outputs after the INPUT and writes them into the current directory, with no
@@ -186,11 +187,9 @@ def run_ppcg(scop: pathlib.Path,
         # ppcg names its outputs after the input's STEM, so the copy has to keep it.
         readable = pathlib.Path(scratch) / scop.name
         readable.write_text(drop_const_params(scop.read_text(), entry))
-        proc = subprocess.run([str(exe), *args, str(readable)],
-                              cwd=scratch,
-                              capture_output=True,
-                              text=True,
-                              timeout=timeout)
+        proc = subprocess.run(
+            [str(exe), *args, str(readable)], cwd=scratch, capture_output=True, text=True, timeout=timeout
+        )
         if proc.returncode == 0:
             host_cu = pathlib.Path(scratch) / f"{scop.stem}_host.cu"
             if host_cu.is_file():
@@ -221,8 +220,9 @@ def transformed_sources(cpp_backend: pathlib.Path, base: str, backend: Optional[
     if ppcg_exe() is None:
         raise NotSupportedByFramework(FRAMEWORK, base, "ppcg is not installed on this host")
     if vendor == "hip" and hipify_exe() is None:
-        raise NotSupportedByFramework(FRAMEWORK, base,
-                                      f"ppcg emits CUDA and this column builds HIP, but {HIPIFY} is not installed")
+        raise NotSupportedByFramework(
+            FRAMEWORK, base, f"ppcg emits CUDA and this column builds HIP, but {HIPIFY} is not installed"
+        )
     out: List[pathlib.Path] = []
     for scop in scops:
         assert_affine(scop, base)
@@ -230,14 +230,18 @@ def transformed_sources(cpp_backend: pathlib.Path, base: str, backend: Optional[
         if any(not p.exists() or p.stat().st_mtime < scop.stat().st_mtime for p in produced):
             argv, proc = run_ppcg(scop, vendor)
             if proc.returncode != 0 or any(not p.is_file() for p in produced):
-                raise NotSupportedByFramework(FRAMEWORK, base,
-                                              f"ppcg rejected {scop.name}: {proc.stderr.strip()[-500:]}")
+                raise NotSupportedByFramework(
+                    FRAMEWORK, base, f"ppcg rejected {scop.name}: {proc.stderr.strip()[-500:]}"
+                )
         # Re-read rather than trusting the run above: a passthrough that was published by an EARLIER
         # call is fresh against its scop, so a gate that only fired on a fresh transform would let
         # the second run of the same kernel time the serial host loop.
         if not offloaded(produced[1].read_text()):
             raise NotSupportedByFramework(
-                FRAMEWORK, base, f"ppcg offloaded nothing from {scop.name}: it copied the scop through "
-                "unchanged and emitted no __global__, so there is no GPU kernel to time")
+                FRAMEWORK,
+                base,
+                f"ppcg offloaded nothing from {scop.name}: it copied the scop through "
+                "unchanged and emitted no __global__, so there is no GPU kernel to time",
+            )
         out.extend(produced)
     return out

@@ -3,6 +3,7 @@
 """Provider-agnostic web search (:mod:`hpcagent_bench.websearch`): env-keyed provider
 selection, per-provider request shaping, and one normalized result shape -- all
 driven with an injected transport, so no test ever touches the network."""
+
 import json
 from urllib.parse import parse_qs, urlparse
 
@@ -13,9 +14,9 @@ from hpcagent_bench.websearch import Provider, SearchResponse, WebSearchConfig, 
 
 #: All env vars any provider reads -- cleared before each test so the host's real
 #: keys never leak into selection assertions.
-_ALL_KEYS = sorted({k
-                    for keys in websearch._ENV_KEYS.values()
-                    for k in keys} | {"HPCAGENT_BENCH_WEBSEARCH_PROVIDER", "GOOGLE_CSE_ID"})
+_ALL_KEYS = sorted(
+    {k for keys in websearch._ENV_KEYS.values() for k in keys} | {"HPCAGENT_BENCH_WEBSEARCH_PROVIDER", "GOOGLE_CSE_ID"}
+)
 
 
 @pytest.fixture(autouse=True)
@@ -144,88 +145,22 @@ def test_perplexity_request_is_a_chat_completion():
 # --- response normalization (every provider -> one shape) ---------------------
 
 _CANNED = {
-    Provider.TAVILY: ({
-        "results": [{
-            "title": "T",
-            "url": "http://a",
-            "content": "C"
-        }],
-        "answer": "ANS"
-    }, "ANS"),
-    Provider.SERPER: ({
-        "organic": [{
-            "title": "T",
-            "link": "http://a",
-            "snippet": "C"
-        }],
-        "answerBox": {
-            "answer": "ANS"
-        }
-    }, "ANS"),
-    Provider.BRAVE: ({
-        "web": {
-            "results": [{
-                "title": "T",
-                "url": "http://a",
-                "description": "C"
-            }]
-        }
-    }, None),
-    Provider.EXA: ({
-        "results": [{
-            "title": "T",
-            "url": "http://a",
-            "text": "C"
-        }]
-    }, None),
-    Provider.GOOGLE_CSE: ({
-        "items": [{
-            "title": "T",
-            "link": "http://a",
-            "snippet": "C"
-        }]
-    }, None),
-    Provider.BING: ({
-        "webPages": {
-            "value": [{
-                "name": "T",
-                "url": "http://a",
-                "snippet": "C"
-            }]
-        }
-    }, None),
-    Provider.SERPAPI: ({
-        "organic_results": [{
-            "title": "T",
-            "link": "http://a",
-            "snippet": "C"
-        }],
-        "answer_box": {
-            "answer": "ANS"
-        }
-    }, "ANS"),
-    Provider.YOU: ({
-        "hits": [{
-            "title": "T",
-            "url": "http://a",
-            "snippets": ["C", "extra"]
-        }]
-    }, None),
-    Provider.JINA: ({
-        "data": [{
-            "title": "T",
-            "url": "http://a",
-            "content": "C"
-        }]
-    }, None),
-    Provider.PERPLEXITY: ({
-        "choices": [{
-            "message": {
-                "content": "ANS"
-            }
-        }],
-        "citations": ["http://a"]
-    }, "ANS"),
+    Provider.TAVILY: ({"results": [{"title": "T", "url": "http://a", "content": "C"}], "answer": "ANS"}, "ANS"),
+    Provider.SERPER: (
+        {"organic": [{"title": "T", "link": "http://a", "snippet": "C"}], "answerBox": {"answer": "ANS"}},
+        "ANS",
+    ),
+    Provider.BRAVE: ({"web": {"results": [{"title": "T", "url": "http://a", "description": "C"}]}}, None),
+    Provider.EXA: ({"results": [{"title": "T", "url": "http://a", "text": "C"}]}, None),
+    Provider.GOOGLE_CSE: ({"items": [{"title": "T", "link": "http://a", "snippet": "C"}]}, None),
+    Provider.BING: ({"webPages": {"value": [{"name": "T", "url": "http://a", "snippet": "C"}]}}, None),
+    Provider.SERPAPI: (
+        {"organic_results": [{"title": "T", "link": "http://a", "snippet": "C"}], "answer_box": {"answer": "ANS"}},
+        "ANS",
+    ),
+    Provider.YOU: ({"hits": [{"title": "T", "url": "http://a", "snippets": ["C", "extra"]}]}, None),
+    Provider.JINA: ({"data": [{"title": "T", "url": "http://a", "content": "C"}]}, None),
+    Provider.PERPLEXITY: ({"choices": [{"message": {"content": "ANS"}}], "citations": ["http://a"]}, "ANS"),
 }
 
 
@@ -252,12 +187,11 @@ def test_max_results_trims_the_list():
 
 def test_api_key_override_bypasses_env():
     """A key on the config is used even with nothing in the environment."""
-    resp = search("q",
-                  WebSearchConfig(provider="tavily", api_key="explicit"),
-                  transport=lambda req: {
-                      "results": [],
-                      "answer": None
-                  })
+    resp = search(
+        "q",
+        WebSearchConfig(provider="tavily", api_key="explicit"),
+        transport=lambda req: {"results": [], "answer": None},
+    )
     assert resp.provider == "tavily" and resp.results == []
 
 

@@ -13,22 +13,23 @@ def generate_config():
     cross-warp optimizations.
     """
     return [
-        triton.Config(kwargs={'BLOCK_SIZE': b}, num_warps=w)
+        triton.Config(kwargs={"BLOCK_SIZE": b}, num_warps=w)
         for b, w in itertools.product([16, 32, 64, 256, 512, 1024], [1, 2, 4, 8, 16, 32])
     ]
 
 
-@triton.autotune(configs=generate_config(), key=['N', 'M'], cache_results=True)
+@triton.autotune(configs=generate_config(), key=["N", "M"], cache_results=True)
 @triton.jit()
 def _kernel(
-        alpha,
-        beta,
-        C,  # (N, N)
-        A,  # (N, M)
-        B,  # (N, M)
-        BLOCK_SIZE: tl.constexpr,
-        N: tl.constexpr,
-        M: tl.constexpr):
+    alpha,
+    beta,
+    C,  # (N, N)
+    A,  # (N, M)
+    B,  # (N, M)
+    BLOCK_SIZE: tl.constexpr,
+    N: tl.constexpr,
+    M: tl.constexpr,
+):
     i = tl.program_id(axis=0)
     j = tl.program_id(axis=1)
     if j >= i + 1:
@@ -39,7 +40,7 @@ def _kernel(
     # Perform a parallel reduction over A[i, k] and A[j, k] simultaneously.
     # The parallelism is introduced similarly as we did in ASL:
     # 'BLOCK_SIZE' many accumulators are used that we sum up at the end.
-    s = tl.zeros((BLOCK_SIZE, ), c_ptr.dtype.element_ty)
+    s = tl.zeros((BLOCK_SIZE,), c_ptr.dtype.element_ty)
     for k in range(tl.cdiv(M, BLOCK_SIZE)):
         tile, mask = get_1d_tile_offsets(k * BLOCK_SIZE, BLOCK_SIZE, M)
 
@@ -75,7 +76,7 @@ def kernel(alpha, beta, C, A, B, N, M):
         for k in range(A.shape[1]):
             C[i, :i + 1] += (A[:i + 1, k] * alpha * B[i, k] +
                              B[:i + 1, k] * alpha * A[i, k])
-                             
+
     that is implemented as:
 
     for i in range(A.shape[0]):
@@ -85,7 +86,7 @@ def kernel(alpha, beta, C, A, B, N, M):
         for j in range(i + 1):
             s = 0
             for k in range(A.shape[1]):
-                s += alpha * A[j, k] * B[i, k] 
+                s += alpha * A[j, k] * B[i, k]
                 s += alpha * B[j, k] * A[j, k]
 
             C[i, j] += s

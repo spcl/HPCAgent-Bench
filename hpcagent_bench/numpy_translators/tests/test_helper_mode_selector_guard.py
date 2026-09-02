@@ -15,6 +15,7 @@ survived to the backend could not be passed at all.
 The load-bearing assertion is not that it emits. It is WHICH arm it emits: a fold that picks the
 wrong branch still produces a program, and every value it computes is wrong.
 """
+
 import ast
 
 import numpy as np
@@ -27,15 +28,17 @@ BACKENDS = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 
 #: Three return paths on a string selector, the shape kl_div_loss ships. The arms are deliberately
 #: far apart numerically so a wrong pick cannot pass as round-off.
-MODE_SRC = ("import numpy as np\n"
-            "def _reduce(v, mode='mean'):\n"
-            " if mode == 'total':\n"
-            "  return np.sum(v)\n"
-            " if mode == 'first':\n"
-            "  return v[0]\n"
-            " return np.sum(v) / v.shape[0]\n"
-            "def f(x, out):\n"
-            " out[0] = _reduce(x * 2.0, mode='total')\n")
+MODE_SRC = (
+    "import numpy as np\n"
+    "def _reduce(v, mode='mean'):\n"
+    " if mode == 'total':\n"
+    "  return np.sum(v)\n"
+    " if mode == 'first':\n"
+    "  return v[0]\n"
+    " return np.sum(v) / v.shape[0]\n"
+    "def f(x, out):\n"
+    " out[0] = _reduce(x * 2.0, mode='total')\n"
+)
 
 
 def flags(*names):
@@ -52,10 +55,12 @@ def test_a_mode_compare_is_a_static_flag_test():
 
 @pytest.mark.parametrize(
     "expr,reason",
-    [("mode == other", "neither side is a literal, so nothing is decided"),
-     ("thing == 'total'", "the name is not a parameter every call site pins to a literal"),
-     ("mode < 'total'", "an ordering compare is not a selector"),
-     ("mode == 'a' == 'b'", "a chained compare has no single decidable pair")],
+    [
+        ("mode == other", "neither side is a literal, so nothing is decided"),
+        ("thing == 'total'", "the name is not a parameter every call site pins to a literal"),
+        ("mode < 'total'", "an ordering compare is not a selector"),
+        ("mode == 'a' == 'b'", "a chained compare has no single decidable pair"),
+    ],
 )
 def test_an_undecidable_compare_is_not_a_static_flag_test(expr, reason):
     """Fusing an undecidable guard would leave an ``IfExp`` over ARRAY branches standing, which C's
@@ -68,11 +73,7 @@ def test_the_selected_arm_is_the_one_the_reference_takes():
     """Every backend, against the numpy reference's own answer. ``mode='total'`` selects the SUM,
     and the mean arm it must not select differs by a factor of eight here."""
     x = np.arange(1.0, 9.0)
-    verdicts = run_op(MODE_SRC,
-                      "f", {"x": x}, {"out": (1, )}, {"N": 8},
-                      shapes={
-                          "x": "(N,)",
-                          "out": "(N,)"
-                      },
-                      backends=BACKENDS)
+    verdicts = run_op(
+        MODE_SRC, "f", {"x": x}, {"out": (1,)}, {"N": 8}, shapes={"x": "(N,)", "out": "(N,)"}, backends=BACKENDS
+    )
     assert all(v == "ok" or v.startswith("skip") for v in verdicts.values()), verdicts

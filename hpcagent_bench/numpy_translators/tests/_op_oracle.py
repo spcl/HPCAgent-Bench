@@ -10,6 +10,7 @@ flags and ctypes invoke so the comparison logic stays in one place.
 ``run_op(src, func, inputs, syms=...)`` returns ``{backend: "ok"|"skip:..."|
 "FAIL:..."}`` exactly like ``numerical_oracle.run_kernel``.
 """
+
 import json
 import pathlib
 import subprocess
@@ -31,12 +32,14 @@ sys.path.insert(0, str(_REPO / "tests"))
 import numerical_oracle as _no  # noqa: E402
 
 
-def _bench_info(func: str,
-                inputs: List[str],
-                outputs: List[str],
-                shapes: Dict[str, str],
-                syms: Dict[str, int],
-                dtypes: Dict[str, str] = None) -> Dict:
+def _bench_info(
+    func: str,
+    inputs: List[str],
+    outputs: List[str],
+    shapes: Dict[str, str],
+    syms: Dict[str, int],
+    dtypes: Dict[str, str] = None,
+) -> Dict:
     """Synthesize the legacy bench_info the translator front end consumes.
 
     The kernel signature is ``inputs ++ outputs`` in order, so ``input_args``
@@ -56,9 +59,7 @@ def _bench_info(func: str,
             "relative_path": "",
             "module_name": func,
             "func_name": func,
-            "parameters": {
-                "S": dict(syms)
-            },
+            "parameters": {"S": dict(syms)},
             "input_args": all_args,
             "array_args": array_args,
             "output_args": outputs,
@@ -74,6 +75,7 @@ def _emit_native(npy: pathlib.Path, bi: pathlib.Path, out: pathlib.Path, base: s
     from numpyto_c.bindings import emit_binding
     from numpyto_fortran.emit import emit_fortran
     from numpyto_fortran.intrinsics import renders_natively as fortran_renders_natively
+
     out.mkdir(parents=True, exist_ok=True)
     kir = lower(parse_kernel(npy, bi))
     (out / f"{base}.c").write_text(emit_c(kir, fn_name=base))
@@ -86,17 +88,19 @@ def _emit_native(npy: pathlib.Path, bi: pathlib.Path, out: pathlib.Path, base: s
     return True
 
 
-def run_op(src: str,
-           func: str,
-           inputs: Dict[str, np.ndarray],
-           outputs: Dict[str, tuple],
-           syms: Dict[str, int],
-           shapes: Dict[str, str] = None,
-           rtol: float = 1e-9,
-           atol: float = 1e-9,
-           backends=("c", "cpp", "fortran", "numba", "pythran", "jax"),
-           skip_backends: Dict[str, str] = None,
-           dtypes: Dict[str, str] = None) -> Dict[str, str]:
+def run_op(
+    src: str,
+    func: str,
+    inputs: Dict[str, np.ndarray],
+    outputs: Dict[str, tuple],
+    syms: Dict[str, int],
+    shapes: Dict[str, str] = None,
+    rtol: float = 1e-9,
+    atol: float = 1e-9,
+    backends=("c", "cpp", "fortran", "numba", "pythran", "jax"),
+    skip_backends: Dict[str, str] = None,
+    dtypes: Dict[str, str] = None,
+) -> Dict[str, str]:
     """Emit ``src``'s ``func`` for each backend, run it, compare to numpy.
 
     :param inputs: name -> concrete numpy array / scalar (kernel call order is
@@ -114,6 +118,7 @@ def run_op(src: str,
     """
     skip_backends = skip_backends or {}
     import shutil
+
     status: Dict[str, str] = {}
     # numpy reference.
     # Effective element types: read each complex INPUT array's ACTUAL dtype
@@ -123,8 +128,7 @@ def run_op(src: str,
     # drop the imaginary part of a complex result). ``.real`` / ``.imag`` accessors
     # are only meaningful when the operand is declared with its true complex type.
     eff_dtypes: Dict[str, str] = {
-        n: str(v.dtype)
-        for n, v in inputs.items() if isinstance(v, np.ndarray) and np.iscomplexobj(v)
+        n: str(v.dtype) for n, v in inputs.items() if isinstance(v, np.ndarray) and np.iscomplexobj(v)
     }
     eff_dtypes.update(dtypes or {})
 
@@ -152,12 +156,13 @@ def run_op(src: str,
             # output is not complex, so skip the probe rather than fail a CORRECT kernel --
             # this used to force such kernels to route compound ops through scalar locals.
             _probed = False
-        for n in (outputs if _probed else ()):
+        for n in outputs if _probed else ():
             if _np_dtype(n) is not np.complex128 and np.any(np.asarray(_sc[n]).imag != 0):
                 raise AssertionError(
                     f"run_op: output {n!r} has a nonzero imaginary part but was declared real -- pass "
                     f"dtypes={{{n!r}: 'complex128'}} (else the numpy reference truncates it and backends "
-                    f"that also truncate spuriously agree)")
+                    f"that also truncate spuriously agree)"
+                )
     np_in = {n: (v.copy() if isinstance(v, np.ndarray) else v) for n, v in inputs.items()}
     out_init = {n: np.zeros(sh, dtype=_np_dtype(n)) for n, sh in outputs.items()}
     npfn(*[np_in[n] for n in inputs], *[out_init[n] for n in outputs])
@@ -196,10 +201,11 @@ def run_op(src: str,
                     continue
                 so = tdp / f"lib{base}_{b}.so"
                 link = _no._ISOPAR_LINK if b == _no.ISOPAR else []
-                cc = subprocess.run(_no.COMPILE["cpp" if b == _no.ISOPAR else b] +
-                                    [str(tdp / f"{base}{ext[b]}"), "-o", str(so)] + link,
-                                    capture_output=True,
-                                    text=True)
+                cc = subprocess.run(
+                    _no.COMPILE["cpp" if b == _no.ISOPAR else b] + [str(tdp / f"{base}{ext[b]}"), "-o", str(so)] + link,
+                    capture_output=True,
+                    text=True,
+                )
                 if cc.returncode:
                     status[b] = f"FAIL:compile:{cc.stderr[-300:]}"
                     continue
@@ -210,8 +216,18 @@ def run_op(src: str,
                     # runs it in a child and reports the crash as a ``FAIL`` string.
                     # frozenset(): these kernels are ad-hoc numpy source with no manifest, so no
                     # buffer is tagged index_array and nothing is rebased at the seam.
-                    status[b] = _no._invoke_isolated("cpp" if b == _no.ISOPAR else b, binding, so, by, syms, expected,
-                                                     list(outputs), rtol, atol, frozenset())
+                    status[b] = _no._invoke_isolated(
+                        "cpp" if b == _no.ISOPAR else b,
+                        binding,
+                        so,
+                        by,
+                        syms,
+                        expected,
+                        list(outputs),
+                        rtol,
+                        atol,
+                        frozenset(),
+                    )
                 except Exception as exc:  # noqa: BLE001
                     status[b] = f"FAIL:{type(exc).__name__}:{exc}"
             elif b == "numba":
@@ -229,6 +245,7 @@ def _shape_tokens(v: np.ndarray) -> List[str]:
 
 def _run_numba(npy, bi, func, inputs, outputs, syms, expected, rtol, atol, capture_return=False) -> str:
     import importlib.util
+
     if importlib.util.find_spec("numba") is None:
         return "skip:not-installed"
     # Emit through NumpyToNumba (kir threaded) so the SAME desugar the real oracle
@@ -239,6 +256,7 @@ def _run_numba(npy, bi, func, inputs, outputs, syms, expected, rtol, atol, captu
     from numpyto_numba.emit import emit_numba
     from numpyto_common.frontend import parse_kernel
     from numpyto_common.lowering import lower
+
     try:
         nb_src = emit_numba(npy.read_text(), kir=lower(parse_kernel(npy, bi)))
     except Exception as exc:  # noqa: BLE001
@@ -271,11 +289,13 @@ def _run_numba(npy, bi, func, inputs, outputs, syms, expected, rtol, atol, captu
 def _run_pythran(npy, bi, func, inputs, outputs, syms, expected, rtol, atol, tdp, capture_return=False) -> str:
     import importlib.util
     import shutil
+
     if not shutil.which("pythran"):
         return "skip:not-installed"
     from numpyto_pythran.emit import emit_pythran
     from numpyto_common.frontend import parse_kernel
     from numpyto_common.lowering import lower
+
     try:
         py_src = emit_pythran(npy.read_text(), lower(parse_kernel(npy, bi)))
     except Exception as exc:  # noqa: BLE001
@@ -301,6 +321,7 @@ def _run_pythran(npy, bi, func, inputs, outputs, syms, expected, rtol, atol, tdp
     # The emitter may append free size symbols (``M, N``) as trailing scalar
     # params; recover them from the emitted signature so the call arity matches.
     import ast as _ast
+
     fndef = next(n for n in _ast.walk(_ast.parse(py_src)) if isinstance(n, _ast.FunctionDef) and n.name == func)
     extra = [a.arg for a in fndef.args.args if a.arg in syms and a.arg not in inputs and a.arg not in outputs]
     try:
@@ -325,6 +346,7 @@ def _run_jax(src, func, inputs, outputs, syms, expected, rtol, atol, capture_ret
     import select
     import signal
     import time
+
     if importlib.util.find_spec("jax") is None:
         return "skip:not-installed"
     # jax is imported ONLY in the fork child, so the parent normally stays jax-free and the
@@ -393,6 +415,7 @@ def _jax_child(src, func, inputs, outputs, expected, rtol, atol, capture_return=
     from numpyto_jax.core import emit_jax
     import jax
     import jax.numpy as jnp
+
     jax.config.update("jax_enable_x64", True)
     try:
         jsrc = emit_jax(src, func)
@@ -474,16 +497,18 @@ def _map_returns(ret, out_names: List[str]):
     return got
 
 
-def run_return_op(src: str,
-                  func: str,
-                  inputs: Dict[str, np.ndarray],
-                  returns: Dict[str, tuple],
-                  syms: Dict[str, int],
-                  shapes: Dict[str, str] = None,
-                  rtol: float = 1e-9,
-                  atol: float = 1e-9,
-                  backends=("c", "cpp", "fortran", "numba", "pythran", "jax"),
-                  skip_backends: Dict[str, str] = None) -> Dict[str, str]:
+def run_return_op(
+    src: str,
+    func: str,
+    inputs: Dict[str, np.ndarray],
+    returns: Dict[str, tuple],
+    syms: Dict[str, int],
+    shapes: Dict[str, str] = None,
+    rtol: float = 1e-9,
+    atol: float = 1e-9,
+    backends=("c", "cpp", "fortran", "numba", "pythran", "jax"),
+    skip_backends: Dict[str, str] = None,
+) -> Dict[str, str]:
     """Validate a RETURN-style kernel (``def f(x): return <expr>``) across backends.
 
     The complement of :func:`run_op` (which is in-place-only: its numpy reference
@@ -503,6 +528,7 @@ def run_return_op(src: str,
     """
     skip_backends = skip_backends or {}
     import shutil
+
     status: Dict[str, str] = {}
     # numpy reference: call the kernel, capture + map the actual return value(s).
     ns: Dict[str, object] = {}
@@ -510,8 +536,10 @@ def run_return_op(src: str,
     np_in = {n: (v.copy() if isinstance(v, np.ndarray) else v) for n, v in inputs.items()}
     got = _map_returns(ns[func](*[np_in[n] for n in inputs]), list(returns))
     if isinstance(got, str):
-        raise ValueError(f"numpy reference produced no value for a promoted return ({got}); "
-                         f"check the `returns` names/order match the kernel")
+        raise ValueError(
+            f"numpy reference produced no value for a promoted return ({got}); "
+            f"check the `returns` names/order match the kernel"
+        )
     expected = {nm: _no._norm(got[nm].reshape(sh)) for nm, sh in returns.items()}
 
     if shapes is None:
@@ -528,15 +556,11 @@ def run_return_op(src: str,
             "relative_path": "",
             "module_name": func,
             "func_name": func,
-            "parameters": {
-                "S": dict(syms)
-            },
+            "parameters": {"S": dict(syms)},
             "input_args": list(inputs),
             "array_args": array_args,
             "output_args": [],
-            "init": {
-                "shapes": shapes
-            },
+            "init": {"shapes": shapes},
         }
     }
     by = {**inputs}
@@ -566,33 +590,25 @@ def run_return_op(src: str,
                     status[b] = "skip:no-compiler"
                     continue
                 so = tdp / f"lib{base}_{b}.so"
-                cc = subprocess.run(_no.COMPILE[b] +
-                                    [str(tdp / f"{base}{ext[b]}"), "-o", str(so)],
-                                    capture_output=True,
-                                    text=True)
+                cc = subprocess.run(
+                    _no.COMPILE[b] + [str(tdp / f"{base}{ext[b]}"), "-o", str(so)], capture_output=True, text=True
+                )
                 if cc.returncode:
                     status[b] = f"FAIL:compile:{cc.stderr[-300:]}"
                     continue
                 try:
                     # frozenset(): ad-hoc numpy source, no manifest, so no buffer is index_array-tagged.
-                    status[b] = _no._invoke_isolated(b, binding, so, by, syms, expected, out_names, rtol, atol,
-                                                     frozenset())
+                    status[b] = _no._invoke_isolated(
+                        b, binding, so, by, syms, expected, out_names, rtol, atol, frozenset()
+                    )
                 except Exception as exc:  # noqa: BLE001
                     status[b] = f"FAIL:{type(exc).__name__}:{exc}"
             elif b == "numba":
                 status[b] = _run_numba(npy, bi, func, inputs, returns, syms, expected, rtol, atol, capture_return=True)
             elif b == "pythran":
-                status[b] = _run_pythran(npy,
-                                         bi,
-                                         func,
-                                         inputs,
-                                         returns,
-                                         syms,
-                                         expected,
-                                         rtol,
-                                         atol,
-                                         tdp,
-                                         capture_return=True)
+                status[b] = _run_pythran(
+                    npy, bi, func, inputs, returns, syms, expected, rtol, atol, tdp, capture_return=True
+                )
             elif b == "jax":
                 status[b] = _run_jax(src, func, inputs, returns, syms, expected, rtol, atol, capture_return=True)
     return status

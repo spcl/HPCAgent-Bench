@@ -91,7 +91,7 @@ def pluto_if_conditions(text: str) -> List[str]:
         for j in range(start, len(text)):
             depth += (text[j] == "(") - (text[j] == ")")
             if not depth:
-                out.append(text[start + 1:j])
+                out.append(text[start + 1 : j])
                 break
     return out
 
@@ -143,11 +143,46 @@ def _is_int_cast(node: ast.AST) -> bool:
 
 
 #: libm functions with a <name>f single-precision variant, emitted in a float32 kernel (see _math_name).
-_FLOATABLE = frozenset({
-    "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "exp", "exp2",
-    "expm1", "log", "log2", "log10", "log1p", "sqrt", "cbrt", "hypot", "atan2", "pow", "floor", "ceil", "round", "rint",
-    "trunc", "fabs", "fmod", "copysign", "erf", "erfc", "tgamma", "lgamma"
-})
+_FLOATABLE = frozenset(
+    {
+        "sin",
+        "cos",
+        "tan",
+        "asin",
+        "acos",
+        "atan",
+        "sinh",
+        "cosh",
+        "tanh",
+        "asinh",
+        "acosh",
+        "atanh",
+        "exp",
+        "exp2",
+        "expm1",
+        "log",
+        "log2",
+        "log10",
+        "log1p",
+        "sqrt",
+        "cbrt",
+        "hypot",
+        "atan2",
+        "pow",
+        "floor",
+        "ceil",
+        "round",
+        "rint",
+        "trunc",
+        "fabs",
+        "fmod",
+        "copysign",
+        "erf",
+        "erfc",
+        "tgamma",
+        "lgamma",
+    }
+)
 
 #: u?int{8,16,32}_t -- integer C types narrower than the int64 ABI integer.
 _NARROW_INT_CT = re.compile(r"u?int(8|16|32)_t")
@@ -174,6 +209,7 @@ def _is_narrow_int(dtype: str) -> bool:
 
 class _Fp8Fns(NamedTuple):
     """The three prelude entry points for one fp8 format."""
+
     promote: str  # storage byte -> float
     demote: str  # float -> storage byte
     round: str  # float -> float, rounded to the fp8 grid
@@ -246,7 +282,7 @@ def _emit_signature(kir: KernelIR, fn_name: str, order: Optional[List[str]] = No
     arr_by_name = {a.name: a for a in kir.arrays}
     sca_by_name = {s.name: s for s in kir.scalars}
     assigned = _assigned_names(kir.tree)
-    for name in (kir.param_order() if order is None else order):
+    for name in kir.param_order() if order is None else order:
         if name in sym_by_name:
             # int64_t (canonical); const per abi_contract Sec. 5 unless the body reuses the symbol
             # as a local -- see _assigned_names.
@@ -308,6 +344,7 @@ class _IsoparRef(NamedTuple):
     and ``const`` differs by one. The outer axes belong in ``key``: ``rows[2*i, j]`` and
     ``rows[2*i+1, j]`` sweep the same last axis but two DIFFERENT rows.
     """
+
     name: str  # array name
     ptr: str  # pointer to the range's first element
     prev: str  # the element one BEFORE that (a scan's init), as an lvalue
@@ -490,8 +527,9 @@ class _CBodyEmitter(BaseEmitter):
         if not isinstance(target, ast.Name):
             raise NotImplementedError("only single-name for-target supported")
         var = target.id
-        if not (isinstance(node.iter, ast.Call) and isinstance(node.iter.func, ast.Name)
-                and node.iter.func.id == "range"):
+        if not (
+            isinstance(node.iter, ast.Call) and isinstance(node.iter.func, ast.Name) and node.iter.func.id == "range"
+        ):
             raise NotImplementedError("only ``for x in range(...)`` supported")
         args = node.iter.args
         if len(args) == 1:
@@ -555,9 +593,7 @@ class _CBodyEmitter(BaseEmitter):
         else:
             inc = f"{var} += {step}"
         # Loop iterators are the int64 ABI integer, matching the size symbols they range over.
-        return (f"{omp_prefix}{indent}for ({_c_type('int')} {var} = {lo}; {cond}; {inc}) {{\n"
-                f"{body}\n"
-                f"{indent}}}")
+        return f"{omp_prefix}{indent}for ({_c_type('int')} {var} = {lo}; {cond}; {inc}) {{\n{body}\n{indent}}}"
 
     # ----- ISO standard-algorithm forms (cpp_isopar) ----------------------
 
@@ -704,8 +740,9 @@ class _CBodyEmitter(BaseEmitter):
         test = f"({hi}) > 0" if lo == "0" else f"({hi}) > ({lo})"
         return f"{indent}const {_c_type('int')} {name} = {test} ? {span} : 0;", name
 
-    def _isopar_lambda(self, expr: ast.AST, by_id: Dict[int, str], param_dtypes: Dict[str, str],
-                       cast_to: str) -> Optional[str]:
+    def _isopar_lambda(
+        self, expr: ast.AST, by_id: Dict[int, str], param_dtypes: Dict[str, str], cast_to: str
+    ) -> Optional[str]:
         """The element-wise callable for ``expr``: its element reads become parameters, and the
         result is cast to the type the loop's assignment would have converted it to anyway.
 
@@ -717,8 +754,8 @@ class _CBodyEmitter(BaseEmitter):
         """
         helpers = {h.kernel_name for h in self.kir.helpers}
         if helpers and any(
-                isinstance(c, ast.Call) and isinstance(c.func, ast.Name) and c.func.id in helpers
-                for c in ast.walk(expr)):
+            isinstance(c, ast.Call) and isinstance(c.func, ast.Name) and c.func.id in helpers for c in ast.walk(expr)
+        ):
             return None
         new = _ElementSubst(by_id).visit(expr)
         self.isopar_param_dtypes = param_dtypes
@@ -747,8 +784,9 @@ class _CBodyEmitter(BaseEmitter):
                 out.append(r)
         return out
 
-    def _isopar_map(self, target: ast.Subscript, rhs: ast.AST, idx: str, indent: str, lo: str,
-                    hi: str) -> Optional[str]:
+    def _isopar_map(
+        self, target: ast.Subscript, rhs: ast.AST, idx: str, indent: str, lo: str, hi: str
+    ) -> Optional[str]:
         """One store per iteration over a contiguous range: fill / copy / transform, or a scan when
         the destination reads its own PREVIOUS element."""
         dst = self._isopar_ref(target, idx, lo)
@@ -782,19 +820,27 @@ class _CBodyEmitter(BaseEmitter):
             # The value is evaluated ONCE, at the call site, and bound to a temporary: it is not an
             # element access function, so a helper call in it is still fine under par_unseq.
             value = self.emit_expr(rhs)  # loop-invariant right-hand side
-            return (f"{decl}\n{indent}std::fill({_ISOPAR_POLICY}, {dst.ptr}, {dst.ptr} + {count}, "
-                    f"static_cast<{dst_ct}>({value}));")
+            return (
+                f"{decl}\n{indent}std::fill({_ISOPAR_POLICY}, {dst.ptr}, {dst.ptr} + {count}, "
+                f"static_cast<{dst_ct}>({value}));"
+            )
         src = distinct[0]
-        if (len(distinct) == 1 and isinstance(rhs, ast.Subscript) and src.name != dst.name
-                and _c_type(src.dtype) == dst_ct):
+        if (
+            len(distinct) == 1
+            and isinstance(rhs, ast.Subscript)
+            and src.name != dst.name
+            and _c_type(src.dtype) == dst_ct
+        ):
             return f"{decl}\n{indent}std::copy({_ISOPAR_POLICY}, {src.ptr}, {src.ptr} + {count}, {dst.ptr});"
         by_id, param_dtypes = self._isopar_params(found, distinct)
         lam = self._isopar_lambda(rhs, by_id, param_dtypes, dst_ct)
         if lam is None:
             return None
         second = f", {distinct[1].ptr}" if len(distinct) == 2 else ""
-        return (f"{decl}\n{indent}std::transform({_ISOPAR_POLICY}, {src.ptr}, {src.ptr} + {count}{second}, "
-                f"{dst.ptr}, {lam});")
+        return (
+            f"{decl}\n{indent}std::transform({_ISOPAR_POLICY}, {src.ptr}, {src.ptr} + {count}{second}, "
+            f"{dst.ptr}, {lam});"
+        )
 
     def _isopar_scan(self, dst: _IsoparRef, rhs: ast.AST, found, indent: str, lo: str, hi: str) -> Optional[str]:
         """``dst[j] = dst[j-1] <+|*> src[j]`` -> ``std::inclusive_scan``.
@@ -820,14 +866,17 @@ class _CBodyEmitter(BaseEmitter):
             # writes cannot race it; the carried dependence itself is the algorithm's, and
             # inclusive_scan is specified over any association of the combine (unlike partial_sum).
             # The weaker policy here is a toolchain bug, not a precondition -- see _ISOPAR_SCAN_POLICY.
-            return (f"{decl}\n{indent}if ({count} > 0) {{\n"
-                    f"{indent}  std::inclusive_scan({_ISOPAR_SCAN_POLICY}, {src.ptr}, {src.ptr} + {count}, "
-                    f"{dst.ptr}, {combine}<{_c_type(dst.dtype)}>{{}}, {dst.prev});\n"
-                    f"{indent}}}")
+            return (
+                f"{decl}\n{indent}if ({count} > 0) {{\n"
+                f"{indent}  std::inclusive_scan({_ISOPAR_SCAN_POLICY}, {src.ptr}, {src.ptr} + {count}, "
+                f"{dst.ptr}, {combine}<{_c_type(dst.dtype)}>{{}}, {dst.prev});\n"
+                f"{indent}}}"
+            )
         return None
 
-    def _isopar_reduce(self, acc: Tuple[str, str, str], op: str, other: ast.AST, idx: str, indent: str, lo: str,
-                       hi: str) -> Optional[str]:
+    def _isopar_reduce(
+        self, acc: Tuple[str, str, str], op: str, other: ast.AST, idx: str, indent: str, lo: str, hi: str
+    ) -> Optional[str]:
         """One value accumulated under an associative, commutative combine -> ``std::reduce`` /
         ``std::transform_reduce``.
 
@@ -859,27 +908,35 @@ class _CBodyEmitter(BaseEmitter):
         # The element is accumulated as-is: no transform needed, and no conversion to spell.
         if uniform and len(distinct) == 1 and isinstance(other, ast.Subscript):
             extra = "" if op == "+" else f", {binary}"
-            return (f"{decl}\n{indent}{acc_lvalue} = std::reduce({_ISOPAR_POLICY}, {first}, {last}, "
-                    f"{acc_lvalue}{extra});")
+            return (
+                f"{decl}\n{indent}{acc_lvalue} = std::reduce({_ISOPAR_POLICY}, {first}, {last}, {acc_lvalue}{extra});"
+            )
         # ``acc + a[i]*b[i]``: transform_reduce's default multiplies/plus IS this expression.
-        if (uniform and len(distinct) == 2 and op == "+" and isinstance(other, ast.BinOp)
-                and isinstance(other.op, ast.Mult)
-                and {id(other.left), id(other.right)} == {id(found[0][0]), id(found[1][0])}):
-            return (f"{decl}\n{indent}{acc_lvalue} = std::transform_reduce({_ISOPAR_POLICY}, {first}, {last}, "
-                    f"{distinct[1].ptr}, {acc_lvalue});")
+        if (
+            uniform
+            and len(distinct) == 2
+            and op == "+"
+            and isinstance(other, ast.BinOp)
+            and isinstance(other.op, ast.Mult)
+            and {id(other.left), id(other.right)} == {id(found[0][0]), id(found[1][0])}
+        ):
+            return (
+                f"{decl}\n{indent}{acc_lvalue} = std::transform_reduce({_ISOPAR_POLICY}, {first}, {last}, "
+                f"{distinct[1].ptr}, {acc_lvalue});"
+            )
         by_id, param_dtypes = self._isopar_params(found, distinct)
         lam = self._isopar_lambda(other, by_id, param_dtypes, acc_ct)
         if lam is None:
             return None
         second = f"{distinct[1].ptr}, " if len(distinct) == 2 else ""
-        return (f"{decl}\n{indent}{acc_lvalue} = std::transform_reduce({_ISOPAR_POLICY}, {first}, {last}, "
-                f"{second}{acc_lvalue}, {binary}, {lam});")
+        return (
+            f"{decl}\n{indent}{acc_lvalue} = std::transform_reduce({_ISOPAR_POLICY}, {first}, {last}, "
+            f"{second}{acc_lvalue}, {binary}, {lam});"
+        )
 
     def _emit_while(self, node: ast.While, indent: str) -> str:
         body = self.emit_block(node.body, indent + "  ")
-        return (f"{indent}while ({self.emit_expr(node.test)}) {{\n"
-                f"{body}\n"
-                f"{indent}}}")
+        return f"{indent}while ({self.emit_expr(node.test)}) {{\n{body}\n{indent}}}"
 
     def live_heap_locals(self) -> List[str]:
         """Heap buffers alive at this point, innermost branch first -- what an exit here must release.
@@ -890,7 +947,9 @@ class _CBodyEmitter(BaseEmitter):
         leaks it once per call, and the caller is a benchmark loop.
         """
         in_branch = [
-            name for frame in reversed(self.branch_stack) for name, branch in self.branch_local_owner.items()
+            name
+            for frame in reversed(self.branch_stack)
+            for name, branch in self.branch_local_owner.items()
             if branch == frame and name in self._branch_declared
         ]
         return in_branch + list(self.heap_locals)
@@ -910,27 +969,35 @@ class _CBodyEmitter(BaseEmitter):
                 # ill-typed (a pointer where a double is declared), and freeing it here would hand
                 # back a dangling one. An array return is supposed to reach _rewrite_returns_to_outparam
                 # instead, so this is a misclassified helper -- say which, rather than emit either.
-                raise NotImplementedError(f"helper returns heap buffer {node.value.id!r} from a scalar "
-                                          "return; an array return must go through the out-param path")
+                raise NotImplementedError(
+                    f"helper returns heap buffer {node.value.id!r} from a scalar "
+                    "return; an array return must go through the out-param path"
+                )
             val = self.emit_expr(node.value)
             if not live:
                 return f"{indent}return {val};"
             # The returned expression may read a buffer this exit releases (``return t[n - 1];``),
             # so latch the value into a temporary before any free runs.
-            return "\n".join([
-                f"{indent}{{",
-                f"{indent}  {self.return_ctype} __ret = {val};",
-                *[f"{indent}  free({name});" for name in live],
-                f"{indent}  return __ret;",
-                f"{indent}}}",
-            ])
+            return "\n".join(
+                [
+                    f"{indent}{{",
+                    f"{indent}  {self.return_ctype} __ret = {val};",
+                    *[f"{indent}  free({name});" for name in live],
+                    f"{indent}  return __ret;",
+                    f"{indent}}}",
+                ]
+            )
         # Array return: write the value into the out-param (whole-array assign), then return void.
-        assign = ast.Assign(targets=[
-            ast.Subscript(value=ast.Name(id=mode, ctx=ast.Load()),
-                          slice=ast.Slice(lower=None, upper=None, step=None),
-                          ctx=ast.Store())
-        ],
-                            value=node.value)
+        assign = ast.Assign(
+            targets=[
+                ast.Subscript(
+                    value=ast.Name(id=mode, ctx=ast.Load()),
+                    slice=ast.Slice(lower=None, upper=None, step=None),
+                    ctx=ast.Store(),
+                )
+            ],
+            value=node.value,
+        )
         ast.copy_location(assign, node)
         ast.fix_missing_locations(assign)
         return "\n".join([self._emit_assign(assign, indent), *frees, f"{indent}return;"])
@@ -941,8 +1008,9 @@ class _CBodyEmitter(BaseEmitter):
         chained = bool(node.orelse) and len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If)
         else_str = ""
         if node.orelse:
-            else_str = (self._emit_if(node.orelse[0], indent) if chained else self._branch_block(
-                node.orelse, indent + "  "))
+            else_str = (
+                self._emit_if(node.orelse[0], indent) if chained else self._branch_block(node.orelse, indent + "  ")
+            )
         # A guard whose branches are both empty (a dropped validation raise) has no effect; drop the whole if.
         if not then.strip() and not else_str.strip():
             return ""
@@ -971,8 +1039,12 @@ class _CBodyEmitter(BaseEmitter):
             return ""
         decls = []
         for stmt in ast.walk(node):
-            if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
-                    and stmt.targets[0].id in inline_locals):
+            if not (
+                isinstance(stmt, ast.Assign)
+                and len(stmt.targets) == 1
+                and isinstance(stmt.targets[0], ast.Name)
+                and stmt.targets[0].id in inline_locals
+            ):
                 continue
             name = stmt.targets[0].id
             shape = inline_locals.pop(name)
@@ -996,7 +1068,8 @@ class _CBodyEmitter(BaseEmitter):
         finally:
             self.branch_stack.pop()
         owned = [
-            name for name, branch in self.branch_local_owner.items()
+            name
+            for name, branch in self.branch_local_owner.items()
             if branch == id(stmts) and name in self._branch_declared
         ]
         if not owned:
@@ -1014,16 +1087,23 @@ class _CBodyEmitter(BaseEmitter):
         if len(node.targets) != 1:
             raise NotImplementedError("chained assignment not supported")
         target = node.targets[0]
-        if (isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
-                and node.value.func.id == "__hpcagent_bench_zeros__"):
+        if (
+            isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id == "__hpcagent_bench_zeros__"
+        ):
             # Per-statement shape update: each marker for a reassigned local advances the FIFO of shapes.
-            is_reassign = bool(node.value.args) and (isinstance(node.value.args[0], ast.Constant)
-                                                     and node.value.args[0].value == "__reassign__")
+            is_reassign = bool(node.value.args) and (
+                isinstance(node.value.args[0], ast.Constant) and node.value.args[0].value == "__reassign__"
+            )
             # Second marker arg (see lowering._WholeArrayAssignRewriter._expand): the RHS reads the
             # target's OWN old values, so the loop needs them still standing -- never force a fresh
             # allocation for this one, symbolic size or not.
-            self_ref = (len(node.value.args) > 1 and isinstance(node.value.args[1], ast.Constant)
-                        and bool(node.value.args[1].value))
+            self_ref = (
+                len(node.value.args) > 1
+                and isinstance(node.value.args[1], ast.Constant)
+                and bool(node.value.args[1].value)
+            )
             if isinstance(target, ast.Name):
                 t = target.id
                 fifo = self._reassign_shapes.get(t)
@@ -1055,7 +1135,7 @@ class _CBodyEmitter(BaseEmitter):
                     # NULL-initialises the name and free(NULL) is a no-op, so the first pass is safe.
                     lines = [f"{indent}free({t});"]
                     # Pluto: cast to the multidimensional pointer-to-array type matching the declaration; else flat T*.
-                    cast = (f"({c_type} (*){self.md_trailing[t]})" if t in self.md_trailing else f"({c_type} *)")
+                    cast = f"({c_type} (*){self.md_trailing[t]})" if t in self.md_trailing else f"({c_type} *)"
                     lines.append(f"{indent}{t} = {cast}malloc({_byte_count(size, c_type)});")
                     if fill is not None:
                         lines.append(self._body_fill_stmt(t, size, c_type, fill, indent))
@@ -1088,7 +1168,7 @@ class _CBodyEmitter(BaseEmitter):
                     return self._body_fill_stmt(t, size, c_type, kind, indent)
             return ""  # local already declared at top of function
         # Name = Name alias: inherit the source's current shape so downstream LHS subscripts flatten correctly.
-        if (isinstance(target, ast.Name) and isinstance(node.value, ast.Name) and node.value.id in self.array_shapes):
+        if isinstance(target, ast.Name) and isinstance(node.value, ast.Name) and node.value.id in self.array_shapes:
             self.array_shapes[target.id] = list(self.array_shapes[node.value.id])
         rhs = self.emit_expr(node.value)
         lhs = self.emit_expr(target)
@@ -1162,8 +1242,10 @@ class _CBodyEmitter(BaseEmitter):
             return cache
         used = _fp8_dtypes_used(self.kir)
         if len(used) > 1:
-            raise NotImplementedError(f"kernel {self.kir.kernel_name!r} mixes fp8 formats {used}: the grid each "
-                                      f"intermediate rounds to is ambiguous")
+            raise NotImplementedError(
+                f"kernel {self.kir.kernel_name!r} mixes fp8 formats {used}: the grid each "
+                f"intermediate rounds to is ambiguous"
+            )
         fns = _fp8_fns(used[0]) if used else None
         self._fp8_fns_cache = fns
         return fns
@@ -1220,11 +1302,10 @@ class _CBodyEmitter(BaseEmitter):
             # a ** b -> pow(a, b); on a complex base, a**2 -> a*a (cheaper), any other exponent -> cpow(a, k).
             if isinstance(node.op, ast.Pow):
                 if self._is_complex_operand(node.left):
-                    if (isinstance(node.right, ast.Constant) and node.right.value == 2):
+                    if isinstance(node.right, ast.Constant) and node.right.value == 2:
                         z = self.emit_expr(node.left)
                         return f"(({z})*({z}))"
-                    return (f"cpow({self.emit_expr(node.left)}, "
-                            f"{self.emit_expr(node.right)})")
+                    return f"cpow({self.emit_expr(node.left)}, {self.emit_expr(node.right)})"
                 return self._emit_pow(node.left, node.right)
             # a // b and a % b ALWAYS go through the emitted helpers: neither C nor C++ has
             # numpy's floor-division or sign-of-divisor modulo natively, and the helpers pick
@@ -1243,11 +1324,12 @@ class _CBodyEmitter(BaseEmitter):
             if isinstance(node.op, ast.MatMult):
                 for side in (node.left, node.right):
                     if not self._is_scalar_operand(side):
-                        raise NotImplementedError(f"matmul {ast.unparse(node)} reached emit unlowered: "
-                                                  f"'{ast.unparse(side)}' is not a scalar, so '*' would drop "
-                                                  f"the contraction")
-                return (f"({self.emit_expr(node.left)} * "
-                        f"{self.emit_expr(node.right)})")
+                        raise NotImplementedError(
+                            f"matmul {ast.unparse(node)} reached emit unlowered: "
+                            f"'{ast.unparse(side)}' is not a scalar, so '*' would drop "
+                            f"the contraction"
+                        )
+                return f"({self.emit_expr(node.left)} * {self.emit_expr(node.right)})"
             op = _BINOP.get(type(node.op))
             if op is None:
                 raise NotImplementedError(f"binop {type(node.op).__name__}")
@@ -1266,12 +1348,11 @@ class _CBodyEmitter(BaseEmitter):
         if isinstance(node, ast.Call):
             return self._emit_call(node)
         if isinstance(node, ast.IfExp):
-            return (f"({self.emit_expr(node.test)} ? "
-                    f"{self.emit_expr(node.body)} : "
-                    f"{self.emit_expr(node.orelse)})")
+            return f"({self.emit_expr(node.test)} ? {self.emit_expr(node.body)} : {self.emit_expr(node.orelse)})"
         # A bare z.real/z.imag never reaches emit: native_desugar rewrites it to np.real(z)/np.imag(z) at parse time.
-        raise NotImplementedError(f"expression {type(node).__name__} "
-                                  f"(line {vars(node).get('lineno', '?')}): {ast.unparse(node)[:120]}")
+        raise NotImplementedError(
+            f"expression {type(node).__name__} (line {vars(node).get('lineno', '?')}): {ast.unparse(node)[:120]}"
+        )
 
     def _unchain_subscript(self, node: ast.Subscript) -> Tuple[ast.AST, List[str]]:
         """Collapse a subscript chain a[i][j]... into (base_node, [i, j, ...]) for row-major flattening.
@@ -1292,9 +1373,11 @@ class _CBodyEmitter(BaseEmitter):
                 sl = cur.slice
                 elts = list(sl.elts) if isinstance(sl, ast.Tuple) else [sl]
                 if cur is not node and any(isinstance(e, ast.Slice) for e in elts):
-                    raise NotImplementedError(f"chained subscript {ast.unparse(node)[:80]} slices an inner level, "
-                                              f"so the outer index is relative to that slice and cannot be "
-                                              f"concatenated onto it")
+                    raise NotImplementedError(
+                        f"chained subscript {ast.unparse(node)[:80]} slices an inner level, "
+                        f"so the outer index is relative to that slice and cannot be "
+                        f"concatenated onto it"
+                    )
                 chain = [self.emit_expr(e) for e in elts] + chain
                 cur = cur.value
         finally:
@@ -1334,8 +1417,11 @@ class _CBodyEmitter(BaseEmitter):
         # numpy negative index a[-1] -> explicit a[N-1]; done first so flatten/chained paths below see it normalized.
         self._normalize_negative_indices(node)
         # Fold a constant-index subscript of a tuple literal: (n,)[0] -> n.
-        if isinstance(node.value, ast.Tuple) and isinstance(node.slice, ast.Constant) and isinstance(
-                node.slice.value, int):
+        if (
+            isinstance(node.value, ast.Tuple)
+            and isinstance(node.slice, ast.Constant)
+            and isinstance(node.slice.value, int)
+        ):
             elts = node.value.elts
             if -len(elts) <= node.slice.value < len(elts):
                 return self.emit_expr(elts[node.slice.value])
@@ -1416,7 +1502,7 @@ class _CBodyEmitter(BaseEmitter):
                 "exp": "cexp",
                 "log": "clog",
             }
-            if (fn in _COMPLEX_INTRINSIC and len(node.args) == 1 and self._is_complex_operand(node.args[0])):
+            if fn in _COMPLEX_INTRINSIC and len(node.args) == 1 and self._is_complex_operand(node.args[0]):
                 args = self.emit_expr(node.args[0])
                 return f"{_COMPLEX_INTRINSIC[fn]}({args})"
             # Python abs(x) on a float must be C fabs (plain abs is integer and truncates); integer operands use llabs.
@@ -1425,8 +1511,8 @@ class _CBodyEmitter(BaseEmitter):
                     return f"{self._math_name('fabs')}({self.emit_expr(node.args[0])})"
                 return f"llabs({self.emit_expr(node.args[0])})"
             # pow(complex_value, K) -> integer-2 fast path or cpow (C++ pow has no complex overload).
-            if (fn == "pow" and len(node.args) == 2 and self._is_complex_operand(node.args[0])):
-                if (isinstance(node.args[1], ast.Constant) and node.args[1].value == 2):
+            if fn == "pow" and len(node.args) == 2 and self._is_complex_operand(node.args[0]):
+                if isinstance(node.args[1], ast.Constant) and node.args[1].value == 2:
                     z = self.emit_expr(node.args[0])
                     return f"(({z})*({z}))"
                 z, w = (self.emit_expr(node.args[0]), self.emit_expr(node.args[1]))
@@ -1460,9 +1546,14 @@ class _CBodyEmitter(BaseEmitter):
             # (POLYCC-008's pluto floord/ceild, else the exact int_floor/int_ceil _Generic macro)
             # instead of C's truncating int64_t / int64_t, which a forward-substituted int/int
             # divide can reach here past _emit_true_divide (only sees a bare top-level Div).
-            if (fn in ("floor", "ceil") and len(node.args) == 1 and isinstance(node.args[0], ast.BinOp)
-                    and isinstance(node.args[0].op, ast.Div) and self._floor_ceil_div_operand_is_int(node.args[0].left)
-                    and self._floor_ceil_div_operand_is_int(node.args[0].right)):
+            if (
+                fn in ("floor", "ceil")
+                and len(node.args) == 1
+                and isinstance(node.args[0], ast.BinOp)
+                and isinstance(node.args[0].op, ast.Div)
+                and self._floor_ceil_div_operand_is_int(node.args[0].left)
+                and self._floor_ceil_div_operand_is_int(node.args[0].right)
+            ):
                 emit_div = self.emit_floordiv if fn == "floor" else self.emit_ceildiv
                 return emit_div(node.args[0].left, node.args[0].right)
             args = ", ".join(self.emit_expr(a) for a in node.args)
@@ -1471,7 +1562,7 @@ class _CBodyEmitter(BaseEmitter):
         if isinstance(node.func, ast.Attribute):
             attr = node.func.attr
             # np.<dtype>(x) scalar constructor is a typecast; emit the C cast via the registry (np.bool_ needs stripping).
-            if (isinstance(node.func.value, ast.Name) and node.func.value.id == "np" and len(node.args) == 1):
+            if isinstance(node.func.value, ast.Name) and node.func.value.id == "np" and len(node.args) == 1:
                 key = attr[:-1] if attr.endswith("_") else attr
                 if key in dtypes.REGISTRY or key in dtypes.SCALAR_KINDS:
                     return f"(({dtypes.c_type(key)})({self.emit_expr(node.args[0])}))"
@@ -1480,17 +1571,27 @@ class _CBodyEmitter(BaseEmitter):
             # copy where the reversal or permutation belonged, silently and without a diagnostic.
             if attr in _NOOP_UNARY_ATTRS and len(node.args) == 1:
                 if not self._is_scalar_operand(node.args[0]):
-                    raise NotImplementedError(f"np.{attr}({ast.unparse(node.args[0])}) reached emit on a whole "
-                                              f"array; treating it as a no-op would drop the operation")
+                    raise NotImplementedError(
+                        f"np.{attr}({ast.unparse(node.args[0])}) reached emit on a whole "
+                        f"array; treating it as a no-op would drop the operation"
+                    )
                 return self.emit_expr(node.args[0])
             # z.conjugate()/z.conj() never reaches emit (native_desugar rewrites it to np.conj(z), handled just below).
-            if (isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy") and attr in _CONJ_ATTRS
-                    and len(node.args) == 1):
+            if (
+                isinstance(node.func.value, ast.Name)
+                and node.func.value.id in ("np", "numpy")
+                and attr in _CONJ_ATTRS
+                and len(node.args) == 1
+            ):
                 self._refuse_whole_array_operand(attr, node.args[0])
                 return f"__npb_conj({self.emit_expr(node.args[0])})"
             # np.real(z)/np.imag(z): complex operand -> creal/cimag; a real operand is the value / 0.
-            if (isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy")
-                    and attr in _REAL_IMAG_ATTRS and len(node.args) == 1):
+            if (
+                isinstance(node.func.value, ast.Name)
+                and node.func.value.id in ("np", "numpy")
+                and attr in _REAL_IMAG_ATTRS
+                and len(node.args) == 1
+            ):
                 self._refuse_whole_array_operand(attr, node.args[0])
                 x = self.emit_expr(node.args[0])
                 if self._is_complex_operand(node.args[0]):
@@ -1503,12 +1604,20 @@ class _CBodyEmitter(BaseEmitter):
                 b = self.emit_expr(node.args[2])
                 return f"({c} ? {a} : {b})"
             # np.sign(x) in scalar context: same NaN-aware __npb_sign helper as the array marker.
-            if (isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy") and attr == "sign"
-                    and len(node.args) == 1):
+            if (
+                isinstance(node.func.value, ast.Name)
+                and node.func.value.id in ("np", "numpy")
+                and attr == "sign"
+                and len(node.args) == 1
+            ):
                 return f"__npb_sign({self.emit_expr(node.args[0])})"
             # np.abs(x) in scalar context: complex -> cabs, float -> fabs, integer -> llabs (mirrors builtin abs above).
-            if (isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy")
-                    and attr in ("abs", "absolute", "fabs") and len(node.args) == 1):
+            if (
+                isinstance(node.func.value, ast.Name)
+                and node.func.value.id in ("np", "numpy")
+                and attr in ("abs", "absolute", "fabs")
+                and len(node.args) == 1
+            ):
                 x = node.args[0]
                 if self._is_complex_operand(x):
                     return f"cabs({self.emit_expr(x)})"
@@ -1516,8 +1625,12 @@ class _CBodyEmitter(BaseEmitter):
                     return f"{self._math_name('fabs')}({self.emit_expr(x)})"
                 return f"llabs({self.emit_expr(x)})"
             # np.hypot(a, b) -> C99 hypot (both operands real).
-            if (isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy") and attr == "hypot"
-                    and len(node.args) == 2):
+            if (
+                isinstance(node.func.value, ast.Name)
+                and node.func.value.id in ("np", "numpy")
+                and attr == "hypot"
+                and len(node.args) == 2
+            ):
                 return f"{self._math_name('hypot')}({self.emit_expr(node.args[0])}, {self.emit_expr(node.args[1])})"
         raise NotImplementedError(f"call to {ast.unparse(node.func)} not supported")
 
@@ -1639,8 +1752,9 @@ class _CBodyEmitter(BaseEmitter):
                 return True
             return False
         if isinstance(node, ast.BinOp):
-            return (self._is_int_operand(node.left, allow_array=allow_array)
-                    and self._is_int_operand(node.right, allow_array=allow_array))
+            return self._is_int_operand(node.left, allow_array=allow_array) and self._is_int_operand(
+                node.right, allow_array=allow_array
+            )
         if isinstance(node, ast.UnaryOp):
             return self._is_int_operand(node.operand, allow_array=allow_array)
         return False
@@ -1650,7 +1764,7 @@ class _CBodyEmitter(BaseEmitter):
         if _is_int_cast(node):
             return True
         if isinstance(node, ast.BinOp) and not isinstance(node.op, ast.Div):
-            return (self._floor_ceil_div_operand_is_int(node.left) and self._floor_ceil_div_operand_is_int(node.right))
+            return self._floor_ceil_div_operand_is_int(node.left) and self._floor_ceil_div_operand_is_int(node.right)
         if isinstance(node, ast.UnaryOp):
             return self._floor_ceil_div_operand_is_int(node.operand)
         return self._is_int_operand(node)
@@ -1683,8 +1797,10 @@ class _CBodyEmitter(BaseEmitter):
         beats a miscompile.
         """
         if not self._is_scalar_operand(operand):
-            raise NotImplementedError(f"np.{attr}({ast.unparse(operand)}) reached emit on a whole array; "
-                                      f"it takes one element, so the operand must be scalarised first")
+            raise NotImplementedError(
+                f"np.{attr}({ast.unparse(operand)}) reached emit on a whole array; "
+                f"it takes one element, so the operand must be scalarised first"
+            )
 
     def _is_scalar_operand(self, node: ast.AST) -> bool:
         """True when ``node`` reads a single VALUE, not a whole array: a literal, a scalar name, or
@@ -1749,8 +1865,13 @@ class _CBodyEmitter(BaseEmitter):
         for _ in range(8):  # small fixpoint
             changed = False
             for node in ast.walk(self.kir.tree):
-                if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
-                        and node.targets[0].id not in floats and self._is_float_operand(node.value, floats)):
+                if (
+                    isinstance(node, ast.Assign)
+                    and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and node.targets[0].id not in floats
+                    and self._is_float_operand(node.value, floats)
+                ):
                     floats.add(node.targets[0].id)
                     changed = True
             if not changed:
@@ -1804,11 +1925,20 @@ class _CBodyEmitter(BaseEmitter):
 
 def _negative_const_k(node: ast.AST):
     """If node is a negative integer index constant, return its magnitude k > 0 (the index is -k), else None."""
-    if isinstance(node, ast.Constant) and isinstance(node.value,
-                                                     int) and not isinstance(node.value, bool) and node.value < 0:
+    if (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, int)
+        and not isinstance(node.value, bool)
+        and node.value < 0
+    ):
         return -node.value
-    if (isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub) and isinstance(node.operand, ast.Constant)
-            and isinstance(node.operand.value, int) and not isinstance(node.operand.value, bool)):
+    if (
+        isinstance(node, ast.UnaryOp)
+        and isinstance(node.op, ast.USub)
+        and isinstance(node.operand, ast.Constant)
+        and isinstance(node.operand.value, int)
+        and not isinstance(node.operand.value, bool)
+    ):
         return node.operand.value
     return None
 
@@ -1908,7 +2038,7 @@ def _c_shape_token(tok: str) -> str:
             while j >= 0 and (out[j].isalnum() or out[j] == "_"):
                 j -= 1
             base_start = j + 1
-        base = out[base_start:i + 1]
+        base = out[base_start : i + 1]
         # Right side: number / identifier / paren run.
         k = idx + 2
         while k < len(out) and out[k] == " ":
@@ -1936,8 +2066,19 @@ def _c_shape_token(tok: str) -> str:
 
 #: Operators that keep an integer result when both operands are integer. ``Div`` is
 #: absent on purpose -- numpy ``/`` is true division and lowering already casts it.
-_INT_PRESERVING_BINOPS: Tuple[type, ...] = (ast.Add, ast.Sub, ast.Mult, ast.Mod, ast.FloorDiv, ast.Pow, ast.LShift,
-                                            ast.RShift, ast.BitAnd, ast.BitOr, ast.BitXor)
+_INT_PRESERVING_BINOPS: Tuple[type, ...] = (
+    ast.Add,
+    ast.Sub,
+    ast.Mult,
+    ast.Mod,
+    ast.FloorDiv,
+    ast.Pow,
+    ast.LShift,
+    ast.RShift,
+    ast.BitAnd,
+    ast.BitOr,
+    ast.BitXor,
+)
 
 
 def _integer_valued_locals(kir: KernelIR) -> Set[str]:
@@ -1990,7 +2131,7 @@ def _integer_valued_locals(kir: KernelIR) -> Set[str]:
             dt = kir.local_dtypes.get(base.id) or array_dtypes.get(base.id)
             return dt is not None and dtypes.is_integer(dt)
         if isinstance(node, ast.BinOp):
-            return (isinstance(node.op, _INT_PRESERVING_BINOPS) and provable(node.left) and provable(node.right))
+            return isinstance(node.op, _INT_PRESERVING_BINOPS) and provable(node.left) and provable(node.right)
         if isinstance(node, ast.UnaryOp):
             return isinstance(node.op, (ast.USub, ast.UAdd, ast.Invert)) and provable(node.operand)
         if isinstance(node, ast.IfExp):
@@ -2088,8 +2229,7 @@ def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
         if name in needs_int:
             return _c_type("int")
         # x = arr[i] (scalar Subscript on a Name with known dtype).
-        if value is not None and isinstance(value, ast.Subscript) \
-                and isinstance(value.value, ast.Name):
+        if value is not None and isinstance(value, ast.Subscript) and isinstance(value.value, ast.Name):
             src_dt = array_dtypes.get(value.value.id) or local_dtypes.get(value.value.id)
             if src_dt is not None:
                 return _c_type(src_dt)
@@ -2134,8 +2274,7 @@ def _fill_loop_stmt(name: str, dims, size: str, value: str, indent: str) -> str:
     memset, so a fill between compute nests need not split their region. ``dims`` are a
     pointer-to-array local's extents (its subscript stays multidimensional); empty means flat."""
     if not dims:
-        return (f"{indent}for (int64_t __zf = 0; __zf < ({size}); ++__zf) "
-                f"{name}[__zf] = {value};")
+        return f"{indent}for (int64_t __zf = 0; __zf < ({size}); ++__zf) {name}[__zf] = {value};"
     ivs = [f"__zf{k}" for k in range(len(dims))]
     lines = [
         f"{indent}{'  ' * k}for (int64_t {iv} = 0; {iv} < ({_c_shape_token(d)}); ++{iv})"
@@ -2155,8 +2294,7 @@ def _alloc_marker_target(stmt: ast.stmt) -> Optional[str]:
     if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
         return None
     value = stmt.value
-    if (isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
-            and value.func.id == "__hpcagent_bench_zeros__"):
+    if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == "__hpcagent_bench_zeros__":
         return stmt.targets[0].id
     return None
 
@@ -2244,15 +2382,17 @@ def _branch_scoped_locals(tree: ast.FunctionDef, candidates: Set[str]) -> Dict[s
     return {name: branch_id for name, (branch_id, _) in owner.items()}
 
 
-def _emit_body(kir: KernelIR,
-               indent: str = "  ",
-               multidim_arrays: Optional[Set[str]] = None,
-               pluto: bool = False,
-               return_parts: bool = False,
-               return_mode: Optional[str] = None,
-               parallel: bool = False,
-               isopar: bool = False,
-               return_ctype: Optional[str] = None):
+def _emit_body(
+    kir: KernelIR,
+    indent: str = "  ",
+    multidim_arrays: Optional[Set[str]] = None,
+    pluto: bool = False,
+    return_parts: bool = False,
+    return_mode: Optional[str] = None,
+    parallel: bool = False,
+    isopar: bool = False,
+    return_ctype: Optional[str] = None,
+):
     emitter = _CBodyEmitter(kir, multidim_arrays=multidim_arrays)
     emitter.pluto = pluto
     emitter.return_mode = return_mode
@@ -2284,7 +2424,7 @@ def _emit_body(kir: KernelIR,
                 idx = t.find(it)
                 while idx >= 0:
                     lo = idx == 0 or not (t[idx - 1].isalnum() or t[idx - 1] == "_")
-                    hi = (idx + len(it) >= len(t) or not (t[idx + len(it)].isalnum() or t[idx + len(it)] == "_"))
+                    hi = idx + len(it) >= len(t) or not (t[idx + len(it)].isalnum() or t[idx + len(it)] == "_")
                     if lo and hi:
                         return True
                     idx = t.find(it, idx + 1)
@@ -2325,8 +2465,9 @@ def _emit_body(kir: KernelIR,
     # Pluto only: local rank>=2 arrays declare as pointer-to-array so the scop indexes them affinely; empty for pluto=False.
     md_locals: Set[str] = set()
     if pluto:
-        for _nm, _shp in (list(fn_top_locals.items()) + list(deferred_malloc_locals.items()) +
-                          list(inline_locals.items())):
+        for _nm, _shp in (
+            list(fn_top_locals.items()) + list(deferred_malloc_locals.items()) + list(inline_locals.items())
+        ):
             if len(_shp) >= 2:
                 md_locals.add(_nm)
                 emitter.md_trailing[_nm] = _md_trailing(_shp)
@@ -2339,15 +2480,9 @@ def _emit_body(kir: KernelIR,
     kir.local_dtypes = local_dtypes
     # The scalar declaration table, so an isopar reduction knows the type its accumulator is kept in.
     emitter.scalar_ctypes = {
-        **{
-            name: _c_type("int")
-            for name in int_locals
-        },
+        **{name: _c_type("int") for name in int_locals},
         **dict(implicit),
-        **{
-            s.name: _c_type(s.dtype)
-            for s in kir.scalars
-        },
+        **{s.name: _c_type(s.dtype) for s in kir.scalars},
     }
     decls: List[str] = []
     # Names, not statements: every exit needs this list too, at whatever indent it sits on.
@@ -2369,12 +2504,10 @@ def _emit_body(kir: KernelIR,
         if name in md_locals:
             # Pluto: pointer-to-array (heap) so name[i][j] is affine.
             tr = emitter.md_trailing[name]
-            decls.append(f"{indent}{c_type} (*{name}){tr} = "
-                         f"({c_type} (*){tr})malloc({_byte_count(size, c_type)});")
+            decls.append(f"{indent}{c_type} (*{name}){tr} = ({c_type} (*){tr})malloc({_byte_count(size, c_type)});")
             heap.append(name)
         elif any(c.isalpha() for c in size):
-            decls.append(f"{indent}{c_type} *{name} = "
-                         f"({c_type} *)malloc({_byte_count(size, c_type)});")
+            decls.append(f"{indent}{c_type} *{name} = ({c_type} *)malloc({_byte_count(size, c_type)});")
             heap.append(name)
         else:
             decls.append(f"{indent}{c_type} {name}[{size}];")
@@ -2427,8 +2560,7 @@ def _emit_body(kir: KernelIR,
         if kind in ("empty", "empty_like", "ndarray"):
             continue  # caller buffer, kernel writes all
         if kind in ("ones", "ones_like"):
-            decls.append(f"{indent}for (int64_t __i = 0; __i < ({size}); ++__i) "
-                         f"{name}[__i] = 1;")
+            decls.append(f"{indent}for (int64_t __i = 0; __i < ({size}); ++__i) {name}[__i] = 1;")
         else:  # zeros / zeros_like / default
             decls.append(f"{indent}memset({name}, 0, {_byte_count(size, c_type)});")
     emitter.heap_locals = heap
@@ -2445,319 +2577,323 @@ def _emit_body(kir: KernelIR,
     return "\n".join(d for d in (*decls, body, *frees) if d)
 
 
-_C_HEADER = ("#define _USE_MATH_DEFINES\n"
-             "#include <stdint.h>\n"
-             "#include <stdlib.h>\n"
-             "#include <stdbool.h>\n"
-             "#include <string.h>\n"
-             "#include <math.h>\n"
-             "#include <complex.h>\n"
-             "/* ``z.conjugate()`` -- named helper so the C and C++ preludes\n"
-             " * offer the same spelling. C has the standard one: ``conj``\n"
-             " * from <complex.h>. The C++ prelude, which has no <complex.h>,\n"
-             " * writes its own. */\n"
-             "static inline double _Complex __npb_conj(double _Complex z) {\n"
-             "    return conj(z);\n"
-             "}\n"
-             "/* M_PI / M_E etc. are POSIX/GNU extensions -- ensure they\n"
-             " * are defined even on strict-C builds (glibc 2.27+ /\n"
-             " * BSDs / MSVC). */\n"
-             "#ifndef M_PI\n#define M_PI 3.14159265358979323846\n#endif\n"
-             "#ifndef M_E\n#define M_E 2.71828182845904523536\n#endif\n"
-             "/* ``<complex.h>`` defines ``I`` as the imaginary unit;\n"
-             " * undef it so user variable names like ``I`` (mandelbrot\n"
-             " * boolean mask) don''t collide. Complex literals continue\n"
-             " * to use the portable ``_Complex_I`` form. */\n"
-             "#ifdef I\n#undef I\n#endif\n"
-             "/* ``max``/``min`` PROPAGATE NaN (a NaN in EITHER operand yields NaN):\n"
-             " * these serve the elementwise ``np.maximum``/``np.minimum`` broadcast\n"
-             " * and the ``np.maximum.at`` / ``np.minimum.at`` scatter folds, which\n"
-             " * follow numpy (propagate), not Python's builtin max (which drops a NaN\n"
-             " * second operand). ``(a)+(b)`` is NaN whenever either operand is; for\n"
-             " * finite operands the ternary picks the larger/smaller -- identical to\n"
-             " * a plain comparison, so the 3-way builtin max (needleman_wunsch, always\n"
-             " * finite) is unchanged. For integer operands the NaN test is dead. */\n"
-             "#ifndef min\n"
-             "#define min(a, b) ((((a) != (a)) || ((b) != (b))) ? ((a) + (b)) : (((b) < (a)) ? (b) : (a)))\n"
-             "#endif\n"
-             "#ifndef max\n"
-             "#define max(a, b) ((((a) != (a)) || ((b) != (b))) ? ((a) + (b)) : (((b) > (a)) ? (b) : (a)))\n"
-             "#endif\n"
-             "/* Elementwise ``np.maximum``/``np.minimum`` lower to ``fmax``/``fmin``;\n"
-             " * libm ``fmax``/``fmin`` SUPPRESS NaN (return the non-NaN operand) but\n"
-             " * numpy PROPAGATES it. These single-evaluation helpers return NaN when\n"
-             " * either operand is NaN, else the larger/smaller.\n"
-             " * Integer operands take the INTEGER form, dispatched on the promoted operand\n"
-             " * type exactly as int_floor is: routing them through the double helper rounds\n"
-             " * every value above 2**53 to the nearest representable double, so\n"
-             " * min(2**53 + 1, 2**53 + 2) returned 2**53 -- a value neither operand had. */\n"
-             "static inline double __npb_fmax_f(double a, double b) {\n"
-             "    return (a != a) ? a : (b != b) ? b : (a > b ? a : b);\n"
-             "}\n"
-             "static inline double __npb_fmin_f(double a, double b) {\n"
-             "    return (a != a) ? a : (b != b) ? b : (a < b ? a : b);\n"
-             "}\n"
-             "static inline int64_t __npb_fmax_i(int64_t a, int64_t b) { return a > b ? a : b; }\n"
-             "static inline int64_t __npb_fmin_i(int64_t a, int64_t b) { return a < b ? a : b; }\n"
-             "static inline uint64_t __npb_fmax_u(uint64_t a, uint64_t b) { return a > b ? a : b; }\n"
-             "static inline uint64_t __npb_fmin_u(uint64_t a, uint64_t b) { return a < b ? a : b; }\n"
-             "/* ``np.sign``: numpy ``sign(nan) == nan`` and ``sign(0) == 0``. The\n"
-             " * naive ``(x>0)-(x<0)`` gives 0 for NaN and evaluates ``x`` twice. */\n"
-             "static inline double __npb_sign(double x) {\n"
-             "    return x != x ? x : (double)((x > 0) - (x < 0));\n"
-             "}\n"
-             "/* Python ``//`` floors toward -inf; C ``/`` truncates toward zero. Integer and\n"
-             " * floating operands need different corrections, so the division helpers dispatch\n"
-             " * on the PROMOTED OPERAND TYPE -- the emitter never has to infer the dtype from\n"
-             " * the source AST (guessing it wrong silently truncated instead of flooring).\n"
-             " * _Generic's controlling expression is unevaluated and each argument is spelled\n"
-             " * once, so operands with side effects are evaluated exactly once. */\n"
-             "static inline int64_t __npb_floordiv_i(int64_t a, int64_t b) {\n"
-             "    return a / b - ((a % b != 0) && ((a < 0) ^ (b < 0)));\n"
-             "}\n"
-             "static inline double __npb_floordiv_f(double a, double b) { return floor(a / b); }\n"
-             "/* Unsigned operands need their own form: floor == truncate for them, and routing\n"
-             " * them through the SIGNED helper reinterprets any value above INT64_MAX as\n"
-             " * negative ((2**63 + 5) // 2 came back negative). */\n"
-             "static inline uint64_t __npb_floordiv_u(uint64_t a, uint64_t b) { return a / b; }\n"
-             "static inline uint64_t __npb_ceildiv_u(uint64_t a, uint64_t b) { return a / b + (a % b != 0); }\n"
-             "static inline uint64_t __npb_mod_u(uint64_t a, uint64_t b) { return a % b; }\n"
-             "/* _Float16 is NOT promoted by GCC in arithmetic, so `_Float16 + _Float16` has type\n"
-             " * _Float16 and fell to `default:` -- the INTEGER helper. 0.5 // 0.25 became\n"
-             " * int_floor(0, 0) and died with SIGFPE. Spelled as a macro because the association\n"
-             " * only exists where the type does. */\n"
-             "#if defined(__FLT16_MANT_DIG__)\n"
-             "#define __NPB_F16_ASSOC(fn) _Float16: fn,\n"
-             "#else\n"
-             "#define __NPB_F16_ASSOC(fn)\n"
-             "#endif\n"
-             "#define __NPB_UNSIGNED_ASSOC(fn) \\\n"
-             "    unsigned int: fn, unsigned long: fn, unsigned long long: fn,\n"
-             "/* min/max dispatch (declared above): integer operands stay exact, floating ones\n"
-             " * propagate NaN. Spelled here because the type associations are. */\n"
-             "#define __npb_fmin(a, b) _Generic((a) + (b), \\\n"
-             "    __NPB_F16_ASSOC(__npb_fmin_f) \\\n"
-             "    __NPB_UNSIGNED_ASSOC(__npb_fmin_u) \\\n"
-             "    float: __npb_fmin_f, double: __npb_fmin_f, long double: __npb_fmin_f, \\\n"
-             "    default: __npb_fmin_i)((a), (b))\n"
-             "#define __npb_fmax(a, b) _Generic((a) + (b), \\\n"
-             "    __NPB_F16_ASSOC(__npb_fmax_f) \\\n"
-             "    __NPB_UNSIGNED_ASSOC(__npb_fmax_u) \\\n"
-             "    float: __npb_fmax_f, double: __npb_fmax_f, long double: __npb_fmax_f, \\\n"
-             "    default: __npb_fmax_i)((a), (b))\n"
-             "#ifndef int_floor\n"
-             "#define int_floor(a, b) _Generic((a) + (b), \\\n"
-             "    __NPB_F16_ASSOC(__npb_floordiv_f) \\\n"
-             "    __NPB_UNSIGNED_ASSOC(__npb_floordiv_u) \\\n"
-             "    float: __npb_floordiv_f, double: __npb_floordiv_f, long double: __npb_floordiv_f, \\\n"
-             "    default: __npb_floordiv_i)((a), (b))\n"
-             "#endif\n"
-             "/* Ceil-division counterpart (toward +inf), exact for both signs -- unlike the\n"
-             " * ``(a + b - 1) / b`` idiom, which is correct only for a positive divisor and\n"
-             " * overflows near the integer maximum. */\n"
-             "static inline int64_t __npb_ceildiv_i(int64_t a, int64_t b) {\n"
-             "    return a / b + ((a % b != 0) && ((a < 0) == (b < 0)));\n"
-             "}\n"
-             "static inline double __npb_ceildiv_f(double a, double b) { return ceil(a / b); }\n"
-             "#ifndef int_ceil\n"
-             "#define int_ceil(a, b) _Generic((a) + (b), \\\n"
-             "    __NPB_F16_ASSOC(__npb_ceildiv_f) \\\n"
-             "    __NPB_UNSIGNED_ASSOC(__npb_ceildiv_u) \\\n"
-             "    float: __npb_ceildiv_f, double: __npb_ceildiv_f, long double: __npb_ceildiv_f, \\\n"
-             "    default: __npb_ceildiv_i)((a), (b))\n"
-             "#endif\n"
-             "/* pet's named quasi-affine builtins (POLYCC-008); guarded because polycc prepends\n"
-             " * its own #define floord/ceild, which would expand these declarators (POLYCC-004). */\n"
-             "#ifndef floord\n"
-             "static inline int64_t floord(int64_t a, int64_t b) {\n"
-             "    return __npb_floordiv_i(a, b);\n"
-             "}\n"
-             "#endif\n"
-             "#ifndef ceild\n"
-             "static inline int64_t ceild(int64_t a, int64_t b) {\n"
-             "    return __npb_ceildiv_i(a, b);\n"
-             "}\n"
-             "#endif\n"
-             "/* Python ``%`` returns sign of divisor; C returns sign of dividend. Same\n"
-             " * type-dispatch as int_floor: integer operands use the exact integer form,\n"
-             " * floating operands numpy's npy_remainder (see python_fmod). */\n"
-             "static inline int64_t __npb_mod_i(int64_t a, int64_t b) { return (a % b + b) % b; }\n"
-             "/* Floating-point ``%``: numpy's floored modulo takes the sign of the\n"
-             " * divisor, which integer ``python_mod`` cannot express on doubles.\n"
-             " * Mirrors numpy ``npy_remainder`` (fmod + sign-of-divisor fixup). */\n"
-             "static inline double python_fmod(double a, double b) {\n"
-             "    double m = fmod(a, b);\n"
-             "    if (m != 0.0 && ((b < 0.0) != (m < 0.0))) m += b;\n"
-             "    return m;\n"
-             "}\n"
-             "#ifndef python_mod\n"
-             "#define python_mod(a, b) _Generic((a) + (b), \\\n"
-             "    __NPB_F16_ASSOC(python_fmod) \\\n"
-             "    __NPB_UNSIGNED_ASSOC(__npb_mod_u) \\\n"
-             "    float: python_fmod, double: python_fmod, long double: python_fmod, \\\n"
-             "    default: __npb_mod_i)((a), (b))\n"
-             "#endif\n"
-             "/* Integer power for VLA shape bounds like ``R ** K``. */\n"
-             "static inline int64_t __npb_int_pow(int64_t base, int64_t exp) {\n"
-             "    int64_t result = 1;\n"
-             "    while (exp > 0) {\n"
-             "        if (exp & 1) result *= base;\n"
-             "        base *= base;\n"
-             "        exp >>= 1;\n"
-             "    }\n"
-             "    return result;\n"
-             "}\n")
+_C_HEADER = (
+    "#define _USE_MATH_DEFINES\n"
+    "#include <stdint.h>\n"
+    "#include <stdlib.h>\n"
+    "#include <stdbool.h>\n"
+    "#include <string.h>\n"
+    "#include <math.h>\n"
+    "#include <complex.h>\n"
+    "/* ``z.conjugate()`` -- named helper so the C and C++ preludes\n"
+    " * offer the same spelling. C has the standard one: ``conj``\n"
+    " * from <complex.h>. The C++ prelude, which has no <complex.h>,\n"
+    " * writes its own. */\n"
+    "static inline double _Complex __npb_conj(double _Complex z) {\n"
+    "    return conj(z);\n"
+    "}\n"
+    "/* M_PI / M_E etc. are POSIX/GNU extensions -- ensure they\n"
+    " * are defined even on strict-C builds (glibc 2.27+ /\n"
+    " * BSDs / MSVC). */\n"
+    "#ifndef M_PI\n#define M_PI 3.14159265358979323846\n#endif\n"
+    "#ifndef M_E\n#define M_E 2.71828182845904523536\n#endif\n"
+    "/* ``<complex.h>`` defines ``I`` as the imaginary unit;\n"
+    " * undef it so user variable names like ``I`` (mandelbrot\n"
+    " * boolean mask) don''t collide. Complex literals continue\n"
+    " * to use the portable ``_Complex_I`` form. */\n"
+    "#ifdef I\n#undef I\n#endif\n"
+    "/* ``max``/``min`` PROPAGATE NaN (a NaN in EITHER operand yields NaN):\n"
+    " * these serve the elementwise ``np.maximum``/``np.minimum`` broadcast\n"
+    " * and the ``np.maximum.at`` / ``np.minimum.at`` scatter folds, which\n"
+    " * follow numpy (propagate), not Python's builtin max (which drops a NaN\n"
+    " * second operand). ``(a)+(b)`` is NaN whenever either operand is; for\n"
+    " * finite operands the ternary picks the larger/smaller -- identical to\n"
+    " * a plain comparison, so the 3-way builtin max (needleman_wunsch, always\n"
+    " * finite) is unchanged. For integer operands the NaN test is dead. */\n"
+    "#ifndef min\n"
+    "#define min(a, b) ((((a) != (a)) || ((b) != (b))) ? ((a) + (b)) : (((b) < (a)) ? (b) : (a)))\n"
+    "#endif\n"
+    "#ifndef max\n"
+    "#define max(a, b) ((((a) != (a)) || ((b) != (b))) ? ((a) + (b)) : (((b) > (a)) ? (b) : (a)))\n"
+    "#endif\n"
+    "/* Elementwise ``np.maximum``/``np.minimum`` lower to ``fmax``/``fmin``;\n"
+    " * libm ``fmax``/``fmin`` SUPPRESS NaN (return the non-NaN operand) but\n"
+    " * numpy PROPAGATES it. These single-evaluation helpers return NaN when\n"
+    " * either operand is NaN, else the larger/smaller.\n"
+    " * Integer operands take the INTEGER form, dispatched on the promoted operand\n"
+    " * type exactly as int_floor is: routing them through the double helper rounds\n"
+    " * every value above 2**53 to the nearest representable double, so\n"
+    " * min(2**53 + 1, 2**53 + 2) returned 2**53 -- a value neither operand had. */\n"
+    "static inline double __npb_fmax_f(double a, double b) {\n"
+    "    return (a != a) ? a : (b != b) ? b : (a > b ? a : b);\n"
+    "}\n"
+    "static inline double __npb_fmin_f(double a, double b) {\n"
+    "    return (a != a) ? a : (b != b) ? b : (a < b ? a : b);\n"
+    "}\n"
+    "static inline int64_t __npb_fmax_i(int64_t a, int64_t b) { return a > b ? a : b; }\n"
+    "static inline int64_t __npb_fmin_i(int64_t a, int64_t b) { return a < b ? a : b; }\n"
+    "static inline uint64_t __npb_fmax_u(uint64_t a, uint64_t b) { return a > b ? a : b; }\n"
+    "static inline uint64_t __npb_fmin_u(uint64_t a, uint64_t b) { return a < b ? a : b; }\n"
+    "/* ``np.sign``: numpy ``sign(nan) == nan`` and ``sign(0) == 0``. The\n"
+    " * naive ``(x>0)-(x<0)`` gives 0 for NaN and evaluates ``x`` twice. */\n"
+    "static inline double __npb_sign(double x) {\n"
+    "    return x != x ? x : (double)((x > 0) - (x < 0));\n"
+    "}\n"
+    "/* Python ``//`` floors toward -inf; C ``/`` truncates toward zero. Integer and\n"
+    " * floating operands need different corrections, so the division helpers dispatch\n"
+    " * on the PROMOTED OPERAND TYPE -- the emitter never has to infer the dtype from\n"
+    " * the source AST (guessing it wrong silently truncated instead of flooring).\n"
+    " * _Generic's controlling expression is unevaluated and each argument is spelled\n"
+    " * once, so operands with side effects are evaluated exactly once. */\n"
+    "static inline int64_t __npb_floordiv_i(int64_t a, int64_t b) {\n"
+    "    return a / b - ((a % b != 0) && ((a < 0) ^ (b < 0)));\n"
+    "}\n"
+    "static inline double __npb_floordiv_f(double a, double b) { return floor(a / b); }\n"
+    "/* Unsigned operands need their own form: floor == truncate for them, and routing\n"
+    " * them through the SIGNED helper reinterprets any value above INT64_MAX as\n"
+    " * negative ((2**63 + 5) // 2 came back negative). */\n"
+    "static inline uint64_t __npb_floordiv_u(uint64_t a, uint64_t b) { return a / b; }\n"
+    "static inline uint64_t __npb_ceildiv_u(uint64_t a, uint64_t b) { return a / b + (a % b != 0); }\n"
+    "static inline uint64_t __npb_mod_u(uint64_t a, uint64_t b) { return a % b; }\n"
+    "/* _Float16 is NOT promoted by GCC in arithmetic, so `_Float16 + _Float16` has type\n"
+    " * _Float16 and fell to `default:` -- the INTEGER helper. 0.5 // 0.25 became\n"
+    " * int_floor(0, 0) and died with SIGFPE. Spelled as a macro because the association\n"
+    " * only exists where the type does. */\n"
+    "#if defined(__FLT16_MANT_DIG__)\n"
+    "#define __NPB_F16_ASSOC(fn) _Float16: fn,\n"
+    "#else\n"
+    "#define __NPB_F16_ASSOC(fn)\n"
+    "#endif\n"
+    "#define __NPB_UNSIGNED_ASSOC(fn) \\\n"
+    "    unsigned int: fn, unsigned long: fn, unsigned long long: fn,\n"
+    "/* min/max dispatch (declared above): integer operands stay exact, floating ones\n"
+    " * propagate NaN. Spelled here because the type associations are. */\n"
+    "#define __npb_fmin(a, b) _Generic((a) + (b), \\\n"
+    "    __NPB_F16_ASSOC(__npb_fmin_f) \\\n"
+    "    __NPB_UNSIGNED_ASSOC(__npb_fmin_u) \\\n"
+    "    float: __npb_fmin_f, double: __npb_fmin_f, long double: __npb_fmin_f, \\\n"
+    "    default: __npb_fmin_i)((a), (b))\n"
+    "#define __npb_fmax(a, b) _Generic((a) + (b), \\\n"
+    "    __NPB_F16_ASSOC(__npb_fmax_f) \\\n"
+    "    __NPB_UNSIGNED_ASSOC(__npb_fmax_u) \\\n"
+    "    float: __npb_fmax_f, double: __npb_fmax_f, long double: __npb_fmax_f, \\\n"
+    "    default: __npb_fmax_i)((a), (b))\n"
+    "#ifndef int_floor\n"
+    "#define int_floor(a, b) _Generic((a) + (b), \\\n"
+    "    __NPB_F16_ASSOC(__npb_floordiv_f) \\\n"
+    "    __NPB_UNSIGNED_ASSOC(__npb_floordiv_u) \\\n"
+    "    float: __npb_floordiv_f, double: __npb_floordiv_f, long double: __npb_floordiv_f, \\\n"
+    "    default: __npb_floordiv_i)((a), (b))\n"
+    "#endif\n"
+    "/* Ceil-division counterpart (toward +inf), exact for both signs -- unlike the\n"
+    " * ``(a + b - 1) / b`` idiom, which is correct only for a positive divisor and\n"
+    " * overflows near the integer maximum. */\n"
+    "static inline int64_t __npb_ceildiv_i(int64_t a, int64_t b) {\n"
+    "    return a / b + ((a % b != 0) && ((a < 0) == (b < 0)));\n"
+    "}\n"
+    "static inline double __npb_ceildiv_f(double a, double b) { return ceil(a / b); }\n"
+    "#ifndef int_ceil\n"
+    "#define int_ceil(a, b) _Generic((a) + (b), \\\n"
+    "    __NPB_F16_ASSOC(__npb_ceildiv_f) \\\n"
+    "    __NPB_UNSIGNED_ASSOC(__npb_ceildiv_u) \\\n"
+    "    float: __npb_ceildiv_f, double: __npb_ceildiv_f, long double: __npb_ceildiv_f, \\\n"
+    "    default: __npb_ceildiv_i)((a), (b))\n"
+    "#endif\n"
+    "/* pet's named quasi-affine builtins (POLYCC-008); guarded because polycc prepends\n"
+    " * its own #define floord/ceild, which would expand these declarators (POLYCC-004). */\n"
+    "#ifndef floord\n"
+    "static inline int64_t floord(int64_t a, int64_t b) {\n"
+    "    return __npb_floordiv_i(a, b);\n"
+    "}\n"
+    "#endif\n"
+    "#ifndef ceild\n"
+    "static inline int64_t ceild(int64_t a, int64_t b) {\n"
+    "    return __npb_ceildiv_i(a, b);\n"
+    "}\n"
+    "#endif\n"
+    "/* Python ``%`` returns sign of divisor; C returns sign of dividend. Same\n"
+    " * type-dispatch as int_floor: integer operands use the exact integer form,\n"
+    " * floating operands numpy's npy_remainder (see python_fmod). */\n"
+    "static inline int64_t __npb_mod_i(int64_t a, int64_t b) { return (a % b + b) % b; }\n"
+    "/* Floating-point ``%``: numpy's floored modulo takes the sign of the\n"
+    " * divisor, which integer ``python_mod`` cannot express on doubles.\n"
+    " * Mirrors numpy ``npy_remainder`` (fmod + sign-of-divisor fixup). */\n"
+    "static inline double python_fmod(double a, double b) {\n"
+    "    double m = fmod(a, b);\n"
+    "    if (m != 0.0 && ((b < 0.0) != (m < 0.0))) m += b;\n"
+    "    return m;\n"
+    "}\n"
+    "#ifndef python_mod\n"
+    "#define python_mod(a, b) _Generic((a) + (b), \\\n"
+    "    __NPB_F16_ASSOC(python_fmod) \\\n"
+    "    __NPB_UNSIGNED_ASSOC(__npb_mod_u) \\\n"
+    "    float: python_fmod, double: python_fmod, long double: python_fmod, \\\n"
+    "    default: __npb_mod_i)((a), (b))\n"
+    "#endif\n"
+    "/* Integer power for VLA shape bounds like ``R ** K``. */\n"
+    "static inline int64_t __npb_int_pow(int64_t base, int64_t exp) {\n"
+    "    int64_t result = 1;\n"
+    "    while (exp > 0) {\n"
+    "        if (exp & 1) result *= base;\n"
+    "        base *= base;\n"
+    "        exp >>= 1;\n"
+    "    }\n"
+    "    return result;\n"
+    "}\n"
+)
 
 # C++ prelude uses constexpr, not consteval (called with runtime args); <complex.h> is dropped to avoid name clashes.
-_CPP_ARITH = ('#include <cstdint>\n#include <cmath>\n'
-              '#include <type_traits>\n'
-              '#include <cstring>\n#include <cstdlib>\n'
-              '// Math constants as typed constexpr values. ``<cmath>`` may\n'
-              '// predefine M_PI / M_E as macros (glibc __USE_MISC); undefine\n'
-              '// them so the names rebind to our constexpr values -- we emit no\n'
-              '// macro DEFINITION, only remove the platform ones.\n'
-              '// [[maybe_unused]]: namespace-scope constexpr has internal linkage, so a\n'
-              '// kernel that references neither draws -Wunused-const-variable from clang\n'
-              '// (the C prelude spells these as macros and never does). They are prelude\n'
-              '// vocabulary offered to every kernel, which is exactly this attribute.\n'
-              '#ifdef M_PI\n#undef M_PI\n#endif\n'
-              '#ifdef M_E\n#undef M_E\n#endif\n'
-              '[[maybe_unused]] constexpr double M_PI = 3.14159265358979323846;\n'
-              '[[maybe_unused]] constexpr double M_E  = 2.71828182845904523536;\n'
-              '// Complex support via the GCC/Clang ``double _Complex`` extension\n'
-              '// (no <complex.h>, so no name clashes). The imaginary unit and\n'
-              '// the C99-named helpers are constexpr/inline FUNCTIONS, not macros.\n'
-              'constexpr double creal(double _Complex z) { return __real__ z; }\n'
-              'constexpr double cimag(double _Complex z) { return __imag__ z; }\n'
-              'inline double _Complex __npb_make_complex(double re, double im) {\n'
-              '    double _Complex z; __real__ z = re; __imag__ z = im; return z;\n'
-              '}\n'
-              'static const double _Complex _Complex_I = __npb_make_complex(0.0, 1.0);\n'
-              'inline double cabs(double _Complex z) {\n'
-              '    return sqrt(creal(z)*creal(z) + cimag(z)*cimag(z));\n'
-              '}\n'
-              'inline double carg(double _Complex z) { return atan2(cimag(z), creal(z)); }\n'
-              '/* ``cexp(z) = exp(re) * (cos(im) + i*sin(im))``. */\n'
-              'inline double _Complex cexp(double _Complex z) {\n'
-              '    return __npb_make_complex(exp(creal(z))*cos(cimag(z)),\n'
-              '                             exp(creal(z))*sin(cimag(z)));\n'
-              '}\n'
-              '/* ``clog(z) = log(|z|) + i*arg(z)``. */\n'
-              'inline double _Complex clog(double _Complex z) {\n'
-              '    return __npb_make_complex(log(cabs(z)), carg(z));\n'
-              '}\n'
-              '/* ``csqrt(z) = exp((1/2) * log(z))`` -- principal branch. */\n'
-              'inline double _Complex csqrt(double _Complex z) {\n'
-              '    double _Complex l = clog(z);\n'
-              '    return cexp(__npb_make_complex(0.5*creal(l), 0.5*cimag(l)));\n'
-              '}\n'
-              '/* ``cpow(z, w) = exp(w * log(z))`` -- general complex pow. */\n'
-              'inline double _Complex cpow(double _Complex z, double _Complex w) {\n'
-              '    double _Complex l = clog(z);\n'
-              '    return cexp(__npb_make_complex(\n'
-              '        creal(w)*creal(l) - cimag(w)*cimag(l),\n'
-              '        creal(w)*cimag(l) + cimag(w)*creal(l)));\n'
-              '}\n'
-              '/* ``z.conjugate()`` -- complex-conjugate scalar helper. */\n'
-              'inline double _Complex __npb_conj(double _Complex z) {\n'
-              '    return __npb_make_complex(creal(z), -cimag(z));\n'
-              '}\n'
-              '/* Integer power for VLA shape bounds. */\n'
-              'constexpr int64_t __npb_int_pow(int64_t base, int64_t exp) {\n'
-              '    int64_t result = 1;\n'
-              '    while (exp > 0) {\n'
-              '        if (exp & 1) result *= base;\n'
-              '        base *= base;\n'
-              '        exp >>= 1;\n'
-              '    }\n'
-              '    return result;\n'
-              '}\n'
-              '/* Ternary-form ``max`` / ``min`` as constexpr function templates\n'
-              ' * so a mixed call like ``max(double, int)`` promotes the int\n'
-              ' * operand via the usual arithmetic conversions (``std::max``\n'
-              ' * would require both args to share a type). They PROPAGATE NaN (a\n'
-              ' * NaN in EITHER operand yields NaN): these serve the elementwise\n'
-              ' * ``np.maximum``/``np.minimum`` broadcast and the ``np.maximum.at`` /\n'
-              ' * ``np.minimum.at`` scatter folds, which follow numpy (propagate),\n'
-              ' * not Python builtin max. For finite operands the result is the\n'
-              ' * larger/smaller -- so the 3-way builtin max (needleman_wunsch,\n'
-              ' * always finite) is unchanged; integer NaN tests are dead. */\n'
-              'template <class A, class B>\n'
-              'constexpr auto max(A a, B b) { return a != a ? a : (b != b ? b : (b > a ? b : a)); }\n'
-              'template <class A, class B>\n'
-              'constexpr auto min(A a, B b) { return a != a ? a : (b != b ? b : (b < a ? b : a)); }\n'
-              '/* Elementwise ``np.maximum``/``np.minimum`` lower to ``fmax``/``fmin``;\n'
-              ' * libm ``fmax``/``fmin`` SUPPRESS NaN but numpy PROPAGATES it. These\n'
-              ' * single-evaluation helpers return NaN when either operand is NaN.\n'
-              ' * Integral operands take the exact integer compare (the same INTEGRAL/floating\n'
-              ' * split int_floor makes): converting them to double rounds anything above 2**53,\n'
-              ' * so min(2**53 + 1, 2**53 + 2) came back 2**53 -- a value neither operand had. */\n'
-              'template <class A, class B>\n'
-              'constexpr auto __npb_fmax(A a, B b) {\n'
-              '    if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {\n'
-              '        return a > b ? a : b;\n'
-              '    } else {\n'
-              '        return a != a ? a : (b != b ? b : (a > b ? a : b));\n'
-              '    }\n'
-              '}\n'
-              'template <class A, class B>\n'
-              'constexpr auto __npb_fmin(A a, B b) {\n'
-              '    if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {\n'
-              '        return a < b ? a : b;\n'
-              '    } else {\n'
-              '        return a != a ? a : (b != b ? b : (a < b ? a : b));\n'
-              '    }\n'
-              '}\n'
-              '/* ``np.sign``: numpy ``sign(nan) == nan`` and ``sign(0) == 0``. The\n'
-              ' * naive ``(x>0)-(x<0)`` gives 0 for NaN and evaluates ``x`` twice. */\n'
-              'inline double __npb_sign(double x) {\n'
-              '    return x != x ? x : (double)((x > 0) - (x < 0));\n'
-              '}\n'
-              '/* Python ``//`` floors toward -inf; C++ ``/`` truncates toward zero.\n'
-              ' * C++ has no built-in floor-division, so it is always this helper. The\n'
-              ' * INTEGRAL/floating split is decided by the operand TYPE here rather than\n'
-              ' * inferred from the source AST -- guessing it wrong emitted a no-op floor\n'
-              ' * over an already-truncated integer quotient. */\n'
-              'template <class A, class B>\n'
-              'constexpr auto int_floor(A a, B b) {\n'
-              '    if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {\n'
-              '        return a / b - ((a % b != 0) && ((a < 0) ^ (b < 0)));\n'
-              '    } else {\n'
-              '        return std::floor(static_cast<double>(a) / static_cast<double>(b));\n'
-              '    }\n'
-              '}\n'
-              '/* Ceil-division counterpart (toward +inf), exact for both signs -- unlike\n'
-              ' * the ``(a + b - 1) / b`` idiom, which holds only for a positive divisor\n'
-              ' * and overflows near the integer maximum. */\n'
-              'template <class A, class B>\n'
-              'constexpr auto int_ceil(A a, B b) {\n'
-              '    if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {\n'
-              '        return a / b + ((a % b != 0) && ((a < 0) == (b < 0)));\n'
-              '    } else {\n'
-              '        return std::ceil(static_cast<double>(a) / static_cast<double>(b));\n'
-              '    }\n'
-              '}\n'
-              '/* Python ``%`` returns the sign of the divisor; C/C++ the dividend.\n'
-              ' * Same type-dispatch as int_floor (floating operands need npy_remainder,\n'
-              ' * which the integer form cannot express on doubles). */\n'
-              'template <class A, class B>\n'
-              'constexpr auto python_mod(A a, B b) {\n'
-              '    if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {\n'
-              '        return (a % b + b) % b;\n'
-              '    } else {\n'
-              '        double m = std::fmod(static_cast<double>(a), static_cast<double>(b));\n'
-              '        if (m != 0.0 && ((b < 0.0) != (m < 0.0))) m += static_cast<double>(b);\n'
-              '        return m;\n'
-              '    }\n'
-              '}\n'
-              '/* Floating-point ``%``: numpy floored modulo (sign of the divisor),\n'
-              ' * which integer ``python_mod`` cannot express on doubles. Mirrors\n'
-              ' * numpy ``npy_remainder`` (fmod + sign-of-divisor fixup). */\n'
-              'inline double python_fmod(double a, double b) {\n'
-              '    double m = std::fmod(a, b);\n'
-              '    if (m != 0.0 && ((b < 0.0) != (m < 0.0))) m += b;\n'
-              '    return m;\n'
-              '}\n')
+_CPP_ARITH = (
+    "#include <cstdint>\n#include <cmath>\n"
+    "#include <type_traits>\n"
+    "#include <cstring>\n#include <cstdlib>\n"
+    "// Math constants as typed constexpr values. ``<cmath>`` may\n"
+    "// predefine M_PI / M_E as macros (glibc __USE_MISC); undefine\n"
+    "// them so the names rebind to our constexpr values -- we emit no\n"
+    "// macro DEFINITION, only remove the platform ones.\n"
+    "// [[maybe_unused]]: namespace-scope constexpr has internal linkage, so a\n"
+    "// kernel that references neither draws -Wunused-const-variable from clang\n"
+    "// (the C prelude spells these as macros and never does). They are prelude\n"
+    "// vocabulary offered to every kernel, which is exactly this attribute.\n"
+    "#ifdef M_PI\n#undef M_PI\n#endif\n"
+    "#ifdef M_E\n#undef M_E\n#endif\n"
+    "[[maybe_unused]] constexpr double M_PI = 3.14159265358979323846;\n"
+    "[[maybe_unused]] constexpr double M_E  = 2.71828182845904523536;\n"
+    "// Complex support via the GCC/Clang ``double _Complex`` extension\n"
+    "// (no <complex.h>, so no name clashes). The imaginary unit and\n"
+    "// the C99-named helpers are constexpr/inline FUNCTIONS, not macros.\n"
+    "constexpr double creal(double _Complex z) { return __real__ z; }\n"
+    "constexpr double cimag(double _Complex z) { return __imag__ z; }\n"
+    "inline double _Complex __npb_make_complex(double re, double im) {\n"
+    "    double _Complex z; __real__ z = re; __imag__ z = im; return z;\n"
+    "}\n"
+    "static const double _Complex _Complex_I = __npb_make_complex(0.0, 1.0);\n"
+    "inline double cabs(double _Complex z) {\n"
+    "    return sqrt(creal(z)*creal(z) + cimag(z)*cimag(z));\n"
+    "}\n"
+    "inline double carg(double _Complex z) { return atan2(cimag(z), creal(z)); }\n"
+    "/* ``cexp(z) = exp(re) * (cos(im) + i*sin(im))``. */\n"
+    "inline double _Complex cexp(double _Complex z) {\n"
+    "    return __npb_make_complex(exp(creal(z))*cos(cimag(z)),\n"
+    "                             exp(creal(z))*sin(cimag(z)));\n"
+    "}\n"
+    "/* ``clog(z) = log(|z|) + i*arg(z)``. */\n"
+    "inline double _Complex clog(double _Complex z) {\n"
+    "    return __npb_make_complex(log(cabs(z)), carg(z));\n"
+    "}\n"
+    "/* ``csqrt(z) = exp((1/2) * log(z))`` -- principal branch. */\n"
+    "inline double _Complex csqrt(double _Complex z) {\n"
+    "    double _Complex l = clog(z);\n"
+    "    return cexp(__npb_make_complex(0.5*creal(l), 0.5*cimag(l)));\n"
+    "}\n"
+    "/* ``cpow(z, w) = exp(w * log(z))`` -- general complex pow. */\n"
+    "inline double _Complex cpow(double _Complex z, double _Complex w) {\n"
+    "    double _Complex l = clog(z);\n"
+    "    return cexp(__npb_make_complex(\n"
+    "        creal(w)*creal(l) - cimag(w)*cimag(l),\n"
+    "        creal(w)*cimag(l) + cimag(w)*creal(l)));\n"
+    "}\n"
+    "/* ``z.conjugate()`` -- complex-conjugate scalar helper. */\n"
+    "inline double _Complex __npb_conj(double _Complex z) {\n"
+    "    return __npb_make_complex(creal(z), -cimag(z));\n"
+    "}\n"
+    "/* Integer power for VLA shape bounds. */\n"
+    "constexpr int64_t __npb_int_pow(int64_t base, int64_t exp) {\n"
+    "    int64_t result = 1;\n"
+    "    while (exp > 0) {\n"
+    "        if (exp & 1) result *= base;\n"
+    "        base *= base;\n"
+    "        exp >>= 1;\n"
+    "    }\n"
+    "    return result;\n"
+    "}\n"
+    "/* Ternary-form ``max`` / ``min`` as constexpr function templates\n"
+    " * so a mixed call like ``max(double, int)`` promotes the int\n"
+    " * operand via the usual arithmetic conversions (``std::max``\n"
+    " * would require both args to share a type). They PROPAGATE NaN (a\n"
+    " * NaN in EITHER operand yields NaN): these serve the elementwise\n"
+    " * ``np.maximum``/``np.minimum`` broadcast and the ``np.maximum.at`` /\n"
+    " * ``np.minimum.at`` scatter folds, which follow numpy (propagate),\n"
+    " * not Python builtin max. For finite operands the result is the\n"
+    " * larger/smaller -- so the 3-way builtin max (needleman_wunsch,\n"
+    " * always finite) is unchanged; integer NaN tests are dead. */\n"
+    "template <class A, class B>\n"
+    "constexpr auto max(A a, B b) { return a != a ? a : (b != b ? b : (b > a ? b : a)); }\n"
+    "template <class A, class B>\n"
+    "constexpr auto min(A a, B b) { return a != a ? a : (b != b ? b : (b < a ? b : a)); }\n"
+    "/* Elementwise ``np.maximum``/``np.minimum`` lower to ``fmax``/``fmin``;\n"
+    " * libm ``fmax``/``fmin`` SUPPRESS NaN but numpy PROPAGATES it. These\n"
+    " * single-evaluation helpers return NaN when either operand is NaN.\n"
+    " * Integral operands take the exact integer compare (the same INTEGRAL/floating\n"
+    " * split int_floor makes): converting them to double rounds anything above 2**53,\n"
+    " * so min(2**53 + 1, 2**53 + 2) came back 2**53 -- a value neither operand had. */\n"
+    "template <class A, class B>\n"
+    "constexpr auto __npb_fmax(A a, B b) {\n"
+    "    if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {\n"
+    "        return a > b ? a : b;\n"
+    "    } else {\n"
+    "        return a != a ? a : (b != b ? b : (a > b ? a : b));\n"
+    "    }\n"
+    "}\n"
+    "template <class A, class B>\n"
+    "constexpr auto __npb_fmin(A a, B b) {\n"
+    "    if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {\n"
+    "        return a < b ? a : b;\n"
+    "    } else {\n"
+    "        return a != a ? a : (b != b ? b : (a < b ? a : b));\n"
+    "    }\n"
+    "}\n"
+    "/* ``np.sign``: numpy ``sign(nan) == nan`` and ``sign(0) == 0``. The\n"
+    " * naive ``(x>0)-(x<0)`` gives 0 for NaN and evaluates ``x`` twice. */\n"
+    "inline double __npb_sign(double x) {\n"
+    "    return x != x ? x : (double)((x > 0) - (x < 0));\n"
+    "}\n"
+    "/* Python ``//`` floors toward -inf; C++ ``/`` truncates toward zero.\n"
+    " * C++ has no built-in floor-division, so it is always this helper. The\n"
+    " * INTEGRAL/floating split is decided by the operand TYPE here rather than\n"
+    " * inferred from the source AST -- guessing it wrong emitted a no-op floor\n"
+    " * over an already-truncated integer quotient. */\n"
+    "template <class A, class B>\n"
+    "constexpr auto int_floor(A a, B b) {\n"
+    "    if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {\n"
+    "        return a / b - ((a % b != 0) && ((a < 0) ^ (b < 0)));\n"
+    "    } else {\n"
+    "        return std::floor(static_cast<double>(a) / static_cast<double>(b));\n"
+    "    }\n"
+    "}\n"
+    "/* Ceil-division counterpart (toward +inf), exact for both signs -- unlike\n"
+    " * the ``(a + b - 1) / b`` idiom, which holds only for a positive divisor\n"
+    " * and overflows near the integer maximum. */\n"
+    "template <class A, class B>\n"
+    "constexpr auto int_ceil(A a, B b) {\n"
+    "    if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {\n"
+    "        return a / b + ((a % b != 0) && ((a < 0) == (b < 0)));\n"
+    "    } else {\n"
+    "        return std::ceil(static_cast<double>(a) / static_cast<double>(b));\n"
+    "    }\n"
+    "}\n"
+    "/* Python ``%`` returns the sign of the divisor; C/C++ the dividend.\n"
+    " * Same type-dispatch as int_floor (floating operands need npy_remainder,\n"
+    " * which the integer form cannot express on doubles). */\n"
+    "template <class A, class B>\n"
+    "constexpr auto python_mod(A a, B b) {\n"
+    "    if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {\n"
+    "        return (a % b + b) % b;\n"
+    "    } else {\n"
+    "        double m = std::fmod(static_cast<double>(a), static_cast<double>(b));\n"
+    "        if (m != 0.0 && ((b < 0.0) != (m < 0.0))) m += static_cast<double>(b);\n"
+    "        return m;\n"
+    "    }\n"
+    "}\n"
+    "/* Floating-point ``%``: numpy floored modulo (sign of the divisor),\n"
+    " * which integer ``python_mod`` cannot express on doubles. Mirrors\n"
+    " * numpy ``npy_remainder`` (fmod + sign-of-divisor fixup). */\n"
+    "inline double python_fmod(double a, double b) {\n"
+    "    double m = std::fmod(a, b);\n"
+    "    if (m != 0.0 && ((b < 0.0) != (m < 0.0))) m += b;\n"
+    "    return m;\n"
+    "}\n"
+)
 #: The kernel prologue = the arithmetic definitions plus the C-linkage opener the entry point needs.
 _CPP_HEADER = _CPP_ARITH + '\nextern "C" {\n'
 _CPP_FOOTER = '} // extern "C"\n'
@@ -2771,8 +2907,11 @@ _CPP_FOOTER = '} // extern "C"\n'
 #: installed the policies dispatch to it (and the LINK then needs it; see
 #: languages.stdpar_link_flags), and without it they degrade to the serial backend and link against
 #: nothing. Either way the source says the same thing.
-_CPP_ISOPAR_HEADER = ('#include <algorithm>\n#include <execution>\n#include <numeric>\n#include <functional>\n' +
-                      _CPP_ARITH + '\nextern "C" {\n')
+_CPP_ISOPAR_HEADER = (
+    "#include <algorithm>\n#include <execution>\n#include <numeric>\n#include <functional>\n"
+    + _CPP_ARITH
+    + '\nextern "C" {\n'
+)
 
 # Timing is owned by the harness bracket externally (abi_contract.md Sec. 6); the kernel neither self-times nor
 # takes a timer arg.
@@ -2807,8 +2946,10 @@ def arith_header_source(lang: str) -> str:
     if lang not in _ARITH_BODY:
         raise KeyError(f"no arithmetic header for {lang!r}; expected one of {sorted(_ARITH_BODY)}")
     guard = _ARITH_GUARD[lang]
-    return (f"/* {ARITH_HEADER_NAME[lang]} -- numpy-semantics arithmetic helpers, emitted by "
-            f"numpyto_c. */\n#ifndef {guard}\n#define {guard}\n\n{_ARITH_BODY[lang]()}\n#endif /* {guard} */\n")
+    return (
+        f"/* {ARITH_HEADER_NAME[lang]} -- numpy-semantics arithmetic helpers, emitted by "
+        f"numpyto_c. */\n#ifndef {guard}\n#define {guard}\n\n{_ARITH_BODY[lang]()}\n#endif /* {guard} */\n"
+    )
 
 
 def write_arith_header(out_dir, lang: str) -> pathlib.Path:
@@ -2821,96 +2962,101 @@ def write_arith_header(out_dir, lang: str) -> pathlib.Path:
 
 #: Per-fp8-format prelude (storage typedef + promote/round/demote conversions), verified bit-exact against ml_dtypes.
 _FP8_HELPERS = {
-    "float8_e4m3":
-    ('/* OCP float8_e4m3fn: 1 sign / 4 exp (bias 7) / 3 mantissa. 1-byte STORAGE\n'
-     ' * only -- promoted to float to compute, rounded back on every op. */\n'
-     'typedef uint8_t {ct};\n'
-     'static inline float __npb_e4m3_to_f32({ct} b) {{\n'
-     '    uint32_t s = (uint32_t)(b >> 7) & 1u, e = (uint32_t)(b >> 3) & 0xFu, m = (uint32_t)b & 0x7u, u;\n'
-     '    if (e == 0xF && m == 0x7) u = (s << 31) | 0x7fc00000u;      /* NaN; E4M3FN has no Inf */\n'
-     '    else if (e == 0) {{                                          /* subnormal: m * 2^-9 */\n'
-     '        if (m == 0) u = s << 31;\n'
-     '        else {{\n'
-     '            int32_t ex = -6; uint32_t mm = m;\n'
-     '            while (!(mm & 0x8u)) {{ mm <<= 1; ex -= 1; }}\n'
-     '            u = (s << 31) | ((uint32_t)(ex + 127) << 23) | ((mm & 0x7u) << 20);\n'
-     '        }}\n'
-     '    }} else u = (s << 31) | ((e + 120u) << 23) | (m << 20);\n'
-     '    float f; memcpy(&f, &u, 4); return f;\n'
-     '}}\n'
-     'static inline {ct} __npb_f32_to_e4m3(float f) {{\n'
-     '    uint32_t u; memcpy(&u, &f, 4);\n'
-     '    uint32_t s = (u >> 31) & 1u, rest = u & 0x7fffffffu, m3, sticky, half, lsb, drop;\n'
-     '    if (rest >= 0x7f800000u) return ({ct})((s << 7) | 0x7Fu);   /* Inf/NaN -> NaN */\n'
-     '    int32_t e = (int32_t)(rest >> 23) - 127;\n'
-     '    uint32_t m = rest & 0x7fffffu;\n'
-     '    if (e >= -6) {{\n'
-     '        drop = 20; m3 = m >> drop; lsb = m3 & 1u;\n'
-     '        half = 1u << (drop - 1); sticky = m & ((1u << drop) - 1u);\n'
-     '        if (sticky > half || (sticky == half && lsb)) {{ m3 += 1u; if (m3 == 8u) {{ m3 = 0u; e += 1; }} }}\n'
-     '        if (e > 8 || (e == 8 && m3 == 7u)) return ({ct})((s << 7) | 0x7Fu);  /* overflow -> NaN */\n'
-     '        return ({ct})((s << 7) | ((uint32_t)(e + 7) << 3) | (m3 & 0x7u));\n'
-     '    }}\n'
-     '    if (e < -10) return ({ct})(s << 7);                          /* underflow -> +/-0 */\n'
-     '    m |= 0x800000u; drop = (uint32_t)(20 + (-6 - e));\n'
-     '    m3 = m >> drop; lsb = m3 & 1u;\n'
-     '    half = 1u << (drop - 1); sticky = m & ((1u << drop) - 1u);\n'
-     '    if (sticky > half || (sticky == half && lsb)) m3 += 1u;      /* carry into e=1 is correct */\n'
-     '    return ({ct})((s << 7) | (m3 & 0xFu));\n'
-     '}}\n'
-     '/* Round a float to the fp8 grid, STAYING in float. This is what makes the\n'
-     ' * emitted arithmetic track numpy: ml_dtypes rounds back to fp8 after EVERY\n'
-     ' * op, so a fused float chain would drift (see the fp8 emission tests). */\n'
-     'static inline float __npb_rn_e4m3(float x) {{ return __npb_e4m3_to_f32(__npb_f32_to_e4m3(x)); }}\n'),
-    "float8_e5m2":
-    ('/* OCP float8_e5m2: 1 sign / 5 exp (bias 15) / 2 mantissa. 1-byte STORAGE\n'
-     ' * only -- promoted to float to compute, rounded back on every op. */\n'
-     'typedef uint8_t {ct};\n'
-     'static inline float __npb_e5m2_to_f32({ct} b) {{\n'
-     '    uint32_t s = (uint32_t)(b >> 7) & 1u, e = (uint32_t)(b >> 2) & 0x1Fu, m = (uint32_t)b & 0x3u, u;\n'
-     '    if (e == 0x1F) u = (s << 31) | 0x7f800000u | (m ? 0x00400000u : 0u);   /* Inf / NaN */\n'
-     '    else if (e == 0) {{                                          /* subnormal: m * 2^-16 */\n'
-     '        if (m == 0) u = s << 31;\n'
-     '        else {{\n'
-     '            int32_t ex = -14; uint32_t mm = m;\n'
-     '            while (!(mm & 0x4u)) {{ mm <<= 1; ex -= 1; }}\n'
-     '            u = (s << 31) | ((uint32_t)(ex + 127) << 23) | ((mm & 0x3u) << 21);\n'
-     '        }}\n'
-     '    }} else u = (s << 31) | ((e + 112u) << 23) | (m << 21);\n'
-     '    float f; memcpy(&f, &u, 4); return f;\n'
-     '}}\n'
-     'static inline {ct} __npb_f32_to_e5m2(float f) {{\n'
-     '    uint32_t u; memcpy(&u, &f, 4);\n'
-     '    uint32_t s = (u >> 31) & 1u, rest = u & 0x7fffffffu, m2, sticky, half, lsb, drop;\n'
-     '    if (rest > 0x7f800000u) return ({ct})((s << 7) | 0x7Eu);    /* NaN */\n'
-     '    if (rest == 0x7f800000u) return ({ct})((s << 7) | 0x7Cu);   /* Inf */\n'
-     '    int32_t e = (int32_t)(rest >> 23) - 127;\n'
-     '    uint32_t m = rest & 0x7fffffu;\n'
-     '    if (e >= -14) {{\n'
-     '        drop = 21; m2 = m >> drop; lsb = m2 & 1u;\n'
-     '        half = 1u << (drop - 1); sticky = m & ((1u << drop) - 1u);\n'
-     '        if (sticky > half || (sticky == half && lsb)) {{ m2 += 1u; if (m2 == 4u) {{ m2 = 0u; e += 1; }} }}\n'
-     '        if (e > 15) return ({ct})((s << 7) | 0x7Cu);             /* overflow -> Inf */\n'
-     '        return ({ct})((s << 7) | ((uint32_t)(e + 15) << 2) | (m2 & 0x3u));\n'
-     '    }}\n'
-     '    if (e < -18) return ({ct})(s << 7);                          /* underflow -> +/-0 */\n'
-     '    m |= 0x800000u; drop = (uint32_t)(21 + (-14 - e));\n'
-     '    m2 = m >> drop; lsb = m2 & 1u;\n'
-     '    half = 1u << (drop - 1); sticky = m & ((1u << drop) - 1u);\n'
-     '    if (sticky > half || (sticky == half && lsb)) m2 += 1u;\n'
-     '    return ({ct})((s << 7) | (m2 & 0x7u));\n'
-     '}}\n'
-     '/* Round a float to the fp8 grid, STAYING in float -- see __npb_rn_e4m3. */\n'
-     'static inline float __npb_rn_e5m2(float x) {{ return __npb_e5m2_to_f32(__npb_f32_to_e5m2(x)); }}\n'),
+    "float8_e4m3": (
+        "/* OCP float8_e4m3fn: 1 sign / 4 exp (bias 7) / 3 mantissa. 1-byte STORAGE\n"
+        " * only -- promoted to float to compute, rounded back on every op. */\n"
+        "typedef uint8_t {ct};\n"
+        "static inline float __npb_e4m3_to_f32({ct} b) {{\n"
+        "    uint32_t s = (uint32_t)(b >> 7) & 1u, e = (uint32_t)(b >> 3) & 0xFu, m = (uint32_t)b & 0x7u, u;\n"
+        "    if (e == 0xF && m == 0x7) u = (s << 31) | 0x7fc00000u;      /* NaN; E4M3FN has no Inf */\n"
+        "    else if (e == 0) {{                                          /* subnormal: m * 2^-9 */\n"
+        "        if (m == 0) u = s << 31;\n"
+        "        else {{\n"
+        "            int32_t ex = -6; uint32_t mm = m;\n"
+        "            while (!(mm & 0x8u)) {{ mm <<= 1; ex -= 1; }}\n"
+        "            u = (s << 31) | ((uint32_t)(ex + 127) << 23) | ((mm & 0x7u) << 20);\n"
+        "        }}\n"
+        "    }} else u = (s << 31) | ((e + 120u) << 23) | (m << 20);\n"
+        "    float f; memcpy(&f, &u, 4); return f;\n"
+        "}}\n"
+        "static inline {ct} __npb_f32_to_e4m3(float f) {{\n"
+        "    uint32_t u; memcpy(&u, &f, 4);\n"
+        "    uint32_t s = (u >> 31) & 1u, rest = u & 0x7fffffffu, m3, sticky, half, lsb, drop;\n"
+        "    if (rest >= 0x7f800000u) return ({ct})((s << 7) | 0x7Fu);   /* Inf/NaN -> NaN */\n"
+        "    int32_t e = (int32_t)(rest >> 23) - 127;\n"
+        "    uint32_t m = rest & 0x7fffffu;\n"
+        "    if (e >= -6) {{\n"
+        "        drop = 20; m3 = m >> drop; lsb = m3 & 1u;\n"
+        "        half = 1u << (drop - 1); sticky = m & ((1u << drop) - 1u);\n"
+        "        if (sticky > half || (sticky == half && lsb)) {{ m3 += 1u; if (m3 == 8u) {{ m3 = 0u; e += 1; }} }}\n"
+        "        if (e > 8 || (e == 8 && m3 == 7u)) return ({ct})((s << 7) | 0x7Fu);  /* overflow -> NaN */\n"
+        "        return ({ct})((s << 7) | ((uint32_t)(e + 7) << 3) | (m3 & 0x7u));\n"
+        "    }}\n"
+        "    if (e < -10) return ({ct})(s << 7);                          /* underflow -> +/-0 */\n"
+        "    m |= 0x800000u; drop = (uint32_t)(20 + (-6 - e));\n"
+        "    m3 = m >> drop; lsb = m3 & 1u;\n"
+        "    half = 1u << (drop - 1); sticky = m & ((1u << drop) - 1u);\n"
+        "    if (sticky > half || (sticky == half && lsb)) m3 += 1u;      /* carry into e=1 is correct */\n"
+        "    return ({ct})((s << 7) | (m3 & 0xFu));\n"
+        "}}\n"
+        "/* Round a float to the fp8 grid, STAYING in float. This is what makes the\n"
+        " * emitted arithmetic track numpy: ml_dtypes rounds back to fp8 after EVERY\n"
+        " * op, so a fused float chain would drift (see the fp8 emission tests). */\n"
+        "static inline float __npb_rn_e4m3(float x) {{ return __npb_e4m3_to_f32(__npb_f32_to_e4m3(x)); }}\n"
+    ),
+    "float8_e5m2": (
+        "/* OCP float8_e5m2: 1 sign / 5 exp (bias 15) / 2 mantissa. 1-byte STORAGE\n"
+        " * only -- promoted to float to compute, rounded back on every op. */\n"
+        "typedef uint8_t {ct};\n"
+        "static inline float __npb_e5m2_to_f32({ct} b) {{\n"
+        "    uint32_t s = (uint32_t)(b >> 7) & 1u, e = (uint32_t)(b >> 2) & 0x1Fu, m = (uint32_t)b & 0x3u, u;\n"
+        "    if (e == 0x1F) u = (s << 31) | 0x7f800000u | (m ? 0x00400000u : 0u);   /* Inf / NaN */\n"
+        "    else if (e == 0) {{                                          /* subnormal: m * 2^-16 */\n"
+        "        if (m == 0) u = s << 31;\n"
+        "        else {{\n"
+        "            int32_t ex = -14; uint32_t mm = m;\n"
+        "            while (!(mm & 0x4u)) {{ mm <<= 1; ex -= 1; }}\n"
+        "            u = (s << 31) | ((uint32_t)(ex + 127) << 23) | ((mm & 0x3u) << 21);\n"
+        "        }}\n"
+        "    }} else u = (s << 31) | ((e + 112u) << 23) | (m << 21);\n"
+        "    float f; memcpy(&f, &u, 4); return f;\n"
+        "}}\n"
+        "static inline {ct} __npb_f32_to_e5m2(float f) {{\n"
+        "    uint32_t u; memcpy(&u, &f, 4);\n"
+        "    uint32_t s = (u >> 31) & 1u, rest = u & 0x7fffffffu, m2, sticky, half, lsb, drop;\n"
+        "    if (rest > 0x7f800000u) return ({ct})((s << 7) | 0x7Eu);    /* NaN */\n"
+        "    if (rest == 0x7f800000u) return ({ct})((s << 7) | 0x7Cu);   /* Inf */\n"
+        "    int32_t e = (int32_t)(rest >> 23) - 127;\n"
+        "    uint32_t m = rest & 0x7fffffu;\n"
+        "    if (e >= -14) {{\n"
+        "        drop = 21; m2 = m >> drop; lsb = m2 & 1u;\n"
+        "        half = 1u << (drop - 1); sticky = m & ((1u << drop) - 1u);\n"
+        "        if (sticky > half || (sticky == half && lsb)) {{ m2 += 1u; if (m2 == 4u) {{ m2 = 0u; e += 1; }} }}\n"
+        "        if (e > 15) return ({ct})((s << 7) | 0x7Cu);             /* overflow -> Inf */\n"
+        "        return ({ct})((s << 7) | ((uint32_t)(e + 15) << 2) | (m2 & 0x3u));\n"
+        "    }}\n"
+        "    if (e < -18) return ({ct})(s << 7);                          /* underflow -> +/-0 */\n"
+        "    m |= 0x800000u; drop = (uint32_t)(21 + (-14 - e));\n"
+        "    m2 = m >> drop; lsb = m2 & 1u;\n"
+        "    half = 1u << (drop - 1); sticky = m & ((1u << drop) - 1u);\n"
+        "    if (sticky > half || (sticky == half && lsb)) m2 += 1u;\n"
+        "    return ({ct})((s << 7) | (m2 & 0x7u));\n"
+        "}}\n"
+        "/* Round a float to the fp8 grid, STAYING in float -- see __npb_rn_e4m3. */\n"
+        "static inline float __npb_rn_e5m2(float x) {{ return __npb_e5m2_to_f32(__npb_f32_to_e5m2(x)); }}\n"
+    ),
 }
 
 
 def _fp8_dtypes_used(kir: KernelIR) -> List[str]:
     """The canonical storage-only (fp8) dtypes this kernel mentions, deduped; drives prelude injection + promote/demote."""
     seen: List[str] = []
-    for dt in (*(a.dtype for a in kir.arrays), *(s.dtype
-                                                 for s in kir.scalars), *kir.local_dtypes.values(), kir.float_precision
-               or ""):
+    for dt in (
+        *(a.dtype for a in kir.arrays),
+        *(s.dtype for s in kir.scalars),
+        *kir.local_dtypes.values(),
+        kir.float_precision or "",
+    ):
         if dt and dtypes.is_storage_only(dt):
             canon = dtypes.canonical(dt)
             if canon not in seen:
@@ -2927,8 +3073,8 @@ def _helper_return_ctype(hkir: KernelIR) -> str:
     """C return type for a scalar-returning helper: int64 iff every return is an int literal, else double."""
     returns = [n.value for n in ast.walk(hkir.tree) if isinstance(n, ast.Return) and n.value is not None]
     if returns and all(
-            isinstance(v, ast.Constant) and isinstance(v.value, int) and not isinstance(v.value, bool)
-            for v in returns):
+        isinstance(v, ast.Constant) and isinstance(v.value, int) and not isinstance(v.value, bool) for v in returns
+    ):
         return _c_type("int")
     return _c_type("float64")
 
@@ -3007,8 +3153,10 @@ def emit_c(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     helpers = emit_c_helpers(kir)
     signature = _emit_signature(kir, name)
     body = _emit_body(kir, indent="        ")
-    return (f"{_C_HEADER}{_fp8_prelude(kir)}\n{pinned_const_block(kir)}{helpers}{signature} {{\n"
-            f"{_C_PRELUDE}{body}\n{_C_EPILOGUE}}}\n")
+    return (
+        f"{_C_HEADER}{_fp8_prelude(kir)}\n{pinned_const_block(kir)}{helpers}{signature} {{\n"
+        f"{_C_PRELUDE}{body}\n{_C_EPILOGUE}}}\n"
+    )
 
 
 def emit_cpp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
@@ -3018,8 +3166,10 @@ def emit_cpp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     # restrict is a C99 keyword; C++ accepts it as __restrict__, so rewrite it for the C++ output.
     signature = signature.replace("*restrict ", "*__restrict__ ")
     body = _emit_body(kir, indent="        ")
-    return (f"{_CPP_HEADER}{_fp8_prelude(kir)}\n{pinned_const_block(kir)}{helpers}{signature} {{\n"
-            f"{_CPP_PRELUDE}{body}\n{_CPP_EPILOGUE}}}\n{_CPP_FOOTER}")
+    return (
+        f"{_CPP_HEADER}{_fp8_prelude(kir)}\n{pinned_const_block(kir)}{helpers}{signature} {{\n"
+        f"{_CPP_PRELUDE}{body}\n{_CPP_EPILOGUE}}}\n{_CPP_FOOTER}"
+    )
 
 
 def emit_cpp_isopar(kir: KernelIR, fn_name: Optional[str] = None) -> str:
@@ -3062,17 +3212,20 @@ def emit_cpp_isopar(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     body = _emit_body(kir, indent="        ", isopar=True)
     return (
         f"{_CPP_ISOPAR_HEADER}{_fp8_prelude(kir)}\n{pinned_const_block(kir)}{helpers}{signature} {{\n{_CPP_PRELUDE}{body}\n"
-        f"{_CPP_EPILOGUE}}}\n{_CPP_FOOTER}")
+        f"{_CPP_EPILOGUE}}}\n{_CPP_FOOTER}"
+    )
 
 
 def _require_parallelizable(kir: KernelIR) -> None:
     """Refuse a kernel the parallel variant can't soundly emit: a colliding scatter, or no parallelizable loop."""
     if parallelism.has_indirect_scatter(kir.tree):
         raise parallelism.UnsupportedParallelError(
-            f"{kir.kernel_name}: data-dependent scatter write needs an atomic; no parallel variant")
+            f"{kir.kernel_name}: data-dependent scatter write needs an atomic; no parallel variant"
+        )
     if not parallelism.any_parallelizable_loop(kir.tree):
         raise parallelism.UnsupportedParallelError(
-            f"{kir.kernel_name}: no iteration-independent or reduction loop to parallelize")
+            f"{kir.kernel_name}: no iteration-independent or reduction loop to parallelize"
+        )
 
 
 def emit_c_omp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
@@ -3092,15 +3245,17 @@ def emit_cpp_omp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     helpers = emit_c_helpers(kir, cpp=True)
     signature = _emit_signature(kir, name).replace("*restrict ", "*__restrict__ ")
     body = _emit_body(kir, indent="        ", parallel=True)
-    return (f"{_CPP_HEADER}{_fp8_prelude(kir)}\n{helpers}{signature} {{\n{_CPP_PRELUDE}{body}\n"
-            f"{_CPP_EPILOGUE}}}\n{_CPP_FOOTER}")
+    return (
+        f"{_CPP_HEADER}{_fp8_prelude(kir)}\n{helpers}{signature} {{\n{_CPP_PRELUDE}{body}\n"
+        f"{_CPP_EPILOGUE}}}\n{_CPP_FOOTER}"
+    )
 
 
 def _pluto_multidim_array_signature(arr: ArrayDesc) -> str:
     """Pluto signature for a rank>=2 array: a direct VLA parameter (pet drops a scop that reaches an array via a cast pointer)."""
     base = _c_type(arr.dtype)
     qual = "" if arr.is_output else "const "
-    dims = (f"[restrict {_c_shape_token(arr.shape[0])}]" + "".join(f"[{_c_shape_token(d)}]" for d in arr.shape[1:]))
+    dims = f"[restrict {_c_shape_token(arr.shape[0])}]" + "".join(f"[{_c_shape_token(d)}]" for d in arr.shape[1:])
     return f"{qual}{base} {arr.name}{dims}"
 
 
@@ -3132,5 +3287,7 @@ def emit_pluto(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     # inside, and the body already carries its own scop markers (see _CBodyEmitter.emit_block).
     decl_block = (decls + "\n") if decls else ""
     free_block = (frees + "\n") if frees else ""
-    return (f"{_C_HEADER}{_fp8_prelude(kir)}\n{pinned_const_block(kir)}{signature} {{\n{_C_PRELUDE}"
-            f"{decl_block}{body}\n{free_block}{_C_EPILOGUE}}}\n")
+    return (
+        f"{_C_HEADER}{_fp8_prelude(kir)}\n{pinned_const_block(kir)}{signature} {{\n{_C_PRELUDE}"
+        f"{decl_block}{body}\n{free_block}{_C_EPILOGUE}}}\n"
+    )

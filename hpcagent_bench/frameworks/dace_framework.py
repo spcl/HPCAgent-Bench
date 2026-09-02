@@ -3,6 +3,7 @@
 """DaCe framework adapter: optimizes a kernel through the SDFG pipelines its FLAVOR names
 (:data:`hpcagent_bench.frameworks.framework.FRAMEWORK_META`'s ``pipelines``), verifies + scores each,
 and returns the fastest correct one as a compiled SDFG (see DaceFramework.optimize)."""
+
 import copy
 import getpass
 import importlib
@@ -49,8 +50,13 @@ dc_complex_float = None
 OUTPUT_ARGS: Dict[str, int] = {"-o": 2, "-MT": 2, "-MF": 2, "-MD": 1, "-MMD": 1}
 
 
-def bind_free_symbols(sdfg: Any, symbol_recipes: Sequence[Tuple[str, str]], input_args: Sequence[str],
-                      resolved: Dict[str, Any], bound: Dict[str, Any]) -> Dict[str, int]:
+def bind_free_symbols(
+    sdfg: Any,
+    symbol_recipes: Sequence[Tuple[str, str]],
+    input_args: Sequence[str],
+    resolved: Dict[str, Any],
+    bound: Dict[str, Any],
+) -> Dict[str, int]:
     """Bind the SDFG free symbols ``bound`` does not already supply; ``{symbol: value}``.
 
     A compiled SDFG needs EVERY free symbol as an explicit keyword or the call dies on "Missing
@@ -138,8 +144,11 @@ def recorded_compiles(folder: pathlib.Path) -> List[Tuple[str, List[str]]]:
     src_root = str(folder / "src")
     db = build / "compile_commands.json"
     if db.is_file():
-        return [(str(e["directory"]), shlex.split(e["command"])) for e in json.loads(db.read_text())
-                if str(e["file"]).startswith(src_root)]
+        return [
+            (str(e["directory"]), shlex.split(e["command"]))
+            for e in json.loads(db.read_text())
+            if str(e["file"]).startswith(src_root)
+        ]
     recorded = [shlex.split(cmd.read_text()) for cmd in sorted(build.glob("*.o.cmd"))]
     return [(str(build), argv) for argv in recorded if any(token.startswith(src_root) for token in argv)]
 
@@ -256,8 +265,11 @@ def pin_single_stream() -> None:
 #: NOT every key exists on every tree: ``build_mode`` is declared only by the FORK -- upstream
 #: spcl/dace@main has no such key anywhere in its ``config_schema.yml``. A pin is therefore a
 #: request, not an assumption; see :func:`pin_build_caching`.
-BUILD_CACHE_PINS = (("compiler", "build_mode", "cmake"), ("compiler", "configure_cache", True), ("compiler",
-                                                                                                 "command_cache", True))
+BUILD_CACHE_PINS = (
+    ("compiler", "build_mode", "cmake"),
+    ("compiler", "configure_cache", True),
+    ("compiler", "command_cache", True),
+)
 
 #: Pins already reported absent, so the notice below is one line per process rather than one per
 #: kernel per variant (:func:`pin_build_caching` runs from ``optimize``, once per compiled kernel).
@@ -268,8 +280,17 @@ _ABSENT_PINS_REPORTED: Set[Tuple[str, ...]] = set()
 #: (``dace/sdfg/sdfg.py``): DaCe splits the build folder on any name it knows, so one we do not probe
 #: leaves the PCH cache shared across ranks while the build folder splits -- half-partitioned, which
 #: is the state the original library-load races came from.
-RANK_ENV = ("OMPI_COMM_WORLD_RANK", "MV2_COMM_WORLD_RANK", "PMIX_RANK", "PMI_RANK", "PMI_ID", "FLUX_TASK_RANK",
-            "PALS_RANKID", "ALPS_APP_PE", "SLURM_PROCID")
+RANK_ENV = (
+    "OMPI_COMM_WORLD_RANK",
+    "MV2_COMM_WORLD_RANK",
+    "PMIX_RANK",
+    "PMI_RANK",
+    "PMI_ID",
+    "FLUX_TASK_RANK",
+    "PALS_RANKID",
+    "ALPS_APP_PE",
+    "SLURM_PROCID",
+)
 
 
 def mpi_rank() -> Optional[str]:
@@ -378,8 +399,11 @@ def pin_per_rank_build_dirs() -> None:
     cache_root = os.environ.get("DACE_BUILD_CACHE_DIR")
     if cache_root is None:
         shm = pathlib.Path("/dev/shm")
-        base = (shm / f"dace_build_cache_{getpass.getuser()}"
-                if shm.is_dir() and os.access(shm, os.W_OK) else pathlib.Path.home() / ".cache/dace/build_cache")
+        base = (
+            shm / f"dace_build_cache_{getpass.getuser()}"
+            if shm.is_dir() and os.access(shm, os.W_OK)
+            else pathlib.Path.home() / ".cache/dace/build_cache"
+        )
         os.environ["DACE_BUILD_CACHE_DIR"] = str(base / f"rank{rank}")
 
 
@@ -411,15 +435,19 @@ def pin_build_caching() -> None:
         except KeyError:
             if tuple(key) not in _ABSENT_PINS_REPORTED:
                 _ABSENT_PINS_REPORTED.add(tuple(key))
-                print(f"dace: this DaCe declares no '{'.'.join(key)}' config key; leaving it "
-                      f"unpinned (wanted {value!r}). Expected on upstream spcl/dace@main, which "
-                      f"has no such key; on spcl/dace@extended it means the checkout is stale.")
+                print(
+                    f"dace: this DaCe declares no '{'.'.join(key)}' config key; leaving it "
+                    f"unpinned (wanted {value!r}). Expected on upstream spcl/dace@main, which "
+                    f"has no such key; on spcl/dace@extended it means the checkout is stale."
+                )
             continue
         if current != value:
             dace.Config.set(*key, value=value)
     if shutil.which("ninja") is None:
-        print("dace: ninja not found -- CMake falls back to Make and compiler.command_cache "
-              "cannot replay, so every SDFG pays a full configure. Install ninja.")
+        print(
+            "dace: ninja not found -- CMake falls back to Make and compiler.command_cache "
+            "cannot replay, so every SDFG pays a full configure. Install ninja."
+        )
     ccache = shutil.which("ccache")
     if ccache is not None:
         for lang in ("C", "CXX", "CUDA"):
@@ -437,6 +465,7 @@ class SdfgPipeline:
     already moved the graph to the device. The generic tails (``set_fast_implementations``, the
     ``_prepare_gpu`` offload) then skip it -- re-running them would either be a no-op or, on GPU,
     offload an already-offloaded graph."""
+
     name: str
     parent: Optional[str]
     transform: Callable[[Any, Dict[str, Any]], None]
@@ -505,6 +534,7 @@ def pipeline_parallel(sdfg: Any, ctx: Dict[str, Any]) -> None:
         sdfg.apply_transformations_repeated([ctx["MapCollapse"]])
     if ctx["device"] is dace_dtypes.DeviceType.GPU:
         from dace.transformation.passes.canonicalize.finalize import offload_to_gpu
+
         offload_to_gpu(sdfg)
 
 
@@ -605,9 +635,11 @@ def enforce_gpu_residency(sdfg: Any) -> None:
             continue
         desc.storage = dace_dtypes.StorageType.GPU_Global
     if stranded:
-        raise ValueError("GPU residency contract: {names} must be device-resident (the harness passes "
-                         "device pointers) but {verb} read by an interstate edge, which is host "
-                         "code".format(names=", ".join(stranded), verb="is" if len(stranded) == 1 else "are"))
+        raise ValueError(
+            "GPU residency contract: {names} must be device-resident (the harness passes "
+            "device pointers) but {verb} read by an interstate edge, which is host "
+            "code".format(names=", ".join(stranded), verb="is" if len(stranded) == 1 else "are")
+        )
 
 
 #: THREE optimizers x TWO targets, and nothing else. All three are device-aware and all three
@@ -627,11 +659,14 @@ def enforce_gpu_residency(sdfg: Any) -> None:
 #: explicit-copy lift both off -- the configuration DaCe documents as byte-identical to upstream,
 #: which is what makes those two columns comparable against a stock install. ``canon`` is scored on
 #: the readable generator, which tree-reduces and lifts its own copies regardless of the flags.
-CLASSIC_CODEGEN: Tuple[Tuple[Tuple[str, ...], Any], ...] = ((("compiler", "cpu", "implementation"),
-                                                             "legacy"), (("compiler", "emit_tree_reductions"), False),
-                                                            (("compiler", "cpu", "explicit_copy"), False))
-READABLE_CODEGEN: Tuple[Tuple[Tuple[str, ...], Any],
-                        ...] = ((("compiler", "cpu", "implementation"), "experimental_readable"), )
+CLASSIC_CODEGEN: Tuple[Tuple[Tuple[str, ...], Any], ...] = (
+    (("compiler", "cpu", "implementation"), "legacy"),
+    (("compiler", "emit_tree_reductions"), False),
+    (("compiler", "cpu", "explicit_copy"), False),
+)
+READABLE_CODEGEN: Tuple[Tuple[Tuple[str, ...], Any], ...] = (
+    (("compiler", "cpu", "implementation"), "experimental_readable"),
+)
 
 
 def apply_pipeline_config(pipe: "SdfgPipeline") -> None:
@@ -664,7 +699,7 @@ PIPELINES_BY_NAME: Dict[str, SdfgPipeline] = {p.name: p for p in DACE_PIPELINES}
 #: Flavors that do not name their own ``pipelines`` score this. Every dace flavor names exactly one
 #: of the four, so this is the fallback for a flavor that forgot to -- CPU parallel, the closest
 #: thing to a plain "run DaCe" answer.
-DEFAULT_PIPELINES: Tuple[str, ...] = ("parallel_cpu", )
+DEFAULT_PIPELINES: Tuple[str, ...] = ("parallel_cpu",)
 
 
 def needed_pipelines(scored: Sequence[str]) -> List[str]:
@@ -754,6 +789,7 @@ class DaceFramework(Framework):
         # twice, on an image whose cupy was fine.
         if self.info["arch"] == "gpu":
             from hpcagent_bench.harness.native_call import import_device_array_module
+
             cupy = import_device_array_module()
 
             def cp_copy_func(arr):
@@ -767,12 +803,13 @@ class DaceFramework(Framework):
     # ----- Pipeline assembly ----------------------------------------------
 
     def autogen_targets(self):
-        return ("dace", )
+        return ("dace",)
 
     def kernel_module(self, bench: Benchmark) -> Any:
         """The generated kernel module; repeat calls are a ``sys.modules`` hit, not a re-import."""
-        module_pypath = "hpcagent_bench.benchmarks.{r}.{m}".format(r=bench.info["relative_path"].replace('/', '.'),
-                                                                   m=bench.info["module_name"])
+        module_pypath = "hpcagent_bench.benchmarks.{r}.{m}".format(
+            r=bench.info["relative_path"].replace("/", "."), m=bench.info["module_name"]
+        )
         postfix = self.info.get("postfix", self.fname)
         return importlib.import_module("{m}_{p}".format(m=module_pypath, p=postfix))
 
@@ -784,13 +821,15 @@ class DaceFramework(Framework):
     def _build_context(self) -> Dict[str, Any]:
         """Bundle the module-level DaCe handles the pipelines refer to into one dict."""
         device = dace_dtypes.DeviceType.GPU if self.info["arch"] == "gpu" else dace_dtypes.DeviceType.CPU
-        return dict(dace=dace,
-                    opt=dace_auto_opt,
-                    device=device,
-                    dtypes=dace_dtypes,
-                    LoopToMap=LoopToMap,
-                    MapCollapse=MapCollapse,
-                    MapFusion=MapFusion)
+        return dict(
+            dace=dace,
+            opt=dace_auto_opt,
+            device=device,
+            dtypes=dace_dtypes,
+            LoopToMap=LoopToMap,
+            MapCollapse=MapCollapse,
+            MapFusion=MapFusion,
+        )
 
     def _device_tag(self) -> str:
         """The cache filename discriminator for the target device (``cpu`` / ``gpu``)."""
@@ -802,6 +841,7 @@ class DaceFramework(Framework):
         (:func:`framework_cache.dace_tree_fingerprint`). Any change to the source, the emitted
         DaCe program, the datatype, or the DaCe library itself misses the cache and rebuilds."""
         from hpcagent_bench import framework_cache, paths
+
         kdir = paths.BENCHMARKS / bench.info["relative_path"]
         module = bench.info["module_name"]
         parts: List[bytes] = []
@@ -822,6 +862,7 @@ class DaceFramework(Framework):
         only the parse is skipped. Guarded end to end: a corrupt/incompatible cache degrades to a
         rebuild and a cache-write failure never breaks the run."""
         from hpcagent_bench import framework_cache, paths
+
         kdir = paths.BENCHMARKS / bench.info["relative_path"]
         module = bench.info["module_name"]
         fingerprint = self._sdfg_fingerprint(bench)
@@ -885,15 +926,14 @@ class DaceFramework(Framework):
         pin_build_caching()
         if self.info["arch"] == "gpu":
             pin_gpu_toolchain()
-            if dace.Config.get('library', 'blas', 'default_implementation') != "pure":
+            if dace.Config.get("library", "blas", "default_implementation") != "pure":
                 # The vendor BLAS is named per BACKEND: a hardcoded 'cuBLAS' on an AMD node names an
                 # expansion whose environment is not installed, and every BLAS node falls through to
                 # the serial 'pure' loop while the log still says the fast library was selected.
                 backend = dace_common.get_gpu_backend()
-                dace.Config.set('library',
-                                'blas',
-                                'default_implementation',
-                                value='rocBLAS' if backend == 'hip' else 'cuBLAS')
+                dace.Config.set(
+                    "library", "blas", "default_implementation", value="rocBLAS" if backend == "hip" else "cuBLAS"
+                )
             pin_single_stream()
 
         self._pipeline_errors = []
@@ -929,8 +969,13 @@ class DaceFramework(Framework):
                 traceback.print_exc()
         return compiled
 
-    def select_fastest(self, compiled: Dict[str, "TimedCompiledSDFG"], reference: Optional[List[Any]], bench: Benchmark,
-                       bdata: Dict[str, Any]) -> Any:
+    def select_fastest(
+        self,
+        compiled: Dict[str, "TimedCompiledSDFG"],
+        reference: Optional[List[Any]],
+        bench: Benchmark,
+        bdata: Dict[str, Any],
+    ) -> Any:
         """Verify + score each compiled variant; return the lowest-scoring one that verifies, else any compiled."""
         best_name: Optional[str] = None
         best: Optional["TimedCompiledSDFG"] = None
@@ -954,8 +999,9 @@ class DaceFramework(Framework):
         print(f"DaCe optimize: no variant verified; falling back to {fallback_name!r}")
         return fallback
 
-    def verify(self, variant: "TimedCompiledSDFG", reference: List[Any], bench: Benchmark, bdata: Dict[str,
-                                                                                                       Any]) -> bool:
+    def verify(
+        self, variant: "TimedCompiledSDFG", reference: List[Any], bench: Benchmark, bdata: Dict[str, Any]
+    ) -> bool:
         """Run ``variant`` and check its output against the NumPy reference via the harness validator."""
         try:
             out = self.collect_outputs(self, variant, bench, bdata)
@@ -1057,7 +1103,8 @@ class DaceFramework(Framework):
         src = folder / "src"
         parts = [
             f"// ==== {p.relative_to(src)} ====\n{languages.annotate_generated(p, 'cpp')}"
-            for p in sorted(src.rglob("*")) if p.is_file()
+            for p in sorted(src.rglob("*"))
+            if p.is_file()
         ]
         if not parts:
             return None
@@ -1157,7 +1204,7 @@ class DaceFramework(Framework):
     # ----- Argument plumbing (unchanged from the original) -----------------
 
     def params(self, bench: Benchmark, impl: Callable = None):
-        return [p for p in bench.info["parameters"]['L'].keys() if p not in bench.info["input_args"]]
+        return [p for p in bench.info["parameters"]["L"].keys() if p not in bench.info["input_args"]]
 
     def call_args(self, bench: Benchmark, impl: Callable, resolved, bdata):
         """DaCe compiled programs take the inputs AND the symbol params as keywords (``A=..., NI=...``)."""
@@ -1166,12 +1213,14 @@ class DaceFramework(Framework):
         # ``resolved`` is keyed by the MANIFEST's input_args, so it holds the logical entry and none
         # of the buffers; it still wins where it has a name, since it carries the per-run mutable copy.
         from hpcagent_bench.initialize import abi_input_args
+
         source = {**bdata, **resolved}
         # The SDFG's own arglist is the authority on what the signature takes: abi_input_args adds
         # declared OUTPUT buffers, which a program that returns them instead does not accept.
         declared = set(impl.sdfg.arglist()) if isinstance(impl, TimedCompiledSDFG) else None
         wanted = [
-            a for a in abi_input_args(bench.spec, bdata)
+            a
+            for a in abi_input_args(bench.spec, bdata)
             if a in source and (declared is None or renames.get(a, a) in declared)
         ]
         kwargs = {renames.get(a, a): source[a] for a in wanted}
@@ -1190,8 +1239,9 @@ class DaceFramework(Framework):
         is applied: everything past here already speaks the emitted spelling."""
         return vars(self.kernel_module(bench)).get("__hpcagent_bench_renames__", {})
 
-    def shape_symbols(self, impl: Callable, bench: Benchmark, resolved: Dict[str, Any],
-                      bound: Dict[str, Any]) -> Dict[str, int]:
+    def shape_symbols(
+        self, impl: Callable, bench: Benchmark, resolved: Dict[str, Any], bound: Dict[str, Any]
+    ) -> Dict[str, int]:
         """Bind free SDFG symbols the manifest didn't supply -- see :func:`bind_free_symbols`, which
         the numeric-agreement probe shares so there is one recipe evaluator, not two."""
         if not isinstance(impl, TimedCompiledSDFG):
@@ -1211,6 +1261,7 @@ class DaceFramework(Framework):
         global dc_float, dc_complex_float
         from dace import float16, float32, float64, complex64, complex128
         from hpcagent_bench.precision import Precision, precision_from_datatype
+
         prec = precision_from_datatype(datatype)
         dc_float = {Precision.FP64: float64, Precision.FP32: float32, Precision.FP16: float16}.get(prec, float32)
         dc_complex_float = complex128 if prec == Precision.FP64 else complex64

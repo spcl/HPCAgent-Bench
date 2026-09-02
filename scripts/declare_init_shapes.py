@@ -31,6 +31,7 @@ Usage::
     python scripts/declare_init_shapes.py --kernels gemm   # one kernel, verbosely
     python scripts/declare_init_shapes.py --write          # land init.arrays in the manifests
 """
+
 import argparse
 import importlib
 import inspect
@@ -146,7 +147,7 @@ def descriptor(value: object) -> Tuple:
         return ("array", tuple(int(d) for d in value.shape), value.dtype.str)
     if np.isscalar(value):
         return ("scalar", value.item() if isinstance(value, np.generic) else value)
-    return ("other", )
+    return ("other",)
 
 
 def run_probes(spec: BenchSpec, out, descending: bool = False) -> None:
@@ -195,8 +196,10 @@ def probe_once(spec: BenchSpec, descending: bool, timeout: float) -> Tuple[Optio
     try:
         status, payload = out.get(timeout=timeout)
     except Exception:  # noqa: BLE001 -- empty queue means the child hung or died before answering
-        status, payload = "error", (f"initialize() did not finish within {timeout:g}s at the probe "
-                                    f"sizes, or the child died")
+        status, payload = (
+            "error",
+            (f"initialize() did not finish within {timeout:g}s at the probe sizes, or the child died"),
+        )
     finally:
         child.terminate()
         child.join(timeout=5)
@@ -265,16 +268,19 @@ def infer(spec: BenchSpec, observations) -> Tuple[Dict[str, Dict[str, str]], Lis
                 dims.append(str(extents[0]))
                 continue
             fits = [
-                expr for expr, rule in ladder if all(
-                    evaluate(rule, sizes) == extent for (sizes, _), extent in zip(observations, extents))
+                expr
+                for expr, rule in ladder
+                if all(evaluate(rule, sizes) == extent for (sizes, _), extent in zip(observations, extents))
             ]
             if not fits:
                 problems.append(f"{name}: axis {axis} matches no candidate (extents {extents})")
                 dims = []
                 break
             if len(fits) > 1:
-                problems.append(f"{name}: axis {axis} is ambiguous -- {len(fits)} candidates fit "
-                                f"{extents} equally ({', '.join(fits[:3])}, ...)")
+                problems.append(
+                    f"{name}: axis {axis} is ambiguous -- {len(fits)} candidates fit "
+                    f"{extents} equally ({', '.join(fits[:3])}, ...)"
+                )
                 dims = []
                 break
             dims.append(fits[0])
@@ -356,7 +362,8 @@ def reload_check(path: pathlib.Path, arrays: Dict[str, Dict[str, str]]) -> str:
         return f"reloaded shapes {got}, expected {want}"
     clashes = {
         name: (entry["dtype"], reloaded.init.dtypes.get(name))
-        for name, entry in arrays.items() if "dtype" in entry and reloaded.init.dtypes.get(name) != entry["dtype"]
+        for name, entry in arrays.items()
+        if "dtype" in entry and reloaded.init.dtypes.get(name) != entry["dtype"]
     }
     return f"reloaded dtypes disagree: {clashes}" if clashes else ""
 

@@ -15,11 +15,12 @@ Each test isolates ONE capability so a regression points straight at the cause:
 
 These are pure AST transforms, so no compiler is needed.
 """
+
 import ast
 
 from numpyto_common.frontend import _collect_inlined_scalar_defs
-from numpyto_common.lib_nodes import (_iter_extent_of, expand_copy, expand_linalg_inv)
-from numpyto_common.lowering import (_ShapeMidExpressionRewriter, _TupleLocalPropagator)
+from numpyto_common.lib_nodes import _iter_extent_of, expand_copy, expand_linalg_inv
+from numpyto_common.lowering import _ShapeMidExpressionRewriter, _TupleLocalPropagator
 
 
 def _expr(src):
@@ -97,9 +98,7 @@ def test_iter_extent_of_method_reshape_resolves_neg1():
 
 
 def test_tuple_local_propagator_inlines_and_drops_assignment():
-    tree = ast.parse("shp = (Lb, Lb, Lb, nstate)\n"
-                     "k = shp[-1]\n"
-                     "y = np.reshape(mm, shp)\n")
+    tree = ast.parse("shp = (Lb, Lb, Lb, nstate)\nk = shp[-1]\ny = np.reshape(mm, shp)\n")
     _TupleLocalPropagator().run(tree)
     out = _unparse(tree)
     assert "shp = " not in out  # dead assignment dropped
@@ -120,20 +119,14 @@ def test_tuple_local_propagator_skips_reassigned_name():
 
 
 def test_collect_inlined_scalar_defs_excludes_augassigned_counter():
-    fn = ast.parse("def k():\n"
-                   " __inl2_na = 0\n"
-                   " __inl2_n = a.shape[0]\n"
-                   " for _ in range(6):\n"
-                   "  __inl2_na += 1\n").body[0]
+    fn = ast.parse("def k():\n __inl2_na = 0\n __inl2_n = a.shape[0]\n for _ in range(6):\n  __inl2_na += 1\n").body[0]
     defs = _collect_inlined_scalar_defs(fn)
     assert "__inl2_na" not in defs  # mutated counter -- not a fixed dim
     assert defs.get("__inl2_n") == "a.shape[0]"
 
 
 def test_collect_inlined_scalar_defs_excludes_multiply_assigned():
-    fn = ast.parse("def k():\n"
-                   " __inl1_m = 3\n"
-                   " __inl1_m = 5\n").body[0]
+    fn = ast.parse("def k():\n __inl1_m = 3\n __inl1_m = 5\n").body[0]
     assert "__inl1_m" not in _collect_inlined_scalar_defs(fn)
 
 
@@ -180,13 +173,19 @@ def _inv_buffer_names(stmts):
 
 def test_inv_working_buffer_is_unique_per_call():
     st = {"A": ("__inl3_k", "__inl3_k"), "B": ("__inl5_k", "__inl5_k")}
-    s1 = expand_linalg_inv(ast.Name(id="X1", ctx=ast.Store()), [ast.Name(id="A", ctx=ast.Load())],
-                           st,
-                           local_dtypes={},
-                           fresh_local_allocs={})
-    s2 = expand_linalg_inv(ast.Name(id="X2", ctx=ast.Store()), [ast.Name(id="B", ctx=ast.Load())],
-                           st,
-                           local_dtypes={},
-                           fresh_local_allocs={})
+    s1 = expand_linalg_inv(
+        ast.Name(id="X1", ctx=ast.Store()),
+        [ast.Name(id="A", ctx=ast.Load())],
+        st,
+        local_dtypes={},
+        fresh_local_allocs={},
+    )
+    s2 = expand_linalg_inv(
+        ast.Name(id="X2", ctx=ast.Store()),
+        [ast.Name(id="B", ctx=ast.Load())],
+        st,
+        local_dtypes={},
+        fresh_local_allocs={},
+    )
     b1, b2 = _inv_buffer_names(s1), _inv_buffer_names(s2)
     assert b1 and b2 and b1.isdisjoint(b2), f"inv buffers collide: {b1} vs {b2}"

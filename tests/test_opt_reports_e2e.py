@@ -16,6 +16,7 @@ Both columns are checked for both kinds because they fail differently: pluto's r
 concatenated (polycc's transformation report + clang's remarks), while dace's is a replay of the
 compile command CMake recorded for the C++ dace generated -- neither shares code with the other.
 """
+
 import importlib.util
 import os
 import pathlib
@@ -63,10 +64,13 @@ MIN_PDF_BYTES = 8_000
 #: producing reports" can never be the same outcome. polycc is what the pluto report shells out to;
 #: dace is an import. Neither is wrapped in try/except: a missing tool is a property of the host,
 #: which is a question with a direct answer.
-requires_polycc = pytest.mark.skipif(shutil.which("polycc") is None,
-                                     reason="polycc not installed: the pluto column cannot be built here")
-requires_dace = pytest.mark.skipif(importlib.util.find_spec("dace") is None,
-                                   reason="dace not importable: the dace_cpu_autoopt column cannot be built here")
+requires_polycc = pytest.mark.skipif(
+    shutil.which("polycc") is None, reason="polycc not installed: the pluto column cannot be built here"
+)
+requires_dace = pytest.mark.skipif(
+    importlib.util.find_spec("dace") is None,
+    reason="dace not importable: the dace_cpu_autoopt column cannot be built here",
+)
 
 
 def kernel_specs() -> List[BenchSpec]:
@@ -108,11 +112,9 @@ def run_cli(cwd: pathlib.Path, *args: str) -> subprocess.CompletedProcess:
     # returns -- the documented anti-hang every launcher in scripts/ carries.
     env["UCX_VFS_ENABLE"] = "n"
     env["HWLOC_COMPONENTS"] = "-opencl,-levelzero,-gl"
-    proc = subprocess.run([sys.executable, "-m", "hpcagent_bench", *args],
-                          cwd=cwd,
-                          env=env,
-                          capture_output=True,
-                          text=True)
+    proc = subprocess.run(
+        [sys.executable, "-m", "hpcagent_bench", *args], cwd=cwd, env=env, capture_output=True, text=True
+    )
     assert proc.returncode == 0, f"`hpcagent-bench {' '.join(args)}` failed:\n{proc.stdout}\n{proc.stderr}"
     return proc
 
@@ -141,8 +143,9 @@ def test_the_selector_still_names_both_kernels() -> None:
     """Anti-vacuity: every assertion below is per-kernel, so a selector that resolved to nothing would
     make this file pass while testing nothing at all."""
     specs = kernel_specs()
-    assert len(specs) == EXPECTED_KERNELS, (f"{SELECTOR} now resolves to {len(specs)} kernels "
-                                            f"({[s.module_name for s in specs]}), not {EXPECTED_KERNELS}")
+    assert len(specs) == EXPECTED_KERNELS, (
+        f"{SELECTOR} now resolves to {len(specs)} kernels ({[s.module_name for s in specs]}), not {EXPECTED_KERNELS}"
+    )
 
 
 def test_the_two_report_kinds_have_separate_roots() -> None:
@@ -161,8 +164,10 @@ def test_both_columns_write_both_reports(swept: pathlib.Path, framework: str, ki
     """Each column leaves a non-empty report of each kind, for each kernel, at the mirrored path."""
     for spec in kernel_specs():
         found = report_files(spec, framework, kind)
-        assert found, (f"no {kind} for {spec.module_name} under {framework}: expected "
-                       f"{perf_reports.report_path(spec.relative_path, spec.module_name, framework, '<impl>', kind)}")
+        assert found, (
+            f"no {kind} for {spec.module_name} under {framework}: expected "
+            f"{perf_reports.report_path(spec.relative_path, spec.module_name, framework, '<impl>', kind)}"
+        )
         for path in found:
             size = path.stat().st_size
             assert size >= MIN_REPORT_BYTES, f"{path} is {size} bytes -- a report that says nothing"
@@ -200,8 +205,19 @@ def test_the_run_plots_a_speedup_table(swept: pathlib.Path) -> None:
     """The whole point of running three columns into one DB: a speedup table against numpy. Rendered
     through the CLI verb, not scripts/plot_results.py -- that shim is on its way out."""
     output_name = "heatmap.pdf"
-    run_cli(swept, "plot", "-b", SELECTOR, "-p", PRESET, "--db", str(swept / "hpcagent_bench.db"), "--no-usetex",
-            "--output", str(swept / output_name))
+    run_cli(
+        swept,
+        "plot",
+        "-b",
+        SELECTOR,
+        "-p",
+        PRESET,
+        "--db",
+        str(swept / "hpcagent_bench.db"),
+        "--no-usetex",
+        "--output",
+        str(swept / output_name),
+    )
     out = one_plot(swept, output_name)
     size = out.stat().st_size
     assert size >= MIN_PDF_BYTES, f"{out} is {size} bytes -- an empty figure, not a speedup table"

@@ -6,6 +6,7 @@ inside. The emitter now splits at those statements (``numpyto_c.emit.pluto_scop_
 desugars a body-level memset into the affine loop it is (``_fill_loop_stmt``), so several scops per
 translation unit is the normal output.
 """
+
 import json
 import pathlib
 import re
@@ -45,10 +46,13 @@ def _sized_zeros_kir():
         "    for i in range(m):\n"
         "        t[i] = a[i] * 2.0\n"
         "    for i in range(N):\n"
-        "        out[i] = t[0] + a[i]\n", "sz", ["a"], ["out"], {
-            "a": "(N,)",
-            "out": "(N,)"
-        }, {"N": 64})
+        "        out[i] = t[0] + a[i]\n",
+        "sz",
+        ["a"],
+        ["out"],
+        {"a": "(N,)", "out": "(N,)"},
+        {"N": 64},
+    )
 
 
 def _two_nests_kir():
@@ -61,10 +65,13 @@ def _two_nests_kir():
         "    m = int(a[0])\n"
         "    t = np.zeros(m)\n"
         "    for i in range(N):\n"
-        "        out[i] = out[i] * 2.0\n", "tn", ["a"], ["out"], {
-            "a": "(N,)",
-            "out": "(N,)"
-        }, {"N": 64})
+        "        out[i] = out[i] * 2.0\n",
+        "tn",
+        ["a"],
+        ["out"],
+        {"a": "(N,)", "out": "(N,)"},
+        {"N": 64},
+    )
 
 
 def _clamp_kir():
@@ -78,10 +85,13 @@ def _clamp_kir():
         "        if out[i] < 0.5:\n"
         "            out[i] = 0.5\n"
         "    for i in range(N):\n"
-        "        out[i] = out[i] * 2.0\n", "cl", ["a"], ["out"], {
-            "a": "(N,)",
-            "out": "(N,)"
-        }, {"N": 64})
+        "        out[i] = out[i] * 2.0\n",
+        "cl",
+        ["a"],
+        ["out"],
+        {"a": "(N,)", "out": "(N,)"},
+        {"N": 64},
+    )
 
 
 def test_no_region_holds_a_construct_pet_cannot_model():
@@ -140,8 +150,10 @@ def test_emitting_twice_gives_byte_identical_c():
 
 def test_the_affine_detector_reads_every_region_not_just_the_first():
     """A gather in the SECOND region used to go unseen, and polycc may miscompile rather than refuse."""
-    text = ("#pragma scop\nfor (i = 0; i < N; i++) a[i] = 1.0;\n#pragma endscop\n"
-            "#pragma scop\nfor (i = 0; i < N; i++) b[i] = a[ip[i]];\n#pragma endscop\n")
+    text = (
+        "#pragma scop\nfor (i = 0; i < N; i++) a[i] = 1.0;\n#pragma endscop\n"
+        "#pragma scop\nfor (i = 0; i < N; i++) b[i] = a[ip[i]];\n#pragma endscop\n"
+    )
     assert scop_nonaffine_reason(text) == "indirection"
 
 
@@ -153,19 +165,21 @@ def test_a_translation_unit_with_no_region_is_not_a_scop_input():
 
 def test_polyccs_repeated_scratch_declarations_are_merged_not_dropped():
     """POLYCC-012: one declaration per counter per function, and only counters are touched."""
-    src = ("void f(int N) {\n"
-           "  int t1, t2;\n"
-           " register int lbv, ubv;\n"
-           "if (N >= 1) {\n"
-           "  for (t1=0;t1<N;t1++) { }\n"
-           "}\n"
-           "  int t1, t2, t3;\n"
-           " register int lbv, ubv;\n"
-           "  double keep, me;\n"
-           "}\n"
-           "void g(int N) {\n"
-           "  int t1;\n"
-           "}\n")
+    src = (
+        "void f(int N) {\n"
+        "  int t1, t2;\n"
+        " register int lbv, ubv;\n"
+        "if (N >= 1) {\n"
+        "  for (t1=0;t1<N;t1++) { }\n"
+        "}\n"
+        "  int t1, t2, t3;\n"
+        " register int lbv, ubv;\n"
+        "  double keep, me;\n"
+        "}\n"
+        "void g(int N) {\n"
+        "  int t1;\n"
+        "}\n"
+    )
     out = dedupe_scratch_declarations(src)
     assert out.count("int t1") == 2, out  # once per function, not once per region
     assert "int t3;" in out, "a counter the first declaration lacked must survive"
@@ -176,14 +190,7 @@ def test_polyccs_repeated_scratch_declarations_are_merged_not_dropped():
 
 def test_a_declaration_that_went_out_of_scope_is_not_deduped_against():
     """Scope, not function: a region nested in a loop body cannot cover the block after it."""
-    src = ("void f(int N) {\n"
-           "for (i=0;i<N;i++) {\n"
-           "  int lbp, ubp;\n"
-           "  lbp = 0;\n"
-           "}\n"
-           "  int lbp, ubp;\n"
-           "  lbp = 0;\n"
-           "}\n")
+    src = "void f(int N) {\nfor (i=0;i<N;i++) {\n  int lbp, ubp;\n  lbp = 0;\n}\n  int lbp, ubp;\n  lbp = 0;\n}\n"
     assert dedupe_scratch_declarations(src).count("int lbp, ubp;") == 2
 
 

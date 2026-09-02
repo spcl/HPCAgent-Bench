@@ -38,6 +38,7 @@ at every rung, a corpus sweep no longer has to GUESS which rank gets which kerne
 :func:`cost_vector` turns the ladder into a per-kernel prediction and :func:`pack_lpt` splits the
 corpus across ranks by it, as a pure function so every rank computes the same answer alone.
 """
+
 import math
 import re
 from dataclasses import dataclass
@@ -55,7 +56,7 @@ from hpcagent_bench.spec import BenchSpec, SparseLayoutVariant, module_level_con
 #: The ladder, small to large. The ends are authored; the middle is derived.
 PRESETS: Tuple[str, ...] = ("S", "M", "L", "XL")
 #: The rung derived by interpolation, with its fractional position between ``M`` and ``XL``.
-DERIVED: Tuple[Tuple[str, float], ...] = (("L", 0.5), )
+DERIVED: Tuple[Tuple[str, float], ...] = (("L", 0.5),)
 #: The rung kept verbatim from the manifest: the tests-and-CI size, never sized for measurement.
 KEPT: str = "S"
 #: The rungs a work/depth model actually authors.
@@ -156,12 +157,16 @@ def interpolate_symbol(small, large, fraction: float):
     """
     if small == large:
         return small
-    if isinstance(small, bool) or isinstance(
-            large, bool) or not isinstance(small, (int, float)) or not isinstance(large, (int, float)):
+    if (
+        isinstance(small, bool)
+        or isinstance(large, bool)
+        or not isinstance(small, (int, float))
+        or not isinstance(large, (int, float))
+    ):
         raise ValueError(f"cannot interpolate a non-numeric symbol between {small!r} and {large!r}")
     if small <= 0 or large <= 0:
         raise ValueError(f"cannot interpolate geometrically through zero or a negative: {small!r} -> {large!r}")
-    value = small * (large / small)**fraction
+    value = small * (large / small) ** fraction
     if not (isinstance(small, int) and isinstance(large, int)):
         return value
     if is_power_of_two(small) and is_power_of_two(large):
@@ -178,13 +183,9 @@ def interpolate(small: Mapping[str, object], large: Mapping[str, object]) -> Dic
     """
     if set(small) != set(large):
         missing = sorted(set(small) ^ set(large))
-        raise ValueError(f"{AUTHORED[0]} and {AUTHORED[1]} declare different symbols; "
-                         f"they differ on {missing}")
+        raise ValueError(f"{AUTHORED[0]} and {AUTHORED[1]} declare different symbols; they differ on {missing}")
     return {
-        preset: {
-            name: interpolate_symbol(small[name], large[name], fraction)
-            for name in small
-        }
+        preset: {name: interpolate_symbol(small[name], large[name], fraction) for name in small}
         for preset, fraction in DERIVED
     }
 
@@ -206,8 +207,9 @@ def raise_to_floor(floor: Mapping[str, object], values: Mapping[str, object]) ->
     return out
 
 
-def build_ladder(kept: Mapping[str, object], mid: Mapping[str, object],
-                 large: Mapping[str, object]) -> Dict[str, Dict[str, object]]:
+def build_ladder(
+    kept: Mapping[str, object], mid: Mapping[str, object], large: Mapping[str, object]
+) -> Dict[str, Dict[str, object]]:
     """The four rungs: ``S`` kept verbatim, ``M`` and ``XL`` as authored, ``L`` interpolated."""
     mid = raise_to_floor(kept, mid)
     ladder: Dict[str, Dict[str, object]] = {KEPT: dict(kept), "M": dict(mid), "XL": dict(large)}
@@ -232,8 +234,9 @@ def fraction_probes(fraction: float) -> Iterator[float]:
                 yield probe
 
 
-def constrain_derived(spec: BenchSpec, ladder: Mapping[str, Mapping[str, object]], mid: Mapping[str, object],
-                      large: Mapping[str, object]) -> Dict[str, Dict[str, object]]:
+def constrain_derived(
+    spec: BenchSpec, ladder: Mapping[str, Mapping[str, object]], mid: Mapping[str, object], large: Mapping[str, object]
+) -> Dict[str, Dict[str, object]]:
     """``ladder`` with every DERIVED rung moved to the nearest position its constraints hold at.
 
     The midpoint is a DEFAULT, not a requirement: what the ladder owes is a rung between ``M`` and
@@ -270,8 +273,11 @@ def ladder_violations(ladder: Mapping[str, Mapping[str, object]]) -> List[str]:
     out: List[str] = []
     for name in sorted(ladder.get("S", {})):
         series = [(preset, ladder[preset][name]) for preset in PRESETS if preset in ladder and name in ladder[preset]]
-        numeric = [(preset, value) for preset, value in series
-                   if isinstance(value, (int, float)) and not isinstance(value, bool)]
+        numeric = [
+            (preset, value)
+            for preset, value in series
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        ]
         for (lo_name, lo), (hi_name, hi) in zip(numeric, numeric[1:]):
             if hi < lo:
                 out.append(f"{name}: {lo_name}={lo} > {hi_name}={hi}")
@@ -282,8 +288,13 @@ def ladder_violations(ladder: Mapping[str, Mapping[str, object]]) -> List[str]:
             continue
         lo_vals, hi_vals = ladder[lo_name], ladder[hi_name]
         grown = any(
-            isinstance(v, (int, float)) and not isinstance(v, bool) and isinstance(hi_vals.get(k), (int, float))
-            and not isinstance(hi_vals.get(k), bool) and hi_vals[k] > v for k, v in lo_vals.items())
+            isinstance(v, (int, float))
+            and not isinstance(v, bool)
+            and isinstance(hi_vals.get(k), (int, float))
+            and not isinstance(hi_vals.get(k), bool)
+            and hi_vals[k] > v
+            for k, v in lo_vals.items()
+        )
         if not grown:
             out.append(f"{lo_name}->{hi_name}: no symbol strictly increases, not a ladder")
     return out
@@ -352,10 +363,11 @@ def rewrite_parameters(text: str, ladder: Mapping[str, Mapping[str, object]]) ->
         if span is None:
             # A missing preset goes after the last rung that precedes it, so the block stays in
             # ladder order and lands ahead of any trailing ``fuzzed:`` entry.
-            earlier = [preset_span(lines, block, name) for name in PRESETS[:PRESETS.index(preset)]]
+            earlier = [preset_span(lines, block, name) for name in PRESETS[: PRESETS.index(preset)]]
             at = max((found[1] for found in earlier if found is not None), default=block[0] + 1)
-            lines[at:at] = [f"{PRESET_INDENT}{preset}:\n"
-                            ] + [f"{SYMBOL_INDENT}{name}: {format_scalar(value)}\n" for name, value in values.items()]
+            lines[at:at] = [f"{PRESET_INDENT}{preset}:\n"] + [
+                f"{SYMBOL_INDENT}{name}: {format_scalar(value)}\n" for name, value in values.items()
+            ]
             continue
         start, stop = span
         seen = set()
@@ -368,8 +380,9 @@ def rewrite_parameters(text: str, ladder: Mapping[str, Mapping[str, object]]) ->
             if current.get(preset, {}).get(name) == values[name]:
                 continue  # unchanged: leave the line exactly as authored, block value and all
             if not match.group(4):
-                raise ValueError(f"{preset}.{name} holds a multi-line block value; a scalar edit "
-                                 "would orphan its continuation lines")
+                raise ValueError(
+                    f"{preset}.{name} holds a multi-line block value; a scalar edit would orphan its continuation lines"
+                )
             lines[i] = f"{match.group(1)}{name}:{match.group(3)}{format_scalar(values[name])}\n"
         missing = [name for name in values if name not in seen]
         lines[stop:stop] = [f"{SYMBOL_INDENT}{name}: {format_scalar(values[name])}\n" for name in missing]
@@ -394,10 +407,12 @@ def variant_bytes(variant: SparseLayoutVariant, namespace: Mapping[str, object])
     return total
 
 
-def sparse_bytes(spec: BenchSpec,
-                 namespace: Mapping[str, object],
-                 dense: Mapping[str, int],
-                 wanted: Optional[AbstractSet[str]] = None) -> Optional[int]:
+def sparse_bytes(
+    spec: BenchSpec,
+    namespace: Mapping[str, object],
+    dense: Mapping[str, int],
+    wanted: Optional[AbstractSet[str]] = None,
+) -> Optional[int]:
     """``dense`` corrected for every array a ``sparse_layouts`` block gives a physical format.
 
     A logical array with a sparse layout is never materialised dense: the initializer hands the
@@ -437,10 +452,9 @@ def sparse_bytes(spec: BenchSpec,
     return max(totals) if totals else None
 
 
-def working_bytes(spec: BenchSpec,
-                  values: Mapping[str, object],
-                  datatype: str = DEFAULT_DTYPE,
-                  names: Optional[Sequence[str]] = None) -> Optional[int]:
+def working_bytes(
+    spec: BenchSpec, values: Mapping[str, object], datatype: str = DEFAULT_DTYPE, names: Optional[Sequence[str]] = None
+) -> Optional[int]:
     """Total declared-array bytes at ``values``, or ``None`` when the shapes are not declarative.
 
     ``names`` restricts the sum to those arrays; the judge sizes its output cache from
@@ -475,7 +489,7 @@ def working_bytes(spec: BenchSpec,
             shape = _safe_eval(str(expr), namespace)
         except Exception:  # noqa: BLE001 -- an unresolvable shape is not a byte count; report unknown
             return None
-        dims = tuple(shape) if isinstance(shape, (tuple, list)) else (shape, )
+        dims = tuple(shape) if isinstance(shape, (tuple, list)) else (shape,)
         if not all(isinstance(d, (int, float)) and not isinstance(d, bool) for d in dims):
             return None
         declared = spec.init.dtypes.get(array)
@@ -506,7 +520,8 @@ def shape_namespace(spec: BenchSpec, values: Mapping[str, object]) -> Dict[str, 
     """
     names: Dict[str, object] = {
         name: value
-        for name, value in module_level_constants(spec.relative_path, spec.module_name).items() if value is not None
+        for name, value in module_level_constants(spec.relative_path, spec.module_name).items()
+        if value is not None
     }
     if spec.config_space:
         names.update(spec.config_space[0])
@@ -530,11 +545,13 @@ MEMORY_COPIES: int = 2
 BYTES_PER_GB: int = 1 << 30
 
 
-def kernel_memory_gb(spec: BenchSpec,
-                     preset: str,
-                     datatype: str = DEFAULT_DTYPE,
-                     workspace: Optional[str] = None,
-                     params: Optional[Mapping[str, object]] = None) -> float:
+def kernel_memory_gb(
+    spec: BenchSpec,
+    preset: str,
+    datatype: str = DEFAULT_DTYPE,
+    workspace: Optional[str] = None,
+    params: Optional[Mapping[str, object]] = None,
+) -> float:
     """The memory budget (GB) ONE single-node run of ``spec`` at ``preset`` may take, on top of the
     harness baseline -- the number ``native_call._call_isolated`` turns into the child's
     ``RLIMIT_AS`` cap, so exceeding it is a scored failure inside that child.
@@ -606,10 +623,9 @@ def scaled(values: Mapping[str, object], scalable: Sequence[str], factor: float)
     return {name: (max(1, int(value * factor)) if name in scalable else value) for name, value in values.items()}
 
 
-def fit_to_ceiling(spec: BenchSpec,
-                   values: Mapping[str, object],
-                   ceiling: int,
-                   floor: int = MIN_TIMED_BYTES) -> Dict[str, object]:
+def fit_to_ceiling(
+    spec: BenchSpec, values: Mapping[str, object], ceiling: int, floor: int = MIN_TIMED_BYTES
+) -> Dict[str, object]:
     """``values`` shrunk uniformly to the LARGEST size that still fits ``ceiling``.
 
     Every symbol the FOOTPRINT depends on is divided by the same factor, so the kernel keeps its
@@ -700,8 +716,9 @@ def constraint_violations(spec: BenchSpec, preset: str, values: Mapping[str, obj
     return out
 
 
-def derive_ladder(spec: BenchSpec, small: Mapping[str, object],
-                  large: Mapping[str, object]) -> Tuple[Dict[str, Dict[str, object]], List[str]]:
+def derive_ladder(
+    spec: BenchSpec, small: Mapping[str, object], large: Mapping[str, object]
+) -> Tuple[Dict[str, Dict[str, object]], List[str]]:
     """The validated four-rung ladder for ``spec`` from its two proposed ends.
 
     Returns ``(ladder, problems)``. A non-empty ``problems`` means the ladder must NOT be applied;
@@ -753,12 +770,16 @@ def derive_ladder(spec: BenchSpec, small: Mapping[str, object],
     #   count beside its embedding width. Those are work axes, and a ladder exists to scale them.
     sized = set(footprint_symbols(spec, small))
     shrunk = sorted(
-        name for name in set(small) & set(large)
-        if name not in sized and is_plain_int(small[name]) and is_plain_int(large[name]) and large[name] < small[name])
+        name
+        for name in set(small) & set(large)
+        if name not in sized and is_plain_int(small[name]) and is_plain_int(large[name]) and large[name] < small[name]
+    )
     if sized and shrunk:
-        problems.append(f"proposal shrinks structural knobs, which no declared shape depends on, so the "
-                        f"rungs would measure different programs: "
-                        f"{', '.join(f'{n} {small[n]}->{large[n]}' for n in shrunk)}")
+        problems.append(
+            f"proposal shrinks structural knobs, which no declared shape depends on, so the "
+            f"rungs would measure different programs: "
+            f"{', '.join(f'{n} {small[n]}->{large[n]}' for n in shrunk)}"
+        )
         return {}, problems
     # ``S`` is not re-derived: it is whatever the manifest already declares, minus any config
     # knob the merged view folded in (a knob is not a size and must not reappear as one).
@@ -782,8 +803,10 @@ def derive_ladder(spec: BenchSpec, small: Mapping[str, object],
             # and every rung measures the same run. Caught here and not by the shrink test, which
             # reads == as monotone. Only among the TIMED rungs: the kept S is a smoke rung the tests
             # run at, and seissol_batched_gemm's S already sits at the batch the proposal names as M.
-            problems.append(f"the problem does not grow from {lo_name} to {hi_name} ({lo:.3g}), so the "
-                            f"two rungs are one benchmark measured twice")
+            problems.append(
+                f"the problem does not grow from {lo_name} to {hi_name} ({lo:.3g}), so the "
+                f"two rungs are one benchmark measured twice"
+            )
     for preset in PRESETS:
         problems.extend(constraint_violations(spec, preset, ladder[preset]))
     # The single-core ceiling belongs on the TIMED one-core rung, not on the kept tests rung:
@@ -791,8 +814,9 @@ def derive_ladder(spec: BenchSpec, small: Mapping[str, object],
     for preset, ceiling in ((AUTHORED[0], S_BYTE_CEILING), (AUTHORED[1], xl_ceiling(spec.track))):
         nbytes = working_bytes(spec, ladder[preset])
         if nbytes is not None and nbytes > ceiling:
-            problems.append(f"{preset} working set {nbytes / 2**30:.1f} GB exceeds the "
-                            f"{ceiling / 2**30:.0f} GB ceiling")
+            problems.append(
+                f"{preset} working set {nbytes / 2**30:.1f} GB exceeds the {ceiling / 2**30:.0f} GB ceiling"
+            )
     return ladder, problems
 
 
@@ -819,6 +843,7 @@ class KernelCost:
     footprint to speak of. Stated here rather than papered over -- when a measured time model
     lands, this field changes and every caller keeps working.
     """
+
     kernel: str
     preset: str
     working_bytes: int
@@ -883,8 +908,9 @@ def partition_loads(partition: Sequence[Sequence[str]], costs: Mapping[str, Kern
     ]
 
 
-def node_footprint_violations(partition: Sequence[Sequence[str]], costs: Mapping[str, KernelCost], ranks_per_node: int,
-                              node_ram_bytes: int) -> List[str]:
+def node_footprint_violations(
+    partition: Sequence[Sequence[str]], costs: Mapping[str, KernelCost], ranks_per_node: int, node_ram_bytes: int
+) -> List[str]:
     """Every way ``partition`` overruns a node's RAM, as human-readable strings (empty when it fits).
 
     The harness has NO node count today -- both sbatch scripts set ``RANKS`` from
@@ -916,23 +942,29 @@ def node_footprint_violations(partition: Sequence[Sequence[str]], costs: Mapping
         # Cheap and unambiguous first: a kernel over its OWN share can never be placed, whatever
         # the rest of the node is doing, and naming it is more actionable than naming the node.
         if top > share:
-            out.append(f"rank {rank}: {who} needs {top / 2**30:.2f} GB, above the {share / 2**30:.2f} GB share "
-                       f"of a {node_ram_bytes / 2**30:.2f} GB node split {ranks_per_node} ways")
+            out.append(
+                f"rank {rank}: {who} needs {top / 2**30:.2f} GB, above the {share / 2**30:.2f} GB share "
+                f"of a {node_ram_bytes / 2**30:.2f} GB node split {ranks_per_node} ways"
+            )
     for node, start in enumerate(range(0, len(peak), ranks_per_node)):
-        group = peak[start:start + ranks_per_node]
+        group = peak[start : start + ranks_per_node]
         total = sum(nbytes for nbytes, _ in group)
         if total > node_ram_bytes:
             worst = ", ".join(f"{name}={nbytes / 2**30:.2f} GB" for nbytes, name in group if name)
-            out.append(f"node {node} (ranks {start}..{start + len(group) - 1}): concurrent working set "
-                       f"{total / 2**30:.2f} GB exceeds the {node_ram_bytes / 2**30:.2f} GB budget ({worst})")
+            out.append(
+                f"node {node} (ranks {start}..{start + len(group) - 1}): concurrent working set "
+                f"{total / 2**30:.2f} GB exceeds the {node_ram_bytes / 2**30:.2f} GB budget ({worst})"
+            )
     return out
 
 
-def pack_lpt(names: Sequence[str],
-             costs: Mapping[str, KernelCost],
-             ranks: int,
-             ranks_per_node: Optional[int] = None,
-             node_ram_bytes: Optional[int] = None) -> List[List[str]]:
+def pack_lpt(
+    names: Sequence[str],
+    costs: Mapping[str, KernelCost],
+    ranks: int,
+    ranks_per_node: Optional[int] = None,
+    node_ram_bytes: Optional[int] = None,
+) -> List[List[str]]:
     """``names`` split across ``ranks`` by longest-processing-time-first bin packing.
 
     Sort descending by predicted cost, give each kernel to the least-loaded rank. A pure function

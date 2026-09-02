@@ -11,6 +11,7 @@ The Poisson solve drops ``meshgrid``: broadcasting three 1-D wavevectors builds 
 without the three full N^3 copies, and the grid depends only on (N, h, dtype), so it is cached
 across the SCF iterations that rebuild the potential twice apiece.
 """
+
 from functools import lru_cache
 
 import numpy as np
@@ -41,7 +42,7 @@ def stencil_matrix(length, dtype):
 def inverse_gsq(n, h, dtype):
     """1 / |G|^2 on the FFT grid with the G = 0 cell left at zero."""
     kx = (2.0 * np.pi * np.fft.fftfreq(n, d=h)).astype(dtype)  # fftfreq is always float64
-    gsq = kx[:, None, None]**2 + kx[None, :, None]**2 + kx[None, None, :]**2
+    gsq = kx[:, None, None] ** 2 + kx[None, :, None] ** 2 + kx[None, None, :] ** 2
     gsq[0, 0, 0] = 1.0
     inv = 1.0 / gsq
     inv[0, 0, 0] = 0.0
@@ -89,7 +90,7 @@ def upper_bound(vloc, proj_f, dij_f, half_inv_h2, v):
         v_prev, v = v, w / beta
         betas[nb] = beta
         nb += 1
-    off = betas[:na - 1]
+    off = betas[: na - 1]
     T = np.diag(alphas[:na])
     if off.size:
         T = T + np.diag(off, 1) + np.diag(off, -1)
@@ -137,8 +138,8 @@ def poisson_fft(rho, h):
 def lda_xc(rho):
     # Slater exchange + Perdew-Zunger correlation potential on the density grid.
     n = np.maximum(rho, 1.0e-12)
-    rs = (3.0 / (4.0 * np.pi * n))**(1.0 / 3.0)
-    n13 = n**(1.0 / 3.0)
+    rs = (3.0 / (4.0 * np.pi * n)) ** (1.0 / 3.0)
+    n13 = n ** (1.0 / 3.0)
     v_x = -_AX * n13
     sqrt_rs = np.sqrt(rs)
     ln_rs = np.log(rs)

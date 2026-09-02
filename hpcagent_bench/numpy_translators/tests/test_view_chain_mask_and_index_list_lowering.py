@@ -24,6 +24,7 @@ Each case is checked numerically against numpy on the ABI backends -- where a mi
 or a dropped mask is a wrong answer, not a compile error -- plus a structural assertion on the
 lowered AST, and a negative case per guard that must keep declining.
 """
+
 import ast
 import json
 import pathlib
@@ -58,10 +59,12 @@ def lowered(src: str, func: str, inputs, outputs, shapes, syms):
 # a slice indexing THROUGH a partial slice
 # --------------------------------------------------------------------------------------------- #
 
-_DWT_SRC = ("import numpy as np\n"
-            "def f(a, out):\n"
-            "    n = a.shape[0]\n"
-            "    out[:, :] = a[:n, :n][:, 0::2] * 2.0 + a[:n, :n][:, 1::2]\n")
+_DWT_SRC = (
+    "import numpy as np\n"
+    "def f(a, out):\n"
+    "    n = a.shape[0]\n"
+    "    out[:, :] = a[:n, :n][:, 0::2] * 2.0 + a[:n, :n][:, 1::2]\n"
+)
 
 
 def test_a_strided_slice_composes_onto_the_partial_slice_it_indexes_through():
@@ -70,15 +73,17 @@ def test_a_strided_slice_composes_onto_the_partial_slice_it_indexes_through():
     # two halves of the sum and numpy comparison catches it.
     N = 8
     a = np.random.default_rng(0).standard_normal((N, N))
-    res = run_op(_DWT_SRC,
-                 "f", {"a": a}, {"out": (N, N // 2)}, {"N": N},
-                 shapes={
-                     "a": "(N,N)",
-                     "out": "(N,N//2)"
-                 },
-                 backends=BACKENDS,
-                 rtol=TOL,
-                 atol=TOL)
+    res = run_op(
+        _DWT_SRC,
+        "f",
+        {"a": a},
+        {"out": (N, N // 2)},
+        {"N": N},
+        shapes={"a": "(N,N)", "out": "(N,N//2)"},
+        backends=BACKENDS,
+        rtol=TOL,
+        atol=TOL,
+    )
     passed, r = ok(res)
     assert passed, r
 
@@ -88,7 +93,8 @@ def test_the_composed_chain_leaves_no_subscript_of_a_subscript():
     # level and reaches it as an index with more axes than the array has.
     kir = lowered(_DWT_SRC, "f", ["a"], ["out"], {"a": "(N,N)", "out": "(N,N//2)"}, {"N": 8})
     chains = [
-        ast.unparse(n) for n in ast.walk(kir.tree)
+        ast.unparse(n)
+        for n in ast.walk(kir.tree)
         if isinstance(n, ast.Subscript) and isinstance(n.value, ast.Subscript)
     ]
     assert not chains, chains
@@ -97,10 +103,7 @@ def test_the_composed_chain_leaves_no_subscript_of_a_subscript():
 def test_two_bounded_stops_still_decline_because_numpy_clamps_between_them():
     # ``a[0:m][0:n]`` keeps only ``min(m, n)`` elements. ``start + step*use`` cannot express that
     # minimum, so the composition must stand back rather than widen the second bound.
-    src = ("import numpy as np\n"
-           "def f(a, out):\n"
-           "    m = a.shape[0]\n"
-           "    out[:] = a[0:m][0:m]\n")
+    src = "import numpy as np\ndef f(a, out):\n    m = a.shape[0]\n    out[:] = a[0:m][0:m]\n"
     kir = lowered(src, "f", ["a"], ["out"], {"a": "(N,)", "out": "(N,)"}, {"N": 6})
     assert any(isinstance(n, ast.Subscript) and isinstance(n.value, ast.Subscript) for n in ast.walk(kir.tree))
 
@@ -109,14 +112,16 @@ def test_two_bounded_stops_still_decline_because_numpy_clamps_between_them():
 # a masked select through a view, feeding several reductions
 # --------------------------------------------------------------------------------------------- #
 
-_MASK_SRC = ("import numpy as np\n"
-             "def f(tab, key, out):\n"
-             "    nb = tab.shape[1]\n"
-             "    for t in range(out.shape[0]):\n"
-             "        match = tab[0, :nb, 0] > key[t]\n"
-             "        vals = tab[1, :nb, 0][match]\n"
-             "        lo, hi = float(np.min(vals)), float(np.max(vals))\n"
-             "        out[t] = hi - lo\n")
+_MASK_SRC = (
+    "import numpy as np\n"
+    "def f(tab, key, out):\n"
+    "    nb = tab.shape[1]\n"
+    "    for t in range(out.shape[0]):\n"
+    "        match = tab[0, :nb, 0] > key[t]\n"
+    "        vals = tab[1, :nb, 0][match]\n"
+    "        lo, hi = float(np.min(vals)), float(np.max(vals))\n"
+    "        out[t] = hi - lo\n"
+)
 
 _MASK_SHAPES = {"tab": "(2,P,1)", "key": "(T,)", "out": "(T,)"}
 
@@ -132,18 +137,17 @@ def test_a_masked_select_through_a_view_feeds_both_of_its_reductions():
     tab[0, :, 0] = np.arange(P, dtype=np.float64)
     tab[1, :, 0] = rng.standard_normal(P)
     key = np.full(T, -1.0)  # every row matches, so the compacted select is never empty
-    res = run_op(_MASK_SRC,
-                 "f", {
-                     "tab": tab,
-                     "key": key
-                 }, {"out": (T, )}, {
-                     "P": P,
-                     "T": T
-                 },
-                 shapes=_MASK_SHAPES,
-                 backends=BACKENDS,
-                 rtol=TOL,
-                 atol=TOL)
+    res = run_op(
+        _MASK_SRC,
+        "f",
+        {"tab": tab, "key": key},
+        {"out": (T,)},
+        {"P": P, "T": T},
+        shapes=_MASK_SHAPES,
+        backends=BACKENDS,
+        rtol=TOL,
+        atol=TOL,
+    )
     passed, r = ok(res)
     assert passed, r
 
@@ -161,15 +165,17 @@ def test_the_masked_select_is_fused_away_rather_than_materialised():
 # ``a = b = None`` sentinels the branches below fill
 # --------------------------------------------------------------------------------------------- #
 
-_SENTINEL_SRC = ("import numpy as np\n"
-                 "def f(a, flag, out):\n"
-                 "    lo = hi = None\n"
-                 "    if flag[0] > 0:\n"
-                 "        lo = a * 2.0\n"
-                 "        hi = a + 1.0\n"
-                 "        out[:] = lo + hi\n"
-                 "    else:\n"
-                 "        out[:] = a\n")
+_SENTINEL_SRC = (
+    "import numpy as np\n"
+    "def f(a, flag, out):\n"
+    "    lo = hi = None\n"
+    "    if flag[0] > 0:\n"
+    "        lo = a * 2.0\n"
+    "        hi = a + 1.0\n"
+    "        out[:] = lo + hi\n"
+    "    else:\n"
+    "        out[:] = a\n"
+)
 
 _SENTINEL_SHAPES = {"a": "(N,)", "flag": "(1,)", "out": "(N,)"}
 
@@ -180,15 +186,17 @@ def test_a_chained_none_declaration_is_dropped_and_the_branches_still_compute():
     N = 5
     a = np.random.default_rng(2).standard_normal(N)
     for flag_value in (1.0, 0.0):
-        res = run_op(_SENTINEL_SRC,
-                     "f", {
-                         "a": a,
-                         "flag": np.array([flag_value])
-                     }, {"out": (N, )}, {"N": N},
-                     shapes=_SENTINEL_SHAPES,
-                     backends=BACKENDS,
-                     rtol=TOL,
-                     atol=TOL)
+        res = run_op(
+            _SENTINEL_SRC,
+            "f",
+            {"a": a, "flag": np.array([flag_value])},
+            {"out": (N,)},
+            {"N": N},
+            shapes=_SENTINEL_SHAPES,
+            backends=BACKENDS,
+            rtol=TOL,
+            atol=TOL,
+        )
         passed, r = ok(res)
         assert passed, (flag_value, r)
 
@@ -201,13 +209,16 @@ def test_no_none_literal_survives_lowering():
 def test_a_sentinel_a_test_still_inspects_is_kept():
     # Here the ``None`` IS the value being read, so dropping the write would change what the test
     # sees. The pruner must leave it alone even though a branch rebinds the name.
-    fn = ast.parse("def f(a, out):\n"
-                   "    seen = None\n"
-                   "    if a[0] > 0:\n"
-                   "        seen = a[0]\n"
-                   "    if seen is not None:\n"
-                   "        out[0] = seen\n").body[0]
+    fn = ast.parse(
+        "def f(a, out):\n"
+        "    seen = None\n"
+        "    if a[0] > 0:\n"
+        "        seen = a[0]\n"
+        "    if seen is not None:\n"
+        "        out[0] = seen\n"
+    ).body[0]
     from numpyto_common.tuple_desugar import _drop_dead_none_bindings
+
     _drop_dead_none_bindings(fn)
     assert [n for n in ast.walk(fn) if isinstance(n, ast.Constant) and n.value is None]
 
@@ -216,11 +227,13 @@ def test_a_sentinel_a_test_still_inspects_is_kept():
 # a bare list literal used as a fancy index
 # --------------------------------------------------------------------------------------------- #
 
-_LIST_SRC = ("import numpy as np\n"
-             "def f(a, out):\n"
-             "    corners = [0, 2, 3]\n"
-             "    out[:, :] = 1.0\n"
-             "    out[:, corners] += a[:, None]\n")
+_LIST_SRC = (
+    "import numpy as np\n"
+    "def f(a, out):\n"
+    "    corners = [0, 2, 3]\n"
+    "    out[:, :] = 1.0\n"
+    "    out[:, corners] += a[:, None]\n"
+)
 
 
 def test_a_bare_list_index_scatters_to_exactly_the_named_columns():
@@ -228,15 +241,17 @@ def test_a_bare_list_index_scatters_to_exactly_the_named_columns():
     # read as a range) shows up as the untouched column moving.
     M = 5
     a = np.random.default_rng(3).standard_normal(M)
-    res = run_op(_LIST_SRC,
-                 "f", {"a": a}, {"out": (M, 4)}, {"M": M},
-                 shapes={
-                     "a": "(M,)",
-                     "out": "(M,4)"
-                 },
-                 backends=BACKENDS,
-                 rtol=TOL,
-                 atol=TOL)
+    res = run_op(
+        _LIST_SRC,
+        "f",
+        {"a": a},
+        {"out": (M, 4)},
+        {"M": M},
+        shapes={"a": "(M,)", "out": "(M,4)"},
+        backends=BACKENDS,
+        rtol=TOL,
+        atol=TOL,
+    )
     passed, r = ok(res)
     assert passed, r
 
@@ -249,14 +264,11 @@ def test_the_bare_list_becomes_an_allocated_int_index_buffer():
 def test_a_tuple_and_a_grown_list_are_not_index_vectors():
     # A tuple in an index slot is a MULTI-AXIS index, not a fancy one, and a list something appends
     # to has no static length -- turning either into a buffer would change what the kernel means.
-    fn = ast.parse("def f(a, out):\n"
-                   "    ij = (1, 2)\n"
-                   "    grown = [0]\n"
-                   "    grown.append(1)\n"
-                   "    out[0] = a[ij] + a[grown][0]\n").body[0]
+    fn = ast.parse(
+        "def f(a, out):\n    ij = (1, 2)\n    grown = [0]\n    grown.append(1)\n    out[0] = a[ij] + a[grown][0]\n"
+    ).body[0]
     values = {
-        t.targets[0].id: t.value
-        for t in fn.body if isinstance(t, ast.Assign) and isinstance(t.targets[0], ast.Name)
+        t.targets[0].id: t.value for t in fn.body if isinstance(t, ast.Assign) and isinstance(t.targets[0], ast.Name)
     }
     assert _bare_index_list(fn, values["ij"], "ij") is None
     assert _bare_index_list(fn, values["grown"], "grown") is None

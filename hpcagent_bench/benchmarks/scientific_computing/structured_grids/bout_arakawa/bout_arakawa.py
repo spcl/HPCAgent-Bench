@@ -13,6 +13,7 @@ cache and rounding behaviour actually see.
 ``examples/blob2d/delta_1/BOUT.inp``'s ``1 + height * exp(...)`` with ``height = 0.5``.
 ``dx`` and ``dz`` are that case's uniform slab spacings, 0.3 rho_s.
 """
+
 import math
 
 import numpy as np
@@ -43,7 +44,7 @@ def mixmode(arg, seed):
     phases = mixmode_phases(seed)
     out = np.zeros_like(arg)
     for i in range(MIXMODE_MODES):
-        out += (1.0 / (1.0 + abs(i - 4))**2) * np.cos(i * arg + phases[i])
+        out += (1.0 / (1.0 + abs(i - 4)) ** 2) * np.cos(i * arg + phases[i])
     return out
 
 

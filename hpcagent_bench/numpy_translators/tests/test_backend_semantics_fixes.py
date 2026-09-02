@@ -22,6 +22,7 @@ The source-level asserts check the emitted text directly; the numerical asserts
 round-trip each idiom through the ``run_op`` oracle (or, for cupy, a guarded GPU
 run) against numpy.
 """
+
 import importlib.util
 import pathlib
 import tempfile
@@ -39,13 +40,15 @@ from numpyto_pythran.emit import _pythran_scalar_type
 # --------------------------------------------------------------------------- #
 def _oracle():
     import shutil
+
     if not (shutil.which("gcc") and shutil.which("gfortran") and shutil.which("g++")):
         pytest.skip("gcc/g++/gfortran needed for the native oracle emit step")
     try:
         import _op_oracle
     except ImportError:
-        spec = importlib.util.spec_from_file_location("_op_oracle",
-                                                      pathlib.Path(__file__).resolve().parent / "_op_oracle.py")
+        spec = importlib.util.spec_from_file_location(
+            "_op_oracle", pathlib.Path(__file__).resolve().parent / "_op_oracle.py"
+        )
         _op_oracle = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(_op_oracle)
     return _op_oracle
@@ -61,16 +64,15 @@ def _assert_ok(status, backend, label):
 # --------------------------------------------------------------------------- #
 # 1. numba: prange only on a provably-independent loop.                        #
 # --------------------------------------------------------------------------- #
-_SCAN = ("import numpy as np\n"
-         "def scan(x, a):\n"
-         "    a[0] = x[0]\n"
-         "    for i in range(1, x.shape[0]):\n"
-         "        a[i] = a[i - 1] + x[i]\n")
+_SCAN = (
+    "import numpy as np\n"
+    "def scan(x, a):\n"
+    "    a[0] = x[0]\n"
+    "    for i in range(1, x.shape[0]):\n"
+    "        a[i] = a[i - 1] + x[i]\n"
+)
 
-_ELEMENTWISE = ("import numpy as np\n"
-                "def f(x, out):\n"
-                "    for i in range(x.shape[0]):\n"
-                "        out[i] = x[i] * 2.0\n")
+_ELEMENTWISE = "import numpy as np\ndef f(x, out):\n    for i in range(x.shape[0]):\n        out[i] = x[i] * 2.0\n"
 
 
 def test_every_numba_emit_is_parallel():
@@ -100,15 +102,16 @@ def test_numba_parallel_pranges_independent_loop():
     assert "for i in nb.prange(" in out
 
 
-@pytest.mark.parametrize("body,label", [
-    ("        out[0] += x[i]\n", "scalar/same-cell reduction"),
-    ("        out[int(perm[i])] = x[i]\n", "data-dependent scatter"),
-    ("        out[i] = out[i - 1] + x[i]\n", "index-shifted stencil"),
-])
+@pytest.mark.parametrize(
+    "body,label",
+    [
+        ("        out[0] += x[i]\n", "scalar/same-cell reduction"),
+        ("        out[int(perm[i])] = x[i]\n", "data-dependent scatter"),
+        ("        out[i] = out[i - 1] + x[i]\n", "index-shifted stencil"),
+    ],
+)
 def test_numba_parallel_refuses_dependent_loops(body, label):
-    src = ("import numpy as np\n"
-           "def f(x, out, perm):\n"
-           "    for i in range(x.shape[0]):\n" + body)
+    src = "import numpy as np\ndef f(x, out, perm):\n    for i in range(x.shape[0]):\n" + body
     assert "nb.prange" not in emit_numba(src), label
 
 
@@ -116,13 +119,15 @@ def test_numba_scan_via_oracle():
     # End-to-end through run_op: the prefix sum must match
     # numpy exactly on the numba backend.
     no = _oracle()
-    st = no.run_op(_SCAN,
-                   "scan", {"x": np.arange(1.0, 6.0)}, {"a": (5, )}, {"N": 5},
-                   shapes={
-                       "x": "(N,)",
-                       "a": "(N,)"
-                   },
-                   backends=("numba", ))
+    st = no.run_op(
+        _SCAN,
+        "scan",
+        {"x": np.arange(1.0, 6.0)},
+        {"a": (5,)},
+        {"N": 5},
+        shapes={"x": "(N,)", "a": "(N,)"},
+        backends=("numba",),
+    )
     _assert_ok(st, "numba", "numba-scan")
 
 
@@ -166,20 +171,16 @@ def test_pythran_int_param_roundtrips():
     # ``k`` (used only as a ``range`` bound) is declared ``int`` and drives the
     # loop count; the result must match numpy on the pythran backend.
     no = _oracle()
-    src = ("import numpy as np\n"
-           "def f(x, k, out):\n"
-           "    for i in range(k):\n"
-           "        out[i] = x[i] * 2.0\n")
-    st = no.run_op(src,
-                   "f", {
-                       "x": np.arange(5.0),
-                       "k": 3
-                   }, {"out": (5, )}, {"N": 5},
-                   shapes={
-                       "x": "(N,)",
-                       "out": "(N,)"
-                   },
-                   backends=("pythran", ))
+    src = "import numpy as np\ndef f(x, k, out):\n    for i in range(k):\n        out[i] = x[i] * 2.0\n"
+    st = no.run_op(
+        src,
+        "f",
+        {"x": np.arange(5.0), "k": 3},
+        {"out": (5,)},
+        {"N": 5},
+        shapes={"x": "(N,)", "out": "(N,)"},
+        backends=("pythran",),
+    )
     _assert_ok(st, "pythran", "pythran-int-param")
 
 
@@ -188,39 +189,37 @@ def test_pythran_maximum_propagates_nan():
     # restores propagation -- checked with equal_nan comparison in the oracle.
     no = _oracle()
     src = "import numpy as np\ndef f(a, b, out):\n    out[:] = np.maximum(a, b)\n"
-    st = no.run_op(src,
-                   "f", {
-                       "a": np.array([np.nan, 1.0, 3.0]),
-                       "b": np.array([2.0, np.nan, 1.0])
-                   }, {"out": (3, )}, {"N": 3},
-                   shapes={
-                       "a": "(N,)",
-                       "b": "(N,)",
-                       "out": "(N,)"
-                   },
-                   backends=("pythran", ))
+    st = no.run_op(
+        src,
+        "f",
+        {"a": np.array([np.nan, 1.0, 3.0]), "b": np.array([2.0, np.nan, 1.0])},
+        {"out": (3,)},
+        {"N": 3},
+        shapes={"a": "(N,)", "b": "(N,)", "out": "(N,)"},
+        backends=("pythran",),
+    )
     _assert_ok(st, "pythran", "pythran-maximum-nan")
 
 
 def test_pythran_sign_propagates_nan():
     no = _oracle()
     src = "import numpy as np\ndef f(a, out):\n    out[:] = np.sign(a)\n"
-    st = no.run_op(src,
-                   "f", {"a": np.array([np.nan, -2.0, 0.0, 5.0])}, {"out": (4, )}, {"N": 4},
-                   shapes={
-                       "a": "(N,)",
-                       "out": "(N,)"
-                   },
-                   backends=("pythran", ))
+    st = no.run_op(
+        src,
+        "f",
+        {"a": np.array([np.nan, -2.0, 0.0, 5.0])},
+        {"out": (4,)},
+        {"N": 4},
+        shapes={"a": "(N,)", "out": "(N,)"},
+        backends=("pythran",),
+    )
     _assert_ok(st, "pythran", "pythran-sign-nan")
 
 
 # --------------------------------------------------------------------------- #
 # 3. cupy: consistent ``cp`` binding + import-form handling.                   #
 # --------------------------------------------------------------------------- #
-_CUPY_SRC = ("import numpy\n"
-             "def f(a, out):\n"
-             "    out[:] = numpy.sqrt(a) + numpy.pi\n")
+_CUPY_SRC = "import numpy\ndef f(a, out):\n    out[:] = numpy.sqrt(a) + numpy.pi\n"
 
 
 def test_cupy_import_form_binds_cp_consistently():

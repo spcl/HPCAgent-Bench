@@ -11,6 +11,7 @@ ranks 1,2,3 positive and rank 4 negative has 7 of the 16 sign assignments at or 
 ``p = 2 * 7/16 = 0.875``. Censoring is checked directly: a kernel an arm never solved must come out
 as success 0 with a BLANK speedup, never as a zero.
 """
+
 import csv
 import importlib.util
 import itertools
@@ -50,26 +51,13 @@ SYNTAX_CHECK_EVENT = assistant("msg_2", tool_use(4, "mcp__optarena__syntax_check
 #: closed by the terminal ``result`` verdict. Measured against run 586713, whose 80 assistant
 #: events are 40 turns.
 STREAM_JSON_EVENTS = (
-    {
-        "type": "system",
-        "subtype": "init",
-        "session_id": "s1"
-    },
-    assistant("msg_1", {
-        "type": "thinking",
-        "thinking": "looking at the kernel"
-    }),
+    {"type": "system", "subtype": "init", "session_id": "s1"},
+    assistant("msg_1", {"type": "thinking", "thinking": "looking at the kernel"}),
     assistant("msg_1", tool_use(1, "mcp__optarena__task")),
     assistant("msg_1", tool_use(2, "mcp__optarena__profile")),
     {
         "type": "user",
-        "message": {
-            "content": [{
-                "type": "tool_result",
-                "tool_use_id": "toolu_02",
-                "content": "hot loop at line 12"
-            }]
-        }
+        "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_02", "content": "hot loop at line 12"}]},
     },
     assistant("msg_2", tool_use(3, "Read")),
     SYNTAX_CHECK_EVENT,
@@ -82,7 +70,7 @@ STREAM_JSON_EVENTS = (
         "is_error": True,
         "duration_ms": 1110116,
         "num_turns": 41,
-        "session_id": "s1"
+        "session_id": "s1",
     },
 )
 
@@ -135,20 +123,23 @@ def seed_db(path: pathlib.Path, submissions: list[tuple], attempts: tuple[str, .
     try:
         for name in {row[0] for row in submissions} | set(attempts):
             conn.execute(
-                "INSERT OR REPLACE INTO benchmarks(name, track, kind, domain, dwarf, source) "
-                "VALUES (?,?,?,?,?,?)", (name, "scientific_computing", "dense", "linalg", "dense_la", None))
+                "INSERT OR REPLACE INTO benchmarks(name, track, kind, domain, dwarf, source) VALUES (?,?,?,?,?,?)",
+                (name, "scientific_computing", "dense", "linalg", "dense_la", None),
+            )
         for row in submissions:
             benchmark, ts, speedup = row[:3]
             suspect = row[3] if len(row) > 3 else 0
             conn.execute(
                 "INSERT INTO submissions(run_id, ts, benchmark, preset, datatype, language, "
                 "source_mode, optimizer, baseline, speedup, suspect) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                ("run", ts, benchmark, "S", "float64", "c", "restricted", "agent", "c", speedup, suspect))
+                ("run", ts, benchmark, "S", "float64", "c", "restricted", "agent", "c", speedup, suspect),
+            )
         for benchmark in attempts:
             conn.execute(
                 "INSERT INTO attempts(run_id, ts, benchmark, preset, datatype, language, "
                 "source_mode, build_ok, correct, reason) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                ("run", 1, benchmark, "S", "float64", "c", "restricted", 0, 0, "build"))
+                ("run", 1, benchmark, "S", "float64", "c", "restricted", 0, 0, "build"),
+            )
         conn.commit()
     finally:
         conn.close()
@@ -164,17 +155,17 @@ def csv_header(path: pathlib.Path) -> list[str]:
         return next(csv.reader(handle))
 
 
-def run_stats(module: ModuleType,
-              tmp_path: pathlib.Path,
-              arms: list[str],
-              problems: int,
-              dedup: str = "best") -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+def run_stats(
+    module: ModuleType, tmp_path: pathlib.Path, arms: list[str], problems: int, dedup: str = "best"
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     """Run the CLI end to end; return ``(per-problem rows, pairs rows)``."""
     prefix = tmp_path / "abl"
     argv = [f"--arm={spec}" for spec in arms] + [f"--problems={problems}", f"--out={prefix}", f"--dedup={dedup}"]
     assert module.main(argv) == 0
-    return (read_csv(tmp_path / ("abl" + module.PER_PROBLEM_SUFFIX)),
-            read_csv(tmp_path / ("abl" + module.PAIRS_SUFFIX)))
+    return (
+        read_csv(tmp_path / ("abl" + module.PER_PROBLEM_SUFFIX)),
+        read_csv(tmp_path / ("abl" + module.PAIRS_SUFFIX)),
+    )
 
 
 def test_dedup_best_takes_the_fastest_verified_submission(ablation_stats, tmp_path):
@@ -239,8 +230,9 @@ def test_a_db_without_the_suspect_column_warns_and_still_runs(ablation_stats, tm
     db = tmp_path / "legacy.db"
     conn = sqlite3.connect(str(db))
     try:
-        conn.execute("CREATE TABLE submissions (id INTEGER PRIMARY KEY, ts INTEGER, "
-                     "benchmark TEXT NOT NULL, speedup REAL)")
+        conn.execute(
+            "CREATE TABLE submissions (id INTEGER PRIMARY KEY, ts INTEGER, benchmark TEXT NOT NULL, speedup REAL)"
+        )
         conn.execute("INSERT INTO submissions(ts, benchmark, speedup) VALUES (1, 'gemm', 2.0)")
         conn.commit()
     finally:
@@ -273,7 +265,7 @@ def test_missing_benchmark_is_censored_not_zero(ablation_stats, tmp_path):
     would be averaged in as "solved it, gained nothing" and bias every effect size downwards."""
     db_a, db_b = tmp_path / "a.db", tmp_path / "b.db"
     seed_db(db_a, [("gemm", 1, 2.0), ("stencil", 1, 1.5)])
-    seed_db(db_b, [("gemm", 1, 2.0)], attempts=("stencil", ))
+    seed_db(db_b, [("gemm", 1, 2.0)], attempts=("stencil",))
     rows, pairs = run_stats(ablation_stats, tmp_path, [f"a={db_a}", f"b={db_b}"], problems=5)
 
     by_name = {r["benchmark"]: r for r in rows}
@@ -289,7 +281,7 @@ def test_missing_benchmark_is_censored_not_zero(ablation_stats, tmp_path):
 
 def test_kernel_no_arm_solved_still_appears_via_attempts(ablation_stats, tmp_path):
     db = tmp_path / "a.db"
-    seed_db(db, [("gemm", 1, 2.0)], attempts=("fdtd", ))
+    seed_db(db, [("gemm", 1, 2.0)], attempts=("fdtd",))
     rows, _ = run_stats(ablation_stats, tmp_path, [f"a={db}"], problems=2)
     censored = next(r for r in rows if r["benchmark"] == "fdtd")
     assert (censored["a_success"], censored["a_speedup"]) == ("0", "")
@@ -405,8 +397,11 @@ def build_run_dir(tmp_path: pathlib.Path) -> pathlib.Path:
     """One node with a stream-json worker, a text-mode worker, and an empty log."""
     run_dir = tmp_path / "run"
     node = run_dir / "agents" / "node-0"
-    for name, text in (("problem-0-worker-0", STREAM_JSON_LOG), ("problem-1-worker-1", TEXT_MODE_LOG),
-                       ("problem-2-worker-2", "")):
+    for name, text in (
+        ("problem-0-worker-0", STREAM_JSON_LOG),
+        ("problem-1-worker-1", TEXT_MODE_LOG),
+        ("problem-2-worker-2", ""),
+    ):
         worker = node / name
         worker.mkdir(parents=True)
         (worker / "claude.log").write_text(text, encoding="utf-8")
@@ -499,22 +494,16 @@ def test_iteration_counts_benchmark_column_joins_on_the_kernel_stem(iteration_co
     the whole point of the column is that the CSV joins to the results DB."""
     run_dir = build_run_dir(tmp_path)
     problems = tmp_path / "problems.jsonl"
-    problems.write_text("".join(
-        json.dumps(p) + "\n" for p in (
-            {
-                "id": 0,
-                "kernel": "loop_level_reasoning/argmax_value/argmax_value",
-                "language": "c",
-                "task": "x"
-            },
-            {
-                "id": 1,
-                "kernel": "loop_level_reasoning/argmin_value/argmin_value",
-                "language": "c",
-                "task": "x"
-            },
-        )),
-                        encoding="utf-8")
+    problems.write_text(
+        "".join(
+            json.dumps(p) + "\n"
+            for p in (
+                {"id": 0, "kernel": "loop_level_reasoning/argmax_value/argmax_value", "language": "c", "task": "x"},
+                {"id": 1, "kernel": "loop_level_reasoning/argmin_value/argmin_value", "language": "c", "task": "x"},
+            )
+        ),
+        encoding="utf-8",
+    )
     out = tmp_path / "iters.csv"
     assert iteration_counts.main([f"--run-dir={run_dir}", f"--out={out}", f"--problems={problems}"]) == 0
     assert read_csv(out)[0]["benchmark"] == "argmax_value"

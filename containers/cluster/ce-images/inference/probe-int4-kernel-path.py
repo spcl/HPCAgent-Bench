@@ -8,6 +8,7 @@ Two open questions:
 Both are answered by what sglang's compressed-tensors path maps our scheme onto, and by which w4
 entry points aiter exposes.
 """
+
 import inspect
 import pathlib
 import re
@@ -33,8 +34,10 @@ def grep(root: pathlib.Path, pattern: str, limit: int = 14) -> None:
 
 def main() -> int:
     import aiter
+
     aroot = pathlib.Path(aiter.__file__).resolve().parent
     import sglang
+
     sroot = pathlib.Path(sglang.__file__).resolve().parent
 
     print("=" * 76, "\n1. aiter entry points carrying w4 / int4")
@@ -44,6 +47,7 @@ def main() -> int:
     print("=" * 76, "\n2. QuantType members (which the MoE gate switches on)")
     try:
         from aiter import QuantType
+
         print("  ", [m for m in dir(QuantType) if not m.startswith("_")])
     except Exception as exc:
         print("   QuantType unavailable:", exc)

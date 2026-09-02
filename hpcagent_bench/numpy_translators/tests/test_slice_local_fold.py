@@ -9,6 +9,7 @@ recorded rank 2 and the shape derived through it disagreed with the buffer alloc
 variable. That surfaced as a re-binding refusal many statements later, naming a variable that was
 never the problem -- which is why these assert the rewrite itself, not just that the kernel lowers.
 """
+
 import ast
 
 import pytest
@@ -48,14 +49,16 @@ def test_step_is_carried():
 
 def test_the_same_window_bound_twice_still_folds():
     """velocity_tendencies rebinds ``rest = slice(1, nlev)`` in two scopes, identically."""
-    src = ("def f(x, nlev, flag):\n"
-           "    if flag:\n"
-           "        rest = slice(1, nlev)\n"
-           "        a = x[rest]\n"
-           "    else:\n"
-           "        rest = slice(1, nlev)\n"
-           "        a = x[rest]\n"
-           "    return a\n")
+    src = (
+        "def f(x, nlev, flag):\n"
+        "    if flag:\n"
+        "        rest = slice(1, nlev)\n"
+        "        a = x[rest]\n"
+        "    else:\n"
+        "        rest = slice(1, nlev)\n"
+        "        a = x[rest]\n"
+        "    return a\n"
+    )
     out = _fold(src)
     assert out.count("x[1:nlev]") == 2, out
     assert "slice(" not in out, out
@@ -64,11 +67,7 @@ def test_the_same_window_bound_twice_still_folds():
 def test_two_different_windows_on_one_name_are_left_alone():
     """Which window a use sees depends on the binding live at that point, which this pass cannot
     see -- so it declines rather than pick one."""
-    src = ("def f(x, nlev, flag):\n"
-           "    w = slice(0, nlev)\n"
-           "    if flag:\n"
-           "        w = slice(1, nlev)\n"
-           "    return x[w]\n")
+    src = "def f(x, nlev, flag):\n    w = slice(0, nlev)\n    if flag:\n        w = slice(1, nlev)\n    return x[w]\n"
     out = _fold(src)
     assert "slice(0, nlev)" in out and "slice(1, nlev)" in out, out
 

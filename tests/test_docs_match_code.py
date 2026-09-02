@@ -6,6 +6,7 @@ Prose goes stale silently: a knob is renamed, a template moves, an endpoint chan
 and the doc keeps confidently describing the old world. These check the claims that are
 mechanically checkable, so drift fails a test instead of misleading a reader.
 """
+
 import dataclasses
 import pathlib
 import re

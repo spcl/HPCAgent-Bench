@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Generic Triton matrix-multiplication kernels: float32 is from the official tutorial, float64 is
 adapted from it (slower -- no tl.dot support). Neither kernel is specifically tuned."""
+
 import itertools
 import operator
 from functools import reduce
@@ -59,7 +60,8 @@ def complex_matmul2(a, b):
     b_real, b_imag = tl.split(b)
     return tl.join(
         micro_matmul(a_real, b_real) - micro_matmul(a_imag, b_imag),
-        micro_matmul(a_real, b_imag) + micro_matmul(a_imag, b_real))
+        micro_matmul(a_real, b_imag) + micro_matmul(a_imag, b_real),
+    )
 
 
 def derive_launch_arguments(extra_kw: Callable):
@@ -118,8 +120,10 @@ def get_6d_tile_offsets(c0, c1, c2, c3, c4, c5, tile_dims: tl.constexpr, matrix_
     c4 = c4[None, None, None, None, :, None]
     c5 = c5[None, None, None, None, None, :]
 
-    return (c0 * m1 * m2 * m3 * m4 * m5 + c1 * m2 * m3 * m4 * m5 + c2 * m3 * m4 * m5 + c3 * m4 * m5 + c4 * m5 + c5,
-            (c0 < m0) & (c1 < m1) & (c2 < m2) & (c3 < m3) & (c4 < m4) & (c5 < m5))
+    return (
+        c0 * m1 * m2 * m3 * m4 * m5 + c1 * m2 * m3 * m4 * m5 + c2 * m3 * m4 * m5 + c3 * m4 * m5 + c4 * m5 + c5,
+        (c0 < m0) & (c1 < m1) & (c2 < m2) & (c3 < m3) & (c4 < m4) & (c5 < m5),
+    )
 
 
 @triton.jit
@@ -129,14 +133,9 @@ def get_4d_tile_offsets(c0, c1, c2, c3, tile_dims: tl.constexpr, matrix_dims: tl
     n2: tl.constexpr = tile_dims[2]
     n3: tl.constexpr = tile_dims[3]
     m0, m1, m2, m3 = matrix_dims
-    tile, mask = get_6d_tile_offsets(0,
-                                     0,
-                                     c0,
-                                     c1,
-                                     c2,
-                                     c3,
-                                     tile_dims=(1, 1, n0, n1, n2, n3),
-                                     matrix_dims=(1, 1, m0, m1, m2, m3))
+    tile, mask = get_6d_tile_offsets(
+        0, 0, c0, c1, c2, c3, tile_dims=(1, 1, n0, n1, n2, n3), matrix_dims=(1, 1, m0, m1, m2, m3)
+    )
     return tl.reshape(tile, *tile_dims), tl.reshape(mask, *tile_dims)
 
 
@@ -156,25 +155,26 @@ def grid_sync(barrier):
     if first:
         nb = -2147483648 - (expected - 1)
 
-    old_arrive = tl.atomic_add(barrier, nb, sem='release')
+    old_arrive = tl.atomic_add(barrier, nb, sem="release")
 
     c = True
     while c:
         # Compiles to an atomic load due to incrementing by 0.
-        current_arrive = tl.atomic_add(barrier, 0, sem='acquire')
+        current_arrive = tl.atomic_add(barrier, 0, sem="acquire")
         # Check whether the sign bit/top bit has changed.
         if (old_arrive ^ current_arrive) < 0:
             c = False
 
 
 @triton.jit
-def get_2d_tile_offsets(x: tl.int32,
-                        y: tl.int32,
-                        tile_width: tl.constexpr,
-                        tile_height: tl.constexpr,
-                        matrix_width: tl.int32,
-                        matrix_height: tl.int32) \
-        -> tuple[tl.block_type, tl.block_type, tl.block_type, tl.block_type]:
+def get_2d_tile_offsets(
+    x: tl.int32,
+    y: tl.int32,
+    tile_width: tl.constexpr,
+    tile_height: tl.constexpr,
+    matrix_width: tl.int32,
+    matrix_height: tl.int32,
+) -> tuple[tl.block_type, tl.block_type, tl.block_type, tl.block_type]:
     """Offset tile (tile_height, tile_width) at (x, y) in a contiguous matrix (element units), plus the
     in-bounds mask and the row/column index vectors; returns (offsets, mask, rows, columns)."""
     columns = x + tl.arange(0, tile_width)
@@ -187,35 +187,33 @@ def get_2d_tile_offsets(x: tl.int32,
 @triton.jit
 def get_1d_tile_offsets(x, tile_width, vector_width):
     """Offset tile of 'tile_width' elements at 'x' in a 'vector_width'-length vector, plus the in-bounds mask."""
-    tile, mask, rows, columns = get_2d_tile_offsets(x=x,
-                                                    y=0,
-                                                    tile_width=tile_width,
-                                                    tile_height=1,
-                                                    matrix_width=vector_width,
-                                                    matrix_height=1)
-    return tl.reshape(tile, (tile_width, )), tl.reshape(mask, (tile_width, ))
+    tile, mask, rows, columns = get_2d_tile_offsets(
+        x=x, y=0, tile_width=tile_width, tile_height=1, matrix_width=vector_width, matrix_height=1
+    )
+    return tl.reshape(tile, (tile_width,)), tl.reshape(mask, (tile_width,))
 
 
 def _get_mean_sumsq_configs():
     return [
-        triton.Config({
-            "BLOCK_SIZE_M": m,
-            "BLOCK_SIZE_N": n
-        }, num_warps=w) for m, n, w in itertools.product([16, 32, 64, 128], [32, 64, 128, 256], [1, 2, 4, 8])
+        triton.Config({"BLOCK_SIZE_M": m, "BLOCK_SIZE_N": n}, num_warps=w)
+        for m, n, w in itertools.product([16, 32, 64, 128], [32, 64, 128, 256], [1, 2, 4, 8])
     ]
 
 
-@use_grid(lambda meta: (
-    triton.cdiv(meta['M'], meta["BLOCK_SIZE_M"]),
-    triton.cdiv(meta['N'], meta["BLOCK_SIZE_N"]),
-))
+@use_grid(
+    lambda meta: (
+        triton.cdiv(meta["M"], meta["BLOCK_SIZE_M"]),
+        triton.cdiv(meta["N"], meta["BLOCK_SIZE_N"]),
+    )
+)
 @derive_launch_arguments(
     lambda data, **_: {
-        'M': data.shape[0],
+        "M": data.shape[0],
         # Allow the innermost dimension to actually consist of multiple dimensions.
         # Legal since all our tensors are fully contiguous.
-        'N': reduce(operator.mul, data.shape[1:], 1),
-    })
+        "N": reduce(operator.mul, data.shape[1:], 1),
+    }
+)
 @triton.autotune(
     configs=_get_mean_sumsq_configs(),
     key=["M", "N"],
@@ -264,8 +262,8 @@ def unary_noop(x):
     return x
 
 
-@use_grid(lambda meta: (triton.cdiv(meta['N'], meta["BLOCK_SIZE_N"]), ))
-@derive_launch_arguments(lambda mean, **_: {'N': reduce(operator.mul, mean.shape, 1)})
+@use_grid(lambda meta: (triton.cdiv(meta["N"], meta["BLOCK_SIZE_N"]),))
+@derive_launch_arguments(lambda mean, **_: {"N": reduce(operator.mul, mean.shape, 1)})
 @triton.autotune(
     configs=_get_stddev_configs(),
     key=["N"],
@@ -273,11 +271,12 @@ def unary_noop(x):
 )
 @triton.jit
 def kernel_compute_stddev(
-        mean,  # (N,)
-        stddev,  # (N,)
-        N,
-        BLOCK_SIZE_N: tl.constexpr,
-        post_process: tl.constexpr = unary_noop):
+    mean,  # (N,)
+    stddev,  # (N,)
+    N,
+    BLOCK_SIZE_N: tl.constexpr,
+    post_process: tl.constexpr = unary_noop,
+):
     """Computes the standard deviation from 'mean' and the mean-of-squares in 'stddev', stores it back
     to 'stddev' (optionally post-processed by 'post_process')."""
 
@@ -294,16 +293,13 @@ def kernel_compute_stddev(
 @triton.autotune(
     configs=[
         # triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 16}),
-        triton.Config({
-            'BLOCK_SIZE_M': 16,
-            'BLOCK_SIZE_N': 32,
-            'BLOCK_SIZE_K': 16
-        }),
+        triton.Config({"BLOCK_SIZE_M": 16, "BLOCK_SIZE_N": 32, "BLOCK_SIZE_K": 16}),
         # triton.Config({'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 32}),
         # triton.Config({'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 16}),
     ],
-    key=['M', 'N', 'K'],
-    cache_results=True)
+    key=["M", "N", "K"],
+    cache_results=True,
+)
 @triton.jit
 def matmul_kernel_float64(
     a_ptr,
@@ -326,8 +322,8 @@ def matmul_kernel_float64(
     pid_m = tl.program_id(axis=0)
     pid_n = tl.program_id(axis=1)
 
-    offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M))
-    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N))
+    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     offs_k = tl.arange(0, BLOCK_SIZE_K)
 
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
@@ -359,8 +355,8 @@ def matmul_float64(a: torch.Tensor, b: torch.Tensor):
     c = torch.empty((M, N), device=a.device, dtype=torch.float64)
 
     grid = lambda META: (
-        triton.cdiv(M, META['BLOCK_SIZE_M']),
-        triton.cdiv(N, META['BLOCK_SIZE_N']),
+        triton.cdiv(M, META["BLOCK_SIZE_M"]),
+        triton.cdiv(N, META["BLOCK_SIZE_N"]),
     )
 
     matmul_kernel_float64[grid](
@@ -382,166 +378,88 @@ def matmul_float64(a: torch.Tensor, b: torch.Tensor):
 
 @triton.autotune(
     configs=[
-        triton.Config({
-            'BLOCK_SIZE_M': 64,
-            'BLOCK_SIZE_N': 64,
-            'BLOCK_SIZE_K': 64,
-            'GROUP_SIZE_M': 8
-        },
-                      num_stages=4,
-                      num_warps=4),
-        triton.Config({
-            'BLOCK_SIZE_M': 128,
-            'BLOCK_SIZE_N': 256,
-            'BLOCK_SIZE_K': 64,
-            'GROUP_SIZE_M': 8
-        },
-                      num_stages=3,
-                      num_warps=8),
-        triton.Config({
-            'BLOCK_SIZE_M': 64,
-            'BLOCK_SIZE_N': 256,
-            'BLOCK_SIZE_K': 32,
-            'GROUP_SIZE_M': 8
-        },
-                      num_stages=4,
-                      num_warps=4),
-        triton.Config({
-            'BLOCK_SIZE_M': 128,
-            'BLOCK_SIZE_N': 128,
-            'BLOCK_SIZE_K': 32,
-            'GROUP_SIZE_M': 8
-        },
-                      num_stages=4,
-                      num_warps=4),
-        triton.Config({
-            'BLOCK_SIZE_M': 128,
-            'BLOCK_SIZE_N': 64,
-            'BLOCK_SIZE_K': 32,
-            'GROUP_SIZE_M': 8
-        },
-                      num_stages=4,
-                      num_warps=4),
-        triton.Config({
-            'BLOCK_SIZE_M': 64,
-            'BLOCK_SIZE_N': 128,
-            'BLOCK_SIZE_K': 32,
-            'GROUP_SIZE_M': 8
-        },
-                      num_stages=4,
-                      num_warps=4),
-        triton.Config({
-            'BLOCK_SIZE_M': 128,
-            'BLOCK_SIZE_N': 32,
-            'BLOCK_SIZE_K': 32,
-            'GROUP_SIZE_M': 8
-        },
-                      num_stages=4,
-                      num_warps=4),
-        triton.Config({
-            'BLOCK_SIZE_M': 64,
-            'BLOCK_SIZE_N': 32,
-            'BLOCK_SIZE_K': 32,
-            'GROUP_SIZE_M': 8
-        },
-                      num_stages=5,
-                      num_warps=2),
-        triton.Config({
-            'BLOCK_SIZE_M': 32,
-            'BLOCK_SIZE_N': 64,
-            'BLOCK_SIZE_K': 32,
-            'GROUP_SIZE_M': 8
-        },
-                      num_stages=5,
-                      num_warps=2),
+        triton.Config(
+            {"BLOCK_SIZE_M": 64, "BLOCK_SIZE_N": 64, "BLOCK_SIZE_K": 64, "GROUP_SIZE_M": 8}, num_stages=4, num_warps=4
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 64, "GROUP_SIZE_M": 8}, num_stages=3, num_warps=8
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 64, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 8}, num_stages=4, num_warps=4
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 128, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 8}, num_stages=4, num_warps=4
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 64, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 8}, num_stages=4, num_warps=4
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 64, "BLOCK_SIZE_N": 128, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 8}, num_stages=4, num_warps=4
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 32, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 8}, num_stages=4, num_warps=4
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 64, "BLOCK_SIZE_N": 32, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 8}, num_stages=5, num_warps=2
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 32, "BLOCK_SIZE_N": 64, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 8}, num_stages=5, num_warps=2
+        ),
         # Good config for fp8 inputs.
-        triton.Config({
-            'BLOCK_SIZE_M': 128,
-            'BLOCK_SIZE_N': 256,
-            'BLOCK_SIZE_K': 128,
-            'GROUP_SIZE_M': 8
-        },
-                      num_stages=3,
-                      num_warps=8),
-        triton.Config({
-            'BLOCK_SIZE_M': 256,
-            'BLOCK_SIZE_N': 128,
-            'BLOCK_SIZE_K': 128,
-            'GROUP_SIZE_M': 8
-        },
-                      num_stages=3,
-                      num_warps=8),
-        triton.Config({
-            'BLOCK_SIZE_M': 256,
-            'BLOCK_SIZE_N': 64,
-            'BLOCK_SIZE_K': 128,
-            'GROUP_SIZE_M': 8
-        },
-                      num_stages=4,
-                      num_warps=4),
-        triton.Config({
-            'BLOCK_SIZE_M': 64,
-            'BLOCK_SIZE_N': 256,
-            'BLOCK_SIZE_K': 128,
-            'GROUP_SIZE_M': 8
-        },
-                      num_stages=4,
-                      num_warps=4),
-        triton.Config({
-            'BLOCK_SIZE_M': 128,
-            'BLOCK_SIZE_N': 128,
-            'BLOCK_SIZE_K': 128,
-            'GROUP_SIZE_M': 8
-        },
-                      num_stages=4,
-                      num_warps=4),
-        triton.Config({
-            'BLOCK_SIZE_M': 128,
-            'BLOCK_SIZE_N': 64,
-            'BLOCK_SIZE_K': 64,
-            'GROUP_SIZE_M': 8
-        },
-                      num_stages=4,
-                      num_warps=4),
-        triton.Config({
-            'BLOCK_SIZE_M': 64,
-            'BLOCK_SIZE_N': 128,
-            'BLOCK_SIZE_K': 64,
-            'GROUP_SIZE_M': 8
-        },
-                      num_stages=4,
-                      num_warps=4),
-        triton.Config({
-            'BLOCK_SIZE_M': 128,
-            'BLOCK_SIZE_N': 32,
-            'BLOCK_SIZE_K': 64,
-            'GROUP_SIZE_M': 8
-        },
-                      num_stages=4,
-                      num_warps=4)
+        triton.Config(
+            {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 128, "GROUP_SIZE_M": 8},
+            num_stages=3,
+            num_warps=8,
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 256, "BLOCK_SIZE_N": 128, "BLOCK_SIZE_K": 128, "GROUP_SIZE_M": 8},
+            num_stages=3,
+            num_warps=8,
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 256, "BLOCK_SIZE_N": 64, "BLOCK_SIZE_K": 128, "GROUP_SIZE_M": 8}, num_stages=4, num_warps=4
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 64, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 128, "GROUP_SIZE_M": 8}, num_stages=4, num_warps=4
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 128, "BLOCK_SIZE_K": 128, "GROUP_SIZE_M": 8},
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 64, "BLOCK_SIZE_K": 64, "GROUP_SIZE_M": 8}, num_stages=4, num_warps=4
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 64, "BLOCK_SIZE_N": 128, "BLOCK_SIZE_K": 64, "GROUP_SIZE_M": 8}, num_stages=4, num_warps=4
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 32, "BLOCK_SIZE_K": 64, "GROUP_SIZE_M": 8}, num_stages=4, num_warps=4
+        ),
     ],
     key=["M", "N", "K"],
-    cache_results=True)
+    cache_results=True,
+)
 @triton.jit
 def matmul_kernel_float32(
-        a_ptr,
-        b_ptr,
-        c_ptr,
-        M,
-        N,
-        K,
-        # stride_am is how much to increase a_ptr per row (A has M rows), etc.
-        stride_am,
-        stride_ak,  #
-        stride_bk,
-        stride_bn,  #
-        stride_cm,
-        stride_cn,
-        BLOCK_SIZE_M: tl.constexpr,
-        BLOCK_SIZE_N: tl.constexpr,
-        BLOCK_SIZE_K: tl.constexpr,  #
-        GROUP_SIZE_M: tl.constexpr,  #
-        ACTIVATION: tl.constexpr  #
+    a_ptr,
+    b_ptr,
+    c_ptr,
+    M,
+    N,
+    K,
+    # stride_am is how much to increase a_ptr per row (A has M rows), etc.
+    stride_am,
+    stride_ak,  #
+    stride_bk,
+    stride_bn,  #
+    stride_cm,
+    stride_cn,
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_SIZE_N: tl.constexpr,
+    BLOCK_SIZE_K: tl.constexpr,  #
+    GROUP_SIZE_M: tl.constexpr,  #
+    ACTIVATION: tl.constexpr,  #
 ):
     """Kernel for computing the matmul C = A x B: A (M, K), B (K, N), C (M, N)."""
     # Map program ids to C blocks in a grouped ordering to promote L2 data reuse.
@@ -598,7 +516,7 @@ def matmul_float32(a: torch.Tensor, b: torch.Tensor, activation=""):
     K, N = b.shape
     c = torch.empty((M, N), device=a.device, dtype=torch.float32)
     # 1D launch kernel where each block gets its own program.
-    grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
+    grid = lambda META: (triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),)
     matmul_kernel_float32[grid](
         a,
         b,

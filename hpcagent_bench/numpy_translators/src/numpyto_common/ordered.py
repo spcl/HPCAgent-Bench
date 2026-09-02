@@ -19,6 +19,7 @@ Where the emitted order should not depend on collection order at all (a declarat
 a symbol list), ``sorted()`` at the point of emission is the stronger answer and is used
 directly there; this type is for the cases that must keep source order.
 """
+
 from typing import Any, Dict, Iterable, Iterator
 
 
@@ -27,7 +28,7 @@ class OrderedSet:
     actually use are implemented; add the one you need here rather than reaching for a
     plain ``set`` at the call site."""
 
-    __slots__ = ("items", )
+    __slots__ = ("items",)
 
     def __init__(self, iterable: Iterable[Any] = ()) -> None:
         self.items: Dict[Any, None] = dict.fromkeys(iterable)

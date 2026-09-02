@@ -13,6 +13,7 @@ The last two cover the way the ML corpus writes a squeeze that never reaches the
 all: BACK TO BACK on the trailing axes, which the front end rewrites to a chained subscript
 first, plus the rank-independence guard the extent fold behind it rests on.
 """
+
 import ast
 
 import numpy as np
@@ -29,23 +30,25 @@ def _ok(res):
 
 def test_swapaxes_negative_axes():
     a = np.arange(12, dtype=np.float64).reshape(3, 4)
-    src = ("import numpy as np\n"
-           "def k(a, out):\n"
-           "    b = np.swapaxes(a, -1, -2)\n"
-           "    for i in range(out.shape[0]):\n"
-           "        for j in range(out.shape[1]):\n"
-           "            out[i, j] = b[i, j]\n")
+    src = (
+        "import numpy as np\n"
+        "def k(a, out):\n"
+        "    b = np.swapaxes(a, -1, -2)\n"
+        "    for i in range(out.shape[0]):\n"
+        "        for j in range(out.shape[1]):\n"
+        "            out[i, j] = b[i, j]\n"
+    )
     ok, res = _ok(
-        run_op(src,
-               "k", {"a": a}, {"out": (4, 3)}, {
-                   "M": 3,
-                   "N": 4
-               },
-               shapes={
-                   "a": "(M, N)",
-                   "out": "(N, M)"
-               },
-               backends=_ALL))
+        run_op(
+            src,
+            "k",
+            {"a": a},
+            {"out": (4, 3)},
+            {"M": 3, "N": 4},
+            shapes={"a": "(M, N)", "out": "(N, M)"},
+            backends=_ALL,
+        )
+    )
     assert ok, res
 
 
@@ -53,90 +56,98 @@ def test_swapaxes_intermediate_local_operand():
     """The operand is an intermediate local (``tmp = a + 1``), whose shape the machinery
     infers -- the ML case where a reshape follows a computed tensor."""
     a = np.arange(12, dtype=np.float64).reshape(3, 4)
-    src = ("import numpy as np\n"
-           "def k(a, out):\n"
-           "    tmp = a + 1.0\n"
-           "    b = np.swapaxes(tmp, 0, 1)\n"
-           "    for i in range(out.shape[0]):\n"
-           "        for j in range(out.shape[1]):\n"
-           "            out[i, j] = b[i, j]\n")
+    src = (
+        "import numpy as np\n"
+        "def k(a, out):\n"
+        "    tmp = a + 1.0\n"
+        "    b = np.swapaxes(tmp, 0, 1)\n"
+        "    for i in range(out.shape[0]):\n"
+        "        for j in range(out.shape[1]):\n"
+        "            out[i, j] = b[i, j]\n"
+    )
     ok, res = _ok(
-        run_op(src,
-               "k", {"a": a}, {"out": (4, 3)}, {
-                   "M": 3,
-                   "N": 4
-               },
-               shapes={
-                   "a": "(M, N)",
-                   "out": "(N, M)"
-               },
-               backends=_ALL))
+        run_op(
+            src,
+            "k",
+            {"a": a},
+            {"out": (4, 3)},
+            {"M": 3, "N": 4},
+            shapes={"a": "(M, N)", "out": "(N, M)"},
+            backends=_ALL,
+        )
+    )
     assert ok, res
 
 
 def test_expand_dims_middle_axis():
     a = np.arange(12, dtype=np.float64).reshape(3, 4)
-    src = ("import numpy as np\n"
-           "def k(a, out):\n"
-           "    b = np.expand_dims(a, axis=1)\n"
-           "    for i in range(a.shape[0]):\n"
-           "        for j in range(a.shape[1]):\n"
-           "            out[i, 0, j] = b[i, 0, j]\n")
+    src = (
+        "import numpy as np\n"
+        "def k(a, out):\n"
+        "    b = np.expand_dims(a, axis=1)\n"
+        "    for i in range(a.shape[0]):\n"
+        "        for j in range(a.shape[1]):\n"
+        "            out[i, 0, j] = b[i, 0, j]\n"
+    )
     ok, res = _ok(
-        run_op(src,
-               "k", {"a": a}, {"out": (3, 1, 4)}, {
-                   "M": 3,
-                   "N": 4
-               },
-               shapes={
-                   "a": "(M, N)",
-                   "out": "(M, 1, N)"
-               },
-               backends=_ALL))
+        run_op(
+            src,
+            "k",
+            {"a": a},
+            {"out": (3, 1, 4)},
+            {"M": 3, "N": 4},
+            shapes={"a": "(M, N)", "out": "(M, 1, N)"},
+            backends=_ALL,
+        )
+    )
     assert ok, res
 
 
 def test_squeeze_named_axis():
     a = np.arange(12, dtype=np.float64).reshape(3, 1, 4)
-    src = ("import numpy as np\n"
-           "def k(a, out):\n"
-           "    b = np.squeeze(a, 1)\n"
-           "    for i in range(out.shape[0]):\n"
-           "        for j in range(out.shape[1]):\n"
-           "            out[i, j] = b[i, j]\n")
+    src = (
+        "import numpy as np\n"
+        "def k(a, out):\n"
+        "    b = np.squeeze(a, 1)\n"
+        "    for i in range(out.shape[0]):\n"
+        "        for j in range(out.shape[1]):\n"
+        "            out[i, j] = b[i, j]\n"
+    )
     ok, res = _ok(
-        run_op(src,
-               "k", {"a": a}, {"out": (3, 4)}, {
-                   "M": 3,
-                   "N": 4
-               },
-               shapes={
-                   "a": "(M, 1, N)",
-                   "out": "(M, N)"
-               },
-               backends=_ALL))
+        run_op(
+            src,
+            "k",
+            {"a": a},
+            {"out": (3, 4)},
+            {"M": 3, "N": 4},
+            shapes={"a": "(M, 1, N)", "out": "(M, N)"},
+            backends=_ALL,
+        )
+    )
     assert ok, res
 
 
 def test_squeeze_all_unit_axes():
     a = np.arange(12, dtype=np.float64).reshape(1, 3, 1, 4)
-    src = ("import numpy as np\n"
-           "def k(a, out):\n"
-           "    b = np.squeeze(a)\n"
-           "    for i in range(out.shape[0]):\n"
-           "        for j in range(out.shape[1]):\n"
-           "            out[i, j] = b[i, j]\n")
+    src = (
+        "import numpy as np\n"
+        "def k(a, out):\n"
+        "    b = np.squeeze(a)\n"
+        "    for i in range(out.shape[0]):\n"
+        "        for j in range(out.shape[1]):\n"
+        "            out[i, j] = b[i, j]\n"
+    )
     ok, res = _ok(
-        run_op(src,
-               "k", {"a": a}, {"out": (3, 4)}, {
-                   "M": 3,
-                   "N": 4
-               },
-               shapes={
-                   "a": "(1, M, 1, N)",
-                   "out": "(M, N)"
-               },
-               backends=_ALL))
+        run_op(
+            src,
+            "k",
+            {"a": a},
+            {"out": (3, 4)},
+            {"M": 3, "N": 4},
+            shapes={"a": "(1, M, 1, N)", "out": "(M, N)"},
+            backends=_ALL,
+        )
+    )
     assert ok, res
 
 
@@ -146,24 +157,26 @@ def test_squeeze_back_to_back_on_the_trailing_axes():
     its rank is not declared -- but the outer indices land inside the inner ``:`` positions, where
     the collapse to ``b[:, :, 0, 0]`` holds at every rank."""
     a = np.arange(12, dtype=np.float64).reshape(3, 4, 1, 1)
-    src = ("import numpy as np\n"
-           "def k(a, out):\n"
-           "    b = a * 2.0\n"
-           "    b = np.squeeze(np.squeeze(b, axis=-1), axis=-1)\n"
-           "    for i in range(out.shape[0]):\n"
-           "        for j in range(out.shape[1]):\n"
-           "            out[i, j] = b[i, j]\n")
+    src = (
+        "import numpy as np\n"
+        "def k(a, out):\n"
+        "    b = a * 2.0\n"
+        "    b = np.squeeze(np.squeeze(b, axis=-1), axis=-1)\n"
+        "    for i in range(out.shape[0]):\n"
+        "        for j in range(out.shape[1]):\n"
+        "            out[i, j] = b[i, j]\n"
+    )
     ok, res = _ok(
-        run_op(src,
-               "k", {"a": a}, {"out": (3, 4)}, {
-                   "M": 3,
-                   "N": 4
-               },
-               shapes={
-                   "a": "(M, N, 1, 1)",
-                   "out": "(M, N)"
-               },
-               backends=_ALL))
+        run_op(
+            src,
+            "k",
+            {"a": a},
+            {"out": (3, 4)},
+            {"M": 3, "N": 4},
+            shapes={"a": "(M, N, 1, 1)", "out": "(M, N)"},
+            backends=_ALL,
+        )
+    )
     assert ok, res
 
 

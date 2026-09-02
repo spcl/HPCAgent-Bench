@@ -11,6 +11,7 @@ Fortran walkers consume, so an algorithmic bug is caught here, at the layer that
 toolchain in the loop. What this does NOT cover is the walker's lowering of those statements -- that
 belongs to the native oracle.
 """
+
 import ast
 
 import numpy as np
@@ -30,15 +31,15 @@ def _build_fn(n_rows_sym: str = "NR", n_cols_sym: str = "NK"):
     out = {b: f"C_{b}" for b in _BUFS}
     body = expand_matmul_csr_csr(ast.Name(id="C", ctx=ast.Store()), lhs, rhs, out, n_rows_sym, n_cols_sym)
     params = [*lhs.values(), *rhs.values(), *out.values(), "__csr_mark", "__csr_acc", n_rows_sym, n_cols_sym]
-    fn = ast.FunctionDef(name="spgemm",
-                         args=ast.arguments(posonlyargs=[],
-                                            args=[ast.arg(arg=p) for p in params],
-                                            kwonlyargs=[],
-                                            kw_defaults=[],
-                                            defaults=[]),
-                         body=body,
-                         decorator_list=[],
-                         returns=None)
+    fn = ast.FunctionDef(
+        name="spgemm",
+        args=ast.arguments(
+            posonlyargs=[], args=[ast.arg(arg=p) for p in params], kwonlyargs=[], kw_defaults=[], defaults=[]
+        ),
+        body=body,
+        decorator_list=[],
+        returns=None,
+    )
     mod = ast.fix_missing_locations(ast.Module(body=[fn], type_ignores=[]))
     ns = {}
     exec(compile(mod, "<spgemm>", "exec"), ns)  # noqa: S102 -- executing our own emitted AST is the point
@@ -49,13 +50,25 @@ def _run(A, B):
     """``A @ B`` through the emitted SpGEMM; returns an unsorted-column CSR triple."""
     nr, nk = A.shape[0], B.shape[1]
     # Worst-case output nnz, the bound the caller is documented to size C's buffers to.
-    cap = int(sum(B.indptr[j + 1] - B.indptr[j] for i in range(nr) for j in A.indices[A.indptr[i]:A.indptr[i + 1]]))
+    cap = int(sum(B.indptr[j + 1] - B.indptr[j] for i in range(nr) for j in A.indices[A.indptr[i] : A.indptr[i + 1]]))
     c_indptr = np.zeros(nr + 1, dtype=np.int64)
     c_indices = np.zeros(max(cap, 1), dtype=np.int64)
     c_data = np.zeros(max(cap, 1), dtype=np.float64)
-    _build_fn()(A.indptr.astype(np.int64), A.indices.astype(np.int64), A.data.astype(np.float64),
-                B.indptr.astype(np.int64), B.indices.astype(np.int64), B.data.astype(np.float64), c_indptr, c_indices,
-                c_data, np.zeros(nk, dtype=np.int64), np.zeros(nk, dtype=np.float64), nr, nk)
+    _build_fn()(
+        A.indptr.astype(np.int64),
+        A.indices.astype(np.int64),
+        A.data.astype(np.float64),
+        B.indptr.astype(np.int64),
+        B.indices.astype(np.int64),
+        B.data.astype(np.float64),
+        c_indptr,
+        c_indices,
+        c_data,
+        np.zeros(nk, dtype=np.int64),
+        np.zeros(nk, dtype=np.float64),
+        nr,
+        nk,
+    )
     return c_indptr, c_indices, c_data
 
 
@@ -121,7 +134,7 @@ def test_repeated_column_contributions_accumulate():
     B = sp.csr_matrix(np.array([[5.0, 6.0], [7.0, 0.0]]))
     c_indptr, c_indices, _ = _run(A, B)
     for i in range(A.shape[0]):
-        cols = list(c_indices[c_indptr[i]:c_indptr[i + 1]])
+        cols = list(c_indices[c_indptr[i] : c_indptr[i + 1]])
         assert len(cols) == len(set(cols)), f"row {i} emitted a duplicate column: {cols}"
     got, _ = _dense(A, B)
     np.testing.assert_allclose(got, (A @ B).toarray())

@@ -7,6 +7,7 @@ DBs, shared/agent-*/ write folders, per-worker claude.log files, monitor CSVs) a
 intact run reports all-PASS while a run missing a log and a submission reports exactly those two
 FAILs, gracefully, with no traceback.
 """
+
 import importlib.util
 import pathlib
 import sqlite3
@@ -55,23 +56,22 @@ def seed_shard(path: pathlib.Path, *, run_id: str, kernel: str = "gemm", ts: int
     conn = recording.connect(str(path))
     try:
         conn.execute(
-            "INSERT OR REPLACE INTO benchmarks(name, track, kind, domain, dwarf, source) "
-            "VALUES (?,?,?,?,?,?)", (kernel, "scientific_computing", "dense", "linalg", "dense_la", None))
+            "INSERT OR REPLACE INTO benchmarks(name, track, kind, domain, dwarf, source) VALUES (?,?,?,?,?,?)",
+            (kernel, "scientific_computing", "dense", "linalg", "dense_la", None),
+        )
         conn.execute(
             "INSERT INTO submissions(run_id, ts, benchmark, preset, datatype, language, "
             "source_mode, optimizer, baseline, speedup) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (run_id, ts, kernel, "S", "float64", "c", "restricted", "noop", "c", 1.5))
+            (run_id, ts, kernel, "S", "float64", "c", "restricted", "noop", "c", 1.5),
+        )
         conn.commit()
     finally:
         conn.close()
 
 
-def build_run_dir(tmp_path: pathlib.Path,
-                  *,
-                  ranks: int = 2,
-                  agents: int = 2,
-                  drop_log: bool = False,
-                  empty_agent: bool = False) -> pathlib.Path:
+def build_run_dir(
+    tmp_path: pathlib.Path, *, ranks: int = 2, agents: int = 2, drop_log: bool = False, empty_agent: bool = False
+) -> pathlib.Path:
     """A run dir shaped like RUN_DIR after a real campaign: judge shards, shared write folders, agent
     logs, and one monitor CSV. ``drop_log`` and ``empty_agent`` punch the exact holes TASK 3 wants."""
     run_dir = tmp_path / "run"
@@ -196,11 +196,9 @@ def test_merge_results_standalone_reports_corrupt_shard_and_fails_cleanly(tmp_pa
     bad_shard = run_dir / "judge" / "rank-1" / "hpcagent_bench.db"
     bad_shard.write_bytes(GARBAGE_BYTES)  # truncated/OOM-killed shard, not a valid sqlite file
 
-    result = subprocess.run([sys.executable, str(EXAMPLE / "merge_results.py"),
-                             str(run_dir)],
-                            capture_output=True,
-                            text=True,
-                            check=False)
+    result = subprocess.run(
+        [sys.executable, str(EXAMPLE / "merge_results.py"), str(run_dir)], capture_output=True, text=True, check=False
+    )
 
     assert result.returncode != 0
     assert "Traceback" not in result.stderr
@@ -219,18 +217,19 @@ def test_merge_results_carries_the_call_trajectory(tmp_path):
             conn.execute(
                 "INSERT INTO calls(run_id, ts, benchmark, preset, datatype, language, source_mode, "
                 "round, tokens, status, route) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                (f"r{rank}", 1, "gemm", "S", "float64", "c", "restricted", 1, 0, "build_error", "score"))
+                (f"r{rank}", 1, "gemm", "S", "float64", "c", "restricted", 1, 0, "build_error", "score"),
+            )
             conn.commit()
         finally:
             conn.close()
 
     out = tmp_path / "merged.db"
     result = subprocess.run(
-        [sys.executable, str(EXAMPLE / "merge_results.py"),
-         str(run_dir), "--out", str(out)],
+        [sys.executable, str(EXAMPLE / "merge_results.py"), str(run_dir), "--out", str(out)],
         capture_output=True,
         text=True,
-        check=False)
+        check=False,
+    )
 
     assert result.returncode == 0, result.stderr
     conn = sqlite3.connect(str(out))

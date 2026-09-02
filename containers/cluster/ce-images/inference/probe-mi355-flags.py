@@ -3,6 +3,7 @@
 A switch nothing greps for is a switch that does nothing here, whatever it does on gfx950.
 Written as a file rather than a heredoc so the sbatch does not nest quotes three deep.
 """
+
 import pathlib
 import subprocess
 import sys
@@ -24,8 +25,11 @@ VARS = [
     "AITER_SITUV2_A8W4",
 ]
 FLAGS = [
-    "enable_aiter_allreduce_fusion", "attention_backend", "disable_radix_cache", "expert_parallel_size",
-    "enable_dp_attention"
+    "enable_aiter_allreduce_fusion",
+    "attention_backend",
+    "disable_radix_cache",
+    "expert_parallel_size",
+    "enable_dp_attention",
 ]
 
 
@@ -43,6 +47,7 @@ def roots() -> list[pathlib.Path]:
 
 def main() -> int:
     import torch
+
     print("gfx:", torch.cuda.get_device_properties(0).gcnArchName)
     trees = roots()
     print("trees:", [str(t) for t in trees], "\n")

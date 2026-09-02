@@ -1,4 +1,5 @@
 """CPU/GPU TVM impl of the nbody leapfrog simulation: per-step compute as TIR PrimFuncs, Nt-step loop driven from Python."""
+
 import numpy as np
 import tvm
 from tvm import te
@@ -42,7 +43,7 @@ def _build_ke(n, dtype, dt, G, soft):
     mass = te.placeholder((n, 1), name="mass", dtype=dtype)
     ki = te.reduce_axis((0, n), name="ki")
     kc = te.reduce_axis((0, 3), name="kc")
-    ke = te.compute((1, ), lambda _: te.sum(mass[ki, 0] * vel[ki, kc] * vel[ki, kc], axis=[ki, kc]), name="ke_raw")
+    ke = te.compute((1,), lambda _: te.sum(mass[ki, 0] * vel[ki, kc] * vel[ki, kc], axis=[ki, kc]), name="ke_raw")
     return te.create_prim_func([vel, mass, ke]).with_attr("global_symbol", "nbody_ke")
 
 
@@ -61,7 +62,7 @@ def _build_pe(n, dtype, dt, G, soft):
         contrib = -(mass[pi, 0] * mass[pj, 0]) / safe
         return te.if_then_else(pi < pj, contrib, te.const(0.0, dtype))
 
-    pe = te.compute((1, ), lambda _: te.sum(term(), axis=[pi, pj]), name="pe_raw")
+    pe = te.compute((1,), lambda _: te.sum(term(), axis=[pi, pj]), name="pe_raw")
     return te.create_prim_func([pos, mass, pe]).with_attr("global_symbol", "nbody_pe")
 
 
@@ -101,8 +102,7 @@ class _NbodyKernels:
             "full": _build_axpy(n, dtype, dt, "nbody_axpy_full"),
         }
         self._k = {
-            name: _compile(pf, self.target_fn(), f"nbody_{name}_{self.tag}", key_str)
-            for name, pf in builders.items()
+            name: _compile(pf, self.target_fn(), f"nbody_{name}_{self.tag}", key_str) for name, pf in builders.items()
         }
         self._key = key
         return self._k
@@ -118,7 +118,7 @@ def _run(kernels, device, mass, pos, vel, N, Nt, dtype, G):
         return tvm.runtime.tensor(np.empty((N, 3), dtype=dtype), device=device)
 
     def empty1():
-        return tvm.runtime.tensor(np.empty((1, ), dtype=dtype), device=device)
+        return tvm.runtime.tensor(np.empty((1,), dtype=dtype), device=device)
 
     def to_dev(arr):
         return tvm.runtime.tensor(np.ascontiguousarray(arr), device=device)

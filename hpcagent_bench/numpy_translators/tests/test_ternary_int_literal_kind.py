@@ -16,6 +16,7 @@ the fix in different places:
 
 This file pins the second form: the negative literal must not drag the temp down to int32.
 """
+
 import re
 
 import numpy as np
@@ -31,12 +32,14 @@ def _all_ok(res):
 
 # ``c = int(idx[i])`` -> an int64 local (the loop iter makes it int64, ``tab[c]``
 # makes it int-used); ``s = c if c > 0 else -1`` is the int64-vs-(-1) ternary.
-_SRC = ("import numpy as np\n"
-        "def f(idx, tab, out):\n"
-        " for i in range(len(idx)):\n"
-        "  c = int(idx[i])\n"
-        "  s = c if c > 0 else -1\n"
-        "  out[i] = tab[c] + float(s)\n")
+_SRC = (
+    "import numpy as np\n"
+    "def f(idx, tab, out):\n"
+    " for i in range(len(idx)):\n"
+    "  c = int(idx[i])\n"
+    "  s = c if c > 0 else -1\n"
+    "  out[i] = tab[c] + float(s)\n"
+)
 
 
 def test_negative_literal_ternary_matches_int64_partner():
@@ -44,20 +47,16 @@ def test_negative_literal_ternary_matches_int64_partner():
     tab = np.linspace(10.0, 20.0, 4, dtype=np.float64)
     out = np.zeros(8, dtype=np.float64)
     ok, res = _all_ok(
-        run_op(_SRC,
-               "f", {
-                   "idx": idx,
-                   "tab": tab
-               }, {"out": (8, )}, {
-                   "N": 8,
-                   "T": 4
-               },
-               shapes={
-                   "idx": "(N,)",
-                   "tab": "(T,)",
-                   "out": "(N,)"
-               },
-               backends=_ALL))
+        run_op(
+            _SRC,
+            "f",
+            {"idx": idx, "tab": tab},
+            {"out": (8,)},
+            {"N": 8, "T": 4},
+            shapes={"idx": "(N,)", "tab": "(T,)", "out": "(N,)"},
+            backends=_ALL,
+        )
+    )
     assert ok, res
     _ = out
 
@@ -75,6 +74,7 @@ def test_ifexp_temp_declares_the_int64_kind_of_its_partner_branch():
     from numpyto_common.frontend import parse_kernel
     from numpyto_common.lowering import lower
     from numpyto_fortran.emit import emit_fortran
+
     d = pathlib.Path(tempfile.mkdtemp())
     (d / "k_numpy.py").write_text(_SRC)
     bi = {
@@ -84,12 +84,7 @@ def test_ifexp_temp_declares_the_int64_kind_of_its_partner_branch():
             "relative_path": "",
             "module_name": "k",
             "func_name": "f",
-            "parameters": {
-                "S": {
-                    "N": 8,
-                    "T": 4
-                }
-            },
+            "parameters": {"S": {"N": 8, "T": 4}},
             "input_args": ["idx", "tab", "out"],
             "array_args": ["idx", "tab", "out"],
             "output_args": ["out"],
@@ -97,16 +92,7 @@ def test_ifexp_temp_declares_the_int64_kind_of_its_partner_branch():
             # declared array); ``init.dtypes`` types the one whose element type is not the
             # kernel float. Fed here exactly as the bridge exports it, so this fixture cannot
             # keep passing on a surface the emitter no longer receives in production.
-            "init": {
-                "arrays": {
-                    "idx": "(N,)",
-                    "tab": "(T,)",
-                    "out": "(N,)"
-                },
-                "dtypes": {
-                    "idx": "int64"
-                }
-            }
+            "init": {"arrays": {"idx": "(N,)", "tab": "(T,)", "out": "(N,)"}, "dtypes": {"idx": "int64"}},
         }
     }
     (d / "bi.json").write_text(json.dumps(bi))

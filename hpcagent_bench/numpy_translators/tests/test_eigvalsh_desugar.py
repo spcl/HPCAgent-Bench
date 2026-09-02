@@ -13,6 +13,7 @@ The first two tests exec the desugared loop nest as numpy and compare against
 eigh tests use (``test_translator_feature_fixes.test_eigh_generalized_subset_matches_scipy``).
 The third drives the full C/Fortran compile+run oracle.
 """
+
 import ast
 
 import numpy as np
@@ -96,26 +97,30 @@ def test_eigvalsh_native_c_fortran_matches_numpy():
     """Full C + Fortran compile+run of ``w[:] = np.linalg.eigvalsh(A)`` vs numpy."""
     n = 5
     A = _sym(n, 1)
-    res = run_op("import numpy as np\ndef f(A, w):\n tmp = np.linalg.eigvalsh(A)\n w[:] = tmp\n",
-                 "f", {"A": A}, {"w": (n, )}, {"N": n},
-                 shapes={
-                     "A": "(N, N)",
-                     "w": "(N,)"
-                 },
-                 rtol=1e-6,
-                 atol=1e-6,
-                 backends=("c", "fortran"))
+    res = run_op(
+        "import numpy as np\ndef f(A, w):\n tmp = np.linalg.eigvalsh(A)\n w[:] = tmp\n",
+        "f",
+        {"A": A},
+        {"w": (n,)},
+        {"N": n},
+        shapes={"A": "(N, N)", "w": "(N,)"},
+        rtol=1e-6,
+        atol=1e-6,
+        backends=("c", "fortran"),
+    )
     for b in ("c", "fortran"):
         assert res[b] == "ok", f"native {b} did not validate: {res}"
 
 
-_DERIVED_OPERAND_SRC = ("def f(X, W):\n"
-                        "    h_sub = X.T @ W\n"
-                        "    s_sub = X.T @ X\n"
-                        "    L = np.linalg.cholesky(s_sub)\n"
-                        "    Linv = np.linalg.inv(L)\n"
-                        "    M = Linv @ h_sub @ Linv.T\n"
-                        "    w = np.linalg.eigvalsh(M)\n")
+_DERIVED_OPERAND_SRC = (
+    "def f(X, W):\n"
+    "    h_sub = X.T @ W\n"
+    "    s_sub = X.T @ X\n"
+    "    L = np.linalg.cholesky(s_sub)\n"
+    "    Linv = np.linalg.inv(L)\n"
+    "    M = Linv @ h_sub @ Linv.T\n"
+    "    w = np.linalg.eigvalsh(M)\n"
+)
 
 
 def test_a_real_operand_stays_real_through_transpose_and_factorisations():
@@ -127,10 +132,8 @@ def test_a_real_operand_stays_real_through_transpose_and_factorisations():
     whose operand is built rather than passed, and the emitted ``.real``/``.imag`` became an
     unqualified C++ ``real()``/``imag()`` that does not compile."""
     txt = ast.unparse(
-        ast.Module(body=_desugar_body(_DERIVED_OPERAND_SRC, dtypes={
-            "X": "float",
-            "W": "float"
-        }), type_ignores=[]))
+        ast.Module(body=_desugar_body(_DERIVED_OPERAND_SRC, dtypes={"X": "float", "W": "float"}), type_ignores=[])
+    )
     assert ".real" not in txt, f"a real operand built through .T / cholesky / inv still emits .real:\n{txt}"
     assert ".imag" not in txt, f"a real operand built through .T / cholesky / inv still emits .imag:\n{txt}"
 

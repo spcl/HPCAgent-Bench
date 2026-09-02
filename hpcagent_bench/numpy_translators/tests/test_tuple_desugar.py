@@ -5,6 +5,7 @@
 Each test asserts on the desugared source, since the failure this pass exists to prevent is an
 ``ast.Tuple`` surviving into value position, where the emitter refuses it.
 """
+
 import ast
 import textwrap
 
@@ -20,11 +21,9 @@ RANKS = {"x": 4, "out": 4}
 
 def desugared(body: str, int_scalars=SCALARS, float_scalars=frozenset(), arrays=ARRAYS, ranks=None) -> str:
     fn = ast.parse(textwrap.dedent(body)).body[0]
-    desugar_tuples(fn,
-                   int_scalars=int_scalars,
-                   float_scalars=float_scalars,
-                   arrays=arrays,
-                   ranks=RANKS if ranks is None else ranks)
+    desugar_tuples(
+        fn, int_scalars=int_scalars, float_scalars=float_scalars, arrays=arrays, ranks=RANKS if ranks is None else ranks
+    )
     return ast.unparse(fn)
 
 
@@ -70,17 +69,16 @@ def test_a_generator_over_a_literal_range_unrolls():
 def test_a_broadcast_shape_padded_to_an_array_rank_folds(rank, want):
     """``(1,) * (x.ndim - 2)``. The rank-2 case repeats ZERO times: the empty tuple is falsy but
     correct, so the fold must test for None rather than truthiness."""
-    got = desugared("""
+    got = desugared(
+        """
         def k(x, out):
             shape = (1, x.shape[1]) + (1,) * (x.ndim - 2)
             out[:] = x.reshape(shape)
         """,
-                    int_scalars=frozenset(),
-                    arrays=frozenset({"x", "out"}),
-                    ranks={
-                        "x": rank,
-                        "out": rank
-                    })
+        int_scalars=frozenset(),
+        arrays=frozenset({"x", "out"}),
+        ranks={"x": rank, "out": rank},
+    )
     assert f"x.reshape({want})" in got
 
 

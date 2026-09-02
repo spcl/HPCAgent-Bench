@@ -21,6 +21,7 @@ GPU flags are kept tight (``CUDA_BASELINE`` / ``HIP_BASELINE``);
 adding a new autopar / autovec knob is one constant + one referrer in
 the framework's :meth:`compile_args`.
 """
+
 import enum
 import os
 import pathlib
@@ -37,6 +38,7 @@ from hpcagent_bench import config, osinfo, paths
 
 class Mode(enum.Enum):
     """The four evaluation modes per kernel."""
+
     SINGLE_CORE = "single_core"
     MULTI_CORE = "multi_core"
     GPU_CUDA = "gpu_cuda"
@@ -167,15 +169,17 @@ OPT_LEVEL = "-O3"
 #: OpenMP is pinned to LLVM's ``libomp`` (like POLLY_PAR -- the runtime clang's own codegen
 #: calls into) and glibc's ``libmvec`` is added;
 #: on macOS both are dropped (neither exists there -- see the OS-aware pieces above).
-CPU_BASELINE_CLANG = (f"-O3 {ARCH_NATIVE} {_OPENMP_CLANG} {_FP_RELAX} {_FP_ASSOC} {_FP_CONTRACT} "
-                      f"-fstrict-aliasing -fPIC{_VECLIB_CLANG}")
+CPU_BASELINE_CLANG = (
+    f"-O3 {ARCH_NATIVE} {_OPENMP_CLANG} {_FP_RELAX} {_FP_ASSOC} {_FP_CONTRACT} -fstrict-aliasing -fPIC{_VECLIB_CLANG}"
+)
 
 #: GCC baseline for C / C++: -O3 + native arch + OpenMP + vectorized libm (no fast-math).
 #: The libmvec half arrives as a decl header, not a flag -- gcc has no -fveclib. This line
 #: previously claimed "libmvec implicit on glibc"; it is not, and was not: glibc's decls
 #: need __FAST_MATH__, so gcc built every libm call scalar while clang vectorized it.
-CPU_BASELINE_GCC = (f"-O3 {ARCH_NATIVE} -fopenmp {_FP_RELAX} {_FP_ASSOC} {_FP_CONTRACT} "
-                    f"-fstrict-aliasing -fPIC{_VECLIB_GCC}")
+CPU_BASELINE_GCC = (
+    f"-O3 {ARCH_NATIVE} -fopenmp {_FP_RELAX} {_FP_ASSOC} {_FP_CONTRACT} -fstrict-aliasing -fPIC{_VECLIB_GCC}"
+)
 
 #: GCC baseline for Fortran -- CPU_BASELINE_GCC minus the C decl header. gfortran cannot
 #: consume one ("valid for C/C++/... but not for Fortran"): a warning on every compile, and
@@ -185,8 +189,7 @@ CPU_BASELINE_GCC = (f"-O3 {ARCH_NATIVE} -fopenmp {_FP_RELAX} {_FP_ASSOC} {_FP_CO
 #: pre-include is a distro spec, not upstream gcc, so it is a host property rather than
 #: something we can assert from here: tests/test_vecmath.py checks gfortran really does
 #: vectorize libm, and fails loudly on a host whose spec omits it.
-CPU_BASELINE_GFORTRAN = (f"-O3 {ARCH_NATIVE} -fopenmp {_FP_RELAX} {_FP_ASSOC} {_FP_CONTRACT} "
-                         f"-fstrict-aliasing -fPIC")
+CPU_BASELINE_GFORTRAN = f"-O3 {ARCH_NATIVE} -fopenmp {_FP_RELAX} {_FP_ASSOC} {_FP_CONTRACT} -fstrict-aliasing -fPIC"
 
 #: NVHPC baseline for C / C++ / Fortran. ``_FP_RELAX`` and ``_FP_ASSOC`` have no nvc spelling and
 #: need none: nvc relaxes errno, trapping and signed zeros AND reassociates by default, and
@@ -217,8 +220,10 @@ NVHPC_OPT_REPORT = "-Minfo=all"
 #: (see ``_FP_CONTRACT``: every vendor contracts, or the columns are not comparable), so the notice
 #: is silenced here rather than printed once per translation unit. Nothing else about ``precise``
 #: is relaxed.
-CPU_BASELINE_ICPX = (f"-O3 -xHost -fp-model=precise -qopenmp {_FP_RELAX} {_FP_ASSOC} {_FP_CONTRACT} "
-                     f"-Wno-overriding-option -fPIC -qopt-zmm-usage=high")
+CPU_BASELINE_ICPX = (
+    f"-O3 -xHost -fp-model=precise -qopenmp {_FP_RELAX} {_FP_ASSOC} {_FP_CONTRACT} "
+    f"-Wno-overriding-option -fPIC -qopt-zmm-usage=high"
+)
 
 #: Appended to a PROFILED build (``Sandbox.build(debug=True)``, the /profile endpoint) so perf can
 #: name the symbols it samples. Only ``-g``: it emits DWARF beside the code without changing it, so
@@ -236,8 +241,7 @@ DEBUG_SYMBOLS: List[str] = ["-g"]
 #: ``_VECLIB_GCC`` rather than ``_VECLIB_CLANG``: pythran forwards these to whichever backend it
 #: was configured with, and the decl header is accepted by gcc AND clang while ``-fveclib`` is
 #: clang-only. Without it pythran was the one CPU column building libm scalar.
-PYTHRAN_BASELINE = (f"-DUSE_XSIMD -fopenmp {ARCH_NATIVE} {_FP_RELAX} {_FP_ASSOC} {_FP_CONTRACT} "
-                    f"-fPIC{_VECLIB_GCC}")
+PYTHRAN_BASELINE = f"-DUSE_XSIMD -fopenmp {ARCH_NATIVE} {_FP_RELAX} {_FP_ASSOC} {_FP_CONTRACT} -fPIC{_VECLIB_GCC}"
 
 #: LLVM Fortran (``flang`` / ``flang-new``) baseline -- LLVM's Fortran front end,
 #: the Fortran companion to the clang C/C++ baseline (``CPU_BASELINE_CLANG``).
@@ -254,7 +258,7 @@ PYTHRAN_BASELINE = (f"-DUSE_XSIMD -fopenmp {ARCH_NATIVE} {_FP_RELAX} {_FP_ASSOC}
 #: ``-fassociative-math`` effective, so switching the licence off must take it out too or the
 #: opt-out does not reproduce the old matrix.
 _FP_ASSOC_FLANG = f"{_FP_ASSOC} -fno-signed-zeros" if _FP_ASSOC else ""
-FLANG_BASELINE = (f"-O3 {ARCH_NATIVE} -fopenmp {_FP_ASSOC_FLANG} {_FP_CONTRACT} -fPIC")
+FLANG_BASELINE = f"-O3 {ARCH_NATIVE} -fopenmp {_FP_ASSOC_FLANG} {_FP_CONTRACT} -fPIC"
 
 #: flang's route to glibc's vector libm. Unlike gfortran -- which gets libmvec from the distro
 #: driver spec pre-including glibc's Fortran directives -- flang has no such spec, so the flag is
@@ -350,8 +354,10 @@ LINK_MIMALLOC = "-lmimalloc"
 #: the profitability heuristic that was rejecting it, and ``-polly-parallel-force`` is what then
 #: emits parallel code for it. Without the pair the column is serial ``-O3`` under an autopar label
 #: on every loop Polly deems not worth it, which on this corpus is most of them.
-POLLY_PAR = (f"-mllvm -polly -mllvm -polly-parallel -mllvm -polly-parallel-force "
-             f"-mllvm -polly-process-unprofitable {_OPENMP_CLANG}")
+POLLY_PAR = (
+    f"-mllvm -polly -mllvm -polly-parallel -mllvm -polly-parallel-force "
+    f"-mllvm -polly-process-unprofitable {_OPENMP_CLANG}"
+)
 
 #: GCC autopar + Graphite, the gcc counterpart of POLLY_PAR.
 #:
@@ -383,8 +389,7 @@ POLLY_PAR = (f"-mllvm -polly -mllvm -polly-parallel -mllvm -polly-parallel-force
 #: transforms cost nothing when the scheduler declines, and they fire on gcc builds/kernels
 #: whose dependences its scheduler does accept. Assert only that gcc ACCEPTS the flags
 #: (tests/test_compile_flags.py), never that they change codegen on this host.
-GCC_AUTOPAR = ("-ftree-parallelize-loops={n} -floop-parallelize-all "
-               "-fgraphite-identity -floop-nest-optimize -fopenmp")
+GCC_AUTOPAR = "-ftree-parallelize-loops={n} -floop-parallelize-all -fgraphite-identity -floop-nest-optimize -fopenmp"
 
 #: Native-construct threading: honor Fortran ``do concurrent``'s independence promise with real
 #: threads, on every family (user decision 2026-08-11). Appended to EVERY build of a block that
@@ -458,6 +463,7 @@ NVHPC_CONCUR = "-Mconcur"
 class AutoparVerdict(enum.Enum):
     """Three states, not a bool -- "accepted but useless" needs its own name, since that is
     exactly the failure mode this probe exists to catch (a bool cannot say it)."""
+
     REJECTED = "rejected"  #: the compiler/toolchain does not accept these flags at all.
     VACUOUS = "vacuous"  #: flags accepted, object built, but nothing was outlined.
     OK = "ok"  #: a parallel loop body was genuinely outlined.
@@ -466,6 +472,7 @@ class AutoparVerdict(enum.Enum):
 class AutoparProbe(NamedTuple):
     """One probe result: the verdict plus the ``nm`` evidence (or compiler error) behind it,
     so a caller reporting "unavailable" can name the cause instead of just the verdict."""
+
     verdict: AutoparVerdict
     detail: str
 
@@ -575,12 +582,14 @@ def _nm(nm_exe: str, args: List[str], obj: pathlib.Path) -> Optional[str]:
 
 
 @lru_cache(typed=True)
-def probe_autopar(compiler: str,
-                  flags: str,
-                  outline_pattern: str,
-                  source: str = _AUTOPAR_PROBE_SOURCE,
-                  runtime_pattern: str = OMP_RUNTIME_CALL_PATTERN,
-                  suffix: str = ".c") -> AutoparProbe:
+def probe_autopar(
+    compiler: str,
+    flags: str,
+    outline_pattern: str,
+    source: str = _AUTOPAR_PROBE_SOURCE,
+    runtime_pattern: str = OMP_RUNTIME_CALL_PATTERN,
+    suffix: str = ".c",
+) -> AutoparProbe:
     """Does ``compiler flags`` genuinely outline a parallel loop, or merely accept the flags?
 
     Compiles ``source`` to an object in a fresh temp dir with ``compiler`` and ``flags`` (the
@@ -736,8 +745,9 @@ GCC_OPT_REPORT = "-fopt-info-vec-optimized -fopt-info-vec-missed"
 #: ``-Rpass-analysis`` is clang's counterpart of gcc's ``missed:`` reason line.
 #: No ``-g`` is needed: the stderr diagnostics carry the frontend's own source
 #: location (only the serialized YAML record needs debug info for its DebugLoc).
-CLANG_OPT_REPORT = ("-Rpass=loop-vectorize|slp-vectorizer -Rpass-missed=loop-vectorize|slp-vectorizer "
-                    "-Rpass-analysis=loop-vectorize")
+CLANG_OPT_REPORT = (
+    "-Rpass=loop-vectorize|slp-vectorizer -Rpass-missed=loop-vectorize|slp-vectorizer -Rpass-analysis=loop-vectorize"
+)
 
 #: Intel oneAPI (icx / icpx / ifx) vectorization + parallelization report. Both phases are named:
 #: ``vec`` is the counterpart of the two above, and ``par`` says what the OpenMP layer did, which
@@ -806,13 +816,13 @@ VECT_COST_NVHPC_OFF = "-Mnovect"
 #: submission's arithmetic differ from the NumPy oracle it is graded against -- and from the CPU
 #: baseline it is compared against -- while the prompt promised agents that fast-math is never
 #: passed. ``_FP_RELAX`` is the whole of the licence, on either side of the PCIe bus.
-CUDA_BASELINE = (f"-O3 -Xcompiler='-O3 -march=native {_FP_RELAX} {_FP_ASSOC} {_FP_CONTRACT} -fPIC'")
+CUDA_BASELINE = f"-O3 -Xcompiler='-O3 -march=native {_FP_RELAX} {_FP_ASSOC} {_FP_CONTRACT} -fPIC'"
 
 #: HIP (AMD) baseline -- hipcc is clang-based and takes the relax flags natively (no
 #: ``-Xcompiler``), so one spelling covers its host and device passes. ``--offload-arch=<gfx>``
 #: is appended per-host by :func:`compose_hip` after :func:`detect_gfx`. No ``-ffast-math``, for
 #: the reason on :data:`CUDA_BASELINE`.
-HIP_BASELINE = (f"-O3 -march=native {_FP_RELAX} {_FP_ASSOC} {_FP_CONTRACT} -fPIC")
+HIP_BASELINE = f"-O3 -march=native {_FP_RELAX} {_FP_ASSOC} {_FP_CONTRACT} -fPIC"
 
 # Directive-offload flag sets; ``{arch}`` filled by :func:`languages.offload_flags` from the arch
 # :func:`languages.offload_arch` PROBED, never from a constant. One toolchain owns each model:
@@ -826,8 +836,23 @@ HIP_BASELINE = (f"-O3 -march=native {_FP_RELAX} {_FP_ASSOC} {_FP_CONTRACT} -fPIC
 #: Only NVIDIA gets a ladder. PTX is forward-compatible, so a lower ``sm_`` still runs on a higher
 #: device; AMD has no such property (gfx1103 code does not run on gfx942), so an AMD offload arch is
 #: matched EXACTLY or the leg is unsupported.
-SM_LADDER: Tuple[str, ...] = ("sm_121", "sm_120", "sm_110", "sm_103", "sm_100", "sm_90", "sm_89", "sm_87", "sm_86",
-                              "sm_80", "sm_75", "sm_70", "sm_62", "sm_60", "sm_53")
+SM_LADDER: Tuple[str, ...] = (
+    "sm_121",
+    "sm_120",
+    "sm_110",
+    "sm_103",
+    "sm_100",
+    "sm_90",
+    "sm_89",
+    "sm_87",
+    "sm_86",
+    "sm_80",
+    "sm_75",
+    "sm_70",
+    "sm_62",
+    "sm_60",
+    "sm_53",
+)
 
 OMP_TARGET_LLVM_NVIDIA = "-fopenmp --offload-arch={arch}"
 OMP_TARGET_LLVM_AMD = "-fopenmp --offload-arch={arch}"
@@ -938,8 +963,12 @@ def detect_sm() -> str:
     if env:
         return env if env.startswith("sm_") else f"sm_{env}"
     try:
-        out = subprocess.check_output(["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"],
-                                      timeout=5).decode().strip().splitlines()
+        out = (
+            subprocess.check_output(["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"], timeout=5)
+            .decode()
+            .strip()
+            .splitlines()
+        )
         if out:
             cap = out[0].strip().replace(".", "")
             return f"sm_{cap}"

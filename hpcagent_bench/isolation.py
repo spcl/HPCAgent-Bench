@@ -6,6 +6,7 @@ The forking itself belongs to :func:`hpcagent_bench.frameworks.forked.run_forked
 already marshals results, timeouts and fatal signals; this module supplies only the one
 thing it was missing.
 """
+
 import ctypes
 import os
 import warnings
@@ -42,12 +43,16 @@ def pause_openmp_pools(mode: int = OMP_PAUSE_SOFT) -> None:
         try:
             pause = lib.omp_pause_resource_all
         except AttributeError:
-            warnings.warn(f"{soname}: no omp_pause_resource_all (pre-OpenMP-5.0 runtime); its thread pool "
-                          f"was NOT torn down before the fork -- fork safety for this runtime now rests on "
-                          f"its own pthread_atfork handler, if it installs one (libgomp installs none).")
+            warnings.warn(
+                f"{soname}: no omp_pause_resource_all (pre-OpenMP-5.0 runtime); its thread pool "
+                f"was NOT torn down before the fork -- fork safety for this runtime now rests on "
+                f"its own pthread_atfork handler, if it installs one (libgomp installs none)."
+            )
             continue  # best effort, but no longer SILENT: the caller can see the fork was left unhardened
         pause.argtypes = [ctypes.c_int]
         pause.restype = ctypes.c_int
         if pause(mode) != 0:  # e.g. called from within a parallel region: the pool was NOT torn down
-            warnings.warn(f"{soname}: omp_pause_resource_all(mode={mode}) returned non-zero; its thread "
-                          f"pool was NOT torn down before the fork.")
+            warnings.warn(
+                f"{soname}: omp_pause_resource_all(mode={mode}) returned non-zero; its thread "
+                f"pool was NOT torn down before the fork."
+            )

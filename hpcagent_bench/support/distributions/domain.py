@@ -15,6 +15,7 @@ which is exactly what the rotation exists to prevent -- so keep the declarations
 ``(low, high)`` pair. Folding with ``abs`` keeps the sampled magnitudes (a half-normal is still a
 normal's magnitudes) rather than resampling, so the spread a kernel was tuned for survives.
 """
+
 from typing import Any, Optional, Tuple, Union
 
 import numpy as np
@@ -38,8 +39,9 @@ def parse(declared: Any) -> Domain:
         return None
     if isinstance(declared, str):
         if declared not in SIGN_DOMAINS:
-            raise ValueError(f"unknown domain {declared!r}; expected one of {SIGN_DOMAINS}, "
-                             f"'any', or a [low, high] pair")
+            raise ValueError(
+                f"unknown domain {declared!r}; expected one of {SIGN_DOMAINS}, 'any', or a [low, high] pair"
+            )
         return declared
     low, high = (float(v) for v in declared)
     if not low < high:
@@ -50,8 +52,10 @@ def parse(declared: Any) -> Domain:
 def check_compatible(distribution: str, domain: Domain, array: str) -> None:
     """A structural distribution and a domain request cannot both hold. Say so at the manifest."""
     if domain is not None and distribution in STRUCTURAL:
-        raise ValueError(f"{array}: distribution {distribution!r} fixes the whole array's structure, so the "
-                         f"domain request {domain!r} cannot also be honoured -- drop one of the two")
+        raise ValueError(
+            f"{array}: distribution {distribution!r} fixes the whole array's structure, so the "
+            f"domain request {domain!r} cannot also be honoured -- drop one of the two"
+        )
 
 
 def apply(raw: np.ndarray, domain: Domain, precision: Precision) -> np.ndarray:

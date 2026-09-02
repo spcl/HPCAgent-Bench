@@ -16,6 +16,7 @@ Two operations:
 tree-sitter availability is detected via :func:`importlib.util.find_spec`
 (no bare try-import dispatch).
 """
+
 import re
 from typing import Dict, Iterable, List, Tuple
 
@@ -139,7 +140,7 @@ def _segment_code_spans(src: str, lang: str) -> List[Tuple[int, int]]:
             if ch == "\\" and i + 1 < n:
                 i += 2
                 continue
-            if src[i:i + len(quote)] == quote:
+            if src[i : i + len(quote)] == quote:
                 # Closing delimiter (1 or 3 chars) ends the literal.
                 i += len(quote)
                 code_start = i
@@ -149,9 +150,9 @@ def _segment_code_spans(src: str, lang: str) -> List[Tuple[int, int]]:
             continue
 
         # Python triple-quoted strings must be detected before single quotes.
-        if is_python and (src[i:i + 3] == '"""' or src[i:i + 3] == "'''"):
+        if is_python and (src[i : i + 3] == '"""' or src[i : i + 3] == "'''"):
             close(i)
-            quote = src[i:i + 3]
+            quote = src[i : i + 3]
             in_string = True
             i += 3
             continue

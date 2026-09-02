@@ -12,6 +12,7 @@ The port stride mirrors ``run_cluster.sh``'s ``judge_router_port``: slot ``s`` o
 ``JUDGE_PORT + 2s`` and its upstream ``JUDGE_PORT + 2s + 1``. The +2 is what keeps a router off the
 previous judge's upstream; a +1 stride collided the moment a node ran more than one judge.
 """
+
 import importlib.util
 import pathlib
 import sys
@@ -49,8 +50,14 @@ def test_several_judges_on_a_node_are_node_major_and_port_strided(driver, monkey
     monkeypatch.setenv("JUDGES_PER_NODE", "4")
     monkeypatch.setenv("JUDGE_PORT", "8800")
     assert driver.judge_urls() == [
-        "http://nidA:8800", "http://nidA:8802", "http://nidA:8804", "http://nidA:8806", "http://nidB:8800",
-        "http://nidB:8802", "http://nidB:8804", "http://nidB:8806"
+        "http://nidA:8800",
+        "http://nidA:8802",
+        "http://nidA:8804",
+        "http://nidA:8806",
+        "http://nidB:8800",
+        "http://nidB:8802",
+        "http://nidB:8804",
+        "http://nidB:8806",
     ]
 
 

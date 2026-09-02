@@ -13,6 +13,7 @@ valid gnu-only choice -- ``run_forked`` must not be safe merely because the defa
 happens to be the forgiving one. :func:`hpcagent_bench.isolation.pause_openmp_pools` is what
 makes that true, so these tests poison the parent on purpose and assert the child still runs.
 """
+
 import ctypes
 import inspect
 import os
@@ -86,12 +87,13 @@ def build(tmp_path: pathlib.Path, runtime: str) -> pathlib.Path:
         assert lib_dir is not None or lib_linkable(runtime), (
             f"lib{runtime}.so is a hard requirement of this regression but is not installed / "
             f"linkable by gcc here -- install it (e.g. libomp-dev); an absent second runtime is "
-            f"a broken env to surface loudly, not a skip to hide behind")
+            f"a broken env to surface loudly, not a skip to hide behind"
+        )
         search = [f"-L{lib_dir}", f"-Wl,-rpath,{lib_dir}"] if lib_dir else []
         extra = [*search, f"-Wl,--push-state,--no-as-needed,-l{runtime},--pop-state"]
     proc = subprocess.run(
-        ["gcc", "-O2", "-fPIC", "-shared", "-fopenmp", *extra,
-         str(src), "-o", str(so)], capture_output=True, text=True)
+        ["gcc", "-O2", "-fPIC", "-shared", "-fopenmp", *extra, str(src), "-o", str(so)], capture_output=True, text=True
+    )
     assert proc.returncode == 0, proc.stderr[-800:]
     needed = subprocess.run(["readelf", "-d", str(so)], capture_output=True, text=True).stdout
     # DT_NEEDED may show libomp.so.5 for a libiomp5 request (ABI-compat symlink); accept the
@@ -142,8 +144,7 @@ def test_forked_child_runs_openmp_after_the_parent_already_did(tmp_path: pathlib
     so = build(tmp_path, runtime)
     call_kernel(so)  # poison: the parent's pool is now live
     res = run_forked(kernel_total, str(so), timeout=60.0)
-    assert res.ok, (f"lib{runtime}: forked child failed after the parent used OpenMP: "
-                    f"{forked_failure_reason(res)}")
+    assert res.ok, f"lib{runtime}: forked child failed after the parent used OpenMP: {forked_failure_reason(res)}"
     assert res.result == float(N), f"lib{runtime}: child computed {res.result}, expected {N}"
 
 
@@ -249,7 +250,8 @@ def test_the_default_pause_mode_is_soft() -> None:
     default = inspect.signature(pause_openmp_pools).parameters["mode"].default
     assert default == OMP_PAUSE_SOFT, (
         f"pause_openmp_pools default mode is {default!r}, expected soft ({OMP_PAUSE_SOFT}) -- soft is the "
-        f"weakest reset that still buys fork safety and must remain the default")
+        f"weakest reset that still buys fork safety and must remain the default"
+    )
 
 
 def test_a_mapped_runtime_without_the_pause_symbol_is_warned_not_silent(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -7,6 +7,7 @@ Written when a thirteen-line fix to ``lowering.py`` failed the commit: the modul
 a dataset. The two limits only mean something while the text/binary split keeps working, and that
 split is a content sniff -- nothing about it is visible in a diff, so it is pinned here.
 """
+
 import importlib.util
 import pathlib
 import sys

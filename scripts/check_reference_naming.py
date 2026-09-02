@@ -28,6 +28,7 @@ staged files as positional args; standalone with none, it scans the tracked tree
 Exit status: 0 when every reference source is canonical, 1 otherwise (each offender and
 its canonical form are printed).
 """
+
 import argparse
 import subprocess
 import sys
@@ -63,7 +64,7 @@ def offenders(paths):
             continue
         for bad in BAD_SUFFIXES:
             if p.stem.endswith(bad):
-                canonical = p.with_name(p.stem[:-len(bad)] + "_reference" + p.suffix)
+                canonical = p.with_name(p.stem[: -len(bad)] + "_reference" + p.suffix)
                 yield rel, canonical.as_posix()
                 break
 
@@ -84,7 +85,8 @@ def main(argv=None):
     print(
         "\nCo-located kernel reference sources must be <stem>_reference.<ext> (the prompt glob and "
         "test_<stem>_reference.py both key on it).",
-        file=sys.stderr)
+        file=sys.stderr,
+    )
     return 1
 
 

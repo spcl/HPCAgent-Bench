@@ -4,6 +4,7 @@ Two layers: pure-AST predicate unit tests (loop classification / reduction /
 scatter detection) and end-to-end ``emit_c_omp`` text assertions (the pragma a
 parallel loop nest gets). Imports resolve via PYTHONPATH.
 """
+
 import ast
 import json
 import pathlib
@@ -11,9 +12,16 @@ import tempfile
 
 import pytest
 
-from numpyto_common.parallelism import (any_parallelizable_loop, collapsible_depth, has_indirect_scatter,
-                                        is_timestep_loop, loop_is_parallel_safe, loop_reduction, subscript_idx_safe,
-                                        UnsupportedParallelError)
+from numpyto_common.parallelism import (
+    any_parallelizable_loop,
+    collapsible_depth,
+    has_indirect_scatter,
+    is_timestep_loop,
+    loop_is_parallel_safe,
+    loop_reduction,
+    subscript_idx_safe,
+    UnsupportedParallelError,
+)
 
 
 def _stmt(src):
@@ -126,10 +134,12 @@ def test_private_temp_is_not_a_reduction():
 # --- collapsible_depth -----------------------------------------------------------------------------
 def test_collapse_depth_perfectly_nested_rectangular_map():
     # 3 perfectly-nested, rectangular, independent levels -> the whole nest collapses.
-    node = _stmt("for i in range(N):\n"
-                 "    for j in range(M):\n"
-                 "        for k in range(K):\n"
-                 "            out[i, j, k] = a[i, j, k] * 2.0\n")
+    node = _stmt(
+        "for i in range(N):\n"
+        "    for j in range(M):\n"
+        "        for k in range(K):\n"
+        "            out[i, j, k] = a[i, j, k] * 2.0\n"
+    )
     assert collapsible_depth(node) == 3
 
 
@@ -140,45 +150,38 @@ def test_collapse_depth_single_loop_is_one():
 def test_collapse_depth_stops_before_inner_reduction():
     # gemm-shaped: i, j are independent (subscript accumulator, not a bare-Name reduction);
     # the innermost k is a genuine reduction and must NOT be folded into the collapse.
-    node = _stmt("for i in range(N):\n"
-                 "    for j in range(M):\n"
-                 "        out[i, j] = 0.0\n"
-                 "        for k in range(K):\n"
-                 "            out[i, j] += a[i, k] * b[k, j]\n")
+    node = _stmt(
+        "for i in range(N):\n"
+        "    for j in range(M):\n"
+        "        out[i, j] = 0.0\n"
+        "        for k in range(K):\n"
+        "            out[i, j] += a[i, k] * b[k, j]\n"
+    )
     assert collapsible_depth(node) == 2
 
 
 def test_collapse_depth_stops_at_non_rectangular_bound():
     # A triangular inner bound (range(i)) makes the iteration space non-rectangular --
     # collapse must not fold it in, however independent the writes look.
-    node = _stmt("for i in range(N):\n"
-                 "    for j in range(i):\n"
-                 "        out[i, j] = a[i, j] * 2.0\n")
+    node = _stmt("for i in range(N):\n    for j in range(i):\n        out[i, j] = a[i, j] * 2.0\n")
     assert collapsible_depth(node) == 1
 
 
 def test_collapse_depth_stops_at_sibling_statement():
     # A statement alongside the nested loop breaks OpenMP's canonical perfectly-nested form.
-    node = _stmt("for i in range(N):\n"
-                 "    total = 0.0\n"
-                 "    for j in range(N):\n"
-                 "        out[i, j] = a[i, j] * 2.0\n")
+    node = _stmt("for i in range(N):\n    total = 0.0\n    for j in range(N):\n        out[i, j] = a[i, j] * 2.0\n")
     assert collapsible_depth(node) == 1
 
 
 def test_collapse_depth_stops_when_inner_index_absent_from_write():
     # out[i] does not depend on j -- every j iteration of a fixed i overwrites the same cell,
     # so the j level alone is unsafe to reorder even though the outer i level is fine.
-    node = _stmt("for i in range(N):\n"
-                 "    for j in range(M):\n"
-                 "        out[i] = a[i, j]\n")
+    node = _stmt("for i in range(N):\n    for j in range(M):\n        out[i] = a[i, j]\n")
     assert collapsible_depth(node) == 1
 
 
 def test_collapse_depth_stops_at_timestep_bound():
-    node = _stmt("for i in range(N):\n"
-                 "    for t in range(TSTEPS):\n"
-                 "        out[i, t] = a[i, t]\n")
+    node = _stmt("for i in range(N):\n    for t in range(TSTEPS):\n        out[i, t] = a[i, t]\n")
     assert collapsible_depth(node) == 1
 
 
@@ -207,6 +210,7 @@ def test_any_parallelizable_false_for_scatter_only():
 def _kir(src, args, shapes, dtypes=None, params=None):
     from numpyto_common.frontend import parse_kernel
     from numpyto_common.lowering import lower
+
     d = pathlib.Path(tempfile.mkdtemp())
     (d / "k_numpy.py").write_text(src)
     bi = {
@@ -216,18 +220,11 @@ def _kir(src, args, shapes, dtypes=None, params=None):
             "relative_path": "",
             "module_name": "k",
             "func_name": "f",
-            "parameters": {
-                "S": params or {
-                    "N": 16
-                }
-            },
+            "parameters": {"S": params or {"N": 16}},
             "input_args": args,
             "array_args": args,
             "output_args": [args[-1]],
-            "init": {
-                "shapes": shapes,
-                "dtypes": dtypes or {}
-            },
+            "init": {"shapes": shapes, "dtypes": dtypes or {}},
         }
     }
     (d / "bi.json").write_text(json.dumps(bi))
@@ -236,11 +233,12 @@ def _kir(src, args, shapes, dtypes=None, params=None):
 
 def test_emit_c_omp_elementwise_parallel_for():
     from numpyto_c.emit import emit_c, emit_c_omp
-    kir = _kir("def f(x, y, out):\n    for i in range(N):\n        out[i] = y[i] + 2.0 * x[i]\n", ["x", "y", "out"], {
-        "x": "(N,)",
-        "y": "(N,)",
-        "out": "(N,)"
-    })
+
+    kir = _kir(
+        "def f(x, y, out):\n    for i in range(N):\n        out[i] = y[i] + 2.0 * x[i]\n",
+        ["x", "y", "out"],
+        {"x": "(N,)", "y": "(N,)", "out": "(N,)"},
+    )
     c = emit_c_omp(kir, fn_name="f")
     assert "#pragma omp parallel for\n" in c
     assert "reduction(" not in c
@@ -249,45 +247,48 @@ def test_emit_c_omp_elementwise_parallel_for():
 
 def test_emit_c_omp_sum_reduction_clause():
     from numpyto_c.emit import emit_c_omp
-    kir = _kir("def f(x, out):\n    s = 0.0\n    for i in range(N):\n        s = s + x[i]\n    out[0] = s\n",
-               ["x", "out"], {
-                   "x": "(N,)",
-                   "out": "(N,)"
-               })
+
+    kir = _kir(
+        "def f(x, out):\n    s = 0.0\n    for i in range(N):\n        s = s + x[i]\n    out[0] = s\n",
+        ["x", "out"],
+        {"x": "(N,)", "out": "(N,)"},
+    )
     assert "#pragma omp parallel for reduction(+:s)" in emit_c_omp(kir, fn_name="f")
 
 
 def test_emit_c_omp_nested_tags_outer_only():
     from numpyto_c.emit import emit_c_omp
+
     kir = _kir(
         "def f(a, out):\n    for i in range(N):\n        for j in range(N):\n            out[i, j] = a[i, j] * 2.0\n",
-        ["a", "out"], {
-            "a": "(N, N)",
-            "out": "(N, N)"
-        })
+        ["a", "out"],
+        {"a": "(N, N)", "out": "(N, N)"},
+    )
     c = emit_c_omp(kir, fn_name="f")
     assert c.count("#pragma omp parallel for") == 1  # only the outermost loop, no nested regions
 
 
 def test_emit_c_omp_scatter_is_refused():
     from numpyto_c.emit import emit_c_omp
-    kir = _kir("def f(idx, x, out):\n    for i in range(N):\n        out[idx[i]] = out[idx[i]] + x[i]\n",
-               ["idx", "x", "out"], {
-                   "idx": "(N,)",
-                   "x": "(N,)",
-                   "out": "(N,)"
-               }, {"idx": "int64"})
+
+    kir = _kir(
+        "def f(idx, x, out):\n    for i in range(N):\n        out[idx[i]] = out[idx[i]] + x[i]\n",
+        ["idx", "x", "out"],
+        {"idx": "(N,)", "x": "(N,)", "out": "(N,)"},
+        {"idx": "int64"},
+    )
     with pytest.raises(UnsupportedParallelError):
         emit_c_omp(kir, fn_name="f")
 
 
 def test_emit_fortran_omp_elementwise_parallel_do():
     from numpyto_fortran.emit import emit_fortran, emit_fortran_omp
-    kir = _kir("def f(x, y, out):\n    for i in range(N):\n        out[i] = y[i] + 2.0 * x[i]\n", ["x", "y", "out"], {
-        "x": "(N,)",
-        "y": "(N,)",
-        "out": "(N,)"
-    })
+
+    kir = _kir(
+        "def f(x, y, out):\n    for i in range(N):\n        out[i] = y[i] + 2.0 * x[i]\n",
+        ["x", "y", "out"],
+        {"x": "(N,)", "y": "(N,)", "out": "(N,)"},
+    )
     f = emit_fortran_omp(kir, fn_name="f")
     assert "!$omp parallel do" in f
     assert "reduction(" not in f
@@ -296,22 +297,24 @@ def test_emit_fortran_omp_elementwise_parallel_do():
 
 def test_emit_fortran_omp_sum_reduction_clause():
     from numpyto_fortran.emit import emit_fortran_omp
-    kir = _kir("def f(x, out):\n    s = 0.0\n    for i in range(N):\n        s = s + x[i]\n    out[0] = s\n",
-               ["x", "out"], {
-                   "x": "(N,)",
-                   "out": "(N,)"
-               })
+
+    kir = _kir(
+        "def f(x, out):\n    s = 0.0\n    for i in range(N):\n        s = s + x[i]\n    out[0] = s\n",
+        ["x", "out"],
+        {"x": "(N,)", "out": "(N,)"},
+    )
     assert "!$omp parallel do reduction(+:s)" in emit_fortran_omp(kir, fn_name="f")
 
 
 def test_emit_fortran_omp_scatter_is_refused():
     from numpyto_fortran.emit import emit_fortran_omp
-    kir = _kir("def f(idx, x, out):\n    for i in range(N):\n        out[idx[i]] = out[idx[i]] + x[i]\n",
-               ["idx", "x", "out"], {
-                   "idx": "(N,)",
-                   "x": "(N,)",
-                   "out": "(N,)"
-               }, {"idx": "int64"})
+
+    kir = _kir(
+        "def f(idx, x, out):\n    for i in range(N):\n        out[idx[i]] = out[idx[i]] + x[i]\n",
+        ["idx", "x", "out"],
+        {"idx": "(N,)", "x": "(N,)", "out": "(N,)"},
+        {"idx": "int64"},
+    )
     with pytest.raises(UnsupportedParallelError):
         emit_fortran_omp(kir, fn_name="f")
 

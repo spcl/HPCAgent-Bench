@@ -5,6 +5,7 @@
 Fixtures are real compiler stderr. Assertions are on the CLASSIFIED structure, not on rendered
 lines -- except where bytes are the contract (determinism, output shape).
 """
+
 import importlib.util
 import pathlib
 import random
@@ -162,10 +163,13 @@ def test_clang_caret_lines_are_neither_remarks_nor_unparsed() -> None:
     assert len(parsed.remarks) == 6, "one remark per `remark:` line, caret lines excluded"
 
 
-@pytest.mark.parametrize("text,family", [
-    ("k.c:4:26: optimized: loop vectorized using hyperwide quantum vectors\n", "gcc"),
-    ("k.c:4:5: remark: vectorised the loop, somehow [-Rpass=loop-vectorize]\n", "clang"),
-])
+@pytest.mark.parametrize(
+    "text,family",
+    [
+        ("k.c:4:26: optimized: loop vectorized using hyperwide quantum vectors\n", "gcc"),
+        ("k.c:4:5: remark: vectorised the loop, somehow [-Rpass=loop-vectorize]\n", "clang"),
+    ],
+)
 def test_an_unknown_success_sentence_still_counts_as_a_success(text: str, family: str) -> None:
     """A future wording may cost the width; it must never turn a success into silence."""
     verdict = verdict_at(grouped_for(text, family), 4)
@@ -176,7 +180,7 @@ def test_an_unknown_success_sentence_still_counts_as_a_success(text: str, family
 
 def test_an_unknown_refusal_sentence_keeps_its_text_as_the_reason() -> None:
     verdict = verdict_at(grouped_for("k.c:17:24: missed: refused, for reasons yet to be invented\n", lr.GCC), 17)
-    assert verdict.missed == ("refused, for reasons yet to be invented", )
+    assert verdict.missed == ("refused, for reasons yet to be invented",)
 
 
 def test_a_variable_length_vector_success_is_read_as_a_success() -> None:
@@ -186,23 +190,29 @@ def test_a_variable_length_vector_success_is_read_as_a_success() -> None:
 
 
 def test_an_unrecognized_line_is_counted_rather_than_swallowed() -> None:
-    text = ("k.c:9: a sentence no version of this parser has ever seen\n"
-            "k.c:4:26: optimized: loop vectorized using 64 byte vectors\n")
+    text = (
+        "k.c:9: a sentence no version of this parser has ever seen\n"
+        "k.c:4:26: optimized: loop vectorized using 64 byte vectors\n"
+    )
     parsed = lr.parse_report(text, lr.GCC)
     assert parsed.unparsed == 1 and len(parsed.remarks) == 1
     assert "1 unparsed remarks (see raw report)" in summary(text, lr.GCC)
 
 
 def test_warnings_and_include_traces_do_not_inflate_the_unparsed_count() -> None:
-    text = ("k.c:5:3: warning: unused variable 'z' [-Wunused-variable]\n"
-            "In file included from k.c:1:\n"
-            "k.c:4:26: optimized: loop vectorized using 64 byte vectors\n")
+    text = (
+        "k.c:5:3: warning: unused variable 'z' [-Wunused-variable]\n"
+        "In file included from k.c:1:\n"
+        "k.c:4:26: optimized: loop vectorized using 64 byte vectors\n"
+    )
     assert lr.parse_report(text, lr.GCC).unparsed == 0
 
 
 def test_a_remark_without_a_location_is_counted_apart_from_the_nests() -> None:
-    text = ("remark: vectorized loop (vectorization width: 4, interleaved count: 1) [-Rpass=loop-vectorize]\n"
-            "k.c:4:5: remark: vectorized loop (vectorization width: 8, interleaved count: 4) [-Rpass=loop-vectorize]\n")
+    text = (
+        "remark: vectorized loop (vectorization width: 4, interleaved count: 1) [-Rpass=loop-vectorize]\n"
+        "k.c:4:5: remark: vectorized loop (vectorization width: 8, interleaved count: 4) [-Rpass=loop-vectorize]\n"
+    )
     grouped = grouped_for(text, lr.CLANG)
     assert grouped.unlocated == 1
     assert verdict_at(grouped, 4).vectorized, "the located remark still lands on its loop"
@@ -211,8 +221,10 @@ def test_a_remark_without_a_location_is_counted_apart_from_the_nests() -> None:
 def test_absolute_paths_are_stripped_from_the_location_and_from_the_text(tmp_path) -> None:
     """clang names the conflicting access inside the message, where display_path never looks."""
     absolute = tmp_path / "k.c"
-    text = (f"{absolute}:18:10: remark: loop not vectorized: unsafe dependent memory operations. "
-            f"Memory location is the same as accessed at {absolute}:18:12 [-Rpass-analysis=loop-vectorize]\n")
+    text = (
+        f"{absolute}:18:10: remark: loop not vectorized: unsafe dependent memory operations. "
+        f"Memory location is the same as accessed at {absolute}:18:12 [-Rpass-analysis=loop-vectorize]\n"
+    )
     parsed = lr.parse_report(text, lr.CLANG, roots=[str(tmp_path)])
     assert parsed.remarks[0].file == "k.c"
     assert "accessed at k.c:18:12" in parsed.remarks[0].text
@@ -276,14 +288,15 @@ def test_a_real_compile_reports_the_ground_truth_of_the_source(compiler, tmp_pat
     last = printed.splitlines()[-1]
     assert last.startswith("raw report: ")
 
-    raw = (tmp_path / last[len("raw report: "):]).read_text()
+    raw = (tmp_path / last[len("raw report: ") :]).read_text()
     assert raw.startswith("# command: ") and len(raw) > len("# command: ")
     family = lr.compiler_family(compiler)
     grouped = lr.group(lr.parse_report(raw.split("\n", 1)[1], family, roots=[str(tmp_path)]), SOURCES)
     assert verdict_at(grouped, 4).vectorized, f"{compiler} vectorizes the unit-stride inner loop"
     refused = verdict_at(grouped, 17)
     assert refused.missed and all(reason for reason in refused.missed), (
-        f"{compiler} cannot vectorize a backward dependence and must say why: {refused}")
+        f"{compiler} cannot vectorize a backward dependence and must say why: {refused}"
+    )
     assert "0 unparsed remarks" in printed, f"real {compiler} stderr did not fully parse:\n{printed}"
 
 

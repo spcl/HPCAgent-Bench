@@ -8,6 +8,7 @@ int8 activations this checkpoint does not carry.
 That leaves the W4A16 FlyDSL MoE path. Enabling a switch proves nothing if the dtype gate rejects
 us three frames down, so print the gate before spending six nodes on a serving smoke.
 """
+
 import inspect
 import pathlib
 import re
@@ -26,6 +27,7 @@ def show(text: str, needle: str, before: int = 10, after: int = 26) -> None:
 
 def main() -> int:
     import aiter
+
     src = pathlib.Path(aiter.__file__).resolve().parent / "fused_moe.py"
     text = src.read_text()
     print("fused_moe.py:", src, len(text.splitlines()), "lines\n")
@@ -36,6 +38,7 @@ def main() -> int:
     # Which dtypes the flydsl moe entry points declare, which is the real gate.
     try:
         from aiter.ops.flydsl import moe_kernels
+
         print("=" * 78, "\nflydsl moe_kernels entry points")
         for name, obj in sorted(vars(moe_kernels).items()):
             if name.startswith("__") or not callable(obj):

@@ -7,6 +7,7 @@ side-table or an AST the context stopped tracking is localised to the phase that
 broke it. These tests prove the checker (a) passes on real kernels with the flag
 on, and (b) actually fires -- naming the phase -- for each corruption mode.
 """
+
 import ast
 import copy
 import json
@@ -16,14 +17,11 @@ import tempfile
 import pytest
 
 from numpyto_common.frontend import parse_kernel
-from numpyto_common.lowering import (LoweringContext, _assert_lowering_invariants, _INVARIANT_ENV, lower)
+from numpyto_common.lowering import LoweringContext, _assert_lowering_invariants, _INVARIANT_ENV, lower
 
-_SRC = ("import numpy as np\n"
-        "def f(x, out):\n"
-        " s = np.zeros((6,))\n"
-        " for i in range(6):\n"
-        "  s[i] = x[i] * 2.0\n"
-        " out[:] = s\n")
+_SRC = (
+    "import numpy as np\ndef f(x, out):\n s = np.zeros((6,))\n for i in range(6):\n  s[i] = x[i] * 2.0\n out[:] = s\n"
+)
 
 
 def _parsed_kir():
@@ -36,20 +34,11 @@ def _parsed_kir():
             "relative_path": "",
             "module_name": "k",
             "func_name": "f",
-            "parameters": {
-                "S": {
-                    "N": 6
-                }
-            },
+            "parameters": {"S": {"N": 6}},
             "input_args": ["x", "out"],
             "array_args": ["x", "out"],
             "output_args": ["out"],
-            "init": {
-                "shapes": {
-                    "x": "(N,)",
-                    "out": "(N,)"
-                }
-            }
+            "init": {"shapes": {"x": "(N,)", "out": "(N,)"}},
         }
     }
     (d / "bi.json").write_text(json.dumps(bi))

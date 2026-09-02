@@ -30,6 +30,7 @@ VISIBLE and keeps it true:
 
 Usage:  python3 scripts/align_unroll_sizes.py [--apply]
 """
+
 from __future__ import annotations
 
 import argparse

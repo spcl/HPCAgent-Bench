@@ -5,6 +5,7 @@ as a data-dependent condition and aborts on (POLYCC-008, pagerank). ``floord`` n
 carries the same semantics, so the fix is a spelling; these tests pin both halves of it -- what the
 pluto emit writes, and that the prelude still defines the name for the compiler.
 """
+
 import json
 import pathlib
 import re
@@ -39,10 +40,11 @@ def _int_bound_kir():
         "def blk_op(a, out):\n"
         "    N, = a.shape\n"
         "    for i in range(N // 8):\n"
-        "        out[i] = a[i] * 2.0\n", "blk_op", {
-            "a": "(N,)",
-            "out": "(N,)"
-        }, {"N": 64})
+        "        out[i] = a[i] * 2.0\n",
+        "blk_op",
+        {"a": "(N,)", "out": "(N,)"},
+        {"N": 64},
+    )
 
 
 def _float_floordiv_kir():
@@ -52,10 +54,11 @@ def _float_floordiv_kir():
         "def flt_op(a, out):\n"
         "    N, = a.shape\n"
         "    for i in range(N):\n"
-        "        out[i] = a[i] // 3.0\n", "flt_op", {
-            "a": "(N,)",
-            "out": "(N,)"
-        }, {"N": 64})
+        "        out[i] = a[i] // 3.0\n",
+        "flt_op",
+        {"a": "(N,)", "out": "(N,)"},
+        {"N": 64},
+    )
 
 
 def _scop_body(text: str) -> str:
@@ -88,8 +91,10 @@ def test_float_floordiv_stays_on_the_generic_macro():
 def test_prelude_defines_the_named_builtins_over_the_existing_helpers(name, helper):
     """Guarded, because polycc prepends its own ``#define floord``/``ceild`` (POLYCC-004), and
     delegating rather than restating keeps one definition of the semantics."""
-    assert f"#ifndef {name}\nstatic inline int64_t {name}(int64_t a, int64_t b) {{\n    return {helper}(a, b);" \
+    assert (
+        f"#ifndef {name}\nstatic inline int64_t {name}(int64_t a, int64_t b) {{\n    return {helper}(a, b);"
         in _C_HEADER
+    )
 
 
 @pytest.mark.skipif(not have_gcc(), reason="gcc not installed")
@@ -97,10 +102,14 @@ def test_floord_and_ceild_agree_with_the_helpers_they_alias():
     """The spelling claim, executed: same values for both signs, and the guarded block compiles."""
     lines = ["#include <stdio.h>", "int main(void) {"]
     for a, b in _PAIRS:
-        lines.append(f'    printf("%lld %lld\\n", (long long)floord((int64_t){a}, (int64_t){b}), '
-                     f'(long long)__npb_floordiv_i((int64_t){a}, (int64_t){b}));')
-        lines.append(f'    printf("%lld %lld\\n", (long long)ceild((int64_t){a}, (int64_t){b}), '
-                     f'(long long)__npb_ceildiv_i((int64_t){a}, (int64_t){b}));')
+        lines.append(
+            f'    printf("%lld %lld\\n", (long long)floord((int64_t){a}, (int64_t){b}), '
+            f"(long long)__npb_floordiv_i((int64_t){a}, (int64_t){b}));"
+        )
+        lines.append(
+            f'    printf("%lld %lld\\n", (long long)ceild((int64_t){a}, (int64_t){b}), '
+            f"(long long)__npb_ceildiv_i((int64_t){a}, (int64_t){b}));"
+        )
     lines.append("    return 0;\n}")
     kernel = _C_HEADER + "\nvoid __unused_anchor(void) {}\n"
     result = build_run_c(kernel, "\n".join(lines))

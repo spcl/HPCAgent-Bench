@@ -18,6 +18,7 @@ data). ``np.diff`` is never materialised: ``counts[i]`` is expressed inline as `
 Any other per-element form has a data-dependent sum with no static extent and is refused --
 guessing would under-size the buffer (a heap overflow, not a wrong number).
 """
+
 import ast
 
 import numpy as np
@@ -33,12 +34,9 @@ def _expand(src: str, shapes: dict) -> str:
     """Run ``expand_repeat`` over the single ``out = np.repeat(...)`` statement in ``src``."""
     assign = ast.parse(src).body[0]
     shape_table = dict(shapes)
-    stmts = expand_repeat(assign.targets[0],
-                          assign.value.args,
-                          shape_table,
-                          assign.value.keywords,
-                          local_dtypes={},
-                          fresh_local_allocs={})
+    stmts = expand_repeat(
+        assign.targets[0], assign.value.args, shape_table, assign.value.keywords, local_dtypes={}, fresh_local_allocs={}
+    )
     return "\n".join(ast.unparse(ast.fix_missing_locations(s)) for s in stmts)
 
 
@@ -52,7 +50,7 @@ def test_per_element_count_uses_running_offset_not_multiply():
     """The destination index is a running scalar offset (``pos``), and the count is the counts
     array INDEXED at the source position (``p[i + 1] - p[i]``) -- never the count array used as a
     bare scalar (the old ``outer * K`` formula's wrong shortcut)."""
-    got = _expand("row_index = np.repeat(a, np.diff(p))", {"a": ("M", ), "p": ("M + 1", )})
+    got = _expand("row_index = np.repeat(a, np.diff(p))", {"a": ("M",), "p": ("M + 1",)})
     assert "= 0" in got and "+= 1" in got, f"no running offset init/advance in:\n{got}"
     assert "p[__rep_i0 + 1] - p[__rep_i0]" in got, f"count not read as p[i+1] - p[i]:\n{got}"
     assert "* p" not in got and "p *" not in got, f"count array used as a scalar multiplier:\n{got}"
@@ -63,30 +61,32 @@ def test_per_element_count_uses_running_offset_not_multiply():
 def test_extent_telescopes_to_diff_endpoints():
     """The result extent (both shape_table and fresh_local_allocs) is ``p[-1] - p[0]``, derived
     structurally from ``p``'s own shape -- never a guess over the count values."""
-    shape_table = {"a": ("M", ), "p": ("M + 1", )}
+    shape_table = {"a": ("M",), "p": ("M + 1",)}
     fresh_local_allocs = {}
     assign = ast.parse("row_index = np.repeat(a, np.diff(p))").body[0]
-    expand_repeat(assign.targets[0],
-                  assign.value.args,
-                  shape_table,
-                  assign.value.keywords,
-                  local_dtypes={},
-                  fresh_local_allocs=fresh_local_allocs)
-    assert shape_table["row_index"] == ("p[M + 1 - 1] - p[0]", )
-    assert fresh_local_allocs["row_index"] == ("p[M + 1 - 1] - p[0]", )
+    expand_repeat(
+        assign.targets[0],
+        assign.value.args,
+        shape_table,
+        assign.value.keywords,
+        local_dtypes={},
+        fresh_local_allocs=fresh_local_allocs,
+    )
+    assert shape_table["row_index"] == ("p[M + 1 - 1] - p[0]",)
+    assert fresh_local_allocs["row_index"] == ("p[M + 1 - 1] - p[0]",)
 
 
 def test_non_diff_per_element_count_refused():
     """A per-element count with no derivable sum (a bare counts array, not ``np.diff(p)``) must
     NOT guess an extent -- refuse with a clear message naming the offending form."""
     with pytest.raises(NotImplementedError, match="derivable sum"):
-        _expand("row_index = np.repeat(a, counts)", {"a": ("M", ), "counts": ("M", )})
+        _expand("row_index = np.repeat(a, counts)", {"a": ("M",), "counts": ("M",)})
 
 
 def test_scalar_count_still_uses_the_multiply_form():
     """Regression guard: a SCALAR repeat count must keep using ``outer * K`` (unaffected by the
     per-element branch, since ``_iter_extent_of`` on a bare int constant is None)."""
-    got = _expand("out = np.repeat(a, 3)", {"a": ("M", )})
+    got = _expand("out = np.repeat(a, 3)", {"a": ("M",)})
     assert "__rep_pos0" not in got
     assert "* 3" in got or "3 *" in got
 
@@ -100,20 +100,22 @@ def test_numeric_row_lengths_from_csr_row_ptr_zero_and_unequal_counts():
     m = p.shape[0] - 1
     expected = np.repeat(np.arange(m), np.diff(p))
     k = int(expected.shape[0])
-    src = ("import numpy as np\n\n"
-           "def k(p, out):\n"
-           "    m = p.shape[0] - 1\n"
-           "    row_index = np.repeat(np.arange(m), np.diff(p))\n"
-           "    out[:] = row_index\n")
+    src = (
+        "import numpy as np\n\n"
+        "def k(p, out):\n"
+        "    m = p.shape[0] - 1\n"
+        "    row_index = np.repeat(np.arange(m), np.diff(p))\n"
+        "    out[:] = row_index\n"
+    )
     _assert_ok(
-        run_op(src,
-               "k", {"p": p}, {"out": (k, )}, {},
-               shapes={
-                   "p": "(5,)",
-                   "out": f"({k},)"
-               },
-               backends=_NATIVE,
-               dtypes={
-                   "p": "int64",
-                   "out": "int64"
-               }))
+        run_op(
+            src,
+            "k",
+            {"p": p},
+            {"out": (k,)},
+            {},
+            shapes={"p": "(5,)", "out": f"({k},)"},
+            backends=_NATIVE,
+            dtypes={"p": "int64", "out": "int64"},
+        )
+    )

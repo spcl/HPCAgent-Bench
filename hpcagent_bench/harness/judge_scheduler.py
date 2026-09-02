@@ -32,6 +32,7 @@ A pure function of its arguments, like ``sizing.pack_lpt``: no clock, no environ
 iteration, so a planner run on the login node and a rank recomputing it in the job agree byte for
 byte.
 """
+
 import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Sequence, Tuple
@@ -141,12 +142,9 @@ class JudgePlan:
         return {kernel: rank for rank, judge in enumerate(self.judges) for kernel in judge.kernels}
 
 
-def demand(spec: BenchSpec,
-           kernel: str,
-           preset: str,
-           datatype: str,
-           variants: int,
-           cache_values: bool = False) -> KernelDemand:
+def demand(
+    spec: BenchSpec, kernel: str, preset: str, datatype: str, variants: int, cache_values: bool = False
+) -> KernelDemand:
     """``kernel``'s judge cost at ``preset``, or a :class:`KernelDemand` saying why there is none.
 
     ``cache_values`` keeps the reference ARRAYS resident instead of only their digests. Off by
@@ -175,12 +173,14 @@ def demand(spec: BenchSpec,
     return KernelDemand(kernel, arrays, (outputs if cache_values else HASH_DIGEST_BYTES) * variants, "", variants)
 
 
-def plan_judges(demands: Sequence[KernelDemand],
-                capacity_bytes: int,
-                workspace_bytes: int = WORKSPACE_CAP_BYTES,
-                factor: float = RUN_POOL_FACTOR,
-                margin: float = DEVICE_SAFETY_MARGIN,
-                judges: int = 1) -> JudgePlan:
+def plan_judges(
+    demands: Sequence[KernelDemand],
+    capacity_bytes: int,
+    workspace_bytes: int = WORKSPACE_CAP_BYTES,
+    factor: float = RUN_POOL_FACTOR,
+    margin: float = DEVICE_SAFETY_MARGIN,
+    judges: int = 1,
+) -> JudgePlan:
     """Size ``judges`` identical judge ranks for ``demands`` at ``capacity_bytes``.
 
     There is no bin packing here, and that is the point. A judge keeps DIGESTS of its references,
@@ -205,8 +205,9 @@ def plan_judges(demands: Sequence[KernelDemand],
     for d in sorted((d for d in demands if d.resolved), key=lambda d: (-d.array_bytes, d.kernel)):
         alone = int(math.ceil(factor * d.array_bytes)) + workspace_bytes
         if alone > usable:
-            infeasible.append((d.kernel, f"needs {alone / 2**30:.2f} GB alone, above the "
-                               f"{usable / 2**30:.2f} GB usable share"))
+            infeasible.append(
+                (d.kernel, f"needs {alone / 2**30:.2f} GB alone, above the {usable / 2**30:.2f} GB usable share")
+            )
         else:
             resolved.append(d)
     count = max(1, judges)
@@ -220,19 +221,20 @@ def plan_judges(demands: Sequence[KernelDemand],
     # The pool is sized from the SELECTION, not from each rank's share: an empty rank is still a
     # judge that must be able to grade the biggest kernel the run can ask it about.
     pool = int(math.ceil(factor * max((d.array_bytes for d in resolved), default=0)))
-    return JudgePlan(judges=ranks,
-                     infeasible=infeasible,
-                     unresolved=[(d.kernel, d.reason) for d in demands if not d.resolved],
-                     usable_bytes=usable,
-                     workspace_bytes=workspace_bytes,
-                     variants=max((d.variants for d in demands), default=0),
-                     pool_bytes=pool)
+    return JudgePlan(
+        judges=ranks,
+        infeasible=infeasible,
+        unresolved=[(d.kernel, d.reason) for d in demands if not d.resolved],
+        usable_bytes=usable,
+        workspace_bytes=workspace_bytes,
+        variants=max((d.variants for d in demands), default=0),
+        pool_bytes=pool,
+    )
 
 
-def pool_bytes_for(specs: Dict[str, BenchSpec],
-                   preset: str,
-                   datatype: str,
-                   factor: float = RUN_POOL_FACTOR) -> Tuple[int, List[str]]:
+def pool_bytes_for(
+    specs: Dict[str, BenchSpec], preset: str, datatype: str, factor: float = RUN_POOL_FACTOR
+) -> Tuple[int, List[str]]:
     """``(run pool bytes, kernels with no predictable footprint)`` for a selection.
 
     The reservation an orchestrator hands each judge, computed from the kernels it is ABOUT TO RUN
@@ -249,6 +251,7 @@ def local_gpu_count() -> int:
     """Visible GPUs on this host (0 when cupy or a driver is absent -> a host-only judge)."""
     try:
         import cupy as cp
+
         return int(cp.cuda.runtime.getDeviceCount())
     except Exception:  # noqa: BLE001 -- no cupy / no driver -> zero GPUs
         return 0
@@ -259,6 +262,7 @@ def gpu_capacity_bytes(index: int) -> int:
     the same plan runs on 40 GB Ampere and 192 GB MI300X."""
     try:
         import cupy as cp
+
         return int(cp.cuda.Device(index).mem_info[1])
     except Exception:  # noqa: BLE001 -- no cupy / no driver -> unknown, and the caller must not guess
         return 0

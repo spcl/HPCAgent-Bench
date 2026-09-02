@@ -11,6 +11,7 @@ One rank is the degenerate case of the same deployment -- the script's N=1 path 
 MPI, no container and no allocation. ``srun`` is the only cluster-only dependency and it is replaced
 by a shim that runs the step in-process as rank 0, which is what a one-task srun does.
 """
+
 import os
 import pathlib
 import shutil
@@ -74,8 +75,16 @@ def _job_env(work: pathlib.Path) -> dict:
     # RUN_TAG is in this list for the same reason as SLURM_JOB_ID: both are interpolated into the
     # script's RUNDIR, so an inherited one moves the results under a name this test does not look in
     # and the finding becomes "no CSV" rather than whatever really happened.
-    for name in ("SLURM_JOB_ID", "SLURM_JOB_NUM_NODES", "SLURM_PROCID", "HPCAGENT_BENCH_DB_SHARD",
-                 "OMPI_COMM_WORLD_RANK", "PMI_RANK", "HPCAGENT_BENCH_EDF", "RUN_TAG"):
+    for name in (
+        "SLURM_JOB_ID",
+        "SLURM_JOB_NUM_NODES",
+        "SLURM_PROCID",
+        "HPCAGENT_BENCH_DB_SHARD",
+        "OMPI_COMM_WORLD_RANK",
+        "PMI_RANK",
+        "HPCAGENT_BENCH_EDF",
+        "RUN_TAG",
+    ):
         env.pop(name, None)
     return env
 
@@ -83,8 +92,9 @@ def _job_env(work: pathlib.Path) -> dict:
 def _rows(db: pathlib.Path) -> int:
     conn = sqlite3.connect(db)
     try:
-        return conn.execute("SELECT COUNT(*) FROM results WHERE framework=? AND benchmark=? AND validated=1",
-                            (FRAMEWORK, KERNEL)).fetchone()[0]
+        return conn.execute(
+            "SELECT COUNT(*) FROM results WHERE framework=? AND benchmark=? AND validated=1", (FRAMEWORK, KERNEL)
+        ).fetchone()[0]
     finally:
         conn.close()
 
@@ -96,12 +106,9 @@ def test_one_rank_job_shards_by_rank_and_rolls_up(tmp_path):
         pytest.skip("hpcagent-bench console script is not installed")
 
     env = _job_env(tmp_path)
-    done = subprocess.run(["bash", str(SCRIPT)],
-                          cwd=str(tmp_path),
-                          env=env,
-                          capture_output=True,
-                          text=True,
-                          timeout=900)
+    done = subprocess.run(
+        ["bash", str(SCRIPT)], cwd=str(tmp_path), env=env, capture_output=True, text=True, timeout=900
+    )
     assert done.returncode == 0, f"job failed ({done.returncode}):\n{done.stdout[-3000:]}\n{done.stderr[-3000:]}"
 
     # The rank ran the framework over ITS shard of the selection, and the rollup closed the job.
@@ -114,10 +121,11 @@ def test_one_rank_job_shards_by_rank_and_rolls_up(tmp_path):
     # inside the assertion message, which replaces the finding with a pathlib traceback and prints
     # none of the script output that would say why -- measured in CI, where this failed with the
     # whole results/ tree absent and nothing to show for it.
-    assert csv.exists(), ("no per-shard CSV: {found}\n--- stdout ---\n{out}\n--- stderr ---\n{err}".format(
+    assert csv.exists(), "no per-shard CSV: {found}\n--- stdout ---\n{out}\n--- stderr ---\n{err}".format(
         found=(sorted(p.name for p in rundir.iterdir()) if rundir.is_dir() else f"{rundir} does not exist"),
         out=done.stdout[-3000:],
-        err=done.stderr[-3000:]))
+        err=done.stderr[-3000:],
+    )
     assert KERNEL in csv.read_text()
 
     # SLURM_PROCID reached recording.db_shard(), so the rank wrote hpcagent_bench0.db and NOT the

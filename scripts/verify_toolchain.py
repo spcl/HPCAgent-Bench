@@ -16,6 +16,7 @@ makes this script correct on a developer box that did not.
 
 Exit status: 0 when everything resolves, 1 when anything is missing.
 """
+
 import pathlib
 import shutil
 import subprocess

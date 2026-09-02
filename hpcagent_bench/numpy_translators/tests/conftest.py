@@ -3,6 +3,7 @@ their bare sibling helpers (``_bench_yaml``, ``sparse_oracle``) regardless of
 whether the suite is run whole or a single file in isolation. pytest imports
 this conftest before collecting any test module in the directory.
 """
+
 import os
 import sys
 
@@ -11,8 +12,10 @@ def pytest_configure(config):
     # Same wording as the top-level tests/conftest.py: this suite has its own conftest, so a
     # marker registered there is unknown here and every use warns.
     config.addinivalue_line(
-        "markers", "integration: end-to-end test that builds/runs a real artifact (native compile, "
-        "heavier + slower than a unit test); still collected and run by default, not skipped.")
+        "markers",
+        "integration: end-to-end test that builds/runs a real artifact (native compile, "
+        "heavier + slower than a unit test); still collected and run by default, not skipped.",
+    )
 
 
 # Pin jax to CPU for the whole suite, set here -- before any test module (hence

@@ -21,6 +21,7 @@ earlier pass produced the operand text. Asserted twice: the division must (1) no
 a Fortran integer truncation on data where trunc and floor disagree (a negative wrapped
 index), and (2) compile at all, which segments-that-truncate never do.
 """
+
 import numpy as np
 
 import _op_oracle as oo
@@ -29,13 +30,15 @@ import _op_oracle as oo
 #: / ``kperiod = float(int(npts_global[2]))`` / ``kg = int(kshifted - kperiod * np.floor(kshifted
 #: / kperiod))`` shape: a loop-invariant scalar pair, read only inside the deeper ``j`` loop, is
 #: the exact ``_ForwardSubstituteInvariantScalars`` candidate.
-_SRC = ("import numpy as np\n"
-        "def f(a, b, out):\n"
-        "    for i in range(a.shape[0]):\n"
-        "        shifted = float(i) - float(int(a[i]))\n"
-        "        period = float(int(b[i]))\n"
-        "        for j in range(out.shape[1]):\n"
-        "            out[i, j] = shifted - period * np.floor(shifted / period)\n")
+_SRC = (
+    "import numpy as np\n"
+    "def f(a, b, out):\n"
+    "    for i in range(a.shape[0]):\n"
+    "        shifted = float(i) - float(int(a[i]))\n"
+    "        period = float(int(b[i]))\n"
+    "        for j in range(out.shape[1]):\n"
+    "            out[i, j] = shifted - period * np.floor(shifted / period)\n"
+)
 
 #: a[0] = 5 with i = 0 makes shifted = -5.0, period = 4.0: floor(-5/4) = floor(-1.25) = -2,
 #: giving out = -5 - 4*(-2) = 3.0. Fortran integer division would instead TRUNCATE -5/4 to
@@ -45,24 +48,16 @@ _B = np.array([4, 4, 4, 4], dtype=np.int64)
 
 
 def test_floor_of_forward_substituted_scalar_stays_real_division():
-    status = oo.run_op(_SRC,
-                       "f", {
-                           "a": _A,
-                           "b": _B
-                       }, {"out": (4, 2)}, {
-                           "N": 4,
-                           "K": 2
-                       },
-                       shapes={
-                           "a": "(N,)",
-                           "b": "(N,)",
-                           "out": "(N, K)"
-                       },
-                       dtypes={
-                           "a": "int64",
-                           "b": "int64"
-                       },
-                       backends=("fortran", ))
+    status = oo.run_op(
+        _SRC,
+        "f",
+        {"a": _A, "b": _B},
+        {"out": (4, 2)},
+        {"N": 4, "K": 2},
+        shapes={"a": "(N,)", "b": "(N,)", "out": "(N, K)"},
+        dtypes={"a": "int64", "b": "int64"},
+        backends=("fortran",),
+    )
     assert status == {"fortran": "ok"}, status
 
 
@@ -80,17 +75,16 @@ def test_emitted_fortran_never_calls_aint_on_an_integer_operand():
     bi = d / "bi.json"
     bi.write_text(
         json.dumps(
-            oo._bench_info("f", ["a", "b"], ["out"], {
-                "a": "(N,)",
-                "b": "(N,)",
-                "out": "(N, K)"
-            }, {
-                "N": 4,
-                "K": 2
-            }, {
-                "a": "int64",
-                "b": "int64"
-            })))
+            oo._bench_info(
+                "f",
+                ["a", "b"],
+                ["out"],
+                {"a": "(N,)", "b": "(N,)", "out": "(N, K)"},
+                {"N": 4, "K": 2},
+                {"a": "int64", "b": "int64"},
+            )
+        )
+    )
     oo._emit_native(npy, bi, d, "f")
     text = (d / "f.f90").read_text()
     # A division feeding aint() must be wrapped in REAL(..., c_double) on any operand

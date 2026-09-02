@@ -65,8 +65,9 @@ def shard_tables(conn: sqlite3.Connection) -> list[tuple[str, str]]:
     Discovered from the shard rather than listed here, so the framework ``results`` table -- a
     different module's schema living in the same file -- and any table added later are merged
     without a second list to keep in sync."""
-    rows = conn.execute("SELECT name, sql FROM shard.sqlite_master "
-                        "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").fetchall()
+    rows = conn.execute(
+        "SELECT name, sql FROM shard.sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+    ).fetchall()
     by_name = {name: sql for name, sql in rows if sql}
     ordered = [name for name in MERGE_FIRST if name in by_name]
     ordered += sorted(set(by_name) - set(MERGE_FIRST))
@@ -116,7 +117,7 @@ def merge_shard(conn: sqlite3.Connection, shard: pathlib.Path) -> dict[str, int]
     The destination's table is created from the SHARD's own DDL, so this needs no copy of the
     benchmark's schema and cannot drift from it."""
     inserted: dict[str, int] = {}
-    conn.execute("ATTACH DATABASE ? AS shard", (str(shard), ))
+    conn.execute("ATTACH DATABASE ? AS shard", (str(shard),))
     try:
         for table, ddl in shard_tables(conn):
             conn.execute(ddl.replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", 1))
@@ -151,8 +152,23 @@ def synthesize_fallback_submissions(conn: sqlite3.Connection) -> int:
         print("fallback: calls table predates route/correct columns; nothing to synthesize")
         return 0
     copied = [
-        c for c in ("run_id", "ts", "benchmark", "preset", "datatype", "language", "source_mode", "optimizer",
-                    "baseline", "speedup", "cpu", "commit_sha", "prompt_hash") if c in call_cols
+        c
+        for c in (
+            "run_id",
+            "ts",
+            "benchmark",
+            "preset",
+            "datatype",
+            "language",
+            "source_mode",
+            "optimizer",
+            "baseline",
+            "speedup",
+            "cpu",
+            "commit_sha",
+            "prompt_hash",
+        )
+        if c in call_cols
     ]
     collist = ", ".join(copied)
     # A score call at a non-default preset measured a DIFFERENT problem size; crediting it would let
@@ -160,11 +176,14 @@ def synthesize_fallback_submissions(conn: sqlite3.Connection) -> int:
     # whatever the judge-verified submissions ran at -- learn it from them (submit calls as backup).
     preset_filter = ""
     if "preset" in call_cols:
-        row = conn.execute("SELECT preset FROM main.submissions GROUP BY preset "
-                           "ORDER BY COUNT(*) DESC, preset LIMIT 1").fetchone()
+        row = conn.execute(
+            "SELECT preset FROM main.submissions GROUP BY preset ORDER BY COUNT(*) DESC, preset LIMIT 1"
+        ).fetchone()
         if row is None:
-            row = conn.execute("SELECT preset FROM main.calls WHERE route = 'submit' GROUP BY preset "
-                               "ORDER BY COUNT(*) DESC, preset LIMIT 1").fetchone()
+            row = conn.execute(
+                "SELECT preset FROM main.calls WHERE route = 'submit' GROUP BY preset "
+                "ORDER BY COUNT(*) DESC, preset LIMIT 1"
+            ).fetchone()
         if row is not None and row[0] is not None:
             quoted = str(row[0]).replace("'", "''")
             preset_filter = f" AND preset = '{quoted}'"
@@ -178,7 +197,8 @@ def synthesize_fallback_submissions(conn: sqlite3.Connection) -> int:
         "AND c.benchmark NOT IN (SELECT benchmark FROM main.submissions) "
         "AND c.id = (SELECT c2.id FROM main.calls c2 WHERE c2.benchmark = c.benchmark "
         f"            AND c2.route = 'score' AND c2.correct = 1 AND c2.speedup IS NOT NULL{preset_filter.replace(' preset', ' c2.preset')} "
-        "            ORDER BY c2.ts DESC, c2.id DESC LIMIT 1)")
+        "            ORDER BY c2.ts DESC, c2.id DESC LIMIT 1)"
+    )
     conn.commit()
     count = max(cur.rowcount, 0)
     print(f"fallback: synthesized {count} submissions from last correct scores (execution='score-fallback')")
@@ -222,8 +242,10 @@ def merge(run_dir: pathlib.Path, out: pathlib.Path) -> int:
         # are different numbers, and only the second one describes what a reader will see.
         print(f"merged {len(shards)} shards into {out}")
         tables = [
-            row[0] for row in conn.execute("SELECT name FROM main.sqlite_master WHERE type = 'table' "
-                                           "AND name NOT LIKE 'sqlite_%' ORDER BY name")
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM main.sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            )
         ]
         for table in tables:
             count = conn.execute(f"SELECT count(*) FROM main.{table}").fetchone()[0]
@@ -238,9 +260,9 @@ def merge(run_dir: pathlib.Path, out: pathlib.Path) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("run_dir", help="the run directory (RUN_DIR), holding judge/rank-<k>/")
-    parser.add_argument("--out",
-                        default=None,
-                        help="destination DB (default <run dir>/results-merged.db); rebuilt from the shards")
+    parser.add_argument(
+        "--out", default=None, help="destination DB (default <run dir>/results-merged.db); rebuilt from the shards"
+    )
     args = parser.parse_args(argv)
 
     run_dir = pathlib.Path(args.run_dir)

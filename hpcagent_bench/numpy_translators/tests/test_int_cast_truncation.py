@@ -21,6 +21,7 @@ Two coupled bugs made every force come out zero:
 is bounded, so the float chain stays ``double`` and the result is bit-exact. This
 pins both the numerical result and the emitted C types.
 """
+
 import ast
 import json
 import pathlib
@@ -34,18 +35,20 @@ _ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 
 # rs = rsq * rinv * 50 = 50 * sqrt(rsq) = 50 * |x - 0.5|; for x in [0.6, 0.9]
 # rs lands in [5, 20], so ri = int(rs) indexes a 24-entry table in range.
-_SRC = ("import numpy as np\n"
-        "def f(x, table, out):\n"
-        " for i in range(len(x)):\n"
-        "  d = x[i] - 0.5\n"
-        "  rsq = d * d\n"
-        "  rinv = 1.0 / np.sqrt(rsq)\n"
-        "  rs = rsq * rinv * 50.0\n"
-        "  ri = int(rs)\n"
-        "  ri = min(max(ri, 0), len(table) - 2)\n"
-        "  frac = rs - float(ri)\n"
-        "  val = (1.0 - frac) * table[ri] + frac * table[ri + 1]\n"
-        "  out[i] = rsq + rinv + val\n")
+_SRC = (
+    "import numpy as np\n"
+    "def f(x, table, out):\n"
+    " for i in range(len(x)):\n"
+    "  d = x[i] - 0.5\n"
+    "  rsq = d * d\n"
+    "  rinv = 1.0 / np.sqrt(rsq)\n"
+    "  rs = rsq * rinv * 50.0\n"
+    "  ri = int(rs)\n"
+    "  ri = min(max(ri, 0), len(table) - 2)\n"
+    "  frac = rs - float(ri)\n"
+    "  val = (1.0 - frac) * table[ri] + frac * table[ri + 1]\n"
+    "  out[i] = rsq + rinv + val\n"
+)
 
 
 def _all_ok(res):
@@ -59,20 +62,16 @@ def test_int_truncation_keeps_float_chain_bit_exact():
     table = np.linspace(1.0, 2.0, 24, dtype=np.float64)
     out = np.zeros(12, dtype=np.float64)
     ok, res = _all_ok(
-        run_op(_SRC,
-               "f", {
-                   "x": x,
-                   "table": table
-               }, {"out": (12, )}, {
-                   "N": 12,
-                   "T": 24
-               },
-               shapes={
-                   "x": "(N,)",
-                   "table": "(T,)",
-                   "out": "(N,)"
-               },
-               backends=_ALL))
+        run_op(
+            _SRC,
+            "f",
+            {"x": x, "table": table},
+            {"out": (12,)},
+            {"N": 12, "T": 24},
+            shapes={"x": "(N,)", "table": "(T,)", "out": "(N,)"},
+            backends=_ALL,
+        )
+    )
     assert ok, res
     _ = out
 
@@ -81,6 +80,7 @@ def _emit_c(src):
     from numpyto_common.frontend import parse_kernel
     from numpyto_common.lowering import lower
     from numpyto_c.emit import emit_c
+
     d = pathlib.Path(tempfile.mkdtemp())
     (d / "k_numpy.py").write_text(src)
     bi = {
@@ -90,22 +90,11 @@ def _emit_c(src):
             "relative_path": "",
             "module_name": "k",
             "func_name": "f",
-            "parameters": {
-                "S": {
-                    "N": 12,
-                    "T": 24
-                }
-            },
+            "parameters": {"S": {"N": 12, "T": 24}},
             "input_args": ["x", "table", "out"],
             "array_args": ["x", "table", "out"],
             "output_args": ["out"],
-            "init": {
-                "shapes": {
-                    "x": "(N,)",
-                    "table": "(T,)",
-                    "out": "(N,)"
-                }
-            }
+            "init": {"shapes": {"x": "(N,)", "table": "(T,)", "out": "(N,)"}},
         }
     }
     (d / "bi.json").write_text(json.dumps(bi))
@@ -129,6 +118,7 @@ def test_int_call_is_not_dropped_in_lowering():
     # Unit-level: the builtin-cast rewriter keeps ``int(...)`` (drops only
     # ``float(...)``) so the used-as-int barrier survives lowering.
     from numpyto_common.lowering import _BuiltinCastRewriter
+
     mod = ast.parse("def f(rs):\n ri = int(rs)\n y = float(rs)\n return ri + y\n")
     _BuiltinCastRewriter().visit(mod)
     src = ast.unparse(mod)

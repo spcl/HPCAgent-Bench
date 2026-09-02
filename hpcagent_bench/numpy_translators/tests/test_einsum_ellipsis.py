@@ -6,6 +6,7 @@ The plain-subscript parser stays ellipsis-free -- its
 ``test_parse_einsum_ellipsis_unsupported`` guard is intact; only the expander
 does the rank-aware expansion.
 """
+
 import numpy as np
 import pytest
 from _op_oracle import run_op
@@ -41,17 +42,17 @@ def test_einsum_ellipsis_batched_transpose_e2e():
     src = "import numpy as np\ndef f(a, out):\n    out[:] = np.einsum('...ij->...ji', a)\n"
     a = rng.random((2, 3, 4))
     _assert_ok(
-        run_op(src,
-               "f", {"a": a}, {"out": (2, 4, 3)}, {
-                   "B": 2,
-                   "M": 3,
-                   "N": 4
-               },
-               shapes={
-                   "a": "(B, M, N)",
-                   "out": "(B, N, M)"
-               },
-               backends=_NATIVE), "einsum-ellipsis-transpose")
+        run_op(
+            src,
+            "f",
+            {"a": a},
+            {"out": (2, 4, 3)},
+            {"B": 2, "M": 3, "N": 4},
+            shapes={"a": "(B, M, N)", "out": "(B, N, M)"},
+            backends=_NATIVE,
+        ),
+        "einsum-ellipsis-transpose",
+    )
 
 
 def test_einsum_ellipsis_batched_matmul_e2e():
@@ -65,22 +66,17 @@ def test_einsum_ellipsis_batched_matmul_e2e():
     src = "import numpy as np\ndef f(a, b, out):\n    out[:] = np.einsum('...ij,...jk->...ik', a, b)\n"
     a, b = rng.random((2, 3, 4)), rng.random((2, 4, 5))
     _assert_ok(
-        run_op(src,
-               "f", {
-                   "a": a,
-                   "b": b
-               }, {"out": (2, 3, 5)}, {
-                   "B": 2,
-                   "M": 3,
-                   "K": 4,
-                   "N": 5
-               },
-               shapes={
-                   "a": "(B, M, K)",
-                   "b": "(B, K, N)",
-                   "out": "(B, M, N)"
-               },
-               backends=("c", "cpp")), "einsum-ellipsis-matmul")
+        run_op(
+            src,
+            "f",
+            {"a": a, "b": b},
+            {"out": (2, 3, 5)},
+            {"B": 2, "M": 3, "K": 4, "N": 5},
+            shapes={"a": "(B, M, K)", "b": "(B, K, N)", "out": "(B, M, N)"},
+            backends=("c", "cpp"),
+        ),
+        "einsum-ellipsis-matmul",
+    )
 
 
 def test_const_coerces_numpy_scalar():
@@ -89,6 +85,7 @@ def test_const_coerces_numpy_scalar():
     fails the Fortran emit's ``isinstance(_, int)`` integer test. ``_const``
     coerces it to the plain Python value so every backend emits a bare ``0``."""
     from numpyto_common.lib_nodes import _const
+
     ci = _const(np.int64(0))
     assert type(ci.value) is int and ci.value == 0
     cf = _const(np.float64(1.5))

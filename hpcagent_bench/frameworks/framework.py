@@ -23,19 +23,22 @@ np_float, np_complex = float_complex_for(None)
 IEEE_PRECISIONS = frozenset({Precision.FP32, Precision.FP64})
 
 #: The full precision matrix (IEEE + fp16/bf16/fp8), for frameworks carrying low precision end to end.
-ALL_PRECISIONS = frozenset({
-    Precision.FP64,
-    Precision.FP32,
-    Precision.FP16,
-    Precision.BF16,
-    Precision.FP8_E4M3,
-    Precision.FP8_E5M2,
-})
+ALL_PRECISIONS = frozenset(
+    {
+        Precision.FP64,
+        Precision.FP32,
+        Precision.FP16,
+        Precision.BF16,
+        Precision.FP8_E4M3,
+        Precision.FP8_E5M2,
+    }
+)
 
 
 class TimingResult(NamedTuple):
     """One timing sample in milliseconds: ``python`` wall-clock (always present), ``native`` framework-internal
     time (None when the framework has no internal timer, e.g. C/C++/Fortran)."""
+
     python: float
     native: Optional[float] = None
 
@@ -60,8 +63,7 @@ class CallPlan:
         """Fresh copies of the mutable array inputs, outside the timed bracket, then after_setup(); a
         read-only sparse ``array_args`` entry is skipped (read straight from bdata in :meth:`_resolved`)."""
         self._mutable = {
-            a: self._copy(self.bdata[a])
-            for a in self.array_args if isinstance(self.bdata.get(a), np.ndarray)
+            a: self._copy(self.bdata[a]) for a in self.array_args if isinstance(self.bdata.get(a), np.ndarray)
         }
         self.f.after_setup()
 
@@ -93,6 +95,7 @@ class CallPlan:
 class Timer:
     """Per-program timer state: created by create_timer, bracketed by start/stop_timer, released by
     free_timer. Holds only state; ``state`` is a free slot (CUDA events, instrumented SDFG, ...)."""
+
     __slots__ = ("program", "t0", "state")
 
     def __init__(self, program: Any):
@@ -108,6 +111,7 @@ class TorchCudaEventTiming:
     def create_timer(self, program: Any) -> "Timer":
         """Allocate a start/stop torch CUDA event pair for device-side timing."""
         import torch
+
         timer = Timer(program)
         timer.state = (torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True))
         return timer
@@ -119,6 +123,7 @@ class TorchCudaEventTiming:
     def stop_timer(self, timer: "Timer") -> "TimingResult":
         """Record + sync the stop event; native = device-measured ms, python = host wall-clock."""
         import torch
+
         start_ev, stop_ev = timer.state
         stop_ev.record()
         torch.cuda.synchronize()
@@ -188,7 +193,7 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "prefix": "dc",
         "postfix": "dace",
         "arch": "cpu",
-        "pipelines": ("parallel_cpu", ),
+        "pipelines": ("parallel_cpu",),
         "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
     },
     "dace_gpu": {
@@ -199,7 +204,7 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "arch": "gpu",
         # GPU searches upstream ``autoopt``, not ``canonicalize``: it is the pipeline this column
         # has always been scored on, and the canonicalize GPU path is its own flavor below.
-        "pipelines": ("parallel_gpu", ),
+        "pipelines": ("parallel_gpu",),
         "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
     },
     # Upstream DaCe's own auto_optimize. The only columns that run unchanged on a stock PyPI/main
@@ -211,7 +216,7 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "prefix": "dc",
         "postfix": "dace",
         "arch": "cpu",
-        "pipelines": ("autoopt_cpu", ),
+        "pipelines": ("autoopt_cpu",),
         "column": "dace_cpu",
         "flavor": "autoopt",
         "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
@@ -222,7 +227,7 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "prefix": "dc",
         "postfix": "dace",
         "arch": "gpu",
-        "pipelines": ("autoopt_gpu", ),
+        "pipelines": ("autoopt_gpu",),
         "column": "dace_gpu",
         "flavor": "autoopt",
         "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
@@ -233,7 +238,7 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "prefix": "dc",
         "postfix": "dace",
         "arch": "cpu",
-        "pipelines": ("canon_cpu", ),
+        "pipelines": ("canon_cpu",),
         "column": "dace_cpu",
         "flavor": "canonicalize",
         "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
@@ -244,7 +249,7 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "prefix": "dc",
         "postfix": "dace",
         "arch": "gpu",
-        "pipelines": ("canon_gpu", ),
+        "pipelines": ("canon_gpu",),
         "column": "dace_gpu",
         "flavor": "canonicalize",
         "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
@@ -455,13 +460,15 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "postfix": "triton",
         "arch": "gpu",
         # No fp64 path; runs the low-precision matrix instead.
-        "precisions": frozenset({
-            Precision.FP32,
-            Precision.FP16,
-            Precision.BF16,
-            Precision.FP8_E4M3,
-            Precision.FP8_E5M2,
-        }),
+        "precisions": frozenset(
+            {
+                Precision.FP32,
+                Precision.FP16,
+                Precision.BF16,
+                Precision.FP8_E4M3,
+                Precision.FP8_E5M2,
+            }
+        ),
     },
     # TVM: one base, two hardware flavors (distinct impl files -> distinct postfix).
     "tvm": {
@@ -528,16 +535,28 @@ def check_flavor_registry() -> None:
         if column not in FRAMEWORK_META:
             raise KeyError(f"framework {name!r} names column {column!r}, which is not a registered framework")
         if name != f"{column}_{flavor}":
-            raise KeyError(f"framework {name!r} must be named {column}_{flavor} so the CLI name and the stored "
-                           "(framework, flavor) pair cannot drift apart")
+            raise KeyError(
+                f"framework {name!r} must be named {column}_{flavor} so the CLI name and the stored "
+                "(framework, flavor) pair cannot drift apart"
+            )
 
 
 def framework_class(fname: str):
     """Map a framework name to its :class:`Framework` subclass via its ``base`` (imported lazily to
     dodge the circular import)."""
-    from hpcagent_bench.frameworks import (Framework, NumbaFramework, CupyFramework, JaxFramework, PythranFramework,
-                                           DaceFramework, NativeFramework, PlutoFramework, TritonFramework,
-                                           TVMFramework)
+    from hpcagent_bench.frameworks import (
+        Framework,
+        NumbaFramework,
+        CupyFramework,
+        JaxFramework,
+        PythranFramework,
+        DaceFramework,
+        NativeFramework,
+        PlutoFramework,
+        TritonFramework,
+        TVMFramework,
+    )
+
     base_class = {
         "numpy": Framework,
         "numba": NumbaFramework,
@@ -604,9 +623,10 @@ class Framework(object):
         """Returns the framework's implementation files for ``bench``."""
 
         package_dir = pathlib.Path(__file__).parent.parent.absolute()  # hpcagent_bench/
-        pymod_path = package_dir.joinpath("benchmarks", bench.info["relative_path"],
-                                          f'{bench.info["module_name"]}_{self.info["postfix"]}.py')
-        return [(pymod_path, 'default')]
+        pymod_path = package_dir.joinpath(
+            "benchmarks", bench.info["relative_path"], f"{bench.info['module_name']}_{self.info['postfix']}.py"
+        )
+        return [(pymod_path, "default")]
 
     def autogen_targets(self) -> Sequence[str]:
         """Sibling targets this framework can auto-generate from the numpy reference when its impl file
@@ -619,6 +639,7 @@ class Framework(object):
         targets = self.autogen_targets()
         if targets:
             from hpcagent_bench.autogen import ensure
+
             # bench.bname is the REGISTRY key the manifest was resolved with;
             # bench.info["short_name"] is a free-form label 26 kernels spell
             # differently from their stem, and no manifest is named after it.
@@ -628,8 +649,8 @@ class Framework(object):
         """Returns the framework's implementations for ``bench``."""
 
         self.ensure_impls(bench)
-        relative = bench.info["relative_path"].replace('/', '.')
-        module_pypath = f'hpcagent_bench.benchmarks.{relative}.{bench.info["module_name"]}'
+        relative = bench.info["relative_path"].replace("/", ".")
+        module_pypath = f"hpcagent_bench.benchmarks.{relative}.{bench.info['module_name']}"
         postfix = self.info["postfix"]
         module_str = f"{module_pypath}_{postfix}"
         func_str = bench.info["func_name"]
@@ -641,7 +662,7 @@ class Framework(object):
             print("Failed to load the {r} {f} implementation.".format(r=self.info["full_name"], f=func_str))
             raise e
 
-        return [(impl, 'default')]
+        return [(impl, "default")]
 
     # ----- Direct-callable invocation. Frameworks customize behaviour by overriding
     # METHODS below -- never by returning code strings or string-dispatching. -----
@@ -651,8 +672,9 @@ class Framework(object):
         override e.g. to sync a device stream before timing starts (cupy)."""
         return None
 
-    def call_args(self, bench: Benchmark, impl: Callable, resolved: Dict[str, Any],
-                  bdata: Dict[str, Any]) -> Tuple[Sequence[Any], Dict[str, Any]]:
+    def call_args(
+        self, bench: Benchmark, impl: Callable, resolved: Dict[str, Any], bdata: Dict[str, Any]
+    ) -> Tuple[Sequence[Any], Dict[str, Any]]:
         """Return ``(positional, keyword)`` args for one impl call. Python frameworks are called by
         labeled keyword; a buffer-class framework writes pre-allocated outputs in place, a functional
         one (jax/tvm/triton) returns its outputs. Native C/C++/Fortran use the positional C-ABI instead."""
@@ -700,6 +722,7 @@ class Framework(object):
         if not self.is_optimizer:
             return None
         from hpcagent_bench.optimize import OptimizeBudget
+
         return OptimizeBudget.from_env()
 
     def optimize(self, program: Any, bench: Benchmark, bdata: Dict[str, Any]) -> Any:
@@ -752,12 +775,14 @@ class Framework(object):
         """Release timer state after the repeat loop (default no-op)."""
         return None
 
-    def measure(self,
-                impl: Any,
-                runner: Callable[[], Any],
-                repeat: int,
-                before_each: Optional[Callable[[], None]] = None,
-                warmup: Optional[int] = None) -> Dict[str, Optional[List[float]]]:
+    def measure(
+        self,
+        impl: Any,
+        runner: Callable[[], Any],
+        repeat: int,
+        before_each: Optional[Callable[[], None]] = None,
+        warmup: Optional[int] = None,
+    ) -> Dict[str, Optional[List[float]]]:
         """Run ``runner`` ``warmup + repeat`` times, discard the first ``warmup``, and return both timing
         series over the kept samples. ``warmup=None`` reads ``measurement.warmup`` (the judge's own policy,
         so a comparison run doesn't drift from it on cold first-touch)."""
@@ -787,7 +812,7 @@ def generate_framework(fname: str, save_strict: bool = False, load_strict: bool 
     """Generates a framework object with the correct class (save/load_strict: dace_cpu/dace_gpu only)."""
 
     cls = framework_class(fname)
-    if fname.startswith('dace'):
+    if fname.startswith("dace"):
         return cls(fname, save_strict, load_strict)
     return cls(fname)
 

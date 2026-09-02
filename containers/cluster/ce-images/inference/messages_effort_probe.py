@@ -5,6 +5,7 @@ carries the status line, never the body. Without the body we have been reasoning
 rewrites the effort level from the outside. This asks the server directly, across the shapes the
 driver can produce, and prints the failure verbatim.
 """
+
 import argparse
 import json
 import sys
@@ -19,52 +20,28 @@ SHAPES = (
     # xhigh. So a request WITHOUT output_config leaves the field unset and lets the server's
     # --default-chat-template-kwargs supply the level instead. These shapes separate the two.
     ("bare", {}),
-    ("thinking-32768", {
-        "thinking": {
-            "type": "enabled",
-            "budget_tokens": 32768
-        }
-    }),
-    ("output_config-xhigh", {
-        "output_config": {
-            "effort": "xhigh"
-        }
-    }),
-    ("output_config-high", {
-        "output_config": {
-            "effort": "high"
-        }
-    }),
-    ("output_config-medium", {
-        "output_config": {
-            "effort": "medium"
-        }
-    }),
-    ("thinking+no-output-config", {
-        "thinking": {
-            "type": "enabled",
-            "budget_tokens": 8192
-        }
-    }),
+    ("thinking-32768", {"thinking": {"type": "enabled", "budget_tokens": 32768}}),
+    ("output_config-xhigh", {"output_config": {"effort": "xhigh"}}),
+    ("output_config-high", {"output_config": {"effort": "high"}}),
+    ("output_config-medium", {"output_config": {"effort": "medium"}}),
+    ("thinking+no-output-config", {"thinking": {"type": "enabled", "budget_tokens": 8192}}),
 )
 
 
 def post(base: str, model: str, name: str, extra: dict, timeout: int) -> None:
     body = dict(extra)
-    body.update({
-        "model": model,
-        "max_tokens": 64,
-        "messages": [{
-            "role": "user",
-            "content": "Reply with the single word OK."
-        }],
-    })
-    req = urllib.request.Request(f"{base}/v1/messages?beta=true",
-                                 data=json.dumps(body).encode(),
-                                 headers={
-                                     "Content-Type": "application/json",
-                                     "anthropic-version": "2023-06-01"
-                                 })
+    body.update(
+        {
+            "model": model,
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": "Reply with the single word OK."}],
+        }
+    )
+    req = urllib.request.Request(
+        f"{base}/v1/messages?beta=true",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json", "anthropic-version": "2023-06-01"},
+    )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             payload = json.load(resp)

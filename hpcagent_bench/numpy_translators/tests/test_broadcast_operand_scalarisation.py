@@ -14,6 +14,7 @@ alone would have said "wrong answer" without saying which operand.
 * An advanced index carrying newaxis reshapes (``gather_z[:, None, None]``) was aligned by its
   slice axes alone, so it read the INNERMOST iter and kept the ``None``s in the emitted subscript.
 """
+
 import ast
 
 import pytest
@@ -41,7 +42,7 @@ def _fused(src, shapes, n):
 
 def test_computed_base_is_scalarised_not_subscripted():
     # The base IS the array; the ``[:, None]`` only says which nest axis it varies along.
-    got = _scalarised("(mask != 0)[:, None]", {"mask": ("np", )}, 2)
+    got = _scalarised("(mask != 0)[:, None]", {"mask": ("np",)}, 2)
     assert got == "mask[__w0] != 0", got
     assert "None" not in got, "a literal newaxis reached the emitter"
 
@@ -65,11 +66,12 @@ def test_an_equal_rank_subscript_operand_is_unchanged():
         # Two vectors and a scalar axis: a rank-2 result, so under a 3-deep nest it right-aligns.
         ("grid[gz[:, None], gy[None, :], 0]", 2, "grid[gz[__w0], gy[__w1], 0]"),
         ("grid[gz[:, None], gy[None, :], 0]", 3, "grid[gz[__w1], gy[__w2], 0]"),
-    ])
+    ],
+)
 def test_open_mesh_gather_binds_each_vector_to_its_own_axis(src, nest, want):
     # ``A[a[:, None, None], b[None, :, None], c[None, None, :]]`` is the open mesh np.ix_ spells:
     # each vector varies along ITS OWN result axis, so each takes its own iter.
-    shapes = {"grid": ("N", "N", "N"), "gz": ("nz", ), "gy": ("ny", ), "gx": ("nx", )}
+    shapes = {"grid": ("N", "N", "N"), "gz": ("nz",), "gy": ("ny",), "gx": ("nx",)}
     got = _fused(src, shapes, nest)
     assert got == want, got
     assert "None" not in got, "a literal newaxis reached the emitter"

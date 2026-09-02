@@ -16,6 +16,7 @@ every dace import needs. The CE images installed exactly what those files said.
 ``--check`` re-renders in memory and diffs; :mod:`tests.test_requirements_cover_project_deps` runs it
 so drift fails a test run rather than a container build.
 """
+
 import argparse
 import dataclasses
 import difflib
@@ -42,6 +43,7 @@ class Rendered:
     ``includes`` emits ``-r`` lines, and ``options`` are pip option lines that cannot be spelled as a
     PEP 508 requirement and so have no home in pyproject.
     """
+
     extras: tuple[str, ...]
     core: bool
     groups: tuple[str, ...] = ()
@@ -54,53 +56,61 @@ class Rendered:
 #: :func:`check` says so rather than deleting it: ``optional.txt`` is a two-package convenience split
 #: that matches no single extra.
 GENERATED: dict[str, Rendered] = {
-    "requirements.txt":
-    Rendered((),
-             core=False,
-             groups=("linting", ),
-             includes=("requirements/cpu.txt", ),
-             note="The CPU runtime stack plus the DEV-ONLY formatters the format-check job and "
-             "scripts/check_format.py drive. Equivalent to `pip install -e \'.[cpu]\' --group linting`, "
-             "kept because a bare `pip install -r requirements.txt` is what a first-time reader reaches "
-             "for."),
-    "requirements/cpu.txt":
-    Rendered(("cpu", ),
-             core=True,
-             note="A CPU box. apache-tvm and mpi4py are deliberately absent -- they are the two "
-             "baselines with platform install friction, and they live in optional.txt so this "
-             "file installs cleanly everywhere, macOS arm64 included."),
-    "requirements/nvidia.txt":
-    Rendered(("nvidia", ), core=True, options=("--pre", ), note="--pre is required for apache-tvm."),
-    "requirements/amd.txt":
-    Rendered(("amd", ), core=True, options=("--pre", ), note="--pre is required for apache-tvm."),
-    "requirements/hf.txt":
-    Rendered(("hf", ),
-             core=False,
-             note="HuggingFace Dataset export (hpcagent-bench export-hf). Optional: the row builder "
-             "and jsonl writer are pure-stdlib; these add the parquet writer and the Hub push."),
-    "requirements/harbor.txt":
-    Rendered(("harbor", ),
-             core=False,
-             note="Harbor integration (adapters/hpcagent_bench). Only needed to RUN the benchmark "
-             "under Harbor, or to validate a generated task.toml against Harbor's schema. The task "
-             "generator and the in-container grader carry no harbor dependency."),
-    "requirements/agent-anthropic.txt":
-    Rendered(("agent-anthropic", ), core=False, note="Agent backend: the Anthropic API."),
-    "requirements/agent-local.txt":
-    Rendered(("agent-local", ), core=False, note="Agent backend: a locally hosted transformers model."),
-    "requirements/agent-aider.txt":
-    Rendered(("agent-aider", ),
-             core=False,
-             note="Agent backend: aider. It hard-pins numpy==1.26.x against this project's numpy>=2, "
-             "which is why it is its own file and its own extra."),
-    "requirements/agent-optimas.txt":
-    Rendered(("agent-optimas", ), core=False, note="Agent backend: optimas."),
+    "requirements.txt": Rendered(
+        (),
+        core=False,
+        groups=("linting",),
+        includes=("requirements/cpu.txt",),
+        note="The CPU runtime stack plus the DEV-ONLY formatters the format-check job and "
+        "scripts/check_format.py drive. Equivalent to `pip install -e '.[cpu]' --group linting`, "
+        "kept because a bare `pip install -r requirements.txt` is what a first-time reader reaches "
+        "for.",
+    ),
+    "requirements/cpu.txt": Rendered(
+        ("cpu",),
+        core=True,
+        note="A CPU box. apache-tvm and mpi4py are deliberately absent -- they are the two "
+        "baselines with platform install friction, and they live in optional.txt so this "
+        "file installs cleanly everywhere, macOS arm64 included.",
+    ),
+    "requirements/nvidia.txt": Rendered(
+        ("nvidia",), core=True, options=("--pre",), note="--pre is required for apache-tvm."
+    ),
+    "requirements/amd.txt": Rendered(("amd",), core=True, options=("--pre",), note="--pre is required for apache-tvm."),
+    "requirements/hf.txt": Rendered(
+        ("hf",),
+        core=False,
+        note="HuggingFace Dataset export (hpcagent-bench export-hf). Optional: the row builder "
+        "and jsonl writer are pure-stdlib; these add the parquet writer and the Hub push.",
+    ),
+    "requirements/harbor.txt": Rendered(
+        ("harbor",),
+        core=False,
+        note="Harbor integration (adapters/hpcagent_bench). Only needed to RUN the benchmark "
+        "under Harbor, or to validate a generated task.toml against Harbor's schema. The task "
+        "generator and the in-container grader carry no harbor dependency.",
+    ),
+    "requirements/agent-anthropic.txt": Rendered(
+        ("agent-anthropic",), core=False, note="Agent backend: the Anthropic API."
+    ),
+    "requirements/agent-local.txt": Rendered(
+        ("agent-local",), core=False, note="Agent backend: a locally hosted transformers model."
+    ),
+    "requirements/agent-aider.txt": Rendered(
+        ("agent-aider",),
+        core=False,
+        note="Agent backend: aider. It hard-pins numpy==1.26.x against this project's numpy>=2, "
+        "which is why it is its own file and its own extra.",
+    ),
+    "requirements/agent-optimas.txt": Rendered(("agent-optimas",), core=False, note="Agent backend: optimas."),
 }
 
-HEADER = ("# GENERATED by scripts/sync_requirements.py -- do not edit.\n"
-          "# Every name below, and the reason it is here, is declared in pyproject.toml"
-          " ({source}).\n"
-          "# Regenerate with: python scripts/sync_requirements.py\n")
+HEADER = (
+    "# GENERATED by scripts/sync_requirements.py -- do not edit.\n"
+    "# Every name below, and the reason it is here, is declared in pyproject.toml"
+    " ({source}).\n"
+    "# Regenerate with: python scripts/sync_requirements.py\n"
+)
 
 
 def resolve(extra: str, extras: dict[str, list[str]], seen: frozenset[str] = frozenset()) -> list[str]:
@@ -129,8 +139,11 @@ def render(spec: Rendered, core: Sequence[str], extras: dict[str, list[str]], gr
     for group in spec.groups:
         names.extend(g for g in groups[group] if isinstance(g, str))
 
-    source = ", ".join(("[project] dependencies", ) * spec.core + tuple(f"extra {e!r}" for e in spec.extras) +
-                       tuple(f"dependency-group {g!r}" for g in spec.groups))
+    source = ", ".join(
+        ("[project] dependencies",) * spec.core
+        + tuple(f"extra {e!r}" for e in spec.extras)
+        + tuple(f"dependency-group {g!r}" for g in spec.groups)
+    )
     lines = [HEADER.format(source=source)]
     if spec.note:
         lines.append("#\n" + "\n".join(f"# {line}" for line in wrap(spec.note)) + "\n")
@@ -176,9 +189,16 @@ def check() -> list[str]:
     for path, want in rendered_files().items():
         have = path.read_text() if path.is_file() else ""
         if have != want:
-            diffs.append("".join(
-                difflib.unified_diff(have.splitlines(True), want.splitlines(True), f"{path.name} (on disk)",
-                                     f"{path.name} (from pyproject)")))
+            diffs.append(
+                "".join(
+                    difflib.unified_diff(
+                        have.splitlines(True),
+                        want.splitlines(True),
+                        f"{path.name} (on disk)",
+                        f"{path.name} (from pyproject)",
+                    )
+                )
+            )
     return diffs
 
 

@@ -8,6 +8,7 @@ enough to measure is a run long enough to exhaust the box.
 
 Under AddressSanitizer, which fails the run on a leak rather than asking a human to read a number.
 """
+
 import json
 import pathlib
 import tempfile
@@ -23,27 +24,31 @@ from numpyto_common.lowering import lower
 #: ``scratch`` allocates a workspace AFTER a guard that returns early, so one call in three exits
 #: with the buffer live and one exits with it allocated. The early return is also what stops the
 #: inliner absorbing the helper, which is why it survives as a real function with a real free.
-SOURCE = ("import numpy as np\n\n\n"
-          "def scratch(v, N):\n"
-          "    if v < 0.0:\n"
-          "        return 0.0\n"
-          "    t = np.zeros((N,))\n"
-          "    for k in range(N):\n"
-          "        t[k] = v * (k + 1)\n"
-          "    if v > 1.0:\n"
-          "        return t[0]\n"
-          "    return t[1]\n\n\n"
-          "def k(a, out, N):\n"
-          "    for i in range(N):\n"
-          "        out[i] = scratch(a[i], N)\n")
+SOURCE = (
+    "import numpy as np\n\n\n"
+    "def scratch(v, N):\n"
+    "    if v < 0.0:\n"
+    "        return 0.0\n"
+    "    t = np.zeros((N,))\n"
+    "    for k in range(N):\n"
+    "        t[k] = v * (k + 1)\n"
+    "    if v > 1.0:\n"
+    "        return t[0]\n"
+    "    return t[1]\n\n\n"
+    "def k(a, out, N):\n"
+    "    for i in range(N):\n"
+    "        out[i] = scratch(a[i], N)\n"
+)
 
-DRIVER = ("int main(void) {\n"
-          "    enum { N = 8 };\n"
-          "    double a[N], out[N];\n"
-          "    for (int i = 0; i < N; ++i) a[i] = (double)i - 3.5;\n"
-          "    for (int rep = 0; rep < 32; ++rep) k(a, out, N);\n"
-          "    return out[N - 1] == out[N - 1] ? 0 : 1;\n"
-          "}\n")
+DRIVER = (
+    "int main(void) {\n"
+    "    enum { N = 8 };\n"
+    "    double a[N], out[N];\n"
+    "    for (int i = 0; i < N; ++i) a[i] = (double)i - 3.5;\n"
+    "    for (int rep = 0; rep < 32; ++rep) k(a, out, N);\n"
+    "    return out[N - 1] == out[N - 1] ? 0 : 1;\n"
+    "}\n"
+)
 
 
 def emitted(cpp: bool, source: str = SOURCE) -> str:
@@ -59,7 +64,7 @@ def emitted(cpp: bool, source: str = SOURCE) -> str:
 def helper_of(text: str) -> str:
     """Just the helper, so a free in the KERNEL cannot stand in for one the helper owes."""
     start = text.index("scratch(")
-    return text[start:text.index("\n}\n", start)]
+    return text[start : text.index("\n}\n", start)]
 
 
 def test_the_c_helper_frees_its_workspace_on_every_return():
@@ -80,19 +85,21 @@ def test_the_cpp_helper_frees_its_workspace_on_every_return():
 
 #: A helper returning a heap local BY VALUE. The array return is supposed to become an out-param;
 #: reaching a scalar return with a live buffer means the classification went wrong upstream.
-RETURNS_BUFFER = ("import numpy as np\n\n\n"
-                  "def build(v, N):\n"
-                  "    t = np.zeros((N,))\n"
-                  "    s = np.zeros((N,))\n"
-                  "    for k in range(N):\n"
-                  "        t[k] = v * (k + 1)\n"
-                  "    if v < 0.0:\n"
-                  "        return s\n"
-                  "    return t\n\n\n"
-                  "def k(a, out, N):\n"
-                  "    for i in range(N):\n"
-                  "        r = build(a[i], N)\n"
-                  "        out[i] = r[0]\n")
+RETURNS_BUFFER = (
+    "import numpy as np\n\n\n"
+    "def build(v, N):\n"
+    "    t = np.zeros((N,))\n"
+    "    s = np.zeros((N,))\n"
+    "    for k in range(N):\n"
+    "        t[k] = v * (k + 1)\n"
+    "    if v < 0.0:\n"
+    "        return s\n"
+    "    return t\n\n\n"
+    "def k(a, out, N):\n"
+    "    for i in range(N):\n"
+    "        r = build(a[i], N)\n"
+    "        out[i] = r[0]\n"
+)
 
 
 def test_returning_a_heap_local_by_value_is_refused_by_name():
@@ -113,22 +120,26 @@ def test_returning_a_heap_local_by_value_is_refused_by_name():
 
 #: A local whose EXTENT is computed in the loop body, so its allocation is deferred to a marker
 #: inside that loop -- emitted once, executed once per iteration.
-IN_LOOP_ALLOC = ("import numpy as np\n\n\n"
-                 "def k(a, out, N):\n"
-                 "    for i in range(N):\n"
-                 "        m = i + 1\n"
-                 "        t = np.zeros((m,))\n"
-                 "        for j in range(m):\n"
-                 "            t[j] = a[j] * 2.0\n"
-                 "        out[i] = t[0]\n")
+IN_LOOP_ALLOC = (
+    "import numpy as np\n\n\n"
+    "def k(a, out, N):\n"
+    "    for i in range(N):\n"
+    "        m = i + 1\n"
+    "        t = np.zeros((m,))\n"
+    "        for j in range(m):\n"
+    "            t[j] = a[j] * 2.0\n"
+    "        out[i] = t[0]\n"
+)
 
-IN_LOOP_DRIVER = ("int main(void) {\n"
-                  "    enum { N = 8 };\n"
-                  "    double a[N], out[N];\n"
-                  "    for (int i = 0; i < N; ++i) a[i] = (double)i + 1.0;\n"
-                  "    for (int rep = 0; rep < 16; ++rep) k(a, out, N);\n"
-                  "    return out[0] == out[0] ? 0 : 1;\n"
-                  "}\n")
+IN_LOOP_DRIVER = (
+    "int main(void) {\n"
+    "    enum { N = 8 };\n"
+    "    double a[N], out[N];\n"
+    "    for (int i = 0; i < N; ++i) a[i] = (double)i + 1.0;\n"
+    "    for (int rep = 0; rep < 16; ++rep) k(a, out, N);\n"
+    "    return out[0] == out[0] ? 0 : 1;\n"
+    "}\n"
+)
 
 
 def test_a_deferred_allocation_inside_a_loop_frees_the_previous_iteration():
@@ -138,8 +149,9 @@ def test_a_deferred_allocation_inside_a_loop_frees_the_previous_iteration():
     text = emitted(cpp=False, source=IN_LOOP_ALLOC)
     alloc = text.index("t = (double *)malloc(")
     before = text[:alloc]
-    assert "free(t);" in before[before.rindex("for "):], (
-        "the deferred allocation inside the loop does not free the previous iteration's buffer:\n" + text)
+    assert "free(t);" in before[before.rindex("for ") :], (
+        "the deferred allocation inside the loop does not free the previous iteration's buffer:\n" + text
+    )
 
 
 @have_gcc

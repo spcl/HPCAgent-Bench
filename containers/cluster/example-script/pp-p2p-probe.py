@@ -15,6 +15,7 @@ Layout mirrors the real one. With 2 nodes x 4 ranks the group is [0, 1, L, L+1],
 an intra-node hop and a cross-node hop, and the group stays size 4 -- at size 2 the group's own
 communicator would serve the P2P directly and the lazy path this exists to test never runs.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -96,11 +97,11 @@ def run_p2p_chain(group, ranks: list[int], device: torch.device, rank: int, elem
     (``irecv_tensor_dict``), and the blocking form takes a different path inside the process group.
     """
     position = ranks.index(rank)
-    payload = torch.full((elements, ), float(rank), device=device)
+    payload = torch.full((elements,), float(rank), device=device)
 
     if position > 0:
         src = ranks[position - 1]
-        inbox = torch.empty((elements, ), device=device)
+        inbox = torch.empty((elements,), device=device)
         dist.irecv(inbox, src=src, group=group).wait()
         torch.cuda.synchronize()
         got = inbox[0].item()
@@ -117,8 +118,18 @@ def tp_group_ranks(rank: int, local_world_size: int) -> list[int]:
     return list(range(node * local_world_size, (node + 1) * local_world_size))
 
 
-def run_sustained(wide_group, gloo_group, tp_group, ranks: list[int], tp_ranks: list[int], device: torch.device,
-                  rank: int, elements: int, allgather_elements: int, seconds: float) -> int:
+def run_sustained(
+    wide_group,
+    gloo_group,
+    tp_group,
+    ranks: list[int],
+    tp_ranks: list[int],
+    device: torch.device,
+    rank: int,
+    elements: int,
+    allgather_elements: int,
+    seconds: float,
+) -> int:
     """Drive TP allgather, gloo metadata handoff and NCCL pipeline P2P together, for a while.
 
     The one-shot stages above only prove a communicator can be BUILT. Kimi got past that: every arm
@@ -145,12 +156,12 @@ def run_sustained(wide_group, gloo_group, tp_group, ranks: list[int], tp_ranks: 
     position = ranks.index(rank) if rank in ranks else -1
     tp_position = tp_ranks.index(rank)
     # bfloat16: the dtype the model actually moves, so the byte counts match the wedged collective.
-    contribution = torch.full((allgather_elements, ), float(tp_position + 1), dtype=torch.bfloat16, device=device)
-    gathered = torch.empty((allgather_elements * len(tp_ranks), ), dtype=torch.bfloat16, device=device)
-    payload = torch.full((elements, ), float(rank), device=device)
-    inbox = torch.empty((elements, ), device=device)
-    meta = torch.empty((1, ), dtype=torch.int64)
-    keep_going = torch.ones((1, ), dtype=torch.int64, device=device)
+    contribution = torch.full((allgather_elements,), float(tp_position + 1), dtype=torch.bfloat16, device=device)
+    gathered = torch.empty((allgather_elements * len(tp_ranks),), dtype=torch.bfloat16, device=device)
+    payload = torch.full((elements,), float(rank), device=device)
+    inbox = torch.empty((elements,), device=device)
+    meta = torch.empty((1,), dtype=torch.int64)
+    keep_going = torch.ones((1,), dtype=torch.int64, device=device)
 
     deadline = time.monotonic() + seconds
     rounds = 0
@@ -196,21 +207,27 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--elements", type=int, default=1 << 20, help="payload floats per P2P hop")
     parser.add_argument("--timeout-seconds", type=int, default=90, help="collective timeout, per group")
-    parser.add_argument("--fill-fraction",
-                        type=float,
-                        default=0.0,
-                        help="occupy this fraction of free GPU memory BEFORE building groups, so the "
-                        "communicator is created under the memory pressure a loaded model imposes")
-    parser.add_argument("--sustain-seconds",
-                        type=float,
-                        default=180.0,
-                        help="how long to drive mixed TP/PP traffic; 0 skips the sustained stage. The "
-                        "default covers the ~2.5 min kimi survived after its first request")
-    parser.add_argument("--allgather-elements",
-                        type=int,
-                        default=14680064,
-                        help="per-rank TP allgather width; the default is the NumelIn of the "
-                        "_ALLGATHER_BASE that wedged in jobs 590380 and 590381")
+    parser.add_argument(
+        "--fill-fraction",
+        type=float,
+        default=0.0,
+        help="occupy this fraction of free GPU memory BEFORE building groups, so the "
+        "communicator is created under the memory pressure a loaded model imposes",
+    )
+    parser.add_argument(
+        "--sustain-seconds",
+        type=float,
+        default=180.0,
+        help="how long to drive mixed TP/PP traffic; 0 skips the sustained stage. The "
+        "default covers the ~2.5 min kimi survived after its first request",
+    )
+    parser.add_argument(
+        "--allgather-elements",
+        type=int,
+        default=14680064,
+        help="per-rank TP allgather width; the default is the NumelIn of the "
+        "_ALLGATHER_BASE that wedged in jobs 590380 and 590381",
+    )
     args = parser.parse_args()
 
     rank = env_int("RANK", 0)
@@ -289,8 +306,18 @@ def main() -> int:
         # Last, because it is the long one and because everything above is a precondition for it.
         stage = "sustained"
         if args.sustain_seconds > 0.0:
-            rounds = run_sustained(wide_group, gloo_group, tp_group, wide, tp_ranks, device, rank, args.elements,
-                                   args.allgather_elements, args.sustain_seconds)
+            rounds = run_sustained(
+                wide_group,
+                gloo_group,
+                tp_group,
+                wide,
+                tp_ranks,
+                device,
+                rank,
+                args.elements,
+                args.allgather_elements,
+                args.sustain_seconds,
+            )
             dist.barrier()
             if rank == 0:
                 report("sustained_rounds_total", rounds)

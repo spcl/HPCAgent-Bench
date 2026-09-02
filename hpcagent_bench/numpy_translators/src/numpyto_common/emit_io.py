@@ -12,6 +12,7 @@ never overwritten. A generated file carries the marker, so a re-run
 refreshes it but never clobbers an override. To turn a generated file into
 an override, delete the marker line (or replace the file).
 """
+
 from __future__ import annotations
 
 import pathlib
@@ -26,7 +27,7 @@ AUTO_MARKER = "hpcagent_bench-autogen"
 #: file carrying one of these is still recognised as auto-generated -- so the
 #: migration to the canonical name refreshes it instead of mistaking it for a
 #: hand override. (DaCe's ``dace_emit`` stamps its own docstring marker.)
-_LEGACY_MARKERS = ("auto-generated from the numpy reference", )
+_LEGACY_MARKERS = ("auto-generated from the numpy reference",)
 
 
 def _first_line(path: pathlib.Path) -> str:
@@ -54,7 +55,7 @@ def is_generated(out_path: Union[str, pathlib.Path]) -> bool:
     body = first.lstrip()
     for lead in ("#", "//", "!"):
         if body.startswith(lead):
-            body = body[len(lead):].lstrip()
+            body = body[len(lead) :].lstrip()
             break
     if body.startswith(AUTO_MARKER):
         return True
@@ -81,9 +82,11 @@ def write_generated(out_path: Union[str, pathlib.Path], src: str, *, line_commen
     p = pathlib.Path(out_path)
     if is_override(p):
         return "override"
-    note = (f"{line_comment}{AUTO_MARKER} -- generated from {source or 'the numpy reference'}; "
-            f"edit the numpy reference and regenerate, or delete this line to keep "
-            f"local edits as a hand override.\n")
+    note = (
+        f"{line_comment}{AUTO_MARKER} -- generated from {source or 'the numpy reference'}; "
+        f"edit the numpy reference and regenerate, or delete this line to keep "
+        f"local edits as a hand override.\n"
+    )
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(note + src)
     return "ok"

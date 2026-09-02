@@ -86,6 +86,7 @@ class SymbolDesc:
         assumption that is merely likely is worse than none, because a solver silently keeps the
         wrong branch of a comparison it can now decide.
     """
+
     name: str
     dtype: str = "int64"
     assumption: str = ""
@@ -112,6 +113,7 @@ class ArrayDesc:
     :ivar is_output: ``True`` when the array appears on the LHS of an
         assignment in the kernel body. Drives ``const`` qualification.
     """
+
     name: str
     dtype: str
     shape: Tuple[str, ...]
@@ -137,6 +139,7 @@ class ArrayDesc:
 @dataclass
 class ScalarDesc:
     """One scalar (non-shape) parameter -- e.g. ``alpha`` in GEMM."""
+
     name: str
     dtype: str
     is_output: bool = False
@@ -174,6 +177,7 @@ class SparseArrayDesc:
     :ivar buffers: ``{role: physical_name}`` -- e.g.
         ``{"indptr": "A_indptr", "indices": "A_indices", "data": "A_data"}``.
     """
+
     name: str
     format: str
     logical_shape: Tuple[str, ...]
@@ -194,6 +198,7 @@ class KernelIR:
     :ivar scalars: per-name lookup for non-shape, non-array scalars.
     :ivar source_path: pathlib.Path of the input file, for diagnostics.
     """
+
     tree: ast.FunctionDef
     kernel_name: str
     #: Stable short name for file paths / symbol prefixes. Equals
@@ -284,8 +289,9 @@ class KernelIR:
         if extra_ref is not None:
             names.append(extra_ref)
         refs = sorted(names)
-        scalars = sorted(n for n in ([s.name for s in self.symbols] + [s.name for s in self.scalars])
-                         if n not in self.pinned_consts)
+        scalars = sorted(
+            n for n in ([s.name for s in self.symbols] + [s.name for s in self.scalars]) if n not in self.pinned_consts
+        )
         return refs + scalars
 
     def abi_param_order(self) -> List[str]:
@@ -342,9 +348,14 @@ def _is_alloc_marker(stmt: ast.stmt) -> bool:
     """``<name> = __hpcagent_bench_zeros__()`` -- the allocation-site marker :func:`lib_nodes._alloc_marker`
     emits ahead of a spilled operand's copy loop. A statically-shaped target's marker renders to
     nothing (the malloc moves to the function top), so tagging it would silently drop the note."""
-    return (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
-            and isinstance(stmt.value, ast.Call) and isinstance(stmt.value.func, ast.Name)
-            and stmt.value.func.id == "__hpcagent_bench_zeros__")
+    return (
+        isinstance(stmt, ast.Assign)
+        and len(stmt.targets) == 1
+        and isinstance(stmt.targets[0], ast.Name)
+        and isinstance(stmt.value, ast.Call)
+        and isinstance(stmt.value.func, ast.Name)
+        and stmt.value.func.id == "__hpcagent_bench_zeros__"
+    )
 
 
 def tag_numpy_origin(stmts: List[ast.stmt], text: str) -> None:
@@ -364,7 +375,7 @@ def tag_numpy_origin(stmts: List[ast.stmt], text: str) -> None:
     target = next((s for s in stmts if not _is_alloc_marker(s)), stmts[0])
     text = " ".join(text.split())
     if len(text) > NUMPY_NOTE_CHARS:
-        text = text[:NUMPY_NOTE_CHARS - 3] + "..."
+        text = text[: NUMPY_NOTE_CHARS - 3] + "..."
     vars(target)[NUMPY_NOTE] = text
 
 

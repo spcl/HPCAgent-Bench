@@ -42,14 +42,37 @@ from numpyto_common import dtypes
 from numpyto_common.ir import _COMPLEX_FOR_FLOAT, KernelIR, SymbolDesc, stamp_symbol_assumptions
 from numpyto_common.ordered import OrderedSet
 from numpyto_common.numpy_desugar import _np_linalg_attr
-from numpyto_common.lib_nodes import (ARRAY_METHOD_SHAPE_OPS, ArrayMethodRewriter, DIM_IDENT_RE, SHAPE_READ_RE,
-                                      LibNodeRewriter, MESHGRID_AXIS_KW, NP_ZEROS_ALIASES, UNARY_C_MATH,
-                                      _broadcast_extents, _const_int, _is_integer_expr, _iter_extent_of,
-                                      _scalarize_at_iters, _slice_step_any, _step_is_negative, _step_node,
-                                      expand_meshgrid, extent_is_scalar, reset_temp_counters, shape_exprs_equal,
-                                      span_multiple_of, substitute_dim_aliases)
-from numpyto_common.frontend import (_collect_inlined_scalar_defs, _dtype_from_constructor, _resolve_shape_attr_tokens,
-                                     _substitute_inlined_scalar_defs, fold_shape_expr)
+from numpyto_common.lib_nodes import (
+    ARRAY_METHOD_SHAPE_OPS,
+    ArrayMethodRewriter,
+    DIM_IDENT_RE,
+    SHAPE_READ_RE,
+    LibNodeRewriter,
+    MESHGRID_AXIS_KW,
+    NP_ZEROS_ALIASES,
+    UNARY_C_MATH,
+    _broadcast_extents,
+    _const_int,
+    _is_integer_expr,
+    _iter_extent_of,
+    _scalarize_at_iters,
+    _slice_step_any,
+    _step_is_negative,
+    _step_node,
+    expand_meshgrid,
+    extent_is_scalar,
+    reset_temp_counters,
+    shape_exprs_equal,
+    span_multiple_of,
+    substitute_dim_aliases,
+)
+from numpyto_common.frontend import (
+    _collect_inlined_scalar_defs,
+    _dtype_from_constructor,
+    _resolve_shape_attr_tokens,
+    _substitute_inlined_scalar_defs,
+    fold_shape_expr,
+)
 
 #: ``np.pi`` / ``np.e`` folded to their double literals.  ``math`` gives the identical IEEE-754 value
 #: ``float(sympy.pi)`` / ``float(sympy.E)`` did, without dragging sympy (+mpmath, 100s of ms) onto the
@@ -59,10 +82,48 @@ _NP_CONSTS = {"pi": math.pi, "e": math.e}
 #: One-to-one rewrites: ``<module>.<name>`` -> bare C function name.
 #: All targets resolve through ``<math.h>``.
 #: Trigonometric / algebraic / transcendental intrinsics.
-_TRIG = ("sin", "cos", "tan", "tanh", "asin", "acos", "atan", "atan2", "sinh", "cosh", "asinh", "acosh", "atanh",
-         "hypot")
-_ALG_TRANS = ("exp", "exp2", "expm1", "log", "log2", "log10", "log1p", "sqrt", "cbrt", "pow", "fabs", "floor", "ceil",
-              "round", "rint", "trunc", "fmod", "fmax", "fmin", "copysign", "erf", "erfc", "tgamma", "lgamma")
+_TRIG = (
+    "sin",
+    "cos",
+    "tan",
+    "tanh",
+    "asin",
+    "acos",
+    "atan",
+    "atan2",
+    "sinh",
+    "cosh",
+    "asinh",
+    "acosh",
+    "atanh",
+    "hypot",
+)
+_ALG_TRANS = (
+    "exp",
+    "exp2",
+    "expm1",
+    "log",
+    "log2",
+    "log10",
+    "log1p",
+    "sqrt",
+    "cbrt",
+    "pow",
+    "fabs",
+    "floor",
+    "ceil",
+    "round",
+    "rint",
+    "trunc",
+    "fmod",
+    "fmax",
+    "fmin",
+    "copysign",
+    "erf",
+    "erfc",
+    "tgamma",
+    "lgamma",
+)
 #: Math intrinsics whose C name collides with common kernel variable
 #: names (Bessel functions ``j0``/``j1``/``y0``/``y1``). When the user
 #: writes ``np.j0(x)`` we rename to ``bessel_j0(x)`` and emit a static
@@ -101,8 +162,9 @@ for _orig, _renamed in _BESSEL_INTRINSICS.items():
     MATH_BUILTINS[("scipy.special", _orig)] = _renamed
 #: Identifiers the parameter-promotion pass must NOT lift to int
 #: parameters (they resolve to C / Fortran intrinsics post-emit).
-_MATH_INTRINSIC_NAMES: Set[str] = (set(_TRIG) | set(_ALG_TRANS) | set(_BESSEL_INTRINSICS.values())
-                                   | {"__npb_sign"})  # np.sign marker; specialised per-backend in emit
+_MATH_INTRINSIC_NAMES: Set[str] = (
+    set(_TRIG) | set(_ALG_TRANS) | set(_BESSEL_INTRINSICS.values()) | {"__npb_sign"}
+)  # np.sign marker; specialised per-backend in emit
 
 #: Method-call form -> free-function rewrite. The rewriter dynamically
 #: replaces the method invocation with the ``np.X(arr, ...)`` form so
@@ -202,11 +264,18 @@ class _MethodCallRewriter(_StmtHoister):
         # ``a.ravel()`` / ``a.flatten()`` -> ``np.reshape(a, (-1,))``: a 1-D view /
         # copy the reshape expander already lowers (``.ravel() @ .ravel()`` is the
         # flattened-dot idiom in the CG kernels).
-        if (isinstance(func, ast.Attribute) and func.attr in ("ravel", "flatten") and not node.args
-                and isinstance(func.value, ast.Name) and func.value.id not in self._MODULE_NAMES):
-            return ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="reshape", ctx=ast.Load()),
-                            args=[func.value, ast.Tuple(elts=[ast.Constant(value=-1)], ctx=ast.Load())],
-                            keywords=[])
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr in ("ravel", "flatten")
+            and not node.args
+            and isinstance(func.value, ast.Name)
+            and func.value.id not in self._MODULE_NAMES
+        ):
+            return ast.Call(
+                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="reshape", ctx=ast.Load()),
+                args=[func.value, ast.Tuple(elts=[ast.Constant(value=-1)], ctx=ast.Load())],
+                keywords=[],
+            )
         if not (isinstance(func, ast.Attribute) and func.attr in _METHOD_TO_NP):
             return node
         recv = func.value
@@ -221,15 +290,20 @@ class _MethodCallRewriter(_StmtHoister):
             # reduce over the bare Name. The reduction expanders / backends only
             # accept a Name or Subscript receiver, never an inline Call.
             recv = self._spill(recv, "__mc")
-        elif not ((isinstance(recv, ast.Name) and recv.id not in self._MODULE_NAMES) or
-                  (isinstance(recv, ast.Subscript) and isinstance(recv.value, ast.Name)
-                   and recv.value.id not in self._MODULE_NAMES)):
+        elif not (
+            (isinstance(recv, ast.Name) and recv.id not in self._MODULE_NAMES)
+            or (
+                isinstance(recv, ast.Subscript)
+                and isinstance(recv.value, ast.Name)
+                and recv.value.id not in self._MODULE_NAMES
+            )
+        ):
             return node
-        return ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()),
-                                           attr=_METHOD_TO_NP[func.attr],
-                                           ctx=ast.Load()),
-                        args=[recv] + list(node.args),
-                        keywords=node.keywords)
+        return ast.Call(
+            func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=_METHOD_TO_NP[func.attr], ctx=ast.Load()),
+            args=[recv] + list(node.args),
+            keywords=node.keywords,
+        )
 
 
 class _ComputedIndexCallHoister(_StmtHoister):
@@ -272,14 +346,18 @@ class _ComputedIndexCallHoister(_StmtHoister):
 
     def _is_arg_reduction(self, call: ast.Call) -> bool:
         f = call.func
-        return (isinstance(f, ast.Attribute) and f.attr in self._ARG_REDUCTIONS and isinstance(f.value, ast.Name)
-                and f.value.id in ("np", "numpy"))
+        return (
+            isinstance(f, ast.Attribute)
+            and f.attr in self._ARG_REDUCTIONS
+            and isinstance(f.value, ast.Name)
+            and f.value.id in ("np", "numpy")
+        )
 
     def _hoist_index(self, e: ast.Call) -> ast.Name:
         """Spill index Call ``e`` to a fresh Name. For an argmax / argmin over a
         non-Name operand, materialise that operand into its own temp Name first so
         the reduction expander (which needs a Name operand) can lower it."""
-        if (self._is_arg_reduction(e) and e.args and not isinstance(e.args[0], ast.Name)):
+        if self._is_arg_reduction(e) and e.args and not isinstance(e.args[0], ast.Name):
             e.args[0] = self._spill(e.args[0], "__ixa")
         return self._spill(e, "__ix")
 
@@ -290,7 +368,7 @@ class _ComputedIndexCallHoister(_StmtHoister):
         elts = list(sl.elts) if is_tuple else [sl]
         new_elts = [self._hoist_index(e) if self._should_hoist(e) else e for e in elts]
         if new_elts != elts:
-            node.slice = (ast.Tuple(elts=new_elts, ctx=ast.Load()) if is_tuple else new_elts[0])
+            node.slice = ast.Tuple(elts=new_elts, ctx=ast.Load()) if is_tuple else new_elts[0]
         return node
 
 
@@ -326,7 +404,7 @@ class _AstypeRewriter(ast.NodeTransformer):
             return node
         recv, dt = f.value, node.args[0]
         name = None
-        if (isinstance(dt, ast.Attribute) and isinstance(dt.value, ast.Name) and dt.value.id in ("np", "numpy")):
+        if isinstance(dt, ast.Attribute) and isinstance(dt.value, ast.Name) and dt.value.id in ("np", "numpy"):
             name = dt.attr  # np.<dtype>
         elif isinstance(dt, ast.Name) and dt.id in ("int", "float", "bool"):
             name = {"int": "int64", "float": "float64", "bool": "bool_"}[dt.id]
@@ -340,22 +418,31 @@ class _AstypeRewriter(ast.NodeTransformer):
             # ``(labels == ids).astype(X.dtype)``). Resolve the source array's
             # dtype and emit the concrete cast so the merge(1, 0, cond) path
             # fires and the destination is declared REAL.
-            bitwise = ((isinstance(recv, ast.BinOp) and isinstance(recv.op, (ast.BitAnd, ast.BitOr, ast.BitXor)))
-                       or (isinstance(recv, ast.UnaryOp) and isinstance(recv.op, (ast.Not, ast.Invert))))
+            bitwise = (isinstance(recv, ast.BinOp) and isinstance(recv.op, (ast.BitAnd, ast.BitOr, ast.BitXor))) or (
+                isinstance(recv, ast.UnaryOp) and isinstance(recv.op, (ast.Not, ast.Invert))
+            )
             # A bitwise combination of masks (fv3_xppm's ``(smt5 | smt5_m1).astype(q.dtype)``) is as
             # LOGICAL as the comparisons it joins; its operands are locals, so their dtype is not in
             # this table yet and the receiver's own shape is the only evidence. Dropping the cast
             # left Fortran multiplying REAL(8) by LOGICAL(1). ``& | ^ ~`` reject floats in numpy, so
             # the operand is boolean or integer either way and the concrete cast is right for both.
-            if ((isinstance(recv, (ast.Compare, ast.BoolOp)) or bitwise) and isinstance(dt, ast.Attribute)
-                    and dt.attr == "dtype" and isinstance(dt.value, ast.Name)):
+            if (
+                (isinstance(recv, (ast.Compare, ast.BoolOp)) or bitwise)
+                and isinstance(dt, ast.Attribute)
+                and dt.attr == "dtype"
+                and isinstance(dt.value, ast.Name)
+            ):
                 name = self.array_dtypes.get(dt.value.id) or self.default_float or None
             if name is None:
                 return recv
         return ast.copy_location(
-            ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=name, ctx=ast.Load()),
-                     args=[recv],
-                     keywords=[]), node)
+            ast.Call(
+                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=name, ctx=ast.Load()),
+                args=[recv],
+                keywords=[],
+            ),
+            node,
+        )
 
 
 def _match_reshape(node: ast.AST):
@@ -400,9 +487,13 @@ class _ReshapeMethodRewriter(ast.NodeTransformer):
         # reshape; every other kwarg is dropped (the method form has none else).
         keep = [kw for kw in node.keywords if kw.arg == "order"]
         return ast.copy_location(
-            ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="reshape", ctx=ast.Load()),
-                     args=[base, ast.Tuple(elts=elts, ctx=ast.Load())],
-                     keywords=keep), node)
+            ast.Call(
+                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="reshape", ctx=ast.Load()),
+                args=[base, ast.Tuple(elts=elts, ctx=ast.Load())],
+                keywords=keep,
+            ),
+            node,
+        )
 
 
 _FFT_FNS = {"fftn": (False, True), "ifftn": (True, True), "fft": (False, False), "ifft": (True, False)}
@@ -414,8 +505,13 @@ def _match_fft(node: ast.AST):
     if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in _FFT_FNS):
         return None
     f = node.func
-    if (isinstance(f.value, ast.Attribute) and f.value.attr == "fft" and isinstance(f.value.value, ast.Name)
-            and f.value.value.id in ("np", "numpy") and node.args):
+    if (
+        isinstance(f.value, ast.Attribute)
+        and f.value.attr == "fft"
+        and isinstance(f.value.value, ast.Name)
+        and f.value.value.id in ("np", "numpy")
+        and node.args
+    ):
         return f.attr, node.args[0], node.keywords
     return None
 
@@ -453,9 +549,15 @@ class _FftGridReshapeRewriter(ast.NodeTransformer):
             if not shp:
                 return None
             return src.id, shp[0], (shp[1] if len(shp) > 1 else "1")
-        if (isinstance(src, ast.Subscript) and isinstance(src.value, ast.Name) and isinstance(src.slice, ast.Tuple)
-                and len(src.slice.elts) == 2 and isinstance(src.slice.elts[0], ast.Slice)
-                and isinstance(src.slice.elts[1], ast.Constant) and src.slice.elts[1].value is None):
+        if (
+            isinstance(src, ast.Subscript)
+            and isinstance(src.value, ast.Name)
+            and isinstance(src.slice, ast.Tuple)
+            and len(src.slice.elts) == 2
+            and isinstance(src.slice.elts[0], ast.Slice)
+            and isinstance(src.slice.elts[1], ast.Constant)
+            and src.slice.elts[1].value is None
+        ):
             shp = self.shape_table.get(src.value.id)
             if not shp or len(shp) != 1:
                 return None
@@ -469,8 +571,13 @@ class _FftGridReshapeRewriter(ast.NodeTransformer):
         rhs = node.value
         # Optional trailing ``[:, k]`` column select.
         col_k = None
-        if (isinstance(rhs, ast.Subscript) and isinstance(rhs.slice, ast.Tuple) and len(rhs.slice.elts) == 2
-                and isinstance(rhs.slice.elts[0], ast.Slice) and isinstance(rhs.slice.elts[1], ast.Constant)):
+        if (
+            isinstance(rhs, ast.Subscript)
+            and isinstance(rhs.slice, ast.Tuple)
+            and len(rhs.slice.elts) == 2
+            and isinstance(rhs.slice.elts[0], ast.Slice)
+            and isinstance(rhs.slice.elts[1], ast.Constant)
+        ):
             col_k = rhs.slice.elts[1].value
             chain = rhs.value
         else:
@@ -495,7 +602,7 @@ class _FftGridReshapeRewriter(ast.NodeTransformer):
             return node
         src_name, M, C = mc
         grid_dims = [ast.unparse(e) for e in grid_elts[:-1]]
-        grid_shape = tuple(grid_dims) + (C, )
+        grid_shape = tuple(grid_dims) + (C,)
         n = self.counter[0]
         self.counter[0] += 3
         g, f, o = f"__fg{n}", f"__ff{n}", f"__fo{n}"
@@ -506,37 +613,42 @@ class _FftGridReshapeRewriter(ast.NodeTransformer):
         def _tuple(toks):
             return ast.Tuple(elts=[_tok(t) for t in toks], ctx=ast.Load())
 
-        reshape_g = ast.Assign(targets=[ast.Name(id=g, ctx=ast.Store())],
-                               value=ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()),
-                                                                 attr="reshape",
-                                                                 ctx=ast.Load()),
-                                              args=[ast.Name(id=src_name, ctx=ast.Load()),
-                                                    _tuple(grid_shape)],
-                                              keywords=[]))
-        fft_call = ast.Assign(targets=[ast.Name(id=f, ctx=ast.Store())],
-                              value=ast.Call(func=ast.Attribute(value=ast.Attribute(value=ast.Name(id="np",
-                                                                                                   ctx=ast.Load()),
-                                                                                    attr="fft",
-                                                                                    ctx=ast.Load()),
-                                                                attr=fn_name,
-                                                                ctx=ast.Load()),
-                                             args=[ast.Name(id=g, ctx=ast.Load())],
-                                             keywords=fft_kw))
+        reshape_g = ast.Assign(
+            targets=[ast.Name(id=g, ctx=ast.Store())],
+            value=ast.Call(
+                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="reshape", ctx=ast.Load()),
+                args=[ast.Name(id=src_name, ctx=ast.Load()), _tuple(grid_shape)],
+                keywords=[],
+            ),
+        )
+        fft_call = ast.Assign(
+            targets=[ast.Name(id=f, ctx=ast.Store())],
+            value=ast.Call(
+                func=ast.Attribute(
+                    value=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="fft", ctx=ast.Load()),
+                    attr=fn_name,
+                    ctx=ast.Load(),
+                ),
+                args=[ast.Name(id=g, ctx=ast.Load())],
+                keywords=fft_kw,
+            ),
+        )
         # Output reshape: drop the singleton column when the chain ends ``[:, 0]``
         # (only valid for C == 1, the single-column case); else keep (M, C).
         if col_k is not None:
             if str(C) != "1" or col_k != 0:
                 return node
-            out_shape = (M, )
+            out_shape = (M,)
         else:
             out_shape = (M, C)
-        reshape_o = ast.Assign(targets=[ast.Name(id=o, ctx=ast.Store())],
-                               value=ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()),
-                                                                 attr="reshape",
-                                                                 ctx=ast.Load()),
-                                              args=[ast.Name(id=f, ctx=ast.Load()),
-                                                    _tuple(out_shape)],
-                                              keywords=[]))
+        reshape_o = ast.Assign(
+            targets=[ast.Name(id=o, ctx=ast.Store())],
+            value=ast.Call(
+                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="reshape", ctx=ast.Load()),
+                args=[ast.Name(id=f, ctx=ast.Load()), _tuple(out_shape)],
+                keywords=[],
+            ),
+        )
         for nm, shp in ((g, grid_shape), (f, grid_shape), (o, out_shape)):
             self.shape_table[nm] = shp
             self.local_dtypes[nm] = "complex128"
@@ -588,10 +700,12 @@ class _ScatterAtRewriter(ast.NodeTransformer):
     #: max/min ufuncs -> a builtin folded into ``t[i] = fn(t[i], v)``.
     _FOLD = {"maximum": "max", "minimum": "min"}
 
-    def __init__(self,
-                 shapes: Dict[str, List[str]],
-                 bool_names: Optional[Set[str]] = None,
-                 wrapper_defs: Optional[Dict[str, ast.expr]] = None):
+    def __init__(
+        self,
+        shapes: Dict[str, List[str]],
+        bool_names: Optional[Set[str]] = None,
+        wrapper_defs: Optional[Dict[str, ast.expr]] = None,
+    ):
         self.shapes = shapes
         #: Names proven boolean (:func:`_collect_bool_names`) -- a boolean array
         #: used as the index of a ``.at`` scatter is a MASK, not a gather; letting
@@ -611,8 +725,13 @@ class _ScatterAtRewriter(ast.NodeTransformer):
     @staticmethod
     def _is_ufunc_at(func: ast.AST):
         # Attribute chain ``np.<op>.at`` -> Attribute(Attribute(Name('np'), op), 'at')
-        if (isinstance(func, ast.Attribute) and func.attr == "at" and isinstance(func.value, ast.Attribute)
-                and isinstance(func.value.value, ast.Name) and func.value.value.id in ("np", "numpy")):
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr == "at"
+            and isinstance(func.value, ast.Attribute)
+            and isinstance(func.value.value, ast.Name)
+            and func.value.value.id in ("np", "numpy")
+        ):
             return func.value.attr
         return None
 
@@ -636,8 +755,11 @@ class _ScatterAtRewriter(ast.NodeTransformer):
                 base, shape_arg = expr.func.value, expr.args[0]
             else:
                 return None
-            elt = (shape_arg.elts[0] if isinstance(shape_arg,
-                                                   (ast.Tuple, ast.List)) and len(shape_arg.elts) == 1 else shape_arg)
+            elt = (
+                shape_arg.elts[0]
+                if isinstance(shape_arg, (ast.Tuple, ast.List)) and len(shape_arg.elts) == 1
+                else shape_arg
+            )
             return base if _const_int(elt) == -1 else None
         if expr.func.attr == "broadcast_to" and is_np and len(expr.args) == 2:
             return expr.args[0]
@@ -672,8 +794,10 @@ class _ScatterAtRewriter(ast.NodeTransformer):
     def _refuse_boolean_index(self, idx: ast.expr, op: str) -> None:
         for n in ast.walk(idx):
             if isinstance(n, ast.Name) and n.id in self.bool_names:
-                raise NotImplementedError(f"np.{op}.at index {ast.unparse(idx)!r} reads boolean {n.id!r} -- "
-                                          "a boolean array there is a MASK, not a gather")
+                raise NotImplementedError(
+                    f"np.{op}.at index {ast.unparse(idx)!r} reads boolean {n.id!r} -- "
+                    "a boolean array there is a MASK, not a gather"
+                )
 
     def _index_extent(self, idx: ast.expr, op: str) -> Tuple[ast.expr, Tuple]:
         """The peeled index expression and its per-axis extent (shape tokens)."""
@@ -686,7 +810,8 @@ class _ScatterAtRewriter(ast.NodeTransformer):
         ext = _iter_extent_of(peeled, self.shapes)
         if ext is None:
             raise NotImplementedError(
-                f"np.{op}.at: cannot determine scatter extent for index expression {ast.unparse(idx)!r}")
+                f"np.{op}.at: cannot determine scatter extent for index expression {ast.unparse(idx)!r}"
+            )
         return peeled, tuple(ast.unparse(e) for e in ext)
 
     def _val_at(self, vals: ast.expr, iters: List[ast.expr]) -> ast.expr:
@@ -705,8 +830,9 @@ class _ScatterAtRewriter(ast.NodeTransformer):
             # ``flux``, whose shape this rewriter never needed to know).
             slot = iters[0] if len(iters) == 1 else ast.Tuple(elts=list(iters), ctx=ast.Load())
             return ast.Subscript(value=ast.Name(id=peeled.id, ctx=ast.Load()), slice=slot, ctx=ast.Load())
-        raise NotImplementedError("np.<op>.at value must be an array name, its negation, a scalar constant, "
-                                  "or a resolvable array expression")
+        raise NotImplementedError(
+            "np.<op>.at value must be an array name, its negation, a scalar constant, or a resolvable array expression"
+        )
 
     @staticmethod
     def _is_full_slice(e: ast.expr) -> bool:
@@ -725,11 +851,14 @@ class _ScatterAtRewriter(ast.NodeTransformer):
             return
         if isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name):
             lead = list(target.slice.elts) if isinstance(target.slice, ast.Tuple) else [target.slice]
-            if sum(1 for e in lead if self._is_full_slice(e)) == 1 and \
-                    all(self._is_full_slice(e) or not isinstance(e, ast.Slice) for e in lead):
+            if sum(1 for e in lead if self._is_full_slice(e)) == 1 and all(
+                self._is_full_slice(e) or not isinstance(e, ast.Slice) for e in lead
+            ):
                 return
-        raise NotImplementedError(f"np.{op}.at needs a Name target or a slice view of one with exactly one "
-                                  f"full-slice axis, not {ast.unparse(target)!r}")
+        raise NotImplementedError(
+            f"np.{op}.at needs a Name target or a slice view of one with exactly one "
+            f"full-slice axis, not {ast.unparse(target)!r}"
+        )
 
     def _write_through_target(self, target: ast.expr, idx_expr: ast.expr, ctx: ast.expr_context) -> ast.Subscript:
         """``target``'s element-write Subscript with ``idx_expr`` substituted at
@@ -775,7 +904,7 @@ class _ScatterAtRewriter(ast.NodeTransformer):
         # 1-D index keeps the flat ``__sat{n}`` name (the common edge_laplacian
         # case); a multi-D index (lulesh nodelist, or a flattened ``.reshape(-1)``
         # peeled back to its 2-D base) suffixes one iter per axis.
-        iters = ([f"__sat{self._n}"] if len(bound) == 1 else [f"__sat{self._n}_{d}" for d in range(len(bound))])
+        iters = [f"__sat{self._n}"] if len(bound) == 1 else [f"__sat{self._n}_{d}" for d in range(len(bound))]
         iter_nodes = [ast.Name(id=i, ctx=ast.Load()) for i in iters]
         # A scatter whose target rows are BLOCKS rather than scalars: the index picks ONE leading
         # axis and every remaining axis belongs to the target and the value alike. Iterated over the
@@ -800,26 +929,30 @@ class _ScatterAtRewriter(ast.NodeTransformer):
                 return base
             lead = list(base.slice.elts) if isinstance(base.slice, ast.Tuple) else [base.slice]
             elts = [copy.deepcopy(e) for e in lead] + [copy.deepcopy(t) for t in trail_nodes]
-            return ast.Subscript(value=ast.Name(id=base.value.id, ctx=ast.Load()),
-                                 slice=ast.Tuple(elts=elts, ctx=ast.Load()),
-                                 ctx=ctx)
+            return ast.Subscript(
+                value=ast.Name(id=base.value.id, ctx=ast.Load()), slice=ast.Tuple(elts=elts, ctx=ast.Load()), ctx=ctx
+            )
 
         if op in self._AUG:
             stmt: ast.stmt = ast.AugAssign(target=_cell(ast.Store()), op=self._AUG[op](), value=val_k)
         else:  # maximum / minimum -> t[i] = fn(t[i], v)
-            stmt = ast.Assign(targets=[_cell(ast.Store())],
-                              value=ast.Call(func=ast.Name(id=self._FOLD[op], ctx=ast.Load()),
-                                             args=[_cell(ast.Load()), val_k],
-                                             keywords=[]))
+            stmt = ast.Assign(
+                targets=[_cell(ast.Store())],
+                value=ast.Call(
+                    func=ast.Name(id=self._FOLD[op], ctx=ast.Load()), args=[_cell(ast.Load()), val_k], keywords=[]
+                ),
+            )
         body: List[ast.stmt] = [stmt]
         for it, ext in zip(reversed(iters + trail_iters), reversed(tuple(bound) + trail)):  # nest deepest-last
             body = [
-                ast.For(target=ast.Name(id=it, ctx=ast.Store()),
-                        iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()),
-                                      args=[_const_or_name_token(ext)],
-                                      keywords=[]),
-                        body=body,
-                        orelse=[])
+                ast.For(
+                    target=ast.Name(id=it, ctx=ast.Store()),
+                    iter=ast.Call(
+                        func=ast.Name(id="range", ctx=ast.Load()), args=[_const_or_name_token(ext)], keywords=[]
+                    ),
+                    body=body,
+                    orelse=[],
+                )
             ]
         return ast.copy_location(body[0], node)
 
@@ -868,25 +1001,27 @@ class _ScatterAtRewriter(ast.NodeTransformer):
         if op in self._AUG:
             stmt: ast.stmt = ast.AugAssign(target=lhs, op=self._AUG[op](), value=val_s)
         else:  # maximum / minimum -> t[i] = fn(t[i], v)
-            cur = ast.Subscript(value=ast.Name(id=target.id, ctx=ast.Load()),
-                                slice=ast.Tuple(elts=list(idx_scalars), ctx=ast.Load()),
-                                ctx=ast.Load())
-            stmt = ast.Assign(targets=[lhs],
-                              value=ast.Call(func=ast.Name(id=self._FOLD[op], ctx=ast.Load()),
-                                             args=[cur, val_s],
-                                             keywords=[]))
+            cur = ast.Subscript(
+                value=ast.Name(id=target.id, ctx=ast.Load()),
+                slice=ast.Tuple(elts=list(idx_scalars), ctx=ast.Load()),
+                ctx=ast.Load(),
+            )
+            stmt = ast.Assign(
+                targets=[lhs],
+                value=ast.Call(func=ast.Name(id=self._FOLD[op], ctx=ast.Load()), args=[cur, val_s], keywords=[]),
+            )
         body: List[ast.stmt] = [stmt]
         for d in reversed(range(len(ext))):
             # ``_iter_extent_of`` already returns each extent as an AST node
             # (a Name like ``nproma`` or a computed length), so it is the
             # loop's ``range`` bound directly.
             body = [
-                ast.For(target=ast.Name(id=iters[d], ctx=ast.Store()),
-                        iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()),
-                                      args=[copy.deepcopy(ext[d])],
-                                      keywords=[]),
-                        body=body,
-                        orelse=[])
+                ast.For(
+                    target=ast.Name(id=iters[d], ctx=ast.Store()),
+                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[copy.deepcopy(ext[d])], keywords=[]),
+                    body=body,
+                    orelse=[],
+                )
             ]
         return ast.copy_location(body[0], node)
 
@@ -910,8 +1045,12 @@ class _NpAliasRewriter(ast.NodeTransformer):
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
         f = node.func
-        if (isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id in ("np", "numpy")
-                and f.attr in _NP_FUNC_ALIASES):
+        if (
+            isinstance(f, ast.Attribute)
+            and isinstance(f.value, ast.Name)
+            and f.value.id in ("np", "numpy")
+            and f.attr in _NP_FUNC_ALIASES
+        ):
             f.attr = _NP_FUNC_ALIASES[f.attr]
         return node
 
@@ -935,9 +1074,12 @@ class _ConditionalNoneAllocRewriter(ast.NodeTransformer):
         # conditional alloc into one of these must NOT be forced, so record them first.
         checked = set()
         for cmp in ast.walk(node):
-            if (isinstance(cmp, ast.Compare) and isinstance(cmp.left, ast.Name)
-                    and any(isinstance(op, (ast.Is, ast.IsNot)) for op in cmp.ops)
-                    and any(isinstance(c, ast.Constant) and c.value is None for c in cmp.comparators)):
+            if (
+                isinstance(cmp, ast.Compare)
+                and isinstance(cmp.left, ast.Name)
+                and any(isinstance(op, (ast.Is, ast.IsNot)) for op in cmp.ops)
+                and any(isinstance(c, ast.Constant) and c.value is None for c in cmp.comparators)
+            ):
                 checked.add(cmp.left.id)
         self._none_checked = checked
         self.generic_visit(node)
@@ -945,8 +1087,12 @@ class _ConditionalNoneAllocRewriter(ast.NodeTransformer):
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         self.generic_visit(node)
-        if not (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and isinstance(node.value, ast.IfExp)
-                and node.targets[0].id not in vars(self).get("_none_checked", set())):
+        if not (
+            len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.IfExp)
+            and node.targets[0].id not in vars(self).get("_none_checked", set())
+        ):
             return node
         ifexp = node.value
         body_none = isinstance(ifexp.body, ast.Constant) and ifexp.body.value is None
@@ -966,8 +1112,14 @@ class _MatmulCallRewriter(ast.NodeTransformer):
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
         f = node.func
-        if (isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id in ("np", "numpy")
-                and f.attr == "matmul" and len(node.args) == 2 and not node.keywords):
+        if (
+            isinstance(f, ast.Attribute)
+            and isinstance(f.value, ast.Name)
+            and f.value.id in ("np", "numpy")
+            and f.attr == "matmul"
+            and len(node.args) == 2
+            and not node.keywords
+        ):
             return ast.copy_location(ast.BinOp(left=node.args[0], op=ast.MatMult(), right=node.args[1]), node)
         return node
 
@@ -995,8 +1147,7 @@ class _ScalarTimesMatmulRewriter(ast.NodeTransformer):
     def visit_BinOp(self, node: ast.BinOp) -> ast.AST:
         self.generic_visit(node)
         # Pattern: ``(scalar * Name) @ B`` -- left is BinOp(Mult), right is anything.
-        if (isinstance(node.op, ast.MatMult) and isinstance(node.left, ast.BinOp)
-                and isinstance(node.left.op, ast.Mult)):
+        if isinstance(node.op, ast.MatMult) and isinstance(node.left, ast.BinOp) and isinstance(node.left.op, ast.Mult):
             inner = node.left
             scaled_name = None
             scalar = None
@@ -1014,32 +1165,42 @@ class _ScalarTimesMatmulRewriter(ast.NodeTransformer):
                     self.temps[temp] = tuple(shape)
                     self.shape_table[temp] = shape
                     iters = [f"__si{i}" for i in range(len(shape))]
-                    idx = (ast.Name(id=iters[0], ctx=ast.Load()) if len(iters) == 1 else ast.Tuple(
-                        elts=[ast.Name(id=i, ctx=ast.Load()) for i in iters], ctx=ast.Load()))
+                    idx = (
+                        ast.Name(id=iters[0], ctx=ast.Load())
+                        if len(iters) == 1
+                        else ast.Tuple(elts=[ast.Name(id=i, ctx=ast.Load()) for i in iters], ctx=ast.Load())
+                    )
                     body = [
-                        ast.Assign(targets=[
-                            ast.Subscript(value=ast.Name(id=temp, ctx=ast.Load()), slice=idx, ctx=ast.Store())
-                        ],
-                                   value=ast.BinOp(left=scalar,
-                                                   op=ast.Mult(),
-                                                   right=ast.Subscript(value=ast.Name(id=scaled_name.id,
-                                                                                      ctx=ast.Load()),
-                                                                       slice=idx,
-                                                                       ctx=ast.Load())))
+                        ast.Assign(
+                            targets=[
+                                ast.Subscript(value=ast.Name(id=temp, ctx=ast.Load()), slice=idx, ctx=ast.Store())
+                            ],
+                            value=ast.BinOp(
+                                left=scalar,
+                                op=ast.Mult(),
+                                right=ast.Subscript(
+                                    value=ast.Name(id=scaled_name.id, ctx=ast.Load()), slice=idx, ctx=ast.Load()
+                                ),
+                            ),
+                        )
                     ]
                     out = body
                     for v, b in zip(reversed(iters), reversed(shape)):
                         out = [
-                            ast.For(target=ast.Name(id=v, ctx=ast.Store()),
-                                    iter=ast.Call(
-                                        func=ast.Name(id="range", ctx=ast.Load()),
-                                        args=[
-                                            ast.Name(id=b, ctx=ast.Load()) if not b.isdigit() else ast.Constant(
-                                                value=int(b))
-                                        ],
-                                        keywords=[]),
-                                    body=out,
-                                    orelse=[])
+                            ast.For(
+                                target=ast.Name(id=v, ctx=ast.Store()),
+                                iter=ast.Call(
+                                    func=ast.Name(id="range", ctx=ast.Load()),
+                                    args=[
+                                        ast.Name(id=b, ctx=ast.Load())
+                                        if not b.isdigit()
+                                        else ast.Constant(value=int(b))
+                                    ],
+                                    keywords=[],
+                                ),
+                                body=out,
+                                orelse=[],
+                            )
                         ]
                     self.pre_stmts.extend(out)
                     # Replace ``alpha * A`` in this MatMult with the temp.
@@ -1070,23 +1231,30 @@ class _ArrayIterRewriter(ast.NodeTransformer):
 
     def visit_For(self, node: ast.For) -> ast.AST:
         self.generic_visit(node)
-        if (isinstance(node.iter, ast.Name) and isinstance(node.target, ast.Name)):
+        if isinstance(node.iter, ast.Name) and isinstance(node.target, ast.Name):
             shape = self.shape_table.get(node.iter.id)
             if shape:
                 self._counter[0] += 1
                 iv = f"__ai{self._counter[0]}"
                 self.var_to_array[node.target.id] = node.iter.id
                 # Build the per-iteration assignment ``x = arr[__i]``.
-                preamble = ast.Assign(targets=[ast.Name(id=node.target.id, ctx=ast.Store())],
-                                      value=ast.Subscript(value=ast.Name(id=node.iter.id, ctx=ast.Load()),
-                                                          slice=ast.Name(id=iv, ctx=ast.Load()),
-                                                          ctx=ast.Load()))
-                bound = (ast.Constant(
-                    value=int(shape[0])) if shape[0].isdigit() else ast.Name(id=shape[0], ctx=ast.Load()))
-                return ast.For(target=ast.Name(id=iv, ctx=ast.Store()),
-                               iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[bound], keywords=[]),
-                               body=[preamble] + node.body,
-                               orelse=node.orelse)
+                preamble = ast.Assign(
+                    targets=[ast.Name(id=node.target.id, ctx=ast.Store())],
+                    value=ast.Subscript(
+                        value=ast.Name(id=node.iter.id, ctx=ast.Load()),
+                        slice=ast.Name(id=iv, ctx=ast.Load()),
+                        ctx=ast.Load(),
+                    ),
+                )
+                bound = (
+                    ast.Constant(value=int(shape[0])) if shape[0].isdigit() else ast.Name(id=shape[0], ctx=ast.Load())
+                )
+                return ast.For(
+                    target=ast.Name(id=iv, ctx=ast.Store()),
+                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[bound], keywords=[]),
+                    body=[preamble] + node.body,
+                    orelse=node.orelse,
+                )
         return node
 
 
@@ -1117,18 +1285,26 @@ class _EnumerateZipRewriter(ast.NodeTransformer):
             # sequence (the finite-difference-stencil idiom ``enumerate(_CW)``):
             # unroll to straight-line ``m = s+i; w = <elt i>; <body>`` blocks so the
             # element values are compile-time constants (an axis/shift a roll needs).
-            if (it.func.id == "enumerate" and it.args and isinstance(it.args[0], (ast.Tuple, ast.List))
-                    and isinstance(node.target, ast.Tuple) and len(node.target.elts) == 2):
+            if (
+                it.func.id == "enumerate"
+                and it.args
+                and isinstance(it.args[0], (ast.Tuple, ast.List))
+                and isinstance(node.target, ast.Tuple)
+                and len(node.target.elts) == 2
+            ):
                 idx_name, val_name = node.target.elts[0], node.target.elts[1]
                 start = self._enumerate_start(it)
                 out: List[ast.stmt] = []
                 for i, elt in enumerate(it.args[0].elts):
                     out.append(
-                        ast.Assign(targets=[ast.Name(id=idx_name.id, ctx=ast.Store())],
-                                   value=ast.BinOp(left=copy.deepcopy(start), op=ast.Add(),
-                                                   right=ast.Constant(value=i))))
-                    out.append(ast.Assign(targets=[ast.Name(id=val_name.id, ctx=ast.Store())],
-                                          value=copy.deepcopy(elt)))
+                        ast.Assign(
+                            targets=[ast.Name(id=idx_name.id, ctx=ast.Store())],
+                            value=ast.BinOp(left=copy.deepcopy(start), op=ast.Add(), right=ast.Constant(value=i)),
+                        )
+                    )
+                    out.append(
+                        ast.Assign(targets=[ast.Name(id=val_name.id, ctx=ast.Store())], value=copy.deepcopy(elt))
+                    )
                     out.extend(copy.deepcopy(stmt) for stmt in node.body)
                 return out
             if it.func.id == "enumerate" and it.args and isinstance(it.args[0], ast.Name):
@@ -1139,41 +1315,62 @@ class _EnumerateZipRewriter(ast.NodeTransformer):
                     start = self._enumerate_start(it)
                     ei = "__ei"
                     # idx = start + __ei ; val = arr[__ei]
-                    idx_assign = ast.Assign(targets=[ast.Name(id=idx_name.id, ctx=ast.Store())],
-                                            value=ast.BinOp(left=copy.deepcopy(start),
-                                                            op=ast.Add(),
-                                                            right=ast.Name(id=ei, ctx=ast.Load())))
-                    val_assign = ast.Assign(targets=[ast.Name(id=val_name.id, ctx=ast.Store())],
-                                            value=ast.Subscript(value=ast.Name(id=arr.id, ctx=ast.Load()),
-                                                                slice=ast.Name(id=ei, ctx=ast.Load()),
-                                                                ctx=ast.Load()))
-                    new_for = ast.For(target=ast.Name(id=ei, ctx=ast.Store()),
-                                      iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()),
-                                                    args=[ast.Name(id=shape[0], ctx=ast.Load())],
-                                                    keywords=[]),
-                                      body=[idx_assign, val_assign] + node.body,
-                                      orelse=node.orelse)
+                    idx_assign = ast.Assign(
+                        targets=[ast.Name(id=idx_name.id, ctx=ast.Store())],
+                        value=ast.BinOp(left=copy.deepcopy(start), op=ast.Add(), right=ast.Name(id=ei, ctx=ast.Load())),
+                    )
+                    val_assign = ast.Assign(
+                        targets=[ast.Name(id=val_name.id, ctx=ast.Store())],
+                        value=ast.Subscript(
+                            value=ast.Name(id=arr.id, ctx=ast.Load()),
+                            slice=ast.Name(id=ei, ctx=ast.Load()),
+                            ctx=ast.Load(),
+                        ),
+                    )
+                    new_for = ast.For(
+                        target=ast.Name(id=ei, ctx=ast.Store()),
+                        iter=ast.Call(
+                            func=ast.Name(id="range", ctx=ast.Load()),
+                            args=[ast.Name(id=shape[0], ctx=ast.Load())],
+                            keywords=[],
+                        ),
+                        body=[idx_assign, val_assign] + node.body,
+                        orelse=node.orelse,
+                    )
                     return new_for
             if it.func.id == "zip" and len(it.args) == 2 and all(isinstance(a, ast.Name) for a in it.args):
                 a, b = it.args
                 shape = self.shape_table.get(a.id)
                 if shape and isinstance(node.target, ast.Tuple) and len(node.target.elts) == 2:
                     x_name, y_name = node.target.elts[0], node.target.elts[1]
-                    new_for = ast.For(target=ast.Name(id="__zi", ctx=ast.Store()),
-                                      iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()),
-                                                    args=[ast.Name(id=shape[0], ctx=ast.Load())],
-                                                    keywords=[]),
-                                      body=[
-                                          ast.Assign(targets=[ast.Name(id=x_name.id, ctx=ast.Store())],
-                                                     value=ast.Subscript(value=ast.Name(id=a.id, ctx=ast.Load()),
-                                                                         slice=ast.Name(id="__zi", ctx=ast.Load()),
-                                                                         ctx=ast.Load())),
-                                          ast.Assign(targets=[ast.Name(id=y_name.id, ctx=ast.Store())],
-                                                     value=ast.Subscript(value=ast.Name(id=b.id, ctx=ast.Load()),
-                                                                         slice=ast.Name(id="__zi", ctx=ast.Load()),
-                                                                         ctx=ast.Load())),
-                                      ] + node.body,
-                                      orelse=node.orelse)
+                    new_for = ast.For(
+                        target=ast.Name(id="__zi", ctx=ast.Store()),
+                        iter=ast.Call(
+                            func=ast.Name(id="range", ctx=ast.Load()),
+                            args=[ast.Name(id=shape[0], ctx=ast.Load())],
+                            keywords=[],
+                        ),
+                        body=[
+                            ast.Assign(
+                                targets=[ast.Name(id=x_name.id, ctx=ast.Store())],
+                                value=ast.Subscript(
+                                    value=ast.Name(id=a.id, ctx=ast.Load()),
+                                    slice=ast.Name(id="__zi", ctx=ast.Load()),
+                                    ctx=ast.Load(),
+                                ),
+                            ),
+                            ast.Assign(
+                                targets=[ast.Name(id=y_name.id, ctx=ast.Store())],
+                                value=ast.Subscript(
+                                    value=ast.Name(id=b.id, ctx=ast.Load()),
+                                    slice=ast.Name(id="__zi", ctx=ast.Load()),
+                                    ctx=ast.Load(),
+                                ),
+                            ),
+                        ]
+                        + node.body,
+                        orelse=node.orelse,
+                    )
                     return new_for
         return node
 
@@ -1218,9 +1415,11 @@ class _TransposeRewriter(ast.NodeTransformer):
         # materialises a non-Name argument (the matmul) into a temp before
         # ``expand_transpose`` lowers it, so the transpose never survives as an
         # attribute the per-element scalarizer would misapply.
-        return ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="transpose", ctx=ast.Load()),
-                        args=[base],
-                        keywords=[])
+        return ast.Call(
+            func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="transpose", ctx=ast.Load()),
+            args=[base],
+            keywords=[],
+        )
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
@@ -1239,9 +1438,13 @@ class _TransposeRewriter(ast.NodeTransformer):
         else:
             args = [base]  # x.transpose() -- full reverse
         return ast.copy_location(
-            ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="transpose", ctx=ast.Load()),
-                     args=args,
-                     keywords=[]), node)
+            ast.Call(
+                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="transpose", ctx=ast.Load()),
+                args=args,
+                keywords=[],
+            ),
+            node,
+        )
 
 
 def _const_int_index(node: ast.AST) -> Optional[int]:
@@ -1250,8 +1453,12 @@ def _const_int_index(node: ast.AST) -> Optional[int]:
     literal index as ``UnaryOp(USub, Constant)``, not a signed ``Constant``."""
     if isinstance(node, ast.Constant) and isinstance(node.value, int):
         return node.value
-    if (isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub) and isinstance(node.operand, ast.Constant)
-            and isinstance(node.operand.value, int)):
+    if (
+        isinstance(node, ast.UnaryOp)
+        and isinstance(node.op, ast.USub)
+        and isinstance(node.operand, ast.Constant)
+        and isinstance(node.operand.value, int)
+    ):
         return -node.operand.value
     return None
 
@@ -1307,17 +1514,24 @@ class _ShapeMidExpressionRewriter(ast.NodeTransformer):
         # the children -- otherwise ``visit_Attribute`` would rewrite
         # the ``arr.shape`` inner node to a Tuple and the pattern
         # match below would miss.
-        if (isinstance(node.value, ast.Attribute) and node.value.attr == "shape"
-                and isinstance(node.value.value, ast.Name) and isinstance(node.slice, ast.Constant)
-                and isinstance(node.slice.value, int)):
+        if (
+            isinstance(node.value, ast.Attribute)
+            and node.value.attr == "shape"
+            and isinstance(node.value.value, ast.Name)
+            and isinstance(node.slice, ast.Constant)
+            and isinstance(node.slice.value, int)
+        ):
             shape = self.arrays_shapes.get(node.value.value.id)
             if shape and 0 <= node.slice.value < len(shape):
                 return _token_to_ast(shape[node.slice.value])
         # ``<array-expr>.shape[k]`` on a Subscript or CALL base (``v[..., None]``,
         # ``np.maximum(h, 0.0)``): resolve the base's static extent (newaxis / Ellipsis
         # aware) and pick axis ``k`` (negative indices allowed). Unresolvable -> left intact.
-        if (isinstance(node.value, ast.Attribute) and node.value.attr == "shape"
-                and isinstance(node.value.value, (ast.Subscript, ast.Call))):
+        if (
+            isinstance(node.value, ast.Attribute)
+            and node.value.attr == "shape"
+            and isinstance(node.value.value, (ast.Subscript, ast.Call))
+        ):
             k = _const_int_index(node.slice)
             if k is not None:
                 ext = _iter_extent_of(node.value.value, self.arrays_shapes)
@@ -1338,8 +1552,13 @@ class _ShapeMidExpressionRewriter(ast.NodeTransformer):
         # the CHARACTER-length intrinsic, so the literal call fails to compile;
         # the python backends (numba / pythran / jax) run the body verbatim and
         # keep the builtin, so they never reach this native-only rewriter.
-        if (isinstance(node.func, ast.Name) and node.func.id == "len" and len(node.args) == 1 and not node.keywords
-                and isinstance(node.args[0], ast.Name)):
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "len"
+            and len(node.args) == 1
+            and not node.keywords
+            and isinstance(node.args[0], ast.Name)
+        ):
             shape = self.arrays_shapes.get(node.args[0].id)
             if shape:
                 return _token_to_ast(shape[0])
@@ -1453,17 +1672,25 @@ class _BuiltinCastRewriter(ast.NodeTransformer):
 
     @staticmethod
     def _keep_float_as_cast(operand: ast.AST) -> ast.AST:
-        if (isinstance(operand, ast.Call) and isinstance(operand.func, ast.Name) and operand.func.id == "float"
-                and len(operand.args) == 1):
+        if (
+            isinstance(operand, ast.Call)
+            and isinstance(operand.func, ast.Name)
+            and operand.func.id == "float"
+            and len(operand.args) == 1
+        ):
             return ast.copy_location(
-                ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="float64", ctx=ast.Load()),
-                         args=list(operand.args),
-                         keywords=[]), operand)
+                ast.Call(
+                    func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="float64", ctx=ast.Load()),
+                    args=list(operand.args),
+                    keywords=[],
+                ),
+                operand,
+            )
         return operand
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
-        if (isinstance(node.func, ast.Name) and node.func.id == "float" and len(node.args) == 1):
+        if isinstance(node.func, ast.Name) and node.func.id == "float" and len(node.args) == 1:
             return node.args[0]
         return node
 
@@ -1525,14 +1752,21 @@ class _TrueDivisionPromoter(ast.NodeTransformer):
     @staticmethod
     def _as_f64(node: ast.expr) -> ast.expr:
         return ast.copy_location(
-            ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="float64", ctx=ast.Load()),
-                     args=[node],
-                     keywords=[]), node)
+            ast.Call(
+                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="float64", ctx=ast.Load()),
+                args=[node],
+                keywords=[],
+            ),
+            node,
+        )
 
     def visit_BinOp(self, node: ast.BinOp) -> ast.AST:
         self.generic_visit(node)
-        if (isinstance(node.op, ast.Div) and _is_integer_expr(node.left, self.local_dtypes, self.array_names)
-                and _is_integer_expr(node.right, self.local_dtypes, self.array_names)):
+        if (
+            isinstance(node.op, ast.Div)
+            and _is_integer_expr(node.left, self.local_dtypes, self.array_names)
+            and _is_integer_expr(node.right, self.local_dtypes, self.array_names)
+        ):
             node.left = self._as_f64(node.left)
             node.right = self._as_f64(node.right)
         return node
@@ -1561,8 +1795,7 @@ class _MathRewriter(ast.NodeTransformer):
 
     def visit_Call(self, node: ast.Call):
         self.generic_visit(node)
-        if isinstance(node.func, ast.Attribute) and \
-                isinstance(node.func.value, ast.Name):
+        if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
             mod = node.func.value.id
             name = node.func.attr
             if mod in ("np", "numpy") and name == "clip" and len(node.args) == 3:
@@ -1596,7 +1829,7 @@ class _MathRewriter(ast.NodeTransformer):
         ``<math.h>`` constants (also valid in C++).
         """
         self.generic_visit(node)
-        if (isinstance(node.value, ast.Name) and node.value.id == "np"):
+        if isinstance(node.value, ast.Name) and node.value.id == "np":
             if node.attr in _NP_CONSTS:
                 return ast.Constant(value=_NP_CONSTS[node.attr])
             mapping = {
@@ -1620,8 +1853,9 @@ class _MathRewriter(ast.NodeTransformer):
         for bound, fn in ((lo, "fmax"), (hi, "fmin")):
             if isinstance(bound, ast.Constant) and bound.value is None:
                 continue
-            value = ast.copy_location(ast.Call(func=ast.Name(id=fn, ctx=ast.Load()), args=[value, bound], keywords=[]),
-                                      node)
+            value = ast.copy_location(
+                ast.Call(func=ast.Name(id=fn, ctx=ast.Load()), args=[value, bound], keywords=[]), node
+            )
         return value
 
     def _refers_to_array(self, expr: ast.expr) -> bool:
@@ -1648,7 +1882,7 @@ class _MathRewriter(ast.NodeTransformer):
                 return False
             return False
         if isinstance(expr, (ast.BinOp, ast.UnaryOp)):
-            children = ([expr.left, expr.right] if isinstance(expr, ast.BinOp) else [expr.operand])
+            children = [expr.left, expr.right] if isinstance(expr, ast.BinOp) else [expr.operand]
             return any(self._refers_to_array(c) for c in children)
         if isinstance(expr, ast.Call):
             return any(self._refers_to_array(a) for a in expr.args)
@@ -1720,14 +1954,9 @@ def _resolve_shape_token(node: ast.AST, shape_table: Dict[str, Tuple[str, ...]])
     if isinstance(node, ast.BinOp):
         left = _resolve_shape_token(node.left, shape_table)
         right = _resolve_shape_token(node.right, shape_table)
-        op = {
-            ast.Add: "+",
-            ast.Sub: "-",
-            ast.Mult: "*",
-            ast.Div: "/",
-            ast.FloorDiv: "//",
-            ast.Mod: "%"
-        }.get(type(node.op))
+        op = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/", ast.FloorDiv: "//", ast.Mod: "%"}.get(
+            type(node.op)
+        )
         if op is not None:
             return f"({left} {op} {right})"
     return ast.unparse(node)
@@ -1736,9 +1965,14 @@ def _resolve_shape_token(node: ast.AST, shape_table: Dict[str, Tuple[str, ...]])
 def _resolve_arr_shape_subscript(node: ast.AST, shape_table: Dict[str, Tuple[str, ...]]) -> Optional[str]:
     """Return the resolved shape token for ``arr.shape[i]``, or None
     if the form does not match or the source array is unknown."""
-    if not (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Attribute) and node.value.attr == "shape"
-            and isinstance(node.value.value, ast.Name) and isinstance(node.slice, ast.Constant)
-            and isinstance(node.slice.value, int)):
+    if not (
+        isinstance(node, ast.Subscript)
+        and isinstance(node.value, ast.Attribute)
+        and node.value.attr == "shape"
+        and isinstance(node.value.value, ast.Name)
+        and isinstance(node.slice, ast.Constant)
+        and isinstance(node.slice.value, int)
+    ):
         return None
     src = shape_table.get(node.value.value.id)
     if src is None or node.slice.value >= len(src):
@@ -1765,7 +1999,8 @@ def _read_in(name: str, blocks: "Tuple[List[ast.stmt], ...]") -> bool:
                 if isinstance(sub.ctx, (ast.Load, ast.Del)):
                     return True
                 if isinstance(sub.ctx, ast.Store) and any(
-                        isinstance(anc, ast.AugAssign) and anc.target is sub for anc in ast.walk(stmt)):
+                    isinstance(anc, ast.AugAssign) and anc.target is sub for anc in ast.walk(stmt)
+                ):
                     return True
     return False
 
@@ -1825,7 +2060,7 @@ def _live_on_loop_reentry(stmts: List[ast.stmt], i: int, name: str) -> "Tuple[Li
             # binding (`X = X * 2.0`, `X, Y = Y, X`) and that read happens on re-entry. Dropping the
             # whole statement skipped it, so a genuinely ambiguous rebinding was accepted.
             return (prefix[:j], [stmt.value] if isinstance(stmt, ast.Assign) else [])
-    return (prefix, )
+    return (prefix,)
 
 
 def _ssa_rename_reassigned(tree: ast.AST, arrays_shapes: Dict[str, List[str]]) -> None:
@@ -1877,27 +2112,29 @@ def _ssa_rename_reassigned(tree: ast.AST, arrays_shapes: Dict[str, List[str]]) -
         if isinstance(sh, (ast.Tuple, ast.List)):
             shapes[target_id] = tuple(ast.unparse(e) for e in sh.elts)
         elif isinstance(sh, ast.Constant) and isinstance(sh.value, int):
-            shapes[target_id] = (str(sh.value), )
+            shapes[target_id] = (str(sh.value),)
         elif isinstance(sh, ast.Name):
-            shapes[target_id] = (sh.id, )
+            shapes[target_id] = (sh.id,)
 
     def _apply_renames(node: ast.AST, rename_map: Dict[str, str]) -> None:
         if not rename_map:
             return
         for sub in ast.walk(node):
-            if (isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load) and sub.id in rename_map):
+            if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load) and sub.id in rename_map:
                 sub.id = rename_map[sub.id]
 
-    def _walk(stmts: List[ast.stmt],
-              rename_map: Dict[str, str],
-              last_shape: Dict[str, Tuple[str, ...]],
-              version: Dict[str, int],
-              nested: bool = False,
-              live_after: Tuple[List[ast.stmt], ...] = (),
-              loop_body: bool = False,
-              reentry: Tuple[Tuple[List[ast.stmt], int], ...] = (),
-              pin: Optional[Dict[str, int]] = None,
-              general_side: bool = True) -> None:
+    def _walk(
+        stmts: List[ast.stmt],
+        rename_map: Dict[str, str],
+        last_shape: Dict[str, Tuple[str, ...]],
+        version: Dict[str, int],
+        nested: bool = False,
+        live_after: Tuple[List[ast.stmt], ...] = (),
+        loop_body: bool = False,
+        reentry: Tuple[Tuple[List[ast.stmt], int], ...] = (),
+        pin: Optional[Dict[str, int]] = None,
+        general_side: bool = True,
+    ) -> None:
         # Single function-scope rename_map / shape map -- Python does
         # not have block scope for assignments, so a ``bcol = ...``
         # inside sibling for-loops at function scope is the SAME local
@@ -1932,7 +2169,7 @@ def _ssa_rename_reassigned(tree: ast.AST, arrays_shapes: Dict[str, List[str]]) -
                     _apply_renames(stmt.value, rename_map)
 
             # Decide on rename for a plain ``Name = expr`` LHS.
-            if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
+            if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
                 orig = stmt.targets[0].id
                 # Allocator-style RHS -- register the allocated shape
                 # so later reads inside loop bodies resolve their
@@ -2003,7 +2240,8 @@ def _ssa_rename_reassigned(tree: ast.AST, arrays_shapes: Dict[str, List[str]]) -
                                     f"inside conditional control flow and read again afterwards; "
                                     f"which buffer that read sees is not decidable statically. Hoist "
                                     f"the re-binding to function scope, or give the two shapes "
-                                    f"separate names. Bound as {list(version[orig])}, now {shape_toks}.")
+                                    f"separate names. Bound as {list(version[orig])}, now {shape_toks}."
+                                )
                             n = len(version[orig])
                             name_for_shape = f"{orig}__v{n}"
                         version[orig][shape_toks] = name_for_shape
@@ -2032,25 +2270,34 @@ def _ssa_rename_reassigned(tree: ast.AST, arrays_shapes: Dict[str, List[str]]) -
                 # dicts, so it leaked). What executes after the body is everything later in this
                 # block plus whatever follows the enclosing blocks; a loop also re-enters its own
                 # body, so a read at the top sees the previous iteration's binding.
-                inner_after = (stmts[i + 1:], ) + live_after
+                inner_after = (stmts[i + 1 :],) + live_after
                 # A While re-tests its condition and both loop forms may run an `else` after the
                 # body, so both execute AFTER anything the body binds.
                 if isinstance(stmt, ast.While):
-                    inner_after = ([ast.Expr(value=stmt.test)], ) + inner_after
+                    inner_after = ([ast.Expr(value=stmt.test)],) + inner_after
                 if stmt.orelse and isinstance(stmt, (ast.For, ast.While)):
-                    inner_after = (stmt.orelse, ) + inner_after
+                    inner_after = (stmt.orelse,) + inner_after
                 is_loop = isinstance(stmt, (ast.For, ast.While))
                 # Carry the enclosing loops' RE-ENTRY POINTS down, not a pre-truncated prefix: the
                 # truncation depends on the name being minted, which is not known until the mint
                 # site. Without this a rebinding nested one level below a loop body escaped the
                 # guard entirely -- the same miscompile, just deeper.
-                inner_reentry = (reentry + ((stmts, i), )) if loop_body else reentry
+                inner_reentry = (reentry + ((stmts, i),)) if loop_body else reentry
                 branch_pin, zero_on_taken = _branch_pin(stmt)
                 for branch, in_loop, taken in ((stmt.body, is_loop, True), (stmt.orelse, False, False)):
                     inner_pin = {**(pin or {}), **branch_pin}
-                    _walk(branch, dict(rename_map), dict(last_shape), version, True, inner_after, in_loop,
-                          inner_reentry, inner_pin,
-                          bool(branch_pin) and taken is not zero_on_taken)
+                    _walk(
+                        branch,
+                        dict(rename_map),
+                        dict(last_shape),
+                        version,
+                        True,
+                        inner_after,
+                        in_loop,
+                        inner_reentry,
+                        inner_pin,
+                        bool(branch_pin) and taken is not zero_on_taken,
+                    )
 
     dim_aliases = collect_dim_aliases(tree, set(arrays_shapes))
     #: Which shape each buffer is currently DECLARED with, and how general each recorded shape is.
@@ -2096,7 +2343,6 @@ def _substitute_ints(token: str, values: Dict[str, int]) -> str:
     """``token`` with each named scalar replaced by its assumed integer value."""
 
     class _Sub(ast.NodeTransformer):
-
         def visit_Name(self, node: ast.Name) -> ast.AST:
             if node.id not in values:
                 return node
@@ -2105,8 +2351,13 @@ def _substitute_ints(token: str, values: Dict[str, int]) -> str:
     return ast.unparse(ast.fix_missing_locations(_Sub().visit(ast.parse(token, mode="eval").body)))
 
 
-def _shapes_agree_under(known: Tuple[str, ...], candidate: Tuple[str, ...], assume: Dict[str, int],
-                        aliases: Dict[str, str], shapes: Dict[str, Tuple[str, ...]]) -> bool:
+def _shapes_agree_under(
+    known: Tuple[str, ...],
+    candidate: Tuple[str, ...],
+    assume: Dict[str, int],
+    aliases: Dict[str, str],
+    shapes: Dict[str, Tuple[str, ...]],
+) -> bool:
     """Whether two shape token tuples denote the same extent once ``assume`` is substituted.
 
     The pin goes in FIRST, then ``aliases``: one branch spells the extent with the kernel's own
@@ -2116,9 +2367,12 @@ def _shapes_agree_under(known: Tuple[str, ...], candidate: Tuple[str, ...], assu
     it away first would leave the pin with nothing to bind.
     """
     return all(
-        shape_exprs_equal(substitute_dim_aliases(_substitute_ints(a, assume), aliases, shapes),
-                          substitute_dim_aliases(_substitute_ints(b, assume), aliases, shapes))
-        for a, b in zip(known, candidate))
+        shape_exprs_equal(
+            substitute_dim_aliases(_substitute_ints(a, assume), aliases, shapes),
+            substitute_dim_aliases(_substitute_ints(b, assume), aliases, shapes),
+        )
+        for a, b in zip(known, candidate)
+    )
 
 
 def _ctor_shape_arg(call: ast.Call) -> Optional[ast.expr]:
@@ -2134,9 +2388,9 @@ def _ctor_shape_arg(call: ast.Call) -> Optional[ast.expr]:
     return None
 
 
-def _harvest_local_shapes(tree: ast.AST,
-                          shape_table: Dict[str, Tuple[str, ...]],
-                          dtype_table: Optional[Dict[str, str]] = None) -> None:
+def _harvest_local_shapes(
+    tree: ast.AST, shape_table: Dict[str, Tuple[str, ...]], dtype_table: Optional[Dict[str, str]] = None
+) -> None:
     """Pre-scan the body for ``name = np.<alloc>(...)`` and seed the
     shape table with the inferred output shapes.
 
@@ -2186,8 +2440,12 @@ def _harvest_local_shapes(tree: ast.AST,
         # ``nxt = data[partner]`` -- a gather or a slice of an array carries the BASE's dtype.
         # Without it the temp falls to the sweep's float default, and bitonic_sort's int64
         # comparator network round-tripped its values through a float32 temp.
-        if (isinstance(rhs, ast.Subscript) and isinstance(rhs.value, ast.Name) and dtype_table is not None
-                and target.id not in dtype_table):
+        if (
+            isinstance(rhs, ast.Subscript)
+            and isinstance(rhs.value, ast.Name)
+            and dtype_table is not None
+            and target.id not in dtype_table
+        ):
             src_dtype = dtype_table.get(rhs.value.id)
             if src_dtype is not None:
                 dtype_table[target.id] = src_dtype
@@ -2207,8 +2465,12 @@ def _harvest_local_shapes(tree: ast.AST,
                 if _src_shape:
                     shape_table[target.id] = tuple(_src_shape)
             continue
-        if not (isinstance(rhs, ast.Call) and isinstance(rhs.func, ast.Attribute)
-                and isinstance(rhs.func.value, ast.Name) and rhs.func.value.id == "np"):
+        if not (
+            isinstance(rhs, ast.Call)
+            and isinstance(rhs.func, ast.Attribute)
+            and isinstance(rhs.func.value, ast.Name)
+            and rhs.func.value.id == "np"
+        ):
             # Last-ditch: a BinOp / UnaryOp / Compare / BoolOp / Subscript
             # whose operands have known shapes -- mirror the (broadcast /
             # slice / gather) extent. Lets the harvest see ``x = a + b``, a
@@ -2222,9 +2484,10 @@ def _harvest_local_shapes(tree: ast.AST,
             # sees before it becomes ``np.<fn>`` -- notably ``X = (Yf @ C).reshape(
             # shp)`` (LS3DF Rayleigh-Ritz), whose target must be sized here or every
             # downstream local derived from ``X`` inherits a wrong extent.
-            if isinstance(rhs, (ast.BinOp, ast.UnaryOp, ast.Compare,
-                                ast.BoolOp, ast.Subscript, ast.Call)) \
-                    and target.id not in shape_table:
+            if (
+                isinstance(rhs, (ast.BinOp, ast.UnaryOp, ast.Compare, ast.BoolOp, ast.Subscript, ast.Call))
+                and target.id not in shape_table
+            ):
                 ext = _iter_extent_of(rhs, shape_table)
                 # An all-size-1 broadcast (``t = a[i] > x`` with ``x`` shape ``(1,)``) is a SCALAR local:
                 # numpyto reads size-1 arrays as ``x[0]``, so sizing ``t`` as ``T t[1]`` would desync its
@@ -2253,9 +2516,9 @@ def _harvest_local_shapes(tree: ast.AST,
                     parts = [_resolve_shape_token(e, shape_table) for e in shape_arg.elts]
                     shape_table[target.id] = tuple(parts)
                 elif isinstance(shape_arg, ast.Name):
-                    shape_table[target.id] = (shape_arg.id, )
+                    shape_table[target.id] = (shape_arg.id,)
                 elif isinstance(shape_arg, ast.Constant) and isinstance(shape_arg.value, int):
-                    shape_table[target.id] = (str(shape_arg.value), )
+                    shape_table[target.id] = (str(shape_arg.value),)
                 elif isinstance(shape_arg, ast.Attribute) and shape_arg.attr == "shape":
                     # ``np.zeros(x.shape, ...)`` -- mirror x's shape.
                     if isinstance(shape_arg.value, ast.Name):
@@ -2269,39 +2532,64 @@ def _harvest_local_shapes(tree: ast.AST,
                     # way a shape-TUPLE element is) so the 1-D temp lands in the table
                     # like its 2-D siblings instead of being dropped; without it the
                     # ``w = __eigh0_wa`` alias never learns ``w`` is an array.
-                    shape_table[target.id] = (_resolve_shape_token(shape_arg, shape_table), )
+                    shape_table[target.id] = (_resolve_shape_token(shape_arg, shape_table),)
         # ``np.eye(M)`` -> ``(M, M)``; ``np.eye(M, N)`` -> ``(M, N)``.
         elif attr == "eye" and rhs.args:
             first = rhs.args[0]
-            first_tok = (str(first.value) if isinstance(first, ast.Constant) and isinstance(first.value, int) else
-                         first.id if isinstance(first, ast.Name) else ast.unparse(first))
+            first_tok = (
+                str(first.value)
+                if isinstance(first, ast.Constant) and isinstance(first.value, int)
+                else first.id
+                if isinstance(first, ast.Name)
+                else ast.unparse(first)
+            )
             second_tok = first_tok
             if len(rhs.args) >= 2:
                 second = rhs.args[1]
-                second_tok = (str(second.value) if isinstance(second, ast.Constant) and isinstance(second.value, int)
-                              else second.id if isinstance(second, ast.Name) else ast.unparse(second))
+                second_tok = (
+                    str(second.value)
+                    if isinstance(second, ast.Constant) and isinstance(second.value, int)
+                    else second.id
+                    if isinstance(second, ast.Name)
+                    else ast.unparse(second)
+                )
             shape_table[target.id] = (first_tok, second_tok)
         # ``np.linspace(start, stop, n)`` -> ``(n,)``. The third
         # positional arg is the sample count; numpy default 50 if
         # omitted but the in-tree expander rejects that.
         elif attr == "linspace" and len(rhs.args) >= 3:
             count = rhs.args[2]
-            tok = (str(count.value) if isinstance(count, ast.Constant) and isinstance(count.value, int) else
-                   count.id if isinstance(count, ast.Name) else ast.unparse(count))
-            shape_table[target.id] = (tok, )
+            tok = (
+                str(count.value)
+                if isinstance(count, ast.Constant) and isinstance(count.value, int)
+                else count.id
+                if isinstance(count, ast.Name)
+                else ast.unparse(count)
+            )
+            shape_table[target.id] = (tok,)
         # ``np.arange(stop)`` -> ``(stop,)``; ``np.arange(start, stop)`` ->
         # ``(stop - start,)``.
         elif attr == "arange" and rhs.args:
             if len(rhs.args) == 1:
                 stop = rhs.args[0]
-                tok = (str(stop.value) if isinstance(stop, ast.Constant) and isinstance(stop.value, int) else
-                       stop.id if isinstance(stop, ast.Name) else ast.unparse(stop))
-                shape_table[target.id] = (tok, )
+                tok = (
+                    str(stop.value)
+                    if isinstance(stop, ast.Constant) and isinstance(stop.value, int)
+                    else stop.id
+                    if isinstance(stop, ast.Name)
+                    else ast.unparse(stop)
+                )
+                shape_table[target.id] = (tok,)
         # ``np.identity(n)`` -> ``(n, n)``.
         elif attr == "identity" and rhs.args:
             first = rhs.args[0]
-            tok = (str(first.value) if isinstance(first, ast.Constant) and isinstance(first.value, int) else
-                   first.id if isinstance(first, ast.Name) else ast.unparse(first))
+            tok = (
+                str(first.value)
+                if isinstance(first, ast.Constant) and isinstance(first.value, int)
+                else first.id
+                if isinstance(first, ast.Name)
+                else ast.unparse(first)
+            )
             shape_table[target.id] = (tok, tok)
         # Elementwise broadcast ops: np.maximum / minimum / add / etc.
         # The result shape is the broadcast of the args' shapes; defer
@@ -2318,8 +2606,11 @@ def _harvest_local_shapes(tree: ast.AST,
                 shape_table[target.id] = tuple(ast.unparse(e) for e in ext)
         # ``np.copy(other)`` (function form) / np.transpose / np.triu /
         # np.flip / np.asarray / np.ascontiguousarray / np.linalg.* -> share shape.
-        elif attr in {"copy", "asarray", "ascontiguousarray", "triu", "flip"} and rhs.args and isinstance(
-                rhs.args[0], ast.Name):
+        elif (
+            attr in {"copy", "asarray", "ascontiguousarray", "triu", "flip"}
+            and rhs.args
+            and isinstance(rhs.args[0], ast.Name)
+        ):
             src_shape = shape_table.get(rhs.args[0].id)
             if src_shape:
                 shape_table[target.id] = tuple(src_shape)
@@ -2370,8 +2661,14 @@ class _FullCallHoister(_StmtHoister):
 
     @staticmethod
     def _is_full_call(v: ast.AST) -> bool:
-        return (isinstance(v, ast.Call) and isinstance(v.func, ast.Attribute) and v.func.attr in ("full", "full_like")
-                and isinstance(v.func.value, ast.Name) and v.func.value.id in ("np", "numpy") and len(v.args) >= 2)
+        return (
+            isinstance(v, ast.Call)
+            and isinstance(v.func, ast.Attribute)
+            and v.func.attr in ("full", "full_like")
+            and isinstance(v.func.value, ast.Name)
+            and v.func.value.id in ("np", "numpy")
+            and len(v.args) >= 2
+        )
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
@@ -2380,7 +2677,7 @@ class _FullCallHoister(_StmtHoister):
         return node
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
-        if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and self._is_full_call(node.value)):
+        if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and self._is_full_call(node.value):
             return node
         return self._flush(node)
 
@@ -2396,25 +2693,38 @@ class _FullLikeRewriter(ast.NodeTransformer):
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         self.generic_visit(node)
         v = node.value
-        if not (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and isinstance(v, ast.Call)
-                and isinstance(v.func, ast.Attribute) and v.func.attr in ("full_like", "full")
-                and isinstance(v.func.value, ast.Name) and v.func.value.id in ("np", "numpy") and len(v.args) >= 2):
+        if not (
+            len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(v, ast.Call)
+            and isinstance(v.func, ast.Attribute)
+            and v.func.attr in ("full_like", "full")
+            and isinstance(v.func.value, ast.Name)
+            and v.func.value.id in ("np", "numpy")
+            and len(v.args) >= 2
+        ):
             return node
         tgt = node.targets[0]
         alloc_attr = "empty_like" if v.func.attr == "full_like" else "empty"
         dtype_kw = [kw for kw in v.keywords if kw.arg == "dtype"]
-        alloc = ast.Assign(targets=[ast.Name(id=tgt.id, ctx=ast.Store())],
-                           value=ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()),
-                                                             attr=alloc_attr,
-                                                             ctx=ast.Load()),
-                                          args=[v.args[0]],
-                                          keywords=dtype_kw))
-        fill = ast.Assign(targets=[
-            ast.Subscript(value=ast.Name(id=tgt.id, ctx=ast.Load()),
-                          slice=ast.Slice(lower=None, upper=None, step=None),
-                          ctx=ast.Store())
-        ],
-                          value=v.args[1])
+        alloc = ast.Assign(
+            targets=[ast.Name(id=tgt.id, ctx=ast.Store())],
+            value=ast.Call(
+                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=alloc_attr, ctx=ast.Load()),
+                args=[v.args[0]],
+                keywords=dtype_kw,
+            ),
+        )
+        fill = ast.Assign(
+            targets=[
+                ast.Subscript(
+                    value=ast.Name(id=tgt.id, ctx=ast.Load()),
+                    slice=ast.Slice(lower=None, upper=None, step=None),
+                    ctx=ast.Store(),
+                )
+            ],
+            value=v.args[1],
+        )
         for s in (alloc, fill):
             ast.copy_location(s, node)
         ast.fix_missing_locations(alloc)
@@ -2434,8 +2744,14 @@ class _EyeCallHoister(_StmtHoister):
 
     @staticmethod
     def _is_eye_call(v: ast.AST) -> bool:
-        return (isinstance(v, ast.Call) and isinstance(v.func, ast.Attribute) and v.func.attr in ("eye", "identity")
-                and isinstance(v.func.value, ast.Name) and v.func.value.id in ("np", "numpy") and bool(v.args))
+        return (
+            isinstance(v, ast.Call)
+            and isinstance(v.func, ast.Attribute)
+            and v.func.attr in ("eye", "identity")
+            and isinstance(v.func.value, ast.Name)
+            and v.func.value.id in ("np", "numpy")
+            and bool(v.args)
+        )
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
@@ -2444,7 +2760,7 @@ class _EyeCallHoister(_StmtHoister):
         return node
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
-        if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and self._is_eye_call(node.value)):
+        if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and self._is_eye_call(node.value):
             return node
         return self._flush(node)
 
@@ -2543,23 +2859,30 @@ class _CopyToAllocAndFill(ast.NodeTransformer):
         src = _copied_name(node)
         if src is None or not (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
             return node
-        alloc = ast.Assign(targets=[copy.deepcopy(node.targets[0])],
-                           value=ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()),
-                                                             attr="empty_like",
-                                                             ctx=ast.Load()),
-                                          args=[copy.deepcopy(src)],
-                                          keywords=[]))
+        alloc = ast.Assign(
+            targets=[copy.deepcopy(node.targets[0])],
+            value=ast.Call(
+                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="empty_like", ctx=ast.Load()),
+                args=[copy.deepcopy(src)],
+                keywords=[],
+            ),
+        )
         fill = ast.Assign(
             targets=[ast.Subscript(value=copy.deepcopy(node.targets[0]), slice=ast.Slice(), ctx=ast.Store())],
-            value=copy.deepcopy(src))
+            value=copy.deepcopy(src),
+        )
         return [ast.copy_location(alloc, node), ast.copy_location(fill, node)]
 
 
 def _copied_name(node: ast.Assign) -> Optional[ast.Name]:
     """The array a whole-array copy assignment reads, for either spelling, else ``None``."""
     value = node.value
-    if not (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute) and value.func.attr == "copy"
-            and not value.keywords):
+    if not (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Attribute)
+        and value.func.attr == "copy"
+        and not value.keywords
+    ):
         return None
     receiver = value.func.value
     if isinstance(receiver, ast.Name) and receiver.id in ("np", "numpy"):
@@ -2587,16 +2910,26 @@ class _EyeToZerosDiagonal(ast.NodeTransformer):
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         self.generic_visit(node)
         v = node.value
-        if not (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and isinstance(v, ast.Call)
-                and isinstance(v.func, ast.Attribute) and v.func.attr in ("eye", "identity")
-                and isinstance(v.func.value, ast.Name) and v.func.value.id in ("np", "numpy") and v.args):
+        if not (
+            len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(v, ast.Call)
+            and isinstance(v.func, ast.Attribute)
+            and v.func.attr in ("eye", "identity")
+            and isinstance(v.func.value, ast.Name)
+            and v.func.value.id in ("np", "numpy")
+            and v.args
+        ):
             return node
         tgt = node.targets[0].id
         rows = v.args[0]
         # ``eye(m, n)`` with a real second extent is rectangular (diagonal =
         # min(m, n)); ``eye(n)`` / ``identity(n)`` (or ``eye(n, None)``) is square.
-        rectangular = (v.func.attr == "eye" and len(v.args) >= 2
-                       and not (isinstance(v.args[1], ast.Constant) and v.args[1].value is None))
+        rectangular = (
+            v.func.attr == "eye"
+            and len(v.args) >= 2
+            and not (isinstance(v.args[1], ast.Constant) and v.args[1].value is None)
+        )
         cols = v.args[1] if rectangular else copy.deepcopy(rows)
         # ``k=`` (or eye's 3rd positional) shifts the unit diagonal: numpy writes 1.0 at
         # (i, i+k). Fill X[t + off_r, t + off_c] for t in range(min(M - off_r, N - off_c))
@@ -2614,14 +2947,23 @@ class _EyeToZerosDiagonal(ast.NodeTransformer):
 
         def _shift(expr, off, op):
             if isinstance(off, int):
-                return copy.deepcopy(expr) if off == 0 else ast.BinOp(
-                    left=copy.deepcopy(expr), op=op, right=ast.Constant(value=off))
+                return (
+                    copy.deepcopy(expr)
+                    if off == 0
+                    else ast.BinOp(left=copy.deepcopy(expr), op=op, right=ast.Constant(value=off))
+                )
             return ast.BinOp(left=copy.deepcopy(expr), op=op, right=copy.deepcopy(off))
 
         if off_zero:
-            count = ast.Call(func=ast.Name(id="min", ctx=ast.Load()),
-                             args=[copy.deepcopy(rows), copy.deepcopy(cols)], keywords=[]) \
-                if rectangular else copy.deepcopy(rows)
+            count = (
+                ast.Call(
+                    func=ast.Name(id="min", ctx=ast.Load()),
+                    args=[copy.deepcopy(rows), copy.deepcopy(cols)],
+                    keywords=[],
+                )
+                if rectangular
+                else copy.deepcopy(rows)
+            )
             row_idx, col_idx = ast.Name(id=it, ctx=ast.Load()), ast.Name(id=it, ctx=ast.Load())
         else:
             if isinstance(k_node, ast.Constant) and isinstance(k_node.value, int):
@@ -2629,37 +2971,48 @@ class _EyeToZerosDiagonal(ast.NodeTransformer):
             else:
                 off_r = ast.Call(
                     func=ast.Name(id="max", ctx=ast.Load()),
-                    args=[ast.Constant(value=0),
-                          ast.UnaryOp(op=ast.USub(), operand=copy.deepcopy(k_node))],
-                    keywords=[])
-                off_c = ast.Call(func=ast.Name(id="max", ctx=ast.Load()),
-                                 args=[ast.Constant(value=0), copy.deepcopy(k_node)],
-                                 keywords=[])
-            count = ast.Call(func=ast.Name(id="min", ctx=ast.Load()),
-                             args=[_shift(rows, off_r, ast.Sub()),
-                                   _shift(cols, off_c, ast.Sub())],
-                             keywords=[])
+                    args=[ast.Constant(value=0), ast.UnaryOp(op=ast.USub(), operand=copy.deepcopy(k_node))],
+                    keywords=[],
+                )
+                off_c = ast.Call(
+                    func=ast.Name(id="max", ctx=ast.Load()),
+                    args=[ast.Constant(value=0), copy.deepcopy(k_node)],
+                    keywords=[],
+                )
+            count = ast.Call(
+                func=ast.Name(id="min", ctx=ast.Load()),
+                args=[_shift(rows, off_r, ast.Sub()), _shift(cols, off_c, ast.Sub())],
+                keywords=[],
+            )
             row_idx = _shift(ast.Name(id=it, ctx=ast.Load()), off_r, ast.Add())
             col_idx = _shift(ast.Name(id=it, ctx=ast.Load()), off_c, ast.Add())
 
         dtype_kw = [kw for kw in v.keywords if kw.arg == "dtype"]
-        zeros = ast.Assign(targets=[ast.Name(id=tgt, ctx=ast.Store())],
-                           value=ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()),
-                                                             attr="zeros",
-                                                             ctx=ast.Load()),
-                                          args=[ast.Tuple(elts=[copy.deepcopy(rows), cols], ctx=ast.Load())],
-                                          keywords=dtype_kw))
-        loop = ast.For(target=ast.Name(id=it, ctx=ast.Store()),
-                       iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[count], keywords=[]),
-                       body=[
-                           ast.Assign(targets=[
-                               ast.Subscript(value=ast.Name(id=tgt, ctx=ast.Load()),
-                                             slice=ast.Tuple(elts=[row_idx, col_idx], ctx=ast.Load()),
-                                             ctx=ast.Store())
-                           ],
-                                      value=ast.Constant(value=1.0))
-                       ],
-                       orelse=[])
+        zeros = ast.Assign(
+            targets=[ast.Name(id=tgt, ctx=ast.Store())],
+            value=ast.Call(
+                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="zeros", ctx=ast.Load()),
+                args=[ast.Tuple(elts=[copy.deepcopy(rows), cols], ctx=ast.Load())],
+                keywords=dtype_kw,
+            ),
+        )
+        loop = ast.For(
+            target=ast.Name(id=it, ctx=ast.Store()),
+            iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[count], keywords=[]),
+            body=[
+                ast.Assign(
+                    targets=[
+                        ast.Subscript(
+                            value=ast.Name(id=tgt, ctx=ast.Load()),
+                            slice=ast.Tuple(elts=[row_idx, col_idx], ctx=ast.Load()),
+                            ctx=ast.Store(),
+                        )
+                    ],
+                    value=ast.Constant(value=1.0),
+                )
+            ],
+            orelse=[],
+        )
         for s in (zeros, loop):
             ast.copy_location(s, node)
         ast.fix_missing_locations(zeros)
@@ -2701,9 +3054,15 @@ class _ZerosRewriter(ast.NodeTransformer):
 
     def visit_Assign(self, node: ast.Assign):
         self.generic_visit(node)
-        if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and isinstance(node.value, ast.Call)
-                and isinstance(node.value.func, ast.Attribute) and isinstance(node.value.func.value, ast.Name)
-                and node.value.func.value.id == "np" and node.value.func.attr in self.aliases):
+        if (
+            len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and isinstance(node.value.func.value, ast.Name)
+            and node.value.func.value.id == "np"
+            and node.value.func.attr in self.aliases
+        ):
             name = node.targets[0].id
             attr = node.value.func.attr
             shape: Optional[Tuple[str, ...]] = None
@@ -2770,8 +3129,12 @@ def _shape_from_ast(node, shape_table=None) -> Tuple[str, ...]:
             return tuple(_resolve_shape_token(e, shape_table) for e in node.elts)
         return tuple(ast.unparse(e) for e in node.elts)
     # ``np.zeros(C.shape, ...)`` -- single-arg whole-shape mirror.
-    if (isinstance(node, ast.Attribute) and node.attr == "shape" and isinstance(node.value, ast.Name)
-            and shape_table is not None):
+    if (
+        isinstance(node, ast.Attribute)
+        and node.attr == "shape"
+        and isinstance(node.value, ast.Name)
+        and shape_table is not None
+    ):
         src = shape_table.get(node.value.id)
         if src is not None:
             return tuple(src)
@@ -2781,8 +3144,8 @@ def _shape_from_ast(node, shape_table=None) -> Tuple[str, ...]:
     # local's ``.shape[0]`` folds to its dimension symbol instead of surviving as an
     # unlowerable ``M.shape[0]`` malloc / allocate extent.
     if shape_table is not None:
-        return (_resolve_shape_token(node, shape_table), )
-    return (ast.unparse(node), )
+        return (_resolve_shape_token(node, shape_table),)
+    return (ast.unparse(node),)
 
 
 #: When a slice's ``start`` or ``stop`` is omitted in numpy
@@ -2815,7 +3178,7 @@ def _is_ellipsis(node: ast.AST) -> bool:
 
 def _is_full_slice(node: ast.AST) -> bool:
     """``True`` for a bare ``:`` slice (no lower / upper / step)."""
-    return (isinstance(node, ast.Slice) and node.lower is None and node.upper is None and node.step is None)
+    return isinstance(node, ast.Slice) and node.lower is None and node.upper is None and node.step is None
 
 
 def _advanced_runs(dims: List[ast.AST]) -> List[List[int]]:
@@ -3017,14 +3380,17 @@ class _ChainedSubscriptFlattener(ast.NodeTransformer):
         # to the front of the result shape. ``A[2][:3, idx]`` is (3, 2) while ``A[2, :3, idx]`` is
         # (2, 3) -- flattening the chain silently TRANSPOSES it. Splitting a run is the whole test:
         # ``A[2][idx]`` keeps one run and composes exactly.
-        if (any(isinstance(n, ast.Name) and self.shape_table.get(n.id) for e in outer_elts for n in ast.walk(e))
-                and len(_advanced_runs(combined)) > len(_advanced_runs(outer_elts))):
+        if any(isinstance(n, ast.Name) and self.shape_table.get(n.id) for e in outer_elts for n in ast.walk(e)) and len(
+            _advanced_runs(combined)
+        ) > len(_advanced_runs(outer_elts)):
             return node
         return ast.copy_location(
-            ast.Subscript(value=inner.value, slice=ast.Tuple(elts=combined, ctx=ast.Load()), ctx=node.ctx), node)
+            ast.Subscript(value=inner.value, slice=ast.Tuple(elts=combined, ctx=ast.Load()), ctx=node.ctx), node
+        )
 
-    def _index_through_full_slices(self, node: ast.Subscript, inner: ast.Subscript,
-                                   inner_elts: List[ast.expr]) -> ast.AST:
+    def _index_through_full_slices(
+        self, node: ast.Subscript, inner: ast.Subscript, inner_elts: List[ast.expr]
+    ) -> ast.AST:
         """``A[:, :, :h][:, k]`` -> ``A[:, k, :h]``: an outer index lands on the axis the inner
         slice at the same result position left whole.
 
@@ -3057,10 +3423,14 @@ class _ChainedSubscriptFlattener(ast.NodeTransformer):
                 continue
             if not (_is_scalar_index(outer) and inner_slice.step is None):
                 return node
-            combined[position] = outer if inner_slice.lower is None else ast.BinOp(
-                left=copy.deepcopy(inner_slice.lower), op=ast.Add(), right=outer)
+            combined[position] = (
+                outer
+                if inner_slice.lower is None
+                else ast.BinOp(left=copy.deepcopy(inner_slice.lower), op=ast.Add(), right=outer)
+            )
         return ast.copy_location(
-            ast.Subscript(value=inner.value, slice=ast.Tuple(elts=combined, ctx=ast.Load()), ctx=node.ctx), node)
+            ast.Subscript(value=inner.value, slice=ast.Tuple(elts=combined, ctx=ast.Load()), ctx=node.ctx), node
+        )
 
 
 def _is_scalar_index(elt: ast.expr) -> bool:
@@ -3116,12 +3486,13 @@ class _EllipsisExpander(ast.NodeTransformer):
             return node
         rank = len(shape)
         # Source-axis-consuming entries (exclude the Ellipsis and any newaxis).
-        consumed = sum(1 for e in elts
-                       if not (isinstance(e, ast.Constant) and (e.value is Ellipsis or e.value is None)))
+        consumed = sum(
+            1 for e in elts if not (isinstance(e, ast.Constant) and (e.value is Ellipsis or e.value is None))
+        )
         pad = max(rank - consumed, 0)
         pos = ell[0]
-        new_elts = (elts[:pos] + [ast.Slice(lower=None, upper=None, step=None) for _ in range(pad)] + elts[pos + 1:])
-        node.slice = (new_elts[0] if len(new_elts) == 1 else ast.Tuple(elts=new_elts, ctx=ast.Load()))
+        new_elts = elts[:pos] + [ast.Slice(lower=None, upper=None, step=None) for _ in range(pad)] + elts[pos + 1 :]
+        node.slice = new_elts[0] if len(new_elts) == 1 else ast.Tuple(elts=new_elts, ctx=ast.Load())
         return ast.copy_location(node, node)
 
 
@@ -3169,7 +3540,8 @@ class _PadImplicitTrailingSlices(ast.NodeTransformer):
             if isinstance(e, ast.Slice) or _is_newaxis(e):
                 continue
             if _is_scalar_index(e) and not any(
-                    isinstance(n, ast.Name) and n.id in self.array_shapes for n in ast.walk(e)):
+                isinstance(n, ast.Name) and n.id in self.array_shapes for n in ast.walk(e)
+            ):
                 continue
             return node  # advanced / unknown index -> skip
         pad = rank - n_index
@@ -3227,6 +3599,7 @@ def _fold_subarray_aliases(tree: ast.AST, array_shapes: Dict[str, List[str]]) ->
             sub_value_ids.add(id(node.value))
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in aliases:
             load_ids.setdefault(node.id, []).append(id(node))
+
     # Base-index stability: reject an alias whose base index name is reassigned in a
     # statement that can execute AFTER it (its block-tail, recursively) -- else the
     # folded ``A[i, j, k]`` at the use site would read the NEW i/j, not the value the
@@ -3256,11 +3629,15 @@ def _fold_subarray_aliases(tree: ast.AST, array_shapes: Dict[str, List[str]]) ->
 
     def _scan(stmts):
         for i, s in enumerate(stmts):
-            if (isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name)
-                    and s.targets[0].id in aliases):
+            if (
+                isinstance(s, ast.Assign)
+                and len(s.targets) == 1
+                and isinstance(s.targets[0], ast.Name)
+                and s.targets[0].id in aliases
+            ):
                 _, base = aliases[s.targets[0].id]
                 base_names = {n.id for b in base for n in ast.walk(b) if isinstance(n, ast.Name)}
-                if base_names & _stores_in(stmts[i + 1:]):
+                if base_names & _stores_in(stmts[i + 1 :]):
                     unsafe.add(s.targets[0].id)
             for cb in _child_blocks(s):
                 _scan(cb)
@@ -3275,7 +3652,6 @@ def _fold_subarray_aliases(tree: ast.AST, array_shapes: Dict[str, List[str]]) ->
         return
 
     class _Fold(ast.NodeTransformer):
-
         def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
             self.generic_visit(node)
             if isinstance(node.value, ast.Name) and node.value.id in good:
@@ -3284,7 +3660,8 @@ def _fold_subarray_aliases(tree: ast.AST, array_shapes: Dict[str, List[str]]) ->
                 new_idx = [copy.deepcopy(b) for b in base] + more
                 sl = ast.Tuple(elts=new_idx, ctx=ast.Load()) if len(new_idx) > 1 else new_idx[0]
                 return ast.copy_location(
-                    ast.Subscript(value=ast.Name(id=aname, ctx=ast.Load()), slice=sl, ctx=node.ctx), node)
+                    ast.Subscript(value=ast.Name(id=aname, ctx=ast.Load()), slice=sl, ctx=node.ctx), node
+                )
             return node
 
         def visit_Assign(self, node: ast.Assign) -> Optional[ast.AST]:
@@ -3384,15 +3761,16 @@ def _names_written_in(stmts: List[ast.stmt]) -> OrderedSet:
     return out
 
 
-def _reject_view_writes_between_bind_and_use(tree: ast.AST, candidates: Dict[str, Tuple[str,
-                                                                                        List[ast.expr]]]) -> OrderedSet:
+def _reject_view_writes_between_bind_and_use(
+    tree: ast.AST, candidates: Dict[str, Tuple[str, List[ast.expr]]]
+) -> OrderedSet:
     """Names among ``candidates`` whose base array, or a name their captured bounds
     read, is written in a statement able to run AFTER the alias's own ``Assign``
     (same block, recursively) -- folding such an alias would read the value AFTER
     that write at the use site, not the one the view captured at bind time."""
     free_names: Dict[str, OrderedSet] = {}
     for name, (base_name, elts) in candidates.items():
-        names = OrderedSet((base_name, ))
+        names = OrderedSet((base_name,))
         for e in elts:
             for n in ast.walk(e):
                 if isinstance(n, ast.Name):
@@ -3403,10 +3781,14 @@ def _reject_view_writes_between_bind_and_use(tree: ast.AST, candidates: Dict[str
 
     def _scan(stmts: List[ast.stmt]) -> None:
         for i, s in enumerate(stmts):
-            if (isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name)
-                    and s.targets[0].id in candidates):
+            if (
+                isinstance(s, ast.Assign)
+                and len(s.targets) == 1
+                and isinstance(s.targets[0], ast.Name)
+                and s.targets[0].id in candidates
+            ):
                 name = s.targets[0].id
-                written = _names_written_in(stmts[i + 1:])
+                written = _names_written_in(stmts[i + 1 :])
                 if any(n in written for n in free_names[name]):
                     unsafe.add(name)
             for cb in _child_blocks_of(s):
@@ -3547,8 +3929,12 @@ def _fold_slice_view_aliases(tree: ast.AST, array_shapes: Dict[str, List[str]]) 
             sub_value_ids.add(id(node.value))
             kept = sum(1 for e in aliases[name][1] if isinstance(e, ast.Slice))
             use_elts = _slice_dims(node)
-            ok = (len(use_elts) <= kept and not any(_is_fancy_dim(e, array_shapes) for e in use_elts)
-                  and not _has_negative_step(use_elts) and not isinstance(node.ctx, ast.Store))
+            ok = (
+                len(use_elts) <= kept
+                and not any(_is_fancy_dim(e, array_shapes) for e in use_elts)
+                and not _has_negative_step(use_elts)
+                and not isinstance(node.ctx, ast.Store)
+            )
             uses_composable[name] = uses_composable.get(name, True) and ok
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in aliases:
             load_ids.setdefault(node.id, []).append(id(node))
@@ -3556,8 +3942,9 @@ def _fold_slice_view_aliases(tree: ast.AST, array_shapes: Dict[str, List[str]]) 
     candidates = {
         name: aliases[name]
         for name in aliases
-        if assigns.get(name, 0) == 1 and uses_composable.get(name, True) and all(i in sub_value_ids
-                                                                                 for i in load_ids.get(name, []))
+        if assigns.get(name, 0) == 1
+        and uses_composable.get(name, True)
+        and all(i in sub_value_ids for i in load_ids.get(name, []))
     }
     if not candidates:
         return OrderedSet()
@@ -3568,7 +3955,6 @@ def _fold_slice_view_aliases(tree: ast.AST, array_shapes: Dict[str, List[str]]) 
     good = _flatten_view_chains(good)
 
     class _Fold(ast.NodeTransformer):
-
         def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
             self.generic_visit(node)
             if not (isinstance(node.value, ast.Name) and node.value.id in good):
@@ -3584,7 +3970,8 @@ def _fold_slice_view_aliases(tree: ast.AST, array_shapes: Dict[str, List[str]]) 
                 composed[pos] = _compose_kept_axis(view_elts[pos], u)
             sl = ast.Tuple(elts=composed, ctx=ast.Load()) if len(composed) > 1 else composed[0]
             return ast.copy_location(
-                ast.Subscript(value=ast.Name(id=base_name, ctx=ast.Load()), slice=sl, ctx=node.ctx), node)
+                ast.Subscript(value=ast.Name(id=base_name, ctx=ast.Load()), slice=sl, ctx=node.ctx), node
+            )
 
         def visit_Assign(self, node: ast.Assign) -> Optional[ast.AST]:
             if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in good:
@@ -3649,7 +4036,8 @@ class _FlattenChainedSubscripts(ast.NodeTransformer):
                 combined.append(copy.deepcopy(e))
         sl = ast.Tuple(elts=combined, ctx=ast.Load()) if len(combined) > 1 else combined[0]
         return ast.copy_location(
-            ast.Subscript(value=ast.Name(id=inner.value.id, ctx=ast.Load()), slice=sl, ctx=node.ctx), node)
+            ast.Subscript(value=ast.Name(id=inner.value.id, ctx=ast.Load()), slice=sl, ctx=node.ctx), node
+        )
 
 
 def _refuse_scalarising_a_contraction(value: ast.expr) -> None:
@@ -3670,9 +4058,11 @@ def _refuse_scalarising_a_contraction(value: ast.expr) -> None:
     """
     for sub in ast.walk(value):
         if isinstance(sub, ast.BinOp) and isinstance(sub.op, ast.MatMult):
-            raise NotImplementedError(f"matmul '{ast.unparse(sub)}' was not lowered before slice fusion; "
-                                      f"scalarising it would drop the contraction and silently "
-                                      f"compute an elementwise product")
+            raise NotImplementedError(
+                f"matmul '{ast.unparse(sub)}' was not lowered before slice fusion; "
+                f"scalarising it would drop the contraction and silently "
+                f"compute an elementwise product"
+            )
 
 
 def _strided_trip_count(start: ast.expr, stop: ast.expr, step) -> ast.expr:
@@ -3776,8 +4166,9 @@ class SliceFusion(ast.NodeTransformer):
                 continue
             step = 1 if d.step is None else _slice_step_any(d)
             if step is None:
-                raise NotImplementedError(f"slice step {ast.unparse(d.step)!r} on an assignment target must be "
-                                          f"a compile-time integer")
+                raise NotImplementedError(
+                    f"slice step {ast.unparse(d.step)!r} on an assignment target must be a compile-time integer"
+                )
             start = self._resolve_bound(d.lower, lhs_name, axis, default=_const(0))
             stop = self._resolve_bound(d.upper, lhs_name, axis, default=lambda: self._axis_length(lhs_name, axis))
             if step == 1:
@@ -3835,8 +4226,9 @@ class SliceFusion(ast.NodeTransformer):
     def _axis_length(self, array_name: str, axis: int) -> ast.AST:
         shape = self.array_shapes.get(array_name)
         if shape is None or axis >= len(shape):
-            raise NotImplementedError(f"slice with omitted stop on {array_name!r} axis {axis}: "
-                                      f"shape unknown to NumpyToC")
+            raise NotImplementedError(
+                f"slice with omitted stop on {array_name!r} axis {axis}: shape unknown to NumpyToC"
+            )
         return _token_to_ast(shape[axis])
 
     def _resolve_bound(self, bound: Optional[ast.AST], array_name: str, axis: int, default) -> ast.AST:
@@ -3858,8 +4250,12 @@ class SliceFusion(ast.NodeTransformer):
             return default() if callable(default) else default
         if isinstance(bound, ast.Constant) and isinstance(bound.value, int) and bound.value < 0:
             return _binop(self._axis_length(array_name, axis), ast.Sub(), _const(-bound.value))
-        if (isinstance(bound, ast.UnaryOp) and isinstance(bound.op, ast.USub)
-                and isinstance(bound.operand, ast.Constant) and isinstance(bound.operand.value, int)):
+        if (
+            isinstance(bound, ast.UnaryOp)
+            and isinstance(bound.op, ast.USub)
+            and isinstance(bound.operand, ast.Constant)
+            and isinstance(bound.operand.value, int)
+        ):
             return _binop(self._axis_length(array_name, axis), ast.Sub(), _const(bound.operand.value))
         return bound
 
@@ -3875,8 +4271,11 @@ class SliceFusion(ast.NodeTransformer):
                     idx_nodes.append(ivar)
                     continue
                 scaled = _binop(ivar, ast.Mult(), _step_node(step))
-                idx_nodes.append(scaled if (isinstance(slice_start, ast.Constant) and slice_start.value == 0
-                                            ) else _binop(slice_start, ast.Add(), scaled))
+                idx_nodes.append(
+                    scaled
+                    if (isinstance(slice_start, ast.Constant) and slice_start.value == 0)
+                    else _binop(slice_start, ast.Add(), scaled)
+                )
             else:
                 idx_nodes.append(self._resolve_scalar_index(d, name, axis))
         if len(idx_nodes) == 1:
@@ -3889,10 +4288,14 @@ class SliceFusion(ast.NodeTransformer):
         wrap-around, so leaving it literal indexes ``arr[... + (-1)]``
         out of bounds (the deriche heap corruption). Other indices pass
         through unchanged so ``N - 1`` etc. survive."""
-        if (isinstance(idx, ast.Constant) and isinstance(idx.value, int) and idx.value < 0):
+        if isinstance(idx, ast.Constant) and isinstance(idx.value, int) and idx.value < 0:
             return _binop(self._axis_length(name, axis), ast.Sub(), _const(-idx.value))
-        if (isinstance(idx, ast.UnaryOp) and isinstance(idx.op, ast.USub) and isinstance(idx.operand, ast.Constant)
-                and isinstance(idx.operand.value, int)):
+        if (
+            isinstance(idx, ast.UnaryOp)
+            and isinstance(idx.op, ast.USub)
+            and isinstance(idx.operand, ast.Constant)
+            and isinstance(idx.operand.value, int)
+        ):
             return _binop(self._axis_length(name, axis), ast.Sub(), _const(idx.operand.value))
         return idx
 
@@ -3986,11 +4389,12 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
         # ``visit_Subscript`` applies the same correction to real sliced
         # operands; this is its bare-Name counterpart.
         lhs_slice_starts = [
-            rng[0] for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
+            rng[0]
+            for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
             if isinstance(dim, ast.Slice) and iv is not None
         ]
-        iters = self._slice_iter_names[-len(shape):]
-        starts = lhs_slice_starts[-len(shape):]
+        iters = self._slice_iter_names[-len(shape) :]
+        starts = lhs_slice_starts[-len(shape) :]
         elts: List[ast.AST] = []
         for dim, iv, start in zip(shape, iters, starts):
             # A size-1 axis broadcasts: pin it to index 0 rather than consuming
@@ -4048,7 +4452,6 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
         shapes = self.array_shapes
 
         class _AtIters(ast.NodeTransformer):
-
             def visit_Subscript(self_inner, n: ast.Subscript) -> ast.AST:
                 sh = shapes.get(n.value.id) if isinstance(n.value, ast.Name) else None
                 elts = list(n.slice.elts) if isinstance(n.slice, ast.Tuple) else [n.slice]
@@ -4073,7 +4476,7 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
                     src_axis_of[k] = src_axis
                     src_axis += 1
                 if sh and axes and len(axes) == len(offs) and len(result_axes) <= len(giters):
-                    own = giters[len(giters) - len(result_axes):]
+                    own = giters[len(giters) - len(result_axes) :]
                     for g, k in zip(own, result_axes):
                         if k in newaxes:
                             continue
@@ -4084,7 +4487,7 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
                         else:
                             elts[k] = _shift_index(copy.deepcopy(g), offs[k])
                     elts = [e for k, e in enumerate(elts) if k not in newaxes]
-                    n.slice = (elts[0] if len(elts) == 1 else ast.Tuple(elts=elts, ctx=ast.Load()))
+                    n.slice = elts[0] if len(elts) == 1 else ast.Tuple(elts=elts, ctx=ast.Load())
                     return n
                 n.slice = self_inner.visit(n.slice)
                 return n
@@ -4093,7 +4496,7 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
                 sh = shapes.get(n.id)
                 if not sh or len(sh) > len(giters):
                     return n
-                own = giters[len(giters) - len(sh):]
+                own = giters[len(giters) - len(sh) :]
                 elts = [_const(0) if str(x).strip() == "1" else copy.deepcopy(g) for x, g in zip(sh, own)]
                 slot = elts[0] if len(elts) == 1 else ast.Tuple(elts=elts, ctx=ast.Load())
                 return ast.Subscript(value=n, slice=slot, ctx=ast.Load())
@@ -4124,17 +4527,24 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
         if not isinstance(node.value, ast.Name):
             sl0 = node.slice
             elts0 = list(sl0.elts) if isinstance(sl0, ast.Tuple) else [sl0]
-            _full = lambda e: (isinstance(e, ast.Slice) and e.lower is None and e.upper is None and e.step is None)
+            _full = lambda e: isinstance(e, ast.Slice) and e.lower is None and e.upper is None and e.step is None
             _newax = lambda e: isinstance(e, ast.Constant) and e.value is None
-            if (elts0 and all(_full(e) or _newax(e) for e in elts0) and any(_full(e) for e in elts0)):
-                lhs_slice_iters = [(iv, rng[0]) for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
-                                   if isinstance(dim, ast.Slice) and iv is not None]
+            if elts0 and all(_full(e) or _newax(e) for e in elts0) and any(_full(e) for e in elts0):
+                lhs_slice_iters = [
+                    (iv, rng[0])
+                    for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
+                    if isinstance(dim, ast.Slice) and iv is not None
+                ]
                 align = max(0, len(lhs_slice_iters) - len(elts0))
                 if len(elts0) <= len(lhs_slice_iters):
                     sub_iters = [lhs_slice_iters[align + pos] for pos, e in enumerate(elts0) if _full(e)]
-                    sub = _SliceToScalarRewriter(self.array_shapes, [iv for iv, _ in sub_iters],
-                                                 [(lo, lo) for _, lo in sub_iters], None,
-                                                 [ast.Slice(lower=None, upper=None, step=None) for _ in sub_iters])
+                    sub = _SliceToScalarRewriter(
+                        self.array_shapes,
+                        [iv for iv, _ in sub_iters],
+                        [(lo, lo) for _, lo in sub_iters],
+                        None,
+                        [ast.Slice(lower=None, upper=None, step=None) for _ in sub_iters],
+                    )
                     return sub.visit(copy.deepcopy(node.value))
         # Advanced indices SEPARATED by a real slice/newaxis (numpy moves their
         # broadcast result to the FRONT) must be pre-resolved BEFORE generic_visit
@@ -4152,14 +4562,15 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
         # below, from the pre-visit form.
         keep = {
             i: copy.deepcopy(d)
-            for i, d in enumerate(_slice_dims(node)) if not isinstance(d, ast.Name) and self._advanced_rank(d) >= 1
+            for i, d in enumerate(_slice_dims(node))
+            if not isinstance(d, ast.Name) and self._advanced_rank(d) >= 1
         }
         self.generic_visit(node)
         if keep:
             restored = _slice_dims(node)
             for i, d in keep.items():
                 restored[i] = d
-            node.slice = (restored[0] if len(restored) == 1 else ast.Tuple(elts=restored, ctx=ast.Load()))
+            node.slice = restored[0] if len(restored) == 1 else ast.Tuple(elts=restored, ctx=ast.Load())
         dims = _slice_dims(node)
         if not any(isinstance(d, ast.Slice) for d in dims):
             # No explicit ``:`` slice, but a PARTIAL scalar index on a
@@ -4184,15 +4595,19 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
             # Name -- gating on the Name spelling alone dropped it through to the fully-scalar
             # branch below, which left the ``:`` for the expression emitter to reject.
             if source_shape is not None and any(self._advanced_rank(d) >= 1 for d in dims):
-                lhs_pairs = [(iv, rng[0]) for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
-                             if isinstance(dim, ast.Slice) and iv is not None]
+                lhs_pairs = [
+                    (iv, rng[0])
+                    for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
+                    if isinstance(dim, ast.Slice) and iv is not None
+                ]
                 lhs_iters = [iv for iv, _ in lhs_pairs]
                 lhs_starts = [st for _, st in lhs_pairs]
                 n_trailing = len(source_shape) - len(dims)
                 if len(_advanced_runs(dims)) > 1:
                     raise NotImplementedError(
                         f"advanced indices of {name!r} separated by a slice/newaxis "
-                        f"({ast.unparse(node)!r}) -- broadcast-to-front placement is not implemented")
+                        f"({ast.unparse(node)!r}) -- broadcast-to-front placement is not implemented"
+                    )
                 run_rank = max((self._advanced_rank(d) for d in dims), default=0)
                 result_rank = run_rank + max(0, n_trailing)
                 if result_rank <= len(lhs_iters):
@@ -4215,8 +4630,10 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
                             # ``nlg[si0 - ip*n]``, not ``nlg[si0]`` (which runs off
                             # the length-n index array).
                             giters = [
-                                _const(0) if str(own_shape[k]).strip() == "1" else self._iter_minus_start(
-                                    lhs_iters[base + k], lhs_starts[base + k]) for k in range(r)
+                                _const(0)
+                                if str(own_shape[k]).strip() == "1"
+                                else self._iter_minus_start(lhs_iters[base + k], lhs_starts[base + k])
+                                for k in range(r)
                             ]
                             new_elts.append(self._bind_gather_operand(d, giters))
                         else:
@@ -4224,12 +4641,18 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
                     for _ in range(max(0, n_trailing)):
                         new_elts.append(self._iter_minus_start(lhs_iters[pos], lhs_starts[pos]))
                         pos += 1
-                    slot = (new_elts[0] if len(new_elts) == 1 else ast.Tuple(elts=new_elts, ctx=ast.Load()))
+                    slot = new_elts[0] if len(new_elts) == 1 else ast.Tuple(elts=new_elts, ctx=ast.Load())
                     return ast.Subscript(value=node.value, slice=slot, ctx=node.ctx)
-            if (source_shape is not None and len(dims) < len(source_shape)
-                    and not any(isinstance(d, ast.Constant) and d.value is None for d in dims)):
-                lhs_pairs = [(iv, rng[0]) for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
-                             if isinstance(dim, ast.Slice) and iv is not None]
+            if (
+                source_shape is not None
+                and len(dims) < len(source_shape)
+                and not any(isinstance(d, ast.Constant) and d.value is None for d in dims)
+            ):
+                lhs_pairs = [
+                    (iv, rng[0])
+                    for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
+                    if isinstance(dim, ast.Slice) and iv is not None
+                ]
                 n_trailing = len(source_shape) - len(dims)
                 if 0 < n_trailing <= len(lhs_pairs):
                     # The implicit trailing source axes read at the LOCAL slice
@@ -4247,7 +4670,7 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
             if source_shape is not None and len(dims) == len(source_shape):
                 resolved = [self._resolve_scalar_index(d, name, axis) for axis, d in enumerate(dims)]
                 if any(r is not d for r, d in zip(resolved, dims)):
-                    slot = (resolved[0] if len(resolved) == 1 else ast.Tuple(elts=resolved, ctx=ast.Load()))
+                    slot = resolved[0] if len(resolved) == 1 else ast.Tuple(elts=resolved, ctx=ast.Load())
                     return ast.Subscript(value=node.value, slice=slot, ctx=node.ctx)
             return node
         rhs_name = _name_of_subscript(node)
@@ -4256,8 +4679,11 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
         # different positions) consume that sequence in order.
         # ``C[i, :i+1] += A[:i+1, k]`` -> LHS slice axis 1, RHS slice
         # axis 0; both use iter var ``si0``.
-        lhs_slice_iters = [(iv, rng[0]) for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
-                           if isinstance(dim, ast.Slice) and iv is not None]
+        lhs_slice_iters = [
+            (iv, rng[0])
+            for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
+            if isinstance(dim, ast.Slice) and iv is not None
+        ]
         # numpy broadcasting aligns operand axes from the RIGHT: a Slice or
         # newaxis contributes one result axis, an ADVANCED index (a Name whose
         # own shape is known, e.g. lulesh ``x1[:, _VOLU_PERM]``) contributes its
@@ -4266,8 +4692,13 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
         # result axis) inside a 2-slice-axis LHS ``A[k+1:, k:]`` reads the COLUMN
         # iter ``si1``, not the row iter ``si0`` (gaussian's rank-1 update).
         # ``align`` shifts the per-axis consumption by the rank difference.
-        rhs_result_axes = sum((self._advanced_rank(d) or (1 if (
-            isinstance(d, ast.Slice) or (isinstance(d, ast.Constant) and d.value is None)) else 0)) for d in dims)
+        rhs_result_axes = sum(
+            (
+                self._advanced_rank(d)
+                or (1 if (isinstance(d, ast.Slice) or (isinstance(d, ast.Constant) and d.value is None)) else 0)
+            )
+            for d in dims
+        )
         align = max(0, len(lhs_slice_iters) - rhs_result_axes)
         idx_nodes: List[ast.AST] = []
         rhs_slice_idx = 0
@@ -4299,8 +4730,10 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
                     # so a non-zero-start LHS slice indexes the length-matched index
                     # array within bounds.
                     giters = [
-                        self._iter_minus_start(lhs_slice_iters[align + rhs_slice_idx + k][0],
-                                               lhs_slice_iters[align + rhs_slice_idx + k][1]) for k in range(r)
+                        self._iter_minus_start(
+                            lhs_slice_iters[align + rhs_slice_idx + k][0], lhs_slice_iters[align + rhs_slice_idx + k][1]
+                        )
+                        for k in range(r)
                     ]
                     rhs_slice_idx += r
                     idx_nodes.append(self._bind_gather_operand(d, giters))
@@ -4325,8 +4758,7 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
             # (An INTEGER index is the other rule and is already handled: it drops the axis, so it
             # never reaches here.) Emitting the start is right whichever extent the destination has:
             # where the destination is also length 1 the iter var only ever takes that one value.
-            rhs_stop = (self._resolve_bound(d.upper, rhs_name, axis, default=_const(0))
-                        if d.upper is not None else None)
+            rhs_stop = self._resolve_bound(d.upper, rhs_name, axis, default=_const(0)) if d.upper is not None else None
             src_shape = self.array_shapes.get(rhs_name)
             axis_len = src_shape[axis] if src_shape and axis < len(src_shape) else None
             if _is_unit_extent(rhs_start, rhs_stop, axis_len):
@@ -4344,8 +4776,11 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
                 if _step_is_negative(step) and d.lower is None:
                     _ss = self.array_shapes.get(rhs_name)
                     if _ss and axis < len(_ss):
-                        _al = (_const(int(_ss[axis])) if str(_ss[axis]).isdigit() else ast.Name(id=str(_ss[axis]),
-                                                                                                ctx=ast.Load()))
+                        _al = (
+                            _const(int(_ss[axis]))
+                            if str(_ss[axis]).isdigit()
+                            else ast.Name(id=str(_ss[axis]), ctx=ast.Load())
+                        )
                         rhs_start = _binop(_al, ast.Sub(), _const(1))
                     else:
                         # Without the axis length we cannot seed the reverse start at
@@ -4379,13 +4814,12 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
         source_axes_consumed = sum(1 for d in dims if not (isinstance(d, ast.Constant) and d.value is None))
         source_shape = self.array_shapes.get(rhs_name)
         if source_shape is not None:
-            while (source_axes_consumed < len(source_shape) and rhs_slice_idx < len(lhs_slice_iters)):
+            while source_axes_consumed < len(source_shape) and rhs_slice_idx < len(lhs_slice_iters):
                 ivar_node, _ = lhs_slice_iters[rhs_slice_idx]
                 rhs_slice_idx += 1
                 source_axes_consumed += 1
                 idx_nodes.append(ast.Name(id=ivar_node.id, ctx=ast.Load()))
-        new_slice = idx_nodes[0] if len(idx_nodes) == 1 else \
-            ast.Tuple(elts=idx_nodes, ctx=ast.Load())
+        new_slice = idx_nodes[0] if len(idx_nodes) == 1 else ast.Tuple(elts=idx_nodes, ctx=ast.Load())
         return ast.Subscript(value=node.value, slice=new_slice, ctx=node.ctx)
 
     def _front_placed_gather(self, node: ast.Subscript) -> Optional[ast.Subscript]:
@@ -4419,8 +4853,11 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
             return None
         if len(_advanced_runs(dims)) <= 1:
             return None  # adjacent -- owned by the existing in-place handling
-        lhs_pairs = [(iv, rng[0]) for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
-                     if isinstance(dim, ast.Slice) and iv is not None]
+        lhs_pairs = [
+            (iv, rng[0])
+            for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
+            if isinstance(dim, ast.Slice) and iv is not None
+        ]
         lhs_iters = [iv for iv, _ in lhs_pairs]
         lhs_starts = [st for _, st in lhs_pairs]
         run_rank = max((r for r in ranks if r is not None and r >= 1), default=0)
@@ -4439,8 +4876,10 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
                 continue
             if isinstance(d, ast.Name):
                 giters = [
-                    _const(0) if str(self.array_shapes[d.id][k]).strip() == "1" else self._iter_minus_start(
-                        front_iters[k], front_starts[k]) for k in range(r)
+                    _const(0)
+                    if str(self.array_shapes[d.id][k]).strip() == "1"
+                    else self._iter_minus_start(front_iters[k], front_starts[k])
+                    for k in range(r)
                 ]
                 gslot = giters[0] if r == 1 else ast.Tuple(elts=giters, ctx=ast.Load())
                 new_dims.append(ast.Subscript(value=d, slice=gslot, ctx=ast.Load()))
@@ -4451,8 +4890,13 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
                 # above uses. Left to generic_visit, it would align against the
                 # wrong (trailing) iters -- it has no idea it is part of a
                 # front-placed group.
-                sub = _SliceToScalarRewriter(self.array_shapes, list(front_iters), [(st, st) for st in front_starts],
-                                             None, [ast.Slice(lower=None, upper=None, step=None) for _ in front_iters])
+                sub = _SliceToScalarRewriter(
+                    self.array_shapes,
+                    list(front_iters),
+                    [(st, st) for st in front_starts],
+                    None,
+                    [ast.Slice(lower=None, upper=None, step=None) for _ in front_iters],
+                )
                 new_dims.append(sub.visit(copy.deepcopy(d)))
         node.slice = ast.Tuple(elts=new_dims, ctx=ast.Load())
         return node
@@ -4464,19 +4908,27 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
         reads the operand shape from ``self.array_shapes`` (RHS side)."""
         shape = self.array_shapes.get(array_name) if array_name else None
         val = None
-        if (isinstance(idx, ast.Constant) and isinstance(idx.value, int) and idx.value < 0):
+        if isinstance(idx, ast.Constant) and isinstance(idx.value, int) and idx.value < 0:
             val = -idx.value
-        elif (isinstance(idx, ast.UnaryOp) and isinstance(idx.op, ast.USub) and isinstance(idx.operand, ast.Constant)
-              and isinstance(idx.operand.value, int)):
+        elif (
+            isinstance(idx, ast.UnaryOp)
+            and isinstance(idx.op, ast.USub)
+            and isinstance(idx.operand, ast.Constant)
+            and isinstance(idx.operand.value, int)
+        ):
             val = idx.operand.value
         if val is not None and shape and axis < len(shape):
-            axis_len = (_const(int(shape[axis])) if str(shape[axis]).isdigit() else ast.Name(id=str(shape[axis]),
-                                                                                             ctx=ast.Load()))
+            axis_len = (
+                _const(int(shape[axis]))
+                if str(shape[axis]).isdigit()
+                else ast.Name(id=str(shape[axis]), ctx=ast.Load())
+            )
             return _binop(axis_len, ast.Sub(), _const(val))
         return idx
 
-    def _resolve_bound(self, bound: Optional[ast.AST], array_name: Optional[str], axis: int,
-                       default: ast.AST) -> ast.AST:
+    def _resolve_bound(
+        self, bound: Optional[ast.AST], array_name: Optional[str], axis: int, default: ast.AST
+    ) -> ast.AST:
         """Mirror :meth:`SliceFusion._resolve_bound` for the RHS scalarizer.
 
         Resolves negative-index bounds against the operand array's shape
@@ -4490,14 +4942,19 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
         shape = self.array_shapes.get(array_name) if array_name else None
         if isinstance(bound, ast.Constant) and isinstance(bound.value, int) and bound.value < 0:
             if shape and axis < len(shape):
-                axis_len = _const(int(shape[axis])) if shape[axis].isdigit() \
-                    else ast.Name(id=shape[axis], ctx=ast.Load())
+                axis_len = (
+                    _const(int(shape[axis])) if shape[axis].isdigit() else ast.Name(id=shape[axis], ctx=ast.Load())
+                )
                 return _binop(axis_len, ast.Sub(), _const(-bound.value))
-        if (isinstance(bound, ast.UnaryOp) and isinstance(bound.op, ast.USub)
-                and isinstance(bound.operand, ast.Constant) and isinstance(bound.operand.value, int) and shape
-                and axis < len(shape)):
-            axis_len = _const(int(shape[axis])) if shape[axis].isdigit() \
-                else ast.Name(id=shape[axis], ctx=ast.Load())
+        if (
+            isinstance(bound, ast.UnaryOp)
+            and isinstance(bound.op, ast.USub)
+            and isinstance(bound.operand, ast.Constant)
+            and isinstance(bound.operand.value, int)
+            and shape
+            and axis < len(shape)
+        ):
+            axis_len = _const(int(shape[axis])) if shape[axis].isdigit() else ast.Name(id=shape[axis], ctx=ast.Load())
             return _binop(axis_len, ast.Sub(), _const(bound.operand.value))
         return bound
 
@@ -4519,8 +4976,13 @@ def _is_unit_extent(start: ast.AST, stop: Optional[ast.AST], axis_len: Any = Non
         return str(axis_len).strip() == "1"
     if _fold_offset(stop, start) == 1:
         return True
-    return (isinstance(stop, ast.BinOp) and isinstance(stop.op, ast.Add) and isinstance(stop.right, ast.Constant)
-            and stop.right.value == 1 and ast.dump(stop.left) == ast.dump(start))
+    return (
+        isinstance(stop, ast.BinOp)
+        and isinstance(stop.op, ast.Add)
+        and isinstance(stop.right, ast.Constant)
+        and stop.right.value == 1
+        and ast.dump(stop.left) == ast.dump(start)
+    )
 
 
 def _fold_offset(rhs_start: ast.AST, lhs_start: ast.AST) -> Optional[int]:
@@ -4533,8 +4995,12 @@ def _fold_offset(rhs_start: ast.AST, lhs_start: ast.AST) -> Optional[int]:
     anyway, but the human-readable form is the whole point of slice
     fusion.
     """
-    if (isinstance(rhs_start, ast.Constant) and isinstance(lhs_start, ast.Constant)
-            and isinstance(rhs_start.value, int) and isinstance(lhs_start.value, int)):
+    if (
+        isinstance(rhs_start, ast.Constant)
+        and isinstance(lhs_start, ast.Constant)
+        and isinstance(rhs_start.value, int)
+        and isinstance(lhs_start.value, int)
+    ):
         return rhs_start.value - lhs_start.value
     return None
 
@@ -4552,12 +5018,16 @@ class _DaceMapRewriter(ast.NodeTransformer):
         # Detect ``for i, in dace.map[a:b:c]:`` (single-element tuple target,
         # subscript of attribute ``dace.map``).
         target = node.target
-        if (isinstance(target, ast.Tuple) and len(target.elts) == 1 and isinstance(target.elts[0], ast.Name)):
+        if isinstance(target, ast.Tuple) and len(target.elts) == 1 and isinstance(target.elts[0], ast.Name):
             target = target.elts[0]  # type: ignore[assignment]
             node.target = target
-        if (isinstance(node.iter, ast.Subscript) and isinstance(node.iter.value, ast.Attribute)
-                and isinstance(node.iter.value.value, ast.Name) and node.iter.value.value.id == "dace"
-                and node.iter.value.attr == "map"):
+        if (
+            isinstance(node.iter, ast.Subscript)
+            and isinstance(node.iter.value, ast.Attribute)
+            and isinstance(node.iter.value.value, ast.Name)
+            and node.iter.value.value.id == "dace"
+            and node.iter.value.attr == "map"
+        ):
             sl = node.iter.slice
             if isinstance(sl, ast.Slice):
                 args: List[ast.AST] = [
@@ -4566,9 +5036,9 @@ class _DaceMapRewriter(ast.NodeTransformer):
                 ]
                 if sl.step is not None:
                     args.append(sl.step)
-                node.iter = ast.Call(func=ast.Name(id="range", ctx=ast.Load()),
-                                     args=[a for a in args if a is not None],
-                                     keywords=[])
+                node.iter = ast.Call(
+                    func=ast.Name(id="range", ctx=ast.Load()), args=[a for a in args if a is not None], keywords=[]
+                )
         return node
 
 
@@ -4610,7 +5080,7 @@ class _BooleanMaskRewriter(ast.NodeTransformer):
         return self._rewrite(node.target, node.value, aug_op=node.op) or node
 
     def _rewrite(self, target, value, aug_op):
-        if (not isinstance(target, ast.Subscript) or not isinstance(target.value, ast.Name)):
+        if not isinstance(target, ast.Subscript) or not isinstance(target.value, ast.Name):
             return None
         arr_name = target.value.id
         shape = self.shape_table.get(arr_name)
@@ -4637,8 +5107,11 @@ class _BooleanMaskRewriter(ast.NodeTransformer):
             # broadcasts across it elementwise.
             return None
         iters = [f"__bm{i}" for i in range(len(shape))]
-        idx = (ast.Name(id=iters[0], ctx=ast.Load())
-               if len(iters) == 1 else ast.Tuple(elts=[ast.Name(id=i, ctx=ast.Load()) for i in iters], ctx=ast.Load()))
+        idx = (
+            ast.Name(id=iters[0], ctx=ast.Load())
+            if len(iters) == 1
+            else ast.Tuple(elts=[ast.Name(id=i, ctx=ast.Load()) for i in iters], ctx=ast.Load())
+        )
         mask_iters = iters if mask_axes is None else [iters[a] for a in mask_axes]
         mask_scalar = _SubscriptifyNames(self.shape_table, mask_iters).visit(copy.deepcopy(mask_expr))
         # ``arr[mask_name]`` on the RHS reads a bool-masked slice in numpy, but
@@ -4655,12 +5128,12 @@ class _BooleanMaskRewriter(ast.NodeTransformer):
         out: List[ast.stmt] = [guarded]
         for var, bound in zip(reversed(iters), reversed(list(shape))):
             out = [
-                ast.For(target=ast.Name(id=var, ctx=ast.Store()),
-                        iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()),
-                                      args=[_token_to_ast(bound)],
-                                      keywords=[]),
-                        body=out,
-                        orelse=[])
+                ast.For(
+                    target=ast.Name(id=var, ctx=ast.Store()),
+                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[_token_to_ast(bound)], keywords=[]),
+                    body=out,
+                    orelse=[],
+                )
             ]
         return out
 
@@ -4675,7 +5148,7 @@ class _BooleanMaskRewriter(ast.NodeTransformer):
         for k, e in enumerate(tup.elts):
             if isinstance(e, ast.Slice) and e.lower is None and e.upper is None and e.step is None:
                 continue
-            if found is not None or not self._is_mask_expr(e, (lhs_shape[k], ), lhs_name):
+            if found is not None or not self._is_mask_expr(e, (lhs_shape[k],), lhs_name):
                 return None, None
             found = k
         if found is None:
@@ -4719,8 +5192,9 @@ class _BooleanMaskRewriter(ast.NodeTransformer):
         # spells logical array-ops this way): mandelbrot2's
         # ``N_out[(abs(Z) > horizon) & (N_out == 0)] = i + 1``.
         if isinstance(expr, ast.BinOp) and isinstance(expr.op, (ast.BitAnd, ast.BitOr)):
-            return (self._is_mask_expr(expr.left, lhs_shape, lhs_name)
-                    and self._is_mask_expr(expr.right, lhs_shape, lhs_name))
+            return self._is_mask_expr(expr.left, lhs_shape, lhs_name) and self._is_mask_expr(
+                expr.right, lhs_shape, lhs_name
+            )
         # ``~m`` / ``not m`` is the INVERTED mask -- still a mask over the same axis. Without this
         # ``A[:, ~m] = 0`` fell through to the integer-gather path, which rejects a boolean index.
         if isinstance(expr, ast.UnaryOp) and isinstance(expr.op, (ast.Invert, ast.Not)):
@@ -4795,8 +5269,7 @@ class _ResolveArrShape(ast.NodeTransformer):
         # shape from this list (a name reassigned 3 times will have
         # 3 entries here, consumed in source order).
         self._reassign_shapes: Dict[str, List[Tuple[str, ...]]] = {
-            k: list(v)
-            for k, v in (reassign_shapes or {}).items()
+            k: list(v) for k, v in (reassign_shapes or {}).items()
         }
         if param_shapes is not None:
             self.current: Dict[str, Tuple[str, ...]] = {k: tuple(v) for k, v in param_shapes.items()}
@@ -4815,15 +5288,18 @@ class _ResolveArrShape(ast.NodeTransformer):
             return tok
 
         class _Sub(ast.NodeTransformer):
-
             def __init__(self_inner, current):
                 self_inner.current = current
 
             def visit_Subscript(self_inner, node):
                 self_inner.generic_visit(node)
-                if not (isinstance(node.value, ast.Attribute) and node.value.attr == "shape"
-                        and isinstance(node.value.value, ast.Name) and isinstance(node.slice, ast.Constant)
-                        and isinstance(node.slice.value, int)):
+                if not (
+                    isinstance(node.value, ast.Attribute)
+                    and node.value.attr == "shape"
+                    and isinstance(node.value.value, ast.Name)
+                    and isinstance(node.slice, ast.Constant)
+                    and isinstance(node.slice.value, int)
+                ):
                     return node
                 src = self_inner.current.get(node.value.value.id)
                 if not src or node.slice.value >= len(src):
@@ -4893,7 +5369,7 @@ class _ResolveArrShape(ast.NodeTransformer):
         # ZerosRewriter (single shape per name in ``zeros_locals``)
         # OR from ``_WholeArrayAssignRewriter`` (one marker per
         # reassignment, shape FIFO in ``_reassign_shapes``).
-        if (isinstance(rhs, ast.Call) and isinstance(rhs.func, ast.Name) and rhs.func.id == "__hpcagent_bench_zeros__"):
+        if isinstance(rhs, ast.Call) and isinstance(rhs.func, ast.Name) and rhs.func.id == "__hpcagent_bench_zeros__":
             if target in self._reassign_shapes and self._reassign_shapes[target]:
                 self.current[target] = self._reassign_shapes[target].pop(0)
                 return
@@ -4913,8 +5389,12 @@ class _ResolveArrShape(ast.NodeTransformer):
             if src is not None:
                 self.current[target] = src
             return
-        if (isinstance(rhs, ast.Call) and isinstance(rhs.func, ast.Attribute) and isinstance(rhs.func.value, ast.Name)
-                and rhs.func.value.id == "np"):
+        if (
+            isinstance(rhs, ast.Call)
+            and isinstance(rhs.func, ast.Attribute)
+            and isinstance(rhs.func.value, ast.Name)
+            and rhs.func.value.id == "np"
+        ):
             attr = rhs.func.attr
             if attr in NP_ZEROS_ALIASES and rhs.args:
                 if attr.endswith("_like") and isinstance(rhs.args[0], ast.Name):
@@ -4926,15 +5406,18 @@ class _ResolveArrShape(ast.NodeTransformer):
                 if isinstance(shape_arg, (ast.Tuple, ast.List)):
                     self.current[target] = tuple(_resolve_shape_token(e, self.current) for e in shape_arg.elts)
                     return
-                if (isinstance(shape_arg, ast.Attribute) and shape_arg.attr == "shape"
-                        and isinstance(shape_arg.value, ast.Name)):
+                if (
+                    isinstance(shape_arg, ast.Attribute)
+                    and shape_arg.attr == "shape"
+                    and isinstance(shape_arg.value, ast.Name)
+                ):
                     src = self.current.get(shape_arg.value.id)
                     if src is not None:
                         self.current[target] = tuple(src)
                     return
             if attr == "linspace" and len(rhs.args) >= 3:
                 tok = ast.unparse(rhs.args[2])
-                self.current[target] = (tok, )
+                self.current[target] = (tok,)
                 return
         # An all-size-1 result is a scalar, not a broadcast shape (see extent_is_scalar).
         if isinstance(rhs, (ast.BinOp, ast.UnaryOp, ast.IfExp)):
@@ -4949,9 +5432,13 @@ class _ResolveArrShape(ast.NodeTransformer):
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
         self.generic_visit(node)
-        if not (isinstance(node.value, ast.Attribute) and node.value.attr == "shape"
-                and isinstance(node.value.value, ast.Name) and isinstance(node.slice, ast.Constant)
-                and isinstance(node.slice.value, int)):
+        if not (
+            isinstance(node.value, ast.Attribute)
+            and node.value.attr == "shape"
+            and isinstance(node.value.value, ast.Name)
+            and isinstance(node.slice, ast.Constant)
+            and isinstance(node.slice.value, int)
+        ):
             return node
         src = self.current.get(node.value.value.id)
         if not src or node.slice.value >= len(src):
@@ -4998,13 +5485,15 @@ def _strip_mask_subscripts(expr: ast.AST, mask_names: Set[str], mask_expr: Optio
     mask_src = ast.unparse(mask_expr) if mask_expr is not None else None
 
     class _Strip(ast.NodeTransformer):
-
         def visit_Subscript(self_inner, node: ast.Subscript) -> ast.AST:
             self_inner.generic_visit(node)
-            if (isinstance(node.slice, ast.Name) and node.slice.id in mask_names):
+            if isinstance(node.slice, ast.Name) and node.slice.id in mask_names:
                 return node.value
-            if (mask_src is not None and isinstance(node.slice, (ast.Compare, ast.BoolOp, ast.BinOp))
-                    and ast.unparse(node.slice) == mask_src):
+            if (
+                mask_src is not None
+                and isinstance(node.slice, (ast.Compare, ast.BoolOp, ast.BinOp))
+                and ast.unparse(node.slice) == mask_src
+            ):
                 return node.value
             return node
 
@@ -5037,7 +5526,7 @@ class _LiftFreshArrayFromSlices(ast.NodeTransformer):
         # Side-effect: when the RHS contains a complex literal like
         # ``1j``, infer that the fresh local should be declared as
         # complex128 (mandelbrot ``C = X + Y[:, None] * 1j``).
-        self.local_dtypes: Dict[str, str] = (local_dtypes if local_dtypes is not None else {})
+        self.local_dtypes: Dict[str, str] = local_dtypes if local_dtypes is not None else {}
 
     def run(self, tree: ast.AST) -> Dict[str, Tuple[str, ...]]:
         """Mutate ``tree`` in place and return the new-local shape map."""
@@ -5066,7 +5555,8 @@ class _LiftFreshArrayFromSlices(ast.NodeTransformer):
         rebind = existing is not None
         if rebind:
             if len(existing) != len(shape_toks) or not all(
-                    shape_exprs_equal(a, b) for a, b in zip(existing, shape_toks)):
+                shape_exprs_equal(a, b) for a, b in zip(existing, shape_toks)
+            ):
                 return node
         else:
             self.new_locals[target.id] = shape_toks
@@ -5091,10 +5581,10 @@ class _LiftFreshArrayFromSlices(ast.NodeTransformer):
         if rebind:
             self_ref = any(isinstance(n, ast.Name) and n.id == target.id for n in ast.walk(node.value))
             marker_args = [ast.Constant(value="__reassign__"), ast.Constant(value=self_ref)]
-        marker = ast.Assign(targets=[ast.Name(id=target.id, ctx=ast.Store())],
-                            value=ast.Call(func=ast.Name(id="__hpcagent_bench_zeros__", ctx=ast.Load()),
-                                           args=marker_args,
-                                           keywords=[]))
+        marker = ast.Assign(
+            targets=[ast.Name(id=target.id, ctx=ast.Store())],
+            value=ast.Call(func=ast.Name(id="__hpcagent_bench_zeros__", ctx=ast.Load()), args=marker_args, keywords=[]),
+        )
         # ``C[:]`` only iterates the first axis; for multi-D targets
         # we need ``C[:, :]`` so slice fusion emits a per-element loop
         # nest covering every axis (mandelbrot's
@@ -5103,8 +5593,9 @@ class _LiftFreshArrayFromSlices(ast.NodeTransformer):
         if rank == 1:
             slice_form: ast.expr = ast.Slice(lower=None, upper=None, step=None)
         else:
-            slice_form = ast.Tuple(elts=[ast.Slice(lower=None, upper=None, step=None) for _ in range(rank)],
-                                   ctx=ast.Load())
+            slice_form = ast.Tuple(
+                elts=[ast.Slice(lower=None, upper=None, step=None) for _ in range(rank)], ctx=ast.Load()
+            )
         slice_lhs = ast.Subscript(value=ast.Name(id=target.id, ctx=ast.Load()), slice=slice_form, ctx=ast.Store())
         slice_assign = ast.Assign(targets=[slice_lhs], value=node.value)
         return [marker, slice_assign]
@@ -5164,10 +5655,21 @@ _DTYPE_PRESERVING_METHODS: FrozenSet[str] = ARRAY_METHOD_SHAPE_OPS | frozenset({
 #: the same reason -- they take their element type from the PROTOTYPE -- and they matter because
 #: the whole-array pass rewrites ``Y.copy()`` into ``np.empty_like(Y)`` plus a copy loop before
 #: any of this runs, so ``copy`` alone never sees the source again.
-_DTYPE_PRESERVING_FUNCS: FrozenSet[str] = frozenset({
-    "copy", "ascontiguousarray", "asarray", "array", "transpose", "conj", "conjugate", "empty_like", "zeros_like",
-    "ones_like", "full_like"
-})
+_DTYPE_PRESERVING_FUNCS: FrozenSet[str] = frozenset(
+    {
+        "copy",
+        "ascontiguousarray",
+        "asarray",
+        "array",
+        "transpose",
+        "conj",
+        "conjugate",
+        "empty_like",
+        "zeros_like",
+        "ones_like",
+        "full_like",
+    }
+)
 
 
 def _dtype_carrying_operands(call: ast.Call) -> Tuple[str, ...]:
@@ -5183,8 +5685,9 @@ def _dtype_carrying_operands(call: ast.Call) -> Tuple[str, ...]:
     if not isinstance(func, ast.Attribute) or any(kw.arg == "dtype" for kw in call.keywords):
         return ()
     out: List[str] = []
-    for node in ([func.value] if func.attr in _DTYPE_PRESERVING_METHODS else
-                 []) + ([call.args[0]] if func.attr in _DTYPE_PRESERVING_FUNCS and call.args else []):
+    for node in ([func.value] if func.attr in _DTYPE_PRESERVING_METHODS else []) + (
+        [call.args[0]] if func.attr in _DTYPE_PRESERVING_FUNCS and call.args else []
+    ):
         while isinstance(node, ast.Subscript):
             node = node.value
         if isinstance(node, ast.Name):
@@ -5217,8 +5720,13 @@ def _walk_complex(node: ast.AST, name_dtype: "Callable[[str], Optional[str]]") -
     if isinstance(node, ast.IfExp):
         return _walk_complex(node.body, name_dtype) or _walk_complex(node.orelse, name_dtype)
     if isinstance(node, ast.Call):
-        fn = (node.func.attr
-              if isinstance(node.func, ast.Attribute) else node.func.id if isinstance(node.func, ast.Name) else None)
+        fn = (
+            node.func.attr
+            if isinstance(node.func, ast.Attribute)
+            else node.func.id
+            if isinstance(node.func, ast.Name)
+            else None
+        )
         if fn in _REAL_FROM_COMPLEX:
             return None
         # An explicit complex ``dtype=`` (``np.zeros((n,), dtype=np.complex128)``)
@@ -5279,8 +5787,12 @@ def _is_conj_call(node: ast.AST) -> Optional[ast.expr]:
     if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
         return None
     f = node.func
-    if (f.attr in ("conj", "conjugate") and isinstance(f.value, ast.Name) and f.value.id in ("np", "numpy")
-            and len(node.args) == 1):
+    if (
+        f.attr in ("conj", "conjugate")
+        and isinstance(f.value, ast.Name)
+        and f.value.id in ("np", "numpy")
+        and len(node.args) == 1
+    ):
         return node.args[0]
     if f.attr == "conjugate" and not node.args:
         return f.value
@@ -5351,8 +5863,11 @@ def _scalar_expr_complex(expr: ast.AST, local_dtypes: Dict[str, str]) -> bool:
     if isinstance(expr, ast.UnaryOp):
         return _scalar_expr_complex(expr.operand, local_dtypes)
     if isinstance(expr, ast.Call):
-        fn = expr.func.attr if isinstance(expr.func,
-                                          ast.Attribute) else (expr.func.id if isinstance(expr.func, ast.Name) else "")
+        fn = (
+            expr.func.attr
+            if isinstance(expr.func, ast.Attribute)
+            else (expr.func.id if isinstance(expr.func, ast.Name) else "")
+        )
         if fn in _REAL_FROM_COMPLEX:
             return False
         # Anything else (exp, sqrt, conj, a reshape, an unknown helper) is assumed to CARRY the
@@ -5362,9 +5877,9 @@ def _scalar_expr_complex(expr: ast.AST, local_dtypes: Dict[str, str]) -> bool:
     return False
 
 
-def _seed_complex_work_dtypes(tree: ast.AST,
-                              local_dtypes: Dict[str, str],
-                              array_dtypes: Optional[Dict[str, str]] = None) -> None:
+def _seed_complex_work_dtypes(
+    tree: ast.AST, local_dtypes: Dict[str, str], array_dtypes: Optional[Dict[str, str]] = None
+) -> None:
     """Seed ``local_dtypes`` for complex work-array temps and their directly
     derived scalar reads, before ``promote-true-division`` and ``libnode-expand``
     consume those dtypes.
@@ -5388,7 +5903,8 @@ def _seed_complex_work_dtypes(tree: ast.AST,
     since a derived scalar's dtype depends on the temp it reads (``m`` / ``ephi``
     <- ``apq`` <- ``Cm``'s constructor)."""
     assigns = [
-        s for s in ast.walk(tree)
+        s
+        for s in ast.walk(tree)
         if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name)
     ]
 
@@ -5430,8 +5946,13 @@ def _seed_complex_work_dtypes(tree: ast.AST,
                             return adt
             # m = np.hypot/abs/real/imag(<complex ...>) -- a real-returning magnitude of a
             # complex operand types to the MATCHING REAL width (so ``m`` is real, not complex).
-            fn = (value.func.attr if isinstance(value.func, ast.Attribute) else
-                  value.func.id if isinstance(value.func, ast.Name) else None)
+            fn = (
+                value.func.attr
+                if isinstance(value.func, ast.Attribute)
+                else value.func.id
+                if isinstance(value.func, ast.Name)
+                else None
+            )
             if fn in _REAL_FROM_COMPLEX:
                 for sub in ast.walk(value):
                     if isinstance(sub, ast.Name):
@@ -5502,22 +6023,34 @@ class _TupleSubscriptFolder(ast.NodeTransformer):
         if isinstance(node.value, ast.Tuple):
             elts = node.value.elts
             idx_node = node.slice
-            if (isinstance(idx_node, ast.Constant) and isinstance(idx_node.value, int)):
+            if isinstance(idx_node, ast.Constant) and isinstance(idx_node.value, int):
                 idx = idx_node.value
                 if idx < 0:
                     idx += len(elts)
                 if 0 <= idx < len(elts):
                     return elts[idx]
-            if (isinstance(idx_node, ast.UnaryOp) and isinstance(idx_node.op, ast.USub)
-                    and isinstance(idx_node.operand, ast.Constant) and isinstance(idx_node.operand.value, int)):
+            if (
+                isinstance(idx_node, ast.UnaryOp)
+                and isinstance(idx_node.op, ast.USub)
+                and isinstance(idx_node.operand, ast.Constant)
+                and isinstance(idx_node.operand.value, int)
+            ):
                 idx = -idx_node.operand.value + len(elts)
                 if 0 <= idx < len(elts):
                     return elts[idx]
         return node
 
 
-_BLOCK_STMT_TYPES = (ast.For, ast.AsyncFor, ast.While, ast.If, ast.With, ast.AsyncWith, ast.FunctionDef,
-                     ast.AsyncFunctionDef)
+_BLOCK_STMT_TYPES = (
+    ast.For,
+    ast.AsyncFor,
+    ast.While,
+    ast.If,
+    ast.With,
+    ast.AsyncWith,
+    ast.FunctionDef,
+    ast.AsyncFunctionDef,
+)
 
 
 def _fill_empty_blocks(tree: ast.AST) -> None:
@@ -5580,9 +6113,15 @@ class _TupleLocalPropagator(ast.NodeTransformer):
             if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
                 store_counts[n.id] = store_counts.get(n.id, 0) + 1
         for stmt in ast.walk(tree):
-            if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
-                    and isinstance(stmt.value, ast.Tuple) and store_counts.get(stmt.targets[0].id) == 1
-                    and stmt.value.elts and all(self._is_dim(e) for e in stmt.value.elts)):
+            if not (
+                isinstance(stmt, ast.Assign)
+                and len(stmt.targets) == 1
+                and isinstance(stmt.targets[0], ast.Name)
+                and isinstance(stmt.value, ast.Tuple)
+                and store_counts.get(stmt.targets[0].id) == 1
+                and stmt.value.elts
+                and all(self._is_dim(e) for e in stmt.value.elts)
+            ):
                 continue
             target = stmt.targets[0].id
             reads = {n.id for e in stmt.value.elts for n in ast.walk(e) if isinstance(n, ast.Name)}
@@ -5598,7 +6137,7 @@ class _TupleLocalPropagator(ast.NodeTransformer):
 
     def visit_Assign(self, node: ast.Assign) -> Optional[ast.AST]:
         self.generic_visit(node)
-        if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in self.tuples):
+        if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in self.tuples:
             return None
         return node
 
@@ -5636,10 +6175,27 @@ def _collect_bool_names(tree: ast.AST, arrays) -> Set[str]:
         # reductions in these kernels use (``cfl_clip[...].any(axis=(0, 2))``).
         if isinstance(e, ast.Call) and isinstance(e.func, ast.Attribute) and e.func.attr in ("any", "all"):
             return True
-        if isinstance(e, ast.Call) and isinstance(e.func, ast.Attribute) and isinstance(e.func.value, ast.Name) \
-                and e.func.value.id == "np":
-            if e.func.attr in ("logical_and", "logical_or", "logical_not", "logical_xor", "isnan", "isinf", "isfinite",
-                               "greater", "greater_equal", "less", "less_equal", "equal", "not_equal"):
+        if (
+            isinstance(e, ast.Call)
+            and isinstance(e.func, ast.Attribute)
+            and isinstance(e.func.value, ast.Name)
+            and e.func.value.id == "np"
+        ):
+            if e.func.attr in (
+                "logical_and",
+                "logical_or",
+                "logical_not",
+                "logical_xor",
+                "isnan",
+                "isinf",
+                "isfinite",
+                "greater",
+                "greater_equal",
+                "less",
+                "less_equal",
+                "equal",
+                "not_equal",
+            ):
                 return True
             # ``np.where`` is boolean exactly when BOTH branches are: it selects between them, so
             # a bool/bool select is still a mask. bitonic_sort builds its compare-exchange mask as
@@ -5650,14 +6206,20 @@ def _collect_bool_names(tree: ast.AST, arrays) -> Set[str]:
             if e.func.attr in ("zeros", "ones", "empty", "full", "zeros_like", "ones_like"):
                 for kw in e.keywords:
                     dv = kw.value
-                    if kw.arg == "dtype" and ((isinstance(dv, ast.Attribute) and dv.attr in ("bool_", "bool")) or
-                                              (isinstance(dv, ast.Name) and dv.id == "bool")):
+                    if kw.arg == "dtype" and (
+                        (isinstance(dv, ast.Attribute) and dv.attr in ("bool_", "bool"))
+                        or (isinstance(dv, ast.Name) and dv.id == "bool")
+                    ):
                         return True
         return False
 
     for node in ast.walk(tree):
-        if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
-                and _is_bool(node.value)):
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and _is_bool(node.value)
+        ):
             bn.add(node.targets[0].id)
     return bn
 
@@ -5666,8 +6228,13 @@ def _unwrap_cast(value: ast.expr) -> Tuple[ast.expr, Optional[ast.expr]]:
     """Split ``int(expr)`` / ``float(expr)`` into ``(expr, the cast callee)``; anything else keeps
     its cast slot empty. The cast has to survive a rewrite of ``expr``: dropping the ``int`` around
     a reduction would stop truncating."""
-    if (isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id in ("int", "float")
-            and len(value.args) == 1 and not value.keywords):
+    if (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Name)
+        and value.func.id in ("int", "float")
+        and len(value.args) == 1
+        and not value.keywords
+    ):
         return value.args[0], value.func
     return value, None
 
@@ -5686,7 +6253,6 @@ def _reads_before_rebind(stmts: List[ast.stmt], name: str) -> bool:
 
 
 class _BooleanMaskReductionRewriter(ast.NodeTransformer):
-
     def __init__(self, shape_table=None, bool_names=None):
         self.shape_table = shape_table or {}
         self.bool_names = bool_names or set()
@@ -5738,9 +6304,15 @@ class _BooleanMaskReductionRewriter(ast.NodeTransformer):
             # (like the inline form) so an integer-index gather ``t = a[idx];
             # s = t.sum()`` is left for the gather materialiser, not mis-lowered
             # into a mask-guarded accumulate loop.
-            if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
-                    and isinstance(stmt.value, ast.Subscript) and isinstance(stmt.value.slice, ast.Name)
-                    and stmt.value.slice.id in self.bool_names and i + 1 < len(stmts)):
+            if (
+                isinstance(stmt, ast.Assign)
+                and len(stmt.targets) == 1
+                and isinstance(stmt.targets[0], ast.Name)
+                and isinstance(stmt.value, ast.Subscript)
+                and isinstance(stmt.value.slice, ast.Name)
+                and stmt.value.slice.id in self.bool_names
+                and i + 1 < len(stmts)
+            ):
                 tmp_name = stmt.targets[0].id
                 arr = stmt.value.value.id if isinstance(stmt.value.value, ast.Name) else stmt.value.value
                 mask = stmt.value.slice.id
@@ -5802,10 +6374,17 @@ class _BooleanMaskReductionRewriter(ast.NodeTransformer):
         """
         if isinstance(arr, str):
             shape = self.shape_table.get(arr) or self.shape_table.get(mask)
-            n_expr = self._tok_to_ast(shape[0]) if shape else ast.Call(
-                func=ast.Name(id="len", ctx=ast.Load()), args=[ast.Name(id=arr, ctx=ast.Load())], keywords=[])
-            return (lambda idx: ast.Subscript(value=ast.Name(id=arr, ctx=ast.Load()), slice=idx, ctx=ast.Load()),
-                    n_expr)
+            n_expr = (
+                self._tok_to_ast(shape[0])
+                if shape
+                else ast.Call(
+                    func=ast.Name(id="len", ctx=ast.Load()), args=[ast.Name(id=arr, ctx=ast.Load())], keywords=[]
+                )
+            )
+            return (
+                lambda idx: ast.Subscript(value=ast.Name(id=arr, ctx=ast.Load()), slice=idx, ctx=ast.Load()),
+                n_expr,
+            )
         if not (isinstance(arr, ast.Subscript) and isinstance(arr.value, ast.Name)):
             return None
         shape = self.shape_table.get(arr.value.id)
@@ -5826,9 +6405,11 @@ class _BooleanMaskReductionRewriter(ast.NodeTransformer):
         def load(idx):
             composed = [copy.deepcopy(e) for e in elts]
             composed[axis] = _view_offset(view.lower, view.step, idx)
-            return ast.Subscript(value=ast.Name(id=arr.value.id, ctx=ast.Load()),
-                                 slice=ast.Tuple(elts=composed, ctx=ast.Load()),
-                                 ctx=ast.Load())
+            return ast.Subscript(
+                value=ast.Name(id=arr.value.id, ctx=ast.Load()),
+                slice=ast.Tuple(elts=composed, ctx=ast.Load()),
+                ctx=ast.Load(),
+            )
 
         return load, n_expr
 
@@ -5851,15 +6432,29 @@ class _BooleanMaskReductionRewriter(ast.NodeTransformer):
         sel = None
         op = None
         # Form ``np.<op>(arr[mask])``.
-        if (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id == "np"
-                and func.attr in {"mean", "sum", "max", "min"} and len(call.args) == 1 and not call.keywords):
+        if (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "np"
+            and func.attr in {"mean", "sum", "max", "min"}
+            and len(call.args) == 1
+            and not call.keywords
+        ):
             sel, op = call.args[0], func.attr
         # Form ``arr[mask].<op>()``.
-        elif (isinstance(func, ast.Attribute) and func.attr in {"mean", "sum", "max", "min"} and not call.args
-              and not call.keywords):
+        elif (
+            isinstance(func, ast.Attribute)
+            and func.attr in {"mean", "sum", "max", "min"}
+            and not call.args
+            and not call.keywords
+        ):
             sel, op = func.value, func.attr
-        if (isinstance(sel, ast.Subscript) and isinstance(sel.value, ast.Name) and isinstance(sel.slice, ast.Name)
-                and sel.slice.id in self.bool_names):
+        if (
+            isinstance(sel, ast.Subscript)
+            and isinstance(sel.value, ast.Name)
+            and isinstance(sel.slice, ast.Name)
+            and sel.slice.id in self.bool_names
+        ):
             return sel.value.id, sel.slice.id, op, tgt
         return None
 
@@ -5880,17 +6475,30 @@ class _BooleanMaskReductionRewriter(ast.NodeTransformer):
         call, _ = _unwrap_cast(stmt.value)
         if not isinstance(call, ast.Call):
             return None
-        if not (isinstance(call.args, list) and len(call.args) == 0 or
-                (len(call.args) == 1 and isinstance(call.args[0], ast.Name) and call.args[0].id == expected_name)):
+        if not (
+            isinstance(call.args, list)
+            and len(call.args) == 0
+            or (len(call.args) == 1 and isinstance(call.args[0], ast.Name) and call.args[0].id == expected_name)
+        ):
             return None
         func = call.func
         # Form 1: np.<op>(...)
-        if (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id == "np"
-                and func.attr in {"mean", "sum", "max", "min"} and len(call.args) == 1):
+        if (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "np"
+            and func.attr in {"mean", "sum", "max", "min"}
+            and len(call.args) == 1
+        ):
             return func.attr
         # Form 2: arr.<op>()
-        if (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id == expected_name
-                and func.attr in {"mean", "sum", "max", "min"} and len(call.args) == 0):
+        if (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id == expected_name
+            and func.attr in {"mean", "sum", "max", "min"}
+            and len(call.args) == 0
+        ):
             return func.attr
         return None
 
@@ -5902,9 +6510,9 @@ class _BooleanMaskReductionRewriter(ast.NodeTransformer):
         if source is None:
             return None
         load, n_expr = source
-        mask_load = ast.Subscript(value=ast.Name(id=mask, ctx=ast.Load()),
-                                  slice=ast.Name(id=i_name, ctx=ast.Load()),
-                                  ctx=ast.Load())
+        mask_load = ast.Subscript(
+            value=ast.Name(id=mask, ctx=ast.Load()), slice=ast.Name(id=i_name, ctx=ast.Load()), ctx=ast.Load()
+        )
         arr_load = load(ast.Name(id=i_name, ctx=ast.Load()))
         out: List[ast.stmt] = []
         if op == "mean":
@@ -5915,23 +6523,34 @@ class _BooleanMaskReductionRewriter(ast.NodeTransformer):
                 ast.AugAssign(target=ast.Name(id=cnt_name, ctx=ast.Store()), op=ast.Add(), value=ast.Constant(value=1)),
             ]
             out.append(
-                ast.For(target=ast.Name(id=i_name, ctx=ast.Store()),
-                        iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[n_expr], keywords=[]),
-                        body=[ast.If(test=mask_load, body=body, orelse=[])],
-                        orelse=[]))
+                ast.For(
+                    target=ast.Name(id=i_name, ctx=ast.Store()),
+                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[n_expr], keywords=[]),
+                    body=[ast.If(test=mask_load, body=body, orelse=[])],
+                    orelse=[],
+                )
+            )
             out.append(
-                ast.Assign(targets=[ast.Name(id=res_name, ctx=ast.Store())],
-                           value=ast.BinOp(left=ast.Name(id=sum_name, ctx=ast.Load()),
-                                           op=ast.Div(),
-                                           right=ast.Name(id=cnt_name, ctx=ast.Load()))))
+                ast.Assign(
+                    targets=[ast.Name(id=res_name, ctx=ast.Store())],
+                    value=ast.BinOp(
+                        left=ast.Name(id=sum_name, ctx=ast.Load()),
+                        op=ast.Div(),
+                        right=ast.Name(id=cnt_name, ctx=ast.Load()),
+                    ),
+                )
+            )
         elif op == "sum":
             out.append(ast.Assign(targets=[ast.Name(id=res_name, ctx=ast.Store())], value=ast.Constant(value=0.0)))
             body = [ast.AugAssign(target=ast.Name(id=res_name, ctx=ast.Store()), op=ast.Add(), value=arr_load)]
             out.append(
-                ast.For(target=ast.Name(id=i_name, ctx=ast.Store()),
-                        iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[n_expr], keywords=[]),
-                        body=[ast.If(test=mask_load, body=body, orelse=[])],
-                        orelse=[]))
+                ast.For(
+                    target=ast.Name(id=i_name, ctx=ast.Store()),
+                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[n_expr], keywords=[]),
+                    body=[ast.If(test=mask_load, body=body, orelse=[])],
+                    orelse=[],
+                )
+            )
         elif op in {"max", "min"}:
             # The FIRST masked hit seeds the accumulator; subsequent hits
             # compare and update. Seeding from ``arr[0]`` unconditionally would
@@ -5941,23 +6560,31 @@ class _BooleanMaskReductionRewriter(ast.NodeTransformer):
             out.append(ast.Assign(targets=[ast.Name(id=res_name, ctx=ast.Store())], value=load(ast.Constant(value=0))))
             out.append(ast.Assign(targets=[ast.Name(id=cnt_name, ctx=ast.Store())], value=ast.Constant(value=0)))
             update = ast.If(
-                test=ast.BoolOp(op=ast.Or(),
-                                values=[
-                                    ast.Compare(left=ast.Name(id=cnt_name, ctx=ast.Load()),
-                                                ops=[ast.Eq()],
-                                                comparators=[ast.Constant(value=0)]),
-                                    ast.Compare(left=copy.deepcopy(arr_load),
-                                                ops=[cmp],
-                                                comparators=[ast.Name(id=res_name, ctx=ast.Load())])
-                                ]),
+                test=ast.BoolOp(
+                    op=ast.Or(),
+                    values=[
+                        ast.Compare(
+                            left=ast.Name(id=cnt_name, ctx=ast.Load()),
+                            ops=[ast.Eq()],
+                            comparators=[ast.Constant(value=0)],
+                        ),
+                        ast.Compare(
+                            left=copy.deepcopy(arr_load), ops=[cmp], comparators=[ast.Name(id=res_name, ctx=ast.Load())]
+                        ),
+                    ],
+                ),
                 body=[ast.Assign(targets=[ast.Name(id=res_name, ctx=ast.Store())], value=copy.deepcopy(arr_load))],
-                orelse=[])
+                orelse=[],
+            )
             body = [update, ast.Assign(targets=[ast.Name(id=cnt_name, ctx=ast.Store())], value=ast.Constant(value=1))]
             out.append(
-                ast.For(target=ast.Name(id=i_name, ctx=ast.Store()),
-                        iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[n_expr], keywords=[]),
-                        body=[ast.If(test=mask_load, body=body, orelse=[])],
-                        orelse=[]))
+                ast.For(
+                    target=ast.Name(id=i_name, ctx=ast.Store()),
+                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[n_expr], keywords=[]),
+                    body=[ast.If(test=mask_load, body=body, orelse=[])],
+                    orelse=[],
+                )
+            )
         else:
             return None
         for s in out:
@@ -5998,7 +6625,7 @@ class _ShapeAttrToReshape(ast.NodeTransformer):
             return node
         shape_targets: List[ast.Name] = []
         for tgt in node.targets:
-            if (isinstance(tgt, ast.Attribute) and tgt.attr == "shape" and isinstance(tgt.value, ast.Name)):
+            if isinstance(tgt, ast.Attribute) and tgt.attr == "shape" and isinstance(tgt.value, ast.Name):
                 shape_targets.append(tgt.value)
             else:
                 return node
@@ -6013,10 +6640,11 @@ class _ShapeAttrToReshape(ast.NodeTransformer):
         # Emit one Assign per target ``x = np.reshape(x, new_shape)``.
         out: List[ast.stmt] = []
         for name in shape_targets:
-            call = ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="reshape", ctx=ast.Load()),
-                            args=[ast.Name(id=name.id, ctx=ast.Load()),
-                                  copy.deepcopy(new_shape)],
-                            keywords=[])
+            call = ast.Call(
+                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="reshape", ctx=ast.Load()),
+                args=[ast.Name(id=name.id, ctx=ast.Load()), copy.deepcopy(new_shape)],
+                keywords=[],
+            )
             out.append(ast.Assign(targets=[ast.Name(id=name.id, ctx=ast.Store())], value=call))
         for s in out:
             ast.fix_missing_locations(s)
@@ -6044,8 +6672,13 @@ class _MgridLowering(ast.NodeTransformer):
         if not (len(node.targets) == 1 and isinstance(node.targets[0], ast.Tuple)):
             return node
         rhs = node.value
-        if not (isinstance(rhs, ast.Subscript) and isinstance(rhs.value, ast.Attribute)
-                and isinstance(rhs.value.value, ast.Name) and rhs.value.value.id == "np" and rhs.value.attr == "mgrid"):
+        if not (
+            isinstance(rhs, ast.Subscript)
+            and isinstance(rhs.value, ast.Attribute)
+            and isinstance(rhs.value.value, ast.Name)
+            and rhs.value.value.id == "np"
+            and rhs.value.attr == "mgrid"
+        ):
             return node
         targets = node.targets[0].elts
         if not all(isinstance(t, ast.Name) for t in targets):
@@ -6069,42 +6702,56 @@ class _MgridLowering(ast.NodeTransformer):
         iters = [ast.Name(id=f"__mg{k}", ctx=ast.Load()) for k in range(len(targets))]
         for k, tgt in enumerate(targets):
             out.append(
-                ast.Assign(targets=[ast.Name(id=tgt.id, ctx=ast.Store())],
-                           value=ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()),
-                                                             attr="empty",
-                                                             ctx=ast.Load()),
-                                          args=[shape_tuple],
-                                          keywords=[
-                                              ast.keyword(arg="dtype",
-                                                          value=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()),
-                                                                              attr="int64",
-                                                                              ctx=ast.Load()))
-                                          ])))
-            lo_k = axes[k].lower if axes[k].lower is not None \
-                else ast.Constant(value=0)
+                ast.Assign(
+                    targets=[ast.Name(id=tgt.id, ctx=ast.Store())],
+                    value=ast.Call(
+                        func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="empty", ctx=ast.Load()),
+                        args=[shape_tuple],
+                        keywords=[
+                            ast.keyword(
+                                arg="dtype",
+                                value=ast.Attribute(
+                                    value=ast.Name(id="np", ctx=ast.Load()), attr="int64", ctx=ast.Load()
+                                ),
+                            )
+                        ],
+                    ),
+                )
+            )
+            lo_k = axes[k].lower if axes[k].lower is not None else ast.Constant(value=0)
             idx_expr: ast.expr = ast.Name(id=iters[k].id, ctx=ast.Load())
             if not (isinstance(lo_k, ast.Constant) and lo_k.value == 0):
                 idx_expr = ast.BinOp(left=idx_expr, op=ast.Add(), right=lo_k)
-            slice_form = (iters[0] if len(iters) == 1 else ast.Tuple(
-                elts=[ast.Name(id=it.id, ctx=ast.Load()) for it in iters], ctx=ast.Load()))
+            slice_form = (
+                iters[0]
+                if len(iters) == 1
+                else ast.Tuple(elts=[ast.Name(id=it.id, ctx=ast.Load()) for it in iters], ctx=ast.Load())
+            )
             body = [
-                ast.Assign(targets=[
-                    ast.Subscript(value=ast.Name(id=tgt.id, ctx=ast.Load()), slice=slice_form, ctx=ast.Store())
-                ],
-                           value=idx_expr)
+                ast.Assign(
+                    targets=[
+                        ast.Subscript(value=ast.Name(id=tgt.id, ctx=ast.Load()), slice=slice_form, ctx=ast.Store())
+                    ],
+                    value=idx_expr,
+                )
             ]
             # Wrap the body in nested loops, deepest first.
             stmt: List[ast.stmt] = body
             for it, ax in zip(reversed(iters), reversed(axes)):
                 ax_lo = ax.lower if ax.lower is not None else ast.Constant(value=0)
                 ax_hi = ax.upper
-                bound = (ax_hi if isinstance(ax_lo, ast.Constant) and ax_lo.value == 0 else ast.BinOp(
-                    left=ax_hi, op=ast.Sub(), right=ax_lo))
+                bound = (
+                    ax_hi
+                    if isinstance(ax_lo, ast.Constant) and ax_lo.value == 0
+                    else ast.BinOp(left=ax_hi, op=ast.Sub(), right=ax_lo)
+                )
                 stmt = [
-                    ast.For(target=ast.Name(id=it.id, ctx=ast.Store()),
-                            iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[bound], keywords=[]),
-                            body=stmt,
-                            orelse=[])
+                    ast.For(
+                        target=ast.Name(id=it.id, ctx=ast.Store()),
+                        iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[bound], keywords=[]),
+                        body=stmt,
+                        orelse=[],
+                    )
                 ]
             out.extend(stmt)
         return out
@@ -6116,8 +6763,9 @@ def _is_constructor_call(node: ast.Call) -> bool:
     semantics is allocation, NOT a shape-preserving elementwise op.
     Used by the whole-array rewriter to refuse expanding these
     forms into per-element loops."""
-    if not (isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "np"):
+    if not (
+        isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name) and node.func.value.id == "np"
+    ):
         return False
     return node.func.attr in {
         "zeros",
@@ -6216,8 +6864,7 @@ def _has_index_array(node: ast.Subscript, shape_table) -> bool:
     for e in elts:
         if isinstance(e, ast.Name) and e.id in shape_table:
             return True
-        if isinstance(e, ast.Subscript) and isinstance(e.value, ast.Name) \
-                and e.value.id in shape_table:
+        if isinstance(e, ast.Subscript) and isinstance(e.value, ast.Name) and e.value.id in shape_table:
             return True
     return False
 
@@ -6225,8 +6872,13 @@ def _has_index_array(node: ast.Subscript, shape_table) -> bool:
 def _np_func_call(value: ast.AST, name: str) -> Optional[ast.Call]:
     """Return ``value`` when it is ``np.<name>(...)`` / ``numpy.<name>(...)``,
     else ``None`` -- used to recognise ``np.ix_`` / ``np.meshgrid`` calls."""
-    if (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute) and value.func.attr == name
-            and isinstance(value.func.value, ast.Name) and value.func.value.id in ("np", "numpy")):
+    if (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Attribute)
+        and value.func.attr == name
+        and isinstance(value.func.value, ast.Name)
+        and value.func.value.id in ("np", "numpy")
+    ):
         return value
     return None
 
@@ -6263,7 +6915,7 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         #: Shared dtype tag table. Alias / BinOp expansions propagate
         #: dtype here so the emitter sees the right C type for a
         #: complex-RHS local that was never directly declared.
-        self.local_dtypes: Dict[str, str] = (local_dtypes if local_dtypes is not None else {})
+        self.local_dtypes: Dict[str, str] = local_dtypes if local_dtypes is not None else {}
         #: New local array names introduced by alias propagation
         #: (``x = __cb2`` where ``x`` wasn't previously an array) --
         #: emitter must declare them as stack arrays.
@@ -6313,8 +6965,11 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         if not shape:
             return []
         iters = [f"__w{i}" for i in range(len(shape))]
-        idx = (ast.Name(id=iters[0], ctx=ast.Load())
-               if len(iters) == 1 else ast.Tuple(elts=[ast.Name(id=i, ctx=ast.Load()) for i in iters], ctx=ast.Load()))
+        idx = (
+            ast.Name(id=iters[0], ctx=ast.Load())
+            if len(iters) == 1
+            else ast.Tuple(elts=[ast.Name(id=i, ctx=ast.Load()) for i in iters], ctx=ast.Load())
+        )
         lhs_sub = ast.Subscript(value=ast.Name(id=target.id, ctx=ast.Load()), slice=idx, ctx=ast.Store())
         # A slice- or newaxis-bearing RHS (``delta = xi[None, :, None, :] - x[aj][:, None, :, :]``)
         # has no Name to subscriptify: the operands are already Subscripts, and left alone they
@@ -6344,12 +6999,12 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         out = body
         for var, bound in zip(reversed(iters), reversed(shape)):
             out = [
-                ast.For(target=ast.Name(id=var, ctx=ast.Store()),
-                        iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()),
-                                      args=[_token_to_ast(bound)],
-                                      keywords=[]),
-                        body=out,
-                        orelse=[])
+                ast.For(
+                    target=ast.Name(id=var, ctx=ast.Store()),
+                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[_token_to_ast(bound)], keywords=[]),
+                    body=out,
+                    orelse=[],
+                )
             ]
         # Prepend a ``Name = __hpcagent_bench_zeros__("__reassign__", self_ref)`` marker so
         # the source-order shape resolver (``_ResolveArrShape``) can pick
@@ -6365,13 +7020,17 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         # reads the OLD U at every index, so a deferred-malloc emitter may not realloc it either.
         if op is None:
             self_ref = any(isinstance(n, ast.Name) and n.id == target.id for n in ast.walk(value))
-            marker = ast.Assign(targets=[ast.Name(id=target.id, ctx=ast.Store())],
-                                value=ast.Call(func=ast.Name(id="__hpcagent_bench_zeros__", ctx=ast.Load()),
-                                               args=[
-                                                   ast.Constant(value="__reassign__"),
-                                                   ast.Constant(value=self_ref),
-                                               ],
-                                               keywords=[]))
+            marker = ast.Assign(
+                targets=[ast.Name(id=target.id, ctx=ast.Store())],
+                value=ast.Call(
+                    func=ast.Name(id="__hpcagent_bench_zeros__", ctx=ast.Load()),
+                    args=[
+                        ast.Constant(value="__reassign__"),
+                        ast.Constant(value=self_ref),
+                    ],
+                    keywords=[],
+                ),
+            )
             self._reassign_shapes.setdefault(target.id, []).append(tuple(shape))
             out = [marker] + out
         return out
@@ -6401,19 +7060,19 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
             return []
         iters = [f"__w{i}" for i in range(len(remaining))]
         full_idx = list(given) + [ast.Name(id=i, ctx=ast.Load()) for i in iters]
-        lhs_sub = ast.Subscript(value=ast.Name(id=name, ctx=ast.Load()),
-                                slice=ast.Tuple(elts=full_idx, ctx=ast.Load()),
-                                ctx=ast.Store())
+        lhs_sub = ast.Subscript(
+            value=ast.Name(id=name, ctx=ast.Load()), slice=ast.Tuple(elts=full_idx, ctx=ast.Load()), ctx=ast.Store()
+        )
         rhs = _SubscriptifyNames(self.shape_table, iters).visit(copy.deepcopy(value))
         out: List[ast.stmt] = [ast.Assign(targets=[lhs_sub], value=rhs)]
         for var, bound in zip(reversed(iters), reversed(remaining)):
             out = [
-                ast.For(target=ast.Name(id=var, ctx=ast.Store()),
-                        iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()),
-                                      args=[_token_to_ast(bound)],
-                                      keywords=[]),
-                        body=out,
-                        orelse=[])
+                ast.For(
+                    target=ast.Name(id=var, ctx=ast.Store()),
+                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[_token_to_ast(bound)], keywords=[]),
+                    body=out,
+                    orelse=[],
+                )
             ]
         return out
 
@@ -6449,7 +7108,7 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         name = target.value.id
         if name not in self.shape_table:
             return []
-        lead = (list(target.slice.elts) if isinstance(target.slice, ast.Tuple) else [target.slice])
+        lead = list(target.slice.elts) if isinstance(target.slice, ast.Tuple) else [target.slice]
         slice_axes = [k for k, e in enumerate(lead) if isinstance(e, ast.Slice)]
 
         def _plain_bound(e: ast.expr) -> bool:
@@ -6457,7 +7116,8 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
             if _slice_step_any(e) not in (None, 1):
                 return False
             return not any(
-                isinstance(b, ast.Constant) and isinstance(b.value, int) and b.value < 0 for b in (e.lower, e.upper))
+                isinstance(b, ast.Constant) and isinstance(b.value, int) and b.value < 0 for b in (e.lower, e.upper)
+            )
 
         if any(not _plain_bound(lead[k]) for k in slice_axes):
             return []
@@ -6507,8 +7167,10 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         # out[0] and out[1]. Unknown dtype is unsafe for the same reason, so require integer.
         for idx_name in idx_names:
             if not dtypes.is_integer(self.local_dtypes.get(idx_name, "")):
-                raise NotImplementedError(f"{ast.unparse(target)}: index array {idx_name!r} is not a known integer "
-                                          f"dtype; a boolean here is a MASK, not a gather")
+                raise NotImplementedError(
+                    f"{ast.unparse(target)}: index array {idx_name!r} is not a known integer "
+                    f"dtype; a boolean here is a MASK, not a gather"
+                )
         extent = self.shape_table[idx_name0][0]
         it = "__sc0"
 
@@ -6518,9 +7180,11 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
 
             def visit_Name(self, node: ast.Name) -> ast.AST:
                 if node.id in idx_names:
-                    return ast.Subscript(value=ast.Name(id=node.id, ctx=ast.Load()),
-                                         slice=ast.Name(id=it, ctx=ast.Load()),
-                                         ctx=ast.Load())
+                    return ast.Subscript(
+                        value=ast.Name(id=node.id, ctx=ast.Load()),
+                        slice=ast.Name(id=it, ctx=ast.Load()),
+                        ctx=ast.Load(),
+                    )
                 return node
 
         new_lead: List[ast.expr] = []
@@ -6554,7 +7218,7 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
                     plan.insert(0 if rhs_carries_index else len(plan), (it, _token_to_ast(extent)))
         iters = [i for i, _ in plan]
         bounds = [b for _, b in plan]
-        lhs_slice = (new_lead[0] if len(new_lead) == 1 else ast.Tuple(elts=new_lead, ctx=ast.Load()))
+        lhs_slice = new_lead[0] if len(new_lead) == 1 else ast.Tuple(elts=new_lead, ctx=ast.Load())
         lhs = ast.Subscript(value=ast.Name(id=name, ctx=ast.Load()), slice=lhs_slice, ctx=ast.Store())
         # The RHS reads the same index arrays at the same iter. An index EXPRESSION
         # (``src[ia - 1, :]``) reaches emit with the array name still bare otherwise, which is
@@ -6564,12 +7228,12 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
 
         def _loop(body_stmt: ast.stmt) -> ast.stmt:
             for ivar, bound in zip(reversed(iters), reversed(bounds)):
-                body_stmt = ast.For(target=ast.Name(id=ivar, ctx=ast.Store()),
-                                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()),
-                                                  args=[copy.deepcopy(bound)],
-                                                  keywords=[]),
-                                    body=[body_stmt],
-                                    orelse=[])
+                body_stmt = ast.For(
+                    target=ast.Name(id=ivar, ctx=ast.Store()),
+                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[copy.deepcopy(bound)], keywords=[]),
+                    body=[body_stmt],
+                    orelse=[],
+                )
             return body_stmt
 
         if op is None:
@@ -6599,9 +7263,9 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
 
             g_store = ast.Subscript(value=ast.Name(id=gname, ctx=ast.Load()), slice=g_index(), ctx=ast.Store())
             g_load = ast.Subscript(value=ast.Name(id=gname, ctx=ast.Load()), slice=g_index(), ctx=ast.Load())
-            a_load = ast.Subscript(value=ast.Name(id=name, ctx=ast.Load()),
-                                   slice=copy.deepcopy(lhs_slice),
-                                   ctx=ast.Load())
+            a_load = ast.Subscript(
+                value=ast.Name(id=name, ctx=ast.Load()), slice=copy.deepcopy(lhs_slice), ctx=ast.Load()
+            )
             gather = _loop(ast.Assign(targets=[g_store], value=a_load))
             store = _loop(ast.Assign(targets=[copy.deepcopy(lhs)], value=ast.BinOp(left=g_load, op=op, right=rhs)))
             out = [gather, store]
@@ -6635,12 +7299,14 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         the fresh gather / meshgrid output; its element type rides on
         :attr:`local_dtypes`."""
         shape_tuple = ast.Tuple(elts=[copy.deepcopy(d) for d in dims], ctx=ast.Load())
-        return ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())],
-                          value=ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()),
-                                                            attr="empty",
-                                                            ctx=ast.Load()),
-                                         args=[shape_tuple],
-                                         keywords=[]))
+        return ast.Assign(
+            targets=[ast.Name(id=name, ctx=ast.Store())],
+            value=ast.Call(
+                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="empty", ctx=ast.Load()),
+                args=[shape_tuple],
+                keywords=[],
+            ),
+        )
 
     def _ix_iters(self, prefix: str, k: int) -> List[str]:
         self._ix_ctr += 1
@@ -6662,17 +7328,21 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         ]
         read_slot = read[0] if k == 1 else ast.Tuple(elts=read, ctx=ast.Load())
         src = ast.Subscript(value=ast.Name(id=arr.id, ctx=ast.Load()), slice=read_slot, ctx=ast.Load())
-        out_slot = (ast.Name(id=iters[0], ctx=ast.Load())
-                    if k == 1 else ast.Tuple(elts=[ast.Name(id=it, ctx=ast.Load()) for it in iters], ctx=ast.Load()))
+        out_slot = (
+            ast.Name(id=iters[0], ctx=ast.Load())
+            if k == 1
+            else ast.Tuple(elts=[ast.Name(id=it, ctx=ast.Load()) for it in iters], ctx=ast.Load())
+        )
         store = ast.Subscript(value=ast.Name(id=target.id, ctx=ast.Load()), slice=out_slot, ctx=ast.Store())
         body: List[ast.stmt] = [ast.Assign(targets=[store], value=src)]
         for it, dim in zip(reversed(iters), reversed(dims)):
             body = [
-                ast.For(target=ast.Name(id=it, ctx=ast.Store()),
-                        iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[copy.deepcopy(dim)],
-                                      keywords=[]),
-                        body=body,
-                        orelse=[])
+                ast.For(
+                    target=ast.Name(id=it, ctx=ast.Store()),
+                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[copy.deepcopy(dim)], keywords=[]),
+                    body=body,
+                    orelse=[],
+                )
             ]
         self.shape_table[target.id] = tuple(ast.unparse(d) for d in dims)
         dt = self.local_dtypes.get(arr.id)
@@ -6683,8 +7353,9 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
             ast.fix_missing_locations(s)
         return out
 
-    def _expand_ix_scatter(self, arr: ast.Name, ops: List[ast.expr], value: ast.expr,
-                           op: Optional[ast.AST]) -> Optional[List[ast.stmt]]:
+    def _expand_ix_scatter(
+        self, arr: ast.Name, ops: List[ast.expr], value: ast.expr, op: Optional[ast.AST]
+    ) -> Optional[List[ast.stmt]]:
         """``A[np.ix_(a, b, c)] (op)= rhs`` -> a nested loop
         ``A[a[i], b[j], c[k]] (op)= rhs[i, j, k]`` over the Cartesian product of
         the index arrays. The index arrays are distinct per axis (the LS3DF
@@ -6702,16 +7373,18 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         lhs_slot = lhs_idx[0] if k == 1 else ast.Tuple(elts=lhs_idx, ctx=ast.Load())
         lhs = ast.Subscript(value=ast.Name(id=arr.id, ctx=ast.Load()), slice=lhs_slot, ctx=ast.Store())
         rhs = _SubscriptifyNames(self.shape_table, iters).visit(copy.deepcopy(value))
-        stmt: ast.stmt = (ast.Assign(targets=[lhs], value=rhs)
-                          if op is None else ast.AugAssign(target=lhs, op=op, value=rhs))
+        stmt: ast.stmt = (
+            ast.Assign(targets=[lhs], value=rhs) if op is None else ast.AugAssign(target=lhs, op=op, value=rhs)
+        )
         body: List[ast.stmt] = [stmt]
         for it, dim in zip(reversed(iters), reversed(dims)):
             body = [
-                ast.For(target=ast.Name(id=it, ctx=ast.Store()),
-                        iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[copy.deepcopy(dim)],
-                                      keywords=[]),
-                        body=body,
-                        orelse=[])
+                ast.For(
+                    target=ast.Name(id=it, ctx=ast.Store()),
+                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[copy.deepcopy(dim)], keywords=[]),
+                    body=body,
+                    orelse=[],
+                )
             ]
         for s in body:
             ast.fix_missing_locations(s)
@@ -6759,11 +7432,11 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
             self.shape_table[gname] = out_shape_tokens
             kwargs = [
                 ast.keyword(arg="indexing", value=ast.Constant(value=indexing)),
-                ast.keyword(arg=MESHGRID_AXIS_KW, value=ast.Constant(value=d))
+                ast.keyword(arg=MESHGRID_AXIS_KW, value=ast.Constant(value=d)),
             ]
-            loops = expand_meshgrid(ast.Name(id=gname, ctx=ast.Store()), [copy.deepcopy(a) for a in args],
-                                    self.shape_table,
-                                    kwargs=kwargs)
+            loops = expand_meshgrid(
+                ast.Name(id=gname, ctx=ast.Store()), [copy.deepcopy(a) for a in args], self.shape_table, kwargs=kwargs
+            )
             out_stmts.append(self._empty_alloc(gname, out_dims))
             out_stmts.extend(loops)
         for s in out_stmts:
@@ -6791,15 +7464,18 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
                 self._ix_grids[target.id] = ix_ops
                 return None
         # ``vloc = A[grid]`` (or ``A[np.ix_(...)]``) open-mesh GATHER.
-        if (isinstance(target, ast.Name) and isinstance(node.value, ast.Subscript)
-                and isinstance(node.value.value, ast.Name)):
+        if (
+            isinstance(target, ast.Name)
+            and isinstance(node.value, ast.Subscript)
+            and isinstance(node.value.value, ast.Name)
+        ):
             ops = self._resolve_ix_operands(node.value)
             if ops is not None:
                 gathered = self._expand_ix_gather(target, node.value.value, ops)
                 if gathered is not None:
                     return gathered
         # ``A[grid] = rhs`` open-mesh scatter store (plain, no accumulate).
-        if (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)):
+        if isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name):
             ops = self._resolve_ix_operands(target)
             if ops is not None:
                 scattered = self._expand_ix_scatter(target.value, ops, node.value, None)
@@ -6808,7 +7484,7 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         # Fancy-index scatter store ``A[idx, c] = rhs`` (idx an index array):
         # a per-element loop. Runs first so the sliced-RHS form the emitter
         # rejects (vexx ``tg[nl, 0] = psi[:, i]``) is lowered here.
-        if (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)):
+        if isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name):
             scattered = self._expand_fancy_scatter_store(target, node.value, None)
             if scattered:
                 return scattered
@@ -6816,9 +7492,15 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         # Without this, resnet's ``x = (padded - mean) / sqrt(std + eps)``
         # (after batchnorm inlining) sees ``x`` with its harvest-time
         # final shape and skips the whole-array expansion.
-        if (isinstance(target, ast.Name) and isinstance(node.value, (ast.BinOp, ast.UnaryOp, ast.IfExp, ast.Call))
-                and not (isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
-                         and node.value.func.id == "__hpcagent_bench_zeros__")):
+        if (
+            isinstance(target, ast.Name)
+            and isinstance(node.value, (ast.BinOp, ast.UnaryOp, ast.IfExp, ast.Call))
+            and not (
+                isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Name)
+                and node.value.func.id == "__hpcagent_bench_zeros__"
+            )
+        ):
             ext = _iter_extent_of(node.value, self.shape_table)
             # All-size-1 broadcast -> a scalar local, not a ``T x[1]`` array (see extent_is_scalar).
             if ext is not None and not extent_is_scalar(ext):
@@ -6826,15 +7508,20 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         # ``C[:] = expr`` on a multi-D array means whole-array elementwise
         # assignment in numpy; lower to a per-element loop that walks the
         # full extent and subscripts every Name expression on the RHS.
-        if (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)
-                and target.value.id in self.shape_table and isinstance(target.slice, ast.Slice)
-                and target.slice.lower is None and target.slice.upper is None):
+        if (
+            isinstance(target, ast.Subscript)
+            and isinstance(target.value, ast.Name)
+            and target.value.id in self.shape_table
+            and isinstance(target.slice, ast.Slice)
+            and target.slice.lower is None
+            and target.slice.upper is None
+        ):
             # Skip constructor-style calls (np.repeat / reshape /
             # transpose / mgrid / zeros etc.) -- they are NOT
             # shape-preserving elementwise ops and lowering them
             # per-element produces nonsense like
             # ``D[w0, w1, w2] = np.repeat(arr[w0, w1, 0], K, axis=2)``.
-            if (isinstance(node.value, ast.Call) and _is_constructor_call(node.value)):
+            if isinstance(node.value, ast.Call) and _is_constructor_call(node.value):
                 return node
             name = target.value.id
             expanded = self._expand(ast.Name(id=name, ctx=ast.Store()), node.value, None)
@@ -6844,9 +7531,14 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         # whole array of the remaining shape (the reduction-into-a-row pattern
         # ``back[t] = np.argmax(scores, axis=0)`` once the RHS is hoisted to a
         # temp Name). Expand to a per-element copy over the trailing dims.
-        if (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)
-                and target.value.id in self.shape_table and not isinstance(target.slice, ast.Slice)
-                and isinstance(node.value, ast.Name) and node.value.id in self.shape_table):
+        if (
+            isinstance(target, ast.Subscript)
+            and isinstance(target.value, ast.Name)
+            and target.value.id in self.shape_table
+            and not isinstance(target.slice, ast.Slice)
+            and isinstance(node.value, ast.Name)
+            and node.value.id in self.shape_table
+        ):
             expanded = self._expand_partial(target, node.value)
             if expanded:
                 return expanded
@@ -6859,16 +7551,23 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         # Subscript gather RHS) keep their own handling: the lead must be plain
         # scalars (no index arrays) and the RHS broadcast extent must match the
         # residual rank.
-        if (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)
-                and target.value.id in self.shape_table and not isinstance(target.slice, ast.Slice)
-                and isinstance(node.value, (ast.BinOp, ast.UnaryOp, ast.IfExp))):
+        if (
+            isinstance(target, ast.Subscript)
+            and isinstance(target.value, ast.Name)
+            and target.value.id in self.shape_table
+            and not isinstance(target.slice, ast.Slice)
+            and isinstance(node.value, (ast.BinOp, ast.UnaryOp, ast.IfExp))
+        ):
             shape = self.shape_table.get(target.value.id)
-            lead = (list(target.slice.elts) if isinstance(target.slice, ast.Tuple) else [target.slice])
-            if (shape and not any(isinstance(e, ast.Slice) for e in lead)
-                    and not any(isinstance(e, ast.Name) and self.shape_table.get(e.id) for e in lead)):
+            lead = list(target.slice.elts) if isinstance(target.slice, ast.Tuple) else [target.slice]
+            if (
+                shape
+                and not any(isinstance(e, ast.Slice) for e in lead)
+                and not any(isinstance(e, ast.Name) and self.shape_table.get(e.id) for e in lead)
+            ):
                 n_trailing = len(shape) - len(lead)
                 rhs_ext = _iter_extent_of(node.value, self.shape_table)
-                if (n_trailing > 0 and rhs_ext is not None and len(rhs_ext) == n_trailing):
+                if n_trailing > 0 and rhs_ext is not None and len(rhs_ext) == n_trailing:
                     expanded = self._expand_partial_subscript(target, node.value, None)
                     if expanded:
                         return expanded
@@ -6876,7 +7575,7 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         # gets the shape of whichever RHS preceded each use. If the LHS
         # is a fresh local (not already an array), record it so the
         # emitter declares it.
-        if (isinstance(target, ast.Name) and isinstance(node.value, ast.Name) and node.value.id in self.shape_table):
+        if isinstance(target, ast.Name) and isinstance(node.value, ast.Name) and node.value.id in self.shape_table:
             rhs_shape = self.shape_table[node.value.id]
             self.shape_table[target.id] = rhs_shape
             if target.id not in self._known_arrays:
@@ -6890,15 +7589,19 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         # ``z = arr[...]`` -- scalar local taking its dtype from a
         # known-dtype array. Lets ``abs(z)`` on a complex-array element
         # route through the ``cabs`` complex-intrinsic path.
-        if (isinstance(target, ast.Name) and isinstance(node.value, ast.Subscript)
-                and isinstance(node.value.value, ast.Name) and target.id not in self.local_dtypes):
+        if (
+            isinstance(target, ast.Name)
+            and isinstance(node.value, ast.Subscript)
+            and isinstance(node.value.value, ast.Name)
+            and target.id not in self.local_dtypes
+        ):
             src_dt = self.local_dtypes.get(node.value.value.id)
             if src_dt is not None:
                 self.local_dtypes[target.id] = src_dt
         # ``X = np.zeros/ones/empty/eye(shape, Y.dtype | np.complexNN)`` -- a fresh
         # complex work array (the eigh reduction's L / Li / C / V). The shape is
         # tracked elsewhere; here we tag the complex element type.
-        if (isinstance(target, ast.Name) and target.id not in self.local_dtypes and isinstance(node.value, ast.Call)):
+        if isinstance(target, ast.Name) and target.id not in self.local_dtypes and isinstance(node.value, ast.Call):
             ctag = _ctor_complex_tag(node.value, self.local_dtypes)
             if ctag is not None:
                 self.local_dtypes[target.id] = ctag
@@ -6911,8 +7614,12 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         # -- so it deleted the ``conj`` from the eigh Jacobi's own rotation. The rotation stopped
         # being unitary and the eigenvalues of ``np.linalg.eigh(np.transpose(m))`` came back as
         # zeros, with nothing failing to say so.
-        if (isinstance(target, ast.Name) and target.id not in self.local_dtypes and isinstance(node.value, ast.Call)
-                and isinstance(node.value.func, ast.Attribute)):
+        if (
+            isinstance(target, ast.Name)
+            and target.id not in self.local_dtypes
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+        ):
             f = node.value.func
             args = node.value.args
             dt = None
@@ -6933,9 +7640,12 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         # BinOp/UnaryOp over complex operands. The array-BinOp branch below only
         # fires when the value is a whole-array expr (``_iter_extent_of`` non-None);
         # a scalar complex temp needs its own tag or the emit declares it real.
-        if (isinstance(target, ast.Name) and target.id not in self.local_dtypes
-                and isinstance(node.value,
-                               (ast.BinOp, ast.UnaryOp)) and _scalar_expr_complex(node.value, self.local_dtypes)):
+        if (
+            isinstance(target, ast.Name)
+            and target.id not in self.local_dtypes
+            and isinstance(node.value, (ast.BinOp, ast.UnaryOp))
+            and _scalar_expr_complex(node.value, self.local_dtypes)
+        ):
             self.local_dtypes[target.id] = "complex128"
         # ``x = BinOp(array, array)`` where ``x`` is a Name: infer
         # x's shape from the broadcast extent of the RHS and treat as
@@ -6943,8 +7653,9 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         # for purely-scalar RHS expressions like
         # ``__inl_H_out = x.shape[1] - K + 1`` so they are not
         # misclassified as arrays.
-        if (isinstance(target, ast.Name) and isinstance(node.value,
-                                                        (ast.BinOp, ast.UnaryOp, ast.IfExp, ast.Compare, ast.BoolOp))):
+        if isinstance(target, ast.Name) and isinstance(
+            node.value, (ast.BinOp, ast.UnaryOp, ast.IfExp, ast.Compare, ast.BoolOp)
+        ):
             ext = _iter_extent_of(node.value, self.shape_table)
             # An all-size-1 broadcast (``t = (a[i] > x)`` with ``x`` shape ``(1,)``) is a SCALAR, not a
             # ``T t[1]`` array: numpyto reads size-1 arrays element-wise as ``x[0]``, so registering ``t`` as
@@ -6962,7 +7673,7 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
                 # boolean operands (``mask = cfl_clip & owner``) -- yields a
                 # BOOLEAN array. Type it so both backends declare it bool
                 # (Fortran ``logical``, C ``bool``) rather than real.
-                if (_is_bool_expr(node.value, self.local_dtypes) and target.id not in self.local_dtypes):
+                if _is_bool_expr(node.value, self.local_dtypes) and target.id not in self.local_dtypes:
                     self.local_dtypes[target.id] = "bool_"
                 # Complex-dtype propagation for BinOp / UnaryOp RHS:
                 # a subtree carrying a complex literal or a complex-
@@ -6979,12 +7690,12 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
                         # j is int64) stays integer -- so an index array derived
                         # from arange keeps its int dtype through the % / * chain
                         # (fft_3d's q/r/s gather indices).
-                        if (isinstance(node.value, ast.BinOp)
-                                and _is_integer_expr(node.value, self.local_dtypes, set(self.shape_table))):
+                        if isinstance(node.value, ast.BinOp) and _is_integer_expr(
+                            node.value, self.local_dtypes, set(self.shape_table)
+                        ):
                             self.local_dtypes[target.id] = "int64"
-        if (isinstance(target, ast.Name) and target.id in self.shape_table):
-            if (isinstance(node.value, ast.Name)
-                    and self.shape_table.get(node.value.id) == self.shape_table[target.id]):
+        if isinstance(target, ast.Name) and target.id in self.shape_table:
+            if isinstance(node.value, ast.Name) and self.shape_table.get(node.value.id) == self.shape_table[target.id]:
                 expanded = self._expand(target, node.value, None)
                 if expanded:
                     return expanded
@@ -6995,14 +7706,14 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
             # ``x = fmax(x, 0)`` (relu post math-rename) or
             # ``x = sqrt(arr)`` where every array operand has the same
             # shape as the LHS.
-            elif isinstance(node.value,
-                            (ast.BinOp, ast.UnaryOp, ast.IfExp, ast.Call, ast.Subscript, ast.Compare, ast.BoolOp)):
+            elif isinstance(
+                node.value, (ast.BinOp, ast.UnaryOp, ast.IfExp, ast.Call, ast.Subscript, ast.Compare, ast.BoolOp)
+            ):
                 # Skip constructor calls (np.zeros / np.empty etc.) --
                 # those are NOT shape-preserving Calls, and lowering
                 # them per-element would emit garbage like
                 # ``N[w0, w1] = np.zeros(...)``.
-                if isinstance(node.value, ast.Call) \
-                        and _is_constructor_call(node.value):
+                if isinstance(node.value, ast.Call) and _is_constructor_call(node.value):
                     return node
                 # A bare-Subscript RHS is handled here ONLY when it is a fancy
                 # gather (>=1 integer index-ARRAY index) -- ``__cb = u2[q, r, s]``
@@ -7050,13 +7761,16 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         this (see "index array ... is not a known integer dtype"); the read side did not.
         """
         for sub in ast.walk(value):
-            if not (isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Name)
-                    and isinstance(sub.slice, ast.Name)):
+            if not (
+                isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Name) and isinstance(sub.slice, ast.Name)
+            ):
                 continue
             if self.local_dtypes.get(sub.slice.id) in ("bool", "bool_"):
-                raise NotImplementedError(f"{ast.unparse(sub)}: {sub.slice.id!r} is a boolean MASK, so this "
-                                          f"selects a SHORTER array, not one element per index; indexing "
-                                          f"through its 0/1 values would be a wrong answer")
+                raise NotImplementedError(
+                    f"{ast.unparse(sub)}: {sub.slice.id!r} is a boolean MASK, so this "
+                    f"selects a SHORTER array, not one element per index; indexing "
+                    f"through its 0/1 values would be a wrong answer"
+                )
 
     def _norm(self, shape) -> Tuple[str, ...]:
         """Shape tokens with scalar-dim locals resolved, then folded -- the comparison form."""
@@ -7085,7 +7799,7 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         # bare Name's full-rank shape is not the relevant constraint.
         subscript_targets: Set[str] = set()
         for sub in ast.walk(expr):
-            if (isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Name)):
+            if isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Name):
                 subscript_targets.add(sub.value.id)
         has_array = False
         for sub in ast.walk(expr):
@@ -7150,14 +7864,14 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
 
     def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST:
         self.generic_visit(node)
-        if (isinstance(node.target, ast.Name) and node.target.id in self.shape_table):
+        if isinstance(node.target, ast.Name) and node.target.id in self.shape_table:
             expanded = self._expand(node.target, node.value, node.op)
             if expanded:
                 return expanded
         # ``A[grid] += rhs`` open-mesh SCATTER-ADD (grid = np.ix_(a, b, c), or an
         # inline ``A[np.ix_(...)] += rhs``): a nested accumulate loop over the
         # Cartesian product of the (distinct-per-axis) index arrays.
-        if (isinstance(node.target, ast.Subscript) and isinstance(node.target.value, ast.Name)):
+        if isinstance(node.target, ast.Subscript) and isinstance(node.target.value, ast.Name):
             ops = self._resolve_ix_operands(node.target)
             if ops is not None:
                 scattered = self._expand_ix_scatter(node.target.value, ops, node.value, node.op)
@@ -7168,7 +7882,7 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         # numpy's BUFFERED fancy ``+=`` (old value, last-write-wins on a duplicate
         # index -- NOT an accumulate) (the QE ultrasoft ``rhoc[nl] += aux2 * sf`` /
         # ``rhoc[box] += ...``).
-        if (isinstance(node.target, ast.Subscript) and isinstance(node.target.value, ast.Name)):
+        if isinstance(node.target, ast.Subscript) and isinstance(node.target.value, ast.Name):
             scattered = self._expand_fancy_scatter_store(node.target, node.value, node.op)
             if scattered:
                 return scattered
@@ -7193,7 +7907,7 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         shape = self.shape_table.get(name)
         if not shape:
             return []
-        lead = (list(target.slice.elts) if isinstance(target.slice, ast.Tuple) else [target.slice])
+        lead = list(target.slice.elts) if isinstance(target.slice, ast.Tuple) else [target.slice]
         if any(isinstance(e, ast.Slice) for e in lead):
             return []
         if any(isinstance(e, ast.Constant) and e.value is None for e in lead):
@@ -7209,17 +7923,18 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         # ``op is None`` -> a plain ``arr[lead] = rhs`` store (stencil_4d's
         # ``out_grid[b] = w_dist[-1] * padded[...]`` slice-expression RHS);
         # otherwise the augmented accumulate (``out_grid[b] += ...``).
-        leaf: ast.stmt = (ast.Assign(targets=[lhs_sub], value=rhs)
-                          if op is None else ast.AugAssign(target=lhs_sub, op=op, value=rhs))
+        leaf: ast.stmt = (
+            ast.Assign(targets=[lhs_sub], value=rhs) if op is None else ast.AugAssign(target=lhs_sub, op=op, value=rhs)
+        )
         out: List[ast.stmt] = [leaf]
         for var, bound in zip(reversed(iters), reversed(trailing)):
             out = [
-                ast.For(target=ast.Name(id=var, ctx=ast.Store()),
-                        iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()),
-                                      args=[_token_to_ast(bound)],
-                                      keywords=[]),
-                        body=out,
-                        orelse=[])
+                ast.For(
+                    target=ast.Name(id=var, ctx=ast.Store()),
+                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[_token_to_ast(bound)], keywords=[]),
+                    body=out,
+                    orelse=[],
+                )
             ]
         return out
 
@@ -7235,8 +7950,12 @@ def _resolve_neg_index(idx: ast.expr, axis_len: ast.expr) -> ast.expr:
     k = None
     if isinstance(idx, ast.Constant) and isinstance(idx.value, int) and idx.value < 0:
         k = -idx.value
-    elif (isinstance(idx, ast.UnaryOp) and isinstance(idx.op, ast.USub) and isinstance(idx.operand, ast.Constant)
-          and isinstance(idx.operand.value, int)):
+    elif (
+        isinstance(idx, ast.UnaryOp)
+        and isinstance(idx.op, ast.USub)
+        and isinstance(idx.operand, ast.Constant)
+        and isinstance(idx.operand.value, int)
+    ):
         k = idx.operand.value
     if k is None:
         return idx
@@ -7295,19 +8014,23 @@ class _SubscriptifyNames(ast.NodeTransformer):
         # ``:`` axes; each newaxis adds a result axis (and consumes an iter) but
         # contributes no source axis. Handled here because the inner value is
         # not a Name, so the Name paths below don't apply.
-        if (not isinstance(node.value, ast.Name) and isinstance(node.ctx, ast.Load)):
+        if not isinstance(node.value, ast.Name) and isinstance(node.ctx, ast.Load):
             sl0 = node.slice
             elts0 = list(sl0.elts) if isinstance(sl0, ast.Tuple) else [sl0]
 
             def _is_full(e):
-                return (isinstance(e, ast.Slice) and e.lower is None and e.upper is None and e.step is None)
+                return isinstance(e, ast.Slice) and e.lower is None and e.upper is None and e.step is None
 
-            if (elts0 and all(_is_full(e) or _is_newaxis(e) for e in elts0) and any(_is_full(e) for e in elts0)
-                    and len(elts0) <= len(self.iters)):
+            if (
+                elts0
+                and all(_is_full(e) or _is_newaxis(e) for e in elts0)
+                and any(_is_full(e) for e in elts0)
+                and len(elts0) <= len(self.iters)
+            ):
                 offset = len(self.iters) - len(elts0)
                 sub_iters = [self.iters[offset + k] for k, e in enumerate(elts0) if _is_full(e)]
                 return _SubscriptifyNames(self.shape_table, sub_iters).visit(copy.deepcopy(node.value))
-        if (isinstance(node.value, ast.Name) and isinstance(node.ctx, ast.Load)):
+        if isinstance(node.value, ast.Name) and isinstance(node.ctx, ast.Load):
             sl = node.slice
             # Fancy-index gather: ``arr[idx]`` where ``idx`` is an INDEX ARRAY
             # (it has its own shape) -> ``arr[idx[iter...]]``. The gathered
@@ -7346,10 +8069,10 @@ class _SubscriptifyNames(ast.NodeTransformer):
                     # exactly the ``sl[idx_iters]`` the Name-only path built.
                     gathered = _SubscriptifyNames(self.shape_table, idx_iters).visit(copy.deepcopy(sl))
                     full = [gathered] + trail_iters
-                    slot = (full[0] if len(full) == 1 else ast.Tuple(elts=full, ctx=ast.Load()))
+                    slot = full[0] if len(full) == 1 else ast.Tuple(elts=full, ctx=ast.Load())
                     return ast.Subscript(value=node.value, slice=slot, ctx=ast.Load())
             if isinstance(sl, ast.Slice):
-                if (sl.lower is None and sl.upper is None and sl.step is None):
+                if sl.lower is None and sl.upper is None and sl.step is None:
                     return self.visit_Name(node.value)
                 step = _slice_step_any(sl)
                 if step is not None and step != 1 and self.iters:
@@ -7360,8 +8083,11 @@ class _SubscriptifyNames(ast.NodeTransformer):
                     if start is None and _step_is_negative(step):
                         sh = self.shape_table.get(node.value.id)
                         if sh:
-                            al = (ast.Constant(
-                                value=int(sh[0])) if str(sh[0]).isdigit() else ast.Name(id=str(sh[0]), ctx=ast.Load()))
+                            al = (
+                                ast.Constant(value=int(sh[0]))
+                                if str(sh[0]).isdigit()
+                                else ast.Name(id=str(sh[0]), ctx=ast.Load())
+                            )
                             start = ast.BinOp(left=al, op=ast.Sub(), right=ast.Constant(value=1))
                     # A negative step with an UNRESOLVED start (axis length not tracked)
                     # cannot emit the reverse index ``(len-1) - iter*|step|``. Falling through
@@ -7371,7 +8097,8 @@ class _SubscriptifyNames(ast.NodeTransformer):
                     # slices (start None, step > 0) are fine: idx = iter*step is forward.
                     if _step_is_negative(step) and start is None:
                         raise NotImplementedError(
-                            f"reverse slice of {node.value.id!r} needs a known axis length (shape untracked)")
+                            f"reverse slice of {node.value.id!r} needs a known axis length (shape untracked)"
+                        )
                     iterv: ast.expr = ast.Name(id=self.iters[-1], ctx=ast.Load())
                     scaled: ast.expr = ast.BinOp(left=iterv, op=ast.Mult(), right=_step_node(step))
                     idx = scaled if start is None else ast.BinOp(left=scaled, op=ast.Add(), right=start)
@@ -7390,10 +8117,11 @@ class _SubscriptifyNames(ast.NodeTransformer):
             elif isinstance(sl, ast.Tuple) and sl.elts:
                 # All-slice fast path -- restored bare-Name behaviour.
                 all_slice = all(
-                    isinstance(e, ast.Slice) and e.lower is None and e.upper is None and e.step is None
-                    for e in sl.elts)
+                    isinstance(e, ast.Slice) and e.lower is None and e.upper is None and e.step is None for e in sl.elts
+                )
                 if all_slice:
                     return self.visit_Name(node.value)
+
                 # Slice-or-index form: every element is either a Slice
                 # (full ``:`` OR bounded ``:-1`` / ``a:b``) or a
                 # non-Slice concrete index. Substitute each Slice with
@@ -7430,7 +8158,8 @@ class _SubscriptifyNames(ast.NodeTransformer):
                     if len(runs) > 1:
                         raise NotImplementedError(
                             f"advanced indices of {node.value.id!r} separated by a slice/newaxis "
-                            f"({ast.unparse(node)!r}) -- broadcast-to-front placement is not implemented")
+                            f"({ast.unparse(node)!r}) -- broadcast-to-front placement is not implemented"
+                        )
                     run = set(runs[0])
                     run_rank = max((_idx_rank(sl.elts[i]) for i in run), default=0)
                     n_other = len(sl.elts) - len(run)
@@ -7443,7 +8172,7 @@ class _SubscriptifyNames(ast.NodeTransformer):
                         for i, e in enumerate(sl.elts):
                             if i in run:
                                 if giters is None:
-                                    giters = self.iters[offset + pos:offset + pos + run_rank]
+                                    giters = self.iters[offset + pos : offset + pos + run_rank]
                                     pos += run_rank
                                 # Each operand in the run right-aligns against the SAME
                                 # shared iters -- a lower-rank (or scalar) operand reads
@@ -7457,11 +8186,14 @@ class _SubscriptifyNames(ast.NodeTransformer):
                                 continue
                             it = ast.Name(id=self.iters[offset + pos], ctx=ast.Load())
                             pos += 1
-                            if isinstance(e, ast.Slice) and e.lower is not None and not (isinstance(
-                                    e.lower, ast.Constant) and e.lower.value == 0):
+                            if (
+                                isinstance(e, ast.Slice)
+                                and e.lower is not None
+                                and not (isinstance(e.lower, ast.Constant) and e.lower.value == 0)
+                            ):
                                 it = ast.BinOp(left=it, op=ast.Add(), right=e.lower)
                             new_elts.append(it)
-                        slot = (new_elts[0] if len(new_elts) == 1 else ast.Tuple(elts=new_elts, ctx=ast.Load()))
+                        slot = new_elts[0] if len(new_elts) == 1 else ast.Tuple(elts=new_elts, ctx=ast.Load())
                         return ast.Subscript(value=node.value, slice=slot, ctx=ast.Load())
                 partial_or_bounded = all(isinstance(e, ast.Slice) or not isinstance(e, ast.Slice) for e in sl.elts)
                 if partial_or_bounded and any(isinstance(e, ast.Slice) for e in sl.elts):
@@ -7490,8 +8222,7 @@ class _SubscriptifyNames(ast.NodeTransformer):
                                 # an ``(ncells, 1)`` array under an ``(ncells, 4, 3)`` nest: taking
                                 # the extent-4 iter reads the next cell's row, and runs past the
                                 # allocation at the last cell.
-                                if (src_shape and src_axis < len(src_shape)
-                                        and str(src_shape[src_axis]).strip() == "1"):
+                                if src_shape and src_axis < len(src_shape) and str(src_shape[src_axis]).strip() == "1":
                                     new_elts.append(ast.Constant(value=0))
                                     axis_pos += 1
                                     src_axis += 1
@@ -7511,7 +8242,7 @@ class _SubscriptifyNames(ast.NodeTransformer):
                                     if not (isinstance(e.lower, ast.Constant) and e.lower.value == 0):
                                         iter_node = ast.BinOp(left=iter_node, op=ast.Add(), right=e.lower)
                                 new_elts.append(iter_node)
-                            elif (isinstance(e, ast.Constant) and e.value is None):
+                            elif isinstance(e, ast.Constant) and e.value is None:
                                 # ``None`` (np.newaxis): consume a result axis
                                 # (and its iter) but add no source index.
                                 axis_pos += 1
@@ -7520,7 +8251,7 @@ class _SubscriptifyNames(ast.NodeTransformer):
                                 src_axis += 1
                         if not new_elts:
                             return ast.Name(id=node.value.id, ctx=ast.Load())
-                        new_slot = (new_elts[0] if len(new_elts) == 1 else ast.Tuple(elts=new_elts, ctx=ast.Load()))
+                        new_slot = new_elts[0] if len(new_elts) == 1 else ast.Tuple(elts=new_elts, ctx=ast.Load())
                         return ast.Subscript(value=node.value, slice=new_slot, ctx=ast.Load())
             # Partial scalar index on a HIGHER-rank array: ``Ham[n]``
             # where ``Ham`` is rank-3 indexes only the leading axis and
@@ -7531,7 +8262,7 @@ class _SubscriptifyNames(ast.NodeTransformer):
             # (contour_integral's ``Tz += zz * Ham[n]``). Without this
             # the read stays rank-1 (``Ham(n)`` in Fortran -> rank
             # mismatch; ``Ham[n]`` in C -> silently wrong numerics).
-            lead = (list(sl.elts) if isinstance(sl, ast.Tuple) else [sl])
+            lead = list(sl.elts) if isinstance(sl, ast.Tuple) else [sl]
 
             def _has_idx_array(e):
                 # An advanced-index axis references an index ARRAY (a Name whose
@@ -7539,9 +8270,12 @@ class _SubscriptifyNames(ast.NodeTransformer):
                 # icon gathers). Those must keep the generic-visit gather path.
                 return any(isinstance(s, ast.Name) and self.shape_table.get(s.id) for s in ast.walk(e))
 
-            if (lead and not any(isinstance(e, ast.Slice) for e in lead)
-                    and not any(isinstance(e, ast.Constant) and e.value is None for e in lead)
-                    and not any(_has_idx_array(e) for e in lead)):
+            if (
+                lead
+                and not any(isinstance(e, ast.Slice) for e in lead)
+                and not any(isinstance(e, ast.Constant) and e.value is None for e in lead)
+                and not any(_has_idx_array(e) for e in lead)
+            ):
                 shape = self.shape_table.get(node.value.id)
                 if shape is not None:
                     rank = len(shape)
@@ -7563,7 +8297,7 @@ class _SubscriptifyNames(ast.NodeTransformer):
                         # resolved) stops the default generic_visit from
                         # subscriptifying the base Name and emitting
                         # ``w_dist[__w2][-1]`` (the stencils' last-weight read).
-                        new_slot = (res_lead[0] if len(res_lead) == 1 else ast.Tuple(elts=res_lead, ctx=ast.Load()))
+                        new_slot = res_lead[0] if len(res_lead) == 1 else ast.Tuple(elts=res_lead, ctx=ast.Load())
                         return ast.Subscript(value=node.value, slice=new_slot, ctx=ast.Load())
         self.generic_visit(node)
         return node
@@ -7632,7 +8366,7 @@ class _TupleAssignRewriter(ast.NodeTransformer):
             # back into source so ast.parse rebuilds them in the new
             # context.
             tgt_elts = node.targets[0].elts
-            if (isinstance(node.value, ast.Tuple) and len(node.value.elts) == len(tgt_elts)):
+            if isinstance(node.value, ast.Tuple) and len(node.value.elts) == len(tgt_elts):
                 val_elts = node.value.elts
                 # Simultaneous bind (numpy): every target reads the OLD values.
                 # A subscript target written here must not be observed already
@@ -7659,8 +8393,11 @@ class _TupleAssignRewriter(ast.NodeTransformer):
             return node
 
         # arr.shape RHS -> shape-symbol substitution.
-        if (isinstance(node.value, ast.Attribute) and node.value.attr == "shape"
-                and isinstance(node.value.value, ast.Name)):
+        if (
+            isinstance(node.value, ast.Attribute)
+            and node.value.attr == "shape"
+            and isinstance(node.value.value, ast.Name)
+        ):
             arr_name = node.value.value.id
             shape = self.arrays_shapes.get(arr_name)
             if shape is None or len(shape) != len(names):
@@ -7737,19 +8474,38 @@ class _SelfAssignDropper(ast.NodeTransformer):
         if len(node.targets) != 1:
             return node
         tgt = node.targets[0]
-        if (isinstance(tgt, ast.Name) and isinstance(node.value, ast.Name) and tgt.id == node.value.id
-                and tgt.id not in self.keep):
+        if (
+            isinstance(tgt, ast.Name)
+            and isinstance(node.value, ast.Name)
+            and tgt.id == node.value.id
+            and tgt.id not in self.keep
+        ):
             return None
         return node
 
 
 #: Expression nodes a substituted RHS may use; ``Slice`` is absent (that is an array).
-_FWD_SUBST_NODES: Tuple[type, ...] = (ast.Constant, ast.Name, ast.Subscript, ast.Tuple, ast.BinOp, ast.UnaryOp,
-                                      ast.IfExp, ast.Compare, ast.BoolOp)
+_FWD_SUBST_NODES: Tuple[type, ...] = (
+    ast.Constant,
+    ast.Name,
+    ast.Subscript,
+    ast.Tuple,
+    ast.BinOp,
+    ast.UnaryOp,
+    ast.IfExp,
+    ast.Compare,
+    ast.BoolOp,
+)
 
 #: Callees that recompute the same value wherever they are replayed.
 _FWD_SUBST_PURE_CALLS: Set[str] = _MATH_INTRINSIC_NAMES | {
-    "min", "max", "abs", "int", "float", "int_floor", "python_mod"
+    "min",
+    "max",
+    "abs",
+    "int",
+    "float",
+    "int_floor",
+    "python_mod",
 }
 
 #: Caps on the already-grown expression, so they bound a chain (conv_2d needs 1 / 9).
@@ -7886,12 +8642,17 @@ class _ForwardSubstituteInvariantScalars(ast.NodeTransformer):
                     return False
             return True
 
-        def _scan(stmts: List[ast.stmt], depth: int, after: Tuple[List[ast.stmt], ...],
-                  reentry: Tuple[Tuple[List[ast.stmt], int], ...], loop_vars: FrozenSet[str]) -> None:
+        def _scan(
+            stmts: List[ast.stmt],
+            depth: int,
+            after: Tuple[List[ast.stmt], ...],
+            reentry: Tuple[Tuple[List[ast.stmt], int], ...],
+            loop_vars: FrozenSet[str],
+        ) -> None:
             for i, stmt in enumerate(stmts):
                 if found:
                     return
-                if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
+                if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
                     name = stmt.targets[0].id
                     if _qualifies(name, stmt.value, depth, loop_vars):
                         # Condition 6 last: it walks every block that runs after this one.
@@ -7905,18 +8666,18 @@ class _ForwardSubstituteInvariantScalars(ast.NodeTransformer):
                             return
                 if not isinstance(stmt, (ast.For, ast.While, ast.If)):
                     continue
-                tail = (stmts[i + 1:], ) + after
+                tail = (stmts[i + 1 :],) + after
                 # A block nested in a loop re-runs its own prefix on the next iteration.
-                inner_reentry = (reentry + ((stmts, i), )) if depth else reentry
+                inner_reentry = (reentry + ((stmts, i),)) if depth else reentry
                 if isinstance(stmt, ast.If):
                     # Counting the sibling branch as "after" only declines more.
-                    _scan(stmt.body, depth, (stmt.orelse, ) + tail, inner_reentry, loop_vars)
-                    _scan(stmt.orelse, depth, (stmt.body, ) + tail, inner_reentry, loop_vars)
+                    _scan(stmt.body, depth, (stmt.orelse,) + tail, inner_reentry, loop_vars)
+                    _scan(stmt.orelse, depth, (stmt.body,) + tail, inner_reentry, loop_vars)
                     continue
                 body_vars = loop_vars
                 if isinstance(stmt, ast.For):
                     body_vars = loop_vars | frozenset(n.id for n in ast.walk(stmt.target) if isinstance(n, ast.Name))
-                _scan(stmt.body, depth + 1, ((stmt.orelse, ) + tail) if stmt.orelse else tail, inner_reentry, body_vars)
+                _scan(stmt.body, depth + 1, ((stmt.orelse,) + tail) if stmt.orelse else tail, inner_reentry, body_vars)
                 _scan(stmt.orelse, depth, tail, inner_reentry, loop_vars)
 
         _scan(fn.body, 0, (), (), frozenset())
@@ -7944,8 +8705,9 @@ class LoweringContext:
         #: The un-lowered input IR -- source of ``.sparse`` and ``.helpers``.
         self.original_kir = original_kir
         #: Target's "I render this numpy call myself" predicate; see :func:`lower`.
-        self.native_call: Optional[Callable[[Tuple[str, str], ast.Call, Dict[str, Tuple[str, ...]], Dict[str, str]],
-                                            bool]] = None
+        self.native_call: Optional[
+            Callable[[Tuple[str, str], ast.Call, Dict[str, Tuple[str, ...]], Dict[str, str]], bool]
+        ] = None
         #: The working (lowered) IR -- what :func:`lower` returns.
         self.kir = lowered
         #: Shortcut to the function-body AST every pass rewrites in place.
@@ -8039,17 +8801,11 @@ def _lp_normalize_calls(ctx: LoweringContext) -> None:
     # which leaves Fortran multiplying a REAL by the LOGICAL mask.
     _AstypeRewriter(
         {
-            **{
-                k: v
-                for k, v in ctx.local_dtypes.items() if v
-            },
-            **{
-                a.name: a.dtype
-                for a in ctx.kir.arrays if a.dtype
-            },
+            **{k: v for k, v in ctx.local_dtypes.items() if v},
+            **{a.name: a.dtype for a in ctx.kir.arrays if a.dtype},
         },
-        default_float=next((a.dtype for a in ctx.kir.arrays if a.dtype and a.dtype.startswith("float")),
-                           "")).visit(tree)
+        default_float=next((a.dtype for a in ctx.kir.arrays if a.dtype and a.dtype.startswith("float")), ""),
+    ).visit(tree)
     _MethodCallRewriter().visit(tree)
     # A Call in subscript-index position (``v[np.argmax(np.abs(v))]``) is hoisted
     # to a fresh temp so the index is a bare Name the backends emit; the spilled
@@ -8152,14 +8908,19 @@ def _lp_seed_dtypes_and_harvest(ctx: LoweringContext) -> None:
     # ``mask = cfl_clip & owner`` is recognised as boolean (and declared bool /
     # logical) before the whole-array rewriter runs.
     for _s in ast.walk(tree):
-        if (isinstance(_s, ast.Assign) and len(_s.targets) == 1 and isinstance(_s.targets[0], ast.Name)
-                and isinstance(_s.value, ast.Call)):
+        if (
+            isinstance(_s, ast.Assign)
+            and len(_s.targets) == 1
+            and isinstance(_s.targets[0], ast.Name)
+            and isinstance(_s.value, ast.Call)
+        ):
             for _kw in _s.value.keywords:
                 if _kw.arg != "dtype":
                     continue
                 _dv = _kw.value
-                if ((isinstance(_dv, ast.Attribute) and _dv.attr in ("bool_", "bool"))
-                        or (isinstance(_dv, ast.Name) and _dv.id == "bool")):
+                if (isinstance(_dv, ast.Attribute) and _dv.attr in ("bool_", "bool")) or (
+                    isinstance(_dv, ast.Name) and _dv.id == "bool"
+                ):
                     ctx.local_dtypes.setdefault(_s.targets[0].id, "bool_")
     # A local the mask harvest already PROVED boolean is declared boolean too. Left at the float
     # default, velocity_tendencies' ``lvl_active = levelmask[band] | levelmask[band_next]`` emitted
@@ -8247,8 +9008,7 @@ def _lp_resolve_inlined_shapes(ctx: LoweringContext) -> None:
 
     def _resolve_inl_table(table):
         for nm in list(table):
-            table[nm] = list(_resolve_inl(table[nm])) \
-                if isinstance(table[nm], list) else _resolve_inl(table[nm])
+            table[nm] = list(_resolve_inl(table[nm])) if isinstance(table[nm], list) else _resolve_inl(table[nm])
 
     ctx.resolve_inl_table = _resolve_inl_table
     # Resolve the harvest table now so the passes that consume it (notably
@@ -8370,19 +9130,15 @@ def _lp_libnode_expand(ctx: LoweringContext) -> None:
     # Library-node expansion -- reductions, matmul, etc. -- runs before
     # ``_ZerosRewriter`` so any matmul temps the rewriter introduces are picked up
     # by the zeros pass as local arrays.
-    ctx.lib_rewriter = LibNodeRewriter(ctx.lib_shape_table,
-                                       known_arrays=set(ctx.arrays_shapes.keys()),
-                                       local_dtypes=ctx.local_dtypes,
-                                       sparse=ctx.original_kir.sparse,
-                                       dim_aliases=ctx.dim_aliases,
-                                       native_call=ctx.native_call,
-                                       native_dtypes={
-                                           **{
-                                               arr.name: arr.dtype
-                                               for arr in ctx.kir.arrays
-                                           },
-                                           **ctx.local_dtypes
-                                       })
+    ctx.lib_rewriter = LibNodeRewriter(
+        ctx.lib_shape_table,
+        known_arrays=set(ctx.arrays_shapes.keys()),
+        local_dtypes=ctx.local_dtypes,
+        sparse=ctx.original_kir.sparse,
+        dim_aliases=ctx.dim_aliases,
+        native_call=ctx.native_call,
+        native_dtypes={**{arr.name: arr.dtype for arr in ctx.kir.arrays}, **ctx.local_dtypes},
+    )
     ctx.lib_rewriter.visit(tree)
     # Second math rename: an intrinsic whose argument only becomes a SCALAR once the library
     # nodes expand. ``np.sqrt(w @ (cov @ w))`` (portfolio_optimization) defers the rename in
@@ -8453,8 +9209,13 @@ def _fix_real_scalar_dtypes(ctx: LoweringContext) -> None:
             tgt = stmt.target
         else:
             continue
-        base = (tgt.id if isinstance(tgt, ast.Name) else
-                tgt.value.id if isinstance(tgt, ast.Subscript) and isinstance(tgt.value, ast.Name) else None)
+        base = (
+            tgt.id
+            if isinstance(tgt, ast.Name)
+            else tgt.value.id
+            if isinstance(tgt, ast.Subscript) and isinstance(tgt.value, ast.Name)
+            else None
+        )
         if base in candidates:
             writes.setdefault(base, []).append(stmt.value)
 
@@ -8503,8 +9264,12 @@ def _lp_scatter_at(ctx: LoweringContext) -> None:
     # wrapped operand exactly as it does for a wrapper call spelled inline.
     wrapper_defs: Dict[str, ast.expr] = {}
     for stmt in ast.walk(ctx.tree):
-        if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
-                and _ScatterAtRewriter._unwrap_wrapper_call(stmt.value) is not None):
+        if (
+            isinstance(stmt, ast.Assign)
+            and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], ast.Name)
+            and _ScatterAtRewriter._unwrap_wrapper_call(stmt.value) is not None
+        ):
             wrapper_defs[stmt.targets[0].id] = stmt.value
     _ScatterAtRewriter(ctx.lib_shape_table, ctx.bool_names, wrapper_defs).visit(ctx.tree)
     ast.fix_missing_locations(ctx.tree)
@@ -8518,7 +9283,6 @@ def _lp_scatter_at(ctx: LoweringContext) -> None:
     if dead:
 
         class _DropDeadWrapperAssign(ast.NodeTransformer):
-
             def visit_Assign(self, node: ast.Assign) -> Optional[ast.Assign]:
                 if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in dead:
                     return None
@@ -8542,10 +9306,12 @@ def _lp_whole_array_and_zeros(ctx: LoweringContext) -> None:
     # mask_expr[i]:`` guard. Runs before the whole-array rewriter so the LHS is a
     # plain scalar subscript downstream.
     _BooleanMaskRewriter(ctx.lib_shape_table, ctx.bool_names).visit(tree)
-    ctx.wa_rewriter = _WholeArrayAssignRewriter(ctx.lib_shape_table,
-                                                real_arrays,
-                                                local_dtypes=ctx.local_dtypes,
-                                                scalar_defs=_collect_inlined_scalar_defs(tree, None))
+    ctx.wa_rewriter = _WholeArrayAssignRewriter(
+        ctx.lib_shape_table,
+        real_arrays,
+        local_dtypes=ctx.local_dtypes,
+        scalar_defs=_collect_inlined_scalar_defs(tree, None),
+    )
     ctx.wa_rewriter.visit(tree)
     # Fold the shapes the whole-array pass inferred for genuinely-new locals
     # (meshgrid ``gx``/``gy``/``gz``, the broadcast ``gsq``) back into the shared
@@ -8573,7 +9339,7 @@ def _lp_whole_array_and_zeros(ctx: LoweringContext) -> None:
     # so the emitter sees them.
     for name, shape in ctx.lib_shape_table.items():
         if name not in zeros_locals and name not in ctx.arrays_shapes:
-            zeros_locals[name] = tuple(shape) if shape else ("1", )
+            zeros_locals[name] = tuple(shape) if shape else ("1",)
     ctx.zeros_locals = zeros_locals
     ctx.kir.zeros_locals = zeros_locals
     # Fill kind per local (zeros / ones / empty / ...). Only the explicit
@@ -8659,8 +9425,9 @@ def _lp_slice_normalize_and_lift(ctx: LoweringContext) -> None:
         ctx.resolve_inl_table(shapes)
 
 
-def _fold_local_shape_attr_tokens(tuple_tables: List[Dict[str, object]], reassign_shapes: Optional[Dict[str,
-                                                                                                        List]]) -> None:
+def _fold_local_shape_attr_tokens(
+    tuple_tables: List[Dict[str, object]], reassign_shapes: Optional[Dict[str, List]]
+) -> None:
     """Fold surviving ``arr.shape[i]`` STRING tokens in the finalised shape tables
     against the now-resolved shapes of the LOCAL arrays they name.
 
@@ -8726,18 +9493,9 @@ def _lp_slice_fusion_and_resolve(ctx: LoweringContext) -> None:
     ctx.kir.reassign_shapes = {k: list(v) for k, v in ctx.wa_rewriter._reassign_shapes.items()}
     _ResolveArrShape(
         shapes,
-        param_shapes={
-            k: tuple(v)
-            for k, v in ctx.arrays_shapes.items()
-        },
-        zeros_locals={
-            k: tuple(v)
-            for k, v in ctx.zeros_locals.items()
-        },
-        reassign_shapes={
-            k: list(v)
-            for k, v in ctx.wa_rewriter._reassign_shapes.items()
-        },
+        param_shapes={k: tuple(v) for k, v in ctx.arrays_shapes.items()},
+        zeros_locals={k: tuple(v) for k, v in ctx.zeros_locals.items()},
+        reassign_shapes={k: list(v) for k, v in ctx.wa_rewriter._reassign_shapes.items()},
     ).visit(tree)
     ast.fix_missing_locations(tree)
     # Force index-array LOCALS to int64. A local whose VALUES index another array
@@ -8764,7 +9522,7 @@ def _lp_slice_fusion_and_resolve(ctx: LoweringContext) -> None:
         # if its index were 0 or 1, and a quiet wrong answer rather than a refusal.
         if _nm in ctx.bool_names:
             continue
-        if (_nm in shapes or _nm in ctx.local_dtypes):
+        if _nm in shapes or _nm in ctx.local_dtypes:
             _dt = ctx.local_dtypes.get(_nm)
             if not (_dt and dtypes.is_integer(_dt)):
                 ctx.local_dtypes[_nm] = "int64"
@@ -8808,8 +9566,8 @@ def _lp_forward_substitute_invariant_scalars(ctx: LoweringContext) -> None:
     for table in tables:
         blocked |= set(table)
         for value in table.values():
-            for token in (value if isinstance(value, (list, tuple)) else [value]):
-                for tok in (token if isinstance(token, (list, tuple)) else [token]):
+            for token in value if isinstance(value, (list, tuple)) else [value]:
+                for tok in token if isinstance(token, (list, tuple)) else [token]:
                     blocked |= set(DIM_IDENT_RE.findall(str(tok)))
     subst = _ForwardSubstituteInvariantScalars(blocked, set(ctx.kir.input_args)).run(ctx.tree)
     if not subst.substituted:
@@ -8878,20 +9636,31 @@ def _assert_lowering_invariants(phase_name: str, ctx: LoweringContext) -> None:
     # The context's tree handle must remain the kir's tree: a phase that rebuilds
     # the AST has to write it back to both, or later phases rewrite an orphan.
     if ctx.tree is not kir.tree:
-        raise AssertionError(f"lowering invariant after '{phase_name}': ctx.tree no "
-                             "longer aliases ctx.kir.tree (a phase rebuilt the AST "
-                             "without writing it back to both handles)")
+        raise AssertionError(
+            f"lowering invariant after '{phase_name}': ctx.tree no "
+            "longer aliases ctx.kir.tree (a phase rebuilt the AST "
+            "without writing it back to both handles)"
+        )
     if not isinstance(kir.tree, ast.FunctionDef):
-        raise AssertionError(f"lowering invariant after '{phase_name}': kir.tree is "
-                             f"{type(kir.tree).__name__}, expected ast.FunctionDef")
+        raise AssertionError(
+            f"lowering invariant after '{phase_name}': kir.tree is {type(kir.tree).__name__}, expected ast.FunctionDef"
+        )
     # The typed side-tables keep their declared container type -- a phase that
     # assigns the wrong shape surfaces here, not at the emitter reader.
-    for _fld, _typ in (("int_locals", list), ("local_dtypes", dict), ("zeros_locals", dict), ("zeros_fills", dict),
-                       ("scalar_call_temps", list), ("reassign_shapes", dict)):
+    for _fld, _typ in (
+        ("int_locals", list),
+        ("local_dtypes", dict),
+        ("zeros_locals", dict),
+        ("zeros_fills", dict),
+        ("scalar_call_temps", list),
+        ("reassign_shapes", dict),
+    ):
         _val = vars(kir)[_fld]
         if not isinstance(_val, _typ):
-            raise AssertionError(f"lowering invariant after '{phase_name}': kir.{_fld} "
-                                 f"is {type(_val).__name__}, expected {_typ.__name__}")
+            raise AssertionError(
+                f"lowering invariant after '{phase_name}': kir.{_fld} "
+                f"is {type(_val).__name__}, expected {_typ.__name__}"
+            )
     # The AST stays structurally well-formed: a rewriter that leaves a bad field
     # (a raw string where a node belongs, a Call missing args) fails to unparse.
     # Unparse a fixed-up copy -- synthetic nodes legitimately lack ``lineno``
@@ -8900,12 +9669,14 @@ def _assert_lowering_invariants(phase_name: str, ctx: LoweringContext) -> None:
     try:
         ast.unparse(ast.fix_missing_locations(copy.deepcopy(kir.tree)))
     except Exception as exc:
-        raise AssertionError(f"lowering invariant after '{phase_name}': kir.tree does "
-                             f"not round-trip through ast.unparse ({exc})") from exc
+        raise AssertionError(
+            f"lowering invariant after '{phase_name}': kir.tree does not round-trip through ast.unparse ({exc})"
+        ) from exc
 
 
-def _tag_complex_locals(kir, zeros_locals: Dict[str, Tuple[str, ...]], dtype_src: Dict[str, str],
-                        dtype_literal: Dict[str, str]) -> None:
+def _tag_complex_locals(
+    kir, zeros_locals: Dict[str, Tuple[str, ...]], dtype_src: Dict[str, str], dtype_literal: Dict[str, str]
+) -> None:
     """Give every COMPLEX zeros-local its complex dtype, so the emitter does not default it to real.
 
     A local array the emitter has no tag for is declared at the kernel's default FLOAT width. For a
@@ -8953,8 +9724,13 @@ def _tag_complex_locals(kir, zeros_locals: Dict[str, Tuple[str, ...]], dtype_src
         """``name`` written by an elementwise store, or None. AugAssign counts: a matmul temp is
         ZEROED by a plain assign and then ACCUMULATED into, so the accumulate is the only statement
         that carries its operands' dtype."""
-        tgt = (node.targets[0] if isinstance(node, ast.Assign) and len(node.targets) == 1 else
-               node.target if isinstance(node, ast.AugAssign) else None)
+        tgt = (
+            node.targets[0]
+            if isinstance(node, ast.Assign) and len(node.targets) == 1
+            else node.target
+            if isinstance(node, ast.AugAssign)
+            else None
+        )
         if isinstance(tgt, ast.Subscript) and isinstance(tgt.value, ast.Name):
             return tgt.value.id
         return None
@@ -8987,8 +9763,9 @@ def _tag_complex_locals(kir, zeros_locals: Dict[str, Tuple[str, ...]], dtype_src
 
 def lower(
     kir: KernelIR,
-    native_call: Optional[Callable[[Tuple[str, str], ast.Call, Dict[str, Tuple[str, ...]], Dict[str, str]],
-                                   bool]] = None
+    native_call: Optional[
+        Callable[[Tuple[str, str], ast.Call, Dict[str, Tuple[str, ...]], Dict[str, str]], bool]
+    ] = None,
 ) -> KernelIR:
     """Return a lowered copy of ``kir`` ready for backend emission.
 
@@ -9115,9 +9892,14 @@ def _detect_output_and_index_arrays(kir: KernelIR) -> None:
                 elif isinstance(t, ast.Name) and t.id in name_to_arr:
                     written.add(t.id)
             # ``k = arr[...]`` -- scalar takes its value from a param array.
-            if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
-                    and isinstance(node.value, ast.Subscript) and isinstance(node.value.value, ast.Name)
-                    and node.value.value.id in name_to_arr):
+            if (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, ast.Subscript)
+                and isinstance(node.value.value, ast.Name)
+                and node.value.value.id in name_to_arr
+            ):
                 scalar_src[node.targets[0].id] = node.value.value.id
         if isinstance(node, ast.Subscript):
             sl = node.slice
@@ -9132,7 +9914,7 @@ def _detect_output_and_index_arrays(kir: KernelIR) -> None:
                 # each is an index array (must be int, not the float default).
                 # A boolean-mask Name goes through the mask rewriter earlier, so
                 # any array Name still appearing as a bare index here is integer.
-                if (isinstance(e, ast.Name) and e.id in name_to_arr):
+                if isinstance(e, ast.Name) and e.id in name_to_arr:
                     index_arrays.add(e.id)
                 # Any bare Name appearing in the index expression (e.g.
                 # ``c[LEN_1D - k - 1]``) is a scalar used as an index.
@@ -9142,17 +9924,27 @@ def _detect_output_and_index_arrays(kir: KernelIR) -> None:
         # ``np.take(a, idx[, axis])`` -- ``idx`` (a param array) holds gather indices, so
         # it is an index array (must be int), even though ``take`` is not yet expanded into
         # the ``a[idx[..]]`` subscript form the direct detection above keys on.
-        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                and isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy")
-                and node.func.attr == "take" and len(node.args) >= 2 and isinstance(node.args[1], ast.Name)
-                and node.args[1].id in name_to_arr):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in ("np", "numpy")
+            and node.func.attr == "take"
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Name)
+            and node.args[1].id in name_to_arr
+        ):
             index_arrays.add(node.args[1].id)
         # ``np.ix_(a, b, c)`` -- each operand is an open-mesh index array (used
         # to index another array), so a param operand must be integer, even
         # though the ``A[ix_]`` gather / scatter is not expanded yet.
-        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                and isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy")
-                and node.func.attr == "ix_"):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in ("np", "numpy")
+            and node.func.attr == "ix_"
+        ):
             for arg in node.args:
                 if isinstance(arg, ast.Name) and arg.id in name_to_arr:
                     index_arrays.add(arg.id)
@@ -9210,6 +10002,7 @@ def _promote_free_names_to_params(kir: KernelIR) -> None:
     for node in ast.walk(kir.tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             declared.add(node.func.id)
+
     # Names assigned anywhere in the body are local variables, not params.
     def _names_in_target(tgt: ast.AST) -> List[str]:
         """Collect every bare Name id appearing as an assignment target,
@@ -9301,7 +10094,7 @@ def _fold_shape_aliases(kir: KernelIR) -> None:
     in-scope symbols / params (not itself, not another local), is folded -- a
     reassigned counter is left alone, so no semantics change."""
     _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-    in_scope = ({s.name for s in kir.symbols} | {s.name for s in kir.scalars} | {a.name for a in kir.arrays})
+    in_scope = {s.name for s in kir.symbols} | {s.name for s in kir.scalars} | {a.name for a in kir.arrays}
     # Dimension symbols (``N`` in ``a: (N,)``) are not yet promoted to the
     # symbol list when this runs, but they ARE valid scope for an alias RHS --
     # ``M = N`` is foldable because ``N`` names ``a``/``b``'s extent. Only
@@ -9325,8 +10118,13 @@ def _fold_shape_aliases(kir: KernelIR) -> None:
     # Count assignments per name so only single-definition aliases qualify.
     assign_count: Dict[str, int] = {}
     for node in ast.walk(kir.tree):
-        tgts = (node.targets if isinstance(node, ast.Assign) else
-                [node.target] if isinstance(node, (ast.AugAssign, ast.AnnAssign)) else [])
+        tgts = (
+            node.targets
+            if isinstance(node, ast.Assign)
+            else [node.target]
+            if isinstance(node, (ast.AugAssign, ast.AnnAssign))
+            else []
+        )
         for t in tgts:
             for nm in (n.id for n in ast.walk(t) if isinstance(n, ast.Name)):
                 assign_count[nm] = assign_count.get(nm, 0) + 1
@@ -9335,8 +10133,12 @@ def _fold_shape_aliases(kir: KernelIR) -> None:
         if not isinstance(node, ast.Assign) or len(node.targets) != 1:
             continue
         tgt = node.targets[0]
-        if (not isinstance(tgt, ast.Name) or tgt.id in in_scope or tgt.id not in shape_idents
-                or assign_count.get(tgt.id, 0) != 1):
+        if (
+            not isinstance(tgt, ast.Name)
+            or tgt.id in in_scope
+            or tgt.id not in shape_idents
+            or assign_count.get(tgt.id, 0) != 1
+        ):
             continue
         rhs_names = {n.id for n in ast.walk(node.value) if isinstance(n, ast.Name)}
         if tgt.id in rhs_names or not rhs_names <= in_scope:
@@ -9346,9 +10148,8 @@ def _fold_shape_aliases(kir: KernelIR) -> None:
         return
 
     class _Fold(ast.NodeTransformer):
-
         def visit_Assign(self, node: ast.Assign):
-            if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in aliases):
+            if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in aliases:
                 return None  # drop the now-dead defining stmt
             self.generic_visit(node)
             return node
@@ -9413,10 +10214,8 @@ def _promote_shape_symbols_to_params(kir: KernelIR) -> None:
     # logical sparse names and existing scalars are already declared).
     in_scope = (
         declared
-        | {s.name
-           for s in kir.scalars}
-        | {a.name
-           for a in kir.arrays}
+        | {s.name for s in kir.scalars}
+        | {a.name for a in kir.arrays}
         # A name DEFINED in the body (``M = a.shape[0]`` -> ``M = N``)
         # is a computed local, not a free input symbol -- even when it
         # appears in an output array's shape (smith_waterman's H is
@@ -9431,7 +10230,8 @@ def _promote_shape_symbols_to_params(kir: KernelIR) -> None:
         # not a runtime input. Promoting it would append a parameter the harness
         # binding never passes, shifting every trailing scalar one slot in the
         # positional call -- a silent miscompile, not a compile error.
-        | kir.inlined_consts)
+        | kir.inlined_consts
+    )
     shape_syms: List[str] = []
     seen: Set[str] = set()
     for arr in kir.arrays:
@@ -9442,7 +10242,7 @@ def _promote_shape_symbols_to_params(kir: KernelIR) -> None:
             # ``indptr`` bound ``NK + 1``) are promoted -- C tolerates
             # an undeclared bound via flat pointers, but Fortran renders
             # the explicit-shape array and needs the symbol in scope.
-            ident_iter = ([tok] if tok.isidentifier() else _IDENT.findall(str(tok)))
+            ident_iter = [tok] if tok.isidentifier() else _IDENT.findall(str(tok))
             for sym in ident_iter:
                 if sym in in_scope or sym in seen:
                     continue

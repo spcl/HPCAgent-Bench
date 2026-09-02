@@ -8,6 +8,7 @@ the runtime at them. Our 2,084,892 misses are all a16w16, so this is the family 
 
 Find the Opus tuner and report what it needs; tuning follows once the entry point is known.
 """
+
 import pathlib
 import subprocess
 import sys
@@ -15,6 +16,7 @@ import sys
 
 def main() -> int:
     import aiter
+
     root = pathlib.Path(aiter.__file__).resolve().parents[1]
     print("aiter root:", root, "\n")
 
@@ -26,10 +28,18 @@ def main() -> int:
         print("   none by filename")
 
     print("=" * 74, "\nwhere the Opus env vars are read")
-    for var in ("AITER_OPUS_LOG_UNTUNED", "AITER_OPUS_A16W16_UNTUNED_CSV", "AITER_OPUS_A16W16_TUNED_CSV",
-                "AITER_OPUS_TUNED_CSV_GLOB", "AITER_ONLINE_TUNE", "AITER_LOG_TUNED_CONFIG", "AITER_BYPASS_TUNE_CONFIG"):
-        found = subprocess.run(["grep", "-rn", var, str(root), "--include=*.py"], capture_output=True,
-                               text=True).stdout.splitlines()
+    for var in (
+        "AITER_OPUS_LOG_UNTUNED",
+        "AITER_OPUS_A16W16_UNTUNED_CSV",
+        "AITER_OPUS_A16W16_TUNED_CSV",
+        "AITER_OPUS_TUNED_CSV_GLOB",
+        "AITER_ONLINE_TUNE",
+        "AITER_LOG_TUNED_CONFIG",
+        "AITER_BYPASS_TUNE_CONFIG",
+    ):
+        found = subprocess.run(
+            ["grep", "-rn", var, str(root), "--include=*.py"], capture_output=True, text=True
+        ).stdout.splitlines()
         print(f"\n{var}")
         for line in found[:4]:
             print("   ", line.replace(str(root) + "/", "")[:150])
@@ -39,6 +49,7 @@ def main() -> int:
     print("\n" + "=" * 74, "\nopus module surface")
     try:
         from aiter.ops import opus
+
         names = [n for n in dir(opus) if not n.startswith("__")]
         print("  ", names[:40])
     except Exception as exc:

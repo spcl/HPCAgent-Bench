@@ -7,6 +7,7 @@ in the workflow, 94 that never executed -- including guards written for regressi
 meant to catch. A hand-written file list drifts in one direction only, because a new test is inert
 by default and inertness is silent.
 """
+
 import pathlib
 import re
 from typing import List, Set
@@ -36,8 +37,10 @@ def test_every_test_file_runs_somewhere() -> None:
     swept = all_test_files() - claimed
     assert swept, "the unit sweep would select nothing"
     orphaned = claimed - all_test_files()
-    assert not orphaned, (f"dedicated_tests.txt names files that do not exist: {sorted(orphaned)}. "
-                          "A stale entry silently shrinks the sweep.")
+    assert not orphaned, (
+        f"dedicated_tests.txt names files that do not exist: {sorted(orphaned)}. "
+        "A stale entry silently shrinks the sweep."
+    )
 
 
 def test_a_dedicated_file_is_actually_run_by_some_phase() -> None:
@@ -47,8 +50,10 @@ def test_a_dedicated_file_is_actually_run_by_some_phase() -> None:
     failure it was introduced to end, one indirection later."""
     workflow = WORKFLOW.read_text()
     missing = [name for name in sorted(dedicated_files()) if name not in workflow]
-    assert not missing, (f"excluded from the sweep but named by no phase, so they run NOWHERE: {missing}. "
-                         "Either give the file a phase, or quarantine it with a written reason.")
+    assert not missing, (
+        f"excluded from the sweep but named by no phase, so they run NOWHERE: {missing}. "
+        "Either give the file a phase, or quarantine it with a written reason."
+    )
 
 
 def test_the_sweep_is_discovered_not_enumerated() -> None:
@@ -78,8 +83,10 @@ def test_ci_never_asks_for_a_billed_runner() -> None:
                     offenders.append(f"{workflow.name}: {value}")
             elif value not in standard:
                 offenders.append(f"{workflow.name}: {value}")
-    assert not offenders, (f"non-standard, billed-per-minute runners requested: {offenders}. "
-                           f"Free on a public repo are {sorted(standard)}, plus self-hosted labels.")
+    assert not offenders, (
+        f"non-standard, billed-per-minute runners requested: {offenders}. "
+        f"Free on a public repo are {sorted(standard)}, plus self-hosted labels."
+    )
 
 
 def test_no_workflow_declares_the_same_key_twice() -> None:
@@ -136,8 +143,10 @@ def test_every_pytest_plugin_the_workflow_asks_for_is_installed() -> None:
     plugins = {"--cov": "pytest-cov", "--timeout": "pytest-timeout", "-n ": "pytest-xdist", "--dist": "pytest-xdist"}
     asked = {dist for opt, dist in plugins.items() if re.search(rf"PYTEST_ADDOPTS:.*{re.escape(opt.strip())}", text)}
     missing = sorted(d for d in asked if d not in installed)
-    assert not missing, (f"PYTEST_ADDOPTS asks for {missing}, which no pyproject.toml dependency group "
-                         f"installs -- every pytest call in CI would fail on an unrecognized argument")
+    assert not missing, (
+        f"PYTEST_ADDOPTS asks for {missing}, which no pyproject.toml dependency group "
+        f"installs -- every pytest call in CI would fail on an unrecognized argument"
+    )
 
 
 def test_asking_for_skip_reasons_does_not_hide_the_failures() -> None:
@@ -151,11 +160,16 @@ def test_asking_for_skip_reasons_does_not_hide_the_failures() -> None:
     """
     # Only pytest lines, and only a STANDALONE -r<letters> token: --no-install-recommends is not one.
     offenders = [
-        i + 1 for i, line in enumerate(WORKFLOW.read_text().splitlines()) if "pytest" in line
-        for token in re.findall(r"(?<![\w-])-r[a-zA-Z]+\b", line) if "s" in token and "f" not in token
+        i + 1
+        for i, line in enumerate(WORKFLOW.read_text().splitlines())
+        if "pytest" in line
+        for token in re.findall(r"(?<![\w-])-r[a-zA-Z]+\b", line)
+        if "s" in token and "f" not in token
     ]
-    assert not offenders, (f"tests.yml lines {offenders} ask for skip reasons without keeping failures in the "
-                           "report set; use -rfEs so a failing test is still named in the short summary")
+    assert not offenders, (
+        f"tests.yml lines {offenders} ask for skip reasons without keeping failures in the "
+        "report set; use -rfEs so a failing test is still named in the short summary"
+    )
 
 
 def test_the_combined_total_is_built_from_every_job_not_one_of_them() -> None:
@@ -178,13 +192,16 @@ def test_the_combined_total_is_built_from_every_job_not_one_of_them() -> None:
     assert combine, "no `coverage combine` step -- the combined total is not being built at all"
     assert "merge-multiple: true" not in text, (
         "an artifact download uses merge-multiple: true; every job's data file is named `.coverage`, "
-        "so flattening them makes six of seven silently disappear into one contested path")
+        "so flattening them makes six of seven silently disappear into one contested path"
+    )
     assert "coverage-data/*/.coverage*" in text, (
         "the combine glob must reach into the per-artifact subdirectories that dropping "
-        "merge-multiple creates, or it finds nothing at all")
-    assert 'Combined ${#files[@]} file' in text, (
+        "merge-multiple creates, or it finds nothing at all"
+    )
+    assert "Combined ${#files[@]} file" in text, (
         "nothing checks that combine consumed every uploaded file; a partial combine prints a "
-        "perfectly plausible percentage and stays green, which is how this went unnoticed")
+        "perfectly plausible percentage and stays green, which is how this went unnoticed"
+    )
 
 
 def test_the_corpus_reference_phase_is_not_instrumented() -> None:
@@ -210,7 +227,8 @@ def test_the_corpus_reference_phase_is_not_instrumented() -> None:
     step = text[phase:nxt]
     assert 'PYTEST_ADDOPTS: ""' in step, (
         "Phase 2c must clear PYTEST_ADDOPTS: it runs only corpus files, every one of which the "
-        "coverage config omits, so instrumenting it costs the job and yields nothing")
+        "coverage config omits, so instrumenting it costs the job and yields nothing"
+    )
 
 
 def test_the_coverage_omit_list_and_the_uninstrumented_phase_agree() -> None:
@@ -222,10 +240,10 @@ def test_the_coverage_omit_list_and_the_uninstrumented_phase_agree() -> None:
 
     pyproject = tomllib.loads((REPO / "pyproject.toml").read_text())
     omit = pyproject["tool"]["coverage"]["run"]["omit"]
-    assert any(
-        pattern.startswith("hpcagent_bench/benchmarks")
-        for pattern in omit), ("coverage no longer omits hpcagent_bench/benchmarks/, but Phase 2c still runs that tree "
-                               "with coverage disabled -- either re-instrument the phase or restore the omit")
+    assert any(pattern.startswith("hpcagent_bench/benchmarks") for pattern in omit), (
+        "coverage no longer omits hpcagent_bench/benchmarks/, but Phase 2c still runs that tree "
+        "with coverage disabled -- either re-instrument the phase or restore the omit"
+    )
 
 
 def test_ci_installs_the_tools_that_fail_silently_when_absent() -> None:
@@ -247,8 +265,10 @@ def test_ci_installs_the_tools_that_fail_silently_when_absent() -> None:
     installed = " ".join(installs)
     assert installs, "no apt-get install line in .github/actions/setup/action.yml"
     for tool in ("ninja-build", "ccache"):
-        assert tool in installed, (f"{tool} is not installed by .github/actions/setup/action.yml; without it the "
-                                   f"build silently loses its cache instead of failing")
+        assert tool in installed, (
+            f"{tool} is not installed by .github/actions/setup/action.yml; without it the "
+            f"build silently loses its cache instead of failing"
+        )
 
 
 def grouped_test_files() -> Set[str]:
@@ -303,5 +323,7 @@ def test_an_xdist_group_marker_is_never_a_no_op() -> None:
             carried |= grouped - claimed
         if carried:
             offenders.append(f"{sorted(carried)} run by: {cmd[:70]}...")
-    assert not offenders, ("these xdist runs carry a file with an xdist_group marker but no --dist loadgroup, "
-                           "so the marker does nothing: " + "; ".join(offenders))
+    assert not offenders, (
+        "these xdist runs carry a file with an xdist_group marker but no --dist loadgroup, "
+        "so the marker does nothing: " + "; ".join(offenders)
+    )

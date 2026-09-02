@@ -19,6 +19,7 @@ The AST tests pin the rewrite and, just as importantly, the guard that declines 
 loop body must not be able to read back the cell being accumulated into. The native-TU
 tests are the numerical consumers -- symm and trmm have no other c/cpp coverage.
 """
+
 import ast
 import importlib.util
 import re
@@ -111,7 +112,8 @@ def test_an_assign_step_that_does_not_read_the_scalar_is_left_alone():
 def test_aug_assign_retargets_without_a_zero_init():
     # ``T[idx] += s`` already holds the running value -- zeroing it would drop it.
     out = _retarget_scalar_accumulator(
-        *_pattern("B[i, j]", "A[__mml1 + (i + 1), i] * B[__mml1 + (i + 1), j]", augmented=True))
+        *_pattern("B[i, j]", "A[__mml1 + (i + 1), i] * B[__mml1 + (i + 1), j]", augmented=True)
+    )
     assert out is not None
     text = _unparse(out)
     assert "= 0.0" not in text
@@ -217,7 +219,9 @@ def test_fortran_carries_the_same_retarget():
     cell = rf"temp2\(\({j}\) \+ 1\)"
     assert re.search(
         rf"{cell} = {cell} \+ \(\(B\(\({j}\) \+ 1, \((x_mml1\w*)\) \+ 1\) \* "
-        rf"A\(\(\1\) \+ 1, \(i\w*\) \+ 1\)\)\)", symm), symm
+        rf"A\(\(\1\) \+ 1, \(i\w*\) \+ 1\)\)\)",
+        symm,
+    ), symm
     assert not LOCAL_SCALAR_REAL.findall(symm), LOCAL_SCALAR_REAL.findall(symm)
     trmm = _joined(_emit_fortran("trmm"))
     assert re.search(r"(B\(\(j\w*\) \+ 1, \(i\w*\) \+ 1\)) = \1 \+ ", trmm), trmm
@@ -263,14 +267,18 @@ def _reference(short, args):
 def _driver(short, args, want):
     if short == "symm":
         call = f"symm_fp64(A, B, C, {M}, {N}, {args['alpha']}, {args['beta']});"
-        bufs = (f"static const double A[] = {{{tu.c_double_list(args['A'].ravel())}}};\n"
-                f"static const double B[] = {{{tu.c_double_list(args['B'].ravel())}}};\n"
-                f"static double C[] = {{{tu.c_double_list(args['C'].ravel())}}};\n")
+        bufs = (
+            f"static const double A[] = {{{tu.c_double_list(args['A'].ravel())}}};\n"
+            f"static const double B[] = {{{tu.c_double_list(args['B'].ravel())}}};\n"
+            f"static double C[] = {{{tu.c_double_list(args['C'].ravel())}}};\n"
+        )
         out, count = "C", M * N
     else:
         call = f"trmm_fp64(A, B, {M}, {N}, {args['alpha']});"
-        bufs = (f"static const double A[] = {{{tu.c_double_list(args['A'].ravel())}}};\n"
-                f"static double B[] = {{{tu.c_double_list(args['B'].ravel())}}};\n")
+        bufs = (
+            f"static const double A[] = {{{tu.c_double_list(args['A'].ravel())}}};\n"
+            f"static double B[] = {{{tu.c_double_list(args['B'].ravel())}}};\n"
+        )
         out, count = "B", M * N
     return f"""
 #include <stdio.h>

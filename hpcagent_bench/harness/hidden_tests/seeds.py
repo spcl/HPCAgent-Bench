@@ -26,6 +26,7 @@ Call the FUNCTIONS, never the constants: the functions are where the ``seeds.sec
 ``seeds.secret_second`` config override is honoured, so a deployment that repoints a seed
 repoints every consumer at once.
 """
+
 import os
 
 from hpcagent_bench import config

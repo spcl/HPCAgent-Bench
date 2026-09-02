@@ -9,6 +9,7 @@ workers saturate the endpoint and there is no single-stream number left to take.
 It is measurement, so it must never be able to end a run: a replica that errors, a reply with no
 usage block, an unwritable run dir all cost the sample and nothing else.
 """
+
 import importlib.util
 import json
 import pathlib
@@ -53,15 +54,8 @@ class FakeResponse:
 
 def reply(completion_tokens: int, prompt_tokens: int = 40) -> dict:
     return {
-        "choices": [{
-            "message": {
-                "content": "x"
-            }
-        }],
-        "usage": {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens
-        },
+        "choices": [{"message": {"content": "x"}}],
+        "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens},
     }
 
 
@@ -134,12 +128,10 @@ def test_the_report_takes_the_median_and_writes_the_raw_samples(driver, monkeypa
     monkeypatch.delenv("AGENT_NODE_RANK", raising=False)
     monkeypatch.setenv("SLURM_PROCID", "0")
 
-    samples = [{
-        "elapsed_s": 1.0,
-        "completion_tokens": rate,
-        "prompt_tokens": 40.0,
-        "decode_tok_s": rate
-    } for rate in (1.5, 40.0, 41.0, 42.0, 43.0)]
+    samples = [
+        {"elapsed_s": 1.0, "completion_tokens": rate, "prompt_tokens": 40.0, "decode_tok_s": rate}
+        for rate in (1.5, 40.0, 41.0, 42.0, 43.0)
+    ]
     driver.report_throughput(samples)
 
     written = json.loads((tmp_path / "throughput-node0.json").read_text(encoding="utf-8"))
@@ -151,12 +143,9 @@ def test_the_report_takes_the_median_and_writes_the_raw_samples(driver, monkeypa
 def test_an_unwritable_run_dir_does_not_raise(driver, monkeypatch, tmp_path, capsys):
     """Reporting is the last thing between readiness and the agents; a bad path must not stop them."""
     monkeypatch.setenv("RUN_DIR", str(tmp_path / "does" / "not" / "exist"))
-    driver.report_throughput([{
-        "elapsed_s": 1.0,
-        "completion_tokens": 10.0,
-        "prompt_tokens": 5.0,
-        "decode_tok_s": 10.0
-    }])
+    driver.report_throughput(
+        [{"elapsed_s": 1.0, "completion_tokens": 10.0, "prompt_tokens": 5.0, "decode_tok_s": 10.0}]
+    )
     assert "could not write" in capsys.readouterr().out
 
 

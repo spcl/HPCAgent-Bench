@@ -10,6 +10,7 @@ axis-space rank is the operand's rank for an axis-preserving op (flip/roll/
 cumsum/concatenate/...) and operand rank + 1 for an axis-ADDING op (stack/
 expand_dims).
 """
+
 import ast
 from types import SimpleNamespace
 
@@ -95,9 +96,10 @@ def test_stack_negative_axis_normalized_in_place():
 def test_positive_stack_axis_returned_verbatim():
     # nothing lowers a positive-axis stack -> source is returned byte-for-byte.
     src = "import numpy as np\ndef f(a, b, out):\n out[:] = np.stack((a, b), axis=1)\n"
-    assert desugar_for_python_backend(src,
-                                      _kir("f", a=("M", "N"), b=("M", "N"), out=("M", "N", "2")),
-                                      backend="pythran") == src
+    assert (
+        desugar_for_python_backend(src, _kir("f", a=("M", "N"), b=("M", "N"), out=("M", "N", "2")), backend="pythran")
+        == src
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -106,21 +108,20 @@ def test_positive_stack_axis_returned_verbatim():
 
 
 def _pythran_ok(res):
-    return res["pythran"] in ("ok", ) or res["pythran"].startswith("skip"), res
+    return res["pythran"] in ("ok",) or res["pythran"].startswith("skip"), res
 
 
 def test_flip_negative_axis_pythran_bit_exact():
     a = np.arange(24, dtype=np.float64).reshape(4, 6)
-    res = run_op("import numpy as np\ndef f(a, out):\n out[:] = np.flip(a, axis=-1)\n",
-                 "f", {"a": a}, {"out": (4, 6)}, {
-                     "M": 4,
-                     "N": 6
-                 },
-                 shapes={
-                     "a": "(M, N)",
-                     "out": "(M, N)"
-                 },
-                 backends=("pythran", ))
+    res = run_op(
+        "import numpy as np\ndef f(a, out):\n out[:] = np.flip(a, axis=-1)\n",
+        "f",
+        {"a": a},
+        {"out": (4, 6)},
+        {"M": 4, "N": 6},
+        shapes={"a": "(M, N)", "out": "(M, N)"},
+        backends=("pythran",),
+    )
     assert res["pythran"] == "ok", res
 
 
@@ -135,17 +136,11 @@ def test_stack_negative_axis_pythran_bit_exact():
         "        for j in range(out.shape[1]):\n"
         "            for l in range(out.shape[2]):\n"
         "                out[i, j, l] = c[i, j, l]\n",
-        "k", {
-            "a": a,
-            "b": b
-        }, {"out": (2, 3, 2)}, {
-            "M": 2,
-            "N": 3
-        },
-        shapes={
-            "a": "(M, N)",
-            "b": "(M, N)",
-            "out": "(M, N, 2)"
-        },
-        backends=("pythran", ))
+        "k",
+        {"a": a, "b": b},
+        {"out": (2, 3, 2)},
+        {"M": 2, "N": 3},
+        shapes={"a": "(M, N)", "b": "(M, N)", "out": "(M, N, 2)"},
+        backends=("pythran",),
+    )
     assert res["pythran"] == "ok", res

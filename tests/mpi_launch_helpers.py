@@ -10,6 +10,7 @@ launcher pair. These helpers pick the FIRST pair that actually compiles + launch
 launcher bootstraps -- like the gcc-gated native tests. Every probe is timeout-wrapped so a
 hanging launcher never wedges the suite.
 """
+
 import functools
 import os
 import shutil
@@ -45,21 +46,9 @@ _C_TOOLCHAINS = [
 #: Compiler command per language for the C-toolchain family (MPICH vs OpenMPI wrappers), so a
 #: built ``bench`` and its launcher share one MPI. Keyed by the discovered C compiler.
 _CC_FAMILY = {
-    "mpicc.mpich": {
-        "c": "mpicc.mpich",
-        "cpp": "mpicxx.mpich",
-        "fortran": "mpifort.mpich"
-    },
-    "mpicc": {
-        "c": "mpicc",
-        "cpp": "mpicxx",
-        "fortran": "mpifort"
-    },
-    "mpicc.openmpi": {
-        "c": "mpicc.openmpi",
-        "cpp": "mpicxx.openmpi",
-        "fortran": "mpifort.openmpi"
-    },
+    "mpicc.mpich": {"c": "mpicc.mpich", "cpp": "mpicxx.mpich", "fortran": "mpifort.mpich"},
+    "mpicc": {"c": "mpicc", "cpp": "mpicxx", "fortran": "mpifort"},
+    "mpicc.openmpi": {"c": "mpicc.openmpi", "cpp": "mpicxx.openmpi", "fortran": "mpifort.openmpi"},
 }
 
 
@@ -113,9 +102,11 @@ def mpi4py_launcher():
     # Check-and-init like the real driver (mpi_py_driver.run), so this probe -- and hence the gated
     # launch tests -- do not silently skip under an ambient MPI4PY_RC_INITIALIZE=0 (the rc attribute
     # does not override that env var in mpi4py 4.x, an explicit MPI.Init() does).
-    prog = ("from mpi4py import MPI\n"
-            "MPI.Init() if not MPI.Is_initialized() else None\n"
-            "print('rank', MPI.COMM_WORLD.rank, flush=True)")
+    prog = (
+        "from mpi4py import MPI\n"
+        "MPI.Init() if not MPI.Is_initialized() else None\n"
+        "print('rank', MPI.COMM_WORLD.rank, flush=True)"
+    )
     for launch in (["mpiexec.mpich", "-n"], ["mpirun", "--oversubscribe", "-n"]):
         if shutil.which(launch[0]) is None:
             continue

@@ -6,6 +6,7 @@ The load-bearing assertion is negative: a fitted normal curve must NOT be drawn 
 non-normal sample. That is the misleading figure the whole exercise exists to prevent, so it is
 asserted against the rendered Axes rather than trusted to a code path reading correctly.
 """
+
 import pathlib
 import sqlite3
 from typing import Dict, List, Tuple
@@ -33,42 +34,41 @@ def build_results_db(db: pathlib.Path, shift: float = 0.0) -> None:
             for framework, base in (("numpy", 10.0), ("dace_cpu", 10.0 * (1.0 - shift))):
                 for value in base * rng.lognormal(0.0, 0.05, 40):
                     session.add(
-                        Result(timestamp=1_700_000_000,
-                               benchmark=kernel,
-                               domain=domain,
-                               preset="S",
-                               framework=framework,
-                               agent=None,
-                               validated=True,
-                               time=float(value),
-                               native_time=None,
-                               datatype="float64",
-                               variant=None,
-                               prompt_hash=None,
-                               execution="native",
-                               cpu="test-cpu"))
+                        Result(
+                            timestamp=1_700_000_000,
+                            benchmark=kernel,
+                            domain=domain,
+                            preset="S",
+                            framework=framework,
+                            agent=None,
+                            validated=True,
+                            time=float(value),
+                            native_time=None,
+                            datatype="float64",
+                            variant=None,
+                            prompt_hash=None,
+                            execution="native",
+                            cpu="test-cpu",
+                        )
+                    )
         session.commit()
 
 
 def test_diagnostics_figure_renders_for_a_normal_sample(tmp_path: pathlib.Path) -> None:
     samples = np.random.default_rng(0).normal(100.0, 5.0, 200)
     assert inference.check_normality(samples).normal, "premise: this branch needs a normal sample"
-    out = plotting.plot_sample_diagnostics(samples,
-                                           title="normal-cell",
-                                           output=str(tmp_path / "normal.pdf"),
-                                           drop=False,
-                                           usetex=False)
+    out = plotting.plot_sample_diagnostics(
+        samples, title="normal-cell", output=str(tmp_path / "normal.pdf"), drop=False, usetex=False
+    )
     assert pathlib.Path(out).exists() and pathlib.Path(out).stat().st_size > 0
 
 
 def test_diagnostics_figure_renders_for_a_skewed_sample(tmp_path: pathlib.Path) -> None:
     samples = 100.0 * np.random.default_rng(0).lognormal(0.0, 0.5, 200)
     assert not inference.check_normality(samples).normal
-    out = plotting.plot_sample_diagnostics(samples,
-                                           title="skewed-cell",
-                                           output=str(tmp_path / "skewed.pdf"),
-                                           drop=False,
-                                           usetex=False)
+    out = plotting.plot_sample_diagnostics(
+        samples, title="skewed-cell", output=str(tmp_path / "skewed.pdf"), drop=False, usetex=False
+    )
     assert pathlib.Path(out).exists() and pathlib.Path(out).stat().st_size > 0
 
 
@@ -87,8 +87,9 @@ def rendered_labels(monkeypatch: pytest.MonkeyPatch, samples: np.ndarray, tmp_pa
     return {"axes": captured[0], "suptitle": captured[1]}
 
 
-def test_no_normal_curve_is_drawn_over_a_non_normal_sample(monkeypatch: pytest.MonkeyPatch,
-                                                           tmp_path: pathlib.Path) -> None:
+def test_no_normal_curve_is_drawn_over_a_non_normal_sample(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
     """⛔ THE point of the whole exercise. A Gaussian over right-skewed wall-clock is the
     misleading plot; assert against the rendered artists, not against the code path."""
     skewed = 100.0 * np.random.default_rng(0).lognormal(0.0, 0.5, 200)

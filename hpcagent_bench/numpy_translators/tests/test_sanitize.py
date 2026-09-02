@@ -1,6 +1,7 @@
 """Directive #4 sanitize pass: strip comments/docstrings (+ optional mangle)
 for the Python-emitting backends before container handoff. Pure-logic unit
 test; imports resolve via PYTHONPATH."""
+
 import ast
 
 from numpyto_common.sanitize import sanitize

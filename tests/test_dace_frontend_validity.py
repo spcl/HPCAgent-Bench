@@ -16,6 +16,7 @@ Parse only (``to_sdfg(simplify=False)``): no C++ compiler runs, so the whole cor
 Each kernel is parsed in its own subprocess because a frontend that hangs (``cloudsc``) or dies
 would otherwise take the session with it, and because DaCe's parse state is process-global.
 """
+
 import collections
 import json
 import pathlib
@@ -156,8 +157,7 @@ REFUSED: Dict[str, str] = {
     "machine_learning/conv_transposed_1d_dilated": "broadcast",
     "machine_learning/conv_transposed_2d_asymmetric_input_asymmetric_kernel": "broadcast",
     "machine_learning/conv_transposed_2d_asymmetric_input_asymmetric_kernel_padded": "broadcast",
-    "machine_learning/conv_transposed_2d_asymmetric_input_asymmetric_kernel_strided_grouped_padded_dilated":
-    "broadcast",
+    "machine_learning/conv_transposed_2d_asymmetric_input_asymmetric_kernel_strided_grouped_padded_dilated": "broadcast",
     "machine_learning/conv_transposed_2d_asymmetric_input_square_kernel": "broadcast",
     "machine_learning/conv_transposed_2d_asymmetric_input_square_kernel_dilated_padded_strided": "broadcast",
     "machine_learning/conv_transposed_2d_square_input_asymmetric_kernel": "broadcast",
@@ -213,6 +213,7 @@ def ensure_dace_program(key: str) -> pathlib.Path:
     """
     from hpcagent_bench import autogen, paths
     from hpcagent_bench.spec import BenchSpec
+
     spec = BenchSpec.load(key)
     autogen.ensure(key, ["dace"])
     return paths.BENCHMARKS / spec.relative_path / f"{spec.module_name}_dace.py"
@@ -231,6 +232,7 @@ def generated_programs() -> List[pathlib.Path]:
     :func:`test_the_refusal_list_names_kernels_that_exist`).
     """
     from hpcagent_bench.spec import KERNELS
+
     return [path for path in (ensure_dace_program(key) for key in sorted(KERNELS)) if path.exists()]
 
 
@@ -288,6 +290,7 @@ def corpus_kernels() -> Set[str]:
     """Every kernel in the registry that HAS a numpy reference, keyed the way :data:`REFUSED` is."""
     from hpcagent_bench import paths
     from hpcagent_bench.spec import KERNELS, BenchSpec
+
     out: Set[str] = set()
     for key in sorted(KERNELS):
         spec = BenchSpec.load(key)
@@ -316,11 +319,14 @@ def test_the_refusal_tally_matches_the_list_it_describes() -> None:
     assert stated_total is not None, "the header tally line is gone; it is what this gate reads"
     stated = {cause: int(count) for cause, count in CAUSE_LINE.findall(source)}
     actual = collections.Counter(REFUSED.values())
-    assert stated == dict(actual), (f"the header names {stated} but REFUSED holds {dict(actual)}. "
-                                    "Update the comment -- a tally that disagrees with the list "
-                                    "describes a corpus nobody has.")
+    assert stated == dict(actual), (
+        f"the header names {stated} but REFUSED holds {dict(actual)}. "
+        "Update the comment -- a tally that disagrees with the list "
+        "describes a corpus nobody has."
+    )
     assert int(stated_total.group(1)) == len(REFUSED), (
-        f"the header says {stated_total.group(1)} refusals and REFUSED holds {len(REFUSED)}.")
+        f"the header says {stated_total.group(1)} refusals and REFUSED holds {len(REFUSED)}."
+    )
 
 
 @pytest.mark.dace_frontend
@@ -338,8 +344,10 @@ def test_the_refusal_list_names_kernels_that_exist() -> None:
     call site rather than passed per site), not ahead of it.
     """
     unknown = sorted(set(REFUSED) - corpus_kernels())
-    assert not unknown, (f"REFUSED names kernels that are not in the corpus: {unknown}. "
-                         "Remove them -- an entry that matches nothing excuses nothing.")
+    assert not unknown, (
+        f"REFUSED names kernels that are not in the corpus: {unknown}. "
+        "Remove them -- an entry that matches nothing excuses nothing."
+    )
 
 
 @pytest.mark.dace_frontend
@@ -361,17 +369,25 @@ def test_every_generated_dace_program_parses_or_is_a_known_refusal() -> None:
         times = sorted((v.get("seconds", 0.0) for v in verdicts if v["verdict"] == "ok"), reverse=True)
         slowest = sorted(
             ((v.get("seconds", 0.0), kernel_of(p)) for p, v in zip(programs, verdicts) if v["verdict"] == "ok"),
-            reverse=True)[:10]
+            reverse=True,
+        )[:10]
         median = times[len(times) // 2] if times else 0.0
-        scale = (f"\n{len(times)} parses finished, median {median:.1f}s, total {sum(times):.0f}s "
-                 f"(budget {PARSE_TIMEOUT_S:.0f}s, {PARSE_WORKERS} workers)\nslowest: " +
-                 ", ".join(f"{k} {s:.0f}s" for s, k in slowest))
-    assert not regressions, ("the DaCe frontend refuses generated programs that used to parse:\n  " +
-                             "\n  ".join(sorted(regressions)) + scale)
-    assert not fixed, (f"these parse now and must come OFF the REFUSED list: {sorted(fixed)}. "
-                       "A list that keeps a fixed entry stops measuring the next regression. "
-                       f"(Reasons in {sorted(TIMEOUT_REASONS)} are exempt -- a parse that finished "
-                       "only says the runner was fast enough.)")
+        scale = (
+            f"\n{len(times)} parses finished, median {median:.1f}s, total {sum(times):.0f}s "
+            f"(budget {PARSE_TIMEOUT_S:.0f}s, {PARSE_WORKERS} workers)\nslowest: "
+            + ", ".join(f"{k} {s:.0f}s" for s, k in slowest)
+        )
+    assert not regressions, (
+        "the DaCe frontend refuses generated programs that used to parse:\n  "
+        + "\n  ".join(sorted(regressions))
+        + scale
+    )
+    assert not fixed, (
+        f"these parse now and must come OFF the REFUSED list: {sorted(fixed)}. "
+        "A list that keeps a fixed entry stops measuring the next regression. "
+        f"(Reasons in {sorted(TIMEOUT_REASONS)} are exempt -- a parse that finished "
+        "only says the runner was fast enough.)"
+    )
 
 
 @pytest.mark.dace_frontend
@@ -401,9 +417,16 @@ def test_an_unexcused_refusal_is_a_regression_whatever_the_verdict() -> None:
     """A kernel off the list may not fail, and the verdict and error text reach the message: a
     regression report naming only the kernel sends the reader back to the CI log to learn what
     broke."""
-    regressions, fixed = ratchet_findings([("scientific_computing/brand_new", {
-        "verdict": "timeout",
-        "error": "the frontend did not finish parsing in 360s",
-    })])
+    regressions, fixed = ratchet_findings(
+        [
+            (
+                "scientific_computing/brand_new",
+                {
+                    "verdict": "timeout",
+                    "error": "the frontend did not finish parsing in 360s",
+                },
+            )
+        ]
+    )
     assert not fixed
     assert regressions == ["scientific_computing/brand_new: timeout: the frontend did not finish parsing in 360s"]

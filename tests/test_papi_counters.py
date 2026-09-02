@@ -11,6 +11,7 @@ The handful of tests that genuinely need counters are gated on EXPLICIT predicat
 so a skip here always means "this host cannot count" and never "something changed and the guard
 stopped noticing".
 """
+
 import ctypes
 import ctypes.util
 import json
@@ -42,7 +43,8 @@ requires_papi = pytest.mark.skipif(
     "or papi.perf_event_reason() names a blocked perf_event gate (paranoid sysctl, or no "
     "perf_event subsystem at all -- common on hosted CI runners, whose hypervisor commonly does "
     "not expose hardware counters to the guest regardless of the sysctl). Install PAPI and/or "
-    "lower kernel.perf_event_paranoid to exercise these.")
+    "lower kernel.perf_event_paranoid to exercise these.",
+)
 
 
 def test_the_papi_provisioning_step_actually_worked() -> None:
@@ -57,23 +59,51 @@ def test_the_papi_provisioning_step_actually_worked() -> None:
     """
     if not CI_EXPECTS_PAPI:
         pytest.skip("HPCAGENT_BENCH_CI_PAPI_INSTALLED is unset; not a job that provisions PAPI")
-    assert PAPI_LIBRARY, ("HPCAGENT_BENCH_CI_PAPI_INSTALLED is set but "
-                          "ctypes.util.find_library('papi') found nothing -- the CI install step "
-                          "silently stopped installing PAPI")
+    assert PAPI_LIBRARY, (
+        "HPCAGENT_BENCH_CI_PAPI_INSTALLED is set but "
+        "ctypes.util.find_library('papi') found nothing -- the CI install step "
+        "silently stopped installing PAPI"
+    )
 
 
 #: The event set of the machine this was developed on -- an AMD Zen4 with 5 counters, where
 #: PAPI_L1_DCM exists and PAPI_L1_ICM, PAPI_L3_DCM, PAPI_L1_DCH, PAPI_INT_INS do not. Frozen as
 #: data so the fallback ladder is tested against a REAL availability map on every host.
-ZEN4_AVAILABLE = ("PAPI_L1_DCM", "PAPI_L2_DCM", "PAPI_L2_ICM", "PAPI_L2_TCM", "PAPI_TLB_DM", "PAPI_FMA_INS",
-                  "PAPI_TOT_INS", "PAPI_FP_INS", "PAPI_TOT_CYC", "PAPI_L2_DCH", "PAPI_L1_DCA", "PAPI_FP_OPS")
+ZEN4_AVAILABLE = (
+    "PAPI_L1_DCM",
+    "PAPI_L2_DCM",
+    "PAPI_L2_ICM",
+    "PAPI_L2_TCM",
+    "PAPI_TLB_DM",
+    "PAPI_FMA_INS",
+    "PAPI_TOT_INS",
+    "PAPI_FP_INS",
+    "PAPI_TOT_CYC",
+    "PAPI_L2_DCH",
+    "PAPI_L1_DCA",
+    "PAPI_FP_OPS",
+)
 
 #: The quantities the wrapper exists to report. Dropping one is a promise withdrawn from the
 #: skill (which names every metric) and from :data:`papi.GROUPS`; adding one belongs in a group,
 #: or nothing will ever ask for it.
-WANTED = ("cycles", "stalled_cycles", "instructions", "data_cache_misses", "instruction_cache_misses", "cache_hits",
-          "l2_cache_misses", "l3_cache_misses", "data_tlb_misses", "instruction_tlb_misses", "branch_instructions",
-          "branch_mispredictions", "fp_ops", "integer_instructions", "fma_instructions")
+WANTED = (
+    "cycles",
+    "stalled_cycles",
+    "instructions",
+    "data_cache_misses",
+    "instruction_cache_misses",
+    "cache_hits",
+    "l2_cache_misses",
+    "l3_cache_misses",
+    "data_tlb_misses",
+    "instruction_tlb_misses",
+    "branch_instructions",
+    "branch_mispredictions",
+    "fp_ops",
+    "integer_instructions",
+    "fma_instructions",
+)
 
 
 def test_every_requested_quantity_has_a_metric() -> None:
@@ -89,8 +119,8 @@ def test_no_candidate_swaps_operations_for_instructions() -> None:
 
 
 def test_resolve_takes_the_direct_event_when_the_cpu_has_it() -> None:
-    assert papi.resolve("data_cache_misses", ZEN4_AVAILABLE) == ("PAPI_L1_DCM", )
-    assert papi.resolve("instructions", ZEN4_AVAILABLE) == ("PAPI_TOT_INS", )
+    assert papi.resolve("data_cache_misses", ZEN4_AVAILABLE) == ("PAPI_L1_DCM",)
+    assert papi.resolve("instructions", ZEN4_AVAILABLE) == ("PAPI_TOT_INS",)
 
 
 def test_resolve_derives_cache_hits_when_the_preferred_event_is_missing() -> None:
@@ -103,7 +133,7 @@ def test_resolve_derives_cache_hits_when_the_preferred_event_is_missing() -> Non
 def test_resolve_falls_through_to_the_next_cache_level() -> None:
     """L1 instruction misses are unavailable here; L2 answers the same question one level down,
     and the expression that ships with the count says which level it was."""
-    assert papi.resolve("instruction_cache_misses", ZEN4_AVAILABLE) == ("PAPI_L2_ICM", )
+    assert papi.resolve("instruction_cache_misses", ZEN4_AVAILABLE) == ("PAPI_L2_ICM",)
 
 
 def test_resolve_reports_nothing_rather_than_a_different_quantity() -> None:
@@ -115,8 +145,8 @@ def test_resolve_reports_nothing_rather_than_a_different_quantity() -> None:
 def test_resolve_needs_every_event_of_a_derived_candidate() -> None:
     """A derivation is only usable when BOTH its events are countable; half of one is not a
     partial answer, it is a wrong one."""
-    assert papi.resolve("cache_hits", ("PAPI_L1_DCA", )) is None
-    assert papi.resolve("cache_hits", ("PAPI_L1_DCM", )) is None
+    assert papi.resolve("cache_hits", ("PAPI_L1_DCA",)) is None
+    assert papi.resolve("cache_hits", ("PAPI_L1_DCM",)) is None
 
 
 def test_expression_and_combine_agree_about_the_signs() -> None:
@@ -172,6 +202,7 @@ def test_the_client_default_group_is_a_real_group() -> None:
     import inspect
 
     from hpcagent_bench.harness.tools import JudgeClient
+
     default = inspect.signature(JudgeClient.profile).parameters["counter_group"].default
     assert default in papi.GROUPS
 
@@ -245,7 +276,7 @@ def test_a_cross_level_hit_rate_carries_a_caveat() -> None:
     row = papi.derive(rows)["ratios"]["data_cache_hit_rate"]
     assert row["value"] == 0.9
     assert "L1" in row["caveat"] and "L2" in row["caveat"]
-    assert papi.cache_levels(["PAPI_L1_DCA - PAPI_L1_DCM"]) == ("L1", )
+    assert papi.cache_levels(["PAPI_L1_DCA - PAPI_L1_DCM"]) == ("L1",)
 
 
 def test_the_cache_line_is_read_from_the_machine_with_an_honest_fallback() -> None:
@@ -297,19 +328,21 @@ def test_a_papi_failure_inside_the_child_is_reported_as_that_metric_s_reason(mon
 
 def counted_line(metric: str) -> str:
     """A counting child's one machine-readable stdout line, as the parent expects to parse it."""
-    return profiling.RESULT_PREFIX + json.dumps({
-        "metric": metric,
-        "expression": "PAPI_X",
-        "events": ["PAPI_X"],
-        "derived": False,
-        "count": 7,
-        "elapsed_ns": 1,
-        "reps_counted": 1,
-        "hardware_counters": 5,
-        "threads_counted": 3,
-        "scope": "all_threads",
-        "smt": True
-    })
+    return profiling.RESULT_PREFIX + json.dumps(
+        {
+            "metric": metric,
+            "expression": "PAPI_X",
+            "events": ["PAPI_X"],
+            "derived": False,
+            "count": 7,
+            "elapsed_ns": 1,
+            "reps_counted": 1,
+            "hardware_counters": 5,
+            "threads_counted": 3,
+            "scope": "all_threads",
+            "smt": True,
+        }
+    )
 
 
 def test_one_wedged_metric_does_not_cost_the_others(monkeypatch, tmp_path) -> None:
@@ -347,28 +380,27 @@ def test_the_rendered_table_carries_the_expression_and_the_ratio() -> None:
     """A raw miss count is not a finding; misses per thousand instructions is. And a metric this
     CPU cannot express must render its reason, not a blank that reads as zero."""
     counters = {
-        "threads":
-        4,
-        "threads_counted":
-        5,
-        "smt":
-        True,
-        "runs":
-        3,
-        "metrics": [{
-            "metric": "instructions",
-            "expression": "PAPI_TOT_INS",
-            "events": ["PAPI_TOT_INS"],
-            "derived": False,
-            "count": 1_000_000
-        }, {
-            "metric": "cache_hits",
-            "expression": "PAPI_L1_DCA - PAPI_L1_DCM",
-            "events": ["PAPI_L1_DCA", "PAPI_L1_DCM"],
-            "derived": True,
-            "count": 25_000
-        },
-                    papi.missing("integer_instructions", "no candidate is available on this CPU")]
+        "threads": 4,
+        "threads_counted": 5,
+        "smt": True,
+        "runs": 3,
+        "metrics": [
+            {
+                "metric": "instructions",
+                "expression": "PAPI_TOT_INS",
+                "events": ["PAPI_TOT_INS"],
+                "derived": False,
+                "count": 1_000_000,
+            },
+            {
+                "metric": "cache_hits",
+                "expression": "PAPI_L1_DCA - PAPI_L1_DCM",
+                "events": ["PAPI_L1_DCA", "PAPI_L1_DCM"],
+                "derived": True,
+                "count": 25_000,
+            },
+            papi.missing("integer_instructions", "no candidate is available on this CPU"),
+        ],
     }
     text = "\n".join(profiling.render_counters(counters))
     assert "PAPI_L1_DCA - PAPI_L1_DCM" in text
@@ -487,19 +519,16 @@ def test_the_count_covers_the_timed_call_and_nothing_else() -> None:
     with Sandbox(binding) as sandbox:
         built = sandbox.build(Submission(language="c", source=reference_source(task)), debug=True)
         assert built.ok, built.log[-2000:]
-        row = papi.count_metric(built.lib,
-                                binding,
-                                _data_seeded("gemm", "S", "float64", 42),
-                                "c",
-                                "fp_ops",
-                                reps=2,
-                                rep_timeout=300.0)
+        row = papi.count_metric(
+            built.lib, binding, _data_seeded("gemm", "S", "float64", 42), "c", "fp_ops", reps=2, rep_timeout=300.0
+        )
     assert row["count"] is not None, row.get("missing")
     assert row["reps_counted"] == 2 and row["elapsed_ns"] > 0
     # 5% either side: the reference also scales C by beta and alpha, which is O(NI*NJ) more work.
     assert 0.95 * expected <= row["count"] <= 1.05 * expected, (
         f"{row['expression']} counted {row['count']}, expected ~{expected} (2*NI*NJ*NK): the "
-        "counted region is not the timed call")
+        "counted region is not the timed call"
+    )
 
 
 #: A gemm submission that really does run on OpenMP worker threads, so a count that only saw the
@@ -584,13 +613,15 @@ def test_a_threaded_kernel_is_counted_on_every_thread_and_degrades_out_loud(monk
     assert counted["threads_counted"] > 1, "the OpenMP pool was never seen, so this proves nothing"
     assert 0.95 * expected <= counted["count"] <= 1.05 * expected, (
         f"counted {counted['count']} on {counted['threads_counted']} thread(s), expected "
-        f"~{expected}; {counted['count'] / expected:.2f}x suggests only some threads were counted")
+        f"~{expected}; {counted['count'] / expected:.2f}x suggests only some threads were counted"
+    )
 
     assert refused["scope"] == "calling_thread" and refused["threads_counted"] == 1
     assert "simulated refusal" in refused["fallback"]
     assert refused["count"] < 0.9 * expected, (
         "the master thread alone cannot have done all the work -- if it did, the kernel never "
-        "parallelised and the all-threads assertion above proved nothing")
+        "parallelised and the all-threads assertion above proved nothing"
+    )
 
 
 @requires_papi
@@ -622,10 +653,8 @@ def thread_row(tid: int, cycles: int, instructions: int, *, cpus=(0, 8)) -> dict
         "cycle_share": None,
         "participated": cycles > 0,
         "cpus": list(cpus),
-        "pinned": len({SMT_TOPOLOGY[c]
-                       for c in cpus}) == 1,
-        "core": SMT_TOPOLOGY[cpus[0]] if len({SMT_TOPOLOGY[c]
-                                              for c in cpus}) == 1 else None,
+        "pinned": len({SMT_TOPOLOGY[c] for c in cpus}) == 1,
+        "core": SMT_TOPOLOGY[cpus[0]] if len({SMT_TOPOLOGY[c] for c in cpus}) == 1 else None,
     }
 
 
@@ -633,7 +662,7 @@ def test_a_wide_affinity_mask_is_never_read_as_one_cpu() -> None:
     """Linux writes affinity as RANGES. Read a 16-cpu mask as one cpu and the report calls a
     freely migrating thread pinned -- the one direction this must never be wrong in."""
     assert papi.cpu_list("0-3,8,12-13") == (0, 1, 2, 3, 8, 12, 13)
-    assert papi.cpu_list("5") == (5, )
+    assert papi.cpu_list("5") == (5,)
     assert len(papi.cpu_list("0-15")) == 16
     assert papi.cpu_list("") == ()
 
@@ -644,7 +673,7 @@ def test_pinning_is_confinement_to_ONE_CORE_not_to_one_cpu(monkeypatch) -> None:
     warns about a migration that cannot happen, while missing the mask that spans two cores."""
     monkeypatch.setattr(papi, "sibling_group", lambda cpu: SMT_TOPOLOGY[cpu])
     assert papi.core_of((0, 8)) == "0,8", "two siblings of one core are one core"
-    assert papi.core_of((0, )) == "0,8"
+    assert papi.core_of((0,)) == "0,8"
     assert papi.core_of((0, 1)) is None, "two distinct cores are not a pin"
     assert papi.core_of(range(16)) is None
 
@@ -664,7 +693,7 @@ def test_cpi_and_ipc_are_reciprocals_and_both_are_labelled(monkeypatch) -> None:
     """The arithmetic the deliverable is about. CPI = cycles/instructions, IPC its reciprocal;
     a reader who inverts the wrong one gets a plausible number and no way to notice."""
     monkeypatch.setattr(papi, "placement", lambda tid: {"cpus": [0], "pinned": True, "core": "0,8"})
-    rows = papi.per_thread_rows(((11, (2000, 1000)), (12, (3000, 6000))), ("PAPI_TOT_CYC", ), ("PAPI_TOT_INS", ))
+    rows = papi.per_thread_rows(((11, (2000, 1000)), (12, (3000, 6000))), ("PAPI_TOT_CYC",), ("PAPI_TOT_INS",))
     assert [row["cpi"] for row in rows] == [2.0, 0.5]
     assert [row["ipc"] for row in rows] == [0.5, 2.0]
     for row in rows:
@@ -677,7 +706,7 @@ def test_a_thread_that_counted_nothing_gets_no_ratio_rather_than_zero(monkeypatc
     """0.0 is a measurement and this is not one: an undefined ratio must stay None all the way
     into the rendered table, where it is '--'."""
     monkeypatch.setattr(papi, "placement", lambda tid: {"cpus": [0], "pinned": True, "core": "0,8"})
-    row = papi.per_thread_rows(((11, (0, 0)), ), ("PAPI_TOT_CYC", ), ("PAPI_TOT_INS", ))[0]
+    row = papi.per_thread_rows(((11, (0, 0)),), ("PAPI_TOT_CYC",), ("PAPI_TOT_INS",))[0]
     assert row["cpi"] is None and row["ipc"] is None and row["participated"] is False
     assert papi.fmt(None) == "--" and papi.fmt(0.0) == "0.0000"
 
@@ -687,7 +716,7 @@ def test_a_derived_candidate_does_not_shift_the_instruction_slice(monkeypatch) -
     at a hardcoded 1 instead of len(cycle_terms) would silently read a cycle count as an
     instruction count on any CPU whose cycle metric resolved to a derivation."""
     monkeypatch.setattr(papi, "placement", lambda tid: {"cpus": [0], "pinned": True, "core": "0,8"})
-    row = papi.per_thread_rows(((11, (500, 100, 3000)), ), ("PAPI_A", "-PAPI_B"), ("PAPI_TOT_INS", ))[0]
+    row = papi.per_thread_rows(((11, (500, 100, 3000)),), ("PAPI_A", "-PAPI_B"), ("PAPI_TOT_INS",))[0]
     assert row["cycles"] == 400 and row["instructions"] == 3000
 
 
@@ -709,7 +738,7 @@ def test_an_idle_thread_is_excluded_from_the_imbalance_denominator(monkeypatch) 
     stranger reported a perfectly balanced kernel as 1.25x imbalanced."""
     monkeypatch.setattr(papi, "placement", lambda tid: {"cpus": [0], "pinned": True, "core": "0,8"})
     counted = ((11, (100, 100)), (12, (0, 0)), (13, (100, 100)), (14, (100, 100)), (15, (100, 100)))
-    rows = papi.per_thread_rows(counted, ("PAPI_TOT_CYC", ), ("PAPI_TOT_INS", ))
+    rows = papi.per_thread_rows(counted, ("PAPI_TOT_CYC",), ("PAPI_TOT_INS",))
     working = [row for row in rows if row["participated"]]
     assert len(working) == 4 and papi.imbalance([row["cycles"] for row in working])["max_over_mean"] == 1.0
     assert papi.imbalance([row["cycles"] for row in rows])["max_over_mean"] == 1.25, "the bug this rules out"
@@ -793,16 +822,8 @@ def test_the_rendered_report_carries_the_labels_the_numbers_need() -> None:
     marked, the excluded thread visible, and every caveat kept -- a caveat dropped from the
     rendering is a caveat nobody reads."""
     report = {
-        "threads": [thread_row(11, 100, 100),
-                    thread_row(12, 300, 100, cpus=(1, 9)),
-                    thread_row(13, 0, 0)],
-        "aggregate": {
-            "threads": 2,
-            "cycles": 400,
-            "instructions": 200,
-            "cpi": 2.0,
-            "ipc": 0.5
-        },
+        "threads": [thread_row(11, 100, 100), thread_row(12, 300, 100, cpus=(1, 9)), thread_row(13, 0, 0)],
+        "aggregate": {"threads": 2, "cycles": 400, "instructions": 200, "cpi": 2.0, "ipc": 0.5},
         "imbalance": {
             "max_over_mean": 1.5,
             "wasted_fraction": 0.3333,
@@ -810,10 +831,7 @@ def test_the_rendered_report_carries_the_labels_the_numbers_need() -> None:
             "reading": "1.0 is perfectly balanced",
             "critical_tid": 12,
         },
-        "expressions": {
-            "cycles": "PAPI_TOT_CYC",
-            "instructions": "PAPI_TOT_INS"
-        },
+        "expressions": {"cycles": "PAPI_TOT_CYC", "instructions": "PAPI_TOT_INS"},
         "elapsed_ns": 1_000_000,
         "reps_counted": 3,
         "threads_idle": 1,
@@ -836,24 +854,9 @@ def test_a_multiplexed_report_says_so_in_the_headline() -> None:
     missed rather than only in the payload."""
     report = {
         "threads": [thread_row(11, 100, 100)],
-        "aggregate": {
-            "threads": 1,
-            "cycles": 100,
-            "instructions": 100,
-            "cpi": 1.0,
-            "ipc": 1.0
-        },
-        "imbalance": {
-            "max_over_mean": 1.0,
-            "wasted_fraction": 0.0,
-            "formula": "f",
-            "reading": "r",
-            "critical_tid": 11
-        },
-        "expressions": {
-            "cycles": "PAPI_TOT_CYC",
-            "instructions": "PAPI_TOT_INS"
-        },
+        "aggregate": {"threads": 1, "cycles": 100, "instructions": 100, "cpi": 1.0, "ipc": 1.0},
+        "imbalance": {"max_over_mean": 1.0, "wasted_fraction": 0.0, "formula": "f", "reading": "r", "critical_tid": 11},
+        "expressions": {"cycles": "PAPI_TOT_CYC", "instructions": "PAPI_TOT_INS"},
         "elapsed_ns": 1,
         "reps_counted": 1,
         "threads_idle": 0,
@@ -868,8 +871,9 @@ def test_a_multiplexed_report_says_so_in_the_headline() -> None:
 #: 3x and 4x the work. The distribution is therefore KNOWN -- 1:2:3:4 -- which is what makes the
 #: per-thread numbers checkable rather than merely plausible, and the imbalance 4/2.5 = 1.6.
 SKEWED_GEMM = OPENMP_GEMM.replace(
-    "        for (int64_t k = 0; k < NK; ++k) {", "        for (int64_t r = 0; r <= (4 * i) / NI; ++r)\n"
-    "        for (int64_t k = 0; k < NK; ++k) {")
+    "        for (int64_t k = 0; k < NK; ++k) {",
+    "        for (int64_t r = 0; r <= (4 * i) / NI; ++r)\n        for (int64_t k = 0; k < NK; ++k) {",
+)
 
 
 def openmp_threads(monkeypatch) -> int:
@@ -897,8 +901,10 @@ def test_the_per_thread_report_recovers_a_KNOWN_work_distribution(monkeypatch) -
     from hpcagent_bench.spec import BenchSpec
     from hpcagent_bench.support.bindings.contract import binding_from_spec
 
-    if papi.resolve("cycles", papi.available_events()) is None or papi.resolve("instructions",
-                                                                               papi.available_events()) is None:
+    if (
+        papi.resolve("cycles", papi.available_events()) is None
+        or papi.resolve("instructions", papi.available_events()) is None
+    ):
         pytest.skip(f"no cycle/instruction preset on this CPU; available: {papi.available_events()}")
     threads = openmp_threads(monkeypatch)
     if threads < 4:
@@ -931,14 +937,15 @@ def test_the_per_thread_report_recovers_a_KNOWN_work_distribution(monkeypatch) -
     work = sorted(row["instructions"] for row in skewed["threads"] if row["participated"])
     assert all(w > 0 for w in work)
     for factor, counted in zip((1, 2, 3, 4), work):
-        assert counted / work[0] == pytest.approx(
-            factor,
-            rel=0.15), (f"the static schedule's blocks do 1:2:3:4 of the work; counted {work}\n{skewed['text']}")
+        assert counted / work[0] == pytest.approx(factor, rel=0.15), (
+            f"the static schedule's blocks do 1:2:3:4 of the work; counted {work}\n{skewed['text']}"
+        )
     # The point of the whole module: the process-wide reading is blind to what just showed up.
     ratio = skewed["aggregate"]["cpi"] / balanced["aggregate"]["cpi"]
     assert 0.75 <= ratio <= 1.35, (
         f"aggregate CPI moved {ratio:.2f}x between a balanced and a badly imbalanced kernel, so this "
-        "run does not demonstrate that a process-wide number hides imbalance")
+        "run does not demonstrate that a process-wide number hides imbalance"
+    )
     assert skewed["imbalance"]["max_over_mean"] > 1.3 * balanced["imbalance"]["max_over_mean"]
 
 
@@ -962,12 +969,14 @@ def test_a_serial_kernel_is_refused_as_not_openmp_rather_than_reported_balanced(
     with Sandbox(binding) as sandbox:
         built = sandbox.build(Submission(language="c", source=reference_source(task)), debug=True)
         assert built.ok, built.log[-2000:]
-        report = papi.count_per_thread(built.lib,
-                                       binding,
-                                       data=_data_seeded("gemm", "S", "float64", 42),
-                                       lang="c",
-                                       reps=1,
-                                       warmup=1,
-                                       rep_timeout=300.0)
+        report = papi.count_per_thread(
+            built.lib,
+            binding,
+            data=_data_seeded("gemm", "S", "float64", 42),
+            lang="c",
+            reps=1,
+            warmup=1,
+            rep_timeout=300.0,
+        )
     assert report["cause"] == "not_openmp", report["text"]
     assert report["imbalance"] is None and "count_metric" in report["missing"]

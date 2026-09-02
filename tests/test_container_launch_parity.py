@@ -7,6 +7,7 @@ real rather than a hand-kept mirror -- if the two folds ever drift, this test fa
 
 Runs `bash --print` in a controlled environment (no ambient HPCAGENT_BENCH_* leakage) and
 compares token-for-token against local_run_command over every backend x hardware."""
+
 import os
 import pathlib
 import shutil
@@ -20,8 +21,9 @@ REPO_ROOT = pathlib.Path(containers.__file__).resolve().parent.parent
 LAUNCHER = REPO_ROOT / "scripts" / "run_agent_in_container.sh"
 AGENT_ARGS = ["--kernels", "gemm", "--baseline", "c"]
 
-pytestmark = pytest.mark.skipif(shutil.which("bash") is None or not LAUNCHER.exists(),
-                                reason="needs bash + the launcher script")
+pytestmark = pytest.mark.skipif(
+    shutil.which("bash") is None or not LAUNCHER.exists(), reason="needs bash + the launcher script"
+)
 
 
 def controlled_env(backend):
@@ -31,8 +33,8 @@ def controlled_env(backend):
     env = {
         k: v
         for k, v in os.environ.items()
-        if not k.startswith("HPCAGENT_BENCH_") and k not in ("OLLAMA_HOST", "ANTHROPIC_API_KEY",
-                                                             "HPCAGENT_BENCH_OLLAMA_HOST", "HPCAGENT_BENCH_LOCAL_MODEL")
+        if not k.startswith("HPCAGENT_BENCH_")
+        and k not in ("OLLAMA_HOST", "ANTHROPIC_API_KEY", "HPCAGENT_BENCH_OLLAMA_HOST", "HPCAGENT_BENCH_LOCAL_MODEL")
     }
     env["HPCAGENT_BENCH_RUNTIME_BACKEND"] = backend
     env["ANTHROPIC_API_KEY"] = "sk-test"  # a passthrough (non-HPCAGENT_BENCH) var
@@ -49,11 +51,13 @@ def controlled_env(backend):
 def test_bash_and_python_fold_identical_argv(backend, hardware, monkeypatch):
     env = controlled_env(backend)
     # bash: --print emits one token per line, no exec/probe.
-    proc = subprocess.run(["bash", str(LAUNCHER), hardware, "--print", "--", *AGENT_ARGS],
-                          env=env,
-                          capture_output=True,
-                          text=True,
-                          check=True)
+    proc = subprocess.run(
+        ["bash", str(LAUNCHER), hardware, "--print", "--", *AGENT_ARGS],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
     bash_argv = proc.stdout.splitlines()
 
     # python: same env (so collect_env sees the same vars), same repo_root as bash computes.

@@ -7,6 +7,7 @@ negative constant index against the array's known dimension size, at both read
 and write positions. A negative SLICE bound (``a[:-1]``) is a different construct
 and is left to the slice lowering (it already works).
 """
+
 import ast
 
 import numpy as np
@@ -46,6 +47,7 @@ def _emit_c(src, inputs, shapes, syms):
     from numpyto_common.frontend import parse_kernel
     from numpyto_common.lowering import lower
     from numpyto_c.emit import emit_c
+
     d = pathlib.Path(tempfile.mkdtemp())
     npy = d / "k_numpy.py"
     npy.write_text(src)
@@ -56,15 +58,11 @@ def _emit_c(src, inputs, shapes, syms):
             "relative_path": "",
             "module_name": "k",
             "func_name": "f",
-            "parameters": {
-                "S": dict(syms)
-            },
+            "parameters": {"S": dict(syms)},
             "input_args": inputs,
             "array_args": [a for a in inputs if a in shapes],
             "output_args": [],
-            "init": {
-                "shapes": shapes
-            }
+            "init": {"shapes": shapes},
         }
     }
     (d / "bi.json").write_text(json.dumps(bi))
@@ -72,18 +70,16 @@ def _emit_c(src, inputs, shapes, syms):
 
 
 def test_c_emit_normalizes_bare_negative_index():
-    c = _emit_c("import numpy as np\ndef f(a, out):\n out[0] = a[-1]\n", ["a", "out"], {
-        "a": "(N,)",
-        "out": "(2,)"
-    }, {"N": 6})
+    c = _emit_c(
+        "import numpy as np\ndef f(a, out):\n out[0] = a[-1]\n", ["a", "out"], {"a": "(N,)", "out": "(2,)"}, {"N": 6}
+    )
     assert "a[-1]" not in c and "N - 1" in c
 
 
 def test_c_emit_leaves_positive_index_alone():
-    c = _emit_c("import numpy as np\ndef f(a, out):\n out[0] = a[2]\n", ["a", "out"], {
-        "a": "(N,)",
-        "out": "(2,)"
-    }, {"N": 6})
+    c = _emit_c(
+        "import numpy as np\ndef f(a, out):\n out[0] = a[2]\n", ["a", "out"], {"a": "(N,)", "out": "(2,)"}, {"N": 6}
+    )
     assert "a[2]" in c
 
 
@@ -95,42 +91,48 @@ def test_c_emit_leaves_positive_index_alone():
 def test_bare_negative_index_read():
     a = np.arange(6, dtype=np.float64)
     ok, res = _all_ok(
-        run_op("import numpy as np\ndef f(a, out):\n out[0] = a[-1]\n out[1] = a[-2]\n",
-               "f", {"a": a}, {"out": (2, )}, {"N": 6},
-               shapes={
-                   "a": "(N,)",
-                   "out": "(2,)"
-               },
-               backends=_ALL))
+        run_op(
+            "import numpy as np\ndef f(a, out):\n out[0] = a[-1]\n out[1] = a[-2]\n",
+            "f",
+            {"a": a},
+            {"out": (2,)},
+            {"N": 6},
+            shapes={"a": "(N,)", "out": "(2,)"},
+            backends=_ALL,
+        )
+    )
     assert ok, res
 
 
 def test_negative_index_write():
     a = np.arange(6, dtype=np.float64)
     ok, res = _all_ok(
-        run_op("import numpy as np\ndef f(a, out):\n out[:] = a\n out[-1] = 99.0\n",
-               "f", {"a": a}, {"out": (6, )}, {"N": 6},
-               shapes={
-                   "a": "(N,)",
-                   "out": "(N,)"
-               },
-               backends=_ALL))
+        run_op(
+            "import numpy as np\ndef f(a, out):\n out[:] = a\n out[-1] = 99.0\n",
+            "f",
+            {"a": a},
+            {"out": (6,)},
+            {"N": 6},
+            shapes={"a": "(N,)", "out": "(N,)"},
+            backends=_ALL,
+        )
+    )
     assert ok, res
 
 
 def test_negative_index_2d_mixed_axes():
     a = np.arange(12, dtype=np.float64).reshape(3, 4)
     ok, res = _all_ok(
-        run_op("import numpy as np\ndef f(a, out):\n out[0] = a[-1, -1]\n out[1] = a[1, -1]\n out[2] = a[-1, 2]\n",
-               "f", {"a": a}, {"out": (3, )}, {
-                   "M": 3,
-                   "N": 4
-               },
-               shapes={
-                   "a": "(M, N)",
-                   "out": "(3,)"
-               },
-               backends=_ALL))
+        run_op(
+            "import numpy as np\ndef f(a, out):\n out[0] = a[-1, -1]\n out[1] = a[1, -1]\n out[2] = a[-1, 2]\n",
+            "f",
+            {"a": a},
+            {"out": (3,)},
+            {"M": 3, "N": 4},
+            shapes={"a": "(M, N)", "out": "(3,)"},
+            backends=_ALL,
+        )
+    )
     assert ok, res
 
 
@@ -138,11 +140,14 @@ def test_negative_slice_bound_still_works():
     # ``a[:-1]`` is a slice bound, NOT an index -- left to the slice lowering.
     a = np.arange(6, dtype=np.float64)
     ok, res = _all_ok(
-        run_op("import numpy as np\ndef f(a, out):\n out[:] = a[1:] - a[:-1]\n",
-               "f", {"a": a}, {"out": (5, )}, {"N": 6},
-               shapes={
-                   "a": "(N,)",
-                   "out": "(5,)"
-               },
-               backends=_ALL))
+        run_op(
+            "import numpy as np\ndef f(a, out):\n out[:] = a[1:] - a[:-1]\n",
+            "f",
+            {"a": a},
+            {"out": (5,)},
+            {"N": 6},
+            shapes={"a": "(N,)", "out": "(5,)"},
+            backends=_ALL,
+        )
+    )
     assert ok, res

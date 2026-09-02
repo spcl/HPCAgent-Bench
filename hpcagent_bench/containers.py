@@ -31,6 +31,7 @@ Apptainer itself is a Go binary (not pip-installable); :func:`install_apptainer`
 official unprivileged install into a user prefix, exposed as the ``hpcagent-bench-install-apptainer``
 entry point.
 """
+
 import os
 import pathlib
 import shutil
@@ -75,9 +76,9 @@ DEFAULT_BACKEND = "podman"
 EXEC_BACKENDS = ("docker", "podman", "apptainer")
 #: Backends selected by a Slurm flag instead of a wrapper argv: the container is chosen by
 #: ``srun --environment=<edf>`` and the command runs directly, with no prefix at all.
-SRUN_ENV_BACKENDS = ("ce", )
+SRUN_ENV_BACKENDS = ("ce",)
 #: Backends that are not containers at all: the command IS the launch, unwrapped and unflagged.
-NO_CONTAINER_BACKENDS = ("native", )
+NO_CONTAINER_BACKENDS = ("native",)
 
 
 def family_members(family: str) -> Tuple[str, ...]:
@@ -94,6 +95,7 @@ class WrapperSpelling:
     it contributes :attr:`srun_flag` to the ``srun`` line and the command runs unwrapped, so its
     flag fields are empty and reading them would be a category error.
     """
+
     name: str
     family: str  # "oci" (the shipped image, unconverted) | "sif" | "ce" (conversions of it)
     rootless: bool  # invocable unprivileged, with no daemon and no root-equivalent group
@@ -128,23 +130,24 @@ def load_backends(path: pathlib.Path = BACKENDS_PATH) -> Tuple[dict, Tuple[str, 
             continue
         rows.setdefault(head, {})[field] = value
     spellings = {
-        name:
-        WrapperSpelling(name=name,
-                        family=f["family"].strip(),
-                        rootless=f.get("rootless", "0").strip() == "1",
-                        kind=f.get("kind", "exec").strip(),
-                        verb=tuple(f.get("verb", "").split()),
-                        bind_flag=f.get("bind", "").strip(),
-                        workdir_flag=f.get("workdir", "").strip(),
-                        env_flag=f.get("env", "").strip(),
-                        gpu={
-                            "nvidia": tuple(f.get("gpu.nvidia", "").split()),
-                            "amd": tuple(f.get("gpu.amd", "").split()),
-                        },
-                        image_form=f["image_form"].strip(),
-                        image_default=f.get("image_default", "").strip(),
-                        harbor_env=f.get("harbor_env", "").strip(),
-                        srun_flag=f.get("srun_flag", "").strip())
+        name: WrapperSpelling(
+            name=name,
+            family=f["family"].strip(),
+            rootless=f.get("rootless", "0").strip() == "1",
+            kind=f.get("kind", "exec").strip(),
+            verb=tuple(f.get("verb", "").split()),
+            bind_flag=f.get("bind", "").strip(),
+            workdir_flag=f.get("workdir", "").strip(),
+            env_flag=f.get("env", "").strip(),
+            gpu={
+                "nvidia": tuple(f.get("gpu.nvidia", "").split()),
+                "amd": tuple(f.get("gpu.amd", "").split()),
+            },
+            image_form=f["image_form"].strip(),
+            image_default=f.get("image_default", "").strip(),
+            harbor_env=f.get("harbor_env", "").strip(),
+            srun_flag=f.get("srun_flag", "").strip(),
+        )
         for name, f in rows.items()
     }
     return spellings, passthrough
@@ -171,8 +174,12 @@ def resolve_backend(explicit: Optional[str] = None) -> str:
     here -- the shell launcher still honors it locally, but wiring it into the Python
     path would make a Harbor run crash whenever a user had set it for a local bash run.
     Both paths share the one canonical ``$HPCAGENT_BENCH_RUNTIME_BACKEND``."""
-    backend = (explicit or os.environ.get("HPCAGENT_BENCH_RUNTIME_BACKEND")
-               or config.get("runtime.backend", DEFAULT_BACKEND) or DEFAULT_BACKEND).strip()
+    backend = (
+        explicit
+        or os.environ.get("HPCAGENT_BENCH_RUNTIME_BACKEND")
+        or config.get("runtime.backend", DEFAULT_BACKEND)
+        or DEFAULT_BACKEND
+    ).strip()
     if backend in FAMILIES:
         members = family_members(backend)
         # A family names the interface, so resolving it must ask the machine which flavour is
@@ -219,9 +226,11 @@ def srun_container_flags(backend: Optional[str] = None, edf: Optional[str] = Non
         return []
     path = edf or os.environ.get("HPCAGENT_BENCH_EDF")
     if not path:
-        raise ValueError(f"backend {chosen!r} selects its container with {spelling.srun_flag}=<edf>, but no EDF "
-                         "was given; pass edf= or set $HPCAGENT_BENCH_EDF (see "
-                         "scripts/cscs/loop_level_reasoning.toml.example)")
+        raise ValueError(
+            f"backend {chosen!r} selects its container with {spelling.srun_flag}=<edf>, but no EDF "
+            "was given; pass edf= or set $HPCAGENT_BENCH_EDF (see "
+            "scripts/cscs/loop_level_reasoning.toml.example)"
+        )
     return [f"{spelling.srun_flag}={path}"]
 
 
@@ -231,11 +240,14 @@ def default_image(backend: str, hardware: str = "cpu", repo_root: Optional[str] 
     ``repo_root``, or an ``hpcagent_bench:<hw>`` tag)."""
     spelling = SPELLINGS[backend]
     if spelling.image_form == "edf":
-        raise ValueError(f"{backend!r} has no image reference of its own: its EDF names the image "
-                         "(see srun_container_flags)")
+        raise ValueError(
+            f"{backend!r} has no image reference of its own: its EDF names the image (see srun_container_flags)"
+        )
     if not spelling.image_form:
-        raise ValueError(f"{backend!r} runs on the host and consumes no image; asking it for one is a "
-                         "category error, not a missing default")
+        raise ValueError(
+            f"{backend!r} runs on the host and consumes no image; asking it for one is a "
+            "category error, not a missing default"
+        )
     if spelling.image_form == "sif":
         override = os.environ.get("HPCAGENT_BENCH_SIF")
         if override:
@@ -269,17 +281,21 @@ def collect_env(hardware: str) -> List[Tuple[str, str]]:
     # -- a silent parity break. Fail loud rather than emit a corrupt launch.
     for key, value in pairs:
         if "\n" in value:
-            raise ValueError(f"env {key!r} contains a newline; the launch fold is newline-delimited "
-                             f"and cannot forward it (container_backends.txt token-list invariant)")
+            raise ValueError(
+                f"env {key!r} contains a newline; the launch fold is newline-delimited "
+                f"and cannot forward it (container_backends.txt token-list invariant)"
+            )
     return pairs
 
 
-def local_run_command(inner: Sequence[str],
-                      *,
-                      backend: Optional[str] = None,
-                      hardware: str = "cpu",
-                      image: Optional[str] = None,
-                      repo_root: Optional[str] = None) -> List[str]:
+def local_run_command(
+    inner: Sequence[str],
+    *,
+    backend: Optional[str] = None,
+    hardware: str = "cpu",
+    image: Optional[str] = None,
+    repo_root: Optional[str] = None,
+) -> List[str]:
     """THE factory: the full launch argv for running ``inner`` inside the image under an
     exec-wrapper backend -- ``prefix + [image] + inner`` in the fixed fold order the bash
     launcher mirrors. ``backend`` defaults to :func:`resolve_backend`.
@@ -312,8 +328,10 @@ def harbor_env_for(backend: Optional[str] = None) -> str:
     chosen = resolve_backend(backend)
     name = SPELLINGS[chosen].harbor_env
     if not name:
-        raise ValueError(f"{chosen!r} is not a Harbor backend (Harbor provides singularity + docker); "
-                         "run it directly via local_run_command / scripts/run_agent_in_container.sh")
+        raise ValueError(
+            f"{chosen!r} is not a Harbor backend (Harbor provides singularity + docker); "
+            "run it directly via local_run_command / scripts/run_agent_in_container.sh"
+        )
     return name
 
 
@@ -350,8 +368,9 @@ def install_apptainer(prefix="~/.local", attempts=4):
     returncode = 1
     for attempt in range(1, attempts + 1):
         try:
-            script = subprocess.run(["curl", "-fsSL", APPTAINER_INSTALLER], check=True, capture_output=True,
-                                    text=True).stdout
+            script = subprocess.run(
+                ["curl", "-fsSL", APPTAINER_INSTALLER], check=True, capture_output=True, text=True
+            ).stdout
             returncode = subprocess.run(["bash", "-s", "-", prefix], input=script, text=True).returncode
             if returncode == 0:
                 return 0
@@ -360,8 +379,10 @@ def install_apptainer(prefix="~/.local", attempts=4):
         if attempt < attempts:
             clean_partial_install(prefix, preexisting)
             delay = 5 * attempt
-            print(f"apptainer install attempt {attempt}/{attempts} failed (rc={returncode}); retrying in {delay}s",
-                  file=sys.stderr)
+            print(
+                f"apptainer install attempt {attempt}/{attempts} failed (rc={returncode}); retrying in {delay}s",
+                file=sys.stderr,
+            )
             time.sleep(delay)
     return returncode
 
