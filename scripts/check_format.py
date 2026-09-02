@@ -141,7 +141,19 @@ def ruff_offenders(rels, fix):
     # "unformatted: File would be reformatted" with the path on a following "--> path:line:col"
     # line, so a parser keyed on "Would reformat:" finds NOTHING and the gate passes every file
     # silently, in check AND in --fix. Measured on 0.16.5: prose parser 0 offenders, json parser 1.
-    offenders = sorted({entry["filename"] for entry in json.loads(out.stdout or "[]")})
+    try:
+        offenders = sorted({entry["filename"] for entry in json.loads(out.stdout or "[]")})
+    except json.JSONDecodeError:
+        # `--output-format` is PREVIEW-GATED on the formatter, so a ruff that does not honour it
+        # prints prose here ("1 file already formatted") and the parse above dies -- taking the
+        # pre-commit hook down with it on 0.15.10. The per-file EXIT CODE is the one shape that has
+        # not moved across releases, so fall back to it: a process per file is slower than the one
+        # batched call, but it is only reached on a ruff whose json this cannot read.
+        offenders = sorted(
+            rel
+            for rel in rels
+            if _run(["ruff", "format", "--check", "--line-length", str(PY_LINE_LENGTH), rel]).returncode != 0
+        )
     if fix and offenders:
         _run(["ruff", "format", "--line-length", str(PY_LINE_LENGTH), *offenders])
     return offenders

@@ -172,7 +172,11 @@ def cegterg(
         vrs_a = vrs_a[:, None]
     vrs_f = _f(vrs_a, np.float64)
     nspin_mag = vrs_f.shape[1]
-    gmap = _f(np.asarray(nlk)[:npw_k, ck0].astype(np.int32) - 1, np.int32)
+    # NO -1. nlk is already 0-based (cegterg.py builds it with ravel_multi_index, and the numpy
+    # kernel subscripts it directly); the C++ subscripts it directly too. The stale 1-based
+    # conversion shifted every G-vector down one and turned the Gamma entry, nl == 0, into -1 --
+    # a size_t(-1) subscript that wrote 8 bytes BEFORE psic and aborted the process.
+    gmap = _f(np.asarray(nlk)[:npw_k, ck0].astype(np.int32), np.int32)
     vkb_re, vkb_im = _split(np.asarray(vkb)[:npw_k, :, ck0]) if nkb > 0 else (None, None)
     deeq_f = _f(deeq, np.float64) if nkb > 0 else None
     qq_f = _f(qq, np.float64) if nkb > 0 else None

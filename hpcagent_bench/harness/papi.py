@@ -1076,6 +1076,21 @@ def perf_event_reason() -> Optional[Tuple[str, str]]:
             "which is what PAPI counts with; need <= 2 ('sudo sysctl -w "
             "kernel.perf_event_paranoid=2', or run the container with --cap-add=CAP_PERFMON)",
         )
+    # An OPEN gate is not a countable machine. A hosted runner's hypervisor exposes the
+    # perf_event subsystem to the guest and then no PMU behind it, so every check above passes and
+    # PAPI_add_event answers "Event does not exist" one layer down -- which reached the tests as a
+    # hard failure instead of a named skip. PAPI's own query is the oracle, same as everywhere else.
+    try:
+        countable = available_events()
+    except PapiUnavailable:
+        return None  # papi_missing / papi_init_failed is check()'s answer, and it is more specific
+    if not countable:
+        return (
+            "events_unsupported",
+            "PAPI loaded and the perf_event gate is open, but PAPI_query_event answers no to every "
+            "preset event: this CPU exposes no hardware counter to count with (a VM whose "
+            "hypervisor does not pass the PMU through, which no setting inside the guest fixes)",
+        )
     return None
 
 

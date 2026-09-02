@@ -26,9 +26,12 @@ import sys
 import tomllib
 from collections.abc import Sequence
 
-from hpcagent_bench import paths
+#: This script's OWN checkout, like scripts/check_format.py. Anchoring on the installed
+#: ``hpcagent_bench`` instead read pyproject from -- and WROTE the generated files into -- whichever
+#: tree pip has an editable install of, which is a different checkout the moment there are two.
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
-PYPROJECT = paths.ROOT / "pyproject.toml"
+PYPROJECT = REPO_ROOT / "pyproject.toml"
 
 #: A self-reference an extra uses to pull in another extra of the same distribution.
 SELF_EXTRA = re.compile(r"^hpcagent_bench\[([A-Za-z0-9._-]+)\]$")
@@ -180,7 +183,7 @@ def rendered_files() -> dict[pathlib.Path, str]:
     core = project["dependencies"]
     extras = project["optional-dependencies"]
     groups = parsed["dependency-groups"]
-    return {paths.ROOT / name: render(spec, core, extras, groups) for name, spec in GENERATED.items()}
+    return {REPO_ROOT / name: render(spec, core, extras, groups) for name, spec in GENERATED.items()}
 
 
 def check() -> list[str]:
@@ -215,7 +218,7 @@ def main() -> int:
 
     for path, text in rendered_files().items():
         path.write_text(text)
-        print(f"wrote {path.relative_to(paths.ROOT)}")
+        print(f"wrote {path.relative_to(REPO_ROOT)}")
     return 0
 
 
