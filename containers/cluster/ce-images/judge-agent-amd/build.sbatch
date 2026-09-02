@@ -25,8 +25,10 @@
 set -Eeuxo pipefail
 
 # Slurm SPOOLS the batch script, so BASH_SOURCE points into /var/spool/slurmd -- the directory is
-# passed in rather than derived. Deriving it is what killed build job 600467.
-IMAGE_DIR="${IMAGE_DIR:?set IMAGE_DIR to containers/cluster/ce-images/judge-agent-amd}"
+# passed in rather than derived. Deriving it is what killed build job 600467. SLURM_SUBMIT_DIR is
+# the submit directory, so `cd <this dir> && sbatch build.sbatch` needs no variable; this is the
+# same fallback the other four builders use, and having a fifth spelling of it cost job 619973.
+IMAGE_DIR="${IMAGE_DIR:-${SLURM_SUBMIT_DIR:-$PWD}}"
 test -x "${IMAGE_DIR}/build.sh"
 
 mkdir -p "${SCRATCH:?}/ce-images/logs"
