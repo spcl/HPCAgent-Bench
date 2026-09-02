@@ -28,6 +28,10 @@ mkdir -p "$(dirname "${OUTPUT_SQSH}")"
 unset DBUS_SESSION_BUS_ADDRESS
 export TMPDIR="/dev/shm/${USER}/tmp"
 export XDG_RUNTIME_DIR="/dev/shm/${USER}/xdg"
+# The wipe goes through `podman unshare`: an image layer under root/overlay/*/diff is owned by
+# a SUBUID, so a plain rm cannot touch it and leaves a half-deleted store the next build
+# dies on. unshare enters the user namespace where those subuids map to this user.
+podman unshare rm -rf "/dev/shm/${USER}/root" "/dev/shm/${USER}/runroot" 2>/dev/null || true
 rm -rf "/dev/shm/${USER}/root" "/dev/shm/${USER}/runroot" "/dev/shm/${USER}/tmp" "/dev/shm/${USER}/xdg"
 mkdir -p "${TMPDIR}"
 mkdir -p -m 0700 "${XDG_RUNTIME_DIR}"
