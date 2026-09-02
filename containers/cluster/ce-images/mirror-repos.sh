@@ -13,6 +13,8 @@ HewlettPackard/shs-libcxi
 vllm-project/vllm
 ROCm/aiter
 triton-lang/triton
+ROCm/triton
+HewlettPackard/shs-cxi-driver
 bondhugula/pluto
 icl-utk-edu/papi
 spcl/dace

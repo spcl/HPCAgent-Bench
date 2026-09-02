@@ -92,14 +92,23 @@ RUN apt-get update \
       libconfig-dev libfuse-dev libuv1-dev libsensors-dev \
  && rm -rf /var/lib/apt/lists/*
 
-# The cassini uAPI headers libcxi compiles against, installed headers-only.
+# The uAPI headers libcxi compiles against, installed headers-only, from TWO repos.
+# cassini-headers carries the hardware definitions; `uapi/misc/cxi.h`, which libcxi.h
+# includes on its first line, is the KERNEL DRIVER's and lives in shs-cxi-driver. Without
+# the second the configure passes and every .lo fails with `uapi/misc/cxi.h: No such file`,
+# a quarter of an hour in, so the test names the miss at the copy instead.
 WORKDIR /tmp/build
 RUN set -eux; \
     gitretry clone --branch "${SHS_REF}" --depth 1 \
       https://github.com/HewlettPackard/shs-cassini-headers.git cassini-headers; \
     git -C cassini-headers rev-parse HEAD > /tmp/cassini-headers.commit; \
     mkdir -p /opt/ofi/include; \
-    cp -a cassini-headers/include/. /opt/ofi/include/
+    cp -a cassini-headers/include/. /opt/ofi/include/; \
+    gitretry clone --branch "${SHS_REF}" --depth 1 \
+      https://github.com/HewlettPackard/shs-cxi-driver.git cxi-driver; \
+    git -C cxi-driver rev-parse HEAD > /tmp/cxi-driver.commit; \
+    cp -a cxi-driver/include/uapi /opt/ofi/include/; \
+    test -f /opt/ofi/include/uapi/misc/cxi.h
 
 RUN set -eux; \
     gitretry clone --branch "${SHS_REF}" --depth 1 \
