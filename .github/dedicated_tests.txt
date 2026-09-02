@@ -48,6 +48,11 @@ tests/test_default_datatype_tolerance.py
 tests/test_fp16.py
 tests/test_frameworks.py
 tests/test_native_autogen.py
+# Phase 2 on e2e-native, beside test_native_autogen.py: it builds the same C / C++ / Fortran matrix
+# through languages.build_shared_lib_commands, and it is the only thing in CI that compiles a
+# submission delivered as TWO translation units -- the GPU delivery shape (host entry + device
+# kernels) that no runner here has hardware for, standing in on the host languages.
+tests/test_multi_unit_submission.py
 
 # --- the long sweeps: each is its own phase, several with a backend matrix ----------------------
 tests/test_e2e_numerical.py
