@@ -385,6 +385,18 @@ jobs:
         # translators tree has its own conftest and is otherwise never scanned by this job.
         # `make test` excludes this marker for a fast local loop; CI is where they must run.
         #
+        # --ignore=tests/test_dace_numeric_agreement.py: this file carries no @pytest.mark.integration
+        # test at all (only dace_numeric, which the mpi job selects), so -m integration keeps none of
+        # its tests -- but COLLECTING it still costs the whole job something, because its parametrize
+        # decorator calls selected_kernels() -> generated_programs() at IMPORT time, which runs
+        # autogen.ensure() (real codegen, not a registry lookup) over EVERY one of the 655 registry
+        # kernels unconditionally, before any marker filter is applied. Measured directly (run
+        # 33555162782, job 100051119972): the step logs zero output for 59m08s between the step
+        # starting and pytest's own "test session starts" line, i.e. collection alone burned more
+        # than half the 105-minute budget, on work that gets thrown away the instant -m integration
+        # deselects it. --ignore skips importing the file, so the cost is never paid here; the mpi
+        # job still collects and runs it for real.
+        #
         # Capped well under the job ceiling so a wedged build still fails as a STEP, leaving the
         # coverage upload below to run -- the cap is a hang detector, not the budget it used to be.
         #
@@ -398,6 +410,7 @@ jobs:
         timeout-minutes: 105
         run: |
           python -m pytest -p no:cacheprovider -rfEs --timeout=1500 --timeout-method=thread --durations=25 \
+            --ignore=tests/test_dace_numeric_agreement.py \
             -m integration tests/ hpcagent_bench/numpy_translators/tests/
 
       - name: ccache statistics
@@ -1341,10 +1354,13 @@ jobs:
           HPCAGENT_BENCH_DACE_BUILD_ROOT: ${{ runner.temp }}/dace_numeric
         run: |
           rm -rf "$HPCAGENT_BENCH_DACE_BUILD_ROOT"
-          # Regenerate ONCE, before xdist starts. *_dace.py is gitignored, so collection emits what
-          # a fresh checkout lacks -- and every worker would do that independently, four processes
-          # writing the same files through one fingerprint cache. Doing it here leaves the workers'
-          # own autogen.ensure a pure cache hit, so there is no race to reason about.
+          # Regenerate ONCE, before xdist starts. *_dace.py is gitignored, so a fresh checkout has
+          # none, and each test emits its own kernel -- four workers would emit their shares
+          # concurrently, four processes writing through one fingerprint cache. Doing it here
+          # leaves the workers' own autogen.ensure a pure cache hit, so there is no race to reason
+          # about. This is the ONLY whole-corpus emit left: collection itself generates nothing
+          # (tests/test_dace_numeric_agreement.py::gated_kernels), which is why this step is
+          # explicit rather than a side effect of importing the test file.
           python -c "from tests.test_dace_frontend_validity import generated_programs; \
             print(len(generated_programs()), 'dace programs ready')"
           python -m pytest -q -p no:cacheprovider -rfEs -n 4 -m dace_numeric \

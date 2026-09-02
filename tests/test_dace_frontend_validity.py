@@ -198,23 +198,40 @@ REFUSED: Dict[str, str] = {
 }
 
 
-def generated_programs() -> List[pathlib.Path]:
-    """Every kernel's canonical DaCe program, GENERATING any that a fresh checkout lacks.
+def ensure_dace_program(key: str) -> pathlib.Path:
+    """Generate ONE kernel's canonical DaCe program if the tree lacks it, and return its path.
 
     ``*_dace.py`` is gitignored -- emitted from the numpy reference on demand -- so a glob alone
     measures whatever a previous run happened to leave behind, and on a CI runner that is nothing.
-    ``.cache/`` copies are skipped: they are per-run duplicates whose dotted path is not importable.
+    The canonical path is CONSTRUCTED from the manifest rather than globbed, which is also what
+    keeps the ``.cache/`` copy out: it is a per-run duplicate whose dotted path is not importable.
+
+    The path comes back whether or not it exists. A kernel whose dace EMIT fails writes no file,
+    and the two gates mean different things by that -- see :func:`generated_programs` here and
+    ``tests.test_dace_numeric_agreement.test_dace_agrees_with_numpy`` -- so neither verdict is
+    taken on their behalf. Emission is a per-kernel cache HIT once the tree is warm.
     """
     from hpcagent_bench import autogen, paths
-    from hpcagent_bench.spec import KERNELS, BenchSpec
-    out: List[pathlib.Path] = []
-    for key in sorted(KERNELS):
-        spec = BenchSpec.load(key)
-        autogen.ensure(key, ["dace"])
-        canonical = paths.BENCHMARKS / spec.relative_path / f"{spec.module_name}_dace.py"
-        if canonical.exists():
-            out.append(canonical)
-    return out
+    from hpcagent_bench.spec import BenchSpec
+    spec = BenchSpec.load(key)
+    autogen.ensure(key, ["dace"])
+    return paths.BENCHMARKS / spec.relative_path / f"{spec.module_name}_dace.py"
+
+
+def generated_programs() -> List[pathlib.Path]:
+    """Every kernel's canonical DaCe program, GENERATING any that a fresh checkout lacks.
+
+    The whole corpus, deliberately: the ratchet below is a sweep over everything that emits, and
+    the CI pre-warm step calls this so the ``-n 4`` workers that follow only ever see cache hits.
+    That is ~655 emits, so it is called from a TEST BODY and never at import time -- a run that
+    selects none of these tests must generate nothing.
+
+    A kernel that emits no program is absent from the list rather than failing it; this gate
+    judges what the frontend is handed, and there is a separate finding for the emit gap (see
+    :func:`test_the_refusal_list_names_kernels_that_exist`).
+    """
+    from hpcagent_bench.spec import KERNELS
+    return [path for path in (ensure_dace_program(key) for key in sorted(KERNELS)) if path.exists()]
 
 
 def parse_one(path: pathlib.Path) -> dict:
