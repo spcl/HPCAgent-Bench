@@ -9,9 +9,9 @@ parameters:
   M:
     N: 2048
   L:
-    N: 4096
+    N: 5194
   XL:
-    N: 16384
+    N: 13175
 init:
   arrays:
     A: (N, N)

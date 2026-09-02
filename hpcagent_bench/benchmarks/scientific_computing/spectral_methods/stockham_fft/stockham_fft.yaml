@@ -14,11 +14,11 @@ parameters:
   L:
     R: 2
     K: 25
-    N: 33554432
+    N: 23367958
   XL:
     R: 2
     K: 28
-    N: 268435456
+    N: 130191196
 init:
   input_args:
   - R

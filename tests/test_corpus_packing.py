@@ -226,20 +226,28 @@ def test_lpt_lands_within_a_percent_of_a_perfectly_balanced_split(corpus, ranks:
 # The memory dimension: refuse, do not OOM.                                    #
 # --------------------------------------------------------------------------- #
 def test_an_over_budget_packing_is_refused_by_name_and_number() -> None:
-    """Four XL-ceiling kernels on four ranks of one 32 GB node is 64 GB of concurrent working
-    set. The refusal has to name the kernel and the number, or it is an unactionable stop."""
+    """Four XL-ceiling kernels on four ranks of a node that holds only two of them is twice the
+    concurrent working set the node has. The refusal has to name the kernel and the number, or it
+    is an unactionable stop.
+
+    Every size here is DERIVED from the ceiling rather than written out, so lowering the ceiling
+    moves the scenario instead of dissolving it: at a literal 32 GB node the 2026-09-01 4 GB
+    ceiling makes four ranks 16 GB, which fits, and the test would assert nothing."""
     sizes: Dict[str, Optional[int]] = {f"xl{i}": XL_BYTE_CEILING for i in range(4)}
+    node = 2 * XL_BYTE_CEILING
     with pytest.raises(ValueError) as excinfo:
-        pack_lpt(sorted(sizes), costs_from(sizes), 4, ranks_per_node=4, node_ram_bytes=32 << 30)
+        pack_lpt(sorted(sizes), costs_from(sizes), 4, ranks_per_node=4, node_ram_bytes=node)
     message = str(excinfo.value)
-    assert "xl0" in message and "16.00 GB" in message and "32.00 GB" in message
+    assert "xl0" in message
+    assert f"{XL_BYTE_CEILING / 2**30:.2f} GB" in message and f"{node / 2**30:.2f} GB" in message
 
 
 def test_the_same_packing_is_accepted_when_the_node_is_big_enough() -> None:
-    """The cap refuses over-budget packings, not packings: 64 GB of working set fits 96 GB."""
+    """The cap refuses over-budget packings, not packings: four ceiling-sized kernels fit a node
+    with room for six."""
     sizes: Dict[str, Optional[int]] = {f"xl{i}": XL_BYTE_CEILING for i in range(4)}
     names = sorted(sizes)
-    packed = pack_lpt(names, costs_from(sizes), 4, ranks_per_node=4, node_ram_bytes=96 << 30)
+    packed = pack_lpt(names, costs_from(sizes), 4, ranks_per_node=4, node_ram_bytes=6 * XL_BYTE_CEILING)
     assert_is_partition(packed, names, 4)
 
 
@@ -250,17 +258,21 @@ def test_spreading_the_same_ranks_over_more_nodes_makes_it_fit() -> None:
     sizes: Dict[str, Optional[int]] = {f"xl{i}": XL_BYTE_CEILING for i in range(4)}
     names = sorted(sizes)
     costs = costs_from(sizes)
+    node = 3 * XL_BYTE_CEILING  # holds three of the four: too small for 4 ranks, ample for 2
     with pytest.raises(ValueError):
-        pack_lpt(names, costs, 4, ranks_per_node=4, node_ram_bytes=48 << 30)
-    assert_is_partition(pack_lpt(names, costs, 4, ranks_per_node=2, node_ram_bytes=48 << 30), names, 4)
+        pack_lpt(names, costs, 4, ranks_per_node=4, node_ram_bytes=node)
+    assert_is_partition(pack_lpt(names, costs, 4, ranks_per_node=2, node_ram_bytes=node), names, 4)
 
 
 def test_a_kernel_over_its_own_share_is_named_on_its_own() -> None:
     """One kernel larger than node RAM / ranks-per-node can never be placed, whatever its
     neighbours do, and it is reported as that rather than as a node total."""
-    sizes: Dict[str, Optional[int]] = {"huge": 20 << 30, "tiny": 1 << 20}
+    sizes: Dict[str, Optional[int]] = {"huge": 20 * XL_BYTE_CEILING, "tiny": 1 << 20}
     partition = [["huge"], ["tiny"]]
-    problems = node_footprint_violations(partition, costs_from(sizes), ranks_per_node=2, node_ram_bytes=32 << 30)
+    problems = node_footprint_violations(partition,
+                                         costs_from(sizes),
+                                         ranks_per_node=2,
+                                         node_ram_bytes=2 * XL_BYTE_CEILING)
     assert any("huge" in problem and "share" in problem for problem in problems)
 
 

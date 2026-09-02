@@ -6,11 +6,11 @@ parameters:
   S:
     N: 2000
   M:
-    N: 22819
+    N: 11409
   L:
-    N: 32271
+    N: 16135
   XL:
-    N: 45639
+    N: 22819
 init:
   input_args:
   - N

@@ -31,9 +31,8 @@ rather than a missing flag — so the factory refuses instead.
 
 **Ranks per node.** Non-agent mode runs NATIVE, so one rank is one deterministic optimizer that
 compiles, runs and validates its own output -- no inference endpoint, no judge, nothing to place
-beside it. Four per node is what the memory allows: `sizing.TRACK_XL_CEILING` caps an `XL` working
-set at 4 GB for both `loop_level_reasoning` and `scientific_computing`, so four ranks hold ~16 GB
-of live data. The 20 GB `sizing.kernel_memory_gb` floor each rank imposes on its children is a
+beside it. Four per node is what the memory allows: `sizing.XL_BYTE_CEILING` caps an `XL` working
+set at 4 GB on every track, so four ranks hold ~16 GB of live data. The 20 GB `sizing.kernel_memory_gb` floor each rank imposes on its children is a
 `RLIMIT_AS` limit, not a reservation, and the ceiling that sized the data is five times tighter,
 so four caps cannot bind at once.
 

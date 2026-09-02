@@ -48,7 +48,7 @@ fuzz:
   # 0.50/1.00 therefore times [0.75, 1.00] x XL -- production-scale, per the note above, with a
   # real spread instead of the three-measurements-of-one-point that 0.85/1.15 timed
   # ([1.00, 1.15], span 0.15 -- and every draw over 1.00 BREACHED the track ceiling, since
-  # sizing.fit_to_ceiling puts XL at 0.97 * TRACK_XL_CEILING = 3.88 GiB and 1.15x is 4.46 GiB).
+  # sizing.fit_to_ceiling puts XL at 0.97 * XL_BYTE_CEILING = 3.88 GiB and 1.15x is 4.46 GiB).
   # Capping hi at 1.00 makes XL a real ceiling; lowering lo widens correctness coverage too.
   xl_lo_mult: 0.50
   xl_hi_mult: 1.00
@@ -427,8 +427,9 @@ limits:
                            # 10 was far under what the ladder actually builds: measured over the
                            # whole loop_level_reasoning track, 2x the XL working set covers only
                            # 10 of 242 kernels at 10 GB and all 242 by 16 GB -- which is no
-                           # coincidence, since sizing.TRACK_XL_CEILING caps that track's XL
-                           # footprint at 8 GB and MEMORY_COPIES is 2. 20 leaves headroom above
+                           # coincidence, since sizing.XL_BYTE_CEILING then capped that track's XL
+                           # footprint at 8 GB and MEMORY_COPIES is 2 (the ceiling is 4 GB since
+                           # 2026-09-01, so the same bound is now 8 GB). 20 leaves headroom above
                            # that bound for workspace and for a fuzz draw near the top of its
                            # interval, without approaching what four concurrent judge slots can
                            # hold on one node.

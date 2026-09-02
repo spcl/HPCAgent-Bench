@@ -33,7 +33,7 @@ prediction is packed last, round-robin, so an unknown cost cannot skew the packi
 
 ## corpus: the second dimension is memory, and it is why ranks != nodes
 
-XL is bounded at 16 GB. Four ranks on one node at XL is 64 GB of concurrent working
+XL is bounded at 4 GB. Four ranks on one node at XL is 16 GB of concurrent working
 set. So the packer is two-dimensional: balance predicted TIME across ranks, subject to
 `sum(concurrent footprint on a node) <= node RAM`.
 
