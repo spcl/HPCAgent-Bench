@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pytest
 
-from hpcagent_bench import flags, pluto_transform
+from hpcagent_bench import flags, pluto_transform, ppcg_transform
 from hpcagent_bench.benchmarks import cpp_runtime
 from hpcagent_bench.frameworks.benchmark import Benchmark
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework
@@ -260,6 +260,127 @@ def test_the_ppcg_column_follows_the_local_gpu_toolchain(monkeypatch) -> None:
         assert languages._compiler_for_lang(languages._load_compilers(), backend)[0] == compiler
 
 
+def test_the_named_ppcg_columns_do_not_follow_the_host(monkeypatch) -> None:
+    """``ppcg_cuda`` and ``ppcg_hip`` MEAN the vendor they are named for on every host.
+
+    The point of splitting them out of bare ``ppcg`` is that a result row says which GPU produced
+    it. If either flavor still consulted :func:`gpu_backend`, a fleet with both vendors would file
+    AMD samples in the CUDA column and nothing would say so -- the same class of silent mislabelling
+    the bare column has by design and these two exist to avoid. Pinned by flipping the probe under
+    them: the derived column moves, the named ones must not.
+    """
+    from hpcagent_bench import languages, ppcg_transform
+    scop = pathlib.Path("/tmp/x_fp64_pluto_input.c")
+    for host in ("hip", "cuda"):
+        monkeypatch.setattr(languages, "gpu_backend", lambda host=host: host)
+        monkeypatch.setattr(ppcg_transform, "gpu_backend", lambda host=host: host)
+        for named, ext in (("cuda", "cu"), ("hip", "hip")):
+            assert [p.name for p in ppcg_transform.transformed_paths(scop, named)
+                    ] == [f"x_fp64_pluto_input_host.{ext}", f"x_fp64_pluto_input_kernel.{ext}"]
+        assert ppcg_transform.resolve_backend(None) == host
+
+
+def test_every_ppcg_column_compiles_ppcg_output_for_its_own_vendor(monkeypatch) -> None:
+    """The build path routes all three ppcg columns through the transform, each with ITS vendor.
+
+    Two failures this catches, both silent: a new flavor missing from the dispatch falls through to
+    ``cpp_backend/<short>_fpNN.<ext>`` and compiles the UNTRANSFORMED translator output -- an nvcc
+    column wearing PPCG's label, exactly the bug ``pluto`` shipped with -- and a flavor that reaches
+    the transform with the wrong vendor generates ``.cu`` for a column that then asks hipcc for
+    ``.hip``, which fails as a missing file rather than as a wrong answer.
+    """
+    from hpcagent_bench import ppcg_transform
+    seen: List[tuple] = []
+    monkeypatch.setattr(ppcg_transform, "transformed_sources", lambda cpp_backend, short, backend: seen.append(
+        (short, backend)) or [])
+    for framework in cpp_runtime.PPCG_FRAMEWORKS:
+        cpp_runtime._native_sources(pathlib.Path("/tmp/cpp_backend"), "mm", framework)
+    assert seen == [("mm", cpp_runtime.FRAMEWORK_LANG[f]) for f in cpp_runtime.PPCG_FRAMEWORKS]
+    assert dict(zip(cpp_runtime.PPCG_FRAMEWORKS, (v for _, v in seen)))["ppcg_cuda"] == "cuda"
+    assert dict(zip(cpp_runtime.PPCG_FRAMEWORKS, (v for _, v in seen)))["ppcg_hip"] == "hip"
+
+
+def test_an_unknown_ppcg_vendor_is_refused_rather_than_guessed() -> None:
+    """A vendor with no :data:`languages.LANG_EXT` entry has no extension and no compilers.yaml
+    block, so accepting one would write sources nothing compiles. Raise where it is named."""
+    from hpcagent_bench import ppcg_transform
+    with pytest.raises(KeyError, match="unknown GPU backend"):
+        ppcg_transform.resolve_backend("rocm")
+
+
+def test_a_scop_ppcg_passed_through_is_declined_rather_than_timed(tmp_path, monkeypatch) -> None:
+    """ppcg's REFUSAL looks exactly like its success, and only the device half tells them apart.
+
+    Handed a scop outside its model, ppcg exits 0, writes both output files, says nothing on stderr,
+    and copies the loop nest into the host half with ``#pragma scop`` still in it -- the ``_kernel``
+    half holds only its own ``#include``. The old "returncode == 0 and both files exist" check
+    accepted that, so the column compiled the ORIGINAL serial loop, ran it on the CPU, and reported
+    it as a polyhedral GPU number.
+
+    The gate is checked on the PUBLISHED files rather than on the run, because the second call for
+    the same kernel finds them fresh and never runs ppcg at all; a gate wired into ``run_ppcg``
+    would fire on the first call and wave the same passthrough through on every one after it.
+    """
+    from hpcagent_bench import ppcg_transform
+    cpp_backend = tmp_path / "cpp_backend"
+    scop = write_scop(cpp_backend)
+    monkeypatch.setattr(ppcg_transform, "ppcg_exe", lambda: "/usr/bin/true")
+    monkeypatch.setattr(ppcg_transform, "hipify_exe", lambda: "/usr/bin/true")
+    monkeypatch.setattr(ppcg_transform, "assert_affine", lambda *a, **k: None)
+
+    host, device = ppcg_transform.transformed_paths(scop, "hip")
+    host.write_text(scop.read_text())
+    device.write_text(f'#include "{scop.stem}_kernel.hu"\n')
+    os.utime(host, None)
+    os.utime(device, None)
+
+    def must_not_run(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("the published pair is fresh; ppcg must not be re-run")
+
+    monkeypatch.setattr(ppcg_transform, "run_ppcg", must_not_run)
+    with pytest.raises(NotSupportedByFramework, match="offloaded nothing"):
+        ppcg_transform.transformed_sources(cpp_backend, "mm", "hip")
+
+    # The control: the same fresh pair, with a kernel in it, is accepted.
+    device.write_text(f'#include "{scop.stem}_kernel.hu"\n__global__ void kernel0(void) {{}}\n')
+    assert ppcg_transform.transformed_sources(cpp_backend, "mm", "hip") == [host, device]
+
+
+def test_ppcgs_c_output_is_repaired_into_the_cpp_the_gpu_drivers_compile() -> None:
+    """ppcg copies everything outside the scop through verbatim, so its output carries the
+    translator's C11 prelude into a file nvcc/hipcc compile as C++. Three spellings do not survive
+    that, and the third is the dangerous one: an entry point left with C++ linkage BUILDS and LINKS,
+    and is then missing at the ctypes lookup that has to find it by name."""
+    from hpcagent_bench import ppcg_transform
+    source = ("static inline double _Complex __npb_conj(double _Complex z) {\n"
+              "    return conj(z);\n}\n"
+              "void mm_fp64(const int64_t N, double A[restrict N]) {\n}\n")
+    out = ppcg_transform.cxx_compat(source, "mm_fp64")
+    assert "#define restrict __restrict__" in out
+    assert "return __builtin_conj(z);" in out and "return conj(z);" not in out
+    assert 'extern "C" void mm_fp64(' in out
+    assert ppcg_transform.entry_symbol(pathlib.Path("/x/mm_fp64_pluto_input.c")) == "mm_fp64"
+
+
+def test_a_read_only_input_array_does_not_make_ppcgs_output_unbuildable(tmp_path) -> None:
+    """``const`` on an input array propagates into ppcg's device pointer and then into its
+    ``cudaFree``/``cudaMemcpy`` calls, which take ``void *``. C casts that away silently; the C++
+    nvcc and hipcc compile does not, so the generated host half stops building on any kernel with a
+    read-only input -- most of them. Stripped from the COPY ppcg reads, never from the file, which is
+    the Pluto column's input as well."""
+    from hpcagent_bench import ppcg_transform
+    scop = write_scop(tmp_path / "cpp_backend", base="mm", fptype="fp32")
+    original = scop.read_text()
+    source = ("void mm_fp32(const int64_t N, const float a[restrict N], float b[restrict N]) {\n"
+              "#pragma scop\n#pragma endscop\n}\n")
+    stripped = ppcg_transform.drop_const_params(source, "mm_fp32")
+    assert "const" not in stripped.split("\n")[0]
+    assert "float a[restrict N]" in stripped and "float b[restrict N]" in stripped
+    # An entry it cannot find is left exactly as it was, rather than half-rewritten.
+    assert ppcg_transform.drop_const_params(source, "other_fp32") == source
+    assert scop.read_text() == original
+
+
 def test_ppcg_only_ever_asks_for_cuda() -> None:
     """The ``--target`` is not vendor-derived and must not become so: ppcg takes c/cuda/opencl and
     has no AMD target at all, so ``cuda`` is what it is asked for on every host and the translation
@@ -433,7 +554,7 @@ def test_the_column_refuses_to_time_a_kernel_the_oracle_calls_a_miscompile(monke
     transform is affine, polycc exits 0, the binary links and runs, and the answer is not the
     kernel's."""
     framework = PlutoFramework.__new__(PlutoFramework)
-    framework.gate_kernel = "pagerank"
+    framework.fname, framework.gate_kernel = "pluto", "pagerank"
     monkeypatch.setattr(pluto_transform, "oracle_pluto_status", lambda kernel: MISCOMPILE_VERDICT)
     ran = []
 
@@ -448,7 +569,7 @@ def test_the_gate_declines_every_verdict_that_is_not_ok(monkeypatch) -> None:
     """Not just the miscompile tag: a kernel the oracle could not grade is a kernel whose transform
     is UNVERIFIED, and timing an unverified polycc output is the state this gate exists to end."""
     framework = PlutoFramework.__new__(PlutoFramework)
-    framework.gate_kernel = "mm"
+    framework.fname, framework.gate_kernel = "pluto", "mm"
     monkeypatch.setattr(pluto_transform, "oracle_pluto_status", lambda kernel: "FAIL:compile: undeclared")
 
     with pytest.raises(NotSupportedByFramework) as excinfo:
@@ -457,11 +578,26 @@ def test_the_gate_declines_every_verdict_that_is_not_ok(monkeypatch) -> None:
     assert "FAIL:compile" in str(excinfo.value)
 
 
+def test_the_ppcg_columns_are_not_gated_on_polyccs_verdict(monkeypatch) -> None:
+    """The oracle grades what POLYCC produced. ppcg is a different transform with no entry there, so
+    a PPCG column asking anyway declines on kernels polycc merely happens not to be graded for -- and
+    says "not supported by pluto" while doing it, naming a tool it never runs. It keeps the
+    validation every other column gets; what it must not do is inherit this one."""
+    for fname in cpp_runtime.PPCG_FRAMEWORKS:
+        framework = PlutoFramework.__new__(PlutoFramework)
+        framework.fname, framework.gate_kernel = fname, "pagerank"
+        monkeypatch.setattr(pluto_transform, "oracle_pluto_status", lambda kernel: MISCOMPILE_VERDICT)
+        monkeypatch.setattr(PlutoFramework, "create_timer", lambda self, program: Timer(program))
+        ran: List[int] = []
+        framework.measure(impl=no_impl, runner=lambda: ran.append(1), repeat=1, warmup=0)
+        assert ran, f"{fname} declined on polycc's verdict"
+
+
 def test_a_kernel_the_oracle_grades_ok_is_still_timed(monkeypatch) -> None:
     """The gate must not become a column that declines everything: an ``ok`` verdict times normally,
     and the verdict is fetched BEFORE the timer so its cost cannot land in a kept sample."""
     framework = PlutoFramework.__new__(PlutoFramework)
-    framework.gate_kernel = "gemm"
+    framework.fname, framework.gate_kernel = "pluto", "gemm"
     order: List[str] = []
 
     def verdict(kernel: str) -> str:

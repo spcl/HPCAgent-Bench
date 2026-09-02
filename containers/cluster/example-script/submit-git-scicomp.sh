@@ -41,10 +41,17 @@ PROBLEMS=problems-git-scicomp.jsonl
 # and every arm reads this same file at launch -- submitting the second model while the first was
 # still starting handed its launcher an empty problems file, which materialized zero kernels and
 # left two arms running over nothing. A rename is atomic, so a reader sees the old file or the new.
-"${PY}" ./make_problems.py --track scientific_computing --language c --repeat 1 \
+# REPEAT is what makes the two arms COMPARABLE, not merely bigger. At one attempt per kernel the
+# first pass landed 2 to 6 submissions out of 10 per arm, and -- because which kernels those were
+# differed by arm -- the arms' geomeans were over different kernel sets and could not be compared
+# at all. Only heat_3d appeared in all four. Independent attempts per kernel raise the chance every
+# kernel lands in every arm, which is the coverage the pairing needs.
+REPEAT=${REPEAT:-3}
+EXPECTED=$((10 * REPEAT))
+"${PY}" ./make_problems.py --track scientific_computing --language c --repeat "${REPEAT}" \
     --kernels-file kernels-git-scicomp.txt >"${PROBLEMS}.tmp"
-[[ "$(wc -l <"${PROBLEMS}.tmp")" == 10 ]] || {
-    echo "expected 10 kernels, got $(wc -l <"${PROBLEMS}.tmp")" >&2
+[[ "$(wc -l <"${PROBLEMS}.tmp")" == "${EXPECTED}" ]] || {
+    echo "expected ${EXPECTED} problems (10 kernels x ${REPEAT}), got $(wc -l <"${PROBLEMS}.tmp")" >&2
     rm -f "${PROBLEMS}.tmp"
     exit 2
 }
@@ -93,13 +100,15 @@ submit_arm() {
     echo "submitted ${arm} -> ${SUBMITTED_JID} (${nodes} nodes)"
 }
 
-# One model's pair goes out together; the other chains behind it. Beverin allows 36 nodes and four
-# arms is 12 on top of whatever else is running, and more importantly an A/B is only readable if
-# both arms met the same machine -- a judge's timings move with what else is on the node.
 SUBMITTED_JID=""
 # DEPEND_ON chains this whole submission behind existing jobs (colon-separated) -- beverin allows 36
 # nodes at once and an arm that starts over that ceiling is an arm that never starts.
 chain="${DEPEND_ON:-}"
+# CHAIN_MODELS=1 puts one model's pair out and chains the other behind it, which keeps the node
+# count down and was the original default. It also serialises the campaign across many hours, and
+# the reason it existed -- both arms meeting the same machine -- is served just as well by sending
+# all four at once, since then no arm waits for a machine the others have already left. At three
+# nodes per arm the whole set is 12, well inside the 36 the cluster allows.
 for model in ${MODELS:-oss120b qwen38}; do
     pair=""
     for layout in kernel repo; do
@@ -108,5 +117,5 @@ for model in ${MODELS:-oss120b qwen38}; do
     done
     # BOTH of this model's arms, not just the last one: they finish at their own pace, and waiting
     # on one of a pair leaves the other still holding its nodes when the next pair starts.
-    chain="${pair}"
+    [[ "${CHAIN_MODELS:-0}" == 1 ]] && chain="${pair}"
 done

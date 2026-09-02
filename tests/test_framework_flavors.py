@@ -40,7 +40,7 @@ def test_the_oneapi_arm_has_no_autopar_flavor():
 def test_pluto_is_its_own_base_and_a_native_subclass():
     # Pluto is a separate toolchain (polycc source-to-source), not a native flavor, and the base
     # carries two arch flavors: polycc on the CPU and PPCG, the polyhedral GPU generator.
-    assert framework_flavors("pluto") == ["pluto", "ppcg"]
+    assert framework_flavors("pluto") == ["pluto", "ppcg", "ppcg_cuda", "ppcg_hip"]
     for name in framework_flavors("pluto"):
         fw = generate_framework(name)
         assert type(fw) is PlutoFramework
@@ -51,6 +51,9 @@ def test_pluto_is_its_own_base_and_a_native_subclass():
     # on ROCm). Pinned against ``gpu_backend()`` rather than a literal, because a literal here is
     # what left the entry claiming nvcc on an AMD node.
     assert FRAMEWORK_META["ppcg"]["language"] == gpu_backend()
+    # ...and the two flavors of that column state theirs instead, so they do not move with the host.
+    assert FRAMEWORK_META["ppcg_cuda"]["language"] == "cuda"
+    assert FRAMEWORK_META["ppcg_hip"]["language"] == "hip"
 
 
 def test_native_flavors_carry_language_and_compiler():
