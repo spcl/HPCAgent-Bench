@@ -1,6 +1,9 @@
 # DESIGN: `hpcagent_papi.h` -- region-level hardware counters for optimizing agents
 
-STATUS: **design only. Nothing here is implemented.** Open questions at the end are unanswered.
+STATUS: **the header IS implemented** -- `hpcagent_bench/helpers/papi/hpc_papi.h`, with
+`tests/test_papi_header.py` holding it to the tables it was generated from. What ships is the
+untagged four-call surface below (`init` / `start` / `stop` / `finalize`). The 2026-09-02 block
+is what is NOT built yet: tagged regions. Read the header before designing against this file.
 
 Today an agent's only counter surface is the judge's `POST /profile` with `counters:true`, which
 counts the WHOLE run from outside. That cannot answer "which of my three loop nests is missing L2"
@@ -17,7 +20,9 @@ Grounded in `hpcagent_bench/harness/papi.py`, `flags.py`, `languages.py`, `harne
 The endpoint is the delivery surface for everything, so these answer open questions 6 and 10 and
 reverse one earlier cut.
 
-**1. Regions are TAGGED.** `papi_start(tag)` / `papi_stop(tag)`, reversing "Cut: `hpc_papi_region`
+**1. Regions are TAGGED.** `hpc_papi_start(tag)` / `hpc_papi_stop(tag)`, as a change to the
+SHIPPED `hpc_papi.h` rather than a second header -- it already owns the PAPI symbol loading, the
+generated metric and cause tables, and the tests that keep those from drifting. Reversing "Cut: `hpc_papi_region`
 (no named regions)". Without a tag a CPU report has nothing to attribute to: `perf` names symbols
 because the linker did, and a counter bracket has no symbol at all -- the harness cannot see a
 "kernel" inside the agent's source, so the AGENT declares the scope and the label is what the
@@ -37,7 +42,11 @@ the pinning are read when the OpenMP image loads -- so the region path reuses th
 adding a second definition of "a counted run". The cost is the same: one full replay per metric,
 which is why a group is priced per metric and asked for once the call graph has said where to look.
 
-**4. OpenMP registers the threads.** `PAPI_thread_init(omp_get_thread_num)` once at library level,
+**4. OpenMP registers the threads** -- which the shipped header already does, arming every
+thread in its own parallel region at `init`. Whether that survives the runtime handing a later
+region different OS threads is UNVERIFIED here: this login node's PMU returns 0 for PAPI's own
+`papi_command_line`, so nothing measured on it can settle the question. Settle it on a host
+whose PMU works before changing the arming shape. `PAPI_thread_init(omp_get_thread_num)` once at library level,
 then `PAPI_register_thread()` per thread from inside a parallel region the INIT opens itself, so the
 agent never writes a parallel region for the instrument. This is the `spcl/dace` `papi-fix-2`
 pattern (`dace/runtime/include/dace/perf/papi.h`), which also fences around each measurement --
