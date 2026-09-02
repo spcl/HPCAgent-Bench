@@ -1615,9 +1615,12 @@ COMPONENT_BUILD: Dict[str, str] = {
     "nvml": "NVIDIA power, clocks, temperature and utilization -- './configure --with-components=nvml' "
     "with PAPI_NVML_ROOT set",
     "rocm": "AMD kernel counters through ROCProfiler -- './configure --with-components=rocm' with "
-    "PAPI_ROCM_ROOT pointing at the ROCm install",
+    "PAPI_ROCM_ROOT pointing at the ROCm install. Rebuilding is not expected to deliver these on a "
+    "current ROCm: this component targets ROCProfiler V1, which AMD is retiring, and its SDK-based "
+    "successor 'rocp_sdk' exists only from PAPI 7.2.0",
     "rocm_smi": "AMD power, clocks and temperature -- './configure --with-components=rocm_smi' with "
-    "PAPI_ROCMSMI_ROOT set",
+    "PAPI_ROCMSMI_ROOT set. Measured on ROCm 7.2.3 with PAPI 7.1.0, setting that root replaced the "
+    "missing-root reason with 'Error while initializing device tables' rather than a working component",
     "sysdetect": "device enumeration (what GPUs are here at all) -- './configure --with-components=sysdetect'",
 }
 
