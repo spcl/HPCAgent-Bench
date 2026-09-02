@@ -97,6 +97,8 @@ RUN apt-get update \
 # includes on its first line, is the KERNEL DRIVER's and lives in shs-cxi-driver. Without
 # the second the configure passes and every .lo fails with `uapi/misc/cxi.h: No such file`,
 # a quarter of an hour in, so the test names the miss at the copy instead.
+# csr_defs.json is data, not a header: libcxi generates utils/cxi_dump_csrs.h from it during
+# make, and its loader only looks at /usr/share/cassini-headers or a sibling install tree.
 WORKDIR /tmp/build
 RUN set -eux; \
     gitretry clone --branch "${SHS_REF}" --depth 1 \
@@ -108,7 +110,10 @@ RUN set -eux; \
       https://github.com/HewlettPackard/shs-cxi-driver.git cxi-driver; \
     git -C cxi-driver rev-parse HEAD > /tmp/cxi-driver.commit; \
     cp -a cxi-driver/include/uapi /opt/ofi/include/; \
-    test -f /opt/ofi/include/uapi/misc/cxi.h
+    test -f /opt/ofi/include/uapi/misc/cxi.h; \
+    mkdir -p /usr/share/cassini-headers; \
+    cp -a cassini-headers/share/cassini-headers/csr_defs.json \
+      /usr/share/cassini-headers/
 
 RUN set -eux; \
     gitretry clone --branch "${SHS_REF}" --depth 1 \
