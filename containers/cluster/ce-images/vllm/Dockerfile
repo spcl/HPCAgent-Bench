@@ -312,9 +312,12 @@ RUN set -eux; \
 # 610251/610252 (TimeoutError on sample_tokens at step_counter=0). prebuild-aiter-jit.sbatch worked
 # around it as a separate GPU job; the wedge is a property of the image, so it is fixed in the image.
 #
-# No GPU is needed for this: the modules compile with hipcc against GPU_ARCHS=gfx942, and the build
-# was measured completing on a device-less login node. Only a kernel LAUNCH needs hardware, and
-# none is issued here -- which is also why this cannot prove the modules run, only that they built.
+# A GPU IS needed, since aiter 0.1.19: `import aiter` runs utility/dtypes.py at module level, which
+# calls get_gfx_runtime(), which shells out to rocminfo and ignores GPU_ARCHS by design (its own
+# docstring says so). v0.1.13 used get_gfx() and read the env, which is why this step used to run
+# device-less. build.sh hands podman /dev/kfd; without it this step dies on `rocminfo returned
+# non-zero exit status 1`. A launch is still not issued here, so this proves the modules built,
+# not that they run.
 #
 # AITER_JIT_DIR points INSIDE the image so a hit is a read off the squashfs. A miss still writes,
 # into the per-job CE overlay, so an op this prebuild did not cover degrades to today's behaviour

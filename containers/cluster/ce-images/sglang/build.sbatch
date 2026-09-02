@@ -3,8 +3,10 @@
 #
 # Replaces a PULL plus two out-of-image steps: install-flydsl.sbatch, which built a --target prefix
 # on scratch that the arms reached through PYTHONPATH, and prebuild-aiter-jit.sbatch, whose whole
-# job was to warm a cache the image can simply carry. It asks for no GPUs, because a podman build
-# cannot use them -- which is also the reason it proves less. See LIMITATION in the Dockerfile.
+# job was to warm a cache the image can simply carry. It asks for no GPUs, but the mi300 node exposes /dev/kfd anyway and
+# build.sh hands it to podman, so a RUN step sees gfx942 (measured, job 619976). It still proves
+# less than a serve: an import and a JIT build are not a kernel launch. See LIMITATION in the
+# Dockerfile.
 #
 # Cost: one mi300 node. The 52 GB base pull dominates; after it, the Slingshot stack (libcxi,
 # libfabric, aws-ofi-nccl) and the aiter JIT prebuild are each minutes. 4 h is the safe request and

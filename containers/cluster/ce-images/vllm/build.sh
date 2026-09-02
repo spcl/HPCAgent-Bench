@@ -49,7 +49,21 @@ if [[ -d "${GIT_MIRRORS}" ]]; then
   printf 'git mirror %s\n' "${GIT_MIRRORS}"
 fi
 
-podman --cgroup-manager=cgroupfs build "${MIRROR_ARGS[@]}" \
+# The GPU, handed to the build. aiter >= 0.1.19 reads the arch from `rocminfo` at IMPORT time and
+# ignores GPU_ARCHS on purpose (get_gfx_runtime's docstring says so), and vLLM's rocm.py probes the
+# device too -- so a device-less build cannot even import them, and the earlier note here that "a
+# podman build cannot use GPUs" was wrong. Measured in job 619976: an mi300 job with NO --gres
+# still exposes /dev/kfd (crw-rw-rw- root:render), and `podman build --device` reports gfx942
+# inside a RUN step. Conditional, so a build on a node without the device fails in the image step
+# that actually needs it rather than on an unusable --device flag.
+GPU_ARGS=()
+if [[ -e /dev/kfd ]]; then
+  GPU_ARGS=(--device /dev/kfd --device /dev/dri --security-opt seccomp=unconfined
+            --group-add keep-groups)
+  printf 'gpu devices handed to the build\n'
+fi
+
+podman --cgroup-manager=cgroupfs build "${MIRROR_ARGS[@]}" "${GPU_ARGS[@]}" \
   --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
   -f "${SCRIPT_DIR}/Dockerfile" \
   -t "${IMAGE_TAG}" \

@@ -249,8 +249,12 @@ RUN set -eux; \
 # 300 s watchdog that way, and smoke-kimi-sglang.sbatch works around it by pointing AITER_JIT_DIR
 # at persistent scratch. The wedge is a property of the image, so it is fixed in the image.
 #
-# No GPU is needed: measured building on a device-less node in 43.6 s here. That is also the limit
-# of what it proves -- the modules built, not that they launch.
+# A GPU IS needed, since aiter 0.1.19: `import aiter` runs utility/dtypes.py at module level, which
+# calls get_gfx_runtime(), which shells out to rocminfo and ignores GPU_ARCHS by design (its own
+# docstring says so). v0.1.13 used get_gfx() and read the env, which is why this step used to run
+# device-less. build.sh hands podman /dev/kfd; without it this step dies on `rocminfo returned
+# non-zero exit status 1`. A launch is still not issued here, so this proves the modules built,
+# not that they run.
 #
 # AITER_JIT_DIR points INSIDE the image so a hit is a read off the squashfs. A miss still writes,
 # into the per-job CE overlay, so an op this prebuild did not cover degrades to today's cold-cache

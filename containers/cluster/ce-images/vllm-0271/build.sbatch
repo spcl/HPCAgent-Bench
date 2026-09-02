@@ -3,8 +3,10 @@
 #
 # Sibling of ce-images/vllm/build.sbatch. Both may be built; they write different artifacts and
 # ce-images/vllm (0.23.0) stays the fallback until this one has SERVED oss120b under an accuracy
-# gate. It asks for no GPUs, because a podman build cannot use them -- which is also the reason it
-# proves less. See LIMITATION in the Dockerfile.
+# gate. It asks for no GPUs, but the mi300 node exposes /dev/kfd anyway and
+# build.sh hands it to podman, so a RUN step sees gfx942 (measured, job 619976). It still proves
+# less than a serve: an import and a JIT build are not a kernel launch. See LIMITATION in the
+# Dockerfile.
 #
 # Cost: one mi300 node, same shape as the 0.23.0 build. 8 h requested, 4-6 h expected.
 #

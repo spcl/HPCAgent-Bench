@@ -3,8 +3,10 @@
 #
 # Replaces the six-job chain in ce-images/inference/build/build-chain.sh (phase1 OFI, phase1 gate,
 # pytorch 2.11, numpy, vLLM 0.23.0, flash-attn) plus the two in-place patch jobs that followed it,
-# with one job. It asks for no GPUs, because a podman build cannot use them -- which is also the
-# reason it proves less than the chain did. See LIMITATION in the Dockerfile.
+# with one job. It asks for no GPUs, but the mi300 node exposes /dev/kfd anyway and
+# build.sh hands it to podman, so a RUN step sees gfx942 (measured, job 619976). It still proves
+# less than a serve: an import and a JIT build are not a kernel launch. See LIMITATION in the
+# Dockerfile.
 #
 # Cost: one mi300 node. The stages it merges asked for 4 h (phase1) + 2 h (pytorch) + 2 h (vLLM) +
 # 2 h (aiter) of wall clock, and the aiter JIT prebuild adds its own compile, so 8 h is the safe
