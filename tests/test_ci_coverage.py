@@ -9,7 +9,7 @@ by default and inertness is silent.
 """
 import pathlib
 import re
-from typing import Set
+from typing import List, Set
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 WORKFLOW = REPO / ".github" / "workflows" / "tests.yml"
@@ -249,3 +249,59 @@ def test_ci_installs_the_tools_that_fail_silently_when_absent() -> None:
     for tool in ("ninja-build", "ccache"):
         assert tool in installed, (f"{tool} is not installed by .github/actions/setup/action.yml; without it the "
                                    f"build silently loses its cache instead of failing")
+
+
+def grouped_test_files() -> Set[str]:
+    """Test files that pin themselves to one xdist worker with an ``xdist_group`` marker.
+
+    Matched by an ESCAPED regex for the applied marker rather than by a plain substring, because
+    the obvious spellings of this check are self-matching: any file searching for the marker's name
+    contains that name, so this file reports ITSELF as grouped and the guard fails on its own text.
+    The backslashes keep the literal out of this source while matching it everywhere else.
+    """
+    marker = re.compile(r"pytest\.mark\.xdist_group\s*\(")
+    return {f"tests/{p.name}" for p in sorted((REPO / "tests").glob("test_*.py")) if marker.search(p.read_text())}
+
+
+def pytest_invocations() -> List[str]:
+    """Every ``python -m pytest`` command in the workflow, backslash continuations folded first
+    so a command wrapped over three lines is matched as the one command it is."""
+    joined = re.sub(r"\\\n\s*", " ", WORKFLOW.read_text())
+    return [line.strip() for line in joined.splitlines() if "python -m pytest" in line]
+
+
+def test_an_xdist_group_marker_is_never_a_no_op() -> None:
+    """A file carrying ``xdist_group`` must be swept WITH ``--dist loadgroup``.
+
+    The marker is inert under any other distribution -- pytest-xdist reads it only in loadgroup
+    mode -- so the flag and the marker are one mechanism written in two files, and dropping either
+    half silently restores the behaviour the marker was added to stop. Nothing fails; the suite
+    just quietly costs more again, which is why this has to be asserted rather than noticed.
+
+    What it costs when it lapses, measured on tests/test_generated_references.py: its module-scoped
+    fixture is 726 emits that each spawn a ``numpyto_common.cli`` subprocess, and under the default
+    per-test distribution every worker that draws one of its 8 tests rebuilds the whole thing. At
+    -n16 a narrow selection scattered all 8 and paid 8 rebuilds -- 5808 spawns instead of 726, with
+    eight copies resident at once -- while a full-sweep run happened to land them together and paid
+    1. The lapse is therefore not reliably visible in a green sweep, which is the other half of why
+    it is asserted here.
+    """
+    grouped = grouped_test_files()
+    assert grouped, "no test file declares an xdist_group marker; this guard has lost its subject"
+    claimed = dedicated_files()
+    offenders = []
+    for cmd in pytest_invocations():
+        workers = re.search(r"-n\s+(\S+)", cmd)
+        # -n0/-n1 is one process, where a module-scoped fixture is built once whatever the
+        # distribution is, so there is nothing for the marker to do and nothing to assert.
+        if workers is None or workers.group(1) in ("0", "1") or "--dist loadgroup" in cmd:
+            continue
+        # A command carries a grouped file either by naming it or by sweeping $files, which is
+        # every test file no dedicated phase claims.
+        carried = {f for f in grouped if f in cmd}
+        if "$files" in cmd:
+            carried |= grouped - claimed
+        if carried:
+            offenders.append(f"{sorted(carried)} run by: {cmd[:70]}...")
+    assert not offenders, ("these xdist runs carry a file with an xdist_group marker but no --dist loadgroup, "
+                           "so the marker does nothing: " + "; ".join(offenders))

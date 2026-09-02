@@ -22,6 +22,22 @@ import pytest
 from hpcagent_bench.spec import KERNELS
 from hpcagent_bench.support.bindings.contract import binding_from_spec
 
+#: One worker for the whole module, because the ``emitted`` fixture below is module-scoped and
+#: EXPENSIVE: 726 emits, each of which spawns a fresh ``numpyto_common.cli`` subprocess, ~115 s in
+#: total. Module scope shares that within ONE process only, so under xdist's default per-test
+#: distribution every worker that draws one of these 8 tests rebuilds the whole fixture.
+#:
+#: How many actually do is a scheduling lottery, which is the point: measured on this file at
+#: -n16, a narrow selection scatters all 8 tests and pays 8 full builds (5808 subprocess spawns
+#: instead of 726, eight fixtures resident at once, 177 s -> 111 s wall once grouped), while one
+#: run of the whole 199-file sweep happened to land them all on gw7 and paid 1. Grouping makes it
+#: deterministically 1 instead of somewhere between 1 and one-per-worker.
+#:
+#: Same idiom, and the same reason, as the per-stem group in tests/test_e2e_numerical.py. Needs
+#: ``--dist loadgroup`` to take effect -- tests/test_ci_coverage.py asserts the pairing -- and is
+#: inert without xdist, so a serial run is unchanged.
+pytestmark = pytest.mark.xdist_group(name="generated_references")
+
 #: The three the agent may submit in.
 LANGUAGES = ("c", "cpp", "fortran")
 

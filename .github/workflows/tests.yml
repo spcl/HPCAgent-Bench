@@ -196,7 +196,22 @@ jobs:
           # default method arms SIGALRM, and this suite forks and waits on subprocesses, where the
           # signal never lands. The thread method owns its own timer, so a wedge dumps the stack of
           # the test that is actually hanging instead of costing the whole job.
-          python -m pytest -p no:cacheprovider -rfEs -n auto --durations=25 \
+          #
+          # --dist loadgroup, for the same reason the e2e sweep carries it (see the header): a
+          # module-scoped fixture is shared within ONE process, so under the default per-test
+          # distribution a file whose fixture is expensive is rebuilt by every worker that draws
+          # one of its tests -- and how many that is depends on where the file lands in the queue,
+          # so the cost is a lottery rather than a constant. The bound is the worker count, and
+          # `-n auto` is 2 here (ubuntu-latest; run 33555162782 logged "created: 2/2 workers"), so
+          # on THIS runner the flag saves at most one duplicate build of test_generated_references'
+          # 726-emit, ~115 s fixture. It is worth more than that off the runner: at -n16 the same
+          # file paid 8 full rebuilds in a narrow selection -- 5808 numpyto subprocess spawns
+          # instead of 726, eight fixtures resident at once, 177 s -> 111 s wall once grouped --
+          # and a developer box with 16 cores is where the sweep has actually been seen to run out
+          # of memory. loadgroup makes it deterministically 1 in both places; files without the
+          # marker keep distributing per test, so this is inert for the other 198 (verified: an
+          # unmarked file still spreads across all workers under loadgroup).
+          python -m pytest -p no:cacheprovider -rfEs -n auto --dist loadgroup --durations=25 \
             --timeout=600 --timeout-method=thread $files
 
       - name: Phase 2 -- translations (C / C++ / Fortran emit + compile + validate)
