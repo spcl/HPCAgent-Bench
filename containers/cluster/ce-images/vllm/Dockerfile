@@ -52,6 +52,9 @@ USER root
 # cannot: spack clones its package repo in-process and vLLM's CMake FetchContent clones
 # triton itself, and both died on the same rate limiting with no retry of their own.
 # Conditional, so a build with no mirror mounted behaves exactly as it did before.
+# `protocol.file.allow` goes with it: git has refused local-path submodule clones since the
+# CVE-2022-39253 fix, and the rewrite turns every submodule URL into exactly that, so
+# `submodule update` aborts with `transport 'file' not allowed` before it looks for the repo.
 # Every network git call goes through this. An unauthenticated clone or fetch from a busy egress
 # IP gets a 401, which git reports as `could not read Username for https://github.com`: it looks
 # like a credentials failure and is a transient one. GIT_TERMINAL_PROMPT=0 makes it fail instead
@@ -74,6 +77,7 @@ RUN set -eux; \
     if [ -d /git-mirrors ]; then \
       git config --global "url./git-mirrors/.insteadOf" "https://github.com/"; \
       git config --global --add safe.directory '*'; \
+      git config --global protocol.file.allow always; \
     fi
 
 RUN apt-get update \
@@ -191,6 +195,9 @@ COPY --from=ofi-builder /opt/aws-ofi-nccl /opt/aws-ofi-nccl
 # cannot: spack clones its package repo in-process and vLLM's CMake FetchContent clones
 # triton itself, and both died on the same rate limiting with no retry of their own.
 # Conditional, so a build with no mirror mounted behaves exactly as it did before.
+# `protocol.file.allow` goes with it: git has refused local-path submodule clones since the
+# CVE-2022-39253 fix, and the rewrite turns every submodule URL into exactly that, so
+# `submodule update` aborts with `transport 'file' not allowed` before it looks for the repo.
 # Every network git call goes through this. An unauthenticated clone or fetch from a busy egress
 # IP gets a 401, which git reports as `could not read Username for https://github.com`: it looks
 # like a credentials failure and is a transient one. GIT_TERMINAL_PROMPT=0 makes it fail instead
@@ -213,6 +220,7 @@ RUN set -eux; \
     if [ -d /git-mirrors ]; then \
       git config --global "url./git-mirrors/.insteadOf" "https://github.com/"; \
       git config --global --add safe.directory '*'; \
+      git config --global protocol.file.allow always; \
     fi
 
 RUN apt-get update \
@@ -412,7 +420,8 @@ PY
 # Drop the mirror rewrite from the SHIPPED image. It is a build-time convenience pointing at a
 # path that exists only while the mirror is mounted; left in /root/.gitconfig, every git clone a
 # user runs inside this container would silently rewrite to a directory that is not there.
-RUN git config --global --unset-all "url./git-mirrors/.insteadOf" || true
+RUN git config --global --unset-all "url./git-mirrors/.insteadOf" || true; \
+    git config --global --unset-all protocol.file.allow || true
 
 WORKDIR /workspace
 
