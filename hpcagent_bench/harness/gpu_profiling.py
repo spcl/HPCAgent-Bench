@@ -330,9 +330,9 @@ def nsys_check(language: str) -> str:
     if language == "hip":
         raise GpuProfilerUnavailable(
             "rocprof_unsupported",
-            "nsys traces CUDA only and cannot see an AMD queue; a hip submission goes "
-            "through rocprof_check()/rocprof_record() instead ('rocprofv3 --kernel-trace --stats "
-            "--output-format csv -- <command>'), which profile_gpu_once dispatches to by language",
+            "nsys traces CUDA only and cannot see an AMD queue; a hip submission is traced by "
+            "rocprofv3 instead, which /profile dispatches to by language -- ask for tool "
+            "'rocprofv3', or omit 'tool' and take the default",
         )
     if not osinfo.IS_LINUX:
         raise GpuProfilerUnavailable(
