@@ -364,6 +364,28 @@ PATCH
 # into the per-job CE overlay, so an op this prebuild did not cover degrades to today's cold-cache
 # behaviour rather than failing. run_cluster.sh reads it as ${AITER_JIT_DIR:-...}, so this value
 # wins over its scratch default without a launcher change.
+# ONE VERSION OF ONE THING: triton, restored after the resolver replaces it.
+#
+# xgrammar declares an unpinned `triton`. On PyPI that name is the NVIDIA distribution, so pip
+# installs it OVER the triton-rocm that torch brought -- same top-level package, two owners --
+# and leaves pip's `~riton` rename behind. Seen in jobs 619988 and 619989: `Collecting triton
+# (from xgrammar...)` followed by triton-3.8.0. torch 2.11.0+rocm7.2 is built against the ROCm
+# triton, so the intruder is removed and the ROCm build reinstalled to restore every file it owns.
+#
+# The version is READ BACK from the surviving triton-rocm metadata rather than pinned again here,
+# so this repair cannot drift from whatever torch actually depends on.
+RUN set -eux; \
+    site="$(/opt/pytorch211/bin/python -c 'import site; print(site.getsitepackages()[0])')"; \
+    ver="$(/opt/pytorch211/bin/python -m pip show triton-rocm | awk '/^Version:/{print $2}')"; \
+    test -n "${ver}"; \
+    /opt/pytorch211/bin/python -m pip uninstall -y triton || true; \
+    rm -rf "${site}"/~riton*; \
+    /opt/pytorch211/bin/python -m pip install --no-cache-dir --no-deps --force-reinstall \
+      --index-url "${TORCH_INDEX}" "triton-rocm==${ver}"; \
+    ! /opt/pytorch211/bin/python -m pip show triton 2>/dev/null | grep -qx 'Name: triton'; \
+    /opt/pytorch211/bin/python -c "import triton, triton.backends; \
+      assert 'amd' in triton.backends.backends, sorted(triton.backends.backends)"
+
 ENV AITER_JIT_DIR=/opt/aiter-jit
 RUN mkdir -p /opt/aiter-jit /tmp/aiter-home
 RUN HOME=/tmp/aiter-home /opt/pytorch211/bin/python <<'PY'
@@ -455,14 +477,20 @@ for mod in ("vllm._C", "vllm._rocm_C"):
     importlib.import_module(mod)
 
 # --- ONE VERSION OF ONE THING: triton ---------------------------------------------------------
-# Exactly one distribution named `triton`, and it must be the ROCm build. PyPI's `triton` is the
-# NVIDIA distribution under the same name, so a resolver that reaches for it OVERWRITES this one
-# and the failure is silent until a kernel compiles for the wrong target. The local version tag is
-# the only honest discriminator -- both wheels expose an `amd` backend.
-tritons = dists("triton", "pytorch-triton", "pytorch-triton-rocm")
+# Exactly one distribution owning the top-level `triton` package, and it must be the ROCm build.
+# PyPI's `triton` is the NVIDIA distribution under a colliding top-level name, so a resolver that
+# reaches for it OVERWRITES this one and the failure is silent until a kernel compiles for the
+# wrong target; xgrammar does exactly that, which is why the repair RUN above removes it.
+#
+# The discriminator is the DISTRIBUTION NAME, not a version tag. torch 2.11.0+rocm7.2 brings
+# `triton-rocm`, whose version is a plain 3.6.0 -- the `+amd.rocm` local tag belonged to the
+# `triton 3.7.0+amd.rocm...` the old base image preinstalled, and asserting it here would reject
+# the correct wheel. Only the ROCm index publishes triton-rocm, and TORCH_INDEX is where the
+# repair installs it from.
+tritons = dists("triton", "pytorch-triton", "pytorch-triton-rocm", "triton-rocm")
 assert len(tritons) == 1, f"expected exactly one triton, got {[d.metadata['Name'] for d in tritons]}"
-triton_version = md.version("triton")
-assert "+amd.rocm" in triton_version, f"not the ROCm triton: {triton_version}"
+triton_dist = (tritons[0].metadata["Name"] or "").replace("-", "_").lower()
+assert triton_dist == "triton_rocm", f"not the ROCm triton distribution: {triton_dist}"
 import triton
 import triton.backends
 assert "amd" in triton.backends.backends, sorted(triton.backends.backends)
