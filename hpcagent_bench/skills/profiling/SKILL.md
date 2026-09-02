@@ -126,9 +126,9 @@ What each metric is for:
 Which of them this machine can actually give you is the intersection of that list with the CPU's
 own event table, computed at run time and never assumed: a microarchitecture that offers
 `PAPI_L1_DCM` may have no `PAPI_L1_ICM`, `PAPI_L3_DCM` or `PAPI_L1_TCM` at all, and the next one
-draws the line elsewhere. Ask before you measure --
-`papi.feature_set()` returns `supported` and `unsupported` with a reason each, without running a
-workload.
+draws the line elsewhere. You do not have to guess which: a counted run reports every metric it could not
+express under `unavailable`, with a reason each, beside the ones it counted -- so ask for the group
+and read what came back rather than predicting the CPU.
 
 Read the `expression` field, not just the metric name -- the metric names the question,
 `PAPI_L1_DCA - PAPI_L1_DCM` names the quantity that answered it. `count:null` with a `missing`

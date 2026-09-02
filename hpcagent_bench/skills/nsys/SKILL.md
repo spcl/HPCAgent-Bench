@@ -68,10 +68,10 @@ device is idle, stop tuning kernels". Two checks, both before any division:
 - **The untraced wall clock**, which the recording does not contain: the judge's `elapsed_ns` is
   it. A 28.75 ms device span inside a 0.40 s run means 93% of the wall is host-side setup that no
   kernel change reaches.
-- **First and last `Start (ns)` in `cuda_gpu_trace`, and the gaps between rows.** A compile or an
-  allocation phase is one gap orders of magnitude above the median. `cuda_api_sum` names it when
-  there is one: a 104.7 ms `cudaMalloc` total over 3 calls whose MAXIMUM is 104.6 ms is one
-  first-touch context creation, not three allocations.
+- **`device_pct` against the rep count.** A compile or an allocation phase inside the span shows up
+  as device time that is a tiny fraction of the measured wall clock while the kernel table looks
+  healthy. The per-launch timestamps that would let you find the gap directly are not in the
+  payload -- `launches` carries DISTINCT geometries, not one row per launch.
 
 If a phase is inside the span, the span is not the denominator: re-sum from the first activity after
 it, or split the steady-state work into its own kernels and re-profile. The judge's `elapsed_ns`
@@ -183,25 +183,21 @@ Where it goes:
   `launch_count`, that is a bound you can check in one multiplication: 5000 launches at ~5 us is
   25 ms of nothing, and it will not shrink by making the kernel faster.
 - **Synchronization stalls** -- a `cudaDeviceSynchronize` or a synchronous `cudaMemcpy` per rep
-  turns an asynchronous pipeline into a round trip. `cuda_api_sum` names which call held the host.
+  turns an asynchronous pipeline into a round trip.
 - **Host-side work between launches** -- index math, allocation, a Python frame. The device is idle
   and no device-side change touches it.
 - **Context creation** -- the first CUDA call costs 100 ms or more. It belongs in warmup; if it
   lands in a measured rep, the mean is fiction.
 
-**Launch-bound is settled by the TOTALS, not by the gap size.** `cuda_api_sum`'s `cudaLaunchKernel`
-total against the kernel total: measured on a 3351-launch trace, 7.20 ms of host time spent
-launching 4.74 ms of device work, which is the textbook signature -- this skill's rule of thumb,
-not a documented NVIDIA test, but it is what settles the verdict. Gap size does not show this and
-usually points the other way -- on that same trace the median kernel-to-kernel gap was 640 ns
-against a mean `cudaLaunchKernel` of 2149 ns, because the host runs far ahead and the queue hides
-the launch cost from the device timeline. `cuda_kern_exec_sum` splits a launch into API, queue and
-kernel time, but a deep queue is NOT the evidence: NVIDIA's help for that report says queue time
-"is not inherently bad", it means "the GPU was busy running other tasks", and "if every kernel
-launch is immediate, without any queue time, that _may_ indicate an idle GPU with poor
-utilization". The column that signals is `QCount`, the launches that had any queue time at all: a
-large `Count - QCount` alongside device-side gaps is the host starving the device. The fix is
-fewer, bigger launches, or a CUDA graph -- nothing about the bodies matters until the count drops.
+**Do not settle launch-bound on the gap size.** The host runs far ahead of the device and the queue
+hides the launch cost from the device timeline: on a 3351-launch trace the median kernel-to-kernel
+gap was 640 ns while the mean `cudaLaunchKernel` was 2149 ns, so the gap points the other way from
+the truth. The host-side API totals that WOULD settle it are not on this route (see the reports
+above), so use the two numbers that are: `launch_count` times a few microseconds of per-launch
+overhead against `device_ns_per_rep`, and the kernel table's own signature -- many `instances` with
+`mean_ns` in the single-digit microseconds. Either one crossing into the same order as the device
+time is the finding. The fix is fewer, bigger launches, or a CUDA graph -- nothing about the bodies
+matters until the count drops.
 
 If you do capture a graph, `--cuda-graph-trace` defaults to `graph` on CUDA driver 11.7+: the graph
 traces as ONE activity and its kernels leave `cuda_gpu_kern_sum` entirely. `--cuda-graph-trace=node`

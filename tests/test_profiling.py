@@ -255,7 +255,6 @@ def run(threads: int, elapsed_ns: int, hotspots):
         samples=100,
         kernel_pct=90.0,
         hotspots=hotspots,
-        run_hotspots=hotspots,
         scope="kernel",
         call_graph={},
         text="",
@@ -497,3 +496,47 @@ def test_a_dead_per_thread_child_is_a_named_cause_and_not_a_balanced_kernel(tmp_
     report = profiling.count_threads(tmp_path, tmp_path / "request.json", threads=4, timeout=1.0)
     assert report["cause"] == "run_failed" and "exit 9" in report["missing"]
     assert report["threads"] == [] and report["aggregate"] is None and report["imbalance"] is None
+
+
+def test_kernel_share_counts_the_work_openmp_outlined_out_of_the_symbol() -> None:
+    """The failure this exists to stop: ``kernel_pct`` read 0.00 for a parallel kernel.
+
+    ``#pragma omp parallel`` outlines the body, so the exported symbol is not an ancestor of its own
+    parallel work -- the workers reach ``<symbol>._omp_fn.0`` from ``gomp_thread_start``. Measured
+    with gcc -O3 -fopenmp at 4 threads on a kernel named ``mykernel``: ``mykernel`` appears in the
+    profile not at all, ``mykernel._omp_fn.0`` holds 86.00% self, and the old cumulative-only rule
+    returned 0.0.
+
+    That is not a cosmetic number. The profiling page tells an agent that below ~30% the best
+    possible outcome is a 1.4x speedup "so go find the frame that owns the rest", and the
+    divide-and-conquer page divides by it. A parallel kernel -- which is what every agent is asked
+    to produce -- would read as not worth optimizing, in the same response whose call graph shows
+    it dominating. Every existing test missed it because the fixture kernel is serial.
+    """
+    outlined = [
+        {"symbol": "mykernel._omp_fn.0", "dso": "k", "self_pct": 86.0, "total_pct": 86.4},
+        {"symbol": "gomp_thread_start", "dso": "libgomp.so", "self_pct": 1.2, "total_pct": 67.6},
+    ]
+    assert profiling.kernel_share(outlined, "mykernel") == 86.0
+
+    # clang spells the same outlining differently, and Fortran mangles the exported name.
+    assert (
+        profiling.kernel_share([{"symbol": "k.omp_outlined.1", "dso": "k", "self_pct": 40.0, "total_pct": 40.0}], "k")
+        == 40.0
+    )
+    assert (
+        profiling.kernel_share([{"symbol": "f_._omp_fn.0", "dso": "k", "self_pct": 12.5, "total_pct": 12.5}], "f")
+        == 12.5
+    )
+
+    # A serial kernel keeps the CUMULATIVE share: time in a library it calls is time it chose.
+    serial = [{"symbol": "mykernel", "dso": "k", "self_pct": 10.0, "total_pct": 90.0}]
+    assert profiling.kernel_share(serial, "mykernel") == 90.0
+
+    # A neighbour that merely starts with the same letters is not the kernel.
+    assert (
+        profiling.kernel_share(
+            [{"symbol": "mykernel_helper", "dso": "k", "self_pct": 50.0, "total_pct": 50.0}], "mykernel"
+        )
+        == 0.0
+    )

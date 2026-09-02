@@ -1377,8 +1377,9 @@ def per_thread_report(
         return missing_report(
             "not_openmp",
             "only the calling thread burned cycles: this kernel started no OpenMP workers (or "
-            "OMP_NUM_THREADS was 1), and a single thread has no imbalance. Its CPI is the process's -- count "
-            "'cycles' and 'instructions' with count_metric instead",
+            "the run was single-threaded), and a single thread has no imbalance. Its CPI is the process's -- "
+            "ask /profile with tool 'papi' and no per_thread for the summed counts, or re-ask with "
+            "threads greater than 1 if the kernel is meant to be parallel",
         )
     spread = imbalance([row["cycles"] for row in working])
     cycles = sum(row["cycles"] for row in rows)

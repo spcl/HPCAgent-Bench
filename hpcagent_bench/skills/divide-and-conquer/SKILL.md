@@ -24,9 +24,15 @@ __attribute__((noinline)) static void stage_advect(...) { /* one phase */ }
 caller and rank as one frame; `noinline` stages rank apart. Measured on a three-stage kernel under
 the harness's own sampling flags: 79.7% / 16.5% / 1.6% self, three rows where an inlined build has
 one. Those shares are that kernel's on one machine and yours will differ -- what carries over is
-the SEPARATION, which is what you are buying. Fortran: `subroutine`/`contains` gives the same symbols, and gfortran will still inline
-across a `contains` boundary at `-O3`, so the same rule applies -- name the stage and keep the
-compiler from folding it away.
+the SEPARATION, which is what you are buying. Fortran has no `__attribute__`, so the equivalent is a directive on the stage itself:
+
+```fortran
+subroutine stage_advect(...)
+  !GCC$ ATTRIBUTES NOINLINE :: stage_advect
+```
+
+`subroutine`/`contains` alone is not enough -- gfortran inlines across a `contains` boundary at
+`-O3`, and a stage that gets folded into its caller is a stage the profile cannot rank.
 
 On a device the stages are already separate kernels and the trace ranks them by name for free.
 The equivalent move there is giving two launches two names instead of one templated one.

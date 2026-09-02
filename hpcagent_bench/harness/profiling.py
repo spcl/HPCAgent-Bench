@@ -96,12 +96,12 @@ class ThreadRun:
     elapsed_ns: int
     samples: int
     kernel_pct: float
+    #: The WHOLE-run flat profile, always. Scoping it to the kernel's subtree removed the only
+    #: ranking that can show work the subtree does not contain -- and under OpenMP that is nearly
+    #: all of it, because the workers reach the outlined body from ``gomp_thread_start`` and never
+    #: through the exported symbol. ``rising`` reads it for the same reason: the symbol that fails
+    #: to scale is often outside the submission (a BLAS worker, an allocator).
     hotspots: List[dict]
-    #: The WHOLE-run flat profile, kept beside the scoped one and never serialised. ``rising`` is
-    #: computed from it on purpose: a symbol whose share grows with threads is the serial fraction,
-    #: and the one that most often matters is OUTSIDE the submission (a BLAS worker, an allocator).
-    #: Scoping this to the kernel would silently stop reporting exactly those.
-    run_hotspots: List[dict]
     #: The symbol the tree and the hotspots are rooted at -- the submitted kernel, or ``(all)``
     #: when it never appeared in the profile. Named in the payload so a reader always knows which
     #: denominator the rows describe rather than inferring it from whether they look familiar.
@@ -269,12 +269,36 @@ def child_result(stdout: str) -> Optional[dict]:
 
 
 def kernel_share(hotspots: List[dict], symbol: str) -> float:
-    """The profile share under ``symbol`` (0.0 when the submitted kernel never appeared).
+    """The profile share the submitted kernel owns (0.0 when it never appeared).
 
+    Two terms, because OpenMP renames the work. The exported symbol's CUMULATIVE share is the right
+    number when the kernel runs on the calling thread: time in a library it calls is time it chose
+    to spend. But ``#pragma omp parallel`` outlines the body, and the workers reach the outlined
+    function from ``gomp_thread_start`` rather than through the exported symbol -- measured with
+    gcc -O3 -fopenmp at 4 threads, ``mykernel`` appears in the profile NOT AT ALL while
+    ``mykernel._omp_fn.0`` holds 86% of it. So the outlined children contribute their SELF time,
+    which is disjoint from anything under the exported symbol and cannot double-count it.
+
+    Two spellings of the same outlining: gcc emits ``<symbol>._omp_fn.<n>``, clang
+    ``<symbol>.omp_outlined...``; both are the exported name, a dot, and the compiler's suffix.
     Fortran mangles the exported name with a trailing underscore, so the comparison ignores one.
     """
     wanted = symbol.rstrip("_")
-    return max((h["total_pct"] for h in hotspots if h["symbol"].rstrip("_") == wanted), default=0.0)
+    mine = [h for h in hotspots if owns(h["symbol"], wanted)]
+    direct = max((h["total_pct"] for h in mine if "." not in h["symbol"]), default=0.0)
+    outlined = sum(h["self_pct"] for h in mine if "." in h["symbol"])
+    return round(direct + outlined, 2)
+
+
+def owns(name: str, wanted: str) -> bool:
+    """``name`` is the kernel, or a function the compiler outlined out of it.
+
+    Split on the first dot BEFORE unmangling, because the two manglings compose: a Fortran OpenMP
+    kernel is ``f_._omp_fn.0``, where the trailing character is the outline index and stripping
+    trailing underscores does nothing at all.
+    """
+    base, _, _rest = name.partition(".")
+    return base.rstrip("_") == wanted
 
 
 def profile_once(
@@ -300,7 +324,10 @@ def profile_once(
         )
     graph, samples = perf_reports.call_graph(data)
     spots = perf_reports.hotspots(graph, samples)
-    kernel_pct = kernel_share(spots, symbol)
+    # Uncapped for the share only: the reported list is the ten hottest, but a kernel outlined into
+    # several parallel regions can put its work in rows past the cut, and a share computed from a
+    # truncated list is short by however much fell off.
+    kernel_pct = kernel_share(perf_reports.hotspots(graph, samples, limit=100_000), symbol)
     # Report the SUBMISSION's tree, not the harness's. kernel_pct still comes from the whole-process
     # flat profile, because "how much of the run is yours" is only meaningful against the whole run;
     # everything else describes what happened INSIDE the kernel. When the symbol never appeared the
@@ -313,8 +340,7 @@ def profile_once(
         elapsed_ns=int(result["elapsed_ns"]),
         samples=samples,
         kernel_pct=kernel_pct,
-        hotspots=perf_reports.hotspots(shown, samples) if scoped is not None else spots,
-        run_hotspots=spots,
+        hotspots=spots,
         scope=shown.symbol,
         call_graph=shown.to_json(samples, min_percent),
         text=perf_reports.render_call_graph(shown, samples, min_percent=min_percent),
@@ -331,8 +357,8 @@ def rising_hotspots(runs: List[ThreadRun], min_percent: float, limit: int = 5) -
     """
     if len(runs) < 2:
         return []
-    low = {(h["symbol"], h["dso"]): h["self_pct"] for h in runs[0].run_hotspots}
-    high = {(h["symbol"], h["dso"]): h["self_pct"] for h in runs[-1].run_hotspots}
+    low = {(h["symbol"], h["dso"]): h["self_pct"] for h in runs[0].hotspots}
+    high = {(h["symbol"], h["dso"]): h["self_pct"] for h in runs[-1].hotspots}
     moved = [
         {
             "symbol": sym,
