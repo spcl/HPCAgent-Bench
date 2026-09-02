@@ -15,6 +15,7 @@ here always means "this host has no PAPI" and never "the guard stopped noticing"
 """
 import ctypes
 import ctypes.util
+import faulthandler
 import os
 import signal
 from typing import Dict, Sequence, Tuple
@@ -576,6 +577,10 @@ def test_a_refused_permission_is_reported_instead_of_being_counted_around(monkey
 
 def segfaulting_worker(*args, **kwargs):
     """Stand-in for the counting child that dies the way a vendor runtime really dies."""
+    # Deliberate: this child is proving the harness survives a fatal signal. pytest enables
+    # faulthandler by default and the fork inherits it, so without this the child dumps a
+    # traceback to stderr and a passing run reads like six real crashes in the CI log.
+    faulthandler.disable()
     os.kill(os.getpid(), signal.SIGSEGV)
 
 

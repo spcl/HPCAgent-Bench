@@ -13,6 +13,7 @@ means "this host has no PAPI" and never "something changed and the guard stopped
 import ctypes
 import ctypes.util
 import json
+import faulthandler
 import os
 import pathlib
 import signal
@@ -238,6 +239,10 @@ def test_the_rendered_ratios_carry_the_formula_and_the_reasons() -> None:
 
 def segfaulting_worker(*args, **kwargs):
     """Stand-in for :func:`papi.counting_worker` that dies the way an agent's kernel dies."""
+    # Deliberate: this child is proving the harness survives a fatal signal. pytest enables
+    # faulthandler by default and the fork inherits it, so without this the child dumps a
+    # traceback to stderr and a passing run reads like six real crashes in the CI log.
+    faulthandler.disable()
     os.kill(os.getpid(), signal.SIGSEGV)
 
 
