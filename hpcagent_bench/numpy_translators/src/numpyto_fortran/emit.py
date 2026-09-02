@@ -12,7 +12,7 @@ from numpyto_common.ir import ArrayDesc, KernelIR, _is_alloc_marker
 from numpyto_common import dtypes, narrow_int, operators, parallelism
 from numpyto_common.emitter import BaseEmitter, index_rank_error
 from numpyto_common.frontend import _names_used_as_int
-from numpyto_common.lowering import _MATH_INTRINSIC_NAMES, _walk_complex
+from numpyto_common.lowering import _MATH_INTRINSIC_NAMES, _walk_complex, helper_returns_int
 
 #: Whole-identifier matcher for scanning a shape-token string for the names it references.
 _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
@@ -3211,7 +3211,7 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, parallel: bool = 
     helper_by_name = {h.kernel_name: h for h in kir.helpers}
     for temp, helper in hcall_temps.items():
         body_emitter.kir.local_dtypes[_safe_full(temp)] = (
-            "int64" if _helper_returns_int(helper_by_name[helper]) else "float64"
+            "int64" if helper_returns_int(helper_by_name[helper]) else "float64"
         )
     # Pre-compute logical_array_locals so _emit_subscript can detect arr[mask]
     # boolean-indexing and emit PACK(arr, mask). Computed ONCE and handed to both the body
@@ -3727,14 +3727,6 @@ def _collect_for_targets(stmts: List[ast.stmt]) -> Set[str]:
     return found
 
 
-def _helper_returns_int(hkir: KernelIR) -> bool:
-    """True when every return value of a scalar helper is an integer literal (out-param is int-typed, not real)."""
-    rets = [n.value for n in ast.walk(hkir.tree) if isinstance(n, ast.Return) and n.value is not None]
-    return bool(rets) and all(
-        isinstance(v, ast.Constant) and isinstance(v.value, int) and not isinstance(v.value, bool) for v in rets
-    )
-
-
 #: Dummy that carries a scalar-returning helper's result back (Fortran has no by-value return here).
 _HELPER_RET = "hret_"
 
@@ -3942,9 +3934,7 @@ def _emit_fortran_helper(
         # A real result follows the KERNEL's float precision, exactly as _collect_implicit_locals
         # types the caller's hoisted temp. Pinned to float64 the two disagreed at fp32 and gfortran
         # rejected the call outright (REAL(4) passed to a REAL(8) dummy).
-        ret_dtype = (
-            "int64" if _helper_returns_int(hkir) else dtypes.accumulator_dtype(hkir.float_precision or "float64")
-        )
+        ret_dtype = "int64" if helper_returns_int(hkir) else dtypes.accumulator_dtype(hkir.float_precision or "float64")
         ret_decl = f"{_fortran_type(ret_dtype)}, intent(out) :: {ret_name}"
     # Names the helper body reassigns need their intent(in) relaxed, same rule as
     # the top-level kernel; collect from the already-safe-renamed helper tree.
@@ -4002,11 +3992,18 @@ def _emit_fortran_helper(
     #: reads the same table this loop DECLARES from -- a helper body that stores a comparison into
     #: a ``logical(c_bool)`` mask has to know the mask is one.
     helper_elem_dtypes: Dict[str, str] = {}
+    # Same oracle the body emitter routes operands with, and read HERE too: eigh_test's helper
+    # builds its triangle mask through an if-expression temp, so the mask's boolean only reaches
+    # it through a copy that ``local_dtypes`` does not record. Declared from ``local_dtypes``
+    # alone it came out real(c_double), and gfortran refused both the store into it ("Cannot
+    # convert LOGICAL(1) to REAL(8)") and the ``if`` that reads it. The kernel-level declaration
+    # pass already consults this; the helper one had drifted off it.
+    helper_logicals = _logical_locals(hkir)
     for lname, lshape in hkir.zeros_locals.items():
         if lname in param_set:
             continue
         rev = [_to_fortran_shape_token(s) for s in reversed(lshape)] if lshape else ["1"]
-        dt = ldt.get(lname)
+        dt = "bool" if lname in helper_logicals else ldt.get(lname)
         if dt:
             helper_elem_dtypes[lname] = dt
         ftype = _fortran_type(dt) if dt else default_real
@@ -4026,7 +4023,7 @@ def _emit_fortran_helper(
     _record_helper_call_shapes(be, siblings or [])
     be.return_mode = ret_name
     be.inline_alloc_locals = helper_inline_alloc
-    be._logical_array_locals = _logical_locals(hkir)
+    be._logical_array_locals = helper_logicals
     be._local_elem_dtypes = helper_elem_dtypes
     # The same name -> int-kind map the top-level kernel builds. Without it a helper's implicit
     # integer local is untyped here, so ``(h + 2 * padding - 1) // stride`` took the REAL floor-div

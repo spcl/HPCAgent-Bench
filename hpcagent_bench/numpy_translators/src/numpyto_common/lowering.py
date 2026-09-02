@@ -69,6 +69,7 @@ from numpyto_common.lib_nodes import (
 from numpyto_common.frontend import (
     _collect_inlined_scalar_defs,
     _dtype_from_constructor,
+    _names_used_as_int,
     _resolve_shape_attr_tokens,
     _substitute_inlined_scalar_defs,
     fold_shape_expr,
@@ -8848,7 +8849,9 @@ def _lp_promote_params(ctx: LoweringContext) -> None:
     _promote_free_names_to_params(lowered)
     # Body-driven: detect writes (force is_output) and index-array usage (force
     # int64 dtype) so the emitter picks the right pointer qualifier / element type.
-    _detect_output_and_index_arrays(lowered)
+    # The helpers come along because a write inside one is still a write to the
+    # CALLER's buffer -- see :func:`written_through_helpers`.
+    _detect_output_and_index_arrays(lowered, ctx.original_kir.helpers)
 
 
 def _lp_pre_libnode_normalize(ctx: LoweringContext) -> None:
@@ -9592,6 +9595,8 @@ def _lp_lower_helpers(ctx: LoweringContext) -> None:
     """Lower each non-inlinable helper the same way -- it is a self-contained
     sub-kernel (own params + body). Its early ``return`` survives lowering (the
     return-extraction is a parse_kernel step, not a lowering pass)."""
+    for helper in ctx.original_kir.helpers:
+        retype_int_helper_scalars(helper)
     ctx.kir.helpers = [lower(h) for h in ctx.original_kir.helpers]
 
 
@@ -9858,11 +9863,140 @@ _BUILTIN_NAMES: Set[str] = {
 } | _MATH_INTRINSIC_NAMES
 
 
-def _detect_output_and_index_arrays(kir: KernelIR) -> None:
+#: Binary operators whose result is an integer when both operands are. ``/`` is absent on
+#: purpose: numpy true division is float even on two ints (see _lp_promote_true_division).
+_INT_PRESERVING_OPS = (
+    ast.Add,
+    ast.Sub,
+    ast.Mult,
+    ast.FloorDiv,
+    ast.Mod,
+    ast.Pow,
+    ast.LShift,
+    ast.RShift,
+    ast.BitAnd,
+    ast.BitOr,
+    ast.BitXor,
+)
+
+
+def _integer_bindings(fn: ast.FunctionDef, name: str) -> List[ast.expr]:
+    """Every expression ``name`` takes its value from in ``fn``, with a ``range`` loop
+    variable spelled as the integer literal it always is."""
+    bound: List[ast.expr] = []
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Assign):
+            if any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
+                bound.append(node.value)
+        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name) and node.target.id == name:
+            bound.append(ast.BinOp(left=ast.Name(id=name, ctx=ast.Load()), op=node.op, right=node.value))
+        elif isinstance(node, ast.For) and isinstance(node.target, ast.Name) and node.target.id == name:
+            is_range = isinstance(node.iter, ast.Call) and isinstance(node.iter.func, ast.Name)
+            bound.append(ast.Constant(value=0) if is_range and node.iter.func.id == "range" else node.iter)
+    return bound
+
+
+def integer_valued_expression(node: ast.expr, fn: ast.FunctionDef, seen: FrozenSet[str] = frozenset()) -> bool:
+    """Whether ``node`` evaluates to an INTEGER, judged from ``fn``'s own body.
+
+    Deliberately conservative: anything this cannot prove integer reads as float, which is
+    what every caller already assumed. A local is chased through its bindings, and a name
+    already on the chase is ASSUMED integer so an accumulator (``ts = ts * 2``) is decided by
+    its other bindings instead of recursing forever -- a name whose only binding mentions
+    itself is unbound in Python, so the assumption has nothing to be wrong about.
+    """
+    if isinstance(node, ast.Constant):
+        return isinstance(node.value, int) and not isinstance(node.value, bool)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub, ast.Invert)):
+        return integer_valued_expression(node.operand, fn, seen)
+    if isinstance(node, ast.BinOp):
+        return (
+            isinstance(node.op, _INT_PRESERVING_OPS)
+            and integer_valued_expression(node.left, fn, seen)
+            and integer_valued_expression(node.right, fn, seen)
+        )
+    if isinstance(node, ast.IfExp):
+        return integer_valued_expression(node.body, fn, seen) and integer_valued_expression(node.orelse, fn, seen)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in ("int", "len"):
+        return True
+    if isinstance(node, ast.Name):
+        if node.id in seen:
+            return True
+        bound = _integer_bindings(fn, node.id)
+        return bool(bound) and all(integer_valued_expression(b, fn, seen | {node.id}) for b in bound)
+    return False
+
+
+def helper_returns_int(hkir: KernelIR) -> bool:
+    """Whether a scalar-returning helper's result is an INTEGER -- what types its C return and
+    its Fortran result dummy.
+
+    An int LITERAL return is the easy case; a returned local is the common one. spgemm_hash's
+    ``_select_bin`` returns the bin index it accumulated, so a literal-only test typed the
+    Fortran dummy REAL(8) while the caller's actual is the INTEGER(8) it indexes bins with --
+    gfortran rejects the call, and the C leg returned a double used as a subscript.
+    """
+    rets = [n.value for n in ast.walk(hkir.tree) if isinstance(n, ast.Return) and n.value is not None]
+    return bool(rets) and all(integer_valued_expression(v, hkir.tree) for v in rets)
+
+
+def retype_int_helper_scalars(helper: KernelIR) -> None:
+    """Retype a helper's float-defaulted scalar params that its BODY uses in an integer-only
+    position (a subscript index or a ``range`` bound).
+
+    A helper's scalar dtypes are read off the CALL SITE, and an argument that is an element of a
+    kernel LOCAL array cannot resolve there -- locals are harvested during lowering, long after
+    the helper is split off -- so it falls to the float64 default. spgemm_hash hands
+    ``row_bin[row]`` (int64) to ``_table_size(b)`` and got ``do x__0 = 0, (b) - 1`` over a REAL
+    bound, which Fortran 2018 deleted. ``range`` takes integers only, so the body settles what
+    the call site could not.
+    """
+    int_uses = _names_used_as_int(helper.tree)
+    for sca in helper.scalars:
+        dtype = str(sca.dtype)
+        if sca.name in int_uses and not dtypes.is_integer(dtype) and dtype not in ("bool", "bool_"):
+            sca.dtype = "int64"
+
+
+def written_through_helpers(tree: ast.AST, helpers: Sequence[KernelIR]) -> Set[str]:
+    """Names this scope passes into a user helper's OUTPUT parameter slot.
+
+    A helper writing ``result[i] = ...`` writes the caller's buffer, so the caller's argument
+    is written too -- and nothing in the caller's own body says so. hotspot_rodinia's ``work``
+    is the ping-pong buffer: the manifest lists it outside ``output_args`` (its final contents
+    are scratch), the kernel only ever hands it to ``hotspot_rodinia_step``, and the entry
+    signature therefore declared it ``const double *`` / ``intent(in)`` while the helper's
+    matching dummy is written. g++ refused the call outright; gfortran called it a definition
+    of an INTENT(IN) dummy. ``output_args`` says what is GRADED, not what is mutable.
+
+    Positional, through :meth:`KernelIR.abi_param_order` -- the one order the emitted signature
+    and the (already reordered) call site both read. A call whose arity does not match that
+    order is left alone: an unrecognised shape is no evidence of a write.
+    """
+    by_name = {h.kernel_name: h for h in helpers}
+    written: Set[str] = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+            continue
+        helper = by_name.get(node.func.id)
+        if helper is None:
+            continue
+        order = helper.abi_param_order()
+        if len(order) != len(node.args):
+            continue
+        outputs = {a.name for a in helper.arrays if a.is_output}
+        for pname, arg in zip(order, node.args):
+            if pname in outputs and isinstance(arg, ast.Name):
+                written.add(arg.id)
+    return written
+
+
+def _detect_output_and_index_arrays(kir: KernelIR, helpers: Sequence[KernelIR] = ()) -> None:
     """Two body-driven adjustments to :class:`ArrayDesc`:
 
     * If a parameter array is written to (appears as the base of a
-      ``Subscript`` on the LHS of an assignment) and was not already
+      ``Subscript`` on the LHS of an assignment, or is handed to a helper's
+      output parameter -- :func:`written_through_helpers`) and was not already
       marked ``is_output``, flip the flag so the C signature uses
       a non-const pointer.
     * If a parameter array is used as a subscript index (``A[B[i]]``
@@ -9952,6 +10086,22 @@ def _detect_output_and_index_arrays(kir: KernelIR) -> None:
             _walk(child)
 
     _walk(kir.tree)
+
+    # A helper that FORWARDS one of its own array params into another helper's output slot
+    # writes it too. Settle that first, or one level of indirection hides the write from the
+    # scope that owns the buffer. Bounded by the helper count: each round marks at least one
+    # more param or stops.
+    for _ in range(len(helpers)):
+        grew = False
+        for helper in helpers:
+            forwarded = written_through_helpers(helper.tree, helpers)
+            for a in helper.arrays:
+                if a.name in forwarded and not a.is_output:
+                    a.is_output = True
+                    grew = True
+        if not grew:
+            break
+    written |= written_through_helpers(kir.tree, helpers) & set(name_to_arr)
 
     # Promote any array feeding a scalar that is itself used as an index.
     for scalar in scalars_used_as_index:

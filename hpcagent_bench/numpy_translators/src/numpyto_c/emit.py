@@ -13,7 +13,7 @@ from numpyto_common import dtypes, narrow_int, operators, parallelism
 from numpyto_common.ordered import OrderedSet
 from numpyto_common.emitter import BaseEmitter, index_rank_error
 from numpyto_common.frontend import _names_used_as_int
-from numpyto_common.lowering import _walk_complex
+from numpyto_common.lowering import _walk_complex, helper_returns_int
 
 #: Whole-identifier matcher for scanning a shape-token string for the names it references.
 _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
@@ -3070,13 +3070,8 @@ def _fp8_prelude(kir: KernelIR) -> str:
 
 
 def _helper_return_ctype(hkir: KernelIR) -> str:
-    """C return type for a scalar-returning helper: int64 iff every return is an int literal, else double."""
-    returns = [n.value for n in ast.walk(hkir.tree) if isinstance(n, ast.Return) and n.value is not None]
-    if returns and all(
-        isinstance(v, ast.Constant) and isinstance(v.value, int) and not isinstance(v.value, bool) for v in returns
-    ):
-        return _c_type("int")
-    return _c_type("float64")
+    """C return type for a scalar-returning helper: int64 iff its result is integer, else double."""
+    return _c_type("int") if helper_returns_int(hkir) else _c_type("float64")
 
 
 def _c_helper_signature(hkir: KernelIR, cpp: bool) -> Tuple[str, str]:
