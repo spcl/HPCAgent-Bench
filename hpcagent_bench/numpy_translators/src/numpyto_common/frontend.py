@@ -4515,6 +4515,29 @@ def value_names(node: ast.AST) -> Set[str]:
     return names
 
 
+def _structure_key(node: ast.AST) -> str:
+    """Value fingerprint of a tree, positions included -- these are rewritten mid-sweep, so an
+    ``id()`` key would answer for a tree that has moved on, and sites are ordered on position."""
+    return ast.dump(node, include_attributes=True)
+
+
+def _desc_key(table: Dict[str, Any]) -> Tuple:
+    """Value fingerprint of a descriptor table; the descriptors are flat dataclasses."""
+    return tuple(sorted((name, repr(desc)) for name, desc in table.items()))
+
+
+def _held_before_table(owner_fn: ast.FunctionDef) -> Dict[Optional[int], Set[str]]:
+    """``{id(node): names bound before the statement holding it}``; ``None`` -> all of them."""
+    table: Dict[Optional[int], Set[str]] = {}
+    held: Set[str] = set()
+    for stmt in owner_fn.body:
+        for node in ast.walk(stmt):
+            table.setdefault(id(node), held)
+        held = held | set(_collect_assigned_names([stmt]))
+    table[None] = held
+    return table
+
+
 def helper_call_local_arrays(owner_fn: ast.FunctionDef, helper_defs, arr_by, sca_by, sym_by) -> Dict[str, ArrayDesc]:
     """``{local: ArrayDesc}`` for every one of ``owner_fn``'s locals bound to a USER-HELPER call.
 
@@ -4550,6 +4573,7 @@ def helper_call_local_arrays(owner_fn: ast.FunctionDef, helper_defs, arr_by, sca
         | {a.arg for a in owner_fn.args.args}
     )
     sites = sorted((n for n in ast.walk(owner_fn) if isinstance(n, ast.Assign)), key=lambda n: (n.lineno, n.col_offset))
+    before = _held_before_table(owner_fn)
     known = dict(arr_by)
     found: Dict[str, ArrayDesc] = {}
     for site in sites:
@@ -4573,7 +4597,7 @@ def helper_call_local_arrays(owner_fn: ast.FunctionDef, helper_defs, arr_by, sca
         shape, dtype = _helper_return_shape_from_body(hfn, pnames, call.args, known, sca_by, sym_by, owner_fn)
         if shape is None:
             continue
-        site_held = held | _held_before(owner_fn, site)
+        site_held = held | before.get(id(site), before[None])
         try:
             tokens = _caller_side_shape(shape, site_held, pnames, call.args, hfn, call.func.id, known)
         except NotImplementedError:
@@ -4883,12 +4907,8 @@ def _held_before(owner_fn: ast.FunctionDef, site: ast.stmt) -> Set[str]:
     passing it reads it before it is written: the extent silently becomes whatever the buffer held,
     which is a wrong answer rather than an error.
     """
-    held: Set[str] = set()
-    for stmt in owner_fn.body:
-        if stmt is site or any(node is site for node in ast.walk(stmt)):
-            break
-        held |= set(_collect_assigned_names([stmt]))
-    return held
+    table = _held_before_table(owner_fn)
+    return set(table.get(id(site), table[None]))
 
 
 def _caller_side_shape(
@@ -5415,6 +5435,16 @@ def _build_helper_kirs(
     scopes: List[Tuple[ast.FunctionDef, List, List, List]] = [
         (kernel_fn, parent.arrays, parent.scalars, parent.symbols)
     ]
+    #: Memo for the chase below; ``generation`` retires entries whose HELPER trees have moved on.
+    local_arrays: Dict[Tuple, Dict[str, ArrayDesc]] = {}
+    generation = 0
+
+    def rewrote(owner: ast.FunctionDef) -> None:
+        """``owner``'s tree changed: renumber it and retire the memo."""
+        nonlocal generation
+        generation += 1
+        ast.fix_missing_locations(owner)
+
     hidx_of = {id(h): i for i, h in enumerate(helper_defs)}
     for hdef in _helpers_callers_first(helper_defs, kernel_fn):
         hidx = hidx_of[id(hdef)]
@@ -5442,7 +5472,19 @@ def _build_helper_kirs(
         # these never join ``oarrays``, which is the emitted ABI, and never ``live_buffers``, which
         # is what says a target already HAS a buffer -- one of these does not yet, and suppressing
         # its allocation is what put an unbound name into the ABI as a scalar int.
-        oarr_by.update(helper_call_local_arrays(owner_fn, helper_defs, oarr_by, osca_by, osym_by))
+        local_key = (
+            _structure_key(owner_fn),
+            generation,
+            _desc_key(oarr_by),
+            _desc_key(osca_by),
+            _desc_key(osym_by),
+        )
+        chased = local_arrays.get(local_key)
+        if chased is None:
+            chased = helper_call_local_arrays(owner_fn, helper_defs, oarr_by, osca_by, osym_by)
+            local_arrays[local_key] = chased
+        # Fresh copy: the descriptors are mutable and consumers mark ``is_output`` on them.
+        oarr_by.update(copy.deepcopy(chased))
         call = call_of[hdef.name]
         assign = assign_of.get(hdef.name)
         lhs = assign.targets[0] if assign is not None else None
@@ -5573,7 +5615,7 @@ def _build_helper_kirs(
                     _desugar_helper_tuples(owner, oa, osc, osy)
                     _reject_symbolic_axis(owner)
                     _reject_unsupported_slices(owner)
-                    ast.fix_missing_locations(owner)
+                    rewrote(owner)
                 continue
             # The splice above declined, so this helper has to become a real function -- and a
             # helper that returns SEVERAL values cannot: C has one return slot and nothing here
@@ -5650,7 +5692,7 @@ def _build_helper_kirs(
                 symbols.extend(SymbolDesc(name=s) for s in extra_syms)
                 for owner, site in calls:
                     site.args.extend(ast.Name(id=s, ctx=ast.Load()) for s in extra_syms)
-                    ast.fix_missing_locations(owner)
+                    rewrote(owner)
             out.append(
                 KernelIR(
                     tree=hfn,
