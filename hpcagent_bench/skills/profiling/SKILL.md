@@ -18,7 +18,7 @@ defend. Four questions, in order -- each one narrows what the next has to look a
 | --- | --- | --- |
 | where does the time go? | `/profile` `tool:"linuxperf"` | a ranked call graph, per thread count |
 | what is the machine doing there? | PAPI counters (`/profile` `counters:true`, or `tool:"papi"` alone) | instructions, misses, flops |
-| do all the threads do the same amount of it? | the per-thread report (`papi.count_per_thread`) | CPI and cycles per thread |
+| do all the threads do the same amount of it? | `/profile` `tool:"papi"`, `per_thread:true` | CPI and cycles per thread, and the imbalance |
 | why does *this loop* behave that way? | `objdump -d`, cachegrind, the compiler's vector report | the emitted code |
 
 Never start at the last one. A perfectly analysed loop that owns 4% of the run is 4% of a win.
@@ -167,11 +167,11 @@ kernel do" and it is blind to the finding that most often decides a parallel ker
 balanced threads and four threads where one burns 60% of the cycles sum to the same total, and
 to the same aggregate IPC. **The distribution is not visible in any process-wide number.**
 
-`papi.count_per_thread(lib, binding, data, language, reps=..., warmup=..., rep_timeout=...)`
-counts `PAPI_TOT_CYC` and `PAPI_TOT_INS` per thread, both in one event set per thread, in ONE
-measured run -- so each thread's CPI is a ratio of two numbers from the same schedule. It is a
-library call (`hpcagent_bench.harness.papi`), not an HTTP knob; `report["text"]` is the rendered
-table and the rest of the payload is the same data as rows.
+`POST /profile` with `tool:"papi"` and `per_thread:true` counts `PAPI_TOT_CYC` and `PAPI_TOT_INS`
+per thread, both in one event set per thread, in ONE measured run -- so each thread's CPI is a
+ratio of two numbers from the same schedule. Ask it with `threads` above 1: a single-threaded run
+has no distribution to report. The rows arrive under `per_thread`, and `text` is the same data
+rendered.
 
 `cpi` is `cycles / instructions` and `ipc` is `instructions / cycles`. They are RECIPROCALS, both
 are reported, and both arrive labelled with the formula that produced them -- 0.5 and 2.0 are the
@@ -181,13 +181,13 @@ What comes back, and what to do with it:
 
 | field | reading |
 | --- | --- |
-| `threads[]` | one row per counted thread: `cycles`, `instructions`, `cpi`, `ipc`, `cycle_share`, `core`, `pinned`, `participated` |
-| `aggregate` | the ratio of the SUMS -- never the mean of the per-thread ratios, which would weight an idle thread like the critical one |
-| `imbalance.max_over_mean` | `max(cycles) / mean(cycles)`. 1.0 is balanced; N threads at N means one does everything |
-| `imbalance.wasted_fraction` | `1 - mean/max`: the share of the region's span that the average thread spent already finished. This is what balancing returns |
-| `imbalance.critical_tid` | the thread everyone waits for, and `critical_cpus` where it ran |
-| `caveats[]` | every trap that ACTUALLY fired on this run (below), as text |
-| `cause` + `missing` | why there is no report at all |
+| `per_thread.threads[]` | one row per counted thread: `cycles`, `instructions`, `cpi`, `ipc`, `cycle_share`, `core`, `pinned`, `participated` |
+| `per_thread.aggregate` | the ratio of the SUMS -- never the mean of the per-thread ratios, which would weight an idle thread like the critical one |
+| `per_thread.imbalance.max_over_mean` | `max(cycles) / mean(cycles)`. 1.0 is balanced; N threads at N means one does everything |
+| `per_thread.imbalance.wasted_fraction` | `1 - mean/max`: the share of the region's span that the average thread spent already finished. This is what balancing returns |
+| `per_thread.imbalance.critical_tid` | the thread everyone waits for, and `critical_cpus` where it ran |
+| `per_thread.caveats[]` | every trap that ACTUALLY fired on this run (below), as text |
+| `per_thread.cause` + `missing` | why there is no report at all |
 
 The decision the number drives:
 
