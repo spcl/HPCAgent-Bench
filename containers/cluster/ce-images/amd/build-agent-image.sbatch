@@ -31,10 +31,22 @@ test -x "${AMD_DIR}/build_sqsh.sh"
 
 export OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?}/ce-images/optarena-ce-amd-mi300-v5-candidate.sqsh}"
 
-[[ "${OUTPUT_SQSH}" == *optarena-ce-amd-mi300-v4.sqsh ]] && {
-    echo "refusing to overwrite the LIVE agent image; build to a candidate name" >&2
-    exit 2
+# Refuse to write over an image some EDF points a running job at. This used to be one hard-coded
+# filename. That name was and still is the right one -- the campaign env files select
+# AMD_CE_ENV=optarena-amd-mi300-v4, whose toml mounts v4.sqsh -- so this is a generalisation, not
+# a repair: the guard held only while somebody remembered to edit it on the day the live image
+# moved, and nothing failed if they did not. Ask the EDFs instead, since they are what a job
+# actually resolves. The cost is that it also protects images nothing currently mounts, which is
+# the safe direction to be wrong in.
+edf_images() {
+    grep -hoE '^[[:space:]]*image[[:space:]]*=[[:space:]]*"[^"]+"' "${HOME}/.edf"/*.toml 2>/dev/null \
+      | sed -E 's/.*"(.*)"/\1/' | sed -E "s|\$\{SCRATCH\}|${SCRATCH:-}|g; s|\$SCRATCH|${SCRATCH:-}|g"
 }
+if edf_images | grep -qxF "${OUTPUT_SQSH}"; then
+    echo "refusing to overwrite ${OUTPUT_SQSH}: an EDF in ${HOME}/.edf mounts it, so a running" >&2
+    echo "arm would read a half-written squashfs. Build to a candidate name and promote by rename." >&2
+    exit 2
+fi
 
 "${AMD_DIR}/build_sqsh.sh"
 

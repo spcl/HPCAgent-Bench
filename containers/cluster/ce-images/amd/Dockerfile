@@ -250,6 +250,45 @@ RUN set -eux; \
     playwright install --with-deps chromium; \
     chmod -R a+rX "${PLAYWRIGHT_BROWSERS_PATH}"
 
+# rocprof-compute -- the ncu analogue, and the only route to achieved occupancy on this vendor --
+# is installed by the ROCm packages and its Python dependencies are NOT, so a first run answers
+# with a list of missing packages instead of a profile.
+#
+# The obvious fix, installing its requirements.txt into the image environment, is worse than the
+# problem. Measured on this base: that file pins astunparse==1.6.2 and DOWNGRADES the 1.6.3 dace
+# depends on, moves rich, and its numpy/pandas floors are free to move the modules every CPU
+# reference is computed with. It also does not work -- rocprof-compute 3.4.0's v3->v2 CSV
+# converter fails on pandas 3 ("You are trying to merge on str and int64 columns for key
+# 'Agent_Id'"), so all thirteen counter passes RUN and all thirteen are dropped, and `analyze`
+# ends at "No profiling data found" after paying a full profile's wall clock.
+#
+# So the tool gets its OWN interpreter, pinned to a pandas its converter agrees with, and the
+# graded environment keeps the numpy/pandas/astunparse it grades against. /opt/rocm/bin/rocprof-
+# compute becomes a wrapper onto that interpreter, so the fix holds whatever PATH order a caller
+# has; the packaged entry point is kept beside it as .image rather than deleted.
+ARG ROCPROF_COMPUTE_PANDAS=2.2.3
+RUN set -eux; \
+    rc=/opt/rocm/libexec/rocprofiler-compute; \
+    test -f "${rc}/requirements.txt"; \
+    numpy_before="$(python3 -c 'import numpy; print(numpy.__version__)')"; \
+    pandas_before="$(python3 -c 'import pandas; print(pandas.__version__)')"; \
+    astunparse_before="$(python3 -c 'import astunparse; print(astunparse.__version__)')"; \
+    python3 -m venv /opt/rocprof-compute-venv; \
+    /opt/rocprof-compute-venv/bin/pip install --no-cache-dir --upgrade pip setuptools wheel; \
+    /opt/rocprof-compute-venv/bin/pip install --no-cache-dir \
+      "pandas==${ROCPROF_COMPUTE_PANDAS}" "numpy<2.3" -r "${rc}/requirements.txt"; \
+    mv /opt/rocm/bin/rocprof-compute /opt/rocm/bin/rocprof-compute.image; \
+    printf '#!/bin/sh\nexec /opt/rocprof-compute-venv/bin/python %s/rocprof-compute "\$@"\n' "${rc}" \
+      > /opt/rocm/bin/rocprof-compute; \
+    chmod +x /opt/rocm/bin/rocprof-compute; \
+    /opt/rocprof-compute-venv/bin/python -c "import pandas, tabulate, plotext, dash; \
+      assert pandas.__version__.split('.')[0] == '2', pandas.__version__"; \
+    rocprof-compute --version >/dev/null; \
+    test "$(python3 -c 'import numpy; print(numpy.__version__)')" = "${numpy_before}" \
+      && test "$(python3 -c 'import pandas; print(pandas.__version__)')" = "${pandas_before}" \
+      && test "$(python3 -c 'import astunparse; print(astunparse.__version__)')" = "${astunparse_before}" \
+      || { echo "rocprof-compute install moved the graded numpy/pandas/astunparse" >&2; exit 2; }
+
 # DaCe is the TIP of spcl/dace@extended, never a pin (scripts/install_dace_extended.sh says the
 # same thing for a local tree). `git clone --branch extended` looks like it says that, but the layer
 # cache keys on the command STRING: it never changes, so every later rebuild reuses the first clone
