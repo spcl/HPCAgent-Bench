@@ -763,12 +763,35 @@ class Framework(object):
         """Generate a timer for ``program``, once before the repeat loop (default: a bare host-side timer)."""
         return Timer(program)
 
+    def synchronize_device(self) -> None:
+        """Block until the device is idle, so a timer brackets this call's work and nothing else.
+
+        A GPU kernel launch RETURNS BEFORE THE KERNEL FINISHES, so a host clock read without this
+        times the launch: measured on one DaCe kernel, 11.0 ms unsynchronised against 24.3 ms
+        synchronised, a 2.2x UNDERCOUNT published as a speedup. The damage does not stop at that
+        number -- the unfinished kernel still holds the device when the next arm is sampled, so on
+        an APU whose HBM is shared it lengthens a neighbour's measurement and an A/B mixes the two.
+
+        No-op on CPU. Frameworks that time with device EVENTS (CuPy, and the torch mixin) override
+        the timer ends outright and never reach this; the ones that need it are those riding the
+        default host clock on a GPU arch. A framework whose device is not reachable through the
+        project's device array module -- a separate runtime holding its own stream -- overrides
+        this method rather than inheriting a synchronize that watches the wrong stream.
+        """
+        if self.info.get("arch") != "gpu":
+            return
+        from hpcagent_bench.harness.native_call import import_device_array_module
+
+        import_device_array_module().cuda.stream.get_current_stream().synchronize()
+
     def start_timer(self, timer: "Timer") -> None:
         """Begin one measurement, just before the kernel call (default: stamp perf_counter)."""
+        self.synchronize_device()
         timer.t0 = time.perf_counter()
 
     def stop_timer(self, timer: "Timer") -> TimingResult:
         """End one measurement and return its value in ms (default: python wall-clock, native=None)."""
+        self.synchronize_device()
         return TimingResult(python=(time.perf_counter() - timer.t0) * 1.0e3)
 
     def free_timer(self, timer: "Timer") -> None:

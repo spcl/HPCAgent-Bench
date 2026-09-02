@@ -78,9 +78,46 @@ def test_both_timer_ends_synchronize(monkeypatch):
     assert log == ["synchronize", "synchronize"], "the clock must be read with the kernel finished"
 
 
-def test_the_generic_timer_is_the_one_dace_overrides():
-    """If DaceFramework ever stops overriding these, the undercount returns silently."""
+def test_every_gpu_framework_reaches_a_synchronize():
+    """The fix lives in the BASE, so a GPU framework cannot miss it by not overriding a timer.
+
+    PlutoFramework (ppcg, ppcg_cuda, ppcg_hip) and TVMFramework ride the default host clock and
+    carried the identical undercount until the hook moved down here. CuPy and the torch mixin
+    replace the timer ends outright and synchronize with device events instead, which is why they
+    are checked for a synchronize of their OWN rather than for the inherited one.
+    """
+    from hpcagent_bench.frameworks.cupy_framework import CupyFramework
+    from hpcagent_bench.frameworks.framework import Framework, TorchCudaEventTiming
+    from hpcagent_bench.frameworks.pluto_framework import PlutoFramework
+    from hpcagent_bench.frameworks.triton_framework import TritonFramework
+    from hpcagent_bench.frameworks.tvm_framework import TVMFramework
+
+    import inspect
+
+    # Riding the default timer is now safe: the base synchronizes at both ends.
+    for cls in (PlutoFramework, TVMFramework, dace_framework.DaceFramework):
+        assert "synchronize_device" in inspect.getsource(cls.stop_timer) or (cls.stop_timer is Framework.stop_timer), (
+            f"{cls.__name__} reads the clock without waiting for the device"
+        )
+
+    # Event-timed frameworks do their own waiting; assert they still do it.
+    assert "synchronize" in inspect.getsource(CupyFramework.stop_timer)
+    assert "synchronize" in inspect.getsource(TorchCudaEventTiming.stop_timer)
+    assert issubclass(TritonFramework, TorchCudaEventTiming)
+
+
+def test_the_base_timer_synchronizes(monkeypatch):
+    """The base is where the fix lives now, so it is what the test pins."""
     from hpcagent_bench.frameworks.framework import Framework
 
-    assert dace_framework.DaceFramework.stop_timer is not Framework.stop_timer
-    assert dace_framework.DaceFramework.start_timer is not Framework.start_timer
+    log = []
+    fw = Framework.__new__(Framework)
+    fw.info = {"arch": "gpu"}
+    monkeypatch.setattr(
+        "hpcagent_bench.harness.native_call.import_device_array_module",
+        lambda: fake_device_module(log),
+    )
+    timer = types.SimpleNamespace(t0=0.0, program=None)
+    fw.start_timer(timer)
+    fw.stop_timer(timer)
+    assert log == ["synchronize", "synchronize"]
