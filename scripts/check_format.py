@@ -27,6 +27,7 @@ error (a needed formatter is missing). ``--fix`` reformats in place instead.
 """
 
 import argparse
+import json
 import concurrent.futures
 import os
 import shutil
@@ -134,9 +135,13 @@ def ruff_offenders(rels, fix):
     """
     if not rels:
         return []
-    check = ["ruff", "format", "--check", "--line-length", str(PY_LINE_LENGTH), *rels]
+    check = ["ruff", "format", "--check", "--output-format", "json", "--line-length", str(PY_LINE_LENGTH), *rels]
     out = _run(check)
-    offenders = [ln.split(":", 1)[1].strip() for ln in out.stdout.splitlines() if ln.startswith("Would reformat:")]
+    # json, not the prose. ruff's concise/full output changed shape between releases -- 0.16.5 emits
+    # "unformatted: File would be reformatted" with the path on a following "--> path:line:col"
+    # line, so a parser keyed on "Would reformat:" finds NOTHING and the gate passes every file
+    # silently, in check AND in --fix. Measured on 0.16.5: prose parser 0 offenders, json parser 1.
+    offenders = sorted({entry["filename"] for entry in json.loads(out.stdout or "[]")})
     if fix and offenders:
         _run(["ruff", "format", "--line-length", str(PY_LINE_LENGTH), *offenders])
     return offenders
