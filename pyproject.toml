@@ -140,7 +140,10 @@ cpu = ["hpcagent_bench[frameworks]", "torch", "jax"]
 nvidia = [
     "hpcagent_bench[frameworks]",
     "torch",
-    "jax[cuda12]",
+    # cuda13, matching cupy-cuda13x above and the CUDA 13 base image. These two used to
+    # disagree, and the image papered over it by reinstalling the plugin for the major it
+    # detected -- so the file was wrong while the image was right.
+    "jax[cuda13]",
     "cupy-cuda13x",
     "apache-tvm>=0.25.0rc0",
     "triton",
@@ -149,9 +152,15 @@ nvidia = [
 amd = [
     "hpcagent_bench[frameworks]",
     "torch",
+    # Bare jax is CPU-only here. The ROCm build is jax + jaxlib + jax-rocm7-plugin from
+    # repo.radeon.com, which is not on PyPI under any name pip can resolve, so the image installs
+    # it explicitly and this extra deliberately does not try.
     "jax",
     "apache-tvm>=0.25.0rc0",
-    "triton",
+    # NO triton. The PyPI "triton" distribution is the NVIDIA build: installing it on a ROCm base
+    # overwrites site-packages/triton with the upstream one and the ROCm kernels disappear. AMD's
+    # triton ships in the ROCm base image, so the correct action here is to install nothing and let
+    # it stand. The image asserts it survived.
     "mpi4py",
 ]
 # The DaCe column. A direct reference to the BRANCH, never the PyPI wheel (that release imports

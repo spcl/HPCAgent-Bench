@@ -31,7 +31,7 @@ netCDF4
 islpy
 z3-solver
 torch
-jax[cuda12]
+jax[cuda13]
 cupy-cuda13x
 apache-tvm>=0.25.0rc0
 triton

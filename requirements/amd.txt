@@ -33,5 +33,4 @@ z3-solver
 torch
 jax
 apache-tvm>=0.25.0rc0
-triton
 mpi4py
