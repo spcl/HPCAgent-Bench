@@ -270,25 +270,13 @@ RUN set -eux; \
     /opt/pytorch211/bin/python -m uv pip install --python /opt/pytorch211/bin/python \
       --no-build-isolation --no-cache .
 
-# The ASM v3 varlen path cannot express our mask. cpp_itfs/mha_fwd.cu maps causal to mask 2 ONLY
-# when seqlen_q == seqlen_k and returns -1 otherwise, which surfaces from asm_mha_varlen_fwd.cu:494
-# as "invalid argument for fmha_v3_varlen_fwd". Chunked prefill against a warm prefix cache ALWAYS
-# has q shorter than k (88-95% hit rate on our arms), so every MLA prefill hits it, and
-# can_impl_fmha_v3_fwd claims the shape anyway: its one 192x128 guard is skipped when block_table
-# is set, and vLLM always pages. Adding the missing condition makes the predicate fall through to
-# aiter's CK-tile mha_varlen_fwd -- still aiter -- instead of crashing.
-RUN /opt/pytorch211/bin/python <<'PATCH'
-import pathlib
-p = pathlib.Path("/opt/pytorch211/lib/python3.12/site-packages/aiter/ops/mha.py")
-s = p.read_text()
-tail = "        return ret\n"
-old = ("        if hdim_q == 192 and hdim_v == 128 and block_table is None:\n"
-       "            ret = ret and not _fmha_kv_byte_extent_ge_u32(max_seqlen_k, k, v)\n" + tail)
-assert s.count(old) == 1, "anchor count " + str(s.count(old))
-new = old[: -len(tail)] + "        ret = ret and ((not causal) or (max_seqlen_q == max_seqlen_k))\n" + tail
-p.write_text(s.replace(old, new, 1))
-print("patched can_impl_fmha_v3_fwd varlen: mask/seqlen guard added")
-PATCH
+# NO aiter mask patch here, deliberately. The sibling 0.27.1 image carries one for the ASM v3
+# varlen path, and it does NOT belong in this image: its anchor is aiter v0.1.20's
+# can_impl_fmha_v3_fwd (mha.py:2858), and this image pins v0.1.13.post1, which has neither
+# _fmha_kv_byte_extent_ge_u32 nor that guard. Carried over anyway, the patch's own assert
+# stopped the build at `anchor count 0` -- which is the assert doing its job rather than
+# silently no-op'ing. This image also ships VLLM_ROCM_USE_AITER=0, so the path is off by
+# default. If a future pin here needs the guard, write it against THIS image's aiter.
 
 # aiter's JIT, built HERE instead of on the first request.
 #
