@@ -534,6 +534,7 @@ def run_kernel(
     max_size: Optional[int] = None,
     only_backends: Optional[set] = None,
     config: Optional[Dict[str, Any]] = None,
+    jax_timeout_s: Optional[int] = None,
 ) -> Dict[str, str]:
     """Return ``{backend: "ok" | "skip:..." | "FAIL:..."}`` for ``short``.
 
@@ -868,7 +869,7 @@ def run_kernel(
         if only_backends is None or "jax" in only_backends:
             try:
                 status["jax"] = _run_jax_backend(
-                    short, info, by, syms, expected, compare, rtol, atol, emit_prec=emit_prec
+                    short, info, by, syms, expected, compare, rtol, atol, emit_prec=emit_prec, timeout_s=jax_timeout_s
                 )
             except Exception as exc:  # noqa: BLE001
                 status["jax"] = f"FAIL:{type(exc).__name__}"
@@ -1134,14 +1135,24 @@ def _forked_status(compute, timeout_s: float) -> str:
     return b"".join(chunks).decode() or "FAIL:no-result"
 
 
-def _run_jax_backend(short, info, by, syms, expected, compare, rtol, atol, emit_prec: str = "") -> str:
-    """Validate the NumpyToJAX emitter vs numpy in a forked child; parent stays jax-free (find_spec only)."""
+def _run_jax_backend(
+    short, info, by, syms, expected, compare, rtol, atol, emit_prec: str = "", timeout_s: Optional[int] = None
+) -> str:
+    """Validate the NumpyToJAX emitter vs numpy in a forked child; parent stays jax-free (find_spec only).
+
+    ``timeout_s`` overrides the module cap for ONE call. What the cap bounds is a hung trace, and that
+    is a property of the trace rather than of the problem size -- eager jax spends its time tracing
+    and compiling, so a down-scaled retry is not proportionally cheaper and can cross the same cap on
+    a loaded runner. A retry that has already shrunk the problem therefore needs a bigger budget, not
+    a smaller one, and it stays bounded.
+    """
     import importlib.util
 
     if importlib.util.find_spec("jax") is None:
         return "skip:not-installed"
     return _forked_status(
-        lambda: _jax_compute(short, info, by, syms, expected, compare, rtol, atol, emit_prec), JAX_FORK_TIMEOUT_S
+        lambda: _jax_compute(short, info, by, syms, expected, compare, rtol, atol, emit_prec),
+        JAX_FORK_TIMEOUT_S if timeout_s is None else timeout_s,
     )
 
 
