@@ -327,3 +327,139 @@ def test_an_xdist_group_marker_is_never_a_no_op() -> None:
         "these xdist runs carry a file with an xdist_group marker but no --dist loadgroup, "
         "so the marker does nothing: " + "; ".join(offenders)
     )
+
+
+TRANSLATOR_TESTS = REPO / "hpcagent_bench" / "numpy_translators" / "tests"
+
+
+def translator_legs() -> List[dict]:
+    """The ``integration_translators`` matrix, as YAML rather than as text."""
+    import yaml
+
+    return list(yaml.safe_load(WORKFLOW.read_text())["jobs"]["integration_translators"]["strategy"]["matrix"]["leg"])
+
+
+def test_the_translator_integration_legs_partition_the_tree() -> None:
+    """The tree's ``-m integration`` selection is split over containers by naming two files on
+    their own legs and ``--ignore``-ing exactly those two on the leg that sweeps the directory.
+
+    Both halves of that have to agree or a whole file stops running while every leg goes green: an
+    --ignore whose path no longer resolves silently ignores nothing (the file runs twice), and a
+    named file the sweeping leg forgot to ignore is a corpus-wide lowering pass paid twice.
+    """
+    named: Set[str] = set()
+    ignored: Set[str] = set()
+    roots: Set[str] = set()
+    for leg in translator_legs():
+        for token in str(leg["select"]).split():
+            if token.startswith("--ignore="):
+                ignored.add(token.split("=", 1)[1])
+            elif token.endswith("/"):
+                roots.add(token)
+            else:
+                named.add(token)
+    assert roots == {"hpcagent_bench/numpy_translators/tests/"}, (
+        f"the legs sweep {sorted(roots)}; exactly one of them has to name the whole tree, or the "
+        "files no leg names are the ones nothing runs"
+    )
+    assert named == ignored, (
+        f"legs name {sorted(named)} but the sweeping leg ignores {sorted(ignored)}. "
+        "A file on both sides runs twice; a file on neither runs once per leg or not at all."
+    )
+    missing = [path for path in sorted(named | ignored) if not (REPO / path).is_file()]
+    assert not missing, (
+        f"the matrix names files that do not exist: {missing} -- an --ignore that misses ignores nothing"
+    )
+
+
+def test_a_sharded_leg_runs_every_slice_it_splits_into() -> None:
+    """A leg that names ``0/2`` and no ``1/2`` runs half the registry and reports green.
+
+    The shard is invisible in the leg's own result -- the sweep asserts its findings are EMPTY, and
+    half a registry produces emptier findings than a whole one -- so the only place this can be
+    caught is here, against the matrix.
+    """
+    slices: dict = {}
+    for leg in translator_legs():
+        index, _, count = str(leg["shard"]).partition("/")
+        slices.setdefault((str(leg["select"]), int(count)), set()).add(int(index))
+    for (select, count), indices in sorted(slices.items()):
+        assert indices == set(range(count)), (
+            f"leg {select.split()[0]} runs shards {sorted(indices)} of {count}; "
+            f"the missing ones are registry nothing sweeps"
+        )
+
+
+def test_every_integration_marked_translator_file_reaches_a_leg() -> None:
+    """The other direction: a NEW ``-m integration`` file under the tree must land on some leg.
+
+    It does, by construction -- the sweeping leg names the directory -- so what this actually pins
+    is that nobody 'fixes' a slow new file by adding a fourth ``--ignore`` and no leg to match.
+    """
+    ignored = {
+        token.split("=", 1)[1]
+        for leg in translator_legs()
+        for token in str(leg["select"]).split()
+        if token.startswith("--ignore=")
+    }
+    named = {token for leg in translator_legs() for token in str(leg["select"]).split() if token.endswith(".py")}
+    marked = {
+        f"hpcagent_bench/numpy_translators/tests/{p.name}"
+        for p in sorted(TRANSLATOR_TESTS.glob("test_*.py"))
+        if "pytest.mark.integration" in p.read_text()
+    }
+    orphaned = sorted((ignored & marked) - named)
+    assert not orphaned, f"ignored by the sweeping leg and run by no other leg: {orphaned}"
+
+
+#: The standing per-container budget, in minutes. Not a suggestion: a job over it becomes the run's
+#: critical path, and the whole shape of tests.yml -- four matrix jobs over a slice knob, the trees
+#: split apart, hf-export lifted off mpi -- exists to hold it. Raising this number is a decision
+#: somebody makes here, once, instead of one job at a time in a comment nobody reads.
+CONTAINER_BUDGET_MINUTES = 45
+
+
+def workflow_jobs() -> dict:
+    import yaml
+
+    return dict(yaml.safe_load(WORKFLOW.read_text())["jobs"])
+
+
+def test_no_job_budgets_itself_past_the_container_ceiling() -> None:
+    """``timeout-minutes`` is where the budget is enforced, so it is also where it can be dodged.
+
+    A job that quietly raises its own cap is the only way back to a 78-minute container, and it
+    reads as a one-line diff. Disabled jobs (``if: false``) are exempt -- no container runs them --
+    but they say so in the workflow rather than here.
+    """
+    over = {
+        name: job["timeout-minutes"]
+        for name, job in workflow_jobs().items()
+        if job.get("if") is not False and int(job.get("timeout-minutes", 10**6)) > CONTAINER_BUDGET_MINUTES
+    }
+    assert not over, (
+        f"these jobs budget past {CONTAINER_BUDGET_MINUTES} minutes: {over}. "
+        "Split the work across containers -- never deselect it -- or move the ceiling here."
+    )
+
+
+def test_every_job_sets_a_timeout_at_all() -> None:
+    """A job with no ``timeout-minutes`` inherits GitHub's 360, which is the budget not existing."""
+    missing = sorted(name for name, job in workflow_jobs().items() if "timeout-minutes" not in job)
+    assert not missing, f"no timeout-minutes on {missing}; the default is 6 hours"
+
+
+def test_the_unit_sweep_matrix_runs_every_slice_it_deals_into() -> None:
+    """The discovery sweep is dealt round-robin over the file list by ``awk 'NR % N == I'``, so the
+    matrix has to list every I in [0, N). A missing index is test FILES nothing runs, and the
+    remaining shards go green -- the same silent hole the discovery mechanism exists to prevent,
+    reintroduced one level up.
+    """
+    job = workflow_jobs()["unit"]
+    indices = {int(s) for s in job["strategy"]["matrix"]["shard"]}
+    deals = set(re.findall(r"awk 'NR % (\d+) == \$\{\{ matrix\.shard \}\}'", WORKFLOW.read_text()))
+    assert len(deals) == 1, f"the unit sweep deals {deals or 'nothing'}; it has to deal exactly one modulus"
+    count = int(deals.pop())
+    assert indices == set(range(count)), (
+        f"unit runs shards {sorted(indices)} of {count}; the missing ones are test files nothing sweeps"
+    )

@@ -4575,7 +4575,7 @@ def helper_call_local_arrays(owner_fn: ast.FunctionDef, helper_defs, arr_by, sca
             continue
         site_held = held | _held_before(owner_fn, site)
         try:
-            tokens = _caller_side_shape(shape, site_held, pnames, call.args, hfn, call.func.id)
+            tokens = _caller_side_shape(shape, site_held, pnames, call.args, hfn, call.func.id, known)
         except NotImplementedError:
             continue  # the callee sizes itself through more of its own locals than the chase follows
         free = set()
@@ -4774,6 +4774,38 @@ def scope_nodes(fn: ast.FunctionDef) -> Iterator[ast.AST]:
         stack.extend(ast.iter_child_nodes(node))
 
 
+def _fold_caller_shape_reads(text: str, arr_by: Optional[Dict[str, "ArrayDesc"]]) -> str:
+    """``a.shape[k]`` in a caller-side extent -> the extent the caller already declares for ``a``.
+
+    Respelling a helper's local through its call-site argument puts a shape READ back into the
+    caller's vocabulary: eigh_test's ``n = m.shape[0]`` with ``m`` bound to ``a`` came back as
+    ``a.shape[0]``. A read is not a value any ABI carries (see :func:`resolve_shape_reads`), and
+    left standing it is not one bad token but two bad SLOTS -- ``_shape_symbols`` reads ``a`` out
+    of it and the emitter reads ``shape``, so the signature grew two parameters no call passes.
+
+    Only a literal axis off a Name the caller declares is folded; anything else keeps its text, so
+    an unresolved read still reaches the pass that owns its refusal.
+    """
+    if not arr_by or ".shape" not in text:
+        return text
+
+    class Fold(ast.NodeTransformer):
+        def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+            base = node.value
+            if isinstance(base, ast.Attribute) and base.attr == "shape" and isinstance(base.value, ast.Name):
+                desc = arr_by.get(base.value.id)
+                axis = _literal_axis(node.slice)
+                if desc is not None and axis is not None and -len(desc.shape) <= axis < len(desc.shape):
+                    return ast.copy_location(ast.parse(str(desc.shape[axis]), mode="eval").body, node)
+            self.generic_visit(node)
+            return node
+
+    try:
+        return ast.unparse(Fold().visit(ast.parse(text, mode="eval")).body)
+    except SyntaxError:
+        return text
+
+
 def _caller_side_symbol(
     sym: str,
     held: Set[str],
@@ -4782,6 +4814,7 @@ def _caller_side_symbol(
     hfn: ast.FunctionDef,
     hname: str,
     depth: int = 0,
+    arr_by: Optional[Dict[str, "ArrayDesc"]] = None,
 ) -> str:
     """The source ONE call site passes for a shape symbol the helper receives but the caller never named.
 
@@ -4826,7 +4859,7 @@ def _caller_side_symbol(
     if leftover:
         nested = {
             nm: ast.parse(
-                _caller_side_symbol(nm, held, decl_pnames, site_args, hfn, hname, depth + 1), mode="eval"
+                _caller_side_symbol(nm, held, decl_pnames, site_args, hfn, hname, depth + 1, arr_by), mode="eval"
             ).body
             for nm in leftover
         }
@@ -4836,7 +4869,7 @@ def _caller_side_symbol(
             f"helper {hname!r} needs shape symbol {sym!r}, but the caller would have to pass "
             f"{ast.unparse(expr)} -- a shape slot takes one integer, not a sequence"
         )
-    return ast.unparse(expr)
+    return _fold_caller_shape_reads(ast.unparse(expr), arr_by)
 
 
 def _held_before(owner_fn: ast.FunctionDef, site: ast.stmt) -> Set[str]:
@@ -4859,7 +4892,13 @@ def _held_before(owner_fn: ast.FunctionDef, site: ast.stmt) -> Set[str]:
 
 
 def _caller_side_shape(
-    tokens, held: Set[str], decl_pnames: List[str], site_args: List[ast.expr], hfn: ast.FunctionDef, hname: str
+    tokens,
+    held: Set[str],
+    decl_pnames: List[str],
+    site_args: List[ast.expr],
+    hfn: ast.FunctionDef,
+    hname: str,
+    arr_by: Optional[Dict[str, "ArrayDesc"]] = None,
 ) -> List[str]:
     """``tokens`` -- one helper descriptor's shape -- respelled in the CALLER's vocabulary.
 
@@ -4874,11 +4913,16 @@ def _caller_side_shape(
     for token in tokens:
         expr = ast.parse(str(token), mode="eval").body
         subst = {
-            n.id: ast.parse(_caller_side_symbol(n.id, held, decl_pnames, site_args, hfn, hname), mode="eval").body
+            n.id: ast.parse(
+                _caller_side_symbol(n.id, held, decl_pnames, site_args, hfn, hname, 0, arr_by), mode="eval"
+            ).body
             for n in ast.walk(expr)
             if isinstance(n, ast.Name) and n.id not in held
         }
-        out.append(ast.unparse(_substitute_names(ast.Expression(body=expr), subst).body) if subst else str(token))
+        respelled = ast.unparse(_substitute_names(ast.Expression(body=expr), subst).body) if subst else str(token)
+        # A token that needed no substitution can still BE a shape read -- one respelled at an
+        # earlier site and carried here through the caller's own descriptor table.
+        out.append(_fold_caller_shape_reads(respelled, arr_by))
     return out
 
 
@@ -5772,15 +5816,18 @@ def _build_helper_kirs(
                     | _held_before(owner_fn, site)
                 )
                 extra_srcs = [
-                    _caller_side_symbol(sy, owner_held, decl_pnames, site_args, hfn, hdef.name) for sy in extra_syms
+                    _caller_side_symbol(sy, owner_held, decl_pnames, site_args, hfn, hdef.name, 0, oarr_by)
+                    for sy in extra_syms
                 ]
                 # The temps and the return buffer are allocated in the caller too, and were sized off
                 # the helper's descriptors: same leak, one statement later. See _caller_side_shape.
                 site_param_info = {
-                    pn: (_caller_side_shape(shp, owner_held, decl_pnames, site_args, hfn, hdef.name), dt)
+                    pn: (_caller_side_shape(shp, owner_held, decl_pnames, site_args, hfn, hdef.name, oarr_by), dt)
                     for pn, (shp, dt) in param_info.items()
                 }
-                site_hret_shape = _caller_side_shape(hret_shape, owner_held, decl_pnames, site_args, hfn, hdef.name)
+                site_hret_shape = _caller_side_shape(
+                    hret_shape, owner_held, decl_pnames, site_args, hfn, hdef.name, oarr_by
+                )
                 callsite_rewrites.setdefault(id(owner_fn), {})[id(site)] = _build_callsite_stmts(
                     site.targets[0],
                     hdef.name,

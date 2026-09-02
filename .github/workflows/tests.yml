@@ -7,22 +7,44 @@ name: CI
 #
 # EVERY CONTAINER UNDER 45 MINUTES. That is the standing budget, and `timeout-minutes` is where it
 # is enforced rather than a number nobody reads: a job that crosses it fails, loudly, instead of
-# quietly becoming the run's critical path. Three jobs are over it today and each says why in its
-# own banner -- port-fidelity (one test, hardcoded PARSE_WORKERS, no seam in the workflow to cut),
-# integration_translators (the frontend lowering hotspot, owned elsewhere) and ports-cegterg (an
-# hour of BLAS that no split removes). They are exceptions with an owner, not a relaxed rule.
+# quietly becoming the run's critical path. EVERY job in this file is now under it, with no
+# exceptions and no jobs carrying an "over budget, owned elsewhere" note, and
+# tests/test_ci_coverage.py::test_no_job_budgets_itself_past_the_container_ceiling is what keeps
+# the next edit from quietly raising one. Nothing was deleted or deselected to get there: four jobs
+# became MATRICES over a slice knob (unit over the discovered file list, port-fidelity over the
+# corpus, integration_translators over the registry per whole-corpus sweep, ports-cegterg over the
+# configuration list), and each carries a test asserting that its shards PARTITION what the single
+# job used to run and that CI runs every shard it splits into. A silent coverage drop is the
+# failure mode a split has, so it is gated rather than trusted.
 #
-# Per-job wall clock, run 33626484866, and what was done about it:
-#   78m36s  port-fidelity      -> Phase 8b (36s) moved to mpi; Phase 8 still >75m, see its banner
-#   74m01s  integration        -> split by tree: tests/ (23m37s) and the translator tree (>45m)
-#   61m30s  mpi + dace-numeric -> dace-numeric split out (50m2s of it); mpi is ~12m
-#   45m06s  unit               -> Phase 2 to e2e-native, Phase 3 to container-image; ~38m
-#   32m26s  translators        ok
-#   30m55s  container-image    ok, +Phase 3 -> ~36m
-#   29m35s  e2e[numba, jax]    ok
-#   23m24s  frameworks + pluto ok
-#   22m06s  e2e[pythran]       ok
-#   14m24s  e2e-native         the largest headroom, and now spent -- see that job's banner
+# The measurement is per STEP, not per job, because that is where the cost actually is -- the
+# 74-minute `integration` job was ONE 70.5-minute step. Run 33626484866 (a = 33649808182 where the
+# two runs disagree), and what was done about each:
+#   75.2m  port-fidelity Phase 8        (a 69.7)  -> 3 shards over the corpus, ~29m each
+#   70.5m  integration Phase 6          (a 52.4)  -> split by tree: tests/ (23m37s) + the
+#                                                    translator tree, itself now 5 legs
+#   50.2m  mpi "dace corpus vs numpy"   (a 50.2)  -> its own job (dace-numeric); the 50m was a COLD
+#                                                    ccache (45.81% hits) off a stale prefix key
+#   35.8m  unit Phase 1                 (a 28.1)  -> Phase 2 (0.5) went to e2e-native and Phase 3
+#                                                    (5.9) to container-image, which was the whole
+#                                                    margin on a 44m36s job; the sweep itself is
+#                                                    then dealt over 2 shards, ~18m each
+#   29.6m  translators Phase 2a         (a 30.4)  -> ok
+#   26.6m  e2e[numba,jax] Phase 5       (a 26.3)  -> ok
+#   19.0m  container-image Phase 6a     (a 19.7)  -> ok, + Phase 3 (5.9) -> ~36m
+#   18.1m  e2e[pythran] Phase 5         (a 18.8)  -> ok
+#   14.5m  frameworks-pluto Phase 5     (a 16.4)  -> ok
+#    4.2m  e2e-native Phase 5           (a 5.8)   -> the largest headroom on the board, and now
+#                                                    spent -- see that job's banner
+#   17.2m  mpi Phase 2b                 (was 3.2) -> the jump IS cegterg, which had been aborting
+#                                                    on a C++ index bug and now runs; it is its own
+#                                                    job (ports-cegterg, 2 shards) and Phase 2b
+#                                                    --ignore's it back to ~3m
+#
+# And one job that was never slow, only late: `mpi` is ~12 minutes of work that started an hour and
+# a quarter after every other job, because a `needs:` on three jobs gated ONE sub-step of it. That
+# sub-step (the HF publish) is now its own `hf-export` job with the identical gate, so `mpi` starts
+# with everybody else and the run's critical path is a 45-minute job rather than 45 + 12.
 #
 # BALANCE is measured, never assumed. Run 30288151626 had translators at 40m32s against mpi's
 # 5m09s, so its two small phases moved to the idle mpi runner. Run 30480407159 then measured the
@@ -76,7 +98,8 @@ name: CI
 # still surfaces the rest (the job stays red). Phase 0 (format) and setup stay hard gates.
 #
 # Runners:
-#   unit                    the format gate + the discovery sweep, and nothing else
+#   unit                    the format gate + the discovery sweep, and nothing else   (MATRIX:
+#                           2 shards of the discovered file list, dealt by `awk NR % 2`)
 #   translators             numpyto op suite
 #   frameworks-pluto        codegen frameworks + fp16 + e2e[pluto]      (ONLY Pluto build)
 #   e2e-native              native emit + the two-unit build line + integration sweep (CLI->DB->
@@ -86,14 +109,20 @@ name: CI
 #   e2e-numba-jax           e2e[numba, jax]
 #   container-image         build + smoke-launch the agent-bench cpu image, + the agent-bench suite
 #   integration             -m integration under tests/
-#   integration_translators -m integration under the numpy-translator tree     (OVER BUDGET)
-#   port-fidelity           the DaCe frontend over the generated corpus        (OVER BUDGET)
+#   integration_translators -m integration under the numpy-translator tree      (MATRIX: 3 legs --
+#                           the two whole-corpus ABI sweeps get a container each, the other 55
+#                           tests share the third)
+#   port-fidelity           the DaCe frontend over the generated corpus         (MATRIX: 3 shards
+#                           of the corpus, HPCAGENT_BENCH_DACE_PARSE_SHARD)
 #   dace-numeric            the generated DaCe corpus vs numpy (a C++ build per kernel, -n 4)
-#   ports-cegterg           one port's eigensolver oracle                      (OVER BUDGET)
+#   ports-cegterg           one port's eigensolver oracle                       (MATRIX: 4 shards
+#                           of the configuration list, HPCAGENT_BENCH_CEGTERG_SHARD)
 #   mpi                     the whole MPI/distributed track (descriptor + driver codegen + launch +
 #                           scoring + halo + sizing) on MPICH + a source-built mpi4py (ONLY MPI
 #                           build), plus port fidelity (minus cegterg) + benchmark reference
-#                           validation (gt4py) + torch agreement + the HF dataset build/publish
+#                           validation (gt4py) + torch agreement
+#   hf-export               the HuggingFace dataset build, and its gated publish -- the ONLY job
+#                           with a `needs:`, because the publish reads three jobs' result
 #
 # GPU frameworks (triton, tvm-gpu) self-skip here and run in agentbench-gpu.yml.
 
@@ -128,17 +157,23 @@ jobs:
   # ===========================================================================================
   unit:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: unit (format + the discovery sweep)
+    name: unit ${{ matrix.shard }}/2 (format + the discovery sweep)
     runs-on: ubuntu-latest
-    # Phase 1 (38) + Phase 0/setup, which is ~5 on a warm cache. A job budget must exceed the sum of
+    strategy:
+      # fail-fast: false -- the sweep is 200 unrelated files, and half a verdict is still a verdict.
+      fail-fast: false
+      matrix:
+        shard: [0, 1]
+    # Phase 1 (24) + Phase 0/setup, which is ~5 on a warm cache. A job budget must exceed the sum of
     # its steps: at 40 + 25 + 55 the STEP budgets once came to 120 minutes inside a 90-minute JOB,
     # so the job could not finish even with every test passing, and the job cancellation that
     # follows is not a step failure -- the run reports a timeout with no summary and names nothing.
     #
-    # 140 -> 45, the per-container ceiling. Phase 1 measured 35m48s in run 33626484866 and its two
-    # slowest tests (tests/test_translator_determinism.py, 471.18s and 470.60s) are 26% of it on a
-    # 2-worker runner. The sweep is growing, so the next thing to cross this line is Phase 1 alone,
-    # and the answer then is a shard knob in the sweep, not a bigger number here.
+    # 140 -> 45, the per-container ceiling, and now with room under it. Phase 1 measured 35m48s in
+    # run 33626484866 (28m03s in 33649808182) with the job at 44m36s against 45 -- the tightest
+    # margin on the board, on the step with the longest history of dying at its cap. Moving Phase 2
+    # and Phase 3 off this job bought 6m24s of that; the shard below is the rest. This is the
+    # "shard knob in the sweep, not a bigger number here" that the previous note said was next.
     timeout-minutes: 45
     env:
       # Job-level so every pytest here collects; --cov-report= suppresses the per-job
@@ -191,8 +226,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ~/.ccache
-          key: ccache-${{ github.job }}-${{ env.CPU_KEY }}-${{ github.run_id }}
-          restore-keys: ccache-${{ github.job }}-${{ env.CPU_KEY }}-
+          key: ccache-${{ github.job }}-${{ matrix.shard }}-${{ env.CPU_KEY }}-${{ github.run_id }}
+          restore-keys: ccache-${{ github.job }}-${{ matrix.shard }}-${{ env.CPU_KEY }}-
       # Zero AFTER the restore: the cache carries its own counters back, so zeroing earlier
       # would make the end-of-job stats cumulative instead of this run's hit rate.
       - name: Setup -- reset the ccache counters
@@ -248,16 +283,22 @@ jobs:
         # cancellation is not a step failure the FIVE phases below never ran at all. A step timeout
         # is a failure, so `!cancelled()` keeps them running and the job reports what it knows.
         #
-        # 40 -> 60 -> 90 -> 38: the sweep reached 69% in 40 minutes on run 33261681823 and died on
-        # the step timeout; run 33283870554 then filled the 60-minute cap; run 33626484866 finished
-        # it in 35m48s. --durations names what it spends the time on, and no -q, because a step
-        # timeout prints no summary: under -q the failures had no test names at all, so the log said
-        # only that the budget had passed.
-        timeout-minutes: 38
+        # 40 -> 60 -> 90 -> 38 -> 24: the sweep reached 69% in 40 minutes on run 33261681823 and
+        # died on the step timeout; run 33283870554 then filled the 60-minute cap; run 33626484866
+        # finished it in 35m48s and 33649808182 in 28m03s. Halved by the shard below, that is
+        # ~18m, and 24 keeps the same kind of margin the 38 had over 35m48s. --durations names what
+        # it spends the time on, and no -q, because a step timeout prints no summary: under -q the
+        # failures had no test names at all, so the log said only that the budget had passed.
+        timeout-minutes: 24
         run: |
           excl=$(mktemp)
           grep -vE '^\s*(#|$)' .github/dedicated_tests.txt > "$excl"
-          files=$(ls tests/test_*.py | grep -vxF -f "$excl")
+          # SHARDED round-robin over the discovered list, and the discovery is still what decides
+          # what exists -- `ls` lists, dedicated_tests.txt subtracts, and only then is the result
+          # dealt. NR % 2 over a sorted list, so the two shards partition it and a new file joins
+          # one of them the moment it lands, exactly as before. tests/test_ci_coverage.py asserts
+          # the matrix runs every index this deals into; a shard nobody runs is files nobody runs.
+          files=$(ls tests/test_*.py | grep -vxF -f "$excl" | awk 'NR % 2 == ${{ matrix.shard }}')
           test -n "$files" || { echo 'unit sweep selected no files'; exit 1; }
           echo "$files" | tr ' ' '\n' | wc -l | xargs echo "sweeping files:"
           # Killed twice here with "the runner has received a shutdown signal", both times at the
@@ -304,7 +345,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ~/.ccache
-          key: ccache-${{ github.job }}-${{ env.CPU_KEY }}-${{ github.run_id }}
+          key: ccache-${{ github.job }}-${{ matrix.shard }}-${{ env.CPU_KEY }}-${{ github.run_id }}
 
       # if: always() -- a job that went red still covered lines on the way, and the total is more
       # honest with them than without. if-no-files-found: ignore for a job that failed before pytest.
@@ -312,7 +353,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-unit
+          name: coverage-unit-${{ matrix.shard }}
           path: .coverage*
           include-hidden-files: true
           if-no-files-found: ignore
@@ -552,11 +593,32 @@ jobs:
   # Split out of `integration` because the two halves fail differently and one was hiding the
   # other. Run 33626484866: the tests/ half finished in 23m37s; this tree then spent 45m53s and
   # got through 2 of its 59 tests before pytest-timeout killed the process, so the whole step
-  # reported "failed" with no verdict for either side. The cost is NOT this job's to fix -- it is
-  # the frontend lowering hotspot (numpyto_common/frontend.py: _assigns_to under
-  # _infer_param_desc), owned elsewhere -- so this job is deliberately over the 45-minute target
-  # and says so rather than shrinking its selection to fit. Nothing is deselected: the union of
-  # this job's path and `integration`'s is exactly the pair the single step used to name.
+  # reported "failed" with no verdict for either side. Nothing is deselected: the union of this
+  # job's paths and `integration`'s is exactly the pair the single step used to name.
+  #
+  # A MATRIX of five legs, and the split is not arbitrary -- it is exactly where the cost is. The
+  # 2 tests that consumed that 45m53s are the first two in collection order, and both are
+  # WHOLE-CORPUS sweeps through the frontend lowering hotspot (numpyto_common/frontend.py,
+  # _assigns_to under _infer_param_desc; owned elsewhere, and this split does not wait on it):
+  #   abi-fold    test_abi_argument_never_folded.py   1 test,  one corpus-wide lowering
+  #   abi-corpus  test_abi_corpus_agreement.py        3 tests, one corpus-wide lowering they SHARE
+  #               through a module-scoped fixture, which is why the file stays whole
+  #   rest        the other 55, which emit and compile per KERNEL rather than corpus-wide, and
+  #               are cheap for exactly that reason: 55 passed in 4m38s measured 2026-09-02, so
+  #               this leg was never the cost and does not need splitting
+  # The two corpus sweeps were always two separate passes, so putting them on separate containers
+  # duplicates no work. Each is then halved AGAIN over the registry
+  # (HPCAGENT_BENCH_TRANSLATOR_CORPUS_SHARD, in _bench_yaml.corpus_shard): measured 2026-09-02 on a
+  # loaded 16-core dev box, the fold sweep alone is 1332 s (22m12s) unsharded, which agrees with
+  # what CI saw -- ~21m for the first of the two, and the second still running when its own 25m
+  # per-test cap fired. Neither had ever finished in CI, so a budget for either ALONE would be a
+  # guess; halved, both are bounded well inside the step cap.
+  #
+  # `rest` names the tree and --ignore's exactly the two files the other legs name, so the legs
+  # partition the selection -- asserted in tests/test_ci_coverage.py by
+  # test_the_translator_integration_legs_partition_the_tree and
+  # test_a_sharded_leg_runs_every_slice_it_splits_into, because an --ignore that stops matching a
+  # moved file is a whole file nothing runs, and every leg still goes green.
   #
   # --timeout-method=thread, like the other half: the default arms SIGALRM and these tests fork,
   # so the signal never lands and a wedge costs the step cap instead of naming the test.
@@ -567,12 +629,42 @@ jobs:
   # hyphen means nobody has to remember that.
   integration_translators:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: integration (numpy-translator tree)
+    name: integration (numpy-translator tree) [${{ matrix.leg.id }}]
     runs-on: ubuntu-latest
-    # Phase 6t (100) + setup, ~5 warm. Sized on what is KNOWN: 2 of 59 tests cost 45m53s, so the
-    # full set has never finished in CI and no smaller budget could be honest. Drop it back toward
-    # 45 once the lowering hotspot lands.
-    timeout-minutes: 110
+    strategy:
+      # fail-fast: false -- the legs fail differently, which is the reason the tree was split off
+      # `integration` in the first place; cancelling the others recreates the hidden verdict.
+      fail-fast: false
+      matrix:
+        leg:
+          - id: abi-fold-0
+            shard: "0/2"
+            select: >-
+              hpcagent_bench/numpy_translators/tests/test_abi_argument_never_folded.py
+          - id: abi-fold-1
+            shard: "1/2"
+            select: >-
+              hpcagent_bench/numpy_translators/tests/test_abi_argument_never_folded.py
+          - id: abi-corpus-0
+            shard: "0/2"
+            select: >-
+              hpcagent_bench/numpy_translators/tests/test_abi_corpus_agreement.py
+          - id: abi-corpus-1
+            shard: "1/2"
+            select: >-
+              hpcagent_bench/numpy_translators/tests/test_abi_corpus_agreement.py
+          - id: rest
+            # 0/1 is the whole registry -- the tests on this leg are per-kernel already.
+            shard: "0/1"
+            select: >-
+              hpcagent_bench/numpy_translators/tests/
+              --ignore=hpcagent_bench/numpy_translators/tests/test_abi_argument_never_folded.py
+              --ignore=hpcagent_bench/numpy_translators/tests/test_abi_corpus_agreement.py
+    # Phase 6t (38) + setup, ~5 warm. Each corpus leg is HALF one lowering pass: the fold sweep is
+    # 22m12s whole, so ~11m halved, and the ABI sweep is the rest of the pair's measured 45m53s, so
+    # ~12m halved. The first green run replaces these with numbers CI took itself. Tighten when the
+    # lowering hotspot lands, which is what makes them loose.
+    timeout-minutes: 45
     env:
       PYTEST_ADDOPTS: "--cov=hpcagent_bench --cov-append --cov-report="
     steps:
@@ -606,12 +698,15 @@ jobs:
           test -n "$cpu_key" || { echo "could not derive a CPU key" >&2; exit 1; }
           echo "CPU_KEY=$cpu_key" >> "$GITHUB_ENV"
       # RESTORE and SAVE are separate actions here -- see the note on the same pair in `unit`.
+      # The key carries the MATRIX value too: every shard of a matrix job shares one `github.job`,
+      # so without it the shards all write the same key, only the first save lands, and the prefix
+      # restore hands one shard's objects to a shard that compiled something else.
       - name: Setup -- restore the compile cache
         uses: actions/cache/restore@v4
         with:
           path: ~/.ccache
-          key: ccache-${{ github.job }}-${{ env.CPU_KEY }}-${{ github.run_id }}
-          restore-keys: ccache-${{ github.job }}-${{ env.CPU_KEY }}-
+          key: ccache-${{ github.job }}-${{ matrix.leg.id }}-${{ env.CPU_KEY }}-${{ github.run_id }}
+          restore-keys: ccache-${{ github.job }}-${{ matrix.leg.id }}-${{ env.CPU_KEY }}-
       # Zero AFTER the restore: the cache carries its own counters back, so zeroing earlier
       # would make the end-of-job stats cumulative instead of this run's hit rate.
       - name: Setup -- reset the ccache counters
@@ -621,10 +716,12 @@ jobs:
 
       - name: Phase 6t -- integration-marked tests under the translator tree
         if: ${{ !cancelled() }}
-        timeout-minutes: 100
+        timeout-minutes: 38
+        env:
+          HPCAGENT_BENCH_TRANSLATOR_CORPUS_SHARD: ${{ matrix.leg.shard }}
         run: |
           python -m pytest -p no:cacheprovider -rfEs --timeout=1500 --timeout-method=thread --durations=25 \
-            -m integration hpcagent_bench/numpy_translators/tests/
+            -m integration ${{ matrix.leg.select }}
 
       - name: ccache statistics
         if: always()
@@ -638,13 +735,13 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ~/.ccache
-          key: ccache-${{ github.job }}-${{ env.CPU_KEY }}-${{ github.run_id }}
+          key: ccache-${{ github.job }}-${{ matrix.leg.id }}-${{ env.CPU_KEY }}-${{ github.run_id }}
 
       - name: Upload coverage data
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-integration-translators
+          name: coverage-integration-translators-${{ matrix.leg.id }}
           path: .coverage*
           include-hidden-files: true
           if-no-files-found: ignore
@@ -658,20 +755,37 @@ jobs:
   # against Phase 8's >75 minutes, and because Phase 8 dies on its step cap with its output still
   # buffered, a 36-second verdict was arriving under 75 minutes of nothing.
   #
-  # OVER the 45-minute target, and splitting cannot fix it: Phase 8 is ONE test
-  # (test_every_generated_dace_program_parses_or_is_a_known_refusal) that fans the whole corpus out
-  # over its own ThreadPoolExecutor at a hardcoded PARSE_WORKERS=2, so there is no seam in the
-  # WORKFLOW to cut. Splitting it needs a shard knob in the test itself -- an env-selected slice of
-  # the corpus, the way HPCAGENT_BENCH_E2E_BACKENDS slices the e2e sweep -- and then this job
-  # becomes a two-entry matrix. Until then the honest thing is to say it does not fit.
+  # A MATRIX of three shards, which is what brings it under the 45-minute target. Phase 8 is ONE
+  # test (test_every_generated_dace_program_parses_or_is_a_known_refusal) that fans the corpus out
+  # over its own ThreadPoolExecutor at PARSE_WORKERS=2, so pytest has no seam to cut and -n shards
+  # nothing -- the CORPUS is what gets divided, by HPCAGENT_BENCH_DACE_PARSE_SHARD, the same way
+  # HPCAGENT_BENCH_E2E_BACKENDS divides the e2e sweep. Nothing is deselected: shard_of PARTITIONS,
+  # and two tests in the file assert that (the union is the corpus, and the CI matrix runs every
+  # index it splits into), so a shard silently dropping kernels cannot go green.
+  #
+  # The arithmetic, off run 33626484866's measured 75.2 min for the whole corpus in one container:
+  #   emit          4.3 min whole corpus  ->  1.4 per shard (sharded at the KEY, before the emit)
+  #   parse        70.9 min wall at 2 workers = 141.8 min serial
+  #     of which    45.0 min is three `hang` entries at PARSE_TIMEOUT_S=900s, dealt one per shard
+  #     leaving     96.8 min over the ~658 other programs -> 32.3 per shard
+  #   per shard    32.3 + 15.0 = 47.3 serial / 2 workers = 23.7 min wall
+  #   + emit 1.4 + checkout/setup ~4  ->  ~29 min against a 45-minute cap
+  # The hang entries have to SPREAD for that to hold, so shard_of deals them first and separately
+  # and test_the_hang_entries_land_in_different_shards asserts it.
   # ===========================================================================================
 
   port-fidelity:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: port-fidelity (dace frontend reads the generated corpus)
+    name: port-fidelity ${{ matrix.shard }}/3 (dace frontend reads the generated corpus)
     runs-on: ubuntu-latest
-    # Phase 8 (75) + checkout/setup, which is ~5 on a warm cache.
-    timeout-minutes: 85
+    strategy:
+      # fail-fast: false -- one shard's regression must not cancel the verdict on the other two.
+      # A ratchet reports WHICH kernels moved, and two thirds of that report is worth having.
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+    # Phase 8 per shard (~24 measured-and-projected, capped at 38) + checkout/setup, ~5 warm.
+    timeout-minutes: 45
     env:
       PYTEST_ADDOPTS: "--cov=hpcagent_bench --cov-append --cov-report="
     steps:
@@ -693,21 +807,27 @@ jobs:
         # can only shrink. *_dace.py is gitignored, so the test emits what it needs first.
         #
         # No -n: the sweep is ONE test that already forks a subprocess per program, so xdist would
-        # shard nothing. The concurrency lives in the test (PARSE_WORKERS). Measured 2026-08-08 on
-        # the full 625-program corpus: 4.3 min to emit + 45 min to parse serially -- which is why
-        # this step timed out at 40 twice on 08-07 -- against 4.3 + 20 at two workers. Three REFUSED
-        # entries are `hang` and spend the whole PARSE_TIMEOUT_S each; at the 900 s that budget was
-        # raised to on 08-21 they alone are 22 min across the two workers, so the 20 min this step
-        # measured at 360 s becomes ~34. 75 rather than 50 keeps the same margin over that.
+        # shard nothing. The concurrency lives in the test (PARSE_WORKERS), and the SHARD below is
+        # what divides the corpus across containers. Measured 2026-08-08 on the full 625-program
+        # corpus: 4.3 min to emit + 45 min to parse serially -- which is why this step timed out at
+        # 40 twice on 08-07 -- against 4.3 + 20 at two workers. Three REFUSED entries are `hang` and
+        # spend the whole PARSE_TIMEOUT_S each; at the 900 s that budget was raised to on 08-21 they
+        # alone are 45 min serial, which is why shard_of deals them one per shard. A third of the
+        # corpus plus one hang projects to ~24 min (see the job banner); 38 keeps the old margin.
         if: ${{ !cancelled() }}
-        timeout-minutes: 75
+        timeout-minutes: 38
+        env:
+          HPCAGENT_BENCH_DACE_PARSE_SHARD: "${{ matrix.shard }}/3"
         run: |
           # Which CPU this ran on, because the parse timings only mean something next to it:
           # esirkepov_deposition took 274 s here and 24 s on the dev box, while mobilenet_v2 came
           # in FASTER than its local number, so "the runner is slower" does not yet explain it.
           lscpu | grep -E "^(Model name|CPU\(s\)|Thread|Core)" || true
+          # --timeout under the step cap, not over it: pytest-timeout naming the test that ran long
+          # is a verdict, and the step cap firing is 38 minutes of buffered output nobody reads.
+          # It was 4200 (70 min) against a 75-minute step, i.e. the step always won.
           python -m pytest -q -p no:cacheprovider -rfsxX -m dace_frontend \
-            --timeout=4200 tests/test_dace_frontend_validity.py
+            --timeout=2100 tests/test_dace_frontend_validity.py
 
       - name: Upload the generated DaCe corpus
         # *_dace.py is gitignored and re-emitted per run, so a kernel that only fails here cannot be
@@ -715,7 +835,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: dace-corpus-portfid
+          name: dace-corpus-portfid-${{ matrix.shard }}
           path: hpcagent_bench/benchmarks/**/*_dace.py
           retention-days: 7
           if-no-files-found: ignore
@@ -724,7 +844,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-port-fidelity
+          name: coverage-port-fidelity-${{ matrix.shard }}
           path: .coverage*
           include-hidden-files: true
           if-no-files-found: ignore
@@ -1174,8 +1294,8 @@ jobs:
         # pythran removed -> peak a few GB -> full -n auto (4) safe under 16 GB.
         #
         # No HPCAGENT_BENCH_E2E_SUBSET here, unlike the fp32 leg below: this is the leg that spends
-        # the job's headroom. 415 gated stems x 3 backends = 1245 cases against the slice's 90 stems
-        # / 271 cases, and the extra 325 are the level-1 bulk the slice drops as redundant -- 151
+        # the job's headroom. 1248 collected cases against the slice's 273 (both counted 2026-09-02),
+        # and the extra 325 stems are the level-1 bulk the slice drops as redundant -- 151
         # tsvc_2_s* variants, 27 matmul, 22 gemm, distinct BENCHMARKS that drive identical
         # translation. They are cheap for the same reason they were dropped, which is why 4.6x the
         # cases is not 4.6x the minutes: measured on a loaded 16-core dev box at -n 2, the slice is
@@ -1183,13 +1303,12 @@ jobs:
         # same box runs the slice at 1.9x this runner's own 4m12s, so the projection here is ~8m and
         # the cap is better than twice it.
         #
-        # It is not green today. The corpus the slice drops carries six real COMPILE failures at
-        # fp64 (2026-09-02, measured, not predicted): eigh_test on all three backends (a helper call
-        # binding a pointer where an integer is declared, and a Fortran array declaration short a
-        # dimension), spgemm_hash on Fortran (a DO bound that is not an integer expression), and
-        # hotspot_rodinia on C++ and Fortran (a parameter emitted const / INTENT(IN) and then
-        # written through). Three emitter bug classes in two kernels that the line-coverage slice
-        # could not see, which is the argument for this phase rather than an argument against it.
+        # The corpus the slice drops carried six real COMPILE failures at fp64 when this leg was
+        # first turned on, in three emitter bug classes the line-coverage slice could not see --
+        # which is the argument for this phase rather than an argument against it. Re-measured
+        # 2026-09-02 against main: spgemm_hash on Fortran (a DO bound that was not an integer
+        # expression) and hotspot_rodinia on C++/Fortran (a parameter emitted const / INTENT(IN)
+        # and then written through) now pass. What is left is eigh_test on all three backends.
         timeout-minutes: 18
         env:
           HPCAGENT_BENCH_E2E_BACKENDS: "c,cpp,fortran"
@@ -1269,13 +1388,6 @@ jobs:
         with:
           path: ~/.ccache
           key: ccache-${{ github.job }}-${{ env.CPU_KEY }}-${{ github.run_id }}
-  # ===========================================================================================
-  # e2e-pythran -- the pythran slice of the e2e sweep, isolated because pythran is the memory/time
-  # pig: a single pythran compile peaks ~7 GB / 11 min while c/cpp/fortran compiles are hundreds of
-  # MB. Folding it into the native job overran the 16 GB runner (exit 143). Same partition mechanism
-  # as e2e-native: HPCAGENT_BENCH_E2E_BACKENDS="pythran" so run_kernel(only_backends=...) emits pythran only.
-  # ===========================================================================================
-
       # if: always() -- a job that went red still covered lines on the way, and the total is more
       # honest with them than without. if-no-files-found: ignore for a job that failed before pytest.
       - name: Upload coverage data
@@ -1286,6 +1398,13 @@ jobs:
           path: .coverage*
           include-hidden-files: true
           if-no-files-found: ignore
+
+  # ===========================================================================================
+  # e2e-pythran -- the pythran slice of the e2e sweep, isolated because pythran is the memory/time
+  # pig: a single pythran compile peaks ~7 GB / 11 min while c/cpp/fortran compiles are hundreds of
+  # MB. Folding it into the native job overran the 16 GB runner (exit 143). Same partition mechanism
+  # as e2e-native: HPCAGENT_BENCH_E2E_BACKENDS="pythran" so run_kernel(only_backends=...) emits pythran only.
+  # ===========================================================================================
 
   e2e-pythran:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
@@ -1526,26 +1645,6 @@ jobs:
             tests/test_optimizer_plugin.py \
             tests/test_agent_bench.py
 
-  # ===========================================================================================
-  # mpi -- the whole MPI / distributed-residency track on its own runner (the "5th runner"): the
-  # pure-numpy data-distribution + descriptor tests, the C-driver / stub codegen, the ABI + wire
-  # checks, the oversubscribed multi-rank launch + scoring e2e, the halo exchange, and the sizing
-  # (strong/weak) tests. MPICH is the track default (ABI-compatible with cray-mpich for host
-  # replacement on Ault; only libfabric/CXI injected on Alps), and mpi4py is source-built against
-  # it. The launch/e2e tests ``mpirun --oversubscribe`` on the CI cores and self-skip cleanly when
-  # MPI_Init cannot bootstrap; the GPU-device e2e tests self-skip with no CUDA/nvcc.
-  #
-  # Riding along, because each is minutes and none of them is worth a queue slot of its own:
-  # hf-export (2026-08-11; build, and on a main push publish, the HuggingFace dataset -- `needs:
-  # [unit, integration]` is its gate and decides the PUBLISH sub-step only), the port-fidelity and
-  # benchmark-reference phases moved off `translators`, and Phase 8b, the torch-agreement sweep,
-  # moved off `port-fidelity` where a 36-second verdict was arriving behind a 75-minute step.
-  #
-  # dace-numeric moved OUT (2026-09-02) to its own job: at 50m+ it was 80% of this job's wall clock
-  # and the only thing keeping it near the 45-minute ceiling. What is left here is ~12 minutes.
-  #
-  # tests/ports/cegterg is NOT in Phase 2b -- it is its own job. See the note there.
-  # ===========================================================================================
 
       # if: always() -- a job that went red still covered lines on the way, and the total is more
       # honest with them than without. if-no-files-found: ignore for a job that failed before pytest.
@@ -1558,17 +1657,38 @@ jobs:
           include-hidden-files: true
           if-no-files-found: ignore
 
+  # ===========================================================================================
+  # mpi -- the whole MPI / distributed-residency track on its own runner (the "5th runner"): the
+  # pure-numpy data-distribution + descriptor tests, the C-driver / stub codegen, the ABI + wire
+  # checks, the oversubscribed multi-rank launch + scoring e2e, the halo exchange, and the sizing
+  # (strong/weak) tests. MPICH is the track default (ABI-compatible with cray-mpich for host
+  # replacement on Ault; only libfabric/CXI injected on Alps), and mpi4py is source-built against
+  # it. The launch/e2e tests ``mpirun --oversubscribe`` on the CI cores and self-skip cleanly when
+  # MPI_Init cannot bootstrap; the GPU-device e2e tests self-skip with no CUDA/nvcc.
+  #
+  # Riding along, because each is minutes and none of them is worth a queue slot of its own: the
+  # port-fidelity and benchmark-reference phases moved off `translators`, and Phase 8b, the
+  # torch-agreement sweep, moved off `port-fidelity` where a 36-second verdict was arriving behind
+  # a 75-minute step.
+  #
+  # dace-numeric moved OUT (2026-09-02) to its own job: at 50m+ it was 80% of this job's wall clock
+  # and the only thing keeping it near the 45-minute ceiling. hf-export moved out the same day for
+  # the opposite reason -- it is two minutes, but its publish gate is a `needs:` on three jobs, and
+  # that `needs:` was making all ~12 minutes of THIS job wait for them. What is left here is ~12
+  # minutes that now start when the run does.
+  #
+  # tests/ports/cegterg is NOT in Phase 2b -- it is its own job. See the note there.
+  # ===========================================================================================
   mpi:
-    # !cancelled(): the phases below must still run and report even when unit or integration went
-    # red (they did before this fusion, as independent jobs with no needs at all).
-    # needs: schedules this job only after those finish -- unavoidable once their `result` has to
-    # gate the hf-export PUBLISH sub-step below -- and is the same wait hf-export's own job already
-    # paid as its own job. integration_translators is in the list because it used to BE part of
-    # integration: without it, splitting that job would have quietly narrowed the publish gate from
-    # "the whole integration marker was green" to "half of it was".
+    # No `needs:` any more, and that is the point. This job runs ~12 minutes and used to wait for
+    # unit + integration + integration_translators before starting -- not because it needs anything
+    # they build, but because ONE sub-step (the HF publish) had to read their `result`. Measured on
+    # run 33626484866: it started at 13:29, an hour and a quarter after every other job, and the
+    # run's total wall clock was that wait plus this job. The export moved to its own `hf-export`
+    # job below, which keeps the identical gate, so the distributed track now starts with everyone
+    # else and the gated step costs its own runner instead of the whole run's critical path.
     if: ${{ !cancelled() && !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    needs: [unit, integration, integration_translators]
-    name: mpi + references + hf-export (distributed track, port fidelity, HF dataset)
+    name: mpi + references (distributed track, port fidelity)
     runs-on: ubuntu-latest
     # Measured on run 33626484866: setup 5m30s + mpi phases 0m24s + Phase 2c 2m00s + hf-export
     # seconds, and Phase 2b's non-cegterg remainder + Phase 8b on top. ~12m expected; 40 leaves
@@ -1781,14 +1901,60 @@ jobs:
           path: ~/.ccache
           key: ccache-${{ github.job }}-${{ env.CPU_KEY }}-${{ github.run_id }}
 
-      # --- hf-export phase (fused 2026-08-11; formerly its own job -- see the banner above) ---
+      # if: always() -- a job that went red still covered lines on the way, and the total is more
+      # honest with them than without. if-no-files-found: ignore for a job that failed before pytest.
+      - name: Upload coverage data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-mpi
+          path: .coverage*
+          include-hidden-files: true
+          if-no-files-found: ignore
+
+  # ===========================================================================================
+  # hf-export -- build the HuggingFace dataset, and on a push to main publish it.
+  #
+  # It is the ONLY job in the file with a `needs:`, and it has one for a reason nothing else does:
+  # the publish is gated on the suite being green, so it has to read three jobs' `result`. It rode
+  # on `mpi` from 2026-08-11 to save a queue slot back when only three jobs could start at once;
+  # that limit is gone (see the banner at the top), and what the fusion cost instead was the whole
+  # run's critical path -- `mpi` is ~12 minutes of work that sat behind 45 minutes of waiting.
+  #
+  # Two minutes of `export-hf` on its own runner is the cheaper half of that trade. The gate is
+  # unchanged: same three jobs, same all-green condition, same push-to-main-only publish.
+  # ===========================================================================================
+  hf-export:
+    # !cancelled(): the parquet artifact is worth having from a run that went red; only the PUBLISH
+    # reads the gate below. `needs` still means this job waits for those three to finish -- that is
+    # the point of it, and it is now the only job in the file paying that wait.
+    if: ${{ !cancelled() && !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
+    needs: [unit, integration, integration_translators]
+    name: hf-export (HuggingFace dataset)
+    runs-on: ubuntu-latest
+    # Run 31023526869 measured the export at 2m37s; setup is ~5 warm. 20 is better than 2x.
+    timeout-minutes: 20
+    env:
+      PYTEST_ADDOPTS: "--cov=hpcagent_bench --cov-append --cov-report="
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/setup
+
       - name: Phase 7 -- export (+ publish on a main push) the HuggingFace dataset
-        # export-hf always writes the parquet artifact -- unconditionally, like every other phase in
-        # this job, on `!cancelled()` rather than on the phases above succeeding.
-        # PUBLISH is the one thing that still keeps hf-export's original all-or-nothing gate: it
-        # fires only on a push to main with HF_TOKEN + HF_DATASET_REPO set AND every `needs` green --
-        # never publish a dataset from a run where unit or either half of integration went red.
+        # export-hf always writes the parquet artifact -- unconditionally, on `!cancelled()`.
+        # PUBLISH keeps hf-export's original all-or-nothing gate: it fires only on a push to main
+        # with HF_TOKEN + HF_DATASET_REPO set AND every `needs` green -- never publish a dataset
+        # from a run where unit or either half of integration went red. integration_translators is
+        # in the list because it used to BE part of integration: without it, splitting that job
+        # would have quietly narrowed the gate from "the whole integration marker was green" to
+        # "half of it was".
         if: ${{ !cancelled() }}
+        timeout-minutes: 12
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_DATASET_REPO: ${{ vars.HF_DATASET_REPO }}
@@ -1810,13 +1976,11 @@ jobs:
           path: hpcagent_bench_hf.parquet
           if-no-files-found: ignore
 
-      # if: always() -- a job that went red still covered lines on the way, and the total is more
-      # honest with them than without. if-no-files-found: ignore for a job that failed before pytest.
       - name: Upload coverage data
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-mpi
+          name: coverage-hf-export
           path: .coverage*
           include-hidden-files: true
           if-no-files-found: ignore
@@ -1953,30 +2117,49 @@ jobs:
   # They used to cost microseconds because they were broken -- a C++ index off-by-one aborted the
   # process partway through the file (SIGABRT, exit 134, run 33626484866) and a missing `nkb`
   # argument made twenty-four of them die on NameError before doing any work. Both are fixed, so
-  # the tests now actually execute: measured with --durations on a 16-core dev box, 136.98s and
-  # 136.45s at npol=1 and ~330s for one npol=2 configuration, drawing 580-690% CPU from
-  # multithreaded BLAS -- roughly an hour of wall clock for the sixteen, and a hosted runner has
-  # 2 physical cores against that box's 16.
+  # the tests now actually execute.
   #
-  # OVER the 45-minute target, and this is arithmetic rather than scheduling: the work is BLAS
-  # FLOPs, so no split, shard or runner layout removes it. What would: a cheaper oracle (fewer
-  # Davidson restarts, or a smaller basis at the same convergence criterion), or dropping
-  # configurations -- which is coverage, so it is not something this file gets to decide.
+  # MEASURED SINGLE-THREADED, which is the shape this job actually runs in (OMP_NUM_THREADS=1
+  # below), rather than at the 6-way BLAS the first estimate was taken at. The two npol values are
+  # not one cost class:
+  #   npol=1 configuration    152.5 s across its five tests
+  #   npol=2 configuration   2035   s across the same five, of which ONE test is 812 s
+  # so the eight together are ~70 min of serial single-thread work, not the ~35 the npol=1 reading
+  # alone suggested. (Both on a 16-core dev box; the npol=2 run was under load ~55, so its number
+  # is an upper bound and the npol=1 one, taken at load ~22, is closer to true.)
+  #
+  # FOUR shards, over HPCAGENT_BENCH_CEGTERG_SHARD, and four is where the arithmetic stops paying:
+  # each shard carries one npol=1 and one npol=2 configuration, ~17.5 min of serial work, which is
+  # about the length of that shard's own longest single test. Past four, the wall clock is that one
+  # test and another container buys nothing. Nothing is deselected: _shard PARTITIONS the
+  # configuration list, and the file asserts both that
+  # (test_the_shards_partition_the_configurations_rather_than_sampling_them) and that CI runs every
+  # index it splits into, plus that no shard ends up holding only the cheap half.
   # ===========================================================================================
   ports-cegterg:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: port fidelity (cegterg eigensolver oracle)
+    name: port fidelity (cegterg eigensolver oracle) ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    strategy:
+      # fail-fast: false -- the configurations are independent physics, and a failure at npol=2
+      # says nothing about npol=1. Cancelling the other shard throws away the half that answers.
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    # ~17.5 min of serial work per shard on the measurement above, spread over TESTS by -n auto,
+    # and the shards are balanced by construction (each carries one npol=1 and one npol=2
+    # configuration). 45 is the ceiling this file holds every job to.
+    timeout-minutes: 45
     env:
       PYTEST_ADDOPTS: "--cov=hpcagent_bench --cov-append --cov-report="
-      # One BLAS thread per worker, because the parallelism has to live in ONE place. The oracle
-      # tests drew ~6 cores each from multithreaded BLAS on a 16-core box; four xdist workers each
-      # doing that on a 4-vCPU runner is 24 threads over 2 physical cores, which is slower than
-      # either alone. -n auto below spends the runner across TESTS instead.
+      # One BLAS thread per worker, because the parallelism has to live in ONE place. Multithreaded
+      # BLAS drew ~6 cores per test on a 16-core box for a 152.5 s -> 137 s saving, i.e. almost
+      # nothing; four xdist workers each doing that on a 4-vCPU runner is 24 threads over 2 physical
+      # cores, which is slower than either alone. -n auto below spends the runner across TESTS.
       OMP_NUM_THREADS: "1"
       OPENBLAS_NUM_THREADS: "1"
       MKL_NUM_THREADS: "1"
+      HPCAGENT_BENCH_CEGTERG_SHARD: "${{ matrix.shard }}/4"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -2003,12 +2186,15 @@ jobs:
       # job is the one that measured why: it restored a stale prefix key at 45.81% hits, spent its
       # whole step budget, and then saved nothing because the combined action skips post-save on a
       # failed job -- so the next run restored the same stale entry and did it again.
+      # The key carries the MATRIX value too: every shard of a matrix job shares one `github.job`,
+      # so without it the shards all write the same key, only the first save lands, and the prefix
+      # restore hands one shard's objects to a shard that compiled something else.
       - name: Setup -- restore the compile cache
         uses: actions/cache/restore@v4
         with:
           path: ~/.ccache
-          key: ccache-${{ github.job }}-${{ env.CPU_KEY }}-${{ github.run_id }}
-          restore-keys: ccache-${{ github.job }}-${{ env.CPU_KEY }}-
+          key: ccache-${{ github.job }}-${{ matrix.shard }}-${{ env.CPU_KEY }}-${{ github.run_id }}
+          restore-keys: ccache-${{ github.job }}-${{ matrix.shard }}-${{ env.CPU_KEY }}-
       # Zero AFTER the restore: the cache carries its own counters back, so zeroing earlier
       # would make the end-of-job stats cumulative instead of this run's hit rate.
       - name: Setup -- reset the ccache counters
@@ -2017,20 +2203,22 @@ jobs:
       - uses: ./.github/actions/setup
 
       - name: Phase 2b-cegterg -- the cegterg port against its C++ reference and a direct solve
-        # --timeout=2700, not the 600 the rest of tests/ports/ runs at. That number is a HANG
-        # detector and has to be sized against the machine: the slowest configuration measured
-        # ~330s on a 16-core box with BLAS spread over six of them, and this runner has two cores
-        # and one BLAS thread per worker, so 600 would fire on a test that is merely running.
+        # --timeout=1800, not the 600 the rest of tests/ports/ runs at, and UNDER the step cap
+        # rather than over it: a per-test timeout that outlives its step names the test, where a
+        # step cap firing prints no summary at all. That number is a HANG detector and has to be
+        # sized against the machine: the slowest single test measured 812 s single-threaded on a
+        # loaded 16-core box, and this runner has two physical cores and one BLAS thread per
+        # worker, so 600 would fire on a test that is merely running.
         #
         # -n auto with the default per-test distribution, NOT --dist loadfile: every heavy test is
-        # in one file, so loadfile would pin all sixteen to one worker and buy nothing. The ctypes
+        # in one file, so loadfile would pin all eight to one worker and buy nothing. The ctypes
         # reference build is lru_cached per PROCESS, so each worker pays it once (seconds) and the
         # tests themselves share no state.
         if: ${{ !cancelled() }}
-        timeout-minutes: 80
+        timeout-minutes: 38
         run: |
           python -m pytest -q -p no:cacheprovider -rfEs -n auto --durations=25 \
-            --timeout=2700 tests/ports/cegterg/
+            --timeout=1800 tests/ports/cegterg/
 
       # Hit rate is the whole point of the cache -- surface it so a regression to 0% is visible.
       - name: ccache statistics
@@ -2045,13 +2233,13 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ~/.ccache
-          key: ccache-${{ github.job }}-${{ env.CPU_KEY }}-${{ github.run_id }}
+          key: ccache-${{ github.job }}-${{ matrix.shard }}-${{ env.CPU_KEY }}-${{ github.run_id }}
 
       - name: Upload coverage data
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-ports-cegterg
+          name: coverage-ports-cegterg-${{ matrix.shard }}
           path: .coverage*
           include-hidden-files: true
           if-no-files-found: ignore
@@ -2115,7 +2303,7 @@ jobs:
     # percentage and stays green. dace-numeric and ports-cegterg split back out of mpi and
     # integration_translators out of integration on 2026-09-02, so all three are listed.
     needs: [unit, e2e-numba-jax, integration, integration_translators, translators, frameworks-pluto, e2e-native,
-            e2e-pythran, container-image, mpi, dace-numeric, ports-cegterg, port-fidelity]
+            e2e-pythran, container-image, mpi, hf-export, dace-numeric, ports-cegterg, port-fidelity]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

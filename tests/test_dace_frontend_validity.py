@@ -19,6 +19,7 @@ would otherwise take the session with it, and because DaCe's parse state is proc
 
 import collections
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -51,6 +52,18 @@ PARSE_TIMEOUT_S = 900.0
 #: two workers, which is the difference between fitting the CI step's budget and not. Two, not
 #: ``auto``: a parse of the deep vision nets is memory-bound in sympy, not core-bound.
 PARSE_WORKERS = 2
+
+#: ``"<index>/<count>"`` -- the slice of the corpus THIS process judges, unset for all of it.
+#:
+#: The sweep is ONE test that fans the corpus out over its own :data:`PARSE_WORKERS` pool, so pytest
+#: has no seam to cut and ``-n`` shards nothing: the corpus itself is what has to be divided. CI
+#: runs the ratchet as a matrix over this variable, which is what puts the job under the 45-minute
+#: per-container budget -- the whole corpus measured 75.2 min in run 33626484866, past any cap the
+#: file could honestly set. Nothing is deselected: :func:`shard_of` PARTITIONS, so the union of the
+#: shards is the corpus, and every kernel is judged in exactly one of them. The ratchet stays
+#: sound under the split because it is per-kernel in both directions -- a shard's regressions and
+#: its ``fixed`` set are read off the kernels that shard parsed.
+PARSE_SHARD = os.environ.get("HPCAGENT_BENCH_DACE_PARSE_SHARD", "").strip()
 
 #: Reasons that are a WALL-CLOCK verdict rather than a frontend refusal. A faster runner, or one
 #: under less load, finishes such a kernel inside :data:`PARSE_TIMEOUT_S` and reports ``ok`` without
@@ -219,6 +232,29 @@ def ensure_dace_program(key: str) -> pathlib.Path:
     return paths.BENCHMARKS / spec.relative_path / f"{spec.module_name}_dace.py"
 
 
+def shard_of(keys: List[str]) -> List[str]:
+    """The slice of ``keys`` :data:`PARSE_SHARD` names, or all of them when it names none.
+
+    Dealt round-robin, so the deep vision nets -- adjacent in sorted order and the slowest parses in
+    the corpus -- land in different shards instead of piling into one. The
+    :data:`TIMEOUT_REASONS` entries are dealt FIRST and separately, because they are the only items
+    whose cost is known in advance and it is the whole per-item budget: three ``hang`` kernels at
+    :data:`PARSE_TIMEOUT_S` are 45 minutes of pure timeout, and a round-robin over the sorted list
+    alone is free to hand all three to one shard.
+    """
+    if not PARSE_SHARD:
+        return keys
+    index, sep, count = PARSE_SHARD.partition("/")
+    if not sep or not index.isdigit() or not count.isdigit():
+        raise ValueError(f"HPCAGENT_BENCH_DACE_PARSE_SHARD={PARSE_SHARD!r} is not '<index>/<count>'")
+    i, n = int(index), int(count)
+    if n < 1 or not 0 <= i < n:
+        raise ValueError(f"HPCAGENT_BENCH_DACE_PARSE_SHARD={PARSE_SHARD!r}: index must be in [0, {n})")
+    timeouts = [k for k in keys if REFUSED.get(k.rsplit("/", 1)[0]) in TIMEOUT_REASONS]
+    rest = [k for k in keys if k not in frozenset(timeouts)]
+    return sorted(timeouts[i::n] + rest[i::n])
+
+
 def generated_programs() -> List[pathlib.Path]:
     """Every kernel's canonical DaCe program, GENERATING any that a fresh checkout lacks.
 
@@ -227,13 +263,17 @@ def generated_programs() -> List[pathlib.Path]:
     That is ~655 emits, so it is called from a TEST BODY and never at import time -- a run that
     selects none of these tests must generate nothing.
 
+    :data:`PARSE_SHARD` narrows it to one slice, and does so at the KEY -- before the emit -- so a
+    shard pays for its own kernels only, rather than emitting the whole corpus to parse a third of
+    it. ``dace-numeric``'s pre-warm leaves the variable unset and still gets all of it.
+
     A kernel that emits no program is absent from the list rather than failing it; this gate
     judges what the frontend is handed, and there is a separate finding for the emit gap (see
     :func:`test_the_refusal_list_names_kernels_that_exist`).
     """
     from hpcagent_bench.spec import KERNELS
 
-    return [path for path in (ensure_dace_program(key) for key in sorted(KERNELS)) if path.exists()]
+    return [path for path in (ensure_dace_program(key) for key in shard_of(sorted(KERNELS))) if path.exists()]
 
 
 def parse_one(path: pathlib.Path) -> dict:
@@ -430,3 +470,86 @@ def test_an_unexcused_refusal_is_a_regression_whatever_the_verdict() -> None:
     )
     assert not fixed
     assert regressions == ["scientific_computing/brand_new: timeout: the frontend did not finish parsing in 360s"]
+
+
+#: The env var CI's port-fidelity matrix sets, and the workflow that has to keep covering all of it.
+SHARD_ENV = "HPCAGENT_BENCH_DACE_PARSE_SHARD"
+WORKFLOW = REPO / ".github" / "workflows" / "tests.yml"
+
+
+def ci_parse_shards() -> Tuple[List[int], int]:
+    """``(shard indices the port-fidelity matrix runs, the count they are shards OF)``."""
+    import yaml
+
+    jobs = yaml.safe_load(WORKFLOW.read_text())["jobs"]
+    job = jobs["port-fidelity"]
+    indices = [int(s) for s in job["strategy"]["matrix"]["shard"]]
+    # Step-level env or the job's -- the variable sits on the step it belongs to here, but a later
+    # edit hoisting it to the job must not turn this gate into a silent pass.
+    counts = set()
+    for env in [job.get("env") or {}] + [step.get("env") or {} for step in job["steps"]]:
+        spec = env.get(SHARD_ENV)
+        if spec:
+            counts.add(int(str(spec).rsplit("/", 1)[-1]))
+    assert len(counts) == 1, f"port-fidelity names {counts or 'no'} shard counts; it has to name exactly one"
+    return indices, counts.pop()
+
+
+@pytest.mark.dace_frontend
+def test_the_shards_partition_the_corpus_rather_than_sampling_it() -> None:
+    """A split that DROPS a kernel is the failure mode worth a test: the shards still go green and
+    the corpus stops being measured. Union == the whole list, and no kernel judged twice."""
+    keys = [f"track_{i // 7}/kernel_{i:03d}" for i in range(200)]
+    for count in (2, 3, 4, 7):
+        pieces = []
+        for index in range(count):
+            with pytest.MonkeyPatch.context() as mp:
+                mp.setattr(sys.modules[__name__], "PARSE_SHARD", f"{index}/{count}")
+                pieces.append(shard_of(keys))
+        flat = [k for piece in pieces for k in piece]
+        assert sorted(flat) == sorted(keys), f"{count} shards do not cover the corpus"
+        assert len(flat) == len(set(flat)), f"{count} shards judge a kernel twice"
+
+
+@pytest.mark.dace_frontend
+def test_an_unsharded_run_still_sees_the_whole_corpus() -> None:
+    """The variable unset is a local run and the pre-warm in ``dace-numeric``; both want all of it."""
+    keys = ["a/one", "b/two", "c/three"]
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(sys.modules[__name__], "PARSE_SHARD", "")
+        assert shard_of(keys) == keys
+
+
+@pytest.mark.dace_frontend
+def test_the_hang_entries_land_in_different_shards() -> None:
+    """The only items whose cost is known ahead of the run, and it is the whole per-kernel budget.
+    Three of them in one shard is 45 minutes of pure timeout on one container, which is the thing
+    the split exists to prevent -- so their spread is asserted, not hoped for."""
+    from hpcagent_bench.spec import KERNELS
+
+    _, count = ci_parse_shards()
+    hung = sorted(k for k, why in REFUSED.items() if why in TIMEOUT_REASONS)
+    assert hung, "no TIMEOUT_REASONS entry left in REFUSED -- drop this test with the last one"
+    # The registry keys the sweep actually deals, not a reconstruction of them: shard_of reads the
+    # position in this list, so a stand-in list would test a different deal than CI runs.
+    placed = {}
+    for index in range(count):
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(sys.modules[__name__], "PARSE_SHARD", f"{index}/{count}")
+            for key in shard_of(sorted(KERNELS)):
+                placed[key.rsplit("/", 1)[0]] = index
+    where = collections.Counter(placed[k] for k in hung)
+    assert len(where) == min(len(hung), count) and max(where.values()) <= -(-len(hung) // count), (
+        f"the {len(hung)} hang kernels are dealt {dict(where)} over {count} shards; "
+        f"each is {PARSE_TIMEOUT_S:.0f}s of pure timeout, so they have to spread"
+    )
+
+
+@pytest.mark.dace_frontend
+def test_ci_runs_every_shard_it_splits_the_corpus_into() -> None:
+    """The workflow half of the partition. A matrix that lists 0 and 1 of 3 shards is a third of the
+    corpus never parsed, and every job in it goes green."""
+    indices, count = ci_parse_shards()
+    assert sorted(indices) == list(range(count)), (
+        f"port-fidelity runs shards {sorted(indices)} of {count}; the missing ones are corpus nothing parses"
+    )
