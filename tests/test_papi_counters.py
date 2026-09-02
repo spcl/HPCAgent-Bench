@@ -784,6 +784,9 @@ def test_the_perf_event_gate_is_reported_by_name(monkeypatch, tmp_path) -> None:
     sysctl = tmp_path / "perf_event_paranoid"
     monkeypatch.setattr(papi, "PARANOID_SYSCTL", sysctl)
     monkeypatch.setattr(osinfo, "IS_LINUX", True)
+    # Pinned so the SYSCTL branch is what this asserts: the events probe below it is the sibling
+    # test's subject, and on a host with no PMU it would answer first and mask the open-gate case.
+    monkeypatch.setattr(papi, "available_events", lambda: ("PAPI_TOT_CYC",))
     assert papi.perf_event_reason()[0] == "no_perf_events"
     sysctl.write_text("3\n")
     cause, message = papi.perf_event_reason()
@@ -791,6 +794,27 @@ def test_the_perf_event_gate_is_reported_by_name(monkeypatch, tmp_path) -> None:
     sysctl.write_text("2\n")
     assert papi.perf_event_reason() is None
     assert {"no_perf_events", "perf_event_paranoid"} <= set(papi.CAUSES)
+
+
+def test_an_open_gate_with_no_countable_event_is_still_refused_by_name(monkeypatch, tmp_path) -> None:
+    """The gate must answer for the MACHINE, not just the sysctl.
+
+    A hosted runner passes every check above -- perf_event present, paranoid <= 2 -- and then has
+    no PMU behind it, so PAPI_add_event fails with "Event does not exist" inside the measurement.
+    That reached CI as seven hard failures in a configuration these tests were never meant to run
+    in; named here, it is a skip with a cause instead.
+    """
+    sysctl = tmp_path / "perf_event_paranoid"
+    sysctl.write_text("2\n")
+    monkeypatch.setattr(papi, "PARANOID_SYSCTL", sysctl)
+    monkeypatch.setattr(osinfo, "IS_LINUX", True)
+    monkeypatch.setattr(papi, "available_events", lambda: ())
+    cause, message = papi.perf_event_reason()
+    assert cause == "events_unsupported" and "PMU" in message
+    assert cause in papi.CAUSES
+    # A machine that CAN count is not gated: the events probe must not become a blanket skip.
+    monkeypatch.setattr(papi, "available_events", lambda: ("PAPI_TOT_CYC",))
+    assert papi.perf_event_reason() is None
 
 
 def test_a_python_submission_is_refused_by_cause_before_anything_runs() -> None:
