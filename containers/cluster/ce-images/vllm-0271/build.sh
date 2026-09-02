@@ -31,7 +31,7 @@ mkdir -p "$(dirname "${OUTPUT_SQSH}")"
 unset DBUS_SESSION_BUS_ADDRESS
 export TMPDIR="/dev/shm/${USER}/tmp"
 export XDG_RUNTIME_DIR="/dev/shm/${USER}/xdg"
-# The wipe goes through `podman unshare`: an image layer under root/overlay/*/diff is owned by
+# The wipe goes through 'podman unshare': an image layer under root/overlay/*/diff is owned by
 # a SUBUID, so a plain rm cannot touch it and leaves a half-deleted store the next build
 # dies on. unshare enters the user namespace where those subuids map to this user.
 podman unshare rm -rf "/dev/shm/${USER}/root" "/dev/shm/${USER}/runroot" 2>/dev/null || true
@@ -53,11 +53,11 @@ if [[ -d "${GIT_MIRRORS}" ]]; then
   printf 'git mirror %s\n' "${GIT_MIRRORS}"
 fi
 
-# The GPU, handed to the build. aiter >= 0.1.19 reads the arch from `rocminfo` at IMPORT time and
+# The GPU, handed to the build. aiter >= 0.1.19 reads the arch from 'rocminfo' at IMPORT time and
 # ignores GPU_ARCHS on purpose (get_gfx_runtime's docstring says so), and vLLM's rocm.py probes the
 # device too -- so a device-less build cannot even import them, and the earlier note here that "a
 # podman build cannot use GPUs" was wrong. Measured in job 619976: an mi300 job with NO --gres
-# still exposes /dev/kfd (crw-rw-rw- root:render), and `podman build --device` reports gfx942
+# still exposes /dev/kfd (crw-rw-rw- root:render), and 'podman build --device' reports gfx942
 # inside a RUN step. Conditional, so a build on a node without the device fails in the image step
 # that actually needs it rather than on an unusable --device flag.
 GPU_ARGS=()
@@ -68,9 +68,9 @@ if [[ -e /dev/kfd ]]; then
 fi
 
 # Base image cache on scratch. The podman LAYER store cannot live there: capstor, iopsstor and the
-# NFS home all reject user xattrs, so `overlay` and `fuse-overlayfs` fail on lsetxattr and `vfs`
+# NFS home all reject user xattrs, so 'overlay' and 'fuse-overlayfs' fail on lsetxattr and 'vfs'
 # fails creating its pivot dir under a subuid (all three measured). The base image can, because a
-# `dir:` tree is plain files. That is the part worth caching -- a 30-52 GB pull from a registry per
+# 'dir:' tree is plain files. That is the part worth caching -- a 30-52 GB pull from a registry per
 # job, on a store that is wiped every time because the nodes are diskless and it lives in RAM.
 #
 # Miss: pull over the network as before, then copy out for next time; the build still reads the

@@ -28,7 +28,7 @@ mkdir -p "$(dirname "${OUTPUT_SQSH}")"
 unset DBUS_SESSION_BUS_ADDRESS
 export TMPDIR="/dev/shm/${USER}/tmp"
 export XDG_RUNTIME_DIR="/dev/shm/${USER}/xdg"
-# The wipe goes through `podman unshare`: an image layer under root/overlay/*/diff is owned by
+# The wipe goes through 'podman unshare': an image layer under root/overlay/*/diff is owned by
 # a SUBUID, so a plain rm cannot touch it and leaves a half-deleted store the next build
 # dies on. unshare enters the user namespace where those subuids map to this user.
 podman unshare rm -rf "/dev/shm/${USER}/root" "/dev/shm/${USER}/runroot" 2>/dev/null || true
@@ -37,7 +37,7 @@ mkdir -p "${TMPDIR}"
 mkdir -p -m 0700 "${XDG_RUNTIME_DIR}"
 
 # DaCe: resolve the TIP of extended HERE and pass the sha in. The Dockerfile cannot do this -- its
-# layer cache keys on the command string, so a `--branch extended` clone is reused forever and the
+# layer cache keys on the command string, so a '--branch extended' clone is reused forever and the
 # image ages into a pin nothing records. Resolving outside makes the sha part of the cache key, so
 # the layer rebuilds exactly when extended moves and never otherwise.
 DACE_COMMIT="${DACE_COMMIT:-$(git ls-remote https://github.com/spcl/dace.git refs/heads/extended | cut -f1)}"
@@ -59,9 +59,9 @@ if [[ -d "${GIT_MIRRORS}" ]]; then
 fi
 
 # Base image cache on scratch. The podman LAYER store cannot live there: capstor, iopsstor and the
-# NFS home all reject user xattrs, so `overlay` and `fuse-overlayfs` fail on lsetxattr and `vfs`
+# NFS home all reject user xattrs, so 'overlay' and 'fuse-overlayfs' fail on lsetxattr and 'vfs'
 # fails creating its pivot dir under a subuid (all three measured). The base image can, because a
-# `dir:` tree is plain files. That is the part worth caching -- a 30-52 GB pull from a registry per
+# 'dir:' tree is plain files. That is the part worth caching -- a 30-52 GB pull from a registry per
 # job, on a store that is wiped every time because the nodes are diskless and it lives in RAM.
 #
 # Miss: pull over the network as before, then copy out for next time; the build still reads the

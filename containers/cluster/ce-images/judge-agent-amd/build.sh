@@ -28,7 +28,7 @@ mkdir -p "$(dirname "${OUTPUT_SQSH}")"
 unset DBUS_SESSION_BUS_ADDRESS
 export TMPDIR="/dev/shm/${USER}/tmp"
 export XDG_RUNTIME_DIR="/dev/shm/${USER}/xdg"
-# The wipe goes through `podman unshare`: an image layer under root/overlay/*/diff is owned by
+# The wipe goes through 'podman unshare': an image layer under root/overlay/*/diff is owned by
 # a subuid, not by this user, so a plain rm hits Permission denied and leaves a half-deleted
 # store the next build dies on. unshare enters the user namespace where those subuids map to
 # this user.
@@ -38,7 +38,7 @@ mkdir -p "${TMPDIR}"
 mkdir -p -m 0700 "${XDG_RUNTIME_DIR}"
 
 # DaCe: resolve the TIP of extended HERE and pass the sha in. The Dockerfile cannot do this --
-# its layer cache keys on the command string, so a `--branch extended` clone is reused forever
+# its layer cache keys on the command string, so a '--branch extended' clone is reused forever
 # and the image ages into a pin nothing records. Resolving outside makes the sha part of the
 # cache key, so the layer rebuilds exactly when extended moves and never otherwise.
 DACE_COMMIT="${DACE_COMMIT:-$(git ls-remote https://github.com/spcl/dace.git refs/heads/extended | cut -f1)}"
