@@ -37,7 +37,19 @@ mkdir -p -m 0700 "${XDG_RUNTIME_DIR}"
 
 cd "${REPO_ROOT}"
 # cgroupfs: with the systemd manager a dying logind session reaps podman mid-pull (silent rc=1).
-podman --cgroup-manager=cgroupfs build \
+# The git mirror, when one exists. Every clone in the build is rewritten to it (see the Dockerfile),
+# which is what finally took GitHub off the critical path: the rate limiter answers an
+# unauthenticated clone with a 401 under load, and the callers that died on it -- spack's in-process
+# package-repo clone, vLLM's CMake FetchContent of triton -- have no retry to give them. Refresh it
+# from a login node with containers/cluster/ce-images/mirror-repos.sh. Absent, the build still works and still talks to GitHub.
+MIRROR_ARGS=()
+GIT_MIRRORS="${GIT_MIRRORS:-${SCRATCH:-}/git-mirrors}"
+if [[ -d "${GIT_MIRRORS}" ]]; then
+  MIRROR_ARGS=(-v "${GIT_MIRRORS}:/git-mirrors:ro")
+  printf 'git mirror %s\n' "${GIT_MIRRORS}"
+fi
+
+podman --cgroup-manager=cgroupfs build "${MIRROR_ARGS[@]}" \
   --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
   -f "${SCRIPT_DIR}/Dockerfile" \
   -t "${IMAGE_TAG}" \

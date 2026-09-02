@@ -52,6 +52,11 @@ ARG LIBFABRIC_REF=v2.3.1
 ARG AWS_OFI_NCCL_REF=v1.20.0
 USER root
 
+# Every network git call goes through this, and where a mirror is mounted none of them
+# reaches GitHub at all. The `insteadOf` rewrite is what covers the callers the wrapper
+# cannot: spack clones its package repo in-process and vLLM's CMake FetchContent clones
+# triton itself, and both died on the same rate limiting with no retry of their own.
+# Conditional, so a build with no mirror mounted behaves exactly as it did before.
 # Every network git call goes through this. An unauthenticated clone or fetch from a busy egress
 # IP gets a 401, which git reports as `could not read Username for https://github.com`: it looks
 # like a credentials failure and is a transient one. GIT_TERMINAL_PROMPT=0 makes it fail instead
@@ -70,7 +75,11 @@ RUN set -eux; \
       '  n=$((n + 1))' \
       'done' \
       > /usr/local/bin/gitretry; \
-    chmod 0755 /usr/local/bin/gitretry
+    chmod 0755 /usr/local/bin/gitretry; \
+    if [ -d /git-mirrors ]; then \
+      git config --global "url./git-mirrors/.insteadOf" "https://github.com/"; \
+      git config --global --add safe.directory '*'; \
+    fi
 
 # The second list is libcxi's own configure.ac, transcribed: libconfig>=1.5, libuv>=1.18,
 # fuse>=2.9.7, yaml-0.1, libnl-3.0, numa>=2.0 and sensors/sensors.h are each a hard

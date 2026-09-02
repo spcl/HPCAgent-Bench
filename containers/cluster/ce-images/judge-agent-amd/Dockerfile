@@ -64,6 +64,11 @@ ENV LC_ALL=C \
     SPACK_DISABLE_LOCAL_CONFIG=true \
     SPACK_USER_CACHE_PATH=/opt/spack-cache
 
+# Every network git call goes through this, and where a mirror is mounted none of them
+# reaches GitHub at all. The `insteadOf` rewrite is what covers the callers the wrapper
+# cannot: spack clones its package repo in-process and vLLM's CMake FetchContent clones
+# triton itself, and both died on the same rate limiting with no retry of their own.
+# Conditional, so a build with no mirror mounted behaves exactly as it did before.
 # Every network git call goes through this. An unauthenticated clone or fetch from a busy egress
 # IP gets a 401, which git reports as `could not read Username for https://github.com`: it looks
 # like a credentials failure and is a transient one. GIT_TERMINAL_PROMPT=0 makes it fail instead
@@ -82,7 +87,11 @@ RUN set -eux; \
       '  n=$((n + 1))' \
       'done' \
       > /usr/local/bin/gitretry; \
-    chmod 0755 /usr/local/bin/gitretry
+    chmod 0755 /usr/local/bin/gitretry; \
+    if [ -d /git-mirrors ]; then \
+      git config --global "url./git-mirrors/.insteadOf" "https://github.com/"; \
+      git config --global --add safe.directory '*'; \
+    fi
 
 # ---------------------------------------------------------------------------------------------
 # 1. Base system packages.
@@ -277,10 +286,12 @@ RUN set -eux; \
     printf '%s\n' \
       'spack:' \
       '  concretizer:' \
-      '    unify: true' \
+      '    unify: when_possible' \
       '  packages:' \
       '    all:' \
-      "      require: \"%gcc@${GCC_VERSION}\"" \
+      "      prefer: [\"%gcc@${GCC_VERSION}\"]" \
+      '    yaksa:' \
+      "      require: [\"amdgpu_target=${ROCM_ARCH}\"]" \
       '  specs:' \
       "  - llvm@${LLVM_VERSION} +clang +flang +mlir +polly +lld +offload +libomptarget targets=amdgpu,nvptx,x86" \
       "  - mpich@4 +rocm amdgpu_target=${ROCM_ARCH} +fortran +hwloc" \
@@ -293,7 +304,7 @@ RUN set -eux; \
       '  - eigen' \
       '  - metis' \
       '  - parmetis' \
-      '  - scotch +mpi +metis' \
+      '  - scotch +mpi +esmumps' \
       '  - suite-sparse +openmp' \
       '  - superlu' \
       '  - superlu-dist +openmp +parmetis' \
@@ -789,6 +800,11 @@ RUN set -eux; \
         print('pandas', pandas.__version__); print('astunparse', astunparse.__version__)"; \
     } > /usr/local/share/image-provenance; \
     cat /usr/local/share/image-provenance
+
+# Drop the mirror rewrite from the SHIPPED image. It is a build-time convenience pointing at a
+# path that exists only while the mirror is mounted; left in /root/.gitconfig, every git clone a
+# user runs inside this container would silently rewrite to a directory that is not there.
+RUN git config --global --unset-all "url./git-mirrors/.insteadOf" || true
 
 WORKDIR /work
 
