@@ -32,7 +32,16 @@ FRAMEWORK_LANG: Dict[str, str] = {
     # ppcg's CUDA is hipified before it is compiled on a ROCm host, so the language -- and through
     # compilers.yaml the compiler -- follows the toolchain, not the tool (hpcagent_bench.ppcg_transform).
     "ppcg": gpu_backend(),
+    # The vendor-pinned pair: unlike bare ``ppcg`` these say which GPU they build for rather than
+    # asking the host, and this entry is what turns that into nvcc/hipcc through compilers.yaml.
+    "ppcg_cuda": "cuda",
+    "ppcg_hip": "hip",
 }
+
+#: The columns that compile PPCG's output. Their FRAMEWORK_LANG entry doubles as the vendor handed
+#: to :func:`hpcagent_bench.ppcg_transform.transformed_sources`, so the language a column builds and
+#: the target its sources were generated for cannot drift apart.
+PPCG_FRAMEWORKS: Tuple[str, ...] = ("ppcg", "ppcg_cuda", "ppcg_hip")
 
 #: framework -> forced compiler override; every cpp framework must be listed or it silently falls back to g++.
 #: ``pluto`` takes the LLVM C driver (``clang-pluto`` -- clang with an OpenMP spelling that works;
@@ -103,17 +112,18 @@ def _fptype(dtype_name: str) -> str:
 def _native_sources(cpp_backend: pathlib.Path, short: str, framework: str) -> List[pathlib.Path]:
     """The per-precision source files that compose ``lib<short>_<framework>.so``.
 
-    Every framework but ``pluto`` compiles what the translator emitted. ``pluto`` compiles what
-    POLYCC emitted FROM that -- generated here on demand -- because a Pluto column built from the
-    untransformed source is a clang column wearing Pluto's label, which is what this used to be.
-    Keyed on the framework rather than the language for exactly that reason: which sources a
-    column compiles is a property of the column, not of the file extension."""
+    Most frameworks compile what the translator emitted. The polyhedral columns do not: ``pluto``
+    compiles what POLYCC emitted FROM that and the PPCG columns what ppcg emitted, both generated
+    here on demand, because a Pluto column built from the untransformed source is a clang column
+    wearing Pluto's label, which is what this used to be. Keyed on the framework rather than the
+    language for exactly that reason: which sources a column compiles is a property of the column,
+    not of the file extension."""
     if framework == "pluto":
         from hpcagent_bench import pluto_transform
         return pluto_transform.transformed_sources(cpp_backend, short)
-    if framework == "ppcg":
+    if framework in PPCG_FRAMEWORKS:
         from hpcagent_bench import ppcg_transform
-        return ppcg_transform.transformed_sources(cpp_backend, short)
+        return ppcg_transform.transformed_sources(cpp_backend, short, FRAMEWORK_LANG[framework])
     ext = LANG_EXT[FRAMEWORK_LANG[framework]]
     return [cpp_backend / f"{short}_fp64.{ext}", cpp_backend / f"{short}_fp32.{ext}"]
 

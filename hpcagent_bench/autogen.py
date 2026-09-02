@@ -201,6 +201,13 @@ NATIVE_FRAMEWORKS = {
     "flang": "fortran",  # same emitted Fortran; the delta is the LLVM driver
     "polly": "cpp",
     "pluto": "cpp",
+    # The PPCG columns compile ppcg's OUTPUT, generated on demand from the ``_pluto_input.c`` the
+    # C target already writes, so like polly/pluto they add a wrapper entry and no new emitted
+    # source. Listed because this dict is what puts ``kernel_<fw>`` in the generated wrapper: with
+    # no entry the column resolves nothing and every run of it ends as status="error".
+    "ppcg": "cpp",
+    "ppcg_cuda": "cpp",
+    "ppcg_hip": "cpp",
 }
 #: language -> the numpyto ``--target`` that emits it (the C target writes BOTH
 #: ``.c`` and ``.cpp`` in one run; fortran has its own target).
