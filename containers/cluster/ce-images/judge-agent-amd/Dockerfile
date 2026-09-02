@@ -188,6 +188,12 @@ RUN set -eux; \
 # build_jobs is capped at 64 rather than left at nproc: llvm's and petsc's link steps at
 # 192-way parallelism are what turn a long build into an OOM-killed one. spack's own
 # default of min(nproc, 16) is the other direction, and costs hours here.
+# The package repo is fetched HERE rather than left to spack. Spack clones a `git:` repo entry
+# in-process, so that clone goes through no retry of any kind, and a rate-limited GitHub kills
+# it with a single warning line. The path written below is the repo's INNER directory, the one
+# holding repo.yaml: pointing at the clone root makes spack warn and carry on with NO packages,
+# then die twenty lines later as `no compiler configured`. The test makes a layout change fail
+# here, where the cause is legible, instead of there, where it is not.
 RUN set -eux; \
     git init -q "${SPACK_ROOT}"; \
     git -C "${SPACK_ROOT}" remote add origin https://github.com/spack/spack.git; \

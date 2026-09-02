@@ -131,10 +131,10 @@ Before submitting the example, verify that:
 
 - the Beverin `mi300` Slurm partition and Container Engine integration are
   available;
-- the inference EDF has been built and registered from
-  `containers/cluster/ce-images/inference`;
-- the AMD EDF has been built and registered from
-  `containers/cluster/ce-images/amd`;
+- the inference EDF has been built and registered from one of
+  `containers/cluster/ce-images/{vllm,vllm-0271,sglang}`;
+- the judge+agent EDF has been built and registered from
+  `containers/cluster/ce-images/judge-agent-amd`;
 - this repository and all configured input paths are mounted at the same path on
   every allocated node;
 - the model is accessible from the compute nodes, including any required model
