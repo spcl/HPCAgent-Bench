@@ -64,6 +64,34 @@ if [[ -e /dev/kfd ]]; then
   printf 'gpu devices handed to the build\n'
 fi
 
+# Base image cache on scratch. The podman LAYER store cannot live there: capstor, iopsstor and the
+# NFS home all reject user xattrs, so `overlay` and `fuse-overlayfs` fail on lsetxattr and `vfs`
+# fails creating its pivot dir under a subuid (all three measured). The base image can, because a
+# `dir:` tree is plain files. That is the part worth caching -- a 30-52 GB pull from a registry per
+# job, on a store that is wiped every time because the nodes are diskless and it lives in RAM.
+#
+# Miss: pull over the network as before, then copy out for next time; the build still reads the
+# copy already in the store, so this costs one write and never a second pull. Hit: read from
+# scratch. Staged through a temp dir and renamed, so two builds racing cannot leave a half-written
+# tree that later jobs would treat as a cache hit.
+BASE_CACHE="${BASE_CACHE:-${SCRATCH:?}/base-images}"
+base_dir="${BASE_CACHE}/$(printf '%s' "${BASE_IMAGE}" | tr '/:@' '___')"
+if [[ -f "${base_dir}/manifest.json" ]]; then
+  printf 'base image from cache %s\n' "${base_dir}"
+  BASE_IMAGE="dir:${base_dir}"
+elif podman pull -q "${BASE_IMAGE}" >/dev/null; then
+  staging="${base_dir}.staging.$$"
+  mkdir -p "${BASE_CACHE}"
+  rm -rf "${staging}"
+  if podman push -q "${BASE_IMAGE}" "dir:${staging}"; then
+    rm -rf "${base_dir}" && mv "${staging}" "${base_dir}" \
+      && printf 'base image cached to %s\n' "${base_dir}"
+  else
+    rm -rf "${staging}"
+    printf 'base image could not be cached; this build is unaffected\n'
+  fi
+fi
+
 podman --cgroup-manager=cgroupfs build "${MIRROR_ARGS[@]}" "${GPU_ARGS[@]}" \
   --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
   --build-arg "SHS_REF=${SHS_REF}" \
