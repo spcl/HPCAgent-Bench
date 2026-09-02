@@ -18,7 +18,7 @@ parameters:
     num_classes: 1000
 config:
   conv1_padding:
-    value: 0
+    value: 2
 init:
   arrays:
     x: (batch_size, 3, 224, 224)
