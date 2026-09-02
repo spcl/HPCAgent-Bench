@@ -164,7 +164,7 @@ jobs:
           sudo sysctl -w kernel.perf_event_paranoid=1 >/dev/null 2>&1 || true
           echo "HPCAGENT_BENCH_CI_PAPI_INSTALLED=1" >> "$GITHUB_ENV"
 
-      # Phase 0 runs BEFORE the heavy setup so a formatting slip fails in seconds. yapf /
+      # Phase 0 runs BEFORE the heavy setup so a formatting slip fails in seconds. ruff /
       # fprettify / clang-format ship as wheels (the clang-format wheel carries the binary), and
       # `--group linting` with no project argument installs those THREE and nothing else -- the
       # point of running this phase first is lost if it first resolves torch.

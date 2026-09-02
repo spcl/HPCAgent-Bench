@@ -24,6 +24,7 @@ This module owns the second edit plus the runtime helpers:
 * :func:`report_flags` -- resolve a block's optional ``report_ref`` the same way,
   giving the flags that make the compiler explain its vectorizer decisions.
 """
+
 import functools
 import glob
 import logging
@@ -81,7 +82,7 @@ def source_units(language: str, stem: str) -> Tuple[Tuple[str, str], ...]:
         raise KeyError(f"unknown language {language!r}; expected one of {sorted(LANG_EXT)}")
     device = (language, f"{stem}.{LANG_EXT[language]}")
     host = GPU_HOST_LANG.get(language)
-    return ((host, f"{stem}.{LANG_EXT[host]}"), device) if host else (device, )
+    return ((host, f"{stem}.{LANG_EXT[host]}"), device) if host else (device,)
 
 
 #: Language token -> the TRANSLATOR target that emits its reference. C and C++ share one emitter
@@ -134,8 +135,9 @@ def resolve_family(lang: str, requested: Optional[str] = None) -> str:
         if value and value not in COMPILER_FAMILIES:
             raise KeyError(f"unknown compiler {value!r} from {origin}; expected one of {family_names()}")
     if pin and requested and pin != requested:
-        logging.getLogger(__name__).info("compiler pin %s=%s overrides the submitted %r",
-                                         FAMILY_PIN_KEY.format(lang=lang), pin, requested)
+        logging.getLogger(__name__).info(
+            "compiler pin %s=%s overrides the submitted %r", FAMILY_PIN_KEY.format(lang=lang), pin, requested
+        )
     return pin or requested or default_family()
 
 
@@ -191,15 +193,9 @@ OFFLOAD_FAMILY: Dict[str, str] = {"openmp": "llvm", "openacc": "nvhpc"}
 
 #: ``(family, vendor)`` -> ``{model: flags constant name}``; an absent pair is an unsupported leg.
 OFFLOAD_REFS: Dict[Tuple[str, str], Dict[str, str]] = {
-    ("llvm", "nvidia"): {
-        "openmp": "OMP_TARGET_LLVM_NVIDIA"
-    },
-    ("llvm", "amd"): {
-        "openmp": "OMP_TARGET_LLVM_AMD"
-    },
-    ("nvhpc", "nvidia"): {
-        "openacc": "OPENACC_NVHPC_NVIDIA"
-    },
+    ("llvm", "nvidia"): {"openmp": "OMP_TARGET_LLVM_NVIDIA"},
+    ("llvm", "amd"): {"openmp": "OMP_TARGET_LLVM_AMD"},
+    ("nvhpc", "nvidia"): {"openacc": "OPENACC_NVHPC_NVIDIA"},
 }
 
 #: The C driver each offload LEG probes with, per ``(family, vendor)``. Deliberately NOT
@@ -240,8 +236,7 @@ OFFLOAD_ARCH_ENV = "HPCAGENT_BENCH_OFFLOAD_ARCH_{vendor}"
 #: surfaces only at RUN. So the probe links and runs, and prints 1 exactly when the region executed
 #: off-host.
 OFFLOAD_PROBE: Dict[str, str] = {
-    "openmp":
-    textwrap.dedent("""\
+    "openmp": textwrap.dedent("""\
         #include <stdio.h>
         #include <omp.h>
         int main(void) {
@@ -252,8 +247,7 @@ OFFLOAD_PROBE: Dict[str, str] = {
             return 0;
         }
         """),
-    "openacc":
-    textwrap.dedent("""\
+    "openacc": textwrap.dedent("""\
         #include <stdio.h>
         #include <openacc.h>
         int main(void) {
@@ -379,7 +373,7 @@ def offload_arch(model: str, vendor: str, *, run: bool = True) -> str:
     if pinned:
         return pinned if offload_probe(model, vendor, pinned, run=run) else ""
     if vendor == "amd":
-        candidates = (flags.detect_gfx(), )
+        candidates = (flags.detect_gfx(),)
     else:
         device = flags.detect_sm()
         capability = int(device[3:]) if device.startswith("sm_") else 0
@@ -582,7 +576,7 @@ def compiler_launcher() -> Tuple[str, ...]:
     if exe is None:
         return ()
     os.environ.setdefault("CCACHE_NAMESPACE", osinfo.cpu_model())
-    return (exe, )
+    return (exe,)
 
 
 def _render_argv(tokens: List[str], subst: Dict[str, str], *, cacheable_lang: Optional[str] = None) -> List[str]:
@@ -609,8 +603,8 @@ def _render_argv(tokens: List[str], subst: Dict[str, str], *, cacheable_lang: Op
 #: experimental and renamed to ``flang`` at graduation (LLVM 16); either spelling may be what
 #: a given distro snapshot shipped.
 COMPILER_ALIASES: Dict[str, Tuple[str, ...]] = {
-    "flang": ("flang-new", ),
-    "flang-new": ("flang", ),
+    "flang": ("flang-new",),
+    "flang-new": ("flang",),
 }
 
 #: Lowest driver major that can build what this driver's ``compilers.yaml`` block asks of it.
@@ -675,7 +669,7 @@ def resolve_compiler(name: str) -> Optional[str]:
 
     A candidate is skipped when it reports a major below :data:`COMPILER_MIN_MAJOR`, so a too-old
     default driver falls through to a versioned sibling that can actually compile."""
-    candidates = (name, ) + COMPILER_ALIASES.get(name, ())
+    candidates = (name,) + COMPILER_ALIASES.get(name, ())
     floor = COMPILER_MIN_MAJOR.get(name, -1)
     for cand in candidates:
         exe = shutil.which(cand)
@@ -698,7 +692,7 @@ def resolve_compiler(name: str) -> Optional[str]:
             for entry in entries:
                 if not entry.startswith(prefix):
                     continue
-                suffix = entry[len(prefix):]
+                suffix = entry[len(prefix) :]
                 if not suffix.isdigit():
                     continue
                 path = os.path.join(directory, entry)
@@ -762,14 +756,9 @@ def library_linkable(soname: str) -> bool:
     return (echoed not in ("", f"lib{soname}.so") and os.path.exists(echoed)) or resolve_library_dir(soname) is not None
 
 
-def subst_map(cc: str,
-              *,
-              baseline: str = "",
-              src: str = "",
-              obj: str = "",
-              objs: str = "",
-              lib: str = "",
-              exe: str = "") -> Dict[str, str]:
+def subst_map(
+    cc: str, *, baseline: str = "", src: str = "", obj: str = "", objs: str = "", lib: str = "", exe: str = ""
+) -> Dict[str, str]:
     """The token map a compile/link template renders against. Every key is always present:
     :func:`_render_argv` does a plain ``str.format``, so a template naming ``{exe}`` on a
     path that has none must still get an (empty) value rather than a ``KeyError``.
@@ -854,11 +843,9 @@ def _stdpar_backend_is_tbb(cc: str) -> bool:
     # Unresolved driver names spawn-fail into a False verdict, which silently drops -ltbb.
     exe = resolve_compiler(cc) or cc
     try:
-        r = subprocess.run([exe, "-x", "c++", "-E", "-"],
-                           input=probe,
-                           capture_output=True,
-                           text=True,
-                           timeout=_STDPAR_PROBE_TIMEOUT_S)
+        r = subprocess.run(
+            [exe, "-x", "c++", "-E", "-"], input=probe, capture_output=True, text=True, timeout=_STDPAR_PROBE_TIMEOUT_S
+        )
     except (OSError, subprocess.SubprocessError):
         return False
     return r.returncode == 0 and "__NPB_STDPAR_TBB__" in r.stdout
@@ -907,7 +894,7 @@ def openmp_link_for_block(block: Dict[str, Any], mode: Mode) -> Tuple[str, ...]:
     tokens = shlex.split(baseline)
     for flag in OPENMP_BASELINE_FLAGS:
         if flag in tokens:
-            return (flag, )
+            return (flag,)
     return ()
 
 
@@ -941,7 +928,8 @@ def _veclib_accepted(cc: str, flag: str, lang: str) -> bool:
                 [exe, flag, "-c", src, "-o", os.path.join(tmp, "veclib_probe.o")],
                 capture_output=True,
                 text=True,
-                timeout=_STDPAR_PROBE_TIMEOUT_S)
+                timeout=_STDPAR_PROBE_TIMEOUT_S,
+            )
         except (OSError, subprocess.SubprocessError):
             return False
         return r.returncode == 0
@@ -953,11 +941,13 @@ def _mimalloc_links(cc: str) -> bool:
     failure being prevented is `cannot find -lmimalloc`, which only the linker can report."""
     exe = resolve_compiler(cc) or cc
     try:
-        r = subprocess.run([exe, "-x", "c", "-", "-o", os.devnull, flags.LINK_MIMALLOC],
-                           input="int main(void){return 0;}\n",
-                           capture_output=True,
-                           text=True,
-                           timeout=_STDPAR_PROBE_TIMEOUT_S)
+        r = subprocess.run(
+            [exe, "-x", "c", "-", "-o", os.devnull, flags.LINK_MIMALLOC],
+            input="int main(void){return 0;}\n",
+            capture_output=True,
+            text=True,
+            timeout=_STDPAR_PROBE_TIMEOUT_S,
+        )
     except (OSError, subprocess.SubprocessError):
         return False
     return r.returncode == 0
@@ -1011,7 +1001,7 @@ def stdpar_link_flags(lang: str) -> Tuple[str, ...]:
 #: emit ``-fopenmp`` in its cflags, and passing that through would let an agent switch OpenMP on for
 #: its whole translation unit by requesting a library -- parallelism is the matrix's decision, and a
 #: submission that got it this way would not be comparable to any other.
-LIBRARY_COMPILE_PREFIXES = ("-I", )
+LIBRARY_COMPILE_PREFIXES = ("-I",)
 #: Tokens kept from ``pkg-config --libs``: a search path and a library name, nothing else.
 LIBRARY_LINK_PREFIXES = ("-L", "-l")
 
@@ -1130,11 +1120,13 @@ def library_links(lang: str, link_tokens: Tuple[str, ...]) -> bool:
     exe = resolve_compiler(block["cc"]) or block["cc"]
     probe = "int main(void){return 0;}\n"
     try:
-        r = subprocess.run([exe, "-x", PROBE_INPUT_LANG.get(lang, "c"), "-", "-o", os.devnull, *link_tokens],
-                           input=probe,
-                           capture_output=True,
-                           text=True,
-                           timeout=_STDPAR_PROBE_TIMEOUT_S)
+        r = subprocess.run(
+            [exe, "-x", PROBE_INPUT_LANG.get(lang, "c"), "-", "-o", os.devnull, *link_tokens],
+            input=probe,
+            capture_output=True,
+            text=True,
+            timeout=_STDPAR_PROBE_TIMEOUT_S,
+        )
     except (OSError, subprocess.SubprocessError):
         return False
     return r.returncode == 0
@@ -1178,8 +1170,14 @@ def isopar_capability() -> flags.AutoparProbe:
     """
     _cname, block = _compiler_for_lang(_load_compilers(), "cpp")
     composed = f"{baseline_flags('cpp')} {std_flag('cpp')}"
-    return flags.probe_autopar(block["cc"], composed, flags.NO_OUTLINE_PATTERN, flags.STDPAR_PROBE_SOURCE,
-                               flags.STDPAR_RUNTIME_CALL_PATTERN, ".cpp")
+    return flags.probe_autopar(
+        block["cc"],
+        composed,
+        flags.NO_OUTLINE_PATTERN,
+        flags.STDPAR_PROBE_SOURCE,
+        flags.STDPAR_RUNTIME_CALL_PATTERN,
+        ".cpp",
+    )
 
 
 def report_flags(lang: str, *, compiler: Optional[str] = None) -> str:
@@ -1213,7 +1211,7 @@ def report_flags(lang: str, *, compiler: Optional[str] = None) -> str:
 #: walking up from the file they are given, which a scratch copy defeats -- so it is named here and
 #: passed explicitly. Pointing at the FILE (rather than restating ``ColumnLimit: 120``) is what keeps
 #: the report copy at the same width as the rest of the tree: there is one column-limit decision per
-#: formatter (``.clang-format`` / ``.style.yapf`` / ``.fprettify.rc``), and this reuses the C/C++ one.
+#: formatter (``.clang-format`` / ``[tool.ruff]`` / ``.fprettify.rc``), and this reuses the C/C++ one.
 CLANG_FORMAT_STYLE: pathlib.Path = paths.ROOT / ".clang-format"
 
 #: Languages the LLVM source tools can read. CUDA/HIP are included because clang parses both.
@@ -1251,9 +1249,11 @@ def column_limit() -> int:
 #:
 #: Deliberately absent: ``readability-*`` / ``modernize-*`` / ``cppcoreguidelines-*``, which grade
 #: hand-maintained style on code no human maintains. Nothing here is ever run with ``--fix``.
-GENERATED_TIDY_CHECKS: str = ("-*,clang-analyzer-core.*,clang-analyzer-deadcode.*,bugprone-integer-division,"
-                              "bugprone-misplaced-widening-cast,bugprone-sizeof-expression,"
-                              "bugprone-undefined-memory-manipulation,performance-*")
+GENERATED_TIDY_CHECKS: str = (
+    "-*,clang-analyzer-core.*,clang-analyzer-deadcode.*,bugprone-integer-division,"
+    "bugprone-misplaced-widening-cast,bugprone-sizeof-expression,"
+    "bugprone-undefined-memory-manipulation,performance-*"
+)
 
 
 def annotate_generated(source: pathlib.Path, lang: str) -> str:
@@ -1276,10 +1276,12 @@ def annotate_generated(source: pathlib.Path, lang: str) -> str:
         return text
     fmt = shutil.which("clang-format")
     if fmt is not None and CLANG_FORMAT_STYLE.is_file():
-        proc = subprocess.run([fmt, f"-style=file:{CLANG_FORMAT_STYLE}", f"-assume-filename={source.name}"],
-                              input=text,
-                              capture_output=True,
-                              text=True)
+        proc = subprocess.run(
+            [fmt, f"-style=file:{CLANG_FORMAT_STYLE}", f"-assume-filename={source.name}"],
+            input=text,
+            capture_output=True,
+            text=True,
+        )
         if proc.returncode == 0:
             text = proc.stdout
     return f"{text}\n{tidy_footer(source, lang)}"
@@ -1333,8 +1335,7 @@ def compile_variant(
     :raises FileNotFoundError: when no source can be resolved.
     """
     if lang not in LANG_EXT:
-        raise KeyError(f"unknown language {lang!r}; expected one of "
-                       f"{sorted(LANG_EXT)}")
+        raise KeyError(f"unknown language {lang!r}; expected one of {sorted(LANG_EXT)}")
 
     compilers = _load_compilers()
     if compiler is not None:
@@ -1347,8 +1348,7 @@ def compile_variant(
     if src is None:
         variants = [p for (vl, p) in discover_variants(spec) if vl == lang]
         if not variants:
-            raise FileNotFoundError(f"{spec.short_name}: no {lang} variant under "
-                                    f"{_backend_dir(spec)}")
+            raise FileNotFoundError(f"{spec.short_name}: no {lang} variant under {_backend_dir(spec)}")
         src = variants[0]
 
     baseline = _resolve_baseline(block, mode)
@@ -1418,12 +1418,14 @@ wrap_kernel` dlopens. Flags resolve from :mod:`hpcagent_bench.flags` via
         src = pathlib.Path(src)
         obj = build_dir / f"{src.name}.o"
         baseline = _resolve_baseline(block, mode)
-        subst = subst_map(block["cc"],
-                          baseline=f"{baseline} {extra_flags}".strip() if extra_flags else baseline,
-                          src=src,
-                          obj=obj,
-                          objs=obj,
-                          lib=out_so)
+        subst = subst_map(
+            block["cc"],
+            baseline=f"{baseline} {extra_flags}".strip() if extra_flags else baseline,
+            src=src,
+            obj=obj,
+            objs=obj,
+            lib=out_so,
+        )
         cmds.append(_render_argv(block["compile"], subst, cacheable_lang=lang))
         objs.append(str(obj))
         langs_present.add(lang)
@@ -1482,15 +1484,15 @@ def mpi_wrapper_flags(wrapper_cc: str) -> Tuple[List[str], List[str]]:
 
 
 def build_mpi_executable_commands(
-        kernel_sources: List[Tuple[str, pathlib.Path]],
-        driver_src: pathlib.Path,
-        out_exe: pathlib.Path,
-        *,
-        mode: Mode = Mode.SINGLE_CORE,
-        cc_override: Optional[Dict[str, str]] = None,
-        extra_compile: Sequence[str] = (),
-        extra_link: Sequence[str] = (),
-        driver_lang: str = "c",
+    kernel_sources: List[Tuple[str, pathlib.Path]],
+    driver_src: pathlib.Path,
+    out_exe: pathlib.Path,
+    *,
+    mode: Mode = Mode.SINGLE_CORE,
+    cc_override: Optional[Dict[str, str]] = None,
+    extra_compile: Sequence[str] = (),
+    extra_link: Sequence[str] = (),
+    driver_lang: str = "c",
 ) -> List[List[str]]:
     """Compile the agent ``kernel_mpi`` source(s) + the harness driver and LINK AN EXECUTABLE.
 
@@ -1528,12 +1530,14 @@ def build_mpi_executable_commands(
         _, block = _compiler_for_lang(compilers, lang, mpi=True)
         src = pathlib.Path(src)
         obj = build_dir / f"{src.name}.o"
-        subst = subst_map(cc_override.get(lang, block["cc"]),
-                          baseline=_resolve_baseline(block, mode),
-                          src=src,
-                          obj=obj,
-                          objs=obj,
-                          exe=out_exe)
+        subst = subst_map(
+            cc_override.get(lang, block["cc"]),
+            baseline=_resolve_baseline(block, mode),
+            src=src,
+            obj=obj,
+            objs=obj,
+            exe=out_exe,
+        )
         argv = _render_argv(block["compile"], subst)
         argv.extend(extra_compile)  # -I/-D dependency tokens on the compile step
         cmds.append(argv)
@@ -1552,15 +1556,15 @@ def build_mpi_executable_commands(
 
 
 def build_shared_lib_commands(
-        lang: str,
-        src: pathlib.Path,
-        out_so: pathlib.Path,
-        *,
-        mode: Mode = Mode.SINGLE_CORE,
-        compiler: Optional[str] = None,
-        extra_compile: Sequence[str] = (),
-        extra_link: Sequence[str] = (),
-        extra_sources: Sequence[pathlib.Path] = (),
+    lang: str,
+    src: pathlib.Path,
+    out_so: pathlib.Path,
+    *,
+    mode: Mode = Mode.SINGLE_CORE,
+    compiler: Optional[str] = None,
+    extra_compile: Sequence[str] = (),
+    extra_link: Sequence[str] = (),
+    extra_sources: Sequence[pathlib.Path] = (),
 ) -> List[List[str]]:
     """Compile+link argv(s) that turn one source file into ``out_so`` -- the
     sandbox path (caller-chosen, workdir-local paths; the repo tree is untouched).

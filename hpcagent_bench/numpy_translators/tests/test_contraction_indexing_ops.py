@@ -5,16 +5,36 @@ structure or intrinsic, so a regression points straight at the cause. The
 end-to-end numerical correctness across c / cpp / fortran / numba / jax is
 covered by ``test_contraction_indexing_ops_e2e`` via the standalone oracle.
 """
+
 import ast
 
 import pytest
 
-from numpyto_common.lib_nodes import (NP_CALL_EXPANDERS, _matmul_result_shape, _parse_einsum_subscripts, dims_agree,
-                                      expand_cumprod, expand_cumsum, expand_diagonal, expand_einsum, expand_inner,
-                                      expand_linalg_norm, expand_median, expand_reshape, expand_roll, expand_tensordot,
-                                      expand_trace, expand_tril, expand_triu, expand_vdot, shape_exprs_equal,
-                                      shape_exprs_differ_numerically, substitute_dim_aliases, sympify_shape)
-from numpyto_common.lowering import (_EllipsisExpander, _FullCallHoister, _MatmulCallRewriter, _ReshapeMethodRewriter)
+from numpyto_common.lib_nodes import (
+    NP_CALL_EXPANDERS,
+    _matmul_result_shape,
+    _parse_einsum_subscripts,
+    dims_agree,
+    expand_cumprod,
+    expand_cumsum,
+    expand_diagonal,
+    expand_einsum,
+    expand_inner,
+    expand_linalg_norm,
+    expand_median,
+    expand_reshape,
+    expand_roll,
+    expand_tensordot,
+    expand_trace,
+    expand_tril,
+    expand_triu,
+    expand_vdot,
+    shape_exprs_equal,
+    shape_exprs_differ_numerically,
+    substitute_dim_aliases,
+    sympify_shape,
+)
+from numpyto_common.lowering import _EllipsisExpander, _FullCallHoister, _MatmulCallRewriter, _ReshapeMethodRewriter
 
 
 def _name(n):
@@ -127,12 +147,14 @@ def test_a_conv_extent_is_refuted_numerically_not_symbolically(monkeypatch):
 def test_the_numeric_probe_refutes_a_pair_that_agrees_at_the_first_point():
     # ``2 * a`` and ``a + 7`` both give 14 at a = 7, which is why one point is not enough.
     import sympy
+
     assert shape_exprs_differ_numerically(sympy.sympify("2 * a"), sympy.sympify("a + 7"))
 
 
 def test_the_numeric_probe_never_refutes_an_equal_pair():
     # The refutation may only ever answer False faster -- never claim a difference that is not there.
     import sympy
+
     assert not shape_exprs_differ_numerically(sympy.sympify("4 * (4 * e)"), sympy.sympify("16 * e"))
     # A floor on both sides is where a careless probe would round its way to a false refutation.
     assert not shape_exprs_differ_numerically(sympy.sympify("2 * (c // g)"), sympy.sympify("(c // g) + (c // g)"))
@@ -178,8 +200,11 @@ def test_substitute_dim_aliases_stops_on_a_self_referential_def():
 def test_matmul_result_shape_accepts_an_aliased_contraction_dim():
     aliases = {"channels": "embed_dim"}
     assert _matmul_result_shape(("seq", "batch", "channels"), ("embed_dim", "3 * embed_dim")) is None
-    assert _matmul_result_shape(("seq", "batch", "channels"), ("embed_dim", "3 * embed_dim"),
-                                aliases) == ("seq", "batch", "3 * embed_dim")
+    assert _matmul_result_shape(("seq", "batch", "channels"), ("embed_dim", "3 * embed_dim"), aliases) == (
+        "seq",
+        "batch",
+        "3 * embed_dim",
+    )
 
 
 def test_matmul_result_shape_aliased_batch_dim_still_checks_rank():
@@ -224,8 +249,7 @@ def _kir(kernel_name, **arrays):
 
 def test_batched_matmul_desugars_to_gemm_loop():
     # The canonical SeisSol batched GEMM: 3-D ``I`` @ shared 2-D ``star``.
-    src = ("def kernel(Q, I, star):\n"
-           "    Q[:] = Q + I @ star\n")
+    src = "def kernel(Q, I, star):\n    Q[:] = Q + I @ star\n"
     kir = _kir("kernel", Q=("b", "n", "q"), I=("b", "n", "q"), star=("q", "q"))
     out = desugar_for_python_backend(src, kir)
     tree = ast.parse(out)
@@ -242,8 +266,7 @@ def test_batched_matmul_desugars_to_gemm_loop():
 
 def test_2d_matmul_left_verbatim():
     # An ordinary 2-D GEMM is supported by numba/pythran -> emit unchanged.
-    src = ("def kernel(C, A, B):\n"
-           "    C[:] = A @ B\n")
+    src = "def kernel(C, A, B):\n    C[:] = A @ B\n"
     kir = _kir("kernel", C=("m", "n"), A=("m", "k"), B=("k", "n"))
     assert desugar_for_python_backend(src, kir) == src
 
@@ -254,8 +277,7 @@ def test_reshape_wrapped_matmul_lowers_to_contraction():
     # leading axis would miscompile), but the dedicated reshape-matmul pass
     # recognises the unit-dim-insertion form and lowers it to a contraction loop
     # into a fresh temp (so the ``A = f(A)`` WAR is safe).
-    src = ("def kernel(NR, NQ, NP, A, C4):\n"
-           "    A[:] = np.reshape(np.reshape(A, (NR, NQ, 1, NP)) @ C4, (NR, NQ, NP))\n")
+    src = "def kernel(NR, NQ, NP, A, C4):\n    A[:] = np.reshape(np.reshape(A, (NR, NQ, 1, NP)) @ C4, (NR, NQ, NP))\n"
     kir = _kir("kernel", A=("NR", "NQ", "NP"), C4=("NP", "NP"))
     out = desugar_for_python_backend(src, kir)
     assert "@" not in out and "reshape" not in out and "for " in out
@@ -264,14 +286,16 @@ def test_reshape_wrapped_matmul_lowers_to_contraction():
 def test_no_matmul_returned_bytewise_unchanged():
     # No trigger token at all -> byte-for-byte identity (no reparse churn).
     src = "def kernel(a, b):\n    a[:] = a + b  # comment kept\n"
-    assert desugar_for_python_backend(src, _kir("kernel", a=("n", ), b=("n", ))) is src
+    assert desugar_for_python_backend(src, _kir("kernel", a=("n",), b=("n",))) is src
 
 
 def test_np_pad_edge_inlined_to_loop_nest():
     # numba / pythran cannot type np.pad -> inline an edge-pad copy loop nest.
-    src = ("def kernel(in_grid, out_grid, N, R):\n"
-           "    padded = np.pad(in_grid, pad_width=R, mode='edge')\n"
-           "    out_grid[:] = padded[:N, :N, :N]\n")
+    src = (
+        "def kernel(in_grid, out_grid, N, R):\n"
+        "    padded = np.pad(in_grid, pad_width=R, mode='edge')\n"
+        "    out_grid[:] = padded[:N, :N, :N]\n"
+    )
     kir = _kir("kernel", in_grid=("N", "N", "N"), out_grid=("N", "N", "N"))
     out = desugar_for_python_backend(src, kir)
     assert "np.pad" not in out, "np.pad must be expanded"
@@ -281,8 +305,10 @@ def test_np_pad_edge_inlined_to_loop_nest():
 
 def test_np_pad_per_axis_tuple_widths():
     # vector stencils use per-axis ((R,R),...,(0,0)) widths -> last axis unpadded.
-    src = ("def kernel(in_grid, out_grid, N, R):\n"
-           "    padded = np.pad(in_grid, pad_width=((R, R), (R, R), (R, R), (0, 0)), mode='edge')\n")
+    src = (
+        "def kernel(in_grid, out_grid, N, R):\n"
+        "    padded = np.pad(in_grid, pad_width=((R, R), (R, R), (R, R), (0, 0)), mode='edge')\n"
+    )
     kir = _kir("kernel", in_grid=("N", "N", "N", "C"))
     out = desugar_for_python_backend(src, kir)
     assert "np.pad" not in out and out.count("for ") >= 4  # rank-4 nest
@@ -290,8 +316,7 @@ def test_np_pad_per_axis_tuple_widths():
 
 def test_einsum_inlined_to_contraction_loops():
     # The SeisSol tensor contraction: 3-operand einsum nested in an add.
-    src = ("def kernel(Q, I, kDivM, star):\n"
-           "    Q[:] = Q + np.einsum('dkl,blq,dqp->bkp', kDivM, I, star)\n")
+    src = "def kernel(Q, I, kDivM, star):\n    Q[:] = Q + np.einsum('dkl,blq,dqp->bkp', kDivM, I, star)\n"
     kir = _kir("kernel", Q=("b", "k", "p"), I=("b", "l", "q"), kDivM=("d", "k", "l"), star=("d", "q", "p"))
     out = desugar_for_python_backend(src, kir)
     assert "einsum" not in out, "einsum must be expanded"
@@ -326,9 +351,8 @@ def test_einsum_transpose_no_summation():
 def test_einsum_seissol_three_operand():
     st = {"g": ("D", "KK", "L"), "h": ("NB", "L", "Q"), "c": ("D", "Q", "P")}
     out = _unparse(
-        expand_einsum(_name("out"),
-                      [ast.Constant("dkl,blq,dqp->bkp"),
-                       _name("g"), _name("h"), _name("c")], st))
+        expand_einsum(_name("out"), [ast.Constant("dkl,blq,dqp->bkp"), _name("g"), _name("h"), _name("c")], st)
+    )
     # b, k, p are output loops; d, l, q are summed inner loops.
     for v in ("__es_b", "__es_k", "__es_p", "__es_d", "__es_l", "__es_q"):
         assert f"for {v} in range" in out
@@ -343,27 +367,28 @@ def test_einsum_seissol_three_operand():
 def test_tensordot_axes1_is_matmul_contraction():
     st = {"a": ("M", "K"), "b": ("K", "N")}
     out = _unparse(
-        expand_tensordot(_name("out"), [_name("a"), _name("b")],
-                         st,
-                         kwargs=[ast.keyword(arg="axes", value=ast.Constant(1))]))
+        expand_tensordot(
+            _name("out"), [_name("a"), _name("b")], st, kwargs=[ast.keyword(arg="axes", value=ast.Constant(1))]
+        )
+    )
     assert "out[__es_a, __es_c] +=" in out  # contracts the shared K axis
 
 
 def test_inner_rank1_is_dot():
-    st = {"u": ("K", ), "v": ("K", )}
+    st = {"u": ("K",), "v": ("K",)}
     out = _unparse(expand_inner(_name("s"), [_name("u"), _name("v")], st))
     assert "s = 0.0" in out and "s += u[__r0] * v[__r0]" in out
 
 
 def test_vdot_real_no_conjugate():
     # Real operands: no conj() call (CONJG/__npb_conj is invalid on a real scalar).
-    st = {"u": ("K", ), "v": ("K", )}
+    st = {"u": ("K",), "v": ("K",)}
     out = _unparse(expand_vdot(_name("s"), [_name("u"), _name("v")], st, local_dtypes={}))
     assert "conj" not in out and "s += u[__vd] * v[__vd]" in out
 
 
 def test_vdot_complex_conjugates_first_operand():
-    st = {"u": ("K", ), "v": ("K", )}
+    st = {"u": ("K",), "v": ("K",)}
     out = _unparse(expand_vdot(_name("s"), [_name("u"), _name("v")], st, local_dtypes={"u": "complex128"}))
     assert "np.conj(u[__vd])" in out
 
@@ -389,21 +414,23 @@ def test_diagonal_copies_diagonal():
 
 
 def test_cumsum_1d_prefix_recurrence():
-    out = _unparse(expand_cumsum(_name("out"), [_name("a")], {"a": ("N", )}))
+    out = _unparse(expand_cumsum(_name("out"), [_name("a")], {"a": ("N",)}))
     assert "out[0] = a[0]" in out
     assert "out[__cs0] = out[__cs0 - 1] + a[__cs0]" in out
     assert "range(1, N)" in out
 
 
 def test_cumprod_uses_mult():
-    out = _unparse(expand_cumprod(_name("out"), [_name("a")], {"a": ("N", )}))
+    out = _unparse(expand_cumprod(_name("out"), [_name("a")], {"a": ("N",)}))
     assert "out[__cs0] = out[__cs0 - 1] * a[__cs0]" in out
 
 
 def test_cumsum_axis1_scans_inner_axis():
     out = _unparse(
-        expand_cumsum(_name("out"), [_name("a")], {"a": ("M", "N")},
-                      kwargs=[ast.keyword(arg="axis", value=ast.Constant(1))]))
+        expand_cumsum(
+            _name("out"), [_name("a")], {"a": ("M", "N")}, kwargs=[ast.keyword(arg="axis", value=ast.Constant(1))]
+        )
+    )
     # axis 0 is the outer loop; the scan recurrence runs along axis 1.
     assert "for __cs0 in range(M):" in out
     assert "out[__cs0, __cs1] = out[__cs0, __cs1 - 1] + a[__cs0, __cs1]" in out
@@ -416,7 +443,7 @@ def test_cumsum_axis1_scans_inner_axis():
 
 def test_median_sorts_and_picks_middle():
     allocs = {}
-    out = _unparse(expand_median(_name("s"), [_name("a")], {"a": ("N", )}, fresh_local_allocs=allocs))
+    out = _unparse(expand_median(_name("s"), [_name("a")], {"a": ("N",)}, fresh_local_allocs=allocs))
     assert "__md_buf" in allocs  # scratch buffer registered
     assert "while" in out  # the in-place sort routine
     assert "N // 2" in out  # middle index
@@ -429,7 +456,7 @@ def test_median_sorts_and_picks_middle():
 
 
 def test_roll_uses_modular_source_index():
-    out = _unparse(expand_roll(_name("out"), [_name("a"), ast.Constant(3)], {"a": ("N", )}))
+    out = _unparse(expand_roll(_name("out"), [_name("a"), ast.Constant(3)], {"a": ("N",)}))
     # ((i - shift) % N + N) % N keeps the source index non-negative.
     assert "out[__rl0] = a[((__rl0 - 3) % N + N) % N]" in out
 
@@ -521,7 +548,7 @@ def test_linalg_norm_ord1_inf_vector_and_matrix():
     ord=inf -> max|v| / max row abs-sum, all without sqrt. A POSITIONAL ord must
     not be misread as ``axis`` (the pre-fix bug returned the L2 norm); an
     unsupported ord or a >2-D operand raises rather than miscompute."""
-    vec = {"a": ("N", )}
+    vec = {"a": ("N",)}
     l1 = _unparse(expand_linalg_norm(_name("s"), [_name("a"), ast.Constant(value=1)], vec))
     assert "abs(" in l1 and "sqrt" not in l1  # sum of |v|, not sqrt(sum v^2)
     # ``np.inf`` reaches the expander as the lowered Name("INFINITY").
@@ -542,16 +569,20 @@ def test_linalg_norm_ord1_inf_vector_and_matrix():
 
 def _oracle():
     import shutil
+
     if not (shutil.which("gcc") and shutil.which("gfortran") and shutil.which("g++")):
         pytest.skip("gcc/g++/gfortran needed for the native numerical check")
     import numpy as np  # noqa: F401
+
     try:
         import _op_oracle  # tests/ is on sys.path under pytest's rootdir
     except ImportError:
         import importlib.util
         import pathlib
-        spec = importlib.util.spec_from_file_location("_op_oracle",
-                                                      pathlib.Path(__file__).resolve().parent / "_op_oracle.py")
+
+        spec = importlib.util.spec_from_file_location(
+            "_op_oracle", pathlib.Path(__file__).resolve().parent / "_op_oracle.py"
+        )
         _op_oracle = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(_op_oracle)
     return _op_oracle
@@ -580,119 +611,132 @@ def _assert_ok(status, label):
 
 #: (id, numpy source, func, input shapes/arrays, output shape, syms, sym-shapes).
 #: Output is read from the kernel's last param (an OUT buffer written in place).
-@pytest.mark.parametrize("label,src,func,ins,out_shape,syms,shapes", [
-    ("matmul_call", "import numpy as np\ndef f(a,b,out):\n    out[:] = np.matmul(a, b)\n", "f", [("a", (4, 6)),
-                                                                                                 ("b", (6, 5))],
-     (4, 5), {
-         "M": 4,
-         "K": 6,
-         "N": 5
-     }, {
-         "a": "(M, K)",
-         "b": "(K, N)",
-         "out": "(M, N)"
-     }),
-    ("batched_both", "import numpy as np\ndef f(a,b,out):\n    out[:] = a @ b\n", "f", [("a", (3, 4, 6)),
-                                                                                        ("b", (3, 6, 5))], (3, 4, 5), {
-                                                                                            "NB": 3,
-                                                                                            "M": 4,
-                                                                                            "K": 6,
-                                                                                            "N": 5
-                                                                                        }, {
-                                                                                            "a": "(NB, M, K)",
-                                                                                            "b": "(NB, K, N)",
-                                                                                            "out": "(NB, M, N)"
-                                                                                        }),
-    ("einsum_seissol", "import numpy as np\ndef f(g,h,c,out):\n    out[:] = np.einsum('dkl,blq,dqp->bkp', g, h, c)\n",
-     "f", [("g", (2, 3, 4)), ("h", (2, 4, 3)), ("c", (2, 3, 2))], (2, 3, 2), {
-         "DD": 2,
-         "KK": 3,
-         "LL": 4,
-         "NB": 2,
-         "QQ": 3,
-         "PP": 2
-     }, {
-         "g": "(DD, KK, LL)",
-         "h": "(NB, LL, QQ)",
-         "c": "(DD, QQ, PP)",
-         "out": "(NB, KK, PP)"
-     }),
-    ("trace", "import numpy as np\ndef f(a,out):\n    s = np.trace(a)\n    out[0] = s\n", "f", [("a", (5, 5))], (1, ), {
-        "M": 5
-    }, {
-        "a": "(M, M)",
-        "out": "(1,)"
-    }),
-    ("cumsum_axis1", "import numpy as np\ndef f(a,out):\n    out[:] = np.cumsum(a, axis=1)\n", "f", [("a", (4, 5))],
-     (4, 5), {
-         "M": 4,
-         "N": 5
-     }, {
-         "a": "(M, N)",
-         "out": "(M, N)"
-     }),
-    ("median_even", "import numpy as np\ndef f(a,out):\n    s = np.median(a)\n    out[0] = s\n", "f", [("a", (8, ))],
-     (1, ), {
-         "N": 8
-     }, {
-         "a": "(N,)",
-         "out": "(1,)"
-     }),
-    ("roll", "import numpy as np\ndef f(a,out):\n    out[:] = np.roll(a, 3)\n", "f", [("a", (8, ))], (8, ), {
-        "N": 8
-    }, {
-        "a": "(N,)",
-        "out": "(N,)"
-    }),
-    ("reshape_method", "import numpy as np\ndef f(a,out):\n    out[:] = a.reshape(3, 4)\n", "f", [("a", (12, ))],
-     (3, 4), {
-         "N": 12
-     }, {
-         "a": "(N,)",
-         "out": "(3, 4)"
-     }),
-    ("fancy_gather_2d", "import numpy as np\ndef f(xe,idx,out):\n    out[:] = xe[:, idx]\n", "f", [("xe", (4, 6)),
-                                                                                                   ("idx", "IDX")],
-     (4, 4), {
-         "M": 4,
-         "N": 6,
-         "K": 4
-     }, {
-         "xe": "(M, N)",
-         "idx": "(K,)",
-         "out": "(M, K)"
-     }),
-    ("ellipsis", "import numpy as np\ndef f(a,out):\n    out[:] = a[..., 0]\n", "f", [("a", (3, 4, 5))], (3, 4), {
-        "M": 3,
-        "N": 4,
-        "P": 5
-    }, {
-        "a": "(M, N, P)",
-        "out": "(M, N)"
-    }),
-    ("tril", "import numpy as np\ndef f(a,out):\n    out[:] = np.tril(a)\n", "f", [("a", (5, 5))], (5, 5), {
-        "M": 5
-    }, {
-        "a": "(M, M)",
-        "out": "(M, M)"
-    }),
-    ("norm_l1", "import numpy as np\ndef f(a,out):\n    out[0] = np.linalg.norm(a, 1)\n", "f", [("a", (6, ))], (1, ), {
-        "N": 6
-    }, {
-        "a": "(N,)",
-        "out": "(1,)"
-    }),
-    ("norm_linf", "import numpy as np\ndef f(a,out):\n    out[0] = np.linalg.norm(a, np.inf)\n", "f", [("a", (6, ))],
-     (1, ), {
-         "N": 6
-     }, {
-         "a": "(N,)",
-         "out": "(1,)"
-     }),
-],
-                         ids=lambda v: v if isinstance(v, str) and v.isidentifier() else "")
+@pytest.mark.parametrize(
+    "label,src,func,ins,out_shape,syms,shapes",
+    [
+        (
+            "matmul_call",
+            "import numpy as np\ndef f(a,b,out):\n    out[:] = np.matmul(a, b)\n",
+            "f",
+            [("a", (4, 6)), ("b", (6, 5))],
+            (4, 5),
+            {"M": 4, "K": 6, "N": 5},
+            {"a": "(M, K)", "b": "(K, N)", "out": "(M, N)"},
+        ),
+        (
+            "batched_both",
+            "import numpy as np\ndef f(a,b,out):\n    out[:] = a @ b\n",
+            "f",
+            [("a", (3, 4, 6)), ("b", (3, 6, 5))],
+            (3, 4, 5),
+            {"NB": 3, "M": 4, "K": 6, "N": 5},
+            {"a": "(NB, M, K)", "b": "(NB, K, N)", "out": "(NB, M, N)"},
+        ),
+        (
+            "einsum_seissol",
+            "import numpy as np\ndef f(g,h,c,out):\n    out[:] = np.einsum('dkl,blq,dqp->bkp', g, h, c)\n",
+            "f",
+            [("g", (2, 3, 4)), ("h", (2, 4, 3)), ("c", (2, 3, 2))],
+            (2, 3, 2),
+            {"DD": 2, "KK": 3, "LL": 4, "NB": 2, "QQ": 3, "PP": 2},
+            {"g": "(DD, KK, LL)", "h": "(NB, LL, QQ)", "c": "(DD, QQ, PP)", "out": "(NB, KK, PP)"},
+        ),
+        (
+            "trace",
+            "import numpy as np\ndef f(a,out):\n    s = np.trace(a)\n    out[0] = s\n",
+            "f",
+            [("a", (5, 5))],
+            (1,),
+            {"M": 5},
+            {"a": "(M, M)", "out": "(1,)"},
+        ),
+        (
+            "cumsum_axis1",
+            "import numpy as np\ndef f(a,out):\n    out[:] = np.cumsum(a, axis=1)\n",
+            "f",
+            [("a", (4, 5))],
+            (4, 5),
+            {"M": 4, "N": 5},
+            {"a": "(M, N)", "out": "(M, N)"},
+        ),
+        (
+            "median_even",
+            "import numpy as np\ndef f(a,out):\n    s = np.median(a)\n    out[0] = s\n",
+            "f",
+            [("a", (8,))],
+            (1,),
+            {"N": 8},
+            {"a": "(N,)", "out": "(1,)"},
+        ),
+        (
+            "roll",
+            "import numpy as np\ndef f(a,out):\n    out[:] = np.roll(a, 3)\n",
+            "f",
+            [("a", (8,))],
+            (8,),
+            {"N": 8},
+            {"a": "(N,)", "out": "(N,)"},
+        ),
+        (
+            "reshape_method",
+            "import numpy as np\ndef f(a,out):\n    out[:] = a.reshape(3, 4)\n",
+            "f",
+            [("a", (12,))],
+            (3, 4),
+            {"N": 12},
+            {"a": "(N,)", "out": "(3, 4)"},
+        ),
+        (
+            "fancy_gather_2d",
+            "import numpy as np\ndef f(xe,idx,out):\n    out[:] = xe[:, idx]\n",
+            "f",
+            [("xe", (4, 6)), ("idx", "IDX")],
+            (4, 4),
+            {"M": 4, "N": 6, "K": 4},
+            {"xe": "(M, N)", "idx": "(K,)", "out": "(M, K)"},
+        ),
+        (
+            "ellipsis",
+            "import numpy as np\ndef f(a,out):\n    out[:] = a[..., 0]\n",
+            "f",
+            [("a", (3, 4, 5))],
+            (3, 4),
+            {"M": 3, "N": 4, "P": 5},
+            {"a": "(M, N, P)", "out": "(M, N)"},
+        ),
+        (
+            "tril",
+            "import numpy as np\ndef f(a,out):\n    out[:] = np.tril(a)\n",
+            "f",
+            [("a", (5, 5))],
+            (5, 5),
+            {"M": 5},
+            {"a": "(M, M)", "out": "(M, M)"},
+        ),
+        (
+            "norm_l1",
+            "import numpy as np\ndef f(a,out):\n    out[0] = np.linalg.norm(a, 1)\n",
+            "f",
+            [("a", (6,))],
+            (1,),
+            {"N": 6},
+            {"a": "(N,)", "out": "(1,)"},
+        ),
+        (
+            "norm_linf",
+            "import numpy as np\ndef f(a,out):\n    out[0] = np.linalg.norm(a, np.inf)\n",
+            "f",
+            [("a", (6,))],
+            (1,),
+            {"N": 6},
+            {"a": "(N,)", "out": "(1,)"},
+        ),
+    ],
+    ids=lambda v: v if isinstance(v, str) and v.isidentifier() else "",
+)
 def test_contraction_indexing_ops_e2e(label, src, func, ins, out_shape, syms, shapes):
     import numpy as np
+
     no = _oracle()
     rng = np.random.default_rng(0)
     inputs = {}
@@ -708,24 +752,22 @@ def test_contraction_indexing_ops_e2e(label, src, func, ins, out_shape, syms, sh
 def test_triu_of_inline_full_mask_e2e():
     """The transformer causal mask verbatim: an inline ``np.full`` under an inline
     ``np.triu``, inside a BinOp. Its own test rather than a row in the table above,
-    because adding a row reflows the whole parametrize literal under yapf.
+    because adding a row reflows the whole parametrize literal under the formatter.
 
     ``exp`` turns the -inf band into an exact 0, so masking the WRONG triangle (or
     none at all) is a whole-magnitude disagreement with numpy, not drift."""
     import numpy as np
-    src = ("import numpy as np\n"
-           "def f(a,out):\n"
-           "    n = a.shape[0]\n"
-           "    out[:] = np.exp(a + np.triu(np.full((n, n), -np.inf), 1))\n")
+
+    src = (
+        "import numpy as np\n"
+        "def f(a,out):\n"
+        "    n = a.shape[0]\n"
+        "    out[:] = np.exp(a + np.triu(np.full((n, n), -np.inf), 1))\n"
+    )
     inputs = {"a": np.random.default_rng(0).random((5, 5))}
-    status = _oracle().run_op(src,
-                              "f",
-                              inputs, {"out": (5, 5)}, {"M": 5},
-                              shapes={
-                                  "a": "(M, M)",
-                                  "out": "(M, M)"
-                              },
-                              backends=_ALL)
+    status = _oracle().run_op(
+        src, "f", inputs, {"out": (5, 5)}, {"M": 5}, shapes={"a": "(M, M)", "out": "(M, M)"}, backends=_ALL
+    )
     _assert_ok(status, "triu_of_inline_full_mask")
 
 
@@ -740,8 +782,8 @@ def _reshape_src_index(order):
     and return the unparsed source subscript expression A[...]."""
     target = ast.Name(id="out", ctx=ast.Store())
     args = [_name("A")]
-    shape_table = {"A": ("N", ), "out": ("P", "Q")}
-    kwargs = ([ast.keyword(arg="order", value=ast.Constant(value=order))] if order else None)
+    shape_table = {"A": ("N",), "out": ("P", "Q")}
+    kwargs = [ast.keyword(arg="order", value=ast.Constant(value=order))] if order else None
     stmts = expand_reshape(target, args, shape_table, kwargs=kwargs)
     txt = _unparse(stmts)
     # The source read is ``A[<expr>]``; grab <expr>.
