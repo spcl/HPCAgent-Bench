@@ -36,14 +36,32 @@ from typing import Any, Callable, Dict, FrozenSet, Iterator, List, Optional, Seq
 
 from numpyto_common import dtypes
 
-from numpyto_common.ir import (ArrayDesc, KernelIR, ScalarDesc, SparseArrayDesc, SymbolDesc, stamp_symbol_assumptions)
-from numpyto_common.lib_nodes import (_const_int, _is_full_slice_elt, _iter_extent_of, _read_axis_keepdims, _slice_axes)
+from numpyto_common.ir import ArrayDesc, KernelIR, ScalarDesc, SparseArrayDesc, SymbolDesc, stamp_symbol_assumptions
+from numpyto_common.lib_nodes import _const_int, _is_full_slice_elt, _iter_extent_of, _read_axis_keepdims, _slice_axes
 from numpyto_common.ordered import OrderedSet
-from numpyto_common.numpy_desugar import (_ComplexAccessorToFunc, _DecomposeRollSlice, _DropValidationGuards,
-                                          _EighCallHoister, _EighLoopRewriter, _ElementalUfuncToPrimitive, _is_newaxis,
-                                          _FillDiagonalInline, _SpliceErrstate, _UfuncOutInline, _UfuncReduceToReducer,
-                                          REDUCE_FNS, _eigh_alias_names, _kind_of_dtype_str, expr_rank, fold_finfo_eps,
-                                          extent_tokens, name_value_pairs, rank_table, rewrite_curve_fit, shape_table)
+from numpyto_common.numpy_desugar import (
+    _ComplexAccessorToFunc,
+    _DecomposeRollSlice,
+    _DropValidationGuards,
+    _EighCallHoister,
+    _EighLoopRewriter,
+    _ElementalUfuncToPrimitive,
+    _is_newaxis,
+    _FillDiagonalInline,
+    _SpliceErrstate,
+    _UfuncOutInline,
+    _UfuncReduceToReducer,
+    REDUCE_FNS,
+    _eigh_alias_names,
+    _kind_of_dtype_str,
+    expr_rank,
+    fold_finfo_eps,
+    extent_tokens,
+    name_value_pairs,
+    rank_table,
+    rewrite_curve_fit,
+    shape_table,
+)
 from numpyto_common.tuple_desugar import desugar_tuples, fold_list_accumulators
 
 
@@ -133,13 +151,18 @@ class _FoldSliceLocals:
         folded: Set[str] = set()
         for stmt in body:
             binding = None
-            if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
-                    and _slice_call_args(stmt.value) is not None):
+            if (
+                isinstance(stmt, ast.Assign)
+                and len(stmt.targets) == 1
+                and isinstance(stmt.targets[0], ast.Name)
+                and _slice_call_args(stmt.value) is not None
+            ):
                 binding = (stmt.targets[0].id, _slice_from_call(stmt.value))
             else:
                 folded |= self._rewrite_uses(stmt, live)
             nested_blocks = [
-                vars(stmt).get(field) for field in ("body", "orelse", "finalbody")
+                vars(stmt).get(field)
+                for field in ("body", "orelse", "finalbody")
                 if isinstance(vars(stmt).get(field), list)
             ]
             for nested in nested_blocks:
@@ -180,16 +203,25 @@ def _slice_bound_names(body: List[ast.stmt]) -> Set[str]:
     out: Set[str] = set()
     for stmt in body:
         for node in ast.walk(stmt):
-            if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
-                    and _slice_call_args(node.value) is not None):
+            if (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and _slice_call_args(node.value) is not None
+            ):
                 out.add(node.targets[0].id)
     return out
 
 
 def _slice_call_args(value: ast.AST) -> Optional[List[ast.expr]]:
     """The argument list of a builtin ``slice(...)`` call, else ``None``."""
-    if (isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == "slice"
-            and not value.keywords and 1 <= len(value.args) <= 3):
+    if (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Name)
+        and value.func.id == "slice"
+        and not value.keywords
+        and 1 <= len(value.args) <= 3
+    ):
         return list(value.args)
     return None
 
@@ -221,9 +253,14 @@ def _drop_dead_slice_bindings(fn: ast.FunctionDef, folds: Set[str]) -> None:
             for field in ("body", "orelse", "finalbody"):
                 if hasattr(stmt, field):
                     setattr(stmt, field, prune(getattr(stmt, field)))
-            if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
-                    and stmt.targets[0].id in folds and stmt.targets[0].id not in live
-                    and _slice_call_args(stmt.value) is not None):
+            if (
+                isinstance(stmt, ast.Assign)
+                and len(stmt.targets) == 1
+                and isinstance(stmt.targets[0], ast.Name)
+                and stmt.targets[0].id in folds
+                and stmt.targets[0].id not in live
+                and _slice_call_args(stmt.value) is not None
+            ):
                 continue
             out.append(stmt)
         return out
@@ -266,14 +303,16 @@ class _ListRepeatToFull(ast.NodeTransformer):
         # the backends default it to double, and nqueens' bitmask stack came out as ``double | int``
         # -- rejected by gcc, and meaningless if it had compiled.
         dtype = "int64" if isinstance(elt.value, int) else "float64"
-        node.value = ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="full", ctx=ast.Load()),
-                              args=[ast.Tuple(elts=[count], ctx=ast.Load()), elt],
-                              keywords=[
-                                  ast.keyword(arg="dtype",
-                                              value=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()),
-                                                                  attr=dtype,
-                                                                  ctx=ast.Load()))
-                              ])
+        node.value = ast.Call(
+            func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="full", ctx=ast.Load()),
+            args=[ast.Tuple(elts=[count], ctx=ast.Load()), elt],
+            keywords=[
+                ast.keyword(
+                    arg="dtype",
+                    value=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=dtype, ctx=ast.Load()),
+                )
+            ],
+        )
         return node
 
 
@@ -331,17 +370,22 @@ class _ArrayLiteralToFill(ast.NodeTransformer):
             if attr is None:
                 return node
             dtype = ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=attr, ctx=ast.Load())
-        alloc = ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())],
-                           value=ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()),
-                                                             attr="empty",
-                                                             ctx=ast.Load()),
-                                          args=[ast.Tuple(elts=[ast.Constant(value=len(elts))], ctx=ast.Load())],
-                                          keywords=[ast.keyword(arg="dtype", value=dtype)]))
+        alloc = ast.Assign(
+            targets=[ast.Name(id=name, ctx=ast.Store())],
+            value=ast.Call(
+                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="empty", ctx=ast.Load()),
+                args=[ast.Tuple(elts=[ast.Constant(value=len(elts))], ctx=ast.Load())],
+                keywords=[ast.keyword(arg="dtype", value=dtype)],
+            ),
+        )
         stores = [
-            ast.Assign(targets=[
-                ast.Subscript(value=ast.Name(id=name, ctx=ast.Load()), slice=ast.Constant(value=k), ctx=ast.Store())
-            ],
-                       value=elt) for k, elt in enumerate(elts)
+            ast.Assign(
+                targets=[
+                    ast.Subscript(value=ast.Name(id=name, ctx=ast.Load()), slice=ast.Constant(value=k), ctx=ast.Store())
+                ],
+                value=elt,
+            )
+            for k, elt in enumerate(elts)
         ]
         return [ast.copy_location(stmt, node) for stmt in (alloc, *stores)]
 
@@ -352,8 +396,13 @@ def _array_literal(value: ast.expr) -> Optional[Tuple[List[ast.expr], Optional[a
     Any other keyword (``copy=``, ``order=``, ``ndmin=``) changes what the call builds, and a
     nested or starred element makes it either 2-D or of no static length -- none of those is the
     flat literal claimed here."""
-    if not (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute) and value.func.attr == "array"
-            and isinstance(value.func.value, ast.Name) and value.func.value.id in ("np", "numpy")):
+    if not (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Attribute)
+        and value.func.attr == "array"
+        and isinstance(value.func.value, ast.Name)
+        and value.func.value.id in ("np", "numpy")
+    ):
         return None
     if len(value.args) != 1 or not isinstance(value.args[0], (ast.List, ast.Tuple)) or not value.args[0].elts:
         return None
@@ -387,8 +436,9 @@ def _is_num_literal(node: ast.expr) -> bool:
     """A numeric literal, negated or not. ``True``/``False`` are ints to Python but a bool list is
     a mask, not a number, so they are excluded."""
     inner = node.operand if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)) else node
-    return (isinstance(inner, ast.Constant) and isinstance(inner.value, (int, float))
-            and not isinstance(inner.value, bool))
+    return (
+        isinstance(inner, ast.Constant) and isinstance(inner.value, (int, float)) and not isinstance(inner.value, bool)
+    )
 
 
 def _literal_elt_dtype(elts: List[ast.expr]) -> Optional[str]:
@@ -421,9 +471,12 @@ def _list_mutated_names(fn: ast.FunctionDef) -> FrozenSet[str]:
     / ``remove``, or a target of ``+=``. An array cannot stand in for any of those."""
     names: Set[str] = set()
     for node in ast.walk(fn):
-        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                and node.func.attr in ("append", "pop", "insert", "extend", "remove")
-                and isinstance(node.func.value, ast.Name)):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in ("append", "pop", "insert", "extend", "remove")
+            and isinstance(node.func.value, ast.Name)
+        ):
             names.add(node.func.value.id)
         elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
             names.add(node.target.id)
@@ -480,12 +533,14 @@ class _AxisReshapeToIndexing(ast.NodeTransformer):
             return node
         if name == "expand_dims":
             axis = axes[0] % (rank + 1)
-            return self._index(node.args[0],
-                               [ast.Constant(value=None) if d == axis else ast.Slice() for d in range(rank + 1)], node)
+            return self._index(
+                node.args[0], [ast.Constant(value=None) if d == axis else ast.Slice() for d in range(rank + 1)], node
+            )
         if name == "squeeze":
             axis = axes[0] % rank
-            return self._index(node.args[0], [ast.Constant(value=0) if d == axis else ast.Slice() for d in range(rank)],
-                               node)
+            return self._index(
+                node.args[0], [ast.Constant(value=0) if d == axis else ast.Slice() for d in range(rank)], node
+            )
         if name == "moveaxis":
             # A pure index rewrite like swapaxes, but the axis MOVES rather than trades places:
             # pull it out of the identity order and re-insert it at the destination.
@@ -519,8 +574,14 @@ class _AxisReshapeToIndexing(ast.NodeTransformer):
         refusal, and the native lowering consumes ``keepdims`` directly.
         """
         node.keywords = [
-            k for k in node.keywords if not (k.arg == "keepdims" and isinstance(k.value, ast.Constant)
-                                             and isinstance(k.value.value, (bool, int)) and not k.value.value)
+            k
+            for k in node.keywords
+            if not (
+                k.arg == "keepdims"
+                and isinstance(k.value, ast.Constant)
+                and isinstance(k.value.value, (bool, int))
+                and not k.value.value
+            )
         ]
 
     def _is_scalar(self, node: ast.expr) -> bool:
@@ -531,8 +592,7 @@ class _AxisReshapeToIndexing(ast.NodeTransformer):
 
     def _is_linalg(self, func: ast.AST) -> bool:
         """``np.linalg.norm``'s callee shape, so a user helper called ``norm`` is not caught."""
-        return (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Attribute)
-                and func.value.attr == "linalg")
+        return isinstance(func, ast.Attribute) and isinstance(func.value, ast.Attribute) and func.value.attr == "linalg"
 
     def _axis_norm(self, node: ast.Call) -> ast.AST:
         """``np.linalg.norm(v, axis=k)`` -> ``np.sqrt(np.sum(abs(v) ** 2, axis=k))``.
@@ -574,9 +634,11 @@ class _AxisReshapeToIndexing(ast.NodeTransformer):
         temp, and reaches the emitter as an unlowered ``np.mean``.
         """
         merged = self._merge_index(operand, entries)
-        subscript = ast.Subscript(value=operand if merged is None else operand.value,
-                                  slice=self._slot(entries if merged is None else merged),
-                                  ctx=ast.Load())
+        subscript = ast.Subscript(
+            value=operand if merged is None else operand.value,
+            slice=self._slot(entries if merged is None else merged),
+            ctx=ast.Load(),
+        )
         return ast.fix_missing_locations(ast.copy_location(subscript, node))
 
     def _merge_index(self, operand: ast.expr, entries: List[ast.expr]) -> Optional[List[ast.expr]]:
@@ -636,8 +698,12 @@ def _rename_rebound_parameters(fn: ast.FunctionDef, inputs: frozenset) -> None:
     # Only a TOP-LEVEL rebinding is handled: one inside a loop would need the rename to apply to
     # reads from the previous iteration too, so those are left exactly as they are.
     rebound = [
-        s.targets[0].id for s in fn.body if isinstance(s, ast.Assign) and len(s.targets) == 1
-        and isinstance(s.targets[0], ast.Name) and s.targets[0].id in inputs
+        s.targets[0].id
+        for s in fn.body
+        if isinstance(s, ast.Assign)
+        and len(s.targets) == 1
+        and isinstance(s.targets[0], ast.Name)
+        and s.targets[0].id in inputs
     ]
     if not rebound:
         return
@@ -650,8 +716,12 @@ def _rename_rebound_parameters(fn: ast.FunctionDef, inputs: frozenset) -> None:
                 sub.id = renamed[sub.id]
 
     for stmt in fn.body:
-        if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
-                and stmt.targets[0].id in renamed):
+        if (
+            isinstance(stmt, ast.Assign)
+            and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], ast.Name)
+            and stmt.targets[0].id in renamed
+        ):
             rewrite_loads(stmt.value)  # the RHS reads the OLD binding, renamed only if already rebound
             bound.add(stmt.targets[0].id)
             stmt.targets[0].id = renamed[stmt.targets[0].id]
@@ -720,8 +790,11 @@ def version_rebound_locals(fn: ast.FunctionDef, skip: FrozenSet[str]) -> None:
     shape_read |= {
         sub.id
         for node in ast.walk(fn)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in (
-            "zeros", "empty", "ones", "full") and node.args for sub in ast.walk(node.args[0])
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in ("zeros", "empty", "ones", "full")
+        and node.args
+        for sub in ast.walk(node.args[0])
         if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load)
     }
     targets = {n for n, c in counts.items() if c > 1 and n not in nested and n not in skip and n in shape_read}
@@ -736,8 +809,12 @@ def version_rebound_locals(fn: ast.FunctionDef, skip: FrozenSet[str]) -> None:
                 sub.id = live[sub.id]
 
     for stmt in fn.body:
-        if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
-                and stmt.targets[0].id in targets):
+        if (
+            isinstance(stmt, ast.Assign)
+            and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], ast.Name)
+            and stmt.targets[0].id in targets
+        ):
             name = stmt.targets[0].id
             rewrite_loads(stmt.value)  # the RHS reads the PREVIOUS version
             seen[name] = seen.get(name, 0) + 1
@@ -832,8 +909,13 @@ class _NonFiniteNormalizer(ast.NodeTransformer):
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
-        if not (isinstance(node.func, ast.Name) and node.func.id == "float" and len(node.args) == 1
-                and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)):
+        if not (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "float"
+            and len(node.args) == 1
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
             return node
         s = node.args[0].value.strip().lower()
         if s in ("inf", "+inf", "infinity", "+infinity"):
@@ -845,10 +927,9 @@ class _NonFiniteNormalizer(ast.NodeTransformer):
         return node
 
 
-def parse_kernel(numpy_py: pathlib.Path,
-                 bench_info: pathlib.Path,
-                 config: Optional[str] = None,
-                 precision: Optional[str] = None) -> KernelIR:
+def parse_kernel(
+    numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optional[str] = None, precision: Optional[str] = None
+) -> KernelIR:
     """Build a :class:`KernelIR` from ``numpy_py`` + ``bench_info``.
 
     Flattening helpers into one body loses exactly what the reference spells out: the emitted code
@@ -917,8 +998,9 @@ def emit_with_inline_fallback(run):
 SHAPE_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
-def pinned_config_in_use(pinned: Dict[str, Any], fn: ast.FunctionDef, arrays: List[ArrayDesc],
-                         input_args: List[str]) -> Dict[str, Any]:
+def pinned_config_in_use(
+    pinned: Dict[str, Any], fn: ast.FunctionDef, arrays: List[ArrayDesc], input_args: List[str]
+) -> Dict[str, Any]:
     """The pinned config knobs this kernel names, anywhere -- signature, body, or a declared shape.
 
     A knob reached ONLY through a declared shape is the case that matters. conv_standard_1d's
@@ -940,11 +1022,13 @@ def pinned_config_in_use(pinned: Dict[str, Any], fn: ast.FunctionDef, arrays: Li
     return {n: v for n, v in pinned.items() if n in used}
 
 
-def build_kernel_ir(numpy_py: pathlib.Path,
-                    bench_info: pathlib.Path,
-                    config: Optional[str] = None,
-                    precision: Optional[str] = None,
-                    keep_helpers: bool = False) -> KernelIR:
+def build_kernel_ir(
+    numpy_py: pathlib.Path,
+    bench_info: pathlib.Path,
+    config: Optional[str] = None,
+    precision: Optional[str] = None,
+    keep_helpers: bool = False,
+) -> KernelIR:
     """Build a :class:`KernelIR` from ``numpy_py`` + ``bench_info``.
 
     :param numpy_py: path to ``<short>_numpy.py``.
@@ -1126,8 +1210,8 @@ def build_kernel_ir(numpy_py: pathlib.Path,
             inlined_consts.update(_inline_module_constants(tree, fn, input_args))
             # Done when no call to a (still-inlinable) helper survives in the body.
             if not any(
-                    isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in names
-                    for n in ast.walk(fn)):
+                isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in names for n in ast.walk(fn)
+            ):
                 break
 
     _run_regular_inline_fixpoint()
@@ -1199,17 +1283,20 @@ def build_kernel_ir(numpy_py: pathlib.Path,
         argument, to each specialised clone of it."""
         # A structural constant becomes a literal BEFORE anything reads it: an axis, a repeat count
         # and a slice bound all pick the loop nest, none buildable from a runtime scalar.
-        _FoldConstantSymbols(_structural_constants(parameters, _init_scalars, shapes_raw,
-                                                   runtime_args=input_args)).apply(target)
+        _FoldConstantSymbols(
+            _structural_constants(parameters, _init_scalars, shapes_raw, runtime_args=input_args)
+        ).apply(target)
         ast.fix_missing_locations(target)
         # expand_dims/swapaxes first: they become plain indexing, which the tuple pass can then rank.
         _AxisReshapeToIndexing(rank_table(target, _declared_ranks(shapes_raw)), _scalar_names).visit(target)
         ast.fix_missing_locations(target)
-        desugar_tuples(target,
-                       int_scalars=_scalar_names - frozenset(_float_preset_names),
-                       float_scalars=frozenset(_float_preset_names) & _scalar_names,
-                       arrays=frozenset(array_args),
-                       ranks=rank_table(target, _declared_ranks(shapes_raw)))
+        desugar_tuples(
+            target,
+            int_scalars=_scalar_names - frozenset(_float_preset_names),
+            float_scalars=frozenset(_float_preset_names) & _scalar_names,
+            arrays=frozenset(array_args),
+            ranks=rank_table(target, _declared_ranks(shapes_raw)),
+        )
         # Whatever axis did not become a literal above has no emittable loop nest. Refuse it here
         # rather than let a downstream reader mistake it for "no axis at all". A slice step and a
         # negative slice start pick the nest the same way, so they are refused on the same pass.
@@ -1277,10 +1364,9 @@ def build_kernel_ir(numpy_py: pathlib.Path,
     # derived (leaving the kernel untouched, i.e. an un-promoted skip).
     returned_outputs, _revert_return = _synthesize_return_temps(fn)
     if returned_outputs and not any(o in input_args for o in returned_outputs):
-        returned_shapes, returned_dtypes = _derive_returned_array_metadata(fn,
-                                                                           returned_outputs,
-                                                                           preset_symbols,
-                                                                           seed_shapes=_input_array_shapes)
+        returned_shapes, returned_dtypes = _derive_returned_array_metadata(
+            fn, returned_outputs, preset_symbols, seed_shapes=_input_array_shapes
+        )
         if all(o in returned_shapes for o in returned_outputs):
             for out in returned_outputs:
                 input_args.append(out)
@@ -1319,8 +1405,7 @@ def build_kernel_ir(numpy_py: pathlib.Path,
     # format for the chosen configuration becomes a set of physical
     # buffer arrays; the logical name is skipped from the dense/scalar
     # paths and recorded in ``sparse_descs`` for the matmul hoister.
-    sparse_descs, sparse_buffer_arrays, logical_to_physical = \
-        _expand_sparse_arrays(info, config)
+    sparse_descs, sparse_buffer_arrays, logical_to_physical = _expand_sparse_arrays(info, config)
 
     scalar_defaults = info.get("init", {}).get("scalars", {}) or {}
     fallback_shape = _fallback_shape_for_legacy(preset_symbols)
@@ -1357,15 +1442,18 @@ def build_kernel_ir(numpy_py: pathlib.Path,
                         shape=returned_shapes[arg],
                         is_output=True,
                         is_index=arg in index_names,
-                    ))
+                    )
+                )
                 continue
             shape_expr = shapes_raw.get(arg)
             if shape_expr is None:
                 shape_expr = legacy_shapes.get(arg)
             if shape_expr is None:
                 if fallback_shape is None:
-                    raise ValueError(f"{bench_info}: array {arg!r} has no shape expression "
-                                     f"in init.shapes and no inferrable size symbol")
+                    raise ValueError(
+                        f"{bench_info}: array {arg!r} has no shape expression "
+                        f"in init.shapes and no inferrable size symbol"
+                    )
                 shape_expr = fallback_shape
             arrays.append(
                 ArrayDesc(
@@ -1374,7 +1462,8 @@ def build_kernel_ir(numpy_py: pathlib.Path,
                     shape=_parse_shape_expression(shape_expr),
                     is_output=arg in output_args,
                     is_index=arg in index_names,
-                ))
+                )
+            )
         elif arg in preset_symbols and arg not in _float_preset_names and arg not in _bool_preset_names:
             declared_dt = legacy_dtypes.get(arg)
             symbols.append(
@@ -1385,7 +1474,8 @@ def build_kernel_ir(numpy_py: pathlib.Path,
                     # something else and must not narrow the binding's int64.
                     dtype=declared_dt if declared_dt and dtypes.is_integer(declared_dt) else "int64",
                     assumption=symbol_sign_from_bindings(arg, parameters, _manifest_scalars),
-                ))
+                )
+            )
         elif arg in _bool_preset_names:
             # A boolean config flag: a runtime ``bool`` scalar (C ``bool`` /
             # Fortran ``logical(c_bool)``), NOT an integer dimension.
@@ -1413,8 +1503,7 @@ def build_kernel_ir(numpy_py: pathlib.Path,
             # otherwise it defaults to real and clashes with the array decl's
             # ``integer``.
             is_array_dim = any(re.search(rf"\b{re.escape(arg)}\b", str(tok)) for a in arrays for tok in a.shape)
-            if inferred_dt in {"float64", "double", "float32"} \
-                    and (arg in int_names or is_array_dim):
+            if inferred_dt in {"float64", "double", "float32"} and (arg in int_names or is_array_dim):
                 inferred_dt = "int"
             scalars.append(
                 ScalarDesc(
@@ -1422,7 +1511,8 @@ def build_kernel_ir(numpy_py: pathlib.Path,
                     dtype=inferred_dt,
                     is_output=arg in output_args,
                     value=scalar_defaults.get(arg),
-                ))
+                )
+            )
 
     # Inject the physical sparse buffer arrays + expand the logical
     # sparse names in input_args to their ordered physical buffers so
@@ -1476,8 +1566,7 @@ def build_kernel_ir(numpy_py: pathlib.Path,
     # instead of re-deriving it there, where the manifest is out of scope.
     bound = set(_manifest_scalars) | {n for preset in parameters.values() for n in preset}
     kir.symbol_signs = {
-        n: sign
-        for n in sorted(bound) if (sign := symbol_sign_from_bindings(n, parameters, _manifest_scalars))
+        n: sign for n in sorted(bound) if (sign := symbol_sign_from_bindings(n, parameters, _manifest_scalars))
     }
     for helper in kir.helpers:
         helper.symbol_signs = kir.symbol_signs
@@ -1559,8 +1648,7 @@ def _choose_sparse_config(info: Dict, config: Optional[str] = None) -> Optional[
         return None
     if config is not None:
         if config not in configs:
-            raise ValueError(f"--config {config!r} is not a declared configuration; "
-                             f"available: {sorted(configs)}")
+            raise ValueError(f"--config {config!r} is not a declared configuration; available: {sorted(configs)}")
         return config
     env = os.environ.get("HPCAGENT_BENCH_SPARSE_CONFIG")
     if env and env in configs:
@@ -1602,7 +1690,7 @@ def _fold_default_args(fn: ast.FunctionDef, input_args: List[str]) -> None:
     args = fn.args.args
     defaults = fn.args.defaults
     kwonlyargs = fn.args.kwonlyargs
-    defaulted = list(zip(args[len(args) - len(defaults):], defaults))
+    defaulted = list(zip(args[len(args) - len(defaults) :], defaults))
     # kw_defaults is positionally aligned with kwonlyargs; None means "no default".
     kw_defaulted = [(a, d) for a, d in zip(kwonlyargs, fn.args.kw_defaults) if d is not None]
     subst: Dict[str, ast.expr] = {}
@@ -1613,7 +1701,6 @@ def _fold_default_args(fn: ast.FunctionDef, input_args: List[str]) -> None:
         return
 
     class _Sub(ast.NodeTransformer):
-
         def visit_Name(self, node: ast.Name):
             if isinstance(node.ctx, ast.Load) and node.id in subst:
                 return ast.copy_location(copy.deepcopy(subst[node.id]), node)
@@ -1642,7 +1729,7 @@ def _standard_sparse_buffers(matrix: str, fmt: str, dim: str, nnz: str):
         return [
             buf("indptr", "indptr", [f"{dim} + 1"], intk),
             buf("indices", "indices", [nnz], intk),
-            buf("data", "data", [nnz], fltk)
+            buf("data", "data", [nnz], fltk),
         ]
     if fmt == "coo":
         return [buf("row", "row", [nnz], intk), buf("col", "col", [nnz], intk), buf("data", "data", [nnz], fltk)]
@@ -1652,7 +1739,7 @@ def _standard_sparse_buffers(matrix: str, fmt: str, dim: str, nnz: str):
         return [
             buf("indptr", "indptr", ["NBR + 1"], intk),
             buf("indices", "indices", ["nnz_blk"], intk),
-            buf("data", "data", ["nnz_blk", "R", "C"], fltk)
+            buf("data", "data", ["nnz_blk", "R", "C"], fltk),
         ]
     if fmt == "ell":
         return [buf("indices", "indices", [dim, "MAXNZ"], intk), buf("data", "data", [dim, "MAXNZ"], fltk)]
@@ -1660,7 +1747,7 @@ def _standard_sparse_buffers(matrix: str, fmt: str, dim: str, nnz: str):
         return [
             buf("row", "row", ["NBLK"], intk),
             buf("col", "col", ["NBLK"], intk),
-            buf("data", "data", ["NBLK", "R", "C"], fltk)
+            buf("data", "data", ["NBLK", "R", "C"], fltk),
         ]
     return None
 
@@ -1673,8 +1760,9 @@ def _legacy_sparse_dims(info: Dict) -> Tuple[str, str]:
     for preset in (info.get("parameters") or {}).values():
         if isinstance(preset, dict):
             names.update(preset)
-    nnz = "nnz" if "nnz" in names else next(
-        (n for n in sorted(names) if "nnz" in n.lower() or n.lower() == "nz"), "nnz")
+    nnz = (
+        "nnz" if "nnz" in names else next((n for n in sorted(names) if "nnz" in n.lower() or n.lower() == "nz"), "nnz")
+    )
     if "N" in names:
         dim = "N"
     else:
@@ -1847,7 +1935,7 @@ def _inline_module_constants(tree: ast.Module, fn: ast.FunctionDef, input_args: 
         # _MathRewriter only lowers these inside the kernel BODY (np.pi -> M_PI);
         # at module-constant time they must fold to their value or the derived
         # constant leaks as a bogus free scalar parameter.
-        if (isinstance(v, ast.Attribute) and isinstance(v.value, ast.Name) and v.value.id in ("np", "numpy", "math")):
+        if isinstance(v, ast.Attribute) and isinstance(v.value, ast.Name) and v.value.id in ("np", "numpy", "math"):
             return {"pi": 3.141592653589793, "e": 2.718281828459045, "tau": 6.283185307179586}.get(v.attr)
         if isinstance(v, ast.UnaryOp) and isinstance(v.op, (ast.USub, ast.UAdd, ast.Invert)):
             x = _const_value(v.operand)
@@ -1918,8 +2006,7 @@ def _inline_module_constants(tree: ast.Module, fn: ast.FunctionDef, input_args: 
                 consts[tgt.id] = val
         # Tuple-unpacking of constants ``A, B, C = c1, c2, c3`` -- lulesh's BC
         # mask flags (``XI_M, XI_M_SYMM, XI_M_FREE = 0x003, 0x001, 0x002``).
-        elif (isinstance(tgt, ast.Tuple) and isinstance(stmt.value, ast.Tuple)
-              and len(tgt.elts) == len(stmt.value.elts)):
+        elif isinstance(tgt, ast.Tuple) and isinstance(stmt.value, ast.Tuple) and len(tgt.elts) == len(stmt.value.elts):
             for sub, v in zip(tgt.elts, stmt.value.elts):
                 if isinstance(sub, ast.Name):
                     val = _const_value(v)
@@ -1943,22 +2030,42 @@ def _inline_module_constants(tree: ast.Module, fn: ast.FunctionDef, input_args: 
     # resolves like a literal ``np.float64`` instead of leaking as a free parameter
     # (minife). Store the attr name and rebuild ``np.<attr>`` at each reference.
     _DTYPE_ATTRS = {
-        "float64", "float32", "float16", "int64", "int32", "int16", "int8", "uint64", "uint32", "uint16", "uint8",
-        "complex128", "complex64", "bool_", "intp", "int_", "float_", "double"
+        "float64",
+        "float32",
+        "float16",
+        "int64",
+        "int32",
+        "int16",
+        "int8",
+        "uint64",
+        "uint32",
+        "uint16",
+        "uint8",
+        "complex128",
+        "complex64",
+        "bool_",
+        "intp",
+        "int_",
+        "float_",
+        "double",
     }
     dtype_consts: Dict[str, str] = {}
     for stmt in tree.body:
         if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
             continue
         v = stmt.value
-        if (isinstance(v, ast.Attribute) and isinstance(v.value, ast.Name) and v.value.id in ("np", "numpy")
-                and v.attr in _DTYPE_ATTRS and stmt.targets[0].id not in shadowed):
+        if (
+            isinstance(v, ast.Attribute)
+            and isinstance(v.value, ast.Name)
+            and v.value.id in ("np", "numpy")
+            and v.attr in _DTYPE_ATTRS
+            and stmt.targets[0].id not in shadowed
+        ):
             dtype_consts[stmt.targets[0].id] = v.attr
     if not consts and not dtype_consts and not seq_consts:
         return {}
 
     class _Sub(ast.NodeTransformer):
-
         def visit_Name(self, node: ast.Name):
             if isinstance(node.ctx, ast.Load):
                 if node.id in consts:
@@ -1967,9 +2074,11 @@ def _inline_module_constants(tree: ast.Module, fn: ast.FunctionDef, input_args: 
                     return ast.copy_location(copy.deepcopy(seq_consts[node.id]), node)
                 if node.id in dtype_consts:
                     return ast.copy_location(
-                        ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()),
-                                      attr=dtype_consts[node.id],
-                                      ctx=ast.Load()), node)
+                        ast.Attribute(
+                            value=ast.Name(id="np", ctx=ast.Load()), attr=dtype_consts[node.id], ctx=ast.Load()
+                        ),
+                        node,
+                    )
             return node
 
     _Sub().visit(fn)
@@ -2031,8 +2140,13 @@ def _parse_array_literal(call: ast.Call):
     """``np.array(<nested list of numeric literals>, dtype=...)`` ->
     ``(shape_tuple, dtype_str, flat_values)`` or ``None``. Regular (rectangular)
     nested ``ast.List`` only; values are int/float constants."""
-    if not (isinstance(call.func, ast.Attribute) and call.func.attr == "array"
-            and isinstance(call.func.value, ast.Name) and call.func.value.id in ("np", "numpy") and call.args):
+    if not (
+        isinstance(call.func, ast.Attribute)
+        and call.func.attr == "array"
+        and isinstance(call.func.value, ast.Name)
+        and call.func.value.id in ("np", "numpy")
+        and call.args
+    ):
         return None
 
     def _walk(node):
@@ -2049,7 +2163,7 @@ def _parse_array_literal(call: ast.Call):
             for s in subs:
                 flat.extend(s[1])
                 all_int = all_int and s[2]
-            return ((len(node.elts), ) + shp0, flat, all_int)
+            return ((len(node.elts),) + shp0, flat, all_int)
         v = _numeric_const(node)
         if v is None:
             return None
@@ -2062,8 +2176,11 @@ def _parse_array_literal(call: ast.Call):
     dtype = None
     for kw in call.keywords:
         if kw.arg == "dtype":
-            tag = kw.value.attr if isinstance(
-                kw.value, ast.Attribute) else (kw.value.id if isinstance(kw.value, ast.Name) else None)
+            tag = (
+                kw.value.attr
+                if isinstance(kw.value, ast.Attribute)
+                else (kw.value.id if isinstance(kw.value, ast.Name) else None)
+            )
             dtype = _ARRAY_LITERAL_DTYPES.get(tag)
     if dtype is None:
         dtype = "int64" if all_int else "float64"
@@ -2082,8 +2199,12 @@ def _materialize_const_arrays(tree: ast.Module, fn: ast.FunctionDef, input_args:
     the existing zeros-local + scalar-store lowering -- no new emitter path."""
     consts: Dict[str, Tuple] = {}
     for stmt in tree.body:
-        if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
-                and isinstance(stmt.value, ast.Call)):
+        if (
+            isinstance(stmt, ast.Assign)
+            and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], ast.Name)
+            and isinstance(stmt.value, ast.Call)
+        ):
             parsed = _parse_array_literal(stmt.value)
             if parsed is not None:
                 consts[stmt.targets[0].id] = parsed
@@ -2102,24 +2223,33 @@ def _materialize_const_arrays(tree: ast.Module, fn: ast.FunctionDef, input_args:
             continue
         shape_tuple = ast.Tuple(elts=[ast.Constant(value=d) for d in shape], ctx=ast.Load())
         prelude.append(
-            ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())],
-                       value=ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()),
-                                                         attr="zeros",
-                                                         ctx=ast.Load()),
-                                      args=[shape_tuple],
-                                      keywords=[
-                                          ast.keyword(arg="dtype",
-                                                      value=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()),
-                                                                          attr=dtype,
-                                                                          ctx=ast.Load()))
-                                      ])))
+            ast.Assign(
+                targets=[ast.Name(id=name, ctx=ast.Store())],
+                value=ast.Call(
+                    func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="zeros", ctx=ast.Load()),
+                    args=[shape_tuple],
+                    keywords=[
+                        ast.keyword(
+                            arg="dtype",
+                            value=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=dtype, ctx=ast.Load()),
+                        )
+                    ],
+                ),
+            )
+        )
         # Row-major element stores ``NAME[i, j, ...] = const``.
         for idx, val in zip(itertools.product(*[range(d) for d in shape]), flat):
-            sl = (ast.Tuple(elts=[ast.Constant(value=i)
-                                  for i in idx], ctx=ast.Load()) if len(idx) > 1 else ast.Constant(value=idx[0]))
+            sl = (
+                ast.Tuple(elts=[ast.Constant(value=i) for i in idx], ctx=ast.Load())
+                if len(idx) > 1
+                else ast.Constant(value=idx[0])
+            )
             prelude.append(
-                ast.Assign(targets=[ast.Subscript(value=ast.Name(id=name, ctx=ast.Load()), slice=sl, ctx=ast.Store())],
-                           value=ast.Constant(value=val)))
+                ast.Assign(
+                    targets=[ast.Subscript(value=ast.Name(id=name, ctx=ast.Load()), slice=sl, ctx=ast.Store())],
+                    value=ast.Constant(value=val),
+                )
+            )
     if prelude:
         fn.body = prelude + fn.body
         ast.fix_missing_locations(fn)
@@ -2145,8 +2275,13 @@ class _PruneSparseDispatch(ast.NodeTransformer):
             return True
         if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
             inner = test.operand
-            return (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name) and inner.func.id == "isinstance"
-                    and len(inner.args) == 2 and _names_ndarray(inner.args[1]))
+            return (
+                isinstance(inner, ast.Call)
+                and isinstance(inner.func, ast.Name)
+                and inner.func.id == "isinstance"
+                and len(inner.args) == 2
+                and _names_ndarray(inner.args[1])
+            )
         return False
 
     @staticmethod
@@ -2229,16 +2364,22 @@ class _SubstituteParamAliases(ast.NodeTransformer):
     def collect(self, fn: ast.FunctionDef) -> None:
         bare_binds: Dict[str, int] = {}
         for s in fn.body:
-            if (isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name)):
+            if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name):
                 bare_binds[s.targets[0].id] = bare_binds.get(s.targets[0].id, 0) + 1
         for s in fn.body:
-            if (isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name)
-                    and isinstance(s.value, ast.Name) and s.value.id in self.params
-                    and s.targets[0].id not in self.params and bare_binds.get(s.targets[0].id) == 1
-                    # ...and the ALIASED parameter is never rebound either. Substituting an alias of
-                    # a rebound name re-reads it at the USE site instead of the BIND site:
-                    # ``original_x = x; x = x * s; x = x + original_x`` became ``x*s + x*s``.
-                    and not bare_binds.get(s.value.id)):
+            if (
+                isinstance(s, ast.Assign)
+                and len(s.targets) == 1
+                and isinstance(s.targets[0], ast.Name)
+                and isinstance(s.value, ast.Name)
+                and s.value.id in self.params
+                and s.targets[0].id not in self.params
+                and bare_binds.get(s.targets[0].id) == 1
+                # ...and the ALIASED parameter is never rebound either. Substituting an alias of
+                # a rebound name re-reads it at the USE site instead of the BIND site:
+                # ``original_x = x; x = x * s; x = x + original_x`` became ``x*s + x*s``.
+                and not bare_binds.get(s.value.id)
+            ):
                 self.subst[s.targets[0].id] = s.value.id
 
     def visit_Assign(self, node: ast.Assign):
@@ -2246,13 +2387,22 @@ class _SubstituteParamAliases(ast.NodeTransformer):
         # documentation alias ``z_kin_hor_e = z_kin_hor_e``): numpy treats it as
         # a no-op, but a backend that copies it into a fresh shadowing buffer
         # would split reads/writes off the real parameter.
-        if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and isinstance(node.value, ast.Name)
-                and node.targets[0].id == node.value.id):
+        if (
+            len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Name)
+            and node.targets[0].id == node.value.id
+        ):
             return None
         # Drop the ``local = param`` alias statement itself (checked BEFORE
         # generic_visit renames its target).
-        if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in self.subst
-                and isinstance(node.value, ast.Name) and node.value.id == self.subst[node.targets[0].id]):
+        if (
+            len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id in self.subst
+            and isinstance(node.value, ast.Name)
+            and node.value.id == self.subst[node.targets[0].id]
+        ):
             return None
         self.generic_visit(node)
         return node
@@ -2271,7 +2421,7 @@ class _NewaxisToNone(ast.NodeTransformer):
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
         self.generic_visit(node)
-        if (isinstance(node.value, ast.Name) and node.value.id == "np" and node.attr == "newaxis"):
+        if isinstance(node.value, ast.Name) and node.value.id == "np" and node.attr == "newaxis":
             return ast.Constant(value=None)
         return node
 
@@ -2346,8 +2496,13 @@ class _FoldStaticNoneBranches(ast.NodeTransformer):
 
 def _bare_none_assign_target(stmt: ast.stmt) -> Optional[str]:
     """The name ``X`` when ``stmt`` is exactly ``X = None``, else ``None``."""
-    if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
-            and isinstance(stmt.value, ast.Constant) and stmt.value.value is None):
+    if (
+        isinstance(stmt, ast.Assign)
+        and len(stmt.targets) == 1
+        and isinstance(stmt.targets[0], ast.Name)
+        and isinstance(stmt.value, ast.Constant)
+        and stmt.value.value is None
+    ):
         return stmt.targets[0].id
     return None
 
@@ -2374,9 +2529,15 @@ def _assigns_name(stmts: List[ast.stmt], name: str) -> bool:
     branch, ``out = patch.copy()``) or ``name += <expr>`` (the combiner branch: avgpool_core's
     running sum keeps its own ``+=`` rather than an ``np.add(acc, patch, out=acc)`` roundtrip)."""
     return any(
-        (isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name) and s.targets[0].id ==
-         name) or (isinstance(s, ast.AugAssign) and isinstance(s.target, ast.Name) and s.target.id == name)
-        for s in stmts)
+        (
+            isinstance(s, ast.Assign)
+            and len(s.targets) == 1
+            and isinstance(s.targets[0], ast.Name)
+            and s.targets[0].id == name
+        )
+        or (isinstance(s, ast.AugAssign) and isinstance(s.target, ast.Name) and s.target.id == name)
+        for s in stmts
+    )
 
 
 def _flag_guard(flag: str, seed_when_none: bool) -> ast.Compare:
@@ -2419,9 +2580,14 @@ def _rewrite_none_toggle(stmts: List[ast.stmt], start: int, name: str, flag: str
                 stmt.test = _flag_guard(flag, seed_when_none)
                 stmts.insert(idx + 1, _flag_set_stmt(flag))
                 return True
-        elif (in_loop and isinstance(stmt, ast.Assign) and len(stmt.targets) == 1
-              and isinstance(stmt.targets[0], ast.Name) and stmt.targets[0].id == name
-              and isinstance(stmt.value, ast.IfExp)):
+        elif (
+            in_loop
+            and isinstance(stmt, ast.Assign)
+            and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], ast.Name)
+            and stmt.targets[0].id == name
+            and isinstance(stmt.value, ast.IfExp)
+        ):
             seed_when_none = _none_toggle_op(stmt.value.test, name)
             if seed_when_none is not None:
                 # A ternary REPLACES the whole Assign with an if/else statement rather than just
@@ -2434,7 +2600,8 @@ def _rewrite_none_toggle(stmts: List[ast.stmt], start: int, name: str, flag: str
                 new_if = ast.If(
                     test=_flag_guard(flag, seed_when_none),
                     body=[ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=stmt.value.body)],
-                    orelse=[ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=stmt.value.orelse)])
+                    orelse=[ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=stmt.value.orelse)],
+                )
                 ast.copy_location(new_if, stmt)
                 ast.fix_missing_locations(new_if)
                 stmts[idx] = new_if
@@ -2535,7 +2702,9 @@ class _FoldTupleLocals(ast.NodeTransformer):
     def collect(self, fn: ast.FunctionDef) -> None:
         loop_vars = {
             n.id
-            for node in ast.walk(fn) if isinstance(node, (ast.For, ast.comprehension)) for n in ast.walk(node.target)
+            for node in ast.walk(fn)
+            if isinstance(node, (ast.For, ast.comprehension))
+            for n in ast.walk(node.target)
             if isinstance(n, ast.Name)
         }
         binds: Dict[str, int] = {}
@@ -2543,17 +2712,26 @@ class _FoldTupleLocals(ast.NodeTransformer):
             if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name):
                 binds[s.targets[0].id] = binds.get(s.targets[0].id, 0) + 1
         for s in ast.walk(fn):
-            if not (isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name)
-                    and isinstance(s.value, ast.Tuple) and s.targets[0].id not in self.params
-                    and binds.get(s.targets[0].id) == 1):
+            if not (
+                isinstance(s, ast.Assign)
+                and len(s.targets) == 1
+                and isinstance(s.targets[0], ast.Name)
+                and isinstance(s.value, ast.Tuple)
+                and s.targets[0].id not in self.params
+                and binds.get(s.targets[0].id) == 1
+            ):
                 continue
             if any(n.id in loop_vars for n in ast.walk(s.value) if isinstance(n, ast.Name)):
                 continue
             self.subst[s.targets[0].id] = s.value
 
     def visit_Assign(self, node: ast.Assign):
-        if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in self.subst
-                and isinstance(node.value, ast.Tuple)):
+        if (
+            len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id in self.subst
+            and isinstance(node.value, ast.Tuple)
+        ):
             return None
         self.generic_visit(node)
         return node
@@ -2603,7 +2781,7 @@ def _resolve_call_args(call: ast.Call, helper: ast.FunctionDef) -> Optional[List
     untouched.
     """
     param_names = [a.arg for a in helper.args.args]
-    defaults = dict(zip(param_names[len(param_names) - len(helper.args.defaults):], helper.args.defaults))
+    defaults = dict(zip(param_names[len(param_names) - len(helper.args.defaults) :], helper.args.defaults))
     call_args = list(call.args)
     if len(call_args) > len(param_names) or any(kw.arg is None for kw in call.keywords):
         return None  # too many positionals, or a **kwargs splat we cannot resolve
@@ -2632,13 +2810,13 @@ def _synthesize_return_temps(fn: ast.FunctionDef):
     original body when a synthesised temp's shape can't be derived, so an
     un-promotable kernel is left exactly as it was.
     """
-    noop = (lambda: None)
+    noop = lambda: None
     if not fn.body or not isinstance(fn.body[-1], ast.Return):
         return [], noop
     ret = fn.body[-1]
     if ret.value is None:
         return [], noop
-    elts = (ret.value.elts if isinstance(ret.value, ast.Tuple) else [ret.value])
+    elts = ret.value.elts if isinstance(ret.value, ast.Tuple) else [ret.value]
     names: List[str] = []
     new_stmts: List[ast.stmt] = []
     new_elts: List[ast.expr] = []
@@ -2684,8 +2862,11 @@ def _strip_framework_dtype_rebinding(fn: ast.FunctionDef) -> None:
             for t in stmt.targets:
                 targets.extend(t.elts if isinstance(t, ast.Tuple) else [t])
             values = stmt.value.elts if isinstance(stmt.value, ast.Tuple) else [stmt.value]
-            if (targets and all(isinstance(t, ast.Name) and t.id in _FRAMEWORK_DTYPE_ALIASES for t in targets)
-                    and all(isinstance(v, ast.Attribute) and v.attr in _FRAMEWORK_DTYPE_ALIASES for v in values)):
+            if (
+                targets
+                and all(isinstance(t, ast.Name) and t.id in _FRAMEWORK_DTYPE_ALIASES for t in targets)
+                and all(isinstance(v, ast.Attribute) and v.attr in _FRAMEWORK_DTYPE_ALIASES for v in values)
+            ):
                 continue
         keep.append(stmt)
     fn.body = keep
@@ -2714,10 +2895,13 @@ def _promote_scalar_returns(fn: ast.FunctionDef, names: List[str]) -> List[str]:
     for i, nm in enumerate(names):
         buf = f"hpcagent_bench_ret{i}"  # distinct from the ``ret_arr`` array-synthesis temps
         writes.append(
-            ast.Assign(targets=[
-                ast.Subscript(value=ast.Name(id=buf, ctx=ast.Load()), slice=ast.Constant(value=0), ctx=ast.Store())
-            ],
-                       value=ast.Name(id=nm, ctx=ast.Load())))
+            ast.Assign(
+                targets=[
+                    ast.Subscript(value=ast.Name(id=buf, ctx=ast.Load()), slice=ast.Constant(value=0), ctx=ast.Store())
+                ],
+                value=ast.Name(id=nm, ctx=ast.Load()),
+            )
+        )
         out_names.append(buf)
     fn.body = fn.body[:-1] + writes
     ast.fix_missing_locations(fn)
@@ -2916,8 +3100,12 @@ def _is_scalar_dim_rhs(node: ast.AST) -> bool:
     if isinstance(node, ast.BinOp):
         return _is_scalar_dim_rhs(node.left) and _is_scalar_dim_rhs(node.right)
     # ``arr.shape[i]`` -- Subscript of a ``.shape`` Attribute on a Name.
-    if (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Attribute) and node.value.attr == "shape"
-            and isinstance(node.value.value, ast.Name)):
+    if (
+        isinstance(node, ast.Subscript)
+        and isinstance(node.value, ast.Attribute)
+        and node.value.attr == "shape"
+        and isinstance(node.value.value, ast.Name)
+    ):
         return True
     return False
 
@@ -2942,7 +3130,7 @@ def _substitute_inlined_scalar_defs(tokens: Tuple[str, ...], defs: Dict[str, str
             ident = m.group(0)
             if ident not in defs or ident in active:
                 return ident
-            return "(" + _expand(defs[ident], active + (ident, )) + ")"
+            return "(" + _expand(defs[ident], active + (ident,)) + ")"
 
         return _IDENT_RE.sub(_repl, text)
 
@@ -3041,9 +3229,9 @@ def _exact_quotient_with_remainder(numerator: ast.expr, divisor: int) -> Optiona
             out = ast.BinOp(left=out, op=ast.Add() if sign > 0 else ast.Sub(), right=quotient)
     remainder = constant // divisor  # floor division, so a negative constant carries its own -1
     if remainder:
-        out = ast.BinOp(left=out,
-                        op=ast.Add() if remainder > 0 else ast.Sub(),
-                        right=ast.Constant(value=abs(remainder)))
+        out = ast.BinOp(
+            left=out, op=ast.Add() if remainder > 0 else ast.Sub(), right=ast.Constant(value=abs(remainder))
+        )
     return out
 
 
@@ -3204,8 +3392,9 @@ def _shape_from_iter_extent(node: ast.AST, known: Dict[str, str], route_calls: b
     can newly-PROMOTE a return that previously fell back to bench_info
     (softmax/mlp/resnet); the caller enables it only for the shape-VALUE
     pass, gated by the conservative promote decision."""
-    accepted = ((ast.BinOp, ast.Subscript, ast.UnaryOp, ast.Call) if route_calls else
-                (ast.BinOp, ast.Subscript, ast.UnaryOp))
+    accepted = (
+        (ast.BinOp, ast.Subscript, ast.UnaryOp, ast.Call) if route_calls else (ast.BinOp, ast.Subscript, ast.UnaryOp)
+    )
     if not isinstance(node, accepted):
         return None
     # Build a shape_table compatible with _iter_extent_of (Tuple of
@@ -3219,15 +3408,26 @@ def _shape_from_iter_extent(node: ast.AST, known: Dict[str, str], route_calls: b
     if ext is None:
         return None
     parts = [ast.unparse(e) for e in ext]
-    return "(" + ", ".join(parts) + ",)" if len(parts) == 1 else \
-        "(" + ", ".join(parts) + ")"
+    return "(" + ", ".join(parts) + ",)" if len(parts) == 1 else "(" + ", ".join(parts) + ")"
 
 
 #: Reductions whose RETURN shape is the operand's shape with the reduced
 #: axis removed (or size 1 if keepdims). A full reduction (axis=None) yields a
 #: scalar -- not an array output -- so it stays unpromoted.
 _RETURN_REDUCTIONS = {
-    "sum", "mean", "prod", "min", "max", "var", "std", "argmin", "argmax", "any", "all", "count_nonzero", "median"
+    "sum",
+    "mean",
+    "prod",
+    "min",
+    "max",
+    "var",
+    "std",
+    "argmin",
+    "argmax",
+    "any",
+    "all",
+    "count_nonzero",
+    "median",
 }
 
 
@@ -3239,8 +3439,14 @@ def _shape_from_reduction(node: ast.AST, known: Dict[str, str]) -> Optional[str]
     deterministic, axis-aware reduction shape -- it lets a returned reduction
     promote to an output param. ``axis=None`` (full reduction) -> scalar -> not
     an array, so returns None."""
-    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in _RETURN_REDUCTIONS
-            and isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy") and node.args):
+    if not (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in _RETURN_REDUCTIONS
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id in ("np", "numpy")
+        and node.args
+    ):
         return None
     axes, keepdims = _read_axis_keepdims(node.args, node.keywords)
     if axes is None:
@@ -3262,8 +3468,7 @@ def _shape_from_reduction(node: ast.AST, known: Dict[str, str]) -> Optional[str]
     if not new:
         return None
     parts = [ast.unparse(e) for e in new]
-    return "(" + ", ".join(parts) + ",)" if len(parts) == 1 else \
-        "(" + ", ".join(parts) + ")"
+    return "(" + ", ".join(parts) + ",)" if len(parts) == 1 else "(" + ", ".join(parts) + ")"
 
 
 def _shape_from_linspace_or_arange(node: ast.AST) -> Optional[str]:
@@ -3293,7 +3498,7 @@ def _shape_from_transpose(node: ast.AST, known: Dict[str, str]) -> Optional[str]
         base = node.value
     elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
         f = node.func
-        if (f.attr == "transpose" and isinstance(f.value, ast.Name) and f.value.id in ("np", "numpy") and node.args):
+        if f.attr == "transpose" and isinstance(f.value, ast.Name) and f.value.id in ("np", "numpy") and node.args:
             base = node.args[0]  # np.transpose(x[, axes])
             axes_node = node.args[1] if len(node.args) > 1 else None
         elif f.attr == "transpose":  # x.transpose([axes]) -- tuple arg or varargs ints
@@ -3339,8 +3544,7 @@ def _shape_from_dot_shape(node: ast.AST, known: Dict[str, str]) -> Optional[str]
     if not node.args:
         return None
     first = node.args[0]
-    if isinstance(first, ast.Attribute) and first.attr == "shape" \
-            and isinstance(first.value, ast.Name):
+    if isinstance(first, ast.Attribute) and first.attr == "shape" and isinstance(first.value, ast.Name):
         return known.get(first.value.id)
     return None
 
@@ -3353,7 +3557,8 @@ def _strip_docstrings(stmts: List[ast.stmt]) -> List[ast.stmt]:
     otherwise be treated as statements by the inliner / classifier.
     """
     return [
-        s for s in stmts
+        s
+        for s in stmts
         if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant) and isinstance(s.value.value, str))
     ]
 
@@ -3365,16 +3570,19 @@ def _collect_called_helper_defs(tree: ast.Module, kernel_fn: ast.FunctionDef) ->
     must be emitted too. Returned in definition order (a callee defined above its
     caller emits first, so no forward declaration is needed)."""
     defs_by_name: Dict[str, ast.FunctionDef] = {
-        n.name: n
-        for n in tree.body if isinstance(n, ast.FunctionDef) and n is not kernel_fn
+        n.name: n for n in tree.body if isinstance(n, ast.FunctionDef) and n is not kernel_fn
     }
     captured: Dict[str, ast.FunctionDef] = {}
     frontier: List[ast.AST] = [kernel_fn]
     while frontier:
         node = frontier.pop()
         for sub in ast.walk(node):
-            if (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name) and sub.func.id in defs_by_name
-                    and sub.func.id not in captured):
+            if (
+                isinstance(sub, ast.Call)
+                and isinstance(sub.func, ast.Name)
+                and sub.func.id in defs_by_name
+                and sub.func.id not in captured
+            ):
                 d = defs_by_name[sub.func.id]
                 captured[sub.func.id] = d
                 frontier.append(d)
@@ -3396,7 +3604,7 @@ def _apply_subscript_axes(dims: List, sub_slice: ast.AST) -> List:
     axes = sub_slice.elts if isinstance(sub_slice, ast.Tuple) else [sub_slice]
     ell = [i for i, ax in enumerate(axes) if isinstance(ax, ast.Constant) and ax.value is Ellipsis]
     if ell:
-        axes = axes[:ell[0]] + [ast.Slice()] * max(0, len(dims) - (len(axes) - 1)) + axes[ell[0] + 1:]
+        axes = axes[: ell[0]] + [ast.Slice()] * max(0, len(dims) - (len(axes) - 1)) + axes[ell[0] + 1 :]
     kept = []
     for ax, dim in zip(axes, dims):
         if not isinstance(ax, ast.Slice):
@@ -3409,7 +3617,7 @@ def _apply_subscript_axes(dims: List, sub_slice: ast.AST) -> List:
         if extent is None:
             return []
         kept.append(extent)
-    kept.extend(dims[len(axes):])
+    kept.extend(dims[len(axes) :])
     return kept
 
 
@@ -3417,8 +3625,12 @@ def bound_token(node: ast.expr, dim) -> str:
     """A slice bound as an extent token, resolving a negative literal against ``dim``."""
     if isinstance(node, ast.Constant) and isinstance(node.value, int) and node.value < 0:
         return f"({dim}) - {-node.value}"
-    if (isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub) and isinstance(node.operand, ast.Constant)
-            and isinstance(node.operand.value, int)):
+    if (
+        isinstance(node, ast.UnaryOp)
+        and isinstance(node.op, ast.USub)
+        and isinstance(node.operand, ast.Constant)
+        and isinstance(node.operand.value, int)
+    ):
         return f"({dim}) - {node.operand.value}"
     return ast.unparse(node)
 
@@ -3465,8 +3677,10 @@ def _ctor_dtype_tag(fn: ast.FunctionDef, node: ast.expr, arr_by: Dict[str, Array
         res = _resolve_array_ref(fn, node.value, arr_by, seen)
         if res is not None:
             return res[1]
-    raise NotImplementedError(f"np.zeros/empty/ones(..., dtype={ast.unparse(node)}): the dtype expression "
-                              f"does not resolve to a known dtype, so the buffer's width is unknown")
+    raise NotImplementedError(
+        f"np.zeros/empty/ones(..., dtype={ast.unparse(node)}): the dtype expression "
+        f"does not resolve to a known dtype, so the buffer's width is unknown"
+    )
 
 
 def _assigns_to(fn: ast.FunctionDef, name: str) -> List[ast.Assign]:
@@ -3477,23 +3691,29 @@ def _assigns_to(fn: ast.FunctionDef, name: str) -> List[ast.Assign]:
     alias chain, so a chain of depth d cost 2*d full walks of the kernel.
     """
     return [
-        node for node in ast.walk(fn) if isinstance(node, ast.Assign) and len(node.targets) == 1
-        and isinstance(node.targets[0], ast.Name) and node.targets[0].id == name
+        node
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == name
     ]
 
 
-def _local_array_def(fn: ast.FunctionDef,
-                     name: str,
-                     arr_by: Dict[str, ArrayDesc],
-                     seen: Optional[Set[str]] = None,
-                     assigns: Optional[List[ast.Assign]] = None):
+def _local_array_def(
+    fn: ast.FunctionDef,
+    name: str,
+    arr_by: Dict[str, ArrayDesc],
+    seen: Optional[Set[str]] = None,
+    assigns: Optional[List[ast.Assign]] = None,
+):
     """Shape (list of AST exprs) and dtype string of a local array from its
     ``name = np.zeros/empty/ones(<shape>, dtype=...)`` definition, or ``None``.
     Used to size the out-param temp when an array-returning helper writes into a
     slice of a kernel-local array (``coulomb_fac[:, j] = h(...)``).
 
     ``assigns`` is this name's assignments when the caller already collected them."""
-    for node in (_assigns_to(fn, name) if assigns is None else assigns):
+    for node in _assigns_to(fn, name) if assigns is None else assigns:
         if not isinstance(node.value, ast.Call):
             continue
         f = node.value.func
@@ -3538,10 +3758,9 @@ def _expr_array_dtype(node: ast.expr, arr_by: Dict[str, ArrayDesc]) -> Optional[
     return None
 
 
-def _shape_from_expression(fn: ast.FunctionDef,
-                           node: ast.expr,
-                           arr_by: Dict[str, ArrayDesc],
-                           seen: Optional[Set[str]] = None) -> Optional[Tuple[Tuple[str, ...], str]]:
+def _shape_from_expression(
+    fn: ast.FunctionDef, node: ast.expr, arr_by: Dict[str, ArrayDesc], seen: Optional[Set[str]] = None
+) -> Optional[Tuple[Tuple[str, ...], str]]:
     """``(shape, dtype)`` of an array-valued EXPRESSION, or ``None``.
 
     A local bound from a numpy expression rather than an allocation or an alias -- mamba2's
@@ -3577,10 +3796,9 @@ def _shape_from_expression(fn: ast.FunctionDef,
     return (toks, dtype) if toks else None
 
 
-def _resolve_array_ref(fn: ast.FunctionDef,
-                       node: ast.expr,
-                       arr_by: Dict[str, ArrayDesc],
-                       seen: Optional[Set[str]] = None) -> Optional[Tuple[Tuple[str, ...], str]]:
+def _resolve_array_ref(
+    fn: ast.FunctionDef, node: ast.expr, arr_by: Dict[str, ArrayDesc], seen: Optional[Set[str]] = None
+) -> Optional[Tuple[Tuple[str, ...], str]]:
     """``(shape, dtype)`` of an array-VALUED expression, or ``None`` when it is not resolvable.
 
     Handles a declared param (``arr_by`` hit), a kernel-local ``np.zeros/empty/ones`` allocation
@@ -3655,7 +3873,6 @@ def fold_dtype_aliases(fn: ast.FunctionDef) -> None:
         return
 
     class Fold(ast.NodeTransformer):
-
         def visit_Name(self, node: ast.Name) -> ast.AST:
             value = aliases.get(node.id) if isinstance(node.ctx, ast.Load) else None
             return ast.copy_location(copy.deepcopy(value), node) if value is not None else node
@@ -3699,7 +3916,6 @@ def resolve_shape_reads(fn: ast.FunctionDef, arr_by: Dict[str, ArrayDesc]) -> Li
     tuple_locals = frozenset(n for n, v in name_value_pairs(fn) if isinstance(v, (ast.Tuple, ast.List)))
 
     class Rewriter(ast.NodeTransformer):
-
         def __init__(self, shapes: Dict[str, Tuple[str, ...]]) -> None:
             self.shapes = shapes
             self.changed = False
@@ -3785,7 +4001,7 @@ def resolve_extent_of(
     arr_by: Dict[str, ArrayDesc],
     shapes: Dict[str, Tuple[str, ...]],
     rebound: FrozenSet[str] = frozenset(),
-    tuple_locals: FrozenSet[str] = frozenset()
+    tuple_locals: FrozenSet[str] = frozenset(),
 ) -> Optional[Tuple[str, ...]]:
     """Shape tokens of an array-valued expression, forward table first, or ``None``.
 
@@ -3871,7 +4087,6 @@ def fold_extent_locals(fn: ast.FunctionDef, arr_by: Dict[str, ArrayDesc]) -> Non
         return
 
     class Folder(ast.NodeTransformer):
-
         def visit_Assign(self, node: ast.Assign) -> ast.AST:
             # The defining store itself keeps its name; a dead scalar store costs nothing and
             # removing it here would race the passes that still read the definition.
@@ -3892,16 +4107,19 @@ def _literal_axis(sl: ast.expr) -> Optional[int]:
     """The integer axis of a ``.shape[k]`` read, or ``None`` when it is not a literal one."""
     if isinstance(sl, ast.Constant) and isinstance(sl.value, int) and not isinstance(sl.value, bool):
         return sl.value
-    if (isinstance(sl, ast.UnaryOp) and isinstance(sl.op, ast.USub) and isinstance(sl.operand, ast.Constant)
-            and isinstance(sl.operand.value, int)):
+    if (
+        isinstance(sl, ast.UnaryOp)
+        and isinstance(sl.op, ast.USub)
+        and isinstance(sl.operand, ast.Constant)
+        and isinstance(sl.operand.value, int)
+    ):
         return -sl.operand.value
     return None
 
 
-def conflicting_rebind_shapes(fn: ast.FunctionDef,
-                              node: ast.expr,
-                              arr_by: Dict[str, ArrayDesc],
-                              ignore: Optional[ast.Assign] = None) -> Optional[Tuple[Tuple[str, ...], Tuple[str, ...]]]:
+def conflicting_rebind_shapes(
+    fn: ast.FunctionDef, node: ast.expr, arr_by: Dict[str, ArrayDesc], ignore: Optional[ast.Assign] = None
+) -> Optional[Tuple[Tuple[str, ...], Tuple[str, ...]]]:
     """Two disagreeing shapes for ``node``, or ``None`` when it resolves to one.
 
     :func:`_resolve_array_ref` chases a local to its FIRST binding, which is the only answer
@@ -3925,8 +4143,12 @@ def conflicting_rebind_shapes(fn: ast.FunctionDef,
             # is exactly what is not resolvable yet -- counting it would make every in-place call
             # look like a disagreement with itself.
             continue
-        if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
-                and stmt.targets[0].id == node.id):
+        if (
+            isinstance(stmt, ast.Assign)
+            and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], ast.Name)
+            and stmt.targets[0].id == node.id
+        ):
             res = _resolve_array_ref(fn, stmt.value, arr_by, {node.id})
             if res is None and isinstance(stmt.value, ast.Call):
                 # A direct ``np.zeros(...)`` binding is a shape ``_resolve_array_ref`` only reads
@@ -3943,7 +4165,7 @@ def conflicting_rebind_shapes(fn: ast.FunctionDef,
     # An UNRESOLVABLE rebind (``h = _maxpool2d(h, 2, 2)``, whose shape only exists once the call
     # is lowered) is a disagreement too: nothing here proves it kept the shape the first binding
     # gave, and assuming it did is what emitted a pooling body sized for its input.
-    return tuple(s if s is not None else ("<unresolved>", ) for s in shapes[:2])
+    return tuple(s if s is not None else ("<unresolved>",) for s in shapes[:2])
 
 
 def _infer_param_desc(arg: ast.AST, pname: str, arr_by, sca_by, sym_by, fn=None):
@@ -4030,7 +4252,8 @@ def boolean_valued_argument(arg: ast.AST, fn, sca_by, depth: int = 0) -> bool:
         # A local bound once to a predicate: resolve through that binding, the same single-binding
         # rule the integer probe uses -- more than one and the value is not decided here.
         bound = [
-            st.value for st in ast.walk(fn)
+            st.value
+            for st in ast.walk(fn)
             if isinstance(st, ast.Assign) and any(isinstance(t, ast.Name) and t.id == arg.id for t in st.targets)
         ]
         return len(bound) == 1 and boolean_valued_argument(bound[0], fn, sca_by, depth + 1)
@@ -4061,13 +4284,15 @@ def integer_valued_argument(arg: ast.AST, fn, sca_by, sym_by, depth: int = 0) ->
             return False
         # A local bound once to an integer expression: resolve through that binding.
         bound = [
-            s.value for s in ast.walk(fn)
+            s.value
+            for s in ast.walk(fn)
             if isinstance(s, ast.Assign) and any(isinstance(t, ast.Name) and t.id == arg.id for t in s.targets)
         ]
         return len(bound) == 1 and integer_valued_argument(bound[0], fn, sca_by, sym_by, depth + 1)
     if isinstance(arg, ast.BinOp) and isinstance(arg.op, (ast.Add, ast.Sub, ast.Mult, ast.FloorDiv, ast.Mod)):
-        return (integer_valued_argument(arg.left, fn, sca_by, sym_by, depth + 1)
-                and integer_valued_argument(arg.right, fn, sca_by, sym_by, depth + 1))
+        return integer_valued_argument(arg.left, fn, sca_by, sym_by, depth + 1) and integer_valued_argument(
+            arg.right, fn, sca_by, sym_by, depth + 1
+        )
     if isinstance(arg, ast.UnaryOp) and isinstance(arg.op, (ast.UAdd, ast.USub)):
         return integer_valued_argument(arg.operand, fn, sca_by, sym_by, depth + 1)
     # ``int(...)`` says so outright.
@@ -4108,8 +4333,9 @@ def _call_arg_key(arg: ast.expr, kernel_fn: ast.FunctionDef, arr_by: Dict[str, A
     return resolved[0] if resolved is not None else ast.unparse(arg)
 
 
-def _specialise_helpers_by_call_signature(tree: ast.Module, kernel_fn: ast.FunctionDef,
-                                          helper_defs: List[ast.FunctionDef], arr_by) -> bool:
+def _specialise_helpers_by_call_signature(
+    tree: ast.Module, kernel_fn: ast.FunctionDef, helper_defs: List[ast.FunctionDef], arr_by
+) -> bool:
     """Give each distinct set of constant call arguments its own copy of the helper.
 
     A kept helper folds its call site's literal arguments into its body, so one emitted function
@@ -4221,8 +4447,12 @@ def target_shape_is_the_call_itself(fn: ast.FunctionDef, lhs, arr_by: Dict[str, 
     if _local_array_def(fn, lhs.id, arr_by) is not None:
         return False
     assigns = _assigns_to(fn, lhs.id)
-    return bool(assigns) and isinstance(assigns[0].value, ast.Call) and isinstance(
-        assigns[0].value.func, ast.Name) and assigns[0].value.func.id == name
+    return (
+        bool(assigns)
+        and isinstance(assigns[0].value, ast.Call)
+        and isinstance(assigns[0].value.func, ast.Name)
+        and assigns[0].value.func.id == name
+    )
 
 
 def _helper_return_shape_from_body(hfn, pnames, args, arr_by, sca_by, sym_by, fn=None):
@@ -4312,12 +4542,13 @@ def helper_call_local_arrays(owner_fn: ast.FunctionDef, helper_defs, arr_by, sca
             for target in node.targets:
                 if isinstance(target, ast.Name):
                     bindings[target.id] = bindings.get(target.id, 0) + 1
-    held = ({s.name
-             for s in sym_by.values()} | {a.name
-                                          for a in arr_by.values()} | {s.name
-                                                                       for s in sca_by.values()}
-            | set(_shape_symbols(arr_by.values())) | {a.arg
-                                                      for a in owner_fn.args.args})
+    held = (
+        {s.name for s in sym_by.values()}
+        | {a.name for a in arr_by.values()}
+        | {s.name for s in sca_by.values()}
+        | set(_shape_symbols(arr_by.values()))
+        | {a.arg for a in owner_fn.args.args}
+    )
     sites = sorted((n for n in ast.walk(owner_fn) if isinstance(n, ast.Assign)), key=lambda n: (n.lineno, n.col_offset))
     known = dict(arr_by)
     found: Dict[str, ArrayDesc] = {}
@@ -4326,8 +4557,14 @@ def helper_call_local_arrays(owner_fn: ast.FunctionDef, helper_defs, arr_by, sca
             continue
         name = site.targets[0].id
         call = site.value
-        if (name in known or bindings.get(name) != 1 or not isinstance(call, ast.Call)
-                or not isinstance(call.func, ast.Name) or call.func.id not in hdefs or call.keywords):
+        if (
+            name in known
+            or bindings.get(name) != 1
+            or not isinstance(call, ast.Call)
+            or not isinstance(call.func, ast.Name)
+            or call.func.id not in hdefs
+            or call.keywords
+        ):
             continue
         hfn = hdefs[call.func.id]
         pnames = [a.arg for a in hfn.args.args]
@@ -4376,14 +4613,18 @@ def reject_subscripted_scalar_params(hfn: ast.FunctionDef, scalars: List[ScalarD
     wrong, so say so here rather than emit against it.
     """
     by_name = {s.name for s in scalars}
-    indexed = sorted({
-        n.value.id
-        for n in ast.walk(hfn)
-        if isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name) and n.value.id in by_name
-    })
+    indexed = sorted(
+        {
+            n.value.id
+            for n in ast.walk(hfn)
+            if isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name) and n.value.id in by_name
+        }
+    )
     if indexed:
-        raise NotImplementedError(f"helper {name!r} indexes {indexed}, which the call site typed as scalars; "
-                                  f"the argument's shape is not resolvable where the helper is built")
+        raise NotImplementedError(
+            f"helper {name!r} indexes {indexed}, which the call site typed as scalars; "
+            f"the argument's shape is not resolvable where the helper is built"
+        )
 
 
 def _mark_written_outputs(hfn: ast.FunctionDef, arrays: List[ArrayDesc]) -> None:
@@ -4391,7 +4632,7 @@ def _mark_written_outputs(hfn: ast.FunctionDef, arrays: List[ArrayDesc]) -> None
     (drops ``const`` on the pointer)."""
     written: Set[str] = set()
     for n in ast.walk(hfn):
-        targets = (n.targets if isinstance(n, ast.Assign) else [n.target] if isinstance(n, ast.AugAssign) else [])
+        targets = n.targets if isinstance(n, ast.Assign) else [n.target] if isinstance(n, ast.AugAssign) else []
         for t in targets:
             if isinstance(t, ast.Name):
                 written.add(t.id)
@@ -4408,7 +4649,6 @@ def _substitute_names(node: ast.AST, consts: Dict[str, ast.expr]) -> ast.AST:
     Returns the (possibly replaced) root so a bare-Name ``node`` is not lost."""
 
     class _Sub(ast.NodeTransformer):
-
         def visit_Name(self, n: ast.Name):
             if isinstance(n.ctx, ast.Load) and n.id in consts:
                 return ast.copy_location(copy.deepcopy(consts[n.id]), n)
@@ -4448,16 +4688,19 @@ def _rewrite_returns_to_outparam(hfn: ast.FunctionDef, hret: str) -> None:
     the helper emits as a ``void`` out-param function."""
 
     class _Ret(ast.NodeTransformer):
-
         def visit_Return(self, n: ast.Return):
             if n.value is None:
                 return n
-            store = ast.Assign(targets=[
-                ast.Subscript(value=ast.Name(id=hret, ctx=ast.Load()),
-                              slice=ast.Slice(lower=None, upper=None, step=None),
-                              ctx=ast.Store())
-            ],
-                               value=n.value)
+            store = ast.Assign(
+                targets=[
+                    ast.Subscript(
+                        value=ast.Name(id=hret, ctx=ast.Load()),
+                        slice=ast.Slice(lower=None, upper=None, step=None),
+                        ctx=ast.Store(),
+                    )
+                ],
+                value=n.value,
+            )
             bare = ast.Return(value=None)
             ast.copy_location(store, n)
             ast.copy_location(bare, n)
@@ -4531,13 +4774,15 @@ def scope_nodes(fn: ast.FunctionDef) -> Iterator[ast.AST]:
         stack.extend(ast.iter_child_nodes(node))
 
 
-def _caller_side_symbol(sym: str,
-                        held: Set[str],
-                        decl_pnames: List[str],
-                        site_args: List[ast.expr],
-                        hfn: ast.FunctionDef,
-                        hname: str,
-                        depth: int = 0) -> str:
+def _caller_side_symbol(
+    sym: str,
+    held: Set[str],
+    decl_pnames: List[str],
+    site_args: List[ast.expr],
+    hfn: ast.FunctionDef,
+    hname: str,
+    depth: int = 0,
+) -> str:
     """The source ONE call site passes for a shape symbol the helper receives but the caller never named.
 
     ``extra_syms`` is the helper's own vocabulary: a parameter the constant-fold pruned
@@ -4557,33 +4802,40 @@ def _caller_side_symbol(sym: str,
     if sym in held:
         return sym
     if depth > EXTRA_SYM_DEPTH:
-        raise NotImplementedError(f"helper {hname!r} defines shape symbol {sym!r} through more than "
-                                  f"{EXTRA_SYM_DEPTH} of its own locals; it needs shape-generic parameters")
+        raise NotImplementedError(
+            f"helper {hname!r} defines shape symbol {sym!r} through more than "
+            f"{EXTRA_SYM_DEPTH} of its own locals; it needs shape-generic parameters"
+        )
     by_param = dict(zip(decl_pnames, site_args))
     if sym in by_param:
         return ast.unparse(by_param[sym])
 
     binding = _sole_local_binding(hfn, sym)
     if binding is None:
-        raise NotImplementedError(f"helper {hname!r} needs shape symbol {sym!r}, which is neither one of its "
-                                  f"parameters nor bound exactly once in its body; the caller has no expression "
-                                  f"to pass for it")
+        raise NotImplementedError(
+            f"helper {hname!r} needs shape symbol {sym!r}, which is neither one of its "
+            f"parameters nor bound exactly once in its body; the caller has no expression "
+            f"to pass for it"
+        )
     expr = _substitute_names(ast.Expression(body=copy.deepcopy(binding)), by_param).body
     # Whatever is still a helper-local after that substitution is another link in the same chain.
     locals_bound = _collect_assigned_names(hfn.body)
-    leftover = sorted({n.id
-                       for n in ast.walk(expr) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
-                      & set(locals_bound))
+    leftover = sorted(
+        {n.id for n in ast.walk(expr) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)} & set(locals_bound)
+    )
     if leftover:
         nested = {
-            nm: ast.parse(_caller_side_symbol(nm, held, decl_pnames, site_args, hfn, hname, depth + 1),
-                          mode="eval").body
+            nm: ast.parse(
+                _caller_side_symbol(nm, held, decl_pnames, site_args, hfn, hname, depth + 1), mode="eval"
+            ).body
             for nm in leftover
         }
         expr = _substitute_names(ast.Expression(body=expr), nested).body
     if isinstance(expr, (ast.Tuple, ast.List, ast.Dict, ast.Set)):
-        raise NotImplementedError(f"helper {hname!r} needs shape symbol {sym!r}, but the caller would have to pass "
-                                  f"{ast.unparse(expr)} -- a shape slot takes one integer, not a sequence")
+        raise NotImplementedError(
+            f"helper {hname!r} needs shape symbol {sym!r}, but the caller would have to pass "
+            f"{ast.unparse(expr)} -- a shape slot takes one integer, not a sequence"
+        )
     return ast.unparse(expr)
 
 
@@ -4606,8 +4858,9 @@ def _held_before(owner_fn: ast.FunctionDef, site: ast.stmt) -> Set[str]:
     return held
 
 
-def _caller_side_shape(tokens, held: Set[str], decl_pnames: List[str], site_args: List[ast.expr], hfn: ast.FunctionDef,
-                       hname: str) -> List[str]:
+def _caller_side_shape(
+    tokens, held: Set[str], decl_pnames: List[str], site_args: List[ast.expr], hfn: ast.FunctionDef, hname: str
+) -> List[str]:
     """``tokens`` -- one helper descriptor's shape -- respelled in the CALLER's vocabulary.
 
     The call is not the only place a helper's names reach the caller. :func:`_build_callsite_stmts`
@@ -4622,23 +4875,26 @@ def _caller_side_shape(tokens, held: Set[str], decl_pnames: List[str], site_args
         expr = ast.parse(str(token), mode="eval").body
         subst = {
             n.id: ast.parse(_caller_side_symbol(n.id, held, decl_pnames, site_args, hfn, hname), mode="eval").body
-            for n in ast.walk(expr) if isinstance(n, ast.Name) and n.id not in held
+            for n in ast.walk(expr)
+            if isinstance(n, ast.Name) and n.id not in held
         }
         out.append(ast.unparse(_substitute_names(ast.Expression(body=expr), subst).body) if subst else str(token))
     return out
 
 
-def _build_callsite_stmts(lhs,
-                          name,
-                          pnames,
-                          kept_args,
-                          extra_srcs,
-                          param_info,
-                          hret_shape,
-                          hret_dtype,
-                          hidx,
-                          inout=False,
-                          live_buffers=frozenset()):
+def _build_callsite_stmts(
+    lhs,
+    name,
+    pnames,
+    kept_args,
+    extra_srcs,
+    param_info,
+    hret_shape,
+    hret_dtype,
+    hidx,
+    inout=False,
+    live_buffers=frozenset(),
+):
     """Replacement statements for an array-returning helper call.
 
     Slice / non-bare array args are first materialised into contiguous temps (a
@@ -4694,8 +4950,9 @@ def _build_callsite_stmts(lhs,
     tmp = f"__hret_tmp_{hidx}"
     call_srcs.append(tmp)
     lines = pre + [
-        f"{tmp} = np.empty(({', '.join(hret_shape)},), dtype=np.{hret_dtype})", f"{name}({', '.join(call_srcs)})",
-        f"{ast.unparse(lhs)} = {tmp}"
+        f"{tmp} = np.empty(({', '.join(hret_shape)},), dtype=np.{hret_dtype})",
+        f"{name}({', '.join(call_srcs)})",
+        f"{ast.unparse(lhs)} = {tmp}",
     ]
     return ast.parse("\n".join(lines)).body
 
@@ -4737,8 +4994,10 @@ def _reorder_helper_call_args(trees: List[ast.AST], helpers: List[KernelIR]) -> 
             # arguments are unrelated to the parameters they land on. Every site is rewritten to
             # `input_args` order in `_build_helper_kirs`, so a mismatch here is a defect upstream.
             if len(node.args) != len(perm):
-                raise NotImplementedError(f"helper {node.func.id!r}: call site has {len(node.args)} args but the "
-                                          f"ABI order has {len(perm)}; the call was not rewritten to the helper ABI")
+                raise NotImplementedError(
+                    f"helper {node.func.id!r}: call site has {len(node.args)} args but the "
+                    f"ABI order has {len(perm)}; the call was not rewritten to the helper ABI"
+                )
             node.args = [node.args[i] for i in perm]
 
 
@@ -4758,10 +5017,9 @@ class _ReplaceStmts(ast.NodeTransformer):
         return repl
 
 
-def _desugar_helper_tuples(hfn: ast.FunctionDef,
-                           arrays: List[ArrayDesc],
-                           scalars: List[ScalarDesc],
-                           symbols: Sequence[SymbolDesc] = ()) -> None:
+def _desugar_helper_tuples(
+    hfn: ast.FunctionDef, arrays: List[ArrayDesc], scalars: List[ScalarDesc], symbols: Sequence[SymbolDesc] = ()
+) -> None:
     """Run :func:`desugar_tuples` on a helper that survived inlining, against ITS OWN param ranks.
 
     The kernel body gets this pass once, inside ``parse_kernel`` (ranks from its declared array
@@ -4783,10 +5041,9 @@ def _desugar_helper_tuples(hfn: ast.FunctionDef,
     desugar_tuples(hfn, int_scalars=int_scalars, float_scalars=float_scalars, arrays=frozenset(ranks), ranks=ranks)
 
 
-def _fold_call_arg_constant(arg: ast.expr,
-                            arrays: List[ArrayDesc],
-                            scalars: List[ScalarDesc],
-                            symbols: Sequence[SymbolDesc] = ()) -> Optional[ast.Constant]:
+def _fold_call_arg_constant(
+    arg: ast.expr, arrays: List[ArrayDesc], scalars: List[ScalarDesc], symbols: Sequence[SymbolDesc] = ()
+) -> Optional[ast.Constant]:
     """``arg`` reduced to a literal against the kernel's own rank/scalar tables, or ``None``.
 
     A call-site argument is not always spelled as a bare literal -- ``_as_tuple(v, x.ndim - 2)``
@@ -4866,8 +5123,8 @@ def _folded_straight_line(body: List[ast.stmt]) -> Optional[List[ast.stmt]]:
         # bails, computes ``iz_hi``, bails again, then computes the bounds it returns. A guard that
         # rebound a folded name would make one substitution stand for two values, so decline.
         if any(
-                isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store) and sub.id in folded
-                for sub in ast.walk(stmt)):
+            isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store) and sub.id in folded for sub in ast.walk(stmt)
+        ):
             return None
         kept = copy.deepcopy(stmt)
         _substitute_names(kept, folded)
@@ -4904,8 +5161,16 @@ def _tuple_leaves(expr: ast.expr) -> List[ast.expr]:
     return [expr]
 
 
-def _tuple_template_for_call(hdef: ast.FunctionDef, call: ast.Call, tree: ast.Module, parent: KernelIR, arr_by, sca_by,
-                             sym_by, kernel_fn: ast.FunctionDef) -> Optional[ast.expr]:
+def _tuple_template_for_call(
+    hdef: ast.FunctionDef,
+    call: ast.Call,
+    tree: ast.Module,
+    parent: KernelIR,
+    arr_by,
+    sca_by,
+    sym_by,
+    kernel_fn: ast.FunctionDef,
+) -> Optional[ast.expr]:
     """``hdef`` folded against THIS call's own arguments as one spliceable expression, or ``None``.
 
     A helper whose every branch yields a fixed-length tuple has no C/Fortran ABI at all -- there is
@@ -4924,8 +5189,11 @@ def _tuple_template_for_call(hdef: ast.FunctionDef, call: ast.Call, tree: ast.Mo
     native_desugar(hfn)
     consts: Dict[str, ast.expr] = {}
     for pname, arg in zip(pnames, call.args):
-        folded = arg if isinstance(arg, ast.Constant) else _fold_call_arg_constant(arg, parent.arrays, parent.scalars,
-                                                                                   parent.symbols)
+        folded = (
+            arg
+            if isinstance(arg, ast.Constant)
+            else _fold_call_arg_constant(arg, parent.arrays, parent.scalars, parent.symbols)
+        )
         if folded is not None:
             consts[pname] = folded
     _bind_call_constants(hfn, consts)
@@ -4981,8 +5249,12 @@ def _helper_call_sites(fn: ast.FunctionDef):
     assign_of: Dict[str, ast.Assign] = {}
     assigns_of: Dict[str, List[ast.Assign]] = {}
     for node in ast.walk(fn):
-        if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.value, ast.Call)
-                and isinstance(node.value.func, ast.Name)):
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+        ):
             assigns_of.setdefault(node.value.func.id, []).append(node)
             if node.value.func.id not in call_of:
                 call_of[node.value.func.id] = node.value
@@ -5003,12 +5275,16 @@ def _helpers_callers_first(helper_defs: List[ast.FunctionDef], kernel_fn: ast.Fu
     ``out``, restored by sorting it back at the end of :func:`_build_helper_kirs`."""
     names = {h.name: h for h in helper_defs}
     calls = {
-        h.name:
-        sorted({
-            n.func.id
-            for n in ast.walk(h)
-            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in names and n.func.id != h.name
-        })
+        h.name: sorted(
+            {
+                n.func.id
+                for n in ast.walk(h)
+                if isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Name)
+                and n.func.id in names
+                and n.func.id != h.name
+            }
+        )
         for h in helper_defs
     }
     ordered: List[ast.FunctionDef] = []
@@ -5056,8 +5332,9 @@ def abi_hostile_arguments(tree: ast.Module, hname: str) -> List[str]:
     return seen
 
 
-def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: KernelIR,
-                       keep_helpers: bool) -> List[KernelIR]:
+def _build_helper_kirs(
+    tree: ast.Module, kernel_fn: ast.FunctionDef, parent: KernelIR, keep_helpers: bool
+) -> List[KernelIR]:
     """One :class:`KernelIR` per non-inlinable called helper (see
     :func:`_collect_called_helper_defs`). Each helper param's type/shape is read
     off the FIRST call site's argument via :func:`_infer_param_desc`; module
@@ -5091,8 +5368,9 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
     #: SIBLING (lulesh's ``_calc_force_for_nodes``, called from ``_lagrange_nodal``) has no
     #: kernel-body call at all, and resolving its arguments against the kernel's tables would read
     #: the wrong scope. Helpers are visited callers-first, so the owner is already registered.
-    scopes: List[Tuple[ast.FunctionDef, List, List,
-                       List]] = [(kernel_fn, parent.arrays, parent.scalars, parent.symbols)]
+    scopes: List[Tuple[ast.FunctionDef, List, List, List]] = [
+        (kernel_fn, parent.arrays, parent.scalars, parent.symbols)
+    ]
     hidx_of = {id(h): i for i, h in enumerate(helper_defs)}
     for hdef in _helpers_callers_first(helper_defs, kernel_fn):
         hidx = hidx_of[id(hdef)]
@@ -5108,8 +5386,10 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
         # kernel that used to emit into a hard failure rather than routing it somewhere better.
         hostile = abi_hostile_arguments(tree, hdef.name) if keep_helpers else []
         if hostile:
-            raise NotImplementedError(f"helper {hdef.name!r} is called with {hostile}, which no ABI carries; "
-                                      f"it must be inlined into its caller")
+            raise NotImplementedError(
+                f"helper {hdef.name!r} is called with {hostile}, which no ABI carries; "
+                f"it must be inlined into its caller"
+            )
         oarr_by = {a.name: a for a in oarrays}
         osca_by = {s.name: s for s in oscalars}
         osym_by = {s.name: s for s in osymbols}
@@ -5131,7 +5411,8 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
             if clash is not None:
                 raise NotImplementedError(
                     f"helper {hdef.name!r} is called on {node.id!r}, which is rebound to both {clash[0]} and "
-                    f"{clash[1]}; the helper's extents are emitted as constants and cannot serve both")
+                    f"{clash[1]}; the helper's extents are emitted as constants and cannot serve both"
+                )
         hfn = copy.deepcopy(hdef)
         pnames = [a.arg for a in hfn.args.args]
         # The parent's folded names carry over: this helper's array params reuse the
@@ -5154,12 +5435,14 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
             # an array return as by-value: no out-param is added, the returns stay as
             # ``return <expr>``, and every shape-changing call inside one reaches the emitter
             # unlowered, because the expanders only ever see assignments.
-            hret_shape, hret_dtype = _helper_return_shape_from_body(hfn, pnames, call.args, oarr_by, osca_by, osym_by,
-                                                                    owner_fn)
+            hret_shape, hret_dtype = _helper_return_shape_from_body(
+                hfn, pnames, call.args, oarr_by, osca_by, osym_by, owner_fn
+            )
         elif target_shape_is_the_call_itself(owner_fn, lhs, oarr_by, hdef.name):
             # The target told us nothing the call did not; ask the body, which knows what it writes.
-            body_shape, body_dtype = _helper_return_shape_from_body(hfn, pnames, call.args, oarr_by, osca_by, osym_by,
-                                                                    owner_fn)
+            body_shape, body_dtype = _helper_return_shape_from_body(
+                hfn, pnames, call.args, oarr_by, osca_by, osym_by, owner_fn
+            )
             if body_shape is not None:
                 hret_shape, hret_dtype = body_shape, body_dtype
 
@@ -5212,17 +5495,26 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
             owners = [kernel_fn] + [built.get(h.name, h) for h in helper_defs if h is not hdef]
             scope_of = {id(fn): (a, sc, sy) for fn, a, sc, sy in scopes}
             default_scope = (parent.arrays, parent.scalars, parent.symbols)
-            calls = [(owner, n) for owner in owners for n in ast.walk(owner)
-                     if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == hdef.name]
+            calls = [
+                (owner, n)
+                for owner in owners
+                for n in ast.walk(owner)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == hdef.name
+            ]
             templates: Dict[int, ast.expr] = {}
             if calls and all(not c.keywords and len(c.args) == len(pnames) for _, c in calls):
                 for owner, site in calls:
                     oa, osc, osy = scope_of.get(id(owner), default_scope)
-                    template = _tuple_template_for_call(hdef, site, tree, parent, {a.name: a
-                                                                                   for a in oa},
-                                                        {s.name: s
-                                                         for s in osc}, {s.name: s
-                                                                         for s in osy}, owner)
+                    template = _tuple_template_for_call(
+                        hdef,
+                        site,
+                        tree,
+                        parent,
+                        {a.name: a for a in oa},
+                        {s.name: s for s in osc},
+                        {s.name: s for s in osy},
+                        owner,
+                    )
                     if template is None:
                         templates.clear()
                         break
@@ -5245,9 +5537,12 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
             # inlining on (:func:`parse_kernel`) and everything else reports the reason here
             # instead of at emit, where nothing retries.
             if isinstance(lhs, ast.Tuple) or any(
-                    isinstance(n, ast.Return) and isinstance(n.value, ast.Tuple) for n in ast.walk(hfn)):
-                raise NotImplementedError(f"helper {hdef.name!r} returns a tuple; it has no standalone ABI and "
-                                          f"must be inlined into its caller")
+                isinstance(n, ast.Return) and isinstance(n.value, ast.Tuple) for n in ast.walk(hfn)
+            ):
+                raise NotImplementedError(
+                    f"helper {hdef.name!r} returns a tuple; it has no standalone ABI and "
+                    f"must be inlined into its caller"
+                )
             # Reaching the by-value branch means the call site's target did not resolve to an array.
             # If the helper nonetheless returns one of its OWN allocations, the classification is
             # wrong: the value belongs in an out-param, and returning it by value hands back a
@@ -5261,11 +5556,15 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
             # only question is whether the return is a local allocation at all.
             harr_by = {a.name: a for a in arrays}
             for n in ast.walk(hfn):
-                if (isinstance(n, ast.Return) and isinstance(n.value, ast.Name)
-                        and _local_array_def(hfn, n.value.id, harr_by) is not None):
+                if (
+                    isinstance(n, ast.Return)
+                    and isinstance(n.value, ast.Name)
+                    and _local_array_def(hfn, n.value.id, harr_by) is not None
+                ):
                     raise NotImplementedError(
                         f"helper {hdef.name!r} returns its own array {n.value.id!r} by value; the call site's "
-                        f"target did not resolve to an array, so there is no out-param to write it into")
+                        f"target did not resolve to an array, so there is no out-param to write it into"
+                    )
             # A helper that survives inlining is emitted as its OWN kernel and lowered through the
             # same expanders, so it needs the same structural guards the kernel body gets. Without
             # them a symbolic axis inside a helper reached lowering and was read as "no axis" --
@@ -5292,16 +5591,18 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
                 # ``C_out`` only through ``input``'s ``(N, H, W, C_in)``).
                 for owner, _ in calls:
                     oa, osc, osy = scope_of.get(id(owner), default_scope)
-                    held = ({sy.name
-                             for sy in osy} | {a.name
-                                               for a in oa} | {sc.name
-                                                               for sc in osc}
-                            | set(_shape_symbols(oa)))
+                    held = (
+                        {sy.name for sy in osy}
+                        | {a.name for a in oa}
+                        | {sc.name for sc in osc}
+                        | set(_shape_symbols(oa))
+                    )
                     absent = [sy for sy in extra_syms if sy not in held]
                     if absent:
                         raise NotImplementedError(
                             f"helper {hdef.name!r} needs shape symbols {absent}, which its caller does not hold; "
-                            f"it must be inlined into its caller")
+                            f"it must be inlined into its caller"
+                        )
                 symbols.extend(SymbolDesc(name=s) for s in extra_syms)
                 for owner, site in calls:
                     site.args.extend(ast.Name(id=s, ctx=ast.Load()) for s in extra_syms)
@@ -5323,8 +5624,11 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
                     # void. Fortran synthesizes a result dummy for "scalar" and C types the
                     # function by its return, so calling a void helper "scalar" put a
                     # parameter in the definition that no call site passes.
-                    return_kind="scalar" if any(
-                        isinstance(n, ast.Return) and n.value is not None for n in ast.walk(hfn)) else None))
+                    return_kind="scalar"
+                    if any(isinstance(n, ast.Return) and n.value is not None for n in ast.walk(hfn))
+                    else None,
+                )
+            )
             scopes.append((hfn, arrays, scalars, symbols))
             continue
 
@@ -5365,8 +5669,9 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
         # single descriptor, so that case is refused rather than silently aliased.
         inout_param = None
         if isinstance(lhs, ast.Name):
-            inout_param = next((pn for pn, a in zip(pnames, kept_args) if isinstance(a, ast.Name) and a.id == lhs.id),
-                               None)
+            inout_param = next(
+                (pn for pn, a in zip(pnames, kept_args) if isinstance(a, ast.Name) and a.id == lhs.id), None
+            )
         if inout_param is not None:
             desc = next((a for a in arrays if a.name == inout_param), None)
             if desc is None or tuple(str(s) for s in desc.shape) != tuple(str(s) for s in hret_shape):
@@ -5374,7 +5679,8 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
                 raise NotImplementedError(
                     f"helper {hdef.name!r} returns into its own argument {inout_param!r}, but the argument is "
                     f"{got} and the result is {tuple(hret_shape)}; one in-out pointer cannot carry both extents "
-                    f"while a helper's dimensions are emitted as constants")
+                    f"while a helper's dimensions are emitted as constants"
+                )
             desc.is_output = True
             hret = inout_param
         else:
@@ -5390,44 +5696,54 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
         # declared symbol; a SIBLING helper holds only what its own signature received, so one
         # missing name would emit a call naming an identifier that is not in scope there.
         if extra_syms and owner_fn is not kernel_fn:
-            held = ({sy.name
-                     for sy in osymbols} | {a.name
-                                            for a in oarrays} | {sc.name
-                                                                 for sc in oscalars}
-                    | set(_shape_symbols(oarrays)))
+            held = (
+                {sy.name for sy in osymbols}
+                | {a.name for a in oarrays}
+                | {sc.name for sc in oscalars}
+                | set(_shape_symbols(oarrays))
+            )
             absent = [sy for sy in extra_syms if sy not in held]
             if absent:
-                raise NotImplementedError(f"helper {hdef.name!r} needs shape symbols {absent}, which its calling "
-                                          f"helper does not hold; it must be inlined into its caller")
+                raise NotImplementedError(
+                    f"helper {hdef.name!r} needs shape symbols {absent}, which its calling "
+                    f"helper does not hold; it must be inlined into its caller"
+                )
         symbols.extend(SymbolDesc(name=s) for s in extra_syms)
         _rewrite_returns_to_outparam(hfn, hret)
         out.append(
-            KernelIR(tree=hfn,
-                     kernel_name=hdef.name,
-                     short_name=hdef.name,
-                     input_args=list(pnames) + extra_syms + ([] if inout_param is not None else [hret]),
-                     symbols=symbols,
-                     arrays=arrays,
-                     scalars=scalars,
-                     source_path=parent.source_path,
-                     inlined_consts=hconsts,
-                     return_kind=hret))
+            KernelIR(
+                tree=hfn,
+                kernel_name=hdef.name,
+                short_name=hdef.name,
+                input_args=list(pnames) + extra_syms + ([] if inout_param is not None else [hret]),
+                symbols=symbols,
+                arrays=arrays,
+                scalars=scalars,
+                source_path=parent.source_path,
+                inlined_consts=hconsts,
+                return_kind=hret,
+            )
+        )
         scopes.append((hfn, arrays, scalars, symbols))
         if assign is not None:
             param_info = {a.name: (a.shape, a.dtype) for a in arrays if a.name != hret}
             for sidx, site in enumerate(assigns_of.get(hdef.name, [assign])):
                 site_args = site.value.args
                 if len(site_args) != len(decl_pnames):
-                    raise NotImplementedError(f"helper {hdef.name!r} is called with {len(site_args)} args at one "
-                                              f"site and declares {len(decl_pnames)}; the call sites disagree")
+                    raise NotImplementedError(
+                        f"helper {hdef.name!r} is called with {len(site_args)} args at one "
+                        f"site and declares {len(decl_pnames)}; the call sites disagree"
+                    )
                 # The body was SPECIALIZED against the first site's literal args, so a site passing a
                 # different constant cannot call it. Refuse rather than emit a call to a body
                 # specialized for someone else.
                 site_consts = {pn: a.value for pn, a in zip(decl_pnames, site_args) if isinstance(a, ast.Constant)}
                 first_consts = {pn: a.value for pn, a in call_consts.items() if isinstance(a, ast.Constant)}
                 if site_consts != first_consts:
-                    raise NotImplementedError(f"helper {hdef.name!r} is specialized on {first_consts} but another "
-                                              f"call site passes {site_consts}; give the two calls their own helper")
+                    raise NotImplementedError(
+                        f"helper {hdef.name!r} is specialized on {first_consts} but another "
+                        f"call site passes {site_consts}; give the two calls their own helper"
+                    )
                 # The body is also specialized on the first site's SHAPES -- `_infer_helper_params`
                 # reads them off that site's arguments and the emitter bakes them in as literals
                 # (vgg16's `_maxpool2d` hardcodes c=3, h=224, w=224). A site passing a differently
@@ -5443,16 +5759,18 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
                         raise NotImplementedError(
                             f"helper {hdef.name!r} is specialized on {first_a.id}{tuple(first_d.shape)} but another "
                             f"call site passes {site_a.id}{tuple(site_d.shape)}; a helper cannot serve two shapes "
-                            f"while its dimensions are emitted as constants")
+                            f"while its dimensions are emitted as constants"
+                        )
                 # What the CALLER can name -- see :func:`_caller_side_symbol`. Resolved per SITE: two
                 # sites can pass different extents for the same helper symbol.
-                owner_held = ({sy.name
-                               for sy in osymbols} | {a.name
-                                                      for a in oarrays}
-                              | {sc.name
-                                 for sc in oscalars} | set(_shape_symbols(oarrays))
-                              | {a.arg
-                                 for a in owner_fn.args.args} | _held_before(owner_fn, site))
+                owner_held = (
+                    {sy.name for sy in osymbols}
+                    | {a.name for a in oarrays}
+                    | {sc.name for sc in oscalars}
+                    | set(_shape_symbols(oarrays))
+                    | {a.arg for a in owner_fn.args.args}
+                    | _held_before(owner_fn, site)
+                )
                 extra_srcs = [
                     _caller_side_symbol(sy, owner_held, decl_pnames, site_args, hfn, hdef.name) for sy in extra_syms
                 ]
@@ -5474,7 +5792,8 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
                     hret_dtype,
                     f"{hidx}_{sidx}" if sidx else hidx,
                     inout=inout_param is not None,
-                    live_buffers=frozenset(a.name for a in oarrays))
+                    live_buffers=frozenset(a.name for a in oarrays),
+                )
     for owner_fn, _, _, _ in scopes:
         rewrites = callsite_rewrites.get(id(owner_fn))
         if rewrites:
@@ -5488,14 +5807,21 @@ def _build_helper_kirs(tree: ast.Module, kernel_fn: ast.FunctionDef, parent: Ker
     emitted = {h.kernel_name for h in out}
     known = {h.name for h in helper_defs}
     for h in out:
-        missing = sorted({
-            n.func.id
-            for n in ast.walk(h.tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in known
-            and n.func.id not in emitted
-        })
+        missing = sorted(
+            {
+                n.func.id
+                for n in ast.walk(h.tree)
+                if isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Name)
+                and n.func.id in known
+                and n.func.id not in emitted
+            }
+        )
         if missing:
-            raise NotImplementedError(f"helper {h.kernel_name!r} calls {missing}, which are reached only from "
-                                      f"another helper and are not emitted as functions of their own")
+            raise NotImplementedError(
+                f"helper {h.kernel_name!r} calls {missing}, which are reached only from "
+                f"another helper and are not emitted as functions of their own"
+            )
     # Last, so every helper KernelIR (hence every param_order()) is final and the rewritten
     # call sites above are in the tree. Helper bodies too: a helper may call a sibling helper.
     _reorder_helper_call_args([kernel_fn] + [h.tree for h in out], out)
@@ -5540,9 +5866,14 @@ def _collect_inlinable_helpers(tree: ast.Module, kernel_fn: ast.FunctionDef) -> 
         if len(body) == 1 and isinstance(body[0], ast.Return) and body[0].value is not None:
             return True
         # Form 2: ``if cond: return a; else: return b``.
-        if (len(body) == 1 and isinstance(body[0], ast.If) and len(body[0].body) == 1
-                and isinstance(body[0].body[0], ast.Return) and len(body[0].orelse) == 1
-                and isinstance(body[0].orelse[0], ast.Return)):
+        if (
+            len(body) == 1
+            and isinstance(body[0], ast.If)
+            and len(body[0].body) == 1
+            and isinstance(body[0].body[0], ast.Return)
+            and len(body[0].orelse) == 1
+            and isinstance(body[0].orelse[0], ast.Return)
+        ):
             return True
         # Form 3: multi-statement body ending with ``return expr``. No
         # early returns / yields / nested defs allowed. ``Expr`` statements are
@@ -5589,8 +5920,15 @@ def _find_none_guard(mid: List[ast.stmt]) -> Optional[int]:
     """Index of the ONE ``if <cond>: return <None sentinel>`` (no ``elif``/``else``) in ``mid``, or
     ``None`` when there is not exactly one such guard."""
     hits = [
-        i for i, s in enumerate(mid) if (isinstance(s, ast.If) and not s.orelse and len(s.body) == 1
-                                         and isinstance(s.body[0], ast.Return) and _is_none_sentinel(s.body[0].value))
+        i
+        for i, s in enumerate(mid)
+        if (
+            isinstance(s, ast.If)
+            and not s.orelse
+            and len(s.body) == 1
+            and isinstance(s.body[0], ast.Return)
+            and _is_none_sentinel(s.body[0].value)
+        )
     ]
     return hits[0] if len(hits) == 1 else None
 
@@ -5616,7 +5954,7 @@ def _collect_none_guarded_helpers(tree: ast.Module, kernel_fn: ast.FunctionDef) 
         guard_idx = _find_none_guard(mid)
         if guard_idx is None:
             return False
-        rest = mid[:guard_idx] + mid[guard_idx + 1:]
+        rest = mid[:guard_idx] + mid[guard_idx + 1 :]
         if not all(isinstance(s, (ast.Assign, ast.AugAssign, ast.For, ast.If, ast.Expr, ast.While)) for s in rest):
             return False
         return not any(isinstance(sub, ast.Return) for s in rest for sub in ast.walk(s))
@@ -5686,25 +6024,38 @@ class _SpliceNoneGuardedCalls:
         if call_stmt not in stmts:
             return None
         writes = [
-            st for st in stmts
+            st
+            for st in stmts
             if isinstance(st, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in st.targets)
         ]
         if writes != [call_stmt]:
             return None
         unpacks = [
-            st for st in stmts
-            if (isinstance(st, ast.Assign) and len(st.targets) == 1 and isinstance(st.targets[0], (ast.Tuple, ast.List))
-                and all(isinstance(e, ast.Name)
-                        for e in st.targets[0].elts) and isinstance(st.value, ast.Name) and st.value.id == name)
+            st
+            for st in stmts
+            if (
+                isinstance(st, ast.Assign)
+                and len(st.targets) == 1
+                and isinstance(st.targets[0], (ast.Tuple, ast.List))
+                and all(isinstance(e, ast.Name) for e in st.targets[0].elts)
+                and isinstance(st.value, ast.Name)
+                and st.value.id == name
+            )
         ]
         if len(unpacks) != 1 or stmts.index(unpacks[0]) <= stmts.index(call_stmt):
             return None
         # Every other read of ``name`` would survive the splice with nothing to bind it to.
-        readers = sum(1 for sub in ast.walk(self._fn)
-                      if isinstance(sub, ast.Name) and sub.id == name and isinstance(sub.ctx, ast.Load))
+        readers = sum(
+            1
+            for sub in ast.walk(self._fn)
+            if isinstance(sub, ast.Name) and sub.id == name and isinstance(sub.ctx, ast.Load)
+        )
         guard = stmts[stmts.index(call_stmt) + 1] if stmts.index(call_stmt) + 1 < len(stmts) else None
-        guard_reads = sum(1 for sub in ast.walk(guard.test)
-                          if isinstance(sub, ast.Name) and sub.id == name) if isinstance(guard, ast.If) else 0
+        guard_reads = (
+            sum(1 for sub in ast.walk(guard.test) if isinstance(sub, ast.Name) and sub.id == name)
+            if isinstance(guard, ast.If)
+            else 0
+        )
         if readers != guard_reads + 1:
             return None
         return unpacks[0]
@@ -5724,7 +6075,7 @@ class _SpliceNoneGuardedCalls:
                     ast.fix_missing_locations(deferred)
                 else:
                     new_stmts = new_stmts + [unpack]
-                stmts[i:i + consumed] = new_stmts
+                stmts[i : i + consumed] = new_stmts
                 changed = True
                 i += len(new_stmts)
                 continue
@@ -5741,9 +6092,13 @@ class _SpliceNoneGuardedCalls:
         separate unpack statement follows a bare-name call target. ``deferred`` is the unpack
         statement when it sits deeper in the nest instead (see :meth:`_deferred_unpack`)."""
         call_stmt = stmts[i]
-        if not (isinstance(call_stmt, ast.Assign) and len(call_stmt.targets) == 1
-                and isinstance(call_stmt.value, ast.Call) and isinstance(call_stmt.value.func, ast.Name)
-                and call_stmt.value.func.id in self.helpers):
+        if not (
+            isinstance(call_stmt, ast.Assign)
+            and len(call_stmt.targets) == 1
+            and isinstance(call_stmt.value, ast.Call)
+            and isinstance(call_stmt.value.func, ast.Name)
+            and call_stmt.value.func.id in self.helpers
+        ):
             return None
         target = call_stmt.targets[0]
         if i + 1 >= len(stmts) or not isinstance(stmts[i + 1], ast.If):
@@ -5752,9 +6107,14 @@ class _SpliceNoneGuardedCalls:
         if isinstance(target, ast.Name):
             if _none_toggle_op(guard_stmt.test, target.id) is not True:
                 return None
-            if (i + 2 < len(stmts) and isinstance(stmts[i + 2], ast.Assign) and len(stmts[i + 2].targets) == 1
-                    and isinstance(stmts[i + 2].targets[0], (ast.Tuple, ast.List))
-                    and isinstance(stmts[i + 2].value, ast.Name) and stmts[i + 2].value.id == target.id):
+            if (
+                i + 2 < len(stmts)
+                and isinstance(stmts[i + 2], ast.Assign)
+                and len(stmts[i + 2].targets) == 1
+                and isinstance(stmts[i + 2].targets[0], (ast.Tuple, ast.List))
+                and isinstance(stmts[i + 2].value, ast.Name)
+                and stmts[i + 2].value.id == target.id
+            ):
                 return call_stmt, guard_stmt, stmts[i + 2].targets[0].elts, 3, None
             deferred = self._deferred_unpack(call_stmt, target.id)
             if deferred is not None:
@@ -5771,8 +6131,11 @@ class _SpliceNoneGuardedCalls:
         if shape is None:
             return None
         call_stmt, guard_stmt, final_targets, consumed, deferred = shape
-        if not (len(guard_stmt.body) == 1 and not guard_stmt.orelse
-                and isinstance(guard_stmt.body[0], (ast.Continue, ast.Break, ast.Pass, ast.Return))):
+        if not (
+            len(guard_stmt.body) == 1
+            and not guard_stmt.orelse
+            and isinstance(guard_stmt.body[0], (ast.Continue, ast.Break, ast.Pass, ast.Return))
+        ):
             return None
         helper = self.helpers[call_stmt.value.func.id]
         call_args = _resolve_call_args(call_stmt.value, helper)
@@ -5789,7 +6152,7 @@ class _SpliceNoneGuardedCalls:
             return None
 
         param_names = [a.arg for a in helper.args.args]
-        local_names = _collect_assigned_names(mid[:guard_idx] + mid[guard_idx + 1:])
+        local_names = _collect_assigned_names(mid[:guard_idx] + mid[guard_idx + 1 :])
         arg_map = dict(zip(param_names, call_args))
         rename: Dict[str, ast.AST] = dict(arg_map)
         self._counter[0] += 1
@@ -5815,8 +6178,10 @@ class _SpliceNoneGuardedCalls:
 
         new_stmts: List[ast.stmt] = []
         for pn in reassigned_params:
-            init = ast.Assign(targets=[ast.Name(id=f"{prefix}{pn}", ctx=ast.Store())],
-                              value=ast.parse(ast.unparse(arg_map[pn]), mode="eval").body)
+            init = ast.Assign(
+                targets=[ast.Name(id=f"{prefix}{pn}", ctx=ast.Store())],
+                value=ast.parse(ast.unparse(arg_map[pn]), mode="eval").body,
+            )
             ast.fix_missing_locations(init)
             new_stmts.append(init)
         for stmt in mid[:guard_idx]:
@@ -5824,7 +6189,7 @@ class _SpliceNoneGuardedCalls:
         cond = clone_rename_expr(mid[guard_idx].test)
         handler = ast.parse(ast.unparse(guard_stmt.body[0])).body[0]
         new_stmts.append(ast.copy_location(ast.If(test=cond, body=[handler], orelse=[]), call_stmt))
-        for stmt in mid[guard_idx + 1:]:
+        for stmt in mid[guard_idx + 1 :]:
             new_stmts.append(clone_rename(stmt))
         ret_expr = clone_rename_expr(ret_value)
         ret_elts_renamed = ret_expr.elts if isinstance(ret_expr, (ast.Tuple, ast.List)) else [ret_expr]
@@ -5832,8 +6197,10 @@ class _SpliceNoneGuardedCalls:
         if len(targets_copy) == 1:
             unpack = ast.Assign(targets=targets_copy, value=ret_elts_renamed[0])
         else:
-            unpack = ast.Assign(targets=[ast.Tuple(elts=targets_copy, ctx=ast.Store())],
-                                value=ast.Tuple(elts=ret_elts_renamed, ctx=ast.Load()))
+            unpack = ast.Assign(
+                targets=[ast.Tuple(elts=targets_copy, ctx=ast.Store())],
+                value=ast.Tuple(elts=ret_elts_renamed, ctx=ast.Load()),
+            )
         ast.fix_missing_locations(unpack)
         return new_stmts, consumed, deferred, unpack
 
@@ -5846,9 +6213,31 @@ class _SpliceNoneGuardedCalls:
 #: and an index op whose axis never resolved fell through to the emitter's scalar no-op path, which
 #: dropped it outright -- ``np.flip(x, axis=dim)`` emitted a plain copy.
 AXIS_STRUCTURAL_FNS = frozenset(REDUCE_FNS) | {
-    "cumsum", "cumprod", "median", "count_nonzero", "squeeze", "expand_dims", "flip", "roll", "take", "repeat", "diff",
-    "sort", "argsort", "swapaxes", "moveaxis", "concatenate", "stack", "split", "unique", "fft", "ifft", "fftn",
-    "ifftn", "rfft", "irfft"
+    "cumsum",
+    "cumprod",
+    "median",
+    "count_nonzero",
+    "squeeze",
+    "expand_dims",
+    "flip",
+    "roll",
+    "take",
+    "repeat",
+    "diff",
+    "sort",
+    "argsort",
+    "swapaxes",
+    "moveaxis",
+    "concatenate",
+    "stack",
+    "split",
+    "unique",
+    "fft",
+    "ifft",
+    "fftn",
+    "ifftn",
+    "rfft",
+    "irfft",
 }
 
 #: Which POSITIONAL slot each call puts ``axis`` in. Most reductions take it second; the ops that
@@ -5869,7 +6258,7 @@ AXIS_POSITION: Dict[str, int] = {
     "rfft": 2,
     "irfft": 2,
     "fftn": 2,
-    "ifftn": 2
+    "ifftn": 2,
 }
 
 
@@ -5945,8 +6334,9 @@ def _rebound_names(fn: ast.FunctionDef) -> FrozenSet[str]:
             continue
         else:
             continue
-        names.update(leaf.id for tgt in targets if tgt is not None for leaf in ast.walk(tgt)
-                     if isinstance(leaf, ast.Name))
+        names.update(
+            leaf.id for tgt in targets if tgt is not None for leaf in ast.walk(tgt) if isinstance(leaf, ast.Name)
+        )
     return frozenset(names)
 
 
@@ -5999,14 +6389,18 @@ def _reject_symbolic_axis(fn: ast.FunctionDef) -> None:
         kw = {k.arg: k.value for k in node.keywords}
         axis = _axis_argument(node)
         if axis is not None and not _is_literal_axis(axis):
-            raise NotImplementedError(f"{ast.unparse(node)}: axis must be a compile-time integer "
-                                      f"(got {ast.unparse(axis)!r}); the emitted loop nest is chosen by it")
+            raise NotImplementedError(
+                f"{ast.unparse(node)}: axis must be a compile-time integer "
+                f"(got {ast.unparse(axis)!r}); the emitted loop nest is chosen by it"
+            )
         # keepdims decides the result RANK, and a non-literal one was read as False -- which then
         # broadcast the reduction against the wrong axis.
         keep = kw.get("keepdims")
         if keep is not None and not (isinstance(keep, ast.Constant) and isinstance(keep.value, (bool, int))):
-            raise NotImplementedError(f"{ast.unparse(node)}: keepdims must be a compile-time constant "
-                                      f"(got {ast.unparse(keep)!r}); it decides the result rank")
+            raise NotImplementedError(
+                f"{ast.unparse(node)}: keepdims must be a compile-time constant "
+                f"(got {ast.unparse(keep)!r}); it decides the result rank"
+            )
 
 
 def _reject_unsupported_slices(fn: ast.FunctionDef) -> None:
@@ -6030,12 +6424,16 @@ def _reject_unsupported_slices(fn: ast.FunctionDef) -> None:
         if not isinstance(node, ast.Slice):
             continue
         if node.step is not None and not _is_literal_axis(node.step) and node.upper is None:
-            raise NotImplementedError(f"slice step {ast.unparse(node.step)!r} needs an upper bound or a "
-                                      f"compile-time integer; an unbounded symbolic step has no known "
-                                      f"direction and would be emitted as a forward stride")
+            raise NotImplementedError(
+                f"slice step {ast.unparse(node.step)!r} needs an upper bound or a "
+                f"compile-time integer; an unbounded symbolic step has no known "
+                f"direction and would be emitted as a forward stride"
+            )
         if isinstance(node.lower, ast.UnaryOp) and isinstance(node.lower.op, ast.USub):
-            raise NotImplementedError(f"negative slice start {ast.unparse(node.lower)!r} is not resolved against "
-                                      f"the axis length; write it as an explicit extent instead")
+            raise NotImplementedError(
+                f"negative slice start {ast.unparse(node.lower)!r} is not resolved against "
+                f"the axis length; write it as an explicit extent instead"
+            )
 
 
 def _is_literal_axis(node: ast.expr) -> bool:
@@ -6074,8 +6472,12 @@ def _sequence_length(value: ast.expr, ranks: Dict[str, int]) -> Optional[int]:
                 continue
             if isinstance(count, ast.Constant) and isinstance(count.value, int):
                 return len(seq.elts) * count.value
-            if (isinstance(count, ast.Attribute) and count.attr == "ndim" and isinstance(count.value, ast.Name)
-                    and count.value.id in ranks):
+            if (
+                isinstance(count, ast.Attribute)
+                and count.attr == "ndim"
+                and isinstance(count.value, ast.Name)
+                and count.value.id in ranks
+            ):
                 return len(seq.elts) * ranks[count.value.id]
     return None
 
@@ -6103,8 +6505,12 @@ def _axis_index_spaces(fn: ast.FunctionDef, ranks: Dict[str, int]) -> Dict[int, 
         if not isinstance(node, ast.Subscript):
             continue
         base = node.value
-        if (isinstance(base, ast.Attribute) and base.attr == "shape" and isinstance(base.value, ast.Name)
-                and base.value.id in ranks):
+        if (
+            isinstance(base, ast.Attribute)
+            and base.attr == "shape"
+            and isinstance(base.value, ast.Name)
+            and base.value.id in ranks
+        ):
             out[id(node.slice)] = ranks[base.value.id]
         elif isinstance(base, ast.Name) and bound.get(base.id):
             lengths = {_sequence_length(v, ranks) for v in bound[base.id]}
@@ -6172,8 +6578,9 @@ def _runtime_axis_dispatch(fn: ast.FunctionDef, scalars: FrozenSet[str], ranks: 
     return (name, rank) if 1 <= rank <= _MAX_DISPATCH_RANK else None
 
 
-def _specialize_runtime_axis(fn: ast.FunctionDef, name: str, rank: int, params: FrozenSet[str],
-                             resolve: Callable[[ast.FunctionDef], None]) -> None:
+def _specialize_runtime_axis(
+    fn: ast.FunctionDef, name: str, rank: int, params: FrozenSet[str], resolve: Callable[[ast.FunctionDef], None]
+) -> None:
     """Emit one specialised body per axis, selected at run time by ``name``.
 
     Scope is the WHOLE body, not the one call whose axis is symbolic: the axis reaches the narrow
@@ -6204,12 +6611,15 @@ def _specialize_runtime_axis(fn: ast.FunctionDef, name: str, rank: int, params: 
     chain: List[ast.stmt] = []
     for axis in reversed(range(rank)):
         # Both spellings of the same axis share a branch; nothing else may enter one.
-        test = ast.BoolOp(op=ast.Or(),
-                          values=[
-                              ast.Compare(left=ast.Name(id=name, ctx=ast.Load()),
-                                          ops=[ast.Eq()],
-                                          comparators=[ast.Constant(value=value)]) for value in (axis, axis - rank)
-                          ])
+        test = ast.BoolOp(
+            op=ast.Or(),
+            values=[
+                ast.Compare(
+                    left=ast.Name(id=name, ctx=ast.Load()), ops=[ast.Eq()], comparators=[ast.Constant(value=value)]
+                )
+                for value in (axis, axis - rank)
+            ],
+        )
         chain = [ast.If(test=test, body=branches[axis], orelse=chain)]
     fn.body = chain
     ast.fix_missing_locations(fn)
@@ -6293,10 +6703,17 @@ def _fuse_guarded_returns(tree: ast.Module) -> None:
         body = fn.body
         while True:
             _lift_pure_assignment_over_guard(body, flags)
-            if not (len(body) >= 2 and isinstance(body[-1], ast.Return) and body[-1].value is not None
-                    and isinstance(body[-2], ast.If) and not body[-2].orelse and len(body[-2].body) == 1
-                    and isinstance(body[-2].body[0], ast.Return) and body[-2].body[0].value is not None
-                    and _is_static_flag_test(body[-2].test, flags)):
+            if not (
+                len(body) >= 2
+                and isinstance(body[-1], ast.Return)
+                and body[-1].value is not None
+                and isinstance(body[-2], ast.If)
+                and not body[-2].orelse
+                and len(body[-2].body) == 1
+                and isinstance(body[-2].body[0], ast.Return)
+                and body[-2].body[0].value is not None
+                and _is_static_flag_test(body[-2].test, flags)
+            ):
                 break
             guard = body[-2]
             fused = ast.Return(value=ast.IfExp(test=guard.test, body=guard.body[0].value, orelse=body[-1].value))
@@ -6333,11 +6750,21 @@ def _lift_pure_assignment_over_guard(body: List[ast.stmt], flags: FrozenSet[str]
     """
     while len(body) >= 3:
         assign, guard = body[-2], body[-3]
-        if not (isinstance(body[-1], ast.Return) and isinstance(assign, ast.Assign) and len(assign.targets) == 1
-                and isinstance(assign.targets[0], ast.Name) and _is_pure_expression(assign.value)):
+        if not (
+            isinstance(body[-1], ast.Return)
+            and isinstance(assign, ast.Assign)
+            and len(assign.targets) == 1
+            and isinstance(assign.targets[0], ast.Name)
+            and _is_pure_expression(assign.value)
+        ):
             return
-        if not (isinstance(guard, ast.If) and not guard.orelse and len(guard.body) == 1
-                and isinstance(guard.body[0], ast.Return) and _is_static_flag_test(guard.test, flags)):
+        if not (
+            isinstance(guard, ast.If)
+            and not guard.orelse
+            and len(guard.body) == 1
+            and isinstance(guard.body[0], ast.Return)
+            and _is_static_flag_test(guard.test, flags)
+        ):
             return
         target = assign.targets[0].id
         if any(isinstance(sub, ast.Name) and sub.id == target for sub in ast.walk(guard)):
@@ -6362,7 +6789,7 @@ def _is_static_flag_test(test: ast.expr, flags: FrozenSet[str]) -> bool:
     if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
         return _is_static_flag_test(test.operand, flags)
     ops = (ast.Eq, ast.NotEq, ast.Is, ast.IsNot)
-    if (isinstance(test, ast.Compare) and len(test.ops) == 1 and isinstance(test.ops[0], ops)):
+    if isinstance(test, ast.Compare) and len(test.ops) == 1 and isinstance(test.ops[0], ops):
         left, right = test.left, test.comparators[0]
         named = [side for side in (left, right) if isinstance(side, ast.Name) and side.id in flags]
         return bool(named) and any(isinstance(side, ast.Constant) for side in (left, right))
@@ -6417,8 +6844,11 @@ class _LoopVarSubst(ast.NodeTransformer):
     def __init__(self, target: ast.AST, elt: ast.AST) -> None:
         self.elt = elt
         self.map: Dict[str, ast.AST] = {}
-        if (isinstance(target, ast.Tuple) and isinstance(elt, (ast.Tuple, ast.List))
-                and len(target.elts) == len(elt.elts)):
+        if (
+            isinstance(target, ast.Tuple)
+            and isinstance(elt, (ast.Tuple, ast.List))
+            and len(target.elts) == len(elt.elts)
+        ):
             for t, v in zip(target.elts, elt.elts):
                 if isinstance(t, ast.Name):
                     self.map[t.id] = v
@@ -6465,13 +6895,17 @@ def _unroll_const_list_loops(fn: ast.FunctionDef) -> None:
                     binds_count[t.id] = binds_count.get(t.id, 0) + 1
     list_binds: Dict[str, List[ast.expr]] = {}
     for s in ast.walk(fn):
-        if (isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name)
-                and _is_const_list_literal(s.value) and binds_count.get(s.targets[0].id) == 1):
+        if (
+            isinstance(s, ast.Assign)
+            and len(s.targets) == 1
+            and isinstance(s.targets[0], ast.Name)
+            and _is_const_list_literal(s.value)
+            and binds_count.get(s.targets[0].id) == 1
+        ):
             list_binds[s.targets[0].id] = s.value.elts
     consumed: Set[str] = set()
 
     class _U(ast.NodeTransformer):
-
         def visit_For(self, node: ast.For):
             self.generic_visit(node)
             if node.orelse or _has_loop_control(node.body):
@@ -6500,10 +6934,13 @@ def _unroll_const_list_loops(fn: ast.FunctionDef) -> None:
     if consumed:
 
         class _DropBind(ast.NodeTransformer):
-
             def visit_Assign(self, node: ast.Assign):
-                if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in consumed
-                        and _is_const_list_literal(node.value)):
+                if (
+                    len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and node.targets[0].id in consumed
+                    and _is_const_list_literal(node.value)
+                ):
                     return None
                 return node
 
@@ -6566,8 +7003,13 @@ class _HoistMultiStmtHelpers(ast.NodeTransformer):
             # Skip the "Assign of a direct helper Call" form -- the
             # multi-statement inliner already handles those. We only
             # want to hoist NESTED helper Calls.
-            if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.value, ast.Call)
-                    and isinstance(stmt.value.func, ast.Name) and stmt.value.func.id in self.multi_stmt):
+            if (
+                isinstance(stmt, ast.Assign)
+                and len(stmt.targets) == 1
+                and isinstance(stmt.value, ast.Call)
+                and isinstance(stmt.value.func, ast.Name)
+                and stmt.value.func.id in self.multi_stmt
+            ):
                 out.append(stmt)
                 continue
             # Same skip for a helper called as a bare STATEMENT: its value is discarded, so
@@ -6575,8 +7017,12 @@ class _HoistMultiStmtHelpers(ast.NodeTransformer):
             # The temp then dead-stores away and its remaining ``Expr(__hcall<n>)`` folds back to
             # the helper's return expression -- a stranded ``(ux, uy, uz)`` no backend can render.
             # ``_InlineHelpers.visit_Expr`` splices this form and drops the dead return instead.
-            if (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)
-                    and isinstance(stmt.value.func, ast.Name) and stmt.value.func.id in self.multi_stmt):
+            if (
+                isinstance(stmt, ast.Expr)
+                and isinstance(stmt.value, ast.Call)
+                and isinstance(stmt.value.func, ast.Name)
+                and stmt.value.func.id in self.multi_stmt
+            ):
                 out.append(stmt)
                 continue
             # Recurse into nested control flow first.
@@ -6605,7 +7051,7 @@ class _HoistMultiStmtHelpers(ast.NodeTransformer):
             def visit_Call(self_inner, call: ast.Call) -> ast.AST:
                 # Recurse into args / kwargs first.
                 self_inner.generic_visit(call)
-                if (isinstance(call.func, ast.Name) and call.func.id in self.multi_stmt):
+                if isinstance(call.func, ast.Name) and call.func.id in self.multi_stmt:
                     self._counter[0] += 1
                     temp = f"__hcall{self._counter[0]}"
                     self._pending.append(ast.Assign(targets=[ast.Name(id=temp, ctx=ast.Store())], value=call))
@@ -6622,7 +7068,7 @@ def _is_multi_stmt_return_form(fn: ast.FunctionDef) -> bool:
     if len(body) <= 1:
         return False
     last = body[-1]
-    return (isinstance(last, ast.Return) and last.value is not None)
+    return isinstance(last, ast.Return) and last.value is not None
 
 
 class _InlineHelpers(ast.NodeTransformer):
@@ -6654,12 +7100,16 @@ class _InlineHelpers(ast.NodeTransformer):
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         self.generic_visit(node)
-        if (len(node.targets) == 1 and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
-                and node.value.func.id in self.helpers):
+        if (
+            len(node.targets) == 1
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id in self.helpers
+        ):
             helper = self.helpers[node.value.func.id]
             body = _strip_docstrings(helper.body)
             # Multi-statement form -- mid statements followed by Return.
-            if (len(body) > 1 and isinstance(body[-1], ast.Return) and body[-1].value is not None):
+            if len(body) > 1 and isinstance(body[-1], ast.Return) and body[-1].value is not None:
                 param_names = [a.arg for a in helper.args.args]
                 call_args = _resolve_call_args(node.value, helper)
                 if call_args is None:
@@ -6689,8 +7139,10 @@ class _InlineHelpers(ast.NodeTransformer):
                 renamer = _SubstNames(rename)
                 new_body: List[ast.stmt] = []
                 for _pn in reassigned_params:
-                    _init = ast.Assign(targets=[ast.Name(id=f"{prefix}{_pn}", ctx=ast.Store())],
-                                       value=ast.parse(ast.unparse(arg_map[_pn]), mode="eval").body)
+                    _init = ast.Assign(
+                        targets=[ast.Name(id=f"{prefix}{_pn}", ctx=ast.Store())],
+                        value=ast.parse(ast.unparse(arg_map[_pn]), mode="eval").body,
+                    )
                     ast.fix_missing_locations(_init)
                     new_body.append(_init)
                 for stmt in body[:-1]:
@@ -6707,8 +7159,11 @@ class _InlineHelpers(ast.NodeTransformer):
                 # volume``) must be DESTRUCTURED into per-element assigns -- a
                 # backend has no runtime tuple, so ``(b, detJ) = (x, y)`` would
                 # reach emit as an unlowerable Tuple. ``_`` elements are discarded.
-                if (isinstance(tgt, ast.Tuple) and isinstance(ret_expr, ast.Tuple)
-                        and len(tgt.elts) == len(ret_expr.elts)):
+                if (
+                    isinstance(tgt, ast.Tuple)
+                    and isinstance(ret_expr, ast.Tuple)
+                    and len(tgt.elts) == len(ret_expr.elts)
+                ):
                     for t_elt, v_elt in zip(tgt.elts, ret_expr.elts):
                         if isinstance(t_elt, ast.Name) and t_elt.id == "_":
                             continue
@@ -6725,8 +7180,11 @@ class _InlineHelpers(ast.NodeTransformer):
         # no return value. Inline the helper body (parameters renamed)
         # in place of the call statement.
         self.generic_visit(node)
-        if not (isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
-                and node.value.func.id in self.helpers):
+        if not (
+            isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id in self.helpers
+        ):
             return node
         helper = self.helpers[node.value.func.id]
         body = _strip_docstrings(helper.body)
@@ -6793,11 +7251,16 @@ class _InlineHelpers(ast.NodeTransformer):
         node.keywords = []
         subst = dict(zip(param_names, node.args))
         body_stmts = _strip_docstrings(helper.body)
-        if (len(body_stmts) == 1 and isinstance(body_stmts[0], ast.Return)):
+        if len(body_stmts) == 1 and isinstance(body_stmts[0], ast.Return):
             return _SubstNames(subst).visit(
-                ast.fix_missing_locations(ast.parse(ast.unparse(body_stmts[0].value), mode="eval").body))
-        if (len(body_stmts) == 1 and isinstance(body_stmts[0], ast.If) and len(body_stmts[0].body) == 1
-                and len(body_stmts[0].orelse) == 1):
+                ast.fix_missing_locations(ast.parse(ast.unparse(body_stmts[0].value), mode="eval").body)
+            )
+        if (
+            len(body_stmts) == 1
+            and isinstance(body_stmts[0], ast.If)
+            and len(body_stmts[0].body) == 1
+            and len(body_stmts[0].orelse) == 1
+        ):
             cond = ast.parse(ast.unparse(body_stmts[0].test), mode="eval").body
             then = ast.parse(ast.unparse(body_stmts[0].body[0].value), mode="eval").body
             else_ = ast.parse(ast.unparse(body_stmts[0].orelse[0].value), mode="eval").body
@@ -7013,7 +7476,7 @@ def _dtype_from_constructor(rhs: ast.AST) -> Optional[str]:
     """
     if isinstance(rhs, ast.Call):
         # ``foo.astype(dtype)`` -- recurse with the receiver.
-        if (isinstance(rhs.func, ast.Attribute) and rhs.func.attr == "astype" and rhs.args):
+        if isinstance(rhs.func, ast.Attribute) and rhs.func.attr == "astype" and rhs.args:
             inner = _dtype_from_dtype_arg(rhs.args[0])
             if inner is not None:
                 return inner
@@ -7191,8 +7654,12 @@ def _shapes_from_initialize(numpy_py: pathlib.Path, info: Dict) -> Dict[str, str
     # shape-literal substitution.
     list_locals: Dict[str, List[str]] = {}
     for stmt in init_fn.body:
-        if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
-                and isinstance(stmt.value, ast.List)):
+        if (
+            isinstance(stmt, ast.Assign)
+            and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], ast.Name)
+            and isinstance(stmt.value, ast.List)
+        ):
             try:
                 list_locals[stmt.targets[0].id] = [ast.unparse(e) for e in stmt.value.elts]
             except Exception:
@@ -7213,7 +7680,7 @@ def _shapes_from_initialize(numpy_py: pathlib.Path, info: Dict) -> Dict[str, str
                 for i, elt in enumerate(elts):
                     shape = shape.replace(f"{lst_name}[{i}]", elt)
             if init_scalar_defs:
-                shape = _substitute_inlined_scalar_defs((shape, ), init_scalar_defs)[0]
+                shape = _substitute_inlined_scalar_defs((shape,), init_scalar_defs)[0]
             shapes[name] = shape
     # Map positional returns to kernel ``input_args`` so a kernel like
     # ``def go_fast(a):`` paired with ``def initialize(...): return x``
@@ -7261,8 +7728,18 @@ _SHAPE_FIRST_ARG = {
 #: numpy.random distribution generators with a ``(low, high, ..., size)``
 #: signature -- the shape is the ``size`` arg, never the leading params.
 _DIST_FUNCS = {
-    "uniform", "normal", "exponential", "poisson", "beta", "gamma", "binomial", "lognormal", "laplace", "logistic",
-    "integers", "randint"
+    "uniform",
+    "normal",
+    "exponential",
+    "poisson",
+    "beta",
+    "gamma",
+    "binomial",
+    "lognormal",
+    "laplace",
+    "logistic",
+    "integers",
+    "randint",
 }
 _SHAPE_SECOND_ARG = {"fromfunction"}
 #: Constructors that spread axis lengths across SEPARATE positional args
@@ -7281,7 +7758,7 @@ def _shape_from_constructor(node: ast.AST, so_far: Dict[str, str]) -> Optional[s
     ``rng = default_rng()``) is recognised as well.
     """
     # Strip a trailing ``.astype(...)``.
-    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "astype"):
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "astype":
         return _shape_from_constructor(node.func.value, so_far)
     # See through shape-preserving elementwise wrappers to the inner
     # constructor: ``(rng.random((N, N)) < 0.15).astype(int)`` (bfs adjacency
@@ -7295,7 +7772,7 @@ def _shape_from_constructor(node: ast.AST, so_far: Dict[str, str]) -> Optional[s
                 return s
         return None
     if isinstance(node, ast.BinOp):
-        return (_shape_from_constructor(node.left, so_far) or _shape_from_constructor(node.right, so_far))
+        return _shape_from_constructor(node.left, so_far) or _shape_from_constructor(node.right, so_far)
     if isinstance(node, ast.UnaryOp):
         return _shape_from_constructor(node.operand, so_far)
     # See through a shape-preserving elementwise ``np.*`` wrapper to the
@@ -7303,8 +7780,13 @@ def _shape_from_constructor(node: ast.AST, so_far: Dict[str, str]) -> Optional[s
     # (NDIM, nb, nb)), 0.0)`` (seissol) is a ``where`` whose value operand holds
     # the (NDIM, nb, nb) shape; the mask / scalar fill resolve to None and skip.
     # ``clip`` / ``minimum`` / ``maximum`` broadcast the same way.
-    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
-            and node.func.value.id in ("np", "numpy") and node.func.attr in ("where", "clip", "minimum", "maximum")):
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id in ("np", "numpy")
+        and node.func.attr in ("where", "clip", "minimum", "maximum")
+    ):
         for operand in node.args:
             s = _shape_from_constructor(operand, so_far)
             if s is not None:
@@ -7315,8 +7797,13 @@ def _shape_from_constructor(node: ast.AST, so_far: Dict[str, str]) -> Optional[s
     # ``np.copy(arr)``); shape is the source array's. The check guards
     # against ``np.copy(arr)`` (free-function form) being misread as
     # the method form.
-    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "copy"
-            and isinstance(node.func.value, ast.Name) and node.func.value.id != "np"):
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "copy"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id != "np"
+    ):
         return so_far.get(node.func.value.id)
     if not isinstance(node, ast.Call):
         return None
@@ -7324,8 +7811,7 @@ def _shape_from_constructor(node: ast.AST, so_far: Dict[str, str]) -> Optional[s
     attr = func.attr if isinstance(func, ast.Attribute) else (func.id if isinstance(func, ast.Name) else None)
     if attr is None:
         return None
-    if (attr.endswith("_like") or attr in _SHARE_SHAPE_OF_FIRST) \
-            and node.args and isinstance(node.args[0], ast.Name):
+    if (attr.endswith("_like") or attr in _SHARE_SHAPE_OF_FIRST) and node.args and isinstance(node.args[0], ast.Name):
         return so_far.get(node.args[0].id)
     if attr in _SHAPE_FIRST_ARG:
         # A ``size=`` kwarg always wins: numpy.random generators
@@ -7340,7 +7826,7 @@ def _shape_from_constructor(node: ast.AST, so_far: Dict[str, str]) -> Optional[s
         # the shape is the 3rd arg, not low/high. With no size they draw a
         # scalar -- not an array shape.
         if attr in _DIST_FUNCS:
-            return (_unparse_shape_arg(node.args[2]) if len(node.args) >= 3 else None)
+            return _unparse_shape_arg(node.args[2]) if len(node.args) >= 3 else None
         if node.args:
             # Only ``np.random.rand(M, N)``/``randn(M, N)`` spread axis lengths
             # across separate positional args -- every other constructor here
@@ -7351,9 +7837,14 @@ def _shape_from_constructor(node: ast.AST, so_far: Dict[str, str]) -> Optional[s
             # extent is still an axis, so accept expression args too (the same
             # node kinds ``_unparse_shape_arg`` treats as one axis) -- else
             # ``rand(2*R+1, 2*R+1)`` collapsed to a rank-1 ``(2*R+1,)``.
-            if attr in _AXES_AS_ARGS and len(node.args) >= 2 and all(
+            if (
+                attr in _AXES_AS_ARGS
+                and len(node.args) >= 2
+                and all(
                     isinstance(a, (ast.Constant, ast.Name, ast.BinOp, ast.Subscript, ast.Call, ast.UnaryOp))
-                    for a in node.args):
+                    for a in node.args
+                )
+            ):
                 inner = ", ".join(ast.unparse(a) for a in node.args)
                 return f"({inner})"
             return _unparse_shape_arg(node.args[0])
@@ -7433,11 +7924,14 @@ def pure_int_arith(n: ast.AST) -> bool:
     if isinstance(n, ast.Constant):
         return isinstance(n.value, int) and not isinstance(n.value, bool)
     if isinstance(n, ast.BinOp):
-        return (isinstance(n.op, (ast.Add, ast.Sub, ast.Mult, ast.FloorDiv, ast.Mod)) and pure_int_arith(n.left)
-                and pure_int_arith(n.right))
+        return (
+            isinstance(n.op, (ast.Add, ast.Sub, ast.Mult, ast.FloorDiv, ast.Mod))
+            and pure_int_arith(n.left)
+            and pure_int_arith(n.right)
+        )
     if isinstance(n, ast.UnaryOp):
         return isinstance(n.op, (ast.USub, ast.UAdd)) and pure_int_arith(n.operand)
-    if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in ("min", "max", "abs")):
+    if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in ("min", "max", "abs"):
         return all(pure_int_arith(a) for a in n.args)
     return False
 
@@ -7496,7 +7990,7 @@ def _names_used_as_int(tree: ast.AST) -> Set[str]:
             elts = sl.elts if isinstance(sl, ast.Tuple) else [sl]
             for e in elts:
                 collect(e)
-        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "range"):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "range":
             for arg in node.args:
                 collect(arg)
         # Array-shape positions are integer-only: a Name in a constructor
@@ -7521,7 +8015,7 @@ def _names_used_as_int(tree: ast.AST) -> Set[str]:
                 if kw.arg in ("shape", "newshape"):
                     shape_args.append(kw.value)
             for sh in shape_args:
-                sh_elts = (sh.elts if isinstance(sh, (ast.Tuple, ast.List)) else [sh])
+                sh_elts = sh.elts if isinstance(sh, (ast.Tuple, ast.List)) else [sh]
                 for e in sh_elts:
                     collect(e)
         # Bitwise operands must be integral in C; promote the operand
@@ -7546,8 +8040,11 @@ def _names_used_as_int(tree: ast.AST) -> Set[str]:
     # 1`` promotes its additive offsets before indexing ``exxbuff``), bounded
     # by :func:`pure_int_arith` so it never crosses a float divide, a
     # transcendental call, or an ``int(...)`` truncation.
-    assigns = [(node.targets[0].id, node.value) for node in ast.walk(tree)
-               if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)]
+    assigns = [
+        (node.targets[0].id, node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+    ]
     changed = True
     while changed:
         changed = False

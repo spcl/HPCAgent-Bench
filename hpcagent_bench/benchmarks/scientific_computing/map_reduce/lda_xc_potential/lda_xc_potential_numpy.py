@@ -20,8 +20,8 @@ _A, _B, _C, _D = 0.0311, -0.0480, 0.0020, -0.0116  # Perdew-Zunger correlation, 
 def kernel(dvol, rho, vxc, exc):
 
     n = np.maximum(rho, 1.0e-12)
-    rs = (3.0 / (4.0 * np.pi * n))**(1.0 / 3.0)
-    n13 = n**(1.0 / 3.0)
+    rs = (3.0 / (4.0 * np.pi * n)) ** (1.0 / 3.0)
+    n13 = n ** (1.0 / 3.0)
     # Slater exchange: energy density eps_x and potential V_x.
     eps_x = -0.75 * _AX * n13
     v_x = -_AX * n13

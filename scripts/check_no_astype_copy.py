@@ -24,6 +24,7 @@ Auto-generated siblings are skipped too: they are a function of the reference be
 
 Exit status: 0 when no source passes ``copy=`` to ``astype``, 1 otherwise.
 """
+
 import argparse
 import ast
 import subprocess
@@ -86,7 +87,8 @@ def main(argv=None):
         "\nDrop the keyword: a.astype(dt, copy=False) may return a ITSELF when the dtype already "
         "matches, which no backend can reproduce -- every one of them materialises the result. "
         "copy=True is the default and says nothing.",
-        file=sys.stderr)
+        file=sys.stderr,
+    )
     return 1
 
 

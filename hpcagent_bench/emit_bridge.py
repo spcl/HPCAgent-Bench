@@ -14,6 +14,7 @@ on the fly from a ``BenchSpec`` and hands the emitter a temp file -- its
 The emitter package set lives under ``hpcagent_bench/numpy_translators/src`` (the unified
 ``numpyto_common`` + per-language ``numpyto_c`` / ``numpyto_fortran`` / ... ).
 """
+
 import contextlib
 import json
 import os
@@ -36,12 +37,9 @@ def _layouts_to_raw(layouts: Dict[str, Any]) -> Dict[str, Any]:
             "default_dtype": lay.default_dtype,
             "variants": {
                 fmt: {
-                    "buffers": [{
-                        "role": b.role,
-                        "name": b.name,
-                        "shape": list(b.shape),
-                        "dtype": b.dtype
-                    } for b in var.buffers]
+                    "buffers": [
+                        {"role": b.role, "name": b.name, "shape": list(b.shape), "dtype": b.dtype} for b in var.buffers
+                    ]
                 }
                 for fmt, var in lay.variants.items()
             },
@@ -83,7 +81,7 @@ def _flatten_buffer_style_sparse(bench: Dict[str, Any], spec: BenchSpec, config:
         present = logical in new_array_args
         idx = new_array_args.index(logical) if present else len(new_array_args)
         names = [b.name for b in bufs]
-        new_array_args[idx:idx + (1 if present else 0)] = names
+        new_array_args[idx : idx + (1 if present else 0)] = names
         for b in bufs:
             shapes[b.name] = "(" + ", ".join(b.shape) + ",)"
             dtypes[b.name] = b.dtype
@@ -178,11 +176,7 @@ def legacy_bench_info_dict(spec: BenchSpec, config: Optional[str] = None) -> Dic
         bench["configurations"] = {k: dict(c.arrays) for k, c in spec.configurations.items()}
     if spec.distributions:
         bench["distributions"] = {
-            k: {
-                "configuration": d.configuration,
-                "distribution": d.distribution
-            }
-            for k, d in spec.distributions.items()
+            k: {"configuration": d.configuration, "distribution": d.distribution} for k, d in spec.distributions.items()
         }
     if config is not None and config != "dense" and spec.configurations:
         _flatten_buffer_style_sparse(bench, spec, config)
@@ -236,14 +230,16 @@ def bench_info_tempfile(spec: BenchSpec, config: Optional[str] = None) -> Iterat
 _DRIVER = "numpyto_common.cli"
 
 
-def emit_kernel(spec: BenchSpec,
-                kernel_py: os.PathLike,
-                out_dir: os.PathLike,
-                *,
-                target: str = "c",
-                config: Optional[str] = None,
-                precision: str = "",
-                extra_env: Optional[Dict[str, str]] = None) -> int:
+def emit_kernel(
+    spec: BenchSpec,
+    kernel_py: os.PathLike,
+    out_dir: os.PathLike,
+    *,
+    target: str = "c",
+    config: Optional[str] = None,
+    precision: str = "",
+    extra_env: Optional[Dict[str, str]] = None,
+) -> int:
     """Emit ``spec``'s kernel to ``target`` via the unified ``numpyto --target``
     driver, feeding it a transient bench_info JSON synthesized from the co-located
     YAML.
@@ -300,10 +296,12 @@ def arith_header(language: str = "c") -> str:
     the emitter renders the rest inline.
     """
     from numpyto_c import emit as c_emit
+
     return c_emit.arith_header_source(language)
 
 
 def write_arith_header(out_dir: os.PathLike, language: str = "c") -> pathlib.Path:
     """Write :func:`arith_header` into ``out_dir``; returns the path to ``#include``."""
     from numpyto_c import emit as c_emit
+
     return c_emit.write_arith_header(out_dir, language)

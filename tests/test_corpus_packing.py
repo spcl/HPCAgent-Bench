@@ -17,14 +17,25 @@ init, an unevaluable shape, a footprint that resolves to zero) is packed LAST an
 the one thing it cannot do is skew a packing built out of real numbers -- and when NOTHING
 resolves there is no packing to build and the stride comes back untouched.
 """
+
 import dataclasses
 import json
 from typing import Dict, List, Mapping, Optional, Sequence
 
 import pytest
 
-from hpcagent_bench.sizing import (cost_vector, KernelCost, node_footprint_violations, pack_lpt, partition_loads,
-                                   preset_cost, PRESETS, stride_partition, TIME_UNIT_BYTES, XL_BYTE_CEILING)
+from hpcagent_bench.sizing import (
+    cost_vector,
+    KernelCost,
+    node_footprint_violations,
+    pack_lpt,
+    partition_loads,
+    preset_cost,
+    PRESETS,
+    stride_partition,
+    TIME_UNIT_BYTES,
+    XL_BYTE_CEILING,
+)
 from hpcagent_bench.spec import KERNELS
 from hpcagent_bench.support.collect.sweep import shard_names
 
@@ -38,8 +49,11 @@ MEASURED_RANKS = (4, 8, 16)
 def costs_from(sizes: Mapping[str, Optional[int]], preset: str = "M") -> Dict[str, KernelCost]:
     """A hand-built cost vector: ``{kernel: bytes}``, with ``None`` for a kernel that has none."""
     return {
-        name: (KernelCost(name, preset, 0, 0.0, "opaque: hand-built unknown") if nbytes is None else KernelCost(
-            name, preset, nbytes, nbytes / TIME_UNIT_BYTES))
+        name: (
+            KernelCost(name, preset, 0, 0.0, "opaque: hand-built unknown")
+            if nbytes is None
+            else KernelCost(name, preset, nbytes, nbytes / TIME_UNIT_BYTES)
+        )
         for name, nbytes in sizes.items()
     }
 
@@ -205,8 +219,10 @@ def test_lpt_beats_the_stride_on_the_real_corpus(corpus, preset: str, ranks: int
     names = sorted(corpus)
     stride_max = max(partition_loads(stride_partition(names, ranks), costs))
     packed_max = max(partition_loads(pack_lpt(names, costs, ranks), costs))
-    assert packed_max < stride_max, (f"{preset} at {ranks} ranks: LPT max load {packed_max:.3f} is not below the "
-                                     f"stride's {stride_max:.3f} -- keep the stride and delete the packer")
+    assert packed_max < stride_max, (
+        f"{preset} at {ranks} ranks: LPT max load {packed_max:.3f} is not below the "
+        f"stride's {stride_max:.3f} -- keep the stride and delete the packer"
+    )
 
 
 @pytest.mark.parametrize("ranks", MEASURED_RANKS)
@@ -269,10 +285,9 @@ def test_a_kernel_over_its_own_share_is_named_on_its_own() -> None:
     neighbours do, and it is reported as that rather than as a node total."""
     sizes: Dict[str, Optional[int]] = {"huge": 20 * XL_BYTE_CEILING, "tiny": 1 << 20}
     partition = [["huge"], ["tiny"]]
-    problems = node_footprint_violations(partition,
-                                         costs_from(sizes),
-                                         ranks_per_node=2,
-                                         node_ram_bytes=2 * XL_BYTE_CEILING)
+    problems = node_footprint_violations(
+        partition, costs_from(sizes), ranks_per_node=2, node_ram_bytes=2 * XL_BYTE_CEILING
+    )
     assert any("huge" in problem and "share" in problem for problem in problems)
 
 

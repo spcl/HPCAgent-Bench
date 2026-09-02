@@ -3,6 +3,7 @@
 """Shared helper for the macrokernel oracle tests: compiles the dace-fortran-emitted C++ fixture and
 compares it end to end, on identical inputs, against the numpy port. dace's include dir is discovered
 from the installed python package, never hard-coded, so it works in CI and locally alike."""
+
 import ctypes
 import functools
 import os
@@ -34,8 +35,13 @@ def oracle_compiler() -> Optional[str]:
     build died. A guard that promises a skip has to compile something to know."""
     flag = languages.std_flag("cpp")
     for cc in (shutil.which("c++"), shutil.which("g++")):
-        if cc and subprocess.run([cc, flag, "-fsyntax-only", "-x", "c++", os.devnull], capture_output=True,
-                                 check=False).returncode == 0:
+        if (
+            cc
+            and subprocess.run(
+                [cc, flag, "-fsyntax-only", "-x", "c++", os.devnull], capture_output=True, check=False
+            ).returncode
+            == 0
+        ):
             return cc
     return None
 
@@ -70,7 +76,7 @@ _VALUE_CTYPE = {
     "int64_t": ctypes.c_int64,
     "double": ctypes.c_double,
     "bool": ctypes.c_bool,
-    "float": ctypes.c_float
+    "float": ctypes.c_float,
 }
 
 

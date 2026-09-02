@@ -14,6 +14,7 @@ covers the emitted binding's order against the canonical one; here it is the bui
 marshalling that consumes that order, the polycc invocation, and -- with a real toolchain -- that
 the transformed library computes the right answer.
 """
+
 import concurrent.futures
 import ctypes
 import os
@@ -169,8 +170,9 @@ def test_a_failed_polycc_never_writes_out_directly(tmp_path, monkeypatch) -> Non
     _cmd, proc = pluto_transform.run_polycc(scop, out)
 
     assert proc.returncode == 1
-    assert out.read_text() == "/* stale but complete, from an earlier good run */\n", \
+    assert out.read_text() == "/* stale but complete, from an earlier good run */\n", (
         "a failed run corrupted or deleted a pre-existing, unrelated out"
+    )
     assert out.stat().st_mtime == stale_mtime, "a failed run touched out's mtime"
     leftover = [p for p in out.parent.iterdir() if p not in (out, scop)]
     assert not leftover, f"a failed run left scratch litter behind: {leftover}"
@@ -251,12 +253,15 @@ def test_the_ppcg_column_follows_the_local_gpu_toolchain(monkeypatch) -> None:
     have to move together, and compilers.yaml turns the language into the compiler, so a hardcoded
     ``cuda``/``nvcc`` was a column that could only ever run on one vendor."""
     from hpcagent_bench import languages, ppcg_transform
+
     scop = pathlib.Path("/tmp/x_fp64_pluto_input.c")
     for backend, ext, compiler in (("hip", "hip", "hipcc"), ("cuda", "cu", "nvcc")):
         monkeypatch.setattr(languages, "gpu_backend", lambda backend=backend: backend)
         monkeypatch.setattr(ppcg_transform, "gpu_backend", lambda backend=backend: backend)
-        assert [p.name for p in ppcg_transform.transformed_paths(scop)
-                ] == [f"x_fp64_pluto_input_host.{ext}", f"x_fp64_pluto_input_kernel.{ext}"]
+        assert [p.name for p in ppcg_transform.transformed_paths(scop)] == [
+            f"x_fp64_pluto_input_host.{ext}",
+            f"x_fp64_pluto_input_kernel.{ext}",
+        ]
         assert languages._compiler_for_lang(languages._load_compilers(), backend)[0] == compiler
 
 
@@ -270,13 +275,16 @@ def test_the_named_ppcg_columns_do_not_follow_the_host(monkeypatch) -> None:
     them: the derived column moves, the named ones must not.
     """
     from hpcagent_bench import languages, ppcg_transform
+
     scop = pathlib.Path("/tmp/x_fp64_pluto_input.c")
     for host in ("hip", "cuda"):
         monkeypatch.setattr(languages, "gpu_backend", lambda host=host: host)
         monkeypatch.setattr(ppcg_transform, "gpu_backend", lambda host=host: host)
         for named, ext in (("cuda", "cu"), ("hip", "hip")):
-            assert [p.name for p in ppcg_transform.transformed_paths(scop, named)
-                    ] == [f"x_fp64_pluto_input_host.{ext}", f"x_fp64_pluto_input_kernel.{ext}"]
+            assert [p.name for p in ppcg_transform.transformed_paths(scop, named)] == [
+                f"x_fp64_pluto_input_host.{ext}",
+                f"x_fp64_pluto_input_kernel.{ext}",
+            ]
         assert ppcg_transform.resolve_backend(None) == host
 
 
@@ -290,9 +298,11 @@ def test_every_ppcg_column_compiles_ppcg_output_for_its_own_vendor(monkeypatch) 
     ``.hip``, which fails as a missing file rather than as a wrong answer.
     """
     from hpcagent_bench import ppcg_transform
+
     seen: List[tuple] = []
-    monkeypatch.setattr(ppcg_transform, "transformed_sources", lambda cpp_backend, short, backend: seen.append(
-        (short, backend)) or [])
+    monkeypatch.setattr(
+        ppcg_transform, "transformed_sources", lambda cpp_backend, short, backend: seen.append((short, backend)) or []
+    )
     for framework in cpp_runtime.PPCG_FRAMEWORKS:
         cpp_runtime._native_sources(pathlib.Path("/tmp/cpp_backend"), "mm", framework)
     assert seen == [("mm", cpp_runtime.FRAMEWORK_LANG[f]) for f in cpp_runtime.PPCG_FRAMEWORKS]
@@ -304,6 +314,7 @@ def test_an_unknown_ppcg_vendor_is_refused_rather_than_guessed() -> None:
     """A vendor with no :data:`languages.LANG_EXT` entry has no extension and no compilers.yaml
     block, so accepting one would write sources nothing compiles. Raise where it is named."""
     from hpcagent_bench import ppcg_transform
+
     with pytest.raises(KeyError, match="unknown GPU backend"):
         ppcg_transform.resolve_backend("rocm")
 
@@ -322,6 +333,7 @@ def test_a_scop_ppcg_passed_through_is_declined_rather_than_timed(tmp_path, monk
     would fire on the first call and wave the same passthrough through on every one after it.
     """
     from hpcagent_bench import ppcg_transform
+
     cpp_backend = tmp_path / "cpp_backend"
     scop = write_scop(cpp_backend)
     monkeypatch.setattr(ppcg_transform, "ppcg_exe", lambda: "/usr/bin/true")
@@ -352,9 +364,12 @@ def test_ppcgs_c_output_is_repaired_into_the_cpp_the_gpu_drivers_compile() -> No
     that, and the third is the dangerous one: an entry point left with C++ linkage BUILDS and LINKS,
     and is then missing at the ctypes lookup that has to find it by name."""
     from hpcagent_bench import ppcg_transform
-    source = ("static inline double _Complex __npb_conj(double _Complex z) {\n"
-              "    return conj(z);\n}\n"
-              "void mm_fp64(const int64_t N, double A[restrict N]) {\n}\n")
+
+    source = (
+        "static inline double _Complex __npb_conj(double _Complex z) {\n"
+        "    return conj(z);\n}\n"
+        "void mm_fp64(const int64_t N, double A[restrict N]) {\n}\n"
+    )
     out = ppcg_transform.cxx_compat(source, "mm_fp64")
     assert "#define restrict __restrict__" in out
     assert "return __builtin_conj(z);" in out and "return conj(z);" not in out
@@ -369,10 +384,13 @@ def test_a_read_only_input_array_does_not_make_ppcgs_output_unbuildable(tmp_path
     read-only input -- most of them. Stripped from the COPY ppcg reads, never from the file, which is
     the Pluto column's input as well."""
     from hpcagent_bench import ppcg_transform
+
     scop = write_scop(tmp_path / "cpp_backend", base="mm", fptype="fp32")
     original = scop.read_text()
-    source = ("void mm_fp32(const int64_t N, const float a[restrict N], float b[restrict N]) {\n"
-              "#pragma scop\n#pragma endscop\n}\n")
+    source = (
+        "void mm_fp32(const int64_t N, const float a[restrict N], float b[restrict N]) {\n"
+        "#pragma scop\n#pragma endscop\n}\n"
+    )
     stripped = ppcg_transform.drop_const_params(source, "mm_fp32")
     assert "const" not in stripped.split("\n")[0]
     assert "float a[restrict N]" in stripped and "float b[restrict N]" in stripped
@@ -386,6 +404,7 @@ def test_ppcg_only_ever_asks_for_cuda() -> None:
     has no AMD target at all, so ``cuda`` is what it is asked for on every host and the translation
     happens after (:func:`ppcg_transform.hipify`)."""
     from hpcagent_bench import ppcg_transform
+
     assert "--target=cuda" in ppcg_transform.PPCG_ARGS
 
 
@@ -394,7 +413,7 @@ def test_polycc_is_invoked_with_pet_and_the_report_only_adds_verbosity() -> None
     rejects. The report's args are defined as an EXTENSION of the build's so the two are structurally
     incapable of describing different transforms."""
     assert "--pet" in pluto_transform.POLYCC_ARGS
-    assert pluto_transform.POLYCC_REPORT_ARGS[:len(pluto_transform.POLYCC_ARGS)] == pluto_transform.POLYCC_ARGS
+    assert pluto_transform.POLYCC_REPORT_ARGS[: len(pluto_transform.POLYCC_ARGS)] == pluto_transform.POLYCC_ARGS
     assert set(pluto_transform.POLYCC_REPORT_ARGS) - set(pluto_transform.POLYCC_ARGS) == {"--debug"}
 
 
@@ -472,8 +491,9 @@ def test_call_args_marshals_in_polyccs_order_not_the_canonical_abis(tmp_path, mo
     """The transformed function takes each size SYMBOL before the VLA array it dimensions, so the
     canonical order would hand a pointer to an ``int64_t`` parameter -- measured elsewhere in this
     tree as an immediate SIGSEGV, which is the good outcome; the bad one is plausible numbers."""
-    (tmp_path /
-     "mm_fp64_pluto_binding.json").write_text('{"args": [{"name": "N"}, {"name": "A"}, {"name": "B"}, {"name": "C"}]}')
+    (tmp_path / "mm_fp64_pluto_binding.json").write_text(
+        '{"args": [{"name": "N"}, {"name": "A"}, {"name": "B"}, {"name": "C"}]}'
+    )
     # Canonical C ABI order: sorted pointers, then sorted scalars. Deliberately NOT polycc's.
     canonical = [fake_arg("A", "ptr"), fake_arg("B", "ptr"), fake_arg("C", "ptr"), fake_arg("N", "scalar")]
     assert [a.name for a in canonical] != ["N", "A", "B", "C"], "the orders must differ, or this proves nothing"
@@ -534,7 +554,7 @@ def test_the_oracle_transforms_with_the_columns_own_flags(tmp_path, monkeypatch)
     status = oracle._run_pluto(tmp_path, "mm", "fp64", {}, {}, {}, {}, (), 0.0, 0.0, "ok", tmp_path, "mm", frozenset())
 
     assert status.startswith("skip:unsupported:polycc")
-    args = tuple(seen["cmd"][1:1 + len(pluto_transform.POLYCC_ARGS)])
+    args = tuple(seen["cmd"][1 : 1 + len(pluto_transform.POLYCC_ARGS)])
     assert args == pluto_transform.POLYCC_ARGS, "the oracle validated a transform the column does not build"
 
 
@@ -654,8 +674,10 @@ def test_preflight_does_not_gate_columns_that_never_run_polycc(monkeypatch) -> N
 
 @pytest.mark.skipif(pluto_transform.polycc_exe() is None, reason=NO_POLYCC)
 @pytest.mark.skipif(shutil.which("clang") is None, reason="clang absent: the pluto column compiles polycc's C with it")
-@pytest.mark.skipif(PLUTO_CAPABILITY.verdict is not flags.AutoparVerdict.OK,
-                    reason=f"this host's clang emits no OpenMP for Pluto's pragma: {PLUTO_CAPABILITY.detail}")
+@pytest.mark.skipif(
+    PLUTO_CAPABILITY.verdict is not flags.AutoparVerdict.OK,
+    reason=f"this host's clang emits no OpenMP for Pluto's pragma: {PLUTO_CAPABILITY.detail}",
+)
 def test_the_transformed_library_computes_the_right_answer(tmp_path) -> None:
     """The whole path with nothing faked: polycc transforms the scop, the column compiles ITS output
     as C, and the resulting symbol -- called through polycc's symbols-first signature -- agrees with
@@ -704,8 +726,10 @@ def test_pagerank_is_declined_and_an_affine_matmul_kernel_is_not() -> None:
 
 @pytest.mark.skipif(pluto_transform.polycc_exe() is None, reason=NO_POLYCC)
 @pytest.mark.skipif(shutil.which("clang") is None, reason="clang absent: the pluto column compiles polycc's C with it")
-@pytest.mark.skipif(PLUTO_CAPABILITY.verdict is not flags.AutoparVerdict.OK,
-                    reason=f"this host's clang emits no OpenMP for Pluto's pragma: {PLUTO_CAPABILITY.detail}")
+@pytest.mark.skipif(
+    PLUTO_CAPABILITY.verdict is not flags.AutoparVerdict.OK,
+    reason=f"this host's clang emits no OpenMP for Pluto's pragma: {PLUTO_CAPABILITY.detail}",
+)
 def test_a_stale_library_is_rebuilt_rather_than_timed(tmp_path) -> None:
     """The ``.so`` name says which framework built it and nothing about which SOURCES it compiled, so
     a tree holding one from before this column compiled polycc's output would be loaded, timed and
@@ -751,20 +775,22 @@ def timing_out_polycc(cmd: List[str], **kwargs: Any) -> subprocess.CompletedProc
 #: What a stand-in polycc "transforms" the scop into. Two scratch declarations of ``t1`` in one
 #: scope, so the dedupe pass has something to do and the published file is provably POST-processed
 #: rather than the raw emission.
-TRANSFORMED = ("void mm_fp64(const int64_t N, double (*restrict C)[N]) {\n"
-               "  int t1, t2;\n"
-               "  int t1;\n"
-               "#pragma omp parallel for\n"
-               "  for (t1 = 0; t1 < N; t1++) C[t1][t1] = 1.0;\n"
-               "}\n")
+TRANSFORMED = (
+    "void mm_fp64(const int64_t N, double (*restrict C)[N]) {\n"
+    "  int t1, t2;\n"
+    "  int t1;\n"
+    "#pragma omp parallel for\n"
+    "  for (t1 = 0; t1 < N; t1++) C[t1][t1] = 1.0;\n"
+    "}\n"
+)
 
 #: The same text after ``dedupe_scratch_declarations`` -- what a correct publish must land.
 PUBLISHED = pluto_transform.dedupe_scratch_declarations(TRANSFORMED)
 
 
-def writing_polycc(text: str = TRANSFORMED,
-                   watch: Optional[pathlib.Path] = None,
-                   seen: Optional[List[Optional[str]]] = None) -> Any:
+def writing_polycc(
+    text: str = TRANSFORMED, watch: Optional[pathlib.Path] = None, seen: Optional[List[Optional[str]]] = None
+) -> Any:
     """A polycc that emits ``text`` in two steps, sampling ``watch`` between them.
 
     The sample is the evidence for "the destination is never exposed mid-transform": it is taken at
@@ -773,7 +799,7 @@ def writing_polycc(text: str = TRANSFORMED,
 
     def run(cmd: List[str], **kwargs: Any) -> subprocess.CompletedProcess:
         dst = emitted_to(cmd)
-        head, tail = text[:len(text) // 2], text[len(text) // 2:]
+        head, tail = text[: len(text) // 2], text[len(text) // 2 :]
         dst.write_text(head)
         if seen is not None and watch is not None:
             seen.append(watch.read_text() if watch.exists() else None)
@@ -904,8 +930,9 @@ def test_an_exception_out_of_the_invoke_is_not_blamed_on_polycc(tmp_path, monkey
 
     monkeypatch.setattr(pluto_transform, "polycc_exe", lambda: "/usr/bin/polycc")
     monkeypatch.setattr(pluto_transform, "run_polycc", fake_polycc)
-    monkeypatch.setattr(pluto_transform, "run_bounded",
-                        lambda cmd, **kw: subprocess.CompletedProcess(list(cmd), 0, "", ""))
+    monkeypatch.setattr(
+        pluto_transform, "run_bounded", lambda cmd, **kw: subprocess.CompletedProcess(list(cmd), 0, "", "")
+    )
 
     def boom(*_a: Any, **_kw: Any) -> str:
         raise NameError("name 'index_names' is not defined")

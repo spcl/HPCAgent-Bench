@@ -17,6 +17,7 @@ integer, matching numpy's promoted result dtype.
 Fixed in the SHARED routing (``_emit_pow`` + ``expand_power`` emitting ``**``), so both
 spellings and both native backends move together.
 """
+
 import ast
 
 import numpy as np
@@ -42,7 +43,7 @@ def _assert_ok(res):
 
 def _run(body: str):
     src = f"import numpy as np\ndef f(a, b, out):\n{body}\n"
-    return run_op(src, "f", {"a": _A, "b": _B}, {"out": (6, )}, _SYMS, shapes=_SHAPES, backends=_NATIVE, dtypes=_DTYPES)
+    return run_op(src, "f", {"a": _A, "b": _B}, {"out": (6,)}, _SYMS, shapes=_SHAPES, backends=_NATIVE, dtypes=_DTYPES)
 
 
 def test_np_power_on_int64_arrays_is_exact():
@@ -58,11 +59,9 @@ def test_np_power_expands_to_a_pow_binop():
     # int-pow routing and Fortran's exact integer ``**`` in the path.
     body = expand_power(
         ast.Name(id="out", ctx=ast.Store()),
-        [ast.Name(id="a", ctx=ast.Load()), ast.Name(id="b", ctx=ast.Load())], {
-            "a": ("N", ),
-            "b": ("N", ),
-            "out": ("N", )
-        })
+        [ast.Name(id="a", ctx=ast.Load()), ast.Name(id="b", ctx=ast.Load())],
+        {"a": ("N",), "b": ("N",), "out": ("N",)},
+    )
     src = ast.unparse(ast.fix_missing_locations(ast.Module(body=body, type_ignores=[])))
     assert "a[__r0] ** b[__r0]" in src, src
     assert "pow(" not in src, src
@@ -70,15 +69,15 @@ def test_np_power_expands_to_a_pow_binop():
 
 def test_float_power_still_matches_numpy():
     # The float path must keep libm's pow -- fractional exponents have no integer form.
-    src = ("import numpy as np\n"
-           "def f(a, b, out):\n"
-           "    out[:] = np.power(a, b)\n")
+    src = "import numpy as np\ndef f(a, b, out):\n    out[:] = np.power(a, b)\n"
     _assert_ok(
-        run_op(src,
-               "f", {
-                   "a": np.array([1.5, 2.0, 3.25, 0.5, 4.0, 9.0]),
-                   "b": np.array([0.5, 3.0, 2.0, 2.0, 1.5, 0.5])
-               }, {"out": (6, )},
-               _SYMS,
-               shapes=_SHAPES,
-               backends=_NATIVE))
+        run_op(
+            src,
+            "f",
+            {"a": np.array([1.5, 2.0, 3.25, 0.5, 4.0, 9.0]), "b": np.array([0.5, 3.0, 2.0, 2.0, 1.5, 0.5])},
+            {"out": (6,)},
+            _SYMS,
+            shapes=_SHAPES,
+            backends=_NATIVE,
+        )
+    )

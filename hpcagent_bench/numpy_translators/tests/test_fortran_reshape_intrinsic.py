@@ -20,6 +20,7 @@ The symbols are ``NA``/``NB``/``NC`` and the kernel is ``rs`` because Fortran FO
 named ``K`` beside a subroutine named ``k`` is the same identifier, and every array declared with it
 then fails to compile as "explicit shaped array with nonconstant bounds".
 """
+
 import json
 import pathlib
 import tempfile
@@ -55,9 +56,7 @@ def emit(body: str, out_shape: str) -> str:
 
 
 def kernel(newshape: str) -> str:
-    return ("import numpy as np\n"
-            "def rs(a, out):\n"
-            f"    out[:] = np.reshape(a, {newshape})\n")
+    return f"import numpy as np\ndef rs(a, out):\n    out[:] = np.reshape(a, {newshape})\n"
 
 
 def check(res) -> None:
@@ -90,25 +89,29 @@ def test_the_dims_are_reversed():
     assert line.index("NC") < line.index("NA * NB"), line
 
 
-@pytest.mark.parametrize("newshape,out_shape,sym_shape", [
-    (FLATTEN, (12, 5), "(NA * NB, NC)"),
-    ("(a.shape[0], a.shape[1] * a.shape[2])", (3, 20), "(NA, NB * NC)"),
-    ("(a.shape[0] * a.shape[1] * a.shape[2],)", (60, ), "(NA * NB * NC,)"),
-    ("(a.shape[1], a.shape[0], a.shape[2])", (4, 3, 5), "(NB, NA, NC)"),
-])
+@pytest.mark.parametrize(
+    "newshape,out_shape,sym_shape",
+    [
+        (FLATTEN, (12, 5), "(NA * NB, NC)"),
+        ("(a.shape[0], a.shape[1] * a.shape[2])", (3, 20), "(NA, NB * NC)"),
+        ("(a.shape[0] * a.shape[1] * a.shape[2],)", (60,), "(NA * NB * NC,)"),
+        ("(a.shape[1], a.shape[0], a.shape[2])", (4, 3, 5), "(NB, NA, NC)"),
+    ],
+)
 def test_reshape_matches_numpy(newshape, out_shape, sym_shape):
     """Rank down, rank up, full flatten, and a same-rank re-extenting: each reads the source in a
     different pattern, and only running them proves the ravel order is numpy's."""
     body = kernel(newshape)
     assert "RESHAPE(" in emit(body, sym_shape)
-    res = run_op(body,
-                 "rs", {"a": RNG.standard_normal(SRC_DIMS)}, {"out": out_shape},
-                 dict(SYMS),
-                 shapes={
-                     "a": SRC_SHAPE,
-                     "out": sym_shape
-                 },
-                 backends=("fortran", ))
+    res = run_op(
+        body,
+        "rs",
+        {"a": RNG.standard_normal(SRC_DIMS)},
+        {"out": out_shape},
+        dict(SYMS),
+        shapes={"a": SRC_SHAPE, "out": sym_shape},
+        backends=("fortran",),
+    )
     check(res)
 
 

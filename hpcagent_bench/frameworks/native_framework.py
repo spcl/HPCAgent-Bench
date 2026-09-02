@@ -50,16 +50,19 @@ class NativeFramework(Framework):
         # Generate the gitignored <module>_cpp.py wrapper + sources on demand; a hand
         # wrapper is left untouched. Only this framework's own language is emitted.
         from hpcagent_bench.autogen import ensure_native, NATIVE_FRAMEWORKS
+
         ensure_native(bench.bname, NATIVE_FRAMEWORKS[self.fname])
         module_str = "hpcagent_bench.benchmarks.{r}.{m}_cpp".format(
-            r=bench.info["relative_path"].replace('/', '.'),
+            r=bench.info["relative_path"].replace("/", "."),
             m=bench.info["module_name"],
         )
         module = importlib.import_module(module_str)
         impl = vars(module).get(self.kernel_attr)
         if impl is None:
-            raise AttributeError(f"{module_str} is missing {self.kernel_attr}(). Make sure "
-                                 f"the wrapper exposes kernel_{{cc,llvm,fortran}}.")
+            raise AttributeError(
+                f"{module_str} is missing {self.kernel_attr}(). Make sure "
+                f"the wrapper exposes kernel_{{cc,llvm,fortran}}."
+            )
         return [(impl, "default")]
 
     def _cpp_backend(self, bench: Benchmark) -> pathlib.Path:
@@ -97,6 +100,7 @@ class NativeFramework(Framework):
         try:
             from hpcagent_bench.spec import BenchSpec
             from hpcagent_bench.support.bindings.contract import binding_from_spec
+
             args = list(binding_from_spec(BenchSpec.load(key)).args) or None
         except Exception:  # noqa: BLE001 -- any resolution failure -> default order
             args = None
@@ -114,12 +118,14 @@ class NativeFramework(Framework):
         import numpy as np
         from hpcagent_bench.dtypes import storage_dtype
         from hpcagent_bench.fuzz import _safe_eval
+
         shape = tuple(int(tok) if str(tok).isdigit() else int(_safe_eval(str(tok), bdata)) for tok in (arg.shape or ()))
         # The buffer is the DECLARED dtype's storage (numpy has no sub-byte integer).
         return np.zeros(shape, dtype=np.dtype(storage_dtype(arg.dtype)))
 
-    def call_args(self, bench: Benchmark, impl: Callable, resolved: Dict[str, Any],
-                  bdata: Dict[str, Any]) -> Tuple[Sequence[Any], Dict[str, Any]]:
+    def call_args(
+        self, bench: Benchmark, impl: Callable, resolved: Dict[str, Any], bdata: Dict[str, Any]
+    ) -> Tuple[Sequence[Any], Dict[str, Any]]:
         """Pass arguments in the emitted ABI order; prefer ``resolved`` (mutable copies) and fall back
         to ``bdata`` for shape symbols. Defers to the base input_args ordering with no auto binding."""
         args = self._abi_args(bench)

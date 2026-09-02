@@ -18,6 +18,7 @@ All four are NATIVE lowerings (the ufunc-reduce rewrite is wired only into
 runs on C / C++ / Fortran and is compared bit-exact-ish vs numpy. Fortran
 auto-skips when gfortran is absent -- an accepted skip, not a failure.
 """
+
 import shutil
 
 import numpy as np
@@ -56,10 +57,8 @@ def test_sort_1d():
     """``out[:] = np.sort(a)`` on a random unsorted 1-D array (ascending)."""
     rng = np.random.default_rng(0)
     a = rng.standard_normal(9)
-    src = ("import numpy as np\n"
-           "def f(a, out):\n"
-           "    out[:] = np.sort(a)\n")
-    res = run_op(src, "f", {"a": a}, {"out": (9, )}, {"N": 9}, shapes={"a": "(N,)", "out": "(N,)"}, backends=_NATIVE)
+    src = "import numpy as np\ndef f(a, out):\n    out[:] = np.sort(a)\n"
+    res = run_op(src, "f", {"a": a}, {"out": (9,)}, {"N": 9}, shapes={"a": "(N,)", "out": "(N,)"}, backends=_NATIVE)
     ok, r = _ok(res)
     assert ok, r
 
@@ -73,16 +72,8 @@ def test_cummax_cummin():
     rng = np.random.default_rng(1)
     a = rng.standard_normal(8)
     for op in ("maximum", "minimum"):
-        src = ("import numpy as np\n"
-               "def f(a, out):\n"
-               f"    out[:] = np.{op}.accumulate(a)\n")
-        res = run_op(src,
-                     "f", {"a": a}, {"out": (8, )}, {"N": 8},
-                     shapes={
-                         "a": "(N,)",
-                         "out": "(N,)"
-                     },
-                     backends=_NATIVE)
+        src = f"import numpy as np\ndef f(a, out):\n    out[:] = np.{op}.accumulate(a)\n"
+        res = run_op(src, "f", {"a": a}, {"out": (8,)}, {"N": 8}, shapes={"a": "(N,)", "out": "(N,)"}, backends=_NATIVE)
         ok, r = _ok(res)
         assert ok, (op, r)
 
@@ -104,39 +95,20 @@ def test_ufunc_reduce():
     # boolean masks below a genuine mix of True / False at threshold 1.0.
     a = rng.random((3, 4)) + 0.5
     for op in ("add", "multiply", "maximum", "minimum"):
-        src = ("import numpy as np\n"
-               "def f(a, out):\n"
-               f"    out[0] = np.{op}.reduce(a, axis=None)\n")
-        res = run_op(src,
-                     "f", {"a": a}, {"out": (1, )}, {
-                         "M": 3,
-                         "N": 4
-                     },
-                     shapes={
-                         "a": "(M, N)",
-                         "out": "(1,)"
-                     },
-                     backends=_NATIVE)
+        src = f"import numpy as np\ndef f(a, out):\n    out[0] = np.{op}.reduce(a, axis=None)\n"
+        res = run_op(
+            src, "f", {"a": a}, {"out": (1,)}, {"M": 3, "N": 4}, shapes={"a": "(M, N)", "out": "(1,)"}, backends=_NATIVE
+        )
         ok, r = _ok(res)
         assert ok, (op, r)
     # logical_and.reduce -> np.all, logical_or.reduce -> np.any over a boolean
     # array (the mask is built inside so no bool INPUT dtype is needed). The mix
     # at threshold 1.0 makes ``all`` genuinely False and ``any`` genuinely True.
     for op in ("logical_and", "logical_or"):
-        src = ("import numpy as np\n"
-               "def f(a, out):\n"
-               "    m = a > 1.0\n"
-               f"    out[0] = np.{op}.reduce(m, axis=None)\n")
-        res = run_op(src,
-                     "f", {"a": a}, {"out": (1, )}, {
-                         "M": 3,
-                         "N": 4
-                     },
-                     shapes={
-                         "a": "(M, N)",
-                         "out": "(1,)"
-                     },
-                     backends=_NATIVE)
+        src = f"import numpy as np\ndef f(a, out):\n    m = a > 1.0\n    out[0] = np.{op}.reduce(m, axis=None)\n"
+        res = run_op(
+            src, "f", {"a": a}, {"out": (1,)}, {"M": 3, "N": 4}, shapes={"a": "(M, N)", "out": "(1,)"}, backends=_NATIVE
+        )
         ok, r = _ok(res)
         assert ok, (op, r)
 
@@ -156,23 +128,20 @@ def test_fft_ifft_norm():
     rng = np.random.default_rng(3)
     x = (rng.standard_normal(6) + 1j * rng.standard_normal(6)).astype(np.complex128)
     for spec in (
-            "np.fft.ifft(x, norm='forward')",
-            "np.fft.fft(x, norm='forward')",
+        "np.fft.ifft(x, norm='forward')",
+        "np.fft.fft(x, norm='forward')",
     ):
-        src = ("import numpy as np\n"
-               "def f(x, out):\n"
-               f"    out[:] = {spec}\n")
-        res = run_op(src,
-                     "f", {"x": x}, {"out": (6, )}, {"N": 6},
-                     shapes={
-                         "x": "(N,)",
-                         "out": "(N,)"
-                     },
-                     dtypes={
-                         "x": "complex128",
-                         "out": "complex128"
-                     },
-                     backends=_NATIVE)
+        src = f"import numpy as np\ndef f(x, out):\n    out[:] = {spec}\n"
+        res = run_op(
+            src,
+            "f",
+            {"x": x},
+            {"out": (6,)},
+            {"N": 6},
+            shapes={"x": "(N,)", "out": "(N,)"},
+            dtypes={"x": "complex128", "out": "complex128"},
+            backends=_NATIVE,
+        )
         ok, r = _ok(res)
         assert ok, (spec, r)
 
@@ -189,20 +158,17 @@ def test_fft_ifft_norm_ortho():
     rng = np.random.default_rng(4)
     x = (rng.standard_normal(6) + 1j * rng.standard_normal(6)).astype(np.complex128)
     for spec in ("np.fft.ifft(x, norm='ortho')", "np.fft.fft(x, norm='ortho')"):
-        src = ("import numpy as np\n"
-               "def f(x, out):\n"
-               f"    out[:] = {spec}\n")
-        res = run_op(src,
-                     "f", {"x": x}, {"out": (6, )}, {"N": 6},
-                     shapes={
-                         "x": "(N,)",
-                         "out": "(N,)"
-                     },
-                     dtypes={
-                         "x": "complex128",
-                         "out": "complex128"
-                     },
-                     backends=_NATIVE)
+        src = f"import numpy as np\ndef f(x, out):\n    out[:] = {spec}\n"
+        res = run_op(
+            src,
+            "f",
+            {"x": x},
+            {"out": (6,)},
+            {"N": 6},
+            shapes={"x": "(N,)", "out": "(N,)"},
+            dtypes={"x": "complex128", "out": "complex128"},
+            backends=_NATIVE,
+        )
         ok, r = _ok(res)
         assert ok, (spec, r)
 
@@ -221,28 +187,29 @@ def test_scatter_conflict_check_tagcount():
     """The TAGCOUNT duplicate-count (`count == N - #distinct`, 0 iff a permutation)
     with an int64 index round-trips on every native backend."""
     idx = np.array([0, 2, 2, 5, 5, 5, 1, 9, 9], dtype=np.int64)  # 9 elems, 5 distinct -> 4
-    src = ("import numpy as np\n"
-           "def f(idx, cnt):\n"
-           "    m = int(np.max(idx))\n"
-           "    owner = np.full(m + 1, -1, np.int64)\n"
-           "    for i in range(idx.shape[0]):\n"
-           "        owner[idx[i]] = i\n"
-           "    c = 0\n"
-           "    for i in range(idx.shape[0]):\n"
-           "        if owner[idx[i]] != i:\n"
-           "            c += 1\n"
-           "    cnt[0] = c\n")
-    res = run_op(src,
-                 "f", {"idx": idx}, {"cnt": (1, )}, {"N": 9},
-                 shapes={
-                     "idx": "(N,)",
-                     "cnt": "(1,)"
-                 },
-                 dtypes={
-                     "idx": "int64",
-                     "cnt": "int64"
-                 },
-                 backends=_NATIVE)
+    src = (
+        "import numpy as np\n"
+        "def f(idx, cnt):\n"
+        "    m = int(np.max(idx))\n"
+        "    owner = np.full(m + 1, -1, np.int64)\n"
+        "    for i in range(idx.shape[0]):\n"
+        "        owner[idx[i]] = i\n"
+        "    c = 0\n"
+        "    for i in range(idx.shape[0]):\n"
+        "        if owner[idx[i]] != i:\n"
+        "            c += 1\n"
+        "    cnt[0] = c\n"
+    )
+    res = run_op(
+        src,
+        "f",
+        {"idx": idx},
+        {"cnt": (1,)},
+        {"N": 9},
+        shapes={"idx": "(N,)", "cnt": "(1,)"},
+        dtypes={"idx": "int64", "cnt": "int64"},
+        backends=_NATIVE,
+    )
     # This guard exists ONLY for the Fortran int-reduction accumulator (a real accumulator
     # makes the running-max `merge(int, real)` a kind mismatch); c/cpp promote silently and
     # would pass either way. So where gfortran exists, Fortran must actually have run --

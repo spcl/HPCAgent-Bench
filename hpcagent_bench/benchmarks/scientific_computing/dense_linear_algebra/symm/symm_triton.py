@@ -12,11 +12,15 @@ def generate_config():
     for m, n, k in itertools.product(ms, ns, ks):
         if m == 128 and n == 128 and k == 64:
             pass
-        cfgs.append(triton.Config(kwargs={
-            "BLOCK_SIZE_M": m,
-            "BLOCK_SIZE_N": n,
-            "BLOCK_SIZE_K": k,
-        }, ))
+        cfgs.append(
+            triton.Config(
+                kwargs={
+                    "BLOCK_SIZE_M": m,
+                    "BLOCK_SIZE_N": n,
+                    "BLOCK_SIZE_K": k,
+                },
+            )
+        )
     return cfgs
 
 
@@ -83,14 +87,14 @@ def _symm_lower_mm_kernel(
         use_lower = m_idx >= k_idx  # (BM, BK)
 
         # masks shaped like (BM, BK)
-        ak_mask = (m_in & k_in_row)  # (BM, BK)
+        ak_mask = m_in & k_in_row  # (BM, BK)
         a_lower = tl.load(a_ptrs_lower, mask=(ak_mask & use_lower), other=0.0)
         a_upper = tl.load(a_ptrs_upper, mask=(ak_mask & ~use_lower), other=0.0)
         s_tile = a_lower + a_upper  # (BM, BK)
 
         # Load B[k, n] -> (BK, BN)
         b_ptrs = B_ptr + (k[:, None] * stride_bk + offs_n[None, :] * stride_bn)
-        bn_mask = (k_in_col & n_in)  # (BK, BN)
+        bn_mask = k_in_col & n_in  # (BK, BN)
         b_tile = tl.load(b_ptrs, mask=bn_mask, other=0.0)
 
         acc += MATRIX_MULT(s_tile, b_tile)

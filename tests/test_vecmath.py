@@ -5,6 +5,7 @@ libmvec (a ~3x gap), by whatever knob its compiler family offers, or the compile
 measures a library difference instead of a compiler one. clang gets ``-fveclib=libmvec`` built in;
 gcc/g++ need ``-include vecmath.h`` (glibc hides its decls behind __FAST_MATH__, which we don't set);
 gfortran gets it for free from the driver spec, a host property asserted here rather than assumed."""
+
 import ctypes.util
 import pathlib
 import re
@@ -86,8 +87,9 @@ def test_the_vecmath_header_ships_with_the_package():
     # so both have to name it or one of the two distributions ships a header the compile -include's.
     declared = tomllib.loads((root / "pyproject.toml").read_text())
     package_data = declared["tool"]["setuptools"]["package-data"]
-    assert any("envs/vecmath.h" in entry for entries in package_data.values() for entry in entries), \
+    assert any("envs/vecmath.h" in entry for entries in package_data.values() for entry in entries), (
         "vecmath.h is not in [tool.setuptools.package-data]; wheels will drop it"
+    )
 
 
 #: Every CPU baseline constant, and the route by which it reaches libmvec. Enumerated so that
@@ -124,8 +126,10 @@ def test_every_cpu_baseline_is_classified():
     checks the constants someone remembered to list, which is exactly how the gaps survived."""
     declared = {name for name in vars(flags) if name.endswith("_BASELINE") or name.startswith("CPU_BASELINE_")}
     unclassified = sorted(declared - set(VECLIB_ROUTE))
-    assert not unclassified, (f"these CPU baselines are not classified in VECLIB_ROUTE: {unclassified}. "
-                              "Say how each reaches libmvec, or that its compiler needs no knob.")
+    assert not unclassified, (
+        f"these CPU baselines are not classified in VECLIB_ROUTE: {unclassified}. "
+        "Say how each reaches libmvec, or that its compiler needs no knob."
+    )
 
 
 @pytest.mark.parametrize("name", sorted(n for n, route in VECLIB_ROUTE.items() if route in ("header", "flag")))
@@ -176,16 +180,18 @@ def test_the_header_declares_nothing_libmvec_does_not_export():
         return
     libmvec = ctypes.util.find_library("mvec")
     assert libmvec, "glibc libmvec not found on this host; CPU_BASELINE_GCC would emit unresolvable calls"
-    path = subprocess.run(["gcc", "-print-file-name=libmvec.so"], capture_output=True, text=True,
-                          check=True).stdout.strip()
+    path = subprocess.run(
+        ["gcc", "-print-file-name=libmvec.so"], capture_output=True, text=True, check=True
+    ).stdout.strip()
     out = subprocess.run(["nm", "-D", "--defined-only", path], capture_output=True, text=True, check=True).stdout
     exported = {s.split("@")[0] for s in re.findall(r"_ZGV\w+", out)}
     declared = declared_functions()
     assert declared, "parsed no declarations out of vecmath.h -- the regex has drifted from the file"
     for fn in declared:
         # The 128-bit SSE2 form (_ZGVbN2v_/_ZGVbN4v_) is the one every x86-64 host has.
-        assert any(s.endswith(f"_{fn}") and s.startswith("_ZGVb") for s in exported), \
+        assert any(s.endswith(f"_{fn}") and s.startswith("_ZGVb") for s in exported), (
             f"vecmath.h declares {fn}(), but this host's libmvec exports no vector {fn} -- kernels using it will not link"
+        )
 
 
 # --- Behavioural guards: gcc/g++/gfortran are present in every job that runs these -------
@@ -218,11 +224,20 @@ def test_gfortran_vectorizes_libm_at_the_baseline(tmp_path):
     if not osinfo.IS_LINUX:
         return
     assert shutil.which("gfortran"), "gfortran is required to build native Fortran kernels"
-    obj = compile_object(tmp_path, FORTRAN_LIBM_LOOP, ".f90", "gfortran", flags.CPU_BASELINE_GFORTRAN, "-ffree-form",
-                         languages.std_flag("fortran"))
-    assert libmvec_calls(obj), ("gfortran emitted NO libmvec calls at CPU_BASELINE_GFORTRAN -- this host's gcc spec "
-                                "does not pre-include glibc's math-vector-fortran.h, so Fortran needs an explicit "
-                                "-fpre-include that C does not")
+    obj = compile_object(
+        tmp_path,
+        FORTRAN_LIBM_LOOP,
+        ".f90",
+        "gfortran",
+        flags.CPU_BASELINE_GFORTRAN,
+        "-ffree-form",
+        languages.std_flag("fortran"),
+    )
+    assert libmvec_calls(obj), (
+        "gfortran emitted NO libmvec calls at CPU_BASELINE_GFORTRAN -- this host's gcc spec "
+        "does not pre-include glibc's math-vector-fortran.h, so Fortran needs an explicit "
+        "-fpre-include that C does not"
+    )
 
 
 def test_the_fortran_baseline_compiles_without_warnings(tmp_path):
@@ -233,10 +248,14 @@ def test_the_fortran_baseline_compiles_without_warnings(tmp_path):
     src = tmp_path / "warn.f90"
     src.write_text(FORTRAN_LIBM_LOOP)
     cmd = [
-        "gfortran", *flags.CPU_BASELINE_GFORTRAN.split(), "-ffree-form",
-        languages.std_flag("fortran"), "-c",
-        str(src), "-o",
-        str(tmp_path / "warn.o")
+        "gfortran",
+        *flags.CPU_BASELINE_GFORTRAN.split(),
+        "-ffree-form",
+        languages.std_flag("fortran"),
+        "-c",
+        str(src),
+        "-o",
+        str(tmp_path / "warn.o"),
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
@@ -253,12 +272,14 @@ def test_the_header_does_not_leak_fast_math_into_libstdcxx(tmp_path):
         return
     assert shutil.which("g++"), "g++ is required to build native C++ kernels"
     probe = tmp_path / "leak.cpp"
-    probe.write_text(f'#include "{flags.VECMATH_H}"\n'
-                     "#include <cmath>\n"
-                     "#if _GLIBCXX_FAST_MATH\n"
-                     "#error fast_math_leaked\n"
-                     "#endif\n"
-                     "int main() { return 0; }\n")
+    probe.write_text(
+        f'#include "{flags.VECMATH_H}"\n'
+        "#include <cmath>\n"
+        "#if _GLIBCXX_FAST_MATH\n"
+        "#error fast_math_leaked\n"
+        "#endif\n"
+        "int main() { return 0; }\n"
+    )
     base = ["g++", languages.std_flag("cpp"), "-fopenmp", "-fsyntax-only", str(probe)]
     clean = subprocess.run(base, capture_output=True, text=True)
     assert clean.returncode == 0, f"vecmath.h leaked __FAST_MATH__ into libstdc++:\n{clean.stderr}"
@@ -274,16 +295,17 @@ def test_the_header_does_not_change_math_errhandling(tmp_path):
     values = {}
     for label, extra in (("with", ["-include", str(flags.VECMATH_H)]), ("without", [])):
         src = tmp_path / f"meh_{label}.c"
-        src.write_text("#include <math.h>\n"
-                       "#include <stdio.h>\n"
-                       "int main(void) { printf(\"%d\\n\", math_errhandling); return 0; }\n")
+        src.write_text(
+            '#include <math.h>\n#include <stdio.h>\nint main(void) { printf("%d\\n", math_errhandling); return 0; }\n'
+        )
         exe = tmp_path / f"meh_{label}"
         subprocess.run(
-            ["gcc", "-O2", "-fopenmp", "-fno-math-errno", *extra,
-             str(src), "-o", str(exe), "-lm"],
+            ["gcc", "-O2", "-fopenmp", "-fno-math-errno", *extra, str(src), "-o", str(exe), "-lm"],
             capture_output=True,
             text=True,
-            check=True)
+            check=True,
+        )
         values[label] = subprocess.run([str(exe)], capture_output=True, text=True, check=True).stdout.strip()
-    assert values["with"] == values["without"], \
+    assert values["with"] == values["without"], (
         f"vecmath.h changed math_errhandling ({values['without']} -> {values['with']}); it must be transparent"
+    )

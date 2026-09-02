@@ -13,6 +13,7 @@ corpus (the stem, unique, unabbreviated), and fitting a symbol into Fortran's li
 emitter (:func:`numpyto_common.naming.entry_symbol`, the single rule both the emitters and
 ``contract.binding_from_spec`` derive the entry point with).
 """
+
 import collections
 
 import pytest
@@ -40,7 +41,7 @@ ALL = specs()
 def bindings():
     """Every (spec, config) pair, because a sparse config is part of the symbol."""
     for spec in ALL:
-        for config in (list(spec.configurations) or [None]):
+        for config in list(spec.configurations) or [None]:
             yield spec, config, binding_from_spec(spec, config)
 
 
@@ -66,8 +67,11 @@ def test_kernel_names_are_unique():
 
 def test_the_name_is_the_manifest_stem():
     """No manifest may reintroduce an alias -- the loader rejects one, this proves it stays true."""
-    mismatched = [(s.short_name, KERNELS.get(s.short_name)) for s in ALL
-                  if KERNELS.get(s.short_name) is None or KERNELS.get(s.short_name).stem != s.short_name]
+    mismatched = [
+        (s.short_name, KERNELS.get(s.short_name))
+        for s in ALL
+        if KERNELS.get(s.short_name) is None or KERNELS.get(s.short_name).stem != s.short_name
+    ]
     assert not mismatched, f"name is not the manifest stem for: {mismatched[:5]}"
 
 
@@ -82,8 +86,12 @@ def test_a_manifest_may_not_declare_a_second_identity(tmp_path):
 
 def test_every_emitted_symbol_fits_fortran():
     """The limit is real -- Fortran 2008 3.2.2 -- and applies to every language's symbol alike."""
-    too_long = [(s.short_name, lang, sym) for s, _c, b in bindings() for lang, sym in b.symbols.items()
-                if len(sym) > FORTRAN_SYMBOL_LIMIT]
+    too_long = [
+        (s.short_name, lang, sym)
+        for s, _c, b in bindings()
+        for lang, sym in b.symbols.items()
+        if len(sym) > FORTRAN_SYMBOL_LIMIT
+    ]
     assert not too_long, f"symbols over {FORTRAN_SYMBOL_LIMIT} chars: {too_long[:5]}"
 
 

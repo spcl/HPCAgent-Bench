@@ -8,6 +8,7 @@ These tests pin the layout end to end WITHOUT a cluster: the descriptor partitio
 serialises, an in-process ``numpy`` "kernel" stands in for the driver, and the gather must
 reconstruct the global array bit-for-bit -- the same round-trip the C / mpi4py drivers perform.
 """
+
 import numpy as np
 import pytest
 
@@ -32,8 +33,8 @@ def _yax_binding() -> Binding:
 
 
 def _block0(nranks: int, arrays) -> Descriptor:
-    ad = ArrayDist(axes=(AxisDist(grid_dim=0, scheme="block"), ))
-    return Descriptor(grid=Grid((nranks, )), arrays={n: ad for n in arrays}, symbol_axes={"N": [("x", 0)]})
+    ad = ArrayDist(axes=(AxisDist(grid_dim=0, scheme="block"),))
+    return Descriptor(grid=Grid((nranks,)), arrays={n: ad for n in arrays}, symbol_axes={"N": [("x", 0)]})
 
 
 # --------------------------------------------------------------------------------------- #
@@ -53,7 +54,7 @@ def test_infile_roundtrip_localises_symbol_and_workspace():
         assert local_n == localNs[r]  # size symbol N is the LOCAL extent
         assert a == 2.5  # a value scalar is replicated unchanged
         assert p.workspace_bytes[r] == 8 * localNs[r]  # 8*N over the LOCAL N
-        assert p.ptrs[0].tiles[r].shape == (localNs[r], )  # x tile local-shaped
+        assert p.ptrs[0].tiles[r].shape == (localNs[r],)  # x tile local-shaped
     # the x tiles reassemble to the original global array
     assert np.array_equal(np.concatenate([p.ptrs[0].tiles[r] for r in range(R)]), x)
 
@@ -72,12 +73,11 @@ def test_infile_replicated_array_full_copy_each_rank():
         Arg(name="y", kind="ptr", dtype="float64", is_const=False, role="output"),
         Arg(name="N", kind="scalar", dtype="int64", is_const=True, role="symbol"),
     )
-    desc = Descriptor(grid=Grid((3, )),
-                      arrays={
-                          "w": ArrayDist(replicated=True),
-                          "y": ArrayDist(axes=(AxisDist(grid_dim=0, scheme="block"), ))
-                      },
-                      symbol_axes={"N": [("y", 0)]})
+    desc = Descriptor(
+        grid=Grid((3,)),
+        arrays={"w": ArrayDist(replicated=True), "y": ArrayDist(axes=(AxisDist(grid_dim=0, scheme="block"),))},
+        symbol_axes={"N": [("y", 0)]},
+    )
     w = np.arange(5.0)
     p = unpack_infile(pack_infile(b, desc, {"w": w, "y": np.zeros(5)}, {"N": 5}, k_repeats=1))
     for r in range(3):
@@ -91,9 +91,11 @@ def test_infile_2d_block_rows():
         Arg(name="A", kind="ptr", dtype="float64", is_const=False, role="output"),
         Arg(name="N", kind="scalar", dtype="int64", is_const=True, role="symbol"),
     )
-    desc = Descriptor(grid=Grid((2, )),
-                      arrays={"A": ArrayDist(axes=(AxisDist(grid_dim=0, scheme="block"), AxisDist(grid_dim=None)))},
-                      symbol_axes={"N": [("A", 0)]})
+    desc = Descriptor(
+        grid=Grid((2,)),
+        arrays={"A": ArrayDist(axes=(AxisDist(grid_dim=0, scheme="block"), AxisDist(grid_dim=None)))},
+        symbol_axes={"N": [("A", 0)]},
+    )
     A = np.arange(20.0).reshape(5, 4)
     p = unpack_infile(pack_infile(b, desc, {"A": A}, {"N": 5}, k_repeats=1))
     assert p.ptrs[0].tiles[0].shape == (3, 4) and p.ptrs[0].tiles[1].shape == (2, 4)
@@ -106,9 +108,11 @@ def test_infile_dtypes_roundtrip(dtype):
         Arg(name="A", kind="ptr", dtype=dtype, is_const=False, role="output"),
         Arg(name="N", kind="scalar", dtype="int64", is_const=True, role="symbol"),
     )
-    desc = Descriptor(grid=Grid((4, )),
-                      arrays={"A": ArrayDist(axes=(AxisDist(grid_dim=0, scheme="block"), ))},
-                      symbol_axes={"N": [("A", 0)]})
+    desc = Descriptor(
+        grid=Grid((4,)),
+        arrays={"A": ArrayDist(axes=(AxisDist(grid_dim=0, scheme="block"),))},
+        symbol_axes={"N": [("A", 0)]},
+    )
     A = np.arange(9, dtype=dtype)
     p = unpack_infile(pack_infile(b, desc, {"A": A}, {"N": 9}, k_repeats=1))
     rebuilt = np.concatenate([p.ptrs[0].tiles[r] for r in range(4)])
@@ -117,7 +121,7 @@ def test_infile_dtypes_roundtrip(dtype):
 
 def test_infile_rejects_unserialisable_dtype():
     b = _binding(Arg(name="A", kind="ptr", dtype="complex128", is_const=False, role="output"))
-    desc = Descriptor(grid=Grid((1, )), arrays={"A": ArrayDist(replicated=True)})
+    desc = Descriptor(grid=Grid((1,)), arrays={"A": ArrayDist(replicated=True)})
     with pytest.raises(ValueError, match="not wire-serialisable"):
         pack_infile(b, desc, {"A": np.zeros(3, dtype="complex128")}, {}, k_repeats=1)
 
@@ -167,17 +171,15 @@ def test_full_roundtrip_yax_block():
     N = 13
     b, desc = _yax_binding(), _block0(4, ("x", "y"))
     x = np.arange(N, dtype=np.float64) + 1.0
-    _full_roundtrip(b,
-                    desc, {
-                        "x": x,
-                        "y": np.zeros(N)
-                    }, {
-                        "N": N,
-                        "a": 3.0
-                    },
-                    N,
-                    kernel=lambda loc, sc: {"y": sc["a"] * loc["x"]},
-                    expected={"y": 3.0 * x})
+    _full_roundtrip(
+        b,
+        desc,
+        {"x": x, "y": np.zeros(N)},
+        {"N": N, "a": 3.0},
+        N,
+        kernel=lambda loc, sc: {"y": sc["a"] * loc["x"]},
+        expected={"y": 3.0 * x},
+    )
 
 
 def test_full_roundtrip_replicated_reduction_reads_rank0():
@@ -187,20 +189,20 @@ def test_full_roundtrip_replicated_reduction_reads_rank0():
         Arg(name="s", kind="ptr", dtype="float64", is_const=False, role="output"),
         Arg(name="N", kind="scalar", dtype="int64", is_const=True, role="symbol"),
     )
-    desc = Descriptor(grid=Grid((4, )),
-                      arrays={
-                          "x": ArrayDist(axes=(AxisDist(grid_dim=0, scheme="block"), )),
-                          "s": ArrayDist(replicated=True)
-                      },
-                      symbol_axes={"N": [("x", 0)]})
+    desc = Descriptor(
+        grid=Grid((4,)),
+        arrays={"x": ArrayDist(axes=(AxisDist(grid_dim=0, scheme="block"),)), "s": ArrayDist(replicated=True)},
+        symbol_axes={"N": [("x", 0)]},
+    )
     x = np.arange(8.0) + 1.0
     # Each rank writes the GLOBAL sum into its replicated s (coherent across ranks); gather
     # takes rank 0's -> the global reduction. (dist_for coerces length-1 s to replicated too.)
-    _full_roundtrip(b,
-                    desc, {
-                        "x": x,
-                        "s": np.zeros(1)
-                    }, {"N": 8},
-                    8,
-                    kernel=lambda loc, sc: {"s": np.array([x.sum()])},
-                    expected={"s": np.array([x.sum()])})
+    _full_roundtrip(
+        b,
+        desc,
+        {"x": x, "s": np.zeros(1)},
+        {"N": 8},
+        8,
+        kernel=lambda loc, sc: {"s": np.array([x.sum()])},
+        expected={"s": np.array([x.sum()])},
+    )

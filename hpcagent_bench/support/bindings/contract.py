@@ -4,6 +4,7 @@
 turns a validated BenchSpec into a Binding (Sec. 8) that the stub generator and host glue both read so every
 language agrees byte-for-byte. Implements Sec. 2 (pointer/scalar args only), Sec. 3 (sparse packing), Sec. 4
 (canonical order), Sec. 5 (const rules), Sec. 6 (no timer argument -- timing is the harness wrapper's job)."""
+
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -41,8 +42,10 @@ def restrict_kw(lang: str) -> str:
 def workspace_c_params(lang: str = "c") -> Tuple[str, str]:
     """The reserved scratch pair as C parameter declarations (Sec. 11); the single source the stub
     generator and host glue both render from, so agent and wrapper can never disagree."""
-    return (f"{c_type(WORKSPACE_DTYPE)} *{restrict_kw(lang)} {WORKSPACE_NAME}",
-            f"const {c_type(DEFAULT_SYMBOL_DTYPE)} {WORKSPACE_SIZE_NAME}")
+    return (
+        f"{c_type(WORKSPACE_DTYPE)} *{restrict_kw(lang)} {WORKSPACE_NAME}",
+        f"const {c_type(DEFAULT_SYMBOL_DTYPE)} {WORKSPACE_SIZE_NAME}",
+    )
 
 
 #: Per-language symbol suffix (Sec. 7). cuda/hip export a *host* C-ABI entry (the agent owns H2D/D2H +
@@ -76,6 +79,7 @@ DEFAULT_SYMBOL_DTYPE = "int64"
 class Arg:
     """One flat C-ABI argument (pointer or scalar) in canonical order: name, kind, dtype, const (Sec. 5),
     optional symbolic shape (pointers only), and role ("output"/"symbol"/None)."""
+
     name: str
     kind: str
     dtype: str
@@ -109,6 +113,7 @@ class PackedGroup:
     """A sparse logical array unpacked into ordered member buffers (Sec. 3): ``logical`` is the array name
     (e.g. ``A``), ``members`` are its member pointer names sorted ascending by name -- the same order they
     take in the flat pointer block -- and ``fmt`` is the sparse format string (``csr``, ``coo``, ...)."""
+
     logical: str
     members: Tuple[str, ...]
     fmt: str
@@ -119,6 +124,7 @@ class Binding:
     """The canonical binding for one (kernel, configuration) pair; ``args`` already in canonical order
     (Sec. 4), serialised by :meth:`to_json` into the ``any``-mode prompt and, by the emitters,
     to ``<short>[_<layout>]_<precision>_binding.json`` beside the generated sources (Sec. 8)."""
+
     kernel: str
     config: str
     args: Tuple[Arg, ...]
@@ -148,13 +154,7 @@ class Binding:
             "symbol": self.symbol,
             "abi": self.abi,
             "args": [a.to_json() for a in self.args],
-            "packed": {
-                g.logical: {
-                    "members": list(g.members),
-                    "format": g.fmt
-                }
-                for g in self.packed
-            },
+            "packed": {g.logical: {"members": list(g.members), "format": g.fmt} for g in self.packed},
             # Sec. 11: reserved scratch pair, always present; NULL/0 unless the submission requests bytes.
             "workspace": {
                 "name": WORKSPACE_NAME,
@@ -320,11 +320,13 @@ def binding_from_spec(spec: BenchSpec, config: Optional[str] = None) -> Binding:
             # Sparse logical array -> packed group of member buffers (Sec. 3).
             variant = layout.variants[fmt]
             members = sorted(variant.buffers, key=lambda b: b.name)
-            packed.append(PackedGroup(
-                logical=name,
-                members=tuple(b.name for b in members),
-                fmt=fmt,
-            ))
+            packed.append(
+                PackedGroup(
+                    logical=name,
+                    members=tuple(b.name for b in members),
+                    fmt=fmt,
+                )
+            )
             for buf in members:
                 pointers.append(
                     Arg(
@@ -335,7 +337,8 @@ def binding_from_spec(spec: BenchSpec, config: Optional[str] = None) -> Binding:
                         shape=tuple(buf.shape),
                         role="output" if buf.name in output_set else None,
                         is_index=buf.name in index_set,
-                    ))
+                    )
+                )
         else:
             is_output = name in output_set
             pointers.append(
@@ -347,7 +350,8 @@ def binding_from_spec(spec: BenchSpec, config: Optional[str] = None) -> Binding:
                     shape=_dense_shape(spec, name),
                     role="output" if is_output else None,
                     is_index=name in index_set,
-                ))
+                )
+            )
 
     # Plain scalars: input_args minus arrays/phantoms/size-symbols (added below with role="symbol")
     # minus already-emitted pointer names (unpacked sparse buffers), so nothing is emitted twice.
@@ -362,8 +366,7 @@ def binding_from_spec(spec: BenchSpec, config: Optional[str] = None) -> Binding:
     ptr_names = {a.name for a in pointers}
     scalars: List[Arg] = []
     for name in spec.input_args:
-        if (name in PHANTOM_ARG_NAMES or name in array_set or name in symbol_set or name in ptr_names
-                or name in pinned):
+        if name in PHANTOM_ARG_NAMES or name in array_set or name in symbol_set or name in ptr_names or name in pinned:
             continue
         scalars.append(
             Arg(
@@ -371,18 +374,21 @@ def binding_from_spec(spec: BenchSpec, config: Optional[str] = None) -> Binding:
                 kind="scalar",
                 dtype=_scalar_dtype(spec, name),
                 is_const=True,  # every scalar input is const (Sec. 5)
-            ))
+            )
+        )
 
     for sym in symbol_names:
         if sym in PHANTOM_ARG_NAMES:
             continue
-        scalars.append(Arg(
-            name=sym,
-            kind="scalar",
-            dtype=_symbol_dtype(spec, sym),
-            is_const=True,
-            role="symbol",
-        ))
+        scalars.append(
+            Arg(
+                name=sym,
+                kind="scalar",
+                dtype=_symbol_dtype(spec, sym),
+                is_const=True,
+                role="symbol",
+            )
+        )
 
     # Sec. 4 canonical order: pointers sorted by name, then scalars sorted by name.
     pointers.sort(key=lambda a: a.name)
@@ -392,8 +398,10 @@ def binding_from_spec(spec: BenchSpec, config: Optional[str] = None) -> Binding:
     # Sec. 11: workspace/workspace_size are reserved for the harness, never taken from the manifest.
     clash = sorted({a.name for a in args} & RESERVED_ARG_NAMES)
     if clash:
-        raise ValueError(f"{spec.short_name}: argument name(s) {clash} are reserved by the ABI "
-                         f"(workspace / workspace_size); rename them in the manifest")
+        raise ValueError(
+            f"{spec.short_name}: argument name(s) {clash} are reserved by the ABI "
+            f"(workspace / workspace_size); rename them in the manifest"
+        )
 
     # Canonical symbol: <native_base>_fp64, same for every language; a sparse config is part of the
     # stem (each layout is its own kernel). Both halves of the name come from the emitter's own
@@ -412,8 +420,10 @@ def binding_from_spec(spec: BenchSpec, config: Optional[str] = None) -> Binding:
     symbols = {lang: entry_symbol(f"{spec.native_base(config)}_fp64") for lang in LANG_SYMBOLS}
     sym = symbols["c"]
     if not sym[0].isalpha():
-        raise ValueError(f"{spec.short_name}: symbol {sym!r} must start with a letter -- Fortran "
-                         f"rejects it otherwise; rename the manifest file")
+        raise ValueError(
+            f"{spec.short_name}: symbol {sym!r} must start with a letter -- Fortran "
+            f"rejects it otherwise; rename the manifest file"
+        )
 
     return Binding(
         constants=dict(spec.init.constants) if spec.init is not None else {},

@@ -63,10 +63,12 @@ def _wrap_for_loops(iters: List[str], bounds, body: List[ast.stmt]) -> List[ast.
     for var, bound in zip(reversed(iters), reversed(bounds)):
         bound_node = _const_or_name(bound) if isinstance(bound, str) else bound
         out = [
-            ast.For(target=_store(var),
-                    iter=ast.Call(func=_name("range"), args=[bound_node], keywords=[]),
-                    body=out,
-                    orelse=[])
+            ast.For(
+                target=_store(var),
+                iter=ast.Call(func=_name("range"), args=[bound_node], keywords=[]),
+                body=out,
+                orelse=[],
+            )
         ]
     return out
 
@@ -82,7 +84,7 @@ def _ast_eq(a: ast.AST, b: ast.AST) -> bool:
     if isinstance(a, ast.Constant):
         return a.value == b.value
     if isinstance(a, ast.BinOp):
-        return (type(a.op) is type(b.op) and _ast_eq(a.left, b.left) and _ast_eq(a.right, b.right))
+        return type(a.op) is type(b.op) and _ast_eq(a.left, b.left) and _ast_eq(a.right, b.right)
     return False
 
 
@@ -228,7 +230,7 @@ def _is_shape_scalar(node: ast.AST) -> bool:
     element dtype, so a value/dtype walk must not descend into them."""
     if isinstance(node, ast.Attribute) and node.attr == "shape":
         return True
-    return (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Attribute) and node.value.attr == "shape")
+    return isinstance(node, ast.Subscript) and isinstance(node.value, ast.Attribute) and node.value.attr == "shape"
 
 
 def _reads_complex(expr: ast.AST, local_dtypes: Dict[str, str]) -> bool:
@@ -338,7 +340,7 @@ def _contraction_result_extent(expr: ast.Call, shape_table):
         ra, rb = len(shape_a), len(shape_b)
         letters = "abcdefghijklmnopqrstuvwxyz"
         if attr == "inner":
-            a_spec, b_spec = list(letters[:ra]), list(letters[ra:ra + rb])
+            a_spec, b_spec = list(letters[:ra]), list(letters[ra : ra + rb])
             b_spec[-1] = a_spec[-1]
             inputs = ["".join(a_spec), "".join(b_spec)]
             output = "".join(a_spec[:-1] + b_spec[:-1])
@@ -359,8 +361,9 @@ def _contraction_result_extent(expr: ast.Call, shape_table):
                     b_spec[i] = letters[nxt]
                     nxt += 1
             inputs = ["".join(a_spec), "".join(b_spec)]
-            output = "".join([c for i, c in enumerate(a_spec) if i not in a_ax] +
-                             [c for i, c in enumerate(b_spec) if i not in b_ax])
+            output = "".join(
+                [c for i, c in enumerate(a_spec) if i not in a_ax] + [c for i, c in enumerate(b_spec) if i not in b_ax]
+            )
         operand_nodes = [a, b]
     letter_extent: Dict[str, str] = {}
     for spec, node in zip(inputs, operand_nodes):
@@ -379,8 +382,13 @@ def _np_fft_attr(call: ast.Call) -> Optional[str]:
     else ``None``. ``np.fft.*`` is a two-level attribute (``func.value`` is the
     ``np.fft`` attribute), which the single-level ``np.<attr>`` matchers miss."""
     f = call.func
-    if (isinstance(f, ast.Attribute) and isinstance(f.value, ast.Attribute) and f.value.attr == "fft"
-            and isinstance(f.value.value, ast.Name) and f.value.value.id in ("np", "numpy")):
+    if (
+        isinstance(f, ast.Attribute)
+        and isinstance(f.value, ast.Attribute)
+        and f.value.attr == "fft"
+        and isinstance(f.value.value, ast.Name)
+        and f.value.value.id in ("np", "numpy")
+    ):
         return f.attr
     return None
 
@@ -388,17 +396,31 @@ def _np_fft_attr(call: ast.Call) -> Optional[str]:
 #: Array methods whose numpy function twin takes the array first and means the same thing, so the
 #: method spelling can be routed to it instead of growing a second branch. ``reshape`` is absent on
 #: purpose: it has a method branch of its own that resolves a ``-1`` against the receiver.
-ARRAY_METHOD_SHAPE_OPS: FrozenSet[str] = frozenset({
-    "copy", "transpose", "squeeze", "clip", "round", "conj", "conjugate", "cumsum", "cumprod", "take", "repeat",
-    "diagonal", "swapaxes"
-})
+ARRAY_METHOD_SHAPE_OPS: FrozenSet[str] = frozenset(
+    {
+        "copy",
+        "transpose",
+        "squeeze",
+        "clip",
+        "round",
+        "conj",
+        "conjugate",
+        "cumsum",
+        "cumprod",
+        "take",
+        "repeat",
+        "diagonal",
+        "swapaxes",
+    }
+)
 
 #: Array REDUCTION methods with the same property. Kept beside the shape ops rather than merged
 #: into them: a reduction CHANGES the rank and a shape op does not, and the sizer routes the two
 #: differently. ``sort`` is absent on purpose -- the METHOD sorts in place and ``np.sort`` returns
 #: a copy, so they are not the same call.
 ARRAY_METHOD_REDUCTIONS: FrozenSet[str] = frozenset(
-    {"sum", "prod", "mean", "max", "min", "argmax", "argmin", "std", "var", "any", "all", "ptp"})
+    {"sum", "prod", "mean", "max", "min", "argmax", "argmin", "std", "var", "any", "all", "ptp"}
+)
 
 
 class ArrayMethodRewriter(ast.NodeTransformer):
@@ -429,9 +451,13 @@ class ArrayMethodRewriter(ast.NodeTransformer):
         if isinstance(recv, ast.Subscript) and isinstance(recv.value, ast.Name) and recv.value.id in self.sparse_names:
             return node
         return ast.copy_location(
-            ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=func.attr, ctx=ast.Load()),
-                     args=[recv] + list(node.args),
-                     keywords=list(node.keywords)), node)
+            ast.Call(
+                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=func.attr, ctx=ast.Load()),
+                args=[recv] + list(node.args),
+                keywords=list(node.keywords),
+            ),
+            node,
+        )
 
 
 def _np_call_attr(func: ast.expr) -> Optional[str]:
@@ -440,8 +466,7 @@ def _np_call_attr(func: ast.expr) -> Optional[str]:
         return None
     if isinstance(func.value, ast.Name) and func.value.id == "np":
         return func.attr
-    if (isinstance(func.value, ast.Attribute) and isinstance(func.value.value, ast.Name)
-            and func.value.value.id == "np"):
+    if isinstance(func.value, ast.Attribute) and isinstance(func.value.value, ast.Name) and func.value.value.id == "np":
         return f"{func.value.attr}.{func.attr}"
     return None
 
@@ -453,8 +478,11 @@ def concat_extent(attr: str, expr: ast.Call, shape_table: Dict[str, Tuple[str, .
     extents are summed. Anything else -- a mixed rank, an unresolved operand, an axis numpy would
     broadcast -- returns ``None`` rather than a shape that is merely plausible.
     """
-    operands = list(expr.args[0].elts) if (len(expr.args) == 1
-                                           and isinstance(expr.args[0], (ast.Tuple, ast.List))) else list(expr.args)
+    operands = (
+        list(expr.args[0].elts)
+        if (len(expr.args) == 1 and isinstance(expr.args[0], (ast.Tuple, ast.List)))
+        else list(expr.args)
+    )
     extents = [_iter_extent_of(operand, shape_table) for operand in operands]
     if not extents or any(e is None for e in extents):
         return None
@@ -525,9 +553,9 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
             if ll == 1 and rl == 1:
                 return None  # scalar
             if ll == 2 and rl == 1:
-                return (l_ext[0], )
+                return (l_ext[0],)
             if ll == 1 and rl == 2:
-                return (r_ext[1], )
+                return (r_ext[1],)
             if ll == 2 and rl == 2:
                 return (l_ext[0], r_ext[1])
             # Batched matmul: last two dims are M,K and K,N; broadcast leading axes.
@@ -542,9 +570,9 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
             #   ``a (K,) @ B (..., K, N) -> (..., N)``
             #   ``A (..., M, K) @ b (K,) -> (..., M)``
             if ll == 1 and rl > 2:
-                return tuple(r_ext[:-2]) + (r_ext[-1], )
+                return tuple(r_ext[:-2]) + (r_ext[-1],)
             if rl == 1 and ll > 2:
-                return tuple(l_ext[:-2]) + (l_ext[-2], )
+                return tuple(l_ext[:-2]) + (l_ext[-2],)
             return None
         # Broadcast the two extents axis-by-axis, aligned from the right,
         # picking the non-1 axis at each position (numpy rules).
@@ -552,8 +580,10 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
         # ``X + Y[:, None]`` with X:(M,), Y[:, None]:(N, 1) -> (N, M).
         l_ext = _iter_extent_of(expr.left, shape_table)
         r_ext = _iter_extent_of(expr.right, shape_table)
-        if l_ext is None: return r_ext
-        if r_ext is None: return l_ext
+        if l_ext is None:
+            return r_ext
+        if r_ext is None:
+            return l_ext
         return _broadcast_extents(l_ext, r_ext)
     if isinstance(expr, ast.UnaryOp):
         return _iter_extent_of(expr.operand, shape_table)
@@ -595,7 +625,7 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
         _fft = _np_fft_attr(expr)
         if _fft is not None:
             if _fft == "fftfreq" and expr.args:
-                return (copy.deepcopy(expr.args[0]), )
+                return (copy.deepcopy(expr.args[0]),)
             if _fft in ("fftn", "ifftn", "fft", "ifft", "fft2", "ifft2", "fftshift", "ifftshift") and expr.args:
                 return _iter_extent_of(expr.args[0], shape_table)
             return None
@@ -604,9 +634,12 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
         # the method->function normaliser) misses it. Left unsized, a reshape
         # target like ``X = (Yf @ C).reshape(shp)`` poisons every derived shape
         # (LS3DF's Rayleigh-Ritz).
-        if (isinstance(expr.func, ast.Attribute) and expr.func.attr == "reshape"
-                and not (isinstance(expr.func.value, ast.Name) and expr.func.value.id in ("np", "numpy"))
-                and expr.args):
+        if (
+            isinstance(expr.func, ast.Attribute)
+            and expr.func.attr == "reshape"
+            and not (isinstance(expr.func.value, ast.Name) and expr.func.value.id in ("np", "numpy"))
+            and expr.args
+        ):
             if len(expr.args) == 1 and isinstance(expr.args[0], (ast.Tuple, ast.List)):
                 elts = list(expr.args[0].elts)
             elif len(expr.args) == 1 and isinstance(expr.args[0], (ast.Name, ast.Constant, ast.BinOp, ast.UnaryOp)):
@@ -635,8 +668,9 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
             # every shape built on one silently fell back to a broadcast partner's extent --
             # cp2k_density_matrix_trs4's ``c_pos`` came out (nnz, 1) instead of (nnz, fanout), and
             # the scatter that reads it then ran over a third of the contributions.
-            method_form = (isinstance(expr.func, ast.Attribute)
-                           and not (isinstance(expr.func.value, ast.Name) and expr.func.value.id in ("np", "numpy")))
+            method_form = isinstance(expr.func, ast.Attribute) and not (
+                isinstance(expr.func.value, ast.Name) and expr.func.value.id in ("np", "numpy")
+            )
             # ``_read_axis_keepdims`` reads the axis from positional slot 1, so the method's args are
             # shifted by one to put them in the vocabulary it expects.
             red_args = ([expr.func.value] + list(expr.args)) if method_form else list(expr.args)
@@ -667,20 +701,21 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
         # two spellings had already diverged for reshape and for the reductions above, each fixed
         # separately after a kernel came back sized off a broadcast partner instead. ``astype`` and
         # ``flatten`` have no numpy function twin to route to and answer directly.
-        if (isinstance(expr.func, ast.Attribute)
-                and not (isinstance(expr.func.value, ast.Name) and expr.func.value.id in ("np", "numpy"))):
+        if isinstance(expr.func, ast.Attribute) and not (
+            isinstance(expr.func.value, ast.Name) and expr.func.value.id in ("np", "numpy")
+        ):
             method = expr.func.attr
             if method == "astype":
                 return _iter_extent_of(expr.func.value, shape_table)  # dtype only, never the shape
             if method in ("ravel", "flatten"):
                 base = _iter_extent_of(expr.func.value, shape_table)
-                return None if base is None else (_mul_exts(base), )
+                return None if base is None else (_mul_exts(base),)
             if method in ARRAY_METHOD_SHAPE_OPS:
-                routed = ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()),
-                                                     attr=method,
-                                                     ctx=ast.Load()),
-                                  args=[expr.func.value] + list(expr.args),
-                                  keywords=list(expr.keywords))
+                routed = ast.Call(
+                    func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=method, ctx=ast.Load()),
+                    args=[expr.func.value] + list(expr.args),
+                    keywords=list(expr.keywords),
+                )
                 return _iter_extent_of(ast.copy_location(routed, expr), shape_table)
         attr = _np_call_attr(expr.func)
         if attr is not None:
@@ -704,10 +739,13 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
             # jitter term and took the whole Rayleigh-Ritz block with it.
             if attr in ("eye", "identity") and expr.args:
                 n = copy.deepcopy(expr.args[0])
-                return (n, copy.deepcopy(expr.args[1])) if attr == "eye" and len(
-                    expr.args) >= 2 and not _const_int(expr.args[1]) is None else (n, copy.deepcopy(n))
+                return (
+                    (n, copy.deepcopy(expr.args[1]))
+                    if attr == "eye" and len(expr.args) >= 2 and not _const_int(expr.args[1]) is None
+                    else (n, copy.deepcopy(n))
+                )
             if attr == "arange" and len(expr.args) == 1:
-                return (copy.deepcopy(expr.args[0]), )
+                return (copy.deepcopy(expr.args[0]),)
             if attr in ("hstack", "vstack", "concatenate") and expr.args:
                 # Concatenation is the one shape-changing form a helper's RETURN commonly takes
                 # (nbody's ``return np.hstack((ax, ay, az))``), and an unsized one leaves the
@@ -725,7 +763,7 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
                 shape_arg = expr.args[0]
                 if isinstance(shape_arg, (ast.Tuple, ast.List)):
                     return tuple(copy.deepcopy(e) for e in shape_arg.elts)
-                return (copy.deepcopy(shape_arg), )
+                return (copy.deepcopy(shape_arg),)
             if attr == "reshape" and len(expr.args) >= 2:
                 newshape = expr.args[1]
                 elts: Optional[List[ast.expr]] = None
@@ -758,7 +796,7 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
                 base = _iter_extent_of(expr.args[0], shape_table)
                 if base is None:
                     return None
-                if (len(expr.args) >= 2 and isinstance(expr.args[1], (ast.Tuple, ast.List))):
+                if len(expr.args) >= 2 and isinstance(expr.args[1], (ast.Tuple, ast.List)):
                     perm = [
                         e.value for e in expr.args[1].elts if isinstance(e, ast.Constant) and isinstance(e.value, int)
                     ]
@@ -813,7 +851,7 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
                     out = [e for k, e in enumerate(base) if k != axis]
                 else:
                     out = [e for e in base if not (isinstance(e, ast.Constant) and e.value == 1)]
-                return tuple(out) if out else (_const(1), )
+                return tuple(out) if out else (_const(1),)
             if attr == "take" and len(expr.args) >= 2:
                 base = _iter_extent_of(expr.args[0], shape_table)
                 # A LITERAL index takes one element off the axis, so numpy drops that axis
@@ -865,7 +903,7 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
                 return None  # scalar result
             if attr == "diagonal" and expr.args:
                 base = _iter_extent_of(expr.args[0], shape_table)
-                return (base[0], ) if base else None
+                return (base[0],) if base else None
             # ``np.diag(v [, k])`` -- a 1-D operand builds an ``(n+|k|, n+|k|)``
             # matrix (single source of truth for the constructed shape); a 2-D
             # operand extracts the main diagonal (length of its first axis).
@@ -874,7 +912,7 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
                 if base is None:
                     return None
                 if len(base) == 2:
-                    return (base[0], )
+                    return (base[0],)
                 if len(base) != 1:
                     return None
                 k_node = _kwarg_or_pos(expr.args, expr.keywords, 1, "k")
@@ -885,7 +923,7 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
                     if kc is None:
                         return None  # non-const offset can't size the result
                     off = abs(kc)
-                side = (base[0] if off == 0 else ast.BinOp(left=base[0], op=ast.Add(), right=_const(off)))
+                side = base[0] if off == 0 else ast.BinOp(left=base[0], op=ast.Add(), right=_const(off))
                 return (side, copy.deepcopy(side))
             # ``np.cumsum``/``np.cumprod`` and the ``maximum``/``minimum.accumulate`` running
             # extremes: a prefix scan is shape-preserving along its
@@ -1012,7 +1050,7 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
                     src_axis += 1
                 continue
             if isinstance(ax, ast.Slice):
-                axis_len = (_const_or_name(shape[src_axis]) if shape and src_axis < len(shape) else None)
+                axis_len = _const_or_name(shape[src_axis]) if shape and src_axis < len(shape) else None
                 lo = _resolve_negative(ax.lower, axis_len) if ax.lower is not None else _const(0)
                 hi = _resolve_negative(ax.upper, axis_len) if ax.upper is not None else axis_len
                 if hi is None or lo is None:
@@ -1048,11 +1086,14 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
                         ext.append(exact)
                     else:
                         ext.append(
-                            ast.BinOp(left=ast.BinOp(left=ast.BinOp(left=raw, op=ast.Add(), right=step),
-                                                     op=ast.Sub(),
-                                                     right=_const(1)),
-                                      op=ast.FloorDiv(),
-                                      right=step))
+                            ast.BinOp(
+                                left=ast.BinOp(
+                                    left=ast.BinOp(left=raw, op=ast.Add(), right=step), op=ast.Sub(), right=_const(1)
+                                ),
+                                op=ast.FloorDiv(),
+                                right=step,
+                            )
+                        )
                 elif step is not None and step != 1:
                     # Element count is ceil(raw / |step|) -- a full-axis negative step
                     # (reverse) spans the same number of elements as its positive
@@ -1062,9 +1103,12 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
                         ext.append(_const((raw.value + astep - 1) // astep))
                     else:
                         ext.append(
-                            ast.BinOp(left=ast.BinOp(left=raw, op=ast.Add(), right=_const(astep - 1)),
-                                      op=ast.FloorDiv(),
-                                      right=_const(astep)))
+                            ast.BinOp(
+                                left=ast.BinOp(left=raw, op=ast.Add(), right=_const(astep - 1)),
+                                op=ast.FloorDiv(),
+                                right=_const(astep),
+                            )
+                        )
                 else:
                     ext.append(raw)
             elif isinstance(ax, ast.Name) and shape_table.get(ax.id):
@@ -1163,8 +1207,8 @@ def _broadcast_extents(l_ext: Tuple[ast.expr, ...], r_ext: Tuple[ast.expr, ...])
     stretches to the other side; otherwise the left side wins (shape mismatches
     surface later, at scalarise time)."""
     rank = max(len(l_ext), len(r_ext))
-    l_pad = (_const(1), ) * (rank - len(l_ext)) + l_ext
-    r_pad = (_const(1), ) * (rank - len(r_ext)) + r_ext
+    l_pad = (_const(1),) * (rank - len(l_ext)) + l_ext
+    r_pad = (_const(1),) * (rank - len(r_ext)) + r_ext
     out: List[ast.expr] = []
     for l, r in zip(l_pad, r_pad):
         # A size-1 axis on either side stretches to the other's extent -- a size-1
@@ -1233,8 +1277,9 @@ def _is_integer_expr(node: ast.AST, local_dtypes: Dict[str, str], array_names: S
     if isinstance(node, ast.BinOp):
         if not isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Mod, ast.FloorDiv)):
             return False
-        return (_is_integer_expr(node.left, local_dtypes, array_names)
-                and _is_integer_expr(node.right, local_dtypes, array_names))
+        return _is_integer_expr(node.left, local_dtypes, array_names) and _is_integer_expr(
+            node.right, local_dtypes, array_names
+        )
     if isinstance(node, ast.UnaryOp):
         return _is_integer_expr(node.operand, local_dtypes, array_names)
     return False
@@ -1284,17 +1329,50 @@ def _all_integer_operands(args: List[ast.expr], local_dtypes: Optional[Dict[str,
 #: an axis, a shape or a tolerance must keep the first-arg rule, or that slot's extent would be
 #: folded into the result.
 _BROADCASTING_UFUNCS: Set[str] = {
-    "add", "subtract", "multiply", "divide", "true_divide", "floor_divide", "power", "float_power", "mod", "remainder",
-    "fmod", "maximum", "minimum", "fmax", "fmin", "hypot", "arctan2", "logaddexp", "logaddexp2", "copysign",
-    "nextafter", "heaviside", "less", "less_equal", "greater", "greater_equal", "equal", "not_equal", "logical_and",
-    "logical_or", "logical_xor", "bitwise_and", "bitwise_or", "bitwise_xor", "left_shift", "right_shift"
+    "add",
+    "subtract",
+    "multiply",
+    "divide",
+    "true_divide",
+    "floor_divide",
+    "power",
+    "float_power",
+    "mod",
+    "remainder",
+    "fmod",
+    "maximum",
+    "minimum",
+    "fmax",
+    "fmin",
+    "hypot",
+    "arctan2",
+    "logaddexp",
+    "logaddexp2",
+    "copysign",
+    "nextafter",
+    "heaviside",
+    "less",
+    "less_equal",
+    "greater",
+    "greater_equal",
+    "equal",
+    "not_equal",
+    "logical_and",
+    "logical_or",
+    "logical_xor",
+    "bitwise_and",
+    "bitwise_or",
+    "bitwise_xor",
+    "left_shift",
+    "right_shift",
 }
 
 _INT_PRESERVING_ELEMENTWISE: Set[str] = {"add", "subtract", "multiply", "power", "maximum", "minimum"}
 
 
-def _broadcast_children(children: List[ast.expr], shape_table: Dict[str, Tuple[str,
-                                                                               ...]]) -> Optional[Tuple[ast.expr, ...]]:
+def _broadcast_children(
+    children: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]]
+) -> Optional[Tuple[ast.expr, ...]]:
     """Fold every child's iter extent through numpy broadcasting, skipping
     scalar (None-extent) children. Returns the broadcast extent, or None when
     no child has an extent. Shared by the Compare / BoolOp extent branches."""
@@ -1313,8 +1391,13 @@ def _resolve_negative(node: ast.AST, axis_len: Optional[ast.expr]) -> Optional[a
         if axis_len is None:
             return None
         return ast.BinOp(left=axis_len, op=ast.Sub(), right=_const(-node.value))
-    if (isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub) and isinstance(node.operand, ast.Constant)
-            and isinstance(node.operand.value, int) and axis_len is not None):
+    if (
+        isinstance(node, ast.UnaryOp)
+        and isinstance(node.op, ast.USub)
+        and isinstance(node.operand, ast.Constant)
+        and isinstance(node.operand.value, int)
+        and axis_len is not None
+    ):
         return ast.BinOp(left=axis_len, op=ast.Sub(), right=_const(node.operand.value))
     return node
 
@@ -1342,7 +1425,7 @@ def _advanced_index_rank(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]
         shape = shape_table.get(expr.id)
         return len(shape) if shape else None
     if isinstance(expr, ast.BinOp):
-        return (_advanced_index_rank(expr.left, shape_table) or _advanced_index_rank(expr.right, shape_table))
+        return _advanced_index_rank(expr.left, shape_table) or _advanced_index_rank(expr.right, shape_table)
     if isinstance(expr, ast.UnaryOp):
         return _advanced_index_rank(expr.operand, shape_table)
     return None
@@ -1398,8 +1481,11 @@ def _subscript_result_rank(expr: ast.Subscript, axes: List[ast.expr], shape, sha
             rank += 1
             src += 1
             continue
-        adv = (len(shape_table[ax.id]) if isinstance(ax, ast.Name) and shape_table.get(ax.id) else _advanced_index_rank(
-            ax, shape_table))
+        adv = (
+            len(shape_table[ax.id])
+            if isinstance(ax, ast.Name) and shape_table.get(ax.id)
+            else _advanced_index_rank(ax, shape_table)
+        )
         if adv:
             if not grouped:
                 rank += adv
@@ -1449,8 +1535,7 @@ def _scalarize_at_iters(expr: ast.expr, iters: List[ast.expr], shape_table: Dict
         # already apply this rule to the same spelling; np.where's cond reached neither.
         full = [isinstance(a, ast.Slice) and a.lower is None and a.upper is None and a.step is None for a in axes]
         newax = [isinstance(a, ast.Constant) and a.value is None for a in axes]
-        if name is None and axes and all(f or n for f, n in zip(full, newax)) and any(full) \
-                and len(axes) <= len(iters):
+        if name is None and axes and all(f or n for f, n in zip(full, newax)) and any(full) and len(axes) <= len(iters):
             offset = len(iters) - len(axes)
             base_iters = [iters[offset + k] for k, f in enumerate(full) if f]
             return _scalarize_at_iters(expr.value, base_iters, shape_table)
@@ -1472,7 +1557,7 @@ def _scalarize_at_iters(expr: ast.expr, iters: List[ast.expr], shape_table: Dict
                     iter_idx += 1
                 continue
             if isinstance(ax, ast.Slice):
-                axis_len = (_const_or_name(shape[src_axis]) if shape and src_axis < len(shape) else None)
+                axis_len = _const_or_name(shape[src_axis]) if shape and src_axis < len(shape) else None
                 step = _slice_step_any(ax)
                 lo = _slice_start(ax, axis_len, step)
                 if iter_idx >= len(iters):
@@ -1490,14 +1575,15 @@ def _scalarize_at_iters(expr: ast.expr, iters: List[ast.expr], shape_table: Dict
                 if group_iters is None:
                     if iter_idx + len(idx_shape) > len(iters):
                         return expr  # not enough iters supplied
-                    group_iters = iters[iter_idx:iter_idx + len(idx_shape)]
+                    group_iters = iters[iter_idx : iter_idx + len(idx_shape)]
                     iter_idx += len(idx_shape)
-                idx_iters = group_iters[-len(idx_shape):]
+                idx_iters = group_iters[-len(idx_shape) :]
                 if len(idx_iters) == 1:
                     new_axes.append(ast.Subscript(value=ax, slice=idx_iters[0], ctx=ast.Load()))
                 else:
                     new_axes.append(
-                        ast.Subscript(value=ax, slice=ast.Tuple(elts=list(idx_iters), ctx=ast.Load()), ctx=ast.Load()))
+                        ast.Subscript(value=ax, slice=ast.Tuple(elts=list(idx_iters), ctx=ast.Load()), ctx=ast.Load())
+                    )
                 src_axis += 1
                 continue
             else:
@@ -1509,7 +1595,7 @@ def _scalarize_at_iters(expr: ast.expr, iters: List[ast.expr], shape_table: Dict
                     if group_iters is None:
                         if iter_idx + adv_rank > len(iters):
                             return expr  # not enough iters supplied
-                        group_iters = iters[iter_idx:iter_idx + adv_rank]
+                        group_iters = iters[iter_idx : iter_idx + adv_rank]
                         iter_idx += adv_rank
                     idx_iters = group_iters[-adv_rank:]
                     new_axes.append(_scalarize_at_iters(ax, idx_iters, shape_table))
@@ -1518,7 +1604,7 @@ def _scalarize_at_iters(expr: ast.expr, iters: List[ast.expr], shape_table: Dict
                 # Concrete scalar index -- resolve a negative ``arr[-1]`` against
                 # the axis length (C / Fortran have no negative indexing): the
                 # stencil_*_vc ``w_dist[-1]`` last-weight read.
-                axis_len = (_const_or_name(shape[src_axis]) if shape and src_axis < len(shape) else None)
+                axis_len = _const_or_name(shape[src_axis]) if shape and src_axis < len(shape) else None
                 new_axes.append(_resolve_negative(ax, axis_len))
             src_axis += 1
         # If the source has more axes than the Subscript covered, the iter
@@ -1533,21 +1619,27 @@ def _scalarize_at_iters(expr: ast.expr, iters: List[ast.expr], shape_table: Dict
         slot = new_axes[0] if len(new_axes) == 1 else ast.Tuple(elts=new_axes, ctx=ast.Load())
         return ast.Subscript(value=expr.value, slice=slot, ctx=ast.Load())
     if isinstance(expr, ast.BinOp):
-        return ast.BinOp(left=_scalarize_at_iters(expr.left, iters, shape_table),
-                         op=expr.op,
-                         right=_scalarize_at_iters(expr.right, iters, shape_table))
+        return ast.BinOp(
+            left=_scalarize_at_iters(expr.left, iters, shape_table),
+            op=expr.op,
+            right=_scalarize_at_iters(expr.right, iters, shape_table),
+        )
     if isinstance(expr, ast.UnaryOp):
         return ast.UnaryOp(op=expr.op, operand=_scalarize_at_iters(expr.operand, iters, shape_table))
     if isinstance(expr, ast.Compare):
-        return ast.Compare(left=_scalarize_at_iters(expr.left, iters, shape_table),
-                           ops=expr.ops,
-                           comparators=[_scalarize_at_iters(c, iters, shape_table) for c in expr.comparators])
+        return ast.Compare(
+            left=_scalarize_at_iters(expr.left, iters, shape_table),
+            ops=expr.ops,
+            comparators=[_scalarize_at_iters(c, iters, shape_table) for c in expr.comparators],
+        )
     if isinstance(expr, ast.BoolOp):
         return ast.BoolOp(op=expr.op, values=[_scalarize_at_iters(v, iters, shape_table) for v in expr.values])
     if isinstance(expr, ast.IfExp):
-        return ast.IfExp(test=_scalarize_at_iters(expr.test, iters, shape_table),
-                         body=_scalarize_at_iters(expr.body, iters, shape_table),
-                         orelse=_scalarize_at_iters(expr.orelse, iters, shape_table))
+        return ast.IfExp(
+            test=_scalarize_at_iters(expr.test, iters, shape_table),
+            body=_scalarize_at_iters(expr.body, iters, shape_table),
+            orelse=_scalarize_at_iters(expr.orelse, iters, shape_table),
+        )
     if isinstance(expr, ast.Call):
         # An array CONSTRUCTOR is not elementwise: every element of ``np.zeros_like(a)`` is 0,
         # whatever ``a`` is. Recursing into the args instead emitted a per-element call to the
@@ -1557,9 +1649,9 @@ def _scalarize_at_iters(expr: ast.expr, iters: List[ast.expr], shape_table: Dict
             return fill
         # Math intrinsics on array values fall through; the args are
         # array expressions to scalarize.
-        return ast.Call(func=expr.func,
-                        args=[_scalarize_at_iters(a, iters, shape_table) for a in expr.args],
-                        keywords=expr.keywords)
+        return ast.Call(
+            func=expr.func, args=[_scalarize_at_iters(a, iters, shape_table) for a in expr.args], keywords=expr.keywords
+        )
     return expr
 
 
@@ -1572,8 +1664,11 @@ _CTOR_FILL: Dict[str, float] = {"zeros": 0.0, "zeros_like": 0.0, "ones": 1.0, "o
 def _ctor_fill_element(expr: ast.Call) -> Optional[ast.expr]:
     """The scalar every element of ``np.zeros(...)`` / ``np.ones_like(...)`` / ``np.full(...)``
     holds, or ``None`` when the call is not such a constructor."""
-    if not (isinstance(expr.func, ast.Attribute) and isinstance(expr.func.value, ast.Name)
-            and expr.func.value.id in ("np", "numpy")):
+    if not (
+        isinstance(expr.func, ast.Attribute)
+        and isinstance(expr.func.value, ast.Name)
+        and expr.func.value.id in ("np", "numpy")
+    ):
         return None
     attr = expr.func.attr
     if attr in ("full", "full_like") and len(expr.args) >= 2:
@@ -1627,15 +1722,18 @@ def _read_axis_keepdims(args, kwargs):
                 continue
             axes = _eval_axes(kw.value)
             if axes is None:
-                raise NotImplementedError(f"axis {ast.unparse(kw.value)!r} must be a compile-time integer or "
-                                          f"tuple of them (it selects the loop nest)")
+                raise NotImplementedError(
+                    f"axis {ast.unparse(kw.value)!r} must be a compile-time integer or "
+                    f"tuple of them (it selects the loop nest)"
+                )
     keepdims = False
     for kw in kwargs or []:
         if kw.arg == "keepdims":
             # Same rule: a non-literal keepdims changes the RESULT RANK, so it cannot default to False.
             if not isinstance(kw.value, ast.Constant):
-                raise NotImplementedError(f"keepdims {ast.unparse(kw.value)!r} must be a compile-time "
-                                          f"constant (it selects the result rank)")
+                raise NotImplementedError(
+                    f"keepdims {ast.unparse(kw.value)!r} must be a compile-time constant (it selects the result rank)"
+                )
             keepdims = bool(kw.value.value)
     return axes, keepdims
 
@@ -1664,8 +1762,10 @@ def _expand_axis_reduction(target, args, kwargs, shape_table, init, op_fn, post_
     # an unreadable one is refused rather than silently becoming a reduction over every axis.
     if len(args) >= 2 and not (isinstance(args[1], ast.Constant) and args[1].value is None):
         if _eval_axes(args[1]) is None:
-            raise NotImplementedError(f"axis {ast.unparse(args[1])!r} must be a compile-time integer or tuple "
-                                      f"of them (it selects the loop nest)")
+            raise NotImplementedError(
+                f"axis {ast.unparse(args[1])!r} must be a compile-time integer or tuple "
+                f"of them (it selects the loop nest)"
+            )
     axes, keepdims = _read_axis_keepdims(args, kwargs)
     n_dim = len(shape)
 
@@ -1682,8 +1782,9 @@ def _expand_axis_reduction(target, args, kwargs, shape_table, init, op_fn, post_
     # not just its storage). Neither is honoured by the loop below, so neither may be ignored.
     for dropped in ("where", "dtype", "out"):
         if _read_kwarg(kwargs, dropped) is not None:
-            raise NotImplementedError(f"reduction {dropped}= is not lowered; it changes the result, "
-                                      f"so it cannot be dropped")
+            raise NotImplementedError(
+                f"reduction {dropped}= is not lowered; it changes the result, so it cannot be dropped"
+            )
 
     if axes is None:
         # Full reduction -- scalar target.
@@ -1691,11 +1792,13 @@ def _expand_axis_reduction(target, args, kwargs, shape_table, init, op_fn, post_
         subscript = ast.Subscript(
             value=_name(arr.id),
             slice=(_name(iters[0]) if n_dim == 1 else ast.Tuple(elts=[_name(i) for i in iters], ctx=ast.Load())),
-            ctx=ast.Load())
+            ctx=ast.Load(),
+        )
         target_load = ast.Name(id=target.id, ctx=ast.Load())
         body = [
-            update_fn(target, target_load, subscript) if update_fn else ast.Assign(targets=[target],
-                                                                                   value=op_fn(target_load, subscript))
+            update_fn(target, target_load, subscript)
+            if update_fn
+            else ast.Assign(targets=[target], value=op_fn(target_load, subscript))
         ]
         loops = _wrap_for_loops(iters, shape, body)
         stmts = [ast.Assign(targets=[target], value=_init_for(init, arr, n_dim))]
@@ -1778,16 +1881,21 @@ def _expand_axis_reduction(target, args, kwargs, shape_table, init, op_fn, post_
     else:
         init_node = init
     init_stmt = ast.Assign(targets=[out_sub], value=init_node)
-    update_stmt = (update_fn(out_sub, out_load, src_sub) if update_fn else ast.Assign(targets=[out_sub],
-                                                                                      value=op_fn(out_load, src_sub)))
+    update_stmt = (
+        update_fn(out_sub, out_load, src_sub)
+        if update_fn
+        else ast.Assign(targets=[out_sub], value=op_fn(out_load, src_sub))
+    )
     # Inner loop nest over the reduction axes, deepest first.
     inner_stmts: List[ast.stmt] = [update_stmt]
     for ax, rn in zip(reversed(axes_norm), reversed(red_iter_names)):
         inner_stmts = [
-            ast.For(target=_store(rn),
-                    iter=ast.Call(func=_name("range"), args=[_const_or_name(shape[ax])], keywords=[]),
-                    body=inner_stmts,
-                    orelse=[])
+            ast.For(
+                target=_store(rn),
+                iter=ast.Call(func=_name("range"), args=[_const_or_name(shape[ax])], keywords=[]),
+                body=inner_stmts,
+                orelse=[],
+            )
         ]
     if post_fn is not None:
         # Divisor for mean: product of the reduction-axis sizes.
@@ -1810,16 +1918,16 @@ def _init_for(init, arr, n_dim):
         # For full reduction we use arr[0, 0, ..., 0] as the init.
         if n_dim == 1:
             return ast.Subscript(value=_name(arr.id), slice=_const(0), ctx=ast.Load())
-        return ast.Subscript(value=_name(arr.id),
-                             slice=ast.Tuple(elts=[_const(0)] * n_dim, ctx=ast.Load()),
-                             ctx=ast.Load())
+        return ast.Subscript(
+            value=_name(arr.id), slice=ast.Tuple(elts=[_const(0)] * n_dim, ctx=ast.Load()), ctx=ast.Load()
+        )
     return init
 
 
 def _read_kwarg(kwargs, name):
     """Return the AST value of keyword ``name`` in ``kwargs`` (list of
     ``ast.keyword``), or ``None`` when absent."""
-    for kw in (kwargs or []):
+    for kw in kwargs or []:
         if kw.arg == name:
             return kw.value
     return None
@@ -1843,17 +1951,17 @@ def _nan_reduce_op(cmp):
     unlike C's ``fmax``/the ``max`` macro, which suppress NaN."""
 
     def _f(acc, x):
-        return ast.IfExp(test=ast.BoolOp(op=ast.Or(),
-                                         values=[
-                                             ast.Compare(left=copy.deepcopy(x),
-                                                         ops=[cmp()],
-                                                         comparators=[copy.deepcopy(acc)]),
-                                             ast.Compare(left=copy.deepcopy(x),
-                                                         ops=[ast.NotEq()],
-                                                         comparators=[copy.deepcopy(x)])
-                                         ]),
-                         body=copy.deepcopy(x),
-                         orelse=copy.deepcopy(acc))
+        return ast.IfExp(
+            test=ast.BoolOp(
+                op=ast.Or(),
+                values=[
+                    ast.Compare(left=copy.deepcopy(x), ops=[cmp()], comparators=[copy.deepcopy(acc)]),
+                    ast.Compare(left=copy.deepcopy(x), ops=[ast.NotEq()], comparators=[copy.deepcopy(x)]),
+                ],
+            ),
+            body=copy.deepcopy(x),
+            orelse=copy.deepcopy(acc),
+        )
 
     return _f
 
@@ -1862,34 +1970,40 @@ def expand_sum(target, args, shape_table, kwargs=None, local_dtypes=None):
     is_int = _reduction_elem_is_integer(args, local_dtypes)
     if is_int and local_dtypes is not None and isinstance(target, ast.Name):
         local_dtypes[target.id] = "int64"
-    return _expand_axis_reduction(target,
-                                  args,
-                                  kwargs,
-                                  shape_table,
-                                  init=_const(0) if is_int else _const(0.0),
-                                  op_fn=lambda acc, x: ast.BinOp(left=acc, op=ast.Add(), right=x))
+    return _expand_axis_reduction(
+        target,
+        args,
+        kwargs,
+        shape_table,
+        init=_const(0) if is_int else _const(0.0),
+        op_fn=lambda acc, x: ast.BinOp(left=acc, op=ast.Add(), right=x),
+    )
 
 
 def expand_max(target, args, shape_table, kwargs=None):
     arr = args[0]
     _reject_zero_size_reduction(args, kwargs, shape_table)
-    return _expand_axis_reduction(target,
-                                  args,
-                                  kwargs,
-                                  shape_table,
-                                  init=ast.Subscript(value=arr, slice=_const(0), ctx=ast.Load()),
-                                  op_fn=_nan_reduce_op(ast.Gt))
+    return _expand_axis_reduction(
+        target,
+        args,
+        kwargs,
+        shape_table,
+        init=ast.Subscript(value=arr, slice=_const(0), ctx=ast.Load()),
+        op_fn=_nan_reduce_op(ast.Gt),
+    )
 
 
 def expand_min(target, args, shape_table, kwargs=None):
     arr = args[0]
     _reject_zero_size_reduction(args, kwargs, shape_table)
-    return _expand_axis_reduction(target,
-                                  args,
-                                  kwargs,
-                                  shape_table,
-                                  init=ast.Subscript(value=arr, slice=_const(0), ctx=ast.Load()),
-                                  op_fn=_nan_reduce_op(ast.Lt))
+    return _expand_axis_reduction(
+        target,
+        args,
+        kwargs,
+        shape_table,
+        init=ast.Subscript(value=arr, slice=_const(0), ctx=ast.Load()),
+        op_fn=_nan_reduce_op(ast.Lt),
+    )
 
 
 def _reject_zero_size_reduction(args, kwargs, shape_table):
@@ -1915,8 +2029,12 @@ def expand_mean(target, args, shape_table, kwargs=None):
     # Special form ``np.mean(arr[mask])``, ``mask`` a same-length boolean array:
     # boolean fancy indexing produces a dynamic-length compacted view we don't
     # materialise, so emit a masked-sum + count loop directly.
-    if (args and isinstance(args[0], ast.Subscript) and isinstance(args[0].value, ast.Name)
-            and isinstance(args[0].slice, ast.Name)):
+    if (
+        args
+        and isinstance(args[0], ast.Subscript)
+        and isinstance(args[0].value, ast.Name)
+        and isinstance(args[0].slice, ast.Name)
+    ):
         arr = args[0].value
         mask = args[0].slice
         a_shape = shape_table.get(arr.id)
@@ -1926,51 +2044,67 @@ def expand_mean(target, args, shape_table, kwargs=None):
             sum_name = "__mn_sum"
             cnt_name = "__mn_cnt"
             body = [
-                ast.If(test=ast.Subscript(value=_name(mask.id), slice=_name(iter_name), ctx=ast.Load()),
-                       body=[
-                           ast.AugAssign(target=_store(sum_name),
-                                         op=ast.Add(),
-                                         value=ast.Subscript(value=_name(arr.id),
-                                                             slice=_name(iter_name),
-                                                             ctx=ast.Load())),
-                           ast.AugAssign(target=_store(cnt_name), op=ast.Add(), value=_const(1)),
-                       ],
-                       orelse=[]),
+                ast.If(
+                    test=ast.Subscript(value=_name(mask.id), slice=_name(iter_name), ctx=ast.Load()),
+                    body=[
+                        ast.AugAssign(
+                            target=_store(sum_name),
+                            op=ast.Add(),
+                            value=ast.Subscript(value=_name(arr.id), slice=_name(iter_name), ctx=ast.Load()),
+                        ),
+                        ast.AugAssign(target=_store(cnt_name), op=ast.Add(), value=_const(1)),
+                    ],
+                    orelse=[],
+                ),
             ]
             return [
                 ast.Assign(targets=[_store(sum_name)], value=_const(0.0)),
                 ast.Assign(targets=[_store(cnt_name)], value=_const(0)),
-                ast.For(target=_store(iter_name),
-                        iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
-                        body=body,
-                        orelse=[]),
-                ast.Assign(targets=[_store(target.id)],
-                           value=ast.BinOp(left=_name(sum_name), op=ast.Div(), right=_name(cnt_name))),
+                ast.For(
+                    target=_store(iter_name),
+                    iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
+                    body=body,
+                    orelse=[],
+                ),
+                ast.Assign(
+                    targets=[_store(target.id)],
+                    value=ast.BinOp(left=_name(sum_name), op=ast.Div(), right=_name(cnt_name)),
+                ),
             ]
-    return _expand_axis_reduction(target,
-                                  args,
-                                  kwargs,
-                                  shape_table,
-                                  init=_const(0.0),
-                                  op_fn=lambda acc, x: ast.BinOp(left=acc, op=ast.Add(), right=x),
-                                  post_fn=lambda lvalue, divisor: ast.Assign(
-                                      targets=[lvalue],
-                                      value=ast.BinOp(left=(lvalue if isinstance(lvalue, ast.Name) else ast.Subscript(
-                                          value=lvalue.value, slice=lvalue.slice, ctx=ast.Load())),
-                                                      op=ast.Div(),
-                                                      right=divisor)))
+    return _expand_axis_reduction(
+        target,
+        args,
+        kwargs,
+        shape_table,
+        init=_const(0.0),
+        op_fn=lambda acc, x: ast.BinOp(left=acc, op=ast.Add(), right=x),
+        post_fn=lambda lvalue, divisor: ast.Assign(
+            targets=[lvalue],
+            value=ast.BinOp(
+                left=(
+                    lvalue
+                    if isinstance(lvalue, ast.Name)
+                    else ast.Subscript(value=lvalue.value, slice=lvalue.slice, ctx=ast.Load())
+                ),
+                op=ast.Div(),
+                right=divisor,
+            ),
+        ),
+    )
 
 
 def expand_prod(target, args, shape_table, kwargs=None, local_dtypes=None):
     is_int = _reduction_elem_is_integer(args, local_dtypes)
     if is_int and local_dtypes is not None and isinstance(target, ast.Name):
         local_dtypes[target.id] = "int64"
-    return _expand_axis_reduction(target,
-                                  args,
-                                  kwargs,
-                                  shape_table,
-                                  init=_const(1) if is_int else _const(1.0),
-                                  op_fn=lambda acc, x: ast.BinOp(left=acc, op=ast.Mult(), right=x))
+    return _expand_axis_reduction(
+        target,
+        args,
+        kwargs,
+        shape_table,
+        init=_const(1) if is_int else _const(1.0),
+        op_fn=lambda acc, x: ast.BinOp(left=acc, op=ast.Mult(), right=x),
+    )
 
 
 def _truthy(x):
@@ -1998,38 +2132,37 @@ def _if_set(test_fn, value_fn):
 def expand_any(target, args, shape_table, kwargs=None):
     """``s = np.any(A [, axis=k, keepdims=...])`` -- OR reduction. Init=0; each
     truthy element sets the (integer 0/1) accumulator to 1."""
-    return _expand_axis_reduction(target,
-                                  args,
-                                  kwargs,
-                                  shape_table,
-                                  init=_const(0),
-                                  op_fn=None,
-                                  update_fn=_if_set(_truthy, lambda load: _const(1)))
+    return _expand_axis_reduction(
+        target,
+        args,
+        kwargs,
+        shape_table,
+        init=_const(0),
+        op_fn=None,
+        update_fn=_if_set(_truthy, lambda load: _const(1)),
+    )
 
 
 def expand_all(target, args, shape_table, kwargs=None):
     """``s = np.all(A [, axis=k, keepdims=...])`` -- AND reduction. Init=1; each
     falsy element clears the (integer 0/1) accumulator to 0."""
-    return _expand_axis_reduction(target,
-                                  args,
-                                  kwargs,
-                                  shape_table,
-                                  init=_const(1),
-                                  op_fn=None,
-                                  update_fn=_if_set(_falsy, lambda load: _const(0)))
+    return _expand_axis_reduction(
+        target, args, kwargs, shape_table, init=_const(1), op_fn=None, update_fn=_if_set(_falsy, lambda load: _const(0))
+    )
 
 
 def expand_count_nonzero(target, args, shape_table, kwargs=None):
     """``s = np.count_nonzero(A [, axis=k, keepdims=...])`` -- count of non-zero
     elements. Init=0; each truthy element increments the integer accumulator."""
-    return _expand_axis_reduction(target,
-                                  args,
-                                  kwargs,
-                                  shape_table,
-                                  init=_const(0),
-                                  op_fn=None,
-                                  update_fn=_if_set(_truthy,
-                                                    lambda load: ast.BinOp(left=load, op=ast.Add(), right=_const(1))))
+    return _expand_axis_reduction(
+        target,
+        args,
+        kwargs,
+        shape_table,
+        init=_const(0),
+        op_fn=None,
+        update_fn=_if_set(_truthy, lambda load: ast.BinOp(left=load, op=ast.Add(), right=_const(1))),
+    )
 
 
 def expand_argmax(target, args, shape_table, kwargs=None):
@@ -2117,11 +2250,11 @@ def _expand_arg_reduction(target, args, shape_table, kwargs, op: str):
         return out
 
     src_elts = _src_elts()
-    src_slot = (src_elts[0] if n_dim == 1 else ast.Tuple(elts=src_elts, ctx=ast.Load()))
+    src_slot = src_elts[0] if n_dim == 1 else ast.Tuple(elts=src_elts, ctx=ast.Load())
     src_sub = ast.Subscript(value=_name(a.id), slice=src_slot, ctx=ast.Load())
     out_elts = _out_elts()
     init_src_elts = _init_src_elts()
-    init_slot = (init_src_elts[0] if n_dim == 1 else ast.Tuple(elts=init_src_elts, ctx=ast.Load()))
+    init_slot = init_src_elts[0] if n_dim == 1 else ast.Tuple(elts=init_src_elts, ctx=ast.Load())
     init_val = ast.Subscript(value=_name(a.id), slice=init_slot, ctx=ast.Load())
     if not out_elts:
         # Scalar target -- full reduction with no kept axes.
@@ -2147,10 +2280,11 @@ def _expand_arg_reduction(target, args, shape_table, kwargs, op: str):
     else:
         flat_idx = _name(red_iter_map[axes_norm[0]])
         for k in range(1, len(axes_norm)):
-            flat_idx = ast.BinOp(left=ast.BinOp(left=flat_idx, op=ast.Mult(),
-                                                right=_const_or_name(shape[axes_norm[k]])),
-                                 op=ast.Add(),
-                                 right=_name(red_iter_map[axes_norm[k]]))
+            flat_idx = ast.BinOp(
+                left=ast.BinOp(left=flat_idx, op=ast.Mult(), right=_const_or_name(shape[axes_norm[k]])),
+                op=ast.Add(),
+                right=_name(red_iter_map[axes_norm[k]]),
+            )
     # NaN semantics (numpy): argmax/argmin return the index of the FIRST NaN.
     # Update rule ``(best == best) and (src != src or src <cmp> best)``:
     # ``best == best`` goes false once ``best`` is NaN, locking the index at the
@@ -2160,22 +2294,24 @@ def _expand_arg_reduction(target, args, shape_table, kwargs, op: str):
     best_not_nan = ast.Compare(left=_name(best_val), ops=[ast.Eq()], comparators=[_name(best_val)])
     src_is_nan = ast.Compare(left=copy.deepcopy(src_sub), ops=[ast.NotEq()], comparators=[copy.deepcopy(src_sub)])
     ordinary = ast.Compare(left=copy.deepcopy(src_sub), ops=[cmp_op], comparators=[_name(best_val)])
-    update = ast.If(test=ast.BoolOp(op=ast.And(),
-                                    values=[best_not_nan,
-                                            ast.BoolOp(op=ast.Or(), values=[src_is_nan, ordinary])]),
-                    body=[
-                        ast.Assign(targets=[_store(best_val)], value=copy.deepcopy(src_sub)),
-                        ast.Assign(targets=[out_sub], value=flat_idx),
-                    ],
-                    orelse=[])
+    update = ast.If(
+        test=ast.BoolOp(op=ast.And(), values=[best_not_nan, ast.BoolOp(op=ast.Or(), values=[src_is_nan, ordinary])]),
+        body=[
+            ast.Assign(targets=[_store(best_val)], value=copy.deepcopy(src_sub)),
+            ast.Assign(targets=[out_sub], value=flat_idx),
+        ],
+        orelse=[],
+    )
     # Wrap the comparison in nested reduction loops, deepest first.
     inner_body: List[ast.stmt] = [update]
     for ax, rn in zip(reversed(axes_norm), reversed(red_iter_names)):
         inner_body = [
-            ast.For(target=_store(rn),
-                    iter=ast.Call(func=_name("range"), args=[_const_or_name(shape[ax])], keywords=[]),
-                    body=inner_body,
-                    orelse=[])
+            ast.For(
+                target=_store(rn),
+                iter=ast.Call(func=_name("range"), args=[_const_or_name(shape[ax])], keywords=[]),
+                body=inner_body,
+                orelse=[],
+            )
         ]
     body_stmts = init_stmts + inner_body
     if not kept_axes:
@@ -2184,8 +2320,9 @@ def _expand_arg_reduction(target, args, shape_table, kwargs, op: str):
     return _wrap_for_loops(outer_iter_names, bounds, body_stmts)
 
 
-def expand_matmul(target: ast.expr, lhs: ast.expr, rhs: ast.expr, shape_table: Dict[str, Tuple[str,
-                                                                                               ...]]) -> List[ast.stmt]:
+def expand_matmul(
+    target: ast.expr, lhs: ast.expr, rhs: ast.expr, shape_table: Dict[str, Tuple[str, ...]]
+) -> List[ast.stmt]:
     """Lower ``C = A @ B`` to the naive ``M x K x N`` triple-loop GEMM. Both
     operands must be Name expressions with a declared shape in the shape table.
     """
@@ -2203,42 +2340,57 @@ def expand_matmul(target: ast.expr, lhs: ast.expr, rhs: ast.expr, shape_table: D
     # ``k`` and ``k2`` should be the same symbol; emit the LHS one and let the
     # compiler / numpy oracle catch divergence.
     body = [
-        ast.Assign(targets=[
-            ast.Subscript(value=_name(target.id),
-                          slice=ast.Tuple(elts=[_name("__i"), _name("__j")], ctx=ast.Load()),
-                          ctx=ast.Store())
-        ],
-                   value=_const(0.0)),
-        ast.For(target=_store("__l"),
-                iter=ast.Call(func=_name("range"), args=[_const_or_name(k)], keywords=[]),
-                body=[
-                    ast.AugAssign(target=ast.Subscript(value=_name(target.id),
-                                                       slice=ast.Tuple(elts=[_name("__i"), _name("__j")],
-                                                                       ctx=ast.Load()),
-                                                       ctx=ast.Store()),
-                                  op=ast.Add(),
-                                  value=ast.BinOp(left=ast.Subscript(value=_name(a_name),
-                                                                     slice=ast.Tuple(elts=[_name("__i"),
-                                                                                           _name("__l")],
-                                                                                     ctx=ast.Load()),
-                                                                     ctx=ast.Load()),
-                                                  op=ast.Mult(),
-                                                  right=ast.Subscript(value=_name(b_name),
-                                                                      slice=ast.Tuple(elts=[_name("__l"),
-                                                                                            _name("__j")],
-                                                                                      ctx=ast.Load()),
-                                                                      ctx=ast.Load())))
-                ],
-                orelse=[]),
+        ast.Assign(
+            targets=[
+                ast.Subscript(
+                    value=_name(target.id),
+                    slice=ast.Tuple(elts=[_name("__i"), _name("__j")], ctx=ast.Load()),
+                    ctx=ast.Store(),
+                )
+            ],
+            value=_const(0.0),
+        ),
+        ast.For(
+            target=_store("__l"),
+            iter=ast.Call(func=_name("range"), args=[_const_or_name(k)], keywords=[]),
+            body=[
+                ast.AugAssign(
+                    target=ast.Subscript(
+                        value=_name(target.id),
+                        slice=ast.Tuple(elts=[_name("__i"), _name("__j")], ctx=ast.Load()),
+                        ctx=ast.Store(),
+                    ),
+                    op=ast.Add(),
+                    value=ast.BinOp(
+                        left=ast.Subscript(
+                            value=_name(a_name),
+                            slice=ast.Tuple(elts=[_name("__i"), _name("__l")], ctx=ast.Load()),
+                            ctx=ast.Load(),
+                        ),
+                        op=ast.Mult(),
+                        right=ast.Subscript(
+                            value=_name(b_name),
+                            slice=ast.Tuple(elts=[_name("__l"), _name("__j")], ctx=ast.Load()),
+                            ctx=ast.Load(),
+                        ),
+                    ),
+                )
+            ],
+            orelse=[],
+        ),
     ]
-    j_loop = ast.For(target=_store("__j"),
-                     iter=ast.Call(func=_name("range"), args=[_const_or_name(n)], keywords=[]),
-                     body=body,
-                     orelse=[])
-    i_loop = ast.For(target=_store("__i"),
-                     iter=ast.Call(func=_name("range"), args=[_const_or_name(m)], keywords=[]),
-                     body=[j_loop],
-                     orelse=[])
+    j_loop = ast.For(
+        target=_store("__j"),
+        iter=ast.Call(func=_name("range"), args=[_const_or_name(n)], keywords=[]),
+        body=body,
+        orelse=[],
+    )
+    i_loop = ast.For(
+        target=_store("__i"),
+        iter=ast.Call(func=_name("range"), args=[_const_or_name(m)], keywords=[]),
+        body=[j_loop],
+        orelse=[],
+    )
     return [i_loop]
 
 
@@ -2276,15 +2428,19 @@ def expand_dot(target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tu
     sa = _scalarize_at_iters(a, iters, shape_table)
     sb = _scalarize_at_iters(b, iters, shape_table)
     body = [
-        ast.AugAssign(target=target if isinstance(target, ast.Subscript) else _store(target.id),
-                      op=ast.Add(),
-                      value=ast.BinOp(left=sa, op=ast.Mult(), right=sb))
+        ast.AugAssign(
+            target=target if isinstance(target, ast.Subscript) else _store(target.id),
+            op=ast.Add(),
+            value=ast.BinOp(left=sa, op=ast.Mult(), right=sb),
+        )
     ]
     loop = [
-        ast.For(target=_store(iter_name),
-                iter=ast.Call(func=_name("range"), args=[extent[0]], keywords=[]),
-                body=body,
-                orelse=[])
+        ast.For(
+            target=_store(iter_name),
+            iter=ast.Call(func=_name("range"), args=[extent[0]], keywords=[]),
+            body=body,
+            orelse=[],
+        )
     ]
     return [ast.Assign(targets=[target], value=_const(0.0))] + loop
 
@@ -2328,12 +2484,14 @@ def _read_fft_axes(args, kwargs, rank: int, is_n: bool) -> List[int]:
     return [rank - 1]  # default: last axis
 
 
-def _expand_dftn(target: ast.expr,
-                 args: List[ast.expr],
-                 shape_table: Dict[str, Tuple[str, ...]],
-                 inverse: bool,
-                 is_n: bool = True,
-                 kwargs=None) -> List[ast.stmt]:
+def _expand_dftn(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    inverse: bool,
+    is_n: bool = True,
+    kwargs=None,
+) -> List[ast.stmt]:
     """``out = np.fft.fft/ifft/fft2/ifft2/fftn/ifftn(x)`` -> a naive DFT.
     Correctness-only (O(prod(N_t)^2) over the transform axes), kept tiny via the
     benchmark's small preset. Over transform-axis set ``T`` (remaining axes
@@ -2358,9 +2516,9 @@ def _expand_dftn(target: ast.expr,
     # axes and the (fixed) output iterator on batch axes.
     o_iters = [f"__fk{i}" for i in range(rank)]
     n_iters = {t: f"__fn{t}" for t in taxes}
-    o_slot = (_name(o_iters[0]) if rank == 1 else ast.Tuple(elts=[_name(o) for o in o_iters], ctx=ast.Load()))
+    o_slot = _name(o_iters[0]) if rank == 1 else ast.Tuple(elts=[_name(o) for o in o_iters], ctx=ast.Load())
     src_idx = [(_name(n_iters[d]) if d in taxes else _name(o_iters[d])) for d in range(rank)]
-    src_slot = (src_idx[0] if rank == 1 else ast.Tuple(elts=src_idx, ctx=ast.Load()))
+    src_slot = src_idx[0] if rank == 1 else ast.Tuple(elts=src_idx, ctx=ast.Load())
     out_k = ast.Subscript(value=_name(target.id), slice=o_slot, ctx=ast.Store())
     out_k_load = ast.Subscript(value=_name(target.id), slice=o_slot, ctx=ast.Load())
     # Emit pi as a numeric literal (backend-agnostic): this expander runs after
@@ -2369,11 +2527,13 @@ def _expand_dftn(target: ast.expr,
     # total phase = sum_{t in T} (2.0 * pi * o_t * n_t) / N_t
     phase = None
     for t in taxes:
-        num = ast.BinOp(left=ast.BinOp(left=ast.BinOp(left=_const(2.0), op=ast.Mult(), right=pi),
-                                       op=ast.Mult(),
-                                       right=_name(o_iters[t])),
-                        op=ast.Mult(),
-                        right=_name(n_iters[t]))
+        num = ast.BinOp(
+            left=ast.BinOp(
+                left=ast.BinOp(left=_const(2.0), op=ast.Mult(), right=pi), op=ast.Mult(), right=_name(o_iters[t])
+            ),
+            op=ast.Mult(),
+            right=_name(n_iters[t]),
+        )
         term = ast.BinOp(left=num, op=ast.Div(), right=_const_or_name(shape[t]))
         phase = term if phase is None else ast.BinOp(left=phase, op=ast.Add(), right=term)
     sign = _const(1j) if inverse else _const(-1j)
@@ -2434,16 +2594,20 @@ def expand_fftfreq(target, args, shape_table, kwargs=None) -> List[ast.stmt]:
     if d_node is None:
         d_node = _const(1.0)
     it = "__ff"
-    half = ast.BinOp(left=ast.BinOp(left=copy.deepcopy(n), op=ast.Sub(), right=_const(1)),
-                     op=ast.FloorDiv(),
-                     right=_const(2))
-    numer = ast.IfExp(test=ast.Compare(left=_name(it), ops=[ast.LtE()], comparators=[half]),
-                      body=_name(it),
-                      orelse=ast.BinOp(left=_name(it), op=ast.Sub(), right=copy.deepcopy(n)))
+    half = ast.BinOp(
+        left=ast.BinOp(left=copy.deepcopy(n), op=ast.Sub(), right=_const(1)), op=ast.FloorDiv(), right=_const(2)
+    )
+    numer = ast.IfExp(
+        test=ast.Compare(left=_name(it), ops=[ast.LtE()], comparators=[half]),
+        body=_name(it),
+        orelse=ast.BinOp(left=_name(it), op=ast.Sub(), right=copy.deepcopy(n)),
+    )
     denom = ast.BinOp(left=copy.deepcopy(n), op=ast.Mult(), right=copy.deepcopy(d_node))
     body = [
-        ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=_name(it), ctx=ast.Store())],
-                   value=ast.BinOp(left=numer, op=ast.Div(), right=denom))
+        ast.Assign(
+            targets=[ast.Subscript(value=_name(target.id), slice=_name(it), ctx=ast.Store())],
+            value=ast.BinOp(left=numer, op=ast.Div(), right=denom),
+        )
     ]
     return _wrap_for_loops([it], [copy.deepcopy(n)], body)
 
@@ -2456,15 +2620,18 @@ def _alloc_marker(name: str) -> ast.Assign:
     consumes the original Assign must re-emit the marker or the buffer stays
     NULL; for a fn-top-malloc'd static local the marker is a no-op, so emitting
     it unconditionally is always safe."""
-    return ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())],
-                      value=ast.Call(func=ast.Name(id="__hpcagent_bench_zeros__", ctx=ast.Load()), args=[],
-                                     keywords=[]))
+    return ast.Assign(
+        targets=[ast.Name(id=name, ctx=ast.Store())],
+        value=ast.Call(func=ast.Name(id="__hpcagent_bench_zeros__", ctx=ast.Load()), args=[], keywords=[]),
+    )
 
 
-def expand_copy(target: ast.expr,
-                args: List[ast.expr],
-                shape_table: Dict[str, Tuple[str, ...]],
-                local_dtypes: Optional[Dict[str, str]] = None) -> List[ast.stmt]:
+def expand_copy(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    local_dtypes: Optional[Dict[str, str]] = None,
+) -> List[ast.stmt]:
     """``out = np.copy(a)`` -> elementwise copy loop into the LHS. Source may be
     a bare Name (``np.copy(a)``) or an array-valued Subscript (``grid[0].copy()``
     -- a row lowered into a fresh local); for the Subscript case the iteration
@@ -2501,17 +2668,16 @@ def expand_copy(target: ast.expr,
                 local_dtypes[target.id] = src_dt
     iters = [f"__r{i}" for i in range(len(shape))]
     iter_nodes = [_name(i) for i in iters]
-    idx = (iter_nodes[0] if len(iters) == 1 else ast.Tuple(elts=iter_nodes, ctx=ast.Load()))
+    idx = iter_nodes[0] if len(iters) == 1 else ast.Tuple(elts=iter_nodes, ctx=ast.Load())
     sub_src = _scalarize_at_iters(src, iter_nodes, shape_table)
     sub_dst = ast.Subscript(value=_name(target.id), slice=idx, ctx=ast.Store())
     body = [ast.Assign(targets=[sub_dst], value=sub_src)]
     return [_alloc_marker(target.id)] + _wrap_for_loops(iters, shape, body)
 
 
-def expand_bincount(target: ast.expr,
-                    args: List[ast.expr],
-                    shape_table: Dict[str, Tuple[str, ...]],
-                    kwargs=None) -> List[ast.stmt]:
+def expand_bincount(
+    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+) -> List[ast.stmt]:
     """``out = np.bincount(idx, weights=w, minlength=M)`` -> zero ``M`` slots, then scatter-add.
 
     numpy sizes the result ``max(minlength, idx.max() + 1)``, and the second term is data. ``M`` is
@@ -2538,28 +2704,31 @@ def expand_bincount(target: ast.expr,
     if not ext or len(ext) != 1:
         raise NotImplementedError("np.bincount needs a rank-1 index operand of known extent")
     out_len = ast.unparse(minlength)
-    shape_table.setdefault(target.id, (out_len, ))
+    shape_table.setdefault(target.id, (out_len,))
     zero_it = "__bcz0"
     zero_body = [
-        ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=_name(zero_it), ctx=ast.Store())],
-                   value=_const(0.0))
+        ast.Assign(
+            targets=[ast.Subscript(value=_name(target.id), slice=_name(zero_it), ctx=ast.Store())], value=_const(0.0)
+        )
     ]
     acc_it = "__bc0"
     idx_k = _scalarize_at_iters(idx, [_name(acc_it)], shape_table)
-    val_k = (_const(1.0) if weights is None else _scalarize_at_iters(weights, [_name(acc_it)], shape_table))
+    val_k = _const(1.0) if weights is None else _scalarize_at_iters(weights, [_name(acc_it)], shape_table)
     acc_body = [
-        ast.AugAssign(target=ast.Subscript(value=_name(target.id), slice=idx_k, ctx=ast.Store()),
-                      op=ast.Add(),
-                      value=val_k)
+        ast.AugAssign(
+            target=ast.Subscript(value=_name(target.id), slice=idx_k, ctx=ast.Store()), op=ast.Add(), value=val_k
+        )
     ]
-    return ([_alloc_marker(target.id)] + _wrap_for_loops([zero_it], [_const_or_name(out_len)], zero_body) +
-            _wrap_for_loops([acc_it], list(ext), acc_body))
+    return (
+        [_alloc_marker(target.id)]
+        + _wrap_for_loops([zero_it], [_const_or_name(out_len)], zero_body)
+        + _wrap_for_loops([acc_it], list(ext), acc_body)
+    )
 
 
-def expand_outer(target: ast.expr,
-                 args: List[ast.expr],
-                 shape_table: Dict[str, Tuple[str, ...]],
-                 op=None) -> List[ast.stmt]:
+def expand_outer(
+    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], op=None
+) -> List[ast.stmt]:
     """``out = np.outer(a, b)`` -> ``out[i, j] = a[i] * b[j]``. ``op`` defaults to
     ``Mult()``; pass ``ast.Add()`` for ``np.add.outer`` (sum-outer-product).
     """
@@ -2576,12 +2745,14 @@ def expand_outer(target: ast.expr,
     sa = _scalarize_at_iters(a, [iter_a], shape_table)
     sb = _scalarize_at_iters(b, [iter_b], shape_table)
     body = [
-        ast.Assign(targets=[
-            ast.Subscript(value=_name(target.id),
-                          slice=ast.Tuple(elts=[iter_a, iter_b], ctx=ast.Load()),
-                          ctx=ast.Store())
-        ],
-                   value=ast.BinOp(left=sa, op=op, right=sb))
+        ast.Assign(
+            targets=[
+                ast.Subscript(
+                    value=_name(target.id), slice=ast.Tuple(elts=[iter_a, iter_b], ctx=ast.Load()), ctx=ast.Store()
+                )
+            ],
+            value=ast.BinOp(left=sa, op=op, right=sb),
+        )
     ]
     bounds = (a_ext[0], b_ext[0])
     return _wrap_for_loops(["__i", "__j"], bounds, body)
@@ -2638,10 +2809,9 @@ def _expand_elementwise(target, args, shape_table, op_fn):
     out = body
     for var, bound in zip(reversed([i.id for i in iters]), reversed(extent)):
         out = [
-            ast.For(target=_store(var),
-                    iter=ast.Call(func=_name("range"), args=[bound], keywords=[]),
-                    body=out,
-                    orelse=[])
+            ast.For(
+                target=_store(var), iter=ast.Call(func=_name("range"), args=[bound], keywords=[]), body=out, orelse=[]
+            )
         ]
     return out
 
@@ -2676,10 +2846,12 @@ def expand_subtract(t, a, s):
     return _expand_elementwise(t, a, s, lambda x, y: ast.BinOp(left=x, op=ast.Sub(), right=y))
 
 
-def expand_divide(target: ast.expr,
-                  args: List[ast.expr],
-                  shape_table: Dict[str, Tuple[str, ...]],
-                  local_dtypes: Optional[Dict[str, str]] = None) -> List[ast.stmt]:
+def expand_divide(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    local_dtypes: Optional[Dict[str, str]] = None,
+) -> List[ast.stmt]:
     """``out = np.divide(a, b)`` -> per-element TRUE division.
 
     numpy ``divide`` / ``true_divide`` is always true division (int64 / int64 -> float64),
@@ -2787,15 +2959,14 @@ def _unary_elementwise(target, args, shape_table, op_fn):
         raise NotImplementedError("unary elementwise: extent unknown")
     iters = [_name(f"__r{i}") for i in range(len(extent))]
     sa = _scalarize_at_iters(a, iters, shape_table)
-    idx = (iters[0] if len(iters) == 1 else ast.Tuple(elts=list(iters), ctx=ast.Load()))
+    idx = iters[0] if len(iters) == 1 else ast.Tuple(elts=list(iters), ctx=ast.Load())
     body = [ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=idx, ctx=ast.Store())], value=op_fn(sa))]
     out = body
     for var, bound in zip(reversed([i.id for i in iters]), reversed(extent)):
         out = [
-            ast.For(target=_store(var),
-                    iter=ast.Call(func=_name("range"), args=[bound], keywords=[]),
-                    body=out,
-                    orelse=[])
+            ast.For(
+                target=_store(var), iter=ast.Call(func=_name("range"), args=[bound], keywords=[]), body=out, orelse=[]
+            )
         ]
     return out
 
@@ -2813,11 +2984,11 @@ def expand_clip(target: ast.expr, args: List[ast.expr], shape_table: Dict[str, T
     if not shape:
         raise NotImplementedError("np.clip: shape unknown")
     iters = [f"__r{i}" for i in range(len(shape))]
-    idx = (_name(iters[0]) if len(iters) == 1 else ast.Tuple(elts=[_name(i) for i in iters], ctx=ast.Load()))
+    idx = _name(iters[0]) if len(iters) == 1 else ast.Tuple(elts=[_name(i) for i in iters], ctx=ast.Load())
     a_sub = ast.Subscript(value=_name(a.id), slice=idx, ctx=ast.Load())
-    clamped = ast.Call(func=_name("min"),
-                       args=[args[2], ast.Call(func=_name("max"), args=[args[1], a_sub], keywords=[])],
-                       keywords=[])
+    clamped = ast.Call(
+        func=_name("min"), args=[args[2], ast.Call(func=_name("max"), args=[args[1], a_sub], keywords=[])], keywords=[]
+    )
     body = [ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=idx, ctx=ast.Store())], value=clamped)]
     return _wrap_for_loops(iters, shape, body)
 
@@ -2838,7 +3009,7 @@ def expand_where(target: ast.expr, args: List[ast.expr], shape_table: Dict[str, 
     if not shape:
         raise NotImplementedError("np.where: shape unknown")
     iters = [f"__r{i}" for i in range(len(shape))]
-    idx = (_name(iters[0]) if len(iters) == 1 else ast.Tuple(elts=[_name(i) for i in iters], ctx=ast.Load()))
+    idx = _name(iters[0]) if len(iters) == 1 else ast.Tuple(elts=[_name(i) for i in iters], ctx=ast.Load())
     iter_nodes = [_name(i) for i in iters]
 
     def maybe_sub(arg):
@@ -2859,16 +3030,15 @@ def _kwarg_or_pos(args: List[ast.expr], kwargs, pos: int, name: str):
     """
     if len(args) > pos:
         return args[pos]
-    for kw in (kwargs or []):
+    for kw in kwargs or []:
         if kw.arg == name:
             return kw.value
     return None
 
 
-def expand_transpose(target: ast.expr,
-                     args: List[ast.expr],
-                     shape_table: Dict[str, Tuple[str, ...]],
-                     kwargs=None) -> List[ast.stmt]:
+def expand_transpose(
+    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+) -> List[ast.stmt]:
     """``out = np.transpose(A[, axes])`` -> nested per-element copy. Supports any
     rank N >= 1 with an explicit perm (Tuple/List of int constants, positional or
     ``axes=``); without one, defaults to reversing the axes. Output is a fresh
@@ -2909,8 +3079,10 @@ def expand_transpose(target: ast.expr,
         out_slot = ast.Tuple(elts=out_slot_elts, ctx=ast.Load())
         src_slot = ast.Tuple(elts=src_slot_elts, ctx=ast.Load())
     body = [
-        ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=out_slot, ctx=ast.Store())],
-                   value=ast.Subscript(value=_name(a.id), slice=src_slot, ctx=ast.Load()))
+        ast.Assign(
+            targets=[ast.Subscript(value=_name(target.id), slice=out_slot, ctx=ast.Store())],
+            value=ast.Subscript(value=_name(a.id), slice=src_slot, ctx=ast.Load()),
+        )
     ]
     return _wrap_for_loops(src_iters, shape, body)
 
@@ -2925,10 +3097,9 @@ def _const_axis(node: Optional[ast.expr], rank: int) -> Optional[int]:
     return ax if 0 <= ax < rank else None
 
 
-def expand_swapaxes(target: ast.expr,
-                    args: List[ast.expr],
-                    shape_table: Dict[str, Tuple[str, ...]],
-                    kwargs=None) -> List[ast.stmt]:
+def expand_swapaxes(
+    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+) -> List[ast.stmt]:
     """``out = np.swapaxes(a, i, j)`` -> ``np.transpose(a, perm)`` with ``perm`` the
     identity permutation with axes ``i`` and ``j`` exchanged (constant int axes). Reuses
     the transpose loop-lowering, so no new machinery -- the ML attention Q/K axis swap."""
@@ -2948,10 +3119,9 @@ def expand_swapaxes(target: ast.expr,
     return expand_transpose(target, [a, perm_tuple], shape_table)
 
 
-def expand_moveaxis(target: ast.expr,
-                    args: List[ast.expr],
-                    shape_table: Dict[str, Tuple[str, ...]],
-                    kwargs=None) -> List[ast.stmt]:
+def expand_moveaxis(
+    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+) -> List[ast.stmt]:
     """``out = np.moveaxis(a, source, destination)`` -> ``np.transpose(a, perm)`` with
     ``perm`` numpy's own algorithm (drop axis ``source``, reinsert it at ``destination``
     among the rest). Reuses the transpose loop-lowering like ``expand_swapaxes``.
@@ -2974,10 +3144,9 @@ def expand_moveaxis(target: ast.expr,
     return expand_transpose(target, [a, perm_tuple], shape_table)
 
 
-def expand_expand_dims(target: ast.expr,
-                       args: List[ast.expr],
-                       shape_table: Dict[str, Tuple[str, ...]],
-                       kwargs=None) -> List[ast.stmt]:
+def expand_expand_dims(
+    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+) -> List[ast.stmt]:
     """``out = np.expand_dims(a, axis)`` -> ``np.reshape(a, <a's shape with a size-1 axis
     inserted at axis>)`` -- a metadata view, lowered as the reshape flat-copy."""
     if not args_one_name(args):
@@ -2995,10 +3164,9 @@ def expand_expand_dims(target: ast.expr,
     return expand_reshape(target, [a, newshape], shape_table)
 
 
-def expand_squeeze(target: ast.expr,
-                   args: List[ast.expr],
-                   shape_table: Dict[str, Tuple[str, ...]],
-                   kwargs=None) -> List[ast.stmt]:
+def expand_squeeze(
+    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+) -> List[ast.stmt]:
     """``out = np.squeeze(a[, axis])`` -> ``np.reshape(a, <a's shape with the size-1
     axis / all size-1 axes dropped>)``. Without ``axis`` every unit dim is dropped; with
     ``axis`` that one axis (which must be size-1) is dropped."""
@@ -3021,10 +3189,9 @@ def expand_squeeze(target: ast.expr,
     return expand_reshape(target, [a, newshape], shape_table)
 
 
-def expand_take(target: ast.expr,
-                args: List[ast.expr],
-                shape_table: Dict[str, Tuple[str, ...]],
-                kwargs=None) -> List[ast.stmt]:
+def expand_take(
+    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+) -> List[ast.stmt]:
     """``out = np.take(a, idx[, axis=k])`` -> a gather loop nest. With ``axis=k``,
     the k-th axis is indexed by 1-D ``idx`` (out's k-th extent = idx's length),
     other axes copied straight through: ``out[.., t, ..] = a[.., idx[t], ..]``
@@ -3055,8 +3222,10 @@ def expand_take(target: ast.expr,
     out_slot = _name(iters[0]) if len(iters) == 1 else ast.Tuple(elts=[_name(v) for v in iters], ctx=ast.Load())
     src_slot = src_index[0] if len(src_index) == 1 else ast.Tuple(elts=src_index, ctx=ast.Load())
     body = [
-        ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=out_slot, ctx=ast.Store())],
-                   value=ast.Subscript(value=_name(a.id), slice=src_slot, ctx=ast.Load()))
+        ast.Assign(
+            targets=[ast.Subscript(value=_name(target.id), slice=out_slot, ctx=ast.Store())],
+            value=ast.Subscript(value=_name(a.id), slice=src_slot, ctx=ast.Load()),
+        )
     ]
     return _wrap_for_loops(iters, out_shape, body)
 
@@ -3079,28 +3248,33 @@ def expand_linspace(target: ast.expr, args: List[ast.expr], shape_table: Dict[st
         raise NotImplementedError("np.linspace needs (start, stop, n)")
     start, stop, n = args
     span = ast.BinOp(left=copy.deepcopy(stop), op=ast.Sub(), right=copy.deepcopy(start))
-    denom = ast.Call(func=_name("max"),
-                     args=[ast.BinOp(left=copy.deepcopy(n), op=ast.Sub(), right=_const(1)),
-                           _const(1)],
-                     keywords=[])
+    denom = ast.Call(
+        func=_name("max"),
+        args=[ast.BinOp(left=copy.deepcopy(n), op=ast.Sub(), right=_const(1)), _const(1)],
+        keywords=[],
+    )
     step = ast.BinOp(left=span, op=ast.Div(), right=denom)
-    expr = ast.BinOp(left=ast.BinOp(left=step, op=ast.Mult(), right=_name("__i")),
-                     op=ast.Add(),
-                     right=copy.deepcopy(start))
+    expr = ast.BinOp(
+        left=ast.BinOp(left=step, op=ast.Mult(), right=_name("__i")), op=ast.Add(), right=copy.deepcopy(start)
+    )
     body = [
         ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=_name("__i"), ctx=ast.Store())], value=expr)
     ]
-    last = ast.Subscript(value=_name(target.id),
-                         slice=ast.BinOp(left=copy.deepcopy(n), op=ast.Sub(), right=_const(1)),
-                         ctx=ast.Store())
+    last = ast.Subscript(
+        value=_name(target.id), slice=ast.BinOp(left=copy.deepcopy(n), op=ast.Sub(), right=_const(1)), ctx=ast.Store()
+    )
     return [
-        ast.For(target=_store("__i"),
-                iter=ast.Call(func=_name("range"), args=[copy.deepcopy(n)], keywords=[]),
-                body=body,
-                orelse=[]),
-        ast.If(test=ast.Compare(left=copy.deepcopy(n), ops=[ast.Gt()], comparators=[_const(1)]),
-               body=[ast.Assign(targets=[last], value=copy.deepcopy(stop))],
-               orelse=[]),
+        ast.For(
+            target=_store("__i"),
+            iter=ast.Call(func=_name("range"), args=[copy.deepcopy(n)], keywords=[]),
+            body=body,
+            orelse=[],
+        ),
+        ast.If(
+            test=ast.Compare(left=copy.deepcopy(n), ops=[ast.Gt()], comparators=[_const(1)]),
+            body=[ast.Assign(targets=[last], value=copy.deepcopy(stop))],
+            orelse=[],
+        ),
     ]
 
 
@@ -3157,8 +3331,9 @@ def arange_count(args: List[ast.expr]) -> ast.expr:
     if step is None or _const_int(step) == 1:
         return span
     # -((-span) // step): ceil for either sign, since // is emitted as the flooring int_floor.
-    return ast.UnaryOp(op=ast.USub(),
-                       operand=ast.BinOp(left=ast.UnaryOp(op=ast.USub(), operand=span), op=ast.FloorDiv(), right=step))
+    return ast.UnaryOp(
+        op=ast.USub(), operand=ast.BinOp(left=ast.UnaryOp(op=ast.USub(), operand=span), op=ast.FloorDiv(), right=step)
+    )
 
 
 def expand_arange(target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
@@ -3184,10 +3359,9 @@ def expand_arange(target: ast.expr, args: List[ast.expr], shape_table: Dict[str,
         ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=_name("__i"), ctx=ast.Store())], value=value)
     ]
     return [
-        ast.For(target=_store("__i"),
-                iter=ast.Call(func=_name("range"), args=[count], keywords=[]),
-                body=body,
-                orelse=[])
+        ast.For(
+            target=_store("__i"), iter=ast.Call(func=_name("range"), args=[count], keywords=[]), body=body, orelse=[]
+        )
     ]
 
 
@@ -3204,8 +3378,9 @@ class _RenameNames(ast.NodeTransformer):
         return node
 
 
-def expand_fromfunction(target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str,
-                                                                                             ...]]) -> List[ast.stmt]:
+def expand_fromfunction(
+    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]]
+) -> List[ast.stmt]:
     """``out = np.fromfunction(lambda i, j: f(i, j), (N, M))`` -> ``for i in
     range(N): for j in range(M): out[i, j] = f(i, j)``. The lambda body is
     inlined per-element with its parameters bound to the loop iters, realising
@@ -3215,7 +3390,7 @@ def expand_fromfunction(target: ast.expr, args: List[ast.expr], shape_table: Dic
         raise NotImplementedError("np.fromfunction needs (lambda, shape)")
     lam, shape_node = args[0], args[1]
     params = [a.arg for a in lam.args.args]
-    shape_elts = (list(shape_node.elts) if isinstance(shape_node, (ast.Tuple, ast.List)) else [shape_node])
+    shape_elts = list(shape_node.elts) if isinstance(shape_node, (ast.Tuple, ast.List)) else [shape_node]
     if len(params) != len(shape_elts):
         raise NotImplementedError("np.fromfunction: lambda arity != shape rank")
     iters = [f"__ff{i}" for i in range(len(params))]
@@ -3232,10 +3407,9 @@ def expand_fromfunction(target: ast.expr, args: List[ast.expr], shape_table: Dic
 MESHGRID_AXIS_KW = "__meshgrid_axis__"
 
 
-def expand_meshgrid(target: ast.expr,
-                    args: List[ast.expr],
-                    shape_table: Dict[str, Tuple[str, ...]],
-                    kwargs=None) -> List[ast.stmt]:
+def expand_meshgrid(
+    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+) -> List[ast.stmt]:
     """Emit ONE broadcast output of ``np.meshgrid(a0, a1, ..., a_{k-1})``. Given
     1-D inputs of lengths ``(N0, ..., N_{k-1})``: ``indexing='ij'`` gives every
     output shape ``(N0, ..., N_{k-1})`` with ``out_d[i0, ..., i_{k-1}] =
@@ -3278,7 +3452,7 @@ def expand_meshgrid(target: ast.expr,
     # (perm is self-inverse, so the read iterator is ``iters[perm[axis]]``).
     read_iter = _name(iters[perm[axis]])
     src = _scalarize_at_iters(copy.deepcopy(args[axis]), [read_iter], shape_table)
-    out_slot = (_name(iters[0]) if k == 1 else ast.Tuple(elts=[_name(v) for v in iters], ctx=ast.Load()))
+    out_slot = _name(iters[0]) if k == 1 else ast.Tuple(elts=[_name(v) for v in iters], ctx=ast.Load())
     body = [ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=out_slot, ctx=ast.Store())], value=src)]
     return _wrap_for_loops(iters, [copy.deepcopy(d) for d in out_dims], body)
 
@@ -3289,30 +3463,41 @@ def expand_eye(target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tu
         raise NotImplementedError("np.eye needs at least 1 arg")
     n = args[0]
     body = [
-        ast.Assign(targets=[
-            ast.Subscript(value=_name(target.id),
-                          slice=ast.Tuple(elts=[_name("__i"), _name("__j")], ctx=ast.Load()),
-                          ctx=ast.Store())
-        ],
-                   value=ast.IfExp(test=ast.Compare(left=_name("__i"), ops=[ast.Eq()], comparators=[_name("__j")]),
-                                   body=_const(1.0),
-                                   orelse=_const(0.0)))
+        ast.Assign(
+            targets=[
+                ast.Subscript(
+                    value=_name(target.id),
+                    slice=ast.Tuple(elts=[_name("__i"), _name("__j")], ctx=ast.Load()),
+                    ctx=ast.Store(),
+                )
+            ],
+            value=ast.IfExp(
+                test=ast.Compare(left=_name("__i"), ops=[ast.Eq()], comparators=[_name("__j")]),
+                body=_const(1.0),
+                orelse=_const(0.0),
+            ),
+        )
     ]
     return [
-        ast.For(target=_store("__i"),
-                iter=ast.Call(func=_name("range"), args=[n], keywords=[]),
-                body=[
-                    ast.For(target=_store("__j"),
-                            iter=ast.Call(func=_name("range"), args=[n], keywords=[]),
-                            body=body,
-                            orelse=[])
-                ],
-                orelse=[])
+        ast.For(
+            target=_store("__i"),
+            iter=ast.Call(func=_name("range"), args=[n], keywords=[]),
+            body=[
+                ast.For(
+                    target=_store("__j"),
+                    iter=ast.Call(func=_name("range"), args=[n], keywords=[]),
+                    body=body,
+                    orelse=[],
+                )
+            ],
+            orelse=[],
+        )
     ]
 
 
-def _expand_triangular(target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs,
-                       lower: bool) -> List[ast.stmt]:
+def _expand_triangular(
+    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs, lower: bool
+) -> List[ast.stmt]:
     """Shared triu/tril lowering: copy ``A[i, j]`` where it's on the kept side of
     the ``i + k`` diagonal, else 0. ``lower=False`` keeps ``j >= i + k`` (upper);
     ``lower=True`` keeps ``j <= i + k``. Optional ``k`` offset (positional or
@@ -3329,31 +3514,36 @@ def _expand_triangular(target: ast.expr, args: List[ast.expr], shape_table: Dict
     _k = _kwarg_or_pos(args, kwargs, 1, "k")
     if _k is not None:
         k_arg = _k
-    a_sub = ast.Subscript(value=_name(a.id),
-                          slice=ast.Tuple(elts=[_name("__i"), _name("__j")], ctx=ast.Load()),
-                          ctx=ast.Load())
+    a_sub = ast.Subscript(
+        value=_name(a.id), slice=ast.Tuple(elts=[_name("__i"), _name("__j")], ctx=ast.Load()), ctx=ast.Load()
+    )
     if isinstance(k_arg, ast.Constant) and k_arg.value == 0:
         threshold: ast.expr = _name("__i")
     else:
         threshold = ast.BinOp(left=_name("__i"), op=ast.Add(), right=k_arg)
     cmp_op = ast.LtE() if lower else ast.GtE()
     body = [
-        ast.Assign(targets=[
-            ast.Subscript(value=_name(target.id),
-                          slice=ast.Tuple(elts=[_name("__i"), _name("__j")], ctx=ast.Load()),
-                          ctx=ast.Store())
-        ],
-                   value=ast.IfExp(test=ast.Compare(left=_name("__j"), ops=[cmp_op], comparators=[threshold]),
-                                   body=a_sub,
-                                   orelse=_const(0.0)))
+        ast.Assign(
+            targets=[
+                ast.Subscript(
+                    value=_name(target.id),
+                    slice=ast.Tuple(elts=[_name("__i"), _name("__j")], ctx=ast.Load()),
+                    ctx=ast.Store(),
+                )
+            ],
+            value=ast.IfExp(
+                test=ast.Compare(left=_name("__j"), ops=[cmp_op], comparators=[threshold]),
+                body=a_sub,
+                orelse=_const(0.0),
+            ),
+        )
     ]
     return _wrap_for_loops(["__i", "__j"], (m, n), body)
 
 
-def expand_triu(target: ast.expr,
-                args: List[ast.expr],
-                shape_table: Dict[str, Tuple[str, ...]],
-                kwargs=None) -> List[ast.stmt]:
+def expand_triu(
+    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+) -> List[ast.stmt]:
     """``out = np.triu(A [, k])`` -> ``out[i, j] = A[i, j] if j >= i+k else 0``.
     Optional ``k`` offset (default 0) selects the diagonal; ``k=1`` skips the
     main diagonal (strict upper-triangular).
@@ -3398,15 +3588,20 @@ def expand_hstack(target: ast.expr, args: List[ast.expr], shape_table: Dict[str,
             else:
                 col_index = ast.BinOp(left=_name("__hsj"), op=ast.Add(), right=_const_or_name(offset_tok))
             body = [
-                ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=col_index, ctx=ast.Store())],
-                           value=ast.Subscript(value=_name(nm), slice=_name("__hsj"), ctx=ast.Load()))
+                ast.Assign(
+                    targets=[ast.Subscript(value=_name(target.id), slice=col_index, ctx=ast.Store())],
+                    value=ast.Subscript(value=_name(nm), slice=_name("__hsj"), ctx=ast.Load()),
+                )
             ]
             out.append(
-                ast.For(target=_store("__hsj"),
-                        iter=ast.Call(func=_name("range"), args=[k_ast], keywords=[]),
-                        body=body,
-                        orelse=[]))
-            offset_tok = (f"({offset_tok}) + ({s[0]})" if offset_tok != "0" else str(s[0]))
+                ast.For(
+                    target=_store("__hsj"),
+                    iter=ast.Call(func=_name("range"), args=[k_ast], keywords=[]),
+                    body=body,
+                    orelse=[],
+                )
+            )
+            offset_tok = f"({offset_tok}) + ({s[0]})" if offset_tok != "0" else str(s[0])
         return out
     # rank == 2
     n_tok = shapes[0][0]
@@ -3419,25 +3614,33 @@ def expand_hstack(target: ast.expr, args: List[ast.expr], shape_table: Dict[str,
         else:
             col_index = ast.BinOp(left=_name("__hsj"), op=ast.Add(), right=_const_or_name(offset_tok))
         body = [
-            ast.Assign(targets=[
-                ast.Subscript(value=_name(target.id),
-                              slice=ast.Tuple(elts=[_name("__hsi"), col_index], ctx=ast.Load()),
-                              ctx=ast.Store())
-            ],
-                       value=ast.Subscript(value=_name(nm),
-                                           slice=ast.Tuple(elts=[_name("__hsi"), _name("__hsj")], ctx=ast.Load()),
-                                           ctx=ast.Load()))
+            ast.Assign(
+                targets=[
+                    ast.Subscript(
+                        value=_name(target.id),
+                        slice=ast.Tuple(elts=[_name("__hsi"), col_index], ctx=ast.Load()),
+                        ctx=ast.Store(),
+                    )
+                ],
+                value=ast.Subscript(
+                    value=_name(nm),
+                    slice=ast.Tuple(elts=[_name("__hsi"), _name("__hsj")], ctx=ast.Load()),
+                    ctx=ast.Load(),
+                ),
+            )
         ]
-        inner = ast.For(target=_store("__hsj"),
-                        iter=ast.Call(func=_name("range"), args=[k_ast], keywords=[]),
-                        body=body,
-                        orelse=[])
+        inner = ast.For(
+            target=_store("__hsj"), iter=ast.Call(func=_name("range"), args=[k_ast], keywords=[]), body=body, orelse=[]
+        )
         out.append(
-            ast.For(target=_store("__hsi"),
-                    iter=ast.Call(func=_name("range"), args=[_const_or_name(n_tok)], keywords=[]),
-                    body=[inner],
-                    orelse=[]))
-        offset_tok = (f"({offset_tok}) + ({s[1]})" if offset_tok != "0" else str(s[1]))
+            ast.For(
+                target=_store("__hsi"),
+                iter=ast.Call(func=_name("range"), args=[_const_or_name(n_tok)], keywords=[]),
+                body=[inner],
+                orelse=[],
+            )
+        )
+        offset_tok = f"({offset_tok}) + ({s[1]})" if offset_tok != "0" else str(s[1])
     return out
 
 
@@ -3489,12 +3692,14 @@ def _concat_operands_axis(args, kwargs, shape_table):
     return names, shapes, axis
 
 
-def expand_concatenate(target: ast.expr,
-                       args: List[ast.expr],
-                       shape_table: Dict[str, Tuple[str, ...]],
-                       kwargs=None,
-                       local_dtypes=None,
-                       fresh_local_allocs=None) -> List[ast.stmt]:
+def expand_concatenate(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs=None,
+    local_dtypes=None,
+    fresh_local_allocs=None,
+) -> List[ast.stmt]:
     """``out = np.concatenate((a, b, ...), axis=k)`` -- join along ``axis``. Each
     operand copies into ``out`` at its cumulative offset along ``axis`` (other
     axes index 1:1); generalises hstack/vstack to arbitrary axis and rank.
@@ -3504,11 +3709,9 @@ def expand_concatenate(target: ast.expr,
     materialisation einsum uses -- so the bare-Name join below is unchanged."""
     prelude: List[ast.stmt] = []
     if args and isinstance(args[0], (ast.Tuple, ast.List)):
-        prelude, elts = _materialize_operands(args[0].elts,
-                                              shape_table,
-                                              "__cc_",
-                                              local_dtypes=local_dtypes,
-                                              fresh_local_allocs=fresh_local_allocs)
+        prelude, elts = _materialize_operands(
+            args[0].elts, shape_table, "__cc_", local_dtypes=local_dtypes, fresh_local_allocs=fresh_local_allocs
+        )
         args = [ast.Tuple(elts=list(elts), ctx=ast.Load())] + list(args[1:])
     names, shapes, axis = _concat_operands_axis(args, kwargs, shape_table)
     if any(nm is None for nm in names):  # materialisation above could not spill this operand
@@ -3525,21 +3728,27 @@ def expand_concatenate(target: ast.expr,
             else:
                 tgt_elts.append(_name(iters[d]))
         tgt_slot = tgt_elts[0] if rank == 1 else ast.Tuple(elts=tgt_elts, ctx=ast.Load())
-        src_slot = (_name(iters[0]) if rank == 1 else ast.Tuple(elts=[_name(i) for i in iters], ctx=ast.Load()))
+        src_slot = _name(iters[0]) if rank == 1 else ast.Tuple(elts=[_name(i) for i in iters], ctx=ast.Load())
         body = [
-            ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=tgt_slot, ctx=ast.Store())],
-                       value=ast.Subscript(value=_name(nm), slice=src_slot, ctx=ast.Load()))
+            ast.Assign(
+                targets=[ast.Subscript(value=_name(target.id), slice=tgt_slot, ctx=ast.Store())],
+                value=ast.Subscript(value=_name(nm), slice=src_slot, ctx=ast.Load()),
+            )
         ]
         out.extend(_wrap_for_loops(iters, s, body))
-        offset_tok = (f"({offset_tok}) + ({s[axis]})" if offset_tok != "0" else str(s[axis]))
+        offset_tok = f"({offset_tok}) + ({s[axis]})" if offset_tok != "0" else str(s[axis])
     return prelude + out
 
 
 def _const_int(node: Optional[ast.expr]) -> Optional[int]:
     """A plain (possibly negative) int constant, or ``None``. A negative literal parses as
     ``UnaryOp(USub, Constant(n))`` -- not ``Constant(-n)`` -- so handle both."""
-    if (isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub) and isinstance(node.operand, ast.Constant)
-            and isinstance(node.operand.value, int)):
+    if (
+        isinstance(node, ast.UnaryOp)
+        and isinstance(node.op, ast.USub)
+        and isinstance(node.operand, ast.Constant)
+        and isinstance(node.operand.value, int)
+    ):
         return -node.operand.value
     if isinstance(node, ast.Constant) and isinstance(node.value, int):
         return node.value
@@ -3560,8 +3769,10 @@ def _axis_literal_or_refuse(node: Optional[ast.expr], what: str, default: Option
         return default
     axis = _const_int(node)
     if axis is None:
-        raise NotImplementedError(f"{what}: axis {ast.unparse(node)!r} must be a compile-time integer "
-                                  f"(it selects the loop nest, so there is no runtime form for it)")
+        raise NotImplementedError(
+            f"{what}: axis {ast.unparse(node)!r} must be a compile-time integer "
+            f"(it selects the loop nest, so there is no runtime form for it)"
+        )
     return axis
 
 
@@ -3589,10 +3800,9 @@ def _stack_axis(args, kwargs, rank: int) -> int:
     return axis
 
 
-def expand_stack(target: ast.expr,
-                 args: List[ast.expr],
-                 shape_table: Dict[str, Tuple[str, ...]],
-                 kwargs=None) -> List[ast.stmt]:
+def expand_stack(
+    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+) -> List[ast.stmt]:
     """``out = np.stack((a, b, ...), axis=k)`` -- join N same-shape operands along
     a NEW axis ``k`` (out's k-th extent = N, rank = operand rank + 1). Operand
     ``s`` copies to ``out`` at position ``s`` of the inserted axis, other axes
@@ -3612,22 +3822,23 @@ def expand_stack(target: ast.expr,
         # read operand 0's iterators, whose values are whatever the first loop exited with: one
         # stale element copied over the whole slice. C never saw it -- its per-loop ``__st0`` is
         # block-scoped, so the alias is harmless there and only Fortran came out wrong.
-        src_slot = (_name(iters[0]) if rank == 1 else ast.Tuple(elts=[_name(i) for i in iters], ctx=ast.Load()))
+        src_slot = _name(iters[0]) if rank == 1 else ast.Tuple(elts=[_name(i) for i in iters], ctx=ast.Load())
         tgt_elts = [_name(iters[d]) for d in range(rank)]
         tgt_elts.insert(axis, _const(s_idx))
         tgt_slot = tgt_elts[0] if len(tgt_elts) == 1 else ast.Tuple(elts=tgt_elts, ctx=ast.Load())
         body = [
-            ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=tgt_slot, ctx=ast.Store())],
-                       value=ast.Subscript(value=_name(nm), slice=src_slot, ctx=ast.Load()))
+            ast.Assign(
+                targets=[ast.Subscript(value=_name(target.id), slice=tgt_slot, ctx=ast.Store())],
+                value=ast.Subscript(value=_name(nm), slice=src_slot, ctx=ast.Load()),
+            )
         ]
         out.extend(_wrap_for_loops(iters, s, body))
     return out
 
 
-def expand_flip(target: ast.expr,
-                args: List[ast.expr],
-                shape_table: Dict[str, Tuple[str, ...]],
-                kwargs=None) -> List[ast.stmt]:
+def expand_flip(
+    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+) -> List[ast.stmt]:
     """``out = np.flip(A[, axis])`` -> reverse-order copy. Without ``axis`` EVERY axis is
     reversed (numpy's default); with ``axis=k`` only that axis. N-D: a loop nest over the
     shape where each flipped axis index ``i`` reads ``extent - 1 - i`` from the source."""
@@ -3652,22 +3863,24 @@ def expand_flip(target: ast.expr,
         if d in flipped:
             ext = _const_or_name(shape[d])
             src_elts.append(
-                ast.BinOp(left=ast.BinOp(left=ext, op=ast.Sub(), right=_const(1)), op=ast.Sub(), right=_name(iters[d])))
+                ast.BinOp(left=ast.BinOp(left=ext, op=ast.Sub(), right=_const(1)), op=ast.Sub(), right=_name(iters[d]))
+            )
         else:
             src_elts.append(_name(iters[d]))
     out_slot = _name(iters[0]) if rank == 1 else ast.Tuple(elts=[_name(i) for i in iters], ctx=ast.Load())
     src_slot = src_elts[0] if rank == 1 else ast.Tuple(elts=src_elts, ctx=ast.Load())
     body = [
-        ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=out_slot, ctx=ast.Store())],
-                   value=ast.Subscript(value=_name(a.id), slice=src_slot, ctx=ast.Load()))
+        ast.Assign(
+            targets=[ast.Subscript(value=_name(target.id), slice=out_slot, ctx=ast.Store())],
+            value=ast.Subscript(value=_name(a.id), slice=src_slot, ctx=ast.Load()),
+        )
     ]
     return _wrap_for_loops(iters, shape, body)
 
 
-def expand_diff(target: ast.expr,
-                args: List[ast.expr],
-                shape_table: Dict[str, Tuple[str, ...]],
-                kwargs=None) -> List[ast.stmt]:
+def expand_diff(
+    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+) -> List[ast.stmt]:
     """``out = np.diff(A[, n][, axis])`` -> ``A[..., 1:, ...] - A[..., :-1, ...]`` along ``axis``.
 
     First difference only. ``n > 1`` is this applied again and needs a temporary per stage;
@@ -3699,10 +3912,14 @@ def expand_diff(target: ast.expr,
         return elts[0] if rank == 1 else ast.Tuple(elts=elts, ctx=ast.Load())
 
     body = [
-        ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=slot(0), ctx=ast.Store())],
-                   value=ast.BinOp(left=ast.Subscript(value=_name(a.id), slice=slot(1), ctx=ast.Load()),
-                                   op=ast.Sub(),
-                                   right=ast.Subscript(value=_name(a.id), slice=slot(0), ctx=ast.Load())))
+        ast.Assign(
+            targets=[ast.Subscript(value=_name(target.id), slice=slot(0), ctx=ast.Store())],
+            value=ast.BinOp(
+                left=ast.Subscript(value=_name(a.id), slice=slot(1), ctx=ast.Load()),
+                op=ast.Sub(),
+                right=ast.Subscript(value=_name(a.id), slice=slot(0), ctx=ast.Load()),
+            ),
+        )
     ]
     return _wrap_for_loops(iters, bounds, body)
 
@@ -3761,12 +3978,19 @@ def _expand_var_or_std(target, args, shape_table, kwargs, finish: str):
         shape_table,
         init=_const(0.0),
         op_fn=lambda acc, x: ast.BinOp(left=acc, op=ast.Add(), right=x),
-        post_fn=lambda lvalue, divisor: ast.Assign(targets=[lvalue],
-                                                   value=ast.BinOp(left=(lvalue if isinstance(
-                                                       lvalue, ast.Name) else ast.Subscript(
-                                                           value=lvalue.value, slice=lvalue.slice, ctx=ast.Load())),
-                                                                   op=ast.Div(),
-                                                                   right=divisor)))
+        post_fn=lambda lvalue, divisor: ast.Assign(
+            targets=[lvalue],
+            value=ast.BinOp(
+                left=(
+                    lvalue
+                    if isinstance(lvalue, ast.Name)
+                    else ast.Subscript(value=lvalue.value, slice=lvalue.slice, ctx=ast.Load())
+                ),
+                op=ast.Div(),
+                right=divisor,
+            ),
+        ),
+    )
 
     # Step 2: accumulate squared deviations into ``__sd_acc`` (scalar per
     # kept-axes position), then finalise as ``out = (__sd_acc / divisor)``, sqrt
@@ -3837,10 +4061,12 @@ def _expand_var_or_std(target, args, shape_table, kwargs, finish: str):
     inner_body: List[ast.stmt] = [add_acc]
     for ax, rn in zip(reversed(axes_norm), reversed(red_iter_names)):
         inner_body = [
-            ast.For(target=_store(rn),
-                    iter=ast.Call(func=_name("range"), args=[_const_or_name(shape[ax])], keywords=[]),
-                    body=inner_body,
-                    orelse=[])
+            ast.For(
+                target=_store(rn),
+                iter=ast.Call(func=_name("range"), args=[_const_or_name(shape[ax])], keywords=[]),
+                body=inner_body,
+                orelse=[],
+            )
         ]
     body_stmts = [init_acc, *inner_body, finalize]
     if is_scalar_target:
@@ -3873,61 +4099,72 @@ def expand_dot_2d(target: ast.expr, args: List[ast.expr], shape_table: Dict[str,
     if len(a_shape) == 2 and len(b_shape) == 1:
         m, k = a_shape
         return [
-            ast.For(target=_store("__i"),
-                    iter=ast.Call(func=_name("range"), args=[_const_or_name(m)], keywords=[]),
-                    body=[
-                        ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=_name("__i"), ctx=ast.Store())],
-                                   value=_const(0.0)),
-                        ast.For(target=_store("__l"),
-                                iter=ast.Call(func=_name("range"), args=[_const_or_name(k)], keywords=[]),
-                                body=[
-                                    ast.AugAssign(target=ast.Subscript(value=_name(target.id),
-                                                                       slice=_name("__i"),
-                                                                       ctx=ast.Store()),
-                                                  op=ast.Add(),
-                                                  value=ast.BinOp(left=ast.Subscript(
-                                                      value=_name(a.id),
-                                                      slice=ast.Tuple(elts=[_name("__i"), _name("__l")],
-                                                                      ctx=ast.Load()),
-                                                      ctx=ast.Load()),
-                                                                  op=ast.Mult(),
-                                                                  right=ast.Subscript(value=_name(b.id),
-                                                                                      slice=_name("__l"),
-                                                                                      ctx=ast.Load())))
-                                ],
-                                orelse=[]),
-                    ],
-                    orelse=[])
+            ast.For(
+                target=_store("__i"),
+                iter=ast.Call(func=_name("range"), args=[_const_or_name(m)], keywords=[]),
+                body=[
+                    ast.Assign(
+                        targets=[ast.Subscript(value=_name(target.id), slice=_name("__i"), ctx=ast.Store())],
+                        value=_const(0.0),
+                    ),
+                    ast.For(
+                        target=_store("__l"),
+                        iter=ast.Call(func=_name("range"), args=[_const_or_name(k)], keywords=[]),
+                        body=[
+                            ast.AugAssign(
+                                target=ast.Subscript(value=_name(target.id), slice=_name("__i"), ctx=ast.Store()),
+                                op=ast.Add(),
+                                value=ast.BinOp(
+                                    left=ast.Subscript(
+                                        value=_name(a.id),
+                                        slice=ast.Tuple(elts=[_name("__i"), _name("__l")], ctx=ast.Load()),
+                                        ctx=ast.Load(),
+                                    ),
+                                    op=ast.Mult(),
+                                    right=ast.Subscript(value=_name(b.id), slice=_name("__l"), ctx=ast.Load()),
+                                ),
+                            )
+                        ],
+                        orelse=[],
+                    ),
+                ],
+                orelse=[],
+            )
         ]
     if len(a_shape) == 1 and len(b_shape) == 2:
         k, n = b_shape
         return [
-            ast.For(target=_store("__j"),
-                    iter=ast.Call(func=_name("range"), args=[_const_or_name(n)], keywords=[]),
-                    body=[
-                        ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=_name("__j"), ctx=ast.Store())],
-                                   value=_const(0.0)),
-                        ast.For(target=_store("__l"),
-                                iter=ast.Call(func=_name("range"), args=[_const_or_name(k)], keywords=[]),
-                                body=[
-                                    ast.AugAssign(target=ast.Subscript(value=_name(target.id),
-                                                                       slice=_name("__j"),
-                                                                       ctx=ast.Store()),
-                                                  op=ast.Add(),
-                                                  value=ast.BinOp(left=ast.Subscript(value=_name(a.id),
-                                                                                     slice=_name("__l"),
-                                                                                     ctx=ast.Load()),
-                                                                  op=ast.Mult(),
-                                                                  right=ast.Subscript(
-                                                                      value=_name(b.id),
-                                                                      slice=ast.Tuple(elts=[_name("__l"),
-                                                                                            _name("__j")],
-                                                                                      ctx=ast.Load()),
-                                                                      ctx=ast.Load())))
-                                ],
-                                orelse=[]),
-                    ],
-                    orelse=[])
+            ast.For(
+                target=_store("__j"),
+                iter=ast.Call(func=_name("range"), args=[_const_or_name(n)], keywords=[]),
+                body=[
+                    ast.Assign(
+                        targets=[ast.Subscript(value=_name(target.id), slice=_name("__j"), ctx=ast.Store())],
+                        value=_const(0.0),
+                    ),
+                    ast.For(
+                        target=_store("__l"),
+                        iter=ast.Call(func=_name("range"), args=[_const_or_name(k)], keywords=[]),
+                        body=[
+                            ast.AugAssign(
+                                target=ast.Subscript(value=_name(target.id), slice=_name("__j"), ctx=ast.Store()),
+                                op=ast.Add(),
+                                value=ast.BinOp(
+                                    left=ast.Subscript(value=_name(a.id), slice=_name("__l"), ctx=ast.Load()),
+                                    op=ast.Mult(),
+                                    right=ast.Subscript(
+                                        value=_name(b.id),
+                                        slice=ast.Tuple(elts=[_name("__l"), _name("__j")], ctx=ast.Load()),
+                                        ctx=ast.Load(),
+                                    ),
+                                ),
+                            )
+                        ],
+                        orelse=[],
+                    ),
+                ],
+                orelse=[],
+            )
         ]
     # 2-D x 2-D: delegate to matmul.
     return expand_matmul(target, a, b, shape_table)
@@ -4045,11 +4282,13 @@ def _materialize_operands(operands, shape_table, prefix: str, local_dtypes=None,
     return prelude, out
 
 
-def expand_einsum(target: ast.expr,
-                  args: List[ast.expr],
-                  shape_table: Dict[str, Tuple[str, ...]],
-                  local_dtypes=None,
-                  fresh_local_allocs=None) -> List[ast.stmt]:
+def expand_einsum(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    local_dtypes=None,
+    fresh_local_allocs=None,
+) -> List[ast.stmt]:
     """Lower ``np.einsum(subscripts, *operands)`` to a nested loop nest. Output
     indices become nested loops over the result; indices summed away (in the
     inputs but not the output) become inner accumulation loops. Body:
@@ -4071,11 +4310,9 @@ def expand_einsum(target: ast.expr,
     operands = args[1:]
     # Materialize any non-Name operand into a fresh local so the bare-Name expansion (and
     # the ellipsis rank lookup) sees a Name.
-    prelude, operands = _materialize_operands(operands,
-                                              shape_table,
-                                              "__es_",
-                                              local_dtypes=local_dtypes,
-                                              fresh_local_allocs=fresh_local_allocs)
+    prelude, operands = _materialize_operands(
+        operands, shape_table, "__es_", local_dtypes=local_dtypes, fresh_local_allocs=fresh_local_allocs
+    )
     if "..." in spec:
         # Expand ``...`` to explicit letters from each operand's rank (needs the
         # shape table), then lower the plain form; the parser stays ellipsis-free.
@@ -4134,17 +4371,20 @@ def expand_einsum(target: ast.expr,
         inner = [ast.Assign(targets=[copy.deepcopy(out_store)], value=product)]
 
     if out_letters:
-        return prelude + _wrap_for_loops([var_of[c] for c in out_letters], [letter_extent[c]
-                                                                            for c in out_letters], inner)
+        return prelude + _wrap_for_loops(
+            [var_of[c] for c in out_letters], [letter_extent[c] for c in out_letters], inner
+        )
     return prelude + inner
 
 
-def expand_tensordot(target: ast.expr,
-                     args: List[ast.expr],
-                     shape_table: Dict[str, Tuple[str, ...]],
-                     kwargs=None,
-                     local_dtypes=None,
-                     fresh_local_allocs=None) -> List[ast.stmt]:
+def expand_tensordot(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs=None,
+    local_dtypes=None,
+    fresh_local_allocs=None,
+) -> List[ast.stmt]:
     """``np.tensordot(a, b, axes)`` -> an equivalent einsum.
 
     ``axes`` is an int K (contract the last K axes of ``a`` with the first K
@@ -4159,11 +4399,9 @@ def expand_tensordot(target: ast.expr,
     """
     if len(args) < 2:
         raise NotImplementedError("tensordot needs 2 array args")
-    prelude, (a, b) = _materialize_operands(args[:2],
-                                            shape_table,
-                                            "__td_",
-                                            local_dtypes=local_dtypes,
-                                            fresh_local_allocs=fresh_local_allocs)
+    prelude, (a, b) = _materialize_operands(
+        args[:2], shape_table, "__td_", local_dtypes=local_dtypes, fresh_local_allocs=fresh_local_allocs
+    )
     if not (isinstance(a, ast.Name) and isinstance(b, ast.Name)):
         raise NotImplementedError("tensordot operands must be bare Names")
     ra = len(shape_table.get(a.id, ()))
@@ -4183,11 +4421,11 @@ def expand_tensordot(target: ast.expr,
         if b_spec[i] is None:
             b_spec[i] = letters[nxt]
             nxt += 1
-    out_spec = [c for i, c in enumerate(a_spec) if i not in a_ax] + \
-               [c for i, c in enumerate(b_spec) if i not in b_ax]
+    out_spec = [c for i, c in enumerate(a_spec) if i not in a_ax] + [c for i, c in enumerate(b_spec) if i not in b_ax]
     spec = f"{''.join(a_spec)},{''.join(b_spec)}->{''.join(out_spec)}"
     return prelude + expand_einsum(
-        target, [_const(spec), a, b], shape_table, local_dtypes=local_dtypes, fresh_local_allocs=fresh_local_allocs)
+        target, [_const(spec), a, b], shape_table, local_dtypes=local_dtypes, fresh_local_allocs=fresh_local_allocs
+    )
 
 
 def _axes_kwarg(kwargs):
@@ -4261,17 +4499,16 @@ def expand_inner(target: ast.expr, args: List[ast.expr], shape_table: Dict[str, 
         return expand_dot(target, args, shape_table)
     letters = "abcdefghijklmnopqrstuvwxyz"
     a_spec = list(letters[:ra])
-    b_spec = list(letters[ra:ra + rb])
+    b_spec = list(letters[ra : ra + rb])
     b_spec[-1] = a_spec[-1]  # contract the last axis of each
     out_spec = a_spec[:-1] + b_spec[:-1]
     spec = f"{''.join(a_spec)},{''.join(b_spec)}->{''.join(out_spec)}"
     return expand_einsum(target, [_const(spec), a, b], shape_table)
 
 
-def expand_vdot(target: ast.expr,
-                args: List[ast.expr],
-                shape_table: Dict[str, Tuple[str, ...]],
-                local_dtypes=None) -> List[ast.stmt]:
+def expand_vdot(
+    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], local_dtypes=None
+) -> List[ast.stmt]:
     """``np.vdot(a, b)`` -> ``sum(conj(a) * b)`` over the flattened operands.
     The conjugate is emitted only when the first operand is complex (a no-op
     for reals, and invalid on a real scalar); real operands reduce to the plain
@@ -4291,9 +4528,9 @@ def expand_vdot(target: ast.expr,
     a_elem: ast.expr = ast.Subscript(value=_name(a.id), slice=_name(it), ctx=ast.Load())
     if is_complex:
         a_elem = _attr_call("np", "conj", [a_elem])
-    prod = ast.BinOp(left=a_elem,
-                     op=ast.Mult(),
-                     right=ast.Subscript(value=_name(b.id), slice=_name(it), ctx=ast.Load()))
+    prod = ast.BinOp(
+        left=a_elem, op=ast.Mult(), right=ast.Subscript(value=_name(b.id), slice=_name(it), ctx=ast.Load())
+    )
     body = [ast.AugAssign(target=_store(target.id), op=ast.Add(), value=prod)]
     return [ast.Assign(targets=[_store(target.id)], value=_const(0.0)), *_wrap_for_loops([it], [shape[0]], body)]
 
@@ -4373,7 +4610,7 @@ def _pad_fill(kwargs) -> ast.expr:
     ``-inf`` precisely so the running maximum never sees it, and filling zeros there instead
     returned a too-large maximum on every trailing block -- a wrong answer, not a refusal.
     """
-    for keyword in (kwargs or []):
+    for keyword in kwargs or []:
         if keyword.arg != "constant_values":
             continue
         if isinstance(keyword.value, (ast.Tuple, ast.List)):
@@ -4382,12 +4619,14 @@ def _pad_fill(kwargs) -> ast.expr:
     return _const(0.0)
 
 
-def expand_pad(target: ast.expr,
-               args: List[ast.expr],
-               shape_table: Dict[str, Tuple[str, ...]],
-               kwargs=None,
-               local_dtypes=None,
-               fresh_local_allocs=None) -> List[ast.stmt]:
+def expand_pad(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs=None,
+    local_dtypes=None,
+    fresh_local_allocs=None,
+) -> List[ast.stmt]:
     """``padded = np.pad(src, pad_width, mode=...)`` -> a ghost-cell fill loop.
     Each source axis grows by its ``before + after`` width (scalar ``R`` pads
     every axis ``(R, R)``; a per-axis tuple lets vector stencils leave the
@@ -4459,15 +4698,17 @@ def expand_pad(target: ast.expr,
         # ((x % m) + m) % m -- a floor modulo, correct whether the backend's
         # ``%`` truncates (C) or floors, keeping the index in [0, m).
         inner = ast.BinOp(left=x, op=ast.Mod(), right=copy.deepcopy(m))
-        return ast.BinOp(left=ast.BinOp(left=inner, op=ast.Add(), right=copy.deepcopy(m)),
-                         op=ast.Mod(),
-                         right=copy.deepcopy(m))
+        return ast.BinOp(
+            left=ast.BinOp(left=inner, op=ast.Add(), right=copy.deepcopy(m)), op=ast.Mod(), right=copy.deepcopy(m)
+        )
 
     def _fold_high(sv: str, hi: ast.expr, d: ast.expr) -> ast.stmt:
         # ``if sv >= d: sv = hi - sv`` -- fold the period's upper half down.
-        return ast.If(test=ast.Compare(left=_name(sv), ops=[ast.GtE()], comparators=[copy.deepcopy(d)]),
-                      body=[ast.Assign(targets=[_store(sv)], value=ast.BinOp(left=hi, op=ast.Sub(), right=_name(sv)))],
-                      orelse=[])
+        return ast.If(
+            test=ast.Compare(left=_name(sv), ops=[ast.GtE()], comparators=[copy.deepcopy(d)]),
+            body=[ast.Assign(targets=[_store(sv)], value=ast.BinOp(left=hi, op=ast.Sub(), right=_name(sv)))],
+            orelse=[],
+        )
 
     def _remap(sv: str, d: ast.expr, pv: str, raw: ast.expr) -> List[ast.stmt]:
         if mode == "edge":
@@ -4477,13 +4718,16 @@ def expand_pad(target: ast.expr,
             # Every arm recomputes the PRE-clamp ``raw``; reading sv back would
             # add a RAW dependence on top of the WAW the assign already carries.
             upper = ast.BinOp(left=copy.deepcopy(d), op=ast.Sub(), right=_const(1))
-            hi = ast.IfExp(test=ast.Compare(left=copy.deepcopy(raw), ops=[ast.Gt()],
-                                            comparators=[copy.deepcopy(upper)]),
-                           body=copy.deepcopy(upper),
-                           orelse=copy.deepcopy(raw))
-            clamp = ast.IfExp(test=ast.Compare(left=copy.deepcopy(raw), ops=[ast.Lt()], comparators=[_const(0)]),
-                              body=_const(0),
-                              orelse=hi)
+            hi = ast.IfExp(
+                test=ast.Compare(left=copy.deepcopy(raw), ops=[ast.Gt()], comparators=[copy.deepcopy(upper)]),
+                body=copy.deepcopy(upper),
+                orelse=copy.deepcopy(raw),
+            )
+            clamp = ast.IfExp(
+                test=ast.Compare(left=copy.deepcopy(raw), ops=[ast.Lt()], comparators=[_const(0)]),
+                body=_const(0),
+                orelse=hi,
+            )
             return [ast.Assign(targets=[_store(sv)], value=clamp)]
         if mode == "wrap":  # periodic tiling: src[q mod d]
             return [ast.Assign(targets=[_store(sv)], value=_floor_mod(_name(sv), d))]
@@ -4498,13 +4742,13 @@ def expand_pad(target: ast.expr,
             if dv is not None:
                 return [
                     ast.Assign(targets=[_store(sv)], value=_floor_mod(_name(sv), _const(2 * dv))),
-                    _fold_high(sv, _const(2 * dv - 1), d)
+                    _fold_high(sv, _const(2 * dv - 1), d),
                 ]
             period = ast.BinOp(left=_const(2), op=ast.Mult(), right=copy.deepcopy(d))
             return [
                 ast.Assign(targets=[_store(pv)], value=period),
                 ast.Assign(targets=[_store(sv)], value=_floor_mod(_name(sv), _name(pv))),
-                _fold_high(sv, ast.BinOp(left=_name(pv), op=ast.Sub(), right=_const(1)), d)
+                _fold_high(sv, ast.BinOp(left=_name(pv), op=ast.Sub(), right=_const(1)), d),
             ]
         # mode == "reflect": period 2(d-1); a size-1 axis just repeats element 0.
         if dv is not None:
@@ -4513,20 +4757,22 @@ def expand_pad(target: ast.expr,
             m = 2 * (dv - 1)
             return [
                 ast.Assign(targets=[_store(sv)], value=_floor_mod(_name(sv), _const(m))),
-                _fold_high(sv, _const(m), d)
+                _fold_high(sv, _const(m), d),
             ]
-        period = ast.BinOp(left=_const(2),
-                           op=ast.Mult(),
-                           right=ast.BinOp(left=copy.deepcopy(d), op=ast.Sub(), right=_const(1)))
+        period = ast.BinOp(
+            left=_const(2), op=ast.Mult(), right=ast.BinOp(left=copy.deepcopy(d), op=ast.Sub(), right=_const(1))
+        )
         reflect_body = [
             ast.Assign(targets=[_store(pv)], value=period),
             ast.Assign(targets=[_store(sv)], value=_floor_mod(_name(sv), _name(pv))),
-            _fold_high(sv, _name(pv), d)
+            _fold_high(sv, _name(pv), d),
         ]
         return [
-            ast.If(test=ast.Compare(left=copy.deepcopy(d), ops=[ast.Eq()], comparators=[_const(1)]),
-                   body=[ast.Assign(targets=[_store(sv)], value=_const(0))],
-                   orelse=reflect_body)
+            ast.If(
+                test=ast.Compare(left=copy.deepcopy(d), ops=[ast.Eq()], comparators=[_const(1)]),
+                body=[ast.Assign(targets=[_store(sv)], value=_const(0))],
+                orelse=reflect_body,
+            )
         ]
 
     pre: List[ast.stmt] = []
@@ -4539,8 +4785,9 @@ def expand_pad(target: ast.expr,
             pre.append(ast.Assign(targets=[_store(sv)], value=raw))
         pre.extend(_remap(sv, _dim(k), f"__pm{k}", raw))
     body = pre + [
-        ast.Assign(targets=[_store_target([_name(v) for v in out_iters])],
-                   value=_src_read([_name(v) for v in src_idx_vars]))
+        ast.Assign(
+            targets=[_store_target([_name(v) for v in out_iters])], value=_src_read([_name(v) for v in src_idx_vars])
+        )
     ]
     return _wrap_for_loops(out_iters, out_bounds, body)
 
@@ -4553,9 +4800,9 @@ def expand_trace(target: ast.expr, args: List[ast.expr], shape_table: Dict[str, 
     if shape is None or len(shape) != 2:
         raise NotImplementedError("np.trace needs a 2-D array")
     it = "__tr"
-    diag = ast.Subscript(value=_name(args[0].id),
-                         slice=ast.Tuple(elts=[_name(it), _name(it)], ctx=ast.Load()),
-                         ctx=ast.Load())
+    diag = ast.Subscript(
+        value=_name(args[0].id), slice=ast.Tuple(elts=[_name(it), _name(it)], ctx=ast.Load()), ctx=ast.Load()
+    )
     body = [ast.AugAssign(target=_store(target.id), op=ast.Add(), value=diag)]
     return [ast.Assign(targets=[_store(target.id)], value=_const(0.0)), *_wrap_for_loops([it], [shape[0]], body)]
 
@@ -4568,17 +4815,16 @@ def expand_diagonal(target: ast.expr, args: List[ast.expr], shape_table: Dict[st
     if shape is None or len(shape) != 2:
         raise NotImplementedError("np.diagonal needs a 2-D array")
     it = "__dg"
-    diag = ast.Subscript(value=_name(args[0].id),
-                         slice=ast.Tuple(elts=[_name(it), _name(it)], ctx=ast.Load()),
-                         ctx=ast.Load())
+    diag = ast.Subscript(
+        value=_name(args[0].id), slice=ast.Tuple(elts=[_name(it), _name(it)], ctx=ast.Load()), ctx=ast.Load()
+    )
     body = [ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=_name(it), ctx=ast.Store())], value=diag)]
     return _wrap_for_loops([it], [shape[0]], body)
 
 
-def expand_diag(target: ast.expr,
-                args: List[ast.expr],
-                shape_table: Dict[str, Tuple[str, ...]],
-                kwargs=None) -> List[ast.stmt]:
+def expand_diag(
+    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+) -> List[ast.stmt]:
     """``np.diag(v [, k])`` -- construct a diagonal matrix, or extract one. 1-D
     ``v`` of shape ``(n,)`` -> an ``(n+|k|, n+|k|)`` matrix, all zeros except
     ``out[i, i+k] = v[i]`` for ``k >= 0`` (``out[i-k, i] = v[i]`` for ``k < 0``),
@@ -4607,12 +4853,16 @@ def expand_diag(target: ast.expr,
     side_tok = n_tok if k == 0 else f"({n_tok}) + {abs(k)}"
     # Zero the whole (side x side) matrix.
     zero_body = [
-        ast.Assign(targets=[
-            ast.Subscript(value=_name(target.id),
-                          slice=ast.Tuple(elts=[_name("__dg_zi"), _name("__dg_zj")], ctx=ast.Load()),
-                          ctx=ast.Store())
-        ],
-                   value=_const(0.0))
+        ast.Assign(
+            targets=[
+                ast.Subscript(
+                    value=_name(target.id),
+                    slice=ast.Tuple(elts=[_name("__dg_zi"), _name("__dg_zj")], ctx=ast.Load()),
+                    ctx=ast.Store(),
+                )
+            ],
+            value=_const(0.0),
+        )
     ]
     zero_loops = _wrap_for_loops(["__dg_zi", "__dg_zj"], [side_tok, side_tok], zero_body)
     # Write v along the k-th diagonal.
@@ -4620,15 +4870,17 @@ def expand_diag(target: ast.expr,
     v_elem = _scalarize_at_iters(v, [_name(it)], shape_table)
     if k >= 0:
         row: ast.expr = _name(it)
-        col: ast.expr = (_name(it) if k == 0 else ast.BinOp(left=_name(it), op=ast.Add(), right=_const(k)))
+        col: ast.expr = _name(it) if k == 0 else ast.BinOp(left=_name(it), op=ast.Add(), right=_const(k))
     else:
         row = ast.BinOp(left=_name(it), op=ast.Add(), right=_const(-k))
         col = _name(it)
     set_body = [
-        ast.Assign(targets=[
-            ast.Subscript(value=_name(target.id), slice=ast.Tuple(elts=[row, col], ctx=ast.Load()), ctx=ast.Store())
-        ],
-                   value=v_elem)
+        ast.Assign(
+            targets=[
+                ast.Subscript(value=_name(target.id), slice=ast.Tuple(elts=[row, col], ctx=ast.Load()), ctx=ast.Store())
+            ],
+            value=v_elem,
+        )
     ]
     return zero_loops + _wrap_for_loops([it], [n_tok], set_body)
 
@@ -4704,17 +4956,25 @@ def _expand_cumulative(target, args, shape_table, op, kwargs=None, combine=None)
     a_at = lambda e: ast.Subscript(value=_name(a.id), slice=_idx(e), ctx=ast.Load())
     sc_prev = ast.BinOp(left=_name(sc), op=ast.Sub(), right=_const(1))
     # out[..start+0..] = a[..0..]
-    init = ast.Assign(targets=[ast.Subscript(value=_name(target_base), slice=_tidx(_const(0)), ctx=ast.Store())],
-                      value=a_at(_const(0)))
+    init = ast.Assign(
+        targets=[ast.Subscript(value=_name(target_base), slice=_tidx(_const(0)), ctx=ast.Store())],
+        value=a_at(_const(0)),
+    )
     # for sc in 1..N: out[..start+sc..] = combine(out[..start+sc-1..], a[..sc..])
-    recur_val = (combine(out_at(sc_prev), a_at(_name(sc)))
-                 if combine is not None else ast.BinOp(left=out_at(sc_prev), op=op, right=a_at(_name(sc))))
-    recur = ast.Assign(targets=[ast.Subscript(value=_name(target_base), slice=_tidx(_name(sc)), ctx=ast.Store())],
-                       value=recur_val)
-    scan_loop = ast.For(target=_store(sc),
-                        iter=ast.Call(func=_name("range"), args=[_const(1), _const_or_name(shape[axis])], keywords=[]),
-                        body=[recur],
-                        orelse=[])
+    recur_val = (
+        combine(out_at(sc_prev), a_at(_name(sc)))
+        if combine is not None
+        else ast.BinOp(left=out_at(sc_prev), op=op, right=a_at(_name(sc)))
+    )
+    recur = ast.Assign(
+        targets=[ast.Subscript(value=_name(target_base), slice=_tidx(_name(sc)), ctx=ast.Store())], value=recur_val
+    )
+    scan_loop = ast.For(
+        target=_store(sc),
+        iter=ast.Call(func=_name("range"), args=[_const(1), _const_or_name(shape[axis])], keywords=[]),
+        body=[recur],
+        orelse=[],
+    )
     inner: List[ast.stmt] = [init, scan_loop]
     return _wrap_for_loops([iters[i] for i in outer], [shape[i] for i in outer], inner)
 
@@ -4732,9 +4992,11 @@ def _running_extreme_combine(cmp):
     ``maximum``/``minimum`` accumulate needs (no numpy ufunc survives to the backend)."""
 
     def combine(prev, cur):
-        return ast.IfExp(test=ast.Compare(left=copy.deepcopy(prev), ops=[cmp()], comparators=[copy.deepcopy(cur)]),
-                         body=copy.deepcopy(prev),
-                         orelse=copy.deepcopy(cur))
+        return ast.IfExp(
+            test=ast.Compare(left=copy.deepcopy(prev), ops=[cmp()], comparators=[copy.deepcopy(cur)]),
+            body=copy.deepcopy(prev),
+            orelse=copy.deepcopy(cur),
+        )
 
     return combine
 
@@ -4758,35 +5020,49 @@ def _make_sort_routine(buf: str, n: ast.expr, prefix: str) -> List[ast.stmt]:
     inner = [
         ast.Assign(targets=[_store(key)], value=ast.Subscript(value=_name(buf), slice=_name(i), ctx=ast.Load())),
         ast.Assign(targets=[_store(j)], value=ast.BinOp(left=_name(i), op=ast.Sub(), right=_const(1))),
-        ast.While(test=ast.BoolOp(op=ast.And(),
-                                  values=[
-                                      ast.Compare(left=_name(j), ops=[ast.GtE()], comparators=[_const(0)]),
-                                      ast.Compare(left=ast.Subscript(value=_name(buf), slice=_name(j), ctx=ast.Load()),
-                                                  ops=[ast.Gt()],
-                                                  comparators=[_name(key)])
-                                  ]),
-                  body=[
-                      ast.Assign(targets=[
-                          ast.Subscript(value=_name(buf),
-                                        slice=ast.BinOp(left=_name(j), op=ast.Add(), right=_const(1)),
-                                        ctx=ast.Store())
-                      ],
-                                 value=ast.Subscript(value=_name(buf), slice=_name(j), ctx=ast.Load())),
-                      ast.AugAssign(target=_store(j), op=ast.Sub(), value=_const(1))
-                  ],
-                  orelse=[]),
-        ast.Assign(targets=[
-            ast.Subscript(value=_name(buf),
-                          slice=ast.BinOp(left=_name(j), op=ast.Add(), right=_const(1)),
-                          ctx=ast.Store())
-        ],
-                   value=_name(key)),
+        ast.While(
+            test=ast.BoolOp(
+                op=ast.And(),
+                values=[
+                    ast.Compare(left=_name(j), ops=[ast.GtE()], comparators=[_const(0)]),
+                    ast.Compare(
+                        left=ast.Subscript(value=_name(buf), slice=_name(j), ctx=ast.Load()),
+                        ops=[ast.Gt()],
+                        comparators=[_name(key)],
+                    ),
+                ],
+            ),
+            body=[
+                ast.Assign(
+                    targets=[
+                        ast.Subscript(
+                            value=_name(buf),
+                            slice=ast.BinOp(left=_name(j), op=ast.Add(), right=_const(1)),
+                            ctx=ast.Store(),
+                        )
+                    ],
+                    value=ast.Subscript(value=_name(buf), slice=_name(j), ctx=ast.Load()),
+                ),
+                ast.AugAssign(target=_store(j), op=ast.Sub(), value=_const(1)),
+            ],
+            orelse=[],
+        ),
+        ast.Assign(
+            targets=[
+                ast.Subscript(
+                    value=_name(buf), slice=ast.BinOp(left=_name(j), op=ast.Add(), right=_const(1)), ctx=ast.Store()
+                )
+            ],
+            value=_name(key),
+        ),
     ]
     return [
-        ast.For(target=_store(i),
-                iter=ast.Call(func=_name("range"), args=[_const(1), n], keywords=[]),
-                body=inner,
-                orelse=[])
+        ast.For(
+            target=_store(i),
+            iter=ast.Call(func=_name("range"), args=[_const(1), n], keywords=[]),
+            body=inner,
+            orelse=[],
+        )
     ]
 
 
@@ -4810,34 +5086,45 @@ def expand_median(target, args, shape_table, kwargs=None, local_dtypes=None, fre
     total = shape[0] if len(shape) == 1 else "(" + ") * (".join(shape) + ")"
     buf = "__md_buf"
     if fresh_local_allocs is not None:
-        fresh_local_allocs[buf] = (total, )
+        fresh_local_allocs[buf] = (total,)
     n_node = _const_or_name(total)
     # Flat copy a -> buf.
     cp_iters = [f"__mdc{i}" for i in range(len(shape))]
     flat = _flat_index(cp_iters, shape)
     copy_body = [
-        ast.Assign(targets=[ast.Subscript(value=_name(buf), slice=flat, ctx=ast.Store())],
-                   value=ast.Subscript(value=_name(a.id),
-                                       slice=(_name(cp_iters[0]) if len(shape) == 1 else ast.Tuple(
-                                           elts=[_name(c) for c in cp_iters], ctx=ast.Load())),
-                                       ctx=ast.Load()))
+        ast.Assign(
+            targets=[ast.Subscript(value=_name(buf), slice=flat, ctx=ast.Store())],
+            value=ast.Subscript(
+                value=_name(a.id),
+                slice=(
+                    _name(cp_iters[0])
+                    if len(shape) == 1
+                    else ast.Tuple(elts=[_name(c) for c in cp_iters], ctx=ast.Load())
+                ),
+                ctx=ast.Load(),
+            ),
+        )
     ]
     copy_loops = _wrap_for_loops(cp_iters, list(shape), copy_body)
     sort = _make_sort_routine(buf, n_node, "__md")
     half = ast.BinOp(left=copy.deepcopy(n_node), op=ast.FloorDiv(), right=_const(2))
     mid = ast.Subscript(value=_name(buf), slice=copy.deepcopy(half), ctx=ast.Load())
-    mid_lo = ast.Subscript(value=_name(buf),
-                           slice=ast.BinOp(left=copy.deepcopy(half), op=ast.Sub(), right=_const(1)),
-                           ctx=ast.Load())
+    mid_lo = ast.Subscript(
+        value=_name(buf), slice=ast.BinOp(left=copy.deepcopy(half), op=ast.Sub(), right=_const(1)), ctx=ast.Load()
+    )
     # even count -> mean of the two middles; odd -> the single middle.
-    even = ast.Compare(left=ast.BinOp(left=copy.deepcopy(n_node), op=ast.Mod(), right=_const(2)),
-                       ops=[ast.Eq()],
-                       comparators=[_const(0)])
-    pick = ast.IfExp(test=even,
-                     body=ast.BinOp(left=ast.BinOp(left=mid_lo, op=ast.Add(), right=copy.deepcopy(mid)),
-                                    op=ast.Div(),
-                                    right=_const(2.0)),
-                     orelse=mid)
+    even = ast.Compare(
+        left=ast.BinOp(left=copy.deepcopy(n_node), op=ast.Mod(), right=_const(2)),
+        ops=[ast.Eq()],
+        comparators=[_const(0)],
+    )
+    pick = ast.IfExp(
+        test=even,
+        body=ast.BinOp(
+            left=ast.BinOp(left=mid_lo, op=ast.Add(), right=copy.deepcopy(mid)), op=ast.Div(), right=_const(2.0)
+        ),
+        orelse=mid,
+    )
     store = ast.Assign(targets=[_store(target.id)], value=pick)
     return [*copy_loops, *sort, store]
 
@@ -4863,8 +5150,10 @@ def expand_sort(target, args, shape_table, kwargs=None) -> List[ast.stmt]:
     shape_table.setdefault(out, tuple(shape))
     it = "__srtc"
     copy_body = [
-        ast.Assign(targets=[ast.Subscript(value=_name(out), slice=_name(it), ctx=ast.Store())],
-                   value=ast.Subscript(value=_name(a.id), slice=_name(it), ctx=ast.Load()))
+        ast.Assign(
+            targets=[ast.Subscript(value=_name(out), slice=_name(it), ctx=ast.Store())],
+            value=ast.Subscript(value=_name(a.id), slice=_name(it), ctx=ast.Load()),
+        )
     ]
     copy_loops = _wrap_for_loops([it], [shape[0]], copy_body)
     sort = _make_sort_routine(out, _const_or_name(shape[0]), "__srt")
@@ -4907,26 +5196,37 @@ def expand_searchsorted(target, args, shape_table, kwargs=None, local_dtypes=Non
     lo, hi, mid = "__ss_lo", "__ss_hi", "__ss_mid"
     # ``a[mid] <= v`` for side='right', ``a[mid] < v`` for side='left': the first is the count of
     # entries at or below the value, the second the count strictly below it.
-    below = ast.Compare(left=ast.Subscript(value=_name(args[0].id), slice=_name(mid), ctx=ast.Load()),
-                        ops=[ast.LtE() if side == "right" else ast.Lt()],
-                        comparators=[value])
+    below = ast.Compare(
+        left=ast.Subscript(value=_name(args[0].id), slice=_name(mid), ctx=ast.Load()),
+        ops=[ast.LtE() if side == "right" else ast.Lt()],
+        comparators=[value],
+    )
     search = [
         ast.Assign(targets=[_store(lo)], value=_const(0)),
         ast.Assign(targets=[_store(hi)], value=_const_or_name(sorted_shape[0])),
-        ast.While(test=ast.Compare(left=_name(lo), ops=[ast.Lt()], comparators=[_name(hi)]),
-                  body=[
-                      ast.Assign(targets=[_store(mid)],
-                                 value=ast.BinOp(left=ast.BinOp(left=_name(lo), op=ast.Add(), right=_name(hi)),
-                                                 op=ast.FloorDiv(),
-                                                 right=_const(2))),
-                      ast.If(test=below,
-                             body=[
-                                 ast.Assign(targets=[_store(lo)],
-                                            value=ast.BinOp(left=_name(mid), op=ast.Add(), right=_const(1)))
-                             ],
-                             orelse=[ast.Assign(targets=[_store(hi)], value=_name(mid))]),
-                  ],
-                  orelse=[]),
+        ast.While(
+            test=ast.Compare(left=_name(lo), ops=[ast.Lt()], comparators=[_name(hi)]),
+            body=[
+                ast.Assign(
+                    targets=[_store(mid)],
+                    value=ast.BinOp(
+                        left=ast.BinOp(left=_name(lo), op=ast.Add(), right=_name(hi)),
+                        op=ast.FloorDiv(),
+                        right=_const(2),
+                    ),
+                ),
+                ast.If(
+                    test=below,
+                    body=[
+                        ast.Assign(
+                            targets=[_store(lo)], value=ast.BinOp(left=_name(mid), op=ast.Add(), right=_const(1))
+                        )
+                    ],
+                    orelse=[ast.Assign(targets=[_store(hi)], value=_name(mid))],
+                ),
+            ],
+            orelse=[],
+        ),
         ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=index, ctx=ast.Store())], value=_name(lo)),
     ]
     return _wrap_for_loops(iters, list(values_shape), search)
@@ -4937,9 +5237,9 @@ def _flat_index(iters: List[str], shape) -> ast.expr:
     ``shape``."""
     idx: ast.expr = _name(iters[0])
     for k in range(1, len(iters)):
-        idx = ast.BinOp(left=ast.BinOp(left=idx, op=ast.Mult(), right=_const_or_name(shape[k])),
-                        op=ast.Add(),
-                        right=_name(iters[k]))
+        idx = ast.BinOp(
+            left=ast.BinOp(left=idx, op=ast.Mult(), right=_const_or_name(shape[k])), op=ast.Add(), right=_name(iters[k])
+        )
     return idx
 
 
@@ -4969,22 +5269,28 @@ def expand_roll(target, args, shape_table, kwargs=None) -> List[ast.stmt]:
     # double mod ``((i - shift) % ext + ext) % ext`` keeps the index in [0, ext)
     # for a negative shift too (C/Fortran ``%`` keeps the dividend's sign, so a
     # bare mod could go negative -> OOB read).
-    src_axis = ast.BinOp(left=ast.BinOp(left=ast.BinOp(left=ast.BinOp(left=_name(iters[axis]),
-                                                                      op=ast.Sub(),
-                                                                      right=shift),
-                                                       op=ast.Mod(),
-                                                       right=copy.deepcopy(extent)),
-                                        op=ast.Add(),
-                                        right=copy.deepcopy(extent)),
-                         op=ast.Mod(),
-                         right=copy.deepcopy(extent))
+    src_axis = ast.BinOp(
+        left=ast.BinOp(
+            left=ast.BinOp(
+                left=ast.BinOp(left=_name(iters[axis]), op=ast.Sub(), right=shift),
+                op=ast.Mod(),
+                right=copy.deepcopy(extent),
+            ),
+            op=ast.Add(),
+            right=copy.deepcopy(extent),
+        ),
+        op=ast.Mod(),
+        right=copy.deepcopy(extent),
+    )
     src_elts = [src_axis if i == axis else _name(iters[i]) for i in range(n)]
     dst_elts = [_name(it) for it in iters]
     src_sl = src_elts[0] if n == 1 else ast.Tuple(elts=src_elts, ctx=ast.Load())
     dst_sl = dst_elts[0] if n == 1 else ast.Tuple(elts=dst_elts, ctx=ast.Load())
     body = [
-        ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=dst_sl, ctx=ast.Store())],
-                   value=ast.Subscript(value=_name(a.id), slice=src_sl, ctx=ast.Load()))
+        ast.Assign(
+            targets=[ast.Subscript(value=_name(target.id), slice=dst_sl, ctx=ast.Store())],
+            value=ast.Subscript(value=_name(a.id), slice=src_sl, ctx=ast.Load()),
+        )
     ]
     return _wrap_for_loops(iters, list(shape), body)
 
@@ -4996,10 +5302,9 @@ def _axis_kwarg(kwargs):
     return None
 
 
-def expand_tril(target: ast.expr,
-                args: List[ast.expr],
-                shape_table: Dict[str, Tuple[str, ...]],
-                kwargs=None) -> List[ast.stmt]:
+def expand_tril(
+    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+) -> List[ast.stmt]:
     """``np.tril(A, k=0)`` -> lower-triangular copy (zero where ``j > i + k``).
 
     Mirrors :func:`expand_triu` with the complementary mask."""
@@ -5012,8 +5317,11 @@ def product_str(tokens: List[str]) -> str:
 
 
 def reshape_axis_groups(
-        src_shape: Tuple[str, ...], tgt_shape: Tuple[str, ...], aliases: Optional[Dict[str, str]],
-        shape_table: Optional[Dict[str, Tuple[str, ...]]]) -> Optional[List[Tuple[List[int], List[int]]]]:
+    src_shape: Tuple[str, ...],
+    tgt_shape: Tuple[str, ...],
+    aliases: Optional[Dict[str, str]],
+    shape_table: Optional[Dict[str, Tuple[str, ...]]],
+) -> Optional[List[Tuple[List[int], List[int]]]]:
     """Pair the two shapes of a C-order reshape into contiguous axis groups, or None.
 
     Axes that agree pairwise from the front and from the back are paired 1:1; whatever is left in
@@ -5030,8 +5338,11 @@ def reshape_axis_groups(
     while head < ns and head < nt and dims_agree(src_shape[head], tgt_shape[head], aliases, shape_table):
         head += 1
     tail = 0
-    while (tail < ns - head and tail < nt - head
-           and dims_agree(src_shape[ns - 1 - tail], tgt_shape[nt - 1 - tail], aliases, shape_table)):
+    while (
+        tail < ns - head
+        and tail < nt - head
+        and dims_agree(src_shape[ns - 1 - tail], tgt_shape[nt - 1 - tail], aliases, shape_table)
+    ):
         tail += 1
     groups: List[Tuple[List[int], List[int]]] = [([i], [i]) for i in range(head)]
     mid_src, mid_tgt = list(range(head, ns - tail)), list(range(head, nt - tail))
@@ -5043,8 +5354,13 @@ def reshape_axis_groups(
     return groups
 
 
-def reshape_grouped_copy(tgt_name: str, src_name: str, src_shape: Tuple[str, ...], tgt_shape: Tuple[str, ...],
-                         groups: List[Tuple[List[int], List[int]]]) -> Optional[List[ast.stmt]]:
+def reshape_grouped_copy(
+    tgt_name: str,
+    src_name: str,
+    src_shape: Tuple[str, ...],
+    tgt_shape: Tuple[str, ...],
+    groups: List[Tuple[List[int], List[int]]],
+) -> Optional[List[ast.stmt]]:
     """The copy nest for a reshape whose axes pair up (:func:`reshape_axis_groups`), or None.
 
     Iterates the finer side of every group, so each index on the coarser side is a linear
@@ -5084,7 +5400,7 @@ def reshape_grouped_copy(tgt_name: str, src_name: str, src_shape: Tuple[str, ...
             loops.append((it, fine_shape[ax]))
             its.append(it)
         for pos, (ax, it) in enumerate(zip(fine_axes, its)):
-            stride = product_str([fine_shape[a] for a in fine_axes[pos + 1:]])
+            stride = product_str([fine_shape[a] for a in fine_axes[pos + 1 :]])
             terms.append(it if stride == "1" else f"({it}) * ({stride})")
             (src_index if fine_is_src else tgt_index)[ax] = it
         (tgt_index if fine_is_src else src_index)[coarse_axes[0]] = " + ".join(terms)
@@ -5096,21 +5412,26 @@ def reshape_grouped_copy(tgt_name: str, src_name: str, src_shape: Tuple[str, ...
         sl = elts[0] if len(elts) == 1 else ast.Tuple(elts=elts, ctx=ast.Load())
         return ast.Subscript(value=_name(name), slice=sl, ctx=ctx)
 
-    inner: ast.stmt = ast.Assign(targets=[subscript(tgt_name, tgt_index, ast.Store())],
-                                 value=subscript(src_name, src_index, ast.Load()))
+    inner: ast.stmt = ast.Assign(
+        targets=[subscript(tgt_name, tgt_index, ast.Store())], value=subscript(src_name, src_index, ast.Load())
+    )
     for it, bound in reversed(loops):
-        inner = ast.For(target=_store(it),
-                        iter=ast.Call(func=_name("range"), args=[_const_or_name(bound)], keywords=[]),
-                        body=[inner],
-                        orelse=[])
+        inner = ast.For(
+            target=_store(it),
+            iter=ast.Call(func=_name("range"), args=[_const_or_name(bound)], keywords=[]),
+            body=[inner],
+            orelse=[],
+        )
     return [inner]
 
 
-def expand_reshape(target: ast.expr,
-                   args: List[ast.expr],
-                   shape_table: Dict[str, Tuple[str, ...]],
-                   kwargs=None,
-                   dim_aliases: Optional[Dict[str, str]] = None) -> List[ast.stmt]:
+def expand_reshape(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs=None,
+    dim_aliases: Optional[Dict[str, str]] = None,
+) -> List[ast.stmt]:
     """``out = np.reshape(A, (m, n, ...))`` -> rank-aware loop-nest copy.
 
     Two lowerings. When the two shapes pair up into contiguous axis groups
@@ -5137,14 +5458,18 @@ def expand_reshape(target: ast.expr,
         # only so existing kernels don't regress mid-migration.
         total = _shape_total_product(a_shape)
         body = [
-            ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=_name("__r"), ctx=ast.Store())],
-                       value=ast.Subscript(value=_name(a.id), slice=_name("__r"), ctx=ast.Load()))
+            ast.Assign(
+                targets=[ast.Subscript(value=_name(target.id), slice=_name("__r"), ctx=ast.Store())],
+                value=ast.Subscript(value=_name(a.id), slice=_name("__r"), ctx=ast.Load()),
+            )
         ]
         return [
-            ast.For(target=_store("__r"),
-                    iter=ast.Call(func=_name("range"), args=[total], keywords=[]),
-                    body=body,
-                    orelse=[])
+            ast.For(
+                target=_store("__r"),
+                iter=ast.Call(func=_name("range"), args=[total], keywords=[]),
+                body=body,
+                orelse=[],
+            )
         ]
 
     # Build per-axis loop iters for the target shape.
@@ -5157,7 +5482,7 @@ def expand_reshape(target: ast.expr,
     # flat position k of the other in the SAME order, so both the target flat
     # index and the source multi-index are computed in ``order``.
     order = "C"
-    for kw in (kwargs or []):
+    for kw in kwargs or []:
         if vars(kw).get("arg") == "order" and isinstance(kw.value, ast.Constant):
             order = str(kw.value.value).upper()
     fortran = order == "F"
@@ -5184,7 +5509,7 @@ def expand_reshape(target: ast.expr,
     def _stride(shape, i: int) -> str:
         # Stride of axis ``i`` = product of the FASTER-varying axes: the trailing
         # axes in C order, the leading axes in F order.
-        faster = list(shape[:i]) if fortran else list(shape[i + 1:])
+        faster = list(shape[:i]) if fortran else list(shape[i + 1 :])
         return _mul(*faster) if faster else "1"
 
     # Flat index of the current target iteration in ``order``.
@@ -5225,16 +5550,20 @@ def expand_reshape(target: ast.expr,
         rhs_slice = src_axes[0]
     else:
         rhs_slice = ast.Tuple(elts=src_axes, ctx=ast.Load())
-    inner = ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=lhs_slice, ctx=ast.Store())],
-                       value=ast.Subscript(value=_name(a.id), slice=rhs_slice, ctx=ast.Load()))
+    inner = ast.Assign(
+        targets=[ast.Subscript(value=_name(target.id), slice=lhs_slice, ctx=ast.Store())],
+        value=ast.Subscript(value=_name(a.id), slice=rhs_slice, ctx=ast.Load()),
+    )
 
     # Wrap in target-shape loop nest (outermost first).
     current: ast.stmt = inner
     for it, bound in zip(reversed(tgt_iters), reversed(list(tgt_shape))):
-        current = ast.For(target=_store(it),
-                          iter=ast.Call(func=_name("range"), args=[_const_or_name(bound)], keywords=[]),
-                          body=[current],
-                          orelse=[])
+        current = ast.For(
+            target=_store(it),
+            iter=ast.Call(func=_name("range"), args=[_const_or_name(bound)], keywords=[]),
+            body=[current],
+            orelse=[],
+        )
     return [current]
 
 
@@ -5246,17 +5575,28 @@ def _diff_operand(expr: ast.expr) -> Optional[ast.Name]:
     change which sum telescopes (or whether it does at all), so only the bare
     single-arg call is recognised.
     """
-    if not (isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute)
-            and isinstance(expr.func.value, ast.Name) and expr.func.value.id == "np" and expr.func.attr == "diff"):
+    if not (
+        isinstance(expr, ast.Call)
+        and isinstance(expr.func, ast.Attribute)
+        and isinstance(expr.func.value, ast.Name)
+        and expr.func.value.id == "np"
+        and expr.func.attr == "diff"
+    ):
         return None
     if len(expr.args) != 1 or not isinstance(expr.args[0], ast.Name) or expr.keywords:
         return None
     return expr.args[0]
 
 
-def _expand_repeat_prefix_sum(target: ast.expr, a: ast.Name, a_shape: Tuple[str, ...], k_arg: ast.expr,
-                              shape_table: Dict[str, Tuple[str,
-                                                           ...]], local_dtypes, fresh_local_allocs) -> List[ast.stmt]:
+def _expand_repeat_prefix_sum(
+    target: ast.expr,
+    a: ast.Name,
+    a_shape: Tuple[str, ...],
+    k_arg: ast.expr,
+    shape_table: Dict[str, Tuple[str, ...]],
+    local_dtypes,
+    fresh_local_allocs,
+) -> List[ast.stmt]:
     """Per-element ``np.repeat`` count -- the destination offset is the
     RUNNING prefix sum of the counts, not ``outer * K`` (that formula reads
     the count array as a scalar multiplier and is wrong the moment two counts
@@ -5280,50 +5620,66 @@ def _expand_repeat_prefix_sum(target: ast.expr, a: ast.Name, a_shape: Tuple[str,
         raise NotImplementedError("np.repeat with a per-element count needs a 1-D source")
     diff_src = _diff_operand(k_arg)
     if diff_src is None:
-        raise NotImplementedError("np.repeat with a per-element count needs a derivable sum "
-                                  f"(got {ast.unparse(k_arg)}); only np.diff(p) telescopes to p[-1] - p[0]")
+        raise NotImplementedError(
+            "np.repeat with a per-element count needs a derivable sum "
+            f"(got {ast.unparse(k_arg)}); only np.diff(p) telescopes to p[-1] - p[0]"
+        )
     p_shape = shape_table.get(diff_src.id)
     if not p_shape or len(p_shape) != 1:
         raise NotImplementedError("np.repeat: np.diff operand shape unknown")
     last_idx = ast.BinOp(left=_const_or_name(p_shape[0]), op=ast.Sub(), right=_const(1))
-    total = ast.BinOp(left=ast.Subscript(value=copy.deepcopy(diff_src), slice=last_idx, ctx=ast.Load()),
-                      op=ast.Sub(),
-                      right=ast.Subscript(value=copy.deepcopy(diff_src), slice=_const(0), ctx=ast.Load()))
+    total = ast.BinOp(
+        left=ast.Subscript(value=copy.deepcopy(diff_src), slice=last_idx, ctx=ast.Load()),
+        op=ast.Sub(),
+        right=ast.Subscript(value=copy.deepcopy(diff_src), slice=_const(0), ctx=ast.Load()),
+    )
     extent_tok = ast.unparse(total)
-    shape_table[target.id] = (extent_tok, )
+    shape_table[target.id] = (extent_tok,)
     if fresh_local_allocs is not None:
-        fresh_local_allocs[target.id] = (extent_tok, )
+        fresh_local_allocs[target.id] = (extent_tok,)
     pos, src_iter, cnt_iter = "__rep_pos0", "__rep_i0", "__rep_r0"
     if local_dtypes is not None:
         local_dtypes[pos] = "int64"
-    count_at_i = ast.BinOp(left=ast.Subscript(value=copy.deepcopy(diff_src),
-                                              slice=ast.BinOp(left=_name(src_iter), op=ast.Add(), right=_const(1)),
-                                              ctx=ast.Load()),
-                           op=ast.Sub(),
-                           right=ast.Subscript(value=copy.deepcopy(diff_src), slice=_name(src_iter), ctx=ast.Load()))
+    count_at_i = ast.BinOp(
+        left=ast.Subscript(
+            value=copy.deepcopy(diff_src),
+            slice=ast.BinOp(left=_name(src_iter), op=ast.Add(), right=_const(1)),
+            ctx=ast.Load(),
+        ),
+        op=ast.Sub(),
+        right=ast.Subscript(value=copy.deepcopy(diff_src), slice=_name(src_iter), ctx=ast.Load()),
+    )
     body = [
-        ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=_name(pos), ctx=ast.Store())],
-                   value=ast.Subscript(value=copy.deepcopy(a), slice=_name(src_iter), ctx=ast.Load())),
+        ast.Assign(
+            targets=[ast.Subscript(value=_name(target.id), slice=_name(pos), ctx=ast.Store())],
+            value=ast.Subscript(value=copy.deepcopy(a), slice=_name(src_iter), ctx=ast.Load()),
+        ),
         ast.AugAssign(target=_store(pos), op=ast.Add(), value=_const(1)),
     ]
-    inner_loop = ast.For(target=_store(cnt_iter),
-                         iter=ast.Call(func=_name("range"), args=[count_at_i], keywords=[]),
-                         body=body,
-                         orelse=[])
-    outer_loop = ast.For(target=_store(src_iter),
-                         iter=ast.Call(func=_name("range"), args=[_const_or_name(a_shape[0])], keywords=[]),
-                         body=[inner_loop],
-                         orelse=[])
+    inner_loop = ast.For(
+        target=_store(cnt_iter),
+        iter=ast.Call(func=_name("range"), args=[count_at_i], keywords=[]),
+        body=body,
+        orelse=[],
+    )
+    outer_loop = ast.For(
+        target=_store(src_iter),
+        iter=ast.Call(func=_name("range"), args=[_const_or_name(a_shape[0])], keywords=[]),
+        body=[inner_loop],
+        orelse=[],
+    )
     init_pos = ast.Assign(targets=[_store(pos)], value=_const(0))
     return [_alloc_marker(target.id), init_pos, outer_loop]
 
 
-def expand_repeat(target: ast.expr,
-                  args: List[ast.expr],
-                  shape_table: Dict[str, Tuple[str, ...]],
-                  kwargs=None,
-                  local_dtypes=None,
-                  fresh_local_allocs=None) -> List[ast.stmt]:
+def expand_repeat(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs=None,
+    local_dtypes=None,
+    fresh_local_allocs=None,
+) -> List[ast.stmt]:
     """``out = np.repeat(A, K, axis=N)`` -> tile-and-write loop nest. Source
     ``A`` of shape ``(s0, ..., sN, ..., sM-1)`` becomes ``out`` of shape
     ``(s0, ..., sN*K, ..., sM-1)``. Per-element::
@@ -5367,34 +5723,42 @@ def expand_repeat(target: ast.expr,
         iters = [_make_iter_name("__rp", i) for i in range(n_dim)]
         rep_iter = _make_iter_name("__rep", 0)
         # source subscript
-        src_slot = (_name(iters[0]) if n_dim == 1 else ast.Tuple(elts=[_name(i) for i in iters], ctx=ast.Load()))
+        src_slot = _name(iters[0]) if n_dim == 1 else ast.Tuple(elts=[_name(i) for i in iters], ctx=ast.Load())
         # destination flat index = ((((i0)*s1 + i1)*s2 + ...) * K + r)
         flat_index: ast.expr = _name(iters[0])
         for k in range(1, n_dim):
-            flat_index = ast.BinOp(left=ast.BinOp(left=flat_index, op=ast.Mult(), right=_const_or_name(a_shape[k])),
-                                   op=ast.Add(),
-                                   right=_name(iters[k]))
-        dst_index = ast.BinOp(left=ast.BinOp(left=flat_index, op=ast.Mult(), right=k_arg),
-                              op=ast.Add(),
-                              right=_name(rep_iter))
+            flat_index = ast.BinOp(
+                left=ast.BinOp(left=flat_index, op=ast.Mult(), right=_const_or_name(a_shape[k])),
+                op=ast.Add(),
+                right=_name(iters[k]),
+            )
+        dst_index = ast.BinOp(
+            left=ast.BinOp(left=flat_index, op=ast.Mult(), right=k_arg), op=ast.Add(), right=_name(rep_iter)
+        )
         body = [
-            ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=dst_index, ctx=ast.Store())],
-                       value=ast.Subscript(value=_name(a.id), slice=src_slot, ctx=ast.Load()))
+            ast.Assign(
+                targets=[ast.Subscript(value=_name(target.id), slice=dst_index, ctx=ast.Store())],
+                value=ast.Subscript(value=_name(a.id), slice=src_slot, ctx=ast.Load()),
+            )
         ]
         # Wrap with the source loops and the repetition loop deepest.
         out = body
         out = [
-            ast.For(target=_store(rep_iter),
-                    iter=ast.Call(func=_name("range"), args=[k_arg], keywords=[]),
-                    body=out,
-                    orelse=[])
+            ast.For(
+                target=_store(rep_iter),
+                iter=ast.Call(func=_name("range"), args=[k_arg], keywords=[]),
+                body=out,
+                orelse=[],
+            )
         ]
         for var, bound in zip(reversed(iters), reversed(a_shape)):
             out = [
-                ast.For(target=_store(var),
-                        iter=ast.Call(func=_name("range"), args=[_const_or_name(bound)], keywords=[]),
-                        body=out,
-                        orelse=[])
+                ast.For(
+                    target=_store(var),
+                    iter=ast.Call(func=_name("range"), args=[_const_or_name(bound)], keywords=[]),
+                    body=out,
+                    orelse=[],
+                )
             ]
         return out
     # Axis-aware repeat: walk every axis; for axis ``N`` the dest
@@ -5411,31 +5775,37 @@ def expand_repeat(target: ast.expr,
     for i in range(n_dim):
         if i == axis:
             dst_elts.append(
-                ast.BinOp(left=ast.BinOp(left=_name(iters[i]), op=ast.Mult(), right=k_arg),
-                          op=ast.Add(),
-                          right=_name(rep_iter)))
+                ast.BinOp(
+                    left=ast.BinOp(left=_name(iters[i]), op=ast.Mult(), right=k_arg),
+                    op=ast.Add(),
+                    right=_name(rep_iter),
+                )
+            )
         else:
             dst_elts.append(_name(iters[i]))
-    src_slot = (src_elts[0] if n_dim == 1 else ast.Tuple(elts=src_elts, ctx=ast.Load()))
-    dst_slot = (dst_elts[0] if n_dim == 1 else ast.Tuple(elts=dst_elts, ctx=ast.Load()))
+    src_slot = src_elts[0] if n_dim == 1 else ast.Tuple(elts=src_elts, ctx=ast.Load())
+    dst_slot = dst_elts[0] if n_dim == 1 else ast.Tuple(elts=dst_elts, ctx=ast.Load())
     body = [
-        ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=dst_slot, ctx=ast.Store())],
-                   value=ast.Subscript(value=_name(a.id), slice=src_slot, ctx=ast.Load()))
+        ast.Assign(
+            targets=[ast.Subscript(value=_name(target.id), slice=dst_slot, ctx=ast.Store())],
+            value=ast.Subscript(value=_name(a.id), slice=src_slot, ctx=ast.Load()),
+        )
     ]
     # Innermost = repetition loop.
     out = body
     out = [
-        ast.For(target=_store(rep_iter),
-                iter=ast.Call(func=_name("range"), args=[k_arg], keywords=[]),
-                body=out,
-                orelse=[])
+        ast.For(
+            target=_store(rep_iter), iter=ast.Call(func=_name("range"), args=[k_arg], keywords=[]), body=out, orelse=[]
+        )
     ]
     for var, bound in zip(reversed(iters), reversed(a_shape)):
         out = [
-            ast.For(target=_store(var),
-                    iter=ast.Call(func=_name("range"), args=[_const_or_name(bound)], keywords=[]),
-                    body=out,
-                    orelse=[])
+            ast.For(
+                target=_store(var),
+                iter=ast.Call(func=_name("range"), args=[_const_or_name(bound)], keywords=[]),
+                body=out,
+                orelse=[],
+            )
         ]
     return out
 
@@ -5471,10 +5841,9 @@ def _classify_norm_ord(node: Optional[ast.expr]) -> Optional[str]:
     return None
 
 
-def expand_linalg_norm(target: ast.expr,
-                       args: List[ast.expr],
-                       shape_table: Dict[str, Tuple[str, ...]],
-                       kwargs=None) -> List[ast.stmt]:
+def expand_linalg_norm(
+    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+) -> List[ast.stmt]:
     """``s = np.linalg.norm(v[, ord, axis=None, keepdims=False])``. numpy puts
     ``ord`` SECOND (positional) -- unlike a reduction, whose second positional
     is ``axis`` -- so it's parsed explicitly before delegating axis/keepdims
@@ -5515,30 +5884,31 @@ def expand_linalg_norm(target: ast.expr,
                 ast.AugAssign(target=_store(target.id), op=ast.Add(), value=ast.BinOp(left=sa, op=ast.Mult(), right=sa))
             ]
             loops = _wrap_for_loops(iters, extent, inner)
-            finish = ast.Assign(targets=[_store(target.id)],
-                                value=ast.Call(func=_name("sqrt"), args=[_name(target.id)], keywords=[]))
+            finish = ast.Assign(
+                targets=[_store(target.id)], value=ast.Call(func=_name("sqrt"), args=[_name(target.id)], keywords=[])
+            )
             return [acc_init, *loops, finish]
         # Axis-aware -- reduce per axis kept, sum-of-squares, then sqrt.
         sq_op = lambda acc, x: ast.BinOp(left=acc, op=ast.Add(), right=ast.BinOp(left=x, op=ast.Mult(), right=x))
-        sqrt_post = lambda lvalue, divisor: ast.Assign(targets=[
-            lvalue
-            if isinstance(lvalue, ast.Name) else ast.Subscript(value=lvalue.value, slice=lvalue.slice, ctx=ast.Store())
-        ],
-                                                       value=ast.Call(func=_name("sqrt"),
-                                                                      args=[
-                                                                          lvalue if isinstance(lvalue, ast.Name) else
-                                                                          ast.Subscript(value=lvalue.value,
-                                                                                        slice=lvalue.slice,
-                                                                                        ctx=ast.Load())
-                                                                      ],
-                                                                      keywords=[]))
-        return _expand_axis_reduction(target,
-                                      reduction_args,
-                                      reduction_kwargs,
-                                      shape_table,
-                                      init=_const(0.0),
-                                      op_fn=sq_op,
-                                      post_fn=sqrt_post)
+        sqrt_post = lambda lvalue, divisor: ast.Assign(
+            targets=[
+                lvalue
+                if isinstance(lvalue, ast.Name)
+                else ast.Subscript(value=lvalue.value, slice=lvalue.slice, ctx=ast.Store())
+            ],
+            value=ast.Call(
+                func=_name("sqrt"),
+                args=[
+                    lvalue
+                    if isinstance(lvalue, ast.Name)
+                    else ast.Subscript(value=lvalue.value, slice=lvalue.slice, ctx=ast.Load())
+                ],
+                keywords=[],
+            ),
+        )
+        return _expand_axis_reduction(
+            target, reduction_args, reduction_kwargs, shape_table, init=_const(0.0), op_fn=sq_op, post_fn=sqrt_post
+        )
 
     # ``ord`` in {1, inf}. A 1-D operand is a vector norm (sum|v| / max|v|); a
     # 2-D operand is a matrix norm (ord=1 = max column abs-sum, ord=inf = max row
@@ -5557,12 +5927,14 @@ def expand_linalg_norm(target: ast.expr,
             inner = [ast.AugAssign(target=_store(target.id), op=ast.Add(), value=abs_sa)]
         else:  # inf: running max of |v| (|v| >= 0, so 0 is a safe max identity)
             inner = [
-                ast.Assign(targets=[_store(target.id)],
-                           value=ast.IfExp(test=ast.Compare(left=copy.deepcopy(abs_sa),
-                                                            ops=[ast.Gt()],
-                                                            comparators=[_name(target.id)]),
-                                           body=abs_sa,
-                                           orelse=_name(target.id)))
+                ast.Assign(
+                    targets=[_store(target.id)],
+                    value=ast.IfExp(
+                        test=ast.Compare(left=copy.deepcopy(abs_sa), ops=[ast.Gt()], comparators=[_name(target.id)]),
+                        body=abs_sa,
+                        orelse=_name(target.id),
+                    ),
+                )
             ]
         loops = _wrap_for_loops([it], extent, inner)
         return [acc_init, *loops]
@@ -5572,31 +5944,39 @@ def expand_linalg_norm(target: ast.expr,
         # ord=inf sums across rows (outer i); the element a[i, j] is the same.
         m_ext, n_ext = extent
         i_it, j_it, csum = "__nmi", "__nmj", "__nmc"
-        elem = ast.Call(func=_name("abs"),
-                        args=[
-                            ast.Subscript(value=_name(a.id),
-                                          slice=ast.Tuple(elts=[_name(i_it), _name(j_it)], ctx=ast.Load()),
-                                          ctx=ast.Load())
-                        ],
-                        keywords=[])
+        elem = ast.Call(
+            func=_name("abs"),
+            args=[
+                ast.Subscript(
+                    value=_name(a.id), slice=ast.Tuple(elts=[_name(i_it), _name(j_it)], ctx=ast.Load()), ctx=ast.Load()
+                )
+            ],
+            keywords=[],
+        )
         if kind == "l1":  # outer over columns j, inner over rows i
             outer_it, outer_bound, inner_it, inner_bound = j_it, n_ext, i_it, m_ext
         else:  # inf: outer over rows i, inner over columns j
             outer_it, outer_bound, inner_it, inner_bound = i_it, m_ext, j_it, n_ext
-        inner_loop = ast.For(target=_store(inner_it),
-                             iter=ast.Call(func=_name("range"), args=[copy.deepcopy(inner_bound)], keywords=[]),
-                             body=[ast.AugAssign(target=_store(csum), op=ast.Add(), value=elem)],
-                             orelse=[])
-        keep_max = ast.Assign(targets=[_store(target.id)],
-                              value=ast.IfExp(test=ast.Compare(left=_name(csum),
-                                                               ops=[ast.Gt()],
-                                                               comparators=[_name(target.id)]),
-                                              body=_name(csum),
-                                              orelse=_name(target.id)))
-        outer_loop = ast.For(target=_store(outer_it),
-                             iter=ast.Call(func=_name("range"), args=[copy.deepcopy(outer_bound)], keywords=[]),
-                             body=[ast.Assign(targets=[_store(csum)], value=_const(0.0)), inner_loop, keep_max],
-                             orelse=[])
+        inner_loop = ast.For(
+            target=_store(inner_it),
+            iter=ast.Call(func=_name("range"), args=[copy.deepcopy(inner_bound)], keywords=[]),
+            body=[ast.AugAssign(target=_store(csum), op=ast.Add(), value=elem)],
+            orelse=[],
+        )
+        keep_max = ast.Assign(
+            targets=[_store(target.id)],
+            value=ast.IfExp(
+                test=ast.Compare(left=_name(csum), ops=[ast.Gt()], comparators=[_name(target.id)]),
+                body=_name(csum),
+                orelse=_name(target.id),
+            ),
+        )
+        outer_loop = ast.For(
+            target=_store(outer_it),
+            iter=ast.Call(func=_name("range"), args=[copy.deepcopy(outer_bound)], keywords=[]),
+            body=[ast.Assign(targets=[_store(csum)], value=_const(0.0)), inner_loop, keep_max],
+            orelse=[],
+        )
         return [ast.Assign(targets=[_store(target.id)], value=_const(0.0)), outer_loop]
     raise NotImplementedError("np.linalg.norm: ord=1/inf supported for a 1-D or 2-D operand")
 
@@ -5607,16 +5987,20 @@ def _guarded_div(num: ast.expr, denom: ast.expr) -> ast.expr:
     early break leaves a singular ``H``) makes a diagonal pivot exactly 0;
     numpy's SVD-based ``lstsq`` still returns a finite minimum-norm solution,
     but the unguarded division would emit NaN/inf. Inert for a full-rank system."""
-    return ast.IfExp(test=ast.Compare(left=copy.deepcopy(denom), ops=[ast.NotEq()], comparators=[_const(0.0)]),
-                     body=ast.BinOp(left=num, op=ast.Div(), right=denom),
-                     orelse=_const(0.0))
+    return ast.IfExp(
+        test=ast.Compare(left=copy.deepcopy(denom), ops=[ast.NotEq()], comparators=[_const(0.0)]),
+        body=ast.BinOp(left=num, op=ast.Div(), right=denom),
+        orelse=_const(0.0),
+    )
 
 
-def expand_lstsq(target: ast.expr,
-                 args: List[ast.expr],
-                 shape_table: Dict[str, Tuple[str, ...]],
-                 kwargs=None,
-                 fresh_local_allocs=None) -> List[ast.stmt]:
+def expand_lstsq(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs=None,
+    fresh_local_allocs=None,
+) -> List[ast.stmt]:
     """``y = np.linalg.lstsq(A, b, rcond=...)[0]`` -> in-place Gaussian
     elimination with partial pivoting, writing the solution into ``target``.
 
@@ -5655,23 +6039,29 @@ def expand_lstsq(target: ast.expr,
         # min(max_iter, n)``), is deferred-malloc'd here. Without it the NULL
         # pointer is dereferenced in the fill loop below.
         pre.append(
-            ast.Assign(targets=[_store(b_name)],
-                       value=ast.Call(func=_name("__hpcagent_bench_zeros__"), args=[], keywords=[])))
+            ast.Assign(
+                targets=[_store(b_name)], value=ast.Call(func=_name("__hpcagent_bench_zeros__"), args=[], keywords=[])
+            )
+        )
         _elem = _scalarize_at_iters(b_node, [_name(_bi)], shape_table)
         pre.append(
-            ast.For(target=_store(_bi),
-                    iter=ast.Call(func=_name("range"), args=[a_size], keywords=[]),
-                    body=[
-                        ast.Assign(targets=[ast.Subscript(value=_name(b_name), slice=_name(_bi), ctx=ast.Store())],
-                                   value=_elem)
-                    ],
-                    orelse=[]))
+            ast.For(
+                target=_store(_bi),
+                iter=ast.Call(func=_name("range"), args=[a_size], keywords=[]),
+                body=[
+                    ast.Assign(
+                        targets=[ast.Subscript(value=_name(b_name), slice=_name(_bi), ctx=ast.Store())], value=_elem
+                    )
+                ],
+                orelse=[],
+            )
+        )
         if fresh_local_allocs is not None:
-            fresh_local_allocs[b_name] = (ast.unparse(a_size), )
+            fresh_local_allocs[b_name] = (ast.unparse(a_size),)
     # The solution vector ``target`` is written element-wise by back
     # substitution; register its shape so the caller allocates it.
     if isinstance(target, ast.Name):
-        shape_table[target.id] = (ast.unparse(a_size), )
+        shape_table[target.id] = (ast.unparse(a_size),)
     # M = A.shape[0]
     p_iter = "__lq_p"
     r_iter = "__lq_r"
@@ -5695,32 +6085,39 @@ def expand_lstsq(target: ast.expr,
     #       for c in p+1..M: A[r,c] -= factor * A[p,c]
     #       b[r] -= factor * b[p]
     inner_c = [
-        ast.AugAssign(target=ast.Subscript(value=_name(a_name),
-                                           slice=ast.Tuple(elts=[r_name, c_name], ctx=ast.Load()),
-                                           ctx=ast.Store()),
-                      op=ast.Sub(),
-                      value=ast.BinOp(left=_name(factor), op=ast.Mult(), right=a_pc))
+        ast.AugAssign(
+            target=ast.Subscript(
+                value=_name(a_name), slice=ast.Tuple(elts=[r_name, c_name], ctx=ast.Load()), ctx=ast.Store()
+            ),
+            op=ast.Sub(),
+            value=ast.BinOp(left=_name(factor), op=ast.Mult(), right=a_pc),
+        )
     ]
-    inner_c_for = ast.For(target=_store(c_iter),
-                          iter=ast.Call(func=_name("range"),
-                                        args=[ast.BinOp(left=p_name, op=ast.Add(), right=_const(1)), a_size],
-                                        keywords=[]),
-                          body=inner_c,
-                          orelse=[])
+    inner_c_for = ast.For(
+        target=_store(c_iter),
+        iter=ast.Call(
+            func=_name("range"), args=[ast.BinOp(left=p_name, op=ast.Add(), right=_const(1)), a_size], keywords=[]
+        ),
+        body=inner_c,
+        orelse=[],
+    )
     factor_assign = ast.Assign(targets=[_store(factor)], value=_guarded_div(a_rp, a_pp))
-    b_aug = ast.AugAssign(target=ast.Subscript(value=_name(b_name), slice=r_name, ctx=ast.Store()),
-                          op=ast.Sub(),
-                          value=ast.BinOp(left=_name(factor), op=ast.Mult(), right=b_p))
-    inner_r = ast.For(target=_store(r_iter),
-                      iter=ast.Call(func=_name("range"),
-                                    args=[ast.BinOp(left=p_name, op=ast.Add(), right=_const(1)), a_size],
-                                    keywords=[]),
-                      body=[factor_assign, inner_c_for, b_aug],
-                      orelse=[])
-    fwd = ast.For(target=_store(p_iter),
-                  iter=ast.Call(func=_name("range"), args=[a_size], keywords=[]),
-                  body=[inner_r],
-                  orelse=[])
+    b_aug = ast.AugAssign(
+        target=ast.Subscript(value=_name(b_name), slice=r_name, ctx=ast.Store()),
+        op=ast.Sub(),
+        value=ast.BinOp(left=_name(factor), op=ast.Mult(), right=b_p),
+    )
+    inner_r = ast.For(
+        target=_store(r_iter),
+        iter=ast.Call(
+            func=_name("range"), args=[ast.BinOp(left=p_name, op=ast.Add(), right=_const(1)), a_size], keywords=[]
+        ),
+        body=[factor_assign, inner_c_for, b_aug],
+        orelse=[],
+    )
+    fwd = ast.For(
+        target=_store(p_iter), iter=ast.Call(func=_name("range"), args=[a_size], keywords=[]), body=[inner_r], orelse=[]
+    )
     # Back substitution:
     #   for r in M-1..0 (reverse):
     #     sum = b[r]
@@ -5731,23 +6128,27 @@ def expand_lstsq(target: ast.expr,
     bs_inner = [
         ast.AugAssign(target=_store(sum_v), op=ast.Sub(), value=ast.BinOp(left=a_rcol, op=ast.Mult(), right=y_c))
     ]
-    bs_inner_for = ast.For(target=_store(c_iter),
-                           iter=ast.Call(func=_name("range"),
-                                         args=[ast.BinOp(left=r_name, op=ast.Add(), right=_const(1)), a_size],
-                                         keywords=[]),
-                           body=bs_inner,
-                           orelse=[])
+    bs_inner_for = ast.For(
+        target=_store(c_iter),
+        iter=ast.Call(
+            func=_name("range"), args=[ast.BinOp(left=r_name, op=ast.Add(), right=_const(1)), a_size], keywords=[]
+        ),
+        body=bs_inner,
+        orelse=[],
+    )
     bs_sum_init = ast.Assign(targets=[_store(sum_v)], value=b_r)
     bs_y_assign = ast.Assign(targets=[y_r], value=_guarded_div(_name(sum_v), a_rr))
     # Reverse iteration via ``range(M-1, -1, -1)``.
-    bs = ast.For(target=_store(r_iter),
-                 iter=ast.Call(func=_name("range"),
-                               args=[ast.BinOp(left=a_size, op=ast.Sub(), right=_const(1)),
-                                     _const(-1),
-                                     _const(-1)],
-                               keywords=[]),
-                 body=[bs_sum_init, bs_inner_for, bs_y_assign],
-                 orelse=[])
+    bs = ast.For(
+        target=_store(r_iter),
+        iter=ast.Call(
+            func=_name("range"),
+            args=[ast.BinOp(left=a_size, op=ast.Sub(), right=_const(1)), _const(-1), _const(-1)],
+            keywords=[],
+        ),
+        body=[bs_sum_init, bs_inner_for, bs_y_assign],
+        orelse=[],
+    )
     return pre + [fwd, bs]
 
 
@@ -5802,10 +6203,16 @@ def _lstsq_index2d(name: str, i: ast.expr, j: ast.expr, base) -> ast.Subscript:
     """Build ``name[i, j]`` (or ``name[i + base0, j + base1]`` when
     a non-zero base is present)."""
     if base is not None:
-        slot_i = (i if (isinstance(base[0], ast.Constant) and base[0].value == 0) else ast.BinOp(
-            left=i, op=ast.Add(), right=base[0]))
-        slot_j = (j if (isinstance(base[1], ast.Constant) and base[1].value == 0) else ast.BinOp(
-            left=j, op=ast.Add(), right=base[1]))
+        slot_i = (
+            i
+            if (isinstance(base[0], ast.Constant) and base[0].value == 0)
+            else ast.BinOp(left=i, op=ast.Add(), right=base[0])
+        )
+        slot_j = (
+            j
+            if (isinstance(base[1], ast.Constant) and base[1].value == 0)
+            else ast.BinOp(left=j, op=ast.Add(), right=base[1])
+        )
     else:
         slot_i, slot_j = i, j
     return ast.Subscript(value=_name(name), slice=ast.Tuple(elts=[slot_i, slot_j], ctx=ast.Load()), ctx=ast.Load())
@@ -5819,10 +6226,12 @@ def _lstsq_index1d(name: str, i: ast.expr, base) -> ast.Subscript:
     return ast.Subscript(value=_name(name), slice=slot, ctx=ast.Load())
 
 
-def expand_cholesky(target: ast.expr,
-                    args: List[ast.expr],
-                    shape_table: Dict[str, Tuple[str, ...]],
-                    local_dtypes: Optional[Dict[str, str]] = None) -> List[ast.stmt]:
+def expand_cholesky(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    local_dtypes: Optional[Dict[str, str]] = None,
+) -> List[ast.stmt]:
     """``L = np.linalg.cholesky(A)`` -> Cholesky-Banachiewicz triple loop.
     Computes ``L`` such that ``L @ L.conj().T == A`` for Hermitian positive-
     definite ``A`` (the conjugate is a no-op for real matrices). Naive O(n^3),
@@ -5853,116 +6262,168 @@ def expand_cholesky(target: ast.expr,
     n = a_shape[0]
     n_ast = _const_or_name(n)
     inner_k = [
-        ast.AugAssign(target=_store("__s"),
-                      op=ast.Sub(),
-                      value=ast.BinOp(
-                          left=ast.Subscript(value=_name(target.id),
-                                             slice=ast.Tuple(elts=[_name("__j"), _name("__k")], ctx=ast.Load()),
-                                             ctx=ast.Load()),
-                          op=ast.Mult(),
-                          right=_attr_call("np", "conj", [
-                              ast.Subscript(value=_name(target.id),
-                                            slice=ast.Tuple(elts=[_name("__j"), _name("__k")], ctx=ast.Load()),
-                                            ctx=ast.Load())
-                          ]))),
+        ast.AugAssign(
+            target=_store("__s"),
+            op=ast.Sub(),
+            value=ast.BinOp(
+                left=ast.Subscript(
+                    value=_name(target.id),
+                    slice=ast.Tuple(elts=[_name("__j"), _name("__k")], ctx=ast.Load()),
+                    ctx=ast.Load(),
+                ),
+                op=ast.Mult(),
+                right=_attr_call(
+                    "np",
+                    "conj",
+                    [
+                        ast.Subscript(
+                            value=_name(target.id),
+                            slice=ast.Tuple(elts=[_name("__j"), _name("__k")], ctx=ast.Load()),
+                            ctx=ast.Load(),
+                        )
+                    ],
+                ),
+            ),
+        ),
     ]
     inner_i = [
-        ast.Assign(targets=[_store("__s")],
-                   value=ast.Subscript(value=_name(a.id),
-                                       slice=ast.Tuple(elts=[_name("__i"), _name("__j")], ctx=ast.Load()),
-                                       ctx=ast.Load())),
-        ast.For(target=_store("__k"),
-                iter=ast.Call(func=_name("range"), args=[_name("__j")], keywords=[]),
-                body=[
-                    ast.AugAssign(
-                        target=_store("__s"),
-                        op=ast.Sub(),
-                        value=ast.BinOp(
-                            left=ast.Subscript(value=_name(target.id),
-                                               slice=ast.Tuple(elts=[_name("__i"), _name("__k")], ctx=ast.Load()),
-                                               ctx=ast.Load()),
-                            op=ast.Mult(),
-                            right=_attr_call("np", "conj", [
-                                ast.Subscript(value=_name(target.id),
-                                              slice=ast.Tuple(elts=[_name("__j"), _name("__k")], ctx=ast.Load()),
-                                              ctx=ast.Load())
-                            ])))
-                ],
-                orelse=[]),
-        ast.Assign(targets=[
-            ast.Subscript(value=_name(target.id),
-                          slice=ast.Tuple(elts=[_name("__i"), _name("__j")], ctx=ast.Load()),
-                          ctx=ast.Store())
-        ],
-                   value=ast.BinOp(left=_name("__s"),
-                                   op=ast.Div(),
-                                   right=ast.Subscript(value=_name(target.id),
-                                                       slice=ast.Tuple(elts=[_name("__j"), _name("__j")],
-                                                                       ctx=ast.Load()),
-                                                       ctx=ast.Load()))),
+        ast.Assign(
+            targets=[_store("__s")],
+            value=ast.Subscript(
+                value=_name(a.id), slice=ast.Tuple(elts=[_name("__i"), _name("__j")], ctx=ast.Load()), ctx=ast.Load()
+            ),
+        ),
+        ast.For(
+            target=_store("__k"),
+            iter=ast.Call(func=_name("range"), args=[_name("__j")], keywords=[]),
+            body=[
+                ast.AugAssign(
+                    target=_store("__s"),
+                    op=ast.Sub(),
+                    value=ast.BinOp(
+                        left=ast.Subscript(
+                            value=_name(target.id),
+                            slice=ast.Tuple(elts=[_name("__i"), _name("__k")], ctx=ast.Load()),
+                            ctx=ast.Load(),
+                        ),
+                        op=ast.Mult(),
+                        right=_attr_call(
+                            "np",
+                            "conj",
+                            [
+                                ast.Subscript(
+                                    value=_name(target.id),
+                                    slice=ast.Tuple(elts=[_name("__j"), _name("__k")], ctx=ast.Load()),
+                                    ctx=ast.Load(),
+                                )
+                            ],
+                        ),
+                    ),
+                )
+            ],
+            orelse=[],
+        ),
+        ast.Assign(
+            targets=[
+                ast.Subscript(
+                    value=_name(target.id),
+                    slice=ast.Tuple(elts=[_name("__i"), _name("__j")], ctx=ast.Load()),
+                    ctx=ast.Store(),
+                )
+            ],
+            value=ast.BinOp(
+                left=_name("__s"),
+                op=ast.Div(),
+                right=ast.Subscript(
+                    value=_name(target.id),
+                    slice=ast.Tuple(elts=[_name("__j"), _name("__j")], ctx=ast.Load()),
+                    ctx=ast.Load(),
+                ),
+            ),
+        ),
     ]
     j_body = [
-        ast.Assign(targets=[_store("__s")],
-                   value=ast.Subscript(value=_name(a.id),
-                                       slice=ast.Tuple(elts=[_name("__j"), _name("__j")], ctx=ast.Load()),
-                                       ctx=ast.Load())),
-        ast.For(target=_store("__k"),
-                iter=ast.Call(func=_name("range"), args=[_name("__j")], keywords=[]),
-                body=inner_k,
-                orelse=[]),
-        ast.Assign(targets=[
-            ast.Subscript(value=_name(target.id),
-                          slice=ast.Tuple(elts=[_name("__j"), _name("__j")], ctx=ast.Load()),
-                          ctx=ast.Store())
-        ],
-                   value=ast.Call(func=_name("sqrt"), args=[_name("__s")], keywords=[])),
-        ast.For(target=_store("__i"),
-                iter=ast.Call(func=_name("range"),
-                              args=[ast.BinOp(left=_name("__j"), op=ast.Add(), right=_const(1)), n_ast],
-                              keywords=[]),
-                body=inner_i,
-                orelse=[]),
+        ast.Assign(
+            targets=[_store("__s")],
+            value=ast.Subscript(
+                value=_name(a.id), slice=ast.Tuple(elts=[_name("__j"), _name("__j")], ctx=ast.Load()), ctx=ast.Load()
+            ),
+        ),
+        ast.For(
+            target=_store("__k"),
+            iter=ast.Call(func=_name("range"), args=[_name("__j")], keywords=[]),
+            body=inner_k,
+            orelse=[],
+        ),
+        ast.Assign(
+            targets=[
+                ast.Subscript(
+                    value=_name(target.id),
+                    slice=ast.Tuple(elts=[_name("__j"), _name("__j")], ctx=ast.Load()),
+                    ctx=ast.Store(),
+                )
+            ],
+            value=ast.Call(func=_name("sqrt"), args=[_name("__s")], keywords=[]),
+        ),
+        ast.For(
+            target=_store("__i"),
+            iter=ast.Call(
+                func=_name("range"),
+                args=[ast.BinOp(left=_name("__j"), op=ast.Add(), right=_const(1)), n_ast],
+                keywords=[],
+            ),
+            body=inner_i,
+            orelse=[],
+        ),
     ]
     # numpy's cholesky returns 0 in the strict upper triangle, but the
     # Banachiewicz loop below only writes the lower triangle + diagonal.
     # Pre-zero the upper triangle so unwritten cells aren't malloc garbage;
     # ``target`` is a fresh temp (!= ``a``), so this can't corrupt the source.
-    zero_upper = ast.For(target=_store("__zi"),
-                         iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
-                         body=[
-                             ast.For(target=_store("__zj"),
-                                     iter=ast.Call(
-                                         func=_name("range"),
-                                         args=[ast.BinOp(left=_name("__zi"), op=ast.Add(), right=_const(1)), n_ast],
-                                         keywords=[]),
-                                     body=[
-                                         ast.Assign(targets=[
-                                             ast.Subscript(value=_name(target.id),
-                                                           slice=ast.Tuple(elts=[_name("__zi"),
-                                                                                 _name("__zj")],
-                                                                           ctx=ast.Load()),
-                                                           ctx=ast.Store())
-                                         ],
-                                                    value=_const(0.0))
-                                     ],
-                                     orelse=[])
-                         ],
-                         orelse=[])
+    zero_upper = ast.For(
+        target=_store("__zi"),
+        iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
+        body=[
+            ast.For(
+                target=_store("__zj"),
+                iter=ast.Call(
+                    func=_name("range"),
+                    args=[ast.BinOp(left=_name("__zi"), op=ast.Add(), right=_const(1)), n_ast],
+                    keywords=[],
+                ),
+                body=[
+                    ast.Assign(
+                        targets=[
+                            ast.Subscript(
+                                value=_name(target.id),
+                                slice=ast.Tuple(elts=[_name("__zi"), _name("__zj")], ctx=ast.Load()),
+                                ctx=ast.Store(),
+                            )
+                        ],
+                        value=_const(0.0),
+                    )
+                ],
+                orelse=[],
+            )
+        ],
+        orelse=[],
+    )
     return [
         zero_upper,
-        ast.For(target=_store("__j"),
-                iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
-                body=j_body,
-                orelse=[])
+        ast.For(
+            target=_store("__j"), iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]), body=j_body, orelse=[]
+        ),
     ]
 
 
-def expand_histogram(target: ast.expr,
-                     args: List[ast.expr],
-                     shape_table: Dict[str, Tuple[str, ...]],
-                     kwargs=None,
-                     local_dtypes: Optional[Dict[str, str]] = None,
-                     fresh_local_allocs: Optional[Dict[str, Tuple[str, ...]]] = None) -> List[ast.stmt]:
+def expand_histogram(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs=None,
+    local_dtypes: Optional[Dict[str, str]] = None,
+    fresh_local_allocs: Optional[Dict[str, Tuple[str, ...]]] = None,
+) -> List[ast.stmt]:
     """``hist = np.histogram(a, bins[, range=(lo, hi)][, weights=w])[0]``.
     Implements the numpy histogram contract: if ``range`` is None, lo/hi come
     from an inline min/max pass; if ``weights=w`` is given, each element
@@ -6004,45 +6465,68 @@ def expand_histogram(target: ast.expr,
     # When range is unspecified, compute a.min() / a.max() inline.
     if lo is None or hi is None:
         out.append(
-            ast.Assign(targets=[_store("__hlo")],
-                       value=ast.Subscript(value=_name(a.id), slice=_const(0), ctx=ast.Load())))
+            ast.Assign(
+                targets=[_store("__hlo")], value=ast.Subscript(value=_name(a.id), slice=_const(0), ctx=ast.Load())
+            )
+        )
         out.append(
-            ast.Assign(targets=[_store("__hhi")],
-                       value=ast.Subscript(value=_name(a.id), slice=_const(0), ctx=ast.Load())))
+            ast.Assign(
+                targets=[_store("__hhi")], value=ast.Subscript(value=_name(a.id), slice=_const(0), ctx=ast.Load())
+            )
+        )
         scan_body = [
-            ast.If(test=ast.Compare(left=ast.Subscript(value=_name(a.id), slice=_name("__hsi"), ctx=ast.Load()),
-                                    ops=[ast.Lt()],
-                                    comparators=[_name("__hlo")]),
-                   body=[
-                       ast.Assign(targets=[_store("__hlo")],
-                                  value=ast.Subscript(value=_name(a.id), slice=_name("__hsi"), ctx=ast.Load()))
-                   ],
-                   orelse=[]),
-            ast.If(test=ast.Compare(left=ast.Subscript(value=_name(a.id), slice=_name("__hsi"), ctx=ast.Load()),
-                                    ops=[ast.Gt()],
-                                    comparators=[_name("__hhi")]),
-                   body=[
-                       ast.Assign(targets=[_store("__hhi")],
-                                  value=ast.Subscript(value=_name(a.id), slice=_name("__hsi"), ctx=ast.Load()))
-                   ],
-                   orelse=[]),
+            ast.If(
+                test=ast.Compare(
+                    left=ast.Subscript(value=_name(a.id), slice=_name("__hsi"), ctx=ast.Load()),
+                    ops=[ast.Lt()],
+                    comparators=[_name("__hlo")],
+                ),
+                body=[
+                    ast.Assign(
+                        targets=[_store("__hlo")],
+                        value=ast.Subscript(value=_name(a.id), slice=_name("__hsi"), ctx=ast.Load()),
+                    )
+                ],
+                orelse=[],
+            ),
+            ast.If(
+                test=ast.Compare(
+                    left=ast.Subscript(value=_name(a.id), slice=_name("__hsi"), ctx=ast.Load()),
+                    ops=[ast.Gt()],
+                    comparators=[_name("__hhi")],
+                ),
+                body=[
+                    ast.Assign(
+                        targets=[_store("__hhi")],
+                        value=ast.Subscript(value=_name(a.id), slice=_name("__hsi"), ctx=ast.Load()),
+                    )
+                ],
+                orelse=[],
+            ),
         ]
         out.append(
-            ast.For(target=_store("__hsi"),
-                    iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
-                    body=scan_body,
-                    orelse=[]))
+            ast.For(
+                target=_store("__hsi"),
+                iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
+                body=scan_body,
+                orelse=[],
+            )
+        )
         lo, hi = _name("__hlo"), _name("__hhi")
     # Zero the target.
     zero_body = [
-        ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=_name("__bi"), ctx=ast.Store())],
-                   value=_const(0.0))
+        ast.Assign(
+            targets=[ast.Subscript(value=_name(target.id), slice=_name("__bi"), ctx=ast.Store())], value=_const(0.0)
+        )
     ]
     out.append(
-        ast.For(target=_store("__bi"),
-                iter=ast.Call(func=_name("range"), args=[bins], keywords=[]),
-                body=zero_body,
-                orelse=[]))
+        ast.For(
+            target=_store("__bi"),
+            iter=ast.Call(func=_name("range"), args=[bins], keywords=[]),
+            body=zero_body,
+            orelse=[],
+        )
+    )
     # numpy's bin is defined by its EDGE ARRAY, not by the closed form below: it truncates the
     # same index and then walks it one step against linspace's edges. The two round apart --
     # probing every edge and one ulp either side, the closed form alone puts 248 of 3005 probes
@@ -6057,14 +6541,14 @@ def expand_histogram(target: ast.expr,
     edges_name = f"__hedge_{target.id}"
     step_name = f"__hstep_{target.id}"
     bins_dim = ast.unparse(bins)
-    shape_table[edges_name] = (bins_dim, )
+    shape_table[edges_name] = (bins_dim,)
     if local_dtypes is not None:
         a_dt = local_dtypes.get(a.id)
         if a_dt is not None:
             local_dtypes[edges_name] = a_dt
             local_dtypes[step_name] = a_dt
     if fresh_local_allocs is not None:
-        fresh_local_allocs[edges_name] = (bins_dim, )
+        fresh_local_allocs[edges_name] = (bins_dim,)
 
     def edge_at(idx: ast.expr, ctx) -> ast.Subscript:
         """``<edges>[idx]`` -- a FRESH Subscript per call; a shared node is renamed in place by
@@ -6073,50 +6557,64 @@ def expand_histogram(target: ast.expr,
 
     out.append(_alloc_marker(edges_name))
     out.append(
-        ast.Assign(targets=[edge_at(_const(0), ast.Store())],
-                   value=ast.BinOp(left=ast.BinOp(left=copy.deepcopy(hi), op=ast.Sub(), right=copy.deepcopy(lo)),
-                                   op=ast.Div(),
-                                   right=copy.deepcopy(bins))))
+        ast.Assign(
+            targets=[edge_at(_const(0), ast.Store())],
+            value=ast.BinOp(
+                left=ast.BinOp(left=copy.deepcopy(hi), op=ast.Sub(), right=copy.deepcopy(lo)),
+                op=ast.Div(),
+                right=copy.deepcopy(bins),
+            ),
+        )
+    )
     out.append(ast.Assign(targets=[_store(step_name)], value=edge_at(_const(0), ast.Load())))
     out.append(
-        ast.For(target=_store("__hj"),
-                iter=ast.Call(func=_name("range"), args=[copy.deepcopy(bins)], keywords=[]),
-                body=[
-                    ast.Assign(targets=[edge_at(_name("__hj"), ast.Store())],
-                               value=ast.BinOp(left=_name("__hj"), op=ast.Mult(), right=_name(step_name))),
-                    ast.Assign(targets=[edge_at(_name("__hj"), ast.Store())],
-                               value=ast.BinOp(left=edge_at(_name("__hj"), ast.Load()),
-                                               op=ast.Add(),
-                                               right=copy.deepcopy(lo))),
-                ],
-                orelse=[]))
+        ast.For(
+            target=_store("__hj"),
+            iter=ast.Call(func=_name("range"), args=[copy.deepcopy(bins)], keywords=[]),
+            body=[
+                ast.Assign(
+                    targets=[edge_at(_name("__hj"), ast.Store())],
+                    value=ast.BinOp(left=_name("__hj"), op=ast.Mult(), right=_name(step_name)),
+                ),
+                ast.Assign(
+                    targets=[edge_at(_name("__hj"), ast.Store())],
+                    value=ast.BinOp(left=edge_at(_name("__hj"), ast.Load()), op=ast.Add(), right=copy.deepcopy(lo)),
+                ),
+            ],
+            orelse=[],
+        )
+    )
     # Per-element binning. Bin index (truncated via ``int()``):
     #   bidx = min(bins - 1, max(0, int((a[i] - lo) * bins / (hi - lo))))
     # FloorDiv is wrong here since numerator/denominator are real-valued; numpy
     # uses floor(real_div), same as int(positive_real_div) for nonneg values.
     a_i = ast.Subscript(value=_name(a.id), slice=_name("__hi"), ctx=ast.Load())
-    bin_idx = ast.Call(func=_name("int"),
-                       args=[
-                           ast.BinOp(left=ast.BinOp(left=ast.BinOp(left=a_i, op=ast.Sub(), right=lo),
-                                                    op=ast.Mult(),
-                                                    right=bins),
-                                     op=ast.Div(),
-                                     right=ast.BinOp(left=hi, op=ast.Sub(), right=lo))
-                       ],
-                       keywords=[])
+    bin_idx = ast.Call(
+        func=_name("int"),
+        args=[
+            ast.BinOp(
+                left=ast.BinOp(left=ast.BinOp(left=a_i, op=ast.Sub(), right=lo), op=ast.Mult(), right=bins),
+                op=ast.Div(),
+                right=ast.BinOp(left=hi, op=ast.Sub(), right=lo),
+            )
+        ],
+        keywords=[],
+    )
     # int() each clamp bound so every min/max operand is int64: bins-1 and 0 are otherwise
     # default-kind integers, and Fortran's min(default, INT(.., c_int64_t)) is a mixed-kind
     # GNU extension that -std=f2018 rejects (harmless (int64_t) casts in C).
-    clamp = ast.Call(func=_name("min"),
-                     args=[
-                         ast.Call(func=_name("int"),
-                                  args=[ast.BinOp(left=bins, op=ast.Sub(), right=_const(1))],
-                                  keywords=[]),
-                         ast.Call(func=_name("max"),
-                                  args=[ast.Call(func=_name("int"), args=[_const(0)], keywords=[]), bin_idx],
-                                  keywords=[])
-                     ],
-                     keywords=[])
+    clamp = ast.Call(
+        func=_name("min"),
+        args=[
+            ast.Call(func=_name("int"), args=[ast.BinOp(left=bins, op=ast.Sub(), right=_const(1))], keywords=[]),
+            ast.Call(
+                func=_name("max"),
+                args=[ast.Call(func=_name("int"), args=[_const(0)], keywords=[]), bin_idx],
+                keywords=[],
+            ),
+        ],
+        keywords=[],
+    )
     add_val: ast.expr
     if weights is not None:
         add_val = ast.Subscript(value=_name(weights.id), slice=_name("__hi"), ctx=ast.Load())
@@ -6124,63 +6622,78 @@ def expand_histogram(target: ast.expr,
         add_val = _const(1.0)
     # numpy drops samples outside [lo, hi] (only the last bin is closed); guard the increment so
     # they are not folded into the edge bins. An auto lo/hi (a.min()/a.max()) makes this a no-op.
-    in_range = ast.BoolOp(op=ast.And(),
-                          values=[
-                              ast.Compare(left=copy.deepcopy(lo), ops=[ast.LtE()], comparators=[copy.deepcopy(a_i)]),
-                              ast.Compare(left=copy.deepcopy(a_i), ops=[ast.LtE()], comparators=[copy.deepcopy(hi)]),
-                          ])
-    # numpy's own two corrections, in its order: step down when the sample falls below its own
-    # bin's lower edge, then up when it reaches the next edge (never off the last bin).
-    walk_down = ast.If(test=ast.Compare(left=copy.deepcopy(a_i),
-                                        ops=[ast.Lt()],
-                                        comparators=[edge_at(_name("__bidx"), ast.Load())]),
-                       body=[
-                           ast.Assign(targets=[_store("__bidx")],
-                                      value=ast.BinOp(left=_name("__bidx"), op=ast.Sub(), right=_const(1)))
-                       ],
-                       orelse=[])
-    walk_up = ast.If(test=ast.BoolOp(
+    in_range = ast.BoolOp(
         op=ast.And(),
         values=[
-            ast.Compare(left=_name("__bidx"),
-                        ops=[ast.Lt()],
-                        comparators=[ast.BinOp(left=copy.deepcopy(bins), op=ast.Sub(), right=_const(1))]),
-            ast.Compare(
-                left=copy.deepcopy(a_i),
-                ops=[ast.GtE()],
-                comparators=[edge_at(ast.BinOp(left=_name("__bidx"), op=ast.Add(), right=_const(1)), ast.Load())]),
-        ]),
-                     body=[
-                         ast.Assign(targets=[_store("__bidx")],
-                                    value=ast.BinOp(left=_name("__bidx"), op=ast.Add(), right=_const(1)))
-                     ],
-                     orelse=[])
+            ast.Compare(left=copy.deepcopy(lo), ops=[ast.LtE()], comparators=[copy.deepcopy(a_i)]),
+            ast.Compare(left=copy.deepcopy(a_i), ops=[ast.LtE()], comparators=[copy.deepcopy(hi)]),
+        ],
+    )
+    # numpy's own two corrections, in its order: step down when the sample falls below its own
+    # bin's lower edge, then up when it reaches the next edge (never off the last bin).
+    walk_down = ast.If(
+        test=ast.Compare(left=copy.deepcopy(a_i), ops=[ast.Lt()], comparators=[edge_at(_name("__bidx"), ast.Load())]),
+        body=[
+            ast.Assign(targets=[_store("__bidx")], value=ast.BinOp(left=_name("__bidx"), op=ast.Sub(), right=_const(1)))
+        ],
+        orelse=[],
+    )
+    walk_up = ast.If(
+        test=ast.BoolOp(
+            op=ast.And(),
+            values=[
+                ast.Compare(
+                    left=_name("__bidx"),
+                    ops=[ast.Lt()],
+                    comparators=[ast.BinOp(left=copy.deepcopy(bins), op=ast.Sub(), right=_const(1))],
+                ),
+                ast.Compare(
+                    left=copy.deepcopy(a_i),
+                    ops=[ast.GtE()],
+                    comparators=[edge_at(ast.BinOp(left=_name("__bidx"), op=ast.Add(), right=_const(1)), ast.Load())],
+                ),
+            ],
+        ),
+        body=[
+            ast.Assign(targets=[_store("__bidx")], value=ast.BinOp(left=_name("__bidx"), op=ast.Add(), right=_const(1)))
+        ],
+        orelse=[],
+    )
     bin_body = [
         ast.Assign(targets=[_store("__bidx")], value=clamp),
         walk_down,
         walk_up,
-        ast.If(test=in_range,
-               body=[
-                   ast.AugAssign(target=ast.Subscript(value=_name(target.id), slice=_name("__bidx"), ctx=ast.Store()),
-                                 op=ast.Add(),
-                                 value=add_val)
-               ],
-               orelse=[]),
+        ast.If(
+            test=in_range,
+            body=[
+                ast.AugAssign(
+                    target=ast.Subscript(value=_name(target.id), slice=_name("__bidx"), ctx=ast.Store()),
+                    op=ast.Add(),
+                    value=add_val,
+                )
+            ],
+            orelse=[],
+        ),
     ]
     out.append(
-        ast.For(target=_store("__hi"),
-                iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
-                body=bin_body,
-                orelse=[]))
+        ast.For(
+            target=_store("__hi"),
+            iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
+            body=bin_body,
+            orelse=[],
+        )
+    )
     return out
 
 
-def expand_linalg_solve(target: ast.expr,
-                        args: List[ast.expr],
-                        shape_table: Dict[str, Tuple[str, ...]],
-                        kwargs=None,
-                        local_dtypes: Optional[Dict[str, str]] = None,
-                        fresh_local_allocs: Optional[Dict[str, Tuple[str, ...]]] = None) -> List[ast.stmt]:
+def expand_linalg_solve(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs=None,
+    local_dtypes: Optional[Dict[str, str]] = None,
+    fresh_local_allocs: Optional[Dict[str, Tuple[str, ...]]] = None,
+) -> List[ast.stmt]:
     """``x = np.linalg.solve(A, b)`` solves ``Ax = b`` for square A. Implemented
     as Gauss-Jordan elimination on the augmented [A | b] matrix. Non-Name
     arguments are materialised into fresh locals first, so callers can write
@@ -6222,14 +6735,15 @@ def expand_linalg_solve(target: ast.expr,
         if arg_dt is not None and local_dtypes is not None:
             local_dtypes[tmp] = arg_dt
         out.append(
-            ast.Assign(targets=[_store(tmp)],
-                       value=ast.Call(func=_name("__hpcagent_bench_zeros__"), args=[], keywords=[])))
+            ast.Assign(
+                targets=[_store(tmp)], value=ast.Call(func=_name("__hpcagent_bench_zeros__"), args=[], keywords=[])
+            )
+        )
         out.append(ast.Assign(targets=[_store(tmp)], value=arg))
         materialized[i] = _name(tmp)
     args = materialized
 
-    if len(args) < 2 or not isinstance(args[0], ast.Name) \
-            or not isinstance(args[1], ast.Name):
+    if len(args) < 2 or not isinstance(args[0], ast.Name) or not isinstance(args[1], ast.Name):
         raise NotImplementedError("np.linalg.solve needs Name args")
     a = args[0]
     b = args[1]
@@ -6249,7 +6763,8 @@ def expand_linalg_solve(target: ast.expr,
     _LINALG_AW[0] += 1
     aw = lambda r, c: ast.Subscript(value=_name(aw_name), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Load())
     aw_store = lambda r, c: ast.Subscript(
-        value=_name(aw_name), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Store())
+        value=_name(aw_name), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Store()
+    )
     # ``b`` indexing depends on rank.
     is_2d = len(b_shape) == 2
 
@@ -6278,45 +6793,58 @@ def expand_linalg_solve(target: ast.expr,
     if fresh_local_allocs is not None:
         fresh_local_allocs[aw_name] = (n, n)
     out.append(
-        ast.Assign(targets=[_store(aw_name)],
-                   value=ast.Call(func=_name("__hpcagent_bench_zeros__"), args=[], keywords=[])))
+        ast.Assign(
+            targets=[_store(aw_name)], value=ast.Call(func=_name("__hpcagent_bench_zeros__"), args=[], keywords=[])
+        )
+    )
     # Init: copy A into __sol_aw and b into target.
     if is_2d:
         m_ast = _const_or_name(b_shape[1])
-        copy_inner = ast.For(target=_store("__sol_j"),
-                             iter=ast.Call(func=_name("range"), args=[m_ast], keywords=[]),
-                             body=[
-                                 ast.Assign(targets=[b_store(_name("__sol_i"), _name("__sol_j"))],
-                                            value=ast.Subscript(value=_name(b.id),
-                                                                slice=ast.Tuple(
-                                                                    elts=[_name("__sol_i"),
-                                                                          _name("__sol_j")],
-                                                                    ctx=ast.Load()),
-                                                                ctx=ast.Load()))
-                             ],
-                             orelse=[])
+        copy_inner = ast.For(
+            target=_store("__sol_j"),
+            iter=ast.Call(func=_name("range"), args=[m_ast], keywords=[]),
+            body=[
+                ast.Assign(
+                    targets=[b_store(_name("__sol_i"), _name("__sol_j"))],
+                    value=ast.Subscript(
+                        value=_name(b.id),
+                        slice=ast.Tuple(elts=[_name("__sol_i"), _name("__sol_j")], ctx=ast.Load()),
+                        ctx=ast.Load(),
+                    ),
+                )
+            ],
+            orelse=[],
+        )
     else:
-        copy_inner = ast.Assign(targets=[b_store(_name("__sol_i"))],
-                                value=ast.Subscript(value=_name(b.id), slice=_name("__sol_i"), ctx=ast.Load()))
+        copy_inner = ast.Assign(
+            targets=[b_store(_name("__sol_i"))],
+            value=ast.Subscript(value=_name(b.id), slice=_name("__sol_i"), ctx=ast.Load()),
+        )
     out.append(
-        ast.For(target=_store("__sol_i"),
-                iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
-                body=[
-                    ast.For(target=_store("__sol_j"),
-                            iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
-                            body=[
-                                ast.Assign(targets=[aw_store(_name("__sol_i"), _name("__sol_j"))],
-                                           value=ast.Subscript(value=_name(a.id),
-                                                               slice=ast.Tuple(
-                                                                   elts=[_name("__sol_i"),
-                                                                         _name("__sol_j")],
-                                                                   ctx=ast.Load()),
-                                                               ctx=ast.Load()))
-                            ],
-                            orelse=[]),
-                    copy_inner if is_2d else copy_inner,
-                ],
-                orelse=[]))
+        ast.For(
+            target=_store("__sol_i"),
+            iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
+            body=[
+                ast.For(
+                    target=_store("__sol_j"),
+                    iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
+                    body=[
+                        ast.Assign(
+                            targets=[aw_store(_name("__sol_i"), _name("__sol_j"))],
+                            value=ast.Subscript(
+                                value=_name(a.id),
+                                slice=ast.Tuple(elts=[_name("__sol_i"), _name("__sol_j")], ctx=ast.Load()),
+                                ctx=ast.Load(),
+                            ),
+                        )
+                    ],
+                    orelse=[],
+                ),
+                copy_inner if is_2d else copy_inner,
+            ],
+            orelse=[],
+        )
+    )
     # Gauss-Jordan on (__sol_aw | target).
     K = _name("__sol_k")
     P = _name("__sol_p")
@@ -6326,29 +6854,31 @@ def expand_linalg_solve(target: ast.expr,
     T = _name("__sol_tmp")
     # Pivot search.
     pivot_init = ast.Assign(targets=[_store("__sol_p")], value=K)
-    pivot_scan = ast.For(target=_store("__sol_r"),
-                         iter=ast.Call(func=_name("range"),
-                                       args=[ast.BinOp(left=K, op=ast.Add(), right=_const(1)), n_ast],
-                                       keywords=[]),
-                         body=[
-                             ast.If(test=ast.Compare(
-                                 left=ast.Call(func=_name("abs"), args=[aw(R, K)], keywords=[]),
-                                 ops=[ast.Gt()],
-                                 comparators=[ast.Call(func=_name("abs"), args=[aw(P, K)], keywords=[])]),
-                                    body=[ast.Assign(targets=[_store("__sol_p")], value=R)],
-                                    orelse=[])
-                         ],
-                         orelse=[])
+    pivot_scan = ast.For(
+        target=_store("__sol_r"),
+        iter=ast.Call(func=_name("range"), args=[ast.BinOp(left=K, op=ast.Add(), right=_const(1)), n_ast], keywords=[]),
+        body=[
+            ast.If(
+                test=ast.Compare(
+                    left=ast.Call(func=_name("abs"), args=[aw(R, K)], keywords=[]),
+                    ops=[ast.Gt()],
+                    comparators=[ast.Call(func=_name("abs"), args=[aw(P, K)], keywords=[])],
+                ),
+                body=[ast.Assign(targets=[_store("__sol_p")], value=R)],
+                orelse=[],
+            )
+        ],
+        orelse=[],
+    )
     # Swap row p and row k in __sol_aw.
     swap_aw = [
         ast.Assign(targets=[_store("__sol_tmp")], value=aw(K, C)),
         ast.Assign(targets=[aw_store(K, C)], value=aw(P, C)),
         ast.Assign(targets=[aw_store(P, C)], value=T),
     ]
-    swap_aw_loop = ast.For(target=_store("__sol_c"),
-                           iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
-                           body=swap_aw,
-                           orelse=[])
+    swap_aw_loop = ast.For(
+        target=_store("__sol_c"), iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]), body=swap_aw, orelse=[]
+    )
     # Swap row p and row k in target (the b-side).
     if is_2d:
         m_ast = _const_or_name(b_shape[1])
@@ -6357,78 +6887,98 @@ def expand_linalg_solve(target: ast.expr,
             ast.Assign(targets=[b_store(K, C)], value=b_load(P, C)),
             ast.Assign(targets=[b_store(P, C)], value=T),
         ]
-        swap_b_loop = ast.For(target=_store("__sol_c"),
-                              iter=ast.Call(func=_name("range"), args=[m_ast], keywords=[]),
-                              body=swap_b,
-                              orelse=[])
+        swap_b_loop = ast.For(
+            target=_store("__sol_c"),
+            iter=ast.Call(func=_name("range"), args=[m_ast], keywords=[]),
+            body=swap_b,
+            orelse=[],
+        )
     else:
-        swap_b_loop = ast.If(test=ast.Compare(left=P, ops=[ast.NotEq()], comparators=[K]),
-                             body=[
-                                 ast.Assign(targets=[_store("__sol_tmp")], value=b_load(K)),
-                                 ast.Assign(targets=[b_store(K)], value=b_load(P)),
-                                 ast.Assign(targets=[b_store(P)], value=T),
-                             ],
-                             orelse=[])
+        swap_b_loop = ast.If(
+            test=ast.Compare(left=P, ops=[ast.NotEq()], comparators=[K]),
+            body=[
+                ast.Assign(targets=[_store("__sol_tmp")], value=b_load(K)),
+                ast.Assign(targets=[b_store(K)], value=b_load(P)),
+                ast.Assign(targets=[b_store(P)], value=T),
+            ],
+            orelse=[],
+        )
     # Divide pivot row by aw[k, k]. Stash divisor.
     pivot_div_stash = ast.Assign(targets=[_store("__sol_factor")], value=aw(K, K))
     pivot_div_aw_body = [
         ast.Assign(targets=[aw_store(K, C)], value=ast.BinOp(left=aw(K, C), op=ast.Div(), right=F)),
     ]
-    pivot_div_aw = ast.For(target=_store("__sol_c"),
-                           iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
-                           body=pivot_div_aw_body,
-                           orelse=[])
+    pivot_div_aw = ast.For(
+        target=_store("__sol_c"),
+        iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
+        body=pivot_div_aw_body,
+        orelse=[],
+    )
     if is_2d:
         pivot_div_b_body = [
             ast.Assign(targets=[b_store(K, C)], value=ast.BinOp(left=b_load(K, C), op=ast.Div(), right=F)),
         ]
-        pivot_div_b = ast.For(target=_store("__sol_c"),
-                              iter=ast.Call(func=_name("range"), args=[_const_or_name(b_shape[1])], keywords=[]),
-                              body=pivot_div_b_body,
-                              orelse=[])
+        pivot_div_b = ast.For(
+            target=_store("__sol_c"),
+            iter=ast.Call(func=_name("range"), args=[_const_or_name(b_shape[1])], keywords=[]),
+            body=pivot_div_b_body,
+            orelse=[],
+        )
     else:
         pivot_div_b = ast.Assign(targets=[b_store(K)], value=ast.BinOp(left=b_load(K), op=ast.Div(), right=F))
     # Eliminate other rows.
     elim_factor = ast.Assign(targets=[_store("__sol_factor")], value=aw(R, K))
-    elim_aw_inner = ast.For(target=_store("__sol_c"),
-                            iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
-                            body=[
-                                ast.Assign(targets=[aw_store(R, C)],
-                                           value=ast.BinOp(left=aw(R, C),
-                                                           op=ast.Sub(),
-                                                           right=ast.BinOp(left=F, op=ast.Mult(), right=aw(K, C))))
-                            ],
-                            orelse=[])
+    elim_aw_inner = ast.For(
+        target=_store("__sol_c"),
+        iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
+        body=[
+            ast.Assign(
+                targets=[aw_store(R, C)],
+                value=ast.BinOp(left=aw(R, C), op=ast.Sub(), right=ast.BinOp(left=F, op=ast.Mult(), right=aw(K, C))),
+            )
+        ],
+        orelse=[],
+    )
     if is_2d:
-        elim_b_inner = ast.For(target=_store("__sol_c"),
-                               iter=ast.Call(func=_name("range"), args=[_const_or_name(b_shape[1])], keywords=[]),
-                               body=[
-                                   ast.Assign(targets=[b_store(R, C)],
-                                              value=ast.BinOp(left=b_load(R, C),
-                                                              op=ast.Sub(),
-                                                              right=ast.BinOp(left=F, op=ast.Mult(), right=b_load(K,
-                                                                                                                  C))))
-                               ],
-                               orelse=[])
+        elim_b_inner = ast.For(
+            target=_store("__sol_c"),
+            iter=ast.Call(func=_name("range"), args=[_const_or_name(b_shape[1])], keywords=[]),
+            body=[
+                ast.Assign(
+                    targets=[b_store(R, C)],
+                    value=ast.BinOp(
+                        left=b_load(R, C), op=ast.Sub(), right=ast.BinOp(left=F, op=ast.Mult(), right=b_load(K, C))
+                    ),
+                )
+            ],
+            orelse=[],
+        )
     else:
-        elim_b_inner = ast.Assign(targets=[b_store(R)],
-                                  value=ast.BinOp(left=b_load(R),
-                                                  op=ast.Sub(),
-                                                  right=ast.BinOp(left=F, op=ast.Mult(), right=b_load(K))))
-    elim_outer = ast.For(target=_store("__sol_r"),
-                         iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
-                         body=[
-                             ast.If(test=ast.Compare(left=R, ops=[ast.NotEq()], comparators=[K]),
-                                    body=[elim_factor, elim_aw_inner, elim_b_inner],
-                                    orelse=[])
-                         ],
-                         orelse=[])
+        elim_b_inner = ast.Assign(
+            targets=[b_store(R)],
+            value=ast.BinOp(left=b_load(R), op=ast.Sub(), right=ast.BinOp(left=F, op=ast.Mult(), right=b_load(K))),
+        )
+    elim_outer = ast.For(
+        target=_store("__sol_r"),
+        iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
+        body=[
+            ast.If(
+                test=ast.Compare(left=R, ops=[ast.NotEq()], comparators=[K]),
+                body=[elim_factor, elim_aw_inner, elim_b_inner],
+                orelse=[],
+            )
+        ],
+        orelse=[],
+    )
     k_body = [pivot_init, pivot_scan, swap_aw_loop, swap_b_loop, pivot_div_stash, pivot_div_aw, pivot_div_b, elim_outer]
     out.append(
-        ast.For(target=_store("__sol_k"),
-                iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
-                body=k_body,
-                orelse=[]))
+        ast.For(
+            target=_store("__sol_k"),
+            iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
+            body=k_body,
+            orelse=[],
+        )
+    )
     return out
 
 
@@ -6453,12 +7003,14 @@ def reset_temp_counters() -> None:
     _LINALG_AW[0] = 0
 
 
-def expand_linalg_inv(target: ast.expr,
-                      args: List[ast.expr],
-                      shape_table: Dict[str, Tuple[str, ...]],
-                      kwargs=None,
-                      local_dtypes: Optional[Dict[str, str]] = None,
-                      fresh_local_allocs: Optional[Dict[str, Tuple[str, ...]]] = None) -> List[ast.stmt]:
+def expand_linalg_inv(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs=None,
+    local_dtypes: Optional[Dict[str, str]] = None,
+    fresh_local_allocs: Optional[Dict[str, Tuple[str, ...]]] = None,
+) -> List[ast.stmt]:
     """``X = np.linalg.inv(A)`` -- in-place Gauss-Jordan elimination with
     partial pivoting on the augmented [A | I] matrix (textbook, Golub & Van
     Loan Algorithm 3.4.1):
@@ -6499,46 +7051,56 @@ def expand_linalg_inv(target: ast.expr,
     if fresh_local_allocs is not None:
         fresh_local_allocs[aw_name] = (n, n)
     out.append(
-        ast.Assign(targets=[_store(aw_name)],
-                   value=ast.Call(func=_name("__hpcagent_bench_zeros__"), args=[], keywords=[])))
+        ast.Assign(
+            targets=[_store(aw_name)], value=ast.Call(func=_name("__hpcagent_bench_zeros__"), args=[], keywords=[])
+        )
+    )
     # Copy A to a working buffer ``__inv_aw[i, j]``; initialise target
     # as the identity I[i, j].
     out.append(
-        ast.For(target=_store("__inv_i"),
-                iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
-                body=[
-                    ast.For(target=_store("__inv_j"),
-                            iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
-                            body=[
-                                ast.Assign(targets=[
-                                    ast.Subscript(value=_name(aw_name),
-                                                  slice=ast.Tuple(elts=[_name("__inv_i"),
-                                                                        _name("__inv_j")],
-                                                                  ctx=ast.Load()),
-                                                  ctx=ast.Store())
-                                ],
-                                           value=ast.Subscript(value=_name(a.id),
-                                                               slice=ast.Tuple(
-                                                                   elts=[_name("__inv_i"),
-                                                                         _name("__inv_j")],
-                                                                   ctx=ast.Load()),
-                                                               ctx=ast.Load())),
-                                ast.Assign(targets=[
-                                    ast.Subscript(value=_name(target.id),
-                                                  slice=ast.Tuple(elts=[_name("__inv_i"),
-                                                                        _name("__inv_j")],
-                                                                  ctx=ast.Load()),
-                                                  ctx=ast.Store())
-                                ],
-                                           value=ast.IfExp(test=ast.Compare(left=_name("__inv_i"),
-                                                                            ops=[ast.Eq()],
-                                                                            comparators=[_name("__inv_j")]),
-                                                           body=_const(1.0),
-                                                           orelse=_const(0.0))),
+        ast.For(
+            target=_store("__inv_i"),
+            iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
+            body=[
+                ast.For(
+                    target=_store("__inv_j"),
+                    iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
+                    body=[
+                        ast.Assign(
+                            targets=[
+                                ast.Subscript(
+                                    value=_name(aw_name),
+                                    slice=ast.Tuple(elts=[_name("__inv_i"), _name("__inv_j")], ctx=ast.Load()),
+                                    ctx=ast.Store(),
+                                )
                             ],
-                            orelse=[])
-                ],
-                orelse=[]))
+                            value=ast.Subscript(
+                                value=_name(a.id),
+                                slice=ast.Tuple(elts=[_name("__inv_i"), _name("__inv_j")], ctx=ast.Load()),
+                                ctx=ast.Load(),
+                            ),
+                        ),
+                        ast.Assign(
+                            targets=[
+                                ast.Subscript(
+                                    value=_name(target.id),
+                                    slice=ast.Tuple(elts=[_name("__inv_i"), _name("__inv_j")], ctx=ast.Load()),
+                                    ctx=ast.Store(),
+                                )
+                            ],
+                            value=ast.IfExp(
+                                test=ast.Compare(left=_name("__inv_i"), ops=[ast.Eq()], comparators=[_name("__inv_j")]),
+                                body=_const(1.0),
+                                orelse=_const(0.0),
+                            ),
+                        ),
+                    ],
+                    orelse=[],
+                )
+            ],
+            orelse=[],
+        )
+    )
     # Outer loop over pivot column k = 0..n:
     # 1) find pivot row p = k; for r in k+1..n: if |aw[r,k]| > |aw[p,k]|: p = r
     # 2) swap rows p and k in aw and target
@@ -6547,11 +7109,14 @@ def expand_linalg_inv(target: ast.expr,
     #                target[r, :] -= factor * target[k, :]
     aw = lambda r, c: ast.Subscript(value=_name(aw_name), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Load())
     aw_store = lambda r, c: ast.Subscript(
-        value=_name(aw_name), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Store())
+        value=_name(aw_name), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Store()
+    )
     tgt = lambda r, c: ast.Subscript(
-        value=_name(target.id), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Load())
+        value=_name(target.id), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Load()
+    )
     tgt_store = lambda r, c: ast.Subscript(
-        value=_name(target.id), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Store())
+        value=_name(target.id), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Store()
+    )
     # Every use below is a FRESH node from this factory, never a shared one: the Fortran
     # emitter's loop-variable uniquifier mutates Name nodes in place, and __inv_r / __inv_c each
     # bind THREE separate sibling/nested loops here (pivot_scan+elim_outer; swap_loop+pivot_div+
@@ -6562,19 +7127,24 @@ def expand_linalg_inv(target: ast.expr,
     nm = lambda tag: _name(f"__inv_{tag}")
     # Pivot search.
     pivot_init = ast.Assign(targets=[_store("__inv_p")], value=nm("k"))
-    pivot_scan = ast.For(target=_store("__inv_r"),
-                         iter=ast.Call(func=_name("range"),
-                                       args=[ast.BinOp(left=nm("k"), op=ast.Add(), right=_const(1)), n_ast],
-                                       keywords=[]),
-                         body=[
-                             ast.If(test=ast.Compare(
-                                 left=ast.Call(func=_name("abs"), args=[aw(nm("r"), nm("k"))], keywords=[]),
-                                 ops=[ast.Gt()],
-                                 comparators=[ast.Call(func=_name("abs"), args=[aw(nm("p"), nm("k"))], keywords=[])]),
-                                    body=[ast.Assign(targets=[_store("__inv_p")], value=nm("r"))],
-                                    orelse=[])
-                         ],
-                         orelse=[])
+    pivot_scan = ast.For(
+        target=_store("__inv_r"),
+        iter=ast.Call(
+            func=_name("range"), args=[ast.BinOp(left=nm("k"), op=ast.Add(), right=_const(1)), n_ast], keywords=[]
+        ),
+        body=[
+            ast.If(
+                test=ast.Compare(
+                    left=ast.Call(func=_name("abs"), args=[aw(nm("r"), nm("k"))], keywords=[]),
+                    ops=[ast.Gt()],
+                    comparators=[ast.Call(func=_name("abs"), args=[aw(nm("p"), nm("k"))], keywords=[])],
+                ),
+                body=[ast.Assign(targets=[_store("__inv_p")], value=nm("r"))],
+                orelse=[],
+            )
+        ],
+        orelse=[],
+    )
     # Swap row p and row k in both aw and target.
     swap_body = [
         ast.Assign(targets=[_store("__inv_tmp")], value=aw(nm("k"), nm("c"))),
@@ -6584,66 +7154,93 @@ def expand_linalg_inv(target: ast.expr,
         ast.Assign(targets=[tgt_store(nm("k"), nm("c"))], value=tgt(nm("p"), nm("c"))),
         ast.Assign(targets=[tgt_store(nm("p"), nm("c"))], value=nm("tmp")),
     ]
-    swap_loop = ast.For(target=_store("__inv_c"),
-                        iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
-                        body=swap_body,
-                        orelse=[])
+    swap_loop = ast.For(
+        target=_store("__inv_c"),
+        iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
+        body=swap_body,
+        orelse=[],
+    )
     # Divide pivot row by aw[k, k] -- stash it first since the loop overwrites
     # aw[k, k] itself before every use.
     pivot_div_stash = ast.Assign(targets=[_store("__inv_factor")], value=aw(nm("k"), nm("k")))
     pivot_div_body_safe = [
-        ast.Assign(targets=[tgt_store(nm("k"), nm("c"))],
-                   value=ast.BinOp(left=tgt(nm("k"), nm("c")), op=ast.Div(), right=nm("factor"))),
-        ast.Assign(targets=[aw_store(nm("k"), nm("c"))],
-                   value=ast.BinOp(left=aw(nm("k"), nm("c")), op=ast.Div(), right=nm("factor"))),
+        ast.Assign(
+            targets=[tgt_store(nm("k"), nm("c"))],
+            value=ast.BinOp(left=tgt(nm("k"), nm("c")), op=ast.Div(), right=nm("factor")),
+        ),
+        ast.Assign(
+            targets=[aw_store(nm("k"), nm("c"))],
+            value=ast.BinOp(left=aw(nm("k"), nm("c")), op=ast.Div(), right=nm("factor")),
+        ),
     ]
     pivot_div = [
         pivot_div_stash,
-        ast.For(target=_store("__inv_c"),
-                iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
-                body=pivot_div_body_safe,
-                orelse=[]),
+        ast.For(
+            target=_store("__inv_c"),
+            iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
+            body=pivot_div_body_safe,
+            orelse=[],
+        ),
     ]
     # Eliminate other rows.
     elim_factor = ast.Assign(targets=[_store("__inv_factor")], value=aw(nm("r"), nm("k")))
     elim_body_inner = [
-        ast.Assign(targets=[tgt_store(nm("r"), nm("c"))],
-                   value=ast.BinOp(left=tgt(nm("r"), nm("c")),
-                                   op=ast.Sub(),
-                                   right=ast.BinOp(left=nm("factor"), op=ast.Mult(), right=tgt(nm("k"), nm("c"))))),
-        ast.Assign(targets=[aw_store(nm("r"), nm("c"))],
-                   value=ast.BinOp(left=aw(nm("r"), nm("c")),
-                                   op=ast.Sub(),
-                                   right=ast.BinOp(left=nm("factor"), op=ast.Mult(), right=aw(nm("k"), nm("c"))))),
+        ast.Assign(
+            targets=[tgt_store(nm("r"), nm("c"))],
+            value=ast.BinOp(
+                left=tgt(nm("r"), nm("c")),
+                op=ast.Sub(),
+                right=ast.BinOp(left=nm("factor"), op=ast.Mult(), right=tgt(nm("k"), nm("c"))),
+            ),
+        ),
+        ast.Assign(
+            targets=[aw_store(nm("r"), nm("c"))],
+            value=ast.BinOp(
+                left=aw(nm("r"), nm("c")),
+                op=ast.Sub(),
+                right=ast.BinOp(left=nm("factor"), op=ast.Mult(), right=aw(nm("k"), nm("c"))),
+            ),
+        ),
     ]
-    elim_inner_loop = ast.For(target=_store("__inv_c"),
-                              iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
-                              body=elim_body_inner,
-                              orelse=[])
-    elim_outer = ast.For(target=_store("__inv_r"),
-                         iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
-                         body=[
-                             ast.If(test=ast.Compare(left=nm("r"), ops=[ast.NotEq()], comparators=[nm("k")]),
-                                    body=[elim_factor, elim_inner_loop],
-                                    orelse=[])
-                         ],
-                         orelse=[])
+    elim_inner_loop = ast.For(
+        target=_store("__inv_c"),
+        iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
+        body=elim_body_inner,
+        orelse=[],
+    )
+    elim_outer = ast.For(
+        target=_store("__inv_r"),
+        iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
+        body=[
+            ast.If(
+                test=ast.Compare(left=nm("r"), ops=[ast.NotEq()], comparators=[nm("k")]),
+                body=[elim_factor, elim_inner_loop],
+                orelse=[],
+            )
+        ],
+        orelse=[],
+    )
     # K-loop body.
     k_body = [pivot_init, pivot_scan, swap_loop] + pivot_div + [elim_outer]
     out.append(
-        ast.For(target=_store("__inv_k"),
-                iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
-                body=k_body,
-                orelse=[]))
+        ast.For(
+            target=_store("__inv_k"),
+            iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
+            body=k_body,
+            orelse=[],
+        )
+    )
     return out
 
 
-def expand_linalg_det(target: ast.expr,
-                      args: List[ast.expr],
-                      shape_table: Dict[str, Tuple[str, ...]],
-                      kwargs=None,
-                      local_dtypes: Optional[Dict[str, str]] = None,
-                      fresh_local_allocs: Optional[Dict[str, Tuple[str, ...]]] = None) -> List[ast.stmt]:
+def expand_linalg_det(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs=None,
+    local_dtypes: Optional[Dict[str, str]] = None,
+    fresh_local_allocs: Optional[Dict[str, Tuple[str, ...]]] = None,
+) -> List[ast.stmt]:
     """``s = np.linalg.det(A)`` -- LU factorisation (Gaussian elimination
     with partial pivoting) on a scratch copy ``__det_aw`` of A. The
     determinant is the product of the pivots (U's diagonal) times
@@ -6682,31 +7279,41 @@ def expand_linalg_det(target: ast.expr,
     if fresh_local_allocs is not None:
         fresh_local_allocs["__det_aw"] = (n, n)
     aw = lambda r, c: ast.Subscript(
-        value=_name("__det_aw"), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Load())
+        value=_name("__det_aw"), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Load()
+    )
     aw_store = lambda r, c: ast.Subscript(
-        value=_name("__det_aw"), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Store())
+        value=_name("__det_aw"), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Store()
+    )
     out.append(
-        ast.Assign(targets=[_store("__det_aw")],
-                   value=ast.Call(func=_name("__hpcagent_bench_zeros__"), args=[], keywords=[])))
+        ast.Assign(
+            targets=[_store("__det_aw")], value=ast.Call(func=_name("__hpcagent_bench_zeros__"), args=[], keywords=[])
+        )
+    )
     # Copy A into the working buffer.
     out.append(
-        ast.For(target=_store("__det_i"),
-                iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
-                body=[
-                    ast.For(target=_store("__det_j"),
-                            iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
-                            body=[
-                                ast.Assign(targets=[aw_store(_name("__det_i"), _name("__det_j"))],
-                                           value=ast.Subscript(value=_name(a.id),
-                                                               slice=ast.Tuple(
-                                                                   elts=[_name("__det_i"),
-                                                                         _name("__det_j")],
-                                                                   ctx=ast.Load()),
-                                                               ctx=ast.Load()))
-                            ],
-                            orelse=[])
-                ],
-                orelse=[]))
+        ast.For(
+            target=_store("__det_i"),
+            iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
+            body=[
+                ast.For(
+                    target=_store("__det_j"),
+                    iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
+                    body=[
+                        ast.Assign(
+                            targets=[aw_store(_name("__det_i"), _name("__det_j"))],
+                            value=ast.Subscript(
+                                value=_name(a.id),
+                                slice=ast.Tuple(elts=[_name("__det_i"), _name("__det_j")], ctx=ast.Load()),
+                                ctx=ast.Load(),
+                            ),
+                        )
+                    ],
+                    orelse=[],
+                )
+            ],
+            orelse=[],
+        )
+    )
     # Accumulator starts at 1 (product of pivots * swap sign).
     out.append(ast.Assign(targets=[_store(target.id)], value=_const(1.0)))
     K = _name("__det_k")
@@ -6717,68 +7324,80 @@ def expand_linalg_det(target: ast.expr,
     T = _name("__det_tmp")
     # Pivot search: p = argmax_{r >= k} |aw[r, k]|.
     pivot_init = ast.Assign(targets=[_store("__det_p")], value=K)
-    pivot_scan = ast.For(target=_store("__det_r"),
-                         iter=ast.Call(func=_name("range"),
-                                       args=[ast.BinOp(left=K, op=ast.Add(), right=_const(1)), n_ast],
-                                       keywords=[]),
-                         body=[
-                             ast.If(test=ast.Compare(
-                                 left=ast.Call(func=_name("abs"), args=[aw(R, K)], keywords=[]),
-                                 ops=[ast.Gt()],
-                                 comparators=[ast.Call(func=_name("abs"), args=[aw(P, K)], keywords=[])]),
-                                    body=[ast.Assign(targets=[_store("__det_p")], value=R)],
-                                    orelse=[])
-                         ],
-                         orelse=[])
+    pivot_scan = ast.For(
+        target=_store("__det_r"),
+        iter=ast.Call(func=_name("range"), args=[ast.BinOp(left=K, op=ast.Add(), right=_const(1)), n_ast], keywords=[]),
+        body=[
+            ast.If(
+                test=ast.Compare(
+                    left=ast.Call(func=_name("abs"), args=[aw(R, K)], keywords=[]),
+                    ops=[ast.Gt()],
+                    comparators=[ast.Call(func=_name("abs"), args=[aw(P, K)], keywords=[])],
+                ),
+                body=[ast.Assign(targets=[_store("__det_p")], value=R)],
+                orelse=[],
+            )
+        ],
+        orelse=[],
+    )
     # Swap rows p and k (when distinct) and flip the running sign.
     swap_body = [
         ast.Assign(targets=[_store("__det_tmp")], value=aw(K, C)),
         ast.Assign(targets=[aw_store(K, C)], value=aw(P, C)),
         ast.Assign(targets=[aw_store(P, C)], value=T),
     ]
-    swap_loop = ast.For(target=_store("__det_c"),
-                        iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
-                        body=swap_body,
-                        orelse=[])
+    swap_loop = ast.For(
+        target=_store("__det_c"),
+        iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
+        body=swap_body,
+        orelse=[],
+    )
     sign_flip = ast.Assign(targets=[_store(target.id)], value=ast.UnaryOp(op=ast.USub(), operand=_name(target.id)))
-    swap_if = ast.If(test=ast.Compare(left=P, ops=[ast.NotEq()], comparators=[K]),
-                     body=[swap_loop, sign_flip],
-                     orelse=[])
+    swap_if = ast.If(
+        test=ast.Compare(left=P, ops=[ast.NotEq()], comparators=[K]), body=[swap_loop, sign_flip], orelse=[]
+    )
     # Multiply the determinant by this pivot.
-    pivot_mul = ast.Assign(targets=[_store(target.id)],
-                           value=ast.BinOp(left=_name(target.id), op=ast.Mult(), right=aw(K, K)))
+    pivot_mul = ast.Assign(
+        targets=[_store(target.id)], value=ast.BinOp(left=_name(target.id), op=ast.Mult(), right=aw(K, K))
+    )
     # Eliminate rows below k (guard a zero pivot so a singular matrix
     # yields det == 0 rather than a NaN from divide-by-zero).
-    elim_factor = ast.Assign(targets=[_store("__det_factor")],
-                             value=ast.BinOp(left=aw(R, K), op=ast.Div(), right=aw(K, K)))
-    elim_inner = ast.For(target=_store("__det_c"),
-                         iter=ast.Call(func=_name("range"),
-                                       args=[ast.BinOp(left=K, op=ast.Add(), right=_const(1)), n_ast],
-                                       keywords=[]),
-                         body=[
-                             ast.Assign(targets=[aw_store(R, C)],
-                                        value=ast.BinOp(left=aw(R, C),
-                                                        op=ast.Sub(),
-                                                        right=ast.BinOp(left=F, op=ast.Mult(), right=aw(K, C))))
-                         ],
-                         orelse=[])
-    elim_outer = ast.For(target=_store("__det_r"),
-                         iter=ast.Call(func=_name("range"),
-                                       args=[ast.BinOp(left=K, op=ast.Add(), right=_const(1)), n_ast],
-                                       keywords=[]),
-                         body=[elim_factor, elim_inner],
-                         orelse=[])
-    elim_guard = ast.If(test=ast.Compare(left=ast.Call(func=_name("abs"), args=[aw(K, K)], keywords=[]),
-                                         ops=[ast.Gt()],
-                                         comparators=[_const(0.0)]),
-                        body=[elim_outer],
-                        orelse=[])
+    elim_factor = ast.Assign(
+        targets=[_store("__det_factor")], value=ast.BinOp(left=aw(R, K), op=ast.Div(), right=aw(K, K))
+    )
+    elim_inner = ast.For(
+        target=_store("__det_c"),
+        iter=ast.Call(func=_name("range"), args=[ast.BinOp(left=K, op=ast.Add(), right=_const(1)), n_ast], keywords=[]),
+        body=[
+            ast.Assign(
+                targets=[aw_store(R, C)],
+                value=ast.BinOp(left=aw(R, C), op=ast.Sub(), right=ast.BinOp(left=F, op=ast.Mult(), right=aw(K, C))),
+            )
+        ],
+        orelse=[],
+    )
+    elim_outer = ast.For(
+        target=_store("__det_r"),
+        iter=ast.Call(func=_name("range"), args=[ast.BinOp(left=K, op=ast.Add(), right=_const(1)), n_ast], keywords=[]),
+        body=[elim_factor, elim_inner],
+        orelse=[],
+    )
+    elim_guard = ast.If(
+        test=ast.Compare(
+            left=ast.Call(func=_name("abs"), args=[aw(K, K)], keywords=[]), ops=[ast.Gt()], comparators=[_const(0.0)]
+        ),
+        body=[elim_outer],
+        orelse=[],
+    )
     k_body = [pivot_init, pivot_scan, swap_if, pivot_mul, elim_guard]
     out.append(
-        ast.For(target=_store("__det_k"),
-                iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
-                body=k_body,
-                orelse=[]))
+        ast.For(
+            target=_store("__det_k"),
+            iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
+            body=k_body,
+            orelse=[],
+        )
+    )
     return out
 
 
@@ -6786,209 +7405,115 @@ def expand_linalg_det(target: ast.expr,
 #: ``(assign_target, call_args, shape_table) -> list[stmt]``.
 NP_CALL_EXPANDERS: Dict[Tuple[str, str], Callable] = {
     # Reductions
-    ("np", "sum"):
-    expand_sum,
+    ("np", "sum"): expand_sum,
     # np.maximum/minimum.accumulate: a DaCe Scan re-emits cummax/cummin as these
     # (there's no np.cummax). ufunc.reduce forms are normalized to np.sum/...
     # upstream in native_desugar (_UfuncReduceToReducer), so they never reach here.
-    ("np", "searchsorted"):
-    expand_searchsorted,
-    ("np", "maximum.accumulate"):
-    expand_cummax,
-    ("np", "minimum.accumulate"):
-    expand_cummin,
-    ("np", "sort"):
-    expand_sort,
-    ("np", "max"):
-    expand_max,
-    ("np", "min"):
-    expand_min,
-    ("np", "mean"):
-    expand_mean,
-    ("np", "prod"):
-    expand_prod,
-    ("np", "std"):
-    expand_std,
+    ("np", "searchsorted"): expand_searchsorted,
+    ("np", "maximum.accumulate"): expand_cummax,
+    ("np", "minimum.accumulate"): expand_cummin,
+    ("np", "sort"): expand_sort,
+    ("np", "max"): expand_max,
+    ("np", "min"): expand_min,
+    ("np", "mean"): expand_mean,
+    ("np", "prod"): expand_prod,
+    ("np", "std"): expand_std,
     # Linear algebra
-    ("np", "dot"):
-    expand_dot_2d,
-    ("np", "einsum"):
-    expand_einsum,
-    ("np", "tensordot"):
-    expand_tensordot,
-    ("np", "inner"):
-    expand_inner,
-    ("np", "vdot"):
-    expand_vdot,
-    ("np", "trace"):
-    expand_trace,
-    ("np", "diagonal"):
-    expand_diagonal,
-    ("np", "diag"):
-    expand_diag,
-    ("np", "cumsum"):
-    expand_cumsum,
-    ("np", "cumprod"):
-    expand_cumprod,
-    ("np", "median"):
-    expand_median,
-    ("np", "roll"):
-    expand_roll,
-    ("np", "tril"):
-    expand_tril,
-    ("np", "pad"):
-    expand_pad,
-    ("np", "outer"):
-    expand_outer,
-    ("np", "add.outer"):
-    expand_add_outer,
-    ("np", "transpose"):
-    expand_transpose,
-    ("np", "linalg.cholesky"):
-    expand_cholesky,
-    ("np", "linalg.norm"):
-    expand_linalg_norm,
-    ("np", "linalg.lstsq"):
-    expand_lstsq,
-    ("np", "linalg.inv"):
-    expand_linalg_inv,
-    ("np", "linalg.det"):
-    expand_linalg_det,
-    ("np", "linalg.solve"):
-    expand_linalg_solve,
-    ("np", "fft.fftn"):
-    expand_fftn,
-    ("np", "fft.ifftn"):
-    expand_ifftn,
-    ("np", "fft.fft"):
-    expand_fft,
-    ("np", "fft.ifft"):
-    expand_ifft,
-    ("np", "fft.fftfreq"):
-    expand_fftfreq,
-    ("np", "var"):
-    expand_var,
-    ("np", "argmax"):
-    expand_argmax,
-    ("np", "argmin"):
-    expand_argmin,
-    ("np", "any"):
-    expand_any,
-    ("np", "all"):
-    expand_all,
-    ("np", "count_nonzero"):
-    expand_count_nonzero,
+    ("np", "dot"): expand_dot_2d,
+    ("np", "einsum"): expand_einsum,
+    ("np", "tensordot"): expand_tensordot,
+    ("np", "inner"): expand_inner,
+    ("np", "vdot"): expand_vdot,
+    ("np", "trace"): expand_trace,
+    ("np", "diagonal"): expand_diagonal,
+    ("np", "diag"): expand_diag,
+    ("np", "cumsum"): expand_cumsum,
+    ("np", "cumprod"): expand_cumprod,
+    ("np", "median"): expand_median,
+    ("np", "roll"): expand_roll,
+    ("np", "tril"): expand_tril,
+    ("np", "pad"): expand_pad,
+    ("np", "outer"): expand_outer,
+    ("np", "add.outer"): expand_add_outer,
+    ("np", "transpose"): expand_transpose,
+    ("np", "linalg.cholesky"): expand_cholesky,
+    ("np", "linalg.norm"): expand_linalg_norm,
+    ("np", "linalg.lstsq"): expand_lstsq,
+    ("np", "linalg.inv"): expand_linalg_inv,
+    ("np", "linalg.det"): expand_linalg_det,
+    ("np", "linalg.solve"): expand_linalg_solve,
+    ("np", "fft.fftn"): expand_fftn,
+    ("np", "fft.ifftn"): expand_ifftn,
+    ("np", "fft.fft"): expand_fft,
+    ("np", "fft.ifft"): expand_ifft,
+    ("np", "fft.fftfreq"): expand_fftfreq,
+    ("np", "var"): expand_var,
+    ("np", "argmax"): expand_argmax,
+    ("np", "argmin"): expand_argmin,
+    ("np", "any"): expand_any,
+    ("np", "all"): expand_all,
+    ("np", "count_nonzero"): expand_count_nonzero,
     # Memory / shape
-    ("np", "copy"):
-    expand_copy,
+    ("np", "copy"): expand_copy,
     # np.asarray/np.ascontiguousarray of an already-materialised array is a copy
     # (contiguity/dtype already hold for our buffers), so they lower exactly
     # like np.copy (dbcsr/minife pass inputs through np.asarray before indexing).
-    ("np", "asarray"):
-    expand_copy,
-    ("np", "ascontiguousarray"):
-    expand_copy,
+    ("np", "asarray"): expand_copy,
+    ("np", "ascontiguousarray"): expand_copy,
     # ``np.array(<array expr>)`` is the same materialising copy. The literal-list and 0-d scalar
     # forms never reach here: the frontend rewrites both before lowering runs.
-    ("np", "array"):
-    expand_copy,
-    ("np", "bincount"):
-    expand_bincount,
-    ("np", "reshape"):
-    expand_reshape,
-    ("np", "swapaxes"):
-    expand_swapaxes,
-    ("np", "moveaxis"):
-    expand_moveaxis,
-    ("np", "expand_dims"):
-    expand_expand_dims,
-    ("np", "squeeze"):
-    expand_squeeze,
-    ("np", "take"):
-    expand_take,
-    ("np", "repeat"):
-    expand_repeat,
-    ("np", "eye"):
-    expand_eye,
-    ("np", "meshgrid"):
-    expand_meshgrid,
-    ("np", "triu"):
-    expand_triu,
-    ("np", "hstack"):
-    expand_hstack,
-    ("np", "concatenate"):
-    expand_concatenate,
-    ("np", "stack"):
-    expand_stack,
-    ("np", "diff"):
-    expand_diff,
-    ("np", "flip"):
-    expand_flip,
-    ("np", "linspace"):
-    expand_linspace,
-    ("np", "arange"):
-    expand_arange,
-    ("np", "fromfunction"):
-    expand_fromfunction,
-    ("np", "histogram"):
-    expand_histogram,
+    ("np", "array"): expand_copy,
+    ("np", "bincount"): expand_bincount,
+    ("np", "reshape"): expand_reshape,
+    ("np", "swapaxes"): expand_swapaxes,
+    ("np", "moveaxis"): expand_moveaxis,
+    ("np", "expand_dims"): expand_expand_dims,
+    ("np", "squeeze"): expand_squeeze,
+    ("np", "take"): expand_take,
+    ("np", "repeat"): expand_repeat,
+    ("np", "eye"): expand_eye,
+    ("np", "meshgrid"): expand_meshgrid,
+    ("np", "triu"): expand_triu,
+    ("np", "hstack"): expand_hstack,
+    ("np", "concatenate"): expand_concatenate,
+    ("np", "stack"): expand_stack,
+    ("np", "diff"): expand_diff,
+    ("np", "flip"): expand_flip,
+    ("np", "linspace"): expand_linspace,
+    ("np", "arange"): expand_arange,
+    ("np", "fromfunction"): expand_fromfunction,
+    ("np", "histogram"): expand_histogram,
     # Elementwise
-    ("np", "minimum"):
-    expand_minimum,
-    ("np", "maximum"):
-    expand_maximum,
-    ("np", "add"):
-    expand_add,
-    ("np", "multiply"):
-    expand_multiply,
+    ("np", "minimum"): expand_minimum,
+    ("np", "maximum"): expand_maximum,
+    ("np", "add"): expand_add,
+    ("np", "multiply"): expand_multiply,
     # Comparison ops -> per-element Compare (boolean output array).
-    ("np", "less"):
-    expand_less,
-    ("np", "less_equal"):
-    expand_less_equal,
-    ("np", "greater"):
-    expand_greater,
-    ("np", "greater_equal"):
-    expand_greater_equal,
-    ("np", "equal"):
-    expand_equal,
-    ("np", "not_equal"):
-    expand_not_equal,
+    ("np", "less"): expand_less,
+    ("np", "less_equal"): expand_less_equal,
+    ("np", "greater"): expand_greater,
+    ("np", "greater_equal"): expand_greater_equal,
+    ("np", "equal"): expand_equal,
+    ("np", "not_equal"): expand_not_equal,
     # Logical ops -> per-element BoolOp / UnaryOp.
-    ("np", "logical_and"):
-    expand_logical_and,
-    ("np", "logical_or"):
-    expand_logical_or,
-    ("np", "logical_not"):
-    expand_logical_not,
-    ("np", "subtract"):
-    expand_subtract,
-    ("np", "divide"):
-    expand_divide,
-    ("np", "true_divide"):
-    expand_divide,
-    ("np", "negative"):
-    expand_negative,
-    ("np", "power"):
-    expand_power,
-    ("np", "tanh"):
-    expand_tanh,
-    ("np", "clip"):
-    expand_clip,
-    ("np", "where"):
-    expand_where,
+    ("np", "logical_and"): expand_logical_and,
+    ("np", "logical_or"): expand_logical_or,
+    ("np", "logical_not"): expand_logical_not,
+    ("np", "subtract"): expand_subtract,
+    ("np", "divide"): expand_divide,
+    ("np", "true_divide"): expand_divide,
+    ("np", "negative"): expand_negative,
+    ("np", "power"): expand_power,
+    ("np", "tanh"): expand_tanh,
+    ("np", "clip"): expand_clip,
+    ("np", "where"): expand_where,
     # Per-element math intrinsics. These also live in MATH_BUILTINS for
     # the scalar-arg form; the call-hoister catches the array form first.
-    ("np", "exp"):
-    expand_exp_arr,
-    ("np", "log"):
-    expand_log_arr,
-    ("np", "sqrt"):
-    expand_sqrt_arr,
-    ("np", "sin"):
-    expand_sin_arr,
-    ("np", "cos"):
-    expand_cos_arr,
+    ("np", "exp"): expand_exp_arr,
+    ("np", "log"): expand_log_arr,
+    ("np", "sqrt"): expand_sqrt_arr,
+    ("np", "sin"): expand_sin_arr,
+    ("np", "cos"): expand_cos_arr,
 }
 
 # Elementwise transcendental/math ufuncs (ARRAY form). Mirrors the scalar
@@ -7058,16 +7583,19 @@ for _np_name, _c_name in UNARY_C_MATH.items():
 # per-language divergence.
 _DEG_PER_RAD = 57.29577951308232  # 180 / pi
 _RAD_PER_DEG = 0.017453292519943295  # pi / 180
-NP_CALL_EXPANDERS[(
-    "np",
-    "square")] = _unary_expr_expander(lambda x: ast.BinOp(left=copy.deepcopy(x), op=ast.Mult(), right=copy.deepcopy(x)))
-NP_CALL_EXPANDERS[("np",
-                   "reciprocal")] = _unary_expr_expander(lambda x: ast.BinOp(left=_const(1.0), op=ast.Div(), right=x))
-NP_CALL_EXPANDERS[(
-    "np", "degrees")] = _unary_expr_expander(lambda x: ast.BinOp(left=x, op=ast.Mult(), right=_const(_DEG_PER_RAD)))
+NP_CALL_EXPANDERS[("np", "square")] = _unary_expr_expander(
+    lambda x: ast.BinOp(left=copy.deepcopy(x), op=ast.Mult(), right=copy.deepcopy(x))
+)
+NP_CALL_EXPANDERS[("np", "reciprocal")] = _unary_expr_expander(
+    lambda x: ast.BinOp(left=_const(1.0), op=ast.Div(), right=x)
+)
+NP_CALL_EXPANDERS[("np", "degrees")] = _unary_expr_expander(
+    lambda x: ast.BinOp(left=x, op=ast.Mult(), right=_const(_DEG_PER_RAD))
+)
 NP_CALL_EXPANDERS[("np", "rad2deg")] = NP_CALL_EXPANDERS[("np", "degrees")]
-NP_CALL_EXPANDERS[(
-    "np", "radians")] = _unary_expr_expander(lambda x: ast.BinOp(left=x, op=ast.Mult(), right=_const(_RAD_PER_DEG)))
+NP_CALL_EXPANDERS[("np", "radians")] = _unary_expr_expander(
+    lambda x: ast.BinOp(left=x, op=ast.Mult(), right=_const(_RAD_PER_DEG))
+)
 NP_CALL_EXPANDERS[("np", "deg2rad")] = NP_CALL_EXPANDERS[("np", "radians")]
 # ``sign`` has no both-language inline form (C bool arithmetic vs Fortran
 # logicals), so emit a ``__npb_sign(x)`` marker each backend specialises in its
@@ -7092,18 +7620,22 @@ def _binary_call_expander(c_name: str) -> Callable:
         iters = [_name(f"__r{i}") for i in range(len(extent))]
         sa = _scalarize_at_iters(a, iters, shape_table)
         sb = _scalarize_at_iters(b, iters, shape_table)
-        idx = (iters[0] if len(iters) == 1 else ast.Tuple(elts=list(iters), ctx=ast.Load()))
+        idx = iters[0] if len(iters) == 1 else ast.Tuple(elts=list(iters), ctx=ast.Load())
         body = [
-            ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=idx, ctx=ast.Store())],
-                       value=ast.Call(func=_name(c_name), args=[sa, sb], keywords=[]))
+            ast.Assign(
+                targets=[ast.Subscript(value=_name(target.id), slice=idx, ctx=ast.Store())],
+                value=ast.Call(func=_name(c_name), args=[sa, sb], keywords=[]),
+            )
         ]
         out = body
         for var, bound in zip(reversed([i.id for i in iters]), reversed(extent)):
             out = [
-                ast.For(target=_store(var),
-                        iter=ast.Call(func=_name("range"), args=[bound], keywords=[]),
-                        body=out,
-                        orelse=[])
+                ast.For(
+                    target=_store(var),
+                    iter=ast.Call(func=_name("range"), args=[bound], keywords=[]),
+                    body=out,
+                    orelse=[],
+                )
             ]
         return out
 
@@ -7111,12 +7643,12 @@ def _binary_call_expander(c_name: str) -> Callable:
 
 
 for _np_name, _c_name in {
-        "arctan2": "atan2",
-        "hypot": "hypot",
-        "copysign": "copysign",
-        "fmod": "fmod",
-        "fmax": "fmax",
-        "fmin": "fmin"
+    "arctan2": "atan2",
+    "hypot": "hypot",
+    "copysign": "copysign",
+    "fmod": "fmod",
+    "fmax": "fmax",
+    "fmin": "fmin",
 }.items():
     NP_CALL_EXPANDERS[("np", _np_name)] = _binary_call_expander(_c_name)
 
@@ -7184,9 +7716,9 @@ SHAPE_READ_RE = re.compile(r"(\w+)\.shape\[(\d+)\]")
 DIM_EXPAND_ROUNDS: int = 8
 
 
-def substitute_dim_aliases(token: str,
-                           aliases: Dict[str, str],
-                           shape_table: Optional[Dict[str, Tuple[str, ...]]] = None) -> str:
+def substitute_dim_aliases(
+    token: str, aliases: Dict[str, str], shape_table: Optional[Dict[str, Tuple[str, ...]]] = None
+) -> str:
     """Rewrite one shape token into the kernel's PARAMETER vocabulary, to a fixpoint.
 
     A kernel names its own dimensions (``batch, channels, h, w = x.shape``), so the SAME extent
@@ -7206,7 +7738,7 @@ def substitute_dim_aliases(token: str,
             ident = m.group(0)
             if ident not in aliases or ident in active:
                 return ident
-            return "(" + expand(aliases[ident], active + (ident, )) + ")"
+            return "(" + expand(aliases[ident], active + (ident,)) + ")"
 
         return DIM_IDENT_RE.sub(repl, text)
 
@@ -7257,6 +7789,7 @@ def sympify_shape(text: str):
     already hold for the integer extents these symbols stand for.
     """
     import sympy  # Deferred: sympy costs ~100s of ms to import and most kernels never reach here.
+
     # An unresolved ``A.shape[i]`` is not sympy syntax, so the whole token used to fail to parse and
     # every compare naming one answered False. It is a fixed extent, not arithmetic: fold it to an
     # atom. Both sides mangle the same way, so the surrounding arithmetic still cancels.
@@ -7272,7 +7805,7 @@ def sympify_shape(text: str):
         "int_ceil": lambda a, b: sympy.ceiling(a / b),
     }
     for m in DIM_IDENT_RE.finditer(text):
-        if text[m.end():m.end() + 1] != "(":  # a call target is a function, not a dimension
+        if text[m.end() : m.end() + 1] != "(":  # a call target is a function, not a dimension
             names[m.group()] = sympy.Symbol(m.group(), integer=True, nonnegative=True)
     try:
         return sympy.sympify(text, locals=names)
@@ -7333,6 +7866,7 @@ def shape_exprs_equal(sa: str, sb: str) -> bool:
     change.
     """
     import sympy  # Deferred, as in sympify_shape.
+
     ea, eb = sympify_shape(sa), sympify_shape(sb)
     if ea is None or eb is None:
         return False
@@ -7349,10 +7883,9 @@ def shape_exprs_equal(sa: str, sb: str) -> bool:
         return False
 
 
-def dims_agree(a: str,
-               b: str,
-               aliases: Optional[Dict[str, str]] = None,
-               shape_table: Optional[Dict[str, Tuple[str, ...]]] = None) -> bool:
+def dims_agree(
+    a: str, b: str, aliases: Optional[Dict[str, str]] = None, shape_table: Optional[Dict[str, Tuple[str, ...]]] = None
+) -> bool:
     """``True`` when two shape tokens denote the same extent.
 
     Three rungs, cheapest first, because the first answers nearly every call: literal string
@@ -7376,10 +7909,12 @@ def dims_agree(a: str,
     return shape_exprs_equal(sa, sb) if sa <= sb else shape_exprs_equal(sb, sa)
 
 
-def _matmul_result_shape(a_shape: Tuple[str, ...],
-                         b_shape: Tuple[str, ...],
-                         dim_aliases: Optional[Dict[str, str]] = None,
-                         shape_table: Optional[Dict[str, Tuple[str, ...]]] = None) -> Optional[Tuple[str, ...]]:
+def _matmul_result_shape(
+    a_shape: Tuple[str, ...],
+    b_shape: Tuple[str, ...],
+    dim_aliases: Optional[Dict[str, str]] = None,
+    shape_table: Optional[Dict[str, Tuple[str, ...]]] = None,
+) -> Optional[Tuple[str, ...]]:
     """``A @ B``'s result shape under numpy broadcasting rules. Supports 1-D x
     2-D / 2-D x 1-D / 2-D x 2-D; batched ``(*batch, m, k) @ (k, n) -> (*batch,
     m, n)`` (rank(a) >= 3, rank(b) == 2) and its mirror (rank(a) == 2, rank(b)
@@ -7401,19 +7936,19 @@ def _matmul_result_shape(a_shape: Tuple[str, ...],
     if len(a_shape) == 2 and len(b_shape) == 2:
         return (a_shape[0], b_shape[1])
     if len(a_shape) == 2 and len(b_shape) == 1:
-        return (a_shape[0], )
+        return (a_shape[0],)
     if len(a_shape) == 1 and len(b_shape) == 2:
-        return (b_shape[1], )
+        return (b_shape[1],)
     if len(a_shape) >= 3 and len(b_shape) >= 3:
         # (*batch, m, k) @ (*batch, k, n) -> (*batch, m, n): identical batch.
-        batch_ok = (len(a_shape) == len(b_shape) and all(agree(x, y) for x, y in zip(a_shape[:-2], b_shape[:-2])))
+        batch_ok = len(a_shape) == len(b_shape) and all(agree(x, y) for x, y in zip(a_shape[:-2], b_shape[:-2]))
         if batch_ok and agree(a_shape[-1], b_shape[-2]):
             return tuple(a_shape[:-2]) + (a_shape[-2], b_shape[-1])
         return None
     if len(a_shape) >= 3 and len(b_shape) == 2:
         # (*batch, m, k) @ (k, n) -> (*batch, m, n)
         if agree(a_shape[-1], b_shape[0]):
-            return tuple(a_shape[:-1]) + (b_shape[1], )
+            return tuple(a_shape[:-1]) + (b_shape[1],)
     if len(a_shape) == 2 and len(b_shape) >= 3:
         # (m, k) @ (*batch, k, n) -> (*batch, m, n)
         if agree(a_shape[1], b_shape[-2]):
@@ -7421,11 +7956,13 @@ def _matmul_result_shape(a_shape: Tuple[str, ...],
     return None
 
 
-def _hoist_matmul(matmul: ast.BinOp,
-                  shape_table: Dict[str, Tuple[str, ...]],
-                  temp_arrays: Dict[str, Tuple[str, ...]],
-                  temp_counter: List[int],
-                  dim_aliases: Optional[Dict[str, str]] = None) -> Tuple[Optional[str], List[ast.stmt]]:
+def _hoist_matmul(
+    matmul: ast.BinOp,
+    shape_table: Dict[str, Tuple[str, ...]],
+    temp_arrays: Dict[str, Tuple[str, ...]],
+    temp_counter: List[int],
+    dim_aliases: Optional[Dict[str, str]] = None,
+) -> Tuple[Optional[str], List[ast.stmt]]:
     """Hoist a ``lhs @ rhs`` subexpression to a fresh temp array. Returns
     ``(temp_name, pre_stmts)``: caller substitutes ``temp_name`` for the matmul
     expression and prepends ``pre_stmts`` before the enclosing assignment.
@@ -7442,7 +7979,7 @@ def _hoist_matmul(matmul: ast.BinOp,
     #   2-D x 1-D -> 1-D vector ``out[i] = sum_l a[i, l] * b[l]``.
     l_ext = _iter_extent_of(matmul.left, shape_table)
     r_ext = _iter_extent_of(matmul.right, shape_table)
-    if (l_ext is not None and r_ext is not None and len(l_ext) == 1 and len(r_ext) == 1):
+    if l_ext is not None and r_ext is not None and len(l_ext) == 1 and len(r_ext) == 1:
         temp_counter[0] += 1
         temp = f"__mm{temp_counter[0]}"
         # Scalar temp -- caller declares it as ``double``.
@@ -7451,18 +7988,18 @@ def _hoist_matmul(matmul: ast.BinOp,
         sb = _scalarize_at_iters(matmul.right, [_name(iter_var)], shape_table)
         stmts = [
             ast.Assign(targets=[_store(temp)], value=_const(0.0)),
-            ast.For(target=_store(iter_var),
-                    iter=ast.Call(func=_name("range"), args=[l_ext[0]], keywords=[]),
-                    body=[
-                        ast.AugAssign(target=_store(temp),
-                                      op=ast.Add(),
-                                      value=ast.BinOp(left=sa, op=ast.Mult(), right=sb))
-                    ],
-                    orelse=[]),
+            ast.For(
+                target=_store(iter_var),
+                iter=ast.Call(func=_name("range"), args=[l_ext[0]], keywords=[]),
+                body=[
+                    ast.AugAssign(target=_store(temp), op=ast.Add(), value=ast.BinOp(left=sa, op=ast.Mult(), right=sb))
+                ],
+                orelse=[],
+            ),
         ]
         return temp, stmts
     # 1-D x 2-D / 2-D x 1-D slice-form matmul (matrix-vector).
-    if (l_ext is not None and r_ext is not None and {len(l_ext), len(r_ext)} == {1, 2}):
+    if l_ext is not None and r_ext is not None and {len(l_ext), len(r_ext)} == {1, 2}:
         temp_counter[0] += 1
         temp = f"__mm{temp_counter[0]}"
         # Output is 1-D; the shared K axis is the matching extent.
@@ -7471,7 +8008,7 @@ def _hoist_matmul(matmul: ast.BinOp,
             # Use the FULL extent of the RHS array as the temp shape so
             # the function-scope declaration doesn't depend on a loop
             # variable. The actual iteration uses the dynamic extent.
-            shape = (_static_shape_of(matmul.right, 1, shape_table) or _call_to_str(n_extent), )
+            shape = (_static_shape_of(matmul.right, 1, shape_table) or _call_to_str(n_extent),)
             temp_arrays[temp] = shape
             shape_table[temp] = shape
             l_iter = _name(f"__mml{temp_counter[0]}")  # k
@@ -7479,27 +8016,33 @@ def _hoist_matmul(matmul: ast.BinOp,
             sa = _scalarize_at_iters(matmul.left, [l_iter], shape_table)
             sb = _scalarize_at_iters(matmul.right, [l_iter, out_iter], shape_table)
             stmts = [
-                ast.For(target=_store(out_iter.id),
-                        iter=ast.Call(func=_name("range"), args=[n_extent], keywords=[]),
-                        body=[
-                            ast.Assign(targets=[ast.Subscript(value=_name(temp), slice=out_iter, ctx=ast.Store())],
-                                       value=_const(0.0)),
-                            ast.For(target=_store(l_iter.id),
-                                    iter=ast.Call(func=_name("range"), args=[k_extent], keywords=[]),
-                                    body=[
-                                        ast.AugAssign(target=ast.Subscript(value=_name(temp),
-                                                                           slice=out_iter,
-                                                                           ctx=ast.Store()),
-                                                      op=ast.Add(),
-                                                      value=ast.BinOp(left=sa, op=ast.Mult(), right=sb))
-                                    ],
-                                    orelse=[]),
-                        ],
-                        orelse=[])
+                ast.For(
+                    target=_store(out_iter.id),
+                    iter=ast.Call(func=_name("range"), args=[n_extent], keywords=[]),
+                    body=[
+                        ast.Assign(
+                            targets=[ast.Subscript(value=_name(temp), slice=out_iter, ctx=ast.Store())],
+                            value=_const(0.0),
+                        ),
+                        ast.For(
+                            target=_store(l_iter.id),
+                            iter=ast.Call(func=_name("range"), args=[k_extent], keywords=[]),
+                            body=[
+                                ast.AugAssign(
+                                    target=ast.Subscript(value=_name(temp), slice=out_iter, ctx=ast.Store()),
+                                    op=ast.Add(),
+                                    value=ast.BinOp(left=sa, op=ast.Mult(), right=sb),
+                                )
+                            ],
+                            orelse=[],
+                        ),
+                    ],
+                    orelse=[],
+                )
             ]
         else:  # 2-D x 1-D
             m_extent, k_extent = l_ext[0], l_ext[1]
-            shape = (_static_shape_of(matmul.left, 0, shape_table) or _call_to_str(m_extent), )
+            shape = (_static_shape_of(matmul.left, 0, shape_table) or _call_to_str(m_extent),)
             temp_arrays[temp] = shape
             shape_table[temp] = shape
             out_iter = _name(f"__mmi{temp_counter[0]}")
@@ -7507,36 +8050,49 @@ def _hoist_matmul(matmul: ast.BinOp,
             sa = _scalarize_at_iters(matmul.left, [out_iter, l_iter], shape_table)
             sb = _scalarize_at_iters(matmul.right, [l_iter], shape_table)
             stmts = [
-                ast.For(target=_store(out_iter.id),
-                        iter=ast.Call(func=_name("range"), args=[m_extent], keywords=[]),
-                        body=[
-                            ast.Assign(targets=[ast.Subscript(value=_name(temp), slice=out_iter, ctx=ast.Store())],
-                                       value=_const(0.0)),
-                            ast.For(target=_store(l_iter.id),
-                                    iter=ast.Call(func=_name("range"), args=[k_extent], keywords=[]),
-                                    body=[
-                                        ast.AugAssign(target=ast.Subscript(value=_name(temp),
-                                                                           slice=out_iter,
-                                                                           ctx=ast.Store()),
-                                                      op=ast.Add(),
-                                                      value=ast.BinOp(left=sa, op=ast.Mult(), right=sb))
-                                    ],
-                                    orelse=[]),
-                        ],
-                        orelse=[])
+                ast.For(
+                    target=_store(out_iter.id),
+                    iter=ast.Call(func=_name("range"), args=[m_extent], keywords=[]),
+                    body=[
+                        ast.Assign(
+                            targets=[ast.Subscript(value=_name(temp), slice=out_iter, ctx=ast.Store())],
+                            value=_const(0.0),
+                        ),
+                        ast.For(
+                            target=_store(l_iter.id),
+                            iter=ast.Call(func=_name("range"), args=[k_extent], keywords=[]),
+                            body=[
+                                ast.AugAssign(
+                                    target=ast.Subscript(value=_name(temp), slice=out_iter, ctx=ast.Store()),
+                                    op=ast.Add(),
+                                    value=ast.BinOp(left=sa, op=ast.Mult(), right=sb),
+                                )
+                            ],
+                            orelse=[],
+                        ),
+                    ],
+                    orelse=[],
+                )
             ]
         return temp, stmts
     # 2-D x 2-D scalarised form: either operand may be a BinOp /
     # Subscript expression instead of a bare Name. Recover their iter
     # extents and scalarise at the matmul loop indices (i, l) / (l, j).
-    if (l_ext is not None and r_ext is not None and len(l_ext) == 2 and len(r_ext) == 2
-            and not (isinstance(matmul.left, ast.Name) and isinstance(matmul.right, ast.Name))):
+    if (
+        l_ext is not None
+        and r_ext is not None
+        and len(l_ext) == 2
+        and len(r_ext) == 2
+        and not (isinstance(matmul.left, ast.Name) and isinstance(matmul.right, ast.Name))
+    ):
         temp_counter[0] += 1
         temp = f"__mm{temp_counter[0]}"
         m_extent, k_extent = l_ext[0], l_ext[1]
         _, n_extent = r_ext
-        shape = (_static_shape_of(matmul.left, 0, shape_table)
-                 or _call_to_str(m_extent), _static_shape_of(matmul.right, 1, shape_table) or _call_to_str(n_extent))
+        shape = (
+            _static_shape_of(matmul.left, 0, shape_table) or _call_to_str(m_extent),
+            _static_shape_of(matmul.right, 1, shape_table) or _call_to_str(n_extent),
+        )
         temp_arrays[temp] = shape
         shape_table[temp] = shape
         i_iter = _name(f"__mmi{temp_counter[0]}")
@@ -7546,29 +8102,36 @@ def _hoist_matmul(matmul: ast.BinOp,
         sb = _scalarize_at_iters(matmul.right, [l_iter, j_iter], shape_table)
         out_sub = ast.Tuple(elts=[i_iter, j_iter], ctx=ast.Load())
         stmts = [
-            ast.For(target=_store(i_iter.id),
-                    iter=ast.Call(func=_name("range"), args=[m_extent], keywords=[]),
-                    body=[
-                        ast.For(target=_store(j_iter.id),
-                                iter=ast.Call(func=_name("range"), args=[n_extent], keywords=[]),
+            ast.For(
+                target=_store(i_iter.id),
+                iter=ast.Call(func=_name("range"), args=[m_extent], keywords=[]),
+                body=[
+                    ast.For(
+                        target=_store(j_iter.id),
+                        iter=ast.Call(func=_name("range"), args=[n_extent], keywords=[]),
+                        body=[
+                            ast.Assign(
+                                targets=[ast.Subscript(value=_name(temp), slice=out_sub, ctx=ast.Store())],
+                                value=_const(0.0),
+                            ),
+                            ast.For(
+                                target=_store(l_iter.id),
+                                iter=ast.Call(func=_name("range"), args=[k_extent], keywords=[]),
                                 body=[
-                                    ast.Assign(
-                                        targets=[ast.Subscript(value=_name(temp), slice=out_sub, ctx=ast.Store())],
-                                        value=_const(0.0)),
-                                    ast.For(target=_store(l_iter.id),
-                                            iter=ast.Call(func=_name("range"), args=[k_extent], keywords=[]),
-                                            body=[
-                                                ast.AugAssign(target=ast.Subscript(value=_name(temp),
-                                                                                   slice=out_sub,
-                                                                                   ctx=ast.Store()),
-                                                              op=ast.Add(),
-                                                              value=ast.BinOp(left=sa, op=ast.Mult(), right=sb))
-                                            ],
-                                            orelse=[]),
+                                    ast.AugAssign(
+                                        target=ast.Subscript(value=_name(temp), slice=out_sub, ctx=ast.Store()),
+                                        op=ast.Add(),
+                                        value=ast.BinOp(left=sa, op=ast.Mult(), right=sb),
+                                    )
                                 ],
-                                orelse=[])
-                    ],
-                    orelse=[])
+                                orelse=[],
+                            ),
+                        ],
+                        orelse=[],
+                    )
+                ],
+                orelse=[],
+            )
         ]
         return temp, stmts
     # BATCHED scalarised form -- the batched counterpart of the 2-D x 2-D branch above. The
@@ -7577,9 +8140,13 @@ def _hoist_matmul(matmul: ast.BinOp,
     # (n, h*w, in_per_group) @ (in_per_group, out_per_group), and declining it left the contraction
     # to slice fusion, which refuses. Extents come from ``_iter_extent_of`` here, which reads
     # through the slice, so the operand's spelling stops mattering.
-    if (l_ext is not None and r_ext is not None and max(len(l_ext), len(r_ext)) >= 3
-            and min(len(l_ext), len(r_ext)) >= 2
-            and not (isinstance(matmul.left, ast.Name) and isinstance(matmul.right, ast.Name))):
+    if (
+        l_ext is not None
+        and r_ext is not None
+        and max(len(l_ext), len(r_ext)) >= 3
+        and min(len(l_ext), len(r_ext)) >= 2
+        and not (isinstance(matmul.left, ast.Name) and isinstance(matmul.right, ast.Name))
+    ):
         # Both operands batched must agree on the batch RANK: numpy would broadcast a mismatch,
         # and the bare-Name path below does not model that either. Refuse rather than guess.
         if len(l_ext) >= 3 and len(r_ext) >= 3 and len(l_ext) != len(r_ext):
@@ -7594,11 +8161,11 @@ def _hoist_matmul(matmul: ast.BinOp,
         # Declare the temp from STATIC axis tokens where they exist, so the function-scope
         # declaration never names a loop variable (same rule as the branches above).
         shape = tuple(
-            _static_shape_of(batched, axis, shape_table) or _call_to_str(ext) for axis, ext in enumerate(batch_ext)) + (
-                _static_shape_of(matmul.left,
-                                 len(l_ext) - 2, shape_table)
-                or _call_to_str(m_extent), _static_shape_of(matmul.right,
-                                                            len(r_ext) - 1, shape_table) or _call_to_str(n_extent))
+            _static_shape_of(batched, axis, shape_table) or _call_to_str(ext) for axis, ext in enumerate(batch_ext)
+        ) + (
+            _static_shape_of(matmul.left, len(l_ext) - 2, shape_table) or _call_to_str(m_extent),
+            _static_shape_of(matmul.right, len(r_ext) - 1, shape_table) or _call_to_str(n_extent),
+        )
         temp_arrays[temp] = shape
         shape_table[temp] = shape
         batch_iters = [_name(f"__mmb{ctr}_{i}") for i in range(len(batch_ext))]
@@ -7612,33 +8179,43 @@ def _hoist_matmul(matmul: ast.BinOp,
         out_sub = ast.Tuple(elts=[*batch_iters, i_iter, j_iter], ctx=ast.Load())
         out_ref = lambda ctx: ast.Subscript(value=_name(temp), slice=copy.deepcopy(out_sub), ctx=ctx)
         body: List[ast.stmt] = [
-            ast.For(target=_store(j_iter.id),
-                    iter=ast.Call(func=_name("range"), args=[n_extent], keywords=[]),
-                    body=[
-                        ast.Assign(targets=[out_ref(ast.Store())], value=_const(0.0)),
-                        ast.For(target=_store(l_iter.id),
-                                iter=ast.Call(func=_name("range"), args=[k_extent], keywords=[]),
-                                body=[
-                                    ast.AugAssign(target=out_ref(ast.Store()),
-                                                  op=ast.Add(),
-                                                  value=ast.BinOp(left=sa, op=ast.Mult(), right=sb))
-                                ],
-                                orelse=[]),
-                    ],
-                    orelse=[])
+            ast.For(
+                target=_store(j_iter.id),
+                iter=ast.Call(func=_name("range"), args=[n_extent], keywords=[]),
+                body=[
+                    ast.Assign(targets=[out_ref(ast.Store())], value=_const(0.0)),
+                    ast.For(
+                        target=_store(l_iter.id),
+                        iter=ast.Call(func=_name("range"), args=[k_extent], keywords=[]),
+                        body=[
+                            ast.AugAssign(
+                                target=out_ref(ast.Store()),
+                                op=ast.Add(),
+                                value=ast.BinOp(left=sa, op=ast.Mult(), right=sb),
+                            )
+                        ],
+                        orelse=[],
+                    ),
+                ],
+                orelse=[],
+            )
         ]
         body = [
-            ast.For(target=_store(i_iter.id),
-                    iter=ast.Call(func=_name("range"), args=[m_extent], keywords=[]),
-                    body=body,
-                    orelse=[])
+            ast.For(
+                target=_store(i_iter.id),
+                iter=ast.Call(func=_name("range"), args=[m_extent], keywords=[]),
+                body=body,
+                orelse=[],
+            )
         ]
         for iter_node, ext in zip(reversed(batch_iters), reversed(batch_ext)):
             body = [
-                ast.For(target=_store(iter_node.id),
-                        iter=ast.Call(func=_name("range"), args=[ext], keywords=[]),
-                        body=body,
-                        orelse=[])
+                ast.For(
+                    target=_store(iter_node.id),
+                    iter=ast.Call(func=_name("range"), args=[ext], keywords=[]),
+                    body=body,
+                    orelse=[],
+                )
             ]
         return temp, body
     if not (isinstance(matmul.left, ast.Name) and isinstance(matmul.right, ast.Name)):
@@ -7661,9 +8238,11 @@ def _hoist_matmul(matmul: ast.BinOp,
     # 2-D matmul body in a loop nest over the batch dims, indexing the LHS by
     # ``[*batch, m, k]`` and writing the temp by ``[*batch, m, n]``. Same shape
     # for ``(m, k) @ (*batch, k, n)``.
-    if (len(a_shape) >= 3 and len(b_shape) == 2) or \
-       (len(a_shape) == 2 and len(b_shape) >= 3) or \
-       (len(a_shape) >= 3 and len(b_shape) >= 3):
+    if (
+        (len(a_shape) >= 3 and len(b_shape) == 2)
+        or (len(a_shape) == 2 and len(b_shape) >= 3)
+        or (len(a_shape) >= 3 and len(b_shape) >= 3)
+    ):
         if not (isinstance(matmul.left, ast.Name) and isinstance(matmul.right, ast.Name)):
             return None, []
         a_name_b, b_name_b = matmul.left.id, matmul.right.id
@@ -7685,39 +8264,52 @@ def _hoist_matmul(matmul: ast.BinOp,
         batch_names = [_name(b) for b in batch_iters]
         # Each operand's subscript is prefixed with the batch iters iff that
         # operand is batched; the output is always batched.
-        a_sub_elts = ((batch_names if a_batch else []) + [_name(i_iter), _name(l_iter)])
-        b_sub_elts = ((batch_names if b_batch else []) + [_name(l_iter), _name(j_iter)])
+        a_sub_elts = (batch_names if a_batch else []) + [_name(i_iter), _name(l_iter)]
+        b_sub_elts = (batch_names if b_batch else []) + [_name(l_iter), _name(j_iter)]
         out_sub_elts = batch_names + [_name(i_iter), _name(j_iter)]
         out_sub = ast.Tuple(elts=out_sub_elts, ctx=ast.Load())
-        a_sub = (ast.Tuple(elts=a_sub_elts, ctx=ast.Load()) if len(a_sub_elts) > 1 else a_sub_elts[0])
-        b_sub = (ast.Tuple(elts=b_sub_elts, ctx=ast.Load()) if len(b_sub_elts) > 1 else b_sub_elts[0])
+        a_sub = ast.Tuple(elts=a_sub_elts, ctx=ast.Load()) if len(a_sub_elts) > 1 else a_sub_elts[0]
+        b_sub = ast.Tuple(elts=b_sub_elts, ctx=ast.Load()) if len(b_sub_elts) > 1 else b_sub_elts[0]
         # Innermost: out[*batch, i, j] = 0; for l: out += a[*] * b[*].
-        zero_assign = ast.Assign(targets=[ast.Subscript(value=_name(temp), slice=out_sub, ctx=ast.Store())],
-                                 value=_const(0.0))
-        accum = ast.AugAssign(target=ast.Subscript(value=_name(temp), slice=out_sub, ctx=ast.Store()),
-                              op=ast.Add(),
-                              value=ast.BinOp(left=ast.Subscript(value=_name(a_name_b), slice=a_sub, ctx=ast.Load()),
-                                              op=ast.Mult(),
-                                              right=ast.Subscript(value=_name(b_name_b), slice=b_sub, ctx=ast.Load())))
-        l_loop = ast.For(target=_store(l_iter),
-                         iter=ast.Call(func=_name("range"), args=[_const_or_name(k)], keywords=[]),
-                         body=[accum],
-                         orelse=[])
-        j_loop = ast.For(target=_store(j_iter),
-                         iter=ast.Call(func=_name("range"), args=[_const_or_name(n)], keywords=[]),
-                         body=[zero_assign, l_loop],
-                         orelse=[])
-        i_loop = ast.For(target=_store(i_iter),
-                         iter=ast.Call(func=_name("range"), args=[_const_or_name(m)], keywords=[]),
-                         body=[j_loop],
-                         orelse=[])
+        zero_assign = ast.Assign(
+            targets=[ast.Subscript(value=_name(temp), slice=out_sub, ctx=ast.Store())], value=_const(0.0)
+        )
+        accum = ast.AugAssign(
+            target=ast.Subscript(value=_name(temp), slice=out_sub, ctx=ast.Store()),
+            op=ast.Add(),
+            value=ast.BinOp(
+                left=ast.Subscript(value=_name(a_name_b), slice=a_sub, ctx=ast.Load()),
+                op=ast.Mult(),
+                right=ast.Subscript(value=_name(b_name_b), slice=b_sub, ctx=ast.Load()),
+            ),
+        )
+        l_loop = ast.For(
+            target=_store(l_iter),
+            iter=ast.Call(func=_name("range"), args=[_const_or_name(k)], keywords=[]),
+            body=[accum],
+            orelse=[],
+        )
+        j_loop = ast.For(
+            target=_store(j_iter),
+            iter=ast.Call(func=_name("range"), args=[_const_or_name(n)], keywords=[]),
+            body=[zero_assign, l_loop],
+            orelse=[],
+        )
+        i_loop = ast.For(
+            target=_store(i_iter),
+            iter=ast.Call(func=_name("range"), args=[_const_or_name(m)], keywords=[]),
+            body=[j_loop],
+            orelse=[],
+        )
         # Wrap with the batch loops, outermost first.
         current: ast.stmt = i_loop
         for bi, bdim in zip(reversed(batch_iters), reversed(list(batch_shape))):
-            current = ast.For(target=_store(bi),
-                              iter=ast.Call(func=_name("range"), args=[_const_or_name(bdim)], keywords=[]),
-                              body=[current],
-                              orelse=[])
+            current = ast.For(
+                target=_store(bi),
+                iter=ast.Call(func=_name("range"), args=[_const_or_name(bdim)], keywords=[]),
+                body=[current],
+                orelse=[],
+            )
         return temp, [current]
 
     # Emit the matmul loop nest that fills ``temp``.
@@ -7726,104 +8318,129 @@ def _hoist_matmul(matmul: ast.BinOp,
         m, k = a_shape
         _, n = b_shape
         stmts.append(
-            ast.For(target=_store("__i"),
-                    iter=ast.Call(func=_name("range"), args=[_const_or_name(m)], keywords=[]),
-                    body=[
-                        ast.For(
-                            target=_store("__j"),
-                            iter=ast.Call(func=_name("range"), args=[_const_or_name(n)], keywords=[]),
-                            body=[
-                                ast.Assign(targets=[
-                                    ast.Subscript(value=_name(temp),
-                                                  slice=ast.Tuple(elts=[_name("__i"), _name("__j")], ctx=ast.Load()),
-                                                  ctx=ast.Store())
+            ast.For(
+                target=_store("__i"),
+                iter=ast.Call(func=_name("range"), args=[_const_or_name(m)], keywords=[]),
+                body=[
+                    ast.For(
+                        target=_store("__j"),
+                        iter=ast.Call(func=_name("range"), args=[_const_or_name(n)], keywords=[]),
+                        body=[
+                            ast.Assign(
+                                targets=[
+                                    ast.Subscript(
+                                        value=_name(temp),
+                                        slice=ast.Tuple(elts=[_name("__i"), _name("__j")], ctx=ast.Load()),
+                                        ctx=ast.Store(),
+                                    )
                                 ],
-                                           value=_const(0.0)),
-                                ast.For(target=_store("__l"),
-                                        iter=ast.Call(func=_name("range"), args=[_const_or_name(k)], keywords=[]),
-                                        body=[
-                                            ast.AugAssign(
-                                                target=ast.Subscript(value=_name(temp),
-                                                                     slice=ast.Tuple(elts=[_name("__i"),
-                                                                                           _name("__j")],
-                                                                                     ctx=ast.Load()),
-                                                                     ctx=ast.Store()),
-                                                op=ast.Add(),
-                                                value=ast.BinOp(left=ast.Subscript(
-                                                    value=_name(a_name),
-                                                    slice=ast.Tuple(elts=[_name("__i"), _name("__l")], ctx=ast.Load()),
-                                                    ctx=ast.Load()),
-                                                                op=ast.Mult(),
-                                                                right=ast.Subscript(value=_name(b_name),
-                                                                                    slice=ast.Tuple(elts=[
-                                                                                        _name("__l"),
-                                                                                        _name("__j")
-                                                                                    ],
-                                                                                                    ctx=ast.Load()),
-                                                                                    ctx=ast.Load())))
-                                        ],
-                                        orelse=[])
-                            ],
-                            orelse=[])
-                    ],
-                    orelse=[]))
+                                value=_const(0.0),
+                            ),
+                            ast.For(
+                                target=_store("__l"),
+                                iter=ast.Call(func=_name("range"), args=[_const_or_name(k)], keywords=[]),
+                                body=[
+                                    ast.AugAssign(
+                                        target=ast.Subscript(
+                                            value=_name(temp),
+                                            slice=ast.Tuple(elts=[_name("__i"), _name("__j")], ctx=ast.Load()),
+                                            ctx=ast.Store(),
+                                        ),
+                                        op=ast.Add(),
+                                        value=ast.BinOp(
+                                            left=ast.Subscript(
+                                                value=_name(a_name),
+                                                slice=ast.Tuple(elts=[_name("__i"), _name("__l")], ctx=ast.Load()),
+                                                ctx=ast.Load(),
+                                            ),
+                                            op=ast.Mult(),
+                                            right=ast.Subscript(
+                                                value=_name(b_name),
+                                                slice=ast.Tuple(elts=[_name("__l"), _name("__j")], ctx=ast.Load()),
+                                                ctx=ast.Load(),
+                                            ),
+                                        ),
+                                    )
+                                ],
+                                orelse=[],
+                            ),
+                        ],
+                        orelse=[],
+                    )
+                ],
+                orelse=[],
+            )
+        )
     elif len(a_shape) == 2 and len(b_shape) == 1:
         m, k = a_shape
         stmts.append(
-            ast.For(target=_store("__i"),
-                    iter=ast.Call(func=_name("range"), args=[_const_or_name(m)], keywords=[]),
-                    body=[
-                        ast.Assign(targets=[ast.Subscript(value=_name(temp), slice=_name("__i"), ctx=ast.Store())],
-                                   value=_const(0.0)),
-                        ast.For(target=_store("__l"),
-                                iter=ast.Call(func=_name("range"), args=[_const_or_name(k)], keywords=[]),
-                                body=[
-                                    ast.AugAssign(target=ast.Subscript(value=_name(temp),
-                                                                       slice=_name("__i"),
-                                                                       ctx=ast.Store()),
-                                                  op=ast.Add(),
-                                                  value=ast.BinOp(left=ast.Subscript(
-                                                      value=_name(a_name),
-                                                      slice=ast.Tuple(elts=[_name("__i"), _name("__l")],
-                                                                      ctx=ast.Load()),
-                                                      ctx=ast.Load()),
-                                                                  op=ast.Mult(),
-                                                                  right=ast.Subscript(value=_name(b_name),
-                                                                                      slice=_name("__l"),
-                                                                                      ctx=ast.Load())))
-                                ],
-                                orelse=[])
-                    ],
-                    orelse=[]))
+            ast.For(
+                target=_store("__i"),
+                iter=ast.Call(func=_name("range"), args=[_const_or_name(m)], keywords=[]),
+                body=[
+                    ast.Assign(
+                        targets=[ast.Subscript(value=_name(temp), slice=_name("__i"), ctx=ast.Store())],
+                        value=_const(0.0),
+                    ),
+                    ast.For(
+                        target=_store("__l"),
+                        iter=ast.Call(func=_name("range"), args=[_const_or_name(k)], keywords=[]),
+                        body=[
+                            ast.AugAssign(
+                                target=ast.Subscript(value=_name(temp), slice=_name("__i"), ctx=ast.Store()),
+                                op=ast.Add(),
+                                value=ast.BinOp(
+                                    left=ast.Subscript(
+                                        value=_name(a_name),
+                                        slice=ast.Tuple(elts=[_name("__i"), _name("__l")], ctx=ast.Load()),
+                                        ctx=ast.Load(),
+                                    ),
+                                    op=ast.Mult(),
+                                    right=ast.Subscript(value=_name(b_name), slice=_name("__l"), ctx=ast.Load()),
+                                ),
+                            )
+                        ],
+                        orelse=[],
+                    ),
+                ],
+                orelse=[],
+            )
+        )
     else:  # len(a)==1, len(b)==2
         k, n = b_shape
         stmts.append(
-            ast.For(target=_store("__j"),
-                    iter=ast.Call(func=_name("range"), args=[_const_or_name(n)], keywords=[]),
-                    body=[
-                        ast.Assign(targets=[ast.Subscript(value=_name(temp), slice=_name("__j"), ctx=ast.Store())],
-                                   value=_const(0.0)),
-                        ast.For(target=_store("__l"),
-                                iter=ast.Call(func=_name("range"), args=[_const_or_name(k)], keywords=[]),
-                                body=[
-                                    ast.AugAssign(target=ast.Subscript(value=_name(temp),
-                                                                       slice=_name("__j"),
-                                                                       ctx=ast.Store()),
-                                                  op=ast.Add(),
-                                                  value=ast.BinOp(left=ast.Subscript(value=_name(a_name),
-                                                                                     slice=_name("__l"),
-                                                                                     ctx=ast.Load()),
-                                                                  op=ast.Mult(),
-                                                                  right=ast.Subscript(
-                                                                      value=_name(b_name),
-                                                                      slice=ast.Tuple(elts=[_name("__l"),
-                                                                                            _name("__j")],
-                                                                                      ctx=ast.Load()),
-                                                                      ctx=ast.Load())))
-                                ],
-                                orelse=[])
-                    ],
-                    orelse=[]))
+            ast.For(
+                target=_store("__j"),
+                iter=ast.Call(func=_name("range"), args=[_const_or_name(n)], keywords=[]),
+                body=[
+                    ast.Assign(
+                        targets=[ast.Subscript(value=_name(temp), slice=_name("__j"), ctx=ast.Store())],
+                        value=_const(0.0),
+                    ),
+                    ast.For(
+                        target=_store("__l"),
+                        iter=ast.Call(func=_name("range"), args=[_const_or_name(k)], keywords=[]),
+                        body=[
+                            ast.AugAssign(
+                                target=ast.Subscript(value=_name(temp), slice=_name("__j"), ctx=ast.Store()),
+                                op=ast.Add(),
+                                value=ast.BinOp(
+                                    left=ast.Subscript(value=_name(a_name), slice=_name("__l"), ctx=ast.Load()),
+                                    op=ast.Mult(),
+                                    right=ast.Subscript(
+                                        value=_name(b_name),
+                                        slice=ast.Tuple(elts=[_name("__l"), _name("__j")], ctx=ast.Load()),
+                                        ctx=ast.Load(),
+                                    ),
+                                ),
+                            )
+                        ],
+                        orelse=[],
+                    ),
+                ],
+                orelse=[],
+            )
+        )
     return temp, stmts
 
 
@@ -7837,7 +8454,7 @@ class _MatmulHoister(ast.NodeTransformer):
         self.shape_table = shape_table
         self.temp_arrays = temp_arrays
         self.temp_counter = temp_counter
-        self.local_dtypes: Dict[str, str] = (local_dtypes if local_dtypes is not None else {})
+        self.local_dtypes: Dict[str, str] = local_dtypes if local_dtypes is not None else {}
         #: Dimension local -> its definition, so a contraction whose operands spell the same extent
         #: two ways (``channels`` vs ``embed_dim``) is recognised instead of declined.
         self.dim_aliases: Dict[str, str] = dim_aliases or {}
@@ -7864,7 +8481,7 @@ class _MatmulHoister(ast.NodeTransformer):
                 # Constant somewhere in the subtree), tag the matmul
                 # temp ``__mm<n>`` so its decl is the right C type.
                 for sub in ast.walk(node):
-                    if (isinstance(sub, ast.Constant) and isinstance(sub.value, complex)):
+                    if isinstance(sub, ast.Constant) and isinstance(sub.value, complex):
                         self.local_dtypes[temp] = "complex128"
                         break
                     if isinstance(sub, ast.Name):
@@ -7931,7 +8548,7 @@ class _MatmulHoister(ast.NodeTransformer):
                     continue
                 while isinstance(tgt, ast.Subscript):
                     tgt = tgt.value
-                if (isinstance(tgt, ast.Name) and tgt.id in self.temp_arrays and tgt.id not in seen):
+                if isinstance(tgt, ast.Name) and tgt.id in self.temp_arrays and tgt.id not in seen:
                     seen.append(tgt.id)
         return [_alloc_marker(n) for n in seen] + stmts
 
@@ -7977,11 +8594,11 @@ class _MatmulHoister(ast.NodeTransformer):
                 self.temp_counter[0] += 1
                 temp = f"__mm{self.temp_counter[0]}"
                 n_rows = td.logical_shape[0] if td.logical_shape else "0"
-                self.temp_arrays[temp] = (n_rows, )
-                self.shape_table[temp] = (n_rows, )
+                self.temp_arrays[temp] = (n_rows,)
+                self.shape_table[temp] = (n_rows,)
                 return temp, pre + self._sparse_matvec(td, node.right.id, temp, transposed=transposed)
-        l_sparse = (isinstance(node.left, ast.Name) and node.left.id in self.sparse)
-        r_sparse = (isinstance(node.right, ast.Name) and node.right.id in self.sparse)
+        l_sparse = isinstance(node.left, ast.Name) and node.left.id in self.sparse
+        r_sparse = isinstance(node.right, ast.Name) and node.right.id in self.sparse
         if not (l_sparse or r_sparse):
             return None  # neither operand is a sparse Name -- dense path
         if l_sparse and not isinstance(node.right, ast.Name):
@@ -8011,15 +8628,20 @@ class _MatmulHoister(ast.NodeTransformer):
                 self.temp_counter[0] += 1
                 temp = f"__mm{self.temp_counter[0]}"
                 ni = la.logical_shape[0] if la.logical_shape else "0"
-                nj = (ra.logical_shape[1] if len(ra.logical_shape) > 1 else
-                      (ra.logical_shape[0] if ra.logical_shape else "0"))
+                nj = (
+                    ra.logical_shape[1]
+                    if len(ra.logical_shape) > 1
+                    else (ra.logical_shape[0] if ra.logical_shape else "0")
+                )
                 self.temp_arrays[temp] = (ni, nj)
                 self.shape_table[temp] = (ni, nj)
                 stmts = _se.expand_matmul_csr_csr_dense(temp, la.buffers, ra.buffers, ni, nj)
                 return temp, pre + stmts
-            raise NotImplementedError(f"sparse @ sparse only supports csr @ csr; got "
-                                      f"{lfmt} @ {rfmt} ({node.left.id} @ {node.right.id}). "
-                                      "Convert operands to CSR or split the kernel.")
+            raise NotImplementedError(
+                f"sparse @ sparse only supports csr @ csr; got "
+                f"{lfmt} @ {rfmt} ({node.left.id} @ {node.right.id}). "
+                "Convert operands to CSR or split the kernel."
+            )
 
         # sparse @ dense / dense @ sparse -- exactly one operand is sparse.
         if la is not None:
@@ -8031,13 +8653,14 @@ class _MatmulHoister(ast.NodeTransformer):
         if rank == 1:
             # matvec: sparse (M x N) @ dense (N,) -> dense (M,).
             if not sp_on_left:
-                raise NotImplementedError("dense (1-D) @ sparse is a row-vector times matrix; "
-                                          "not supported -- write it as sparse.T @ x.")
+                raise NotImplementedError(
+                    "dense (1-D) @ sparse is a row-vector times matrix; not supported -- write it as sparse.T @ x."
+                )
             self.temp_counter[0] += 1
             temp = f"__mm{self.temp_counter[0]}"
             n_rows = sp_desc.logical_shape[0] if sp_desc.logical_shape else "0"
-            self.temp_arrays[temp] = (n_rows, )
-            self.shape_table[temp] = (n_rows, )
+            self.temp_arrays[temp] = (n_rows,)
+            self.shape_table[temp] = (n_rows,)
             stmts = self._sparse_matvec(sp_desc, dense_name, temp)
             return temp, pre + stmts
         # matmat sparse @ dense (2-D) -> dense -- CSR only for now.
@@ -8050,8 +8673,10 @@ class _MatmulHoister(ast.NodeTransformer):
             self.shape_table[temp] = (n_rows, n_cols)
             stmts = _se.expand_matmul_csr_dense_mat(temp, sp_desc.buffers, dense_name, n_rows, n_cols)
             return temp, pre + stmts
-        raise NotImplementedError(f"sparse @ dense for format {sp_desc.format} with dense rank "
-                                  f"{rank} not supported ({node.left.id} @ {node.right.id}).")
+        raise NotImplementedError(
+            f"sparse @ dense for format {sp_desc.format} with dense rank "
+            f"{rank} not supported ({node.left.id} @ {node.right.id})."
+        )
 
     def _materialise_dense_operand(self, expr: ast.expr, max_rank: Optional[int] = None):
         """Copy a non-Name dense matmul operand into a fresh temp array, so the consumer -- which
@@ -8085,14 +8710,17 @@ class _MatmulHoister(ast.NodeTransformer):
         self.shape_table[temp] = shape
         iters = [_name(f"__spvi{n}_{ax}") for ax in range(len(ext))]
         elem = _scalarize_at_iters(expr, iters, self.shape_table)
-        sub_slice = (ast.Tuple(elts=list(iters), ctx=ast.Load()) if len(iters) > 1 else iters[0])
-        body: ast.stmt = ast.Assign(targets=[ast.Subscript(value=_name(temp), slice=sub_slice, ctx=ast.Store())],
-                                    value=elem)
+        sub_slice = ast.Tuple(elts=list(iters), ctx=ast.Load()) if len(iters) > 1 else iters[0]
+        body: ast.stmt = ast.Assign(
+            targets=[ast.Subscript(value=_name(temp), slice=sub_slice, ctx=ast.Store())], value=elem
+        )
         for it, extent in zip(reversed(iters), reversed(list(ext))):
-            body = ast.For(target=_store(it.id),
-                           iter=ast.Call(func=_name("range"), args=[extent], keywords=[]),
-                           body=[body],
-                           orelse=[])
+            body = ast.For(
+                target=_store(it.id),
+                iter=ast.Call(func=_name("range"), args=[extent], keywords=[]),
+                body=[body],
+                orelse=[],
+            )
         return temp, [body]
 
     def _transpose_sparse_desc(self, operand):
@@ -8112,10 +8740,15 @@ class _MatmulHoister(ast.NodeTransformer):
         ``logical_shape`` is reversed either way, so the caller sizes the result temp off the
         transpose's own row count without knowing which kind it got.
         """
-        if not (isinstance(operand, ast.Attribute) and operand.attr == "T" and isinstance(operand.value, ast.Name)
-                and operand.value.id in self.sparse):
+        if not (
+            isinstance(operand, ast.Attribute)
+            and operand.attr == "T"
+            and isinstance(operand.value, ast.Name)
+            and operand.value.id in self.sparse
+        ):
             return None
         from numpyto_common.ir import SparseArrayDesc
+
         d = self.sparse[operand.value.id]
         ls = list(d.logical_shape) if d.logical_shape else []
         swapped = tuple(reversed(ls)) if len(ls) >= 2 else tuple(ls)
@@ -8144,11 +8777,12 @@ class _MatmulHoister(ast.NodeTransformer):
         forward matvec on the dual descriptor is the transpose.
         """
         from numpyto_common import sparse_emit as _se
+
         fmt = sp_desc.format
         bufs = sp_desc.buffers
         tgt = _name(temp)
         n_rows = sp_desc.logical_shape[0] if sp_desc.logical_shape else "0"
-        n_cols = (sp_desc.logical_shape[1] if len(sp_desc.logical_shape) > 1 else "0")
+        n_cols = sp_desc.logical_shape[1] if len(sp_desc.logical_shape) > 1 else "0"
 
         def _buf_shape(role, axis):
             """Shape token of the physical buffer for ``role`` at ``axis``,
@@ -8186,8 +8820,8 @@ class _MatmulHoister(ast.NodeTransformer):
             # on the caller to declare it (see expand_matmul_jds_* docstring):
             # register it as a fresh (n_rows,) local so the emitter allocates
             # it -- the dispatcher zeroes it itself.
-            self.temp_arrays["__jds_y_perm"] = (n_rows, )
-            self.shape_table["__jds_y_perm"] = (n_rows, )
+            self.temp_arrays["__jds_y_perm"] = (n_rows,)
+            self.shape_table["__jds_y_perm"] = (n_rows,)
             return _se.expand_matmul_jds_dense_vec(tgt, bufs, dense_name, n_rows, njd)
         if fmt == "bcsr":
             # block dims live on the descriptor's logical shape vs buffer
@@ -8247,8 +8881,11 @@ class _CallHoister(ast.NodeTransformer):
         if isinstance(func, ast.Attribute):
             if isinstance(func.value, ast.Name):
                 return ("np" if func.value.id == "np" else func.value.id, func.attr)
-            if (isinstance(func.value, ast.Attribute) and isinstance(func.value.value, ast.Name)
-                    and func.value.value.id == "np"):
+            if (
+                isinstance(func.value, ast.Attribute)
+                and isinstance(func.value.value, ast.Name)
+                and func.value.value.id == "np"
+            ):
                 return ("np", f"{func.value.attr}.{func.attr}")
         return None
 
@@ -8260,7 +8897,7 @@ class _CallHoister(ast.NodeTransformer):
         # ``__cb<n>`` temp before the repeat expander ever ran, losing the one
         # piece of syntax that proves the sum is derivable. Visit every other
         # child normally and leave that one argument untouched.
-        if (self._key_of(node) == ("np", "repeat") and len(node.args) >= 2 and _diff_operand(node.args[1]) is not None):
+        if self._key_of(node) == ("np", "repeat") and len(node.args) >= 2 and _diff_operand(node.args[1]) is not None:
             node.func = self.visit(node.func)
             node.args = [(a if i == 1 else self.visit(a)) for i, a in enumerate(node.args)]
             node.keywords = [self.visit(kw) for kw in node.keywords]
@@ -8270,12 +8907,14 @@ class _CallHoister(ast.NodeTransformer):
         # ``np.maximum(input @ w1 + b1, 0)`` -> ``__mm1 = input @ w1; ...;
         # np.maximum(__mm1 + b1, 0)``, so the elementwise expander sees a bare
         # BinOp on Names, not a MatMult.
-        mm = _MatmulHoister(self.shape_table,
-                            self.array_temps,
-                            self.counter,
-                            local_dtypes=self.local_dtypes,
-                            sparse=vars(self).get("sparse"),
-                            dim_aliases=self.dim_aliases)
+        mm = _MatmulHoister(
+            self.shape_table,
+            self.array_temps,
+            self.counter,
+            local_dtypes=self.local_dtypes,
+            sparse=vars(self).get("sparse"),
+            dim_aliases=self.dim_aliases,
+        )
         node.args = [mm.visit(a) for a in node.args]
         self.pre_stmts.extend(mm.pre_stmts)
         # Hoist a non-Name first arg of an array reduction (sum/max/min/mean/
@@ -8289,14 +8928,48 @@ class _CallHoister(ast.NodeTransformer):
         # otherwise the whole-array roll stays buried in the broadcast BinOp
         # and the per-element scalarizer mangles it into a scalar-arg roll.
         key = self._key_of(node)
-        if (key in ({("np", k)
-                     for k in {
-                         "sum", "max", "min", "mean", "prod", "std", "var", "median", "any", "all", "count_nonzero",
-                         "argmax", "argmin", "repeat", "transpose", "reshape", "triu", "tril", "flip", "roll", "copy",
-                         "array", "bincount", "cumsum", "cumprod", "swapaxes", "expand_dims", "squeeze", "moveaxis"
-                     }}
-                    | {("np", "fft.fftn"), ("np", "fft.ifftn"), ("np", "fft.fft"), ("np", "fft.ifft")}) and node.args
-                and not isinstance(node.args[0], ast.Name)):
+        if (
+            key
+            in (
+                {
+                    ("np", k)
+                    for k in {
+                        "sum",
+                        "max",
+                        "min",
+                        "mean",
+                        "prod",
+                        "std",
+                        "var",
+                        "median",
+                        "any",
+                        "all",
+                        "count_nonzero",
+                        "argmax",
+                        "argmin",
+                        "repeat",
+                        "transpose",
+                        "reshape",
+                        "triu",
+                        "tril",
+                        "flip",
+                        "roll",
+                        "copy",
+                        "array",
+                        "bincount",
+                        "cumsum",
+                        "cumprod",
+                        "swapaxes",
+                        "expand_dims",
+                        "squeeze",
+                        "moveaxis",
+                    }
+                }
+                | {("np", "fft.fftn"), ("np", "fft.ifftn"), ("np", "fft.fft"), ("np", "fft.ifft")}
+            )
+            and node.args
+            and not isinstance(node.args[0], ast.Name)
+        ):
             first = node.args[0]
             ext = _iter_extent_of(first, self.shape_table)
             if ext is not None:
@@ -8316,15 +8989,22 @@ class _CallHoister(ast.NodeTransformer):
                 # per-element copy later.
                 if _has_slice_subscript(first):
                     rank = len(shape)
-                    slice_form = (ast.Slice(lower=None, upper=None, step=None) if rank == 1 else ast.Tuple(
-                        elts=[ast.Slice(lower=None, upper=None, step=None) for _ in range(rank)], ctx=ast.Load()))
-                    marker = ast.Assign(targets=[ast.Name(id=temp, ctx=ast.Store())],
-                                        value=ast.Call(func=ast.Name(id="__hpcagent_bench_zeros__", ctx=ast.Load()),
-                                                       args=[],
-                                                       keywords=[]))
-                    slice_lhs = ast.Subscript(value=ast.Name(id=temp, ctx=ast.Load()),
-                                              slice=slice_form,
-                                              ctx=ast.Store())
+                    slice_form = (
+                        ast.Slice(lower=None, upper=None, step=None)
+                        if rank == 1
+                        else ast.Tuple(
+                            elts=[ast.Slice(lower=None, upper=None, step=None) for _ in range(rank)], ctx=ast.Load()
+                        )
+                    )
+                    marker = ast.Assign(
+                        targets=[ast.Name(id=temp, ctx=ast.Store())],
+                        value=ast.Call(
+                            func=ast.Name(id="__hpcagent_bench_zeros__", ctx=ast.Load()), args=[], keywords=[]
+                        ),
+                    )
+                    slice_lhs = ast.Subscript(
+                        value=ast.Name(id=temp, ctx=ast.Load()), slice=slice_form, ctx=ast.Store()
+                    )
                     slice_assign = ast.Assign(targets=[slice_lhs], value=first)
                     self.pre_stmts.append(marker)
                     self.pre_stmts.append(slice_assign)
@@ -8355,8 +9035,25 @@ class _CallHoister(ast.NodeTransformer):
         temp = f"__cb{self.counter[0]}"
         # Classify: scalar return vs array return.
         is_scalar = key[1] in {
-            "sum", "max", "min", "mean", "prod", "std", "var", "dot", "vdot", "inner", "linalg.norm", "linalg.det",
-            "argmax", "argmin", "any", "all", "count_nonzero", "median", "trace"
+            "sum",
+            "max",
+            "min",
+            "mean",
+            "prod",
+            "std",
+            "var",
+            "dot",
+            "vdot",
+            "inner",
+            "linalg.norm",
+            "linalg.det",
+            "argmax",
+            "argmin",
+            "any",
+            "all",
+            "count_nonzero",
+            "median",
+            "trace",
         }
         # ``np.inner`` is scalar ONLY for rank-1 x rank-1; higher ranks
         # contract the last axes into an array result.
@@ -8369,10 +9066,26 @@ class _CallHoister(ast.NodeTransformer):
         # (``_expand_var_or_std``, std is var plus a sqrt). Omitting it left
         # gpt2_block's layer-norm ``np.var(z, axis=-1, keepdims=True)``
         # classified scalar, so its temp was never sized or declared an array.
-        if (is_scalar and key[1] in {
-                "sum", "max", "min", "mean", "prod", "std", "var", "argmax", "argmin", "any", "all", "count_nonzero",
-                "linalg.norm"
-        } and self._cur_axis is not None):
+        if (
+            is_scalar
+            and key[1]
+            in {
+                "sum",
+                "max",
+                "min",
+                "mean",
+                "prod",
+                "std",
+                "var",
+                "argmax",
+                "argmin",
+                "any",
+                "all",
+                "count_nonzero",
+                "linalg.norm",
+            }
+            and self._cur_axis is not None
+        ):
             is_scalar = False
         if is_scalar and node.args and isinstance(node.args[0], ast.Subscript):
             # np.dot on 1-D slices is scalar.
@@ -8403,9 +9116,16 @@ class _CallHoister(ast.NodeTransformer):
             # dtype: ``Xiv = np.reshape(Xi, (xn * yn,))`` where ``Xi``
             # is int64 must keep Xiv as int64, not the default double.
             SHAPE_PRESERVING = {
-                "reshape", "repeat", "copy", "array", "asarray", "ascontiguousarray", "transpose", "flip"
+                "reshape",
+                "repeat",
+                "copy",
+                "array",
+                "asarray",
+                "ascontiguousarray",
+                "transpose",
+                "flip",
             }
-            if (key[1] in SHAPE_PRESERVING and node.args and temp not in self.local_dtypes):
+            if key[1] in SHAPE_PRESERVING and node.args and temp not in self.local_dtypes:
                 first = node.args[0]
                 if isinstance(first, ast.Name):
                     src_dt = self.local_dtypes.get(first.id)
@@ -8414,14 +9134,21 @@ class _CallHoister(ast.NodeTransformer):
             # An all-integer elementwise ufunc returns an INTEGER array in numpy --
             # declare the temp int64 so an exact int64 result is not round-tripped
             # through a double (which drops every bit above 2**53).
-            if (key[1] in _INT_PRESERVING_ELEMENTWISE and temp not in self.local_dtypes
-                    and _all_integer_operands(node.args, self.local_dtypes)):
+            if (
+                key[1] in _INT_PRESERVING_ELEMENTWISE
+                and temp not in self.local_dtypes
+                and _all_integer_operands(node.args, self.local_dtypes)
+            ):
                 self.local_dtypes[temp] = "int64"
             # ``np.where`` promotes its two VALUE operands and ignores the condition's dtype, so an
             # integer select stays integer -- the last hop of bitonic_sort's comparator network,
             # whose int64 payload was otherwise handed back through a float temp.
-            if (key[1] == "where" and len(node.args) == 3 and temp not in self.local_dtypes
-                    and _all_integer_operands(node.args[1:], self.local_dtypes)):
+            if (
+                key[1] == "where"
+                and len(node.args) == 3
+                and temp not in self.local_dtypes
+                and _all_integer_operands(node.args[1:], self.local_dtypes)
+            ):
                 self.local_dtypes[temp] = "int64"
         else:
             self.scalar_temps[temp] = True
@@ -8433,7 +9160,7 @@ class _CallHoister(ast.NodeTransformer):
             # Fortran emit's running-max ``merge(int_elem, real_acc, ...)`` update is
             # a kind mismatch. mean/std/var/median are excluded: they produce a float
             # even from an int input.
-            elif (key[1] in {"max", "min", "sum", "prod"} and node.args and isinstance(node.args[0], ast.Name)):
+            elif key[1] in {"max", "min", "sum", "prod"} and node.args and isinstance(node.args[0], ast.Name):
                 src_dt = self.local_dtypes.get(node.args[0].id)
                 if src_dt and dtypes.is_integer(src_dt):
                     self.local_dtypes[temp] = src_dt
@@ -8444,10 +9171,11 @@ class _CallHoister(ast.NodeTransformer):
         # then lowers into a per-element copy via the existing call-expansion path.
         if not is_scalar:
             self.pre_stmts.append(
-                ast.Assign(targets=[ast.Name(id=temp, ctx=ast.Store())],
-                           value=ast.Call(func=ast.Name(id="__hpcagent_bench_zeros__", ctx=ast.Load()),
-                                          args=[],
-                                          keywords=[])))
+                ast.Assign(
+                    targets=[ast.Name(id=temp, ctx=ast.Store())],
+                    value=ast.Call(func=ast.Name(id="__hpcagent_bench_zeros__", ctx=ast.Load()), args=[], keywords=[]),
+                )
+            )
         # Synthesise an Assign that the LibNodeRewriter will lower.
         self.pre_stmts.append(ast.Assign(targets=[ast.Name(id=temp, ctx=ast.Store())], value=node))
         return ast.Name(id=temp, ctx=ast.Load())
@@ -8474,7 +9202,7 @@ class _CallHoister(ast.NodeTransformer):
         if op == "bincount" and args:
             minlength = _kwarg_or_pos(args, keywords or [], 2, "minlength")
             if minlength is not None:
-                return (self._extent_to_shape_token(minlength), )
+                return (self._extent_to_shape_token(minlength),)
         # ``np.searchsorted(a, v)`` -> one index per element of the VALUES operand, so the temp
         # takes ``v``'s extent and not the sorted array's.
         if op == "searchsorted" and len(args) >= 2:
@@ -8495,23 +9223,23 @@ class _CallHoister(ast.NodeTransformer):
             # arange_count: `stop - start` ignores the step, which over-allocates for step > 1 and
             # is NEGATIVE for a step < 0 (see arange_count).
             if op == "linspace" and len(args) >= 3:
-                return (self._extent_to_shape_token(args[2]), )
+                return (self._extent_to_shape_token(args[2]),)
             if op == "arange":
                 if len(args) == 1:
-                    return (self._extent_to_shape_token(args[0]), )
+                    return (self._extent_to_shape_token(args[0]),)
                 if len(args) == 2:
-                    return (ast.unparse(ast.BinOp(left=args[1], op=ast.Sub(), right=args[0])), )
+                    return (ast.unparse(ast.BinOp(left=args[1], op=ast.Sub(), right=args[0])),)
                 if len(args) >= 3:
-                    return (ast.unparse(arange_count(list(args[:3]))), )
+                    return (ast.unparse(arange_count(list(args[:3]))),)
         # ``np.fromfunction(lambda..., (N, M))`` -> the SECOND arg is the shape.
         if op == "fromfunction" and len(args) >= 2:
             sh = args[1]
-            elts = (sh.elts if isinstance(sh, (ast.Tuple, ast.List)) else [sh])
+            elts = sh.elts if isinstance(sh, (ast.Tuple, ast.List)) else [sh]
             return tuple(self._extent_to_shape_token(e) for e in elts)
         # ``np.histogram(a, bins, ...)`` returns ``hist`` of length
         # ``bins`` (the ``[0]`` Subscript unwrap selects it).
         if op == "histogram" and len(args) >= 2:
-            return (self._extent_to_shape_token(args[1]), )
+            return (self._extent_to_shape_token(args[1]),)
         # ``np.linalg.inv(A)`` returns the square inverse with A's
         # shape.
         if op == "linalg.inv" and args and isinstance(args[0], ast.Name):
@@ -8519,22 +9247,20 @@ class _CallHoister(ast.NodeTransformer):
             if shape:
                 return tuple(shape)
         # ``np.linalg.solve(A, b)`` returns x with b's shape.
-        if op == "linalg.solve" and len(args) >= 2 \
-                and isinstance(args[1], ast.Name):
+        if op == "linalg.solve" and len(args) >= 2 and isinstance(args[1], ast.Name):
             shape = self.shape_table.get(args[1].id)
             if shape:
                 return tuple(shape)
         # Every ``np.fft.*`` transform is shape-preserving (the output has the
         # same shape as the input -- only the values change).
-        if op in {"fft.fftn", "fft.ifftn", "fft.fft", "fft.ifft"} \
-                and args and isinstance(args[0], ast.Name):
+        if op in {"fft.fftn", "fft.ifftn", "fft.fft", "fft.ifft"} and args and isinstance(args[0], ast.Name):
             shape = self.shape_table.get(args[0].id)
             if shape:
                 return tuple(shape)
         # ``np.fft.fftfreq(n, d=...)`` -> a 1-D frequency array of length ``n``
         # (the first positional arg is the sample count, not an array operand).
         if op == "fft.fftfreq" and args:
-            return (self._extent_to_shape_token(args[0]), )
+            return (self._extent_to_shape_token(args[0]),)
         # ``np.diag(v [, k])`` -- 1-D operand builds an ``(n+|k|, n+|k|)`` matrix,
         # 2-D operand extracts the diagonal. Reuses the ``_iter_extent_of`` rule
         # so the constructed-shape logic lives in one place; lets a Lanczos
@@ -8550,8 +9276,7 @@ class _CallHoister(ast.NodeTransformer):
         # return an array with the FIRST operand's shape -- so an inline
         # ``acc + np.roll(x, m, axis)`` (the periodic-stencil idiom) can be
         # hoisted out of the BinOp instead of reaching the emitter unlowered.
-        if op in {"roll", "linalg.cholesky", "tril", "triu"} \
-                and args and isinstance(args[0], ast.Name):
+        if op in {"roll", "linalg.cholesky", "tril", "triu"} and args and isinstance(args[0], ast.Name):
             shape = self.shape_table.get(args[0].id)
             if shape:
                 return tuple(shape)
@@ -8616,7 +9341,7 @@ class _CallHoister(ast.NodeTransformer):
         # for 2-D operands, axis 0 for 1-D operands. Sum the
         # concatenation-axis widths; the other axes are shared.
         if op == "hstack" and args:
-            ops = (list(args[0].elts) if (len(args) == 1 and isinstance(args[0], ast.Tuple)) else list(args))
+            ops = list(args[0].elts) if (len(args) == 1 and isinstance(args[0], ast.Tuple)) else list(args)
             shapes = []
             for op_arg in ops:
                 if not isinstance(op_arg, ast.Name):
@@ -8629,7 +9354,7 @@ class _CallHoister(ast.NodeTransformer):
                 return None
             rank = len(shapes[0])
             if rank == 1:
-                return (sum_width_tokens([s[0] for s in shapes]), )
+                return (sum_width_tokens([s[0] for s in shapes]),)
             if rank == 2:
                 return (shapes[0][0], sum_width_tokens([s[1] for s in shapes]))
             return None
@@ -8675,7 +9400,7 @@ class _CallHoister(ast.NodeTransformer):
                 if src_shape:
                     # args doesn't carry keywords (those are on the parent
                     # call), so read the live axis/keepdims stash visit_Call set.
-                    kw_axes, kw_keep = vars(self).get('_cur_axis'), vars(self).get('_cur_keepdims', False)
+                    kw_axes, kw_keep = vars(self).get("_cur_axis"), vars(self).get("_cur_keepdims", False)
                     if kw_axes is None:
                         return None  # scalar -- not array-shape
                     # ``_read_axis_keepdims`` returns a list or None; normalise
@@ -8717,7 +9442,7 @@ class _CallHoister(ast.NodeTransformer):
         if op in {"outer", "add.outer"} and len(args) == 2:
             a_ext = _iter_extent_of(args[0], self.shape_table)
             b_ext = _iter_extent_of(args[1], self.shape_table)
-            if (a_ext is not None and b_ext is not None and len(a_ext) == 1 and len(b_ext) == 1):
+            if a_ext is not None and b_ext is not None and len(a_ext) == 1 and len(b_ext) == 1:
                 return (self._extent_to_shape_token(a_ext[0]), self._extent_to_shape_token(b_ext[0]))
         # ``np.diagonal(a)`` on a SQUARE rank-2 operand: one element per row. Without a size here the
         # hoister declines, so the diagonal stayed inline inside ``np.tanh(...)`` -- where the
@@ -8725,10 +9450,9 @@ class _CallHoister(ast.NodeTransformer):
         if op == "diagonal" and len(args) == 1:
             d_ext = _iter_extent_of(args[0], self.shape_table)
             if d_ext is not None and len(d_ext) == 2 and ast.unparse(d_ext[0]) == ast.unparse(d_ext[1]):
-                return (self._extent_to_shape_token(d_ext[0]), )
+                return (self._extent_to_shape_token(d_ext[0]),)
         # linalg ops that preserve their argument's shape.
-        if op in {"linalg.cholesky", "linalg.inv"} \
-                and args and isinstance(args[0], ast.Name):
+        if op in {"linalg.cholesky", "linalg.inv"} and args and isinstance(args[0], ast.Name):
             shape = self.shape_table.get(args[0].id)
             if shape:
                 return tuple(shape)
@@ -8750,14 +9474,9 @@ class _CallHoister(ast.NodeTransformer):
 import inspect
 
 
-def _call_expander(expander,
-                   target,
-                   args,
-                   keywords,
-                   shape_table,
-                   local_dtypes=None,
-                   fresh_local_allocs=None,
-                   dim_aliases=None):
+def _call_expander(
+    expander, target, args, keywords, shape_table, local_dtypes=None, fresh_local_allocs=None, dim_aliases=None
+):
     """Adapter: pass ``keywords``/``local_dtypes``/``fresh_local_allocs`` to
     expanders that accept them, else call with the legacy signature. The two
     extra tables let an expander register internal working buffers (shape +
@@ -8791,19 +9510,71 @@ def _call_expander(expander,
 #: binary libm ufuncs, and each omission made ``_derive_output_shape`` return None -- which does not
 #: fail, it silently DECLINES to hoist and leaves a bare ``np.square(...)`` for the emitter.
 NON_ELEMENTWISE_SHAPE_OPS: Set[str] = set(_REDUCTION_NAMES) | {
-    "reshape", "repeat", "transpose", "flip", "roll", "triu", "tril", "concatenate", "stack", "pad", "diag", "diagonal",
-    "diff", "trace", "einsum", "tensordot", "inner", "outer", "dot", "vdot", "matmul", "cumsum", "cumprod", "linspace",
-    "arange", "zeros", "ones", "empty", "full", "eye", "identity", "fromfunction", "meshgrid", "mgrid", "sort",
-    "argsort", "histogram", "unique", "take", "interp", "searchsorted", "nonzero", "kron", "cross", "split",
-    "expand_dims", "squeeze", "swapaxes", "moveaxis", "ravel", "flatten", "tile", "broadcast_to", "atleast_1d",
-    "atleast_2d", "append", "insert", "delete"
+    "reshape",
+    "repeat",
+    "transpose",
+    "flip",
+    "roll",
+    "triu",
+    "tril",
+    "concatenate",
+    "stack",
+    "pad",
+    "diag",
+    "diagonal",
+    "diff",
+    "trace",
+    "einsum",
+    "tensordot",
+    "inner",
+    "outer",
+    "dot",
+    "vdot",
+    "matmul",
+    "cumsum",
+    "cumprod",
+    "linspace",
+    "arange",
+    "zeros",
+    "ones",
+    "empty",
+    "full",
+    "eye",
+    "identity",
+    "fromfunction",
+    "meshgrid",
+    "mgrid",
+    "sort",
+    "argsort",
+    "histogram",
+    "unique",
+    "take",
+    "interp",
+    "searchsorted",
+    "nonzero",
+    "kron",
+    "cross",
+    "split",
+    "expand_dims",
+    "squeeze",
+    "swapaxes",
+    "moveaxis",
+    "ravel",
+    "flatten",
+    "tile",
+    "broadcast_to",
+    "atleast_1d",
+    "atleast_2d",
+    "append",
+    "insert",
+    "delete",
 }
 
 ELEMENTWISE_SHAPE_OPS: FrozenSet[str] = frozenset(
-    name for module, name in NP_CALL_EXPANDERS
-    if module == "np" and "." not in name and name not in NON_ELEMENTWISE_SHAPE_OPS) | {
-        "copy", "array", "where", "clip"
-    }
+    name
+    for module, name in NP_CALL_EXPANDERS
+    if module == "np" and "." not in name and name not in NON_ELEMENTWISE_SHAPE_OPS
+) | {"copy", "array", "where", "clip"}
 
 _SLICE_TARGET_EXPANDERS = {("np", "cumsum"), ("np", "cumprod")}
 
@@ -8921,11 +9692,16 @@ def _reduction_misses_target(target: ast.Subscript, loop: ast.For, body: ast.exp
         return False
     # The nonnegativity below is what proves the miss, so demand the 0-based
     # ``range(n)`` that makes it true rather than assuming every hoist emits one.
-    if not (isinstance(loop.iter, ast.Call) and isinstance(loop.iter.func, ast.Name) and loop.iter.func.id == "range"
-            and len(loop.iter.args) == 1):
+    if not (
+        isinstance(loop.iter, ast.Call)
+        and isinstance(loop.iter.func, ast.Name)
+        and loop.iter.func.id == "range"
+        and len(loop.iter.args) == 1
+    ):
         return False
     # Deferred: sympy import costs ~100s of ms and only this narrow shape needs it.
     import sympy
+
     iter_name = loop.target.id
     it = sympy.Symbol(iter_name, nonnegative=True)
     for read in reads:
@@ -8951,10 +9727,16 @@ def _accumulation_addend(step: ast.stmt, scalar: str) -> Optional[ast.expr]:
         if isinstance(step.op, ast.Add) and isinstance(step.target, ast.Name) and step.target.id == scalar:
             return step.value
         return None
-    if (isinstance(step, ast.Assign) and len(step.targets) == 1 and isinstance(step.targets[0], ast.Name)
-            and step.targets[0].id == scalar and isinstance(step.value, ast.BinOp)
-            and isinstance(step.value.op, ast.Add) and isinstance(step.value.left, ast.Name)
-            and step.value.left.id == scalar):
+    if (
+        isinstance(step, ast.Assign)
+        and len(step.targets) == 1
+        and isinstance(step.targets[0], ast.Name)
+        and step.targets[0].id == scalar
+        and isinstance(step.value, ast.BinOp)
+        and isinstance(step.value.op, ast.Add)
+        and isinstance(step.value.left, ast.Name)
+        and step.value.left.id == scalar
+    ):
         return step.value.right
     return None
 
@@ -8989,16 +9771,24 @@ def _retarget_scalar_accumulator(node: ast.stmt, prelude: List[ast.stmt]) -> Opt
         target = node.targets[0]
     # A single cell is the whole point: a slice destination is a different lowering
     # (slice fusion) and would not give pet the affine reduction carrier we are after.
-    if not (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)
-            and _index_axes(target) is not None):
+    if not (
+        isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name) and _index_axes(target) is not None
+    ):
         return None
     scalar = node.value.id
     init, loop = prelude[-2], prelude[-1]
-    if not (isinstance(init, ast.Assign) and len(init.targets) == 1 and isinstance(init.targets[0], ast.Name)
-            and init.targets[0].id == scalar and isinstance(init.value, ast.Constant) and init.value.value == 0.0):
+    if not (
+        isinstance(init, ast.Assign)
+        and len(init.targets) == 1
+        and isinstance(init.targets[0], ast.Name)
+        and init.targets[0].id == scalar
+        and isinstance(init.value, ast.Constant)
+        and init.value.value == 0.0
+    ):
         return None
-    if not (isinstance(loop, ast.For) and not loop.orelse and len(loop.body) == 1
-            and isinstance(loop.target, ast.Name)):
+    if not (
+        isinstance(loop, ast.For) and not loop.orelse and len(loop.body) == 1 and isinstance(loop.target, ast.Name)
+    ):
         return None
     addend = _accumulation_addend(loop.body[0], scalar)
     if addend is None:
@@ -9031,14 +9821,16 @@ class LibNodeRewriter(ast.NodeTransformer):
     matmul-hoisted/scalarised.
     """
 
-    def __init__(self,
-                 shape_table: Dict[str, Tuple[str, ...]],
-                 known_arrays: Optional[Set[str]] = None,
-                 local_dtypes: Optional[Dict[str, str]] = None,
-                 sparse: Optional[Dict[str, object]] = None,
-                 dim_aliases: Optional[Dict[str, str]] = None,
-                 native_call: Optional[Callable[[Tuple[str, str], ast.Call, Dict, Dict], bool]] = None,
-                 native_dtypes: Optional[Dict[str, str]] = None):
+    def __init__(
+        self,
+        shape_table: Dict[str, Tuple[str, ...]],
+        known_arrays: Optional[Set[str]] = None,
+        local_dtypes: Optional[Dict[str, str]] = None,
+        sparse: Optional[Dict[str, object]] = None,
+        dim_aliases: Optional[Dict[str, str]] = None,
+        native_call: Optional[Callable[[Tuple[str, str], ast.Call, Dict, Dict], bool]] = None,
+        native_dtypes: Optional[Dict[str, str]] = None,
+    ):
         self.shape_table = shape_table
         #: Target's "I render this numpy call myself" predicate. A call it claims is left
         #: UNEXPANDED so the emitter can use its own intrinsic -- Fortran's SUM/MAXVAL/NORM2 --
@@ -9061,7 +9853,7 @@ class LibNodeRewriter(ast.NodeTransformer):
         #: Per-local dtype table, shared with ``_CallHoister`` so the temp it
         #: synthesises for ``np.exp(-2j * ...)`` carries ``complex128`` through
         #: to the emit-time declaration.
-        self.local_dtypes: Dict[str, str] = (local_dtypes if local_dtypes is not None else {})
+        self.local_dtypes: Dict[str, str] = local_dtypes if local_dtypes is not None else {}
         #: Filled-in temps the emitter must declare as local arrays (same dict
         #: shape as ``zeros_locals`` so the zeros rewriter picks them up once
         #: LibNodeRewriter has finished).
@@ -9082,22 +9874,26 @@ class LibNodeRewriter(ast.NodeTransformer):
         # np.dot(A[i, :j], A[j, :j])`` becomes ``__cb1 = np.dot(...); A[i, j]
         # -= __cb1`` -- the next matmul hoist + expansion passes then handle
         # the synthetic assignment uniformly.
-        call_hoister = _CallHoister(self.shape_table,
-                                    self.scalar_call_temps,
-                                    self.matmul_temps,
-                                    self._counter,
-                                    local_dtypes=self.local_dtypes,
-                                    dim_aliases=self.dim_aliases)
+        call_hoister = _CallHoister(
+            self.shape_table,
+            self.scalar_call_temps,
+            self.matmul_temps,
+            self._counter,
+            local_dtypes=self.local_dtypes,
+            dim_aliases=self.dim_aliases,
+        )
         call_hoister.sparse = self.sparse
         value = call_hoister.visit(value)
         pre = list(call_hoister.pre_stmts)
         # Now hoist any matmul subexpressions.
-        mm_hoister = _MatmulHoister(self.shape_table,
-                                    self.matmul_temps,
-                                    self._counter,
-                                    local_dtypes=self.local_dtypes,
-                                    sparse=self.sparse,
-                                    dim_aliases=self.dim_aliases)
+        mm_hoister = _MatmulHoister(
+            self.shape_table,
+            self.matmul_temps,
+            self._counter,
+            local_dtypes=self.local_dtypes,
+            sparse=self.sparse,
+            dim_aliases=self.dim_aliases,
+        )
         new_value = mm_hoister.visit(value)
         pre.extend(mm_hoister.pre_stmts)
         return new_value, pre
@@ -9123,8 +9919,13 @@ class LibNodeRewriter(ast.NodeTransformer):
         # source array's shape may only become known during this pass (eigh_test's ``scaled =
         # np.zeros_like(bu)``, where ``bu`` is an eigh output this same rewriter expands), and a
         # local with no shape declines every matmul it feeds -- which slice fusion then refuses.
-        if (isinstance(rhs, ast.Call) and isinstance(rhs.func, ast.Attribute) and isinstance(rhs.func.value, ast.Name)
-                and rhs.func.value.id == "np" and rhs.func.attr in NP_ZEROS_ALIASES):
+        if (
+            isinstance(rhs, ast.Call)
+            and isinstance(rhs.func, ast.Attribute)
+            and isinstance(rhs.func.value, ast.Name)
+            and rhs.func.value.id == "np"
+            and rhs.func.attr in NP_ZEROS_ALIASES
+        ):
             if rhs.func.attr.endswith("_like") and rhs.args and isinstance(rhs.args[0], ast.Name):
                 src = self.shape_table.get(rhs.args[0].id)
                 if src is not None:
@@ -9133,8 +9934,13 @@ class LibNodeRewriter(ast.NodeTransformer):
         # Shape-CHANGING ops (reshape/repeat/transpose) aren't elementwise, but
         # the generic ``_iter_extent_of`` Call branch would treat them as such
         # and return the source operand's extent -- the wrong shape for the LHS.
-        if (isinstance(rhs, ast.Call) and isinstance(rhs.func, ast.Attribute) and isinstance(rhs.func.value, ast.Name)
-                and rhs.func.value.id == "np" and rhs.func.attr in {"reshape", "repeat", "transpose"}):
+        if (
+            isinstance(rhs, ast.Call)
+            and isinstance(rhs.func, ast.Attribute)
+            and isinstance(rhs.func.value, ast.Name)
+            and rhs.func.value.id == "np"
+            and rhs.func.attr in {"reshape", "repeat", "transpose"}
+        ):
             attr = rhs.func.attr
             if attr == "reshape" and len(rhs.args) >= 2:
                 # ``yv = np.reshape(y, (R**i, R, ...))`` -- the result
@@ -9144,9 +9950,9 @@ class LibNodeRewriter(ast.NodeTransformer):
                 if isinstance(newshape, (ast.Tuple, ast.List)):
                     toks = tuple(ast.unparse(e) for e in newshape.elts)
                 elif isinstance(newshape, ast.Name):
-                    toks = (newshape.id, )
+                    toks = (newshape.id,)
                 elif _const_int(newshape) is not None:
-                    toks = (str(_const_int(newshape)), )
+                    toks = (str(_const_int(newshape)),)
                 if toks is not None:
                     # Resolve a ``-1`` placeholder (``x.reshape(batch, -1)``) to the source
                     # element count divided by the product of the other target dims.
@@ -9197,10 +10003,13 @@ class LibNodeRewriter(ast.NodeTransformer):
         """
         func = call.func
         if isinstance(func, ast.Attribute):
-            if (isinstance(func.value, ast.Name)):
+            if isinstance(func.value, ast.Name):
                 return ("np" if func.value.id == "np" else func.value.id, func.attr)
-            if (isinstance(func.value, ast.Attribute) and isinstance(func.value.value, ast.Name)
-                    and func.value.value.id == "np"):
+            if (
+                isinstance(func.value, ast.Attribute)
+                and isinstance(func.value.value, ast.Name)
+                and func.value.value.id == "np"
+            ):
                 # ``np.linalg.cholesky`` -> key ("np", "linalg.cholesky")
                 return ("np", f"{func.value.attr}.{func.attr}")
         return None
@@ -9214,16 +10023,26 @@ class LibNodeRewriter(ast.NodeTransformer):
         # the slice-LHS-with-call form to ``D = call(...)`` so the registered
         # call expander fires -- required for stockham_fft's ``y[:] =
         # np.reshape(...)`` and ``D[:] = np.repeat(...)``.
-        if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Subscript)
-                and isinstance(node.targets[0].value, ast.Name) and _is_full_slice_subscript(node.targets[0])
-                and isinstance(node.value, ast.Call) and self._lookup(node.value) in NP_CALL_EXPANDERS):
+        if (
+            len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Subscript)
+            and isinstance(node.targets[0].value, ast.Name)
+            and _is_full_slice_subscript(node.targets[0])
+            and isinstance(node.value, ast.Call)
+            and self._lookup(node.value) in NP_CALL_EXPANDERS
+        ):
             node.targets[0] = ast.Name(id=node.targets[0].value.id, ctx=ast.Store())
         # ``y = np.linalg.lstsq(A, b, rcond=...)[0]`` canonicalisation: strip
         # the trailing ``[0]`` subscript on a tuple-returning call so the
         # registered call expander fires on the bare call. Only lstsq/histogram
         # for now; extend as other tuple-returners (svd, eig, etc.) land.
-        if (len(node.targets) == 1 and isinstance(node.value, ast.Subscript) and isinstance(node.value.value, ast.Call)
-                and isinstance(node.value.slice, ast.Constant) and node.value.slice.value == 0):
+        if (
+            len(node.targets) == 1
+            and isinstance(node.value, ast.Subscript)
+            and isinstance(node.value.value, ast.Call)
+            and isinstance(node.value.slice, ast.Constant)
+            and node.value.slice.value == 0
+        ):
             inner = node.value.value
             inner_key = self._lookup(inner)
             if inner_key in {("np", "linalg.lstsq"), ("np", "histogram")}:
@@ -9236,20 +10055,24 @@ class LibNodeRewriter(ast.NodeTransformer):
         # the RHS against the OLD binding, and refreshing first made ``x = x @ w.T + b`` contract over
         # the RESULT's extent: out_features instead of in_features, silently dropping terms when
         # in > out and reading past the row when in < out.
-        if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
+        if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
             self._update_shape_for_assign(node.targets[0].id, node.value)
         # Whole-array alias propagation: ``x = <Name>`` where the RHS is a Name
         # with a known shape gives ``x`` the same shape, so downstream visits
         # see ``x`` as an array. Also propagate ``local_dtypes``, else a
         # complex temp aliased to a fresh local loses its dtype tag and the
         # next call hoister synthesizes a non-complex temp.
-        if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and isinstance(node.value, ast.Name)
-                and node.value.id in self.shape_table):
+        if (
+            len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Name)
+            and node.value.id in self.shape_table
+        ):
             self.shape_table[node.targets[0].id] = self.shape_table[node.value.id]
             rhs_dt = self.local_dtypes.get(node.value.id)
             if rhs_dt and node.targets[0].id not in self.local_dtypes:
                 self.local_dtypes[node.targets[0].id] = rhs_dt
-        if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
+        if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
             target = node.targets[0]
             if isinstance(node.value, ast.Call):
                 key = self._lookup(node.value)
@@ -9258,20 +10081,25 @@ class LibNodeRewriter(ast.NodeTransformer):
                     return node
                 if expander is not None:
                     try:
-                        expanded = _call_expander(expander,
-                                                  target,
-                                                  node.value.args,
-                                                  node.value.keywords,
-                                                  self.shape_table,
-                                                  local_dtypes=self.local_dtypes,
-                                                  fresh_local_allocs=self.fresh_local_allocs,
-                                                  dim_aliases=self.dim_aliases)
+                        expanded = _call_expander(
+                            expander,
+                            target,
+                            node.value.args,
+                            node.value.keywords,
+                            self.shape_table,
+                            local_dtypes=self.local_dtypes,
+                            fresh_local_allocs=self.fresh_local_allocs,
+                            dim_aliases=self.dim_aliases,
+                        )
                         # Linspace/arange/similar element-write expanders
                         # consume the original Assign, leaving the target
                         # dangling without a decl -- register a fresh-local
                         # allocation now so the emitter sees the shape downstream.
-                        if (key in _ELEMENT_WRITE_EXPANDERS and target.id in self.shape_table
-                                and target.id not in self.known_arrays):
+                        if (
+                            key in _ELEMENT_WRITE_EXPANDERS
+                            and target.id in self.shape_table
+                            and target.id not in self.known_arrays
+                        ):
                             # Not gated on the local being UNREGISTERED: a temp the call-hoister
                             # already spilled is registered as an array temp but still carries no
                             # allocation SITE, and the expander has just consumed the assignment
@@ -9292,8 +10120,11 @@ class LibNodeRewriter(ast.NodeTransformer):
                         # iota (numpy intp) -- declare the local int64 so a
                         # gather index built from it (``q = j % nx``) is
                         # integer, not the float default (fft_3d).
-                        if (key == ("np", "arange") and target.id not in self.local_dtypes
-                                and all(_is_integer_expr(a, self.local_dtypes) for a in node.value.args)):
+                        if (
+                            key == ("np", "arange")
+                            and target.id not in self.local_dtypes
+                            and all(_is_integer_expr(a, self.local_dtypes) for a in node.value.args)
+                        ):
                             self.local_dtypes[target.id] = "int64"
                         tag_numpy_origin(expanded, numpy_text)
                         return prelude + expanded
@@ -9303,18 +10134,24 @@ class LibNodeRewriter(ast.NodeTransformer):
         # = np.cumsum(m_sizes)``): the full-slice case is canonicalised to a bare
         # Name above, but a shifted slice keeps its offset, routed to the
         # offset-aware cumulative expander.
-        if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Subscript)
-                and isinstance(node.targets[0].value, ast.Name) and isinstance(node.value, ast.Call)):
+        if (
+            len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Subscript)
+            and isinstance(node.targets[0].value, ast.Name)
+            and isinstance(node.value, ast.Call)
+        ):
             key = self._lookup(node.value)
             if key in _SLICE_TARGET_EXPANDERS:
                 try:
-                    expanded = _call_expander(NP_CALL_EXPANDERS[key],
-                                              node.targets[0],
-                                              node.value.args,
-                                              node.value.keywords,
-                                              self.shape_table,
-                                              local_dtypes=self.local_dtypes,
-                                              fresh_local_allocs=self.fresh_local_allocs)
+                    expanded = _call_expander(
+                        NP_CALL_EXPANDERS[key],
+                        node.targets[0],
+                        node.value.args,
+                        node.value.keywords,
+                        self.shape_table,
+                        local_dtypes=self.local_dtypes,
+                        fresh_local_allocs=self.fresh_local_allocs,
+                    )
                     return prelude + expanded
                 except NotImplementedError:
                     pass
@@ -9344,8 +10181,12 @@ class LibNodeRewriter(ast.NodeTransformer):
         """
         out: List[ast.stmt] = []
         for stmt in prelude:
-            if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
-                    and isinstance(stmt.value, ast.Call)):
+            if (
+                isinstance(stmt, ast.Assign)
+                and len(stmt.targets) == 1
+                and isinstance(stmt.targets[0], ast.Name)
+                and isinstance(stmt.value, ast.Call)
+            ):
                 key = self._lookup(stmt.value)
                 expander = NP_CALL_EXPANDERS.get(key) if key else None
                 if expander is not None and self._target_renders(key, stmt.value):
@@ -9353,14 +10194,16 @@ class LibNodeRewriter(ast.NodeTransformer):
                     continue
                 if expander is not None:
                     try:
-                        expanded = _call_expander(expander,
-                                                  stmt.targets[0],
-                                                  stmt.value.args,
-                                                  stmt.value.keywords,
-                                                  self.shape_table,
-                                                  local_dtypes=self.local_dtypes,
-                                                  fresh_local_allocs=self.fresh_local_allocs,
-                                                  dim_aliases=self.dim_aliases)
+                        expanded = _call_expander(
+                            expander,
+                            stmt.targets[0],
+                            stmt.value.args,
+                            stmt.value.keywords,
+                            self.shape_table,
+                            local_dtypes=self.local_dtypes,
+                            fresh_local_allocs=self.fresh_local_allocs,
+                            dim_aliases=self.dim_aliases,
+                        )
                         # Same note as the direct path: the hoister split ``out = f(np.sum(a))`` into
                         # a temp assign, and it is THIS statement that becomes the loop nest.
                         tag_numpy_origin(expanded, ast.unparse(stmt.value))
@@ -9370,16 +10213,22 @@ class LibNodeRewriter(ast.NodeTransformer):
                         # malloc'd at its marker. Without one, max_filter's hoisted running-max
                         # scan wrote its first element through that NULL.
                         spilled = stmt.targets[0].id
-                        if (key in _ELEMENT_WRITE_EXPANDERS and spilled in self.shape_table
-                                and spilled not in self.known_arrays):
+                        if (
+                            key in _ELEMENT_WRITE_EXPANDERS
+                            and spilled in self.shape_table
+                            and spilled not in self.known_arrays
+                        ):
                             self.fresh_local_allocs.setdefault(spilled, tuple(self.shape_table[spilled]))
                             out.append(_alloc_marker(spilled))
                         out.extend(expanded)
                         # Integer-iota arange in the prelude (hoisted ``__cb =
                         # np.arange(1, 1025)``) keeps an int64 dtype so a derived
                         # gather index stays integer (fft_3d).
-                        if (key == ("np", "arange") and stmt.targets[0].id not in self.local_dtypes
-                                and all(_is_integer_expr(a, self.local_dtypes) for a in stmt.value.args)):
+                        if (
+                            key == ("np", "arange")
+                            and stmt.targets[0].id not in self.local_dtypes
+                            and all(_is_integer_expr(a, self.local_dtypes) for a in stmt.value.args)
+                        ):
                             self.local_dtypes[stmt.targets[0].id] = "int64"
                         continue
                     except NotImplementedError:

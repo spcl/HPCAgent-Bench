@@ -16,6 +16,7 @@ survived as a call a ``@dc.program`` cannot make, and emitted no program at all.
 The load-bearing assertion is the last one. Picking the wrong arm still produces a program, and
 every value it computes is wrong -- so the arm is checked against the reference, not assumed.
 """
+
 import ast
 
 import numpy as np
@@ -29,16 +30,18 @@ BACKENDS = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 
 #: ``_instance_norm``'s exact shape: an ``is None`` guard with a pure binding BETWEEN it and the
 #: trailing return. The affine arm is scaled far from 1.0 so selecting it cannot pass as round-off.
-NORM_SRC = ("import numpy as np\n"
-            "def _norm(x, weight):\n"
-            " mean = np.sum(x) / x.shape[0]\n"
-            " y = x - mean\n"
-            " if weight is None:\n"
-            "  return y\n"
-            " shape = (x.shape[0],)\n"
-            " return y * np.reshape(weight, shape) * 100.0\n"
-            "def f(x, out):\n"
-            " out[:] = _norm(x, None)\n")
+NORM_SRC = (
+    "import numpy as np\n"
+    "def _norm(x, weight):\n"
+    " mean = np.sum(x) / x.shape[0]\n"
+    " y = x - mean\n"
+    " if weight is None:\n"
+    "  return y\n"
+    " shape = (x.shape[0],)\n"
+    " return y * np.reshape(weight, shape) * 100.0\n"
+    "def f(x, out):\n"
+    " out[:] = _norm(x, None)\n"
+)
 
 
 def parse(src: str) -> ast.Module:
@@ -63,9 +66,11 @@ def test_an_identity_test_against_a_literal_is_a_static_flag_test():
 
 @pytest.mark.parametrize(
     "expr,reason",
-    [("weight is other", "neither side is a literal, so nothing is decided"),
-     ("thing is None", "the name is not a parameter every call site pins to a literal"),
-     ("weight is None is None", "a chained compare has no single decidable pair")],
+    [
+        ("weight is other", "neither side is a literal, so nothing is decided"),
+        ("thing is None", "the name is not a parameter every call site pins to a literal"),
+        ("weight is None is None", "a chained compare has no single decidable pair"),
+    ],
 )
 def test_an_undecidable_identity_test_is_declined(expr, reason):
     """An undecidable guard fused into an ``IfExp`` over ARRAY branches has no target form: C's
@@ -107,16 +112,18 @@ def test_a_binding_that_calls_is_not_lifted():
 def test_a_binding_the_guard_reads_is_not_lifted():
     """Moving it above the guard would change which value the guard tests -- the one case where
     the lift is not merely early but wrong."""
-    read_by_guard = ("import numpy as np\n"
-                     "def _norm(x, weight):\n"
-                     " shape = 0\n"
-                     " y = x - 1.0\n"
-                     " if weight is None:\n"
-                     "  return y + shape\n"
-                     " shape = x.shape[0]\n"
-                     " return y * shape\n"
-                     "def f(x, out):\n"
-                     " out[:] = _norm(x, None)\n")
+    read_by_guard = (
+        "import numpy as np\n"
+        "def _norm(x, weight):\n"
+        " shape = 0\n"
+        " y = x - 1.0\n"
+        " if weight is None:\n"
+        "  return y + shape\n"
+        " shape = x.shape[0]\n"
+        " return y * shape\n"
+        "def f(x, out):\n"
+        " out[:] = _norm(x, None)\n"
+    )
     tree = parse(read_by_guard)
     _fuse_guarded_returns(tree)
     body = helper_of(tree, "_norm").body
@@ -127,11 +134,7 @@ def test_the_selected_arm_is_the_one_the_reference_takes():
     """Every backend, against numpy's own answer. ``weight=None`` selects the CENTERED array, and
     the affine arm it must not select is a hundred times larger."""
     x = np.arange(1.0, 9.0)
-    verdicts = run_op(NORM_SRC,
-                      "f", {"x": x}, {"out": (8, )}, {"N": 8},
-                      shapes={
-                          "x": "(N,)",
-                          "out": "(N,)"
-                      },
-                      backends=BACKENDS)
+    verdicts = run_op(
+        NORM_SRC, "f", {"x": x}, {"out": (8,)}, {"N": 8}, shapes={"x": "(N,)", "out": "(N,)"}, backends=BACKENDS
+    )
     assert all(v == "ok" or v.startswith("skip") for v in verdicts.values()), verdicts

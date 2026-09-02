@@ -9,6 +9,7 @@ detects a known shift is worthless unless it stays quiet on two identical distri
 directions are asserted for every decision this module makes, because the false-POSITIVE side is
 the one such code usually leaves untested.
 """
+
 import math
 import warnings
 from typing import Dict, Tuple
@@ -382,7 +383,7 @@ def test_wilcoxon_refuses_unequal_lengths() -> None:
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_tost_declares_equivalence_for_two_identical_distributions(seed: int) -> None:
-    """"This optimisation changed nothing measurable" as a POSITIVE claim."""
+    """ "This optimisation changed nothing measurable" as a POSITIVE claim."""
     generator = rng(seed)
     a = 100.0 * generator.lognormal(0.0, 0.05, 200)
     b = 100.0 * generator.lognormal(0.0, 0.05, 200)

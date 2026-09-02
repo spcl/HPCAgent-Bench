@@ -27,6 +27,7 @@ arguments (already narrowed by the hook's path filter). ``--fix`` inserts the
 header in place; without it the tool only reports, exiting 1 when any in-scope
 file is missing the header (the offenders and the fix command are printed).
 """
+
 import argparse
 import re
 import subprocess
@@ -80,7 +81,7 @@ def prefix_len(lines):
 
 def has_header(lines):
     idx = prefix_len(lines)
-    seg = [line.rstrip("\n") for line in lines[idx:idx + 2]]
+    seg = [line.rstrip("\n") for line in lines[idx : idx + 2]]
     return len(seg) == 2 and COPYRIGHT_RE.match(seg[0]) is not None and seg[1] == SPDX_LINE
 
 

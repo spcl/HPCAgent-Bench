@@ -66,17 +66,19 @@ def emit_binding(kir: KernelIR, out_path: pathlib.Path, base_name: str = None, s
     return payload
 
 
-def emit_pluto_binding(kir: KernelIR,
-                       out_path: pathlib.Path,
-                       base_name: str = None,
-                       symbol: str = None) -> Dict[str, Any]:
+def emit_pluto_binding(
+    kir: KernelIR, out_path: pathlib.Path, base_name: str = None, symbol: str = None
+) -> Dict[str, Any]:
     """Binding for the Pluto backend: same schema as :func:`emit_binding`, args ordered symbols/arrays/scalars."""
     sym_by_name = {s.name: s for s in kir.symbols}
     arr_by_name = {a.name: a for a in kir.arrays}
     sca_by_name = {s.name: s for s in kir.scalars}
     order = kir.param_order()
-    grouped = ([n for n in order if n in sym_by_name] + [n for n in order if n in arr_by_name] +
-               [n for n in order if n in sca_by_name])
+    grouped = (
+        [n for n in order if n in sym_by_name]
+        + [n for n in order if n in arr_by_name]
+        + [n for n in order if n in sca_by_name]
+    )
     args = [_arg_entry(n, sym_by_name, arr_by_name, sca_by_name) for n in grouped]
     base = base_name or kir.short_name or kir.kernel_name
     sym = symbol or entry_symbol(base)
@@ -84,12 +86,8 @@ def emit_pluto_binding(kir: KernelIR,
         "kernel": base,
         "abi": "c",
         "args": args,
-        "symbols": {
-            "c": sym
-        },
-        "sources": {
-            "c": f"{base}_pluto.c"
-        },
+        "symbols": {"c": sym},
+        "sources": {"c": f"{base}_pluto.c"},
     }
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(payload, indent=2))

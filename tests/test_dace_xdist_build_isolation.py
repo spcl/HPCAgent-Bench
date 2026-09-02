@@ -10,6 +10,7 @@ through. Imported from that module and NOT from ``conftest``: both test trees ha
 and CI collects them together, so the bare name resolves to whichever was imported first -- a
 collection error that killed the whole integration job 21 minutes in, before any test ran.
 """
+
 import os
 import pathlib
 

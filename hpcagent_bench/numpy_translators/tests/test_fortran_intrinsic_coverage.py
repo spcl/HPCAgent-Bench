@@ -18,6 +18,7 @@ Two kinds live in it and they are not the same:
 The dict may only SHRINK. An op that starts reaching its intrinsic and is still listed fails here,
 so the list cannot rot into a description of the past.
 """
+
 import json
 import pathlib
 import re
@@ -69,19 +70,16 @@ CASES = {
     "dot": ("DOT_PRODUCT", "    s = np.dot(v, v)\n    out[:] = v * s\n", V1),
     "inner": ("DOT_PRODUCT", "    s = np.inner(v, v)\n    out[:] = v * s\n", V1),
     "vdot": ("DOT_PRODUCT", "    s = np.vdot(v, v)\n    out[:] = v * s\n", V1),
-    "transpose": ("TRANSPOSE", "    c = np.transpose(a)\n    out[:] = c[0, :] * 2.0\n", ({
-        "a": "(N, N)",
-        "out": "(N,)"
-    }, {
-        "N": 6
-    })),
-    "reshape": ("RESHAPE", "    c = np.reshape(a, (M, N))\n    out[:] = c[0, :] * 2.0\n", ({
-        "a": "(N, M)",
-        "out": "(N,)"
-    }, {
-        "N": 6,
-        "M": 6
-    })),
+    "transpose": (
+        "TRANSPOSE",
+        "    c = np.transpose(a)\n    out[:] = c[0, :] * 2.0\n",
+        ({"a": "(N, N)", "out": "(N,)"}, {"N": 6}),
+    ),
+    "reshape": (
+        "RESHAPE",
+        "    c = np.reshape(a, (M, N))\n    out[:] = c[0, :] * 2.0\n",
+        ({"a": "(N, M)", "out": "(N,)"}, {"N": 6, "M": 6}),
+    ),
     "roll": ("CSHIFT", "    c = np.roll(v, 2)\n    out[:] = c * 2.0\n", V1),
     "where": ("MERGE", "    out[:] = np.where(v > 0.0, v, -v)\n", V1),
     "abs": ("ABS", "    out[:] = np.abs(v)\n", V1),
@@ -101,27 +99,18 @@ CASES = {
     "fmod": ("MOD", "    out[:] = np.fmod(v, 2.0)\n", V1),
     "erf": ("ERF", "    out[:] = np.erf(v)\n", V1),
     "erfc": ("ERFC", "    out[:] = np.erfc(v)\n", V1),
-    "matmul": ("MATMUL", "    c = a @ a\n    out[:] = c[0, :] * 2.0\n", ({
-        "a": "(N, N)",
-        "out": "(N,)"
-    }, {
-        "N": 6
-    })),
-    "tensordot": ("MATMUL", "    c = np.tensordot(a, a, axes=([1], [1]))\n    out[:] = c[0, :] * 2.0\n", ({
-        "a": "(N, M)",
-        "out": "(N,)"
-    }, {
-        "N": 6,
-        "M": 4
-    })),
+    "matmul": ("MATMUL", "    c = a @ a\n    out[:] = c[0, :] * 2.0\n", ({"a": "(N, N)", "out": "(N,)"}, {"N": 6})),
+    "tensordot": (
+        "MATMUL",
+        "    c = np.tensordot(a, a, axes=([1], [1]))\n    out[:] = c[0, :] * 2.0\n",
+        ({"a": "(N, M)", "out": "(N,)"}, {"N": 6, "M": 4}),
+    ),
     "flip": ("(", "    c = np.flip(v)\n    out[:] = c * 2.0\n", V1),
-    "moveaxis": ("RESHAPE", "    c = np.moveaxis(a, 0, 1)\n    out[:] = c[0, :] * 2.0\n", ({
-        "a": "(N, M)",
-        "out": "(M,)"
-    }, {
-        "N": 6,
-        "M": 4
-    })),
+    "moveaxis": (
+        "RESHAPE",
+        "    c = np.moveaxis(a, 0, 1)\n    out[:] = c[0, :] * 2.0\n",
+        ({"a": "(N, M)", "out": "(M,)"}, {"N": 6, "M": 4}),
+    ),
     "cumsum": (None, "    c = np.cumsum(v)\n    out[:] = c * 2.0\n", V1),
     "sort": (None, "    c = np.sort(v)\n    out[:] = c * 2.0\n", V1),
 }

@@ -7,6 +7,7 @@ provide, and rollback-journal locking over them is unreliable. Each rank therefo
 persistent shard and the shards are merged afterwards -- on demand, by
 :func:`recording.ensure_aggregated`, so no caller has to remember an aggregation step.
 """
+
 import os
 import pathlib
 import sqlite3
@@ -25,25 +26,32 @@ def _seed(path: str, *, run: str, kernels: List[str], with_results: bool = True)
     try:
         for kernel in kernels:
             conn.execute(
-                "INSERT OR REPLACE INTO benchmarks(name, track, kind, domain, dwarf, source) "
-                "VALUES (?,?,?,?,?,?)", (kernel, "scientific_computing", "dense", "linalg", "dense_la", None))
+                "INSERT OR REPLACE INTO benchmarks(name, track, kind, domain, dwarf, source) VALUES (?,?,?,?,?,?)",
+                (kernel, "scientific_computing", "dense", "linalg", "dense_la", None),
+            )
             conn.execute(
                 "INSERT INTO submissions(run_id, ts, benchmark, preset, datatype, language, "
                 "source_mode, optimizer, baseline, speedup) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (run, 1, kernel, "S", "float64", "c", "restricted", "noop", "c", 1.5))
+                (run, 1, kernel, "S", "float64", "c", "restricted", "noop", "c", 1.5),
+            )
             conn.execute(
                 "INSERT INTO attempts(run_id, ts, benchmark, preset, datatype, language, "
                 "source_mode, build_ok, correct, reason) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (run, 1, kernel, "S", "float64", "c", "restricted", 0, 0, "build"))
+                (run, 1, kernel, "S", "float64", "c", "restricted", 0, 0, "build"),
+            )
             if with_results:
                 # The framework ``results`` table belongs to another module's schema but lives in the
                 # same file; aggregation must carry it even though recording.py never creates it.
-                conn.execute("CREATE TABLE IF NOT EXISTS results ("
-                             "id INTEGER PRIMARY KEY, timestamp INTEGER, benchmark TEXT, preset TEXT, "
-                             "framework TEXT, validated INTEGER, time REAL)")
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS results ("
+                    "id INTEGER PRIMARY KEY, timestamp INTEGER, benchmark TEXT, preset TEXT, "
+                    "framework TEXT, validated INTEGER, time REAL)"
+                )
                 conn.execute(
                     "INSERT INTO results(timestamp, benchmark, preset, framework, validated, time) "
-                    "VALUES (?,?,?,?,?,?)", (1, kernel, "S", "numpy", 1, 2.0))
+                    "VALUES (?,?,?,?,?,?)",
+                    (1, kernel, "S", "numpy", 1, 2.0),
+                )
         conn.commit()
     finally:
         conn.close()
@@ -191,6 +199,7 @@ def test_a_single_writer_run_still_writes_a_shard(monkeypatch, tmp_path):
     """Nothing writes the base file. It is BOTH authoritative and derived otherwise -- the next
     merge erases it, and its mtime makes a stale aggregate look fresh."""
     from hpcagent_bench import config
+
     for name in ("HPCAGENT_BENCH_DB_SHARD", "SLURM_PROCID", "OMPI_COMM_WORLD_RANK", "PMI_RANK"):
         monkeypatch.delenv(name, raising=False)
     config.set_override("record.db_path", str(tmp_path / "hpcagent_bench.db"))
@@ -273,10 +282,17 @@ def test_db_shard_is_none_when_single_writer(monkeypatch):
 def test_memory_backed_storage_is_refused(tmp_path):
     """Results on tmpfs vanish with the allocation and steal RAM from the kernel being measured."""
     from hpcagent_bench import config
+
     # Whichever of the host's temp locations is actually in RAM -- named by the probe rather than
     # hardcoded, since which mounts are tmpfs differs per host and per CI image.
-    memory_dir = next((d for d in (tmp_path, pathlib.Path(tempfile.gettempdir()))
-                       if recording.memory_backed_fstype(str(d)) is not None), None)
+    memory_dir = next(
+        (
+            d
+            for d in (tmp_path, pathlib.Path(tempfile.gettempdir()))
+            if recording.memory_backed_fstype(str(d)) is not None
+        ),
+        None,
+    )
     if memory_dir is None:
         pytest.skip("no memory-backed temp directory on this host")
     config.set_override("record.db_path", str(memory_dir / "hpcagent_bench.db"))

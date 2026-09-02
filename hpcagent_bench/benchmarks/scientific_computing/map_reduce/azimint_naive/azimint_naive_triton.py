@@ -37,7 +37,7 @@ def triton_max(x: torch.Tensor):
     while n > 1:
         grid_size = triton.cdiv(n, MIN_BLOCK)
         out = torch.empty(grid_size, dtype=cur.dtype)
-        _kernel_max[(grid_size, )](cur, out, n)
+        _kernel_max[(grid_size,)](cur, out, n)
         cur = out
         n = cur.numel()
     return cur[0]
@@ -45,8 +45,9 @@ def triton_max(x: torch.Tensor):
 
 @triton.autotune(configs=generate_config(), key=["N"], cache_results=True)
 @triton.jit
-def _accumulate_bins_kernel(data_ptr, radius_ptr, sums_ptr, counts_ptr, N, n_bins, rmax: tl.float64,
-                            BLOCK_SIZE: tl.constexpr):
+def _accumulate_bins_kernel(
+    data_ptr, radius_ptr, sums_ptr, counts_ptr, N, n_bins, rmax: tl.float64, BLOCK_SIZE: tl.constexpr
+):
     # axis 0 = bin index; axis 1 = block id over the data
     bin_idx = tl.program_id(axis=0)
     pid = tl.program_id(axis=1)
@@ -112,7 +113,7 @@ def azimint_naive(data: torch.Tensor, radius: torch.Tensor, npt: int):
         rmax,
     )
 
-    grid = lambda meta: (triton.cdiv(npt, meta["BLOCK_SIZE_NPT"]), )
+    grid = lambda meta: (triton.cdiv(npt, meta["BLOCK_SIZE_NPT"]),)
     _finalize_means_kernel[grid](
         sums,
         counts,

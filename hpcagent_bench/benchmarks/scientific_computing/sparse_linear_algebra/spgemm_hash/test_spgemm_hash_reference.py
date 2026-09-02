@@ -17,6 +17,7 @@ this file gates the two things that can be checked without a GPU:
 The port was additionally checked against the *running* upstream on real graphs
 (SuiteSparse roadNet-CA / belgium_osm etc. through a patched cuBool) -- see the port notes;
 that check needs a GPU and the SpBench build, so it does not live in pytest."""
+
 import importlib.util
 from pathlib import Path
 from types import ModuleType
@@ -44,7 +45,7 @@ def _union_oracle(A_indptr, A_indices, B_indptr, B_indices):
         acc = set()
         for j in range(A_indptr[i], A_indptr[i + 1]):
             a_col = A_indices[j]
-            acc.update(B_indices[B_indptr[a_col]:B_indptr[a_col + 1]].tolist())
+            acc.update(B_indices[B_indptr[a_col] : B_indptr[a_col + 1]].tolist())
         rows.append(sorted(acc))
     indptr = np.zeros(len(rows) + 1, dtype=np.int64)
     indptr[1:] = np.cumsum([len(r) for r in rows])
@@ -101,7 +102,7 @@ def test_rectangular_and_distinct_axes() -> None:
     ref_indptr, ref_indices = _union_oracle(A_indptr, A_indices, B_indptr, B_indices)
     spgemm_hash(A_indices, A_indptr, B_indices, B_indptr, cols, rows, C_indices, C_indptr)
     np.testing.assert_array_equal(C_indptr, ref_indptr)
-    np.testing.assert_array_equal(C_indices[:int(ref_indptr[-1])], ref_indices)
+    np.testing.assert_array_equal(C_indices[: int(ref_indptr[-1])], ref_indices)
 
 
 def test_output_contract() -> None:
@@ -114,7 +115,7 @@ def test_output_contract() -> None:
     assert np.all(C_indices[:nnz] >= 0) and np.all(C_indices[:nnz] < _N)
     assert np.all(C_indices[nnz:] == -1), "wrote past the row pointers"
     for i in range(_M):
-        row = C_indices[C_indptr[i]:C_indptr[i + 1]]
+        row = C_indices[C_indptr[i] : C_indptr[i + 1]]
         assert np.all(np.diff(row) > 0), f"row {i} is not strictly ascending"
     for got, want in zip((A_indptr, A_indices, B_indptr, B_indices), pristine):
         np.testing.assert_array_equal(got, want)

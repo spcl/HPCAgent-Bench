@@ -9,6 +9,7 @@ each tree has a ``conftest`` of its own: collecting ``tests/`` and
 resolve to whichever one was imported first, which is a COLLECTION error that kills the whole job
 before a single test runs. A uniquely named module has no such ambiguity.
 """
+
 import os
 import pathlib
 

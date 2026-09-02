@@ -1,6 +1,7 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Unit tests for the container-launch factory: argv assembly, backend resolution, Harbor provider name."""
+
 import os
 import pathlib
 import subprocess
@@ -25,7 +26,7 @@ def test_load_backends_lists_every_backend():
     spellings, passthrough = containers.load_backends()
     assert set(spellings) == {"docker", "podman", "apptainer", "ce", "native"}
     assert "ANTHROPIC_API_KEY" in passthrough
-    assert spellings["apptainer"].verb == ("exec", )
+    assert spellings["apptainer"].verb == ("exec",)
     assert spellings["podman"].verb == ("run", "--rm", "--network", "host")
     assert spellings["docker"].verb == ("run", "--rm", "--network", "host")
 
@@ -38,13 +39,16 @@ def test_oci_is_a_standard_not_a_program():
     spellings, _ = containers.load_backends()
     assert "oci" not in spellings  # a standard has no row: it is not a thing you exec
     assert containers.family_members("oci") == ("docker", "podman")
-    assert containers.family_members("sif") == ("apptainer", )
-    assert containers.family_members("ce") == ("ce", )
-    assert containers.family_members("native") == ("native", )
+    assert containers.family_members("sif") == ("apptainer",)
+    assert containers.family_members("ce") == ("ce",)
+    assert containers.family_members("native") == ("native",)
     podman, docker = spellings["podman"], spellings["docker"]
     assert podman.verb == docker.verb
-    assert (podman.bind_flag, podman.workdir_flag, podman.env_flag) == (docker.bind_flag, docker.workdir_flag,
-                                                                        docker.env_flag)
+    assert (podman.bind_flag, podman.workdir_flag, podman.env_flag) == (
+        docker.bind_flag,
+        docker.workdir_flag,
+        docker.env_flag,
+    )
     assert podman.image_form == docker.image_form == "tag"
     assert podman.gpu["nvidia"] != docker.gpu["nvidia"]  # the one flag spelling that differs
     assert podman.rootless and not docker.rootless  # and the one property that decides defaults
@@ -118,8 +122,9 @@ def test_a_sif_is_never_the_distributed_artifact():
 def test_ce_contributes_an_srun_flag_and_refuses_to_be_silent_without_one():
     """On Alps a step without --environment runs OUTSIDE the image, on the bare node, which
     looks like a broken environment rather than a missing flag. So a missing EDF raises."""
-    assert containers.srun_container_flags(
-        "ce", edf="/scratch/loop_level_reasoning.toml") == ["--environment=/scratch/loop_level_reasoning.toml"]
+    assert containers.srun_container_flags("ce", edf="/scratch/loop_level_reasoning.toml") == [
+        "--environment=/scratch/loop_level_reasoning.toml"
+    ]
     assert containers.srun_container_flags("podman") == []  # an exec wrapper needs no srun flag
     with pytest.raises(ValueError, match="HPCAGENT_BENCH_EDF"):
         containers.srun_container_flags("ce")
@@ -169,13 +174,23 @@ def test_resolve_backend_rejects_unknown():
 
 
 def test_local_run_command_apptainer_cpu():
-    argv = containers.local_run_command(["python", "-m", "hpcagent_bench.cli", "agent"],
-                                        backend="apptainer",
-                                        hardware="cpu",
-                                        repo_root="/repo")
+    argv = containers.local_run_command(
+        ["python", "-m", "hpcagent_bench.cli", "agent"], backend="apptainer", hardware="cpu", repo_root="/repo"
+    )
     assert argv == [
-        "apptainer", "exec", "--env", "HPCAGENT_BENCH_IMAGE=cpu", "--bind", "/repo:/repo", "--pwd", "/repo",
-        "/repo/hpcagent_bench-cpu.sif", "python", "-m", "hpcagent_bench.cli", "agent"
+        "apptainer",
+        "exec",
+        "--env",
+        "HPCAGENT_BENCH_IMAGE=cpu",
+        "--bind",
+        "/repo:/repo",
+        "--pwd",
+        "/repo",
+        "/repo/hpcagent_bench-cpu.sif",
+        "python",
+        "-m",
+        "hpcagent_bench.cli",
+        "agent",
     ]
 
 
@@ -327,8 +342,9 @@ def test_install_apptainer_clears_a_partial_tree_between_attempts(monkeypatch, t
     monkeypatch.setattr(containers.subprocess, "run", fake_run)
     monkeypatch.setattr(containers.time, "sleep", lambda s: None)
     assert containers.install_apptainer(str(prefix), attempts=4) == 0
-    assert seen_dirty == [False, False, False], \
+    assert seen_dirty == [False, False, False], (
         f"a retry started against a dirty prefix {seen_dirty} -- upstream would refuse it outright"
+    )
 
 
 def test_clean_partial_install_never_touches_a_preexisting_path(tmp_path):
@@ -359,7 +375,7 @@ def test_ce_stays_its_own_family_even_though_it_is_podman_underneath():
     The runtime is shared; the launch contract is not."""
     spellings, _ = containers.load_backends()
     assert containers.family_members("oci") == ("docker", "podman")
-    assert containers.family_members("ce") == ("ce", )
+    assert containers.family_members("ce") == ("ce",)
     assert spellings["ce"].kind == "srun_env"
     assert all(spellings[name].kind == "exec" for name in containers.family_members("oci"))
     # The safety property itself: asking for the OCI family never lands on the Slurm-only one.

@@ -32,6 +32,7 @@ WHAT THE HARNESS ACTUALLY MEASURES (the facts these choices rest on)
   ``native_ns`` / ``baseline_ns`` / ``speedup`` (recording.py:115-117) -- the raw repeats die
   with the scoring call, so agent-track cells can only be intervaled once they are persisted.
 """
+
 import math
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -79,6 +80,7 @@ class NormalityVerdict:
     a perfect straight QQ line. It is REPORTED, not thresholded -- under true normality it
     shrinks with n (~0.02 at n=50, ~0.0002 at n=10000), so no fixed cut is meaningful across
     sample sizes. The veto uses skew / excess kurtosis instead."""
+
     normal: bool
     test: str  # "shapiro" | "anderson-darling" | "insufficient"
     statistic: float
@@ -97,6 +99,7 @@ class Interval:
     """A confidence interval and, critically, WHAT IT IS FOR. An interval around the mean is not
     an interval around the min-of-k; ``statistic`` keeps the two from being confused in a table
     or a figure caption."""
+
     statistic: str  # "mean" | "median" | "min_of_k" | "speedup(min_of_k)" | ...
     point: float
     low: float
@@ -117,6 +120,7 @@ class Comparison:
     A p-value on 10000 repetitions can certify a 0.1% difference that means nothing, so
     ``effect`` (Cliff's delta, identical to the rank-biserial correlation for Mann-Whitney) and
     ``ratio`` (the median-scale ratio, a physical effect size) travel with it."""
+
     test: str  # "mann-whitney" | "wilcoxon-signed-rank"
     statistic: float
     pvalue: float
@@ -136,6 +140,7 @@ class Equivalence:
     Not the same as failing to reject a difference -- a null result can mean "no effect" or "no
     power", and only TOST separates them. ``margin`` is fractional and multiplicative (0.05 =
     within +/-5%), which is the right scale for ratio-scale wall-clock."""
+
     equivalent: bool
     pvalue: float  # max of the two one-sided p-values -- the TOST p
     pvalue_lower: float
@@ -150,6 +155,7 @@ class Equivalence:
 class CorpusComparison:
     """One kernel's row in a corpus-wide sweep, carrying both the raw and the multiplicity-
     adjusted p-value. Only ``significant_adjusted`` may be quoted as a finding."""
+
     key: str
     comparison: Comparison
     pvalue_adjusted: float
@@ -235,12 +241,33 @@ def check_normality(samples: Sequence[float], alpha: float = DEFAULT_ALPHA) -> N
     x = clean(samples)
     n = int(x.size)
     if n < MIN_NORMALITY_N:
-        return NormalityVerdict(False, "insufficient", float("nan"), float("nan"), n, float("nan"), float("nan"),
-                                float("nan"), False, False,
-                                f"n={n} < {MIN_NORMALITY_N}: no power to establish normality; use non-parametric")
+        return NormalityVerdict(
+            False,
+            "insufficient",
+            float("nan"),
+            float("nan"),
+            n,
+            float("nan"),
+            float("nan"),
+            float("nan"),
+            False,
+            False,
+            f"n={n} < {MIN_NORMALITY_N}: no power to establish normality; use non-parametric",
+        )
     if float(np.ptp(x)) == 0.0:
-        return NormalityVerdict(False, "insufficient", float("nan"), float("nan"), n, 0.0, 0.0, 0.0, False, False,
-                                "zero spread: timer resolution floor, not a normal sample")
+        return NormalityVerdict(
+            False,
+            "insufficient",
+            float("nan"),
+            float("nan"),
+            n,
+            0.0,
+            0.0,
+            0.0,
+            False,
+            False,
+            "zero spread: timer resolution floor, not a normal sample",
+        )
 
     sk = float(skew(x, bias=False))
     ek = float(kurtosis(x, fisher=True, bias=False))
@@ -260,8 +287,10 @@ def check_normality(samples: Sequence[float], alpha: float = DEFAULT_ALPHA) -> N
     if not rejected:
         reason = f"{test} p={pvalue:.3g} >= alpha={alpha}"
     elif negligible:
-        reason = (f"{test} p={pvalue:.3g} < alpha={alpha} but skew={sk:.3f}, excess kurtosis={ek:.3f} are within "
-                  f"practical bounds -- rejection is too small to matter at n={n}")
+        reason = (
+            f"{test} p={pvalue:.3g} < alpha={alpha} but skew={sk:.3f}, excess kurtosis={ek:.3f} are within "
+            f"practical bounds -- rejection is too small to matter at n={n}"
+        )
     else:
         reason = f"{test} p={pvalue:.3g} < alpha={alpha}, skew={sk:.3f}, excess kurtosis={ek:.3f}"
     return NormalityVerdict(normal, test, statistic, pvalue, n, sk, ek, dep, rejected, negligible, reason)
@@ -297,13 +326,15 @@ def median_rank_ci(samples: Sequence[float], confidence: float = DEFAULT_CONFIDE
     return Interval("median", med, float(x[k - 1]), float(x[n - k]), confidence, "rank-median", n)
 
 
-def bootstrap_ci(samples: Sequence[float],
-                 statistic: Callable[[np.ndarray], float] = np.median,
-                 name: str = "median",
-                 confidence: float = DEFAULT_CONFIDENCE,
-                 n_resamples: int = DEFAULT_RESAMPLES,
-                 method: str = "BCa",
-                 seed: int = DEFAULT_SEED) -> Interval:
+def bootstrap_ci(
+    samples: Sequence[float],
+    statistic: Callable[[np.ndarray], float] = np.median,
+    name: str = "median",
+    confidence: float = DEFAULT_CONFIDENCE,
+    n_resamples: int = DEFAULT_RESAMPLES,
+    method: str = "BCa",
+    seed: int = DEFAULT_SEED,
+) -> Interval:
     """Non-parametric bootstrap interval for whatever ``statistic`` actually gets reported.
 
     BCa by default -- it corrects both the median bias and the skew of the bootstrap
@@ -322,13 +353,15 @@ def bootstrap_ci(samples: Sequence[float],
 
     for attempt in (method, "percentile"):
         try:
-            res = bootstrap((x, ),
-                            vectorized,
-                            confidence_level=confidence,
-                            n_resamples=n_resamples,
-                            method=attempt,
-                            vectorized=True,
-                            random_state=np.random.default_rng(seed))
+            res = bootstrap(
+                (x,),
+                vectorized,
+                confidence_level=confidence,
+                n_resamples=n_resamples,
+                method=attempt,
+                vectorized=True,
+                random_state=np.random.default_rng(seed),
+            )
         except (ValueError, ZeroDivisionError, FloatingPointError):
             continue
         low, high = float(res.confidence_interval.low), float(res.confidence_interval.high)
@@ -337,11 +370,13 @@ def bootstrap_ci(samples: Sequence[float],
     return Interval(name, point, point, point, confidence, "bootstrap-degenerate", n)
 
 
-def min_of_k_ci(samples: Sequence[float],
-                k: int,
-                confidence: float = DEFAULT_CONFIDENCE,
-                n_resamples: int = DEFAULT_RESAMPLES,
-                seed: int = DEFAULT_SEED) -> Interval:
+def min_of_k_ci(
+    samples: Sequence[float],
+    k: int,
+    confidence: float = DEFAULT_CONFIDENCE,
+    n_resamples: int = DEFAULT_RESAMPLES,
+    seed: int = DEFAULT_SEED,
+) -> Interval:
     """Interval for the statistic the harness ACTUALLY credits: ``min`` of ``k`` repeats.
 
     Resamples ``k`` values with replacement from the observed ``n`` and takes their minimum,
@@ -371,12 +406,14 @@ def min_of_k_ci(samples: Sequence[float],
     return Interval(f"min_of_{k}", point, float(low), float(high), confidence, method, n)
 
 
-def interval_for(samples: Sequence[float],
-                 verdict: Optional[NormalityVerdict] = None,
-                 confidence: float = DEFAULT_CONFIDENCE,
-                 alpha: float = DEFAULT_ALPHA,
-                 n_resamples: int = DEFAULT_RESAMPLES,
-                 seed: int = DEFAULT_SEED) -> Tuple[Interval, NormalityVerdict]:
+def interval_for(
+    samples: Sequence[float],
+    verdict: Optional[NormalityVerdict] = None,
+    confidence: float = DEFAULT_CONFIDENCE,
+    alpha: float = DEFAULT_ALPHA,
+    n_resamples: int = DEFAULT_RESAMPLES,
+    seed: int = DEFAULT_SEED,
+) -> Tuple[Interval, NormalityVerdict]:
     """The interval the normality verdict SELECTS: t-interval for the mean when normal, BCa
     bootstrap interval for the median when not. Returns the verdict alongside so the caller can
     label the figure with which branch it took."""
@@ -386,9 +423,9 @@ def interval_for(samples: Sequence[float],
     return bootstrap_ci(samples, np.median, "median", confidence, n_resamples, "BCa", seed), verdict
 
 
-def fieller_ratio_ci(numerator: Sequence[float],
-                     denominator: Sequence[float],
-                     confidence: float = DEFAULT_CONFIDENCE) -> Interval:
+def fieller_ratio_ci(
+    numerator: Sequence[float], denominator: Sequence[float], confidence: float = DEFAULT_CONFIDENCE
+) -> Interval:
     """Fieller's theorem interval for the RATIO OF MEANS of two INDEPENDENT normal samples.
 
     A ratio's interval is not the ratio of two intervals: the denominator's uncertainty enters
@@ -415,13 +452,15 @@ def fieller_ratio_ci(numerator: Sequence[float],
     return Interval("ratio_of_means", ratio, low, high, confidence, "fieller", min(na, nb))
 
 
-def speedup_ci(baseline: Sequence[float],
-               candidate: Sequence[float],
-               statistic: Callable[[np.ndarray], float] = np.median,
-               name: str = "median",
-               confidence: float = DEFAULT_CONFIDENCE,
-               n_resamples: int = DEFAULT_RESAMPLES,
-               seed: int = DEFAULT_SEED) -> Interval:
+def speedup_ci(
+    baseline: Sequence[float],
+    candidate: Sequence[float],
+    statistic: Callable[[np.ndarray], float] = np.median,
+    name: str = "median",
+    confidence: float = DEFAULT_CONFIDENCE,
+    n_resamples: int = DEFAULT_RESAMPLES,
+    seed: int = DEFAULT_SEED,
+) -> Interval:
     """Interval for the SPEED-UP ``stat(baseline) / stat(candidate)`` -- the ratio itself.
 
     ⛔ An interval on the numerator and one on the denominator do not compose into an interval on
@@ -484,8 +523,18 @@ def mann_whitney(a: Sequence[float], b: Sequence[float], alpha: float = DEFAULT_
     x, y = clean(a), clean(b)
     n_a, n_b = int(x.size), int(y.size)
     if n_a < 2 or n_b < 2:
-        return Comparison("mann-whitney", float("nan"), float("nan"), float("nan"), "cliffs-delta", float("nan"), n_a,
-                          n_b, False, alpha)
+        return Comparison(
+            "mann-whitney",
+            float("nan"),
+            float("nan"),
+            float("nan"),
+            "cliffs-delta",
+            float("nan"),
+            n_a,
+            n_b,
+            False,
+            alpha,
+        )
     try:
         result = mannwhitneyu(x, y, alternative="two-sided")
         statistic, pvalue = float(result.statistic), float(result.pvalue)
@@ -494,8 +543,9 @@ def mann_whitney(a: Sequence[float], b: Sequence[float], alpha: float = DEFAULT_
     med_a, med_b = float(np.median(x)), float(np.median(y))
     ratio = (med_b / med_a) if med_a else float("nan")
     effect = cliffs_delta(statistic, n_a, n_b) if math.isfinite(statistic) else 0.0
-    return Comparison("mann-whitney", statistic, pvalue, effect, "cliffs-delta", ratio, n_a, n_b, bool(pvalue < alpha),
-                      alpha)
+    return Comparison(
+        "mann-whitney", statistic, pvalue, effect, "cliffs-delta", ratio, n_a, n_b, bool(pvalue < alpha), alpha
+    )
 
 
 def wilcoxon_signed_rank(a: Sequence[float], b: Sequence[float], alpha: float = DEFAULT_ALPHA) -> Comparison:
@@ -521,8 +571,9 @@ def wilcoxon_signed_rank(a: Sequence[float], b: Sequence[float], alpha: float = 
     effect = (2.0 * statistic / total - 1.0) if total else 0.0
     med_a, med_b = float(np.median(x)), float(np.median(y))
     ratio = (med_b / med_a) if med_a else float("nan")
-    return Comparison("wilcoxon-signed-rank", statistic, pvalue, effect, "rank-biserial", ratio, n, n,
-                      bool(pvalue < alpha), alpha)
+    return Comparison(
+        "wilcoxon-signed-rank", statistic, pvalue, effect, "rank-biserial", ratio, n, n, bool(pvalue < alpha), alpha
+    )
 
 
 def compare(a: Sequence[float], b: Sequence[float], paired: bool = False, alpha: float = DEFAULT_ALPHA) -> Comparison:
@@ -531,11 +582,9 @@ def compare(a: Sequence[float], b: Sequence[float], paired: bool = False, alpha:
     return wilcoxon_signed_rank(a, b, alpha) if paired else mann_whitney(a, b, alpha)
 
 
-def tost_equivalence(a: Sequence[float],
-                     b: Sequence[float],
-                     margin: float = 0.05,
-                     alpha: float = DEFAULT_ALPHA,
-                     paired: bool = False) -> Equivalence:
+def tost_equivalence(
+    a: Sequence[float], b: Sequence[float], margin: float = 0.05, alpha: float = DEFAULT_ALPHA, paired: bool = False
+) -> Equivalence:
     """Two one-sided tests for EQUIVALENCE: can we assert "this changed nothing measurable"?
 
     ⛔ Failing to reject a difference is NOT evidence of no difference -- it is equally consistent
@@ -617,10 +666,12 @@ def adjust_pvalues(pvalues: Sequence[float], method: str = "fdr_bh") -> List[flo
     raise ValueError(f"unknown multiple-comparison method {method!r}; use 'fdr_bh' or 'holm'")
 
 
-def compare_corpus(cells: Mapping[str, Tuple[Sequence[float], Sequence[float]]],
-                   paired: bool = False,
-                   alpha: float = DEFAULT_ALPHA,
-                   method: str = "fdr_bh") -> List[CorpusComparison]:
+def compare_corpus(
+    cells: Mapping[str, Tuple[Sequence[float], Sequence[float]]],
+    paired: bool = False,
+    alpha: float = DEFAULT_ALPHA,
+    method: str = "fdr_bh",
+) -> List[CorpusComparison]:
     """Corpus-wide comparison with multiplicity correction ALREADY APPLIED.
 
     ``cells`` maps a key (kernel, or ``kernel@framework``) to ``(candidate_samples,
@@ -635,10 +686,12 @@ def compare_corpus(cells: Mapping[str, Tuple[Sequence[float], Sequence[float]]],
     return [CorpusComparison(key, comp, adj, bool(adj < alpha)) for key, comp, adj in zip(keys, comparisons, adjusted)]
 
 
-def summarize(samples: Sequence[float],
-              confidence: float = DEFAULT_CONFIDENCE,
-              alpha: float = DEFAULT_ALPHA,
-              seed: int = DEFAULT_SEED) -> Dict[str, object]:
+def summarize(
+    samples: Sequence[float],
+    confidence: float = DEFAULT_CONFIDENCE,
+    alpha: float = DEFAULT_ALPHA,
+    seed: int = DEFAULT_SEED,
+) -> Dict[str, object]:
     """One sample's full honest summary: the verdict, the interval it selected, and the
     min-of-k reproducibility band the default backend credits. A plain dict so a report writer
     or a JSON dump consumes it without importing this module's dataclasses."""

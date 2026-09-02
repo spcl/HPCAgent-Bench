@@ -12,14 +12,16 @@ already does (``v1/worker/gpu/pp_utils.PPHandler``).
 Run in a subprocess: importing sitecustomize rebinds ``torch.distributed.init_process_group``
 process-wide, which has no business leaking into the rest of the suite.
 """
+
 import pathlib
 import subprocess
 import sys
 
-PATCH_DIR = (pathlib.Path(__file__).resolve().parents[1] /
-             "containers/cluster/ce-images/inference/external-eager-pg-patch")
+PATCH_DIR = (
+    pathlib.Path(__file__).resolve().parents[1] / "containers/cluster/ce-images/inference/external-eager-pg-patch"
+)
 
-DRIVER = '''
+DRIVER = """
 import sys, types
 sys.path.insert(0, {patch_dir!r})
 
@@ -58,14 +60,13 @@ try:
 except ValueError:
     pass
 print("SAW", seen, "AFTER", pp.device_group)
-'''
+"""
 
 
 def run(sibling):
     proc = subprocess.run(
-        [sys.executable, "-c", DRIVER.format(patch_dir=str(PATCH_DIR), sibling=sibling)],
-        capture_output=True,
-        text=True)
+        [sys.executable, "-c", DRIVER.format(patch_dir=str(PATCH_DIR), sibling=sibling)], capture_output=True, text=True
+    )
     assert proc.returncode == 0, proc.stderr
     return proc.stdout.strip().splitlines()[-1]
 

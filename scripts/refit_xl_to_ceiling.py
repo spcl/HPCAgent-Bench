@@ -17,6 +17,7 @@ asked for and would invalidate its comparison with previously recorded runs for 
     python3 scripts/apply_sizes.py proposal.json --check
     python3 scripts/apply_sizes.py proposal.json --apply
 """
+
 import argparse
 import json
 import pathlib
@@ -73,7 +74,8 @@ def proposal_for(key: str, spec: BenchSpec) -> Optional[Dict[str, object]]:
         print(
             f"REFUSED {spec.short_name}: cannot fit {before / GIB:.2f} GiB under "
             f"{ceiling / GIB:.2f} GiB without going under the timing floor",
-            file=sys.stderr)
+            file=sys.stderr,
+        )
         return None
     print(f"  {spec.short_name:<44} {before / GIB:6.2f} -> {after / GIB:5.2f} GiB", file=sys.stderr)
     return {

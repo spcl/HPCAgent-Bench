@@ -18,6 +18,7 @@ native emitters already fail earlier on unrelated constructs). The other
 cases below are not hit by any live kernel yet, so they are pinned directly
 against the pass rather than through the full emit pipeline.
 """
+
 import ast
 
 from numpyto_common.ir import KernelIR
@@ -31,8 +32,7 @@ def _kir(body: str, input_args: list) -> KernelIR:
 
 def test_listcomp_target_not_promoted_to_param():
     kir = _kir(
-        "def k(xs, size, out):\n"
-        "    out[0] = sum(int(round(fr * size)) for fr in xs)\n",
+        "def k(xs, size, out):\n    out[0] = sum(int(round(fr * size)) for fr in xs)\n",
         ["xs", "size", "out"],
     )
     _promote_free_names_to_params(kir)
@@ -42,10 +42,7 @@ def test_listcomp_target_not_promoted_to_param():
 
 def test_setcomp_and_dictcomp_targets_not_promoted():
     kir = _kir(
-        "def k(xs, out):\n"
-        "    d = {v: v * 2 for v in xs}\n"
-        "    s = {w for w in xs}\n"
-        "    out[0] = len(d) + len(s)\n",
+        "def k(xs, out):\n    d = {v: v * 2 for v in xs}\n    s = {w for w in xs}\n    out[0] = len(d) + len(s)\n",
         ["xs", "out"],
     )
     _promote_free_names_to_params(kir)
@@ -55,9 +52,7 @@ def test_setcomp_and_dictcomp_targets_not_promoted():
 
 def test_lambda_args_not_promoted():
     kir = _kir(
-        "def k(xs, out):\n"
-        "    f = lambda z: z + 1\n"
-        "    out[0] = f(xs[0])\n",
+        "def k(xs, out):\n    f = lambda z: z + 1\n    out[0] = f(xs[0])\n",
         ["xs", "out"],
     )
     _promote_free_names_to_params(kir)
@@ -66,9 +61,7 @@ def test_lambda_args_not_promoted():
 
 def test_walrus_target_not_promoted():
     kir = _kir(
-        "def k(xs, out):\n"
-        "    if (n := len(xs)) > 0:\n"
-        "        out[0] = n\n",
+        "def k(xs, out):\n    if (n := len(xs)) > 0:\n        out[0] = n\n",
         ["xs", "out"],
     )
     _promote_free_names_to_params(kir)
@@ -77,11 +70,7 @@ def test_walrus_target_not_promoted():
 
 def test_except_handler_name_not_promoted():
     kir = _kir(
-        "def k(xs, out):\n"
-        "    try:\n"
-        "        out[0] = xs[0]\n"
-        "    except IndexError as err:\n"
-        "        out[0] = 0\n",
+        "def k(xs, out):\n    try:\n        out[0] = xs[0]\n    except IndexError as err:\n        out[0] = 0\n",
         ["xs", "out"],
     )
     _promote_free_names_to_params(kir)

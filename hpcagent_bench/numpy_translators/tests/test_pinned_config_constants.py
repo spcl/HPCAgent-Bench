@@ -8,6 +8,7 @@ like the reference -- as a C ``constexpr`` / Fortran ``parameter``, and leaves `
 both binding JSONs and ``binding_from_spec``. A knob with a ``domain:`` is a real axis and stays a
 parameter; see tests/test_spec_dimensions_config.py for that half.
 """
+
 import json
 import pathlib
 import tempfile
@@ -17,13 +18,15 @@ from numpyto_common.frontend import parse_kernel
 from numpyto_common.lowering import lower
 from numpyto_fortran.emit import emit_fortran
 
-_SRC = ("import numpy as np\n"
-        "def f(x, max_iter, tol, out):\n"
-        " out[:] = x\n"
-        " for _ in range(max_iter):\n"
-        "  out[:] = out * 0.5\n"
-        "  if np.max(np.abs(out)) < tol:\n"
-        "   break\n")
+_SRC = (
+    "import numpy as np\n"
+    "def f(x, max_iter, tol, out):\n"
+    " out[:] = x\n"
+    " for _ in range(max_iter):\n"
+    "  out[:] = out * 0.5\n"
+    "  if np.max(np.abs(out)) < tol:\n"
+    "   break\n"
+)
 
 
 def _kir(pinned=True, src=_SRC, **overrides):
@@ -35,22 +38,11 @@ def _kir(pinned=True, src=_SRC, **overrides):
         "relative_path": "",
         "module_name": "k",
         "func_name": "f",
-        "parameters": {
-            "S": {
-                "n": 8,
-                "max_iter": 100,
-                "tol": 1.0e-06
-            }
-        },
+        "parameters": {"S": {"n": 8, "max_iter": 100, "tol": 1.0e-06}},
         "input_args": ["x", "max_iter", "tol", "out"],
         "array_args": ["x", "out"],
         "output_args": ["out"],
-        "init": {
-            "shapes": {
-                "x": "(n,)",
-                "out": "(n,)"
-            }
-        },
+        "init": {"shapes": {"x": "(n,)", "out": "(n,)"}},
     }
     if pinned:
         bench["pinned_config"] = {"max_iter": 100, "tol": 1.0e-06}
@@ -85,6 +77,7 @@ def test_a_narrowed_pinned_float_carries_the_literal_suffix_of_its_own_type():
     its knob. The suffix is what makes the declaration legal; the value is unchanged either way.
     """
     from numpyto_common.ir import apply_precision
+
     kir = apply_precision(_kir(), "float32")
     c = emit_c(kir, fn_name="f")
     assert "constexpr float tol = 1e-06f;" in c, c
@@ -101,8 +94,10 @@ def test_a_narrowed_pinned_float_still_compiles_as_c23():
     import shutil
     import subprocess
     from numpyto_common.ir import apply_precision
+
     if shutil.which("gcc") is None:  # pragma: no cover -- toolchain gate
         import pytest
+
         pytest.skip("gcc not installed")
     d = pathlib.Path(tempfile.mkdtemp())
     src = d / "k.c"
@@ -121,26 +116,15 @@ def test_without_the_pinned_declaration_the_same_knobs_stay_parameters():
     assert "constexpr int64_t max_iter" not in emit_c(kir, fn_name="f")
 
 
-_SHAPE_KNOB_SRC = ("import numpy as np\n"
-                   "def f(x, out):\n"
-                   " out[:] = x * 2.0\n")
+_SHAPE_KNOB_SRC = "import numpy as np\ndef f(x, out):\n out[:] = x * 2.0\n"
 
 _SHAPE_KNOB_BENCH = {
     "func_name": "f",
-    "parameters": {
-        "S": {
-            "n": 8
-        }
-    },
+    "parameters": {"S": {"n": 8}},
     "input_args": ["x", "out"],
     "array_args": ["x", "out"],
     "output_args": ["out"],
-    "init": {
-        "shapes": {
-            "x": "(n // groups,)",
-            "out": "(n // groups,)"
-        }
-    },
+    "init": {"shapes": {"x": "(n // groups,)", "out": "(n // groups,)"}},
 }
 
 

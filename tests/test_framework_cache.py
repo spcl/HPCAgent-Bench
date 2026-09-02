@@ -17,6 +17,7 @@ Four features, one contract -- a cache entry is served ONLY for the source it wa
 The DaCe tests skip via :func:`tests.optional_imports.import_or_skip` (a broken dace wheel must
 skip, not FAIL); the rest are pure pathlib/hashlib and always run.
 """
+
 import subprocess
 
 import pytest
@@ -91,26 +92,28 @@ def _widget_kernel(benchmarks_root):
     """Write a minimal valid kernel (manifest + numpy reference) under a tmp benchmarks root."""
     kdir = benchmarks_root / "widget"
     kdir.mkdir(parents=True)
-    (kdir / "widget.yaml").write_text("name: widget\n"
-                                      "relative_path: widget\n"
-                                      "kind: microkernel\n"
-                                      "parameters:\n"
-                                      "  S:\n"
-                                      "    N: 8\n"
-                                      "output_args:\n"
-                                      "- C\n"
-                                      "init:\n"
-                                      "  input_args:\n"
-                                      "  - N\n"
-                                      "  func_name: initialize\n"
-                                      "  arrays:\n"
-                                      "    C:\n"
-                                      "      shape: (N,)\n"
-                                      "    A:\n"
-                                      "      shape: (N,)\n"
-                                      "array_args:\n"
-                                      "- C\n"
-                                      "- A\n")
+    (kdir / "widget.yaml").write_text(
+        "name: widget\n"
+        "relative_path: widget\n"
+        "kind: microkernel\n"
+        "parameters:\n"
+        "  S:\n"
+        "    N: 8\n"
+        "output_args:\n"
+        "- C\n"
+        "init:\n"
+        "  input_args:\n"
+        "  - N\n"
+        "  func_name: initialize\n"
+        "  arrays:\n"
+        "    C:\n"
+        "      shape: (N,)\n"
+        "    A:\n"
+        "      shape: (N,)\n"
+        "array_args:\n"
+        "- C\n"
+        "- A\n"
+    )
     (kdir / "widget_numpy.py").write_text("def kernel(C, A):\n    C[:] = A\n")
     return kdir
 
@@ -174,9 +177,11 @@ def test_ensure_removes_a_stale_canonical_whose_emit_failed(tmp_path, monkeypatc
 
     def fake_ok(spec, targets):
         for t in targets:
-            write_generated(paths.BENCHMARKS / spec.relative_path / f"{spec.module_name}_{t}.py",
-                            "# body\n",
-                            source=f"{spec.module_name}_numpy.py")
+            write_generated(
+                paths.BENCHMARKS / spec.relative_path / f"{spec.module_name}_{t}.py",
+                "# body\n",
+                source=f"{spec.module_name}_numpy.py",
+            )
         return {t: "ok" for t in targets}
 
     def fake_fail(spec, targets):
@@ -342,8 +347,10 @@ def test_cache_tree_is_fully_gitignored():
     from hpcagent_bench import paths
 
     repo = paths.ROOT
-    if subprocess.run(["git", "-C", str(repo), "rev-parse", "--is-inside-work-tree"],
-                      capture_output=True).returncode != 0:
+    if (
+        subprocess.run(["git", "-C", str(repo), "rev-parse", "--is-inside-work-tree"], capture_output=True).returncode
+        != 0
+    ):
         pytest.skip("not a git checkout")
 
     base = "hpcagent_bench/benchmarks/scientific_computing/dense_linear_algebra/gemm/.cache"

@@ -13,6 +13,7 @@ parsed :class:`KernelIR` (declared arrays) plus a light local-allocation walk
 -- enough for the batched-``@`` rewrite to tell a batched matmul (operand
 rank > 2) from an ordinary 2-D one (which numba / pythran handle).
 """
+
 import ast
 import re
 import copy
@@ -64,7 +65,7 @@ _DTYPE_NAME_KIND = {
     "double": "float",
     "complex64": "complex",
     "complex128": "complex",
-    "complex": "complex"
+    "complex": "complex",
 }
 
 
@@ -72,8 +73,17 @@ def _kind_of_dtype_str(dt: Optional[str]) -> Optional[str]:
     """A numpy dtype tag string (``"int64"``, ``"float32"``) -> its kind."""
     if not dt:
         return None
-    return _DTYPE_NAME_KIND.get(dt) or ("int" if dt.startswith(("int", "uint")) else "float" if dt.startswith(
-        "float") else "complex" if dt.startswith("complex") else "bool" if dt.startswith("bool") else None)
+    return _DTYPE_NAME_KIND.get(dt) or (
+        "int"
+        if dt.startswith(("int", "uint"))
+        else "float"
+        if dt.startswith("float")
+        else "complex"
+        if dt.startswith("complex")
+        else "bool"
+        if dt.startswith("bool")
+        else None
+    )
 
 
 def _dtype_arg_kind(node: ast.AST) -> Optional[str]:
@@ -97,8 +107,12 @@ def _promote_kind(a: Optional[str], b: Optional[str]) -> Optional[str]:
 
 def _np_attr(node: ast.AST) -> Optional[str]:
     """``np.<attr>`` / ``numpy.<attr>`` call -> ``attr`` else None."""
-    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
-            and node.func.value.id in ("np", "numpy")):
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id in ("np", "numpy")
+    ):
         return node.func.attr
     return None
 
@@ -108,9 +122,14 @@ def _np_fft_attr(node: ast.AST) -> Optional[str]:
     of ``fft``/``ifft``/``fft2``/``ifft2``/``fftn``/``ifftn``), else None. The
     call func is a two-level Attribute (``np.fft.fft``), so the single-level
     ``_np_attr`` misses it."""
-    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Attribute) and node.func.value.attr == "fft"
-            and isinstance(node.func.value.value, ast.Name) and node.func.value.value.id in ("np", "numpy")):
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == "fft"
+        and isinstance(node.func.value.value, ast.Name)
+        and node.func.value.value.id in ("np", "numpy")
+    ):
         return node.func.attr
     return None
 
@@ -123,8 +142,11 @@ def _tuple_len(node: ast.AST) -> Optional[int]:
 
 def _is_newaxis(e: ast.AST) -> bool:
     """``None`` / ``np.newaxis`` / bare ``newaxis`` -- a subscript newaxis."""
-    return ((isinstance(e, ast.Constant) and e.value is None) or (isinstance(e, ast.Attribute) and e.attr == "newaxis")
-            or (isinstance(e, ast.Name) and e.id == "newaxis"))
+    return (
+        (isinstance(e, ast.Constant) and e.value is None)
+        or (isinstance(e, ast.Attribute) and e.attr == "newaxis")
+        or (isinstance(e, ast.Name) and e.id == "newaxis")
+    )
 
 
 def _is_ellipsis(e: ast.AST) -> bool:
@@ -139,8 +161,20 @@ REDUCE_FNS = {"sum", "prod", "mean", "std", "var", "min", "max", "amin", "amax",
 
 #: ufuncs whose result is always a boolean array (regardless of operand dtype).
 _BOOL_UFUNCS = {
-    "logical_and", "logical_or", "logical_not", "logical_xor", "isnan", "isinf", "isfinite", "isclose", "equal",
-    "not_equal", "less", "less_equal", "greater", "greater_equal"
+    "logical_and",
+    "logical_or",
+    "logical_not",
+    "logical_xor",
+    "isnan",
+    "isinf",
+    "isfinite",
+    "isclose",
+    "equal",
+    "not_equal",
+    "less",
+    "less_equal",
+    "greater",
+    "greater_equal",
 }
 
 
@@ -279,13 +313,13 @@ def expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
             if n is not None:
                 return n
             a0 = value.args[0]
-            if (isinstance(a0, ast.Attribute) and a0.attr == "shape"):
+            if isinstance(a0, ast.Attribute) and a0.attr == "shape":
                 return expr_rank(a0.value, ranks)  # np.zeros(C.shape, ...) keeps C's rank
             if isinstance(a0, (ast.Name, ast.Constant)):
                 return 1  # 1-D length
         if attr in _LIKE_CTORS and value.args:
             return expr_rank(value.args[0], ranks)
-        if attr in ("reshape", ) and len(value.args) >= 2:
+        if attr in ("reshape",) and len(value.args) >= 2:
             n = _tuple_len(value.args[1])
             if n is not None:
                 return n
@@ -306,10 +340,10 @@ def expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
             base = expr_rank(value.args[0], ranks)
             idx = expr_rank(value.args[1], ranks)
             return None if base is None or idx is None else base - 1 + idx
-        if attr in ("expand_dims", ) and value.args:
+        if attr in ("expand_dims",) and value.args:
             base = expr_rank(value.args[0], ranks)
             return None if base is None else base + 1
-        if attr in ("squeeze", ) and value.args:
+        if attr in ("squeeze",) and value.args:
             base = expr_rank(value.args[0], ranks)
             axes = _axis_count(value.args[1:], value.keywords)
             return None if base is None or axes is None else base - axes
@@ -323,10 +357,10 @@ def expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
             n = _tensordot_contracted(value)
             return None if la is None or lb is None or n is None else la + lb - 2 * n
         # rank-preserving methods ``x.astype(dt)`` / ``x.copy()`` (receiver's rank).
-        if (isinstance(value.func, ast.Attribute) and value.func.attr in ("astype", "copy", "ravel")):
+        if isinstance(value.func, ast.Attribute) and value.func.attr in ("astype", "copy", "ravel"):
             return expr_rank(value.func.value, ranks) if value.func.attr != "ravel" else 1
         # ``x.reshape((a, b))`` method form.
-        if (isinstance(value.func, ast.Attribute) and value.func.attr == "reshape" and value.args):
+        if isinstance(value.func, ast.Attribute) and value.func.attr == "reshape" and value.args:
             # Multi-arg spelling: ONE positional argument per dimension, so the rank is the
             # argument count whatever each dimension expression looks like -- ``X.reshape(-1,
             # X.shape[-1])`` (ls3df_scf) is rank 2, and neither ``-1`` (a UnaryOp) nor
@@ -395,8 +429,11 @@ def name_value_pairs(tree: ast.AST) -> Iterator[Tuple[str, ast.expr]]:
         target = node.targets[0]
         if isinstance(target, ast.Name):
             yield target.id, node.value
-        elif (isinstance(target, ast.Tuple) and isinstance(node.value, ast.Tuple)
-              and len(target.elts) == len(node.value.elts)):
+        elif (
+            isinstance(target, ast.Tuple)
+            and isinstance(node.value, ast.Tuple)
+            and len(target.elts) == len(node.value.elts)
+        ):
             for t, v in zip(target.elts, node.value.elts):
                 if isinstance(t, ast.Name):
                     yield t.id, v
@@ -406,7 +443,7 @@ def extent_tokens(
     value: ast.AST,
     table: Dict[str, Tuple[str, ...]],
     tuple_locals: FrozenSet[str] = frozenset(),
-    arrays: FrozenSet[str] = frozenset()
+    arrays: FrozenSet[str] = frozenset(),
 ) -> Optional[Tuple[str, ...]]:
     """``value``'s shape as unparsed tokens, or ``None`` when this round cannot say.
 
@@ -452,8 +489,13 @@ def shape_table(tree: ast.AST, seed: Dict[str, Tuple[str, ...]]) -> Dict[str, Tu
     whatever a rebinding makes it.
     """
     tuple_locals = frozenset(
-        node.targets[0].id for node in ast.walk(tree) if isinstance(node, ast.Assign) and len(node.targets) == 1
-        and isinstance(node.targets[0], ast.Name) and isinstance(node.value, (ast.Tuple, ast.List)))
+        node.targets[0].id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, (ast.Tuple, ast.List))
+    )
     pairs = list(name_value_pairs(tree))
     # Which names are ARRAYS, from the rank table -- the only question asked of it here, and the one
     # it answers without needing an extent. A name it cannot rank counts as an array: refusing to
@@ -501,7 +543,7 @@ def rank_table(tree: ast.AST, seed: Dict[str, int], call_returns: Optional[Dict[
         changed = False
         _active_tuple_lengths = _build_tuple_lengths(tree, ranks, seed_ranks=seed)
         for node in ast.walk(tree):
-            if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
+            if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
                 r = expr_rank(node.value, ranks)
                 if r is None and call_returns is not None:
                     r = _call_return_rank(node.value, call_returns)
@@ -579,11 +621,13 @@ def _int_expr(value: ast.AST, ranks: Dict[str, int], seed_ranks: Optional[Dict[s
     return None
 
 
-def _tuple_expr_len(value: ast.AST,
-                    ranks: Dict[str, int],
-                    assigns: Dict[str, ast.expr],
-                    visited: Optional[Set[str]] = None,
-                    seed_ranks: Optional[Dict[str, int]] = None) -> Optional[int]:
+def _tuple_expr_len(
+    value: ast.AST,
+    ranks: Dict[str, int],
+    assigns: Dict[str, ast.expr],
+    visited: Optional[Set[str]] = None,
+    seed_ranks: Optional[Dict[str, int]] = None,
+) -> Optional[int]:
     """Length of a tuple-valued expression, if statically known.
 
     Covers tuple/list literals, ``arr.shape``, tuple concatenation ``A + B``,
@@ -630,9 +674,9 @@ def _iter_function_bodies(node: ast.AST):
             yield from child.body
 
 
-def _build_tuple_lengths(tree: ast.AST,
-                         ranks: Dict[str, int],
-                         seed_ranks: Optional[Dict[str, int]] = None) -> Dict[str, int]:
+def _build_tuple_lengths(
+    tree: ast.AST, ranks: Dict[str, int], seed_ranks: Optional[Dict[str, int]] = None
+) -> Dict[str, int]:
     """Map each local bound to a statically-known tuple shape to its length.
 
     Used by :func:`expr_rank` while ``rank_table`` is iterating, so
@@ -644,11 +688,11 @@ def _build_tuple_lengths(tree: ast.AST,
     # scan returned.
     assigns: Dict[str, ast.expr] = {}
     for node in _iter_function_bodies(tree):
-        if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
             assigns.setdefault(node.targets[0].id, node.value)
     lengths: Dict[str, int] = {}
     for node in ast.walk(tree):
-        if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
             length = _tuple_expr_len(node.value, ranks, assigns, seed_ranks=seed_ranks)
             if length is not None:
                 lengths[node.targets[0].id] = length
@@ -663,8 +707,17 @@ def _dtype_kind(value: ast.AST, dtypes: Dict[str, str]) -> Optional[str]:
         return dtypes.get(value.id)
     if isinstance(value, ast.Constant):
         v = value.value
-        return ("bool" if isinstance(v, bool) else "int" if isinstance(v, int) else
-                "float" if isinstance(v, float) else "complex" if isinstance(v, complex) else None)
+        return (
+            "bool"
+            if isinstance(v, bool)
+            else "int"
+            if isinstance(v, int)
+            else "float"
+            if isinstance(v, float)
+            else "complex"
+            if isinstance(v, complex)
+            else None
+        )
     if isinstance(value, (ast.Compare, ast.BoolOp)):
         return "bool"
     if isinstance(value, ast.UnaryOp):
@@ -751,7 +804,7 @@ def _dtype_table(tree: ast.AST, seed: Dict[str, str]) -> Dict[str, str]:
     for _ in range(8):
         changed = False
         for node in ast.walk(tree):
-            if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
+            if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
                 k = _dtype_kind(node.value, dtypes)
                 if k is not None and dtypes.get(node.targets[0].id) != k:
                     dtypes[node.targets[0].id] = k
@@ -790,9 +843,13 @@ class _IndexLeadingAxis(ast.NodeTransformer):
     def visit_Name(self, node: ast.Name) -> ast.AST:
         if isinstance(node.ctx, ast.Load) and (self.ranks.get(node.id, 0) or 0) > 2:
             return ast.copy_location(
-                ast.Subscript(value=ast.Name(id=node.id, ctx=ast.Load()),
-                              slice=ast.Name(id=self.bv, ctx=ast.Load()),
-                              ctx=ast.Load()), node)
+                ast.Subscript(
+                    value=ast.Name(id=node.id, ctx=ast.Load()),
+                    slice=ast.Name(id=self.bv, ctx=ast.Load()),
+                    ctx=ast.Load(),
+                ),
+                node,
+            )
         return node
 
 
@@ -835,15 +892,22 @@ class _BatchedMatmulToLoop(ast.NodeTransformer):
 
     def _index_target(self, target: ast.AST, bv: str) -> Optional[ast.AST]:
         """``T[:]`` or bare rank > 2 ``T`` -> ``T[bv]``."""
-        if (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)
-                and isinstance(target.slice, ast.Slice) and target.slice.lower is None and target.slice.upper is None):
-            return ast.Subscript(value=ast.Name(id=target.value.id, ctx=ast.Load()),
-                                 slice=ast.Name(id=bv, ctx=ast.Load()),
-                                 ctx=ast.Store())
+        if (
+            isinstance(target, ast.Subscript)
+            and isinstance(target.value, ast.Name)
+            and isinstance(target.slice, ast.Slice)
+            and target.slice.lower is None
+            and target.slice.upper is None
+        ):
+            return ast.Subscript(
+                value=ast.Name(id=target.value.id, ctx=ast.Load()),
+                slice=ast.Name(id=bv, ctx=ast.Load()),
+                ctx=ast.Store(),
+            )
         if isinstance(target, ast.Name) and (self.ranks.get(target.id, 0) or 0) > 2:
-            return ast.Subscript(value=ast.Name(id=target.id, ctx=ast.Load()),
-                                 slice=ast.Name(id=bv, ctx=ast.Load()),
-                                 ctx=ast.Store())
+            return ast.Subscript(
+                value=ast.Name(id=target.id, ctx=ast.Load()), slice=ast.Name(id=bv, ctx=ast.Load()), ctx=ast.Store()
+            )
         return None
 
     def _allocation(self, name: str, value: ast.AST) -> Optional[ast.stmt]:
@@ -884,15 +948,17 @@ class _BatchedMatmulToLoop(ast.NodeTransformer):
         self.changed = True
         new_target = self._index_target(node.targets[0], bv)
         new_value = _IndexLeadingAxis(bv, self.ranks).visit(copy.deepcopy(node.value))
-        extent = ast.Subscript(value=ast.Attribute(value=ast.Name(id=bsrc.id, ctx=ast.Load()),
-                                                   attr="shape",
-                                                   ctx=ast.Load()),
-                               slice=ast.Constant(value=0),
-                               ctx=ast.Load())
-        loop = ast.For(target=ast.Name(id=bv, ctx=ast.Store()),
-                       iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[extent], keywords=[]),
-                       body=[ast.Assign(targets=[new_target], value=new_value)],
-                       orelse=[])
+        extent = ast.Subscript(
+            value=ast.Attribute(value=ast.Name(id=bsrc.id, ctx=ast.Load()), attr="shape", ctx=ast.Load()),
+            slice=ast.Constant(value=0),
+            ctx=ast.Load(),
+        )
+        loop = ast.For(
+            target=ast.Name(id=bv, ctx=ast.Store()),
+            iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[extent], keywords=[]),
+            body=[ast.Assign(targets=[new_target], value=new_value)],
+            orelse=[],
+        )
         ast.copy_location(loop, node)
         return [ast.copy_location(alloc, node), loop] if alloc is not None else loop
 
@@ -929,8 +995,7 @@ def _pad_inline_stmts(target: str, arr: ast.AST, widths, rank: int, ctr: int) ->
     for i, (lo, hi) in enumerate(widths):
         src.append(f"{indent}for {p}_i{i} in range({dims[i]}):")
         indent += "    "
-        src.append(f"{indent}{p}_s{i} = min(max({p}_i{i} - "
-                   f"{ast.unparse(lo)}, 0), {xv}.shape[{i}] - 1)")
+        src.append(f"{indent}{p}_s{i} = min(max({p}_i{i} - {ast.unparse(lo)}, 0), {xv}.shape[{i}] - 1)")
     idx_o = ", ".join(f"{p}_i{i}" for i in range(rank))
     idx_s = ", ".join(f"{p}_s{i}" for i in range(rank))
     src.append(f"{indent}{target}[{idx_o}] = {xv}[{idx_s}]")
@@ -980,7 +1045,7 @@ class _PadInline(ast.NodeTransformer):
 
     def visit_Assign(self, node: ast.Assign):
         self.generic_visit(node)
-        if (len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name) or _np_attr(node.value) != "pad"):
+        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name) or _np_attr(node.value) != "pad":
             return node
         call = node.value
         kw = {k.arg: k.value for k in call.keywords}
@@ -1136,14 +1201,16 @@ def _fft_axes(fattr: str, call: ast.Call, rank: int):
         if axes is None:
             return list(range(rank)), inverse
         if isinstance(axes, (ast.Tuple, ast.List)) and all(
-                isinstance(e, ast.Constant) and isinstance(e.value, int) for e in axes.elts):
+            isinstance(e, ast.Constant) and isinstance(e.value, int) for e in axes.elts
+        ):
             return [e.value % rank for e in axes.elts], inverse
         return None, inverse
     return None, inverse
 
 
-def _fft_inline_stmts(tname: str, sname: str, taxes: List[int], rank: int, inverse: bool, ctr: int, alloc: bool,
-                      real_dtype: str) -> List[ast.stmt]:
+def _fft_inline_stmts(
+    tname: str, sname: str, taxes: List[int], rank: int, inverse: bool, ctr: int, alloc: bool, real_dtype: str
+) -> List[ast.stmt]:
     """Source statements computing ``np.fft.*`` into ``tname`` (shape == source)
     as a naive DFT loop nest -- the same O(prod(N_t)^2) transform the C/Fortran
     backends lower, but as plain numpy (``np.exp`` of a complex phase, complex
@@ -1234,8 +1301,13 @@ class _FftInline(ast.NodeTransformer):
         tgt = node.targets[0]
         if isinstance(tgt, ast.Name):
             tname, alloc = tgt.id, True
-        elif (isinstance(tgt, ast.Subscript) and isinstance(tgt.value, ast.Name) and isinstance(tgt.slice, ast.Slice)
-              and tgt.slice.lower is None and tgt.slice.upper is None):
+        elif (
+            isinstance(tgt, ast.Subscript)
+            and isinstance(tgt.value, ast.Name)
+            and isinstance(tgt.slice, ast.Slice)
+            and tgt.slice.lower is None
+            and tgt.slice.upper is None
+        ):
             tname, alloc = tgt.value.id, False
         else:
             return node
@@ -1280,8 +1352,7 @@ def _mgrid_inline_stmts(tnames: List[str], slices: List[ast.AST], ctr: int) -> O
         rshape = ", ".join(exts[mm] if mm == m else "1" for mm in range(k))
         # int64 is numpy's OWN mgrid dtype (integer slice bounds -> the platform int), not a
         # choice this lowering makes -- the broadcast zeros must not widen or narrow it.
-        lines.append(f"{tnames[m]} = np.arange({los[m]}, {his[m]}).reshape({rshape}) + "
-                     f"np.zeros(({full},), np.int64)")
+        lines.append(f"{tnames[m]} = np.arange({los[m]}, {his[m]}).reshape({rshape}) + np.zeros(({full},), np.int64)")
     return ast.parse("\n".join(lines)).body
 
 
@@ -1295,8 +1366,13 @@ class _MgridInline(ast.NodeTransformer):
     def visit_Assign(self, node: ast.Assign):
         self.generic_visit(node)
         val = node.value
-        if not (isinstance(val, ast.Subscript) and isinstance(val.value, ast.Attribute) and val.value.attr == "mgrid"
-                and isinstance(val.value.value, ast.Name) and val.value.value.id in ("np", "numpy")):
+        if not (
+            isinstance(val, ast.Subscript)
+            and isinstance(val.value, ast.Attribute)
+            and val.value.attr == "mgrid"
+            and isinstance(val.value.value, ast.Name)
+            and val.value.value.id in ("np", "numpy")
+        ):
             return node
         if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Tuple):
             return node
@@ -1330,8 +1406,9 @@ class _FancyGatherHoister(ast.NodeTransformer):
 
     def visit_Subscript(self, node: ast.Subscript):
         self.generic_visit(node)
-        if not (isinstance(node.value, ast.Name) and isinstance(node.ctx, ast.Load)
-                and isinstance(node.slice, ast.Tuple)):
+        if not (
+            isinstance(node.value, ast.Name) and isinstance(node.ctx, ast.Load) and isinstance(node.slice, ast.Tuple)
+        ):
             return node
         arr = node.value.id
         arank = self.ranks.get(arr)
@@ -1443,16 +1520,18 @@ def _axis_list(ax: Optional[ast.AST], rank: int) -> Optional[List[int]]:
     return [v % rank] if _in_range(v) else None
 
 
-def _reduce_axis_stmts(tname: str,
-                       sname: str,
-                       op: str,
-                       axes: List[int],
-                       rank: int,
-                       ctr: int,
-                       keepdims: bool = False,
-                       elem_is_float: bool = False,
-                       ddof: int = 0,
-                       elem_kind: Optional[str] = None) -> List[ast.stmt]:
+def _reduce_axis_stmts(
+    tname: str,
+    sname: str,
+    op: str,
+    axes: List[int],
+    rank: int,
+    ctr: int,
+    keepdims: bool = False,
+    elem_is_float: bool = False,
+    ddof: int = 0,
+    elem_kind: Optional[str] = None,
+) -> List[ast.stmt]:
     """Source statements reducing ``sname`` over ``axes`` (a sorted list of one or
     more axis indices) into a freshly allocated ``tname`` via an explicit loop nest
     -- the numba/pythran-compatible form of ``np.sum/prod/mean/min/max/argmin/
@@ -1478,8 +1557,15 @@ def _reduce_axis_stmts(tname: str,
     # wraps instead: int32 columns summing past 2^31 came back negative on numba.
     # min/max/argmin/argmax pick an ELEMENT, so they keep the input dtype.
     acc_res = "np.int64" if (op in ("sum", "prod") and elem_kind in ("int", "bool")) else f"{sname}.dtype"
-    dtype = ("np.int64" if is_arg else "np.bool_" if op in ("any", "all") else float_res if op in ("mean", "std",
-                                                                                                   "var") else acc_res)
+    dtype = (
+        "np.int64"
+        if is_arg
+        else "np.bool_"
+        if op in ("any", "all")
+        else float_res
+        if op in ("mean", "std", "var")
+        else acc_res
+    )
     shape_dims = [(d[i] if i in out_axes else "1") for i in range(rank)] if keepdims else [d[i] for i in out_axes]
     lines.append(f"{tname} = np.empty(({''.join(s + ', ' for s in shape_dims)}), {dtype})")
     o = {i: f"{p}_k{i}" for i in out_axes}
@@ -1581,8 +1667,11 @@ class _ReduceAxisHoister(ast.NodeTransformer):
         if npop in _REDUCE_AXIS_OPS and node.args:  # np.mean(x, axis=k)
             op, arg = npop, node.args[0]
             ax = kw.get("axis") or (node.args[1] if len(node.args) > 1 else None)
-        elif (isinstance(node.func, ast.Attribute) and node.func.attr in _REDUCE_AXIS_OPS
-              and not (isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy"))):
+        elif (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr in _REDUCE_AXIS_OPS
+            and not (isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy"))
+        ):
             op, arg = node.func.attr, node.func.value  # x.mean(axis=k) method form
             ax = kw.get("axis") or (node.args[0] if node.args else None)
         else:
@@ -1614,7 +1703,8 @@ class _ReduceAxisHoister(ast.NodeTransformer):
         temp = f"__rdo{self.ctr}"
         elem_kind = _dtype_kind(arg, self.dtypes)
         self.pre.extend(
-            _reduce_axis_stmts(temp, sname, op, axes, rank, self.ctr, keepdims, elem_kind == "float", ddof, elem_kind))
+            _reduce_axis_stmts(temp, sname, op, axes, rank, self.ctr, keepdims, elem_kind == "float", ddof, elem_kind)
+        )
         self.ctr += 1
         return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
 
@@ -1672,8 +1762,9 @@ def _keepdims_index(axes: list[int]) -> list[ast.expr] | None:
         entries: list[ast.expr] = [ast.Constant(value=None) if i in axes else ast.Slice() for i in range(max(axes) + 1)]
         return entries + [ast.Constant(value=Ellipsis)]
     if all(a < 0 for a in axes):
-        return [ast.Constant(value=Ellipsis)
-                ] + [ast.Constant(value=None) if i in axes else ast.Slice() for i in range(min(axes), 0)]
+        return [ast.Constant(value=Ellipsis)] + [
+            ast.Constant(value=None) if i in axes else ast.Slice() for i in range(min(axes), 0)
+        ]
     return None
 
 
@@ -1706,8 +1797,9 @@ class _KeepdimsToNewaxis(ast.NodeTransformer):
             return node
         if not (isinstance(kw.value, ast.Constant) and kw.value.value is True):
             return node
-        ax = next(
-            (k.value for k in node.keywords if k.arg == "axis"), None) or (node.args[1] if len(node.args) > 1 else None)
+        ax = next((k.value for k in node.keywords if k.arg == "axis"), None) or (
+            node.args[1] if len(node.args) > 1 else None
+        )
         given = ax.elts if isinstance(ax, (ast.Tuple, ast.List)) else ([ax] if ax is not None else [])
         axes = [_const_int(e) for e in given]
         if not axes or None in axes:
@@ -1735,8 +1827,13 @@ class _CallFixups(ast.NodeTransformer):
 
     def visit_Call(self, node: ast.Call):
         self.generic_visit(node)
-        if (isinstance(node.func, ast.Name) and node.func.id == "abs" and len(node.args) == 1 and not node.keywords
-                and (expr_rank(node.args[0], self.ranks) or 0) >= 1):
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "abs"
+            and len(node.args) == 1
+            and not node.keywords
+            and (expr_rank(node.args[0], self.ranks) or 0) >= 1
+        ):
             self.changed = True
             npabs = ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="abs", ctx=ast.Load())
             return ast.copy_location(ast.Call(func=npabs, args=node.args, keywords=[]), node)
@@ -1769,7 +1866,8 @@ class _CallFixups(ast.NodeTransformer):
             self.changed = True
             empty = ast.Attribute(value=node.func.value, attr="empty", ctx=ast.Load())
             return ast.copy_location(
-                ast.Call(func=empty, args=[node.args[0]] + ([dt] if dt is not None else []), keywords=[]), node)
+                ast.Call(func=empty, args=[node.args[0]] + ([dt] if dt is not None else []), keywords=[]), node
+            )
         if attr == "linspace":
             kw = {k.arg: k.value for k in node.keywords}
             if "dtype" in kw:
@@ -1807,7 +1905,8 @@ class _CallFixups(ast.NodeTransformer):
             self.changed = True
             order = ", ".join(str(p) for p in perm)
             return ast.copy_location(
-                ast.parse(f"np.transpose({ast.unparse(node.args[0])}, ({order}))", mode="eval").body, node)
+                ast.parse(f"np.transpose({ast.unparse(node.args[0])}, ({order}))", mode="eval").body, node
+            )
         return node
 
 
@@ -1816,9 +1915,14 @@ _OUTER_OPS = {"add": "+", "subtract": "-", "multiply": "*", "divide": "/", "true
 
 def _ufunc_outer_op(node: ast.AST) -> Optional[str]:
     """``np.<op>.outer(...)`` -> ``<op>`` (add/subtract/multiply/...) else None."""
-    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "outer"
-            and isinstance(node.func.value, ast.Attribute) and isinstance(node.func.value.value, ast.Name)
-            and node.func.value.value.id in ("np", "numpy")):
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "outer"
+        and isinstance(node.func.value, ast.Attribute)
+        and isinstance(node.func.value.value, ast.Name)
+        and node.func.value.value.id in ("np", "numpy")
+    ):
         return node.func.value.attr
     return None
 
@@ -1847,8 +1951,9 @@ class _UfuncOuterHoister(ast.NodeTransformer):
         # ``.copy()`` -- a strided slice (floyd's ``path[:, k]`` column) is
         # non-contiguous, and numba's reshape requires a contiguous array.
         src = [
-            f"{na} = ({ast.unparse(a)}).copy()", f"{nb} = ({ast.unparse(b)}).copy()",
-            f"{p} = {na}.reshape({na}.shape[0], 1) {sym} {nb}.reshape(1, {nb}.shape[0])"
+            f"{na} = ({ast.unparse(a)}).copy()",
+            f"{nb} = ({ast.unparse(b)}).copy()",
+            f"{p} = {na}.reshape({na}.shape[0], 1) {sym} {nb}.reshape(1, {nb}.shape[0])",
         ]
         self.pre.extend(ast.parse("\n".join(src)).body)
         return ast.copy_location(ast.Name(id=p, ctx=ast.Load()), node)
@@ -1946,9 +2051,11 @@ class _MaskedAssignToLoop(ast.NodeTransformer):
         arank = self.ranks.get(tgt.value.id)
         if not arank or arank < 2 or isinstance(idx, (ast.Tuple, ast.Slice)):
             return node
-        struct_mask = (isinstance(idx, (ast.Compare, ast.BoolOp))
-                       or (isinstance(idx, ast.BinOp) and isinstance(idx.op, (ast.BitAnd, ast.BitOr, ast.BitXor)))
-                       or (isinstance(idx, ast.UnaryOp) and isinstance(idx.op, ast.Invert)))
+        struct_mask = (
+            isinstance(idx, (ast.Compare, ast.BoolOp))
+            or (isinstance(idx, ast.BinOp) and isinstance(idx.op, (ast.BitAnd, ast.BitOr, ast.BitXor)))
+            or (isinstance(idx, ast.UnaryOp) and isinstance(idx.op, ast.Invert))
+        )
         if isinstance(idx, ast.Name):
             # A full-shape index Name is a mask ONLY if boolean-kind; a same-rank
             # integer array is a fancy index (different semantics) -> leave verbatim.
@@ -1967,7 +2074,8 @@ class _MaskedAssignToLoop(ast.NodeTransformer):
         scal = _ScalarizeMask(ast.dump(idx), idx_slice, arank, self.ranks)
         mask_s = ast.unparse(scal.visit(copy.deepcopy(idx)))
         rhs_s = ast.unparse(
-            _ScalarizeMask(ast.dump(idx), idx_slice, arank, self.ranks).visit(copy.deepcopy(node.value)))
+            _ScalarizeMask(ast.dump(idx), idx_slice, arank, self.ranks).visit(copy.deepcopy(node.value))
+        )
         lines, deepen = [], ""
         for k in range(arank):
             lines.append(f"{deepen}for {idx_vars[k]} in range({T}.shape[{k}]):")
@@ -1990,11 +2098,20 @@ def _masked_reduce_of(node: ast.AST, gathers: Dict[str, tuple]):
     if not isinstance(node, ast.Call) or node.keywords:
         return None
     f = node.func
-    if (isinstance(f, ast.Attribute) and f.attr in _MASKED_REDUCE_OPS and not node.args
-            and isinstance(f.value, ast.Name) and f.value.id in gathers):
+    if (
+        isinstance(f, ast.Attribute)
+        and f.attr in _MASKED_REDUCE_OPS
+        and not node.args
+        and isinstance(f.value, ast.Name)
+        and f.value.id in gathers
+    ):
         return f.attr, f.value.id
-    if (_np_attr(node) in _MASKED_REDUCE_OPS and len(node.args) == 1 and isinstance(node.args[0], ast.Name)
-            and node.args[0].id in gathers):
+    if (
+        _np_attr(node) in _MASKED_REDUCE_OPS
+        and len(node.args) == 1
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id in gathers
+    ):
         return _np_attr(node), node.args[0].id
     return None
 
@@ -2036,9 +2153,14 @@ def _masked_reduce_map(fn: ast.AST, ranks: Dict[str, int], dtypes: Dict[str, str
     way (indexed, returned, passed on) is excluded and left verbatim."""
     gathers: Dict[str, tuple] = {}
     for node in ast.walk(fn):
-        if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
-                and isinstance(node.value, ast.Subscript) and isinstance(node.value.value, ast.Name)
-                and _is_bool_mask(node.value.slice, node.value.value, ranks, dtypes)):
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Subscript)
+            and isinstance(node.value.value, ast.Name)
+            and _is_bool_mask(node.value.slice, node.value.value, ranks, dtypes)
+        ):
             gathers[node.targets[0].id] = (node.value.value, node.value.slice)
     ok: Dict[str, tuple] = {}
     for v, am in gathers.items():
@@ -2101,8 +2223,12 @@ class _MaskedReduceInline(ast.NodeTransformer):
         return node
 
     def visit_Assign(self, node: ast.Assign):
-        if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in self.gathers
-                and isinstance(node.value, ast.Subscript)):
+        if (
+            len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id in self.gathers
+            and isinstance(node.value, ast.Subscript)
+        ):
             self.changed = True
             return []  # drop the masked select; each reduction inlines its own loop
         return self._hoist(node)
@@ -2122,9 +2248,14 @@ _AT_OPS = {"add": "+=", "subtract": "-=", "multiply": "*="}
 
 def _ufunc_at_op(node: ast.AST) -> Optional[str]:
     """``np.add.at(...)`` / ``np.subtract.at`` / ``np.multiply.at`` -> the op."""
-    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "at"
-            and isinstance(node.func.value, ast.Attribute) and isinstance(node.func.value.value, ast.Name)
-            and node.func.value.value.id in ("np", "numpy")):
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "at"
+        and isinstance(node.func.value, ast.Attribute)
+        and isinstance(node.func.value.value, ast.Name)
+        and node.func.value.value.id in ("np", "numpy")
+    ):
         return node.func.value.attr
     return None
 
@@ -2147,12 +2278,16 @@ class _DiffToSliceDifference(ast.NodeTransformer):
             return node
         base = node.args[0]
         self.changed = True
-        tail = ast.Subscript(value=copy.deepcopy(base),
-                             slice=ast.Slice(lower=ast.Constant(value=1), upper=None, step=None),
-                             ctx=ast.Load())
-        head = ast.Subscript(value=copy.deepcopy(base),
-                             slice=ast.Slice(lower=None, upper=ast.Constant(value=-1), step=None),
-                             ctx=ast.Load())
+        tail = ast.Subscript(
+            value=copy.deepcopy(base),
+            slice=ast.Slice(lower=ast.Constant(value=1), upper=None, step=None),
+            ctx=ast.Load(),
+        )
+        head = ast.Subscript(
+            value=copy.deepcopy(base),
+            slice=ast.Slice(lower=None, upper=ast.Constant(value=-1), step=None),
+            ctx=ast.Load(),
+        )
         return ast.copy_location(ast.BinOp(left=tail, op=ast.Sub(), right=head), node)
 
 
@@ -2169,8 +2304,11 @@ class _StripAstypeCopyKwarg(ast.NodeTransformer):
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
-        if (isinstance(node.func, ast.Attribute) and node.func.attr == "astype"
-                and any(k.arg == "copy" for k in node.keywords)):
+        if (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "astype"
+            and any(k.arg == "copy" for k in node.keywords)
+        ):
             node.keywords = [k for k in node.keywords if k.arg != "copy"]
             self.changed = True
         return node
@@ -2282,7 +2420,6 @@ def _replace_call_with_name(root: ast.AST, target: ast.Call, name: str) -> None:
     """Swap one already-lowered Call node for a Name reference, wherever it sits in ``root``."""
 
     class Swap(ast.NodeTransformer):
-
         def visit_Call(self, node: ast.Call) -> ast.AST:
             self.generic_visit(node)
             return ast.copy_location(ast.Name(id=name, ctx=ast.Load()), node) if node is target else node
@@ -2354,10 +2491,12 @@ class _AddAtInline(ast.NodeTransformer):
             a_rank = self.ranks.get(A)
             if vr and trailing and (trailing < 0 or a_rank is None or a_rank - len(elts) != trailing):
                 # Anything else would need numpy broadcast alignment we do not model -> fail loudly.
-                raise DesugarError(f"np.add.at values ndim {vr} != index ndim {driver_rank} "
-                                   f"plus the {'unknown' if a_rank is None else a_rank - len(elts)} "
-                                   "axes the index leaves untouched (only scalar, matching-shape or "
-                                   "block-shaped values are lowered)")
+                raise DesugarError(
+                    f"np.add.at values ndim {vr} != index ndim {driver_rank} "
+                    f"plus the {'unknown' if a_rank is None else a_rank - len(elts)} "
+                    "axes the index leaves untouched (only scalar, matching-shape or "
+                    "block-shaped values are lowered)"
+                )
             trail_iters = [f"{p}_t{k}" for k in range(trailing)]
             idx_exprs.extend(trail_iters)
             rhs = f"{tv}[{', '.join(iters + trail_iters)}]" if vr and vr >= 1 else tv
@@ -2393,8 +2532,13 @@ class _SpliceErrstate(ast.NodeTransformer):
         if len(node.items) != 1 or node.items[0].optional_vars is not None:
             return node
         call = node.items[0].context_expr
-        if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and call.func.attr == "errstate"
-                and isinstance(call.func.value, ast.Name) and call.func.value.id in ("np", "numpy")):
+        if not (
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "errstate"
+            and isinstance(call.func.value, ast.Name)
+            and call.func.value.id in ("np", "numpy")
+        ):
             return node
         self.changed = True
         return node.body
@@ -2428,12 +2572,17 @@ class _SearchsortedMaterialize(ast.NodeTransformer):
             tmp = f"__ss{self._ctr}"
             self._ctr += 1
             pre.append(
-                ast.Assign(targets=[ast.Name(id=tmp, ctx=ast.Store())],
-                           value=ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()),
-                                                             attr="ascontiguousarray",
-                                                             ctx=ast.Load()),
-                                          args=[call.args[0]],
-                                          keywords=[])))
+                ast.Assign(
+                    targets=[ast.Name(id=tmp, ctx=ast.Store())],
+                    value=ast.Call(
+                        func=ast.Attribute(
+                            value=ast.Name(id="np", ctx=ast.Load()), attr="ascontiguousarray", ctx=ast.Load()
+                        ),
+                        args=[call.args[0]],
+                        keywords=[],
+                    ),
+                )
+            )
             call.args[0] = ast.Name(id=tmp, ctx=ast.Load())
         self.changed = True
         out = pre + [node]
@@ -2457,8 +2606,12 @@ class _HistogramHoister(ast.NodeTransformer):
 
     def visit_Subscript(self, node: ast.Subscript):
         self.generic_visit(node)
-        if not (isinstance(node.slice, ast.Constant) and node.slice.value == 0 and _np_attr(node.value) == "histogram"
-                and len(node.value.args) >= 2):
+        if not (
+            isinstance(node.slice, ast.Constant)
+            and node.slice.value == 0
+            and _np_attr(node.value) == "histogram"
+            and len(node.value.args) >= 2
+        ):
             return node
         call = node.value
         a, bins = ast.unparse(call.args[0]), ast.unparse(call.args[1])
@@ -2476,8 +2629,11 @@ class _HistogramHoister(ast.NodeTransformer):
         if lo is None or hi is None:
             lo_s, hi_s = f"{p}_lo", f"{p}_hi"
             lines += [
-                f"{lo_s} = {a}[0]", f"{hi_s} = {a}[0]", f"for {p}_s in range({a}.shape[0]):",
-                f"    if {a}[{p}_s] < {lo_s}: {lo_s} = {a}[{p}_s]", f"    if {a}[{p}_s] > {hi_s}: {hi_s} = {a}[{p}_s]"
+                f"{lo_s} = {a}[0]",
+                f"{hi_s} = {a}[0]",
+                f"for {p}_s in range({a}.shape[0]):",
+                f"    if {a}[{p}_s] < {lo_s}: {lo_s} = {a}[{p}_s]",
+                f"    if {a}[{p}_s] > {hi_s}: {hi_s} = {a}[{p}_s]",
             ]
         else:
             lo_s, hi_s = f"({ast.unparse(lo)})", f"({ast.unparse(hi)})"
@@ -2513,13 +2669,15 @@ class _HistogramHoister(ast.NodeTransformer):
         # would fold them into bin 0 / bin-1 instead. Guard the increment. For an auto lo/hi
         # (a.min()/a.max()) every element is in range, so the guard is a no-op there.
         lines += [
-            f"{temp} = np.zeros({bins}, {wdtype})", f"for {p}_i in range({a}.shape[0]):",
+            f"{temp} = np.zeros({bins}, {wdtype})",
+            f"for {p}_i in range({a}.shape[0]):",
             f"    if {lo_s} <= {a}[{p}_i] and {a}[{p}_i] <= {hi_s}:",
             f"        {p}_b = int(({a}[{p}_i] - {lo_s}) * {bins} / ({hi_s} - {lo_s}))",
-            f"        if {p}_b < 0: {p}_b = 0", f"        if {p}_b > {bins} - 1: {p}_b = {bins} - 1",
+            f"        if {p}_b < 0: {p}_b = 0",
+            f"        if {p}_b > {bins} - 1: {p}_b = {bins} - 1",
             f"        if {a}[{p}_i] < {edges}[{p}_b]: {p}_b = {p}_b - 1",
             f"        if {p}_b < {bins} - 1 and {a}[{p}_i] >= {edges}[{p}_b + 1]: {p}_b = {p}_b + 1",
-            f"        {temp}[{p}_b] += {add}"
+            f"        {temp}[{p}_b] += {add}",
         ]
         self.pre.extend(ast.parse("\n".join(lines)).body)
         return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
@@ -2555,9 +2713,13 @@ class _FillDiagonalInline(ast.NodeTransformer):
 
     def visit_Expr(self, node: ast.Expr) -> ast.AST:
         call = node.value
-        if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
-                and isinstance(call.func.value, ast.Name) and call.func.value.id in ("np", "numpy")
-                and call.func.attr == "fill_diagonal"):
+        if not (
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and isinstance(call.func.value, ast.Name)
+            and call.func.value.id in ("np", "numpy")
+            and call.func.attr == "fill_diagonal"
+        ):
             return node
         if len(call.args) != 2 or call.keywords or not isinstance(call.args[0], ast.Name):
             return node
@@ -2565,25 +2727,31 @@ class _FillDiagonalInline(ast.NodeTransformer):
         it = "__fd0"
 
         def axis(k: int) -> ast.expr:
-            return ast.Subscript(value=ast.Attribute(value=ast.Name(id=arr.id, ctx=ast.Load()),
-                                                     attr="shape",
-                                                     ctx=ast.Load()),
-                                 slice=ast.Constant(value=k),
-                                 ctx=ast.Load())
+            return ast.Subscript(
+                value=ast.Attribute(value=ast.Name(id=arr.id, ctx=ast.Load()), attr="shape", ctx=ast.Load()),
+                slice=ast.Constant(value=k),
+                ctx=ast.Load(),
+            )
 
         bound = ast.Call(func=ast.Name(id="min", ctx=ast.Load()), args=[axis(0), axis(1)], keywords=[])
-        store = ast.Assign(targets=[
-            ast.Subscript(value=ast.Name(id=arr.id, ctx=ast.Load()),
-                          slice=ast.Tuple(elts=[ast.Name(id=it, ctx=ast.Load()),
-                                                ast.Name(id=it, ctx=ast.Load())],
-                                          ctx=ast.Load()),
-                          ctx=ast.Store())
-        ],
-                           value=val)
-        loop = ast.For(target=ast.Name(id=it, ctx=ast.Store()),
-                       iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[bound], keywords=[]),
-                       body=[store],
-                       orelse=[])
+        store = ast.Assign(
+            targets=[
+                ast.Subscript(
+                    value=ast.Name(id=arr.id, ctx=ast.Load()),
+                    slice=ast.Tuple(
+                        elts=[ast.Name(id=it, ctx=ast.Load()), ast.Name(id=it, ctx=ast.Load())], ctx=ast.Load()
+                    ),
+                    ctx=ast.Store(),
+                )
+            ],
+            value=val,
+        )
+        loop = ast.For(
+            target=ast.Name(id=it, ctx=ast.Store()),
+            iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[bound], keywords=[]),
+            body=[store],
+            orelse=[],
+        )
         return ast.fix_missing_locations(ast.copy_location(loop, node))
 
 
@@ -2600,8 +2768,12 @@ class _UfuncOutInline(ast.NodeTransformer):
         # ``np.<ufunc>.outer(a, b, out=c)`` is the same store with a two-level name. There is no
         # BinOp spelling for an outer product, so the call is kept and only the ``out=`` becomes a
         # target -- floyd_warshall writes its whole relaxation step this way.
-        outer_form = (isinstance(call.func.value, ast.Attribute) and isinstance(call.func.value.value, ast.Name)
-                      and call.func.value.value.id in ("np", "numpy") and call.func.attr == "outer")
+        outer_form = (
+            isinstance(call.func.value, ast.Attribute)
+            and isinstance(call.func.value.value, ast.Name)
+            and call.func.value.value.id in ("np", "numpy")
+            and call.func.attr == "outer"
+        )
         if outer_form:
             op = None
         else:
@@ -2683,22 +2855,29 @@ def _int_matmul_stmts(temp: str, a: str, b: str, ra: int, rb: int, ctr: int, acc
         return [f"{temp} = 0", f"for {p}_k in range({a}.shape[0]):", f"    {temp} += {a}[{p}_k] * {b}[{p}_k]"]
     if ra == 1 and rb == 2:  # (K,) @ (K, N) -> (N,)
         return [
-            f"{temp} = np.zeros({b}.shape[1], {acc})", f"for {p}_j in range({b}.shape[1]):",
-            f"    for {p}_k in range({a}.shape[0]):", f"        {temp}[{p}_j] += {a}[{p}_k] * {b}[{p}_k, {p}_j]"
+            f"{temp} = np.zeros({b}.shape[1], {acc})",
+            f"for {p}_j in range({b}.shape[1]):",
+            f"    for {p}_k in range({a}.shape[0]):",
+            f"        {temp}[{p}_j] += {a}[{p}_k] * {b}[{p}_k, {p}_j]",
         ]
     if ra == 2 and rb == 1:  # (M, K) @ (K,) -> (M,)
         return [
-            f"{temp} = np.zeros({a}.shape[0], {acc})", f"for {p}_i in range({a}.shape[0]):",
-            f"    for {p}_k in range({a}.shape[1]):", f"        {temp}[{p}_i] += {a}[{p}_i, {p}_k] * {b}[{p}_k]"
+            f"{temp} = np.zeros({a}.shape[0], {acc})",
+            f"for {p}_i in range({a}.shape[0]):",
+            f"    for {p}_k in range({a}.shape[1]):",
+            f"        {temp}[{p}_i] += {a}[{p}_i, {p}_k] * {b}[{p}_k]",
         ]
     if ra == 2 and rb == 2:  # (M, K) @ (K, N) -> (M, N)
         return [
-            f"{temp} = np.zeros(({a}.shape[0], {b}.shape[1]), {acc})", f"for {p}_i in range({a}.shape[0]):",
-            f"    for {p}_j in range({b}.shape[1]):", f"        for {p}_k in range({a}.shape[1]):",
-            f"            {temp}[{p}_i, {p}_j] += {a}[{p}_i, {p}_k] * {b}[{p}_k, {p}_j]"
+            f"{temp} = np.zeros(({a}.shape[0], {b}.shape[1]), {acc})",
+            f"for {p}_i in range({a}.shape[0]):",
+            f"    for {p}_j in range({b}.shape[1]):",
+            f"        for {p}_k in range({a}.shape[1]):",
+            f"            {temp}[{p}_i, {p}_j] += {a}[{p}_i, {p}_k] * {b}[{p}_k, {p}_j]",
         ]
-    raise DesugarError(f"integer matmul of ranks {ra}x{rb} is unsupported "
-                       "(numba has no integer @; only <=2-D operands are lowered)")
+    raise DesugarError(
+        f"integer matmul of ranks {ra}x{rb} is unsupported (numba has no integer @; only <=2-D operands are lowered)"
+    )
 
 
 class _IntMatmulHoister(ast.NodeTransformer):
@@ -2790,8 +2969,11 @@ class _IntMatmulInline(ast.NodeTransformer):
 def _is_transpose_expr(v: ast.AST) -> bool:
     """``np.transpose(x, ...)`` / ``x.transpose(...)`` / ``x.T`` -- these produce a
     non-contiguous view."""
-    return (_np_attr(v) == "transpose" or (isinstance(v, ast.Attribute) and v.attr == "T")
-            or (isinstance(v, ast.Call) and isinstance(v.func, ast.Attribute) and v.func.attr == "transpose"))
+    return (
+        _np_attr(v) == "transpose"
+        or (isinstance(v, ast.Attribute) and v.attr == "T")
+        or (isinstance(v, ast.Call) and isinstance(v.func, ast.Attribute) and v.func.attr == "transpose")
+    )
 
 
 def _noncontig_names(tree: ast.AST) -> set:
@@ -2801,7 +2983,7 @@ def _noncontig_names(tree: ast.AST) -> set:
     for _ in range(6):
         grew = False
         for node in ast.walk(tree):
-            if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
+            if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
                 v = node.value
                 bad = _is_transpose_expr(v) or (isinstance(v, ast.Name) and v.id in nc)
                 if bad and node.targets[0].id not in nc:
@@ -2834,8 +3016,7 @@ class _ReshapeContiguousInline(ast.NodeTransformer):
         self.generic_visit(node)
         if _np_attr(node) == "reshape" and node.args and self._noncontig(node.args[0]):
             node.args[0] = self._wrap(node.args[0])
-        elif (isinstance(node.func, ast.Attribute) and node.func.attr == "reshape"
-              and self._noncontig(node.func.value)):
+        elif isinstance(node.func, ast.Attribute) and node.func.attr == "reshape" and self._noncontig(node.func.value):
             node.func.value = self._wrap(node.func.value)
         return node
 
@@ -2924,7 +3105,17 @@ class _RepeatAxisInline(ast.NodeTransformer):
 #: ``axis=`` counts back from the operand's own rank (``flip``/``roll``/``cumsum``
 #: /``concatenate``/... are all axis-preserving).
 _AXIS_PRESERVING_OPS = {
-    "flip", "roll", "cumsum", "cumprod", "nancumsum", "nancumprod", "sort", "argsort", "concatenate", "diff", "gradient"
+    "flip",
+    "roll",
+    "cumsum",
+    "cumprod",
+    "nancumsum",
+    "nancumprod",
+    "sort",
+    "argsort",
+    "concatenate",
+    "diff",
+    "gradient",
 }
 #: ops that ADD one axis, so the axis-space is the operand rank PLUS one
 #: (``np.stack((a, b), axis=-1)`` on rank-2 operands addresses axis 2).
@@ -3014,14 +3205,15 @@ class _DropValidationGuards(ast.NodeTransformer):
 
     def visit_If(self, node: ast.If):
         self.generic_visit(node)
-        if (not node.orelse and node.body and all(isinstance(s, (ast.Raise, ast.Assert, ast.Pass)) for s in node.body)):
+        if not node.orelse and node.body and all(isinstance(s, (ast.Raise, ast.Assert, ast.Pass)) for s in node.body):
             return None
         return node
 
 
 def _strip_docstring_stmts(body: List[ast.stmt]) -> List[ast.stmt]:
     return [
-        s for s in body
+        s
+        for s in body
         if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant) and isinstance(s.value.value, str))
     ]
 
@@ -3060,8 +3252,11 @@ class _IssubdtypeFold(ast.NodeTransformer):
         if _np_attr(node) != "issubdtype" or len(node.args) != 2:
             return node
         a = node.args[0]
-        kind = _dtype_kind(a.value, self.dtypes) if (isinstance(a, ast.Attribute)
-                                                     and a.attr == "dtype") else _dtype_arg_kind(a)
+        kind = (
+            _dtype_kind(a.value, self.dtypes)
+            if (isinstance(a, ast.Attribute) and a.attr == "dtype")
+            else _dtype_arg_kind(a)
+        )
         cat = node.args[1]
         catname = cat.attr if isinstance(cat, ast.Attribute) else (cat.id if isinstance(cat, ast.Name) else None)
         kinds = _ISSUBDTYPE_CATEGORY.get(catname)
@@ -3114,8 +3309,7 @@ _BOOLOP_CLONE_MAX = 4
 def _symbolic_eq_test(node: ast.expr) -> bool:
     """A single-comparator ``==`` / ``!=`` -- the one shape dace replaces with a bare
     sympy object, and so the only one that has to leave a ``BoolOp`` list field."""
-    return (isinstance(node, ast.Compare) and len(node.comparators) == 1
-            and isinstance(node.ops[0], (ast.Eq, ast.NotEq)))
+    return isinstance(node, ast.Compare) and len(node.comparators) == 1 and isinstance(node.ops[0], (ast.Eq, ast.NotEq))
 
 
 class _BoolOpIfToChain(ast.NodeTransformer):
@@ -3213,9 +3407,14 @@ class _FinfoEpsFold(ast.NodeTransformer):
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
         self.generic_visit(node)
         call = node.value
-        if (node.attr == "eps" and isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
-                and call.func.attr == "finfo" and isinstance(call.func.value, ast.Name)
-                and call.func.value.id in ("np", "numpy")):
+        if (
+            node.attr == "eps"
+            and isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "finfo"
+            and isinstance(call.func.value, ast.Name)
+            and call.func.value.id in ("np", "numpy")
+        ):
             return ast.copy_location(ast.Constant(value=self.eps), node)
         return node
 
@@ -3252,8 +3451,14 @@ def _list_display_elts(node: ast.AST) -> Optional[List[ast.expr]]:
 
 def _len_call_of(node: ast.AST, name: str) -> bool:
     """``len(<name>)`` -- the list's running length."""
-    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "len"
-            and len(node.args) == 1 and isinstance(node.args[0], ast.Name) and node.args[0].id == name)
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "len"
+        and len(node.args) == 1
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id == name
+    )
 
 
 class _SubstLenWithIndex(ast.NodeTransformer):
@@ -3281,16 +3486,33 @@ def _appended_elts(stmt: ast.stmt, name: str) -> Optional[List[ast.expr]]:
     Accepts ``name.append(e)``, ``name += [e...]`` and ``name = name + [e...]``
     -- the three spellings the corpus uses to build a parameter vector.
     """
-    if (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call) and isinstance(stmt.value.func, ast.Attribute)
-            and stmt.value.func.attr == "append" and isinstance(stmt.value.func.value, ast.Name)
-            and stmt.value.func.value.id == name and len(stmt.value.args) == 1):
+    if (
+        isinstance(stmt, ast.Expr)
+        and isinstance(stmt.value, ast.Call)
+        and isinstance(stmt.value.func, ast.Attribute)
+        and stmt.value.func.attr == "append"
+        and isinstance(stmt.value.func.value, ast.Name)
+        and stmt.value.func.value.id == name
+        and len(stmt.value.args) == 1
+    ):
         return [stmt.value.args[0]]
-    if (isinstance(stmt, ast.AugAssign) and isinstance(stmt.op, ast.Add) and isinstance(stmt.target, ast.Name)
-            and stmt.target.id == name):
+    if (
+        isinstance(stmt, ast.AugAssign)
+        and isinstance(stmt.op, ast.Add)
+        and isinstance(stmt.target, ast.Name)
+        and stmt.target.id == name
+    ):
         return _list_display_elts(stmt.value)
-    if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
-            and stmt.targets[0].id == name and isinstance(stmt.value, ast.BinOp) and isinstance(stmt.value.op, ast.Add)
-            and isinstance(stmt.value.left, ast.Name) and stmt.value.left.id == name):
+    if (
+        isinstance(stmt, ast.Assign)
+        and len(stmt.targets) == 1
+        and isinstance(stmt.targets[0], ast.Name)
+        and stmt.targets[0].id == name
+        and isinstance(stmt.value, ast.BinOp)
+        and isinstance(stmt.value.op, ast.Add)
+        and isinstance(stmt.value.left, ast.Name)
+        and stmt.value.left.id == name
+    ):
         return _list_display_elts(stmt.value.right)
     return None
 
@@ -3306,8 +3528,12 @@ def _off_add(off: str, delta: str) -> str:
 
 def _range_bound(node: ast.AST) -> Optional[ast.expr]:
     """``range(E)`` -> ``E`` (single-argument form only), else None."""
-    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "range"
-            and len(node.args) == 1):
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "range"
+        and len(node.args) == 1
+    ):
         return node.args[0]
     return None
 
@@ -3344,7 +3570,8 @@ def _plan_list_build(body: List[ast.stmt], start: int, name: str):
     off = _off_add("0", str(len(seed)))
     trunc: Optional[str] = None
     all_int = all(
-        isinstance(e, ast.Constant) and isinstance(e.value, int) and not isinstance(e.value, bool) for e in seed)
+        isinstance(e, ast.Constant) and isinstance(e.value, int) and not isinstance(e.value, bool) for e in seed
+    )
     j = start + 1
     while j < len(body):
         stmt = body[j]
@@ -3376,9 +3603,14 @@ def _plan_list_build(body: List[ast.stmt], start: int, name: str):
             j += 1
             continue
         # ``while len(name) < E: name.append(<expr>)`` -- extend to length E.
-        if (isinstance(stmt, ast.While) and isinstance(stmt.test, ast.Compare) and len(stmt.test.ops) == 1
-                and isinstance(stmt.test.ops[0], ast.Lt) and _len_call_of(stmt.test.left, name)
-                and len(stmt.body) == 1):
+        if (
+            isinstance(stmt, ast.While)
+            and isinstance(stmt.test, ast.Compare)
+            and len(stmt.test.ops) == 1
+            and isinstance(stmt.test.ops[0], ast.Lt)
+            and _len_call_of(stmt.test.left, name)
+            and len(stmt.body) == 1
+        ):
             got = _appended_elts(stmt.body[0], name)
             if got is None or len(got) != 1 or trunc is not None:
                 return None
@@ -3387,11 +3619,20 @@ def _plan_list_build(body: List[ast.stmt], start: int, name: str):
             # ``name = name[:E]`` on the SAME bound pins it to E. Without that the
             # length is a max() this fold does not model -- leave it verbatim.
             nxt = body[j + 1] if j + 1 < len(body) else None
-            if not (isinstance(nxt, ast.Assign) and len(nxt.targets) == 1 and isinstance(nxt.targets[0], ast.Name)
-                    and nxt.targets[0].id == name and isinstance(nxt.value, ast.Subscript)
-                    and isinstance(nxt.value.value, ast.Name) and nxt.value.value.id == name and isinstance(
-                        nxt.value.slice, ast.Slice) and nxt.value.slice.lower is None and nxt.value.slice.step is None
-                    and nxt.value.slice.upper is not None and ast.unparse(nxt.value.slice.upper) == bound):
+            if not (
+                isinstance(nxt, ast.Assign)
+                and len(nxt.targets) == 1
+                and isinstance(nxt.targets[0], ast.Name)
+                and nxt.targets[0].id == name
+                and isinstance(nxt.value, ast.Subscript)
+                and isinstance(nxt.value.value, ast.Name)
+                and nxt.value.value.id == name
+                and isinstance(nxt.value.slice, ast.Slice)
+                and nxt.value.slice.lower is None
+                and nxt.value.slice.step is None
+                and nxt.value.slice.upper is not None
+                and ast.unparse(nxt.value.slice.upper) == bound
+            ):
                 return None
             segs.append(("while", off, (bound, got[0])))
             trunc = bound
@@ -3444,8 +3685,12 @@ def _fold_list_preludes(fn: ast.FunctionDef) -> None:
     changed = False
     while i < len(fn.body):
         stmt = fn.body[i]
-        if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
-                and isinstance(stmt.value, ast.List)):
+        if (
+            isinstance(stmt, ast.Assign)
+            and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], ast.Name)
+            and isinstance(stmt.value, ast.List)
+        ):
             plan = _plan_list_build(fn.body, i, stmt.targets[0].id)
             if plan is not None:
                 out.extend(plan[0])
@@ -3459,14 +3704,9 @@ def _fold_list_preludes(fn: ast.FunctionDef) -> None:
         ast.fix_missing_locations(fn)
 
 
-def _curve_fit_lm_lines(popt: str,
-                        f: str,
-                        x: str,
-                        y: str,
-                        p0: str,
-                        pfx: str,
-                        iters: int,
-                        precision: Optional[str] = None) -> List[str]:
+def _curve_fit_lm_lines(
+    popt: str, f: str, x: str, y: str, p0: str, pfx: str, iters: int, precision: Optional[str] = None
+) -> List[str]:
     """Source lines for a naive Levenberg-Marquardt fit replacing ``curve_fit``.
 
     ``scipy.optimize.curve_fit(f, x, y, p0=...)`` with no bounds/sigma is an
@@ -3649,9 +3889,14 @@ class _CurveFitRewriter(ast.NodeTransformer):
         fdef.args.args.append(ast.arg(arg=vp.arg))
         fdef.args.vararg = None
         for sub in ast.walk(fdef):
-            if (isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Name) and sub.value.id == vp.arg
-                    and isinstance(sub.slice, ast.UnaryOp) and isinstance(sub.slice.op, ast.USub)
-                    and isinstance(sub.slice.operand, ast.Constant)):
+            if (
+                isinstance(sub, ast.Subscript)
+                and isinstance(sub.value, ast.Name)
+                and sub.value.id == vp.arg
+                and isinstance(sub.slice, ast.UnaryOp)
+                and isinstance(sub.slice.op, ast.USub)
+                and isinstance(sub.slice.operand, ast.Constant)
+            ):
                 sub.slice = ast.parse(f"{nexpr} - {sub.slice.operand.value}", mode="eval").body
         ast.fix_missing_locations(fdef)
 
@@ -3664,8 +3909,10 @@ class _CurveFitRewriter(ast.NodeTransformer):
             if len(tgt.elts) != 2 or not all(isinstance(e, ast.Name) for e in tgt.elts):
                 raise DesugarError(f"curve_fit: unsupported target {ast.unparse(tgt)}")
             if tgt.elts[1].id != "_":
-                raise DesugarError("curve_fit: the pcov covariance output is not computed by the LM "
-                                   f"lowering, but {tgt.elts[1].id!r} binds it")
+                raise DesugarError(
+                    "curve_fit: the pcov covariance output is not computed by the LM "
+                    f"lowering, but {tgt.elts[1].id!r} binds it"
+                )
             popt = tgt.elts[0].id
         elif isinstance(tgt, ast.Name):
             popt = tgt.id
@@ -3673,8 +3920,10 @@ class _CurveFitRewriter(ast.NodeTransformer):
             raise DesugarError(f"curve_fit: unsupported target {ast.unparse(tgt)}")
         for kw in call.keywords:
             if kw.arg not in _CURVE_FIT_IGNORED_KW:
-                raise DesugarError(f"curve_fit: keyword {kw.arg!r} changes the fit; the LM lowering "
-                                   "only reproduces the unweighted, unbounded, FD-Jacobian form")
+                raise DesugarError(
+                    f"curve_fit: keyword {kw.arg!r} changes the fit; the LM lowering "
+                    "only reproduces the unweighted, unbounded, FD-Jacobian form"
+                )
         p0 = next((kw.value for kw in call.keywords if kw.arg == "p0"), None)
         if p0 is None and len(call.args) >= 4:
             p0 = call.args[3]
@@ -3710,8 +3959,13 @@ class _NegParamIndexFold(ast.NodeTransformer):
 
     def visit_Subscript(self, node: ast.Subscript):
         self.generic_visit(node)
-        if (isinstance(node.value, ast.Name) and node.value.id == self.name and isinstance(node.slice, ast.UnaryOp)
-                and isinstance(node.slice.op, ast.USub) and isinstance(node.slice.operand, ast.Constant)):
+        if (
+            isinstance(node.value, ast.Name)
+            and node.value.id == self.name
+            and isinstance(node.slice, ast.UnaryOp)
+            and isinstance(node.slice.op, ast.USub)
+            and isinstance(node.slice.operand, ast.Constant)
+        ):
             node.slice = ast.parse(f"{self.nexpr} - {node.slice.operand.value}", mode="eval").body
             ast.fix_missing_locations(node)
         return node
@@ -3766,8 +4020,12 @@ def _as_reshape(node: ast.AST):
     """``np.reshape(x, shape)`` / ``x.reshape(shape)`` -> ``(x, shape_node)`` else None."""
     if _np_attr(node) == "reshape" and len(node.args) >= 2:
         return node.args[0], node.args[1]
-    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "reshape"
-            and node.args):
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "reshape"
+        and node.args
+    ):
         shape = node.args[0] if len(node.args) == 1 else ast.Tuple(elts=list(node.args), ctx=ast.Load())
         return node.func.value, shape
     return None
@@ -3793,8 +4051,10 @@ class _ReshapeMatmulInline(ast.NodeTransformer):
         if len(node.targets) != 1:
             return node
         tgt = node.targets[0]
-        if not ((isinstance(tgt, ast.Subscript) and isinstance(tgt.value, ast.Name)
-                 and isinstance(tgt.slice, ast.Slice)) or isinstance(tgt, ast.Name)):
+        if not (
+            (isinstance(tgt, ast.Subscript) and isinstance(tgt.value, ast.Name) and isinstance(tgt.slice, ast.Slice))
+            or isinstance(tgt, ast.Name)
+        ):
             return node
         outer = _as_reshape(node.value)
         if not outer:
@@ -3808,12 +4068,19 @@ class _ReshapeMatmulInline(ast.NodeTransformer):
         X, Y, mid = inner[0], mm[1], inner[1]
         rX = expr_rank(X, self.ranks)
         # Fire only on the unit-dim-insertion batched form; other reshapes -> verbatim.
-        if not (isinstance(mid, ast.Tuple) and rX and len(mid.elts) == rX + 1
-                and isinstance(mid.elts[-2], ast.Constant) and mid.elts[-2].value == 1):
+        if not (
+            isinstance(mid, ast.Tuple)
+            and rX
+            and len(mid.elts) == rX + 1
+            and isinstance(mid.elts[-2], ast.Constant)
+            and mid.elts[-2].value == 1
+        ):
             return node
         if expr_rank(Y, self.ranks) != 2 or rX < 2:
-            raise DesugarError(f"reshape-batched matmul: unit-dim form needs a 2-D right operand and a >=2-D "
-                               f"left operand (got left ndim {rX}, right ndim {expr_rank(Y, self.ranks)})")
+            raise DesugarError(
+                f"reshape-batched matmul: unit-dim form needs a 2-D right operand and a >=2-D "
+                f"left operand (got left ndim {rX}, right ndim {expr_rank(Y, self.ranks)})"
+            )
         p = f"__dg{self._ctr}"
         self._ctr += 1
         batch = list(range(rX - 1))
@@ -3838,9 +4105,14 @@ def _np_linalg_attr(node: ast.AST) -> Optional[str]:
     """``np.linalg.<attr>(...)`` / ``numpy.linalg.<attr>(...)`` call -> ``attr``
     (``cholesky``/``solve``/``inv``), else None. Like :func:`_np_fft_attr` but for
     the two-level ``np.linalg`` prefix the single-level ``_np_attr`` misses."""
-    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Attribute) and node.func.value.attr == "linalg"
-            and isinstance(node.func.value.value, ast.Name) and node.func.value.value.id in ("np", "numpy")):
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == "linalg"
+        and isinstance(node.func.value.value, ast.Name)
+        and node.func.value.value.id in ("np", "numpy")
+    ):
         return node.func.attr
     return None
 
@@ -3891,26 +4163,30 @@ def _gauss_jordan_lines(aw: str, o: str, n: str, m: Optional[str], p: str) -> Li
     # A 2-D ``o`` swaps whole rows (a fresh row .copy()); a 1-D ``o`` swaps a scalar.
     o_swap = [f"        {p}_to = {o}[{k}].copy()"] if m is not None else [f"        {p}_to = {o}[{k}]"]
     o_swap += [f"        {o}[{k}] = {o}[{p}_pv]", f"        {o}[{p}_pv] = {p}_to"]
-    return [
-        f"for {k} in range({n}):",
-        f"    {p}_pv = {k}",
-        f"    for {r} in range({k} + 1, {n}):",
-        f"        if np.abs({aw}[{r}, {k}]) > np.abs({aw}[{p}_pv, {k}]):",
-        f"            {p}_pv = {r}",
-        f"    if {p}_pv != {k}:",
-        f"        {p}_tr = {aw}[{k}].copy()",
-        f"        {aw}[{k}] = {aw}[{p}_pv]",
-        f"        {aw}[{p}_pv] = {p}_tr",
-    ] + o_swap + [
-        f"    {p}_f = {aw}[{k}, {k}]",
-        f"    {aw}[{k}] = {aw}[{k}] / {p}_f",
-        f"    {o}[{k}] = {o}[{k}] / {p}_f",
-        f"    for {r} in range({n}):",
-        f"        if {r} != {k}:",
-        f"            {p}_g = {aw}[{r}, {k}]",
-        f"            {aw}[{r}] -= {p}_g * {aw}[{k}]",
-        f"            {o}[{r}] -= {p}_g * {o}[{k}]",
-    ]
+    return (
+        [
+            f"for {k} in range({n}):",
+            f"    {p}_pv = {k}",
+            f"    for {r} in range({k} + 1, {n}):",
+            f"        if np.abs({aw}[{r}, {k}]) > np.abs({aw}[{p}_pv, {k}]):",
+            f"            {p}_pv = {r}",
+            f"    if {p}_pv != {k}:",
+            f"        {p}_tr = {aw}[{k}].copy()",
+            f"        {aw}[{k}] = {aw}[{p}_pv]",
+            f"        {aw}[{p}_pv] = {p}_tr",
+        ]
+        + o_swap
+        + [
+            f"    {p}_f = {aw}[{k}, {k}]",
+            f"    {aw}[{k}] = {aw}[{k}] / {p}_f",
+            f"    {o}[{k}] = {o}[{k}] / {p}_f",
+            f"    for {r} in range({n}):",
+            f"        if {r} != {k}:",
+            f"            {p}_g = {aw}[{r}, {k}]",
+            f"            {aw}[{r}] -= {p}_g * {aw}[{k}]",
+            f"            {o}[{r}] -= {p}_g * {o}[{k}]",
+        ]
+    )
 
 
 class _LinalgHoister(ast.NodeTransformer):
@@ -3924,12 +4200,14 @@ class _LinalgHoister(ast.NodeTransformer):
     (an inference gap, a clean backend skip). A non-Name operand is materialised
     to a temp first so the loop body can index it."""
 
-    def __init__(self,
-                 ranks: Dict[str, int],
-                 dtypes: Dict[str, str],
-                 lower_ops: set,
-                 ctr: int,
-                 lower_solve_rhs_ranks: frozenset = frozenset()):
+    def __init__(
+        self,
+        ranks: Dict[str, int],
+        dtypes: Dict[str, str],
+        lower_ops: set,
+        ctr: int,
+        lower_solve_rhs_ranks: frozenset = frozenset(),
+    ):
         self.ranks = ranks
         self.dtypes = dtypes
         self.lower_ops = lower_ops
@@ -3982,8 +4260,10 @@ class _LinalgHoister(ast.NodeTransformer):
         self.ctr += 1
         an, bn = self._src_name(a, p, "a"), self._src_name(b, p, "b")
         temp = f"{p}_o"
-        self._emit([f"{p}_aw = {an}.copy()", f"{temp} = {bn}.copy()"] +
-                   _gauss_jordan_lines(f"{p}_aw", temp, f"{an}.shape[0]", (f"{bn}.shape[1]" if rb == 2 else None), p))
+        self._emit(
+            [f"{p}_aw = {an}.copy()", f"{temp} = {bn}.copy()"]
+            + _gauss_jordan_lines(f"{p}_aw", temp, f"{an}.shape[0]", (f"{bn}.shape[1]" if rb == 2 else None), p)
+        )
         return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
 
     def _inv(self, node: ast.Call):
@@ -3997,10 +4277,15 @@ class _LinalgHoister(ast.NodeTransformer):
         self.ctr += 1
         an = self._src_name(a, p, "a")
         temp, n = f"{p}_o", f"{an}.shape[0]"
-        self._emit([
-            f"{p}_aw = {an}.copy()", f"{temp} = np.zeros(({n}, {n}), {an}.dtype)", f"for {p}_d in range({n}):",
-            f"    {temp}[{p}_d, {p}_d] = 1"
-        ] + _gauss_jordan_lines(f"{p}_aw", temp, n, n, p))
+        self._emit(
+            [
+                f"{p}_aw = {an}.copy()",
+                f"{temp} = np.zeros(({n}, {n}), {an}.dtype)",
+                f"for {p}_d in range({n}):",
+                f"    {temp}[{p}_d, {p}_d] = 1",
+            ]
+            + _gauss_jordan_lines(f"{p}_aw", temp, n, n, p)
+        )
         return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
 
     def visit_Call(self, node: ast.Call):
@@ -4025,11 +4310,13 @@ class _LinalgInline(ast.NodeTransformer):
     except for the ``solve`` right-hand-side ranks their library node cannot expand
     (see :data:`_LOWER_SOLVE_RHS_RANKS`)."""
 
-    def __init__(self,
-                 ranks: Dict[str, int],
-                 dtypes: Dict[str, str],
-                 lower_ops: set,
-                 lower_solve_rhs_ranks: frozenset = frozenset()):
+    def __init__(
+        self,
+        ranks: Dict[str, int],
+        dtypes: Dict[str, str],
+        lower_ops: set,
+        lower_solve_rhs_ranks: frozenset = frozenset(),
+    ):
         self.ranks = ranks
         self.dtypes = dtypes
         self.lower_ops = lower_ops
@@ -4085,13 +4372,9 @@ def _eigh_w_dtype(is_real: bool, names, array_dtypes: Dict[str, str]) -> Optiona
     return "np.float64"
 
 
-def _eigh_jacobi_lines(w: str,
-                       y: str,
-                       c: str,
-                       n: str,
-                       p: str,
-                       is_real: bool = False,
-                       w_dtype: Optional[str] = None) -> List[str]:
+def _eigh_jacobi_lines(
+    w: str, y: str, c: str, n: str, p: str, is_real: bool = False, w_dtype: Optional[str] = None
+) -> List[str]:
     """Source lines diagonalising Hermitian ``n``x``n`` matrix ``c`` by cyclic
     complex Jacobi into eigenvalues ``w`` (ascending real, shape ``(n,)``) and
     eigenvectors ``y`` (unitary columns). Each sweep rotates every off-diagonal
@@ -4192,16 +4475,18 @@ def _eigh_jacobi_lines(w: str,
     ]
 
 
-def _eigh_stmts(w: str,
-                v: str,
-                a: str,
-                b: Optional[str],
-                lo: str,
-                hi: str,
-                p: str,
-                native_std: bool = False,
-                is_real: bool = False,
-                w_dtype: Optional[str] = None) -> List[str]:
+def _eigh_stmts(
+    w: str,
+    v: str,
+    a: str,
+    b: Optional[str],
+    lo: str,
+    hi: str,
+    p: str,
+    native_std: bool = False,
+    is_real: bool = False,
+    w_dtype: Optional[str] = None,
+) -> List[str]:
     """Source lines for ``w, v = eigh(a[, b])[subset lo:hi]`` (ascending).
 
     The generalized Hermitian problem ``a x = w b x`` reduces to standard form
@@ -4227,8 +4512,11 @@ def _eigh_stmts(w: str,
     else:
         pre = [f"{p}_C = {a}.copy()"]
         cname = f"{p}_C"
-    std = ([f"{p}_wa, {p}_ya = np.linalg.eigh({cname})"] if native_std else _eigh_jacobi_lines(
-        f"{p}_wa", f"{p}_ya", cname, f"{a}.shape[0]", p, is_real=is_real, w_dtype=w_dtype))
+    std = (
+        [f"{p}_wa, {p}_ya = np.linalg.eigh({cname})"]
+        if native_std
+        else _eigh_jacobi_lines(f"{p}_wa", f"{p}_ya", cname, f"{a}.shape[0]", p, is_real=is_real, w_dtype=w_dtype)
+    )
     lines = pre + std
     xname = f"{p}_xa" if b is not None else f"{p}_ya"
     if b is not None:
@@ -4240,16 +4528,18 @@ def _eigh_stmts(w: str,
     return lines
 
 
-def _eigh_c_stmts(w: str,
-                  v: Optional[str],
-                  a: str,
-                  b: Optional[str],
-                  lo: str,
-                  hi: str,
-                  p: str,
-                  eigenvalues_only: bool = False,
-                  is_real: bool = False,
-                  w_dtype: Optional[str] = None) -> List[str]:
+def _eigh_c_stmts(
+    w: str,
+    v: Optional[str],
+    a: str,
+    b: Optional[str],
+    lo: str,
+    hi: str,
+    p: str,
+    eigenvalues_only: bool = False,
+    is_real: bool = False,
+    w_dtype: Optional[str] = None,
+) -> List[str]:
     """Fully self-contained loop lowering of standard/generalized complex-
     Hermitian ``eigh`` for the C/Fortran backends, which have no ``np.linalg``
     and no matmul lowering for the ``L^-H`` conjugate-transpose operand. Emits
@@ -4370,11 +4660,13 @@ class _EighLoopRewriter(ast.NodeTransformer):
     runs before helper inlining assigns local ranks/dtypes, so only names the
     manifest itself declares are known; everything else stays the safe unknown."""
 
-    def __init__(self,
-                 alias_names: set,
-                 dtypes: Dict[str, str],
-                 kernel_name: Optional[str] = None,
-                 array_dtypes: Optional[Dict[str, str]] = None):
+    def __init__(
+        self,
+        alias_names: set,
+        dtypes: Dict[str, str],
+        kernel_name: Optional[str] = None,
+        array_dtypes: Optional[Dict[str, str]] = None,
+    ):
         self.alias_names = alias_names
         self.declared = dtypes
         self.dtypes = dtypes
@@ -4444,7 +4736,8 @@ class _EighLoopRewriter(ast.NodeTransformer):
         is_real = b_node is None and _eigh_operand_is_real(a_node, b_node, self.dtypes)
         w_dtype = _eigh_w_dtype(is_real, (aname, bname), self.array_dtypes)
         lines = pre + _eigh_c_stmts(
-            w, v, aname, bname, lo, hi, p, eigenvalues_only=(v is None), is_real=is_real, w_dtype=w_dtype)
+            w, v, aname, bname, lo, hi, p, eigenvalues_only=(v is None), is_real=is_real, w_dtype=w_dtype
+        )
         return [ast.copy_location(st, node) for st in ast.parse("\n".join(lines)).body]
 
 
@@ -4473,9 +4766,15 @@ def _eigh_call_kind(node: ast.AST, alias_names: set):
         return None
     f = node.func
     linalg_attr = _np_linalg_attr(node)
-    scipy_attr = (f.attr
-                  if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Attribute) and f.value.attr == "linalg"
-                  and isinstance(f.value.value, ast.Name) and f.value.value.id == "scipy" else None)
+    scipy_attr = (
+        f.attr
+        if isinstance(f, ast.Attribute)
+        and isinstance(f.value, ast.Attribute)
+        and f.value.attr == "linalg"
+        and isinstance(f.value.value, ast.Name)
+        and f.value.value.id == "scipy"
+        else None
+    )
     if linalg_attr == "eigvalsh" or scipy_attr == "eigvalsh":
         kind = "eigvalsh"
     elif linalg_attr == "eigh" or scipy_attr == "eigh" or (isinstance(f, ast.Name) and f.id in alias_names):
@@ -4591,11 +4890,13 @@ class _EighInline(ast.NodeTransformer):
     consulted the same way :class:`_LinalgInline` consults it for its ``hermitian``
     flag -- see :func:`_eigh_operand_is_real`."""
 
-    def __init__(self,
-                 ranks: Dict[str, int],
-                 alias_names: set,
-                 dtypes: Dict[str, str],
-                 array_dtypes: Optional[Dict[str, str]] = None):
+    def __init__(
+        self,
+        ranks: Dict[str, int],
+        alias_names: set,
+        dtypes: Dict[str, str],
+        array_dtypes: Optional[Dict[str, str]] = None,
+    ):
         self.ranks = ranks
         self.alias_names = alias_names
         self.dtypes = dtypes
@@ -4631,8 +4932,9 @@ class _EighInline(ast.NodeTransformer):
             w, v = tgt.id, None
         else:
             return node
-        if expr_rank(a_node, self.ranks) not in (2, None) or (b_node is not None
-                                                              and expr_rank(b_node, self.ranks) not in (2, None)):
+        if expr_rank(a_node, self.ranks) not in (2, None) or (
+            b_node is not None and expr_rank(b_node, self.ranks) not in (2, None)
+        ):
             return node
         p = f"__eigh{self._ctr}"
         self._ctr += 1
@@ -4706,7 +5008,7 @@ def _param_body_rank_evidence(fn: ast.FunctionDef) -> Dict[str, int]:
     for node in ast.walk(fn):
         if isinstance(node, ast.Subscript):
             v = node.value
-            if (isinstance(v, ast.Attribute) and v.attr == "shape" and isinstance(v.value, ast.Name)):
+            if isinstance(v, ast.Attribute) and v.attr == "shape" and isinstance(v.value, ast.Name):
                 k = _const_int(node.slice)
                 if k is not None and k >= 0:
                     bump(v.value.id, k + 1)  # p.shape[k] -> rank >= k+1
@@ -4715,9 +5017,9 @@ def _param_body_rank_evidence(fn: ast.FunctionDef) -> Dict[str, int]:
     return ev
 
 
-def _return_rank(fn: ast.FunctionDef,
-                 ranks: Dict[str, int],
-                 seed_ranks: Optional[Dict[str, int]] = None) -> Optional[int]:
+def _return_rank(
+    fn: ast.FunctionDef, ranks: Dict[str, int], seed_ranks: Optional[Dict[str, int]] = None
+) -> Optional[int]:
     """Rank of ``fn``'s returned value (the max over its ``return`` statements),
     given a rank table for its body -- so a caller can propagate it."""
     global _active_tuple_lengths
@@ -4731,8 +5033,9 @@ def _return_rank(fn: ast.FunctionDef,
         _active_tuple_lengths = prev
 
 
-def _infer_param_ranks(funcs: List[ast.FunctionDef], kernel_name: str,
-                       kir_seed: Dict[str, int]) -> Dict[str, Dict[str, int]]:
+def _infer_param_ranks(
+    funcs: List[ast.FunctionDef], kernel_name: str, kir_seed: Dict[str, int]
+) -> Dict[str, Dict[str, int]]:
     """Per-function ``{param: ndim}`` seeds. The kernel's array params come from
     ``kir_seed``; a HELPER function's param ranks are inferred from its call sites
     -- ``getAcc(pos, ...)`` in the kernel tells ``getAcc`` that ``pos`` has the
@@ -4798,9 +5101,15 @@ class _DecomposeRollSlice(ast.NodeTransformer):
         # ``expand_roll`` reads the shift from args[1], so a keyword ``shift=`` roll
         # is not lowerable -- don't decompose it into a dead snapshot temp, leave it
         # to fail loudly unchanged.
-        if not (isinstance(v, ast.Call) and isinstance(v.func, ast.Attribute) and v.func.attr == "roll"
-                and isinstance(v.func.value, ast.Name) and v.func.value.id in ("np", "numpy") and len(v.args) >= 2
-                and len(node.targets) == 1):
+        if not (
+            isinstance(v, ast.Call)
+            and isinstance(v.func, ast.Attribute)
+            and v.func.attr == "roll"
+            and isinstance(v.func.value, ast.Name)
+            and v.func.value.id in ("np", "numpy")
+            and len(v.args) >= 2
+            and len(node.targets) == 1
+        ):
             return node
         target = node.targets[0]
         op_bare = isinstance(v.args[0], ast.Name)
@@ -4844,16 +5153,24 @@ class _ComplexAccessorToFunc(ast.NodeTransformer):
     def _np_call(self, fn: str, arg: ast.expr) -> ast.expr:
         self.changed = True
         return ast.copy_location(
-            ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=fn, ctx=ast.Load()),
-                     args=[arg],
-                     keywords=[]), arg)
+            ast.Call(
+                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=fn, ctx=ast.Load()),
+                args=[arg],
+                keywords=[],
+            ),
+            arg,
+        )
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         # ``x.conjugate()`` / ``x.conj()`` (no args) -> ``np.conj(x)``. Handled at
         # the Call so ``.conjugate`` is not first mistaken for an accessor below;
         # ``np.conj(x)`` (a real call with args) is left as-is.
-        if (isinstance(node.func, ast.Attribute) and not node.args and not node.keywords
-                and node.func.attr in ("conjugate", "conj")):
+        if (
+            isinstance(node.func, ast.Attribute)
+            and not node.args
+            and not node.keywords
+            and node.func.attr in ("conjugate", "conj")
+        ):
             return self._np_call("conj", self.visit(node.func.value))
         self.generic_visit(node)
         return node
@@ -4863,8 +5180,12 @@ class _ComplexAccessorToFunc(ast.NodeTransformer):
         # ``x.real`` / ``x.imag`` accessor -> function form; but NOT the ``np.real``
         # / ``np.imag`` module attribute (that IS the function -- rewriting it would
         # nest ``np.real(np)``).
-        if (not self.conjugate_only and isinstance(node.ctx, ast.Load) and node.attr in ("real", "imag")
-                and not (isinstance(node.value, ast.Name) and node.value.id in ("np", "numpy"))):
+        if (
+            not self.conjugate_only
+            and isinstance(node.ctx, ast.Load)
+            and node.attr in ("real", "imag")
+            and not (isinstance(node.value, ast.Name) and node.value.id in ("np", "numpy"))
+        ):
             return self._np_call(node.attr, node.value)
         return node
 
@@ -4872,9 +5193,9 @@ class _ComplexAccessorToFunc(ast.NodeTransformer):
 def _np_multi_call(fn: str, args: List[ast.expr]) -> ast.Call:
     """Build ``np.<fn>(*args)`` (the multi-argument sibling of
     ``_ComplexAccessorToFunc._np_call``)."""
-    return ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=fn, ctx=ast.Load()),
-                    args=args,
-                    keywords=[])
+    return ast.Call(
+        func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=fn, ctx=ast.Load()), args=args, keywords=[]
+    )
 
 
 def _cmp_zero(x: ast.expr, op: ast.cmpop) -> ast.Compare:
@@ -4909,20 +5230,31 @@ class _UfuncReduceToReducer(ast.NodeTransformer):
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
         f = node.func
-        if (isinstance(f, ast.Attribute) and f.attr == "reduce" and isinstance(f.value, ast.Attribute)
-                and isinstance(f.value.value, ast.Name) and f.value.value.id in ("np", "numpy")
-                and f.value.attr in _UFUNC_REDUCE_TO_CALL):
+        if (
+            isinstance(f, ast.Attribute)
+            and f.attr == "reduce"
+            and isinstance(f.value, ast.Attribute)
+            and isinstance(f.value.value, ast.Name)
+            and f.value.value.id in ("np", "numpy")
+            and f.value.attr in _UFUNC_REDUCE_TO_CALL
+        ):
             self.changed = True
             has_axis = len(node.args) > 1 or any(k.arg == "axis" for k in node.keywords)
             keywords = list(node.keywords)
             if not has_axis:
                 keywords.append(ast.keyword(arg="axis", value=ast.Constant(value=0)))
             return ast.copy_location(
-                ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()),
-                                            attr=_UFUNC_REDUCE_TO_CALL[f.value.attr],
-                                            ctx=ast.Load()),
-                         args=node.args,
-                         keywords=keywords), node)
+                ast.Call(
+                    func=ast.Attribute(
+                        value=ast.Name(id="np", ctx=ast.Load()),
+                        attr=_UFUNC_REDUCE_TO_CALL[f.value.attr],
+                        ctx=ast.Load(),
+                    ),
+                    args=node.args,
+                    keywords=keywords,
+                ),
+                node,
+            )
         return node
 
 
@@ -4952,8 +5284,13 @@ class _ElementalUfuncToPrimitive(ast.NodeTransformer):
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
         f = node.func
-        if not (isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id in ("np", "numpy")
-                and len(node.args) == 2 and not node.keywords):
+        if not (
+            isinstance(f, ast.Attribute)
+            and isinstance(f.value, ast.Name)
+            and f.value.id in ("np", "numpy")
+            and len(node.args) == 2
+            and not node.keywords
+        ):
             return node
         a, b = node.args
         if f.attr in ("mod", "remainder"):
@@ -4995,7 +5332,7 @@ _AUG_OP_SRC = {
     ast.BitOr: "|=",
     ast.BitXor: "^=",
     ast.LShift: "<<=",
-    ast.RShift: ">>="
+    ast.RShift: ">>=",
 }
 
 
@@ -5174,7 +5511,7 @@ _CONST_BUILTINS = {
     "str": str,
     "sum": sum,
     "tuple": tuple,
-    "zip": zip
+    "zip": zip,
 }
 
 
@@ -5246,8 +5583,20 @@ class _ConstComprehensionFold(ast.NodeTransformer):
     def _foldable(self, node: ast.expr) -> bool:
         bound = {n.id for g in node.generators for n in ast.walk(g.target) if isinstance(n, ast.Name)}
         for n in ast.walk(node):
-            if isinstance(n, (ast.Attribute, ast.Subscript, ast.Lambda, ast.Starred, ast.NamedExpr, ast.Await,
-                              ast.Yield, ast.YieldFrom, ast.JoinedStr)):
+            if isinstance(
+                n,
+                (
+                    ast.Attribute,
+                    ast.Subscript,
+                    ast.Lambda,
+                    ast.Starred,
+                    ast.NamedExpr,
+                    ast.Await,
+                    ast.Yield,
+                    ast.YieldFrom,
+                    ast.JoinedStr,
+                ),
+            ):
                 return False
             if isinstance(n, ast.Call) and not (isinstance(n.func, ast.Name) and n.func.id in _CONST_BUILTINS):
                 return False
@@ -5311,8 +5660,14 @@ def _const_iterable(node: ast.expr, consts: dict[str, object]) -> Sequence[objec
             return ast.literal_eval(node)
         except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
             return None
-    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "range" and node.args
-            and len(node.args) < 4 and not node.keywords):
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "range"
+        and node.args
+        and len(node.args) < 4
+        and not node.keywords
+    ):
         bounds = [_const_int(a) for a in node.args]
         if None in bounds or bounds[2:] == [0]:
             return None  # a zero step is a ValueError, not an iterable
@@ -5365,7 +5720,8 @@ class _ListCompUnroll(ast.NodeTransformer):
         name = gen.target.id
         shadowed = any(
             isinstance(n, ast.Lambda) or (isinstance(n, ast.Name) and n.id == name and not isinstance(n.ctx, ast.Load))
-            for n in ast.walk(node.elt))
+            for n in ast.walk(node.elt)
+        )
         if shadowed:
             return node
         elts: list[ast.expr] = []
@@ -5415,8 +5771,11 @@ def _ssa_versionable(fn: ast.AST, pinned: set[str]) -> set[str]:
         if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
             counts[stmt.targets[0].id] = counts.get(stmt.targets[0].id, 0) + 1
             plain.add(id(stmt.targets[0]))
-            if (isinstance(stmt.value, ast.Call) and isinstance(stmt.value.func, ast.Name)
-                    and stmt.value.func.id == _ZEROS_MARKER):
+            if (
+                isinstance(stmt.value, ast.Call)
+                and isinstance(stmt.value.func, ast.Name)
+                and stmt.value.func.id == _ZEROS_MARKER
+            ):
                 blocked.add(stmt.targets[0].id)
     used: set[str] = set()
     for node in ast.walk(fn):
@@ -5431,7 +5790,7 @@ def _ssa_versionable(fn: ast.AST, pinned: set[str]) -> set[str]:
         elif isinstance(node, (ast.Return, ast.Lambda)) or (isinstance(node, ast.FunctionDef) and node is not fn):
             blocked.update(n.id for n in ast.walk(node) if isinstance(n, ast.Name))
         elif isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
-            for target in (node.targets if isinstance(node, ast.Assign) else [node.target]):
+            for target in node.targets if isinstance(node, ast.Assign) else [node.target]:
                 for sub in ast.walk(target):
                     root = _store_root(sub) if isinstance(sub, (ast.Subscript, ast.Attribute)) else None
                     if root is not None:
@@ -5511,8 +5870,7 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
     all_funcs = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
     kir_seed: Dict[str, int] = {a.name: len(a.shape) for a in kir.arrays}
     kir_dtype_seed: Dict[str, str] = {
-        a.name: _kind_of_dtype_str(vars(a).get("dtype"))
-        for a in kir.arrays if _kind_of_dtype_str(vars(a).get("dtype"))
+        a.name: _kind_of_dtype_str(vars(a).get("dtype")) for a in kir.arrays if _kind_of_dtype_str(vars(a).get("dtype"))
     }
     # Concrete (not just KIND) dtypes, for passes that need an exact width -- e.g. _FftInline's
     # phase-divisor cast, which must match complex64 vs complex128, not just "is complex".
@@ -5522,7 +5880,7 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
     param_ranks = _infer_param_ranks(all_funcs, kir.kernel_name, kir_seed)
     eigh_aliases = _eigh_alias_names(tree)
     changed = False
-    for fn in (all_funcs or [tree]):
+    for fn in all_funcs or [tree]:
         is_kernel = vars(fn).get("name") == kir.kernel_name
         seed = dict(param_ranks.get(vars(fn).get("name"), {}))
         if is_kernel:

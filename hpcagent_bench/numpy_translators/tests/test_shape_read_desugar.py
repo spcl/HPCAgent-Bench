@@ -11,9 +11,10 @@ is ``(Lb, Lb, Lb)`` going in and ``(vcol.shape[0], nb1, nb2)`` coming back out o
 lowering's rebind check then sees one name bound to two shapes and refuses a kernel that has only
 ever had one.
 """
+
 import ast
 
-from numpyto_common.frontend import (ArrayDesc, _apply_subscript_axes, _parse_shape_expression, resolve_shape_reads)
+from numpyto_common.frontend import ArrayDesc, _apply_subscript_axes, _parse_shape_expression, resolve_shape_reads
 
 
 def _fn(src):
@@ -44,17 +45,13 @@ def test_a_chain_of_subscripts_resolves_like_one():
     # ``psi_frag[f]`` picks a fragment and ``[..., 0]`` its first state. Stopping the resolver at
     # a Name base left the whole chain unresolved, so every extent read off the local it binds
     # stayed spelled ``local.shape[k]``.
-    fn = _fn("def f(psi_frag, out):\n"
-             " v = psi_frag[0][..., 0]\n"
-             " out[:] = v.shape[0] + v.shape[2]\n")
+    fn = _fn("def f(psi_frag, out):\n v = psi_frag[0][..., 0]\n out[:] = v.shape[0] + v.shape[2]\n")
     assert resolve_shape_reads(fn, _env(psi_frag="(nfrag, Lb, Lb, Lb, nstate)", out="(1,)")) == []
     assert "out[:] = Lb + Lb" in ast.unparse(fn)
 
 
 def test_a_read_on_a_local_allocation_resolves_through_it():
-    fn = _fn("def f(x, out):\n"
-             " buf = np.zeros((x.shape[1], 4), dtype=np.float64)\n"
-             " out[:] = buf.shape[0]\n")
+    fn = _fn("def f(x, out):\n buf = np.zeros((x.shape[1], 4), dtype=np.float64)\n out[:] = buf.shape[0]\n")
     assert resolve_shape_reads(fn, _env(x="(n, m)", out="(1,)")) == []
     assert "out[:] = m" in ast.unparse(fn)
 
@@ -83,11 +80,13 @@ def test_a_scalar_local_bound_once_to_an_extent_is_that_extent():
     # already carries. The buffer allocated from them is then described as ``(nb0, nb1, nb2)``
     # while the same buffer coming the other way is ``(Lb, Lb, Lb)`` -- one shape, two spellings,
     # and the rebind check reads that as two shapes.
-    fn = _fn("def f(v, out):\n"
-             " nb0 = v.shape[0]\n"
-             " nb1 = v.shape[1]\n"
-             " vcol = np.zeros((nb0, nb1, 1), dtype=np.float64)\n"
-             " out[:] = vcol.shape[0]\n")
+    fn = _fn(
+        "def f(v, out):\n"
+        " nb0 = v.shape[0]\n"
+        " nb1 = v.shape[1]\n"
+        " vcol = np.zeros((nb0, nb1, 1), dtype=np.float64)\n"
+        " out[:] = vcol.shape[0]\n"
+    )
     assert resolve_shape_reads(fn, _env(v="(Lb, Lb)", out="(1,)")) == []
     src = ast.unparse(fn)
     assert "np.zeros((Lb, Lb, 1)" in src
@@ -97,10 +96,7 @@ def test_a_scalar_local_bound_once_to_an_extent_is_that_extent():
 def test_a_rebound_scalar_is_not_folded():
     # Only a local bound ONCE to a declared extent is interchangeable with it. A counter that
     # happens to start at an extent is not, and substituting it would move the loop bound.
-    fn = _fn("def f(x, out):\n"
-             " k = x.shape[0]\n"
-             " k = k - 1\n"
-             " out[:] = k\n")
+    fn = _fn("def f(x, out):\n k = x.shape[0]\n k = k - 1\n out[:] = k\n")
     resolve_shape_reads(fn, _env(x="(n,)", out="(1,)"))
     src = ast.unparse(fn)
     assert "k = n" in src and "k = k - 1" in src and "out[:] = k" in src
@@ -109,10 +105,7 @@ def test_a_rebound_scalar_is_not_folded():
 def test_a_name_read_inside_a_store_target_is_not_a_rebinding():
     # ``row[i % nb0] += w`` writes ``row`` and only READS ``nb0``. Counting every name in the
     # target subtree made the index look rebound, and the extent local stopped folding.
-    fn = _fn("def f(x, row, out):\n"
-             " nb0 = x.shape[0]\n"
-             " row[0, 0 % nb0] += 1.0\n"
-             " out[:] = nb0\n")
+    fn = _fn("def f(x, row, out):\n nb0 = x.shape[0]\n row[0, 0 % nb0] += 1.0\n out[:] = nb0\n")
     resolve_shape_reads(fn, _env(x="(n,)", row="(n, n)", out="(1,)"))
     src = ast.unparse(fn)
     assert "row[0, 0 % n] += 1.0" in src
@@ -124,11 +117,11 @@ def test_a_bounded_or_strided_slice_is_sized_not_passed_through():
     # raman_fitting reads ``centres.shape[0]`` off ``p[0:3 * npeaks:3]``: passed through it came
     # back the full ``3 * npeaks + 1``, so the jacobian was allocated three times over and strided
     # against a count it does not have. Wrong numbers, and nothing downstream reports it.
-    assert _axes(("M", ), "a[0:3 * npeaks:3]") == ["((3 * npeaks) + 2) // 3"]
-    assert _axes(("M", ), "a[:npeaks]") == ["npeaks"]
-    assert _axes(("M", ), "a[2:7]") == ["(7) - (2)"]
-    assert _axes(("M", ), "a[::2]") == ["((M) + 1) // 2"]
-    assert _axes(("M", ), "a[:-1]") == ["(M) - 1"]
+    assert _axes(("M",), "a[0:3 * npeaks:3]") == ["((3 * npeaks) + 2) // 3"]
+    assert _axes(("M",), "a[:npeaks]") == ["npeaks"]
+    assert _axes(("M",), "a[2:7]") == ["(7) - (2)"]
+    assert _axes(("M",), "a[::2]") == ["((M) + 1) // 2"]
+    assert _axes(("M",), "a[:-1]") == ["(M) - 1"]
     # A whole-axis slice is the one case where the source extent IS the answer, and it stays the
     # very object it was handed -- callers pass AST exprs through this untouched.
     assert _axes(("M", "N"), "a[:, :]") == ["M", "N"]
@@ -137,8 +130,8 @@ def test_a_bounded_or_strided_slice_is_sized_not_passed_through():
 def test_a_step_this_cannot_size_refuses_the_whole_shape():
     # A symbolic or reversed step has no ceiling form here, and answering with the source extent
     # would be a wrong number presented as a resolved one. Empty == the callers' "unresolved".
-    assert _axes(("M", ), "a[::k]") == []
-    assert _axes(("M", ), "a[::-1]") == []
+    assert _axes(("M",), "a[::k]") == []
+    assert _axes(("M",), "a[::-1]") == []
     # One unsizable axis takes the whole shape with it -- a partially-right shape is not a shape.
     assert _axes(("M", "N"), "a[::k, :]") == []
 
@@ -147,8 +140,6 @@ def test_a_rank_zero_shape_read_is_reported_not_folded_to_an_empty_tuple():
     # ``()`` is a resolver out of evidence, not a rank-0 array. Folded, the ``[k]`` beside the read
     # becomes ``()[k]`` -- an index off the end of a tuple that no emitter has a form for and no
     # reader can trace back to the array it came from.
-    fn = _fn("def f(x, out):\n"
-             " s = x[0].shape\n"
-             " out[:] = s[0]\n")
+    fn = _fn("def f(x, out):\n s = x[0].shape\n out[:] = s[0]\n")
     assert resolve_shape_reads(fn, _env(x="(n,)", out="(1,)")) != []
     assert "()" not in ast.unparse(fn)

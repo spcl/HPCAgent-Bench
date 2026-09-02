@@ -14,6 +14,7 @@ The load-bearing test is the last one. Folding a chain of locals into three guar
 rewrite that is easy to get subtly wrong -- an off-by-one in a bound reads as a plausible program --
 so the folded expression is evaluated against the original function over the whole parameter space.
 """
+
 import ast
 import itertools
 
@@ -22,19 +23,21 @@ import pytest
 from numpyto_common.frontend import _folded_straight_line, _return_expression, _tuple_leaves
 
 #: ``_tap_span``'s exact shape: locals INTERLEAVED with guarded returns, and a docstring first.
-TAP_SPAN = ('def _tap_span(in_size, out_size, stride, padding, k):\n'
-            '    """Valid input/output slice bounds for one kernel tap."""\n'
-            '    offset = k - padding\n'
-            '    iz_lo = 0 if offset >= 0 else (-offset + stride - 1) // stride\n'
-            '    rhs = out_size - 1 - offset\n'
-            '    if rhs < 0 or iz_lo >= in_size:\n'
-            '        return iz_lo, iz_lo, 0, 0\n'
-            '    iz_hi = min(in_size, rhs // stride + 1)\n'
-            '    if iz_hi <= iz_lo:\n'
-            '        return iz_lo, iz_lo, 0, 0\n'
-            '    oz_lo = iz_lo * stride + offset\n'
-            '    oz_hi = oz_lo + (iz_hi - iz_lo - 1) * stride + 1\n'
-            '    return iz_lo, iz_hi, oz_lo, oz_hi\n')
+TAP_SPAN = (
+    "def _tap_span(in_size, out_size, stride, padding, k):\n"
+    '    """Valid input/output slice bounds for one kernel tap."""\n'
+    "    offset = k - padding\n"
+    "    iz_lo = 0 if offset >= 0 else (-offset + stride - 1) // stride\n"
+    "    rhs = out_size - 1 - offset\n"
+    "    if rhs < 0 or iz_lo >= in_size:\n"
+    "        return iz_lo, iz_lo, 0, 0\n"
+    "    iz_hi = min(in_size, rhs // stride + 1)\n"
+    "    if iz_hi <= iz_lo:\n"
+    "        return iz_lo, iz_lo, 0, 0\n"
+    "    oz_lo = iz_lo * stride + offset\n"
+    "    oz_hi = oz_lo + (iz_hi - iz_lo - 1) * stride + 1\n"
+    "    return iz_lo, iz_hi, oz_lo, oz_hi\n"
+)
 
 
 def parse(src: str) -> ast.FunctionDef:
@@ -60,32 +63,21 @@ def test_locals_interleaved_with_guards_are_all_folded():
 def test_a_rebound_local_declines():
     """One substitution cannot stand for two values, so a name bound twice refuses outright rather
     than folding whichever binding it saw last."""
-    rebound = ("def f(a):\n"
-               "    t = a + 1\n"
-               "    t = t * 2\n"
-               "    return t, t\n")
+    rebound = "def f(a):\n    t = a + 1\n    t = t * 2\n    return t, t\n"
     assert _folded_straight_line(parse(rebound).body) is None
 
 
 def test_a_guard_that_rebinds_a_folded_local_declines():
     """A local reassigned inside a branch is live differently on each path; substituting its first
     value into the reads after the branch would silently compute the wrong bound."""
-    rebinding_guard = ("def f(a, c):\n"
-                       "    t = a + 1\n"
-                       "    if c:\n"
-                       "        t = 0\n"
-                       "    return t, t\n")
+    rebinding_guard = "def f(a, c):\n    t = a + 1\n    if c:\n        t = 0\n    return t, t\n"
     assert _folded_straight_line(parse(rebinding_guard).body) is None
 
 
 def test_a_statement_the_fold_cannot_express_declines():
     """Only assignments, guards and returns. A loop has no single-expression form, and guessing one
     would splice a body that does not run."""
-    looping = ("def f(a, n):\n"
-               "    t = a\n"
-               "    for i in range(n):\n"
-               "        t = t + i\n"
-               "    return t, t\n")
+    looping = "def f(a, n):\n    t = a\n    for i in range(n):\n        t = t + i\n    return t, t\n"
     assert _folded_straight_line(parse(looping).body) is None
 
 

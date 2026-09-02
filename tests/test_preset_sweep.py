@@ -5,6 +5,7 @@
 These assert the COMPOSED command + thread env for given flags without a scheduler and
 without running any kernel (no subprocess, no build). The script is loaded from its file
 path (scripts/ is not an importable package)."""
+
 import importlib.util
 import pathlib
 
@@ -41,8 +42,13 @@ def test_thread_env_pins_single_core_to_one_portably():
     plus NUMEXPR + macOS Accelerate (VECLIB) -- so it bounds the kernel to one core with no
     taskset/numactl."""
     env = sweep.thread_env(Mode.SINGLE_CORE)
-    for knob in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS",
-                 "VECLIB_MAXIMUM_THREADS"):
+    for knob in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+    ):
         assert env[knob] == "1", knob
     # It is a superset of the grader's cpu_env (never contradicts it).
     for k, v in flags.cpu_env(Mode.SINGLE_CORE).items():
@@ -94,6 +100,7 @@ def test_affinity_is_capability_gated_and_single_core_only(monkeypatch):
 def test_affinity_supported_uses_capability_check_not_hasattr():
     """affinity_supported probes os.__dict__ (a capability check), matching the real platform."""
     import os
+
     assert sweep.affinity_supported() == ("sched_setaffinity" in vars(os))
 
 
@@ -109,11 +116,9 @@ def test_plan_preset_bundles_env_and_command(tmp_path):
 def test_render_sbatch_full_node_only():
     """The emitted (never-submitted) sbatch requests an exclusive node and runs only the
     full-node presets under one task -- derived from launch.sbatch's header."""
-    text = sweep.render_sbatch("gemm,jacobi_2d",
-                               framework="numpy",
-                               presets=["S", "M", "L", "XL"],
-                               single_core_presets=("S", "M"),
-                               repeat=5)
+    text = sweep.render_sbatch(
+        "gemm,jacobi_2d", framework="numpy", presets=["S", "M", "L", "XL"], single_core_presets=("S", "M"), repeat=5
+    )
     assert text.startswith("#!/bin/bash")
     assert "#SBATCH --nodes=1" in text
     assert "#SBATCH --exclusive" in text
@@ -129,14 +134,8 @@ def test_parse_wall_ms_picks_min_native_then_python(tmp_path):
     row = {
         "status": "ok",
         "impls": {
-            "a": {
-                "time_native": [3.0, 2.0, 4.0],
-                "time_python": [9.0]
-            },
-            "b": {
-                "time_native": None,
-                "time_python": [5.0, 6.0]
-            }
+            "a": {"time_native": [3.0, 2.0, 4.0], "time_python": [9.0]},
+            "b": {"time_native": None, "time_python": [5.0, 6.0]},
         },
     }
     p = tmp_path / "r.jsonl"

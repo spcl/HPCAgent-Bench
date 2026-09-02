@@ -33,6 +33,7 @@ them (Polly/Pluto were separate file tracks; now flag presets).
 Importing a backend requires its ``src`` on ``PYTHONPATH`` (the same wiring the
 per-package CLIs already need); the driver itself only resolves the module.
 """
+
 import argparse
 import importlib
 import sys
@@ -69,8 +70,9 @@ _ISOPAR_TARGETS = {"cpp_isopar"}
 
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    ap = argparse.ArgumentParser(prog="numpyto",
-                                 description="Unified NumpyToX emitter: emit a numpy kernel to a target language.")
+    ap = argparse.ArgumentParser(
+        prog="numpyto", description="Unified NumpyToX emitter: emit a numpy kernel to a target language."
+    )
     ap.add_argument("--target", "-t", required=True, choices=sorted(_TARGETS), help="output language / framework")
     args, rest = ap.parse_known_args(argv)
     mod = importlib.import_module(_TARGETS[args.target])

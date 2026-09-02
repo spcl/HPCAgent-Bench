@@ -5,6 +5,7 @@
 The child of :mod:`tests.test_dace_frontend_validity`: one kernel per process, so a parse that
 wedges or crashes costs that kernel and reports it, instead of taking the whole sweep down.
 """
+
 import importlib
 import json
 import pathlib
@@ -20,7 +21,7 @@ IMPL_POSTFIXES = ("_dace_gpu", "_dace_cpu", "_dace")
 def program_name(path: pathlib.Path) -> str:
     for postfix in IMPL_POSTFIXES:
         if path.stem.endswith(postfix):
-            return path.stem[:-len(postfix)]
+            return path.stem[: -len(postfix)]
     return path.stem
 
 

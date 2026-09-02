@@ -1,11 +1,22 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Exhaustive scatter/gather round-trip matrix for MPI data distribution: scheme x dim x grid x dtype."""
+
 import numpy as np
 import pytest
 
-from hpcagent_bench.harness.mpi_descriptor import (ArrayDist, AxisDist, default_distribution, factor_grid, gather, Grid,
-                                                   is_partition, local_shape, owned_indices, scatter)
+from hpcagent_bench.harness.mpi_descriptor import (
+    ArrayDist,
+    AxisDist,
+    default_distribution,
+    factor_grid,
+    gather,
+    Grid,
+    is_partition,
+    local_shape,
+    owned_indices,
+    scatter,
+)
 
 DTYPES = ["float64", "float32", "int64", "int32"]
 RANKS = [1, 2, 3, 4, 6, 8]
@@ -61,9 +72,9 @@ def test_roundtrip_near_square_grid(ranks, ndim, scheme, dtype):
 @pytest.mark.parametrize("block_size", [1, 2, 3, 5])
 @pytest.mark.parametrize("ranks", [2, 3, 4])
 def test_block_cyclic_tiles_1d(ranks, block_size):
-    grid = Grid((ranks, ))
-    a = _arr((13, ), "float64")
-    _check(a, ArrayDist(axes=(AxisDist(grid_dim=0, scheme="block_cyclic", block_size=block_size), )), grid)
+    grid = Grid((ranks,))
+    a = _arr((13,), "float64")
+    _check(a, ArrayDist(axes=(AxisDist(grid_dim=0, scheme="block_cyclic", block_size=block_size),)), grid)
 
 
 # --- Canonical ScaLAPACK grid shapes on a 2-D array: 1xR (block-col), Rx1 (block-row), PxQ (2-D) ---
@@ -79,9 +90,12 @@ def test_scalapack_2d_block_cyclic_distinct_block_sizes():
     # ScaLAPACK's workhorse: 2-D block-cyclic with distinct MB, NB on a PxQ grid.
     grid = Grid((2, 3))
     a = _arr((10, 11), "float64")
-    dist = ArrayDist(axes=(
-        AxisDist(grid_dim=0, scheme="block_cyclic", block_size=2),  # MB=2 over P=2
-        AxisDist(grid_dim=1, scheme="block_cyclic", block_size=3)))  # NB=3 over Q=3
+    dist = ArrayDist(
+        axes=(
+            AxisDist(grid_dim=0, scheme="block_cyclic", block_size=2),  # MB=2 over P=2
+            AxisDist(grid_dim=1, scheme="block_cyclic", block_size=3),
+        )
+    )  # NB=3 over Q=3
     _check(a, dist, grid)
 
 
@@ -97,8 +111,13 @@ def test_3d_array_on_2d_grid_trailing_axis_replicated():
     # ndim > grid rank: the unmapped trailing axis is replicated on every rank.
     grid = Grid((2, 2))
     a = _arr((5, 4, 3), "float64")
-    dist = ArrayDist(axes=(AxisDist(grid_dim=0, scheme="block"),
-                           AxisDist(grid_dim=1, scheme="block_cyclic", block_size=2), AxisDist(grid_dim=None)))
+    dist = ArrayDist(
+        axes=(
+            AxisDist(grid_dim=0, scheme="block"),
+            AxisDist(grid_dim=1, scheme="block_cyclic", block_size=2),
+            AxisDist(grid_dim=None),
+        )
+    )
     _check(a, dist, grid)
 
 
@@ -140,8 +159,12 @@ def test_block_cyclic_2d_block_tuple_matches_scalapack_owner(grid_dims, mb, nb):
     p, q = grid_dims
     shape = (11, 13)  # ragged vs every block size and grid dim
     a = _arr(shape, "int64")
-    dist = ArrayDist(axes=(AxisDist(grid_dim=0, scheme="block_cyclic", block_size=mb),
-                           AxisDist(grid_dim=1, scheme="block_cyclic", block_size=nb)))
+    dist = ArrayDist(
+        axes=(
+            AxisDist(grid_dim=0, scheme="block_cyclic", block_size=mb),
+            AxisDist(grid_dim=1, scheme="block_cyclic", block_size=nb),
+        )
+    )
     _check(a, dist, grid)
     owner = _owner_grid(shape, dist, grid)
     expect = np.empty(shape, dtype=np.int64)
@@ -153,9 +176,9 @@ def test_block_cyclic_2d_block_tuple_matches_scalapack_owner(grid_dims, mb, nb):
 
 # --- Replicated + the length-1 / scalar convention (rank 0 authoritative on gather) ---
 @pytest.mark.parametrize("ranks", RANKS)
-@pytest.mark.parametrize("shape", [(1, ), (5, ), (3, 4), (2, 2, 2)])
+@pytest.mark.parametrize("shape", [(1,), (5,), (3, 4), (2, 2, 2)])
 def test_replicated_full_copy_and_gather_from_rank0(ranks, shape):
-    grid = Grid((ranks, ))
+    grid = Grid((ranks,))
     a = _arr(shape, "float64")
     tiles = scatter(a, ArrayDist(replicated=True), grid)
     assert all(np.array_equal(t, a) for t in tiles)  # whole array on every rank
@@ -171,14 +194,14 @@ def test_replicated_full_copy_and_gather_from_rank0(ranks, shape):
 @pytest.mark.parametrize("n", [1, 2, 3, 5, 7])
 def test_size_smaller_or_ragged_vs_ranks_1d(n, scheme):
     # n may be < ranks: some ranks own nothing; the round-trip + partition must still hold.
-    grid = Grid((4, ))
-    a = _arr((n, ), "float64")
-    tiles = _check(a, ArrayDist(axes=(AxisDist(grid_dim=0, scheme=scheme, block_size=2), )), grid)
+    grid = Grid((4,))
+    a = _arr((n,), "float64")
+    tiles = _check(a, ArrayDist(axes=(AxisDist(grid_dim=0, scheme=scheme, block_size=2),)), grid)
     assert sum(t.size for t in tiles) == n  # nothing dropped or duplicated
 
 
 def test_length_one_distributed_axis():
-    grid = Grid((4, ))
+    grid = Grid((4,))
     a = _arr((1, 5), "float64")  # axis 0 has length 1, distributed over 4 -> rank 0 owns it
     dist = ArrayDist(axes=(AxisDist(grid_dim=0, scheme="block"), AxisDist(grid_dim=None)))
     tiles = _check(a, dist, grid)
@@ -186,7 +209,7 @@ def test_length_one_distributed_axis():
 
 
 def test_length_zero_axis():
-    grid = Grid((3, ))
+    grid = Grid((3,))
     a = _arr((0, 4), "float64")  # empty leading axis
     dist = ArrayDist(axes=(AxisDist(grid_dim=0, scheme="block"), AxisDist(grid_dim=None)))
     tiles = scatter(a, dist, grid)
@@ -199,7 +222,7 @@ def test_length_zero_axis():
 @pytest.mark.parametrize("scheme", ["block", "block_cyclic", "cyclic"])
 @pytest.mark.parametrize("ranks", [2, 3, 4, 6])
 def test_owned_indices_partition_each_axis(ranks, scheme):
-    grid = Grid((ranks, ))
+    grid = Grid((ranks,))
     n = 11  # ragged vs every rank count
     seen = np.zeros(n, dtype=np.int64)
     ad = AxisDist(grid_dim=0, scheme=scheme, block_size=2)

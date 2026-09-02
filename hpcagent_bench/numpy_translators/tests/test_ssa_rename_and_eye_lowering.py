@@ -6,6 +6,7 @@
 * ``_EyeToZerosDiagonal`` must honor ``k=``: numpy writes 1.0 on the k-th diagonal
   (element ``(i, i+k)``), not always the main diagonal.
 """
+
 import ast
 
 import numpy as np
@@ -14,11 +15,7 @@ from numpyto_common.lowering import _EyeToZerosDiagonal, _ssa_rename_reassigned
 
 
 def test_ssa_rename_rewrites_plain_subscript_fill_target():
-    src = ("def k(a, out):\n"
-           "    x = np.copy(a)\n"
-           "    x = np.zeros((3,))\n"
-           "    x[0] = 1.0\n"
-           "    out[0] = x[0]\n")
+    src = "def k(a, out):\n    x = np.copy(a)\n    x = np.zeros((3,))\n    x[0] = 1.0\n    out[0] = x[0]\n"
     tree = ast.parse(src)
     _ssa_rename_reassigned(tree, {"a": ["N"], "out": ["N"]})
     out = ast.unparse(tree)

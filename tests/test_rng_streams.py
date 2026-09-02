@@ -7,6 +7,7 @@ and of nothing else. A single shared stream does not have it -- there, array *k*
 many draws arrays *0..k-1* made, so materialising a subset, reordering the declaration, or filling
 on threads all change the data.
 """
+
 import numpy as np
 import pytest
 
@@ -66,8 +67,8 @@ def test_stream_k_does_not_depend_on_draw_order():
 
 def test_bit_generators_are_round_robined():
     got = [type(g.bit_generator) for g in streams.spawn_streams(1, 2 * len(streams.ROUND_ROBIN))]
-    assert got[:len(streams.ROUND_ROBIN)] == list(streams.ROUND_ROBIN)
-    assert got[len(streams.ROUND_ROBIN):] == list(streams.ROUND_ROBIN), "rotation must repeat"
+    assert got[: len(streams.ROUND_ROBIN)] == list(streams.ROUND_ROBIN)
+    assert got[len(streams.ROUND_ROBIN) :] == list(streams.ROUND_ROBIN), "rotation must repeat"
 
 
 def test_threaded_fill_matches_sequential(monkeypatch):
@@ -93,7 +94,7 @@ EXTREME = {"sigma": 90.0, "scale": 1e30, "loc": 1e30}
 def test_standard_distributions_stay_in_the_safe_range(name, precision, spec):
     """EVERY precision, not just the two wide ones: the narrow formats are where the clip does the
     work, and the wide ones are where its absence went unnoticed."""
-    got = distributions.generate(name, (2048, ), precision, {"rng": np.random.default_rng(5), **spec})
+    got = distributions.generate(name, (2048,), precision, {"rng": np.random.default_rng(5), **spec})
     assert got.dtype == numpy_dtype(precision)
     as_f64 = np.asarray(got, dtype=np.float64)
     assert np.isfinite(as_f64).all(), f"{name} produced a non-finite value at {precision} ({spec})"
@@ -110,9 +111,9 @@ def test_no_precision_has_an_unbounded_ceiling():
 @pytest.mark.parametrize("name", STANDARD)
 def test_standard_distributions_follow_their_stream(name):
     kwargs = {"rng": np.random.default_rng(3)}
-    a = distributions.generate(name, (64, ), Precision.FP64, kwargs)
-    b = distributions.generate(name, (64, ), Precision.FP64, {"rng": np.random.default_rng(3)})
-    c = distributions.generate(name, (64, ), Precision.FP64, {"rng": np.random.default_rng(4)})
+    a = distributions.generate(name, (64,), Precision.FP64, kwargs)
+    b = distributions.generate(name, (64,), Precision.FP64, {"rng": np.random.default_rng(3)})
+    c = distributions.generate(name, (64,), Precision.FP64, {"rng": np.random.default_rng(4)})
     assert np.array_equal(a, b)
     assert not np.array_equal(a, c)
 

@@ -5,6 +5,7 @@
 Child of :mod:`tests.test_dace_openblas_link`, one process per install shape: a from-source and a
 distro OpenBLAS are both ``libopenblas.so.0``, so the loader reuses the first and the other dies.
 """
+
 import json
 import os
 import pathlib

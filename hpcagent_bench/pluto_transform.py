@@ -20,6 +20,7 @@ invocation is what stops any of that from being expressible.
 There is no ``plutocc``: this Pluto installs ``clan``, ``pet``, ``pluto`` and ``polycc``,
 and ``polycc`` is the driver.
 """
+
 from __future__ import annotations
 
 import os
@@ -61,7 +62,7 @@ POLYCC_ARGS: Tuple[str, ...] = ("--pet", "--tile", "--parallel")
 #:
 #: Defined as an EXTENSION of the build args, not as its own list, so the report is
 #: structurally incapable of describing a transform other than the one that was compiled.
-POLYCC_REPORT_ARGS: Tuple[str, ...] = POLYCC_ARGS + ("--debug", )
+POLYCC_REPORT_ARGS: Tuple[str, ...] = POLYCC_ARGS + ("--debug",)
 
 
 def polycc_exe() -> Optional[str]:
@@ -73,10 +74,12 @@ def polycc_exe() -> Optional[str]:
 #: glibc's real header opens by including these same stubs and adds the vector-math declarations
 #: only under ``__FAST_MATH__`` on x86_64, so on that architecture this reduces to what pet already
 #: saw -- measured: the transform of an affine matmul is BYTE-IDENTICAL with and without it.
-PET_MATH_VECTOR_SHIM = ("/* Neutralised for pet scop extraction only -- see pluto_transform.pet_parse_env.\n"
-                        "   These are the empty SIMD declarations glibc's own <bits/math-vector.h> starts\n"
-                        "   from; the vector-math decls it adds on top are unused by scop extraction. */\n"
-                        "#include <bits/libm-simd-decl-stubs.h>\n")
+PET_MATH_VECTOR_SHIM = (
+    "/* Neutralised for pet scop extraction only -- see pluto_transform.pet_parse_env.\n"
+    "   These are the empty SIMD declarations glibc's own <bits/math-vector.h> starts\n"
+    "   from; the vector-math decls it adds on top are unused by scop extraction. */\n"
+    "#include <bits/libm-simd-decl-stubs.h>\n"
+)
 
 #: The ``<omp.h>`` :func:`pet_parse_env` supplies, for the pet parse only. polycc processes a
 #: MULTI-scop translation unit one scop at a time, re-parsing its own OUTPUT for the next one -- and
@@ -84,15 +87,17 @@ PET_MATH_VECTOR_SHIM = ("/* Neutralised for pet scop extraction only -- see plut
 #: does not find on its default search path, so every scop after the first is lost with "No SCoPs
 #: extracted". Nothing polycc emits CALLS the runtime (measured: no ``omp_*`` reference in its
 #: output, only ``#pragma omp parallel for``), so the declarations below are all a re-parse needs.
-PET_OMP_SHIM = ("/* Parse-only <omp.h> for pet scop re-extraction -- see pluto_transform.pet_parse_env. */\n"
-                "typedef struct { int __pet_shim; } omp_lock_t;\n"
-                "typedef struct { int __pet_shim; } omp_nest_lock_t;\n"
-                "int omp_get_thread_num(void);\n"
-                "int omp_get_num_threads(void);\n"
-                "int omp_get_max_threads(void);\n"
-                "int omp_in_parallel(void);\n"
-                "void omp_set_num_threads(int);\n"
-                "double omp_get_wtime(void);\n")
+PET_OMP_SHIM = (
+    "/* Parse-only <omp.h> for pet scop re-extraction -- see pluto_transform.pet_parse_env. */\n"
+    "typedef struct { int __pet_shim; } omp_lock_t;\n"
+    "typedef struct { int __pet_shim; } omp_nest_lock_t;\n"
+    "int omp_get_thread_num(void);\n"
+    "int omp_get_num_threads(void);\n"
+    "int omp_get_max_threads(void);\n"
+    "int omp_in_parallel(void);\n"
+    "void omp_set_num_threads(int);\n"
+    "double omp_get_wtime(void);\n"
+)
 
 
 def pet_parse_env(scratch: pathlib.Path) -> Dict[str, str]:
@@ -288,9 +293,9 @@ def transformed_path(scop: pathlib.Path) -> pathlib.Path:
     gitignored ``cpp_backend`` instead -- writing polycc's output beside the override would dirty a
     tracked directory on every build."""
     if scop.name.endswith(OVERRIDE_INPUT_SUFFIX):
-        return scop.with_name(f"{scop.name[:-len(OVERRIDE_INPUT_SUFFIX)]}{OVERRIDE_OUTPUT_SUFFIX}")
+        return scop.with_name(f"{scop.name[: -len(OVERRIDE_INPUT_SUFFIX)]}{OVERRIDE_OUTPUT_SUFFIX}")
     if scop.name.endswith("_pluto_input.c"):
-        return scop.with_name(f"{scop.name[:-len('_pluto_input.c')]}_pluto.c")
+        return scop.with_name(f"{scop.name[: -len('_pluto_input.c')]}_pluto.c")
     build_dir = scop.parent / "cpp_backend"
     build_dir.mkdir(parents=True, exist_ok=True)
     base = scop.name.removesuffix("_pluto_reference.c")
@@ -300,30 +305,32 @@ def transformed_path(scop: pathlib.Path) -> pathlib.Path:
 def drop_core_dumps() -> None:  # pragma: no cover -- runs in the forked child
     """Child preexec: disable core dumps, so a legitimate polycc/pluto SIGABRT leaves no litter."""
     import resource
+
     try:
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     except (ValueError, OSError):
         pass
 
 
-def run_bounded(cmd: Sequence[str],
-                cwd: Optional[str] = None,
-                timeout: Optional[float] = None,
-                env: Optional[Dict[str, str]] = None) -> subprocess.CompletedProcess:
+def run_bounded(
+    cmd: Sequence[str], cwd: Optional[str] = None, timeout: Optional[float] = None, env: Optional[Dict[str, str]] = None
+) -> subprocess.CompletedProcess:
     """``subprocess.run`` whose timeout ``killpg``s the child's WHOLE process group.
 
     polycc forks grandchildren (pet, the pluto binary, clang-format) and a plain SIGKILL orphans
     them; the pipes they keep open then wedge the parent's own read, so the bound would not bind.
     Raises :class:`subprocess.TimeoutExpired` on expiry, like the call it replaces.
     """
-    proc = subprocess.Popen(cmd,
-                            cwd=cwd,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,
-                            text=True,
-                            start_new_session=True,
-                            preexec_fn=drop_core_dumps,
-                            env=env)
+    proc = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+        preexec_fn=drop_core_dumps,
+        env=env,
+    )
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -372,10 +379,9 @@ def dedupe_scratch_declarations(transformed_c: str) -> str:
     return "\n".join(out)
 
 
-def run_polycc(scop: pathlib.Path,
-               out: pathlib.Path,
-               args: Sequence[str] = POLYCC_ARGS,
-               timeout: Optional[float] = None) -> Tuple[List[str], subprocess.CompletedProcess]:
+def run_polycc(
+    scop: pathlib.Path, out: pathlib.Path, args: Sequence[str] = POLYCC_ARGS, timeout: Optional[float] = None
+) -> Tuple[List[str], subprocess.CompletedProcess]:
     """Transform one scop with ``polycc``, writing ``out``. Returns ``(argv, result)``.
 
     Runs in a throwaway cwd because polycc drops a ``<stem>.pluto.cloog`` intermediate beside
@@ -445,8 +451,11 @@ def assert_affine(scop: pathlib.Path, kernel: str) -> None:
     reason = scop_nonaffine_reason(scop.read_text())
     if reason is not None:
         raise NotSupportedByFramework(
-            FRAMEWORK, kernel, f"{scop.name} is outside Pluto's affine model ({reason}); polycc may "
-            f"silently miscompile such a scop rather than reject it")
+            FRAMEWORK,
+            kernel,
+            f"{scop.name} is outside Pluto's affine model ({reason}); polycc may "
+            f"silently miscompile such a scop rather than reject it",
+        )
 
 
 def polycc_report_timeout_s() -> float:
@@ -465,6 +474,7 @@ def polycc_report_timeout_s() -> float:
     if str(paths.ROOT) not in sys.path:
         sys.path.insert(0, str(paths.ROOT))
     from tests.numerical_oracle import _cfg
+
     return _cfg("polycc_timeout_s")
 
 
@@ -486,6 +496,7 @@ def oracle_pluto_status(kernel: str) -> str:
     if str(paths.ROOT) not in sys.path:
         sys.path.insert(0, str(paths.ROOT))
     from tests.numerical_oracle import PLUTO, run_kernel
+
     return run_kernel(kernel, only_backends={PLUTO}).get(PLUTO, "skip:no-verdict")
 
 
@@ -505,9 +516,12 @@ def assert_numeric_agreement(kernel: str) -> None:
     status = oracle_pluto_status(kernel)
     if status != "ok":
         raise NotSupportedByFramework(
-            FRAMEWORK, kernel, f"the numerical oracle grades the polycc-transformed kernel "
+            FRAMEWORK,
+            kernel,
+            f"the numerical oracle grades the polycc-transformed kernel "
             f"'{status}', not 'ok'; polycc may silently miscompile a scop it accepts, so timing "
-            f"this column would grade a wrong answer")
+            f"this column would grade a wrong answer",
+        )
 
 
 def transformed_sources(cpp_backend: pathlib.Path, base: str) -> List[pathlib.Path]:
@@ -529,7 +543,8 @@ def transformed_sources(cpp_backend: pathlib.Path, base: str) -> List[pathlib.Pa
         if not dst.exists() or dst.stat().st_mtime < scop.stat().st_mtime:
             _, proc = run_polycc(scop, dst)
             if proc.returncode != 0 or not dst.is_file():
-                raise NotSupportedByFramework(FRAMEWORK, base,
-                                              f"polycc rejected {scop.name}: {proc.stderr.strip()[-500:]}")
+                raise NotSupportedByFramework(
+                    FRAMEWORK, base, f"polycc rejected {scop.name}: {proc.stderr.strip()[-500:]}"
+                )
         out.append(dst)
     return out

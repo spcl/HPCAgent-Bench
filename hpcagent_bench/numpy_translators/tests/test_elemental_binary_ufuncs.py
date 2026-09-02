@@ -13,6 +13,7 @@ python-backend desugar because numba has no ``np.heaviside`` and pythran no
 numerically vs numpy across the full backend matrix (skip-tolerant), on whole arrays and
 on a slice.
 """
+
 import ast
 
 import numpy as np
@@ -68,7 +69,7 @@ def test_non_target_two_arg_ufuncs_untouched():
 
 def _run(expr, a=_A, b=_B):
     src = f"import numpy as np\ndef f(a, b, out):\n    out[:] = {expr}\n"
-    return run_op(src, "f", {"a": a, "b": b}, {"out": (6, )}, _SYMS, shapes=_SHAPES, backends=_ALL)
+    return run_op(src, "f", {"a": a, "b": b}, {"out": (6,)}, _SYMS, shapes=_SHAPES, backends=_ALL)
 
 
 def test_mod_matches_numpy_all_backends():
@@ -95,9 +96,11 @@ def test_heaviside_matches_numpy_all_backends():
 
 
 def test_elemental_ufunc_on_slice_matches_numpy():
-    src = ("import numpy as np\n"
-           "def f(a, b, out):\n"
-           "    out[:] = 0.0\n"
-           "    out[1:5] = np.heaviside(a[1:5], b[1:5]) + np.mod(a[1:5], b[1:5])\n")
-    ok, res = _ok(run_op(src, "f", {"a": _A, "b": _B}, {"out": (6, )}, _SYMS, shapes=_SHAPES, backends=_ALL))
+    src = (
+        "import numpy as np\n"
+        "def f(a, b, out):\n"
+        "    out[:] = 0.0\n"
+        "    out[1:5] = np.heaviside(a[1:5], b[1:5]) + np.mod(a[1:5], b[1:5])\n"
+    )
+    ok, res = _ok(run_op(src, "f", {"a": _A, "b": _B}, {"out": (6,)}, _SYMS, shapes=_SHAPES, backends=_ALL))
     assert ok, res

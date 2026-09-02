@@ -23,6 +23,7 @@ on a large kernel, and a sweep must lose that kernel rather than the sweep -- th
 ``tests/dace_parse_probe.py`` exists. This module is both the parent (:func:`render_kernel`) and
 the child (``python -m hpcagent_bench.mpr_bridge``).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -65,7 +66,7 @@ def program_name(path: pathlib.Path) -> str:
     """The ``@dace.program`` name a generated impl file is expected to define."""
     for postfix in IMPL_POSTFIXES:
         if path.stem.endswith(postfix):
-            return path.stem[:-len(postfix)]
+            return path.stem[: -len(postfix)]
     return path.stem
 
 
@@ -93,6 +94,7 @@ def binding_for(rendering, kernel: str, symbol: str) -> Binding:
     """
     from dace import data as dace_data
     from dace.codegen.mpr import readonly_entry_arrays
+
     sdfg = rendering.sdfg
     # The renderer's OWN answer, not a second derivation of it: MPR qualifies exactly these
     # parameters ``const`` in the signature it emits, so asking it is what keeps the published
@@ -117,8 +119,9 @@ def binding_for(rendering, kernel: str, symbol: str) -> Binding:
     return Binding(kernel=kernel, config="dense", args=tuple(args), symbols={"c": symbol}, abi=MPR_ABI)
 
 
-def render_sdfg(spec: BenchSpec, numpy_py: pathlib.Path, out_dir: pathlib.Path, language: str,
-                precision: str) -> Dict[str, Any]:
+def render_sdfg(
+    spec: BenchSpec, numpy_py: pathlib.Path, out_dir: pathlib.Path, language: str, precision: str
+) -> Dict[str, Any]:
     """Steps 1-4 for one kernel, in THIS process. Returns the verdict record.
 
     Called by :func:`main`; :func:`render_kernel` is the out-of-process front door and is what
@@ -144,7 +147,7 @@ def render_sdfg(spec: BenchSpec, numpy_py: pathlib.Path, out_dir: pathlib.Path, 
     dace_framework.dc_float = {
         Precision.FP64: dace.float64,
         Precision.FP32: dace.float32,
-        Precision.FP16: dace.float16
+        Precision.FP16: dace.float16,
     }.get(prec, dace.float32)
     dace_framework.dc_complex_float = dace.complex128 if prec is Precision.FP64 else dace.complex64
 
@@ -182,13 +185,15 @@ def render_sdfg(spec: BenchSpec, numpy_py: pathlib.Path, out_dir: pathlib.Path, 
     return rec
 
 
-def render_kernel(spec: BenchSpec,
-                  out_dir: os.PathLike,
-                  *,
-                  language: str = "c++",
-                  precision: str = "",
-                  timeout: float = RENDER_TIMEOUT_S,
-                  extra_env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+def render_kernel(
+    spec: BenchSpec,
+    out_dir: os.PathLike,
+    *,
+    language: str = "c++",
+    precision: str = "",
+    timeout: float = RENDER_TIMEOUT_S,
+    extra_env: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
     """Render ``spec``'s kernel to a self-contained TU in ``out_dir``; returns the verdict record.
 
     Takes the loaded :class:`~hpcagent_bench.spec.BenchSpec` for the same reason
@@ -203,8 +208,15 @@ def render_kernel(spec: BenchSpec,
     if language not in LANGUAGE_EXT:
         raise ValueError(f"unknown MPR language {language!r}; known: {sorted(LANGUAGE_EXT)}")
     cmd = [
-        sys.executable, "-m", __spec__.name, "--kernel", spec.short_name, "--out",
-        str(out_dir), "--language", language
+        sys.executable,
+        "-m",
+        __spec__.name,
+        "--kernel",
+        spec.short_name,
+        "--out",
+        str(out_dir),
+        "--language",
+        language,
     ]
     if precision:
         cmd += ["--precision", precision]
@@ -240,6 +252,7 @@ def track_specs(track: str) -> List[BenchSpec]:
     manifest moved), and a sweep must skip those quietly instead of dying on the first one.
     """
     from hpcagent_bench.spec import KERNELS
+
     specs: List[BenchSpec] = []
     for key in sorted(KERNELS):
         try:
@@ -251,13 +264,15 @@ def track_specs(track: str) -> List[BenchSpec]:
     return specs
 
 
-def render_track(track: str,
-                 out_dir: os.PathLike,
-                 *,
-                 language: str = "c++",
-                 precision: str = "",
-                 timeout: float = RENDER_TIMEOUT_S,
-                 jsonl: Optional[os.PathLike] = None) -> List[Dict[str, Any]]:
+def render_track(
+    track: str,
+    out_dir: os.PathLike,
+    *,
+    language: str = "c++",
+    precision: str = "",
+    timeout: float = RENDER_TIMEOUT_S,
+    jsonl: Optional[os.PathLike] = None,
+) -> List[Dict[str, Any]]:
     """Render every kernel on ``track``, appending one verdict per line to ``jsonl``.
 
     Written as it goes rather than at the end: a sweep over a few hundred kernels is minutes per
@@ -269,7 +284,7 @@ def render_track(track: str,
         for index, spec in enumerate(track_specs(track), start=1):
             rec = render_kernel(spec, out_dir, language=language, precision=precision, timeout=timeout)
             records.append(rec)
-            print(f'[{index}] {rec["kernel"]}: {rec["verdict"]}', flush=True)
+            print(f"[{index}] {rec['kernel']}: {rec['verdict']}", flush=True)
             if sink is not None:
                 sink.write(json.dumps(rec) + "\n")
                 sink.flush()

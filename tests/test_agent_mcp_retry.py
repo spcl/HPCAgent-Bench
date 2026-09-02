@@ -7,6 +7,7 @@ entirely, burns its whole budget and exits reporting success -- measured on qwen
 such agent ran 36 minutes over 54 turns and called a `Submit` tool that does not exist. The harness
 records rc=0 and the data point is simply gone, so the driver has to notice and relaunch.
 """
+
 import importlib
 import json
 import pathlib
@@ -133,7 +134,6 @@ def test_only_so_many_agents_start_at_once(monkeypatch, tmp_path):
     lock = threading.Lock()
 
     class BlockingPopen:
-
         def __init__(self, command, cwd=None, env=None, stdout=None, stderr=None):
             with lock:
                 spawned.append(1)
@@ -266,8 +266,9 @@ def test_a_relaunch_keeps_the_transcript_of_the_crash_it_followed(monkeypatch, t
     first = kept.read_text(encoding="utf-8")
     assert "ATTEMPT 1" in first, f"the preserved file is not attempt 1's: {first[:120]!r}"
     assert "agent crashed (rc=1)" in first, "the preserved file does not say why it was relaunched"
-    assert "ATTEMPT 2" in (workdir / "claude.log").read_text(encoding="utf-8"), \
+    assert "ATTEMPT 2" in (workdir / "claude.log").read_text(encoding="utf-8"), (
         "claude.log must hold the run that actually finished"
+    )
 
 
 def test_every_attempt_shares_one_wall_clock(monkeypatch, tmp_path):
@@ -292,16 +293,19 @@ def test_every_attempt_shares_one_wall_clock(monkeypatch, tmp_path):
     monkeypatch.setattr(driver, "write_cost_record", lambda *a, **k: None)
     node_dir = tmp_path / "node-0"
     node_dir.mkdir()
-    driver.run_agent({
-        "id": 0,
-        "kernel": "loop_level_reasoning/k/k",
-        "language": "c",
-        "task": "x"
-    }, 0, node_dir, ["http://127.0.0.1:8800"], 0, 1)
+    driver.run_agent(
+        {"id": 0, "kernel": "loop_level_reasoning/k/k", "language": "c", "task": "x"},
+        0,
+        node_dir,
+        ["http://127.0.0.1:8800"],
+        0,
+        1,
+    )
     assert len(waits) == 3, f"expected three attempts, got {len(waits)}"
     assert all(w is not None for w in waits), "the wall-clock cap must stay armed across relaunches"
     # Strictly decreasing, not merely non-increasing: a relaunch handed a FRESH budget produces
     # [600, 600, 600], which is non-increasing too, and that is exactly the bug.
-    assert waits[2] < waits[1] < waits[0], \
+    assert waits[2] < waits[1] < waits[0], (
         f"each attempt must inherit what is LEFT of the budget, not a fresh one: {waits}"
+    )
     assert all(w < 600 for w in waits), f"no attempt may be given the whole budget again: {waits}"

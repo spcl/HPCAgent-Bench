@@ -191,7 +191,7 @@ harbor = ["harbor"]
 [dependency-groups]
 testing = ["pytest", "pytest-timeout", "pytest-xdist", "pytest-cov", "coverage"]
 # The format gate. clang-format ships its binary in the wheel, which is why it is a python dep.
-linting = ["yapf", "fprettify", "clang-format", "pre-commit"]
+linting = ["ruff", "fprettify", "clang-format", "pre-commit"]
 dev = [{ include-group = "testing" }, { include-group = "linting" }]
 
 [tool.setuptools]
@@ -260,3 +260,17 @@ exclude_also = [
     "raise NotImplementedError",
     "if __name__ == .__main__.:",
 ]
+
+# ---------------------------------------------------------------------------------------------
+# ruff formats every hand-written .py in the repo, the kernels included; scripts/check_format.py
+# routes to it and the pre-commit hook and CI Phase 0 both call that script. One invocation covers
+# the whole file list, which is why Phase 0 costs under a second rather than the ~105s a
+# process-per-file formatter took.
+#
+# Only the generated sources are excluded. The C / C++ / Fortran references under
+# hpcagent_bench/benchmarks are transcriptions and stay unformatted, but they are not Python, so
+# ruff never sees them -- that skip lives in check_format.py where the routing is.
+# ---------------------------------------------------------------------------------------------
+[tool.ruff]
+line-length = 120
+extend-exclude = ["*_generated.py"]

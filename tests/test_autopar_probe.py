@@ -6,6 +6,7 @@ flag ACCEPTANCE (see ``flags.POLLY_PAR`` for the measured bug this guards agains
 accepts ``-mllvm -polly-parallel`` and outlines nothing). These tests exercise the probe itself
 plus the ``cpp_runtime`` gate built on it -- not the polly/gcc_autopar frameworks end to end
 (``tests/test_frameworks.py`` covers those)."""
+
 import shutil
 
 import pytest
@@ -24,8 +25,9 @@ FORCE_SERIAL_BACKEND = "-D_GLIBCXX_USE_TBB_PAR_BACKEND=0"
 def isopar_probe(extra: str = "") -> flags.AutoparProbe:
     """:func:`languages.isopar_capability`'s probe, with ``extra`` appended to its real flags."""
     composed = f"{languages.baseline_flags('cpp')} {languages.std_flag('cpp')} {extra}"
-    return flags.probe_autopar("g++", composed, flags.NO_OUTLINE_PATTERN, flags.STDPAR_PROBE_SOURCE,
-                               flags.STDPAR_RUNTIME_CALL_PATTERN, ".cpp")
+    return flags.probe_autopar(
+        "g++", composed, flags.NO_OUTLINE_PATTERN, flags.STDPAR_PROBE_SOURCE, flags.STDPAR_RUNTIME_CALL_PATTERN, ".cpp"
+    )
 
 
 def test_probe_rejected_for_a_nonexistent_compiler():
@@ -79,8 +81,9 @@ def test_gate_declines_polly_when_the_probe_is_vacuous(monkeypatch):
     wiring, not today's measured verdict, so the test stays correct even after a future clang
     build genuinely wires up Polly's auto-pipeline.
     """
-    monkeypatch.setattr(flags, "polly_capability",
-                        lambda: flags.AutoparProbe(flags.AutoparVerdict.VACUOUS, "forced for test"))
+    monkeypatch.setattr(
+        flags, "polly_capability", lambda: flags.AutoparProbe(flags.AutoparVerdict.VACUOUS, "forced for test")
+    )
     with pytest.raises(NotSupportedByFramework, match="vacuous"):
         cpp_runtime.assert_autopar_capable("polly", "gemm")
 
@@ -149,8 +152,9 @@ def test_isopar_capability_agrees_with_the_link_decision():
         pytest.skip("g++ not installed")
     linked = languages.stdpar_link_flags("cpp") != ()
     genuine = languages.isopar_capability().verdict is flags.AutoparVerdict.OK
-    assert linked == genuine, (f"stdpar_link_flags says tbb={linked} but the compiled object says "
-                               f"{languages.isopar_capability()}")
+    assert linked == genuine, (
+        f"stdpar_link_flags says tbb={linked} but the compiled object says {languages.isopar_capability()}"
+    )
 
 
 def test_preflight_measures_the_isopar_column():

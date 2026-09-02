@@ -13,6 +13,7 @@ threshold and a body-assigned staged read. This is the numpyto side of the nest-
 (nest-forge emits such scalars under ``init.scalars`` from the SDFG symbol dtype, and types the matching
 ctypes arg ``c_double``); locking it here keeps the two in step.
 """
+
 import ctypes
 import json
 import pathlib
@@ -21,20 +22,24 @@ import tempfile
 import numpy as np
 
 # read-only float threshold: if `thr` truncates to int (0.5 -> 0) every positive `a[i]` passes.
-_THRESH_SRC = ("def f(a, out, thr):\n"
-               "    out[0] = 0.0\n"
-               "    for i in range(len(a)):\n"
-               "        if a[i] > thr:\n"
-               "            out[0] = out[0] + a[i]\n")
+_THRESH_SRC = (
+    "def f(a, out, thr):\n"
+    "    out[0] = 0.0\n"
+    "    for i in range(len(a)):\n"
+    "        if a[i] > thr:\n"
+    "            out[0] = out[0] + a[i]\n"
+)
 
 # body-assigned staged read (the `a_index = a[i]` shape a nest extractor produces): `v` is written before
 # read, holds a[i] (double). If typed int it truncates the comparison and the captured value.
-_STAGED_SRC = ("def g(a, out, v):\n"
-               "    out[0] = 0.0\n"
-               "    for i in range(len(a)):\n"
-               "        v = a[i]\n"
-               "        if v > 0.5:\n"
-               "            out[0] = out[0] + v\n")
+_STAGED_SRC = (
+    "def g(a, out, v):\n"
+    "    out[0] = 0.0\n"
+    "    for i in range(len(a)):\n"
+    "        v = a[i]\n"
+    "        if v > 0.5:\n"
+    "            out[0] = out[0] + v\n"
+)
 
 
 def _bench_info(func, scalar):
@@ -47,23 +52,11 @@ def _bench_info(func, scalar):
             "relative_path": "",
             "module_name": "k",
             "func_name": func,
-            "parameters": {
-                "S": {
-                    "N": 16
-                }
-            },
+            "parameters": {"S": {"N": 16}},
             "input_args": ["a", "out", scalar],
             "array_args": ["a", "out"],
             "output_args": ["out"],
-            "init": {
-                "shapes": {
-                    "a": "(N,)",
-                    "out": "(1,)"
-                },
-                "scalars": {
-                    scalar: 0.0
-                }
-            },
+            "init": {"shapes": {"a": "(N,)", "out": "(1,)"}, "scalars": {scalar: 0.0}},
         }
     }
 
@@ -73,6 +66,7 @@ def _emit(src, func, scalar):
     from numpyto_common.lowering import lower
     from numpyto_c.emit import emit_c, emit_cpp
     from numpyto_fortran.emit import emit_fortran
+
     d = pathlib.Path(tempfile.mkdtemp())
     (d / "k_numpy.py").write_text(src)
     (d / "bi.json").write_text(json.dumps(_bench_info(func, scalar)))
@@ -84,6 +78,7 @@ def _emit(src, func, scalar):
 
 def _scalar_desc(src, func, scalar):
     from numpyto_common.frontend import parse_kernel
+
     d = pathlib.Path(tempfile.mkdtemp())
     (d / "k_numpy.py").write_text(src)
     (d / "bi.json").write_text(json.dumps(_bench_info(func, scalar)))
@@ -135,6 +130,7 @@ def test_staged_scalar_fortran_compiles_and_runs():
 
     if shutil.which("gfortran") is None:
         import pytest
+
         pytest.skip("no gfortran")
     d, _c, _cpp, f90 = _emit(_STAGED_SRC, "g", "v")
     (d / "g.f90").write_text(f90)
@@ -173,6 +169,7 @@ def test_staged_scalar_fortran_compiles_and_runs():
 
 def _shutil_which(name):
     import shutil
+
     return shutil.which(name)
 
 
@@ -182,16 +179,18 @@ def test_threshold_scalar_not_truncated_end_to_end_c():
     cc = _shutil_which("gcc") or _shutil_which("clang")
     if cc is None:
         import pytest
+
         pytest.skip("no C compiler")
     import subprocess
+
     d, c, _cpp, _f90 = _emit(_THRESH_SRC, "f", "thr")
     (d / "f.c").write_text(c)
     so = d / "libf.so"
     r = subprocess.run(
-        [cc, "-O2", "-fPIC", "-shared", "-ffp-contract=off",
-         str(d / "f.c"), "-o", str(so)],
+        [cc, "-O2", "-fPIC", "-shared", "-ffp-contract=off", str(d / "f.c"), "-o", str(so)],
         capture_output=True,
-        text=True)
+        text=True,
+    )
     assert r.returncode == 0, r.stderr
 
     rng = np.random.default_rng(0)
@@ -215,7 +214,7 @@ def test_threshold_scalar_not_truncated_end_to_end_c():
         "a": a.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
         "out": out.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
         "thr": ctypes.c_double(thr),
-        "N": ctypes.c_int64(len(a))
+        "N": ctypes.c_int64(len(a)),
     }
     fn.argtypes = [
         ctypes.POINTER(ctypes.c_double) if n in ("a", "out") else (ctypes.c_double if n == "thr" else ctypes.c_int64)

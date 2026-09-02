@@ -13,14 +13,15 @@ real path. Every command is copy-pasteable.
 ## Golden rule
 
 **All gates run. Warnings are errors. Type errors are errors.** A clean pass =
-zero diagnostics from yapf (`--diff` shows nothing), ruff, pyright (or mypy), and
+zero diagnostics from the project's formatter, ruff, pyright (or mypy), and
 the warnings-as-errors smoke, **plus** a clean `pre-commit run` and green pytest
 consumers. Do not report "looks good" until every gate is green. Fix findings at
 the source -- never silence a warning, `# type: ignore`, or `# noqa` to pass
 (a targeted `# noqa: CODE` with a reason is allowed only for a genuine
 third-party/false-positive, same discipline as the C++/Fortran skills).
 
-Tools used: `yapf`, `ruff` (with `pyflakes`/`flake8` as fallbacks), `pyright` or
+Tools used: the project's formatter (`ruff format` or `yapf`, see below), `ruff`
+(with `pyflakes`/`flake8` as fallbacks), `pyright` or
 `mypy` for the type gate, `pre-commit`, `pytest`. Probe what's actually available
 before running (`ruff --version`, `pyright --version`, etc.) and adapt. If a tool is
 absent, run its gate where the project provides it (repo config / CI) and report that
@@ -30,25 +31,29 @@ a `.python-version`), use that one.
 
 ## A. The gates (run in this order)
 
-### 1. yapf -- format first, in place (column 120)
-yapf auto-discovers a project `.style.yapf` / `setup.cfg [yapf]` /
-`pyproject.toml [tool.yapf]` at or above the file; the explicit `--style` below is
-the fallback used only when none exists (house default: pep8 base, 120 columns).
+### 1. Format first, in place (column 120)
+**The project picks the formatter, never you** -- switching one reflows the whole
+tree to a different style. Read the repo root: `[tool.ruff]` in `pyproject.toml`
+means `ruff format` (HPCAgent-Bench); a `.style.yapf` / `setup.cfg [yapf]` /
+`pyproject.toml [tool.yapf]` means yapf (dace). If the repo ships a format script
+(HPCAgent-Bench: `scripts/check_format.py`), run THAT -- it also owns the skip policy.
 ```bash
-cfg="$(dirname <file>.py)/.style.yapf"
-[ -f "$cfg" ] || cfg="$(git -C "$(dirname <file>.py)" rev-parse --show-toplevel 2>/dev/null)/.style.yapf"
-if [ -f "$cfg" ]; then
-  yapf -i --style="$cfg" <file>.py
+root="$(git -C "$(dirname <file>.py)" rev-parse --show-toplevel 2>/dev/null)"
+if [ -f "$root/scripts/check_format.py" ]; then
+  python "$root/scripts/check_format.py" --fix <file>.py
+elif grep -q '^\[tool.ruff\]' "$root/pyproject.toml" 2>/dev/null; then
+  ruff format --line-length 120 <file>.py
+elif [ -f "$root/.style.yapf" ]; then
+  yapf -i --style="$root/.style.yapf" <file>.py
 else
   yapf -i --style='{based_on_style: pep8, column_limit: 120}' <file>.py
 fi
 ```
-yapf is the established formatter here -- do NOT switch to black or ruff-format;
-either would reflow the whole tree to a different style. To CHECK without editing
-(the form the golden rule scores), use `--diff` -- it exits non-zero if anything
-would change:
+To CHECK without editing (the form the golden rule scores), use the same tool's check
+mode -- each exits non-zero if anything would change:
 ```bash
-yapf --diff --style='{based_on_style: pep8, column_limit: 120}' <file>.py
+ruff format --check --line-length 120 <file>.py     # ruff projects
+yapf --diff --style='{based_on_style: pep8, column_limit: 120}' <file>.py   # yapf projects
 ```
 
 ### 2. ruff -- lint (fast: unused imports, undefined names, bugbear, pyupgrade)
@@ -62,10 +67,10 @@ ruff check --select E,F,W,B,C4,UP,SIM --target-version py310 --line-length 120 <
 ```
 **Always pass `--line-length 120`** unless the repo's own `ruff` config sets it.
 ruff defaults to **88**, while gate 1 formats at **120** -- so the two gates disagree
-and every line yapf just produced between 89 and 120 columns comes back as a wall of
+and every line gate 1 just produced between 89 and 120 columns comes back as a wall of
 `E501`. That is a bug in the invocation, not in the file: read the codes before
 reflowing anything, and if they are all `E501`, re-run at 120 first.
-`--fix` applies the autofixable subset (re-run yapf after). If `ruff` is absent,
+`--fix` applies the autofixable subset (re-run the formatter after). If `ruff` is absent,
 fall back to `flake8 --max-line-length 120 <file>.py`, or at minimum
 `pyflakes <file>.py` -- these catch unused imports and undefined names but far less
 than ruff. flake8's default is **79**, tighter still than ruff's 88, so the same
@@ -106,7 +111,8 @@ else                                             # silence here would read as a 
   echo "pre-commit: DEFERRED (no config)" >&2
 fi
 ```
-Standing mandate: yapf + pre-commit on every file you touch, no exceptions. If a
+Standing mandate: the project's formatter + pre-commit on every file you touch, no
+exceptions. If a
 new import was added, ensure the dep is declared (e.g. `pyproject.toml`)
 so the hooks and CI resolve it. A failing hook is a failing gate -- fix the code,
 do not `--no-verify`.
@@ -213,10 +219,10 @@ factories, or indirection. New code is a liability. Then apply:
   `Path(__file__).resolve().parents[N]` (or `git rev-parse --show-toplevel`, or an
   env/config var); scratch -> `tempfile`; fixtures -> a package-relative import.
 
-- **Formatting: yapf, column 120, no nested f-strings.** Never reuse the outer
-  quote char inside an f-string expression -- `f"{d['k']}"`, never `f"{d["k"]}"`:
-  yapf's bundled parser can hard-crash on PEP 701 same-quote nesting, and keeping
-  f-strings un-nested is clearer regardless of tooling.
+- **Formatting: the project's formatter, column 120, no nested f-strings.** Never
+  reuse the outer quote char inside an f-string expression -- `f"{d['k']}"`, never
+  `f"{d["k"]}"`: yapf's bundled parser can hard-crash on PEP 701 same-quote nesting,
+  and keeping f-strings un-nested is clearer regardless of tooling.
 
 - **Perf patterns** (apply ONLY in a proven hot path -- per-node/edge/item/match --
   and only when behavior-preserving; cold code stays readable):

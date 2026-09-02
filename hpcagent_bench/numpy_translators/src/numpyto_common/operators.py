@@ -5,6 +5,7 @@ duplicated across the C and Fortran emitters (and, in Phase 4, so the shared
 ``BaseEmitter`` can look up its column by target). JAX does not use these -- it
 unparses Python operators directly.
 """
+
 import ast
 from typing import Dict, Type
 
@@ -57,14 +58,8 @@ CMPOP: Dict[str, Dict[Type[ast.AST], str]] = {
 
 #: AST bool-op type -> target operator string.
 BOOLOP: Dict[str, Dict[Type[ast.AST], str]] = {
-    "c": {
-        ast.And: "&&",
-        ast.Or: "||"
-    },
-    "fortran": {
-        ast.And: ".AND.",
-        ast.Or: ".OR."
-    },
+    "c": {ast.And: "&&", ast.Or: "||"},
+    "fortran": {ast.And: ".AND.", ast.Or: ".OR."},
 }
 
 #: Fortran-only: libm function name -> Fortran intrinsic.

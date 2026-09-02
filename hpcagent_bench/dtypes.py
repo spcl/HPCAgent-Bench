@@ -6,6 +6,7 @@ The single source of truth lives in ``numpyto_common.dtypes`` (installed with th
 package). Re-exported here so the harness (bindings, scoring, the cpp runtime) uses
 the SAME table the emitters do -- one place to change a dtype.
 """
+
 from numpyto_common.dtypes import (
     REGISTRY,
     DTypeInfo,

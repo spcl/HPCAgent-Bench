@@ -12,6 +12,7 @@ four-node kimi endpoint in 600262, 604463 and 604479 within a minute of the firs
 ``run_vllm_node`` cannot be sourced -- it needs Slurm variables, downloads a snapshot and ends
 in ``exec`` -- so the argv is pinned against the shipped text.
 """
+
 import pathlib
 import re
 
@@ -36,7 +37,7 @@ def test_async_scheduling_is_off_on_the_pipeline_path():
 def test_the_flag_is_reachable_but_not_the_default():
     """An operator can re-enable it to re-test upstream, and gets today's behaviour if they do not."""
     branch = pp_branch()
-    assert 'VLLM_ASYNC_SCHEDULING:-0' in branch
+    assert "VLLM_ASYNC_SCHEDULING:-0" in branch
     assert '!= "1"' in branch
 
 

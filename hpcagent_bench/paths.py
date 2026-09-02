@@ -6,6 +6,7 @@ Previously the path math :code:`__file__.parent.absolute() / ".." / ".."`
 was triplicated across :mod:`hpcagent_bench.frameworks.benchmark`,
 :mod:`hpcagent_bench.frameworks.framework`, and the top-level
 ``run_*.py`` drivers. Consolidate here so a layout change touches one file."""
+
 import os
 import pathlib
 

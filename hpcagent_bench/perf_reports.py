@@ -37,6 +37,7 @@ WHEN to ask is the harness's. It therefore imports nothing from
 :mod:`hpcagent_bench.frameworks` (which imports the harness that calls this), and takes the
 two path components it needs -- ``relative_path`` / ``module_name`` -- as plain strings.
 """
+
 import dataclasses
 import pathlib
 import shutil
@@ -110,8 +111,9 @@ def report_path(relative_path: str, module_name: str, framework: str, impl_name:
     return report_root(kind) / relative_path / f"{module_name}.{framework}.{impl_name}.{KINDS[kind]}"
 
 
-def write(relative_path: str, module_name: str, framework: str, impl_name: str, kind: str,
-          text: Optional[str]) -> Optional[pathlib.Path]:
+def write(
+    relative_path: str, module_name: str, framework: str, impl_name: str, kind: str, text: Optional[str]
+) -> Optional[pathlib.Path]:
     """Write ``text`` as report ``kind``, creating the directory on demand.
 
     ``text=None`` means the framework does not support this report (a GPU flavor has
@@ -200,34 +202,44 @@ def perf_check() -> str:
     """
     if not osinfo.IS_LINUX:
         raise PerfUnavailable(
-            "not_linux", "perf is Linux-only; on macOS profile by hand with Instruments or "
-            "'xctrace record --template \"Time Profiler\"' -- there is no equivalent to drive from here")
+            "not_linux",
+            "perf is Linux-only; on macOS profile by hand with Instruments or "
+            "'xctrace record --template \"Time Profiler\"' -- there is no equivalent to drive from here",
+        )
     exe = shutil.which("perf")
     if exe is None:
         raise PerfUnavailable(
-            "perf_missing", "perf is not on PATH; install it (Debian/Ubuntu: 'apt install linux-perf', "
+            "perf_missing",
+            "perf is not on PATH; install it (Debian/Ubuntu: 'apt install linux-perf', "
             "which is what the judge image ships -- linux-tools-generic pins a host kernel ABI; "
-            "RHEL: 'dnf install perf')")
+            "RHEL: 'dnf install perf')",
+        )
     if not PARANOID_SYSCTL.is_file():
         raise PerfUnavailable(
-            "no_perf_events", f"{PARANOID_SYSCTL} is absent: this kernel exposes no perf_event "
-            "subsystem (a container/VM without it cannot be profiled from inside)")
+            "no_perf_events",
+            f"{PARANOID_SYSCTL} is absent: this kernel exposes no perf_event "
+            "subsystem (a container/VM without it cannot be profiled from inside)",
+        )
     level = PARANOID_SYSCTL.read_text().strip()
     if level.lstrip("-").isdigit() and int(level) > 2:
         raise PerfUnavailable(
-            "perf_event_paranoid", f"kernel.perf_event_paranoid={level} blocks user-space sampling; "
+            "perf_event_paranoid",
+            f"kernel.perf_event_paranoid={level} blocks user-space sampling; "
             "need <= 2 ('sudo sysctl -w kernel.perf_event_paranoid=2', or run the container "
-            "with --cap-add=CAP_PERFMON)")
+            "with --cap-add=CAP_PERFMON)",
+        )
     return exe
 
 
-def perf_record(argv: Sequence[str],
-                data: pathlib.Path,
-                *,
-                env: Optional[Dict[str, str]] = None,
-                cwd: Optional[pathlib.Path] = None,
-                timeout: float,
-                frequency: int = PERF_FREQUENCY) -> subprocess.CompletedProcess:
+def perf_record(
+    argv: Sequence[str],
+    data: pathlib.Path,
+    *,
+    env: Optional[Dict[str, str]] = None,
+    cwd: Optional[pathlib.Path] = None,
+    timeout: float,
+    frequency: int = PERF_FREQUENCY,
+) -> subprocess.CompletedProcess:
     """Sample ``argv`` under ``perf record``, writing ``data``; returns the completed process.
 
     ``perf record -- cmd`` samples the command AND its descendants (event inheritance is on
@@ -236,16 +248,22 @@ def perf_record(argv: Sequence[str],
     workload failing, and only the caller knows which output proves which.
     """
     cmd = [
-        perf_check(), "record", "-q", "-e", PERF_EVENT, f"--call-graph={PERF_CALL_GRAPH}", "-F",
-        str(frequency), "-o",
-        str(data), "--", *argv
+        perf_check(),
+        "record",
+        "-q",
+        "-e",
+        PERF_EVENT,
+        f"--call-graph={PERF_CALL_GRAPH}",
+        "-F",
+        str(frequency),
+        "-o",
+        str(data),
+        "--",
+        *argv,
     ]
-    return subprocess.run(cmd,
-                          capture_output=True,
-                          text=True,
-                          env=env,
-                          cwd=None if cwd is None else str(cwd),
-                          timeout=timeout)
+    return subprocess.run(
+        cmd, capture_output=True, text=True, env=env, cwd=None if cwd is None else str(cwd), timeout=timeout
+    )
 
 
 @dataclasses.dataclass
@@ -257,6 +275,7 @@ class CallNode:
     different call paths is two nodes -- that is what makes this a call graph rather than a
     flat profile (:func:`hotspots` gives the flat view).
     """
+
     symbol: str
     dso: str
     self_samples: int = 0
@@ -273,18 +292,14 @@ class CallNode:
     def to_json(self, total: int, min_percent: float) -> dict:
         """Serialise the subtree, omitting children below ``min_percent`` of ``total`` samples."""
         return {
-            "symbol":
-            self.symbol,
-            "dso":
-            self.dso,
-            "self_pct":
-            percent(self.self_samples, total),
-            "total_pct":
-            percent(self.total_samples, total),
-            "samples":
-            self.total_samples,
+            "symbol": self.symbol,
+            "dso": self.dso,
+            "self_pct": percent(self.self_samples, total),
+            "total_pct": percent(self.total_samples, total),
+            "samples": self.total_samples,
             "children": [
-                c.to_json(total, min_percent) for c in self.ordered_children()
+                c.to_json(total, min_percent)
+                for c in self.ordered_children()
                 if percent(c.total_samples, total) >= min_percent
             ],
         }
@@ -306,7 +321,8 @@ def stacks(data: pathlib.Path) -> List[List[Tuple[str, str]]]:
     proc = subprocess.run(
         [perf_check(), "script", "-i", str(data), "-F", "comm,ip,sym,dso", "--no-inline"],
         capture_output=True,
-        text=True)
+        text=True,
+    )
     if proc.returncode != 0:
         raise PerfUnavailable("perf_record_failed", f"perf script failed on {data.name}: {proc.stderr.strip()[-400:]}")
     out: List[List[Tuple[str, str]]] = []
@@ -364,8 +380,10 @@ def call_graph(data: pathlib.Path) -> Tuple[CallNode, int]:
     recorded = stacks(data)
     if not recorded:
         raise PerfUnavailable(
-            "no_samples", "perf recorded 0 samples: the workload was too short to sample, or the "
-            "kernel refused the counter (a container needs --cap-add=CAP_PERFMON)")
+            "no_samples",
+            "perf recorded 0 samples: the workload was too short to sample, or the "
+            "kernel refused the counter (a container needs --cap-add=CAP_PERFMON)",
+        )
     return fold(recorded)
 
 
@@ -386,12 +404,11 @@ def hotspots(root: CallNode, total: int, limit: int = 10) -> List[dict]:
             acc[1] += node.total_samples  # a recursive interpreter loop reports >100% total
         stack.extend((child, ancestors | {key}) for child in node.children.values())
     ranked = sorted(flat.items(), key=lambda kv: (-kv[1][0], kv[0]))
-    return [{
-        "symbol": sym,
-        "dso": dso,
-        "self_pct": percent(self_n, total),
-        "total_pct": percent(total_n, total)
-    } for (sym, dso), (self_n, total_n) in ranked[:limit] if self_n]
+    return [
+        {"symbol": sym, "dso": dso, "self_pct": percent(self_n, total), "total_pct": percent(total_n, total)}
+        for (sym, dso), (self_n, total_n) in ranked[:limit]
+        if self_n
+    ]
 
 
 def render_call_graph(root: CallNode, total: int, *, min_percent: float = 1.0) -> str:
@@ -406,8 +423,10 @@ def render_call_graph(root: CallNode, total: int, *, min_percent: float = 1.0) -
     def walk(node: CallNode, depth: int) -> None:
         prefix = ("  " * (depth - 1) + "+- ") if depth else ""
         dso = f"  [{node.dso}]" if node.dso and node.dso != node.symbol else ""
-        lines.append(f"  {percent(node.total_samples, total):6.2f}  {percent(node.self_samples, total):6.2f}  "
-                     f"{prefix}{node.symbol}{dso}")
+        lines.append(
+            f"  {percent(node.total_samples, total):6.2f}  {percent(node.self_samples, total):6.2f}  "
+            f"{prefix}{node.symbol}{dso}"
+        )
         for child in node.ordered_children():
             if percent(child.total_samples, total) >= min_percent:
                 walk(child, depth + 1)

@@ -16,6 +16,7 @@ translation is orthogonal to the config flags -- one binary handles all of them)
     length-matched index array: the gather index must be read at the LOCAL offset
     ``si0 - ip*n``, not the absolute ``si0`` (which runs off ``nlg``).
 """
+
 import ast
 
 import numpy as np
@@ -23,7 +24,7 @@ from _op_oracle import run_op
 
 from numpyto_common.frontend import _collect_bool_preset_names
 from numpyto_common.lib_nodes import _reads_complex
-from numpyto_common.lowering import (_CollapseChainedSubscripts, _ShapeMidExpressionRewriter, _SliceToScalarRewriter)
+from numpyto_common.lowering import _CollapseChainedSubscripts, _ShapeMidExpressionRewriter, _SliceToScalarRewriter
 
 _ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 
@@ -75,13 +76,13 @@ def test_collapse_bails_on_fancy_inner_index():
     # ``A[idx][j]`` with ``idx`` an ARRAY is a fancy GATHER (== ``A[idx[j]]``), not
     # a scalar associate -- collapsing to ``A[idx, j]`` would change the access, so
     # it must be left untouched (``idx`` known-array via its shape-table entry).
-    assert _collapse("A[idx][j]", {"A": ("n", "m"), "idx": ("k", )}) == "A[idx][j]"
+    assert _collapse("A[idx][j]", {"A": ("n", "m"), "idx": ("k",)}) == "A[idx][j]"
 
 
 def test_collapse_keeps_scalar_inner_when_a_sibling_name_is_an_array():
     # ``A[i][j]`` -- ``i`` is a plain scalar (absent from the shape table) even
     # though some OTHER name ``idx`` is an array: the scalar associate still fires.
-    assert _collapse("A[i][j]", {"A": ("n", "m"), "idx": ("k", )}) == "A[i, j]"
+    assert _collapse("A[i][j]", {"A": ("n", "m"), "idx": ("k",)}) == "A[i, j]"
 
 
 def test_collapse_bails_on_ellipsis_inner():
@@ -94,21 +95,8 @@ def test_collapse_bails_on_ellipsis_inner():
 
 def test_bool_preset_names_picks_boolean_flags_not_int_symbols():
     params = {
-        "S": {
-            "N": 6,
-            "okvan": False,
-            "tqr": False,
-            "negrp": 1
-        },
-        "fuzzed": {
-            "N": [6, 16],
-            "okvan": {
-                "set": [False, True]
-            },
-            "negrp": {
-                "set": [1, 2]
-            }
-        },
+        "S": {"N": 6, "okvan": False, "tqr": False, "negrp": 1},
+        "fuzzed": {"N": [6, 16], "okvan": {"set": [False, True]}, "negrp": {"set": [1, 2]}},
     }
     # ``okvan`` is boolean everywhere it is pinned; ``N`` / ``negrp`` are integers.
     assert _collect_bool_preset_names(params) == {"okvan", "tqr"}
@@ -120,36 +108,29 @@ def test_bool_preset_names_picks_boolean_flags_not_int_symbols():
 def test_chained_column_dot_matches_numpy():
     # ``np.dot(A[ia][:, 1], v[box[ia]])`` -- the collapsed chained column dotted
     # with a materialised-box gather (vexx_k ``_newdxx_r``).
-    src = ("import numpy as np\n"
-           "def f(A, box, v, out):\n"
-           "    nat = A.shape[0]\n"
-           "    for ia in range(nat):\n"
-           "        bx = box[ia]\n"
-           "        col = A[ia][:, 1]\n"
-           "        out[ia] = np.dot(col, v[bx])\n")
+    src = (
+        "import numpy as np\n"
+        "def f(A, box, v, out):\n"
+        "    nat = A.shape[0]\n"
+        "    for ia in range(nat):\n"
+        "        bx = box[ia]\n"
+        "        col = A[ia][:, 1]\n"
+        "        out[ia] = np.dot(col, v[bx])\n"
+    )
     nat, K, ncol, N = 3, 4, 2, 10
     rng = np.random.default_rng(0)
     A = rng.standard_normal((nat, K, ncol))
     box = np.stack([np.sort(rng.choice(N, K, replace=False)) for _ in range(nat)]).astype(np.int64)
     v = rng.standard_normal(N)
-    res = run_op(src,
-                 "f", {
-                     "A": A,
-                     "box": box,
-                     "v": v
-                 }, {"out": (nat, )}, {
-                     "nat": nat,
-                     "K": K,
-                     "ncol": ncol,
-                     "N": N
-                 },
-                 shapes={
-                     "A": "(nat,K,ncol)",
-                     "box": "(nat,K)",
-                     "v": "(N,)",
-                     "out": "(nat,)"
-                 },
-                 backends=_ALL)
+    res = run_op(
+        src,
+        "f",
+        {"A": A, "box": box, "v": v},
+        {"out": (nat,)},
+        {"nat": nat, "K": K, "ncol": ncol, "N": N},
+        shapes={"A": "(nat,K,ncol)", "box": "(nat,K)", "v": "(N,)", "out": "(nat,)"},
+        backends=_ALL,
+    )
     ok, r = _ok(res)
     assert ok, r
 
@@ -158,30 +139,26 @@ def test_slice_assign_gather_offset_matches_numpy():
     # ``out[k*n:k*n+n] -= r[idx]`` for k in 0,1 -- the length-``n`` gather index
     # ``idx`` must be read at the LOCAL slice offset, so k=1 does not run off it
     # (the vexx_k noncolin npol=2 finalise OOB).
-    src = ("import numpy as np\n"
-           "def f(r, idx, out):\n"
-           "    n = idx.shape[0]\n"
-           "    for k in range(2):\n"
-           "        out[k * n:k * n + n] -= r[idx]\n")
+    src = (
+        "import numpy as np\n"
+        "def f(r, idx, out):\n"
+        "    n = idx.shape[0]\n"
+        "    for k in range(2):\n"
+        "        out[k * n:k * n + n] -= r[idx]\n"
+    )
     n, M, P = 5, 12, 10
     rng = np.random.default_rng(1)
     r = rng.standard_normal(M)
     idx = rng.integers(0, M, size=n).astype(np.int64)
-    res = run_op(src,
-                 "f", {
-                     "r": r,
-                     "idx": idx
-                 }, {"out": (P, )}, {
-                     "n": n,
-                     "M": M,
-                     "P": P
-                 },
-                 shapes={
-                     "r": "(M,)",
-                     "idx": "(n,)",
-                     "out": "(P,)"
-                 },
-                 backends=_ALL)
+    res = run_op(
+        src,
+        "f",
+        {"r": r, "idx": idx},
+        {"out": (P,)},
+        {"n": n, "M": M, "P": P},
+        shapes={"r": "(M,)", "idx": "(n,)", "out": "(P,)"},
+        backends=_ALL,
+    )
     ok, rr = _ok(res)
     assert ok, rr
 
@@ -190,15 +167,17 @@ def test_shape_of_complex_array_is_integer_bound():
     # ``n = z.shape[0]`` reads a DIMENSION (int) even though ``z`` is complex --
     # a complex-typed loop bound would make ``for i in range(n)`` a type error
     # (vexx_k ``ngm = qgm.shape[0]``).
-    src = ("import numpy as np\n"
-           "def f(z, out):\n"
-           "    n = z.shape[0]\n"
-           "    for i in range(n):\n"
-           "        out[i] = z[i].real + z[i].imag\n")
+    src = (
+        "import numpy as np\n"
+        "def f(z, out):\n"
+        "    n = z.shape[0]\n"
+        "    for i in range(n):\n"
+        "        out[i] = z[i].real + z[i].imag\n"
+    )
     N = 6
     rng = np.random.default_rng(2)
     z = (rng.standard_normal(N) + 1j * rng.standard_normal(N)).astype(np.complex128)
-    res = run_op(src, "f", {"z": z}, {"out": (N, )}, {"N": N}, shapes={"z": "(N,)", "out": "(N,)"}, backends=_ALL)
+    res = run_op(src, "f", {"z": z}, {"out": (N,)}, {"N": N}, shapes={"z": "(N,)", "out": "(N,)"}, backends=_ALL)
     ok, r = _ok(res)
     assert ok, r
 

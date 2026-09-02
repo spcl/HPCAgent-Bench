@@ -15,6 +15,7 @@ the real figure lives in, and an aggregate quoted over a window in which the ser
 The fourth invariant is that none of this can fail the run it measures: an endpoint that is down, a
 truncated exposition and an unwritable run dir all cost the measurement and nothing else.
 """
+
 import importlib.util
 import json
 import pathlib
@@ -70,16 +71,18 @@ class FakeMetrics:
 
 def exposition(generation: float, prompt: float, running: float, waiting: float, model: str = "optarena-vllm") -> str:
     """A cut-down copy of what vLLM actually serves at /metrics, labels and neighbours included."""
-    return "\n".join([
-        "# HELP vllm:generation_tokens_total Number of generation tokens processed.",
-        "# TYPE vllm:generation_tokens_total counter",
-        f'vllm:generation_tokens_total{{model_name="{model}"}} {generation}',
-        f'vllm:prompt_tokens_total{{model_name="{model}"}} {prompt}',
-        f'vllm:num_requests_running{{model_name="{model}"}} {running}',
-        f'vllm:num_requests_waiting{{model_name="{model}"}} {waiting}',
-        f'vllm:time_to_first_token_seconds_bucket{{model_name="{model}",le="0.1"}} 7.0',
-        "",
-    ])
+    return "\n".join(
+        [
+            "# HELP vllm:generation_tokens_total Number of generation tokens processed.",
+            "# TYPE vllm:generation_tokens_total counter",
+            f'vllm:generation_tokens_total{{model_name="{model}"}} {generation}',
+            f'vllm:prompt_tokens_total{{model_name="{model}"}} {prompt}',
+            f'vllm:num_requests_running{{model_name="{model}"}} {running}',
+            f'vllm:num_requests_waiting{{model_name="{model}"}} {waiting}',
+            f'vllm:time_to_first_token_seconds_bucket{{model_name="{model}",le="0.1"}} 7.0',
+            "",
+        ]
+    )
 
 
 def row(elapsed: float, generation: float, running: float = 40.0, waiting: float = 0.0) -> dict[str, float]:
@@ -111,16 +114,18 @@ def test_every_label_set_of_a_series_is_summed_and_a_lookalike_name_is_not(drive
     dropped. Matching on the name has to be exact all the same: prometheus_client emits _created
     beside every counter and histogram buckets beside every latency, and a prefix match would fold
     a bucket count into the token total."""
-    text = "\n".join([
-        "# TYPE vllm:generation_tokens_total counter",
-        'vllm:generation_tokens_total{model_name="kimi"} 1200.0',
-        'vllm:generation_tokens_total{model_name="qwen"} 300.0',
-        'vllm:generation_tokens_total_created{model_name="kimi"} 1.7e9',
-        'vllm:prompt_tokens_total{model_name="kimi"} 50.0',
-        'vllm:num_requests_running{model_name="kimi"} 12.0',
-        'vllm:num_requests_waiting{model_name="kimi"} 3.0',
-        'vllm:time_to_first_token_seconds_bucket{model_name="kimi",le="+Inf"} 999.0',
-    ])
+    text = "\n".join(
+        [
+            "# TYPE vllm:generation_tokens_total counter",
+            'vllm:generation_tokens_total{model_name="kimi"} 1200.0',
+            'vllm:generation_tokens_total{model_name="qwen"} 300.0',
+            'vllm:generation_tokens_total_created{model_name="kimi"} 1.7e9',
+            'vllm:prompt_tokens_total{model_name="kimi"} 50.0',
+            'vllm:num_requests_running{model_name="kimi"} 12.0',
+            'vllm:num_requests_waiting{model_name="kimi"} 3.0',
+            'vllm:time_to_first_token_seconds_bucket{model_name="kimi",le="+Inf"} 999.0',
+        ]
+    )
     parsed = driver.parse_prometheus(text, driver.AGGREGATE_METRICS)
     assert parsed[GENERATION] == pytest.approx(1500.0)  # both label sets, not the _created epoch
     assert parsed[PROMPT] == pytest.approx(50.0)
@@ -128,17 +133,20 @@ def test_every_label_set_of_a_series_is_summed_and_a_lookalike_name_is_not(drive
     assert parsed[WAITING] == pytest.approx(3.0)
 
 
-def test_a_truncated_or_incomplete_exposition_costs_the_sample_and_not_the_run(driver: ModuleType,
-                                                                               monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_truncated_or_incomplete_exposition_costs_the_sample_and_not_the_run(
+    driver: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The body comes off a server that may be mid-restart, so half an exposition is an ordinary
     thing to read. A row missing one series cannot be differenced against a row that has it, so the
     whole sample is dropped -- and nothing raises, because this runs beside 40 live agents."""
-    bodies = iter([
-        "vllm:generation_tokens_total{model_name=\"kimi\"} 12",  # truncated: three series missing
-        exposition(generation=float("nan"), prompt=10, running=1, waiting=0),  # NaN would poison the rate
-        "<html>502 Bad Gateway</html>",
-        exposition(generation=100, prompt=10, running=1, waiting=0),
-    ])
+    bodies = iter(
+        [
+            'vllm:generation_tokens_total{model_name="kimi"} 12',  # truncated: three series missing
+            exposition(generation=float("nan"), prompt=10, running=1, waiting=0),  # NaN would poison the rate
+            "<html>502 Bad Gateway</html>",
+            exposition(generation=100, prompt=10, running=1, waiting=0),
+        ]
+    )
     monkeypatch.setattr(driver.urllib.request, "urlopen", lambda request, timeout=None: FakeMetrics(next(bodies)))
 
     assert driver.scrape_metrics("http://vllm:8000/metrics", {}) is None
@@ -148,13 +156,14 @@ def test_a_truncated_or_incomplete_exposition_costs_the_sample_and_not_the_run(d
 
 
 def test_a_partial_scrape_is_dropped_rather_than_read_as_a_counter_going_backwards(
-        driver: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    driver: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """In replica mode the aggregate is the sum over every serving endpoint. A sum missing one
     endpoint is not a smaller reading of the same quantity -- it is a counter that fell, and the
     next interval would be scored as a server restart. Both answer or the sample does not exist."""
     served = {
         "http://a:8000/metrics": exposition(1000, 100, 20, 2),
-        "http://b:8000/metrics": exposition(500, 50, 10, 1)
+        "http://b:8000/metrics": exposition(500, 50, 10, 1),
     }
 
     def fake_urlopen(request: urllib.request.Request, timeout: float | None = None) -> FakeMetrics:
@@ -232,10 +241,9 @@ def test_the_overall_rate_drops_the_seconds_it_could_not_observe(driver: ModuleT
     assert overall["generation_tok_s"] == pytest.approx(3000.0)  # not 35000/30 = 1166
 
 
-def test_the_report_states_the_concurrency_every_figure_was_taken_at(driver: ModuleType,
-                                                                     monkeypatch: pytest.MonkeyPatch,
-                                                                     tmp_path: pathlib.Path,
-                                                                     capsys: pytest.CaptureFixture[str]) -> None:
+def test_the_report_states_the_concurrency_every_figure_was_taken_at(
+    driver: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """An aggregate tok/s is a claim about a saturated server, so the report has to carry the
     evidence for that claim beside it. The raw series is written out too: the plateau, the ramp and
     the drain are only separable if the per-interval rows survive the summary."""
@@ -260,9 +268,9 @@ def test_the_report_states_the_concurrency_every_figure_was_taken_at(driver: Mod
     assert written["missed_scrapes"] == 2
 
 
-def test_a_window_that_was_never_saturated_reports_the_two_requests_it_saw(driver: ModuleType,
-                                                                           monkeypatch: pytest.MonkeyPatch,
-                                                                           capsys: pytest.CaptureFixture[str]) -> None:
+def test_a_window_that_was_never_saturated_reports_the_two_requests_it_saw(
+    driver: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     """The failure this guards is a number quoted out of context: 90 tok/s taken while two agents
     were in flight says nothing about a 40-agent campaign, and reads as a catastrophic regression
     next to a figure taken at full load. The peak is printed, so the reader can tell them apart."""
@@ -276,9 +284,9 @@ def test_a_window_that_was_never_saturated_reports_the_two_requests_it_saw(drive
     assert "generation=90.0 tok/s" in out
 
 
-def test_an_unwritable_run_dir_and_a_single_sample_do_not_raise(driver: ModuleType, monkeypatch: pytest.MonkeyPatch,
-                                                                tmp_path: pathlib.Path,
-                                                                capsys: pytest.CaptureFixture[str]) -> None:
+def test_an_unwritable_run_dir_and_a_single_sample_do_not_raise(
+    driver: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """Reporting happens after every agent has finished; nothing it does may cost the run its exit
     code. One sample is not an interval and must be said, not written out as a rate of zero."""
     monkeypatch.setenv("RUN_DIR", str(tmp_path / "does" / "not" / "exist"))
@@ -290,8 +298,9 @@ def test_an_unwritable_run_dir_and_a_single_sample_do_not_raise(driver: ModuleTy
     assert "1 samples, missed=7" in out and "no interval to measure" in out
 
 
-def test_the_sampler_records_a_series_and_stops_when_the_agents_do(driver: ModuleType,
-                                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_sampler_records_a_series_and_stops_when_the_agents_do(
+    driver: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The sampler runs beside the ThreadPoolExecutor for the length of the workload, so it has to
     end on the event rather than on a deadline, and it has to timestamp what it read rather than
     trust the nominal interval -- a scrape takes real time and the replicas are walked one by one.
@@ -310,9 +319,9 @@ def test_the_sampler_records_a_series_and_stops_when_the_agents_do(driver: Modul
     monkeypatch.setattr(driver.urllib.request, "urlopen", fake_urlopen)
     stop = threading.Event()
     state: dict[str, Any] = {"samples": [], "missed": 0}
-    thread = threading.Thread(target=driver.sample_aggregate_throughput,
-                              args=(["http://vllm:8000/v1"], {}, 0.01, stop, state),
-                              daemon=True)
+    thread = threading.Thread(
+        target=driver.sample_aggregate_throughput, args=(["http://vllm:8000/v1"], {}, 0.01, stop, state), daemon=True
+    )
 
     thread.start()
     deadline = time.monotonic() + 5.0
@@ -330,8 +339,9 @@ def test_the_sampler_records_a_series_and_stops_when_the_agents_do(driver: Modul
     assert samples[0][RUNNING] == pytest.approx(40.0) and samples[0][WAITING] == pytest.approx(3.0)
 
 
-def test_a_dead_endpoint_costs_samples_and_never_the_workload(driver: ModuleType,
-                                                              monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_dead_endpoint_costs_samples_and_never_the_workload(
+    driver: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The sampler is a daemon thread running against a server the agents are hammering. If it could
     raise, the campaign would lose nothing visible and the log would carry a traceback nobody can
     attribute; instead the misses are counted and the report says how many there were."""
@@ -342,9 +352,9 @@ def test_a_dead_endpoint_costs_samples_and_never_the_workload(driver: ModuleType
     monkeypatch.setattr(driver.urllib.request, "urlopen", fake_urlopen)
     stop = threading.Event()
     state: dict[str, Any] = {"samples": [], "missed": 0}
-    thread = threading.Thread(target=driver.sample_aggregate_throughput,
-                              args=(["http://vllm:8000/v1"], {}, 0.01, stop, state),
-                              daemon=True)
+    thread = threading.Thread(
+        target=driver.sample_aggregate_throughput, args=(["http://vllm:8000/v1"], {}, 0.01, stop, state), daemon=True
+    )
 
     thread.start()
     deadline = time.monotonic() + 5.0
@@ -357,8 +367,9 @@ def test_a_dead_endpoint_costs_samples_and_never_the_workload(driver: ModuleType
     assert state["missed"] >= 3 and state["samples"] == []
 
 
-def test_the_probe_is_on_by_default_and_switchable_off_from_the_environment(driver: ModuleType,
-                                                                            monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_probe_is_on_by_default_and_switchable_off_from_the_environment(
+    driver: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Default-on because a measurement nobody remembers to arm is not taken, and it costs one HTTP
     GET per interval against a server already serving 40 agents. Garbage reads as off rather than as
     a crash: this value is one line in a hand-edited .env file."""

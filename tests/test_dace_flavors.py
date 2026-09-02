@@ -12,6 +12,7 @@ the ``autoopt`` columns are upstream DaCe's own optimizer and must stay runnable
 install, so a fork gate that fired on every ``dace_*`` name would make that impossible while the
 column still looked fine locally.
 """
+
 import csv
 import json
 import shlex
@@ -19,21 +20,25 @@ import types
 
 import pytest
 
-from hpcagent_bench.frameworks.dace_framework import (DACE_PIPELINES, DEFAULT_PIPELINES, needed_pipelines,
-                                                      recorded_compiles)
-from hpcagent_bench.frameworks.framework import (FRAMEWORK_META, check_flavor_registry, framework_flavors, split_flavor)
+from hpcagent_bench.frameworks.dace_framework import (
+    DACE_PIPELINES,
+    DEFAULT_PIPELINES,
+    needed_pipelines,
+    recorded_compiles,
+)
+from hpcagent_bench.frameworks.framework import FRAMEWORK_META, check_flavor_registry, framework_flavors, split_flavor
 from hpcagent_bench.harness import preflight
 
 #: (flavor, what it scores, what it must BUILD to get there). THREE optimizers x TWO targets, and
 #: every pipeline is parentless now: there are no intermediate rungs left to build through, so what
 #: a flavor scores and what it builds are the same one-element list.
 EXPECTED = (
-    ("dace_cpu", ("parallel_cpu", ), ["parallel_cpu"]),
-    ("dace_gpu", ("parallel_gpu", ), ["parallel_gpu"]),
-    ("dace_cpu_autoopt", ("autoopt_cpu", ), ["autoopt_cpu"]),
-    ("dace_gpu_autoopt", ("autoopt_gpu", ), ["autoopt_gpu"]),
-    ("dace_cpu_canonicalize", ("canon_cpu", ), ["canon_cpu"]),
-    ("dace_gpu_canonicalize", ("canon_gpu", ), ["canon_gpu"]),
+    ("dace_cpu", ("parallel_cpu",), ["parallel_cpu"]),
+    ("dace_gpu", ("parallel_gpu",), ["parallel_gpu"]),
+    ("dace_cpu_autoopt", ("autoopt_cpu",), ["autoopt_cpu"]),
+    ("dace_gpu_autoopt", ("autoopt_gpu",), ["autoopt_gpu"]),
+    ("dace_cpu_canonicalize", ("canon_cpu",), ["canon_cpu"]),
+    ("dace_gpu_canonicalize", ("canon_gpu",), ["canon_gpu"]),
 )
 
 
@@ -49,16 +54,16 @@ def test_every_pipeline_is_scored_by_exactly_one_flavor():
     """Six pipelines, six columns, one each. A pipeline no flavor names is measured by nothing; a
     pipeline two flavors name makes two columns report the same number under different titles."""
     scored = [p for meta in FRAMEWORK_META.values() if meta.get("base") == "dace" for p in meta["pipelines"]]
-    assert sorted(scored) == sorted(
-        p.name
-        for p in DACE_PIPELINES), (f"pipelines {sorted(p.name for p in DACE_PIPELINES)} vs scored {sorted(scored)}")
+    assert sorted(scored) == sorted(p.name for p in DACE_PIPELINES), (
+        f"pipelines {sorted(p.name for p in DACE_PIPELINES)} vs scored {sorted(scored)}"
+    )
 
 
 def test_parents_come_before_children():
     """A pipeline deepcopies from its parent's OUTPUT, so an order inversion silently optimizes the
     wrong graph rather than raising."""
     for pipe in DACE_PIPELINES:
-        order = needed_pipelines((pipe.name, ))
+        order = needed_pipelines((pipe.name,))
         assert order[-1] == pipe.name
         if pipe.parent:
             assert order.index(pipe.parent) < order.index(pipe.name)
@@ -66,7 +71,7 @@ def test_parents_come_before_children():
 
 def test_unknown_pipeline_is_rejected():
     with pytest.raises(KeyError):
-        needed_pipelines(("does_not_exist", ))
+        needed_pipelines(("does_not_exist",))
 
 
 def test_only_canonicalize_columns_need_the_fork():
@@ -80,7 +85,8 @@ def test_only_canonicalize_columns_need_the_fork():
         assert (name in gated) is wants, f"{name}: fork gate does not match its pipelines"
     assert "dace_cpu_autoopt" not in gated, (
         "dace_cpu_autoopt is upstream auto_optimize end to end; gating it on the fork removes "
-        "the only column that can be measured on both trees")
+        "the only column that can be measured on both trees"
+    )
     assert "dace_cpu_canonicalize" in gated
 
 
@@ -89,13 +95,16 @@ def test_every_dace_flavor_is_a_deterministic_column():
     assert not preflight.check_deterministic(framework_flavors("dace"))
 
 
-@pytest.mark.parametrize("flavor,expected", [
-    ("dace_cpu_autoopt", ("dace_cpu", "autoopt")),
-    ("dace_cpu_canonicalize", ("dace_cpu", "canonicalize")),
-    ("dace_gpu_autoopt", ("dace_gpu", "autoopt")),
-    ("dace_cpu", ("dace_cpu", None)),
-    ("numpy", ("numpy", None)),
-])
+@pytest.mark.parametrize(
+    "flavor,expected",
+    [
+        ("dace_cpu_autoopt", ("dace_cpu", "autoopt")),
+        ("dace_cpu_canonicalize", ("dace_cpu", "canonicalize")),
+        ("dace_gpu_autoopt", ("dace_gpu", "autoopt")),
+        ("dace_cpu", ("dace_cpu", None)),
+        ("numpy", ("numpy", None)),
+    ],
+)
 def test_the_flat_name_splits_into_framework_and_flavor(flavor, expected):
     """One name on the CLI, two columns in the DB -- so `GROUP BY framework` still gathers every
     DaCe row instead of scattering it across five names."""
@@ -117,24 +126,15 @@ def test_the_split_is_declared_not_parsed():
     assert "dace_cpu_autoopt" == "dace" + "_" + "cpu_autoopt"
 
 
-@pytest.mark.parametrize("broken,why", [
-    ({
-        "flavor": "parallel",
-        "column": None
-    }, "flavor without a column"),
-    ({
-        "flavor": None,
-        "column": "dace_cpu"
-    }, "column without a flavor"),
-    ({
-        "flavor": "parallel",
-        "column": "not_a_framework"
-    }, "column is not registered"),
-    ({
-        "flavor": "cpu_autoopt",
-        "column": "dace_cpu"
-    }, "pair does not compose into the name"),
-])
+@pytest.mark.parametrize(
+    "broken,why",
+    [
+        ({"flavor": "parallel", "column": None}, "flavor without a column"),
+        ({"flavor": None, "column": "dace_cpu"}, "column without a flavor"),
+        ({"flavor": "parallel", "column": "not_a_framework"}, "column is not registered"),
+        ({"flavor": "cpu_autoopt", "column": "dace_cpu"}, "pair does not compose into the name"),
+    ],
+)
 def test_a_malformed_flavor_entry_is_rejected_at_import(monkeypatch, broken, why):
     """Each of these writes a wrong GROUP BY key onto every row of a finished sweep."""
     entry = {k: v for k, v in {**FRAMEWORK_META["dace_cpu_autoopt"], **broken}.items() if v is not None}
@@ -178,15 +178,18 @@ def test_absent_shard_csvs_report_instead_of_tracebacking(tmp_path, capsys):
 def _sweep_row(**overrides):
     """One CSV_FIELDS-shaped row for the summarize_csv tests below, all-green unless overridden."""
     from hpcagent_bench.support.collect.sweep import CSV_FIELDS
+
     row = dict.fromkeys(CSV_FIELDS, "")
-    row.update(framework="dace_cpu",
-               preset="p",
-               datatype="float64",
-               kernel="k",
-               impl="parallel_cpu",
-               status="ok",
-               validated="True",
-               median_ms="1.0")
+    row.update(
+        framework="dace_cpu",
+        preset="p",
+        datatype="float64",
+        kernel="k",
+        impl="parallel_cpu",
+        status="ok",
+        validated="True",
+        median_ms="1.0",
+    )
     row.update(overrides)
     return row
 
@@ -270,15 +273,13 @@ def test_both_build_modes_expose_the_commands_the_opt_report_replays(tmp_path):
 
     # cmake: the same two units, as CMake writes them.
     (build / "compile_commands.json").write_text(
-        json.dumps([{
-            "directory": str(build),
-            "command": shlex.join(argv),
-            "file": str(source)
-        }, {
-            "directory": str(build),
-            "command": foreign,
-            "file": "/elsewhere/x.cpp"
-        }]))
+        json.dumps(
+            [
+                {"directory": str(build), "command": shlex.join(argv), "file": str(source)},
+                {"directory": str(build), "command": foreign, "file": "/elsewhere/x.cpp"},
+            ]
+        )
+    )
     assert recorded_compiles(tmp_path) == [(str(build), argv)]
 
 

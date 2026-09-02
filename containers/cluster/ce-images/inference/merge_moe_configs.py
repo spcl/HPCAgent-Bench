@@ -13,6 +13,7 @@ overrides a finished one. Check squeue first.
 N=512 only. Job 595206 emitted an N=4608 file from the DENSE intermediate_size (the multimodal
 wrapper defeats benchmark_moe's model-params helper); serving never looks that shape up.
 """
+
 import argparse
 import glob
 import json
@@ -51,8 +52,10 @@ def main() -> None:
             # land in the same glob and sort late, so without this guard they would quietly
             # overwrite a servable size. Ship one only after a correctness run.
             if cfg.get("SPLIT_K", 1) != 1:
-                print(f"  SKIP bs={size} from {Path(path).parent.name}: "
-                      f"SPLIT_K={cfg['SPLIT_K']} is unverified for serving")
+                print(
+                    f"  SKIP bs={size} from {Path(path).parent.name}: "
+                    f"SPLIT_K={cfg['SPLIT_K']} is unverified for serving"
+                )
                 continue
             merged[size] = cfg
             provenance[size] = Path(path).parent.name

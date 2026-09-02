@@ -27,6 +27,7 @@ Then, inside the SGLang image (aiter checkout at /sgl-workspace/aiter):
 and bake the result back to aiter/configs/bf16_tuned_gemm.csv in the image, so nothing JITs or
 tunes at request time -- the failure mode that wedged six earlier aiter attempts.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -37,8 +38,10 @@ import pathlib
 import re
 import sys
 
-SHAPE = re.compile(r"shape is M:(\d+), N:(\d+), K:(\d+) dtype='([^']+)' otype='([^']+)' "
-                   r"bias=(\w+), scaleAB=(\w+), bpreshuffle=(\w+)")
+SHAPE = re.compile(
+    r"shape is M:(\d+), N:(\d+), K:(\d+) dtype='([^']+)' otype='([^']+)' "
+    r"bias=(\w+), scaleAB=(\w+), bpreshuffle=(\w+)"
+)
 # aiter's own column order for an untuned list; the tuner appends the solution columns.
 COLUMNS = ["cu_num", "M", "N", "K", "bias", "dtype", "outdtype", "scaleAB", "bpreshuffle"]
 TORCH_TO_AITER = {"torch.bfloat16": "bf16", "torch.float16": "fp16", "torch.float32": "fp32"}
@@ -98,17 +101,19 @@ def main() -> int:
     for n, k in hot:
         dtype, otype, bias, scale, preshuffle = meta[(n, k)]
         for m in ladder(args.max_m):
-            rows.append({
-                "cu_num": args.cu_num,
-                "M": m,
-                "N": int(n),
-                "K": int(k),
-                "bias": bias,
-                "dtype": TORCH_TO_AITER.get(dtype, dtype),
-                "outdtype": TORCH_TO_AITER.get(otype, otype),
-                "scaleAB": scale,
-                "bpreshuffle": preshuffle,
-            })
+            rows.append(
+                {
+                    "cu_num": args.cu_num,
+                    "M": m,
+                    "N": int(n),
+                    "K": int(k),
+                    "bias": bias,
+                    "dtype": TORCH_TO_AITER.get(dtype, dtype),
+                    "outdtype": TORCH_TO_AITER.get(otype, otype),
+                    "scaleAB": scale,
+                    "bpreshuffle": preshuffle,
+                }
+            )
     with args.out.open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=COLUMNS)
         writer.writeheader()

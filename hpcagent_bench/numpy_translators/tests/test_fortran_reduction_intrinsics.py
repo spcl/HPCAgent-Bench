@@ -15,6 +15,7 @@ numbers must still match numpy (an intrinsic spelled wrong compiles fine).
 C is asserted unchanged in the same file. The predicate is off by default, and a C backend that
 started skipping expansion would emit a call it has no rendering for.
 """
+
 import ast
 import json
 import pathlib
@@ -63,10 +64,7 @@ _DISAGREEING = {
 
 
 def build(call: str):
-    src = ("import numpy as np\n"
-           "def f(a, out):\n"
-           f"    s = {call}\n"
-           "    out[:] = a[:, 0] * s\n")
+    src = f"import numpy as np\ndef f(a, out):\n    s = {call}\n    out[:] = a[:, 0] * s\n"
     d = pathlib.Path(tempfile.mkdtemp())
     npy = d / "f.py"
     npy.write_text(src)
@@ -109,10 +107,7 @@ def test_a_reduction_carrying_an_axis_still_lowers_to_loops() -> None:
     Getting that mapping wrong is a wrong answer that compiles, which is why the predicate declines
     every call with a second argument rather than trying.
     """
-    src = ("import numpy as np\n"
-           "def f(a, out):\n"
-           "    c = np.sum(a, axis=1)\n"
-           "    out[:] = c * 2.0\n")
+    src = "import numpy as np\ndef f(a, out):\n    c = np.sum(a, axis=1)\n    out[:] = c * 2.0\n"
     d = pathlib.Path(tempfile.mkdtemp())
     npy = d / "f.py"
     npy.write_text(src)
@@ -187,5 +182,5 @@ def test_the_intrinsics_match_numpy_on_every_backend() -> None:
     a = rng.standard_normal((8, 4)) + 3.0
     for call in _REDUCTIONS:
         src, _, _ = build(call)
-        status = run_op(src, "f", {"a": a}, {"out": (8, )}, _SYMS, shapes=_SHAPES, backends=NATIVE)
+        status = run_op(src, "f", {"a": a}, {"out": (8,)}, _SYMS, shapes=_SHAPES, backends=NATIVE)
         assert status == {"c": "ok", "cpp": "ok", "fortran": "ok"}, (call, status)

@@ -9,6 +9,7 @@ echoed filler on a repeated-sentence prompt at temperature 0, so that shape repo
 where there is none. Numbered sentences carrying distinct facts plus a retrieval question isolate
 real attention damage: a healthy model answers, a corrupt one cannot.
 """
+
 import argparse
 import json
 import re
@@ -16,8 +17,10 @@ import sys
 import urllib.request
 
 # Deterministic, distinct-per-step facts. The buffer name is what the question asks back for.
-FILLER = ("Step {i} loads buffer {name} from the staging arena, runs for {ms} milliseconds, and "
-          "writes {n} cache lines back before releasing the arena lock.")
+FILLER = (
+    "Step {i} loads buffer {name} from the staging arena, runs for {ms} milliseconds, and "
+    "writes {n} cache lines back before releasing the arena lock."
+)
 
 
 def buffer_name(step: int) -> str:
@@ -30,17 +33,15 @@ def build_context(steps: int) -> str:
 
 
 def ask(base: str, model: str, context: str, step: int, timeout: int) -> tuple[str, str]:
-    question = (f"{context}\n\nWhich buffer does step {step} load? Reply with the buffer name and "
-                f"nothing else.")
-    body = json.dumps({
-        "model": model,
-        "messages": [{
-            "role": "user",
-            "content": question
-        }],
-        "temperature": 0.0,
-        "max_tokens": 8192,
-    }).encode()
+    question = f"{context}\n\nWhich buffer does step {step} load? Reply with the buffer name and nothing else."
+    body = json.dumps(
+        {
+            "model": model,
+            "messages": [{"role": "user", "content": question}],
+            "temperature": 0.0,
+            "max_tokens": 8192,
+        }
+    ).encode()
     req = urllib.request.Request(f"{base}/v1/chat/completions", data=body, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         payload = json.load(resp)
@@ -73,8 +74,9 @@ def main() -> int:
             try:
                 answer, reason = ask(args.base, args.model, context, step, args.timeout)
             except Exception as exc:  # noqa: BLE001 -- any transport failure is a gate failure
-                print(f"  steps={steps:<5} ~{approx:<6} tok  step={step:<5} ERROR {type(exc).__name__}: {exc}",
-                      flush=True)
+                print(
+                    f"  steps={steps:<5} ~{approx:<6} tok  step={step:<5} ERROR {type(exc).__name__}: {exc}", flush=True
+                )
                 failures += 1
                 continue
             # A correct reply names exactly one buffer. Filler-echo corruption reproduces the

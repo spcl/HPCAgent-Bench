@@ -9,6 +9,7 @@ Run as a SUBPROCESS rather than imported, because the failure this catches first
 the tool resolves the checkout at module level, and a wrong working directory used to surface as a
 ``CalledProcessError`` from ``git rev-parse`` instead of a sentence naming the problem.
 """
+
 import pathlib
 import subprocess
 import sys
@@ -29,15 +30,15 @@ ENV = {"CUDA_VISIBLE_DEVICES": "", "PYTHONHASHSEED": "0", "OMP_NUM_THREADS": "1"
 
 def run(args, cwd, timeout=300):
     import os
-    return subprocess.run([sys.executable, str(TOOL), *args],
-                          cwd=str(cwd),
-                          env={
-                              **os.environ,
-                              **ENV
-                          },
-                          capture_output=True,
-                          text=True,
-                          timeout=timeout)
+
+    return subprocess.run(
+        [sys.executable, str(TOOL), *args],
+        cwd=str(cwd),
+        env={**os.environ, **ENV},
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
 
 
 def test_the_tool_the_skill_names_is_actually_there():
@@ -80,9 +81,9 @@ def test_emit_mpr_renders_the_same_kernel_to_a_self_contained_unit(tmp_path, lan
     """
     pytest.importorskip("dace")
     out = tmp_path / "mpr"
-    proc = run([KERNEL, "--emit-mpr", str(out), "--mpr-language", language, "--require-mpr"],
-               cwd=paths.ROOT,
-               timeout=1800)
+    proc = run(
+        [KERNEL, "--emit-mpr", str(out), "--mpr-language", language, "--require-mpr"], cwd=paths.ROOT, timeout=1800
+    )
     assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr[-2000:]}"
     assert f"mpr {language}:" in proc.stdout, proc.stdout
     rendered = sorted(out.glob(f"*_mpr.{ext}"))

@@ -26,7 +26,7 @@ def conv2d(input, weights):
     for i in range(H_out):
         for j in range(W_out):
             output[:, i, j, :] = np.sum(
-                input[:, i:i + K, j:j + K, :, np.newaxis] * weights[np.newaxis, :, :, :],
+                input[:, i : i + K, j : j + K, :, np.newaxis] * weights[np.newaxis, :, :, :],
                 axis=(1, 2, 3),
             )
 
@@ -38,7 +38,7 @@ def maxpool2d(x):
     output = np.empty([x.shape[0], x.shape[1] // 2, x.shape[2] // 2, x.shape[3]], dtype=x.dtype)
     for i in range(x.shape[1] // 2):
         for j in range(x.shape[2] // 2):
-            output[:, i, j, :] = np.max(x[:, 2 * i:2 * i + 2, 2 * j:2 * j + 2, :], axis=(1, 2))
+            output[:, i, j, :] = np.max(x[:, 2 * i : 2 * i + 2, 2 * j : 2 * j + 2, :], axis=(1, 2))
     return output
 
 

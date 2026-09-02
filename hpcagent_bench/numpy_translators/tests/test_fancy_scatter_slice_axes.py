@@ -16,6 +16,7 @@ Two spellings behaved differently, and only one of them announced itself:
 Asserted numerically against numpy rather than on the emitted text: the defect was a wrong
 subscript, and only running it proves the right elements moved.
 """
+
 import json
 import pathlib
 import tempfile
@@ -27,42 +28,35 @@ from numpyto_c.emit import emit_c
 from numpyto_common.frontend import parse_kernel
 from numpyto_common.lowering import lower
 
-_HDR2 = ("import numpy as np\n"
-         "def pick(src, out):\n"
-         "    ia = np.zeros(2, dtype=np.int64)\n"
-         "    ia[0] = 1\n"
-         "    ia[1] = 3\n")
+_HDR2 = "import numpy as np\ndef pick(src, out):\n    ia = np.zeros(2, dtype=np.int64)\n    ia[0] = 1\n    ia[1] = 3\n"
 _HDR3 = _HDR2.replace("def pick(", "def pick3(")
 
 
 def _run2(body, **kw):
     rng = np.random.default_rng(0)
-    return run_op(_HDR2 + body,
-                  "pick", {"src": rng.standard_normal((8, 4))}, {"out": (8, 4)}, {
-                      "N": 8,
-                      "M": 4
-                  },
-                  shapes={
-                      "src": "(N, M)",
-                      "out": "(N, M)"
-                  },
-                  backends=("c", "fortran"),
-                  **kw)
+    return run_op(
+        _HDR2 + body,
+        "pick",
+        {"src": rng.standard_normal((8, 4))},
+        {"out": (8, 4)},
+        {"N": 8, "M": 4},
+        shapes={"src": "(N, M)", "out": "(N, M)"},
+        backends=("c", "fortran"),
+        **kw,
+    )
 
 
 def _run3(body):
     rng = np.random.default_rng(0)
-    return run_op(_HDR3 + body,
-                  "pick3", {"src": rng.standard_normal((5, 4, 3))}, {"out": (5, 4, 3)}, {
-                      "N": 5,
-                      "M": 4,
-                      "K": 3
-                  },
-                  shapes={
-                      "src": "(N, M, K)",
-                      "out": "(N, M, K)"
-                  },
-                  backends=("c", "fortran"))
+    return run_op(
+        _HDR3 + body,
+        "pick3",
+        {"src": rng.standard_normal((5, 4, 3))},
+        {"out": (5, 4, 3)},
+        {"N": 5, "M": 4, "K": 3},
+        shapes={"src": "(N, M, K)", "out": "(N, M, K)"},
+        backends=("c", "fortran"),
+    )
 
 
 def _ok(res):
@@ -129,20 +123,19 @@ def test_a_strided_slice_beside_the_index_is_still_declined():
     Asserted on the absence of the scatter iter -- a wrong answer is exactly what a numeric
     check would have accepted as 'it ran'."""
     d = pathlib.Path(tempfile.mkdtemp())
-    (d / "k_numpy.py").write_text(("import numpy as np\n"
-                                   "def pick(src, out):\n"
-                                   "    ia = np.zeros(2, dtype=np.int64)\n"
-                                   "    ia[0] = 1\n"
-                                   "    ia[1] = 3\n"
-                                   "    out[ia, ::2] = src[ia, ::2] * 2.0\n"))
+    (d / "k_numpy.py").write_text(
+        (
+            "import numpy as np\n"
+            "def pick(src, out):\n"
+            "    ia = np.zeros(2, dtype=np.int64)\n"
+            "    ia[0] = 1\n"
+            "    ia[1] = 3\n"
+            "    out[ia, ::2] = src[ia, ::2] * 2.0\n"
+        )
+    )
     (d / "bi.json").write_text(
-        json.dumps(_bench_info("pick", ["src"], ["out"], {
-            "src": "(N, M)",
-            "out": "(N, M)"
-        }, {
-            "N": 8,
-            "M": 4
-        }, None)))
+        json.dumps(_bench_info("pick", ["src"], ["out"], {"src": "(N, M)", "out": "(N, M)"}, {"N": 8, "M": 4}, None))
+    )
     try:
         text = emit_c(lower(parse_kernel(d / "k_numpy.py", d / "bi.json")), fn_name="pick")
     except NotImplementedError:

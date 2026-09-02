@@ -1,4 +1,5 @@
 """CPU TVM impl of numerically-stable ``softmax`` over the last axis."""
+
 import tvm
 from tvm import te
 

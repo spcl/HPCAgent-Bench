@@ -17,6 +17,7 @@ translation logic", which is the question kernel selection asks. It does NOT cla
 covering the same lines must produce the same numbers -- a per-kernel numerical bug still needs the
 full sweep, which is why the remainder moves to a schedule instead of being deleted.
 """
+
 import argparse
 import json
 import multiprocessing as mp
@@ -46,11 +47,12 @@ def emit_under_coverage(key: str) -> Tuple[str, List[Tuple[str, int]], str]:
     try:
         from numpyto_c import dace_emit, emit as c_emit  # noqa: F401 -- imported for its side effects
         from numpyto_common.frontend import emit_with_inline_fallback, parse_kernel
+
         spec = BenchSpec.load(key)
         kdir = paths.BENCHMARKS / spec.relative_path
         numpy_py = kdir / f"{spec.module_name}_numpy.py"
         with bench_info_tempfile(spec) as info:
-            for emitter in (dace_emit.emit_dace, ):
+            for emitter in (dace_emit.emit_dace,):
                 try:
                     emit_with_inline_fallback(lambda fn=emitter: fn(parse_kernel(numpy_py, info)))
                 except Exception:  # noqa: BLE001 -- a refusal still covers the lines that decided it
@@ -64,7 +66,7 @@ def emit_under_coverage(key: str) -> Tuple[str, List[Tuple[str, int]], str]:
     for filename in data.measured_files():
         if not filename.startswith(root):
             continue  # a line outside the translators says nothing about which kernels to keep
-        rel = filename[len(root) + 1:]
+        rel = filename[len(root) + 1 :]
         lines.extend((rel, n) for n in (data.lines(filename) or ()))
     return key, lines, status
 
@@ -75,12 +77,14 @@ def worker(keys: List[str], out: "mp.Queue") -> None:
             name, lines, status = emit_under_coverage(key)
             out.put({"kernel": name, "lines": lines, "status": status})
         except BaseException as exc:  # noqa: BLE001
-            out.put({
-                "kernel": key,
-                "lines": [],
-                "status": f"crash: {type(exc).__name__}",
-                "frame": traceback.format_exc().strip().splitlines()[-1][:160],
-            })
+            out.put(
+                {
+                    "kernel": key,
+                    "lines": [],
+                    "status": f"crash: {type(exc).__name__}",
+                    "frame": traceback.format_exc().strip().splitlines()[-1][:160],
+                }
+            )
     out.put(None)
 
 
@@ -88,7 +92,7 @@ def measure(keys: List[str], destination: pathlib.Path) -> None:
     ctx = mp.get_context("spawn")
     with destination.open("w") as handle:
         for start in range(0, len(keys), CHUNK):
-            chunk = keys[start:start + CHUNK]
+            chunk = keys[start : start + CHUNK]
             queue = ctx.Queue()
             proc = ctx.Process(target=worker, args=(chunk, queue))
             proc.start()
@@ -111,9 +115,7 @@ def measure(keys: List[str], destination: pathlib.Path) -> None:
 def select(records: List[dict]) -> Tuple[List[str], int, int]:
     """Greedy set cover: repeatedly take the kernel adding the most uncovered lines."""
     coverage_by_kernel: Dict[str, Set[Tuple[str, int]]] = {
-        r["kernel"]: {tuple(line)
-                      for line in r["lines"]}
-        for r in records if r["lines"]
+        r["kernel"]: {tuple(line) for line in r["lines"]} for r in records if r["lines"]
     }
     universe: Set[Tuple[str, int]] = set().union(*coverage_by_kernel.values()) if coverage_by_kernel else set()
     remaining = set(universe)
@@ -137,6 +139,7 @@ def main() -> int:
 
     if not args.select_only:
         from hpcagent_bench.spec import KERNELS
+
         # The same enumeration test_e2e_numerical.py parametrizes over, so the subset is chosen from
         # exactly the set the sweep runs.
         keys = sorted({key.rsplit("/", 1)[-1] for key in KERNELS})

@@ -21,6 +21,7 @@ Before the fix the emitter either raised ``EmitError`` on the bare call or (wors
 let ``_augment_returns`` grow the return into a tuple the value-capturing call site
 silently bound whole, so ``fac`` became a 3-tuple and every downstream use broke.
 """
+
 import ast
 
 import numpy as np
@@ -30,7 +31,7 @@ pytest.importorskip("jax")
 
 from numpyto_jax.core import _helper_mutation_map, emit_jax
 
-_SRC = '''
+_SRC = """
 import numpy as np
 
 def fill_col(store, done, j, col):
@@ -55,7 +56,7 @@ def kernel(store, done, cols, out):
         c = fill_col(store, done, j, cols[:, j])   # value-captured: mutates store/done
         add_into(out[:, j], c)                      # bare, subscript arg: mutates out[:, j]
     scale_rows(out, 2.0)                            # bare, no-return helper
-'''
+"""
 
 
 def _defs(src):
@@ -65,7 +66,7 @@ def _defs(src):
 def test_return_slots_classify_the_three_helper_shapes():
     hm = _helper_mutation_map(list(_defs(_SRC).values()))
     # return-value-plus-mutation: the value is captured, then the two caches rebind.
-    assert hm["fill_col"] == [("val", ), ("mut", 0), ("mut", 1)]
+    assert hm["fill_col"] == [("val",), ("mut", 0), ("mut", 1)]
     # return-is-the-mutated-param: one mut slot at the mutated position.
     assert hm["add_into"] == [("mut", 0)]
     # no own return: the mutated param is returned and rebound.
@@ -78,13 +79,13 @@ def test_helper_returning_a_derived_value_is_not_treated_as_in_place():
     # would corrupt the captured value. Here the return mixes a mutated param with
     # a fresh scalar, so both return points must agree; a branch-local return the
     # augmentation can't reach disqualifies the rewrite (falls back to normal call).
-    src = '''
+    src = """
 def h(acc, x):
     if x > 0:
         acc += x
         return acc
     return acc
-'''
+"""
     hm = _helper_mutation_map(list(_defs(src).values()))
     # The nested (branch) return is unreachable by fn.body augmentation -> not rewritten.
     assert "h" not in hm
@@ -102,6 +103,7 @@ def test_emit_rewrites_bare_value_and_subscript_call_sites():
 
 def test_inplace_helpers_match_numpy_end_to_end():
     import jax
+
     jax.config.update("jax_enable_x64", True)
     import jax.numpy as jnp
 

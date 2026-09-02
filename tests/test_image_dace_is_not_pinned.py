@@ -13,6 +13,7 @@ busts the layer), and every recipe writes the resolved sha to /opt/dace.commit s
 which dace graded it. A .def file has no layer cache and may clone the branch, but it still has to
 record what it got.
 """
+
 import pathlib
 
 import pytest
@@ -39,17 +40,22 @@ BUILDERS = [
 @pytest.mark.parametrize("recipe", DOCKERFILES)
 def test_a_cached_recipe_takes_the_dace_commit_as_a_build_arg(recipe: str) -> None:
     text = (ROOT / recipe).read_text()
-    assert "ARG DACE_COMMIT" in text, (f"{recipe} does not declare ARG DACE_COMMIT; without it the dace layer "
-                                       "caches forever and the image pins itself to its first build")
+    assert "ARG DACE_COMMIT" in text, (
+        f"{recipe} does not declare ARG DACE_COMMIT; without it the dace layer "
+        "caches forever and the image pins itself to its first build"
+    )
     assert "--branch extended https://github.com/spcl/dace.git" not in text, (
-        f"{recipe} clones the branch directly -- that layer never invalidates. Fetch $DACE_COMMIT instead.")
+        f"{recipe} clones the branch directly -- that layer never invalidates. Fetch $DACE_COMMIT instead."
+    )
 
 
 @pytest.mark.parametrize("recipe", DOCKERFILES + DEFINITIONS)
 def test_every_recipe_records_the_dace_commit_it_installed(recipe: str) -> None:
     text = (ROOT / recipe).read_text()
-    assert "/opt/dace.commit" in text, (f"{recipe} does not write /opt/dace.commit; an image that cannot say which "
-                                        "dace it carries cannot be told from a stale one")
+    assert "/opt/dace.commit" in text, (
+        f"{recipe} does not write /opt/dace.commit; an image that cannot say which "
+        "dace it carries cannot be told from a stale one"
+    )
 
 
 @pytest.mark.parametrize("builder", BUILDERS)
@@ -57,5 +63,6 @@ def test_the_builder_resolves_the_tip_and_passes_it_in(builder: str) -> None:
     """The resolve belongs OUTSIDE the build: inside, the layer cache would eat it."""
     text = (ROOT / builder).read_text()
     assert "git ls-remote https://github.com/spcl/dace.git refs/heads/extended" in text, (
-        f"{builder} does not resolve extended's tip")
-    assert "--build-arg \"DACE_COMMIT=${DACE_COMMIT}\"" in text, f"{builder} resolves the tip but never passes it"
+        f"{builder} does not resolve extended's tip"
+    )
+    assert '--build-arg "DACE_COMMIT=${DACE_COMMIT}"' in text, f"{builder} resolves the tip but never passes it"

@@ -14,6 +14,7 @@ count the loop runs cannot disagree. A step > 1 is here too: it was over-allocat
 ``stop - start`` for ``stop - start`` / step elements), which is wasteful rather than wrong, but
 the same expression fixes it.
 """
+
 import numpy as np
 import pytest
 
@@ -24,36 +25,36 @@ _NATIVE = ("c", "cpp", "fortran")
 
 def _run(expr, n):
     """``t = <expr>`` copied element-wise into an ``n``-long int64 output, on every native backend."""
-    src = ("import numpy as np\n"
-           "def f(out):\n"
-           f"    t = {expr}\n"
-           "    for i in range(out.shape[0]):\n"
-           "        out[i] = t[i]\n")
-    res = run_op(src,
-                 "f", {}, {"out": (n, )}, {"N": n},
-                 shapes={"out": "(N,)"},
-                 dtypes={"out": "int64"},
-                 backends=_NATIVE)
+    src = f"import numpy as np\ndef f(out):\n    t = {expr}\n    for i in range(out.shape[0]):\n        out[i] = t[i]\n"
+    res = run_op(
+        src, "f", {}, {"out": (n,)}, {"N": n}, shapes={"out": "(N,)"}, dtypes={"out": "int64"}, backends=_NATIVE
+    )
     assert all(v == "ok" or v.startswith("skip") for v in res.values()), (expr, res)
     assert any(v == "ok" for v in res.values()), (expr, res)
 
 
-@pytest.mark.parametrize("expr,n", [
-    ("np.arange(10, 0, -1)", 10),
-    ("np.arange(0, -10, -2)", 5),
-    ("np.arange(-3, -9, -3)", 2),
-])
+@pytest.mark.parametrize(
+    "expr,n",
+    [
+        ("np.arange(10, 0, -1)", 10),
+        ("np.arange(0, -10, -2)", 5),
+        ("np.arange(-3, -9, -3)", 2),
+    ],
+)
 def test_negative_step_arange_matches_numpy(expr, n):
     assert len(eval(expr)) == n, "test's own expectation disagrees with numpy"  # noqa: S307
     _run(expr, n)
 
 
-@pytest.mark.parametrize("expr,n", [
-    ("np.arange(0, 10, 2)", 5),
-    ("np.arange(1, 10, 3)", 3),
-    ("np.arange(0, 10)", 10),
-    ("np.arange(7)", 7),
-])
+@pytest.mark.parametrize(
+    "expr,n",
+    [
+        ("np.arange(0, 10, 2)", 5),
+        ("np.arange(1, 10, 3)", 3),
+        ("np.arange(0, 10)", 10),
+        ("np.arange(7)", 7),
+    ],
+)
 def test_positive_step_arange_still_matches_numpy(expr, n):
     assert len(eval(expr)) == n, "test's own expectation disagrees with numpy"  # noqa: S307
     _run(expr, n)
@@ -69,8 +70,13 @@ def test_count_is_folded_for_literal_bounds():
     def count(text):
         return arange_count(ast.parse(text, mode="eval").body.args)
 
-    for text, want in [("np.arange(10, 0, -1)", 10), ("np.arange(0, 10, 2)", 5), ("np.arange(0, 10, -1)", 0),
-                       ("np.arange(5)", 5), ("np.arange(2, 9)", 7)]:
+    for text, want in [
+        ("np.arange(10, 0, -1)", 10),
+        ("np.arange(0, 10, 2)", 5),
+        ("np.arange(0, 10, -1)", 0),
+        ("np.arange(5)", 5),
+        ("np.arange(2, 9)", 7),
+    ]:
         node = count(text)
         assert isinstance(node, ast.Constant), (text, ast.unparse(node))
         assert node.value == want, (text, node.value, want)

@@ -52,8 +52,21 @@ TRACKED_TOOLS = (
     "mcp__optarena__task",
 )
 
-COLUMNS = ("agent_dir", "problem", "worker", "benchmark", "turns", "tool_uses", "score_calls", "syntax_check_calls",
-           "submit_calls", "profile_calls", "task_calls", "num_turns_reported", "outcome")
+COLUMNS = (
+    "agent_dir",
+    "problem",
+    "worker",
+    "benchmark",
+    "turns",
+    "tool_uses",
+    "score_calls",
+    "syntax_check_calls",
+    "submit_calls",
+    "profile_calls",
+    "task_calls",
+    "num_turns_reported",
+    "outcome",
+)
 
 #: ``problem-<N>-worker-<M>`` -- the per-worker directory agent_driver.py creates.
 WORKER_DIR = re.compile(r"^problem-(\d+)-worker-(\d+)$")
@@ -206,21 +219,23 @@ def collect(run_dir: pathlib.Path, kernels: dict[int, str] | None) -> tuple[list
             skipped += 1
             continue
         problem = int(match.group(1))
-        rows.append({
-            "agent_dir": relative,
-            "problem": problem,
-            "worker": int(match.group(2)),
-            "benchmark": "" if kernels is None else kernels.get(problem, ""),
-            "turns": counts["turns"],
-            "tool_uses": counts["tool_uses"],
-            "score_calls": counts["mcp__optarena__score"],
-            "syntax_check_calls": counts["mcp__optarena__syntax_check"],
-            "submit_calls": counts["mcp__optarena__submit"],
-            "profile_calls": counts["mcp__optarena__profile"],
-            "task_calls": counts["mcp__optarena__task"],
-            "num_turns_reported": counts["num_turns_reported"],
-            "outcome": counts["outcome"],
-        })
+        rows.append(
+            {
+                "agent_dir": relative,
+                "problem": problem,
+                "worker": int(match.group(2)),
+                "benchmark": "" if kernels is None else kernels.get(problem, ""),
+                "turns": counts["turns"],
+                "tool_uses": counts["tool_uses"],
+                "score_calls": counts["mcp__optarena__score"],
+                "syntax_check_calls": counts["mcp__optarena__syntax_check"],
+                "submit_calls": counts["mcp__optarena__submit"],
+                "profile_calls": counts["mcp__optarena__profile"],
+                "task_calls": counts["mcp__optarena__task"],
+                "num_turns_reported": counts["num_turns_reported"],
+                "outcome": counts["outcome"],
+            }
+        )
     return rows, skipped
 
 
@@ -236,11 +251,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--run-dir", required=True, type=pathlib.Path, help="the run directory (RUN_ROOT/<jobid>)")
     parser.add_argument("--out", required=True, type=pathlib.Path, help="destination CSV")
-    parser.add_argument("--problems",
-                        type=pathlib.Path,
-                        default=None,
-                        help="the run's make_problems.py JSONL; fills the benchmark column so the CSV "
-                        "joins to submissions.benchmark (left empty when omitted)")
+    parser.add_argument(
+        "--problems",
+        type=pathlib.Path,
+        default=None,
+        help="the run's make_problems.py JSONL; fills the benchmark column so the CSV "
+        "joins to submissions.benchmark (left empty when omitted)",
+    )
     args = parser.parse_args(argv)
 
     kernels = None if args.problems is None else load_problem_kernels(args.problems)

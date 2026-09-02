@@ -14,6 +14,7 @@ Four families, each validated numerically vs numpy across C / C++ / Fortran:
   backends emitted integer bitwise NOT (``~1`` -> the truthy ``-2`` in C, an
   ``i`` argument error in Fortran).
 """
+
 import numpy as np
 from _op_oracle import run_op
 
@@ -38,15 +39,18 @@ _A = np.linspace(0.5, 3.0, 6)
 
 
 def test_reverse_whole_array_assign():
-    ok, res = _run(" out[:] = a[::-1]", {"a": _A}, {"out": (6, )}, {"N": 6}, {"a": "(N,)", "out": "(N,)"})
+    ok, res = _run(" out[:] = a[::-1]", {"a": _A}, {"out": (6,)}, {"N": 6}, {"a": "(N,)", "out": "(N,)"})
     assert ok, res
 
 
 def test_strided_reverse_step2():
-    ok, res = _run(" b = a[::-2]\n for i in range(3):\n  out[i] = b[i]", {"a": _A}, {"out": (3, )}, {"N": 6}, {
-        "a": "(N,)",
-        "out": "(3,)"
-    })
+    ok, res = _run(
+        " b = a[::-2]\n for i in range(3):\n  out[i] = b[i]",
+        {"a": _A},
+        {"out": (3,)},
+        {"N": 6},
+        {"a": "(N,)", "out": "(3,)"},
+    )
     assert ok, res
 
 
@@ -54,10 +58,9 @@ def test_strided_reverse_step2():
 
 
 def test_masked_sum_inline():
-    ok, res = _run(" m = a > 1.5\n out[0] = np.sum(a[m])", {"a": _A}, {"out": (1, )}, {"N": 6}, {
-        "a": "(N,)",
-        "out": "(1,)"
-    })
+    ok, res = _run(
+        " m = a > 1.5\n out[0] = np.sum(a[m])", {"a": _A}, {"out": (1,)}, {"N": 6}, {"a": "(N,)", "out": "(1,)"}
+    )
     assert ok, res
 
 
@@ -65,10 +68,9 @@ def test_masked_max_seed_excludes_index0():
     """Index 0 is masked OUT and holds the global max; the accumulator must seed
     from the first masked HIT, not ``arr[0]`` (correct masked-max = 3.0)."""
     a = np.array([10.0, 1.0, 2.0, 3.0])
-    ok, res = _run(" m = a < 5.0\n out[0] = np.max(a[m])", {"a": a}, {"out": (1, )}, {"N": 4}, {
-        "a": "(N,)",
-        "out": "(1,)"
-    })
+    ok, res = _run(
+        " m = a < 5.0\n out[0] = np.max(a[m])", {"a": a}, {"out": (1,)}, {"N": 4}, {"a": "(N,)", "out": "(1,)"}
+    )
     assert ok, res
 
 
@@ -77,14 +79,13 @@ def test_integer_gather_reduction_not_masked():
     masked reduction -- it must stay a gather (the mask peephole is gated on a
     known-boolean index)."""
     a = np.linspace(0.5, 3.0, 6)
-    ok, res = _run(" out[0] = np.sum(a[idx])", {
-        "a": a,
-        "idx": np.array([0, 2, 4])
-    }, {"out": (1, )}, {"N": 6}, {
-        "a": "(N,)",
-        "idx": "(3,)",
-        "out": "(1,)"
-    })
+    ok, res = _run(
+        " out[0] = np.sum(a[idx])",
+        {"a": a, "idx": np.array([0, 2, 4])},
+        {"out": (1,)},
+        {"N": 6},
+        {"a": "(N,)", "idx": "(3,)", "out": "(1,)"},
+    )
     assert ok, res
 
 
@@ -107,21 +108,21 @@ def test_masked_sum_explicit_loop_staged_scalar():
     """``v = a[i]; if v > K: acc += v`` -- the nest-extracted masked SUM. ``v`` is
     a reassigned value scalar (Fortran must drop its ``intent(in)``)."""
     body = " acc = 0.0\n for i in range(len(a)):\n  v = a[i]\n  if v > K:\n   acc = acc + v\n out[0] = acc"
-    ok, res = _run(body, {"a": _M, "K": 0.5, "v": 0.0}, {"out": (1, )}, {"N": 8}, {"a": "(N,)", "out": "(1,)"})
+    ok, res = _run(body, {"a": _M, "K": 0.5, "v": 0.0}, {"out": (1,)}, {"N": 8}, {"a": "(N,)", "out": "(1,)"})
     assert ok, res
 
 
 def test_masked_max_explicit_loop_staged_scalar():
     """Nest-extracted masked MAX: seed from a sentinel, keep the largest ``v > K``."""
     body = " m = -1.0e30\n for i in range(len(a)):\n  v = a[i]\n  if v > K:\n   if v > m:\n    m = v\n out[0] = m"
-    ok, res = _run(body, {"a": _M, "K": 0.5, "v": 0.0}, {"out": (1, )}, {"N": 8}, {"a": "(N,)", "out": "(1,)"})
+    ok, res = _run(body, {"a": _M, "K": 0.5, "v": 0.0}, {"out": (1,)}, {"N": 8}, {"a": "(N,)", "out": "(1,)"})
     assert ok, res
 
 
 def test_masked_count_explicit_loop_staged_scalar():
     """Nest-extracted masked COUNT: integer accumulator over ``v > K``."""
     body = " c = 0\n for i in range(len(a)):\n  v = a[i]\n  if v > K:\n   c = c + 1\n out[0] = c"
-    ok, res = _run(body, {"a": _M, "K": 0.5, "v": 0.0}, {"out": (1, )}, {"N": 8}, {"a": "(N,)", "out": "(1,)"})
+    ok, res = _run(body, {"a": _M, "K": 0.5, "v": 0.0}, {"out": (1,)}, {"N": 8}, {"a": "(N,)", "out": "(1,)"})
     assert ok, res
 
 
@@ -130,41 +131,39 @@ def test_masked_count_explicit_loop_staged_scalar():
 
 def test_any_all_named_mask():
     for op, expect_body in (("any", " m = a > 1.5\n"), ("all", " m = a > 0.0\n")):
-        ok, res = _run(expect_body + f" out[0] = np.{op}(m)", {"a": _A}, {"out": (1, )}, {"N": 6}, {
-            "a": "(N,)",
-            "out": "(1,)"
-        })
+        ok, res = _run(
+            expect_body + f" out[0] = np.{op}(m)", {"a": _A}, {"out": (1,)}, {"N": 6}, {"a": "(N,)", "out": "(1,)"}
+        )
         assert ok, (op, res)
 
 
 def test_count_nonzero_mask_and_float():
-    ok, res = _run(" m = a > 1.5\n out[0] = np.count_nonzero(m)", {"a": _A}, {"out": (1, )}, {"N": 6}, {
-        "a": "(N,)",
-        "out": "(1,)"
-    })
+    ok, res = _run(
+        " m = a > 1.5\n out[0] = np.count_nonzero(m)", {"a": _A}, {"out": (1,)}, {"N": 6}, {"a": "(N,)", "out": "(1,)"}
+    )
     assert ok, res
     x = np.array([0.0, 1.5, 0.0, 2.0, 3.0, 0.0])
-    ok, res = _run(" out[0] = np.count_nonzero(a)", {"a": x}, {"out": (1, )}, {"N": 6}, {"a": "(N,)", "out": "(1,)"})
+    ok, res = _run(" out[0] = np.count_nonzero(a)", {"a": x}, {"out": (1,)}, {"N": 6}, {"a": "(N,)", "out": "(1,)"})
     assert ok, res
 
 
 def test_any_all_axis():
     a = np.array([[0.0, 1.0, 0.0], [2.0, 0.0, 3.0]])
-    ok, res = _run(" m = a > 1.0\n out[:] = np.any(m, axis=0)", {"a": a}, {"out": (3, )}, {
-        "M": 2,
-        "N": 3
-    }, {
-        "a": "(M, N)",
-        "out": "(N,)"
-    })
+    ok, res = _run(
+        " m = a > 1.0\n out[:] = np.any(m, axis=0)",
+        {"a": a},
+        {"out": (3,)},
+        {"M": 2, "N": 3},
+        {"a": "(M, N)", "out": "(N,)"},
+    )
     assert ok, res
-    ok, res = _run(" m = a >= 0.0\n out[:] = np.all(m, axis=1)", {"a": a}, {"out": (2, )}, {
-        "M": 2,
-        "N": 3
-    }, {
-        "a": "(M, N)",
-        "out": "(M,)"
-    })
+    ok, res = _run(
+        " m = a >= 0.0\n out[:] = np.all(m, axis=1)",
+        {"a": a},
+        {"out": (2,)},
+        {"M": 2, "N": 3},
+        {"a": "(M, N)", "out": "(M,)"},
+    )
     assert ok, res
 
 
@@ -174,10 +173,9 @@ _S = np.linspace(-1.0, 3.0, 6)
 
 
 def test_not_mask_in_where():
-    ok, res = _run(" m = a > 1.0\n out[:] = np.where(~m, a, 0.0)", {"a": _S}, {"out": (6, )}, {"N": 6}, {
-        "a": "(N,)",
-        "out": "(N,)"
-    })
+    ok, res = _run(
+        " m = a > 1.0\n out[:] = np.where(~m, a, 0.0)", {"a": _S}, {"out": (6,)}, {"N": 6}, {"a": "(N,)", "out": "(N,)"}
+    )
     assert ok, res
 
 
@@ -187,20 +185,24 @@ def test_not_over_compound_mask():
     0/1 combine would give the truthy -2 (always-true where); Fortran NOT() on a
     logical is a compile error."""
     for combine in ("m1 & m2", "m1 | m2", "m1 ^ m2"):
-        ok, res = _run(f" m1 = a > 0.0\n m2 = a < 2.0\n out[:] = np.where(~({combine}), a, 0.0)", {"a": _S},
-                       {"out": (6, )}, {"N": 6}, {
-                           "a": "(N,)",
-                           "out": "(N,)"
-                       })
+        ok, res = _run(
+            f" m1 = a > 0.0\n m2 = a < 2.0\n out[:] = np.where(~({combine}), a, 0.0)",
+            {"a": _S},
+            {"out": (6,)},
+            {"N": 6},
+            {"a": "(N,)", "out": "(N,)"},
+        )
         assert ok, (combine, res)
 
 
 def test_logical_xor_combine():
     """``m1 ^ m2`` on boolean masks is elementwise XOR (Fortran ``.neqv.``, not the
     integer IEOR that rejects a logical operand)."""
-    ok, res = _run(" m1 = a > 0.0\n m2 = a < 2.0\n out[:] = np.where(m1 ^ m2, a, 0.0)", {"a": _S}, {"out": (6, )},
-                   {"N": 6}, {
-                       "a": "(N,)",
-                       "out": "(N,)"
-                   })
+    ok, res = _run(
+        " m1 = a > 0.0\n m2 = a < 2.0\n out[:] = np.where(m1 ^ m2, a, 0.0)",
+        {"a": _S},
+        {"out": (6,)},
+        {"N": 6},
+        {"a": "(N,)", "out": "(N,)"},
+    )
     assert ok, res

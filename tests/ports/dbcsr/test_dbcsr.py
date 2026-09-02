@@ -145,7 +145,7 @@ def build_csr_index(mi, mf, ai, af, list_index, list_norms=None):
 
 
 def filter_indices(index, row_min, row_max, col_min, col_max):
-    mask = ((index[:, 0] >= row_min) & (index[:, 0] <= row_max) & (index[:, 1] >= col_min) & (index[:, 1] <= col_max))
+    mask = (index[:, 0] >= row_min) & (index[:, 0] <= row_max) & (index[:, 1] >= col_min) & (index[:, 1] <= col_max)
     return index[mask]
 
 
@@ -765,7 +765,7 @@ def dense_from_packed(index, packed_blocks, row_sizes, col_sizes):
             continue
         r0, r1 = int(row_offsets[row]), int(row_offsets[row + 1])
         c0, c1 = int(col_offsets[col]), int(col_offsets[col + 1])
-        dense[r0:r1, c0:c1] = packed_blocks[block_id, :r1 - r0, :c1 - c0]
+        dense[r0:r1, c0:c1] = packed_blocks[block_id, : r1 - r0, : c1 - c0]
 
     return dense
 
@@ -793,7 +793,8 @@ def assert_manifest_kernel_matches_dense():
     ]
     for n_block_rows, n_block_cols, n_block_inner, block_size, density, seed in cases:
         a_index, b_index, a_blocks, b_blocks, m_sizes, n_sizes, k_sizes, C = initialize(
-            n_block_rows, n_block_cols, n_block_inner, block_size, density, seed)
+            n_block_rows, n_block_cols, n_block_inner, block_size, density, seed
+        )
         result = dbcsr(
             a_index,
             b_index,
@@ -817,7 +818,7 @@ def assert_manifest_kernel_matches_dense():
 
 
 def build_fortran_reference():
-    if (not FORTRAN_LIBRARY.exists() or FORTRAN_LIBRARY.stat().st_mtime < FORTRAN_SOURCE.stat().st_mtime):
+    if not FORTRAN_LIBRARY.exists() or FORTRAN_LIBRARY.stat().st_mtime < FORTRAN_SOURCE.stat().st_mtime:
         subprocess.run(
             [
                 "gfortran",
@@ -978,7 +979,7 @@ def validate_inputs(
         k_sizes,
     )
 
-    finite = (np.isfinite(c_numpy).all() and np.isfinite(c_dense_ref).all() and np.isfinite(c_fortran).all())
+    finite = np.isfinite(c_numpy).all() and np.isfinite(c_dense_ref).all() and np.isfinite(c_fortran).all()
     valid_dense = np.allclose(c_numpy, c_dense_ref, rtol=RTOL, atol=ATOL, equal_nan=True)
     valid_fortran = np.allclose(c_numpy, c_fortran, rtol=RTOL, atol=ATOL, equal_nan=True)
     valid_flop = flop == flop_fortran
@@ -993,8 +994,16 @@ def validate_inputs(
         expected_flop = flop == expected_flop_value
         expected_lastblk = lastblk == expected_lastblk_value
 
-    valid = (finite and valid_dense and valid_fortran and valid_flop and valid_lastblk and valid_expected
-             and expected_flop and expected_lastblk)
+    valid = (
+        finite
+        and valid_dense
+        and valid_fortran
+        and valid_flop
+        and valid_lastblk
+        and valid_expected
+        and expected_flop
+        and expected_lastblk
+    )
 
     if verbose or not valid:
         print(f"{name}:")
@@ -1054,7 +1063,8 @@ def generated_case(
             density=density,
             seed=seed,
             sparsity_pattern=sparsity_pattern,
-        ))
+        )
+    )
 
 
 def exactly_one_product_case():
@@ -1156,7 +1166,8 @@ def build_randomized_params():
         multrec_limit = int(rng.choice(MULTREC_LIMITS))
         stack_capacity = int(rng.choice(STACK_CAPACITIES))
         edge_cases.append(
-            (test_id, n_block_rows, n_block_cols, n_block_inner, block_size, density, multrec_limit, stack_capacity))
+            (test_id, n_block_rows, n_block_cols, n_block_inner, block_size, density, multrec_limit, stack_capacity)
+        )
 
     return random_cases, variable_cases, edge_cases
 
@@ -1245,9 +1256,19 @@ def test_randomized_variable(test_id, n_block_rows, n_block_cols, n_block_inner,
 
 
 @pytest.mark.parametrize(
-    "test_id,n_block_rows,n_block_cols,n_block_inner,block_size,density,multrec_limit,stack_capacity", EDGE_CASES)
-def test_edge_random(test_id, n_block_rows, n_block_cols, n_block_inner, block_size, density, multrec_limit,
-                     stack_capacity, fortran_reference):
+    "test_id,n_block_rows,n_block_cols,n_block_inner,block_size,density,multrec_limit,stack_capacity", EDGE_CASES
+)
+def test_edge_random(
+    test_id,
+    n_block_rows,
+    n_block_cols,
+    n_block_inner,
+    block_size,
+    density,
+    multrec_limit,
+    stack_capacity,
+    fortran_reference,
+):
     args = generated_case(
         n_block_rows,
         n_block_cols,

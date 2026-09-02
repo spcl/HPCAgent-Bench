@@ -35,6 +35,7 @@ request builder, and one parser -- no caller change.
     python -m hpcagent_bench.websearch "fast gemm avx512" --max-results 5
     python -m hpcagent_bench.websearch --list          # which providers have a key here
 """
+
 import argparse
 import dataclasses
 import json
@@ -50,6 +51,7 @@ from typing import Callable, Dict, List, Optional
 
 class Provider(str, Enum):
     """A web-search backend. Declaration order is the auto-detect priority."""
+
     TAVILY = "tavily"
     SERPER = "serper"
     BRAVE = "brave"
@@ -64,16 +66,16 @@ class Provider(str, Enum):
 
 #: provider -> the env var(s) that hold its API key (any one present = configured).
 _ENV_KEYS: Dict[Provider, tuple] = {
-    Provider.TAVILY: ("TAVILY_API_KEY", ),
-    Provider.SERPER: ("SERPER_API_KEY", ),
+    Provider.TAVILY: ("TAVILY_API_KEY",),
+    Provider.SERPER: ("SERPER_API_KEY",),
     Provider.BRAVE: ("BRAVE_API_KEY", "BRAVE_SEARCH_API_KEY"),
-    Provider.EXA: ("EXA_API_KEY", ),
-    Provider.GOOGLE_CSE: ("GOOGLE_CSE_API_KEY", ),
+    Provider.EXA: ("EXA_API_KEY",),
+    Provider.GOOGLE_CSE: ("GOOGLE_CSE_API_KEY",),
     Provider.BING: ("BING_SEARCH_API_KEY", "BING_SUBSCRIPTION_KEY"),
     Provider.SERPAPI: ("SERPAPI_API_KEY", "SERPAPI_KEY"),
     Provider.YOU: ("YDC_API_KEY", "YOU_API_KEY"),
-    Provider.JINA: ("JINA_API_KEY", ),
-    Provider.PERPLEXITY: ("PERPLEXITY_API_KEY", ),
+    Provider.JINA: ("JINA_API_KEY",),
+    Provider.PERPLEXITY: ("PERPLEXITY_API_KEY",),
 }
 
 
@@ -88,6 +90,7 @@ class WebSearchConfig:
     ``provider`` ``None`` auto-detects from the environment. ``api_key`` / ``cse_id``
     override the env-resolved credentials (e.g. to pass a key held elsewhere).
     """
+
     provider: Optional[Provider] = None
     max_results: int = 5
     timeout: float = 30.0
@@ -104,6 +107,7 @@ class WebSearchConfig:
 @dataclass(frozen=True)
 class SearchResult:
     """One normalized hit."""
+
     title: str
     url: str
     content: str = ""
@@ -112,6 +116,7 @@ class SearchResult:
 @dataclass(frozen=True)
 class SearchResponse:
     """A provider-independent search result set."""
+
     query: str
     provider: str
     results: List[SearchResult]
@@ -155,8 +160,10 @@ def resolve_provider(config: WebSearchConfig) -> Provider:
         try:
             return Provider(forced.strip().lower())
         except ValueError:
-            raise WebSearchError(f"unknown web-search provider {forced!r} in "
-                                 f"$HPCAGENT_BENCH_WEBSEARCH_PROVIDER; known: {[p.value for p in Provider]}")
+            raise WebSearchError(
+                f"unknown web-search provider {forced!r} in "
+                f"$HPCAGENT_BENCH_WEBSEARCH_PROVIDER; known: {[p.value for p in Provider]}"
+            )
     for provider in available_providers():
         return provider
     raise WebSearchError("no web-search provider configured; set one of the API keys: " + _env_hint())
@@ -165,8 +172,10 @@ def resolve_provider(config: WebSearchConfig) -> Provider:
 def _credentials(provider: Provider, config: WebSearchConfig) -> tuple:
     key = config.api_key or _env_key(provider)
     if not key:
-        raise WebSearchError(f"{provider.value}: no API key -- set {' or '.join(_ENV_KEYS[provider])} "
-                             f"or pass WebSearchConfig(api_key=...)")
+        raise WebSearchError(
+            f"{provider.value}: no API key -- set {' or '.join(_ENV_KEYS[provider])} "
+            f"or pass WebSearchConfig(api_key=...)"
+        )
     cse_id = config.cse_id or os.environ.get("GOOGLE_CSE_ID")
     if provider is Provider.GOOGLE_CSE and not cse_id:
         raise WebSearchError("google_cse: also set GOOGLE_CSE_ID (the search-engine cx)")
@@ -183,13 +192,9 @@ def post_request(url: str, body: dict, headers: dict) -> urllib.request.Request:
     ``Content-Type: application/json`` merged with ``headers``). Shared by the
     per-provider request builders here and the chat agents' HTTP transport."""
     data = json.dumps(body).encode("utf-8")
-    return urllib.request.Request(url,
-                                  data=data,
-                                  headers={
-                                      "Content-Type": "application/json",
-                                      **headers
-                                  },
-                                  method="POST")
+    return urllib.request.Request(
+        url, data=data, headers={"Content-Type": "application/json", **headers}, method="POST"
+    )
 
 
 def _http_json(request: urllib.request.Request, timeout: float) -> dict:
@@ -207,11 +212,11 @@ def _http_json(request: urllib.request.Request, timeout: float) -> dict:
 
 # ------------------------------------------------------- per-provider requests --
 def _req_tavily(q, key, cse_id, cfg):
-    return post_request("https://api.tavily.com/search", {
-        "query": q,
-        "max_results": cfg.max_results,
-        "include_answer": True
-    }, {"Authorization": f"Bearer {key}"})
+    return post_request(
+        "https://api.tavily.com/search",
+        {"query": q, "max_results": cfg.max_results, "include_answer": True},
+        {"Authorization": f"Bearer {key}"},
+    )
 
 
 def _req_serper(q, key, cse_id, cfg):
@@ -219,13 +224,11 @@ def _req_serper(q, key, cse_id, cfg):
 
 
 def _req_brave(q, key, cse_id, cfg):
-    return _get_request("https://api.search.brave.com/res/v1/web/search", {
-        "q": q,
-        "count": cfg.max_results
-    }, {
-        "X-Subscription-Token": key,
-        "Accept": "application/json"
-    })
+    return _get_request(
+        "https://api.search.brave.com/res/v1/web/search",
+        {"q": q, "count": cfg.max_results},
+        {"X-Subscription-Token": key, "Accept": "application/json"},
+    )
 
 
 def _req_exa(q, key, cse_id, cfg):
@@ -233,28 +236,25 @@ def _req_exa(q, key, cse_id, cfg):
 
 
 def _req_google_cse(q, key, cse_id, cfg):
-    return _get_request("https://www.googleapis.com/customsearch/v1", {
-        "key": key,
-        "cx": cse_id,
-        "q": q,
-        "num": min(cfg.max_results, 10)
-    }, {})
+    return _get_request(
+        "https://www.googleapis.com/customsearch/v1",
+        {"key": key, "cx": cse_id, "q": q, "num": min(cfg.max_results, 10)},
+        {},
+    )
 
 
 def _req_bing(q, key, cse_id, cfg):
-    return _get_request("https://api.bing.microsoft.com/v7.0/search", {
-        "q": q,
-        "count": cfg.max_results
-    }, {"Ocp-Apim-Subscription-Key": key})
+    return _get_request(
+        "https://api.bing.microsoft.com/v7.0/search",
+        {"q": q, "count": cfg.max_results},
+        {"Ocp-Apim-Subscription-Key": key},
+    )
 
 
 def _req_serpapi(q, key, cse_id, cfg):
-    return _get_request("https://serpapi.com/search.json", {
-        "engine": "google",
-        "q": q,
-        "num": cfg.max_results,
-        "api_key": key
-    }, {})
+    return _get_request(
+        "https://serpapi.com/search.json", {"engine": "google", "q": q, "num": cfg.max_results, "api_key": key}, {}
+    )
 
 
 def _req_you(q, key, cse_id, cfg):
@@ -262,20 +262,17 @@ def _req_you(q, key, cse_id, cfg):
 
 
 def _req_jina(q, key, cse_id, cfg):
-    return _get_request("https://s.jina.ai/", {"q": q}, {
-        "Authorization": f"Bearer {key}",
-        "Accept": "application/json"
-    })
+    return _get_request(
+        "https://s.jina.ai/", {"q": q}, {"Authorization": f"Bearer {key}", "Accept": "application/json"}
+    )
 
 
 def _req_perplexity(q, key, cse_id, cfg):
-    return post_request("https://api.perplexity.ai/chat/completions", {
-        "model": "sonar",
-        "messages": [{
-            "role": "user",
-            "content": q
-        }]
-    }, {"Authorization": f"Bearer {key}"})
+    return post_request(
+        "https://api.perplexity.ai/chat/completions",
+        {"model": "sonar", "messages": [{"role": "user", "content": q}]},
+        {"Authorization": f"Bearer {key}"},
+    )
 
 
 _REQUEST: Dict[Provider, Callable] = {
@@ -294,13 +291,15 @@ _REQUEST: Dict[Provider, Callable] = {
 
 # --------------------------------------------------------- per-provider parsers --
 def _hit(item: dict, title_key: str, url_key: str, content_key: str) -> SearchResult:
-    return SearchResult(title=str(item.get(title_key, "") or ""),
-                        url=str(item.get(url_key, "") or ""),
-                        content=str(item.get(content_key, "") or ""))
+    return SearchResult(
+        title=str(item.get(title_key, "") or ""),
+        url=str(item.get(url_key, "") or ""),
+        content=str(item.get(content_key, "") or ""),
+    )
 
 
 def _hits(items, title_key, url_key, content_key, cfg) -> List[SearchResult]:
-    return [_hit(it, title_key, url_key, content_key) for it in (items or [])[:cfg.max_results]]
+    return [_hit(it, title_key, url_key, content_key) for it in (items or [])[: cfg.max_results]]
 
 
 def _parse_tavily(data, cfg):
@@ -318,9 +317,12 @@ def _parse_brave(data, cfg):
 def _parse_exa(data, cfg):
     items = data.get("results") or []
     results = [
-        SearchResult(title=str(it.get("title", "") or ""),
-                     url=str(it.get("url", "") or ""),
-                     content=str(it.get("text", "") or it.get("snippet", "") or "")) for it in items[:cfg.max_results]
+        SearchResult(
+            title=str(it.get("title", "") or ""),
+            url=str(it.get("url", "") or ""),
+            content=str(it.get("text", "") or it.get("snippet", "") or ""),
+        )
+        for it in items[: cfg.max_results]
     ]
     return results, None
 
@@ -334,18 +336,20 @@ def _parse_bing(data, cfg):
 
 
 def _parse_serpapi(data, cfg):
-    return _hits(data.get("organic_results"), "title", "link", "snippet", cfg), (data.get("answer_box")
-                                                                                 or {}).get("answer")
+    return _hits(data.get("organic_results"), "title", "link", "snippet", cfg), (data.get("answer_box") or {}).get(
+        "answer"
+    )
 
 
 def _parse_you(data, cfg):
     items = data.get("hits") or []
     results = []
-    for it in items[:cfg.max_results]:
+    for it in items[: cfg.max_results]:
         snippets = it.get("snippets")
         content = " ".join(snippets) if isinstance(snippets, list) else str(it.get("description", "") or "")
         results.append(
-            SearchResult(title=str(it.get("title", "") or ""), url=str(it.get("url", "") or ""), content=content))
+            SearchResult(title=str(it.get("title", "") or ""), url=str(it.get("url", "") or ""), content=content)
+        )
     return results, None
 
 
@@ -357,7 +361,7 @@ def _parse_perplexity(data, cfg):
     choices = data.get("choices") or []
     answer = (choices[0].get("message") or {}).get("content", "") if choices else ""
     citations = data.get("citations") or []
-    results = [SearchResult(title="", url=str(u), content="") for u in citations[:cfg.max_results]]
+    results = [SearchResult(title="", url=str(u), content="") for u in citations[: cfg.max_results]]
     return results, answer or None
 
 
@@ -376,10 +380,12 @@ _PARSE: Dict[Provider, Callable] = {
 
 
 # ----------------------------------------------------------------- public entry --
-def search(query: str,
-           config: Optional[WebSearchConfig] = None,
-           *,
-           transport: Optional[Callable[[urllib.request.Request], dict]] = None) -> SearchResponse:
+def search(
+    query: str,
+    config: Optional[WebSearchConfig] = None,
+    *,
+    transport: Optional[Callable[[urllib.request.Request], dict]] = None,
+) -> SearchResponse:
     """Search ``query`` and return a normalized :class:`SearchResponse`.
 
     ``config`` selects the provider + limits (default: auto-detect, 5 results).

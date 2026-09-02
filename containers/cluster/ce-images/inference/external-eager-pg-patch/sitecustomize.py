@@ -36,14 +36,17 @@ EAGER_DEVICE_ID = os.environ.get("VLLM_EAGER_PG_DEVICE_ID", "1") == "1"
 def eager_init_process_group(*args, **kwargs):
     backend = backend_from_call(args, kwargs, 0)
 
-    if (EAGER_DEVICE_ID and "nccl" in str(backend).lower() and kwargs.get("device_id") is None
-            and torch.cuda.is_available()):
+    if (
+        EAGER_DEVICE_ID
+        and "nccl" in str(backend).lower()
+        and kwargs.get("device_id") is None
+        and torch.cuda.is_available()
+    ):
         device = local_device()
         kwargs["device_id"] = device
 
         print(
-            "[external-eager-pg] init_process_group "
-            f"backend={backend} device_id={device}",
+            f"[external-eager-pg] init_process_group backend={backend} device_id={device}",
             file=sys.stderr,
             flush=True,
         )
@@ -56,8 +59,13 @@ def eager_new_group(*args, **kwargs):
     # ranks, timeout, backend, ...
     backend = backend_from_call(args, kwargs, 2)
 
-    if (EAGER_DEVICE_ID and "device_id" in _new_group_parameters and "nccl" in str(backend).lower()
-            and kwargs.get("device_id") is None and torch.cuda.is_available()):
+    if (
+        EAGER_DEVICE_ID
+        and "device_id" in _new_group_parameters
+        and "nccl" in str(backend).lower()
+        and kwargs.get("device_id") is None
+        and torch.cuda.is_available()
+    ):
         device = local_device()
         kwargs["device_id"] = device
 
@@ -84,7 +92,7 @@ def eager_new_group(*args, **kwargs):
 # Upstream ships this remedy for exactly one broadcast (make_sibling_device_group in
 # v1/worker/gpu/pp_utils.py); this extends it to every collective, leaving device_group carrying
 # P2P alone. Membership is identical, so global rank ids still address the same processes.
-COLLECTIVE_SIBLING_GROUPS = ("pp", )
+COLLECTIVE_SIBLING_GROUPS = ("pp",)
 
 
 def patch_pp_collectives() -> None:
@@ -109,9 +117,11 @@ def patch_pp_collectives() -> None:
         # in the same order. Coordinator construction is already in lockstep, which is why this
         # sits here and not at the first collective, where only the group's own ranks would call.
         self.collective_group = self.make_sibling_device_group(group_desc="external_pp_collectives")
-        print(f"[external-eager-pg] {self.unique_name}: collectives split onto a sibling communicator",
-              file=sys.stderr,
-              flush=True)
+        print(
+            f"[external-eager-pg] {self.unique_name}: collectives split onto a sibling communicator",
+            file=sys.stderr,
+            flush=True,
+        )
 
     def on_collective_group(method):
         """Run ``method`` with ``device_group`` pointing at the sibling.
@@ -188,12 +198,16 @@ def patch_pp_token_broadcast() -> None:
         return wrapper
 
     GPUModelRunner._pp_broadcast_prev_sampled_token_ids = on_sibling(
-        GPUModelRunner._pp_broadcast_prev_sampled_token_ids)
+        GPUModelRunner._pp_broadcast_prev_sampled_token_ids
+    )
     GPUModelRunner._pp_receive_prev_sampled_token_ids_to_input_batch = on_sibling(
-        GPUModelRunner._pp_receive_prev_sampled_token_ids_to_input_batch)
-    print("[external-eager-pg] pp sampled-token broadcast routed onto the sibling communicator",
-          file=sys.stderr,
-          flush=True)
+        GPUModelRunner._pp_receive_prev_sampled_token_ids_to_input_batch
+    )
+    print(
+        "[external-eager-pg] pp sampled-token broadcast routed onto the sibling communicator",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 # The MLA chunked-prefill context path transposes its log-sum-exp on ROCm.
@@ -232,8 +246,13 @@ def patch_mla_empty_context_mask() -> None:
     def mask_empty_context(lse, output, query_start_loc, context_start_loc):
         # [num_tokens, num_heads] against an output of [num_tokens, num_heads, head_dim]. The
         # square case is genuinely ambiguous, so leave it to the original rather than guess.
-        if (lse.ndim == 2 and output.ndim == 3 and lse.shape[0] == output.shape[0] and lse.shape[1] == output.shape[1]
-                and output.shape[0] != output.shape[1]):
+        if (
+            lse.ndim == 2
+            and output.ndim == 3
+            and lse.shape[0] == output.shape[0]
+            and lse.shape[1] == output.shape[1]
+            and output.shape[0] != output.shape[1]
+        ):
             lse = lse.transpose(0, 1)
         return original(lse, output, query_start_loc, context_start_loc)
 

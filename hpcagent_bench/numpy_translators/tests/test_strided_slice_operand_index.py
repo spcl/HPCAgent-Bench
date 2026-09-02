@@ -18,6 +18,7 @@ The bare strided slice-ASSIGN (``lo[:] = b[0::2]``, dwt2d's Haar) goes through
 lowering's own slice rewriters and was always correct; it is pinned here too so the
 shared-index fix cannot regress it.
 """
+
 import ast
 
 import numpy as np
@@ -47,24 +48,24 @@ def _index_of(expr: str, shape) -> str:
 
 
 def test_positive_stride_scales_the_iter():
-    assert _index_of("a[0::2]", ("12", )) == "a[i * 2]"
-    assert _index_of("a[3::2]", ("12", )) == "a[i * 2 + 3]"
+    assert _index_of("a[0::2]", ("12",)) == "a[i * 2]"
+    assert _index_of("a[3::2]", ("12",)) == "a[i * 2 + 3]"
 
 
 def test_full_axis_reverse_counts_down_from_the_last_element():
-    assert _index_of("a[::-1]", ("N", )) == "a[i * -1 + (N - 1)]"
-    assert _index_of("a[::-2]", ("12", )) == "a[i * -2 + (12 - 1)]"
+    assert _index_of("a[::-1]", ("N",)) == "a[i * -1 + (N - 1)]"
+    assert _index_of("a[::-2]", ("12",)) == "a[i * -2 + (12 - 1)]"
 
 
 def test_unit_stride_index_is_unchanged():
     # The step-free forms must render exactly as before -- no stray ``* 1``.
-    assert _index_of("a[:]", ("N", )) == "a[i]"
-    assert _index_of("a[2:]", ("N", )) == "a[i + 2]"
+    assert _index_of("a[:]", ("N",)) == "a[i]"
+    assert _index_of("a[2:]", ("N",)) == "a[i + 2]"
 
 
 def test_extent_and_index_agree_on_the_last_element():
     # The last iteration must land inside the axis: extent 6, index 2*5 = 10 < 12.
-    ext = _iter_extent_of(ast.parse("a[0::2]", mode="eval").body, {"a": ("12", )})
+    ext = _iter_extent_of(ast.parse("a[0::2]", mode="eval").body, {"a": ("12",)})
     assert ast.unparse(ast.fix_missing_locations(ext[0])) == "6"
 
 
@@ -74,67 +75,60 @@ def test_extent_and_index_agree_on_the_last_element():
 def test_strided_operand_of_elementwise_matches_numpy():
     src = "import numpy as np\ndef f(a, b, out):\n    out[:] = np.maximum(a[0::2], b)\n"
     _assert_ok(
-        run_op(src,
-               "f", {
-                   "a": _A12,
-                   "b": _ZERO6
-               }, {"out": (6, )}, {"N": 12},
-               shapes={
-                   "a": "(12,)",
-                   "b": "(6,)",
-                   "out": "(6,)"
-               },
-               backends=_NATIVE))
+        run_op(
+            src,
+            "f",
+            {"a": _A12, "b": _ZERO6},
+            {"out": (6,)},
+            {"N": 12},
+            shapes={"a": "(12,)", "b": "(6,)", "out": "(6,)"},
+            backends=_NATIVE,
+        )
+    )
 
 
 def test_reverse_operand_of_elementwise_matches_numpy():
     src = "import numpy as np\ndef f(a, b, out):\n    out[:] = np.maximum(a[::-1], b)\n"
     _assert_ok(
-        run_op(src,
-               "f", {
-                   "a": np.arange(1.0, 7.0),
-                   "b": _ZERO6
-               }, {"out": (6, )}, {"N": 6},
-               shapes={
-                   "a": "(6,)",
-                   "b": "(6,)",
-                   "out": "(6,)"
-               },
-               backends=_NATIVE))
+        run_op(
+            src,
+            "f",
+            {"a": np.arange(1.0, 7.0), "b": _ZERO6},
+            {"out": (6,)},
+            {"N": 6},
+            shapes={"a": "(6,)", "b": "(6,)", "out": "(6,)"},
+            backends=_NATIVE,
+        )
+    )
 
 
 def test_strided_operand_of_dot_matches_numpy():
     src = "import numpy as np\ndef f(a, b, out):\n    out[0] = np.dot(a[0::2], b)\n"
     _assert_ok(
-        run_op(src,
-               "f", {
-                   "a": _A12,
-                   "b": np.ones(6)
-               }, {"out": (1, )}, {"N": 12},
-               shapes={
-                   "a": "(12,)",
-                   "b": "(6,)",
-                   "out": "(1,)"
-               },
-               backends=_NATIVE))
+        run_op(
+            src,
+            "f",
+            {"a": _A12, "b": np.ones(6)},
+            {"out": (1,)},
+            {"N": 12},
+            shapes={"a": "(12,)", "b": "(6,)", "out": "(1,)"},
+            backends=_NATIVE,
+        )
+    )
 
 
 def test_strided_slice_assign_still_matches_numpy():
     # dwt2d's Haar shape: a bare strided slice ASSIGN, which lowering (not the
     # operand scalarizer) rewrites. Was always correct -- pinned against regression.
-    src = ("import numpy as np\n"
-           "def f(a, lo, hi):\n"
-           "    lo[:] = a[0::2]\n"
-           "    hi[:] = a[1::2]\n")
+    src = "import numpy as np\ndef f(a, lo, hi):\n    lo[:] = a[0::2]\n    hi[:] = a[1::2]\n"
     _assert_ok(
-        run_op(src,
-               "f", {"a": _A12}, {
-                   "lo": (6, ),
-                   "hi": (6, )
-               }, {"N": 12},
-               shapes={
-                   "a": "(12,)",
-                   "lo": "(6,)",
-                   "hi": "(6,)"
-               },
-               backends=_NATIVE))
+        run_op(
+            src,
+            "f",
+            {"a": _A12},
+            {"lo": (6,), "hi": (6,)},
+            {"N": 12},
+            shapes={"a": "(12,)", "lo": "(6,)", "hi": "(6,)"},
+            backends=_NATIVE,
+        )
+    )

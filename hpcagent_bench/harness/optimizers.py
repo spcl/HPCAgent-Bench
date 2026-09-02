@@ -24,6 +24,7 @@ Signatures come from the kernel's :class:`Binding` (the single ABI source of
 truth) via :func:`gen_call_stub`, so an optimizer never re-derives argument order
 or symbol names. :func:`optimizer_registry` names them for ``hpcagent-bench agent``.
 """
+
 import pathlib
 import shutil
 import subprocess
@@ -50,8 +51,9 @@ def openblas_flags() -> Tuple[List[str], List[str]]:
     pc = shutil.which("pkg-config")
     if pc:
         try:
-            cflags = subprocess.run([pc, "--cflags", "openblas"], capture_output=True, text=True,
-                                    check=True).stdout.split()
+            cflags = subprocess.run(
+                [pc, "--cflags", "openblas"], capture_output=True, text=True, check=True
+            ).stdout.split()
             libs = subprocess.run([pc, "--libs", "openblas"], capture_output=True, text=True, check=True).stdout.split()
             return cflags, libs
         except (subprocess.CalledProcessError, OSError):
@@ -71,10 +73,15 @@ def have_openblas() -> bool:
     _cflags, libs = openblas_flags()
     with tempfile.TemporaryDirectory() as d:
         out = pathlib.Path(d) / "probe"
-        return subprocess.run([cc, "-xc", "-", *libs, "-o", str(out)],
-                              input="int main(void){return 0;}",
-                              text=True,
-                              capture_output=True).returncode == 0
+        return (
+            subprocess.run(
+                [cc, "-xc", "-", *libs, "-o", str(out)],
+                input="int main(void){return 0;}",
+                text=True,
+                capture_output=True,
+            ).returncode
+            == 0
+        )
 
 
 class LibraryOptimizer(Agent):
@@ -92,8 +99,9 @@ class LibraryOptimizer(Agent):
     def __init__(self, workdir: Optional[pathlib.Path] = None):
         self._workdir = pathlib.Path(workdir) if workdir is not None else None
 
-    def _build_so(self, task: Task, source: str, *, extra_compile: Sequence[str] = (),
-                  extra_link: Sequence[str] = ()) -> pathlib.Path:
+    def _build_so(
+        self, task: Task, source: str, *, extra_compile: Sequence[str] = (), extra_link: Sequence[str] = ()
+    ) -> pathlib.Path:
         """Compile + link ``source`` into a ``.so`` we own (the ABI-mode path).
 
         With no ``workdir`` the ``.so`` lands in a fresh ``mkdtemp`` dir that
@@ -113,11 +121,9 @@ class LibraryOptimizer(Agent):
             # workdir for the same kernel in C and Fortran must not overwrite the
             # first .so (the throwaway mkdtemp path is already per-build unique).
             lib = root / f"lib{task.kernel}_{task.language}.so"
-            cmds = languages.build_shared_lib_commands(task.language,
-                                                       src,
-                                                       lib,
-                                                       extra_compile=extra_compile,
-                                                       extra_link=extra_link)
+            cmds = languages.build_shared_lib_commands(
+                task.language, src, lib, extra_compile=extra_compile, extra_link=extra_link
+            )
             # One shared build loop (languages.run_build_commands) -- same capture /
             # OSError / returncode handling as Sandbox.build and build_reference_lib.
             failed, log = languages.run_build_commands(cmds, root)
@@ -131,12 +137,9 @@ class LibraryOptimizer(Agent):
                 shutil.rmtree(root, ignore_errors=True)
             raise
 
-    def _library_submission(self,
-                            task: Task,
-                            source: str,
-                            *,
-                            extra_compile: Sequence[str] = (),
-                            extra_link: Sequence[str] = ()) -> Submission:
+    def _library_submission(
+        self, task: Task, source: str, *, extra_compile: Sequence[str] = (), extra_link: Sequence[str] = ()
+    ) -> Submission:
         """Build ``source`` to a ``.so`` and wrap it in a :class:`Submission` that
         OWNS the throwaway build dir -- the dir is removed when the submission is
         collected, so the ``.so`` cannot vanish before the judge copies it."""
@@ -195,12 +198,15 @@ class NoOpMPIOptimizer(Agent):
 
     def solve(self, task: Task, prompt: str = "", budget: Optional[int] = None) -> Submission:
         if task.residency != "distributed":
-            raise NotImplementedError(f"{self.name} is the distributed-track optimizer; "
-                                      f"got residency {task.residency!r} (use 'noop' for single-node)")
+            raise NotImplementedError(
+                f"{self.name} is the distributed-track optimizer; "
+                f"got residency {task.residency!r} (use 'noop' for single-node)"
+            )
         spec = BenchSpec.load(task.kernel)
         if not spec.mpi:
-            raise NotImplementedError(f"{task.kernel} declares no 'mpi:' decomposition block; "
-                                      f"the distributed track needs one")
+            raise NotImplementedError(
+                f"{task.kernel} declares no 'mpi:' decomposition block; the distributed track needs one"
+            )
         binding = binding_from_spec(spec)
         ranks = int(config.get("mpi.ranks", 4))
         # The default 1-D block layout, read from the kernel's ``mpi:`` block: a kernel with
@@ -224,28 +230,23 @@ class BlasReductionOptimizer(LibraryOptimizer):
     #: kernel short-name -> the BLAS body computing each declared output (the
     #: argument names are the canonical C-ABI ones from the binding).
     _BODIES = {
-        "tsvc_2_vdotr":
-        "    dot_out[0] = cblas_ddot((int)LEN_1D, a, 1, b, 1);",
+        "tsvc_2_vdotr": "    dot_out[0] = cblas_ddot((int)LEN_1D, a, 1, b, 1);",
         # gesummv: out = alpha*A@x + beta*B@x -- two accumulating dgemv calls.
-        "gesummv":
-        ("    cblas_dgemv(CblasRowMajor, CblasNoTrans, (int)N, (int)N, alpha, A, (int)N, x, 1, 0.0, out, 1);\n"
-         "    cblas_dgemv(CblasRowMajor, CblasNoTrans, (int)N, (int)N, beta,  B, (int)N, x, 1, 1.0, out, 1);"),
+        "gesummv": (
+            "    cblas_dgemv(CblasRowMajor, CblasNoTrans, (int)N, (int)N, alpha, A, (int)N, x, 1, 0.0, out, 1);\n"
+            "    cblas_dgemv(CblasRowMajor, CblasNoTrans, (int)N, (int)N, beta,  B, (int)N, x, 1, 1.0, out, 1);"
+        ),
     }
 
     def _emit_source(self, task: Task) -> str:
         """Render the C-ABI signature from the binding, fill in the BLAS body."""
         binding = binding_from_spec(BenchSpec.load(task.kernel))
         header = gen_call_stub(binding, "c").split(") {", 1)[0] + ") {"
-        return ("#include <stdint.h>\n"
-                "#include <cblas.h>\n"
-                f"{header}\n"
-                f"{self._BODIES[task.kernel]}\n"
-                "}\n")
+        return f"#include <stdint.h>\n#include <cblas.h>\n{header}\n{self._BODIES[task.kernel]}\n}}\n"
 
     def solve(self, task: Task, prompt: str = "", budget: Optional[int] = None) -> Submission:
         if task.kernel not in self._BODIES:
-            raise NotImplementedError(f"{self.name} only optimizes {sorted(self._BODIES)}; "
-                                      f"got {task.kernel!r}")
+            raise NotImplementedError(f"{self.name} only optimizes {sorted(self._BODIES)}; got {task.kernel!r}")
         if task.language != "c":
             raise NotImplementedError(f"{self.name} emits C only; got language {task.language!r}")
         source = self._emit_source(task)
@@ -262,6 +263,7 @@ class BlasReductionOptimizer(LibraryOptimizer):
 def backend_importable(module: str) -> bool:
     """Whether ``module`` imports here -- the autotuner backend's availability gate."""
     import importlib
+
     try:
         importlib.import_module(module)
         return True
@@ -312,8 +314,7 @@ class TVMAutotunerOptimizer(AutotunerOptimizer):
     install_hint = "pip install apache-tvm"
 
     def _tuned_source(self, task: Task, binding) -> str:
-        raise NotImplementedError(f"no TVM schedule mapped for {task.kernel!r} yet "
-                                  f"(add its TE/Relax description here)")
+        raise NotImplementedError(f"no TVM schedule mapped for {task.kernel!r} yet (add its TE/Relax description here)")
 
 
 class TritonOptimizer(AutotunerOptimizer):
@@ -330,8 +331,9 @@ class TritonOptimizer(AutotunerOptimizer):
     install_hint = "pip install triton (and a CUDA/HIP GPU)"
 
     def _tuned_source(self, task: Task, binding) -> str:
-        raise NotImplementedError(f"no Triton kernel mapped for {task.kernel!r} yet "
-                                  f"(add its @triton.jit kernel + host wrapper here)")
+        raise NotImplementedError(
+            f"no Triton kernel mapped for {task.kernel!r} yet (add its @triton.jit kernel + host wrapper here)"
+        )
 
 
 def optimizer_registry() -> dict:

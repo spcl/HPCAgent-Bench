@@ -29,6 +29,7 @@ same reason the AXIS slot was never folded.
 
 Marked ``integration``: it parses the whole registry.
 """
+
 import ast
 import contextlib
 from typing import Dict, List
@@ -77,5 +78,7 @@ def folded_abi_arguments(monkeypatch: pytest.MonkeyPatch) -> Dict[str, List[str]
 def test_no_kernel_folds_a_value_its_own_binding_passes(monkeypatch: pytest.MonkeyPatch) -> None:
     """One sweep, whole corpus. No waiver list: a fold of an ABI name is a regression, not a backlog."""
     observed = folded_abi_arguments(monkeypatch)
-    assert not observed, (f"these kernels fold an argument their own binding passes, so the emitted signature "
-                          f"lies about what the body reads: {observed}")
+    assert not observed, (
+        f"these kernels fold an argument their own binding passes, so the emitted signature "
+        f"lies about what the body reads: {observed}"
+    )

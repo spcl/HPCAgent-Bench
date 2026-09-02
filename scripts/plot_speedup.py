@@ -42,6 +42,7 @@ baseline's cleaned MEDIAN rather than a per-repetition partner, because the samp
 -- so a box is the CANDIDATE's spread in speed-up units, never a manufactured ratio distribution.
 A cell with too few cleaned repetitions keeps its marker and is counted in a warning.
 """
+
 import argparse
 import math
 import pathlib
@@ -78,6 +79,7 @@ class Point(NamedTuple):
     without them, and a cell with fewer than :data:`MIN_BOX_SAMPLES` is drawn as a marker whatever
     the mode -- a box over one or two points draws a quartile range that was never measured.
     """
+
     kernel: str
     framework: str
     ratio: float  # t_baseline / t_candidate -- > 1 is faster than the baseline
@@ -146,9 +148,9 @@ def cell_changes(samples: Sequence[float], base_time: float, label: str = "") ->
     return tuple(c for c in changes if not math.isnan(c))
 
 
-def speedup_points(summary: pd.DataFrame,
-                   baseline: str = plotting.BASELINE,
-                   data: Optional[pd.DataFrame] = None) -> List[Point]:
+def speedup_points(
+    summary: pd.DataFrame, baseline: str = plotting.BASELINE, data: Optional[pd.DataFrame] = None
+) -> List[Point]:
     """Per (kernel, framework) median speed-up over ``baseline``, as plottable points.
 
     ``summary`` is a :func:`hpcagent_bench.plotting.cell_summary` frame -- one row per
@@ -185,8 +187,10 @@ def speedup_points(summary: pd.DataFrame,
             samples = cell_changes(per_cell[key], base_time, f"{kernel}@{row.framework}") if key in per_cell else ()
             points.append(Point(str(kernel), str(row.framework), ratio, change, band, samples))
     if unusable:
-        warnings.warn(f"dropped {len(unusable)} cell(s) with no usable speed-up "
-                      f"(missing baseline, or a non-positive / non-finite median): {', '.join(unusable)}")
+        warnings.warn(
+            f"dropped {len(unusable)} cell(s) with no usable speed-up "
+            f"(missing baseline, or a non-positive / non-finite median): {', '.join(unusable)}"
+        )
     return points
 
 
@@ -267,14 +271,16 @@ def draw_boxes(ax, points: Sequence[Point], x_of: Dict[str, int], colors: Dict[s
         if not boxed:
             continue
         color = colors[framework]
-        artists = ax.boxplot([list(p.samples) for p in boxed],
-                             positions=[x_of[p.kernel] + offsets[framework] for p in boxed],
-                             widths=width * 0.85,
-                             patch_artist=True,
-                             manage_ticks=False,
-                             showfliers=True,
-                             flierprops=dict(marker=".", markersize=1.6, markerfacecolor=color, markeredgecolor="none"),
-                             medianprops=dict(color="0.1", linewidth=0.7))
+        artists = ax.boxplot(
+            [list(p.samples) for p in boxed],
+            positions=[x_of[p.kernel] + offsets[framework] for p in boxed],
+            widths=width * 0.85,
+            patch_artist=True,
+            manage_ticks=False,
+            showfliers=True,
+            flierprops=dict(marker=".", markersize=1.6, markerfacecolor=color, markeredgecolor="none"),
+            medianprops=dict(color="0.1", linewidth=0.7),
+        )
         for box in artists["boxes"]:
             box.set(facecolor=color, edgecolor=color, alpha=0.55, linewidth=0.5)
         for part in ("whiskers", "caps"):
@@ -283,12 +289,9 @@ def draw_boxes(ax, points: Sequence[Point], x_of: Dict[str, int], colors: Dict[s
     return unboxed
 
 
-def draw_band(ax,
-              band: str,
-              points: Sequence[Point],
-              x_of: Dict[str, int],
-              colors: Dict[str, str],
-              boxes: bool = False) -> None:
+def draw_band(
+    ax, band: str, points: Sequence[Point], x_of: Dict[str, int], colors: Dict[str, str], boxes: bool = False
+) -> None:
     """One panel: its band's points at their kernel's shared x position, on the band's own y scale.
 
     With ``boxes`` the cells that carry enough repetitions are drawn as boxes and the rest keep
@@ -302,12 +305,15 @@ def draw_band(ax,
         # clip_on=False: the limits below close exactly on the extreme point, so a clipped marker is
         # drawn as a half-disc at the axis edge -- worst in the ``> 10x`` band, whose whole job is to
         # show the outlier. The point is inside the axes; only its radius is not.
-        ax.plot([x_of[point.kernel] for point in mine], [point.change for point in mine],
-                linestyle="none",
-                marker="o",
-                markersize=3.0,
-                clip_on=False,
-                color=colors[framework])
+        ax.plot(
+            [x_of[point.kernel] for point in mine],
+            [point.change for point in mine],
+            linestyle="none",
+            marker="o",
+            markersize=3.0,
+            clip_on=False,
+            color=colors[framework],
+        )
     # The box reaches past its cell's median, so the panel is closed on the whiskers too -- limits
     # taken from the medians alone would clip the very spread the boxes were added to show.
     spread = [value for point in points for value in (point.samples if boxes else ())]
@@ -335,13 +341,15 @@ def figure_legend(fig, colors: Dict[str, str], boxes: bool = False) -> None:
         ]
     else:
         handles = [plt.Line2D([], [], linestyle="none", marker="o", color=color) for color in colors.values()]
-    fig.legend(handles,
-               list(colors),
-               loc="upper center",
-               ncol=min(len(colors), 6),
-               bbox_to_anchor=(0.5, 1.02),
-               fontsize=7,
-               frameon=False)
+    fig.legend(
+        handles,
+        list(colors),
+        loc="upper center",
+        ncol=min(len(colors), 6),
+        bbox_to_anchor=(0.5, 1.02),
+        fontsize=7,
+        frameon=False,
+    )
 
 
 def label_kernels(ax, kernels: Sequence[str]) -> None:
@@ -367,11 +375,9 @@ def panel_heights(points: Sequence[Point], present: Sequence[str], compact: bool
     return [min(0.60, max(0.18, count / total)) for count in counts]
 
 
-def banded_figure(points: Sequence[Point],
-                  kernels: Sequence[str],
-                  output: str,
-                  boxes: bool = False,
-                  compact: bool = False) -> str:
+def banded_figure(
+    points: Sequence[Point], kernels: Sequence[str], output: str, boxes: bool = False, compact: bool = False
+) -> str:
     """The three-panel figure: one panel per NON-EMPTY band, over one shared kernel axis.
 
     An empty band is DROPPED rather than drawn empty. An empty panel carries no information, and
@@ -387,12 +393,14 @@ def banded_figure(points: Sequence[Point],
     present = [band for band in BANDS if any(point.band == band for point in points)]
     width = min(20.0, max(6.8, 0.16 * len(kernels)))
     per_panel = 1.15 if compact else 1.9
-    fig, axes = plt.subplots(len(present),
-                             1,
-                             sharex=True,
-                             figsize=(width, max(1.8 if compact else 2.4, per_panel * len(present))),
-                             squeeze=False,
-                             gridspec_kw={"height_ratios": panel_heights(points, present, compact)})
+    fig, axes = plt.subplots(
+        len(present),
+        1,
+        sharex=True,
+        figsize=(width, max(1.8 if compact else 2.4, per_panel * len(present))),
+        squeeze=False,
+        gridspec_kw={"height_ratios": panel_heights(points, present, compact)},
+    )
     for row, band in zip(axes, present):
         draw_band(row[0], band, [point for point in points if point.band == band], x_of, colors, boxes=boxes)
     label_kernels(axes[-1][0], kernels)
@@ -412,11 +420,9 @@ def dominant_band(points: Sequence[Point]) -> str:
     return max(BANDS, key=lambda band: counts[band])
 
 
-def simple_figure(points: Sequence[Point],
-                  kernels: Sequence[str],
-                  output: str,
-                  boxes: bool = False,
-                  bare: bool = False) -> str:
+def simple_figure(
+    points: Sequence[Point], kernels: Sequence[str], output: str, boxes: bool = False, bare: bool = False
+) -> str:
     """The SIMPLIFIED single-order-of-magnitude variant (SVG): one band, one y axis.
 
     Only the dominant band's kernels get an x slot -- this is a standalone figure, so keeping the
@@ -612,13 +618,15 @@ def square_figure(points: Sequence[Point], output: str, cells: int = SQUARE_CELL
     for framework in frameworks:
         mine = [p for p in points if p.framework == framework and p.kernel in x_of]
         color = colors[framework]
-        artists = ax.boxplot([list(p.samples) or [p.change] for p in mine],
-                             positions=[x_of[p.kernel] + offsets[framework] for p in mine],
-                             widths=width * 0.92,
-                             patch_artist=True,
-                             manage_ticks=False,
-                             showfliers=False,
-                             medianprops=dict(color="0.1", linewidth=1.8))
+        artists = ax.boxplot(
+            [list(p.samples) or [p.change] for p in mine],
+            positions=[x_of[p.kernel] + offsets[framework] for p in mine],
+            widths=width * 0.92,
+            patch_artist=True,
+            manage_ticks=False,
+            showfliers=False,
+            medianprops=dict(color="0.1", linewidth=1.8),
+        )
         for box in artists["boxes"]:
             box.set(facecolor=color, edgecolor=color, alpha=0.7, linewidth=1.5)
         for part in ("whiskers", "caps"):
@@ -650,16 +658,18 @@ def variant_output(output: str, variant: str) -> str:
     return str(path.with_name(f"{path.stem}-{variant}.svg"))
 
 
-def plot_signed_speedup(benchmark: str = "all",
-                        preset: str = "S",
-                        datatype: str = "float64",
-                        variant: Optional[str] = None,
-                        order: str = BY_DWARF,
-                        db: Optional[str] = None,
-                        output: str = PLOTS_DIR + "/speedup.pdf",
-                        usetex: bool = True,
-                        boxes: bool = False,
-                        compact: bool = False) -> List[str]:
+def plot_signed_speedup(
+    benchmark: str = "all",
+    preset: str = "S",
+    datatype: str = "float64",
+    variant: Optional[str] = None,
+    order: str = BY_DWARF,
+    db: Optional[str] = None,
+    output: str = PLOTS_DIR + "/speedup.pdf",
+    usetex: bool = True,
+    boxes: bool = False,
+    compact: bool = False,
+) -> List[str]:
     """Read ``db`` and emit the banded figure + both SVG variants PER MACHINE; returns the paths.
 
     ``output`` names a FAMILY, not a file: each machine's files carry its label
@@ -683,28 +693,36 @@ def plot_signed_speedup(benchmark: str = "all",
     for label, rows in plotting.machine_groups(everything):
         points = speedup_points(plotting.cell_summary(rows), data=rows if boxes else None)
         if not points:
-            warnings.warn(f"machine {label}: no kernel has a plottable speed-up over "
-                          f"{plotting.BASELINE!r}; no figure written for it")
+            warnings.warn(
+                f"machine {label}: no kernel has a plottable speed-up over "
+                f"{plotting.BASELINE!r}; no figure written for it"
+            )
             continue
         if boxes:
             thin = sum(1 for point in points if len(point.samples) < MIN_BOX_SAMPLES)
             if thin:
-                warnings.warn(f"machine {label}: {thin} of {len(points)} cell(s) have fewer than "
-                              f"{MIN_BOX_SAMPLES} cleaned repetitions and are drawn as their median marker, "
-                              f"not as a box -- re-run those cells with more repetitions for a spread")
+                warnings.warn(
+                    f"machine {label}: {thin} of {len(points)} cell(s) have fewer than "
+                    f"{MIN_BOX_SAMPLES} cleaned repetitions and are drawn as their median marker, "
+                    f"not as a box -- re-run those cells with more repetitions for a spread"
+                )
         kernels = plotted_kernels(points, order)
         written.append(banded_figure(points, kernels, plotting.machine_output(output, label), boxes, compact))
         written.append(
-            simple_figure(points, kernels, plotting.machine_output(variant_output(output, "simple"), label), boxes))
+            simple_figure(points, kernels, plotting.machine_output(variant_output(output, "simple"), label), boxes)
+        )
         written.append(
-            mini_figure(points, kernels, plotting.machine_output(variant_output(output, "mini"), label), boxes))
+            mini_figure(points, kernels, plotting.machine_output(variant_output(output, "mini"), label), boxes)
+        )
     # Writing nothing must FAIL, not exit 0: a plot leg that reports success while producing no
     # file is the failure that looks like a clean run (the guard plot_heatmap grew for the same).
     if not written:
-        raise RuntimeError(f"no speed-up to plot: benchmark={benchmark!r} preset={preset!r} "
-                           f"datatype={datatype!r} variant={variant!r} db={db!r}. The DB has no "
-                           f"validated, domained rows pairing a candidate framework with the "
-                           f"{plotting.BASELINE!r} baseline on one machine.")
+        raise RuntimeError(
+            f"no speed-up to plot: benchmark={benchmark!r} preset={preset!r} "
+            f"datatype={datatype!r} variant={variant!r} db={db!r}. The DB has no "
+            f"validated, domained rows pairing a candidate framework with the "
+            f"{plotting.BASELINE!r} baseline on one machine."
+        )
     return written
 
 
@@ -778,14 +796,16 @@ def demo_points(seed: int = DEMO_SEED, repeats: int = DEMO_REPEATS) -> List[Poin
     return points
 
 
-def plot_demo(output: str,
-              order: str = BY_DWARF,
-              usetex: bool = True,
-              seed: int = DEMO_SEED,
-              boxes: bool = False,
-              compact: bool = False,
-              square: bool = False,
-              bare: bool = False) -> List[str]:
+def plot_demo(
+    output: str,
+    order: str = BY_DWARF,
+    usetex: bool = True,
+    seed: int = DEMO_SEED,
+    boxes: bool = False,
+    compact: bool = False,
+    square: bool = False,
+    bare: bool = False,
+) -> List[str]:
     """Render the three figures from :func:`demo_points`; returns the paths written.
 
     No machine label in the names: synthetic data was measured on no machine, and a label that
@@ -806,60 +826,74 @@ def plot_demo(output: str,
 
 def build_parser() -> argparse.ArgumentParser:
     """CLI mirroring ``hpcagent-bench plot``'s selection flags, so one habit drives both figures."""
-    p = argparse.ArgumentParser(description="median speed-up per kernel as signed relative change, "
-                                "banded by order of magnitude")
+    p = argparse.ArgumentParser(
+        description="median speed-up per kernel as signed relative change, banded by order of magnitude"
+    )
     p.add_argument(
         "-b",
         "--benchmark",
         default="all",
-        help="selector: a kernel, a track, a dwarf, or a level (scientific_computing@lvl1, lvl2). Default: all")
+        help="selector: a kernel, a track, a dwarf, or a level (scientific_computing@lvl1, lvl2). Default: all",
+    )
     p.add_argument("-p", "--preset", default="S", help="preset to plot (default S)")
-    p.add_argument("-d",
-                   "--datatype",
-                   choices=["float32", "float64"],
-                   default="float64",
-                   help="precision to plot (default float64; legacy NULL rows treated as float64)")
+    p.add_argument(
+        "-d",
+        "--datatype",
+        choices=["float32", "float64"],
+        default="float64",
+        help="precision to plot (default float64; legacy NULL rows treated as float64)",
+    )
     p.add_argument("-V", "--variant", default=None, help="restrict to a single sparse variant")
-    p.add_argument("--order",
-                   choices=list(ORDER_MODES),
-                   default=BY_DWARF,
-                   help="kernel ordering: by_dwarf (default) or by_level")
-    p.add_argument("--no-usetex",
-                   action="store_true",
-                   default=False,
-                   help="render without LaTeX (for a box with no LaTeX install)")
+    p.add_argument(
+        "--order", choices=list(ORDER_MODES), default=BY_DWARF, help="kernel ordering: by_dwarf (default) or by_level"
+    )
+    p.add_argument(
+        "--no-usetex", action="store_true", default=False, help="render without LaTeX (for a box with no LaTeX install)"
+    )
     p.add_argument("--db", default=None, help="SQLite results DB to read (default: the configured record.db_path)")
-    p.add_argument("--demo",
-                   action="store_true",
-                   default=False,
-                   help=f"render from SYNTHETIC random data (seed {DEMO_SEED}), three kernels in every band; "
-                   "reads no DB. For judging the figure itself.")
-    p.add_argument("--boxplot",
-                   action="store_true",
-                   default=False,
-                   help=f"draw each cell's run-to-run spread as a box instead of a single median marker. A cell "
-                   f"with fewer than {MIN_BOX_SAMPLES} cleaned repetitions keeps its marker and is counted in a "
-                   "warning, so a thinly-sampled DB says so rather than drawing quartiles nobody measured")
-    p.add_argument("--compact",
-                   action="store_true",
-                   default=False,
-                   help="shorter banded figure for a paper column: panel heights weighted by band population "
-                   "instead of split equally. Layout only -- no cell is dropped")
-    p.add_argument("--bare",
-                   action="store_true",
-                   default=False,
-                   help="strip the title, legend, y label and kernel names from the SIMPLE variant, leaving the "
-                   "boxes, the zero line and the y numbers. The hidden-point count lives in the title, so a bare "
-                   "figure no longer states that it shows one band of several -- put that in the caption")
-    p.add_argument("--square",
-                   action="store_true",
-                   default=False,
-                   help=f"write ONLY a square {SQUARE_SIDE}x{SQUARE_SIDE}in panel of {SQUARE_CELLS} boxes with no "
-                   "title, legend or kernel names, for an embed. Implies --boxplot")
-    p.add_argument("--output",
-                   default=PLOTS_DIR + "/speedup.pdf",
-                   help=f"PDF path family for the banded figure (default {PLOTS_DIR}/speedup.pdf); the two SVG "
-                   "variants are written beside it as <stem>-simple.<machine>.svg and <stem>-mini.<machine>.svg")
+    p.add_argument(
+        "--demo",
+        action="store_true",
+        default=False,
+        help=f"render from SYNTHETIC random data (seed {DEMO_SEED}), three kernels in every band; "
+        "reads no DB. For judging the figure itself.",
+    )
+    p.add_argument(
+        "--boxplot",
+        action="store_true",
+        default=False,
+        help=f"draw each cell's run-to-run spread as a box instead of a single median marker. A cell "
+        f"with fewer than {MIN_BOX_SAMPLES} cleaned repetitions keeps its marker and is counted in a "
+        "warning, so a thinly-sampled DB says so rather than drawing quartiles nobody measured",
+    )
+    p.add_argument(
+        "--compact",
+        action="store_true",
+        default=False,
+        help="shorter banded figure for a paper column: panel heights weighted by band population "
+        "instead of split equally. Layout only -- no cell is dropped",
+    )
+    p.add_argument(
+        "--bare",
+        action="store_true",
+        default=False,
+        help="strip the title, legend, y label and kernel names from the SIMPLE variant, leaving the "
+        "boxes, the zero line and the y numbers. The hidden-point count lives in the title, so a bare "
+        "figure no longer states that it shows one band of several -- put that in the caption",
+    )
+    p.add_argument(
+        "--square",
+        action="store_true",
+        default=False,
+        help=f"write ONLY a square {SQUARE_SIDE}x{SQUARE_SIDE}in panel of {SQUARE_CELLS} boxes with no "
+        "title, legend or kernel names, for an embed. Implies --boxplot",
+    )
+    p.add_argument(
+        "--output",
+        default=PLOTS_DIR + "/speedup.pdf",
+        help=f"PDF path family for the banded figure (default {PLOTS_DIR}/speedup.pdf); the two SVG "
+        "variants are written beside it as <stem>-simple.<machine>.svg and <stem>-mini.<machine>.svg",
+    )
     return p
 
 
@@ -867,25 +901,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     """CLI entry point: print every path written."""
     args = build_parser().parse_args(argv)
     if args.demo:
-        for path in plot_demo(args.output,
-                              order=args.order,
-                              usetex=not args.no_usetex,
-                              boxes=args.boxplot or args.square,
-                              compact=args.compact,
-                              square=args.square,
-                              bare=args.bare):
+        for path in plot_demo(
+            args.output,
+            order=args.order,
+            usetex=not args.no_usetex,
+            boxes=args.boxplot or args.square,
+            compact=args.compact,
+            square=args.square,
+            bare=args.bare,
+        ):
             print(path)
         return 0
-    for path in plot_signed_speedup(benchmark=args.benchmark,
-                                    preset=args.preset,
-                                    datatype=args.datatype,
-                                    variant=args.variant,
-                                    order=args.order,
-                                    db=args.db,
-                                    output=args.output,
-                                    usetex=not args.no_usetex,
-                                    boxes=args.boxplot,
-                                    compact=args.compact):
+    for path in plot_signed_speedup(
+        benchmark=args.benchmark,
+        preset=args.preset,
+        datatype=args.datatype,
+        variant=args.variant,
+        order=args.order,
+        db=args.db,
+        output=args.output,
+        usetex=not args.no_usetex,
+        boxes=args.boxplot,
+        compact=args.compact,
+    ):
         print(path)
     return 0
 

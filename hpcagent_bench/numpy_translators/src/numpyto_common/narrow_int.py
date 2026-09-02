@@ -30,6 +30,7 @@ overflow their own width; ``&``/``|``/``^``/``>>`` only combine or drop bits alr
 inside the width, so they cannot either. Only their sub-expressions can overflow,
 which the recursion already covers.
 """
+
 import ast
 from typing import Callable, Optional
 
@@ -43,8 +44,19 @@ _WEAK_INT = "\0weakint"  # a Python int literal: does not widen a concrete int (
 
 #: BinOps under which numpy keeps an integer result (so the inference recurses into
 #: them). ``Div`` is handled separately -- true division is always float.
-_INT_PRESERVING = (ast.Add, ast.Sub, ast.Mult, ast.FloorDiv, ast.Mod, ast.Pow, ast.BitAnd, ast.BitOr, ast.BitXor,
-                   ast.LShift, ast.RShift)
+_INT_PRESERVING = (
+    ast.Add,
+    ast.Sub,
+    ast.Mult,
+    ast.FloorDiv,
+    ast.Mod,
+    ast.Pow,
+    ast.BitAnd,
+    ast.BitOr,
+    ast.BitXor,
+    ast.LShift,
+    ast.RShift,
+)
 
 #: The ops whose wide result is re-wrapped: a narrow intermediate overflows here.
 #: ``**`` is exponential and ``<<`` shifts bits past the top of the width, so both

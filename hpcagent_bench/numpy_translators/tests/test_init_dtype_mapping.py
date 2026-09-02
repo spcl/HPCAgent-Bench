@@ -15,6 +15,7 @@ authoritative source. These tests pin both directions of that gate. A full
 emit+compile+run numerical check of the fix lives in
 ``test_translator_feature_fixes::test_feature_kernels_e2e[cloudsc]``.
 """
+
 import pathlib
 import textwrap
 
@@ -39,14 +40,16 @@ def test_mismatched_length_skips_positional_mapping(tmp_path):
     # would put ``flags``'s int32 onto ``flux`` (float). The length gate must
     # skip it -- only the by-name int32 of ``flags`` survives.
     numpy_py = _write_harness(
-        tmp_path, """
+        tmp_path,
+        """
         import numpy as np
         def initialize():
             flux = np.zeros((4,))
             temp = np.zeros((4,))
             flags = np.zeros((4,)).astype(np.int32)
             return temp, flux, flags
-        """)
+        """,
+    )
     info = {"init": {"func_name": "initialize"}, "input_args": ["flux", "flags"], "array_args": ["flux", "flags"]}
     dtypes = _dtypes_from_initialize(numpy_py, info)
     assert dtypes.get("flags") == "int32"  # by-name: correct
@@ -57,19 +60,19 @@ def test_equal_length_positional_mapping_renamed(tmp_path):
     # Equal length AND order: a kernel that RENAMES the harness locals (idx_in
     # <- idx) inherits the int32 via the gated positional fallback.
     numpy_py = _write_harness(
-        tmp_path, """
+        tmp_path,
+        """
         import numpy as np
         def initialize():
             data = np.zeros((4,))
             idx = np.zeros((4,)).astype(np.int32)
             return data, idx
-        """)
+        """,
+    )
     info = {
-        "init": {
-            "func_name": "initialize"
-        },
+        "init": {"func_name": "initialize"},
         "input_args": ["data_in", "idx_in"],
-        "array_args": ["data_in", "idx_in"]
+        "array_args": ["data_in", "idx_in"],
     }
     dtypes = _dtypes_from_initialize(numpy_py, info)
     assert dtypes.get("idx_in") == "int32"  # positional rename mapping applied
@@ -79,13 +82,15 @@ def test_by_name_dtype_is_recorded(tmp_path):
     # The harness local name == kernel arg name: the dtype is recorded under that
     # name regardless of any positional consideration.
     numpy_py = _write_harness(
-        tmp_path, """
+        tmp_path,
+        """
         import numpy as np
         def initialize():
             mask = np.zeros((4,)).astype(np.int32)
             val = np.zeros((4,))
             return val, mask
-        """)
+        """,
+    )
     info = {"init": {"func_name": "initialize"}, "input_args": ["val", "mask"], "array_args": ["val", "mask"]}
     dtypes = _dtypes_from_initialize(numpy_py, info)
     assert dtypes.get("mask") == "int32"
@@ -104,14 +109,8 @@ def test_by_name_dtype_is_recorded(tmp_path):
 def test_declared_dtypes_reads_the_arrays_entry():
     init = {
         "arrays": {
-            "ip": {
-                "shape": "(N,)",
-                "dtype": "int32"
-            },
-            "z": {
-                "shape": "(N,)",
-                "dtype": "complex128"
-            },
+            "ip": {"shape": "(N,)", "dtype": "int32"},
+            "z": {"shape": "(N,)", "dtype": "complex128"},
             "a": "(N,)",  # shorthand: shape only, no dtype to report
         }
     }
@@ -130,10 +129,13 @@ def test_declared_dtypes_prefers_the_arrays_entry_over_the_legacy_block():
     assert declared_dtypes(init) == {"a": "complex128"}, "the current spelling wins"
 
 
-@pytest.mark.parametrize("short,array,dtype", [
-    ("tsvc_2_s4114", "ip", "int32"),
-    ("fft_1d", "x", "complex128"),
-])
+@pytest.mark.parametrize(
+    "short,array,dtype",
+    [
+        ("tsvc_2_s4114", "ip", "int32"),
+        ("fft_1d", "x", "complex128"),
+    ],
+)
 def test_declared_array_dtype_reaches_the_ir(short, array, dtype):
     """The whole seam, on real manifests: manifest -> emit_bridge export -> parse_kernel.
 

@@ -1,15 +1,16 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The copyright/SPDX header must sit at the top of every core ``.py`` AND survive yapf untouched.
+"""The copyright/SPDX header must sit at the top of every core ``.py`` AND survive the formatter.
 
 Two pre-commit fixers touch the top of a file: ``check_headers.py --fix`` inserts the two-line
 copyright header (after an optional shebang / coding line, so it is the first line of *content*),
-and ``check_format.py --fix`` runs yapf over the body. This test locks both guarantees so the two
-fixers cannot fight -- restamping or shifting the notice on every commit:
+and ``check_format.py --fix`` runs ``ruff format`` over the body. This test locks both guarantees so
+the two fixers cannot fight -- restamping or shifting the notice on every commit:
 
 * ``--fix`` inserts the header at the top, is idempotent (never a second copy), and honours a shebang.
-* a yapf pass leaves those header lines BYTE-FOR-BYTE identical while it reformats the code below.
+* a format pass leaves those header lines BYTE-FOR-BYTE identical while it reformats the code below.
 """
+
 import importlib.util
 import shutil
 import subprocess
@@ -17,7 +18,8 @@ from pathlib import Path
 from typing import List
 
 REPO = Path(__file__).resolve().parent.parent
-STYLE = REPO / ".style.yapf"
+#: Passed explicitly rather than discovered, so the test formats the way check_format.py does.
+LINE_LENGTH = "120"
 HEADER: tuple = (
     "# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.",
     "# SPDX-License-Identifier: GPL-3.0-or-later",
@@ -65,30 +67,30 @@ def test_fix_places_header_after_a_shebang(tmp_path: Path) -> None:
     assert lines[1] == HEADER[0] and lines[2] == HEADER[1]
 
 
-def test_yapf_leaves_the_header_byte_for_byte(tmp_path: Path) -> None:
-    """The OTHER pre-commit fixer must not disturb the header: yapf reformats the mangled body but
+def test_the_formatter_leaves_the_header_byte_for_byte(tmp_path: Path) -> None:
+    """The OTHER pre-commit fixer must not disturb the header: ruff reformats the mangled body but
     the shebang + header lines come out identical to what went in."""
-    yapf = shutil.which("yapf")
-    assert yapf, "yapf must be installed (the format pre-commit hook + CI format-check both require it)"
+    ruff = shutil.which("ruff")
+    assert ruff, "ruff must be installed (the format pre-commit hook + CI format-check both require it)"
     f = tmp_path / "mod.py"
     top = "#!/usr/bin/env python\n" + HEADER[0] + "\n" + HEADER[1] + "\n"
     f.write_text(top + "import   os,sys\ndef  f( x ):\n        return x+1\n", encoding="utf-8")
-    subprocess.run([yapf, "--style", str(STYLE), "-i", str(f)], check=True)
+    subprocess.run([ruff, "format", "--line-length", LINE_LENGTH, str(f)], check=True)
     out: List[str] = f.read_text(encoding="utf-8").splitlines()
     assert out[0] == "#!/usr/bin/env python"
     assert out[1] == HEADER[0] and out[2] == HEADER[1]
     assert "def f(x):" in f.read_text(encoding="utf-8")  # body WAS reformatted (test is meaningful)
 
 
-def test_header_hook_and_yapf_compose(tmp_path: Path) -> None:
-    """End to end: insert the header into a headerless, badly-formatted file, then run yapf -- the
+def test_header_hook_and_the_formatter_compose(tmp_path: Path) -> None:
+    """End to end: insert the header into a headerless, badly-formatted file, then format it -- the
     header is present at the top and untouched, proving the two fixers do not fight."""
-    yapf = shutil.which("yapf")
-    assert yapf, "yapf must be installed"
+    ruff = shutil.which("ruff")
+    assert ruff, "ruff must be installed"
     ch = _load_check_headers()
     f = tmp_path / "mod.py"
     f.write_text("import   os\ndef  h( ):\n    return  os.getpid( )\n", encoding="utf-8")
     assert ch.insert_header(f) is True
-    subprocess.run([yapf, "--style", str(STYLE), "-i", str(f)], check=True)
+    subprocess.run([ruff, "format", "--line-length", LINE_LENGTH, str(f)], check=True)
     lines = f.read_text(encoding="utf-8").splitlines()
     assert lines[0] == HEADER[0] and lines[1] == HEADER[1]

@@ -6,15 +6,16 @@
 #
 # The single hook delegates to scripts/check_format.py --fix -- the SAME script
 # the CI `format-check` job runs in check mode -- so local and CI share one
-# routing table (yapf for .py, clang-format for C/C++, fprettify for Fortran, all
-# at 120 cols) and one skip policy (hpcagent_bench/benchmarks/, hpcagent_bench/numpy_translators/,
-# *_generated.*). check_format owns the skip logic, so any skipped file pre-commit
-# happens to pass through is left untouched -- the hook is safe to run repo-wide.
+# routing table (ruff format for .py, clang-format for C/C++, fprettify for Fortran,
+# all at 120 cols) and one skip policy (*_generated.*, plus the NATIVE references under
+# hpcagent_bench/benchmarks/, which are transcriptions). check_format owns the skip logic,
+# so any skipped file pre-commit happens to pass through is left untouched -- the hook is
+# safe to run repo-wide.
 repos:
   - repo: local
     hooks:
       - id: hpcagent_bench-format
-        name: format (yapf / clang-format / fprettify @ 120 cols)
+        name: format (ruff / clang-format / fprettify @ 120 cols)
         entry: python scripts/check_format.py --fix
         language: system
         require_serial: true
@@ -25,7 +26,7 @@ repos:
       - id: hpcagent_bench-headers
         name: copyright / SPDX header (core package)
         # --fix ADDS the header (as the first content line, after any shebang) rather than only
-        # failing -- the same auto-fix contract as the format hook. yapf leaves the header
+        # failing -- the same auto-fix contract as the format hook. ruff leaves the header
         # byte-for-byte (locked by tests/test_header_hook.py), so the two fixers never fight.
         entry: python scripts/check_headers.py --fix
         language: system

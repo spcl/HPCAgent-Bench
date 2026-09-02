@@ -8,6 +8,7 @@ and a cell that cannot be turned into a speed-up must not be able to land on 0, 
 value of "measured, and nothing changed". Both are pure functions, so both are tested without
 rendering anything.
 """
+
 import importlib.util
 import math
 import pathlib
@@ -71,18 +72,21 @@ def test_an_unusable_ratio_is_nan_never_zero(ratio: float) -> None:
 # --- band assignment --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("ratio,band", [
-    (1.0, speedup.BAND_LOW),
-    (1.999, speedup.BAND_LOW),
-    (0.51, speedup.BAND_LOW),
-    (2.0, speedup.BAND_MID),
-    (10.0, speedup.BAND_MID),
-    (0.5, speedup.BAND_MID),
-    (0.1, speedup.BAND_MID),
-    (10.5, speedup.BAND_HIGH),
-    (100.0, speedup.BAND_HIGH),
-    (1.0 / 10.5, speedup.BAND_HIGH),
-])
+@pytest.mark.parametrize(
+    "ratio,band",
+    [
+        (1.0, speedup.BAND_LOW),
+        (1.999, speedup.BAND_LOW),
+        (0.51, speedup.BAND_LOW),
+        (2.0, speedup.BAND_MID),
+        (10.0, speedup.BAND_MID),
+        (0.5, speedup.BAND_MID),
+        (0.1, speedup.BAND_MID),
+        (10.5, speedup.BAND_HIGH),
+        (100.0, speedup.BAND_HIGH),
+        (1.0 / 10.5, speedup.BAND_HIGH),
+    ],
+)
 def test_the_band_edges(ratio: float, band: str) -> None:
     """The band named for an edge owns it: 2x and 10x are both ``2x .. 10x``."""
     assert speedup.band_of(speedup.signed_change(ratio)) == band
@@ -92,8 +96,7 @@ def test_the_band_edges(ratio: float, band: str) -> None:
 def test_a_band_holds_a_win_and_its_mirrored_loss(magnitude: float) -> None:
     """Bands are keyed on magnitude, never on sign -- a 3x regression is read on the same axis as
     a 3x win, which is what makes the panels comparable."""
-    assert (speedup.band_of(speedup.signed_change(magnitude)) == speedup.band_of(speedup.signed_change(1.0 /
-                                                                                                       magnitude)))
+    assert speedup.band_of(speedup.signed_change(magnitude)) == speedup.band_of(speedup.signed_change(1.0 / magnitude))
 
 
 def test_an_unplottable_change_has_no_band() -> None:
@@ -127,8 +130,9 @@ def test_points_carry_the_median_speedup_over_the_baseline() -> None:
 
 
 def test_a_kernel_with_no_baseline_is_dropped_and_named() -> None:
-    frame = summary_for([("heat_3d", "dace_cpu", 5.0), ("jacobi_2d", plotting.BASELINE, 10.0),
-                         ("jacobi_2d", "dace_cpu", 20.0)])
+    frame = summary_for(
+        [("heat_3d", "dace_cpu", 5.0), ("jacobi_2d", plotting.BASELINE, 10.0), ("jacobi_2d", "dace_cpu", 20.0)]
+    )
     with pytest.warns(UserWarning, match="heat_3d@dace_cpu"):
         points = speedup.speedup_points(frame)
     assert [point.kernel for point in points] == ["jacobi_2d"]
@@ -159,12 +163,19 @@ def rendered_panels(monkeypatch: pytest.MonkeyPatch, points, kernels, output: st
     return seen[0]
 
 
-def test_an_empty_band_is_dropped_rather_than_drawn_empty(monkeypatch: pytest.MonkeyPatch,
-                                                          tmp_path: pathlib.Path) -> None:
+def test_an_empty_band_is_dropped_rather_than_drawn_empty(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
     """Two kernels, one band -> ONE panel. An empty panel carries no information and its y scale
     would be invented rather than measured, so the band is dropped from the layout."""
-    frame = summary_for([("heat_3d", plotting.BASELINE, 10.0), ("heat_3d", "dace_cpu", 5.0),
-                         ("jacobi_2d", plotting.BASELINE, 10.0), ("jacobi_2d", "dace_cpu", 2.5)])
+    frame = summary_for(
+        [
+            ("heat_3d", plotting.BASELINE, 10.0),
+            ("heat_3d", "dace_cpu", 5.0),
+            ("jacobi_2d", plotting.BASELINE, 10.0),
+            ("jacobi_2d", "dace_cpu", 2.5),
+        ]
+    )
     points = speedup.speedup_points(frame)
     assert {point.band for point in points} == {speedup.BAND_MID}
     assert rendered_panels(monkeypatch, points, ["heat_3d", "jacobi_2d"], str(tmp_path / "speedup.pdf")) == 1
@@ -172,18 +183,32 @@ def test_an_empty_band_is_dropped_rather_than_drawn_empty(monkeypatch: pytest.Mo
 
 def test_every_non_empty_band_gets_its_own_panel(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
     """Three magnitudes -> three panels, each with its own y scale."""
-    frame = summary_for([("heat_3d", plotting.BASELINE, 10.0), ("heat_3d", "dace_cpu", 9.5),
-                         ("jacobi_2d", plotting.BASELINE, 10.0), ("jacobi_2d", "dace_cpu", 2.0),
-                         ("gemm", plotting.BASELINE, 10.0), ("gemm", "dace_cpu", 0.05)])
+    frame = summary_for(
+        [
+            ("heat_3d", plotting.BASELINE, 10.0),
+            ("heat_3d", "dace_cpu", 9.5),
+            ("jacobi_2d", plotting.BASELINE, 10.0),
+            ("jacobi_2d", "dace_cpu", 2.0),
+            ("gemm", plotting.BASELINE, 10.0),
+            ("gemm", "dace_cpu", 0.05),
+        ]
+    )
     points = speedup.speedup_points(frame)
     assert {point.band for point in points} == {speedup.BAND_LOW, speedup.BAND_MID, speedup.BAND_HIGH}
     assert rendered_panels(monkeypatch, points, ["gemm", "heat_3d", "jacobi_2d"], str(tmp_path / "speedup.pdf")) == 3
 
 
 def test_the_simplified_figure_shows_the_band_with_the_most_points(tmp_path: pathlib.Path) -> None:
-    frame = summary_for([("heat_3d", plotting.BASELINE, 10.0), ("heat_3d", "dace_cpu", 5.0),
-                         ("jacobi_2d", plotting.BASELINE, 10.0), ("jacobi_2d", "dace_cpu", 2.5),
-                         ("gemm", plotting.BASELINE, 10.0), ("gemm", "dace_cpu", 9.5)])
+    frame = summary_for(
+        [
+            ("heat_3d", plotting.BASELINE, 10.0),
+            ("heat_3d", "dace_cpu", 5.0),
+            ("jacobi_2d", plotting.BASELINE, 10.0),
+            ("jacobi_2d", "dace_cpu", 2.5),
+            ("gemm", plotting.BASELINE, 10.0),
+            ("gemm", "dace_cpu", 9.5),
+        ]
+    )
     points = speedup.speedup_points(frame)
     assert speedup.dominant_band(points) == speedup.BAND_MID
     out = speedup.simple_figure(points, ["gemm", "heat_3d", "jacobi_2d"], str(tmp_path / "speedup-simple.svg"))
@@ -192,8 +217,9 @@ def test_the_simplified_figure_shows_the_band_with_the_most_points(tmp_path: pat
     assert b"<svg" in blob
 
 
-def test_the_mini_variant_prunes_the_ticks_that_do_not_survive_embed_size(monkeypatch: pytest.MonkeyPatch,
-                                                                          tmp_path: pathlib.Path) -> None:
+def test_the_mini_variant_prunes_the_ticks_that_do_not_survive_embed_size(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
     """At 3.4in wide a real kernel name and a y-tick number are both an unreadable smear, so the x
     ticks are ``K1..Kn`` and the y numbers are gone -- the band title carries the order of magnitude
     instead. What is left still has to say which axis it is."""
@@ -240,23 +266,27 @@ def baseline_only_db(path: pathlib.Path) -> None:
     from sqlmodel import Session
 
     from hpcagent_bench.frameworks.schema import Result, results_engine
+
     with Session(results_engine(str(path))) as session:
         for value in (10.0, 10.5, 9.5):
             session.add(
-                Result(timestamp=0,
-                       benchmark="heat_3d",
-                       domain="Physics",
-                       preset="S",
-                       framework=plotting.BASELINE,
-                       agent=None,
-                       validated=True,
-                       cpu="test-cpu",
-                       time=value,
-                       native_time=None,
-                       datatype="float64",
-                       variant=None,
-                       prompt_hash=None,
-                       execution="native"))
+                Result(
+                    timestamp=0,
+                    benchmark="heat_3d",
+                    domain="Physics",
+                    preset="S",
+                    framework=plotting.BASELINE,
+                    agent=None,
+                    validated=True,
+                    cpu="test-cpu",
+                    time=value,
+                    native_time=None,
+                    datatype="float64",
+                    variant=None,
+                    prompt_hash=None,
+                    execution="native",
+                )
+            )
         session.commit()
 
 
@@ -313,7 +343,8 @@ def test_points_carry_their_repetitions_only_when_asked() -> None:
     the median and the band come from the summary either way, and only ``samples`` is added."""
     cells = [("heat_3d", plotting.BASELINE, 10.0), ("heat_3d", "dace_cpu", 5.0)]
     rows = pd.DataFrame(
-        [dict(benchmark=k, domain="Physics", framework=f, time=t) for k, f, ms in cells for t in [ms] * 5])
+        [dict(benchmark=k, domain="Physics", framework=f, time=t) for k, f, ms in cells for t in [ms] * 5]
+    )
     frame = plotting.cell_summary(rows)
     without = speedup.speedup_points(frame)
     with_samples = speedup.speedup_points(frame, data=rows)
@@ -366,8 +397,9 @@ def test_dodged_frameworks_do_not_share_an_x_position() -> None:
 def test_compact_weights_panel_heights_by_population_and_is_otherwise_the_equal_split() -> None:
     """``--compact`` is a LAYOUT knob. Without it the panels keep matplotlib's equal split, and with
     it a band holding one outlier stops costing the same height as one holding forty kernels."""
-    points = ([speedup.Point(f"k{i}", "dace_cpu", 2.0, 1.0, speedup.BAND_MID)
-               for i in range(9)] + [speedup.Point("solo", "dace_cpu", 20.0, 19.0, speedup.BAND_HIGH)])
+    points = [speedup.Point(f"k{i}", "dace_cpu", 2.0, 1.0, speedup.BAND_MID) for i in range(9)] + [
+        speedup.Point("solo", "dace_cpu", 20.0, 19.0, speedup.BAND_HIGH)
+    ]
     present = [speedup.BAND_HIGH, speedup.BAND_MID]
     assert speedup.panel_heights(points, present, compact=False) is None
     heights = speedup.panel_heights(points, present, compact=True)
@@ -392,7 +424,8 @@ def two_framework_points(kernels, band: str, magnitude: float = 3.0):
     """Both demo frameworks on every kernel in ``kernels`` -- the complete groups the figure wants."""
     return [
         speedup.Point(kernel, framework, magnitude, magnitude - 1.0, band, tuple([magnitude - 1.0] * 12))
-        for kernel in kernels for framework in speedup.DEMO_FRAMEWORKS
+        for kernel in kernels
+        for framework in speedup.DEMO_FRAMEWORKS
     ]
 
 

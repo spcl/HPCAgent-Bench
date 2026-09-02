@@ -14,6 +14,7 @@ never going to work, while a usable compiler sat one PATH entry away.
 the highest versioned sibling, so it answers "a driver that can build this" -- the question the
 guards meant to ask. Route every port's compile through here so the answer stays in one place.
 """
+
 import functools
 from typing import Optional
 

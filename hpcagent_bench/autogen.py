@@ -19,6 +19,7 @@ The emitter reads a bench_info JSON synthesized from the co-located YAML
 C/C++/Fortran siblings (``cpp_backend/``, precision-specialised) are a separate
 path and are NOT generated here.
 """
+
 from __future__ import annotations
 
 import ast
@@ -66,6 +67,7 @@ def _emit_jax(numpy_py: pathlib.Path, bench_info: pathlib.Path, out: pathlib.Pat
     # untouched.
     from numpyto_jax import emit_jax
     from numpyto_common.emit_io import write_generated
+
     func = json.loads(bench_info.read_text())["benchmark"]["func_name"]
     src = emit_jax(numpy_py.read_text(), func)
     ast.parse(src)  # syntactic self-check before writing
@@ -141,6 +143,7 @@ def ensure(key: str, targets: Iterable[str]) -> None:
     what a clean checkout, which has no file to keep, reports as a hard failure.
     """
     from numpyto_common.emit_io import is_generated, is_override
+
     targets = list(targets)
     if not targets:
         return
@@ -274,6 +277,7 @@ def emit_native(spec, langs: Iterable[str]) -> Dict[str, str]:
     buffers); the file/symbol stem is ``<short>_<config>[_<fptype>]``."""
     from hpcagent_bench.emit_bridge import emit_kernel
     from numpyto_common.emit_io import write_generated
+
     kdir = paths.BENCHMARKS / spec.relative_path
     numpy_py = kdir / f"{spec.module_name}_numpy.py"
     out: Dict[str, str] = {}

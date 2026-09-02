@@ -148,7 +148,7 @@ def test_sum_axis_tuple_with_keepdims_writes_to_const_zero():
     has_const_zero = False
     for stmt in stmts:
         for sub in ast.walk(stmt):
-            if (isinstance(sub, ast.Subscript) and isinstance(sub.slice, ast.Tuple)):
+            if isinstance(sub, ast.Subscript) and isinstance(sub.slice, ast.Tuple):
                 for elt in sub.slice.elts:
                     if isinstance(elt, ast.Constant) and elt.value == 0:
                         has_const_zero = True
@@ -213,21 +213,22 @@ def test_mean_over_nested_expand_dims():
     """``np.mean(np.expand_dims(np.expand_dims(z, 1), 1), axis=(2, 3), keepdims=True)`` --
     the instance-norm operand shape, reduced over a tuple axis."""
     z = np.linspace(-3.0, 5.0, 12).reshape(3, 4)
-    src = ("import numpy as np\n"
-           "def f(z, out):\n"
-           "    t = np.expand_dims(np.expand_dims(z, axis=1), axis=1)\n"
-           "    m = np.mean(t, axis=(2, 3), keepdims=True)\n"
-           "    out[:] = np.squeeze(np.squeeze(m, axis=1), axis=1)\n")
-    res = run_op(src,
-                 "f", {"z": z}, {"out": (3, 1)}, {
-                     "NB": 3,
-                     "NC": 4
-                 },
-                 shapes={
-                     "z": "(NB, NC)",
-                     "out": "(NB, 1)"
-                 },
-                 backends=_ALL)
+    src = (
+        "import numpy as np\n"
+        "def f(z, out):\n"
+        "    t = np.expand_dims(np.expand_dims(z, axis=1), axis=1)\n"
+        "    m = np.mean(t, axis=(2, 3), keepdims=True)\n"
+        "    out[:] = np.squeeze(np.squeeze(m, axis=1), axis=1)\n"
+    )
+    res = run_op(
+        src,
+        "f",
+        {"z": z},
+        {"out": (3, 1)},
+        {"NB": 3, "NC": 4},
+        shapes={"z": "(NB, NC)", "out": "(NB, 1)"},
+        backends=_ALL,
+    )
     assert all(v == "ok" or v.startswith("skip") for v in res.values()), res
 
 
@@ -238,23 +239,24 @@ def test_instance_norm_over_expanded_operand():
     reduction count is what makes a wrong count show up as a wrong value rather than a wrong shape.
     """
     z = np.linspace(-2.0, 6.0, 12).reshape(3, 4)
-    src = ("import numpy as np\n"
-           "def f(z, out):\n"
-           "    t = np.expand_dims(np.expand_dims(z, axis=1), axis=1)\n"
-           "    m = np.mean(t, axis=(2, 3), keepdims=True)\n"
-           "    v = np.var(t, axis=(2, 3), keepdims=True)\n"
-           "    n = (t - m) / np.sqrt(v + 1e-05)\n"
-           "    out[:] = np.squeeze(np.squeeze(n, axis=1), axis=1)\n")
-    res = run_op(src,
-                 "f", {"z": z}, {"out": (3, 4)}, {
-                     "NB": 3,
-                     "NC": 4
-                 },
-                 shapes={
-                     "z": "(NB, NC)",
-                     "out": "(NB, NC)"
-                 },
-                 backends=_ALL)
+    src = (
+        "import numpy as np\n"
+        "def f(z, out):\n"
+        "    t = np.expand_dims(np.expand_dims(z, axis=1), axis=1)\n"
+        "    m = np.mean(t, axis=(2, 3), keepdims=True)\n"
+        "    v = np.var(t, axis=(2, 3), keepdims=True)\n"
+        "    n = (t - m) / np.sqrt(v + 1e-05)\n"
+        "    out[:] = np.squeeze(np.squeeze(n, axis=1), axis=1)\n"
+    )
+    res = run_op(
+        src,
+        "f",
+        {"z": z},
+        {"out": (3, 4)},
+        {"NB": 3, "NC": 4},
+        shapes={"z": "(NB, NC)", "out": "(NB, NC)"},
+        backends=_ALL,
+    )
     assert all(v == "ok" or v.startswith("skip") for v in res.values()), res
 
 
@@ -269,7 +271,7 @@ def _full_sum_stmts(shape):
 
 
 def test_full_float_sum_is_one_chain():
-    txt = ast.unparse(ast.fix_missing_locations(ast.Module(body=_full_sum_stmts(("N", )), type_ignores=[])))
+    txt = ast.unparse(ast.fix_missing_locations(ast.Module(body=_full_sum_stmts(("N",)), type_ignores=[])))
     # No block-index division: it is what pet reads as a data-dependent bound (POLYCC-008), and
     # the block accumulator is the scop-external scalar pet then drops (POLYCC-009).
     assert "range(N)" in txt, txt
@@ -286,7 +288,7 @@ def test_full_sum_over_two_axes_is_a_plain_nest():
 
 def test_integer_sum_keeps_an_integer_seed():
     args, kws = _call_args("np.sum(a)")
-    stmts = expand_sum(_target("s"), args, {"a": ("N", )}, kwargs=kws, local_dtypes={"a": "int64"})
+    stmts = expand_sum(_target("s"), args, {"a": ("N",)}, kwargs=kws, local_dtypes={"a": "int64"})
     txt = ast.unparse(ast.fix_missing_locations(ast.Module(body=stmts, type_ignores=[])))
     assert "s = 0\n" in txt + "\n", txt
     assert "range(N)" in txt, txt
@@ -311,16 +313,16 @@ def test_sum_adds_initial_exactly_once():
     """
     n = 1000
     a = np.random.default_rng(0).random(n)
-    src = ("import numpy as np\n"
-           "def f(a, out):\n"
-           "    out[0] = np.sum(a, initial=7.0)\n")
-    res = run_op(src,
-                 "f", {"a": a}, {"out": (1, )}, {"N": n},
-                 shapes={
-                     "a": "(N,)",
-                     "out": "(1,)"
-                 },
-                 backends=("c", "cpp", "fortran"))
+    src = "import numpy as np\ndef f(a, out):\n    out[0] = np.sum(a, initial=7.0)\n"
+    res = run_op(
+        src,
+        "f",
+        {"a": a},
+        {"out": (1,)},
+        {"N": n},
+        shapes={"a": "(N,)", "out": "(1,)"},
+        backends=("c", "cpp", "fortran"),
+    )
     assert all(v == "ok" or v.startswith("skip") for v in res.values()), res
     assert any(v == "ok" for v in res.values()), f"no backend ran it: {res}"
 
@@ -341,21 +343,18 @@ def test_large_fp32_sum_stays_within_the_reassociation_band():
     """
     n = 1 << 22
     a = np.random.default_rng(0).random(n, dtype=np.float32)
-    src = ("import numpy as np\n"
-           "def f(a, out):\n"
-           "    out[0] = np.sum(a)\n")
-    res = run_op(src,
-                 "f", {"a": a}, {"out": (1, )}, {"N": n},
-                 shapes={
-                     "a": "(N,)",
-                     "out": "(1,)"
-                 },
-                 rtol=2e-4,
-                 atol=0.0,
-                 dtypes={
-                     "a": "float32",
-                     "out": "float32"
-                 },
-                 backends=("c", "cpp", "fortran"))
+    src = "import numpy as np\ndef f(a, out):\n    out[0] = np.sum(a)\n"
+    res = run_op(
+        src,
+        "f",
+        {"a": a},
+        {"out": (1,)},
+        {"N": n},
+        shapes={"a": "(N,)", "out": "(1,)"},
+        rtol=2e-4,
+        atol=0.0,
+        dtypes={"a": "float32", "out": "float32"},
+        backends=("c", "cpp", "fortran"),
+    )
     assert all(v == "ok" or v.startswith("skip") for v in res.values()), res
     assert any(v == "ok" for v in res.values()), f"no backend ran it: {res}"

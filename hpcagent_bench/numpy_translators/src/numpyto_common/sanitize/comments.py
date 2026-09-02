@@ -15,6 +15,7 @@ fallback**:
 Availability is detected with :func:`importlib.util.find_spec` (no bare
 try-import-on-string dispatch).
 """
+
 import importlib.util
 import io
 import re
@@ -60,6 +61,7 @@ def _ts_attr(obj, name):
 
 def _ts_get_parser(grammar: str):
     from tree_sitter_language_pack import get_parser
+
     return get_parser(grammar)
 
 
@@ -245,7 +247,7 @@ _ATTRIBUTION_RE = re.compile("licen[sc]e|attribution|copyright|spdx|creative com
 # comment in python/shell but a PREPROCESSOR directive in C, and '*' is a pointer in C --
 # so neither may count as a header comment there (the C '/* */' continuation is tracked
 # separately). Anything not listed is C-family and uses '//'.
-_COMMENT_STARTS = {"python": ("#", ), "fortran": ("!", )}
+_COMMENT_STARTS = {"python": ("#",), "fortran": ("!",)}
 
 
 def _carries_attribution(text: str) -> bool:
@@ -263,7 +265,7 @@ def _leading_license_block(src: str, norm: str) -> str:
     force_lj's closed-form formula, separated from the copyright by a bare ``#``: only the
     notice survives, the description is stripped with the body. Returns ``""`` when that
     first block carries no license marker (a synthetic kernel)."""
-    starts = _COMMENT_STARTS.get(norm, ("//", ))
+    starts = _COMMENT_STARTS.get(norm, ("//",))
     c_family = norm not in _COMMENT_STARTS
     block: List[str] = []
     in_block = False  # inside a /* ... */ comment
@@ -283,7 +285,7 @@ def _leading_license_block(src: str, norm: str) -> str:
             continue
         if s.startswith(starts):
             marker = next(m for m in starts if s.startswith(m))
-            if s[len(marker):].strip() == "":
+            if s[len(marker) :].strip() == "":
                 break  # a blank comment line separates the notice from a description below
             block.append(line)
             continue
@@ -315,10 +317,9 @@ def strip_comments(src: str, lang: str) -> str:
     """
     norm = _normalize_lang(lang)
     if norm not in TS_GRAMMAR:
-        raise ValueError(f"strip_comments: unsupported lang {lang!r}; "
-                         f"supported = {sorted(TS_GRAMMAR)}")
+        raise ValueError(f"strip_comments: unsupported lang {lang!r}; supported = {sorted(TS_GRAMMAR)}")
 
     header = _leading_license_block(src, norm)
     if header:
-        return header + _strip_dispatch(src[len(header):], norm)
+        return header + _strip_dispatch(src[len(header) :], norm)
     return _strip_dispatch(src, norm)

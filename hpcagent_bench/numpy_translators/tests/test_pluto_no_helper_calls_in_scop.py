@@ -7,6 +7,7 @@ take the prelude's own NaN-propagating ``max``/``min`` macro, which pet expands 
 symbol-only ``floord`` in a SUBSCRIPT is hoisted to a scop-external temp. The loop-BOUND ``floord``
 that POLYCC-008 needs is untouched -- pet name-matches it there -- so these tests pin the split too.
 """
+
 import json
 import pathlib
 import re
@@ -35,25 +36,25 @@ def _lower_src(src: str, fn: str, inputs, outputs, shapes, syms):
 def _gather_kir():
     """``a[i + N // 2]`` -- the floor division sits in a SUBSCRIPT and in the loop bound."""
     return _lower_src(
-        "import numpy as np\n"
-        "def gath(a, out, N):\n"
-        "    for i in range(N // 2):\n"
-        "        out[i] = a[i + N // 2]\n", "gath", ["a"], ["out"], {
-            "a": "(N,)",
-            "out": "(N,)"
-        }, {"N": 64})
+        "import numpy as np\ndef gath(a, out, N):\n    for i in range(N // 2):\n        out[i] = a[i + N // 2]\n",
+        "gath",
+        ["a"],
+        ["out"],
+        {"a": "(N,)", "out": "(N,)"},
+        {"N": 64},
+    )
 
 
 def _relu_kir():
     """``np.maximum`` on a loop-varying operand: nothing to hoist, so only a spelling removes the call."""
     return _lower_src(
-        "import numpy as np\n"
-        "def relu(a, out, N):\n"
-        "    for i in range(N):\n"
-        "        out[i] = np.maximum(a[i], 0.0)\n", "relu", ["a"], ["out"], {
-            "a": "(N,)",
-            "out": "(N,)"
-        }, {"N": 64})
+        "import numpy as np\ndef relu(a, out, N):\n    for i in range(N):\n        out[i] = np.maximum(a[i], 0.0)\n",
+        "relu",
+        ["a"],
+        ["out"],
+        {"a": "(N,)", "out": "(N,)"},
+        {"N": 64},
+    )
 
 
 def _scop(text: str) -> str:
@@ -105,7 +106,8 @@ def test_the_transformed_output_compiles(kir_fn, name):
     assert proc.returncode == 0 and out.exists(), proc.stderr
     assert "__pet_ret" not in out.read_text(), out.read_text()
     cc = subprocess.run(
-        ["gcc", "-fsyntax-only", "-fopenmp", "-std=c99", str(out)], capture_output=True, text=True, check=False)
+        ["gcc", "-fsyntax-only", "-fopenmp", "-std=c99", str(out)], capture_output=True, text=True, check=False
+    )
     assert cc.returncode == 0, cc.stderr
 
 

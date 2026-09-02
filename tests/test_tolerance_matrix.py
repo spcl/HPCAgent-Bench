@@ -17,11 +17,19 @@ atols already sat at 1.02x and 1.28x their eps. Only the fp8 rows were round dec
 So the rule was already there, followed by every format that worked and broken by the two that
 did not. These tests pin it.
 """
+
 import numpy as np
 import pytest
 
-from hpcagent_bench.precision import (DTYPES, Precision, TOLERANCE_MATRIX, atol_below_one_ulp, derived_band,
-                                      machine_eps, numpy_dtype)
+from hpcagent_bench.precision import (
+    DTYPES,
+    Precision,
+    TOLERANCE_MATRIX,
+    atol_below_one_ulp,
+    derived_band,
+    machine_eps,
+    numpy_dtype,
+)
 
 
 def test_every_band_is_satisfiable():
@@ -33,9 +41,12 @@ def test_every_band_is_satisfiable():
     unsatisfiable = atol_below_one_ulp()
     assert not unsatisfiable, (
         "these bands demand agreement finer than the format can represent, so no pair of "
-        "correct implementations can pass them: " +
-        ", ".join(f"{p.value}: atol={atol:g} < eps={eps:g}"
-                  for p, (atol, eps) in sorted(unsatisfiable.items(), key=lambda kv: kv[0].value)))
+        "correct implementations can pass them: "
+        + ", ".join(
+            f"{p.value}: atol={atol:g} < eps={eps:g}"
+            for p, (atol, eps) in sorted(unsatisfiable.items(), key=lambda kv: kv[0].value)
+        )
+    )
 
 
 @pytest.mark.parametrize("precision", list(Precision), ids=lambda p: p.value)
@@ -46,10 +57,10 @@ def test_a_one_ulp_disagreement_passes_the_band(precision):
     rtol, atol = TOLERANCE_MATRIX[precision].as_tuple()
     dtype = numpy_dtype(precision)
     one_ulp = float(np.asarray([machine_eps(precision)], dtype=dtype)[0])
-    assert np.isclose(
-        one_ulp, 0.0, rtol=rtol,
-        atol=atol), (f"{precision.value}: a reference of 0.0 against a candidate one ULP away ({one_ulp:g}) "
-                     f"fails its own band (rtol={rtol:g}, atol={atol:g}) -- unsatisfiable")
+    assert np.isclose(one_ulp, 0.0, rtol=rtol, atol=atol), (
+        f"{precision.value}: a reference of 0.0 against a candidate one ULP away ({one_ulp:g}) "
+        f"fails its own band (rtol={rtol:g}, atol={atol:g}) -- unsatisfiable"
+    )
 
 
 def test_derived_band_never_falls_below_one_ulp():
@@ -61,7 +72,7 @@ def test_derived_band_never_falls_below_one_ulp():
     for precision in Precision:
         band = derived_band(precision)
         eps = machine_eps(precision)
-        assert band.atol >= eps, (f"{precision.value}: derived atol {band.atol:g} is below one ULP ({eps:g})")
+        assert band.atol >= eps, f"{precision.value}: derived atol {band.atol:g} is below one ULP ({eps:g})"
 
 
 def test_the_fp8_formats_are_the_coarse_case_this_guards():
@@ -70,5 +81,7 @@ def test_the_fp8_formats_are_the_coarse_case_this_guards():
     guarding nothing, so the premise is asserted rather than assumed."""
     for precision in (Precision.FP8_E4M3, Precision.FP8_E5M2):
         assert precision in DTYPES, f"{precision.value} left the corpus; re-check what this file still covers"
-        assert machine_eps(precision) >= 0.1, (f"{precision.value} eps is {machine_eps(precision):g} -- no longer the "
-                                               "coarse case, so the guard's premise changed")
+        assert machine_eps(precision) >= 0.1, (
+            f"{precision.value} eps is {machine_eps(precision):g} -- no longer the "
+            "coarse case, so the guard's premise changed"
+        )

@@ -24,6 +24,7 @@ Anything undecidable is left exactly as it was: this pass narrows, it never gues
 
 Entry point: :func:`desugar_tuples`.
 """
+
 import ast
 import copy
 from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
@@ -41,20 +42,20 @@ NUMPY_MODULES = frozenset({"np", "numpy"})
 #: to subclass float -- np.float32 does not, and this pass cannot tell them apart.
 TYPE_ACCEPTS: Dict[str, Tuple[str, ...]] = {
     "int": ("py_int", "py_bool"),
-    "bool": ("py_bool", ),
-    "float": ("py_float", ),
-    "complex": ("py_complex", ),
-    "str": ("py_str", ),
-    "tuple": ("tuple", ),
-    "list": ("list", ),
-    "integer": ("np_int", ),
-    "signedinteger": ("np_int", ),
-    "unsignedinteger": ("np_int", ),
-    "floating": ("np_float", ),
-    "complexfloating": ("np_complex", ),
-    "bool_": ("np_bool", ),
+    "bool": ("py_bool",),
+    "float": ("py_float",),
+    "complex": ("py_complex",),
+    "str": ("py_str",),
+    "tuple": ("tuple",),
+    "list": ("list",),
+    "integer": ("np_int",),
+    "signedinteger": ("np_int",),
+    "unsignedinteger": ("np_int",),
+    "floating": ("np_float",),
+    "complexfloating": ("np_complex",),
+    "bool_": ("np_bool",),
     "number": ("np_int", "np_float", "np_complex"),
-    "ndarray": ("ndarray", ),
+    "ndarray": ("ndarray",),
 }
 
 #: Value kind -> the concrete runtime types a value of that kind may actually have. A DECLARED
@@ -63,19 +64,19 @@ TYPE_ACCEPTS: Dict[str, Tuple[str, ...]] = {
 #: a bare ``isinstance(knob, int)`` stays unfolded while ``isinstance(knob, (int, np.integer))``
 #: folds -- the second is true either way, the first is not.
 KIND_TYPES: Dict[str, Tuple[str, ...]] = {
-    "int": ("py_int", ),
-    "float": ("py_float", ),
-    "complex": ("py_complex", ),
-    "bool": ("py_bool", ),
-    "str": ("py_str", ),
+    "int": ("py_int",),
+    "float": ("py_float",),
+    "complex": ("py_complex",),
+    "bool": ("py_bool",),
+    "str": ("py_str",),
     "integer": ("py_int", "np_int"),
     "floating": ("py_float", "np_float"),
-    "np_int": ("np_int", ),
-    "np_float": ("np_float", ),
-    "tuple": ("tuple", ),
-    "list": ("list", ),
-    "array": ("ndarray", ),
-    "none": ("none", ),
+    "np_int": ("np_int",),
+    "np_float": ("np_float",),
+    "tuple": ("tuple",),
+    "list": ("list",),
+    "array": ("ndarray",),
+    "none": ("none",),
 }
 
 #: Builtin scalar casts -> the kind of their result. ``int(x)`` yields a genuine Python int, which is
@@ -84,18 +85,9 @@ CAST_KINDS: Dict[str, str] = {"int": "int", "float": "float", "complex": "comple
 
 #: numpy scalar constructors -> the kind of their result.
 NUMPY_CAST_KINDS: Dict[str, str] = {
-    **{
-        f"int{w}": "np_int"
-        for w in (8, 16, 32, 64)
-    },
-    **{
-        f"uint{w}": "np_int"
-        for w in (8, 16, 32, 64)
-    },
-    **{
-        f"float{w}": "np_float"
-        for w in (16, 32, 64)
-    },
+    **{f"int{w}": "np_int" for w in (8, 16, 32, 64)},
+    **{f"uint{w}": "np_int" for w in (8, 16, 32, 64)},
+    **{f"float{w}": "np_float" for w in (16, 32, 64)},
     "bool_": "bool",
 }
 
@@ -111,10 +103,12 @@ class Env:
     """Names bound to a compile-time tuple, plus the names known to be bound at all (so
     ``x is None`` decides). Copied per branch; never shared across a loop body."""
 
-    def __init__(self,
-                 tuples: Optional[Dict[str, List[ast.expr]]] = None,
-                 bound: Optional[Set[str]] = None,
-                 kinds: Optional[Dict[str, str]] = None) -> None:
+    def __init__(
+        self,
+        tuples: Optional[Dict[str, List[ast.expr]]] = None,
+        bound: Optional[Set[str]] = None,
+        kinds: Optional[Dict[str, str]] = None,
+    ) -> None:
         self.tuples: Dict[str, List[ast.expr]] = dict(tuples or {})
         self.bound: Set[str] = set(bound or ())
         #: Local -> value kind, so the inliner's ``__inlN_stride = int(stride)`` stays decidable.
@@ -152,7 +146,7 @@ def _target_names(target: ast.AST) -> OrderedSet:
     to a literal outside the loop reverted to an un-foldable ``stride[0]`` the moment the SAME
     variable was also used as a slice step somewhere inside it."""
     if isinstance(target, ast.Name):
-        return OrderedSet((target.id, ))
+        return OrderedSet((target.id,))
     if isinstance(target, ast.Starred):
         return _target_names(target.value)
     if isinstance(target, (ast.Tuple, ast.List)):
@@ -225,8 +219,12 @@ def type_names(node: ast.AST) -> Optional[List[str]]:
         return None if any(p is None for p in parts) else [n for p in parts for n in p]
     if isinstance(node, ast.Name):
         return [node.id] if node.id in TYPE_ACCEPTS else None
-    if (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id in NUMPY_MODULES
-            and node.attr in TYPE_ACCEPTS):
+    if (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id in NUMPY_MODULES
+        and node.attr in TYPE_ACCEPTS
+    ):
         return [node.attr]
     return None
 
@@ -235,11 +233,13 @@ class TupleDesugar:
     """The forward interpreter. ``int_scalars`` / ``float_scalars`` / ``arrays`` are the kernel's
     declared parameters, which is what makes an ``isinstance`` guard on a knob decidable."""
 
-    def __init__(self,
-                 int_scalars: FrozenSet[str] = frozenset(),
-                 float_scalars: FrozenSet[str] = frozenset(),
-                 arrays: FrozenSet[str] = frozenset(),
-                 ranks: Optional[Dict[str, int]] = None) -> None:
+    def __init__(
+        self,
+        int_scalars: FrozenSet[str] = frozenset(),
+        float_scalars: FrozenSet[str] = frozenset(),
+        arrays: FrozenSet[str] = frozenset(),
+        ranks: Optional[Dict[str, int]] = None,
+    ) -> None:
         self.int_scalars = frozenset(int_scalars)
         self.float_scalars = frozenset(float_scalars)
         self.arrays = frozenset(arrays)
@@ -305,8 +305,13 @@ class TupleDesugar:
             # `is not None`, never `or`: a 0-repeat is the empty tuple, which is falsy but correct.
             repeated = self.repeat(node.left, node.right, env)
             return repeated if repeated is not None else self.repeat(node.right, node.left, env)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in ("tuple", "list") and len(
-                node.args) == 1 and not node.keywords:
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in ("tuple", "list")
+            and len(node.args) == 1
+            and not node.keywords
+        ):
             inner = self.tuple_of(node.args[0], env)
             if inner is not None:
                 return inner
@@ -397,8 +402,13 @@ class TupleDesugar:
 
     def range_bounds(self, node: ast.AST, env: Env) -> Optional[Tuple[int, int, int]]:
         """``range(...)`` with literal arguments, as ``(start, stop, step)``."""
-        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "range" and node.args
-                and not node.keywords):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "range"
+            and node.args
+            and not node.keywords
+        ):
             return None
         args = [const_int(self.fold(copy.deepcopy(a), env)) for a in node.args]
         if any(a is None for a in args) or len(args) > 3:
@@ -425,8 +435,11 @@ class TupleDesugar:
             return self.loop(stmt, env)
         if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
             return self.assign(stmt, env, linear)
-        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0],
-                                                                                  (ast.Tuple, ast.List)):
+        if (
+            isinstance(stmt, ast.Assign)
+            and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], (ast.Tuple, ast.List))
+        ):
             unpacked = self.unpack(stmt, env, linear)
             if unpacked is not None:
                 return unpacked
@@ -463,16 +476,19 @@ class TupleDesugar:
         self.track_rank(name, stmt.value, linear)
         return [stmt]
 
-    def capture_self_reference(self, name: str, elements: List[ast.expr], at: ast.stmt,
-                               env: Env) -> Tuple[List[ast.expr], List[ast.stmt]]:
+    def capture_self_reference(
+        self, name: str, elements: List[ast.expr], at: ast.stmt, env: Env
+    ) -> Tuple[List[ast.expr], List[ast.stmt]]:
         """``x = (x, x)`` -- what every port's ``_as_tuple(x, 2)`` folds to. Its elements mean x's
         PREVIOUS value, but recording them as they stand leaves the name denoting both that value
         and the tuple, so a later read of an element folds straight back into the tuple. Capture the
         old value in a fresh local and point the elements at that instead.
         """
         reads_itself = any(
-            isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, ast.Load) for e in elements
-            for n in ast.walk(e))
+            isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, ast.Load)
+            for e in elements
+            for n in ast.walk(e)
+        )
         if not reads_itself:
             return elements, []
         self.aliases += 1
@@ -480,7 +496,8 @@ class TupleDesugar:
         self.captured.append((alias, name))
         captured = [_substitute(copy.deepcopy(e), name, ast.Name(id=alias, ctx=ast.Load())) for e in elements]
         bind = ast.copy_location(
-            ast.Assign(targets=[ast.Name(id=alias, ctx=ast.Store())], value=ast.Name(id=name, ctx=ast.Load())), at)
+            ast.Assign(targets=[ast.Name(id=alias, ctx=ast.Store())], value=ast.Name(id=name, ctx=ast.Load())), at
+        )
         env.bound.add(alias)
         if name in env.kinds:
             env.kinds[alias] = env.kinds[name]
@@ -667,8 +684,13 @@ class _Folder(ast.NodeTransformer):
                 elts = self.interp.tuple_of(node.args[0], self.env)
                 if elts is not None:
                     return ast.copy_location(ast.Constant(value=len(elts)), node)
-        if (isinstance(node.func, ast.Attribute) and node.func.attr == "ndim" and isinstance(node.func.value, ast.Name)
-                and node.func.value.id in NUMPY_MODULES and len(node.args) == 1):
+        if (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "ndim"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in NUMPY_MODULES
+            and len(node.args) == 1
+        ):
             ndim = self._ndim(node.args[0])
             if ndim is not None:
                 return ast.copy_location(ast.Constant(value=ndim), node)
@@ -725,8 +747,12 @@ class _Folder(ast.NodeTransformer):
             # compare folded here would bake in a rounding decision the backend might make
             # differently. Ordering counts: a padding folded to its manifest value leaves
             # ``if 3 > 0:`` guarding a rebinding, and an unfolded guard is a second buffer shape.
-            if lv is not NO_VALUE and rv is not NO_VALUE and isinstance(lv,
-                                                                        (bool, int)) and isinstance(rv, (bool, int)):
+            if (
+                lv is not NO_VALUE
+                and rv is not NO_VALUE
+                and isinstance(lv, (bool, int))
+                and isinstance(rv, (bool, int))
+            ):
                 return ast.copy_location(ast.Constant(value=decide(lv, rv)), node)
             if isinstance(node.ops[0], (ast.Eq, ast.NotEq)) and isinstance(lv, str) and isinstance(rv, str):
                 return ast.copy_location(ast.Constant(value=decide(lv, rv)), node)
@@ -795,8 +821,13 @@ def _slice_calls_to_slices(index: ast.AST) -> ast.AST:
 
 
 def _as_slice(node: ast.AST) -> Optional[ast.Slice]:
-    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "slice"
-            and 1 <= len(node.args) <= 3 and not node.keywords):
+    if not (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "slice"
+        and 1 <= len(node.args) <= 3
+        and not node.keywords
+    ):
         return None
     args = [None if isinstance(a, ast.Constant) and a.value is None else a for a in node.args]
     lower, upper, step = (None, args[0], None) if len(args) == 1 else (args + [None, None])[:3]
@@ -807,7 +838,6 @@ def _substitute(node: ast.expr, name: str, value: ast.expr) -> ast.expr:
     """``node`` with every load of ``name`` replaced by ``value`` (the comprehension unroll)."""
 
     class _Sub(ast.NodeTransformer):
-
         def visit_Name(self, inner: ast.Name) -> ast.AST:
             if inner.id == name and isinstance(inner.ctx, ast.Load):
                 return ast.copy_location(copy.deepcopy(value), inner)
@@ -816,11 +846,13 @@ def _substitute(node: ast.expr, name: str, value: ast.expr) -> ast.expr:
     return ast.fix_missing_locations(_Sub().visit(node))
 
 
-def desugar_tuples(fn: ast.FunctionDef,
-                   int_scalars: FrozenSet[str] = frozenset(),
-                   float_scalars: FrozenSet[str] = frozenset(),
-                   arrays: FrozenSet[str] = frozenset(),
-                   ranks: Optional[Dict[str, int]] = None) -> None:
+def desugar_tuples(
+    fn: ast.FunctionDef,
+    int_scalars: FrozenSet[str] = frozenset(),
+    float_scalars: FrozenSet[str] = frozenset(),
+    arrays: FrozenSet[str] = frozenset(),
+    ranks: Optional[Dict[str, int]] = None,
+) -> None:
     """Fold every compile-time tuple out of ``fn`` in place (see the module docstring)."""
     # The marker guards ONE run against re-entering a tuple that run just materialised. Left
     # standing it also freezes that tuple's ELEMENTS against the next run, and this pass runs a
@@ -871,8 +903,13 @@ def statement_blocks(node: ast.AST) -> List[List[ast.stmt]]:
 
 def literal_list_bind(stmt: ast.stmt) -> Optional[Tuple[str, List[ast.Constant]]]:
     """``name = [c0, c1, ...]`` with every element a numeric constant -> ``(name, elements)``."""
-    if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
-            and isinstance(stmt.value, ast.List) and stmt.value.elts):
+    if not (
+        isinstance(stmt, ast.Assign)
+        and len(stmt.targets) == 1
+        and isinstance(stmt.targets[0], ast.Name)
+        and isinstance(stmt.value, ast.List)
+        and stmt.value.elts
+    ):
         return None
     elts = stmt.value.elts
     if not all(isinstance(e, ast.Constant) and isinstance(e.value, (int, float)) for e in elts):
@@ -881,8 +918,14 @@ def literal_list_bind(stmt: ast.stmt) -> Optional[Tuple[str, List[ast.Constant]]
 
 
 def is_len_of(node: ast.AST, name: str) -> bool:
-    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "len"
-            and len(node.args) == 1 and isinstance(node.args[0], ast.Name) and node.args[0].id == name)
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "len"
+        and len(node.args) == 1
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id == name
+    )
 
 
 def growth_loop(stmt: ast.stmt, name: str) -> Optional[Tuple[ast.expr, ast.expr]]:
@@ -890,27 +933,48 @@ def growth_loop(stmt: ast.stmt, name: str) -> Optional[Tuple[ast.expr, ast.expr]
     if not (isinstance(stmt, ast.While) and not stmt.orelse and len(stmt.body) == 1):
         return None
     test = stmt.test
-    if not (isinstance(test, ast.Compare) and len(test.ops) == 1 and isinstance(test.ops[0], ast.Lt)
-            and is_len_of(test.left, name)):
+    if not (
+        isinstance(test, ast.Compare)
+        and len(test.ops) == 1
+        and isinstance(test.ops[0], ast.Lt)
+        and is_len_of(test.left, name)
+    ):
         return None
     grow = stmt.body[0]
-    if not (isinstance(grow, ast.Expr) and isinstance(grow.value, ast.Call)
-            and isinstance(grow.value.func, ast.Attribute) and grow.value.func.attr == "append"
-            and isinstance(grow.value.func.value, ast.Name) and grow.value.func.value.id == name
-            and len(grow.value.args) == 1 and not grow.value.keywords):
+    if not (
+        isinstance(grow, ast.Expr)
+        and isinstance(grow.value, ast.Call)
+        and isinstance(grow.value.func, ast.Attribute)
+        and grow.value.func.attr == "append"
+        and isinstance(grow.value.func.value, ast.Name)
+        and grow.value.func.value.id == name
+        and len(grow.value.args) == 1
+        and not grow.value.keywords
+    ):
         return None
     return test.comparators[0], grow.value.args[0]
 
 
 def is_truncation(stmt: ast.stmt, name: str, bound: ast.expr) -> bool:
     """``name = name[:bound]`` -- a cut to the length the growth loop already produced."""
-    if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
-            and stmt.targets[0].id == name and isinstance(stmt.value, ast.Subscript)
-            and isinstance(stmt.value.value, ast.Name) and stmt.value.value.id == name):
+    if not (
+        isinstance(stmt, ast.Assign)
+        and len(stmt.targets) == 1
+        and isinstance(stmt.targets[0], ast.Name)
+        and stmt.targets[0].id == name
+        and isinstance(stmt.value, ast.Subscript)
+        and isinstance(stmt.value.value, ast.Name)
+        and stmt.value.value.id == name
+    ):
         return False
     cut = stmt.value.slice
-    return (isinstance(cut, ast.Slice) and cut.lower is None and cut.step is None and cut.upper is not None
-            and ast.dump(cut.upper) == ast.dump(bound))
+    return (
+        isinstance(cut, ast.Slice)
+        and cut.lower is None
+        and cut.step is None
+        and cut.upper is not None
+        and ast.dump(cut.upper) == ast.dump(bound)
+    )
 
 
 def mutation_count(node: ast.AST, name: str) -> int:
@@ -919,8 +983,13 @@ def mutation_count(node: ast.AST, name: str) -> int:
     for sub in ast.walk(node):
         if isinstance(sub, ast.Name) and isinstance(sub.ctx, (ast.Store, ast.Del)) and sub.id == name:
             total += 1
-        elif (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute) and sub.func.attr == "append"
-              and isinstance(sub.func.value, ast.Name) and sub.func.value.id == name):
+        elif (
+            isinstance(sub, ast.Call)
+            and isinstance(sub.func, ast.Attribute)
+            and sub.func.attr == "append"
+            and isinstance(sub.func.value, ast.Name)
+            and sub.func.value.id == name
+        ):
             total += 1
     return total
 
@@ -948,29 +1017,37 @@ def fold_accumulator_in(block: List[ast.stmt], fn: ast.FunctionDef, minted: List
         index = f"__la{minted[0]}"
         fill = SubstituteLen(name, index).visit(copy.deepcopy(step))
         for pos in range(len(elts) - 1, -1, -1):
-            fill = ast.IfExp(test=ast.Compare(left=ast.Name(id=index, ctx=ast.Load()),
-                                              ops=[ast.Eq()],
-                                              comparators=[ast.Constant(value=pos)]),
-                             body=copy.deepcopy(elts[pos]),
-                             orelse=fill)
+            fill = ast.IfExp(
+                test=ast.Compare(
+                    left=ast.Name(id=index, ctx=ast.Load()), ops=[ast.Eq()], comparators=[ast.Constant(value=pos)]
+                ),
+                body=copy.deepcopy(elts[pos]),
+                orelse=fill,
+            )
         dtype = "int64" if all(isinstance(e.value, int) for e in elts) else "float64"
-        alloc = ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())],
-                           value=ast.Call(func=numpy_attr("zeros"),
-                                          args=[copy.deepcopy(bound)],
-                                          keywords=[ast.keyword(arg="dtype", value=numpy_attr(dtype))]))
-        write = ast.Assign(targets=[
-            ast.Subscript(value=ast.Name(id=name, ctx=ast.Load()),
-                          slice=ast.Name(id=index, ctx=ast.Load()),
-                          ctx=ast.Store())
-        ],
-                           value=fill)
-        loop = ast.For(target=ast.Name(id=index, ctx=ast.Store()),
-                       iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()),
-                                     args=[copy.deepcopy(bound)],
-                                     keywords=[]),
-                       body=[write],
-                       orelse=[])
-        block[i:i + (3 if cut else 2)] = [alloc, loop]
+        alloc = ast.Assign(
+            targets=[ast.Name(id=name, ctx=ast.Store())],
+            value=ast.Call(
+                func=numpy_attr("zeros"),
+                args=[copy.deepcopy(bound)],
+                keywords=[ast.keyword(arg="dtype", value=numpy_attr(dtype))],
+            ),
+        )
+        write = ast.Assign(
+            targets=[
+                ast.Subscript(
+                    value=ast.Name(id=name, ctx=ast.Load()), slice=ast.Name(id=index, ctx=ast.Load()), ctx=ast.Store()
+                )
+            ],
+            value=fill,
+        )
+        loop = ast.For(
+            target=ast.Name(id=index, ctx=ast.Store()),
+            iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[copy.deepcopy(bound)], keywords=[]),
+            body=[write],
+            orelse=[],
+        )
+        block[i : i + (3 if cut else 2)] = [alloc, loop]
         return
 
 
@@ -1006,8 +1083,14 @@ def collapse_capture_aliases(fn: ast.FunctionDef, captured: List[Tuple[str, str]
         minted[name] = minted.get(name, 0) + 1
 
     def is_bind(stmt: ast.stmt, alias: str, name: str) -> bool:
-        return (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
-                and stmt.targets[0].id == alias and isinstance(stmt.value, ast.Name) and stmt.value.id == name)
+        return (
+            isinstance(stmt, ast.Assign)
+            and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], ast.Name)
+            and stmt.targets[0].id == alias
+            and isinstance(stmt.value, ast.Name)
+            and stmt.value.id == name
+        )
 
     def written_from(alias: str, name: str) -> bool:
         state = {"seen": False, "written": False}
@@ -1065,7 +1148,8 @@ def _drop_dead_none_bindings(fn: ast.FunctionDef) -> None:
     tested: OrderedSet = OrderedSet()
     for cmp in ast.walk(fn):
         if isinstance(cmp, ast.Compare) and any(
-                isinstance(c, ast.Constant) and c.value is None for c in cmp.comparators):
+            isinstance(c, ast.Constant) and c.value is None for c in cmp.comparators
+        ):
             tested.update(n.id for n in ast.walk(cmp) if isinstance(n, ast.Name))
     rebound: OrderedSet = OrderedSet()
     for node in ast.walk(fn):
@@ -1078,18 +1162,29 @@ def _drop_dead_none_bindings(fn: ast.FunctionDef) -> None:
     def none_bind_targets(stmt: ast.stmt) -> List[str]:
         # ``a = b = None`` declares a whole run of sentinels at once (warpx spells all six shape
         # buffers that way), so a chained bind is the same statement, not a different idiom.
-        if (isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Constant) and stmt.value.value is None
-                and all(isinstance(t, ast.Name) for t in stmt.targets)):
+        if (
+            isinstance(stmt, ast.Assign)
+            and isinstance(stmt.value, ast.Constant)
+            and stmt.value.value is None
+            and all(isinstance(t, ast.Name) for t in stmt.targets)
+        ):
             return [t.id for t in stmt.targets]
         return []
 
     def rebinds(stmt: ast.stmt, name: str) -> bool:
-        return (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
-                and stmt.targets[0].id == name)
+        return (
+            isinstance(stmt, ast.Assign)
+            and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], ast.Name)
+            and stmt.targets[0].id == name
+        )
 
     def dead(name: str, i: int, stmts: List[ast.stmt]) -> bool:
-        return (name not in read or (i + 1 < len(stmts) and rebinds(stmts[i + 1], name))
-                or (name in rebound and name not in tested))
+        return (
+            name not in read
+            or (i + 1 < len(stmts) and rebinds(stmts[i + 1], name))
+            or (name in rebound and name not in tested)
+        )
 
     def prune(stmts: List[ast.stmt]) -> List[ast.stmt]:
         out: List[ast.stmt] = []

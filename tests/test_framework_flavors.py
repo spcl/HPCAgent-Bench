@@ -6,6 +6,7 @@ Pins the consolidated registry: one Framework subclass per ``base`` flavor famil
 the native backend split into its base languages, each language's autopar variant,
 and polly, vs Pluto as its own toolchain, and APPy fully removed.
 """
+
 from hpcagent_bench.frameworks import NativeFramework, PlutoFramework
 from hpcagent_bench.languages import gpu_backend
 from hpcagent_bench.frameworks.framework import FRAMEWORK_META, framework_flavors, generate_framework
@@ -31,10 +32,12 @@ def test_the_oneapi_arm_has_no_autopar_flavor():
     """icx has no auto-parallelizer, so registering one would publish serial numbers under a
     parallel name. Pinned separately from the inventory above so the reason survives a rename."""
     from hpcagent_bench import flags
+
     assert "cc_oneapi_autopar" not in FRAMEWORK_META
     assert not hasattr(flags, "ICX_AUTOPAR"), (
         "an ICX_AUTOPAR constant is back; icx accepts -parallel with warning #10430 and outlines "
-        "nothing, so any column built on it would be silently serial")
+        "nothing, so any column built on it would be silently serial"
+    )
 
 
 def test_pluto_is_its_own_base_and_a_native_subclass():
@@ -105,4 +108,5 @@ def test_arch_families_share_one_class():
 def test_appy_removed():
     assert "appy" not in FRAMEWORK_META
     import hpcagent_bench.frameworks as infra
+
     assert "APPyFramework" not in vars(infra)

@@ -8,6 +8,7 @@ imported DaCe, called ``MPI_Init``, and hung -- the whole GPU track produced zer
 The variables are stripped before the first framework import; these tests pin that, and pin the two
 things about it that are easy to break by tidying.
 """
+
 import os
 
 import pytest
@@ -60,8 +61,9 @@ def test_the_list_still_covers_what_dace_triggers_on():
     from dace.sdfg.sdfg import MPI_RANK_VARS
 
     missing = sorted(set(MPI_RANK_VARS) - set(MPI_LAUNCHER_VARS))
-    assert not missing, (f"DaCe initializes MPI on {missing}, which the sweep no longer strips; "
-                         f"add them to MPI_LAUNCHER_VARS")
+    assert not missing, (
+        f"DaCe initializes MPI on {missing}, which the sweep no longer strips; add them to MPI_LAUNCHER_VARS"
+    )
 
 
 def test_the_distributed_residency_keeps_its_launcher_variables(launcher_env, monkeypatch):

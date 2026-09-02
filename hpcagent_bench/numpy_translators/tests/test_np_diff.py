@@ -10,6 +10,7 @@ output is NOT the operand's shape, so ``diff`` also has to leave ``ELEMENTWISE_S
 first difference expands -- ``n > 1`` needs a temporary per stage, and ``prepend=``/``append=`` are a
 concatenate the caller can spell.
 """
+
 import ast
 
 import numpy as np
@@ -39,41 +40,45 @@ def test_registered():
 
 
 def test_1d_expands_to_neighbour_subtraction():
-    got = _expand("out = np.diff(a)", {"a": ("n", )})
+    got = _expand("out = np.diff(a)", {"a": ("n",)})
     assert got == "for __df0 in range(n - 1):\n    out[__df0] = a[__df0 + 1] - a[__df0]"
 
 
 def test_2d_defaults_to_last_axis():
     got = _expand("out = np.diff(a)", {"a": ("r", "c")})
-    assert got == ("for __df0 in range(r):\n"
-                   "    for __df1 in range(c - 1):\n"
-                   "        out[__df0, __df1] = a[__df0, __df1 + 1] - a[__df0, __df1]")
+    assert got == (
+        "for __df0 in range(r):\n"
+        "    for __df1 in range(c - 1):\n"
+        "        out[__df0, __df1] = a[__df0, __df1 + 1] - a[__df0, __df1]"
+    )
 
 
 def test_2d_axis_zero_walks_rows():
     got = _expand("out = np.diff(a, axis=0)", {"a": ("r", "c")})
-    assert got == ("for __df0 in range(r - 1):\n"
-                   "    for __df1 in range(c):\n"
-                   "        out[__df0, __df1] = a[__df0 + 1, __df1] - a[__df0, __df1]")
+    assert got == (
+        "for __df0 in range(r - 1):\n"
+        "    for __df1 in range(c):\n"
+        "        out[__df0, __df1] = a[__df0 + 1, __df1] - a[__df0, __df1]"
+    )
 
 
 def test_negative_axis_normalizes():
-    assert _expand("out = np.diff(a, axis=-1)", {"a": ("n", )}) == _expand("out = np.diff(a)", {"a": ("n", )})
+    assert _expand("out = np.diff(a, axis=-1)", {"a": ("n",)}) == _expand("out = np.diff(a)", {"a": ("n",)})
 
 
 def test_literal_extent_folds_the_bound():
-    got = _expand("out = np.diff(a)", {"a": ("8", )})
+    got = _expand("out = np.diff(a)", {"a": ("8",)})
     assert "range(8 - 1)" in got
 
 
 def test_n_greater_than_one_refused():
     with pytest.raises(NotImplementedError, match="first difference"):
-        _expand("out = np.diff(a, 2)", {"a": ("n", )})
+        _expand("out = np.diff(a, 2)", {"a": ("n",)})
 
 
 def test_prepend_refused_as_concatenate():
     with pytest.raises(NotImplementedError, match="concatenate"):
-        _expand("out = np.diff(a, prepend=0)", {"a": ("n", )})
+        _expand("out = np.diff(a, prepend=0)", {"a": ("n",)})
 
 
 def test_nonconstant_axis_refused():
@@ -85,10 +90,8 @@ def test_numeric_1d_matches_numpy():
     a = np.array([3.0, 5.0, 4.0, 9.0, 9.0, 1.0])
     src = "import numpy as np\n\ndef k(a, out):\n    out[:] = np.diff(a)\n"
     _assert_ok(
-        run_op(src, "k", {"a": a}, {"out": (5, )}, {"n": 6}, shapes={
-            "a": "(6,)",
-            "out": "(5,)"
-        }, backends=_NATIVE))
+        run_op(src, "k", {"a": a}, {"out": (5,)}, {"n": 6}, shapes={"a": "(6,)", "out": "(5,)"}, backends=_NATIVE)
+    )
 
 
 def test_numeric_row_lengths_from_csr_row_ptr():
@@ -96,20 +99,20 @@ def test_numeric_row_lengths_from_csr_row_ptr():
     row_ptr = np.array([0, 2, 2, 5, 9], dtype=np.int64)
     src = "import numpy as np\n\ndef k(row_ptr, out):\n    out[:] = np.diff(row_ptr)\n"
     _assert_ok(
-        run_op(src,
-               "k", {"row_ptr": row_ptr}, {"out": (4, )}, {"n": 5},
-               shapes={
-                   "row_ptr": "(5,)",
-                   "out": "(4,)"
-               },
-               backends=_NATIVE,
-               dtypes={
-                   "row_ptr": "int64",
-                   "out": "int64"
-               }))
+        run_op(
+            src,
+            "k",
+            {"row_ptr": row_ptr},
+            {"out": (4,)},
+            {"n": 5},
+            shapes={"row_ptr": "(5,)", "out": "(4,)"},
+            backends=_NATIVE,
+            dtypes={"row_ptr": "int64", "out": "int64"},
+        )
+    )
 
 
 def test_numeric_2d_axis_zero_matches_numpy():
-    a = np.arange(12, dtype=np.float64).reshape(3, 4)**2
+    a = np.arange(12, dtype=np.float64).reshape(3, 4) ** 2
     src = "import numpy as np\n\ndef k(a, out):\n    out[:, :] = np.diff(a, axis=0)\n"
     _assert_ok(run_op(src, "k", {"a": a}, {"out": (2, 4)}, {}, shapes={"a": "(3,4)", "out": "(2,4)"}, backends=_NATIVE))

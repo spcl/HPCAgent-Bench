@@ -11,6 +11,7 @@ replaced by statements -- the one place that still knows both halves.
 It is a comment and nothing else: no statement changes, so a backend that ignores comments emits
 exactly what it emitted before.
 """
+
 import json
 import pathlib
 import tempfile
@@ -96,17 +97,11 @@ def test_a_long_expression_is_truncated_to_keep_the_column_budget() -> None:
 
 def test_the_note_leaves_the_numbers_alone() -> None:
     """A comment must not change what the kernel computes -- pinned on real output, not on emit."""
-    src = ("import numpy as np\n"
-           "def f(a, out):\n"
-           "    c = np.sum(a, axis=1)\n"
-           "    out[:] = c * 2.0\n")
+    src = "import numpy as np\ndef f(a, out):\n    c = np.sum(a, axis=1)\n    out[:] = c * 2.0\n"
     rng = np.random.default_rng(0)
-    assert run_op(src, "f", {"a": rng.standard_normal((8, 4))}, {"out": (8, )}, _SYMS, shapes=_SHAPES,
-                  backends=NATIVE) == {
-                      "c": "ok",
-                      "cpp": "ok",
-                      "fortran": "ok"
-                  }
+    assert run_op(
+        src, "f", {"a": rng.standard_normal((8, 4))}, {"out": (8,)}, _SYMS, shapes=_SHAPES, backends=NATIVE
+    ) == {"c": "ok", "cpp": "ok", "fortran": "ok"}
 
 
 def test_a_dropped_statement_leaves_no_orphan_comment() -> None:

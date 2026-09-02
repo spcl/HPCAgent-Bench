@@ -21,6 +21,7 @@ and would be reported twice.
 Exit status: 0 when no source writes through ``out=``, 1 otherwise (each offender is printed with
 the slice-assign it should be).
 """
+
 import argparse
 import ast
 import subprocess
@@ -88,7 +89,8 @@ def main(argv=None):
     print(
         "\nWrite the store as a store: np.f(a, b, out=X) -> X[:] = np.f(a, b) (or X[<slice>] = ... "
         "when the target is already a slice). numba rejects out=, pythran silently ignores it.",
-        file=sys.stderr)
+        file=sys.stderr,
+    )
     return 1
 
 

@@ -101,10 +101,9 @@ def env_bool(name: str, default: bool) -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
-def post_json(url: str,
-              payload: Dict[str, Any],
-              timeout: float,
-              headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+def post_json(
+    url: str, payload: Dict[str, Any], timeout: float, headers: Optional[Dict[str, str]] = None
+) -> Dict[str, Any]:
     data = json.dumps(payload).encode("utf-8")
     request_headers = {"Content-Type": "application/json", "Accept": "application/json"}
     if headers:
@@ -160,12 +159,16 @@ def call_serpapi(query: str, max_results: int, timeout: float) -> List[SearchRes
         raise RuntimeError("SERPAPI_API_KEY must be set")
 
     debug(f"calling SerpAPI url={serpapi_url} max_results={max_results}")
-    payload = get_json(serpapi_url, {
-        "engine": "google",
-        "q": query,
-        "api_key": api_key,
-        "num": str(max_results),
-    }, timeout)
+    payload = get_json(
+        serpapi_url,
+        {
+            "engine": "google",
+            "q": query,
+            "api_key": api_key,
+            "num": str(max_results),
+        },
+        timeout,
+    )
 
     organic = payload.get("organic_results") or payload.get("results") or []
     results: List[SearchResult] = []
@@ -174,9 +177,12 @@ def call_serpapi(query: str, max_results: int, timeout: float) -> List[SearchRes
         if not url:
             continue
         results.append(
-            SearchResult(title=str(item.get("title") or url),
-                         url=url,
-                         snippet=str(item.get("snippet") or item.get("description") or "")))
+            SearchResult(
+                title=str(item.get("title") or url),
+                url=url,
+                snippet=str(item.get("snippet") or item.get("description") or ""),
+            )
+        )
         if len(results) >= max_results:
             break
     debug(f"SerpAPI returned {len(results)} usable URLs")
@@ -204,8 +210,9 @@ async def collect_arun_many(crawler: Any, urls: List[str], config: Any) -> List[
     return list(crawled)
 
 
-async def crawl_with_crawl4ai(results: Iterable[SearchResult], query: str, max_pages: int,
-                              max_chars: int) -> List[CrawledPage]:
+async def crawl_with_crawl4ai(
+    results: Iterable[SearchResult], query: str, max_pages: int, max_chars: int
+) -> List[CrawledPage]:
     fake = os.environ.get("WEBSEARCH_FAKE_CRAWL_JSON", "").strip()
     if fake:
         debug("using WEBSEARCH_FAKE_CRAWL_JSON instead of Crawl4AI")
@@ -214,8 +221,16 @@ async def crawl_with_crawl4ai(results: Iterable[SearchResult], query: str, max_p
         for result in list(results)[:max_pages]:
             content = str(mapping.get(result.url, ""))
             pages.append(
-                CrawledPage(result.title, result.url, result.snippet, content[:max_chars], "", bool(content),
-                            "" if content else "no fake crawl content for url"))
+                CrawledPage(
+                    result.title,
+                    result.url,
+                    result.snippet,
+                    content[:max_chars],
+                    "",
+                    bool(content),
+                    "" if content else "no fake crawl content for url",
+                )
+            )
         return pages
 
     try:
@@ -224,7 +239,8 @@ async def crawl_with_crawl4ai(results: Iterable[SearchResult], query: str, max_p
         from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(
-            "crawl4ai is required for live crawling; install requirements.txt and playwright chromium") from exc
+            "crawl4ai is required for live crawling; install requirements.txt and playwright chromium"
+        ) from exc
 
     bm25_threshold = env_float("WEBSEARCH_BM25_THRESHOLD", 1.0)
     page_timeout = env_int("WEBSEARCH_PAGE_TIMEOUT_MS", 30000)
@@ -279,13 +295,22 @@ async def crawl_with_crawl4ai(results: Iterable[SearchResult], query: str, max_p
             pages.append(CrawledPage(source.title, source.url, source.snippet, content, references, True))
         else:
             pages.append(
-                CrawledPage(source.title, source.url, source.snippet, "", "", False,
-                            str(getattr(crawled, "error_message", "crawl failed"))))
+                CrawledPage(
+                    source.title,
+                    source.url,
+                    source.snippet,
+                    "",
+                    "",
+                    False,
+                    str(getattr(crawled, "error_message", "crawl failed")),
+                )
+            )
 
     for result in selected:
         if result.url not in seen_urls:
             pages.append(
-                CrawledPage(result.title, result.url, result.snippet, "", "", False, "crawl did not return a result"))
+                CrawledPage(result.title, result.url, result.snippet, "", "", False, "crawl did not return a result")
+            )
     debug(f"Crawl4AI returned {sum(1 for page in pages if page.success)} successful page(s)")
     return pages
 
@@ -304,14 +329,16 @@ def build_llm_messages(query: str, pages: List[CrawledPage]) -> List[Dict[str, s
             {page.content}
             References:
             {page.references}
-            """).strip())
+            """).strip()
+            )
     context = "\n\n".join(context_blocks) if context_blocks else "No crawled page content was available."
     return [
         {
-            "role":
-            "system",
-            "content": ("Answer the user's web search query using only the provided sources. "
-                        "Be concise, technical, and include source URLs in a short Sources section."),
+            "role": "system",
+            "content": (
+                "Answer the user's web search query using only the provided sources. "
+                "Be concise, technical, and include source URLs in a short Sources section."
+            ),
         },
         {
             "role": "user",
@@ -382,22 +409,21 @@ def result_dict(query: str, answer: str, results: List[SearchResult], pages: Lis
     return {
         "query": query,
         "answer": answer,
-        "sources": [{
-            "title": page.title,
-            "url": page.url,
-            "success": page.success,
-            "error": page.error
-        } for page in pages],
+        "sources": [
+            {"title": page.title, "url": page.url, "success": page.success, "error": page.error} for page in pages
+        ],
         "search_results": [result.__dict__ for result in results],
         "crawled_pages": [page.__dict__ for page in pages],
     }
 
 
-def run_web_search(query: str,
-                   max_results: Optional[int] = None,
-                   max_pages: Optional[int] = None,
-                   max_chars_per_page: Optional[int] = None,
-                   timeout: Optional[float] = None) -> Dict[str, Any]:
+def run_web_search(
+    query: str,
+    max_results: Optional[int] = None,
+    max_pages: Optional[int] = None,
+    max_chars_per_page: Optional[int] = None,
+    timeout: Optional[float] = None,
+) -> Dict[str, Any]:
     seconds = timeout if timeout is not None else float(os.environ.get("WEBSEARCH_TIMEOUT_SECONDS", "60"))
     result_count = max_results if max_results is not None else env_int("WEBSEARCH_MAX_RESULTS", 5)
     page_count = max_pages if max_pages is not None else env_int("WEBSEARCH_MAX_PAGES", 3)

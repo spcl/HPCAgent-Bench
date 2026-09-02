@@ -35,6 +35,7 @@ staged files as positional args (already narrowed by the hook's broad ``\\.ya?ml
 whose script owns its own skip policy). With no files given -- standalone, or the pytest
 gate in ``tests/test_yaml_style.py`` -- it scans every tracked owned YAML instead.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -108,10 +109,11 @@ def fix(path: pathlib.Path) -> bool:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--fix", action="store_true", help="auto-fix trailing whitespace + final newline (lossless)")
-    ap.add_argument("files",
-                    nargs="*",
-                    help="files to check (default: every tracked owned YAML); "
-                    "pre-commit passes the staged files here")
+    ap.add_argument(
+        "files",
+        nargs="*",
+        help="files to check (default: every tracked owned YAML); pre-commit passes the staged files here",
+    )
     args = ap.parse_args(argv)
 
     # A staged DELETION is still passed as a positional arg by pre-commit; drop paths that

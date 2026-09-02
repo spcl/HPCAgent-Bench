@@ -14,6 +14,7 @@ closed form alone, and azimint_hist put 6 of 400000 fp32 samples one bin over --
 histograms, so that moved a bin ratio by 0.2% and failed the fp32 band under dace_cpu and cc
 alike, while every other bin was perfect.
 """
+
 import json
 import re
 
@@ -32,23 +33,19 @@ def _assert_ok(res):
 def test_histogram_explicit_range_drops_out_of_range():
     # a spans [-3, 5]; with range=(-2, 2) numpy keeps only -1, 0, 1 -> counts [0,1,1,1].
     # The old clamp folded -3 into bin 0 and 3, 5 into bin 3 -> [1,1,1,3].
-    src = ("import numpy as np\n"
-           "def f(a, out):\n"
-           "    out[:] = np.histogram(a, 4, range=(-2.0, 2.0))[0]\n")
+    src = "import numpy as np\ndef f(a, out):\n    out[:] = np.histogram(a, 4, range=(-2.0, 2.0))[0]\n"
     a = np.array([-3.0, -1.0, 0.0, 1.0, 3.0, 5.0])
     assert np.array_equal(np.histogram(a, 4, range=(-2.0, 2.0))[0], [0, 1, 1, 1])  # numpy anchor
-    res = run_op(src, "f", {"a": a}, {"out": (4, )}, {"N": 6}, shapes={"a": "(N,)", "out": "(4,)"}, backends=_BACKENDS)
+    res = run_op(src, "f", {"a": a}, {"out": (4,)}, {"N": 6}, shapes={"a": "(N,)", "out": "(4,)"}, backends=_BACKENDS)
     _assert_ok(res)
 
 
 def test_histogram_auto_range_unchanged():
     # No explicit range: lo/hi are a.min()/a.max(), so every element is in range and the
     # guard is a no-op -- this must still match numpy (regression guard for the fix).
-    src = ("import numpy as np\n"
-           "def f(a, out):\n"
-           "    out[:] = np.histogram(a, 5)[0]\n")
+    src = "import numpy as np\ndef f(a, out):\n    out[:] = np.histogram(a, 5)[0]\n"
     a = np.array([0.5, 1.5, 2.5, 3.5, 4.5, 2.0, 2.0, 4.0])
-    res = run_op(src, "f", {"a": a}, {"out": (5, )}, {"N": 8}, shapes={"a": "(N,)", "out": "(5,)"}, backends=_BACKENDS)
+    res = run_op(src, "f", {"a": a}, {"out": (5,)}, {"N": 8}, shapes={"a": "(N,)", "out": "(5,)"}, backends=_BACKENDS)
     _assert_ok(res)
 
 
@@ -76,16 +73,10 @@ def test_histogram_bins_edge_probes_exactly():
     a = _edge_probes(npt)
     ref = np.histogram(a, npt)[0]
     assert ref.sum() == a.size  # numpy anchor: every probe is in range, none is dropped
-    src = ("import numpy as np\n"
-           "def f(a, out):\n"
-           f"    out[:] = np.histogram(a, {npt})[0]\n")
-    res = run_op(src,
-                 "f", {"a": a}, {"out": (npt, )}, {"N": a.size},
-                 shapes={
-                     "a": "(N,)",
-                     "out": f"({npt},)"
-                 },
-                 backends=_BACKENDS)
+    src = f"import numpy as np\ndef f(a, out):\n    out[:] = np.histogram(a, {npt})[0]\n"
+    res = run_op(
+        src, "f", {"a": a}, {"out": (npt,)}, {"N": a.size}, shapes={"a": "(N,)", "out": f"({npt},)"}, backends=_BACKENDS
+    )
     _assert_ok(res)
 
 
@@ -95,26 +86,20 @@ def test_histogram_weighted_edge_probes_exactly():
     npt = 1000
     a = _edge_probes(npt)
     w = (np.arange(a.size, dtype=np.float64) % 13.0) + 1.0
-    src = ("import numpy as np\n"
-           "def f(a, w, out):\n"
-           f"    out[:] = np.histogram(a, {npt}, weights=w)[0]\n")
-    res = run_op(src,
-                 "f", {
-                     "a": a,
-                     "w": w
-                 }, {"out": (npt, )}, {"N": a.size},
-                 shapes={
-                     "a": "(N,)",
-                     "w": "(N,)",
-                     "out": f"({npt},)"
-                 },
-                 backends=_BACKENDS)
+    src = f"import numpy as np\ndef f(a, w, out):\n    out[:] = np.histogram(a, {npt}, weights=w)[0]\n"
+    res = run_op(
+        src,
+        "f",
+        {"a": a, "w": w},
+        {"out": (npt,)},
+        {"N": a.size},
+        shapes={"a": "(N,)", "w": "(N,)", "out": f"({npt},)"},
+        backends=_BACKENDS,
+    )
     _assert_ok(res)
 
 
-_HIST_SRC = ("import numpy as np\n"
-             "def f(a, out):\n"
-             "    out[:] = np.histogram(a, 8)[0]\n")
+_HIST_SRC = "import numpy as np\ndef f(a, out):\n    out[:] = np.histogram(a, 8)[0]\n"
 
 
 def _emit_sources(tmp_path):
@@ -123,6 +108,7 @@ def _emit_sources(tmp_path):
     from numpyto_common.lowering import lower
     from numpyto_c.emit import emit_c
     from numpyto_c.dace_emit import emit_dace
+
     npy = tmp_path / "f_numpy.py"
     npy.write_text(_HIST_SRC)
     bi = tmp_path / "bench_info.json"

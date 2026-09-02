@@ -14,6 +14,7 @@ bit-identical either way, because NumPy releases the GIL inside the fill.
 The bit generators are round-robined over the spawned children. MT19937 is deliberately absent:
 1.9x slower than PCG64 for the same fill and 2.5KB of state per stream, in exchange for nothing.
 """
+
 import concurrent.futures
 from typing import Any, Callable, List, Sequence
 

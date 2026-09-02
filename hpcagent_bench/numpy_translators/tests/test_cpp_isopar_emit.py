@@ -24,6 +24,7 @@ Numerics run the emitted C++ against numpy through the shared oracles: ``run_op`
 probes, ``run_kernel`` for corpus kernels across the four shapes (elementwise, reduction, scan,
 convolution nest).
 """
+
 import json
 import pathlib
 import re
@@ -43,8 +44,14 @@ from numpyto_common.frontend import parse_kernel  # noqa: E402
 from numpyto_common.lowering import lower  # noqa: E402
 
 #: Every algorithm this backend may emit. A conversion outside this set is a bug, not a feature.
-_ALGORITHMS = ("std::transform", "std::reduce", "std::transform_reduce", "std::inclusive_scan", "std::fill",
-               "std::copy")
+_ALGORITHMS = (
+    "std::transform",
+    "std::reduce",
+    "std::transform_reduce",
+    "std::inclusive_scan",
+    "std::fill",
+    "std::copy",
+)
 
 _SYMS = {"N": 8}
 _SHAPE_1D = {"a": "(N,)", "b": "(N,)", "out": "(N,)"}
@@ -84,7 +91,7 @@ def _calls(text: str) -> list:
 
 def _body(text: str) -> str:
     """The emitted kernel function body, without the shared prelude (which names no algorithm)."""
-    return text[text.index('extern "C"'):]
+    return text[text.index('extern "C"') :]
 
 
 def _stayed_a_loop(text: str) -> bool:
@@ -102,10 +109,11 @@ def _stayed_a_loop(text: str) -> bool:
         # ... and FIRST: the ABI orders pointers by name, so the output has no reserved position.
         ("    for i in range(N):\n        out[i] = x[i] * 2.0\n", "x, out", None),
         # A converted loop next to one that stays a loop, with a by-value scalar in the signature.
-        ("    s = 0.0\n    for i in range(N):\n        s = s + z[i]\n    out[0] = s * alpha\n", "z, alpha, out", {
-            "z": "(N,)",
-            "out": "(N,)"
-        }),
+        (
+            "    s = 0.0\n    for i in range(N):\n        s = s + z[i]\n    out[0] = s * alpha\n",
+            "z, alpha, out",
+            {"z": "(N,)", "out": "(N,)"},
+        ),
     ],
     ids=["output-last", "output-first", "scalar-param"],
 )
@@ -113,8 +121,9 @@ def test_signature_is_byte_identical_to_the_plain_cpp_backend(body, args, shapes
     """isopar changes the BODY, never the interface: same symbol, same canonical parameter order
     (pointers by name, then scalars/symbols by name), same types, same ``__restrict__``. Both
     backends read it from one ``_emit_signature``, and this pins that they still do."""
-    assert _signature(_emit(body, args=args,
-                            shapes=shapes)) == _signature(_emit(body, args=args, shapes=shapes, isopar=False))
+    assert _signature(_emit(body, args=args, shapes=shapes)) == _signature(
+        _emit(body, args=args, shapes=shapes, isopar=False)
+    )
 
 
 def test_c_linkage_block_is_opened_once():
@@ -160,8 +169,10 @@ def test_scan_carries_unseq_because_the_parallel_scan_is_wrong_here():
     every size, both float and double. ``unseq`` reaches the same serial recurrence the loop does
     (still vectorizable), so it is correct by construction rather than by the accident that zero is
     ``plus``'s identity. Both scan combines take it, so the emitter never depends on that accident."""
-    for body in ("    for i in range(1, N):\n        out[i] = out[i - 1] + a[i]\n",
-                 "    for i in range(1, N):\n        out[i] = out[i - 1] * a[i]\n"):
+    for body in (
+        "    for i in range(1, N):\n        out[i] = out[i - 1] + a[i]\n",
+        "    for i in range(1, N):\n        out[i] = out[i - 1] * a[i]\n",
+    ):
         text = _body(_emit(body))
         assert _calls(text) == ["std::inclusive_scan("], text
         assert "std::inclusive_scan(std::execution::unseq, " in text, text
@@ -186,8 +197,10 @@ def test_never_std_accumulate():
 
 def test_binary_elementwise_map_is_one_transform():
     text = _body(_emit("    for i in range(N):\n        out[i] = a[i] + b[i]\n"))
-    assert ("std::transform(std::execution::par_unseq, a, a + __n0, b, out, "
-            "[](double __v0, double __v1) { return static_cast<double>((__v0 + __v1)); });") in text
+    assert (
+        "std::transform(std::execution::par_unseq, a, a + __n0, b, out, "
+        "[](double __v0, double __v1) { return static_cast<double>((__v0 + __v1)); });"
+    ) in text
     assert _calls(text) == ["std::transform("]
 
 
@@ -200,8 +213,10 @@ def test_in_place_map_reuses_the_destination_range():
 
 def test_unary_map_carries_the_call_into_the_lambda():
     text = _body(_emit("    for i in range(N):\n        out[i] = np.sqrt(a[i]) * 2.0\n"))
-    assert "std::transform(std::execution::par_unseq, a, a + __n0, out, [](double __v0) { return static_cast<double>((sqrt(__v0) * 2.0)); });" \
+    assert (
+        "std::transform(std::execution::par_unseq, a, a + __n0, out, [](double __v0) { return static_cast<double>((sqrt(__v0) * 2.0)); });"
         in text
+    )
 
 
 def test_plain_move_is_a_copy_not_a_transform():
@@ -219,7 +234,9 @@ def test_shifted_read_shifts_the_input_range():
     destination is a DIFFERENT array, so the ranges cannot overlap."""
     text = _body(_emit("    for i in range(1, N):\n        out[i] = a[i - 1] + b[i]\n"))
     assert "const int64_t __n0 = (N) > (1) ? (N) - (1) : 0;" in text
-    assert "std::transform(std::execution::par_unseq, a + ((1) - 1), a + ((1) - 1) + __n0, b + ((1)), out + ((1))," in text
+    assert (
+        "std::transform(std::execution::par_unseq, a + ((1) - 1), a + ((1) - 1) + __n0, b + ((1)), out + ((1))," in text
+    )
 
 
 def test_invariant_read_of_the_destination_stays_a_loop():
@@ -232,7 +249,10 @@ def test_invariant_operand_is_captured_not_parameterised():
     """A loop-invariant read stays inline in the lambda body, which then captures; only the element
     reads become parameters."""
     text = _body(_emit("    for i in range(N):\n        out[i] = a[i] * b[0]\n"))
-    assert "std::transform(std::execution::par_unseq, a, a + __n0, out, [&](double __v0) { return static_cast<double>((__v0 * b[0])); });" in text
+    assert (
+        "std::transform(std::execution::par_unseq, a, a + __n0, out, [&](double __v0) { return static_cast<double>((__v0 * b[0])); });"
+        in text
+    )
 
 
 def test_trip_count_is_clamped_so_an_empty_range_is_never_inverted():
@@ -246,14 +266,17 @@ def test_row_of_a_2d_array_converts_on_the_contiguous_axis():
     """The inner loop walks the FASTEST axis, so one iteration is one element: that row is a range.
     The outer loop stays a loop -- no algorithm expresses a nest."""
     text = _body(
-        _emit("    for i in range(N):\n        for j in range(N):\n            out[i, j] = a[i, j] * 2.0\n",
-              args="a, out",
-              shapes={
-                  "a": "(N, N)",
-                  "out": "(N, N)"
-              }))
+        _emit(
+            "    for i in range(N):\n        for j in range(N):\n            out[i, j] = a[i, j] * 2.0\n",
+            args="a, out",
+            shapes={"a": "(N, N)", "out": "(N, N)"},
+        )
+    )
     assert "for (int64_t i = 0; i < N; ++i) {" in text
-    assert "std::transform(std::execution::par_unseq, a + ((i)*(N) + (0)), a + ((i)*(N) + (0)) + __n0, out + ((i)*(N) + (0))," in text
+    assert (
+        "std::transform(std::execution::par_unseq, a + ((i)*(N) + (0)), a + ((i)*(N) + (0)) + __n0, out + ((i)*(N) + (0)),"
+        in text
+    )
 
 
 def test_two_reads_on_different_outer_rows_are_two_ranges():
@@ -266,24 +289,24 @@ def test_two_reads_on_different_outer_rows_are_two_ranges():
             "        for j in range(N):\n"
             "            out[i, j] = (a[2 * i, j] + a[2 * i + 1, j]) * 0.5\n",
             args="a, out",
-            shapes={
-                "a": "(N, N)",
-                "out": "(N, N)"
-            }))
-    assert "std::transform(std::execution::par_unseq, a + (((2 * i))*(N) + (0)), a + (((2 * i))*(N) + (0)) + __n0, " \
-           "a + ((((2 * i) + 1))*(N) + (0)), out + ((i)*(N) + (0)), " \
-           "[](double __v0, double __v1) { return static_cast<double>(((__v0 + __v1) * 0.5)); });" in text
+            shapes={"a": "(N, N)", "out": "(N, N)"},
+        )
+    )
+    assert (
+        "std::transform(std::execution::par_unseq, a + (((2 * i))*(N) + (0)), a + (((2 * i))*(N) + (0)) + __n0, "
+        "a + ((((2 * i) + 1))*(N) + (0)), out + ((i)*(N) + (0)), "
+        "[](double __v0, double __v1) { return static_cast<double>(((__v0 + __v1) * 0.5)); });" in text
+    )
 
 
 def test_column_sweep_stays_a_loop():
     """``out[j, i]`` walks the SLOW axis: stride N, not 1. No standard algorithm takes a strided
     range, and pretending it does would read the wrong elements."""
-    text = _emit("    for i in range(N):\n        for j in range(N):\n            out[j, i] = a[j, i] * 2.0\n",
-                 args="a, out",
-                 shapes={
-                     "a": "(N, N)",
-                     "out": "(N, N)"
-                 })
+    text = _emit(
+        "    for i in range(N):\n        for j in range(N):\n            out[j, i] = a[j, i] * 2.0\n",
+        args="a, out",
+        shapes={"a": "(N, N)", "out": "(N, N)"},
+    )
     assert _stayed_a_loop(text)
 
 
@@ -306,7 +329,10 @@ def test_max_reduction_uses_the_nan_propagating_combine():
     """numpy's maximum propagates NaN, and so does the prelude's ``max`` -- which makes it
     commutative and associative, hence a legal std::reduce combine."""
     text = _body(_emit("    s = a[0]\n    for i in range(N):\n        s = max(s, a[i])\n    out[0] = s\n"))
-    assert "s = std::reduce(std::execution::par_unseq, a, a + __n0, s, [](double __a, double __b) { return max(__a, __b); });" in text
+    assert (
+        "s = std::reduce(std::execution::par_unseq, a, a + __n0, s, [](double __a, double __b) { return max(__a, __b); });"
+        in text
+    )
 
 
 def test_dot_product_is_the_default_transform_reduce():
@@ -316,8 +342,10 @@ def test_dot_product_is_the_default_transform_reduce():
 
 def test_transformed_reduction_keeps_the_combine_in_the_accumulator_type():
     text = _body(_emit("    s = 0.0\n    for i in range(N):\n        s = s + a[i] * a[i]\n    out[0] = s\n"))
-    assert ("s = std::transform_reduce(std::execution::par_unseq, a, a + __n0, s, std::plus<double>{}, "
-            "[](double __v0) { return static_cast<double>((__v0 * __v0)); });") in text
+    assert (
+        "s = std::transform_reduce(std::execution::par_unseq, a, a + __n0, s, std::plus<double>{}, "
+        "[](double __v0) { return static_cast<double>((__v0 * __v0)); });"
+    ) in text
 
 
 def test_reduction_into_an_output_cell_converts_too():
@@ -343,16 +371,20 @@ def test_index_valued_body_stays_a_loop():
 
 def test_prefix_sum_is_an_inclusive_scan_seeded_from_the_preceding_element():
     text = _body(_emit("    for i in range(1, N):\n        out[i] = out[i - 1] + a[i]\n"))
-    assert ("std::inclusive_scan(std::execution::unseq, a + ((1)), a + ((1)) + __n0, out + ((1)), "
-            "std::plus<double>{}, out[(1) - 1]);") in text
+    assert (
+        "std::inclusive_scan(std::execution::unseq, a + ((1)), a + ((1)) + __n0, out + ((1)), "
+        "std::plus<double>{}, out[(1) - 1]);"
+    ) in text
     # The init READS the element before the range, which an empty range does not have.
     assert "if (__n0 > 0) {" in text
 
 
 def test_prefix_product_scans_under_multiplies():
     text = _body(_emit("    for i in range(1, N):\n        out[i] = out[i - 1] * a[i]\n"))
-    assert ("std::inclusive_scan(std::execution::unseq, a + ((1)), a + ((1)) + __n0, out + ((1)), "
-            "std::multiplies<double>{}, out[(1) - 1]);") in text
+    assert (
+        "std::inclusive_scan(std::execution::unseq, a + ((1)), a + ((1)) + __n0, out + ((1)), "
+        "std::multiplies<double>{}, out[(1) - 1]);"
+    ) in text
 
 
 def test_per_row_scan_of_a_2d_array_converts():
@@ -360,12 +392,13 @@ def test_per_row_scan_of_a_2d_array_converts():
         _emit(
             "    for i in range(N):\n        for j in range(1, N):\n            out[i, j] = out[i, j - 1] + a[i, j]\n",
             args="a, out",
-            shapes={
-                "a": "(N, N)",
-                "out": "(N, N)"
-            }))
-    assert ("std::inclusive_scan(std::execution::unseq, a + ((i)*(N) + ((1))), "
-            "a + ((i)*(N) + ((1))) + __n0, out + ((i)*(N) + ((1))),") in text
+            shapes={"a": "(N, N)", "out": "(N, N)"},
+        )
+    )
+    assert (
+        "std::inclusive_scan(std::execution::unseq, a + ((i)*(N) + ((1))), "
+        "a + ((i)*(N) + ((1))) + __n0, out + ((i)*(N) + ((1))),"
+    ) in text
     assert "std::plus<double>{}, out[(i)*(N) + ((1) - 1)]);" in text
 
 
@@ -385,7 +418,8 @@ def test_recurrence_with_a_third_operand_stays_a_loop():
     """``out[i] = out[i] + out[i-1]*b[i]`` reads the destination at two different offsets: neither a
     map (overlapping ranges) nor a scan (the combine is not the bare associative one)."""
     assert _stayed_a_loop(
-        _emit("    for i in range(1, N):\n        out[i] = out[i] + out[i - 1] * b[i]\n", args="b, out"))
+        _emit("    for i in range(1, N):\n        out[i] = out[i] + out[i - 1] * b[i]\n", args="b, out")
+    )
 
 
 # --- shapes with no faithful spelling stay loops ---------------------------------------------------
@@ -407,43 +441,39 @@ def test_reversed_loop_stays_a_loop():
 
 def test_scaled_index_stays_a_loop():
     assert _stayed_a_loop(
-        _emit("    for i in range(N):\n        out[i] = a[2 * i]\n", shapes={
-            "a": "(N,)",
-            "b": "(N,)",
-            "out": "(N,)"
-        }))
+        _emit("    for i in range(N):\n        out[i] = a[2 * i]\n", shapes={"a": "(N,)", "b": "(N,)", "out": "(N,)"})
+    )
 
 
 def test_indirect_gather_stays_a_loop():
     """``out[i] = a[ip[i]]`` is a gather: the range it touches is data-dependent."""
     assert _stayed_a_loop(
-        _emit("    for i in range(N):\n        out[i] = a[ip[i]]\n",
-              args="a, ip, out",
-              shapes={
-                  "a": "(N,)",
-                  "ip": "(N,)",
-                  "out": "(N,)"
-              },
-              dtypes={"ip": "int64"}))
+        _emit(
+            "    for i in range(N):\n        out[i] = a[ip[i]]\n",
+            args="a, ip, out",
+            shapes={"a": "(N,)", "ip": "(N,)", "out": "(N,)"},
+            dtypes={"ip": "int64"},
+        )
+    )
 
 
 def test_indirect_scatter_stays_a_loop():
     assert _stayed_a_loop(
-        _emit("    for i in range(N):\n        out[ip[i]] = a[i]\n",
-              args="a, ip, out",
-              shapes={
-                  "a": "(N,)",
-                  "ip": "(N,)",
-                  "out": "(N,)"
-              },
-              dtypes={"ip": "int64"}))
+        _emit(
+            "    for i in range(N):\n        out[ip[i]] = a[i]\n",
+            args="a, ip, out",
+            shapes={"a": "(N,)", "ip": "(N,)", "out": "(N,)"},
+            dtypes={"ip": "int64"},
+        )
+    )
 
 
 def test_multi_statement_body_stays_a_loop():
     """Two stores per iteration is a schedule of two maps; converting only one would reorder them
     against each other."""
     assert _stayed_a_loop(
-        _emit("    for i in range(N):\n        out[i] = a[i] + b[i]\n        out[i] = out[i] * 2.0\n"))
+        _emit("    for i in range(N):\n        out[i] = a[i] + b[i]\n        out[i] = out[i] * 2.0\n")
+    )
 
 
 def test_conditional_body_stays_a_loop():
@@ -455,17 +485,19 @@ def test_body_calling_a_kernel_helper_stays_a_loop():
     emitted from the same IR as the kernel, so its body may ``malloc`` a local array -- which a
     lambda calling it would then do once per element, on an unspecified thread. Refused."""
     # The early return is what stops the frontend inlining it, so it survives as a real function.
-    src = ("import numpy as np\n\n\n"
-           "def scratch(v, N):\n"
-           "    if v < 0.0:\n"
-           "        return 0.0\n"
-           "    t = np.zeros((N,))\n"
-           "    for k in range(N):\n"
-           "        t[k] = v\n"
-           "    return t[N - 1]\n\n\n"
-           "def k(a, b, out, N):\n"
-           "    for i in range(N):\n"
-           "        out[i] = scratch(a[i], N)\n")
+    src = (
+        "import numpy as np\n\n\n"
+        "def scratch(v, N):\n"
+        "    if v < 0.0:\n"
+        "        return 0.0\n"
+        "    t = np.zeros((N,))\n"
+        "    for k in range(N):\n"
+        "        t[k] = v\n"
+        "    return t[N - 1]\n\n\n"
+        "def k(a, b, out, N):\n"
+        "    for i in range(N):\n"
+        "        out[i] = scratch(a[i], N)\n"
+    )
     with tempfile.TemporaryDirectory() as td:
         d = pathlib.Path(td)
         (d / "k_numpy.py").write_text(src)
@@ -476,7 +508,7 @@ def test_body_calling_a_kernel_helper_stays_a_loop():
     assert "static double scratch(" in text and "malloc(" in text, text[-900:]
     # So the loop that CALLS it stays a loop. (The helper's own body still converts -- a call
     # there is an ordinary call site, not an element access function.)
-    kernel = text[text.index("void k("):]
+    kernel = text[text.index("void k(") :]
     assert not _calls(kernel), kernel
 
 
@@ -484,12 +516,11 @@ def test_narrow_int_elements_stay_a_loop():
     """An int32 element PROMOTES to int64 on read (numpy's arithmetic width). A lambda taking it by
     value would compute in int32 and wrap where the loop does not."""
     assert _stayed_a_loop(
-        _emit("    for i in range(N):\n        out[i] = a[i] + b[i]\n",
-              dtypes={
-                  "a": "int32",
-                  "b": "int32",
-                  "out": "int32"
-              }))
+        _emit(
+            "    for i in range(N):\n        out[i] = a[i] + b[i]\n",
+            dtypes={"a": "int32", "b": "int32", "out": "int32"},
+        )
+    )
 
 
 def test_every_algorithm_emitted_is_one_we_claim():
@@ -516,14 +547,7 @@ def _run(body: str):
     calls the numpy reference with the arrays alone; the emitted signature still carries ``N``, as
     the shapes declare it."""
     src = "import numpy as np\n\n\ndef k(a, b, out):\n" + body
-    return run_op(src,
-                  "k", {
-                      "a": _A.copy(),
-                      "b": _B.copy()
-                  }, {"out": (8, )},
-                  _SYMS,
-                  shapes=_SHAPE_1D,
-                  backends=_NUMERIC)
+    return run_op(src, "k", {"a": _A.copy(), "b": _B.copy()}, {"out": (8,)}, _SYMS, shapes=_SHAPE_1D, backends=_NUMERIC)
 
 
 def _ok(res):
@@ -559,11 +583,13 @@ def test_shapes_match_numpy(name, body):
 def test_two_dimensional_row_map_and_scan_match_numpy():
     a2 = np.arange(16, dtype=np.float64).reshape(4, 4) - 7.0
     shapes = {"a": "(M, M)", "out": "(M, M)"}
-    src = ("import numpy as np\n\n\ndef k(a, out):\n"
-           "    for i in range(4):\n"
-           "        out[i, 0] = a[i, 0]\n"
-           "        for j in range(1, 4):\n"
-           "            out[i, j] = out[i, j - 1] + a[i, j] * 2.0\n")
+    src = (
+        "import numpy as np\n\n\ndef k(a, out):\n"
+        "    for i in range(4):\n"
+        "        out[i, 0] = a[i, 0]\n"
+        "        for j in range(1, 4):\n"
+        "            out[i, j] = out[i, j - 1] + a[i, j] * 2.0\n"
+    )
     res = run_op(src, "k", {"a": a2}, {"out": (4, 4)}, {"M": 4}, shapes=shapes, backends=_NUMERIC)
     assert all(v == "ok" for v in res.values()), res
 
@@ -589,6 +615,7 @@ def _oracle():
     if path not in sys.path:
         sys.path.insert(0, path)
     import numerical_oracle as no
+
     if not shutil.which("g++"):
         pytest.skip("g++ needed to build the emitted C++")
     return no
@@ -605,29 +632,40 @@ def test_corpus_kernel_matches_numpy(kernel, shape):
 
 #: The no-implicit-conversion gate emitted C/C++ is held to. ``-Wunused-parameter`` is deliberately
 #: absent: the ABI fixes the parameter list, so an unread parameter is required, not a defect.
-_NO_IMPLICIT_CONVERSION = ("-Werror=conversion", "-Werror=sign-conversion", "-Werror=float-conversion",
-                           "-Werror=double-promotion")
+_NO_IMPLICIT_CONVERSION = (
+    "-Werror=conversion",
+    "-Werror=sign-conversion",
+    "-Werror=float-conversion",
+    "-Werror=double-promotion",
+)
 
 #: One converted case per algorithm, all mixed into one kernel per parametrization below.
 _CONVERSION_CASES = [
-    ("transform+reduce", "    s = 0.0\n"
-     "    for i in range(N):\n"
-     "        out[i] = np.sqrt(np.abs(a[i])) * b[i]\n"
-     "    for i in range(N):\n"
-     "        s = s + out[i] * b[i]\n"
-     "    out[0] = s\n", None),
-    ("scan+fill+copy", "    for i in range(N):\n"
-     "        out[i] = 0.0\n"
-     "    for i in range(1, N):\n"
-     "        out[i] = out[i - 1] + a[i]\n"
-     "    for i in range(N):\n"
-     "        b[i] = out[i]\n", None),
-    ("integer elements", "    for i in range(N):\n"
-     "        out[i] = a[i] * b[i] + 3\n", {
-         "a": "int64",
-         "b": "int64",
-         "out": "int64"
-     }),
+    (
+        "transform+reduce",
+        "    s = 0.0\n"
+        "    for i in range(N):\n"
+        "        out[i] = np.sqrt(np.abs(a[i])) * b[i]\n"
+        "    for i in range(N):\n"
+        "        s = s + out[i] * b[i]\n"
+        "    out[0] = s\n",
+        None,
+    ),
+    (
+        "scan+fill+copy",
+        "    for i in range(N):\n"
+        "        out[i] = 0.0\n"
+        "    for i in range(1, N):\n"
+        "        out[i] = out[i - 1] + a[i]\n"
+        "    for i in range(N):\n"
+        "        b[i] = out[i]\n",
+        None,
+    ),
+    (
+        "integer elements",
+        "    for i in range(N):\n        out[i] = a[i] * b[i] + 3\n",
+        {"a": "int64", "b": "int64", "out": "int64"},
+    ),
 ]
 
 
@@ -639,16 +677,24 @@ def test_emitted_source_has_no_implicit_conversion(name, body, dtypes):
     ``static_cast``. Inside a lambda that is load-bearing: the callable's result is converted on the
     way into the output range, where the loop form's assignment used to hide it."""
     from hpcagent_bench import languages
+
     text = _emit(body, dtypes=dtypes)
     with tempfile.TemporaryDirectory() as td:
         src = pathlib.Path(td) / "k.cpp"
         src.write_text(text)
-        cc = subprocess.run([
-            "g++", "-O1",
-            languages.std_flag("cpp"), "-Wall", "-Wextra", "-Wno-unused-parameter", *_NO_IMPLICIT_CONVERSION,
-            "-fsyntax-only",
-            str(src)
-        ],
-                            capture_output=True,
-                            text=True)
+        cc = subprocess.run(
+            [
+                "g++",
+                "-O1",
+                languages.std_flag("cpp"),
+                "-Wall",
+                "-Wextra",
+                "-Wno-unused-parameter",
+                *_NO_IMPLICIT_CONVERSION,
+                "-fsyntax-only",
+                str(src),
+            ],
+            capture_output=True,
+            text=True,
+        )
     assert cc.returncode == 0, cc.stderr

@@ -26,7 +26,7 @@ help:            ## list targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
 		awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n",$$1,$$2}'
 
-format:          ## reformat every tracked source in place (yapf + clang-format + fprettify)
+format:          ## reformat every tracked source in place (ruff + clang-format + fprettify)
 	$(PYTHON) scripts/check_format.py --all --fix
 
 format-check:    ## check formatting of changed files (CI parity, no writes)

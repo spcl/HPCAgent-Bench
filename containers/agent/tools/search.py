@@ -17,18 +17,9 @@ DESCRIPTION = "Ask the remote search service for web/documentation information."
 INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "query": {
-            "type": "string",
-            "description": "Question or search query."
-        },
-        "context": {
-            "type": "string",
-            "description": "Optional task context to guide the search."
-        },
-        "limit": {
-            "type": "integer",
-            "description": "Optional requested number of results."
-        },
+        "query": {"type": "string", "description": "Question or search query."},
+        "context": {"type": "string", "description": "Optional task context to guide the search."},
+        "limit": {"type": "integer", "description": "Optional requested number of results."},
     },
     "required": ["query"],
 }

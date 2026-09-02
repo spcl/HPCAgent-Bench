@@ -6,36 +6,53 @@ import torch
 import triton
 import triton.language as tl
 
-from hpcagent_bench.frameworks.triton_utilities import get_4d_tile_offsets, derive_launch_arguments, use_grid, \
-    kernel_mean_and_sumsq, kernel_compute_stddev, get_2d_tile_offsets
+from hpcagent_bench.frameworks.triton_utilities import (
+    get_4d_tile_offsets,
+    derive_launch_arguments,
+    use_grid,
+    kernel_mean_and_sumsq,
+    kernel_compute_stddev,
+    get_2d_tile_offsets,
+)
 
 
 def _generate_conv2d_config():
     return [
-        triton.Config(kwargs={
-            'BLOCK_SIZE_C1': block_size_c1,
-            'BLOCK_SIZE_C2': block_size_c2,
-            'REUSE_INPUT': reuse_input
-        },
-                      num_warps=warps) for block_size_c1, block_size_c2, warps, reuse_input in itertools.product(
-                          [1, 2, 4, 8, 16, 32, 64], [1, 2, 4, 8, 16, 32, 64], [1, 2], [False, True])
+        triton.Config(
+            kwargs={"BLOCK_SIZE_C1": block_size_c1, "BLOCK_SIZE_C2": block_size_c2, "REUSE_INPUT": reuse_input},
+            num_warps=warps,
+        )
+        for block_size_c1, block_size_c2, warps, reuse_input in itertools.product(
+            [1, 2, 4, 8, 16, 32, 64], [1, 2, 4, 8, 16, 32, 64], [1, 2], [False, True]
+        )
         if (block_size_c2 < 512 and warps < 4 if reuse_input else block_size_c1 < 8)
     ]
 
 
-@use_grid(lambda meta: (meta['H'], meta['W'], meta['N'] * (triton.cdiv(meta['C1'], meta['BLOCK_SIZE_C1']) if meta[
-    'REUSE_INPUT'] else triton.cdiv(meta['C2'], meta['BLOCK_SIZE_C2']))))
+@use_grid(
+    lambda meta: (
+        meta["H"],
+        meta["W"],
+        meta["N"]
+        * (
+            triton.cdiv(meta["C1"], meta["BLOCK_SIZE_C1"])
+            if meta["REUSE_INPUT"]
+            else triton.cdiv(meta["C2"], meta["BLOCK_SIZE_C2"])
+        ),
+    )
+)
 @derive_launch_arguments(
     lambda input, weights, **_: {
-        'N': input.shape[0],
-        'H': input.shape[1],
-        'W': input.shape[2],
-        'C1': input.shape[3],
-        'C2': weights.shape[-1],
-        'K': weights.shape[0],
-        'K_NEXT_2': triton.next_power_of_2(weights.shape[0])
-    })
-@triton.autotune(configs=_generate_conv2d_config(), key=['N', 'H', 'W', 'K', 'C1', 'C2'], cache_results=True)
+        "N": input.shape[0],
+        "H": input.shape[1],
+        "W": input.shape[2],
+        "C1": input.shape[3],
+        "C2": weights.shape[-1],
+        "K": weights.shape[0],
+        "K_NEXT_2": triton.next_power_of_2(weights.shape[0]),
+    }
+)
+@triton.autotune(configs=_generate_conv2d_config(), key=["N", "H", "W", "K", "C1", "C2"], cache_results=True)
 @triton.jit()
 def _conv2d(
     input,  # (N, H, W, C1)
@@ -91,8 +108,9 @@ def _conv2d(
                 tile_dims=(K_NEXT_2, K_NEXT_2, BLOCK_SIZE_C1, BLOCK_SIZE_C2),
                 matrix_dims=(K, K, C1, C2),
             )
-            weight_tile = tl.load(weights + tile, mask, other=0.0).reshape(K_NEXT_2 * K_NEXT_2 * BLOCK_SIZE_C1,
-                                                                           BLOCK_SIZE_C2)
+            weight_tile = tl.load(weights + tile, mask, other=0.0).reshape(
+                K_NEXT_2 * K_NEXT_2 * BLOCK_SIZE_C1, BLOCK_SIZE_C2
+            )
             sum = tl.sum(conv_matrix * weight_tile, axis=0)[None, None, None, :]
 
             output_tile, output_mask = get_4d_tile_offsets(
@@ -131,8 +149,9 @@ def _conv2d(
                 tile_dims=(K_NEXT_2, K_NEXT_2, BLOCK_SIZE_C1, BLOCK_SIZE_C2),
                 matrix_dims=(K, K, C1, C2),
             )
-            weight_tile = tl.load(weights + tile, mask, other=0.0).reshape(K_NEXT_2 * K_NEXT_2 * BLOCK_SIZE_C1,
-                                                                           BLOCK_SIZE_C2)
+            weight_tile = tl.load(weights + tile, mask, other=0.0).reshape(
+                K_NEXT_2 * K_NEXT_2 * BLOCK_SIZE_C1, BLOCK_SIZE_C2
+            )
             sum += tl.sum(conv_matrix * weight_tile, axis=0)[None, None, None, :]
 
         output_tile, output_mask = get_4d_tile_offsets(
@@ -146,26 +165,31 @@ def _conv2d(
         tl.store(output + output_tile, sum, output_mask)
 
 
-@use_grid(lambda meta: (
-    triton.cdiv(meta['N'], meta['BLOCK_SIZE_N']),
-    triton.cdiv(meta['M'], meta['BLOCK_SIZE_M']),
-))
-@derive_launch_arguments(lambda x, **_: {
-    'N': reduce(operator.mul, x.shape[1:], 1),
-    'M': x.shape[0],
-})
+@use_grid(
+    lambda meta: (
+        triton.cdiv(meta["N"], meta["BLOCK_SIZE_N"]),
+        triton.cdiv(meta["M"], meta["BLOCK_SIZE_M"]),
+    )
+)
+@derive_launch_arguments(
+    lambda x, **_: {
+        "N": reduce(operator.mul, x.shape[1:], 1),
+        "M": x.shape[0],
+    }
+)
 @triton.autotune(
     configs=[
-        triton.Config(kwargs={
-            'BLOCK_SIZE_N': n,
-            'BLOCK_SIZE_M': m
-        }, num_warps=w)
-        for n, m, w in itertools.product([4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048],
-                                         [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048], [1, 2, 4, 8])
+        triton.Config(kwargs={"BLOCK_SIZE_N": n, "BLOCK_SIZE_M": m}, num_warps=w)
+        for n, m, w in itertools.product(
+            [4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048],
+            [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048],
+            [1, 2, 4, 8],
+        )
         if n * m < (1 << 16)  # Arbitrary limit to not be too slow.
     ],
-    key=['N', 'M'],
-    cache_results=True)
+    key=["N", "M"],
+    cache_results=True,
+)
 @triton.jit()
 def _batchnorm2d_normalize(
     x,  # (M, N)
@@ -181,12 +205,14 @@ def _batchnorm2d_normalize(
 ):
     n = tl.program_id(axis=0)
     m = tl.program_id(axis=1)
-    tile, mask, rows, columns = get_2d_tile_offsets(n * BLOCK_SIZE_N,
-                                                    m * BLOCK_SIZE_M,
-                                                    tile_width=BLOCK_SIZE_N,
-                                                    tile_height=BLOCK_SIZE_M,
-                                                    matrix_width=N,
-                                                    matrix_height=M)
+    tile, mask, rows, columns = get_2d_tile_offsets(
+        n * BLOCK_SIZE_N,
+        m * BLOCK_SIZE_M,
+        tile_width=BLOCK_SIZE_N,
+        tile_height=BLOCK_SIZE_M,
+        matrix_width=N,
+        matrix_height=M,
+    )
     x_tile = tl.load(x + tile, mask)
     mean_tile = tl.load(mean + columns, columns < N)
     std_tile = tl.load(stddev + columns, columns < N)
@@ -205,9 +231,10 @@ def _padded_batchnorm2d_relu(x, eps=1e-5):
 
 # Batch normalization operator, as used in ResNet
 def _batchnorm2d_relu_input(
-        x,  # (N, H, W, C)
-        input,  # (N, H, W, C)
-        eps=1e-5):
+    x,  # (N, H, W, C)
+    input,  # (N, H, W, C)
+    eps=1e-5,
+):
     """Fused implementation of batchnorm2d with 'relu(result + input)' activation."""
 
     N, H, W, C = x.shape
@@ -230,8 +257,9 @@ def _batchnorm2d_relu_input(
 
 
 def _batchnorm2d_relu(
-        x,  # (N, H, W, C)
-        eps=1e-5):
+    x,  # (N, H, W, C)
+    eps=1e-5,
+):
     """Fused implementation of batchnorm2d with relu activation."""
 
     N, H, W, C = x.shape

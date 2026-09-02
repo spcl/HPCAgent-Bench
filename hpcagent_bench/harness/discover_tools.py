@@ -2,6 +2,7 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Probe the host for the compilers + libraries hpcagent_bench/agent-bench can use; stdlib-only detection."""
+
 import argparse
 import functools
 import glob
@@ -42,8 +43,11 @@ def detect_platform():
 
 def _linux_distro():
     try:
-        kv = dict(line.rstrip().split("=", 1) for line in pathlib.Path("/etc/os-release").read_text().splitlines()
-                  if "=" in line)
+        kv = dict(
+            line.rstrip().split("=", 1)
+            for line in pathlib.Path("/etc/os-release").read_text().splitlines()
+            if "=" in line
+        )
     except OSError:
         return "linux"
     name = (kv.get("ID", "linux")).strip('"')
@@ -102,7 +106,7 @@ def _ldconfig_index():
 
 
 def _run_version(cmd, args):
-    for a in (args or []):
+    for a in args or []:
         try:
             r = subprocess.run([cmd, a], capture_output=True, text=True, timeout=10)
         except (OSError, subprocess.SubprocessError):
@@ -141,8 +145,9 @@ def detect_library(spec):
         for pc in _as_list(spec.get("pkgconfig", [])):
             try:
                 if subprocess.run(["pkg-config", "--exists", pc], timeout=10).returncode == 0:
-                    ver = subprocess.run(["pkg-config", "--modversion", pc], capture_output=True, text=True,
-                                         timeout=10).stdout.strip()
+                    ver = subprocess.run(
+                        ["pkg-config", "--modversion", pc], capture_output=True, text=True, timeout=10
+                    ).stdout.strip()
                     return {"found": True, "via": f"pkg-config:{pc}", "version": ver or None}
             except (OSError, subprocess.SubprocessError):
                 pass
@@ -229,8 +234,11 @@ def main(argv=None):
     report = discover()
 
     if args.json or args.yaml or args.out:
-        text = (json.dumps(report, indent=2) if args.json or
-                (args.out and not args.yaml) else yaml.safe_dump(report, sort_keys=False))
+        text = (
+            json.dumps(report, indent=2)
+            if args.json or (args.out and not args.yaml)
+            else yaml.safe_dump(report, sort_keys=False)
+        )
         if args.out:
             pathlib.Path(args.out).write_text(text)
             print(f"wrote {args.out}", file=sys.stderr)

@@ -37,6 +37,7 @@ do not have; the fix is shape-GENERIC helpers, extents passed per call site.
 
 Marked ``integration``: it lowers the whole registry, far too slow for the default suite.
 """
+
 import dataclasses
 from typing import List, Optional, Tuple
 
@@ -100,6 +101,7 @@ def classify(short: str, lowered) -> Optional[str]:
 @dataclasses.dataclass(frozen=True)
 class CorpusFindings:
     """What ONE lowering sweep of the registry found, split by the fix each class needs."""
+
     names: List[str]
     dtypes: List[str]
     refused: List[str]
@@ -156,8 +158,10 @@ def findings() -> CorpusFindings:
 
 def none_of(observed: List[str], label: str) -> None:
     """Assert nothing was observed. There is no waiver list to compare against, by design."""
-    assert not observed, (f"{label}: {observed}. This is a regression, not a backlog -- fix the emitter or the "
-                          f"binding; do not add a waiver list back.")
+    assert not observed, (
+        f"{label}: {observed}. This is a regression, not a backlog -- fix the emitter or the "
+        f"binding; do not add a waiver list back."
+    )
 
 
 @pytest.mark.integration
@@ -173,8 +177,9 @@ def test_param_order_is_references_then_scalars_corpus_wide(findings: CorpusFind
     """The ordering rule itself: the two groups never interleave, and each is sorted.
     ``param_order`` builds this by construction, so a break means an emitter grew its own
     ordering -- which is exactly how a positional call gets permuted."""
-    assert not findings.order, ("param_order violates references-then-scalars (abi_contract.md Sec. 4):\n  " +
-                                "\n  ".join(findings.order))
+    assert not findings.order, (
+        "param_order violates references-then-scalars (abi_contract.md Sec. 4):\n  " + "\n  ".join(findings.order)
+    )
 
 
 @pytest.mark.integration
@@ -205,6 +210,7 @@ def test_symbols_report_the_dtype_the_emitter_uses() -> None:
     """
     from numpyto_common.ir import SymbolDesc
     from hpcagent_bench.support.bindings.contract import DEFAULT_SYMBOL_DTYPE
+
     fields = {f.name: f for f in dataclasses.fields(SymbolDesc)}
     assert "dtype" in fields, "SymbolDesc lost its dtype; emitted_abi would have nothing to read"
     assert fields["dtype"].default == DEFAULT_SYMBOL_DTYPE_HERE

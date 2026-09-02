@@ -10,6 +10,7 @@ and association in every operator, so the two evaluate the same fp64 operations 
 order. The C++ side has already been checked bit-for-bit against the running application on
 a live BOUT++ mesh; this test is what keeps the numpy side pinned to it.
 """
+
 import ctypes
 import importlib.util
 import subprocess
@@ -27,10 +28,46 @@ _SOURCE = _HERE / "bout_elm_pb_reference.cpp"
 
 #: The kernel signature, in order. The reference takes the same arguments, with the three
 #: outputs kept in their alphabetical slot.
-_ARGS = ("B0", "B0phi_ydown", "B0phi_yup", "G1", "G3", "J", "J0", "Jpar", "Jpar_ydown", "Jpar_yup", "P", "P0",
-         "P_ydown", "P_yup", "Psi", "Psi_ydown", "Psi_yup", "U", "U_ydown", "U_yup", "d1_dx", "ddt_P", "ddt_Psi",
-         "ddt_U", "dx", "dy", "dz", "eta", "g11", "g13", "g33", "g_12", "g_22", "g_23", "phi", "phi0", "phi_ydown",
-         "phi_yup")
+_ARGS = (
+    "B0",
+    "B0phi_ydown",
+    "B0phi_yup",
+    "G1",
+    "G3",
+    "J",
+    "J0",
+    "Jpar",
+    "Jpar_ydown",
+    "Jpar_yup",
+    "P",
+    "P0",
+    "P_ydown",
+    "P_yup",
+    "Psi",
+    "Psi_ydown",
+    "Psi_yup",
+    "U",
+    "U_ydown",
+    "U_yup",
+    "d1_dx",
+    "ddt_P",
+    "ddt_Psi",
+    "ddt_U",
+    "dx",
+    "dy",
+    "dz",
+    "eta",
+    "g11",
+    "g13",
+    "g33",
+    "g_12",
+    "g_22",
+    "g_23",
+    "phi",
+    "phi0",
+    "phi_ydown",
+    "phi_yup",
+)
 
 _HYPERRESIST = 1e-4
 
@@ -79,10 +116,10 @@ def test_numpy_matches_upstream_reference(tmp_path, NX, NY, NZ) -> None:
     for name in expected:
         written = fields[name]
         assert np.array_equal(written[0:2], np.zeros((2, NY, NZ)))
-        assert np.array_equal(written[NX - 2:NX], np.zeros((2, NY, NZ)))
+        assert np.array_equal(written[NX - 2 : NX], np.zeros((2, NY, NZ)))
         assert np.array_equal(written[:, 0:2], np.zeros((NX, 2, NZ)))
-        assert np.array_equal(written[:, NY - 2:NY], np.zeros((NX, 2, NZ)))
-        assert np.all(written[2:NX - 2, 2:NY - 2] != 0.0)
+        assert np.array_equal(written[:, NY - 2 : NY], np.zeros((NX, 2, NZ)))
+        assert np.all(written[2 : NX - 2, 2 : NY - 2] != 0.0)
 
 
 def test_initializer_metric_is_a_real_metric() -> None:
@@ -104,7 +141,7 @@ def test_initializer_metric_is_a_real_metric() -> None:
     g12 = 0.10 * np.cos(np.pi * x) * np.sin(y + 0.4) * ones
     g23 = 0.08 * np.cos(3.0 * np.pi * x) * np.sin(2.0 * y - 0.2) * ones
 
-    det = (g11 * (g22 * g33 - g23 * g23) - g12 * (g12 * g33 - g23 * g13) + g13 * (g12 * g23 - g22 * g13))
+    det = g11 * (g22 * g33 - g23 * g23) - g12 * (g12 * g33 - g23 * g13) + g13 * (g12 * g23 - g22 * g13)
     assert np.all(det > 0.0), "contravariant tensor must be positive-definite"
     assert np.max(np.abs(J - 1.0 / np.sqrt(det))) < 1e-14
 

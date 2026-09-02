@@ -9,13 +9,19 @@ surfaced auditing the KernelBench ML kernels: softmax's stable form is
 over a tuple axis. The AST-level tests pin the rewrite; the two numerical tests
 confirm bit-exact agreement with numpy on numba + pythran.
 """
+
 import ast
 from types import SimpleNamespace
 
 import numpy as np
 
-from numpyto_common.numpy_desugar import (_axis_list, _const_int, _param_body_rank_evidence, _reduce_axis_stmts,
-                                          desugar_for_python_backend)
+from numpyto_common.numpy_desugar import (
+    _axis_list,
+    _const_int,
+    _param_body_rank_evidence,
+    _reduce_axis_stmts,
+    desugar_for_python_backend,
+)
 
 
 def _kir(kernel_name, **arrays):
@@ -59,7 +65,7 @@ def test_negative_axis_now_reduces():
     # Before the fix ``axis=-1`` was left verbatim (parsed as a UnaryOp, not a
     # constant), so numba/pythran saw the unsupported axis form.
     src = "def k(x, out):\n out[:] = np.max(x, axis=-1)\n"
-    kir = _kir("k", x=("M", "N"), out=("M", ))
+    kir = _kir("k", x=("M", "N"), out=("M",))
     got = desugar_for_python_backend(src, kir, backend="numba")
     assert "np.max(" not in got and "for " in got
 
@@ -75,7 +81,7 @@ def test_keepdims_keeps_a_size_one_dim():
 
 def test_sum_axis_desugars_with_accumulator():
     src = "def k(x, out):\n out[:] = np.sum(x, axis=1)\n"
-    kir = _kir("k", x=("M", "N"), out=("M", ))
+    kir = _kir("k", x=("M", "N"), out=("M",))
     got = desugar_for_python_backend(src, kir, backend="numba")
     assert "np.sum(" not in got and "+=" in got
 
@@ -94,14 +100,14 @@ def test_full_reduction_without_keepdims_left_verbatim():
     # every axis reduced -> a scalar; the backend's own full ``np.sum(x)`` handles
     # it, and emitting ``tmp[] = ...`` would be a syntax error.
     src = "def k(x, out):\n out[0] = np.sum(x, axis=(0, 1))\n"
-    kir = _kir("k", x=("M", "N"), out=("one", ))
+    kir = _kir("k", x=("M", "N"), out=("one",))
     assert desugar_for_python_backend(src, kir, backend="numba") == src
 
 
 def test_tuple_axis_argmax_refused():
     # numpy itself rejects a tuple axis for argmin/argmax -> leave verbatim.
     src = "def k(x, out):\n out[:] = np.argmax(x, axis=(1, 2))\n"
-    kir = _kir("k", x=("A", "B", "C"), out=("A", ))
+    kir = _kir("k", x=("A", "B", "C"), out=("A",))
     assert desugar_for_python_backend(src, kir, backend="numba") == src
 
 
@@ -128,15 +134,17 @@ def test_body_evidence_overrides_poisoned_callsite_rank():
     # poisoning the flow-insensitive call-site inference. The helper's own
     # ``x.shape[3]`` / tuple axis must still pin rank 4 so the tuple-axis reduce
     # lowers instead of wrapping the axes into a scalar over-reduction.
-    src = ("def pool(x):\n"
-           "    out = np.empty((x.shape[0], x.shape[3]), x.dtype)\n"
-           "    out[:] = np.max(x[:, 0:2, 0:2, :], axis=(1, 2))\n"
-           "    return out\n"
-           "def kernel(img, out):\n"
-           "    y = pool(img)\n"
-           "    z = np.reshape(y, (y.shape[0] * y.shape[1],))\n"
-           "    out[:] = z\n")
-    kir = _kir("kernel", img=("N", "H", "W", "C"), out=("P", ))
+    src = (
+        "def pool(x):\n"
+        "    out = np.empty((x.shape[0], x.shape[3]), x.dtype)\n"
+        "    out[:] = np.max(x[:, 0:2, 0:2, :], axis=(1, 2))\n"
+        "    return out\n"
+        "def kernel(img, out):\n"
+        "    y = pool(img)\n"
+        "    z = np.reshape(y, (y.shape[0] * y.shape[1],))\n"
+        "    out[:] = z\n"
+    )
+    kir = _kir("kernel", img=("N", "H", "W", "C"), out=("P",))
     got = desugar_for_python_backend(src, kir, backend="numba")
     assert "np.max(" not in got  # the pooling reduce lowered (rank not poisoned to 2)
     assert "[]" not in got  # no scalar-index over-reduction was emitted
@@ -152,34 +160,30 @@ def test_body_evidence_overrides_poisoned_callsite_rank():
 
 def _numba(src, ins, outs, syms, shapes):
     from _op_oracle import run_op
-    res = run_op(src, "f", ins, outs, syms, shapes=shapes, backends=("numba", ))
+
+    res = run_op(src, "f", ins, outs, syms, shapes=shapes, backends=("numba",))
     return res["numba"]
 
 
 def test_softmax_keepdims_matches_numpy_on_numba():
-    src = ("import numpy as np\n"
-           "def f(x, out):\n"
-           " m = np.max(x, axis=-1, keepdims=True)\n"
-           " e = np.exp(x - m)\n"
-           " out[:] = e / np.sum(e, axis=-1, keepdims=True)\n")
+    src = (
+        "import numpy as np\n"
+        "def f(x, out):\n"
+        " m = np.max(x, axis=-1, keepdims=True)\n"
+        " e = np.exp(x - m)\n"
+        " out[:] = e / np.sum(e, axis=-1, keepdims=True)\n"
+    )
     x = np.linspace(-3.0, 3.0, 24).reshape(4, 6)
     assert _numba(src, {"x": x}, {"out": (4, 6)}, {"M": 4, "N": 6}, {"x": "(M, N)", "out": "(M, N)"}) == "ok"
 
 
 def test_tuple_axis_pool_matches_numpy_on_numba():
-    src = ("import numpy as np\n"
-           "def f(x, out):\n"
-           " out[:] = np.sum(x, axis=(1, 2))\n")
+    src = "import numpy as np\ndef f(x, out):\n out[:] = np.sum(x, axis=(1, 2))\n"
     x = np.arange(2 * 3 * 3 * 5, dtype=np.float64).reshape(2, 3, 3, 5)
-    assert _numba(src, {"x": x}, {"out": (2, 5)}, {
-        "A": 2,
-        "B": 3,
-        "C": 3,
-        "D": 5
-    }, {
-        "x": "(A, B, C, D)",
-        "out": "(A, D)"
-    }) == "ok"
+    assert (
+        _numba(src, {"x": x}, {"out": (2, 5)}, {"A": 2, "B": 3, "C": 3, "D": 5}, {"x": "(A, B, C, D)", "out": "(A, D)"})
+        == "ok"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -194,38 +198,27 @@ def test_tuple_axis_pool_matches_numpy_on_numba():
 def _lowered_c(src, func, arrays, shapes):
     """The C source lowering emits for ``src``; raises the emitter's own error on a refusal."""
     from _op_oracle import run_op
+
     return run_op(src, func, arrays, shapes[0], shapes[1], shapes=shapes[2], backends=("c", "fortran"))
 
 
 def test_expression_receiver_sum_lowers_and_matches_numpy():
-    src = ("import numpy as np\n"
-           "def f(data, mean, out):\n"
-           "    out[:] = ((data - mean) ** 2).sum(axis=0)\n")
+    src = "import numpy as np\ndef f(data, mean, out):\n    out[:] = ((data - mean) ** 2).sum(axis=0)\n"
     data = np.arange(12.0).reshape(4, 3)
     mean = np.array([1.0, 2.0, 3.0])
-    st = _lowered_c(src, "f", {
-        "data": data,
-        "mean": mean
-    }, ({
-        "out": (3, )
-    }, {
-        "M": 4,
-        "N": 3
-    }, {
-        "data": "(M, N)",
-        "mean": "(N,)",
-        "out": "(N,)"
-    }))
+    st = _lowered_c(
+        src,
+        "f",
+        {"data": data, "mean": mean},
+        ({"out": (3,)}, {"M": 4, "N": 3}, {"data": "(M, N)", "mean": "(N,)", "out": "(N,)"}),
+    )
     assert st == {"c": "ok", "fortran": "ok"}, st
 
 
 def test_expression_receiver_max_and_all_lower():
     """Not just ``sum``: every method with a same-meaning numpy twin is normalised."""
-    src = ("import numpy as np\n"
-           "def f(a, b, out):\n"
-           "    out[0] = (a * b).max()\n"
-           "    out[1] = (a - b).min()\n")
+    src = "import numpy as np\ndef f(a, b, out):\n    out[0] = (a * b).max()\n    out[1] = (a - b).min()\n"
     a = np.array([1.0, 5.0, 2.0])
     b = np.array([3.0, 1.0, 4.0])
-    st = _lowered_c(src, "f", {"a": a, "b": b}, ({"out": (2, )}, {"N": 3}, {"a": "(N,)", "b": "(N,)", "out": "(2,)"}))
+    st = _lowered_c(src, "f", {"a": a, "b": b}, ({"out": (2,)}, {"N": 3}, {"a": "(N,)", "b": "(N,)", "out": "(2,)"}))
     assert st == {"c": "ok", "fortran": "ok"}, st

@@ -5,6 +5,7 @@ Runs inside the 0.27.1 image with no weights and no decode. Every check answers 
 renamed serve flag kills the head at startup, a moved internal API breaks the pp collective split
 in every rank. Exit status is the gate: 0 iff every check passes.
 """
+
 import inspect
 import os
 import subprocess
@@ -57,23 +58,32 @@ def check_serve_flags(help_text: str) -> None:
     wanted = os.environ["CAMPAIGN_ARGS"].split()
     missing = [flag for flag in wanted if flag not in help_text]
     report(
-        "serve-arg parity", not missing, f"{len(wanted) - len(missing)}/{len(wanted)} present"
-        f"{'; MISSING ' + ' '.join(missing) if missing else ''}")
+        "serve-arg parity",
+        not missing,
+        f"{len(wanted) - len(missing)}/{len(wanted)} present{'; MISSING ' + ' '.join(missing) if missing else ''}",
+    )
 
 
 def check_parser_choices(help_text: str) -> None:
     """kimi_k2 decides whether the kimi arms can move; qwen3_xml whether the qwen arms can."""
     for parser in ("kimi_k2", "qwen3_xml"):
         report(
-            f"parser {parser}", parser in help_text, "listed in serve --help"
-            if parser in help_text else "NOT registered -- arms using it cannot move to 0.27.1")
+            f"parser {parser}",
+            parser in help_text,
+            "listed in serve --help"
+            if parser in help_text
+            else "NOT registered -- arms using it cannot move to 0.27.1",
+        )
 
 
 def check_tuned_config_env() -> None:
     """An unrecognised VLLM_* var only WARNS, so serving untuned looks identical to serving tuned."""
     recognised = "VLLM_TUNED_CONFIG_FOLDER" in vllm.envs.environment_variables
-    report("VLLM_TUNED_CONFIG_FOLDER recognised", recognised,
-           "in envs.environment_variables" if recognised else "unknown to 0.27.1 -- the 1.71x tuning would be IGNORED")
+    report(
+        "VLLM_TUNED_CONFIG_FOLDER recognised",
+        recognised,
+        "in envs.environment_variables" if recognised else "unknown to 0.27.1 -- the 1.71x tuning would be IGNORED",
+    )
 
     folder = Path(os.environ["VLLM_TUNED_CONFIG_FOLDER"])
     configs = sorted(path.name for path in folder.glob("*MI300A*.json"))
@@ -93,8 +103,11 @@ def check_kv_connectors() -> None:
         name = name.strip()
         if not name:
             continue
-        report(f"kv connector {name}", name in registry,
-               "registered" if name in registry else f"NOT registered; have: {', '.join(sorted(registry)) or '<none>'}")
+        report(
+            f"kv connector {name}",
+            name in registry,
+            "registered" if name in registry else f"NOT registered; have: {', '.join(sorted(registry)) or '<none>'}",
+        )
 
 
 def check_sibling_group_api() -> None:
@@ -108,8 +121,11 @@ def check_sibling_group_api() -> None:
         report("make_sibling_device_group", False, "absent -- the pp collective split cannot install")
         return
     accepts = "group_desc" in inspect.signature(method).parameters
-    report("make_sibling_device_group", accepts,
-           "accepts group_desc" if accepts else f"signature changed: {inspect.signature(method)}")
+    report(
+        "make_sibling_device_group",
+        accepts,
+        "accepts group_desc" if accepts else f"signature changed: {inspect.signature(method)}",
+    )
 
 
 def check_patch_installs() -> None:
@@ -138,9 +154,11 @@ def check_patch_installs() -> None:
 
     rebound = [name for name in collectives if class_attr(GroupCoordinator, name) is not before[name]]
     init_patched = class_attr(GroupCoordinator, "__init__") is not before_init
-    report("pp collective split installs",
-           len(rebound) == len(collectives) and init_patched,
-           f"{len(rebound)}/{len(collectives)} collectives rebound, __init__ patched={init_patched}")
+    report(
+        "pp collective split installs",
+        len(rebound) == len(collectives) and init_patched,
+        f"{len(rebound)}/{len(collectives)} collectives rebound, __init__ patched={init_patched}",
+    )
 
 
 def main() -> int:

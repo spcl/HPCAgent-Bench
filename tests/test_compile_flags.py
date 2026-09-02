@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The compile-options matrix (``hpcagent_bench/flags.py``) must produce flag sets a real compiler accepts
 and that yield a runnable program; each case skips when its compiler is not installed."""
+
 import os
 import pathlib
 import shutil
@@ -14,8 +15,9 @@ from hpcagent_bench import flags, languages
 
 # A trivial program per language whose result depends on an FP loop, so the optimizer can't delete it.
 _C_SRC = "int main(void){double x=1.0;for(int i=0;i<1000;i++)x*=1.0000001;return x>1e9;}\n"
-_CPP_SRC = ("#include <cmath>\nint main(){double x=1.0;"
-            "for(int i=0;i<1000;i++)x=std::fma(x,1.0000001,0.0);return x>1e9;}\n")
+_CPP_SRC = (
+    "#include <cmath>\nint main(){double x=1.0;for(int i=0;i<1000;i++)x=std::fma(x,1.0000001,0.0);return x>1e9;}\n"
+)
 
 # (id, exe, baseline flag string, source extension, source) for the C-family.
 _CC_CASES = [
@@ -29,9 +31,11 @@ _CC_CASES = [
 # Fortran: GNU (gfortran, GCC baseline) + LLVM (flang, FLANG_BASELINE). Driver name ->
 # path resolution (versioned spellings, the flang/flang-new rename) is
 # languages.resolve_compiler's job, not this test's -- it just names the driver.
-_FORT_SRC = ("program t\n  real(8) :: x\n  integer :: i\n  x = 1.0d0\n"
-             "  do i = 1, 1000\n    x = x * 1.0000001d0\n  end do\n"
-             "  if (x > 1.0d9) call exit(1)\nend program\n")
+_FORT_SRC = (
+    "program t\n  real(8) :: x\n  integer :: i\n  x = 1.0d0\n"
+    "  do i = 1, 1000\n    x = x * 1.0000001d0\n  end do\n"
+    "  if (x > 1.0d9) call exit(1)\nend program\n"
+)
 _FORTRAN_CASES = [
     ("gfortran", flags.CPU_BASELINE_GCC),
     ("flang", flags.FLANG_BASELINE),
@@ -49,7 +53,7 @@ def test_cpu_baseline_compiles_and_runs(name, exe, baseline, ext, src):
             f.write(src)
         cmd = [exe, *baseline.split(), src_path, "-o", out_path]
         proc = subprocess.run(cmd, capture_output=True, text=True)
-        assert proc.returncode == 0, (f"{name} rejected the matrix baseline:\n  {' '.join(cmd)}\n{proc.stderr}")
+        assert proc.returncode == 0, f"{name} rejected the matrix baseline:\n  {' '.join(cmd)}\n{proc.stderr}"
         run = subprocess.run([out_path], capture_output=True)
         assert run.returncode in (0, 1), f"{name} program crashed (rc={run.returncode})"
 
@@ -66,7 +70,7 @@ def test_fortran_baseline_compiles_and_runs(name, baseline):
             f.write(_FORT_SRC)
         cmd = [exe, *baseline.split(), src_path, "-o", out_path]
         proc = subprocess.run(cmd, capture_output=True, text=True)
-        assert proc.returncode == 0, (f"{name} rejected its matrix baseline:\n  {' '.join(cmd)}\n{proc.stderr}")
+        assert proc.returncode == 0, f"{name} rejected its matrix baseline:\n  {' '.join(cmd)}\n{proc.stderr}"
         run = subprocess.run([out_path], capture_output=True)
         assert run.returncode in (0, 1), f"{name} program crashed (rc={run.returncode})"
 
@@ -76,6 +80,7 @@ def test_fortran_baseline_compiles_and_runs(name, baseline):
 
 def _compiler_blocks():
     from hpcagent_bench.languages import _load_compilers
+
     return _load_compilers()
 
 
@@ -113,21 +118,25 @@ def test_every_shared_library_block_compiles_position_independent():
         if block.get("mpi"):
             continue
         line = " ".join(block["compile"])
-        assert "-shared" in " ".join(block["link"]), (f"{name} is not an MPI block yet does not link -shared; "
-                                                      f"this test's exemption rule no longer describes the config")
+        assert "-shared" in " ".join(block["link"]), (
+            f"{name} is not an MPI block yet does not link -shared; "
+            f"this test's exemption rule no longer describes the config"
+        )
         for mode in (Mode.SINGLE_CORE, Mode.MULTI_CORE):
             if "-fPIC" not in f"{line} {_resolve_baseline(block, mode)}":
                 missing.append(f"{name} ({mode})")
-    assert not missing, (f"these blocks compile a dlopen-ed shared library without -fPIC, in neither the "
-                         f"compile line nor the resolved baseline: {missing}")
+    assert not missing, (
+        f"these blocks compile a dlopen-ed shared library without -fPIC, in neither the "
+        f"compile line nor the resolved baseline: {missing}"
+    )
 
 
 def test_flang_uses_the_flang_baseline_not_the_clang_one():
     """flang must not inherit the C/C++ clang baseline; pinned by name since the toolchain may be absent."""
     block = _compiler_blocks()["flang"]
     assert block["baseline_ref"] == "FLANG_BASELINE", (
-        f"flang resolves {block['baseline_ref']}; FLANG_BASELINE exists for this compiler and is "
-        f"otherwise unreferenced")
+        f"flang resolves {block['baseline_ref']}; FLANG_BASELINE exists for this compiler and is otherwise unreferenced"
+    )
 
 
 def test_every_native_flavor_is_wired_end_to_end():
@@ -146,8 +155,9 @@ def test_every_native_flavor_is_wired_end_to_end():
     built = {n for n, meta in FRAMEWORK_META.items() if meta["base"] in ("native", "pluto")}
     assert {"cc", "pluto", "ppcg_cuda", "ppcg_hip"} <= built, "the check would pass vacuously"
     assert not (built - set(FRAMEWORK_LANG)), f"missing from cpp_runtime.FRAMEWORK_LANG: {built - set(FRAMEWORK_LANG)}"
-    assert not (built - set(NATIVE_FRAMEWORKS)), f"missing from autogen.NATIVE_FRAMEWORKS: " \
-                                                 f"{built - set(NATIVE_FRAMEWORKS)}"
+    assert not (built - set(NATIVE_FRAMEWORKS)), (
+        f"missing from autogen.NATIVE_FRAMEWORKS: {built - set(NATIVE_FRAMEWORKS)}"
+    )
 
 
 def test_a_cpp_flavor_names_its_compiler_explicitly():
@@ -155,10 +165,15 @@ def test_a_cpp_flavor_names_its_compiler_explicitly():
     from hpcagent_bench.benchmarks.cpp_runtime import FRAMEWORK_COMPILER, FRAMEWORK_LANG
     from hpcagent_bench.frameworks.framework import FRAMEWORK_META
 
-    unset = sorted(n for n, meta in FRAMEWORK_META.items()
-                   if meta["base"] == "native" and FRAMEWORK_LANG.get(n) == "cpp" and n not in FRAMEWORK_COMPILER)
-    assert not unset, (f"cpp flavor(s) {unset} name no compiler and would fall through to g++; "
-                       f"declare them in cpp_runtime.FRAMEWORK_COMPILER")
+    unset = sorted(
+        n
+        for n, meta in FRAMEWORK_META.items()
+        if meta["base"] == "native" and FRAMEWORK_LANG.get(n) == "cpp" and n not in FRAMEWORK_COMPILER
+    )
+    assert not unset, (
+        f"cpp flavor(s) {unset} name no compiler and would fall through to g++; "
+        f"declare them in cpp_runtime.FRAMEWORK_COMPILER"
+    )
 
 
 def test_gcc_autopar_carries_graphite_and_gcc_accepts_it():
@@ -172,8 +187,10 @@ def test_gcc_autopar_carries_graphite_and_gcc_accepts_it():
     with tempfile.TemporaryDirectory() as d:
         src = os.path.join(d, "nest.c")
         with open(src, "w") as fh:
-            fh.write("void f(double *restrict a,double *restrict b,long n){"
-                     "for(long i=0;i<n;i++)for(long j=0;j<n;j++)b[i]+=a[j];}\n")
+            fh.write(
+                "void f(double *restrict a,double *restrict b,long n){"
+                "for(long i=0;i<n;i++)for(long j=0;j<n;j++)b[i]+=a[j];}\n"
+            )
         cmd = ["gcc", *flags.CPU_BASELINE_GCC.split(), *autopar.split(), "-c", src, "-o", os.path.join(d, "nest.o")]
         proc = subprocess.run(cmd, capture_output=True, text=True)
         assert proc.returncode == 0, f"gcc rejected the Graphite autopar line:\n$ {' '.join(cmd)}\n{proc.stderr}"
@@ -215,7 +232,8 @@ def test_a_driver_below_its_floor_is_not_resolved(fake_path):
         languages.resolve_compiler.cache_clear()
         assert languages.resolve_compiler(name) is None, (
             f"{name}-{floor - 1} resolved despite a floor of {floor}; it cannot build what the "
-            f"compilers.yaml block pins")
+            f"compilers.yaml block pins"
+        )
 
 
 def test_resolve_compiler_prefers_the_highest_version_numerically(fake_path):

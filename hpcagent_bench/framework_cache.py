@@ -24,6 +24,7 @@ run leaves either the old artifact or none -- never a truncated one. Pure
 ``pathlib`` + ``hashlib`` (cross-platform); DaCe is imported lazily inside the
 SDFG helpers so importing this module stays cheap and dependency-free.
 """
+
 from __future__ import annotations
 
 import functools
@@ -77,20 +78,18 @@ def dace_tree_fingerprint() -> str:
     one in place) must miss the cache even though the kernel's own files never changed. Computed
     once per process (memoized)."""
     import dace
+
     root = pathlib.Path(dace.__file__).resolve().parent.parent
     try:
-        sha = subprocess.run(["git", "rev-parse", "HEAD"],
-                             cwd=root,
-                             capture_output=True,
-                             text=True,
-                             check=True,
-                             timeout=5).stdout.strip()
-        dirty = subprocess.run(["git", "status", "--porcelain"],
-                               cwd=root,
-                               capture_output=True,
-                               text=True,
-                               check=True,
-                               timeout=5).stdout != ""
+        sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True, timeout=5
+        ).stdout.strip()
+        dirty = (
+            subprocess.run(
+                ["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True, check=True, timeout=5
+            ).stdout
+            != ""
+        )
         return fingerprint_bytes(f"{sha}\x00{dirty}".encode())
     except (OSError, subprocess.SubprocessError):
         return fingerprint_bytes(f"{root}\x00{getattr(dace, '__version__', '')}".encode())
@@ -176,6 +175,7 @@ def load_sdfg(cache_dir: pathlib.Path, module_name: str, device_tag: str, finger
         return None
     try:
         import dace
+
         return dace.SDFG.from_file(str(path))
     except Exception:  # noqa: BLE001 -- a corrupt/incompatible cache entry must fall back to a rebuild
         return None

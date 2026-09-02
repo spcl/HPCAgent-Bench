@@ -1,4 +1,5 @@
 """Foundation canonicalize kernel ``two_stream_reftrans`` (numpy reference)."""
+
 from math import exp, sqrt
 
 

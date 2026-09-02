@@ -34,12 +34,13 @@ class FakeHandler(BaseHTTPRequestHandler):
         ]
     }
     llm_payload: dict[str, Any] = {
-        "choices": [{
-            "message": {
-                "content":
-                "Use AsyncWebCrawler to collect markdown, then summarize with vLLM.\n\nSources:\n- https://example.test/crawl4ai"
+        "choices": [
+            {
+                "message": {
+                    "content": "Use AsyncWebCrawler to collect markdown, then summarize with vLLM.\n\nSources:\n- https://example.test/crawl4ai"
+                }
             }
-        }]
+        ]
     }
 
     def log_message(self, fmt: str, *args: Any) -> None:
@@ -77,27 +78,32 @@ def main() -> int:
     port = server.server_address[1]
 
     env = os.environ.copy()
-    env.update({
-        "SERPAPI_API_KEY":
-        "fake",
-        "SERPAPI_URL":
-        f"http://127.0.0.1:{port}/search.json",
-        "WEBSEARCH_LLM_BASE_URL":
-        f"http://127.0.0.1:{port}/v1",
-        "WEBSEARCH_LLM_MODEL":
-        "fake-vllm",
-        "WEBSEARCH_FAKE_CRAWL_JSON":
-        json.dumps({
-            "https://example.test/crawl4ai": "Crawl4AI provides AsyncWebCrawler and markdown output.",
-            "https://example.test/vllm": "vLLM has OpenAI-compatible chat completions endpoints.",
-        }),
-    })
+    env.update(
+        {
+            "SERPAPI_API_KEY": "fake",
+            "SERPAPI_URL": f"http://127.0.0.1:{port}/search.json",
+            "WEBSEARCH_LLM_BASE_URL": f"http://127.0.0.1:{port}/v1",
+            "WEBSEARCH_LLM_MODEL": "fake-vllm",
+            "WEBSEARCH_FAKE_CRAWL_JSON": json.dumps(
+                {
+                    "https://example.test/crawl4ai": "Crawl4AI provides AsyncWebCrawler and markdown output.",
+                    "https://example.test/vllm": "vLLM has OpenAI-compatible chat completions endpoints.",
+                }
+            ),
+        }
+    )
 
     try:
         proc = subprocess.run(
             [
                 sys.executable,
-                str(TOOL), "--query", "How should web search work?", "--max-results", "2", "--max-pages", "2"
+                str(TOOL),
+                "--query",
+                "How should web search work?",
+                "--max-results",
+                "2",
+                "--max-pages",
+                "2",
             ],
             env=env,
             stdout=subprocess.PIPE,

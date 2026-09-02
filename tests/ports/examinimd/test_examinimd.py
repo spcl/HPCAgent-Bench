@@ -83,7 +83,6 @@ def build_cpp_reference():
 
 
 class ExaMiniMDCppReference:
-
     def __init__(self, path=LIB_PATH):
         if path == LIB_PATH:
             path = build_cpp_reference()
@@ -342,7 +341,7 @@ def counts_to_csr(inputs):
     np.cumsum(counts, out=offsets[1:])
     indices = np.empty(int(offsets[-1]), dtype=np.int32)
     for i, count in enumerate(counts):
-        indices[offsets[i]:offsets[i + 1]] = inputs[3][i, :int(count)]
+        indices[offsets[i] : offsets[i + 1]] = inputs[3][i, : int(count)]
     return np.ascontiguousarray(offsets), np.ascontiguousarray(indices)
 
 
@@ -364,7 +363,7 @@ def independent_force_reference(inputs):
             if rsq < inputs[6][type_i, type_j]:
                 r2inv = 1.0 / rsq
                 r6inv = r2inv * r2inv * r2inv
-                fpair = (r6inv * (inputs[4][type_i, type_j] * r6inv - inputs[5][type_i, type_j]) * r2inv)
+                fpair = r6inv * (inputs[4][type_i, type_j] * r6inv - inputs[5][type_i, type_j]) * r2inv
                 fxi += dx * fpair
                 fyi += dy * fpair
                 fzi += dz * fpair
@@ -405,7 +404,7 @@ def make_manual_inputs(x, rows, atom_type=None, lj1=None, lj2=None, cutsq=None, 
     neigh_counts = np.asarray([len(row) for row in rows], dtype=np.int32)
     neigh_list = np.full((len(rows), max_neighs), -1, dtype=np.int32)
     for i, row in enumerate(rows):
-        neigh_list[i, :len(row)] = np.asarray(row, dtype=np.int32)
+        neigh_list[i, : len(row)] = np.asarray(row, dtype=np.int32)
     if atom_type is None:
         atom_type = np.zeros(n_atoms, dtype=np.int32)
     else:
@@ -445,7 +444,7 @@ def test_generator_invariants():
     inputs = generate_random_examinimd_inputs(cells_per_dim=(2, 2, 2))
     assert validate_examinimd_inputs(*inputs) is True
     assert inputs[0].shape == (32, 3)
-    assert inputs[1].shape == (32, )
+    assert inputs[1].shape == (32,)
     assert np.all(inputs[1] == 0)
     assert inputs[11] == DEFAULT_MASS
     assert inputs[9] == DEFAULT_CUTOFF
@@ -474,9 +473,9 @@ def test_generator_invariants():
         raise AssertionError("different seeds with displacement should change positions")
 
     for i in range(n_local(inputs)):
-        row = set(int(v) for v in inputs[3][i, :int(inputs[2][i])])
+        row = set(int(v) for v in inputs[3][i, : int(inputs[2][i])])
         for j in row:
-            reverse = inputs[3][j, :int(inputs[2][j])]
+            reverse = inputs[3][j, : int(inputs[2][j])]
             if i not in reverse:
                 raise AssertionError("generated full-neighbor rows are not symmetric")
 

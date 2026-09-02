@@ -17,6 +17,7 @@ Both surface far from the cause, as ``axis must be a compile-time integer``. The
 direction is asserted too: a non-linear rebinding that CHANGES the rank must still drop it, because
 after the loop the name holds one or the other and nothing here knows which.
 """
+
 import ast
 
 from numpyto_common.tuple_desugar import TupleDesugar, Env, desugar_tuples
@@ -39,12 +40,11 @@ def test_a_slice_of_the_shape_tuple_is_still_compile_time():
     """``x.shape[2:]`` -- the "trailing axes" idiom. The elements stay symbolic; only the LENGTH
     has to be compile-time, which is what the concat and the following ``ndim`` need."""
     interp = fold(
-        "def f(x, g):\n"
-        "    n, c = x.shape[0], x.shape[1]\n"
-        "    y = x.reshape((n, g, c // g) + x.shape[2:])\n",
+        "def f(x, g):\n    n, c = x.shape[0], x.shape[1]\n    y = x.reshape((n, g, c // g) + x.shape[2:])\n",
         ranks={"x": 4},
         int_scalars=frozenset({"g", "n", "c"}),
-        arrays=frozenset({"x"}))
+        arrays=frozenset({"x"}),
+    )
     assert "x.reshape((n, g, c // g, x.shape[2], x.shape[3]))" in source_of(interp)
     assert interp.ranks["y"] == 5
 
@@ -57,14 +57,14 @@ def test_the_group_norm_axis_folds_once_the_reshape_collapses():
         "    m = np.mean(y, axis=tuple(range(2, y.ndim)), keepdims=True)\n",
         ranks={"x": 4},
         int_scalars=frozenset({"g", "n", "c"}),
-        arrays=frozenset({"x"}))
+        arrays=frozenset({"x"}),
+    )
     assert "axis=(2, 3, 4)" in source_of(interp)
 
 
 def test_a_negative_shape_slice_folds_too():
     """``x.shape[:-1]`` is the same idiom from the other end; the bound must fold, not the extents."""
-    interp = fold("def f(x):\n"
-                  "    y = x.reshape(x.shape[:-1] + (1,))\n", ranks={"x": 3}, arrays=frozenset({"x"}))
+    interp = fold("def f(x):\n    y = x.reshape(x.shape[:-1] + (1,))\n", ranks={"x": 3}, arrays=frozenset({"x"}))
     assert "x.reshape((x.shape[0], x.shape[1], 1))" in source_of(interp)
     assert interp.ranks["y"] == 3
 
@@ -72,11 +72,12 @@ def test_a_negative_shape_slice_folds_too():
 def test_a_symbolic_slice_bound_declines():
     """The LENGTH is what must be compile-time. A bound that is a runtime scalar leaves the tuple
     alone rather than guessing a length."""
-    interp = fold("def f(x, k):\n"
-                  "    y = x.reshape(x.shape[k:] + (1,))\n",
-                  ranks={"x": 3},
-                  int_scalars=frozenset({"k"}),
-                  arrays=frozenset({"x"}))
+    interp = fold(
+        "def f(x, k):\n    y = x.reshape(x.shape[k:] + (1,))\n",
+        ranks={"x": 3},
+        int_scalars=frozenset({"k"}),
+        arrays=frozenset({"x"}),
+    )
     # ``x.shape`` still expands to its per-axis tuple -- that part is rank-3 knowledge, not a guess.
     # The SLICE is what must survive: a ``[k:]`` left standing is the decline, and any fixed-length
     # tuple in its place would be a length invented from a runtime scalar.
@@ -96,7 +97,8 @@ def test_a_rank_preserving_rebind_inside_a_loop_keeps_the_rank():
         "    y = out.reshape(out.shape[1:])\n",
         ranks={"x": 4},
         int_scalars=frozenset({"ks"}),
-        arrays=frozenset({"x"}))
+        arrays=frozenset({"x"}),
+    )
     assert interp.ranks["out"] == 4
     assert "out.reshape((out.shape[1], out.shape[2], out.shape[3]))" in source_of(interp)
 
@@ -111,15 +113,18 @@ def test_a_rank_changing_rebind_inside_a_loop_drops_the_rank():
         "        out = np.full((5,), 0.0)\n",
         ranks={"x": 4},
         int_scalars=frozenset({"ks"}),
-        arrays=frozenset({"x"}))
+        arrays=frozenset({"x"}),
+    )
     assert "out" not in interp.ranks
 
 
 def test_desugar_tuples_entry_point_agrees():
     """The module entry point, not just the interpreter -- it is what the frontend calls."""
-    fn = ast.parse("def f(x, g):\n"
-                   "    n, c = x.shape[0], x.shape[1]\n"
-                   "    y = x.reshape((n, g, c // g) + x.shape[2:])\n"
-                   "    m = np.mean(y, axis=tuple(range(2, y.ndim)), keepdims=True)\n").body[0]
+    fn = ast.parse(
+        "def f(x, g):\n"
+        "    n, c = x.shape[0], x.shape[1]\n"
+        "    y = x.reshape((n, g, c // g) + x.shape[2:])\n"
+        "    m = np.mean(y, axis=tuple(range(2, y.ndim)), keepdims=True)\n"
+    ).body[0]
     desugar_tuples(fn, int_scalars=frozenset({"g", "n", "c"}), arrays=frozenset({"x"}), ranks={"x": 4})
     assert "axis=(2, 3, 4)" in ast.unparse(fn)

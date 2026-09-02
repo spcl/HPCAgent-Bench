@@ -34,6 +34,7 @@ how large the int, in every branch (default range, size cap, edge probes,
 timed large shapes). ``config_names`` defaults to empty, so a manifest that
 has not migrated to ``config:`` is unaffected.
 """
+
 import ast
 import logging
 import operator
@@ -52,14 +53,14 @@ NO_CONFIG_NAMES: FrozenSet[str] = frozenset()
 
 def is_range(value: Any) -> bool:
     """``True`` when a parameter value is a ``[lo, hi]`` fuzz range (interval)."""
-    return (isinstance(value, (list, tuple)) and len(value) == 2 and all(isinstance(x, (int, float)) for x in value))
+    return isinstance(value, (list, tuple)) and len(value) == 2 and all(isinstance(x, (int, float)) for x in value)
 
 
 def is_set(value: Any) -> bool:
     """``True`` when a parameter value is a discrete set ``{set: [v0, v1, ...]}``
     -- one element is chosen at random per fuzz iteration. The mapping form keeps
     a two-element set distinct from a two-element ``[lo, hi]`` interval."""
-    return (isinstance(value, dict) and isinstance(value.get("set"), (list, tuple)) and len(value["set"]) > 0)
+    return isinstance(value, dict) and isinstance(value.get("set"), (list, tuple)) and len(value["set"]) > 0
 
 
 def is_derive(value: Any) -> bool:
@@ -102,9 +103,9 @@ def _constant_across_presets(parameters: Dict[str, Any], name: str) -> bool:
     return len(seen) > 1 and all(v == seen[0] for v in seen)
 
 
-def resolve_ranges(parameters: Dict[str, Any],
-                   size_cap: int = None,
-                   config_names: FrozenSet[str] = NO_CONFIG_NAMES) -> Dict[str, Any]:
+def resolve_ranges(
+    parameters: Dict[str, Any], size_cap: int = None, config_names: FrozenSet[str] = NO_CONFIG_NAMES
+) -> Dict[str, Any]:
     """Per-param fuzz spec: each value is a ``[lo, hi]`` range or a fixed scalar.
 
     Prefers an explicit ``fuzzed`` preset; otherwise the default range is ANCHORED on the rung
@@ -143,7 +144,7 @@ def resolve_ranges(parameters: Dict[str, Any],
     # the caller asked for: XL+fuzz draws around XL, M+fuzz around M. resolve_preset sets
     # fuzz.anchor for every token, so this never reads a stale rung from an earlier call.
     anchor = str(config.get("fuzz.anchor", "XL"))
-    base = (parameters.get(anchor) or parameters.get("XL") or parameters.get("L") or next(iter(parameters.values())))
+    base = parameters.get(anchor) or parameters.get("XL") or parameters.get("L") or next(iter(parameters.values()))
     # Defaults track config.yaml. They used to read 0.85/1.15, which silently restored the band
     # that put every draw above 1.00x through the track ceiling whenever the key was absent.
     lo_m = float(config.get("fuzz.xl_lo_mult", 0.50))
@@ -168,9 +169,9 @@ def resolve_ranges(parameters: Dict[str, Any],
     return _apply_size_cap(out, size_cap, config_names)
 
 
-def _apply_size_cap(ranges: Dict[str, Any],
-                    cap: int = None,
-                    config_names: FrozenSet[str] = NO_CONFIG_NAMES) -> Dict[str, Any]:
+def _apply_size_cap(
+    ranges: Dict[str, Any], cap: int = None, config_names: FrozenSet[str] = NO_CONFIG_NAMES
+) -> Dict[str, Any]:
     """Clamp every resolved fuzz size range / scalar to a per-dimension ceiling.
 
     ``cap`` defaults to the global ``fuzz.size_cap`` knob (OFF at 0 so production
@@ -352,12 +353,14 @@ def _resolve_config(configs, rng) -> Dict[str, Any]:
     return dict(configs[int(rng.integers(len(configs)))])
 
 
-def sample_params(parameters: Dict[str, Any],
-                  iteration: int = 0,
-                  configs: Dict[str, Any] = None,
-                  constraints=None,
-                  size_cap: int = None,
-                  config_names: FrozenSet[str] = NO_CONFIG_NAMES) -> Dict[str, Any]:
+def sample_params(
+    parameters: Dict[str, Any],
+    iteration: int = 0,
+    configs: Dict[str, Any] = None,
+    constraints=None,
+    size_cap: int = None,
+    config_names: FrozenSet[str] = NO_CONFIG_NAMES,
+) -> Dict[str, Any]:
     """Concrete params for fuzz ``iteration``, seeded by ``seeds.fuzz + iteration``.
 
     Microkernels pass just ``parameters`` -- intervals / sets / scalars resolve as
@@ -435,19 +438,24 @@ def enumerate_configs(configs=None, max_configs: int = None):
         rng = np.random.default_rng(secret_shape_seed())
         keep = sorted(int(i) for i in rng.choice(len(out), size=cap, replace=False))
         logging.getLogger(__name__).warning(
-            "config space has %d configs > cap %d; evaluating a seeded "
-            "subset of %d (set perf.max_configs to change)", len(out), cap, cap)
+            "config space has %d configs > cap %d; evaluating a seeded subset of %d (set perf.max_configs to change)",
+            len(out),
+            cap,
+            cap,
+        )
         out = [out[i] for i in keep]
     return out
 
 
-def _resolve_against(parameters: Dict[str, Any],
-                     fixed: Dict[str, Any],
-                     seed: int,
-                     distribution,
-                     constraints,
-                     size_cap: int = None,
-                     config_names: FrozenSet[str] = NO_CONFIG_NAMES) -> Dict[str, Any]:
+def _resolve_against(
+    parameters: Dict[str, Any],
+    fixed: Dict[str, Any],
+    seed: int,
+    distribution,
+    constraints,
+    size_cap: int = None,
+    config_names: FrozenSet[str] = NO_CONFIG_NAMES,
+) -> Dict[str, Any]:
     """Resolve sizes against an already-chosen ``fixed`` config namespace.
 
     Mirrors the size half of :func:`sample_params` (topo resolve of
@@ -496,10 +504,12 @@ def respec_ranges(parameters: Dict[str, Any], fuzzed: Dict[str, Any], interval) 
     return {**parameters, FUZZED_PRESET: edged}
 
 
-def edge_shapes(parameters: Dict[str, Any],
-                config: Dict[str, Any] = None,
-                constraints=None,
-                config_names: FrozenSet[str] = NO_CONFIG_NAMES):
+def edge_shapes(
+    parameters: Dict[str, Any],
+    config: Dict[str, Any] = None,
+    constraints=None,
+    config_names: FrozenSet[str] = NO_CONFIG_NAMES,
+):
     """Correctness EDGE probes for one config namespace.
 
     Returns a list of ``(label, sample)`` where each ``sample`` sets every free
@@ -531,10 +541,12 @@ def edge_shapes(parameters: Dict[str, Any],
     return out
 
 
-def max_shape(parameters: Dict[str, Any],
-              config: Dict[str, Any] = None,
-              constraints=None,
-              config_names: FrozenSet[str] = NO_CONFIG_NAMES) -> Dict[str, Any]:
+def max_shape(
+    parameters: Dict[str, Any],
+    config: Dict[str, Any] = None,
+    constraints=None,
+    config_names: FrozenSet[str] = NO_CONFIG_NAMES,
+) -> Dict[str, Any]:
     """The exact top of the fuzz interval: every free size root pinned to its declared maximum.
 
     :func:`resolve_ranges` brackets each size as ``[L, XL]``, so this is the ``XL`` preset with
@@ -553,14 +565,16 @@ def max_shape(parameters: Dict[str, Any],
     return _resolve_against(spec, fixed, 0, "uniform", constraints, config_names=config_names)
 
 
-def large_shapes(parameters: Dict[str, Any],
-                 config: Dict[str, Any] = None,
-                 *,
-                 mode: str = None,
-                 n: int = None,
-                 secret_seed: int = None,
-                 constraints=None,
-                 config_names: FrozenSet[str] = NO_CONFIG_NAMES):
+def large_shapes(
+    parameters: Dict[str, Any],
+    config: Dict[str, Any] = None,
+    *,
+    mode: str = None,
+    n: int = None,
+    secret_seed: int = None,
+    constraints=None,
+    config_names: FrozenSet[str] = NO_CONFIG_NAMES,
+):
     """TIMED large-shape samples for one config namespace.
 
     Both modes time ``n`` large shapes per config (``perf.n_large_shapes``, default
@@ -613,17 +627,23 @@ def large_shapes(parameters: Dict[str, Any],
     if len(out) < len(seeds):
         logging.getLogger(__name__).log(
             logging.WARNING if not out else logging.DEBUG,
-            "large_shapes: config %s timed %d/%d shapes -- constraints %s dropped %d seed(s)", fixed, len(out),
-            len(seeds), constraints,
-            len(seeds) - len(out))
+            "large_shapes: config %s timed %d/%d shapes -- constraints %s dropped %d seed(s)",
+            fixed,
+            len(out),
+            len(seeds),
+            constraints,
+            len(seeds) - len(out),
+        )
     return out
 
 
-def fuzzed_shape(parameters: Dict[str, Any],
-                 iteration: int,
-                 config_ns: Dict[str, Any] = None,
-                 constraints=None,
-                 config_names: FrozenSet[str] = NO_CONFIG_NAMES) -> Dict[str, Any]:
+def fuzzed_shape(
+    parameters: Dict[str, Any],
+    iteration: int,
+    config_ns: Dict[str, Any] = None,
+    constraints=None,
+    config_names: FrozenSet[str] = NO_CONFIG_NAMES,
+) -> Dict[str, Any]:
     """One seeded fuzzed-size sample resolved against a FIXED config namespace.
 
     The per-config crossing of the ``k``-iteration correctness sweep: same seed
@@ -633,13 +653,15 @@ def fuzzed_shape(parameters: Dict[str, Any],
     knob names, see :func:`resolve_ranges`) forwards to :func:`_resolve_against`."""
     seed = int(config.get("seeds.fuzz", 42)) + int(iteration)
     distribution = config.get("fuzz.size_distribution", "log_uniform")
-    return _resolve_against(parameters,
-                            dict(config_ns or {}),
-                            seed,
-                            distribution,
-                            constraints,
-                            size_cap=correctness_size_cap() or None,
-                            config_names=config_names)
+    return _resolve_against(
+        parameters,
+        dict(config_ns or {}),
+        seed,
+        distribution,
+        constraints,
+        size_cap=correctness_size_cap() or None,
+        config_names=config_names,
+    )
 
 
 def correctness_size_cap() -> int:

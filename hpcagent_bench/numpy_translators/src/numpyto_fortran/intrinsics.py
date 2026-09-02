@@ -15,6 +15,7 @@ argument) still lowers to loops: the intrinsic's ``dim=`` counts in Fortran's ax
 numpy's, and a wrong ``dim`` is a silently wrong answer rather than a refusal. ``argmax``/``argmin``
 are held back for the neighbouring reason -- ``MAXLOC`` is 1-based where numpy is 0-based.
 """
+
 import ast
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -29,12 +30,14 @@ from numpyto_common.lib_nodes import iter_extent_of, shape_exprs_equal
 #: * ``all`` / ``any`` / ``count_nonzero``: the result is ``LOGICAL`` (or an integer count) while
 #:   the hoisted temp is declared ``real``, and ``COUNT(m /= 0)`` on a ``LOGICAL`` operand is not
 #:   even a legal comparison. Both need result-dtype plumbing that does not exist yet.
-WHOLE_ARRAY_REDUCTIONS = frozenset({
-    ("np", "sum"),
-    ("np", "prod"),
-    ("np", "mean"),
-    ("np", "linalg.norm"),
-})
+WHOLE_ARRAY_REDUCTIONS = frozenset(
+    {
+        ("np", "sum"),
+        ("np", "prod"),
+        ("np", "mean"),
+        ("np", "linalg.norm"),
+    }
+)
 
 #: Elementwise ops with a Fortran intrinsic that takes whole arrays. ``MERGE`` evaluates BOTH of its
 #: branches, which is what ``np.where`` does too -- so unlike a guarded division, the eager form is
@@ -92,11 +95,13 @@ def _is_extent_expr(node: ast.expr) -> bool:
 
 #: ``(module, attr)`` keys whose Fortran intrinsic also takes a ``dim=``, reducing ONE axis.
 #: ``norm`` is absent: Fortran has no per-axis 2-norm, and ``median`` has no intrinsic at all.
-AXIS_REDUCTIONS = frozenset({
-    ("np", "sum"),
-    ("np", "prod"),
-    ("np", "mean"),
-})
+AXIS_REDUCTIONS = frozenset(
+    {
+        ("np", "sum"),
+        ("np", "prod"),
+        ("np", "mean"),
+    }
+)
 
 
 def literal_axis(call: ast.Call) -> Optional[int]:
@@ -146,7 +151,7 @@ def operand_is_float(call: ast.Call, dtypes: Dict[str, str]) -> bool:
     a loop nest; claiming one wrongly costs a wrong answer or a Fortran compile error.
     """
     attr = call.func.attr if isinstance(call.func, ast.Attribute) else ""
-    slots = _FLOAT_SLOTS.get(attr, (0, ))
+    slots = _FLOAT_SLOTS.get(attr, (0,))
     if len(call.args) <= max(slots):
         return False
     return all(_slot_is_float(call.args[i], dtypes) for i in slots)
@@ -175,8 +180,9 @@ def conformable_operands(args: List[ast.expr], shapes: Dict[str, Tuple[str, ...]
     return len(ranks) <= 1
 
 
-def renders_natively(key: Tuple[str, str], call: ast.Call, shapes: Dict[str, Tuple[str, ...]],
-                     dtypes: Dict[str, str]) -> bool:
+def renders_natively(
+    key: Tuple[str, str], call: ast.Call, shapes: Dict[str, Tuple[str, ...]], dtypes: Dict[str, str]
+) -> bool:
     """True when Fortran has an intrinsic for ``call`` and lowering should leave it alone.
 
     Decided HERE, with the shape table in hand, rather than at emit: once lowering hands the call

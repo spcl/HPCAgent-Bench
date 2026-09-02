@@ -12,6 +12,7 @@ while the operator form ``a / b`` and the ``out=`` kwarg form (both written by t
 source, hence visible to the promoter) were already correct. All three are pinned here so
 the phase-order dependence cannot come back.
 """
+
 import numpy as np
 from _op_oracle import run_op
 
@@ -31,7 +32,7 @@ def _assert_ok(res):
 
 def _run(body: str):
     src = f"import numpy as np\ndef f(a, b, out):\n    {body}\n"
-    return run_op(src, "f", {"a": _A, "b": _B}, {"out": (6, )}, _SYMS, shapes=_SHAPES, backends=_NATIVE, dtypes=_DTYPES)
+    return run_op(src, "f", {"a": _A, "b": _B}, {"out": (6,)}, _SYMS, shapes=_SHAPES, backends=_NATIVE, dtypes=_DTYPES)
 
 
 def test_divide_call_form_is_true_division():
@@ -61,22 +62,23 @@ def test_float_divide_is_not_cast_to_fp64():
     import ast
 
     from numpyto_common.lib_nodes import expand_divide
+
     args = [ast.Name(id="a", ctx=ast.Load()), ast.Name(id="b", ctx=ast.Load())]
-    shapes = {"a": ("N", ), "b": ("N", ), "out": ("N", )}
+    shapes = {"a": ("N",), "b": ("N",), "out": ("N",)}
     target = ast.Name(id="out", ctx=ast.Store())
     float_src = ast.unparse(
         ast.fix_missing_locations(
-            ast.Module(body=expand_divide(target, args, shapes, local_dtypes={
-                "a": "float64",
-                "b": "float64"
-            }),
-                       type_ignores=[])))
+            ast.Module(
+                body=expand_divide(target, args, shapes, local_dtypes={"a": "float64", "b": "float64"}), type_ignores=[]
+            )
+        )
+    )
     assert "float64" not in float_src, float_src
     int_src = ast.unparse(
         ast.fix_missing_locations(
-            ast.Module(body=expand_divide(target, args, shapes, local_dtypes={
-                "a": "int64",
-                "b": "int64"
-            }),
-                       type_ignores=[])))
+            ast.Module(
+                body=expand_divide(target, args, shapes, local_dtypes={"a": "int64", "b": "int64"}), type_ignores=[]
+            )
+        )
+    )
     assert "np.float64(a[__r0])" in int_src, int_src

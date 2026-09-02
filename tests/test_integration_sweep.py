@@ -6,6 +6,7 @@ the layers are composed is caught. Two legs share one cwd/db so a speedup exists
 the baseline) and native+autopar (``scientific_computing/unstructured_grids@lvl1`` under ``polly``, the only framework
 reachable from ``run-benchmark`` that actually requests auto-parallelization -- see
 :func:`test_native_leg_requests_autopar`)."""
+
 import os
 import pathlib
 import re
@@ -37,8 +38,10 @@ NATIVE_FRAMEWORK = "polly"
 #: as UNSUPPORTED, so the rows below never exist. Gate on the SAME probe the harness gates on, or the
 #: skip and the column disagree.
 _POLLY = flags.polly_capability()
-requires_polly = pytest.mark.skipif(_POLLY.verdict is not flags.AutoparVerdict.OK,
-                                    reason=f"this host's polly is {_POLLY.verdict.value}: {_POLLY.detail}")
+requires_polly = pytest.mark.skipif(
+    _POLLY.verdict is not flags.AutoparVerdict.OK,
+    reason=f"this host's polly is {_POLLY.verdict.value}: {_POLLY.detail}",
+)
 
 PRESET = "S"
 
@@ -69,14 +72,18 @@ def run_cli(cwd: pathlib.Path, *args: str) -> subprocess.CompletedProcess:
         env.pop(rank_var, None)
     # The repo root, so `-m hpcagent_bench.cli` resolves from a tmp cwd whether pip-installed or not.
     env["PYTHONPATH"] = str(pathlib.Path(hpcagent_bench.__file__).resolve().parent.parent)
-    proc = subprocess.run([sys.executable, "-m", "hpcagent_bench.cli", *args],
-                          cwd=str(cwd),
-                          env=env,
-                          capture_output=True,
-                          text=True,
-                          timeout=1800)
-    assert proc.returncode == 0, (f"`hpcagent_bench {' '.join(args)}` exited {proc.returncode}\n"
-                                  f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}")
+    proc = subprocess.run(
+        [sys.executable, "-m", "hpcagent_bench.cli", *args],
+        cwd=str(cwd),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=1800,
+    )
+    assert proc.returncode == 0, (
+        f"`hpcagent_bench {' '.join(args)}` exited {proc.returncode}\n"
+        f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
+    )
     return proc
 
 
@@ -94,7 +101,7 @@ def rows_for(db: pathlib.Path, framework: str) -> List[Dict[str, object]]:
     conn = sqlite3.connect(db)
     try:
         conn.row_factory = sqlite3.Row
-        cur = conn.execute("SELECT * FROM results WHERE framework = ?", (framework, ))
+        cur = conn.execute("SELECT * FROM results WHERE framework = ?", (framework,))
         return [dict(r) for r in cur.fetchall()]
     finally:
         conn.close()
@@ -107,8 +114,20 @@ def sweep(tmp_path_factory) -> pathlib.Path:
     cwd = tmp_path_factory.mktemp("integration_sweep")
     run_cli(cwd, "run-benchmark", "-b", NUMPY_SELECTOR, "-f", "numpy", "-p", PRESET, "-r", "1")
     run_cli(cwd, "run-benchmark", "-b", NATIVE_SELECTOR, "-f", NATIVE_FRAMEWORK, "-p", PRESET, "-r", "1")
-    run_cli(cwd, "plot", "-b", NUMPY_SELECTOR, "--db", "hpcagent_bench.db", "--output", "heatmap.pdf", "-p", PRESET,
-            "-d", DATATYPE)
+    run_cli(
+        cwd,
+        "plot",
+        "-b",
+        NUMPY_SELECTOR,
+        "--db",
+        "hpcagent_bench.db",
+        "--output",
+        "heatmap.pdf",
+        "-p",
+        PRESET,
+        "-d",
+        DATATYPE,
+    )
     return cwd
 
 
@@ -196,11 +215,14 @@ def test_native_leg_requests_autopar(framework, want_flag, monkeypatch):
         so.unlink()  # force a real compile; a cached .so would skip the composer entirely
     cpp_runtime._ensure_built(cpp_backend, spec.native_base(), framework)
 
-    assert seen, ("_ensure_built never composed a compile command -- it cannot have built anything, "
-                  "so this test would have been vacuous")
+    assert seen, (
+        "_ensure_built never composed a compile command -- it cannot have built anything, "
+        "so this test would have been vacuous"
+    )
     extra = " ".join(str(k.get("extra_flags", "")) for k in seen)
-    assert want_flag in extra, (f"the {framework} build did NOT request autopar; _ensure_built passed "
-                                f"extra_flags={extra!r}")
+    assert want_flag in extra, (
+        f"the {framework} build did NOT request autopar; _ensure_built passed extra_flags={extra!r}"
+    )
     # An unsubstituted field would be passed to the compiler verbatim and rejected.
     assert "{n}" not in extra, f"{framework}: the core-count field was never substituted: {extra!r}"
 
@@ -214,7 +236,8 @@ def test_speedup_against_numpy_is_computable(sweep):
     native = {r["benchmark"]: r["time"] for r in rows_for(db, NATIVE_FRAMEWORK)}
     compared = sorted(set(baseline) & set(native))
     assert compared == sorted(short_names_for(NATIVE_SELECTOR)), (
-        f"no numpy baseline for the native kernels; numpy={sorted(baseline)} native={sorted(native)}")
+        f"no numpy baseline for the native kernels; numpy={sorted(baseline)} native={sorted(native)}"
+    )
     for name in compared:
         speedup = baseline[name] / native[name]
         assert speedup > 0 and speedup != float("inf"), f"{name}: speedup {speedup} is not a real number"
@@ -235,9 +258,11 @@ def test_narrow_divergent_selector_keeps_rows(sweep):
     the real sweep DB through the filter the plotters use. Reuses the module sweep (no extra run)."""
     from hpcagent_bench.plotting import load_results
     from hpcagent_bench.spec import select_short_names
+
     # premise (loud if the corpus drifts): the divergent kernel really is in the swept selection.
-    assert DIVERGENT_SHORT in short_names_for(NUMPY_SELECTOR), \
+    assert DIVERGENT_SHORT in short_names_for(NUMPY_SELECTOR), (
         f"{DIVERGENT_STEM}/{DIVERGENT_SHORT} not in {NUMPY_SELECTOR}; pick another divergent kernel"
+    )
     assert select_short_names(DIVERGENT_STEM) == [DIVERGENT_SHORT]  # stem -> DB short_name
     assert select_short_names(DIVERGENT_SHORT) == [DIVERGENT_SHORT]  # raw short_name honoured too
     rows = load_results(str(sweep / "hpcagent_bench.db"), DIVERGENT_STEM, PRESET, DATATYPE)
@@ -250,8 +275,20 @@ def test_narrow_divergent_selector_renders_pdf(sweep):
     arc_distance`` (a divergent stem, exit 0) renders a genuine single-row heatmap over the sweep DB,
     not the ~1.2 kB empty stub a zero-row selection would produce."""
     out_name = "heatmap_narrow.pdf"
-    run_cli(sweep, "plot", "-b", DIVERGENT_STEM, "--db", "hpcagent_bench.db", "--output", out_name, "-p", PRESET, "-d",
-            DATATYPE)
+    run_cli(
+        sweep,
+        "plot",
+        "-b",
+        DIVERGENT_STEM,
+        "--db",
+        "hpcagent_bench.db",
+        "--output",
+        out_name,
+        "-p",
+        PRESET,
+        "-d",
+        DATATYPE,
+    )
     blob = one_plot(sweep, out_name).read_bytes()
     assert blob.startswith(b"%PDF-"), f"not a PDF: starts {blob[:16]!r}"
     assert blob.rstrip().endswith(b"%%EOF"), "PDF is truncated (no %%EOF)"

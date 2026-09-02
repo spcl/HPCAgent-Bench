@@ -12,6 +12,7 @@ Discovery probes the machine (``shutil.which`` + ``pkg-config`` + ``ldconfig``);
 it never installs anything. The result is cached for the process -- the host's
 toolchain does not change within a run.
 """
+
 import functools
 from typing import Optional
 
