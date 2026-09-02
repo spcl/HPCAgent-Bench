@@ -259,6 +259,33 @@ RUN set -eux; \
     "${SPACK_ROOT}/bin/spack" compiler find --scope site; \
     "${SPACK_ROOT}/bin/spack" compiler list
 
+# Binary buildcache on scratch, so a rebuild does not recompile gcc 16 and llvm 22 -- 60-80 minutes
+# that this image paid three times in one evening, every time to fail at a gate AFTER it. The
+# podman LAYER cache cannot do this job: the nodes are diskless and no persistent filesystem here
+# supports the xattrs its storage drivers need, so the store lives in RAM and dies with the job.
+# A spack buildcache is plain tarballs, so it survives on Lustre.
+#
+# Both halves are no-ops when build.sh mounted nothing, which keeps a cacheless build identical to
+# today's. The mirror is registered only when the cache is non-empty, because an empty one has no
+# index to fetch; pushing needs no registered mirror, it takes the path.
+RUN set -eux; \
+    if [ -d /spack-buildcache ] && [ -n "$(ls -A /spack-buildcache 2>/dev/null)" ]; then \
+      "${SPACK_ROOT}/bin/spack" mirror add --scope site --unsigned localcache /spack-buildcache; \
+    fi; \
+    printf '%s\n' \
+      '#!/bin/sh' \
+      '# Push what was just installed, so the next build downloads it instead of compiling it.' \
+      '# Never fails the image: a cache that cannot be written is a slow build, not a wrong one.' \
+      'set -eu' \
+      '[ -d /spack-buildcache ] || exit 0' \
+      'if [ "$#" -gt 0 ]; then' \
+      '  "${SPACK_ROOT}/bin/spack" buildcache push --unsigned --update-index /spack-buildcache "$@" || true' \
+      'else' \
+      '  "${SPACK_ROOT}/bin/spack" -e "${SPACK_ENV_DIR}" buildcache push --unsigned --update-index /spack-buildcache || true' \
+      'fi' \
+      > /usr/local/bin/spack-cache-push; \
+    chmod 0755 /usr/local/bin/spack-cache-push
+
 # ---------------------------------------------------------------------------------------------
 # 4. gcc 16 with Graphite, then llvm 22 with MLIR, Polly and flang, built BY that gcc.
 #
@@ -286,6 +313,7 @@ RUN set -eux; \
     "${spack}" install --fail-fast "gcc@${GCC_VERSION} +graphite +binutils"; \
     "${spack}" compiler find --scope site "$("${spack}" location -i "gcc@${GCC_VERSION}")"; \
     ln -sfn "$("${spack}" location -i "gcc@${GCC_VERSION}")" /opt/gcc; \
+    spack-cache-push "gcc@${GCC_VERSION}"; \
     mkdir -p "${SPACK_ENV_DIR}"; \
     printf '%s\n' \
       'spack:' \
@@ -327,6 +355,7 @@ RUN set -eux; \
       > "${SPACK_ENV_DIR}/spack.yaml"; \
     "${spack}" -e "${SPACK_ENV_DIR}" concretize -f | tail -80; \
     "${spack}" -e "${SPACK_ENV_DIR}" install --fail-fast "llvm@${LLVM_VERSION}"; \
+    spack-cache-push; \
     "${spack}" clean --stage
 
 # The toolchain is NAMED, not left to PATH: a stale configure cache beats PATH, so a toolchain
@@ -460,6 +489,7 @@ RUN set -eux; \
 # frameworks, dace, the agent payload -- comes after it.
 RUN set -eux; \
     "${SPACK_ROOT}/bin/spack" -e "${SPACK_ENV_DIR}" install --fail-fast petsc slepc; \
+    spack-cache-push; \
     "${SPACK_ROOT}/bin/spack" clean --stage; \
     ls /opt/view/lib/libpetsc.so /opt/view/lib/libslepc.so
 
