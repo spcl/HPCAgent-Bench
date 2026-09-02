@@ -80,7 +80,7 @@ count artifact -- change the rep count and it moves without anything getting fas
 measured time per rep. Low, with a healthy-looking kernel table, means the device was idle and the
 HOST is the bottleneck: launch gaps, a synchronous copy per rep, a `hipDeviceSynchronize` inside
 the loop. No device-side change fixes that, and rocprofv3 cannot show you the gap -- it has no
-timeline. That question belongs to rocprof-sys.
+timeline. That question belongs to `rocprof-sys-sample`.
 
 `kernels_omitted` counts what fell below `min_percent` (default 1%). A short table is a filtered
 table, not a simple kernel.
@@ -91,7 +91,7 @@ table, not a simple kernel.
 | --- | --- | --- | --- |
 | `rocprofv3` | counter and trace CLI; intercepts HSA/HIP dispatches and dumps them | CUPTI + ncu's counter side | current, ROCm >= 6.2 |
 | `rocprof` (v1), `rocprofv2` | the earlier CLIs, different flags AND different output schemas | -- | SUPERSEDED |
-| `rocprof-sys` (was Omnitrace) | timeline, host sampling, system-wide correlation | Nsight Systems (`nsys`) | current |
+| `rocprof-sys-sample` (rocprof-sys, was Omnitrace) | timeline, host sampling, system-wide correlation | Nsight Systems (`nsys`) | current |
 | `rocprof-compute` (was Omniperf) | per-kernel counters, roofline, occupancy, register pressure | Nsight Compute (`ncu`) | current |
 | `rocm-smi` / `amd-smi` | board state: clocks, power, partition mode | `nvidia-smi` | current |
 
@@ -104,11 +104,61 @@ version banner before you trust a recipe.
 timeline view, no host sampling and no system-wide correlation. Neither of the other two is
 invoked by the harness, and neither belongs inside a timed run:
 
-- idle device, launch gaps, host/device interleaving -> `rocprof-sys-run -- <command>`;
+- idle device, launch gaps, host/device interleaving -> `rocprof-sys-sample --output <dir> --
+  <command>`. It is `-sample`, not `-run`: measured on ROCm 7.2.3, `rocprof-sys-run --profile
+  --trace` sets its environment, runs the program to completion, exits 0 and writes NO output
+  file at all -- the failure looks like a program that did nothing. `-sample` writes
+  `<dir>/<date_time>/perfetto-trace-<pid>.proto` beside `metadata-<pid>.json` and
+  `functions-<pid>.json`; open the `.proto` in the Perfetto UI. `rocprof-sys-run` is the
+  binary-instrumentation front end and needs an instrumented binary to have anything to say.
 - inside one kernel: achieved occupancy, register pressure, cache behaviour ->
   `rocprof-compute profile -n run -- <command>`, then
   `rocprof-compute analyze -p workloads/run --block 6.2`. A SECOND pass over the same binary,
-  never the pass you take a time from.
+  never the pass you take a time from. Two things go wrong with it before any kernel does, and
+  neither reads as an install problem. It ships with the ROCm packages and its Python
+  dependencies do NOT, so a first run answers with a list of `[ERROR] The '<package>' package
+  was not found` -- an incomplete install, not a refusal to profile
+  (`pip install -r $ROCM_PATH/libexec/rocprofiler-compute/requirements.txt`, and constrain numpy
+  and pandas to what is already there, because that file's floors will happily move them).
+  Completing it is not sufficient: measured on rocprof-compute 3.4.0 against pandas 3.0.2, all
+  thirteen counter passes RUN and every one is then dropped converting rocprofv3's v3 CSV to the
+  v2 schema (`You are trying to merge on str and int64 columns for key 'Agent_Id'`), so
+  `analyze` ends at `No profiling data found` -- a full profile's wall clock for an empty
+  result. Check for those `Error converting` warnings before you believe a run. The fix is to give
+  it its OWN interpreter rather than to bend the one you compute references with: a venv holding
+  its requirements plus a pandas its converter agrees with, invoked as
+  `<venv>/bin/python $ROCM_PATH/libexec/rocprofiler-compute/rocprof-compute ...`.
+
+You do not need it for counters alone. `rocprofv3` counts too, and that is the surface below.
+
+### Device counters without leaving `rocprofv3`
+
+```sh
+rocprofv3 -L                                     # the counters THIS part can express
+rocprofv3 --pmc SQ_WAVES SQ_INSTS_VALU TCC_HIT_sum TCC_MISS_sum \
+    --kernel-include-regex <your kernel> \
+    --output-format csv --output-directory <dir> --output-file counts -- <command>
+```
+
+One `<dir>/counts_counter_collection.csv`, one row per (dispatch, counter):
+`Counter_Name` and `Counter_Value` beside `Dispatch_Id`, `Kernel_Name`, `Grid_Size`,
+`Workgroup_Size`, `VGPR_Count`, `Accum_VGPR_Count`, `SGPR_Count`, `LDS_Block_Size` and
+`Scratch_Size`. So the launch geometry arrives WITH the counts rather than from a second trace.
+
+Three rules the tool enforces or punishes:
+
+- **Rows are per dispatch, not per kernel.** Sum `Counter_Value` over `Dispatch_Id` yourself
+  before comparing anything to a per-kernel figure. Check the sum against a number you can
+  derive: a 2^22-element launch at 64 lanes is 65,536 waves, and twenty of them counted
+  1,310,720 `SQ_WAVES` exactly -- a counter that does not reconcile with the launch geometry is
+  a counter you have misread, not a finding.
+- **Ask for FEW counters per run.** The job FAILS outright when the set cannot be collected in
+  one pass; there is no silent multiplexing, which is the one thing to like about it.
+- **`--kernel-include-regex` filters counter collection**, so the setup and library kernels stop
+  diluting the rows you care about.
+
+Same constraint as every counted run, on either vendor: collection serialises dispatches, so
+read the counts and never the wall clock.
 
 ## MI300 is a chiplet part, and one of them is an APU
 
@@ -182,17 +232,29 @@ Read as tiling decisions:
 the PAPI GPU surface (`gpu_feature_set`, `count_gpu_metric`, `count_gpu_group`), and they are
 counters, not a profile: they never replace the trace above.
 
-Two components, and the usual answer is that neither was compiled in:
+Two components, and the usual answer is that neither one answers:
 
 - `rocm` -- kernel counters through ROCProfiler: `./configure --with-components=rocm` with
   `PAPI_ROCM_ROOT` pointing at the ROCm install.
 - `rocm_smi` -- power, clocks and temperature: `./configure --with-components=rocm_smi` with
   `PAPI_ROCMSMI_ROOT` set.
 
+**Do not plan a device measurement around this path.** `rocm` is written against ROCProfiler V1,
+which AMD is retiring -- the tool map above already says V1 is superseded, and a PAPI component
+built on it inherits that. Its SDK-based replacement, `rocp_sdk`, exists only from PAPI 7.2.0.
+A distribution PAPI is typically older than that and compiled with neither, so `rocm` is not
+"disabled", it is absent. Measured on ROCm 7.2.3 with the distribution PAPI 7.1.0:
+no `rocm` component and no `rocp_sdk`; `rocm_smi` compiled in but disabled for a missing
+`PAPI_ROCMSMI_ROOT`, and setting it to the ROCm install replaced that reason with
+`Error while initializing device tables` rather than a working component. **`rocprofv3 --pmc`
+above is the surface that answers on this hardware today**; the table below is what the PAPI path
+WOULD give you where it is built and does enable.
+
 "Not built" is a PAPI rebuild; "built but would not enable" carries PAPI's own reason and is
-usually the device or the permission gate. `papi_component_avail` lists what a build has. Ask
-`gpu_feature_set()` before measuring: it resolves every metric against what the component
-ENUMERATES on this part and gives a reason for each one it cannot.
+usually the device, the permission gate, or a component-to-runtime version mismatch.
+`papi_component_avail` lists what a build has -- read it before writing any code against these
+names. Ask `gpu_feature_set()` before measuring: it resolves every metric against what the
+component ENUMERATES on this part and gives a reason for each one it cannot.
 
 | metric | AMD event | unit | NVIDIA's answer, for contrast |
 | --- | --- | --- | --- |
@@ -234,7 +296,7 @@ Three things to hold on to:
 | `rocprof_failed` | the tool exited non-zero with no kernel report | read what it said; it is quoted in the message. If the quoted error names YOUR program and `libhsa-amd-aqlprofile64.so.1`, see below -- the code is fine |
 | `rocprof_report_missing` | it exited 0 and wrote no `*_kernel_stats.csv` | this build does not support `--stats` in that form; get rocprofv3 |
 | `no_kernels` | the trace contains zero dispatches | the submission ran on the host, or the launch failed silently -- check the launch's error code |
-| `counters_unsupported` | host counters were asked for on a device kernel | use rocprof-compute, or the PAPI `rocm` path above |
+| `counters_unsupported` | host counters were asked for on a device kernel | use `rocprofv3 --pmc`, rocprof-compute, or the PAPI `rocm` path above |
 
 **`rocprofv3` REQUIRES `hsa-amd-aqlprofile` and does not depend on it**, so a package manager will
 happily leave it out. Missing, the traced run dies with `error while loading shared libraries:
