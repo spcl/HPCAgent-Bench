@@ -13,19 +13,25 @@ kernel that starts parsing must be REMOVED from the list -- an entry that no lon
 same silent drift a hand-written list always accumulates.
 
 Parse only (``to_sdfg(simplify=False)``): no C++ compiler runs, so the whole corpus is affordable.
-Each kernel is parsed in its own subprocess because a frontend that hangs (``cloudsc``) or dies
-would otherwise take the session with it, and because DaCe's parse state is process-global.
+Each kernel is parsed in its own process because a frontend that hangs (``cloudsc``) or dies would
+otherwise take the session with it, and because DaCe's parse state is process-global. Those
+processes are FORKED from a warm :mod:`tests.dace_parse_probe` server rather than started from
+scratch, which is the same isolation without ``import dace`` 661 times over.
 """
 
 import collections
 import json
 import os
 import pathlib
+import queue
 import re
+import select
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from typing import Dict, Iterable, List, Set, Tuple
 
 import pytest
@@ -53,12 +59,14 @@ BENCHMARKS = REPO / "hpcagent_bench" / "benchmarks"
 #: parse faster rather than to keep buying time.
 PARSE_TIMEOUT_S = 1800.0
 
-#: How many kernels are in flight at once. The sweep is a SUBPROCESS per program already, so this
-#: changes no verdict and no per-kernel budget -- it only stops the three ``hang`` entries, at
-#: :data:`PARSE_TIMEOUT_S` each, from serialising 45 minutes of pure timeout ahead of the 620
-#: kernels that take ~2 s. Measured on the whole corpus 2026-08-08: 45 min serial against 20 min at
-#: two workers, which is the difference between fitting the CI step's budget and not. Two, not
-#: ``auto``: a parse of the deep vision nets is memory-bound in sympy, not core-bound.
+#: How many kernels are in flight at once. Each parse is a PROCESS of its own already, so this
+#: changes no verdict and no per-kernel budget -- it only stops a wedged entry, at
+#: :data:`PARSE_TIMEOUT_S`, from serialising ahead of the 650 kernels that take ~2 s. Measured on
+#: the whole corpus 2026-08-08: 45 min serial against 20 min at two workers, which is the
+#: difference between fitting the CI step's budget and not. Two, not the runner's four vCPU: the
+#: runner has two PHYSICAL cores, and a third parse in flight buys throughput by slowing every
+#: parse in flight -- which spends the very contention margin :data:`PARSE_TIMEOUT_S` is sized
+#: for, and a parse pushed past that budget is reported as a REGRESSION.
 PARSE_WORKERS = 2
 
 #: ``"<index>/<count>"`` -- the slice of the corpus THIS process judges, unset for all of it.
@@ -72,6 +80,19 @@ PARSE_WORKERS = 2
 #: sound under the split because it is per-kernel in both directions -- a shard's regressions and
 #: its ``fixed`` set are read off the kernels that shard parsed.
 PARSE_SHARD = os.environ.get("HPCAGENT_BENCH_DACE_PARSE_SHARD", "").strip()
+
+#: How many kernels EMIT at once. The emit is a pure-Python AST walk with no shared state -- each
+#: kernel reads and writes only its own directory -- so nothing races and no verdict moves.
+#: PROCESSES, not threads: it is pure Python and would serialise on the GIL. Four, unlike
+#: :data:`PARSE_WORKERS`: an emit carries no per-kernel budget for contention to blow.
+EMIT_WORKERS = 4
+
+#: How long the sweep waits on a parse SERVER past the budget it handed the server, before calling
+#: the server dead. The server enforces :data:`PARSE_TIMEOUT_S` on the kernel itself and answers
+#: either way, so this only fires if the server -- which forks per kernel and parses nothing
+#: itself -- is the thing that wedged. Without it a wedged server would hang the sweep until the
+#: step cap, and the step cap reports no kernel at all.
+SERVER_GRACE_S = 120.0
 
 #: Reasons that are a WALL-CLOCK verdict rather than a frontend refusal. A faster runner, or one
 #: under less load, finishes such a kernel inside :data:`PARSE_TIMEOUT_S` and reports ``ok`` without
@@ -287,6 +308,24 @@ def shard_of(keys: List[str]) -> List[str]:
     return sorted(mine)
 
 
+def stop_measuring_coverage() -> None:
+    """Stop recording coverage in an emit worker; a no-op wherever the phase runs without it.
+
+    The port-fidelity job runs this phase under ``--cov=hpcagent_bench``, and a pool worker
+    inherits the tracer whether it is forked or spawned (pytest-cov starts one in a multiprocessing
+    child on purpose). Tracing the emit costs it 2.7x to record a report that discards the result:
+    the seconds go to ``numpyto_*``, which ``--cov=hpcagent_bench`` does not measure. What this
+    does stop recording is ``autogen.ensure``'s own cache-hit path, which
+    ``tests/test_framework_cache.py`` drives in-process and traced.
+    """
+    coverage = sys.modules.get("coverage")
+    if coverage is None:
+        return
+    active = coverage.Coverage.current()
+    if active is not None:
+        active.stop()
+
+
 def generated_programs() -> List[pathlib.Path]:
     """Every kernel's canonical DaCe program, GENERATING any that a fresh checkout lacks.
 
@@ -303,33 +342,98 @@ def generated_programs() -> List[pathlib.Path]:
     A kernel that emits no program is absent from the list rather than failing it; this gate
     judges what the frontend is handed, and there is a separate finding for the emit gap (see
     :func:`test_the_refusal_list_names_kernels_that_exist`).
+
+    A POOL, because this was the serial half of the port-fidelity step: a cold checkout has no
+    ``*_dace.py`` and no per-kernel ``.cache/`` to hand one back -- both are gitignored and the job
+    restores neither -- so every one of them is emitted here, on one core, before a single parse
+    starts.
     """
     from hpcagent_bench.spec import KERNELS
 
-    return [path for path in (ensure_dace_program(key) for key in shard_of(sorted(KERNELS))) if path.exists()]
+    with ProcessPoolExecutor(max_workers=EMIT_WORKERS, initializer=stop_measuring_coverage) as pool:
+        emitted = pool.map(ensure_dace_program, shard_of(sorted(KERNELS)))
+        return [path for path in emitted if path.exists()]
 
 
-def parse_one(path: pathlib.Path) -> dict:
-    """Parse ONE program in a fresh interpreter; ``{"verdict": "ok"|"fail"|"timeout"|"crash", ...}``.
+class ProbeServer:
+    """A warm ``tests.dace_parse_probe --serve``, asked for one kernel's verdict at a time.
 
-    A subprocess per kernel because the two interesting failures -- a wedged parse and a hard crash
-    -- are exactly the ones an in-process loop cannot survive to report.
+    Still a process per parse -- the server forks one and never parses in itself -- so a wedged
+    frontend or a hard crash still costs its own kernel and reports it, which is the only reason
+    the sweep is out-of-process at all. What the server removes is the ``import dace`` that a fresh
+    interpreter per kernel paid 661 times: 1.6 s on the dev box against a 1.9 s MEDIAN parse on CI,
+    i.e. most of what a typical kernel cost this sweep was the interpreter arriving.
     """
-    argv = [sys.executable, "-m", "tests.dace_parse_probe", str(path)]
-    started = time.monotonic()
-    try:
-        proc = subprocess.run(argv, capture_output=True, text=True, cwd=str(REPO), timeout=PARSE_TIMEOUT_S)
-    except subprocess.TimeoutExpired:
+
+    def __init__(self) -> None:
+        self.proc = self.spawn()
+
+    @staticmethod
+    def spawn() -> subprocess.Popen:
+        return subprocess.Popen(
+            [sys.executable, "-m", "tests.dace_parse_probe", "--serve"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+            cwd=str(REPO),
+        )
+
+    def parse(self, path: pathlib.Path) -> dict:
+        """``{"verdict": "ok"|"fail"|"noprogram"|"timeout"|"crash", ...}`` for one program."""
+        return self.ask(path, PARSE_TIMEOUT_S)
+
+    def ask(self, path: pathlib.Path, budget_s: float) -> dict:
+        """One program's verdict under an explicit per-kernel budget."""
+        started = time.monotonic()
+        try:
+            self.proc.stdin.write(f"{budget_s} {path}\n")
+            self.proc.stdin.flush()
+            answer = self.readline(budget_s + SERVER_GRACE_S)
+        except (BrokenPipeError, ValueError):
+            answer = ""
+        if answer:
+            return json.loads(answer)
+        # The SERVER failed to answer, which is not a verdict on this kernel. Say that rather than
+        # blaming the kernel, and replace it so the rest of this worker's queue is still judged.
+        self.close()
+        self.proc = self.spawn()
         return {
-            "verdict": "timeout",
-            "error": f"the frontend did not finish parsing in {PARSE_TIMEOUT_S:.0f}s",
+            "verdict": "crash",
+            "error": "the parse server gave no verdict; this kernel was not judged",
             "seconds": time.monotonic() - started,
         }
-    elapsed = time.monotonic() - started
-    for line in reversed(proc.stdout.splitlines()):
-        if line.startswith("{"):
-            return dict(json.loads(line), seconds=elapsed)
-    return {"verdict": "crash", "error": (proc.stderr or proc.stdout)[-400:], "seconds": elapsed}
+
+    def readline(self, budget_s: float) -> str:
+        """One answer line, or ``""`` if the server did not produce one inside ``budget_s``."""
+        if not select.select([self.proc.stdout], [], [], budget_s)[0]:
+            return ""
+        return self.proc.stdout.readline()
+
+    def close(self) -> None:
+        self.proc.kill()
+        self.proc.communicate()
+
+
+def parse_all(programs: List[pathlib.Path]) -> List[dict]:
+    """Every program's verdict, :data:`PARSE_WORKERS` in flight against one warm server each."""
+    fleet = [ProbeServer() for _ in range(PARSE_WORKERS)]
+    idle: queue.SimpleQueue = queue.SimpleQueue()
+    for server in fleet:
+        idle.put(server)
+
+    def one(path: pathlib.Path) -> dict:
+        server = idle.get()
+        try:
+            return server.parse(path)
+        finally:
+            idle.put(server)
+
+    try:
+        with ThreadPoolExecutor(max_workers=PARSE_WORKERS) as pool:
+            return list(pool.map(one, programs))
+    finally:
+        for server in fleet:
+            server.close()
 
 
 def kernel_of(path: pathlib.Path) -> str:
@@ -442,8 +546,7 @@ def test_every_generated_dace_program_parses_or_is_a_known_refusal() -> None:
     that parsed is runner speed, not a fix, so it does not fail the shrink direction."""
     programs = generated_programs()
     assert programs, "no generated DaCe programs found -- the glob or the corpus moved"
-    with ThreadPoolExecutor(max_workers=PARSE_WORKERS) as pool:
-        verdicts = list(pool.map(parse_one, programs))
+    verdicts = parse_all(programs)
     regressions, fixed = ratchet_findings((kernel_of(p), v) for p, v in zip(programs, verdicts))
     # A timeout alone cannot tell a wedged frontend from a runner slower than the box the budget was
     # measured on. The MEDIAN is what separates them: a uniformly slower runner moves it, and a
@@ -473,6 +576,51 @@ def test_every_generated_dace_program_parses_or_is_a_known_refusal() -> None:
         f"(Reasons in {sorted(TIMEOUT_REASONS)} are exempt -- a parse that finished "
         "only says the runner was fast enough.)"
     )
+
+
+@pytest.fixture
+def program_shaped_file() -> pathlib.Path:
+    """A writable directory UNDER the corpus root, where a fake ``*_dace.py`` can be dropped.
+
+    Under the root because the probe keys its record on the path relative to the repo, which is how
+    :func:`kernel_of` names a kernel; a file outside it is not a program this sweep could ever be
+    handed.
+    """
+    kdir = pathlib.Path(tempfile.mkdtemp(prefix="probeserver_", dir=BENCHMARKS))
+    yield kdir
+    shutil.rmtree(kdir, ignore_errors=True)
+
+
+@pytest.mark.dace_frontend
+def test_the_parse_server_times_a_kernel_out_and_goes_on_serving(program_shaped_file) -> None:
+    """The budget is enforced on the FORKED child, so a kernel that never finishes costs its own
+    budget and nothing else -- the same guarantee a process per kernel gave, which is the only
+    reason this sweep is out of process. Asserted by wedging one and then asking the SAME server
+    for a verdict it can produce: a server that came back poisoned would fail the second half."""
+    wedged = program_shaped_file / "wedged_dace.py"
+    wedged.write_text("import time\n\ntime.sleep(3600)\n")
+    fine = program_shaped_file / "fine_dace.py"
+    fine.write_text("value = 1\n")
+    server = ProbeServer()
+    try:
+        assert server.ask(wedged, 2.0)["verdict"] == "timeout"
+        assert server.ask(fine, 60.0)["verdict"] == "noprogram"
+    finally:
+        server.close()
+
+
+@pytest.mark.dace_frontend
+def test_the_parse_server_calls_a_kernel_that_kills_its_process_a_crash(program_shaped_file) -> None:
+    """A frontend that dies rather than raises is one of the two failures worth forking for, and it
+    reaches the ratchet as a verdict on THAT kernel. The server must not read a missing answer as
+    its own death and take the rest of the queue down with it."""
+    fatal = program_shaped_file / "fatal_dace.py"
+    fatal.write_text("import os\n\nos._exit(9)\n")
+    server = ProbeServer()
+    try:
+        assert server.ask(fatal, 60.0)["verdict"] == "crash"
+    finally:
+        server.close()
 
 
 @pytest.mark.dace_frontend

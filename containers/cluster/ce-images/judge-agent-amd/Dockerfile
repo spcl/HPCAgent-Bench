@@ -339,20 +339,12 @@ RUN set -eux; \
       '  - mimalloc' \
       '  - eigen' \
       '  - blaze' \
-      '  # NO blis. Its haswell sup kernels claim %rbp in inline asm and gcc 16 refuses them --' \
-      '  # "bp cannot be used in `asm` here" on bli_gemmsup_rv_haswell_asm_{s6x16m,s6x16n,d6x8n}' \
-      '  # and more (621068). cflags=-fomit-frame-pointer does NOT free the register: 621321 hit' \
-      '  # the identical error with it set, so those functions need a frame for another reason.' \
-      '  # Upstream carries no gcc-16 patch and 2.0 is the newest release, so there is nothing to' \
-      '  # bump to. OpenBLAS is the SELECTED BLAS here and MKL and hptt cover the rest of the' \
-      '  # shape, so the cost of its absence is one requestable name -- and libraries.yaml gates' \
-      '  # on a trial link, so an absent blis is never advertised to an agent.' \
-      '  # NO slate. Its matgen translation units die under this toolchain (621349, three files at' \
-      '  # once with no error line of their own), and netlib-scalapack -- which builds -- already' \
-      '  # covers the distributed dense shape it would add. Its own note here called it "nearly' \
-      '  # free"; a build cycle is not free, and it buys one requestable name we already have a' \
-      '  # provider for. trilinos stays out for the same reason: hours of build for one name whose' \
-      '  # solvers petsc, hypre, mumps and superlu-dist already cover.' \
+      '  # NO blis: gcc 16 refuses its haswell asm ("bp cannot be used in `asm` here", 621068)' \
+      '  # and -fomit-frame-pointer does not help (621321, identical error). No upstream patch,' \
+      '  # 2.0 is newest. OpenBLAS and MKL cover the shape.' \
+      '  # NO slate: its matgen units die under this toolchain (621349) and netlib-scalapack' \
+      '  # already covers distributed dense. trilinos stays out too -- hours of build for solvers' \
+      '  # petsc, hypre, mumps and superlu-dist already provide.' \
       '  - metis' \
       '  - parmetis' \
       '  - scotch +mpi +esmumps' \
@@ -377,10 +369,8 @@ RUN set -eux; \
       "  - magma ~cuda +rocm amdgpu_target=${ROCM_ARCH} +fortran" \
       "  - petsc +mpi +metis +hypre +mumps +superlu-dist +strumpack +suite-sparse +scalapack +hdf5 +fftw +rocm amdgpu_target=${ROCM_ARCH} +shared" \
       '  - slepc +arpack' \
-      '  # sundials is the one requestable name with NO provider in this image at all: the entry' \
-      '  # declares -lsundials_core, which only exists from SUNDIALS 7, so even where a distro 6.x' \
-      '  # is present the link fails on that token alone. Spack ships 7.x, which makes the declared' \
-      '  # tokens true, and it is a ROCmPackage, so the device vectors come with it.' \
+      '  # sundials had no provider at all: its entry declares -lsundials_core, which exists only' \
+      '  # from SUNDIALS 7, so a distro 6.x fails on that token alone. Spack ships 7.x, with rocm.' \
       "  - sundials +openmp ~cuda +rocm amdgpu_target=${ROCM_ARCH}" \
       '  view:' \
       '    default:' \
@@ -542,13 +532,11 @@ RUN set -eux; \
 # MKL ships because intel_mkl / intel_mkl_mpich / intel_mkl_openmpi exist and this is x86_64.
 # OpenBLAS stays the SELECTED BLAS.
 #
-# `+openshmem` is NOT a request for OpenSHMEM. Spack's openmpi variant only ever ADDS
-# `--enable-oshmem` and never passes `--disable-oshmem`, while OpenMPI 5's configure builds
-# OSHMEM by default whenever a supported SPML is present -- which `fabrics=ucx` guarantees. So
-# OSHMEM is compiled either way, and the variant's only real effect at 5.0.0:5.0.10 is whether
-# spack applies the gcc-16 patch for it (ompi issue 13757: `mca_memheap_base_map = {{{{0}}}}`,
-# which gcc 16 rejects as `braces around scalar initializer` where gcc 15 warned). Under
-# `~openshmem` we paid for the OSHMEM build AND skipped its fix, so the build could only fail.
+# `+openshmem` is not a request for OpenSHMEM. Spack only ever ADDS `--enable-oshmem`, never
+# `--disable-oshmem`, and OpenMPI 5 builds OSHMEM whenever an SPML is present -- `fabrics=ucx`
+# guarantees one. So it is compiled either way, and the variant's only effect at 5.0.0:5.0.10 is
+# whether spack applies its gcc-16 patch (ompi 13757). `~openshmem` paid for the build and
+# skipped the fix.
 RUN set -eux; \
     spack="${SPACK_ROOT}/bin/spack"; \
     "${spack}" install --fail-fast \
@@ -567,10 +555,9 @@ RUN set -eux; \
 # until a commit has been observed to build: this value is devinamatthews/tblis master as of
 # 2026-09-02 and has not yet had a successful build against it, so confirm it from the first
 # build log before treating it as verified.
-# The library is asserted alongside the header below. Header-only success is how a half-install
-# ships: v5 carried libhptt.so and NO tblis library at all, and a report weeks later is where that
-# surfaced. The comment lives HERE because one placed between a RUN's line continuations is passed
-# to the shell by some parsers, which comments out the rest of the command.
+# The library is asserted alongside the header: header-only success is how a half-install ships
+# (v5 carried libhptt.so and no tblis library at all). Comment here, not inside the RUN -- one
+# between line continuations is passed to the shell and comments out the rest.
 COPY containers/build-hptt.sh /build-hptt.sh
 COPY containers/build-tblis.sh /build-tblis.sh
 ARG TBLIS_REF=eb719e718976572e0ab53975f4e0c799faeb35f2

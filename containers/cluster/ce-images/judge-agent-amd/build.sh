@@ -46,12 +46,11 @@ DACE_COMMIT="${DACE_COMMIT:-$(git ls-remote https://github.com/spcl/dace.git ref
 printf 'dace @ %s\n' "${DACE_COMMIT}"
 
 cd "${REPO_ROOT}"
-# cgroupfs: with the systemd manager a dying logind session reaps podman mid-pull (silent rc=1).
 # The git mirror, when one exists. Every clone in the build is rewritten to it (see the Dockerfile),
-# which is what finally took GitHub off the critical path: the rate limiter answers an
-# unauthenticated clone with a 401 under load, and the callers that died on it -- spack's in-process
-# package-repo clone, vLLM's CMake FetchContent of triton -- have no retry to give them. Refresh it
-# from a login node with containers/cluster/ce-images/mirror-repos.sh. Absent, the build still works and still talks to GitHub.
+# which took GitHub off the critical path: the rate limiter answers an unauthenticated clone with a
+# 401 under load, and the callers that died on it -- spack's in-process package-repo clone, vLLM's
+# CMake FetchContent of triton -- have no retry. Refresh from a login node with
+# containers/cluster/ce-images/mirror-repos.sh. Absent, the build still works, via GitHub.
 MIRROR_ARGS=()
 GIT_MIRRORS="${GIT_MIRRORS:-${SCRATCH:-}/git-mirrors}"
 if [[ -d "${GIT_MIRRORS}" ]]; then
@@ -59,15 +58,16 @@ if [[ -d "${GIT_MIRRORS}" ]]; then
   printf 'git mirror %s\n' "${GIT_MIRRORS}"
 fi
 
-# Spack binary buildcache on scratch. gcc 16 and llvm 22 are 60-80 minutes that this image has
-# now paid four times, every time to fail at something after them. The Dockerfile pushes into this
-# mount after each install and registers it as a mirror when it is non-empty; both halves are
-# no-ops without it, so an unmounted build behaves exactly as before.
+# Spack binary buildcache on scratch: gcc 16 and llvm 22 are 60-80 minutes this image has paid
+# repeatedly, every time to fail at something after them. The Dockerfile pushes here after each
+# install and registers it as a mirror when non-empty; both halves no-op without the mount.
 SPACK_BUILDCACHE="${SPACK_BUILDCACHE:-${SCRATCH:?}/spack-buildcache}"
 mkdir -p "${SPACK_BUILDCACHE}"
 CACHE_ARGS=(-v "${SPACK_BUILDCACHE}:/spack-buildcache:rw")
 printf 'spack buildcache %s\n' "${SPACK_BUILDCACHE}"
 
+# cgroupfs, not systemd: a dying logind session reaps podman mid-pull under the systemd manager,
+# with a silent rc=1.
 podman --cgroup-manager=cgroupfs build "${MIRROR_ARGS[@]}" "${CACHE_ARGS[@]}" \
   --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
   --build-arg "DACE_COMMIT=${DACE_COMMIT}" \
@@ -81,12 +81,10 @@ podman --cgroup-manager=cgroupfs build "${MIRROR_ARGS[@]}" "${CACHE_ARGS[@]}" \
 podman image inspect --format '{{.Digest}}' "${IMAGE_TAG}" > "${OUTPUT_SQSH}.digest"
 printf 'image digest %s\n' "$(cat "${OUTPUT_SQSH}.digest")"
 
-# enroot's exit code lies when its cleanup fails after a good write, so gate on the ARTIFACT:
-# listing forces a read of the inode table at file END, which a truncated image fails.
-# The output is REMOVED first. enroot refuses to overwrite ("File already exists"), the `|| true`
-# below swallows that, and `unsquashfs -l` then happily validates LAST run's file -- so job 620068
-# printed "Wrote" and "IMAGE READY" over a stale image built with the wrong triton. Deleting first
-# is what makes the check below mean what it says: no import, no file, no green.
+# enroot's exit code lies when cleanup fails after a good write, so gate on the ARTIFACT: listing
+# reads the inode table at file END, which a truncated image fails. Remove the output first --
+# enroot refuses to overwrite, `|| true` swallows that, and `unsquashfs -l` would then validate
+# LAST run's file (620068 printed "IMAGE READY" over a stale image built with the wrong triton).
 rm -f "${OUTPUT_SQSH}"
 enroot import -x mount -o "${OUTPUT_SQSH}" "podman://${IMAGE_TAG}" || true
 unsquashfs -l "${OUTPUT_SQSH}" opt >/dev/null
