@@ -378,8 +378,17 @@ awk -v a="${g0:-0}" -v b="${g1:-0}" -v dt="$((t1-t0))" -v span="${STEADY_SPAN_S:
         if (rate <= 0) { print "FAIL: no decode progress under load"; exit 1 }
     }' "${RUN_DIR}/probe-conc.txt" || exit 1
 
+stage "gate 5: long-context accuracy -- throughput alone never said whether a change was SAFE"
+# The sglang smoke has graded this since it was written; this one graded decode and stopped, which
+# is how a backend that reads 78.5 tok/s while echoing filler (604789) would have been promoted on
+# its rate. aiter #1455 took kimi from 94.2% to 0.9% on gsm8k with no error anywhere.
+srun --nodes=1 --ntasks=1 --overlap --nodelist="${NODE0}" --environment="${INFERENCE_EDF}" \
+    /opt/pytorch211/bin/python "$(dirname "${PG_PATCH_DIR}")/accuracy-gate.py" \
+        --base "http://${NODE0}:${API_PORT}" --model "${SERVED_MODEL}" \
+    || { echo "FAIL: long-context accuracy gate" >&2; touch "${SMOKE_DONE}"; exit 1; }
+
 if (( AGENTLIKE_DURATION_S > 0 )); then
-    stage "gate 5: agent-shaped load, ${AGENTLIKE_STREAMS} streams x long shared prefix for ${AGENTLIKE_DURATION_S}s"
+    stage "gate 6: agent-shaped load, ${AGENTLIKE_STREAMS} streams x long shared prefix for ${AGENTLIKE_DURATION_S}s"
     srun --nodes=1 --ntasks=1 --overlap --nodelist="${NODE0}" --environment="${INFERENCE_EDF}" \
         # Beside the resolved patch dir, not beside the SUBMIT dir: a driver that submits
         # this from elsewhere (smoke-new-images.sh does) would not find it otherwise.
