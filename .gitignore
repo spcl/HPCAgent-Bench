@@ -54,6 +54,7 @@
 .coverage
 .coverage.*
 .dacecache/
+.dacecache_rank*/
 .dmypy.json
 .eggs/
 .env
