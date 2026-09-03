@@ -84,10 +84,14 @@ for name in "${candidates[@]}"; do
   # asks a different question -- does this image serve what the CAMPAIGN serves -- so the three
   # knobs .env.kvfix3-kimi27sglang-c settled on are passed through: triton attention, the decode
   # graph cap that bought 4.7x KV, and the hierarchical cache. 256k context is free at that cap.
+  # SGLANG_EXTRA_ARGS and MEM_FRACTION are DEFAULTS here, not overrides: tuning a serving knob
+  # means running this driver against the same image with one value changed, and a hardcoded
+  # assignment made that impossible -- the 0.42-vs-0.50 mem-fraction pair had to be run by hand.
   sgl=()
   if [[ "${name}" == sglang ]]; then
-    sgl=(CONTEXT_LEN=262144
-         SGLANG_EXTRA_ARGS="--attention-backend triton --cuda-graph-max-bs-decode 64 --enable-hierarchical-cache")
+    sgl=(CONTEXT_LEN="${CONTEXT_LEN:-262144}"
+         MEM_FRACTION="${MEM_FRACTION:-0.42}"
+         SGLANG_EXTRA_ARGS="${SGLANG_EXTRA_ARGS:---attention-backend triton --cuda-graph-max-bs-decode 64 --enable-hierarchical-cache}")
   fi
   # TUNED_MOE_DIR defaults to <submit dir>/moe-configs, and this driver submits from HERE, where
   # there is no such folder -- an empty one reads as "tuned" and is how a smoke measures the

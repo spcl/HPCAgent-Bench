@@ -375,6 +375,11 @@ RUN set -eux; \
       "  - magma ~cuda +rocm amdgpu_target=${ROCM_ARCH} +fortran" \
       "  - petsc +mpi +metis +hypre +mumps +superlu-dist +strumpack +suite-sparse +scalapack +hdf5 +fftw +rocm amdgpu_target=${ROCM_ARCH} +shared" \
       '  - slepc +arpack' \
+      '  # sundials is the one requestable name with NO provider in this image at all: the entry' \
+      '  # declares -lsundials_core, which only exists from SUNDIALS 7, so even where a distro 6.x' \
+      '  # is present the link fails on that token alone. Spack ships 7.x, which makes the declared' \
+      '  # tokens true, and it is a ROCmPackage, so the device vectors come with it.' \
+      "  - sundials +openmp ~cuda +rocm amdgpu_target=${ROCM_ARCH}" \
       '  view:' \
       '    default:' \
       '      root: /opt/view' \
@@ -506,10 +511,10 @@ RUN set -eux; \
 # substitute for any of this.
 RUN set -eux; \
     "${SPACK_ROOT}/bin/spack" -e "${SPACK_ENV_DIR}" install --fail-fast \
-      superlu-dist mumps strumpack hypre arpack-ng magma slate; \
+      superlu-dist mumps strumpack hypre arpack-ng magma slate sundials; \
     "${SPACK_ROOT}/bin/spack" clean --stage; \
     ls /opt/view/lib/libmagma.so /opt/view/lib/libsuperlu_dist.so /opt/view/lib/libHYPRE.so \
-      /opt/view/lib/libslate.so
+      /opt/view/lib/libslate.so /opt/view/lib/libsundials_core.so
 
 # ---------------------------------------------------------------------------------------------
 # 7. PETSc and SLEPc -- their OWN layer, on purpose.

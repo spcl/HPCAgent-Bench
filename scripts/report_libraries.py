@@ -115,8 +115,15 @@ def reason_missing(name: str, lang: str) -> str:
             return "declared header_only but names no headers, so nothing can be probed"
         return f"header did not resolve -- {compile_error(lang, compile_tokens, headers[0])}"
     if not link:
-        return ("no link tokens resolved: pkg-config answered nothing and the entry declares no"
-                " usable link fallback for this language")
+        # library_tokens returns () for BOTH "nothing to try" and "tried and the link failed", so
+        # emptiness alone cannot tell them apart -- reporting the first when it was the second is
+        # what sent tblis to "no link tokens resolved" when the truth was a failed -ltblis. Retry
+        # the declared fallback here and let the linker say which it was.
+        declared = tuple(entry.get("link") or ())
+        if not declared:
+            return ("no link tokens resolved: pkg-config answered nothing and the entry declares"
+                    " no link fallback for this language")
+        return f"declared {' '.join(declared)} did not link -- {link_error(lang, declared)}"
     return f"trial link failed -- {link_error(lang, link)}"
 
 
