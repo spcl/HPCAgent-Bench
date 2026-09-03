@@ -15,6 +15,7 @@ output matching the known-good original VectraArtifacts dace source.
 
 import ast
 import re
+import textwrap
 
 import numpy as np
 import pytest
@@ -57,6 +58,7 @@ from numpyto_c.dace_emit import (
     mixed_view_names,
     names_logical_sparse,
     shape_argument,
+    uniquify_nested_loop_targets,
     value_binding,
     version_reallocations,
     version_rebound_names,
@@ -1924,3 +1926,83 @@ def test_the_negative_step_guard_reads_both_spellings_of_a_negative():
     assert negative_step(ast.parse("-st", mode="eval").body)
     assert not negative_step(ast.parse("2", mode="eval").body)
     assert not negative_step(ast.parse("st", mode="eval").body)
+
+
+def uniquified(src: str) -> str:
+    fn = ast.parse(textwrap.dedent(src)).body[0]
+    uniquify_nested_loop_targets(fn)
+    return ast.unparse(fn)
+
+
+def test_a_nested_loop_target_that_shadows_its_enclosing_one_is_renamed():
+    """dace declares ONE variable per loop NAME, so nested loops sharing a name share a counter:
+    the inner ``_ = 0`` resets the outer's, and if the inner ever breaks early the outer never
+    ends. distribution_search nests ``range(60)`` inside ``range(200)`` on ``_`` and the emitted C
+    looped forever -- it spent the numeric gate's whole 1200 s cap and never produced an answer."""
+    got = uniquified(
+        """
+        def k(a):
+            for _ in range(200):
+                for _ in range(60):
+                    a[0] += 1.0
+        """
+    )
+    assert "for _ in range(200)" in got
+    assert "for it_nested1 in range(60)" in got
+    assert got.count("for _ in") == 1, got
+
+
+def test_the_renamed_target_is_rewritten_at_its_uses_too():
+    """A rename that misses a read leaves the inner body indexing the OUTER counter, which is a
+    wrong answer rather than a hang -- strictly worse than the bug it replaces."""
+    got = uniquified(
+        """
+        def k(a):
+            for i in range(4):
+                for i in range(3):
+                    a[i] = i * 2
+        """
+    )
+    assert "for i_nested1 in range(3)" in got
+    assert "a[i_nested1] = i_nested1 * 2" in got
+
+
+def test_loops_that_do_not_nest_keep_their_shared_name():
+    """Two loops in SEQUENCE reuse one dace variable safely -- the second starts after the first is
+    done -- so renaming them would churn every kernel that spells both counters ``i``."""
+    src = """
+        def k(a):
+            for i in range(4):
+                a[i] = 1.0
+            for i in range(3):
+                a[i] = 2.0
+        """
+    assert uniquified(src).count("for i in range") == 2
+
+
+def test_a_shadowed_target_read_after_the_inner_loop_is_left_alone():
+    """Python leaves the INNER loop's last value in the name, so a read after that loop sees the
+    inner value. Renaming would hand it the outer counter instead -- a different program. This is
+    the one shape the rewrite declines rather than guesses at."""
+    src = """
+        def k(a):
+            for i in range(4):
+                for i in range(3):
+                    a[0] += 1.0
+                a[1] = i
+        """
+    assert uniquified(src).count("for i in range") == 2
+
+
+def test_a_tuple_target_element_that_shadows_is_renamed_too():
+    """``for i, j in ...`` binds each element; a shadowing element collides exactly like a bare one."""
+    got = uniquified(
+        """
+        def k(a, pairs):
+            for i in range(4):
+                for i, j in pairs:
+                    a[j] = i
+        """
+    )
+    assert "for i_nested1, j in pairs" in got
+    assert "a[j] = i_nested1" in got

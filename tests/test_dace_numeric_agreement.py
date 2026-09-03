@@ -139,6 +139,21 @@ def selected_kernels() -> List[str]:
     return gated
 
 
+def prewarm() -> int:
+    """Emit the programs THIS gate runs, once, before xdist forks; returns how many exist.
+
+    CI calls this instead of ``generated_programs()``. That one emits the whole registry, and this
+    gate opens 400 of its 661 kernels: measured 2026-09-03, the corpus costs 596 s to emit and the
+    gated slice 111 s, so five sixths of the pre-warm was programs nothing here ever reads. The
+    ``machine_learning`` track is most of the difference and most of the cost -- densenet201 alone
+    is 100 s -- and :data:`GATED_TRACKS` deliberately leaves it out.
+
+    Derived from :func:`selected_kernels`, so a kernel entering the gate enters the pre-warm with
+    it and the workers keep seeing pure cache hits -- there is no second list to drift.
+    """
+    return sum(1 for key in selected_kernels() if ensure_dace_program(key).exists())
+
+
 def test_kernel_stems_are_unique() -> None:
     """:func:`gated_kernels` keys everything on the stem, which is only safe while stems are unique.
 

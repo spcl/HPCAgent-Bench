@@ -4,6 +4,7 @@ import ast
 import copy
 import dataclasses
 import functools
+import itertools
 import re
 from typing import Dict, List, Optional, Set
 
@@ -1086,6 +1087,62 @@ class _MaterializeDynamicFlip(ast.NodeTransformer):
         loop = f"for {fi} in range({length}):\n    {ws}[{fi}] = {base}[({hi_src}) - 1 - {fi}]"
         prelude.append(ast.parse(loop).body[0])
         return ast.parse(f"{ws}[0:{length}]", mode="eval").body
+
+
+def for_target_names(node: ast.For) -> List[str]:
+    """The names a ``for`` binds -- one, or each element of a tuple target."""
+    targets = node.target.elts if isinstance(node.target, ast.Tuple) else [node.target]
+    return [t.id for t in targets if isinstance(t, ast.Name)]
+
+
+def uniquify_nested_loop_targets(fn_ast: ast.AST) -> None:
+    """Rename a ``for`` target that shadows an ENCLOSING one -- dace gives both the same variable.
+
+    Python scopes nothing here but keeps an iterator per loop, so two nested ``for _ in range(...)``
+    are independent. dace's frontend mints ONE symbol per name and codegen declares it once at
+    function scope, so the inner loop's ``_ = 0`` resets the outer loop's counter: distribution_search
+    nests ``range(60)`` inside ``range(200)`` on ``_``, the inner one breaks on its first trial, and
+    the emitted C loops forever. It is a hang, not a slow kernel -- 1200 s of the numeric gate's cap
+    with the answer never arriving.
+
+    Only where the shadowed name is read NOWHERE outside the inner loop's own body. A read after the
+    inner loop sees the INNER value in Python, and renaming would quietly change which value that is.
+    """
+    taken = {n.id for n in ast.walk(fn_ast) if isinstance(n, ast.Name)}
+
+    def rename(node: ast.For, old: str, new: str) -> None:
+        for stmt in [node.target] + node.body + node.orelse:
+            for name in ast.walk(stmt):
+                if isinstance(name, ast.Name) and name.id == old:
+                    name.id = new
+
+    def visit(node: ast.AST, enclosing: Set[str]) -> None:
+        for child in ast.iter_child_nodes(node):
+            if not isinstance(child, ast.For):
+                visit(child, enclosing)
+                continue
+            inner = set(enclosing)
+            for old in for_target_names(child):
+                if old in enclosing and not read_outside(fn_ast, child, old):
+                    stem = old.lstrip("_") or "it"
+                    new = next(f"{stem}_nested{k}" for k in itertools.count(1) if f"{stem}_nested{k}" not in taken)
+                    taken.add(new)
+                    rename(child, old, new)
+                    old = new
+                inner.add(old)
+            visit(child, inner)
+
+    visit(fn_ast, set())
+    ast.fix_missing_locations(fn_ast)
+
+
+def read_outside(fn_ast: ast.AST, loop: ast.For, name: str) -> bool:
+    """Is ``name`` LOADED anywhere in ``fn_ast`` other than inside ``loop``'s body?"""
+    inside = {id(n) for stmt in loop.body + loop.orelse for n in ast.walk(stmt)}
+    return any(
+        isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, ast.Load) and id(n) not in inside
+        for n in ast.walk(fn_ast)
+    )
 
 
 def loop_target_ranks(fn_ast: ast.AST) -> Dict[str, int]:
@@ -2931,9 +2988,14 @@ def spell_aranges_with_named_lengths(fn_ast: ast.AST, known: set) -> None:
     Only where the name is bound EARLIER IN THE SAME BLOCK: a binding in another branch does not
     reach this arange, and one after it is not yet the length.
     """
+    # One scan for every candidate, not one per candidate: _scan_size_assigns walks the whole
+    # function, and densenet121 ran it 879 times for 62 s of a 134 s emit. A target set only
+    # filters which assigns get recorded, so the answer per name is the same either way.
+    once = once_bound_locals(fn_ast, known)
+    first_rhs = _scan_size_assigns(fn_ast, once)[0]
     lengths: Dict[str, ast.expr] = {}
-    for name in once_bound_locals(fn_ast, known):
-        rhs = _scan_size_assigns(fn_ast, {name})[0].get(name)
+    for name in once:
+        rhs = first_rhs.get(name)
         if rhs is not None and _is_symbol_expr(rhs, {n.id for n in ast.walk(rhs) if isinstance(n, ast.Name)}):
             lengths[name] = rhs
     if not lengths:
@@ -3375,6 +3437,9 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
     fn_ast = DesugarChainedCompare().visit(fn_ast)
     # dace names a method call by its receiver chain: a call/subscript receiver is refused outright.
     fn_ast = BindMethodReceiver().visit(fn_ast)
+    # One variable per loop NAME in dace, so nested loops sharing one -- two ``for _ in range(...)``
+    # -- share a counter and the outer never ends. Before every pass below that reads a loop target.
+    uniquify_nested_loop_targets(fn_ast)
     ast.fix_missing_locations(fn_ast)
     # numpy infers a reshape's -1 from the size; dace takes the shape literally, so spell it out.
     fn_ast = ResolveInferredReshape(arr_shapes).visit(fn_ast)
