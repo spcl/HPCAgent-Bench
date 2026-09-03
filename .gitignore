@@ -257,5 +257,8 @@ core.[0-9]*
 
 # Per-run job logs written beside the launcher, one pair per SLURM id
 containers/cluster/example-script/results/
+# Job stdout the launchers used to write beside themselves. The directives now point at
+# scratch; this keeps a stale or hand-run log from being committed again (db2027bd did).
+containers/cluster/example-script/logs/
 containers/cluster/example-script/*.err
 containers/cluster/example-script/gap/

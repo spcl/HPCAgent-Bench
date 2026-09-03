@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=0
 #SBATCH --time=02:00:00
-#SBATCH --output=logs/phase1-build-%j.out
-#SBATCH --error=logs/phase1-build-%j.err
+#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/phase1-build-%j.out
+#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/phase1-build-%j.err
 
 # Steps 0+1 of the rebuild chain: pack host SDK, build the phase-1 diag image, import to
 # sqsh, install its EDF. The gate runs in the NEXT job so build and gate failures stay apart.

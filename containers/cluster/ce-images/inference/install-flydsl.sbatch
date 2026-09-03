@@ -22,8 +22,8 @@
 #SBATCH --exclusive
 #SBATCH --mem=0
 #SBATCH --time=01:30:00
-#SBATCH --output=logs/install-flydsl-%j.out
-#SBATCH --error=logs/install-flydsl-%j.err
+#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/install-flydsl-%j.out
+#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/install-flydsl-%j.err
 set -Eeuo pipefail
 ulimit -c 0
 

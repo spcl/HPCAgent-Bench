@@ -6,8 +6,8 @@
 #SBATCH --gpus-per-task=4
 #SBATCH --cpus-per-task=32
 #SBATCH --time=03:00:00
-#SBATCH --output=logs/build-pt211-%j.out
-#SBATCH --error=logs/build-pt211-%j.err
+#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/build-pt211-%j.out
+#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/build-pt211-%j.err
 
 set -Eeuxo pipefail
 umask 0022

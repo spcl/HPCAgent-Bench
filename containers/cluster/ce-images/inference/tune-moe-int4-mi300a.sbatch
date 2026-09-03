@@ -16,8 +16,8 @@
 #SBATCH --gpus-per-node=4
 #SBATCH --mem=0
 #SBATCH --time=06:00:00
-#SBATCH --output=logs/tune-moe-int4-%j.out
-#SBATCH --error=logs/tune-moe-int4-%j.err
+#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/tune-moe-int4-%j.out
+#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/tune-moe-int4-%j.err
 
 set -Eeuo pipefail
 ulimit -c 0

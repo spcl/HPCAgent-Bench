@@ -14,8 +14,8 @@
 #SBATCH --gpus-per-node=4
 #SBATCH --mem=0
 #SBATCH --time=02:00:00
-#SBATCH --output=logs/smoke-kimi-replicas-%j.out
-#SBATCH --error=logs/smoke-kimi-replicas-%j.err
+#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/smoke-kimi-replicas-%j.out
+#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/smoke-kimi-replicas-%j.err
 
 set -Eeuo pipefail
 ulimit -c 0

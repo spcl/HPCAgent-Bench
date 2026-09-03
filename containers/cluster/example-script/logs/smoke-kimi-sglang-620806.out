@@ -1,8 +1,0 @@
-job:    620806
-model:  moonshotai/Kimi-K2.7-Code tp=4 pp=2 on 2 nodes (sglang)
-master: nid002442
-logs:   /capstor/scratch/cscs/ybudanaz/x86_64/kimi-smoke/620806
-
-===== stage: serving tp=4 pp=2 across 2 nodes via sglang =====
-
-===== stage: waiting for the API (up to 5400s) =====

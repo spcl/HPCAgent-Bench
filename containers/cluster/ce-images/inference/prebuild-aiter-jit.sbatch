@@ -16,8 +16,8 @@
 #SBATCH --gpus-per-node=4
 #SBATCH --mem=0
 #SBATCH --time=01:00:00
-#SBATCH --output=logs/prebuild-aiter-%j.out
-#SBATCH --error=logs/prebuild-aiter-%j.err
+#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/prebuild-aiter-%j.out
+#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/prebuild-aiter-%j.err
 
 set -Eeuo pipefail
 ulimit -c 0
