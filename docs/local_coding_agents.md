@@ -32,30 +32,12 @@ python -m hpcagent_bench.cli agent --agent ollama --kernels gemm --languages c
 # HPCAGENT_BENCH_OLLAMA_MODEL / HPCAGENT_BENCH_OLLAMA_HOST override the model / server.
 ```
 
-### b) Continue.dev -- VS Code inline assistant
+### b) and c) third-party editors -- removed
 
-Best for autocomplete + chat while you code. Install the **Continue** extension,
-then point `~/.continue/config.yaml` at the local Ollama models --
-`qwen2.5-coder:7b` for chat/edit/apply and the tiny `qwen2.5-coder:1.5b` for
-tab-autocomplete (snappy on a CPU-only machine).
-
-### c) Aider -- terminal coding agent (autonomous, multi-file)
-
-Best for "do this task" workflows -- closest to Claude Code:
-
-```bash
-pip install -r requirements/agent-aider.txt   # aider-chat
-aider --model ollama/qwen2.5-coder:7b
-```
-
-Inside Aider:
-
-```
-> /add src/myfile.py        # scope the files
-> fix the off-by-one in the loop
-```
-
-It edits files, shows a diff, and asks before applying.
+Install walkthroughs for Continue.dev and Aider lived here. They pinned versions and config
+paths of tools this repo does not ship, against Ollama models the project does not run, so
+they rotted without anything failing. Use the vendors' own docs; what is repo-specific is
+(a) above and the sections that follow.
 
 ### What to actually run
 

@@ -26,22 +26,8 @@ front-end / IR / lowering sits in `numpyto_common`:
 | CuPy            | `src/numpyto_cupy/`   |
 | Pythran         | `src/numpyto_pythran/`|
 
-## Why a new tool
-
-HPCAgent-Bench's current Foundation pipeline translates from the *C++*
-reference (`scripts/emit_c_variants.py`). Two failure modes that
-the new path fixes:
-
-1. **1D pointer math defeats polycc.** 165 of 183 kernels fail
-   ``polycc --pet`` because the C++ uses ``A[i*N+j]`` instead of
-   declared multi-dim arrays. The numpy source has the multi-dim
-   shape natively; emitting from Python keeps that information.
-2. **No ``@`` / ``np.dot`` lowering.** The C++ corpus is hand-coded
-   with naive loops; numpy-native idioms get rewritten by us into
-   the same loop bodies (triple-loop GEMM for ``A @ B``, accumulator
-   loop for ``np.sum``), so the C output matches even when the
-   Python uses an idiom.
-
+<!-- The 'Why a new tool' argument compared this path against scripts/emit_c_variants.py,
+     which no longer exists; the comparison outlived the thing it compared against. -->
 ## Roadmap (future targets)
 
 * **NumpyToFortran** (next obvious target). Fortran already has
