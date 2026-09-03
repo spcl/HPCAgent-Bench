@@ -32,8 +32,8 @@
 #SBATCH --gpus-per-node=4
 #SBATCH --mem=0
 #SBATCH --time=02:00:00
-#SBATCH --output=logs/smoke-kimi-eager-pg-%j.out
-#SBATCH --error=logs/smoke-kimi-eager-pg-%j.err
+#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/smoke-kimi-eager-pg-%j.out
+#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/smoke-kimi-eager-pg-%j.err
 
 set -Eeuo pipefail
 ulimit -c 0
@@ -92,6 +92,12 @@ READY_TIMEOUT="${READY_TIMEOUT:-5400}"
 STALL_LIMIT="${STALL_LIMIT:-2700}"
 PROBE_STREAMS="${PROBE_STREAMS:-64}"
 PROBE_MAX_TOKENS="${PROBE_MAX_TOKENS:-512}"
+# Gate 5 is the 90-minute EngineCore hunt, not part of accepting an image, so it is OFF
+# unless a run asks for it. These three were read but never assigned, and under set -u an
+# unset name in (( )) aborts the job -- the gate has been unreachable since it landed.
+AGENTLIKE_DURATION_S="${AGENTLIKE_DURATION_S:-0}"
+AGENTLIKE_STREAMS="${AGENTLIKE_STREAMS:-64}"
+AGENTLIKE_SHARED_WORDS="${AGENTLIKE_SHARED_WORDS:-2000}"
 
 test -f "${PG_PATCH_DIR:-}/sitecustomize.py" 2>/dev/null || {
     echo "FAIL: no sitecustomize.py found from SLURM_SUBMIT_DIR=${SUBMIT_DIR}" >&2
@@ -374,7 +380,9 @@ awk -v a="${g0:-0}" -v b="${g1:-0}" -v dt="$((t1-t0))" -v span="${STEADY_SPAN_S:
 if (( AGENTLIKE_DURATION_S > 0 )); then
     stage "gate 5: agent-shaped load, ${AGENTLIKE_STREAMS} streams x long shared prefix for ${AGENTLIKE_DURATION_S}s"
     srun --nodes=1 --ntasks=1 --overlap --nodelist="${NODE0}" --environment="${INFERENCE_EDF}" \
-        /opt/pytorch211/bin/python "${SUBMIT_DIR}/agentlike-probe.py" \
+        # Beside the resolved patch dir, not beside the SUBMIT dir: a driver that submits
+        # this from elsewhere (smoke-new-images.sh does) would not find it otherwise.
+        /opt/pytorch211/bin/python "$(dirname "${PG_PATCH_DIR}")/agentlike-probe.py" \
             --base "http://${NODE0}:${API_PORT}" --model "${SERVED_MODEL}" \
             --streams "${AGENTLIKE_STREAMS}" --shared-words "${AGENTLIKE_SHARED_WORDS}" \
             --max-tokens "${PROBE_MAX_TOKENS}" --duration "${AGENTLIKE_DURATION_S}" \

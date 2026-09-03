@@ -32,6 +32,13 @@ declare -A SQSH=(
   [vllm]="${IMAGES}/optarena-vllm-candidate.sqsh"
   [vllm-0271]="${IMAGES}/optarena-vllm-0271-candidate.sqsh"
 )
+# What each engine is ACCEPTED on is the model the campaign actually serves from it: kimi on
+# sglang, gpt-oss on vLLM. Running kimi against a vLLM candidate measures a configuration we
+# already know is not viable (4.1 s per forward pass at campaign context) over 4 nodes, so it
+# would burn the allocation to reproduce a dead end rather than accept the image. The oss control
+# is one node at pp=1 and is the run smoke-kimi-eager-pg.sbatch documents for exactly this.
+declare -A NODES=([sglang]=2 [vllm]=1 [vllm-0271]=1)
+declare -A MODEL=([vllm]=openai/gpt-oss-120b [vllm-0271]=openai/gpt-oss-120b)
 
 candidates=("$@")
 [[ ${#candidates[@]} -eq 0 ]] && candidates=(sglang vllm vllm-0271)
@@ -59,8 +66,21 @@ for name in "${candidates[@]}"; do
   # /opt/vllm-eager-pg), so this only satisfies the smoke's precondition with the identical file
   # rather than changing what is tested; without it the job exits in one second (620856).
   # Logs to scratch, not to logs/ under the submit directory -- that is the source tree.
+  # Parsers are model-specific and the serve flags carry spaces, so they travel as environment
+  # (sbatch propagates it) rather than through --export, which splits on commas.
+  oss=()
+  if [[ -n "${MODEL[${name}]:-}" ]]; then
+    oss=(MODEL_REPO="${MODEL[${name}]}" TOOL_PARSER=openai REASONING_PARSER=openai_gptoss
+         EXTRA_SERVE_ARGS="--dtype bfloat16")
+  fi
+  # TUNED_MOE_DIR defaults to <submit dir>/moe-configs, and this driver submits from HERE, where
+  # there is no such folder -- an empty one reads as "tuned" and is how a smoke measures the
+  # untuned ceiling and calls it a result. Name the real folder. E=128,N=192 is the gpt-oss shape.
+  env "${oss[@]}" \
+  TUNED_MOE_DIR="${PWD}/../ce-images/inference/moe-configs" \
   PG_PATCH_DIR="${PWD}/../ce-images/inference/external-eager-pg-patch" \
   EDF="${edf}" sbatch --job-name="smoke-candidate-${name}" \
+    --nodes="${NODES[${name}]}" \
     --output="${SCRATCH}/ce-images/logs/smoke-candidate-${name}-%j.out" \
     --error="${SCRATCH}/ce-images/logs/smoke-candidate-${name}-%j.out" "${smoke}"
 done

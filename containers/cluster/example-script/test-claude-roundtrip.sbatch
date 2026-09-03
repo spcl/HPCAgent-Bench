@@ -25,9 +25,10 @@
 #   4 direct tools   - raw chat/completions with tools[]; isolates the vLLM parser from claude
 #   5 claude roundtrip - claude -p through LiteLLM, forced through the Bash tool
 #
-# The inference harness containers/cluster/ce-images/inference/test-vllm-gpt-oss-120b-1n4g.sh is
-# NOT reused as the server: its EXIT trap kills vLLM as soon as its own smoke test finishes, so it
-# cannot host a second client stage. Its exact serve flags are copied instead.
+# The serve flags below were copied from the gpt-oss inference harness that used to live in
+# ce-images/inference; it could never host this job's second client stage, because its EXIT trap
+# killed vLLM the moment its own smoke finished. smoke-kimi-eager-pg.sbatch is the serving smoke
+# now -- `--nodes=1 MODEL_REPO=openai/gpt-oss-120b` is the same configuration.
 
 set -euo pipefail
 
