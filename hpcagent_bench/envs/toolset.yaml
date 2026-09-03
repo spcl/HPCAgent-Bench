@@ -64,6 +64,12 @@ cuda_libraries:
   cub:      {detect: header,  header: cub/cub.cuh}
   cutensor: {detect: library, soname: libcutensor.so, header: cutensor.h}
 
+  curand:   {detect: library, soname: libcurand.so,   header: curand.h}
+  nccl:     {detect: library, soname: libnccl.so,     header: nccl.h}
+  cutlass:  {detect: header,  header: cutlass/cutlass.h}
+  cute:     {detect: header,  header: cute/tensor.hpp}
+  thrust:   {detect: header,  header: thrust/device_vector.h}
+
 # AMD ROCm math libraries (the "default" AMD stack on top of hipcc/amdclang).
 hip_libraries:
   hipblas:   {detect: library, soname: libhipblas.so,      header: hipblas.h}
@@ -75,6 +81,15 @@ hip_libraries:
   hiptensor: {detect: library, soname: libhiptensor.so,    header: hiptensor.h}
 
 # Common HPC numeric / IO libraries -- all optional, all enrich the default env.
+  hipsparse: {detect: library, soname: libhipsparse.so,    header: hipsparse/hipsparse.h}
+  hipsolver: {detect: library, soname: libhipsolver.so,    header: hipsolver/hipsolver.h}
+  hipfft:    {detect: library, soname: libhipfft.so,       header: hipfft/hipfft.h}
+  hiprand:   {detect: library, soname: libhiprand.so,      header: hiprand/hiprand.h}
+  hipblaslt: {detect: library, soname: libhipblaslt.so,    header: hipblaslt/hipblaslt.h}
+  rocrand:   {detect: library, soname: librocrand.so,      header: rocrand/rocrand.h}
+  rccl:      {detect: library, soname: librccl.so,         header: rccl/rccl.h}
+  rocprim:   {detect: header,  header: rocprim/rocprim.hpp}
+  rocthrust: {detect: header,  header: thrust/system/hip/config.h}
 hpc_libraries:
   blas:      {detect: library, pkgconfig: [openblas, blas], soname: [libopenblas.so, libblas.so]}
   lapack:    {detect: library, pkgconfig: lapack, soname: liblapack.so}
@@ -109,3 +124,13 @@ hpc_libraries:
   numa:      {detect: library, soname: libnuma.so, header: numa.h}
   hwloc:     {detect: library, pkgconfig: hwloc, soname: libhwloc.so, header: hwloc.h}
   fftw_mpi:  {detect: library, soname: libfftw3_mpi.so, header: fftw3-mpi.h}
+  tblis:     {detect: library, soname: libtblis.so, header: tblis/tblis.h}
+  arpack:    {detect: library, pkgconfig: arpack, soname: libarpack.so, header: arpack/arpack.h}
+  slepc:     {detect: library, pkgconfig: SLEPc, soname: libslepc.so, header: slepceps.h}
+  scotch:    {detect: library, soname: libscotch.so, header: scotch.h}
+  superlu_dist: {detect: library, soname: libsuperlu_dist.so, header: superlu_dist/superlu_ddefs.h}
+  strumpack: {detect: library, soname: libstrumpack.so, header: StrumpackSparseSolver.hpp}
+  trilinos:  {detect: library, soname: libteuchoscore.so, header: Teuchos_Version.hpp}
+  pfft:      {detect: library, soname: libpfft.so, header: pfft.h}
+  blaze:     {detect: header,  header: blaze/Blaze.h}
+  tat:       {detect: header,  header: TAT/TAT.hpp}
