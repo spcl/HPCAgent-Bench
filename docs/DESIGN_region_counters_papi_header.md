@@ -207,10 +207,12 @@ At `hpc_papi_init`, in order (cheap checks first, mirroring `papi.check()` / `pe
    `papi.VERSION_MAJORS` / `VERSION_MINORS` -> `papi_init_failed`.
 5. `PAPI_thread_init((unsigned long (*)())omp_get_thread_num)` (see section 4).
 6. `B = PAPI_num_cmp_hwctrs(0)` -- the budget. `papi.hardware_counters()` uses exactly this call.
-7. For every candidate event in the generated table, `PAPI_query_named_event`. Then run
-   `papi.resolve`'s ladder in C: first candidate whose every event queried OK wins; a leading `-` is
-   a sign, not part of the name. A metric with no surviving candidate is recorded `count:null` +
-   `missing`, never substituted -- the `PAPI_FP_OPS` / `PAPI_FP_INS` rule holds unchanged.
+7. For every candidate event in the generated table, `PAPI_query_named_event` AND a real arming
+   probe -- `PAPI_add_named_event` + `PAPI_start` on a scratch set, because a virtualised guest
+   queries OK and then answers "Event does not exist" at add time. Then run `papi.resolve`'s ladder
+   in C: first candidate whose every event ARMED wins; a leading `-` is a sign, not part of the
+   name. A metric with no surviving candidate is recorded `count:null` + `missing` NAMING the
+   events, never substituted -- the `PAPI_FP_OPS` / `PAPI_FP_INS` rule holds unchanged.
 8. The survivors are the INTERSECTION, and EVERY metric in it is collected. No fixed event list
    ships.
 

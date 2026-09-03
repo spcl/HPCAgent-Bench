@@ -10,6 +10,11 @@ The handful of tests that genuinely need counters are gated on EXPLICIT predicat
 ``find_library("papi")`` + ``papi.perf_event_reason()`` -- rather than a swallowed import error,
 so a skip here always means "this host cannot count" and never "something changed and the guard
 stopped noticing".
+
+A host with libpapi and no countable event is NOT one of those, though a hosted runner is exactly
+that host: an absent event is a thing this module promises to degrade over, by name, so the tests
+that measure something assert the refusal on such a machine rather than skipping it, and simulate
+one (``available_events`` patched empty) on a machine that can count.
 """
 
 import ctypes
@@ -38,13 +43,49 @@ PAPI_LIBRARY = ctypes.util.find_library("papi")
 CI_EXPECTS_PAPI = os.environ.get("HPCAGENT_BENCH_CI_PAPI_INSTALLED")
 
 requires_papi = pytest.mark.skipif(
-    not (osinfo.IS_LINUX and PAPI_LIBRARY) or papi.perf_event_reason() is not None,
-    reason="no WORKING PAPI on this host: either ctypes.util.find_library('papi') found nothing, "
-    "or papi.perf_event_reason() names a blocked perf_event gate (paranoid sysctl, or no "
-    "perf_event subsystem at all -- common on hosted CI runners, whose hypervisor commonly does "
-    "not expose hardware counters to the guest regardless of the sysctl). Install PAPI and/or "
-    "lower kernel.perf_event_paranoid to exercise these.",
+    not (osinfo.IS_LINUX and PAPI_LIBRARY),
+    reason="no PAPI on this host (ctypes.util.find_library('papi') found nothing, or this is not "
+    "Linux), so there is no library to ask anything of. A host that HAS PAPI and no countable "
+    "event does not skip -- it asserts the refusal instead.",
 )
+
+
+def can_count() -> bool:
+    """Whether this host can arm a hardware counter at all, asked once and by name.
+
+    Mostly NOT a skip predicate: it selects which contract a test asserts, the counted one or the
+    refusal. ``PapiUnavailable`` is a no -- a libpapi that will not come up counts nothing.
+    """
+    if not (osinfo.IS_LINUX and PAPI_LIBRARY):
+        return False
+    try:
+        return papi.perf_event_reason() is None and bool(papi.available_events())
+    except papi.PapiUnavailable:
+        return False
+
+
+CAN_COUNT = can_count()
+
+requires_counters = pytest.mark.skipif(
+    not CAN_COUNT,
+    reason="this host arms no hardware counter: either no PAPI, or papi.perf_event_reason() names "
+    "a blocked gate (paranoid sysctl, no perf_event subsystem, or no countable event at all -- "
+    "common on hosted CI runners, whose hypervisor commonly does not pass the PMU through to the "
+    "guest regardless of the sysctl). What such a host DOES report is asserted by the measuring "
+    "tests below; these few are claims ABOUT a CPU that has counters and have nothing to check "
+    "here. Install PAPI and/or lower kernel.perf_event_paranoid to exercise them.",
+)
+
+
+def armable(*metrics: str) -> bool:
+    """Whether every one of ``metrics`` resolves to events THIS CPU can arm."""
+    return CAN_COUNT and not papi.feature_set(metrics)["unsupported"]
+
+
+def unarmable_events(metric: str) -> set:
+    """The events ``metric`` would want that this CPU cannot arm -- what a refusal must NAME."""
+    wanted = {papi.event_name(term) for candidate in papi.METRICS[metric] for term in candidate}
+    return wanted.difference(papi.available_events() if CAN_COUNT else ())
 
 
 def test_the_papi_provisioning_step_actually_worked() -> None:
@@ -431,8 +472,14 @@ def test_the_version_probe_finds_the_installed_papi() -> None:
 
 @requires_papi
 def test_availability_comes_from_papi_and_is_a_strict_subset_of_the_presets() -> None:
+    """What comes back is what ARMS. A machine whose hypervisor passes no PMU through has a full
+    preset table and can count none of it, so it must report the empty set and the named cause --
+    reporting the table there is how "Event does not exist" used to reach a counted run."""
     events = papi.available_events()
-    assert events, "PAPI enumerated no countable preset on a host that has PAPI"
+    if not CAN_COUNT:
+        assert events == ()
+        assert papi.perf_event_reason()[0] == "events_unsupported"
+        return
     assert all(name.startswith("PAPI_") for name in events)
     # Availability is per-CPU, so the only safe universal claim is that SOMETHING is unavailable:
     # no CPU implements the whole preset table, which is exactly why this is discovered.
@@ -442,11 +489,68 @@ def test_availability_comes_from_papi_and_is_a_strict_subset_of_the_presets() ->
 
 @requires_papi
 def test_at_least_one_metric_resolves_on_a_real_cpu() -> None:
+    """And on a CPU that arms nothing, every metric is refused WITH the events it wanted -- the
+    absence is enumerated, never a silent empty table."""
     resolved = {m: papi.resolve(m, papi.available_events()) for m in papi.METRICS}
+    if not CAN_COUNT:
+        assert all(terms is None for terms in resolved.values()), resolved
+        unsupported = papi.feature_set()["unsupported"]
+        assert set(unsupported) == set(papi.METRICS)
+        assert all(papi.METRICS[metric][0][0] in reason for metric, reason in unsupported.items())
+        return
     assert any(v is not None for v in resolved.values()), resolved
 
 
-@requires_papi
+class FakeLib:
+    """A libpapi whose answers are dictated: one VM in seven methods, no PAPI needed to run it.
+
+    Only the calls :func:`papi.countable` makes are here, and it makes exactly these, so a probe
+    that started reaching for another entry point fails this with AttributeError rather than
+    quietly probing something else.
+    """
+
+    def __init__(self, add: int = papi.PAPI_OK, start: int = papi.PAPI_OK) -> None:
+        self.add, self.start, self.destroyed = add, start, 0
+
+    def PAPI_create_eventset(self, ref) -> int:  # noqa: N802 -- PAPI's own spelling
+        return papi.PAPI_OK
+
+    def PAPI_assign_eventset_component(self, eventset, component) -> int:  # noqa: N802
+        return papi.PAPI_OK
+
+    def PAPI_add_event(self, eventset, code) -> int:  # noqa: N802
+        return self.add
+
+    def PAPI_start(self, eventset) -> int:  # noqa: N802
+        return self.start
+
+    def PAPI_stop(self, eventset, values) -> int:  # noqa: N802
+        return papi.PAPI_OK
+
+    def PAPI_cleanup_eventset(self, eventset) -> int:  # noqa: N802
+        return papi.PAPI_OK
+
+    def PAPI_destroy_eventset(self, ref) -> int:  # noqa: N802
+        self.destroyed += 1
+        return papi.PAPI_OK
+
+
+def test_an_event_papi_knows_but_cannot_arm_is_not_countable() -> None:
+    """The one a hosted runner shipped: ``PAPI_query_event`` answers out of the preset table PAPI
+    built for the CPU model the guest advertises, ``PAPI_add_event`` answers out of the PMU the
+    hypervisor did not pass through, and the two disagree. What ARMS is the answer -- believing
+    the query put "Event does not exist" inside a counted run, where it cost the whole run.
+
+    ``PAPI_start`` counts too: an event that adds and will not start counts nothing either. And
+    the scratch set is destroyed on every path, because this runs once per preset.
+    """
+    enoevnt = -7  # PAPI_ENOEVNT, the code the runner answered with
+    for lib, armed in ((FakeLib(), True), (FakeLib(add=enoevnt), False), (FakeLib(start=enoevnt), False)):
+        assert papi.countable(lib, papi.PRESET_MASK) is armed
+        assert lib.destroyed == 1, "a probe that leaks an event set per preset runs the process dry"
+
+
+@requires_counters
 def test_the_counter_budget_is_reported_so_multiplexing_stays_checkable() -> None:
     """Every candidate must fit the budget, or the counts this module returns are estimates."""
     budget = papi.hardware_counters()
@@ -492,14 +596,17 @@ def test_thread_ids_put_the_calling_thread_first() -> None:
 
 
 @requires_papi
-def test_the_count_covers_the_timed_call_and_nothing_else() -> None:
+def test_the_count_covers_the_timed_call_and_nothing_else(monkeypatch) -> None:
     """The assertion this whole module exists for: gemm at preset S does 2*NI*NJ*NK multiply-adds,
     so a correctly bracketed fp-op count lands ON that number. A count that also swept up
     interpreter start-up, the seeded input generation or the per-rep buffer copies would not --
     which is how a wrong number wearing a right label gets caught.
 
-    Skipped by name (not silently) on a CPU with no fp-op preset: there the metric is honestly
-    unavailable, and this test has nothing to check.
+    NOT skipped on a CPU with no fp-op preset, which is what a hosted runner is: there the metric
+    is honestly unavailable, and the assertion is the other half of the contract -- count_metric
+    refuses it by name, NAMES the events it could not arm, and the parent survives to ask for the
+    next metric. Both halves run everywhere: the refusal is forced with an empty event set, so a
+    machine with counters walks the same ladder a machine without them walks for real.
     """
     from hpcagent_bench.harness.agent import reference_source
     from hpcagent_bench.harness.envelope import Submission
@@ -509,19 +616,27 @@ def test_the_count_covers_the_timed_call_and_nothing_else() -> None:
     from hpcagent_bench.spec import BenchSpec
     from hpcagent_bench.support.bindings.contract import binding_from_spec
 
-    if papi.resolve("fp_ops", papi.available_events()) is None:
-        pytest.skip(f"no fp-op preset on this CPU; available: {papi.available_events()}")
     spec = BenchSpec.load("gemm")
     sizes = spec.parameters["S"]
     expected = 2 * sizes["NI"] * sizes["NJ"] * sizes["NK"]
     binding = binding_from_spec(spec)
     task = Task("gemm", "restricted", "c")
+    # Read off the REAL machine, before the patch below empties its event set.
+    have_fp_ops, absent = armable("fp_ops"), unarmable_events("fp_ops")
     with Sandbox(binding) as sandbox:
         built = sandbox.build(Submission(language="c", source=reference_source(task)), debug=True)
         assert built.ok, built.log[-2000:]
-        row = papi.count_metric(
-            built.lib, binding, _data_seeded("gemm", "S", "float64", 42), "c", "fp_ops", reps=2, rep_timeout=300.0
-        )
+        data = _data_seeded("gemm", "S", "float64", 42)
+        row = papi.count_metric(built.lib, binding, data, "c", "fp_ops", reps=2, rep_timeout=300.0)
+        # A machine with no countable event at all, forced. The patch crosses count_metric's fork.
+        monkeypatch.setattr(papi, "available_events", lambda: ())
+        starved = papi.count_metric(built.lib, binding, data, "c", "fp_ops", reps=1, rep_timeout=300.0)
+    assert starved["count"] is None and "PAPI_FP_OPS" in starved["missing"]
+
+    if not have_fp_ops:
+        assert row["count"] is None, row
+        assert absent and all(event in row["missing"] for event in absent), row
+        return
     assert row["count"] is not None, row.get("missing")
     assert row["reps_counted"] == 2 and row["elapsed_ns"] > 0
     # 5% either side: the reference also scales C by beta and alpha, which is O(NI*NJ) more work.
@@ -580,6 +695,10 @@ def test_a_threaded_kernel_is_counted_on_every_thread_and_degrades_out_loud(monk
     The same build then proves the OTHER half of the contract: a host that refuses the attach
     still answers, with the master thread's share and a STATED scope. A silent fraction of the
     kernel's work is the one outcome that must be impossible.
+
+    And where the CPU cannot arm an fp-op event at all -- a hosted runner -- BOTH runs come back
+    refused by name, with the events they wanted. That is what "degrades out loud" means when
+    there is nothing to count: a named absence, never a crash and never a fraction.
     """
     from hpcagent_bench.harness.envelope import Submission
     from hpcagent_bench.harness.grading import _data_seeded
@@ -587,8 +706,6 @@ def test_a_threaded_kernel_is_counted_on_every_thread_and_degrades_out_loud(monk
     from hpcagent_bench.spec import BenchSpec
     from hpcagent_bench.support.bindings.contract import binding_from_spec
 
-    if papi.resolve("fp_ops", papi.available_events()) is None:
-        pytest.skip(f"no fp-op preset on this CPU; available: {papi.available_events()}")
     threads = min(4, flags.ncores())
     if threads < 2:
         pytest.skip(f"only {flags.ncores()} physical core(s) available; nothing to parallelise over")
@@ -608,6 +725,12 @@ def test_a_threaded_kernel_is_counted_on_every_thread_and_degrades_out_loud(monk
         monkeypatch.setattr(papi, "open_counter", refusing_open_counter(papi.open_counter))
         refused = papi.count_metric(built.lib, binding, data, "c", "fp_ops", reps=1, warmup=1, rep_timeout=300.0)
 
+    absent = unarmable_events("fp_ops")
+    if not armable("fp_ops"):
+        for row in (counted, refused):
+            assert row["count"] is None, row
+            assert absent and all(event in row["missing"] for event in absent), row
+        return
     assert counted["count"] is not None, counted.get("missing")
     assert counted["scope"] == "all_threads", counted.get("fallback")
     assert counted["threads_counted"] > 1, "the OpenMP pool was never seen, so this proves nothing"
@@ -909,7 +1032,7 @@ def openmp_threads(monkeypatch) -> int:
     return threads
 
 
-@requires_papi
+@requires_counters
 def test_the_per_thread_report_recovers_a_KNOWN_work_distribution(monkeypatch) -> None:
     """The headline: a process-wide count cannot tell these two kernels apart, and this can.
 
@@ -976,7 +1099,12 @@ def test_the_per_thread_report_recovers_a_KNOWN_work_distribution(monkeypatch) -
 @requires_papi
 def test_a_serial_kernel_is_refused_as_not_openmp_rather_than_reported_balanced(monkeypatch) -> None:
     """A single thread has no distribution. Reporting 1.00x for it would be a perfectly balanced
-    parallel kernel and a serial one rendered identically."""
+    parallel kernel and a serial one rendered identically.
+
+    A CPU that cannot arm a cycle counter has no distribution EITHER, and the two absences are
+    different answers: ``not_openmp`` names the kernel, ``events_unsupported`` names the machine.
+    Both are asserted, the second on every host through an emptied event set, because a refusal
+    that picked the wrong one sends a reader to fix the wrong thing."""
     from hpcagent_bench.harness.agent import reference_source
     from hpcagent_bench.harness.envelope import Submission
     from hpcagent_bench.harness.grading import _data_seeded
@@ -985,22 +1113,26 @@ def test_a_serial_kernel_is_refused_as_not_openmp_rather_than_reported_balanced(
     from hpcagent_bench.spec import BenchSpec
     from hpcagent_bench.support.bindings.contract import binding_from_spec
 
-    if papi.resolve("cycles", papi.available_events()) is None:
-        pytest.skip(f"no cycle preset on this CPU; available: {papi.available_events()}")
     openmp_threads(monkeypatch)
+    have_cpi = armable(*papi.PER_THREAD_METRICS)  # before the patch below empties the event set
     binding = binding_from_spec(BenchSpec.load("gemm"))
     task = Task("gemm", "restricted", "c")
     with Sandbox(binding) as sandbox:
         built = sandbox.build(Submission(language="c", source=reference_source(task)), debug=True)
         assert built.ok, built.log[-2000:]
-        report = papi.count_per_thread(
-            built.lib,
-            binding,
-            data=_data_seeded("gemm", "S", "float64", 42),
-            lang="c",
-            reps=1,
-            warmup=1,
-            rep_timeout=300.0,
-        )
+        data = _data_seeded("gemm", "S", "float64", 42)
+        report = papi.count_per_thread(built.lib, binding, data=data, lang="c", reps=1, warmup=1, rep_timeout=300.0)
+        # A machine with no countable event at all, forced. The patch crosses the fork.
+        monkeypatch.setattr(papi, "available_events", lambda: ())
+        starved = papi.count_per_thread(built.lib, binding, data=data, lang="c", reps=1, rep_timeout=300.0)
+    assert starved["cause"] == "events_unsupported" and starved["imbalance"] is None
+    assert "[events_unsupported]" in starved["text"] and starved["missing"]
+
+    if not have_cpi:
+        assert report["cause"] == "events_unsupported", report["text"]
+        assert report["imbalance"] is None and report["missing"]
+        return
     assert report["cause"] == "not_openmp", report["text"]
-    assert report["imbalance"] is None and "count_metric" in report["missing"]
+    # The refusal has to route the reader, so it names the tool and the shape that DOES answer.
+    assert report["imbalance"] is None and "per_thread" in report["missing"]
+    assert "'papi'" in report["missing"]

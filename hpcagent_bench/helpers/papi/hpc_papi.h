@@ -23,15 +23,18 @@
  * A counted build is a DIAGNOSTIC build. Bracket a region of >= ~10 ms, never a loop body, and
  * never compare a counted run's wall clock against anything -- not even its own.
  *
- * Failure is loud by construction: every count reads 0 AND the report's "error" is non-empty.
- * All zeros with an empty "error" cannot happen, which is what keeps a GENUINELY counted zero
- * (PAPI_FMA_INS reads exactly 0 for gemm on Zen4) readable as the measurement it is. A metric
- * this CPU cannot express is "count": null with a reason -- absent, never zero.
+ * Failure is loud by construction: every ARMED count reads 0 AND the report's "error" is
+ * non-empty. All zeros with an empty "error" cannot happen, which is what keeps a GENUINELY
+ * counted zero (PAPI_FMA_INS reads exactly 0 for gemm on Zen4) readable as the measurement it is.
+ * A metric this CPU cannot express is "count": null with the events it wanted -- absent, never
+ * zero, in a failed report too, so a CPU that armed nothing does not publish a table of zeros.
  *
  * Environment:
  *   HPC_PAPI_OUT      report path (default ./hpc_papi.json)
  *   HPC_PAPI_METRICS  comma-separated metric names to arm; default is as many as fit the budget
  *   HPC_PAPI_BUDGET   override the counter-register budget (testing the packing)
+ *   HPC_PAPI_UNAVAILABLE  comma-separated PAPI event names to treat as absent, so a machine that
+ *                     HAS them can still exercise the degradation ladder (testing the refusal)
  *   HPC_PAPI_VERBOSE  echo the degradation cause to stderr
  */
 #ifndef HPC_PAPI_H
@@ -460,14 +463,52 @@ static int hpc_papi_bring_up(void) {
   return 0;
 }
 
-/* The first candidate every one of whose events this CPU reports, or -1. Names resolve HERE and
+/* Whether this machine can ARM the event, which is not what PAPI_query_named_event answers: the
+ * query reads the preset table PAPI derived from the CPU model, and a virtualised guest
+ * advertises a model whose PMU its hypervisor does not pass through. There every preset queries
+ * yes and PAPI_add_named_event answers "Event does not exist" -- one layer down, on every worker
+ * at once, which collapsed the whole armed set instead of dropping one metric. So the probe adds
+ * the event to a scratch set and starts it, which is what the counted run does one step later. */
+static int hpc_papi_countable(const char *event) {
+  const char *off = getenv("HPC_PAPI_UNAVAILABLE");
+  int eventset = HPC_PAPI_NULLSET, rc;
+  long long value = 0;
+  if (off && hpc_papi_listed(off, event))
+    return 0;
+  if (hpc_papi.query_named_event(event) != HPC_PAPI_OK)
+    return 0;
+  if (hpc_papi.create_eventset(&eventset) != HPC_PAPI_OK)
+    return 0;
+  rc = hpc_papi.add_named_event(eventset, event);
+  if (rc == HPC_PAPI_OK) {
+    rc = hpc_papi.start(eventset);
+    if (rc == HPC_PAPI_OK)
+      hpc_papi.stop(eventset, &value);
+  }
+  hpc_papi.cleanup_eventset(eventset);
+  hpc_papi.destroy_eventset(&eventset);
+  return rc == HPC_PAPI_OK;
+}
+
+/* The events the last hpc_papi_resolve could not arm, so the metric it gave up on can NAME them
+ * rather than say "unavailable" and leave a reader to run papi_avail. */
+static char hpc_papi_absent[96];
+
+/* The first candidate every one of whose events this CPU can arm, or -1. Names resolve HERE and
  * nowhere else: start and stop touch no strings. */
 static int hpc_papi_resolve(int m) {
   int c, t;
+  hpc_papi_absent[0] = '\0';
   for (c = 0; c < HPC_PAPI_METRIC[m].ncand; c++) {
     int ok = 1;
-    for (t = 0; HPC_PAPI_METRIC[m].cand[c][t] && ok; t++)
-      ok = hpc_papi.query_named_event(hpc_papi_bare(HPC_PAPI_METRIC[m].cand[c][t])) == HPC_PAPI_OK;
+    for (t = 0; HPC_PAPI_METRIC[m].cand[c][t] && ok; t++) {
+      const char *event = hpc_papi_bare(HPC_PAPI_METRIC[m].cand[c][t]);
+      ok = hpc_papi_countable(event);
+      if (!ok && !hpc_papi_listed(hpc_papi_absent, event)) {
+        size_t used = strlen(hpc_papi_absent);
+        snprintf(hpc_papi_absent + used, sizeof hpc_papi_absent - used, "%s%s", used ? ", " : "", event);
+      }
+    }
     if (ok)
       return c;
   }
@@ -485,7 +526,8 @@ static void hpc_papi_arm(int m) {
 
   c = hpc_papi_resolve(m);
   if (c < 0) {
-    snprintf(hpc_papi_why[m], sizeof hpc_papi_why[m], "no candidate expression is available on this CPU");
+    snprintf(hpc_papi_why[m], sizeof hpc_papi_why[m],
+             "no candidate expression is available on this CPU (unavailable: %s)", hpc_papi_absent);
     return;
   }
   terms = HPC_PAPI_METRIC[m].cand[c];
@@ -740,9 +782,11 @@ static void hpc_papi_write_metric(FILE *out, int m) {
 
   fputs("  {\"metric\": ", out);
   hpc_papi_json_str(out, HPC_PAPI_METRIC[m].name);
-  if (!terms && !hpc_papi_err[0]) {
+  if (!terms) {
     /* ABSENT, not zero: the distinction hpcagent_bench.harness.papi.missing() enforces one
-     * level down. The whole-report failure below is the other rule -- zeros, beside an error. */
+     * level down, and it holds in a FAILED report too -- a metric this CPU could not arm names
+     * the events it wanted, where a zero beside the error would say the counters read nothing.
+     * The whole-report failure below is the other rule -- zeros, beside an error. */
     fputs(", \"expression\": \"\", \"count\": null, \"missing\": ", out);
     hpc_papi_json_str(out, hpc_papi_why[m][0] ? hpc_papi_why[m] : "not armed");
     fputs("}", out);

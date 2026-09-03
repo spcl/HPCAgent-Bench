@@ -20,7 +20,11 @@ one extra measured run per metric.
 mapping is not guessable: on the machine this was developed on ``PAPI_L1_DCM`` is available while
 ``PAPI_L1_ICM``, ``PAPI_L3_DCM`` and ``PAPI_L1_TCM`` are not, and an Intel server splits them
 differently. :func:`available_events` asks PAPI's own preset enumeration -- the same
-``PAPI_enum_event`` + ``PAPI_query_event`` pair ``papi_avail`` prints its table from.
+``PAPI_enum_event`` + ``PAPI_query_event`` pair ``papi_avail`` prints its table from -- and then
+ARMS every survivor (:func:`countable`), because on a virtualised host those two questions have
+different answers: PAPI builds its preset table from the CPU model the guest advertises, the
+hypervisor passes no PMU through, and ``PAPI_add_event`` answers "Event does not exist" to a
+preset ``PAPI_query_event`` just said yes to.
 
 **ctypes, and only ctypes.** ``libpapi.so`` is already installed wherever PAPI is, so ctypes needs
 no build step and no pip dependency. The alternatives were rejected rather than kept as fallbacks:
@@ -438,14 +442,41 @@ def demand(lib: ctypes.CDLL, code: int, what: str) -> None:
         raise PapiUnavailable("papi_init_failed", f"{what} failed: {strerror(lib, code)}")
 
 
+def countable(lib: ctypes.CDLL, code: int) -> bool:
+    """Whether this machine can ARM ``code``, which is not what ``PAPI_query_event`` answers.
+
+    The query reads the preset table PAPI derived from the CPU model, and a virtualised guest
+    advertises a model whose PMU its hypervisor does not pass through: every preset queries yes
+    and ``PAPI_add_event`` then answers ``PAPI_ENOEVNT``, "Event does not exist". That is not a
+    difference this module can reason about, so it stops reasoning and arms the event -- add it to
+    a scratch set and start it, which is exactly what a counted run does one step later.
+    """
+    eventset = ctypes.c_int(PAPI_NULL)
+    if lib.PAPI_create_eventset(ctypes.byref(eventset)) != PAPI_OK:
+        return False
+    ok = lib.PAPI_assign_eventset_component(eventset, 0) == PAPI_OK and lib.PAPI_add_event(eventset, code) == PAPI_OK
+    if ok:
+        ok = lib.PAPI_start(eventset) == PAPI_OK
+        if ok:
+            lib.PAPI_stop(eventset, (ctypes.c_longlong * 1)())
+    lib.PAPI_cleanup_eventset(eventset)
+    lib.PAPI_destroy_eventset(ctypes.byref(eventset))
+    return ok
+
+
 @functools.lru_cache(maxsize=None, typed=True)
 def available_events() -> Tuple[str, ...]:
     """Every PAPI PRESET event THIS CPU can actually count, in PAPI's enumeration order.
 
-    The oracle is PAPI's own: ``PAPI_enum_event`` walks the preset table and ``PAPI_query_event``
-    answers "does this CPU have it". Nothing is hardcoded per CPU because nothing can be -- the
-    same preset name is available on one machine and absent on the next, which is the whole reason
-    this function exists rather than a constant.
+    The oracle is PAPI's own: ``PAPI_enum_event`` walks the preset table, ``PAPI_query_event``
+    answers "does this CPU have it" and :func:`countable` answers the question that actually
+    decides a run, "does it ARM". Nothing is hardcoded per CPU because nothing can be -- the same
+    preset name is available on one machine and absent on the next, which is the whole reason this
+    function exists rather than a constant.
+
+    The query stays as the cheap first filter (it walks the whole preset table); only its
+    survivors pay for a scratch event set, which measured 8 ms for the 30 presets that
+    survive on the CPU this was written on.
     """
     lib = initialised()
     code = ctypes.c_int(PRESET_MASK)
@@ -454,7 +485,11 @@ def available_events() -> Tuple[str, ...]:
         return ()
     out: List[str] = []
     while True:
-        if lib.PAPI_query_event(code.value) == PAPI_OK and lib.PAPI_event_code_to_name(code.value, name) == PAPI_OK:
+        if (
+            lib.PAPI_query_event(code.value) == PAPI_OK
+            and lib.PAPI_event_code_to_name(code.value, name) == PAPI_OK
+            and countable(lib, code.value)
+        ):
             out.append(name.value.decode())
         if lib.PAPI_enum_event(ctypes.byref(code), ENUM_NEXT) != PAPI_OK:
             return tuple(out)
@@ -529,7 +564,8 @@ def feature_set(metrics: Sequence[str] = ()) -> dict:
         terms = resolve(metric, available)
         if terms is None:
             tried = ", ".join(expression(c) for c in METRICS[metric])
-            unsupported[metric] = f"no candidate is available on this CPU (tried: {tried})"
+            absent = ", ".join(sorted({event_name(t) for c in METRICS[metric] for t in c}.difference(available)))
+            unsupported[metric] = f"no candidate is available on this CPU (tried: {tried}; unavailable: {absent})"
         else:
             supported[metric] = {
                 "expression": expression(terms),
@@ -1078,18 +1114,20 @@ def perf_event_reason() -> Optional[Tuple[str, str]]:
         )
     # An OPEN gate is not a countable machine. A hosted runner's hypervisor exposes the
     # perf_event subsystem to the guest and then no PMU behind it, so every check above passes and
-    # PAPI_add_event answers "Event does not exist" one layer down -- which reached the tests as a
-    # hard failure instead of a named skip. PAPI's own query is the oracle, same as everywhere else.
+    # PAPI_add_event answers "Event does not exist" one layer down. available_events ARMS what it
+    # reports (see countable), so that answer arrives here as an empty set rather than as a crash
+    # inside a counted run.
     try:
-        countable = available_events()
+        armable = available_events()
     except PapiUnavailable:
         return None  # papi_missing / papi_init_failed is check()'s answer, and it is more specific
-    if not countable:
+    if not armable:
         return (
             "events_unsupported",
-            "PAPI loaded and the perf_event gate is open, but PAPI_query_event answers no to every "
-            "preset event: this CPU exposes no hardware counter to count with (a VM whose "
-            "hypervisor does not pass the PMU through, which no setting inside the guest fixes)",
+            "PAPI loaded and the perf_event gate is open, but not one preset event can be ARMED "
+            "here -- PAPI_add_event answers 'Event does not exist' to every one PAPI_query_event "
+            "accepts: this CPU exposes no hardware counter to count with (a VM whose hypervisor "
+            "does not pass the PMU through, which no setting inside the guest fixes)",
         )
     return None
 
