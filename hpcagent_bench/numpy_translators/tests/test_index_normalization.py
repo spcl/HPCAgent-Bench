@@ -110,3 +110,28 @@ def test_mixed_scalar_ellipsis_scalar():
     )
     ok, r = _ok(res)
     assert ok, r
+
+
+def test_ellipsis_over_a_hoisted_call_base():
+    # ``np.transpose(a, perm)[..., None]`` -- the base is a CALL, so the normalisation phase
+    # (which only fires on a Name) leaves the Ellipsis standing. The call hoister materialises
+    # the transpose into a sized temp one phase later, and the expansion has to happen there or
+    # the literal Ellipsis reaches the emitter (mamba2_return_final_state's ``b_decayed``).
+    src = "import numpy as np\ndef f(a, x, out):\n    out[:, :, :, :] = np.transpose(a, (0, 2, 1))[..., None] * x\n"
+    M, N, K, P = 2, 3, 4, 5
+    rng = np.random.default_rng(4)
+    a = rng.standard_normal((M, N, K))
+    x = rng.standard_normal((M, K, N, P))
+    res = run_op(
+        src,
+        "f",
+        {"a": a, "x": x},
+        {"out": (M, K, N, P)},
+        {"M": M, "N": N, "K": K, "P": P},
+        shapes={"a": "(M,N,K)", "x": "(M,K,N,P)", "out": "(M,K,N,P)"},
+        backends=_BACKENDS,
+        rtol=_TOL,
+        atol=_TOL,
+    )
+    ok, r = _ok(res)
+    assert ok, r

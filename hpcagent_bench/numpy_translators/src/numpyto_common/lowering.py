@@ -9247,6 +9247,11 @@ def _fix_real_scalar_dtypes(ctx: LoweringContext) -> None:
                 candidates.discard(name)
                 changed = True
     _RealConjDropper(ld).visit(tree)
+    # A library call in subscript-base position is materialised into a temp by THIS phase, so
+    # ``np.transpose(d, perm)[..., None]`` still carried its Ellipsis through
+    # ``normalize-index-access`` -- that pass only fires on a Name base. The temp now has a
+    # harvested shape, so the rank the expansion needs is finally known.
+    _EllipsisExpander(ctx.lib_shape_table).visit(tree)
     ast.fix_missing_locations(tree)
 
 
