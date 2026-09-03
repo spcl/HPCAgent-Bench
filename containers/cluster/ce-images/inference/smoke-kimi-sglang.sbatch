@@ -9,8 +9,10 @@
 # discriminates.
 #SBATCH --job-name=smoke-kimi-sglang
 #SBATCH --partition=mi300
-# PP spans the allocation: -N4 gives the campaign's own topology, -N2 the 2-node recipe.
-#SBATCH --nodes=2
+# PP spans the allocation, so the node count decides how much of the model each stage holds and
+# therefore what --mem-fraction-static can mean. 4 is the campaign's own topology and the one
+# MEM_FRACTION below is sized for; -N2 is the 2-node recipe and needs MEM_FRACTION >= 0.76.
+#SBATCH --nodes=4
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=4
 #SBATCH --mem=0
@@ -36,6 +38,12 @@ export EDF="${EDF:-${HOME}/.edf/sglang-rocm-mi30x.toml}"
 # sizes the static budget against NODE-WIDE memory and every rank claims all of it. 0.93 read
 # as ~0.79 after the VLM derate and the serving step was OOM-killed at 58.5 GB RSS (620806,
 # exit 0:125) after 68 minutes of load and capture. 0.42 is the fraction the campaign serves.
+#
+# It is only meaningful WITH the node count above. The fraction applies to pre-weight-load
+# node-wide free memory, so the floor is 1 - available/pre and PP decides the numerator: at pp=4
+# the campaign loads 171 GB of compressed-tensors weights per stage against 412 GB pre, a floor
+# of 0.415 that 0.42 just clears. At pp=2 each stage holds twice that and sglang refuses on the
+# spot -- "minimum viable = 0.7525" (621070). Raise the NODES, not this number.
 export MEM_FRACTION="${MEM_FRACTION:-0.42}"
 export CONTEXT_LEN="${CONTEXT_LEN:-65536}"
 export SWEEP_CONCURRENCY="${SWEEP_CONCURRENCY:-1 8 16}"

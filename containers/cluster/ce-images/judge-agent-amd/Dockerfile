@@ -342,7 +342,11 @@ RUN set -eux; \
       '  # blis through SPACK, not apt: the base layer deliberately withholds the distro' \
       '  # BLAS/LAPACK stack so the OpenBLAS generated code links is the threads=openmp build and' \
       '  # nothing else, and a distro BLIS beside it reintroduces exactly that ambiguity.' \
-      '  - blis threads=openmp' \
+      '  # cflags: blis 2.0 haswell asm kernels take %rbp, and gcc 16 refuses them with "bp' \
+      '  # cannot be used in `asm` here" wherever the frame pointer is live (621068 died on' \
+      '  # bli_gemmsup_rv_haswell_asm_s6x16m among others). Omitting it is what frees the' \
+      '  # register; there is no gcc-16 patch for blis upstream and 2.0 is the newest release.' \
+      '  - blis threads=openmp cflags=-fomit-frame-pointer' \
       '  # slate is nearly free here: blaspp and lapackpp are already in this graph as strumpack' \
       "  # dependencies. trilinos is NOT -- it is hours of build for one requestable name, and the" \
       '  # solvers it would add are already covered by petsc, hypre, mumps and superlu-dist.' \

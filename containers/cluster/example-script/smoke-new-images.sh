@@ -37,7 +37,14 @@ declare -A SQSH=(
 # already know is not viable (4.1 s per forward pass at campaign context) over 4 nodes, so it
 # would burn the allocation to reproduce a dead end rather than accept the image. The oss control
 # is one node at pp=1 and is the run smoke-kimi-eager-pg.sbatch documents for exactly this.
-declare -A NODES=([sglang]=2 [vllm]=1 [vllm-0271]=1)
+# sglang is FOUR nodes, not the recipe's two: PP spans the allocation, so the node count sets
+# how much of the model each stage holds and therefore what --mem-fraction-static can mean.
+# The campaign runs pp=4 -- "Load weight end. quant=compressed-tensors, mem usage=171.07 GB,
+# avail mem=241.29 GB" -- where the floor is 1 - 241/412 = 0.415 and the campaign's 0.42
+# clears it. At pp=2 each stage holds twice the weights and sglang refuses 0.42 outright
+# ("minimum viable = 0.7525", 621070). Accepting at pp=2 would have meant accepting a
+# fraction, a KV pool and a stage size the campaign never serves.
+declare -A NODES=([sglang]=4 [vllm]=1 [vllm-0271]=1)
 declare -A MODEL=([vllm]=openai/gpt-oss-120b [vllm-0271]=openai/gpt-oss-120b)
 
 candidates=("$@")
