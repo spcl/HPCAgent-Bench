@@ -8,7 +8,7 @@ parameters:
   M:
     N: 1300
   L:
-    N: 9023
+    N: 4156
   XL:
     N: 20800
 init:

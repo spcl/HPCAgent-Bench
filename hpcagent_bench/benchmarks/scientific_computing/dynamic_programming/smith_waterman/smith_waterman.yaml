@@ -11,7 +11,7 @@ parameters:
     N: 16000
     gap: 1
   L:
-    N: 22723
+    N: 15107
     gap: 1
   XL:
     N: 32270

@@ -9,9 +9,9 @@ parameters:
   M:
     N: 1048576
   L:
-    N: 23367958
+    N: 2097152
   XL:
-    N: 520764784
+    N: 8388608
 init:
   input_args:
   - N

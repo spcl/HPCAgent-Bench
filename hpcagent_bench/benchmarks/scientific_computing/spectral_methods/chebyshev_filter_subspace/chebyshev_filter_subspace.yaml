@@ -14,8 +14,8 @@ parameters:
     k: 20
     m: 10
   L:
-    N: 90
-    k: 35
+    N: 53
+    k: 21
     m: 10
   XL:
     N: 162

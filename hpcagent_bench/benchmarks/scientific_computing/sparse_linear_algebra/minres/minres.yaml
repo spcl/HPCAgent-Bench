@@ -13,7 +13,7 @@ parameters:
     N: 223607
     nnz: 35873555
   XL:
-    N: 2000000
+    N: 16623667
     nnz: 257382391
 config:
   max_iter: {value: 100, selects: iteration}

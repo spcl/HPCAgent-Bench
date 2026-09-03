@@ -15,7 +15,7 @@ parameters:
     nnz: 6553600
   XL:
     N: 23170
-    nnz: 6553600
+    nnz: 52428800
 config:
   max_iter: {value: 100, selects: iteration}
 init:

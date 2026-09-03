@@ -13,8 +13,8 @@ parameters:
     N: 10362151
     npt: 1000
   XL:
-    N: 134217728
-    npt: 1000
+    N: 268435289
+    npt: 333
 init:
   input_args:
   - N

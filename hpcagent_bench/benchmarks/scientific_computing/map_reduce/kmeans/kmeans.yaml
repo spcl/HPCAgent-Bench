@@ -15,7 +15,7 @@ parameters:
     dim: 128
     niter: 20
   L:
-    npoints: 267455
+    npoints: 31239
     nclusters: 50
     dim: 108
     niter: 20
