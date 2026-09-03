@@ -155,6 +155,39 @@ def _is_ellipsis(e: ast.AST) -> bool:
     return isinstance(e, ast.Constant) and e.value is Ellipsis
 
 
+def _newaxis_singletons(value: ast.AST, rank: int) -> frozenset:
+    """Axes of ``value`` a literal ``None`` in its own subscript pins to extent 1.
+
+    Index arrays in one gather BROADCAST against each other, so an open mesh
+    (``g_z[:, None, None]``, ``g_y[None, :, None]``, ``g_x[None, None, :]``) names three
+    DIFFERENT shapes of the same rank and the gather runs over their broadcast. Reading every
+    one of them at the full iterator tuple walks off the end of the two singleton axes -- and
+    reads whatever follows the allocation rather than raising, which is how cp2k_grid_integrate
+    graded on garbage. A ``None`` entry is the one extent this pass can read off the source
+    text, which is enough for the open-mesh spelling every kernel here uses.
+
+    An expression whose axes cannot be placed (an ellipsis, an advanced index, or anything but
+    a subscript) reports NO singleton, so it is indexed the way it always was.
+    """
+    if not isinstance(value, ast.Subscript):
+        return frozenset()
+    elts = list(value.slice.elts) if isinstance(value.slice, ast.Tuple) else [value.slice]
+    if any(_is_ellipsis(e) for e in elts):
+        return frozenset()
+    axes, out = [], 0
+    for e in elts:
+        if _is_newaxis(e):
+            axes.append(out)
+            out += 1
+        elif isinstance(e, ast.Slice):
+            out += 1
+        elif isinstance(e, ast.Constant) and isinstance(e.value, int) and not isinstance(e.value, bool):
+            continue  # a scalar index consumes its base axis and adds none
+        else:
+            return frozenset()
+    return frozenset(a for a in axes if a < rank)
+
+
 #: numpy reductions that take an ``axis`` (drops the reduced axes; no axis ->
 #: scalar). Used only for ndim propagation, not rewriting.
 REDUCE_FNS = {"sum", "prod", "mean", "std", "var", "min", "max", "amin", "amax", "argmin", "argmax", "any", "all"}
@@ -1397,7 +1430,9 @@ class _FancyGatherHoister(ast.NodeTransformer):
     nor mixed 2-D-array + scalar (icon_gather's ``A[nbr[:,:,n]-1, jk,
     blk[:,:,n]-1]``). Array index entries (possibly expressions) are hoisted to
     temps; the driver is the first array entry, scalar axes ride each iteration.
-    All array entries must share the driver rank (they broadcast to it)."""
+    All array entries must share the driver rank, and they BROADCAST against each other over
+    it: an axis a ``None`` pins to extent 1 in one entry takes its extent from another entry
+    and is read at 0, not at the loop iterator (see :func:`_newaxis_singletons`)."""
 
     def __init__(self, ranks: Dict[str, int], ctr: int):
         self.ranks = ranks
@@ -1428,20 +1463,31 @@ class _FancyGatherHoister(ast.NodeTransformer):
         self.ctr += 1
         iters = [f"{p}_i{k}" for k in range(driver_rank)]
         it = ", ".join(iters)
-        pre, idx_exprs, first = [], [], None
+        # Which array entries pin which axes to extent 1 -- a pinned axis is read at 0 rather
+        # than at the iterator, because the entry has one plane there and the gather has many.
+        idx_j = [j for j, r in enumerate(elt_ranks) if (r or 0) >= 1]
+        singles = {j: _newaxis_singletons(elts[j], driver_rank) for j in idx_j}
+        pre, idx_exprs = [], []
         for j, e in enumerate(elts):
-            if (elt_ranks[j] or 0) >= 1:
-                t = f"{p}_x{j}"
-                pre.append(f"{t} = {ast.unparse(e)}")
-                idx_exprs.append(f"{t}[{it}]")
-                first = first or t
-            else:
+            if j not in singles:
                 idx_exprs.append(ast.unparse(e))
+                continue
+            t = f"{p}_x{j}"
+            pre.append(f"{t} = {ast.unparse(e)}")
+            idx_exprs.append(f"{t}[{', '.join('0' if k in singles[j] else iters[k] for k in range(driver_rank))}]")
+        # The result's shape is spelled by BROADCASTING the entries, never by naming their
+        # extents: an extent read back per axis re-spells a shape the rest of the statement
+        # already carries, which a symbolic-shape backend cannot prove equal.
+        driver = f"{p}_x{idx_j[0]}"
+        if any(singles.values()):
+            driver = f"{p}_b"
+            pre.append(f"{driver} = " + " + ".join(f"{p}_x{j} * 0" for j in idx_j))
+        extents = [f"{driver}.shape[{k}]" for k in range(driver_rank)]
         temp = f"{p}_o"
-        lines = pre + [f"{temp} = np.empty({first}.shape, {arr}.dtype)"]
+        lines = pre + [f"{temp} = np.empty({driver}.shape, {arr}.dtype)"]
         deepen = ""
         for k in range(driver_rank):
-            lines.append(f"{deepen}for {iters[k]} in range({first}.shape[{k}]):")
+            lines.append(f"{deepen}for {iters[k]} in range({extents[k]}):")
             deepen += "    "
         lines.append(f"{deepen}{temp}[{it}] = {arr}[{', '.join(idx_exprs)}]")
         self.pre.extend(ast.parse("\n".join(lines)).body)
