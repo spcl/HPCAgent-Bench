@@ -346,7 +346,14 @@ RUN set -eux; \
       '  - superlu-dist +openmp +parmetis' \
       '  - mumps +mpi +metis +parmetis +scotch +ptscotch +openmp +shared' \
       '  - strumpack +mpi +openmp +parmetis +scotch ~cuda' \
-      "  - hypre +mpi +openmp +rocm amdgpu_target=${ROCM_ARCH}" \
+      '  # hypre@3 is pinned OUT, not merely unselected: it carries requires("+umpire") and' \
+      '  # depends_on("umpire+c+rocm"), and umpire@2026.07 accepts only cxxstd=20 or 23. Its' \
+      '  # HIP sources are compiled by ROCm 7.2 clang, which cannot parse gcc 16.2.0 libstdc++' \
+      "  # <format> -- 'expected an identifier for the attribute name [-Wtemplate-body]', a" \
+      '  # clang-only diagnostic, on every translation unit reaching umpire/event/event.hpp' \
+      '  # (620749). hypre@2 leaves +umpire default-off, so the GPU build stays and the' \
+      '  # unbuildable dependency goes.' \
+      "  - hypre@:2 +mpi +openmp +rocm amdgpu_target=${ROCM_ARCH}" \
       '  - arpack-ng +mpi +shared' \
       "  - magma ~cuda +rocm amdgpu_target=${ROCM_ARCH} +fortran" \
       "  - petsc +mpi +metis +hypre +mumps +superlu-dist +strumpack +suite-sparse +scalapack +hdf5 +fftw +rocm amdgpu_target=${ROCM_ARCH} +shared" \
