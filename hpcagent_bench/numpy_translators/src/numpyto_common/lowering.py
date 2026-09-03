@@ -3467,25 +3467,35 @@ def _rebases_onto_view_axis(view_slice: ast.Slice, use_slice: ast.Slice) -> bool
 class _EllipsisExpander(ast.NodeTransformer):
     """Replace ``...`` (Ellipsis) in a subscript with the explicit full slices
     it stands for, using the array's rank: ``a[..., 0]`` on a 3-D array ->
-    ``a[:, :, 0]``. Only fires on a subscript of a known-shape Name (chained
-    subscripts are flattened to this form first by _ChainedSubscriptFlattener)."""
+    ``a[:, :, 0]``. Chained subscripts are flattened to a Name base first by
+    _ChainedSubscriptFlattener; a base that is an EXPRESSION is sized through
+    :func:`_iter_extent_of`, which is all the rank costs."""
 
     def __init__(self, array_shapes: Dict[str, List[str]]):
         self.array_shapes = array_shapes
 
+    def base_rank(self, base: ast.expr) -> Optional[int]:
+        """Axis count of a subscript base, or None when nothing says what it is.
+
+        cfd subscripts an arithmetic expression -- ``(__cb4 / density_i)[..., None]`` -- whose
+        operands are sized even though the expression itself has no name to look up.
+        """
+        if isinstance(base, ast.Name):
+            shape = self.array_shapes.get(base.id)
+            return len(shape) if shape else None
+        ext = _iter_extent_of(base, self.array_shapes)
+        return len(ext) if ext else None
+
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
         self.generic_visit(node)
-        if not isinstance(node.value, ast.Name):
-            return node
-        shape = self.array_shapes.get(node.value.id)
-        if not shape:
+        rank = self.base_rank(node.value)
+        if rank is None:
             return node
         sl = node.slice
         elts = list(sl.elts) if isinstance(sl, ast.Tuple) else [sl]
         ell = [k for k, e in enumerate(elts) if isinstance(e, ast.Constant) and e.value is Ellipsis]
         if len(ell) != 1:
             return node
-        rank = len(shape)
         # Source-axis-consuming entries (exclude the Ellipsis and any newaxis).
         consumed = sum(
             1 for e in elts if not (isinstance(e, ast.Constant) and (e.value is Ellipsis or e.value is None))

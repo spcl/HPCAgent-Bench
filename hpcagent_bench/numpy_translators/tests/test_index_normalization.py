@@ -135,3 +135,31 @@ def test_ellipsis_over_a_hoisted_call_base():
     )
     ok, r = _ok(res)
     assert ok, r
+
+
+def test_ellipsis_over_an_arithmetic_base():
+    # ``(np.sum(m * n, axis=-1) / d)[..., None]`` -- cfd's shape. The base is an ARITHMETIC
+    # expression, so there is no name to look a rank up under; its operands are sized, which is
+    # all the expansion needs. Left unexpanded, the Ellipsis reaches the emitter as a literal.
+    src = (
+        "import numpy as np\ndef f(m, n, d, x, out):\n    out[:, :, :] = (np.sum(m * n, axis=-1) / d)[..., None] * x\n"
+    )
+    M, N, K = 3, 4, 5
+    rng = np.random.default_rng(5)
+    m = rng.standard_normal((M, N, K))
+    n = rng.standard_normal((M, N, K))
+    d = rng.standard_normal((M, N)) + 3.0
+    x = rng.standard_normal((M, N, K))
+    res = run_op(
+        src,
+        "f",
+        {"m": m, "n": n, "d": d, "x": x},
+        {"out": (M, N, K)},
+        {"M": M, "N": N, "K": K},
+        shapes={"m": "(M,N,K)", "n": "(M,N,K)", "d": "(M,N)", "x": "(M,N,K)", "out": "(M,N,K)"},
+        backends=_BACKENDS,
+        rtol=_TOL,
+        atol=_TOL,
+    )
+    ok, r = _ok(res)
+    assert ok, r
