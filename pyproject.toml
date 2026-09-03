@@ -198,7 +198,10 @@ harbor = ["harbor"]
 # installs one WITHOUT the project, which is what keeps the format gate from resolving torch.
 # ---------------------------------------------------------------------------------------------
 [dependency-groups]
-testing = ["pytest", "pytest-timeout", "pytest-xdist", "pytest-cov", "coverage"]
+# pytest-forked: tests/ports/ runs each test in its own process. A port oracle is hand-written
+# C/C++/Fortran reached through ctypes, so a bad index aborts the INTERPRETER, not the test --
+# one vexx abort truncated the job and hid 221 tests for over a week.
+testing = ["pytest", "pytest-timeout", "pytest-xdist", "pytest-forked", "pytest-cov", "coverage"]
 # The format gate. clang-format ships its binary in the wheel, which is why it is a python dep.
 linting = ["ruff", "fprettify", "clang-format", "pre-commit"]
 dev = [{ include-group = "testing" }, { include-group = "linting" }]

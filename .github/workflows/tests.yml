@@ -1831,8 +1831,14 @@ jobs:
         # not a duration. This selection is 788 of the 830 tests those runs carried.
         if: ${{ !cancelled() }}
         timeout-minutes: 18
+        #
+        # --forked: every port oracle here is hand-written C/C++/Fortran reached through ctypes, so
+        # a bad index does not raise -- it aborts the INTERPRETER, taking the whole session with it.
+        # A vexx oracle wrote one element below a vector and hid 221 later tests for over a week,
+        # because the run simply stopped. Forked, that same abort is one red test (`CRASHED with
+        # signal 6`) and the other 787 still run. Coverage survives it -- checked, not assumed.
         run: |
-          python -m pytest -q -p no:cacheprovider -rfEs --timeout=600 \
+          python -m pytest -q -p no:cacheprovider -rfEs --timeout=600 --forked \
             --ignore=tests/ports/cegterg tests/ports/
 
 
@@ -2222,7 +2228,7 @@ jobs:
         timeout-minutes: 38
         run: |
           python -m pytest -q -p no:cacheprovider -rfEs -n auto --durations=25 \
-            --timeout=1800 tests/ports/cegterg/
+            --timeout=1800 --forked tests/ports/cegterg/
 
       # Hit rate is the whole point of the cache -- surface it so a regression to 0% is visible.
       - name: ccache statistics
