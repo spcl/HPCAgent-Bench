@@ -32,6 +32,7 @@ from numpyto_c.dace_emit import (
     NormalizeReshape,
     PointwiseScatterToLoop,
     ResolveInferredReshape,
+    DesugarContractionFreeEinsum,
     ResolveShapeReads,
     RewriteBuiltinDtype,
     rank_of_subscript,
@@ -997,6 +998,45 @@ def test_ascontiguousarray_becomes_the_copy_dace_does_have():
     out = ast.unparse(_DesugarUnreplacedCalls().visit(ast.parse(src)))
     assert "ascontiguousarray" not in out
     assert "np.transpose(ctx, (0, 2, 1, 3)).copy()" in out
+
+
+def _einsum(src):
+    """Run ``DesugarContractionFreeEinsum`` over one expression and unparse the result."""
+    return ast.unparse(ast.fix_missing_locations(DesugarContractionFreeEinsum().visit(ast.parse(src, mode="eval"))))
+
+
+def test_a_contraction_free_einsum_becomes_the_broadcast_product_it_is():
+    """lulesh's hourglass term. Nothing is summed, so dace's GEMM path mints a K=1 batched MatMul
+    whose views collapse to ``[numElem, 4]`` and ``[numElem, 8]`` -- shapes that never conform as a
+    matrix product. The broadcast spelling is the same value with no library node at all."""
+    assert _einsum("np.einsum('ei,ek->eik', hx, dvdx)") == "hx[:, :, None] * dvdx[:, None, :]"
+    # ``optimize`` names a contraction ORDER, and there is no contraction to order.
+    assert _einsum("np.einsum('ei,ek->eik', hx, dvdx, optimize=True)") == "hx[:, :, None] * dvdx[:, None, :]"
+    # The unbatched case is exactly np.outer, and an output permutation needs no transpose here.
+    assert _einsum("np.einsum('i,k->ik', a, b)") == "a[:, None] * b[None, :]"
+    assert _einsum("np.einsum('ei,ek->eki', a, b)") == "a[:, None, :] * b[:, :, None]"
+
+
+def test_an_einsum_that_actually_contracts_keeps_its_einsum():
+    """The rewrite is only ever a product, so anything that sums, takes a diagonal, or would need a
+    transpose stays as written -- including the conv contractions the ML track emits."""
+    for spec, args in (
+        ("eik,ek->ei", "hourgam, vd"),  # sums k
+        ("ei,eik->ek", "hxx, hourgam"),  # sums i
+        ("ij,jk->ik", "a, b"),  # an ordinary gemm
+        ("ngidhw,gio->ngodhw", "x, w"),  # conv_transposed_3d, sums i
+        ("ii,k->ik", "a, b"),  # a diagonal, not a product
+        ("ei,ek->ike", "a, b"),  # axes reach the output out of order
+    ):
+        src = f"np.einsum('{spec}', {args})"
+        assert _einsum(src) == src, spec
+    # An implicit output, a third operand, and ``out=`` each change what the call means.
+    for src in (
+        "np.einsum('ei,ek', a, b)",
+        "np.einsum('ei,ek,em->eikm', a, b, c)",
+        "np.einsum('ei,ek->eik', a, b, out=z)",
+    ):
+        assert _einsum(src) == src, src
 
 
 # --------------------------------------------------------------------------- #
