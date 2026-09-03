@@ -1944,6 +1944,10 @@ jobs:
         with:
           python-version: '3.12'
       - uses: ./.github/actions/setup
+        with:
+          # The parquet writer lives in the `hf` extra. This job was lifted out of `mpi`, which
+          # asked for `gt4py hf mpi`; the extra has to come with it or export-hf dies on pyarrow.
+          extras: "hf"
 
       - name: Phase 7 -- export (+ publish on a main push) the HuggingFace dataset
         # export-hf always writes the parquet artifact -- unconditionally, on `!cancelled()`.
