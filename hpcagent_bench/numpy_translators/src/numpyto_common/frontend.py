@@ -3772,8 +3772,6 @@ def _shape_from_expression(
     if not isinstance(node, (ast.Call, ast.BinOp, ast.UnaryOp)):
         return None
     dtype = _expr_array_dtype(node, arr_by)
-    if dtype is None:
-        return None
     # Declared arrays only. The body-wide shape harvest resolves more, but it reaches this
     # resolver back through the constructor dtype path, and a table built per unresolved
     # expression re-sweeps the whole body -- neither is worth what it adds here.
@@ -3784,11 +3782,21 @@ def _shape_from_expression(
     # that fills it read the matmul buffer BARE (``__mm2 + b2[i]``, a pointer plus a double).
     # Resolved through the same chase the caller used, ``seen`` threaded so an operand naming the
     # local being resolved terminates instead of recursing.
+    local_dtype = None
     for operand in ast.walk(node):
         if isinstance(operand, ast.Name) and operand.id not in declared:
             local = _resolve_array_ref(fn, operand, arr_by, seen)
             if local is not None:
                 declared[operand.id] = _shape_tuple_string(tuple(str(s) for s in local[0]))
+                if local_dtype is None:
+                    local_dtype = local[1]
+    # A resolved LOCAL names its dtype as firmly as a declared array does, and an expression over
+    # only locals reads none of the latter: densenet121_transition_layer's ``h1 =
+    # np.maximum(__hcall1, 0.0)`` resolved to nothing, so the helper it feeds typed its ``x``
+    # by-value and every shape read inside that helper had nothing behind it.
+    dtype = dtype or local_dtype
+    if dtype is None:
+        return None
     shape_str = _shape_from_iter_extent(node, declared, route_calls=True)
     if shape_str is None:
         return None
@@ -4391,17 +4399,43 @@ def _specialise_helpers_by_call_signature(
     return cloned
 
 
+def _statements_in_order(body: List[ast.stmt], nested: bool = False):
+    """Each statement in SOURCE order, nested blocks included, paired with whether it is nested.
+
+    ``ast.walk`` is breadth-first, which is the wrong order for a forward extent sweep.
+    """
+    for stmt in body:
+        yield stmt, nested
+        if isinstance(stmt, (ast.If, ast.For, ast.While)):
+            yield from _statements_in_order(stmt.body, True)
+            yield from _statements_in_order(stmt.orelse, True)
+        elif isinstance(stmt, ast.With):
+            yield from _statements_in_order(stmt.body, True)
+
+
 def _propagate_local_extents(hfn: ast.FunctionDef, table: Dict[str, Tuple[str, ...]]) -> None:
     """Extend ``table`` with each local of ``hfn`` that :func:`_iter_extent_of` can size.
 
     Statement order matters: a local is sized against the names bound before it, so one sweep
     forward resolves a chain (``cumulative`` from ``x``, then ``seg`` from ``cumulative``). A name
     that stops resolving is dropped rather than left holding a stale extent.
+
+    A local bound inside a branch counts too -- conv2d_gelu_global_avg_pool's ``_adaptive_avg_pool2d``
+    reshapes into ``y`` under an ``if`` and returns a reduction over it, and skipping the block left
+    the helper sized off its INPUT. Only when that is the name's ONLY binding: two branches sizing
+    it differently would leave whichever ran last, and a wrong extent allocates a wrong buffer
+    instead of declining.
     """
-    for stmt in hfn.body:
+    bindings: Dict[str, int] = {}
+    for node in ast.walk(hfn):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            bindings[node.targets[0].id] = bindings.get(node.targets[0].id, 0) + 1
+    for stmt, nested in _statements_in_order(hfn.body):
         if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
             continue
         name = stmt.targets[0].id
+        if nested and bindings.get(name, 0) != 1:
+            continue
         ext = _iter_extent_of(stmt.value, table)
         if ext is None:
             table.pop(name, None)
