@@ -247,14 +247,14 @@ def patch_mla_empty_context_mask() -> None:
     try:
         from vllm.model_executor.layers.attention import mla_attention
     except ImportError:  # pre-0.27.1 layout, or a build with no MLA at all
-        print("[external-eager-pg] mla mask_empty_context: no mla_attention module, skipped",
-              file=sys.stderr, flush=True)
+        print(
+            "[external-eager-pg] mla mask_empty_context: no mla_attention module, skipped", file=sys.stderr, flush=True
+        )
         return
 
     original = vars(mla_attention).get("mask_empty_context")
     if original is None:
-        print("[external-eager-pg] mla mask_empty_context: symbol absent, skipped",
-              file=sys.stderr, flush=True)
+        print("[external-eager-pg] mla mask_empty_context: symbol absent, skipped", file=sys.stderr, flush=True)
         return
 
     def mask_empty_context(lse, output, query_start_loc, context_start_loc):
