@@ -172,9 +172,22 @@ SERVE
 chmod +x "${SERVE_SCRIPT}"
 rm -f "${SMOKE_DONE}"
 
+# 192 logical CPUs per node = 4 sockets x 24 physical cores x 2 SMT threads. --exclusive gives the
+# JOB the node; it does NOT give a STEP the node's CPUs, and a step without --cpus-per-task claims
+# ONE. That is not a slow-down, it is a hang: 620948's serving step ran on 2 CPUs across 2 nodes,
+# its Triton JIT of alloc_extend_kernel never finished, and the peer's PP SEND blocked until the
+# 600 s NCCL watchdog aborted every rank. Every vLLM smoke before this served on 1 CPU too, so
+# their tok/s were floor numbers. run_cluster.sh:749 carries the full account; an acceptance run
+# must allocate the way the campaign does or it is not measuring the campaign.
+SERVE_CPUS="${SERVE_CPUS:-${SLURM_CPUS_ON_NODE:-192}}"
+# Clients and gates run --overlap ALONGSIDE the server, so they take one socket's PHYSICAL cores
+# (--hint=nomultithread) rather than the node -- enough not to be the bottleneck, not so much that
+# the measurement contends with what it is measuring.
+CLIENT_CPUS="${CLIENT_CPUS:-24}"
+
 stage "serving ${NREPLICAS} x (tp=${TP_SIZE} pp=${REPLICA_SIZE}) with the eager-PG patch"
 srun --nodes="${NNODES}" --ntasks="${NNODES}" --ntasks-per-node=1 --exclusive --export=ALL \
-    --nodelist="${NODELIST}" --environment="${INFERENCE_EDF}" \
+    --nodelist="${NODELIST}" --environment="${INFERENCE_EDF}" --cpus-per-task="${SERVE_CPUS}" \
     bash "${SERVE_SCRIPT}" >"${RUN_DIR}/vllm-step.log" 2>&1 &
 SERVER_STEP_PID=$!
 cleanup_steps() {

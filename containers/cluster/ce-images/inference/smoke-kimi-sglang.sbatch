@@ -53,9 +53,22 @@ echo "logs:   ${RUN_DIR}"
 
 stage() { printf '\n===== stage: %s =====\n' "$*"; }
 
+# 192 logical CPUs per node = 4 sockets x 24 physical cores x 2 SMT threads. --exclusive gives the
+# JOB the node; it does NOT give a STEP the node's CPUs, and a step without --cpus-per-task claims
+# ONE. That is not a slow-down, it is a hang: 620948's serving step ran on 2 CPUs across 2 nodes,
+# its Triton JIT of alloc_extend_kernel never finished, and the peer's PP SEND blocked until the
+# 600 s NCCL watchdog aborted every rank. Every vLLM smoke before this served on 1 CPU too, so
+# their tok/s were floor numbers. run_cluster.sh:749 carries the full account; an acceptance run
+# must allocate the way the campaign does or it is not measuring the campaign.
+SERVE_CPUS="${SERVE_CPUS:-${SLURM_CPUS_ON_NODE:-192}}"
+# Clients and gates run --overlap ALONGSIDE the server, so they take one socket's PHYSICAL cores
+# (--hint=nomultithread) rather than the node -- enough not to be the bottleneck, not so much that
+# the measurement contends with what it is measuring.
+CLIENT_CPUS="${CLIENT_CPUS:-24}"
+
 stage "serving tp=4 pp=2 across 2 nodes via sglang"
 srun --nodes="${SLURM_NNODES}" --ntasks="${SLURM_NNODES}" --ntasks-per-node=1 --exclusive --export=ALL \
-    --environment="${EDF}" bash -c '
+    --cpus-per-task="${SERVE_CPUS}" --environment="${EDF}" bash -c '
   export SGLANG_USE_AITER=1
   export SGLANG_ROCM_FUSED_DECODE_MLA=0
   # slurm cgroup rejects sglang default CPU pinning (psutil EINVAL, 604937 node1)
@@ -222,6 +235,7 @@ PYEOF
 
 stage "accuracy gate + concurrency sweep (client on ${MASTER})"
 srun --overlap --nodes=1 --ntasks=1 --nodelist="${MASTER}" --export=ALL \
+    --cpus-per-task="${CLIENT_CPUS}" --hint=nomultithread \
     --environment="${EDF}" /opt/venv/bin/python3 "${RUN_DIR}/client.py" \
     2>&1 | tee "${RUN_DIR}/client.out"
 
