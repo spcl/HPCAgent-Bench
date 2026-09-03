@@ -2931,9 +2931,14 @@ def spell_aranges_with_named_lengths(fn_ast: ast.AST, known: set) -> None:
     Only where the name is bound EARLIER IN THE SAME BLOCK: a binding in another branch does not
     reach this arange, and one after it is not yet the length.
     """
+    # One scan for every candidate, not one per candidate: _scan_size_assigns walks the whole
+    # function, and densenet121 ran it 879 times for 62 s of a 134 s emit. A target set only
+    # filters which assigns get recorded, so the answer per name is the same either way.
+    once = once_bound_locals(fn_ast, known)
+    first_rhs = _scan_size_assigns(fn_ast, once)[0]
     lengths: Dict[str, ast.expr] = {}
-    for name in once_bound_locals(fn_ast, known):
-        rhs = _scan_size_assigns(fn_ast, {name})[0].get(name)
+    for name in once:
+        rhs = first_rhs.get(name)
         if rhs is not None and _is_symbol_expr(rhs, {n.id for n in ast.walk(rhs) if isinstance(n, ast.Name)}):
             lengths[name] = rhs
     if not lengths:

@@ -207,15 +207,53 @@ def ensure_dace_program(key: str) -> pathlib.Path:
     return paths.BENCHMARKS / spec.relative_path / f"{spec.module_name}_dace.py"
 
 
+#: Seconds of ONE worker's time the named kernels cost this sweep (emit plus
+#: parse/:data:`PARSE_WORKERS`), for the deal in :func:`shard_of`. Only the tail is named: measured
+#: 2026-09-03 over the whole corpus, 12 of 661 kernels cost 40 s or more and the rest have a median
+#: of 1.2 s, so they deal evenly on COUNT alone and naming them would be a table nobody keeps true.
+#:
+#: A round-robin deal cannot see any of this, and the corpus is not shaped for one. The three
+#: costliest kernels are 25 minutes of the corpus's 56, and ``densenet121`` sits three registry keys
+#: from ``densenet201`` -- so at three shards the stride ALIASES and both land on the same runner,
+#: with ``googlenet_inception_v1`` beside them. Measured on that deal: 30.5 min on shard 0 against
+#: 8.9 on shard 1, which is the 35m39s timeout in CI run 33731755723 and the 12m38s next to it. The
+#: same corpus dealt by cost is 18.6 / 18.7 / 18.8, against 18.7 for a perfect split.
+#:
+#: Numbers, not an order -- they are summed, so an entry drifting stale costs balance and nothing
+#: else. Keyed on the kernel DIRECTORY, like :data:`REFUSED`. Re-measure with the sweep itself.
+PARSE_COST: Dict[str, float] = {
+    "machine_learning/densenet201": 551.0,
+    "machine_learning/googlenet_inception_v1": 474.0,
+    "scientific_computing/structured_grids/cloudsc": 471.0,
+    "machine_learning/densenet121": 297.0,
+    "scientific_computing/n_body_methods/field_gather": 111.0,
+    "machine_learning/swin_transformer_v2": 62.0,
+    "machine_learning/efficientnet_b0": 55.0,
+    "scientific_computing/unstructured_grids/lulesh": 53.0,
+    "machine_learning/mobilenet_v2": 50.0,
+    "machine_learning/shufflenet": 50.0,
+    "scientific_computing/structured_grids/sw4_rhs4sg": 46.0,
+    "machine_learning/resnet101": 41.0,
+}
+
+
+def cost_of(key: str) -> float:
+    """What :data:`PARSE_COST` says this registry key costs; one unit for an unnamed kernel."""
+    return PARSE_COST.get(key.rsplit("/", 1)[0], 1.0)
+
+
 def shard_of(keys: List[str]) -> List[str]:
     """The slice of ``keys`` :data:`PARSE_SHARD` names, or all of them when it names none.
 
-    Dealt round-robin, so the deep vision nets -- adjacent in sorted order and the slowest parses in
-    the corpus -- land in different shards instead of piling into one. The
-    :data:`TIMEOUT_REASONS` entries are dealt FIRST and separately, because they are the only items
-    whose cost is known in advance and it is the whole per-item budget: three ``hang`` kernels at
-    :data:`PARSE_TIMEOUT_S` are 45 minutes of pure timeout, and a round-robin over the sorted list
-    alone is free to hand all three to one shard.
+    The :data:`TIMEOUT_REASONS` entries are dealt FIRST and separately, one per shard, because
+    theirs is the only cost the HARNESS bounds rather than the kernel: three ``hang`` kernels at
+    :data:`PARSE_TIMEOUT_S` are 45 minutes of pure timeout on one container.
+
+    Everything else is dealt LONGEST FIRST onto whichever shard carries the least so far, by
+    :func:`cost_of`. That is what balances the corpus -- a plain round-robin left 30.5 minutes on
+    one shard and 8.9 on another (see :data:`PARSE_COST`). Ties fall to the shard holding the fewest
+    kernels and then to the lowest index, so a corpus with nothing costed in it -- the partition
+    tests below -- still deals round-robin.
     """
     if not PARSE_SHARD:
         return keys
@@ -226,8 +264,21 @@ def shard_of(keys: List[str]) -> List[str]:
     if n < 1 or not 0 <= i < n:
         raise ValueError(f"HPCAGENT_BENCH_DACE_PARSE_SHARD={PARSE_SHARD!r}: index must be in [0, {n})")
     timeouts = [k for k in keys if REFUSED.get(k.rsplit("/", 1)[0]) in TIMEOUT_REASONS]
-    rest = [k for k in keys if k not in frozenset(timeouts)]
-    return sorted(timeouts[i::n] + rest[i::n])
+    rest = sorted((k for k in keys if k not in frozenset(timeouts)), key=lambda k: (-cost_of(k), k))
+    load, held = [0.0] * n, [0] * n
+    mine: List[str] = []
+    for at, key in enumerate(timeouts):
+        load[at % n] += cost_of(key)
+        held[at % n] += 1
+        if at % n == i:
+            mine.append(key)
+    for key in rest:
+        at = min(range(n), key=lambda s: (load[s], held[s], s))
+        load[at] += cost_of(key)
+        held[at] += 1
+        if at == i:
+            mine.append(key)
+    return sorted(mine)
 
 
 def generated_programs() -> List[pathlib.Path]:
@@ -240,7 +291,8 @@ def generated_programs() -> List[pathlib.Path]:
 
     :data:`PARSE_SHARD` narrows it to one slice, and does so at the KEY -- before the emit -- so a
     shard pays for its own kernels only, rather than emitting the whole corpus to parse a third of
-    it. ``dace-numeric``'s pre-warm leaves the variable unset and still gets all of it.
+    it. A local run leaves the variable unset and still gets all of it; ``dace-numeric`` warms only
+    the kernels its own gate opens (``test_dace_numeric_agreement.prewarm``).
 
     A kernel that emits no program is absent from the list rather than failing it; this gate
     judges what the frontend is handed, and there is a separate finding for the emit gap (see
@@ -362,6 +414,18 @@ def test_the_refusal_list_names_kernels_that_exist() -> None:
     assert not unknown, (
         f"REFUSED names kernels that are not in the corpus: {unknown}. "
         "Remove them -- an entry that matches nothing excuses nothing."
+    )
+
+
+@pytest.mark.dace_frontend
+def test_the_costed_kernels_exist() -> None:
+    """A :data:`PARSE_COST` key that matches nothing weighs nothing, and the deal quietly goes back
+    to dealing the corpus's most expensive kernels blind -- which is the 30.5-minute shard this
+    table exists to end. A rename is silent otherwise: the sweep still passes, just unevenly."""
+    unknown = sorted(set(PARSE_COST) - corpus_kernels())
+    assert not unknown, (
+        f"PARSE_COST names kernels that are not in the corpus: {unknown}. "
+        "Re-key them -- an entry that matches nothing costs nothing and the deal goes blind."
     )
 
 

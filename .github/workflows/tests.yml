@@ -2074,11 +2074,14 @@ jobs:
           # none, and each test emits its own kernel -- four workers would emit their shares
           # concurrently, four processes writing through one fingerprint cache. Doing it here
           # leaves the workers' own autogen.ensure a pure cache hit, so there is no race to reason
-          # about. This is the ONLY whole-corpus emit left: collection itself generates nothing
+          # about. Collection itself generates nothing
           # (tests/test_dace_numeric_agreement.py::gated_kernels), which is why this step is
-          # explicit rather than a side effect of importing the test file.
-          python -c "from tests.test_dace_frontend_validity import generated_programs; \
-            print(len(generated_programs()), 'dace programs ready')"
+          # explicit rather than a side effect of importing the test file. It warms the GATED
+          # kernels, not the registry: measured 2026-09-03, the whole corpus emits in 596s and the
+          # 400 kernels this job opens in 111s, so the old whole-corpus call spent 8 minutes of a
+          # 38-minute step on programs nothing here reads.
+          python -c "from tests.test_dace_numeric_agreement import prewarm; \
+            print(prewarm(), 'dace programs ready')"
           python -m pytest -q -p no:cacheprovider -rfEs -n 4 -m dace_numeric \
             --maxfail=20 --timeout=1500 tests/test_dace_numeric_agreement.py
 
