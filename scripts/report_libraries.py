@@ -104,8 +104,7 @@ def reason_missing(name: str, lang: str) -> str:
         if not entry.get("link"):
             return f"pkg-config has no {pkg}, and no link fallback is declared"
         tokens = tuple(entry["link"])
-        return (f"pkg-config has no {pkg}; link fallback {' '.join(tokens)} did not link"
-                f" -- {link_error(lang, tokens)}")
+        return f"pkg-config has no {pkg}; link fallback {' '.join(tokens)} did not link -- {link_error(lang, tokens)}"
     compile_tokens, link = languages.library_tokens(name, lang)
     # Ask the gate the library actually faces. A header-only entry is decided by the preprocessor,
     # and a link probe on its empty link line succeeds and says nothing.
@@ -121,8 +120,10 @@ def reason_missing(name: str, lang: str) -> str:
         # the declared fallback here and let the linker say which it was.
         declared = tuple(entry.get("link") or ())
         if not declared:
-            return ("no link tokens resolved: pkg-config answered nothing and the entry declares"
-                    " no link fallback for this language")
+            return (
+                "no link tokens resolved: pkg-config answered nothing and the entry declares"
+                " no link fallback for this language"
+            )
         return f"declared {' '.join(declared)} did not link -- {link_error(lang, declared)}"
     return f"trial link failed -- {link_error(lang, link)}"
 
