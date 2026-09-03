@@ -79,7 +79,11 @@ RUN set -eux; \
       > /usr/local/bin/gitretry; \
     chmod 0755 /usr/local/bin/gitretry; \
     if [ -d /git-mirrors ]; then \
-      git config --global "url./git-mirrors/.insteadOf" "https://github.com/"; \
+      for m in /git-mirrors/*/*.git; do \
+        r="${m#/git-mirrors/}"; r="${r%.git}"; \
+        git config --global "url./git-mirrors/${r}.git.insteadOf" "https://github.com/${r}.git"; \
+        git config --global --add "url./git-mirrors/${r}.git.insteadOf" "https://github.com/${r}"; \
+      done; \
       git config --global --add safe.directory '*'; \
       git config --global protocol.file.allow always; \
     fi
@@ -221,7 +225,11 @@ RUN set -eux; \
       > /usr/local/bin/gitretry; \
     chmod 0755 /usr/local/bin/gitretry; \
     if [ -d /git-mirrors ]; then \
-      git config --global "url./git-mirrors/.insteadOf" "https://github.com/"; \
+      for m in /git-mirrors/*/*.git; do \
+        r="${m#/git-mirrors/}"; r="${r%.git}"; \
+        git config --global "url./git-mirrors/${r}.git.insteadOf" "https://github.com/${r}.git"; \
+        git config --global --add "url./git-mirrors/${r}.git.insteadOf" "https://github.com/${r}"; \
+      done; \
       git config --global --add safe.directory '*'; \
       git config --global protocol.file.allow always; \
     fi
@@ -241,7 +249,10 @@ RUN set -eux; \
     /opt/pytorch211/bin/python -m pip install --no-cache-dir --no-deps \
       --index-url "${TORCH_INDEX}" \
       "torchvision==${TORCHVISION_VERSION}" "torchaudio==${TORCHAUDIO_VERSION}"; \
-    /opt/pytorch211/bin/python -m pip install --no-cache-dir 'pillow>=10.0' 'numpy<3'
+    /opt/pytorch211/bin/python -m pip install --no-cache-dir 'pillow>=10.0' 'numpy<3'; \
+    /opt/pytorch211/bin/python -m pip show triton-rocm \
+      | awk '/^Version:/{print $2}' > /opt/triton-rocm.version; \
+    test -s /opt/triton-rocm.version
 
 # pybind11 pinned below 3.1: 3.1.0 bumped its internals id v11 -> v12 and refuses to share
 # registered types across that boundary, so a v12 build cannot accept tensors from the v11 torch
@@ -372,11 +383,13 @@ PATCH
 # (from xgrammar...)` followed by triton-3.8.0. torch 2.11.0+rocm7.2 is built against the ROCm
 # triton, so the intruder is removed and the ROCm build reinstalled to restore every file it owns.
 #
-# The version is READ BACK from the surviving triton-rocm metadata rather than pinned again here,
-# so this repair cannot drift from whatever torch actually depends on.
+# The version comes from /opt/triton-rocm.version, recorded right after the torch install. Reading
+# it back from pip HERE does not work: installing PyPI triton leaves triton-rocm's metadata gone,
+# not merely shadowed -- job 620069 died on `Package(s) not found: triton-rocm`. Recording it at
+# the one moment it is known also keeps the repair from drifting from torch's actual dependency.
 RUN set -eux; \
     site="$(/opt/pytorch211/bin/python -c 'import site; print(site.getsitepackages()[0])')"; \
-    ver="$(/opt/pytorch211/bin/python -m pip show triton-rocm | awk '/^Version:/{print $2}')"; \
+    ver="$(cat /opt/triton-rocm.version)"; \
     test -n "${ver}"; \
     /opt/pytorch211/bin/python -m pip uninstall -y triton || true; \
     rm -rf "${site}"/~riton*; \
@@ -569,7 +582,9 @@ PY
 # Drop the mirror rewrite from the SHIPPED image. It is a build-time convenience pointing at a
 # path that exists only while the mirror is mounted; left in /root/.gitconfig, every git clone a
 # user runs inside this container would silently rewrite to a directory that is not there.
-RUN git config --global --unset-all "url./git-mirrors/.insteadOf" || true; \
+RUN set -eux; \
+    git config --global --name-only --get-regexp '^url\..*\.insteadof$' 2>/dev/null \
+      | sort -u | while read -r k; do git config --global --unset-all "${k}" || true; done; \
     git config --global --unset-all protocol.file.allow || true
 
 WORKDIR /workspace

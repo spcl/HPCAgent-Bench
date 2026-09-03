@@ -80,7 +80,11 @@ RUN set -eux; \
       > /usr/local/bin/gitretry; \
     chmod 0755 /usr/local/bin/gitretry; \
     if [ -d /git-mirrors ]; then \
-      git config --global "url./git-mirrors/.insteadOf" "https://github.com/"; \
+      for m in /git-mirrors/*/*.git; do \
+        r="${m#/git-mirrors/}"; r="${r%.git}"; \
+        git config --global "url./git-mirrors/${r}.git.insteadOf" "https://github.com/${r}.git"; \
+        git config --global --add "url./git-mirrors/${r}.git.insteadOf" "https://github.com/${r}"; \
+      done; \
       git config --global --add safe.directory '*'; \
       git config --global protocol.file.allow always; \
     fi
@@ -336,7 +340,8 @@ assert torch.version.hip is not None, "not a ROCm torch"
 # so a future move shows the path instead of only the failure.
 sglang_paths = [str(p) for p in sglang.__path__]
 print("sglang", sglang_paths, file=sys.stderr)
-assert any(p.startswith("/sgl-workspace/sglang/") for p in sglang_paths), sglang_paths
+SGLANG_TREE = "/sgl-workspace/sglang"
+assert any(p == SGLANG_TREE or p.startswith(SGLANG_TREE + "/") for p in sglang_paths), sglang_paths
 subprocess.run([sys.executable, "-m", "sglang.launch_server", "--help"], check=True,
                stdout=subprocess.DEVNULL)
 

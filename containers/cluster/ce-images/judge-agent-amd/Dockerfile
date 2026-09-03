@@ -92,7 +92,11 @@ RUN set -eux; \
       > /usr/local/bin/gitretry; \
     chmod 0755 /usr/local/bin/gitretry; \
     if [ -d /git-mirrors ]; then \
-      git config --global "url./git-mirrors/.insteadOf" "https://github.com/"; \
+      for m in /git-mirrors/*/*.git; do \
+        r="${m#/git-mirrors/}"; r="${r%.git}"; \
+        git config --global "url./git-mirrors/${r}.git.insteadOf" "https://github.com/${r}.git"; \
+        git config --global --add "url./git-mirrors/${r}.git.insteadOf" "https://github.com/${r}"; \
+      done; \
       git config --global --add safe.directory '*'; \
       git config --global protocol.file.allow always; \
     fi
@@ -840,7 +844,9 @@ RUN set -eux; \
 # Drop the mirror rewrite from the SHIPPED image. It is a build-time convenience pointing at a
 # path that exists only while the mirror is mounted; left in /root/.gitconfig, every git clone a
 # user runs inside this container would silently rewrite to a directory that is not there.
-RUN git config --global --unset-all "url./git-mirrors/.insteadOf" || true; \
+RUN set -eux; \
+    git config --global --name-only --get-regexp '^url\..*\.insteadof$' 2>/dev/null \
+      | sort -u | while read -r k; do git config --global --unset-all "${k}" || true; done; \
     git config --global --unset-all protocol.file.allow || true
 
 WORKDIR /work

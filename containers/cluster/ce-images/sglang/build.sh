@@ -84,8 +84,15 @@ elif podman pull -q "${BASE_IMAGE}" >/dev/null; then
   mkdir -p "${BASE_CACHE}"
   rm -rf "${staging}"
   if podman push -q "${BASE_IMAGE}" "dir:${staging}"; then
-    rm -rf "${base_dir}" && mv "${staging}" "${base_dir}" \
-      && printf 'base image cached to %s\n' "${base_dir}"
+    if [[ -f "${base_dir}/manifest.json" ]]; then
+      rm -rf "${staging}"
+      printf 'base image was cached by a concurrent build\n'
+    elif mv -T "${staging}" "${base_dir}"; then
+      printf 'base image cached to %s\n' "${base_dir}"
+    else
+      rm -rf "${staging}"
+      printf 'base image could not be published; this build is unaffected\n'
+    fi
   else
     rm -rf "${staging}"
     printf 'base image could not be cached; this build is unaffected\n'
@@ -106,6 +113,11 @@ podman run --rm "${IMAGE_TAG}" cat /opt/ofi/BUILD-MANIFEST.txt
 
 # enroot's exit code lies when its cleanup fails after a good write; gate on the artifact
 # (listing forces a read of the inode table at file END, which a truncated image fails).
+# The output is REMOVED first. enroot refuses to overwrite ("File already exists"), the `|| true`
+# below swallows that, and `unsquashfs -l` then happily validates LAST run's file -- so job 620068
+# printed "Wrote" and "IMAGE READY" over a stale image built with the wrong triton. Deleting first
+# is what makes the check below mean what it says: no import, no file, no green.
+rm -f "${OUTPUT_SQSH}"
 enroot import -x mount -o "${OUTPUT_SQSH}" "podman://${IMAGE_TAG}" || true
 unsquashfs -l "${OUTPUT_SQSH}" opt >/dev/null
 printf 'Wrote %s\n' "${OUTPUT_SQSH}"

@@ -59,7 +59,16 @@ if [[ -d "${GIT_MIRRORS}" ]]; then
   printf 'git mirror %s\n' "${GIT_MIRRORS}"
 fi
 
-podman --cgroup-manager=cgroupfs build "${MIRROR_ARGS[@]}" \
+# Spack binary buildcache on scratch. gcc 16 and llvm 22 are 60-80 minutes that this image has
+# now paid four times, every time to fail at something after them. The Dockerfile pushes into this
+# mount after each install and registers it as a mirror when it is non-empty; both halves are
+# no-ops without it, so an unmounted build behaves exactly as before.
+SPACK_BUILDCACHE="${SPACK_BUILDCACHE:-${SCRATCH:?}/spack-buildcache}"
+mkdir -p "${SPACK_BUILDCACHE}"
+CACHE_ARGS=(-v "${SPACK_BUILDCACHE}:/spack-buildcache:rw")
+printf 'spack buildcache %s\n' "${SPACK_BUILDCACHE}"
+
+podman --cgroup-manager=cgroupfs build "${MIRROR_ARGS[@]}" "${CACHE_ARGS[@]}" \
   --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
   --build-arg "DACE_COMMIT=${DACE_COMMIT}" \
   --build-arg "ROCM_ARCH=${ROCM_ARCH}" \
@@ -74,6 +83,11 @@ printf 'image digest %s\n' "$(cat "${OUTPUT_SQSH}.digest")"
 
 # enroot's exit code lies when its cleanup fails after a good write, so gate on the ARTIFACT:
 # listing forces a read of the inode table at file END, which a truncated image fails.
+# The output is REMOVED first. enroot refuses to overwrite ("File already exists"), the `|| true`
+# below swallows that, and `unsquashfs -l` then happily validates LAST run's file -- so job 620068
+# printed "Wrote" and "IMAGE READY" over a stale image built with the wrong triton. Deleting first
+# is what makes the check below mean what it says: no import, no file, no green.
+rm -f "${OUTPUT_SQSH}"
 enroot import -x mount -o "${OUTPUT_SQSH}" "podman://${IMAGE_TAG}" || true
 unsquashfs -l "${OUTPUT_SQSH}" opt >/dev/null
 printf 'Wrote %s\n' "${OUTPUT_SQSH}"
