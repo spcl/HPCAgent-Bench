@@ -78,18 +78,22 @@ for name in "${candidates[@]}"; do
   # knobs .env.kvfix3-kimi27sglang-c settled on are passed through: triton attention, the decode
   # graph cap that bought 4.7x KV, and the hierarchical cache. 256k context is free at that cap.
   sgl=()
-  [[ "${name}" == sglang ]] && sgl=(CONTEXT_LEN=262144
-    SGLANG_EXTRA_ARGS="--attention-backend triton --cuda-graph-max-bs-decode 64 --enable-hierarchical-cache")
+  if [[ "${name}" == sglang ]]; then
+    sgl=(CONTEXT_LEN=262144
+         SGLANG_EXTRA_ARGS="--attention-backend triton --cuda-graph-max-bs-decode 64 --enable-hierarchical-cache")
+  fi
   # TUNED_MOE_DIR defaults to <submit dir>/moe-configs, and this driver submits from HERE, where
   # there is no such folder -- an empty one reads as "tuned" and is how a smoke measures the
   # untuned ceiling and calls it a result. Name the real folder. E=128,N=192 is the gpt-oss shape.
+  # BOTH EDF names: smoke-kimi-sglang.sbatch reads EDF, smoke-kimi-eager-pg.sbatch reads
+  # INFERENCE_EDF and defaults it to the DEPLOYED 0.27.1 image. Setting only EDF is why 620860 and
+  # 620870 ran the deployed image and 620870 reproduced the documented 0.27.1 gpt-oss failure, as if
+  # the candidate had regressed. Each smoke prints the environment it opened, so a log carries the
+  # proof. Keep this one command unbroken -- a comment between continuations ends it, and the tail
+  # then submits with none of these set (620910/620911).
   env "${oss[@]}" "${sgl[@]}" \
   TUNED_MOE_DIR="${PWD}/../ce-images/inference/moe-configs" \
   PG_PATCH_DIR="${PWD}/../ce-images/inference/external-eager-pg-patch" \
-  # BOTH names: smoke-kimi-sglang.sbatch reads EDF, smoke-kimi-eager-pg.sbatch reads INFERENCE_EDF
-  # and defaults it to the DEPLOYED 0.27.1 image. Setting only EDF is why 620860 and 620870 ran the
-  # deployed image and 620870 reproduced the documented 0.27.1 gpt-oss failure, as if the candidate
-  # had regressed. Each smoke now prints the environment it opened, so the log carries the proof.
   EDF="${edf}" INFERENCE_EDF="${edf}" sbatch --job-name="smoke-candidate-${name}" \
     --nodes="${NODES[${name}]}" \
     --output="${SCRATCH}/ce-images/logs/smoke-candidate-${name}-%j.out" \
