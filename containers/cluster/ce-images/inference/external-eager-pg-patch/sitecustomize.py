@@ -238,10 +238,24 @@ def patch_mla_empty_context_mask() -> None:
 
     mla_attention does `from ... import mask_empty_context`, so the name has to be rebound in
     THAT module -- patching the defining module would leave the existing binding untouched.
-    """
-    from vllm.model_executor.layers.attention import mla_attention
 
-    original = mla_attention.mask_empty_context
+    MLA is kimi's attention and `mask_empty_context` is a 0.27.1 symbol, so neither the module nor
+    the name is guaranteed: on vLLM 0.23 serving gpt-oss this raised AttributeError from inside
+    init_process_group and took the engine down before the API came up (620914). A patch whose
+    target is absent has nothing to fix -- it says so and leaves the eager-PG half to do its job.
+    """
+    try:
+        from vllm.model_executor.layers.attention import mla_attention
+    except ImportError:  # pre-0.27.1 layout, or a build with no MLA at all
+        print("[external-eager-pg] mla mask_empty_context: no mla_attention module, skipped",
+              file=sys.stderr, flush=True)
+        return
+
+    original = vars(mla_attention).get("mask_empty_context")
+    if original is None:
+        print("[external-eager-pg] mla mask_empty_context: symbol absent, skipped",
+              file=sys.stderr, flush=True)
+        return
 
     def mask_empty_context(lse, output, query_start_loc, context_start_loc):
         # [num_tokens, num_heads] against an output of [num_tokens, num_heads, head_dim]. The
