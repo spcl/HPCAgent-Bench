@@ -347,10 +347,12 @@ RUN set -eux; \
       '  # bump to. OpenBLAS is the SELECTED BLAS here and MKL and hptt cover the rest of the' \
       '  # shape, so the cost of its absence is one requestable name -- and libraries.yaml gates' \
       '  # on a trial link, so an absent blis is never advertised to an agent.' \
-      '  # slate is nearly free here: blaspp and lapackpp are already in this graph as strumpack' \
-      "  # dependencies. trilinos is NOT -- it is hours of build for one requestable name, and the" \
-      '  # solvers it would add are already covered by petsc, hypre, mumps and superlu-dist.' \
-      "  - slate ~cuda +rocm amdgpu_target=${ROCM_ARCH}" \
+      '  # NO slate. Its matgen translation units die under this toolchain (621349, three files at' \
+      '  # once with no error line of their own), and netlib-scalapack -- which builds -- already' \
+      '  # covers the distributed dense shape it would add. Its own note here called it "nearly' \
+      '  # free"; a build cycle is not free, and it buys one requestable name we already have a' \
+      '  # provider for. trilinos stays out for the same reason: hours of build for one name whose' \
+      '  # solvers petsc, hypre, mumps and superlu-dist already cover.' \
       '  - metis' \
       '  - parmetis' \
       '  - scotch +mpi +esmumps' \
@@ -510,10 +512,10 @@ RUN set -eux; \
 # substitute for any of this.
 RUN set -eux; \
     "${SPACK_ROOT}/bin/spack" -e "${SPACK_ENV_DIR}" install --fail-fast \
-      superlu-dist mumps strumpack hypre arpack-ng magma slate sundials; \
+      superlu-dist mumps strumpack hypre arpack-ng magma sundials; \
     "${SPACK_ROOT}/bin/spack" clean --stage; \
     ls /opt/view/lib/libmagma.so /opt/view/lib/libsuperlu_dist.so /opt/view/lib/libHYPRE.so \
-      /opt/view/lib/libslate.so /opt/view/lib/libsundials_core.so
+      /opt/view/lib/libsundials_core.so
 
 # ---------------------------------------------------------------------------------------------
 # 7. PETSc and SLEPc -- their OWN layer, on purpose.
