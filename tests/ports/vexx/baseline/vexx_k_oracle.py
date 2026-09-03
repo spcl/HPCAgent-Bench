@@ -250,9 +250,11 @@ def vexx_all_paths(
     igk = np.asarray(igk_exx)
 
     # --- pre-slice per (current_k, egrp) ---
-    nl0 = _F(nl[:ngm].astype(np.int64) - 1, np.int32)
-    gki = igk[:n, ck0].astype(np.int64) - 1
-    nlg = _F(nl[gki].astype(np.int64) - 1, np.int32)
+    # Every index table out of vexx_k.initialize is 0-based, the corpus-wide rule; the C++ core
+    # subscripts them bare, so nothing is renumbered on the way in.
+    nl0 = _F(nl[:ngm].astype(np.int64), np.int32)
+    gki = igk[:n, ck0].astype(np.int64)
+    nlg = _F(nl[gki].astype(np.int64), np.int32)
     ibands_eg = _F(np.asarray(ibands)[:my_n, eg], np.int32)
     egrp_eg = _F(np.asarray(egrp_pairs)[:, :, eg], np.int32)
     all_s = _F(np.asarray(all_start), np.int32)
@@ -260,9 +262,9 @@ def vexx_all_paths(
     xk_cur = _F(np.asarray(xk)[:, ck0], np.float64)
     ixkq = np.asarray(index_xkq).reshape(-1, nqs) if np.asarray(index_xkq).ndim == 1 else np.asarray(index_xkq)
     ikq_iq = np.array([int(ixkq[cik0, iq]) for iq in range(nqs)], np.int64)
-    ik_iq = _F(np.array([int(np.asarray(index_xk)[k - 1]) for k in ikq_iq], np.int32), np.int32)
+    ik_iq = _F(np.array([int(np.asarray(index_xk)[k]) for k in ikq_iq], np.int32), np.int32)
     xkqc = np.asarray(xkq_collect)
-    xkq_all = _F(np.stack([xkqc[:, k - 1] for k in ikq_iq], axis=1), np.float64)  # (3,nqs)
+    xkq_all = _F(np.stack([xkqc[:, k] for k in ikq_iq], axis=1), np.float64)  # (3,nqs)
     ikq_iq32 = _F(ikq_iq.astype(np.int32), np.int32)
 
     exxbuff_f = _F(exxbuff, np.complex128)
