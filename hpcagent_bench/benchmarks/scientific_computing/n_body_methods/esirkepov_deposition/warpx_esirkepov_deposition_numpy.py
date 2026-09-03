@@ -444,9 +444,20 @@ def warpx_esirkepov_deposition(
             sdxi = cum_x[:, None] * zavg_x[None, :]
             Jx[lox + ib + i0 : lox + ib + i1, loy + kb + k0 : loy + kb + k1, 0, 0] += sdxi
             if rz_modes:
+                # Mode m lands in components (2m-1, 2m) and carries xy_mid0**m, built by repeated
+                # complex multiplication exactly as the original mode loop does.
                 djr = 2.0 * sdxi
-                Jx[lox + ib + i0 : lox + ib + i1, loy + kb + k0 : loy + kb + k1, 0, 1] += djr * xy_mid0_re[ip]
-                Jx[lox + ib + i0 : lox + ib + i1, loy + kb + k0 : loy + kb + k1, 0, 2] += djr * xy_mid0_im[ip]
+                xy_mid_re = xy_mid0_re[ip]
+                xy_mid_im = xy_mid0_im[ip]
+                for imode in range(1, n_modes):
+                    Jx[lox + ib + i0 : lox + ib + i1, loy + kb + k0 : loy + kb + k1, 0, 2 * imode - 1] += (
+                        djr * xy_mid_re
+                    )
+                    Jx[lox + ib + i0 : lox + ib + i1, loy + kb + k0 : loy + kb + k1, 0, 2 * imode] += djr * xy_mid_im
+                    nxt_mid_re = xy_mid_re * xy_mid0_re[ip] - xy_mid_im * xy_mid0_im[ip]
+                    nxt_mid_im = xy_mid_re * xy_mid0_im[ip] + xy_mid_im * xy_mid0_re[ip]
+                    xy_mid_re = nxt_mid_re
+                    xy_mid_im = nxt_mid_im
 
             i0y, i1y = int(dil[ip]), o + 3 - int(diu[ip])
             k0y, k1y = int(dkl[ip]), o + 3 - int(dku[ip])
@@ -465,14 +476,38 @@ def warpx_esirkepov_deposition(
             if rz_modes:
                 a_re = sxn[:, None] * szn[None, :]
                 b_re = sxo[:, None] * szo[None, :]
-                sum_re = a_re * (xy_new0_re[ip] - xy_mid0_re[ip]) + b_re * (xy_mid0_re[ip] - xy_old0_re[ip])
-                sum_im = a_re * (xy_new0_im[ip] - xy_mid0_im[ip]) + b_re * (xy_mid0_im[ip] - xy_old0_im[ip])
                 i_local = ib + np.arange(i0y, i1y)
                 neg2coef = -2.0 * (i_local + xmin * dinvx) * wqi * invdtd_x
-                Jy[lox + ib + i0y : lox + ib + i1y, loy + kb + k0y : loy + kb + k1y, 0, 1] += neg2coef[:, None] * (
-                    -sum_im
-                )
-                Jy[lox + ib + i0y : lox + ib + i1y, loy + kb + k0y : loy + kb + k1y, 0, 2] += neg2coef[:, None] * sum_re
+                # The theta current divides by the mode number, so unlike Jr/Jz its coefficient is
+                # not shared across modes.
+                xy_new_re = xy_new0_re[ip]
+                xy_new_im = xy_new0_im[ip]
+                xy_mid_re = xy_mid0_re[ip]
+                xy_mid_im = xy_mid0_im[ip]
+                xy_old_re = xy_old0_re[ip]
+                xy_old_im = xy_old0_im[ip]
+                for imode in range(1, n_modes):
+                    sum_re = a_re * (xy_new_re - xy_mid_re) + b_re * (xy_mid_re - xy_old_re)
+                    sum_im = a_re * (xy_new_im - xy_mid_im) + b_re * (xy_mid_im - xy_old_im)
+                    coef_m = neg2coef / float(imode)
+                    Jy[lox + ib + i0y : lox + ib + i1y, loy + kb + k0y : loy + kb + k1y, 0, 2 * imode - 1] += coef_m[
+                        :, None
+                    ] * (-sum_im)
+                    Jy[lox + ib + i0y : lox + ib + i1y, loy + kb + k0y : loy + kb + k1y, 0, 2 * imode] += (
+                        coef_m[:, None] * sum_re
+                    )
+                    nxt_new_re = xy_new_re * xy_new0_re[ip] - xy_new_im * xy_new0_im[ip]
+                    nxt_new_im = xy_new_re * xy_new0_im[ip] + xy_new_im * xy_new0_re[ip]
+                    nxt_mid_re = xy_mid_re * xy_mid0_re[ip] - xy_mid_im * xy_mid0_im[ip]
+                    nxt_mid_im = xy_mid_re * xy_mid0_im[ip] + xy_mid_im * xy_mid0_re[ip]
+                    nxt_old_re = xy_old_re * xy_old0_re[ip] - xy_old_im * xy_old0_im[ip]
+                    nxt_old_im = xy_old_re * xy_old0_im[ip] + xy_old_im * xy_old0_re[ip]
+                    xy_new_re = nxt_new_re
+                    xy_new_im = nxt_new_im
+                    xy_mid_re = nxt_mid_re
+                    xy_mid_im = nxt_mid_im
+                    xy_old_re = nxt_old_re
+                    xy_old_im = nxt_old_im
 
             i0z, i1z = int(dil[ip]), o + 3 - int(diu[ip])
             k0z, k1z = int(dkl[ip]), o + 2 - int(dku[ip])
@@ -482,8 +517,19 @@ def warpx_esirkepov_deposition(
             Jz[lox + ib + i0z : lox + ib + i1z, loy + kb + k0z : loy + kb + k1z, 0, 0] += sdzk
             if rz_modes:
                 djz = 2.0 * sdzk
-                Jz[lox + ib + i0z : lox + ib + i1z, loy + kb + k0z : loy + kb + k1z, 0, 1] += djz * xy_mid0_re[ip]
-                Jz[lox + ib + i0z : lox + ib + i1z, loy + kb + k0z : loy + kb + k1z, 0, 2] += djz * xy_mid0_im[ip]
+                xy_mid_re = xy_mid0_re[ip]
+                xy_mid_im = xy_mid0_im[ip]
+                for imode in range(1, n_modes):
+                    Jz[lox + ib + i0z : lox + ib + i1z, loy + kb + k0z : loy + kb + k1z, 0, 2 * imode - 1] += (
+                        djz * xy_mid_re
+                    )
+                    Jz[lox + ib + i0z : lox + ib + i1z, loy + kb + k0z : loy + kb + k1z, 0, 2 * imode] += (
+                        djz * xy_mid_im
+                    )
+                    nxt_mid_re = xy_mid_re * xy_mid0_re[ip] - xy_mid_im * xy_mid0_im[ip]
+                    nxt_mid_im = xy_mid_re * xy_mid0_im[ip] + xy_mid_im * xy_mid0_re[ip]
+                    xy_mid_re = nxt_mid_re
+                    xy_mid_im = nxt_mid_im
 
         elif geom == GEOM_1D_Z:
             k0, k1 = int(dkl[ip]), o + 3 - int(dku[ip])
