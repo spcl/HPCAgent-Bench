@@ -13,6 +13,7 @@ from numpyto_common import dtypes, narrow_int, operators, parallelism
 from numpyto_common.ordered import OrderedSet
 from numpyto_common.emitter import BaseEmitter, index_rank_error
 from numpyto_common.frontend import _names_used_as_int
+from numpyto_common.lib_nodes import BLAS_GEMM_MARKER
 from numpyto_common.lowering import _walk_complex, helper_returns_int
 
 #: Whole-identifier matcher for scanning a shape-token string for the names it references.
@@ -1494,6 +1495,8 @@ class _CBodyEmitter(BaseEmitter):
             fn = node.func.id
             if fn == "__hpcagent_bench_zeros__":
                 return ""
+            if fn == BLAS_GEMM_MARKER:
+                return self._emit_blas_gemm(node)
             # Math intrinsics on a complex operand mishandle by default; route through the c* helpers in the prelude.
             _COMPLEX_INTRINSIC = {
                 "abs": "cabs",
@@ -1633,6 +1636,26 @@ class _CBodyEmitter(BaseEmitter):
             ):
                 return f"{self._math_name('hypot')}({self.emit_expr(node.args[0])}, {self.emit_expr(node.args[1])})"
         raise NotImplementedError(f"call to {ast.unparse(node.func)} not supported")
+
+    def _emit_blas_gemm(self, node: ast.Call) -> str:
+        """Render the dense 2-D GEMM marker as a CBLAS call.
+
+        Operands are row-major and C-contiguous by ABI, so each leading dimension is the row
+        length: ``k`` for ``a`` (m, k), ``n`` for ``b`` (k, n), ``n`` for the (m, n) output.
+        """
+        a, b, out = (arg.id for arg in node.args[:3])
+        m, n, k = (self.emit_expr(arg) for arg in node.args[3:])
+        f32 = self._is_float32_kernel()
+        gemm = "cblas_sgemm" if f32 else "cblas_dgemm"
+        one, zero = ("1.0f", "0.0f") if f32 else ("1.0", "0.0")
+        # Explicit (blasint) casts: blasint is 32-bit unless OpenBLAS was built INTERFACE64, while
+        # every extent here is int64_t, so the implicit narrowing is a -Wconversion diagnostic. Only
+        # single extents are passed (never their product), and no corpus dimension approaches 2**31.
+        dims = ", ".join(f"(blasint)({e})" for e in (m, n, k))
+        return (
+            f"{gemm}(CblasRowMajor, CblasNoTrans, CblasNoTrans, {dims}, "
+            f"{one}, {a}, (blasint)({k}), {b}, (blasint)({n}), {zero}, {out}, (blasint)({n}))"
+        )
 
     def _emit_true_divide(self, node: ast.BinOp) -> str:
         """numpy ``/`` mixing a float and a Python int yields the FLOAT's own precision -- NEP 50
@@ -2895,6 +2918,14 @@ _CPP_ARITH = (
     "}\n"
 )
 #: The kernel prologue = the arithmetic definitions plus the C-linkage opener the entry point needs.
+def _blas_include(body: str) -> str:
+    """``#include <cblas.h>`` when this body calls a cblas gemm, else nothing.
+
+    OpenBLAS's cblas.h carries its own ``extern "C"`` guard, so C++ needs no wrapper.
+    """
+    return "#include <cblas.h>\n" if "cblas_" in body else ""
+
+
 _CPP_HEADER = _CPP_ARITH + '\nextern "C" {\n'
 _CPP_FOOTER = '} // extern "C"\n'
 
@@ -3149,7 +3180,7 @@ def emit_c(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     signature = _emit_signature(kir, name)
     body = _emit_body(kir, indent="        ")
     return (
-        f"{_C_HEADER}{_fp8_prelude(kir)}\n{pinned_const_block(kir)}{helpers}{signature} {{\n"
+        f"{_C_HEADER}{_blas_include(body)}{_fp8_prelude(kir)}\n{pinned_const_block(kir)}{helpers}{signature} {{\n"
         f"{_C_PRELUDE}{body}\n{_C_EPILOGUE}}}\n"
     )
 
@@ -3162,7 +3193,7 @@ def emit_cpp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     signature = signature.replace("*restrict ", "*__restrict__ ")
     body = _emit_body(kir, indent="        ")
     return (
-        f"{_CPP_HEADER}{_fp8_prelude(kir)}\n{pinned_const_block(kir)}{helpers}{signature} {{\n"
+        f"{_CPP_HEADER}{_blas_include(body)}{_fp8_prelude(kir)}\n{pinned_const_block(kir)}{helpers}{signature} {{\n"
         f"{_CPP_PRELUDE}{body}\n{_CPP_EPILOGUE}}}\n{_CPP_FOOTER}"
     )
 
@@ -3206,7 +3237,7 @@ def emit_cpp_isopar(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     signature = _emit_signature(kir, name).replace("*restrict ", "*__restrict__ ")
     body = _emit_body(kir, indent="        ", isopar=True)
     return (
-        f"{_CPP_ISOPAR_HEADER}{_fp8_prelude(kir)}\n{pinned_const_block(kir)}{helpers}{signature} {{\n{_CPP_PRELUDE}{body}\n"
+        f"{_CPP_ISOPAR_HEADER}{_blas_include(body)}{_fp8_prelude(kir)}\n{pinned_const_block(kir)}{helpers}{signature} {{\n{_CPP_PRELUDE}{body}\n"
         f"{_CPP_EPILOGUE}}}\n{_CPP_FOOTER}"
     )
 
@@ -3230,7 +3261,7 @@ def emit_c_omp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     helpers = emit_c_helpers(kir)
     signature = _emit_signature(kir, name)
     body = _emit_body(kir, indent="        ", parallel=True)
-    return f"{_C_HEADER}{_fp8_prelude(kir)}\n{helpers}{signature} {{\n{_C_PRELUDE}{body}\n{_C_EPILOGUE}}}\n"
+    return f"{_C_HEADER}{_blas_include(body)}{_fp8_prelude(kir)}\n{helpers}{signature} {{\n{_C_PRELUDE}{body}\n{_C_EPILOGUE}}}\n"
 
 
 def emit_cpp_omp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
@@ -3241,7 +3272,7 @@ def emit_cpp_omp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     signature = _emit_signature(kir, name).replace("*restrict ", "*__restrict__ ")
     body = _emit_body(kir, indent="        ", parallel=True)
     return (
-        f"{_CPP_HEADER}{_fp8_prelude(kir)}\n{helpers}{signature} {{\n{_CPP_PRELUDE}{body}\n"
+        f"{_CPP_HEADER}{_blas_include(body)}{_fp8_prelude(kir)}\n{helpers}{signature} {{\n{_CPP_PRELUDE}{body}\n"
         f"{_CPP_EPILOGUE}}}\n{_CPP_FOOTER}"
     )
 

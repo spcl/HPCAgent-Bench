@@ -23,6 +23,14 @@ from typing import Any, Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 from numpyto_common import dtypes
 from numpyto_common.ir import tag_numpy_origin
 
+#: Pseudo-call a BLAS-capable target's emitter renders as its gemm. Emitted ONLY when the caller
+#: asked for ``blas``; every other target keeps the loop nest, so this name never reaches them.
+#: Args are ``(a, b, out, m, n, k)`` on row-major C-contiguous operands.
+BLAS_GEMM_MARKER = "__blas_gemm"
+
+#: Element dtypes a real BLAS gemm cannot take, so they keep the loop nest.
+BLAS_INELIGIBLE_DTYPES = ("complex", "int", "uint", "bool")
+
 
 def _name(n: str) -> ast.Name:
     return ast.Name(id=n, ctx=ast.Load())
@@ -7962,6 +7970,7 @@ def _hoist_matmul(
     temp_arrays: Dict[str, Tuple[str, ...]],
     temp_counter: List[int],
     dim_aliases: Optional[Dict[str, str]] = None,
+    blas: bool = False,
 ) -> Tuple[Optional[str], List[ast.stmt]]:
     """Hoist a ``lhs @ rhs`` subexpression to a fresh temp array. Returns
     ``(temp_name, pre_stmts)``: caller substitutes ``temp_name`` for the matmul
@@ -8317,6 +8326,21 @@ def _hoist_matmul(
     if len(a_shape) == 2 and len(b_shape) == 2:
         m, k = a_shape
         _, n = b_shape
+        if blas:
+            # A bare Expr, NOT an assignment to the temp: an ``Assign`` whose target is an array is
+            # what the later elementwise/slice passes wrap in an iteration nest, which turned the
+            # gemm into a per-element call indexing its own operands. The allocation marker ahead of
+            # it carries what the assignment was needed for -- it stores to ``temp``, so the buffer
+            # is malloc'd and the name is never mistaken for a free one to promote to a parameter.
+            gemm = ast.Call(
+                func=_name(BLAS_GEMM_MARKER),
+                args=[
+                    _name(a_name), _name(b_name), _name(temp),
+                    _const_or_name(m), _const_or_name(n), _const_or_name(k)
+                ],
+                keywords=[],
+            )
+            return temp, [_alloc_marker(temp), ast.Expr(value=gemm)]
         stmts.append(
             ast.For(
                 target=_store("__i"),
@@ -8450,8 +8474,12 @@ class _MatmulHoister(ast.NodeTransformer):
     each get their own temp (chained ``A @ B @ C`` lifts to two temps fused
     left-to-right)."""
 
-    def __init__(self, shape_table, temp_arrays, temp_counter, local_dtypes=None, sparse=None, dim_aliases=None):
+    def __init__(
+        self, shape_table, temp_arrays, temp_counter, local_dtypes=None, sparse=None, dim_aliases=None, blas=False
+    ):
         self.shape_table = shape_table
+        #: Target renders a dense 2-D float GEMM as a BLAS call rather than a loop nest.
+        self.blas = blas
         self.temp_arrays = temp_arrays
         self.temp_counter = temp_counter
         self.local_dtypes: Dict[str, str] = local_dtypes if local_dtypes is not None else {}
@@ -8473,7 +8501,10 @@ class _MatmulHoister(ast.NodeTransformer):
                 self.pre_stmts.extend(self._prepend_alloc_markers(stmts))
                 return ast.Name(id=temp, ctx=ast.Load())
             node = self._materialise_call_operands(node)
-            temp, stmts = _hoist_matmul(node, self.shape_table, self.temp_arrays, self.temp_counter, self.dim_aliases)
+            temp, stmts = _hoist_matmul(
+                node, self.shape_table, self.temp_arrays, self.temp_counter, self.dim_aliases,
+                blas=self.blas and self._blas_eligible(node)
+            )
             if temp is not None:
                 self.pre_stmts.extend(self._prepend_alloc_markers(stmts))
                 # Propagate complex dtype across the matmul: if
@@ -8491,6 +8522,21 @@ class _MatmulHoister(ast.NodeTransformer):
                             break
                 return ast.Name(id=temp, ctx=ast.Load())
         return node
+
+    def _blas_eligible(self, node: ast.BinOp) -> bool:
+        """True when both operands are real floats, so a BLAS gemm computes the same contraction.
+
+        Integer, boolean and complex matmuls have no real-BLAS equivalent and keep the loop nest.
+        A complex literal anywhere in the subtree counts, matching how the caller tags the temp.
+        """
+        for sub_node in ast.walk(node):
+            if isinstance(sub_node, ast.Constant) and isinstance(sub_node.value, complex):
+                return False
+            if isinstance(sub_node, ast.Name):
+                dt = self.local_dtypes.get(sub_node.id, "")
+                if dt.startswith(BLAS_INELIGIBLE_DTYPES):
+                    return False
+        return True
 
     def _materialise_call_operands(self, node: ast.BinOp) -> ast.BinOp:
         """Spill a CALL-valued matmul operand to a temp array, so the hoister sees a bare Name.
@@ -8859,13 +8905,16 @@ class _CallHoister(ast.NodeTransformer):
     shape is inferred from its arguments.
     """
 
-    def __init__(self, shape_table, scalar_temps, array_temps, counter, local_dtypes=None, dim_aliases=None):
+    def __init__(
+        self, shape_table, scalar_temps, array_temps, counter, local_dtypes=None, dim_aliases=None, blas=False
+    ):
         self.shape_table = shape_table
         self.scalar_temps = scalar_temps
         self.array_temps = array_temps
         self.counter = counter
-        #: Forwarded to the nested ``_MatmulHoister`` (see its docstring).
+        #: Both forwarded to the nested ``_MatmulHoister`` (see its docstring).
         self.dim_aliases: Dict[str, str] = dim_aliases or {}
+        self.blas = blas
         # Side-effect dtype table (shared with the lowering pipeline)
         # so a ``__cb<n>`` whose RHS contains complex literals or
         # complex-typed Name references is tagged ``complex128``.
@@ -8914,6 +8963,7 @@ class _CallHoister(ast.NodeTransformer):
             local_dtypes=self.local_dtypes,
             sparse=vars(self).get("sparse"),
             dim_aliases=self.dim_aliases,
+            blas=self.blas,
         )
         node.args = [mm.visit(a) for a in node.args]
         self.pre_stmts.extend(mm.pre_stmts)
@@ -9830,8 +9880,12 @@ class LibNodeRewriter(ast.NodeTransformer):
         dim_aliases: Optional[Dict[str, str]] = None,
         native_call: Optional[Callable[[Tuple[str, str], ast.Call, Dict, Dict], bool]] = None,
         native_dtypes: Optional[Dict[str, str]] = None,
+        blas: bool = False,
     ):
         self.shape_table = shape_table
+        #: Target renders a dense 2-D float GEMM as a BLAS call. Threaded to the matmul hoister;
+        #: every other matmul shape (batched, transposed, matvec, sparse, non-float) keeps its loops.
+        self.blas = blas
         #: Target's "I render this numpy call myself" predicate. A call it claims is left
         #: UNEXPANDED so the emitter can use its own intrinsic -- Fortran's SUM/MAXVAL/NORM2 --
         #: instead of the loop nest every target would otherwise get. Default: claims nothing.
@@ -9881,6 +9935,7 @@ class LibNodeRewriter(ast.NodeTransformer):
             self._counter,
             local_dtypes=self.local_dtypes,
             dim_aliases=self.dim_aliases,
+            blas=self.blas,
         )
         call_hoister.sparse = self.sparse
         value = call_hoister.visit(value)
@@ -9893,6 +9948,7 @@ class LibNodeRewriter(ast.NodeTransformer):
             local_dtypes=self.local_dtypes,
             sparse=self.sparse,
             dim_aliases=self.dim_aliases,
+            blas=self.blas,
         )
         new_value = mm_hoister.visit(value)
         pre.extend(mm_hoister.pre_stmts)

@@ -12,10 +12,17 @@ from numpyto_common.lowering import lower
 from numpyto_common.emit_io import write_generated
 from numpyto_common.naming import entry_symbol, native_base, short_for
 
+#: Requested precisions a real BLAS gemm covers. "" is the manifest default (float64).
+BLAS_PRECISIONS = ("", "float32", "float64")
+
 
 def emit_once(args: argparse.Namespace) -> int:
     kir = parse_kernel(args.kernel, args.bench_info, config=args.config, precision=args.precision)
-    kir = lower(kir)
+    # C and C++ hand a dense 2-D float GEMM to BLAS. Pluto does NOT (see the pluto emit below).
+    # Gated on the REQUESTED precision, not the IR: ``apply_precision`` runs after lowering, so the
+    # hoister cannot see that a float64 kernel is about to become float16 -- and real BLAS has only
+    # single and double gemm, so any other precision has to keep the loop nest.
+    kir = lower(kir, blas=args.precision in BLAS_PRECISIONS)
     out = args.out
     out.mkdir(parents=True, exist_ok=True)
     # Kernel name from the input stem, independent of bench_info's short_name.
@@ -43,10 +50,18 @@ def emit_once(args: argparse.Namespace) -> int:
         return 0
     write_generated(out / f"{base}.c", emit_c(kir, fn_name=sym), line_comment="// ", source=src)
     write_generated(out / f"{base}.cpp", emit_cpp(kir, fn_name=sym), line_comment="// ", source=src)
-    write_generated(out / f"{base}_pluto_input.c", emit_pluto(kir, fn_name=sym), line_comment="// ", source=src)
+    # Pluto optimises the contraction itself, so it gets the loop-lowered matmul: a library call
+    # is opaque to the polyhedral scop and would put the kernel's main loop nest out of its reach.
+    # Re-parsed rather than shared, so neither lowering sees the other's rewrites.
+    pluto_kir = lower(parse_kernel(args.kernel, args.bench_info, config=args.config, precision=args.precision))
+    if args.precision:
+        pluto_kir = apply_precision(pluto_kir, args.precision)
+    write_generated(
+        out / f"{base}_pluto_input.c", emit_pluto(pluto_kir, fn_name=sym), line_comment="// ", source=src
+    )
     emit_binding(kir, out / f"{base}_binding.json", base_name=base, symbol=sym)
     # Pluto's VLA-param signature reorders args (symbols first), so it needs its own binding.
-    emit_pluto_binding(kir, out / f"{base}_pluto_binding.json", base_name=base, symbol=sym)
+    emit_pluto_binding(pluto_kir, out / f"{base}_pluto_binding.json", base_name=base, symbol=sym)
     print(f"numpyto_c: emitted {base}.{{c,cpp}} + {base}_pluto_input.c + {base}_binding.json")
     return 0
 

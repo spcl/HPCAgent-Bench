@@ -8709,6 +8709,8 @@ class LoweringContext:
         self.native_call: Optional[
             Callable[[Tuple[str, str], ast.Call, Dict[str, Tuple[str, ...]], Dict[str, str]], bool]
         ] = None
+        #: Target renders a dense 2-D float GEMM as a BLAS call; see :func:`lower`.
+        self.blas: bool = False
         #: The working (lowered) IR -- what :func:`lower` returns.
         self.kir = lowered
         #: Shortcut to the function-body AST every pass rewrites in place.
@@ -9141,6 +9143,7 @@ def _lp_libnode_expand(ctx: LoweringContext) -> None:
         dim_aliases=ctx.dim_aliases,
         native_call=ctx.native_call,
         native_dtypes={**{arr.name: arr.dtype for arr in ctx.kir.arrays}, **ctx.local_dtypes},
+        blas=ctx.blas,
     )
     ctx.lib_rewriter.visit(tree)
     # Second math rename: an intrinsic whose argument only becomes a SCALAR once the library
@@ -9771,6 +9774,7 @@ def lower(
     native_call: Optional[
         Callable[[Tuple[str, str], ast.Call, Dict[str, Tuple[str, ...]], Dict[str, str]], bool]
     ] = None,
+    blas: bool = False,
 ) -> KernelIR:
     """Return a lowered copy of ``kir`` ready for backend emission.
 
@@ -9789,9 +9793,11 @@ def lower(
     shapes are visible to it.
 
     Matmul (``A @ B`` / ``np.matmul`` -- normalised to ``@`` by
-    :class:`_MatmulCallRewriter`) is loop-lowered uniformly for every target;
-    the Fortran ``MATMUL`` intrinsic is reserved for the rare unresolved-shape
-    case the loop hoister cannot lower (handled in the Fortran emitter).
+    :class:`_MatmulCallRewriter`) is loop-lowered for every target EXCEPT a dense 2-D float
+    contraction under ``blas``, which becomes a :data:`lib_nodes.BLAS_GEMM_MARKER` call the
+    target's emitter renders as its own gemm. Every other shape -- batched, transposed, matvec,
+    sparse, non-float -- keeps the loop nest on every target. The Fortran ``MATMUL`` intrinsic is
+    reserved for the rare unresolved-shape case the loop hoister cannot lower (Fortran emitter).
 
     Set :data:`_INVARIANT_ENV` in the environment to run
     :func:`_assert_lowering_invariants` after every phase.
@@ -9802,6 +9808,7 @@ def lower(
     reset_temp_counters()
     ctx = LoweringContext(kir, copy.deepcopy(kir))
     ctx.native_call = native_call
+    ctx.blas = blas
     for _name, _phase in _LOWER_PHASES:
         _phase(ctx)
         if check is not None:
