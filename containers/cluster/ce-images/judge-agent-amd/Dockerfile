@@ -531,10 +531,18 @@ RUN set -eux; \
 #
 # MKL ships because intel_mkl / intel_mkl_mpich / intel_mkl_openmpi exist and this is x86_64.
 # OpenBLAS stays the SELECTED BLAS.
+#
+# `+openshmem` is NOT a request for OpenSHMEM. Spack's openmpi variant only ever ADDS
+# `--enable-oshmem` and never passes `--disable-oshmem`, while OpenMPI 5's configure builds
+# OSHMEM by default whenever a supported SPML is present -- which `fabrics=ucx` guarantees. So
+# OSHMEM is compiled either way, and the variant's only real effect at 5.0.0:5.0.10 is whether
+# spack applies the gcc-16 patch for it (ompi issue 13757: `mca_memheap_base_map = {{{{0}}}}`,
+# which gcc 16 rejects as `braces around scalar initializer` where gcc 15 warned). Under
+# `~openshmem` we paid for the OSHMEM build AND skipped its fix, so the build could only fail.
 RUN set -eux; \
     spack="${SPACK_ROOT}/bin/spack"; \
     "${spack}" install --fail-fast \
-      "openmpi@5 +rocm amdgpu_target=${ROCM_ARCH} fabrics=ucx %gcc@${GCC_VERSION} ^ucx +rocm"; \
+      "openmpi@5 +rocm +openshmem amdgpu_target=${ROCM_ARCH} fabrics=ucx %gcc@${GCC_VERSION} ^ucx +rocm"; \
     "${spack}" install --fail-fast "intel-oneapi-mkl %gcc@${GCC_VERSION}"; \
     "${spack}" clean --stage; \
     ln -sfn "$("${spack}" location -i openmpi)" /opt/openmpi; \
