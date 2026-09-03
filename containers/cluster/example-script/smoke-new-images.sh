@@ -102,10 +102,16 @@ for name in "${candidates[@]}"; do
   # the candidate had regressed. Each smoke prints the environment it opened, so a log carries the
   # proof. Keep this one command unbroken -- a comment between continuations ends it, and the tail
   # then submits with none of these set (620910/620911).
+  # DEPEND_ON chains the submission behind existing jobs (colon-separated), the same knob and the
+  # same reason as submit-git-scicomp.sh: beverin allows 36 nodes at once, and a smoke submitted
+  # into a full cluster does not queue politely -- it starts, and the campaign is over the cap.
+  dep=()
+  [[ -n "${DEPEND_ON:-}" ]] && dep=(--dependency="afterany:${DEPEND_ON}")
   env "${oss[@]}" "${sgl[@]}" \
   TUNED_MOE_DIR="${PWD}/../ce-images/inference/moe-configs" \
   PG_PATCH_DIR="${PWD}/../ce-images/inference/external-eager-pg-patch" \
   EDF="${edf}" INFERENCE_EDF="${edf}" sbatch --job-name="smoke-candidate-${name}" \
+    "${dep[@]}" \
     --nodes="${NODES[${name}]}" \
     --output="${SCRATCH}/ce-images/logs/smoke-candidate-${name}-%j.out" \
     --error="${SCRATCH}/ce-images/logs/smoke-candidate-${name}-%j.out" "${smoke}"
