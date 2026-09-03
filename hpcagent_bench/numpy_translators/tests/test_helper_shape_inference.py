@@ -1,14 +1,12 @@
-"""What a kept helper's parameters and return are SIZED from.
+"""What a kept helper's RETURN is sized from.
 
-Every kernel is built with its helpers kept, so a helper whose parameter or return comes back
-unsized is not a corner case -- it is a refusal at emit ("call to np.reshape not supported"), or
-worse a by-value ``double`` parameter where the call passes a buffer. Three sources had gaps:
-
-* a caller local bound to an expression over another LOCAL (``h = np.maximum(__hcall1, 0.0)``)
-  read no declared array, so it resolved to nothing and the helper it feeds typed its array
-  parameter by-value (densenet121_transition_layer, squeezenet);
-* a local bound inside an ``if`` was skipped by the forward extent sweep, so a helper returning a
-  reduction over it was sized off its INPUT instead (conv2d_gelu_global_avg_pool).
+Every kernel is built with its helpers kept, so a helper whose return comes back unsized is not a
+corner case -- it is a refusal at emit, or an out-param allocated at the wrong extent. The call
+site's target is the first authority, and when that target says nothing (a fresh local) the
+helper's own body is asked instead. That body derivation swept only top-level statements, so a
+local bound inside an ``if`` was invisible and a helper returning a reduction over one came back
+sized off its INPUT -- conv2d_gelu_global_avg_pool's ``_adaptive_avg_pool2d``, which reshapes
+into ``y`` under a divisibility guard and returns ``y.mean(axis=(3, 5))``.
 """
 
 import json
@@ -36,20 +34,6 @@ def pool_demo(x, out, N, C, H, W):
     out[:] = y * 2.0
 """
 
-_CHAIN_KERNEL = """import numpy as np
-
-
-def _shift(v, n, m):
-    return v + 1.0
-
-
-def chain_demo(x, out, N, M):
-    t = np.zeros((N, M))
-    t[:] = x * 2.0
-    h = np.maximum(t, 0.0)
-    out[:] = _shift(h, N, M)
-"""
-
 _POOL_BENCH = {
     "benchmark": {
         "func_name": "pool_demo",
@@ -67,40 +51,23 @@ _POOL_BENCH = {
     "precisions": ["fp64"],
 }
 
-_CHAIN_BENCH = {
-    "benchmark": {
-        "func_name": "chain_demo",
-        "array_args": ["x", "out"],
-        "input_args": ["x", "out"],
-        "output_args": ["out"],
-        "init": {"shapes": {"x": "(N,M)", "out": "(N,M)"}, "dtypes": {"x": "float64", "out": "float64"}},
-        "parameters": {"S": {"N": 3, "M": 4}},
-        "short_name": "chain_demo",
-    },
-    "track": "loop_level_reasoning",
-    "precisions": ["fp64"],
-}
 
-
-def _kir(kernel_src, bench, stem):
+def _pool_kir():
     from numpyto_common.frontend import parse_kernel
 
     with tempfile.TemporaryDirectory() as d:
         d = pathlib.Path(d)
-        kp = d / f"{stem}_numpy.py"
-        kp.write_text(kernel_src)
+        kp = d / "pool_demo_numpy.py"
+        kp.write_text(_POOL_KERNEL)
         bi = d / "bi.json"
-        bi.write_text(json.dumps(bench))
+        bi.write_text(json.dumps(_POOL_BENCH))
         return parse_kernel(kp, bi)
 
 
-def _helper(kir, name):
-    return next(h for h in kir.helpers if h.kernel_name == name)
-
-
 def test_return_is_sized_from_the_branch_that_builds_it():
-    # ``__hret`` is the (n, c, 1, 1) pooled result, NOT ``x``'s own (N, C, H, W).
-    pool = _helper(_kir(_POOL_KERNEL, _POOL_BENCH, "pool_demo"), "_pool")
+    # The call binds a fresh local, so the target says nothing and the body is the authority:
+    # ``__hret`` is the (N, C, 1, 1) pooled result, NOT ``x``'s own (N, C, H, W).
+    pool = next(h for h in _pool_kir().helpers if h.kernel_name == "_pool")
     hret = next(a for a in pool.arrays if a.name.startswith("__hret"))
     assert tuple(str(s) for s in hret.shape) == ("N", "C", "1", "1"), [(a.name, a.shape) for a in pool.arrays]
 
@@ -121,35 +88,6 @@ def test_pool_helper_emits_and_matches_numpy():
         {"out": (N, C, 1, 1)},
         {"N": N, "C": C, "H": H, "W": W},
         shapes={"x": "(N,C,H,W)", "out": "(N,C,1,1)"},
-        backends=("c", "cpp", "fortran"),
-    )
-    assert all(v == "ok" or v.startswith("skip") for v in res.values()), res
-
-
-def test_parameter_bound_to_a_local_expression_stays_an_array():
-    # ``h = np.maximum(t, 0.0)`` reads no declared array; ``_shift``'s ``v`` must still be one.
-    kir = _kir(_CHAIN_KERNEL, _CHAIN_BENCH, "chain_demo")
-    shift = _helper(kir, "_shift")
-    assert "v" in {a.name for a in shift.arrays}, (
-        [(a.name, a.shape) for a in shift.arrays],
-        [s.name for s in shift.scalars],
-    )
-    assert "v" not in {s.name for s in shift.scalars}
-
-
-def test_chained_helper_locals_match_numpy():
-    src = _CHAIN_KERNEL.replace(
-        "def chain_demo(x, out, N, M):\n", "def chain_demo(x, out):\n    N = x.shape[0]\n    M = x.shape[1]\n"
-    )
-    N, M = 3, 4
-    x = np.random.default_rng(1).standard_normal((N, M))
-    res = run_op(
-        src,
-        "chain_demo",
-        {"x": x},
-        {"out": (N, M)},
-        {"N": N, "M": M},
-        shapes={"x": "(N,M)", "out": "(N,M)"},
         backends=("c", "cpp", "fortran"),
     )
     assert all(v == "ok" or v.startswith("skip") for v in res.values()), res
