@@ -5882,6 +5882,358 @@ class _SsaRename(ast.NodeTransformer):
         return node
 
 
+#: Extent token for an axis pinned to one element (a newaxis or a 1-long slice).
+_ONE = "1"
+
+
+def _bcast_tokens(a: List[str], b: List[str]) -> List[str]:
+    """numpy's right-aligned broadcast over two extent-token vectors.
+
+    Two non-``1`` tokens spelled differently (``pos.shape[1]`` vs ``apos.shape[1]``) name the SAME
+    extent under numpy's rules -- the source would not run otherwise -- so either one answers."""
+    n = max(len(a), len(b))
+    a = [_ONE] * (n - len(a)) + list(a)
+    b = [_ONE] * (n - len(b)) + list(b)
+    return [y if x == _ONE else x for x, y in zip(a, b)]
+
+
+def _is_full_slice(e: ast.AST) -> bool:
+    """A bare ``:`` entry -- it keeps its base axis whole."""
+    return isinstance(e, ast.Slice) and (e.lower, e.upper, e.step) == (None, None, None)
+
+
+def _slice_extent_token(e: ast.Slice, base: Optional[str]) -> Optional[str]:
+    """A ``Slice`` entry's extent as a source token, or None when it cannot be read off the text."""
+    if e.step is not None:
+        return None
+    if e.lower is None and e.upper is None:
+        return base
+    lo = 0 if e.lower is None else _const_int(e.lower)
+    hi = None if e.upper is None else _const_int(e.upper)
+    if lo is not None and hi is not None:
+        return str(hi - lo) if hi >= lo else None
+    if lo == 0 and e.upper is not None:
+        return ast.unparse(e.upper)
+    return None
+
+
+def _one_slice_index(e: ast.Slice) -> Optional[ast.expr]:
+    """A constant 1-long slice's single index -- ``a[..., 0:1, ...]`` IS that element. numba's
+    parfor analysis equates a length-1 axis with a length-N one instead of broadcasting it, so a
+    leading singleton has to disappear entirely rather than merely shrink."""
+    if e.step is not None or _slice_extent_token(e, None) != _ONE:
+        return None
+    return copy.deepcopy(e.lower) if e.lower is not None else ast.Constant(value=0)
+
+
+def _without_leading_newaxis(e: ast.expr) -> Optional[ast.expr]:
+    """``x[None, :]`` -> ``x``, or None when there is no LEADING newaxis to drop. numpy prepends
+    the singleton back when the operand broadcasts, so the two spell one value."""
+    if not isinstance(e, ast.Subscript):
+        return None
+    if _is_newaxis(e.slice):
+        return e.value
+    if not isinstance(e.slice, ast.Tuple):
+        return None
+    entries = list(e.slice.elts)
+    n = 0
+    while n < len(entries) and _is_newaxis(entries[n]):
+        n += 1
+    if n == 0:
+        return None
+    rest = entries[n:]
+    while rest and _is_full_slice(rest[-1]):
+        rest.pop()
+    if not rest:
+        return e.value
+    sl = rest[0] if len(rest) == 1 else ast.Tuple(elts=rest, ctx=ast.Load())
+    return ast.Subscript(value=e.value, slice=sl, ctx=ast.Load())
+
+
+def _scalar_index(e: ast.AST, ranks: Dict[str, int]) -> bool:
+    """A subscript entry that CONSUMES its base axis and contributes none. An unknown-rank Name
+    reads as a scalar -- the same reading :func:`expr_rank` already gives an index it cannot rank."""
+    if isinstance(e, ast.Constant):
+        return isinstance(e.value, int) and not isinstance(e.value, bool)
+    return isinstance(e, ast.Name) and ranks.get(e.id, 0) == 0
+
+
+def _expr_of(src: str) -> ast.expr:
+    return ast.parse(src, mode="eval").body
+
+
+class _OuterBroadcastPeel(ast.NodeTransformer):
+    """Peel an OUTER-PRODUCT broadcast's outermost axis into an explicit loop (numba only).
+
+    numba's parfor array analysis equates the operands of an elementwise expression and asserts
+    ``Sizes of $a, $b do not match`` when two of them put a non-1 extent in DIFFERENT axes --
+    floyd's ``path[:, k][:, None] + path[k, :][None, :]`` ((N,1) with (1,N)), gem's
+    ``pos[:, None, :] - apos[None, :, :]``. It fires only under ``parallel=True``, which is the one
+    numba build the benchmark measures, so the kernels cannot answer it by going serial.
+
+    Indexing the outermost axis explicitly leaves every row an ordinary broadcast the analysis
+    accepts, and the row is still an array expression the parfor pass parallelises. Reshaping the
+    operands, ``np.add.outer`` and hoisting the two halves into locals were each measured to keep
+    failing, so the loop peel is the only form that both compiles and stays parallel.
+
+    Extents are read off the SOURCE TEXT as ``<name>.shape[k]`` tokens over the rank table: a kir
+    shape symbol (gem's atom count) is not a name the kernel signature binds, so it cannot be
+    emitted. An operand whose axes cannot be placed that way declines the whole statement -- a
+    wrong rewrite changes numbers silently, a declined one only leaves the bug in place."""
+
+    def __init__(self, ranks: Dict[str, int]) -> None:
+        self.ranks = ranks
+        self.changed = False
+        self._ctr = 0
+
+    def _operands(self, node: ast.AST) -> Optional[List[ast.expr]]:
+        """The operands an elementwise node broadcasts together, or None when it is not one."""
+        if isinstance(node, ast.BinOp):
+            return None if isinstance(node.op, ast.MatMult) else [node.left, node.right]
+        if isinstance(node, ast.Compare):
+            return [node.left, *node.comparators]
+        if isinstance(node, ast.BoolOp):
+            return list(node.values)
+        if _np_attr(node) == "where" and len(node.args) == 3 and not node.keywords:
+            return list(node.args)
+        return None
+
+    def _combine(self, nodes: List[ast.expr]) -> Optional[List[str]]:
+        out: List[str] = []
+        for n in nodes:
+            ext = self._extents(n)
+            if ext is None:
+                return None
+            out = _bcast_tokens(out, ext)
+        return out
+
+    def _extents(self, expr: ast.AST) -> Optional[List[str]]:
+        """Per-axis extent tokens of an expression, or None when this pass cannot place its axes."""
+        if isinstance(expr, ast.Constant):
+            return [] if isinstance(expr.value, (bool, int, float, complex)) else None
+        if isinstance(expr, ast.Name):
+            return [f"{expr.id}.shape[{k}]" for k in range(self.ranks.get(expr.id, 0))]
+        if isinstance(expr, ast.UnaryOp):
+            return self._extents(expr.operand)
+        ops = self._operands(expr)
+        if ops is not None:
+            return self._combine(ops)
+        if isinstance(expr, ast.Subscript):
+            axes = self._axes(expr)
+            return None if axes is None else [ext for _, _, ext in axes]
+        return None
+
+    def _axes(self, sub: ast.Subscript):
+        """``(entry index or None, kind, extent token)`` per OUTPUT axis of a subscript."""
+        if not isinstance(sub.value, (ast.Name, ast.Subscript)):
+            return None  # a computed base would have to be peeled THROUGH, which this pass does not do
+        base = self._extents(sub.value)
+        if base is None:
+            return None
+        entries = list(sub.slice.elts) if isinstance(sub.slice, ast.Tuple) else [sub.slice]
+        axes, bi = [], 0
+        for i, e in enumerate(entries):
+            if _is_newaxis(e):
+                axes.append((i, "new", _ONE))
+            elif isinstance(e, ast.Slice):
+                if bi >= len(base):
+                    return None
+                ext = _slice_extent_token(e, base[bi])
+                if ext is None:
+                    return None
+                axes.append((i, "slice", ext))
+                bi += 1
+            elif _scalar_index(e, self.ranks):
+                bi += 1
+            else:
+                return None
+        if bi > len(base):
+            return None
+        axes.extend((None, "tail", base[k]) for k in range(bi, len(base)))
+        return axes
+
+    def _outer_product(self, value: ast.AST, rank: int) -> bool:
+        """True when some elementwise node of THIS rank puts two operands' non-1 extents in
+        different axes, one of them axis 0 -- exactly the shape numba's analysis asserts on, and
+        exactly the one peeling axis 0 dissolves."""
+        for node in ast.walk(value):
+            ops = self._operands(node)
+            if ops is None:
+                continue
+            exts = [self._extents(o) for o in ops]
+            if any(e is None or len(e) > rank for e in exts):
+                continue
+            if max((len(e) for e in exts), default=0) != rank:
+                continue
+            padded = [[_ONE] * (rank - len(e)) + e for e in exts]
+            for a in padded:
+                for b in padded:
+                    if a[0] == _ONE or b[0] != _ONE:
+                        continue
+                    if any(a[j] == _ONE and b[j] != _ONE for j in range(1, rank)):
+                        return True
+        return False
+
+    def _peel(self, expr: ast.expr, idx: str, rank: int) -> Optional[ast.expr]:
+        ext = self._extents(expr)
+        if ext is None or len(ext) > rank:
+            return None
+        if len(ext) < rank:
+            return expr  # a lower-rank operand broadcasts along the peeled axis untouched
+        if isinstance(expr, ast.UnaryOp):
+            operand = self._peel(expr.operand, idx, rank)
+            return None if operand is None else ast.UnaryOp(op=expr.op, operand=operand)
+        ops = self._operands(expr)
+        if ops is not None:
+            peeled = [self._peel(o, idx, rank) for o in ops]
+            return None if any(p is None for p in peeled) else self._rebuild(expr, peeled)
+        if isinstance(expr, ast.Name):
+            return ast.Subscript(value=expr, slice=_expr_of(idx), ctx=ast.Load())
+        if isinstance(expr, ast.Subscript):
+            return self._peel_subscript(expr, idx)
+        return None
+
+    def _rebuild(self, expr: ast.expr, peeled: List[ast.expr]) -> ast.expr:
+        if isinstance(expr, ast.BinOp):
+            return ast.BinOp(left=peeled[0], op=expr.op, right=peeled[1])
+        if isinstance(expr, ast.Compare):
+            return ast.Compare(left=peeled[0], ops=expr.ops, comparators=peeled[1:])
+        if isinstance(expr, ast.BoolOp):
+            return ast.BoolOp(op=expr.op, values=peeled)
+        return ast.Call(func=expr.func, args=peeled, keywords=[])
+
+    def _peel_subscript(self, sub: ast.Subscript, idx: str) -> Optional[ast.expr]:
+        axes = self._axes(sub)
+        if not axes:
+            return None
+        entries = list(sub.slice.elts) if isinstance(sub.slice, ast.Tuple) else [sub.slice]
+        pos, kind, ext0 = axes[0]
+        if pos is None:
+            if ext0 == _ONE:
+                return None
+            entries = entries + [_expr_of(idx)]  # axis 0 is an unindexed trailing base axis
+        elif kind == "new":
+            entries = entries[:pos] + entries[pos + 1 :]
+        else:
+            e = entries[pos]
+            if ext0 == _ONE:
+                repl = e.lower if e.lower is not None else ast.Constant(value=0)
+            elif e.lower is None or _const_int(e.lower) == 0:
+                repl = _expr_of(idx)
+            elif isinstance(e.lower, (ast.Name, ast.Constant)):
+                repl = ast.BinOp(left=copy.deepcopy(e.lower), op=ast.Add(), right=_expr_of(idx))
+            else:
+                return None
+            entries = entries[:pos] + [repl] + entries[pos + 1 :]
+        return self._tidy(sub.value, entries)
+
+    def _tidy(self, base: ast.expr, entries: List[ast.expr]) -> ast.expr:
+        """Drop the entries the peel made redundant: every LEADING singleton out-axis (numpy
+        prepends those back when the row broadcasts, and numba's analysis chokes on them) and
+        every TRAILING full slice (``a[i, :]`` IS ``a[i]``)."""
+        kept: List[ast.expr] = []
+        for i, e in enumerate(entries):
+            if _is_newaxis(e):
+                continue
+            if isinstance(e, ast.Slice):
+                lone = _one_slice_index(e)
+                if lone is None:
+                    kept.extend(entries[i:])
+                    break
+                kept.append(lone)
+                continue
+            kept.append(e)
+        while kept and _is_full_slice(kept[-1]):
+            kept.pop()
+        if not kept:
+            return base
+        sl = kept[0] if len(kept) == 1 else ast.Tuple(elts=kept, ctx=ast.Load())
+        return ast.Subscript(value=base, slice=sl, ctx=ast.Load())
+
+    def _store_base(self, target: ast.AST, rank: int) -> Optional[str]:
+        """``T[:]`` / ``T[:, :]`` over a rank-``rank`` ``T`` -> ``T``; anything else declines."""
+        if not (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)):
+            return None
+        entries = list(target.slice.elts) if isinstance(target.slice, ast.Tuple) else [target.slice]
+        if not all(_is_full_slice(e) for e in entries) or len(entries) > rank:
+            return None
+        return target.value.id if self.ranks.get(target.value.id) == rank else None
+
+    def _drop_newaxes(self, value: ast.AST) -> None:
+        """Drop every LEADING newaxis the enclosing broadcast makes redundant.
+
+        gem's ``charge[np.newaxis, :] * np.exp(-kappa * r)`` is the second half of the same numba
+        defect: the analysis equates the (1, natoms) operand with the (npoints, natoms) one instead
+        of broadcasting the singleton. ``charge`` alone broadcasts identically -- but only while the
+        node's rank does not move, which is what :func:`expr_rank` is asked here."""
+        for node in ast.walk(value):
+            ops = self._operands(node)
+            rank = None if ops is None else expr_rank(node, self.ranks)
+            if rank is None:
+                continue
+            for i, operand in enumerate(ops):
+                bare = _without_leading_newaxis(operand)
+                if bare is None:
+                    continue
+                trial = list(ops)
+                trial[i] = bare
+                if expr_rank(self._rebuild(node, trial), self.ranks) != rank:
+                    continue
+                ops[i] = bare
+                self._replace(node, i, bare)
+                self.changed = True
+
+    def _replace(self, node: ast.AST, i: int, operand: ast.expr) -> None:
+        if isinstance(node, ast.BinOp):
+            node.left, node.right = (operand, node.right) if i == 0 else (node.left, operand)
+        elif isinstance(node, ast.Compare):
+            if i == 0:
+                node.left = operand
+            else:
+                node.comparators[i - 1] = operand
+        elif isinstance(node, ast.BoolOp):
+            node.values[i] = operand
+        else:
+            node.args[i] = operand
+
+    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+        if len(node.targets) != 1:
+            return node
+        self._drop_newaxes(node.value)
+        ext = self._extents(node.value)
+        if ext is None or len(ext) < 2 or ext[0] == _ONE or not self._outer_product(node.value, len(ext)):
+            return node
+        rank = len(ext)
+        target = node.targets[0]
+        base = target.id if isinstance(target, ast.Name) else self._store_base(target, rank)
+        # A target the value also READS is a whole-array update: row i would see the rows the loop
+        # already rewrote, which numpy's all-at-once semantics never do.
+        if base is None or any(isinstance(n, ast.Name) and n.id == base for n in ast.walk(node.value)):
+            return node
+        temp, ivar = f"__ob{self._ctr}", f"__ob{self._ctr}_i"
+        row = self._peel(copy.deepcopy(node.value), ivar, rank)
+        probe = self._peel(copy.deepcopy(node.value), "0", rank)
+        if row is None or probe is None:
+            return node
+        self._ctr += 1
+        self.changed = True
+        out: List[ast.stmt] = []
+        if isinstance(target, ast.Name):
+            # A bare Name is a BINDING, so the loop alone would leave it unbound. The probe row
+            # carries the promoted dtype (mandelbrot's ``X + Y[:, None] * 1j`` is complex, which
+            # neither operand is); only its dtype is read, never its values.
+            out.append(ast.Assign(targets=[ast.Name(id=temp, ctx=ast.Store())], value=probe))
+            out.append(ast.parse(f"{base} = np.empty(({', '.join(ext)},), {temp}.dtype)").body[0])
+        store = ast.parse(f"{base}[{ivar}] = 0").body[0]
+        store.value = row
+        loop = ast.parse(f"for {ivar} in range({ext[0]}): pass").body[0]
+        loop.body = [store]
+        out.append(loop)
+        for s in out:
+            ast.copy_location(s, node)
+        return out
+
+
 def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) -> str:
     """Rewrite ``source`` so numba/pythran/dace can compile it: expand numpy
     ops they don't support (batched ``@``/``np.matmul``, ``np.pad``,
@@ -5977,6 +6329,9 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
             _IntMatmulInline(ranks, dtypes),
             _ComplexAccessorToFunc(conjugate_only=True),
             _ElementalUfuncToPrimitive(),
+            # numba only, and LAST of the rewrites: it peels an outer-product broadcast into a
+            # loop, and a pass running after it would have to see through the loop to match.
+            *([_OuterBroadcastPeel(ranks)] if backend == "numba" else []),
             # LAST: every pass above matches BY NAME through a table built before the loop
             # (ranks / dtypes / consts / noncontig / masked_gathers), so a rename ahead of
             # them turns every lookup into a miss and silently switches those passes off.
