@@ -54,5 +54,13 @@ for name in "${candidates[@]}"; do
     printf 'mounts = [\n  "/capstor:/capstor",\n  "/iopsstor:/iopsstor"\n]\n'
   } > "${edf}"
   printf '%-12s EDF=%s\n' "${name}" "${edf}"
-  EDF="${edf}" sbatch --job-name="smoke-candidate-${name}" "${smoke}"
+  # PG_PATCH_DIR: the eager-PG smoke insists on an EXTERNAL sitecustomize.py, from the era when the
+  # patch was injected at run time. The candidate images bake it in (vllm/Dockerfile COPYs it to
+  # /opt/vllm-eager-pg), so this only satisfies the smoke's precondition with the identical file
+  # rather than changing what is tested; without it the job exits in one second (620856).
+  # Logs to scratch, not to logs/ under the submit directory -- that is the source tree.
+  PG_PATCH_DIR="${PWD}/../ce-images/inference/external-eager-pg-patch" \
+  EDF="${edf}" sbatch --job-name="smoke-candidate-${name}" \
+    --output="${SCRATCH}/ce-images/logs/smoke-candidate-${name}-%j.out" \
+    --error="${SCRATCH}/ce-images/logs/smoke-candidate-${name}-%j.out" "${smoke}"
 done
