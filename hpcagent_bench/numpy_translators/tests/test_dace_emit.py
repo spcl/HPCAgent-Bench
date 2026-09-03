@@ -32,6 +32,7 @@ from numpyto_c.dace_emit import (
     NormalizeReshape,
     PointwiseScatterToLoop,
     ResolveInferredReshape,
+    DesugarContractionFreeEinsum,
     ResolveShapeReads,
     RewriteBuiltinDtype,
     rank_of_subscript,
@@ -44,6 +45,7 @@ from numpyto_c.dace_emit import (
     _ResolveZeros,
     _RewriteFrameworkDtype,
     _SplitReassignedSize,
+    _array_annotation,
     _dace_dtype,
     _float_names,
     _inline_symbol_aliases,
@@ -191,6 +193,41 @@ def test_promoted_shape_symbol_is_positive_without_a_manifest():
     kir.symbols.extend([SymbolDesc(name="NBR"), SymbolDesc(name="UNSEEN")])
     stamp_symbol_assumptions(kir)
     assert [s.assumption for s in kir.symbols] == ["positive", ""]
+
+
+def test_a_declared_extent_spells_floor_division_the_way_the_frontend_does():
+    """A signature annotation is evaluated by PYTHON, the body is parsed by dace, and the two do
+    not agree on ``//``: sympy answers ``floor(x/2 + 1/2)`` and dace's parser answers
+    ``int_floor(x, 2)``. One extent then reaches the write under two spellings and the broadcast is
+    refused -- conv_standard_1d_dilated_strided, the moment its stride stopped being 1."""
+    pytest.importorskip("dace")
+    import dace as dc
+    import sympy
+    from dace import symbolic
+
+    text = "(L - 2 * (K - 1) - 1) // 2 + 1"
+    emitted = _array_annotation(ArrayDesc(name="out", dtype="float64", shape=(text,)))
+    assert emitted == "dc_float[dc.symbolic.int_floor(L - 2 * (K - 1) - 1, 2) + 1]"
+    scope = {
+        "dc": dc,
+        "L": dc.symbol("L", dtype=dc.int64, positive=True),
+        "K": dc.symbol("K", dtype=dc.int64, positive=True),
+    }
+    extent = eval(emitted[len("dc_float[") : -1], scope)  # noqa: S307 -- the annotation, as python runs it
+    assert extent.atoms(symbolic.int_floor) and not extent.atoms(sympy.floor)
+    # premise: the `//` this replaced is the sympy head the body's spelling never carries
+    assert eval(text, scope).atoms(sympy.floor)  # noqa: S307
+
+
+def test_a_declared_extent_whose_divisor_is_one_still_folds_to_the_dividend():
+    """The corpus spelling that always worked: ``groups`` is 1, so both readings fold away. The
+    respelling must leave it exactly there rather than freeze an ``int_floor(C, 1)`` node."""
+    pytest.importorskip("dace")
+    import dace as dc
+
+    emitted = _array_annotation(ArrayDesc(name="w", dtype="float64", shape=("C // 1",)))
+    scope = {"dc": dc, "C": dc.symbol("C", dtype=dc.int64, positive=True)}
+    assert eval(emitted[len("dc_float[") : -1], scope) == scope["C"]  # noqa: S307
 
 
 def test_known_kernels_discovered():
@@ -961,6 +998,45 @@ def test_ascontiguousarray_becomes_the_copy_dace_does_have():
     out = ast.unparse(_DesugarUnreplacedCalls().visit(ast.parse(src)))
     assert "ascontiguousarray" not in out
     assert "np.transpose(ctx, (0, 2, 1, 3)).copy()" in out
+
+
+def _einsum(src):
+    """Run ``DesugarContractionFreeEinsum`` over one expression and unparse the result."""
+    return ast.unparse(ast.fix_missing_locations(DesugarContractionFreeEinsum().visit(ast.parse(src, mode="eval"))))
+
+
+def test_a_contraction_free_einsum_becomes_the_broadcast_product_it_is():
+    """lulesh's hourglass term. Nothing is summed, so dace's GEMM path mints a K=1 batched MatMul
+    whose views collapse to ``[numElem, 4]`` and ``[numElem, 8]`` -- shapes that never conform as a
+    matrix product. The broadcast spelling is the same value with no library node at all."""
+    assert _einsum("np.einsum('ei,ek->eik', hx, dvdx)") == "hx[:, :, None] * dvdx[:, None, :]"
+    # ``optimize`` names a contraction ORDER, and there is no contraction to order.
+    assert _einsum("np.einsum('ei,ek->eik', hx, dvdx, optimize=True)") == "hx[:, :, None] * dvdx[:, None, :]"
+    # The unbatched case is exactly np.outer, and an output permutation needs no transpose here.
+    assert _einsum("np.einsum('i,k->ik', a, b)") == "a[:, None] * b[None, :]"
+    assert _einsum("np.einsum('ei,ek->eki', a, b)") == "a[:, None, :] * b[:, :, None]"
+
+
+def test_an_einsum_that_actually_contracts_keeps_its_einsum():
+    """The rewrite is only ever a product, so anything that sums, takes a diagonal, or would need a
+    transpose stays as written -- including the conv contractions the ML track emits."""
+    for spec, args in (
+        ("eik,ek->ei", "hourgam, vd"),  # sums k
+        ("ei,eik->ek", "hxx, hourgam"),  # sums i
+        ("ij,jk->ik", "a, b"),  # an ordinary gemm
+        ("ngidhw,gio->ngodhw", "x, w"),  # conv_transposed_3d, sums i
+        ("ii,k->ik", "a, b"),  # a diagonal, not a product
+        ("ei,ek->ike", "a, b"),  # axes reach the output out of order
+    ):
+        src = f"np.einsum('{spec}', {args})"
+        assert _einsum(src) == src, spec
+    # An implicit output, a third operand, and ``out=`` each change what the call means.
+    for src in (
+        "np.einsum('ei,ek', a, b)",
+        "np.einsum('ei,ek,em->eikm', a, b, c)",
+        "np.einsum('ei,ek->eik', a, b, out=z)",
+    ):
+        assert _einsum(src) == src, src
 
 
 # --------------------------------------------------------------------------- #

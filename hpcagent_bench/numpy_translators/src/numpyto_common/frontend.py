@@ -4555,6 +4555,16 @@ def helper_call_local_arrays(owner_fn: ast.FunctionDef, helper_defs, arr_by, sca
     more than once, a call whose arity does not match, and a return whose extents do not respell
     into names the caller holds are all left OUT: absent is what every consumer already handles,
     a guess is what this exists to stop.
+
+    A chain is not only helper calls. conv_transpose3d_scale_batch_norm_global_avg_pool writes
+    ``h2 = h1 * scale_factor`` between two of them, and conv2d_gelu_global_avg_pool's whole chain
+    becomes plain locals once its first two helpers are inlined. Those links are carried here too
+    -- same forward pass, extents through :func:`_iter_extent_of` against the table built so far --
+    because dropping one drops every helper downstream of it: the argument resolves to nothing, the
+    parameter is typed by-value, and the helper indexes a double. This is a CLASSIFYING pass, not a
+    guessing one: a statement is read only when every name it reads is already known to be an array
+    or a scalar, so the broadcast-hint answer ``_iter_extent_of`` gives for a half-resolved operand
+    pair is never reached.
     """
     hdefs = {h.name: h for h in helper_defs}
     if not hdefs:
@@ -4572,45 +4582,194 @@ def helper_call_local_arrays(owner_fn: ast.FunctionDef, helper_defs, arr_by, sca
         | set(_shape_symbols(arr_by.values()))
         | {a.arg for a in owner_fn.args.args}
     )
-    sites = sorted((n for n in ast.walk(owner_fn) if isinstance(n, ast.Assign)), key=lambda n: (n.lineno, n.col_offset))
+    sites = _assigns_in_run_order(owner_fn)
     before = _held_before_table(owner_fn)
-    known = dict(arr_by)
-    found: Dict[str, ArrayDesc] = {}
-    for site in sites:
-        if len(site.targets) != 1 or not isinstance(site.targets[0], ast.Name):
-            continue
-        name = site.targets[0].id
-        call = site.value
-        if (
-            name in known
-            or bindings.get(name) != 1
-            or not isinstance(call, ast.Call)
-            or not isinstance(call.func, ast.Name)
-            or call.func.id not in hdefs
-            or call.keywords
-        ):
-            continue
-        hfn = hdefs[call.func.id]
-        pnames = [a.arg for a in hfn.args.args]
-        if len(call.args) != len(pnames):
-            continue
-        shape, dtype = _helper_return_shape_from_body(hfn, pnames, call.args, known, sca_by, sym_by, owner_fn)
-        if shape is None:
-            continue
-        site_held = held | before.get(id(site), before[None])
-        try:
-            tokens = _caller_side_shape(shape, site_held, pnames, call.args, hfn, call.func.id, known)
-        except NotImplementedError:
-            continue  # the callee sizes itself through more of its own locals than the chase follows
-        free = set()
-        for token in tokens:
-            free |= value_names(ast.parse(str(token), mode="eval"))
-        if not free <= site_held:
-            continue  # an extent the caller cannot name is not a shape the caller can be told
-        desc = ArrayDesc(name=name, dtype=dtype, shape=tuple(tokens), is_output=False)
-        known[name] = desc
-        found[name] = desc
-    return found
+    # Names already known NOT to carry an extent: the caller's own scalars and shape symbols, plus
+    # every loop induction variable. A plain statement is read only when its operands are all in
+    # here or in the array table; anything else leaves its target unclassified, which is what keeps
+    # a half-resolved expression from being sized by whichever operand happened to answer.
+    base_scalars = (
+        {s.name for s in sca_by.values()}
+        | {s.name for s in sym_by.values()}
+        | set(_shape_symbols(arr_by.values()))
+        | {
+            t.id
+            for n in ast.walk(owner_fn)
+            if isinstance(n, ast.For)
+            for t in ast.walk(n.target)
+            if isinstance(t, ast.Name)
+        }
+    )
+
+    def sweep(rebound_ok: bool) -> Tuple[Dict[str, ArrayDesc], bool]:
+        """One forward pass. ``rebound_ok`` also reads a name the body binds more than once,
+        keeping its FIRST resolved shape; the flag returned says whether every such name's other
+        bindings came back with that same shape, which is what makes the assumption a fixpoint
+        rather than a guess."""
+        known = dict(arr_by)
+        found: Dict[str, ArrayDesc] = {}
+        scalar_names = set(base_scalars)
+        per_binding: Dict[str, List[Tuple[str, ...]]] = {}
+        for site in sites:
+            if len(site.targets) != 1 or not isinstance(site.targets[0], ast.Name):
+                continue
+            name = site.targets[0].id
+            call = site.value
+            count = bindings.get(name, 0)
+            if name in arr_by or count == 0 or (count > 1 and not rebound_ok):
+                continue
+            site_held = held | before.get(id(site), before[None])
+            desc: Optional[ArrayDesc] = None
+            if (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Name)
+                and call.func.id in hdefs
+                and not call.keywords
+            ):
+                desc = _helper_call_local(call, hdefs, known, sca_by, sym_by, owner_fn, site_held, name)
+            else:
+                desc = _plain_local_array(site, known, scalar_names, site_held)
+                if desc is None and _reads_no_array(call, known):
+                    scalar_names.add(name)
+            if desc is None:
+                continue
+            per_binding.setdefault(name, []).append(tuple(str(s) for s in desc.shape))
+            if name not in found:
+                known[name] = desc
+                found[name] = desc
+        settled = all(
+            len(shapes) == bindings[name] and len(set(shapes)) == 1
+            for name, shapes in per_binding.items()
+            if bindings[name] > 1
+        )
+        return found, settled
+
+    found, settled = sweep(True)
+    # A rebound local whose bindings do NOT agree makes every extent read off the first one
+    # suspect, so nothing from that pass is kept -- the strict pass, which never looked at a
+    # rebound name, is the answer instead.
+    return found if settled else sweep(False)[0]
+
+
+def _helper_call_local(
+    call: ast.Call,
+    hdefs: Dict[str, ast.FunctionDef],
+    known: Dict[str, ArrayDesc],
+    sca_by,
+    sym_by,
+    owner_fn: ast.FunctionDef,
+    site_held: Set[str],
+    name: str,
+) -> Optional[ArrayDesc]:
+    """The descriptor a caller local gets from the USER HELPER whose call binds it, or ``None``.
+
+    The helper is asked with this site's literal arguments already bound into a COPY of its body,
+    the same specialisation :func:`_build_helper_kirs` performs before it reads any extent. Asked
+    raw, resnet101's ``_conv2d`` binds ``oh`` twice -- once in the 1x1 branch, once in the general
+    one -- and ``_caller_side_symbol`` declines a symbol that is not bound exactly once, so every
+    one of its hundred-odd specialisations went unresolved and each following layer's input with it.
+    """
+    hfn = hdefs[call.func.id]
+    pnames = [a.arg for a in hfn.args.args]
+    if len(call.args) != len(pnames):
+        return None
+    consts = {pn: a for pn, a in zip(pnames, call.args) if _literal_call_arg(a)}
+    if consts:
+        hfn = copy.deepcopy(hfn)
+        _bind_call_constants(hfn, consts)
+    shape, dtype = _helper_return_shape_from_body(hfn, pnames, call.args, known, sca_by, sym_by, owner_fn)
+    if shape is None:
+        return None
+    try:
+        tokens = _caller_side_shape(shape, site_held, pnames, call.args, hfn, call.func.id, known)
+    except NotImplementedError:
+        return None  # the callee sizes itself through more of its own locals than the chase follows
+    free: Set[str] = set()
+    for token in tokens:
+        free |= value_names(ast.parse(str(token), mode="eval"))
+    if not free <= site_held:
+        return None  # an extent the caller cannot name is not a shape the caller can be told
+    return ArrayDesc(name=name, dtype=dtype, shape=tuple(tokens), is_output=False)
+
+
+def _assigns_in_run_order(fn: ast.FunctionDef) -> List[ast.Assign]:
+    """Every ``name = ...`` in ``fn``, in the order the statements RUN.
+
+    Not by position: inlining SPLICES a helper's statements into the caller verbatim, so they keep
+    the callee DEF's line numbers and sort ahead of the caller statements they actually follow.
+    conv_transpose3d's inlined ``_batch_norm`` tail carried line 34 into a body whose surrounding
+    statements are at 136 and 146, so a forward pass over sorted positions read it before the
+    local it is computed from and resolved nothing.
+    """
+    out: List[ast.Assign] = []
+
+    def walk(body: List[ast.stmt]) -> None:
+        for stmt in body:
+            if isinstance(stmt, ast.Assign):
+                out.append(stmt)
+            elif isinstance(stmt, (ast.For, ast.AsyncFor, ast.While, ast.If)):
+                walk(stmt.body)
+                walk(stmt.orelse)
+            elif isinstance(stmt, (ast.With, ast.AsyncWith)):
+                walk(stmt.body)
+
+    walk(fn.body)
+    return out
+
+
+def _rhs_value_names(value: ast.expr) -> Set[str]:
+    """Every name a statement's RHS reads as a VALUE. A call's own Name callee (``int(...)``) and
+    the numpy module are spellings, not operands, so neither has to be classified."""
+    callees = {id(n.func) for n in ast.walk(value) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+    return {
+        n.id
+        for n in ast.walk(value)
+        if isinstance(n, ast.Name)
+        and isinstance(n.ctx, ast.Load)
+        and id(n) not in callees
+        and n.id not in ("np", "numpy", "math")
+    }
+
+
+def _reads_no_array(value: ast.expr, known: Dict[str, ArrayDesc]) -> bool:
+    """Whether the RHS reads nothing that carries an extent -- so its target is a scalar rather
+    than an array this pass merely failed to size (``head_dim = embed_dim // num_heads``)."""
+    return not (_rhs_value_names(value) & set(known))
+
+
+def _plain_local_array(
+    site: ast.Assign, known: Dict[str, ArrayDesc], scalar_names: Set[str], site_held: Set[str]
+) -> Optional[ArrayDesc]:
+    """The descriptor for ``name = <numpy expression>`` when the caller can be TOLD that shape.
+
+    Declines unless every name the expression reads is already classified -- an array in ``known``
+    or a scalar -- because :func:`_iter_extent_of` answers a BinOp with whichever operand it could
+    size when the other comes back ``None``, and that answer is a wrong allocation, not a hint.
+    Declines too when no operand supplies a dtype: the width decides the buffer, and there is
+    nothing to read it off.
+    """
+    value = site.value
+    reads = _rhs_value_names(value)
+    if not reads or not reads <= (set(known) | scalar_names):
+        return None
+    table = {n: tuple(str(s) for s in a.shape) for n, a in known.items()}
+    ext = _iter_extent_of(value, table)
+    if not ext:
+        return None
+    tokens = [ast.unparse(dim) for dim in ext]
+    free: Set[str] = set()
+    for token in tokens:
+        free |= value_names(ast.parse(token, mode="eval"))
+    if not free <= site_held:
+        return None  # an extent the caller cannot name is not a shape the caller can be told
+    # AST order, not set order: the descriptor has to come out the same on every run.
+    dtype = next(
+        (known[n.id].dtype for n in ast.walk(value) if isinstance(n, ast.Name) and n.id in known),
+        None,
+    )
+    if dtype is None:
+        return None
+    return ArrayDesc(name=site.targets[0].id, dtype=dtype, shape=tuple(tokens), is_output=False)
 
 
 def _infer_helper_params(pnames, args, arr_by, sca_by, sym_by, fn=None):
@@ -4932,12 +5091,17 @@ def _caller_side_shape(
     out: List[str] = []
     for token in tokens:
         expr = ast.parse(str(token), mode="eval").body
+        # Only names the token reads as a VALUE. A call's CALLEE is not one: ``int`` in
+        # ``(height - 1) // int(conv_stride) + 1`` is the builtin, and asking
+        # :func:`_caller_side_symbol` to respell it refused the whole call ("needs shape symbol
+        # 'int'"). :func:`value_names` already draws that line for the free-name check below.
+        operands = value_names(ast.Expression(body=expr))
         subst = {
             n.id: ast.parse(
                 _caller_side_symbol(n.id, held, decl_pnames, site_args, hfn, hname, 0, arr_by), mode="eval"
             ).body
             for n in ast.walk(expr)
-            if isinstance(n, ast.Name) and n.id not in held
+            if isinstance(n, ast.Name) and n.id not in held and n.id in operands
         }
         respelled = ast.unparse(_substitute_names(ast.Expression(body=expr), subst).body) if subst else str(token)
         # A token that needed no substitution can still BE a shape read -- one respelled at an
@@ -5134,6 +5298,32 @@ def _rewrite_helper_axes(hfn: ast.FunctionDef, arrays: List[ArrayDesc], scalars:
     ranks = {a.name: len(a.shape) for a in arrays}
     _AxisReshapeToIndexing(rank_table(hfn, ranks), frozenset(s.name for s in scalars)).visit(hfn)
     ast.fix_missing_locations(hfn)
+
+
+def _literal_call_arg(arg: ast.expr) -> bool:
+    """Whether a call argument is compile-time in the callee's body.
+
+    A literal TUPLE is as compile-time as a scalar literal and has to be treated the same way:
+    ``_adaptive_avg_pool3d(h3, (1, 1, 1), ...)`` guards its whole body on ``output_size == (1, 1, 1)``
+    and indexes ``output_size[0]``. Left a plain parameter, the tuple branch never folds -- the helper
+    then indexes what the call site typed as a scalar (refused outright), and its two surviving
+    returns disagree on extent, which sizes the pool's out-param at its INPUT's shape.
+    """
+    if isinstance(arg, ast.Constant):
+        return True
+    return (
+        isinstance(arg, (ast.Tuple, ast.List)) and bool(arg.elts) and all(isinstance(e, ast.Constant) for e in arg.elts)
+    )
+
+
+def _literal_key(arg: ast.expr) -> Any:
+    """What two call sites have to AGREE on for one specialised body to serve both.
+
+    A scalar literal keys on its VALUE, as it always did -- ``1`` and ``True`` are the same
+    argument to a body that only branches on it. A literal tuple has no such equivalence to
+    preserve, so it keys on its text.
+    """
+    return arg.value if isinstance(arg, ast.Constant) else ast.unparse(arg)
 
 
 def _bind_call_constants(hfn: ast.FunctionDef, consts: Dict[str, ast.expr]) -> None:
@@ -5544,7 +5734,7 @@ def _build_helper_kirs(
             # function rewrites, so the signature must keep every argument slot the call passes.
             call_consts = {}
             for pn, a in zip(pnames, call.args):
-                if isinstance(a, ast.Constant):
+                if _literal_call_arg(a):
                     call_consts[pn] = a
                     continue
                 folded = _fold_call_arg_constant(a, oarrays, oscalars, osymbols)
@@ -5724,7 +5914,7 @@ def _build_helper_kirs(
         # paths whose tuples & sibling-helper calls don't lower). Params left
         # unused are then dropped along with their call-site args, keeping
         # signature and call site aligned.
-        call_consts = {pn: a for pn, a in zip(pnames, call.args) if isinstance(a, ast.Constant)}
+        call_consts = {pn: a for pn, a in zip(pnames, call.args) if _literal_call_arg(a)}
         # ``_bind_call_constants`` also prunes what the substitution makes dead: a statically-true
         # ``if None is None: return y`` leaves ORIGINAL siblings behind (conv2d_instance_norm_divide's
         # dead ``shape = ...; return y * None.reshape(...) + ...``) that still reference the
@@ -5823,8 +6013,8 @@ def _build_helper_kirs(
                 # The body was SPECIALIZED against the first site's literal args, so a site passing a
                 # different constant cannot call it. Refuse rather than emit a call to a body
                 # specialized for someone else.
-                site_consts = {pn: a.value for pn, a in zip(decl_pnames, site_args) if isinstance(a, ast.Constant)}
-                first_consts = {pn: a.value for pn, a in call_consts.items() if isinstance(a, ast.Constant)}
+                site_consts = {pn: _literal_key(a) for pn, a in zip(decl_pnames, site_args) if _literal_call_arg(a)}
+                first_consts = {pn: _literal_key(a) for pn, a in call_consts.items() if _literal_call_arg(a)}
                 if site_consts != first_consts:
                     raise NotImplementedError(
                         f"helper {hdef.name!r} is specialized on {first_consts} but another "
@@ -7056,8 +7246,16 @@ class _HoistMultiStmtHelpers(ast.NodeTransformer):
         # Shared across the inline fixpoint -- see _InlineHelpers re: prefix reuse.
         self._counter = counter if counter is not None else [0]
         self._pending: List[ast.stmt] = []
+        #: Names the tree ALREADY binds, so a fresh temp never lands on one. Three call sites
+        #: build this transformer and two of them start their own counter, so both series minted
+        #: ``__hcall1``, ``__hcall2``, ... over the same body: resnet101 ended up with
+        #: ``__hcall4`` bound once to a 256-channel convolution and once to a 64-channel
+        #: batch-norm. The shape table holds one entry per name, so every extent read off either
+        #: was the other's -- and, downstream, the whole layer went unresolved.
+        self._taken: Set[str] = set()
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
+        self._taken |= {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
         node.body = self._rewrite_stmt_list(node.body)
         return node
 
@@ -7143,6 +7341,10 @@ class _HoistMultiStmtHelpers(ast.NodeTransformer):
                 if isinstance(call.func, ast.Name) and call.func.id in self.multi_stmt:
                     self._counter[0] += 1
                     temp = f"__hcall{self._counter[0]}"
+                    while temp in self._taken:
+                        self._counter[0] += 1
+                        temp = f"__hcall{self._counter[0]}"
+                    self._taken.add(temp)
                     self._pending.append(ast.Assign(targets=[ast.Name(id=temp, ctx=ast.Store())], value=call))
                     return ast.Name(id=temp, ctx=ast.Load())
                 return call

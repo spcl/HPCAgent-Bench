@@ -335,6 +335,38 @@ def _dace_dtype(tag: str) -> str:
     )
 
 
+class _FloorDivToIntFloor(ast.NodeTransformer):
+    """``a // b`` -> ``dc.symbolic.int_floor(a, b)``, recursively."""
+
+    def visit_BinOp(self, node: ast.BinOp):
+        self.generic_visit(node)
+        if not isinstance(node.op, ast.FloorDiv):
+            return node
+        symbolic = ast.Attribute(value=ast.Name(id="dc", ctx=ast.Load()), attr="symbolic", ctx=ast.Load())
+        call = ast.Call(
+            func=ast.Attribute(value=symbolic, attr="int_floor", ctx=ast.Load()),
+            args=[node.left, node.right],
+            keywords=[],
+        )
+        return ast.copy_location(call, node)
+
+
+def _declared_extent(dim) -> str:
+    """One declared extent, with ``//`` spelled the way the frontend spells it inside the body.
+
+    A signature annotation is evaluated by PYTHON, where ``//`` on a dace symbol is sympy's
+    ``floor(x/2 + 1/2)``; the SAME text inside the program is parsed by dace, which maps
+    ``ast.FloorDiv`` to ``int_floor(x, 2)``. One extent then reaches the write under two spellings
+    and the frontend, unable to prove them equal, refuses the broadcast -- stride-2 dilated conv
+    was the first corpus case where the divisor is not 1 and the two stop folding together.
+    """
+    text = str(dim)
+    if "//" not in text:
+        return text
+    tree = _FloorDivToIntFloor().visit(ast.parse(text, mode="eval"))
+    return ast.unparse(ast.fix_missing_locations(tree))
+
+
 def _array_annotation(arr) -> str:
     """``a`` of shape ``(LEN_1D,)`` float64 -> ``dc_float[LEN_1D]``; a 0-d array -> a dace scalar.
 
@@ -344,7 +376,7 @@ def _array_annotation(arr) -> str:
     """
     if not arr.shape:
         return _dace_dtype(arr.dtype)
-    return f"{_dace_dtype(arr.dtype)}[{', '.join(str(s) for s in arr.shape)}]"
+    return f"{_dace_dtype(arr.dtype)}[{', '.join(_declared_extent(s) for s in arr.shape)}]"
 
 
 #: Map framework precision globals (np_float/np_complex) to the dace globals the module imports.
@@ -726,6 +758,67 @@ class _DesugarUnreplacedCalls(ast.NodeTransformer):
         if node.func.attr == "ascontiguousarray" and len(node.args) == 1:
             return ast.copy_location(ast.parse(f"({ast.unparse(node.args[0])}).copy()", mode="eval").body, node)
         return node
+
+
+class DesugarContractionFreeEinsum(ast.NodeTransformer):
+    """Rewrite a two-operand einsum that sums NOTHING into the broadcast product it already is.
+
+    ``np.einsum('ei,ek->eik', a, b)`` is ``np.outer`` batched over ``e``: every index survives into
+    the output, so no index is contracted. dace routes every two-operand einsum through its GEMM
+    path anyway, and with an empty sum that mints a batched MatMul of K=1. ``simplify`` then
+    collapses the ``[E, 4, 1]`` and ``[E, 1, 8]`` operand views back to rank 2, which MatMul's
+    dispatch has no case for, so expansion dies in ``NotImplementedError: Matrix multiplication not
+    implemented for shapes: [E, 4] and [E, 8]`` -- shapes that never conform as a matrix product
+    because they were never meant to be one.
+
+    Value-preserving by construction: with nothing summed, each output element is a single product
+    of one element from each operand, so there is no accumulation to reorder. Same rewrite
+    ``np.outer`` already gets above, generalised to leading batch axes.
+    """
+
+    @staticmethod
+    def broadcast_index(operand: str, out: str) -> Optional[str]:
+        """``operand``'s subscripts as an index into ``out``'s axes, or None if it needs a transpose."""
+        positions = [out.index(ch) for ch in operand]
+        # An operand whose axes reach the output out of order needs a real transpose; leave it for
+        # dace rather than guess a permutation this kernel has never asked for.
+        if positions != sorted(positions):
+            return None
+        return ", ".join(":" if ch in operand else "None" for ch in out)
+
+    def visit_Call(self, node: ast.Call):
+        self.generic_visit(node)
+        if not (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "einsum"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in ("np", "numpy")
+            and len(node.args) == 3
+        ):
+            return node
+        # ``optimize`` picks a contraction ORDER, and there is no contraction here; any other
+        # keyword (``out``, ``dtype``) changes what the call means, so it keeps its einsum.
+        if any(kw.arg != "optimize" for kw in node.keywords):
+            return node
+        spec = node.args[0]
+        if not (isinstance(spec, ast.Constant) and isinstance(spec.value, str) and "->" in spec.value):
+            return node
+        lhs, _, out = spec.value.replace(" ", "").partition("->")
+        operands = lhs.split(",")
+        if len(operands) != 2:
+            return node
+        a, b = operands
+        # A repeated subscript is a diagonal and a dropped one is a reduction -- neither is a plain
+        # product. Requiring the union to BE the output rules both out, along with any summed index.
+        if len({*a}) != len(a) or len({*b}) != len(b) or len({*out}) != len(out):
+            return node
+        if {*a} | {*b} != {*out}:
+            return node
+        left, right = self.broadcast_index(a, out), self.broadcast_index(b, out)
+        if left is None or right is None:
+            return node
+        src = f"({ast.unparse(node.args[1])})[{left}] * ({ast.unparse(node.args[2])})[{right}]"
+        return ast.copy_location(ast.parse(src, mode="eval").body, node)
 
 
 class _DesugarReverseSlice(ast.NodeTransformer):
@@ -3289,6 +3382,9 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
     fn_ast = NormalizeReshape().visit(fn_ast)
     # dace has no np.outer and rejects negative-stride subscripts; rewrite both to forms dace accepts.
     fn_ast = _DesugarUnreplacedCalls().visit(fn_ast)
+    # An einsum that contracts nothing is a broadcast product; dace's GEMM path mints a K=1 MatMul
+    # whose views collapse to shapes its dispatch refuses. Say the product directly.
+    fn_ast = DesugarContractionFreeEinsum().visit(fn_ast)
     fn_ast = _DesugarReverseSlice().visit(fn_ast)
     # dace's frontend rejects element iteration over an array value: rewrite to an indexed range form.
     fn_ast = _DesugarArrayIteration(arr_shapes).visit(fn_ast)
