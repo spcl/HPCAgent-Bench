@@ -847,5 +847,14 @@ echo "===== node utilization report (${RUN_DIR}/monitor) ====="
 "$(command -v python3.11 || command -v python3)" "${SCRIPT_DIR}/monitor_report.py" "${RUN_DIR}/monitor" 2>&1 \
     || echo "monitor_report failed; run it manually on the login node with python3.11"
 
+# Thinking tokens are the ones no endpoint here reports: usage.output_tokens_details.thinking_tokens
+# comes back 0 from vLLM and SGLang alike, while the client's stream counter recorded 1.74M of them
+# for qwen38 in 621016 -- 52.9% of everything that arm generated. A report that prints output_tokens
+# alone therefore understates a reasoning arm by about half. Same guard as above: best-effort, and a
+# report that fails must never fail a run that already finished its work.
+echo "===== token report (${RUN_DIR}/agents) ====="
+"$(command -v python3.11 || command -v python3)" "${SCRIPT_DIR}/token_report.py" "${RUN_DIR}" 2>&1 \
+    || echo "token_report failed; run it manually on the login node with python3.11"
+
 exit "${agent_status}"
 }
