@@ -12,7 +12,12 @@ from hpcagent_bench import languages
 
 def test_every_entry_declares_what_the_tool_needs():
     for name, entry in languages.load_libraries().items():
-        assert entry.get("pkg") or entry.get("toolset") or entry.get("link"), f"{name} names no resolution route"
+        route = entry.get("pkg") or entry.get("toolset") or entry.get("link") or entry.get("header_only")
+        assert route, f"{name} names no resolution route"
+        if entry.get("header_only"):
+            # The compile probe is the only gate a header-only library has, and it needs a header
+            # to include. Without one library_offered can never say yes, so the entry is dead.
+            assert entry.get("headers"), f"{name} is header_only and names no header to probe"
         assert entry.get("langs"), f"{name} declares no languages"
         assert entry.get("summary", "").strip(), f"{name} has no agent-facing summary"
         assert set(entry["langs"]) <= set(languages.LANG_EXT), f"{name} names an unknown language"
@@ -166,14 +171,17 @@ def test_a_requested_library_actually_builds_links_and_loads(name, tmp_path):
 
 
 def test_an_entry_offers_a_pkg_config_name_a_toolset_entry_or_a_bare_link():
-    """Three resolution routes, and each entry must name at least one. pkg-config where the distro
-    ships a .pc, a toolset.yaml entry for the GPU toolkits, and a bare -l for a library built into
-    the image's own prefix (hptt, tblis). An entry may carry pkg AND link: the .pc is preferred and
-    the bare -l is the fallback for an image that packages the same library without one."""
+    """Four resolution routes, and each entry must name at least one. pkg-config where the distro
+    ships a .pc, a toolset.yaml entry for the GPU toolkits, a bare -l for a library built into the
+    image's own prefix (hptt, tblis), and header_only for one with no .so at all. An entry may
+    carry pkg AND link: the .pc is preferred and the bare -l is the fallback for an image that
+    packages the same library without one. A header-only entry may carry pkg too -- that is where
+    its -I comes from -- but never link, because there is nothing to link."""
     for name, entry in languages.load_libraries().items():
-        routes = [k for k in ("pkg", "toolset", "link") if entry.get(k)]
+        routes = [k for k in ("pkg", "toolset", "link", "header_only") if entry.get(k)]
         assert routes, f"{name} names no resolution route"
         assert not ("toolset" in routes and len(routes) > 1), f"{name} mixes a toolset entry with another route"
+        assert not ("header_only" in routes and "link" in routes), f"{name} is header_only and names a link route"
 
 
 def test_a_bare_link_route_never_invents_a_search_path():
@@ -185,3 +193,31 @@ def test_a_bare_link_route_never_invents_a_search_path():
             compile_tokens, link = languages.library_tokens(name, lang)
             assert not compile_tokens, (name, compile_tokens)
             assert all(t.startswith("-l") for t in link), (name, link)
+
+
+def test_a_header_only_library_is_offered_without_link_tokens():
+    """eigen is the case the link probe cannot decide: no .so exists, and the only thing that can
+    fail is whether the header resolves. Its -I is the point -- the headers are under
+    /usr/include/eigen3, so advertising eigen without it promises a build that does not compile."""
+    entry = languages.load_libraries()["eigen"]
+    assert entry["header_only"] is True
+    compile_tokens, link_tokens = languages.library_tokens("eigen", "cpp")
+    assert link_tokens == ()
+    assert all(t.startswith("-I") for t in compile_tokens), compile_tokens
+    if languages.library_offered("eigen", "cpp"):
+        assert languages.library_compiles("cpp", compile_tokens, "Eigen/Dense")
+        assert "eigen" in languages.available_libraries("cpp")
+
+
+def test_header_only_availability_is_not_token_emptiness():
+    """A header on the default include path yields no tokens and is still usable, so emptiness
+    cannot be the signal -- which is exactly what available_libraries used to ask."""
+    for name, entry in languages.load_libraries().items():
+        if not entry.get("header_only"):
+            continue
+        for lang in entry["langs"]:
+            offered = languages.library_offered(name, lang)
+            if offered and languages.library_tokens(name, lang) == ((), ()):
+                return  # the case the old predicate got wrong is reachable here
+    # Nothing on this host exercises it; the language gate must still hold.
+    assert not languages.library_offered("eigen", "fortran")
