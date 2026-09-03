@@ -35,9 +35,14 @@ set -a
 . "${ENV_FILE}"
 set +a
 
-# A mislabelled arm is worse than an unlabelled one: CAMPAIGN_ARM is the only arm signal in the
-# judge DB, and a stale copy would attribute this arm's rows to another one, silently.
-if [[ "${CAMPAIGN_ARM:-}" != "${VARIANT}" ]]; then
+# A mislabelled arm is worse than an unlabelled one: CAMPAIGN_ARM reaches the judge DB as the
+# run_id prefix, and a stale copy would attribute this arm's rows to another one, silently.
+#
+# A -wN suffix is NOT a different arm. Sharded variants split one arm's problem list across
+# several jobs that differ only in PROBLEMS_FILE, so they must share a label -- run_id keeps the
+# shard separately (llr40v10-kimi27sglang-c.n0.p0.w0), and suffixing CAMPAIGN_ARM here would
+# split one arm's rows into as many arms as there are workers. Strip it before comparing.
+if [[ "${CAMPAIGN_ARM:-}" != "${VARIANT%%-w[0-9]}" && "${CAMPAIGN_ARM:-}" != "${VARIANT}" ]]; then
     echo "${ENV_FILE} sets CAMPAIGN_ARM='${CAMPAIGN_ARM:-}' but the variant is '${VARIANT}'" >&2
     exit 2
 fi
