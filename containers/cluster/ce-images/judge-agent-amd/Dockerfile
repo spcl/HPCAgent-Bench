@@ -339,14 +339,14 @@ RUN set -eux; \
       '  - mimalloc' \
       '  - eigen' \
       '  - blaze' \
-      '  # blis through SPACK, not apt: the base layer deliberately withholds the distro' \
-      '  # BLAS/LAPACK stack so the OpenBLAS generated code links is the threads=openmp build and' \
-      '  # nothing else, and a distro BLIS beside it reintroduces exactly that ambiguity.' \
-      '  # cflags: blis 2.0 haswell asm kernels take %rbp, and gcc 16 refuses them with "bp' \
-      '  # cannot be used in `asm` here" wherever the frame pointer is live (621068 died on' \
-      '  # bli_gemmsup_rv_haswell_asm_s6x16m among others). Omitting it is what frees the' \
-      '  # register; there is no gcc-16 patch for blis upstream and 2.0 is the newest release.' \
-      '  - blis threads=openmp cflags=-fomit-frame-pointer' \
+      '  # NO blis. Its haswell sup kernels claim %rbp in inline asm and gcc 16 refuses them --' \
+      '  # "bp cannot be used in `asm` here" on bli_gemmsup_rv_haswell_asm_{s6x16m,s6x16n,d6x8n}' \
+      '  # and more (621068). cflags=-fomit-frame-pointer does NOT free the register: 621321 hit' \
+      '  # the identical error with it set, so those functions need a frame for another reason.' \
+      '  # Upstream carries no gcc-16 patch and 2.0 is the newest release, so there is nothing to' \
+      '  # bump to. OpenBLAS is the SELECTED BLAS here and MKL and hptt cover the rest of the' \
+      '  # shape, so the cost of its absence is one requestable name -- and libraries.yaml gates' \
+      '  # on a trial link, so an absent blis is never advertised to an agent.' \
       '  # slate is nearly free here: blaspp and lapackpp are already in this graph as strumpack' \
       "  # dependencies. trilinos is NOT -- it is hours of build for one requestable name, and the" \
       '  # solvers it would add are already covered by petsc, hypre, mumps and superlu-dist.' \
@@ -491,14 +491,13 @@ RUN set -eux; \
 RUN set -eux; \
     "${SPACK_ROOT}/bin/spack" -e "${SPACK_ENV_DIR}" install --fail-fast \
       mpich openblas netlib-scalapack fftw hdf5 intel-tbb mimalloc eigen \
-      metis parmetis scotch suite-sparse superlu blis blaze; \
+      metis parmetis scotch suite-sparse superlu blaze; \
     "${SPACK_ROOT}/bin/spack" clean --stage; \
     test -f /opt/view/lib/libopenblas.so; \
     test -f /opt/view/include/cblas.h; \
     test -f /opt/view/include/lapacke.h; \
     test -f /opt/view/include/fftw3.h; \
     test -f /opt/view/include/tbb/tbb.h; \
-    test -f /opt/view/include/blis/blis.h || test -f /opt/view/include/blis.h; \
     test -f /opt/view/include/blaze/Blaze.h; \
     mpicc -show
 
@@ -566,6 +565,10 @@ RUN set -eux; \
 # until a commit has been observed to build: this value is devinamatthews/tblis master as of
 # 2026-09-02 and has not yet had a successful build against it, so confirm it from the first
 # build log before treating it as verified.
+# The library is asserted alongside the header below. Header-only success is how a half-install
+# ships: v5 carried libhptt.so and NO tblis library at all, and a report weeks later is where that
+# surfaced. The comment lives HERE because one placed between a RUN's line continuations is passed
+# to the shell by some parsers, which comments out the rest of the command.
 COPY containers/build-hptt.sh /build-hptt.sh
 COPY containers/build-tblis.sh /build-tblis.sh
 ARG TBLIS_REF=eb719e718976572e0ab53975f4e0c799faeb35f2
@@ -574,7 +577,8 @@ RUN set -eux; \
     TBLIS_REF="${TBLIS_REF}" sh /build-tblis.sh; \
     ldconfig; \
     test -f /usr/local/include/hptt.h; \
-    test -f /usr/local/include/tblis/tblis.h
+    test -f /usr/local/include/tblis/tblis.h; \
+    { test -f /usr/local/lib/libtblis.so || test -f /usr/local/lib/libtblis.a; }
 
 # ---------------------------------------------------------------------------------------------
 # 9. PAPI, rebuilt with the rocm and rocm_smi components.
