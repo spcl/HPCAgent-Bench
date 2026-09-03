@@ -44,6 +44,7 @@ from numpyto_c.dace_emit import (
     _ResolveZeros,
     _RewriteFrameworkDtype,
     _SplitReassignedSize,
+    _array_annotation,
     _dace_dtype,
     _float_names,
     _inline_symbol_aliases,
@@ -191,6 +192,41 @@ def test_promoted_shape_symbol_is_positive_without_a_manifest():
     kir.symbols.extend([SymbolDesc(name="NBR"), SymbolDesc(name="UNSEEN")])
     stamp_symbol_assumptions(kir)
     assert [s.assumption for s in kir.symbols] == ["positive", ""]
+
+
+def test_a_declared_extent_spells_floor_division_the_way_the_frontend_does():
+    """A signature annotation is evaluated by PYTHON, the body is parsed by dace, and the two do
+    not agree on ``//``: sympy answers ``floor(x/2 + 1/2)`` and dace's parser answers
+    ``int_floor(x, 2)``. One extent then reaches the write under two spellings and the broadcast is
+    refused -- conv_standard_1d_dilated_strided, the moment its stride stopped being 1."""
+    pytest.importorskip("dace")
+    import dace as dc
+    import sympy
+    from dace import symbolic
+
+    text = "(L - 2 * (K - 1) - 1) // 2 + 1"
+    emitted = _array_annotation(ArrayDesc(name="out", dtype="float64", shape=(text,)))
+    assert emitted == "dc_float[dc.symbolic.int_floor(L - 2 * (K - 1) - 1, 2) + 1]"
+    scope = {
+        "dc": dc,
+        "L": dc.symbol("L", dtype=dc.int64, positive=True),
+        "K": dc.symbol("K", dtype=dc.int64, positive=True),
+    }
+    extent = eval(emitted[len("dc_float[") : -1], scope)  # noqa: S307 -- the annotation, as python runs it
+    assert extent.atoms(symbolic.int_floor) and not extent.atoms(sympy.floor)
+    # premise: the `//` this replaced is the sympy head the body's spelling never carries
+    assert eval(text, scope).atoms(sympy.floor)  # noqa: S307
+
+
+def test_a_declared_extent_whose_divisor_is_one_still_folds_to_the_dividend():
+    """The corpus spelling that always worked: ``groups`` is 1, so both readings fold away. The
+    respelling must leave it exactly there rather than freeze an ``int_floor(C, 1)`` node."""
+    pytest.importorskip("dace")
+    import dace as dc
+
+    emitted = _array_annotation(ArrayDesc(name="w", dtype="float64", shape=("C // 1",)))
+    scope = {"dc": dc, "C": dc.symbol("C", dtype=dc.int64, positive=True)}
+    assert eval(emitted[len("dc_float[") : -1], scope) == scope["C"]  # noqa: S307
 
 
 def test_known_kernels_discovered():

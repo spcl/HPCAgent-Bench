@@ -335,6 +335,38 @@ def _dace_dtype(tag: str) -> str:
     )
 
 
+class _FloorDivToIntFloor(ast.NodeTransformer):
+    """``a // b`` -> ``dc.symbolic.int_floor(a, b)``, recursively."""
+
+    def visit_BinOp(self, node: ast.BinOp):
+        self.generic_visit(node)
+        if not isinstance(node.op, ast.FloorDiv):
+            return node
+        symbolic = ast.Attribute(value=ast.Name(id="dc", ctx=ast.Load()), attr="symbolic", ctx=ast.Load())
+        call = ast.Call(
+            func=ast.Attribute(value=symbolic, attr="int_floor", ctx=ast.Load()),
+            args=[node.left, node.right],
+            keywords=[],
+        )
+        return ast.copy_location(call, node)
+
+
+def _declared_extent(dim) -> str:
+    """One declared extent, with ``//`` spelled the way the frontend spells it inside the body.
+
+    A signature annotation is evaluated by PYTHON, where ``//`` on a dace symbol is sympy's
+    ``floor(x/2 + 1/2)``; the SAME text inside the program is parsed by dace, which maps
+    ``ast.FloorDiv`` to ``int_floor(x, 2)``. One extent then reaches the write under two spellings
+    and the frontend, unable to prove them equal, refuses the broadcast -- stride-2 dilated conv
+    was the first corpus case where the divisor is not 1 and the two stop folding together.
+    """
+    text = str(dim)
+    if "//" not in text:
+        return text
+    tree = _FloorDivToIntFloor().visit(ast.parse(text, mode="eval"))
+    return ast.unparse(ast.fix_missing_locations(tree))
+
+
 def _array_annotation(arr) -> str:
     """``a`` of shape ``(LEN_1D,)`` float64 -> ``dc_float[LEN_1D]``; a 0-d array -> a dace scalar.
 
@@ -344,7 +376,7 @@ def _array_annotation(arr) -> str:
     """
     if not arr.shape:
         return _dace_dtype(arr.dtype)
-    return f"{_dace_dtype(arr.dtype)}[{', '.join(str(s) for s in arr.shape)}]"
+    return f"{_dace_dtype(arr.dtype)}[{', '.join(_declared_extent(s) for s in arr.shape)}]"
 
 
 #: Map framework precision globals (np_float/np_complex) to the dace globals the module imports.
