@@ -352,9 +352,9 @@ RUN set -eux; \
       '  - scotch +mpi +esmumps' \
       '  - suite-sparse +openmp' \
       '  - superlu' \
-      '  - superlu-dist +openmp +parmetis' \
+      "  - superlu-dist +openmp +parmetis +rocm amdgpu_target=${ROCM_ARCH}" \
       '  - mumps +mpi +metis +parmetis +scotch +ptscotch +openmp +shared' \
-      '  - strumpack +mpi +openmp +parmetis +scotch ~cuda' \
+      "  - strumpack +mpi +openmp +parmetis +scotch ~cuda +rocm amdgpu_target=${ROCM_ARCH}" \
       '  # hypre is the ONE library here without a GPU build, and the box it is in is closed on' \
       '  # three sides. hypre@3 carries requires("+umpire") with depends_on("umpire+c+rocm");' \
       '  # umpire@2026.07 accepts only cxxstd=20 or 23, and its HIP units are compiled by ROCm' \
