@@ -484,6 +484,10 @@ class _CBodyEmitter(BaseEmitter):
         self.branch_stack: List[int] = []
         #: C return type of a scalar-returning helper, for the temporary an early return latches into.
         self.return_ctype: str = _c_type("float64")
+        #: Kernel helper -> (its ABI parameter order, the names among them that are ARRAYS).
+        #: A helper body's own kir lists no helpers, so :func:`_emit_body` overwrites this with the
+        #: parent's table when it emits one.
+        self.helper_params: Dict[str, Tuple[List[str], Set[str]]] = _helper_param_table(kir.helpers)
         self.array_shapes: Dict[str, List[str]] = {a.name: list(a.shape) for a in kir.arrays}
         zeros = kir.zeros_locals
         for name, shape in zeros.items():
@@ -1490,6 +1494,16 @@ class _CBodyEmitter(BaseEmitter):
         fns = _fp8_fns(self._name_dtype(node.id) or "")
         return f"{fns.promote}({access})" if fns is not None else access
 
+    def _emit_helper_arg(self, node: ast.expr, param_is_array: bool) -> str:
+        """One argument of a kernel-helper call: an ARRAY parameter takes the pointer.
+
+        ``emit_expr`` renders a size-1 array Name as its sole element, which is what a value
+        expression wants and what a pointer parameter cannot take.
+        """
+        if param_is_array and isinstance(node, ast.Name) and self.array_shapes.get(node.id):
+            return node.id
+        return self.emit_expr(node)
+
     def _emit_call(self, node: ast.Call) -> str:
         if isinstance(node.func, ast.Name):
             fn = node.func.id
@@ -1559,6 +1573,16 @@ class _CBodyEmitter(BaseEmitter):
             ):
                 emit_div = self.emit_floordiv if fn == "floor" else self.emit_ceildiv
                 return emit_div(node.args[0].left, node.args[0].right)
+            if fn in self.helper_params:
+                # A helper parameter bound to an array is a POINTER, whatever the array's size.
+                # emit_expr renders a size-1 Name as its sole element (the right thing in a value
+                # expression), which passed examinimd's ``cutsq[0]`` into a ``const double *``.
+                # The call is already in ABI order (see ``written_through_helpers``); an arity that
+                # does not match that order says nothing, so every argument keeps the value form.
+                order, arrays = self.helper_params[fn]
+                aligned = len(order) == len(node.args)
+                rendered = [self._emit_helper_arg(a, aligned and order[i] in arrays) for i, a in enumerate(node.args)]
+                return f"{fn}({', '.join(rendered)})"
             args = ", ".join(self.emit_expr(a) for a in node.args)
             return f"{self._math_name(fn)}({args})"
         # np.X(arg) / arr.X(...): handle passthrough/identity intrinsics that survived lowering.
@@ -2415,8 +2439,11 @@ def _emit_body(
     parallel: bool = False,
     isopar: bool = False,
     return_ctype: Optional[str] = None,
+    helper_params: Optional[Dict[str, Tuple[List[str], Set[str]]]] = None,
 ):
     emitter = _CBodyEmitter(kir, multidim_arrays=multidim_arrays)
+    if helper_params is not None:
+        emitter.helper_params = helper_params
     emitter.pluto = pluto
     emitter.return_mode = return_mode
     if return_ctype is not None:
@@ -2917,6 +2944,8 @@ _CPP_ARITH = (
     "    return m;\n"
     "}\n"
 )
+
+
 #: The kernel prologue = the arithmetic definitions plus the C-linkage opener the entry point needs.
 def _blas_include(body: str) -> str:
     """``#include <cblas.h>`` when this body calls a cblas gemm, else nothing.
@@ -3105,6 +3134,11 @@ def _helper_return_ctype(hkir: KernelIR) -> str:
     return _c_type("int") if helper_returns_int(hkir) else _c_type("float64")
 
 
+def _helper_param_table(helpers) -> Dict[str, Tuple[List[str], Set[str]]]:
+    """``{helper name: (ABI parameter order, the array parameters among them)}``."""
+    return {h.kernel_name: (h.abi_param_order(), {a.name for a in h.arrays}) for h in helpers}
+
+
 def _c_helper_signature(hkir: KernelIR, cpp: bool) -> Tuple[str, str]:
     """``(return type, "static <signature>")`` for one helper -- shared by its prototype and its body."""
     rettype = "void" if hkir.return_kind != "scalar" else _helper_return_ctype(hkir)
@@ -3116,10 +3150,22 @@ def _c_helper_signature(hkir: KernelIR, cpp: bool) -> Tuple[str, str]:
     return rettype, f"static {signature}"
 
 
-def _emit_c_helper(hkir: KernelIR, cpp: bool = False, isopar: bool = False) -> str:
+def _emit_c_helper(
+    hkir: KernelIR,
+    cpp: bool = False,
+    isopar: bool = False,
+    helper_params: Optional[Dict[str, Tuple[List[str], Set[str]]]] = None,
+) -> str:
     """Emit one non-inlinable helper as a static C/C++ function; an array return becomes a void fn with an out-param."""
     rettype, signature = _c_helper_signature(hkir, cpp)
-    body = _emit_body(hkir, indent="    ", return_mode=hkir.return_kind, isopar=isopar, return_ctype=rettype)
+    body = _emit_body(
+        hkir,
+        indent="    ",
+        return_mode=hkir.return_kind,
+        isopar=isopar,
+        return_ctype=rettype,
+        helper_params=helper_params,
+    )
     return f"{signature} {{\n{body}\n}}\n\n"
 
 
@@ -3135,7 +3181,11 @@ def emit_c_helpers(kir: KernelIR, cpp: bool = False, isopar: bool = False) -> st
     if not kir.helpers:
         return ""
     prototypes = "".join(f"{_c_helper_signature(h, cpp)[1]};\n" for h in kir.helpers)
-    return prototypes + "\n" + "".join(_emit_c_helper(h, cpp=cpp, isopar=isopar) for h in kir.helpers)
+    # A helper is free to call a SIBLING, and its own kir lists no helpers -- hand the table down.
+    table = _helper_param_table(kir.helpers)
+    return (
+        prototypes + "\n" + "".join(_emit_c_helper(h, cpp=cpp, isopar=isopar, helper_params=table) for h in kir.helpers)
+    )
 
 
 def pinned_const_block(kir: KernelIR) -> str:
