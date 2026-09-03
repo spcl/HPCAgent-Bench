@@ -338,6 +338,15 @@ RUN set -eux; \
       '  - intel-tbb' \
       '  - mimalloc' \
       '  - eigen' \
+      '  - blaze' \
+      '  # blis through SPACK, not apt: the base layer deliberately withholds the distro' \
+      '  # BLAS/LAPACK stack so the OpenBLAS generated code links is the threads=openmp build and' \
+      '  # nothing else, and a distro BLIS beside it reintroduces exactly that ambiguity.' \
+      '  - blis threads=openmp' \
+      '  # slate is nearly free here: blaspp and lapackpp are already in this graph as strumpack' \
+      "  # dependencies. trilinos is NOT -- it is hours of build for one requestable name, and the" \
+      '  # solvers it would add are already covered by petsc, hypre, mumps and superlu-dist.' \
+      "  - slate ~cuda +rocm amdgpu_target=${ROCM_ARCH}" \
       '  - metis' \
       '  - parmetis' \
       '  - scotch +mpi +esmumps' \
@@ -473,13 +482,15 @@ RUN set -eux; \
 RUN set -eux; \
     "${SPACK_ROOT}/bin/spack" -e "${SPACK_ENV_DIR}" install --fail-fast \
       mpich openblas netlib-scalapack fftw hdf5 intel-tbb mimalloc eigen \
-      metis parmetis scotch suite-sparse superlu; \
+      metis parmetis scotch suite-sparse superlu blis blaze; \
     "${SPACK_ROOT}/bin/spack" clean --stage; \
     test -f /opt/view/lib/libopenblas.so; \
     test -f /opt/view/include/cblas.h; \
     test -f /opt/view/include/lapacke.h; \
     test -f /opt/view/include/fftw3.h; \
     test -f /opt/view/include/tbb/tbb.h; \
+    test -f /opt/view/include/blis/blis.h || test -f /opt/view/include/blis.h; \
+    test -f /opt/view/include/blaze/Blaze.h; \
     mpicc -show
 
 # ---------------------------------------------------------------------------------------------
@@ -491,9 +502,10 @@ RUN set -eux; \
 # substitute for any of this.
 RUN set -eux; \
     "${SPACK_ROOT}/bin/spack" -e "${SPACK_ENV_DIR}" install --fail-fast \
-      superlu-dist mumps strumpack hypre arpack-ng magma; \
+      superlu-dist mumps strumpack hypre arpack-ng magma slate; \
     "${SPACK_ROOT}/bin/spack" clean --stage; \
-    ls /opt/view/lib/libmagma.so /opt/view/lib/libsuperlu_dist.so /opt/view/lib/libHYPRE.so
+    ls /opt/view/lib/libmagma.so /opt/view/lib/libsuperlu_dist.so /opt/view/lib/libHYPRE.so \
+      /opt/view/lib/libslate.so
 
 # ---------------------------------------------------------------------------------------------
 # 7. PETSc and SLEPc -- their OWN layer, on purpose.

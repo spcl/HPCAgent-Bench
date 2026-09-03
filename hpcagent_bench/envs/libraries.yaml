@@ -207,14 +207,6 @@ magma:
     solvers that split work between the CPU and the GPU. Built here with the ROCm backend.
 
 # --- Graph partitioning ------------------------------------------------------------------------
-metis:
-  link: ["-lmetis"]
-  langs: [c, cpp]
-  headers: ["metis.h"]
-  summary: >-
-    METIS, for partitioning graphs and finite element meshes and for computing fill-reducing
-    orderings of sparse matrices, using multilevel recursive bisection and k-way schemes.
-
 parmetis:
   link: ["-lparmetis", "-lmetis"]
   langs: [c, cpp]
@@ -305,24 +297,6 @@ numa:
     query and set the memory policy and CPU affinity of a thread.
 
 # --- Storage formats ----------------------------------------------------------------------------
-hdf5:
-  pkg: hdf5
-  link: ["-lhdf5"]
-  langs: [c, cpp, fortran]
-  headers: ["hdf5.h"]
-  summary: >-
-    HDF5, a data model, file format and library for storing and organizing large, heterogeneous
-    numerical datasets, with chunking, compression and parallel (MPI-IO) access.
-
-netcdf:
-  pkg: netcdf
-  link: ["-lnetcdf"]
-  langs: [c, cpp, fortran]
-  headers: ["netcdf.h"]
-  summary: >-
-    NetCDF, a self-describing, machine-independent format and library for array-oriented
-    scientific data, with the classic and the HDF5-backed formats.
-
 # --- Vendor GPU math libraries. Same `toolset` route as hiptensor and cutensor: the toolkit ships
 # no pkg-config files and needs none, because hipcc and nvcc already search their own lib and
 # include directories. The link name comes from that entry's soname in envs/toolset.yaml, so it is
@@ -570,3 +544,13 @@ rocthrust:
   summary: >-
     rocThrust, the Thrust API on AMD GPUs: the same parallel algorithms -- transform, reduce, scan,
     sort and their by-key variants -- backed by rocPRIM.
+
+slate:
+  pkg: slate
+  link: ["-lslate"]
+  langs: [cpp, hip]
+  headers: ["slate/slate.hh"]
+  summary: >-
+    SLATE, dense distributed linear algebra for multicore and GPU nodes: parallel BLAS,
+    factorizations and solvers, and symmetric eigenvalue and singular value problems, as the
+    intended successor to ScaLAPACK.
