@@ -89,7 +89,11 @@ set -Eeuo pipefail
 
 rank="${SLURM_PROCID:-0}"
 export TOKENIZERS_PARALLELISM=false
-export VLLM_DISABLE_PYNCCL=1
+# VLLM_DISABLE_PYNCCL is deliberately NOT set. It was the workaround this probe was written
+# under, and it is superseded: without PyNCCL every collective goes through ProcessGroupNCCL,
+# which is not graph-capturable, so capture stalls, --enforce-eager becomes mandatory, and
+# kimi decodes at 1.4 tok/s against 16.8 on this same shape. run_cluster.sh stopped
+# defaulting it on 2026-08-13 and vectorize.sbatch names this file as the last holdout.
 export VLLM_ENGINE_READY_TIMEOUT_S=7200
 export NCCL_DEBUG_FILE="${RUN_DIR}/nccl.%h.%p.log"
 # Debug logging only on the API rank: that is where the anthropic router logs live.
