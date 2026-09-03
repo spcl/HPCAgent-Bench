@@ -766,10 +766,13 @@ jobs:
   # The arithmetic, off run 33626484866's measured 75.2 min for the whole corpus in one container:
   #   emit          4.3 min whole corpus  ->  1.4 per shard (sharded at the KEY, before the emit)
   #   parse        70.9 min wall at 2 workers = 141.8 min serial
-  #     of which    45.0 min is three `hang` entries at PARSE_TIMEOUT_S=900s, dealt one per shard
+  #     of which    90.0 min is three `hang` entries at PARSE_TIMEOUT_S=1800s, dealt one per shard
   #     leaving     96.8 min over the ~658 other programs -> 32.3 per shard
-  #   per shard    32.3 + 15.0 = 47.3 serial / 2 workers = 23.7 min wall
-  #   + emit 1.4 + checkout/setup ~4  ->  ~29 min against a 45-minute cap
+  #   per shard    32.3 + 30.0 = 62.3 serial / 2 workers = 31.2 min wall
+  #   + emit 1.4 + checkout/setup ~4  ->  ~37 min against a 45-minute cap
+  # The budget doubled on 2026-09-03 so densenet201 -- 787s idle, a real parse -- stops being
+  # reported as a regression. That spends most of the slack this job had, so the next kernel to
+  # outgrow the cap needs a faster parse, not a bigger number.
   # The hang entries have to SPREAD for that to hold, so shard_of deals them first and separately
   # and test_the_hang_entries_land_in_different_shards asserts it.
   # ===========================================================================================
@@ -827,7 +830,7 @@ jobs:
           # is a verdict, and the step cap firing is 38 minutes of buffered output nobody reads.
           # It was 4200 (70 min) against a 75-minute step, i.e. the step always won.
           python -m pytest -q -p no:cacheprovider -rfsxX -m dace_frontend \
-            --timeout=2100 tests/test_dace_frontend_validity.py
+            --timeout=2700 tests/test_dace_frontend_validity.py
 
       - name: Upload the generated DaCe corpus
         # *_dace.py is gitignored and re-emitted per run, so a kernel that only fails here cannot be
