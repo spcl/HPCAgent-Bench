@@ -346,14 +346,18 @@ RUN set -eux; \
       '  - superlu-dist +openmp +parmetis' \
       '  - mumps +mpi +metis +parmetis +scotch +ptscotch +openmp +shared' \
       '  - strumpack +mpi +openmp +parmetis +scotch ~cuda' \
-      '  # hypre@3 is pinned OUT, not merely unselected: it carries requires("+umpire") and' \
-      '  # depends_on("umpire+c+rocm"), and umpire@2026.07 accepts only cxxstd=20 or 23. Its' \
-      '  # HIP sources are compiled by ROCm 7.2 clang, which cannot parse gcc 16.2.0 libstdc++' \
-      "  # <format> -- 'expected an identifier for the attribute name [-Wtemplate-body]', a" \
-      '  # clang-only diagnostic, on every translation unit reaching umpire/event/event.hpp' \
-      '  # (620749). hypre@2 leaves +umpire default-off, so the GPU build stays and the' \
-      '  # unbuildable dependency goes.' \
-      "  - hypre@:2 +mpi +openmp +rocm amdgpu_target=${ROCM_ARCH}" \
+      '  # hypre is the ONE library here without a GPU build, and the box it is in is closed on' \
+      '  # three sides. hypre@3 carries requires("+umpire") with depends_on("umpire+c+rocm");' \
+      '  # umpire@2026.07 accepts only cxxstd=20 or 23, and its HIP units are compiled by ROCm' \
+      "  # 7.2 clang, which cannot parse gcc 16.2.0 libstdc++ <format> -- 'expected an identifier" \
+      "  # for the attribute name [-Wtemplate-body]', a clang-only diagnostic, on everything that" \
+      '  # reaches umpire/event/event.hpp (620749, two hours in). Older hypre would dodge umpire,' \
+      '  # but hypre@:3.0.0 declares depends_on("hip@:6") and the external hip here is 7.2.0, so' \
+      '  # +rocm below 3.0.1 does not concretize at all (620907). What is NOT closed: petsc asks' \
+      '  # for hypre+rocm only under +int64 (depends_on("hypre+mixedint+rocm", when=' \
+      '  # "+hypre+int64+rocm")), which this petsc does not set. So hypre loses its device' \
+      '  # solvers and nothing else moves -- petsc and magma keep +rocm.' \
+      '  - hypre +mpi +openmp' \
       '  - arpack-ng +mpi +shared' \
       "  - magma ~cuda +rocm amdgpu_target=${ROCM_ARCH} +fortran" \
       "  - petsc +mpi +metis +hypre +mumps +superlu-dist +strumpack +suite-sparse +scalapack +hdf5 +fftw +rocm amdgpu_target=${ROCM_ARCH} +shared" \
