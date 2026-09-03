@@ -73,13 +73,24 @@ for name in "${candidates[@]}"; do
     oss=(MODEL_REPO="${MODEL[${name}]}" TOOL_PARSER=openai REASONING_PARSER=openai_gptoss
          EXTRA_SERVE_ARGS="--dtype bfloat16")
   fi
+  # The sglang smoke defaults to the official aiter recipe it was written to evaluate. Acceptance
+  # asks a different question -- does this image serve what the CAMPAIGN serves -- so the three
+  # knobs .env.kvfix3-kimi27sglang-c settled on are passed through: triton attention, the decode
+  # graph cap that bought 4.7x KV, and the hierarchical cache. 256k context is free at that cap.
+  sgl=()
+  [[ "${name}" == sglang ]] && sgl=(CONTEXT_LEN=262144
+    SGLANG_EXTRA_ARGS="--attention-backend triton --cuda-graph-max-bs-decode 64 --enable-hierarchical-cache")
   # TUNED_MOE_DIR defaults to <submit dir>/moe-configs, and this driver submits from HERE, where
   # there is no such folder -- an empty one reads as "tuned" and is how a smoke measures the
   # untuned ceiling and calls it a result. Name the real folder. E=128,N=192 is the gpt-oss shape.
-  env "${oss[@]}" \
+  env "${oss[@]}" "${sgl[@]}" \
   TUNED_MOE_DIR="${PWD}/../ce-images/inference/moe-configs" \
   PG_PATCH_DIR="${PWD}/../ce-images/inference/external-eager-pg-patch" \
-  EDF="${edf}" sbatch --job-name="smoke-candidate-${name}" \
+  # BOTH names: smoke-kimi-sglang.sbatch reads EDF, smoke-kimi-eager-pg.sbatch reads INFERENCE_EDF
+  # and defaults it to the DEPLOYED 0.27.1 image. Setting only EDF is why 620860 and 620870 ran the
+  # deployed image and 620870 reproduced the documented 0.27.1 gpt-oss failure, as if the candidate
+  # had regressed. Each smoke now prints the environment it opened, so the log carries the proof.
+  EDF="${edf}" INFERENCE_EDF="${edf}" sbatch --job-name="smoke-candidate-${name}" \
     --nodes="${NODES[${name}]}" \
     --output="${SCRATCH}/ce-images/logs/smoke-candidate-${name}-%j.out" \
     --error="${SCRATCH}/ce-images/logs/smoke-candidate-${name}-%j.out" "${smoke}"

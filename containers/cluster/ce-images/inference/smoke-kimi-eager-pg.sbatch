@@ -129,6 +129,7 @@ stage() { printf '\n===== stage: %s =====\n' "$*"; }
 cat <<EOF
 job:    ${SLURM_JOB_ID}
 model:  ${MODEL_REPO} tp=${TP_SIZE} pp=${PP_SIZE} on ${NNODES} node(s): ${NODELIST}
+image:  ${INFERENCE_EDF}
 patch:  ${PG_PATCH_DIR}
 logs:   ${RUN_DIR}
 moe:    ${TUNED_MOE_DIR:-<none: vLLM default MoE config>}

@@ -32,14 +32,23 @@ export SERVED_MODEL="${SERVED_MODEL:-kimi-k27}"
 export API_PORT="${API_PORT:-8000}"
 export READY_TIMEOUT="${READY_TIMEOUT:-5400}"
 export EDF="${EDF:-${HOME}/.edf/sglang-rocm-mi30x.toml}"
-export MEM_FRACTION="${MEM_FRACTION:-0.93}"  # x0.85 multimodal derate -> ~0.79 effective; weights floor 0.727
+# 0.42, not the 0.8-0.9 this knob takes anywhere else: MI300A reports is_integrated, so SGLang
+# sizes the static budget against NODE-WIDE memory and every rank claims all of it. 0.93 read
+# as ~0.79 after the VLM derate and the serving step was OOM-killed at 58.5 GB RSS (620806,
+# exit 0:125) after 68 minutes of load and capture. 0.42 is the fraction the campaign serves.
+export MEM_FRACTION="${MEM_FRACTION:-0.42}"
 export CONTEXT_LEN="${CONTEXT_LEN:-65536}"
 export SWEEP_CONCURRENCY="${SWEEP_CONCURRENCY:-1 8 16}"
+# Trusted operator-controlled word list, the same contract as run_cluster.sh's SGLANG_EXTRA_ARGS.
+# Acceptance runs pass the campaign's own knobs through here so a pass means the image serves what
+# the campaign serves, not what this recipe defaults to.
+export SGLANG_EXTRA_ARGS="${SGLANG_EXTRA_ARGS:-}"
 
 export MASTER="$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | head -n1)"
 echo "job:    ${SLURM_JOB_ID}"
 echo "model:  ${MODEL_REPO} tp=4 pp=${SLURM_NNODES} on ${SLURM_NNODES} nodes (sglang)"
 echo "master: ${MASTER}"
+echo "image:  ${EDF}"
 echo "logs:   ${RUN_DIR}"
 
 stage() { printf '\n===== stage: %s =====\n' "$*"; }
@@ -74,6 +83,7 @@ srun --nodes="${SLURM_NNODES}" --ntasks="${SLURM_NNODES}" --ntasks-per-node=1 --
     --max-running-requests 128 \
     --enable-metrics \
     --pre-warm-nccl \
+    ${SGLANG_EXTRA_ARGS} \
     --host 0.0.0.0 --port "${API_PORT}" \
     > "${RUN_DIR}/sglang-node${SLURM_PROCID}.log" 2>&1
 ' &
@@ -131,6 +141,10 @@ gate = [
     ('long-code', LONG + '\n\nIgnore the text above. Write a C function that sums a float array. '
                   'Code only.'),
 ]
+# A request that raised is the engine failing, not a datum. 620806 OOM-killed its server mid-sweep
+# and this script still exited 0, so slurm recorded the job COMPLETED while nothing was served.
+FAILURES = []
+
 print('===== accuracy gate =====', flush=True)
 for tag, prompt in gate:
     try:
@@ -138,6 +152,7 @@ for tag, prompt in gate:
         print(f'ACC {tag}: {txt.strip()[:160]!r}', flush=True)
     except Exception as e:
         print(f'ACC {tag}: ERR {repr(e)[:120]}', flush=True)
+        FAILURES.append(f'accuracy gate {tag} raised')
 
 # --- throughput: streamed completions at 10k-token prompts, per-request-distinct prefixes so
 # every request pays real prefill (the campaign's cache-cold shape is what killed the vLLM arm)
@@ -181,7 +196,10 @@ def run_arm(name, conc, tools=False):
     errs = conc - len(good)
     if not good:
         print(f'{name} conc={conc} ALL {errs} FAILED: {list(out.values())[:2]}', flush=True)
+        FAILURES.append(f'{name} conc={conc}: all {errs} requests failed')
         return
+    if errs:
+        FAILURES.append(f'{name} conc={conc}: {errs} of {conc} requests failed')
     ttft_max = max(v[0] for v in good)
     toks = sum(v[2] for v in good)
     decode = [(v[2] - 1) / (v[1] - v[0]) for v in good if v[1] > v[0] and v[2] > 1]
@@ -194,6 +212,12 @@ for c in [int(x) for x in os.environ.get('SWEEP_CONCURRENCY', '1 8 16').split()]
     run_arm('sglang-sweep', c)
 print('===== campaign shape: chat+stream+tools =====', flush=True)
 run_arm('sglang-tools', 16, tools=True)
+
+if FAILURES:
+    print('===== SMOKE FAILED =====', flush=True)
+    for line in FAILURES:
+        print('  ' + line, flush=True)
+    sys.exit(1)
 PYEOF
 
 stage "accuracy gate + concurrency sweep (client on ${MASTER})"
