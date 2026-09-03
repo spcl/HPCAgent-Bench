@@ -17,9 +17,9 @@ parameters:
     NLEV: 90
     NPROMA: 256
   XL:
-    NB: 1344
-    NLEV: 90
-    NPROMA: 256
+    NB: 2744
+    NLEV: 184
+    NPROMA: 523
 init:
   input_args:
   - NB

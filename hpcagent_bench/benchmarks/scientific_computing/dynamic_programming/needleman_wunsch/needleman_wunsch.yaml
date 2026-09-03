@@ -11,7 +11,7 @@ parameters:
     N: 16000
     penalty: 1
   L:
-    N: 22723
+    N: 18847
     penalty: 1
   XL:
     N: 32270

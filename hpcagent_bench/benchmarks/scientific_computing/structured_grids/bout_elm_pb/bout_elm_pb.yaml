@@ -37,9 +37,9 @@ parameters:
     NY: 196
     NZ: 128
   XL:
-    NX: 324
-    NY: 260
-    NZ: 256
+    NX: 342
+    NY: 275
+    NZ: 271
 init:
   func_name: initialize
   input_args:

@@ -10,7 +10,7 @@ parameters:
   L:
     N: 16134
   XL:
-    N: 22818
+    N: 23168
 init:
   input_args:
   - N

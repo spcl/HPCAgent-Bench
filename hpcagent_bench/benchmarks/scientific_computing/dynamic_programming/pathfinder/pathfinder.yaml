@@ -14,8 +14,8 @@ parameters:
     rows: 3391
     cols: 76759
   XL:
-    rows: 5704
-    cols: 91282
+    rows: 5791
+    cols: 92686
 init:
   arrays:
     grid: "(rows, cols)"

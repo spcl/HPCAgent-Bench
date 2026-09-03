@@ -20,8 +20,8 @@ parameters:
     NCLV: 5
     KLON: 887742
   XL:
-    NCLV: 5
-    KLON: 12025237
+    NCLV: 2
+    KLON: 66364246
 init:
   func_name: initialize
   input_args:

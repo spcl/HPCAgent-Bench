@@ -20,9 +20,9 @@ parameters:
     nfrag: 139
     k: 32
   XL:
-    N: 367
+    N: 375
     Lb: 45
-    nfrag: 155
+    nfrag: 158
     k: 33
   fuzzed:
     N: [24, 200]

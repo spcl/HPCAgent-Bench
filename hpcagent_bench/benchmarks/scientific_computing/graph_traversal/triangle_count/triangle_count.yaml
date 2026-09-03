@@ -16,8 +16,8 @@ parameters:
     NV: 65536
     NE: 2097152
   XL:
-    NV: 262144
-    NE: 16777216
+    NV: 179558
+    NE: 11491700
 init:
   input_args:
   - NV

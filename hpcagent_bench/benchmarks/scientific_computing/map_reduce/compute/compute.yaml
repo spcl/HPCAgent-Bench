@@ -13,8 +13,8 @@ parameters:
     M: 11478
     N: 11478
   XL:
-    M: 13175
-    N: 13175
+    M: 13377
+    N: 13377
 init:
   input_args:
   - M
