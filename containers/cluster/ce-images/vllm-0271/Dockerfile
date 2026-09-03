@@ -301,9 +301,7 @@ RUN set -eux; \
 # aiter/ops/triton/_triton_kernels, and conch_triton_kernels is a different distribution with a
 # different top-level name. Checked before removing, and checked again in the gate below.
 # ================================================================================================
-RUN set -eux; \
-    /opt/pytorch211/bin/python -m pip uninstall -y triton_kernels; \
-    ! /opt/pytorch211/bin/python -m pip show triton_kernels 2>/dev/null | grep -q '^Name:'
+# (the uninstall itself now runs AFTER aiter -- see below, before the triton repair.)
 
 # Triton path, not composable-kernel: SKIP_CK_BUILD turns a multi-hour gfx942 CK compile into a
 # minutes-long pure-Triton install. --no-build-isolation because flash-attn's setup.py imports
@@ -375,6 +373,14 @@ PATCH
 # into the per-job CE overlay, so an op this prebuild did not cover degrades to today's cold-cache
 # behaviour rather than failing. run_cluster.sh reads it as ${AITER_JIT_DIR:-...}, so this value
 # wins over its scratch default without a launcher change.
+# The uninstall runs HERE, after every installer, not beside the explanation above. Run early it
+# reported "Skipping triton_kernels as it is not installed" and aiter's own resolve then pulled the
+# package back in transitively -- flydsl moved 0.1.4.2 -> 0.3.1 with aiter v0.1.20 -- so the gate
+# below caught a package the build believed it had removed (job 620804). Last word, not first.
+RUN set -eux; \
+    /opt/pytorch211/bin/python -m pip uninstall -y triton_kernels; \
+    ! /opt/pytorch211/bin/python -m pip show triton_kernels 2>/dev/null | grep -q '^Name:'
+
 # ONE VERSION OF ONE THING: triton, restored after the resolver replaces it.
 #
 # xgrammar declares an unpinned `triton`. On PyPI that name is the NVIDIA distribution, so pip
