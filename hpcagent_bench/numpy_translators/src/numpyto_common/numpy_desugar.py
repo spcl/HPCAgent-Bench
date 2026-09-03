@@ -3210,14 +3210,6 @@ class _DropValidationGuards(ast.NodeTransformer):
         return node
 
 
-def _strip_docstring_stmts(body: List[ast.stmt]) -> List[ast.stmt]:
-    return [
-        s
-        for s in body
-        if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant) and isinstance(s.value.value, str))
-    ]
-
-
 #: ``np.<name>`` abstract dtype category -> the concrete dtype KINDS it covers.
 #: Used to fold ``np.issubdtype(x.dtype, np.<name>)`` to a compile-time bool.
 _ISSUBDTYPE_CATEGORY: Dict[str, set] = {
