@@ -509,6 +509,7 @@ for mod in ("vllm._C", "vllm._rocm_C"):
 tritons = dists("triton", "pytorch-triton", "pytorch-triton-rocm", "triton-rocm")
 assert len(tritons) == 1, f"expected exactly one triton, got {[d.metadata['Name'] for d in tritons]}"
 triton_dist = (tritons[0].metadata["Name"] or "").replace("-", "_").lower()
+triton_version = tritons[0].version
 assert triton_dist == "triton_rocm", f"not the ROCm triton distribution: {triton_dist}"
 import triton
 import triton.backends
