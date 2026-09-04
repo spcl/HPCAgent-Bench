@@ -203,14 +203,22 @@ def test_every_campaign_variant_declares_its_own_arm():
     it; run_campaign.sh refuses that drift, and the labels have to agree for it to be able to.
 
     EVERY .env, not a hand-listed few: the pair drifted apart four times while two were checked.
-    .env.example is the template and carries a deliberately blank arm."""
+    .env.example is the template and carries a deliberately blank arm.
+
+    A ``-wN`` suffix is NOT an arm of its own, and run_campaign.sh is the authority on that: sharded
+    variants split one arm's problem list across jobs that differ only in PROBLEMS_FILE, so they
+    share a label and the run_id keeps the shard apart. It strips the suffix before comparing, and
+    this pins the same rule -- demanding the suffix in CAMPAIGN_ARM would split one arm's rows into
+    as many arms as there are workers."""
     for path in sorted(EXAMPLE.glob(".env.*")):
         if path.name == ".env.example" or path.suffix in (".bak", ".v2bak"):
             continue
-        arm = path.name[len(".env.") :]
-        assert f"\nCAMPAIGN_ARM={arm}\n" in path.read_text(), (
-            f"{path.name} must carry CAMPAIGN_ARM={arm}; rename the file to the arm label rather "
-            "than relabelling the arm, because the label is what the judge DB already records"
+        variant = path.name[len(".env.") :]
+        arm = re.sub(r"-w\d$", "", variant)
+        text = path.read_text()
+        assert f"\nCAMPAIGN_ARM={arm}\n" in text or f"\nCAMPAIGN_ARM={variant}\n" in text, (
+            f"{path.name} must carry CAMPAIGN_ARM={arm} (or {variant}); rename the file to the arm "
+            "label rather than relabelling the arm, because the label is what the judge DB records"
         )
     assert "\nCAMPAIGN_ARM=\n" in (EXAMPLE / ".env.example").read_text()
     assert '"${CAMPAIGN_ARM:-}" != "${VARIANT}"' in (EXAMPLE / "run_campaign.sh").read_text()

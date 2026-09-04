@@ -169,9 +169,17 @@ def interpolate_symbol(small, large, fraction: float):
     value = small * (large / small) ** fraction
     if not (isinstance(small, int) and isinstance(large, int)):
         return value
+    clamped = min(max(round(value), min(small, large)), max(small, large))
     if is_power_of_two(small) and is_power_of_two(large):
-        return min(max(snap_power_of_two(value), min(small, large)), max(small, large))
-    return min(max(round(value), min(small, large)), max(small, large))
+        snapped = min(max(snap_power_of_two(value), min(small, large)), max(small, large))
+        # ADJACENT powers of two have none between them, so the snap can only land on an end and
+        # the derived rung becomes a second copy of M or XL. dwt2d spans 8192..16384 and every
+        # probe came back 16384: "the problem does not grow from L to XL". Keeping the structure is
+        # unsatisfiable there, and the manifest states the real requirement as a `constraints:`
+        # expression anyway, which constrain_derived then snaps to.
+        if snapped not in (small, large) or clamped in (small, large):
+            return snapped
+    return clamped
 
 
 def interpolate(small: Mapping[str, object], large: Mapping[str, object]) -> Dict[str, Dict[str, object]]:

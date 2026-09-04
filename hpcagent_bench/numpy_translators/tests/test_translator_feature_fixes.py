@@ -948,7 +948,7 @@ def test_fp16_emission_compiles_c_cpp(kernel):
             # Output width comes from the IR precision pass -> the half C type.
             assert "_Float16" in src.read_text(), f"{kernel} {backend}: fp16 element type _Float16 not emitted"
             r = subprocess.run(
-                no.COMPILE[backend] + [str(src), "-o", str(tdp / f"o_{backend}.so")], capture_output=True, text=True
+                no.native_build_command(backend, src, tdp / f"o_{backend}.so"), capture_output=True, text=True
             )
             assert r.returncode == 0, f"{kernel} {backend} fp16 compile failed:\n{r.stderr[:600]}"
 

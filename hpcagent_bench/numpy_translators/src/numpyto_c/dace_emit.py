@@ -1451,7 +1451,12 @@ def written_through(fn: ast.FunctionDef) -> set:
             if isinstance(node, ast.Assign)
             else ([node.target] if isinstance(node, (ast.AugAssign, ast.AnnAssign)) else [])
         )
+        # A tuple target is a list of stores, not one: ``a[i], b[j] = ...`` lands on both. Missing
+        # that read daubechies_dwt2d's four quadrant writes as no store at all.
+        flat = []
         for target in targets:
+            flat.extend(target.elts if isinstance(target, ast.Tuple) else [target])
+        for target in flat:
             if isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name):
                 names.add(target.value.id)
     return names
@@ -1476,6 +1481,40 @@ def copy_view_bindings(fn: ast.FunctionDef, names, symbols: frozenset = frozense
                     keywords=[],
                 )
                 stmt.value = ast.copy_location(copied, stmt.value)
+
+
+def views_of_written_bases(fn: ast.FunctionDef) -> set:
+    """View names whose BASE array is stored into later in the same block.
+
+    dace's simplify fuses a straight-line block into ONE dataflow state, and inside one state there
+    is no ordering edge between a read through a View and a write to the array that view reads:
+    codegen may serialize the write first. daubechies_dwt2d binds ``block = out[:s, :s]``, reads it
+    for both column bands, then writes four quadrants of ``out``; one term of the high band was
+    emitted after the first quadrant write and read back what that write had just replaced.
+
+    Only bindings whose every read precedes the first such store are named. A kernel that reads the
+    view AFTER writing the base is relying on the aliasing, and a copy would answer the wrong array.
+    """
+    names = set()
+    for block in statement_lists(fn):
+        for index, stmt in enumerate(block):
+            name = view_slice_binding(stmt)
+            if name is None:
+                continue
+            rest = block[index + 1 :]
+            base = stmt.value.value.id
+            store = next((i for i, later in enumerate(rest) if base in written_through(later)), None)
+            if store is None:
+                continue
+            read = max((i for i, later in enumerate(rest) if name in loaded_names(later)), default=-1)
+            if read < store:
+                names.add(name)
+    return names
+
+
+def loaded_names(node: ast.AST) -> set:
+    """Every name READ in the subtree."""
+    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
 
 
 def mixed_view_names(fn: ast.FunctionDef, symbols: frozenset = frozenset()) -> set:
@@ -3569,6 +3608,7 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
     symbol_set = frozenset(symbol_names)
     copy_view_bindings(fn_ast, mixed_view_names(fn_ast, symbol_set), symbol_set)
     copy_view_bindings(fn_ast, version_rebound_views(fn_ast), symbol_set)
+    copy_view_bindings(fn_ast, views_of_written_bases(fn_ast), symbol_set)
     version_reallocations(fn_ast)
     # Widest last: a name bound to a computed value in two arms of a branch is one descriptor dace
     # refuses to rebind, and the narrower predicates above see neither binding. Only the bindings

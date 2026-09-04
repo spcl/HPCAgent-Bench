@@ -118,7 +118,7 @@ def test_fp8_emits_and_compiles(tmp_path, cli, canon, mlname, backend):
         assert fn in text, f"{backend}: fp8 helper {fn} not emitted"
 
     r = subprocess.run(
-        no.COMPILE[backend] + [str(src), "-o", str(tmp_path / f"o_{backend}.so")], capture_output=True, text=True
+        no.native_build_command(backend, src, tmp_path / f"o_{backend}.so"), capture_output=True, text=True
     )
     assert r.returncode == 0, f"{KERNEL} {backend} {cli} compile failed:\n{r.stderr[:1500]}"
 
@@ -165,7 +165,7 @@ def test_fp8_numeric_matches_numpy_oracle(tmp_path, cli, canon, mlname, backend)
     _emit_fp8(tmp_path, cli)
     src = _src(tmp_path, cli, backend)
     so = tmp_path / f"num_{backend}.so"
-    r = subprocess.run(no.COMPILE[backend] + [str(src), "-o", str(so)], capture_output=True, text=True)
+    r = subprocess.run(no.native_build_command(backend, src, so), capture_output=True, text=True)
     assert r.returncode == 0, f"{backend} {cli} compile failed:\n{r.stderr[:1500]}"
 
     # Values well inside the format's finite range, so this measures rounding, not overflow saturation.
@@ -195,7 +195,7 @@ def test_fp8_conversions_cover_every_code(tmp_path, cli, canon, mlname):
     f8 = vars(ml_dtypes)[mlname]
     _emit_fp8(tmp_path, cli)
     so = tmp_path / "rt.so"
-    r = subprocess.run(no.COMPILE["c"] + [str(_src(tmp_path, cli, "c")), "-o", str(so)], capture_output=True, text=True)
+    r = subprocess.run(no.native_build_command("c", _src(tmp_path, cli, "c"), so), capture_output=True, text=True)
     assert r.returncode == 0, r.stderr[:1500]
 
     vals = np.arange(256, dtype=np.uint8).view(f8)
