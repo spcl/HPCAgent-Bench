@@ -655,17 +655,41 @@ def enforce_gpu_residency(sdfg: Any) -> None:
 #:
 #: Every entry is ``finalized``: each ends in a graph ready for codegen, with no later rung to
 #: inherit a finalization from.
-#: ``parallel`` and ``autoopt`` are scored on the CLASSIC generator with tree reductions and the
+#: ``parallel`` and ``autoopt`` are scored on the CLASSIC generators with tree reductions and the
 #: explicit-copy lift both off -- the configuration DaCe documents as byte-identical to upstream,
 #: which is what makes those two columns comparable against a stock install. ``canon`` is scored on
-#: the readable generator, which tree-reduces and lifts its own copies regardless of the flags.
+#: the experimental generators, which tree-reduce and lift their own copies regardless of the flags.
+#:
+#: The two tuples set the SAME KEYS, always, and that is the point. ``apply_pipeline_config`` writes
+#: them into the process-global ``dace.Config``, so a key one flavor sets and the other omits is a
+#: key the second flavor INHERITS -- from the first flavor in the same process, or from the branch
+#: default. Naming every key in both makes a flavor's configuration total: whichever ran before it,
+#: it lands in its own.
+#:
+#: GPU offloading is the deliberate asymmetry. ``optimizer.new_gpu_offloading_pass`` is TRUE in both
+#: -- ``OffloadToAccelerator``, which decides placement from the whole control flow, is how every
+#: column here offloads. Only the CODE GENERATORS are held back for the parallel/autoopt columns,
+#: because those exist to be comparable against a stock install, and the offloading pass is not part
+#: of what "stock" means for them.
+_NEW_GPU_OFFLOADING: Tuple[Tuple[str, ...], Any] = (("optimizer", "new_gpu_offloading_pass"), True)
+
 CLASSIC_CODEGEN: Tuple[Tuple[Tuple[str, ...], Any], ...] = (
     (("compiler", "cpu", "implementation"), "legacy"),
+    (("compiler", "cuda", "implementation"), "legacy"),
     (("compiler", "emit_tree_reductions"), False),
     (("compiler", "cpu", "explicit_copy"), False),
+    _NEW_GPU_OFFLOADING,
 )
+#: emit_tree_reductions and explicit_copy are stated here too even though the experimental
+#: generators ignore both -- they tree-reduce and lift copies unconditionally. Stating them is what
+#: keeps the key sets identical, so a canon column cannot pick up a False that a classic column
+#: left behind in the same interpreter.
 READABLE_CODEGEN: Tuple[Tuple[Tuple[str, ...], Any], ...] = (
     (("compiler", "cpu", "implementation"), "experimental_readable"),
+    (("compiler", "cuda", "implementation"), "experimental"),
+    (("compiler", "emit_tree_reductions"), True),
+    (("compiler", "cpu", "explicit_copy"), True),
+    _NEW_GPU_OFFLOADING,
 )
 
 

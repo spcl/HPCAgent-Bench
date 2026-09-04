@@ -350,6 +350,20 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "compiler": "clang",
         "precisions": IEEE_PRECISIONS,
     },
+    # The gcc half of C++, which had none: ``llvm`` and ``polly`` are both clang, so a C-vs-C++
+    # comparison could only be read across two compiler families and measured the family as much as
+    # the language. The ``gpp`` block already existed in compilers.yaml with nothing selecting it;
+    # this entry is what makes gcc/g++/gfortran a complete set for one family.
+    "cpp": {
+        "base": "native",
+        "full_name": "C++ (g++)",
+        "prefix": "cpp",
+        "postfix": "cpp",
+        "arch": "cpu",
+        "language": "cpp",
+        "compiler": "gpp",
+        "precisions": IEEE_PRECISIONS,
+    },
     "fortran": {
         "base": "native",
         "full_name": "Fortran (gfortran)",
