@@ -60,9 +60,18 @@ COLUMNS=${COLUMNS:-"numba cc cc_autopar dace_cpu dace_cpu_canonicalize dace_gpu 
 mkdir -p "${OUT_ROOT}"
 printf 'roster: %s kernels\n' "$(tr ',' '\n' <<<"${KERNELS}" | wc -l)"
 
+#: ONE job for every column by default, not one job per column. The columns are independent but
+#: mostly serial work, and seven allocations held seven nodes to run what one node can do in
+#: sequence -- inside a node budget that is the whole campaign's constraint. ONE_JOB=0 goes back
+#: to a job per column when a single column needs to be re-run on its own.
+if [[ "${ONE_JOB:-1}" == 1 ]]; then
+    COLUMNS="$(tr ' ' ',' <<<"${COLUMNS}" | sed 's/,\+/,/g; s/^,//; s/,$//')"
+    TIME_LIMIT=${TIME_LIMIT_ONE_JOB:-24:00:00}
+fi
+
 for col in ${COLUMNS}; do
-    # The GPU columns are the only ones that need the devices; asking for them everywhere would
-    # make a CPU column wait behind a GPU node it never touches.
+    # A job that will run a GPU column at any point needs the devices for the whole allocation;
+    # asking for them on a CPU-only job would make it wait behind a GPU node it never touches.
     gres=()
     [[ "${col}" == *gpu* ]] && gres=(--gres=gpu:4)
     if [[ "${SUBMIT:-1}" != 1 ]]; then
@@ -74,7 +83,7 @@ for col in ${COLUMNS}; do
     # because the login shape (64 cores, 1 socket) is not the mi300 shape (24 cores, 4 sockets).
     dep=(); [[ -n "${DEPEND_ON:-}" ]] && dep=(--dependency="afterany:${DEPEND_ON}")
     jid=$(sbatch --parsable --partition=mi300 --nodes=1 --exclusive --mem=0 \
-        "${gres[@]}" --time="${TIME_LIMIT}" --job-name="canon40-${col}" \
+        "${gres[@]}" --time="${TIME_LIMIT}" --job-name="canon40-${JOB_TAG:-${col%%,*}}" \
         "${dep[@]}" ${BEGIN:+--begin="${BEGIN}"} \
         --output="${OUT_ROOT}/%x-%j.out" --error="${OUT_ROOT}/%x-%j.err" \
         --wrap "bash ${PWD}/canon_column.sh outer ${col} ${OUT_ROOT} ${KERNELS} ${PRESET} ${OPT}")
