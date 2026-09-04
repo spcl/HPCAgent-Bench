@@ -41,10 +41,17 @@ if [[ "${mode}" == outer ]]; then
         echo "canon_column: could not detect cores per socket and HPCAGENT_BENCH_NCORES is unset" >&2
         exit 2
     fi
-    echo "canon ${col}: binding ${cpt} physical cores (one socket), the graded width"
+    #: The node unit here is 4 ranks of one socket each. One rank on one socket leaves three
+    #: sockets idle for the whole column; four ranks each bound to their own socket keep the
+    #: graded width per rank AND use the node. run-framework does not split work itself -- a
+    #: batch job's per-rank invocations are expected to carry disjoint selections -- so the
+    #: split is done below, by rank, and each rank writes its own CSV shard.
+    ranks=${CANON_RANKS:-$(lscpu -p=SOCKET 2>/dev/null | grep -v '^#' | sort -u | wc -l)}
+    [[ "${ranks}" =~ ^[1-9][0-9]*$ ]] || ranks=1
+    echo "canon ${col}: ${ranks} ranks x ${cpt} physical cores (one socket each), the graded width"
     # No --gres here even for a GPU column: the allocation already carries it, and asking a second
     # time from inside is the nested-gres trap that leaves the step with no devices at all.
-    exec srun --environment=optarena-amd-mi300-v5 --ntasks=1 \
+    exec srun --environment=optarena-amd-mi300-v5 --ntasks="${ranks}" \
         --cpus-per-task="${cpt}" --hint=nomultithread --mem=0 \
         bash "${SELF}" inner "${col}" "${out_root}" "${kernels}" "${preset}" "${opt}"
 fi
@@ -65,11 +72,21 @@ export DACE_default_build_folder="${out_root}/dacecache-${col}"
 mkdir -p "${DACE_default_build_folder}" "${out_root}"
 cd "${opt}"
 
-echo "canon ${col}: OMP_NUM_THREADS=${OMP_NUM_THREADS} build_folder=${DACE_default_build_folder}"
+#: Disjoint by rank, and each rank keeps its own CSV: two ranks appending to one file interleave
+#: partial lines, and the merge is a glob at analysis time anyway.
+rank=${SLURM_PROCID:-0}
+nranks=${SLURM_NTASKS:-1}
+csv="${out_root}/${col}.rank${rank}.csv"
+echo "canon ${col} rank ${rank}/${nranks}: OMP_NUM_THREADS=${OMP_NUM_THREADS} build_folder=${DACE_default_build_folder}"
 failed=0
+i=0
+mine=""
 for k in ${kernels//,/ }; do
-    if ! python3 -m hpcagent_bench.cli run-framework -b "${k}" -f "${col}" -p "${preset}" \
-            --csv "${out_root}/${col}.csv"; then
+    [[ $((i % nranks)) -eq ${rank} ]] && mine="${mine} ${k}"
+    i=$((i + 1))
+done
+for k in ${mine}; do
+    if ! python3 -m hpcagent_bench.cli run-framework -b "${k}" -f "${col}" -p "${preset}" --csv "${csv}"; then
         echo "  FAILED ${k}"
         failed=$((failed + 1))
     fi
@@ -80,6 +97,6 @@ done
 # nothing at all reports a clean run.
 awk -F, -v col="${col}" -v hard="${failed}" '
     NR > 1 { total++; if ($9 == "") ok++; else if ($9 == "unsupported") unsup++; else other++ }
-    END { printf "canon %s: %d rows -- %d ok, %d unsupported, %d failed-in-column, %d nonzero-exit\n",
+    END { printf "canon %s rank '"${rank}"': %d rows -- %d ok, %d unsupported, %d failed-in-column, %d nonzero-exit\n",
                  col, total, ok, unsup, other, hard }
-' "${out_root}/${col}.csv"
+'  "${csv}"
