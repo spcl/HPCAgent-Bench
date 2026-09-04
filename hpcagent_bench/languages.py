@@ -1474,9 +1474,14 @@ wrap_kernel` dlopens. Flags resolve from :mod:`hpcagent_bench.flags` via
         src = pathlib.Path(src)
         obj = build_dir / f"{src.name}.o"
         baseline = _resolve_baseline(block, mode)
+        # BLAS on the C/C++ sources for the reason build_shared_lib_commands links it: the
+        # translator lowers a dense 2-D GEMM to cblas_*gemm, so <cblas.h> has to resolve.
+        flags = [extra_flags] if extra_flags else []
+        if lang in ALWAYS_LINKED_LANGS:
+            flags.extend(library_build_flags(lang, ALWAYS_LINKED_LIBRARIES)[0])
         subst = subst_map(
             block["cc"],
-            baseline=f"{baseline} {extra_flags}".strip() if extra_flags else baseline,
+            baseline=" ".join([baseline, *flags]) if flags else baseline,
             src=src,
             obj=obj,
             objs=obj,
@@ -1505,6 +1510,12 @@ wrap_kernel` dlopens. Flags resolve from :mod:`hpcagent_bench.flags` via
     link_argv.extend(f for f in _mimalloc_link_for_block(link_block) if f not in link_argv)
     if extra_flags:  # Polly/Pluto need -fopenmp -lgomp at link too
         link_argv.extend(shlex.split(extra_flags))
+    # ... and the library group LAST, after every object: ld resolves left to right and the
+    # default --as-needed drops a -l that precedes the object needing it, which linked a clean
+    # .so that then failed dlopen with ``undefined symbol: cblas_sgemm``.
+    if langs_present & set(ALWAYS_LINKED_LANGS):
+        lang = "cpp" if "cpp" in langs_present else "c"
+        link_argv.extend(f for f in library_build_flags(lang, ALWAYS_LINKED_LIBRARIES)[1] if f not in link_argv)
     cmds.append(link_argv)
     return cmds
 
