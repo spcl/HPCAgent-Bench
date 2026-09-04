@@ -2299,6 +2299,49 @@ def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
     return out
 
 
+#: Stack a whole kernel frame may spend on literal-sized locals before the rest go to the heap.
+#: Well under the 8 MiB a default thread gets, because an OpenMP worker's stack is smaller again and
+#: the frame also carries the emitted scalars and whatever the compiler spills.
+_STACK_BUDGET_BYTES = 1 << 20
+
+#: Element widths for the C types the emitter declares locals with.
+_C_TYPE_BYTES = {
+    "float": 4,
+    "double": 8,
+    "int8_t": 1,
+    "int16_t": 2,
+    "int32_t": 4,
+    "int64_t": 8,
+    "uint8_t": 1,
+    "uint16_t": 2,
+    "uint32_t": 4,
+    "uint64_t": 8,
+    "bool": 1,
+    "_Float16": 2,
+    "float _Complex": 8,
+    "double _Complex": 16,
+}
+
+
+def _literal_stack_bytes(size: str, c_type: str) -> Optional[int]:
+    """Frame bytes a local of ``size`` elements costs, or None when that is not a literal.
+
+    ``size`` is the product of parenthesised extents the emitter built itself, so anything that is
+    not that exact shape -- a symbol, an int_floor, an arithmetic extent -- returns None and lands
+    on the heap, which is the safe direction.
+    """
+    width = _C_TYPE_BYTES.get(c_type)
+    if width is None:
+        return None
+    total = width
+    for token in size.split("*"):
+        digits = token.strip().strip("()").strip()
+        if not digits.isdigit():
+            return None
+        total *= int(digits)
+    return total
+
+
 def _byte_count(size: str, c_type: str) -> str:
     """``size`` elements of ``c_type`` as a byte count for malloc / memset.
 
@@ -2545,21 +2588,28 @@ def _emit_body(
         decls.append(f"{indent}{ctype} {name};")
     # Fresh np.zeros/np.ones locals need an initial fill; zeros_refill lets an in-loop reset re-zero each iteration.
     zeros_refill: Dict[str, Tuple[str, str, str]] = {}
+    #: Literal-sized local bytes committed to the frame so far; the rest spill to the heap.
+    stack_used = 0
     for name, shape in fn_top_locals.items():
         size_tokens = [f"({_c_shape_token(s)})" for s in shape] if shape else []
         size = " * ".join(size_tokens) if size_tokens else "1"
         dtype_tag = local_dtypes.get(name, default_float)
         c_type = _c_type(dtype_tag)
-        # A symbolic-sized local is heap-allocated (a stack VLA could overflow); a literal-sized local stays on the stack.
+        # A symbolic-sized local is heap-allocated (a stack VLA could overflow), and so is a
+        # literal-sized one once the frame's stack budget is spent -- a fixed extent overflows the
+        # stack just as readily as a VLA. alexnet declared 600 MB of literal-sized locals against
+        # the default 8 MB stack and segfaulted before its first statement.
+        stack_bytes = _literal_stack_bytes(size, c_type)
         if name in md_locals:
             # Pluto: pointer-to-array (heap) so name[i][j] is affine.
             tr = emitter.md_trailing[name]
             decls.append(f"{indent}{c_type} (*{name}){tr} = ({c_type} (*){tr})malloc({_byte_count(size, c_type)});")
             heap.append(name)
-        elif any(c.isalpha() for c in size):
+        elif stack_bytes is None or stack_used + stack_bytes > _STACK_BUDGET_BYTES:
             decls.append(f"{indent}{c_type} *{name} = ({c_type} *)malloc({_byte_count(size, c_type)});")
             heap.append(name)
         else:
+            stack_used += stack_bytes
             decls.append(f"{indent}{c_type} {name}[{size}];")
         # Only fill locals explicitly built by a zeros/ones constructor; empty-kind/scratch temps are skipped.
         kind = zeros_fills.get(name)
