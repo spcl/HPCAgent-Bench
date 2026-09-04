@@ -462,6 +462,12 @@ MODEL_SKILL_LANGUAGES: Dict[str, FrozenSet[str]] = {
 #: nothing. Gated on the IMAGE rather than the language because it is the hardware that decides.
 OFFLOAD_ONLY_SKILLS: FrozenSet[str] = frozenset({"openacc", "openmp-offload"})
 
+#: Which directive-offload MODEL each of those pages teaches, and which vendor an image is. Both
+#: exist so the gate below can ask the language registry whether the page's toolchain is reachable
+#: here, instead of restating the answer as a literal that goes stale when a toolchain moves.
+OFFLOAD_SKILL_MODEL: Dict[str, str] = {"openacc": "openacc", "openmp-offload": "openmp"}
+IMAGE_VENDOR: Dict[str, str] = {"amd": "amd", "nvidia": "nvidia"}
+
 
 def model_skill_applies(name: str, task) -> bool:
     """Whether a parallelism-model page is usable in ``task``'s language and image.
@@ -470,8 +476,17 @@ def model_skill_applies(name: str, task) -> bool:
     reachable and nothing is dropped -- the same rule :func:`language_skills_for` follows. The
     IMAGE gate is not relaxed that way: no source language makes a CPU box grow a device.
     """
-    if name in OFFLOAD_ONLY_SKILLS and task.image == "cpu":
-        return False
+    if name in OFFLOAD_ONLY_SKILLS:
+        if task.image == "cpu":
+            return False
+        # And drop a page whose model has no toolchain for THIS vendor. openacc on an amd image is
+        # the case: its only family is nvhpc, which does not offload to AMD, so the pair has no
+        # entry in OFFLOAD_REFS and every C arm here was carrying a page for a compiler that is not
+        # in the image. Registry lookup, no device probe -- a prompt asks this once per page.
+        vendor = IMAGE_VENDOR.get(task.image)
+        model = OFFLOAD_SKILL_MODEL.get(name)
+        if vendor and model and not languages.offload_model_available(model, vendor):
+            return False
     languages_for_page = MODEL_SKILL_LANGUAGES.get(name)
     if languages_for_page is None:
         return True
