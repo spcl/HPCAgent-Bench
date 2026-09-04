@@ -13,11 +13,14 @@
 set -eu
 
 REPO="${TBLIS_REPO:-https://github.com/devinamatthews/tblis.git}"
-# NOT PINNED YET, unlike build-hptt.sh: a floating ref makes the image's contents a function of the
-# day it was built, so set TBLIS_REF to a verified commit before building an image for a campaign.
-# Left floating because the pin has to be a commit that was actually observed to build, and this
-# script was written without network access to establish one.
-REF="${TBLIS_REF:-master}"
+# PINNED to the last autotools release. master is v2.0-beta, which VENDORS BLIS through CMake
+# FetchContent, and gcc 16 rejects that BLIS's haswell sup kernels -- "bp cannot be used in `asm`
+# here" on bli_gemmsup_rv_haswell_asm_{d6x8m,s6x16m,d6x8n,s6x16n} (621401). Removing blis from the
+# image's spack list did not help, because this is a second copy reached through here. v1.3.0
+# carries its own kernels, has no submodules and no vendored BLIS; only its knl config touches
+# %rbp, and the config list below never selects knl. Verified to build under the image's gcc 16.2
+# in 621508.
+REF="${TBLIS_REF:-v1.3.0}"
 CXX="${CXX:-g++}"
 # Named, not left to CMake's default. TBLIS vendors BLIS, whose config/*/make_defs.mk derives a
 # vendor from `$(CC) --version` and hard-errors on anything but gcc/icc/clang/nvc. CMake picks
@@ -34,9 +37,10 @@ clone_pinned() {
     git init -q "$SRC"
     git -C "$SRC" fetch -q --depth 1 "$REPO" "$REF"
     git -C "$SRC" checkout -q FETCH_HEAD
-    # TBLIS vendors MArray, TCI and stl_ext as submodules, and its CMakeLists aborts on the first
-    # of them with "MArray not found". Inside the retry loop, not after it: these are three more
-    # anonymous fetches and throttling hits them the same way it hits the one above.
+    # A no-op at v1.3.0, which has no .gitmodules -- kept for an overridden TBLIS_REF, where the
+    # 2.x line vendors MArray, TCI and stl_ext and aborts on the first with "MArray not found".
+    # Inside the retry loop, not after it: those are three more anonymous fetches and throttling
+    # hits them the same way it hits the one above.
     git -C "$SRC" submodule update --init --recursive --depth 1
 }
 
@@ -61,8 +65,12 @@ while : ; do
 done
 cd "$SRC"
 
-# --enable-config=auto keeps the build ISA-portable rather than pinning one microarchitecture.
-./configure --prefix=/usr/local --enable-config=auto CC="$CC" CXX="$CXX"
+# NAMED configs, not `auto`. `auto` builds EVERY x86 config and dispatches at run time, and one of
+# them is knl, whose kernels ask for -mavx512pf -- a flag gcc dropped after 13, so the build dies
+# on a target this machine cannot run anyway (621500). zen covers the Zen host and haswell is the
+# AVX2 fallback beneath it; runtime dispatch still picks between them.
+TBLIS_CONFIGS="${TBLIS_CONFIGS:-zen,haswell}"
+./configure --prefix=/usr/local --enable-config="$TBLIS_CONFIGS" CC="$CC" CXX="$CXX"
 make -j"$(nproc)"
 make install
 ldconfig

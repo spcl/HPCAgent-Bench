@@ -115,6 +115,15 @@ RUN set -eux; \
 # measurement ends up reading the one WITHOUT them.
 # Deliberately NOT installed: the distro BLAS/LAPACK/solver stack. Those come from spack, so the
 # OpenBLAS the generated code links is the threads=openmp build and nothing else.
+# The ONE exception is blis, and it is here rather than in the spack list because spack builds it
+# from source and gcc 16 rejects its haswell sup kernels -- "bp cannot be used in `asm` here"
+# (621068, and again with -fomit-frame-pointer in 621321). The distro ships a BINARY, so no
+# compiler of ours ever sees that asm. libblis-openmp-dev is the OPENMP flavor by name, the same
+# choice made for OpenBLAS; it registers /usr/include/x86_64-linux-gnu/blis.h and
+# /usr/lib/x86_64-linux-gnu/libblis.so through update-alternatives, which is what makes the
+# `-lblis` and `#include <blis.h>` that libraries.yaml declares resolve without any -I of its own.
+# It also becomes the image's libblas.so provider, which nothing was providing before and which
+# the generated code never asks for by that name.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
@@ -125,7 +134,7 @@ RUN set -eux; \
       unzip vim nano file bzip2 xz-utils patch diffutils gzip gawk \
       automake autoconf libtool bison flex texinfo gettext \
       libnuma-dev libhwloc-dev libudev-dev libgmp-dev libyaml-dev libssl-dev zlib1g-dev \
-      libcurl4-openssl-dev libxml2-dev uuid-dev \
+      libcurl4-openssl-dev libxml2-dev uuid-dev libblis-openmp-dev \
       make cmake ninja-build pkg-config; \
     if ! apt-get install -y --no-install-recommends linux-perf; then \
       apt-get install -y --no-install-recommends linux-tools-common linux-tools-generic || true; \
@@ -137,6 +146,8 @@ RUN set -eux; \
       if [ -x "${tool_bin}" ]; then ln -sf "${tool_bin}" /usr/local/bin/cpupower; fi; \
     done; \
     command -v perf; \
+    test -f /usr/include/x86_64-linux-gnu/blis.h; \
+    test -e /usr/lib/x86_64-linux-gnu/libblis.so; \
     rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------------------------
@@ -339,9 +350,9 @@ RUN set -eux; \
       '  - mimalloc' \
       '  - eigen' \
       '  - blaze' \
-      '  # NO blis: gcc 16 refuses its haswell asm ("bp cannot be used in `asm` here", 621068)' \
-      '  # and -fomit-frame-pointer does not help (621321, identical error). No upstream patch,' \
-      '  # 2.0 is newest. OpenBLAS and MKL cover the shape.' \
+      '  # NO blis from SOURCE: gcc 16 refuses its haswell asm ("bp cannot be used in `asm` here",' \
+      '  # 621068) and -fomit-frame-pointer does not help (621321, identical error). It comes from' \
+      '  # apt instead -- libblis-openmp-dev, a binary no compiler of ours reads.' \
       '  # NO slate: its matgen units die under this toolchain (621349) and netlib-scalapack' \
       '  # already covers distributed dense. trilinos stays out too -- hours of build for solvers' \
       '  # petsc, hypre, mumps and superlu-dist already provide.' \
@@ -551,16 +562,16 @@ RUN set -eux; \
     ls /opt/intel-mkl/lib/libmkl_core.so*
 
 # tblis and HPTT are packaged nowhere, so both CE images build them with the repo's own scripts.
-# TBLIS_REF is pinned HERE rather than in build-tblis.sh, which deliberately leaves it floating
-# until a commit has been observed to build: this value is devinamatthews/tblis master as of
-# 2026-09-02 and has not yet had a successful build against it, so confirm it from the first
-# build log before treating it as verified.
+# TBLIS_REF is the v1.3.0 tag, restated here so the image records the version it built rather than
+# inheriting a default. The 2.0-beta line that master carries vendors BLIS and does not compile
+# under gcc 16 (621401); v1.3.0 does, in two minutes, verified in 621508 -- build-tblis.sh holds
+# the detail.
 # The library is asserted alongside the header: header-only success is how a half-install ships
 # (v5 carried libhptt.so and no tblis library at all). Comment here, not inside the RUN -- one
 # between line continuations is passed to the shell and comments out the rest.
 COPY containers/build-hptt.sh /build-hptt.sh
 COPY containers/build-tblis.sh /build-tblis.sh
-ARG TBLIS_REF=eb719e718976572e0ab53975f4e0c799faeb35f2
+ARG TBLIS_REF=v1.3.0
 RUN set -eux; \
     sh /build-hptt.sh; \
     TBLIS_REF="${TBLIS_REF}" sh /build-tblis.sh; \
@@ -581,6 +592,12 @@ RUN set -eux; \
 #
 # perf_event is named alongside the two new components so the build is right under either
 # reading of --with-components -- additive, or replacing the default list.
+#
+# --allow-multiple-definition, because sysdetect puts linux_cpu_utils.c and x86_cpu_utils.c on the
+# libpapi.so link line TWICE and every symbol in them collides with itself (621528). The duplicate
+# is the SAME object built from the SAME source, so first-definition-wins is the correct
+# resolution and not a papering-over; what changed is only that binutils 2.47 refuses by default
+# where the linkers PAPI 7.2 was released against did not.
 ARG PAPI_REF=papi-7-2-0-t
 RUN set -eux; \
     git init -q /tmp/papi; \
@@ -589,7 +606,8 @@ RUN set -eux; \
     git -C /tmp/papi checkout -q FETCH_HEAD; \
     cd /tmp/papi/src; \
     ./configure --prefix=/opt/papi \
-      --with-components="perf_event perf_event_uncore sysdetect rocm rocm_smi"; \
+      --with-components="perf_event perf_event_uncore sysdetect rocm rocm_smi" \
+      LDFLAGS="-Wl,--allow-multiple-definition"; \
     make -j"$(nproc)"; \
     make install; \
     cd /; \
@@ -737,13 +755,19 @@ RUN set -eux; \
 #
 # The packaged entry point is kept beside the wrapper as .image rather than deleted, and it is a
 # WRAPPER rather than a PATH entry so the fix holds whatever PATH order a caller has.
+#
+# astunparse is read TOLERANTLY, because at this point in the file it is not installed yet: it
+# arrives as a dependency of the editable dace install further down, so a bare `import astunparse`
+# exits non-zero, and under `set -e` an assignment whose only command is that substitution takes
+# the build down with it (621615). The guard asks whether the version CHANGED, and "absent both
+# times" is a truthful answer to that; the ordering is what makes a hard import wrong here.
 ARG ROCPROF_COMPUTE_PANDAS=2.2.3
 RUN set -eux; \
     rc=/opt/rocm/libexec/rocprofiler-compute; \
     test -f "${rc}/requirements.txt"; \
     numpy_before="$(python3 -c 'import numpy; print(numpy.__version__)')"; \
     pandas_before="$(python3 -c 'import pandas; print(pandas.__version__)')"; \
-    astunparse_before="$(python3 -c 'import astunparse; print(astunparse.__version__)')"; \
+    astunparse_before="$(python3 -c 'import astunparse; print(astunparse.__version__)' 2>/dev/null || echo absent)"; \
     python3 -m venv /opt/rocprof-compute-venv; \
     /opt/rocprof-compute-venv/bin/pip install --no-cache-dir --upgrade pip setuptools wheel; \
     /opt/rocprof-compute-venv/bin/pip install --no-cache-dir \
@@ -757,7 +781,7 @@ RUN set -eux; \
     rocprof-compute --version >/dev/null; \
     test "$(python3 -c 'import numpy; print(numpy.__version__)')" = "${numpy_before}" \
       && test "$(python3 -c 'import pandas; print(pandas.__version__)')" = "${pandas_before}" \
-      && test "$(python3 -c 'import astunparse; print(astunparse.__version__)')" = "${astunparse_before}" \
+      && test "$(python3 -c 'import astunparse; print(astunparse.__version__)' 2>/dev/null || echo absent)" = "${astunparse_before}" \
       || { echo "rocprof-compute install moved the graded numpy/pandas/astunparse" >&2; exit 2; }
 
 # Judge-side python: the crawl/browser stack and the proxy the arms talk through.
