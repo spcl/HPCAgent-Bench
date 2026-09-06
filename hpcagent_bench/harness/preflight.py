@@ -31,6 +31,7 @@ DETERMINISTIC_FRAMEWORKS: Tuple[str, ...] = (
     "cc",
     "cc_autopar",
     "llvm",
+    "cpp",
     "fortran",
     "fortran_autopar",
     "flang",

@@ -854,6 +854,30 @@ def generate_framework(fname: str, save_strict: bool = False, load_strict: bool 
     return cls(fname)
 
 
+def check_native_registry() -> None:
+    """Every ``base: native`` framework must declare its language in BOTH sibling registries.
+
+    ``autogen.NATIVE_FRAMEWORKS`` (which language to EMIT) and ``cpp_runtime.FRAMEWORK_LANG`` (which
+    language to COMPILE) are documented as mirrors of each other, but nothing checked it. A column
+    registered here and missing from them is not a startup error: it resolves, prints its full name,
+    and then raises ``KeyError`` inside the per-kernel fork, so the sweep exits 0 having written one
+    ``crash`` row per kernel -- which reads downstream as "the column ran and every kernel failed".
+    Measured: the ``cpp`` column lost a 40-kernel sweep that way.
+
+    ``language`` is not re-derived here; the entry states it and this asserts the others agree."""
+    from hpcagent_bench.autogen import NATIVE_FRAMEWORKS
+    from hpcagent_bench.benchmarks.cpp_runtime import FRAMEWORK_LANG
+
+    for name, meta in FRAMEWORK_META.items():
+        if meta.get("base") != "native":
+            continue
+        if name not in NATIVE_FRAMEWORKS:
+            raise KeyError(f"native framework {name!r} has no autogen.NATIVE_FRAMEWORKS entry")
+        if name not in FRAMEWORK_LANG:
+            raise KeyError(f"native framework {name!r} has no cpp_runtime.FRAMEWORK_LANG entry")
+
+
 # A malformed flavor entry is a wrong GROUP BY key on every row it writes, and the rows outlive the
 # run. Checked once, here, at import -- there is no later moment at which noticing still helps.
 check_flavor_registry()
+check_native_registry()
