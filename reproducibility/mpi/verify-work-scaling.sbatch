@@ -41,7 +41,7 @@ OUT_DIR="${SCRATCH:?}/optarena-logs"
 OUT="${OUT_DIR}/mpi-work-scaling-${SLURM_JOB_ID:-local}.json"
 mkdir -p "${OUT_DIR}"
 
-printf 'image:    %s\nrepo:     %s\npreset:   %s\nselector: %s\n\n' "${EDF}" "${REPO}" "${PRESET}" "${SELECTOR}"
+printf 'image:    %s\nrepo:     %s\npreset:   %s\nselector: %s\nbudget:   %s GiB\n\n' "${EDF}" "${REPO}" "${PRESET}" "${SELECTOR}" "${MEMORY_GB}"
 
 # PYTHONHASHSEED=0: the dace-backed emit path is order-sensitive, and a reference that differs
 # between the two counted sizes would be comparing two programs, not two sizes.
