@@ -48,6 +48,11 @@ tests/test_default_datatype_tolerance.py
 tests/test_fp16.py
 tests/test_frameworks.py
 tests/test_native_autogen.py
+# Phase 4b on frameworks-pluto, the only runner that builds polycc. Left in the unit sweep these
+# three files skipped EVERY case on EVERY run ("polycc absent"), which reads as green forever.
+tests/test_pluto_affine_detect.py
+tests/test_pluto_genuine.py
+tests/test_pluto_override.py
 # Phase 2 on e2e-native, beside test_native_autogen.py: it builds the same C / C++ / Fortran matrix
 # through languages.build_shared_lib_commands, and it is the only thing in CI that compiles a
 # submission delivered as TWO translation units -- the GPU delivery shape (host entry + device
