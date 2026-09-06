@@ -358,6 +358,7 @@ def measure_kernel(
                         "ranks": ranks,
                         "params": params,
                         "reason": f"needs {need / 2**30:.1f} GiB > the {memory_gb:.0f} GiB budget",
+                        "over_budget": True,
                     }
                 )
                 continue
@@ -376,9 +377,27 @@ def measure_kernel(
     row["points"] = points
     row["metric"] = metric
 
+    def _smaller(reason: str) -> dict | None:
+        """Retry the whole kernel one preset down, when the reason to is that it did not FIT.
+
+        Keyed off ``over_budget`` rather than the message, and only for that cause: a host that
+        cannot count at all would otherwise re-run every kernel at every preset to learn the same
+        thing twice. Returns None when there is nothing smaller to try."""
+        if preset not in PRESET_FALLBACK or not any(pt.get("over_budget") for pt in points):
+            return None
+        retried = measure_kernel(key, PRESET_FALLBACK[preset], datatype, reps, timeout, seed, memory_gb)
+        retried["fell_back_from"] = f"{preset} ({reason})"
+        return retried
+
     base_count = points[0].get("count")
     if not base_count:
-        return {**row, "ok": False, "reason": f"{metric} unusable at R=1: {points[0].get('reason', '')}"}
+        # The BASE size did not fit or did not count. Falling back has to be possible here too --
+        # a kernel whose reference allocates 20 GiB before any growth never reaches the rung loop.
+        return _smaller("base size") or {
+            **row,
+            "ok": False,
+            "reason": f"{metric} unusable at R=1: {points[0].get('reason', '')}",
+        }
     for point in points[1:]:
         # The axis grows by R**(1/k); the WORK should grow by R. Both are recorded so a failing
         # kernel shows which of the two the manifest got wrong.
@@ -388,13 +407,12 @@ def measure_kernel(
 
     usable = [p for p in points[1:] if p.get("count")]
     skipped = [p for p in points[1:] if not p.get("count")]
-    if not usable and preset in PRESET_FALLBACK:
-        # Too wide to grow at this size. Measuring it smaller answers the same question; reporting
+    if not usable:
+        # Base fits but nothing grows. Measuring it smaller answers the same question; reporting
         # nothing does not. One step at a time, so the report always names the size it used.
-        smaller = PRESET_FALLBACK[preset]
-        retried = measure_kernel(key, smaller, datatype, reps, timeout, seed, memory_gb)
-        retried["fell_back_from"] = preset
-        return retried
+        fell_back = _smaller("growth rungs")
+        if fell_back is not None:
+            return fell_back
     if skipped:
         # Never silent: a thinned ladder is a weaker check, and the reader must see which rungs
         # went missing before reading the exponent that was fitted from the rest.
