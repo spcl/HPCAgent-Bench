@@ -367,7 +367,7 @@ LANGUAGE_SKILLS = frozenset(
 #: for it and to no others, so its size is charged to those arms only. Pages listed here should
 #: carry a ``when:`` in their frontmatter -- the packet states that trigger next to the page name,
 #: because an inlined page with nothing pointing at it is text the reader has no reason to open.
-OPT_IN_SKILLS: FrozenSet[str] = frozenset({"divide-and-conquer"})
+OPT_IN_SKILLS: FrozenSet[str] = frozenset({"divide-and-conquer", "lang-triton"})
 
 #: Manual-sized pages that are deliberately NOT gated, with the reason. A page this long costs real
 #: tokens in EVERY prompt, so leaving one ungated has to be a decision somebody made on purpose --

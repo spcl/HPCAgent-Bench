@@ -1,6 +1,7 @@
 ---
 name: lang-triton
 description: "Writing Triton on CDNA3: the call the harness times, when a fused kernel beats the library it replaces, and the first-call compile you pay for."
+when: the arm accepts a Python delivery and the kernel has enough arithmetic per byte to pay for the round trip and the first-call compile, write the hot loop as a Triton kernel
 ---
 
 # lang-triton
@@ -69,7 +70,9 @@ and spending that inside a timed rep reads as pathologically slow, or as a timeo
 - **A wave is 64 lanes, not 32.** `num_warps` counts 64-lane waves, so the default `num_warps=4`
   is 256 threads -- twice what it means on NVIDIA. Configs transplanted from an NVIDIA tutorial ask
   for double the occupancy they were tuned at; drop `num_warps` a step first.
-- **`num_stages` defaults to 2 here, not 3.** A workgroup gets 64 KB of local memory and a CUDA
+- **`num_stages` defaults to 2 here, not 3 -- but only on a bare launch.** `triton.Config` keeps its
+  own default of 3 and always forwards it, so an autotune config inherits the CUDA number unless you
+  spell `num_stages=2` yourself. A workgroup gets 64 KB of local memory and a CUDA
   config's 3-4 stages overflows it (the error names the 65536 limit; the fix is a smaller tile or
   fewer stages). 1 belongs to a fused two-matmul kernel, not to general use.
 - **A small `tl.dot` does not fail here, it silently leaves the matrix cores.** This backend takes
