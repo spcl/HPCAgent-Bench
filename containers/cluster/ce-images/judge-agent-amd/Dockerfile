@@ -875,9 +875,17 @@ RUN set -eux; \
       assert p.is_file(), p"; \
     python3 -c "import importlib; \
       mods = ('numpy', 'scipy', 'pandas', 'astunparse', 'cupy', 'dace', 'jax', 'numba', \
-              'pythran', 'triton', 'tvm', 'torch', 'mpi4py'); \
+              'pythran', 'triton', 'tvm', 'torch', 'mpi4py', 'islpy', 'z3', 'sympy', 'h5py'); \
       [importlib.import_module(m) for m in mods]; \
       print('imported:', ' '.join(mods))"; \
+    # islpy and z3 back WavefrontSkew and LoopToMap's dependence proof. Both gates FAIL CLOSED and \
+    # SILENT: without the module the pass is a no-op and every canon number is measured with that \
+    # transformation off, with nothing in the log to say so. Assert the gates, not just the imports. \
+    python3 -c "from dace.sdfg.analysis.polyhedral_isl import HAVE_ISL; \
+      from dace.transformation.passes.analysis import smt_dependence; \
+      assert HAVE_ISL, 'islpy gate closed: WavefrontSkew would be a silent no-op'; \
+      assert smt_dependence.has_z3(), 'z3 gate closed: LoopToMap cannot prove'; \
+      print('solver gates open: isl + z3')"; \
     for tool in polycc claude litellm rocprofv3 rocprof-sys-sample rocprof-compute perf hipcc \
                 amdclang mpicc gcc clang flang; do \
       command -v "${tool}" >/dev/null || { echo "${tool} is missing from the image" >&2; exit 1; }; \
