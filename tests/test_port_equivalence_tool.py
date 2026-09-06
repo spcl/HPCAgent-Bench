@@ -10,7 +10,6 @@ the tool resolves the checkout at module level, and a wrong working directory us
 ``CalledProcessError`` from ``git rev-parse`` instead of a sentence naming the problem.
 """
 
-import pathlib
 import subprocess
 import sys
 

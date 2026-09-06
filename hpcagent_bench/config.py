@@ -46,6 +46,23 @@ def clear_override(dotted: str) -> None:
     _OVERRIDES.pop(dotted, None)
 
 
+def override_snapshot() -> dict:
+    """A copy of the whole runtime-override table, for a caller that must restore it exactly.
+
+    :func:`overridden` scopes ONE key, which is the right tool when the caller knows which key it
+    is pinning. This pairs with :func:`restore_overrides` for a caller that has to undo whatever
+    the code under it happened to set -- ``spec.resolve_preset`` pins ``fuzz.anchor`` and
+    ``seeds.fuzz`` as a side effect, and an override is process-global and outlives the call.
+    """
+    return dict(_OVERRIDES)
+
+
+def restore_overrides(snapshot: dict) -> None:
+    """Put the override table back to ``snapshot`` -- the inverse of :func:`override_snapshot`."""
+    _OVERRIDES.clear()
+    _OVERRIDES.update(snapshot)
+
+
 @contextlib.contextmanager
 def overridden(dotted: str, value: Any):
     """Override ``dotted`` for the block, then restore exactly what was there.

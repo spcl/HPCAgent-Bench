@@ -56,9 +56,7 @@ def emit_once(args: argparse.Namespace) -> int:
     pluto_kir = lower(parse_kernel(args.kernel, args.bench_info, config=args.config, precision=args.precision))
     if args.precision:
         pluto_kir = apply_precision(pluto_kir, args.precision)
-    write_generated(
-        out / f"{base}_pluto_input.c", emit_pluto(pluto_kir, fn_name=sym), line_comment="// ", source=src
-    )
+    write_generated(out / f"{base}_pluto_input.c", emit_pluto(pluto_kir, fn_name=sym), line_comment="// ", source=src)
     emit_binding(kir, out / f"{base}_binding.json", base_name=base, symbol=sym)
     # Pluto's VLA-param signature reorders args (symbols first), so it needs its own binding.
     emit_pluto_binding(pluto_kir, out / f"{base}_pluto_binding.json", base_name=base, symbol=sym)

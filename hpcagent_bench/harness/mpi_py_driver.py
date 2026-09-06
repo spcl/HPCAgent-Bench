@@ -124,6 +124,13 @@ def run(
         with open(outfile, "wb") as f:
             f.write(pack_outfile(world.size, k_repeats, samples, outputs))
 
+    # Match the C driver, which has always called MPI_Finalize (support/bindings/mpi_driver.py).
+    # mpi4py finalizes at exit only when IT did the init, and the check-and-init above means it
+    # did not -- so every rank exited an initialized world. Open MPI's prte reports that as
+    # `prun:proc-exit-no-sync` and the LAUNCHER exits 1 even though every rank ran and wrote its
+    # output, which read as a broken MPI environment and skipped the whole distributed track.
+    MPI.Finalize()
+
 
 def main(argv: Optional[List[str]] = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)

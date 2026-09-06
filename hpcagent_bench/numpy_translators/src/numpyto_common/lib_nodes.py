@@ -8335,8 +8335,12 @@ def _hoist_matmul(
             gemm = ast.Call(
                 func=_name(BLAS_GEMM_MARKER),
                 args=[
-                    _name(a_name), _name(b_name), _name(temp),
-                    _const_or_name(m), _const_or_name(n), _const_or_name(k)
+                    _name(a_name),
+                    _name(b_name),
+                    _name(temp),
+                    _const_or_name(m),
+                    _const_or_name(n),
+                    _const_or_name(k),
                 ],
                 keywords=[],
             )
@@ -8502,8 +8506,12 @@ class _MatmulHoister(ast.NodeTransformer):
                 return ast.Name(id=temp, ctx=ast.Load())
             node = self._materialise_call_operands(node)
             temp, stmts = _hoist_matmul(
-                node, self.shape_table, self.temp_arrays, self.temp_counter, self.dim_aliases,
-                blas=self.blas and self._blas_eligible(node)
+                node,
+                self.shape_table,
+                self.temp_arrays,
+                self.temp_counter,
+                self.dim_aliases,
+                blas=self.blas and self._blas_eligible(node),
             )
             if temp is not None:
                 self.pre_stmts.extend(self._prepend_alloc_markers(stmts))

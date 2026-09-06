@@ -7,7 +7,7 @@ The pipeline is four steps, and each already exists somewhere else:
 1. :func:`hpcagent_bench.autogen.emit_targets` writes the ``<module>_dace.py`` sibling from the
    numpy reference (the same file the dace framework leg runs),
 2. that module's ``@dace.program`` is parsed to an SDFG,
-3. ``canonicalize`` + ``finalize_for_target`` turn it into the maximally parallel CPU form,
+3. ``canonicalize`` + ``finalize_for_target`` turn it into the canonical parallel CPU form,
 4. ``dace.codegen.cpf.render`` emits a translation unit that a bare host compiler accepts -- no
    ``-I``, no ``libdace``, no BLAS -- together with the PREPARED SDFG whose ``arglist()`` is the
    entry point's real signature.

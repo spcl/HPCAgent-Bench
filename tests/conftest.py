@@ -90,6 +90,25 @@ def _cap_fuzz_sizes(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def restore_config_overrides():
+    """Give every test back the config overrides it started with.
+
+    A ``config.set_override`` is process-global and no fixture undoes it -- ``monkeypatch`` cannot,
+    it is not an env var. ``spec.resolve_preset`` pins ``fuzz.anchor`` (and ``seeds.fuzz``) as a
+    side effect of parsing a preset token, so ONE test that resolves a preset re-anchored the fuzz
+    sampler for every later test in that xdist worker: test_fuzz drew sizes around ``S`` while
+    asserting bounds computed from ``XL`` and failed ``50000 <= 7``. It passed alone and failed in
+    the suite, which is the same order-dependence :func:`restore_cpu_affinity` below exists for.
+
+    A snapshot rather than a list of keys to clear, so the next global someone pins is covered
+    too, and restoring rather than clearing so an override a session fixture set legitimately
+    survives."""
+    snapshot = config.override_snapshot()
+    yield
+    config.restore_overrides(snapshot)
+
+
+@pytest.fixture(autouse=True)
 def _restore_cpu_affinity():
     """Give every test back the CPU affinity it started with.
 
