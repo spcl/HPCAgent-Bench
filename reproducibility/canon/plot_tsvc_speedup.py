@@ -1,4 +1,4 @@
-"""TSVC kernel speed-ups from the MPR framework sweep, on a SIGNED relative axis.
+"""TSVC kernel speed-ups from the CPF framework sweep, on a SIGNED relative axis.
 
 Three arms against the serial gcc -O3 reference the sweep times per kernel: dace canon, dace main
 and llvm
