@@ -120,7 +120,12 @@ def binding_for(rendering, kernel: str, symbol: str) -> Binding:
 
 
 def render_sdfg(
-    spec: BenchSpec, numpy_py: pathlib.Path, out_dir: pathlib.Path, language: str, precision: str
+    spec: BenchSpec,
+    numpy_py: pathlib.Path,
+    out_dir: pathlib.Path,
+    language: str,
+    precision: str,
+    target: str = "cpu",
 ) -> Dict[str, Any]:
     """Steps 1-4 for one kernel, in THIS process. Returns the verdict record.
 
@@ -129,7 +134,7 @@ def render_sdfg(
     """
     import dace
     from dace.codegen.mpr import render
-    from dace.transformation.passes.canonicalize.finalize import finalize_for_target
+    from dace.transformation.passes.canonicalize.finalize import finalize_for_target, offload_to_gpu
     from dace.transformation.passes.canonicalize.pipeline import canonicalize
 
     from hpcagent_bench import autogen
@@ -138,7 +143,12 @@ def render_sdfg(
 
     short = short_for(numpy_py)
     base = f"{short}_{fptype_tag(precision)}_mpr"
-    rec: Dict[str, Any] = {"kernel": spec.short_name, "language": language, "precision": precision or "fp64"}
+    rec: Dict[str, Any] = {
+        "kernel": spec.short_name,
+        "language": language,
+        "precision": precision or "fp64",
+        "target": target,
+    }
 
     # Every generated impl annotates with these module-level names, which are None until a
     # framework binds a precision. Without the binding the whole corpus fails at import with
@@ -168,8 +178,14 @@ def render_sdfg(
     # PARALLEL but decides no OpenMP region. finalize_for_target runs the CPU specialization that
     # does, and MPR renders exactly the schedules it finds: without this tail the translation unit
     # is correct and entirely sequential, which is the opposite of the point.
-    canonicalize(sdfg, validate=True, validate_all=False, target="cpu")
-    finalize_for_target(sdfg, "cpu", validate=True)
+    # The fork's documented order, and the GPU one has a step between the two:
+    # canonicalize(target='gpu') -> offload_to_gpu -> finalize_for_target('gpu'). finalize REJECTS
+    # a graph that was never offloaded, so a wiring mistake fails here instead of quietly
+    # finalizing a host-scheduled graph and rendering it as if it were the device form.
+    canonicalize(sdfg, validate=True, validate_all=False, target=target)
+    if target == "gpu":
+        offload_to_gpu(sdfg)
+    finalize_for_target(sdfg, target, validate=True)
     sdfg.name = base
 
     rendering = render(sdfg, language=language)
@@ -191,6 +207,7 @@ def render_kernel(
     *,
     language: str = "c++",
     precision: str = "",
+    target: str = "cpu",
     timeout: float = RENDER_TIMEOUT_S,
     extra_env: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
@@ -220,10 +237,15 @@ def render_kernel(
     ]
     if precision:
         cmd += ["--precision", precision]
+    if target != "cpu":
+        cmd += ["--target", target]
     # A CPU rendering must not see a GPU (the frontend would offload nothing, but cupy imports and
     # device probes cost seconds each), and PYTHONHASHSEED pins the set iteration DaCe's
-    # determinism rests on.
-    env = {**os.environ, "PYTHONHASHSEED": "0", "CUDA_VISIBLE_DEVICES": "", **(extra_env or {})}
+    # determinism rests on. A GPU rendering is the opposite case and must NOT be blinded: hiding
+    # the device from the offload pass is how a device form comes back host-scheduled.
+    env = {**os.environ, "PYTHONHASHSEED": "0", **(extra_env or {})}
+    if target == "cpu":
+        env["CUDA_VISIBLE_DEVICES"] = ""
     started = time.monotonic()
     try:
         proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout)
@@ -270,6 +292,7 @@ def render_track(
     *,
     language: str = "c++",
     precision: str = "",
+    target: str = "cpu",
     timeout: float = RENDER_TIMEOUT_S,
     jsonl: Optional[os.PathLike] = None,
 ) -> List[Dict[str, Any]]:
@@ -282,7 +305,7 @@ def render_track(
     sink = pathlib.Path(jsonl).open("a") if jsonl is not None else None
     try:
         for index, spec in enumerate(track_specs(track), start=1):
-            rec = render_kernel(spec, out_dir, language=language, precision=precision, timeout=timeout)
+            rec = render_kernel(spec, out_dir, language=language, precision=precision, target=target, timeout=timeout)
             records.append(rec)
             print(f"[{index}] {rec['kernel']}: {rec['verdict']}", flush=True)
             if sink is not None:
@@ -305,6 +328,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--out", required=True, help="directory to write the TU and its binding into")
     p.add_argument("--language", default="c++", choices=sorted(LANGUAGE_EXT))
     p.add_argument("--precision", default="", help="fp64 (default) / fp32 / fp16")
+    p.add_argument("--target", default="cpu", choices=("cpu", "gpu"), help="which specialization to render")
     args = p.parse_args(argv)
 
     spec = BenchSpec.load(args.kernel)
@@ -315,7 +339,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         rec["error"] = f"no numpy reference at {numpy_py}"
     else:
         try:
-            rec = render_sdfg(spec, numpy_py, pathlib.Path(args.out), args.language, args.precision)
+            rec = render_sdfg(spec, numpy_py, pathlib.Path(args.out), args.language, args.precision, args.target)
         except NotImplementedError as exc:  # MPR names the construct it cannot render
             rec["verdict"] = "refused"
             rec["error"] = str(exc)[:400]
