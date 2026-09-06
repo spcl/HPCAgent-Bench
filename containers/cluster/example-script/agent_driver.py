@@ -1207,6 +1207,12 @@ def run_agent(
     prompt_file.write_text(prompt, encoding="utf-8")
 
     mcp_config = workdir / "mcp.json"
+    # ``env`` is DECLARED, not inherited. The MCP server is a stdio child of ``claude``, not of this
+    # driver, so the identity we export below reaches it only if the client forwards our environment
+    # -- and it does not do so reliably: measured on the gpu-llr40 campaign, 90 of 95 submissions
+    # landed under the judge's default ``run_id`` of "adhoc" (five of six arms lost their identity
+    # entirely), which makes an arm, node and worker unrecoverable from the row afterwards. Naming
+    # the two variables here puts them in the child's environment by contract instead.
     mcp_config.write_text(
         json.dumps(
             {
@@ -1214,6 +1220,7 @@ def run_agent(
                     "optarena": {
                         "command": "python3",
                         "args": [str((runtime / "tools" / "mcp_server.py").resolve())],
+                        "env": identity_env(problem_index, worker_index),
                     }
                 }
             },
