@@ -75,6 +75,22 @@ This document itself belongs in `docs/`, not here.
 
 ## Load-bearing, do not drop when rewriting a Dockerfile
 
+**islpy and z3 are not optional, and importing them is not the check.** They back
+`WavefrontSkew` and the dependence proof behind `LoopToMap` / `BreakAntiDependence` /
+`LoopFission`, and **both gates fail closed and silent**: with the module absent the pass returns
+on its first line, nothing raises, and the run reports numbers for a weaker pipeline than the
+column it is named for. An image that carries the wheels can still have a closed gate, so the
+build asserts what the passes themselves read:
+
+```
+python3 -c "from dace.sdfg.analysis.polyhedral_isl import HAVE_ISL; \
+  from dace.transformation.passes.analysis import smt_dependence; \
+  assert HAVE_ISL; assert smt_dependence.has_z3()"
+```
+
+`verify_image.py` carries the same two as `dace-gate` checks. Measured 2026-09-06 on
+`optarena-amd-mi300-v5`: islpy 2026.2.1, z3 5.1.0, both gates open.
+
 **rocprof-compute needs its OWN interpreter.** ROCm installs the tool but not its Python deps.
 Installing `/opt/rocm/libexec/rocprofiler-compute/requirements.txt` into the image environment is
 WORSE than the breakage: it pins `astunparse==1.6.2`, and **dace declares astunparse as a
