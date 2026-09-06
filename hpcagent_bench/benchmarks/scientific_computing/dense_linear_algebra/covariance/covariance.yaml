@@ -42,3 +42,12 @@ taxonomy:
   domain: Learning
   tags:
   - npbench
+mpi:
+  decomposition:
+    axis:
+    - N
+    work_exponent: 1
+  arrays:
+    data:
+    - N
+    - M

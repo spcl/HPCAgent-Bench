@@ -45,3 +45,13 @@ taxonomy:
   domain: Chemistry
   tags:
   - npbench
+mpi:
+  decomposition:
+    axis:
+    - NR
+    work_exponent: 1
+  arrays:
+    A:
+    - NR
+    - NQ
+    - NP

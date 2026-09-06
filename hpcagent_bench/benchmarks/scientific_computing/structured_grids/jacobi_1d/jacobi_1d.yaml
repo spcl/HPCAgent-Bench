@@ -40,3 +40,13 @@ taxonomy:
   domain: Physics
   tags:
   - npbench
+mpi:
+  decomposition:
+    axis:
+    - N
+    work_exponent: 1
+  arrays:
+    A:
+    - N
+    B:
+    - N

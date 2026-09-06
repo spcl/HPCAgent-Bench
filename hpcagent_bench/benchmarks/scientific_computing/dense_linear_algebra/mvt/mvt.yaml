@@ -48,3 +48,14 @@ taxonomy:
   domain: LinAlg
   tags:
   - npbench
+mpi:
+  decomposition:
+    axis:
+    - N
+    work_exponent: 2
+  arrays:
+    A:
+    - N
+    - N
+    x1:
+    - N
