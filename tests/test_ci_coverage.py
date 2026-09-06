@@ -198,9 +198,19 @@ def test_the_combined_total_is_built_from_every_job_not_one_of_them() -> None:
         "the combine glob must reach into the per-artifact subdirectories that dropping "
         "merge-multiple creates, or it finds nothing at all"
     )
-    assert "Combined ${#files[@]} file" in text, (
+    # ACCOUNTED FOR, not combined: coverage.py hashes the databases and skips exact duplicates,
+    # and the port-fidelity / ports-cegterg shards split parametrized cases of one test file, so
+    # every shard past the first is byte-identical and legitimately skipped. Demanding
+    # "Combined N" made that a permanent red. The check that matters is combined + skipped == N,
+    # which still refuses a file that was neither.
+    assert "combine accounted for" in text, (
         "nothing checks that combine consumed every uploaded file; a partial combine prints a "
         "perfectly plausible percentage and stays green, which is how this went unnoticed"
+    )
+    assert 'Skipping duplicate data ' in text and "Combined (\\d+) files?" in text, (
+        "the guard must count BOTH combined and skipped-as-duplicate files, and must handle both "
+        "of coverage.py's report shapes (a per-file listing and a one-line summary); counting only "
+        "one of them turns a legitimate duplicate shard into a permanent red"
     )
 
 

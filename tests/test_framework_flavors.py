@@ -21,9 +21,9 @@ C_FAMILY = ["cc", "cc_autopar", "cc_llvm", "cc_llvm_autopar", "cc_oneapi", "cc_n
 def test_native_family_is_the_base_languages_their_autopar_and_polly():
     # Each base language (c/cpp/fortran) plus its auto-parallelizing variant, plus polly.
     # The C family spans four vendors (C_FAMILY); cc_autopar/fortran_autopar are the gcc autopar
-    # route; flang is LLVM Fortran; llvm/polly are the C++ clang pair, and ``cpp`` is its g++ half --
-    # without it a C-vs-C++ reading compares gcc against clang and measures the family too.
-    # All build through the one NativeFramework wrapper.
+    # route; flang is LLVM Fortran; llvm/polly are the C++ clang pair and ``cpp`` its gcc half, so
+    # a C-vs-C++ reading is within one compiler family instead of across two. All build through
+    # the one NativeFramework wrapper.
     assert framework_flavors("native") == C_FAMILY + ["llvm", "cpp", "fortran", "fortran_autopar", "flang", "polly"]
     for name in framework_flavors("native"):
         assert type(generate_framework(name)) is NativeFramework
