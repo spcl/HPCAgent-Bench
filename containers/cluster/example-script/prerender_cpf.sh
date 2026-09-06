@@ -14,6 +14,11 @@
 # finalize_for_target(sdfg, "cpu"), and DaCe's gpu target finalizes an ALREADY-offloaded graph
 # rather than offloading one, so a device form needs an offload step that does not exist here yet.
 set -uo pipefail
+
+# A crashed worker drops a core_nid<node>_<pid> file in its CWD -- 31 GB of them across the
+# tree before this line existed. Slurm propagates the limit to job steps, so setting it once
+# here covers every srun below.
+ulimit -c 0
 SELF="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/$(basename -- "${BASH_SOURCE[0]}")"
 mode=${1:?outer|inner}
 out=${2:?output dir}

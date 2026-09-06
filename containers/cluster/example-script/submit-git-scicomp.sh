@@ -18,6 +18,10 @@
 # DB that other campaigns also write to. run_id carries the arm as a prefix, but an arm is not an
 # experiment and nothing enforces that convention.
 set -euo pipefail
+
+# Slurm propagates the submitting shell's limits to the job, so one line here keeps a
+# crashed worker from dropping a multi-GB core_nid<node>_<pid> file in its CWD.
+ulimit -c 0
 cd "$(dirname "$0")"
 PY=/capstor/scratch/cscs/ybudanaz/x86_64/venv-optarena-314/bin/python
 OPTARENA=/capstor/scratch/cscs/ybudanaz/x86_64/optarena

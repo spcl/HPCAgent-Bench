@@ -6,6 +6,10 @@
 # kimi jobs to release their nodes first, and recomputes the gap AFTER they land -- their shards
 # keep growing until the wall clock, and a gap read mid-run re-issues kernels they went on to solve.
 set -euo pipefail
+
+# Slurm propagates the submitting shell's limits to the job, so one line here keeps a
+# crashed worker from dropping a multi-GB core_nid<node>_<pid> file in its CWD.
+ulimit -c 0
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 OPTARENA=$(cd ../../.. && pwd)
 PAPER="${PAPER_DATA:-$(cd ../../../../ICLR26Reproducibility/paper_artifacts && pwd)}"

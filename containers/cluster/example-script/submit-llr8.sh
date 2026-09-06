@@ -26,6 +26,10 @@
 # agents with 2-8x headroom, so an arm is 3 nodes. The 6 and 8 that used to stand here read the
 # old per-node grading rate as a per-rank one, back when a node ran a single judge.
 set -euo pipefail
+
+# Slurm propagates the submitting shell's limits to the job, so one line here keeps a
+# crashed worker from dropping a multi-GB core_nid<node>_<pid> file in its CWD.
+ulimit -c 0
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 # beverin.sbatch writes --output=results/... relative to here; slurm DROPS the file when the
 # folder is missing and the job then runs with no serve log at all.
