@@ -81,7 +81,12 @@ export UCX_VFS_ENABLE=n HWLOC_COMPONENTS=-gl MPI4PY_RC_INITIALIZE=0
 # `.dacecache` itself, which is otherwise RELATIVE TO CWD and therefore shared by every column that
 # runs from the repo -- four dace columns writing one folder is the same non-atomic build race that
 # pin_per_rank_build_dirs exists to stop, except across jobs, where the rank check cannot see it.
-export DACE_BUILD_CACHE_DIR="/dev/shm/${USER}/dace_bc_${col}"
+#: Keyed by the dace COMMIT as well as the column: the PCH root outlives a run, and a header
+#: precompiled against one tree is silently reused by the next one on the same node. Two
+#: trees, one cache, and the build that reports a number was not built from the tree the
+#: run cites.
+dace_sha="$(git -C "${DACE_TREE}" rev-parse --short HEAD 2>/dev/null || echo notree)"
+export DACE_BUILD_CACHE_DIR="/dev/shm/${USER}/dace_bc_${col}_${dace_sha}"
 export DACE_default_build_folder="${out_root}/dacecache-${col}"
 mkdir -p "${DACE_default_build_folder}" "${out_root}"
 cd "${opt}"
