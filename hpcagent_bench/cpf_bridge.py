@@ -1,6 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Render a kernel's DaCe SDFG as ONE self-contained C/C++ translation unit (DaCe's MPR).
+"""Render a kernel's DaCe SDFG as ONE self-contained C/C++ translation unit (DaCe's CPF).
 
 The pipeline is four steps, and each already exists somewhere else:
 
@@ -8,20 +8,20 @@ The pipeline is four steps, and each already exists somewhere else:
    numpy reference (the same file the dace framework leg runs),
 2. that module's ``@dace.program`` is parsed to an SDFG,
 3. ``canonicalize`` + ``finalize_for_target`` turn it into the maximally parallel CPU form,
-4. ``dace.codegen.mpr.render`` emits a translation unit that a bare host compiler accepts -- no
+4. ``dace.codegen.cpf.render`` emits a translation unit that a bare host compiler accepts -- no
    ``-I``, no ``libdace``, no BLAS -- together with the PREPARED SDFG whose ``arglist()`` is the
    entry point's real signature.
 
-The rendered entry is named ``<short>_<fptype>_mpr`` and NOT the canonical native symbol
-(``numpyto_common.naming.entry_symbol``) on purpose: MPR's argument list is the SDFG's, which
+The rendered entry is named ``<short>_<fptype>_cpf`` and NOT the canonical native symbol
+(``numpyto_common.naming.entry_symbol``) on purpose: CPF's argument list is the SDFG's, which
 orders differently from the C ABI and carries free symbols the C emitter never passes. Sharing the
 symbol would let the native loader bind this text and call it with the wrong arguments; a distinct
-name plus its own ``*_mpr_binding.json`` keeps the two legs from ever being mistaken for one.
+name plus its own ``*_cpf_binding.json`` keeps the two legs from ever being mistaken for one.
 
 Rendering runs in a CHILD PROCESS with a timeout. The DaCe python frontend is the part that wedges
 on a large kernel, and a sweep must lose that kernel rather than the sweep -- the same reason
 ``tests/dace_parse_probe.py`` exists. This module is both the parent (:func:`render_kernel`) and
-the child (``python -m hpcagent_bench.mpr_bridge``).
+the child (``python -m hpcagent_bench.cpf_bridge``).
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ from hpcagent_bench import paths
 from hpcagent_bench.spec import BenchSpec
 from hpcagent_bench.support.bindings.contract import Arg, Binding
 
-#: MPR dialect -> the source extension its text is written with.
+#: CPF dialect -> the source extension its text is written with.
 LANGUAGE_EXT = {"c++": "cpp", "c": "c"}
 
 #: Postfixes a generated impl's stem carries over its kernel's ``@dace.program`` name. Longest
@@ -56,10 +56,10 @@ IMPL_POSTFIXES = ("_dace_gpu", "_dace_cpu", "_dace")
 #: strictly more work on top of it.
 RENDER_TIMEOUT_S = 1800.0
 
-#: ``abi`` tag on an MPR binding. Deliberately not the native ``ABI_TAG``: the argument list is the
+#: ``abi`` tag on a CPF binding. Deliberately not the native ``ABI_TAG``: the argument list is the
 #: SDFG's own, so a consumer that reads this file must not assume the native contract's rules
 #: (canonical ordering, the reserved workspace pair, 1-based index rebasing).
-MPR_ABI = "mpr/1"
+CPF_ABI = "cpf/1"
 
 
 def program_name(path: pathlib.Path) -> str:
@@ -85,7 +85,7 @@ def resolve_program(module, path: pathlib.Path):
 
 
 def binding_for(rendering, kernel: str, symbol: str) -> Binding:
-    """The MPR entry point's own binding, read off the PREPARED SDFG.
+    """The CPF entry point's own binding, read off the PREPARED SDFG.
 
     ``rendering.sdfg`` rather than the SDFG handed to the renderer: preparation expands library
     nodes through their pure implementations, and an expansion can introduce an extent symbol the
@@ -93,10 +93,10 @@ def binding_for(rendering, kernel: str, symbol: str) -> Binding:
     the caller would run the kernel on an uninitialized extent.
     """
     from dace import data as dace_data
-    from dace.codegen.mpr import readonly_entry_arrays
+    from dace.codegen.cpf import readonly_entry_arrays
 
     sdfg = rendering.sdfg
-    # The renderer's OWN answer, not a second derivation of it: MPR qualifies exactly these
+    # The renderer's OWN answer, not a second derivation of it: CPF qualifies exactly these
     # parameters ``const`` in the signature it emits, so asking it is what keeps the published
     # ``const`` flag and the rendered signature from disagreeing (they did, and cppcheck reported
     # ``constParameterPointer`` on every read-only pointer as a result).
@@ -108,15 +108,15 @@ def binding_for(rendering, kernel: str, symbol: str) -> Binding:
             shape = tuple(str(dim) for dim in desc.shape)
             args.append(Arg(name=name, kind="ptr", dtype=dtype, is_const=name in readonly, shape=shape))
         else:
-            # A scalar in the arglist is either a symbol or a read-only scalar parameter; MPR has
+            # A scalar in the arglist is either a symbol or a read-only scalar parameter; CPF has
             # already promoted every WRITTEN one to a length-1 array, so what is left is by-value.
             role = "symbol" if name not in sdfg.arrays else None
             args.append(Arg(name=name, kind="scalar", dtype=dtype, is_const=True, role=role))
     # Keyed ``c`` because that is the slot ``Binding.symbol`` reads, and this binding's entry IS a
-    # C symbol -- MPR's, not the native emitter's. Under any other key the property would fall back
+    # C symbol -- CPF's, not the native emitter's. Under any other key the property would fall back
     # to ``<kernel>_fp64``, which is the NATIVE symbol: the one name this file exists to not claim.
     # ``abi`` is what says the argument list follows the SDFG's order rather than the native ABI.
-    return Binding(kernel=kernel, config="dense", args=tuple(args), symbols={"c": symbol}, abi=MPR_ABI)
+    return Binding(kernel=kernel, config="dense", args=tuple(args), symbols={"c": symbol}, abi=CPF_ABI)
 
 
 def render_sdfg(
@@ -133,7 +133,7 @@ def render_sdfg(
     every sweep should use.
     """
     import dace
-    from dace.codegen.mpr import render
+    from dace.codegen.cpf import render
     from dace.transformation.passes.canonicalize.finalize import finalize_for_target, offload_to_gpu
     from dace.transformation.passes.canonicalize.pipeline import canonicalize
 
@@ -142,7 +142,7 @@ def render_sdfg(
     from hpcagent_bench.precision import Precision, precision_from_datatype
 
     short = short_for(numpy_py)
-    base = f"{short}_{fptype_tag(precision)}_mpr"
+    base = f"{short}_{fptype_tag(precision)}_cpf"
     rec: Dict[str, Any] = {
         "kernel": spec.short_name,
         "language": language,
@@ -176,7 +176,7 @@ def render_sdfg(
     sdfg = prog.to_sdfg(simplify=True)
     # canonicalize is stage one and stops where the target begins -- it leaves every open choice
     # PARALLEL but decides no OpenMP region. finalize_for_target runs the CPU specialization that
-    # does, and MPR renders exactly the schedules it finds: without this tail the translation unit
+    # does, and CPF renders exactly the schedules it finds: without this tail the translation unit
     # is correct and entirely sequential, which is the opposite of the point.
     # The fork's documented order, and the GPU one has a step between the two:
     # canonicalize(target='gpu') -> offload_to_gpu -> finalize_for_target('gpu'). finalize REJECTS
@@ -218,12 +218,12 @@ def render_kernel(
     re-loading by name only invites the two to drift. The CHILD reloads by ``short_name``, which is
     the manifest stem and addresses the same spec.
 
-    ``verdict`` is one of ``ok`` / ``refused`` (MPR named a construct it cannot render) / ``noemit``
-    / ``noprogram`` / ``fail`` / ``timeout``. A refusal is a RESULT, not an error: MPR refuses
+    ``verdict`` is one of ``ok`` / ``refused`` (CPF named a construct it cannot render) / ``noemit``
+    / ``noprogram`` / ``fail`` / ``timeout``. A refusal is a RESULT, not an error: CPF refuses
     loudly by design and the message names the construct, which is what a sweep is measuring.
     """
     if language not in LANGUAGE_EXT:
-        raise ValueError(f"unknown MPR language {language!r}; known: {sorted(LANGUAGE_EXT)}")
+        raise ValueError(f"unknown CPF language {language!r}; known: {sorted(LANGUAGE_EXT)}")
     cmd = [
         sys.executable,
         "-m",
@@ -340,7 +340,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     else:
         try:
             rec = render_sdfg(spec, numpy_py, pathlib.Path(args.out), args.language, args.precision, args.target)
-        except NotImplementedError as exc:  # MPR names the construct it cannot render
+        except NotImplementedError as exc:  # CPF names the construct it cannot render
             rec["verdict"] = "refused"
             rec["error"] = str(exc)[:400]
         except BaseException as exc:  # noqa: BLE001 -- every failure mode is a verdict, SystemExit included
