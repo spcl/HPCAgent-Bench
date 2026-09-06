@@ -64,6 +64,11 @@ sha256sum "${OUTPUT_SQSH}" | tee "${OUTPUT_SQSH}.sha256"
 # component up -- reading its status flag without that reports a working component as disabled.
 srun --environment="${OUTPUT_SQSH}" --gpus-per-node=1 bash -c '
   set -eu
+
+# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
+# process's CWD, littering the checkout with core_nid<node>_<pid> files on a filesystem whose
+# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
+ulimit -c 0
   python3 -c "import cupy; print(\"cupy device count\", cupy.cuda.runtime.getDeviceCount())"
   python3 -c "import jax; print(\"jax devices\", jax.devices())"
   papi_component_avail | sed -n "1,60p"

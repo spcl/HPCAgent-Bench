@@ -10,6 +10,11 @@
 #SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/build-vllm023-pt211-%j.err
 
 set -Eeuxo pipefail
+
+# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
+# process's CWD, littering the checkout with core_nid<node>_<pid> files on a filesystem whose
+# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
+ulimit -c 0
 umask 0022
 
 ROOT="${VLLM_BUILD_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"

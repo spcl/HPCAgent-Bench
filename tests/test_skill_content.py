@@ -895,11 +895,9 @@ def test_no_fortran_page_teaches_a_2023_spelling() -> None:
 #: reached. Prompt length is therefore a first-order term in the score, and an unbudgeted page is
 #: how the regression came back.
 #: 18_000 was the C packet's size when the measurement above was taken, and it was never a size
-#: Fortran met: that language ships three pages (the language page, loop-transformations and
-#: openmp), and the ceiling has sat red rather than binding since they landed. A budget nothing
-#: satisfies is not enforcement, it is a permanently failing test that stops being read -- so this
-#: is the smallest round number the corpus actually meets, and it stays a ceiling to argue with:
-#: shorten a page rather than raise this again.
+#: Fortran met. A budget nothing satisfies is not enforcement, it is a permanently failing test
+#: that stops being read -- so this is the smallest round number the corpus actually meets, and it
+#: stays a ceiling to argue with: shorten a page rather than raise this again.
 SKILL_PACKET_BUDGET_CHARS = 24_000
 
 #: Fortran is the one language allowed past it, and only by what its extra failure modes cost.
@@ -1063,8 +1061,21 @@ def test_the_divide_and_conquer_skill_sends_the_reader_back_to_fusion() -> None:
     )
 
 
-def test_the_divide_and_conquer_skill_is_triggered_from_the_main_prompt() -> None:
-    """A page nothing points at is a page nobody opens. The main-prompt trigger file is charged on
-    every turn, so it carries the pointer and the page carries the mechanics."""
-    triggers = (paths.ROOT / "containers" / "agent" / "skill-triggers.md").read_text()
-    assert DIVIDE in triggers, f"nothing in the main-prompt triggers points at the {DIVIDE!r} page"
+def test_the_divide_and_conquer_skill_is_triggered_from_the_packet_that_carries_it() -> None:
+    """A page nothing points at is a page nobody opens.
+
+    The main-prompt trigger table may only name pages EVERY arm receives, and this one is opt-in,
+    so the pointer belongs where the opt-in happens: ``make_problems.py`` states the trigger of
+    each ``--skill`` page in the packet preamble. Checked through that function rather than a
+    literal, so the bullet cannot go missing while the page still ships.
+    """
+    import sys
+
+    example = paths.ROOT / "containers" / "cluster" / "example-script"
+    sys.path.insert(0, str(example))
+    try:
+        import make_problems
+    finally:
+        sys.path.remove(str(example))
+    packet = make_problems.skills_section("c", also=(DIVIDE,))
+    assert f"`{DIVIDE}`" in packet, f"nothing in the packet preamble points at the {DIVIDE!r} page"
