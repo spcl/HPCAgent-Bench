@@ -161,9 +161,11 @@ BIND=$([[ "${RANKS_PER_NODE}" -gt 1 ]] && echo "--cpu-bind=cores" || echo "--cpu
 srun "${CE[@]}" --ntasks="${RANKS}" --ntasks-per-node="${RANKS_PER_NODE}" "${BIND}" bash -c '
 set -euo pipefail
 
-# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
-# process's CWD, littering the checkout with core_nid<node>_<pid> files on a filesystem whose
-# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
+# The Beverin core_pattern is the machine-global core_%h_%p and a dump lands in the CWD of the
+# crashing process, littering the checkout with core_nid<node>_<pid> files on a filesystem whose
+# quota is inodes. Slurm propagates the core limit of the SUBMITTER, so set the floor here.
+# No apostrophe below either -- see the NOTE: one closes this block and the next reopens it, which
+# turned the backticks around core_%h_%p into a command substitution and the job into exit 127.
 ulimit -c 0
 rank="${SLURM_PROCID:-0}"
 # One accelerator per rank, by position on the node. Co-resident ranks would otherwise all take

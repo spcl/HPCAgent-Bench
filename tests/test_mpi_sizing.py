@@ -126,5 +126,9 @@ def test_stencil_manifest_carries_the_mpi_envelope():
 
 
 def test_mpi_block_defaults_to_empty_when_absent():
-    spec = BenchSpec.load("gemm")
+    # A SPARSE kernel is the exemplar: BenchSpec refuses an 'mpi:' block beside 'sparse_layouts'
+    # (a sparse kernel runs multi-node replicated), so this one cannot quietly acquire one. gemm
+    # stood here until ccc284e20 declared mpi: for 52 scientific_computing kernels and took it.
+    spec = BenchSpec.load("spmv")
+    assert spec.sparse_layouts
     assert spec.mpi == {}
