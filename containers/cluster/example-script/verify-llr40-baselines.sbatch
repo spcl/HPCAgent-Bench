@@ -24,6 +24,10 @@
 #SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/verify-llr40-baselines-%j.out
 set -euo pipefail
 
+# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
+# process's CWD, littering the repo with core_nid<node>_<pid> files. Slurm propagates CORE to steps.
+ulimit -c 0
+
 # Slurm SPOOLS the batch script, so BASH_SOURCE points into /var/spool and deriving the repo
 # from it lands there -- job 620788 died on exactly that. SLURM_SUBMIT_DIR is the directory
 # sbatch was run from, which for the documented invocation is scripts/cscs.
