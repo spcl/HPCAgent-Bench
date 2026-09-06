@@ -2487,11 +2487,26 @@ jobs:
           fi
           coverage combine "${files[@]}" 2>&1 | tee combine.log
           # Silent partial combines are what hid the collision through every green run: a total
-          # built from one job of seven still prints a plausible percentage.
-          grep -q "Combined ${#files[@]} file" combine.log || {
-            echo "::error::combine consumed fewer than ${#files[@]} files -- the total is not a total"
-            exit 1
-          }
+          # built from one job of seven still prints a plausible percentage. So every file has to
+          # be ACCOUNTED FOR, which is not the same as combined: coverage.py hashes the databases
+          # and skips exact duplicates, and the port-fidelity / ports-cegterg shards split
+          # parametrized cases of ONE test file, so each shard measures the same line set and
+          # every shard past the first is a byte-identical duplicate. Demanding "Combined N" made
+          # that permanent red. Counting combined + skipped still catches a file that was neither.
+          python - "${#files[@]}" <<'PY'
+          import re, sys
+          log = open("combine.log").read()
+          # Two shapes, depending on verbosity: a per-file listing, or a one-line summary.
+          seen = len(re.findall(r"^Combined data file ", log, re.M)) + \
+                 len(re.findall(r"^Skipping duplicate data ", log, re.M))
+          for n, m in re.findall(r"Combined (\d+) files?(?:, skipped (\d+))?", log):
+              seen = max(seen, int(n) + int(m or 0))
+          want = int(sys.argv[1])
+          if seen != want:
+              print(f"::error::combine accounted for {seen} of {want} files -- the total is not a total")
+              sys.exit(1)
+          print(f"combine accounted for all {want} coverage files")
+          PY
           coverage report --precision=2 | tee coverage.txt
           coverage xml -o coverage.xml
           coverage html -d htmlcov
