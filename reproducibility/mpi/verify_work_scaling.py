@@ -380,10 +380,15 @@ def measure_kernel(
     def _smaller(reason: str) -> dict | None:
         """Retry the whole kernel one preset down, when the reason to is that it did not FIT.
 
-        Keyed off ``over_budget`` rather than the message, and only for that cause: a host that
-        cannot count at all would otherwise re-run every kernel at every preset to learn the same
-        thing twice. Returns None when there is nothing smaller to try."""
-        if preset not in PRESET_FALLBACK or not any(pt.get("over_budget") for pt in points):
+        Fires on ANY unusable point, not only a predicted ``over_budget`` one. Prediction is
+        best-effort: ``emitted_bytes`` cannot evaluate a malloc whose size is derived rather than
+        a manifest symbol (max_filter's block width is the case), so that kernel is attempted, its
+        allocation fails, and it arrives here as a crash instead of a skip. Both mean the same
+        thing -- too big at this preset -- and gating on the predicted case alone made a kernel
+        that measured fine at S fail outright. The cost of the loose rule is one extra attempt per
+        kernel on a host that cannot count at all, and it terminates: S has nothing below it.
+        Returns None when there is nothing smaller to try."""
+        if preset not in PRESET_FALLBACK:
             return None
         retried = measure_kernel(key, PRESET_FALLBACK[preset], datatype, reps, timeout, seed, memory_gb)
         retried["fell_back_from"] = f"{preset} ({reason})"
