@@ -186,16 +186,19 @@ jobs:
         # work. Whole, that is 1773 s of sweep against a 40-minute step inside a 45-minute
         # container.
         #
-        # THE KNOWN RISK, recorded because it is not hypothetical: the modulus is also a PROCESS
-        # split, deciding which files share an interpreter, and ten of these files fork. At NR % 2
-        # the sweep reached 99% in 9m47s and then wedged for the remaining 20m23s of its cap,
-        # identically on runs 34092074108 and 34097376180, with --timeout=600
-        # --timeout-method=thread never firing. A timer that does not fire is the tell: the thread
-        # method owns its own timer, so a wedge it cannot interrupt is one in a process-wide lock
-        # -- the fork()-in-a-multi-threaded-process deadlock tests/test_fork_openmp_safety.py
-        # exists to document. NR % 3 never produced it; NR % 1 puts every forking file in one
-        # interpreter. If this job wedges at ~99% with no summary, that is this, and the fix is
-        # to name the colliding test rather than to re-shard blind.
+        # THE KNOWN RISK, recorded because it is not hypothetical: at NR % 2 this sweep reached
+        # 99% in 9m47s and then wedged for the remaining 20m23s of its cap, identically on runs
+        # 34092074108 and 34097376180, with --timeout=600 --timeout-method=thread never firing.
+        #
+        # Reproduced locally 2026-09-07 and the mechanism is an xdist WORKER THAT DIED: `ps`
+        # showed one worker a zombie (exited, never reaped) with the controller parked in
+        # futex_do_wait on it, and the run sat there until the cap. That is also why the timeout
+        # cannot save it -- pytest-timeout's thread lives IN the worker, so a dead worker takes
+        # its own timer with it, and the controller has no timer at all. So a wedge here is not
+        # necessarily two tests colliding: FIRST check whether a worker exited (a `-n0` re-run
+        # names the test; the runner's memory graph names an OOM). The local repro ran beside
+        # other heavy jobs, so what killed that worker is not established -- only that a dead
+        # worker is what the controller does not survive.
         shard: [0]
     # Phase 1 (24) + Phase 0/setup, which is ~5 on a warm cache. A job budget must exceed the sum of
     # its steps: at 40 + 25 + 55 the STEP budgets once came to 120 minutes inside a 90-minute JOB,
@@ -920,15 +923,26 @@ jobs:
 
   port-fidelity:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: port-fidelity ${{ matrix.shard }}/3 (dace frontend reads the generated corpus)
+    name: port-fidelity (dace frontend reads the generated corpus)
     runs-on: ubuntu-latest
     strategy:
       # fail-fast: false -- one shard's regression must not cancel the verdict on the other two.
       # A ratchet reports WHICH kernels moved, and two thirds of that report is worth having.
       fail-fast: false
       matrix:
-        shard: [0, 1, 2]
-    # Phase 8 per shard (~24 measured-and-projected, capped at 38) + checkout/setup, ~5 warm.
+        # ONE. Phase 8 measured 382 + 878 + 485 s on run 34122110084 -- 1745 s whole, against a
+        # 38-minute step, where three containers each paid a ~2.5-minute setup and the emit.
+        #
+        # THE GUARD THIS SPENDS, recorded rather than argued away: the split existed to deal the
+        # three `hang` entries one per shard, because each spends the whole PARSE_TIMEOUT_S and
+        # the sweep runs PARSE_WORKERS=2 in flight -- all three together are ~45 min of pure
+        # timeout in ONE container, which is the arithmetic in the job banner above. They are all
+        # REFUSED today, which is why the measured cost is 1745 s and not that; the moment one is
+        # un-refused this job needs its shards back, and
+        # test_the_hang_entries_land_in_different_shards passes at count=1 by construction rather
+        # than by checking anything, so it will not be the thing that tells you.
+        shard: [0]
+    # Phase 8 whole (1745 s measured, capped at 38) + checkout/setup, ~5 warm.
     timeout-minutes: 45
     env:
       PYTEST_ADDOPTS: "--cov=hpcagent_bench --cov-append --cov-report="
@@ -961,7 +975,7 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 38
         env:
-          HPCAGENT_BENCH_DACE_PARSE_SHARD: "${{ matrix.shard }}/3"
+          HPCAGENT_BENCH_DACE_PARSE_SHARD: "${{ matrix.shard }}/1"
         run: |
           # Which CPU this ran on, because the parse timings only mean something next to it:
           # esirkepov_deposition took 274 s here and 24 s on the dev box, while mobilenet_v2 came
