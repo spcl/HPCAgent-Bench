@@ -19,7 +19,12 @@ source "${SCRIPT_DIR}/../build_common.sh"
 
 IMAGE_TAG="${IMAGE_TAG:-optarena-judge-agent-amd:latest}"
 OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?SCRATCH must be set on CSCS}/ce-images/optarena-judge-agent-amd.sqsh}"
-BASE_IMAGE="${BASE_IMAGE:-docker.io/rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pytorch_release_2.9.1}"
+# Pinned by DIGEST, matching the Dockerfile's ARG default. Passing the bare tag here would
+# OVERRIDE that default and quietly unpin the build, and the base.name label would then
+# record a mutable reference. Same shape as the three inference builders.
+BASE_REPO="docker.io/rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pytorch_release_2.9.1"
+BASE_DIGEST="sha256:a3b65813621095e3389269417e963725b59310184588c9d2490d44e6e83fa01c"
+BASE_IMAGE="${BASE_IMAGE:-${BASE_REPO}@${BASE_DIGEST}}"
 ROCM_ARCH="${ROCM_ARCH:-gfx942}"
 
 mkdir -p "$(dirname "${OUTPUT_SQSH}")"
