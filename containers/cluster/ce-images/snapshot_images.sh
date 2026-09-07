@@ -26,14 +26,24 @@ DEEP=0
 
 sidecar() { [[ -s "$1" ]] && tr -d '\n' < "$1" || printf 'none'; }
 
-# A sidecar OLDER than the squashfs it describes belongs to a PREVIOUS build of the same name, and
-# reads as valid to anything that just cats it. That is how job 620068 reported an image it had not
-# built; it happened again here when a build failed after writing the squashfs but before its
-# checksum, leaving a four-day-old sha256 beside a fresh image. Say so rather than print it.
+# A sidecar left over from a PREVIOUS build of the same name reads as valid to anything that just
+# cats it. That is how job 620068 reported an image it had not built, and it happened again here:
+# a build failed after writing the squashfs but before its checksum, leaving a four-day-old sha256
+# beside a fresh image.
+#
+# Older is NOT the test, though -- ce_export_image writes the digest, THEN imports the squashfs,
+# so a correct .digest is always a little older than the .sqsh. Measured across four images, that
+# gap is 101-133 s (the enroot import), while the real staleness was 4 days. So flag only a gap
+# large enough that no single build could produce it; anything under the threshold is the normal
+# write order, and flagging it made every correctly built image look broken.
+STALE_AFTER_S="${STALE_AFTER_S:-21600}"   # 6 h: ~160x the observed within-build gap
 stale_note() {
-    local sidecar="$1" sqsh="$2"
-    [[ -s "${sidecar}" ]] || return 0
-    [[ "${sidecar}" -ot "${sqsh}" ]] && printf '  <- STALE, older than the .sqsh: belongs to an earlier build'
+    local sidecar="$1" sqsh="$2" gap
+    [[ -s "${sidecar}" && -e "${sqsh}" ]] || return 0
+    gap=$(( $(stat -c %Y "${sqsh}") - $(stat -c %Y "${sidecar}") ))
+    (( gap > STALE_AFTER_S )) \
+      && printf '  <- STALE by %sh: belongs to an earlier build' "$(( gap / 3600 ))"
+    return 0
 }
 human()   { [[ -e "$1" ]] && du -h --apparent-size "$1" 2>/dev/null | cut -f1 || printf '-'; }
 
