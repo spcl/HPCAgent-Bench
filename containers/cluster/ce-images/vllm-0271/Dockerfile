@@ -166,6 +166,19 @@ ARG FLASH_ATTN_VERSION=2.8.3
 ARG AITER_REF=v0.1.20
 ARG TORCH_INDEX=https://download.pytorch.org/whl/rocm7.2
 
+# OCI metadata, because these are published as OCI artifacts and a registry shows nothing about
+# where an image came from unless the image says so. base.name records what FROM resolved to
+# WITHOUT unpacking the image -- and since it is pinned by digest above, that is the whole
+# reproducibility claim in one label. BASE_IMAGE is re-declared here because an ARG from before
+# the first FROM is not in scope inside a stage.
+ARG BASE_IMAGE
+LABEL org.opencontainers.image.title="optarena-vllm-0271" \
+      org.opencontainers.image.description="vLLM ${VLLM_VERSION} inference for MI300A: ROCm 7.2, libfabric/CXI, aiter ${AITER_REF}" \
+      org.opencontainers.image.version="${VLLM_VERSION}" \
+      org.opencontainers.image.source="https://github.com/spcl/HPCAgent-Bench" \
+      org.opencontainers.image.licenses="GPL-3.0-or-later" \
+      org.opencontainers.image.base.name="${BASE_IMAGE}"
+
 ENV VIRTUAL_ENV=/opt/pytorch211 \
     ROCM_PATH=/opt/rocm \
     PYTORCH_ROCM_ARCH=gfx942 \

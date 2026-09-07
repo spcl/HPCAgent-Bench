@@ -105,13 +105,15 @@ Every image builds the same way: one node, its own `build.sbatch`, the directory
 cd $SCRATCH/optarena
 B=$PWD/containers/cluster/ce-images
 sbatch --export=ALL,IMAGE_DIR=$B/judge-agent-amd $B/judge-agent-amd/build.sbatch
-sbatch --export=ALL,VLLM_DIR=$B/vllm                $B/vllm/build.sbatch
-sbatch --export=ALL,VLLM_0271_DIR=$B/vllm-0271      $B/vllm-0271/build.sbatch
-sbatch --export=ALL,SGLANG_DIR=$B/sglang            $B/sglang/build.sbatch
+sbatch --export=ALL,IMAGE_DIR=$B/vllm            $B/vllm/build.sbatch
+sbatch --export=ALL,IMAGE_DIR=$B/vllm-0271       $B/vllm-0271/build.sbatch
+sbatch --export=ALL,IMAGE_DIR=$B/sglang          $B/sglang/build.sbatch
 ```
 
-The directory variable is REQUIRED and its name still differs per image; a plain `sbatch` with
-none of them fails in a second rather than building the wrong thing.
+`IMAGE_DIR` is REQUIRED and is now the same name for every image; the old per-image spellings
+(`VLLM_DIR`, `VLLM_0271_DIR`, `SGLANG_DIR`) still work as fallbacks. A plain `sbatch` with none of
+them fails in a second rather than building the wrong thing -- Slurm spools the batch script, so
+`BASH_SOURCE` points into /var/spool/slurmd and the directory cannot be derived.
 
 Logs land in `$SCRATCH/ce-images/logs/`. The `.sqsh` and a `.digest` recording the image digest
 land beside them in `$SCRATCH/ce-images/`. **The digest is the version**, not the tag: a `-v5` in
