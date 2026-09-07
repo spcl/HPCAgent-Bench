@@ -55,6 +55,13 @@ echo "installing EDFs into ${EDF_DIR}"
 render "${JUDGE_AGENT_AMD_EDF}"        "${JUDGE_AGENT_AMD_TEMPLATE}" "${JUDGE_AGENT_AMD_SQSH}"
 render "${JUDGE_AGENT_AMD_EDF_LATEST}" "${JUDGE_AGENT_AMD_TEMPLATE}" "${JUDGE_AGENT_AMD_SQSH}"
 
+# The inference pair. Their -latest aliases exist for the same reason the judge one does: a
+# rebuild should be reachable by re-rendering, not by editing every campaign that names it. The
+# version-named EDFs are left exactly as they are, so a run that must not move does not.
+render "${INFERENCE_SGLANG_EDF_LATEST}" "${INFERENCE_SGLANG_TEMPLATE}" "${INFERENCE_SGLANG_SQSH}"
+render "${INFERENCE_VLLM_EDF_LATEST}"   "${INFERENCE_VLLM_TEMPLATE}"   "${INFERENCE_VLLM_SQSH}"
+
 echo
-echo "use --environment=${JUDGE_AGENT_AMD_EDF_LATEST} to follow images.env,"
-echo "or --environment=${JUDGE_AGENT_AMD_EDF} to pin this run to ${JUDGE_AGENT_AMD_LATEST}."
+echo "follow images.env:  AMD_CE_ENV=${JUDGE_AGENT_AMD_EDF_LATEST}"
+echo "                    INFERENCE_CE_ENV=${INFERENCE_SGLANG_EDF_LATEST} (or ${INFERENCE_VLLM_EDF_LATEST})"
+echo "pin this run:       AMD_CE_ENV=${JUDGE_AGENT_AMD_EDF}"
