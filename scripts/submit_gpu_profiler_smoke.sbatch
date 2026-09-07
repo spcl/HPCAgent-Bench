@@ -29,7 +29,13 @@ set -euo pipefail
 ulimit -c 0
 
 EDF="${EDF:-optarena-amd-mi300-v5}"
-REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+# NOT from BASH_SOURCE: sbatch runs a COPY of this file out of /var/spool/slurmd/scripts, so
+# dirname of it is the spool directory and every repo-relative path below resolves under it
+# -- "No such file or directory" naming a script that is plainly present in the checkout.
+# SLURM_SUBMIT_DIR is where the user actually was; BASH_SOURCE stays as the fallback for a
+# direct ./scripts/submit_gpu_profiler_smoke.sbatch run, where it is correct.
+SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+REPO="${REPO:-$(cd -- "${SUBMIT_DIR}" && git rev-parse --show-toplevel 2>/dev/null || echo "${SUBMIT_DIR}")}"
 WORK="${WORK:-${SCRATCH}/gpu-profiler-smoke/${SLURM_JOB_ID:-manual}}"
 
 srun --environment="${EDF}" env WORK="${WORK}" bash "${REPO}/scripts/smoke_gpu_profilers.sh"
