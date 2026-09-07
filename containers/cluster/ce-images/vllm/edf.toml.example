@@ -9,7 +9,7 @@ mounts = [
   "/iopsstor:/iopsstor"
 ]
 
-workdir = "/capstor/scratch/cscs/ybudanaz/x86_64"
+workdir = "${SCRATCH}"
 
 [annotations]
 com.hooks.cxi.enabled = "true"

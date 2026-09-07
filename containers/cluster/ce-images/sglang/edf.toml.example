@@ -15,7 +15,7 @@ mounts = [
   "/iopsstor:/iopsstor"
 ]
 
-workdir = "/capstor/scratch/cscs/ybudanaz/x86_64"
+workdir = "${SCRATCH}"
 
 [env]
 HSA_ENABLE_IPC_MODE_LEGACY = "1"

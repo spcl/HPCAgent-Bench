@@ -13,7 +13,7 @@ ulimit -c 0
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 OPTARENA=$(cd ../../.. && pwd)
 PAPER="${PAPER_DATA:-$(cd ../../../../ICLR26Reproducibility/paper_artifacts && pwd)}"
-VENV=/capstor/scratch/cscs/ybudanaz/x86_64/venv-optarena-314/bin
+VENV="${VENV:-${SCRATCH:?set SCRATCH}/venv-optarena-314/bin}"
 # optarena is not installed in this venv -- it is installed in the campaign IMAGE. Outside the
 # container the source tree and the translator sources both have to be named explicitly, or
 # hpcagent_bench resolves off the cwd and numpyto_common does not resolve at all.
