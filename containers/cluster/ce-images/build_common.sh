@@ -85,6 +85,12 @@ ce_gpu_args() {
 # would treat as a hit.
 ce_cache_base_image() {
     BASE_CACHE="${BASE_CACHE:-${SCRATCH:?}/base-images}"
+    # The REGISTRY reference, kept before BASE_IMAGE is rewritten to a local dir: on a cache hit
+    # BASE_IMAGE becomes dir:${SCRATCH}/base-images/..., and labelling the image with that records
+    # a path on somebody's scratch instead of the digest it came from -- a host path published
+    # inside the artifact, and the reproducibility claim in base.name destroyed. Measured in the
+    # vLLM 0.23.0 archive before this existed.
+    BASE_IMAGE_REF="${BASE_IMAGE_REF:-${BASE_IMAGE}}"
     local base_dir staging
     base_dir="${BASE_CACHE}/$(printf '%s' "${BASE_IMAGE}" | tr '/:@' '___')"
     if [[ -f "${base_dir}/manifest.json" ]]; then

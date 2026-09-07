@@ -206,12 +206,15 @@ USER root
 # reproducibility claim in one label. BASE_IMAGE is re-declared here because an ARG from before
 # the first FROM is not in scope inside a stage.
 ARG BASE_IMAGE
+# The registry reference, not whatever FROM resolved to: a cache hit rewrites BASE_IMAGE to a
+# local dir: path, and that must not become the published base.name.
+ARG BASE_IMAGE_REF="${BASE_IMAGE}"
 LABEL org.opencontainers.image.title="optarena-sglang" \
       org.opencontainers.image.description="SGLang inference for MI300A: ROCm 7.2, libfabric/CXI, pinned flydsl" \
       org.opencontainers.image.version="0.5.18" \
       org.opencontainers.image.source="https://github.com/spcl/HPCAgent-Bench" \
       org.opencontainers.image.licenses="GPL-3.0-or-later" \
-      org.opencontainers.image.base.name="${BASE_IMAGE}"
+      org.opencontainers.image.base.name="${BASE_IMAGE_REF}"
 
 # flydsl, PINNED and INSIDE the image.
 #
