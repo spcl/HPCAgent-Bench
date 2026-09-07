@@ -66,6 +66,14 @@ for name in "${candidates[@]}"; do
     printf '# image digest: %s\n' "$(cat "${sqsh}.digest")"
     printf 'image = "%s"\n\n' "${sqsh}"
     printf 'mounts = [\n  "/capstor:/capstor",\n  "/iopsstor:/iopsstor"\n]\n'
+    # PATH is DECLARED, not inherited. The CE does not preserve the image's own ENV reliably: with
+    # no [env] block it handed the sglang image a PATH without /opt/venv/bin, so `python3` was the
+    # distro interpreter and every framework in the image looked absent. That is how verify_image
+    # reported numpy, torch, sglang, aiter, triton and flydsl all missing from an image carrying
+    # every one of them (job 627151), and a serving smoke would fail the same way for the same
+    # reason. Both interpreter prefixes are named because only one exists per image.
+    printf '\n[env]\n'
+    printf 'PATH = "/opt/venv/bin:/opt/pytorch211/bin:/opt/rocm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"\n'
   } > "${edf}"
   printf '%-12s EDF=%s\n' "${name}" "${edf}"
   # PG_PATCH_DIR: the eager-PG smoke insists on an EXTERNAL sitecustomize.py, from the era when the

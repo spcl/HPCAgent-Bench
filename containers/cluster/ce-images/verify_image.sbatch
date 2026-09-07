@@ -30,10 +30,22 @@ test -f "${IMAGE}"
 
 EDF="${S}/.tmp/verify-${SLURM_JOB_ID}.toml"
 mkdir -p "$(dirname "${EDF}")"
+# PATH is declared, not inherited, for the same reason the real EDF declares it: the CE does not
+# preserve the image's own ENV reliably. Without this the CE handed the sglang image
+# PATH=/usr/local/bin:/opt/rocm/bin:/usr/sbin:/usr/bin:/sbin:/bin -- no /opt/venv/bin -- so
+# `python3` was /usr/bin/python3 and verify_image.py, which probes with sys.executable, reported
+# numpy, torch, sglang, aiter, triton and flydsl all missing from an image that has every one of
+# them. A verifier that fails a good image is as useless as one that passes a bad one.
+#
+# Both interpreter prefixes are named because only one exists per image: /opt/venv/bin in the
+# sglang and judge images, /opt/pytorch211/bin in the vLLM pair.
 cat > "${EDF}" <<TOML
 image = "${IMAGE}"
 mounts = ["/capstor/:/capstor/", "/iopsstor/:/iopsstor/"]
 workdir = "/"
+
+[env]
+PATH = "/opt/venv/bin:/opt/pytorch211/bin:/opt/gcc/bin:/opt/view/bin:/opt/papi/bin:/opt/rocm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 TOML
 
 echo "=== verifying ${IMAGE} as profile=${PROFILE} ==="
