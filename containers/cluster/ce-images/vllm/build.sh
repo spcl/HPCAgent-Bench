@@ -37,9 +37,13 @@ ce_cache_base_image
 
 podman --cgroup-manager=cgroupfs build "${MIRROR_ARGS[@]}" "${GPU_ARGS[@]}" \
   --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
+  --build-arg "BASE_IMAGE_REF=${BASE_IMAGE_REF:-${BASE_IMAGE}}" \
   -f "${SCRIPT_DIR}/Dockerfile" \
   -t "${IMAGE_TAG}" \
   .
 
 ce_export_image "${IMAGE_TAG}" "${OUTPUT_SQSH}"
-podman run --rm "${IMAGE_TAG}" cat /opt/ofi/BUILD-MANIFEST.txt
+# Provenance, not a gate: sglang stages the OFI build at /opt/ofi and the vLLM images at
+# /opt/aws-ofi-nccl. `|| true` because a missing manifest must not fail a build whose
+# squashfs and archive are already written and verified -- which is exactly what it did.
+podman run --rm "${IMAGE_TAG}" cat /opt/aws-ofi-nccl/BUILD-MANIFEST.txt || true

@@ -206,12 +206,15 @@ USER root
 # reproducibility claim in one label. BASE_IMAGE is re-declared here because an ARG from before
 # the first FROM is not in scope inside a stage.
 ARG BASE_IMAGE
+# The registry reference, not whatever FROM resolved to: a cache hit rewrites BASE_IMAGE to a
+# local dir: path, and that must not become the published base.name.
+ARG BASE_IMAGE_REF="${BASE_IMAGE}"
 LABEL org.opencontainers.image.title="optarena-sglang" \
       org.opencontainers.image.description="SGLang inference for MI300A: ROCm 7.2, libfabric/CXI, pinned flydsl" \
       org.opencontainers.image.version="0.5.18" \
       org.opencontainers.image.source="https://github.com/spcl/HPCAgent-Bench" \
       org.opencontainers.image.licenses="GPL-3.0-or-later" \
-      org.opencontainers.image.base.name="${BASE_IMAGE}"
+      org.opencontainers.image.base.name="${BASE_IMAGE_REF}"
 
 # flydsl, PINNED and INSIDE the image.
 #
@@ -232,6 +235,39 @@ ARG FLYDSL_VERSION=0.3.2
 RUN set -eux; \
     /opt/venv/bin/python3 -m pip install --no-cache-dir "flydsl==${FLYDSL_VERSION}"; \
     /opt/venv/bin/python3 -c 'import flydsl; assert flydsl.__version__ == "'"${FLYDSL_VERSION}"'", flydsl.__version__'
+
+# cupy, IN the image, for the same reason flydsl is.
+#
+# It was reaching the sglang arms through PYTHONPATH=${SCRATCH}/pyprefix/sglang-rocm-mi30x, a host
+# directory supplying cupy and flydsl 0.3.2. Measured: with that prefix injected both resolve
+# under /capstor, so what an arm actually ran was invisible to the image digest -- the attribution
+# hole this image exists to close. It survived because the base ships flydsl 0.3.1 and no cupy at
+# all, so the prefix was genuinely load-bearing. With both baked it has nothing left to add.
+#
+# From SOURCE: there is no ROCm wheel, the cupy-rocm-* names are dead and PyPI carries only the
+# sdist. Same recipe as judge-agent-amd, which builds cupy 14.2.0 this way.
+#
+# numpy is CONSTRAINED to what is installed and the build fails if it moved: the sdist would
+# otherwise pull its own, and numpy is what served results are compared against.
+ARG CUPY_VERSION=14.2.0
+ARG ROCM_ARCH=gfx942
+RUN set -eux; \
+    numpy_before="$(/opt/venv/bin/python3 -c 'import numpy; print(numpy.__version__)')"; \
+    printf 'numpy==%s\n' "${numpy_before}" > /tmp/constraint.txt; \
+    CUPY_INSTALL_USE_HIP=1 ROCM_HOME=/opt/rocm HCC_AMDGPU_TARGET="${ROCM_ARCH}" \
+    CUPY_NUM_BUILD_JOBS="$(nproc)" PIP_CONSTRAINT=/tmp/constraint.txt \
+      /opt/venv/bin/python3 -m pip install --no-cache-dir "cupy==${CUPY_VERSION}"; \
+    rm -f /tmp/constraint.txt; \
+    test "$(/opt/venv/bin/python3 -c 'import numpy; print(numpy.__version__)')" = "${numpy_before}" \
+      || { echo "cupy moved numpy off ${numpy_before}" >&2; exit 2; }; \
+    /opt/venv/bin/python3 -c "import cupy; print('cupy', cupy.__version__)"
+
+# Gate: both must resolve INSIDE the image. This is what lets the PYTHONPATH be deleted from the
+# campaign .env files rather than quietly remaining load-bearing.
+RUN /opt/venv/bin/python3 -c "import cupy, flydsl; \
+    assert cupy.__file__.startswith('/opt/'), cupy.__file__; \
+    assert flydsl.__file__.startswith('/opt/'), flydsl.__file__; \
+    print('self-contained: cupy', cupy.__version__, '| flydsl', flydsl.__version__)"
 
 COPY --from=ofi-builder /opt/ofi /opt/ofi
 

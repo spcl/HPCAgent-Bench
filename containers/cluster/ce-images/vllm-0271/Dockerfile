@@ -172,12 +172,15 @@ ARG TORCH_INDEX=https://download.pytorch.org/whl/rocm7.2
 # reproducibility claim in one label. BASE_IMAGE is re-declared here because an ARG from before
 # the first FROM is not in scope inside a stage.
 ARG BASE_IMAGE
+# The registry reference, not whatever FROM resolved to: a cache hit rewrites BASE_IMAGE to a
+# local dir: path, and that must not become the published base.name.
+ARG BASE_IMAGE_REF="${BASE_IMAGE}"
 LABEL org.opencontainers.image.title="optarena-vllm-0271" \
       org.opencontainers.image.description="vLLM ${VLLM_VERSION} inference for MI300A: ROCm 7.2, libfabric/CXI, aiter ${AITER_REF}" \
       org.opencontainers.image.version="${VLLM_VERSION}" \
       org.opencontainers.image.source="https://github.com/spcl/HPCAgent-Bench" \
       org.opencontainers.image.licenses="GPL-3.0-or-later" \
-      org.opencontainers.image.base.name="${BASE_IMAGE}"
+      org.opencontainers.image.base.name="${BASE_IMAGE_REF}"
 
 ENV VIRTUAL_ENV=/opt/pytorch211 \
     ROCM_PATH=/opt/rocm \

@@ -778,6 +778,22 @@ class TimedCompiledSDFG:
     def __call__(self, *args, **kwargs):
         return self._exec(*args, **kwargs)
 
+    def release_retained(self) -> None:
+        """Drop the Python objects the last call is still holding.
+
+        ``CompiledSDFG`` keeps every argument alive in ``_argument_to_pyobject`` and clears it at
+        the TOP of the next ``construct_arguments`` -- so the previous call's inputs are freed
+        inside the NEXT call. The harness gives each rep a fresh copy of every mutable array, so
+        that is the whole input set: measured on tsvc_2_vtvtv at the fuzzed preset, 3.4 GB and
+        9.5 ms against a 17.5 ms kernel, charged to this column alone.
+
+        Safe wherever the previous call has returned and its outputs have been read back, which is
+        what ``CallPlan.before_each`` guarantees.
+        """
+        retained = getattr(self._exec, "_argument_to_pyobject", None)
+        if retained is not None:
+            retained.clear()
+
 
 # ----- Framework -----
 

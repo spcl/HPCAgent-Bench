@@ -25,6 +25,26 @@ DEEP=0
 [[ "${1:-}" == "--deep" ]] && DEEP=1
 
 sidecar() { [[ -s "$1" ]] && tr -d '\n' < "$1" || printf 'none'; }
+
+# A sidecar left over from a PREVIOUS build of the same name reads as valid to anything that just
+# cats it. That is how job 620068 reported an image it had not built, and it happened again here:
+# a build failed after writing the squashfs but before its checksum, leaving a four-day-old sha256
+# beside a fresh image.
+#
+# Older is NOT the test, though -- ce_export_image writes the digest, THEN imports the squashfs,
+# so a correct .digest is always a little older than the .sqsh. Measured across four images, that
+# gap is 101-133 s (the enroot import), while the real staleness was 4 days. So flag only a gap
+# large enough that no single build could produce it; anything under the threshold is the normal
+# write order, and flagging it made every correctly built image look broken.
+STALE_AFTER_S="${STALE_AFTER_S:-21600}"   # 6 h: ~160x the observed within-build gap
+stale_note() {
+    local sidecar="$1" sqsh="$2" gap
+    [[ -s "${sidecar}" && -e "${sqsh}" ]] || return 0
+    gap=$(( $(stat -c %Y "${sqsh}") - $(stat -c %Y "${sidecar}") ))
+    (( gap > STALE_AFTER_S )) \
+      && printf '  <- STALE by %sh: belongs to an earlier build' "$(( gap / 3600 ))"
+    return 0
+}
 human()   { [[ -e "$1" ]] && du -h --apparent-size "$1" 2>/dev/null | cut -f1 || printf '-'; }
 
 {
@@ -42,8 +62,8 @@ human()   { [[ -e "$1" ]] && du -h --apparent-size "$1" 2>/dev/null | cut -f1 ||
         printf '%s\n' "$(basename "${sqsh}")"
         printf '  size        %s\n' "$(human "${sqsh}")"
         printf '  built       %s\n' "$(date -u -r "${sqsh}" '+%Y-%m-%d %H:%M:%SZ' 2>/dev/null || echo '?')"
-        printf '  digest      %s\n' "$(sidecar "${sqsh}.digest")"
-        printf '  sha256      %s\n' "$(sidecar "${sqsh}.sha256" | awk '{print $1}')"
+        printf '  digest      %s%s\n' "$(sidecar "${sqsh}.digest")" "$(stale_note "${sqsh}.digest" "${sqsh}")"
+        printf '  sha256      %s%s\n' "$(sidecar "${sqsh}.sha256" | awk '{print $1}')" "$(stale_note "${sqsh}.sha256" "${sqsh}")"
         if [[ -e "${archive}" ]]; then
             printf '  publishable YES -- push_image.sh --from-archive %s\n' "${archive}"
             printf '  archive     %s\n' "$(human "${archive}")"

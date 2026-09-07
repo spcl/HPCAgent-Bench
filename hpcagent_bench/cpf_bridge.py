@@ -44,7 +44,13 @@ from hpcagent_bench.spec import BenchSpec
 from hpcagent_bench.support.bindings.contract import Arg, Binding
 
 #: CPF dialect -> the source extension its text is written with.
-LANGUAGE_EXT = {"c++": "cpp", "c": "c"}
+LANGUAGE_EXT = {"c++": "cpp", "c": "c", "hip": "hip"}
+
+#: The dialect a device render takes, whatever ``--language`` asked for. A GPU SDFG carries device
+#: storages and schedules, and the host dialects refuse those outright ("CPF renders one
+#: translation unit, but ... has the GPU_Device schedule"), so the target decides this and the
+#: language flag only picks between the two HOST spellings.
+DEVICE_LANGUAGE = "hip"
 
 #: Postfixes a generated impl's stem carries over its kernel's ``@dace.program`` name. Longest
 #: first: ``_dace_cpu`` also ends in nothing shared with ``_dace``, but a future ``_dace_x`` would
@@ -188,9 +194,12 @@ def render_sdfg(
     finalize_for_target(sdfg, target, validate=True)
     sdfg.name = base
 
-    rendering = render(sdfg, language=language)
+    # The device form is one unit holding both the host code and the kernels, which is a dialect of
+    # its own; ``--language`` chooses between the two host spellings and says nothing about it.
+    emitted = DEVICE_LANGUAGE if target == "gpu" else language
+    rendering = render(sdfg, language=emitted)
     out_dir.mkdir(parents=True, exist_ok=True)
-    source = out_dir / f"{base}.{LANGUAGE_EXT[language]}"
+    source = out_dir / f"{base}.{LANGUAGE_EXT[emitted]}"
     source.write_text(rendering.code)
     binding = out_dir / f"{base}_binding.json"
     binding.write_text(json.dumps(binding_for(rendering, spec.short_name, base).to_json(), indent=2))
