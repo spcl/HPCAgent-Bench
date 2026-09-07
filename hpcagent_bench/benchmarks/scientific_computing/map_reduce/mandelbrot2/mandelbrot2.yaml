@@ -76,6 +76,7 @@ taxonomy:
   domain: Other
   tags:
   - npbench
+  - mpi-focus32
   min_precision: fp64
 mpi:
   decomposition:

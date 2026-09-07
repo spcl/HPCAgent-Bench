@@ -43,6 +43,8 @@ taxonomy:
   subtrack: max_filter
   dwarf: structured_grids
   domain: Image Processing
+  tags:
+  - mpi-focus32
 mpi:
   decomposition:
     axis:

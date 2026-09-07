@@ -63,6 +63,8 @@ taxonomy:
   track: scientific_computing
   dwarf: structured_grids
   domain: Physics
+  tags:
+  - mpi-focus32
 mpi:
   decomposition:
     axis:

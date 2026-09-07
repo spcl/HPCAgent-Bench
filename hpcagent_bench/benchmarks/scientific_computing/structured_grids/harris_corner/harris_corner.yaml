@@ -54,6 +54,8 @@ taxonomy:
   subtrack: halide
   dwarf: structured_grids
   domain: Image Processing
+  tags:
+  - mpi-focus32
 mpi:
   decomposition:
     axis:

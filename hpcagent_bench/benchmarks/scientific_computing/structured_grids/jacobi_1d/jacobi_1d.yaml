@@ -40,6 +40,7 @@ taxonomy:
   domain: Physics
   tags:
   - npbench
+  - mpi-focus32
 mpi:
   decomposition:
     axis:

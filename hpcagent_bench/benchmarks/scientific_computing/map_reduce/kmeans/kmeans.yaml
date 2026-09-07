@@ -46,6 +46,8 @@ taxonomy:
   subtrack: kmeans
   dwarf: map_reduce
   domain: Machine Learning
+  tags:
+  - mpi-focus32
 mpi:
   decomposition:
     axis:

@@ -35,6 +35,7 @@ taxonomy:
   domain: Others
   tags:
   - npbench
+  - mpi-focus32
 mpi:
   decomposition:
     axis:

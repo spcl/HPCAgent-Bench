@@ -44,6 +44,8 @@ taxonomy:
   subtrack: ls3df
   dwarf: map_reduce
   domain: Physics
+  tags:
+  - mpi-focus32
 mpi:
   decomposition:
     axis:

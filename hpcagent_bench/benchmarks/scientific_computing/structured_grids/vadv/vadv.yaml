@@ -44,6 +44,7 @@ taxonomy:
   domain: Weather
   tags:
   - npbench
+  - mpi-focus32
 mpi:
   decomposition:
     axis:

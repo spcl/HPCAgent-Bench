@@ -84,6 +84,8 @@ taxonomy:
   subtrack: quatrex
   dwarf: sparse_linear_algebra
   domain: Physics
+  tags:
+  - mpi-focus32
 mpi:
   decomposition:
     axis:

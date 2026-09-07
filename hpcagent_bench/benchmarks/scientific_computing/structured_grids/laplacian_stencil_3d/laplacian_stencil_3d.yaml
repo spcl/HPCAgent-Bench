@@ -50,6 +50,8 @@ taxonomy:
   subtrack: ls3df
   dwarf: structured_grids
   domain: Physics
+  tags:
+  - mpi-focus32
 mpi:
   decomposition:
     axis:

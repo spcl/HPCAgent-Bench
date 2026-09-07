@@ -43,6 +43,8 @@ taxonomy:
   subtrack: force_lj
   dwarf: n_body_methods
   domain: Physics
+  tags:
+  - mpi-focus32
 mpi:
   decomposition:
     axis:

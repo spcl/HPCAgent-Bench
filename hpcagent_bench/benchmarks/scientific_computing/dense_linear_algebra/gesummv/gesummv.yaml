@@ -45,6 +45,7 @@ taxonomy:
   domain: LinAlg
   tags:
   - npbench
+  - mpi-focus32
 mpi:
   decomposition:
     axis:
