@@ -155,12 +155,14 @@ on:
 
 concurrency:
   group: ${{github.workflow}}-${{github.ref}}
-  # Cancel superseded runs on a branch, never on the default branch. A push to main that lands while
-  # the previous run is still going used to kill it, and a killed run takes its FINDINGS with it: a
-  # -std= break on the mpi wrapper had already been reported by one run and was discarded before
-  # anyone read it, so the same breakage had to be rediscovered a push later. Branch runs keep the
-  # old behaviour, where the newer commit is the only one anybody wants an answer about.
-  cancel-in-progress: ${{github.ref != 'refs/heads/main'}}
+  # Cancel superseded runs EVERYWHERE, main included: the answer anybody wants is about the newest
+  # commit. Exempting main cost more than it saved. Only one run may be PENDING in a group, so while
+  # an old run held the runners each new push cancelled the previously queued one BEFORE it created
+  # a single job -- four in a row on 2026-09-07 (34154680978, 34160618941, 34163609110), and a fix
+  # that was correct and pushed went unexercised for hours because no run carrying it ever started.
+  # That is the same "findings discarded unread" failure the old note was guarding against, just
+  # moved from the killed run to the one that never ran.
+  cancel-in-progress: true
 
 jobs:
   # ===========================================================================================
