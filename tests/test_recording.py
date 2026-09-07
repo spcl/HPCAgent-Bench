@@ -250,6 +250,32 @@ def test_a_graded_source_is_persisted_beside_the_row_that_graded_it(tmp_path):
     assert row["language"] == "c"
 
 
+def test_a_gpu_submission_persists_both_translation_units(tmp_path):
+    """A hip/cuda body is TWO units and the archive kept only the host one.
+
+    The host half of a graded tsvc_2_s255 was 251 bytes of `extern "C"` shim naming a launcher
+    defined nowhere in the record, so no GPU row could be rebuilt from the database -- which is
+    what blocked re-grading a speed-up the mannwhitney ceiling had censored. Both halves land as
+    their own row, the device one tagged in `language`, because this schema is never ALTERed.
+    """
+    db = str(tmp_path / "r.db")
+    recording.record(
+        _correct_score(),
+        Submission(language="hip", source="/* host entry */", device_source="/* __global__ */", build=[]),
+        Task(KERNEL, "restricted", "hip"),
+        verify=_ok_verify(),
+        run_id="t",
+        path=db,
+    )
+    stored = {row["language"]: text for row, text in _stored_sources(db)}
+    assert stored == {"hip": "/* host entry */", "hip:device": "/* __global__ */"}
+    # Both halves carry the graded row's own stamp, so the join back to the leaderboard reaches
+    # the complete submission rather than half of it.
+    sub = _rows(db, "submissions")[0]
+    for row, _ in _stored_sources(db):
+        assert (row["run_id"], row["benchmark"], row["ts"]) == (sub["run_id"], sub["benchmark"], sub["ts"])
+
+
 def test_a_source_that_failed_grading_is_persisted_too(tmp_path):
     """The triage case: an arm's failures are only classifiable afterwards if their bytes survive."""
     db = str(tmp_path / "r.db")
