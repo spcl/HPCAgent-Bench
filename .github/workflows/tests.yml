@@ -76,10 +76,18 @@ name: CI
 # so of the run's 76-minute wall clock only ~36 was work. Job COUNT drives it again, exactly as it
 # did on 2026-08-11, and this time the arithmetic is ceil(26/12) = 3 queue waves. What was fused
 # back is what measured SHORT against the ~3-minute setup every container pays: ports-cegterg (four
-# shards, 11.6 min of phase work between them), integration_translators (five legs, 33.6 min) and
-# the unit sweep's third shard (4.7 min). 26 containers -> 18, two waves instead of three, and no
-# job projects past the ceiling. What was NOT fused: port-fidelity, whose three shards each carry one
-# of the corpus's three `hang` entries by construction, and every job already over 20 minutes.
+# shards, 11.6 min of phase work between them) and integration_translators (five legs, 33.6 min).
+# 26 containers -> 21, two waves instead of three, and no job projects past the ceiling. What was
+# NOT fused: port-fidelity, whose three shards each carry one of the corpus's three `hang` entries
+# by construction, and every job already over 20 minutes.
+#
+# Two of those fusions were tried WHOLE first, on run 34092074108, and neither held -- both for the
+# same reason, which is that a container is not only a budget. Merging the unit sweep's three
+# shards into two merged what runs in one interpreter, and the shard that then held both files
+# that fork wedged for 20 minutes with no timeout firing. Merging the translator tree into one leg
+# gave a single test the whole corpus, and --timeout=1500 is what bounds that test, not the step
+# cap. Both are back to a split, with the reason recorded at each; the ports-cegterg fusion, whose
+# eight configurations are eight independent tests, ran in 15 minutes and stays.
 #
 # frameworks-pluto stays separate: its own range is 15m05s-28m18s
 # across the same two runs, it is the only runner building Pluto from source (its own LLVM-17
@@ -109,7 +117,7 @@ name: CI
 #
 # Runners:
 #   unit                    the format gate + the discovery sweep, and nothing else   (MATRIX:
-#                           2 shards of the discovered file list, dealt by `awk NR % 2`)
+#                           3 shards of the discovered file list, dealt by `awk NR % 3`)
 #   translators             numpyto op suite
 #   frameworks-pluto        codegen frameworks + fp16 + e2e[pluto]      (ONLY Pluto build)
 #   e2e-native              native emit + the two-unit build line + integration sweep (CLI->DB->
@@ -119,9 +127,9 @@ name: CI
 #   e2e-numba-jax           e2e[numba, jax]
 #   container-image         build + smoke-launch the agent-bench cpu image, + the agent-bench suite
 #   integration             -m integration under tests/
-#   integration_translators -m integration under the numpy-translator tree      (ONE leg over the
-#                           whole tree: the two ABI sweeps share the corpus-wide lowering pass, so
-#                           splitting them paid it once per container instead of once)
+#   integration_translators -m integration under the numpy-translator tree      (MATRIX: 3 legs --
+#                           the ABI corpus sweep is one test over the registry and takes a
+#                           container per half, everything else shares the third)
 #   port-fidelity           the DaCe frontend over the generated corpus         (MATRIX: 3 shards
 #                           of the corpus, HPCAGENT_BENCH_DACE_PARSE_SHARD)
 #   dace-numeric            the generated DaCe corpus vs numpy (a C++ build per kernel, -n 4)
@@ -167,13 +175,23 @@ jobs:
   # ===========================================================================================
   unit:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: unit ${{ matrix.shard }}/2 (format + the discovery sweep)
+    name: unit ${{ matrix.shard }}/3 (format + the discovery sweep)
     runs-on: ubuntu-latest
     strategy:
       # fail-fast: false -- the sweep is 200 unrelated files, and half a verdict is still a verdict.
       fail-fast: false
       matrix:
-        shard: [0, 1]
+        # THREE, back from two. Halving looked free on phase minutes -- run 34058390220 measured
+        # the three shards at 12.8 + 13.8 + 4.7 -- but the modulus is not only a cost split, it is
+        # a PROCESS split: it decides which files share an interpreter, and ten of these files
+        # fork. Halved, shard 1 reached 99% in 9m47s and then wedged for the remaining 20m23s of
+        # its cap, identically on runs 34092074108 and 34097376180, with --timeout=600
+        # --timeout-method=thread never firing. A timer that does not fire is the tell: the thread
+        # method owns its own timer, so a wedge it cannot interrupt is one in a process-wide lock,
+        # which is the fork()-in-a-multi-threaded-process deadlock tests/test_fork_openmp_safety.py
+        # exists to document. Which pair of files it takes is not established -- what is, is that
+        # NR % 3 does not produce it and NR % 2 does, twice. Name the test before merging these.
+        shard: [0, 1, 2]
     # Phase 1 (24) + Phase 0/setup, which is ~5 on a warm cache. A job budget must exceed the sum of
     # its steps: at 40 + 25 + 55 the STEP budgets once came to 120 minutes inside a 90-minute JOB,
     # so the job could not finish even with every test passing, and the job cancellation that
@@ -362,22 +380,22 @@ jobs:
         # 40 -> 60 -> 90 -> 38 -> 24 -> 30: the sweep reached 69% in 40 minutes on run 33261681823
         # and died on the step timeout; run 33283870554 then filled the 60-minute cap; run
         # 33626484866 finished it in 35m48s and 33649808182 in 28m03s. Thirded, run 34058390220
-        # measured 12.8 + 13.8 + 4.7; halved instead (the third container was buying 4.7 min for a
-        # whole setup), a shard carries ~16m and 30 keeps the margin 24 had over a third. --durations names what
-        # it spends the time on, and no -q, because a step timeout prints no summary: under -q the
-        # failures had no test names at all, so the log said only that the budget had passed.
+        # measured 12.8 + 13.8 + 4.7. 30 rather than back to 24: run 34097376180 measured a third
+        # at 22m42s when it was a HALF, and the corpus a shard sweeps has grown under both a moving
+        # dace and new tests since 24 was set. --durations names what it spends the time on, and no
+        # -q, because a step timeout prints no summary: under -q the failures had no test names at
+        # all, so the log said only that the budget had passed.
         timeout-minutes: 30
         run: |
           excl=$(mktemp)
           grep -vE '^\s*(#|$)' .github/dedicated_tests.txt > "$excl"
           # SHARDED round-robin over the discovered list, and the discovery is still what decides
           # what exists -- `ls` lists, dedicated_tests.txt subtracts, and only then is the result
-          # dealt. NR % 2 over a sorted list, so the two shards partition it and a new file joins
-          # one of them the moment it lands, exactly as before. Three shards on run 34058390220
-          # measured 12.8 + 13.8 + 4.7 min of sweep, so two carry ~16 each -- the third container
-          # was buying a third of a sweep for a whole setup. tests/test_ci_coverage.py asserts
+          # dealt. NR % 3 over a sorted list, so the three shards partition it and a new file joins
+          # one of them the moment it lands. The modulus is not only a cost split -- see the matrix
+          # above for the fork/OpenMP wedge that NR % 2 produced. tests/test_ci_coverage.py asserts
           # the matrix runs every index this deals into; a shard nobody runs is files nobody runs.
-          files=$(ls tests/test_*.py | grep -vxF -f "$excl" | awk 'NR % 2 == ${{ matrix.shard }}')
+          files=$(ls tests/test_*.py | grep -vxF -f "$excl" | awk 'NR % 3 == ${{ matrix.shard }}')
           test -n "$files" || { echo 'unit sweep selected no files'; exit 1; }
           echo "$files" | tr ' ' '\n' | wc -l | xargs echo "sweeping files:"
           # Killed twice here with "the runner has received a shutdown signal", both times at the
@@ -735,20 +753,33 @@ jobs:
       fail-fast: false
       matrix:
         leg:
-          - id: tree
-            # 0/1 is the whole registry. The two ABI files were a leg each, sharded 0/2 and 1/2,
-            # which is four containers for 32 minutes of work -- and four times the ~3-minute
-            # setup. They share the corpus-wide lowering pass, so running them in ONE process pays
-            # it once rather than four times. Naming the directory with no --ignore is also the
-            # partition: there is one leg, so nothing can fall between two of them.
+          # test_abi_corpus_agreement.py keeps a leg per corpus HALF, and the reason is the
+          # per-test timeout rather than the step budget: the sweep there is ONE test over
+          # HPCAGENT_BENCH_TRANSLATOR_CORPUS_SHARD of the registry, so `0/1` does not make the
+          # phase longer, it makes a single test longer. Fused whole, run 34092074108 finished it
+          # in 24m11s and run 34097376180 -- same workflow, a moved dace -- did not: the test hit
+          # --timeout=1500 and the leg died with 58 of 59 tests never reported. Halved, no test
+          # carries more than the ~11 min half that has always fit.
+          - id: abi-corpus-0
+            shard: "0/2"
+            select: >-
+              hpcagent_bench/numpy_translators/tests/test_abi_corpus_agreement.py
+          - id: abi-corpus-1
+            shard: "1/2"
+            select: >-
+              hpcagent_bench/numpy_translators/tests/test_abi_corpus_agreement.py
+          - id: rest
+            # 0/1 is the whole registry, and here that is fine: the fold sweep's two halves
+            # measured 3.0 + 8.8 min on run 34058390220, so whole it is ~12 min against the same
+            # 1500 s, and every other test on this leg is per-kernel already.
             shard: "0/1"
             select: >-
               hpcagent_bench/numpy_translators/tests/
-    # Phase 6t (40) + setup, ~3 warm. Run 34058390220 measured the five legs this replaces at
-    # 3.0 + 8.8 (fold) + 9.2 + 11.2 (ABI) + 1.4 (the rest) = 33.6 min of phase work in five
-    # containers; whole, that is ~37 min against the 45-minute ceiling, and less than the sum
-    # because one process pays the corpus-wide lowering once. Split it again the moment a run
-    # measures it past 40.
+              --ignore=hpcagent_bench/numpy_translators/tests/test_abi_corpus_agreement.py
+    # Phase 6t (40) + setup, ~3 warm. Three legs, down from five: the two fold legs and the
+    # per-kernel `rest` leg fused (3.0 + 8.8 + 1.4 = 13.2 min of phase work over three containers,
+    # and one process pays the corpus-wide lowering pass once), while the ABI corpus sweep stays
+    # halved because its cost lands on ONE test and --timeout=1500 is what bounds it.
     timeout-minutes: 45
     env:
       PYTEST_ADDOPTS: "--cov=hpcagent_bench --cov-append --cov-report="
