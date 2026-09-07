@@ -125,11 +125,27 @@ enroot import -x mount -o "${OUTPUT_SQSH}" "podman://${IMAGE_TAG}" || true
 unsquashfs -l "${OUTPUT_SQSH}" opt >/dev/null
 printf 'Wrote %s\n' "${OUTPUT_SQSH}"
 
+# Keep an OCI archive beside the squashfs, so publishing does not have to happen during the build.
+# The squashfs cannot stand in for it: it is a flattened filesystem, so reimporting one collapses
+# the image into a single layer far past the registry's per-layer ceiling and drops the image
+# config with it. An archive keeps the layers and the config, which turns `push_image.sh
+# --from-archive` into a short job instead of a multi-hour rebuild. Costs its own size on scratch;
+# set SAVE_OCI_ARCHIVE=0 to skip it and accept that publishing later means rebuilding.
+if [[ "${SAVE_OCI_ARCHIVE:-1}" != "0" ]]; then
+  oci_archive="${OUTPUT_SQSH%.sqsh}.oci.tar"
+  rm -f "${oci_archive}"
+  if podman save --format oci-archive -o "${oci_archive}" "${IMAGE_TAG}"; then
+    printf 'Wrote %s\n' "${oci_archive}"
+  else
+    echo "OCI archive save FAILED: the squashfs is fine, but publishing this build later would" >&2
+    echo "need a full rebuild. See ce-images/push_image.sh." >&2
+  fi
+fi
+
 # Optional registry push, so this image can be PULLED instead of rebuilt. AFTER the artifact is
-# written, so a registry failure never costs it. It must happen in THIS job: podman's graphroot is
-# node-local tmpfs that dies with the job, and the squashfs left behind is a flattened filesystem,
-# not an OCI image -- an image not pushed while it was built has to be rebuilt to be pushed.
-# See ce-images/push_image.sh.
+# written, so a registry failure never costs it. Pushing straight from the build graphroot is the
+# cheapest path when credentials are already to hand; the archive above is what makes a later
+# push possible at all. See ce-images/push_image.sh.
 if [[ -n "${PUSH_REPO:-}" ]]; then
   "$(dirname -- "${SCRIPT_DIR}")/push_image.sh" "${IMAGE_TAG}" ${PUSH_TAGS:-} \
     || echo "push to ${PUSH_REPO} FAILED; the local image and squashfs are unaffected" >&2
