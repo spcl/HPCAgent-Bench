@@ -41,7 +41,14 @@ OPT=${SCRATCH:?}/optarena
 PY=${SCRATCH:?}/venv-optarena-314/bin/python
 STAMP=${STAMP:-$(date +%Y%m%d)}
 OUT_ROOT=${OUT_ROOT:-${SCRATCH:?}/canon-llr40-${STAMP}}
-PRESET=${PRESET:-S}
+#: The preset the AGENTS are graded at, which is what makes these columns baselines FOR their
+#: numbers rather than a different measurement beside them: run_cluster.sh leaves the preset
+#: unset, so an agent grade takes the CLI default, `fuzzed`. Fuzz is anchored on XL
+#: (config.yaml: xl_lo_mult/xl_hi_mult), and the TIMED draws take the upper half of that
+#: interval, so this times [0.75, 1.00] x XL over fuzz.iterations draws rather than the single
+#: point 1.00 x XL that a fixed `-p XL` measures. The default used to be S, which is a size no
+#: measurement should ever be reported at.
+PRESET=${PRESET:-fuzzed}
 TIME_LIMIT=${TIME_LIMIT:-12:00:00}
 # Every kernel carrying the roster tag, read from the registry at submit time. A checked-in list
 # goes stale silently and reports a number for the wrong forty.

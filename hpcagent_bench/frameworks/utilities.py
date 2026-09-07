@@ -128,12 +128,20 @@ def nonfinite_mismatch(e, a, xp=np) -> Optional[str]:
 def lapack_test_ratio(reference, value, xp=np, growth: Optional[float] = None) -> float:
     """LAPACK's normwise test ratio: ``max|value - reference| / (eps * f(n) * ||reference||_inf)``.
 
-    LAPACK grades by a ratio of this shape -- a residual over ``eps`` times the norms of the data,
-    asked to be O(1) -- rather than by a per-element relative error (netlib, "How to Measure
-    Errors"; TESTING/LIN/dchkaa.f). The distinction matters exactly where a signed accumulation
-    passes near zero: the per-element relative error is meaningless there because cancellation
-    destroyed the digits, while this ratio stays interpretable because its denominator is the
-    magnitude of the DATA, not of the one element.
+    LAPACK grades by a ratio of this shape -- a residual over ``eps`` times a norm, asked to be
+    O(1) against a threshold of 30 (``TESTING/dtest.in``) -- rather than by a per-element relative
+    error (netlib, "How to Measure Errors"). The distinction matters exactly where a signed
+    accumulation passes near zero: the per-element relative error is meaningless there because
+    cancellation destroyed the digits, while this ratio stays interpretable because its denominator
+    carries a magnitude of the whole array rather than of the one element.
+
+    NOT identical to LAPACK's, and knowing how it differs is load-bearing: LAPACK normalises by the
+    norms of the OPERANDS (``norm(A)``, ``norm(A)*norm(X)``), which for an accumulation means
+    ``sum|x_i|``. Only the two output arrays reach here, so this divides by ``||reference||_inf``
+    instead -- smaller by the condition number of summation, ``sum|x_i| / |sum x_i|``, whenever the
+    terms cancel. The ratio therefore runs STRICTER than the LAPACK statistic, by a factor that is
+    ``Theta(sqrt(n))`` for a signed accumulation; see the floor in :func:`compare_arrays`, which is
+    where that factor is put back.
 
     ``growth`` overrides the default ``f(n) = summation_growth(reference.size)`` -- for a caller
     whose ``n`` is NOT the output's element count, e.g. a scalar reduction over a long input
@@ -286,12 +294,23 @@ def compare_arrays(ref, val, rtol=1e-5, atol=1e-8):
     # 1.0: for an array reaching 4.9e6 one ULP is 1.1e-9, so a fixed 1e-11 asks for ~100x finer
     # agreement than the data carries.
     #
-    # The floor is what separates two summation ORDERS of the same terms, which is what this
-    # comparison actually holds: a parallel accumulation against a sequential reference. That is
-    # reassociation_growth's question (sqrt(n), Higham Sec. 4.5), NOT summation_growth's log2(n) --
-    # log2(n) bounds the TREE's own error, and summation_growth's docstring says in as many words
-    # that the honest factor for the DIFFERENCE of the two is larger, because the sequential side
-    # carries the bigger error of the pair.
+    # sqrt(n), not log2(n), and the reason is the DENOMINATOR rather than the growth function.
+    #
+    # LAPACK's ratios normalise by the norms of the OPERANDS -- norm(L*U - A)/(N*norm(A)*eps),
+    # norm(B - A*X)/(norm(A)*norm(X)*eps) -- while this one has only the two output arrays and so
+    # divides by ||reference||_inf, the norm of the RESULT. For an accumulation those differ by the
+    # condition number of summation, kappa = sum|x_i| / |sum x_i| (Higham), which is large exactly
+    # under cancellation. Measured on the scan kernels: kappa = 3976 (tsvc_2_s3112) and 6724
+    # (tsvc_2_s323) at n = 6.4e7, so the ratio as computed here runs ~kappa times stricter than the
+    # LAPACK statistic it is named after -- which is the whole reason a correct parallel scan landed
+    # near the threshold of 30 at all.
+    #
+    # For a signed accumulation sum|x_i| grows like n while |sum x_i| grows like sqrt(n), so
+    # kappa = Theta(sqrt(n)): measured kappa/sqrt(n) stays in [0.5, 1.2] across 64x in n and across
+    # both kernels. Multiplying f(n) by sqrt(n) is therefore not a looser bound bolted on, it is the
+    # missing operand scale put back. That it coincides with reassociation_growth -- Higham's
+    # sqrt(n) rule of thumb for the DIFFERENCE of two summation orders, which is also exactly what
+    # this comparison holds -- is why one factor serves both.
     #
     # Measured on a correct blocked scan of uniform(-1000,1000), no compiler involved, grading the
     # scan against numpy's sequential cumsum -- LAPACK ratio at n = 1e6 / 4e6 / 1.6e7 / 6.4e7:

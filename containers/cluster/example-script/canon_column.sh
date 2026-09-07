@@ -100,6 +100,24 @@ cd "${opt}"
 #: partial lines, and the merge is a glob at analysis time anyway.
 rank=${SLURM_PROCID:-0}
 nranks=${SLURM_NTASKS:-1}
+
+#: ONE RANK PER GPU. srun hands every task the JOB's whole gres, and nothing downstream picks a
+#: device by rank -- dace_framework's mpi_rank() only splits the build folder -- so all four ranks
+#: ran on device 0 while the other three GPUs sat idle. Four processes timing kernels on one GPU
+#: is a contended measurement, not the per-socket one the column claims to report.
+#: Narrowing the inherited list here rather than asking srun for --gpus-per-task: requesting gres
+#: a second time inside the step is the nested-gres trap that leaves it with no devices at all.
+#: A CPU column inherits no list and is left untouched.
+visible="${ROCR_VISIBLE_DEVICES:-${HIP_VISIBLE_DEVICES:-${CUDA_VISIBLE_DEVICES:-}}}"
+if [[ -n "${visible}" ]]; then
+    IFS=',' read -r -a devices <<<"${visible}"
+    mine="${devices[$((rank % ${#devices[@]}))]}"
+    export ROCR_VISIBLE_DEVICES="${mine}" HIP_VISIBLE_DEVICES="${mine}" CUDA_VISIBLE_DEVICES="${mine}"
+    echo "canon ${col} rank ${rank}: GPU ${mine} of ${#devices[@]} (${visible})"
+else
+    echo "canon ${col} rank ${rank}: no GPU list inherited"
+fi
+
 csv="${out_root}/${col}.rank${rank}.csv"
 echo "canon ${col} rank ${rank}/${nranks}: OMP_NUM_THREADS=${OMP_NUM_THREADS} build_folder=${DACE_default_build_folder}"
 failed=0
