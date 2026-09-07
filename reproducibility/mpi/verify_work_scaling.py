@@ -464,7 +464,13 @@ def main(argv=None) -> int:
     ap.add_argument("--calibrate-only", action="store_true")
     args = ap.parse_args(argv)
 
-    report = {"preset": args.preset, "calibration": calibrate(args.reps, args.timeout)}
+    # The job id travels with the numbers: the docs quote a measured exponent, and a reader
+    # who wants the log needs to know which run produced it.
+    report = {
+        "job": os.environ.get("SLURM_JOB_ID", "local"),
+        "preset": args.preset,
+        "calibration": calibrate(args.reps, args.timeout),
+    }
     cal = report["calibration"]
     print(f"calibration: {json.dumps(cal)}", flush=True)
     if not cal.get("fma_counted_twice"):
