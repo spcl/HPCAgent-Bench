@@ -16,6 +16,7 @@ layered on top of these defaults by the caller.
 import contextlib
 import dataclasses
 import functools
+import json
 import os
 import pathlib
 from typing import Any, ClassVar, Optional, Tuple
@@ -89,6 +90,18 @@ def _coerce(s: str) -> Any:
     for cast in (int, float):
         try:
             return cast(s)
+        except ValueError:
+            pass
+    # A LIST or OBJECT value, which several keys need and the environment can only carry as text:
+    # mpi.launcher is an argv prefix and mpi.compilers a {language: wrapper} map, so without this
+    # `HPCAGENT_BENCH_MPI_LAUNCHER='["srun","--mpi=pmi2","-n"]'` arrives as a 34-character STRING.
+    # Nothing rejects it -- dict() over it raises "dictionary update sequence element #0 has
+    # length 1", far from the export that caused it, and list() over it would silently launch with
+    # one argument per character. Attempted only for a value that opens with a bracket or brace,
+    # so an ordinary string still reaches the caller as itself.
+    if s[:1] in ("[", "{"):
+        try:
+            return json.loads(s)
         except ValueError:
             pass
     return s
