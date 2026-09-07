@@ -343,6 +343,24 @@ def test_a_counted_region_reports_counts_and_ratios(tmp_path: pathlib.Path) -> N
 
 @requires_gcc
 @requires_papi
+def test_a_report_that_gives_up_before_selection_still_names_the_events(tmp_path: pathlib.Path) -> None:
+    """Degrading BY NAME has to hold on the path that gives up BEFORE any metric is reached.
+
+    That is the path a counter-less hosted runner takes: PAPI answers 0 usable counter registers,
+    the report is written before selection ran, and so no metric carries a reason of its own. The
+    events a metric wanted are a property of the TABLE, not of the run, so they are reportable
+    anyway -- and a bare "not armed" that names nothing is what this refuses. ``HPC_PAPI_BUDGET``
+    reaches the same early return on a machine that HAS counters.
+    """
+    report = counted(tmp_path, HPC_PAPI_BUDGET="0")
+    assert report["cause"] == "events_unsupported" and report["error"]
+    for row in report["metrics"]:
+        assert row["count"] is None, row
+        assert papi.METRICS[row["metric"]][0][0] in row["missing"], row
+
+
+@requires_gcc
+@requires_papi
 def test_absence_is_null_and_failure_is_zero_with_an_error(tmp_path: pathlib.Path) -> None:
     """The two ways a number can be missing, kept apart. A metric this CPU cannot express is
     ``null`` with a reason -- in a FAILED report too, naming the events it wanted; the failed

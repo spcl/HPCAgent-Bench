@@ -774,6 +774,21 @@ static long long hpc_papi_value(int m, int thread) {
   return v;
 }
 
+static void hpc_papi_wanted(char *out, size_t n, int m) {
+  const char *const *terms = HPC_PAPI_METRIC[m].cand[0];
+  size_t used = (size_t)snprintf(out, n, "not armed (wanted:");
+  int t;
+  if (used >= n)
+    return;
+  for (t = 0; terms[t]; t++) {
+    int wrote = snprintf(out + used, n - used, " %s", hpc_papi_bare(terms[t]));
+    if (wrote < 0 || (size_t)wrote >= n - used)
+      return;
+    used += (size_t)wrote;
+  }
+  snprintf(out + used, n - used, ")");
+}
+
 static void hpc_papi_write_metric(FILE *out, int m) {
   const char *const *terms = hpc_papi_pick[m] >= 0 ? HPC_PAPI_METRIC[m].cand[hpc_papi_pick[m]] : NULL;
   int counted = terms && !hpc_papi_err[0];
@@ -788,7 +803,15 @@ static void hpc_papi_write_metric(FILE *out, int m) {
      * the events it wanted, where a zero beside the error would say the counters read nothing.
      * The whole-report failure below is the other rule -- zeros, beside an error. */
     fputs(", \"expression\": \"\", \"count\": null, \"missing\": ", out);
-    hpc_papi_json_str(out, hpc_papi_why[m][0] ? hpc_papi_why[m] : "not armed");
+    if (hpc_papi_why[m][0]) {
+      hpc_papi_json_str(out, hpc_papi_why[m]);
+    } else {
+      /* Selection never ran -- a CPU reporting no counter register fails before it. Name the
+       * events anyway; degrading BY NAME is the contract on every path, not just that one. */
+      char wanted[sizeof hpc_papi_why[m]];
+      hpc_papi_wanted(wanted, sizeof wanted, m);
+      hpc_papi_json_str(out, wanted);
+    }
     fputs("}", out);
     return;
   }
