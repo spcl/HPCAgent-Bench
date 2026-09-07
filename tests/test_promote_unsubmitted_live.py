@@ -133,5 +133,8 @@ def test_the_same_judge_refuses_a_body_that_names_no_rank(promoter, judge, tmp_p
         outcome = promoter.promote(judge, item, False, JUDGE_RANK)
     finally:
         promoter.promote = original
-    assert outcome == "refused 400"
+    assert outcome.startswith("refused 400: ")
+    # The code alone names the fact of a refusal and nothing about its cause; the report line has
+    # to carry the judge's own words, or a promotion failure is undiagnosable from the arm's log.
+    assert "rank" in outcome, f"the refusal reason must reach the report line, got {outcome!r}"
     assert Judge.posted == [], "a refused promotion must not be recorded as graded"
