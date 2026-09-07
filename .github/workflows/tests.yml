@@ -753,33 +753,31 @@ jobs:
       fail-fast: false
       matrix:
         leg:
-          # test_abi_corpus_agreement.py keeps a leg per corpus HALF, and the reason is the
-          # per-test timeout rather than the step budget: the sweep there is ONE test over
-          # HPCAGENT_BENCH_TRANSLATOR_CORPUS_SHARD of the registry, so `0/1` does not make the
-          # phase longer, it makes a single test longer. Fused whole, run 34092074108 finished it
-          # in 24m11s and run 34097376180 -- same workflow, a moved dace -- did not: the test hit
-          # --timeout=1500 and the leg died with 58 of 59 tests never reported. Halved, no test
-          # carries more than the ~11 min half that has always fit.
-          - id: abi-corpus-0
-            shard: "0/2"
-            select: >-
-              hpcagent_bench/numpy_translators/tests/test_abi_corpus_agreement.py
-          - id: abi-corpus-1
-            shard: "1/2"
+          # test_abi_corpus_agreement.py sweeps the WHOLE registry in one test again, and this
+          # time the timeout is sized for it. The halves measured 1054s and 536s on run
+          # 34122110084, so whole is ~1590s: it fits a container easily and always did -- what it
+          # did not fit was --timeout=1500, which bounds the TEST rather than the step, and that
+          # is what killed the fused leg on run 34097376180 with 58 of 59 tests never reported.
+          # The bound is 2100 s now, ~32% over the measured cost, and it stays BELOW the step cap
+          # so a wedge dumps the stack of the test that hung instead of dying nameless at the cap.
+          # Re-split into "0/2" + "1/2" legs the moment a run measures the sweep past ~1800 s;
+          # it grew 1224 -> 1590 s between 2026-09-06 and 2026-09-07 on a moving dace.
+          - id: abi-corpus
+            shard: "0/1"
             select: >-
               hpcagent_bench/numpy_translators/tests/test_abi_corpus_agreement.py
           - id: rest
             # 0/1 is the whole registry, and here that is fine: the fold sweep's two halves
             # measured 3.0 + 8.8 min on run 34058390220, so whole it is ~12 min against the same
-            # 1500 s, and every other test on this leg is per-kernel already.
+            # budget, and every other test on this leg is per-kernel already.
             shard: "0/1"
             select: >-
               hpcagent_bench/numpy_translators/tests/
               --ignore=hpcagent_bench/numpy_translators/tests/test_abi_corpus_agreement.py
-    # Phase 6t (40) + setup, ~3 warm. Three legs, down from five: the two fold legs and the
-    # per-kernel `rest` leg fused (3.0 + 8.8 + 1.4 = 13.2 min of phase work over three containers,
-    # and one process pays the corpus-wide lowering pass once), while the ABI corpus sweep stays
-    # halved because its cost lands on ONE test and --timeout=1500 is what bounds it.
+    # Phase 6t (40) + setup, ~3 warm. TWO legs, down from three: the ABI corpus sweep is whole
+    # again at ~1590 s of a 40-minute step, which is the shape a 45-minute container budget is
+    # meant to buy -- two containers at 20 and 17 minutes rather than three at 20, 12 and 17,
+    # each paying its own ~2.5-minute setup.
     timeout-minutes: 45
     env:
       PYTEST_ADDOPTS: "--cov=hpcagent_bench --cov-append --cov-report="
@@ -836,7 +834,7 @@ jobs:
         env:
           HPCAGENT_BENCH_TRANSLATOR_CORPUS_SHARD: ${{ matrix.leg.shard }}
         run: |
-          python -m pytest -p no:cacheprovider -rfEs --timeout=1500 --timeout-method=thread --durations=25 \
+          python -m pytest -p no:cacheprovider -rfEs --timeout=2100 --timeout-method=thread --durations=25 \
             -m integration ${{ matrix.leg.select }}
 
       - name: ccache statistics
