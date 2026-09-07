@@ -25,6 +25,16 @@ DEEP=0
 [[ "${1:-}" == "--deep" ]] && DEEP=1
 
 sidecar() { [[ -s "$1" ]] && tr -d '\n' < "$1" || printf 'none'; }
+
+# A sidecar OLDER than the squashfs it describes belongs to a PREVIOUS build of the same name, and
+# reads as valid to anything that just cats it. That is how job 620068 reported an image it had not
+# built; it happened again here when a build failed after writing the squashfs but before its
+# checksum, leaving a four-day-old sha256 beside a fresh image. Say so rather than print it.
+stale_note() {
+    local sidecar="$1" sqsh="$2"
+    [[ -s "${sidecar}" ]] || return 0
+    [[ "${sidecar}" -ot "${sqsh}" ]] && printf '  <- STALE, older than the .sqsh: belongs to an earlier build'
+}
 human()   { [[ -e "$1" ]] && du -h --apparent-size "$1" 2>/dev/null | cut -f1 || printf '-'; }
 
 {
@@ -42,8 +52,8 @@ human()   { [[ -e "$1" ]] && du -h --apparent-size "$1" 2>/dev/null | cut -f1 ||
         printf '%s\n' "$(basename "${sqsh}")"
         printf '  size        %s\n' "$(human "${sqsh}")"
         printf '  built       %s\n' "$(date -u -r "${sqsh}" '+%Y-%m-%d %H:%M:%SZ' 2>/dev/null || echo '?')"
-        printf '  digest      %s\n' "$(sidecar "${sqsh}.digest")"
-        printf '  sha256      %s\n' "$(sidecar "${sqsh}.sha256" | awk '{print $1}')"
+        printf '  digest      %s%s\n' "$(sidecar "${sqsh}.digest")" "$(stale_note "${sqsh}.digest" "${sqsh}")"
+        printf '  sha256      %s%s\n' "$(sidecar "${sqsh}.sha256" | awk '{print $1}')" "$(stale_note "${sqsh}.sha256" "${sqsh}")"
         if [[ -e "${archive}" ]]; then
             printf '  publishable YES -- push_image.sh --from-archive %s\n' "${archive}"
             printf '  archive     %s\n' "$(human "${archive}")"
