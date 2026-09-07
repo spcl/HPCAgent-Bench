@@ -71,6 +71,16 @@ name: CI
 # port-fidelity (78m) and then mpi (61m, gated on unit and integration) end to end; with
 # dace-numeric off mpi's serial chain the same shape finishes around an hour earlier.
 #
+# 2026-09-07: THE LIMIT IS BACK, and bigger. Run 34058390220 (26 jobs, all green) started 12 jobs
+# at once and no more: the median job waited 32 minutes for a slot and the slowest waited 39m54s,
+# so of the run's 76-minute wall clock only ~36 was work. Job COUNT drives it again, exactly as it
+# did on 2026-08-11, and this time the arithmetic is ceil(26/12) = 3 queue waves. What was fused
+# back is what measured SHORT against the ~3-minute setup every container pays: ports-cegterg (four
+# shards, 11.6 min of phase work between them), integration_translators (five legs, 33.6 min) and
+# the unit sweep's third shard (4.7 min). 26 containers -> 18, two waves instead of three, and no
+# job projects past the ceiling. What was NOT fused: port-fidelity, whose three shards each carry one
+# of the corpus's three `hang` entries by construction, and every job already over 20 minutes.
+#
 # frameworks-pluto stays separate: its own range is 15m05s-28m18s
 # across the same two runs, it is the only runner building Pluto from source (its own LLVM-17
 # toolchain, unrelated to MPI/OpenMPI or DaCe's per-kernel C++ builds), and a bad day on both sides
@@ -99,7 +109,7 @@ name: CI
 #
 # Runners:
 #   unit                    the format gate + the discovery sweep, and nothing else   (MATRIX:
-#                           3 shards of the discovered file list, dealt by `awk NR % 3`)
+#                           2 shards of the discovered file list, dealt by `awk NR % 2`)
 #   translators             numpyto op suite
 #   frameworks-pluto        codegen frameworks + fp16 + e2e[pluto]      (ONLY Pluto build)
 #   e2e-native              native emit + the two-unit build line + integration sweep (CLI->DB->
@@ -109,14 +119,14 @@ name: CI
 #   e2e-numba-jax           e2e[numba, jax]
 #   container-image         build + smoke-launch the agent-bench cpu image, + the agent-bench suite
 #   integration             -m integration under tests/
-#   integration_translators -m integration under the numpy-translator tree      (MATRIX: 3 legs --
-#                           the two whole-corpus ABI sweeps get a container each, the other 55
-#                           tests share the third)
+#   integration_translators -m integration under the numpy-translator tree      (ONE leg over the
+#                           whole tree: the two ABI sweeps share the corpus-wide lowering pass, so
+#                           splitting them paid it once per container instead of once)
 #   port-fidelity           the DaCe frontend over the generated corpus         (MATRIX: 3 shards
 #                           of the corpus, HPCAGENT_BENCH_DACE_PARSE_SHARD)
 #   dace-numeric            the generated DaCe corpus vs numpy (a C++ build per kernel, -n 4)
-#   ports-cegterg           one port's eigensolver oracle                       (MATRIX: 4 shards
-#                           of the configuration list, HPCAGENT_BENCH_CEGTERG_SHARD)
+#   ports-cegterg           one port's eigensolver oracle (all eight configurations in one
+#                           container; HPCAGENT_BENCH_CEGTERG_SHARD is still the knob)
 #   mpi                     the whole MPI/distributed track (descriptor + driver codegen + launch +
 #                           scoring + halo + sizing) on MPICH + a source-built mpi4py (ONLY MPI
 #                           build), plus port fidelity (minus cegterg) + benchmark reference
@@ -157,13 +167,13 @@ jobs:
   # ===========================================================================================
   unit:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: unit ${{ matrix.shard }}/3 (format + the discovery sweep)
+    name: unit ${{ matrix.shard }}/2 (format + the discovery sweep)
     runs-on: ubuntu-latest
     strategy:
       # fail-fast: false -- the sweep is 200 unrelated files, and half a verdict is still a verdict.
       fail-fast: false
       matrix:
-        shard: [0, 1, 2]
+        shard: [0, 1]
     # Phase 1 (24) + Phase 0/setup, which is ~5 on a warm cache. A job budget must exceed the sum of
     # its steps: at 40 + 25 + 55 the STEP budgets once came to 120 minutes inside a 90-minute JOB,
     # so the job could not finish even with every test passing, and the job cancellation that
@@ -349,22 +359,25 @@ jobs:
         # cancellation is not a step failure the FIVE phases below never ran at all. A step timeout
         # is a failure, so `!cancelled()` keeps them running and the job reports what it knows.
         #
-        # 40 -> 60 -> 90 -> 38 -> 24: the sweep reached 69% in 40 minutes on run 33261681823 and
-        # died on the step timeout; run 33283870554 then filled the 60-minute cap; run 33626484866
-        # finished it in 35m48s and 33649808182 in 28m03s. Halved by the shard below, that is
-        # ~18m, and 24 keeps the same kind of margin the 38 had over 35m48s. --durations names what
+        # 40 -> 60 -> 90 -> 38 -> 24 -> 30: the sweep reached 69% in 40 minutes on run 33261681823
+        # and died on the step timeout; run 33283870554 then filled the 60-minute cap; run
+        # 33626484866 finished it in 35m48s and 33649808182 in 28m03s. Thirded, run 34058390220
+        # measured 12.8 + 13.8 + 4.7; halved instead (the third container was buying 4.7 min for a
+        # whole setup), a shard carries ~16m and 30 keeps the margin 24 had over a third. --durations names what
         # it spends the time on, and no -q, because a step timeout prints no summary: under -q the
         # failures had no test names at all, so the log said only that the budget had passed.
-        timeout-minutes: 24
+        timeout-minutes: 30
         run: |
           excl=$(mktemp)
           grep -vE '^\s*(#|$)' .github/dedicated_tests.txt > "$excl"
           # SHARDED round-robin over the discovered list, and the discovery is still what decides
           # what exists -- `ls` lists, dedicated_tests.txt subtracts, and only then is the result
           # dealt. NR % 2 over a sorted list, so the two shards partition it and a new file joins
-          # one of them the moment it lands, exactly as before. tests/test_ci_coverage.py asserts
+          # one of them the moment it lands, exactly as before. Three shards on run 34058390220
+          # measured 12.8 + 13.8 + 4.7 min of sweep, so two carry ~16 each -- the third container
+          # was buying a third of a sweep for a whole setup. tests/test_ci_coverage.py asserts
           # the matrix runs every index this deals into; a shard nobody runs is files nobody runs.
-          files=$(ls tests/test_*.py | grep -vxF -f "$excl" | awk 'NR % 3 == ${{ matrix.shard }}')
+          files=$(ls tests/test_*.py | grep -vxF -f "$excl" | awk 'NR % 2 == ${{ matrix.shard }}')
           test -n "$files" || { echo 'unit sweep selected no files'; exit 1; }
           echo "$files" | tr ' ' '\n' | wc -l | xargs echo "sweeping files:"
           # Killed twice here with "the runner has received a shutdown signal", both times at the
@@ -685,29 +698,24 @@ jobs:
   # reported "failed" with no verdict for either side. Nothing is deselected: the union of this
   # job's paths and `integration`'s is exactly the pair the single step used to name.
   #
-  # A MATRIX of five legs, and the split is not arbitrary -- it is exactly where the cost is. The
-  # 2 tests that consumed that 45m53s are the first two in collection order, and both are
-  # WHOLE-CORPUS sweeps through the frontend lowering hotspot (numpyto_common/frontend.py,
-  # _assigns_to under _infer_param_desc; owned elsewhere, and this split does not wait on it):
+  # ONE leg over the whole tree, as of 2026-09-07. It was five -- the two whole-corpus sweeps
+  # through the frontend lowering hotspot on a container each, halved AGAIN over the registry by
+  # HPCAGENT_BENCH_TRANSLATOR_CORPUS_SHARD, plus a `rest` leg for the other 55 per-kernel tests:
   #   abi-fold    test_abi_argument_never_folded.py   1 test,  one corpus-wide lowering
   #   abi-corpus  test_abi_corpus_agreement.py        3 tests, one corpus-wide lowering they SHARE
   #               through a module-scoped fixture, which is why the file stays whole
-  #   rest        the other 55, which emit and compile per KERNEL rather than corpus-wide, and
-  #               are cheap for exactly that reason: 55 passed in 4m38s measured 2026-09-02, so
-  #               this leg was never the cost and does not need splitting
-  # The two corpus sweeps were always two separate passes, so putting them on separate containers
-  # duplicates no work. Each is then halved AGAIN over the registry
-  # (HPCAGENT_BENCH_TRANSLATOR_CORPUS_SHARD, in _bench_yaml.corpus_shard): measured 2026-09-02 on a
-  # loaded 16-core dev box, the fold sweep alone is 1332 s (22m12s) unsharded, which agrees with
-  # what CI saw -- ~21m for the first of the two, and the second still running when its own 25m
-  # per-test cap fired. Neither had ever finished in CI, so a budget for either ALONE would be a
-  # guess; halved, both are bounded well inside the step cap.
+  #   rest        the other 55, which emit and compile per KERNEL rather than corpus-wide
+  # That split was sized against a 45m53s step that had never finished. It has since: run
+  # 34058390220 measured the five legs at 3.0 + 8.8 + 9.2 + 11.2 + 1.4 = 33.6 min of phase work,
+  # i.e. four extra containers, each paying ~3 min of setup, for a job that now fits in one --
+  # and 1.4 min of that is a container of its own. Whole, the lowering pass is paid ONCE instead
+  # of once per leg, so 33.6 is an upper bound on the fused number rather than a projection.
   #
-  # `rest` names the tree and --ignore's exactly the two files the other legs name, so the legs
-  # partition the selection -- asserted in tests/test_ci_coverage.py by
-  # test_the_translator_integration_legs_partition_the_tree and
-  # test_a_sharded_leg_runs_every_slice_it_splits_into, because an --ignore that stops matching a
-  # moved file is a whole file nothing runs, and every leg still goes green.
+  # The knobs stay. The leg still names its shard (``0/1``, the whole registry) and
+  # test_a_sharded_leg_runs_every_slice_it_splits_into still reads it, so re-splitting is a matrix
+  # edit and nothing else. What goes away with the split is the --ignore bookkeeping: one leg names
+  # the directory and ignores nothing, which is the partition -- there is no second leg for a file
+  # to fall between. test_the_translator_integration_legs_partition_the_tree holds either shape.
   #
   # --timeout-method=thread, like the other half: the default arms SIGALRM and these tests fork,
   # so the signal never lands and a wedge costs the step cap instead of naming the test.
@@ -721,38 +729,26 @@ jobs:
     name: integration (numpy-translator tree) [${{ matrix.leg.id }}]
     runs-on: ubuntu-latest
     strategy:
-      # fail-fast: false -- the legs fail differently, which is the reason the tree was split off
-      # `integration` in the first place; cancelling the others recreates the hidden verdict.
+      # fail-fast: false -- kept with the one-entry matrix, so re-splitting the tree does not
+      # silently reintroduce cancelling; the legs fail differently, which is the reason the tree
+      # was split off `integration` in the first place.
       fail-fast: false
       matrix:
         leg:
-          - id: abi-fold-0
-            shard: "0/2"
-            select: >-
-              hpcagent_bench/numpy_translators/tests/test_abi_argument_never_folded.py
-          - id: abi-fold-1
-            shard: "1/2"
-            select: >-
-              hpcagent_bench/numpy_translators/tests/test_abi_argument_never_folded.py
-          - id: abi-corpus-0
-            shard: "0/2"
-            select: >-
-              hpcagent_bench/numpy_translators/tests/test_abi_corpus_agreement.py
-          - id: abi-corpus-1
-            shard: "1/2"
-            select: >-
-              hpcagent_bench/numpy_translators/tests/test_abi_corpus_agreement.py
-          - id: rest
-            # 0/1 is the whole registry -- the tests on this leg are per-kernel already.
+          - id: tree
+            # 0/1 is the whole registry. The two ABI files were a leg each, sharded 0/2 and 1/2,
+            # which is four containers for 32 minutes of work -- and four times the ~3-minute
+            # setup. They share the corpus-wide lowering pass, so running them in ONE process pays
+            # it once rather than four times. Naming the directory with no --ignore is also the
+            # partition: there is one leg, so nothing can fall between two of them.
             shard: "0/1"
             select: >-
               hpcagent_bench/numpy_translators/tests/
-              --ignore=hpcagent_bench/numpy_translators/tests/test_abi_argument_never_folded.py
-              --ignore=hpcagent_bench/numpy_translators/tests/test_abi_corpus_agreement.py
-    # Phase 6t (38) + setup, ~5 warm. Each corpus leg is HALF one lowering pass: the fold sweep is
-    # 22m12s whole, so ~11m halved, and the ABI sweep is the rest of the pair's measured 45m53s, so
-    # ~12m halved. The first green run replaces these with numbers CI took itself. Tighten when the
-    # lowering hotspot lands, which is what makes them loose.
+    # Phase 6t (40) + setup, ~3 warm. Run 34058390220 measured the five legs this replaces at
+    # 3.0 + 8.8 (fold) + 9.2 + 11.2 (ABI) + 1.4 (the rest) = 33.6 min of phase work in five
+    # containers; whole, that is ~37 min against the 45-minute ceiling, and less than the sum
+    # because one process pays the corpus-wide lowering once. Split it again the moment a run
+    # measures it past 40.
     timeout-minutes: 45
     env:
       PYTEST_ADDOPTS: "--cov=hpcagent_bench --cov-append --cov-report="
@@ -805,7 +801,7 @@ jobs:
 
       - name: Phase 6t -- integration-marked tests under the translator tree
         if: ${{ !cancelled() }}
-        timeout-minutes: 38
+        timeout-minutes: 40
         env:
           HPCAGENT_BENCH_TRANSLATOR_CORPUS_SHARD: ${{ matrix.leg.shard }}
         run: |
@@ -2272,27 +2268,27 @@ jobs:
   # alone suggested. (Both on a 16-core dev box; the npol=2 run was under load ~55, so its number
   # is an upper bound and the npol=1 one, taken at load ~22, is closer to true.)
   #
-  # FOUR shards, over HPCAGENT_BENCH_CEGTERG_SHARD, and four is where the arithmetic stops paying:
-  # each shard carries one npol=1 and one npol=2 configuration, ~17.5 min of serial work, which is
-  # about the length of that shard's own longest single test. Past four, the wall clock is that one
-  # test and another container buys nothing. Nothing is deselected: _shard PARTITIONS the
-  # configuration list, and the file asserts both that
-  # (test_the_shards_partition_the_configurations_rather_than_sampling_them) and that CI runs every
-  # index it splits into, plus that no shard ends up holding only the cheap half.
+  # ONE container, ``0/1``, and the dev-box arithmetic above is not what CI measures: run
+  # 34058390220 timed the four shards at 1.6 + 2.0 + 4.0 + 4.0 = 11.6 min of phase work between
+  # them, against ~3 min of setup EACH. Four containers for twelve minutes is three runners spent
+  # on setup, and with the concurrency ceiling back (see the banner at the top) it is also three
+  # slots somebody else queues behind. The knob stays: _shard PARTITIONS the configuration list,
+  # test_the_shards_partition_the_configurations_rather_than_sampling_them still runs it at every
+  # count, and the matrix is what a future re-split edits.
   # ===========================================================================================
   ports-cegterg:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: port fidelity (cegterg eigensolver oracle) ${{ matrix.shard }}/4
+    name: port fidelity (cegterg eigensolver oracle)
     runs-on: ubuntu-latest
     strategy:
-      # fail-fast: false -- the configurations are independent physics, and a failure at npol=2
-      # says nothing about npol=1. Cancelling the other shard throws away the half that answers.
+      # fail-fast: false -- kept with the one-entry matrix, so a re-split does not silently
+      # reintroduce cancelling: the configurations are independent physics, and a failure at
+      # npol=2 says nothing about npol=1.
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
-    # ~17.5 min of serial work per shard on the measurement above, spread over TESTS by -n auto,
-    # and the shards are balanced by construction (each carries one npol=1 and one npol=2
-    # configuration). 45 is the ceiling this file holds every job to.
+        shard: [0]
+    # ~12 min of phase work measured whole (run 34058390220, summed over the four shards it then
+    # had), spread over TESTS by -n auto. 45 is the ceiling this file holds every job to.
     timeout-minutes: 45
     env:
       PYTEST_ADDOPTS: "--cov=hpcagent_bench --cov-append --cov-report="
@@ -2303,7 +2299,7 @@ jobs:
       OMP_NUM_THREADS: "1"
       OPENBLAS_NUM_THREADS: "1"
       MKL_NUM_THREADS: "1"
-      HPCAGENT_BENCH_CEGTERG_SHARD: "${{ matrix.shard }}/4"
+      HPCAGENT_BENCH_CEGTERG_SHARD: "${{ matrix.shard }}/1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
