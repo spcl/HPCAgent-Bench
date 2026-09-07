@@ -26,6 +26,9 @@ LEGS = ("", "-skills")
 #: Every CAMPAIGN_ARM prefix a wave of this campaign has written rows under, oldest first.
 ARM_PREFIXES = ("llr40v11", "v11w2")
 
+#: The arm label every later wave keeps, and the env files a new wave is copied from.
+BASE_WAVE = "v11w2"
+
 
 def submitted_by_arm(runs: pathlib.Path) -> dict[str, set[str]]:
     """``{campaign arm: kernels it has ever landed a submission for}`` across every wave."""
@@ -96,10 +99,17 @@ def main() -> int:
                 (here / f"problems-v11w{args.wave}-{arm}.jsonl").write_text(
                     "\n".join(json.dumps(r) for r in gap) + "\n"
                 )
-                src = here / f".env.v11w2-{arm}"
-                dst = here / f".env.v11w{args.wave}-{arm}"
+                src = here / f".env.{BASE_WAVE}-{arm}"
+                # ``.env.<arm>-wN``, NOT ``.env.v11wN-<arm>``: a completion wave is the SAME arm with
+                # a different problem list, which is exactly the shard case run_campaign.sh strips a
+                # ``-wN`` suffix for. Naming it as its own arm would force CAMPAIGN_ARM to follow the
+                # filename (tests/test_materialize_shared.py pins that pair), and the label is what
+                # the judge DB records -- so the wave's rows would stop pooling with the arm's.
+                dst = here / f".env.{BASE_WAVE}-{arm}-w{args.wave}"
                 dst.write_text(
-                    src.read_text().replace("PROBLEMS_FILE=problems-v11w2-", f"PROBLEMS_FILE=problems-v11w{args.wave}-")
+                    src.read_text().replace(
+                        f"PROBLEMS_FILE=problems-{BASE_WAVE}-", f"PROBLEMS_FILE=problems-v11w{args.wave}-"
+                    )
                 )
     print(f"\nTOTAL remaining kernel-slots: {total}")
     if not total:
