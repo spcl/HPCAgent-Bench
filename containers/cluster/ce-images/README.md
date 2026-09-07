@@ -123,6 +123,40 @@ Stagger the submissions. GitHub rate-limits the shared egress IP when several bu
 once; every network git call goes through `gitretry` (ten tries over ~29 minutes), but not
 tripping the limiter is cheaper than surviving it.
 
+## dace, and nothing from outside the container
+
+The image clones dace itself and bakes an exact commit (`DACE_COMMIT`, resolved by the builder
+from the tip of `extended`, recorded in `/opt/dace.commit`). That is what makes the image
+self-contained: the dace a run uses is fixed by the image digest, not by the state of anyone's
+scratch directory.
+
+Two things keep it that way.
+
+`PYTHONSAFEPATH = "1"` in the EDF. dace is installed editable, so `import dace` resolves through
+a finder -- and a plain DIRECTORY named `dace` on `sys.path` beats that finder and imports as an
+empty namespace package. `sys.path` starts with the CWD, the EDF's `workdir` is `${SCRATCH}`, and
+`${SCRATCH}/dace` is the live host checkout. Without this, `import dace` from the workdir
+SUCCEEDS and returns a module with `__file__` None and no `SDFG`, surfacing later as a traceback
+that reads like a packaging fault. Measured on v6: unusable from `${SCRATCH}` and from `/opt`,
+usable from `/tmp`. `tests/test_edf_contract.py` gates it.
+
+`dace_refresh.sh` to move forward. It advances `/opt/dace` -- the image's own tree, never
+`${SCRATCH}/dace` -- to the tip of `extended`, so a run is not stuck behind the branch until the
+next rebuild:
+
+```bash
+srun --environment=optarena-amd-mi300-latest containers/cluster/ce-images/dace_refresh.sh
+```
+
+Writes land in the container's ephemeral upper layer, so it is per-job and the image is
+unchanged. A fetch failure is deliberately NOT fatal -- the baked commit is a working dace, and
+refusing to start on a GitHub hiccup trades a slightly stale run for no run. It prints the live
+commit either way, and that is the line a results table should quote, since the image digest no
+longer determines the dace commit once this has run.
+
+**Not yet wired into `run_cluster.sh`.** `beverin.sbatch` execs it by path, and campaigns are
+running against it; editing a script bash is part-way through is how a live arm breaks.
+
 ## Verify
 
 `verify_image.py` runs INSIDE an image and checks every library the benchmark can emit a call to,

@@ -71,3 +71,20 @@ def test_rocm_libs_precede_the_distro_libdir(env):
     # The distro libdir carries an ancient libhsa-runtime64 that leaves ROCR_1 symbols undefined.
     entries = env["LD_LIBRARY_PATH"].split(":")
     assert entries.index("/opt/rocm/lib") < entries.index("/usr/lib/x86_64-linux-gnu")
+
+
+def test_cwd_is_off_sys_path(env):
+    """The image's own dace must win over anything mounted from the host.
+
+    dace is installed editable, so `import dace` resolves through a finder -- and a plain
+    DIRECTORY named `dace` on sys.path beats that finder, importing as an empty namespace
+    package instead. sys.path starts with the CWD and the EDF's workdir is ${SCRATCH}, which
+    holds the live extended checkout, so `import dace` there SUCCEEDS and returns a module with
+    __file__ None and no SDFG. Measured on v6: unusable from ${SCRATCH} and from /opt, usable
+    from /tmp. PYTHONSAFEPATH drops the CWD, so the container stops depending on where the job
+    happened to start.
+    """
+    assert env.get("PYTHONSAFEPATH") == "1", (
+        "PYTHONSAFEPATH=1 is missing: import dace from the workdir returns a broken namespace "
+        "package shadowed by ${SCRATCH}/dace"
+    )
