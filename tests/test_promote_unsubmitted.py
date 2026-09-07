@@ -144,3 +144,52 @@ def test_a_host_only_arm_promotes_without_a_device_unit(promoter, tmp_path):
     (item,) = promoter.candidates(run_dir)
     assert item["source"] == "void gemm(void){}"
     assert "device_source" not in item
+
+
+def make_run_dir_many(tmp_path: pathlib.Path, kernels: list[tuple[str, float]]) -> pathlib.Path:
+    """A run dir holding several verified-but-unsubmitted kernels of differing worth."""
+    rank = tmp_path / "judge" / "rank-0"
+    rank.mkdir(parents=True)
+    con = sqlite3.connect(rank / "hpcagent_bench0.db")
+    con.execute("create table submissions (benchmark text)")
+    con.execute("create table calls (benchmark text, run_id text, correct int, speedup real)")
+    con.execute("create table sources (benchmark text, run_id text, ts int, path text, language text)")
+    for name, speedup in kernels:
+        (rank / f"{name}.c").write_text(f"/* {name} */", encoding="utf-8")
+        con.execute("insert into calls values (?, ?, 1, ?)", (name, f"arm.{name}", speedup))
+        con.execute("insert into sources values (?, ?, 1, ?, 'c')", (name, f"arm.{name}", f"{name}.c"))
+    con.commit()
+    con.close()
+    return tmp_path
+
+
+def test_the_biggest_win_is_promoted_first(promoter, tmp_path):
+    """The budget can cut this list short, so order has to follow WORTH. Alphabetically, `alpha`
+    at 1.1x would outrank `zeta` at 76.6x and be the one that survived a truncation."""
+    run_dir = make_run_dir_many(tmp_path, [("alpha", 1.1), ("zeta", 76.6), ("mid", 4.0)])
+    assert [item["kernel"] for item in promoter.candidates(run_dir)] == ["zeta", "mid", "alpha"]
+
+
+def test_the_budget_stops_the_pass_and_names_what_it_cut(promoter, tmp_path, monkeypatch, capsys):
+    """Teardown runs inside the job's remaining wall clock: a pass that outlives it is killed with
+    the allocation, losing even the promotions it already landed."""
+    run_dir = make_run_dir_many(tmp_path, [("alpha", 1.1), ("zeta", 76.6), ("mid", 4.0)])
+    attempted: list[str] = []
+
+    def slow(judge, item, dry_run, rank):
+        attempted.append(item["kernel"])
+        return "SUBMITTED speedup=1.00x"
+
+    monkeypatch.setattr(promoter, "promote", slow)
+    monkeypatch.setattr(promoter, "judge_rank", lambda judge: 0)
+    # A clock that is inside the budget for the first item and past it for every one after.
+    ticks = iter([0.0, 0.0, 10_000.0, 10_000.0, 10_000.0, 10_000.0])
+    monkeypatch.setattr(promoter.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(sys, "argv", ["promote_unsubmitted.py", str(run_dir), "--judge", "http://judge:8800"])
+    assert promoter.main() == 0
+
+    out = capsys.readouterr().out
+    assert attempted == ["zeta"], "the most valuable kernel must be the one that fits"
+    assert "budget exhausted; 2 not attempted" in out
+    # Named rather than counted: they still exist in the run dir and can be collected later.
+    assert "mid" in out and "alpha" in out
