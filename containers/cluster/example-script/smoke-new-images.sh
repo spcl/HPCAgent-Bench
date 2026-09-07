@@ -73,7 +73,15 @@ for name in "${candidates[@]}"; do
     # every one of them (job 627151), and a serving smoke would fail the same way for the same
     # reason. Both interpreter prefixes are named because only one exists per image.
     printf '\n[env]\n'
-    printf 'PATH = "/opt/venv/bin:/opt/pytorch211/bin:/opt/rocm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"\n'
+    # Per image, not one PATH for all: the rocm/pytorch base ships /opt/venv, and the vLLM
+    # images install vLLM into /opt/pytorch211, so naming /opt/venv/bin first probes the base
+    # venv and misses vllm entirely (627183).
+    case "${name}" in
+      sglang)          img_path="/opt/venv/bin" ;;
+      vllm|vllm-0271)  img_path="/opt/pytorch211/bin" ;;
+      *)               img_path="/opt/venv/bin" ;;
+    esac
+    printf 'PATH = "%s:/opt/rocm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"\n' "${img_path}"
   } > "${edf}"
   printf '%-12s EDF=%s\n' "${name}" "${edf}"
   # PG_PATCH_DIR: the eager-PG smoke insists on an EXTERNAL sitecustomize.py, from the era when the

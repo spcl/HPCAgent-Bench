@@ -37,15 +37,22 @@ mkdir -p "$(dirname "${EDF}")"
 # numpy, torch, sglang, aiter, triton and flydsl all missing from an image that has every one of
 # them. A verifier that fails a good image is as useless as one that passes a bad one.
 #
-# Both interpreter prefixes are named because only one exists per image: /opt/venv/bin in the
-# sglang and judge images, /opt/pytorch211/bin in the vLLM pair.
+# PER PROFILE, and that is not tidiness. Naming both prefixes in one PATH does not work: the
+# rocm/pytorch base ships /opt/venv, and the vLLM images install vLLM into /opt/pytorch211 --
+# so a PATH with /opt/venv/bin first probes the BASE venv and reports vllm and aiter missing from
+# an image that has them (job 627183). Each image has exactly one interpreter that matters.
+case "${PROFILE}" in
+    sglang)          ce_path="/opt/venv/bin" ;;
+    vllm|vllm-0271)  ce_path="/opt/pytorch211/bin" ;;
+    *)               ce_path="/opt/gcc/bin:/opt/view/bin:/opt/papi/bin:/opt/venv/bin" ;;
+esac
 cat > "${EDF}" <<TOML
 image = "${IMAGE}"
 mounts = ["/capstor/:/capstor/", "/iopsstor/:/iopsstor/"]
 workdir = "/"
 
 [env]
-PATH = "/opt/venv/bin:/opt/pytorch211/bin:/opt/gcc/bin:/opt/view/bin:/opt/papi/bin:/opt/rocm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+PATH = "${ce_path}:/opt/rocm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 TOML
 
 echo "=== verifying ${IMAGE} as profile=${PROFILE} ==="
