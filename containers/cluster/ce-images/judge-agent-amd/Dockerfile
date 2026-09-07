@@ -29,8 +29,26 @@
 # tagged rocm720, so everything else matches it. AMD tags the .0 release without a patch digit --
 # `rocm7.2_*` IS 7.2.0, confirmed against repo.radeon.com/rocm/apt/7.2, whose rocm-libs is
 # 7.2.0.70200-43~24.04. The `rocm723` names elsewhere in this tree are the retired pin.
-ARG BASE_IMAGE=docker.io/rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pytorch_release_2.9.1
+# Pinned by DIGEST, not by the tag alone. rocm/pytorch:rocm7.2_... is a mutable tag, so two
+# v-numbered builds could sit on different bases with nothing recording which -- the same
+# attribution problem a version suffix in a name causes. The three inference images have always
+# pinned it; this one was the exception. The tag has NOT moved: resolved live on 2026-09-07 it
+# gives the digest below, the same one vllm and vllm-0271 already pin, and the same base v7 is
+# building on. So this records where we already are rather than changing it.
+ARG BASE_IMAGE=docker.io/rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pytorch_release_2.9.1\
+@sha256:a3b65813621095e3389269417e963725b59310184588c9d2490d44e6e83fa01c
 FROM ${BASE_IMAGE}
+
+# OCI metadata, because these are published as OCI artifacts and a registry shows nothing about
+# where an image came from unless the image says so. base.name is the reproducibility claim in
+# one label, readable without unpacking the image. BASE_IMAGE is re-declared because an ARG from
+# before the first FROM is not in scope inside a stage.
+ARG BASE_IMAGE
+LABEL org.opencontainers.image.title="optarena-judge-agent-amd" \
+      org.opencontainers.image.description="OptArena judge+agent for MI300A: gcc 16, llvm 22, GPU-aware MPICH, PETSc/MAGMA, ROCm profilers" \
+      org.opencontainers.image.source="https://github.com/spcl/HPCAgent-Bench" \
+      org.opencontainers.image.licenses="GPL-3.0-or-later" \
+      org.opencontainers.image.base.name="${BASE_IMAGE}"
 
 ARG DEBIAN_FRONTEND=noninteractive
 # MI300A is gfx942. One arch, named once, reused by every GPU-aware spec below.
@@ -990,3 +1008,15 @@ WORKDIR /work
 # LD_PRELOAD last, after every RUN: set earlier it would preload mimalloc into the apt, pip and
 # compiler steps of the build itself, which can break them.
 ENV LD_PRELOAD=/usr/local/lib/libmimalloc.so
+
+# PYTHONSAFEPATH last, for the same reason as LD_PRELOAD: it changes how python resolves imports,
+# and the build's own pip and setup steps run before this point.
+#
+# It drops the CWD from sys.path, which is what makes this image's dace win over anything mounted
+# from the host. dace is installed editable, so `import dace` resolves through a finder -- and a
+# plain DIRECTORY named `dace` on sys.path beats that finder and imports as an empty namespace
+# package. sys.path starts with the CWD, and both ${SCRATCH} (the live host checkout, mounted by
+# every EDF) and /opt (this image's own /opt/dace) contain one, so `import dace` from either
+# SUCCEEDS and hands back a module with __file__ None and no SDFG. Declared here as well as in
+# the EDF, so the image is correct on its own and not only when launched through our TOML.
+ENV PYTHONSAFEPATH=1

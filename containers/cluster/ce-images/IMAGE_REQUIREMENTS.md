@@ -89,8 +89,25 @@ python3 -c "from dace.sdfg.analysis.polyhedral_isl import HAVE_ISL; \
 ```
 
 `verify_image.py` carries the same two as `dace-gate` checks. Measured 2026-09-06 on
-`optarena-amd-mi300-v5`: islpy 2026.2.1, z3 5.1.0, both gates open. Not yet re-measured on
-`optarena-amd-mi300-v6`, so treat it as unknown there rather than inherited.
+`optarena-amd-mi300-v5` and 2026-09-07 on `optarena-amd-mi300-v6`: islpy 2026.2.1, z3 5.1.0,
+`HAVE_ISL` true and `has_z3()` true. Both gates are OPEN on v6.
+
+**Measure it from a CWD with no `dace` directory in it, or the answer is meaningless.** The image
+installs dace editable, so `import dace` is resolved through a finder -- but a plain DIRECTORY
+named `dace` on `sys.path` beats that finder and imports as an empty namespace package instead.
+`sys.path` starts with the CWD, and two of the directories a job actually runs in contain one:
+`${SCRATCH}` holds the live extended checkout, and `/opt` holds the image's own `/opt/dace`. From
+either, `import dace` SUCCEEDS and yields a module with `__file__` None and no `SDFG`, so the
+failure surfaces later as an AttributeError or a circular-import traceback that reads like a
+packaging bug rather than a shadowing one. From `/tmp` the same image gives dace 2.0.0a8 out of
+`/opt/dace`.
+
+This is why `verify_image.py` runs every probe with `cwd="/"` and `verify_image.sbatch` sets
+`workdir = "/"`. The consequence worth stating plainly: **the verifier passing does not mean a
+job importing dace will work**, because the judge+agent EDF sets `workdir = "${SCRATCH}"`, which
+is one of the shadowed directories. Campaign arms avoid it by pointing PYTHONPATH at the extended
+tree, which resolves `dace` to `${SCRATCH}/dace/dace` deliberately; an arm that sets neither
+PYTHONPATH nor a clean CWD gets the broken namespace package silently.
 
 **rocprof-compute needs its OWN interpreter.** ROCm installs the tool but not its Python deps.
 Installing `/opt/rocm/libexec/rocprofiler-compute/requirements.txt` into the image environment is

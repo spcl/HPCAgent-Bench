@@ -200,6 +200,19 @@ RUN { \
 FROM ${BASE_IMAGE} AS final
 USER root
 
+# OCI metadata, because these are published as OCI artifacts and a registry shows nothing about
+# where an image came from unless the image says so. base.name records what FROM resolved to
+# WITHOUT unpacking the image -- and since it is pinned by digest above, that is the whole
+# reproducibility claim in one label. BASE_IMAGE is re-declared here because an ARG from before
+# the first FROM is not in scope inside a stage.
+ARG BASE_IMAGE
+LABEL org.opencontainers.image.title="optarena-sglang" \
+      org.opencontainers.image.description="SGLang inference for MI300A: ROCm 7.2, libfabric/CXI, pinned flydsl" \
+      org.opencontainers.image.version="0.5.18" \
+      org.opencontainers.image.source="https://github.com/spcl/HPCAgent-Bench" \
+      org.opencontainers.image.licenses="GPL-3.0-or-later" \
+      org.opencontainers.image.base.name="${BASE_IMAGE}"
+
 # flydsl, PINNED and INSIDE the image.
 #
 # The base already carries 0.3.1; what the arms actually load is 0.3.2, installed by

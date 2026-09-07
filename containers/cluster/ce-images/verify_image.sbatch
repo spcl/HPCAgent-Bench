@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=24
 #SBATCH --mem=0
 #SBATCH --time=00:40:00
-#SBATCH --output=/capstor/scratch/cscs/ybudanaz/x86_64/ce-images/logs/verify-%x-%j.out
+#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/verify-%x-%j.out
 # Run verify_image.py INSIDE a built image and fail the job when a required library is missing.
 #
 #   sbatch --export=ALL,IMAGE=$SCRATCH/ce-images/optarena-judge-agent-amd.sqsh,PROFILE=judge-agent-amd \
@@ -21,7 +21,9 @@ set -euo pipefail
 # process's CWD, littering the checkout with core_nid<node>_<pid> files on a filesystem whose
 # quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
-S=/capstor/scratch/cscs/ybudanaz/x86_64
+# %u above is the only way to keep the log path portable in an SBATCH directive; the body can just
+# use SCRATCH, which is what a clone on another account will have.
+S="${SCRATCH:?set SCRATCH}"
 IMAGE="${IMAGE:?set IMAGE to the .sqsh to verify}"
 PROFILE="${PROFILE:-judge-agent-amd}"
 test -f "${IMAGE}"

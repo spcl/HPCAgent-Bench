@@ -13,7 +13,7 @@
 # SUBMIT WITH THE DIRECTORY NAMED. The guard below exits in about a second without it, which is
 # what three failed jobs looked like:
 #
-#   sbatch --export=ALL,VLLM_0271_DIR=$PWD/containers/cluster/ce-images/vllm-0271 \
+#   sbatch --export=ALL,IMAGE_DIR=$PWD/containers/cluster/ce-images/vllm-0271 \
 #          containers/cluster/ce-images/vllm-0271/build.sbatch
 #
 # or equivalently `sbatch --chdir=containers/cluster/ce-images/vllm-0271 build.sbatch`, since the
@@ -37,10 +37,12 @@ ulimit -c 0
 
 # Slurm SPOOLS the batch script, so BASH_SOURCE points at /var/spool/slurmd -- pass the directory
 # rather than deriving it (this is exactly what killed build job 600467).
-VLLM_0271_DIR="${VLLM_0271_DIR:-${SLURM_SUBMIT_DIR:-$PWD}}"
-if [[ ! -x "${VLLM_0271_DIR}/build.sh" ]]; then
-    echo "no build.sh under ${VLLM_0271_DIR}. Submit with" >&2
-    echo "  sbatch --export=ALL,VLLM_0271_DIR=<abs path to ce-images/vllm-0271> ..." >&2
+# IMAGE_DIR, the same name all five builders take. This one also answers to VLLM_0271_DIR, which is
+# what it used to be called and what older submit lines still say.
+IMAGE_DIR="${IMAGE_DIR:-${VLLM_0271_DIR:-${SLURM_SUBMIT_DIR:-$PWD}}}"
+if [[ ! -x "${IMAGE_DIR}/build.sh" ]]; then
+    echo "no build.sh under ${IMAGE_DIR}. Submit with" >&2
+    echo "  sbatch --export=ALL,IMAGE_DIR=<abs path to ce-images/vllm-0271> ..." >&2
     echo "or --chdir into that directory." >&2
     exit 2
 fi
@@ -61,7 +63,7 @@ if edf_images | grep -qxF "${OUTPUT_SQSH}"; then
     exit 2
 fi
 
-"${VLLM_0271_DIR}/build.sh"
+"${IMAGE_DIR}/build.sh"
 
 ls -lh "${OUTPUT_SQSH}"
 sha256sum "${OUTPUT_SQSH}" | tee "${OUTPUT_SQSH}.sha256"
