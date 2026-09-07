@@ -465,10 +465,22 @@ jobs:
   # ===========================================================================================
   e2e-numba-jax:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: e2e[numba, jax] (numerical sweep @ S)
+    name: e2e[${{ matrix.backend }}] (numerical sweep @ S)
     runs-on: ubuntu-latest
+    strategy:
+      # fail-fast: false -- the two backends fail for unrelated reasons, and half a verdict is
+      # still a verdict.
+      fail-fast: false
+      matrix:
+        # A BACKEND EACH, split on 2026-09-07. Fused, this was the run's critical path: 29m30s on
+        # run 34122110084, against a 22008s run whose 21 containers averaged 17m. The backends
+        # already select through HPCAGENT_BENCH_E2E_BACKENDS, so the split is this list and
+        # nothing else -- no new knob, no test change. e2e[pythran] stays its own job for the
+        # reason the header gives (~7 GB per compile, -n 2).
+        backend: [numba, jax]
     # Phase 5 (38) + setup, ~5 on a warm cache. Must exceed the sum of its steps. 45 is the
-    # per-container ceiling; the phase measured 26m30s on run 33626484866.
+    # per-container ceiling; the phase measured 26m30s on run 33626484866 with both backends in
+    # one container, and a backend is roughly half of that.
     timeout-minutes: 45
     env:
       PYTEST_ADDOPTS: "--cov=hpcagent_bench --cov-append --cov-report="
@@ -481,7 +493,7 @@ jobs:
           python-version: '3.12'
       - uses: ./.github/actions/setup
 
-      - name: Phase 5 -- e2e numerical sweep [numba, jax] @ S
+      - name: Phase 5 -- e2e numerical sweep [${{ matrix.backend }}] @ S
         if: ${{ !cancelled() }}
         # Bounded so a wedged worker fails this step rather than the job. --timeout is the per-test
         # backstop; the oracle already SIGKILLs its own forked jax/native children, so this only
@@ -507,7 +519,7 @@ jobs:
         # timeout into a job cancellation, which reports nothing at all.
         timeout-minutes: 38
         env:
-          HPCAGENT_BENCH_E2E_BACKENDS: "numba,jax"
+          HPCAGENT_BENCH_E2E_BACKENDS: "${{ matrix.backend }}"
           HPCAGENT_BENCH_E2E_SUBSET: ${{ github.event_name == 'workflow_dispatch' && '0' || '1' }}
         run: |
           python -m pytest -p no:cacheprovider -rfEs -n auto --dist loadgroup --durations=25 \
