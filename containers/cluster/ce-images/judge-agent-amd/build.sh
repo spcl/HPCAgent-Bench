@@ -56,6 +56,23 @@ GIT_MIRRORS="${GIT_MIRRORS:-${SCRATCH:-}/git-mirrors}"
 if [[ -d "${GIT_MIRRORS}" ]]; then
   MIRROR_ARGS=(-v "${GIT_MIRRORS}:/git-mirrors:ro")
   printf 'git mirror %s\n' "${GIT_MIRRORS}"
+
+  # The sha was resolved from GITHUB above, but the clone is rewritten to the MIRROR. A mirror
+  # older than the branch tip therefore has a sha it cannot serve, and git says so as
+  # `upload-pack: not our ref` -- two hours in, at the dace layer, with every expensive layer
+  # already paid for. That is build 626608. Refresh here, where it costs seconds, and fail now
+  # rather than then if the sha still is not there.
+  dace_mirror="${GIT_MIRRORS}/spcl/dace.git"
+  if [[ -d "${dace_mirror}" ]] && ! git -C "${dace_mirror}" cat-file -e "${DACE_COMMIT}" 2>/dev/null; then
+    printf 'mirror lacks %s, refreshing ... ' "${DACE_COMMIT:0:12}"
+    git -C "${dace_mirror}" remote update --prune >/dev/null 2>&1 && echo OK || echo FAILED
+    git -C "${dace_mirror}" cat-file -e "${DACE_COMMIT}" 2>/dev/null || {
+      echo "mirror ${dace_mirror} still cannot serve ${DACE_COMMIT}." >&2
+      echo "Refresh it with containers/cluster/ce-images/mirror-repos.sh, or unset GIT_MIRRORS" >&2
+      echo "to clone from GitHub directly." >&2
+      exit 2
+    }
+  fi
 fi
 
 # Spack binary buildcache on scratch: gcc 16 and llvm 22 are 60-80 minutes this image has paid
@@ -89,3 +106,18 @@ rm -f "${OUTPUT_SQSH}"
 enroot import -x mount -o "${OUTPUT_SQSH}" "podman://${IMAGE_TAG}" || true
 unsquashfs -l "${OUTPUT_SQSH}" opt >/dev/null
 printf 'Wrote %s\n' "${OUTPUT_SQSH}"
+
+# Optional registry push, so this image can be PULLED instead of rebuilt.
+#
+# It has to happen here and not in a later job: podman's graphroot is /dev/shm/$USER/root, which
+# is node-local tmpfs wiped at the top of this script and gone when the job ends. Once that store
+# disappears the only artifact left is the squashfs, and a squashfs is a flattened filesystem
+# rather than an OCI image -- reimporting one loses the layers and the config. So an image that
+# was not pushed while it was built has to be rebuilt to be pushed.
+#
+# AFTER the squashfs is written and verified, so a registry outage or a rejected layer costs the
+# upload and never the local artifact this job exists to produce.
+if [[ -n "${PUSH_REPO:-}" ]]; then
+  "$(dirname -- "${SCRIPT_DIR}")/push_image.sh" "${IMAGE_TAG}" ${PUSH_TAGS:-} \
+    || echo "push to ${PUSH_REPO} FAILED; the local image and squashfs are unaffected" >&2
+fi

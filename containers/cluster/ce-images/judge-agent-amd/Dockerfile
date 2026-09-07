@@ -160,6 +160,12 @@ RUN set -eux; \
 # hipCUB is listed next to rocPRIM because hipCUB does not build without it, and hiptensor-dev is
 # named explicitly because rocm-libs does not pull it in.
 #
+# rccl/rccl-dev are named for the same reason and matter more than the others: RCCL IS the NCCL
+# API on AMD (`rccl.h` provides ncclAllReduce and friends, and libnccl.so is an alias), so a
+# submission written against NCCL builds against it unchanged. It was previously declared to spack
+# as an external at /opt/rocm without anything installing or asserting it, which works only for as
+# long as some other metapackage keeps pulling it in.
+#
 # Every result is asserted afterwards: a metapackage install succeeding says nothing about which
 # of its members actually landed.
 RUN set -eux; \
@@ -174,6 +180,7 @@ RUN set -eux; \
       rocblas-dev hipblas-dev rocsolver-dev hipsolver-dev \
       rocfft-dev hipfft-dev rocsparse-dev hipsparse-dev hiptensor-dev \
       hipcub-dev rocprim-dev rocthrust-dev rocrand-dev hiprand-dev rocwmma-dev \
+      rccl rccl-dev \
       rocprofiler-sdk rocprofiler-systems rocprofiler-compute; \
     rm -rf /var/lib/apt/lists/*; \
     for header in \
@@ -187,7 +194,8 @@ RUN set -eux; \
       /opt/rocm/include/hipcub/hipcub.hpp \
       /opt/rocm/include/rocprim/rocprim.hpp \
       /opt/rocm/include/thrust/version.h \
-      /opt/rocm/include/rocrand/rocrand.h ; do \
+      /opt/rocm/include/rocrand/rocrand.h \
+      /opt/rocm/include/rccl/rccl.h ; do \
       test -f "${header}" || { echo "missing ROCm header ${header}" >&2; exit 1; }; \
     done; \
     ln -sf /opt/rocm/llvm/bin/amdclang /usr/local/bin/amdclang; \
@@ -341,7 +349,15 @@ RUN set -eux; \
       "      require: [\"amdgpu_target=${ROCM_ARCH}\"]" \
       '  specs:' \
       "  - llvm@${LLVM_VERSION} +clang +flang +mlir +polly +lld +offload +libomptarget targets=amdgpu,nvptx,x86" \
-      "  - mpich@4 +rocm amdgpu_target=${ROCM_ARCH} +fortran +hwloc" \
+      '  # MPICH is the GPU-aware one the distributed track needs, and every variant here is' \
+      '  # load-bearing. +rocm is what lets a device pointer reach MPI at all -- without it the' \
+      '  # calls still compile and still run, staging through host memory or hanging, which is the' \
+      '  # failure the gate after this layer exists to catch. device=ch4 netmod=ofi matches the' \
+      '  # CUDA image and targets libfabric, which is how Slingshot is reached on Alps (the EDF' \
+      "  # enables the CE's CXI hook for exactly this); spack's default netmod would build against" \
+      '  # UCX instead, and the distro MPICH already demonstrates where that ends -- a ch4:ucx' \
+      '  # build whose UCX has no ROCm transport at all.' \
+      "  - mpich@4 +rocm amdgpu_target=${ROCM_ARCH} +fortran +hwloc device=ch4 netmod=ofi" \
       '  - openblas threads=openmp +fortran' \
       '  - netlib-scalapack' \
       '  - fftw +mpi +openmp precision=float,double,long_double' \
@@ -503,6 +519,47 @@ RUN set -eux; \
     test -f /opt/view/include/tbb/tbb.h; \
     test -f /opt/view/include/blaze/Blaze.h; \
     mpicc -show
+
+# GPU-aware MPI gate. HARD, and it exists because the failure mode is silence.
+#
+# The distro ships its own MPICH at /usr/bin, built `ch4:ucx` against a UCX with no ROCm
+# transport. If that one wins on PATH -- which is exactly what happened in the image this
+# replaces, whose EDF re-declared PATH absolutely and left /opt/view/bin out of it -- then
+# `mpicc` compiles, `mpiexec` launches, ranks talk, and every host-buffer benchmark passes. Only
+# a device pointer handed to MPI behaves differently, and it does so as a hang or a wrong number
+# rather than as an error. So the check is not "is there an mpicc" but "is it THE one".
+#
+# Three questions, because two of them can pass on the wrong MPI:
+#   1. Do the wrappers resolve into /opt/view (the spack env), not /usr/bin?
+#   2. Does mpichversion report the spack build's configure line, with ROCm in it?
+#   3. Does libmpi actually LINK the ROCm runtime? That is the one the other two cannot fake.
+#
+# RCCL is checked in the same layer because it answers the other half of "GPU-aware collectives":
+# MPI carries the point-to-point and the harness comm, RCCL/NCCL carries what a submission reaches
+# for when it wants device-side collectives. `libnccl.so` is asserted too -- a submission written
+# against NCCL links that name, and on ROCm it is RCCL wearing it.
+RUN set -eux; \
+    for wrapper in mpicc mpicxx mpifort mpiexec; do \
+      case "$(command -v "${wrapper}")" in \
+        /opt/view/bin/*) ;; \
+        *) echo "${wrapper} is $(command -v "${wrapper}" || echo MISSING), not the spack MPICH in /opt/view" >&2; \
+           echo "   the distro MPICH at /usr/bin is NOT GPU-aware; PATH order is the bug" >&2; exit 1;; \
+      esac; \
+    done; \
+    mpichversion | tee /tmp/mpichversion.txt; \
+    grep -qiE 'rocm|hip' /tmp/mpichversion.txt \
+      || { echo "mpichversion shows no ROCm/HIP in its configure line -- this MPICH is not GPU-aware" >&2; exit 1; }; \
+    libmpi="$(ls /opt/view/lib/libmpi.so* 2>/dev/null | head -1)"; \
+    test -n "${libmpi}" || { echo "no libmpi.so under /opt/view/lib" >&2; exit 1; }; \
+    ldd "${libmpi}" | grep -qiE 'libamdhip64|libhsa-runtime64' \
+      || { echo "${libmpi} links no ROCm runtime -- GPU buffers would go through host staging at best" >&2; \
+           ldd "${libmpi}" >&2; exit 1; }; \
+    test -f /opt/rocm/include/rccl/rccl.h || { echo "missing rccl.h" >&2; exit 1; }; \
+    ls /opt/rocm/lib/librccl.so* >/dev/null \
+      || { echo "librccl.so missing -- device collectives unavailable" >&2; exit 1; }; \
+    ls /opt/rocm/lib/libnccl.so* >/dev/null 2>&1 \
+      || ln -sf "$(ls /opt/rocm/lib/librccl.so.* | head -1)" /opt/rocm/lib/libnccl.so; \
+    rm -f /tmp/mpichversion.txt
 
 # ---------------------------------------------------------------------------------------------
 # 6. Sparse-direct solvers, iterative kernels and MAGMA.

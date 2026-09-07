@@ -1,0 +1,71 @@
+# CSCS Container Engine EDF for the image judge-agent-amd/Dockerfile builds.
+#
+# Copy to ~/.edf/<name>.toml and edit `image`. The name is what --environment takes; the image
+# DIGEST (written next to the squashfs by build.sh) is what identifies the build, so a results
+# table should quote that rather than the EDF name.
+#
+# THE PATH BELOW IS LOAD-BEARING. The CE does not preserve the image's own ENV reliably, so this
+# file re-declares PATH absolutely -- and the previous generation of it left /opt/view/bin and
+# /opt/gcc/bin out. The consequences were silent and specific:
+#
+#   * /opt/view/bin holds the spack MPICH built `+rocm ... device=ch4 netmod=ofi`. Without it on
+#     PATH, `mpicc` resolves to /usr/bin -- an alternatives symlink to OPEN MPI -- and `mpiexec`
+#     to the distro MPICH. A wrapper and launcher from two different MPIs start P processes that
+#     each come up as their own COMM_WORLD of size 1: every rank solves the whole problem, the
+#     answer verifies, and nothing fails. Even matched, the distro MPICH is `ch4:ucx` against a
+#     UCX with no ROCm transport, so device pointers have no GPU path at all.
+#   * /opt/gcc/bin holds the pinned gcc. A bare `c++` otherwise finds the distro gcc 13, whose
+#     auto-vectorizer mislowers a masked select and returns zeros for the upper half of each
+#     vector.
+#
+# The image asserts both at build time (the GPU-aware MPI gate and the toolchain gate); this file
+# is what keeps them true at RUN time.
+image = "${SCRATCH}/ce-images/optarena-ce-amd-mi300-v6.sqsh"
+mounts = [
+    "/capstor/:/capstor/",
+    "/iopsstor/:/iopsstor/",
+    "${SCRATCH}:${SCRATCH}",
+]
+workdir = "${SCRATCH}"
+writable = true
+entrypoint = false
+
+[env]
+LC_ALL = "C"
+ROCM_PATH = "/opt/rocm"
+HIP_PATH = "/opt/rocm"
+PYTORCH_ROCM_ARCH = "gfx942"
+HCC_AMDGPU_TARGET = "gfx942"
+# Absolute, never inherited: host SLES/spack binaries leak in through ${PATH} otherwise (a host
+# curl needing libldap_r-2.4 broke the v5 image; compilers would be next). Order matches the
+# Dockerfile's own ENV PATH -- toolchain, then the spack view, then PAPI, then ROCm, then the
+# distro. Anything the image builds must come BEFORE /usr/bin.
+# /opt/venv/bin is NOT optional and does not come from this Dockerfile: the rocm/pytorch base
+# image ships a venv and puts it on PATH, so every `python3 -m pip install` here -- torch, cupy,
+# and the editable dace -- lands in /opt/venv/lib, not in the system python. PIP_BREAK_SYSTEM_
+# PACKAGES=1 in those lines is what makes them work despite PEP 668; it does not mean they went
+# to /usr/bin/python3. Drop this entry and python3 resolves to the system interpreter, which
+# imports none of them -- the judge fails at `import dace` before it reaches any kernel.
+# Position matches the image's own resolution order (base PATH sits behind the four prefixes
+# the Dockerfile prepends); the base's duplicate /opt/rocm/bin and /sbin are not reproduced.
+PATH = "/opt/gcc/bin:/opt/view/bin:/opt/papi/bin:/opt/rocm/bin:/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# ORDER IS LOAD-BEARING both ways. ROCm first: the distro libdir carries an ancient
+# libhsa-runtime64.so.1.11 that leaves every ROCR_1 symbol in libamdhip64 undefined at link. The
+# distro libdir last but present: the CXI hook's ld.so.conf.d entry otherwise lands a stale SLES
+# libcurl.so.4 (wanting an openldap 2.4 soname Ubuntu 24.04 does not ship) ahead of the good one,
+# and cmake -- so every DaCe compile -- becomes unrunnable.
+LD_LIBRARY_PATH = "/opt/rocm/lib:/opt/rocm/lib64:/opt/gcc/lib64:/opt/gcc/lib:/opt/view/lib:/opt/view/lib64:/opt/papi/lib:/usr/lib/x86_64-linux-gnu"
+# Named, not left to PATH: a stale configure cache beats PATH, so a toolchain that looks selected
+# can still be ignored.
+CC = "/opt/gcc/bin/gcc"
+CXX = "/opt/gcc/bin/g++"
+FC = "/opt/gcc/bin/gfortran"
+PMIX_MCA_psec = "native"
+# The hwloc GPU probe hangs a containerized MPI launcher; harmless on a bare cluster.
+HWLOC_COMPONENTS = "-opencl,-levelzero,-gl"
+LD_PRELOAD = "/usr/local/lib/libmimalloc.so"
+
+[annotations]
+# Generic ROCm image: the CE CXI hook is how libfabric-aware MPI/RCCL see Slingshot, which is what
+# `netmod=ofi` in the image's MPICH is built to use.
+com.hooks.cxi.enabled = "true"

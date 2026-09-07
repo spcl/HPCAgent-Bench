@@ -15,6 +15,52 @@ partition here).
 `IMAGE_REQUIREMENTS.md` is the specification -- what each image must carry and why each entry is
 load-bearing. This file is only how to build and check one.
 
+## Publishing and pulling
+
+An image can be pushed to a registry so it is PULLED rather than rebuilt -- a rebuild is one node
+for hours, a pull is bandwidth.
+
+Opt in at build time by naming the repository; every `build.sh` takes it:
+
+```
+REGISTRY_USER=<user> REGISTRY_TOKEN=<token> \
+  PUSH_REPO=docker.io/<user>/optarena-judge-agent-amd PUSH_TAGS="v6 latest" \
+  IMAGE_DIR=containers/cluster/ce-images/judge-agent-amd \
+  sbatch containers/cluster/ce-images/judge-agent-amd/build.sbatch
+```
+
+The push runs after the squashfs is written and verified, so a registry failure costs the upload
+and never the artifact the job exists to produce. Credentials come from the environment and are
+never stored in the repo; use a scoped access token, not a password.
+
+**It must happen in the build job, and that is not a preference.** podman's graphroot here is
+`/dev/shm/$USER/root` -- node-local tmpfs, wiped at the top of every `build.sh` and gone when the
+job ends. Between `podman build` and the end of that job is the only window in which an OCI image
+exists at all. Afterwards the only artifact is the squashfs, and a squashfs is a flattened
+filesystem rather than an OCI image: reimporting one loses the layer structure and the image
+config. **An image that was not pushed while it was built has to be rebuilt to be pushed** -- there
+is no script that can upload the `.sqsh` files already sitting on scratch.
+
+Pulling, either as a container or straight to the squashfs the CE wants:
+
+```
+podman pull docker.io/<user>/optarena-judge-agent-amd:sha-<digest>
+enroot import -x mount -o optarena-judge-agent-amd.sqsh \
+    docker://docker.io/<user>/optarena-judge-agent-amd:sha-<digest>
+```
+
+Every push publishes a `sha-<digest>` tag beside the human-facing ones, because the digest is what
+identifies a build -- a mutable tag over two different images is what made a results table
+unreadable before.
+
+**Size is the binding constraint.** These images run 37-54 GB. Docker Hub caps an image at 100 GB
+and a single LAYER at 10 GB, so they fit but not with much room, and one oversized `RUN` would be
+rejected partway through a multi-hour upload. `push_image.sh` therefore measures the image and its
+largest layer and refuses BEFORE sending anything; both ceilings are overridable
+(`MAX_LAYER_GB`, `MAX_IMAGE_GB`) since other registries differ -- ECR raised its layer limit to
+200 GB in August 2026. Publishing the whole set is roughly 350 GB of upload and storage, which is
+worth pricing against a registry account before starting.
+
 ## Build
 
 Every image builds the same way: one node, its own `build.sbatch`, the directory passed in.
