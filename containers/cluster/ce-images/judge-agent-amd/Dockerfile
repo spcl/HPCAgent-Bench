@@ -44,10 +44,14 @@ FROM ${BASE_IMAGE}
 # one label, readable without unpacking the image. BASE_IMAGE is re-declared because an ARG from
 # before the first FROM is not in scope inside a stage.
 ARG BASE_IMAGE
+# Without this the label is INHERITED from the base and reads "24.04" -- the Ubuntu release,
+# not this image. A published artifact then names a version nobody can map to a build.
+ARG IMAGE_VERSION=dev
 LABEL org.opencontainers.image.title="optarena-judge-agent-amd" \
       org.opencontainers.image.description="OptArena judge+agent for MI300A: gcc 16, llvm 22, GPU-aware MPICH, PETSc/MAGMA, ROCm profilers" \
       org.opencontainers.image.source="https://github.com/spcl/HPCAgent-Bench" \
       org.opencontainers.image.licenses="GPL-3.0-or-later" \
+      org.opencontainers.image.version="${IMAGE_VERSION}" \
       org.opencontainers.image.base.name="${BASE_IMAGE}"
 
 ARG DEBIAN_FRONTEND=noninteractive

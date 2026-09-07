@@ -27,6 +27,9 @@ BASE_DIGEST="sha256:a3b65813621095e3389269417e963725b59310184588c9d2490d44e6e83f
 BASE_IMAGE="${BASE_IMAGE:-${BASE_REPO}@${BASE_DIGEST}}"
 ROCM_ARCH="${ROCM_ARCH:-gfx942}"
 
+# The version the LABEL records. Taken from the output name -- ...-v7.sqsh is v7 --
+# so the label and the artifact cannot disagree.
+IMAGE_VERSION="${IMAGE_VERSION:-$(basename "${OUTPUT_SQSH}" .sqsh | sed 's/.*-//')}"
 mkdir -p "$(dirname "${OUTPUT_SQSH}")"
 
 ce_podman_env
@@ -55,6 +58,7 @@ printf 'spack buildcache %s\n' "${SPACK_BUILDCACHE}"
 # with a silent rc=1.
 podman --cgroup-manager=cgroupfs build "${MIRROR_ARGS[@]}" "${CACHE_ARGS[@]}" \
   --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
+  --build-arg "IMAGE_VERSION=${IMAGE_VERSION}" \
   --build-arg "DACE_COMMIT=${DACE_COMMIT}" \
   --build-arg "ROCM_ARCH=${ROCM_ARCH}" \
   -f "${SCRIPT_DIR}/Dockerfile" \

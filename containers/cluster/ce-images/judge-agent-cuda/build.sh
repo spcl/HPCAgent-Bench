@@ -24,6 +24,9 @@ if [[ "${arch}" != "aarch64" ]]; then
     exit 2
 fi
 
+# The version the LABEL records. Taken from the output name -- ...-v7.sqsh is v7 --
+# so the label and the artifact cannot disagree.
+IMAGE_VERSION="${IMAGE_VERSION:-$(basename "${OUTPUT_SQSH}" .sqsh | sed 's/.*-//')}"
 mkdir -p "$(dirname "${OUTPUT_SQSH}")"
 
 ce_podman_env
@@ -44,6 +47,7 @@ ce_cache_base_image
 
 podman --cgroup-manager=cgroupfs build "${MIRROR_ARGS[@]}" \
   --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
+  --build-arg "IMAGE_VERSION=${IMAGE_VERSION}" \
   --build-arg "DACE_COMMIT=${DACE_COMMIT}" \
   -f "${SCRIPT_DIR}/Dockerfile" \
   -t "${IMAGE_TAG}" \
