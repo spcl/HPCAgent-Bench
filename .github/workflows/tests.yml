@@ -175,23 +175,28 @@ jobs:
   # ===========================================================================================
   unit:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: unit ${{ matrix.shard }}/3 (format + the discovery sweep)
+    name: unit (format + the discovery sweep)
     runs-on: ubuntu-latest
     strategy:
       # fail-fast: false -- the sweep is 200 unrelated files, and half a verdict is still a verdict.
       fail-fast: false
       matrix:
-        # THREE, back from two. Halving looked free on phase minutes -- run 34058390220 measured
-        # the three shards at 12.8 + 13.8 + 4.7 -- but the modulus is not only a cost split, it is
-        # a PROCESS split: it decides which files share an interpreter, and ten of these files
-        # fork. Halved, shard 1 reached 99% in 9m47s and then wedged for the remaining 20m23s of
-        # its cap, identically on runs 34092074108 and 34097376180, with --timeout=600
+        # ONE. The three shards measured 182 + 531 + 1060 s on run 34122110084 -- a 6x spread,
+        # so two of the three containers were buying a ~2.5-minute setup with three minutes of
+        # work. Whole, that is 1773 s of sweep against a 40-minute step inside a 45-minute
+        # container.
+        #
+        # THE KNOWN RISK, recorded because it is not hypothetical: the modulus is also a PROCESS
+        # split, deciding which files share an interpreter, and ten of these files fork. At NR % 2
+        # the sweep reached 99% in 9m47s and then wedged for the remaining 20m23s of its cap,
+        # identically on runs 34092074108 and 34097376180, with --timeout=600
         # --timeout-method=thread never firing. A timer that does not fire is the tell: the thread
-        # method owns its own timer, so a wedge it cannot interrupt is one in a process-wide lock,
-        # which is the fork()-in-a-multi-threaded-process deadlock tests/test_fork_openmp_safety.py
-        # exists to document. Which pair of files it takes is not established -- what is, is that
-        # NR % 3 does not produce it and NR % 2 does, twice. Name the test before merging these.
-        shard: [0, 1, 2]
+        # method owns its own timer, so a wedge it cannot interrupt is one in a process-wide lock
+        # -- the fork()-in-a-multi-threaded-process deadlock tests/test_fork_openmp_safety.py
+        # exists to document. NR % 3 never produced it; NR % 1 puts every forking file in one
+        # interpreter. If this job wedges at ~99% with no summary, that is this, and the fix is
+        # to name the colliding test rather than to re-shard blind.
+        shard: [0]
     # Phase 1 (24) + Phase 0/setup, which is ~5 on a warm cache. A job budget must exceed the sum of
     # its steps: at 40 + 25 + 55 the STEP budgets once came to 120 minutes inside a 90-minute JOB,
     # so the job could not finish even with every test passing, and the job cancellation that
@@ -347,7 +352,10 @@ jobs:
       # job rather than raising the ceiling -- the header rule is EVERY job under 45 with no
       # exceptions, and test_no_job_budgets_itself_past_the_container_ceiling holds it there.
       - name: Setup -- vendor compilers (icpx via oneAPI, nvc++ via NVHPC on shard 0)
-        timeout-minutes: 15
+        # 15 -> 10. It measured 201 s on run 34122110084 and retries three times, so 10 is still
+        # ~3x the measured cost -- and the room had to come from somewhere: with the sweep whole,
+        # the STEP budgets must sum under the job's 45 or a step cannot reach its own cap.
+        timeout-minutes: 10
         env:
           INSTALL_NVHPC: ${{ matrix.shard == 0 && '1' || '0' }}
         run: |
@@ -377,15 +385,22 @@ jobs:
         # cancellation is not a step failure the FIVE phases below never ran at all. A step timeout
         # is a failure, so `!cancelled()` keeps them running and the job reports what it knows.
         #
-        # 40 -> 60 -> 90 -> 38 -> 24 -> 30: the sweep reached 69% in 40 minutes on run 33261681823
-        # and died on the step timeout; run 33283870554 then filled the 60-minute cap; run
-        # 33626484866 finished it in 35m48s and 33649808182 in 28m03s. Thirded, run 34058390220
-        # measured 12.8 + 13.8 + 4.7. 30 rather than back to 24: run 34097376180 measured a third
-        # at 22m42s when it was a HALF, and the corpus a shard sweeps has grown under both a moving
-        # dace and new tests since 24 was set. --durations names what it spends the time on, and no
-        # -q, because a step timeout prints no summary: under -q the failures had no test names at
-        # all, so the log said only that the budget had passed.
-        timeout-minutes: 30
+        # 40 -> 60 -> 90 -> 38 -> 24 -> 30 -> 40: the sweep reached 69% in 40 minutes on run
+        # 33261681823 and died on the step timeout; run 33283870554 then filled the 60-minute cap;
+        # run 33626484866 finished it in 35m48s and 33649808182 in 28m03s. Thirded, run
+        # 34122110084 measured 182 + 531 + 1060 s. Whole again, that is 1773 s -- 29.6 minutes,
+        # which is why 30 is not the cap for it: a budget a measurement already touches is a
+        # budget that fails on the first slow runner. 34 leaves ~15% over measured, and the step
+        # budgets now sum to 44 inside the job's 45 -- they have to, or a step cannot reach its
+        # own cap. The vendor-compiler step gave up the room it was not using.
+        #
+        # 15% is THIN, and deliberately recorded as such: this sweep grew from 28m03s to 1773 s
+        # of measured work while the corpus and dace both moved. If a run lands past ~1900 s,
+        # re-shard rather than raise -- the job cannot go past 45.
+        # --durations names what it spends the time on, and no -q, because a step timeout prints
+        # no summary: under -q the failures had no test names at all, so the log said only that
+        # the budget had passed.
+        timeout-minutes: 34
         run: |
           excl=$(mktemp)
           grep -vE '^\s*(#|$)' .github/dedicated_tests.txt > "$excl"
@@ -395,7 +410,7 @@ jobs:
           # one of them the moment it lands. The modulus is not only a cost split -- see the matrix
           # above for the fork/OpenMP wedge that NR % 2 produced. tests/test_ci_coverage.py asserts
           # the matrix runs every index this deals into; a shard nobody runs is files nobody runs.
-          files=$(ls tests/test_*.py | grep -vxF -f "$excl" | awk 'NR % 3 == ${{ matrix.shard }}')
+          files=$(ls tests/test_*.py | grep -vxF -f "$excl" | awk 'NR % 1 == ${{ matrix.shard }}')
           test -n "$files" || { echo 'unit sweep selected no files'; exit 1; }
           echo "$files" | tr ' ' '\n' | wc -l | xargs echo "sweeping files:"
           # Killed twice here with "the runner has received a shutdown signal", both times at the
