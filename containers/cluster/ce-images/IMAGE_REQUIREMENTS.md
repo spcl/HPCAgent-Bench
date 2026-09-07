@@ -89,7 +89,8 @@ python3 -c "from dace.sdfg.analysis.polyhedral_isl import HAVE_ISL; \
 ```
 
 `verify_image.py` carries the same two as `dace-gate` checks. Measured 2026-09-06 on
-`optarena-amd-mi300-v5`: islpy 2026.2.1, z3 5.1.0, both gates open.
+`optarena-amd-mi300-v5`: islpy 2026.2.1, z3 5.1.0, both gates open. Not yet re-measured on
+`optarena-amd-mi300-v6`, so treat it as unknown there rather than inherited.
 
 **rocprof-compute needs its OWN interpreter.** ROCm installs the tool but not its Python deps.
 Installing `/opt/rocm/libexec/rocprofiler-compute/requirements.txt` into the image environment is
@@ -152,7 +153,7 @@ Same set on the AMD and the CUDA image; only the offload target differs.
 |---|---|
 | `perf` | the CPU profiling path the skills teach; PAPI's `perf_event` component depends on it |
 | tblis, OpenBLAS, LAPACK | see the OpenBLAS trap below |
-| MPI | **mpich, GPU-aware for the platform** -- see "GPU-aware MPI" below; the shipped `optarena-amd-mi300-v5` does NOT satisfy this |
+| MPI | **mpich, GPU-aware for the platform** -- see "GPU-aware MPI" below. `optarena-amd-mi300-v6` SATISFIES this (verified to 32 nodes); the older `optarena-amd-mi300-v5` does not |
 | GCC + Graphite | loop transforms; **OpenACC offload lives here**, not on LLVM |
 | LLVM + MLIR + Polly | **OpenMP offload lives here**, not on GCC |
 | vendor compiler | `amdclang` on AMD; **NVHPC** on CUDA -- and NVHPC is the ONLY OpenACC path |

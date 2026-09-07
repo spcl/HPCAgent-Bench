@@ -10,7 +10,7 @@
 # "the command ran" -- every check reads the artifact and, where the answer is derivable, checks
 # the number against the launch geometry.
 #
-#   srun --partition=mi300 -N1 --environment=optarena-amd-mi300-v5 scripts/smoke_gpu_profilers.sh
+#   srun --partition=mi300 -N1 --environment=optarena-amd-mi300-v6 scripts/smoke_gpu_profilers.sh
 #   sbatch scripts/submit_gpu_profiler_smoke.sbatch
 #
 # Exits non-zero naming the first instrument that could not answer. WORK defaults to a scratch

@@ -63,9 +63,14 @@ echo
 echo "################ launcher selection across ${NODES} nodes"
 CHOSEN=""
 for plugin in pmix pmi2 cray_shasta; do
+    # stderr is KEPT, not discarded: a candidate that fails says WHY, and the reason is the useful
+    # part. Throwing it away once turned "MPICH is a PMI-1 client and this plugin speaks PMIx"
+    # into the uninformative line "no output".
+    err="${WORK}/launcher-${plugin}.err"
     out=$(srun --mpi="${plugin}" --nodes="${NODES}" --ntasks="${NODES}" --ntasks-per-node=1 \
-              --environment="${EDF}" "${WORK}/worldsize" 2>/dev/null | sort -u | tr '\n' ' ' || true)
-    printf '  %-14s %s\n' "${plugin}" "${out:-no output}"
+              --environment="${EDF}" "${WORK}/worldsize" 2>"${err}" | sort -u | tr '\n' ' ' || true)
+    printf '  %-14s %s\n' "${plugin}" "${out:-no WORLD line}"
+    [ -s "${err}" ] && sed 's/^/                 | /' "${err}" | head -3
     if [ "${out}" = "WORLD=${NODES} " ] && [ -z "${CHOSEN}" ]; then CHOSEN="${plugin}"; fi
 done
 if [ -z "${CHOSEN}" ]; then
