@@ -492,7 +492,7 @@ def pipeline_parallel(sdfg: Any, ctx: Dict[str, Any]) -> None:
 
     The stage list is the one CloudSC is driven with, which dace-fortran arrived at first. What
     stood here before was a strict subset of it: no ``UniqueLoopIterators``, no scalar fission, no
-    length-one-array conversion, plain vertical ``MapFusion`` instead of ``FullMapFusion``, and
+    length-one-array conversion, plain vertical ``MapFusion`` instead of ``FuseMaps``, and
     ``simplify`` ahead of the unroll rather than after it. The column therefore reported DaCe as
     WEAKER than that pipeline actually drives it -- durbin fuses to 3 maps under this list and
     reported 5 under the old one.
@@ -516,7 +516,7 @@ def pipeline_parallel(sdfg: Any, ctx: Dict[str, Any]) -> None:
     """
     from dace.transformation.interstate.state_fusion_with_happens_before import StateFusionExtended
     from dace.transformation.pass_pipeline import Pipeline
-    from dace.transformation.passes.full_map_fusion import FullMapFusion
+    from dace.transformation.passes.fuse_maps import FuseMaps
     from dace.transformation.passes.length_one_array_scalar_conversion import ConvertLengthOneArraysToScalars
     from dace.transformation.passes.parallelization_prep import ShortLoopUnroll
     from dace.transformation.passes.scalar_fission import ScalarFission
@@ -535,10 +535,10 @@ def pipeline_parallel(sdfg: Any, ctx: Dict[str, Any]) -> None:
     sdfg.apply_transformations_repeated([ctx["LoopToMap"]])
     sdfg.apply_transformations_repeated(StateFusionExtended)
     for _ in range(PARALLEL_FUSION_ROUNDS):
-        # FullMapFusion, not ctx["MapFusion"]: vertical AND horizontal to a fixed point. Horizontal
+        # FuseMaps, not ctx["MapFusion"]: vertical AND horizontal to a fixed point. Horizontal
         # fuses maps that only share an INPUT, with no producer/consumer edge between them, which
         # vertical fusion cannot see at all.
-        FullMapFusion().apply_pass(sdfg, {})
+        FuseMaps().apply_pass(sdfg, {})
         sdfg.apply_transformations_repeated([ctx["MapCollapse"]])
     if ctx["device"] is dace_dtypes.DeviceType.GPU:
         from dace.transformation.passes.canonicalize.finalize import offload_to_gpu
@@ -553,7 +553,7 @@ def pipeline_auto_opt(sdfg: Any, ctx: Dict[str, Any]) -> None:
     ctx["opt"].auto_optimize(sdfg, ctx["device"], symbols=ctx.get("symbols", {}), use_gpu_storage=True)
 
 
-#: Rounds of (FullMapFusion, MapCollapse) the parallel pipeline runs. Two, not a fixed point: the
+#: Rounds of (FuseMaps, MapCollapse) the parallel pipeline runs. Two, not a fixed point: the
 #: two feed each other (a fusion exposes a collapse, a collapse exposes a fusion), and the second
 #: round is where that settles on this corpus.
 PARALLEL_FUSION_ROUNDS = 2
