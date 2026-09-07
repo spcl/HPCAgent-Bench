@@ -176,7 +176,7 @@ def test_the_budget_stops_the_pass_and_names_what_it_cut(promoter, tmp_path, mon
     run_dir = make_run_dir_many(tmp_path, [("alpha", 1.1), ("zeta", 76.6), ("mid", 4.0)])
     attempted: list[str] = []
 
-    def slow(judge, item, dry_run, rank):
+    def slow(judge, item, dry_run, rank, timeout=0.0):
         attempted.append(item["kernel"])
         return "SUBMITTED speedup=1.00x"
 
@@ -193,3 +193,25 @@ def test_the_budget_stops_the_pass_and_names_what_it_cut(promoter, tmp_path, mon
     assert "budget exhausted; 2 not attempted" in out
     # Named rather than counted: they still exist in the run dir and can be collected later.
     assert "mid" in out and "alpha" in out
+
+
+def test_a_lone_candidate_gets_the_whole_budget_not_a_fixed_slice(promoter, tmp_path, monkeypatch):
+    """The case that lost tsvc_2_s2233 on all four v11w2 fortran arms.
+
+    Each had exactly ONE unsubmitted kernel and 1800s of budget, and each cut the grade at a fixed
+    900s -- reporting "unreachable (timed out)" against a kernel the judge needs ~1600s for, with
+    half the budget never spent. The per-item value is a ceiling, not an allowance."""
+    run_dir = make_run_dir_many(tmp_path, [("tsvc_2_s2233", 3.0)])
+    handed: list[float] = []
+
+    def record_timeout(judge, item, dry_run, rank, timeout=0.0):
+        handed.append(timeout)
+        return "SUBMITTED speedup=3.00x"
+
+    monkeypatch.setattr(promoter, "promote", record_timeout)
+    monkeypatch.setattr(promoter, "judge_rank", lambda judge: 0)
+    monkeypatch.setattr(
+        sys, "argv", ["promote_unsubmitted.py", str(run_dir), "--judge", "http://judge:8800", "--budget-s", "1800"]
+    )
+    assert promoter.main() == 0
+    assert handed and handed[0] > 900.0, f"a lone candidate must get more than the old fixed slice, got {handed}"
