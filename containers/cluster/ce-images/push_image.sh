@@ -101,6 +101,15 @@ fi
 # builds under one tag is the thing that made a results table unreadable before. Pushed as
 # `sha-<12>` alongside whatever human-facing tags the caller names, so a campaign can always cite
 # something immutable.
+# What goes UP is an OCI image, stated rather than inherited. podman is only the tool used to
+# move it: `podman push --format` defaults to "manifest type of source, with fallbacks", podman
+# build's default can be flipped by BUILDAH_FORMAT in the environment, and a docker v2s2 manifest
+# would otherwise be published without anything saying so. --format oci below is what makes the
+# published artifact an OCI image regardless of how it was built or which path it took to here.
+manifest="$("${PODMAN[@]}" image inspect --format '{{.ManifestType}}' "${LOCAL_TAG}")"
+printf 'source manifest: %s\n' "${manifest}"
+printf 'pushing as:      application/vnd.oci.image.manifest.v1+json (forced with --format oci)\n'
+
 digest="$("${PODMAN[@]}" image inspect --format '{{.Digest}}' "${LOCAL_TAG}")"
 short="sha-${digest#sha256:}"; short="${short:0:16}"
 
@@ -109,7 +118,7 @@ for tag in "${short}" "$@"; do
     target="${PUSH_REPO}:${tag}"
     echo "pushing ${target}"
     "${PODMAN[@]}" tag "${LOCAL_TAG}" "${target}"
-    "${PODMAN[@]}" push "${target}"
+    "${PODMAN[@]}" push --format oci "${target}"
     pushed+=("${target}")
 done
 
