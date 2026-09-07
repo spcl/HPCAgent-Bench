@@ -13,9 +13,14 @@ hands that limit to every step. Setting it inside the script overrides that for 
 everything it spawns. There is no ``#SBATCH`` flag that does this -- ``--propagate`` selects which
 of the SUBMITTER'S limits to carry, so it can only pass a bad limit along, never impose a good one.
 
+A script that EMITS a batch script counts too. ``scripts/preset_sweep.py --emit-sbatch`` writes a
+submittable header from an f-string, so the guard has to be inside the emitted text -- and a check
+keyed on the ``.sbatch`` suffix never sees it. Those are reported, never auto-fixed: the insertion
+point sits inside a quoted template, where a blind splice would land in the wrong string.
+
     python scripts/check_core_dumps.py [--fix] [paths...]
 
-With no paths it walks every ``*.sbatch`` in the repo.
+With no paths it walks every ``*.sbatch`` and every tracked file that emits an SBATCH header.
 """
 
 import argparse
@@ -37,14 +42,41 @@ def repo_root() -> pathlib.Path:
     return pathlib.Path(__file__).resolve().parents[1]
 
 
+def display(path: pathlib.Path) -> str:
+    """Repo-relative when it can be, absolute otherwise -- a path argument may sit outside the tree."""
+    try:
+        return str(path.relative_to(repo_root()))
+    except ValueError:
+        return str(path)
+
+
+#: A real submission header always names the job; `#SBATCH` alone also matches prose about it.
+EMITTED_HEADER = "#SBATCH --job-name"
+
+
+def tracked(root: pathlib.Path, *globs: str) -> list[pathlib.Path]:
+    out = subprocess.run(
+        ["git", "-C", str(root), "ls-files", *globs], capture_output=True, text=True, check=False
+    ).stdout.split()
+    return [root / name for name in out]
+
+
 def batch_scripts(paths: list[str]) -> list[pathlib.Path]:
     if paths:
         return [pathlib.Path(p) for p in paths if p.endswith(".sbatch")]
-    root = repo_root()
-    tracked = subprocess.run(
-        ["git", "-C", str(root), "ls-files", "*.sbatch"], capture_output=True, text=True, check=False
-    ).stdout.split()
-    return [root / name for name in tracked]
+    return tracked(repo_root(), "*.sbatch")
+
+
+def emitters(paths: list[str]) -> list[pathlib.Path]:
+    """Tracked non-``.sbatch`` files that write an SBATCH header into a script they generate."""
+    candidates = [pathlib.Path(p) for p in paths] if paths else tracked(repo_root(), "*.py", "*.sh")
+    found = []
+    for path in candidates:
+        if path.suffix == ".sbatch" or not path.is_file() or path.name == pathlib.Path(__file__).name:
+            continue
+        if EMITTED_HEADER in path.read_text(encoding="utf-8", errors="ignore"):
+            found.append(path)
+    return found
 
 
 def insertion_point(lines: list[str]) -> int:
@@ -86,16 +118,23 @@ def main() -> int:
         path.write_text("".join(lines), encoding="utf-8")
         print(f"core-dumps: added the guard to {path}")
 
+    emitted = [p for p in emitters(args.paths) if GUARD not in p.read_text(encoding="utf-8", errors="ignore")]
+
     if offenders:
-        root = repo_root()
-        names = "\n  ".join(str(p.relative_to(root)) for p in offenders)
+        names = "\n  ".join(display(p) for p in offenders)
         print(
             f"core-dumps: {len(offenders)} batch script(s) do not disable core dumps:\n  {names}\n"
             "Run: python scripts/check_core_dumps.py --fix",
             file=sys.stderr,
         )
-        return 1
-    return 0
+    if emitted:
+        names = "\n  ".join(display(p) for p in emitted)
+        print(
+            f"core-dumps: {len(emitted)} file(s) emit an SBATCH header without the guard:\n  {names}\n"
+            f"Add `{GUARD}` to the EMITTED script body (not the emitting file's own header).",
+            file=sys.stderr,
+        )
+    return 1 if offenders or emitted else 0
 
 
 if __name__ == "__main__":

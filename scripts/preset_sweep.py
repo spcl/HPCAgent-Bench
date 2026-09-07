@@ -286,6 +286,10 @@ def render_sbatch(kernels: str, *, framework: str, presets, single_core_presets,
 
 set -euo pipefail
 
+# A crashing rank dumps a multi-GB core into the CWD on a filesystem whose quota is inodes.
+# Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
+ulimit -c 0
+
 # One task owns the whole node; the driver sets OMP/BLAS thread counts to flags.ncores().
 srun --ntasks=1 --cpu-bind=none \\
     python scripts/preset_sweep.py \\
