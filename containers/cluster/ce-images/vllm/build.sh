@@ -119,3 +119,13 @@ rm -f "${OUTPUT_SQSH}"
 enroot import -x mount -o "${OUTPUT_SQSH}" "podman://${IMAGE_TAG}" || true
 unsquashfs -l "${OUTPUT_SQSH}" opt >/dev/null
 printf 'Wrote %s\n' "${OUTPUT_SQSH}"
+
+# Optional registry push, so this image can be PULLED instead of rebuilt. AFTER the artifact is
+# written, so a registry failure never costs it. It must happen in THIS job: podman's graphroot is
+# node-local tmpfs that dies with the job, and the squashfs left behind is a flattened filesystem,
+# not an OCI image -- an image not pushed while it was built has to be rebuilt to be pushed.
+# See ce-images/push_image.sh.
+if [[ -n "${PUSH_REPO:-}" ]]; then
+  "$(dirname -- "${SCRIPT_DIR}")/push_image.sh" "${IMAGE_TAG}" ${PUSH_TAGS:-} \
+    || echo "push to ${PUSH_REPO} FAILED; the local image and squashfs are unaffected" >&2
+fi
