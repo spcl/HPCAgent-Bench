@@ -58,9 +58,9 @@ int main(int argc, char **argv) {
   int rank = 0, size = 0;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   MPI_Comm_size(MPI_COMM_WORLD, &size);
-  if (size != 2) {
+  if (size < 2) {
     if (rank == 0)
-      fprintf(stderr, "gpu_aware_mpi_probe: needs exactly 2 ranks, got %d\n", size);
+      fprintf(stderr, "gpu_aware_mpi_probe: needs at least 2 ranks, got %d\n", size);
     MPI_Abort(MPI_COMM_WORLD, 2);
   }
 
@@ -97,21 +97,25 @@ int main(int argc, char **argv) {
   double *send = NULL, *recv = NULL;
   HIP_CHECK(hipMalloc((void **)&send, N * sizeof(double)));
   HIP_CHECK(hipMalloc((void **)&recv, N * sizeof(double)));
-  const double base = rank == 0 ? 1000.0 : 2000.0;
+  const double base = 1000.0 * (double)(rank + 1);
   fill<<<(N + 255) / 256, 256>>>(send, N, base);
   HIP_CHECK(hipDeviceSynchronize());
 
-  const int peer = 1 - rank;
+  // A RING, not a pair: with one rank per node this puts every exchange on the network, which is
+  // what a single-node run can never test. At size 2 the ring degenerates to the pair exchange, so
+  // the image gate keeps measuring exactly what it did before.
+  const int next = (rank + 1) % size;
+  const int prev = (rank + size - 1) % size;
   // DEVICE pointers straight into MPI. This is the call that a non-GPU-aware MPI cannot serve
   // on a discrete GPU, and that an APU may serve by accident.
-  MPI_Sendrecv(send, N, MPI_DOUBLE, peer, 0, recv, N, MPI_DOUBLE, peer, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+  MPI_Sendrecv(send, N, MPI_DOUBLE, next, 0, recv, N, MPI_DOUBLE, prev, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
   double *host = (double *)malloc(N * sizeof(double));
   if (host == NULL)
     MPI_Abort(MPI_COMM_WORLD, 4);
   HIP_CHECK(hipMemcpy(host, recv, N * sizeof(double), hipMemcpyDeviceToHost));
 
-  const double expect = peer == 0 ? 1000.0 : 2000.0;
+  const double expect = 1000.0 * (double)(prev + 1);
   int bad = 0;
   for (int i = 0; i < N; i++) {
     if (host[i] != expect + (double)i)
@@ -126,8 +130,8 @@ int main(int argc, char **argv) {
 
   int rc = 0;
   if (rank == 0) {
-    printf("device-pointer MPI_Sendrecv: %s (%d/%d elements wrong)\n",
-           bad_total == 0 ? "transferred correctly" : "WRONG DATA", bad_total, 2 * N);
+    printf("device-pointer MPI_Sendrecv over %d ranks: %s (%d/%d elements wrong)\n", size,
+           bad_total == 0 ? "transferred correctly" : "WRONG DATA", bad_total, size * N);
     if (bad_total != 0) {
       printf("VERDICT: FAIL -- the exchange itself is broken\n");
       rc = 1;

@@ -241,6 +241,25 @@ experiment: compile `mpi_worldsize.c` with the image's own `mpicc`, try each can
 only one that reports `WORLD=2`. A hardcoded launcher is a v5-ism that fails on v6 for reasons
 unrelated to what the test is measuring.
 
+**Across nodes the launcher changes again, and the wrong one lies.** Hydra's `-launcher fork`
+keeps ranks inside the container but cannot leave the node, so cross-node ranks have to come from
+Slurm's own PMI. Measured on v6 at 2, 4, 8, 16 and 32 nodes, one rank per node
+(`reproducibility/mpi/multinode-mpi.sbatch`):
+
+| `srun --mpi=` | result |
+|---|---|
+| `pmi2` | correct `COMM_WORLD` at every node count tried |
+| `cray_shasta` | **`WORLD=1` at every node count** -- the singleton failure, silently |
+| `pmix` | no output at all |
+
+`cray_shasta` is the plausible guess on this machine and it is the one that produces confident
+wrong numbers: N ranks each their own `COMM_WORLD`, each solving the whole problem, nothing
+reporting an error. This is why the launcher is selected by experiment rather than named.
+
+GPU-aware MPI holds across the fabric: the device-pointer ring verified elementwise with 0 wrong
+out of 131072 at 32 nodes (job 627002), one rank per node so every exchange crosses Slingshot
+rather than being served by shared memory.
+
 The singleton case is the dangerous one: P processes each solving the whole problem, at P times the
 cost, with a plausible number at the end. Any MPI job here must assert the size it actually got --
 `reproducibility/mpi/smoke-mpi-judge.sbatch` does, which is why it is a gate and not a demo.
