@@ -181,10 +181,13 @@ jobs:
       # fail-fast: false -- the sweep is 200 unrelated files, and half a verdict is still a verdict.
       fail-fast: false
       matrix:
-        # ONE. The three shards measured 182 + 531 + 1060 s on run 34122110084 -- a 6x spread,
-        # so two of the three containers were buying a ~2.5-minute setup with three minutes of
-        # work. Whole, that is 1773 s of sweep against a 40-minute step inside a 45-minute
-        # container.
+        # THREE. Fusing to one container measured the 182 + 531 + 1060 s of run 34122110084 as
+        # 1773 s of work and read the 6x spread as two containers buying a ~2.5-minute setup with
+        # three minutes of work. Whole, it does not fit: run 34154693609 reached 47% and died on
+        # the step's own 34-minute cap, naming nothing -- exactly the ">= ~1900 s, re-shard rather
+        # than raise" trigger the step below records. A cheap shard that reports beats a full one
+        # that never does, and 1773 s of work was never the number to check: the sum of the parts
+        # ignores what the setup and the single runner's serialization add back.
         #
         # THE KNOWN RISK, recorded because it is not hypothetical: at NR % 2 this sweep reached
         # 99% in 9m47s and then wedged for the remaining 20m23s of its cap, identically on runs
@@ -198,8 +201,9 @@ jobs:
         # necessarily two tests colliding: FIRST check whether a worker exited (a `-n0` re-run
         # names the test; the runner's memory graph names an OOM). The local repro ran beside
         # other heavy jobs, so what killed that worker is not established -- only that a dead
-        # worker is what the controller does not survive.
-        shard: [0]
+        # worker is what the controller does not survive. That is why the modulus goes back to 3
+        # and not 2: NR % 2 is the deal that produced the wedge.
+        shard: [0, 1, 2]
     # Phase 1 (24) + Phase 0/setup, which is ~5 on a warm cache. A job budget must exceed the sum of
     # its steps: at 40 + 25 + 55 the STEP budgets once came to 120 minutes inside a 90-minute JOB,
     # so the job could not finish even with every test passing, and the job cancellation that
@@ -399,7 +403,9 @@ jobs:
         #
         # 15% is THIN, and deliberately recorded as such: this sweep grew from 28m03s to 1773 s
         # of measured work while the corpus and dace both moved. If a run lands past ~1900 s,
-        # re-shard rather than raise -- the job cannot go past 45.
+        # re-shard rather than raise -- the job cannot go past 45. That trigger has now FIRED once
+        # (run 34154693609, whole-list at NR % 1, killed at the cap on 47%) and the answer was the
+        # modulus above, not this number.
         # --durations names what it spends the time on, and no -q, because a step timeout prints
         # no summary: under -q the failures had no test names at all, so the log said only that
         # the budget had passed.
@@ -413,7 +419,7 @@ jobs:
           # one of them the moment it lands. The modulus is not only a cost split -- see the matrix
           # above for the fork/OpenMP wedge that NR % 2 produced. tests/test_ci_coverage.py asserts
           # the matrix runs every index this deals into; a shard nobody runs is files nobody runs.
-          files=$(ls tests/test_*.py | grep -vxF -f "$excl" | awk 'NR % 1 == ${{ matrix.shard }}')
+          files=$(ls tests/test_*.py | grep -vxF -f "$excl" | awk 'NR % 3 == ${{ matrix.shard }}')
           test -n "$files" || { echo 'unit sweep selected no files'; exit 1; }
           echo "$files" | tr ' ' '\n' | wc -l | xargs echo "sweeping files:"
           # Killed twice here with "the runner has received a shutdown signal", both times at the
