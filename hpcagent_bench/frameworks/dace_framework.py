@@ -39,7 +39,7 @@ from hpcagent_bench import flags as bench_flags, languages, perf_reports
 from hpcagent_bench.frameworks import Benchmark, Framework
 from hpcagent_bench.frameworks import utilities as util
 from hpcagent_bench.frameworks.framework import TimingResult, Timer
-from hpcagent_bench.frameworks.test import tolerance_datatype, tolerances_for
+from hpcagent_bench.frameworks.test import njit_reference, tolerance_datatype, tolerances_for
 
 dc_float = None
 dc_complex_float = None
@@ -399,12 +399,20 @@ def pin_per_rank_build_dirs() -> None:
     cache_root = os.environ.get("DACE_BUILD_CACHE_DIR")
     if cache_root is None:
         shm = pathlib.Path("/dev/shm")
-        base = (
+        cache_root = str(
             shm / f"dace_build_cache_{getpass.getuser()}"
             if shm.is_dir() and os.access(shm, os.W_OK)
             else pathlib.Path.home() / ".cache/dace/build_cache"
         )
-        os.environ["DACE_BUILD_CACHE_DIR"] = str(base / f"rank{rank}")
+    # An operator-set root is a ROOT, not a finished path: partitioned per rank exactly like the
+    # build folder above. Pinning only the unset case left a caller that names its own root -- the
+    # canon columns key theirs by column and DaCe commit -- with four ranks writing one PCH cache
+    # while their build folders split, which is the half-partitioned state this function exists to
+    # prevent and which surfaces as a rank failing to load the library it just built.
+    root = pathlib.Path(cache_root)
+    if root.name != f"rank{rank}":
+        root = root / f"rank{rank}"
+    os.environ["DACE_BUILD_CACHE_DIR"] = str(root)
 
 
 def pin_build_caching() -> None:
@@ -1062,7 +1070,12 @@ class DaceFramework(Framework):
         try:
             numpy_fw = Framework("numpy")
             np_impl, _ = numpy_fw.implementations(bench)[0]
-            reference = self.collect_outputs(numpy_fw, np_impl, bench, bdata)
+            # The SAME njit wrapper the harness puts on its own oracle. This one runs INSIDE
+            # first_execution, so an interpreted reference is charged to the timeout the framework
+            # is being judged by: wf_diff_skew spent 190 s of a 200 s budget here and was recorded
+            # as a TIMEOUT for a kernel that runs in 0.26 s. Speeding up the harness's oracle alone
+            # did not help, because that one is outside the budget.
+            reference = self.collect_outputs(numpy_fw, njit_reference(np_impl, bench), bench, bdata)
         except Exception as exc:
             print(f"DaCe optimize: numpy reference unavailable ({exc}); verification skipped")
             return None

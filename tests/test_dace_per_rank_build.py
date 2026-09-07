@@ -109,14 +109,46 @@ def test_a_rank_gets_its_own_precompiled_header_cache(monkeypatch, native) -> No
 
 
 @pytest.mark.parametrize("native", (False, True))
-def test_an_explicit_cache_dir_is_left_alone(monkeypatch, tmp_path, native) -> None:
-    """A job that already partitioned the cache itself (or points it at node-local scratch) must not
-    have that decision silently re-taken."""
+def test_a_cache_dir_already_naming_a_rank_is_left_alone(monkeypatch, tmp_path, native) -> None:
+    """A job that already PARTITIONED the cache itself must not have that decision re-taken.
+
+    Recognised by the leaf naming this rank, which is the only thing in the path that says
+    partitioned rather than merely relocated -- see the sibling test.
+    """
+    monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "1")
+    mine = tmp_path / "rank1"
+    monkeypatch.setenv("DACE_BUILD_CACHE_DIR", str(mine))
+    fake_config(monkeypatch, native=native)
+    dace_framework.pin_per_rank_build_dirs()
+    assert dace_framework.os.environ["DACE_BUILD_CACHE_DIR"] == str(mine)
+
+
+@pytest.mark.parametrize("native", (False, True))
+def test_an_explicit_cache_dir_is_a_root_and_is_still_partitioned(monkeypatch, tmp_path, native) -> None:
+    """Naming a root RELOCATES the cache; it does not partition it, and the two are not the same
+    decision. Leaving a relocated root alone put four ranks in one PCH cache while their build
+    folders split -- the half-partitioned state that shows up as a rank failing to load the library
+    it just built (measured on the canon columns, which key their root by column and DaCe commit).
+    The relocation is still honoured: the rank folder lands UNDER the root the caller chose.
+    """
     monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "1")
     monkeypatch.setenv("DACE_BUILD_CACHE_DIR", str(tmp_path))
     fake_config(monkeypatch, native=native)
     dace_framework.pin_per_rank_build_dirs()
-    assert dace_framework.os.environ["DACE_BUILD_CACHE_DIR"] == str(tmp_path)
+    assert dace_framework.os.environ["DACE_BUILD_CACHE_DIR"] == str(tmp_path / "rank1")
+
+
+@pytest.mark.parametrize("native", (False, True))
+def test_two_ranks_never_share_an_explicit_cache_root(monkeypatch, tmp_path, native) -> None:
+    """The invariant the PCH partition exists for, stated over the operands that actually race."""
+    roots = []
+    for rank in ("0", "1"):
+        monkeypatch.setenv("OMPI_COMM_WORLD_RANK", rank)
+        monkeypatch.setenv("DACE_BUILD_CACHE_DIR", str(tmp_path))
+        fake_config(monkeypatch, native=native)
+        dace_framework.pin_per_rank_build_dirs()
+        roots.append(dace_framework.os.environ["DACE_BUILD_CACHE_DIR"])
+    assert roots[0] != roots[1], f"both ranks write one PCH cache: {roots[0]}"
 
 
 @pytest.mark.parametrize("native", (False, True))
