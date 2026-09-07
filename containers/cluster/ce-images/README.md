@@ -176,6 +176,22 @@ list.
 reads ARTIFACTS rather than exit codes, reconciling `SQ_WAVES` against the launch geometry so a
 profiler that runs and drops its rows fails instead of passing.
 
+## What is actually on scratch
+
+`snapshot_images.sh` writes one file describing every built image: size, build time, digest,
+sha256, which EDFs mount it, and -- the row that matters before a publish -- whether its OCI
+archive exists, because an image without one has to be REBUILT to be pushed.
+
+```bash
+./snapshot_images.sh          # sidecars only, seconds
+./snapshot_images.sh --deep   # also reads /usr/local/share/image-provenance from inside each image
+```
+
+The pieces it collects already existed and were scattered across sidecar files and one path
+INSIDE each image, where nothing could read it without mounting it. Output goes to
+`$SCRATCH/ce-images/SNAPSHOT.txt`, not into the repo: it describes this filesystem now, which is
+not a fact about the source tree.
+
 ## Install an EDF
 
 An image is reached from a job through an EDF in `~/.edf`. Use `install_edfs.sh` rather than
