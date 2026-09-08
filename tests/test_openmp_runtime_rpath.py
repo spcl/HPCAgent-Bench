@@ -9,7 +9,7 @@ while writing no RUNPATH. The .so builds clean, reports success, and then dies a
 REFERENCE build down and voided every graded call of four campaign arms -- a whole column of zeros
 behind a build line that said OK.
 
-The hermetic tests drive :func:`languages.openmp_runtime_dir` with stub drivers, so the three
+The hermetic tests drive :func:`languages.driver_library_dir` with stub drivers, so the three
 answers a driver can give are all covered on a host with no compiler at all. The build test is the
 one that would have caught it: it links and then loads.
 """
@@ -51,8 +51,8 @@ def test_a_runtime_in_a_libdir_no_loader_searches_earns_an_rpath(tmp_path):
     libdir.mkdir(parents=True)
     (libdir / "libomp.so").write_bytes(b"")
     cc = _stub_driver(tmp_path, libdir / "libomp.so")
-    languages.openmp_runtime_dir.cache_clear()
-    assert languages.openmp_runtime_dir(cc, ("libomp.so",)) == str(libdir)
+    languages.driver_library_dir.cache_clear()
+    assert languages.driver_library_dir(cc, ("libomp.so",)) == str(libdir)
 
 
 def test_a_runtime_the_loader_already_finds_earns_none(tmp_path):
@@ -60,15 +60,28 @@ def test_a_runtime_the_loader_already_finds_earns_none(tmp_path):
     if not resident.exists():
         pytest.skip(f"{resident} is not installed on this host")
     cc = _stub_driver(tmp_path, resident)
-    languages.openmp_runtime_dir.cache_clear()
-    assert languages.openmp_runtime_dir(cc, ("libgomp.so",)) == ""
+    languages.driver_library_dir.cache_clear()
+    assert languages.driver_library_dir(cc, ("libgomp.so",)) == ""
 
 
 def test_a_driver_that_cannot_place_the_name_earns_none(tmp_path):
     # What gcc answers for libomp.so: the name straight back, with no path in front of it.
     cc = _stub_driver(tmp_path, "libomp.so")
-    languages.openmp_runtime_dir.cache_clear()
-    assert languages.openmp_runtime_dir(cc, ("libomp.so",)) == ""
+    languages.driver_library_dir.cache_clear()
+    assert languages.driver_library_dir(cc, ("libomp.so",)) == ""
+
+
+def test_a_library_only_library_path_can_reach_is_still_named(tmp_path, monkeypatch):
+    # The allocator's case: the driver cannot place libmimalloc.so, and the only directory that
+    # can is the one toolchain_env() is about to drop. Naming it is the whole fix.
+    viewdir = tmp_path / "view" / "lib"
+    viewdir.mkdir(parents=True)
+    (viewdir / "libmimalloc.so").write_bytes(b"")
+    cc = _stub_driver(tmp_path, "libmimalloc.so")  # what a driver answers when it cannot place it
+    monkeypatch.setenv("LIBRARY_PATH", f"/nonexistent:{viewdir}")
+    languages.driver_library_dir.cache_clear()
+    assert languages.driver_library_dir(cc, ("libmimalloc.so",)) == str(viewdir)
+    languages.driver_library_dir.cache_clear()
 
 
 @pytest.mark.parametrize("block", ["clang", "gcc"])
@@ -101,7 +114,7 @@ def test_the_link_line_carries_the_flag_and_its_runtime():
     link = cmds[-1]
     flag = next((t for t in link if t in languages.OPENMP_BASELINE_FLAGS), None)
     assert flag is not None, link
-    runtime = languages.openmp_runtime_dir(cc, languages.OPENMP_RUNTIME_SONAMES.get(flag, ("libomp.so", "libgomp.so")))
+    runtime = languages.driver_library_dir(cc, languages.OPENMP_RUNTIME_SONAMES.get(flag, ("libomp.so", "libgomp.so")))
     if not runtime:
         pytest.skip(f"{cc} resolves its OpenMP runtime without help")
     assert f"-Wl,-rpath,{runtime}" in link, link

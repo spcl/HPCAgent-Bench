@@ -1068,8 +1068,9 @@ DEFAULT_LOADER_DIRS: Tuple[str, ...] = ("/lib", "/lib64", "/usr/lib", "/usr/lib6
 
 
 @functools.lru_cache(maxsize=None, typed=True)
-def openmp_runtime_dir(cc: str, sonames: Tuple[str, ...]) -> str:
-    """Directory of the OpenMP runtime ``cc`` links, when ``ld.so`` cannot find it alone; ``""`` else.
+def driver_library_dir(cc: str, sonames: Tuple[str, ...]) -> str:
+    """Directory holding the first of ``sonames`` that ``cc`` can place, when it is outside the
+    loader's own search path; ``""`` when the driver resolves it unaided or cannot name it at all.
 
     LLVM 17 and later install ``libomp.so`` under a target-triple libdir
     (``lib/x86_64-unknown-linux-gnu``) that no loader searches, and clang links it by absolute path
@@ -1077,8 +1078,10 @@ def openmp_runtime_dir(cc: str, sonames: Tuple[str, ...]) -> str:
     open shared object file`` -- measured here on spack clang 22.1.8, where it voided every graded
     call of the four OpenMP-offload arms because their REFERENCE could not be loaded.
 
-    Asked of the driver rather than guessed: only the driver knows which of its libdirs holds the
-    runtime it just linked.
+    Asked of the driver first, because only the driver knows which of its own libdirs holds the
+    library it just linked; ``LIBRARY_PATH`` second, because the driver does not read that one and
+    it is where a spack view is reached from. Cached per driver, so the answer is stable for a
+    process even though the second source is environment.
     """
     exe = resolve_compiler(cc) or cc
     for soname in sonames:
@@ -1094,6 +1097,16 @@ def openmp_runtime_dir(cc: str, sonames: Tuple[str, ...]) -> str:
             continue
         parent = str(pathlib.Path(answer).resolve().parent)
         return "" if parent in DEFAULT_LOADER_DIRS else parent
+    # ``-print-file-name`` walks the driver's OWN search dirs and does not read ``LIBRARY_PATH``,
+    # which is where a spack view's libraries are reached from. Asking the linker's other search
+    # list is not a fallback for tidiness: it is the only way to name a directory that
+    # :func:`toolchain_env` is about to remove.
+    for entry in os.environ.get("LIBRARY_PATH", "").split(os.pathsep):
+        if not entry or entry in DEFAULT_LOADER_DIRS:
+            continue
+        for soname in sonames:
+            if os.path.exists(os.path.join(entry, soname)):
+                return str(pathlib.Path(entry).resolve())
     return ""
 
 
@@ -1105,7 +1118,7 @@ def openmp_link_for_block(block: Dict[str, Any], mode: Mode, cc: Optional[str] =
     ``dlopen``. Read off the resolved baseline, so a block cannot declare OpenMP only at compile.
 
     The flag alone is not enough: it pulls the runtime in at LINK, and an rpath is what lets the
-    loader find that runtime again at ``dlopen`` (:func:`openmp_runtime_dir`). ``cc`` names the
+    loader find that runtime again at ``dlopen`` (:func:`driver_library_dir`). ``cc`` names the
     driver actually running the link, which is the block's own only when no caller overrode it --
     an offload leg links with ``amdclang`` and must rpath ROCm's runtime, not the block's.
     """
@@ -1113,7 +1126,7 @@ def openmp_link_for_block(block: Dict[str, Any], mode: Mode, cc: Optional[str] =
     tokens = shlex.split(baseline)
     for flag in OPENMP_BASELINE_FLAGS:
         if flag in tokens:
-            runtime = openmp_runtime_dir(
+            runtime = driver_library_dir(
                 cc or block["cc"], OPENMP_RUNTIME_SONAMES.get(flag, ("libomp.so", "libgomp.so"))
             )
             return (flag, f"-Wl,-rpath,{runtime}") if runtime else (flag,)
@@ -1175,18 +1188,32 @@ def _mimalloc_links(cc: str) -> bool:
     return r.returncode == 0
 
 
-def _mimalloc_link_for_block(block: Dict[str, Any]) -> Tuple[str, ...]:
+def _mimalloc_link_for_block(block: Dict[str, Any], cc: Optional[str] = None) -> Tuple[str, ...]:
     """The allocator link arguments for one compiler block; ``()`` when the block declares none or
-    this toolchain cannot resolve it."""
+    this toolchain cannot resolve it.
+
+    An OFFLOAD build names the allocator's directory as well. :func:`run_build_commands` runs one
+    under :func:`toolchain_env`, which drops ``LIBRARY_PATH`` so the device bitcode resolves from
+    the toolchain instead of from whoever started the harness -- and that same drop takes the spack
+    view with it, which is the only place ``libmimalloc.so`` lives. The probe below then answers
+    for the harness's environment while the build runs in a different one, and
+    ``clang-linker-wrapper`` reports ``unable to find library -lmimalloc``: 26 of 130 build errors
+    across the four offload arms. Naming the directory is what makes the two agree.
+    """
     ref = block.get("mimalloc_link_ref")
     if not ref:
         return ()
     flag_vars = vars(flags)
     if ref not in flag_vars:
         raise KeyError(f"mimalloc_link_ref {ref!r} is not a constant in hpcagent_bench.flags")
-    if not _mimalloc_links(block["cc"]):
+    driver = cc or block["cc"]
+    if not _mimalloc_links(driver):
         return ()
-    return tuple(shlex.split(flag_vars[ref]))
+    tokens = tuple(shlex.split(flag_vars[ref]))
+    if not offload_model():
+        return tokens
+    lib = driver_library_dir(driver, ("libmimalloc.so",))
+    return (f"-L{lib}", *tokens) if lib else tokens
 
 
 def mimalloc_link_flags(lang: str) -> Tuple[str, ...]:
@@ -1948,7 +1975,7 @@ def build_shared_lib_commands(
         # () when this toolchain's backend is not TBB, and --as-needed drops it when unused.
         link_argv.extend(f for f in _stdpar_link_for_block(block) if f not in link_argv)
         # The allocator, same discipline: () when this toolchain cannot resolve it.
-        link_argv.extend(f for f in _mimalloc_link_for_block(block) if f not in link_argv)
+        link_argv.extend(f for f in _mimalloc_link_for_block(block, cc) if f not in link_argv)
         cmds.append(link_argv)
     if extra_link:
         cmds[-1].extend(extra_link)  # final argv produces the .so (sees -L/-l)
