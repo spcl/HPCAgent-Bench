@@ -37,7 +37,7 @@ if [[ "${mode}" == outer ]]; then
     ranks="$(lscpu -p=SOCKET | grep -v '^#' | sort -u | wc -l)"
     mkdir -p "${out}"
     echo "prerender(${target}): ${ranks} ranks x ${cpt} cores -> ${out}"
-    exec srun --environment=optarena-amd-mi300-v5 --ntasks="${ranks}" \
+    exec srun --environment=optarena-amd-mi300-latest --ntasks="${ranks}" \
         --cpus-per-task="${cpt}" --hint=nomultithread --mem=0 \
         bash "${SELF}" inner "${out}" "${kernels}" "${opt}" "${target}"
 fi
