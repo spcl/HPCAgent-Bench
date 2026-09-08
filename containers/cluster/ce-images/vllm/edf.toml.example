@@ -1,4 +1,4 @@
-# GENERATED FROM the live EDF rocm723-vllm-0.23.0-pytorch211-ofi.toml, then kept in the repo so a fresh clone can
+# GENERATED FROM the live EDF vllm-latest.toml, then kept in the repo so a fresh clone can
 # render its own. install_edfs.sh rewrites the `image` line; everything else here is the
 # tuning that EDF already carried and must not drift.
 # Replace both placeholders as described in README.md before registering this EDF.

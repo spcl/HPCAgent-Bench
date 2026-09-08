@@ -172,8 +172,8 @@ selected at submission time with `CLUSTER_ENV_FILE=/shared/path/run.env`.
 | `AGENT_NODES` | `1` | Nodes assigned to agent workers. |
 | `JUDGE_NODES` | `1` | Nodes assigned to judge replicas. |
 | `GPUS_PER_NODE` | `4` | GPUs used by vLLM on each inference node. This must agree with the Slurm request. |
-| `INFERENCE_CE_ENV` | `rocm723-vllm-0.23.0-pytorch211-ofi` | Registered Container Engine environment for vLLM. Use the EDF environment name, not the `.toml` path. |
-| `AMD_CE_ENV` | `optarena-amd-mi300` | Registered AMD Container Engine environment for agent and judge nodes. |
+| `INFERENCE_CE_ENV` | `vllm-latest` | Registered Container Engine environment for the inference engine (`vllm-latest` or `sglang-latest`). Use the EDF environment name, not the `.toml` path. |
+| `AMD_CE_ENV` | `optarena-amd-mi300-latest` | Registered AMD Container Engine environment for agent and judge nodes. |
 
 ### Shared paths and problem source
 
@@ -274,8 +274,8 @@ step launches its image, controlled by `CONTAINER_RUNTIME` (default `ce`): `ce`,
 ### CSCS Container Engine (default)
 
 Nothing extra to set. `role_srun()` adds `srun --environment=<edf>`: `INFERENCE_CE_ENV`
-(default `rocm723-vllm-0.23.0-pytorch211-ofi`) for the vLLM node, `AMD_CE_ENV` (default
-`optarena-amd-mi300`) for judge and agent nodes. Both EDFs must already be registered under
+(default `vllm-latest`) for the inference node, `AMD_CE_ENV` (default
+`optarena-amd-mi300-latest`) for judge and agent nodes. Both EDFs must already be registered under
 `${HOME}/.edf` (or another `EDF_PATH` dir) and point their `image` line at a built `.sqsh`. See
 [Prerequisites](#prerequisites).
 

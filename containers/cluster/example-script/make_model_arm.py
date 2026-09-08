@@ -9,9 +9,11 @@ ceilings) has already been argued for in the source arm and must survive verbati
 below describe the model. Hand-editing got this wrong once already, so the split is stated here
 rather than re-derived per arm.
 
-oss120b is the one arm that stays on vLLM 0.23: 0.27.1 routes gpt-oss through its mxfp4 path
-regardless of --dtype and imports triton_kernels.matmul_ogs, which AMD's ROCm build does not
-carry (601854-601857 all died there in ~7 minutes).
+oss120b serves on vllm-latest, which is vLLM 0.23. 0.27.1 was retired on 2026-09-08 -- it routes
+gpt-oss through its mxfp4 path regardless of --dtype and imports triton_kernels.matmul_ogs, which
+AMD's ROCm build does not carry (601854-601857 all died there in ~7 minutes), and where it did run
+it served 25% slower. Name the EDF, never the image build: a version-named EDF freezes the arm on
+whatever was promoted the day it was written.
 """
 
 import argparse
@@ -22,7 +24,7 @@ import sys
 #: The keys that describe the MODEL, per model. Everything else is the programming model's.
 MODELS = {
     "oss120b": {
-        "INFERENCE_CE_ENV": "rocm723-vllm-0.23.0-pytorch211-ofi",
+        "INFERENCE_CE_ENV": "vllm-latest",
         "AGENT_EFFORT": "high",
         "VLLM_MODEL": "openai/gpt-oss-120b",
         "VLLM_EXTRA_ARGS": (

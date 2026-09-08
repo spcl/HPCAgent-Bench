@@ -1,262 +1,37 @@
-# Build the known-good vLLM Container Engine image on Beverin
-
-This directory records the **working** Beverin build path extracted from the
-former `vvlm-mi300-3-main` working tree. The resulting
-Container Engine (CE) image contains:
-
-- Ubuntu 24.04 and ROCm 7.2.3 from the Phase 1 base image;
-- the AWS OFI RCCL network plugin built against Beverin's host
-  Slingshot/CXI ABI;
-- Python 3.12, PyTorch `2.11.0+rocm7.2`, torchvision
-  `0.26.0+rocm7.2`, and torchaudio `2.11.0+rocm7.2`; and
-- vLLM `0.23.0`, compiled for the MI300A `gfx942` target.
-
-The final, known-good artifact name is
-`containers/rocm723-vllm-0.23.0-pytorch211-ofi.sqsh`. Do not select the older
-`rocm723-ofi-vllm-0.23.0.sqsh`/`/opt/vllm-venv` path: that belongs to an earlier
-build line. The final image uses `/opt/pytorch211`.
-
-This is a build and setup guide, not a test procedure. The build scripts do
-perform fail-fast checks while assembling the image, but no separate test jobs
-are required by this guide.
-
-## 1. Requirements
-
-Run these steps on Beverin with:
-
-- access to the `mi300` Slurm partition and a four-GPU MI300A node;
-- Podman for the initial OCI build;
-- Enroot and Slurm for the `.sqsh` image builds;
-- outbound access to GitHub, Ubuntu package repositories, PyPI, and the
-  PyTorch ROCm 7.2 wheel index; and
-- a checkout on the shared `$SCRATCH` filesystem (`/iopsstor` at CSCS),
-  visible at the same path from login and compute nodes.
-
-The promoted build scripts derive their root from this directory. Override it
-with `VLLM_BUILD_ROOT` if the build inputs are copied elsewhere. Slurm output
-paths are relative, so submit from `$ROOT` (or use `sbatch --chdir="$ROOT"`).
-Create the output directories (uses `$SCRATCH` if set, otherwise Beverin's
-default scratch path):
-
-```bash
-export ROOT=${SCRATCH:-/iopsstor/scratch/cscs/$USER}/vllm-mi300-3
-export VLLM_BUILD_ROOT="$ROOT"
-mkdir -p "$ROOT/logs" "$ROOT/containers" "$ROOT/phase1-passed"
-cd "$ROOT"
-```
-
-Keep the repository mounted at `$ROOT` during all Enroot builds. The vLLM
-inner build writes its detailed build log back to `$ROOT/logs`.
-
-## 2. Build the Beverin host-OFI base image
-
-This phase is important: the compute-node host hook supplies `libfabric` and
-`libcxi` at runtime, so the RCCL network plugin must be compiled against the
-same host ABI. The relevant files are under
-`beverin-rocm723-host-ofi-phase1/`:
-
-- `pack-beverin-host-sdk.sh` captures the host headers and builder-only
-  dependency closure;
-- `Containerfile.rocm723-ofi-host-diag` starts from ROCm 7.2.3 and builds
-  AWS OFI NCCL `v1.20.0`;
-- `host-loader-gate.sh` and `torch-dist-allreduce-mi300.py` are copied into the
-  image as diagnostics; and
-- `rocm723-ofi-host-diag.toml` records the required CE host-network hooks.
-
-On Beverin, create the SDK and OCI image:
-
-```bash
-cd "$ROOT/beverin-rocm723-host-ofi-phase1"
-./pack-beverin-host-sdk.sh beverin-host-sdk.tar.gz
-
-podman build \
-  --file Containerfile.rocm723-ofi-host-diag \
-  --tag rocm723-ofi-host-diag:phase1 \
-  .
-```
-
-Import that local OCI image with the site's normal Enroot workflow and place
-the resulting squashfs file at the path expected by the next build:
-
-```text
-$ROOT/phase1-passed/rocm723-ofi-host-diag-phase1.sqsh
-```
-
-For example, when the installed Enroot supports its Podman URI importer:
-
-```bash
-enroot import --output \
-  "$ROOT/phase1-passed/rocm723-ofi-host-diag-phase1.sqsh" \
-  podman://localhost/rocm723-ofi-host-diag:phase1
-```
-
-Use Beverin's site-provided OCI-to-Enroot command instead if its Enroot build
-does not enable the Podman importer. The only contract for the following step
-is the final `.sqsh` pathname above.
-
-## 3. Add the qualified PyTorch 2.11 ROCm environment
-
-Return to the repository root and submit:
-
-```bash
-cd "$ROOT"
-sbatch build/build-pytorch211-phase1.sbatch
-```
-
-The Slurm wrapper `build/build-pytorch211-phase1.sbatch` creates a writable
-Enroot container from the Phase 1 image, runs
-`build/build-pytorch211-phase1-inner.sh`, and exports:
-
-```text
-$ROOT/containers/rocm723-pytorch211-ofi-phase1-candidate.sqsh
-```
-
-The inner script deliberately installs PyTorch into the separate
-`/opt/pytorch211` virtual environment. It does not replace the base image's
-`/opt/venv`; this separation is part of the working recipe.
-
-### Required NumPy patch
-
-The successful sequence added NumPy to that intermediate image before the
-vLLM build. After the PyTorch job completes successfully, submit:
-
-```bash
-sbatch build/add-numpy-pytorch211.sbatch
-```
-
-This updates the same candidate image atomically and keeps the original as
-`rocm723-pytorch211-ofi-phase1-candidate.before-numpy.sqsh`. Do not skip this
-job: `build/build-vllm023-pt211-inner.sh` imports NumPy during its base-image
-qualification.
-
-## 4. Build vLLM 0.23.0 for MI300A
-
-After the NumPy job completes successfully, submit:
-
-```bash
-sbatch build/build-vllm023-pt211.sbatch
-```
-
-The wrapper `build/build-vllm023-pt211.sbatch` uses the patched PyTorch image,
-runs `build/build-vllm023-pt211-inner.sh`, and exports the final CE image. The
-inner script:
-
-1. keeps the qualified ROCm PyTorch packages instead of allowing vLLM's
-   dependencies to replace them;
-2. installs the matching torchvision and torchaudio ROCm wheels;
-3. clones the exact `v0.23.0` vLLM tag;
-4. constrains the complete GPU package stack;
-5. removes the CUDA-only `torch-c-dlpack-ext` optional package; and
-6. builds the ROCm extensions with `VLLM_TARGET_DEVICE=rocm` and
-   `PYTORCH_ROCM_ARCH=gfx942`.
-
-The outputs are:
-
-```text
-$ROOT/containers/rocm723-vllm-0.23.0-pytorch211-ofi.sqsh
-$ROOT/containers/rocm723-vllm-0.23.0-pytorch211-ofi.sqsh.sha256
-```
-
-The recorded checksum from the successful build is:
-
-```text
-d37bd31cf1de4eccf87aa0e48dbfcac8f2187ed5982adfad32bc19a27b9aa417  rocm723-vllm-0.23.0-pytorch211-ofi.sqsh
-```
-
-It was recorded under an absolute scratch path
-(`/iopsstor/scratch/cscs/<username>/vllm-mi300-3/containers/`) that is historical;
-compare the digest (the first field), not the recorded filename.
-
-## 5. Register the final image with Container Engine
-
-Copy the final EDF template and replace its image and work-directory paths:
-
-```bash
-mkdir -p "$HOME/.edf"
-cp rocm723-vllm-0.23.0-pytorch211-ofi.toml \
-  "$HOME/.edf/rocm723-vllm-0.23.0-pytorch211-ofi.toml"
-
-sed -i \
-  -e "s|@ROOT@|$ROOT|g" \
-  -e "s|@WORKDIR@|$(dirname "$ROOT")|g" \
-  "$HOME/.edf/rocm723-vllm-0.23.0-pytorch211-ofi.toml"
-```
-
-The EDF enables Beverin's CXI and host netstack hooks, selects the OFI network
-plugin, disables DMA-BUF for the current Beverin kernel, and puts
-`/opt/pytorch211/bin` first on `PATH`. Use the environment name
-`rocm723-vllm-0.23.0-pytorch211-ofi` with the site's CE command.
-
-## 6. Add flash-attn, then gate the fabric
-
-vLLM's ROCm path needs upstream flash-attn for the MLA **prefill** backend that Kimi and DeepSeek
-use; without it engine init dies with `No valid MLA prefill backend found ... {FLASH_ATTN:
-[required dependencies not available]}` (589001). MLA decode already works here via TRITON_MLA.
-
-```bash
-sbatch --account=<account> build/add-flash-attn-pt211.sbatch
-```
-
-That patches the image in place, keeping `.before-flash-attn.sqsh`, and installs via the Triton
-backend so no composable-kernel compile is needed. `FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE` is in
-the EDF because `flash_attn_interface.py` reads it at **import** time, not only at build time.
-
-Then gate the fabric before trusting a campaign to it:
-
-```bash
-sbatch --account=<account> ../../example-script/test-rccl-ofi-2node.sbatch
-```
-
-A pass requires `Selected provider is cxi`, `Using network AWS Libfabric`, no `Using network
-Socket`, and `correct=True`. A run that is correct **over Socket** is the failure this gate
-exists to catch, so read the three network lines, not just the numeric result.
-
-## File selection summary
-
-Use only this build chain:
-
-```text
-beverin-rocm723-host-ofi-phase1/pack-beverin-host-sdk.sh
-beverin-rocm723-host-ofi-phase1/Containerfile.rocm723-ofi-host-diag
-    -> phase1-passed/rocm723-ofi-host-diag-phase1.sqsh
-
-build/build-pytorch211-phase1.sbatch
-build/build-pytorch211-phase1-inner.sh
-    -> containers/rocm723-pytorch211-ofi-phase1-candidate.sqsh
-
-build/add-numpy-pytorch211.sbatch
-    -> patches the PyTorch candidate in place
-
-build/build-vllm023-pt211.sbatch
-build/build-vllm023-pt211-inner.sh
-    -> containers/rocm723-vllm-0.23.0-pytorch211-ofi.sqsh
-
-build/add-flash-attn-pt211.sbatch
-    -> patches the final image in place
-
-rocm723-vllm-0.23.0-pytorch211-ofi.toml
-    -> final CE runtime environment
-```
-
-`build/build-chain.sh` submits all of the above as one `afterok` dependency chain, so a full
-rebuild is a single command:
-
-```bash
-VLLM_BUILD_ROOT=$SCRATCH/vllm-mi300-rebuild build/build-chain.sh --account=<account>
-```
-
-Files whose names contain `.before-` or `.failed-` are retained history, not
-build inputs. `phase2-vllm-passed/rocm723-ofi-vllm-023.toml` describes the
-older `/opt/vllm-venv` image and must not be used for this PyTorch 2.11 build.
-
-## Material that was not carried over
-
-Everything from the original working tree that is not part of the promoted
-build chain above was deliberately left out of this repository: historical
-logs (chiefly ~190 MB of NCCL debug output from two Slurm jobs), failed or
-superseded scripts, discovery output, and runtime experiments. None of it is a
-build input, and nothing here reads it. The one artefact that mattered -- the
-recorded image digest -- is quoted inline in section 4 above, and the host SDK
-tarball is regenerated on demand by
-`beverin-rocm723-host-ofi-phase1/pack-beverin-host-sdk.sh`. Every build input
-needed to reproduce the image remains directly available in this directory.
+# Serving-side smokes and probes
+
+The images this directory used to build are gone. vLLM and SGLang are now each
+built from a single Dockerfile -- `../vllm/Dockerfile` and `../sglang/Dockerfile`
+-- and promoted under one unversioned name per role, which `../images.env`
+records and `../install_edfs.sh` registers as `vllm-latest` and `sglang-latest`.
+Build and promotion are documented in `../../../../SUBMITTING.md`.
+
+What was here until 2026-09-08 was the earlier path: a multi-phase chain
+(`build/`, plus a `beverin-rocm723-host-ofi-phase1/` base) that assembled an
+image by layering sbatch jobs onto an upstream pull. It produced
+`rocm723-vllm-0.23.0-pytorch211-ofi.sqsh` and
+`sglang-rocm-v0.5.18-rocm720-mi30x.sqsh`, and it is why the sglang arms carried
+`PYTHONPATH=${SCRATCH}/pyprefix` for cupy and flydsl: what the Dockerfiles built
+had never been promoted into service, so the served image did not have them.
+Those pulls also carried a squashfs sha256 and no `.digest`, so publishing one
+published something the repo could not rebuild. Recover the chain from git
+history if a phase of it is ever needed again; do not restore it wholesale.
+
+vLLM 0.27.1 was retired the same day and lives on the `parked/vllm-0271`
+branch. On one pinned node, same probe and parsers, it served oss120b at 2405
+tok/s against 0.23.0's 3013 -- 25% slower, entirely in decode (steady-state 2540
+vs 3187; prefill matched to 0.3%). Same dtype, quantization, MoE and attention
+backends, same torch and triton.
+
+## What remains here
+
+| File | What it does |
+| --- | --- |
+| `agentlike-probe.py` | Serving throughput under a campaign-shaped load. Node-to-node spread is ~30%, so pin an A/B to one node. |
+| `accuracy-gate.py` | Correctness gate a serving change must pass before it is believed. |
+| `smoke-kimi-sglang.sbatch` | SGLang serving smoke. |
+| `smoke-kimi-replicas.sbatch` | Multi-replica serving smoke. |
+| `smoke-kimi-eager-pg.sbatch` | Serving smoke with the eager process-group patch loaded. |
+| `prebuild-aiter-jit.sbatch` | Warms the aiter JIT cache. `@compile_ops` is lazy: importing an op never builds it, so this has to CALL each one. Gate on what was built, never on a module name -- the names differ across engine versions. |
+| `tune-moe-int4-mi300a.sbatch`, `merge_moe_configs.py`, `moe-configs/` | MoE autotuning sweep and its promoted results. `../sglang/Dockerfile` COPYs `moe-configs/`, so it is build input, not scratch output. |
+| `external-eager-pg-patch/` | `sitecustomize.py` loaded into the serving venv. Its effect is unfalsified: both arms of the last A/B reported zero unbatched P2P warnings with it loaded. |
