@@ -175,37 +175,40 @@ move", not "how did the model score".
 ```bash
 cd containers/cluster/ce-images
 
-# Agent image. Compilers are pinned by MAJOR version only (gcc 16, LLVM 22) because the PPA
-# serves 16.0.1, not a fixed point release; the build records what it actually resolved to in
-# /usr/local/share/toolchain-provenance. Lands as ...-v5-candidate.sqsh, never over v4.
-sbatch amd/build-agent-image.sbatch
-
-# vLLM image, parameterised by version. The artefact name carries the version, so a new build
-# lands BESIDE the one every measured arm ran on rather than over it.
-VLLM_VERSION=0.27.1 sbatch \
-    --export=ALL,VLLM_BUILD_ROOT=$PWD/inference \
-    inference/build/build-vllm023-pt211.sbatch
+# One Dockerfile per role, and IMAGE_DIR must be spelled: without it build.sbatch exits in
+# about a second and the job looks like it ran. Each lands as <role>-candidate.sqsh.
+#
+# The judge image pins compilers by MAJOR version only (gcc 16, LLVM 22) because the PPA serves
+# 16.0.1, not a fixed point release; the build records what it resolved to in
+# /usr/local/share/toolchain-provenance.
+sbatch --partition=mi300 --export=ALL,IMAGE_DIR=$PWD/judge-agent-amd judge-agent-amd/build.sbatch
+sbatch --partition=mi300 --export=ALL,IMAGE_DIR=$PWD/sglang         sglang/build.sbatch
+sbatch --partition=mi300 --export=ALL,IMAGE_DIR=$PWD/vllm           vllm/build.sbatch
+sbatch --partition=mi300 --export=ALL,IMAGE_DIR=$PWD/vllm-0271      vllm-0271/build.sbatch
 
 # 0.27.1 serving-surface gate: serve-arg parity, tool/reasoning parser choices, the tuned-MoE
 # env var, and the internal API the pp collective split depends on. One node, ~2 minutes,
 # no weights. Run it BEFORE spending a 4-node hour on a decode gate.
 sbatch inference/gate-0271-serving-surface.sbatch
-
-# aiter into a freshly built image. NOT optional on 0.27.1: its Kimi ViT patch-embed imports
-# aiter unconditionally during the multimodal dummy profile_run, so an aiter-less 0.27.1 dies
-# at startup before the API binds even on a text-only campaign (600649). Patches in place with
-# a .before-aiter backup, so a decode gate must be re-run after it.
-VLLM_VERSION=0.27.1 sbatch --export=ALL,VLLM_VERSION=0.27.1 \
-    inference/build/add-aiter-pt211.sbatch
 ```
 
-Promoting a candidate image is a rename, and only when nothing has the old one mounted:
+`inference/build/` is the multi-phase chain that produced the upstream pulls these Dockerfiles
+replaced. It is kept because arms are still running on those images, not because it is how a new
+image gets built.
+
+Promotion is verify, then rename. There is ONE version per role, so the rename is what publishes:
 
 ```bash
-squeue -u "$USER" -o "%.9i %.24j"          # must show no arm using the image you are replacing
-mv $SCRATCH/ce-images/optarena-ce-amd-mi300-v5-candidate.sqsh \
-   $SCRATCH/ce-images/optarena-ce-amd-mi300-v5.sqsh
+sbatch --export=ALL,IMAGE=$SCRATCH/ce-images/optarena-ce-amd-mi300-candidate.sqsh,\
+PROFILE=judge-agent-amd verify_image.sbatch     # 0 failures, nothing resolving outside
+mv $SCRATCH/ce-images/optarena-ce-amd-mi300-candidate.sqsh \
+   $SCRATCH/ce-images/optarena-ce-amd-mi300.sqsh    # move the .digest and .sha256 with it
+ALLOW_REPOINT=1 ./install_edfs.sh
 ```
+
+A rename is safe while arms are running: a mounted squashfs is held by its inode, so a job that
+already started keeps reading the bytes it opened. What is never safe is writing over the file in
+place, which is why build.sbatch refuses to when an EDF mounts it.
 
 ### Weights: iopsstor and striping (already done -- verify, do not redo)
 

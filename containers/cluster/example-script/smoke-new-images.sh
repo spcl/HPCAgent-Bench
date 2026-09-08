@@ -28,9 +28,9 @@ declare -A SMOKE=(
   [vllm-0271]="${SMOKES}/smoke-kimi-eager-pg.sbatch"
 )
 declare -A SQSH=(
-  [sglang]="${IMAGES}/optarena-sglang-v1.sqsh"
-  [vllm]="${IMAGES}/optarena-vllm-v1.sqsh"
-  [vllm-0271]="${IMAGES}/optarena-vllm-0271-v1.sqsh"
+  [sglang]="${IMAGES}/optarena-sglang-candidate.sqsh"
+  [vllm]="${IMAGES}/optarena-vllm-candidate.sqsh"
+  [vllm-0271]="${IMAGES}/optarena-vllm-0271-candidate.sqsh"
 )
 # What each engine is ACCEPTED on is the model the campaign actually serves from it: kimi on
 # sglang, gpt-oss on vLLM. Running kimi against a vLLM candidate measures a configuration we

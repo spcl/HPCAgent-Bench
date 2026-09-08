@@ -55,15 +55,16 @@ per-layer ceiling and drops the image config as well. The archive keeps the laye
 back the same layer count and the same `Env`.
 
 All four images share ONE repository, `docker.io/spcleth/hpcagent-bench`, so a tag names the
-ROLE as well as the version -- `ce-amd-mi300-v9`, `sglang-v2`, `vllm-v1`, `vllm-0271-v2`.
-`latest` is meaningless there: it would be whichever role was pushed last. images.env
-derives each tag from its .sqsh name so the two cannot drift.
+ROLE -- `ce-amd-mi300`, `sglang`, `vllm`, `vllm-0271`. There is one version per role, so those
+tags move with each rebuild; `latest` is meaningless here because it would be whichever role
+was pushed last. images.env derives each tag from its .sqsh name so the two cannot drift, and
+every push publishes a sha-<digest> tag beside the moving one. Cite the digest.
 
 Push during the build, when credentials are already to hand:
 
 ```bash
 REGISTRY_USER=<user> REGISTRY_TOKEN=<token> \
-  PUSH_REPO=docker.io/spcleth/hpcagent-bench PUSH_TAGS="ce-amd-mi300-v9" \
+  PUSH_REPO=docker.io/spcleth/hpcagent-bench PUSH_TAGS="ce-amd-mi300" \
   IMAGE_DIR=containers/cluster/ce-images/judge-agent-amd \
   sbatch containers/cluster/ce-images/judge-agent-amd/build.sbatch
 ```
@@ -73,7 +74,7 @@ Or later, from the archive, with no rebuild:
 ```bash
 REGISTRY_USER=<user> REGISTRY_TOKEN=<token> \
   PUSH_REPO=docker.io/spcleth/hpcagent-bench \
-  ./push_image.sh --from-archive $SCRATCH/ce-images/optarena-ce-amd-mi300-v9.oci.tar ce-amd-mi300-v9
+  ./push_image.sh --from-archive $SCRATCH/ce-images/optarena-ce-amd-mi300.oci.tar ce-amd-mi300
 ```
 
 **Run that on a compute node.** The archive loads into an isolated graphroot, which must be tmpfs:
