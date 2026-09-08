@@ -209,7 +209,8 @@ def framework_colors(points: Sequence[Point]) -> Dict[str, str]:
     """One stable hue per framework, from the palette every other report figure uses, so a
     framework keeps its colour across the whole report."""
     names = sorted({point.framework for point in points})
-    return {fw: plotting.PALETTE[i % len(plotting.PALETTE)] for i, fw in enumerate(names)}
+    # One global map, so a framework wears the same hue here as in the heatmap grid.
+    return plotting.framework_colors(names)
 
 
 def band_limits(band: str, changes: Sequence[float]) -> Tuple[float, float]:

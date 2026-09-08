@@ -35,11 +35,13 @@ stack.
 """
 
 import collections
+import logging
 import math
 import pathlib
 import re
 import sqlite3
-from typing import List, Optional, Sequence, Tuple
+import zlib
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import matplotlib
 import numpy as np
@@ -51,11 +53,13 @@ import matplotlib.pyplot as plt  # noqa: E402 -- must follow the backend setup
 from scipy.stats import norm  # noqa: E402
 from scipy.stats.mstats import gmean  # noqa: E402
 
-from hpcagent_bench import inference, stats  # noqa: E402
+from hpcagent_bench import inference, palette, stats  # noqa: E402
 from hpcagent_bench.harness import recording  # noqa: E402
 from hpcagent_bench.paths import PLOTS_DIR  # noqa: E402
 from hpcagent_bench.reporting_order import BY_DWARF, GroupSpan, order_rows, row_meta_for  # noqa: E402
 from hpcagent_bench.spec import select_short_names  # noqa: E402
+
+LOG = logging.getLogger(__name__)
 
 #: Seed for every per-cell bootstrap so the same DB yields the same published figure.
 CI_SEED: int = 0
@@ -64,24 +68,19 @@ CI_SEED: int = 0
 #: heatmap divides by it, so it has to survive :func:`load_results` under its own name.
 BASELINE: str = "numpy"
 
-#: Fixed categorical palette (colorblind-safe), one stable hue per framework slot; cycled if
-#: more frameworks than colors. A framework keeps its colour across every panel of the grid --
-#: and across every figure, which is why the speed-up chart (scripts/plot_speedup.py) reads it
-#: from here rather than picking its own.
-PALETTE: Tuple[str, ...] = (
-    "#2a78d6",
-    "#e07a2b",
-    "#1baf7a",
-    "#d64550",
-    "#7a5cc0",
-    "#b5892b",
-    "#4aada6",
-    "#c65b9b",
-    "#6b8f3a",
-    "#8a8a86",
-    "#3f6fb0",
-    "#c0522b",
-)
+#: Re-exported so existing callers keep working; :mod:`hpcagent_bench.palette` owns it, and
+#: :func:`framework_color` there is what makes a hue stick to a framework.
+PALETTE: Tuple[str, ...] = palette.PALETTE
+
+
+def framework_color(name: str) -> str:
+    """A framework's one colour. Thin alias -- :mod:`hpcagent_bench.palette` decides it."""
+    return palette.color("framework", name)
+
+
+def framework_colors(names) -> dict:
+    """``{framework: colour}`` for one figure, with palette.py's collision warning."""
+    return palette.colors("framework", names)
 
 
 def set_usetex(usetex: bool) -> None:
@@ -525,7 +524,7 @@ def distribution_figure(data: pd.DataFrame, kind: str, order: str, output: str, 
     ordered, _spans = _reorder_rows(kernels, order)
 
     slots = _framework_slots(data)  # FIXED slot per framework, shared by every panel
-    colors = {fw: PALETTE[i % len(PALETTE)] for i, fw in enumerate(slots)}
+    colors = framework_colors(slots)
     nslots = len(slots)
 
     nrows, ncols = _grid_shape(len(ordered))
