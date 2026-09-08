@@ -1055,18 +1055,68 @@ def _stdpar_link_for_block(block: Dict[str, Any]) -> Tuple[str, ...]:
 OPENMP_BASELINE_FLAGS: Tuple[str, ...] = ("-fopenmp=libomp", "-fopenmp=libgomp", "-fopenmp", "-qopenmp", "-mp")
 
 
-def openmp_link_for_block(block: Dict[str, Any], mode: Mode) -> Tuple[str, ...]:
+#: The runtime each OpenMP flag spelling links. A flag that NAMES its library settles the question;
+#: a bare one takes the driver's default, which is ``libomp`` for clang and ``libgomp`` for gcc --
+#: so both are probed and whichever that driver can place is the answer.
+OPENMP_RUNTIME_SONAMES: Dict[str, Tuple[str, ...]] = {
+    "-fopenmp=libomp": ("libomp.so",),
+    "-fopenmp=libgomp": ("libgomp.so",),
+}
+
+#: Directories ``ld.so`` searches unprompted. A runtime already in one needs no rpath.
+DEFAULT_LOADER_DIRS: Tuple[str, ...] = ("/lib", "/lib64", "/usr/lib", "/usr/lib64", "/usr/lib/x86_64-linux-gnu")
+
+
+@functools.lru_cache(maxsize=None, typed=True)
+def openmp_runtime_dir(cc: str, sonames: Tuple[str, ...]) -> str:
+    """Directory of the OpenMP runtime ``cc`` links, when ``ld.so`` cannot find it alone; ``""`` else.
+
+    LLVM 17 and later install ``libomp.so`` under a target-triple libdir
+    (``lib/x86_64-unknown-linux-gnu``) that no loader searches, and clang links it by absolute path
+    while writing NO RUNPATH. The .so builds clean and dies at ``dlopen`` with ``libomp.so: cannot
+    open shared object file`` -- measured here on spack clang 22.1.8, where it voided every graded
+    call of the four OpenMP-offload arms because their REFERENCE could not be loaded.
+
+    Asked of the driver rather than guessed: only the driver knows which of its libdirs holds the
+    runtime it just linked.
+    """
+    exe = resolve_compiler(cc) or cc
+    for soname in sonames:
+        try:
+            probe = subprocess.run(
+                [exe, f"-print-file-name={soname}"], capture_output=True, text=True, timeout=_STDPAR_PROBE_TIMEOUT_S
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return ""
+        answer = probe.stdout.strip()
+        # A driver that cannot place the name echoes it back bare, so only an absolute hit counts.
+        if not answer or not os.path.isabs(answer) or not os.path.exists(answer):
+            continue
+        parent = str(pathlib.Path(answer).resolve().parent)
+        return "" if parent in DEFAULT_LOADER_DIRS else parent
+    return ""
+
+
+def openmp_link_for_block(block: Dict[str, Any], mode: Mode, cc: Optional[str] = None) -> Tuple[str, ...]:
     """The OpenMP flag this block's link driver needs, or ``()`` when its baseline carries none.
 
     The link line never sees the compile baseline. gfortran turns a plain ``do concurrent`` into
     ``GOMP_parallel`` with no directive in the source, so 46 of 49 kernels built clean and died at
     ``dlopen``. Read off the resolved baseline, so a block cannot declare OpenMP only at compile.
+
+    The flag alone is not enough: it pulls the runtime in at LINK, and an rpath is what lets the
+    loader find that runtime again at ``dlopen`` (:func:`openmp_runtime_dir`). ``cc`` names the
+    driver actually running the link, which is the block's own only when no caller overrode it --
+    an offload leg links with ``amdclang`` and must rpath ROCm's runtime, not the block's.
     """
     baseline = _resolve_baseline(block, mode)
     tokens = shlex.split(baseline)
     for flag in OPENMP_BASELINE_FLAGS:
         if flag in tokens:
-            return (flag,)
+            runtime = openmp_runtime_dir(
+                cc or block["cc"], OPENMP_RUNTIME_SONAMES.get(flag, ("libomp.so", "libgomp.so"))
+            )
+            return (flag, f"-Wl,-rpath,{runtime}") if runtime else (flag,)
     return ()
 
 
@@ -1785,10 +1835,11 @@ def build_mpi_executable_commands(
 
     link_lang = link_lang_for(langs_present)
     _, link_block = _compiler_for_lang(compilers, link_lang, mpi=True)
-    link_subst = subst_map(cc_override.get(link_lang, link_block["cc"]), objs=" ".join(objs), exe=out_exe)
+    link_cc = cc_override.get(link_lang, link_block["cc"])
+    link_subst = subst_map(link_cc, objs=" ".join(objs), exe=out_exe)
     link_argv = _render_argv(link_block["link"], link_subst)
     link_argv.extend(link_block.get("link_extra") or [])
-    link_argv.extend(f for f in openmp_link_for_block(link_block, mode) if f not in link_argv)
+    link_argv.extend(f for f in openmp_link_for_block(link_block, mode, link_cc) if f not in link_argv)
     link_argv.extend(extra_link)  # -l/-L dependency tokens on the link step
     cmds.append(link_argv)
     return cmds
@@ -1890,7 +1941,7 @@ def build_shared_lib_commands(
     if link:
         link_argv = _render_argv(link, subst)
         link_argv.extend(block.get("link_extra") or [])
-        link_argv.extend(f for f in openmp_link_for_block(block, mode) if f not in link_argv)
+        link_argv.extend(f for f in openmp_link_for_block(block, mode, cc) if f not in link_argv)
         # The C++ <execution> policies (std::execution::par / par_unseq) dispatch into oneTBB in
         # libstdc++, and an unresolved TBB symbol is a link failure the agent cannot fix from the
         # source field. Appended for every C++ link so the task text can promise the policies work;
