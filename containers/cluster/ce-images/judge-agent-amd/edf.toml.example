@@ -20,7 +20,7 @@
 #
 # The image asserts both at build time (the GPU-aware MPI gate and the toolchain gate); this file
 # is what keeps them true at RUN time.
-image = "${SCRATCH}/ce-images/optarena-ce-amd-mi300-v8.sqsh"
+image = "${SCRATCH}/ce-images/optarena-ce-amd-mi300-v9.sqsh"
 mounts = [
     "/capstor/:/capstor/",
     "/iopsstor/:/iopsstor/",

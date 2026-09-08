@@ -849,6 +849,13 @@ RUN set -eux; \
 # The packaged entry point is kept beside the wrapper as .image rather than deleted, and it is a
 # WRAPPER rather than a PATH entry so the fix holds whatever PATH order a caller has.
 #
+# The wrapper also names PYTHONPATH. PYTHONSAFEPATH=1 -- set further down and in the EDF, so the
+# image's own dace wins over a CWD that holds one -- drops the script's directory from sys.path,
+# and the launcher imports rocprof_compute_base from beside itself. 628218 failed exactly there
+# with `No module named 'rocprof_compute_base'` while every other profiler passed. The version
+# check below therefore runs UNDER PYTHONSAFEPATH=1: without that it passes at build time, because
+# the ENV that breaks it is set later in this file, and the breakage only appears in a job.
+#
 # astunparse is read TOLERANTLY, because at this point in the file it is not installed yet: it
 # arrives as a dependency of the editable dace install further down, so a bare `import astunparse`
 # exits non-zero, and under `set -e` an assignment whose only command is that substitution takes
@@ -866,12 +873,12 @@ RUN set -eux; \
     /opt/rocprof-compute-venv/bin/pip install --no-cache-dir \
       "pandas==${ROCPROF_COMPUTE_PANDAS}" "numpy<2.3" -r "${rc}/requirements.txt"; \
     mv /opt/rocm/bin/rocprof-compute /opt/rocm/bin/rocprof-compute.image; \
-    printf '#!/bin/sh\nexec /opt/rocprof-compute-venv/bin/python %s/rocprof-compute "$@"\n' "${rc}" \
+    printf '#!/bin/sh\nexec env PYTHONPATH="%s${PYTHONPATH:+:$PYTHONPATH}" /opt/rocprof-compute-venv/bin/python %s/rocprof-compute "$@"\n' "${rc}" "${rc}" \
       > /opt/rocm/bin/rocprof-compute; \
     chmod +x /opt/rocm/bin/rocprof-compute; \
     /opt/rocprof-compute-venv/bin/python -c "import pandas, tabulate, plotext, dash; \
       assert pandas.__version__.split('.')[0] == '2', pandas.__version__"; \
-    rocprof-compute --version >/dev/null; \
+    PYTHONSAFEPATH=1 rocprof-compute --version >/dev/null; \
     test "$(python3 -c 'import numpy; print(numpy.__version__)')" = "${numpy_before}" \
       && test "$(python3 -c 'import pandas; print(pandas.__version__)')" = "${pandas_before}" \
       && test "$(python3 -c 'import astunparse; print(astunparse.__version__)' 2>/dev/null || echo absent)" = "${astunparse_before}" \
