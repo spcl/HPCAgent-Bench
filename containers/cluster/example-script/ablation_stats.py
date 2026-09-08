@@ -41,6 +41,7 @@ import csv
 import itertools
 import math
 import pathlib
+import random
 import sqlite3
 import statistics
 import sys
@@ -63,10 +64,40 @@ PAIR_COLUMNS = (
     "median_speedup_a",
     "median_speedup_b",
     "hl_log_ratio",
+    "rho_score",
+    "score_pct",
+    "score_ci_low_pct",
+    "score_ci_high_pct",
+    "score_median_delta",
+    "score_wins",
+    "score_losses",
+    "rho_cost",
+    "cost_pct",
+    "cost_ci_low_pct",
+    "cost_ci_high_pct",
+    "cost_median_delta",
+    "cost_wins",
+    "cost_losses",
+    "n_cost",
+    "efficacy_q",
+    "overall_effect",
     "n_used",
     "p_value",
     "q_value",
 )
+
+#: Resamples for the paired bootstrap interval, its confidence level, and the seed that makes it
+#: reproducible. FIXED seed: these bounds go in a paper, so the same DBs must give the same interval
+#: on a rerun. Mirrors hpcagent_bench.harness.efficacy, which is the definition of record --
+#: test_ablation_stats.py cross-checks the two, because this file cannot import it (see the module
+#: docstring: stdlib-only, it runs on a login node from a shell that has no venv).
+BOOTSTRAP_RESAMPLES = 10000
+CONFIDENCE = 0.95
+BOOTSTRAP_SEED = 20260908
+
+#: Weight of the score half of Q; the cost half is the remainder. Equal by default -- any other
+#: split is a claim about how a token trades against a speedup.
+SCORE_WEIGHT = 0.5
 
 
 def parse_arm(spec: str) -> tuple[str, str]:
@@ -153,6 +184,82 @@ def load_arm(name: str, path: str, dedup: str) -> tuple[dict[str, float], set[st
         return speedups, seen
     finally:
         conn.close()
+
+
+def load_arm_costs(name: str, path: str) -> dict[str, float]:
+    """One arm's ``benchmark -> total tokens``, the COST half of the efficacy pair.
+
+    ``calls.tokens`` is CUMULATIVE through a call, so an episode's spend is its own maximum and a
+    kernel's is the sum of its episodes' -- summing the rows would count every earlier call again,
+    once per later one, and inflate a long repair loop quadratically. A DB written before the calls
+    table, or one whose agent never reported tokens, yields an empty mapping and the pair simply
+    reports no cost half rather than a fabricated one.
+    """
+    conn = sqlite3.connect(f"file:{pathlib.Path(path).resolve()}?mode=ro", uri=True)
+    try:
+        if not table_exists(conn, "calls"):
+            print(f"{name}: no 'calls' table; the cost half of the efficacy is unavailable", file=sys.stderr)
+            return {}
+        rows = conn.execute(
+            "SELECT benchmark, SUM(spend) FROM ("
+            "  SELECT benchmark, run_id, MAX(tokens) AS spend FROM calls"
+            "  WHERE tokens IS NOT NULL GROUP BY benchmark, run_id"
+            ") GROUP BY benchmark"
+        ).fetchall()
+        return {str(bench): float(total) for bench, total in rows if total is not None and float(total) > 0}
+    finally:
+        conn.close()
+
+
+def geometric_mean(values: list[float]) -> float:
+    """Geometric mean of strictly positive values, in log space. ``nan`` on empty."""
+    if not values:
+        return float("nan")
+    return math.exp(math.fsum(math.log(v) for v in values) / len(values))
+
+
+def bootstrap_interval(deltas: list[float], seed: int = BOOTSTRAP_SEED) -> tuple[float, float]:
+    """Percentile bootstrap interval for ``mean(deltas)``, in LOG space.
+
+    Resampling the per-kernel ``d_i`` is what makes it paired: a kernel enters a resample with both
+    arms' numbers together, so the correlation between two answers to the same question is carried.
+    An interval covering zero reads as no effect. One observation has no spread and returns a
+    degenerate interval at its own value rather than a narrow one that pretends to bound something.
+    """
+    if not deltas:
+        return (float("nan"), float("nan"))
+    if len(deltas) == 1:
+        return (deltas[0], deltas[0])
+    rng = random.Random(seed)
+    n = len(deltas)
+    means = sorted(math.fsum(deltas[rng.randrange(n)] for _ in range(n)) / n for _ in range(BOOTSTRAP_RESAMPLES))
+    tail = (1.0 - CONFIDENCE) / 2.0
+    lo = means[max(0, min(len(means) - 1, int(math.floor(tail * len(means)))))]
+    hi = means[max(0, min(len(means) - 1, int(math.ceil((1.0 - tail) * len(means))) - 1))]
+    return (lo, hi)
+
+
+def ratio_columns(prefix: str, deltas: list[float]) -> dict[str, object]:
+    """The efficacy columns for one quantity, from its per-kernel log deltas.
+
+    ``d_i`` is oriented so positive always means the intervention HELPED, for a cost as for a score,
+    which is why one code path serves both. ``rho`` is ``exp(mean(d))`` -- the ratio of the two
+    geometric means -- and the median and the win/loss counts are the heavy-tail checks a mean of
+    logs cannot make on its own: one kernel that moved 40x can carry an arm whose others did not.
+    """
+    if not deltas:
+        return {f"{prefix}_{k}": "" for k in ("pct", "ci_low_pct", "ci_high_pct", "median_delta", "wins", "losses")}
+    log_rho = math.fsum(deltas) / len(deltas)
+    low, high = bootstrap_interval(deltas)
+    return {
+        f"rho_{prefix}": math.exp(log_rho),
+        f"{prefix}_pct": 100.0 * (math.exp(log_rho) - 1.0),
+        f"{prefix}_ci_low_pct": 100.0 * (math.exp(low) - 1.0),
+        f"{prefix}_ci_high_pct": 100.0 * (math.exp(high) - 1.0),
+        f"{prefix}_median_delta": statistics.median(deltas),
+        f"{prefix}_wins": sum(1 for d in deltas if d > 0),
+        f"{prefix}_losses": sum(1 for d in deltas if d < 0),
+    }
 
 
 def mcnemar_exact(only_a: int, only_b: int) -> float:
@@ -280,7 +387,14 @@ def benjamini_hochberg(pvalues: list[float]) -> list[float]:
 
 
 def pair_stats(
-    name_a: str, name_b: str, arm_a: dict[str, float], arm_b: dict[str, float], benchmarks: list[str], problems: int
+    name_a: str,
+    name_b: str,
+    arm_a: dict[str, float],
+    arm_b: dict[str, float],
+    benchmarks: list[str],
+    problems: int,
+    cost_a: dict[str, float] | None = None,
+    cost_b: dict[str, float] | None = None,
 ) -> list[dict[str, object]]:
     """The two test rows for one unordered arm pair.
 
@@ -295,6 +409,28 @@ def pair_stats(
 
     diffs = [math.log(arm_a[b]) - math.log(arm_b[b]) for b in both]
     n_used, wilcoxon_p = wilcoxon_signed_rank(diffs)
+
+    # The intervention view: arm_a is the AFTER arm, so a positive delta is a gain on both axes.
+    # Cost is differenced the other way round (before minus after) so that spending LESS reads as an
+    # improvement -- without the inversion every intervention that saved tokens would report as a
+    # regression. Paired on the kernels where both arms have a score AND both have a cost; a kernel
+    # only one arm reached is not two answers to the same question.
+    cost_a, cost_b = cost_a or {}, cost_b or {}
+    priced = [b for b in both if b in cost_a and b in cost_b]
+    cost_diffs = [math.log(cost_b[b]) - math.log(cost_a[b]) for b in priced]
+    score_on_priced = [math.log(arm_a[b]) - math.log(arm_b[b]) for b in priced]
+    efficacy = dict(ratio_columns("score", diffs), **ratio_columns("cost", cost_diffs))
+    if cost_diffs:
+        # Q is over the SAME kernels on both axes, or it would weight a speedup measured on forty
+        # kernels against a saving measured on three and call the sum one effect.
+        q = SCORE_WEIGHT * (math.fsum(score_on_priced) / len(score_on_priced)) + (1.0 - SCORE_WEIGHT) * (
+            math.fsum(cost_diffs) / len(cost_diffs)
+        )
+        efficacy.update({"efficacy_q": q, "overall_effect": math.exp(q)})
+    else:
+        efficacy.update({"efficacy_q": "", "overall_effect": ""})
+    efficacy["n_cost"] = len(priced)
+
     shared = {
         "arm_a": name_a,
         "arm_b": name_b,
@@ -305,6 +441,7 @@ def pair_stats(
         "median_speedup_a": statistics.median([arm_a[b] for b in both]) if both else "",
         "median_speedup_b": statistics.median([arm_b[b] for b in both]) if both else "",
         "hl_log_ratio": hodges_lehmann(diffs) if diffs else "",
+        **efficacy,
     }
     return [
         dict(shared, test="wilcoxon_logspeedup", n_used=n_used, p_value=wilcoxon_p),
@@ -352,9 +489,11 @@ def analyse(
     names = [name for name, _ in arm_specs]
     arms: dict[str, dict[str, float]] = {}
     universe: set[str] = set()
+    costs: dict[str, dict[str, float]] = {}
     for name, path in arm_specs:
         speedups, seen = load_arm(name, path, dedup)
         arms[name] = speedups
+        costs[name] = load_arm_costs(name, path)
         universe |= seen
     benchmarks = sorted(universe)
     # n_neither is problems MINUS the observed cells, so a denominator below the observed universe
@@ -369,7 +508,9 @@ def analyse(
 
     rows: list[dict[str, object]] = []
     for name_a, name_b in itertools.combinations(names, 2):
-        rows += pair_stats(name_a, name_b, arms[name_a], arms[name_b], benchmarks, problems)
+        rows += pair_stats(
+            name_a, name_b, arms[name_a], arms[name_b], benchmarks, problems, costs[name_a], costs[name_b]
+        )
 
     for family in ("wilcoxon_logspeedup", "mcnemar_success"):
         members = [row for row in rows if row["test"] == family]

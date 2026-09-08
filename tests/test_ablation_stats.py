@@ -570,3 +570,101 @@ def test_iteration_counts_orders_workers_numerically(iteration_counts, tmp_path)
 def test_iteration_counts_without_agents_dir_names_the_path(iteration_counts, tmp_path):
     with pytest.raises(SystemExit, match="agents"):
         iteration_counts.main([f"--run-dir={tmp_path}", f"--out={tmp_path / 'x.csv'}"])
+
+
+def seed_calls(path: pathlib.Path, rows: tuple[tuple[str, str, int, int], ...]) -> None:
+    """``(benchmark, run_id, round, cumulative_tokens)`` rows on the calls table."""
+    conn = recording.connect(str(path))
+    try:
+        for benchmark, run_id, round_index, tokens in rows:
+            conn.execute(
+                "INSERT OR REPLACE INTO benchmarks(name, track, kind, domain, dwarf, source) VALUES (?,?,?,?,?,?)",
+                (benchmark, "scientific_computing", "dense", "linalg", "dense_la", None),
+            )
+            conn.execute(
+                "INSERT INTO calls(run_id, ts, benchmark, preset, datatype, language, source_mode, "
+                "optimizer, round, tokens, speedup, correct) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (run_id, 1, benchmark, "S", "float64", "c", "restricted", "agent", round_index, tokens, 1.0, 1),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_a_kernels_cost_is_its_episode_peaks_summed_not_its_rows(ablation_stats, tmp_path):
+    """calls.tokens is CUMULATIVE through a call. Summing the rows counts every earlier call again
+    once per later one, so a long repair loop would price quadratically -- 100+250 reported as 350
+    for one episode is the whole point."""
+    db = tmp_path / "a.db"
+    seed_calls(db, (("k1", "r1", 1, 100), ("k1", "r1", 2, 250), ("k1", "r2", 1, 40), ("k2", "r1", 1, 7)))
+    costs = ablation_stats.load_arm_costs("a", str(db))
+    assert costs["k1"] == pytest.approx(290.0), "one episode's spend is its MAX, and episodes add"
+    assert costs["k2"] == pytest.approx(7.0)
+
+
+def test_a_db_with_no_calls_table_reports_no_cost_rather_than_zero(ablation_stats, tmp_path):
+    """A pre-calls DB has no cost evidence. Zero tokens would read as a free intervention."""
+    db = tmp_path / "b.db"
+    seed_db(db, [("k1", 1, 2.0)])
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute("DROP TABLE IF EXISTS calls")
+        conn.commit()
+    finally:
+        conn.close()
+    assert ablation_stats.load_arm_costs("b", str(db)) == {}
+
+
+def test_the_efficacy_matches_the_library_definition(ablation_stats):
+    """This file is deliberately stdlib-only and so cannot import hpcagent_bench.harness.efficacy,
+    which is the definition of record. The arithmetic is therefore duplicated, and duplication that
+    nothing compares is duplication that drifts -- so compare it."""
+    from hpcagent_bench.harness import efficacy as library
+
+    scores_a = {"k1": 2.0, "k2": 5.0, "k3": 0.5}
+    scores_b = {"k1": 1.0, "k2": 2.0, "k3": 2.0}
+    costs_a = {"k1": 50.0, "k2": 400.0, "k3": 90.0}
+    costs_b = {"k1": 100.0, "k2": 100.0, "k3": 30.0}
+
+    row = ablation_stats.pair_stats("after", "before", scores_a, scores_b, ["k1", "k2", "k3"], 3, costs_a, costs_b)[0]
+    reference = library.efficacy(scores_b, scores_a, costs_b, costs_a)
+
+    assert row["rho_score"] == pytest.approx(reference.score.rho)
+    assert row["rho_cost"] == pytest.approx(reference.cost.rho)
+    assert row["efficacy_q"] == pytest.approx(reference.q)
+    assert row["overall_effect"] == pytest.approx(reference.overall_effect)
+    assert row["score_pct"] == pytest.approx(reference.score.pct_change)
+    assert row["cost_pct"] == pytest.approx(reference.cost.pct_change)
+    assert row["score_wins"] == reference.score.wins and row["score_losses"] == reference.score.losses
+    assert row["cost_wins"] == reference.cost.wins and row["cost_losses"] == reference.cost.losses
+    assert row["score_median_delta"] == pytest.approx(reference.score.median_delta)
+    # The interval too: a bootstrap that drew a different resample sequence would still look
+    # plausible, so the seed and the percentile convention have to agree, not just the point.
+    assert row["score_ci_low_pct"] == pytest.approx(reference.score.ci_pct[0])
+    assert row["score_ci_high_pct"] == pytest.approx(reference.score.ci_pct[1])
+
+
+def test_spending_fewer_tokens_reads_as_an_improvement(ablation_stats):
+    """rho_C is inverted deliberately. Read the other way round, every intervention that saved
+    tokens would be reported as a regression."""
+    row = ablation_stats.pair_stats("after", "before", {"k": 1.0}, {"k": 1.0}, ["k"], 1, {"k": 50.0}, {"k": 100.0})[0]
+    assert row["rho_cost"] == pytest.approx(2.0)
+    assert row["cost_pct"] == pytest.approx(100.0)
+    assert row["efficacy_q"] > 0.0
+
+
+def test_a_pair_with_no_token_evidence_still_reports_its_speed_half(ablation_stats):
+    """The cost half going missing must not take the speed half with it, nor invent a Q from one
+    axis -- a blank says 'not measured', a number would say 'measured, and neutral'."""
+    row = ablation_stats.pair_stats("after", "before", {"k": 2.0}, {"k": 1.0}, ["k"], 1, {}, {})[0]
+    assert row["rho_score"] == pytest.approx(2.0)
+    assert row["efficacy_q"] == "" and row["overall_effect"] == ""
+    assert row["n_cost"] == 0
+
+
+def test_every_efficacy_column_reaches_the_csv(ablation_stats):
+    """A column computed and not written is a column nobody reads."""
+    row = ablation_stats.pair_stats("after", "before", {"k": 2.0}, {"k": 1.0}, ["k"], 1, {"k": 1.0}, {"k": 2.0})[0]
+    for column in ("rho_score", "rho_cost", "efficacy_q", "overall_effect", "n_cost", "score_wins", "cost_losses"):
+        assert column in ablation_stats.PAIR_COLUMNS, f"{column} is computed but never written"
+        assert column in row
