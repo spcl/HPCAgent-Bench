@@ -47,7 +47,12 @@ phase() {  # phase <lang> <gate ids or empty> -> prints job ids
     for model in oss120b qwen38 kimi27sglang; do
         for sfx in "" "-skills"; do
             env=".env.v11w2-${model}-${lang}${sfx}-w${WAVE}"
-            [[ -f "${env}" ]] || { echo "no env: ${env}" >&2; exit 2; }
+            # A COMPLETE arm has no wave file, because make_wave.py writes one only where the gap
+            # is non-empty. That is the normal end state, not a misconfiguration: by wave 5 seven
+            # of the twelve arms were at 40/40 and re-running them would re-measure kernels that
+            # already have a submission, which under last-submission-wins can only move a settled
+            # number. Absent -> skip and say so; a MALFORMED wave is still caught below.
+            [[ -f "${env}" ]] || { echo "  ${model}-${lang}${sfx}  complete, no gap -- skipped" >&2; continue; }
             list="$(sed -n 's/^PROBLEMS_FILE=//p' "${env}" | tail -1)"
             problems_fresh "${list}" || exit 2
             for kv in "AGENT_TIMEOUT_SECONDS=${AGENT_TIMEOUT_SECONDS}" "AGENT_MAX_TOKENS=${AGENT_MAX_TOKENS}"; do
@@ -60,7 +65,10 @@ phase() {  # phase <lang> <gate ids or empty> -> prints job ids
             ids+=("${jid}")
         done
     done
-    printf '%s\n' "${ids[@]}"
+    # An empty array under `set -u` is an error on bash < 4.4, and a phase whose arms are ALL
+    # complete legitimately submits nothing -- print no ids and let the next phase run ungated.
+    (( ${#ids[@]} )) && printf '%s\n' "${ids[@]}"
+    return 0
 }
 
 gate=""
@@ -68,5 +76,5 @@ LANGS_ORDERED=${LANGS_ORDERED:-"c fortran"}
 for lang in ${LANGS_ORDERED}; do
     echo "phase ${lang}${gate:+ -- after the previous phase}" >&2
     mapfile -t ids < <(phase "${lang}" "${gate}")
-    gate="$(IFS=:; echo "${ids[*]}")"
+    gate="$(IFS=:; echo "${ids[*]:-}")"
 done
