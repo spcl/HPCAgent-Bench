@@ -2344,6 +2344,85 @@ jobs:
           if-no-files-found: ignore
 
   # ===========================================================================================
+  # njit-oracle -- the numpy-vs-numba oracle comparison over the whole kernel registry.
+  #
+  # Its own runner for the same reason dace-numeric has one. tests/conftest.py registers
+  # `njit_oracle` as "one numba compile per kernel; minutes, not seconds", and its two sibling
+  # heavy markers were BOTH given this treatment -- `dace_numeric` its own job above,
+  # `torch_agreement` a phase on mpi -- while this one was in neither dedicated_tests.txt nor any
+  # phase. So its 667 cases ran inside the unit sweep, which is where shard 0's stall was: run
+  # 34203202925 raced to 31% in 53 seconds and then spent 11m19s on the 176 njit cases it reached
+  # before the run was cancelled, 3.86 s of wall each across the two workers `-n auto` gives this
+  # runner. The whole file at that rate is ~43 minutes, inside a 34-minute step that also owes
+  # 3200 other tests a verdict -- it could not fit and never did.
+  #
+  # This is a CORRECTNESS gate, not a smoke test: test.py compiles the `_numpy` reference in the
+  # ORACLE role for every kernel outside NJIT_INTERPRETED, so a kernel numba miscompiles hands
+  # every framework graded against that oracle a verdict nobody checked. Moving it off the sweep
+  # must not mean running it less, which is why it is a job and not a deletion.
+  # ===========================================================================================
+  njit-oracle:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
+    name: njit-oracle (the compiled numpy reference vs the interpreted one)
+    runs-on: ubuntu-latest
+    strategy:
+      # fail-fast: false -- the registry is ~670 independent kernels, and half a verdict is still
+      # a verdict. A shard that dies must not hide which kernels the other two graded.
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+    # ~43m for the whole file, projected from the 3.86 s/case measured above, so a third of it is
+    # ~15m and 25 leaves room for a slow runner and the setup. THREE, not two: the ceiling
+    # test_no_job_budgets_itself_past_the_container_ceiling enforces is 45 minutes, and two shards
+    # at ~22m each leave no room for the cold run that has to happen once. If a shard lands past
+    # ~20m, deal one more -- never deselect kernels to fit.
+    timeout-minutes: 25
+    env:
+      PYTEST_ADDOPTS: "--cov=hpcagent_bench --cov-append --cov-report="
+      # Read by tests/test_njit_reference.py::shard, which partitions ALL_MODULES round-robin.
+      # test_the_shards_partition_the_registry_rather_than_sampling_it pins that the three hands
+      # cover the registry, and test_the_matrix_runs_every_shard_it_deals_into that CI runs them.
+      HPCAGENT_BENCH_NJIT_SHARD: ${{ matrix.shard }}/3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/setup
+
+      - name: The compiled oracle still computes what the interpreter computes @ S
+        if: ${{ !cancelled() }}
+        # The WHOLE file, not `-m njit_oracle`. Pairing the marker with the path is the Phase 8b
+        # idiom, but it only holds while the file is also swept: dedicated_tests.txt now takes this
+        # one out of the discovery sweep, so a marker selection here would leave its unmarked tests
+        # -- the NJIT_INTERPRETED bookkeeping and the fp16 guard -- running in NO job at all. That
+        # is precisely the silent inertness test_a_dedicated_file_is_actually_run_by_some_phase
+        # exists to catch. They cost seconds beside the corpus sweep, so the file runs whole.
+        #
+        # No ccache, no build root, no PAPI: numba compiles in-process through llvmlite and this
+        # file reaches no C toolchain at all, so none of the unit job's build setup applies.
+        #
+        # --maxfail=20 so a registry-wide break reports twenty named kernels rather than hundreds,
+        # and -v because a step that dies on its cap prints no summary -- the same reason the unit
+        # sweep carries it, and the reason these failures went unnamed for as long as they did.
+        timeout-minutes: 20
+        run: |
+          python -m pytest -p no:cacheprovider -rfEs -n auto -v \
+            --maxfail=20 --durations=25 --timeout=900 tests/test_njit_reference.py
+
+      - name: Upload coverage data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-njit-oracle-${{ matrix.shard }}
+          path: .coverage*
+          include-hidden-files: true
+          if-no-files-found: ignore
+
+
+  # ===========================================================================================
   # ports-cegterg -- one port's oracle, on its own runner, because it is the only one of the
   # nineteen in tests/ports/ that costs hours rather than seconds.
   #
@@ -2538,7 +2617,8 @@ jobs:
     # percentage and stays green. dace-numeric and ports-cegterg split back out of mpi and
     # integration_translators out of integration on 2026-09-02, so all three are listed.
     needs: [unit, e2e-numba-jax, integration, integration_translators, translators, frameworks-pluto, e2e-native,
-            e2e-pythran, container-image, mpi, hf-export, dace-numeric, ports-cegterg, port-fidelity]
+            e2e-pythran, container-image, mpi, hf-export, dace-numeric, ports-cegterg, port-fidelity,
+            njit-oracle]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
