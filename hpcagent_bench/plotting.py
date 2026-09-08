@@ -37,10 +37,10 @@ stack.
 import collections
 import logging
 import math
+import os
 import pathlib
 import re
 import sqlite3
-import zlib
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import matplotlib
@@ -61,12 +61,24 @@ from hpcagent_bench.spec import select_short_names  # noqa: E402
 
 LOG = logging.getLogger(__name__)
 
+
+class NoBaselineRows(ValueError):
+    """A slice of the data holds no rows for the speed-up denominator, so it has no ratios."""
+
+
 #: Seed for every per-cell bootstrap so the same DB yields the same published figure.
 CI_SEED: int = 0
 
-#: The speedup denominator. Named here because it is not just another series: every ratio in the
+#: The speed-up denominator. Named here because it is not just another series: every ratio in the
 #: heatmap divides by it, so it has to survive :func:`load_results` under its own name.
-BASELINE: str = "numpy"
+#:
+#: Overridable because numpy is not always AVAILABLE as one. The llr-focus40 roster has a numpy XL
+#: row for 8 of its 40 kernels and a `cc` row for all 40 -- the references that carry a loop-carried
+#: dependence are Python loops, and at XL that is ~10^8 interpreted iterations, so those rows do not
+#: exist and will not. A heatmap of that roster against numpy is therefore not a thin heatmap, it is
+#: no heatmap at all. Set it with $HPCAGENT_BENCH_PLOT_BASELINE or the CLI's --baseline; the ratios
+#: then read "over cc" and the axis label says so.
+BASELINE: str = os.environ.get("HPCAGENT_BENCH_PLOT_BASELINE", "numpy").strip() or "numpy"
 
 #: Re-exported so existing callers keep working; :mod:`hpcagent_bench.palette` owns it, and
 #: :func:`framework_color` there is what makes a hue stick to a framework.
@@ -333,7 +345,17 @@ def plot_heatmap(
             f"datatype={datatype!r} variant={variant!r} db={db!r}. The DB has no "
             f"validated, domained rows matching that selection."
         )
-    return [heatmap_figure(rows, order, machine_output(output, label)) for label, rows in groups]
+    written = []
+    for label, rows in groups:
+        try:
+            written.append(heatmap_figure(rows, order, machine_output(output, label)))
+        except NoBaselineRows as exc:
+            # Named in the log rather than swallowed: a missing machine in the output is a fact
+            # about the data and the reader has to be able to find out which one and why.
+            LOG.warning("plotting: skipping machine %s -- %s", label, exc)
+    if not written:
+        raise NoBaselineRows(f"no machine in scope has {BASELINE} rows to divide by")
+    return written
 
 
 def heatmap_figure(data: pd.DataFrame, order: str, output: str) -> str:
@@ -347,9 +369,13 @@ def heatmap_figure(data: pd.DataFrame, order: str, output: str) -> str:
     best = summary[["benchmark", "domain", "framework", "time"]].copy()
 
     frmwrks = list(data["framework"].unique())
-    assert "numpy" in frmwrks
-    frmwrks.remove("numpy")
-    frmwrks.append("numpy")
+    # Raised, not asserted, and the CALLER decides: figures are emitted one per machine, and a
+    # machine that ran only one framework has nothing to divide by. That is a thin slice of the
+    # data, not a broken run, and it used to take the whole plot down with it.
+    if BASELINE not in frmwrks:
+        raise NoBaselineRows(f"no {BASELINE} rows to divide by; frameworks present: {sorted(frmwrks)}")
+    frmwrks.remove(BASELINE)
+    frmwrks.append(BASELINE)
     lfilter = ["benchmark", "domain"] + frmwrks
 
     # Wide form: normalise every framework's median to NumPy's; keep the raw times for the
@@ -358,7 +384,7 @@ def heatmap_figure(data: pd.DataFrame, order: str, output: str) -> str:
     best_wide = best_wide[lfilter].reset_index(drop=True)
     best_wide_time = best_wide.copy(deep=True)
     for f in frmwrks:
-        best_wide[f] = best_wide[f] / best_wide_time["numpy"]
+        best_wide[f] = best_wide[f] / best_wide_time[BASELINE]
 
     # Row ordering: reindex both the ratio and the raw-time frames identically.
     ordered_names, spans = _reorder_rows(best_wide["benchmark"].tolist(), order)
@@ -398,7 +424,7 @@ def heatmap_figure(data: pd.DataFrame, order: str, output: str) -> str:
             else:
                 ax2.text(j, 0, my_speedup_abbr(label), ha="center", va="center", color="white", fontsize=8)
         else:
-            label = overall_time_wide["numpy"].to_numpy()[0]
+            label = overall_time_wide[BASELINE].to_numpy()[0]
             ax2.text(j, 0, my_runtime_abbr(label), ha="center", va="center", color="white", fontsize=8)
 
     hm_data = best_wide.drop(["benchmark", "domain"], axis=1)
@@ -433,7 +459,7 @@ def heatmap_figure(data: pd.DataFrame, order: str, output: str) -> str:
                     else:
                         ax1.text(j, i, my_speedup_abbr(label) + ci, ha="center", va="center", color="white", fontsize=8)
             else:
-                label = best_wide_time["numpy"].to_numpy()[i]
+                label = best_wide_time[BASELINE].to_numpy()[i]
                 ax1.text(j, i, my_runtime_abbr(label), ha="center", va="center", color="black", fontsize=8)
 
     # Group separators + right-side y-axis group text (structured grids / tsvc2 / machine_learning / ...).
@@ -460,7 +486,7 @@ def _framework_slots(data: pd.DataFrame) -> List[str]:
     """The FULL framework set across the plotted scope, in a fixed slot order (numpy first as
     the reference, then alphabetical). Every panel reserves one slot per framework here, so a
     kernel missing a framework leaves an empty gap instead of re-packing the present ones."""
-    return sorted(data["framework"].unique(), key=lambda f: (f != "numpy", f))
+    return sorted(data["framework"].unique(), key=lambda f: (f != BASELINE, f))
 
 
 def plot_distribution_grid(
