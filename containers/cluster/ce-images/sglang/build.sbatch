@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the SGLang inference image on a compute node.
 #
-# Replaces a PULL plus two out-of-image steps: install-flydsl.sbatch, which built a --target prefix
+# Replaces a PULL plus two out-of-image steps: a flydsl install that built a --target prefix
 # on scratch that the arms reached through PYTHONPATH, and prebuild-aiter-jit.sbatch, whose whole
 # job was to warm a cache the image can simply carry. It asks for no GPUs, but the mi300 node exposes /dev/kfd anyway and
 # build.sh hands it to podman, so a RUN step sees gfx942 (measured, job 619976). It still proves
