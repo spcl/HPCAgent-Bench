@@ -54,11 +54,16 @@ per-layer ceiling and drops the image config as well. The archive keeps the laye
 -- verified by round-tripping a multi-layer image through one into a fresh graphroot and reading
 back the same layer count and the same `Env`.
 
+All four images share ONE repository, `docker.io/spcleth/hpcagent-bench`, so a tag names the
+ROLE as well as the version -- `ce-amd-mi300-v9`, `sglang-v2`, `vllm-v1`, `vllm-0271-v2`.
+`latest` is meaningless there: it would be whichever role was pushed last. images.env
+derives each tag from its .sqsh name so the two cannot drift.
+
 Push during the build, when credentials are already to hand:
 
 ```bash
 REGISTRY_USER=<user> REGISTRY_TOKEN=<token> \
-  PUSH_REPO=docker.io/<user>/optarena-judge-agent-amd PUSH_TAGS="v6 latest" \
+  PUSH_REPO=docker.io/spcleth/hpcagent-bench PUSH_TAGS="ce-amd-mi300-v9" \
   IMAGE_DIR=containers/cluster/ce-images/judge-agent-amd \
   sbatch containers/cluster/ce-images/judge-agent-amd/build.sbatch
 ```
@@ -67,8 +72,8 @@ Or later, from the archive, with no rebuild:
 
 ```bash
 REGISTRY_USER=<user> REGISTRY_TOKEN=<token> \
-  PUSH_REPO=docker.io/<user>/optarena-judge-agent-amd \
-  ./push_image.sh --from-archive $SCRATCH/ce-images/optarena-ce-amd-mi300-v6.oci.tar v6 latest
+  PUSH_REPO=docker.io/spcleth/hpcagent-bench \
+  ./push_image.sh --from-archive $SCRATCH/ce-images/optarena-ce-amd-mi300-v9.oci.tar ce-amd-mi300-v9
 ```
 
 **Run that on a compute node.** The archive loads into an isolated graphroot, which must be tmpfs:
@@ -79,7 +84,7 @@ the same requirement the build has.
 Pulling, straight to the squashfs the CE wants:
 
 ```bash
-REGISTRY_NAMESPACE=<user> ./pull_image.sh judge-agent-amd sha-<digest>
+./pull_image.sh judge-agent-amd sha-<digest>
 ```
 
 Also a compute node, and for the same reason: enroot unpacks every layer before writing the
