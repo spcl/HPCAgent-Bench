@@ -516,6 +516,20 @@ RUN set -eux; \
     clang -fopenmp --offload-arch="${ROCM_ARCH}" -c "${work}/off.c" -o "${work}/off.o"; \
     llvm-objdump --offloading "${work}/off.o" | grep -q amdgcn \
       || { echo "clang emitted no amdgcn offload bundle: OpenMP offload is not in this LLVM" >&2; exit 1; }; \
+    # COMPILING an offload object is not the same claim as LINKING one, and the gate used to stop
+    # at the object. MEASURED on this image: spack llvm 22.1.8 emits the amdgcn bundle above and
+    # then fails the link with "unable to find library -lompdevice" -- its +offload build ships no
+    # amdgcn device runtime (no libompdevice.a, no amdgcn-amd-amdhsa dir), while ROCm's does. The
+    # provenance line said offload was fine the whole time. So the gate links too, and records
+    # WHICH driver can actually produce an offload binary rather than asserting that both can.
+    llvm_links_offload=no; \
+    clang -fopenmp --offload-arch="${ROCM_ARCH}" "${work}/off.c" -o "${work}/off.llvm" \
+      2>"${work}/off.llvm.log" && llvm_links_offload=yes; \
+    amdclang -fopenmp --offload-arch="${ROCM_ARCH}" "${work}/off.c" -o "${work}/off.rocm" \
+      || { echo "amdclang cannot LINK an offload binary; every offload arm builds with it" >&2; \
+           exit 1; }; \
+    [ "${llvm_links_offload}" = yes ] \
+      || echo "note: spack llvm compiles but cannot link offload ($(tail -1 "${work}/off.llvm.log"))" >&2; \
     printf '%s\n' 'int main(void){ int s = 0;' '#pragma acc parallel loop reduction(+:s)' \
       '  for (int i = 0; i < 64; i++) s += i;' '  return s; }' > "${work}/acc.c"; \
     gcc -fopenacc -c "${work}/acc.c" -o "${work}/acc.o"; \
@@ -525,7 +539,7 @@ RUN set -eux; \
       "gcc $(gcc -dumpfullversion) $(readlink -f "$(command -v gcc)")" \
       "clang $(clang --version | head -1)" \
       "flang $(flang --version | head -1)" \
-      "openmp-offload amdgcn ok (llvm)" \
+      "openmp-offload amdgcn: compile ok (llvm), link ok (amdclang), llvm-link ${llvm_links_offload}" \
       "openacc host-only -- ${acc_targets}" \
       > /usr/local/share/toolchain-provenance; \
     cat /usr/local/share/toolchain-provenance; \
