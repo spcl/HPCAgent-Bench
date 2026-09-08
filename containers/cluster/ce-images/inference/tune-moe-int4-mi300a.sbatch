@@ -30,7 +30,7 @@ export HF_HOME="${HF_HOME:-${FAST_SCRATCH}/hf}"
 export MODEL_REPO="${MODEL_REPO:-moonshotai/Kimi-K2.7-Code}"
 export TP_SIZE="${TP_SIZE:-4}"
 
-INFERENCE_EDF="${INFERENCE_EDF:-rocm723-vllm-0.27.1-pytorch211-ofi}"
+INFERENCE_EDF="${INFERENCE_EDF:-vllm-0271-latest}"
 EXPECTED_JSON="${EXPECTED_JSON:-E=384,N=512,device_name=AMD_Instinct_MI300A,dtype=int4_w4a16.json}"
 
 mkdir -p "${RUN_DIR}"

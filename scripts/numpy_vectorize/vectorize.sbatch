@@ -44,8 +44,8 @@ export FAST_SCRATCH="/iopsstor/scratch/cscs/${USER}"
 export HF_HOME="${HF_HOME:-${FAST_SCRATCH}/hf}"
 export REPO="${HPCAGENT_BENCH_REPO:-${SCRATCH}/optarena}"
 
-INFERENCE_EDF="${INFERENCE_EDF:-rocm723-vllm-0.23.0-pytorch211-ofi}"
-AGENT_EDF="${AGENT_EDF:-optarena-amd-mi300-v4}"
+INFERENCE_EDF="${INFERENCE_EDF:-vllm-latest}"
+AGENT_EDF="${AGENT_EDF:-optarena-amd-mi300-latest}"
 
 export MODEL_REPO="${MODEL_REPO:-moonshotai/Kimi-K2.7-Code}"
 export SERVED_MODEL="${SERVED_MODEL:-optarena-vllm}"

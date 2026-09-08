@@ -68,7 +68,7 @@ rc=$?
 echo "=== self-containment: nothing may resolve outside the image ==="
 case "${PROFILE}" in
     sglang)  sc_modules="numpy,torch,sglang,flydsl,triton,cupy" ;;
-    vllm)    sc_modules="numpy,torch,vllm,triton" ;;
+    vllm|vllm-0271) sc_modules="numpy,torch,vllm,triton" ;;
     *)       sc_modules="" ;;   # judge-agent-amd: the checker's own default list
 esac
 srun --environment="${EDF}" python3 \

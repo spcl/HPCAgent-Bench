@@ -43,7 +43,7 @@ PLUGIN_DIR="${PLUGIN_DIR:-${SCRATCH}/ce-plugins/aws-ofi-nccl-rocm723/opt/aws-ofi
 # pass OPTARENA_REPO (or ALLREDUCE_PY outright), the same way build-agent-image.sbatch takes
 # AMD_DIR.
 ALLREDUCE_PY="${ALLREDUCE_PY:-${OPTARENA_REPO:?set OPTARENA_REPO (repo root) or ALLREDUCE_PY}/containers/cluster/ce-images/inference/beverin-rocm723-host-ofi-phase1/torch-dist-allreduce-mi300.py}"
-INFERENCE_EDF="${INFERENCE_EDF:-rocm723-vllm-0.27.1-pytorch211-ofi}"
+INFERENCE_EDF="${INFERENCE_EDF:-vllm-0271-latest}"
 
 MASTER_PORT="${MASTER_PORT:-$((20000 + SLURM_JOB_ID % 20000))}"
 SIZE_MB="${SIZE_MB:-256}"

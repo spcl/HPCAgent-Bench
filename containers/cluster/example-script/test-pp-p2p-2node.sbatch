@@ -51,7 +51,7 @@ RUN_DIR="${SCRATCH}/rccl-ofi/logs/${SLURM_JOB_ID}"
 # NOT dirname "${BASH_SOURCE[0]}": slurmd runs a spooled copy out of /var/spool, so that resolves to
 # a directory holding nothing but the script itself. SLURM_SUBMIT_DIR is where sbatch was invoked.
 PROBE_PY="${PROBE_PY:-${SLURM_SUBMIT_DIR:-.}/pp-p2p-probe.py}"
-INFERENCE_EDF="${INFERENCE_EDF:-rocm723-vllm-0.27.1-pytorch211-ofi}"
+INFERENCE_EDF="${INFERENCE_EDF:-vllm-0271-latest}"
 
 MASTER_PORT="${MASTER_PORT:-$((20000 + SLURM_JOB_ID % 20000))}"
 RANKS_PER_NODE="${RANKS_PER_NODE:-4}"

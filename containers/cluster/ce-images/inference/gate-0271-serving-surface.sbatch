@@ -40,7 +40,7 @@ INFERENCE_DIR="${INFERENCE_DIR:-${SCRATCH}/optarena/containers/cluster/ce-images
 test -d "${INFERENCE_DIR}/external-eager-pg-patch"
 test -d "${INFERENCE_DIR}/moe-configs"
 
-INFERENCE_EDF="${INFERENCE_EDF:-rocm723-vllm-0.27.1-pytorch211-ofi}"
+INFERENCE_EDF="${INFERENCE_EDF:-vllm-0271-latest}"
 # The exact word list the llr4 kimi arm serves with, plus the flags cluster_launch.py always
 # passes. Kept as one string so it can be diffed against the .env file it was copied from.
 CAMPAIGN_ARGS="${CAMPAIGN_ARGS:---host --port --tensor-parallel-size --pipeline-parallel-size --distributed-executor-backend --load-format --safetensors-load-strategy --generation-config --enable-auto-tool-choice --tool-call-parser --trust-remote-code --max-model-len --gpu-memory-utilization --reasoning-parser --max-num-seqs}"

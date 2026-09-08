@@ -6,7 +6,7 @@
 # code say whether every profiling instrument the skills point at can still answer.
 #
 #   sbatch scripts/submit_gpu_profiler_smoke.sbatch
-#   EDF=optarena-amd-mi300-v6 sbatch scripts/submit_gpu_profiler_smoke.sbatch
+#   EDF=optarena-amd-mi300-latest sbatch scripts/submit_gpu_profiler_smoke.sbatch
 #
 # The image is where this has to run: the instruments are the IMAGE's, and a bare-node run would
 # measure the host toolchain instead of the one an agent is handed.
@@ -28,7 +28,7 @@ set -euo pipefail
 # quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
 
-EDF="${EDF:-optarena-amd-mi300-v6}"
+EDF="${EDF:-optarena-amd-mi300-latest}"
 # NOT from BASH_SOURCE: sbatch runs a COPY of this file out of /var/spool/slurmd/scripts, so
 # dirname of it is the spool directory and every repo-relative path below resolves under it
 # -- "No such file or directory" naming a script that is plainly present in the checkout.

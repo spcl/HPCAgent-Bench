@@ -33,7 +33,7 @@ export MODEL_REPO="${MODEL_REPO:-moonshotai/Kimi-K2.7-Code}"
 export SERVED_MODEL="${SERVED_MODEL:-kimi-k27}"
 export API_PORT="${API_PORT:-8000}"
 export READY_TIMEOUT="${READY_TIMEOUT:-5400}"
-export EDF="${EDF:-${HOME}/.edf/sglang-rocm-mi30x.toml}"
+export EDF="${EDF:-${HOME}/.edf/sglang-latest.toml}"
 # 0.42, not the 0.8-0.9 this knob takes anywhere else: MI300A reports is_integrated, so SGLang
 # sizes the static budget against NODE-WIDE memory and every rank claims all of it. 0.93 read
 # as ~0.79 after the VLM derate and the serving step was OOM-killed at 58.5 GB RSS (620806,
