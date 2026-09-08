@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Run a callable in a forked child and SURFACE its failure (signal/traceback/timeout) instead of eating it."""
 
+import ctypes
 import multiprocessing
+import os
 import queue
 import signal
 import sys
@@ -67,7 +69,40 @@ def forked_failure_reason(r: RunResult) -> str:
     return r.signal or (r.error.strip().splitlines()[-1] if r.error else "unknown")
 
 
+#: ``prctl`` option number for PR_SET_PDEATHSIG (asm-generic, stable across Linux architectures).
+PR_SET_PDEATHSIG = 1
+
+
+def die_with_parent() -> None:
+    """Ask the kernel to SIGKILL this child when its parent dies. Linux only; best effort.
+
+    run_forked reaps its own child on every path it controls, but it cannot reap one when the
+    PARENT is what dies -- pytest-timeout's thread method calls os._exit on the worker, and a CI
+    step cap is a SIGKILL. The orphan then keeps every descriptor it inherited, and under pytest-
+    xdist one of those is the pipe execnet talks to the controller over: the controller's receiver
+    never sees EOF, xdist never reports the worker down, and the session waits on an empty queue
+    until the job's own cap kills it with nothing printed. Measured: a hanging test that leaves a
+    forked child alive wedges the whole session, the same test with no child left alive is named
+    and reported in 13.53 s.
+
+    A kernel child outliving the judge that forked it is the same bug wearing production clothes,
+    so this is not a test-only guard. The getppid check closes the race where the parent already
+    died before prctl ran, which the kernel would otherwise never signal us for.
+    """
+    if not osinfo.IS_LINUX:
+        return
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.prctl(PR_SET_PDEATHSIG, ctypes.c_ulong(signal.SIGKILL), 0, 0, 0) != 0:
+            return
+    except (OSError, AttributeError, ValueError):
+        return  # no prctl (musl, a sandbox, a non-Linux kernel claiming linux): keep the old behaviour
+    if os.getppid() == 1:  # reparented already, so the signal we just armed will never arrive
+        os._exit(0)
+
+
 def _child(fn, args, kwargs, q):
+    die_with_parent()
     # First act, before any work: this is what arms the parent's deadline (see run_forked).
     q.put(("started", None))
     try:
