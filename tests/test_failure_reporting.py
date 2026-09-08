@@ -9,6 +9,7 @@ from ``pytest_runtest_logreport`` instead; these pin that it lands EARLY rather 
 lands, which is the whole property.
 """
 
+import os
 import pathlib
 import subprocess
 import sys
@@ -26,12 +27,21 @@ def test_that_fails():
 
 
 def run_probe(tmp_path, *extra):
-    """Run one deliberately failing test with the repo's conftest loaded, and return its output."""
+    """Run one deliberately failing test with the repo's conftest loaded, and return its output.
+
+    PYTEST_ADDOPTS is dropped rather than inherited. CI sets it to ``--cov=hpcagent_bench
+    --cov-append`` at the job level, and a nested run that appends to the SAME coverage database as
+    the run that spawned it dies in coverage's own sqlite (``no such table: other_db.file``,
+    INTERNALERROR, run 34271219562) before pytest reaches the summary -- which is exactly the
+    ending this test measures, so the probe stopped measuring anything and said so.
+    """
     probe = tmp_path / "test_probe.py"
     probe.write_text(FAILING_TEST)
+    env = {k: v for k, v in os.environ.items() if k != "PYTEST_ADDOPTS"}
     finished = subprocess.run(
         [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-p", "tests.conftest", "-rfEs", str(probe), *extra],
         cwd=REPO_ROOT,
+        env=env,
         capture_output=True,
         text=True,
         timeout=300,

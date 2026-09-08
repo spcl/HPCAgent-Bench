@@ -2408,16 +2408,23 @@ jobs:
     # spread. The budget has to cover the body plus the per-test `--timeout=900` the step declares,
     # or a slow kernel kills the CONTAINER before pytest can time it out and name it.
     #
-    # 40 STILL DOES NOT FIT, and is deliberately left alone rather than raised again: this job's
-    # setup is not a budgetable constant. The `GNU Fortran matching the graded image` step alone
-    # cost 28s, 6m48s and 9m57s on the THREE SHARDS OF ONE RUN (Launchpad/apt, the same variance
-    # the pip cache showed at 3m05s vs 14m28s in 34214415167), so no number under the 45-minute
-    # ceiling test_no_job_budgets_itself_past_the_container_ceiling enforces makes a 30-minute body
-    # reliable. Budgeting around a test that fails anyway is the wrong move; `cloudsc`'s reason
-    # comes out of tests/conftest.py's early failure report, which survives the cap, and the
-    # decision it forces -- this job does not invoke a compiler at all, so the whole native
-    # toolchain is dead weight here -- is what to settle once that reason is known.
-    timeout-minutes: 40
+    # `cloudsc`'s reason came out of the early failure report, and it is
+    # `Failed: Timeout (>900.0s) from pytest-timeout` raised INSIDE numba's compile pass -- not a
+    # disagreement. Its compile STRADDLES the bound: 555.87s on run 34249654333 (passed) and over
+    # 900s on 34271219562 (killed), the same ~1.8x runner-speed swing every other measurement here
+    # shows. So the bound was the thing that was wrong, and 900 -> 1500 is sized from the slow
+    # side rather than the fast one. It is NOT an NJIT_INTERPRETED entry: that list is for
+    # references numba cannot compile, and using it for one that merely compiles slowly would
+    # retire the oracle this job exists to check while still reporting green.
+    #
+    # 45, the ceiling, because the arithmetic no longer fits under 40: shard 0's other 229 cases
+    # are 765s, so its worst body is 765 + 1500 = 2265s, i.e. 37m45s, and the step has to be able
+    # to outlive the per-test timeout it declares. Setup is ~1 minute typically and has been seen
+    # at 17 (Launchpad; see the integration_translators budget), so a stall and a slow cloudsc in
+    # the same container still will not fit -- if that combination shows up, redeal the shards
+    # rather than raising anything: more shards shrink the 765s that has to share the container
+    # with cloudsc, which is the only term sharding can move.
+    timeout-minutes: 45
     env:
       PYTEST_ADDOPTS: "--cov=hpcagent_bench --cov-append --cov-report="
       # Read by tests/test_njit_reference.py::shard, which partitions ALL_MODULES round-robin.
@@ -2449,13 +2456,13 @@ jobs:
         # and -v because a step that dies on its cap prints no summary -- the same reason the unit
         # sweep carries it, and the reason these failures went unnamed for as long as they did.
         #
-        # 32, not 20: the step must outlive the `--timeout=900` it sets, or the cap fires first and
-        # a slow kernel is reported as nothing rather than as a named timeout. ~7m of body plus one
-        # 15m test is 22, over the 20 this used to allow.
-        timeout-minutes: 32
+        # The step must outlive the `--timeout` it sets, or the cap fires first and a slow kernel is
+        # reported as nothing rather than as a named timeout. 765s of other cases plus one 1500s
+        # test is 37m45s, so 40 -- which the 45-minute job budget above still exceeds.
+        timeout-minutes: 40
         run: |
           python -m pytest -p no:cacheprovider -rfEs -n auto -v \
-            --maxfail=20 --durations=25 --timeout=900 tests/test_njit_reference.py
+            --maxfail=20 --durations=25 --timeout=1500 tests/test_njit_reference.py
 
       - name: Upload coverage data
         if: always()
