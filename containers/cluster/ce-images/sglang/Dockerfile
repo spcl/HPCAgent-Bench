@@ -339,17 +339,26 @@ for name in ("aiter.ops.rmsnorm", "aiter.ops.norm", "aiter.ops.gemm_op_a8w8", "a
 # time: module_rmsnorm_quant cost 74 s in 628158 and the sampling template ops another 77 s.
 # Measured in 628179, these calls build them here in 78 s total, and the sampling artefact hashes
 # match the ones the server asks for, so a serve is a cache hit rather than a near-miss.
+import os
+import pathlib
+
 import torch
 
 _dev = torch.device("cuda")
+_jit = pathlib.Path(os.environ["AITER_JIT_DIR"])
 
 
 def _prebuild(label, fn):
+    # Report the module each call produced. 628185 built four .so and still failed a gate that
+    # asked for module_rmsnorm_quant.so by name: the three images here carry different aiter
+    # builds and the names do not match across them.
+    before = {p.name for p in _jit.rglob("*.so")}
     try:
         fn()
-        print("prebuilt:", label, flush=True)
     except Exception as exc:
         print(f"skip {label}: {type(exc).__name__}: {exc}", flush=True)
+        return
+    print("prebuilt:", label, "->", sorted({p.name for p in _jit.rglob("*.so")} - before), flush=True)
 
 
 def _rms_norm():
@@ -383,19 +392,27 @@ def _top_k_renorm():
 
 # Signatures and deterministic=True come from the engine call site, so what is prebuilt is what
 # gets asked for. Each is guarded: an op a release does not carry must degrade to a runtime build.
-_prebuild("module_rmsnorm_quant", _rms_norm)
+_prebuild("rms_norm", _rms_norm)
 _prebuild("top_k_top_p_sampling_from_probs", _top_k_top_p)
 _prebuild("top_p_sampling_from_probs", _top_p)
 _prebuild("top_k_renorm_probs", _top_k_renorm)
 
+# The defect this step exists to catch, stated as the build's own assertion: an import-only
+# prebuild left module_aiter_core.so and nothing else, and the shell gate below cannot tell that
+# apart from a healthy image without naming a module.
+_ops = {p.name for p in _jit.rglob("*.so")} - {"module_aiter_core.so"}
+if not _ops:
+    raise SystemExit("aiter prebuild produced no op module beyond module_aiter_core")
+print("aiter op modules prebuilt:", sorted(_ops), flush=True)
+
 PY
-# A prebuild that produced nothing is the wedge with extra steps, so it fails the build. The
-# module_rmsnorm_quant check is what makes that real: module_aiter_core.so alone satisfied the old
-# `any .so` test, which is exactly how an import-only prebuild passed while building nothing.
+# The prebuild step above already fails the build if it produced no op module. What is left for
+# the shell is the AITER_ROOT_DIR pin: aiter's template ops default to $HOME/.aiter, so if the pin
+# does not hold, HOME grows a .aiter and the artefacts are outside the image.
 RUN set -eux; \
     find /opt/aiter-jit -name '*.so' | wc -l | xargs printf 'aiter prebuilt modules: %s\n'; \
-    test -f /opt/aiter-jit/module_rmsnorm_quant.so; \
-    test -n "$(find /opt/aiter-root/build -mindepth 1 -print -quit)"; \
+    find /opt/aiter-root -mindepth 1 -maxdepth 2 | head -20; \
+    test ! -e /tmp/aiter-home/.aiter; \
     rm -rf /tmp/aiter-home
 
 # The EDF's env, restated in the image so it is under the digest rather than only in ~/.edf.
