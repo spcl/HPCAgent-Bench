@@ -263,3 +263,6 @@ containers/cluster/example-script/results/
 containers/cluster/example-script/logs/
 containers/cluster/example-script/*.err
 containers/cluster/example-script/gap/
+
+# SQLite sidecars of the repo-root results DB (a run-benchmark invoked from here leaves them).
+hpcagent_bench.db-*
