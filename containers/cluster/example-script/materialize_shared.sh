@@ -142,7 +142,12 @@ if ! PYTHONPATH="${repo}:${repo}/hpcagent_bench/numpy_translators/src${PYTHONPAT
     echo "materialize_shared: could not regenerate build fragments; agents read the baked ones" >&2
 fi
 # Both submission policies: the prompt has a slot, and the arm picks which text fills it.
-for policy in submission-multi.md submission-single.md; do
+# EVERY submission-*.md, not a hardcoded pair. AGENT_SUBMISSION_POLICY_FILE names one of these
+# and agent_driver resolves it strictly under the shared mount -- resolve_shared_file has no
+# fallback to the checkout -- so a policy this loop does not know about is a FileNotFoundError
+# in every agent of the arm that asked for it, at launch, after the allocation is already held.
+# Adding submission-blind.md to the list would have fixed it once; globbing fixes the next one.
+for policy in $(cd "${repo}/containers/agent" && ls submission-*.md); do
     if [[ -f "${repo}/containers/agent/${policy}" ]]; then
         cp -f "${repo}/containers/agent/${policy}" "${shared}/${policy}"
     fi
