@@ -1171,13 +1171,16 @@ def _veclib_accepted(cc: str, flag: str, lang: str) -> bool:
 
 
 @functools.lru_cache(maxsize=None, typed=True)
-def _mimalloc_links(cc: str, tokens: Tuple[str, ...], env: Optional[Dict[str, str]]) -> bool:
-    """Can ``cc`` resolve ``tokens`` IN ``env``? Asked by LINKING, not by header presence -- the
-    failure being prevented is `cannot find -lmimalloc`, which only the linker can report.
+def _mimalloc_links(cc: str, tokens: Tuple[str, ...], offload: bool) -> bool:
+    """Can ``cc`` resolve ``tokens`` in the environment the BUILD will run in? Asked by LINKING, not
+    by header presence -- the failure being prevented is `cannot find -lmimalloc`, which only the
+    linker can report.
 
-    ``env`` is the environment the BUILD will run in, and passing it is the whole point. Probing in
-    the harness's own environment answered a question no build asks: an offload build runs under
-    :func:`toolchain_env`, which drops ``LIBRARY_PATH`` and with it the spack view that holds
+    ``offload`` selects that environment rather than the caller passing it, because this is cached
+    and a dict is not hashable -- and because deriving it from :func:`toolchain_env` here is what
+    keeps the probe's environment and :func:`run_build_commands`'s the same one. Probing in the
+    harness's own environment answered a question no build asks: an offload build runs under
+    ``toolchain_env``, which drops ``LIBRARY_PATH`` and with it the spack view that holds
     ``libmimalloc.so``, so the probe linked and the build then did not -- 26 of 130 build errors
     across the four offload arms, all of them `unable to find library -lmimalloc` out of
     ``clang-linker-wrapper``. The tokens are passed rather than assumed for the same reason: what
@@ -1190,7 +1193,7 @@ def _mimalloc_links(cc: str, tokens: Tuple[str, ...], env: Optional[Dict[str, st
             capture_output=True,
             text=True,
             timeout=_STDPAR_PROBE_TIMEOUT_S,
-            env=env,
+            env=toolchain_env() if offload else None,
         )
     except (OSError, subprocess.SubprocessError):
         return False
@@ -1223,13 +1226,10 @@ def _mimalloc_link_for_block(block: Dict[str, Any], cc: Optional[str] = None) ->
         lib = driver_library_dir(driver, ("libmimalloc.so",))
         if lib:
             tokens = (f"-L{lib}", *tokens)
-        env: Optional[Dict[str, str]] = toolchain_env()
-    else:
-        env = None
-    # Probed LAST, with the final tokens and the build's environment, so a driver that cannot
+    # Probed LAST, with the final tokens and the build's own environment, so a driver that cannot
     # resolve them drops the link instead of failing the build. Dropping is safe and the reason is
     # in :func:`mimalloc_link_flags`: the container preloads mimalloc process-wide anyway.
-    return tokens if _mimalloc_links(driver, tokens, env) else ()
+    return tokens if _mimalloc_links(driver, tokens, bool(offload_model())) else ()
 
 
 def mimalloc_link_flags(lang: str) -> Tuple[str, ...]:
