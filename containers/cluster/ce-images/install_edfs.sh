@@ -51,18 +51,29 @@ render() {
     printf '  %-32s -> %s\n' "${name}" "${image}"
 }
 
+# One missing image used to abort the whole run under set -e, so a promotion that had three of
+# four images installed nothing and left the fourth name unexplained. Each render is now reported
+# and the script exits non-zero at the end, so a partial install is visible rather than silent.
+failed=0
+try_render() { render "$@" || failed=$((failed + 1)); }
+
 echo "installing EDFs into ${EDF_DIR}"
-render "${JUDGE_AGENT_AMD_EDF}"        "${JUDGE_AGENT_AMD_TEMPLATE}" "${JUDGE_AGENT_AMD_SQSH}"
-render "${JUDGE_AGENT_AMD_EDF_LATEST}" "${JUDGE_AGENT_AMD_TEMPLATE}" "${JUDGE_AGENT_AMD_SQSH}"
+try_render "${JUDGE_AGENT_AMD_EDF}"        "${JUDGE_AGENT_AMD_TEMPLATE}" "${JUDGE_AGENT_AMD_SQSH}"
+try_render "${JUDGE_AGENT_AMD_EDF_LATEST}" "${JUDGE_AGENT_AMD_TEMPLATE}" "${JUDGE_AGENT_AMD_SQSH}"
 
 # The inference pair. Their -latest aliases exist for the same reason the judge one does: a
 # rebuild should be reachable by re-rendering, not by editing every campaign that names it. The
 # version-named EDFs are left exactly as they are, so a run that must not move does not.
-render "${INFERENCE_SGLANG_EDF_LATEST}" "${INFERENCE_SGLANG_TEMPLATE}" "${INFERENCE_SGLANG_SQSH}"
-render "${INFERENCE_VLLM_EDF_LATEST}"   "${INFERENCE_VLLM_TEMPLATE}"   "${INFERENCE_VLLM_SQSH}"
-render "${INFERENCE_VLLM_0271_EDF_LATEST}" "${INFERENCE_VLLM_0271_TEMPLATE}" "${INFERENCE_VLLM_0271_SQSH}"
+try_render "${INFERENCE_SGLANG_EDF_LATEST}" "${INFERENCE_SGLANG_TEMPLATE}" "${INFERENCE_SGLANG_SQSH}"
+try_render "${INFERENCE_VLLM_EDF_LATEST}"   "${INFERENCE_VLLM_TEMPLATE}"   "${INFERENCE_VLLM_SQSH}"
+try_render "${INFERENCE_VLLM_0271_EDF_LATEST}" "${INFERENCE_VLLM_0271_TEMPLATE}" "${INFERENCE_VLLM_0271_SQSH}"
 
 echo
+if [[ ${failed} -gt 0 ]]; then
+    echo "${failed} EDF(s) NOT installed -- the names above still point wherever they did" >&2
+fi
 echo "follow images.env:  AMD_CE_ENV=${JUDGE_AGENT_AMD_EDF_LATEST}"
 echo "                    INFERENCE_CE_ENV=${INFERENCE_SGLANG_EDF_LATEST} (or ${INFERENCE_VLLM_EDF_LATEST})"
 echo "pin this run:       AMD_CE_ENV=${JUDGE_AGENT_AMD_EDF}"
+
+exit $(( failed > 0 ))
