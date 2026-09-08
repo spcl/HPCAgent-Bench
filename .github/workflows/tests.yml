@@ -771,7 +771,8 @@ jobs:
   # reported "failed" with no verdict for either side. Nothing is deselected: the union of this
   # job's paths and `integration`'s is exactly the pair the single step used to name.
   #
-  # ONE leg over the whole tree, as of 2026-09-07. It was five -- the two whole-corpus sweeps
+  # THREE legs over the whole tree, as of 2026-09-08 -- the ABI corpus sweep on two registry
+  # shards plus `rest`. It was five -- the two whole-corpus sweeps
   # through the frontend lowering hotspot on a container each, halved AGAIN over the registry by
   # HPCAGENT_BENCH_TRANSLATOR_CORPUS_SHARD, plus a `rest` leg for the other 55 per-kernel tests:
   #   abi-fold    test_abi_argument_never_folded.py   1 test,  one corpus-wide lowering
@@ -784,11 +785,12 @@ jobs:
   # and 1.4 min of that is a container of its own. Whole, the lowering pass is paid ONCE instead
   # of once per leg, so 33.6 is an upper bound on the fused number rather than a projection.
   #
-  # The knobs stay. The leg still names its shard (``0/1``, the whole registry) and
-  # test_a_sharded_leg_runs_every_slice_it_splits_into still reads it, so re-splitting is a matrix
-  # edit and nothing else. What goes away with the split is the --ignore bookkeeping: one leg names
-  # the directory and ignores nothing, which is the partition -- there is no second leg for a file
-  # to fall between. test_the_translator_integration_legs_partition_the_tree holds either shape.
+  # Keeping the knobs is what made 34228549272 a matrix edit and nothing else, which is the whole
+  # reason they were kept: test_a_sharded_leg_runs_every_slice_it_splits_into groups the legs by
+  # (select, shard count) and so demands BOTH halves once one leg says ``/2``, and
+  # test_the_translator_integration_legs_partition_the_tree compares sets, so two legs naming one
+  # file still match the single --ignore that covers it. The --ignore bookkeeping stays minimal
+  # either way: one leg names the directory, and every file it ignores is named by some other leg.
   #
   # --timeout-method=thread, like the other half: the default arms SIGALRM and these tests fork,
   # so the signal never lands and a wedge costs the step cap instead of naming the test.
@@ -808,17 +810,24 @@ jobs:
       fail-fast: false
       matrix:
         leg:
-          # test_abi_corpus_agreement.py sweeps the WHOLE registry in one test again, and this
-          # time the timeout is sized for it. The halves measured 1054s and 536s on run
-          # 34122110084, so whole is ~1590s: it fits a container easily and always did -- what it
-          # did not fit was --timeout=1500, which bounds the TEST rather than the step, and that
-          # is what killed the fused leg on run 34097376180 with 58 of 59 tests never reported.
-          # The bound is 2100 s now, ~32% over the measured cost, and it stays BELOW the step cap
-          # so a wedge dumps the stack of the test that hung instead of dying nameless at the cap.
-          # Re-split into "0/2" + "1/2" legs the moment a run measures the sweep past ~1800 s;
-          # it grew 1224 -> 1590 s between 2026-09-06 and 2026-09-07 on a moving dace.
-          - id: abi-corpus
-            shard: "0/1"
+          # test_abi_corpus_agreement.py sweeps the whole registry, and it is BACK ON TWO SHARDS
+          # (halves measured 1054 s and 536 s on run 34122110084). Whole, at ~1590 s, it fit the
+          # container on typical setup and had done for three runs at 30-31 minutes -- what it
+          # does not fit is a container whose SETUP took 17m07s, which is what happened on run
+          # 34228549272. The pre-registered trigger here was "re-split past ~1800 s of sweep", and
+          # that trigger read the wrong number: the sweep never grew, the slack did. See the job
+          # budget below for the measurement.
+          #
+          # Halving the sweep buys 9 minutes of it back (a 26.5-minute body becomes 17.6), which
+          # is what carries a 17-minute setup stall: 3 + 17 + 17.6 fits 45 where 3 + 17 + 26.5 did
+          # not. The cost is ONE more container paying a setup that is ~1 minute in the ordinary
+          # case, and the shard knob and the two tests that police it were kept for exactly this.
+          - id: abi-corpus-0
+            shard: "0/2"
+            select: >-
+              hpcagent_bench/numpy_translators/tests/test_abi_corpus_agreement.py
+          - id: abi-corpus-1
+            shard: "1/2"
             select: >-
               hpcagent_bench/numpy_translators/tests/test_abi_corpus_agreement.py
           - id: rest
@@ -829,10 +838,20 @@ jobs:
             select: >-
               hpcagent_bench/numpy_translators/tests/
               --ignore=hpcagent_bench/numpy_translators/tests/test_abi_corpus_agreement.py
-    # Phase 6t (40) + setup, ~3 warm. TWO legs, down from three: the ABI corpus sweep is whole
-    # again at ~1590 s of a 40-minute step, which is the shape a 45-minute container budget is
-    # meant to buy -- two containers at 20 and 17 minutes rather than three at 20, 12 and 17,
-    # each paying its own ~2.5-minute setup.
+    # Phase 6t (25) + setup. 25 and not 40: a job budget must exceed the sum of its steps, and at
+    # 40 this one did not -- run 34228549272 died on the 45-minute JOB cap with 15 minutes of its
+    # own step budget still unspent, so the step cap never applied and the run named nothing.
+    #
+    # SETUP IS NOT THE ~3 MINUTES THE OLD NUMBER ASSUMED, and that assumption is what failed. The
+    # `GNU Fortran matching the graded image` step -- add-apt-repository against Launchpad, then
+    # the GCC pin -- took 32-81 s on the twelve OTHER jobs of that same run and 17m07s on this
+    # one, all of it spent downloading four packages from ppa.launchpadcontent.net at ~4 minutes
+    # each. The tail is rare rather than systemic (hence no deb cache: the repo is at 9.54 GB of
+    # its 10 GB Actions cache, so a new entry would be evicted before it paid for itself), but it
+    # is unbounded, so the leg has to hold slack for it rather than the budget assuming it away.
+    #
+    # 25 covers the larger half at 1054 s plus the --timeout=1300 a wedge is allowed to burn, and
+    # leaves 45 - 25 - 3 = 17 minutes of headroom for the setup tail.
     timeout-minutes: 45
     env:
       PYTEST_ADDOPTS: "--cov=hpcagent_bench --cov-append --cov-report="
@@ -885,11 +904,14 @@ jobs:
 
       - name: Phase 6t -- integration-marked tests under the translator tree
         if: ${{ !cancelled() }}
-        timeout-minutes: 40
+        timeout-minutes: 25
         env:
           HPCAGENT_BENCH_TRANSLATOR_CORPUS_SHARD: ${{ matrix.leg.shard }}
         run: |
-          python -m pytest -p no:cacheprovider -rfEs --timeout=2100 --timeout-method=thread --durations=25 \
+          # 1300 s, ~23% over the 1054 s the larger ABI half measured, and BELOW the step cap so a
+          # wedge dumps the stack of the test that hung instead of dying nameless at the cap. The
+          # `rest` leg's own sweep is ~708 s, well inside it.
+          python -m pytest -p no:cacheprovider -rfEs --timeout=1300 --timeout-method=thread --durations=25 \
             -m integration ${{ matrix.leg.select }}
 
       - name: ccache statistics
