@@ -382,8 +382,9 @@ PATCH
 # calls get_gfx_runtime(), which shells out to rocminfo and ignores GPU_ARCHS by design (its own
 # docstring says so). v0.1.13 used get_gfx() and read the env, which is why this step used to run
 # device-less. build.sh hands podman /dev/kfd; without it this step dies on `rocminfo returned
-# non-zero exit status 1`. A launch is still not issued here, so this proves the modules built,
-# not that they run.
+# non-zero exit status 1`. The op calls below DO issue launches, which is what builds the op
+# modules at all -- /dev/dri and the seccomp/keep-groups flags in build_common.sh are what
+# make that work, and the gate below fails the build if they ever stop working.
 #
 # AITER_JIT_DIR points INSIDE the image so a hit is a read off the squashfs. A miss still writes,
 # into the per-job CE overlay, so an op this prebuild did not cover degrades to today's cold-cache
@@ -421,8 +422,9 @@ RUN set -eux; \
     /opt/pytorch211/bin/python -c "import triton, triton.backends; \
       assert 'amd' in triton.backends.backends, sorted(triton.backends.backends)"
 
-ENV AITER_JIT_DIR=/opt/aiter-jit
-RUN mkdir -p /opt/aiter-jit /tmp/aiter-home
+ENV AITER_JIT_DIR=/opt/aiter-jit \
+    AITER_ROOT_DIR=/opt/aiter-root
+RUN mkdir -p /opt/aiter-jit /opt/aiter-root /tmp/aiter-home
 RUN HOME=/tmp/aiter-home /opt/pytorch211/bin/python <<'PY'
 import aiter
 
@@ -436,14 +438,73 @@ for name in ("aiter.ops.rmsnorm", "aiter.ops.norm", "aiter.ops.gemm_op_a8w8", "a
              "aiter.ops.pos_encoding", "aiter.fused_moe"):
     try:
         __import__(name)
-        print("built:", name, flush=True)
+        print("imported (a build still needs a call):", name, flush=True)
     except Exception as exc:
         print(f"skip {name}: {type(exc).__name__}: {exc}", flush=True)
+
+# Importing an op family does NOT build its kernel module. @compile_ops is lazy and builds on the
+# first CALL, so the loop above only ever produced module_aiter_core.so -- read back off the
+# deployed image, which carried exactly that one file. Every other module was still built at serve
+# time: module_rmsnorm_quant cost 74 s in 628158 and the sampling template ops another 77 s.
+# Measured in 628179, these calls build them here in 78 s total, and the sampling artefact hashes
+# match the ones the server asks for, so a serve is a cache hit rather than a near-miss.
+import torch
+
+_dev = torch.device("cuda")
+
+
+def _prebuild(label, fn):
+    try:
+        fn()
+        print("prebuilt:", label, flush=True)
+    except Exception as exc:
+        print(f"skip {label}: {type(exc).__name__}: {exc}", flush=True)
+
+
+def _rms_norm():
+    # 2-D, bf16, hidden <= 8192 is the case that dispatches to the hand-tuned HIP
+    # module_rmsnorm_quant; anything else takes the generic opus path and builds nothing.
+    x = torch.randn(4, 7168, dtype=torch.bfloat16, device=_dev)
+    w = torch.ones(7168, dtype=torch.bfloat16, device=_dev)
+    aiter.rms_norm(x, w, 1e-6)
+
+
+def _probs():
+    return torch.softmax(torch.randn(4, 1024, dtype=torch.float32, device=_dev), dim=-1).contiguous()
+
+
+def _top_k_top_p():
+    import aiter.ops.sampling  # noqa: F401
+    k = torch.full((4,), 50, dtype=torch.int32, device=_dev)
+    p = torch.full((4,), 0.9, dtype=torch.float32, device=_dev)
+    torch.ops.aiter.top_k_top_p_sampling_from_probs(_probs(), None, k, 0, p, 0.0, deterministic=True)
+
+
+def _top_p():
+    p = torch.full((4,), 0.9, dtype=torch.float32, device=_dev)
+    torch.ops.aiter.top_p_sampling_from_probs(_probs(), None, p, 0.0, deterministic=True)
+
+
+def _top_k_renorm():
+    k = torch.full((4,), 50, dtype=torch.int32, device=_dev)
+    torch.ops.aiter.top_k_renorm_probs(_probs(), k, 0)
+
+
+# Signatures and deterministic=True come from the engine call site, so what is prebuilt is what
+# gets asked for. Each is guarded: an op a release does not carry must degrade to a runtime build.
+_prebuild("module_rmsnorm_quant", _rms_norm)
+_prebuild("top_k_top_p_sampling_from_probs", _top_k_top_p)
+_prebuild("top_p_sampling_from_probs", _top_p)
+_prebuild("top_k_renorm_probs", _top_k_renorm)
+
 PY
-# A prebuild that produced nothing is the wedge with extra steps, so it fails the build.
+# A prebuild that produced nothing is the wedge with extra steps, so it fails the build. The
+# module_rmsnorm_quant check is what makes that real: module_aiter_core.so alone satisfied the old
+# `any .so` test, which is exactly how an import-only prebuild passed while building nothing.
 RUN set -eux; \
     find /opt/aiter-jit -name '*.so' | wc -l | xargs printf 'aiter prebuilt modules: %s\n'; \
-    test -n "$(find /opt/aiter-jit -name '*.so' -print -quit)"; \
+    test -f /opt/aiter-jit/module_rmsnorm_quant.so; \
+    test -n "$(find /opt/aiter-root/build -mindepth 1 -print -quit)"; \
     rm -rf /tmp/aiter-home
 
 # Tuned fused_moe Triton configs, keyed by (experts, N, device, dtype). Losing these once cost a

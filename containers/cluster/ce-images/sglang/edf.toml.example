@@ -31,6 +31,10 @@ TOKENIZERS_PARALLELISM = "false"
 # run_cluster.sh's ${AITER_JIT_DIR:-<scratch>} default wins -- which loads module_aiter_core
 # from a HOST directory and leaves the image's prebuilt copy unused (measured, job 628077).
 AITER_JIT_DIR = "/opt/aiter-jit"
+# aiter's TEMPLATE ops ignore AITER_JIT_DIR and default to $HOME/.aiter -- the one host path
+# the prebuild never closed. 628158 built three of them there at 77 s per serve. Pinned into
+# the image, 628179 confirms nothing lands in HOME and the artefact hashes match.
+AITER_ROOT_DIR = "/opt/aiter-root"
 
 LD_LIBRARY_PATH = "/opt/rocm/lib:/opt/rocm/lib64"
 PATH = "/usr/local/bin:/opt/rocm/bin:/usr/sbin:/usr/bin:/sbin:/bin"

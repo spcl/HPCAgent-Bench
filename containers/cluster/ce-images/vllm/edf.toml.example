@@ -55,3 +55,7 @@ FLASH_ATTENTION_TRITON_AMD_ENABLE = "TRUE"
 # from a HOST directory and leaves the image's prebuilt copy unused (measured, job 628077;
 # declaring it moved the load to /opt/aiter-jit in 628103).
 AITER_JIT_DIR = "/opt/aiter-jit"
+# aiter's TEMPLATE ops ignore AITER_JIT_DIR and default to $HOME/.aiter -- the one host path
+# the prebuild never closed. 628158 built three of them there at 77 s per serve. Pinned into
+# the image, 628179 confirms nothing lands in HOME and the artefact hashes match.
+AITER_ROOT_DIR = "/opt/aiter-root"
