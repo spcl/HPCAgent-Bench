@@ -911,7 +911,14 @@ jobs:
           # 1300 s, ~23% over the 1054 s the larger ABI half measured, and BELOW the step cap so a
           # wedge dumps the stack of the test that hung instead of dying nameless at the cap. The
           # `rest` leg's own sweep is ~708 s, well inside it.
-          python -m pytest -p no:cacheprovider -rfEs --timeout=1300 --timeout-method=thread --durations=25 \
+          #
+          # -v for the same reason the unit and njit sweeps carry it, and this leg has now earned
+          # it: on run 34228549272 it printed `collected 5 items / 2 deselected / 3 selected` and
+          # then nothing at all for 35 minutes until the job cap, so the log named neither which
+          # of the three it was in nor how far it had got. --durations only prints on a clean
+          # finish, and a cap is a SIGKILL. The cost is three lines on a leg whose whole point is
+          # that it runs for half an hour.
+          python -m pytest -p no:cacheprovider -rfEs -v --timeout=1300 --timeout-method=thread --durations=25 \
             -m integration ${{ matrix.leg.select }}
 
       - name: ccache statistics
