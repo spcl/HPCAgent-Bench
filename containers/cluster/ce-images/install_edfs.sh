@@ -3,8 +3,8 @@
 #
 # Two jobs, and the second is why this is a script rather than a paragraph in the README:
 #
-#   1. A default name. `optarena-amd-mi300-latest` resolves to whatever images.env calls latest,
-#      so a campaign stops hardcoding a version and a promotion is one edit instead of 169.
+#   1. A default name. `optarena-amd-mi300-latest` resolves to the one image images.env names for
+#      that role, so a campaign never spells a version and a promotion is a rename plus this.
 #   2. A fresh clone. ~/.edf is not in the repo, so a checkout on another account has no way to
 #      reach any image. Copying a teammate's EDF carries their absolute scratch path into your
 #      jobs; this renders yours from ${SCRATCH}.
@@ -22,8 +22,8 @@ CE_IMAGES="${CE_IMAGES:-${SCRATCH}/ce-images}"
 EDF_DIR="${EDF_DIR:-${HOME}/.edf}"
 mkdir -p "${EDF_DIR}"
 
-# Repointing latest changes which image every unpinned job gets, including one that is queued now
-# and starts in an hour. That is the one edit here worth being loud about, so it is opt-in.
+# Repointing changes which image every job gets, including one that is queued now and starts in
+# an hour. With one version per role there is no pinned run to fall back on, so it is opt-in.
 render() {
     local name="$1" template="$2" sqsh="$3" target="${EDF_DIR}/$1.toml" image="${CE_IMAGES}/$3"
 
@@ -58,7 +58,6 @@ failed=0
 try_render() { render "$@" || failed=$((failed + 1)); }
 
 echo "installing EDFs into ${EDF_DIR}"
-try_render "${JUDGE_AGENT_AMD_EDF}"        "${JUDGE_AGENT_AMD_TEMPLATE}" "${JUDGE_AGENT_AMD_SQSH}"
 try_render "${JUDGE_AGENT_AMD_EDF_LATEST}" "${JUDGE_AGENT_AMD_TEMPLATE}" "${JUDGE_AGENT_AMD_SQSH}"
 
 # The inference pair. Their -latest aliases exist for the same reason the judge one does: a
@@ -74,6 +73,7 @@ if [[ ${failed} -gt 0 ]]; then
 fi
 echo "follow images.env:  AMD_CE_ENV=${JUDGE_AGENT_AMD_EDF_LATEST}"
 echo "                    INFERENCE_CE_ENV=${INFERENCE_SGLANG_EDF_LATEST} (or ${INFERENCE_VLLM_EDF_LATEST})"
-echo "pin this run:       AMD_CE_ENV=${JUDGE_AGENT_AMD_EDF}"
+# Version-named EDFs from before one-version-per-role are LEFT ALONE: arms are running through
+# them and their images are still on disk. They are not re-rendered and not deleted here.
 
 exit $(( failed > 0 ))

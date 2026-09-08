@@ -38,7 +38,7 @@ test -x "${IMAGE_DIR}/build.sh"
 
 mkdir -p "${SCRATCH:?}/ce-images/logs"
 
-export OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?}/ce-images/optarena-judge-agent-amd.sqsh}"
+export OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?}/ce-images/optarena-ce-amd-mi300-candidate.sqsh}"
 
 # Refuse to write over an image some EDF points a running job at: overwriting a mounted squashfs
 # is how a live arm starts reading a half-written inode table. Ask the EDFs rather than hard-code
