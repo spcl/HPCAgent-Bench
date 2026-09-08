@@ -115,8 +115,8 @@ judge_upstream_port() { printf '%s\n' "$((JUDGE_PORT + 2 * ${1:-0} + 1))"; }
 JUDGE_UPSTREAM_PORT="$(judge_upstream_port 0)"
 JUDGE_UPSTREAM_READY_TIMEOUT_SECONDS="${JUDGE_UPSTREAM_READY_TIMEOUT_SECONDS:-300}"
 LITELLM_PORT="${LITELLM_PORT:-4000}"
-INFERENCE_CE_ENV="${INFERENCE_CE_ENV:-rocm723-vllm-0.23.0-pytorch211-ofi}"
-AMD_CE_ENV="${AMD_CE_ENV:-optarena-amd-mi300-v4}"
+INFERENCE_CE_ENV="${INFERENCE_CE_ENV:-vllm-latest}"
+AMD_CE_ENV="${AMD_CE_ENV:-optarena-amd-mi300-latest}"
 # Weights only. iopsstor reads 9.45 GB/s at 16 readers vs capstor 0.83 (job 593523), which is the
 # shape of a checkpoint load; build artefacts are small, many and written, and live on capstor
 # under JIT_CACHE_ROOT instead -- see run_vllm_node. iopsstor also purges at 14 days to capstor's 30.

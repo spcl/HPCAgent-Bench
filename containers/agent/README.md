@@ -102,7 +102,7 @@ and subagents. Web/search access should go through the `search` MCP tool only.
 After copying `.env` into the submit directory, the batch body can be one command:
 
 ```bash
-srun --environment=optarena-amd-mi300-v3 /opt/optarena-agent/start_run.sh
+srun --environment=optarena-amd-mi300-latest /opt/optarena-agent/start_run.sh
 ```
 
 or:

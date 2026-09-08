@@ -15,7 +15,7 @@ Run this on a compute node. The baseline flags carry ``-march=native``, so a log
 describes the login node's ISA and not the machine the campaign ran on.
 
     srun --partition=mi300 --nodes=1 --ntasks=1 --cpus-per-task=24 --time=00:30:00 \
-         --environment=optarena-amd-mi300-v5 python3 gen_opt_reports.py \
+         --environment=optarena-amd-mi300-latest python3 gen_opt_reports.py \
          --lowerings /path/to/reproducibility/llr40/lowerings \
          --index /path/to/reproducibility/llr40/opt_reports_index.csv
 """
