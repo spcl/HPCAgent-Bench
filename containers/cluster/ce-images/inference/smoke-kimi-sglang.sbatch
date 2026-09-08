@@ -44,6 +44,11 @@ export EDF="${EDF:-${HOME}/.edf/sglang-rocm-mi30x.toml}"
 # the campaign loads 171 GB of compressed-tensors weights per stage against 412 GB pre, a floor
 # of 0.415 that 0.42 just clears. At pp=2 each stage holds twice that and sglang refuses on the
 # spot -- "minimum viable = 0.7525" (621070). Raise the NODES, not this number.
+# 0.42 needs --cuda-graph-max-bs-decode in the launch args below to mean what it means in the
+# campaign. Without it sglang captures graphs for its default decode batch and the residual comes
+# out of KV: 628052 and its live-image control 628063 both died on an effective 0.357 against a
+# 0.3988 floor, at the campaign's own 4 nodes and pp=4. The cap is in every kimi SGLANG_EXTRA_ARGS;
+# the smoke had dropped it, so it was measuring a topology the campaign never serves.
 export MEM_FRACTION="${MEM_FRACTION:-0.42}"
 export CONTEXT_LEN="${CONTEXT_LEN:-65536}"
 export SWEEP_CONCURRENCY="${SWEEP_CONCURRENCY:-1 8 16}"
@@ -105,6 +110,7 @@ srun --nodes="${SLURM_NNODES}" --ntasks="${SLURM_NNODES}" --ntasks-per-node=1 --
     --mem-fraction-static "${MEM_FRACTION}" \
     --context-length "${CONTEXT_LEN}" \
     --max-running-requests 128 \
+    --cuda-graph-max-bs-decode 64 \
     --enable-metrics \
     --pre-warm-nccl \
     ${SGLANG_EXTRA_ARGS} \
