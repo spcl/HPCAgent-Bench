@@ -89,8 +89,14 @@ def db_files(run_dir: pathlib.Path) -> list[str]:
     return sorted(glob.glob(str(run_dir / "judge" / "rank-*" / "*.db")))
 
 
-def candidates(run_dir: pathlib.Path) -> list[dict[str, str]]:
-    """Kernels verified correct-and-faster with no submission, each with its last passing source."""
+def candidates(run_dir: pathlib.Path, only_run_id: str = "") -> list[dict[str, str]]:
+    """Kernels verified correct-and-faster with no submission, each with its last passing source.
+
+    ``only_run_id`` narrows every query to ONE worker, which is what the per-agent call needs: at
+    agent teardown the job still has hours of wall clock and this worker is the only candidate, so
+    the pass costs one submit instead of competing with 39 others for a 30-minute end-of-job
+    budget. Left empty, the whole run dir is scanned as before.
+    """
     submitted: set[str] = set()
     # Best verified worker PER KERNEL, not per (kernel, worker): several agents can be handed the
     # same kernel, and promoting each of their answers would submit the same kernel twice.
@@ -98,12 +104,21 @@ def candidates(run_dir: pathlib.Path) -> list[dict[str, str]]:
     for db in db_files(run_dir):
         con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
         try:
-            for (bench,) in con.execute("select benchmark from submissions"):
+            sub_sql = "select benchmark from submissions"
+            call_sql = "select benchmark, run_id, speedup from calls where correct = 1 and speedup > 1.0"
+            sub_args: tuple = ()
+            call_args: tuple = ()
+            if only_run_id:
+                # A worker owns ONE kernel, so scoping by run_id also scopes the "already
+                # submitted" set -- another worker's submission of the same kernel must not
+                # suppress this one's promotion, since the two are different data points.
+                sub_sql += " where run_id = ?"
+                call_sql += " and run_id = ?"
+                sub_args = call_args = (only_run_id,)
+            for (bench,) in con.execute(sub_sql, sub_args):
                 if bench:
                     submitted.add(bench)
-            for bench, run_id, speedup in con.execute(
-                "select benchmark, run_id, speedup from calls where correct = 1 and speedup > 1.0"
-            ):
+            for bench, run_id, speedup in con.execute(call_sql, call_args):
                 if not bench or not run_id:
                     continue
                 if bench not in best or speedup > best[bench][0]:
@@ -240,6 +255,26 @@ def promote(judge: str, item: dict[str, str], dry_run: bool, rank: int, timeout:
         return f"SUBMITTED speedup={graded.get('speedup', 0):.2f}x"
     verdict = "built but incorrect" if graded.get("build_ok") else "build failed"
     return f"not a submission -- {verdict}: {grade_detail(graded)}"
+
+
+def promote_one_worker(run_dir: pathlib.Path, judge: str, run_id: str, timeout: float = SUBMIT_TIMEOUT_S) -> str:
+    """Promote THIS worker's last correct score, at ITS teardown. Returns a short outcome word.
+
+    The end-of-job pass was the wrong place for this: it runs after the agents are gone, inside
+    whatever wall clock the allocation has left, and shares one budget across every candidate.
+    627129 hit exactly that -- three candidates, the first two spent the budget, and the third
+    ("fv3_dycore") was never attempted. Here there is one candidate, the judge is up and idle
+    enough, and the job has hours left.
+
+    Never raises: a promotion is bookkeeping and must not change the agent's recorded outcome.
+    """
+    try:
+        items = candidates(run_dir, only_run_id=run_id)
+        if not items:
+            return ""
+        return promote(judge, items[0], dry_run=False, rank=judge_rank(judge), timeout=timeout)
+    except (OSError, ValueError, sqlite3.Error, urllib.error.URLError) as exc:
+        return f"promote failed: {type(exc).__name__}"
 
 
 def main() -> int:
