@@ -85,7 +85,10 @@ srun --nodes="${SLURM_NNODES}" --ntasks="${SLURM_NNODES}" --ntasks-per-node=1 --
   export TRITON_CACHE_DIR='"${FAST_SCRATCH}"'/triton-cache-sglang
   # aiter builds into the read-only image by default; the mha_varlen build on the first request
   # outran the 300 s watchdog in 610164. Persist it, and the second run pays nothing.
-  export AITER_JIT_DIR='"${FAST_SCRATCH}"'/aiter-jit/sglang-rocm-mi30x
+  # An image that ships a prebuilt /opt/aiter-jit wins; older ones still fall back to
+  # persistent scratch, because aiter JIT-building into a read-only image is what blew the
+  # 300 s watchdog in 610164.
+  export AITER_JIT_DIR="${AITER_JIT_DIR:-'"${FAST_SCRATCH}"'/aiter-jit/sglang-rocm-mi30x}"
   mkdir -p "${TRITON_CACHE_DIR}" "${AITER_JIT_DIR}"
   exec /opt/venv/bin/python3 -m sglang.launch_server \
     --model-path "${MODEL_REPO}" \

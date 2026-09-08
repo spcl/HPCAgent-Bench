@@ -10,6 +10,10 @@ mounts = [
 ]
 
 workdir = "${SCRATCH}"
+# An in-image cache is only safe to name if a MISS has somewhere to go. Without this the
+# squashfs is read-only and an op the prebuild did not cover fails outright instead of
+# degrading to a cold build in the per-job CE overlay.
+writable = true
 
 [annotations]
 com.hooks.cxi.enabled = "true"
@@ -45,3 +49,9 @@ PATH = "/opt/pytorch211/bin:/opt/rocm/bin:/usr/local/sbin:/usr/local/bin:/usr/sb
 # and just reports the backend unavailable -- the exact 589001 "No valid MLA prefill backend"
 # failure, but with the package installed and looking fine.
 FLASH_ATTENTION_TRITON_AMD_ENABLE = "TRUE"
+# DECLARED, not inherited, for the same reason PATH is: the CE does not preserve the image's
+# own ENV, so the Dockerfile's ENV AITER_JIT_DIR=/opt/aiter-jit never arrives and
+# run_cluster.sh's ${AITER_JIT_DIR:-<scratch>} default wins -- which loads module_aiter_core
+# from a HOST directory and leaves the image's prebuilt copy unused (measured, job 628077;
+# declaring it moved the load to /opt/aiter-jit in 628103).
+AITER_JIT_DIR = "/opt/aiter-jit"

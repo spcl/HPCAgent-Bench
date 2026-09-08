@@ -16,12 +16,21 @@ mounts = [
 ]
 
 workdir = "${SCRATCH}"
+# An in-image cache is only safe to name if a MISS has somewhere to go. Without this the
+# squashfs is read-only and an op the prebuild did not cover fails outright instead of
+# degrading to a cold build in the per-job CE overlay.
+writable = true
 
 [env]
 HSA_ENABLE_IPC_MODE_LEGACY = "1"
 SAFETENSORS_FAST_GPU = "1"
 HIP_FORCE_DEV_KERNARG = "1"
 TOKENIZERS_PARALLELISM = "false"
+# DECLARED, not inherited, for the same reason PATH is: the CE does not preserve the image's
+# own ENV, so the Dockerfile's ENV AITER_JIT_DIR=/opt/aiter-jit never arrives and
+# run_cluster.sh's ${AITER_JIT_DIR:-<scratch>} default wins -- which loads module_aiter_core
+# from a HOST directory and leaves the image's prebuilt copy unused (measured, job 628077).
+AITER_JIT_DIR = "/opt/aiter-jit"
 
 LD_LIBRARY_PATH = "/opt/rocm/lib:/opt/rocm/lib64"
 PATH = "/usr/local/bin:/opt/rocm/bin:/usr/sbin:/usr/bin:/sbin:/bin"
