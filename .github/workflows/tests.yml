@@ -408,6 +408,15 @@ jobs:
         # re-shard rather than raise -- the job cannot go past 45. That trigger has now FIRED once
         # (run 34154693609, whole-list at NR % 1, killed at the cap on 47%) and the answer was the
         # modulus above, not this number.
+        #
+        # Thirded, run 34164900875 measured 1102 s on shard 2 and blew the cap on the other two --
+        # and the trigger above does NOT apply to them, because neither was slow. Shard 0 reached
+        # 31% in 53 seconds and then spent 22 minutes reaching 39%, with a worker gone at the end
+        # of it ("node down: Not properly terminated"); shard 1 reached 99% and sat there for
+        # 29m23s with zero failures and the 600 s per-test timeout never firing, which means no
+        # test was running to time out. Those are STALLS, and a stall is not divided by adding a
+        # shard: at shard 0's own un-stalled rate its whole list is about ten minutes of work.
+        # Re-shard for a budget a measurement grew past; do not re-shard for a run that stopped.
         # --durations names what it spends the time on, and no -q, because a step timeout prints
         # no summary: under -q the failures had no test names at all, so the log said only that
         # the budget had passed.
@@ -452,7 +461,15 @@ jobs:
           # of memory. loadgroup makes it deterministically 1 in both places; files without the
           # marker keep distributing per test, so this is inert for the other 198 (verified: an
           # unmarked file still spreads across all workers under loadgroup).
-          python -m pytest -p no:cacheprovider -rfEs -n auto --dist loadgroup --durations=25 \
+          #
+          # -v, and the log volume is the price of a diagnosis. Runs 34164900875 (shards 0 and 1)
+          # both died on the step cap and named NOTHING: the summary and --durations only print at
+          # the end, and the cap is a SIGKILL, so shard 0's 25 failures and the test shard 1 wedged
+          # on are all recorded as bare `F`s and dots. -v names each test as it is dispatched, so
+          # whatever the sweep is doing when the cap lands is the last line in the log. This is the
+          # same argument the -q ban above already makes -- it just has to survive a kill, not a
+          # clean finish, and that needs the name printed BEFORE the test rather than after.
+          python -m pytest -p no:cacheprovider -rfEs -n auto --dist loadgroup --durations=25 -v \
             --timeout=600 --timeout-method=thread $files
 
       # Hit rate is the whole point of the cache -- surface it so a regression to 0% is visible.
