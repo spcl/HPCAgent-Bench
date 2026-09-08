@@ -55,7 +55,7 @@ per-layer ceiling and drops the image config as well. The archive keeps the laye
 back the same layer count and the same `Env`.
 
 All four images share ONE repository, `docker.io/spcleth/hpcagent-bench`, so a tag names the
-ROLE -- `ce-amd-mi300`, `sglang`, `vllm`, `vllm-0271`. There is one version per role, so those
+ROLE -- `ce-amd-mi300`, `sglang`, `vllm`. There is one version per role, so those
 tags move with each rebuild; `latest` is meaningless here because it would be whichever role
 was pushed last. images.env derives each tag from its .sqsh name so the two cannot drift, and
 every push publishes a sha-<digest> tag beside the moving one. Cite the digest.

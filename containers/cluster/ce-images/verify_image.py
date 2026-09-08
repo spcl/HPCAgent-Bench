@@ -18,7 +18,7 @@ Exit status is the number of REQUIRED checks that failed, so a build gate can us
 Entries marked optional report but never fail: they mark a capability whose absence changes what
 an arm can be asked for, not whether the image is usable.
 
-    python3 verify_image.py [--profile judge-agent-amd|vllm|vllm-0271|sglang] [--verbose]
+    python3 verify_image.py [--profile judge-agent-amd|vllm|sglang] [--verbose]
 """
 
 from __future__ import annotations
@@ -180,9 +180,9 @@ def checks(profile: str) -> list[Check]:
         Check("rocm", "rocminfo", "exe", "rocminfo"),
         Check("rocm", "hipcc", "exe", "hipcc"),
     ]
-    # vllm-0271 is the same surface as vllm at a different engine version; the checks are
+    # the inference profiles share one surface; the checks are
     # version-agnostic, so it shares them rather than duplicating the list to drift from it.
-    if profile in ("vllm", "vllm-0271", "sglang"):
+    if profile in ("vllm", "sglang"):
         engine = "sglang" if profile == "sglang" else "vllm"
         return common + [
             Check("serving", engine, "py", engine),
@@ -324,7 +324,7 @@ def main() -> int:
     parser.add_argument(
         "--profile",
         default=os.environ.get("IMAGE_PROFILE", "judge-agent-amd"),
-        choices=("judge-agent-amd", "vllm", "vllm-0271", "sglang"),
+        choices=("judge-agent-amd", "vllm", "sglang"),
     )
     parser.add_argument("--verbose", action="store_true", help="print the evidence for a pass too")
     args = parser.parse_args()

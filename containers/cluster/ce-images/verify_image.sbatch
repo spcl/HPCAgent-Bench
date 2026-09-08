@@ -43,7 +43,7 @@ mkdir -p "$(dirname "${EDF}")"
 # an image that has them (job 627183). Each image has exactly one interpreter that matters.
 case "${PROFILE}" in
     sglang)          ce_path="/opt/venv/bin" ;;
-    vllm|vllm-0271)  ce_path="/opt/pytorch211/bin" ;;
+    vllm)            ce_path="/opt/pytorch211/bin" ;;
     *)               ce_path="/opt/gcc/bin:/opt/view/bin:/opt/papi/bin:/opt/venv/bin" ;;
 esac
 cat > "${EDF}" <<TOML
@@ -68,7 +68,7 @@ rc=$?
 echo "=== self-containment: nothing may resolve outside the image ==="
 case "${PROFILE}" in
     sglang)  sc_modules="numpy,torch,sglang,flydsl,triton,cupy" ;;
-    vllm|vllm-0271) sc_modules="numpy,torch,vllm,triton" ;;
+    vllm)    sc_modules="numpy,torch,vllm,triton" ;;
     *)       sc_modules="" ;;   # judge-agent-amd: the checker's own default list
 esac
 srun --environment="${EDF}" python3 \

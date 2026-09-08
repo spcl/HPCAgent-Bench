@@ -38,7 +38,7 @@ def drop_own_directory_from_path() -> None:
     """Take this script's own directory off sys.path before importing anything.
 
     THE CHECKER FOUND THIS ON ITSELF. Python puts the script's directory at sys.path[0], and this
-    script lives beside directories named `sglang`, `vllm` and `vllm-0271` -- so `import sglang`
+    script lives beside directories named `sglang` and `vllm` -- so `import sglang`
     resolved to the ce-images source tree as a namespace package and the gate reported an image
     that ships SGLang as depending on the host. Exactly the shadowing it exists to detect, which
     is precisely why it must not do it itself.

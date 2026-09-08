@@ -25,12 +25,10 @@ mkdir -p "${EDF_DIR}"
 declare -A SMOKE=(
   [sglang]="${SMOKES}/smoke-kimi-sglang.sbatch"
   [vllm]="${SMOKES}/smoke-kimi-eager-pg.sbatch"
-  [vllm-0271]="${SMOKES}/smoke-kimi-eager-pg.sbatch"
 )
 declare -A SQSH=(
   [sglang]="${IMAGES}/optarena-sglang-candidate.sqsh"
   [vllm]="${IMAGES}/optarena-vllm-candidate.sqsh"
-  [vllm-0271]="${IMAGES}/optarena-vllm-0271-candidate.sqsh"
 )
 # What each engine is ACCEPTED on is the model the campaign actually serves from it: kimi on
 # sglang, gpt-oss on vLLM. Running kimi against a vLLM candidate measures a configuration we
@@ -44,11 +42,11 @@ declare -A SQSH=(
 # clears it. At pp=2 each stage holds twice the weights and sglang refuses 0.42 outright
 # ("minimum viable = 0.7525", 621070). Accepting at pp=2 would have meant accepting a
 # fraction, a KV pool and a stage size the campaign never serves.
-declare -A NODES=([sglang]=4 [vllm]=1 [vllm-0271]=1)
-declare -A MODEL=([vllm]=openai/gpt-oss-120b [vllm-0271]=openai/gpt-oss-120b)
+declare -A NODES=([sglang]=4 [vllm]=1)
+declare -A MODEL=([vllm]=openai/gpt-oss-120b)
 
 candidates=("$@")
-[[ ${#candidates[@]} -eq 0 ]] && candidates=(sglang vllm vllm-0271)
+[[ ${#candidates[@]} -eq 0 ]] && candidates=(sglang vllm)
 for name in "${candidates[@]}"; do
   sqsh="${SQSH[${name}]:-}"
   smoke="${SMOKE[${name}]:-}"
@@ -78,7 +76,7 @@ for name in "${candidates[@]}"; do
     # venv and misses vllm entirely (627183).
     case "${name}" in
       sglang)          img_path="/opt/venv/bin" ;;
-      vllm|vllm-0271)  img_path="/opt/pytorch211/bin" ;;
+      vllm)            img_path="/opt/pytorch211/bin" ;;
       *)               img_path="/opt/venv/bin" ;;
     esac
     printf 'PATH = "%s:/opt/rocm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"\n' "${img_path}"

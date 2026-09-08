@@ -26,7 +26,7 @@ SCRATCH="${SCRATCH:-/capstor/scratch/cscs/ybudanaz/x86_64}"
 FAST_SCRATCH="/iopsstor/scratch/cscs/${USER}"
 [[ -d "${FAST_SCRATCH}" ]] || FAST_SCRATCH="${SCRATCH}"
 export HF_HOME="${HF_HOME:-${FAST_SCRATCH}/hf}"
-INFERENCE_EDF="${INFERENCE_EDF:-vllm-0271-latest}"
+INFERENCE_EDF="${INFERENCE_EDF:-vllm-latest}"
 # Same root and the same image key run_cluster.sh uses: capstor for build artefacts, and one
 # subtree per image because these .so files are built against one aiter/ROCm build and a rank
 # that loads a mismatched one fails late or silently. HOME goes with it -- aiter falls back to

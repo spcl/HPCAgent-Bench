@@ -184,12 +184,6 @@ cd containers/cluster/ce-images
 sbatch --partition=mi300 --export=ALL,IMAGE_DIR=$PWD/judge-agent-amd judge-agent-amd/build.sbatch
 sbatch --partition=mi300 --export=ALL,IMAGE_DIR=$PWD/sglang         sglang/build.sbatch
 sbatch --partition=mi300 --export=ALL,IMAGE_DIR=$PWD/vllm           vllm/build.sbatch
-sbatch --partition=mi300 --export=ALL,IMAGE_DIR=$PWD/vllm-0271      vllm-0271/build.sbatch
-
-# 0.27.1 serving-surface gate: serve-arg parity, tool/reasoning parser choices, the tuned-MoE
-# env var, and the internal API the pp collective split depends on. One node, ~2 minutes,
-# no weights. Run it BEFORE spending a 4-node hour on a decode gate.
-sbatch inference/gate-0271-serving-surface.sbatch
 ```
 
 `inference/build/` is the multi-phase chain that produced the upstream pulls these Dockerfiles
