@@ -56,6 +56,42 @@ export SWEEP_CONCURRENCY="${SWEEP_CONCURRENCY:-1 8 16}"
 # Acceptance runs pass the campaign's own knobs through here so a pass means the image serves what
 # the campaign serves, not what this recipe defaults to.
 export SGLANG_EXTRA_ARGS="${SGLANG_EXTRA_ARGS:-}"
+# Model-specific knobs. Defaults ARE the kimi recipe, so this file still serves kimi unchanged.
+# Both parsers must be named for any model: SGLang starts fine without them and then fails at the
+# FIRST request with a parser error, which reads as a serving bug rather than a launch one.
+export TOOL_PARSER="${TOOL_PARSER:-kimi_k2}"
+export REASONING_PARSER="${REASONING_PARSER:-kimi_k2}"
+# TP is per node; PP spans the allocation. GLM-5.3 (GlmMoeDsaForCausalLM, 755.7 GB of fp8 weights)
+# needs tp=4 x pp=4 over 4 nodes: at pp=2 the weights alone are 378 GB of the ~412 GB a node has
+# free pre-load, a 0.917 floor that leaves no KV pool at all.
+export TP_SIZE="${TP_SIZE:-4}"
+# --language-only is NOT a generic "text only" switch in this SGLang: it selects the VLM
+# ENCODER-DISAGGREGATION receiver role, and server_args._handle_encoder_disaggregation raises
+# outright for any architecture off its allowlist. GLM-5.3 (GlmMoeDsaForCausalLM) is text-only
+# to begin with, so it must pass EMPTY here -- 628586 died at launch on exactly this.
+# A 0/1 knob, NOT a string default: ${VAR:-default} substitutes on EMPTY as well as unset, so
+# passing LANGUAGE_ONLY_ARG="" silently reverted to --language-only and killed 628589 with the
+# same encoder-disaggregation error it had already killed 628586 with. 1 for VLM-capable models
+# (kimi), 0 for text-only ones (GLM-5.3).
+export LANGUAGE_ONLY="${LANGUAGE_ONLY:-1}"
+LANGUAGE_ONLY_ARG=""
+[ "${LANGUAGE_ONLY}" = "1" ] && LANGUAGE_ONLY_ARG="--language-only"
+export LANGUAGE_ONLY_ARG
+# fp8_e4m3 KV is the default because it is what every arm serves, but it is NOT free: an fp8
+# checkpoint ships no calibrated KV scales, so the engine quantizes at runtime against scale 1.0.
+# That is exactly the kind of damage the accuracy gate below exists to catch, so the dtype is a
+# knob and the fp8-vs-bf16 A/B is a rerun, not an edit.
+export KV_DTYPE="${KV_DTYPE:-fp8_e4m3}"
+# The gate asks over /v1/chat/completions, so a reasoning model spends its budget thinking before
+# it answers at all. 2048 covers GLM-5.3 at effort=max on the long legs; below ~512 it answers
+# nothing and the gate reports a corruption that is really a truncation.
+export GATE_MAX_TOKENS="${GATE_MAX_TOKENS:-2048}"
+# Empty omits the field entirely, which is what kimi wants. GLM-5.3 maps every unrecognised value
+# to max in its own chat template, so naming max here is a statement of intent, not a switch.
+export REASONING_EFFORT="${REASONING_EFFORT:-}"
+# Structured tool_calls and reasoning_content are contract, not throughput: the sweep SENDS tools
+# but only counts tokens, so a server answering with prose ABOUT the call scores as healthy.
+export VERIFY_SCRIPT="${VERIFY_SCRIPT:-${SLURM_SUBMIT_DIR:-.}/verify-tools-reasoning.py}"
 
 export MASTER="$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | head -n1)"
 echo "job:    ${SLURM_JOB_ID}"
@@ -79,7 +115,7 @@ SERVE_CPUS="${SERVE_CPUS:-${SLURM_CPUS_ON_NODE:-192}}"
 # the measurement contends with what it is measuring.
 CLIENT_CPUS="${CLIENT_CPUS:-24}"
 
-stage "serving tp=4 pp=2 across 2 nodes via sglang"
+stage "serving tp=${TP_SIZE} pp=${SLURM_NNODES} across ${SLURM_NNODES} nodes via sglang"
 srun --nodes="${SLURM_NNODES}" --ntasks="${SLURM_NNODES}" --ntasks-per-node=1 --exclusive --export=ALL \
     --cpus-per-task="${SERVE_CPUS}" --environment="${EDF}" bash -c '
   export SGLANG_USE_AITER=1
@@ -99,14 +135,14 @@ srun --nodes="${SLURM_NNODES}" --ntasks="${SLURM_NNODES}" --ntasks-per-node=1 --
     --model-path "${MODEL_REPO}" \
     --served-model-name "${SERVED_MODEL}" \
     --trust-remote-code \
-    --language-only \
+    ${LANGUAGE_ONLY_ARG} \
     --watchdog-timeout 1800 \
-    --tp-size 4 --pp-size '"${SLURM_NNODES}"' \
+    --tp-size '"${TP_SIZE}"' --pp-size '"${SLURM_NNODES}"' \
     --nnodes '"${SLURM_NNODES}"' --node-rank "${SLURM_PROCID}" \
     --dist-init-addr "'"${MASTER}"':29765" \
-    --kv-cache-dtype fp8_e4m3 \
+    --kv-cache-dtype '"${KV_DTYPE}"' \
     --page-size 64 \
-    --tool-call-parser kimi_k2 --reasoning-parser kimi_k2 \
+    --tool-call-parser '"${TOOL_PARSER}"' --reasoning-parser '"${REASONING_PARSER}"' \
     --mem-fraction-static "${MEM_FRACTION}" \
     --context-length "${CONTEXT_LEN}" \
     --max-running-requests 128 \
@@ -136,11 +172,24 @@ until curl -sf "http://${MASTER}:${API_PORT}/v1/models" -o "${RUN_DIR}/models.js
 done
 echo "ready: ${MASTER}"
 
+stage "tool-call + reasoning contract"
+if [[ -r "${VERIFY_SCRIPT}" ]]; then
+    cp "${VERIFY_SCRIPT}" "${RUN_DIR}/verify-tools-reasoning.py"
+    srun --overlap --nodes=1 --ntasks=1 --nodelist="${MASTER}" --export=ALL \
+        --cpus-per-task=4 --hint=nomultithread --environment="${EDF}" \
+        /opt/venv/bin/python3 "${RUN_DIR}/verify-tools-reasoning.py" \
+        --base "http://${MASTER}:${API_PORT}" --model "${SERVED_MODEL}" \
+        --reasoning-effort "${REASONING_EFFORT}" \
+        2>&1 | tee "${RUN_DIR}/verify-tools-reasoning.out"
+else
+    echo "SKIP: no verifier at ${VERIFY_SCRIPT}"
+fi
+
 stage "which kernels sglang actually picked"
 grep -aiE "aiter|attention backend|mla|kv cache dtype|page" "${RUN_DIR}/sglang-node0.log" | head -20 || true
 
 cat > "${RUN_DIR}/client.py" <<'PYEOF'
-import json, os, sys, threading, time, urllib.request
+import json, os, re, sys, threading, time, urllib.request
 
 HOST = os.environ['MASTER']
 PORT = os.environ.get('API_PORT', '8000')
@@ -158,31 +207,72 @@ def completion_text(prompt, max_tokens=32):
                                   'max_tokens': max_tokens, 'temperature': 0}) as r:
         return json.load(r)['choices'][0]['text']
 
+GATE_MAX_TOKENS = int(os.environ.get('GATE_MAX_TOKENS', '2048'))
+REASONING_EFFORT = os.environ.get('REASONING_EFFORT', '')
+
+# The gate has to ask the way the campaign asks. /v1/completions bypasses the chat template, so a
+# reasoning model never gets its thinking tags, and a 48-token budget then truncates mid-thought:
+# every ACC line GLM-5.3 produced (628603/628619) was a fragment of deliberation being scored as
+# an answer. Chat plus a real budget is the only shape that tells a corrupt kernel apart from a
+# truncated one.
+def chat_answer(prompt, max_tokens):
+    body = {'model': MODEL, 'temperature': 0, 'max_tokens': max_tokens,
+            'messages': [{'role': 'user', 'content': prompt}]}
+    if REASONING_EFFORT:
+        body['reasoning_effort'] = REASONING_EFFORT
+    with post('/v1/chat/completions', body) as r:
+        choice = json.load(r)['choices'][0]
+    msg = choice['message']
+    return (msg.get('content') or '', len(msg.get('reasoning_content') or ''),
+            choice.get('finish_reason') or '?')
+
+def last_int(text):
+    nums = re.findall(r'-?\d+', text)
+    return nums[-1] if nums else None
+
 # --- accuracy gate: long context is the only leg that discriminates (probe 604789 passed short)
 # varied long context: literal repetition creates an echo attractor at temp 0 that even a
 # correct backend falls into (604790 long-reason); varied text isolates real corruption
 LONG = ''.join(f'Step {i}: the kernel processes block {i} and accumulates partial sums '
                f'into buffer {i % 7}. ' for i in range(650))
+# Third field is the expected answer. A gate that only PRINTS is not a gate: 628603 served four
+# truncated fragments and still exited 0, so the wrong answer has to fail the job.
 gate = [
-    ('short-math', 'What is 17 * 23? Answer with only the number.'),
-    ('long-math', LONG + '\n\nIgnore the text above. What is 17 * 23? Answer with only the number.'),
+    ('short-math', 'What is 17 * 23? Answer with only the number.', '391'),
+    ('long-math', LONG + '\n\nIgnore the text above. What is 17 * 23? Answer with only the number.',
+     '391'),
     ('long-reason', LONG + '\n\nIgnore the text above. A farmer has 12 sheep and buys 3 more, then '
-                    'sells 5. How many sheep remain? Answer with only the number.'),
+                    'sells 5. How many sheep remain? Answer with only the number.', '10'),
     ('long-code', LONG + '\n\nIgnore the text above. Write a C function that sums a float array. '
-                  'Code only.'),
+                  'Code only.', None),
 ]
 # A request that raised is the engine failing, not a datum. 620806 OOM-killed its server mid-sweep
 # and this script still exited 0, so slurm recorded the job COMPLETED while nothing was served.
 FAILURES = []
 
 print('===== accuracy gate =====', flush=True)
-for tag, prompt in gate:
+for tag, prompt, expect in gate:
     try:
-        txt = completion_text(prompt, 48)
-        print(f'ACC {tag}: {txt.strip()[:160]!r}', flush=True)
+        txt, think, finish = chat_answer(prompt, GATE_MAX_TOKENS)
     except Exception as e:
         print(f'ACC {tag}: ERR {repr(e)[:120]}', flush=True)
         FAILURES.append(f'accuracy gate {tag} raised')
+        continue
+    if expect is None:
+        ok = bool(txt.strip())
+        why = '' if ok else 'empty answer'
+    else:
+        got = last_int(txt)
+        ok = got == expect
+        why = '' if ok else f'expected {expect}, got {got}'
+    # finish_reason=length means the budget ran out, which reads as a wrong answer but is not a
+    # kernel fault -- name it so a raised GATE_MAX_TOKENS is the obvious next move.
+    if not ok and finish == 'length':
+        why += ' (truncated: raise GATE_MAX_TOKENS)'
+    print(f'ACC {tag}: {"ok" if ok else "WRONG"} think={think}c finish={finish} '
+          f'answer={txt.strip()[:160]!r}', flush=True)
+    if not ok:
+        FAILURES.append(f'accuracy gate {tag}: {why}')
 
 # --- throughput: streamed completions at 10k-token prompts, per-request-distinct prefixes so
 # every request pays real prefill (the campaign's cache-cold shape is what killed the vLLM arm)

@@ -77,27 +77,80 @@ import aiter
 print("aiter loaded from", aiter.__file__, flush=True)
 print("jit dir:", os.environ.get("AITER_JIT_DIR"), flush=True)
 
-# Importing builds module_aiter_core. Touching the op families vLLM dispatches to builds the
-# rest -- each import is wrapped because coverage varies by aiter build and a missing symbol
-# must not abort the whole prebuild.
+# Importing an op module builds NOTHING: @compile_ops returns a wrapper that only calls
+# get_module() -- and therefore only builds -- when the op is INVOKED. The previous version of
+# this script imported ten families and made exactly one real call (rms_norm), so exactly one
+# family was ever prebuilt. Serving GLM-5.3 then JIT-built 13 modules x 4 ranks at run time,
+# ~15 min of a 24 min start, and waited on a build baton for module_custom_all_reduce.
+#
+# So: one real CALL per module. Arguments need not be semantically right -- the jit/core.py
+# wrapper is def wrapper(*args, custom_build_args=None, **kwargs) and reaches get_module()
+# before the args ever go to the C++ side, so a shape error still leaves the module built.
+# Each call is wrapped because op coverage varies across aiter builds and a missing symbol
+# must not abort the prebuild.
 d = torch.device("cuda")
-for name in ("aiter.ops.rmsnorm", "aiter.ops.norm", "aiter.ops.gemm_op_a8w8", "aiter.ops.moe_op",
-             "aiter.ops.mha", "aiter.ops.attention", "aiter.ops.rope", "aiter.ops.quant",
-             "aiter.ops.shuffle", "aiter.fused_moe"):
-    try:
-        __import__(name)
-        print("built/imported:", name, flush=True)
-    except Exception as exc:
-        print(f"skip {name}: {type(exc).__name__}: {exc}", flush=True)
+bf16, fp8 = torch.bfloat16, torch.float8_e4m3fnuz
 
-# A real rmsnorm call forces the kernel module rather than only the python wrapper.
-try:
-    x = torch.randn(4, 7168, dtype=torch.bfloat16, device=d)
-    w = torch.ones(7168, dtype=torch.bfloat16, device=d)
-    aiter.rms_norm(x, w, 1e-6)
-    print("rms_norm kernel built", flush=True)
-except Exception as exc:
-    print(f"skip rms_norm call: {type(exc).__name__}: {exc}", flush=True)
+
+def norm_call():
+    n = 7168
+    x = torch.randn(4, n, dtype=bf16, device=d)
+    aiter.layernorm2d_fwd_with_add(torch.empty_like(x), x, x.clone(), torch.empty_like(x),
+                                   torch.ones(n, dtype=bf16, device=d),
+                                   torch.zeros(n, dtype=bf16, device=d), 1e-6)
+
+
+def quant_call():
+    x = torch.randn(4, 7168, dtype=bf16, device=d)
+    aiter.dynamic_per_tensor_quant(torch.empty(x.shape, dtype=fp8, device=d), x,
+                                   torch.ones(1, dtype=torch.float32, device=d))
+
+
+def activation_call():
+    x = torch.randn(4, 2 * 7168, dtype=bf16, device=d)
+    aiter.silu_and_mul(torch.empty(4, 7168, dtype=bf16, device=d), x)
+
+
+def cache_call():
+    k = torch.randn(4, 8, 128, dtype=bf16, device=d)
+    kc = torch.zeros(64, 8, 128, 16, dtype=bf16, device=d)
+    aiter.reshape_and_cache(k, k.clone(), kc, kc.clone(),
+                            torch.arange(4, dtype=torch.int64, device=d), "auto")
+
+
+def moe_sum_call():
+    # topk MUST be one of 2/4/5: any other value takes a python-side torch.sum branch that
+    # never reaches the kernel, which would prebuild nothing while looking like it worked.
+    x = torch.randn(8, 4, 7168, dtype=bf16, device=d)
+    aiter.moe_sum(x, torch.empty(8, 7168, dtype=bf16, device=d))
+
+
+def sample_call():
+    logits = torch.randn(4, 1024, dtype=torch.float32, device=d)
+    aiter.greedy_sample(torch.empty(4, dtype=torch.int64, device=d), logits)
+
+
+CALLS = (
+    ("module_norm", norm_call),
+    ("module_quant", quant_call),
+    ("module_activation", activation_call),
+    ("module_cache", cache_call),
+    ("module_moe_asm", moe_sum_call),
+    ("module_sample", sample_call),
+    ("module_gemm_common", lambda: aiter.get_padded_m(128, 7168, 7168, 1)),
+    ("module_moe_sorting_opus", lambda: aiter.moe_sorting_opus_get_workspace_size(128, 256, 8)),
+    ("module_rmsnorm", lambda: aiter.rms_norm(torch.randn(4, 7168, dtype=bf16, device=d),
+                                              torch.ones(7168, dtype=bf16, device=d), 1e-6)),
+)
+
+for md, fn in CALLS:
+    try:
+        fn()
+        print("called:", md, flush=True)
+    except Exception as exc:
+        # A raise here is expected for shape/dtype mismatches and is harmless: the module is
+        # already built by the time the C++ side sees the arguments.
+        print(f"called (raised, module still built) {md}: {type(exc).__name__}: {exc}", flush=True)
 PY
 
     echo "=== after ==="; ls -1 "${AITER_JIT_DIR}" | wc -l; ls -1 "${AITER_JIT_DIR}" | head -20

@@ -206,7 +206,13 @@ ENV FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE
 # fmha_v3_varlen_fwd invalid arg) and both qwen38 legs of 610203/610204. Every oss120b arm that
 # has ever finished ran with it off. run_cluster.sh reads it as ${VLLM_ROCM_USE_AITER:-0}, so this
 # value stands unless an env file overrides it -- which is the intended way to retry aiter.
-ENV VLLM_ROCM_USE_AITER=0
+#
+# It is an ARG so a candidate image can DECLARE the opposite without forking this file. The
+# GLM-5.3 candidate needs 1: the vLLM MI300X recipe for GlmMoeDsaForCausalLM serves with
+# VLLM_ROCM_USE_AITER=1 and --linear-backend aiter --moe-backend aiter, so an image that hard-
+# codes 0 cannot run it. Default stays 0, so optarena-vllm.sqsh rebuilds byte-identical.
+ARG VLLM_ROCM_AITER_SWITCH=0
+ENV VLLM_ROCM_USE_AITER=${VLLM_ROCM_AITER_SWITCH}
 
 COPY --from=ofi-builder /opt/aws-ofi-nccl /opt/aws-ofi-nccl
 
@@ -502,6 +508,7 @@ COPY containers/cluster/ce-images/inference/external-eager-pg-patch/sitecustomiz
 RUN /opt/pytorch211/bin/python <<'PY'
 import importlib
 import importlib.metadata as md
+import os
 import sys
 
 for pkg, want in (("torch", "2.11.0+rocm7.2"), ("torchvision", "0.26.0+rocm7.2"),
@@ -554,7 +561,9 @@ from vllm.v1.attention.backends.fa_utils import is_flash_attn_varlen_func_availa
 assert is_flash_attn_varlen_func_available(), "vLLM still reports flash-attn unavailable"
 
 import vllm.envs as envs
-assert not envs.VLLM_ROCM_USE_AITER, "the aiter master switch is on in the image"
+_want_aiter = os.environ.get("VLLM_ROCM_USE_AITER", "0") == "1"
+assert bool(envs.VLLM_ROCM_USE_AITER) == _want_aiter, (
+    f"aiter master switch is {envs.VLLM_ROCM_USE_AITER}, image declared {_want_aiter}")
 from vllm._aiter_ops import is_aiter_found
 assert is_aiter_found(), "vLLM does not find the aiter package"
 

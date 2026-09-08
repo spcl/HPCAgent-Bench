@@ -35,9 +35,16 @@ ce_gpu_args
 
 ce_cache_base_image
 
+# Pass-through for the ARGs a CANDIDATE image varies: VLLM_VERSION, AITER_REF and
+# VLLM_ROCM_AITER_SWITCH. Empty by default, so the live optarena-vllm.sqsh build is unchanged.
+#   EXTRA_BUILD_ARGS="VLLM_VERSION=0.28.0 VLLM_ROCM_AITER_SWITCH=1" ./build.sh
+EXTRA_ARGS=()
+for kv in ${EXTRA_BUILD_ARGS:-}; do EXTRA_ARGS+=(--build-arg "${kv}"); done
+
 podman --cgroup-manager=cgroupfs build "${MIRROR_ARGS[@]}" "${GPU_ARGS[@]}" \
   --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
   --build-arg "BASE_IMAGE_REF=${BASE_IMAGE_REF:-${BASE_IMAGE}}" \
+  ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} \
   -f "${SCRIPT_DIR}/Dockerfile" \
   -t "${IMAGE_TAG}" \
   .
