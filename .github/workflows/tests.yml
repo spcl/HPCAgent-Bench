@@ -2371,12 +2371,17 @@ jobs:
       fail-fast: false
       matrix:
         shard: [0, 1, 2]
-    # ~43m for the whole file, projected from the 3.86 s/case measured above, so a third of it is
-    # ~15m and 25 leaves room for a slow runner and the setup. THREE, not two: the ceiling
-    # test_no_job_budgets_itself_past_the_container_ceiling enforces is 45 minutes, and two shards
-    # at ~22m each leave no room for the cold run that has to happen once. If a shard lands past
-    # ~20m, deal one more -- never deselect kernels to fit.
-    timeout-minutes: 25
+    # THREE shards, and the budget below is set by the SLOWEST KERNEL rather than by the average.
+    # Run 34214415167 measured shards 1 and 2 at 4m08s and 6m29s for 220 cases each, while shard 0
+    # spent 3m15s on its first 110 and then over 7m21s inside a single one, `cloudsc` -- 2092 lines
+    # of numpy, the largest reference in the registry, and numba compiles it whole. Dealing a fourth
+    # shard does not divide that: one kernel lands in one shard, so the cost is concentrated, not
+    # spread. The budget has to cover the body plus the per-test `--timeout=900` the step declares,
+    # or a slow kernel kills the CONTAINER before pytest can time it out and name it -- which is
+    # exactly what happened, and the run reported no failure at all. 40 < the 45-minute ceiling
+    # test_no_job_budgets_itself_past_the_container_ceiling enforces, and leaves room for the setup
+    # (3m typical, 14m28s on the shard that missed the pip cache in that same run).
+    timeout-minutes: 40
     env:
       PYTEST_ADDOPTS: "--cov=hpcagent_bench --cov-append --cov-report="
       # Read by tests/test_njit_reference.py::shard, which partitions ALL_MODULES round-robin.
@@ -2407,7 +2412,11 @@ jobs:
         # --maxfail=20 so a registry-wide break reports twenty named kernels rather than hundreds,
         # and -v because a step that dies on its cap prints no summary -- the same reason the unit
         # sweep carries it, and the reason these failures went unnamed for as long as they did.
-        timeout-minutes: 20
+        #
+        # 32, not 20: the step must outlive the `--timeout=900` it sets, or the cap fires first and
+        # a slow kernel is reported as nothing rather than as a named timeout. ~7m of body plus one
+        # 15m test is 22, over the 20 this used to allow.
+        timeout-minutes: 32
         run: |
           python -m pytest -p no:cacheprovider -rfEs -n auto -v \
             --maxfail=20 --durations=25 --timeout=900 tests/test_njit_reference.py
