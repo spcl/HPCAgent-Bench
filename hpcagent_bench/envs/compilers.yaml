@@ -34,11 +34,20 @@ gcc:
   compile: ["{cc}", "{baseline}", "-std=c23", "-D_POSIX_C_SOURCE=199309L", "-fPIC", "-c", "{src}", "-o", "{obj}"]
   link:    ["{cc}", "-shared", "{objs}", "-o", "{lib}", "-lm"]
 
-# C++23 everywhere. Parity with dace's own codegen is kept by dace_framework.pin_cpp_standard,
-# which pushes THIS value into compiler.cpp_standard, so a dace-compiled baseline and an agent's
-# C++ submission are still built to the same standard -- and a user's ~/.dace.conf cannot change
-# that. Every other -std= in the tree (test oracles, the ported applications) is this value,
-# reached through languages.std_flag.
+# C++20 everywhere, INCLUDING the device compilers. It was c++23 for the host and c++20 for cuda
+# and hip, because c++20 is nvcc's ceiling -- which split the language in two: `lang-cpp` described
+# a standard the host half of a .cu or .hip was never built with, and a separate `lang-hostcpp`
+# page existed only to say so. One standard removes the split and the page.
+#
+# c++20 is also what the corpus itself is written in: 28 of the ported C++ applications and their
+# oracles name `-std=c++20` and 6 name c++23, so the judge was building submissions to a stricter
+# standard than the references it grades them against.
+#
+# Parity with dace's own codegen is kept by dace_framework.pin_cpp_standard, which pushes THIS
+# value into compiler.cpp_standard, so a dace-compiled baseline and an agent's C++ submission are
+# still built to the same standard -- and a user's ~/.dace.conf cannot change that. Every other
+# -std= in the tree (test oracles, the ported applications) is this value, reached through
+# languages.std_flag.
 gpp:
   lang: cpp
   install: {apt: g++, spack: gcc}
@@ -54,7 +63,7 @@ gpp:
   # host property, not a constant of the block.
   stdpar_link_ref: STDPAR_LINK_TBB
   mimalloc_link_ref: LINK_MIMALLOC
-  compile: ["{cc}", "{baseline}", "-std=c++23", "-D_POSIX_C_SOURCE=199309L", "-fPIC", "-c", "{src}", "-o", "{obj}"]
+  compile: ["{cc}", "{baseline}", "-std=c++20", "-D_POSIX_C_SOURCE=199309L", "-fPIC", "-c", "{src}", "-o", "{obj}"]
   link:    ["{cc}", "-shared", "{objs}", "-o", "{lib}", "-lm"]
 
 # CPU_BASELINE_GFORTRAN, not CPU_BASELINE_GCC: the C/C++ one carries the libmvec decl
@@ -110,7 +119,7 @@ clangpp:
   # libc++ resolves it to false and links nothing extra.
   stdpar_link_ref: STDPAR_LINK_TBB
   mimalloc_link_ref: LINK_MIMALLOC
-  compile: ["{cc}", "{baseline}", "-std=c++23", "-D_POSIX_C_SOURCE=199309L", "-fPIC", "-c", "{src}", "-o", "{obj}"]
+  compile: ["{cc}", "{baseline}", "-std=c++20", "-D_POSIX_C_SOURCE=199309L", "-fPIC", "-c", "{src}", "-o", "{obj}"]
   link:    ["{cc}", "-shared", "{objs}", "-o", "{lib}", "-lm"]
 
 # The Pluto column's driver: same LLVM toolchain as `clang`, two deliberate differences.
@@ -120,7 +129,7 @@ clangpp:
 #     variably-modified types nor the `restrict` KEYWORD exist in C++ -- and polycc prepends its
 #     own `#define min(x,y)`, which detonates inside libstdc++ (`max_size_type.h:800: too few
 #     arguments provided to function-like macro invocation`). Measured both ways: clang -std=c23
-#     compiles it clean, clang++ -std=c++23 does not compile it at all.
+#     compiles it clean, clang++ does not compile it at all at any C++ standard.
 # (2) CPU_BASELINE_CLANG_PLUTO, not CPU_BASELINE_CLANG -- identical except the OpenMP spelling,
 #     which here has to be one clang actually generates code for. See flags.PLUTO_PAR for the
 #     measurement; the short version is that the shared baseline's `-fopenmp=libgomp` makes
@@ -173,7 +182,7 @@ flang:
 # OpenMP runtime references from a plain parallelizable nest. See the note in flags.py where
 # ICX_AUTOPAR would otherwise live.
 #
-# icpx additionally needs the image to point it at a libstdc++: a bare `icpx -std=c++23` cannot
+# icpx additionally needs the image to point it at a libstdc++: a bare `icpx` cannot
 # resolve `<vector>` (measured), because the oneAPI layer ships an EMPTY icpx.cfg. The image writes
 # `--gcc-toolchain=/usr` into that file, so nothing is needed on the compile line here -- see
 # containers/install-extra-toolchains.sh.
@@ -201,7 +210,7 @@ icpx:
   # does for g++/clang++; languages.stdpar_link_flags still probes before appending.
   stdpar_link_ref: STDPAR_LINK_TBB
   mimalloc_link_ref: LINK_MIMALLOC
-  compile: ["{cc}", "{baseline}", "-std=c++23", "-D_POSIX_C_SOURCE=199309L", "-fPIC", "-c", "{src}", "-o", "{obj}"]
+  compile: ["{cc}", "{baseline}", "-std=c++20", "-D_POSIX_C_SOURCE=199309L", "-fPIC", "-c", "{src}", "-o", "{obj}"]
   link:    ["{cc}", "-shared", "{objs}", "-o", "{lib}", "-lm"]
 
 ifx:
@@ -282,12 +291,12 @@ hipcc:
   # while the CPU C++ blocks pinned c++23, so one submission was graded at two language standards
   # depending on which arm compiled it.
   #
-  # c++20, NOT c++23, even though hipcc accepts c++23 on gfx942 (measured). The GPU dialect is the
-  # INTERSECTION of the backends a device kernel must build under, and nvcc's ceiling is c++20
-  # (`nvcc -std=c++23` is "Value 'c++23' is not defined for option 'std'"). Pinning hipcc higher
-  # would let a submission use a c++23 feature that builds on AMD and cannot build on NVIDIA --
-  # the harness would be certifying non-portable device code. The CPU blocks stay at c++23; they
-  # have no such second backend to satisfy.
+  # c++20 is the whole tree's standard now, so this block no longer differs from the CPU ones. It
+  # is still the number the GPU side would pick on its own: the device dialect is the INTERSECTION
+  # of the backends a kernel must build under, and nvcc's ceiling is c++20 (`nvcc -std=c++23` is
+  # "Value 'c++23' is not defined for option 'std'"). hipcc does accept c++23 on gfx942 (measured),
+  # and pinning it higher would let a submission use a feature that builds on AMD and cannot build
+  # on NVIDIA -- the harness would be certifying non-portable device code.
   compile: ["{cc}", "{baseline}", "-std=c++20", "-fPIC", "-c", "{src}", "-o", "{obj}"]
   # -fopenmp at LINK too, not only in {baseline}: clang pulls libomp in through the driver, so a
   # .so compiled with the pragmas honoured and linked without the flag resolves omp_* at load time
@@ -325,7 +334,7 @@ mpicxx:
   cc: mpicxx.mpich
   baseline_ref: CPU_BASELINE_GCC
   stdpar_link_ref: STDPAR_LINK_TBB
-  compile: ["{cc}", "{baseline}", "-std=c++23", "-c", "{src}", "-o", "{obj}"]
+  compile: ["{cc}", "{baseline}", "-std=c++20", "-c", "{src}", "-o", "{obj}"]
   link:    ["{cc}", "{objs}", "-o", "{exe}"]
   link_extra: ["-lm"]
 

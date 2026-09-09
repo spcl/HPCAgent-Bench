@@ -227,8 +227,9 @@ def pin_cpp_standard(arch: str = "cpu") -> None:
     grade a dace baseline against an agent submission compiled to a different C++.
 
     A GPU build reads the CUDA block, not the C++ one: dace passes this single value through as
-    ``CMAKE_CUDA_STANDARD`` as well, and nvcc rejects the c++23 the host blocks ask for, so every
-    dace GPU column died in CMake's compiler-ABI probe before emitting a line of code.
+    ``CMAKE_CUDA_STANDARD`` as well. That killed every dace GPU column in CMake's compiler-ABI
+    probe, before a line of code was emitted, back when the host blocks asked for c++23 and
+    nvcc rejected it; host and device pin the same c++20 now, so the two agree by construction.
     """
     std = languages.std_flag("cuda" if arch == "gpu" else "cpp").removeprefix("-std=c++")
     if std and dace.Config.get("compiler", "cpp_standard") != std:

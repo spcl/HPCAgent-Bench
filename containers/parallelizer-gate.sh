@@ -105,7 +105,8 @@ int main() { std::vector<double> v(1, 0.0); return (int)v[0]; }
 CPP
 for cxx in g++ clang++ icpx nvc++; do
   command -v "${cxx}" >/dev/null 2>&1 || { echo "C++ ${cxx}: skipped -- not installed"; continue; }
-  std="-std=c++23"; [ "${cxx}" = "nvc++" ] && std="-std=c++20"
+  # One standard for every C++ driver, nvc++ included -- compilers.yaml pins c++20 everywhere.
+  std="-std=c++20"
   if ${cxx} ${std} -c "${work}/cxx.cpp" -o "${work}/cxx.o" 2>"${work}/err"; then
     echo "C++ ${cxx}: ok"
   else
