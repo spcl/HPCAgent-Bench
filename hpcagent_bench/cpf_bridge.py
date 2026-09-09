@@ -438,6 +438,7 @@ def render_kernel(
     precision: str = "",
     target: str = "cpu",
     timeout: float = RENDER_TIMEOUT_S,
+    dropin: bool = False,
     extra_env: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Render ``spec``'s kernel to a self-contained TU in ``out_dir``; returns the verdict record.
@@ -468,6 +469,8 @@ def render_kernel(
         cmd += ["--precision", precision]
     if target != "cpu":
         cmd += ["--target", target]
+    if dropin:
+        cmd += ["--dropin"]
     # A CPU rendering must not see a GPU (the frontend would offload nothing, but cupy imports and
     # device probes cost seconds each), and PYTHONHASHSEED pins the set iteration DaCe's
     # determinism rests on. A GPU rendering is the opposite case and must NOT be blinded: hiding
@@ -523,6 +526,7 @@ def render_track(
     precision: str = "",
     target: str = "cpu",
     timeout: float = RENDER_TIMEOUT_S,
+    dropin: bool = False,
     jsonl: Optional[os.PathLike] = None,
 ) -> List[Dict[str, Any]]:
     """Render every kernel on ``track``, appending one verdict per line to ``jsonl``.
@@ -534,7 +538,9 @@ def render_track(
     sink = pathlib.Path(jsonl).open("a") if jsonl is not None else None
     try:
         for index, spec in enumerate(track_specs(track), start=1):
-            rec = render_kernel(spec, out_dir, language=language, precision=precision, target=target, timeout=timeout)
+            rec = render_kernel(
+                spec, out_dir, language=language, precision=precision, target=target, timeout=timeout, dropin=dropin
+            )
             records.append(rec)
             print(f"[{index}] {rec['kernel']}: {rec['verdict']}", flush=True)
             if sink is not None:
@@ -558,6 +564,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--language", default="c++", choices=sorted(LANGUAGE_EXT))
     p.add_argument("--precision", default="", help="fp64 (default) / fp32 / fp16")
     p.add_argument("--target", default="cpu", choices=("cpu", "gpu"), help="which specialization to render")
+    p.add_argument(
+        "--dropin",
+        action="store_true",
+        help="render a DROP-IN for the kernel: canonical symbol and ABI, workspace pair, no banner",
+    )
     args = p.parse_args(argv)
 
     spec = BenchSpec.load(args.kernel)
@@ -568,7 +579,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         rec["error"] = f"no numpy reference at {numpy_py}"
     else:
         try:
-            rec = render_sdfg(spec, numpy_py, pathlib.Path(args.out), args.language, args.precision, args.target)
+            rec = render_sdfg(
+                spec, numpy_py, pathlib.Path(args.out), args.language, args.precision, args.target, args.dropin
+            )
         except NotImplementedError as exc:  # CPF names the construct it cannot render
             rec["verdict"] = "refused"
             rec["error"] = str(exc)[:400]
