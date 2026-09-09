@@ -1,7 +1,9 @@
 # `.cache/` -- everything this repo builds once and reuses
 
-Gitignored (`.gitignore` carries `.cache`). Nothing here is an input: every file is reproducible
-from the repo plus an image, so deleting the whole directory costs time and never correctness.
+Gitignored except this file: `.gitignore` ignores `**/.cache/` and everything under the repo-root
+one, then re-includes this README so the directory explains itself. Nothing here is an input --
+every file is reproducible from the repo plus an image, so deleting the whole directory costs time
+and never correctness.
 
     .cache/
       jit/<image>/     aiter, triton, inductor, torch-extension and vLLM JIT artefacts
