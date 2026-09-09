@@ -50,7 +50,12 @@
 *.so
 *.spec
 .Python
-.cache
+# Cache dirs anywhere in the tree, EXCEPT the repo-root one's README. A bare `.cache/*` is
+# anchored to this file's directory, which un-ignored 658 per-kernel .cache dirs.
+**/.cache/
+!/.cache/
+/.cache/*
+!/.cache/README.md
 .coverage
 .coverage.*
 .dacecache/
@@ -266,3 +271,7 @@ experiments/gap/
 
 # SQLite sidecars of the repo-root results DB (a run-benchmark invoked from here leaves them).
 hpcagent_bench.db-*
+
+# Job output and scratch that lands in the checkout because that is where sbatch was run.
+slurm-*.out
+scratchpad/
