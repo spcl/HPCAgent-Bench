@@ -29,18 +29,16 @@ THE MODEL, and its three assumptions:
    The measured hit rate is 99.3 percent, so this is an approximation of something real rather
    than a convenient fiction -- but it IS an upper bound, and an episode whose context was evicted
    is charged less here than it truly cost.
-2. CACHE DISCOUNT of 50 percent (``CACHE_DISCOUNT``). A PRICING convention, borrowed: providers
-   publish 90 percent off (Anthropic) and 50 percent off (OpenAI) for cache reads, and this takes
-   the conservative one. It is one named constant, not a literal, because changing it changes every
-   number here.
+2. A CACHE READ COSTS NOTHING (``CACHE_DISCOUNT`` = 0), so every token is counted ONCE, in the
+   turn it first appeared. This began at 50 percent, OpenAI's published cache-read rate, which was
+   wrong for a reason worth stating: ``cached`` is a sum over TURNS, and the thing it sums existed
+   only once. One episode here summed 10,329,254 cached tokens against a context that reached
+   98,723 -- the KV cache held one copy and the rest is that copy re-counted per turn. Any nonzero
+   fraction of it prices a phantom, and prices it in proportion to turn count, which differs by
+   model.
 
-   Read it as conservative in the strong sense. Nobody bills us per token -- these are self-hosted
-   vLLM/SGLang endpoints -- and what a cache hit actually saves is the PREFILL COMPUTE for the
-   cached prefix, which published measurements put at 85 to 95 percent. So 50 percent OVER-charges
-   a cached token against what it costs us, and an arm with a long shared prefix looks dearer here
-   than it was. The reason to keep it anyway: it is a published number a reader can check, where a
-   compute-derived discount would be ours alone and would move with the hit rate, the eviction
-   policy and the model.
+   What zero omits is the KV re-read on each decode step. That is real, but it is memory traffic
+   rather than a forward pass, and it is second-order beside a 106x double count.
 3. REASONING IS OUTPUT. ``thinking`` counted from the client's streamed
    ``estimated_tokens_delta``, since the endpoint reports zero, and added to output.
 
@@ -65,8 +63,22 @@ import pathlib
 import sys
 from collections.abc import Iterator
 
-#: Cache reads are billed at this fraction of a fresh input token. See assumption 2.
-CACHE_DISCOUNT: float = 0.5
+#: What a cache read is charged, as a fraction of a fresh token. ZERO, and the reason is not
+#: generosity -- it is that the alternative charges for a quantity that never existed.
+#:
+#: ``cached`` is a sum over TURNS of the prefix each turn shared with the one before it. A 173-turn
+#: episode measured here summed to 10,329,254 while its context only ever reached 98,723 tokens:
+#: the KV cache held ONE copy, and the other 10.2 million are the same tokens counted again per
+#: turn. Charging any fraction of that -- 50 percent or 5 -- prices a thing with no referent, and
+#: prices it in proportion to TURN COUNT, which differs by model and is exactly what a
+#: cross-model comparison must not absorb.
+#:
+#: At zero the total becomes every token counted ONCE, when it first appeared: fresh input is the
+#: context that was ever built, output and thinking are what was generated. Each of those needed
+#: exactly one forward pass to produce its KV, so the count maps to work done. What it omits is the
+#: re-reading of that KV on every decode step -- real, memory-bound rather than compute-bound, and
+#: second-order next to a 106x double count.
+CACHE_DISCOUNT: float = 0.0
 
 #: Usage fields that make up one turn's INPUT. Cache fields are summed in because a turn served
 #: from cache still reports its prompt somewhere, and which field varies by endpoint.
@@ -136,6 +148,7 @@ def episode_cost(log: pathlib.Path) -> dict[str, float]:
         "generated": generated,
         # What the harness records today, for the comparison this exists to make.
         "naive_total": fresh + cached + output,
+        # Every token once: the context that was ever built, plus everything generated.
         "effective": fresh + CACHE_DISCOUNT * cached + generated,
         # The SELF-HOSTED unit. Tokens are a borrowed currency here -- nobody bills us per token,
         # we pay for nodes by the second -- and api_ms is the share of the shared inference node
@@ -206,6 +219,8 @@ def main() -> int:
             "generated",
             "naive_total",
             "effective",
+            "wall_ms",
+            "api_ms",
         ]
         with args.csv.open("w", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=fields)
