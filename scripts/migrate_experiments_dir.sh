@@ -20,6 +20,7 @@ cd -- "$(git rev-parse --show-toplevel)"
 OLD=containers/cluster/example-script
 NEW=experiments
 DRY=${DRY:-0}
+FORCE=${FORCE:-0}   # deliberate override; see COMPAT below -- it is what makes FORCE survivable
 SELF=scripts/migrate_experiments_dir.sh   # names the old path in its own comments; never sweep it
 
 run() { if [[ "${DRY}" == 1 ]]; then printf 'would: %s\n' "$*"; else "$@"; fi; }
@@ -29,7 +30,7 @@ run() { if [[ "${DRY}" == 1 ]]; then printf 'would: %s\n' "$*"; else "$@"; fi; }
 # DRY=1 changes nothing, so it skips the guards on purpose: a preview you can only take once it is
 # already safe to run is not a preview, and reviewing the plan is most useful while the guards bite.
 live=$(squeue -u "${USER}" -h -o '%j' 2>/dev/null | grep -v '^build-' | wc -l)
-if [[ "${live}" -gt 0 && "${DRY}" != 1 ]]; then
+if [[ "${live}" -gt 0 && "${DRY}" != 1 && "${FORCE}" != 1 ]]; then
     echo "REFUSING: ${live} non-build job(s) in flight; a live arm execs ${OLD}/run_cluster.sh" >&2
     squeue -u "${USER}" -o '%.10i %.34j %.9T %.10M %.5D' >&2
     exit 1
@@ -38,7 +39,7 @@ fi
 # GUARD 2: uncommitted work in the tree being moved belongs to whoever is mid-edit. git mv would
 # carry it along silently and a rebase would land it under a path they never wrote.
 dirty=$(git status --porcelain -- "${OLD}" | wc -l)
-if [[ "${dirty}" -gt 0 && "${DRY}" != 1 ]]; then
+if [[ "${dirty}" -gt 0 && "${DRY}" != 1 && "${FORCE}" != 1 ]]; then
     echo "REFUSING: ${dirty} uncommitted path(s) under ${OLD}; commit or stash them first" >&2
     git status --short -- "${OLD}" >&2
     exit 1
@@ -46,6 +47,18 @@ fi
 
 echo "moving ${OLD} -> ${NEW} ($(git ls-files "${OLD}" | wc -l) tracked files)"
 run git mv "${OLD}" "${NEW}"
+
+# COMPAT SHIM -- this is what makes FORCE=1 safe rather than merely permitted.
+# A running job resolved SCRIPT_DIR to the OLD absolute path at submit time and keeps re-resolving
+# against it for the rest of its life: srun steps (run_cluster.sh:943) and, at teardown,
+# monitor_report.py / token_report.py / recoverable_report.py (:1002,:1011,:1017). git mv is a
+# rename(), so fds already open follow the inode -- but a path resolved fresh from the old string
+# would 404 and the job would finish ungraded. The symlink keeps that string valid. It is untracked
+# and TEMPORARY: delete it once the last pre-migration job leaves the queue.
+if [[ "${FORCE}" == 1 || "${DRY}" == 1 ]]; then
+    echo "compat: ${OLD} -> symlink, so in-flight jobs keep resolving their SCRIPT_DIR"
+    run ln -s "$(realpath -m --relative-to="$(dirname "${OLD}")" "${NEW}")" "${OLD}"
+fi
 
 echo "folding the campaign wrappers in beside the launchers they exec"
 run mkdir -p "${NEW}/samples"

@@ -250,19 +250,19 @@ perf_reports/**
 # so nothing has to be tracked to keep a directory alive. Re-including the .gitkeep instead would
 # put 356 empty files in the repo (one per kernel) and leave an untracked `.cache/` in `git status`
 # for every kernel ever run -- the same reason perf_reports/ is one root dir, not one per kernel.
-containers/cluster/example-script/problems-*.jsonl
+experiments/problems-*.jsonl
 
 # Crash dumps from cluster jobs (ROCm/vLLM workers drop multi-GB cores next to the sbatch)
 core_*
 core.[0-9]*
 
 # Per-run job logs written beside the launcher, one pair per SLURM id
-containers/cluster/example-script/results/
+experiments/results/
 # Job stdout the launchers used to write beside themselves. The directives now point at
 # scratch; this keeps a stale or hand-run log from being committed again (db2027bd did).
-containers/cluster/example-script/logs/
-containers/cluster/example-script/*.err
-containers/cluster/example-script/gap/
+experiments/logs/
+experiments/*.err
+experiments/gap/
 
 # SQLite sidecars of the repo-root results DB (a run-benchmark invoked from here leaves them).
 hpcagent_bench.db-*

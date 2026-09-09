@@ -248,7 +248,7 @@ def test_the_launcher_allows_every_tool_the_server_advertises(agent_tools):
     # The cluster example does NOT go through start_agents.sh -- run_cluster.sh --agent-node runs
     # agent_driver.py, which builds its own claude invocation. It is a second copy of the same list
     # and drifted from the server independently.
-    driver = TOOLS_DIR.parents[1] / "cluster" / "example-script" / "agent_driver.py"
+    driver = TOOLS_DIR.parents[2] / "experiments" / "agent_driver.py"
     driver_tools = set(re.findall(r"^AGENT_TOOLS = \(([^)]*)\)", driver.read_text(), re.MULTILINE)[0].split(","))
     driver_tools = {name.strip().strip('"') for name in driver_tools if name.strip()}
     assert driver_tools == served, (
