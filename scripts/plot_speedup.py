@@ -149,7 +149,7 @@ def cell_changes(samples: Sequence[float], base_time: float, label: str = "") ->
 
 
 def speedup_points(
-    summary: pd.DataFrame, baseline: str = plotting.BASELINE, data: Optional[pd.DataFrame] = None
+    summary: pd.DataFrame, baseline: str = plotting.DEFAULT_BASELINE, data: Optional[pd.DataFrame] = None
 ) -> List[Point]:
     """Per (kernel, framework) median speed-up over ``baseline``, as plottable points.
 
@@ -696,7 +696,7 @@ def plot_signed_speedup(
         if not points:
             warnings.warn(
                 f"machine {label}: no kernel has a plottable speed-up over "
-                f"{plotting.BASELINE!r}; no figure written for it"
+                f"{plotting.DEFAULT_BASELINE!r}; no figure written for it"
             )
             continue
         if boxes:
@@ -722,7 +722,7 @@ def plot_signed_speedup(
             f"no speed-up to plot: benchmark={benchmark!r} preset={preset!r} "
             f"datatype={datatype!r} variant={variant!r} db={db!r}. The DB has no "
             f"validated, domained rows pairing a candidate framework with the "
-            f"{plotting.BASELINE!r} baseline on one machine."
+            f"{plotting.DEFAULT_BASELINE!r} baseline on one machine."
         )
     return written
 

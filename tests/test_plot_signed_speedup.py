@@ -120,7 +120,7 @@ def test_band_limits_are_anchored_at_the_band_edge_and_open_only_at_the_top() ->
 
 
 def test_points_carry_the_median_speedup_over_the_baseline() -> None:
-    frame = summary_for([("heat_3d", plotting.BASELINE, 10.0), ("heat_3d", "dace_cpu", 5.0)])
+    frame = summary_for([("heat_3d", plotting.DEFAULT_BASELINE, 10.0), ("heat_3d", "dace_cpu", 5.0)])
     points: List[speedup.Point] = speedup.speedup_points(frame)
     assert len(points) == 1, "the baseline is the divisor, not a series"
     assert points[0].framework == "dace_cpu"
@@ -131,7 +131,7 @@ def test_points_carry_the_median_speedup_over_the_baseline() -> None:
 
 def test_a_kernel_with_no_baseline_is_dropped_and_named() -> None:
     frame = summary_for(
-        [("heat_3d", "dace_cpu", 5.0), ("jacobi_2d", plotting.BASELINE, 10.0), ("jacobi_2d", "dace_cpu", 20.0)]
+        [("heat_3d", "dace_cpu", 5.0), ("jacobi_2d", plotting.DEFAULT_BASELINE, 10.0), ("jacobi_2d", "dace_cpu", 20.0)]
     )
     with pytest.warns(UserWarning, match="heat_3d@dace_cpu"):
         points = speedup.speedup_points(frame)
@@ -140,7 +140,7 @@ def test_a_kernel_with_no_baseline_is_dropped_and_named() -> None:
 
 
 def test_a_non_positive_median_is_dropped_not_plotted_at_zero() -> None:
-    frame = summary_for([("heat_3d", plotting.BASELINE, 10.0), ("heat_3d", "dace_cpu", 0.0)])
+    frame = summary_for([("heat_3d", plotting.DEFAULT_BASELINE, 10.0), ("heat_3d", "dace_cpu", 0.0)])
     with pytest.warns(UserWarning, match="heat_3d@dace_cpu"):
         assert speedup.speedup_points(frame) == []
 
@@ -170,9 +170,9 @@ def test_an_empty_band_is_dropped_rather_than_drawn_empty(
     would be invented rather than measured, so the band is dropped from the layout."""
     frame = summary_for(
         [
-            ("heat_3d", plotting.BASELINE, 10.0),
+            ("heat_3d", plotting.DEFAULT_BASELINE, 10.0),
             ("heat_3d", "dace_cpu", 5.0),
-            ("jacobi_2d", plotting.BASELINE, 10.0),
+            ("jacobi_2d", plotting.DEFAULT_BASELINE, 10.0),
             ("jacobi_2d", "dace_cpu", 2.5),
         ]
     )
@@ -185,11 +185,11 @@ def test_every_non_empty_band_gets_its_own_panel(monkeypatch: pytest.MonkeyPatch
     """Three magnitudes -> three panels, each with its own y scale."""
     frame = summary_for(
         [
-            ("heat_3d", plotting.BASELINE, 10.0),
+            ("heat_3d", plotting.DEFAULT_BASELINE, 10.0),
             ("heat_3d", "dace_cpu", 9.5),
-            ("jacobi_2d", plotting.BASELINE, 10.0),
+            ("jacobi_2d", plotting.DEFAULT_BASELINE, 10.0),
             ("jacobi_2d", "dace_cpu", 2.0),
-            ("gemm", plotting.BASELINE, 10.0),
+            ("gemm", plotting.DEFAULT_BASELINE, 10.0),
             ("gemm", "dace_cpu", 0.05),
         ]
     )
@@ -201,11 +201,11 @@ def test_every_non_empty_band_gets_its_own_panel(monkeypatch: pytest.MonkeyPatch
 def test_the_simplified_figure_shows_the_band_with_the_most_points(tmp_path: pathlib.Path) -> None:
     frame = summary_for(
         [
-            ("heat_3d", plotting.BASELINE, 10.0),
+            ("heat_3d", plotting.DEFAULT_BASELINE, 10.0),
             ("heat_3d", "dace_cpu", 5.0),
-            ("jacobi_2d", plotting.BASELINE, 10.0),
+            ("jacobi_2d", plotting.DEFAULT_BASELINE, 10.0),
             ("jacobi_2d", "dace_cpu", 2.5),
-            ("gemm", plotting.BASELINE, 10.0),
+            ("gemm", plotting.DEFAULT_BASELINE, 10.0),
             ("gemm", "dace_cpu", 9.5),
         ]
     )
@@ -275,7 +275,7 @@ def baseline_only_db(path: pathlib.Path) -> None:
                     benchmark="heat_3d",
                     domain="Physics",
                     preset="S",
-                    framework=plotting.BASELINE,
+                    framework=plotting.DEFAULT_BASELINE,
                     agent=None,
                     validated=True,
                     cpu="test-cpu",
@@ -341,7 +341,7 @@ def test_a_cell_whose_baseline_is_unusable_yields_no_samples() -> None:
 def test_points_carry_their_repetitions_only_when_asked() -> None:
     """``speedup_points`` must not change the POSITIONS it computes by being asked for spread --
     the median and the band come from the summary either way, and only ``samples`` is added."""
-    cells = [("heat_3d", plotting.BASELINE, 10.0), ("heat_3d", "dace_cpu", 5.0)]
+    cells = [("heat_3d", plotting.DEFAULT_BASELINE, 10.0), ("heat_3d", "dace_cpu", 5.0)]
     rows = pd.DataFrame(
         [dict(benchmark=k, domain="Physics", framework=f, time=t) for k, f, ms in cells for t in [ms] * 5]
     )

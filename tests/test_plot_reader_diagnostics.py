@@ -128,14 +128,14 @@ def test_the_baseline_survives_a_build_stamp(tmp_path):
 
     base = tmp_path / "hpcagent_bench.db"
     shard = pathlib.Path(recording.shard_db_path(0, str(base)))
-    write_row(shard, plotting.BASELINE, "main", 10.0)
+    write_row(shard, plotting.DEFAULT_BASELINE, "main", 10.0)
     write_row(shard, "dace_cpu", "main", 5.0)
     write_row(shard, "dace_cpu", "extended", 2.5)
 
     frameworks = set(plotting.load_results(str(base), benchmark="gemm", preset="S")["framework"])
-    assert plotting.BASELINE in frameworks, (
+    assert plotting.DEFAULT_BASELINE in frameworks, (
         f"the baseline was folded into {sorted(frameworks)} -- every speedup "
-        f"divides by {plotting.BASELINE!r} and can no longer find it"
+        f"divides by {plotting.DEFAULT_BASELINE!r} and can no longer find it"
     )
     assert {"dace_cpu/main", "dace_cpu/extended"} <= frameworks, (
         f"the candidate columns must still fold, or two DaCe trees average into one line: {sorted(frameworks)}"
