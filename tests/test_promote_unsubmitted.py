@@ -301,3 +301,74 @@ def test_a_submission_under_either_spelling_suppresses_promotion(promoter, tmp_p
     con.close()
 
     assert promoter.candidates(tmp_path) == []
+
+
+# --- the WORKSPACE harvest ---------------------------------------------------------------------
+#
+# A blind arm withdraws the score route, so the judge's source store -- which log_grade fills on
+# every PASSING score -- is empty, and `candidates` can never see one of its workers: its evidence
+# is precisely the scores that arm does not have. On llrblind 47 of 80 qwen38 agents were killed on
+# the clock and every one of them was holding a finished kernel that reached no table at all.
+
+
+def workspace_run(tmp_path: pathlib.Path, name: str, body: str) -> pathlib.Path:
+    """A run tree holding one agent's write folder, keyed the way agent_driver keys it."""
+    folder = tmp_path / "shared" / "agent-7"
+    folder.mkdir(parents=True)
+    (folder / name).write_text(body)
+    return tmp_path
+
+
+def test_workspace_candidate_reads_the_file_the_agent_left(promoter, tmp_path):
+    run = workspace_run(tmp_path, "argmax_with_index.c", "void argmax(void) {}\n")
+    item = promoter.workspace_candidate(run, "llrblind-oss120b-c.n0.p7.w7", "loop_level_reasoning/argmax_with_index")
+    assert item["language"] == "c"
+    assert item["source"] == "void argmax(void) {}\n"
+    # TAGGED, and not with the promotion tag: an answer the agent never claimed is not the same
+    # datum as one it verified and ran out of clock before sending.
+    assert item["optimizer"] == promoter.HARVESTED_TAG
+    assert promoter.HARVESTED_TAG != promoter.PROMOTED_TAG
+
+
+def test_workspace_candidate_keys_on_the_problem_index_not_the_worker(promoter, tmp_path):
+    """agent_driver names the folder agent-<problem index>. On an arm running several agents per
+    task the worker index differs, and a folder picked by it is another agent's answer."""
+    run = workspace_run(tmp_path, "kernel.f90", "subroutine k\nend subroutine\n")
+    assert promoter.workspace_dir(run, "arm.n0.p7.w3") == run / "shared" / "agent-7"
+    assert promoter.workspace_candidate(run, "arm.n0.p7.w3", "track/kernel")["language"] == "fortran"
+    assert promoter.workspace_candidate(run, "arm.n0.p3.w7", "track/kernel") is None
+
+
+def test_workspace_candidate_pairs_the_device_unit(promoter, tmp_path):
+    """A hip delivery is two translation units and the host half alone does not build, so a harvest
+    that sent only `source` would be refused for a reason that looks like the agent's fault."""
+    run = workspace_run(tmp_path, "stencil.cpp", "// host\n")
+    (run / "shared" / "agent-7" / "stencil.hip").write_text("// device\n")
+    item = promoter.workspace_candidate(run, "arm.n0.p7.w7", "track/stencil")
+    assert item["language"] == "hip"
+    assert item["device_source"] == "// device\n"
+
+
+def test_workspace_candidate_is_absent_when_the_agent_wrote_nothing(promoter, tmp_path):
+    (tmp_path / "shared" / "agent-7").mkdir(parents=True)
+    assert promoter.workspace_candidate(tmp_path, "arm.n0.p7.w7", "track/kernel") is None
+
+
+def test_harvest_is_off_unless_the_arm_asks(promoter, monkeypatch):
+    """Off by default and it must stay that way: every other campaign's promotion path only ever
+    offers the judge an answer the agent VERIFIED, and harvesting unverified files by default would
+    silently add rows to arms whose numbers are already published."""
+    monkeypatch.delenv("AGENT_HARVEST_WORKSPACE", raising=False)
+    assert not promoter.harvest_enabled()
+    monkeypatch.setenv("AGENT_HARVEST_WORKSPACE", "1")
+    assert promoter.harvest_enabled()
+
+
+def test_promote_sends_the_items_own_tag(promoter, monkeypatch):
+    """The judge is told WHICH recovery this is, because `submissions.optimizer` is the only place
+    an analysis can hold a harvest and a submission apart."""
+    captured: list = []
+    monkeypatch.setattr(promoter.urllib.request, "urlopen", fake_urlopen(captured, body={"correct": 1, "build_ok": 1}))
+    item = {"kernel": "k", "language": "c", "source": "x", "run_id": "r", "optimizer": promoter.HARVESTED_TAG}
+    assert promoter.promote("http://judge", item, dry_run=False, rank=0).startswith("SUBMITTED")
+    assert json.loads(captured[-1].data)["optimizer"] == promoter.HARVESTED_TAG

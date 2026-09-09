@@ -151,6 +151,77 @@ def candidates(run_dir: pathlib.Path, only_run_id: str = "") -> list[dict[str, s
     return out
 
 
+#: What ``submissions.optimizer`` says about a row nobody submitted. Two tags, because the two
+#: recoveries are not the same evidence: PROMOTED_TAG is an answer the agent SCORED correct and
+#: faster and then ran out of clock before submitting; HARVESTED_TAG is the file it left in its
+#: write folder, never scored by anything, in an arm that has no score route to have scored it.
+PROMOTED_TAG = "promoted-unsubmitted"
+HARVESTED_TAG = "harvested-workspace"
+
+#: Extension -> the language the judge is asked to build it as. The agent writes ONE deliverable
+#: named after the kernel, into the folder the driver names for it in the prompt.
+WORKSPACE_LANGUAGES: dict[str, str] = {".c": "c", ".f90": "fortran", ".cpp": "cpp", ".py": "python"}
+
+#: The DEVICE half of a two-unit GPU delivery, which sits beside the host unit under the same stem.
+DEVICE_EXT = ".hip"
+
+
+def workspace_dir(run_dir: pathlib.Path, run_id: str) -> pathlib.Path | None:
+    """The write folder the driver gave this worker: ``<run>/shared/agent-<problem index>``.
+
+    Keyed on the PROBLEM index out of the run id (``<arm>.n<N>.p<P>.w<W>``), because that is what
+    ``agent_driver.agent_workspace`` keys it on. The worker index coincides on a one-agent-per-task
+    arm and does not in general, and a folder picked by the wrong index is another agent's answer.
+    """
+    for field in run_id.split("."):
+        if field.startswith("p") and field[1:].isdigit():
+            return run_dir / "shared" / f"agent-{field[1:]}"
+    return None
+
+
+def workspace_candidate(run_dir: pathlib.Path, run_id: str, kernel: str) -> dict[str, str] | None:
+    """The deliverable the agent LEFT behind, for an arm where nothing it did was ever scored.
+
+    :func:`candidates` cannot see a blind worker at all: its evidence is the judge's source store,
+    which ``log_grade`` fills on every PASSING score, and a blind arm answers /score with 403 -- so
+    the store is empty and the loop above has nothing to iterate. The agent did write a kernel, to
+    the folder the prompt named, and on llrblind every one of the 47 agents killed on the clock had
+    left one. Grading it is the difference between recording that work and erasing it.
+
+    This is OPT-IN (``AGENT_HARVEST_WORKSPACE``) and must stay that way. Every other campaign's
+    promotion path only ever offers the judge an answer the agent VERIFIED; harvesting unverified
+    files by default would quietly add rows to arms whose numbers are already published.
+    """
+    folder = workspace_dir(run_dir, run_id)
+    if folder is None or not folder.is_dir():
+        return None
+    stem = short_name(kernel)
+    for ext, language in WORKSPACE_LANGUAGES.items():
+        path = folder / f"{stem}{ext}"
+        if not path.is_file():
+            continue
+        item = {
+            "kernel": kernel,
+            "run_id": run_id,
+            "language": language,
+            "source": path.read_text(errors="ignore"),
+            "optimizer": HARVESTED_TAG,
+        }
+        device = folder / f"{stem}{DEVICE_EXT}"
+        if device.is_file():
+            # A hip delivery is two units and the host half alone does not build, so sending only
+            # `source` would be refused for a reason that looks like the agent's fault.
+            item["language"] = "hip"
+            item["device_source"] = device.read_text(errors="ignore")
+        return item
+    return None
+
+
+def harvest_enabled() -> bool:
+    """Whether this arm asked for the workspace fallback. Off unless the launcher says otherwise."""
+    return os.environ.get("AGENT_HARVEST_WORKSPACE", "").strip() in {"1", "true", "yes"}
+
+
 def short_name(benchmark: str) -> str:
     """The kernel's last path segment, which is the ONE spelling every table agrees on.
 
@@ -247,7 +318,10 @@ def promote(judge: str, item: dict[str, str], dry_run: bool, rank: int, timeout:
         "language": item["language"],
         "source": item["source"],
         "run_id": item["run_id"],
-        "optimizer": "promoted-unsubmitted",
+        # Carried by the ITEM, not fixed here: a workspace harvest and a score-store promotion are
+        # different claims about the same kernel -- one the agent verified and one it merely left
+        # behind -- and `submissions.optimizer` is where an analysis tells them apart.
+        "optimizer": item.get("optimizer", PROMOTED_TAG),
         # Not optional: an absent rank is a 400 before anything is graded (service.rank_error).
         "rank": rank,
     }
@@ -268,7 +342,9 @@ def promote(judge: str, item: dict[str, str], dry_run: bool, rank: int, timeout:
     return f"not a submission -- {verdict}: {grade_detail(graded)}"
 
 
-def promote_one_worker(run_dir: pathlib.Path, judge: str, run_id: str, timeout: float = SUBMIT_TIMEOUT_S) -> str:
+def promote_one_worker(
+    run_dir: pathlib.Path, judge: str, run_id: str, timeout: float = SUBMIT_TIMEOUT_S, kernel: str = ""
+) -> str:
     """Promote THIS worker's last correct score, at ITS teardown. Returns a short outcome word.
 
     The end-of-job pass was the wrong place for this: it runs after the agents are gone, inside
@@ -277,10 +353,18 @@ def promote_one_worker(run_dir: pathlib.Path, judge: str, run_id: str, timeout: 
     ("fv3_dycore") was never attempted. Here there is one candidate, the judge is up and idle
     enough, and the job has hours left.
 
+    ``kernel`` is what the WORKSPACE fallback needs and the score-store path does not: with no
+    scores there is no row to read a kernel name off, so the caller -- which is holding the problem
+    -- has to say which kernel this worker was given. Only consulted when the store yielded nothing
+    and ``AGENT_HARVEST_WORKSPACE`` is set.
+
     Never raises: a promotion is bookkeeping and must not change the agent's recorded outcome.
     """
     try:
         items = candidates(run_dir, only_run_id=run_id)
+        if not items and kernel and harvest_enabled():
+            harvested = workspace_candidate(run_dir, run_id, kernel)
+            items = [harvested] if harvested else []
         if not items:
             return ""
         return promote(judge, items[0], dry_run=False, rank=judge_rank(judge), timeout=timeout)
