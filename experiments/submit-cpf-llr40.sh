@@ -126,6 +126,12 @@ submit_arm() {  # submit_arm <model> <language> <kind:plain|skills|cpf>
         -e "s|^RUN_ROOT=.*|RUN_ROOT=\${SCRATCH:-/iopsstor/scratch/cscs/\$USER}/hpcagent-bench-runs/${EXPERIMENT}-${STAMP}|" \
         ".env.base-${model}" >"${env}"
     echo "HPCAGENT_BENCH_RECORD_EXPERIMENT=${EXPERIMENT}" >>"${env}"
+    # Arbitrary KEY=VALUE lines for this campaign. run_cluster.sh sources the env file under
+    # `set -a`, so anything added here is exported to every role including the inference server --
+    # which is the only way to reach a serving knob without editing the shared base env that every
+    # other arm reads too.
+    local kv
+    for kv in ${EXTRA_ENV_KV:-}; do echo "${kv}" >>"${env}"; done
     # The base env is a CPU arm's, so a device arm has to say so: prompt-gpu.md is what tells the
     # agent it is writing device code and what the build line will be. Without it the arm asks for
     # hip in LANGUAGE and describes a CPU task in the prompt, which is two experiments at once.

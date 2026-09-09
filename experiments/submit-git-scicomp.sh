@@ -149,6 +149,10 @@ submit_arm() {
         "AGENT_SINGLE_SUBMISSION=1"
         "AGENT_SUBMISSION_POLICY_FILE=submission-single.md"
     )
+    # The agent image, named rather than inherited: the base envs say -latest, and a campaign that
+    # has to run somewhere else (a candidate build) would otherwise need the base file edited,
+    # which every other arm reads too.
+    [[ -n "${GIT_CE_ENV:-}" ]] && kvs+=("AMD_CE_ENV=${GIT_CE_ENV}")
     if [[ "${layout}" == repo ]]; then
         # The staging hook and the composed prompt. Both absent from the kernel arm, which
         # therefore sees byte-identical inputs to every wave before it.
@@ -177,9 +181,14 @@ chain="${DEPEND_ON:-}"
 # the reason it existed -- both arms meeting the same machine -- is served just as well by sending
 # all four at once, since then no arm waits for a machine the others have already left. At three
 # nodes per arm the whole set is 12, well inside the 36 the cluster allows.
+#: Which FORMULATIONS to send. Both is the A/B; `repo` alone is what to run once the pair has
+#: already been measured as null -- the control adds nothing a second time, and the question left
+#: is how the repo framing behaves on its own, not whether it differs from a kernel arm.
+LAYOUTS=${LAYOUTS:-"kernel repo"}
+
 for model in ${MODELS:-oss120b qwen38}; do
     pair=""
-    for layout in kernel repo; do
+    for layout in ${LAYOUTS}; do
         submit_arm "${model}" "${layout}" "${chain}"
         pair="${pair:+${pair}:}${SUBMITTED_JID}"
     done

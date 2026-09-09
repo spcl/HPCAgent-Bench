@@ -139,10 +139,46 @@ def test_a_kernel_with_no_baseline_is_dropped_and_named() -> None:
     assert points[0].change == pytest.approx(-1.0), "a 2x slow-down is -1, the mirror of a 2x win"
 
 
-def test_a_non_positive_median_is_dropped_not_plotted_at_zero() -> None:
+def test_a_non_positive_median_is_marked_a_crash_and_never_claims_a_speedup() -> None:
+    """A framework that produced no usable time is DRAWN, at zero, as a crash -- and cannot be
+    mistaken for a cell that measured 1.0x.
+
+    Zero used to be forbidden outright, which kept a failure from wearing "nothing changed" but
+    also made the figure silent about it: a crashed cell and a framework that was never run there
+    looked identical. It occupies zero as a POSITION now, marked `crashed` and carrying a NaN
+    ratio, and :func:`draw_band` gives it its own glyph. The value it must never carry is a ratio,
+    and that is what this asserts.
+    """
     frame = summary_for([("heat_3d", plotting.DEFAULT_BASELINE, 10.0), ("heat_3d", "dace_cpu", 0.0)])
     with pytest.warns(UserWarning, match="heat_3d@dace_cpu"):
-        assert speedup.speedup_points(frame) == []
+        points = speedup.speedup_points(frame)
+    assert len(points) == 1
+    crash = points[0]
+    assert crash.crashed, "a cell with no usable time has to be distinguishable from a measured one"
+    assert math.isnan(crash.ratio), "a crash has no speed-up; a real 1.0x cell would carry ratio 1.0"
+    assert crash.change == 0.0, "drawn on the zero line"
+    assert crash.samples == (), "nothing was measured, so there is nothing to draw a box from"
+
+
+def test_a_crash_is_kept_out_of_the_limits_that_measured_points_set() -> None:
+    """The X is a glyph, not a datum: it must not stretch a panel or shift a box.
+
+    band_limits is fed only the measured changes, so a panel holding one real point and one crash
+    closes on the real one alone.
+    """
+    frame = summary_for(
+        [
+            ("heat_3d", plotting.DEFAULT_BASELINE, 10.0),
+            ("heat_3d", "dace_cpu", 0.0),
+            ("jacobi_2d", plotting.DEFAULT_BASELINE, 10.0),
+            ("jacobi_2d", "dace_cpu", 10.0),
+        ]
+    )
+    with pytest.warns(UserWarning):
+        points = speedup.speedup_points(frame)
+    measured = [point for point in points if not point.crashed]
+    assert len(measured) == 1 and len(points) == 2
+    assert all(not math.isnan(point.change) for point in measured)
 
 
 # --- the figures ---------------------------------------------------------------------------------

@@ -86,6 +86,12 @@ class Point(NamedTuple):
     change: float  # the plotted value: signed_change(ratio)
     band: str
     samples: Tuple[float, ...] = ()
+    #: The framework was ASKED for this kernel and produced no usable time (a crash, a build
+    #: failure, a kernel it cannot lower). Drawn as an X on the zero line in the framework's colour
+    #: -- a POSITION, not a value: it carries no ``ratio`` and is excluded from every limit and
+    #: statistic. Before this, such a cell was dropped with a warning and the figure was silent
+    #: about it, which reads as "this framework was never run here" rather than "it failed here".
+    crashed: bool = False
 
 
 #: Below this many cleaned repetitions a cell is drawn as its median marker, never as a box. Four is
@@ -170,6 +176,7 @@ def speedup_points(
         per_cell = {(str(k), str(f)): g["time"].to_numpy() for (k, f), g in data.groupby(["benchmark", "framework"])}
     points: List[Point] = []
     unusable: List[str] = []
+    crashed: List[str] = []
     for kernel, rows in summary.groupby("benchmark", sort=False):
         base = rows[rows["framework"] == baseline]["time"]
         base_time = float(base.iloc[0]) if len(base) else math.nan
@@ -181,11 +188,19 @@ def speedup_points(
             change = signed_change(ratio)
             band = band_of(change)
             if band is None:
-                unusable.append(f"{kernel}@{row.framework}")
+                # A cell with no BASELINE cannot be placed at all -- there is no ratio to fail to
+                # have. A cell whose own time is unusable is a FAILURE, and the figure says so.
+                if math.isfinite(base_time) and base_time > 0.0:
+                    points.append(Point(str(kernel), str(row.framework), math.nan, 0.0, BAND_LOW, (), True))
+                    crashed.append(f"{kernel}@{row.framework}")
+                else:
+                    unusable.append(f"{kernel}@{row.framework}")
                 continue
             key = (str(kernel), str(row.framework))
             samples = cell_changes(per_cell[key], base_time, f"{kernel}@{row.framework}") if key in per_cell else ()
             points.append(Point(str(kernel), str(row.framework), ratio, change, band, samples))
+    if crashed:
+        warnings.warn(f"{len(crashed)} cell(s) produced no usable time and are drawn as X at 0: {', '.join(crashed)}")
     if unusable:
         warnings.warn(
             f"dropped {len(unusable)} cell(s) with no usable speed-up "
@@ -298,6 +313,10 @@ def draw_band(
     With ``boxes`` the cells that carry enough repetitions are drawn as boxes and the rest keep
     their median marker, so the panel never loses a cell for being thinly sampled.
     """
+    # Crashes are drawn, never measured: they carry no ratio, so they are held out of the boxes,
+    # of the y limits and of every statistic, and only ever reach the axes as a glyph.
+    crashed = [point for point in points if point.crashed]
+    points = [point for point in points if not point.crashed]
     drawn_as_marker: Sequence[Point] = points
     if boxes:
         drawn_as_marker = draw_boxes(ax, points, x_of, colors)
@@ -322,6 +341,22 @@ def draw_band(
     ax.set_ylim(*limits)
     if limits[0] < 0.0 < limits[1]:
         ax.axhline(0.0, color="0.35", linewidth=0.8)  # only where 0 is in view -- it is not, in a one-sided band
+    # On the zero line, in the framework's own colour, and ONLY in the band that contains zero:
+    # a one-sided band does not show 0, so an X drawn there would sit at a y it does not mean.
+    # The X is a different glyph from every measured marker, so it cannot be read as 1.0x.
+    if limits[0] <= 0.0 <= limits[1]:
+        for framework in sorted({point.framework for point in crashed}):
+            mine = [point for point in crashed if point.framework == framework]
+            ax.plot(
+                [x_of[point.kernel] for point in mine if point.kernel in x_of],
+                [0.0] * sum(1 for point in mine if point.kernel in x_of),
+                linestyle="none",
+                marker="x",
+                markersize=4.0,
+                markeredgewidth=1.1,
+                clip_on=False,
+                color=colors[framework],
+            )
     ax.set_title(band, fontsize=7, loc="left")
     ax.tick_params(axis="y", labelsize=6)
     # x grid too: a point sits three panels above its kernel's label, and the vertical rule is what
