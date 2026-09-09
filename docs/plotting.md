@@ -12,15 +12,16 @@ Three shared modules. Each rule below exists because the failure named beside it
 
 ```bash
 python -m hpcagent_bench.experiments \
-    --runs '/scratch/.../hpcagent-bench-runs/llr40v11-*' \
+    --runs '/scratch/.../hpcagent-bench-runs/llrblind-*' \
     --runs '/scratch/.../hpcagent-bench-runs/6[0-9][0-9][0-9][0-9][0-9]' \
-    --experiment llr40v11 --experiment v11w2 \
-    --out data/llr40_observations.csv
+    --experiment llrblind \
+    --out data/observations.csv
 ```
 
-`--experiment` is an arm PREFIX and repeatable: pass every label the campaign used. llr40v11 ran
-its first wave as `llr40v11-*` and its completion waves as `v11w2-*`, so one prefix silently keeps
-half of it. `--runs` is repeatable for the same reason -- arms spread over named wave roots and
+`--experiment` is an arm PREFIX and repeatable: pass every label the campaign used. A campaign
+that spelled its completion waves with a different PREFIX than its first wave keeps only half of
+itself under one spelling -- which is the reason a wave belongs in a suffix (`<campaign>-w2`), so
+one prefix still matches every wave. `--runs` is repeatable for the same reason -- arms spread over named wave roots and
 per-job Slurm-id roots. Read the summary line it prints; a missing arm means a wrong prefix, not a
 missing campaign. From Python, `experiments.observations(globs, experiment=[...])` returns the same
 thing as a DataFrame.

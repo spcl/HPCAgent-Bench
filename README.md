@@ -48,22 +48,23 @@ Extract once, plot from the CSV -- so a figure never re-reads a judge database.
 
 ```bash
 python -m hpcagent_bench.experiments \
-    --runs '/capstor/scratch/.../hpcagent-bench-runs/llr40v11-*' \
-    --experiment llr40v11 --experiment v11w2 \
-    --out data/llr40_observations.csv
+    --runs '/capstor/scratch/.../hpcagent-bench-runs/llrblind-*' \
+    --experiment llrblind \
+    --out data/observations.csv
 
-python scripts/plot_arm_summary.py  data/obs.csv --experiment llr40v11 \
+python scripts/plot_arm_summary.py  data/obs.csv --experiment llrblind \
     --out figures/arm.pdf    --table data/arm.csv     # per-arm speedup + spend, skills vs not
-python scripts/plot_score_change.py data/obs.csv --experiment llr40v11 \
+python scripts/plot_score_change.py data/obs.csv --experiment llrblind \
     --out figures/skills.pdf --table data/skills.csv  # speedup vs spend, quadrants named
-python scripts/plot_tokens.py       data/obs.csv --experiment llr40v11 \
+python scripts/plot_tokens.py       data/obs.csv --experiment llrblind \
     --out figures/tokens.pdf --table data/tokens.csv  # median tokens per task
 ```
 
-`--runs` and `--experiment` are both **repeatable**, and `--experiment` is a *prefix*: llr40v11 ran
-its first wave as `llr40v11-*` and its completion waves as `v11w2-*`, so one spelling silently keeps
-half the campaign. Read the summary line it prints -- a missing arm means a wrong prefix, not a
-missing campaign.
+`--runs` and `--experiment` are both **repeatable**, and `--experiment` is a *prefix*. Pass every
+label the campaign used: a campaign whose completion waves were spelled with a different prefix
+than its first wave keeps only half of itself under one spelling, which is why a wave belongs in a
+SUFFIX. Read the summary line it prints -- a missing arm means a wrong prefix, not a missing
+campaign.
 
 Each plot writes a PDF, a PNG beside it, and the **table** behind the figure; a figure nobody can
 check is a claim. Rules and the failure behind each: **[docs/plotting.md](docs/plotting.md)**.
