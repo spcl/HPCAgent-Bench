@@ -153,6 +153,11 @@ submit_arm() {
     # has to run somewhere else (a candidate build) would otherwise need the base file edited,
     # which every other arm reads too.
     [[ -n "${GIT_CE_ENV:-}" ]] && kvs+=("AMD_CE_ENV=${GIT_CE_ENV}")
+    # Arbitrary KEY=VALUE for this campaign -- run_cluster.sh sources the env file under `set -a`,
+    # so these reach every role including the inference server. That is how a serving knob is set
+    # for one campaign without pinning it in the base env every other arm reads.
+    local extra
+    for extra in ${EXTRA_ENV_KV:-}; do kvs+=("${extra}"); done
     if [[ "${layout}" == repo ]]; then
         # The staging hook and the composed prompt. Both absent from the kernel arm, which
         # therefore sees byte-identical inputs to every wave before it.
