@@ -27,6 +27,11 @@ FAST_SCRATCH="/iopsstor/scratch/cscs/${USER}"
 [[ -d "${FAST_SCRATCH}" ]] || FAST_SCRATCH="${SCRATCH}"
 export HF_HOME="${HF_HOME:-${FAST_SCRATCH}/hf}"
 INFERENCE_EDF="${INFERENCE_EDF:-vllm-latest}"
+# The interpreter that HAS torch, which differs per image: the vLLM image puts it on PATH, the
+# sglang image keeps it at /opt/venv/bin/python3 and leaves bare `python3` as the system one with
+# no torch. Pointing this script at an sglang EDF without setting this fails on line 2 of the
+# heredoc with ModuleNotFoundError (630775).
+PREBUILD_PYTHON="${PREBUILD_PYTHON:-python3}"
 # Same root and the same image key run_cluster.sh uses: capstor for build artefacts, and one
 # subtree per image because these .so files are built against one aiter/ROCm build and a rank
 # that loads a mismatched one fails late or silently. HOME goes with it -- aiter falls back to
@@ -69,7 +74,7 @@ srun --nodes=1 --ntasks=1 --exclusive --export=ALL --cpus-per-task="${SERVE_CPUS
 
     echo "=== before ==="; ls -1 "${AITER_JIT_DIR}" 2>/dev/null | wc -l
 
-    python3 - <<PY
+    "${PREBUILD_PYTHON}" - <<PY
 import os
 import torch
 
