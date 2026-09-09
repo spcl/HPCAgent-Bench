@@ -34,6 +34,11 @@ NATIVE_SELECTOR = "scientific_computing/unstructured_grids@lvl1"
 #: The autopar framework: auto-generated C++ + clang's Polly auto-parallelizer.
 NATIVE_FRAMEWORK = "polly"
 
+#: The denominator these figures divide by, named rather than defaulted: this fixture runs a
+#: numpy leg and a native one, so numpy is the only framework in its DB that every row can be
+#: divided by. plotting.DEFAULT_BASELINE is numba, which no leg here produces.
+SWEEP_BASELINE = "numpy"
+
 #: Some clang builds accept ``-mllvm -polly`` and outline nothing; the harness then drops the column
 #: as UNSUPPORTED, so the rows below never exist. Gate on the SAME probe the harness gates on, or the
 #: skip and the column disagree.
@@ -131,6 +136,8 @@ def sweep(tmp_path_factory) -> pathlib.Path:
         PRESET,
         "-d",
         DATATYPE,
+        "--baseline",
+        SWEEP_BASELINE,
     )
     return cwd
 
@@ -292,6 +299,8 @@ def test_narrow_divergent_selector_renders_pdf(sweep):
         PRESET,
         "-d",
         DATATYPE,
+        "--baseline",
+        SWEEP_BASELINE,
     )
     blob = one_plot(sweep, out_name).read_bytes()
     assert blob.startswith(b"%PDF-"), f"not a PDF: starts {blob[:16]!r}"

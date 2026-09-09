@@ -224,7 +224,14 @@ def test_every_campaign_variant_declares_its_own_arm():
     this pins the same rule -- demanding the suffix in CAMPAIGN_ARM would split one arm's rows into
     as many arms as there are workers."""
     for path in sorted(EXAMPLE.glob(".env.*")):
-        if path.name == ".env.example" or path.suffix in (".bak", ".v2bak"):
+        if path.suffix in (".bak", ".v2bak"):
+            continue
+        # A TEMPLATE is not a variant, and must carry no arm at all: .env.example, and the
+        # per-model .env.base-<model> every launcher seds its arm into. Naming a real arm in one
+        # is the drift this test exists to catch -- a failed sed then files the rows under whatever
+        # campaign the template was copied from, which is how base-<model> came to say llr40v10.
+        if path.name == ".env.example" or path.name.startswith(".env.base-"):
+            assert "\nCAMPAIGN_ARM=\n" in path.read_text(), f"{path.name} is a template: leave CAMPAIGN_ARM blank"
             continue
         variant = path.name[len(".env.") :]
         arm = re.sub(r"-w\d$", "", variant)
@@ -233,7 +240,6 @@ def test_every_campaign_variant_declares_its_own_arm():
             f"{path.name} must carry CAMPAIGN_ARM={arm} (or {variant}); rename the file to the arm "
             "label rather than relabelling the arm, because the label is what the judge DB records"
         )
-    assert "\nCAMPAIGN_ARM=\n" in (EXAMPLE / ".env.example").read_text()
     assert '"${CAMPAIGN_ARM:-}" != "${VARIANT}"' in (EXAMPLE / "run_campaign.sh").read_text()
 
 

@@ -92,6 +92,7 @@ NJIT_INTERPRETED: FrozenSet[str] = frozenset(
         "resnet_basic_block",
         "sum_reduction_over_a_dimension",
         "vexx_k",
+        "vloc_psi_k_acc",
     }
 )
 
