@@ -358,7 +358,8 @@ def _apply_g_psi(colset, shift, hd, sd, kdim):
     """Apply the smoothed diagonal preconditioner in place.
     ``hd`` / ``sd`` are the active diagonals already folded to length ``kdim``."""
     x = hd[:, None] - shift[None, :] * sd[:, None]
-    denm = 0.5 * (1.0 + x + np.sqrt(1.0 + (x - 1.0) ** 2))
+    pow_base1 = x - 1.0
+    denm = 0.5 * (1.0 + x + np.sqrt(1.0 + (pow_base1 * pow_base1)))
     m = colset.shape[1]
     for i in range(kdim):
         for j in range(m):
@@ -593,7 +594,8 @@ def cegterg(
         for i in range(kdim):
             for j in range(notcnv):
                 x = hd[i] - ew[nb1 + j] * sd[i]
-                denm = 0.5 * (1.0 + x + np.sqrt(1.0 + (x - 1.0) ** 2))
+                pow_base2 = x - 1.0
+                denm = 0.5 * (1.0 + x + np.sqrt(1.0 + (pow_base2 * pow_base2)))
                 psi[i, nb1 + j] = psi[i, nb1 + j] / denm
 
         # ... normalise: ew = <psi|psi>,  psi /= sqrt(ew)

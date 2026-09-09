@@ -135,7 +135,17 @@ def lagrange_weights(nodes, k1, deriv, max_order, weights):
     aug = np.zeros((max_order + 1, max_order + 2), dtype=np.float64)
     for row in range(k1):
         for col in range(k1):
-            aug[row, col] = nodes[col] ** row
+            # Repeated multiplication, NOT ``nodes[col] ** row``. The exponent is a small
+            # non-negative integer, and the two lowerings of ``**`` do not agree on it: measured
+            # over realistic node sets, numpy and numba differ on 2076 of 4000 builds of this row
+            # by up to 2 ulp. That seed does not stay 2 ulp -- this is a VANDERMONDE matrix solved
+            # just below without pivoting, which carries it to 375 ulp in the weights, and those
+            # weights drive every BDF step, so the integration turns it into 1.1e-9 by t_end=10
+            # with the step sequence otherwise identical. Written out, the two agree bit for bit.
+            power = 1.0
+            for _ in range(row):
+                power = power * nodes[col]
+            aug[row, col] = power
     aug[deriv, k1] = 1.0
     for col in range(k1):
         aug[col, :] = aug[col, :] / aug[col, col]

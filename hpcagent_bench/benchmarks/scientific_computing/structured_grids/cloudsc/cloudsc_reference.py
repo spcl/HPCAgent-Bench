@@ -533,11 +533,13 @@ def cloudsc(
             zrdtgdp[jl - 1] = zdp[jl - 1] * (1.0 / (ptsphy * ydcst_rg))
             if jk > 1:
                 zdtgdpf[jl - 1] = ptsphy * ydcst_rg / (pap[jk - 1, jl - 1] - pap[jk - 1 - 1, jl - 1])
-            zfacw = ydthf_r5les / (ztp1[jk - 1, jl - 1] - ydthf_r4les) ** 2
+            pow_base1 = ztp1[jk - 1, jl - 1] - ydthf_r4les
+            zfacw = ydthf_r5les / (pow_base1 * pow_base1)
             zcor = 1.0 / (1.0 - ydcst_retv * zfoeeliqt[jk - 1, jl - 1])
             zdqsliqdt[jl - 1] = zfacw * zcor * zqsliq[jk - 1, jl - 1]
             zcorqsliq[jl - 1] = 1.0 + ydthf_ralvdcp * zdqsliqdt[jl - 1]
-            zfaci = ydthf_r5ies / (ztp1[jk - 1, jl - 1] - ydthf_r4ies) ** 2
+            pow_base2 = ztp1[jk - 1, jl - 1] - ydthf_r4ies
+            zfaci = ydthf_r5ies / (pow_base2 * pow_base2)
             zcor = 1.0 / (1.0 - ydcst_retv * zfoeew[jk - 1, jl - 1])
             zdqsicedt[jl - 1] = zfaci * zcor * zqsice[jk - 1, jl - 1]
             zcorqsice[jl - 1] = 1.0 + ydthf_ralsdcp * zdqsicedt[jl - 1]
@@ -975,7 +977,8 @@ def cloudsc(
             if zdqs[jl - 1] <= -yrecldp_rlmin and za[jk - 1, jl - 1] < 1.0 - zepsec:
                 zsigk = pap[jk - 1, jl - 1] / paph[nlev + 1 - 1, jl - 1]
                 if zsigk > 0.8:
-                    zrhc = yrecldp_ramid + (1.0 - yrecldp_ramid) * ((zsigk - 0.8) / 0.2) ** 2
+                    pow_base3 = (zsigk - 0.8) / 0.2
+                    zrhc = yrecldp_ramid + (1.0 - yrecldp_ramid) * (pow_base3 * pow_base3)
                 else:
                     zrhc = yrecldp_ramid
                 if yrecldp_nssopt == 0:
@@ -1180,7 +1183,8 @@ def cloudsc(
                         zzco = zzco * (yrecldp_rnice / pnice[jk - 1, jl - 1]) ** 0.333
                     else:
                         zlcrit = yrecldp_rlcritsnow
-                    zsnowaut[jl - 1] = zzco * (1.0 - np.exp(-((zicecld[jl - 1] / zlcrit) ** 2)))
+                    pow_base4 = zicecld[jl - 1] / zlcrit
+                    zsnowaut[jl - 1] = zzco * (1.0 - np.exp(-(pow_base4 * pow_base4)))
                     zsolqb[ncldqi - 1, ncldqs - 1, jl - 1] = zsolqb[ncldqi - 1, ncldqs - 1, jl - 1] + zsnowaut[jl - 1]
             if zliqcld[jl - 1] > zepsec:
                 if iwarmrain == 1:
@@ -1201,7 +1205,8 @@ def cloudsc(
                     zzco = zzco * zcfpr
                     zlcrit = zlcrit / max(zcfpr, zepsec)
                     if zliqcld[jl - 1] / zlcrit < 20.0:
-                        zrainaut[jl - 1] = zzco * (1.0 - np.exp(-((zliqcld[jl - 1] / zlcrit) ** 2)))
+                        pow_base5 = zliqcld[jl - 1] / zlcrit
+                        zrainaut[jl - 1] = zzco * (1.0 - np.exp(-(pow_base5 * pow_base5)))
                     else:
                         zrainaut[jl - 1] = zzco
                     if ztp1[jk - 1, jl - 1] <= ydcst_rtt:
@@ -1526,14 +1531,16 @@ def cloudsc(
                     zaplusb = (
                         yrecldp_rcl_apb1 * zvpice
                         - yrecldp_rcl_apb2 * zvpice * ztp1[jk - 1, jl - 1]
-                        + pap[jk - 1, jl - 1] * yrecldp_rcl_apb3 * ztp1[jk - 1, jl - 1] ** 3
+                        + pap[jk - 1, jl - 1]
+                        * yrecldp_rcl_apb3
+                        * (ztp1[jk - 1, jl - 1] * ztp1[jk - 1, jl - 1] * ztp1[jk - 1, jl - 1])
                     )
                     zcorrfac = (1.0 / zrho[jl - 1]) ** 0.5
                     zcorrfac2 = (ztp1[jk - 1, jl - 1] / 273.0) ** 1.5 * (393.0 / (ztp1[jk - 1, jl - 1] + 120.0))
                     zpr02 = zrho[jl - 1] * zpreclr * yrecldp_rcl_const1s / (ztcg * zfacx1s)
                     zterm1 = (
                         (zqsice[jk - 1, jl - 1] - zqe)
-                        * ztp1[jk - 1, jl - 1] ** 2
+                        * (ztp1[jk - 1, jl - 1] * ztp1[jk - 1, jl - 1])
                         * zvpice
                         * zcorrfac2
                         * ztcg

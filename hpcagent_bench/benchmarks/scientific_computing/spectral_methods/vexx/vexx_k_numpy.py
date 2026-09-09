@@ -55,13 +55,13 @@ def _core(exxbuff, facb, temppsic, result, occ, omega_inv, nqs_inv):
 
 def _vcut_spheric_get(q, vcut_a):
     """QE vcut_spheric_get: spherically-truncated Coulomb v(q) = 4pi e2/|q|^2 (1 - cos(rcut|q|))."""
-    rcut1 = 0.5 * np.sqrt(np.sum(vcut_a**2, axis=0)).min()
+    rcut1 = 0.5 * np.sqrt(np.sum((vcut_a * vcut_a), axis=0)).min()
     rcut2 = rcut1 - rcut1 / 50.0
-    kg2 = np.sum(q**2, axis=0)
+    kg2 = np.sum((q * q), axis=0)
     limit = kg2 < 1.0e-6  # eps6
     kg2s = np.where(limit, 1.0, kg2)
     res = _FPI * _E2 / kg2s * (1.0 - np.cos(rcut2 * np.sqrt(np.where(limit, 0.0, kg2))))
-    return np.where(limit, _FPI * _E2 * rcut2**2 / 2.0, res)
+    return np.where(limit, _FPI * _E2 * (rcut2 * rcut2) / 2.0, res)
 
 
 def _vcut_init(a, cutoff, security=6.0):
@@ -70,15 +70,15 @@ def _vcut_init(a, cutoff, security=6.0):
     tpi = 2.0 * np.pi
     b = tpi * np.linalg.inv(a).T  # b = 2pi (a^-1)^T
     a_omega = float(np.linalg.det(a))
-    n = [int(np.ceil(cutoff * np.sqrt(np.sum(a[i, :] ** 2)) / tpi)) for i in range(3)]
+    n = [int(np.ceil(cutoff * np.sqrt(np.sum((a[i, :] * a[i, :]))) / tpi)) for i in range(3)]
     n1, n2, n3 = n
 
     # --- Ewald split params (vcut_formula) ---
-    rwigner = 0.5 * np.sqrt(1.0 / np.max(np.sum(b**2, axis=0))) * tpi
+    rwigner = 0.5 * np.sqrt(1.0 / np.max(np.sum((b * b), axis=0))) * tpi
     sigma = 3.0 / rwigner
 
     # --- long-range real-space grid over one unit cell (full grid, weight 1) ---
-    m = [max(1, int(security * np.sqrt(np.sum(a[:, i] ** 2)) * sigma)) for i in range(3)]
+    m = [max(1, int(security * np.sqrt(np.sum((a[:, i] * a[:, i]))) * sigma)) for i in range(3)]
     m1, m2, m3 = m
     F = np.stack(
         np.meshgrid(np.arange(m1) / m1, np.arange(m2) / m2, np.arange(m3) / m3, indexing="ij"), axis=-1
@@ -87,7 +87,7 @@ def _vcut_init(a, cutoff, security=6.0):
     rc1 = (rtmp @ b) / tpi  # (b^T r)/2pi
     rc2 = rc1 - _nint(rc1)  # minimal image (orthorhombic)
     r = rc2 @ a.T  # a.rc              (Nr,3)
-    modr = np.sqrt(np.sum(r**2, axis=1))
+    modr = np.sqrt(np.sum((r * r), axis=1))
     small = modr * sigma < 1.0e-6
     tmp = np.where(
         small,
@@ -106,8 +106,8 @@ def _vcut_init(a, cutoff, security=6.0):
         .astype(b.dtype)
     )
     Q = idx @ b.T  # (Nq,3)  q = b.idx
-    q2 = np.sum(Q**2, axis=1)
-    inside = q2 <= cutoff**2
+    q2 = np.sum((Q * Q), axis=1)
+    inside = q2 <= (cutoff * cutoff)
     corrected = np.zeros((2 * n1 + 1, 2 * n2 + 1, 2 * n3 + 1), b.dtype)
     Qin = Q[inside]
     # short-range (reciprocal): e2 2pi/sigma^2 at q->0 else e2 4pi/q^2 (1-exp(-q^2/2sigma^2))
@@ -133,7 +133,7 @@ def _vcut_get(q, a, cutoff, corrected):
     """QE vcut_get: per-G lookup of the WS-truncated Coulomb table; falls back to bare Coulomb outside the cutoff."""
     tpi = 2.0 * np.pi
     i = _nint((a.T @ q) / tpi).astype(np.intp)  # (3, ngm)
-    qq = np.sum(q**2, axis=0)
+    qq = np.sum((q * q), axis=0)
     n1 = (corrected.shape[0] - 1) // 2
     n2 = (corrected.shape[1] - 1) // 2
     n3 = (corrected.shape[2] - 1) // 2
@@ -142,7 +142,7 @@ def _vcut_get(q, a, cutoff, corrected):
     i2 = np.clip(i[2] + n3, 0, 2 * n3)
     tab = corrected[i0, i1, i2]
     bare = _FPI * _E2 / np.where(qq > 0.0, qq, 1.0)
-    return np.where(qq <= cutoff**2, tab, bare)
+    return np.where(qq <= (cutoff * cutoff), tab, bare)
 
 
 def _g2_convolution(
@@ -177,7 +177,7 @@ def _g2_convolution(
         return _vcut_get(q * tpiba, vcut_a, vcut_cutoff, vcut_corrected)
     if use_coulomb_vcut_spheric:
         return _vcut_spheric_get(q * tpiba, vcut_a)
-    qq = np.sum(q**2, axis=0) * tpiba2  # |q+G|^2
+    qq = np.sum((q * q), axis=0) * tpiba2  # |q+G|^2
     # gamma-extrapolation grid factor: odg(j) true when q.at[:,j]*nq_j/2 is integer, for all 3 axes
     # at once (q.T @ at is the same dot product the per-axis loop was computing one column at a time).
     if x_gamma_extrapolation:
@@ -192,16 +192,16 @@ def _g2_convolution(
     if gau_scrlen > 0.0:
         return _E2 * (_PI / gau_scrlen) ** 1.5 * np.exp(-qq / 4.0 / gau_scrlen) * gf
     if erfc_scrlen > 0.0:
-        fac = _E2 * _FPI / qqn * (1.0 - np.exp(-qqn / 4.0 / erfc_scrlen**2)) * gf
+        fac = _E2 * _FPI / qqn * (1.0 - np.exp(-qqn / 4.0 / (erfc_scrlen * erfc_scrlen))) * gf
     elif erf_scrlen > 0.0:
-        fac = _E2 * _FPI / qqn * np.exp(-qqn / 4.0 / erf_scrlen**2) * gf
+        fac = _E2 * _FPI / qqn * np.exp(-qqn / 4.0 / (erf_scrlen * erf_scrlen)) * gf
     else:
         fac = _E2 * _FPI / (qqn + yukawa) * gf
     fac = np.where(nonsing, fac, -exxdiv)  # G -> 0 (singular) term
     if yukawa > 0.0 and not x_gamma_extrapolation:
         fac = np.where(nonsing, fac, fac + _E2 * _FPI / (qq + yukawa))
     if erfc_scrlen > 0.0 and not x_gamma_extrapolation:
-        fac = np.where(nonsing, fac, fac + _E2 * _PI / erfc_scrlen**2)
+        fac = np.where(nonsing, fac, fac + _E2 * _PI / (erfc_scrlen * erfc_scrlen))
     return fac
 
 

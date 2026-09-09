@@ -32,7 +32,7 @@ def test_interval_and_set_are_deterministic_and_in_range():
 def test_derive_is_computed_not_sampled():
     p = _fuzzed(edge=[2, 8], numelem={"derive": "edge**3"})
     out = fuzz.sample_params(p, iteration=3)
-    assert out["numelem"] == out["edge"] ** 3
+    assert out["numelem"] == (out["edge"] * out["edge"] * out["edge"])
 
 
 def test_construct_satisfies_divisibility_by_construction():
