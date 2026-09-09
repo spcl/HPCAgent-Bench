@@ -25,7 +25,7 @@ def packet(extra: list[str]) -> tuple[int, list[str]]:
     :param extra: the skill flags this arm adds, e.g. ``["--skill", "canonical-parallel-form"]``.
     :returns: the size of the ``# Skills`` block and the pages inside it.
     """
-    # make_problems writes the JSONL to STDOUT (regen_problems.sh redirects it), so capture that
+    # make_problems writes the JSONL to STDOUT (callers redirect it), so capture that
     # rather than inventing an --out it does not take.
     sys.argv = [
         "make_problems.py",
