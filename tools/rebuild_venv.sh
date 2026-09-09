@@ -53,8 +53,37 @@ fi
 
 # Tier 2 -- heavy/optional. Installed one at a time so one missing 3.14 wheel does not abort
 # the rest, and so the report says exactly which are unavailable.
+#
+# The SPECS come from pyproject, not from a list here. These names were bare, and pyproject pins
+# one of them: pythran==0.18.1, because 0.19.0 turns subset_sum into a >600 s hang and then a
+# SIG11. A bare "pip install pythran" installed 0.19.0, so the login venv graded kernels through
+# exactly the compiler the pin exists to keep out -- and it did it silently, because a pythran
+# status is only ever reached when its console script is on PATH. requirements/*.txt carried this
+# same bug and scripts/sync_requirements.py derives them for that reason; this was the last copy.
+mapfile -t TIER2 < <("${PY}" - "${REPO}/pyproject.toml" <<'PYSPEC'
+import pathlib, re, sys, tomllib
+
+# Every table pyproject can state a requirement in: the pins for these live under
+# optional-dependencies (frameworks), not in the core list, so reading one table finds nothing.
+WANTED = ("torch", "numba", "pythran", "jax", "xgboost", "h5py", "netCDF4")
+path = pathlib.Path(sys.argv[1])
+project = tomllib.loads(path.read_text())["project"] if path.is_file() else {}
+specs = list(project.get("dependencies", ()))
+for group in project.get("optional-dependencies", {}).values():
+    specs.extend(group)
+# VERSION constraints only. An extras spelling is a variant, not a pin, and the one that exists
+# here is jax[cuda13] -- CUDA wheels, on an AMD box, for a venv that only needs jax to import.
+pinned = {}
+for spec in specs:
+    name = re.split(r"[<>=!~\[; ]", spec, maxsplit=1)[0].strip().lower().replace("_", "-")
+    if re.search(r"[<>=!~]", spec):
+        pinned.setdefault(name, spec)
+for name in WANTED:
+    print(pinned.get(name.lower().replace("_", "-"), name))
+PYSPEC
+)
 echo "=== tier 2: heavy, best effort ==="
-for pkg in torch numba pythran jax xgboost h5py netCDF4; do
+for pkg in "${TIER2[@]}"; do
     if "${VENV}/bin/python3" -m pip install "${pkg}" >/dev/null 2>&1; then
         echo "  OK      ${pkg}"
     else
