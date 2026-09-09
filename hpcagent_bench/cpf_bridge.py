@@ -395,7 +395,12 @@ def render_sdfg(
         if forced:
             rec["forced_abi_symbols"] = list(forced)
         sdfg.name = native.symbol
-        base = native.symbol
+        # The FILE keeps the ``_cpf`` suffix even for a drop-in. The judge's
+        # /canonical_parallel_form route globs ``<kernel>_*_cpf.<ext>`` and answers a miss with
+        # ``unavailable`` and HTTP 200 -- so a directory of drop-ins named ``<kernel>_fp64.c``
+        # serves NOTHING and the treated arm silently becomes its own control. That route lives in
+        # the judge IMAGE, so renaming the file is the fix that needs no rebuild. Only the entry
+        # SYMBOL is canonical, which is the half a drop-in actually needs.
 
     # The device form is one unit holding both the host code and the kernels, which is a dialect of
     # its own; ``--language`` chooses between the two host spellings and says nothing about it.
