@@ -14,6 +14,91 @@ promote and extend** one.
 vLLM 0.27.1 was retired 2026-09-08 (25% slower than 0.23.0 on oss120b, entirely in decode) and
 lives on the `parked/vllm-0271` branch. Do not re-derive that; restore the branch.
 
+## From nothing to a served model, in order
+
+Four steps, and the order is load-bearing: the EDFs name images that must exist, and the serving
+jobs read weights that must already be wide-striped.
+
+```bash
+# 1. images. PULL is the default -- see the next section; a build is only for changing one.
+sbatch containers/cluster/ce-images/pull_images.sbatch
+ALLOW_REPOINT=1 containers/cluster/ce-images/install_edfs.sh
+
+# 2. weights: download AND fix the Lustre layout, in ONE job (details below)
+sbatch containers/cluster/ce-images/inference/fetch_weights.sbatch
+
+# 3. prove the image serves before trusting any number from it
+sbatch containers/cluster/ce-images/inference/smoke-kimi-sglang.sbatch
+containers/cluster/ce-images/inference/submit-glm53-sglang.sh
+
+# 4. the campaign
+sbatch experiments/submit.sbatch
+```
+
+### Step 2 in detail: submitting the weight fetch
+
+One job does both halves, because they cannot run in the same place -- `huggingface_hub` lives
+inside the CE container, `lfs` only on the host. It downloads, then restripes, then VERIFIES, and
+exits non-zero if any blob did not reach the target layout.
+
+```bash
+cd containers/cluster/ce-images/inference
+
+# everything the campaign serves (kimi, GLM-5.3, qwen38, oss120b) -- about 1.5 TB
+sbatch fetch_weights.sbatch
+
+# one model only
+MODELS="zai-org/GLM-5.3" sbatch fetch_weights.sbatch
+
+# check the layout of what is already there, download nothing, write nothing (~4 s)
+AUDIT_ONLY=1 sbatch --time=00:20:00 fetch_weights.sbatch
+
+# somewhere else entirely, e.g. to test without touching the real tree
+HF_HOME=/iopsstor/scratch/cscs/$USER/hf-test MODELS="Qwen/Qwen2.5-Coder-7B-Instruct" \
+    sbatch fetch_weights.sbatch
+```
+
+| variable | default | what it does |
+|---|---|---|
+| `MODELS` | the four campaign models | space-separated HF repo ids |
+| `AUDIT_ONLY` | `0` | `1` checks layout and changes nothing |
+| `HF_HOME` | `$FAST_SCRATCH/hf` | where the hub lives; iopsstor when it exists |
+| `STRIPE_COUNT` / `STRIPE_SIZE` | `16` / `4M` | the target Lustre layout |
+| `MIN_BLOB_BYTES` | 1 GiB | only blobs above this are striped or audited |
+| `HF_TOKEN` | unset | set it for a large fetch: unauthenticated pulls are rate-limited |
+
+A healthy run ends with a per-model line and a verdict:
+
+```
+=== zai-org/GLM-5.3
+  blobs>1G=141  narrow=0  restriped=0  STILL NARROW=0
+  OK: every blob >1G is stripe_count >= 16
+WEIGHTS READY: downloaded and wide-striped under /iopsstor/scratch/cscs/<user>/hf
+```
+
+`STILL NARROW` above zero, or `no blobs over 1G found`, fails the job -- the second catches a
+metadata-only directory, which is what an interrupted download leaves behind and what a serving
+job would otherwise hit as a confusing runtime error. Measured: the audit over all four models
+takes ~4 s (job 630444); a fresh 7B download plus verify took 52 s (job 630445).
+
+Restriping is safe only while nothing is serving that model.
+
+**Do not skip step 2 because the weights are already on disk.** A checkpoint downloaded into a
+stripe-1 layout loads at ONE OST's bandwidth: measured, kimi's 554 GiB took 55 minutes, against
+9.45 GB/s at 16 readers on a wide-striped iopsstor (0.83 GB/s on capstor). `run_cluster.sh` sets a
+PFL default on the hub dir, and inheritance USUALLY works: the five models fetched in 2026-08 got
+it, and a control download of Qwen2.5-Coder-7B into a fresh hub dir (job 630445) came down with
+all 4 of its >1G blobs already at stripe_count 16, restriping nothing. But GLM-5.3, downloaded
+into that same directory on 2026-09-08, arrived with all 141 blobs at `stripe_count 1`. So
+inheritance is the common case and NOT a guarantee -- which is why `fetch_weights.sbatch`
+restripes and then VERIFIES, and fails the job when a blob did not move. `lfs migrate` exits 0
+having migrated nothing, so its exit code proves nothing on its own.
+
+Set `HF_TOKEN` before a large fetch if you have one: unauthenticated downloads are rate-limited
+(the hub says so on stderr) and 1.5 TB is where that starts to matter.
+
+Restriping is safe only while nothing is serving that model.
+
 ## The naming contract
 
 **One image per role, no version in any name.** `images.env` is the only place a name maps to a
@@ -35,9 +120,7 @@ sidecar, not a tag.
 ```bash
 # every role, on a compute node (enroot unpacks 60+ GB before it writes the squashfs, and
 # extraction onto Lustre fails outright -- a rootless overlay cannot create its pivot dir there)
-sbatch containers/cluster/ce-images/pull_images.sbatch
-
-# one role, pinned to a digest -- what a results table should cite
+sbatch containers/cluster/ce-images/pull_images.sbatch   # one role, pinned to a digest -- what a results table should cite
 ./pull_image.sh judge-agent-amd sha-<digest>
 
 # then point the EDFs at what you fetched
@@ -70,14 +153,14 @@ Roles: `judge-agent-amd` (the agent image), `judge`, `sglang`, `vllm`.
 # full 2 h builds; one job is the agent build plus a pip layer. Order matters -- agent first --
 # and each target is exported before the next is built, so a judge failure still leaves a usable
 # agent image.
-sbatch --export=ALL,IMAGE_DIR=$PWD/judge-agent-amd judge-agent-amd/build.sbatch   # ~2h, both targets
+IMAGE_DIR=$PWD/judge-agent-amd sbatch judge-agent-amd/build.sbatch   # ~2h, both targets
 
 # Or build and verify in ONE job, which is the entry point to PREFER for every role: an image
 # that cannot pass verification does not report success, and the artifact keeps its CANDIDATE
 # name until a human promotes it. It also writes the .verified marker promote_image.sh requires.
-sbatch --export=ALL,IMAGE_DIR=$PWD/judge-agent-amd build_and_verify.sbatch   # ~2h, BOTH targets
-sbatch --export=ALL,IMAGE_DIR=$PWD/sglang          build_and_verify.sbatch   # ~1h
-sbatch --export=ALL,IMAGE_DIR=$PWD/vllm            build_and_verify.sbatch   # ~4h
+IMAGE_DIR=$PWD/judge-agent-amd sbatch build_and_verify.sbatch   # ~2h, BOTH targets
+IMAGE_DIR=$PWD/sglang sbatch build_and_verify.sbatch   # ~1h
+IMAGE_DIR=$PWD/vllm sbatch build_and_verify.sbatch   # ~4h
 
 # 2. verify a candidate on its own (build_and_verify already did this; this is the re-run path).
 # IMAGE and PROFILE are ENV, not positional arguments.
@@ -221,7 +304,7 @@ refuses any that survives; with a partial hook set `libmpi.so` does not resolve 
 loud failure rather than a silent fallback. Run it standalone against any image:
 
 ```bash
-sbatch containers/cluster/ce-images/mpi_check.sbatch      # single node, generates its own EDF
+sbatch containers/cluster/ce-images/mpi_check.sbatch   # single node, generates its own EDF
 sbatch containers/cluster/ce-images/mpi_multinode_check.sbatch   # 2 nodes: the cross-node claim
 ```
 
@@ -229,6 +312,59 @@ Single-node is the limit of what `mpi_gpu_check.sh` can prove about transport: i
 provider MPI *initialised*, not that a cross-node transfer rode it. It SKIPs the GPU-runtime checks
 with no visible device and says so, so it never reports a pass for something it could not test --
 except inside a batch job on `mi300`, where a missing GPU is a broken EDF and fails.
+
+## Chaining verification to a build
+
+A build is 1-4 hours and the fabric checks it should be followed by are minutes, so wire them with
+Slurm dependencies rather than waiting to type them. `afterok` matters: a failed build must not
+hand a broken image to a checker, which would then report a failure of its own and bury the real
+one.
+
+```bash
+CE=$SCRATCH/ce-images
+ja=$(IMAGE_DIR=$PWD/judge-agent-amd sbatch --parsable build_and_verify.sbatch)
+sg=$(IMAGE_DIR=$PWD/sglang sbatch --parsable build_and_verify.sbatch)
+
+# The judge-agent image is the only one that runs MPI, so it is the only one with MPI checks.
+IMAGE=$CE/optarena-ce-amd-mi300-candidate.sqsh sbatch --dependency=afterok:$ja mpi_check.sbatch
+IMAGE=$CE/optarena-ce-amd-mi300-candidate.sqsh sbatch --dependency=afterok:$ja mpi_multinode_check.sbatch
+IMAGE=$CE/optarena-ce-amd-mi300-candidate.sqsh sbatch --dependency=afterok:$ja rccl_hook_check.sbatch
+
+# Inference images reach the fabric through RCCL only.
+IMAGE=$CE/optarena-sglang-candidate.sqsh sbatch --dependency=afterok:$sg rccl_hook_check.sbatch
+IMAGE=$CE/optarena-sglang-candidate.sqsh sbatch --dependency=afterok:$sg inference/aiter_mla_check.sbatch
+```
+
+Name the **candidate** explicitly. The live names still point at the previous images and will until
+`promote_image.sh` runs, so a checker that takes the default verifies the image you just replaced.
+
+| job | nodes | what only IT can answer |
+|---|---|---|
+| `mpi_check.sbatch` | 1 | which libfabric MPI mapped, which provider it chose, GPU-aware transfer, PETSc HIP |
+| `mpi_multinode_check.sbatch` | 2 | that a **cross-node** MPI transfer rides cxi -- single-node shows initialisation only. MPI only: RCCL belongs to `rccl_hook_check` |
+| `rccl_hook_check.sbatch` | 2 | that RCCL **selects** the OFI plugin rather than its TCP fallback. Takes `IMAGE=`, so it serves every role |
+| `inference/aiter_mla_check.sbatch` | 1 | whether aiter's MLA kernels are correct on this stack |
+
+## aiter MLA kernels
+
+`inference/aiter_mla_check.sbatch` asks the kernels directly, on synthetic tensors, and **never
+starts a server**. That is the point: every previous aiter attempt here was inconclusive for a
+reason that was never about the kernels -- `SGLANG_USE_AITER=1` drives the JIT into a per-module
+baton lock that wedges serving for hours (0-for-6 across probes), and the master switch separately
+broke MLA prefill. The question "are these kernels correct" was never reached.
+
+It stages so a failure names itself: resolve -> launch -> **correctness against an fp32 reference**
+-> speed. Correctness is the one that matters; a kernel that runs and returns wrong numbers is the
+failure mode that reached ~9k context before anyone noticed, and no smoke test sees it. The
+reference is plain scaled dot-product, deliberately not another fused kernel -- two fused paths can
+share a bug and agree with each other.
+
+It prints the real MLA API surface before calling anything, and **skips** an entry point whose
+signature is not `(q, k, v)` rather than guessing at it. A guessed call that raises looks exactly
+like a broken kernel in a log, and those are different findings.
+
+Passing here is a PREREQUISITE for enabling AITER MLA in a serving config, never a substitute for
+measuring one: a kernel that is correct can still lose to triton end to end.
 
 ## Registry
 

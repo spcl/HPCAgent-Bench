@@ -308,6 +308,22 @@ PY
             --tp-size "${GPUS_PER_NODE}"
             --host 0.0.0.0 --port "${VLLM_PORT}"
         )
+        # AITER attention, named rather than left to SGLang's default. Unset, SGLang picks its own
+        # and on ROCm that is triton -- which is what every "aiter is on" arm has actually been
+        # serving, because SGLANG_USE_AITER=1 switches aiter OPS and not the attention backend.
+        # Job 630351 checked "aiter" against --help for this build (0.5.19) rather than assuming
+        # it; an invalid value is an argparse error that would take down every serve.
+        #
+        # ${VAR-default}, NOT ${VAR:-default}: a model that must choose its OWN backend passes
+        # SGLANG_ATTENTION_BACKEND= (empty) and gets the flag OMITTED. With :- an empty value
+        # substitutes the default instead, which is the trap that killed 628589 on LANGUAGE_ONLY.
+        # GLM-5.3 is exactly that case -- GlmMoeDsaForCausalLM selects DSA from its own config and
+        # make_glm53_envs.py deliberately strips any --attention-backend, so forcing one here
+        # would override the backend the model requires.
+        sgl_attention_backend="${SGLANG_ATTENTION_BACKEND-aiter}"
+        if [[ -n "${sgl_attention_backend}" ]]; then
+            command+=(--attention-backend "${sgl_attention_backend}")
+        fi
         if [[ "${INFERENCE_MODE}" != "replicas" ]] && (( INFERENCE_NODES > 1 )); then
             # No headless rank unlike vLLM: every rank runs launch_server and only rank 0 binds
             # the HTTP port. dist-init is a single host:port, not master-addr plus master-port.

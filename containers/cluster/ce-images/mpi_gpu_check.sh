@@ -129,8 +129,9 @@ if mpicc -O0 -o "${work}/prov" "${work}/prov.c" 2>"${work}/prov.log"; then
     case "${lf}" in
         "")                    say libfabric INCONCL "MPI mapped no libfabric at all -- see ${work}/prov.out"
                                skipped+=("libfabric provenance") ;;
-        /opt/ofi-sdk/*|/opt/spack-install/*)
-                               say libfabric FAIL "${lf} -- the compile-only stub, NOT the artifact; it has no cxi provider"
+        /opt/ofi-sdk/*)        say libfabric FAIL "${lf} -- the compile-only link stub; it was not deleted from the shipped image"
+                               fail=1 ;;
+        /opt/spack-install/*)  say libfabric FAIL "${lf} -- SPACK built its own; the packages.yaml external did not take, so it has no cxi provider"
                                fail=1 ;;
         /opt/cscs/*)           say libfabric OK "${lf} -> $(readlink -f "${lf}" 2>/dev/null || echo "${lf}")" ;;
         *)                     say libfabric INCONCL "${lf} -- not the netstack artifact and not a known stub" ;;
@@ -261,13 +262,27 @@ if [[ -n "${plugin}" ]]; then
         say rccl-plugin FAIL "plugin no longer links libfabric -- it would load and do nothing"
         fail=1
     fi
-    # ZERO unresolved, not "only libfabric unresolved". The artifact is self-contained: it carries
-    # its own libfabric, libcxi, libcurl and libc, so anything still missing is a real defect
-    # rather than the deliberate gap the old self-built plugin left for the host hook to fill.
-    missing="$(ldd "${plugin}" 2>/dev/null | grep 'not found' | tr '\n' ' ' || true)"
+    # A MISSING SONAME is a defect; a symbol-version complaint under ldd is not. ldd resolves this
+    # library in ISOLATION, and /opt/cscs/netstack comes early in the search path, so the artifact's
+    # own libc (2.35) gets asked to satisfy GLIBC_2.38 references from /opt/rocm -- and cannot.
+    # At run time nothing of the sort happens: libc is already mapped by the program interpreter
+    # before any dlopen, and the image's 2.39 satisfies them all.
+    #
+    # Job 630088 is why this distinction is written down rather than inferred. It reported
+    # "rccl-deps FAIL, GLIBC_2.38 not found" and, four lines below, "rccl-net OK, Using network AWS
+    # Libfabric" -- in the SAME run, on a plugin that 630033 had just driven through a correct
+    # 8-rank cross-node collective. Failing on that rejects a working stack for an artefact of the
+    # diagnostic, which is the error this file exists to stop making.
+    #
+    # So: "=> not found" (an absent library) FAILS. "version `GLIBC_x' not found" is REPORTED and
+    # does not fail, because rccl-net below tests the thing that actually matters -- selection.
+    missing="$(ldd "${plugin}" 2>/dev/null | grep '=> not found' | tr '\n' ' ' || true)"
+    symver="$(ldd "${plugin}" 2>&1 | grep -c "version .* not found" || true)"
     if [[ -n "${missing}" ]]; then
-        say rccl-deps FAIL "unresolved: ${missing}"
+        say rccl-deps FAIL "absent library: ${missing}"
         fail=1
+    elif [[ "${symver}" -gt 0 ]]; then
+        say rccl-deps OK "no absent library; ${symver} ldd symbol-version notes (isolated-resolution artefact, see rccl-net)"
     else
         say rccl-deps OK "all deps resolve against the netstack artifact"
     fi

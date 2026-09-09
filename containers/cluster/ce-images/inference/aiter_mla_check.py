@@ -22,6 +22,7 @@ aiter build is reported and skipped, because absence is a version fact, not a de
 """
 
 import argparse
+import functools
 import importlib
 import inspect
 import os
@@ -57,11 +58,43 @@ def reference_attention(q, k, v):
     return torch.einsum("bhqk,bkhd->bqhd", probs, vf)
 
 
+# aiter's decode MLA takes PAGED KV, not (q, k, v). The surface dump in job 630332 gave the exact
+# signature, so the call below is written to it rather than guessed:
+#   mla_decode_fwd(q, kv_buffer, o, qo_indptr, kv_indptr, kv_indices, kv_last_page_lens,
+#                  max_seqlen_q, page_size=1, nhead_kv=1, sm_scale=None, ...)
+# MLA keeps ONE latent KV head and reads the value as the first dv columns of the same buffer --
+# that is what makes v (512) narrower than qk (576), and the reference below mirrors it exactly.
+# page_size=1 is chosen so kv_indices is a plain arange and the paging cannot silently reorder
+# anything; that keeps a numeric mismatch attributable to the kernel rather than to this layout.
+PAGED_DECODE_ARGS = ("q", "kv_buffer", "o", "qo_indptr", "kv_indptr", "kv_indices", "kv_last_page_lens", "max_seqlen_q")
+
+
+def paged_decode_inputs(b, skv, h, dqk, dv, dtype, dev):
+    """One query token per sequence, skv single-slot pages behind it."""
+    q = torch.randn(b, h, dqk, dtype=dtype, device=dev)
+    kv = torch.randn(b * skv, 1, 1, dqk, dtype=dtype, device=dev)
+    o = torch.empty(b, h, dv, dtype=dtype, device=dev)
+    qo_indptr = torch.arange(b + 1, dtype=torch.int32, device=dev)
+    kv_indptr = torch.arange(b + 1, dtype=torch.int32, device=dev) * skv
+    kv_indices = torch.arange(b * skv, dtype=torch.int32, device=dev)
+    kv_last_page_lens = torch.ones(b, dtype=torch.int32, device=dev)
+    return q, kv, o, qo_indptr, kv_indptr, kv_indices, kv_last_page_lens
+
+
+def paged_decode_reference(q, kv, b, skv, dv, scale):
+    """fp32 attention over the same paged buffer, value = the first dv columns of the latent."""
+    qf = q.float()
+    kvf = kv.float().reshape(b, skv, -1)
+    scores = torch.einsum("bhd,bkd->bhk", qf, kvf) * scale
+    probs = torch.softmax(scores, dim=-1)
+    return torch.einsum("bhk,bkd->bhd", probs, kvf[..., :dv])
+
+
 def probe_module(modname):
     """Is this aiter op module IMPORTABLE and does it carry a compiled extension?"""
     try:
         mod = importlib.import_module(modname)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 -- a module that fails to import is a fact to report, not a crash
         return None, f"{type(exc).__name__}: {exc}"
     return mod, ""
 
@@ -74,6 +107,7 @@ def main():
     args = ap.parse_args()
 
     failures = 0
+    launched = 0
     absent = []
     skipped_calls = []
 
@@ -86,7 +120,7 @@ def main():
 
     try:
         import aiter
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 -- import failure on this ROCm/torch pair is stage 1's verdict
         say("import", "aiter", "FAIL", f"{type(exc).__name__}: {exc}")
         return 1
     say("import", "aiter", "OK", getattr(aiter, "__file__", "?"))
@@ -151,8 +185,8 @@ def main():
         q = torch.randn(b, sq, h, dqk, dtype=dtype, device=dev)
         k = torch.randn(b, skv, h, dqk, dtype=dtype, device=dev)
         v = torch.randn(b, skv, h, dv, dtype=dtype, device=dev)
-        ref = reference_attention(q, k, v[..., :dv])
-
+        # v is already dv wide -- MLA's value head is NARROWER than its qk head (512 vs 576),
+        # which is the shape the kernel has to get right and the reference has to mirror.
         for modname, fnname, fn in found:
             label = f"{fnname} {shape}"
             # Only attempt the plain (q, k, v) call where the signature actually accepts exactly
@@ -161,24 +195,50 @@ def main():
             # are different findings and only one of them is about aiter.
             try:
                 sig = inspect.signature(fn)
-                required = [pname for pname, prm in sig.parameters.items()
-                            if prm.default is inspect.Parameter.empty
-                            and prm.kind not in (inspect.Parameter.VAR_POSITIONAL,
-                                                 inspect.Parameter.VAR_KEYWORD)]
+                required = [
+                    pname
+                    for pname, prm in sig.parameters.items()
+                    if prm.default is inspect.Parameter.empty
+                    and prm.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+                ]
             except (TypeError, ValueError):
                 required = None
-            if required is not None and len(required) != 3:
+            paged = required is not None and tuple(required[:8]) == PAGED_DECODE_ARGS
+            if paged and sq != 1:
+                # decode attends from ONE token; a q512 shape is prefill and belongs to a
+                # different entry point. Not a defect, and not this kernel's claim to answer.
+                say("launch", label, "SKIP", "paged decode kernel, but this shape is prefill (sq>1)")
+                continue
+            if not paged and required is not None and len(required) != 3:
                 say("launch", label, "SKIP", f"needs {len(required)} args: {', '.join(required)}")
                 skipped_calls.append(f"{fnname}({', '.join(required)})")
                 continue
+
+            scale = 1.0 / (dqk**0.5)
+            if paged:
+                pq, pkv, po, qo_ind, kv_ind, kv_idx, kv_lpl = paged_decode_inputs(b, skv, h, dqk, dv, dtype, dev)
+                ref = paged_decode_reference(pq, pkv, b, skv, dv, scale)
+                # partial, not a lambda: it binds these NOW rather than reading the loop
+                # variables when it is finally called.
+                call = functools.partial(fn, pq, pkv, po, qo_ind, kv_ind, kv_idx, kv_lpl, 1, sm_scale=scale)
+            else:
+                ref = reference_attention(q, k, v)
+                call = functools.partial(fn, q, k, v)
+
             try:
-                out = fn(q, k, v)
-            except Exception as exc:
-                say("launch", label, "FAIL", f"{type(exc).__name__}: {str(exc)[:70]}")
+                out = call()
+            except Exception as exc:  # noqa: BLE001 -- a native kernel can raise anything; that IS the finding
+                # Distinguish the two, because they are different findings: the harness failing to
+                # satisfy the signature is OUR bug, a kernel raising on valid inputs is AITER's.
+                whose = "harness layout may be wrong" if paged else "kernel raised"
+                say("launch", label, "FAIL", f"{type(exc).__name__}: {str(exc)[:60]} ({whose})")
                 traceback.print_exc(limit=3)
                 failures += 1
                 continue
             torch.cuda.synchronize()
+            if paged:
+                out = po  # this kernel writes into o and returns None
+            launched += 1
             say("launch", label, "OK", f"out {tuple(out.shape)}")
 
             got = out.float()
@@ -195,11 +255,11 @@ def main():
                 continue
 
             for _ in range(args.warmup):
-                fn(q, k, v)
+                call()
             torch.cuda.synchronize()
             t0 = time.perf_counter()
             for _ in range(args.iters):
-                fn(q, k, v)
+                call()
             torch.cuda.synchronize()
             per = (time.perf_counter() - t0) / args.iters * 1e3
             say("speed", label, "OK", f"{per:.3f} ms/call")
@@ -213,7 +273,13 @@ def main():
     if failures:
         print(f"AITER MLA CHECK: FAILED ({failures} failure(s))")
         return 1
-    print("AITER MLA CHECK: PASSED")
+    if not launched:
+        # Job 630332 printed PASSED having called zero kernels: every entry point was SKIPPED for
+        # signature mismatch and nothing else objected. A check that proves nothing must not pass.
+        print("AITER MLA CHECK: FAILED -- no kernel was launched, so nothing was proven")
+        print("  every resolved entry point was skipped; the surface dump above is the fix list")
+        return 1
+    print(f"AITER MLA CHECK: PASSED ({launched} kernel launch(es) verified against fp32)")
     return 0
 
 

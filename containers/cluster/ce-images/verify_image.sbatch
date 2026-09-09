@@ -9,7 +9,7 @@
 #SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/verify-%x-%j.out
 # Run verify_image.py INSIDE a built image and fail the job when a required library is missing.
 #
-#   sbatch --export=ALL,IMAGE=$SCRATCH/ce-images/optarena-judge-agent-amd.sqsh,PROFILE=judge-agent-amd \
+#   IMAGE=$SCRATCH/ce-images/optarena-judge-agent-amd.sqsh PROFILE=judge-agent-amd sbatch \
 #          containers/cluster/ce-images/verify_image.sbatch
 #
 # The EDF is generated here rather than kept in ~/.edf: this runs against a CANDIDATE image that no

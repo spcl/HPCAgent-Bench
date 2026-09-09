@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Upload readiness for every built image, WITHOUT pushing anything.
 #
-#   sbatch --export=ALL,IMAGE_DIR=$PWD push_preflight.sbatch
+#   IMAGE_DIR=$PWD sbatch push_preflight.sbatch
 #
 # Answers the only questions that can fail an upload after it has started: is any single layer
 # over the registry's 10 GB ceiling, is the image over 100 GB, and is the manifest what we intend

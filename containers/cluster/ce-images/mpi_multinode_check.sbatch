@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
-# CROSS-NODE MPI and CROSS-NODE RCCL, proven by running them across two nodes.
+# CROSS-NODE MPI, proven by running it across two nodes. MPI only -- see the note below.
+#
+# There is deliberately NO RCCL leg here. rccl_hook_check.sbatch runs the identical 2 nodes x 4
+# ranks cross-node collective, takes IMAGE= so it serves every role, and finishes in about two
+# minutes. The copy that used to live here hung instead: in 630089 only one node's four ranks ever
+# reached ncclCommInitRank, so the communicator could not form and the job burned its whole
+# 30-minute wall clock into a Slurm TIMEOUT -- which in sacct is indistinguishable from merely
+# being slow. Two implementations of one check is how you end up with one that is wrong.
 #
 #   IMAGE=$SCRATCH/ce-images/optarena-ce-amd-mi300.sqsh \
 #     sbatch containers/cluster/ce-images/mpi_multinode_check.sbatch
@@ -159,77 +166,17 @@ int main(int argc, char **argv) {
     return (sum==size && got==size && nnodes>=2 && host) ? 0 : 1;
 }
 C
-
-cat > "${WORK}/mn_rccl.c" <<'C'
-/* Cross-node RCCL: ncclCommInitRank bootstrapped over MPI, allreduce across BOTH nodes. */
-#include <mpi.h>
-#include <rccl/rccl.h>
-#include <hip/hip_runtime.h>
-#include <stdio.h>
-#include <stdlib.h>
-
-#define N 65536
-#define HIP_OK(c) do { hipError_t e=(c); if(e!=hipSuccess){ \
-    fprintf(stderr,"hip %s at %d\n",hipGetErrorString(e),__LINE__); MPI_Abort(MPI_COMM_WORLD,2);} } while(0)
-#define NCCL_OK(c) do { ncclResult_t r=(c); if(r!=ncclSuccess){ \
-    fprintf(stderr,"rccl %s at %d\n",ncclGetErrorString(r),__LINE__); MPI_Abort(MPI_COMM_WORLD,3);} } while(0)
-
-int main(int argc,char**argv){
-    int rank=0,size=0,ndev=0,nnodes=0;
-    MPI_Init(&argc,&argv);
-    MPI_Comm_rank(MPI_COMM_WORLD,&rank);
-    MPI_Comm_size(MPI_COMM_WORLD,&size);
-    MPI_Comm shared; MPI_Comm_split_type(MPI_COMM_WORLD,MPI_COMM_TYPE_SHARED,rank,MPI_INFO_NULL,&shared);
-    int srank=0; MPI_Comm_rank(shared,&srank);
-    int leader=(srank==0); MPI_Allreduce(&leader,&nnodes,1,MPI_INT,MPI_SUM,MPI_COMM_WORLD);
-    if(nnodes<2){ if(!rank) fprintf(stderr,"ranks span %d node(s); need 2\n",nnodes);
-                  MPI_Finalize(); return 9; }
-
-    HIP_OK(hipGetDeviceCount(&ndev));
-    HIP_OK(hipSetDevice(srank % (ndev>0?ndev:1)));
-
-    ncclUniqueId id;
-    if(rank==0) NCCL_OK(ncclGetUniqueId(&id));
-    MPI_Bcast(&id,sizeof(id),MPI_BYTE,0,MPI_COMM_WORLD);
-
-    ncclComm_t comm; hipStream_t st;
-    HIP_OK(hipStreamCreate(&st));
-    NCCL_OK(ncclCommInitRank(&comm,size,id,rank));
-
-    /* Rank r contributes r+1, so the sum is size(size+1)/2 -- a value no rank holds, and one a
-       no-op collective handing back its input cannot produce. */
-    float *ds,*dr,*h=malloc(N*sizeof(float));
-    HIP_OK(hipMalloc((void**)&ds,N*sizeof(float)));
-    HIP_OK(hipMalloc((void**)&dr,N*sizeof(float)));
-    for(int k=0;k<N;k++) h[k]=(float)(rank+1);
-    HIP_OK(hipMemcpy(ds,h,N*sizeof(float),hipMemcpyHostToDevice));
-    HIP_OK(hipMemset(dr,0,N*sizeof(float)));
-
-    NCCL_OK(ncclAllReduce(ds,dr,N,ncclFloat,ncclSum,comm,st));
-    HIP_OK(hipStreamSynchronize(st));
-    HIP_OK(hipMemcpy(h,dr,N*sizeof(float),hipMemcpyDeviceToHost));
-
-    float expect=(float)(size*(size+1)/2);
-    int bad=0; for(int k=0;k<N;k++) if(h[k]!=expect){bad=1;break;}
-    int anybad=0; MPI_Allreduce(&bad,&anybad,1,MPI_INT,MPI_SUM,MPI_COMM_WORLD);
-    if(rank==0) printf("ranks=%d nodes=%d allreduce=%.0f expected=%.0f bad_ranks=%d\n",
-                       size,nnodes,(double)h[0],(double)expect,anybad);
-    ncclCommDestroy(comm);
-    MPI_Finalize();
-    return anybad?4:0;
-}
-C
 echo "=== image: ${IMAGE}"
 echo "=== nodes: ${SLURM_JOB_NODELIST}"
 
 echo "=== compile (one node, shared filesystem) ==="
-srun -N1 -n1 -c24 --overlap --environment="${EDF}" bash -c "
+timeout --signal=TERM 600 \
+  srun -N1 -n1 -c24 --overlap --environment="${EDF}" bash -c "
   set -eux
   mpicc -O0 -o ${WORK}/mn_mpi ${WORK}/mn_mpi.c -D__HIP_PLATFORM_AMD__ -I/opt/rocm/include -L/opt/rocm/lib -lamdhip64
-  mpicc -O0 -o ${WORK}/mn_rccl ${WORK}/mn_rccl.c -D__HIP_PLATFORM_AMD__ -I/opt/rocm/include -L/opt/rocm/lib -lrccl -lamdhip64
 "
 
-rc_mpi=0; rc_rccl=0; verdict=0
+rc_mpi=0; verdict=0
 echo
 echo "=== 1. CROSS-NODE MPI (2 nodes x 4 ranks) ==="
 # --mpi=pmi2: MPICH 4.2+ builds both PMI-1 and PMI-2 client interfaces, and pmi2 is what makes
@@ -238,7 +185,8 @@ echo "=== 1. CROSS-NODE MPI (2 nodes x 4 ranks) ==="
 # is named -- the program can report the .so it mapped but not what MPICH chose inside it. Passed
 # as an env prefix rather than --export because that list splits on commas (see the EDF above).
 MPIR_CVAR_CH4_OFI_CAPABILITY_SETS_DEBUG=1 FI_LOG_LEVEL=warn FI_LOG_PROV=core \
-srun -N2 --ntasks-per-node=4 -c24 --mpi=pmi2 --environment="${EDF}" \
+timeout --signal=TERM 420 \
+  srun -N2 --ntasks-per-node=4 -c24 --mpi=pmi2 --environment="${EDF}" \
      "${WORK}/mn_mpi" 2>&1 | tee "${WORK}/mpi.log" || rc_mpi=$?
 
 echo
@@ -247,8 +195,11 @@ fab="$(grep -m1 -oE 'libfabric=[^ ]+' "${WORK}/mpi.log" | cut -d= -f2- || true)"
 case "${fab}" in
     ""|none)
         echo "  INCONCL: the MPI process mapped no libfabric.so at all" ;;
-    /opt/ofi-sdk/*|/opt/spack-install/*)
-        echo "  FAIL: mapped ${fab} -- the compile-only stub, which ships no cxi provider" >&2
+    /opt/ofi-sdk/*)
+        echo "  FAIL: mapped ${fab} -- the compile-only link stub; it was not deleted from the image" >&2
+        verdict=1 ;;
+    /opt/spack-install/*)
+        echo "  FAIL: mapped ${fab} -- SPACK built its own; the packages.yaml external did not take" >&2
         verdict=1 ;;
     /opt/cscs/*)
         echo "  OK: mapped ${fab} (the pinned netstack artifact)" ;;
@@ -267,27 +218,8 @@ else
 fi
 
 echo
-echo "=== 3. CROSS-NODE RCCL (2 nodes x 4 ranks, net transport forced into the log) ==="
-srun -N2 --ntasks-per-node=4 -c24 --mpi=pmi2 --environment="${EDF}" \
-     "${WORK}/mn_rccl" 2>&1 | tee "${WORK}/rccl.log" || rc_rccl=$?
-
-echo
-echo "=== 4. which NET transport did RCCL choose? ==="
-net="$(grep -oiE '(Using network [A-Za-z ]+|NET/[A-Za-z]+)' "${WORK}/rccl.log" | sort -u | tr '\n' ' ' || true)"
-if grep -qiE 'NET/OFI|AWS Libfabric' "${WORK}/rccl.log"; then
-    echo "  OFI/libfabric plugin SELECTED: ${net}"
-elif grep -qiE 'NET/Socket|Using network Socket' "${WORK}/rccl.log"; then
-    echo "  TCP SOCKETS: ${net}"
-    echo "  cross-node RCCL is NOT on Slingshot -- the net plugin is missing or not selected" >&2
-    verdict=1
-else
-    echo "  INCONCLUSIVE: no transport line in the RCCL log (${net:-none})"
-    tail -5 "${WORK}/rccl.log" || true
-fi
-
-echo
-echo "=== cross-node MPI rc=${rc_mpi}  cross-node RCCL rc=${rc_rccl}  fabric/transport verdict=${verdict}"
-s=$(( rc_mpi + rc_rccl + verdict ))
+echo "=== cross-node MPI rc=${rc_mpi}  fabric verdict=${verdict}"
+s=$(( rc_mpi + verdict ))
 
 # A FAILING run is the one whose logs are wanted, and the old unconditional rm deleted them.
 for f in "${WORK}"/*.log; do

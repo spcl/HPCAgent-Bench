@@ -52,6 +52,17 @@ mkdir -p "$(dirname "${OUTPUT_SQSH}")"
 
 ce_podman_env
 
+# The 30 GB rocm/pytorch base, read from scratch instead of re-pulled from Docker Hub every
+# build. vllm/build.sh already caches this EXACT digest, so this build was fetching bytes
+# that were already on disk. It rewrites BASE_IMAGE to a local dir: on a hit, which is why
+# BASE_IMAGE_REF is passed below -- the base.name label must stay the registry reference.
+ce_cache_base_image
+
+# Wheels survive between jobs here, OUTSIDE the image, so a retry does not rebuild cupy
+# from its sdist. The bind mount means nothing lands in an image layer either way.
+PIP_CACHE="${PIP_CACHE:-${SCRATCH:?}/pip-cache}"
+mkdir -p "${PIP_CACHE}"
+
 # DaCe: resolve the TIP of extended HERE and pass the sha in. The Dockerfile cannot do this --
 # its layer cache keys on the command string, so a '--branch extended' clone is reused forever
 # and the image ages into a pin nothing records. Resolving outside makes the sha part of the
@@ -93,7 +104,7 @@ ce_require_mirror_commit "ofiwg/libfabric.git" "${LIBFABRIC_COMMIT}"
 # install and registers it as a mirror when non-empty; both halves no-op without the mount.
 SPACK_BUILDCACHE="${SPACK_BUILDCACHE:-${SCRATCH:?}/spack-buildcache}"
 mkdir -p "${SPACK_BUILDCACHE}"
-CACHE_ARGS=(-v "${SPACK_BUILDCACHE}:/spack-buildcache:rw")
+CACHE_ARGS=(-v "${SPACK_BUILDCACHE}:/spack-buildcache:rw" -v "${PIP_CACHE}:/pip-cache:rw")
 printf 'spack buildcache %s\n' "${SPACK_BUILDCACHE}"
 
 # cgroupfs, not systemd: a dying logind session reaps podman mid-pull under the systemd manager,
@@ -114,6 +125,7 @@ for target in ${BUILD_TARGETS}; do
     printf '\n===== building target %s -> %s =====\n' "${target}" "${out}"
     podman --cgroup-manager=cgroupfs build "${MIRROR_ARGS[@]}" "${CACHE_ARGS[@]}" \
       --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
+      --build-arg "BASE_IMAGE_REF=${BASE_IMAGE_REF:-${BASE_IMAGE}}" \
       --build-arg "IMAGE_VERSION=${IMAGE_VERSION}" \
       --build-arg "DACE_COMMIT=${DACE_COMMIT}" \
       --build-arg "LIBFABRIC_REF=${LIBFABRIC_REF}" \

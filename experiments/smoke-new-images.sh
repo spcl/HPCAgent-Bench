@@ -18,7 +18,7 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 SCRATCH="${SCRATCH:?}"
 IMAGES="${SCRATCH}/ce-images"
 EDF_DIR="${HOME}/.edf"
-SMOKES="../ce-images/inference"
+SMOKES="../containers/cluster/ce-images/inference"
 mkdir -p "${EDF_DIR}"
 
 # candidate .sqsh -> the smoke that knows how to drive that engine
@@ -96,8 +96,11 @@ for name in "${candidates[@]}"; do
   fi
   # The sglang smoke defaults to the official aiter recipe it was written to evaluate. Acceptance
   # asks a different question -- does this image serve what the CAMPAIGN serves -- so the three
-  # knobs .env.kvfix3-kimi27sglang-c settled on are passed through: triton attention, the decode
-  # graph cap that bought 4.7x KV, and the hierarchical cache. 256k context is free at that cap.
+  # knobs .env.kvfix3-kimi27sglang-c settled on are passed through: triton attention and the
+  # decode graph cap that bought 4.7x KV. 256k context is free at that cap. The hierarchical
+  # cache was DROPPED 2026-09-09: hicache_ratio 2.0 mirrors the KV pool into a host tier that
+  # on MI300A is the same physical RAM, so it triples the cost of every token and OOM-killed
+  # the eff 0.50 and 0.55 arms with no traceback.
   # SGLANG_EXTRA_ARGS and MEM_FRACTION are DEFAULTS here, not overrides: tuning a serving knob
   # means running this driver against the same image with one value changed, and a hardcoded
   # assignment made that impossible -- the 0.42-vs-0.50 mem-fraction pair had to be run by hand.
@@ -105,7 +108,7 @@ for name in "${candidates[@]}"; do
   if [[ "${name}" == sglang ]]; then
     sgl=(CONTEXT_LEN="${CONTEXT_LEN:-262144}"
          MEM_FRACTION="${MEM_FRACTION:-0.42}"
-         SGLANG_EXTRA_ARGS="${SGLANG_EXTRA_ARGS:---attention-backend triton --cuda-graph-max-bs-decode 64 --enable-hierarchical-cache}")
+         SGLANG_EXTRA_ARGS="${SGLANG_EXTRA_ARGS:---attention-backend triton --cuda-graph-max-bs-decode 64}")
   fi
   # TUNED_MOE_DIR defaults to <submit dir>/moe-configs, and this driver submits from HERE, where
   # there is no such folder -- an empty one reads as "tuned" and is how a smoke measures the

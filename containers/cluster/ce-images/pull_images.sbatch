@@ -11,7 +11,7 @@
 # that merely resembles it -- apt and PyPI move underneath, and the digest will not match.
 #
 # Build instead when you are CHANGING an image, or when a role has not been published yet:
-#   sbatch --export=ALL,IMAGE_DIR=$PWD/judge-agent-amd build_and_verify.sbatch
+#   IMAGE_DIR=$PWD/judge-agent-amd sbatch build_and_verify.sbatch
 #
 # A COMPUTE NODE, not a login shell: enroot unpacks every layer before writing the squashfs, and
 # the judge+agent image is over 60 GB decompressed. Layer extraction onto Lustre fails outright --
@@ -61,7 +61,7 @@ echo
 if [ -n "${failed}" ]; then
     echo "FAILED:${failed}" >&2
     echo "A role that has never been published has nothing to pull -- build that one:" >&2
-    echo "  sbatch --export=ALL,IMAGE_DIR=${SCRIPT_DIR}/<role> ${SCRIPT_DIR}/build_and_verify.sbatch" >&2
+    echo "  IMAGE_DIR=${SCRIPT_DIR}/<role> sbatch ${SCRIPT_DIR}/build_and_verify.sbatch" >&2
     exit 1
 fi
 echo "all roles fetched. Install the EDFs that name them:"

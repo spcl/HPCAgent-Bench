@@ -32,7 +32,7 @@ render() {
         echo "  PULL it (the default path -- same bytes we published, minutes not hours):" >&2
         echo "    sbatch ${SCRIPT_DIR}/pull_images.sbatch" >&2
         echo "  or BUILD it, if you are changing the image or it is not published yet:" >&2
-        echo "    sbatch --export=ALL,IMAGE_DIR=${SCRIPT_DIR}/<role> ${SCRIPT_DIR}/build_and_verify.sbatch" >&2
+        echo "    IMAGE_DIR=${SCRIPT_DIR}/<role> sbatch ${SCRIPT_DIR}/build_and_verify.sbatch" >&2
         return 1
     fi
 

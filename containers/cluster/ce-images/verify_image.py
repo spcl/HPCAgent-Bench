@@ -34,7 +34,22 @@ import sys
 import tempfile
 
 #: Where an image of ours puts things the loader is not told about by default.
-PREFIXES = ("/opt/view", "/opt/gcc", "/opt/papi", "/opt/rocm", "/opt/ofi", "/opt/hpcstack", "/usr")
+#: /opt/cscs/netstack is the CSCS netstack artifact the enroot hooks install, and it is the ONLY
+#: place libcxi and the RCCL plugin exist -- the images are forbidden to ship them. It lays its
+#: 49 .so files FLAT at the prefix root, with no lib/ or lib64/ under it, and only libfabric is
+#: bind-mounted onto a system path, so ldconfig never learns the rest. Job 630050 failed a good
+#: sglang image on exactly that: libfabric passed via the bind mount, libcxi was reported absent
+#: while sitting at /opt/cscs/netstack/libcxi.so.1.
+PREFIXES = (
+    "/opt/view",
+    "/opt/gcc",
+    "/opt/papi",
+    "/opt/rocm",
+    "/opt/ofi",
+    "/opt/hpcstack",
+    "/opt/cscs/netstack",
+    "/usr",
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -66,7 +81,8 @@ def have_lib(soname: str) -> tuple[bool, str]:
     if soname in loader_cache():
         return True, "ldconfig"
     for prefix in PREFIXES:
-        for libdir in ("lib", "lib64"):
+        # "" is the prefix root itself: the netstack artifact has no lib/ level.
+        for libdir in ("lib", "lib64", ""):
             root = pathlib.Path(prefix) / libdir
             if not root.is_dir():
                 continue
@@ -189,7 +205,7 @@ def checks(profile: str) -> list[Check]:
             Check("serving", "aiter", "py", "aiter"),
             Check("serving", "triton", "py", "triton"),
             Check("fabric", "libfabric", "lib", "libfabric.so"),
-            Check("fabric", "libcxi", "lib", "libcxi.so", required=(profile == "sglang")),
+            Check("fabric", "libcxi", "lib", "libcxi.so"),
             Check("serving", "flydsl", "py", "flydsl", required=(profile == "sglang")),
         ]
     return common + [

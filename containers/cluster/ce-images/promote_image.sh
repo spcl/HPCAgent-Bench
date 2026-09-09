@@ -67,7 +67,7 @@ for role in ${roles}; do
         # The judge is a second TARGET of the judge-agent-amd build, not a directory of its own.
         dir="${role}"; [ "${role}" = "judge" ] && dir="judge-agent-amd"
         echo "${role}: REFUSING -- ${cand##*/} carries no .verified marker" >&2
-        echo "  run: sbatch --export=ALL,IMAGE_DIR=${SCRIPT_DIR}/${dir} build_and_verify.sbatch" >&2
+        echo "  run: IMAGE_DIR=${SCRIPT_DIR}/${dir} sbatch build_and_verify.sbatch" >&2
         failed=$((failed + 1))
         continue
     fi
