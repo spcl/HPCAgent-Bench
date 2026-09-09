@@ -91,6 +91,10 @@ done
 #
 # numpy rides along once as the reference every speedup is against; running it in both stages would
 # time the same interpreter twice.
+# The single-tree cases are this same sample with one stage. dace against pluto, for instance:
+#   STAGES=("${DACE_MAIN} main numpy,dace_cpu_autoopt,pluto") DACE_MAIN=<upstream> sbatch $0
+# which is why there is no separate sample for it -- a second file that shares every line but the
+# column list is a file that drifts from this one.
 if [[ "${GPU:-0}" == "1" ]]; then
     STAGES=("${DACE_MAIN} main dace_gpu_parallel,dace_gpu_autoopt"
             "${DACE_EXTENDED} extended dace_gpu_parallel,dace_gpu_autoopt,dace_gpu_canonicalize")

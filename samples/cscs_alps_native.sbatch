@@ -2,20 +2,24 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# SAMPLE -- THREE-WAY optimizer comparison over the HPC track, on CSCS Daint/Alps, NATIVE (no
-# container, no EDF, no --environment flag anywhere).
+# SAMPLE -- the DaCe SDFG PIPELINES over the HPC track, across BOTH DaCe trees, on CSCS Daint/Alps,
+# NATIVE (no container, no EDF, no --environment flag anywhere).
 #
-#   pluto                             the polyhedral native column, no DaCe involved
-#   dace_cpu_autoopt on `main`        upstream auto_optimize, measured on upstream DaCe
-#   dace_cpu_autoopt on `extended`    the SAME upstream optimizer, measured on the fork
+#   dace_cpu_parallel       LoopToMap / MapCollapse / MapFusion -- upstream transformations
+#   dace_cpu_autoopt        upstream auto_optimize
+#   dace_cpu_canonicalize   the fork's canonicalize + finalize pair (spcl/dace@extended only)
 #
-# The two autoopt cells are the point: identical pipeline, identical kernel, identical preset, so
-# whatever differs between them is the DaCe underneath rather than the optimizer. Pluto is the
-# outside reference that says whether either DaCe is competitive at all.
+# The first two are UPSTREAM code, so they run on both branches and are run on both: five
+# stage-columns -- main/parallel, main/autoopt, extended/parallel, extended/autoopt,
+# extended/canonicalize. The four shared cells are the control that makes the fifth readable. Same
+# pipeline, same kernel, same preset, different tree: whatever differs there is the DaCe underneath
+# rather than the optimizer, and without it the canonicalize column is not a claim about the
+# optimizer at all.
 #
 #   HPCAGENT_BENCH_ENV=$SCRATCH/hpcagent-env.sh DACE_MAIN=$SCRATCH/dace-main \
 #       DACE_EXTENDED=$SCRATCH/dace-extended \
-#       sbatch -A <account> samples/cscs_alps_native_three_way.sbatch
+#       sbatch -A <account> samples/cscs_alps_native.sbatch            # 5-column pipelines
+#       PLAN=three-way sbatch -A <account> samples/cscs_alps_native.sbatch   # + pluto
 #
 # `-A <account>` is mandatory on Alps (or export SBATCH_ACCOUNT first).
 #
@@ -30,6 +34,10 @@
 # numpy is NOT optional: `hpcagent-bench plot` builds its speedup table against the numpy column.
 # It rides in the reference stage below, ONCE, so it is not timed twice.
 #
+# The extended stage needs the fork's canonicalize pipeline; preflight inside submit_deterministic
+# checks for it and exits non-zero there rather than hundreds of kernels deep with a canonicalize
+# column silently scored on upstream auto_optimize.
+#
 # Overridable: BENCH, PRESET, RANKS_PER_NODE, DACE_BUILD_ROOT, DACE_CHECKOUT, plus anything
 # submit_deterministic takes. All the real work -- sharding, preflight, thread split, per-rank DB
 # shards, the merged failure count -- is that script's; this file is a stage table and a loop.
@@ -42,13 +50,13 @@
 # three things most likely to need a local edit before this runs as-is. No --partition line is set
 # for that reason.
 
-#SBATCH --job-name=hpcagent-alps-native-three-way
-#SBATCH --nodes=4
+#SBATCH --job-name=hpcagent-alps-native-pipelines
+#SBATCH --nodes=8
 #SBATCH --ntasks-per-node=4         # MUST equal RANKS_PER_NODE below: this is what allocates the
                                     # ranks, and srun cannot launch more tasks than were allocated
 #SBATCH --exclusive                 # whole nodes: the ranks split them, no foreign co-runners
 #SBATCH --time=12:00:00
-#SBATCH --output=results/alps-native-three-way-%j.out
+#SBATCH --output=results/alps-native-%j.out
 
 set -euo pipefail
 
@@ -80,9 +88,23 @@ require_dace_tree DACE_EXTENDED
 # because HPCAGENT_BENCH_RECORD_BUILD is read for EVERY framework, not just the DaCe ones, and
 # plot folds a non-null build into the series name -- a numpy row stamped `main` plots as
 # `numpy/main`, which is not the baseline plot divides by. Unstamped here, so it is.
-STAGES=("none ${DACE_MAIN} numpy,pluto"
-        "main ${DACE_MAIN} dace_cpu_autoopt"
-        "extended ${DACE_EXTENDED} dace_cpu_autoopt")
+# PLAN picks WHAT is compared; everything below is identical either way, which is why these are
+# one sample and not two. `pipelines` runs the upstream transformations on BOTH trees so the four
+# shared cells are the control that makes the fork's canonicalize column readable. `three-way` drops
+# to one optimizer and adds pluto as the outside reference that says whether either DaCe is
+# competitive at all -- the two autoopt cells then differ only in the DaCe underneath.
+case "${PLAN:-pipelines}" in
+    pipelines)
+        STAGES=("none ${DACE_MAIN} numpy"
+                "main ${DACE_MAIN} dace_cpu_parallel,dace_cpu_autoopt"
+                "extended ${DACE_EXTENDED} dace_cpu_parallel,dace_cpu_autoopt,dace_cpu_canonicalize") ;;
+    three-way)
+        STAGES=("none ${DACE_MAIN} numpy,pluto"
+                "main ${DACE_MAIN} dace_cpu_autoopt"
+                "extended ${DACE_EXTENDED} dace_cpu_autoopt") ;;
+    *)
+        echo "PLAN must be 'pipelines' or 'three-way', got '${PLAN}'" >&2; exit 2 ;;
+esac
 
 BASE_PYTHONPATH="${PYTHONPATH:-}"
 # DaCe writes one .so per SDFG variant per kernel. Off /tmp, which is tmpfs on these nodes (the
@@ -116,9 +138,9 @@ for stage in "${STAGES[@]}"; do
     # there first, and the resulting binary is neither tree's -- a wrong measurement that builds.
     export DACE_BUILD_ROOT="${BUILD_ROOT}/${build}"
 
-    # Every stage RUNS even if an earlier one failed, and the job still fails at the end. The
-    # comparison this job exists for needs both autoopt halves, so losing one silently is the worst
-    # outcome; a crash in one must not cost the others their allocation.
+    # Every stage RUNS even if an earlier one failed, and the job still fails at the end. A crash in
+    # the main-tree stage must not cost the extended-tree measurements their allocation -- and the
+    # comparison this job exists for needs both halves, so losing one silently is the worst outcome.
     echo "=== stage ${build}: ${columns} (dace=${tree}) ==="
     if ! bash "${REPO}/scripts/submit_deterministic.sbatch"; then
         failed+=("${build}")
@@ -135,9 +157,9 @@ hpcagent-bench aggregate-db
 # Signed relative change (0 = no change, +1 = 2x faster, -1 = 2x slower), banded by order of
 # magnitude. NOT the old ratio-axis table, which reads a 0.5x regression as smaller than a 1.5x
 # win; that one is opt-in now (`hpcagent-bench plot`). --no-usetex: a compute node rarely has LaTeX.
-echo "=== speed-up chart ==="
+echo "=== speed-up chart (framework/flavor/build folded into one series each) ==="
 python "${REPO}/scripts/plot_speedup.py" --benchmark "${BENCH}" --preset "${PRESET}" --no-usetex \
-    --output "results/plots/alps-native-three-way-${SLURM_JOB_ID:-local}.pdf"
+    --output "results/plots/alps-native-${PLAN:-pipelines}-${SLURM_JOB_ID:-local}.pdf"
 
 if (( ${#failed[@]} )); then
     echo "stages with failures: ${failed[*]}" >&2
