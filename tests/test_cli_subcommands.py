@@ -58,12 +58,22 @@ DISPATCH = {
 }
 
 
+#: Names a stubbed module must expose BESIDES its dispatch function, because a cmd_* handler
+#: imports them in the same statement: ``from hpcagent_bench.plotting import DEFAULT_BASELINE,
+#: plot_heatmap``. cli.py resolves --baseline's default in the handler rather than at parse time so
+#: that plotting, and matplotlib under it, stays unimported for every other subcommand -- so a stub
+#: carrying only the function raises ImportError before the recorder is ever reached. The value is
+#: never asserted; it exists so the name resolves, and says where it came from if one ever is.
+STUB_CONSTANTS = {"hpcagent_bench.plotting": {"DEFAULT_BASELINE": "<stub-default-baseline>"}}
+
+
 def _stub_module(monkeypatch, dotted, funcname, recorder):
     """Install a fake ``dotted`` module exposing ``funcname`` -> ``recorder`` so a
     subcommand's ``from dotted import funcname`` binds the stub, never the real (heavy)
     module."""
     fake = types.ModuleType(dotted)
     vars(fake)[funcname] = recorder
+    vars(fake).update(STUB_CONSTANTS.get(dotted, {}))
     monkeypatch.setitem(sys.modules, dotted, fake)
 
 
