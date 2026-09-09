@@ -165,6 +165,16 @@ run_vllm_node() {
     # cancel reaches it and its own TERM trap exits it cleanly.
     ROLE=vllm OUT_DIR="${RUN_DIR}/monitor" "${SCRIPT_DIR}/node_monitor.sh" &
 
+    # ROCR_ -> HIP_, which is what the CSCS multi-node recipe does and what ray requires. Slurm
+    # hands the step ROCR_VISIBLE_DEVICES; ray hard-errors on it and wants HIP_VISIBLE_DEVICES
+    # (measured, 595060), and the two are NOT interchangeable -- ROCR_ filters at the runtime
+    # level, so a stale one left set alongside HIP_ filters twice and the engine sees fewer
+    # devices than tp-size asks for. Translate and unset, never both.
+    if [[ -n "${ROCR_VISIBLE_DEVICES:-}" ]]; then
+        export HIP_VISIBLE_DEVICES="${HIP_VISIBLE_DEVICES:-${ROCR_VISIBLE_DEVICES}}"
+        unset ROCR_VISIBLE_DEVICES
+    fi
+
     # HF_HOME MUST be exported before the snapshot resolution below: inside the CE container
     # ~/.cache is the RAM-backed overlay, and resolving there made the fallback download 60 GB
     # of weights into the job cgroup - the OOM that killed 585035.
