@@ -49,22 +49,27 @@
 import numpy as np
 
 
-def _invfft_wave(psic, nr1, nr2, nr3):
+def _invfft_wave(psic, nnr, nr1, nr2, nr3):
     """invfft('Wave'): backward FFT e^{+iG.r}, unscaled (QE convention).
 
     One 3D transform of the flat Fortran-ordered psic grid; np.fft.ifftn divides by
     nnr while QE's backward transform is unscaled, hence the * nnr.
+
+    nnr is PASSED, not recomputed as nr1*nr2*nr3: it is psic's own extent, and the flatten
+    below writes back into psic. Recomputed, the write is one quantity in two spellings and
+    the DaCe frontend cannot prove the product equals the declared extent.
     """
-    nnr = nr1 * nr2 * nr3
     grid = psic.reshape((nr1, nr2, nr3), order="F")
-    psic[:] = (np.fft.ifftn(grid) * nnr).reshape(-1, order="F")
+    psic[:] = (np.fft.ifftn(grid) * nnr).reshape(nnr, order="F")
 
 
-def _fwfft_wave(psic, nr1, nr2, nr3):
-    """fwfft('Wave'): forward FFT e^{-iG.r} scaled by 1/nnr (the QE forward normalization)."""
-    nnr = nr1 * nr2 * nr3
+def _fwfft_wave(psic, nnr, nr1, nr2, nr3):
+    """fwfft('Wave'): forward FFT e^{-iG.r} scaled by 1/nnr (the QE forward normalization).
+
+    nnr is psic's declared extent -- see :func:`_invfft_wave`.
+    """
     grid = psic.reshape((nr1, nr2, nr3), order="F")
-    psic[:] = (np.fft.fftn(grid) / nnr).reshape(-1, order="F")
+    psic[:] = (np.fft.fftn(grid) / nnr).reshape(nnr, order="F")
 
 
 def _fftx_c2psi_k(psic, c, nl, igk, ngk):
@@ -86,16 +91,16 @@ def _fftx_psi2c_k(vin, vout, nl, igk, ngw):
         vout[ig, 0] = vin[nl[igk[ig]]]
 
 
-def _wave_g2r(f_in, psic, nl, igk, nr1, nr2, nr3):
+def _wave_g2r(f_in, psic, nl, igk, nnr, nr1, nr2, nr3):
     """wave_g2r, k arm only: scatter then backward FFT."""
     npw = f_in.shape[0]
     _fftx_c2psi_k(psic, f_in, nl, igk, npw)
-    _invfft_wave(psic, nr1, nr2, nr3)
+    _invfft_wave(psic, nnr, nr1, nr2, nr3)
 
 
-def _wave_r2g(psic, f_out, nl, igk, ngw, nr1, nr2, nr3):
+def _wave_r2g(psic, f_out, nl, igk, ngw, nnr, nr1, nr2, nr3):
     """wave_r2g, k arm only: forward FFT then gather."""
-    _fwfft_wave(psic, nr1, nr2, nr3)
+    _fwfft_wave(psic, nnr, nr1, nr2, nr3)
     _fftx_psi2c_k(psic, f_out, nl, igk, ngw)
 
 
@@ -111,11 +116,11 @@ def vloc_psi_k_acc(psi, hpsi, v, igk_k, nl, lda, n, m, nnr, nr1, nr2, nr3, ngm, 
         idx = 0
         for j in range(n):
             psi1[j, idx] = psi[j, ibnd + idx]
-        _wave_g2r(psi1[:, idx:idx + 1], psic, nl, igk, nr1, nr2, nr3)
+        _wave_g2r(psi1[:, idx : idx + 1], psic, nl, igk, dffts_nnr, nr1, nr2, nr3)
 
         for j in range(dffts_nnr):
             psic[j] = psic[j] * v[j]
-        _wave_r2g(psic, psi1, nl, igk, ngw, nr1, nr2, nr3)
+        _wave_r2g(psic, psi1, nl, igk, ngw, dffts_nnr, nr1, nr2, nr3)
 
         for i in range(n):
             hpsi[i, ibnd] = hpsi[i, ibnd] + psi1[i, idx]
