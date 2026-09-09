@@ -50,6 +50,7 @@ set -euo pipefail
 ulimit -c 0
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 . ./arm_nodes.sh
+. ./skill_args.sh
 
 PY=${SCRATCH:?}/venv-optarena-314/bin/python
 OPT=${SCRATCH:?}/optarena
@@ -88,11 +89,15 @@ submit_arm() {  # submit_arm <model> <language> <skills:0|1> <deps or empty>
     local arm="${EXPERIMENT}-${model}-${lang}${OFFLOAD:+-${OFFLOAD}}${sfx}"
     local env=".env.${arm}" problems="${PROBLEMS_PREFIX}-${lang}${sfx}.jsonl"
 
-    # --image amd drops the pages that teach a vendor this box does not have; --skills adds the
-    # language page for the skills leg only. Written through a temp file and renamed, because every
-    # arm reads this file at launch and `>` truncates it the instant the redirect opens.
+    # --image amd drops the pages that teach a vendor this box does not have. The skills leg NAMES
+    # its pages rather than asking for the auto packet: both render through the same path then, so
+    # this arm and a single-page arm differ in their pages and in nothing else. Written through a
+    # temp file and renamed, because every arm reads this file at launch and `>` truncates it the
+    # instant the redirect opens.
+    local skill_args=""
+    [[ "${skills}" == 1 ]] && skill_args="$(skill_args_for "${lang}" amd)"
     "${PY}" ./make_problems.py --track loop_level_reasoning --tag "${TAG}" \
-        --language "${lang}" --image amd ${skills:+$([[ "${skills}" == 1 ]] && echo --skills)} \
+        --language "${lang}" --image amd ${skill_args} \
         >"${problems}.tmp"
     mv -f "${problems}.tmp" "${problems}"
 
