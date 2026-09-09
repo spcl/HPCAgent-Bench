@@ -71,6 +71,20 @@ for role in ${roles}; do
         failed=$((failed + 1))
         continue
     fi
+    # A marker records the DIGEST it verified. Existence alone is not enough: a build that
+    # overwrites an image in place leaves the OLD marker beside NEW bytes, and promoting on that
+    # is promoting something nothing ever verified. build.sbatch (unlike build_and_verify.sbatch)
+    # does exactly that. Compare, and refuse when they disagree.
+    marker_digest="$(grep -oE 'digest=[^[:space:]]+' "$(verified_marker "${cand}")" | cut -d= -f2)"
+    image_digest="$(cat "${cand}.digest" 2>/dev/null || true)"
+    if [ -n "${image_digest}" ] && [ "${marker_digest}" != "${image_digest}" ]; then
+        echo "${role}: REFUSING -- ${cand##*/} was rebuilt after it was verified" >&2
+        echo "  marker verified: ${marker_digest}" >&2
+        echo "  image is now:    ${image_digest}" >&2
+        echo "  re-verify it, do not promote on a stale pass" >&2
+        failed=$((failed + 1))
+        continue
+    fi
     printf '%s\n  %s\n  -> %s\n' "${role}" "${cand##*/}" "${live##*/}"
     # The sidecars move WITH the image, or the live name loses its provenance. .oci.tar is the
     # only publishable form -- a squashfs reimports as one layer past the registry ceiling -- so
