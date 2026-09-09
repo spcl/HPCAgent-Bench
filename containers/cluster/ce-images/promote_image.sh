@@ -54,6 +54,32 @@ esac
 # been different things often enough here to cost whole campaigns.
 verified_marker() { printf '%s.verified' "$1"; }
 
+EDF_DIR="${EDF_DIR:-${HOME}/.edf}"
+
+# Repoint every EDF that named the image we just renamed.
+#
+# install_edfs.sh (run at the end) re-renders the four MANAGED names from their templates, and for
+# a long time that was assumed to be all of ~/.edf. It is not. An EDF written by hand is managed by
+# nothing, so a promotion renames the image out from under it and leaves it pointing at a path that
+# no longer exists -- the arm then dies at container start with nothing but "image does not exist",
+# a long way from the rename that caused it. sglang-glm-halfconv is one such file and there is no
+# reason to believe it is the last, so this keys off the RENAME rather than off a list of names:
+# whatever pointed at the old path is what has to move.
+repoint_edfs() {
+    local from="$1" to="$2" edf current n=0
+    for edf in "${EDF_DIR}"/*.toml; do
+        [ -f "${edf}" ] || continue
+        current="$(sed -nE 's/^[[:space:]]*image[[:space:]]*=[[:space:]]*"(.*)"/\1/p' "${edf}" | head -1)"
+        [ "${current}" = "${from}" ] || continue
+        # Anchored on the image line only; an EDF is mostly comments and env, and a looser
+        # substitution would rewrite prose that happens to quote the path.
+        [ "${DRY_RUN}" = "1" ] || sed -i -E "s|^([[:space:]]*image[[:space:]]*=[[:space:]]*)\".*\"|\1\"${to}\"|" "${edf}"
+        printf '    repoint %s\n' "${edf##*/}"
+        n=$((n + 1))
+    done
+    [ "${n}" -gt 0 ] || printf '    (no unmanaged EDF named %s)\n' "${from##*/}"
+}
+
 failed=0
 moved=0
 for role in ${roles}; do
@@ -105,6 +131,7 @@ for role in ${roles}; do
     # The marker does not follow: it describes a candidate that was verified, and the live name
     # having one would make the next promotion's refusal check meaningless.
     [ "${DRY_RUN}" = "1" ] || rm -f -- "$(verified_marker "${cand}")"
+    repoint_edfs "${cand}" "${live}"
     moved=$((moved + 1))
 done
 
