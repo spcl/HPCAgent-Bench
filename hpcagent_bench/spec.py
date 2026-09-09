@@ -605,8 +605,18 @@ def _validate_constraints(
     constraints: Tuple[str, ...], parameters_view: Dict[str, Dict[str, Any]], kernel: str, source: str
 ) -> None:
     """Reject at LOAD any ``constraints:`` expression that is false, or names an undeclared symbol,
-    at any preset. Evaluated by ``fuzz._safe_eval`` -- AST-restricted, never Python ``eval``."""
+    at any CONCRETE preset. Evaluated by ``fuzz._safe_eval`` -- AST-restricted, never Python ``eval``.
+
+    The ``fuzzed`` preset is skipped: its values are fuzz SPECS (``[lo, hi]`` intervals, ``{set:
+    [...]}``, ``{construct: ...}``), not numbers, so a numeric predicate over them is a type error
+    rather than a false constraint (``'>=' not supported between instances of 'list' and 'dict'``).
+    The fuzzer applies the same constraints to each RESOLVED draw (``fuzz.sample_params``), which is
+    where they bite for that preset."""
+    from hpcagent_bench.fuzz import FUZZED_PRESET
+
     for preset, names in parameters_view.items():
+        if preset == FUZZED_PRESET:
+            continue
         for expr in constraints:
             try:
                 ok = _safe_eval(expr, names)
