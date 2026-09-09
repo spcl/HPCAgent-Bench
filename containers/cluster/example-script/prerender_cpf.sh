@@ -64,8 +64,12 @@ for k in ${kernels//,/ }; do
         langs="c c++"
         [[ "${target}" == gpu ]] && langs="c++"
         for lang in ${langs}; do
+            # A roster may name kernels by their full track key, and the slashes in one turn the
+            # log path into a directory that does not exist -- which failed EVERY render with
+            # nothing in the output dir and a redirect error as the only clue.
+            slug="${k//\//_}"
             python3 -m hpcagent_bench.cli cpf --kernel "${k}" --out "${out}" --language "${lang}" \
-                --target "${target}" >"${out}/log.${k}.${lang}.txt" 2>&1 \
+                --target "${target}" >"${out}/log.${slug}.${lang}.txt" 2>&1 \
                 || echo "  rank ${rank}: ${k} ${lang} ${target} render FAILED"
         done
     fi
