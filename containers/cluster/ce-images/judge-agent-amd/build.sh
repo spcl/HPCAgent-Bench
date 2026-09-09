@@ -81,7 +81,7 @@ printf 'dace @ %s\n' "${DACE_COMMIT}"
 # This is a COMPILE-TIME link target for spack's MPICH and nothing else -- it is deleted from the
 # shipped image so MPI resolves to the CSCS netstack artifact's libfabric 2.6.0 at run time. No
 # RCCL net plugin is built here either; the artifact carries one, matched to the host driver.
-LIBFABRIC_REF="${LIBFABRIC_REF:-v2.3.1}"
+LIBFABRIC_REF="${LIBFABRIC_REF:-v2.6.0}"
 resolve_tag() {
     # ^{} dereferences an annotated tag to the commit it points at; without it a tag object's own
     # sha comes back and never matches `git rev-parse HEAD` in a checkout.

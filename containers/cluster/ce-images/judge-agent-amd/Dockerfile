@@ -62,7 +62,7 @@ ARG BASE_IMAGE=docker.io/rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pytorch_release
 # ------------------------------------------------------------------------------------------------
 FROM ${BASE_IMAGE} AS ofi-builder
 ARG BASE_IMAGE
-ARG LIBFABRIC_REF=v2.3.1
+ARG LIBFABRIC_REF=v2.6.0
 # The SHA each tag resolved to, passed in by build.sh. A tag is a mutable pointer, and podman's
 # layer cache keys on the command string -- so `--branch v1.20.0` alone would be reused forever
 # and this image would age into a pin nothing recorded. Resolving outside makes the sha part of
@@ -118,7 +118,12 @@ RUN apt-get update \
 #
 # Compile-only on purpose. Building our own PROVIDER would pin a userspace against a kernel
 # driver CSCS upgrades without us; a stub keeps the link correct at build time and leaves the
-# implementation correct at run time. LIBFABRIC_REF is v2.3.1, matching the host's 2.3.1.
+# implementation correct at run time. LIBFABRIC_REF is v2.6.0, matching the netstack artifact
+# (gpu_rocm7-cxi_13.1.0-ofi_2.6.0-aws_1.20.0) whose libfabric is what actually loads. It was
+# v2.3.1 until 2026-09-09, when a probe showed HEADER 2.3 against RUNTIME 2.6. That mismatch
+# was NOT the cause of the multi-node MPI assert -- libfabric reports a valid PCI BDF at API
+# 2.3, 2.6 and 1.20 alike -- but building against headers older than the library you load is
+# not a thing to leave standing.
 # libfabric, compile-only. --disable-verbs and friends keep it to the sockets/tcp core: the plugin
 # needs the headers and the .so to link against, never a provider, because at run time the host
 # hook's libfabric (with cxi) is what gets loaded.
