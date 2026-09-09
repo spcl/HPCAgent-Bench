@@ -24,6 +24,21 @@ SD="${OPT}/experiments"
 source "${SD}/roster.sh"
 TAG=${TAG:-llr-focus40}
 KERNELS=${KERNELS:-$(roster_for "${TAG}")}
+
+# The forms are only as current as the dace that rendered them, so move the tree to the tip of
+# extended FIRST and print the commit the render is attributable to. Fast-forward only, and a
+# network failure is not fatal: a slightly older tip still renders, and refusing to start would
+# trade that for nothing. The tree is shared, so this never merges and never resets.
+DACE_TREE=${DACE_TREE:-${SCRATCH}/dace}
+if [[ -d "${DACE_TREE}/.git" ]]; then
+    git -C "${DACE_TREE}" fetch --quiet origin extended \
+        && git -C "${DACE_TREE}" merge --ff-only --quiet FETCH_HEAD \
+        || echo "dace: could not fast-forward; rendering with what is checked out" >&2
+    echo "dace: $(git -C "${DACE_TREE}" rev-parse --short HEAD) on $(git -C "${DACE_TREE}" rev-parse --abbrev-ref HEAD)"
+else
+    echo "dace: no checkout at ${DACE_TREE}" >&2
+fi
+export DACE_TREE
 echo "prerender ${TAG}: $(tr ',' '\n' <<<"${KERNELS}" | grep -c .) kernels"
 for target in cpu gpu; do
     bash "${SD}/prerender_cpf.sh" outer "${SCRATCH}/cpf-forms-${target}-${TAG}" "${KERNELS}" "${OPT}" "${target}"

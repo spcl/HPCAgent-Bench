@@ -73,6 +73,13 @@ def main() -> int:
         if not src.is_file():
             raise SystemExit(f"missing base {src.name}")
         derive(src, here / f".env.llrbase-glm53-c{suffix}")
+    # The GPU and CPF launchers sed .env.base-<model>, a different family from the llrbase one
+    # above, so glm53 needs its counterpart there too or it cannot be a model those campaigns name.
+    # Same derivation, so the serving block cannot drift between the two families.
+    src = here / ".env.base-kimi27sglang"
+    if not src.is_file():
+        raise SystemExit(f"missing base {src.name}")
+    derive(src, here / ".env.base-glm53")
     return 0
 
 
