@@ -81,9 +81,24 @@ target_for() {  # target_for <language> -> cpu|gpu
     echo cpu
 }
 
-submit_arm() {  # submit_arm <model> <language> <cpf:0|1>
-    local model="$1" lang="$2" cpf="$3"
-    local sfx=""; [[ "${cpf}" == 1 ]] && sfx="-cpf"
+#: An arm KIND, not a cpf on/off flag. The campaign asks four questions of the same language and
+#: two of them are not "was the page there": `skills` ships the whole language packet, which is a
+#: different treatment from the one page under test and is separately measured as null-to-negative
+#: on C, so it has to be its own arm rather than a variant of the treated one.
+#:
+#:   plain   no packet at all                       -- the control
+#:   skills  the full language packet (--skills)    -- what the pages cost and buy
+#:   cpf     ONLY canonical-parallel-form + the pre-rendered forms the tool serves
+submit_arm() {  # submit_arm <model> <language> <kind:plain|skills|cpf>
+    local model="$1" lang="$2" kind="$3"
+    local cpf=0; [[ "${kind}" == cpf ]] && cpf=1
+    local sfx=""
+    case "${kind}" in
+        plain) sfx="" ;;
+        skills) sfx="-skills" ;;
+        cpf) sfx="-cpf" ;;
+        *) echo "unknown arm kind ${kind}" >&2; return 2 ;;
+    esac
     local arm="${EXPERIMENT}-${model}-${lang}${sfx}"
     local env=".env.${arm}" problems="problems-${EXPERIMENT}-${lang}${sfx}.jsonl"
     local target; target=$(target_for "${lang}")
@@ -94,7 +109,10 @@ submit_arm() {  # submit_arm <model> <language> <cpf:0|1>
     # truncates it the instant the redirect opens.
     local skill_args=()
     # --skill WITHOUT --skills: exactly the page under test, nothing else. See the header.
-    [[ "${cpf}" == 1 ]] && skill_args=(--skill "${CPF_SKILL}")
+    case "${kind}" in
+        cpf) skill_args=(--skill "${CPF_SKILL}") ;;
+        skills) skill_args=(--skills) ;;
+    esac
     "${PY}" ./make_problems.py --track loop_level_reasoning --tag "${TAG}" \
         --language "${lang}" --image "${image}" "${skill_args[@]}" >"${problems}.tmp"
     mv -f "${problems}.tmp" "${problems}"
@@ -165,11 +183,11 @@ submit_arm() {  # submit_arm <model> <language> <cpf:0|1>
     echo "submitted ${arm} -> ${SUBMITTED_JID} (${nodes} nodes)"
 }
 
-#: Which arms to send, as "<language>:<cpf>" pairs. Named so a single missing arm can be added to a
+#: Which arms to send, as "<language>:<kind>" pairs. Named so a single missing arm can be added to a
 #: campaign that already has the rest on disk, without re-running six nodes of finished work -- and
 #: so that re-running the WHOLE set stays one word, which is what an A/B wants when every arm has
 #: to meet the same machine.
-ARMS=${ARMS:-"c:0 c:1"}
+ARMS=${ARMS:-"c:plain c:skills c:cpf"}
 
 JIDS=()
 for model in ${MODELS}; do
