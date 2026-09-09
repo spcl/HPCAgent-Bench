@@ -86,6 +86,15 @@ PATH = "/opt/gcc/bin:/opt/view/bin:/opt/papi/bin:/opt/rocm/bin:/opt/venv/bin:/us
 # failure: a 600 s stall on a TWO-element broadcast at communicator setup. Value verbatim from the
 # production judge-agent EDF -- "-gl" alone left the opencl and levelzero probes in.
 HWLOC_COMPONENTS = "-opencl,-levelzero,-gl"
+# THE MULTI-NODE FIX (630725). MPICH is spack-built and its RPATH pins spack's own
+# hwloc 2.13.0, so it never uses the HOST hwloc the CXI hook injects at
+# /opt/cscs/netstack/libhwloc.so.15 (2.7.0). With spack's, hwloc_get_pcidev_by_busid returns
+# NULL for a valid PCI BDF and MPICH aborts in MPI_Init:
+#   Assertion failed in file src/util/mpir_hwtopo.c at line 570: io_device
+# Preloading the host one: OK size=8 allreduce=8 across 2 nodes x 4 ranks.
+# PRELOAD THE ONE FILE, never LD_LIBRARY_PATH=/opt/cscs/netstack -- that directory holds ~49
+# host libraries and shadowing all of them kills TaskProlog (630713).
+LD_PRELOAD = "/opt/cscs/netstack/libhwloc.so.15"
 # FI_PROVIDER is deliberately NOT set. MPICH inherits it, and 629966 aborted in MPI_Init with
 # "OFI call getinfo failed" against a libfabric that has no cxi provider. The production
 # judge-agent EDFs omit it for exactly this reason; only the sglang/vllm EDFs set it.
