@@ -76,9 +76,11 @@ CI_SEED: int = 0
 #: row for 8 of its 40 kernels and a `cc` row for all 40 -- the references that carry a loop-carried
 #: dependence are Python loops, and at XL that is ~10^8 interpreted iterations, so those rows do not
 #: exist and will not. A heatmap of that roster against numpy is therefore not a thin heatmap, it is
-#: no heatmap at all. Set it with $HPCAGENT_BENCH_PLOT_BASELINE or the CLI's --baseline; the ratios
-#: then read "over cc" and the axis label says so.
-BASELINE: str = os.environ.get("HPCAGENT_BENCH_PLOT_BASELINE", "numpy").strip() or "numpy"
+#: no heatmap at all. So it is the DEFAULT, and every function that divides takes a ``baseline``
+#: argument instead of reading a global: which framework is the denominator is a property of the
+#: figure being drawn, not of the process drawing it, and two figures in one process may want
+#: different ones.
+DEFAULT_BASELINE: str = "numpy"
 
 #: Re-exported so existing callers keep working; :mod:`hpcagent_bench.palette` owns it, and
 #: :func:`framework_color` there is what makes a hue stick to a framework.
@@ -155,6 +157,7 @@ def load_results(
     preset: str = "S",
     datatype: str = "float64",
     variant: Optional[str] = None,
+    baseline: str = DEFAULT_BASELINE,
 ) -> pd.DataFrame:
     """Read + filter the ``results`` table into the per-sample frame both figures consume.
 
@@ -219,7 +222,7 @@ def load_results(
     # figure plots one series per column. Without the fold, dace_cpu's three optimizers -- and the
     # same optimizer measured on two DaCe trees -- would silently average into one line.
     #
-    # The BASELINE never folds. `record.build` is a property of the deployment, so the launcher sets
+    # The baseline never folds. `record.build` is a property of the deployment, so the launcher sets
     # it once and every framework measured under it gets stamped, baseline included -- but the
     # baseline is the DIVISOR, not a series. Fold it and one job's reference becomes `numpy/main`,
     # which is no longer the name every speedup is divided by; fold two builds and there are two
@@ -228,7 +231,7 @@ def load_results(
     # therefore used to sweep the entire corpus and only then fail in `plot`.
     for axis in ("flavor", "build"):
         if axis in data.columns:
-            mask = data[axis].notna() & (data["framework"] != BASELINE)
+            mask = data[axis].notna() & (data["framework"] != baseline)
             data.loc[mask, "framework"] = (
                 data.loc[mask, "framework"].astype(str) + "/" + data.loc[mask, axis].astype(str)
             )
@@ -256,9 +259,18 @@ def machine_groups(data: pd.DataFrame) -> List[Tuple[str, pd.DataFrame]]:
 
     Sorted by label, so one DB always yields the same files in the same order.
     """
+    # Normalized FIRST, because a machine that recorded no device wrote it as NULL in some rows and
+    # as "" in others -- two group keys, one machine, and machine_label maps both to the same
+    # string. They were then two figures competing for one filename, the second silently
+    # overwriting the first: on the llr XL scope that split 9,957 rows into 2,264 (no cc, skipped)
+    # and 7,693, and the figure that survived was missing a third of the machine's data.
+    normalized = data.assign(
+        cpu=data["cpu"].fillna("").astype(str),
+        gpu=data["gpu"].fillna("").astype(str),
+    )
     grouped = [
         (machine_label(cpu, gpu), rows.drop(["cpu", "gpu"], axis=1).reset_index(drop=True))
-        for (cpu, gpu), rows in data.groupby(["cpu", "gpu"], dropna=False)
+        for (cpu, gpu), rows in normalized.groupby(["cpu", "gpu"], dropna=False)
     ]
     return sorted(grouped, key=lambda pair: pair[0])
 
@@ -313,6 +325,7 @@ def plot_heatmap(
     db=None,
     output=PLOTS_DIR + "/heatmap.pdf",
     usetex: bool = True,
+    baseline: str = DEFAULT_BASELINE,
 ) -> List[str]:
     """Read ``db`` and emit ONE speedup heatmap PER MACHINE; returns the paths written.
 
@@ -334,7 +347,7 @@ def plot_heatmap(
     :param usetex: render text with LaTeX (default); ``False`` for a LaTeX-free box.
     """
     set_usetex(usetex)
-    everything = load_results(db, benchmark, preset, datatype, variant)
+    everything = load_results(db, benchmark, preset, datatype, variant, baseline)
     groups = machine_groups(everything)
     # An empty selection must FAIL, not return []. Before the per-machine split this function always
     # drew something or raised; the comprehension below would instead write no file and exit 0 --
@@ -348,17 +361,17 @@ def plot_heatmap(
     written = []
     for label, rows in groups:
         try:
-            written.append(heatmap_figure(rows, order, machine_output(output, label)))
+            written.append(heatmap_figure(rows, order, machine_output(output, label), baseline))
         except NoBaselineRows as exc:
             # Named in the log rather than swallowed: a missing machine in the output is a fact
             # about the data and the reader has to be able to find out which one and why.
             LOG.warning("plotting: skipping machine %s -- %s", label, exc)
     if not written:
-        raise NoBaselineRows(f"no machine in scope has {BASELINE} rows to divide by")
+        raise NoBaselineRows(f"no machine in scope has {baseline} rows to divide by")
     return written
 
 
-def heatmap_figure(data: pd.DataFrame, order: str, output: str) -> str:
+def heatmap_figure(data: pd.DataFrame, order: str, output: str, baseline: str = DEFAULT_BASELINE) -> str:
     """Draw ONE machine's speedup heatmap to ``output``; returns the path written.
 
     Split from :func:`plot_heatmap` so the per-machine partition happens once, above the drawing,
@@ -372,10 +385,10 @@ def heatmap_figure(data: pd.DataFrame, order: str, output: str) -> str:
     # Raised, not asserted, and the CALLER decides: figures are emitted one per machine, and a
     # machine that ran only one framework has nothing to divide by. That is a thin slice of the
     # data, not a broken run, and it used to take the whole plot down with it.
-    if BASELINE not in frmwrks:
-        raise NoBaselineRows(f"no {BASELINE} rows to divide by; frameworks present: {sorted(frmwrks)}")
-    frmwrks.remove(BASELINE)
-    frmwrks.append(BASELINE)
+    if baseline not in frmwrks:
+        raise NoBaselineRows(f"no {baseline} rows to divide by; frameworks present: {sorted(frmwrks)}")
+    frmwrks.remove(baseline)
+    frmwrks.append(baseline)
     lfilter = ["benchmark", "domain"] + frmwrks
 
     # Wide form: normalise every framework's median to NumPy's; keep the raw times for the
@@ -384,7 +397,7 @@ def heatmap_figure(data: pd.DataFrame, order: str, output: str) -> str:
     best_wide = best_wide[lfilter].reset_index(drop=True)
     best_wide_time = best_wide.copy(deep=True)
     for f in frmwrks:
-        best_wide[f] = best_wide[f] / best_wide_time[BASELINE]
+        best_wide[f] = best_wide[f] / best_wide_time[baseline]
 
     # Row ordering: reindex both the ratio and the raw-time frames identically.
     ordered_names, spans = _reorder_rows(best_wide["benchmark"].tolist(), order)
@@ -424,7 +437,7 @@ def heatmap_figure(data: pd.DataFrame, order: str, output: str) -> str:
             else:
                 ax2.text(j, 0, my_speedup_abbr(label), ha="center", va="center", color="white", fontsize=8)
         else:
-            label = overall_time_wide[BASELINE].to_numpy()[0]
+            label = overall_time_wide[baseline].to_numpy()[0]
             ax2.text(j, 0, my_runtime_abbr(label), ha="center", va="center", color="white", fontsize=8)
 
     hm_data = best_wide.drop(["benchmark", "domain"], axis=1)
@@ -459,7 +472,7 @@ def heatmap_figure(data: pd.DataFrame, order: str, output: str) -> str:
                     else:
                         ax1.text(j, i, my_speedup_abbr(label) + ci, ha="center", va="center", color="white", fontsize=8)
             else:
-                label = best_wide_time[BASELINE].to_numpy()[i]
+                label = best_wide_time[baseline].to_numpy()[i]
                 ax1.text(j, i, my_runtime_abbr(label), ha="center", va="center", color="black", fontsize=8)
 
     # Group separators + right-side y-axis group text (structured grids / tsvc2 / machine_learning / ...).
@@ -482,11 +495,11 @@ def _grid_shape(n: int) -> Tuple[int, int]:
     return nrows, ncols
 
 
-def _framework_slots(data: pd.DataFrame) -> List[str]:
+def _framework_slots(data: pd.DataFrame, baseline: str = DEFAULT_BASELINE) -> List[str]:
     """The FULL framework set across the plotted scope, in a fixed slot order (numpy first as
     the reference, then alphabetical). Every panel reserves one slot per framework here, so a
     kernel missing a framework leaves an empty gap instead of re-packing the present ones."""
-    return sorted(data["framework"].unique(), key=lambda f: (f != BASELINE, f))
+    return sorted(data["framework"].unique(), key=lambda f: (f != baseline, f))
 
 
 def plot_distribution_grid(
@@ -498,6 +511,7 @@ def plot_distribution_grid(
     kind: str = "violin",
     order: str = BY_DWARF,
     db=None,
+    baseline: str = DEFAULT_BASELINE,
     output=PLOTS_DIR + "/distribution.pdf",
     col_width_in: float = 3.4,
     usetex: bool = True,
@@ -528,18 +542,20 @@ def plot_distribution_grid(
     if kind not in ("violin", "box"):
         raise ValueError(f"kind must be 'violin' or 'box' (got {kind!r})")
     set_usetex(usetex)
-    everything = load_results(db, benchmark, preset, datatype, variant)
+    everything = load_results(db, benchmark, preset, datatype, variant, baseline)
     if framework is not None:
         everything = everything[everything["framework"] == framework].reset_index(drop=True)
     if everything.empty:
         raise RuntimeError(f"no rows to plot for benchmark={benchmark!r} preset={preset!r} datatype={datatype!r}")
     return [
-        distribution_figure(rows, kind, order, machine_output(output, label), col_width_in)
+        distribution_figure(rows, kind, order, machine_output(output, label), col_width_in, baseline)
         for label, rows in machine_groups(everything)
     ]
 
 
-def distribution_figure(data: pd.DataFrame, kind: str, order: str, output: str, col_width_in: float) -> str:
+def distribution_figure(
+    data: pd.DataFrame, kind: str, order: str, output: str, col_width_in: float, baseline: str = DEFAULT_BASELINE
+) -> str:
     """Draw ONE machine's distribution grid to ``output``; returns the path written.
 
     Split from :func:`plot_distribution_grid` for the same reason as :func:`heatmap_figure`: the
@@ -549,7 +565,7 @@ def distribution_figure(data: pd.DataFrame, kind: str, order: str, output: str, 
     kernels = list(dict.fromkeys(data["benchmark"].tolist()))  # unique, insertion order
     ordered, _spans = _reorder_rows(kernels, order)
 
-    slots = _framework_slots(data)  # FIXED slot per framework, shared by every panel
+    slots = _framework_slots(data, baseline)  # FIXED slot per framework, shared by every panel
     colors = framework_colors(slots)
     nslots = len(slots)
 
@@ -742,7 +758,7 @@ def corpus_comparisons(
     ⛔ Only :attr:`~hpcagent_bench.inference.CorpusComparison.significant_adjusted` may be quoted
     as a finding. Kernels are returned in the shared report order so the table is deterministic.
     """
-    data = load_results(db, benchmark, preset, datatype, variant)
+    data = load_results(db, benchmark, preset, datatype, variant, baseline)
     kernels = list(dict.fromkeys(data["benchmark"].tolist()))
     ordered, _spans = _reorder_rows(kernels, BY_DWARF)
     # Ordered: the key order reaches the report table, so it must not depend on hash order.
