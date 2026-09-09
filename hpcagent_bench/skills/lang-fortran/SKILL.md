@@ -107,20 +107,10 @@ question below from them.
 The cheapest exit and the most often missed. Three shapes LOOK serial and are not; each dies to a
 rewrite, not a directive, and the loop is then simply parallel.
 
-- **Rotated scalar.** A scalar saved only so the next iteration can read it is the previous
-  iteration's expression by another name -- substitute it away (twice for a two-deep carry):
-
-```fortran
-do i = 1, n
-  t = p(i) + q(i)
-  r(i) = t - carry           ! carry == p(i-1) + q(i-1)
-  carry = t
-end do
-! becomes (i == 1 peeled to use the entry value of carry)
-do i = 2, n
-  r(i) = (p(i) + q(i)) - (p(i-1) + q(i-1))
-end do
-```
+- **Rotated scalar.** A scalar written every iteration and read by the next carries no information
+  the loop cannot recompute: it holds the previous iteration's expression under another name.
+  Substitute that expression back in and the carry is gone; peel the first iteration, which reads
+  the value from before the loop. Works through two levels of carry as well -- substitute twice.
 
 - **Read of a future element** (`x(i+1)` on the right while `x(i)` is written): the read means
   the ORIGINAL value, so keep a copy of the input, or write to a fresh output array -- either way
