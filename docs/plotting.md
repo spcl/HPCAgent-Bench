@@ -120,6 +120,96 @@ never an angle.
 **Say what is missing.** If a figure caps coverage -- top-N, a dropped band, a sampled subset --
 print what was dropped. Silent truncation reads as "this is everything".
 
+## Worked example: a campaign to a figure
+
+Two steps. Extract once, then plot as often as you like -- the CSV is the boundary, so a figure
+never re-reads a judge database and an analysis never has to know where the run roots are.
+
+### 1. Extract the experiment
+
+```bash
+python -m hpcagent_bench.experiments \
+    --runs '/capstor/scratch/.../hpcagent-bench-runs/llr40v11-*' \
+    --runs '/capstor/scratch/.../hpcagent-bench-runs/6[0-9][0-9][0-9][0-9][0-9]' \
+    --experiment llr40v11 --experiment v11w2 \
+    --out data/llr40_observations.csv
+```
+
+`--experiment` is an arm PREFIX and is repeatable -- pass every label the campaign used. llr40v11
+ran its first wave as `llr40v11-*` and its completion waves as `v11w2-*`, so one prefix silently
+keeps half the campaign. `--runs` is a glob and is also repeatable, because a campaign's arms are
+spread over its named wave roots and its per-job Slurm-id roots.
+
+Databases are opened read-only, discovered recursively (the judge shards into
+`judge/rank-<N>/`), and an unreadable one is warned about rather than fatal. It prints what it
+found, and you should read that line:
+
+```
+experiments: 39 databases -> 412 observations
+412 observations over 11 arms -> data/llr40_observations.csv
+arms: llrblind-kimi27sglang-c, llrblind-kimi27sglang-c-skills, ...
+```
+
+If an arm you expected is missing from that list, the prefix is wrong -- not the campaign.
+
+From Python, the same thing returns a DataFrame:
+
+```python
+from hpcagent_bench import experiments
+frame = experiments.observations(["runs/llr40v11-*"], experiment=["llr40v11", "v11w2"])
+```
+
+### 2. Draw the figures
+
+```bash
+# Per-arm speed-up and spend, skills against no skills. Writes -speedup, -tokens and -pair.
+python scripts/plot_arm_summary.py data/llr40_observations.csv \
+    --experiment llr40v11 --out figures/llr40v11_arm.pdf --table data/llr40v11_arm.csv
+
+# Speed-up against spend, two marks per arm joined by an elbow, four quadrants named.
+python scripts/plot_score_change.py data/llr40_observations.csv \
+    --experiment llr40v11 --out figures/llr40v11_skills.pdf --table data/llr40v11_skills.csv
+
+# Median tokens per task, per kernel, per model.
+python scripts/plot_tokens.py data/llr40_observations.csv \
+    --experiment llr40v11 --out figures/llr40v11_tokens.pdf --table data/llr40v11_tokens.csv
+```
+
+Every script writes a PDF, a PNG beside it, and the TABLE behind the figure. The table is not a
+convenience: a figure nobody can check is a claim, and the numbers in it should be readable without
+re-running anything.
+
+`--experiment` here is the same arm prefix, and it also picks the title through
+`experiment_tags.display_name` -- `llr40v11` becomes "Loop Level Reasoning Focus@40 (v11)".
+
+### 3. Writing a new figure
+
+Reuse the three modules rather than reaching for matplotlib defaults:
+
+```python
+from hpcagent_bench import experiment_tags, palette, plotstyle
+
+plotstyle.apply()                       # BEFORE importing pyplot
+import matplotlib.pyplot as plt
+
+models = sorted(frame.model.unique())
+hues, shapes = palette.colors("model", models), palette.markers("model", models)
+
+fig, ax = plt.subplots(figsize=(8.4, 5.2))
+for model in models:
+    part = frame[frame.model == model]
+    ax.scatter(part.x, part.y, color=hues[model], marker=shapes[model], s=130,
+               label=experiment_tags.model_name(model))
+
+ax.set_ylabel("Median Tokens per Task")          # Title Case
+plotstyle.value_axis(ax, "y", log_base=10.0)     # ticks + grid on the MEASURED axis
+plotstyle.despine(ax)
+fig.subplots_adjust(left=0.17, right=0.975, top=0.855, bottom=0.30)
+plotstyle.legend_below(fig, ax.get_legend_handles_labels()[0], y=0.02)
+plotstyle.title(fig, experiment_tags.display_name("llr40v11"))
+fig.savefig("out.pdf", bbox_inches=fig.bbox_inches)   # not None -- see above
+```
+
 ## The figures
 
 | script | figure |
