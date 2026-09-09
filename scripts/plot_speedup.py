@@ -670,6 +670,7 @@ def plot_signed_speedup(
     usetex: bool = True,
     boxes: bool = False,
     compact: bool = False,
+    baseline: str = plotting.DEFAULT_BASELINE,
 ) -> List[str]:
     """Read ``db`` and emit the banded figure + both SVG variants PER MACHINE; returns the paths.
 
@@ -687,16 +688,23 @@ def plot_signed_speedup(
     :param db: SQLite results DB path; ``None`` uses the configured ``record.db_path``.
     :param output: PDF path family for the banded figure.
     :param usetex: render text with LaTeX (default); ``False`` for a LaTeX-free box.
+    :param baseline: the speed-up denominator. Defaults to the campaign default (``numba``); an
+        npbench-shaped corpus wants ``numpy``, and a v9/v10 llr corpus wants ``c``. Which
+        framework divides is a property of the DATA being plotted, so it is named by the caller
+        rather than assumed here.
     """
     plotting.set_usetex(usetex)
     everything = plotting.load_results(db, benchmark, preset, datatype, variant)
     written: List[str] = []
     for label, rows in plotting.machine_groups(everything):
-        points = speedup_points(plotting.cell_summary(rows), data=rows if boxes else None)
+        points = speedup_points(plotting.cell_summary(rows), baseline=baseline, data=rows if boxes else None)
         if not points:
+            # Name what IS there. "no speed-up over 'numba'" on a DB whose frameworks are numpy
+            # and dace_cpu reads as missing data when the real answer is a wrong denominator.
+            present = ", ".join(sorted(set(rows["framework"].astype(str)))) or "(none)"
             warnings.warn(
                 f"machine {label}: no kernel has a plottable speed-up over "
-                f"{plotting.DEFAULT_BASELINE!r}; no figure written for it"
+                f"{baseline!r}; frameworks present: {present}. No figure written for it"
             )
             continue
         if boxes:
@@ -722,7 +730,7 @@ def plot_signed_speedup(
             f"no speed-up to plot: benchmark={benchmark!r} preset={preset!r} "
             f"datatype={datatype!r} variant={variant!r} db={db!r}. The DB has no "
             f"validated, domained rows pairing a candidate framework with the "
-            f"{plotting.DEFAULT_BASELINE!r} baseline on one machine."
+            f"{baseline!r} baseline on one machine."
         )
     return written
 

@@ -250,7 +250,12 @@ def test_every_output_is_written_per_machine(tmp_path: pathlib.Path) -> None:
 
     db = tmp_path / "results.db"
     build_results_db(db, shift=0.5)  # dace_cpu at half the numpy runtime -> a clean 2x
-    written = speedup.plot_signed_speedup(db=str(db), preset="S", output=str(tmp_path / "speedup.pdf"), usetex=False)
+    # This fixture is npbench-shaped -- numpy is the reference and dace_cpu the candidate -- so it
+    # names numpy as its denominator. The default is numba, which is what the llr campaigns grade
+    # against; a figure divides by the framework ITS data was measured against, never a global.
+    written = speedup.plot_signed_speedup(
+        db=str(db), preset="S", output=str(tmp_path / "speedup.pdf"), usetex=False, baseline="numpy"
+    )
     pdfs = [p for p in written if p.endswith(".pdf")]
     svgs = sorted(p for p in written if p.endswith(".svg"))
     assert len(pdfs) == 1 and len(svgs) == 2, written
