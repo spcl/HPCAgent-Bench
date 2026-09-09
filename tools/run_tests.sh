@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the login-side pytest suite in the environment the suite actually needs.
+# Run the pytest suite in the environment the suite actually needs.
 #
 # THIS EXISTS BECAUSE THE SUITE LIES WITHOUT IT. A full run launched as
 # "${VENV}/bin/python -m pytest tests/" reported 90 failures, of which 84 were the environment and
@@ -13,6 +13,9 @@
 # Everything is DERIVED. A spack prefix carries a content hash that changes on every reinstall, so
 # a pasted path is a setting that silently stops existing -- the glob spelling is the one already
 # used by experiments/smoke-gpu-models.sbatch and reproducibility/mpi/smoke-mpi-judge.sbatch.
+#
+# A FULL run still belongs in an sbatch on a compute node -- this only fixes what the run sees,
+# not where it belongs; the login node is for a targeted selection.
 #
 # Usage: tools/run_tests.sh [pytest args...]   (default: -q --maxfail=20 tests/)
 set -Eeuo pipefail
@@ -39,7 +42,11 @@ fi
 
 # mpi4py imports at collection time in the MPI tests; these are the same values every dace command
 # in this repo runs under, and without them the run hangs instead of skipping.
-export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+#
+# OMP_NUM_THREADS is DELIBERATELY ABSENT from that list. It is part of the dace MPI prefix, but on a
+# suite run exporting 1 serializes every threaded and timed test and disarms the race checks -- a
+# dropped WCR or a parallelised reducing axis is invisible at one thread. The suite's own default
+# has to win.
 export OMPI_MCA_pml=ob1 OMPI_MCA_btl=self,vader,tcp PMIX_MCA_gds=hash
 export UCX_VFS_ENABLE=n HWLOC_COMPONENTS=-gl MPI4PY_RC_INITIALIZE=0
 
