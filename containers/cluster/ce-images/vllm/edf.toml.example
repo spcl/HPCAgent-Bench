@@ -36,6 +36,22 @@ com.hooks.netstack.name = "gpu_rocm7-cxi_13.1.0-ofi_2.6.0-aws_1.20.0"
 com.hooks.cxi.enabled = "true"
 com.hooks.aws_ofi_nccl.enabled = "true"
 [env]
+# quark_online_quant is registered as a vllm general plugin, and load_general_plugins() runs it
+# from `python -m vllm.model_executor.models.registry` -- a subprocess where vllm/__init__ is
+# still executing. The plugin does `from vllm.engine.arg_utils import EngineArgs`, which reaches
+# vllm/v1/sample/logits_processor/builtin.py doing `from vllm import SamplingParams`, closing a
+# CIRCULAR IMPORT:
+#   ImportError: cannot import name 'SamplingParams' from 'vllm' (unknown location)
+# That killed all five oss120b arms (630706-630708, 630719, 630720). VLLM_PLUGINS is an ALLOWLIST
+# and UNSET MEANS LOAD EVERYTHING, so quark is excluded by naming only what we want. oss120b is
+# pre-quantized mxfp4 and never needs ONLINE quantization.
+# It does NOT reproduce in a bare smoke -- 630756 served fine with plugins on -- because the
+# campaign also sets aiter env, which changes the import graph enough to close the cycle.
+# An ALLOWLIST, so naming the two LoRA resolvers excludes quark while keeping them. "" would
+# also work but drops the resolvers for no reason. This is the ONLY owner of the setting: it was
+# briefly also in .env.base-oss120b, and two owners that can disagree is worse than one -- a
+# campaign env exported under `set -a` could override the EDF and silently win.
+VLLM_PLUGINS = "lora_filesystem_resolver,lora_hf_hub_resolver"
 # CSCS documents this one against a hang at NCCL initialisation time.
 HWLOC_COMPONENTS = "-gl"
 FI_CXI_RX_MATCH_MODE = "software"
