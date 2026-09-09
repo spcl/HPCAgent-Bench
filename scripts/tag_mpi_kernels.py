@@ -34,13 +34,10 @@ BENCHMARKS = ROOT / "hpcagent_bench" / "benchmarks"
 PLANS = ROOT / "reproducibility" / "mpi" / "plans"
 KERNEL_LIST = ROOT / "experiments" / "mpi-kernels.txt"
 
-#: Matches the ``tags:`` sequence inside a top-level ``taxonomy:`` block, capturing its entries so
-#: a tag can be added or removed in place. Anchored at two-space indent because ``tags`` also
-#: appears at other nesting depths in some manifests.
-TAGS_RE = re.compile(r"^(  tags:\n)((?:  - .*\n)*)", re.MULTILINE)
-
-#: Where a taxonomy block ends: the next top-level key, or end of file.
-TAXONOMY_RE = re.compile(r"^taxonomy:\n((?:[ \t].*\n|\n)*)", re.MULTILINE)
+#: The top-level ``experiment_tags:`` sequence, capturing its entries so a tag can be added or
+#: removed in place. Top level, not indented: the block used to live inside ``taxonomy:``, which
+#: no longer exists -- track and dwarf were the manifest's own path written out a second time.
+TAGS_RE = re.compile(r"^(experiment_tags:\n)((?:- .*\n)*)", re.MULTILINE)
 
 
 def curation() -> tuple[set[str], dict[str, str]]:
@@ -71,17 +68,12 @@ def mpi_manifests() -> dict[str, pathlib.Path]:
 def set_tag(text: str, tag: str, present: bool) -> str | None:
     """The manifest text with ``tag`` added or removed, or None when already in that state.
 
-    Three shapes to handle: a taxonomy with tags, a taxonomy without (open a ``tags:`` sequence at
-    its end), and no taxonomy at all -- an error, because every manifest has one and silently
-    inventing the block would hide a malformed file.
+    Two shapes to handle: a manifest that already has ``experiment_tags:``, and one that has none
+    (append the block). Most manifests carry no tags at all now that descriptive ones are gone.
     """
-    taxonomy = TAXONOMY_RE.search(text)
-    if not taxonomy:
-        raise ValueError("manifest has no taxonomy block")
-    body = taxonomy.group(1)
-    tags = TAGS_RE.search(body)
+    tags = TAGS_RE.search(text)
     entries = [ln for ln in tags.group(2).splitlines() if ln.strip()] if tags else []
-    line = f"  - {tag}"
+    line = f"- {tag}"
     if (line in entries) == present:
         return None
     if present:
@@ -89,14 +81,14 @@ def set_tag(text: str, tag: str, present: bool) -> str | None:
     else:
         entries.remove(line)
     if not tags:
-        new_body = body.rstrip("\n") + "\n  tags:\n" + "".join(f"{e}\n" for e in entries)
-    elif entries:
-        new_body = body[: tags.start()] + tags.group(1) + "".join(f"{e}\n" for e in entries) + body[tags.end() :]
+        return (text if text.endswith("\n") else text + "\n") + "experiment_tags:\n" + f"{line}\n"
+    if entries:
+        body = tags.group(1) + "".join(f"{e}\n" for e in entries)
     else:
-        # Last tag removed: drop the now-empty `tags:` key rather than leaving a null sequence,
-        # which the manifest schema reads as a malformed value rather than as "no tags".
-        new_body = body[: tags.start()] + body[tags.end() :]
-    return text[: taxonomy.start(1)] + new_body + text[taxonomy.end(1) :]
+        # Last tag removed: drop the now-empty key rather than leaving a null sequence, which the
+        # manifest schema reads as a malformed value rather than as "no tags".
+        body = ""
+    return text[: tags.start()] + body + text[tags.end() :]
 
 
 def main() -> int:

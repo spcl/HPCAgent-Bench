@@ -62,10 +62,3 @@ init:
 output_args:
 - ddt_n
 - ddt_vort
-taxonomy:
-  track: scientific_computing
-  domain: plasma physics
-  dwarf: structured_grids
-  scale: proxy
-  tags:
-  - bout++
