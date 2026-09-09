@@ -50,6 +50,7 @@ set -euo pipefail
 ulimit -c 0
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 . ./arm_nodes.sh
+. ./skill_args.sh
 
 PY=${SCRATCH:?}/venv-optarena-314/bin/python
 OPT=${SCRATCH:?}/optarena
@@ -79,8 +80,10 @@ time_for() { case "$1" in kimi27sglang) echo "12:00:00" ;; qwen38) echo "08:00:0
 #: cupy in it.
 AMD_CE_ENV_GPU=${AMD_CE_ENV_GPU:-optarena-amd-mi300-latest}
 
-declare -A BASE_ENV=([oss120b]=llr40v10-oss120b-c [qwen38]=llr40v10-qwen38-c \
-                     [kimi27sglang]=llr40v10-kimi27sglang-c-w1)
+#: The per-model BASE env every arm here is sed-ed out of. Named base-<model> rather than borrowing
+#: some past campaign's arm: the base is infrastructure, and pointing it at an experiment meant that
+#: retiring that experiment silently broke every launcher built on it.
+declare -A BASE_ENV=([oss120b]=base-oss120b [qwen38]=base-qwen38 [kimi27sglang]=base-kimi27sglang)
 
 submit_arm() {  # submit_arm <model> <language> <skills:0|1> <deps or empty>
     local model="$1" lang="$2" skills="$3" deps="${4:-}"
@@ -88,11 +91,15 @@ submit_arm() {  # submit_arm <model> <language> <skills:0|1> <deps or empty>
     local arm="${EXPERIMENT}-${model}-${lang}${OFFLOAD:+-${OFFLOAD}}${sfx}"
     local env=".env.${arm}" problems="${PROBLEMS_PREFIX}-${lang}${sfx}.jsonl"
 
-    # --image amd drops the pages that teach a vendor this box does not have; --skills adds the
-    # language page for the skills leg only. Written through a temp file and renamed, because every
-    # arm reads this file at launch and `>` truncates it the instant the redirect opens.
+    # --image amd drops the pages that teach a vendor this box does not have. The skills leg NAMES
+    # its pages rather than asking for the auto packet: both render through the same path then, so
+    # this arm and a single-page arm differ in their pages and in nothing else. Written through a
+    # temp file and renamed, because every arm reads this file at launch and `>` truncates it the
+    # instant the redirect opens.
+    local skill_args=""
+    [[ "${skills}" == 1 ]] && skill_args="$(skill_args_for "${lang}" amd)"
     "${PY}" ./make_problems.py --track loop_level_reasoning --tag "${TAG}" \
-        --language "${lang}" --image amd ${skills:+$([[ "${skills}" == 1 ]] && echo --skills)} \
+        --language "${lang}" --image amd ${skill_args} \
         >"${problems}.tmp"
     mv -f "${problems}.tmp" "${problems}"
 
