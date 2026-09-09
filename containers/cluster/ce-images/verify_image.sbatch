@@ -46,13 +46,38 @@ case "${PROFILE}" in
     vllm)            ce_path="/opt/pytorch211/bin" ;;
     *)               ce_path="/opt/gcc/bin:/opt/view/bin:/opt/papi/bin:/opt/venv/bin" ;;
 esac
+# FI_PROVIDER on the INFERENCE profiles only. Setting it globally on an image that also runs MPI
+# aborted MPI_Init with "OFI call getinfo failed" (629966), so the judge-agent EDFs leave it unset
+# and let MPICH negotiate -- and this generated EDF must match production or it is not verifying
+# the configuration anything actually runs under.
+case "${PROFILE}" in
+    sglang|vllm) ce_fi_provider='FI_PROVIDER = "cxi"' ;;
+    *)           ce_fi_provider='' ;;
+esac
+
+# The five hook annotations are NOT optional here. The images ship no libfabric, libcxi or RCCL
+# net plugin at all -- they are deleted, and a build gate fails if any survives -- so libmpi.so's
+# NEEDED libfabric.so.1 resolves ONLY against the netstack artifact these annotations install.
+# Without them mpicc cannot link and mpiexec cannot exec, and the verifier would fail a correct
+# image for its own missing configuration.
 cat > "${EDF}" <<TOML
 image = "${IMAGE}"
 mounts = ["/capstor/:/capstor/", "/iopsstor/:/iopsstor/"]
 workdir = "/"
 
+[annotations]
+com.hooks.netstack.source = "artifact"
+com.hooks.netstack.version = "26.08.1"
+com.hooks.netstack.name = "gpu_rocm7-cxi_13.1.0-ofi_2.6.0-aws_1.20.0"
+com.hooks.cxi.enabled = "true"
+com.hooks.aws_ofi_nccl.enabled = "true"
+
 [env]
 PATH = "${ce_path}:/opt/rocm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+HWLOC_COMPONENTS = "-opencl,-levelzero,-gl"
+FI_CXI_RX_MATCH_MODE = "software"
+FI_MR_CACHE_MONITOR = "disabled"
+${ce_fi_provider}
 TOML
 
 echo "=== verifying ${IMAGE} as profile=${PROFILE} ==="
@@ -76,7 +101,27 @@ srun --environment="${EDF}" python3 \
      ${sc_modules:+--modules "${sc_modules}"}
 sc=$?
 
+# MPI is the one capability the declarative table above cannot judge. It can ask whether mpicc is
+# on PATH and whether libmpi.so exists -- both were true of the distro MPICH whose wrapper and
+# launcher came from different MPIs, so four ranks each came up as their own COMM_WORLD of size 1,
+# every rank solved the whole problem, the answer verified and nothing failed. Only RUNNING it
+# catches that. The same script also proves the device-pointer path, the RCCL net plugin and
+# PETSc's HIP support. judge-agent profiles only: the inference images ship no compilers.
+mpi_rc=0
+case "${PROFILE}" in
+    judge|judge-agent-*|optarena-ce-*)
+        echo "=== MPI: multi-rank, GPU-aware, RCCL plugin, PETSc GPU ==="
+        srun --environment="${EDF}" \
+             "${S}/optarena/containers/cluster/ce-images/mpi_gpu_check.sh" || mpi_rc=$?
+        ;;
+    *) echo "=== MPI check skipped for profile=${PROFILE} (no compilers in image) ==="; ;;
+esac
+
 rm -f "${EDF}"
-echo "=== required-failure count: ${rc}; resolving outside the image: ${sc} ==="
+echo "=== required-failure count: ${rc}; resolving outside the image: ${sc}; mpi: ${mpi_rc} ==="
+if [ "${mpi_rc}" -ne 0 ]; then
+    echo "MPI/GPU capability check FAILED -- image is not acceptable" >&2
+    exit 1
+fi
 # Either is disqualifying, and the status says which dominated.
 exit $(( rc + sc ))

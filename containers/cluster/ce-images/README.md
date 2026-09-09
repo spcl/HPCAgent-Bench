@@ -6,7 +6,7 @@ promote and extend** one.
 
 | directory | promoted name | role |
 |---|---|---|
-| `judge-agent-amd/` | `optarena-ce-amd-mi300.sqsh` | judge + agent: compilers, HPC libraries, solvers, profilers, frameworks. One image serves BOTH the CPU and GPU arms. |
+| `judge-agent-amd/` | `optarena-ce-amd-mi300.sqsh` (agent), `optarena-ce-judge-amd-mi300.sqsh` (judge) | **TWO targets, one Dockerfile.** `agent` is the whole toolchain and carries NO hpcagent_bench, so an agent cannot reach the references it is graded against. `judge` is `FROM agent` plus the library -- one extra layer. |
 | `sglang/` | `optarena-sglang.sqsh` | SGLang inference -- the dominant serving engine (qwen38, kimi, GLM-5.3) |
 | `vllm/` | `optarena-vllm.sqsh` | vLLM 0.23.0 inference, kept for oss120b's mxfp4 path |
 | `judge-agent-cuda/` | not built here | CUDA counterpart of `judge-agent-amd`; parse-checked only, no NVIDIA partition on this cluster |
@@ -30,30 +30,80 @@ every fix promoted after that file was written -- which is exactly how three off
 image built before the libomp fix and scored zero. What identifies a build is the `.digest`
 sidecar, not a tag.
 
+## Getting the images: PULL is the default
+
+```bash
+# every role, on a compute node (enroot unpacks 60+ GB before it writes the squashfs, and
+# extraction onto Lustre fails outright -- a rootless overlay cannot create its pivot dir there)
+sbatch containers/cluster/ce-images/pull_images.sbatch
+
+# one role, pinned to a digest -- what a results table should cite
+./pull_image.sh judge-agent-amd sha-<digest>
+
+# then point the EDFs at what you fetched
+./install_edfs.sh
+```
+
+A rebuild is one node for hours; the judge+agent image bootstraps gcc 16 and then llvm 22 before it
+reaches PETSc and MAGMA. A pull is bandwidth. The reason that matters beyond time: a pull gets the
+**same bytes we published**, so the digest in a results table is the digest that ran. A rebuild
+from the same Dockerfile is a *different* image that merely resembles it -- apt and PyPI move
+underneath it, and the digest will not match.
+
+**Build instead when you are changing an image, or when a role has not been published yet.** Both
+are real cases: `pull_images.sbatch` reports a per-role failure rather than aborting, and names the
+build command for whatever it could not fetch.
+
+Roles: `judge-agent-amd` (the agent image), `judge`, `sglang`, `vllm`.
+
 ## Build -> verify -> promote
 
 ```bash
 # 1. build to a CANDIDATE name; never write over a name an EDF mounts
-IMAGE_DIR=/capstor/scratch/cscs/$USER/x86_64/ce-images \
-  sbatch judge-agent-amd/build.sbatch          # ~2h; sglang/vllm ~1h
+# IMAGE_DIR is the directory holding that image's build.sh -- NOT the output directory. It
+# defaults to the SUBMIT dir, so submitting from ce-images/ without it fails in 2 s on
+# `test -x <ce-images>/build.sh`. Output location is OUTPUT_SQSH, which already defaults to
+# $SCRATCH/ce-images/optarena-<role>-candidate.sqsh.
+# judge-agent-amd builds BOTH targets in ONE job (BUILD_TARGETS="agent judge", the default).
+# That is not a convenience: build_common.sh wipes the /dev/shm graphroot on entry because the
+# nodes are diskless, so there is no layer cache BETWEEN jobs. Two separate jobs would be two
+# full 2 h builds; one job is the agent build plus a pip layer. Order matters -- agent first --
+# and each target is exported before the next is built, so a judge failure still leaves a usable
+# agent image.
+sbatch --export=ALL,IMAGE_DIR=$PWD/judge-agent-amd judge-agent-amd/build.sbatch   # ~2h, both targets
 
-# 2. verify the candidate before it is anyone's problem
-sbatch verify_image.sbatch <candidate>.sqsh    # required-tool + loader checks
+# Or build and verify in ONE job, which is the entry point to PREFER for every role: an image
+# that cannot pass verification does not report success, and the artifact keeps its CANDIDATE
+# name until a human promotes it. It also writes the .verified marker promote_image.sh requires.
+sbatch --export=ALL,IMAGE_DIR=$PWD/judge-agent-amd build_and_verify.sbatch   # ~2h, BOTH targets
+sbatch --export=ALL,IMAGE_DIR=$PWD/sglang          build_and_verify.sbatch   # ~1h
+sbatch --export=ALL,IMAGE_DIR=$PWD/vllm            build_and_verify.sbatch   # ~4h
 
-# 3. promote: rename over the live name, keeping the sidecars
-mv optarena-<role>-candidate.sqsh optarena-<role>.sqsh
-mv optarena-<role>-candidate.digest optarena-<role>.digest    # and .sha256
+# 2. verify a candidate on its own (build_and_verify already did this; this is the re-run path).
+# IMAGE and PROFILE are ENV, not positional arguments.
+IMAGE=$SCRATCH/ce-images/optarena-sglang-candidate.sqsh PROFILE=sglang \
+  sbatch verify_image.sbatch
 
-# 4. repoint the EDFs
-ALLOW_REPOINT=1 ./install_edfs.sh
+# 3. promote. One command per role, or --all.
+DRY_RUN=1 ./promote_image.sh --all      # say what would move, touch nothing
+./promote_image.sh --all                # rename + sidecars + ALLOW_REPOINT=1 install_edfs.sh
 ```
+
+`promote_image.sh` **refuses a candidate that carries no `.verified` marker**, which only
+`build_and_verify.sbatch` writes and only on a clean verdict. "Built" and "works" have been
+different things often enough here to cost whole campaigns.
 
 The rename is **safe while arms are running**: a mounted squashfs is held by its inode, so a job
 that already started keeps reading the bytes it opened and only new jobs see the new image.
 Overwriting a file in place is NOT safe -- that is why builds go to a candidate name first.
 
-Keep `.digest` and `.sha256` with the rename. With one version per role they are the only record
-of *which* build a name currently holds.
+The script moves `.digest`, `.sha256` **and `.oci.tar`** with the image, which is the half that
+used to get forgotten when this was four hand-typed `mv` lines. The first two are the only record
+of *which* build a name currently holds -- with one version per role there is nothing else to tell
+two builds apart. The `.oci.tar` matters for a different reason: it is what
+`push_image.sh --from-archive` publishes. Leave it behind and the archive under the live name is
+still the SUPERSEDED build, so the next push sends the old bytes under the promoted tag -- the
+registry and the cluster then disagree while every checksum looks fine.
 
 **There is no layer cache between build jobs.** `build_common.sh` wipes the `/dev/shm` podman
 graphroot on entry because the nodes are diskless, so every build pays full cost. Budget 1-2h and
@@ -108,7 +158,7 @@ srun --environment=sglang-latest python3 -c \
   "from sglang.srt.models import <mod>; print('present')"
 ```
 GLM-5.3 needed **no rebuild**: `GlmMoeDsaForCausalLM` was already in the shipped image. The serving
-config lives in `containers/cluster/example-script/.env.*`, not in the image.
+config lives in `experiments/.env.*`, not in the image.
 
 ## Traps this directory has already paid for
 
@@ -135,12 +185,50 @@ what the harness rpath cannot reach; a one-node gate job catches what neither do
 ## Verifying
 
 ```bash
-sbatch verify_image.sbatch <image>.sqsh     # required tools resolve, nothing resolves outside
+# IMAGE and PROFILE are ENV, not positional -- a path passed positionally is silently ignored
+# and the default profile is verified instead.
+IMAGE=$SCRATCH/ce-images/<image>.sqsh PROFILE=<judge-agent-amd|judge|sglang|vllm> \
+  sbatch verify_image.sbatch
 srun --environment=<edf> python -m pytest tests/test_compile_flags.py
 ```
 
 `verify_image.py` also checks the solver gates (`HAVE_ISL`, `has_z3()`), which **fail closed and
 silent** in dace: no islpy means `WavefrontSkew` is a no-op, no z3 means `LoopToMap` cannot prove.
+
+`mpi_gpu_check.sh` runs as part of `build_and_verify.sbatch` for the judge-agent profiles, and
+RUNS what the declarative table can only look for. `mpicc` on `PATH` and `libmpi.so` on disk were
+both true of the distro MPICH whose wrapper and launcher came from different MPIs: four ranks each
+came up as their own `COMM_WORLD` of size 1, every rank solved the whole problem, and the answer
+verified. It proves instead:
+
+* a size-4 communicator with a correct allreduce;
+* a **device pointer** surviving a real allreduce, behind
+  `MPIX_GPU_query_support(MPIX_GPU_SUPPORT_HIP)` -- the MPICH spelling, in `mpi.h`; the OpenMPI
+  one reports a false NO on this stack;
+* **which libfabric the live process mapped and which provider it chose**, read from
+  `/proc/self/maps` rather than predicted with `ldd`;
+* the RCCL net plugin being *selected* -- `NET/OFI`, not `NET/Socket`;
+* `PETSC_HAVE_HIP` rather than just `libpetsc.so`.
+
+The transport legs are the ones to read first, because **a correct allreduce proves correctness,
+never transport** -- the same sum comes back over the `tcp` provider, several times slower, with
+every other assertion still green. That mistake was made here once and reported as "MPI is already
+reaching Slingshot".
+
+All of libfabric, libcxi and `librccl-net.so` come from the pinned CSCS **netstack artifact**, so
+the EDF must carry all five hook annotations. The images ship none of the three and a build gate
+refuses any that survives; with a partial hook set `libmpi.so` does not resolve at all, which is a
+loud failure rather than a silent fallback. Run it standalone against any image:
+
+```bash
+sbatch containers/cluster/ce-images/mpi_check.sbatch      # single node, generates its own EDF
+sbatch containers/cluster/ce-images/mpi_multinode_check.sbatch   # 2 nodes: the cross-node claim
+```
+
+Single-node is the limit of what `mpi_gpu_check.sh` can prove about transport: it shows which
+provider MPI *initialised*, not that a cross-node transfer rode it. It SKIPs the GPU-runtime checks
+with no visible device and says so, so it never reports a pass for something it could not test --
+except inside a batch job on `mi300`, where a missing GPU is a broken EDF and fails.
 
 ## Registry
 

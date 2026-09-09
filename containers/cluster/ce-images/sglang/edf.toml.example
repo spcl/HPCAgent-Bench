@@ -22,6 +22,10 @@ workdir = "${SCRATCH}"
 writable = true
 
 [env]
+# CSCS documents this one against a hang at NCCL initialisation time.
+HWLOC_COMPONENTS = "-gl"
+FI_CXI_RX_MATCH_MODE = "software"
+FI_MR_CACHE_MONITOR = "disabled"
 HSA_ENABLE_IPC_MODE_LEGACY = "1"
 SAFETENSORS_FAST_GPU = "1"
 HIP_FORCE_DEV_KERNARG = "1"
@@ -36,9 +40,27 @@ AITER_JIT_DIR = "/opt/aiter-jit"
 # the image, 628179 confirms nothing lands in HOME and the artefact hashes match.
 AITER_ROOT_DIR = "/opt/aiter-root"
 
+# UBUNTU 24.04 (glibc 2.39) as of 2026-09-09, so the host Slingshot stack finally loads here and
+# this image takes it like the others. Before that it was Ubuntu 22.04 / glibc 2.35 against a host
+# stack built on 2.38, so no hook could be enabled and cross-node RCCL rode TCP over hsn*.
+#
+# /opt/aws-ofi-nccl/lib is the plugin. libfabric and libcxi are NOT in the image -- the cxi hook
+# supplies both, plus /dev/cxi*. Declaring LD_LIBRARY_PATH here is not optional: the CE does not
+# preserve the image's own ENV, so this file re-declares it absolutely, and omitting the plugin
+# path silently returns RCCL to the TCP fallback.
 LD_LIBRARY_PATH = "/opt/rocm/lib:/opt/rocm/lib64"
-PATH = "/usr/local/bin:/opt/rocm/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
+# The three that make RCCL take Slingshot rather than answer correctly over TCP, matching what the
+# vLLM EDF already declared. NCCL_NET_PLUGIN/NCCL_NET name the plugin the aws_ofi_nccl hook
+# installs, so RCCL ERRORS when it is not loadable instead of silently falling back -- a fallback
+# is numerically correct and several times slower, which is the failure mode that hides.
+#
+# FI_PROVIDER is safe HERE and is deliberately absent from the judge-agent EDFs: this image has no
+# MPI, and what 629966 killed was MPI_Init, where MPICH inherits the variable and aborts with "OFI
+# call getinfo failed" against a libfabric that cannot offer cxi.
+NCCL_NET_PLUGIN = "ofi"
+NCCL_NET = "AWS Libfabric"
+FI_PROVIDER = "cxi"
 NCCL_SOCKET_IFNAME = "hsn0,hsn1,hsn2,hsn3"
 GLOO_SOCKET_IFNAME = "hsn0"
 
@@ -48,3 +70,24 @@ OFI_NCCL_DISABLE_DMABUF = "1"
 
 NCCL_DEBUG = "INFO"
 NCCL_DEBUG_SUBSYS = "INIT,NET"
+
+[annotations]
+# The CSCS-documented set. Three hooks, and we previously enabled only the middle one:
+#   10-netstack.sh    source defaults to "artifact"; setting "host" makes it exit(0) and fall back
+#                     to a raw filesystem graft -- which is how a host libcurl needing glibc 2.38
+#                     reached an image with 2.35 and killed its whole OFI stack (629822).
+#   89-libfabric-cxi  the cxi provider and /dev/cxi*.
+#   90-aws-ofi-nccl   exits(0) unless enabled == "true". Never set until now, which is exactly why
+#                     RCCL logged "NET/Plugin: Could not find: libnccl-net.so" and fell back to TCP
+#                     over hsn* (629800/629802).
+#
+# With all three, job 629967 measured on an UNMODIFIED image: /opt/cscs/netstack/librccl-net.so,
+# "Using network AWS Libfabric", GPU Direct RDMA on cxi0-2, 8 ranks over 2 nodes, correct result.
+#
+# Version and name are PINNED rather than left to the hook defaults, so a CSCS-side bump cannot
+# change the fabric under a running campaign.
+com.hooks.netstack.source = "artifact"
+com.hooks.netstack.version = "26.08.1"
+com.hooks.netstack.name = "gpu_rocm7-cxi_13.1.0-ofi_2.6.0-aws_1.20.0"
+com.hooks.cxi.enabled = "true"
+com.hooks.aws_ofi_nccl.enabled = "true"

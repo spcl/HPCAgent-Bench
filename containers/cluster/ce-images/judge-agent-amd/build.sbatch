@@ -16,7 +16,10 @@
 #SBATCH --partition=mi300
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=192
+# 96 PHYSICAL cores, not 192 logical: the node is Sockets=4 CoresPerSocket=24
+# ThreadsPerCore=2, and an SMT sibling is not extra compute for a compile.
+#SBATCH --cpus-per-task=96
+#SBATCH --hint=nomultithread
 #SBATCH --mem=0
 #SBATCH --time=24:00:00
 #SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/build-judge-agent-amd-%j.out
@@ -60,7 +63,20 @@ fi
 ls -lh "${OUTPUT_SQSH}"
 sha256sum "${OUTPUT_SQSH}" | tee "${OUTPUT_SQSH}.sha256"
 cat "${OUTPUT_SQSH}.digest"
-echo "JUDGE+AGENT AMD IMAGE READY: ${OUTPUT_SQSH}"
+echo "AGENT IMAGE READY: ${OUTPUT_SQSH}"
+
+# The SECOND target. build.sh builds `agent judge` by default, and this block reported only the
+# first -- so the judge candidate shipped with no .sha256 and nothing saying it existed. The judge
+# is the image that grades every submission; it should not be the one nobody mentions.
+judge_sqsh="${SCRATCH:?}/ce-images/optarena-ce-judge-amd-mi300-candidate.sqsh"
+if [ -f "${judge_sqsh}" ]; then
+    ls -lh "${judge_sqsh}"
+    sha256sum "${judge_sqsh}" | tee "${judge_sqsh}.sha256"
+    [ -f "${judge_sqsh}.digest" ] && cat "${judge_sqsh}.digest"
+    echo "JUDGE IMAGE READY: ${judge_sqsh}"
+else
+    echo "note: no judge candidate at ${judge_sqsh} (single-target build?)"
+fi
 echo "Verify it before it goes live: scripts/smoke_gpu_profilers.sh via"
 echo "scripts/submit_gpu_profiler_smoke.sbatch -- it reads ARTIFACTS, not exit codes, and fails"
 echo "rocprof-compute specifically when its passes run and its rows are dropped."

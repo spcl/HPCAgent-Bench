@@ -16,10 +16,30 @@ workdir = "${SCRATCH}"
 writable = true
 
 [annotations]
+# The CSCS-documented set. Three hooks, and we previously enabled only the middle one:
+#   10-netstack.sh    source defaults to "artifact"; setting "host" makes it exit(0) and fall back
+#                     to a raw filesystem graft -- which is how a host libcurl needing glibc 2.38
+#                     reached an image with 2.35 and killed its whole OFI stack (629822).
+#   89-libfabric-cxi  the cxi provider and /dev/cxi*.
+#   90-aws-ofi-nccl   exits(0) unless enabled == "true". Never set until now, which is exactly why
+#                     RCCL logged "NET/Plugin: Could not find: libnccl-net.so" and fell back to TCP
+#                     over hsn* (629800/629802).
+#
+# With all three, job 629967 measured on an UNMODIFIED image: /opt/cscs/netstack/librccl-net.so,
+# "Using network AWS Libfabric", GPU Direct RDMA on cxi0-2, 8 ranks over 2 nodes, correct result.
+#
+# Version and name are PINNED rather than left to the hook defaults, so a CSCS-side bump cannot
+# change the fabric under a running campaign.
+com.hooks.netstack.source = "artifact"
+com.hooks.netstack.version = "26.08.1"
+com.hooks.netstack.name = "gpu_rocm7-cxi_13.1.0-ofi_2.6.0-aws_1.20.0"
 com.hooks.cxi.enabled = "true"
-com.hooks.netstack.source = "host"
-
+com.hooks.aws_ofi_nccl.enabled = "true"
 [env]
+# CSCS documents this one against a hang at NCCL initialisation time.
+HWLOC_COMPONENTS = "-gl"
+FI_CXI_RX_MATCH_MODE = "software"
+FI_MR_CACHE_MONITOR = "disabled"
 HSA_ENABLE_IPC_MODE_LEGACY = "1"
 SAFETENSORS_FAST_GPU = "1"
 HIP_FORCE_DEV_KERNARG = "1"
@@ -27,7 +47,7 @@ TOKENIZERS_PARALLELISM = "false"
 
 NCCL_NET_PLUGIN = "ofi"
 NCCL_NET = "AWS Libfabric"
-LD_LIBRARY_PATH = "/opt/aws-ofi-nccl/lib:/opt/rocm/lib:/opt/rocm/lib64"
+LD_LIBRARY_PATH = "/opt/rocm/lib:/opt/rocm/lib64"
 FI_PROVIDER = "cxi"
 
 NCCL_SOCKET_IFNAME = "hsn0,hsn1,hsn2,hsn3"

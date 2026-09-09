@@ -10,7 +10,7 @@
 #
 # Bisect the CXI env against the failure that kills kimi pipeline parallelism.
 #
-# test-rccl-ofi-2node.sbatch already proved inter-node COLLECTIVES ride CXI (job 590212: cxi
+# Inter-node COLLECTIVES were already proved to ride CXI (job 590212: cxi
 # provider, AWS Libfabric, 85.1 GB/s bus at 2n x 4r). Job 590270 then showed that is not enough:
 # vLLM's PP handoff -- torch.distributed.irecv on a size-4 group, which makes RCCL build a fresh
 # 2-rank communicator -- died with `ncclInternalError: Internal check failed` (RCCL 2.30.4,

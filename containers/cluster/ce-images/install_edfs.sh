@@ -29,7 +29,10 @@ render() {
 
     if [[ ! -f "${image}" ]]; then
         echo "refusing to write ${name}: ${image} does not exist" >&2
-        echo "  build it, or pull it with pull_image.sh, before naming it in an EDF" >&2
+        echo "  PULL it (the default path -- same bytes we published, minutes not hours):" >&2
+        echo "    sbatch ${SCRIPT_DIR}/pull_images.sbatch" >&2
+        echo "  or BUILD it, if you are changing the image or it is not published yet:" >&2
+        echo "    sbatch --export=ALL,IMAGE_DIR=${SCRIPT_DIR}/<role> ${SCRIPT_DIR}/build_and_verify.sbatch" >&2
         return 1
     fi
 
@@ -59,6 +62,11 @@ try_render() { render "$@" || failed=$((failed + 1)); }
 
 echo "installing EDFs into ${EDF_DIR}"
 try_render "${JUDGE_AGENT_AMD_EDF_LATEST}" "${JUDGE_AGENT_AMD_TEMPLATE}" "${JUDGE_AGENT_AMD_SQSH}"
+# The judge image. Rendered only when its template exists, so a checkout that predates the split
+# installs the same set it always did rather than reporting a failure for a name it has never had.
+if [[ -n "${JUDGE_AMD_EDF_LATEST:-}" && -f "${SCRIPT_DIR}/${JUDGE_AMD_TEMPLATE:-}" ]]; then
+    try_render "${JUDGE_AMD_EDF_LATEST}" "${JUDGE_AMD_TEMPLATE}" "${JUDGE_AMD_SQSH}"
+fi
 
 # The inference pair. Their -latest aliases exist for the same reason the judge one does: a
 # rebuild should be reachable by re-rendering, not by editing every campaign that names it. The
@@ -71,6 +79,10 @@ if [[ ${failed} -gt 0 ]]; then
     echo "${failed} EDF(s) NOT installed -- the names above still point wherever they did" >&2
 fi
 echo "follow images.env:  AMD_CE_ENV=${JUDGE_AGENT_AMD_EDF_LATEST}"
+# The judge EDF is rendered above but was never named here, so nothing told the operator
+# the role exists. It is a separate image: the agent one carries no hpcagent_bench.
+[[ -n "${JUDGE_AMD_EDF_LATEST:-}" ]] \
+  && echo "                    JUDGE_CE_ENV=${JUDGE_AMD_EDF_LATEST}"
 echo "                    INFERENCE_CE_ENV=${INFERENCE_SGLANG_EDF_LATEST} (or ${INFERENCE_VLLM_EDF_LATEST})"
 # Version-named EDFs from before one-version-per-role are LEFT ALONE: arms are running through
 # them and their images are still on disk. They are not re-rendered and not deleted here.
