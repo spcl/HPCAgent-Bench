@@ -92,7 +92,11 @@ submit_arm() {  # submit_arm <model> <language> <skills:0|1> <deps or empty>
     local model="$1" lang="$2" skills="$3" deps="${4:-}"
     local sfx="" ; [[ "${skills}" == 1 ]] && sfx="-skills"
     local arm="${EXPERIMENT}-${model}-${lang}${OFFLOAD:+-${OFFLOAD}}${sfx}"
-    local env=".env.${arm}" problems="${PROBLEMS_PREFIX}-${lang}${sfx}.jsonl"
+    #: Keyed by MODEL too. Every model running a language shared one problems file, which is
+    #: harmless only while they all run the identical roster -- and wrong the moment a wave runs
+    #: each model over its own subset, since the file is written at submit time and read when the
+    #: job starts, so the last writer would decide what every queued arm of that language ran.
+    local env=".env.${arm}" problems="${PROBLEMS_PREFIX}-${model}-${lang}${sfx}.jsonl"
 
     # --image amd drops the pages that teach a vendor this box does not have. The skills leg NAMES
     # its pages rather than asking for the auto packet: both render through the same path then, so
