@@ -68,6 +68,15 @@ PROBLEMS_PREFIX=${PROBLEMS_PREFIX:-problems-gpu-llr40}
 #: The roster tag, not a checked-in list: the registry moves and a stale list reports a number for
 #: the wrong forty.
 TAG=${TAG:-llr-focus40}
+#: A NEXT WAVE over a named subset, one kernel per line -- exactly what an arm still owes a row for,
+#: as remaining_kernels.py computes it. Empty means the whole tag. Re-running only the complement is
+#: what keeps a partial arm comparable: every kernel then carries ONE agent across the waves, and a
+#: kernel is summarised by the best value any agent verified for it, so re-running the whole roster
+#: would score the survivors twice over and the rest once.
+KERNELS_FILE=${KERNELS_FILE:-}
+if [[ -n "${KERNELS_FILE}" ]]; then
+    [[ -s "${KERNELS_FILE}" ]] || { echo "KERNELS_FILE ${KERNELS_FILE} is missing or empty" >&2; exit 2; }
+fi
 
 time_for() { case "$1" in kimi27sglang) echo "12:00:00" ;; qwen38) echo "08:00:00" ;; *) echo "06:00:00" ;; esac; }
 #: Inherited whole from the CPU campaign's newest env per model, so a GPU arm differs from its CPU
@@ -111,6 +120,15 @@ submit_arm() {  # submit_arm <model> <language> <skills:0|1> <deps or empty>
     # that delivers ONE host-pointer unit, and for a Triton arm that delivers Python. Regenerating
     # either one silently replaced its correct addendum with hip's, so the arm was told to build
     # something it was not graded on.
+    #: A PYTHON delivery needs the judge mode that accepts one. The base env pins
+    #: JUDGE_INPUT_MODE=source, and source enforces ('c','cpp','fortran','cuda','hip') -- so every
+    #: triton submission was REFUSED at the route with "input mode is 'source'", and the arm could
+    #: not have produced a row whatever the agent wrote. Measured on 631274: 11 of 40 kernels, 42
+    #: refusals in the agent logs, the arm exiting COMPLETED in 58 minutes having measured nothing.
+    #: py-binding enforces ('python',), which is the delivery triton-build.md actually asks for.
+    local input_mode=""
+    case "${lang}" in triton | python | pytriton) input_mode=py-binding ;; esac
+
     #: OFFLOAD decides FIRST, because it decides the delivery. The case below reads ${lang}, and an
     #: offload arm's language is `c` -- so the documented invocation, LANGUAGES=c OFFLOAD=openmp,
     #: fell through to prompt-gpu.md and told the agent to deliver two translation units and device
@@ -125,8 +143,10 @@ submit_arm() {  # submit_arm <model> <language> <skills:0|1> <deps or empty>
             triton | python | pytriton) prompt=prompt-triton.md ;;
         esac
     fi
+    local subset=()
+    [[ -n "${KERNELS_FILE}" ]] && subset=(--kernels-file "${KERNELS_FILE}")
     "${PY}" ./make_problems.py --track loop_level_reasoning --tag "${TAG}" \
-        --language "${lang}" --image amd ${skill_args} \
+        --language "${lang}" --image amd ${skill_args} "${subset[@]}" \
         >"${problems}.tmp"
     mv -f "${problems}.tmp" "${problems}"
 
@@ -137,6 +157,7 @@ submit_arm() {  # submit_arm <model> <language> <skills:0|1> <deps or empty>
         -e "s|^AMD_CE_ENV=.*|AMD_CE_ENV=${AMD_CE_ENV_GPU}|" \
         -e "s|^RUN_ROOT=.*|RUN_ROOT=\${SCRATCH:-/iopsstor/scratch/cscs/\$USER}/hpcagent-bench-runs/${EXPERIMENT}-${STAMP}|" \
         ".env.${BASE_ENV[${model}]}" >"${env}"
+    [[ -n "${input_mode}" ]] && sed -i -e "s|^JUDGE_INPUT_MODE=.*|JUDGE_INPUT_MODE=${input_mode}|" "${env}"
     echo "HPCAGENT_BENCH_RECORD_EXPERIMENT=${EXPERIMENT}" >>"${env}"
     if [[ -n "${OFFLOAD}" ]]; then
         printf 'HPCAGENT_BENCH_OFFLOAD=%s\nHPCAGENT_BENCH_OFFLOAD_MEMORY=explicit\n' "${OFFLOAD}" >>"${env}"
@@ -154,18 +175,22 @@ submit_arm() {  # submit_arm <model> <language> <skills:0|1> <deps or empty>
     echo "submitted ${arm} -> ${SUBMITTED_JID} (${nodes} nodes)"
 }
 
+#: Which legs to send. Both, in order, is the campaign; ONE is what a next wave needs, because the
+#: two legs are different arms that owe DIFFERENT kernels -- sending them together would hand both
+#: the same KERNELS_FILE and re-run finished work on one of them.
+LEGS=${LEGS:-"0 1"}
+
 # Leg 1 (no skills) in full, then leg 2 behind ALL of it -- the comparison is leg-1-complete
 # against leg-2-complete, and a half-finished baseline is not a baseline.
 leg1=()
-for lang in ${LANGUAGES}; do
-    for model in ${MODELS}; do
-        submit_arm "${model}" "${lang}" 0 "${DEPEND_ON:-}"
-        [[ "${SUBMIT:-1}" == 1 ]] && leg1+=("${SUBMITTED_JID}")
+gate="${DEPEND_ON:-}"
+for leg in ${LEGS}; do
+    for lang in ${LANGUAGES}; do
+        for model in ${MODELS}; do
+            submit_arm "${model}" "${lang}" "${leg}" "${gate}"
+            [[ "${SUBMIT:-1}" == 1 && "${leg}" == 0 ]] && leg1+=("${SUBMITTED_JID}")
+        done
     done
-done
-gate="$(IFS=:; echo "${leg1[*]:-}")"
-for lang in ${LANGUAGES}; do
-    for model in ${MODELS}; do
-        submit_arm "${model}" "${lang}" 1 "${gate}"
-    done
+    # Leg 2 waits on every leg-1 job THIS invocation sent; a leg-2-only wave keeps DEPEND_ON.
+    [[ "${leg}" == 0 && ${#leg1[@]} -gt 0 ]] && gate="$(IFS=:; echo "${leg1[*]}")"
 done
