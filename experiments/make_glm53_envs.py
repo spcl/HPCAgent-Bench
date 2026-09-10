@@ -31,6 +31,25 @@ GLM_ARGS = (
 # mem-fraction-static is a CEILING on weights+KV together on MI300A, not a KV reservation:
 # KV(f) = 443.4 * (f - 0.486) GB/rank at tp=4 pp=4. Below 0.486 sglang refuses; 0.62 let the
 # heaviest PP stage (node3 at 206.1 GB -- the stages are UNEVEN) reach the host OOM killer.
+CE_ENV = """
+# SAME CONTAINER AS EVERY OTHER SGLANG ARM. sglang-glm-halfconv and sglang-latest both resolve to
+# optarena-sglang.sqsh -- the identical squashfs. GLM is NOT a patched image and there is no GLM
+# build. The EDF differs from the shared one by exactly two [env] keys and nothing else:
+#   1. PYTHONPATH, reaching a sitecustomize that sets torch.Tensor.format_ue8m0 = False as a CLASS
+#      default, or the ROCm fnuz branch returns a fresh tensor without the attribute and the loader
+#      dies -- GLM-5.3 cannot load at all without it;
+#   2. HIPCC_COMPILE_FLAGS_APPEND=-U__HIP_NO_HALF_CONVERSIONS__ -U__HIP_NO_HALF_OPERATORS__,
+#      without which module_fused_qk_norm_rope_cache_quant_shuffle will not compile.
+# Do NOT move those into sglang-latest: kimi and qwen build their aiter kernels fine, and those
+# macros exist to stop ambiguous __half overloads.
+# Both are ordinary process env vars and role_srun passes --export=ALL, so they could live in the
+# .env instead and retire the second EDF. Worth doing, but only behind a serving smoke: a second
+# sitecustomize.py exists in the tree (external-eager-pg-patch, baked into the vLLM image), Python
+# imports the FIRST one on sys.path and stops, and the two collide silently if an arm ever sets
+# VLLM_EAGER_PG_PATCH=1 alongside this. GLM serves correctly today.
+INFERENCE_CE_ENV=sglang-glm-halfconv
+"""
+
 HEADER = """
 # --- GLM-5.3 deviations from the kimi arm this env was derived from ------------------
 # Serving config proven by smoke 628603: 4 nodes, tp=4 x pp=4, fp8 weights and fp8_e4m3 KV.
@@ -54,12 +73,19 @@ def derive(src: pathlib.Path, dst: pathlib.Path) -> None:
             replaced.add("optimizer")
         elif line.startswith("AITER_USE_FLYDSL_MOE_SORTING="):
             continue
+        elif line.startswith("INFERENCE_CE_ENV="):
+            # The kimi source says sglang-latest. Without this branch a regeneration silently
+            # dropped GLM back to the shared EDF, which cannot load GLM-5.3 at all -- and the
+            # arm would look correct right up until the loader died on format_ue8m0.
+            out.extend(CE_ENV.strip("\n").splitlines())
+            replaced.add("ce_env")
+            continue
         elif line.startswith("SGLANG_EXTRA_ARGS="):
             out.extend(HEADER.strip("\n").splitlines())
             line = f"SGLANG_EXTRA_ARGS={GLM_ARGS}"
             replaced.add("args")
         out.append(line)
-    missing = {"model", "optimizer", "args"} - replaced
+    missing = {"model", "optimizer", "args", "ce_env"} - replaced
     if missing:
         raise SystemExit(f"{src.name}: never matched {sorted(missing)}")
     dst.write_text("\n".join(out) + "\n")
