@@ -23,7 +23,7 @@ import sys
 
 GLM_ARGS = (
     '"--trust-remote-code --watchdog-timeout 1800 --kv-cache-dtype fp8_e4m3 --page-size 64 '
-    "--context-length 131072 --mem-fraction-static 0.55 --cuda-graph-max-bs-decode 64 "
+    "--context-length 131072 --mem-fraction-static 0.50 --cuda-graph-max-bs-decode 64 "
     "--enable-metrics --pre-warm-nccl --reasoning-parser glm45 --tool-call-parser glm47 "
     '--dsa-prefill-backend tilelang --dsa-decode-backend tilelang --enable-cache-report"'
 )
