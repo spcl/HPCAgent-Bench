@@ -32,10 +32,27 @@ opt=${4:-${SCRATCH:?}/optarena}
 #: device form.
 target=${5:-cpu}
 
+#: HOW the directory was rendered, recorded IN the directory. A drop-in form and a plain one carry
+#: the same file names, so the mode is invisible from the outside -- and every caller that does not
+#: pass CPF_DROPIN silently re-renders a drop-in directory as plain. That is not hypothetical: an
+#: arm's own preparation step re-renders its forms directory before launching, and on 2026-09-10 it
+#: rewrote 16 of 40 canonical drop-ins as plain forms WHILE the treated arms were reading them,
+#: which strips the workspace pair from the signature and makes the file stop being a drop-in
+#: replacement at all. Marking the directory makes the mode survive a caller that does not know it.
+DROPIN_MARK="${out}/.cpf-dropin"
+if [[ -z "${CPF_DROPIN:-}" && -e "${DROPIN_MARK}" ]]; then
+    CPF_DROPIN=1
+    echo "prerender: ${out} is a DROP-IN directory; rendering drop-in forms"
+fi
+export CPF_DROPIN
+
 if [[ "${mode}" == outer ]]; then
     cpt="$(lscpu -p=CORE,SOCKET | grep -v '^#' | sort -u | awk -F, '$2 == 0' | wc -l)"
     ranks="$(lscpu -p=SOCKET | grep -v '^#' | sort -u | wc -l)"
     mkdir -p "${out}"
+    # Written BEFORE the ranks start, so a re-render that is interrupted still leaves the directory
+    # labelled with what it holds.
+    [[ -n "${CPF_DROPIN:-}" ]] && : >"${DROPIN_MARK}"
     echo "prerender(${target}): ${ranks} ranks x ${cpt} cores -> ${out}"
     exec srun --environment=optarena-amd-mi300-latest --ntasks="${ranks}" \
         --cpus-per-task="${cpt}" --hint=nomultithread --mem=0 \
