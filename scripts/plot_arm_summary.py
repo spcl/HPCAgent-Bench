@@ -236,6 +236,10 @@ def handles_for(frame: pd.DataFrame) -> list:
     # The shape in the legend has to be the shape on the panel, which depends on whether the
     # connector is drawn -- a legend showing four shapes beside a panel drawn in one is worse than
     # no legend at all.
+    # A single condition has nothing to distinguish, and an entry reading "No Skills" beside a
+    # figure with no skills dimension states a contrast that is not on the panel.
+    if len(conditions) < 2:
+        return marks
     entries = []
     for key in conditions:
         hollow = key == "plain"
