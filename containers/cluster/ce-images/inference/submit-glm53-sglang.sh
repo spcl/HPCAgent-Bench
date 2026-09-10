@@ -16,6 +16,11 @@
 # IndexerKPool, which raises "kpool indexer is only supported on CUDA". Plain 5.3 uses the DSA
 # Indexer, which is ROCm-capable. Do not re-derive this.
 set -Eeuo pipefail
+
+# Slurm propagates the submitting shell's limits into the job, so one line here keeps a crashed
+# worker from dropping a core_nid<node>_<pid> file beside this script. 152 of them had
+# accumulated in this directory before it existed.
+ulimit -c 0
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 # DSA backend, overridable via SGLANG_EXTRA_ARGS. GlmMoeDsaForCausalLM routes attention through

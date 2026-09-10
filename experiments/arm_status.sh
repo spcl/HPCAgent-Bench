@@ -31,7 +31,11 @@ for job in "${jobs[@]}"; do
     connected=$(grep -ho '"status":"connected"' "${node_dir}"/*/claude.log 2>/dev/null | wc -l)
     turns=$(grep -ho '"type":"assistant"' "${node_dir}"/*/claude.log 2>/dev/null | wc -l)
     # The driver prints one of these per sample; the last is the current state of the arm.
-    log="results/beverin-services-${job}.out"
+    # Where beverin.sbatch's --output actually goes. It used to read a bare `results/`, which is
+    # the path the sbatch wrote to before it moved under RUN_ROOT -- so the directory sat empty and
+    # every arm reported "no sample yet" whatever it was doing. Derived from RUN_ROOT so the two
+    # cannot drift again.
+    log="${RUN_ROOT}/slurm/beverin-services-${job}.out"
     line=$([[ -f "${log}" ]] && tr '\r' '\n' <"${log}" |
         grep -oE "aggregate throughput: t=[0-9]+s [0-9.]+ tok/s running=[0-9]+ waiting=[0-9]+" | tail -1)
     if [[ -n "${line}" ]]; then
