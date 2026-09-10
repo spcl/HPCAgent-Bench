@@ -125,12 +125,25 @@ form_ext() { case "$1" in cpp) echo cpp ;; hip) echo hip ;; cuda) echo cu ;; *) 
 #: 40-form directory passes a count test without anyone having checked that those 12 are among the
 #: 40. The judge answers a miss with 200 "unavailable", so the arm would launch, grade every kernel
 #: and carry the treatment for none of them, with nothing failing to notice.
+#: A directory marked drop-in is held to the drop-in SIGNATURE, not just to having a file. The
+#: marker records the mode a render was asked for; it cannot record whether the render finished, and
+#: a half-rendered directory has the full file COUNT with half the content -- which is the exact
+#: shape of the failure this guard exists to catch. `workspace_size` is the check because the
+#: workspace pair is what makes the form substitutable for the kernel, and it survives however the
+#: pointer itself is spelled.
 forms_missing() {
-    local dir="$1" ext="$2" kernel found
+    local dir="$1" ext="$2" kernel form dropin=0
+    [[ -e "${dir}/.cpf-dropin" ]] && dropin=1
     for kernel in ${KERNELS//,/ }; do
-        found=0
-        [[ -d "${dir}" ]] && compgen -G "${dir}/${kernel}"'_*_cpf.'"${ext}" >/dev/null && found=1
-        (( found )) || echo "${kernel}"
+        form=""
+        if [[ -d "${dir}" ]]; then
+            form=$(compgen -G "${dir}/${kernel}"'_*_cpf.'"${ext}" | head -1 || true)
+        fi
+        if [[ -z "${form}" ]]; then
+            echo "${kernel}"
+        elif (( dropin )) && ! grep -q workspace_size "${form}"; then
+            echo "${kernel} (form is not a drop-in)"
+        fi
     done
 }
 
