@@ -4571,12 +4571,13 @@ def helper_returns_rank0(hfn, pnames, args, arr_by, sca_by, sym_by, fn=None) -> 
     returns = [n.value for n in ast.walk(hfn) if isinstance(n, ast.Return) and n.value is not None]
     if not returns:
         return False
-    arrays, _, _ = _infer_helper_params(pnames, args, arr_by, sca_by, sym_by, fn)
+    arrays, scalars, symbols = _infer_helper_params(pnames, args, arr_by, sca_by, sym_by, fn)
     if not arrays:
         return False
+    scalar_names = scalar_value_names(hfn, {d.name for d in (*scalars, *symbols)})
     table = {a.name: tuple(str(s) for s in a.shape) for a in arrays}
     _propagate_local_extents(hfn, table)
-    if any(not _extent_operands_resolved(value, hfn, table) for value in returns):
+    if any(not _extent_operands_resolved(value, hfn, table, scalar_names) for value in returns):
         return False
     return all(_iter_extent_of(value, table) is None for value in returns)
 
