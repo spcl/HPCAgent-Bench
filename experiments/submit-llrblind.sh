@@ -62,13 +62,17 @@ submit_arm() {
     total_problems=$(grep -c . "${problems}")
     needed=$(( (total_problems + per_node - 1) / per_node ))
     pin_env_kv "${env}" "AGENT_NODES=${needed}"
+    # a single-submission arm has one shot per kernel, so a compaction overrun costs the whole
+    # episode and records nothing; refuse rather than spend the walltime finding out
+    check_context_budget "${env}" || exit 2
     local nodes; nodes=$(arm_nodes "${env}")
     if [[ "${SUBMIT:-1}" != 1 ]]; then
-        echo "  prepared ${arm} (${nodes} nodes) -- not submitted"
+        echo "  prepared ${arm} (${nodes} nodes)${DEPEND_ON:+ after ${DEPEND_ON}} -- not submitted"
         return 0
     fi
+    local dep=(); [[ -n "${DEPEND_ON:-}" ]] && dep=(--dependency="afterany:${DEPEND_ON}")
     local jid
-    jid=$(sbatch --parsable --nodes="${nodes}" --time="${WALLCLOCK}" --job-name="${arm}" \
+    jid=$(sbatch --parsable --nodes="${nodes}" --time="${WALLCLOCK}" --job-name="${arm}" "${dep[@]}" \
           --export=ALL,CLUSTER_ENV_FILE="${PWD}/${env}" beverin.sbatch)
     echo "  ${arm} -> ${jid} (${nodes} nodes)"
 }
