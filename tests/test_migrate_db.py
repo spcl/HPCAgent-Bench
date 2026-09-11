@@ -82,9 +82,10 @@ def _old_shard(path, rows):
     conn.close()
 
 
-def test_the_bodys_claim_moves_to_delivered_language(tmp_path):
-    """A pre-identity row's `language` is what the agent said, and bodies arrived naming py, zzz and
-    a file path. It moves aside so the column a figure groups by can come from the run instead."""
+def test_the_bodys_claim_is_dropped_rather_than_carried_across(tmp_path):
+    """A pre-identity row's `language` is what the AGENT said, and bodies arrived naming py, zzz and
+    a file path. It is not migrated anywhere: the column a figure groups by comes from the run, and
+    the claim recorded a naming artifact with no consequence that is not already in `status`."""
     shard = str(tmp_path / "old0.db")
     _old_shard(
         shard,
@@ -93,9 +94,14 @@ def test_the_bodys_claim_moves_to_delivered_language(tmp_path):
     dest = recording.connect(str(tmp_path / "out.db"))
     src = sqlite3.connect(shard)
     try:
-        migrate.copy_table(dest, src, "calls", lambda r: migrate.parse_arm(migrate.arm_of(r)))
+        identity = lambda r: migrate.parse_arm(migrate.arm_of(r))  # noqa: E731 -- one expression
+        run_ids = [r[0] for r in src.execute("SELECT DISTINCT run_id FROM calls")]
+        migrate.write_runs(dest, run_ids, identity)
+        migrate.copy_table(dest, src, "calls", identity)
         dest.commit()
-        assert list(dest.execute("SELECT delivered_language FROM calls")) == [("zzz",)]
+        columns = {r[1] for r in dest.execute("PRAGMA table_info(calls)")}
+        assert "delivered_language" not in columns and "language" not in columns
+        assert list(dest.execute("SELECT language FROM runs")) == [("triton",)]
     finally:
         src.close()
         dest.close()
