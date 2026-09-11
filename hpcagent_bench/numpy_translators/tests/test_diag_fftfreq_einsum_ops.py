@@ -22,20 +22,20 @@ from numpyto_common.lib_nodes import NP_CALL_EXPANDERS, expand_diag, expand_eins
 _NATIVE = ("c", "cpp", "fortran")
 
 
-def _name(n):
+def _name(n: str) -> ast.Name:
     return ast.Name(id=n, ctx=ast.Load())
 
 
-def _sub_const(name, idx):
+def _sub_const(name: str, idx: int) -> ast.Subscript:
     return ast.Subscript(value=_name(name), slice=ast.Constant(idx), ctx=ast.Load())
 
 
-def _unparse(stmts):
+def _unparse(stmts: list[ast.stmt]) -> str:
     mod = ast.fix_missing_locations(ast.Module(body=list(stmts), type_ignores=[]))
     return ast.unparse(mod)
 
 
-def _assert_ok(res, label) -> None:
+def _assert_ok(res: dict[str, str], label: str) -> None:
     fails = {b: s for b, s in res.items() if not (s == "ok" or s.startswith("skip"))}
     assert any(v == "ok" for v in res.values()), f"every backend skipped; the comparison never ran: {res}"
     assert not fails, f"{label}: {fails}"
@@ -175,7 +175,7 @@ def test_diag_tridiagonal_e2e() -> None:
 
 
 @pytest.mark.parametrize("n", [6, 7])  # even + odd exercise the negative-frequency wrap
-def test_fftfreq_e2e(n) -> None:
+def test_fftfreq_e2e(n: int) -> None:
     _oracle_available()
     src = "import numpy as np\ndef f(nbuf, h, out):\n    out[:] = np.fft.fftfreq(nbuf[0], d=h[0])\n"
     nbuf, h = np.array([n], dtype=np.int64), np.array([0.25])

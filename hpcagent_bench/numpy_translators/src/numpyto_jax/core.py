@@ -120,7 +120,7 @@ def _np_to_jnp(tree: ast.AST) -> ast.AST:
     """Rewrite ``np.<x>`` -> ``jnp.<x>`` (and bare ``np`` -> ``jnp``)."""
 
     class _R(ast.NodeTransformer):
-        def visit_Name(self, node):
+        def visit_Name(self, node: ast.Name) -> ast.expr:
             if node.id == "np":
                 return ast.copy_location(ast.Name(id="jnp", ctx=node.ctx), node)
             # np_float/np_complex are framework globals resolving to the
@@ -135,7 +135,7 @@ def _np_to_jnp(tree: ast.AST) -> ast.AST:
                 )
             return node
 
-        def visit_Attribute(self, node):
+        def visit_Attribute(self, node: ast.Attribute) -> ast.expr:
             self.generic_visit(node)
             # np.ndarray(shape, dtype=..) is a bare ctor; jnp has none -- use jnp.empty.
             if node.attr == "ndarray":
@@ -154,7 +154,7 @@ def _np_to_jnp(tree: ast.AST) -> ast.AST:
                 )
             return node
 
-        def visit_Call(self, node):
+        def visit_Call(self, node: ast.Call) -> ast.expr:
             self.generic_visit(node)
             # jnp ctors reject numpy's order= (C/F layout; jax has none) -- drop
             # it from ctors only (jnp.reshape DOES honour order=, left intact).
@@ -221,7 +221,7 @@ def _np_to_jnp(tree: ast.AST) -> ast.AST:
                 )
             return node
 
-        def visit_IfExp(self, node):
+        def visit_IfExp(self, node: ast.IfExp) -> ast.expr:
             self.generic_visit(node)
             # Data-dependent ternary (lulesh's Courant limit) can't yield a
             # concrete bool under trace -> jnp.where(cond, a, b). A static
@@ -244,7 +244,7 @@ def _np_to_jnp(tree: ast.AST) -> ast.AST:
             )
             return ast.copy_location(where, node)
 
-        def visit_BoolOp(self, node):
+        def visit_BoolOp(self, node: ast.BoolOp) -> ast.expr:
             self.generic_visit(node)
             # a and b / a or b: when every operand is provably boolean (compare
             # or np.logical_*), this is a mask combine -> elementwise & / | (a
@@ -788,7 +788,7 @@ def _rewrite_eigh(fn: ast.FunctionDef) -> None:
         def __init__(self) -> None:
             self.ctr = 0
 
-        def visit_Assign(self, node: ast.Assign):
+        def visit_Assign(self, node: ast.Assign) -> ast.Assign | list[ast.stmt]:
             if len(node.targets) != 1:
                 return node
             hit = _eigh_call_ab(node.value, _EIGH_ALIASES)
@@ -805,7 +805,7 @@ def _rewrite_eigh(fn: ast.FunctionDef) -> None:
             self.ctr += 1
             pre: List[str] = []
 
-            def name_of(nd, tag):
+            def name_of(nd: ast.expr, tag: str) -> str:
                 if isinstance(nd, ast.Name):
                     return nd.id
                 pre.append(f"{p}_{tag} = np.ascontiguousarray({ast.unparse(nd)})")
@@ -1239,14 +1239,14 @@ def _devectorize_index(node: ast.AST, i: str) -> ast.AST:
     subscript-strip alone would collapse it to a full-array scalar."""
 
     class _R(ast.NodeTransformer):
-        def visit_Call(self, n):
+        def visit_Call(self, n: ast.Call) -> ast.expr:
             rewritten = _row_reduce_rewrite(n, i)
             if rewritten is not None:
                 return rewritten
             self.generic_visit(n)
             return n
 
-        def visit_Subscript(self, n):
+        def visit_Subscript(self, n: ast.Subscript) -> ast.expr:
             self.generic_visit(n)
             if _is_index_i(n.slice, i):
                 return n.value
@@ -1448,7 +1448,7 @@ def _rewrite_inplace_helper_calls(fn: ast.FunctionDef, helper_mut: dict) -> None
     that flows through ``_functionalize_stmt`` into ``.at[:, ii].set(..)``);
     a ``("val",)`` slot comes from the call's LHS."""
 
-    def _targets(call: ast.Call, lhs_elts: List[ast.AST]):
+    def _targets(call: ast.Call, lhs_elts: List[ast.AST]) -> List[ast.AST] | None:
         slots = helper_mut[call.func.id]
         if sum(1 for s in slots if s[0] == "val") != len(lhs_elts):
             return None  # LHS arity must match the genuine return values
@@ -1458,21 +1458,21 @@ def _rewrite_inplace_helper_calls(fn: ast.FunctionDef, helper_mut: dict) -> None
         vi = iter(lhs_elts)
         return [_as_store(next(vi) if s[0] == "val" else call.args[s[1]]) for s in slots]
 
-    def _rebind(call, lhs_elts, node):
+    def _rebind(call: ast.Call, lhs_elts: List[ast.AST], node: ast.stmt) -> ast.stmt:
         tgts = _targets(call, lhs_elts)
         if tgts is None:
             return node
         tgt = tgts[0] if len(tgts) == 1 else ast.Tuple(elts=tgts, ctx=ast.Store())
         return ast.copy_location(ast.Assign(targets=[tgt], value=call), node)
 
-    def _is_mut_call(c):
+    def _is_mut_call(c: ast.AST) -> bool:
         return isinstance(c, ast.Call) and isinstance(c.func, ast.Name) and c.func.id in helper_mut
 
     class _T(ast.NodeTransformer):
-        def visit_Expr(self, node):  # bare call: no captured return values
+        def visit_Expr(self, node: ast.Expr) -> ast.stmt:  # bare call: no captured return values
             return _rebind(node.value, [], node) if _is_mut_call(node.value) else node
 
-        def visit_Assign(self, node):  # value-captured call: LHS supplies the ``val`` slots
+        def visit_Assign(self, node: ast.Assign) -> ast.stmt:  # value-captured call: LHS supplies the ``val`` slots
             if _is_mut_call(node.value) and len(node.targets) == 1:
                 lhs = node.targets[0]
                 return _rebind(node.value, lhs.elts if isinstance(lhs, ast.Tuple) else [lhs], node)
@@ -1768,7 +1768,7 @@ def _fold_const_branches(fn: ast.FunctionDef) -> None:
         return
 
     class _T(ast.NodeTransformer):
-        def visit_If(self, node):
+        def visit_If(self, node: ast.If) -> ast.If | List[ast.stmt]:
             self.generic_visit(node)  # fold inner elif chain first
             if _names_loaded(node.test) <= set(usable):
                 try:
@@ -1831,7 +1831,7 @@ def _desugar_foreach(fn: ast.FunctionDef) -> None:
     Name iterable is handled."""
 
     class _T(ast.NodeTransformer):
-        def visit_For(self, node):
+        def visit_For(self, node: ast.For) -> ast.For:
             self.generic_visit(node)
             it = node.iter
             if isinstance(it, ast.Call) and isinstance(it.func, ast.Name) and it.func.id == "range":
@@ -1873,7 +1873,7 @@ def _expand_tuple_targets(fn: ast.FunctionDef) -> None:
     alone -- JAX unpacks tuples directly."""
 
     class _T(ast.NodeTransformer):
-        def visit_Assign(self, node):
+        def visit_Assign(self, node: ast.Assign) -> ast.Assign | List[ast.stmt]:
             self.generic_visit(node)
             if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Tuple):
                 return node
@@ -1903,7 +1903,7 @@ def _expand_chained_assigns(fn: ast.FunctionDef) -> None:
     correlation write the same row+column from one dot)."""
 
     class _T(ast.NodeTransformer):
-        def visit_Assign(self, node):
+        def visit_Assign(self, node: ast.Assign) -> ast.Assign | List[ast.stmt]:
             self.generic_visit(node)
             if len(node.targets) <= 1:
                 return node
@@ -1994,7 +1994,7 @@ def _boolean_mask_transform(fn: ast.FunctionDef) -> None:
                 if isinstance(t, ast.Name):
                     bool_names.add(t.id)
 
-    def is_mask(idx):
+    def is_mask(idx: ast.expr) -> bool:
         return _is_bool_expr(idx) or (isinstance(idx, ast.Name) and idx.id in bool_names)
 
     # Inline a masked-subset temp: ``v = data[mask]; ... v.mean()`` (azimint_

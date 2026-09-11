@@ -17,7 +17,7 @@ from hpcagent_bench.support.collect.sweep import MPI_LAUNCHER_VARS, drop_mpi_lau
 
 
 @pytest.fixture(name="launcher_env")
-def launcher_env_fixture(monkeypatch: pytest.MonkeyPatch):
+def launcher_env_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
     """A process that looks like a rank of a pmix-launched step, plus the shard variable."""
     for var in MPI_LAUNCHER_VARS:
         monkeypatch.delenv(var, raising=False)
@@ -27,13 +27,13 @@ def launcher_env_fixture(monkeypatch: pytest.MonkeyPatch):
     return None
 
 
-def test_the_launcher_variables_are_removed(launcher_env) -> None:
+def test_the_launcher_variables_are_removed(launcher_env: None) -> None:
     removed = drop_mpi_launcher_vars()
     assert set(removed) == {"PMIX_RANK", "PMI_RANK"}
     assert not [var for var in MPI_LAUNCHER_VARS if var in os.environ]
 
 
-def test_slurm_procid_survives(launcher_env) -> None:
+def test_slurm_procid_survives(launcher_env: None) -> None:
     """The sweep shards on SLURM_PROCID and names per-rank build folders with it.
 
     DaCe excludes it from its own MPI trigger for the same reason -- it says a launcher started the
@@ -66,7 +66,9 @@ def test_the_list_still_covers_what_dace_triggers_on() -> None:
     )
 
 
-def test_the_distributed_residency_keeps_its_launcher_variables(launcher_env, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_distributed_residency_keeps_its_launcher_variables(
+    launcher_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """An MPI rank must NOT be stripped: MPI is what the launcher already prepared for it.
 
     The two residencies fail in opposite directions -- a single-node child that lets MPI come up

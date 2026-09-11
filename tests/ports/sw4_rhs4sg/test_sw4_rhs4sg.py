@@ -30,6 +30,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import numpy as np
 import pytest
@@ -48,7 +49,7 @@ _CI = ctypes.c_int
 _D = ctypes.c_double
 
 
-def _load(name):
+def _load(name: str) -> ModuleType:
     spec = importlib.util.spec_from_file_location(name, _BENCH / f"{name}.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -59,7 +60,7 @@ gen = _load("sw4_rhs4sg")
 ref = _load("sw4_rhs4sg_numpy")
 
 
-def _build(tmp, cc, contract, tag):
+def _build(tmp: Path, cc: str, contract: str, tag: str) -> ctypes.CDLL:
     lib = tmp / (f"libsw4xc_{tag}" + (".dylib" if sys.platform == "darwin" else ".so"))
     r = subprocess.run(
         [
@@ -88,7 +89,7 @@ def _build(tmp, cc, contract, tag):
 
 
 @pytest.fixture(scope="module")
-def native(tmp_path_factory):
+def native(tmp_path_factory: pytest.TempPathFactory) -> ctypes.CDLL:
     """The genuine upstream kernel, compiled as a shared library.
 
     ``-ffp-contract=off`` is deliberate: it is what makes the C and the numpy port
@@ -103,7 +104,7 @@ def native(tmp_path_factory):
 
 
 @pytest.fixture(scope="module")
-def native_contracted(tmp_path_factory):
+def native_contracted(tmp_path_factory: pytest.TempPathFactory) -> ctypes.CDLL:
     """The same kernel built the way the PRODUCTION binary was: FP contraction on.
 
     The captured call was produced by a `mpicxx -O3` (Apple clang) build, which
@@ -124,13 +125,29 @@ def native_contracted(tmp_path_factory):
     return _build(tmp_path_factory.mktemp("sw4_xcheck_fma"), cc, "on", "fma")
 
 
-def _p(a):
+def _p(a: np.ndarray) -> ctypes.c_void_p:
     assert a.flags["C_CONTIGUOUS"] and a.dtype == np.float64
     return a.ctypes.data_as(_P)
 
 
 def _call_native(
-    dll, u, lu, mu, la, strx, stry, strz, acof, bope, ghcof, N_I, N_J, N_K, h, lo: int = 1, hi: int = 1
+    dll: ctypes.CDLL,
+    u: np.ndarray,
+    lu: np.ndarray,
+    mu: np.ndarray,
+    la: np.ndarray,
+    strx: np.ndarray,
+    stry: np.ndarray,
+    strz: np.ndarray,
+    acof: np.ndarray,
+    bope: np.ndarray,
+    ghcof: np.ndarray,
+    N_I: int,
+    N_J: int,
+    N_K: int,
+    h: float,
+    lo: int = 1,
+    hi: int = 1,
 ) -> None:
     dll.sw4_rhs4sg_xcheck(
         _p(u),
@@ -158,7 +175,7 @@ def _call_native(
 # Cubic, oblong, and the smallest shape the two SBP closures fit in without
 # overlapping (N_K >= 17 leaves a non-empty interior between them).
 @pytest.mark.parametrize("N_I,N_J,N_K", [(24, 24, 24), (20, 26, 22), (18, 19, 17), (31, 22, 28)])
-def test_numpy_matches_vendored_kernel_bitwise(native, N_I, N_J, N_K) -> None:
+def test_numpy_matches_vendored_kernel_bitwise(native: ctypes.CDLL, N_I: int, N_J: int, N_K: int) -> None:
     u, lu, mu, la, strx, stry, strz, acof, bope, ghcof, h = gen.initialize(N_I, N_J, N_K)
     lu_native = lu.copy()
     lu_numpy = lu.copy()
@@ -172,7 +189,7 @@ def test_numpy_matches_vendored_kernel_bitwise(native, N_I, N_J, N_K) -> None:
     )
 
 
-def test_each_code_block_is_exercised(native) -> None:
+def test_each_code_block_is_exercised(native: ctypes.CDLL) -> None:
     """The three blocks (interior + both SBP closures) must all be live and distinct."""
     N_I = N_J = N_K = 24
     u, lu, mu, la, strx, stry, strz, acof, bope, ghcof, h = gen.initialize(N_I, N_J, N_K)
@@ -191,7 +208,7 @@ def test_each_code_block_is_exercised(native) -> None:
     )
 
 
-def test_ghost_planes_and_halo_pass_through(native) -> None:
+def test_ghost_planes_and_halo_pass_through(native: ctypes.CDLL) -> None:
     """`lu` is INOUT: everything outside global k in [1,nk] and i,j in [1,n-2] is untouched."""
     N_I = N_J = N_K = 24
     u, lu, mu, la, strx, stry, strz, acof, bope, ghcof, h = gen.initialize(N_I, N_J, N_K)
@@ -217,7 +234,7 @@ def test_ghost_planes_and_halo_pass_through(native) -> None:
 # ---------------------------------------------------------------------------
 # Layer 2: the port reproduces a call captured from the running application.
 # ---------------------------------------------------------------------------
-def _load_capture():
+def _load_capture() -> tuple[np.lib.npyio.NpzFile, int, int, int, int, int, float]:
     d = np.load(_CAPTURE)
     N_I, N_J, N_K, lo, hi = (int(v) for v in d["meta"])
     return d, N_I, N_J, N_K, lo, hi, float(d["h"][0])
@@ -230,7 +247,7 @@ def _load_capture():
 _FEW_ULP = 4 * np.finfo(np.float64).eps
 
 
-def test_matches_captured_production_call(native) -> None:
+def test_matches_captured_production_call(native: ctypes.CDLL) -> None:
     """Original application -> vendored reference -> numpy port, on real production data."""
     d, N_I, N_J, N_K, lo, hi, h = _load_capture()
     u, lu_in, lu_prod = d["u"], d["lu_in"], d["lu_out"]
@@ -268,7 +285,7 @@ def test_matches_captured_production_call(native) -> None:
     assert np.array_equal(lu_numpy, lu_native_11)
 
 
-def test_captured_call_replays_bit_exactly_under_production_flags(native_contracted) -> None:
+def test_captured_call_replays_bit_exactly_under_production_flags(native_contracted: ctypes.CDLL) -> None:
     """With the production build's FP contraction, the vendored kernel IS the application."""
     d, N_I, N_J, N_K, lo, hi, h = _load_capture()
     lu_native = d["lu_in"].copy()
@@ -301,7 +318,7 @@ def test_captured_call_replays_bit_exactly_under_production_flags(native_contrac
 _MMS_MU, _MMS_LA = 1.3, 0.7
 
 
-def _mms_inputs(N, h):
+def _mms_inputs(N: int, h: float) -> tuple[np.ndarray, ...]:
     """Smooth u on a constant-coefficient, unstretched grid, plus the exact continuum L(u).
 
     With constant mu = M and la = L the elastic operator collapses to
@@ -349,7 +366,7 @@ def _mms_inputs(N, h):
     )
 
 
-def _mms_interior_error(N):
+def _mms_interior_error(N: int) -> float:
     h = 1.0 / (N - 1)
     u, lu, mu, la, sx, sy, sz, acof, bope, ghcof, exact = _mms_inputs(N, h)
     ref.sw4_rhs4sg(u, lu, mu, la, sx, sy, sz, acof, bope, ghcof, N, N, N, h)
@@ -420,7 +437,7 @@ def test_rigid_translation_gives_zero() -> None:
 # ---------------------------------------------------------------------------
 # Layer 4: the SBP tables are upstream's, bit-for-bit.
 # ---------------------------------------------------------------------------
-def test_sbp_coefficients_match_upstream_fortran(tmp_path) -> None:
+def test_sbp_coefficients_match_upstream_fortran(tmp_path: Path) -> None:
     """Regenerate acof/bope/ghcof with upstream's own Fortran and compare bitwise."""
     fc = shutil.which("gfortran")
     cc = shutil.which("cc") or shutil.which("clang") or shutil.which("gcc")

@@ -23,7 +23,9 @@ import ast
 from numpyto_common.tuple_desugar import TupleDesugar, Env, desugar_tuples
 
 
-def fold(src: str, ranks: dict, int_scalars=frozenset(), arrays=frozenset()) -> TupleDesugar:
+def fold(
+    src: str, ranks: dict, int_scalars: frozenset[str] = frozenset(), arrays: frozenset[str] = frozenset()
+) -> TupleDesugar:
     """Run the interpreter over ``src``'s single function and return it, for its rank table."""
     fn = ast.parse(src).body[0]
     interp = TupleDesugar(int_scalars, frozenset(), arrays, ranks)

@@ -27,20 +27,25 @@ SOFTWARE.
 import sys
 import threading
 import _thread as thread
+from collections.abc import Callable
+from typing import ParamSpec, TypeVar
+
+P = ParamSpec("P")
+T = TypeVar("T")
 
 
-def cdquit(fn_name) -> None:
+def cdquit(fn_name: str) -> None:
     print("{0} took too long".format(fn_name), file=sys.stderr)
     sys.stderr.flush()  # Python 3 stderr is likely buffered.
     thread.interrupt_main()  # raises KeyboardInterrupt
 
 
-def exit_after(s):
+def exit_after(s: float) -> Callable[[Callable[P, T]], Callable[P, T]]:
     """Decorator: exit the process if the function takes longer than s seconds."""
 
-    def outer(fn):
+    def outer(fn: Callable[P, T]) -> Callable[P, T]:
 
-        def inner(*args, **kwargs):
+        def inner(*args: P.args, **kwargs: P.kwargs) -> T:
             timer = threading.Timer(s, cdquit, args=[fn.__name__])
             timer.start()
             try:

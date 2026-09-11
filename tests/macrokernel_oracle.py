@@ -12,6 +12,8 @@ import shutil
 import subprocess
 from typing import Dict, List, Optional
 
+import numpy as np
+
 from hpcagent_bench import languages
 
 
@@ -80,7 +82,7 @@ _VALUE_CTYPE = {
 }
 
 
-def _parse_args(cpp_text: str, fn: str):
+def _parse_args(cpp_text: str, fn: str) -> list[tuple[str, str, bool]]:
     """``[(name, ctype_token, is_pointer), ...]`` for entry ``fn`` in the .cpp."""
     m = re.search(re.escape(fn) + r"\s*\(([^;{]*?)\)\s*\{", cpp_text, re.S)
     if not m:
@@ -97,14 +99,18 @@ def _parse_args(cpp_text: str, fn: str):
     return out
 
 
-def call_emitted(cpp_path: str, so_path: str, kernel: str, *, buffers: Dict, scalars: Dict) -> None:
+def call_emitted(
+    cpp_path: str, so_path: str, kernel: str, *, buffers: Dict[str, np.ndarray], scalars: Dict[str, int | float]
+) -> None:
     """Run a DaCe-emitted kernel on caller-provided flat-SoA inputs, in place. Array shape symbols are
     taken from ``buffers[arr].shape[k]``, so the caller only supplies genuine inputs, not the derived
     dimension args."""
     text = open(cpp_path).read()
     lib = ctypes.CDLL(so_path)
 
-    def resolve(name, tok, is_ptr):
+    def resolve(
+        name: str, tok: str, is_ptr: bool
+    ) -> ctypes.c_void_p | ctypes.c_int64 | ctypes.c_int | ctypes.c_double | ctypes.c_bool | ctypes.c_float:
         if is_ptr:
             return ctypes.c_void_p(buffers[name].ctypes.data)
         if name.startswith("offset_"):
@@ -122,7 +128,7 @@ def call_emitted(cpp_path: str, so_path: str, kernel: str, *, buffers: Dict, sca
             return _VALUE_CTYPE[tok](int(buf.shape[dim]) if buf is not None and dim < buf.ndim else 1)
         raise KeyError(f"no value for emitted-kernel arg {name!r} ({tok})")
 
-    def invoke(fn, state=None, ret=None):
+    def invoke(fn: str, state: int | None = None, ret: type[ctypes._SimpleCData] | None = None) -> int | None:
         args = _parse_args(text, fn)
         if state is not None:
             args = args[1:]  # the first arg is __state (the handle)

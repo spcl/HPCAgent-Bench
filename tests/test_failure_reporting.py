@@ -26,7 +26,7 @@ def test_that_fails():
 '''
 
 
-def run_probe(tmp_path: pathlib.Path, *extra):
+def run_probe(tmp_path: pathlib.Path, *extra: str) -> str:
     """Run one deliberately failing test with the repo's conftest loaded, and return its output.
 
     PYTEST_ADDOPTS is dropped rather than inherited. CI sets it to ``--cov=hpcagent_bench
@@ -50,7 +50,7 @@ def run_probe(tmp_path: pathlib.Path, *extra):
 
 
 @pytest.mark.parametrize("extra", [(), ("-n", "2", "--dist", "loadgroup")], ids=["serial", "xdist"])
-def test_a_failure_names_its_reason_before_the_summary_section(tmp_path: pathlib.Path, extra) -> None:
+def test_a_failure_names_its_reason_before_the_summary_section(tmp_path: pathlib.Path, extra: tuple[str, ...]) -> None:
     """Cut the log where a SIGKILL or an INTERNALERROR would cut it; the reason must already be there.
 
     Asserting only that the reason appears somewhere is the assertion that passed all along --

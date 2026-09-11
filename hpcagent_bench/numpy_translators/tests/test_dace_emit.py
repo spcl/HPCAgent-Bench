@@ -16,6 +16,7 @@ output matching the known-good original VectraArtifacts dace source.
 import ast
 import re
 import textwrap
+from typing import Any
 
 import numpy as np
 import pytest
@@ -368,12 +369,12 @@ def test_resolvezeros_shape_change_reemits() -> None:
         seq = [("A",), ("B", "C")]
         i = 0
 
-        def __getitem__(self, key):
+        def __getitem__(self, key: str) -> tuple[str, ...]:
             s = self.seq[min(self.i, len(self.seq) - 1)]
             self.i += 1
             return s
 
-        def __contains__(self, key):
+        def __contains__(self, key: str) -> bool:
             return key == "t"
 
     out = _ResolveZeros(_ShapeSeq(), {}, {}, "float64").visit(fn)
@@ -490,7 +491,7 @@ def test_gmres_workspace_allocation_carries_an_explicit_dtype_end_to_end() -> No
 # --------------------------------------------------------------------------- #
 
 
-def _transform(tf, src):
+def _transform(tf: ast.NodeTransformer, src: str) -> str:
     tree = tf.visit(ast.parse(src).body[0])
     ast.fix_missing_locations(tree)
     return ast.unparse(tree)
@@ -654,7 +655,7 @@ def test_mandelbrot_no_leaked_framework_dtype_token() -> None:
     assert "dc_float" in src  # the dace precision global the module actually imports
 
 
-def _alloc_shape_names(prog):
+def _alloc_shape_names(prog: ast.FunctionDef) -> set[str]:
     """Names appearing inside an ``np.zeros/empty/ones`` shape tuple."""
     names = set()
     for node in ast.walk(prog):
@@ -708,7 +709,7 @@ def test_contour_integral_array_iteration_rewritten_to_indexed_range() -> None:
             )
 
 
-def _rewrites_to(transformer, source, expected):
+def _rewrites_to(transformer: ast.NodeTransformer, source: str, expected: str) -> tuple[bool, str]:
     """``source`` through ``transformer`` means the same as ``expected``.
 
     Both sides go through ``ast.parse`` before comparing: the two differ only in redundant
@@ -774,7 +775,7 @@ def test_a_reshape_the_generator_cannot_infer_is_left_for_dace_to_refuse() -> No
 # --------------------------------------------------------------------------- #
 
 
-def _resolved(shapes, body):
+def _resolved(shapes: dict[str, list[str]], body: str) -> list[str]:
     return ast.unparse(ResolveShapeReads(shapes).visit(ast.parse(f"def k():\n    {body}\n"))).splitlines()[1:]
 
 
@@ -916,7 +917,7 @@ def test_an_array_alias_is_not_promoted_to_an_int64_symbol() -> None:
     assert "h" not in order and not any(nm == "h" for nm, _ in defs)
 
 
-def _where_filled(shapes, body):
+def _where_filled(shapes: dict[str, list[str]], body: str) -> list[str]:
     return ast.unparse(BroadcastScalarWhere(shapes).visit(ast.parse(f"def k():\n    {body}\n"))).splitlines()[1:]
 
 
@@ -1022,7 +1023,7 @@ def test_ascontiguousarray_becomes_the_copy_dace_does_have() -> None:
     assert "np.transpose(ctx, (0, 2, 1, 3)).copy()" in out
 
 
-def _einsum(src):
+def _einsum(src: str) -> str:
     """Run ``DesugarContractionFreeEinsum`` over one expression and unparse the result."""
     return ast.unparse(ast.fix_missing_locations(DesugarContractionFreeEinsum().visit(ast.parse(src, mode="eval"))))
 
@@ -1069,7 +1070,7 @@ def test_an_einsum_that_actually_contracts_keeps_its_einsum() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _copied(shapes, floats, body, skip=frozenset()):
+def _copied(shapes: dict[str, list[str]], floats: set[str], body: str, skip: frozenset[str] = frozenset()) -> list[str]:
     """Run ``_CopyScalarAlias`` over a function whose body is ``body`` and unparse the result."""
     fn = ast.parse("def k():\n" + "".join(f"    {ln}\n" for ln in body.split("; ")))
     out = _CopyScalarAlias(shapes, set(floats), set(skip)).visit(fn)
@@ -1580,7 +1581,7 @@ def test_a_loop_target_is_rank_0_so_a_scattered_scalar_is_not_indexed() -> None:
 
 
 @pytest.mark.parametrize("short", ["bicgstab", "cg", "gmres", "minres", "spmm"])
-def test_a_logical_sparse_matrix_is_lowered_onto_its_own_buffers(short) -> None:
+def test_a_logical_sparse_matrix_is_lowered_onto_its_own_buffers(short: str) -> None:
     """The frontend expands ``A`` into its CSR buffers in the SIGNATURE, but only ``lower()``
     rewrites the BODY onto them -- an un-lowered kir reached dace with the two disagreeing and was
     refused as ``Use of undefined variable "A"``. Every Krylov solver emitted that way."""
@@ -1600,7 +1601,7 @@ def test_a_buffer_style_sparse_kernel_is_not_lowered() -> None:
 
 
 @pytest.mark.parametrize("short", ["dwt2d", "daubechies_dwt2d"])
-def test_the_wavelet_lattice_spells_both_halves_off_one_pair_count(short) -> None:
+def test_the_wavelet_lattice_spells_both_halves_off_one_pair_count(short: str) -> None:
     """``b[:, 0::2]`` and ``b[:, 1::2]`` have extents ceil(s/2) and ceil((s-1)/2). They are equal
     only for even s -- which the manifest constrains but a symbolic-shape backend cannot see, so it
     refused the add. Both halves are spelled ``0:2*h:2`` / ``1:2*h:2`` instead, and every quadrant
@@ -1679,7 +1680,7 @@ def lowered(src: str, ranks: dict, complex_arrays: set = frozenset()) -> str:
     return ast.unparse(out)
 
 
-def run_lowered(src: str, ranks: dict, complex_arrays: set = frozenset(), **binds):
+def run_lowered(src: str, ranks: dict, complex_arrays: set = frozenset(), **binds: Any) -> Any:
     """Execute the lowered body and hand back what it bound to ``__probe__``.
 
     The lowerings replace a numpy call with arithmetic that has to produce the SAME numbers; a
@@ -1829,7 +1830,7 @@ def respelled(src: str) -> str:
     return ast.unparse(DivisibleStridedSpan().visit(ast.parse(src)))
 
 
-def spliced(src: str, symbols=("st", "lo", "hi"), known=()) -> str:
+def spliced(src: str, symbols: tuple[str, ...] = ("st", "lo", "hi"), known: tuple[str, ...] = ()) -> str:
     return ast.unparse(inline_slice_only_extents(ast.parse(src), set(symbols), set(known)))
 
 
