@@ -83,10 +83,10 @@ def arm_points(frame: pd.DataFrame) -> pd.DataFrame:
 #: The arm KINDS this figure can carry, in legend order, with the suffix each arm name ends in.
 #: `plain` is the control and is spelled by the ABSENCE of a suffix, so it is matched last.
 CONDITIONS: tuple[tuple[str, str, str], ...] = (
-    ("plain", "", "No Skills"),
-    ("skills", "-skills", "Language Skills"),
-    ("cpf", "-cpf", "CPF page"),
-    ("cpfsrc", "-cpfsrc", "CPF drop-in source"),
+    ("plain", "", "No Skill Packet"),
+    ("skills", "-skills", "Language Skill Packet"),
+    ("cpf", "-cpf", "Canonical Parallel Form Page"),
+    ("cpfsrc", "-cpfsrc", "Canonical Parallel Form"),
 )
 
 #: Below this many conditions the pair is joined by a dashed connector; at or above it the marker
@@ -323,12 +323,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("observations", type=pathlib.Path)
     parser.add_argument("--experiment", required=True, help="arm prefix naming ONE campaign")
+    parser.add_argument("--arms", default="", help="regex; keep only arms whose full name matches")
     parser.add_argument("--label", default="", help="figure title; defaults to the campaign's display name")
     parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/arm_summary.pdf"))
     parser.add_argument("--table", type=pathlib.Path, default=pathlib.Path("data/arm_summary.csv"))
     args = parser.parse_args()
 
-    frame = arm_points(load(args.observations, args.experiment))
+    rows = load(args.observations, args.experiment)
+    if args.arms:
+        rows = rows[rows["arm"].astype(str).str.fullmatch(args.arms)]
+    frame = arm_points(rows)
     if frame.empty:
         raise SystemExit(f"no arms for experiment {args.experiment!r}")
     args.table.parent.mkdir(parents=True, exist_ok=True)

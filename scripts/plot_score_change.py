@@ -399,6 +399,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("observations", type=pathlib.Path)
     parser.add_argument("--experiment", required=True, help="arm prefix naming ONE campaign")
+    parser.add_argument(
+        "--treatment",
+        default="skills",
+        help="arm suffix marking the TREATED side (skills, cpf, cpfsrc); the control is the arm "
+        "without any suffix, so a campaign carrying several treatments is read one at a time "
+        "against the same control rather than against each other",
+    )
     parser.add_argument("--label", default="", help="figure title; defaults to the campaign's display name")
     parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/score_change.pdf"))
     parser.add_argument("--table", type=pathlib.Path, default=pathlib.Path("data/score_change.csv"))
@@ -407,10 +414,16 @@ def main() -> None:
     frame_all = load(args.observations, args.experiment)
     # The two SIDES are the treatment, not two campaigns: an arm carrying the packet against the
     # arm that did not. Split on the suffix the submit scripts already use.
-    skills = frame_all[frame_all["arm"].astype(str).str.endswith("-skills")]
-    before, after = frame_all.drop(skills.index), skills
+    suffix = f"-{args.treatment}"
+    # The CONTROL is the arm with no suffix at all, never "everything that is not the treatment":
+    # a campaign carrying skills, cpf and cpfsrc would otherwise put two other treatments into the
+    # control side and report a contrast against a mixture.
+    names = frame_all["arm"].astype(str)
+    treated = frame_all[names.str.endswith(suffix)]
+    control = frame_all[~names.str.contains(r"-(?:skills|cpf|cpfsrc)$", regex=True)]
+    before, after = control, treated
     if before.empty or after.empty:
-        raise SystemExit(f"empty side: no-skills={len(before)} skills={len(after)}")
+        raise SystemExit(f"empty side: control={len(before)} {args.treatment}={len(after)}")
     frame = points(before, after)
     if frame.empty:
         raise SystemExit("no (model, language) appears in both experiments")
