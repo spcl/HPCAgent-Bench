@@ -6,6 +6,7 @@ The gate must agree with the harness about what "present" means. When it was str
 CI went red on a toolchain every test then used successfully.
 """
 
+import sys
 import importlib.util
 import pathlib
 import stat
@@ -26,6 +27,9 @@ def load_script():
     """Import ``scripts/verify_toolchain.py`` as a module (scripts/ is not a package)."""
     spec = importlib.util.spec_from_file_location("verify_toolchain", REPO / "scripts" / "verify_toolchain.py")
     module = importlib.util.module_from_spec(spec)
+    # Registered BEFORE exec: dataclasses resolves a string annotation through
+    # sys.modules[cls.__module__], which is None for a module loaded by path alone.
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 

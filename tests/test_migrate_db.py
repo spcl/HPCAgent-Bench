@@ -7,6 +7,7 @@ downstream parses a run_id again. Two things have to hold or a campaign's number
 resolves to exactly one identity, and a row that ALREADY carries an identity is copied untouched.
 """
 
+import sys
 import importlib.util
 import pathlib
 import sqlite3
@@ -19,6 +20,9 @@ SPEC = importlib.util.spec_from_file_location(
     "migrate_db", pathlib.Path(recording.__file__).parents[2] / "scripts" / "migrate_db.py"
 )
 migrate = importlib.util.module_from_spec(SPEC)
+# Registered BEFORE exec: dataclasses resolves a string annotation through
+# sys.modules[cls.__module__], which is None for a module loaded by path alone.
+sys.modules[SPEC.name] = migrate
 SPEC.loader.exec_module(migrate)
 
 

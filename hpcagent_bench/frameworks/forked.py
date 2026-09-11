@@ -27,7 +27,9 @@ P = ParamSpec("P")
 #: return value (the best-so-far a killed child would have returned), so it is the same type.
 # No PEP 696 default: that is 3.13+, and the interpreter materialize_shared picks inside a
 # container can be older, where it raises TypeError at import and takes the whole arm down.
-ResultT = TypeVar("ResultT")
+# Covariant: a RunResult is read, never written, so one of a concrete payload type is usable
+# wherever a helper reads any of them (forked_failure_reason, the OOM classifier).
+ResultT = TypeVar("ResultT", covariant=True)
 
 #: One message on the result queue: the start stamp that arms the parent's deadline, the child's
 #: return value (``None`` when the queue could not take the real one), or its traceback text.

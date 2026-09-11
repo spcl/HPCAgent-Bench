@@ -187,13 +187,21 @@ import pathlib
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, NotRequired, Sequence, TypedDict
 
 import numpy as np
 
 from hpcagent_bench import flags, osinfo
 from hpcagent_bench.frameworks.forked import forked_failure_reason, run_forked
-from hpcagent_bench.harness.native_call import _call_native_impl, _current_vmsize_bytes, import_device_array_module
+from hpcagent_bench.harness.native_call import (
+    CArgument,
+    CKernel,
+    KernelData,
+    _call_native_impl,
+    _current_vmsize_bytes,
+    host_buffer,
+    import_device_array_module,
+)
 from hpcagent_bench.support.bindings.contract import Binding
 
 #: PAPI's success code; everything else is an error whose text ``PAPI_strerror`` owns.
@@ -223,18 +231,18 @@ TASK_DIR = pathlib.Path("/proc/self/task")
 #: count measures whatever the pair did, and the number is not reproducible let alone attributable.
 #: It cannot fence out ANOTHER process's thread on a sibling -- no user-space code can -- which is
 #: why the payload reports ``smt`` as well as pinning it.
-PINNED_ENV: Dict[str, str] = {"OMP_PLACES": "cores", "OMP_PROC_BIND": "close"}
+PINNED_ENV: dict[str, str] = {"OMP_PLACES": "cores", "OMP_PROC_BIND": "close"}
 
 #: The two quantities a CPI/IPC report is made of. Metric NAMES rather than event names, so the
 #: per-thread path resolves through the same ladder (:func:`resolve`) and reports the same
 #: expression every other metric does -- there is one place in this module that knows an event
 #: name, and it is :data:`METRICS`.
-PER_THREAD_METRICS: Tuple[str, str] = ("cycles", "instructions")
+PER_THREAD_METRICS: tuple[str, str] = ("cycles", "instructions")
 
 #: CPI and IPC written out, because they are RECIPROCALS and the single commonest counter mistake
 #: is quoting one under the other's name. Shipped in the payload beside the values, so a reader
 #: never has to infer which way up a number is: 0.5 and 2.0 are the same machine.
-PER_THREAD_FORMULAS: Dict[str, str] = {"cpi": "cycles / instructions", "ipc": "instructions / cycles"}
+PER_THREAD_FORMULAS: dict[str, str] = {"cpi": "cycles / instructions", "ipc": "instructions / cycles"}
 
 #: The imbalance figure. The MEAN is the time the region would take if the work were spread
 #: evenly; the MAX is the thread every other thread waits for, so their ratio is what a parallel
@@ -307,7 +315,7 @@ VERSION_MINORS = range(15, -1, -1)
 #: ``cache_hits`` shows why derivation is worth having: almost no CPU exposes ``PAPI_L1_DCH``
 #: directly, but accesses minus misses is the same number, exactly, from two events that fit in
 #: the counter budget together.
-METRICS: Dict[str, Tuple[Tuple[str, ...], ...]] = {
+METRICS: dict[str, tuple[tuple[str, ...], ...]] = {
     "cycles": (("PAPI_TOT_CYC",),),
     "stalled_cycles": (("PAPI_RES_STL",),),
     "instructions": (("PAPI_TOT_INS",),),
@@ -338,7 +346,7 @@ METRICS: Dict[str, Tuple[Tuple[str, ...], ...]] = {
 #: ``cycles`` and ``instructions`` sit in nearly every group on purpose -- they are the
 #: DENOMINATORS of :data:`RATIOS`, and a raw count with no denominator is the number a reader
 #: most reliably misreads. ``all`` exists for a sweep that has time to burn, not for a first look.
-GROUPS: Dict[str, Tuple[str, ...]] = {
+GROUPS: dict[str, tuple[str, ...]] = {
     "overview": ("cycles", "instructions", "data_cache_misses", "fp_ops"),
     "cache": ("cycles", "instructions", "data_cache_misses", "cache_hits", "l2_cache_misses", "l3_cache_misses"),
     "memory": ("cycles", "instructions", "l3_cache_misses", "fp_ops"),
@@ -360,6 +368,225 @@ DEFAULT_LINE_BYTES = 64
 
 #: Pulls the cache LEVEL out of a resolved expression (``PAPI_L1_DCA - PAPI_L1_DCM`` -> L1).
 CACHE_LEVEL = re.compile(r"PAPI_(L[123])_")
+
+
+class ResolvedMetric(TypedDict):
+    """How one metric is expressed on THIS cpu: the arithmetic, its events, the candidate terms."""
+
+    expression: str
+    events: list[str]
+    derived: bool
+    terms: list[str]
+
+
+class FeatureSet(TypedDict):
+    """What this cpu can count, metric by metric, with a reason for each one it cannot."""
+
+    available_events: list[str]
+    hardware_counters: int
+    smt: bool
+    supported: dict[str, ResolvedMetric]
+    unsupported: dict[str, str]
+
+
+class MetricRow(TypedDict):
+    """ONE metric's answer, counted or absent. Every payload here is a dict rather than a dataclass
+    because it crosses a fork and a ``json`` line before a reader sees it.
+
+    ``metric`` and ``count`` are the whole contract: a reader tells absence from zero by testing
+    ``count is None``, and then reads ``missing``. Everything else describes a count that happened,
+    so it is present only on a row that has one -- and the device rows
+    (:func:`gpu_counting_worker`) carry their own half, which no cpu row has.
+    """
+
+    metric: str
+    count: int | None
+    missing: NotRequired[str]
+    expression: NotRequired[str]
+    events: NotRequired[list[str]]
+    derived: NotRequired[bool]
+    elapsed_ns: NotRequired[int]
+    reps_counted: NotRequired[int]
+    hardware_counters: NotRequired[int]
+    threads_counted: NotRequired[int]
+    scope: NotRequired[str]
+    smt: NotRequired[bool]
+    fallback: NotRequired[str]
+    unit: NotRequired[str]
+    vendor: NotRequired[str]
+    component: NotRequired[str]
+    question: NotRequired[str]
+    reading: NotRequired[str]
+    residency: NotRequired[str]
+    serialized: NotRequired[bool]
+    devices_matched: NotRequired[int]
+
+
+class RatioRow(TypedDict):
+    """One derived ratio: its value, the formula that produced it, and how to read it."""
+
+    value: float
+    formula: str
+    reading: str
+    inputs: dict[str, int]
+    expressions: dict[str, str]
+    caveat: NotRequired[str]
+
+
+class Derived(TypedDict):
+    """Every ratio a set of rows supports, and a reason for every one it does not."""
+
+    cache_line_bytes: int
+    ratios: dict[str, RatioRow]
+    unavailable: dict[str, str]
+
+
+class Placement(TypedDict):
+    """Where one thread may run: its cpus, whether they are ONE core, and which."""
+
+    cpus: list[int]
+    pinned: bool
+    core: str | None
+
+
+class ThreadRow(Placement):
+    """One counted thread's cycles, instructions and the two ratios, plus its placement."""
+
+    tid: int
+    cycles: int
+    instructions: int
+    cpi: float | None
+    ipc: float | None
+    cycle_share: float | None
+    participated: bool
+
+
+class Spread(TypedDict):
+    """The cycle distribution across the working threads, reduced to one figure."""
+
+    max_over_mean: float
+    wasted_fraction: float
+    max_cycles: int
+    mean_cycles: float
+    min_cycles: int
+    threads: int
+    formula: str
+    reading: str
+
+
+class Imbalance(Spread):
+    """:class:`Spread` plus the thread every other thread waits for."""
+
+    critical_tid: int
+    critical_cpus: list[int]
+
+
+class Aggregate(TypedDict):
+    """The whole region as one row: summed counts, and the ratios OF the sums."""
+
+    threads: int
+    cycles: int
+    instructions: int
+    cpi: float | None
+    ipc: float | None
+
+
+class ThreadReport(TypedDict):
+    """The per-thread answer: the rows, the aggregate OF the rows, and the spread across them."""
+
+    threads: list[ThreadRow]
+    aggregate: Aggregate
+    imbalance: Imbalance
+    formulas: dict[str, str]
+    expressions: dict[str, str]
+    elapsed_ns: int
+    reps_counted: int
+    threads_counted: int
+    threads_participating: int
+    threads_idle: int
+    hardware_counters: int
+    events: int
+    multiplexed: bool
+    smt: bool
+    pinned_env: dict[str, str]
+    governor: str
+    caveats: list[str]
+    text: NotRequired[str]
+
+
+class MissingThreadReport(TypedDict):
+    """The "no per-thread report" answer: the same shape, emptied.
+
+    ``aggregate`` and ``imbalance`` are explicitly ``None`` and ``threads`` explicitly empty, so
+    no reader can take absence for a balanced kernel; ``cause`` is one of :data:`CAUSES`.
+    """
+
+    threads: list[ThreadRow]
+    aggregate: None
+    imbalance: None
+    cause: str
+    missing: str
+    text: NotRequired[str]
+
+
+#: Either answer. The two are told apart by the ``missing`` key, which only the absent one has.
+PerThreadReport = ThreadReport | MissingThreadReport
+
+
+class ComponentInfoRow(TypedDict):
+    """One PAPI component as its info struct reports it."""
+
+    index: int
+    name: str
+    short_name: str
+    description: str
+    enabled: bool
+    disabled_reason: str
+
+
+class ComponentRow(TypedDict):
+    """One GPU component: whether this libpapi has it, whether it came up, and what it costs."""
+
+    built: bool
+    enabled: bool
+    reason: str | None
+    purpose: str
+    events: int
+
+
+class ResolvedGpuMetric(TypedDict):
+    """The event that answers one metric on THIS device, with the unit it reports in."""
+
+    metric: str
+    vendor: str
+    component: str
+    event: str
+    matches: list[str]
+    unit: str
+    question: str
+    reading: str
+
+
+class GpuFeatureSet(TypedDict):
+    """What this device can count, and a reason for everything it cannot."""
+
+    vendor: str
+    vendors: list[str]
+    components: dict[str, ComponentRow]
+    permissions: dict[str, str | None]
+    supported: dict[str, ResolvedGpuMetric]
+    unsupported: dict[str, str]
+    caveats: list[str]
+
+
+class GpuGroupReport(TypedDict):
+    """One measured run per metric of a GPU group, and the caveats every device count carries."""
+
+    group: str
+    vendor: str
+    runs: int
+    metrics: list[MetricRow]
+    caveats: list[str]
 
 
 class PapiUnavailable(RuntimeError):
@@ -467,7 +694,7 @@ def countable(lib: ctypes.CDLL, code: int) -> bool:
 
 
 @functools.lru_cache(maxsize=None, typed=True)
-def available_events() -> Tuple[str, ...]:
+def available_events() -> tuple[str, ...]:
     """Every PAPI PRESET event THIS CPU can actually count, in PAPI's enumeration order.
 
     The oracle is PAPI's own: ``PAPI_enum_event`` walks the preset table, ``PAPI_query_event``
@@ -485,7 +712,7 @@ def available_events() -> Tuple[str, ...]:
     name = ctypes.create_string_buffer(NAME_LEN)
     if lib.PAPI_enum_event(ctypes.byref(code), ENUM_FIRST) != PAPI_OK:
         return ()
-    out: List[str] = []
+    out: list[str] = []
     while True:
         if (
             lib.PAPI_query_event(code.value) == PAPI_OK
@@ -511,7 +738,7 @@ def event_name(term: str) -> str:
     return term[1:] if term.startswith("-") else term
 
 
-def resolve(metric: str, available: Sequence[str]) -> Optional[Tuple[str, ...]]:
+def resolve(metric: str, available: Sequence[str]) -> tuple[str, ...] | None:
     """The first candidate expression for ``metric`` whose every event is in ``available``.
 
     Pure, so the fallback ladder is testable on any host: hand it the event set of a CPU that
@@ -540,13 +767,13 @@ def combine(terms: Sequence[str], values: Sequence[int]) -> int:
     return sum(-v if t.startswith("-") else v for t, v in zip(terms, values))
 
 
-def missing(metric: str, reason: str) -> dict:
+def missing(metric: str, reason: str) -> MetricRow:
     """The "no number for this metric" payload. Always the same shape as a successful one, with
     ``count`` explicitly ``None`` -- a caller must never have to tell absence from zero."""
     return {"metric": metric, "count": None, "missing": reason}
 
 
-def feature_set(metrics: Sequence[str] = ()) -> dict:
+def feature_set(metrics: Sequence[str] = ()) -> FeatureSet:
     """What this machine can actually measure: the INTERSECTION of what we ask for and what the
     CPU reports, plus the complement with a reason each. Answers without running a workload.
 
@@ -560,8 +787,8 @@ def feature_set(metrics: Sequence[str] = ()) -> dict:
     and a snapshot is a dict.
     """
     available = available_events()
-    supported: Dict[str, dict] = {}
-    unsupported: Dict[str, str] = {}
+    supported: dict[str, ResolvedMetric] = {}
+    unsupported: dict[str, str] = {}
     for metric in tuple(metrics) or tuple(METRICS):
         terms = resolve(metric, available)
         if terms is None:
@@ -596,7 +823,7 @@ def cache_line_bytes() -> int:
     return int(text) if text.isdigit() and int(text) > 0 else DEFAULT_LINE_BYTES
 
 
-def group_metrics(group: str) -> Tuple[str, ...]:
+def group_metrics(group: str) -> tuple[str, ...]:
     """The metrics :data:`GROUPS` names for ``group``; unknown name -> ``ValueError``.
 
     Refusing a typo matters more here than usual: the alternative to an error is measuring some
@@ -607,7 +834,7 @@ def group_metrics(group: str) -> Tuple[str, ...]:
     return GROUPS[group]
 
 
-def quotient(numerator: float, denominator: float) -> Optional[float]:
+def quotient(numerator: float, denominator: float) -> float | None:
     """``numerator / denominator``, or ``None`` when the denominator counted zero.
 
     An unmeasurable ratio is ABSENT, never ``0.0`` and never an infinity: the same rule
@@ -615,7 +842,7 @@ def quotient(numerator: float, denominator: float) -> Optional[float]:
     return numerator / denominator if denominator else None
 
 
-def cache_levels(expressions: Sequence[str]) -> Tuple[str, ...]:
+def cache_levels(expressions: Sequence[str]) -> tuple[str, ...]:
     """The distinct cache levels a set of resolved expressions names, sorted.
 
     Two levels inside ONE ratio means its numerator and its denominator are not about the same
@@ -640,16 +867,16 @@ class Ratio:
     """
 
     formula: str
-    needs: Tuple[str, ...]
+    needs: tuple[str, ...]
     reading: str
-    compute: Callable[[Dict[str, float]], Optional[float]]
+    compute: Callable[[dict[str, float]], float | None]
 
 
 #: The derived metrics, computed in ONE place. Every one of them is a division an agent would
 #: otherwise do by hand against a table of raw counts, which is where counter work goes wrong:
 #: the wrong denominator, a miss rate quoted per instruction against a threshold meant per access,
 #: or bytes inferred from a miss count without the line size.
-RATIOS: Dict[str, Ratio] = {
+RATIOS: dict[str, Ratio] = {
     "ipc": Ratio(
         "instructions / cycles",
         ("instructions", "cycles"),
@@ -725,7 +952,7 @@ RATIOS: Dict[str, Ratio] = {
 }
 
 
-def derive(rows: Sequence[dict]) -> dict:
+def derive(rows: Sequence[MetricRow]) -> Derived:
     """Every ratio :data:`RATIOS` can compute from ``rows``, and a REASON for every one it cannot.
 
     ``rows`` are :func:`counting_worker` payloads. The two failure modes are named rather than
@@ -737,27 +964,32 @@ def derive(rows: Sequence[dict]) -> dict:
     :func:`cache_levels`). It is not an error: the counts are real, and on a CPU that exposes L1
     misses but only L2 hits it is the best hit rate obtainable. It is the reading that changes.
     """
-    counted = {row["metric"]: row for row in rows if row["count"] is not None}
+    counts: dict[str, int] = {}
+    counted: dict[str, MetricRow] = {}
+    for measured in rows:
+        count = measured["count"]
+        if count is not None:
+            counts[measured["metric"]], counted[measured["metric"]] = count, measured
     line = cache_line_bytes()
-    ratios: Dict[str, dict] = {}
-    unavailable: Dict[str, str] = {}
+    ratios: dict[str, RatioRow] = {}
+    unavailable: dict[str, str] = {}
     for name, ratio in RATIOS.items():
-        absent = [metric for metric in ratio.needs if metric not in counted]
+        absent = [metric for metric in ratio.needs if metric not in counts]
         if absent:
             unavailable[name] = f"no count for {', '.join(absent)} in this run"
             continue
-        inputs = {metric: float(counted[metric]["count"]) for metric in ratio.needs}
+        inputs = {metric: float(counts[metric]) for metric in ratio.needs}
         seconds = counted[ratio.needs[0]].get("elapsed_ns", 0) / 1e9
         value = ratio.compute({**inputs, "line_bytes": float(line), "seconds": seconds})
         if value is None:
             unavailable[name] = f"the denominator of '{ratio.formula}' counted 0"
             continue
         expressions = {metric: counted[metric].get("expression", "") for metric in ratio.needs}
-        row = {
+        row: RatioRow = {
             "value": value,
             "formula": ratio.formula,
             "reading": ratio.reading,
-            "inputs": {metric: counted[metric]["count"] for metric in ratio.needs},
+            "inputs": {metric: counts[metric] for metric in ratio.needs},
             "expressions": expressions,
         }
         levels = cache_levels(list(expressions.values()))
@@ -770,7 +1002,7 @@ def derive(rows: Sequence[dict]) -> dict:
     return {"cache_line_bytes": line, "ratios": ratios, "unavailable": unavailable}
 
 
-def thread_ids() -> Tuple[int, ...]:
+def thread_ids() -> tuple[int, ...]:
     """This process's thread ids, the CALLING thread first.
 
     Order is load-bearing: the calling thread's event set needs no attach (an unattached set
@@ -783,7 +1015,7 @@ def thread_ids() -> Tuple[int, ...]:
 
 def open_counter(
     lib: ctypes.CDLL, tid: int, codes: Sequence[ctypes.c_int], multiplex: bool = False
-) -> Tuple[ctypes.c_int, Optional[str]]:
+) -> tuple[ctypes.c_int, str | None]:
     """An event set counting thread ``tid``, or ``(_, reason)`` when this host will not attach.
 
     ``PAPI_attach`` is what makes MULTITHREADED counting possible at all here. dace can count from
@@ -814,6 +1046,19 @@ def open_counter(
     return eventset, None
 
 
+@dataclass(slots=True)
+class CounterScope:
+    """WHICH threads a counted run ended up counting, and why it is not all of them.
+
+    Mutable and written from :func:`counted_run`'s inner ``arm``, which is the one place that can
+    discover mid-run that a thread will not attach.
+    """
+
+    threads: tuple[int, ...]
+    how: str
+    fallback: str | None
+
+
 @dataclass(frozen=True)
 class CountedRun:
     """What one counted run of the kernel saw, PER THREAD and per event.
@@ -828,20 +1073,20 @@ class CountedRun:
     """
 
     elapsed_ns: int
-    per_thread: Tuple[Tuple[int, Tuple[int, ...]], ...]
+    per_thread: tuple[tuple[int, tuple[int, ...]], ...]
     reps_counted: int
     scope: str
-    fallback: Optional[str]
-    appeared: Tuple[int, ...]
+    fallback: str | None
+    appeared: tuple[int, ...]
     multiplexed: bool
 
 
 def counted_run(
     lib_path: str,
     binding: Binding,
-    data: Dict,
+    data: KernelData,
     lang: str,
-    workspace_bytes: Optional[str],
+    workspace_bytes: str | None,
     terms: Sequence[str],
     *,
     reps: int,
@@ -880,11 +1125,11 @@ def counted_run(
 
     width = len(terms)
     warm = max(warmup, 1)
-    handles: List[Tuple[int, ctypes.c_int]] = []
-    buffers: List[Tuple] = []
-    readings: List[Tuple[int, Tuple[Tuple[int, Tuple[int, ...]], ...]]] = []
-    calls: List[int] = []
-    scope = {"threads": (), "how": "all_threads", "fallback": None}
+    handles: list[tuple[int, ctypes.c_int]] = []
+    buffers: list[tuple[ctypes.Array[ctypes.c_longlong], ctypes.Array[ctypes.c_longlong]]] = []
+    readings: list[tuple[int, tuple[tuple[int, tuple[int, ...]], ...]]] = []
+    calls: list[int] = []
+    scope = CounterScope(threads=(), how="all_threads", fallback=None)
 
     def arm() -> None:
         """One event set per live thread, then start them all."""
@@ -895,15 +1140,15 @@ def counted_run(
                 for _t, extra in handles[1:]:
                     lib.PAPI_destroy_eventset(ctypes.byref(extra))
                 del handles[1:]
-                scope["how"], scope["fallback"] = "calling_thread", why
+                scope.how, scope.fallback = "calling_thread", why
                 break
             handles.append((tid, eventset))
-        scope["threads"] = tuple(tid for tid, _ in handles)
+        scope.threads = tuple(tid for tid, _ in handles)
         buffers.extend(((ctypes.c_longlong * width)(), (ctypes.c_longlong * width)()) for _ in handles)
         for _tid, eventset in handles:
             demand(lib, lib.PAPI_start(eventset), "PAPI_start")
 
-    def counted(fn: Callable[..., Any], c_args: List[Any], settle: Callable[[], None]) -> int:
+    def counted(fn: CKernel, c_args: list[CArgument], settle: Callable[[], None]) -> int:
         index = len(calls)
         calls.append(0)
         if index < warm:  # untimed as far as the counters go: this is what creates the OpenMP pool
@@ -931,13 +1176,13 @@ def counted_run(
         return ns
 
     _call_native_impl(
-        lib_path,
+        pathlib.Path(lib_path),
         binding,
         data,
         lang,
         workspace_bytes,
         xp=np,
-        to_host=lambda a: a,
+        to_host=host_buffer,
         timed_call=counted,
         reps=reps,
         warmup=warm,
@@ -947,7 +1192,7 @@ def counted_run(
     # thread nothing was attached to, and every total is short by exactly that -- a wrong number
     # with no symptom, which is the one outcome worth failing the metric over. A thread that
     # EXITED is not checked here: its own PAPI_read would have failed loudly first.
-    appeared = tuple(sorted(set(thread_ids()) - set(scope["threads"])))
+    appeared = tuple(sorted(set(thread_ids()) - set(scope.threads)))
     # Disarm only, and unchecked: the counts are already harvested per rep, so a teardown error
     # must not be allowed to throw away good numbers.
     for _tid, eventset in handles:
@@ -957,8 +1202,8 @@ def counted_run(
         elapsed_ns=elapsed_ns,
         per_thread=rows,
         reps_counted=len(readings),
-        scope=str(scope["how"]),
-        fallback=scope["fallback"],
+        scope=scope.how,
+        fallback=scope.fallback,
         appeared=appeared,
         multiplexed=multiplex,
     )
@@ -967,15 +1212,15 @@ def counted_run(
 def counting_worker(
     lib_path: str,
     binding: Binding,
-    data: Dict,
+    data: KernelData,
     lang: str,
-    workspace_bytes: Optional[str],
+    workspace_bytes: str | None,
     metric: str,
     reps: int,
     warmup: int,
     rep_timeout: float,
     memory_bytes: int,
-) -> dict:
+) -> MetricRow:
     """CHILD: resolve ``metric`` on this CPU and count it across EVERY thread of the timed call.
 
     Resolution happens HERE, before the kernel runs, so a metric this CPU cannot express costs a
@@ -1012,7 +1257,7 @@ def counting_worker(
 
     elapsed_ns = run.elapsed_ns
     raw = [sum(values[i] for _tid, values in run.per_thread) for i in range(len(terms))]
-    row = {
+    row: MetricRow = {
         "metric": metric,
         "expression": resolved["expression"],
         "events": resolved["events"],
@@ -1033,16 +1278,16 @@ def counting_worker(
 def count_metric(
     lib_path: str,
     binding: Binding,
-    data: Dict,
+    data: KernelData,
     lang: str,
     metric: str,
     *,
-    workspace_bytes: Optional[str] = None,
+    workspace_bytes: str | None = None,
     reps: int = 1,
     warmup: int = 0,
     rep_timeout: float = 0.0,
     memory_gb: float = 0.0,
-) -> dict:
+) -> MetricRow:
     """Count ONE metric over ``reps`` timed calls of ``lib_path``'s kernel, in an isolated child.
 
     Never raises for a measurement failure: a segfault, an OOM kill, a PAPI bring-up error or a
@@ -1065,7 +1310,7 @@ def count_metric(
         label=f"papi:{metric}",
         timeout=max(1.0, rep_timeout) * (warmup + max(1, reps) + 2),
     )
-    if not run.ok:
+    if not run.ok or run.result is None:
         return missing(metric, f"counted run failed ({forked_failure_reason(run)})")
     return run.result
 
@@ -1076,7 +1321,7 @@ def count_metric(
 # --------------------------------------------------------------------------------------------
 
 
-def missing_report(cause: str, reason: str) -> dict:
+def missing_report(cause: str, reason: str) -> MissingThreadReport:
     """The "no per-thread report" payload: same shape as a successful one, emptied.
 
     ``cause`` is machine-readable and one of :data:`CAUSES`; ``missing`` names the fix. Same rule
@@ -1086,7 +1331,7 @@ def missing_report(cause: str, reason: str) -> dict:
     return {"threads": [], "aggregate": None, "imbalance": None, "cause": cause, "missing": reason}
 
 
-def perf_event_reason() -> Optional[Tuple[str, str]]:
+def perf_event_reason() -> tuple[str, str] | None:
     """``(cause, message)`` when this kernel's perf_event gate blocks counting, else ``None``.
 
     PAPI's cpu component is ``perf_event_open`` underneath, so the sysctl that decides whether
@@ -1134,14 +1379,14 @@ def perf_event_reason() -> Optional[Tuple[str, str]]:
     return None
 
 
-def cpu_list(text: str) -> Tuple[int, ...]:
+def cpu_list(text: str) -> tuple[int, ...]:
     """``"0-3,8,12-13"`` -> the cpus it names, ascending.
 
     Linux writes affinity as ranges, so a naive ``split(",")`` reads a 64-cpu mask as one cpu --
     and a mask read too narrow says "pinned" about a thread that is free to migrate, which is the
     one direction this must never be wrong in.
     """
-    cpus: List[int] = []
+    cpus: list[int] = []
     for part in text.split(","):
         lo, _, hi = part.partition("-")
         if lo.isdigit():
@@ -1149,7 +1394,7 @@ def cpu_list(text: str) -> Tuple[int, ...]:
     return tuple(sorted(set(cpus)))
 
 
-def thread_cpus(tid: int) -> Tuple[int, ...]:
+def thread_cpus(tid: int) -> tuple[int, ...]:
     """The cpus thread ``tid`` is allowed to run on (empty when it is gone or unreadable).
 
     Per THREAD, from ``/proc/self/task/<tid>/status`` rather than ``sched_getaffinity(0)``: the
@@ -1176,7 +1421,7 @@ def sibling_group(cpu: int) -> str:
     return path.read_text().strip() if path.is_file() else str(cpu)
 
 
-def core_of(cpus: Sequence[int]) -> Optional[str]:
+def core_of(cpus: Sequence[int]) -> str | None:
     """The one physical core ``cpus`` all belong to, or ``None`` when they span several.
 
     This -- not "the mask is one cpu" -- is what pinning means for a counted thread, and getting
@@ -1199,7 +1444,7 @@ def governor() -> str:
     return GOVERNOR_SYSFS.read_text().strip() if GOVERNOR_SYSFS.is_file() else ""
 
 
-def placement(tid: int) -> dict:
+def placement(tid: int) -> Placement:
     """Where thread ``tid`` may run: its cpus, the core they belong to, whether that is ONE core.
 
     ``pinned`` is the precondition of the whole report. An unpinned thread can be migrated by the
@@ -1212,7 +1457,7 @@ def placement(tid: int) -> dict:
     return {"cpus": list(cpus), "pinned": core is not None, "core": core}
 
 
-def imbalance(cycles: Sequence[int]) -> Optional[dict]:
+def imbalance(cycles: Sequence[int]) -> Spread | None:
     """The spread of ``cycles`` across threads: :data:`IMBALANCE_FORMULA` and how to read it.
 
     ``max_over_mean`` is 1.0 for a perfectly balanced region and N for one thread of N doing
@@ -1241,8 +1486,8 @@ def imbalance(cycles: Sequence[int]) -> Optional[dict]:
 
 
 def per_thread_rows(
-    per_thread: Sequence[Tuple[int, Tuple[int, ...]]], cycle_terms: Sequence[str], instruction_terms: Sequence[str]
-) -> List[dict]:
+    per_thread: Sequence[tuple[int, tuple[int, ...]]], cycle_terms: Sequence[str], instruction_terms: Sequence[str]
+) -> list[ThreadRow]:
     """One row per counted thread: its cycles, its instructions, its CPI and its IPC.
 
     Pure, so the arithmetic that matters most here is testable on a host with no PAPI at all.
@@ -1282,8 +1527,8 @@ def per_thread_rows(
 
 
 def measurement_caveats(
-    rows: Sequence[dict], idle: Sequence[dict], *, multiplexed: bool, budget: int, events: int
-) -> List[str]:
+    rows: Sequence[ThreadRow], idle: Sequence[ThreadRow], *, multiplexed: bool, budget: int, events: int
+) -> list[str]:
     """Every trap that ACTUALLY fired on this run, in a fixed order, as text a reader can act on.
 
     Probed, not assumed. Each of these silently changes what the numbers mean, and each of them is
@@ -1294,7 +1539,7 @@ def measurement_caveats(
     itself is a caveat, because from outside the ``.so`` an OpenMP worker that got no iterations
     and a thread that was never in the pool are the same zero.
     """
-    notes: List[str] = []
+    notes: list[str] = []
     if idle:
         tids = ", ".join(str(row["tid"]) for row in idle)
         notes.append(
@@ -1311,7 +1556,7 @@ def measurement_caveats(
             f"they migrated across; set OMP_PLACES/OMP_PROC_BIND ({dict(PINNED_ENV)}) before the "
             ".so loads -- after it has loaded, the runtime has already placed its pool"
         )
-    cores: Dict[str, List[int]] = {}
+    cores: dict[str, list[int]] = {}
     for row in rows:
         if row["core"] is not None:
             cores.setdefault(row["core"], []).append(row["tid"])
@@ -1352,14 +1597,14 @@ def measurement_caveats(
 def per_thread_report(
     lib_path: str,
     binding: Binding,
-    data: Dict,
+    data: KernelData,
     lang: str,
-    workspace_bytes: Optional[str],
+    workspace_bytes: str | None,
     reps: int,
     warmup: int,
     rep_timeout: float,
     memory_bytes: int,
-) -> dict:
+) -> PerThreadReport:
     """CHILD: count cycles AND instructions per thread over one run, and report the distribution.
 
     Both events in ONE event set per thread, so a thread's CPI is a ratio of two numbers from the
@@ -1422,10 +1667,12 @@ def per_thread_report(
             "threads greater than 1 if the kernel is meant to be parallel",
         )
     spread = imbalance([row["cycles"] for row in working])
+    if spread is None:  # unreachable: every working row burned cycles, so the spread exists
+        return missing_report("no_measured_rep", "the counted threads produced no cycle distribution")
     cycles = sum(row["cycles"] for row in rows)
     instructions = sum(row["instructions"] for row in rows)
     peak = max(working, key=lambda row: (row["cycles"], -row["tid"]))
-    return {
+    report: ThreadReport = {
         "threads": rows,
         # The aggregate is a ratio of SUMS, not the mean of the per-thread ratios: averaging
         # ratios weights an idle thread exactly as heavily as the critical one.
@@ -1456,19 +1703,20 @@ def per_thread_report(
         "governor": governor(),
         "caveats": measurement_caveats(working, idle, multiplexed=multiplex, budget=budget, events=len(terms)),
     }
+    return report
 
 
 def per_thread_worker(
     lib_path: str,
     binding: Binding,
-    data: Dict,
+    data: KernelData,
     lang: str,
-    workspace_bytes: Optional[str],
+    workspace_bytes: str | None,
     reps: int,
     warmup: int,
     rep_timeout: float,
     memory_bytes: int,
-) -> dict:
+) -> PerThreadReport:
     """CHILD entry: :func:`per_thread_report` with the gate checked and the CAUSE kept.
 
     The only reason this wrapper exists is that a cause must cross the fork as DATA.
@@ -1490,15 +1738,15 @@ def per_thread_worker(
 def count_per_thread(
     lib_path: str,
     binding: Binding,
-    data: Dict,
+    data: KernelData,
     lang: str,
     *,
-    workspace_bytes: Optional[str] = None,
+    workspace_bytes: str | None = None,
     reps: int = 1,
     warmup: int = 0,
     rep_timeout: float = 0.0,
     memory_gb: float = 0.0,
-) -> dict:
+) -> PerThreadReport:
     """Per-thread cycles, instructions, CPI, IPC and the cycle imbalance, in an isolated child.
 
     ONE measured run, not one per thread and not one per event: the two events share an event set
@@ -1558,14 +1806,17 @@ def count_per_thread(
             label="papi:per_thread",
             timeout=max(1.0, rep_timeout) * (warmup + max(1, reps) + 2),
         )
+        counted = run.result if run.ok else None
         report = (
-            run.result if run.ok else missing_report("run_failed", f"counted run failed ({forked_failure_reason(run)})")
+            counted
+            if counted is not None
+            else missing_report("run_failed", f"counted run failed ({forked_failure_reason(run)})")
         )
     report["text"] = render_thread_report(report)
     return report
 
 
-def fmt(value: Optional[float], digits: int = 4) -> str:
+def fmt(value: float | None, digits: int = 4) -> str:
     """A ratio for the text table, or ``--`` when its denominator counted zero.
 
     ``0.0000`` would be a measurement; the absence of one is not, and the two must not render the
@@ -1573,7 +1824,7 @@ def fmt(value: Optional[float], digits: int = 4) -> str:
     return "--" if value is None else f"{value:.{digits}f}"
 
 
-def render_thread_report(report: dict) -> str:
+def render_thread_report(report: PerThreadReport) -> str:
     """The human view: the per-thread table, the aggregate, the imbalance, then the caveats.
 
     Shipped WITH the payload exactly as :mod:`hpcagent_bench.harness.gpu_profiling` ships its
@@ -1581,7 +1832,7 @@ def render_thread_report(report: dict) -> str:
     An absent report renders as its reason: a table that is merely empty reads as a kernel that
     did nothing.
     """
-    if report.get("missing"):
+    if "missing" in report:
         return f"per-thread counters unavailable [{report['cause']}]: {report['missing']}"
     aggregate, spread = report["aggregate"], report["imbalance"]
     events = " / ".join(report["expressions"][metric] for metric in PER_THREAD_METRICS)
@@ -1660,12 +1911,12 @@ NATIVE_MASK = 0x40000000
 
 #: PAPI components that count, or describe, a GPU -- the ones a device measurement can come from.
 #: Everything else in a build (``perf_event``, ``rapl``, ``lmsensors``) answers a host question.
-GPU_COMPONENTS: Tuple[str, ...] = ("cuda", "nvml", "rocm", "rocm_smi", "sysdetect")
+GPU_COMPONENTS: tuple[str, ...] = ("cuda", "nvml", "rocm", "rocm_smi", "sysdetect")
 
 #: What each component IS and the configure line that puts it in a build. Shipped in the "not
 #: built" reason, because that reason is otherwise unactionable: a component is not installable,
 #: it is a PAPI that has to be rebuilt, and the flag is the whole fix.
-COMPONENT_BUILD: Dict[str, str] = {
+COMPONENT_BUILD: dict[str, str] = {
     "cuda": "NVIDIA kernel counters through CUPTI -- './configure --with-components=cuda' with "
     "PAPI_CUDA_ROOT pointing at the CUDA install",
     "nvml": "NVIDIA power, clocks, temperature and utilization -- './configure --with-components=nvml' "
@@ -1681,10 +1932,10 @@ COMPONENT_BUILD: Dict[str, str] = {
 }
 
 #: Vendor -> the driver node that says one of its GPUs is visible to this process.
-VENDOR_DEVICES: Dict[str, pathlib.Path] = {"nvidia": NVIDIA_DEVICE, "amd": AMD_DEVICE}
+VENDOR_DEVICES: dict[str, pathlib.Path] = {"nvidia": NVIDIA_DEVICE, "amd": AMD_DEVICE}
 
 #: Vendor -> its components, kernel counters first. Iteration order reaches the payload.
-VENDOR_COMPONENTS: Dict[str, Tuple[str, ...]] = {"nvidia": ("cuda", "nvml"), "amd": ("rocm", "rocm_smi")}
+VENDOR_COMPONENTS: dict[str, tuple[str, ...]] = {"nvidia": ("cuda", "nvml"), "amd": ("rocm", "rocm_smi")}
 
 
 @dataclass(frozen=True)
@@ -1720,8 +1971,8 @@ class GpuMetric:
 
     question: str
     reading: str
-    candidates: Dict[str, Tuple[GpuEvent, ...]]
-    absent: Dict[str, str] = field(default_factory=dict)
+    candidates: dict[str, tuple[GpuEvent, ...]]
+    absent: dict[str, str] = field(default_factory=dict[str, str])
 
 
 #: The vendor-independent surface: metric -> the question, and each vendor's events for it.
@@ -1732,7 +1983,7 @@ class GpuMetric:
 #: ``.pct_of_peak_sustained_active`` but not Nsight Compute's ``.avg.`` rollup. So both spellings
 #: are candidates and the machine decides -- a name built from a template would fail with PAPI's
 #: ``Invalid argument``, which reads like a broken install rather than like a different CUPTI.
-GPU_METRICS: Dict[str, GpuMetric] = {
+GPU_METRICS: dict[str, GpuMetric] = {
     "occupancy": GpuMetric(
         question="how full the SMs (CUs) were kept -- the resident-warp side of latency hiding",
         reading="low with a big grid means registers or shared memory capped the blocks per SM, "
@@ -1849,7 +2100,7 @@ GPU_METRICS: Dict[str, GpuMetric] = {
 #: device twin of :data:`GROUPS`, and priced the same way -- one measured run per metric, because
 #: a device event set is as finite as a CPU's and a multi-pass metric set is REPLAYED rather than
 #: counted at once (which is one of the reasons a counted run's clock means nothing).
-GPU_GROUPS: Dict[str, Tuple[str, ...]] = {
+GPU_GROUPS: dict[str, tuple[str, ...]] = {
     "occupancy": ("occupancy", "wave_utilization"),
     "memory": ("dram_read_bytes", "dram_write_bytes", "memory_stall"),
     "cache": ("l1_hit_rate", "l2_hit_rate"),
@@ -1860,7 +2111,7 @@ GPU_GROUPS: Dict[str, Tuple[str, ...]] = {
 #: The three things a device count is NOT, shipped WITH every payload rather than left in this
 #: docstring: they are the constraints a reader breaks by default, and prose nobody receives is
 #: prose that does not exist.
-GPU_CAVEATS: Tuple[str, ...] = (
+GPU_CAVEATS: tuple[str, ...] = (
     "counter collection SERIALISES kernels and REPLAYS multi-pass metric sets, so a counted run's "
     "wall clock is not the plain run's -- read the counts, never the time, and never compare a "
     "counted run's ms against a timed run's",
@@ -1898,7 +2149,7 @@ class ComponentInfo(ctypes.Structure):
     ]
 
 
-def components() -> Tuple[dict, ...]:
+def components() -> tuple[ComponentInfoRow, ...]:
     """Every component THIS libpapi was built with, in PAPI's own index order.
 
     The probe the GPU half rests on, and the reason nothing here trusts documentation: a PAPI
@@ -1918,7 +2169,7 @@ def components() -> Tuple[dict, ...]:
     """
     lib = initialised()
     lib.PAPI_get_component_info.restype = ctypes.POINTER(ComponentInfo)
-    out: List[dict] = []
+    out: list[ComponentInfoRow] = []
     for index in range(max(0, int(lib.PAPI_num_components()))):
         info = lib.PAPI_get_component_info(index)
         if not info:
@@ -1945,7 +2196,7 @@ def components() -> Tuple[dict, ...]:
     return tuple(out)
 
 
-def gpu_component(name: str) -> Optional[dict]:
+def gpu_component(name: str) -> ComponentInfoRow | None:
     """The component called ``name``, or ``None`` when this PAPI was not built with it.
 
     Matched against BOTH names PAPI carries, because they differ: the cpu component is ``name``
@@ -1959,7 +2210,7 @@ def gpu_component(name: str) -> Optional[dict]:
 
 
 @functools.lru_cache(maxsize=None, typed=True)
-def native_events(component: str) -> Tuple[str, ...]:
+def native_events(component: str) -> tuple[str, ...]:
     """Every NATIVE event ``component`` exposes ON THIS MACHINE, in PAPI's enumeration order.
 
     The device twin of :func:`available_events`, discovered for the same reason and one more: a
@@ -1982,7 +2233,7 @@ def native_events(component: str) -> Tuple[str, ...]:
     name = ctypes.create_string_buffer(HUGE_STR_LEN)
     if lib.PAPI_enum_cmp_event(ctypes.byref(code), ENUM_FIRST, row["index"]) != PAPI_OK:
         return ()
-    out: List[str] = []
+    out: list[str] = []
     while True:
         if lib.PAPI_event_code_to_name(code.value, name) == PAPI_OK:
             out.append(name.value.decode())
@@ -1990,7 +2241,7 @@ def native_events(component: str) -> Tuple[str, ...]:
             return tuple(out)
 
 
-def component_reason(component: str) -> Optional[str]:
+def component_reason(component: str) -> str | None:
     """Why ``component`` cannot count here, or ``None`` when it can.
 
     The two answers a caller must be able to tell apart, and the whole point of the probe:
@@ -2018,14 +2269,14 @@ def component_reason(component: str) -> Optional[str]:
     )
 
 
-def component_report() -> Dict[str, dict]:
+def component_report() -> dict[str, ComponentRow]:
     """Every component in :data:`GPU_COMPONENTS`: is it built, is it on, why not, how many events.
 
     The answer to "what is PAPI's GPU support on this install", which is the question that has to
     be asked before any device number means anything -- and the one whose usual answer is "none of
     it was compiled in".
     """
-    report: Dict[str, dict] = {}
+    report: dict[str, ComponentRow] = {}
     for name in GPU_COMPONENTS:
         reason = component_reason(name)
         row = gpu_component(name)
@@ -2039,7 +2290,7 @@ def component_report() -> Dict[str, dict]:
     return report
 
 
-def gpu_vendors() -> Tuple[str, ...]:
+def gpu_vendors() -> tuple[str, ...]:
     """The vendors whose driver node THIS process can see, in :data:`VENDOR_DEVICES` order.
 
     A device node rather than a component, deliberately: the node answers "is there a GPU here at
@@ -2049,7 +2300,7 @@ def gpu_vendors() -> Tuple[str, ...]:
     return tuple(vendor for vendor, node in VENDOR_DEVICES.items() if node.exists())
 
 
-def gpu_vendor(vendor: Optional[str] = None) -> str:
+def gpu_vendor(vendor: str | None = None) -> str:
     """The vendor to measure: ``vendor`` if named, else the one this host has.
 
     Refuses rather than guesses when there is nothing to measure, and refuses an unknown name
@@ -2072,7 +2323,7 @@ def gpu_vendor(vendor: Optional[str] = None) -> str:
     return present[0]
 
 
-def permission_reason(vendor: str) -> Optional[str]:
+def permission_reason(vendor: str) -> str | None:
     """Why this user will be REFUSED device counters, or ``None`` when nothing blocks them.
 
     The single most common device-counter failure, and the one that looks least like itself: on
@@ -2112,7 +2363,7 @@ def permission_reason(vendor: str) -> Optional[str]:
     return None
 
 
-def event_tokens(event: str) -> Tuple[str, ...]:
+def event_tokens(event: str) -> tuple[str, ...]:
     """The colon-separated parts of a PAPI event name, component prefix dropped.
 
     Every component spells its qualifiers differently -- ``cuda:::dram__bytes_read``,
@@ -2125,8 +2376,8 @@ def event_tokens(event: str) -> Tuple[str, ...]:
 
 
 def resolve_gpu(
-    metric: str, vendor: str, enumerated: Dict[str, Sequence[str]], blocked: Dict[str, str]
-) -> Tuple[Optional[dict], str]:
+    metric: str, vendor: str, enumerated: dict[str, Sequence[str]], blocked: dict[str, str]
+) -> tuple[ResolvedGpuMetric | None, str]:
     """``(resolved, "")`` for the first candidate this machine has, or ``(None, why not)``.
 
     Pure -- ``enumerated`` maps component -> the events it exposes and ``blocked`` maps component
@@ -2143,7 +2394,7 @@ def resolve_gpu(
     candidates = spec.candidates.get(vendor, ())
     if not candidates:
         return None, f"no {vendor} events are declared for {metric!r}"
-    tried: List[str] = []
+    tried: list[str] = []
     for candidate in candidates:
         if candidate.component in blocked:
             tried.append(f"{candidate.component}:::{candidate.event} ({blocked[candidate.component]})")
@@ -2165,14 +2416,14 @@ def resolve_gpu(
     return None, "; ".join(tried)
 
 
-def gpu_group_metrics(group: str) -> Tuple[str, ...]:
+def gpu_group_metrics(group: str) -> tuple[str, ...]:
     """The metrics :data:`GPU_GROUPS` names for ``group``; unknown name -> ``ValueError``."""
     if group not in GPU_GROUPS:
         raise ValueError(f"unknown GPU counter group {group!r}; have: {', '.join(GPU_GROUPS)}")
     return GPU_GROUPS[group]
 
 
-def gpu_feature_set(vendor: Optional[str] = None, metrics: Sequence[str] = ()) -> dict:
+def gpu_feature_set(vendor: str | None = None, metrics: Sequence[str] = ()) -> GpuFeatureSet:
     """What this machine can actually count on its GPU, and a reason for everything it cannot.
 
     The device twin of :func:`feature_set`, and the first call every other path here makes. It
@@ -2188,16 +2439,16 @@ def gpu_feature_set(vendor: Optional[str] = None, metrics: Sequence[str] = ()) -
     chosen = gpu_vendor(vendor)
     wanted = tuple(metrics) or tuple(GPU_METRICS)
     needed = {c.component for m in wanted for c in GPU_METRICS[m].candidates.get(chosen, ())}
-    blocked: Dict[str, str] = {}
-    enumerated: Dict[str, Sequence[str]] = {}
+    blocked: dict[str, str] = {}
+    enumerated: dict[str, Sequence[str]] = {}
     for component in sorted(needed):
         reason = component_reason(component)
         if reason is None:
             enumerated[component] = native_events(component)
         else:
             blocked[component] = reason
-    supported: Dict[str, dict] = {}
-    unsupported: Dict[str, str] = {}
+    supported: dict[str, ResolvedGpuMetric] = {}
+    unsupported: dict[str, str] = {}
     for metric in wanted:
         resolved, why = resolve_gpu(metric, chosen, enumerated, blocked)
         if resolved is None:
@@ -2215,7 +2466,7 @@ def gpu_feature_set(vendor: Optional[str] = None, metrics: Sequence[str] = ()) -
     }
 
 
-def device_barrier(vendor: str) -> Tuple[Optional[Callable[[], int]], str]:
+def device_barrier(vendor: str) -> tuple[Callable[[], int] | None, str]:
     """``(the driver call that blocks until the device is idle, "")``, or ``(None, why not)``.
 
     A kernel launch is ASYNCHRONOUS, so a counter read taken the instant the launch returns is a
@@ -2247,18 +2498,18 @@ def device_barrier(vendor: str) -> Tuple[Optional[Callable[[], int]], str]:
 def gpu_counting_worker(
     lib_path: str,
     binding: Binding,
-    data: Dict,
+    data: KernelData,
     lang: str,
-    workspace_bytes: Optional[str],
+    workspace_bytes: str | None,
     metric: str,
-    vendor: Optional[str],
+    vendor: str | None,
     device: bool,
-    device_id: Optional[int],
+    device_id: int | None,
     reps: int,
     warmup: int,
     rep_timeout: float,
     memory_bytes: int,
-) -> dict:
+) -> MetricRow:
     """CHILD: resolve ``metric`` on this GPU and count it around the timed call.
 
     Resolution happens HERE, before the kernel runs, so a metric this device cannot express costs
@@ -2305,8 +2556,11 @@ def gpu_counting_worker(
             cp.cuda.Device(device_id).use()
         xp, to_host = cp, cp.asnumpy
     else:
-        xp, to_host = np, lambda array: array
+        xp, to_host = np, host_buffer
     row = gpu_component(resolved["component"])
+    if row is None:  # unreachable: the metric resolved against events this component enumerated
+        return missing(metric, f"PAPI has no '{resolved['component']}' component to count through")
+    component_index = row["index"]
     lib = initialised()
     if memory_bytes > 0:
         cap = _current_vmsize_bytes() + memory_bytes
@@ -2318,8 +2572,8 @@ def gpu_counting_worker(
     )
     eventset = ctypes.c_int(PAPI_NULL)
     warm = max(warmup, 1)
-    readings: List[Tuple[int, int]] = []
-    calls: List[int] = []
+    readings: list[tuple[int, int]] = []
+    calls: list[int] = []
     before = (ctypes.c_longlong * 1)()
     after = (ctypes.c_longlong * 1)()
 
@@ -2334,7 +2588,7 @@ def gpu_counting_worker(
                 f"(driver status {status}), so the count would be of an unfinished kernel",
             )
 
-    def counted(fn: Callable[..., Any], c_args: List[Any], settle: Callable[[], None]) -> int:
+    def counted(fn: CKernel, c_args: list[CArgument], settle: Callable[[], None]) -> int:
         index = len(calls)
         calls.append(0)
         if index < warm:  # untimed: this is the call that creates the device context
@@ -2345,7 +2599,7 @@ def gpu_counting_worker(
             return time.perf_counter_ns() - start
         if index == warm:
             demand(lib, lib.PAPI_create_eventset(ctypes.byref(eventset)), "PAPI_create_eventset")
-            demand(lib, lib.PAPI_assign_eventset_component(eventset, row["index"]), "PAPI_assign_eventset_component")
+            demand(lib, lib.PAPI_assign_eventset_component(eventset, component_index), "PAPI_assign_eventset_component")
             demand(lib, lib.PAPI_add_event(eventset, code), "PAPI_add_event")
             demand(lib, lib.PAPI_start(eventset), "PAPI_start")
         demand(lib, lib.PAPI_read(eventset, before), "PAPI_read")
@@ -2359,7 +2613,7 @@ def gpu_counting_worker(
         return ns
 
     _call_native_impl(
-        lib_path,
+        pathlib.Path(lib_path),
         binding,
         data,
         lang,
@@ -2400,19 +2654,19 @@ def gpu_counting_worker(
 def count_gpu_metric(
     lib_path: str,
     binding: Binding,
-    data: Dict,
+    data: KernelData,
     lang: str,
     metric: str,
     *,
-    vendor: Optional[str] = None,
+    vendor: str | None = None,
     device: bool = False,
-    device_id: Optional[int] = None,
-    workspace_bytes: Optional[str] = None,
+    device_id: int | None = None,
+    workspace_bytes: str | None = None,
     reps: int = 1,
     warmup: int = 0,
     rep_timeout: float = 0.0,
     memory_gb: float = 0.0,
-) -> dict:
+) -> MetricRow:
     """Count ONE device metric over ``reps`` timed calls, in an isolated child.
 
     ``device`` is the task's residency and ``device_id`` the judge's per-thread GPU pin -- the two
@@ -2441,7 +2695,7 @@ def count_gpu_metric(
         label=f"papi-gpu:{metric}",
         timeout=max(1.0, rep_timeout) * (warmup + max(1, reps) + 2),
     )
-    if not run.ok:
+    if not run.ok or run.result is None:
         return missing(metric, f"counted run failed ({forked_failure_reason(run)})")
     return run.result
 
@@ -2449,19 +2703,19 @@ def count_gpu_metric(
 def count_gpu_group(
     lib_path: str,
     binding: Binding,
-    data: Dict,
+    data: KernelData,
     lang: str,
     *,
     group: str = "occupancy",
-    vendor: Optional[str] = None,
+    vendor: str | None = None,
     device: bool = False,
-    device_id: Optional[int] = None,
-    workspace_bytes: Optional[str] = None,
+    device_id: int | None = None,
+    workspace_bytes: str | None = None,
     reps: int = 1,
     warmup: int = 0,
     rep_timeout: float = 0.0,
     memory_gb: float = 0.0,
-) -> dict:
+) -> GpuGroupReport:
     """One measured run per metric of :data:`GPU_GROUPS` ``group``; the caller asks a QUESTION.
 
     The vendor-independent surface: ``group`` names what is being asked ("cache", "power") and

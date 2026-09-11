@@ -38,13 +38,13 @@ has not migrated to ``config:`` is unaffected.
 
 from __future__ import annotations
 import ast
+import enum
 import logging
-import operator
 
 import numpy as np
 
 from hpcagent_bench import config
-from typing import Any, Callable, Mapping, Sequence
+from typing import Callable, Final, Mapping, Sequence, TypeAlias, TypeGuard
 
 FUZZED_PRESET = "fuzzed"
 
@@ -53,33 +53,62 @@ FUZZED_PRESET = "fuzzed"
 NO_CONFIG_NAMES: frozenset[str] = frozenset()
 
 #: A manifest parameter's raw fuzz spec: a discrete-set / derive / construct mapping, a
-#: ``[lo, hi]`` range, or a scalar passed through unchanged.
-FuzzValue = Mapping[str, Any] | Sequence[Any] | int | float | str | bool
+#: ``[lo, hi]`` range, or a scalar passed through unchanged. Recursive: a mapping's or a
+#: sequence's MEMBERS are the same vocabulary, narrowed where they are read.
+FuzzValue: TypeAlias = "Mapping[str, FuzzValue] | Sequence[FuzzValue] | int | float | str | bool"
+
+#: ``{preset: {symbol: value}}`` -- the manifest size table every resolver below reads. The mutable
+#: spelling is :data:`hpcagent_bench.spec.PresetTable`; nothing here writes it, so it is a mapping.
+ParameterTable: TypeAlias = "Mapping[str, Mapping[str, FuzzValue]]"
 
 
-def is_range(value: FuzzValue) -> bool:
-    """``True`` when a parameter value is a ``[lo, hi]`` fuzz range (interval)."""
+def is_range(value: FuzzValue) -> TypeGuard[Sequence[int | float]]:
+    """``True`` when a parameter value is a ``[lo, hi]`` fuzz range (interval). Both bounds are
+    numbers, which is what makes the guard a true statement about the members."""
     return isinstance(value, (list, tuple)) and len(value) == 2 and all(isinstance(x, (int, float)) for x in value)
 
 
-def is_set(value: FuzzValue) -> bool:
+def is_set(value: FuzzValue) -> TypeGuard[Mapping[str, FuzzValue]]:
     """``True`` when a parameter value is a discrete set ``{set: [v0, v1, ...]}``
     -- one element is chosen at random per fuzz iteration. The mapping form keeps
     a two-element set distinct from a two-element ``[lo, hi]`` interval."""
-    return isinstance(value, dict) and isinstance(value.get("set"), (list, tuple)) and len(value["set"]) > 0
+    members = value.get("set") if isinstance(value, dict) else None
+    return isinstance(members, (list, tuple)) and len(members) > 0
 
 
-def is_derive(value: FuzzValue) -> bool:
+def is_derive(value: FuzzValue) -> TypeGuard[Mapping[str, FuzzValue]]:
     """``True`` for a derived param ``{derive: "<expr over other params>"}`` --
     computed, never sampled (e.g. ``numelem: {derive: "edge**3"}``)."""
     return isinstance(value, dict) and "derive" in value
 
 
-def is_construct(value: FuzzValue) -> bool:
+def is_construct(value: FuzzValue) -> TypeGuard[Mapping[str, FuzzValue]]:
     """``True`` for a constructed param ``{construct: "<expr>", <gen>: range|set}``:
     the generators are sampled, the expr makes a constraint true by construction
     (divisibility ``{construct: "m*R", m: [4,64], R: {set: [2,4]}}``)."""
     return isinstance(value, dict) and "construct" in value
+
+
+def _as_number(value: FuzzValue, context: str) -> int | float:
+    """One value as the number an arithmetic / ordering operator needs. ``bool`` counts as one,
+    exactly as Python does. A mapping or a sequence raises, as the operator itself would."""
+    if isinstance(value, (bool, int, float)):
+        return value
+    raise TypeError(f"non-numeric value in {context!r}: {value!r}")
+
+
+def _as_sequence(value: FuzzValue, context: str) -> Sequence[FuzzValue]:
+    """One value as the sequence its reader needs (a ``{set: [...]}`` member list)."""
+    if isinstance(value, (list, tuple)):
+        return value
+    raise TypeError(f"non-sequence value in {context!r}: {value!r}")
+
+
+def _as_expr(value: FuzzValue, context: str) -> str:
+    """One declared ``derive`` / ``construct`` body as the expression text it must be."""
+    if isinstance(value, str):
+        return value
+    raise TypeError(f"non-expression value in {context!r}: {value!r}")
 
 
 def _sample_set(choices: Sequence[FuzzValue], rng: np.random.Generator) -> FuzzValue:
@@ -88,18 +117,18 @@ def _sample_set(choices: Sequence[FuzzValue], rng: np.random.Generator) -> FuzzV
 
 
 def _sample_one(lo: float, hi: float, rng: np.random.Generator, distribution: str) -> int:
-    lo, hi = int(lo), int(hi)
-    if hi <= lo:
-        return lo
+    lo_i, hi_i = int(lo), int(hi)
+    if hi_i <= lo_i:
+        return lo_i
     # log_uniform needs lo > 0 (log(0)/log(<0) = -inf/nan); fall back to uniform otherwise.
-    if distribution == "log_uniform" and lo > 0:
-        val = float(np.exp(rng.uniform(np.log(lo), np.log(hi))))
+    if distribution == "log_uniform" and lo_i > 0:
+        val = float(np.exp(rng.uniform(np.log(lo_i), np.log(hi_i))))
     else:  # uniform (or non-positive interval)
-        val = float(rng.uniform(lo, hi))
+        val = float(rng.uniform(lo_i, hi_i))
     return int(round(val))
 
 
-def _constant_across_presets(parameters: dict[str, Any], name: str) -> bool:
+def _constant_across_presets(parameters: ParameterTable, name: str) -> bool:
     """Whether ``name`` holds the SAME value in every preset that declares it.
 
     The pre-XL resolution derived each range as ``[min over presets, max over presets]``, so such a
@@ -110,8 +139,8 @@ def _constant_across_presets(parameters: dict[str, Any], name: str) -> bool:
 
 
 def resolve_ranges(
-    parameters: dict[str, Any], size_cap: int | None = None, config_names: frozenset[str] = NO_CONFIG_NAMES
-) -> dict[str, Any]:
+    parameters: ParameterTable, size_cap: int | None = None, config_names: frozenset[str] = NO_CONFIG_NAMES
+) -> dict[str, FuzzValue]:
     """Per-param fuzz spec: each value is a ``[lo, hi]`` range or a fixed scalar.
 
     Prefers an explicit ``fuzzed`` preset; otherwise the default range is ANCHORED on the rung
@@ -155,7 +184,7 @@ def resolve_ranges(
     # that put every draw above 1.00x through the track ceiling whenever the key was absent.
     lo_m = config.get_float("fuzz.xl_lo_mult", 0.50)
     hi_m = config.get_float("fuzz.xl_hi_mult", 1.00)
-    out: dict[str, Any] = {}
+    out: dict[str, FuzzValue] = {}
     for name, value in base.items():
         if name in config_names:
             out[name] = value  # declared config knob: fixed, never scaled by a size preset
@@ -176,8 +205,8 @@ def resolve_ranges(
 
 
 def _apply_size_cap(
-    ranges: dict[str, Any], cap: int | None = None, config_names: frozenset[str] = NO_CONFIG_NAMES
-) -> dict[str, Any]:
+    ranges: dict[str, FuzzValue], cap: int | None = None, config_names: frozenset[str] = NO_CONFIG_NAMES
+) -> dict[str, FuzzValue]:
     """Clamp every resolved fuzz size range / scalar to a per-dimension ceiling.
 
     ``cap`` defaults to the global ``fuzz.size_cap`` knob (OFF at 0 so production
@@ -189,7 +218,7 @@ def _apply_size_cap(
     cap = config.get_int("fuzz.size_cap", 0) if cap is None else int(cap)
     if cap <= 0:
         return ranges
-    out: dict[str, Any] = {}
+    out: dict[str, FuzzValue] = {}
     for name, value in ranges.items():
         if name in config_names:
             out[name] = value
@@ -210,7 +239,7 @@ def _apply_size_cap(
     return out
 
 
-def pick_data_distribution(fuzz_spec: dict[str, Any], iteration: int = 0) -> str:
+def pick_data_distribution(fuzz_spec: Mapping[str, FuzzValue], iteration: int = 0) -> str:
     """The input-value distribution for fuzz ``iteration``.
 
     A kernel's manifest ``fuzz.data_distributions`` lists one or more registered
@@ -226,32 +255,102 @@ def pick_data_distribution(fuzz_spec: dict[str, Any], iteration: int = 0) -> str
     return str(fuzz_spec.get("data_distribution", "") or "")
 
 
-_UNRESOLVED = object()
+class Sentinel(enum.Enum):
+    """The one marker a resolved value can never be: ``UNRESOLVED`` says a param's dependency is
+    not bound yet, which the topo loop retries (:func:`_try_resolve`)."""
+
+    UNRESOLVED = enum.auto()
+
+
+_UNRESOLVED: Final = Sentinel.UNRESOLVED
 _MAX_RESAMPLE = 1000
 #: Functions callable from derive/construct/in/rule/constraint expressions.
 #: Only these names may be CALLED -- everything else (attribute access, imports,
 #: other builtins) is rejected by the AST walk in :func:`safe_eval`.
-_EVAL_FUNCS = {"min": min, "max": max, "int": int, "abs": abs, "round": round, "len": len, "bool": bool, "float": float}
+_EVAL_FUNCS = frozenset({"min", "max", "int", "abs", "round", "len", "bool", "float"})
 
-#: Permitted binary / unary / comparison operators.
-_BINOPS = {
-    ast.Add: operator.add,
-    ast.Sub: operator.sub,
-    ast.Mult: operator.mul,
-    ast.Div: operator.truediv,
-    ast.FloorDiv: operator.floordiv,
-    ast.Mod: operator.mod,
-    ast.Pow: operator.pow,
-}
-_UNARYOPS = {ast.USub: operator.neg, ast.UAdd: operator.pos, ast.Not: operator.not_}
-_CMPOPS = {
-    ast.Eq: operator.eq,
-    ast.NotEq: operator.ne,
-    ast.Lt: operator.lt,
-    ast.LtE: operator.le,
-    ast.Gt: operator.gt,
-    ast.GtE: operator.ge,
-}
+#: Permitted binary / unary / comparison operators. Applied by :func:`_binop`, :func:`_unaryop`
+#: and :func:`_compare`; an operator outside these tuples is rejected in :func:`safe_eval`.
+_BINOPS: tuple[type[ast.operator], ...] = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow)
+_UNARYOPS: tuple[type[ast.unaryop], ...] = (ast.USub, ast.UAdd, ast.Not)
+_CMPOPS: tuple[type[ast.cmpop], ...] = (ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE)
+
+
+def _binop(op: ast.operator, left: int | float, right: int | float, expr: str) -> int | float:
+    """Apply one permitted arithmetic operator. Operands are numbers: every arithmetic expression
+    in the corpus is over sizes, and a mapping or a sequence has no arithmetic here."""
+    if isinstance(op, ast.Add):
+        return left + right
+    if isinstance(op, ast.Sub):
+        return left - right
+    if isinstance(op, ast.Mult):
+        return left * right
+    if isinstance(op, ast.Div):
+        return left / right
+    if isinstance(op, ast.FloorDiv):
+        return left // right
+    if isinstance(op, ast.Mod):
+        return left % right
+    if isinstance(op, ast.Pow):
+        return left**right
+    raise ValueError(f"unsupported operator in {expr!r}: {type(op).__name__}")
+
+
+def _unaryop(op: ast.unaryop, value: FuzzValue, expr: str) -> FuzzValue:
+    """Apply one permitted unary operator. ``not`` reads any value's truth; the signs need a number."""
+    if isinstance(op, ast.Not):
+        return not value
+    if isinstance(op, ast.USub):
+        return -_as_number(value, expr)
+    if isinstance(op, ast.UAdd):
+        return +_as_number(value, expr)
+    raise ValueError(f"unsupported operator in {expr!r}: {type(op).__name__}")
+
+
+def _compare(op: ast.cmpop, left: FuzzValue, right: FuzzValue, expr: str) -> bool:
+    """Apply one permitted comparison. Equality reads any two values; ordering needs numbers."""
+    if isinstance(op, ast.Eq):
+        return left == right
+    if isinstance(op, ast.NotEq):
+        return left != right
+    lhs, rhs = _as_number(left, expr), _as_number(right, expr)
+    if isinstance(op, ast.Lt):
+        return lhs < rhs
+    if isinstance(op, ast.LtE):
+        return lhs <= rhs
+    if isinstance(op, ast.Gt):
+        return lhs > rhs
+    if isinstance(op, ast.GtE):
+        return lhs >= rhs
+    raise ValueError(f"unsupported comparison in {expr!r}: {type(op).__name__}")
+
+
+def _apply_func(name: str, args: list[FuzzValue], expr: str) -> FuzzValue:
+    """Apply one whitelisted builtin (:data:`_EVAL_FUNCS`) to already-evaluated arguments.
+    ``min`` / ``max`` take numbers as separate arguments, the form every manifest uses."""
+    if name == "min":
+        return min(_as_number(a, expr) for a in args)
+    if name == "max":
+        return max(_as_number(a, expr) for a in args)
+    if not args:
+        raise ValueError(f"{name}() needs an argument in {expr!r}")
+    first = args[0]
+    if name == "bool":
+        return bool(first)
+    if name == "len":
+        if isinstance(first, (bool, int, float)):
+            raise TypeError(f"len() of a number in {expr!r}: {first!r}")
+        return len(first)
+    if name == "abs":
+        return abs(_as_number(first, expr))
+    if name == "round":
+        number = _as_number(first, expr)
+        return round(number, int(_as_number(args[1], expr))) if len(args) > 1 else round(number)
+    if name == "float":
+        return float(first) if isinstance(first, str) else float(_as_number(first, expr))
+    if name == "int":
+        return int(first) if isinstance(first, str) else int(_as_number(first, expr))
+    raise ValueError(f"disallowed call in {expr!r}")
 
 
 def safe_eval(expr: str, names: dict[str, FuzzValue]) -> FuzzValue:
@@ -263,12 +362,19 @@ def safe_eval(expr: str, names: dict[str, FuzzValue]) -> FuzzValue:
     calls, lambdas, comprehensions) raises :class:`ValueError`. An unknown name
     raises :class:`NameError` so callers can use it as the "dependency not yet
     resolved" signal (topo retry).
+
+    Arithmetic, the signs and ordering read NUMBERS -- a size expression is what the
+    vocabulary is for -- and raise :class:`TypeError` on anything else, as the operator
+    itself would; equality, ``not`` and ``bool`` read any value.
     """
     tree = ast.parse(expr, mode="eval")
 
     def ev(node: ast.expr) -> FuzzValue:
         if isinstance(node, ast.Constant):
-            return node.value
+            constant = node.value
+            if isinstance(constant, (bool, int, float, str)):
+                return constant
+            raise ValueError(f"unsupported constant in {expr!r}: {constant!r}")
         if isinstance(node, ast.Name):
             if node.id in names:
                 return names[node.id]
@@ -276,9 +382,9 @@ def safe_eval(expr: str, names: dict[str, FuzzValue]) -> FuzzValue:
         if isinstance(node, (ast.List, ast.Tuple)):
             return [ev(e) for e in node.elts]
         if isinstance(node, ast.BinOp) and type(node.op) in _BINOPS:
-            return _BINOPS[type(node.op)](ev(node.left), ev(node.right))
+            return _binop(node.op, _as_number(ev(node.left), expr), _as_number(ev(node.right), expr), expr)
         if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARYOPS:
-            return _UNARYOPS[type(node.op)](ev(node.operand))
+            return _unaryop(node.op, ev(node.operand), expr)
         if isinstance(node, ast.BoolOp):
             vals = [ev(v) for v in node.values]
             return all(vals) if isinstance(node.op, ast.And) else any(vals)
@@ -288,7 +394,7 @@ def safe_eval(expr: str, names: dict[str, FuzzValue]) -> FuzzValue:
                 if type(op) not in _CMPOPS:
                     raise ValueError(f"unsupported comparison in {expr!r}: {type(op).__name__}")
                 right = ev(comparator)
-                if not _CMPOPS[type(op)](left, right):
+                if not _compare(op, left, right, expr):
                     return False
                 left = right
             return True
@@ -299,7 +405,7 @@ def safe_eval(expr: str, names: dict[str, FuzzValue]) -> FuzzValue:
                 raise ValueError(f"disallowed call in {expr!r}")
             if node.keywords:
                 raise ValueError(f"keyword args not allowed in {expr!r}")
-            return _EVAL_FUNCS[node.func.id](*[ev(a) for a in node.args])
+            return _apply_func(node.func.id, [ev(a) for a in node.args], expr)
         raise ValueError(f"unsupported expression in {expr!r}: {ast.dump(node)}")
 
     return ev(tree.body)
@@ -308,7 +414,7 @@ def safe_eval(expr: str, names: dict[str, FuzzValue]) -> FuzzValue:
 def _sample_leaf(spec: FuzzValue, rng: np.random.Generator, distribution: str) -> FuzzValue:
     """A leaf form: discrete set, interval, or a fixed scalar passed through."""
     if is_set(spec):
-        return _sample_set(spec["set"], rng)
+        return _sample_set(_as_sequence(spec["set"], "set"), rng)
     if is_range(spec):
         return _sample_one(spec[0], spec[1], rng, distribution)
     return spec
@@ -316,32 +422,32 @@ def _sample_leaf(spec: FuzzValue, rng: np.random.Generator, distribution: str) -
 
 def _try_resolve(
     spec: FuzzValue, resolved: dict[str, FuzzValue], rng: np.random.Generator, distribution: str
-) -> FuzzValue | object:
+) -> FuzzValue | Sentinel:
     """Resolve one param against the already-resolved namespace, or
     ``_UNRESOLVED`` when a dependency isn't available yet (topo retry)."""
     if is_derive(spec):
         try:
-            return safe_eval(spec["derive"], resolved)
+            return safe_eval(_as_expr(spec["derive"], "derive"), resolved)
         except NameError:
             return _UNRESOLVED
     if is_construct(spec):
         local = {k: _sample_leaf(v, rng, distribution) for k, v in spec.items() if k != "construct"}
         try:
-            return safe_eval(spec["construct"], {**resolved, **local})
+            return safe_eval(_as_expr(spec["construct"], "construct"), {**resolved, **local})
         except NameError:
             return _UNRESOLVED
     return _sample_leaf(spec, rng, distribution)
 
 
 def _resolve_sizes(
-    fuzzed: dict[str, FuzzValue], initial: dict[str, FuzzValue], rng: np.random.Generator, distribution: str
+    fuzzed: Mapping[str, FuzzValue], initial: Mapping[str, FuzzValue], rng: np.random.Generator, distribution: str
 ) -> dict[str, FuzzValue]:
     """Topologically resolve size params: sample leaves, then evaluate
     derive/construct to a fixpoint (a cyclic reference raises)."""
-    resolved = dict(initial)
+    resolved: dict[str, FuzzValue] = dict(initial)
     # A name the caller already bound (the chosen config) is NOT re-drawn: BenchSpec.parameters is the
     # merged view, so every preset carries the config knobs and they would otherwise clobber the draw.
-    pending = {name: spec for name, spec in fuzzed.items() if name not in initial}
+    pending: dict[str, FuzzValue] = {name: spec for name, spec in fuzzed.items() if name not in initial}
     progress = True
     while pending and progress:
         progress = False
@@ -356,7 +462,7 @@ def _resolve_sizes(
     return {name: resolved[name] for name in fuzzed if name not in initial}
 
 
-def _resolve_config(configs: Sequence[Mapping[str, Any]], rng: np.random.Generator) -> dict[str, Any]:
+def _resolve_config(configs: Sequence[Mapping[str, FuzzValue]], rng: np.random.Generator) -> dict[str, FuzzValue]:
     """Pick one complete config from an enumerated config space (``BenchSpec.config_space``)."""
     if not configs:
         raise ValueError("config space is empty; a kernel with no config knobs must pass None")
@@ -364,13 +470,13 @@ def _resolve_config(configs: Sequence[Mapping[str, Any]], rng: np.random.Generat
 
 
 def sample_params(
-    parameters: dict[str, Any],
+    parameters: ParameterTable,
     iteration: int = 0,
-    configs: Sequence[Mapping[str, Any]] | None = None,
+    configs: Sequence[Mapping[str, FuzzValue]] | None = None,
     constraints: Sequence[str] | None = None,
     size_cap: int | None = None,
     config_names: frozenset[str] = NO_CONFIG_NAMES,
-) -> dict[str, Any]:
+) -> dict[str, FuzzValue]:
     """Concrete params for fuzz ``iteration``, seeded by ``seeds.fuzz + iteration``.
 
     Microkernels pass just ``parameters`` -- intervals / sets / scalars resolve as
@@ -387,11 +493,11 @@ def sample_params(
     """
     fuzzed = resolve_ranges(parameters, size_cap, config_names)
     seed = config.get_int("seeds.fuzz", 42) + int(iteration)
-    distribution = config.get("fuzz.size_distribution", "log_uniform")
+    distribution = config.get_str("fuzz.size_distribution", "log_uniform")
     constraints = constraints or []
     for attempt in range(_MAX_RESAMPLE):
         rng = np.random.default_rng(seed + attempt * 1_000_003)
-        out = _resolve_config(configs, rng) if configs else {}
+        out: dict[str, FuzzValue] = _resolve_config(configs, rng) if configs else {}
         out.update(_resolve_sizes(fuzzed, out, rng, distribution))
         if all(safe_eval(c, out) for c in constraints):
             return out
@@ -409,8 +515,9 @@ def correctness_iterations() -> int:
     Distinct from :func:`iterations`, which also sizes the ``run`` verb's framework sweep and
     harbor_grade's default ``--k``. Those produce framework-comparison numbers, so the agent
     gate's cost/coverage dial must not move them. Falls back to :func:`iterations` when unset."""
-    configured = config.get("fuzz.correctness_iterations")
-    return int(configured) if configured is not None else iterations()
+    if config.get("fuzz.correctness_iterations") is None:
+        return iterations()
+    return config.get_int("fuzz.correctness_iterations")
 
 
 # --------------------------------------------------------------------------- #
@@ -426,8 +533,8 @@ UNCAPPED = 0
 
 
 def enumerate_configs(
-    configs: Sequence[Mapping[str, Any]] | None = None, max_configs: int | None = None
-) -> list[dict[str, Any]]:
+    configs: Sequence[Mapping[str, FuzzValue]] | None = None, max_configs: int | None = None
+) -> list[dict[str, FuzzValue]]:
     """The complete configs to evaluate, as a list of dicts, capped at ``max_configs``
     (default ``perf.max_configs`` = 5) so the config space cannot explode the evaluation.
     Pass :data:`UNCAPPED` for the correctness gate.
@@ -445,7 +552,7 @@ def enumerate_configs(
     if not configs:
         return [{}]
     out = [dict(v) for v in configs]
-    cap = int(max_configs if max_configs is not None else config.get("perf.max_configs", 5))
+    cap = int(max_configs) if max_configs is not None else config.get_int("perf.max_configs", 5)
     if cap > 0 and len(out) > cap:
         rng = np.random.default_rng(secret_shape_seed())
         keep = sorted(int(i) for i in rng.choice(len(out), size=cap, replace=False))
@@ -460,14 +567,14 @@ def enumerate_configs(
 
 
 def _resolve_against(
-    parameters: dict[str, Any],
-    fixed: dict[str, Any],
+    parameters: ParameterTable,
+    fixed: Mapping[str, FuzzValue],
     seed: int,
     distribution: str,
     constraints: Sequence[str] | None,
     size_cap: int | None = None,
     config_names: frozenset[str] = NO_CONFIG_NAMES,
-) -> dict[str, Any]:
+) -> dict[str, FuzzValue]:
     """Resolve sizes against an already-chosen ``fixed`` config namespace.
 
     Mirrors the size half of :func:`sample_params` (topo resolve of
@@ -480,7 +587,7 @@ def _resolve_against(
     constraints = constraints or []
     for attempt in range(_MAX_RESAMPLE):
         rng = np.random.default_rng(int(seed) + attempt * 1_000_003)
-        out = dict(fixed)
+        out: dict[str, FuzzValue] = dict(fixed)
         out.update(_resolve_sizes(fuzzed, out, rng, distribution))
         if all(safe_eval(c, out) for c in constraints):
             return out
@@ -499,7 +606,7 @@ EDGE_VALUES = {"one": 1, "odd": 3, "prime": 7, "nonpow2": 6, "nonaligned": 5}
 EDGE_KINDS = tuple(EDGE_VALUES)
 
 
-def _edge_value(hi: int, kind: str) -> int:
+def _edge_value(hi: int | float, kind: str) -> int:
     """The small structural probe value for ``kind`` (:data:`EDGE_VALUES`), capped
     only at ``hi`` -- the one bound that must hold (a size cannot exceed its declared
     maximum). It is NOT raised to the fuzz range's lower bound: edges stay small so
@@ -510,20 +617,22 @@ def _edge_value(hi: int, kind: str) -> int:
 
 
 def respec_ranges(
-    parameters: dict[str, Any], fuzzed: dict[str, Any], interval: Callable[[float, float], list[float]]
-) -> dict[str, Any]:
+    parameters: ParameterTable,
+    fuzzed: Mapping[str, FuzzValue],
+    interval: Callable[[int | float, int | float], Sequence[FuzzValue]],
+) -> dict[str, Mapping[str, FuzzValue]]:
     """A fuzzed-preset spec where each RANGE param is replaced by ``interval(lo, hi)`` and
     non-range params pass through unchanged -- the shared edge/large interval rewrite."""
-    edged = {nm: (interval(v[0], v[1]) if is_range(v) else v) for nm, v in fuzzed.items()}
+    edged: dict[str, FuzzValue] = {nm: (interval(v[0], v[1]) if is_range(v) else v) for nm, v in fuzzed.items()}
     return {**parameters, FUZZED_PRESET: edged}
 
 
 def edge_shapes(
-    parameters: dict[str, Any],
-    config: dict[str, Any] | None = None,
+    parameters: ParameterTable,
+    config: Mapping[str, FuzzValue] | None = None,
     constraints: Sequence[str] | None = None,
     config_names: frozenset[str] = NO_CONFIG_NAMES,
-) -> list[tuple[str, dict[str, Any]]]:
+) -> list[tuple[str, dict[str, FuzzValue]]]:
     """Correctness EDGE probes for one config namespace.
 
     Returns a list of ``(label, sample)`` where each ``sample`` sets every free
@@ -539,7 +648,8 @@ def edge_shapes(
     """
     fixed = dict(config or {})
     fuzzed = resolve_ranges(parameters, config_names=config_names)
-    out, seen = [], set()
+    out: list[tuple[str, dict[str, FuzzValue]]] = []
+    seen: set[tuple[tuple[str, int | float], ...]] = set()
     for kind in EDGE_KINDS:
         # Override each interval with a degenerate [v, v] so the resolver returns the
         # edge value, while derive/construct/in still compute off those roots.
@@ -556,11 +666,11 @@ def edge_shapes(
 
 
 def max_shape(
-    parameters: dict[str, Any],
-    config: dict[str, Any] | None = None,
+    parameters: ParameterTable,
+    config: Mapping[str, FuzzValue] | None = None,
     constraints: Sequence[str] | None = None,
     config_names: frozenset[str] = NO_CONFIG_NAMES,
-) -> dict[str, Any]:
+) -> dict[str, FuzzValue]:
     """The exact top of the fuzz interval: every free size root pinned to its declared maximum.
 
     :func:`resolve_ranges` brackets each size as ``[L, XL]``, so this is the ``XL`` preset with
@@ -580,15 +690,15 @@ def max_shape(
 
 
 def large_shapes(
-    parameters: dict[str, Any],
-    config: dict[str, Any] | None = None,
+    parameters: ParameterTable,
+    config: Mapping[str, FuzzValue] | None = None,
     *,
     mode: str | None = None,
     n: int | None = None,
     secret_seed: int | None = None,
     constraints: Sequence[str] | None = None,
     config_names: frozenset[str] = NO_CONFIG_NAMES,
-) -> list[tuple[str, dict[str, Any]]]:
+) -> list[tuple[str, dict[str, FuzzValue]]]:
     """TIMED large-shape samples for one config namespace.
 
     Both modes time ``n`` large shapes per config (``perf.n_large_shapes``, default
@@ -605,7 +715,7 @@ def large_shapes(
     their fixed value rather than biased to the interval's upper half -- a knob has
     no "large" half, only a declared value.
     """
-    mode = str(mode if mode is not None else perf_mode())
+    draw_mode = str(mode if mode is not None else perf_mode())
     fixed = dict(config or {})
     fuzzed = resolve_ranges(parameters, config_names=config_names)
     # Bias each interval to its upper half so sampled shapes are genuinely large.
@@ -613,19 +723,18 @@ def large_shapes(
 
     # NB: the ``config`` parameter shadows the config module, so the seeds +
     # default n are read via module-scope helpers.
-    n = int(n) if n is not None else default_n_large_shapes()
-    n = max(1, n)
-    if mode.startswith("secret"):
+    count = max(1, int(n) if n is not None else default_n_large_shapes())
+    if draw_mode.startswith("secret"):
         # n large shapes from the JUDGE-ONLY secret seed, hidden from the agent.
         base = int(secret_seed if secret_seed is not None else secret_shape_seed())
-        seeds = [base + i for i in range(n)]
-        labels = [f"secret{i}" for i in range(n)]
+        seeds = [base + i for i in range(count)]
+        labels = [f"secret{i}" for i in range(count)]
     else:
         # n large shapes from a FIXED PUBLIC seed offset (reproducible leaderboard).
-        seeds = _public_large_seeds(n)
-        labels = [f"large{i}" for i in range(n)]
+        seeds = _public_large_seeds(count)
+        labels = [f"large{i}" for i in range(count)]
 
-    out = []
+    out: list[tuple[str, dict[str, FuzzValue]]] = []
     for label, sd in zip(labels, seeds):
         try:
             sample = _resolve_against(big_spec, fixed, sd, "uniform", constraints, config_names=config_names)
@@ -652,12 +761,12 @@ def large_shapes(
 
 
 def fuzzed_shape(
-    parameters: dict[str, Any],
+    parameters: ParameterTable,
     iteration: int,
-    config_ns: dict[str, Any] | None = None,
+    config_ns: Mapping[str, FuzzValue] | None = None,
     constraints: Sequence[str] | None = None,
     config_names: frozenset[str] = NO_CONFIG_NAMES,
-) -> dict[str, Any]:
+) -> dict[str, FuzzValue]:
     """One seeded fuzzed-size sample resolved against a FIXED config namespace.
 
     The per-config crossing of the ``k``-iteration correctness sweep: same seed
@@ -666,7 +775,7 @@ def fuzzed_shape(
     ``ValueError`` if no draw satisfies ``constraints``. ``config_names`` (declared
     knob names, see :func:`resolve_ranges`) forwards to :func:`_resolve_against`."""
     seed = config.get_int("seeds.fuzz", 42) + int(iteration)
-    distribution = config.get("fuzz.size_distribution", "log_uniform")
+    distribution = config.get_str("fuzz.size_distribution", "log_uniform")
     return _resolve_against(
         parameters,
         dict(config_ns or {}),

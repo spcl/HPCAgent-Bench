@@ -93,7 +93,7 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Union
+from typing import NotRequired, Sequence, TypedDict
 
 from hpcagent_bench import config, osinfo
 from hpcagent_bench.harness import papi, profiling, timing
@@ -300,6 +300,87 @@ class GpuProfilerUnavailable(RuntimeError):
         self.cause = cause
 
 
+#: One report row, keyed by the tool's own column headers. A string map and not a per-report
+#: record: the two tools rename their columns across releases and carry the unit inside the
+#: header, so a column is located by PREFIX (:func:`find`) rather than by a name fixed here.
+CsvRow = dict[str, str]
+
+
+class KernelStat(TypedDict):
+    """One kernel's summary, in the shape both tools answer in.
+
+    ``min_ns`` / ``max_ns`` are ``None`` where the report has no such column: legacy ``rocprof``
+    reports no per-kernel minimum, and a 0 ns minimum would be a measurement.
+    """
+
+    name: str
+    instances: int
+    total_ns: int
+    mean_ns: float
+    min_ns: int | None
+    max_ns: int | None
+    time_pct: float
+
+
+class MemoryStat(TypedDict):
+    """One memory operation: how long it took, and how much it moved where the tool measured that.
+
+    ``total`` keeps the TOOL's unit (``unit``) rather than being converted to bytes; both are
+    ``None`` on a report that times copies without sizing them.
+    """
+
+    operation: str
+    direction: str
+    count: int
+    total_ns: int
+    mean_ns: float
+    total: float | None
+    unit: str | None
+
+
+class LaunchRow(TypedDict):
+    """One launch geometry, in the shape both vendors answer in. ``grid`` is BLOCKS on both."""
+
+    name: str
+    grid: list[int]
+    block: list[int]
+    threads_per_block: int
+    warps_per_block: int | None
+    blocks: int
+    registers_per_thread: int | None
+    shared_memory: float | None
+    shared_memory_unit: str | None
+    launches: int
+
+
+class GpuPayload(TypedDict):
+    """The ``/profile`` answer for a device submission: the device/host split and the geometry."""
+
+    build_ok: bool
+    kernel: str
+    language: str
+    preset: str
+    datatype: str
+    symbol: str
+    reps: int
+    warmup: int
+    tool: str
+    trace: str
+    reports: list[str]
+    min_percent: float
+    elapsed_ns: int
+    device_ns: int
+    device_ns_per_rep: float
+    device_pct: float
+    launch_count: int
+    kernels: list[KernelStat]
+    kernels_omitted: int
+    memory: list[MemoryStat]
+    launches: list[LaunchRow]
+    occupancy_note: str
+    text: NotRequired[str]
+
+
 @dataclass(frozen=True, slots=True)
 class GpuRun:
     """One traced run: how long the host measured, and what the device actually did.
@@ -311,15 +392,15 @@ class GpuRun:
 
     elapsed_ns: int
     reps: int
-    kernels: List[dict]
-    memory: List[dict]
-    launches: List[dict]
+    kernels: list[KernelStat]
+    memory: list[MemoryStat]
+    launches: list[LaunchRow]
     device_ns: int
     launch_count: int
     kernels_omitted: int
     tool: str
     trace: str
-    reports: List[str]
+    reports: list[str]
     occupancy_note: str
 
 
@@ -374,8 +455,8 @@ def gpu_check(language: str) -> str:
 
 
 def nsys_record(
-    argv: List[str], report: pathlib.Path, *, cwd: pathlib.Path, timeout: float, language: str
-) -> subprocess.CompletedProcess:
+    argv: list[str], report: pathlib.Path, *, cwd: pathlib.Path, timeout: float, language: str
+) -> subprocess.CompletedProcess[str]:
     """Trace ``argv`` under ``nsys profile``, writing ``report``; returns the completed process.
 
     The environment is INHERITED unchanged. The host path pins ``OMP_NUM_THREADS`` because the
@@ -400,7 +481,7 @@ def nsys_record(
     return subprocess.run(cmd, capture_output=True, text=True, cwd=str(cwd), timeout=timeout)
 
 
-def recording(root: pathlib.Path) -> Optional[pathlib.Path]:
+def recording(root: pathlib.Path) -> pathlib.Path | None:
     """The recording ``nsys profile`` left in ``root``, or ``None`` -- the extension is the
     ``nsys`` version's choice, not ours (see :data:`REPORT_SUFFIXES`)."""
     for suffix in REPORT_SUFFIXES:
@@ -410,7 +491,7 @@ def recording(root: pathlib.Path) -> Optional[pathlib.Path]:
     return None
 
 
-def record_failure(proc: subprocess.CompletedProcess) -> GpuProfilerUnavailable:
+def record_failure(proc: subprocess.CompletedProcess[str]) -> GpuProfilerUnavailable:
     """Classify an ``nsys profile`` run that produced no recording.
 
     A permission refusal is separated from every other failure because it is the one an operator
@@ -431,7 +512,7 @@ def record_failure(proc: subprocess.CompletedProcess) -> GpuProfilerUnavailable:
     )
 
 
-def nsys_stats(report: pathlib.Path, *, language: str, timeout: float) -> Dict[str, List[dict]]:
+def nsys_stats(report: pathlib.Path, *, language: str, timeout: float) -> dict[str, list[CsvRow]]:
     """Run :data:`REPORTS` over ``report`` and return ``{report name: rows}``.
 
     ONE ``nsys stats`` invocation for all four: it exports the recording to SQLite on first use,
@@ -453,7 +534,7 @@ def nsys_stats(report: pathlib.Path, *, language: str, timeout: float) -> Dict[s
     return {name: parse_csv(text) for name, text in sections.items()}
 
 
-def rocprof_check() -> Tuple[str, str]:
+def rocprof_check() -> tuple[str, str]:
     """``(tool, executable)`` for the AMD path, or :class:`GpuProfilerUnavailable` naming the cause
     and the fix. ``tool`` is ``rocprofv3`` or the deprecated ``rocprof``, and it is reported in the
     payload -- the two answer with different schemas and one of them is missing fields.
@@ -499,7 +580,7 @@ def rocprof_check() -> Tuple[str, str]:
     return name, exe
 
 
-def rocm_agents(timeout: float = ROCMINFO_TIMEOUT) -> List[str]:
+def rocm_agents(timeout: float = ROCMINFO_TIMEOUT) -> list[str]:
     """The AMD GPU ISA names ``rocminfo`` reports (``['gfx942']`` on MI300), hottest-agent-first as
     ``rocminfo`` orders them.
 
@@ -515,7 +596,7 @@ def rocm_agents(timeout: float = ROCMINFO_TIMEOUT) -> List[str]:
             "binary alone does not bring it). Install rocminfo/rocm-smi and put /opt/rocm/bin on PATH",
         )
     proc = subprocess.run([exe], capture_output=True, text=True, timeout=timeout)
-    agents: List[str] = []
+    agents: list[str] = []
     for name in GFX_AGENT.findall(proc.stdout or ""):
         if name not in agents:  # ordered + deduped: rocminfo names an agent's ISA more than once
             agents.append(name)
@@ -529,7 +610,7 @@ def rocm_agents(timeout: float = ROCMINFO_TIMEOUT) -> List[str]:
     return agents
 
 
-def rocprof_command(tool: str, exe: str, argv: List[str], outdir: pathlib.Path) -> List[str]:
+def rocprof_command(tool: str, exe: str, argv: list[str], outdir: pathlib.Path) -> list[str]:
     """The command line for ``tool``. The two are NOT interchangeable.
 
     ``rocprofv3`` takes the trace domains as flags, writes one CSV per report into a directory, and
@@ -556,8 +637,8 @@ def rocprof_command(tool: str, exe: str, argv: List[str], outdir: pathlib.Path) 
 
 
 def rocprof_record(
-    argv: List[str], outdir: pathlib.Path, *, cwd: pathlib.Path, timeout: float, tool: str, exe: str
-) -> subprocess.CompletedProcess:
+    argv: list[str], outdir: pathlib.Path, *, cwd: pathlib.Path, timeout: float, tool: str, exe: str
+) -> subprocess.CompletedProcess[str]:
     """Trace ``argv`` under ``tool``, writing its reports into ``outdir``; returns the completed
     process. The AMD twin of :func:`nsys_record`, with the same division of labour: the environment
     is inherited unchanged, and the CALLER owns the verdict, because a non-zero exit can be the
@@ -568,7 +649,7 @@ def rocprof_record(
     return subprocess.run(cmd, capture_output=True, text=True, cwd=str(cwd), timeout=timeout)
 
 
-def rocprof_csv(outdir: pathlib.Path, suffix: str) -> Optional[pathlib.Path]:
+def rocprof_csv(outdir: pathlib.Path, suffix: str) -> pathlib.Path | None:
     """The report under ``outdir`` whose name ends in ``suffix``, or ``None``.
 
     Searched RECURSIVELY and taken in sorted order: ``rocprofv3`` writes flat in some releases and
@@ -578,7 +659,9 @@ def rocprof_csv(outdir: pathlib.Path, suffix: str) -> Optional[pathlib.Path]:
     return next(iter(sorted(outdir.rglob("*" + suffix))), None)
 
 
-def rocprof_reports(outdir: pathlib.Path, *, tool: str, proc: subprocess.CompletedProcess) -> Dict[str, List[dict]]:
+def rocprof_reports(
+    outdir: pathlib.Path, *, tool: str, proc: subprocess.CompletedProcess[str]
+) -> dict[str, list[CsvRow]]:
     """Read what ``tool`` left in ``outdir`` as ``{report suffix: rows}``.
 
     Keyed by :data:`ROCPROF_REPORTS` for both tools, so the caller reads one shape: legacy
@@ -589,7 +672,7 @@ def rocprof_reports(outdir: pathlib.Path, *, tool: str, proc: subprocess.Complet
     died, and only a profiler that exited cleanly with no report is a ``rocprof_report_missing``.
     """
     if tool == "rocprofv3":
-        found = {suffix: rocprof_csv(outdir, suffix) for suffix in ROCPROF_REPORTS}
+        found: dict[str, pathlib.Path | None] = {suffix: rocprof_csv(outdir, suffix) for suffix in ROCPROF_REPORTS}
     else:
         found = {suffix: None for suffix in ROCPROF_REPORTS}
         found[KERNEL_STATS_CSV] = rocprof_csv(outdir, LEGACY_STATS_CSV)
@@ -598,7 +681,7 @@ def rocprof_reports(outdir: pathlib.Path, *, tool: str, proc: subprocess.Complet
     return {suffix: parse_csv(path.read_text()) if path else [] for suffix, path in found.items()}
 
 
-def rocprof_failure(proc: subprocess.CompletedProcess, tool: str) -> GpuProfilerUnavailable:
+def rocprof_failure(proc: subprocess.CompletedProcess[str], tool: str) -> GpuProfilerUnavailable:
     """Classify a ``tool`` run that produced no kernel report.
 
     A device-access refusal is separated from every other failure for the same reason the NVIDIA
@@ -626,7 +709,7 @@ def rocprof_failure(proc: subprocess.CompletedProcess, tool: str) -> GpuProfiler
     )
 
 
-def wavefront_size(agent_rows: List[dict]) -> Optional[int]:
+def wavefront_size(agent_rows: Sequence[CsvRow]) -> int | None:
     """The GPU agent's wavefront width from ``*_agent_info.csv``, or ``None`` when no agent report
     was written (legacy ``rocprof`` writes none).
 
@@ -643,15 +726,15 @@ def wavefront_size(agent_rows: List[dict]) -> Optional[int]:
     return None
 
 
-def split_reports(stdout: str) -> Dict[str, str]:
+def split_reports(stdout: str) -> dict[str, str]:
     """Split one ``nsys stats`` stdout into ``{report name: its CSV}``.
 
     ``nsys`` prints each report under a ``** Title (report_name):`` banner; without splitting on it
     the four CSVs concatenate into one table whose headers appear as rows.
     """
-    sections: Dict[str, str] = {}
+    sections: dict[str, str] = {}
     name = ""
-    lines: List[str] = []
+    lines: list[str] = []
     for line in stdout.splitlines():
         match = SECTION.match(line)
         if match is None:
@@ -665,7 +748,7 @@ def split_reports(stdout: str) -> Dict[str, str]:
     return sections
 
 
-def parse_csv(text: str) -> List[dict]:
+def parse_csv(text: str) -> list[CsvRow]:
     """One report's CSV as a list of ordered row dicts (empty when the report had no data).
 
     :data:`STATS_NOISE` lines are dropped first: ``nsys`` interleaves progress and "no data"
@@ -674,10 +757,15 @@ def parse_csv(text: str) -> List[dict]:
     lines = [ln for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith(STATS_NOISE)]
     if len(lines) < 2:
         return []
-    return [dict(row) for row in csv.DictReader(lines)]
+    # A short row's missing cells come back as None and a long one's overflow under a None key:
+    # the empty cell keeps its column (the report HAS it), the overflow has no column to keep.
+    return [
+        {header: value or "" for header, value in row.items() if isinstance(header, str)}
+        for row in csv.DictReader(lines)
+    ]
 
 
-def find(row: dict, *prefixes: str) -> Tuple[str, str]:
+def find(row: CsvRow, *prefixes: str) -> tuple[str, str]:
     """The first ``(header, value)`` in ``row`` whose header starts with one of ``prefixes``.
 
     Columns are located by PREFIX rather than by index or exact name because ``nsys`` renames them
@@ -691,12 +779,12 @@ def find(row: dict, *prefixes: str) -> Tuple[str, str]:
     return "", ""
 
 
-def column(row: dict, *prefixes: str) -> str:
+def column(row: CsvRow, *prefixes: str) -> str:
     """:func:`find`'s value alone -- ``""`` when no column matched."""
     return find(row, *prefixes)[1]
 
 
-def optional_int(row: dict, *prefixes: str) -> Optional[int]:
+def optional_int(row: CsvRow, *prefixes: str) -> int | None:
     """The column as an int, or ``None`` when the report HAS no such column.
 
     The distinction :func:`column` cannot make and this path needs: legacy ``rocprof`` reports no
@@ -722,7 +810,7 @@ def number(text: str) -> float:
     return float(cleaned) if cleaned else 0.0
 
 
-def kernel_stats(rows: List[dict], min_percent: float = 0.0) -> Tuple[List[dict], int]:
+def kernel_stats(rows: Sequence[CsvRow], min_percent: float = 0.0) -> tuple[list[KernelStat], int]:
     """Per-kernel summary rows -> ``(kernels, omitted)``, hottest first.
 
     ONE reader for ``nsys``' ``cuda_gpu_kern_sum`` and for rocprof's ``*_kernel_stats.csv``: the
@@ -735,7 +823,7 @@ def kernel_stats(rows: List[dict], min_percent: float = 0.0) -> Tuple[List[dict]
     rep count changes, the mean is not. Kernels below ``min_percent`` of device time are dropped
     and COUNTED, so the caller can say how many rather than quietly shortening the list.
     """
-    stats = [
+    stats: list[KernelStat] = [
         {
             "name": column(row, "Name"),
             "instances": int(number(column(row, "Instances", "Count", "Calls"))),
@@ -780,7 +868,7 @@ def direction(operation: str) -> str:
     return "other"
 
 
-def memory_stats(time_rows: List[dict], size_rows: List[dict]) -> List[dict]:
+def memory_stats(time_rows: Sequence[CsvRow], size_rows: Sequence[CsvRow]) -> list[MemoryStat]:
     """``cuda_gpu_mem_time_sum`` + ``cuda_gpu_mem_size_sum`` joined per operation.
 
     The two reports are separate because they answer separate questions (how long, how much), and
@@ -796,7 +884,7 @@ def memory_stats(time_rows: List[dict], size_rows: List[dict]) -> List[dict]:
     answer; a 0 MB transfer that took 2.4 ms is not.
     """
     sizes = {column(row, "Operation", "Name"): row for row in size_rows}
-    out = []
+    out: list[MemoryStat] = []
     for row in time_rows:
         operation = column(row, "Operation", "Name")
         size = sizes.get(operation)
@@ -817,15 +905,15 @@ def memory_stats(time_rows: List[dict], size_rows: List[dict]) -> List[dict]:
 
 def launch_row(
     name: str,
-    grid: Tuple[int, ...],
-    block: Tuple[int, ...],
+    grid: tuple[int, ...],
+    block: tuple[int, ...],
     *,
-    registers: Optional[int],
-    shared_memory: Optional[float],
-    shared_unit: Optional[str],
+    registers: int | None,
+    shared_memory: float | None,
+    shared_unit: str | None,
     launches: int,
-    lane_width: Optional[int],
-) -> dict:
+    lane_width: int | None,
+) -> LaunchRow:
     """One launch geometry, in the shape both vendors answer in.
 
     Built in one place so the NVIDIA and AMD readers cannot drift into two schemas: ``grid`` is
@@ -849,14 +937,15 @@ def launch_row(
     }
 
 
-def launch_configs(rows: List[dict]) -> List[dict]:
+def launch_configs(rows: Sequence[CsvRow]) -> list[LaunchRow]:
     """``cuda_gpu_trace`` rows -> the DISTINCT launch geometries, most-launched first.
 
     One row per launch is thousands of rows saying the same thing; what varies -- and what bounds
     occupancy -- is the geometry. Rows without a grid dimension are memory operations, which
     :func:`memory_stats` already covers.
     """
-    seen: Dict[Tuple, int] = {}  # insertion-ordered, so equal-count geometries render stably
+    # Insertion-ordered, so equal-count geometries render stably.
+    seen: dict[tuple[str, tuple[int, ...], tuple[int, ...], int, float, str], int] = {}
     for row in rows:
         if not column(row, "GrdX", "Grid X"):
             continue
@@ -886,7 +975,7 @@ def launch_configs(rows: List[dict]) -> List[dict]:
     return sorted(configs, key=lambda c: (-c["launches"], c["name"]))
 
 
-def rocprof_launch_configs(rows: List[dict], lane_width: Optional[int]) -> List[dict]:
+def rocprof_launch_configs(rows: Sequence[CsvRow], lane_width: int | None) -> list[LaunchRow]:
     """``*_kernel_trace.csv`` rows -> the DISTINCT launch geometries, most-launched first.
 
     HSA counts a grid in WORK-ITEMS where CUDA counts it in BLOCKS, so the block count is the
@@ -905,7 +994,8 @@ def rocprof_launch_configs(rows: List[dict], lane_width: Optional[int]) -> List[
     What still comes back absent: the warps per block when no agent report named the wavefront
     width, and either geometry field on a report that omits its column.
     """
-    seen: Dict[Tuple, int] = {}  # insertion-ordered, so equal-count geometries render stably
+    # Insertion-ordered, so equal-count geometries render stably.
+    seen: dict[tuple[str, tuple[int, ...], tuple[int, ...], float | None, int | None], int] = {}
     for row in rows:
         block = tuple(int(number(column(row, f"Workgroup_Size_{axis}", f"Workgroup Size {axis}"))) for axis in "XYZ")
         grid = tuple(int(number(column(row, f"Grid_Size_{axis}", f"Grid Size {axis}"))) for axis in "XYZ")
@@ -936,7 +1026,7 @@ def rocprof_launch_configs(rows: List[dict], lane_width: Optional[int]) -> List[
     return sorted(configs, key=lambda c: (-c["launches"], c["name"]))
 
 
-def child_argv(request_file: pathlib.Path) -> List[str]:
+def child_argv(request_file: pathlib.Path) -> list[str]:
     """The measured child, identical under either profiler -- one measurement, two tracers.
 
     NOT :func:`hpcagent_bench.harness.profiling.child_argv` despite the identical shape: this one
@@ -982,8 +1072,8 @@ def profile_nvidia_once(
     if not kernels and not omitted:
         raise empty_trace("nsys")
     return GpuRun(
-        elapsed_ns=int(result["elapsed_ns"]),
-        reps=int(result["reps"]),
+        elapsed_ns=profiling.as_int(result["elapsed_ns"], "elapsed_ns"),
+        reps=profiling.as_int(result["reps"], "reps"),
         kernels=kernels,
         memory=memory_stats(reports.get(MEM_TIME_REPORT, []), reports.get(MEM_SIZE_REPORT, [])),
         launches=launch_configs(reports.get(TRACE_REPORT, [])),
@@ -1017,8 +1107,8 @@ def profile_amd_once(root: pathlib.Path, request_file: pathlib.Path, *, timeout:
     if not kernels and not omitted:
         raise empty_trace(tool)
     return GpuRun(
-        elapsed_ns=int(result["elapsed_ns"]),
-        reps=int(result["reps"]),
+        elapsed_ns=profiling.as_int(result["elapsed_ns"], "elapsed_ns"),
+        reps=profiling.as_int(result["reps"], "reps"),
         kernels=kernels,
         memory=memory_stats(reports[MEMORY_STATS_CSV], []),
         launches=rocprof_launch_configs(reports[KERNEL_TRACE_CSV], wavefront_size(reports[AGENT_INFO_CSV])),
@@ -1043,7 +1133,7 @@ def per_rep_ns(device_ns: int, reps: int, warmup: int) -> float:
     return device_ns / total if total else 0.0
 
 
-def shown(value: Union[int, float, None]) -> str:
+def shown(value: int | float | None) -> str:
     """A geometry field for the text report: ``--`` when the tool did not record it.
 
     The rendered half of the payload's ``null``. Printing ``None``, or worse a ``0``, would read as
@@ -1054,7 +1144,7 @@ def shown(value: Union[int, float, None]) -> str:
     return f"{value:g}" if isinstance(value, float) else str(value)
 
 
-def render_report(payload: dict) -> str:
+def render_report(payload: GpuPayload) -> str:
     """The human view of a GPU profile: the device/host split, the kernels, the transfers, the
     launch geometry. Shipped WITH the JSON, exactly as the host path does -- an agent reads the
     rows, a human reads this, and neither re-derives the other's view.
@@ -1108,10 +1198,10 @@ def profile_gpu_submission(
     *,
     preset: str = "S",
     datatype: str = "float64",
-    reps: Optional[int] = None,
+    reps: int | None = None,
     min_percent: float = 1.0,
     counters: bool = False,
-) -> dict:
+) -> GpuPayload | profiling.BuildFailure:
     """Build, run and trace ``submission`` on the GPU; returns the profile payload.
 
     Raises :class:`GpuProfilerUnavailable` when this host cannot trace (checked FIRST, before
@@ -1158,10 +1248,36 @@ def profile_gpu_submission(
         # The inner per-rep guard bounds the measurement; this is the backstop for a child that
         # wedges outside a rep, plus the profiler's own post-processing of the recording.
         outer = rep_timeout * (reps + warmup + 2)
-        run = profile_gpu_once(sandbox.root, request, language=task.language, timeout=outer, min_percent=min_percent)
+        run = profile_gpu_once(
+            profiling.sandbox_root(sandbox),
+            request,
+            language=task.language,
+            timeout=outer,
+            min_percent=min_percent,
+        )
+        return gpu_payload(
+            task, run, preset=preset, datatype=datatype, symbol=symbol, warmup=warmup, min_percent=min_percent
+        )
 
+
+def gpu_payload(
+    task: Task,
+    run: GpuRun,
+    *,
+    preset: str,
+    datatype: str,
+    symbol: str,
+    warmup: int,
+    min_percent: float,
+) -> GpuPayload:
+    """The traced run as the route answers it, rendering included.
+
+    Separate from :func:`profile_gpu_submission` so the payload is built from the :class:`GpuRun`
+    and nothing else -- the recording is already read by then, and the answer must not depend on
+    the sandbox still being open.
+    """
     device_per_rep = per_rep_ns(run.device_ns, run.reps, warmup)
-    payload = {
+    payload: GpuPayload = {
         "build_ok": True,
         "kernel": task.kernel,
         "language": task.language,
@@ -1189,7 +1305,7 @@ def profile_gpu_submission(
     return payload
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     """CHILD entry: run the measurement and print the result line the parent reads.
 
     The same :data:`~hpcagent_bench.harness.profiling.RESULT_PREFIX` protocol the host path's child
@@ -1202,7 +1318,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # at runtime init the same way. A bare fork() child inherits the injection but not a working
     # subscriber, so the measured worker must be spawned or the trace is empty.
     config.set_override("runtime.mp_context", "spawn")
-    request = json.loads(pathlib.Path(args.request).read_text())
+    request = profiling.child_request(pathlib.Path(args.request).read_text())
     print(profiling.RESULT_PREFIX + json.dumps(profiling.run_workload(request)))
     return 0
 

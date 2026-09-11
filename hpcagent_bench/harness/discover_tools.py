@@ -16,7 +16,8 @@ import re
 import shutil
 import subprocess
 import sys
-from typing import Any
+from collections.abc import Callable
+from typing import TypeAlias, TypedDict, cast
 
 import yaml
 
@@ -25,10 +26,65 @@ TOOLSET = _PKG / "envs" / "toolset.yaml"
 TARGETS = ("cpu", "nvidia", "amd")
 _VERSION_RE = re.compile(r"\d+(?:\.\d+)+")
 
+#: One ``toolset.yaml`` tool entry as the loader hands it over. A YAML mapping proves nothing about
+#: its values, so they stay ``object`` until :func:`_as_list` converts the one being read.
+ToolSpec: TypeAlias = "dict[str, object]"
 
-def detect_platform() -> dict[str, Any]:
+
+class PlatformInfo(TypedDict):
+    """The host the probe ran on, as the report records it."""
+
+    system: str
+    machine: str
+    wsl: bool
+    distro: str
+
+
+class Evidence(TypedDict, total=False):
+    """What a positive detection carries beyond the yes/no; a miss carries none of it.
+
+    ``path`` and ``version`` come from a binary, ``via`` names the strategy that resolved a
+    library, ``variants`` lists every name a binary answered to.
+    """
+
+    path: str
+    version: str | None
+    via: str
+    variants: list[str]
+
+
+class DetectResult(Evidence):
+    """One detector's answer: whether the tool is here, plus its evidence."""
+
+    found: bool
+
+
+class ToolEntry(DetectResult):
+    """One detection filed under its tool name, with the requirement the toolset declares."""
+
+    required_on: list[str]
+    optional: bool
+
+
+class Report(TypedDict):
+    """The whole probe: the host, then every tool by category."""
+
+    platform: PlatformInfo
+    categories: dict[str, dict[str, ToolEntry]]
+
+
+def as_block(raw: object) -> dict[str, object]:
+    """One YAML mapping, keyed by text, with the weakest TRUE statement about its values.
+
+    ``isinstance(raw, dict)`` proves it is a mapping and nothing about what is in it, so every
+    value stays ``object`` until it is converted. A node that is not a mapping reads as empty.
+    """
+    return {str(k): v for k, v in cast("dict[object, object]", raw).items()} if isinstance(raw, dict) else {}
+
+
+def detect_platform() -> PlatformInfo:
     sysname = platform.system()  # Linux / Darwin / Windows
-    info = {"system": sysname.lower(), "machine": platform.machine(), "wsl": False}
+    info: PlatformInfo = {"system": sysname.lower(), "machine": platform.machine(), "wsl": False, "distro": ""}
     if sysname == "Darwin":
         info["distro"] = "macos " + platform.mac_ver()[0]
     elif sysname == "Linux":
@@ -46,13 +102,14 @@ def detect_platform() -> dict[str, Any]:
 
 def _linux_distro() -> str:
     try:
-        kv = dict(
-            line.rstrip().split("=", 1)
-            for line in pathlib.Path("/etc/os-release").read_text().splitlines()
-            if "=" in line
-        )
+        release = pathlib.Path("/etc/os-release").read_text()
     except OSError:
         return "linux"
+    kv: dict[str, str] = {}
+    for line in release.splitlines():
+        key, sep, value = line.rstrip().partition("=")
+        if sep:
+            kv[key] = value
     name = (kv.get("ID", "linux")).strip('"')
     ver = (kv.get("VERSION_ID", "")).strip('"')
     return f"{name} {ver}".strip()
@@ -60,7 +117,7 @@ def _linux_distro() -> str:
 
 def _accel_roots() -> list[str]:
     """CUDA + ROCm roots (which are usually NOT on the default loader path)."""
-    roots = []
+    roots: list[str] = []
     for env in ("CUDA_HOME", "CUDA_PATH", "CUDA_ROOT"):
         if os.environ.get(env):
             roots.append(os.environ[env])
@@ -72,7 +129,7 @@ def _accel_roots() -> list[str]:
     return [r for r in roots if os.path.isdir(r)]
 
 
-@functools.lru_cache(maxsize=1)
+@functools.lru_cache(maxsize=1, typed=True)
 def _lib_dirs() -> list[str]:
     dirs = ["/usr/lib", "/usr/local/lib", "/lib", "/usr/lib64", "/lib64", "/opt/homebrew/lib", "/usr/local/opt"]
     dirs += [os.path.join(r, sub) for r in _accel_roots() for sub in ("lib", "lib64", "targets/x86_64-linux/lib")]
@@ -80,7 +137,7 @@ def _lib_dirs() -> list[str]:
     return [d for d in dirs if os.path.isdir(d)]
 
 
-@functools.lru_cache(maxsize=1)
+@functools.lru_cache(maxsize=1, typed=True)
 def _include_dirs() -> list[str]:
     dirs = ["/usr/include", "/usr/local/include", "/opt/homebrew/include"]
     dirs += [os.path.join(r, "include") for r in _accel_roots()]
@@ -88,7 +145,7 @@ def _include_dirs() -> list[str]:
     return [d for d in dirs if os.path.isdir(d)]
 
 
-@functools.lru_cache(maxsize=1)
+@functools.lru_cache(maxsize=1, typed=True)
 def _ldconfig_index() -> dict[str, str]:
     """soname -> path map from `ldconfig -p` (Linux glibc only; empty elsewhere)."""
     if not shutil.which("ldconfig"):
@@ -121,28 +178,29 @@ def _run_version(cmd: str, args: list[str] | None) -> str | None:
     return None
 
 
-def detect_binary(spec: dict[str, Any]) -> dict[str, Any]:
-    found = []
-    for name in spec["names"]:
+def detect_binary(spec: ToolSpec) -> DetectResult:
+    found: list[tuple[str, str]] = []
+    for name in _as_list(spec["names"]):
         path = shutil.which(name)
         if path:
-            found.append({"name": name, "path": path})
+            found.append((name, path))
     if not found:
         return {"found": False}
-    chosen = found[0]  # names are in prefer-latest order
+    chosen_path = found[0][1]  # names are in prefer-latest order
     return {
         "found": True,
-        "path": chosen["path"],
-        "version": _run_version(chosen["path"], spec.get("version_arg")),
-        "variants": [f["name"] for f in found],
+        "path": chosen_path,
+        "version": _run_version(chosen_path, _as_list(spec.get("version_arg", []))),
+        "variants": [name for name, _ in found],
     }
 
 
-def _as_list(v: str | list[str]) -> list[str]:
-    return v if isinstance(v, list) else [v]
+def _as_list(v: object) -> list[str]:
+    """One toolset field that may be spelled as a single name or a list of them, always as a list."""
+    return [str(item) for item in cast("list[object]", v)] if isinstance(v, list) else [str(v)]
 
 
-def detect_library(spec: dict[str, Any]) -> dict[str, Any]:
+def detect_library(spec: ToolSpec) -> DetectResult:
     # 1) pkg-config (authoritative; gives a version)
     if shutil.which("pkg-config"):
         for pc in _as_list(spec.get("pkgconfig", [])):
@@ -172,30 +230,34 @@ def detect_library(spec: dict[str, Any]) -> dict[str, Any]:
     return {"found": False}
 
 
-def detect_header(spec: dict[str, Any]) -> dict[str, Any]:
+def detect_header(spec: ToolSpec) -> DetectResult:
     return detect_library({"header": spec["header"]})
 
 
-DETECTORS = {"binary": detect_binary, "library": detect_library, "header": detect_header}
+DETECTORS: dict[str, Callable[[ToolSpec], DetectResult]] = {
+    "binary": detect_binary,
+    "library": detect_library,
+    "header": detect_header,
+}
 
 
-def discover() -> dict[str, Any]:
-    toolset = yaml.safe_load(TOOLSET.read_text())
-    report: dict[str, Any] = {"platform": detect_platform(), "categories": {}}
+def discover() -> Report:
+    toolset = as_block(yaml.safe_load(TOOLSET.read_text()))
+    report: Report = {"platform": detect_platform(), "categories": {}}
     for cat, tools in toolset.items():
-        out = {}
-        for tool, spec in tools.items():
-            res = DETECTORS[spec["detect"]](spec)
-            req_on = spec.get("required_on", [])
-            res["required_on"] = req_on
-            res["optional"] = not req_on
-            out[tool] = res
+        out: dict[str, ToolEntry] = {}
+        for tool, raw in as_block(tools).items():
+            spec = as_block(raw)
+            res = DETECTORS[str(spec["detect"])](spec)
+            req_on = _as_list(spec.get("required_on", []))
+            entry: ToolEntry = {**res, "required_on": req_on, "optional": not req_on}
+            out[tool] = entry
         report["categories"][cat] = out
     return report
 
 
-def missing_for_target(report: dict[str, Any], target: str) -> list[str]:
-    miss = []
+def missing_for_target(report: Report, target: str) -> list[str]:
+    miss: list[str] = []
     for cat in report["categories"].values():
         for tool, res in cat.items():
             if target in res.get("required_on", []) and not res["found"]:
@@ -203,7 +265,7 @@ def missing_for_target(report: dict[str, Any], target: str) -> list[str]:
     return miss
 
 
-def print_human(report: dict[str, Any]) -> None:
+def print_human(report: Report) -> None:
     p = report["platform"]
     wsl = " (WSL)" if p.get("wsl") else ""
     print(f"platform: {p['distro']}{wsl}  [{p['system']}/{p['machine']}]\n")

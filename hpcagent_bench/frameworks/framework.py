@@ -22,13 +22,33 @@ from typing import (
     runtime_checkable,
 )
 
-from hpcagent_bench import config
+from hpcagent_bench import config, precision
 from hpcagent_bench.frameworks import Benchmark
 from hpcagent_bench.languages import gpu_backend
-from hpcagent_bench.precision import Precision, float_complex_for
+from hpcagent_bench.precision import Precision
 
 if TYPE_CHECKING:
     from hpcagent_bench.optimize import OptimizeBudget
+
+#: The two numpy scalar types a datatype spelling resolves to. Both are ``np.generic`` subclasses at
+#: every precision, the low ones included: ml_dtypes registers bf16/fp8 as numpy scalar types.
+DtypePair = tuple[type[np.generic], type[np.generic]]
+
+
+@runtime_checkable
+class PrecisionModule(Protocol):
+    """The slice of :mod:`hpcagent_bench.precision` this file calls. ``float_complex_for`` leaves its
+    parameter unannotated there, so the shape it is called with is declared here."""
+
+    float_complex_for: Callable[[str | None], DtypePair]
+
+
+def float_complex_for(datatype: str | None) -> DtypePair:
+    """The ``(np_float, np_complex)`` numpy scalar types for a datatype spelling (``None`` -> fp64)."""
+    if not isinstance(precision, PrecisionModule):
+        raise RuntimeError("hpcagent_bench.precision exposes no float_complex_for")
+    return precision.float_complex_for(datatype)
+
 
 # The fp64 pair set_datatype resolves for a datatype of None, so a kernel that reads these before
 # any framework has set them computes at the default precision instead of at dtype None -- which
@@ -111,12 +131,21 @@ def is_numpy_array(value: ArgValue) -> TypeGuard[ArrayLike]:
     return isinstance(value, np.ndarray)
 
 
+@runtime_checkable
+class SparseModule(Protocol):
+    """The slice of :mod:`scipy.sparse` this file calls. scipy ships no type stubs and leaves
+    ``issparse``'s argument unannotated, so the shape is declared here."""
+
+    issparse: Callable[[object], bool]
+
+
 def is_dense(value: AnyArray) -> TypeGuard[ArrayLike]:
     """Whether ``np.copy`` can copy ``value`` as an array. A scipy.sparse matrix cannot: np.copy
-    wraps one in a 0-d object array and ``A @ x`` then breaks. scipy ships no type stubs, so this is
-    the single place that asks it."""
+    wraps one in a 0-d object array and ``A @ x`` then breaks. This is the single place that asks it."""
     import scipy.sparse
 
+    if not isinstance(scipy.sparse, SparseModule):
+        raise RuntimeError("scipy.sparse exposes no issparse")
     return not scipy.sparse.issparse(value)
 
 

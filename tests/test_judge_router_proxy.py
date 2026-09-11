@@ -10,6 +10,7 @@ and say so wrongly. The ONE thing it withholds is the held-out seed's own verdic
 oracle to iterate against rather than a measurement.
 """
 
+import sys
 import importlib.util
 import json
 import pathlib
@@ -104,6 +105,9 @@ def service():
     import_or_skip("httpx")
     spec = importlib.util.spec_from_file_location("judge_service_example", SERVICE)
     module = importlib.util.module_from_spec(spec)
+    # Registered BEFORE exec: dataclasses resolves a string annotation through
+    # sys.modules[cls.__module__], which is None for a module loaded by path alone.
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 

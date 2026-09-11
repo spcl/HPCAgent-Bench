@@ -5,21 +5,25 @@
 both the DDL (``create_all``) and row inserts, replacing the old hand-written CREATE TABLE/INSERT pair."""
 
 from __future__ import annotations
-from typing import Optional
+from typing import ClassVar
 
+from sqlalchemy import Table
 from sqlalchemy.engine import Engine
 from sqlmodel import Field, SQLModel, create_engine
+
+#: The table name; SQLModel's default would be the class name lowercased, which is not it.
+RESULTS_TABLE = "results"
 
 
 class Result(SQLModel, table=True):
     """One (framework, flavor, build, benchmark, preset, datatype, variant) runtime sample."""
 
-    __tablename__ = "results"
+    __tablename__: ClassVar[str] = RESULTS_TABLE
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     timestamp: int  # epoch seconds; groups the rows of one run
     benchmark: str  # kernel short_name
-    domain: Optional[str] = None  # taxonomy label; used as a heatmap grouping key
+    domain: str | None = None  # taxonomy label; used as a heatmap grouping key
     preset: str  # S | M | L | XL
     framework: str  # numpy | dace_cpu | jax | ... -- the backend, WITHOUT its flavor suffix
     # Which optimizer inside the framework produced this row: dace_cpu's `parallel` / `autoopt` /
@@ -28,20 +32,20 @@ class Result(SQLModel, table=True):
     # and `flavor` is what tells them apart. One flat name on the CLI (`--framework
     # dace_cpu_parallel`), two columns here; framework.split_flavor is the one place that maps
     # between them.
-    flavor: Optional[str] = None
-    agent: Optional[str] = None  # who produced the optimization (None == direct framework run)
+    flavor: str | None = None
+    agent: str | None = None  # who produced the optimization (None == direct framework run)
     validated: bool  # output matched the NumPy oracle
     time: float  # host-measured runtime, milliseconds
-    native_time: Optional[float] = None  # framework-internal runtime, ms (None if no native timer)
-    datatype: Optional[str] = None  # float32 | float64 | ... (None == legacy float64)
-    variant: Optional[str] = None  # sparse storage/distribution axis (None == dense)
+    native_time: float | None = None  # framework-internal runtime, ms (None if no native timer)
+    datatype: str | None = None  # float32 | float64 | ... (None == legacy float64)
+    variant: str | None = None  # sparse storage/distribution axis (None == dense)
     # WHICH BUILD ran it -- upstream `main` vs the fork's `extended`, a different BLAS, a different
     # image. A separate axis from `flavor` because you cannot ASK for it: the flavor is a column you
     # name on the command line, the build is whatever PYTHONPATH resolved to, so it is stamped by
     # the launcher (HPCAGENT_BENCH_RECORD_BUILD) exactly like `execution`. NULL == single-build run.
     # Without it, the same pipeline measured on two DaCe trees is two indistinguishable rows.
-    build: Optional[str] = None
-    prompt_hash: Optional[str] = None  # -> the content-addressed prompt store (None if no prompt)
+    build: str | None = None
+    prompt_hash: str | None = None  # -> the content-addressed prompt store (None if no prompt)
     execution: str = "native"  # native (no container) | container -- where the runtime was measured
     # WHICH MACHINE measured it. Two nodes are two experiments: a baseline timed on one CPU against
     # a candidate timed on another is a hardware comparison wearing a software label, and nothing
@@ -53,7 +57,7 @@ class Result(SQLModel, table=True):
     # The DEVICE the measurement ran on; NULL for a CPU-only column. Not "the GPU in this box": a
     # device that took no part in the run must not split the figure for it, or the same CPU
     # measurement lands in two plots because someone swapped a card that was never used.
-    gpu: Optional[str] = None
+    gpu: str | None = None
 
 
 def add_missing_columns(engine: Engine) -> None:
@@ -69,9 +73,10 @@ def add_missing_columns(engine: Engine) -> None:
     ADD COLUMN only: additive, no table rewrite, cannot lose a row, and a legacy row reads back with
     NULL for the new column -- which is exactly what "this run predates the axis" means. A missing
     NOT NULL column is NOT invented: there is no honest value to backfill, so it is raised."""
-    table = Result.__table__
+    # The metadata, not ``Result.__table__``: the same Table object, and the one spelling typed.
+    table: Table = SQLModel.metadata.tables[RESULTS_TABLE]
     with engine.connect() as conn:
-        present = {row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table.name})")}
+        present: set[str] = {row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table.name})")}
         if not present:
             return  # create_all just built it from the model; nothing to reconcile
         for name, column in table.columns.items():

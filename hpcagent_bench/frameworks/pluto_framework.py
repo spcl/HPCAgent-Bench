@@ -19,14 +19,15 @@ from __future__ import annotations
 import json
 import shlex
 import subprocess
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from collections.abc import Callable, Sequence
 
 from hpcagent_bench import pluto_transform
 from hpcagent_bench.benchmarks import cpp_runtime
 from hpcagent_bench.frameworks import Benchmark
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework
-from hpcagent_bench.frameworks.framework import CallPlan
+from hpcagent_bench.frameworks.framework import ArgValue, BenchData, CallPlan, KernelImpl, KernelResult
 from hpcagent_bench.frameworks.native_framework import NativeFramework
+from hpcagent_bench.spec import as_block, as_list
 
 
 class PlutoFramework(NativeFramework):
@@ -37,7 +38,7 @@ class PlutoFramework(NativeFramework):
     #: carries no benchmark and the gate needs a name to ask the oracle about.
     gate_kernel: str = ""
 
-    def build_call(self, bench: Benchmark, impl: Callable, bdata: Dict[str, Any]) -> CallPlan:
+    def build_call(self, bench: Benchmark, impl: KernelImpl, bdata: BenchData) -> CallPlan:
         """The base plan, plus the kernel name :meth:`measure` needs; the last hook before timing
         that still sees the benchmark."""
         self.gate_kernel = self._native_base(bench)
@@ -45,12 +46,12 @@ class PlutoFramework(NativeFramework):
 
     def measure(
         self,
-        impl: Any,
-        runner: Callable[[], Any],
+        impl: KernelImpl,
+        runner: Callable[[], KernelResult],
         repeat: int,
-        before_each: Optional[Callable[[], None]] = None,
-        warmup: Optional[int] = None,
-    ) -> Dict[str, Optional[List[float]]]:
+        before_each: Callable[[], None] | None = None,
+        warmup: int | None = None,
+    ) -> dict[str, list[float] | None]:
         """Time the column only once the oracle has graded its transformed binary ``ok``.
 
         The gate runs HERE, before ``create_timer``: a verdict fetched from inside the timed bracket
@@ -72,8 +73,8 @@ class PlutoFramework(NativeFramework):
         return super().measure(impl, runner, repeat, before_each=before_each, warmup=warmup)
 
     def call_args(
-        self, bench: Benchmark, impl: Callable, resolved: Dict[str, Any], bdata: Dict[str, Any]
-    ) -> Tuple[Sequence[Any], Dict[str, Any]]:
+        self, bench: Benchmark, impl: KernelImpl, resolved: dict[str, ArgValue], bdata: BenchData
+    ) -> tuple[Sequence[ArgValue], dict[str, ArgValue]]:
         """Arguments in POLYCC's order, which is not the shared C ABI's order.
 
         The emitted scop passes rank>=2 arrays as VLA parameters (``const double A[restrict NI][NK]``)
@@ -104,7 +105,7 @@ class PlutoFramework(NativeFramework):
                 "difference, so there is no safe default to fall back to",
             )
         declared = {a.name: a for a in (self._abi_args(bench) or [])}
-        out: List[Any] = []
+        out: list[ArgValue] = []
         for name in order:
             if name in resolved:
                 out.append(resolved[name])
@@ -120,7 +121,7 @@ class PlutoFramework(NativeFramework):
                 out.append(self._alloc_output(arg, bdata))
         return out, {}
 
-    def _pluto_arg_names(self, bench: Benchmark) -> Optional[List[str]]:
+    def _pluto_arg_names(self, bench: Benchmark) -> list[str] | None:
         """polycc's argument ORDER, from any ``<base>_fpNN_pluto_binding.json``; ``None`` when none
         was emitted.
 
@@ -131,12 +132,12 @@ class PlutoFramework(NativeFramework):
         """
         paths = sorted(self._cpp_backend(bench).glob(f"{self._native_base(bench)}_fp*_pluto_binding.json"))
         for path in paths:
-            args = json.loads(path.read_text()).get("args")
+            args = as_list(as_block(json.loads(path.read_text())).get("args"))
             if args:
-                return [a["name"] for a in args]
+                return [str(as_block(a)["name"]) for a in args]
         return None
 
-    def opt_report(self, program: Any, bench: Benchmark) -> Optional[str]:
+    def opt_report(self, program: KernelImpl, bench: Benchmark) -> str | None:
         """Pluto's polyhedral transformation report, followed by the C compiler's vectorization report.
 
         Two reports because two tools shape this column and they answer different questions: polycc
@@ -147,7 +148,7 @@ class PlutoFramework(NativeFramework):
         parts = [p for p in (self.polycc_report(bench), super().opt_report(program, bench)) if p]
         return "\n\n".join(parts) if parts else None
 
-    def polycc_report(self, bench: Benchmark) -> Optional[str]:
+    def polycc_report(self, bench: Benchmark) -> str | None:
         """polycc's transformation report for this kernel's scops, or ``None`` when there is none.
 
         ``None`` covers two normal answers: polycc is not installed, and the translator emitted no
@@ -180,7 +181,7 @@ class PlutoFramework(NativeFramework):
         if not scops:
             return None
         timeout = pluto_transform.polycc_report_timeout_s()
-        chunks: List[str] = ["==== polycc transformation report ===="]
+        chunks: list[str] = ["==== polycc transformation report ===="]
         for scop in scops:
             try:
                 pluto_transform.assert_affine(scop, base)
@@ -188,6 +189,9 @@ class PlutoFramework(NativeFramework):
                 chunks.append(f"---- {scop.name} ----\nskipped: {exc}")
                 continue
             out = pluto_transform.transformed_path(scop)
+            cmd: list[str]
+            # run_polycc runs the child with text=True, so both streams come back as str.
+            proc: subprocess.CompletedProcess[str]
             try:
                 cmd, proc = pluto_transform.run_polycc(scop, out, pluto_transform.POLYCC_REPORT_ARGS, timeout=timeout)
             except subprocess.TimeoutExpired:
@@ -199,7 +203,7 @@ class PlutoFramework(NativeFramework):
             chunks.append(f"---- {scop.name} ----\n$ {shlex.join(cmd)}\n{proc.stdout}{proc.stderr}")
         return "\n\n".join(chunks)
 
-    def generated_source(self, program: Any, bench: Benchmark) -> Optional[str]:
+    def generated_source(self, program: KernelImpl, bench: Benchmark) -> str | None:
         """The sources this column compiled -- polycc's OUTPUT, which is what it now builds.
 
         The base class promises "the polyhedrally-transformed code" for a source-to-source backend.

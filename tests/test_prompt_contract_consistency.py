@@ -12,6 +12,7 @@ viewed three ways -- ``GET /build/<language>``, ``containers/agent/build-<langua
 it was prose.
 """
 
+import sys
 import importlib.util
 import json
 import pathlib
@@ -120,6 +121,9 @@ def driver_module():
     it imports stdlib only -- which is the property the slot test is here to hold."""
     spec = importlib.util.spec_from_file_location("agent_driver", DRIVER)
     module = importlib.util.module_from_spec(spec)
+    # Registered BEFORE exec: dataclasses resolves a string annotation through
+    # sys.modules[cls.__module__], which is None for a module loaded by path alone.
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -130,6 +134,9 @@ def driver_module():
 GENERATOR = pathlib.Path(__file__).resolve().parents[1] / "scripts/gen_build_fragments.py"
 _spec = importlib.util.spec_from_file_location("gen_build_fragments", GENERATOR)
 gen = importlib.util.module_from_spec(_spec)
+# Registered BEFORE exec: dataclasses resolves a string annotation through
+# sys.modules[cls.__module__], which is None for a module loaded by path alone.
+sys.modules[_spec.name] = gen
 _spec.loader.exec_module(gen)
 
 #: A markdown code block's continued shell line, as the fragment folds it.

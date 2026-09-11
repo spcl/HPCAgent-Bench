@@ -9,6 +9,7 @@ value of "measured, and nothing changed". Both are pure functions, so both are t
 rendering anything.
 """
 
+import sys
 import importlib.util
 import math
 import pathlib
@@ -26,6 +27,9 @@ def load_script():
     """Import ``scripts/plot_speedup.py`` as a module (scripts/ is not a package)."""
     spec = importlib.util.spec_from_file_location("plot_speedup", REPO / "scripts" / "plot_speedup.py")
     module = importlib.util.module_from_spec(spec)
+    # Registered BEFORE exec: dataclasses resolves a string annotation through
+    # sys.modules[cls.__module__], which is None for a module loaded by path alone.
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
