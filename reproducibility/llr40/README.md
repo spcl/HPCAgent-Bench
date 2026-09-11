@@ -26,7 +26,7 @@ export PYTHONPATH=$S/optarena:$S/optarena/hpcagent_bench/numpy_translators/src
 | `lowerings/` | emitted C / C++ / Fortran for the 40 focus kernels, both precisions, + opt reports | 240 sources / 80 bindings |
 | `asm_reports/` | assembly + vectorizer report for every lowering CORPUS-WIDE | 1,792 lowerings / 3,585 files / 87 MB |
 | `timings/` | per-arm aggregate CSV and the merged per-job judge databases | 22 rows / 38 databases |
-| `analysis/` | per-kernel and per-arm speed-up tables (CSV + markdown) and figures (PDF + PNG) | 8 CSV / 4 MD / 2 figures |
+| `analysis/` | per-kernel and per-arm speed-up tables (CSV + markdown) and figures (PDF + PNG) | 12 CSV / 5 MD / 4 figures |
 | `data-llr8-superseded/` | the previous llr8 extraction, deliberately preserved | -- |
 
 ## Snapshot, and why it is a snapshot
@@ -100,10 +100,24 @@ it by design.
 ### Intervention efficacy -- `analysis/intervention_efficacy.csv`
 
 What the skill packet DID, as a point in the score--cost plane rather than a speed-up alone. Score is
-the arm's best verified speed-up on a kernel, cost is the tokens it spent there, and the two are
-paired per kernel between the arms of one `(model, language)` that ran with and without the packet.
-Both ratios are oriented so `1` is no effect and `>1` an improvement -- the cost ratio is inverted,
-so spending fewer tokens reads as a gain.
+the arm's best verified speed-up on a kernel, cost is the tokens the arm's episodes spent there, and
+the two are paired per kernel between the arms of one `(baseline, campaign, model, language)` that
+ran with and without the packet. The campaign is in that key because two campaigns of one model were
+served different rosters, and the denominator because a pair that does not share one is not a
+comparison. Both ratios are oriented so `1` is no effect and `>1` an improvement -- the cost ratio is
+inverted, so spending fewer tokens reads as a gain.
+
+**Cost comes from the `call` rows.** Only they carry a token count; a `submission` row carries none,
+so reading the cost off submissions yields an empty table and no efficacy at all, which is why this
+CSV was documented here and never produced. `calls.tokens` is CUMULATIVE through a call, so an
+episode's spend is its own maximum and a kernel's is the sum over its episodes.
+
+**The pairing DROPS kernels, and the survivors are not a fair sample.** `n_only_before`,
+`n_only_after` and `n_neither` count what the intersection removed and `coverage_p` is an exact
+McNemar on the discordant kernels. `before_geomean_paired` beside `before_geomean_all` is the bias
+directly: on `llr40v9-oss120b-c` the 2 kernels that survive pairing carry a before-geomean of 20.09x
+against 7.14x over the arm's own 4, so the pairing reports the easy half as the whole. That is why
+three of the four apparently positive packet effects reverse once the kernel set is held fixed.
 
 Read the two ratios, not `q`: `q` is a weighted sum of their logs and exists to RANK, so it can
 trade a speed-up against tokens at a weighting nobody agreed to. An arm that bought 5% more speed
@@ -114,8 +128,11 @@ ratio is a MEAN of per-kernel log differences and one kernel that moved 40x can 
 others did nothing. The `skills:all` row pools every pair, keyed by `model/language/kernel` so one
 model does not enter the pool forty times while another enters once.
 
-The same numbers are on every pair row of `ablation_stats.py`'s pair CSV, which computes them from
-the merged DBs directly; `hpcagent_bench.harness.efficacy` is the definition both follow.
+`ablation_stats.py`'s pair CSV computes the same quantities from the merged DBs directly and
+`hpcagent_bench.harness.efficacy` is the definition both follow, but the two are only comparable arm
+pair by arm pair: that script is pointed at two DBs by hand and does not itself split a mixed
+denominator, so an arm whose jobs graded against two references must be passed to it one denominator
+at a time.
 
 ## 2. The kernels themselves -- `kernels/`, `kernels_manifest.csv`
 
@@ -243,9 +260,13 @@ $S/venv-optarena-314/bin/python $S/optarena/scripts/collect_campaign.py \
     --out reproducibility/llr40/timings --csv
 ```
 
-- `timings/summary.csv` -- 22 rows, per-arm aggregate: `runs, subs, bench, geomean_su, median_su,
-  suspect`. `collect_campaign.py` owns this aggregation (one value per kernel, the best the arm
-  verified, geomean over kernels). The `adhoc` row is the pseudo-arm, not a condition.
+- `timings/summary.csv` -- **SUPERSEDED, and it cannot be regenerated.** Its 22 rows were produced
+  by a reduction `collect_campaign.py` no longer performs (a max over every submission ROW, which
+  scores best-of-N attempts) and pooled two grading denominators under one arm label. The llr40 run
+  roots have since been purged, so the command above cannot rebuild it. Read
+  `analysis/per_arm_summary.csv` instead: it is keyed on `(arm, baseline)` and computed from
+  `data/llr40_observations.csv`, which is the surviving record. The `adhoc` row is the pseudo-arm,
+  not a condition.
 - `timings/<job>.db` + `timings/<job>_prompts/` -- 38 per-job aggregate judge databases the same
   command builds, merged from the rank shards. Query these for anything `summary.csv` does not say.
 - **Per-submission timings are in `data/llr40_observations.csv`**, not duplicated here: the
@@ -261,40 +282,82 @@ $S/venv-optarena-314/bin/python analyze_llr40.py --artifact . --out analysis
 
 ### Aggregation rules, all load-bearing
 
+`hpcagent_bench/stats/population.py` owns every rule below and REFUSES rather than warns, so none
+of them can be bypassed by a caller that forgets.
+
 - **Geometric mean, always.** A speed-up is a ratio. Every aggregate is a geomean and every axis
   carrying one is logarithmic.
-- **One value per kernel, and it is the agent's FINAL answer.** A per-arm or per-language summary
-  is a geomean over one value per kernel, never over submission rows: pooling rows weights a kernel
-  by how often an agent resubmitted it, which made two arms incomparable earlier in this project.
-  That value is reduced on two axes. Within an episode -- one agent, one kernel -- the LAST verified
-  submission wins, because evaluation is single-shot and a max over an episode scores best-of-N
-  attempts rather than what the agent stopped at. Across episodes the BEST is kept, since how many
-  agents an arm runs is a property of the arm. The shift costs the worst-affected arm 47% of its
-  geomean (llr40v10-qwen38-c, 15.27x -> 8.13x) and C 14% against Fortran's 8%, so it narrows the
-  language gap without reversing it. `ablation_stats.py --dedup last` reduces the same way.
+- **One denominator per aggregate, and it is part of the key.** `baseline` is the reference the
+  judge divided by, and it is a property of the JOB: 32 of the 38 jobs graded against the
+  single-core C lowering, 6 against parallel numba. The same agent work on `tsvc_2_s231` reads
+  95.3x against a 1.02 s C reference and 1.82x against a 20.5 ms numba reference while its own
+  `native_ns` moves 7%. Every table is therefore keyed on `(arm, baseline)`, and
+  `analysis/denominator_split.csv` says which job graded against which. Four arms split in two, and
+  the three arm pairs that had no kernel in common under one denominator lose their comparison
+  entirely -- they were never identified, and `analysis/arm_pairs.csv` now says so.
+- **One value per kernel, and it is the agent's FINAL answer.** Within an EPISODE -- one agent, one
+  kernel -- the LAST verified submission wins, because evaluation is single-shot and a max over an
+  episode scores best-of-N attempts rather than what the agent stopped at. Across episodes the BEST
+  is kept, since how many agents an arm runs is a property of the arm. An episode is
+  `(run_root, job, run_id, benchmark)`: `run_id` is derived from the rank layout
+  (`<arm>.n<node>.p<problem>.w<worker>`), so 154 of the 226 run_ids here appear under more than one
+  job and deduplicating on it alone discards whole agent runs. `ablation_stats.py --dedup final` is
+  the same reduction and is that script's default; `--dedup best` (best-of-N across the arm) and
+  `--dedup last` (whichever agent submitted last) are its two sensitivity analyses and neither is
+  this number. One DB must be one JOB for `final` to identify an episode, which is what
+  `collect_campaign.py` writes.
+- **Two population policies, and every column names its own.** `geomean_solved` is over the kernels
+  the arm VERIFIED -- "how good when it works". `geomean_served` scores a kernel the arm was GIVEN
+  and never verified at 1.0 -- "how good overall", since a non-delivery leaves the baseline standing
+  and is a real outcome of the arm. The served roster is the kernels that `(arm, baseline)` slice has
+  a recorded observation for, never the full 40: a kernel it never saw is a scheduling fact, and the
+  llr40v9 arms were served 1 to 6 kernels before being cut. The two are never combined into one
+  number.
+- **A k-way ranking is over the kernels EVERY arm of the group solved, and it is a short list.**
+  `arm_ranking.csv` is that table. Holding the denominator fixed, the six llr40v10 arms share
+  **4 of 40** kernels they all verified -- not the 19 a pooled reading suggests -- and on those 4 the
+  order is `oss120b-c` (17.61x), `qwen38-c` (16.88x), `kimi27sglang-c` (14.00x), then all three
+  Fortran arms; the published table had `oss120b-c` fifth of six. Under the `served` policy the
+  group shares 14 kernels and `kimi27sglang-c` leads at 11.07x, with all three C arms above all
+  three Fortran ones either way.
+- **A per-arm row is not a comparison.** Each row's geomean is over that arm's own kernel set, so
+  dividing two of them is partly a statement about coverage: on the 21 arms of the previous
+  reduction `corr(log geomean, n_kernels)` was **-0.30**, meaning solving more kernels LOWERED the
+  score. `analysis/arm_pairs.csv` is the comparison table: every pair restricted to the kernels both
+  reached, with `unmatched_ratio` beside `matched_ratio`, `n_only_a`/`n_only_b`/`n_neither` for what
+  the intersection dropped, an exact McNemar p on those, and `direction_flips` marking the 96 of 432
+  pairs where matching reverses which arm is ahead.
+- **A language claim is PAIRED and carries an interval.** Two unpaired geomeans over two arm
+  populations cannot support a comparative claim: the per-kernel spread here is far larger than any
+  language effect, and the per-language max is a best-of-k with unequal k (C ran 126 arm-kernel
+  cells at 3.56 submissions each, Fortran 121 at 2.69). `per_language_summary.csv` therefore carries
+  `hl_c_over_fortran` with its distribution-free interval and signed-rank p, paired by
+  `(campaign, model, kernel)` inside one denominator.
 - **The median is a spread cue, never the headline.** It appears beside every geomean and is never
   reported alone.
 - **Non-positive speed-ups are DROPPED, not clamped.** A zero or a negative is a missing
   measurement, not a slow ratio. None occurred: all 780 submissions are 1.0x or more.
-
-`per_arm_summary` reproduces `timings/summary.csv` EXACTLY on all 21 arms, so this is a second view
-of `collect_campaign.py`'s number and not a second definition of it.
 
 ### Files
 
 | file | rows | what |
 |---|---|---|
 | `submissions_index.csv` | 780 | every submission: speed-up, timings, and the path to its exact submitted text |
-| `per_arm_kernel.csv` / `.md` | 252 | one row per arm per kernel: best speed-up, submission count, source path |
-| `arm_by_kernel_speedup.csv` | 21 x 40 | arm x kernel matrix of best verified speed-up, for pivoting |
-| `arm_by_kernel_counts.csv` | 21 x 40 | the same matrix of submission counts |
-| `per_arm_summary.csv` / `.md` | 21 | per-arm geomean over one value per kernel, + model, skills, runs |
-| `per_kernel_summary.csv` / `.md` | 40 | per-kernel geomean over one value per arm, + the best arm and its source |
-| `per_language_kernel.csv` | 40 | paired C-against-Fortran best per kernel, + the ratio |
-| `per_language_summary.csv` | 3 | per-language geomean over one value per kernel |
+| `submissions_index.csv` | 780 | every submission, now carrying `run_root` / `job` / `run_id` so an episode is identifiable |
+| `per_arm_kernel.csv` / `.md` | 307 | one row per (arm, baseline, kernel): best speed-up, submission count, source path |
+| `arm_by_kernel_speedup.csv` | 25 x 40 | (arm, baseline) x kernel matrix of best verified speed-up, for pivoting |
+| `arm_by_kernel_counts.csv` | 25 x 40 | the same matrix of submission counts |
+| `per_arm_summary.csv` / `.md` | 25 | per (arm, baseline): both policy geomeans with the n behind each |
+| `arm_pairs.csv` / `.md` | 432 | every arm pair sharing a denominator, over one kernel set, with what matching dropped |
+| `arm_ranking.csv` | 50 | the k-way ranking a sorted bar chart asserts, over the kernels EVERY arm of the group solved |
+| `denominator_split.csv` | 38 | which job graded against which reference |
+| `per_kernel_summary.csv` / `.md` | 80 | per (baseline, kernel) geomean over one value per arm, + the best arm and its source |
+| `per_language_kernel.csv` | 80 | paired C-against-Fortran best per kernel, per denominator |
+| `per_language_summary.csv` | 5 | per (baseline, language) geomean + the PAIRED HL estimate, interval and p |
 | `per_language.md` | -- | both language tables with the C++ caveat |
-| `figures/per_kernel_c_vs_fortran.pdf` / `.png` | -- | paired dumbbell, 39 kernels |
-| `figures/per_arm_geomean.pdf` / `.png` | -- | per-arm geomean bars with median ticks |
+| `intervention_efficacy.csv` | 7 | the skills A/B in the score-cost plane, with the coverage the pairing dropped |
+| `figures/per_kernel_c_vs_fortran_<baseline>.pdf` / `.png` | -- | paired dumbbell, one per denominator |
+| `figures/per_arm_geomean_<baseline>.pdf` / `.png` | -- | per-arm bars, served and solved, one per denominator |
 
 ### Reaching the source text from any number
 
@@ -307,25 +370,29 @@ their best row.
 
 ### What the figures show
 
-- **`per_kernel_c_vs_fortran`** -- one row per kernel, a blue dot for the best any C arm verified
-  and an orange dot for the best any Fortran arm verified, joined by a rule, on a log speed-up axis
-  with 1.0x marked. Sorted by the C value. All 39 submitted kernels have BOTH languages, so every
-  row is a genuine pair over one roster. The spread is enormous and the ranking is not stable across
-  languages: `tsvc_2_s1232` tops C at 242.9x, while `tsvc_2_s255` is the single largest value
-  anywhere at 247.8x -- in Fortran, against 38.5x in C. **C wins 25 of the 39 kernels, Fortran 10,
-  with 4 ties** (and see caveat 4 -- a tie is a 1% bin collision). C loses badly on a handful
-  (`tsvc_2_s255` 0.16x of Fortran, `tsvc_2_s275` and `tsvc_2_s235` 0.53x); the
-  widest wins the other way are `ext_break_capture` 10.8x and `tsvc_2_s1244` 5.5x, both cases where
-  Fortran barely moved off 1.0x. `tsvc_2_s2233` is named in the figure footnote as the one roster
-  kernel with no submission at all.
-- **`per_arm_geomean`** -- 21 arms as horizontal bars on a log axis, coloured by language, each
-  labelled with its geomean and the kernel count behind it, with a black tick at the median. The
-  two cpp bars sit high (20.6x, 12.3x) on n=1 kernel each and must not be read as a language
-  result. Among arms with real coverage, `llr40v10-qwen38-c` leads at 15.3x over 36 kernels and
-  `llr40v9-oss120b-fortran` trails at 4.9x over 4.
+- **`per_kernel_c_vs_fortran_<baseline>`** -- one figure PER DENOMINATOR, since a C-denominated and
+  a numba-denominated speed-up are not two dots on one axis. One row per kernel, a blue dot for the
+  best any C arm verified and an orange dot for the best any Fortran arm verified, joined by a rule,
+  on a log speed-up axis with 1.0x marked, sorted by the C value. Against the C reference 37 kernels
+  carry both languages (**C ahead on 19, Fortran on 15, 3 ties** -- and see the caveats: a tie is a
+  1% bin collision), one is C-only, one Fortran-only and one has no submission at all. Against the
+  numba reference only 23 kernels pair (C ahead on 16, Fortran on 6, 1 tie), 12 are C-only and 4
+  have nothing: that half of the campaign cannot support a language claim on its own. The spread is
+  enormous and the ranking is not stable: `tsvc_2_s1232` tops both languages against C (242.9x
+  against 169.8x), while the single largest value anywhere is `tsvc_2_s255` at 247.8x, in Fortran,
+  against the numba reference.
+- **`per_arm_geomean_<baseline>`** -- the (arm, baseline) slices of one denominator as horizontal
+  bars on a log axis, coloured by language, TWO bars per arm: solid for `served` and faded for
+  `solved`, each labelled with its own n. The bars are explicitly NOT comparable pairwise -- each is
+  over that arm's own kernel set -- and the footnote says so and points at `arm_pairs.csv`. The cpp
+  bars sit high (20.6x, 12.3x) on n=1 kernel each and must not be read as a language result.
 
-Aggregate: **C 16.7x over 39 kernels, Fortran 13.7x over 39 kernels** (geomean of the best any arm
-of that language verified per kernel).
+Aggregate, and it is now a TESTED claim rather than two sorted numbers: against the C reference,
+paired by `(campaign, model, kernel)` over n = 67 pairs, C is **1.099x** Fortran, 95% CI
+**[1.030, 1.196]**, **p = 0.0036**. Against the numba reference, n = 19, C is **1.452x** Fortran,
+CI **[1.005, 2.195]**, **p = 0.040**. The descriptive geomeans beside them (C 13.33x over 38
+kernels against Fortran 11.44x, on the C reference) are best-of-k over unequal k and must not be
+divided.
 
 ### Colour
 

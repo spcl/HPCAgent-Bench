@@ -20,7 +20,7 @@ a dropped row. That is also why the success denominator is ``--problems`` rather
 rows the DB happens to hold.
 
 Rows the judge flagged as SUSPECT (recording.py: an otherwise verified submission whose speedup is
-implausible, > 1000x or non-finite) are excluded from both dedup modes and counted to stderr. They
+implausible, > 1000x or non-finite) are excluded from every dedup mode and counted to stderr. They
 are measurement failures, not results -- one of them taken as an arm's ``best`` would decide the
 comparison by itself.
 
@@ -50,17 +50,33 @@ import sys
 PER_PROBLEM_SUFFIX = "-per-problem.csv"
 PAIRS_SUFFIX = "-pairs.csv"
 
+#: The pairs CSV, grouped so that reading ACROSS never crosses two parameters.
+#:
+#: ``p_value`` and ``q_value`` test exactly one quantity, and ``parameter`` names it: the paired
+#: Hodges-Lehmann log ratio, whose point and interval sit immediately before them. Everything after
+#: ``rho_score`` is a SECOND quantity -- ratios of geometric means, that is ``exp`` of the MEAN of
+#: the same logs -- with its own bootstrap interval and no test of its own. The two are not
+#: interchangeable: on the pooled C/Fortran set (n = 97, skew -0.49) they land on opposite sides of
+#: 1.0, so a row that let a reader take the effect from one and the significance from the other
+#: would state something neither supports.
 PAIR_COLUMNS = (
     "arm_a",
     "arm_b",
     "test",
+    "parameter",
     "n_both",
     "n_only_a",
     "n_only_b",
     "n_neither",
     "median_speedup_a",
     "median_speedup_b",
+    "n_used",
+    "method",
     "hl_log_ratio",
+    "hl_ci_low_log",
+    "hl_ci_high_log",
+    "p_value",
+    "q_value",
     "rho_score",
     "score_pct",
     "score_ci_low_pct",
@@ -78,10 +94,17 @@ PAIR_COLUMNS = (
     "n_cost",
     "efficacy_q",
     "overall_effect",
-    "n_used",
-    "p_value",
-    "q_value",
 )
+
+#: What each row's ``p_value`` is a test OF, written into the row rather than left to whoever reads
+#: the column order.
+HL_PARAMETER = "hl_log_speedup_ratio"
+SUCCESS_PARAMETER = "success_discordance"
+
+#: The columns that describe the SPEED and COST effect. Blank on the success row: its p value tests
+#: the discordant counts, and an effect repeated beside it is an effect a reader can quote with the
+#: wrong test attached.
+EFFECT_COLUMNS = PAIR_COLUMNS[PAIR_COLUMNS.index("rho_score") :]
 
 #: Resamples for the paired bootstrap interval, its confidence level, and the seed that makes it
 #: reproducible. FIXED seed: these bounds go in a paper, so the same DBs must give the same interval
@@ -91,6 +114,10 @@ PAIR_COLUMNS = (
 BOOTSTRAP_RESAMPLES = 10000
 CONFIDENCE = 0.95
 BOOTSTRAP_SEED = 20260908
+
+#: Two-sided error rate the rank interval and the ``q_value`` gate are read at. Mirrors
+#: hpcagent_bench.stats.summary.DEFAULT_ALPHA, which this file cannot import.
+CONFIDENCE_ALPHA = 0.05
 
 #: Weight of the score half of Q; the cost half is the remainder. Equal by default -- any other
 #: split is a claim about how a token trades against a speedup.
@@ -131,9 +158,13 @@ def load_arm(name: str, path: str, dedup: str) -> tuple[dict[str, float], set[st
     still counts as SEEN: the evidence exists, it just cannot be believed, so the kernel reads as
     censored (success 0) instead of vanishing from the universe.
 
-    A kernel is deduped to one number: ``best`` takes the fastest verified submission (the primary
-    analysis: the arm's achieved capability), ``last`` takes the final one in time (the sensitivity
-    analysis: what the agent stopped at, which can be worse).
+    A kernel is deduped to one number by one of three rules. ``final`` (the default) is the
+    reduction the published tables use: the LAST submission of each episode, then the max over the
+    arm's episodes -- the agent's own final answer, best over the arm's agents. ``best`` takes the
+    fastest verified submission anywhere in the arm, which scores best-of-N and pays out by how often
+    an agent resubmitted. ``last`` takes the final row per kernel across ALL agents, which is
+    whichever agent submitted last. The last two are sensitivity analyses, and neither is the number
+    ``reproducibility/llr40/analyze_llr40.py`` and ``scripts/collect_campaign.py`` publish.
 
     The second return value is every kernel the arm has any evidence for -- a verified submission OR
     a failed ``attempts`` row -- which is how a kernel that no arm ever solved still gets a name in
@@ -168,6 +199,23 @@ def load_arm(name: str, path: str, dedup: str) -> tuple[dict[str, float], set[st
                 "SELECT benchmark, MAX(speedup) FROM submissions "
                 f"WHERE speedup IS NOT NULL{suspect_filter} GROUP BY benchmark"
             ).fetchall()
+        elif dedup == "final":
+            # The agent's own final answer, then the best of the arm's agents. Ordered ascending and
+            # folded per EPISODE, so the last row of each agent wins and the agents are then maxed --
+            # `last` folds per kernel across agents instead, which returns whichever agent happened
+            # to submit last. The episode is (run_id, benchmark) because one DB is one JOB;
+            # run_id is derived from the rank layout and repeats across jobs, so a DB merged from
+            # several jobs cannot identify an episode and must be split before it reaches here.
+            episodes: dict[tuple[str, str], float] = {}
+            for run_id, bench, value in conn.execute(
+                "SELECT run_id, benchmark, speedup FROM submissions "
+                f"WHERE speedup IS NOT NULL{suspect_filter} ORDER BY ts, id"
+            ):
+                episodes[(str(run_id), str(bench))] = float(value)
+            per_kernel: dict[str, float] = {}
+            for (_run_id, bench), value in episodes.items():
+                per_kernel[bench] = max(value, per_kernel.get(bench, value))
+            rows = list(per_kernel.items())
         else:
             # ordered ascending and folded into a dict, so the LAST row per kernel wins; id breaks a
             # ts tie deterministically (two submissions can land in the same millisecond).
@@ -237,15 +285,21 @@ def bootstrap_interval(deltas: list[float], seed: int = BOOTSTRAP_SEED) -> tuple
 
 
 def ratio_columns(prefix: str, deltas: list[float]) -> dict[str, object]:
-    """The efficacy columns for one quantity, from its per-kernel log deltas.
+    """The geometric-mean columns for one quantity, from its per-kernel log deltas.
 
     ``d_i`` is oriented so positive always means the intervention HELPED, for a cost as for a score,
     which is why one code path serves both. ``rho`` is ``exp(mean(d))`` -- the ratio of the two
     geometric means -- and the median and the win/loss counts are the heavy-tail checks a mean of
     logs cannot make on its own: one kernel that moved 40x can carry an arm whose others did not.
+
+    These columns carry NO test. The bootstrap interval here bounds the mean and nothing else: its
+    measured coverage against a null with this repo's delta shape is 0.93 at n = 39 and 0.70 at
+    n = 4, so "excludes zero" is not a 5% statement. The tested quantity is the Hodges-Lehmann
+    ratio, which has its own point, its own interval and the ``p_value`` beside them.
     """
     if not deltas:
-        return {f"{prefix}_{k}": "" for k in ("pct", "ci_low_pct", "ci_high_pct", "median_delta", "wins", "losses")}
+        keys = ("pct", "ci_low_pct", "ci_high_pct", "median_delta", "wins", "losses")
+        return dict({f"{prefix}_{k}": "" for k in keys}, **{f"rho_{prefix}": ""})
     log_rho = math.fsum(deltas) / len(deltas)
     low, high = bootstrap_interval(deltas)
     return {
@@ -305,10 +359,14 @@ signed_rank = load_signed_rank()
 EXACT_MAX_N = signed_rank.EXACT_MAX_N
 
 
-def wilcoxon_signed_rank(diffs: list[float]) -> tuple[int, float]:
-    """Paired Wilcoxon signed-rank over ``diffs``; returns ``(n used, two-sided p)``."""
-    n, p, _method = signed_rank.signed_rank_p(diffs)
-    return n, p
+def wilcoxon_signed_rank(diffs: list[float]) -> tuple[int, float, str]:
+    """Paired Wilcoxon signed-rank over ``diffs``; returns ``(n used, two-sided p, method)``."""
+    return signed_rank.signed_rank_p(diffs)
+
+
+def walsh_averages(values: list[float]) -> list[float]:
+    """Sorted ``(v_i + v_j) / 2`` for ``i <= j`` -- what the Hodges-Lehmann estimate is a median of."""
+    return sorted((values[i] + values[j]) / 2.0 for i in range(len(values)) for j in range(i, len(values)))
 
 
 def hodges_lehmann(values: list[float]) -> float:
@@ -317,8 +375,40 @@ def hodges_lehmann(values: list[float]) -> float:
     The location estimate the signed-rank test is consistent with: reporting a mean beside a rank
     test would let the p-value and the effect size disagree about which arm is ahead.
     """
-    walsh = [(values[i] + values[j]) / 2.0 for i in range(len(values)) for j in range(i, len(values))]
-    return statistics.median(walsh)
+    return statistics.median(walsh_averages(values))
+
+
+def min_pairs_for_interval(alpha: float = CONFIDENCE_ALPHA) -> int:
+    """Fewest pairs at which a two-sided signed-rank test can reach ``alpha`` at all.
+
+    DERIVED from the null this file already loads, not a second copy of a threshold: the smallest
+    attainable two-sided p at ``n`` is ``2 / 2**n`` (every difference pointing one way), so below
+    the ``n`` where that reaches ``alpha`` an interval is decoration and is withheld. Agrees with
+    ``hpcagent_bench.stats.summary.MIN_PAIRS_FOR_INTERVAL`` by construction, which
+    test_ablation_stats.py asserts.
+    """
+    n = 1
+    while 2.0 / (2.0**n) > alpha:
+        n += 1
+    return n
+
+
+def walsh_interval(values: list[float], alpha: float = CONFIDENCE_ALPHA) -> tuple[float, float]:
+    """Distribution-free interval for the Hodges-Lehmann estimate of ``values``.
+
+    The k-th smallest and k-th largest Walsh average, k taken from the signed-rank null: no
+    normality assumption and no resampling, so a published end point cannot move because a seed
+    changed. ``(nan, nan)`` below :func:`min_pairs_for_interval`, where no test was run either.
+    """
+    n = len(values)
+    if n < min_pairs_for_interval(alpha):
+        return (float("nan"), float("nan"))
+    walsh = walsh_averages(values)
+    mean = n * (n + 1) / 4.0
+    sd = math.sqrt(n * (n + 1) * (2 * n + 1) / 24.0)
+    z = statistics.NormalDist().inv_cdf(1.0 - alpha / 2.0)
+    cutoff = min(max(math.floor(mean - z * sd), 0), len(walsh) // 2 - 1)
+    return (walsh[cutoff], walsh[len(walsh) - 1 - cutoff])
 
 
 def benjamini_hochberg(pvalues: list[float]) -> list[float]:
@@ -349,6 +439,11 @@ def pair_stats(
 ) -> list[dict[str, object]]:
     """The two test rows for one unordered arm pair.
 
+    EACH ROW CARRIES ONE TESTED PARAMETER. The speed row's ``p_value`` inverts the Hodges-Lehmann
+    log ratio, so that estimate and its interval are the columns beside it; the success row tests
+    the discordant counts, and the speed and cost effect columns are left blank there rather than
+    repeated next to a p value that says nothing about them.
+
     ``n_neither`` counts against ``--problems``, not against the kernels that happen to appear in a
     DB: a kernel both arms were killed on leaves no row anywhere, and dropping it would silently
     shrink the denominator of the success comparison.
@@ -359,7 +454,12 @@ def pair_stats(
     n_neither = problems - len(both) - only_a - only_b
 
     diffs = [math.log(arm_a[b]) - math.log(arm_b[b]) for b in both]
-    n_used, wilcoxon_p = wilcoxon_signed_rank(diffs)
+    n_used, wilcoxon_p, method = wilcoxon_signed_rank(diffs)
+    # The SAME kernels the test ran on: it drops the zero differences (they support neither
+    # direction), so an estimate taken over the kernels including them would describe a different
+    # set from its own p value.
+    tested = [d for d in diffs if d != 0.0]
+    hl_low, hl_high = walsh_interval(tested)
 
     # The intervention view: arm_a is the AFTER arm, so a positive delta is a gain on both axes.
     # Cost is differenced the other way round (before minus after) so that spending LESS reads as an
@@ -391,13 +491,29 @@ def pair_stats(
         "n_neither": n_neither,
         "median_speedup_a": statistics.median([arm_a[b] for b in both]) if both else "",
         "median_speedup_b": statistics.median([arm_b[b] for b in both]) if both else "",
-        "hl_log_ratio": hodges_lehmann(diffs) if diffs else "",
-        **efficacy,
     }
-    return [
-        dict(shared, test="wilcoxon_logspeedup", n_used=n_used, p_value=wilcoxon_p),
-        dict(shared, test="mcnemar_success", n_used=only_a + only_b, p_value=mcnemar_exact(only_a, only_b)),
-    ]
+    blank = {key: "" for key in EFFECT_COLUMNS}
+    speed = {
+        "test": "wilcoxon_logspeedup",
+        "parameter": HL_PARAMETER,
+        "n_used": n_used,
+        "method": method,
+        "hl_log_ratio": hodges_lehmann(tested) if tested else "",
+        "hl_ci_low_log": "" if math.isnan(hl_low) else hl_low,
+        "hl_ci_high_log": "" if math.isnan(hl_high) else hl_high,
+        "p_value": wilcoxon_p,
+    }
+    success = {
+        "test": "mcnemar_success",
+        "parameter": SUCCESS_PARAMETER,
+        "n_used": only_a + only_b,
+        "method": "mcnemar-exact",
+        "hl_log_ratio": "",
+        "hl_ci_low_log": "",
+        "hl_ci_high_log": "",
+        "p_value": mcnemar_exact(only_a, only_b),
+    }
+    return [dict(shared, **speed, **efficacy), dict(shared, **success, **blank)]
 
 
 def write_per_problem(
@@ -500,16 +616,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--out", required=True, help=f"output prefix: writes PREFIX{PER_PROBLEM_SUFFIX} and PREFIX{PAIRS_SUFFIX}"
     )
-    # `last`, not `best`: agents resubmit freely (up to 6 rows for one kernel on llr4), and taking
+    # `final`, not `best`: agents resubmit freely (up to 6 rows for one kernel on llr4), and taking
     # the MAX over those rows scores a run by its luckiest attempt rather than by what the agent
-    # actually converged on -- a cherry-pick that flatters whichever arm submitted most often.
-    # The last verified submission is the agent's own final answer. Raw rows are kept either way;
-    # this only chooses how they collapse at read time.
+    # actually converged on -- a cherry-pick that flatters whichever arm submitted most often, worth
+    # 1.88x to the llr40 qwen38 arms against 1.15x to every oss120b one. `final` is the agent's own
+    # final answer, maxed over the arm's agents, and is the reduction the published tables use;
+    # `last`, which folds per kernel across agents and returns whichever agent submitted last, is a
+    # sensitivity analysis and was never that number. Raw rows are kept whichever is chosen; this
+    # only decides how they collapse at read time.
     parser.add_argument(
         "--dedup",
-        choices=("best", "last"),
-        default="last",
-        help="which verified submission represents a kernel (default last)",
+        choices=("final", "best", "last"),
+        default="final",
+        help="which verified submission represents a kernel (default final)",
     )
     args = parser.parse_args(argv)
 
