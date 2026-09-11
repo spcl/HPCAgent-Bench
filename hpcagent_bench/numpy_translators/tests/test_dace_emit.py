@@ -53,6 +53,8 @@ from numpyto_c.dace_emit import (
     _plan_size_promotion,
     _widen_int_seeds,
     emit_dace,
+    freeze_pinned_extent_scalars,
+    freeze_shape_only_parameters,
     copy_view_bindings,
     loop_target_ranks,
     mixed_view_names,
@@ -2006,3 +2008,98 @@ def test_a_tuple_target_element_that_shadows_is_renamed_too():
     )
     assert "for i_nested1, j in pairs" in got
     assert "a[j] = i_nested1" in got
+
+
+# --------------------------------------------------------------------------- #
+# one quantity, one spelling: the two repairs that took the depthwise convs     #
+# off the refusal list                                                          #
+# --------------------------------------------------------------------------- #
+
+
+def test_an_accumulator_reshaped_after_its_loop_gets_a_name_of_its_own():
+    """``acc += tap`` UPDATES the binding in scope; it does not make a new one. Counted as a foreign
+    store it declined every accumulator a later ``acc = acc.reshape(..)`` rebinds -- one dace
+    descriptor asked to hold two shapes, which is ``Cannot reassign value to variable`` and exactly
+    where conv_depthwise_2d_square_input_asymmetric_kernel stopped parsing."""
+    rewritten = value_versioned(
+        "def k(a, out):\n"
+        "    acc = np.zeros((1, 2, 4))\n"
+        "    for i in range(3):\n"
+        "        acc += a[2 * i:2 * i + 2, :][None, :, :]\n"
+        "    acc = acc.reshape((2, 4))\n"
+        "    acc += a[0, 0]\n"
+        "    out[:] = acc\n"
+    )
+    # the accumulate BEFORE the rebind keeps the first name; the one after it moves with the rebind
+    assert "acc += a[2 * i:2 * i + 2, :][None, :, :]" in rewritten
+    assert "acc__v2 = acc.reshape((2, 4))" in rewritten
+    assert "acc__v2 += a[0, 0]" in rewritten
+    assert "out[:] = acc__v2" in rewritten
+
+
+def test_an_update_two_bindings_reach_is_declined_exactly_like_a_read():
+    """An ``+=`` no single binding owns is the phi a rename cannot express: both arms bind the name
+    and the accumulate after the merge belongs to neither. Renaming either arm would update the
+    other's value under a name nothing bound."""
+    rewritten = value_versioned(
+        "def k(a, out):\n"
+        "    if a[0, 0] < 1:\n"
+        "        acc = a[0:2, :] * 1.0\n"
+        "    else:\n"
+        "        acc = a[2:4, :] * 1.0\n"
+        "    acc += a[4:6, :]\n"
+        "    out[:] = acc\n"
+    )
+    assert "__v2" not in rewritten
+
+
+def test_a_manifest_name_only_a_declared_shape_spells_is_frozen_to_its_value():
+    """conv_depthwise_separable_2d declares ``out`` through ``dilation`` and convolves through the
+    pinned scalar ``depthwise_dilation``, which the extent freeze already turned into ``1``. Left
+    symbolic, ``dilation`` is a dc.symbol the BODY can never mention, so the frontend is asked to
+    broadcast ``height - kernel_size + 1`` into ``height - dilation * (kernel_size - 1)`` and
+    refuses. One quantity, two spellings: freezing one and not the other is what made it
+    unprovable."""
+    assert kir_for("conv_depthwise_separable_2d").shape_only_consts == {"dilation": 1}
+    _, text = _emit("conv_depthwise_separable_2d")
+    assert "dilation" not in set(re.findall(r"[A-Za-z_]\w*", text)), (
+        "a name only a declared shape spells must reach the module as its literal, not a dc.symbol"
+    )
+    # premise: the stage spellings the body DOES convolve with are still there, as runtime scalars
+    assert "depthwise_dilation: dc.int64" in text and "pointwise_dilation: dc.int64" in text
+
+
+def test_the_frozen_declared_extent_is_the_one_the_body_computes():
+    """Text alone does not settle a broadcast: the two extents have to be the SAME sympy expression
+    once python evaluates the annotation. Both spatial dims, so a fix unifying only ``height`` is
+    caught."""
+    pytest.importorskip("dace")
+    import dace as dc
+
+    kir = freeze_shape_only_parameters(freeze_pinned_extent_scalars(kir_for("conv_depthwise_separable_2d")))
+    annotation = _array_annotation(next(a for a in kir.arrays if a.name == "out"))
+    scope = {
+        "dc": dc,
+        "depthwise_padding": 0,
+        "pointwise_padding": 0,
+        "stride": 1,
+        **{
+            n: dc.symbol(n, dtype=dc.int64, positive=True)
+            for n in ("batch_size", "out_channels", "height", "width", "kernel_size")
+        },
+    }
+    extents = eval(f"({annotation[len('dc_float[') : -1]},)", scope)  # noqa: S307 -- as python runs it
+    assert extents[2] == scope["height"] - scope["kernel_size"] + 1
+    assert extents[3] == scope["width"] - scope["kernel_size"] + 1
+
+
+def test_a_shape_name_the_body_also_reads_is_left_symbolic():
+    """The freeze is sound only because nothing else can observe the name. A manifest name the
+    kernel READS is a real parameter -- pinned or not -- and baking its value in is a miscompile, so
+    ``kernel_size`` stays a dc.symbol in the very kernel the freeze fires on."""
+    assert not kir_for("conv_depthwise_separable_2d").shape_only_consts.keys() & {
+        "kernel_size",
+        "height",
+        "width",
+    }
+    assert "kernel_size = dc.symbol('kernel_size'" in _emit("conv_depthwise_separable_2d")[1]
