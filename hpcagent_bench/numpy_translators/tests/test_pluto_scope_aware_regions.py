@@ -94,7 +94,7 @@ def _clamp_kir():
     )
 
 
-def test_no_region_holds_a_construct_pet_cannot_model():
+def test_no_region_holds_a_construct_pet_cannot_model() -> None:
     text = emit_pluto(_sized_zeros_kir(), fn_name="sz")
     regions = _regions(text)
     assert regions, text
@@ -103,14 +103,14 @@ def test_no_region_holds_a_construct_pet_cannot_model():
             assert bad not in body, f"{bad} inside a scop region:\n{body}"
 
 
-def test_the_allocation_stays_in_the_translation_unit_outside_every_region():
+def test_the_allocation_stays_in_the_translation_unit_outside_every_region() -> None:
     """Splitting must not DROP the prologue -- it moves out of the regions, not out of the kernel."""
     text = emit_pluto(_sized_zeros_kir(), fn_name="sz")
     assert "malloc(" in text, text
     assert "malloc(" not in "".join(_regions(text)), text
 
 
-def test_a_body_level_zero_fill_is_a_loop_not_a_memset():
+def test_a_body_level_zero_fill_is_a_loop_not_a_memset() -> None:
     """The desugar: a fill adjacent to compute is spelled as the affine nest it is, so it can stay in."""
     text = emit_pluto(_sized_zeros_kir(), fn_name="sz")
     fill = [ln for ln in text.split("\n") if "__zf" in ln]
@@ -118,14 +118,14 @@ def test_a_body_level_zero_fill_is_a_loop_not_a_memset():
     assert all("for (" in ln for ln in fill), fill
 
 
-def test_a_nest_between_two_others_splits_the_kernel_into_several_regions():
+def test_a_nest_between_two_others_splits_the_kernel_into_several_regions() -> None:
     text = emit_pluto(_two_nests_kir(), fn_name="tn")
     regions = _regions(text)
     assert len(regions) == 2, f"expected one region per side of the allocation, got {len(regions)}:\n{text}"
     assert all("for (" in body for body in regions), regions
 
 
-def test_an_unmodellable_nest_does_not_cost_its_scopable_neighbours():
+def test_an_unmodellable_nest_does_not_cost_its_scopable_neighbours() -> None:
     """Per-NEST, never per-program: the clamp is excluded, the nests around it are still scoped."""
     text = emit_pluto(_clamp_kir(), fn_name="cl")
     regions = _regions(text)
@@ -134,7 +134,7 @@ def test_an_unmodellable_nest_does_not_cost_its_scopable_neighbours():
     assert "if (" in text, text
 
 
-def test_regions_never_nest():
+def test_regions_never_nest() -> None:
     for kir, name in ((_sized_zeros_kir(), "sz"), (_two_nests_kir(), "tn"), (_clamp_kir(), "cl")):
         depth = 0
         for line in emit_pluto(kir, fn_name=name).split("\n"):
@@ -143,12 +143,12 @@ def test_regions_never_nest():
         assert depth == 0, f"{name}: unterminated scop"
 
 
-def test_emitting_twice_gives_byte_identical_c():
+def test_emitting_twice_gives_byte_identical_c() -> None:
     for src_fn, name in ((_sized_zeros_kir, "sz"), (_two_nests_kir, "tn"), (_clamp_kir, "cl")):
         assert emit_pluto(src_fn(), fn_name=name) == emit_pluto(src_fn(), fn_name=name), name
 
 
-def test_the_affine_detector_reads_every_region_not_just_the_first():
+def test_the_affine_detector_reads_every_region_not_just_the_first() -> None:
     """A gather in the SECOND region used to go unseen, and polycc may miscompile rather than refuse."""
     text = (
         "#pragma scop\nfor (i = 0; i < N; i++) a[i] = 1.0;\n#pragma endscop\n"
@@ -157,13 +157,13 @@ def test_the_affine_detector_reads_every_region_not_just_the_first():
     assert scop_nonaffine_reason(text) == "indirection"
 
 
-def test_a_translation_unit_with_no_region_is_not_a_scop_input():
+def test_a_translation_unit_with_no_region_is_not_a_scop_input() -> None:
     """A kernel pet can model no part of must decline, not be handed to polycc unchanged."""
     assert not has_scop("void f(void) { while (1) { } }")
     assert has_scop(emit_pluto(_two_nests_kir(), fn_name="tn"))
 
 
-def test_polyccs_repeated_scratch_declarations_are_merged_not_dropped():
+def test_polyccs_repeated_scratch_declarations_are_merged_not_dropped() -> None:
     """POLYCC-012: one declaration per counter per function, and only counters are touched."""
     src = (
         "void f(int N) {\n"
@@ -188,13 +188,13 @@ def test_polyccs_repeated_scratch_declarations_are_merged_not_dropped():
     assert "if (N >= 1) {" in out and out.count("for (t1=0") == 1, out
 
 
-def test_a_declaration_that_went_out_of_scope_is_not_deduped_against():
+def test_a_declaration_that_went_out_of_scope_is_not_deduped_against() -> None:
     """Scope, not function: a region nested in a loop body cannot cover the block after it."""
     src = "void f(int N) {\nfor (i=0;i<N;i++) {\n  int lbp, ubp;\n  lbp = 0;\n}\n  int lbp, ubp;\n  lbp = 0;\n}\n"
     assert dedupe_scratch_declarations(src).count("int lbp, ubp;") == 2
 
 
-def test_the_registry_names_this_scoping_as_what_avoids_those_bugs():
+def test_the_registry_names_this_scoping_as_what_avoids_those_bugs() -> None:
     for issue in ("POLYCC-007", "POLYCC-013"):
         assert KNOWN_POLYCC_ISSUES[issue].avoided_by == "numpyto_c.emit.pluto_scop_regions", issue
     assert KNOWN_POLYCC_ISSUES["POLYCC-011"].avoided_by == "hpcagent_bench.pluto_transform.pet_parse_env"

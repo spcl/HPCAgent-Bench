@@ -50,18 +50,18 @@ def fake_toolchain(tmp_path, monkeypatch):
     resolve_compiler.cache_clear()
 
 
-def test_a_versioned_only_llvm_driver_counts_as_present(fake_toolchain):
+def test_a_versioned_only_llvm_driver_counts_as_present(fake_toolchain) -> None:
     """The exact CI failure: `command -v flang` misses flang-new-22, the harness resolves it."""
     rows = dict(load_script().probe())
     assert rows["flang"] == str(fake_toolchain / "flang-new-22")
     assert all(found is not None for found in rows.values()), f"unexpected MISS: {rows}"
 
 
-def test_a_complete_toolchain_exits_zero(fake_toolchain):
+def test_a_complete_toolchain_exits_zero(fake_toolchain) -> None:
     assert load_script().main() == 0
 
 
-def test_a_missing_driver_fails_loudly(fake_toolchain, capsys):
+def test_a_missing_driver_fails_loudly(fake_toolchain, capsys) -> None:
     """A gate that tolerated a missing driver would let the tests needing it skip silently."""
     (fake_toolchain / "gfortran").unlink()
     resolve_compiler.cache_clear()
@@ -69,14 +69,14 @@ def test_a_missing_driver_fails_loudly(fake_toolchain, capsys):
     assert "MISS  gfortran" in capsys.readouterr().out
 
 
-def test_a_missing_library_fails_loudly(fake_toolchain, capsys):
+def test_a_missing_library_fails_loudly(fake_toolchain, capsys) -> None:
     """openblas resolves through pkg-config, not PATH, so it needs its own MISS row."""
     write_executable(fake_toolchain / "pkg-config", "#!/bin/sh\nexit 1\n")
     assert load_script().main() == 1
     assert "MISS  pkg-config:openblas" in capsys.readouterr().out
 
 
-def test_an_unlinkable_runtime_fails_loudly(fake_toolchain, monkeypatch, capsys):
+def test_an_unlinkable_runtime_fails_loudly(fake_toolchain, monkeypatch, capsys) -> None:
     """libomp is a HARD requirement, not an extra: libgomp deadlocks across fork() and libomp
     recovers, so a runner with only libgomp cannot tell the fix from the forgiving runtime.
     apt's libomp-dev is a metapackage, so `installed` and `linkable` are different questions."""

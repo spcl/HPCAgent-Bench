@@ -16,13 +16,13 @@ from numpyto_common.lib_nodes import _expand_einsum_ellipsis
 _NATIVE = ("c", "cpp", "fortran")
 
 
-def _assert_ok(res, label):
+def _assert_ok(res, label) -> None:
     fails = {b: s for b, s in res.items() if not (s == "ok" or s.startswith("skip"))}
     assert any(v == "ok" for v in res.values()), f"every backend skipped; the comparison never ran: {res}"
     assert not fails, f"{label}: {fails}"
 
 
-def test_expand_einsum_ellipsis_to_explicit_letters():
+def test_expand_einsum_ellipsis_to_explicit_letters() -> None:
     # One broadcast axis -> a fresh shared index letter; the output ellipsis
     # expands to the same letters (ellipsis-first, as numpy orders it).
     assert _expand_einsum_ellipsis("...ij->...ji", [3]) == "Aij->Aji"
@@ -31,14 +31,14 @@ def test_expand_einsum_ellipsis_to_explicit_letters():
     assert _expand_einsum_ellipsis("...ij->...ji", [4]) == "ABij->ABji"
 
 
-def test_expand_einsum_ellipsis_rejects_bad_forms():
+def test_expand_einsum_ellipsis_rejects_bad_forms() -> None:
     with pytest.raises(NotImplementedError):  # implicit output not supported with ellipsis
         _expand_einsum_ellipsis("...ij", [3])
     with pytest.raises(NotImplementedError):  # differing ellipsis ranks (broadcast) unsupported
         _expand_einsum_ellipsis("...ij,...jk->...ik", [4, 3])
 
 
-def test_einsum_ellipsis_batched_transpose_e2e():
+def test_einsum_ellipsis_batched_transpose_e2e() -> None:
     rng = np.random.default_rng(0)
     src = "import numpy as np\ndef f(a, out):\n    out[:] = np.einsum('...ij->...ji', a)\n"
     a = rng.random((2, 3, 4))
@@ -56,7 +56,7 @@ def test_einsum_ellipsis_batched_transpose_e2e():
     )
 
 
-def test_einsum_ellipsis_batched_matmul_e2e():
+def test_einsum_ellipsis_batched_matmul_e2e() -> None:
     # Ellipsis WITH a contraction: '...ij,...jk->...ik' expands to 'Aij,Ajk->Aik'
     # (a batched GEMM). c/cpp only: the batched-einsum FORTRAN emit
     # non-deterministically types a size symbol REAL (~40% flaky, hash/order
@@ -80,7 +80,7 @@ def test_einsum_ellipsis_batched_matmul_e2e():
     )
 
 
-def test_const_coerces_numpy_scalar():
+def test_const_coerces_numpy_scalar() -> None:
     """A numpy scalar must never reach an ast.Constant: under numpy 2.0 it
     unparse to ``np.int64(0)`` (breaking dace's sympy loop-range parse) and it
     fails the Fortran emit's ``isinstance(_, int)`` integer test. ``_const``

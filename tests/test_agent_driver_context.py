@@ -38,7 +38,7 @@ def driver_fixture() -> ModuleType:
     return load_example_module("agent_driver")
 
 
-def test_a_context_overflow_death_is_not_a_success(driver, tmp_path):
+def test_a_context_overflow_death_is_not_a_success(driver, tmp_path) -> None:
     log = tmp_path / "claude.log"
     log.write_text(
         '{"type":"assistant","message":{"id":"a","usage":{"output_tokens":5}}}\n' + OVERFLOW, encoding="utf-8"
@@ -57,7 +57,7 @@ def test_a_context_overflow_death_is_not_a_success(driver, tmp_path):
         "",
     ],
 )
-def test_every_other_ending_is_left_alone(driver, tmp_path, closing):
+def test_every_other_ending_is_left_alone(driver, tmp_path, closing) -> None:
     """A finished run, the turn cap, and an agent that merely WROTE about context lengths."""
     log = tmp_path / "claude.log"
     log.write_text(

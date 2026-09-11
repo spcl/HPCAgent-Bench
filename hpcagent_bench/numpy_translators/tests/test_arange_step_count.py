@@ -23,7 +23,7 @@ from _op_oracle import run_op
 _NATIVE = ("c", "cpp", "fortran")
 
 
-def _run(expr, n):
+def _run(expr, n) -> None:
     """``t = <expr>`` copied element-wise into an ``n``-long int64 output, on every native backend."""
     src = f"import numpy as np\ndef f(out):\n    t = {expr}\n    for i in range(out.shape[0]):\n        out[i] = t[i]\n"
     res = run_op(
@@ -41,7 +41,7 @@ def _run(expr, n):
         ("np.arange(-3, -9, -3)", 2),
     ],
 )
-def test_negative_step_arange_matches_numpy(expr, n):
+def test_negative_step_arange_matches_numpy(expr, n) -> None:
     assert len(eval(expr)) == n, "test's own expectation disagrees with numpy"  # noqa: S307
     _run(expr, n)
 
@@ -55,12 +55,12 @@ def test_negative_step_arange_matches_numpy(expr, n):
         ("np.arange(7)", 7),
     ],
 )
-def test_positive_step_arange_still_matches_numpy(expr, n):
+def test_positive_step_arange_still_matches_numpy(expr, n) -> None:
     assert len(eval(expr)) == n, "test's own expectation disagrees with numpy"  # noqa: S307
     _run(expr, n)
 
 
-def test_count_is_folded_for_literal_bounds():
+def test_count_is_folded_for_literal_bounds() -> None:
     """A literal arange must size its array with a plain integer: an expression there has to be
     evaluable in a Fortran declaration, where ``/`` truncates instead of flooring."""
     import ast
@@ -83,7 +83,7 @@ def test_count_is_folded_for_literal_bounds():
         assert node.value == len(eval(text))  # noqa: S307 -- numpy is the definition
 
 
-def test_symbolic_bounds_keep_a_sign_correct_expression():
+def test_symbolic_bounds_keep_a_sign_correct_expression() -> None:
     """With a runtime bound there is nothing to fold, so the emitted form must be the ceil that
     holds for either sign -- not the positive-step-only identity."""
     import ast

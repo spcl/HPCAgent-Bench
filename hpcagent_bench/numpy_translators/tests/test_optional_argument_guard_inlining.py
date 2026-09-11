@@ -56,7 +56,7 @@ def flags(*names):
     return frozenset(names)
 
 
-def test_an_identity_test_against_a_literal_is_a_static_flag_test():
+def test_an_identity_test_against_a_literal_is_a_static_flag_test() -> None:
     """``weight is None`` decides on the same grounds ``weight == 0`` does: the call site binds the
     parameter to a literal, so substitution leaves two constants."""
     assert _is_static_flag_test(ast.parse("weight is None", mode="eval").body, flags("weight"))
@@ -72,13 +72,13 @@ def test_an_identity_test_against_a_literal_is_a_static_flag_test():
         ("weight is None is None", "a chained compare has no single decidable pair"),
     ],
 )
-def test_an_undecidable_identity_test_is_declined(expr, reason):
+def test_an_undecidable_identity_test_is_declined(expr, reason) -> None:
     """An undecidable guard fused into an ``IfExp`` over ARRAY branches has no target form: C's
     ``?:`` rejects the operand types and Fortran's ``merge`` evaluates BOTH arms."""
     assert not _is_static_flag_test(ast.parse(expr, mode="eval").body, flags("weight")), reason
 
 
-def test_a_binding_between_the_guard_and_the_return_is_lifted_over_it():
+def test_a_binding_between_the_guard_and_the_return_is_lifted_over_it() -> None:
     """``shape`` is bound on the affine path only, which left the guard two statements from the
     trailing return -- and the fuse only ever looked at the last two."""
     tree = parse(NORM_SRC)
@@ -89,7 +89,7 @@ def test_a_binding_between_the_guard_and_the_return_is_lifted_over_it():
     assert body[2].targets[0].id == "shape", "the lifted binding runs ahead of the guard now"
 
 
-def test_the_fused_helper_becomes_inlinable():
+def test_the_fused_helper_becomes_inlinable() -> None:
     """The whole point of fusing: an early return anywhere but the last statement matches no form,
     and a helper that matches no form survives as a CALL that a ``@dc.program`` cannot make."""
     tree = parse(NORM_SRC)
@@ -98,7 +98,7 @@ def test_the_fused_helper_becomes_inlinable():
     assert "_norm" in _collect_inlinable_helpers(tree, helper_of(tree, "f"))
 
 
-def test_a_binding_that_calls_is_not_lifted():
+def test_a_binding_that_calls_is_not_lifted() -> None:
     """Lifting runs the statement on a path that never ran it. A call may write an argument array
     in place, so hoisting one over an early return is a side effect the source never had."""
     impure = NORM_SRC.replace(" shape = (x.shape[0],)\n", " shape = np.zeros(x.shape[0])\n")
@@ -109,7 +109,7 @@ def test_a_binding_that_calls_is_not_lifted():
     assert "_norm" not in _collect_inlinable_helpers(tree, helper_of(tree, "f"))
 
 
-def test_a_binding_the_guard_reads_is_not_lifted():
+def test_a_binding_the_guard_reads_is_not_lifted() -> None:
     """Moving it above the guard would change which value the guard tests -- the one case where
     the lift is not merely early but wrong."""
     read_by_guard = (
@@ -130,7 +130,7 @@ def test_a_binding_the_guard_reads_is_not_lifted():
     assert [type(s).__name__ for s in body] == ["Assign", "Assign", "If", "Assign", "Return"]
 
 
-def test_the_selected_arm_is_the_one_the_reference_takes():
+def test_the_selected_arm_is_the_one_the_reference_takes() -> None:
     """Every backend, against numpy's own answer. ``weight=None`` selects the CENTERED array, and
     the affine arm it must not select is a hundred times larger."""
     x = np.arange(1.0, 9.0)

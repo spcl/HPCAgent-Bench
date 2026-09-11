@@ -34,13 +34,13 @@ from numpyto_common.lib_nodes import NP_CALL_EXPANDERS
 _NATIVE = ("c", "fortran")
 
 
-def _assert_ok(res, label):
+def _assert_ok(res, label) -> None:
     fails = {b: s for b, s in res.items() if not (s == "ok" or s.startswith("skip"))}
     assert any(v == "ok" for v in res.values()), f"every backend skipped; the comparison never ran: {res}"
     assert not fails, f"{label}: {fails}"
 
 
-def _oracle_available():
+def _oracle_available() -> None:
     if not (shutil.which("gcc") and shutil.which("gfortran")):
         pytest.skip("gcc/gfortran needed for the native numerical check")
 
@@ -73,11 +73,11 @@ def _lower_source(src: str, func: str, shapes, syms) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def test_roll_registered():
+def test_roll_registered() -> None:
     assert ("np", "roll") in NP_CALL_EXPANDERS
 
 
-def test_subscript_operand_roll_is_hoisted():
+def test_subscript_operand_roll_is_hoisted() -> None:
     # The ls3df idiom: a whole-array roll of a state block (a Subscript operand)
     # nested in a broadcast BinOp. After lowering NO ``np.roll`` Call may survive
     # -- it must be spilled + hoisted into an explicit index-shift loop nest.
@@ -93,7 +93,7 @@ def test_subscript_operand_roll_is_hoisted():
 # --------------------------------------------------------------------------- #
 
 
-def test_nested_roll_subscript_operand_e2e():
+def test_nested_roll_subscript_operand_e2e() -> None:
     # Positive shift, kw axis, Subscript operand (the ls3df _hpsi bug).
     _oracle_available()
     rng = np.random.default_rng(0)
@@ -113,7 +113,7 @@ def test_nested_roll_subscript_operand_e2e():
     _assert_ok(res, "nested-roll-subscript")
 
 
-def test_nested_roll_negative_shift_e2e():
+def test_nested_roll_negative_shift_e2e() -> None:
     # Negative shift + kw axis, the acc = ... + w * (roll(+m) + roll(-m)) stencil.
     _oracle_available()
     rng = np.random.default_rng(1)
@@ -137,7 +137,7 @@ def test_nested_roll_negative_shift_e2e():
     _assert_ok(res, "nested-roll-negative-shift")
 
 
-def test_nested_roll_positional_axis_e2e():
+def test_nested_roll_positional_axis_e2e() -> None:
     # Positional (non-kw) axis argument, Subscript operand.
     _oracle_available()
     rng = np.random.default_rng(2)
@@ -157,7 +157,7 @@ def test_nested_roll_positional_axis_e2e():
     _assert_ok(res, "nested-roll-positional-axis")
 
 
-def test_nested_roll_name_operand_e2e():
+def test_nested_roll_name_operand_e2e() -> None:
     # Bare-Name roll operand in a broadcast (the already-green top-level-roll path
     # -- guards against a regression of the laplacian_stencil_3d case).
     _oracle_available()

@@ -404,7 +404,7 @@ def settle_hook(lib):
         except AttributeError:
             continue  # not linked against that runtime -- nothing of its kind to wait for
 
-    def settle():
+    def settle() -> None:
         for wait in waits:
             wait()
 
@@ -1001,9 +1001,9 @@ def _native_call_worker(
     q=None,
     py_meta=None,
     device_id=None,
-    reps=1,
-    warmup=0,
-    rep_timeout=0.0,
+    reps: int = 1,
+    warmup: int = 0,
+    rep_timeout: float = 0.0,
     followups=(),
 ):
     """Child-process entry: run the whole measurement and RETURN its payload
@@ -1068,7 +1068,7 @@ def _native_call_worker(
     entry_device_free = _device_free_bytes() if device else 0
     after_first_device: List[int] = []
 
-    def probe_first_rep():
+    def probe_first_rep() -> None:
         after_first.append(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
         if device:
             after_first_device.append(_device_free_bytes())

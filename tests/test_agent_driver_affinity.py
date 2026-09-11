@@ -46,13 +46,13 @@ def driver_fixture() -> ModuleType:
 def node_fixture(monkeypatch):
     """A beverin agent node's mask: 4 sockets x 24 cores x 2 threads."""
 
-    def mask(count: int):
+    def mask(count: int) -> None:
         monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set(range(count)))
 
     return mask
 
 
-def test_the_whole_node_is_dealt_out_and_no_two_agents_share_a_cpu(driver, node):
+def test_the_whole_node_is_dealt_out_and_no_two_agents_share_a_cpu(driver, node) -> None:
     """Disjoint and complete: an agent that shares a CPU is contending with a peer, and a CPU no
     agent holds is a quarter of a socket the arm paid for and did not use."""
     node(192)
@@ -62,7 +62,7 @@ def test_the_whole_node_is_dealt_out_and_no_two_agents_share_a_cpu(driver, node)
     assert sorted(flat) == list(range(192)), "some CPUs went to no agent"
 
 
-def test_the_shares_stay_even_when_the_count_does_not_divide(driver, node):
+def test_the_shares_stay_even_when_the_count_does_not_divide(driver, node) -> None:
     """40 into 192 leaves a remainder; the shares may differ by one CPU and no more, or the agents
     that sort last are systematically slower than the ones that sort first."""
     node(192)
@@ -70,7 +70,7 @@ def test_the_shares_stay_even_when_the_count_does_not_divide(driver, node):
     assert max(sizes) - min(sizes) <= 1, f"uneven shares: {sorted(sizes)}"
 
 
-def test_a_share_is_spread_across_sockets_not_packed_into_one(driver, node):
+def test_a_share_is_spread_across_sockets_not_packed_into_one(driver, node) -> None:
     """Consecutive CPU ids are siblings and same-socket neighbours. A contiguous block would put
     the early workers on socket 0 and hand whole sockets to whoever sorted last; dealing spreads
     every worker instead."""
@@ -81,19 +81,19 @@ def test_a_share_is_spread_across_sockets_not_packed_into_one(driver, node):
     assert len({cpu // 48 for cpu in share}) > 1, "share never leaves one socket"
 
 
-def test_fewer_cpus_than_agents_leaves_them_unpinned(driver, node):
+def test_fewer_cpus_than_agents_leaves_them_unpinned(driver, node) -> None:
     """There is no share to give. Dealing anyway would put several agents on one CPU, which is
     worse than the mask they already inherit -- so the caller is told to leave the process alone."""
     node(8)
     assert driver.agent_cpus(0, 40) == []
 
 
-def test_a_nonsense_worker_count_is_refused_rather_than_dividing_by_it(driver, node):
+def test_a_nonsense_worker_count_is_refused_rather_than_dividing_by_it(driver, node) -> None:
     node(192)
     assert driver.agent_cpus(0, 0) == []
 
 
-def test_an_unreadable_mask_is_not_fatal(driver):
+def test_an_unreadable_mask_is_not_fatal(driver) -> None:
     """A platform without affinity, or a mask the step may not read, must not take the arm down --
     every agent still runs, just wherever the scheduler puts it.
 
@@ -101,7 +101,7 @@ def test_an_unreadable_mask_is_not_fatal(driver):
     so a fixture-scoped patch that raises takes the teardown down with it.
     """
 
-    def boom(_pid):
+    def boom(_pid) -> None:
         raise OSError("no affinity here")
 
     saved = os.sched_getaffinity
@@ -113,7 +113,7 @@ def test_an_unreadable_mask_is_not_fatal(driver):
     assert result == []
 
 
-def test_pinning_a_process_that_already_exited_is_survivable(driver, tmp_path):
+def test_pinning_a_process_that_already_exited_is_survivable(driver, tmp_path) -> None:
     """``pin`` runs on a child that may have died during startup. It logs and returns; an agent
     that cannot be pinned is not an agent that must be abandoned."""
 
@@ -126,7 +126,7 @@ def test_pinning_a_process_that_already_exited_is_survivable(driver, tmp_path):
     assert "could not pin" in log_path.read_text()
 
 
-def test_no_cpus_means_no_syscall_and_no_log_noise(driver, tmp_path):
+def test_no_cpus_means_no_syscall_and_no_log_noise(driver, tmp_path) -> None:
     """The unpinned path is the normal one on a small machine; it must not write a warning per
     agent into a transcript that readers parse."""
 
@@ -139,7 +139,7 @@ def test_no_cpus_means_no_syscall_and_no_log_noise(driver, tmp_path):
     assert log_path.read_text() == ""
 
 
-def test_the_node_is_dealt_over_the_agents_it_runs_not_the_pool_it_declares():
+def test_the_node_is_dealt_over_the_agents_it_runs_not_the_pool_it_declares() -> None:
     """The bug every other test in this file passed through.
 
     ``AGENTS_PER_NODE`` sizes the thread pool for the BIGGEST arm; a node is handed only the
@@ -173,7 +173,7 @@ def test_the_node_is_dealt_over_the_agents_it_runs_not_the_pool_it_declares():
 
 
 @pytest.mark.parametrize(("agents", "share"), [(40, 4), (12, 16), (120, 1)])
-def test_a_shipped_arm_gets_the_node_divided_by_its_own_agent_count(driver, node, agents, share):
+def test_a_shipped_arm_gets_the_node_divided_by_its_own_agent_count(driver, node, agents, share) -> None:
     """The three shapes the campaign actually submits: 40 focus40 agents, a 12-worker kimi batch,
     and the full 120 pool. Each agent holds at least the floor of the division -- 4 CPUs, not 2."""
     node(192)

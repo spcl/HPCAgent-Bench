@@ -26,7 +26,7 @@ def _all_ok(res):
     return all(v == "ok" or v.startswith("skip") for v in res.values()), res
 
 
-def test_array_return_slice_target():
+def test_array_return_slice_target() -> None:
     # Early-return array helper, result stored into a row slice of the output.
     src = (
         "import numpy as np\n"
@@ -53,7 +53,7 @@ def test_array_return_slice_target():
     assert ok, res
 
 
-def test_array_return_bare_target():
+def test_array_return_bare_target() -> None:
     # Whole-array target: the out-param is filled in place (no temp copy).
     src = (
         "import numpy as np\n"
@@ -73,7 +73,7 @@ def test_array_return_bare_target():
     assert ok, res
 
 
-def test_array_return_helper_pointer_params_sort_against_source_order():
+def test_array_return_helper_pointer_params_sort_against_source_order() -> None:
     # Three same-typed pointers (zz, aa and the synthesized out buffer) whose ABI order
     # (__hret_0, aa, zz) is a non-trivial permutation of the source order. Transposing two of them
     # compiles and links clean in C, so only numerics can catch a definition/call-site drift; the
@@ -103,7 +103,7 @@ def test_array_return_helper_pointer_params_sort_against_source_order():
     assert ok, res
 
 
-def test_array_return_specialized_config_flag():
+def test_array_return_specialized_config_flag() -> None:
     # A ``g2_convolution``-shaped helper: a config flag (``use_alt``) is a
     # compile-time ``False`` at the call site, so its early-return branch folds
     # away; a strided column arg ``xk[:, k]`` is materialised; the live path runs
@@ -141,7 +141,7 @@ def test_array_return_specialized_config_flag():
     assert ok, res
 
 
-def test_array_return_helper_native_desugar_bug3():
+def test_array_return_helper_native_desugar_bug3() -> None:
     # BUG-3: a NON-inlined array-returning helper used to keep native constructs
     # the kernel body had already shed -- the desugars only ran on the kernel, not
     # on ``_build_helper_kirs`` bodies. This helper is non-inlinable (an early
@@ -177,7 +177,7 @@ def test_array_return_helper_native_desugar_bug3():
     assert ok, res
 
 
-def test_array_helper_emitted_as_outparam_c_function():
+def test_array_helper_emitted_as_outparam_c_function() -> None:
     # Structural: the helper is a ``void`` C function with a trailing out-param,
     # and the call site is a SINGLE opaque call (not a per-element loop calling
     # the whole-array helper once per element).
@@ -257,7 +257,7 @@ _DTYPE_OF_SRC = (
 )
 
 
-def test_array_return_helper_buffers_follow_kernel_precision():
+def test_array_return_helper_buffers_follow_kernel_precision() -> None:
     # ``dtype=x.dtype`` is "whatever x is", so the helper's argument and its synthesized out-param
     # must narrow with the kernel. Read as the literal tag ``"dtype"`` they missed every emitter's
     # dtype table and fell back to double, and an fp32 caller then handed a ``float *`` to a
@@ -279,7 +279,7 @@ def test_array_return_helper_buffers_follow_kernel_precision():
     assert "real(c_float), intent(inout) :: x_hret_0(n)" in f90
 
 
-def test_fp64_helper_buffers_are_unchanged():
+def test_fp64_helper_buffers_are_unchanged() -> None:
     # The default (no ``--precision``) path must stay exactly where it was: fp64 everywhere.
     from numpyto_c.emit import emit_c, emit_cpp
     from numpyto_fortran.emit import emit_fortran
@@ -298,7 +298,7 @@ def test_fp64_helper_buffers_are_unchanged():
     assert "real(c_double), intent(inout) :: x_hret_0(n)" in f90
 
 
-def test_an_unresolvable_buffer_dtype_refuses():
+def test_an_unresolvable_buffer_dtype_refuses() -> None:
     # A refusal beats a silently wrong emit: a dtype expression nothing can resolve used to be
     # stored verbatim and rendered as double. No emitter can pick a width for it, so it stops here.
     import pytest
@@ -308,7 +308,7 @@ def test_an_unresolvable_buffer_dtype_refuses():
         _helper_kir(src, "float32")
 
 
-def test_a_helper_local_resolves_its_dtype_against_the_helpers_own_params():
+def test_a_helper_local_resolves_its_dtype_against_the_helpers_own_params() -> None:
     # ``np.zeros(..., dtype=v.dtype)`` inside a HELPER names that helper's parameter, so the
     # parameter table is the scope it resolves against. ``_build_helper_kirs`` asked with an EMPTY
     # one while classifying the return, which turned a perfectly resolvable dtype into a hard
@@ -340,7 +340,7 @@ _INOUT_SRC = (
 )
 
 
-def test_inout_target_takes_one_abi_slot():
+def test_inout_target_takes_one_abi_slot() -> None:
     # An in-out buffer is ONE parameter. Appending a separate out-param put the same pointer in two
     # slots, and in C both carry ``restrict`` -- a promise the call itself breaks, so the compiler
     # is licensed to keep a stale copy of what the helper just wrote (vgg16's _maxpool2d(h, h, n)).
@@ -361,7 +361,7 @@ def test_inout_target_takes_one_abi_slot():
     assert "call scale_in_place(t, thr)" in f90
 
 
-def test_helper_specialised_on_a_rebound_shape_is_refused():
+def test_helper_specialised_on_a_rebound_shape_is_refused() -> None:
     # A local rebound to a DIFFERENT shape resolves to whichever binding came first, and the helper
     # built from it bakes those extents in as literals. vgg16's _maxpool2d was emitted for
     # (batch, 3, 224, 224) and called on (batch, 512, 14, 14): wrong numbers and reads past the end,
@@ -385,7 +385,7 @@ def test_helper_specialised_on_a_rebound_shape_is_refused():
         _helper_kir(src)
 
 
-def test_a_fresh_local_bound_by_a_helper_call_gets_its_buffer():
+def test_a_fresh_local_bound_by_a_helper_call_gets_its_buffer() -> None:
     """``y = pick(x, thr)`` binds a local nothing allocated.
 
     The bare-Name target is passed as the helper's out-param, so it is never a Store anywhere in
@@ -420,7 +420,7 @@ def test_a_fresh_local_bound_by_a_helper_call_gets_its_buffer():
     assert ok, res
 
 
-def test_an_array_valued_expression_argument_is_passed_as_a_buffer():
+def test_an_array_valued_expression_argument_is_passed_as_a_buffer() -> None:
     """mlp's shape: ``y = step(x * 2.0 + 1.0, thr)``, a helper called on an EXPRESSION.
 
     ``_infer_param_desc`` reached the resolver for a Name and a Subscript only, so every other node
@@ -495,7 +495,7 @@ def _kept_helper_c(src: str) -> str:
     return emit_c(lower(parse_kernel(d / "k_numpy.py", d / "bi.json")), fn_name="f")
 
 
-def test_a_helper_argument_temp_keeps_the_axes_of_its_local_operand():
+def test_a_helper_argument_temp_keeps_the_axes_of_its_local_operand() -> None:
     """The broadcast join does not FAIL on an operand it cannot resolve -- it drops that operand's
     axes.
 
@@ -514,7 +514,7 @@ def test_a_helper_argument_temp_keeps_the_axes_of_its_local_operand():
     assert fill and all("__mm2[" in ln for ln in fill), f"the argument temp is filled from a bare pointer:\n{fill}"
 
 
-def test_the_kept_helper_kernel_is_a_legal_translation_unit():
+def test_the_kept_helper_kernel_is_a_legal_translation_unit() -> None:
     """A mis-sized temp is not a wrong number here, it is a type error -- so the compiler is the
     assertion that matters, and it has to be a real one."""
     import pathlib
@@ -532,7 +532,7 @@ def test_the_kept_helper_kernel_is_a_legal_translation_unit():
     assert r.returncode == 0, r.stderr
 
 
-def test_a_local_bound_from_a_helper_takes_the_callee_return_shape():
+def test_a_local_bound_from_a_helper_takes_the_callee_return_shape() -> None:
     """A local a helper call binds is sized by the CALLEE'S RETURN, never by joining the call's args.
 
     Nothing else resolves such a local: it is neither a declared array nor an allocation, so the

@@ -46,7 +46,7 @@ def _assert_ok(res: dict) -> None:
     assert any(status == "ok" for status in res.values()), f"all skipped (vacuous): {res}"
 
 
-def test_per_element_count_uses_running_offset_not_multiply():
+def test_per_element_count_uses_running_offset_not_multiply() -> None:
     """The destination index is a running scalar offset (``pos``), and the count is the counts
     array INDEXED at the source position (``p[i + 1] - p[i]``) -- never the count array used as a
     bare scalar (the old ``outer * K`` formula's wrong shortcut)."""
@@ -58,7 +58,7 @@ def test_per_element_count_uses_running_offset_not_multiply():
     assert "row_index[" in got and "] = a[__rep_i0]" in got
 
 
-def test_extent_telescopes_to_diff_endpoints():
+def test_extent_telescopes_to_diff_endpoints() -> None:
     """The result extent (both shape_table and fresh_local_allocs) is ``p[-1] - p[0]``, derived
     structurally from ``p``'s own shape -- never a guess over the count values."""
     shape_table = {"a": ("M",), "p": ("M + 1",)}
@@ -76,14 +76,14 @@ def test_extent_telescopes_to_diff_endpoints():
     assert fresh_local_allocs["row_index"] == ("p[M + 1 - 1] - p[0]",)
 
 
-def test_non_diff_per_element_count_refused():
+def test_non_diff_per_element_count_refused() -> None:
     """A per-element count with no derivable sum (a bare counts array, not ``np.diff(p)``) must
     NOT guess an extent -- refuse with a clear message naming the offending form."""
     with pytest.raises(NotImplementedError, match="derivable sum"):
         _expand("row_index = np.repeat(a, counts)", {"a": ("M",), "counts": ("M",)})
 
 
-def test_scalar_count_still_uses_the_multiply_form():
+def test_scalar_count_still_uses_the_multiply_form() -> None:
     """Regression guard: a SCALAR repeat count must keep using ``outer * K`` (unaffected by the
     per-element branch, since ``_iter_extent_of`` on a bare int constant is None)."""
     got = _expand("out = np.repeat(a, 3)", {"a": ("M",)})
@@ -91,7 +91,7 @@ def test_scalar_count_still_uses_the_multiply_form():
     assert "* 3" in got or "3 *" in got
 
 
-def test_numeric_row_lengths_from_csr_row_ptr_zero_and_unequal_counts():
+def test_numeric_row_lengths_from_csr_row_ptr_zero_and_unequal_counts() -> None:
     """The idiom that found the gap, exercised end to end: spmv's ``row_index =
     np.repeat(np.arange(M), np.diff(A_indptr))``. ``p``'s diffs are ``2, 0, 3, 4`` -- a ZERO count
     (row 1 has no nonzeros, the case a naive ``outer * K`` formula silently skips) and unequal

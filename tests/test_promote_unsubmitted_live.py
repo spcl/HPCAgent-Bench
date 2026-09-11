@@ -50,7 +50,7 @@ class Judge(http.server.BaseHTTPRequestHandler):
 
     posted: ClassVar[list[dict]] = []
 
-    def log_message(self, *args):  # keep pytest output readable
+    def log_message(self, *args) -> None:  # keep pytest output readable
         pass
 
     def reply(self, status: int, payload: dict) -> None:
@@ -61,7 +61,7 @@ class Judge(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def do_GET(self):
+    def do_GET(self) -> None:
         self.reply(200, {"status": "ok", "judge_rank": JUDGE_RANK})
 
     def do_POST(self):
@@ -111,7 +111,7 @@ def run_dir_with_one_verified_kernel(tmp_path: pathlib.Path) -> pathlib.Path:
     return tmp_path
 
 
-def test_a_promotion_is_accepted_by_a_real_judge(promoter, judge, tmp_path, capsys, monkeypatch):
+def test_a_promotion_is_accepted_by_a_real_judge(promoter, judge, tmp_path, capsys, monkeypatch) -> None:
     """End to end through main(): discover the kernel, discover the rank, land the submission."""
     run_dir = run_dir_with_one_verified_kernel(tmp_path)
     monkeypatch.setattr(sys, "argv", ["promote_unsubmitted.py", str(run_dir), "--judge", judge])
@@ -126,7 +126,7 @@ def test_a_promotion_is_accepted_by_a_real_judge(promoter, judge, tmp_path, caps
     assert posted["optimizer"] == "promoted-unsubmitted"
 
 
-def test_the_same_judge_refuses_a_body_that_names_no_rank(promoter, judge, tmp_path, capsys):
+def test_the_same_judge_refuses_a_body_that_names_no_rank(promoter, judge, tmp_path, capsys) -> None:
     """The control. Without this the test above would pass against a judge that checks nothing,
     which is exactly how a promoter that never sent a rank looked green for its whole life."""
     run_dir = run_dir_with_one_verified_kernel(tmp_path)
@@ -174,7 +174,7 @@ def add_worker(rank_dir: pathlib.Path, run_id: str, bench: str, speedup: float, 
     con.close()
 
 
-def test_a_worker_that_never_submitted_is_promoted_at_its_own_exit(promoter, judge, tmp_path):
+def test_a_worker_that_never_submitted_is_promoted_at_its_own_exit(promoter, judge, tmp_path) -> None:
     """The rule the campaign runs on: exit without submitting -> the last correct score IS the
     submission. This is the agent_driver path, which no test reached before."""
     rank_dir = tmp_path / "judge" / "rank-0"
@@ -189,7 +189,7 @@ def test_a_worker_that_never_submitted_is_promoted_at_its_own_exit(promoter, jud
     assert posted["optimizer"] == "promoted-unsubmitted"
 
 
-def test_a_worker_that_did_submit_is_left_alone(promoter, judge, tmp_path):
+def test_a_worker_that_did_submit_is_left_alone(promoter, judge, tmp_path) -> None:
     """Promoting over a deliberate answer would replace it with an older one, so a worker holding
     a submission must produce no candidate at all."""
     rank_dir = tmp_path / "judge" / "rank-0"
@@ -200,7 +200,7 @@ def test_a_worker_that_did_submit_is_left_alone(promoter, judge, tmp_path):
     assert Judge.posted == [], "a worker that submitted must not be promoted over"
 
 
-def test_a_worker_promotes_only_its_own_run(promoter, judge, tmp_path):
+def test_a_worker_promotes_only_its_own_run(promoter, judge, tmp_path) -> None:
     """Scoring is per EPISODE, so two workers in one shard are two data points. A promoter that
     ignored run_id would hand this worker its neighbour's kernel."""
     rank_dir = tmp_path / "judge" / "rank-0"

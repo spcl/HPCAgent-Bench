@@ -57,7 +57,7 @@ def measured(preset: str, wall_ms: Optional[float], nbytes: Optional[int]) -> "e
 
 
 @pytest.mark.parametrize("k", [1.0, 2.0, 3.0])
-def test_fit_exponent_recovers_exact_power_law(k: float):
+def test_fit_exponent_recovers_exact_power_law(k: float) -> None:
     """t = C * n**k at two footprints 1024x apart must recover k exactly (up to float error)."""
     n_lo, n_hi = 2**20, 2**30  # 1 MiB -> 1 GiB, ratio 2**10
     t_lo = 2.0  # ms; comfortably above MIN_MEASURED_MS
@@ -68,7 +68,7 @@ def test_fit_exponent_recovers_exact_power_law(k: float):
     assert fitted == pytest.approx(k, rel=1e-9)
 
 
-def test_fit_exponent_refuses_measurement_below_floor():
+def test_fit_exponent_refuses_measurement_below_floor() -> None:
     """A point under MIN_MEASURED_MS must not anchor a fit, even with a clean power law."""
     n_lo, n_hi = 2**20, 2**30
     t_lo = ex.MIN_MEASURED_MS / 2  # too fast to time honestly
@@ -78,7 +78,7 @@ def test_fit_exponent_refuses_measurement_below_floor():
     assert "floor" in why
 
 
-def test_fit_exponent_refuses_below_min_exponent():
+def test_fit_exponent_refuses_below_min_exponent() -> None:
     """A fitted k under MIN_EXPONENT (cost not tracking footprint) is refused, not returned."""
     n_lo, n_hi = 2**20, 2**30
     k = ex.MIN_EXPONENT / 2  # deliberately below the floor
@@ -89,21 +89,21 @@ def test_fit_exponent_refuses_below_min_exponent():
     assert "below" in why
 
 
-def test_fit_exponent_refuses_equal_footprint():
+def test_fit_exponent_refuses_equal_footprint() -> None:
     """Two presets with the same declared footprint have no slope to fit."""
     fitted, why = ex.fit_exponent([measured("S", 2.0, 2**20), measured("M", 20.0, 2**20)])
     assert fitted is None
     assert "no slope" in why
 
 
-def test_fit_exponent_refuses_when_time_does_not_grow():
+def test_fit_exponent_refuses_when_time_does_not_grow() -> None:
     """Footprint grows but time does not (cache-resident regime): refuse, don't fit a flat line."""
     fitted, why = ex.fit_exponent([measured("S", 5.0, 2**20), measured("M", 5.0, 2**30)])
     assert fitted is None
     assert "cache level" in why
 
 
-def test_fit_exponent_needs_two_usable_points():
+def test_fit_exponent_needs_two_usable_points() -> None:
     fitted, why = ex.fit_exponent([measured("S", None, 2**20), measured("M", 20.0, 2**30)])
     assert fitted is None
     assert "fewer than two" in why
@@ -119,7 +119,7 @@ def test_fit_exponent_needs_two_usable_points():
 class FakeInit:
     """The slice of ``init`` that :func:`hpcagent_bench.sizing.working_bytes` reads."""
 
-    def __init__(self, shapes: Dict[str, str]):
+    def __init__(self, shapes: Dict[str, str]) -> None:
         self.shapes = shapes
         self.dtypes: Dict[str, str] = {}
         self.scalars: Dict[str, object] = {}
@@ -132,7 +132,7 @@ class FakeSpec:
         config_names: frozenset = frozenset(),
         track: str = "scientific_computing",
         shapes: Optional[Dict[str, str]] = None,
-    ):
+    ) -> None:
         self.parameters = parameters
         self.config_names = config_names
         # The projection caps on the TRACK's own XL ceiling, so a spec without a track is not a
@@ -154,7 +154,7 @@ class FakeSpec:
 FAKE_ELEM_BYTES = 8
 
 
-def test_extrapolate_is_time_bound_when_the_projection_fits_memory():
+def test_extrapolate_is_time_bound_when_the_projection_fits_memory() -> None:
     n_lo, n_hi = 1_000_000, 10_000_000  # k=1 (linear) fit
     points = [measured("S", 10.0, n_lo), measured("M", 100.0, n_hi)]
     spec = FakeSpec(parameters={"M": {"N": 1000}})
@@ -170,7 +170,7 @@ def test_extrapolate_is_time_bound_when_the_projection_fits_memory():
     assert out.S == {"N": 1000}  # the anchor's OWN values, unchanged -- apply_sizes' "S" partner
 
 
-def test_extrapolate_is_memory_bound_when_the_ceiling_binds_first():
+def test_extrapolate_is_memory_bound_when_the_ceiling_binds_first() -> None:
     n_lo, n_hi = 1_000_000, 10_000_000  # k=1 again
     points = [measured("S", 10.0, n_lo), measured("M", 100.0, n_hi)]
     spec = FakeSpec(parameters={"M": {"N": 1000}})
@@ -181,7 +181,7 @@ def test_extrapolate_is_memory_bound_when_the_ceiling_binds_first():
     assert out.xl_bytes == min(XL_BYTE_CEILING, FAKE_ELEM_BYTES * 1000 * ex.MAX_EXTRAPOLATION)
 
 
-def test_extrapolate_excludes_config_knobs_from_xl_and_from_the_scale():
+def test_extrapolate_excludes_config_knobs_from_xl_and_from_the_scale() -> None:
     """A config: knob at the anchor preset is dropped from XL and does not count toward the
     scalable-symbol count the per-symbol root uses."""
     n_lo, n_hi = 1_000_000, 10_000_000
@@ -196,7 +196,7 @@ def test_extrapolate_excludes_config_knobs_from_xl_and_from_the_scale():
     assert out.XL["N"] == pytest.approx(1000 * 10, rel=1e-9)
 
 
-def test_extrapolate_reports_the_fit_refusal_as_its_own_problem():
+def test_extrapolate_reports_the_fit_refusal_as_its_own_problem() -> None:
     spec = FakeSpec(parameters={"M": {"N": 1000}})
     points = [measured("S", 5.0, 2**20), measured("M", 5.0, 2**30)]  # flat: no slope
     out = ex.extrapolate(spec, "fake/kernel", points, target_ms=1000.0)
@@ -210,7 +210,7 @@ def test_extrapolate_reports_the_fit_refusal_as_its_own_problem():
 # --------------------------------------------------------------------------------------------
 
 
-def test_measure_pins_one_precision(monkeypatch, tmp_path):
+def test_measure_pins_one_precision(monkeypatch, tmp_path) -> None:
     captured: Dict[str, list] = {}
 
     def fake_run(argv, **kw):
@@ -232,7 +232,7 @@ def test_measure_pins_one_precision(monkeypatch, tmp_path):
 # --------------------------------------------------------------------------------------------
 
 
-def test_measured_points_never_mixes_native_and_python_across_presets(monkeypatch):
+def test_measured_points_never_mixes_native_and_python_across_presets(monkeypatch) -> None:
     """S falls back to python (no native at that size); M has native. The fit must not use
     M's tighter native clock against S's looser python one -- both points must end up on the
     SAME series (python, since that is the one common to every point that ran)."""
@@ -252,7 +252,7 @@ def test_measured_points_never_mixes_native_and_python_across_presets(monkeypatc
     assert by_preset["M"].wall_ms == 50.0  # python, NOT native_ms=20.0 -- never mixed in
 
 
-def test_measured_points_uses_native_when_every_point_has_it(monkeypatch):
+def test_measured_points_uses_native_when_every_point_has_it(monkeypatch) -> None:
     """When native is available at every measured preset, it is used at every preset (the
     tighter clock, consistently) -- this is the case the mixing guard must not disable."""
 
@@ -277,7 +277,7 @@ def test_measured_points_uses_native_when_every_point_has_it(monkeypatch):
 # --------------------------------------------------------------------------------------------
 
 
-def test_materialised_bytes_resolves_hand_initialized_kernel_by_path_key():
+def test_materialised_bytes_resolves_hand_initialized_kernel_by_path_key() -> None:
     """A kernel the declared shapes cannot size must be materialised through its PATH-KEY -- exactly
     the case that used to crash inside Benchmark(spec.short_name) and get swallowed into "unknown".
 
@@ -299,7 +299,7 @@ def test_materialised_bytes_resolves_hand_initialized_kernel_by_path_key():
     assert nbytes is not None and nbytes > 0
 
 
-def test_fit_exponent_drops_a_sub_floor_rung_and_fits_the_rest():
+def test_fit_exponent_drops_a_sub_floor_rung_and_fits_the_rest() -> None:
     """Measuring EVERY rung must still fit. S is a 512-element smoke rung no kernel can time
     honestly, so it is dropped -- the fit comes from the rungs that clear the floor."""
     n_s, n_m, n_xl = 2**16, 2**20, 2**30
@@ -313,14 +313,14 @@ def test_fit_exponent_drops_a_sub_floor_rung_and_fits_the_rest():
     assert fitted == pytest.approx(2.0, rel=1e-9)  # S did not drag the slope toward 0
 
 
-def test_fit_exponent_names_the_rung_it_dropped():
+def test_fit_exponent_names_the_rung_it_dropped() -> None:
     """Dropping the only other point still refuses -- and says which rung went under the floor."""
     fitted, why = ex.fit_exponent([measured("S", ex.MIN_MEASURED_MS / 2, 2**20), measured("M", 50.0, 2**30)])
     assert fitted is None
     assert "floor" in why and "S=" in why
 
 
-def test_an_xl_over_target_is_shrunk_not_left_alone():
+def test_an_xl_over_target_is_shrunk_not_left_alone() -> None:
     """A kernel measured far OVER the target must come back smaller. Flooring the proposal at the
     anchor's own size (right only while the anchor is M) silently returned the current XL while the
     report claimed the target had been hit."""
@@ -337,7 +337,7 @@ def test_an_xl_over_target_is_shrunk_not_left_alone():
     assert out.XL["LEN_1D"] >= out.S["LEN_1D"], "XL may never fall under the M rung it is applied beside"
 
 
-def test_a_whole_ladder_over_target_slides_down_instead_of_collapsing():
+def test_a_whole_ladder_over_target_slides_down_instead_of_collapsing() -> None:
     """When M itself already costs more than the target, XL solves BELOW it and the per-symbol
     floor clamps it back up -- M == XL, one benchmark measured three times. Five of 242 kernels
     proposed exactly that, and apply_sizes took all five before derive_ladder learned to refuse a
@@ -350,7 +350,7 @@ def test_a_whole_ladder_over_target_slides_down_instead_of_collapsing():
     assert out.XL["N"] < spec.parameters["M"]["N"], "and the whole ladder must end up below today's M"
 
 
-def test_extrapolate_respects_the_ceiling_when_arrays_outrank_the_symbol_count():
+def test_extrapolate_respects_the_ceiling_when_arrays_outrank_the_symbol_count() -> None:
     """heat_3d: ONE symbol, (N,N,N) arrays. The closed form this replaced raised N by the whole
     byte ratio, so an 8 GB proposal materialised at 46.6 GB and derive_ladder refused it."""
     n_lo, n_hi = 1_000_000, 10_000_000
@@ -364,7 +364,7 @@ def test_extrapolate_respects_the_ceiling_when_arrays_outrank_the_symbol_count()
     assert got > out.xl_bytes * 0.9  # and not left an order of magnitude short of it either
 
 
-def test_extrapolate_leaves_a_symbol_the_footprint_ignores_alone():
+def test_extrapolate_leaves_a_symbol_the_footprint_ignores_alone() -> None:
     """A loop count (TSTEPS) is not a size: growing it changes the program, which derive_ladder
     refuses as "moves structural knobs"."""
     n_lo, n_hi = 1_000_000, 10_000_000

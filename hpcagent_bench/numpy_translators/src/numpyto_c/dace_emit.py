@@ -22,7 +22,7 @@ _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 class _ShapeToSymbol(ast.NodeTransformer):
     """Replace each <array>.shape[<const k>] with the array's k-th declared symbolic shape token."""
 
-    def __init__(self, arr_shapes: Dict[str, List[str]]):
+    def __init__(self, arr_shapes: Dict[str, List[str]]) -> None:
         self.arr_shapes = arr_shapes
 
     def visit_Subscript(self, node: ast.Subscript):
@@ -58,7 +58,7 @@ class SplitTupleAssign(ast.NodeTransformer):
     binds.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.temporaries = 0
 
     def visit_Assign(self, node: ast.Assign):
@@ -123,7 +123,7 @@ class SplitTupleAssign(ast.NodeTransformer):
 class _DropSymbolAssign(ast.NodeTransformer):
     """Drop <sym> = ... where <sym> is a declared size symbol (dace symbols are immutable)."""
 
-    def __init__(self, symbols):
+    def __init__(self, symbols) -> None:
         self.symbols = set(symbols)
 
     def visit_Assign(self, node: ast.Assign):
@@ -141,7 +141,7 @@ class _ResolveZeros(ast.NodeTransformer):
         zeros_fills: Dict[str, str],
         local_dtypes: Dict[str, str],
         default_dtype: str,
-    ):
+    ) -> None:
         self.zeros_locals = zeros_locals
         self.zeros_fills = zeros_fills
         self.local_dtypes = local_dtypes
@@ -220,7 +220,7 @@ class _AnnotateEmptyDtype(ast.NodeTransformer):
     precision-driven float global reproduces that default rather than guessing one.
     """
 
-    def __init__(self, dtype_expr: str):
+    def __init__(self, dtype_expr: str) -> None:
         self.dtype_expr = dtype_expr
 
     def visit_Call(self, node: ast.Call):
@@ -266,7 +266,7 @@ class _FillOutputParamRealloc(ast.NodeTransformer):
     miscompile rather than the missed write it replaces.
     """
 
-    def __init__(self, shapes: Dict[str, List[str]]):
+    def __init__(self, shapes: Dict[str, List[str]]) -> None:
         self.shapes = shapes
 
     def visit_Assign(self, node: ast.Assign):
@@ -387,7 +387,7 @@ _FRAMEWORK_DTYPE_TO_DACE = {"np_float": "dc_float", "np_complex": "dc_complex_fl
 class _RewriteFrameworkDtype(ast.NodeTransformer):
     """Rewrite leaked np_float/np_complex tokens to the dace precision global; tracks complex usage for the import."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.used_complex = False
 
     def visit_Name(self, node: ast.Name):
@@ -434,7 +434,7 @@ class RewriteBuiltinDtype(ast.NodeTransformer):
     emitter declares, so the fp32 leg does not allocate an fp64 workspace.
     """
 
-    def __init__(self, float_dtype: str):
+    def __init__(self, float_dtype: str) -> None:
         self.float_dtype = float_dtype
 
     def visit_keyword(self, node: ast.keyword):
@@ -451,7 +451,7 @@ class RewriteBuiltinDtype(ast.NodeTransformer):
 class _TernaryValueHoister(ast.NodeTransformer):
     """Hoist each ternary-used-as-value to a scalar temp assigned by a guarding if/else appended to prelude."""
 
-    def __init__(self, owner: "_DesugarTernary", prelude: List[ast.stmt]):
+    def __init__(self, owner: "_DesugarTernary", prelude: List[ast.stmt]) -> None:
         self.owner = owner
         self.prelude = prelude
 
@@ -472,7 +472,7 @@ class _TernaryValueHoister(ast.NodeTransformer):
 class _DesugarTernary(ast.NodeTransformer):
     """Lower a ternary (assignment RHS or nested value) to the if/else statement dace's frontend accepts."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.ctr = 0
 
     def visit_FunctionDef(self, node: ast.FunctionDef):
@@ -519,7 +519,7 @@ class _DesugarTernary(ast.NodeTransformer):
 class _MethodReceiverHoister(ast.NodeTransformer):
     """Bind a method call's non-Name receiver to a temp, appended to ``prelude``."""
 
-    def __init__(self, owner: "BindMethodReceiver", prelude: List[ast.stmt]):
+    def __init__(self, owner: "BindMethodReceiver", prelude: List[ast.stmt]) -> None:
         self.owner = owner
         self.prelude = prelude
 
@@ -554,7 +554,7 @@ class BindMethodReceiver(ast.NodeTransformer):
     before the loop would freeze the first value. That construct stays refused, which is honest.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.ctr = 0
 
     def visit_FunctionDef(self, node: ast.FunctionDef):
@@ -612,7 +612,7 @@ class DropIdentityAsarray(ast.NodeTransformer):
     keeps its call: there the constructor is doing real work.
     """
 
-    def __init__(self, ranks: Dict[str, int]):
+    def __init__(self, ranks: Dict[str, int]) -> None:
         self.ranks = ranks
 
     def visit_Call(self, node: ast.Call):
@@ -684,7 +684,7 @@ class ResolveInferredReshape(ast.NodeTransformer):
     guessed at.
     """
 
-    def __init__(self, arr_shapes: Dict[str, List[str]]):
+    def __init__(self, arr_shapes: Dict[str, List[str]]) -> None:
         self.arr_shapes = arr_shapes
 
     def visit_Call(self, node: ast.Call):
@@ -954,7 +954,7 @@ def negative_step(step: ast.expr) -> bool:
 class _DesugarArrayIteration(ast.NodeTransformer):
     """Rewrite 'for x in array' to an indexed range form -- dace's frontend rejects element iteration over an array."""
 
-    def __init__(self, arr_shapes: Dict[str, List[str]]):
+    def __init__(self, arr_shapes: Dict[str, List[str]]) -> None:
         self.arr_shapes = arr_shapes
         self.ctr = 0
 
@@ -980,7 +980,7 @@ class _DesugarArrayIteration(ast.NodeTransformer):
 class _FlipReplacer(ast.NodeTransformer):
     """Replace a materialisable np.flip(base[lo:hi]) with a reversing-copy workspace slice, via the owner."""
 
-    def __init__(self, owner: "_MaterializeDynamicFlip", prelude: List[ast.stmt]):
+    def __init__(self, owner: "_MaterializeDynamicFlip", prelude: List[ast.stmt]) -> None:
         self.owner = owner
         self.prelude = prelude
 
@@ -995,7 +995,7 @@ class _FlipReplacer(ast.NodeTransformer):
 class _MaterializeDynamicFlip(ast.NodeTransformer):
     """Materialise a dynamic-length np.flip into a fixed-extent reversing-copy workspace -- dace rejects a View there."""
 
-    def __init__(self, arr_shapes: Dict[str, List[str]], arr_dtypes: Dict[str, str], symbols: set):
+    def __init__(self, arr_shapes: Dict[str, List[str]], arr_dtypes: Dict[str, str], symbols: set) -> None:
         self.arr_shapes = arr_shapes
         self.arr_dtypes = arr_dtypes
         self.symbols = set(symbols)
@@ -1180,7 +1180,7 @@ class PointwiseScatterToLoop(ast.NodeTransformer):
     :class:`numpyto_common.numpy_desugar._IxWriteToLoop` carries, and undetectable statically.
     """
 
-    def __init__(self, ranks: Dict[str, int]):
+    def __init__(self, ranks: Dict[str, int]) -> None:
         self.ranks = ranks
         self.ctr = 0
 
@@ -1239,7 +1239,7 @@ class PointwiseScatterToLoop(ast.NodeTransformer):
 class _DesugarBroadcastAugAssign(ast.NodeTransformer):
     """Rewrite 'A <op>= b' to 'A[:] = A <op> b' -- dace builds an invalid SDFG for a broadcasting in-place augassign."""
 
-    def __init__(self, array_names: set):
+    def __init__(self, array_names: set) -> None:
         self.array_names = set(array_names)
 
     def visit_AugAssign(self, node: ast.AugAssign):
@@ -1292,7 +1292,7 @@ class _DesugarChainedAssign(ast.NodeTransformer):
     the unroll factor. Repeating the literal is what the reference already means.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.ctr = 0
 
     def visit_Assign(self, node: ast.Assign):
@@ -1317,7 +1317,7 @@ class _DesugarChainedAssign(ast.NodeTransformer):
 class _SubstituteNames(ast.NodeTransformer):
     """Replace every load of a name in ``mapping`` with a copy of its expression."""
 
-    def __init__(self, mapping: Dict[str, ast.AST]):
+    def __init__(self, mapping: Dict[str, ast.AST]) -> None:
         self.mapping = mapping
 
     def visit_Name(self, node: ast.Name):
@@ -1329,7 +1329,7 @@ class _SubstituteNames(ast.NodeTransformer):
 class _DropAliasAssign(ast.NodeTransformer):
     """Drop ``<name> = ...`` for each inlined alias name (its uses are substituted)."""
 
-    def __init__(self, names):
+    def __init__(self, names) -> None:
         self.names = set(names)
 
     def visit_Assign(self, node: ast.Assign):
@@ -1690,7 +1690,7 @@ class ResolveShapeReads(ast.NodeTransformer):
     extent was read as axis 0's.
     """
 
-    def __init__(self, shapes: Dict[str, List[str]]):
+    def __init__(self, shapes: Dict[str, List[str]]) -> None:
         self.shapes: Dict[str, List[str]] = {k: [fold_shape_expr(t) for t in v] for k, v in shapes.items()}
         self.aliases: Dict[str, ast.AST] = {}
         self.alias_seen: set = set()
@@ -2167,7 +2167,7 @@ class _CopyScalarAlias(ResolveShapeReads):
     infer is left alone -- an invented copy on a rank it guessed wrong is a miscompile.
     """
 
-    def __init__(self, shapes: Dict[str, List[str]], floats: set, skip: set):
+    def __init__(self, shapes: Dict[str, List[str]], floats: set, skip: set) -> None:
         super().__init__(shapes)
         self.floats = floats
         self.skip = skip
@@ -2300,7 +2300,7 @@ class HoistCompoundExtents(ast.NodeTransformer):
     anything else would move a read above its write.
     """
 
-    def __init__(self, known: set):
+    def __init__(self, known: set) -> None:
         self.known = known
         self.names: Dict[str, str] = {}
         self.plan: List = []  # (index of the top-level statement to define before, name, expression)
@@ -2397,7 +2397,7 @@ def shape_reaching_names(body: ast.AST, direct: set) -> set:
 class SubstituteScalarValues(ast.NodeTransformer):
     """Replace every READ of a named scalar with its literal value."""
 
-    def __init__(self, values: Dict[str, int]):
+    def __init__(self, values: Dict[str, int]) -> None:
         self.values = values
 
     def visit_Name(self, node: ast.Name):
@@ -2784,7 +2784,7 @@ class LowerCallsDaceCannotReplace(ast.NodeTransformer):
     extents these emit are resolved with every other one.
     """
 
-    def __init__(self, ranks: Dict[str, int], complex_arrays: Optional[Set[str]] = None):
+    def __init__(self, ranks: Dict[str, int], complex_arrays: Optional[Set[str]] = None) -> None:
         self.ranks = ranks
         self.complex_arrays = complex_arrays or set()
         self.counter = 0
@@ -3225,7 +3225,7 @@ def _plan_size_promotion(fn_ast: ast.AST, known: set, symbols: set | None = None
 class _SplitReassignedSize(ast.NodeTransformer):
     """Split a size symbol the body also reassigns: keep the symbol for allocation, route other uses through <name>_iter."""
 
-    def __init__(self, names):
+    def __init__(self, names) -> None:
         self.names = set(names)
         self._defined = set()  # first assignment per name = the (dropped) def
         self._in_alloc_shape = False
@@ -3310,7 +3310,7 @@ def sympy_reserved(name: str) -> bool:
 class RenameNames(ast.NodeTransformer):
     """Rewrite renamed identifiers wherever they appear -- loads, stores and arguments alike."""
 
-    def __init__(self, renames: Dict[str, str]):
+    def __init__(self, renames: Dict[str, str]) -> None:
         self.renames = renames
 
     def visit_Name(self, node: ast.Name):

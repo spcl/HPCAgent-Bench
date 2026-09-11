@@ -49,7 +49,7 @@ def _spmv_primfunc(n, nnz, max_nnz, dtype):
 class TvmSpMV:
     """Compiled CSR SpMV bound to one matrix; ``self(x_np) -> y_np``."""
 
-    def __init__(self, A, dtype, target_fn=cpu_target, device=None):
+    def __init__(self, A, dtype, target_fn=cpu_target, device=None) -> None:
         A = A.tocsr()
         self.n = int(A.shape[0])
         self.dtype = str(dtype)

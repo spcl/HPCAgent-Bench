@@ -101,7 +101,7 @@ def die_with_parent() -> None:
         os._exit(0)
 
 
-def _child(fn, args, kwargs, q):
+def _child(fn, args, kwargs, q) -> None:
     die_with_parent()
     # First act, before any work: this is what arms the parent's deadline (see run_forked).
     q.put(("started", None))

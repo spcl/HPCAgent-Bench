@@ -34,7 +34,7 @@ _SCALAR_SRC = (
 )
 
 
-def test_scalar_early_return_helper():
+def test_scalar_early_return_helper() -> None:
     x = np.array([-3.0, 0.5, 7.0, 2.0, -1.0, 5.5, 0.0, 4.9], dtype=np.float64)
     ok, res = _all_ok(
         run_op(_SCALAR_SRC, "f", {"x": x}, {"out": (8,)}, {"N": 8}, shapes={"x": "(N,)", "out": "(N,)"}, backends=_ALL)
@@ -42,7 +42,7 @@ def test_scalar_early_return_helper():
     assert ok, res
 
 
-def test_scalar_helper_multiple_args():
+def test_scalar_helper_multiple_args() -> None:
     # two scalar params + an early return that depends on both.
     src = (
         "import numpy as np\n"
@@ -70,7 +70,7 @@ def test_scalar_helper_multiple_args():
     assert ok, res
 
 
-def test_scalar_helper_params_sort_against_source_order():
+def test_scalar_helper_params_sort_against_source_order() -> None:
     # Both params are ``double``, and their alphabetical order (aa, zz) is the REVERSE of their
     # source order -- so a definition/call-site disagreement transposes two same-typed arguments,
     # which every compiler accepts silently. Numerics are the only detector, and the expression is
@@ -101,7 +101,7 @@ def test_scalar_helper_params_sort_against_source_order():
     assert ok, res
 
 
-def test_helper_emitted_as_c_function():
+def test_helper_emitted_as_c_function() -> None:
     import json
     import pathlib
     import tempfile
@@ -159,7 +159,7 @@ _INSTANCE_NORM_HELPER_SRC = (
 )
 
 
-def test_surviving_helper_ndim_tuple_axis_folds():
+def test_surviving_helper_ndim_tuple_axis_folds() -> None:
     x = (np.arange(2 * 3 * 4 * 5, dtype=np.float64).reshape(2, 3, 4, 5) - 60.0) / 7.0
     ok, res = _all_ok(
         run_op(

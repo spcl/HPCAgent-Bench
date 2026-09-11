@@ -32,7 +32,7 @@ def _flag_string(language: str, compiler: str, mode: Mode) -> str:
 # --- vocabularies -----------------------------------------------------------------
 
 
-def test_baseline_choices_include_the_autopar_kinds():
+def test_baseline_choices_include_the_autopar_kinds() -> None:
     assert grading.BASELINE_CHOICES == ("numpy", "numba", "c", "c-autopar", "cpp-autopar", "fortran-autopar")
     # BASELINE_OPTIONS is what the CLI / config / API accept: the concrete kinds + the auto sentinel.
     assert grading.BASELINE_OPTIONS == grading.BASELINE_CHOICES + ("auto",)
@@ -43,7 +43,7 @@ def test_baseline_choices_include_the_autopar_kinds():
         assert concrete in grading.BASELINE_CHOICES
 
 
-def test_autopar_baselines_map_language_and_candidate_compilers():
+def test_autopar_baselines_map_language_and_candidate_compilers() -> None:
     # Each autopar kind -> (reference language, ordered candidate compilers); denominator is the fastest available.
     assert grading.AUTOPAR_BASELINES == {
         "c-autopar": ("c", ("clang", "gcc")),
@@ -55,7 +55,7 @@ def test_autopar_baselines_map_language_and_candidate_compilers():
 # --- track -> default baseline map + resolution -----------------------------------
 
 
-def test_track_default_map_values():
+def test_track_default_map_values() -> None:
     assert grading.TRACK_DEFAULT_BASELINE == {
         "loop_level_reasoning": "numba",
         "machine_learning": "numpy",
@@ -69,7 +69,7 @@ def test_track_default_map_values():
     assert grading.default_baseline_for_track(None) == "c"
 
 
-def test_resolve_from_track_when_not_overridden():
+def test_resolve_from_track_when_not_overridden() -> None:
     """The ``auto`` sentinel (and ``None``) resolve from the kernel's track."""
     loop_level_reasoning = BenchSpec.load(_FOUNDATION)
     machine_learning = BenchSpec.load(_ML)
@@ -88,7 +88,7 @@ def test_resolve_from_track_when_not_overridden():
     )
 
 
-def test_explicit_override_beats_track_default():
+def test_explicit_override_beats_track_default() -> None:
     """An explicit concrete kind wins over the track default (both directions)."""
     loop_level_reasoning = BenchSpec.load(_FOUNDATION)  # track default = c (single-core)
     scientific_computing = BenchSpec.load(_HPC)  # track default = numba (the parallel njit build)
@@ -106,7 +106,7 @@ def test_explicit_override_beats_track_default():
     assert grading.resolve_baseline("fortran-autopar", machine_learning) == "fortran-autopar"
 
 
-def test_resolve_rejects_unknown_baseline():
+def test_resolve_rejects_unknown_baseline() -> None:
     scientific_computing = BenchSpec.load(_HPC)
     with pytest.raises(ValueError):
         grading.resolve_baseline("nonsense", scientific_computing)
@@ -115,7 +115,7 @@ def test_resolve_rejects_unknown_baseline():
 # --- compiled-reference plan ------------------------------------------------------
 
 
-def test_baseline_compiled_descriptors():
+def test_baseline_compiled_descriptors() -> None:
     assert grading.baseline_compiled("numpy") is None
     assert grading.baseline_uses_numpy("numpy")
     assert not grading.baseline_uses_numpy("c") and not grading.baseline_uses_numpy("c-autopar")
@@ -144,7 +144,7 @@ _AUTOPAR_FLAG = {
 }
 
 
-def test_c_autopar_candidates_are_multicore_autopar():
+def test_c_autopar_candidates_are_multicore_autopar() -> None:
     """Every c-autopar candidate auto-parallelizes under MULTI_CORE and only then (mode-gated)."""
     lang, compilers = grading.AUTOPAR_BASELINES["c-autopar"]
     assert compilers == ("clang", "gcc")
@@ -154,7 +154,7 @@ def test_c_autopar_candidates_are_multicore_autopar():
         assert flag not in _flag_string(lang, compiler, Mode.SINGLE_CORE)
 
 
-def test_cpp_autopar_candidates_are_multicore_autopar():
+def test_cpp_autopar_candidates_are_multicore_autopar() -> None:
     lang, compilers = grading.AUTOPAR_BASELINES["cpp-autopar"]
     assert compilers == ("clangpp", "gpp")
     for compiler in compilers:
@@ -163,7 +163,7 @@ def test_cpp_autopar_candidates_are_multicore_autopar():
         assert flag not in _flag_string(lang, compiler, Mode.SINGLE_CORE)
 
 
-def test_fortran_autopar_candidates_are_multicore_autopar():
+def test_fortran_autopar_candidates_are_multicore_autopar() -> None:
     """fortran-autopar compiles gfortran + GCC auto-parallelization, MULTI_CORE only.
 
     gfortran cannot use the plain `_AUTOPAR_FLAG` check the C/C++ cases use. Its block also
@@ -187,7 +187,7 @@ def test_fortran_autopar_candidates_are_multicore_autopar():
 # --- API + service surfaces -------------------------------------------------------
 
 
-def test_api_baseline_enum_and_default():
+def test_api_baseline_enum_and_default() -> None:
     from hpcagent_bench import api
 
     values = [b.value for b in api.Baseline]
@@ -199,7 +199,7 @@ def test_api_baseline_enum_and_default():
     assert api.RunConfig(baseline="c-autopar").baseline is api.Baseline.C_AUTOPAR
 
 
-def test_service_config_default_and_validation():
+def test_service_config_default_and_validation() -> None:
     from hpcagent_bench.harness.service import ServiceConfig, from_config
 
     # The per-track default is None internally (the "auto" boundary token).
@@ -222,7 +222,7 @@ def _emitter_and_any(compilers) -> bool:
     return any(shutil.which(c) for c in compilers)
 
 
-def test_c_autopar_reference_builds_and_times():
+def test_c_autopar_reference_builds_and_times() -> None:
     """A c-autopar baseline compiles the multi-core autopar reference (fastest candidate) and times it."""
     if not _emitter_and_any(["clang", "gcc"]):
         pytest.skip("NumpyToC emitter or a C autopar compiler (clang/gcc) absent")
@@ -244,7 +244,7 @@ def test_c_autopar_reference_builds_and_times():
         )
 
 
-def test_hpc_resolves_to_autopar_and_times():
+def test_hpc_resolves_to_autopar_and_times() -> None:
     """An scientific_computing kernel resolves to the AUTOPAR baseline -- the multi-core build of
     the same reference -- so the compiled autopar reference is what gets timed under ``auto``.
     What the track must never reach under ``auto`` is a Python denominator: numba ran 16-165x
@@ -257,7 +257,7 @@ def test_hpc_resolves_to_autopar_and_times():
     assert "numba" not in out and "numpy" not in out, "auto must not reach a Python denominator on scientific_computing"
 
 
-def test_numba_baseline_times_the_parallel_njit_build():
+def test_numba_baseline_times_the_parallel_njit_build() -> None:
     """An explicit numba override times the GENERATED parallel sibling, not the numpy reference.
 
     Structural, not just "a number came back": the file the baseline imports is asserted to exist
@@ -277,14 +277,14 @@ def test_numba_baseline_times_the_parallel_njit_build():
     assert numba_impl_module(spec).__name__.endswith("_numba_np")
 
 
-def test_numba_baseline_falls_back_to_numpy_when_the_kernel_has_no_numba_form():
+def test_numba_baseline_falls_back_to_numpy_when_the_kernel_has_no_numba_form() -> None:
     """A kernel numba cannot emit or type keeps its speedup column on the numpy denominator.
 
     The row then NAMES numpy, so a degraded denominator is visible in the result rather than
     reported as if the parallel build had been timed."""
     from hpcagent_bench.harness import scoring
 
-    def refuse(*_a, **_k):
+    def refuse(*_a, **_k) -> None:
         raise RuntimeError("numba declined to type this kernel")
 
     original = scoring._time_numba_samples
@@ -296,7 +296,7 @@ def test_numba_baseline_falls_back_to_numpy_when_the_kernel_has_no_numba_form():
     assert out.get("numpy", 0) > 0 and "numba" not in out
 
 
-def test_primary_baseline_credits_numba_over_its_numpy_fallback():
+def test_primary_baseline_credits_numba_over_its_numpy_fallback() -> None:
     """Where both were timed, the scalar speedup row is the REQUESTED denominator."""
     from hpcagent_bench.harness.scoring import PYTHON_BASELINES, _primary_baseline
 
@@ -306,7 +306,7 @@ def test_primary_baseline_credits_numba_over_its_numpy_fallback():
     assert _primary_baseline({"c-autopar": 3}) == "c-autopar"
 
 
-def test_numpy_baseline_times_when_explicitly_selected():
+def test_numpy_baseline_times_when_explicitly_selected() -> None:
     """An explicit numpy override times the numpy reference (the non-compiled denominator path)."""
     from hpcagent_bench.harness.scoring import measure_baselines
 

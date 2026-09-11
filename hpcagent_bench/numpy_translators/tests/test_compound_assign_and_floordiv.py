@@ -14,13 +14,13 @@ from _op_oracle import run_op
 _NATIVE = ("c", "cpp", "fortran")
 
 
-def _assert_native_ok(res):
+def _assert_native_ok(res) -> None:
     for backend, status in res.items():
         assert status == "ok" or status.startswith("skip"), f"{backend}: {status}"
     assert any(status == "ok" for status in res.values()), f"all backends skipped (vacuous): {res}"
 
 
-def test_compound_int_floordiv_and_mod_match_numpy():
+def test_compound_int_floordiv_and_mod_match_numpy() -> None:
     # //= and %= over the full sign matrix: numpy // floors toward -inf and % takes the
     # divisor's sign, unlike C/Fortran's native truncate/dividend-sign forms.
     # The compound ops run DIRECTLY on the output buffers -- the shape a real kernel writes.
@@ -50,7 +50,7 @@ def test_compound_int_floordiv_and_mod_match_numpy():
     _assert_native_ok(res)
 
 
-def test_literal_grid_unpack_does_not_overflow_int32():
+def test_literal_grid_unpack_does_not_overflow_int32() -> None:
     # tuple-unpack int_locals were declared as bare 32-bit C int; a literal grid whose
     # pairwise product exceeds 2^31 (46341*46341 = 2147488281) wrapped negative.
     src = "import numpy as np\ndef f(out):\n    nx, ny = 46341, 46341\n    out[0] = nx * ny\n"
@@ -58,7 +58,7 @@ def test_literal_grid_unpack_does_not_overflow_int32():
     _assert_native_ok(res)
 
 
-def test_floordiv_float_matches_numpy_over_overflow_range():
+def test_floordiv_float_matches_numpy_over_overflow_range() -> None:
     # 1e20 // 2 == 5e19 in numpy; the old Fortran FLOOR(.., int64) overflowed int64 here.
     src = "import numpy as np\ndef f(a, b, out):\n    for i in range(a.shape[0]):\n        out[i] = a[i] // b[i]\n"
     a = np.array([1e20, -7.5, 7.5, 3.0], dtype=np.float64)
@@ -75,7 +75,7 @@ def test_floordiv_float_matches_numpy_over_overflow_range():
     _assert_native_ok(res)
 
 
-def test_int_cast_floordiv_and_mod_floor_like_numpy():
+def test_int_cast_floordiv_and_mod_floor_like_numpy() -> None:
     # int(a[i]) is an INTEGER however float a is, so ``int(a[i]) // 2`` must take the
     # integer floor-div branch. The float-operand test used to walk into the cast, see
     # float ``a`` and pick the float path ``floor((x) / (y))`` -- but both emitted operands
@@ -102,7 +102,7 @@ def test_int_cast_floordiv_and_mod_floor_like_numpy():
     _assert_native_ok(res)
 
 
-def test_integer_floordiv_index_emits_integer_index():
+def test_integer_floordiv_index_emits_integer_index() -> None:
     # b[i // 2] is an integer floor-div used as an array index. It must take the integer
     # FloorDiv branch and emit an INTEGER index -- a real-valued index is rejected by
     # Fortran -std=f2018 (regression: loop induction vars must type as int64).

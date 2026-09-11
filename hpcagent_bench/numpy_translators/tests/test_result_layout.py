@@ -8,7 +8,7 @@ from numpyto_common.sparse_emit import DENSE, FRAMEWORK_SPARSE_CAPS, result_layo
 from numpyto_common.testing import sizes
 
 
-def test_sparse_times_dense_is_dense():
+def test_sparse_times_dense_is_dense() -> None:
     # sparse @ dense and dense @ sparse -> dense, every target.
     assert result_layout("csr", None, "c") == DENSE
     assert result_layout(None, "csr", "c") == DENSE
@@ -16,7 +16,7 @@ def test_sparse_times_dense_is_dense():
     assert result_layout(None, "dia", "fortran") == DENSE
 
 
-def test_sparse_times_sparse_follows_caps():
+def test_sparse_times_sparse_follows_caps() -> None:
     # Backends with no sparse-result SpGEMM in the lowering path densify.
     assert result_layout("csr", "csr", "c") == DENSE
     assert result_layout("csr", "csr", "fortran") == DENSE
@@ -26,14 +26,14 @@ def test_sparse_times_sparse_follows_caps():
     assert result_layout("csr", "csr", "cupy") == "csr"
 
 
-def test_jax_spmm_skip_is_a_consequence_of_the_rule():
+def test_jax_spmm_skip_is_a_consequence_of_the_rule() -> None:
     # spmm is CSR @ CSR on JAX; BCOO@BCOO densifies, so the rule yields DENSE
     # at benchmark size -> the documented skip is the rule, not an ad-hoc call.
     assert FRAMEWORK_SPARSE_CAPS["jax"] is False
     assert result_layout("csr", "csr", "jax") == DENSE
 
 
-def test_sizes_come_from_frozen_small_fixture_not_json():
+def test_sizes_come_from_frozen_small_fixture_not_json() -> None:
     # Directive #2: a unit test sizes its inputs from the frozen small fixture,
     # never from bench_info/*.json (which can change under it). The shapes are
     # tiny (so the test runs fast) and distinct per axis (to catch index bugs).

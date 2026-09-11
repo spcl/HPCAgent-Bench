@@ -24,14 +24,14 @@ import pytest
 from hpcagent_bench.harness import recording
 
 
-def test_table_exists_is_false_for_a_file_connect_would_create(tmp_path):
+def test_table_exists_is_false_for_a_file_connect_would_create(tmp_path) -> None:
     """The primitive the guard rests on. ``sqlite3.connect`` would happily make this file."""
     missing = tmp_path / "hpcagent_bench.db"
     assert not missing.exists()
     assert not recording.table_exists(str(missing), "results")
 
 
-def test_table_exists_is_false_for_an_empty_database(tmp_path):
+def test_table_exists_is_false_for_an_empty_database(tmp_path) -> None:
     """And an empty DB is not the same as an absent one: a previous reader may already have
     created it, which is exactly how the confusing case arises."""
     empty = tmp_path / "hpcagent_bench.db"
@@ -40,7 +40,7 @@ def test_table_exists_is_false_for_an_empty_database(tmp_path):
     assert not recording.table_exists(str(empty), "results")
 
 
-def test_reading_an_unwritten_db_names_the_run_leg(tmp_path):
+def test_reading_an_unwritten_db_names_the_run_leg(tmp_path) -> None:
     """The end this exists for: the error names the path, reports that no shard was found, and
     points at the run leg rather than the plot."""
     from hpcagent_bench import plotting
@@ -54,7 +54,7 @@ def test_reading_an_unwritten_db_names_the_run_leg(tmp_path):
     assert "run leg" in message, "the error must point at the leg that actually failed"
 
 
-def test_a_written_shard_is_aggregated_and_read(tmp_path):
+def test_a_written_shard_is_aggregated_and_read(tmp_path) -> None:
     """The other side of the guard: with a shard present the reader aggregates and returns rows,
     so the check above cannot be passing merely because this path never works."""
     from sqlmodel import Session
@@ -119,7 +119,7 @@ def write_row(shard: pathlib.Path, framework: str, build, time: float) -> None:
         session.commit()
 
 
-def test_the_baseline_survives_a_build_stamp(tmp_path):
+def test_the_baseline_survives_a_build_stamp(tmp_path) -> None:
     """``record.build`` is a deployment-wide setting, so a multi-tree job stamps EVERY framework it
     measures -- baseline included. The candidate columns must fold (``dace_cpu/main`` and
     ``dace_cpu/extended`` are two series); the baseline must not, because it is the divisor every

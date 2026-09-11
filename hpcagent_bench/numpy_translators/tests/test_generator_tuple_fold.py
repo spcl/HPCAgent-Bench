@@ -53,7 +53,7 @@ def _kir_for(src: str, func: str, inputs, outputs, shapes, syms):
     return parse_kernel(npy, bi)
 
 
-def test_as_tuple_generator_folds_and_helper_vanishes():
+def test_as_tuple_generator_folds_and_helper_vanishes() -> None:
     # ``_as_tuple`` has no C/Fortran ABI once it folds to a bare tuple return, so a correct fix
     # does not emit it at all -- it disappears into the call site.
     src = (
@@ -71,7 +71,7 @@ def test_as_tuple_generator_folds_and_helper_vanishes():
     assert "out[i] = x[i] * k + x[i] * k" in body
 
 
-def test_as_tuple_generator_numeric_c_cpp_fortran():
+def test_as_tuple_generator_numeric_c_cpp_fortran() -> None:
     src = (
         "import numpy as np\n" + _AS_TUPLE + "def f(x, k, out):\n"
         " stride = _as_tuple(k, 2)\n"
@@ -92,7 +92,7 @@ def test_as_tuple_generator_numeric_c_cpp_fortran():
     assert res == {"c": "ok", "cpp": "ok", "fortran": "ok"}, res
 
 
-def test_as_tuple_derived_count_from_operand_rank():
+def test_as_tuple_derived_count_from_operand_rank() -> None:
     # ``dims`` is not a bare literal here but ``x.ndim - 2`` -- the same "count derived from an
     # operand's rank" idiom as the ``(1,) * (x.ndim - 2)`` broadcast pad. Still a compile-time
     # count once ``x``'s rank is known (4), so it folds exactly like the literal-``2`` case.
@@ -108,7 +108,7 @@ def test_as_tuple_derived_count_from_operand_rank():
     assert ast.unparse(kir.tree).endswith("out[0] = k + k")
 
 
-def test_as_tuple_list_comprehension_sibling_form_folds():
+def test_as_tuple_list_comprehension_sibling_form_folds() -> None:
     # Same helper shape, a list comprehension bound to a local instead of a bare generator handed
     # straight to ``tuple(...)`` -- the sibling form the corpus also uses (``pad_widths = [...] +
     # [(padding[i], padding[i]) for i in range(dims)]`` style local list building).
@@ -130,7 +130,7 @@ def test_as_tuple_list_comprehension_sibling_form_folds():
     assert body.endswith("out[0] = k + k")
 
 
-def test_runtime_dims_declines_the_fold_and_still_refuses():
+def test_runtime_dims_declines_the_fold_and_still_refuses() -> None:
     # NEGATIVE case: ``dims`` is a genuine runtime scalar (not a literal, not derived from a known
     # rank). A correct refusal beats a wrong unroll -- the helper must stay a real (un-emittable)
     # function, not get spliced with a guessed trip count.
@@ -151,7 +151,7 @@ def test_runtime_dims_declines_the_fold_and_still_refuses():
         assert "GeneratorExp" in str(exc)
 
 
-def test_bare_comprehension_over_literal_range_unrolls_in_tuple_desugar():
+def test_bare_comprehension_over_literal_range_unrolls_in_tuple_desugar() -> None:
     # The narrower unit-level pin: :func:`tuple_desugar.tuple_of` used to unroll a generator/list
     # comprehension only when it sat directly inside a ``tuple(...)``/``list(...)`` call; a bare
     # comprehension bound straight to a name (as the helper-inlining fix above produces mid-fold)

@@ -40,20 +40,20 @@ def _fused(src, shapes, n):
     return ast.unparse(rewriter.visit(ast.parse(src, mode="eval").body))
 
 
-def test_computed_base_is_scalarised_not_subscripted():
+def test_computed_base_is_scalarised_not_subscripted() -> None:
     # The base IS the array; the ``[:, None]`` only says which nest axis it varies along.
     got = _scalarised("(mask != 0)[:, None]", {"mask": ("np",)}, 2)
     assert got == "mask[__w0] != 0", got
     assert "None" not in got, "a literal newaxis reached the emitter"
 
 
-def test_a_lower_rank_subscript_operand_right_aligns():
+def test_a_lower_rank_subscript_operand_right_aligns() -> None:
     # numpy broadcasts right-aligned: under a 4-deep nest a rank-3 read takes the LAST three iters.
     got = _scalarised("cxyz[:a, :b, :c]", {"cxyz": ("A", "B", "C")}, 4)
     assert got == "cxyz[__w1, __w2, __w3]", got
 
 
-def test_an_equal_rank_subscript_operand_is_unchanged():
+def test_an_equal_rank_subscript_operand_is_unchanged() -> None:
     # The offset is zero when the ranks already agree -- the arithmetic that was there before.
     got = _scalarised("cxyz[:a, :b, :c]", {"cxyz": ("A", "B", "C")}, 3)
     assert got == "cxyz[__w0, __w1, __w2]", got
@@ -68,7 +68,7 @@ def test_an_equal_rank_subscript_operand_is_unchanged():
         ("grid[gz[:, None], gy[None, :], 0]", 3, "grid[gz[__w1], gy[__w2], 0]"),
     ],
 )
-def test_open_mesh_gather_binds_each_vector_to_its_own_axis(src, nest, want):
+def test_open_mesh_gather_binds_each_vector_to_its_own_axis(src, nest, want) -> None:
     # ``A[a[:, None, None], b[None, :, None], c[None, None, :]]`` is the open mesh np.ix_ spells:
     # each vector varies along ITS OWN result axis, so each takes its own iter.
     shapes = {"grid": ("N", "N", "N"), "gz": ("nz",), "gy": ("ny",), "gx": ("nx",)}

@@ -40,7 +40,7 @@ def _block0(nranks: int, arrays) -> Descriptor:
 # --------------------------------------------------------------------------------------- #
 # Infile: tiles, localised scalars, per-rank workspace
 # --------------------------------------------------------------------------------------- #
-def test_infile_roundtrip_localises_symbol_and_workspace():
+def test_infile_roundtrip_localises_symbol_and_workspace() -> None:
     N, R = 10, 4  # ragged: 10 over 4 -> 3,3,2,2
     b, desc = _yax_binding(), _block0(4, ("x", "y"))
     x = np.arange(N, dtype=np.float64) + 1.0
@@ -59,14 +59,14 @@ def test_infile_roundtrip_localises_symbol_and_workspace():
     assert np.array_equal(np.concatenate([p.ptrs[0].tiles[r] for r in range(R)]), x)
 
 
-def test_infile_no_workspace_is_zero_per_rank():
+def test_infile_no_workspace_is_zero_per_rank() -> None:
     b, desc = _yax_binding(), _block0(2, ("x", "y"))
     raw = pack_infile(b, desc, {"x": np.arange(6.0), "y": np.zeros(6)}, {"N": 6, "a": 1.0}, k_repeats=1)
     p = unpack_infile(raw)
     assert p.workspace_bytes == [0, 0]  # no request -> 0 bytes everywhere (ABI Sec. 11)
 
 
-def test_infile_replicated_array_full_copy_each_rank():
+def test_infile_replicated_array_full_copy_each_rank() -> None:
     # A replicated pointer: every rank gets the whole array (scalars/length-1 rule + explicit).
     b = _binding(
         Arg(name="w", kind="ptr", dtype="float64", is_const=True),
@@ -86,7 +86,7 @@ def test_infile_replicated_array_full_copy_each_rank():
     assert [p.scalar_values[r][0] for r in range(3)] == [2, 2, 1]
 
 
-def test_infile_2d_block_rows():
+def test_infile_2d_block_rows() -> None:
     b = _binding(
         Arg(name="A", kind="ptr", dtype="float64", is_const=False, role="output"),
         Arg(name="N", kind="scalar", dtype="int64", is_const=True, role="symbol"),
@@ -103,7 +103,7 @@ def test_infile_2d_block_rows():
 
 
 @pytest.mark.parametrize("dtype", ["float64", "float32", "int64", "int32"])
-def test_infile_dtypes_roundtrip(dtype):
+def test_infile_dtypes_roundtrip(dtype) -> None:
     b = _binding(
         Arg(name="A", kind="ptr", dtype=dtype, is_const=False, role="output"),
         Arg(name="N", kind="scalar", dtype="int64", is_const=True, role="symbol"),
@@ -119,14 +119,14 @@ def test_infile_dtypes_roundtrip(dtype):
     assert rebuilt.dtype == np.dtype(dtype) and np.array_equal(rebuilt, A)
 
 
-def test_infile_rejects_unserialisable_dtype():
+def test_infile_rejects_unserialisable_dtype() -> None:
     b = _binding(Arg(name="A", kind="ptr", dtype="complex128", is_const=False, role="output"))
     desc = Descriptor(grid=Grid((1,)), arrays={"A": ArrayDist(replicated=True)})
     with pytest.raises(ValueError, match="not wire-serialisable"):
         pack_infile(b, desc, {"A": np.zeros(3, dtype="complex128")}, {}, k_repeats=1)
 
 
-def test_unpack_rejects_bad_magic():
+def test_unpack_rejects_bad_magic() -> None:
     with pytest.raises(ValueError, match="magic"):
         unpack_infile(b"\x00" * 64)
 
@@ -134,7 +134,7 @@ def test_unpack_rejects_bad_magic():
 # --------------------------------------------------------------------------------------- #
 # Outfile + the full scatter -> compute -> gather round-trip (what the drivers actually do)
 # --------------------------------------------------------------------------------------- #
-def test_outfile_roundtrip():
+def test_outfile_roundtrip() -> None:
     tiles = [np.arange(3.0), np.arange(3.0, 5.0)]  # ragged per-rank output tiles
     raw = pack_outfile(2, 4, [0.1, 0.2, 0.3, 0.05], [("y", "float64", tiles)])
     samples, outputs = unpack_outfile(raw)
@@ -144,7 +144,7 @@ def test_outfile_roundtrip():
     assert np.array_equal(got[0], tiles[0]) and np.array_equal(got[1], tiles[1])
 
 
-def _full_roundtrip(b, desc, data, scalars, N, kernel, expected, dtype=np.float64):
+def _full_roundtrip(b, desc, data, scalars, N, kernel, expected, dtype=np.float64) -> None:
     """scatter (pack_infile) -> per-rank numpy kernel -> gather (pack/unpack_outfile) -> global."""
     p = unpack_infile(pack_infile(b, desc, data, scalars, k_repeats=2))
     out_names = [a.name for a in b.pointers if a.role == "output"]
@@ -167,7 +167,7 @@ def _full_roundtrip(b, desc, data, scalars, N, kernel, expected, dtype=np.float6
         assert np.allclose(result[name], expected[name]), (name, result[name], expected[name])
 
 
-def test_full_roundtrip_yax_block():
+def test_full_roundtrip_yax_block() -> None:
     N = 13
     b, desc = _yax_binding(), _block0(4, ("x", "y"))
     x = np.arange(N, dtype=np.float64) + 1.0
@@ -182,7 +182,7 @@ def test_full_roundtrip_yax_block():
     )
 
 
-def test_full_roundtrip_replicated_reduction_reads_rank0():
+def test_full_roundtrip_replicated_reduction_reads_rank0() -> None:
     # A length-1 (replicated) output: every rank computes it; gather reads rank 0's copy.
     b = _binding(
         Arg(name="x", kind="ptr", dtype="float64", is_const=True),

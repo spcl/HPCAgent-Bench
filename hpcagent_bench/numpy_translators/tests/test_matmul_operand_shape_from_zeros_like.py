@@ -59,7 +59,7 @@ def _lowered():
     return lower(parse_kernel(npy, bi))
 
 
-def test_the_contraction_survives_lowering_as_a_loop_nest():
+def test_the_contraction_survives_lowering_as_a_loop_nest() -> None:
     """Structural: no ``@`` reaches the emitters, and the accumulation the hoister builds is
     there -- a ``+=`` into a rank-2 temp under three nested loops. Asserting only "it lowered"
     would pass on the elementwise product this exists to prevent."""
@@ -77,7 +77,7 @@ def test_the_contraction_survives_lowering_as_a_loop_nest():
     assert accums, ast.unparse(tree)
 
 
-def test_the_scaled_eigenbasis_product_matches_numpy():
+def test_the_scaled_eigenbasis_product_matches_numpy() -> None:
     """``scaled @ vec.T`` reconstructs ``sym`` itself, so a dropped sum over ``k`` -- or a
     ``scaled`` buffer sized from nothing -- is a different matrix, not a rounding difference."""
     status = run_op(

@@ -143,7 +143,7 @@ def test_classify_affine_never_invokes_the_emitter_for_an_override_backed_kernel
     status must resolve straight from that file -- the translator is never asked to emit anything,
     proven by making the emit call itself fail loudly if reached."""
 
-    def must_not_run(*args, **kwargs):
+    def must_not_run(*args, **kwargs) -> None:
         raise AssertionError("the translator was invoked for an override-backed kernel")
 
     monkeypatch.setattr(pluto_survey, "_emit", must_not_run)
@@ -301,7 +301,9 @@ def test_a_kernel_without_an_override_is_unaffected(tmp_path) -> None:
     "fptype,ctype,npdtype,rtol",
     [("fp64", ctypes.c_double, np.float64, 1e-12), ("fp32", ctypes.c_float, np.float32, 1e-4)],
 )
-def test_an_override_backed_library_exports_and_computes_both_precisions(tmp_path, fptype, ctype, npdtype, rtol):
+def test_an_override_backed_library_exports_and_computes_both_precisions(
+    tmp_path, fptype, ctype, npdtype, rtol
+) -> None:
     """The end-to-end claim, with nothing faked: an override-backed kernel builds ONE library that
     exports both `mm_fp64` and `mm_fp32`, and each symbol -- called with buffers of its own dtype --
     agrees with numpy.
@@ -344,7 +346,7 @@ for _mark in needs_toolchain:
 
 
 @pytest.mark.parametrize("npdtype,rtol", [(np.float64, 1e-12), (np.float32, 1e-4)])
-def test_the_production_dispatch_path_resolves_both_precisions(tmp_path, npdtype, rtol):
+def test_the_production_dispatch_path_resolves_both_precisions(tmp_path, npdtype, rtol) -> None:
     """The failure from job 4391506, reproduced on its own path and shown gone.
 
     `cpp_runtime.wrap_kernel` is what the generated wrapper modules call, and its closure picks the

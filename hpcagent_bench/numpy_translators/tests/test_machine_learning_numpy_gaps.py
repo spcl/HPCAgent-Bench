@@ -31,7 +31,7 @@ _A = np.arange(24, dtype=np.float64).reshape(4, 6)
 # --- np.inf / np.nan (Fortran ieee_value) --------------------------------- #
 
 
-def test_neg_inf_masking():
+def test_neg_inf_masking() -> None:
     ok, res = _run(
         "import numpy as np\ndef f(x, out):\n out[:] = np.where(x > 0.0, x, -np.inf)\n",
         {"x": _X},
@@ -42,7 +42,7 @@ def test_neg_inf_masking():
     assert ok, res
 
 
-def test_nan_fill():
+def test_nan_fill() -> None:
     ok, res = _run(
         "import numpy as np\ndef f(x, out):\n out[:] = np.where(x > 5.0, np.nan, x)\n",
         {"x": _X},
@@ -56,7 +56,7 @@ def test_nan_fill():
 # --- np.flip (N-D, axis-aware) --------------------------------------------- #
 
 
-def test_flip_axis0_and_axis1():
+def test_flip_axis0_and_axis1() -> None:
     for axis in (0, 1, -1):
         ok, res = _run(
             f"import numpy as np\ndef f(a, out):\n out[:] = np.flip(a, axis={axis})\n",
@@ -68,7 +68,7 @@ def test_flip_axis0_and_axis1():
         assert ok, (axis, res)
 
 
-def test_flip_all_axes():
+def test_flip_all_axes() -> None:
     ok, res = _run(
         "import numpy as np\ndef f(a, out):\n out[:] = np.flip(a)\n",
         {"a": _A},
@@ -82,7 +82,7 @@ def test_flip_all_axes():
 # --- np.reshape(-1) -------------------------------------------------------- #
 
 
-def test_reshape_row_neg1():
+def test_reshape_row_neg1() -> None:
     src = (
         "import numpy as np\n"
         "def f(a, out):\n"
@@ -95,7 +95,7 @@ def test_reshape_row_neg1():
     assert ok, res
 
 
-def test_reshape_neg1_on_intermediate_local():
+def test_reshape_neg1_on_intermediate_local() -> None:
     """``t.reshape(-1)`` where t is a computed local -- the shape is resolved from t's
     inferred extent, not just a parameter's."""
     ok, res = _run(
@@ -111,7 +111,7 @@ def test_reshape_neg1_on_intermediate_local():
 # --- np.ones_like (was missing from NP_ZEROS_ALIASES) ---------------------- #
 
 
-def test_ones_like():
+def test_ones_like() -> None:
     ok, res = _run(
         "import numpy as np\ndef f(a, out):\n b = np.ones_like(a)\n out[:] = a + b\n",
         {"a": np.arange(6, dtype=np.float64)},

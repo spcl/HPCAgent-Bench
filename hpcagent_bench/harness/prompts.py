@@ -260,7 +260,7 @@ class RecordingLoader(jinja2.ChoiceLoader):
     section by section, and a template added later is covered for free.
     """
 
-    def __init__(self, loaders, annotate: bool = False):
+    def __init__(self, loaders, annotate: bool = False) -> None:
         super().__init__(loaders)
         self.resolved: dict = {}
         self.annotate = annotate

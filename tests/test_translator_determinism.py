@@ -181,7 +181,7 @@ def seeded_runs() -> Dict[str, Dict[str, Dict[str, Dict[str, str]]]]:
 
 
 @pytest.mark.skipif(not TRANSLATORS_PRESENT, reason="translators absent")
-def test_witness_kernels_actually_emit():
+def test_witness_kernels_actually_emit() -> None:
     """Premise for the two guards below. If the witnesses stopped emitting -- renamed,
     retired, or refused by every backend -- the comparisons would pass on empty output and
     prove nothing. Assert real text first."""
@@ -199,7 +199,7 @@ def test_witness_kernels_actually_emit():
 
 
 @pytest.mark.skipif(not TRANSLATORS_PRESENT, reason="translators absent")
-def test_emit_is_stable_within_one_process():
+def test_emit_is_stable_within_one_process() -> None:
     """Axis (a): two emits, one interpreter. Fails on state that outlives an emit -- an
     unreset name counter, or a container ordered by ``id()``. Checked at BOTH seeds, since
     an allocator-ordered container is not the seed's to fix."""
@@ -211,7 +211,7 @@ def test_emit_is_stable_within_one_process():
 
 
 @pytest.mark.skipif(not TRANSLATORS_PRESENT, reason="translators absent")
-def test_emit_is_stable_across_hash_seeds():
+def test_emit_is_stable_across_hash_seeds() -> None:
     """Axis (b): one emit per interpreter, two different PYTHONHASHSEED values. Fails on
     ``str``-keyed set/dict iteration order reaching the text. Must be a subprocess -- the
     seed is fixed before this module is imported."""

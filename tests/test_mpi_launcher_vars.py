@@ -27,13 +27,13 @@ def launcher_env_fixture(monkeypatch):
     return None
 
 
-def test_the_launcher_variables_are_removed(launcher_env):
+def test_the_launcher_variables_are_removed(launcher_env) -> None:
     removed = drop_mpi_launcher_vars()
     assert set(removed) == {"PMIX_RANK", "PMI_RANK"}
     assert not [var for var in MPI_LAUNCHER_VARS if var in os.environ]
 
 
-def test_slurm_procid_survives(launcher_env):
+def test_slurm_procid_survives(launcher_env) -> None:
     """The sweep shards on SLURM_PROCID and names per-rank build folders with it.
 
     DaCe excludes it from its own MPI trigger for the same reason -- it says a launcher started the
@@ -44,14 +44,14 @@ def test_slurm_procid_survives(launcher_env):
     assert os.environ["SLURM_PROCID"] == "2"
 
 
-def test_it_is_idempotent_and_quiet_when_nothing_is_set(monkeypatch):
+def test_it_is_idempotent_and_quiet_when_nothing_is_set(monkeypatch) -> None:
     for var in MPI_LAUNCHER_VARS:
         monkeypatch.delenv(var, raising=False)
     assert drop_mpi_launcher_vars() == []
     assert drop_mpi_launcher_vars() == []
 
 
-def test_the_list_still_covers_what_dace_triggers_on():
+def test_the_list_still_covers_what_dace_triggers_on() -> None:
     """DaCe owns the trigger list; ours is a hardcoded copy and must not fall behind it.
 
     The copy is deliberate -- reading it from DaCe would import DaCe, which is the import the strip
@@ -66,7 +66,7 @@ def test_the_list_still_covers_what_dace_triggers_on():
     )
 
 
-def test_the_distributed_residency_keeps_its_launcher_variables(launcher_env, monkeypatch):
+def test_the_distributed_residency_keeps_its_launcher_variables(launcher_env, monkeypatch) -> None:
     """An MPI rank must NOT be stripped: MPI is what the launcher already prepared for it.
 
     The two residencies fail in opposite directions -- a single-node child that lets MPI come up

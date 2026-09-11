@@ -44,7 +44,7 @@ def _unparse(stmts):
     return ast.unparse(mod)
 
 
-def test_iter_extent_of_sliced_tensordot_uses_the_slice_bound():
+def test_iter_extent_of_sliced_tensordot_uses_the_slice_bound() -> None:
     # Regression pin for the root cause: the output extent along a sliced axis must be the
     # slice's own bound (H_out), not the full base axis (H) the old operand-shape helper fell
     # back to when it saw a non-Name operand.
@@ -57,7 +57,7 @@ def test_iter_extent_of_sliced_tensordot_uses_the_slice_bound():
     assert tuple(ast.unparse(e) for e in ext) == ("N", "H_out", "W_out", "Cout")
 
 
-def test_expand_tensordot_materializes_non_name_operands():
+def test_expand_tensordot_materializes_non_name_operands() -> None:
     # Unit-level: expand_tensordot used to raise "operands must be bare Names" for exactly
     # this shape. It now spills each into a __td_ scratch buffer and contracts those.
     a = ast.parse("x[:, ki:ki + H_out, kj:kj + W_out, :]", mode="eval").body
@@ -107,7 +107,7 @@ def _emit_c(src):
     return emit_c(lower(parse_kernel(d / "k_numpy.py", d / "bi.json")), fn_name="conv_tap")
 
 
-def test_hoisted_tensordot_loop_nest_is_labelled_and_scoped():
+def test_hoisted_tensordot_loop_nest_is_labelled_and_scoped() -> None:
     # The emitted C carries a numpy-provenance comment naming the call the loop nest replaced
     # (there's no C intrinsic for a contraction), and the copy-in temps are correctly sized.
     c = _emit_c(_SRC)
@@ -117,7 +117,7 @@ def test_hoisted_tensordot_loop_nest_is_labelled_and_scoped():
     assert "__td_op1" in c and "__td_op2" in c
 
 
-def test_conv_tap_tensordot_matches_numpy():
+def test_conv_tap_tensordot_matches_numpy() -> None:
     rng = np.random.default_rng(0)
     N, H, W, Cin, K, Cout = 2, 6, 6, 3, 3, 4
     H_out, W_out = H - K + 1, W - K + 1
@@ -138,7 +138,7 @@ def test_conv_tap_tensordot_matches_numpy():
     _ = out
 
 
-def test_an_axis_past_the_resolved_rank_declines_instead_of_crashing():
+def test_an_axis_past_the_resolved_rank_declines_instead_of_crashing() -> None:
     """A contracted axis outside the operand's rank means the rank we resolved is not the one the
     kernel meant, so the sizer must report "unresolved", not raise.
 
@@ -151,7 +151,7 @@ def test_an_axis_past_the_resolved_rank_declines_instead_of_crashing():
     assert _iter_extent_of(call, {"g": ("5", "5", "5"), "a": ("3", "3", "5")}) is None
 
 
-def test_a_negative_contraction_axis_resolves_against_the_rank():
+def test_a_negative_contraction_axis_resolves_against_the_rank() -> None:
     """``axes=([-1], [0])`` contracts the LAST axis of the first operand.
 
     Read literally, -1 indexes the spec list from the end and happens to name the same letter; the
@@ -164,7 +164,7 @@ def test_a_negative_contraction_axis_resolves_against_the_rank():
     assert [ast.unparse(e) for e in ext] == ["N", "M"], [ast.unparse(e) for e in ext]
 
 
-def test_a_negative_contraction_axis_matches_numpy_on_every_backend():
+def test_a_negative_contraction_axis_matches_numpy_on_every_backend() -> None:
     """The structural pin above says the spec is right; these numbers say the contraction is."""
     src = "import numpy as np\ndef td(x, w, out):\n out[:] = np.tensordot(x, w, axes=([-1], [0]))\n"
     rng = np.random.default_rng(7)

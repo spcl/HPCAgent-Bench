@@ -29,7 +29,7 @@ def _ok(res):
     return all(v == "ok" or v.startswith("skip") for v in res.values()), res
 
 
-def test_swapaxes_negative_axes():
+def test_swapaxes_negative_axes() -> None:
     a = np.arange(12, dtype=np.float64).reshape(3, 4)
     src = (
         "import numpy as np\n"
@@ -53,7 +53,7 @@ def test_swapaxes_negative_axes():
     assert ok, res
 
 
-def test_swapaxes_intermediate_local_operand():
+def test_swapaxes_intermediate_local_operand() -> None:
     """The operand is an intermediate local (``tmp = a + 1``), whose shape the machinery
     infers -- the ML case where a reshape follows a computed tensor."""
     a = np.arange(12, dtype=np.float64).reshape(3, 4)
@@ -80,7 +80,7 @@ def test_swapaxes_intermediate_local_operand():
     assert ok, res
 
 
-def test_expand_dims_middle_axis():
+def test_expand_dims_middle_axis() -> None:
     a = np.arange(12, dtype=np.float64).reshape(3, 4)
     src = (
         "import numpy as np\n"
@@ -104,7 +104,7 @@ def test_expand_dims_middle_axis():
     assert ok, res
 
 
-def test_squeeze_named_axis():
+def test_squeeze_named_axis() -> None:
     a = np.arange(12, dtype=np.float64).reshape(3, 1, 4)
     src = (
         "import numpy as np\n"
@@ -128,7 +128,7 @@ def test_squeeze_named_axis():
     assert ok, res
 
 
-def test_squeeze_all_unit_axes():
+def test_squeeze_all_unit_axes() -> None:
     a = np.arange(12, dtype=np.float64).reshape(1, 3, 1, 4)
     src = (
         "import numpy as np\n"
@@ -152,7 +152,7 @@ def test_squeeze_all_unit_axes():
     assert ok, res
 
 
-def test_squeeze_back_to_back_on_the_trailing_axes():
+def test_squeeze_back_to_back_on_the_trailing_axes() -> None:
     """``np.squeeze(np.squeeze(b, axis=-1), axis=-1)`` (the global-pool tail) is rewritten to the
     CHAINED subscript ``b[:, :, :, 0][:, :, 0]`` before any expander runs. ``b`` is a local, so
     its rank is not declared -- but the outer indices land inside the inner ``:`` positions, where
@@ -181,7 +181,7 @@ def test_squeeze_back_to_back_on_the_trailing_axes():
     assert ok, res
 
 
-def test_a_newaxis_extent_folds_without_the_operand_rank_but_nothing_else_does():
+def test_a_newaxis_extent_folds_without_the_operand_rank_but_nothing_else_does() -> None:
     """``X[:, None, :].shape[1]`` is 1 for every ``X``, which is what lets an ``expand_dims``
     operand's extent resolve before that operand's own shape is harvested -- the squeeze in
     ``np.squeeze(_pool(np.expand_dims(x, 1)), axis=1)`` is only provably dropping a unit axis

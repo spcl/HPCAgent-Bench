@@ -34,7 +34,7 @@ def _all_ok(res):
 # --------------------------------------------------------------------------- #
 
 
-def test_negative_const_k_recognizes_forms():
+def test_negative_const_k_recognizes_forms() -> None:
     assert _negative_const_k(ast.parse("-1", mode="eval").body) == 1
     assert _negative_const_k(ast.parse("-3", mode="eval").body) == 3
     assert _negative_const_k(ast.parse("2", mode="eval").body) is None  # non-negative
@@ -76,14 +76,14 @@ def _emit_c(src, inputs, shapes, syms):
     return emit_c(lower(parse_kernel(npy, d / "bi.json")), fn_name="f")
 
 
-def test_c_emit_normalizes_bare_negative_index():
+def test_c_emit_normalizes_bare_negative_index() -> None:
     c = _emit_c(
         "import numpy as np\ndef f(a, out):\n out[0] = a[-1]\n", ["a", "out"], {"a": "(N,)", "out": "(2,)"}, {"N": 6}
     )
     assert "a[-1]" not in c and "N - 1" in c
 
 
-def test_c_emit_leaves_positive_index_alone():
+def test_c_emit_leaves_positive_index_alone() -> None:
     c = _emit_c(
         "import numpy as np\ndef f(a, out):\n out[0] = a[2]\n", ["a", "out"], {"a": "(N,)", "out": "(2,)"}, {"N": 6}
     )
@@ -95,7 +95,7 @@ def test_c_emit_leaves_positive_index_alone():
 # --------------------------------------------------------------------------- #
 
 
-def test_bare_negative_index_read():
+def test_bare_negative_index_read() -> None:
     a = np.arange(6, dtype=np.float64)
     ok, res = _all_ok(
         run_op(
@@ -111,7 +111,7 @@ def test_bare_negative_index_read():
     assert ok, res
 
 
-def test_negative_index_write():
+def test_negative_index_write() -> None:
     a = np.arange(6, dtype=np.float64)
     ok, res = _all_ok(
         run_op(
@@ -127,7 +127,7 @@ def test_negative_index_write():
     assert ok, res
 
 
-def test_negative_index_2d_mixed_axes():
+def test_negative_index_2d_mixed_axes() -> None:
     a = np.arange(12, dtype=np.float64).reshape(3, 4)
     ok, res = _all_ok(
         run_op(
@@ -143,7 +143,7 @@ def test_negative_index_2d_mixed_axes():
     assert ok, res
 
 
-def test_negative_slice_bound_still_works():
+def test_negative_slice_bound_still_works() -> None:
     # ``a[:-1]`` is a slice bound, NOT an index -- left to the slice lowering.
     a = np.arange(6, dtype=np.float64)
     ok, res = _all_ok(

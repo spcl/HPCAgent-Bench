@@ -315,7 +315,7 @@ class Sandbox:
     removed on exit -- callers must read results out before leaving the block.
     """
 
-    def __init__(self, binding: Binding):
+    def __init__(self, binding: Binding) -> None:
         self.binding = binding
         self._tmp: Optional[tempfile.TemporaryDirectory] = None
         self.root: Optional[pathlib.Path] = None

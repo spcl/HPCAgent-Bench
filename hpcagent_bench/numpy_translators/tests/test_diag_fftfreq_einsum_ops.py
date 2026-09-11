@@ -35,13 +35,13 @@ def _unparse(stmts):
     return ast.unparse(mod)
 
 
-def _assert_ok(res, label):
+def _assert_ok(res, label) -> None:
     fails = {b: s for b, s in res.items() if not (s == "ok" or s.startswith("skip"))}
     assert any(v == "ok" for v in res.values()), f"every backend skipped; the comparison never ran: {res}"
     assert not fails, f"{label}: {fails}"
 
 
-def _oracle_available():
+def _oracle_available() -> None:
     if not (shutil.which("gcc") and shutil.which("g++") and shutil.which("gfortran")):
         pytest.skip("gcc/g++/gfortran needed for the native numerical check")
 
@@ -51,7 +51,7 @@ def _oracle_available():
 # --------------------------------------------------------------------------- #
 
 
-def test_ops_registered():
+def test_ops_registered() -> None:
     assert ("np", "diag") in NP_CALL_EXPANDERS
     assert ("np", "fft.fftfreq") in NP_CALL_EXPANDERS
 
@@ -61,7 +61,7 @@ def test_ops_registered():
 # --------------------------------------------------------------------------- #
 
 
-def test_diag_1d_builds_offset_matrix():
+def test_diag_1d_builds_offset_matrix() -> None:
     # k = +1: an (N+1)x(N+1) matrix zeroed, then v placed on the super-diagonal
     # ``out[i, i+1] = v[i]``.
     out = _unparse(expand_diag(_name("out"), [_name("v"), ast.Constant(1)], {"v": ("N",)}))
@@ -71,26 +71,26 @@ def test_diag_1d_builds_offset_matrix():
     assert "range(N)" in out  # the diagonal loop is over v's length
 
 
-def test_diag_negative_offset_lowers_the_row():
+def test_diag_negative_offset_lowers_the_row() -> None:
     # k = -1: the sub-diagonal ``out[i+1, i] = v[i]`` (row shifted down).
     neg1 = ast.UnaryOp(op=ast.USub(), operand=ast.Constant(1))
     out = _unparse(expand_diag(_name("out"), [_name("v"), neg1], {"v": ("N",)}))
     assert "out[__dg_i + 1, __dg_i] = v[__dg_i]" in out
 
 
-def test_diag_k0_main_diagonal():
+def test_diag_k0_main_diagonal() -> None:
     out = _unparse(expand_diag(_name("out"), [_name("v")], {"v": ("N",)}))
     assert "out[__dg_i, __dg_i] = v[__dg_i]" in out
     assert "range(N)" in out  # no |k| growth for k == 0
 
 
-def test_diag_2d_extracts_diagonal():
+def test_diag_2d_extracts_diagonal() -> None:
     # A 2-D operand extracts the main diagonal (delegates to expand_diagonal).
     out = _unparse(expand_diag(_name("d"), [_name("A")], {"A": ("M", "M")}))
     assert "d[__dg] = A[__dg, __dg]" in out
 
 
-def test_diag_subscript_operand_reads_the_slice():
+def test_diag_subscript_operand_reads_the_slice() -> None:
     # ``np.diag(betas[1:])`` -- a sliced 1-D operand scalarizes to ``betas[1 + i]``.
     v = ast.Subscript(
         value=_name("betas"), slice=ast.Slice(lower=ast.Constant(1), upper=None, step=None), ctx=ast.Load()
@@ -104,7 +104,7 @@ def test_diag_subscript_operand_reads_the_slice():
 # --------------------------------------------------------------------------- #
 
 
-def test_fftfreq_formula_default_spacing():
+def test_fftfreq_formula_default_spacing() -> None:
     out = _unparse(expand_fftfreq(_name("out"), [_name("N")], {}))
     # numerator: i if i <= (N-1)//2 else i - N ; denominator N * d (default 1.0).
     assert "(N - 1) // 2" in out
@@ -113,7 +113,7 @@ def test_fftfreq_formula_default_spacing():
     assert "out[__ff] =" in out
 
 
-def test_fftfreq_uses_d_kwarg():
+def test_fftfreq_uses_d_kwarg() -> None:
     out = _unparse(expand_fftfreq(_name("out"), [_name("N")], {}, kwargs=[ast.keyword(arg="d", value=_name("h"))]))
     assert "N * h" in out
 
@@ -123,7 +123,7 @@ def test_fftfreq_uses_d_kwarg():
 # --------------------------------------------------------------------------- #
 
 
-def test_einsum_materializes_subscript_operand():
+def test_einsum_materializes_subscript_operand() -> None:
     st = {"A": ("K", "M", "N")}
     allocs = {}
     out = _unparse(
@@ -141,7 +141,7 @@ def test_einsum_materializes_subscript_operand():
     assert "res[__es_i] +=" in out
 
 
-def test_einsum_bare_name_fast_path_unchanged():
+def test_einsum_bare_name_fast_path_unchanged() -> None:
     st = {"a": ("M", "K"), "b": ("K", "N")}
     out = _unparse(expand_einsum(_name("o"), [ast.Constant("ij,jk->ik"), _name("a"), _name("b")], st))
     # No spill machinery when the operands are already bare Names.
@@ -154,7 +154,7 @@ def test_einsum_bare_name_fast_path_unchanged():
 # --------------------------------------------------------------------------- #
 
 
-def test_diag_tridiagonal_e2e():
+def test_diag_tridiagonal_e2e() -> None:
     # The ls3df Lanczos idiom: T = diag(alphas) + diag(betas[1:], 1) + diag(betas[1:], -1).
     _oracle_available()
     rng = np.random.default_rng(0)
@@ -175,7 +175,7 @@ def test_diag_tridiagonal_e2e():
 
 
 @pytest.mark.parametrize("n", [6, 7])  # even + odd exercise the negative-frequency wrap
-def test_fftfreq_e2e(n):
+def test_fftfreq_e2e(n) -> None:
     _oracle_available()
     src = "import numpy as np\ndef f(nbuf, h, out):\n    out[:] = np.fft.fftfreq(nbuf[0], d=h[0])\n"
     nbuf, h = np.array([n], dtype=np.int64), np.array([0.25])
@@ -194,7 +194,7 @@ def test_fftfreq_e2e(n):
     _assert_ok(res, f"fftfreq-{n}")
 
 
-def test_einsum_subscript_operand_e2e():
+def test_einsum_subscript_operand_e2e() -> None:
     # einsum over a subscripted operand: out[i] = sum_j A[1, i, j] * A[1, i, j].
     _oracle_available()
     rng = np.random.default_rng(0)

@@ -337,7 +337,7 @@ def test_the_rendered_ratios_carry_the_formula_and_the_reasons() -> None:
     assert "stall_fraction" in text and "no count for stalled_cycles" in text
 
 
-def segfaulting_worker(*args, **kwargs):
+def segfaulting_worker(*args, **kwargs) -> None:
     """Stand-in for :func:`papi.counting_worker` that dies the way an agent's kernel dies."""
     # Deliberate: this child is proving the harness survives a fatal signal. pytest enables
     # faulthandler by default and the fork inherits it, so without this the child dumps a
@@ -346,7 +346,7 @@ def segfaulting_worker(*args, **kwargs):
     os.kill(os.getpid(), signal.SIGSEGV)
 
 
-def raising_worker(*args, **kwargs):
+def raising_worker(*args, **kwargs) -> None:
     raise RuntimeError("PAPI_start failed: no such event")
 
 

@@ -67,19 +67,19 @@ def _scop_body(text: str) -> str:
     return m.group(1)
 
 
-def test_integer_floordiv_in_a_scop_is_spelled_floord():
+def test_integer_floordiv_in_a_scop_is_spelled_floord() -> None:
     body = _scop_body(emit_pluto(_int_bound_kir(), fn_name="blk_op"))
     assert "floord(N, 8)" in body, body
     assert "int_floor" not in body, body
 
 
-def test_the_c_leg_keeps_int_floor():
+def test_the_c_leg_keeps_int_floor() -> None:
     """Only the pluto reader cares about the name; the C emit is unchanged."""
     body = emit_c(_int_bound_kir(), fn_name="blk_op")
     assert "int_floor(N, 8)" in body.split("void blk_op", 1)[1], body
 
 
-def test_float_floordiv_stays_on_the_generic_macro():
+def test_float_floordiv_stays_on_the_generic_macro() -> None:
     """A float operand must keep ``int_floor``: ``floord`` is the int64 form and would truncate."""
     for text in (emit_pluto(_float_floordiv_kir(), fn_name="flt_op"), emit_c(_float_floordiv_kir(), fn_name="flt_op")):
         body = _scop_body(text) if "#pragma scop" in text else text.split("void flt_op", 1)[1]
@@ -88,7 +88,7 @@ def test_float_floordiv_stays_on_the_generic_macro():
 
 
 @pytest.mark.parametrize("name,helper", [("floord", "__npb_floordiv_i"), ("ceild", "__npb_ceildiv_i")])
-def test_prelude_defines_the_named_builtins_over_the_existing_helpers(name, helper):
+def test_prelude_defines_the_named_builtins_over_the_existing_helpers(name, helper) -> None:
     """Guarded, because polycc prepends its own ``#define floord``/``ceild`` (POLYCC-004), and
     delegating rather than restating keeps one definition of the semantics."""
     assert (
@@ -98,7 +98,7 @@ def test_prelude_defines_the_named_builtins_over_the_existing_helpers(name, help
 
 
 @pytest.mark.skipif(not have_gcc(), reason="gcc not installed")
-def test_floord_and_ceild_agree_with_the_helpers_they_alias():
+def test_floord_and_ceild_agree_with_the_helpers_they_alias() -> None:
     """The spelling claim, executed: same values for both signs, and the guarded block compiles."""
     lines = ["#include <stdio.h>", "int main(void) {"]
     for a, b in _PAIRS:
@@ -123,6 +123,6 @@ def test_floord_and_ceild_agree_with_the_helpers_they_alias():
         assert int(got) == int(alias) == exp, (rows, expected)
 
 
-def test_polycc_008_names_the_rule_that_avoids_it():
+def test_polycc_008_names_the_rule_that_avoids_it() -> None:
     entry = KNOWN_POLYCC_ISSUES["POLYCC-008"]
     assert entry.avoided_by == f"numpyto_c.emit.{pluto_floordiv.__name__}"

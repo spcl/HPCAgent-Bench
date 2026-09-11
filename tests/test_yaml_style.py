@@ -15,7 +15,7 @@ from tests.check_yaml_style import owned_yaml, violations
 REPO = pathlib.Path(__file__).resolve().parent.parent
 
 
-def test_all_owned_yaml_conforms():
+def test_all_owned_yaml_conforms() -> None:
     bad = {f.relative_to(REPO): probs for f in owned_yaml() if (probs := violations(f))}
     assert not bad, "YAML style violations (run `python tests/check_yaml_style.py --fix`):\n" + "\n".join(
         f"{f}: {p}" for f, p in bad.items()

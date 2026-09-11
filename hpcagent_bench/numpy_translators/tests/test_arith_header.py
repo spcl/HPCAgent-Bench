@@ -53,7 +53,7 @@ def _expected():
     return out
 
 
-def _check(result):
+def _check(result) -> None:
     assert result.returncode == 0, result.stderr
     got = result.stdout.split()
     exp = _expected()
@@ -63,19 +63,19 @@ def _check(result):
 
 
 @pytest.mark.skipif(not have_gcc(), reason="gcc not installed")
-def test_c_header_compiles_standalone_and_floors_toward_negative_infinity():
+def test_c_header_compiles_standalone_and_floors_toward_negative_infinity() -> None:
     src = arith_header_source("c")
     _check(build_run_c_include(ARITH_HEADER_NAME["c"], src, _driver(ARITH_HEADER_NAME["c"])))
 
 
 @pytest.mark.skipif(not have_gpp(), reason="g++ not installed")
-def test_cpp_header_compiles_standalone_and_floors_toward_negative_infinity():
+def test_cpp_header_compiles_standalone_and_floors_toward_negative_infinity() -> None:
     src = arith_header_source("cpp")
     _check(build_run_c_include(ARITH_HEADER_NAME["cpp"], src, _driver(ARITH_HEADER_NAME["cpp"]), cpp=True))
 
 
 @pytest.mark.parametrize("lang,inlined", [("c", _C_HEADER), ("cpp", _CPP_ARITH)])
-def test_header_is_the_text_the_emitter_inlines(lang, inlined):
+def test_header_is_the_text_the_emitter_inlines(lang, inlined) -> None:
     """A drift here means an included kernel and an emitted one compute differently."""
     src = arith_header_source(lang)
     assert inlined in src
@@ -83,7 +83,7 @@ def test_header_is_the_text_the_emitter_inlines(lang, inlined):
         assert name in src, name
 
 
-def test_header_is_guarded_and_written_under_its_documented_name(tmp_path):
+def test_header_is_guarded_and_written_under_its_documented_name(tmp_path) -> None:
     path = write_arith_header(tmp_path, "c")
     assert path == pathlib.Path(tmp_path) / "npb_arith.h"
     text = path.read_text()
@@ -91,7 +91,7 @@ def test_header_is_guarded_and_written_under_its_documented_name(tmp_path):
     assert text == arith_header_source("c")
 
 
-def test_unknown_language_names_the_ones_that_exist():
+def test_unknown_language_names_the_ones_that_exist() -> None:
     with pytest.raises(KeyError, match="fortran"):
         arith_header_source("fortran")  # Fortran needs no header: MIN/MAX/SQRT are intrinsics
 
@@ -101,7 +101,7 @@ def test_unknown_language_names_the_ones_that_exist():
 _GNU_SPELLINGS = ("__builtin_", "__real__", "__imag__", "__restrict__", "__attribute__", "__typeof__")
 
 
-def test_c_header_uses_no_gnu_only_spellings():
+def test_c_header_uses_no_gnu_only_spellings() -> None:
     """The C prelude is standard C23. It includes ``<complex.h>``, so the conjugate helper is
     ``conj``; it used to be hand-rolled out of ``__builtin_complex(__real__ z, -__imag__ z)``, which
     is portable to exactly gcc and clang and compiles clean under every gate we run."""
@@ -110,7 +110,7 @@ def test_c_header_uses_no_gnu_only_spellings():
     assert not found, f"GNU-only spellings in the C prelude: {found}"
 
 
-def test_cpp_header_keeps_the_complex_extension_deliberately():
+def test_cpp_header_keeps_the_complex_extension_deliberately() -> None:
     """The C++ prelude is the exception, and stays one: C++ has no ``<complex.h>`` and no
     ``_Complex`` of its own, so ``__real__`` / ``__imag__`` are how it reaches the members at all.
     Pinned so the C-side rule above is never applied here by analogy."""

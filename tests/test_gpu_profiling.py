@@ -147,7 +147,7 @@ def write_rocprof(outdir: pathlib.Path, csvs: dict, *, nested: bool = False) -> 
     return root
 
 
-def test_split_reports_keys_each_csv_by_its_report_id():
+def test_split_reports_keys_each_csv_by_its_report_id() -> None:
     """The banner's title is prose that nsys has reworded across releases; the parenthesised id is
     the contract, so it is what keys the sections."""
     found = gpu_profiling.split_reports(NSYS_STATS)
@@ -155,7 +155,7 @@ def test_split_reports_keys_each_csv_by_its_report_id():
     assert found[gpu_profiling.KERNEL_REPORT].lstrip().startswith("Time (%)")
 
 
-def test_parse_csv_drops_the_lines_nsys_interleaves_with_the_table():
+def test_parse_csv_drops_the_lines_nsys_interleaves_with_the_table() -> None:
     """A 'Processing ...' line read as a header renames every column; a 'SKIPPED' line read as a
     row becomes a kernel that took no time."""
     assert gpu_profiling.parse_csv("Processing [x.sqlite] with [y.py]...\n") == []
@@ -164,7 +164,7 @@ def test_parse_csv_drops_the_lines_nsys_interleaves_with_the_table():
     assert rows == [{"A": "1", "B": "2"}]
 
 
-def test_kernel_stats_rank_hottest_first_and_keep_the_mean():
+def test_kernel_stats_rank_hottest_first_and_keep_the_mean() -> None:
     kernels, omitted = gpu_profiling.kernel_stats(sections()[gpu_profiling.KERNEL_REPORT])
     assert omitted == 0
     assert [k["name"] for k in kernels][:2] == [
@@ -176,14 +176,14 @@ def test_kernel_stats_rank_hottest_first_and_keep_the_mean():
     assert (hot["min_ns"], hot["max_ns"], hot["time_pct"]) == (441120, 449280, 88.7)
 
 
-def test_kernel_stats_prunes_below_min_percent_but_counts_what_it_dropped():
+def test_kernel_stats_prunes_below_min_percent_but_counts_what_it_dropped() -> None:
     """A shorter list with no note reads as a machine that only ran two kernels."""
     kernels, omitted = gpu_profiling.kernel_stats(sections()[gpu_profiling.KERNEL_REPORT], min_percent=1.0)
     assert [k["name"] for k in kernels] == ["gemm_fp64_kernel(double *, double *, int)", "scale_kernel(double *, int)"]
     assert omitted == 1
 
 
-def test_find_locates_a_column_nsys_renamed_between_releases():
+def test_find_locates_a_column_nsys_renamed_between_releases() -> None:
     """Columns are read by prefix because nsys renamed them (Average -> Avg (ns), Operations ->
     Count) and carries the unit in the header."""
     legacy = [
@@ -203,13 +203,13 @@ def test_find_locates_a_column_nsys_renamed_between_releases():
     assert gpu_profiling.unit_of("Total (MB)") == "MB" and gpu_profiling.unit_of("Count") == ""
 
 
-def test_number_survives_the_separators_nsys_leaves_in_a_cell():
+def test_number_survives_the_separators_nsys_leaves_in_a_cell() -> None:
     assert gpu_profiling.number("1,234,567") == 1234567.0
     assert gpu_profiling.number("88.7%") == 88.7
     assert gpu_profiling.number("") == 0.0
 
 
-def test_memory_stats_join_the_time_report_to_the_size_report():
+def test_memory_stats_join_the_time_report_to_the_size_report() -> None:
     """Time without volume cannot be turned into a bandwidth, which is the only reading either
     number supports on its own."""
     parsed = sections()
@@ -219,14 +219,14 @@ def test_memory_stats_join_the_time_report_to_the_size_report():
     assert (h2d["count"], h2d["total_ns"], h2d["total"], h2d["unit"]) == (48, 2411520, 402.653, "MB")
 
 
-def test_memory_stats_report_an_absent_volume_as_none_not_as_zero():
+def test_memory_stats_report_an_absent_volume_as_none_not_as_zero() -> None:
     parsed = sections()
     memory = gpu_profiling.memory_stats(parsed[gpu_profiling.MEM_TIME_REPORT], [])
     assert memory[0]["total"] is None and memory[0]["unit"] is None
     assert memory[0]["total_ns"] == 2411520, "the time half is still known"
 
 
-def test_direction_normalizes_both_spellings_nsys_uses():
+def test_direction_normalizes_both_spellings_nsys_uses() -> None:
     assert gpu_profiling.direction("[CUDA memcpy HtoD]") == "h2d"
     assert gpu_profiling.direction("[CUDA memcpy Device-to-Host]") == "d2h"
     assert gpu_profiling.direction("[CUDA memcpy DtoD]") == "d2d"
@@ -234,7 +234,7 @@ def test_direction_normalizes_both_spellings_nsys_uses():
     assert gpu_profiling.direction("[CUDA Unified Memory prefetch]") == "other"
 
 
-def test_launch_configs_collapse_repeated_launches_of_one_geometry():
+def test_launch_configs_collapse_repeated_launches_of_one_geometry() -> None:
     """One row per launch is thousands of rows saying the same thing; what varies is the geometry."""
     configs = gpu_profiling.launch_configs(sections()[gpu_profiling.TRACE_REPORT])
     assert len(configs) == 2, f"a memcpy row was read as a launch: {configs}"
@@ -245,13 +245,13 @@ def test_launch_configs_collapse_repeated_launches_of_one_geometry():
     assert (gemm["shared_memory"], gemm["shared_memory_unit"]) == (0.001, "MB")
 
 
-def test_launch_configs_round_a_partial_warp_up():
+def test_launch_configs_round_a_partial_warp_up() -> None:
     """100 threads occupy 4 warps, 28 lanes of which are idle -- rounding down would hide that."""
     scale = gpu_profiling.launch_configs(sections()[gpu_profiling.TRACE_REPORT])[1]
     assert scale["threads_per_block"] == 100 and scale["warps_per_block"] == 4
 
 
-def test_nsys_check_names_every_cause_it_can_refuse_for(tmp_path, monkeypatch):
+def test_nsys_check_names_every_cause_it_can_refuse_for(tmp_path, monkeypatch) -> None:
     """Each reason the GPU cannot be profiled is a distinct machine-readable cause, and each
     message names the fix -- an unnamed refusal is what an empty profile already looks like."""
     with pytest.raises(gpu_profiling.GpuProfilerUnavailable) as ei:
@@ -279,7 +279,7 @@ def test_nsys_check_names_every_cause_it_can_refuse_for(tmp_path, monkeypatch):
     assert gpu_profiling.nsys_check("cuda") == "/usr/bin/nsys"
 
 
-def test_record_failure_separates_a_permission_refusal_from_a_broken_install():
+def test_record_failure_separates_a_permission_refusal_from_a_broken_install() -> None:
     """A container that merely lacks a capability otherwise looks identical to a missing tool, and
     only one of the two is the operator's to fix."""
     denied = gpu_profiling.record_failure(
@@ -291,7 +291,7 @@ def test_record_failure_separates_a_permission_refusal_from_a_broken_install():
     assert other.cause == "nsys_failed" and "Target application terminated" in str(other)
 
 
-def test_nsys_stats_names_the_upgrade_when_no_known_report_came_back(tmp_path, monkeypatch):
+def test_nsys_stats_names_the_upgrade_when_no_known_report_came_back(tmp_path, monkeypatch) -> None:
     """An nsys too old to know these report names returns nothing, which must not be read as a run
     that launched nothing."""
     monkeypatch.setattr(gpu_profiling, "nsys_check", lambda _lang: "/usr/bin/nsys")
@@ -303,7 +303,7 @@ def test_nsys_stats_names_the_upgrade_when_no_known_report_came_back(tmp_path, m
     assert ei.value.cause == "nsys_report_missing" and "2022.1" in str(ei.value)
 
 
-def test_nsys_stats_asks_for_the_documented_reports(tmp_path, monkeypatch):
+def test_nsys_stats_asks_for_the_documented_reports(tmp_path, monkeypatch) -> None:
     """The report names ARE the contract this module and the service doc both quote."""
     seen = {}
     monkeypatch.setattr(gpu_profiling, "nsys_check", lambda _lang: "/usr/bin/nsys")
@@ -319,7 +319,7 @@ def test_nsys_stats_asks_for_the_documented_reports(tmp_path, monkeypatch):
     assert len(parsed[gpu_profiling.KERNEL_REPORT]) == 3
 
 
-def test_nsys_record_traces_cuda_without_turning_on_cpu_sampling(tmp_path, monkeypatch):
+def test_nsys_record_traces_cuda_without_turning_on_cpu_sampling(tmp_path, monkeypatch) -> None:
     """CPU sampling answers the host path's question and needs perf_event_paranoid <= 2; leaving it
     on would make a GPU profile fail for a host reason."""
     seen = {}
@@ -333,7 +333,7 @@ def test_nsys_record_traces_cuda_without_turning_on_cpu_sampling(tmp_path, monke
     assert seen["kw"]["timeout"] == 9.0
 
 
-def test_recording_prefers_the_modern_extension(tmp_path):
+def test_recording_prefers_the_modern_extension(tmp_path) -> None:
     assert gpu_profiling.recording(tmp_path) is None
     (tmp_path / (gpu_profiling.REPORT_STEM + ".qdrep")).write_text("")
     assert gpu_profiling.recording(tmp_path).name.endswith(".qdrep")
@@ -341,13 +341,13 @@ def test_recording_prefers_the_modern_extension(tmp_path):
     assert gpu_profiling.recording(tmp_path).name.endswith(".nsys-rep")
 
 
-def test_per_rep_ns_divides_by_the_reps_the_trace_actually_covered():
+def test_per_rep_ns_divides_by_the_reps_the_trace_actually_covered() -> None:
     """The trace covers the warmup launches too; elapsed_ns is the best MEASURED rep."""
     assert gpu_profiling.per_rep_ns(1200, reps=3, warmup=1) == 300.0
     assert gpu_profiling.per_rep_ns(1200, reps=0, warmup=0) == 0.0
 
 
-def test_every_raised_cause_is_declared():
+def test_every_raised_cause_is_declared() -> None:
     """CAUSES is what the endpoint contract and the agent docs quote; a cause raised but not listed
     is a 503 nobody can look up."""
     source = pathlib.Path(gpu_profiling.__file__).read_text()
@@ -356,7 +356,7 @@ def test_every_raised_cause_is_declared():
     assert len(gpu_profiling.CAUSES) == len(set(gpu_profiling.CAUSES))
 
 
-def test_render_report_shows_the_device_host_split_and_the_geometry():
+def test_render_report_shows_the_device_host_split_and_the_geometry() -> None:
     parsed = sections()
     kernels, omitted = gpu_profiling.kernel_stats(parsed[gpu_profiling.KERNEL_REPORT], 1.0)
     payload = {
@@ -393,7 +393,7 @@ def test_render_report_shows_the_device_host_split_and_the_geometry():
     assert "ncu --" not in text, "the note must not hand back a runnable line; the measurement goes through /profile"
 
 
-def test_measurement_request_takes_the_residency_from_the_task(monkeypatch):
+def test_measurement_request_takes_the_residency_from_the_task(monkeypatch) -> None:
     """One request schema for both profilers -- and ``device`` comes from the TASK's residency, so a
     device-resident submission is not silently measured down the host path.
 
@@ -433,7 +433,7 @@ def test_measurement_request_takes_the_residency_from_the_task(monkeypatch):
     assert device["device"] is True
 
 
-def test_run_workload_honours_the_requested_residency(monkeypatch):
+def test_run_workload_honours_the_requested_residency(monkeypatch) -> None:
     seen = {}
     monkeypatch.setattr(profiling, "_data_seeded", lambda *a, **k: {})
     monkeypatch.setattr(profiling, "_call_isolated", lambda *a, **k: (seen.update(k), ({}, [7, 9], None, []))[1])
@@ -456,7 +456,7 @@ def test_run_workload_honours_the_requested_residency(monkeypatch):
     assert seen["device"] is True and seen["device_id"] == 2
 
 
-def test_profile_endpoint_routes_a_cuda_submission_to_nsys(make_judge, monkeypatch):
+def test_profile_endpoint_routes_a_cuda_submission_to_nsys(make_judge, monkeypatch) -> None:
     """A host without nsys answers 503 + cause -- never an empty (or host-path) profile. The
     dispatch is the LANGUAGE, so this is also the proof that a cuda submission does not fall
     through to perf."""
@@ -469,7 +469,7 @@ def test_profile_endpoint_routes_a_cuda_submission_to_nsys(make_judge, monkeypat
     assert body["cause"] == "nsys_missing" and "nsight-systems" in body["error"]
 
 
-def test_profile_endpoint_routes_a_hip_submission_to_rocprof(make_judge, monkeypatch):
+def test_profile_endpoint_routes_a_hip_submission_to_rocprof(make_judge, monkeypatch) -> None:
     """A hip submission goes to the AMD profiler, not to nsys and not to perf -- and a host without
     ROCm answers 503 naming the tool it wants, never an empty profile. The dispatch is the LANGUAGE,
     so this is the AMD half of the proof that /profile is one route for both vendors."""
@@ -483,7 +483,7 @@ def test_profile_endpoint_routes_a_hip_submission_to_rocprof(make_judge, monkeyp
     assert "rocprofv3" in body["error"] and "deprecated" in body["error"]
 
 
-def test_profile_endpoint_refuses_amd_host_counters_by_the_amd_tool_name(make_judge, monkeypatch):
+def test_profile_endpoint_refuses_amd_host_counters_by_the_amd_tool_name(make_judge, monkeypatch) -> None:
     """The counters refusal must name the tool that WOULD answer on THIS vendor; sending an AMD
     user to ncu is a dead end dressed as a fix."""
     monkeypatch.setattr(gpu_profiling.shutil, "which", lambda name: f"/opt/rocm/bin/{name}")
@@ -495,7 +495,7 @@ def test_profile_endpoint_refuses_amd_host_counters_by_the_amd_tool_name(make_ju
     assert "rocprof-compute" in body["error"] and "ncu" not in body["error"]
 
 
-def test_profile_endpoint_refuses_host_counters_for_a_device_kernel(make_judge):
+def test_profile_endpoint_refuses_host_counters_for_a_device_kernel(make_judge) -> None:
     """PAPI counts host CPU events; returning them under a GPU profile would answer a question
     nobody asked with numbers that look like the ones they did."""
     _srv, url = make_judge(ServiceConfig())
@@ -506,7 +506,7 @@ def test_profile_endpoint_refuses_host_counters_for_a_device_kernel(make_judge):
     assert "ncu --" not in body["error"], "the refusal names the tool that owns the question, not a line to run"
 
 
-def test_profile_endpoint_rejects_an_impossible_residency(make_judge):
+def test_profile_endpoint_rejects_an_impossible_residency(make_judge) -> None:
     """device residency needs a GPU language; the request is at fault, so it is a 400, not a 503."""
     _srv, url = make_judge(ServiceConfig())
     with pytest.raises(urllib.error.HTTPError) as ei:
@@ -544,13 +544,13 @@ def which_map(names):
     return lambda name: f"/opt/rocm/bin/{name}" if name in names else None
 
 
-def deny_kfd(monkeypatch, kfd, allowed: bool):
+def deny_kfd(monkeypatch, kfd, allowed: bool) -> None:
     """Answer ``os.access`` for /dev/kfd only, so the rest of the process keeps the real one."""
     real = gpu_profiling.os.access
     monkeypatch.setattr(gpu_profiling.os, "access", lambda p, m: allowed if pathlib.Path(p) == kfd else real(p, m))
 
 
-def test_kernel_stats_read_rocprofv3_columns_into_exactly_the_nsys_rows():
+def test_kernel_stats_read_rocprofv3_columns_into_exactly_the_nsys_rows() -> None:
     """The point of sharing the reader: the two tools spell the same seven quantities differently
     (Calls/Instances, TotalDurationNs/Total Time (ns), Percentage/Time (%)), and the /profile row
     must not be able to tell which one measured it."""
@@ -564,7 +564,7 @@ def test_kernel_stats_read_rocprofv3_columns_into_exactly_the_nsys_rows():
     assert (hot["min_ns"], hot["max_ns"], hot["time_pct"]) == (441120, 449280, 88.7)
 
 
-def test_kernel_stats_report_a_column_the_deprecated_tool_lacks_as_absent_not_zero():
+def test_kernel_stats_report_a_column_the_deprecated_tool_lacks_as_absent_not_zero() -> None:
     """rocprof v1 reports no per-kernel min/max. A 0 ns minimum is a MEASUREMENT -- it would say
     the kernel once took no time, rather than that the tool never looked."""
     kernels, _omitted = gpu_profiling.kernel_stats(gpu_profiling.parse_csv(LEGACY_STATS))
@@ -572,7 +572,7 @@ def test_kernel_stats_report_a_column_the_deprecated_tool_lacks_as_absent_not_ze
     assert kernels[0]["total_ns"] == 10650240, "what v1 DOES report is still read"
 
 
-def test_memory_stats_read_rocprofs_underscored_operation_names():
+def test_memory_stats_read_rocprofs_underscored_operation_names() -> None:
     """rocprof spells a copy MEMORY_COPY_HOST_TO_DEVICE where nsys spells it Host-to-Device; both
     must land in the same h2d row or 'how much did I move each way' is unanswerable across vendors."""
     memory = gpu_profiling.memory_stats(rocprof_sections()[gpu_profiling.MEMORY_STATS_CSV], [])
@@ -580,14 +580,14 @@ def test_memory_stats_read_rocprofs_underscored_operation_names():
     assert (memory[0]["count"], memory[0]["total_ns"], memory[0]["mean_ns"]) == (48, 2411520, 50240.0)
 
 
-def test_memory_stats_report_the_volume_rocprofv3_never_measures_as_absent():
+def test_memory_stats_report_the_volume_rocprofv3_never_measures_as_absent() -> None:
     """rocprofv3's memory-copy report times the copies and does not size them. A 0 MB transfer that
     took 2.4 ms is not an answer; null is."""
     memory = gpu_profiling.memory_stats(rocprof_sections()[gpu_profiling.MEMORY_STATS_CSV], [])
     assert memory[0]["total"] is None and memory[0]["unit"] is None
 
 
-def test_rocprof_launch_configs_divide_the_hsa_grid_into_blocks():
+def test_rocprof_launch_configs_divide_the_hsa_grid_into_blocks() -> None:
     """HSA counts a grid in WORK-ITEMS, CUDA in BLOCKS. Passing Grid_Size_X through would report
     16384 blocks where the dispatch had 64 -- a 256x error that reads as a real geometry."""
     parsed = rocprof_sections()
@@ -602,7 +602,7 @@ def test_rocprof_launch_configs_divide_the_hsa_grid_into_blocks():
     assert (gemm["shared_memory"], gemm["shared_memory_unit"]) == (1024, "B"), "LDS is CUDA's shared memory"
 
 
-def test_rocprof_launch_configs_emit_the_same_row_shape_the_nsys_reader_does():
+def test_rocprof_launch_configs_emit_the_same_row_shape_the_nsys_reader_does() -> None:
     """The /profile response schema is vendor-independent, which is a property of the ROWS, not of
     the prose describing them."""
     parsed = rocprof_sections()
@@ -611,7 +611,7 @@ def test_rocprof_launch_configs_emit_the_same_row_shape_the_nsys_reader_does():
     assert sorted(amd[0]) == sorted(nvidia[0])
 
 
-def test_rocprof_launch_configs_report_what_the_trace_never_carries_as_absent():
+def test_rocprof_launch_configs_report_what_the_trace_never_carries_as_absent() -> None:
     """Without an agent report the wavefront width is unknown, so it comes back null rather than
     being guessed. What the trace DOES carry is reported alongside it."""
     parsed = rocprof_sections()
@@ -620,7 +620,7 @@ def test_rocprof_launch_configs_report_what_the_trace_never_carries_as_absent():
     assert configs[0]["threads_per_block"] == 256, "what the trace DOES carry is still reported"
 
 
-def test_rocprof_launch_configs_read_the_register_count_the_trace_carries():
+def test_rocprof_launch_configs_read_the_register_count_the_trace_carries() -> None:
     """`VGPR_Count` is per work-item and it is in the trace: it was documented as unavailable while
     the tool had been emitting it, so the occupancy story stopped one field short of a cause."""
     parsed = rocprof_sections()
@@ -629,7 +629,7 @@ def test_rocprof_launch_configs_read_the_register_count_the_trace_carries():
     assert "VGPR" in gpu_profiling.AMD_OCCUPANCY_NOTE, "the payload note must not still call the register count absent"
 
 
-def test_rocprof_launch_configs_read_lds_under_either_column_spelling():
+def test_rocprof_launch_configs_read_lds_under_either_column_spelling() -> None:
     """rocprofiler-sdk renamed `Group_Segment_Size` to `LDS_Block_Size`. A reader pinned to one
     spelling reads the other generation's 1 KB workgroup as 0 B -- a budget it says is free."""
     modern = gpu_profiling.rocprof_launch_configs(rocprof_sections()[gpu_profiling.KERNEL_TRACE_CSV], 64)
@@ -639,7 +639,7 @@ def test_rocprof_launch_configs_read_lds_under_either_column_spelling():
     assert legacy[0]["registers_per_thread"] is None, "the older trace has no register column, and none is not zero"
 
 
-def test_rocprof_launch_configs_report_a_missing_lds_column_as_absent_not_zero():
+def test_rocprof_launch_configs_report_a_missing_lds_column_as_absent_not_zero() -> None:
     """A trace with neither LDS spelling has not measured LDS. Reporting 0 B says the workgroup used
     none, and an agent then sizes a tile against a budget it has already spent."""
     configs = gpu_profiling.rocprof_launch_configs(gpu_profiling.parse_csv(NO_LDS_KERNEL_TRACE), 64)
@@ -647,7 +647,7 @@ def test_rocprof_launch_configs_report_a_missing_lds_column_as_absent_not_zero()
     assert configs[0]["shared_memory_unit"] is None, "a unit on an absent quantity reads as a measurement"
 
 
-def test_wavefront_size_reads_the_gpu_agent_and_not_the_cpu_one():
+def test_wavefront_size_reads_the_gpu_agent_and_not_the_cpu_one() -> None:
     """Every ROCm install reports the CPU as an agent, with wavefront 0. Taking the first row would
     report every workgroup as an unknown number of wavefronts."""
     parsed = rocprof_sections()
@@ -655,7 +655,7 @@ def test_wavefront_size_reads_the_gpu_agent_and_not_the_cpu_one():
     assert gpu_profiling.wavefront_size([]) is None, "legacy rocprof writes no agent report"
 
 
-def test_rocprof_check_names_every_cause_it_can_refuse_for(tmp_path, monkeypatch):
+def test_rocprof_check_names_every_cause_it_can_refuse_for(tmp_path, monkeypatch) -> None:
     """Four things must hold and each has its own fix, so each has its own machine-readable cause:
     a profiler, a GPU, the right to open it, and a runtime to enumerate it with. Overloading
     rocprof_unsupported for all four would send every operator to the same wrong page."""
@@ -690,7 +690,7 @@ def test_rocprof_check_names_every_cause_it_can_refuse_for(tmp_path, monkeypatch
     assert gpu_profiling.rocprof_check() == ("rocprofv3", "/opt/rocm/bin/rocprofv3")
 
 
-def test_rocprof_check_prefers_v3_and_says_when_it_fell_back_to_the_deprecated_one(tmp_path, monkeypatch):
+def test_rocprof_check_prefers_v3_and_says_when_it_fell_back_to_the_deprecated_one(tmp_path, monkeypatch) -> None:
     """The two tools answer with different schemas, so which one ran is not a detail -- it is the
     difference between a launch geometry and no launch geometry at all."""
     kfd = tmp_path / "kfd"
@@ -707,7 +707,7 @@ def test_rocprof_check_prefers_v3_and_says_when_it_fell_back_to_the_deprecated_o
     assert gpu_profiling.rocprof_check() == ("rocprof", "/opt/rocm/bin/rocprof")
 
 
-def test_rocm_agents_separate_a_missing_runtime_from_a_missing_gpu(monkeypatch):
+def test_rocm_agents_separate_a_missing_runtime_from_a_missing_gpu(monkeypatch) -> None:
     """'ROCm is not installed here' and 'ROCm is installed and sees no GPU' need opposite actions."""
     monkeypatch.setattr(gpu_profiling.shutil, "which", lambda _name: None)
     with pytest.raises(gpu_profiling.GpuProfilerUnavailable) as ei:
@@ -724,7 +724,7 @@ def test_rocm_agents_separate_a_missing_runtime_from_a_missing_gpu(monkeypatch):
     assert gpu_profiling.rocm_agents() == ["gfx942"], "the ISA line repeats the name; it is one agent"
 
 
-def test_rocprof_command_is_not_the_same_command_for_v3_and_the_deprecated_v1(tmp_path):
+def test_rocprof_command_is_not_the_same_command_for_v3_and_the_deprecated_v1(tmp_path) -> None:
     """The docstring this module used to carry described v1's 'rocprof --stats' + results.stats.csv.
     v3 takes different flags AND writes a different schema; running one's command line under the
     other's name produces no report at all."""
@@ -741,7 +741,7 @@ def test_rocprof_command_is_not_the_same_command_for_v3_and_the_deprecated_v1(tm
     assert v1[v1.index("-o") + 1].endswith(gpu_profiling.REPORT_STEM + ".csv")
 
 
-def test_rocprof_record_writes_where_the_reader_looks(tmp_path, monkeypatch):
+def test_rocprof_record_writes_where_the_reader_looks(tmp_path, monkeypatch) -> None:
     seen = {}
     monkeypatch.setattr(gpu_profiling.subprocess, "run", lambda cmd, **k: seen.update(cmd=cmd, kw=k))
     outdir = tmp_path / gpu_profiling.ROCPROF_OUTDIR
@@ -752,7 +752,7 @@ def test_rocprof_record_writes_where_the_reader_looks(tmp_path, monkeypatch):
     assert seen["kw"]["timeout"] == 9.0 and seen["kw"]["cwd"] == str(tmp_path)
 
 
-def test_rocprof_reports_find_the_csvs_even_when_v3_nests_them(tmp_path):
+def test_rocprof_reports_find_the_csvs_even_when_v3_nests_them(tmp_path) -> None:
     """rocprofv3 writes flat in some releases and under <hostname>/<pid> in others. A glob that
     assumed one would report a successful trace as a run that launched nothing."""
     write_rocprof(tmp_path, ROCPROF_CSVS, nested=True)
@@ -762,7 +762,7 @@ def test_rocprof_reports_find_the_csvs_even_when_v3_nests_them(tmp_path):
     assert len(reports[gpu_profiling.KERNEL_TRACE_CSV]) == 3
 
 
-def test_rocprof_reports_read_the_legacy_file_into_the_same_keys(tmp_path):
+def test_rocprof_reports_read_the_legacy_file_into_the_same_keys(tmp_path) -> None:
     """One shape for both tools: v1's missing reports are EMPTY, not absent, which is what makes
     their downstream fields null instead of a KeyError."""
     write_rocprof(tmp_path, {gpu_profiling.LEGACY_STATS_CSV: LEGACY_STATS})
@@ -772,7 +772,7 @@ def test_rocprof_reports_read_the_legacy_file_into_the_same_keys(tmp_path):
     assert reports[gpu_profiling.KERNEL_TRACE_CSV] == [] and reports[gpu_profiling.AGENT_INFO_CSV] == []
 
 
-def test_rocprof_reports_name_which_kind_of_nothing_came_back(tmp_path):
+def test_rocprof_reports_name_which_kind_of_nothing_came_back(tmp_path) -> None:
     """Three different silences: the device was refused, the tool died, or the tool ran and wrote
     no report. They have three different fixes, so they get three different causes."""
     denied = gpu_profiling.rocprof_reports
@@ -789,7 +789,7 @@ def test_rocprof_reports_name_which_kind_of_nothing_came_back(tmp_path):
     assert ei.value.cause == "rocprof_report_missing" and gpu_profiling.KERNEL_STATS_CSV in str(ei.value)
 
 
-def test_gpu_check_picks_the_profiler_by_language_and_reports_which(monkeypatch):
+def test_gpu_check_picks_the_profiler_by_language_and_reports_which(monkeypatch) -> None:
     """One probe, before anything is built, and the vendor is the only branch in it."""
     monkeypatch.setattr(gpu_profiling, "nsys_check", lambda _lang: "/usr/bin/nsys")
     monkeypatch.setattr(gpu_profiling, "rocprof_check", lambda: ("rocprofv3", "/opt/rocm/bin/rocprofv3"))
@@ -797,7 +797,7 @@ def test_gpu_check_picks_the_profiler_by_language_and_reports_which(monkeypatch)
     assert gpu_profiling.gpu_check("hip") == "rocprofv3"
 
 
-def test_render_report_marks_the_amd_fields_that_have_no_counterpart():
+def test_render_report_marks_the_amd_fields_that_have_no_counterpart() -> None:
     """An absent field printed as 0 reads as a kernel using no registers; printed as None it reads
     as a bug. It is '--', and the note says which tool would answer."""
     parsed = rocprof_sections()

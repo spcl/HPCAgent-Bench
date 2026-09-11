@@ -24,7 +24,7 @@ _SHAPES = {"a": "(N,)", "b": "(N,)", "out": "(N,)"}
 _DTYPES = {"a": "int64", "b": "int64", "out": "float64"}
 
 
-def _assert_ok(res):
+def _assert_ok(res) -> None:
     for backend, status in res.items():
         assert status == "ok" or status.startswith("skip"), f"{backend}: {status}"
     assert any(status == "ok" for status in res.values()), f"all skipped (vacuous): {res}"
@@ -35,28 +35,28 @@ def _run(body: str):
     return run_op(src, "f", {"a": _A, "b": _B}, {"out": (6,)}, _SYMS, shapes=_SHAPES, backends=_NATIVE, dtypes=_DTYPES)
 
 
-def test_divide_call_form_is_true_division():
+def test_divide_call_form_is_true_division() -> None:
     _assert_ok(_run("out[:] = np.divide(a, b)"))
 
 
-def test_true_divide_call_form_is_true_division():
+def test_true_divide_call_form_is_true_division() -> None:
     _assert_ok(_run("out[:] = np.true_divide(a, b)"))
 
 
-def test_divide_by_integer_literal_is_true_division():
+def test_divide_by_integer_literal_is_true_division() -> None:
     _assert_ok(_run("out[:] = np.divide(a, 4)"))
 
 
-def test_operator_form_still_true_division():
+def test_operator_form_still_true_division() -> None:
     # Already correct (the promoter sees it); pinned so the expander fix cannot regress it.
     _assert_ok(_run("out[:] = a / b"))
 
 
-def test_out_kwarg_form_still_true_division():
+def test_out_kwarg_form_still_true_division() -> None:
     _assert_ok(_run("np.divide(a, b, out=out)"))
 
 
-def test_float_divide_is_not_cast_to_fp64():
+def test_float_divide_is_not_cast_to_fp64() -> None:
     # A float operand must NOT pick up the int/int cast -- it would pin an fp32 kernel's
     # arithmetic to double. Numerically identical at fp64; asserted on the emitted text.
     import ast

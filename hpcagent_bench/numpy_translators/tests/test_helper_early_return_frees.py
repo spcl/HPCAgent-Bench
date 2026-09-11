@@ -67,7 +67,7 @@ def helper_of(text: str) -> str:
     return text[start : text.index("\n}\n", start)]
 
 
-def test_the_c_helper_frees_its_workspace_on_every_return():
+def test_the_c_helper_frees_its_workspace_on_every_return() -> None:
     text = emitted(cpp=False)
     helper = helper_of(text)
     assert "malloc(" in helper, f"the helper stopped allocating, so this proves nothing:\n{helper}"
@@ -77,7 +77,7 @@ def test_the_c_helper_frees_its_workspace_on_every_return():
     assert helper.count("return ") == 3 and helper.count("free(") == 3, helper
 
 
-def test_the_cpp_helper_frees_its_workspace_on_every_return():
+def test_the_cpp_helper_frees_its_workspace_on_every_return() -> None:
     helper = helper_of(emitted(cpp=True))
     assert "malloc(" in helper, f"the helper stopped allocating, so this proves nothing:\n{helper}"
     assert helper.count("return ") == 3 and helper.count("free(") == 3, helper
@@ -102,7 +102,7 @@ RETURNS_BUFFER = (
 )
 
 
-def test_returning_a_heap_local_by_value_is_refused_by_name():
+def test_returning_a_heap_local_by_value_is_refused_by_name() -> None:
     """Freeing on the way out must never hand back a dangling pointer. Emitting the free would; NOT
     emitting it leaks; the emitted C does not even typecheck. So it is refused, naming the buffer.
 
@@ -142,7 +142,7 @@ IN_LOOP_DRIVER = (
 )
 
 
-def test_a_deferred_allocation_inside_a_loop_frees_the_previous_iteration():
+def test_a_deferred_allocation_inside_a_loop_frees_the_previous_iteration() -> None:
     """The reallocating free was only emitted where a SECOND marker made it visible in the text. A
     marker whose one occurrence is inside a loop runs per iteration, so every iteration but the last
     overwrote a pointer nothing freed -- measured on dbcsr, ~160k live buffers at preset XL."""
@@ -155,21 +155,21 @@ def test_a_deferred_allocation_inside_a_loop_frees_the_previous_iteration():
 
 
 @have_gcc
-def test_a_deferred_loop_allocation_runs_leak_free_under_address_sanitizer():
+def test_a_deferred_loop_allocation_runs_leak_free_under_address_sanitizer() -> None:
     run = build_run_c(emitted(cpp=False, source=IN_LOOP_ALLOC), IN_LOOP_DRIVER, sanitize=True)
     assert run.returncode == 0, f"{run.stdout}\n{run.stderr}"
     assert "detected memory leaks" not in run.stderr, run.stderr
 
 
 @have_gcc
-def test_generated_c_runs_leak_free_under_address_sanitizer():
+def test_generated_c_runs_leak_free_under_address_sanitizer() -> None:
     run = build_run_c(emitted(cpp=False), DRIVER, sanitize=True)
     assert run.returncode == 0, f"{run.stdout}\n{run.stderr}"
     assert "detected memory leaks" not in run.stderr, run.stderr
 
 
 @have_gpp
-def test_generated_cpp_runs_leak_free_under_address_sanitizer():
+def test_generated_cpp_runs_leak_free_under_address_sanitizer() -> None:
     run = build_run_c(emitted(cpp=True), DRIVER, cpp=True, sanitize=True)
     assert run.returncode == 0, f"{run.stdout}\n{run.stderr}"
     assert "detected memory leaks" not in run.stderr, run.stderr

@@ -77,7 +77,7 @@ def _mangle_with_tree_sitter(src: str, lang: str, name_map: Dict[str, str]) -> s
     # is safe (a non-key node is never rewritten).
     edits: List[Tuple[int, int, bytes]] = []
 
-    def walk(node):
+    def walk(node) -> None:
         children = _ts_children(node)
         if "identifier" in _ts_type(node) and not children:
             start, end = _ts_span(node)
@@ -119,7 +119,7 @@ def _segment_code_spans(src: str, lang: str) -> List[Tuple[int, int]]:
     n = len(src)
     code_start = 0
 
-    def close(end):
+    def close(end) -> None:
         if end > code_start:
             spans.append((code_start, end))
 

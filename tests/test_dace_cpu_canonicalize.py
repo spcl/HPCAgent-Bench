@@ -24,7 +24,7 @@ from hpcagent_bench.frameworks.dace_framework import DaceFramework, pipeline_can
 
 
 @dace.program
-def _scaled_sum(a: dace.float64[64], b: dace.float64[64], out: dace.float64[64]):
+def _scaled_sum(a: dace.float64[64], b: dace.float64[64], out: dace.float64[64]) -> None:
     out[:] = a * 2.0 + b
 
 
@@ -34,7 +34,7 @@ def _base_sdfg():
     return _scaled_sum.to_sdfg(simplify=False)
 
 
-def test_cpu_canonicalize_runs_the_fork_canonicalize_pipeline(base_sdfg):
+def test_cpu_canonicalize_runs_the_fork_canonicalize_pipeline(base_sdfg) -> None:
     ctx = DaceFramework("dace_cpu")._build_context()
     assert ctx["device"] is dace.dtypes.DeviceType.CPU, "dace_cpu did not resolve to the CPU device"
 
@@ -46,7 +46,7 @@ def test_cpu_canonicalize_runs_the_fork_canonicalize_pipeline(base_sdfg):
     )
 
 
-def test_a_cpu_column_still_scores_canonicalize():
+def test_a_cpu_column_still_scores_canonicalize() -> None:
     """The pipeline being correct is only half of it -- a CPU column must still SCORE it.
 
     ``dace_cpu`` stopped being a search over three pipelines: it is the single ``parallel_cpu``
@@ -64,7 +64,7 @@ def test_a_cpu_column_still_scores_canonicalize():
     )
 
 
-def test_auto_optimize_alone_does_not_set_the_marker(base_sdfg):
+def test_auto_optimize_alone_does_not_set_the_marker(base_sdfg) -> None:
     """The control: without it, a True default would make the test above vacuous."""
     import dace.transformation.auto.auto_optimize as dace_auto_opt
 

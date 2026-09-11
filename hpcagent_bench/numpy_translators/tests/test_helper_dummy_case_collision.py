@@ -29,7 +29,7 @@ _CASE_COLLISION_SRC = (
 )
 
 
-def test_helper_dummy_case_insensitive_collision():
+def test_helper_dummy_case_insensitive_collision() -> None:
     # mat's row bound is the manifest symbol N (a dummy the helper needs to declare mat's shape);
     # the helper's own local extent n is a distinct Python name -- same spelling once Fortran folds
     # case. Neither can be dropped, so the fix uniquifies rather than picking one.

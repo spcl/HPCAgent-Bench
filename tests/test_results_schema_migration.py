@@ -51,7 +51,7 @@ def _legacy_db(tmp_path):
     return str(path)
 
 
-def test_a_legacy_db_accepts_a_row_carrying_the_new_column(legacy_db):
+def test_a_legacy_db_accepts_a_row_carrying_the_new_column(legacy_db) -> None:
     engine = results_engine(legacy_db)
     with Session(engine) as session:
         session.add(
@@ -75,7 +75,7 @@ def test_a_legacy_db_accepts_a_row_carrying_the_new_column(legacy_db):
     assert rows == {"numpy": (None, None), "dace_cpu": ("parallel", "extended")}
 
 
-def test_reconciling_twice_is_a_no_op(legacy_db):
+def test_reconciling_twice_is_a_no_op(legacy_db) -> None:
     results_engine(legacy_db)
     results_engine(legacy_db)  # ADD COLUMN is not idempotent in SQLite; the guard must be
     with sqlite3.connect(legacy_db) as conn:
@@ -84,14 +84,14 @@ def test_reconciling_twice_is_a_no_op(legacy_db):
     assert names.count("build") == 1
 
 
-def test_a_fresh_db_gets_the_whole_model(tmp_path):
+def test_a_fresh_db_gets_the_whole_model(tmp_path) -> None:
     engine = results_engine(str(tmp_path / "fresh.db"))
     with engine.connect() as conn:
         names = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(results)")}
     assert set(Result.__table__.columns.keys()) == names
 
 
-def test_the_plot_loader_folds_flavor_and_build_back_into_one_series(tmp_path, monkeypatch):
+def test_the_plot_loader_folds_flavor_and_build_back_into_one_series(tmp_path, monkeypatch) -> None:
     """Stored apart, plotted together. Without the fold, dace_cpu's three optimizers -- and the
     same optimizer measured on two DaCe trees -- average into one silently wrong line."""
     import pandas as pd
@@ -138,7 +138,7 @@ def test_the_plot_loader_folds_flavor_and_build_back_into_one_series(tmp_path, m
     ]
 
 
-def test_the_plot_loader_partitions_machines_instead_of_folding_them(tmp_path, monkeypatch):
+def test_the_plot_loader_partitions_machines_instead_of_folding_them(tmp_path, monkeypatch) -> None:
     """The counterpart to the fold above, and deliberately the opposite operation.
 
     ``flavor``/``build`` FOLD into the framework name so two pipelines read as two series in one

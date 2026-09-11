@@ -53,7 +53,7 @@ def _ok(res):
 # --- np.sort (1-D) -------------------------------------------------------- #
 
 
-def test_sort_1d():
+def test_sort_1d() -> None:
     """``out[:] = np.sort(a)`` on a random unsorted 1-D array (ascending)."""
     rng = np.random.default_rng(0)
     a = rng.standard_normal(9)
@@ -66,7 +66,7 @@ def test_sort_1d():
 # --- np.maximum/minimum.accumulate (running max / min prefix scan) -------- #
 
 
-def test_cummax_cummin():
+def test_cummax_cummin() -> None:
     """``out[:] = np.maximum.accumulate(a)`` and the ``minimum`` running-min
     counterpart -- 1-D prefix scans over a random array."""
     rng = np.random.default_rng(1)
@@ -86,7 +86,7 @@ def test_cummax_cummin():
 # full-reduction form, which leaves the backend's own full reduction and works.
 
 
-def test_ufunc_reduce():
+def test_ufunc_reduce() -> None:
     """``add`` / ``multiply`` / ``maximum`` / ``minimum`` ``.reduce(a, axis=None)``
     over a 2-D array into a scalar output, plus ``logical_and`` / ``logical_or``
     ``.reduce`` over a boolean mask."""
@@ -121,7 +121,7 @@ def test_ufunc_reduce():
 # 'ortho' both by sqrt(N). nest-forge emits ``np.fft.ifft(x, norm='forward')``.
 
 
-def test_fft_ifft_norm():
+def test_fft_ifft_norm() -> None:
     """``np.fft.ifft(x, norm='forward')`` (the nest-forge form) and the
     ``'forward'``-scaled forward transform -- both use a plain ``/ N`` and work on
     every native backend."""
@@ -146,7 +146,7 @@ def test_fft_ifft_norm():
         assert ok, (spec, r)
 
 
-def test_fft_ifft_norm_ortho():
+def test_fft_ifft_norm_ortho() -> None:
     """``norm='ortho'`` (both directions scaled by ``1/sqrt(N)``), all native backends.
 
     Regression guard: ``_expand_dftn`` builds the ortho denominator as
@@ -183,7 +183,7 @@ def test_fft_ifft_norm_ortho():
 # `merge(int_elem, real_acc, ...)` update is a kind mismatch gfortran rejects.
 
 
-def test_scatter_conflict_check_tagcount():
+def test_scatter_conflict_check_tagcount() -> None:
     """The TAGCOUNT duplicate-count (`count == N - #distinct`, 0 iff a permutation)
     with an int64 index round-trips on every native backend."""
     idx = np.array([0, 2, 2, 5, 5, 5, 1, 9, 9], dtype=np.int64)  # 9 elems, 5 distinct -> 4

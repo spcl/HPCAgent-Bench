@@ -39,12 +39,12 @@ from numpyto_common.lowering import lower
 _NATIVE = ("c", "cpp", "fortran")
 
 
-def _require_native():
+def _require_native() -> None:
     if not (shutil.which("gcc") and shutil.which("g++") and shutil.which("gfortran")):
         pytest.skip("gcc/g++/gfortran needed for the native numerical check")
 
 
-def _assert_native_ok(status, label):
+def _assert_native_ok(status, label) -> None:
     for b in _NATIVE:
         assert status[b] == "ok", f"{label}: native {b} did not validate: {status}"
 
@@ -82,7 +82,7 @@ def _lower_local_dtypes(src, func, shapes, syms, inputs, outputs, dtypes):
 # --------------------------------------------------------------------------- #
 
 
-def test_reduction_method_on_call_receiver():
+def test_reduction_method_on_call_receiver() -> None:
     _require_native()
     x = np.array([0.3, -2.5, 1.1, -0.7, 4.2, -3.9], dtype=np.float64)
     y = np.array([1.0, 0.5, -2.0, 3.3, -1.1, 0.8], dtype=np.float64)
@@ -105,7 +105,7 @@ def test_reduction_method_on_call_receiver():
 # --------------------------------------------------------------------------- #
 
 
-def test_computed_index_call_in_subscript():
+def test_computed_index_call_in_subscript() -> None:
     _require_native()
     # Distinct magnitudes -> the argmax has no tie (index 4, |4.2|).
     v = np.array([0.3, -2.5, 1.1, -0.7, 4.2, -3.9], dtype=np.float64)
@@ -134,7 +134,7 @@ def test_computed_index_call_in_subscript():
 # raised ``call to np.argmax not supported`` at emit.
 
 
-def test_argreduction_over_computed_operand():
+def test_argreduction_over_computed_operand() -> None:
     _require_native()
     v = np.array([0.3, -2.5, 1.1, -0.7, 4.2, -3.9], dtype=np.float64)
     st_max = run_op(
@@ -176,7 +176,7 @@ def test_argreduction_over_computed_operand():
 # double-read the overwritten buffer.
 
 
-def test_inloop_whole_array_swap():
+def test_inloop_whole_array_swap() -> None:
     _require_native()
     x = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64)
     y = np.array([5.0, 6.0, 7.0, 8.0], dtype=np.float64)
@@ -205,7 +205,7 @@ def test_inloop_whole_array_swap():
 # --------------------------------------------------------------------------- #
 
 
-def test_real_accessor_scalar_tagged_real():
+def test_real_accessor_scalar_tagged_real() -> None:
     """``d = A[0, 0].real`` / ``e = A[0, 0].imag`` on a complex ``A`` are REAL
     scalars: the LibNode pass over-propagates ``A``'s complex128 onto them, and
     ``_fix_real_scalar_dtypes`` retags them to the matching real width (float64).
@@ -223,7 +223,7 @@ def test_real_accessor_scalar_tagged_real():
     assert ld.get("e") == "float64", f"e should be real, got {ld.get('e')!r}"
 
 
-def test_eigvalsh_native_real_symmetric():
+def test_eigvalsh_native_real_symmetric() -> None:
     """End-to-end: ``np.linalg.eigvalsh(A)`` (the shared cyclic-Jacobi sweep, with
     ``.real`` / ``hypot`` / ``np.float64`` real scalar temps + a ``conj`` on the
     real ``ephi``) compiles and matches numpy on c + fortran once the real temps

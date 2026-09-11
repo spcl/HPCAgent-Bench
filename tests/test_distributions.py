@@ -12,30 +12,30 @@ def _gen(name, shape):
     return distributions.generate(name, shape, Precision.FP64, {"rng": np.random.default_rng(0)})
 
 
-def test_error_regimes_registered():
+def test_error_regimes_registered() -> None:
     for name in ("well_conditioned", "near_singular", "stable", "unstable"):
         assert name in distributions.DISTRIBUTIONS
 
 
-def test_stable_is_contractive():
+def test_stable_is_contractive() -> None:
     assert np.all(np.abs(_gen("stable", (64,))) < 1.0)
 
 
-def test_unstable_grows():
+def test_unstable_grows() -> None:
     assert np.all(np.abs(_gen("unstable", (64,))) >= 1.0)
 
 
-def test_well_conditioned_matrix_low_cond():
+def test_well_conditioned_matrix_low_cond() -> None:
     # square 2D -> diagonally dominant -> low condition number
     assert np.linalg.cond(_gen("well_conditioned", (8, 8))) < 1.0e3
 
 
-def test_near_singular_matrix_high_cond():
+def test_near_singular_matrix_high_cond() -> None:
     # square 2D -> rank-1 + tiny noise -> huge condition number
     assert np.linalg.cond(_gen("near_singular", (8, 8))) > 1.0e6
 
 
-def test_regimes_respect_shape_and_seed():
+def test_regimes_respect_shape_and_seed() -> None:
     a = _gen("well_conditioned", (5, 7))
     assert a.shape == (5, 7)
     # seeded -> reproducible

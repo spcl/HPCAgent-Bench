@@ -425,7 +425,7 @@ class _ElementSubst(ast.NodeTransformer):
     (``bias[oc]``) survives into the lambda body as itself.
     """
 
-    def __init__(self, by_id: Dict[int, str]):
+    def __init__(self, by_id: Dict[int, str]) -> None:
         self.by_id = by_id
 
     def visit_Subscript(self, node: ast.Subscript):  # noqa: N802 -- NodeTransformer dispatch name
@@ -443,7 +443,7 @@ class _CBodyEmitter(BaseEmitter):
     _COMMENT = ("/*", "*/")
     _KW_CONTINUE = "continue;"
 
-    def __init__(self, kir: KernelIR, multidim_arrays: Optional[Set[str]] = None):
+    def __init__(self, kir: KernelIR, multidim_arrays: Optional[Set[str]] = None) -> None:
         self.kir = kir
         #: Pluto: names with a multidimensional (*A)[M][K] VIEW -- subscripts stay multidimensional for affine analysis.
         self.multidim_arrays: Set[str] = multidim_arrays or set()

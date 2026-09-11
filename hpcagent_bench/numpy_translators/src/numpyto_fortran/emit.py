@@ -799,7 +799,7 @@ class _FortranBodyEmitter(BaseEmitter):
             return f"{indent}{mode} = {self.emit_expr(node.value)}\n{indent}return"
         return f"{indent}return"
 
-    def __init__(self, kir: KernelIR):
+    def __init__(self, kir: KernelIR) -> None:
         self.kir = kir
         #: Lazy cache of the names used in an integer context (see _int_uses).
         self._int_uses_cache: Optional[Set[str]] = None
@@ -2952,7 +2952,7 @@ class _FortranRenameTemps(ast.NodeTransformer):
     """Rewrite every leading-underscore Name/For-target to a Fortran-safe form, case-insensitive collisions to f_<name>,
     and give each For-loop iterator a unique Fortran name so nested loops do not reuse the same DO variable."""
 
-    def __init__(self, case_map: Optional[Dict[str, str]] = None):
+    def __init__(self, case_map: Optional[Dict[str, str]] = None) -> None:
         # case_map maps a lower-cased reserved name to its colliding f_-prefixed rewrite.
         self.case_map: Dict[str, str] = case_map or {}
         # Stack of (original_id, unique_fortran_id) for currently active For-loop targets.
@@ -3570,7 +3570,7 @@ def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
     # must be INTEGER in Fortran. An operand that _produces_bool is a numpy mask
     # combine, not integer bitwise arithmetic, so it stays logical/real and is skipped.
 
-    def _walk_bitwise_operands(rhs):
+    def _walk_bitwise_operands(rhs) -> None:
         # Walk a RHS expression and add every Name reachable through bitwise
         # BinOps/Invert UnaryOps to int_uses.
         if isinstance(rhs, ast.BinOp) and isinstance(rhs.op, BITWISE_OPS):

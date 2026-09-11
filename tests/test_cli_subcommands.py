@@ -67,7 +67,7 @@ DISPATCH = {
 STUB_CONSTANTS = {"hpcagent_bench.plotting": {"DEFAULT_BASELINE": "<stub-default-baseline>"}}
 
 
-def _stub_module(monkeypatch, dotted, funcname, recorder):
+def _stub_module(monkeypatch, dotted, funcname, recorder) -> None:
     """Install a fake ``dotted`` module exposing ``funcname`` -> ``recorder`` so a
     subcommand's ``from dotted import funcname`` binds the stub, never the real (heavy)
     module."""
@@ -82,14 +82,14 @@ def _subcommand_choices(parser):
     return action.choices
 
 
-def test_new_subcommands_are_registered():
+def test_new_subcommands_are_registered() -> None:
     choices = _subcommand_choices(build_parser())
     for name in NEW_SUBCOMMANDS:
         assert name in choices, f"{name} not registered on the top-level parser"
 
 
 @pytest.mark.parametrize("subcommand", NEW_SUBCOMMANDS)
-def test_subcommand_binds_dispatcher(subcommand):
+def test_subcommand_binds_dispatcher(subcommand) -> None:
     """The trivial argv parses and binds the expected ``cmd_*`` function."""
     _dotted, _fn, argv, cmd_name = DISPATCH[subcommand]
     ns = build_parser().parse_args(argv)
@@ -97,7 +97,7 @@ def test_subcommand_binds_dispatcher(subcommand):
 
 
 @pytest.mark.parametrize("subcommand", NEW_SUBCOMMANDS)
-def test_subcommand_dispatches_to_module_function(subcommand, monkeypatch):
+def test_subcommand_dispatches_to_module_function(subcommand, monkeypatch) -> None:
     """`main(argv)` reaches the target module function directly and returns cleanly."""
     dotted, funcname, argv, _cmd = DISPATCH[subcommand]
     calls = []
@@ -135,7 +135,7 @@ def test_unblock_sigchld_clears_an_inherited_block() -> None:
 
 
 @pytest.mark.parametrize("subcommand", NEW_SUBCOMMANDS)
-def test_main_unblocks_sigchld_before_dispatching(subcommand, monkeypatch):
+def test_main_unblocks_sigchld_before_dispatching(subcommand, monkeypatch) -> None:
     """Every verb reaches its dispatcher with SIGCHLD already clear. The mask is read INSIDE the
     stub, so this pins the ordering (unblock, then dispatch) and not merely that the call exists --
     a verb that compiles gets no second chance once its cmake is stuck in select()."""
@@ -156,7 +156,7 @@ def test_main_unblocks_sigchld_before_dispatching(subcommand, monkeypatch):
     assert seen and signal.SIGCHLD not in seen[0], f"{subcommand} dispatched with SIGCHLD still blocked"
 
 
-def test_run_benchmark_resolves_preset_and_forwards_flags(monkeypatch):
+def test_run_benchmark_resolves_preset_and_forwards_flags(monkeypatch) -> None:
     """`-p fuzzed:7` is resolved to base `fuzzed` and the selectors are forwarded."""
     calls = []
     _stub_module(
@@ -172,7 +172,7 @@ def test_run_benchmark_resolves_preset_and_forwards_flags(monkeypatch):
     assert preset == "fuzzed"  # base preset, seed stripped by resolve_preset
 
 
-def test_plot_forwards_db_and_output_defaults(monkeypatch):
+def test_plot_forwards_db_and_output_defaults(monkeypatch) -> None:
     calls = []
     _stub_module(monkeypatch, "hpcagent_bench.plotting", "plot_heatmap", lambda **k: calls.append(k))
     assert main(["plot"]) == 0
@@ -182,13 +182,13 @@ def test_plot_forwards_db_and_output_defaults(monkeypatch):
     assert kwargs["preset"] == "S"  # plot's default preset (matches the legacy plot_results.py)
 
 
-def test_bad_preset_is_rejected():
+def test_bad_preset_is_rejected() -> None:
     """`preset_arg` validation is preserved: a bogus preset is a clean CLI error."""
     with pytest.raises(SystemExit):
         build_parser().parse_args(["run-benchmark", "-b", "gemm", "-p", "not-a-preset"])
 
 
-def test_run_benchmark_requires_benchmark():
+def test_run_benchmark_requires_benchmark() -> None:
     """`-b/--benchmark` stays required on run-benchmark (as in the legacy script)."""
     with pytest.raises(SystemExit):
         build_parser().parse_args(["run-benchmark"])
@@ -212,14 +212,14 @@ def parser_option(subparser, option):
     return next(a for a in subparser._actions if option in a.option_strings)
 
 
-def test_agent_baseline_choices_come_from_the_registry():
+def test_agent_baseline_choices_come_from_the_registry() -> None:
     """The flag's `choices` must be `BASELINES`' own keys, not a hardcoded copy of them."""
     action = parser_option(agent_subparser(build_parser()), "--agent-baseline")
     assert set(action.choices) == set(BASELINES)
     assert action.default == "tools"  # today's behaviour: full prompt + repair loop, no search
 
 
-def test_a_fourth_registered_baseline_appears_in_the_cli_choices_automatically():
+def test_a_fourth_registered_baseline_appears_in_the_cli_choices_automatically() -> None:
     """Registering one more entry must reach the CLI with NO second edit anywhere in cli.py."""
     baselines.register(AgentBaseline(name="a-fourth-test-baseline"))
     try:
@@ -229,7 +229,7 @@ def test_a_fourth_registered_baseline_appears_in_the_cli_choices_automatically()
         del BASELINES["a-fourth-test-baseline"]  # BASELINES has no unregister; undo the test's own edit
 
 
-def test_an_unknown_agent_baseline_is_a_clean_cli_error():
+def test_an_unknown_agent_baseline_is_a_clean_cli_error() -> None:
     with pytest.raises(SystemExit):
         build_parser().parse_args(["agent", "stub", "--agent-baseline", "nope"])
 
@@ -247,7 +247,7 @@ def fake_solve_task(calls):
     return solve_task
 
 
-def test_default_agent_baseline_reaches_a_single_plain_solve_task_call(monkeypatch, tmp_path):
+def test_default_agent_baseline_reaches_a_single_plain_solve_task_call(monkeypatch, tmp_path) -> None:
     """Today's behaviour, unchanged: one call, on the RAW agent, no search wrapper."""
     calls = []
     monkeypatch.setattr(baselines, "solve_task", fake_solve_task(calls))
@@ -259,7 +259,7 @@ def test_default_agent_baseline_reaches_a_single_plain_solve_task_call(monkeypat
     assert not isinstance(calls[0], baselines.InstructedAgent)
 
 
-def test_agent_baseline_optimas_reaches_the_optimas_search_construction_path(monkeypatch, tmp_path):
+def test_agent_baseline_optimas_reaches_the_optimas_search_construction_path(monkeypatch, tmp_path) -> None:
     """`--agent-baseline optimas` must drive the REAL OptimasBaseline search -- control run + every proposed
     candidate, each its own InstructedAgent-wrapped solve_task call -- never silently collapse to
     'tools' plain single call. The proposer LLM call is stubbed (StubAgent has no model to call), so
@@ -311,7 +311,7 @@ def noop_abi_submission(monkeypatch, shared):
     return builder, sub
 
 
-def test_the_http_graded_optimizer_builds_into_the_shared_folder(tmp_path, monkeypatch):
+def test_the_http_graded_optimizer_builds_into_the_shared_folder(tmp_path, monkeypatch) -> None:
     """Checked with the JUDGE's own boundary check (``resolve_shared``), so the client and the
     service can never disagree on what counts as inside the mount -- and the mount is left as it
     was found once the sweep's factory goes away."""
@@ -327,7 +327,7 @@ def test_the_http_graded_optimizer_builds_into_the_shared_folder(tmp_path, monke
     assert not pathlib.Path(sub.library).exists() and list(shared.iterdir()) == []  # no leak in the mount
 
 
-def test_without_a_shared_folder_the_optimizer_keeps_its_own_throwaway_dir(tmp_path, monkeypatch):
+def test_without_a_shared_folder_the_optimizer_keeps_its_own_throwaway_dir(tmp_path, monkeypatch) -> None:
     """A local run has no mount: unchanged behaviour, and the folder is never created here."""
     pytest.importorskip("hpcagent_bench.emit_bridge")
     from hpcagent_bench.harness.sandbox import resolve_shared

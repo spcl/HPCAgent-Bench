@@ -495,7 +495,7 @@ def optimas_proposer(
     class InstructionComponent(BaseComponent):
         """A component whose optimizable variable is the leading instruction itself."""
 
-        def __init__(self, instruction: str):
+        def __init__(self, instruction: str) -> None:
             super().__init__(
                 description="the leading instruction given to a kernel-optimizing agent",
                 input_fields=["kernel"],
@@ -548,7 +548,7 @@ class InstructedAgent(Agent):
     so the token counters stay single-sourced.
     """
 
-    def __init__(self, inner: Agent, instruction: str):
+    def __init__(self, inner: Agent, instruction: str) -> None:
         self.inner = inner
         self.instruction = instruction
         self.name = inner.name

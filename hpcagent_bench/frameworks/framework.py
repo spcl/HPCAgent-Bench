@@ -47,7 +47,7 @@ class CallPlan:
     """Holds an impl + its resolved arguments and runs it by direct call; per-framework behaviour comes from
     method overrides on the owning :class:`Framework`, never generated code strings."""
 
-    def __init__(self, frmwrk: "Framework", bench: Benchmark, impl: Callable, bdata: Dict[str, Any]):
+    def __init__(self, frmwrk: "Framework", bench: Benchmark, impl: Callable, bdata: Dict[str, Any]) -> None:
         self.f = frmwrk
         self.bench = bench
         self.impl = impl
@@ -122,7 +122,7 @@ class Timer:
 
     __slots__ = ("program", "t0", "state")
 
-    def __init__(self, program: Any):
+    def __init__(self, program: Any) -> None:
         self.program = program
         self.t0: float = 0.0
         self.state: Any = None
@@ -616,7 +616,7 @@ class Framework(object):
     """Base per-backend adapter: default implementations()/call_args()/timing hooks a subclass overrides
     per flavor; used directly (unsubclassed) for the numpy flavor -- see :data:`FRAMEWORK_META`."""
 
-    def __init__(self, fname: str):
+    def __init__(self, fname: str) -> None:
         """Populate framework metadata from :data:`FRAMEWORK_META`."""
         self.fname = fname
         if fname not in FRAMEWORK_META:
@@ -739,7 +739,7 @@ class Framework(object):
         """Build the direct-callable plan for one ``(bench, impl)``."""
         return CallPlan(self, bench, impl, bdata)
 
-    def set_datatype(self, datatype):
+    def set_datatype(self, datatype) -> None:
         """Set the framework's working dtype globals from a datatype string (numpy or Precision-enum
         spelling, or None -> float64); a low-precision request is honored, never coerced to fp64."""
         global np_float, np_complex

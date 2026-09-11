@@ -445,7 +445,7 @@ class ArrayMethodRewriter(ast.NodeTransformer):
     ``np.sum(A)`` over them would index a CSR triple as a 2-D matrix.
     """
 
-    def __init__(self, sparse_names=None):
+    def __init__(self, sparse_names=None) -> None:
         self.sparse_names = set(sparse_names or ())
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
@@ -2014,7 +2014,7 @@ def expand_min(target, args, shape_table, kwargs=None):
     )
 
 
-def _reject_zero_size_reduction(args, kwargs, shape_table):
+def _reject_zero_size_reduction(args, kwargs, shape_table) -> None:
     """Refuse to lower ``np.max``/``np.min`` over a statically zero-length
     reduction axis: numpy raises ``zero-size array to reduction ... which has no
     identity``, and the seed ``arr[..., 0]`` would read OOB. Raise
@@ -3377,7 +3377,7 @@ class _RenameNames(ast.NodeTransformer):
     """Rename bare ``Name`` ids per a mapping (used to bind a fromfunction
     lambda's parameters to the loop iteration variables)."""
 
-    def __init__(self, mapping: Dict[str, str]):
+    def __init__(self, mapping: Dict[str, str]) -> None:
         self.mapping = mapping
 
     def visit_Name(self, node: ast.Name) -> ast.AST:
@@ -8479,8 +8479,15 @@ class _MatmulHoister(ast.NodeTransformer):
     left-to-right)."""
 
     def __init__(
-        self, shape_table, temp_arrays, temp_counter, local_dtypes=None, sparse=None, dim_aliases=None, blas=False
-    ):
+        self,
+        shape_table,
+        temp_arrays,
+        temp_counter,
+        local_dtypes=None,
+        sparse=None,
+        dim_aliases=None,
+        blas: bool = False,
+    ) -> None:
         self.shape_table = shape_table
         #: Target renders a dense 2-D float GEMM as a BLAS call rather than a loop nest.
         self.blas = blas
@@ -8914,8 +8921,8 @@ class _CallHoister(ast.NodeTransformer):
     """
 
     def __init__(
-        self, shape_table, scalar_temps, array_temps, counter, local_dtypes=None, dim_aliases=None, blas=False
-    ):
+        self, shape_table, scalar_temps, array_temps, counter, local_dtypes=None, dim_aliases=None, blas: bool = False
+    ) -> None:
         self.shape_table = shape_table
         self.scalar_temps = scalar_temps
         self.array_temps = array_temps
@@ -9896,7 +9903,7 @@ class LibNodeRewriter(ast.NodeTransformer):
         native_call: Optional[Callable[[Tuple[str, str], ast.Call, Dict, Dict], bool]] = None,
         native_dtypes: Optional[Dict[str, str]] = None,
         blas: bool = False,
-    ):
+    ) -> None:
         self.shape_table = shape_table
         #: Target renders a dense 2-D float GEMM as a BLAS call. Threaded to the matmul hoister;
         #: every other matmul shape (batched, transposed, matvec, sparse, non-float) keeps its loops.

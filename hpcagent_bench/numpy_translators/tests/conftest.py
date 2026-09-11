@@ -8,7 +8,7 @@ import os
 import sys
 
 
-def pytest_configure(config):
+def pytest_configure(config) -> None:
     # Same wording as the top-level tests/conftest.py: this suite has its own conftest, so a
     # marker registered there is unknown here and every use warns.
     config.addinivalue_line(

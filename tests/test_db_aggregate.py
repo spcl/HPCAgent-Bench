@@ -65,7 +65,7 @@ def _count(path: str, table: str) -> int:
         conn.close()
 
 
-def test_shard_paths_order_numerically(tmp_path):
+def test_shard_paths_order_numerically(tmp_path) -> None:
     """Shard 10 must merge after shard 9, which a lexical sort gets wrong."""
     base = str(tmp_path / "hpcagent_bench.db")
     for shard in (0, 2, 9, 10):
@@ -73,7 +73,7 @@ def test_shard_paths_order_numerically(tmp_path):
     assert recording.shard_paths(base) == [recording.shard_db_path(s, base) for s in (0, 2, 9, 10)]
 
 
-def test_shard_paths_ignores_the_base_and_unrelated_files(tmp_path):
+def test_shard_paths_ignores_the_base_and_unrelated_files(tmp_path) -> None:
     base = str(tmp_path / "hpcagent_bench.db")
     open(base, "w").close()
     open(str(tmp_path / "hpcagent_benchX.db"), "w").close()
@@ -82,7 +82,7 @@ def test_shard_paths_ignores_the_base_and_unrelated_files(tmp_path):
     assert recording.shard_paths(base) == [recording.shard_db_path(1, base)]
 
 
-def test_aggregate_merges_every_table_and_reassigns_ids(tmp_path):
+def test_aggregate_merges_every_table_and_reassigns_ids(tmp_path) -> None:
     base = str(tmp_path / "hpcagent_bench.db")
     _seed(recording.shard_db_path(0, base), run="r0", kernels=["gemm", "jacobi_2d"])
     _seed(recording.shard_db_path(1, base), run="r1", kernels=["gemm", "spmv"])
@@ -106,7 +106,7 @@ def test_aggregate_merges_every_table_and_reassigns_ids(tmp_path):
     assert runs == {"r0", "r1"}
 
 
-def test_aggregate_survives_a_shard_missing_a_column(tmp_path):
+def test_aggregate_survives_a_shard_missing_a_column(tmp_path) -> None:
     """Shards can be written by different code versions; one stale shard must not kill the merge."""
     base = str(tmp_path / "hpcagent_bench.db")
     current, stale = recording.shard_db_path(0, base), recording.shard_db_path(1, base)
@@ -132,7 +132,7 @@ def test_aggregate_survives_a_shard_missing_a_column(tmp_path):
     assert frameworks == {None, "numpy"}
 
 
-def test_aggregate_is_idempotent(tmp_path):
+def test_aggregate_is_idempotent(tmp_path) -> None:
     """Rebuilt from scratch, never appended to -- re-merging must not double the rows."""
     base = str(tmp_path / "hpcagent_bench.db")
     _seed(recording.shard_db_path(0, base), run="r0", kernels=["gemm"])
@@ -144,7 +144,7 @@ def test_aggregate_is_idempotent(tmp_path):
     assert _count(base, "submissions") == first == 2
 
 
-def test_aggregate_merges_the_prompt_store(tmp_path):
+def test_aggregate_merges_the_prompt_store(tmp_path) -> None:
     """A copied ``prompts`` row whose file stayed beside the shard would be a dangling pointer."""
     base = str(tmp_path / "hpcagent_bench.db")
     shard = recording.shard_db_path(0, base)
@@ -161,7 +161,7 @@ def test_aggregate_merges_the_prompt_store(tmp_path):
     assert stored.read_text() == "optimize this"
 
 
-def test_ensure_aggregated_builds_when_the_aggregate_is_missing(tmp_path):
+def test_ensure_aggregated_builds_when_the_aggregate_is_missing(tmp_path) -> None:
     base = str(tmp_path / "hpcagent_bench.db")
     _seed(recording.shard_db_path(0, base), run="r0", kernels=["gemm"])
     assert not os.path.exists(base)
@@ -170,7 +170,7 @@ def test_ensure_aggregated_builds_when_the_aggregate_is_missing(tmp_path):
     assert _count(base, "submissions") == 1
 
 
-def test_ensure_aggregated_rebuilds_when_a_shard_is_newer(tmp_path):
+def test_ensure_aggregated_rebuilds_when_a_shard_is_newer(tmp_path) -> None:
     """A shard that landed after the last merge must not be read through a stale aggregate."""
     base = str(tmp_path / "hpcagent_bench.db")
     _seed(recording.shard_db_path(0, base), run="r0", kernels=["gemm"])
@@ -185,7 +185,7 @@ def test_ensure_aggregated_rebuilds_when_a_shard_is_newer(tmp_path):
     assert _count(base, "submissions") == 2
 
 
-def test_ensure_aggregated_is_a_noop_without_shards(tmp_path):
+def test_ensure_aggregated_is_a_noop_without_shards(tmp_path) -> None:
     """A single-writer run keeps working untouched -- no aggregate is invented for it."""
     base = str(tmp_path / "hpcagent_bench.db")
     _seed(base, run="solo", kernels=["gemm"])
@@ -195,7 +195,7 @@ def test_ensure_aggregated_is_a_noop_without_shards(tmp_path):
     assert _count(base, "submissions") == 1
 
 
-def test_a_single_writer_run_still_writes_a_shard(monkeypatch, tmp_path):
+def test_a_single_writer_run_still_writes_a_shard(monkeypatch, tmp_path) -> None:
     """Nothing writes the base file. It is BOTH authoritative and derived otherwise -- the next
     merge erases it, and its mtime makes a stale aggregate look fresh."""
     from hpcagent_bench import config
@@ -211,7 +211,7 @@ def test_a_single_writer_run_still_writes_a_shard(monkeypatch, tmp_path):
         config.clear_override("record.allow_memory_db")
 
 
-def test_a_pre_sharding_db_is_adopted_rather_than_erased(tmp_path):
+def test_a_pre_sharding_db_is_adopted_rather_than_erased(tmp_path) -> None:
     """The rebuild unlinks the destination, so a run from before sharding -- whose results ARE the
     base file -- has to become an input first, or reading the DB destroys it."""
     base = str(tmp_path / "hpcagent_bench.db")
@@ -228,7 +228,7 @@ def test_a_pre_sharding_db_is_adopted_rather_than_erased(tmp_path):
         conn.close()
 
 
-def test_adoption_happens_once(tmp_path):
+def test_adoption_happens_once(tmp_path) -> None:
     """The rebuilt aggregate is marked derived, so re-reading cannot adopt it as its own input and
     double every legacy row."""
     base = str(tmp_path / "hpcagent_bench.db")
@@ -243,7 +243,7 @@ def test_adoption_happens_once(tmp_path):
     assert recording.user_version(base) == recording.DERIVED_MARK
 
 
-def test_adoption_carries_the_prompt_store(tmp_path):
+def test_adoption_carries_the_prompt_store(tmp_path) -> None:
     """The store is named after the DB beside it, so a base adopted under a new name leaves its
     prompt rows pointing at files that are no longer there."""
     base = str(tmp_path / "hpcagent_bench.db")
@@ -260,26 +260,26 @@ def test_adoption_carries_the_prompt_store(tmp_path):
     assert (recording.prompt_store_dir(base) / f"{digest[:2]}/{digest}.txt").read_text() == "legacy prompt"
 
 
-def test_db_shard_prefers_the_explicit_override(monkeypatch):
+def test_db_shard_prefers_the_explicit_override(monkeypatch) -> None:
     monkeypatch.setenv("SLURM_PROCID", "7")
     monkeypatch.setenv("HPCAGENT_BENCH_DB_SHARD", "2")
     assert recording.db_shard() == 2
 
 
-def test_db_shard_falls_back_to_the_launcher_rank(monkeypatch):
+def test_db_shard_falls_back_to_the_launcher_rank(monkeypatch) -> None:
     """A job that forgets the explicit variable still shards, rather than sharing one file."""
     monkeypatch.delenv("HPCAGENT_BENCH_DB_SHARD", raising=False)
     monkeypatch.setenv("SLURM_PROCID", "7")
     assert recording.db_shard() == 7
 
 
-def test_db_shard_is_none_when_single_writer(monkeypatch):
+def test_db_shard_is_none_when_single_writer(monkeypatch) -> None:
     for name in ("HPCAGENT_BENCH_DB_SHARD", "SLURM_PROCID", "OMPI_COMM_WORLD_RANK", "PMI_RANK"):
         monkeypatch.delenv(name, raising=False)
     assert recording.db_shard() is None
 
 
-def test_memory_backed_storage_is_refused(tmp_path):
+def test_memory_backed_storage_is_refused(tmp_path) -> None:
     """Results on tmpfs vanish with the allocation and steal RAM from the kernel being measured."""
     from hpcagent_bench import config
 

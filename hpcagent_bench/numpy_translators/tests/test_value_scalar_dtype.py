@@ -86,14 +86,14 @@ def _scalar_desc(src, func, scalar):
     return {s.name: s.dtype for s in kir.scalars}, {sym.name for sym in kir.symbols}
 
 
-def test_init_scalar_float_is_value_scalar_not_size_symbol():
+def test_init_scalar_float_is_value_scalar_not_size_symbol() -> None:
     # The frontend classifies a float-declared name as a float SCALAR, not an integer sizing SYMBOL.
     scalars, symbols = _scalar_desc(_THRESH_SRC, "f", "thr")
     assert scalars.get("thr") in ("float64", "double"), scalars
     assert "thr" not in symbols, f"thr wrongly classified as an int size symbol: {symbols}"
 
 
-def test_threshold_scalar_declared_double_all_langs():
+def test_threshold_scalar_declared_double_all_langs() -> None:
     _d, c, cpp, f90 = _emit(_THRESH_SRC, "f", "thr")
     assert "double thr" in c, c
     assert "double thr" in cpp, cpp
@@ -102,14 +102,14 @@ def test_threshold_scalar_declared_double_all_langs():
     assert "integer(c_int64_t), value :: thr" not in f90, f90
 
 
-def test_staged_body_assigned_scalar_declared_double_all_langs():
+def test_staged_body_assigned_scalar_declared_double_all_langs() -> None:
     _d, c, cpp, f90 = _emit(_STAGED_SRC, "g", "v")
     assert "double v" in c, c
     assert "double v" in cpp, cpp
     assert "integer(c_int64_t), value :: v" not in f90, f90
 
 
-def test_staged_scalar_fortran_drops_intent_in_when_reassigned():
+def test_staged_scalar_fortran_drops_intent_in_when_reassigned() -> None:
     """A value scalar the body REASSIGNS (``v = a[i]``, the staged read a nest
     extractor leaks) must NOT be ``intent(in)`` in Fortran: an intent(in) dummy on
     the LHS is a hard compile error. The ``value`` attribute keeps it a local copy
@@ -119,7 +119,7 @@ def test_staged_scalar_fortran_drops_intent_in_when_reassigned():
     assert "intent(in) :: v" not in f90, f90
 
 
-def test_staged_scalar_fortran_compiles_and_runs():
+def test_staged_scalar_fortran_compiles_and_runs() -> None:
     """The regression that the dtype checks above MISS: ``real(c_double)`` v was
     right, but it was emitted ``value, intent(in)`` and gfortran rejected the
     ``v = a[i]`` assignment (``Dummy argument 'v' with INTENT(IN) in variable
@@ -173,7 +173,7 @@ def _shutil_which(name):
     return shutil.which(name)
 
 
-def test_threshold_scalar_not_truncated_end_to_end_c():
+def test_threshold_scalar_not_truncated_end_to_end_c() -> None:
     # Discriminating run: thr = 0.5, a in [0, 1). A double `thr` sums only a[i] > 0.5; a truncated int
     # `thr` (== 0) would sum EVERY element. The two differ, so a regression to int is loud.
     cc = _shutil_which("gcc") or _shutil_which("clang")

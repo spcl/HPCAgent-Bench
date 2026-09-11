@@ -45,7 +45,7 @@ def _binding() -> Binding:
 # --------------------------------------------------------------------------- #
 # Pure resolvers
 # --------------------------------------------------------------------------- #
-def test_workspace_bytes_scales_with_symbols():
+def test_workspace_bytes_scales_with_symbols() -> None:
     b = _binding()
     data = {"x": None, "y": None, "N": 32, "a": 2.0}
     # Expression over the size symbol -> scales with the sampled shape.
@@ -54,7 +54,7 @@ def test_workspace_bytes_scales_with_symbols():
     assert _workspace_bytes(None, b, data) == 0  # no request -> 0
 
 
-def test_workspace_bytes_rejects_bad_request():
+def test_workspace_bytes_rejects_bad_request() -> None:
     b = _binding()
     data = {"N": 8, "a": 1.0}
     with pytest.raises(ValueError):
@@ -69,7 +69,7 @@ def test_workspace_bytes_rejects_bad_request():
     assert _workspace_bytes("8*N/3", b, data) == 22  # ceil(64/3)=22
 
 
-def test_alloc_workspace_alignment_and_null():
+def test_alloc_workspace_alignment_and_null() -> None:
     assert _alloc_workspace(0) is None
     assert _alloc_workspace(-5) is None
     buf = _alloc_workspace(1000)
@@ -80,7 +80,7 @@ def test_alloc_workspace_alignment_and_null():
 # --------------------------------------------------------------------------- #
 # ABI surface: pair present as the trailing args, never in the ordinary arg list
 # --------------------------------------------------------------------------- #
-def test_stub_and_glue_carry_workspace_trailing():
+def test_stub_and_glue_carry_workspace_trailing() -> None:
     b = _binding()
     for lang in LANGS:
         stub = gen_call_stub(b, lang)
@@ -92,7 +92,7 @@ def test_stub_and_glue_carry_workspace_trailing():
     assert glue.count("workspace_size") >= 2
 
 
-def test_binding_json_describes_workspace_and_keeps_args_clean():
+def test_binding_json_describes_workspace_and_keeps_args_clean() -> None:
     j = _binding().to_json()
     assert j["abi"] == "c-abi-v2"
     assert j["workspace"]["name"] == "workspace"
@@ -106,7 +106,7 @@ def test_binding_json_describes_workspace_and_keeps_args_clean():
 # --------------------------------------------------------------------------- #
 # Envelope round-trip
 # --------------------------------------------------------------------------- #
-def test_submission_carries_workspace_bytes():
+def test_submission_carries_workspace_bytes() -> None:
     sub = Submission.from_obj({"language": "c", "source": "x", "workspace_bytes": "8*N"})
     assert sub.workspace_bytes == "8*N"
     assert sub.to_json()["workspace_bytes"] == "8*N"
@@ -139,7 +139,7 @@ void wstest_fp64(const double *x, double *y, const int64_t N, const double a,
 
 
 @pytest.mark.skipif(not shutil.which("gcc"), reason="gcc required for the native round-trip")
-def test_native_call_passes_workspace(tmp_path):
+def test_native_call_passes_workspace(tmp_path) -> None:
     src = tmp_path / "wstest.c"
     src.write_text(_WS_KERNEL)
     so = tmp_path / "libwstest.so"
@@ -179,7 +179,7 @@ void wstest_fp64(const double *x, double *y, const int64_t N, const double a,
 
 
 @pytest.mark.skipif(not shutil.which("gcc"), reason="gcc required for the native round-trip")
-def test_the_workspace_does_not_carry_between_reps(tmp_path):
+def test_the_workspace_does_not_carry_between_reps(tmp_path) -> None:
     """One child runs the whole budget, so the workspace is allocated once and would otherwise
     persist -- a channel to memoize through and have the replay credited by ``min(samples)``.
     Zeroing cannot break a conforming kernel: the ABI calls it write-before-read."""

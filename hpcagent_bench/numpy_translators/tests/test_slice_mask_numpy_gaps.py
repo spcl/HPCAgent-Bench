@@ -39,12 +39,12 @@ _A = np.linspace(0.5, 3.0, 6)
 # --- reverse / strided slices --------------------------------------------- #
 
 
-def test_reverse_whole_array_assign():
+def test_reverse_whole_array_assign() -> None:
     ok, res = _run(" out[:] = a[::-1]", {"a": _A}, {"out": (6,)}, {"N": 6}, {"a": "(N,)", "out": "(N,)"})
     assert ok, res
 
 
-def test_strided_reverse_step2():
+def test_strided_reverse_step2() -> None:
     ok, res = _run(
         " b = a[::-2]\n for i in range(3):\n  out[i] = b[i]",
         {"a": _A},
@@ -58,14 +58,14 @@ def test_strided_reverse_step2():
 # --- boolean-mask reductions ---------------------------------------------- #
 
 
-def test_masked_sum_inline():
+def test_masked_sum_inline() -> None:
     ok, res = _run(
         " m = a > 1.5\n out[0] = np.sum(a[m])", {"a": _A}, {"out": (1,)}, {"N": 6}, {"a": "(N,)", "out": "(1,)"}
     )
     assert ok, res
 
 
-def test_masked_max_seed_excludes_index0():
+def test_masked_max_seed_excludes_index0() -> None:
     """Index 0 is masked OUT and holds the global max; the accumulator must seed
     from the first masked HIT, not ``arr[0]`` (correct masked-max = 3.0)."""
     a = np.array([10.0, 1.0, 2.0, 3.0])
@@ -75,7 +75,7 @@ def test_masked_max_seed_excludes_index0():
     assert ok, res
 
 
-def test_integer_gather_reduction_not_masked():
+def test_integer_gather_reduction_not_masked() -> None:
     """``np.sum(a[idx])`` with an INTEGER index array is a gather-sum, NOT a
     masked reduction -- it must stay a gather (the mask peephole is gated on a
     known-boolean index)."""
@@ -105,7 +105,7 @@ def test_integer_gather_reduction_not_masked():
 _M = np.linspace(-1.0, 2.0, 8)
 
 
-def test_masked_sum_explicit_loop_staged_scalar():
+def test_masked_sum_explicit_loop_staged_scalar() -> None:
     """``v = a[i]; if v > K: acc += v`` -- the nest-extracted masked SUM. ``v`` is
     a reassigned value scalar (Fortran must drop its ``intent(in)``)."""
     body = " acc = 0.0\n for i in range(len(a)):\n  v = a[i]\n  if v > K:\n   acc = acc + v\n out[0] = acc"
@@ -113,14 +113,14 @@ def test_masked_sum_explicit_loop_staged_scalar():
     assert ok, res
 
 
-def test_masked_max_explicit_loop_staged_scalar():
+def test_masked_max_explicit_loop_staged_scalar() -> None:
     """Nest-extracted masked MAX: seed from a sentinel, keep the largest ``v > K``."""
     body = " m = -1.0e30\n for i in range(len(a)):\n  v = a[i]\n  if v > K:\n   if v > m:\n    m = v\n out[0] = m"
     ok, res = _run(body, {"a": _M, "K": 0.5, "v": 0.0}, {"out": (1,)}, {"N": 8}, {"a": "(N,)", "out": "(1,)"})
     assert ok, res
 
 
-def test_masked_count_explicit_loop_staged_scalar():
+def test_masked_count_explicit_loop_staged_scalar() -> None:
     """Nest-extracted masked COUNT: integer accumulator over ``v > K``."""
     body = " c = 0\n for i in range(len(a)):\n  v = a[i]\n  if v > K:\n   c = c + 1\n out[0] = c"
     ok, res = _run(body, {"a": _M, "K": 0.5, "v": 0.0}, {"out": (1,)}, {"N": 8}, {"a": "(N,)", "out": "(1,)"})
@@ -130,7 +130,7 @@ def test_masked_count_explicit_loop_staged_scalar():
 # --- any / all / count_nonzero -------------------------------------------- #
 
 
-def test_any_all_named_mask():
+def test_any_all_named_mask() -> None:
     for op, expect_body in (("any", " m = a > 1.5\n"), ("all", " m = a > 0.0\n")):
         ok, res = _run(
             expect_body + f" out[0] = np.{op}(m)", {"a": _A}, {"out": (1,)}, {"N": 6}, {"a": "(N,)", "out": "(1,)"}
@@ -138,7 +138,7 @@ def test_any_all_named_mask():
         assert ok, (op, res)
 
 
-def test_count_nonzero_mask_and_float():
+def test_count_nonzero_mask_and_float() -> None:
     ok, res = _run(
         " m = a > 1.5\n out[0] = np.count_nonzero(m)", {"a": _A}, {"out": (1,)}, {"N": 6}, {"a": "(N,)", "out": "(1,)"}
     )
@@ -148,7 +148,7 @@ def test_count_nonzero_mask_and_float():
     assert ok, res
 
 
-def test_any_all_axis():
+def test_any_all_axis() -> None:
     a = np.array([[0.0, 1.0, 0.0], [2.0, 0.0, 3.0]])
     ok, res = _run(
         " m = a > 1.0\n out[:] = np.any(m, axis=0)",
@@ -173,14 +173,14 @@ def test_any_all_axis():
 _S = np.linspace(-1.0, 3.0, 6)
 
 
-def test_not_mask_in_where():
+def test_not_mask_in_where() -> None:
     ok, res = _run(
         " m = a > 1.0\n out[:] = np.where(~m, a, 0.0)", {"a": _S}, {"out": (6,)}, {"N": 6}, {"a": "(N,)", "out": "(N,)"}
     )
     assert ok, res
 
 
-def test_not_over_compound_mask():
+def test_not_over_compound_mask() -> None:
     """``~`` applied to a ``& | ^`` COMBINE (De Morgan), not just a bare Name -- the
     operand is a BinOp, so the bool-detection must recurse. C bitwise ``~`` on the
     0/1 combine would give the truthy -2 (always-true where); Fortran NOT() on a
@@ -196,7 +196,7 @@ def test_not_over_compound_mask():
         assert ok, (combine, res)
 
 
-def test_logical_xor_combine():
+def test_logical_xor_combine() -> None:
     """``m1 ^ m2`` on boolean masks is elementwise XOR (Fortran ``.neqv.``, not the
     integer IEOR that rejects a logical operand)."""
     ok, res = _run(

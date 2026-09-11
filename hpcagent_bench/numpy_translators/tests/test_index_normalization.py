@@ -20,7 +20,7 @@ def _ok(res):
     return all(v == "ok" or v.startswith("skip") for v in res.values()), res
 
 
-def test_ellipsis_trailing_scalar():
+def test_ellipsis_trailing_scalar() -> None:
     # ``a[..., 0]`` on a 3-D array -> ``a[:, :, 0]`` (the trailing scalar keeps the
     # last axis; the Ellipsis fills the two leading source axes).
     src = "import numpy as np\ndef f(a, out):\n    out[:, :] = a[..., 0]\n"
@@ -41,7 +41,7 @@ def test_ellipsis_trailing_scalar():
     assert ok, r
 
 
-def test_ellipsis_then_newaxis_broadcast():
+def test_ellipsis_then_newaxis_broadcast() -> None:
     # ``a[..., None] * x`` -- the LS3DF ``vloc[..., None] * X`` shape: the Ellipsis
     # fills a's two axes, the newaxis inserts a trailing size-1 axis that broadcasts
     # against x's last axis.
@@ -65,7 +65,7 @@ def test_ellipsis_then_newaxis_broadcast():
     assert ok, r
 
 
-def test_scalar_chained_then_ellipsis():
+def test_scalar_chained_then_ellipsis() -> None:
     # ``A[i][..., 0]`` -- a scalar-chained subscript flattened to ``A[i, ..., 0]``
     # then the Ellipsis expanded to ``A[i, :, :, 0]`` (LS3DF ``psi_frag[f][..., 0]``).
     src = "import numpy as np\ndef f(A, out):\n    for i in range(A.shape[0]):\n        out[i, :, :] = A[i][..., 0]\n"
@@ -86,7 +86,7 @@ def test_scalar_chained_then_ellipsis():
     assert ok, r
 
 
-def test_mixed_scalar_ellipsis_scalar():
+def test_mixed_scalar_ellipsis_scalar() -> None:
     # ``A[i, ..., j]`` -- an Ellipsis between two scalar indices: axis 0 and the last
     # axis are consumed, the Ellipsis fills the middle two -> ``A[i, :, :, j]``.
     src = (
@@ -113,7 +113,7 @@ def test_mixed_scalar_ellipsis_scalar():
     assert ok, r
 
 
-def test_ellipsis_over_a_hoisted_call_base():
+def test_ellipsis_over_a_hoisted_call_base() -> None:
     # ``np.transpose(a, perm)[..., None]`` -- the base is a CALL, so the normalisation phase
     # (which only fires on a Name) leaves the Ellipsis standing. The call hoister materialises
     # the transpose into a sized temp one phase later, and the expansion has to happen there or
@@ -138,7 +138,7 @@ def test_ellipsis_over_a_hoisted_call_base():
     assert ok, r
 
 
-def test_ellipsis_over_an_arithmetic_base():
+def test_ellipsis_over_an_arithmetic_base() -> None:
     # ``(np.sum(m * n, axis=-1) / d)[..., None]`` -- cfd's shape. The base is an ARITHMETIC
     # expression, so there is no name to look a rank up under; its operands are sized, which is
     # all the expansion needs. Left unexpanded, the Ellipsis reaches the emitter as a literal.

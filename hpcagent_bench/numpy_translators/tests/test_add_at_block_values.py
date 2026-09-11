@@ -26,7 +26,7 @@ def _apply(pass_obj, src: str) -> str:
     return ast.unparse(ast.fix_missing_locations(ast.Module(body=body, type_ignores=[])))
 
 
-def test_block_values_get_a_loop_per_untouched_axis():
+def test_block_values_get_a_loop_per_untouched_axis() -> None:
     # The two trailing axes are iterated, not left as a subarray ``+=``: scalar accumulation is
     # what every backend supports, and it keeps the unbuffered duplicate-index order.
     out = _apply(_AddAtInline({"c": 3, "pos": 1, "prod": 3, "alpha": 0}), "np.add.at(c, pos, alpha * prod)")
@@ -35,7 +35,7 @@ def test_block_values_get_a_loop_per_untouched_axis():
     assert "c[__sc0_x0[__sc0_i0], __sc0_t0, __sc0_t1] += __sc0_v[__sc0_i0, __sc0_t0, __sc0_t1]" in out, out
 
 
-def test_matching_shape_scatter_is_untouched():
+def test_matching_shape_scatter_is_untouched() -> None:
     # edge_laplacian's flat scatter: nothing trailing, so no extra loop may appear.
     out = _apply(_AddAtInline({"Lx": 1, "src": 1, "flux": 1}), "np.add.at(Lx, src, flux)")
     assert out == (
@@ -46,14 +46,14 @@ def test_matching_shape_scatter_is_untouched():
     ), out
 
 
-def test_a_genuine_broadcast_still_refuses():
+def test_a_genuine_broadcast_still_refuses() -> None:
     # rank-1 index into a rank-1 target leaves NO axis untouched, so rank-2 values really are an
     # unmodelled broadcast -- the refusal this generalisation must not swallow.
     with pytest.raises(DesugarError, match="axes the index leaves untouched"):
         _apply(_AddAtInline({"Lx": 1, "src": 1, "flux": 2}), "np.add.at(Lx, src, flux)")
 
 
-def test_lowered_loop_reproduces_numpy_with_duplicate_indices():
+def test_lowered_loop_reproduces_numpy_with_duplicate_indices() -> None:
     # The property the lowering exists for: duplicate targets accumulate, they do not overwrite.
     rng = np.random.default_rng(0)
     nb, bs, nv = 5, 3, 11

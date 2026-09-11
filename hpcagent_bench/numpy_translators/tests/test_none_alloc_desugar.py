@@ -23,19 +23,19 @@ def _rw(body_src: str) -> str:
     return ast.unparse(tree.body[0].body[0])
 
 
-def test_alloc_then_none_takes_the_alloc_branch():
+def test_alloc_then_none_takes_the_alloc_branch() -> None:
     assert _rw("x = np.zeros((n,)) if cond else None") == "x = np.zeros((n,))"
 
 
-def test_none_then_alloc_mirror_takes_the_alloc_branch():
+def test_none_then_alloc_mirror_takes_the_alloc_branch() -> None:
     assert _rw("x = None if cond else np.ones((n,))") == "x = np.ones((n,))"
 
 
-def test_non_none_ternary_is_left_alone():
+def test_non_none_ternary_is_left_alone() -> None:
     assert _rw("y = a if cond else b") == "y = a if cond else b"
 
 
-def test_name_observed_via_is_none_is_not_forced():
+def test_name_observed_via_is_none_is_not_forced() -> None:
     """When the buffer's None-ness is later observed (``x is not None``) the conditional
     is load-bearing, so the rewrite must NOT fire (else the guard would always take the
     allocated branch)."""
@@ -62,7 +62,7 @@ def condnone(a, cond, out):
 """
 
 
-def test_conditional_none_alloc_matches_numpy_end_to_end():
+def test_conditional_none_alloc_matches_numpy_end_to_end() -> None:
     """The always-allocated lowering runs + matches numpy on C/C++/Fortran (the backends
     that have no ``None``); the verbatim backends run the numpy form directly."""
     a = np.arange(6, dtype=np.float64)

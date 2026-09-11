@@ -37,9 +37,23 @@ EXCLUDE = "hpcagent_bench/benchmarks"
 def violations() -> collections.Counter:
     """``{repo-relative path: ANN violation count}`` from ruff itself, not a reimplementation."""
     proc = subprocess.run(
-        [sys.executable, "-m", "ruff", "check", "--select", "ANN", "--output-format", "json",
-         "--no-cache", "--exclude", EXCLUDE, *ROOTS],
-        cwd=REPO, capture_output=True, text=True,
+        [
+            sys.executable,
+            "-m",
+            "ruff",
+            "check",
+            "--select",
+            "ANN",
+            "--output-format",
+            "json",
+            "--no-cache",
+            "--exclude",
+            EXCLUDE,
+            *ROOTS,
+        ],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
     )
     if proc.returncode not in (0, 1):  # 0 = clean, 1 = findings; anything else is ruff failing
         raise RuntimeError(f"ruff could not run (rc={proc.returncode}):\n{proc.stderr[-2000:]}")

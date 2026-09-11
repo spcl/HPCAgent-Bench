@@ -43,33 +43,33 @@ def _expr(src):
 # --------------------------------------------------------------------------- #
 
 
-def test_rng_integers_size_kwarg_shape():
+def test_rng_integers_size_kwarg_shape() -> None:
     """``rng.integers(0, NS, size=(NS, NA))`` -> shape ``(NS, NA)`` (dfa)."""
     assert _shape_from_constructor(_expr("rng.integers(0, NS, size=(NS, NA))"), {}) == "(NS, NA)"
 
 
-def test_rng_integers_positional_size():
+def test_rng_integers_positional_size() -> None:
     """Positional ``(low, high, size)`` form -> the 3rd arg is the shape."""
     assert _shape_from_constructor(_expr("rng.integers(0, NS, N)"), {}) == "(N,)"
 
 
-def test_np_full_fill_is_not_an_axis():
+def test_np_full_fill_is_not_an_axis() -> None:
     """``np.full(N, INF)`` is 1-D ``(N,)`` -- the fill value INF must NOT be
     read as a second axis (the bellman_ford ``INF`` phantom-dimension leak)."""
     assert _shape_from_constructor(_expr("np.full(N, INF)"), {}) == "(N,)"
 
 
-def test_np_full_2d_tuple_shape():
+def test_np_full_2d_tuple_shape() -> None:
     """A genuine 2-D ``np.full((N, M), 0.0)`` keeps its tuple shape."""
     assert _shape_from_constructor(_expr("np.full((N, M), 0.0)"), {}) == "(N, M)"
 
 
-def test_np_zeros_dtype_arg_not_an_axis():
+def test_np_zeros_dtype_arg_not_an_axis() -> None:
     """``np.zeros(N, dtype)`` -- the dtype positional must not become an axis."""
     assert _shape_from_constructor(_expr("np.zeros(N, np.int64)"), {}) == "(N,)"
 
 
-def test_rand_separate_axes_still_supported():
+def test_rand_separate_axes_still_supported() -> None:
     """``np.random.rand(M, N)`` DOES spread axis lengths positionally."""
     assert _shape_from_constructor(_expr("np.random.rand(M, N)"), {}) == "(M, N)"
 
@@ -93,7 +93,7 @@ def _for_loops(stmts):
     return [n for s in stmts for n in ast.walk(s) if isinstance(n, ast.For)]
 
 
-def test_arange_stop_iota():
+def test_arange_stop_iota() -> None:
     """``np.arange(K)`` -> ``for __i in range(K): out[__i] = __i``."""
     stmts = _arange_stmts("np.arange(K)")
     loops = _for_loops(stmts)
@@ -103,7 +103,7 @@ def test_arange_stop_iota():
     assert ast.unparse(body) == "out[__i] = __i"
 
 
-def test_arange_start_stop_offset():
+def test_arange_start_stop_offset() -> None:
     """``np.arange(s, e)`` -> value ``s + __i`` over ``range(e - s)``."""
     stmts = _arange_stmts("np.arange(s, e)")
     loops = _for_loops(stmts)
@@ -111,7 +111,7 @@ def test_arange_start_stop_offset():
     assert ast.unparse(loops[0].body[0]) == "out[__i] = s + __i"
 
 
-def test_arange_step_form():
+def test_arange_step_form() -> None:
     """``np.arange(s, e, d)`` -> value ``s + __i * d`` with a ceil-div count."""
     stmts = _arange_stmts("np.arange(s, e, d)")
     (body,) = _for_loops(stmts)[0].body
@@ -129,22 +129,22 @@ def _astype(src):
     return ast.unparse(tree).strip()
 
 
-def test_astype_concrete_np_dtype():
+def test_astype_concrete_np_dtype() -> None:
     """``(a == b).astype(np.int64)`` -> ``np.int64(a == b)`` (bfs)."""
     assert _astype("x = (a == b).astype(np.int64)") == "x = np.int64(a == b)"
 
 
-def test_astype_array_dtype_strips():
+def test_astype_array_dtype_strips() -> None:
     """``z.astype(X.dtype)`` -> ``z`` (the destination dtype realises it; kmeans)."""
     assert _astype("y = z.astype(X.dtype)") == "y = z"
 
 
-def test_astype_builtin_float():
+def test_astype_builtin_float() -> None:
     """``x.astype(float)`` -> ``np.float64(x)``."""
     assert _astype("r = x.astype(float)") == "r = np.float64(x)"
 
 
-def test_astype_string_dtype():
+def test_astype_string_dtype() -> None:
     assert _astype('r = x.astype("int32")') == "r = np.int32(x)"
 
 
@@ -154,7 +154,7 @@ def test_astype_string_dtype():
 
 
 @pytest.mark.parametrize("fn", ["max", "min"])
-def test_variadic_minmax_folds_to_nested_2arg(fn):
+def test_variadic_minmax_folds_to_nested_2arg(fn) -> None:
     """A 3-arg builtin ``max(a, b, c)`` emits as nested 2-arg calls so the
     C/C++ 2-arg ``max``/``min`` macros accept it (needleman_wunsch)."""
     from numpyto_c.emit import _CBodyEmitter
@@ -174,7 +174,7 @@ def test_variadic_minmax_folds_to_nested_2arg(fn):
 # --------------------------------------------------------------------------- #
 
 
-def test_var_is_scalar_reduction():
+def test_var_is_scalar_reduction() -> None:
     """``np.var`` must be hoistable as a SCALAR temp (srad nests it in a
     division). Mirrors ``np.std`` -- both go through ``_expand_var_or_std``."""
     import inspect
@@ -196,17 +196,17 @@ def _alias(src):
     return ast.unparse(tree).strip()
 
 
-def test_permute_dims_aliases_transpose():
+def test_permute_dims_aliases_transpose() -> None:
     """``np.permute_dims(A, axes)`` is numpy's array-API spelling of
     ``np.transpose(A, axes)`` -- normalised so the transpose path is reused."""
     assert _alias("B = np.permute_dims(A, (1, 0))") == "B = np.transpose(A, (1, 0))"
 
 
-def test_permute_aliases_transpose():
+def test_permute_aliases_transpose() -> None:
     assert _alias("B = np.permute(A, (2, 0, 1))") == "B = np.transpose(A, (2, 0, 1))"
 
 
-def test_amax_amin_alias_max_min():
+def test_amax_amin_alias_max_min() -> None:
     assert _alias("m = np.amax(x)") == "m = np.max(x)"
     assert _alias("m = np.amin(x, axis=1)") == "m = np.min(x, axis=1)"
 
@@ -224,7 +224,7 @@ def _fromfunction_stmts(src):
     return stmts
 
 
-def test_fromfunction_2d_inlines_lambda():
+def test_fromfunction_2d_inlines_lambda() -> None:
     """``np.fromfunction(lambda i, j: i*M + j, (N, M))`` -> a 2-D loop with the
     lambda body inlined, its params bound to the loop iters."""
     stmts = _fromfunction_stmts("np.fromfunction(lambda i, j: i * M + j, (N, M))")
@@ -236,14 +236,14 @@ def test_fromfunction_2d_inlines_lambda():
     assert ast.unparse(inner) == "out[__ff0, __ff1] = __ff0 * M + __ff1"
 
 
-def test_fromfunction_1d():
+def test_fromfunction_1d() -> None:
     stmts = _fromfunction_stmts("np.fromfunction(lambda i: 2 * i, (N,))")
     loops = _for_loops(stmts)
     assert len(loops) == 1
     assert ast.unparse(loops[0].body[0]) == "out[__ff0] = 2 * __ff0"
 
 
-def test_fromfunction_rejects_non_lambda():
+def test_fromfunction_rejects_non_lambda() -> None:
     with pytest.raises(NotImplementedError):
         expand_fromfunction(ast.Name(id="out", ctx=ast.Store()), _expr("np.fromfunction(f, (N,))").args, {})
 
@@ -260,42 +260,42 @@ def _scatter(src, shapes):
     return ast.unparse(tree).strip()
 
 
-def test_add_at_scatter_loop():
+def test_add_at_scatter_loop() -> None:
     """``np.add.at(Lx, src, flux)`` -> ``for __sat1 in range(E): Lx[src[__sat1]] += flux[__sat1]``."""
     out = _scatter("np.add.at(Lx, src, flux)", {"src": ["E"]})
     assert "for __sat1 in range(E):" in out
     assert "Lx[src[__sat1]] += flux[__sat1]" in out
 
 
-def test_subtract_at_negated_value():
+def test_subtract_at_negated_value() -> None:
     """``np.subtract.at(Lx, dst, flux)`` accumulates with ``-=``."""
     out = _scatter("np.subtract.at(Lx, dst, flux)", {"dst": ["E"]})
     assert "Lx[dst[__sat1]] -= flux[__sat1]" in out
 
 
-def test_add_at_unary_negation_value():
+def test_add_at_unary_negation_value() -> None:
     """``np.add.at(Lx, dst, -flux)`` pushes the negation inside the gather."""
     out = _scatter("np.add.at(Lx, dst, -flux)", {"dst": ["E"]})
     assert "Lx[dst[__sat1]] += -flux[__sat1]" in out
 
 
-def test_maximum_at_folds_to_max_assign():
+def test_maximum_at_folds_to_max_assign() -> None:
     """``np.maximum.at`` has no compound operator -> ``t[i] = max(t[i], v[i])``."""
     out = _scatter("np.maximum.at(M, idx, v)", {"idx": ["E"]})
     assert "M[idx[__sat1]] = max(M[idx[__sat1]], v[__sat1])" in out
 
 
-def test_multiply_and_divide_at():
+def test_multiply_and_divide_at() -> None:
     assert "*=" in _scatter("np.multiply.at(A, idx, v)", {"idx": ["E"]})
     assert "/=" in _scatter("np.divide.at(A, idx, v)", {"idx": ["E"]})
 
 
-def test_at_unknown_index_extent_refused():
+def test_at_unknown_index_extent_refused() -> None:
     with pytest.raises(NotImplementedError):
         _scatter("np.add.at(Lx, src, flux)", {})  # no shape for src
 
 
-def test_add_at_flattened_2d_index_and_value():
+def test_add_at_flattened_2d_index_and_value() -> None:
     """``np.add.at(deexx, ikb.reshape(-1), delta.reshape(-1))`` (vexx_k's
     ``_newdxx_g``/``_newdxx_r``/``_paw_newdxx``): a ``.reshape(-1)`` flatten of a
     2-D index array is peeled back to its OWN (nat, nh) axes -- a 2-D loop nest,
@@ -309,7 +309,7 @@ def test_add_at_flattened_2d_index_and_value():
     assert "deexx[ikb[__sat1_0, __sat1_1]] += delta[__sat1_0, __sat1_1]" in out
 
 
-def test_add_at_scalar_value_broadcasts():
+def test_add_at_scalar_value_broadcasts() -> None:
     """``np.add.at(counts, bin_id, 1)`` (azimint_naive): a scalar value is not an
     array name or its negation -- it broadcasts the SAME literal to every
     scatter iteration (a counting histogram), not a per-element gather."""
@@ -318,7 +318,7 @@ def test_add_at_scalar_value_broadcasts():
     assert "counts[bin_id[__sat1]] += 1" in out
 
 
-def test_add_at_broadcast_to_value_peeled():
+def test_add_at_broadcast_to_value_peeled() -> None:
     """``np.add.at(out, idx, np.broadcast_to(val, (E,)))``: the wrapper carries
     no information ``_scalarize_at_iters`` needs once ``val`` is scalarised
     structurally, so it is peeled to ``val`` rather than reaching the emitter
@@ -328,7 +328,7 @@ def test_add_at_broadcast_to_value_peeled():
     assert "broadcast_to" not in out
 
 
-def test_add_at_boolean_index_refused_not_mislowered():
+def test_add_at_boolean_index_refused_not_mislowered() -> None:
     """A boolean array in the index slot is a MASK, not a gather -- refusing it
     (rather than scattering through its 0/1 truth values) needs the boolean
     names the real pipeline harvests; this rewriter accepts them explicitly."""
@@ -336,7 +336,7 @@ def test_add_at_boolean_index_refused_not_mislowered():
         _ScatterAtRewriter({"mask": ["E"]}, bool_names={"mask"}).visit(ast.parse("np.add.at(out, mask, v)"))
 
 
-def test_add_at_lowered_output_is_not_rewrapped_by_fancy_scatter_store():
+def test_add_at_lowered_output_is_not_rewrapped_by_fancy_scatter_store() -> None:
     """Regression: ``_ScatterAtRewriter``'s OWN output -- ``Lx[src[__sat1]] +=
     flux[__sat1]`` -- must never be re-matched by ``_expand_fancy_scatter_store``
     as an un-lowered fancy scatter (``src`` is already indexed by ``__sat1``,
@@ -351,7 +351,7 @@ def test_add_at_lowered_output_is_not_rewrapped_by_fancy_scatter_store():
     assert scattered == []
 
 
-def test_add_at_flatten_numeric_agreement():
+def test_add_at_flatten_numeric_agreement() -> None:
     """Numeric oracle: a 2-D int64 index array (with GUARANTEED duplicate
     entries) and its matching value array, both flattened, must accumulate
     exactly like numpy's ``np.add.at`` on every native backend."""
@@ -377,7 +377,7 @@ def test_add_at_flatten_numeric_agreement():
     assert all(v == "ok" for v in status.values()), status
 
 
-def test_add_at_scalar_value_numeric_agreement():
+def test_add_at_scalar_value_numeric_agreement() -> None:
     """Numeric oracle: ``np.add.at(counts, idx, 1)`` with duplicate ``idx``
     entries must count occurrences exactly like numpy on every native backend."""
     from _op_oracle import run_op
@@ -399,7 +399,7 @@ def test_add_at_scalar_value_numeric_agreement():
     assert all(v == "ok" for v in status.values()), status
 
 
-def test_add_at_slice_view_target():
+def test_add_at_slice_view_target() -> None:
     """``np.add.at(deexx[:, ii], ikb.reshape(-1), delta.reshape(-1))`` (vexx_k's
     ``_newdxx_g``/``_newdxx_r``/``_paw_newdxx`` after inlining ``deexx[:, ii]``
     for the callee's ``deexx`` parameter): the TARGET is a slice VIEW, not a
@@ -422,12 +422,12 @@ def test_add_at_slice_view_target():
         "deexx[mask, ii]",  # a fancy index, not a slice
     ],
 )
-def test_add_at_view_target_non_full_slice_refused(bad_target):
+def test_add_at_view_target_non_full_slice_refused(bad_target) -> None:
     with pytest.raises(NotImplementedError, match="full-slice axis"):
         _scatter(f"np.add.at({bad_target}, idx, v)", {"idx": ["E"]})
 
 
-def test_add_at_slice_view_target_numeric_agreement():
+def test_add_at_slice_view_target_numeric_agreement() -> None:
     """Numeric oracle: scattering through a slice VIEW of a 2-D output (a
     fixed column, the vexx_k ``deexx[:, ii]`` shape) with a flattened 2-D
     index/value pair must accumulate exactly like numpy's ``np.add.at`` on
@@ -459,7 +459,7 @@ def test_add_at_slice_view_target_numeric_agreement():
 # --------------------------------------------------------------------------- #
 
 
-def test_fancy_gather_single_index_array():
+def test_fancy_gather_single_index_array() -> None:
     """``x[src]`` scalarised at iter ``__w0`` -> ``x[src[__w0]]`` (NOT the buggy
     ``x[__w0][src[__w0]]``). edge_laplacian's gather."""
     tree = ast.parse("x[src]", mode="eval").body
@@ -467,14 +467,14 @@ def test_fancy_gather_single_index_array():
     assert ast.unparse(out) == "x[src[__w0]]"
 
 
-def test_plain_array_still_subscripts_iter():
+def test_plain_array_still_subscripts_iter() -> None:
     """A plain array Name still maps to the iter (no regression)."""
     tree = ast.parse("w", mode="eval").body
     out = _SubscriptifyNames({"w": ("E",)}, ["__w0"]).visit(tree)
     assert ast.unparse(out) == "w[__w0]"
 
 
-def test_fancy_gather_broadcasts_not_sums_rank():
+def test_fancy_gather_broadcasts_not_sums_rank() -> None:
     """Several ADJACENT index arrays BROADCAST into one shared result-axis
     block, not the SUM of their own ranks. icon_gather's ``A[idx, lev, blk]``
     with idx/blk (nproma,1,nblks) and lev (1,nlev,1) broadcasts to
@@ -493,7 +493,7 @@ def test_fancy_gather_broadcasts_not_sums_rank():
     assert ast.unparse(out) == "A[idx[__w0, 0, __w2], lev[0, __w1, 0], blk[__w0, 0, __w2]]"
 
 
-def test_fancy_gather_broadcast_with_trailing_scalar_axis():
+def test_fancy_gather_broadcast_with_trailing_scalar_axis() -> None:
     """A literal scalar axis (``0``) sitting in the SAME adjacent advanced
     group (numpy counts a bare integer as advanced too) consumes an A axis
     but adds no rank of its own and no iter."""
@@ -507,7 +507,7 @@ def test_fancy_gather_broadcast_with_trailing_scalar_axis():
     assert ast.unparse(out) == "A[idx[__w0, 0, __w2], lev[0, __w1, 0], 0]"
 
 
-def test_fancy_gather_broadcast_adjacent_to_real_slice():
+def test_fancy_gather_broadcast_adjacent_to_real_slice() -> None:
     """A rank-2 index array ADJACENT to a scalar, followed by a real ``:``
     slice: the array's own rank replaces its axis, the slice keeps its own
     (right-aligned after the group)."""
@@ -517,7 +517,7 @@ def test_fancy_gather_broadcast_adjacent_to_real_slice():
     assert ast.unparse(out) == "A[idx[__w0, __w1], jk, __w2]"
 
 
-def test_fancy_gather_separated_advanced_indices_refused():
+def test_fancy_gather_separated_advanced_indices_refused() -> None:
     """``_SubscriptifyNames`` (the whole-array path taken when the RHS carries
     no raw slice token of its own -- icon_gather's pre-extracted ``idx``/
     ``blk`` locals) still refuses advanced indices SEPARATED by a real slice:
@@ -531,7 +531,7 @@ def test_fancy_gather_separated_advanced_indices_refused():
         _SubscriptifyNames(shapes, ["__w0", "__w1"]).visit(tree)
 
 
-def test_front_placed_gather_separated_by_real_slice():
+def test_front_placed_gather_separated_by_real_slice() -> None:
     """Advanced indices SEPARATED by a real slice move their broadcast result
     to the FRONT (numpy rule): each operand consumes the SAME leading iters
     as one shared block, and the slice consumes the iter after that block --
@@ -568,26 +568,26 @@ def _ext(src, table):
     return None if e is None else tuple(ast.unparse(x) for x in e)
 
 
-def test_iter_extent_reduction_axis():
+def test_iter_extent_reduction_axis() -> None:
     """``np.sum(X, axis=k)`` -> operand extent with axis k removed (kmeans/gem)."""
     assert _ext("np.sum(dpos * dpos, axis=2)", {"dpos": ("N", "N", "3")}) == ("N", "N")
     assert _ext("np.sum(A, axis=1)", {"A": ("M", "K")}) == ("M",)
 
 
-def test_iter_extent_reduction_keepdims():
+def test_iter_extent_reduction_keepdims() -> None:
     assert _ext("np.sum(A, axis=1, keepdims=True)", {"A": ("M", "K")}) == ("M", "1")
 
 
-def test_iter_extent_full_reduction_is_scalar():
+def test_iter_extent_full_reduction_is_scalar() -> None:
     assert _ext("np.sum(A)", {"A": ("M", "K")}) is None
 
 
-def test_iter_extent_elementwise_wrapping_reduction():
+def test_iter_extent_elementwise_wrapping_reduction() -> None:
     """gem's ``r = np.sqrt(np.sum(d * d, axis=2))`` -> (npoints, natoms)."""
     assert _ext("np.sqrt(np.sum(d * d, axis=2))", {"d": ("npoints", "natoms", "3")}) == ("npoints", "natoms")
 
 
-def test_shape_from_reduction_frontend():
+def test_shape_from_reduction_frontend() -> None:
     from numpyto_common.frontend import _shape_from_reduction
 
     assert (
@@ -604,7 +604,7 @@ def test_shape_from_reduction_frontend():
 # --------------------------------------------------------------------------- #
 
 
-def test_produces_logical_bitand_on_comparisons():
+def test_produces_logical_bitand_on_comparisons() -> None:
     from numpyto_fortran.emit import _produces_logical
 
     assert _produces_logical(ast.parse("(rsq < c) & (rsq > 0.0)", mode="eval").body)
@@ -612,7 +612,7 @@ def test_produces_logical_bitand_on_comparisons():
     assert _produces_logical(ast.parse("~(a < b)", mode="eval").body)
 
 
-def test_produces_logical_false_for_arithmetic():
+def test_produces_logical_false_for_arithmetic() -> None:
     from numpyto_fortran.emit import _produces_logical
 
     assert not _produces_logical(ast.parse("a & b", mode="eval").body)  # int bitand
@@ -689,7 +689,7 @@ _E2E_BACKENDS = {"conv2d": {"c", "cpp", "fortran", "numba", "pythran", "jax"}}
 
 
 @pytest.mark.parametrize("kernel,feature", _E2E, ids=[k for k, _ in _E2E])
-def test_feature_kernels_e2e(kernel, feature):
+def test_feature_kernels_e2e(kernel, feature) -> None:
     no = _oracle()
     status = no.run_kernel(
         kernel, preset="S", precision="fp64", seed=0, only_backends=_E2E_BACKENDS.get(kernel, _E2E_NATIVE)
@@ -703,15 +703,15 @@ def test_feature_kernels_e2e(kernel, feature):
 # --------------------------------------------------------------------------- #
 
 
-def test_compare_outer_broadcast_extent():
+def test_compare_outer_broadcast_extent() -> None:
     assert _ext("a[:, None] == b[None, :]", {"a": ("N",), "b": ("N",)}) == ("N", "N")
 
 
-def test_boolop_outer_broadcast_extent():
+def test_boolop_outer_broadcast_extent() -> None:
     assert _ext("(a[:, None] > 0) & (b[None, :] > 0)", {"a": ("M",), "b": ("N",)}) == ("M", "N")
 
 
-def test_compare_scalar_operands_have_no_extent():
+def test_compare_scalar_operands_have_no_extent() -> None:
     assert _ext("x < 1.0", {}) is None
 
 
@@ -729,24 +729,24 @@ def _pad(src, table):
     return ast.unparse(tree).strip()
 
 
-def test_pad_trailing_slice_on_3d_partial_index():
+def test_pad_trailing_slice_on_3d_partial_index() -> None:
     # ``TN[:, 1:] = T[:, :-1]`` on a 3-D array gains the implicit trailing axis.
     out = _pad("TN[:, 1:] = T[:, :-1]", {"TN": ("Z", "Y", "X"), "T": ("Z", "Y", "X")})
     assert "TN[:, 1:, :]" in out and "T[:, :-1, :]" in out
 
 
-def test_pad_scalar_index_trailing_axis():
+def test_pad_scalar_index_trailing_axis() -> None:
     out = _pad("TN[:, 0] = T[:, 0]", {"TN": ("Z", "Y", "X"), "T": ("Z", "Y", "X")})
     assert "TN[:, 0, :]" in out and "T[:, 0, :]" in out
 
 
-def test_pad_skips_advanced_index_array():
+def test_pad_skips_advanced_index_array() -> None:
     # ``x[src]`` with src an index array (fancy gather) must NOT be padded.
     out = _pad("y = x[src]", {"x": ("N", "M"), "src": ("E",), "y": ("E", "M")})
     assert "x[src]" in out and "x[src, :]" not in out
 
 
-def test_pad_noop_when_fully_indexed():
+def test_pad_noop_when_fully_indexed() -> None:
     out = _pad("A[i, j] = 0.0", {"A": ("N", "M")})
     assert out == "A[i, j] = 0.0"
 
@@ -756,7 +756,7 @@ def test_pad_noop_when_fully_indexed():
 # --------------------------------------------------------------------------- #
 
 
-def test_method_copy_on_subscript_lowers_to_np_copy():
+def test_method_copy_on_subscript_lowers_to_np_copy() -> None:
     from numpyto_common.lowering import _MethodCallRewriter
 
     tree = ast.parse("dp = grid[0].copy()")
@@ -764,7 +764,7 @@ def test_method_copy_on_subscript_lowers_to_np_copy():
     assert "np.copy(grid[0])" in ast.unparse(tree)
 
 
-def test_method_copy_on_bare_name_still_lowers():
+def test_method_copy_on_bare_name_still_lowers() -> None:
     from numpyto_common.lowering import _MethodCallRewriter
 
     tree = ast.parse("out = image.copy()")
@@ -772,7 +772,7 @@ def test_method_copy_on_bare_name_still_lowers():
     assert "np.copy(image)" in ast.unparse(tree)
 
 
-def test_expand_copy_accepts_subscript_source():
+def test_expand_copy_accepts_subscript_source() -> None:
     from numpyto_common.lib_nodes import expand_copy
 
     stmts = expand_copy(ast.Name(id="dp", ctx=ast.Store()), [_expr("grid[0]")], {"grid": ("R", "C"), "dp": ("C",)})
@@ -786,7 +786,7 @@ def test_expand_copy_accepts_subscript_source():
 # --------------------------------------------------------------------------- #
 
 
-def test_body_local_dim_alias_excluded_from_params():
+def test_body_local_dim_alias_excluded_from_params() -> None:
     """``M = a.shape[0]`` then ``H`` shaped ``(M+1, N+1)``: M must fold to the
     real dim N and never appear as a kernel parameter (smith_waterman)."""
     no = _oracle()
@@ -810,7 +810,7 @@ def test_body_local_dim_alias_excluded_from_params():
 # --------------------------------------------------------------------------- #
 
 
-def test_oracle_output_dtype_for_kind():
+def test_oracle_output_dtype_for_kind() -> None:
     no = _oracle()
     import numpy as np
 
@@ -825,7 +825,7 @@ def test_oracle_output_dtype_for_kind():
 # --------------------------------------------------------------------------- #
 
 
-def test_fortran_where_negative_int_literal():
+def test_fortran_where_negative_int_literal() -> None:
     """``np.where(cond, 2, -1)`` -- both MERGE branches share a type (the -1 is
     a UnaryOp, not a Constant; the old code left it integer beside a real)."""
     no = _oracle()
@@ -840,7 +840,7 @@ def test_fortran_where_negative_int_literal():
 # --------------------------------------------------------------------------- #
 
 
-def test_dtype_aliases_not_promoted():
+def test_dtype_aliases_not_promoted() -> None:
     from numpyto_common.lowering import _BUILTIN_NAMES
 
     assert {"np_float", "np_complex"} <= _BUILTIN_NAMES
@@ -851,13 +851,13 @@ def test_dtype_aliases_not_promoted():
 # --------------------------------------------------------------------------- #
 
 
-def test_shape_through_astype_and_compare():
+def test_shape_through_astype_and_compare() -> None:
     """``(rng.random((N, N)) < 0.15).astype(int)`` -> (N, N) (bfs adjacency)."""
     s = _shape_from_constructor(_expr("(rng.random((N, N)) < 0.15).astype(int)"), {})
     assert s == "(N, N)"
 
 
-def test_shape_through_binop():
+def test_shape_through_binop() -> None:
     s = _shape_from_constructor(_expr("np.zeros((N, M)) * 2.0"), {})
     assert s == "(N, M)"
 
@@ -867,7 +867,7 @@ def test_shape_through_binop():
 # --------------------------------------------------------------------------- #
 
 
-def test_pad_newaxis_does_not_consume_rank():
+def test_pad_newaxis_does_not_consume_rank() -> None:
     # ``weights[None, :, :, :]`` on 4-D weights -> a trailing source axis is
     # still implicit (5-D result); pad it so the broadcast alignment is right.
     out = _pad("c = weights[None, :, :, :]", {"weights": ("K", "K", "Ci", "Co"), "c": ("X",)})
@@ -875,13 +875,13 @@ def test_pad_newaxis_does_not_consume_rank():
     assert out.count(":") >= 4 and "None" in out
 
 
-def test_pad_newaxis_full_source_rank_not_padded():
+def test_pad_newaxis_full_source_rank_not_padded() -> None:
     # 4 real slices already cover the 4-D source -> no extra pad despite newaxis.
     out = _pad("c = inp[:, a:b, c:d, :, None]", {"inp": ("N", "H", "W", "Ci"), "c": ("X",)})
     assert out.count("None") == 1 and out.count(":") == 4
 
 
-def test_fortran_abi_param_order_matches_binding():
+def test_fortran_abi_param_order_matches_binding() -> None:
     """The emitted Fortran subroutine's parameter order must equal the binding
     JSON's arg order (the matvec-cluster desync fix): a promoted return
     ``ret_arr0`` keeps its ABI slot rather than re-sorting after rename.
@@ -930,7 +930,7 @@ def test_fortran_abi_param_order_matches_binding():
 
 
 @pytest.mark.parametrize("kernel", ["gemm", "softmax"])
-def test_fp16_emission_compiles_c_cpp(kernel):
+def test_fp16_emission_compiles_c_cpp(kernel) -> None:
     no = _oracle()
     import pathlib
     import subprocess
@@ -953,7 +953,7 @@ def test_fp16_emission_compiles_c_cpp(kernel):
             assert r.returncode == 0, f"{kernel} {backend} fp16 compile failed:\n{r.stderr[:600]}"
 
 
-def test_fp16_signature_uses_half_not_double():
+def test_fp16_signature_uses_half_not_double() -> None:
     """The emitted signature's float params/arrays must be the half type, not a
     hardcoded double -- guards against a return/output precision regression."""
     no = _oracle()
@@ -1002,7 +1002,7 @@ def _run_c(compile_cmd, source, ext, tmp):
 
 
 @pytest.mark.parametrize("backend", ["c", "cpp"])
-def test_max_min_propagate_nan_like_numpy(backend):
+def test_max_min_propagate_nan_like_numpy(backend) -> None:
     """max/min emitted by the C/C++ prelude must PROPAGATE a NaN in EITHER operand,
     exactly as numpy.maximum/minimum (which the elementwise broadcast and the
     ``np.maximum.at`` / ``np.minimum.at`` scatter folds lower to) -- not the
@@ -1075,7 +1075,7 @@ def _py_kir(name, src, arrays, syms, input_args):
     )
 
 
-def test_lowerings_size_their_temps_from_the_operands_not_a_fixed_width():
+def test_lowerings_size_their_temps_from_the_operands_not_a_fixed_width() -> None:
     """No lowering may hardcode a temp's dtype: numpy sizes each result from its operands,
     and a fixed width both changes the working precision and makes the store back into a
     narrower target a copy DaCe cannot emit (comet_int4_gemm's CopyNDDynamic<int,...>).
@@ -1114,7 +1114,7 @@ def test_lowerings_size_their_temps_from_the_operands_not_a_fixed_width():
     assert "w.dtype" in wout, f"weighted counts do not take the weights dtype:\n{wout}"
 
 
-def test_fft_desugar_lowers_npfft_to_dft_loops():
+def test_fft_desugar_lowers_npfft_to_dft_loops() -> None:
     """``np.fft.fft``/``ifft`` -> a naive-DFT loop nest (no np.fft survives;
     numba cannot type np.fft at all)."""
     from numpyto_common.numpy_desugar import desugar_for_python_backend
@@ -1129,7 +1129,7 @@ def test_fft_desugar_lowers_npfft_to_dft_loops():
     assert "] / " in out
 
 
-def test_fft_desugar_phase_divisor_casts_to_transform_precision():
+def test_fft_desugar_phase_divisor_casts_to_transform_precision() -> None:
     """The DFT phase's divisor (``np.exp(-1j * (2*pi*k*n / N))``) must be cast to the
     transform's OWN real dtype: dace constant-folds the phase's leading ``1j`` into the
     surrounding product chain and codegens a raw ``complex128 / int64`` division, which
@@ -1159,7 +1159,7 @@ def test_fft_desugar_phase_divisor_casts_to_transform_precision():
         )
 
 
-def test_mgrid_desugar_to_arange_broadcast():
+def test_mgrid_desugar_to_arange_broadcast() -> None:
     """``i, j = np.mgrid[0:R, 0:R]`` -> arange reshaped + broadcast (pythran has
     no np.mgrid)."""
     from numpyto_common.numpy_desugar import desugar_for_python_backend
@@ -1170,7 +1170,7 @@ def test_mgrid_desugar_to_arange_broadcast():
     assert out.count("np.arange(") == 2 and "reshape(" in out
 
 
-def test_pythran_export_uses_signature_order_not_abi():
+def test_pythran_export_uses_signature_order_not_abi() -> None:
     """#pythran export types follow the def signature (``input_args``), NOT the
     alphabetical-then-scalars ABI ``param_order`` -- otherwise fft_3d's scalar
     ``niter`` is typed as a complex array (the arg-order scramble that made
@@ -1189,7 +1189,7 @@ def test_pythran_export_uses_signature_order_not_abi():
 
 
 @pytest.mark.parametrize("kernel", ["fft_1d", "fft_3d"])
-def test_fft_numba_pythran_e2e(kernel):
+def test_fft_numba_pythran_e2e(kernel) -> None:
     """fft_1d/fft_3d run bit-close to numpy on numba (np.fft lowered) AND pythran
     (fftn lowered + export in signature order); fft_3d also exercises the
     multi-array fancy gather ``u2[q, r, s]``."""
@@ -1207,7 +1207,7 @@ def test_fft_numba_pythran_e2e(kernel):
 #    fixups. numba rejects ``axis=`` on mean/std/min/max/argmax, 2-D bool-mask  #
 #    indexing, ufunc.outer, np.ndarray/linspace(dtype=)/abs(array).            #
 # --------------------------------------------------------------------------- #
-def test_reduce_axis_desugar_lowers_mean_min():
+def test_reduce_axis_desugar_lowers_mean_min() -> None:
     from numpyto_common.numpy_desugar import desugar_for_python_backend
 
     src = "def k(data, mn, mx):\n    mn[:] = np.mean(data, axis=0)\n    mx[:] = np.max(data, axis=0)\n"
@@ -1217,7 +1217,7 @@ def test_reduce_axis_desugar_lowers_mean_min():
     assert "for " in out and "/ " in out  # explicit mean loop divides by N
 
 
-def test_masked_assign_lowers_to_guarded_loop_not_where():
+def test_masked_assign_lowers_to_guarded_loop_not_where() -> None:
     """Masked assignment -> a guarded loop (NOT np.where): the RHS must be
     computed only on selected elements (mandelbrot freezes diverged points to
     avoid overflow; force_lj divides only where rsq > 0)."""
@@ -1232,7 +1232,7 @@ def test_masked_assign_lowers_to_guarded_loop_not_where():
     assert "out[in_range]" not in out  # mask indexing removed
 
 
-def test_ufunc_outer_and_call_fixups():
+def test_ufunc_outer_and_call_fixups() -> None:
     from numpyto_common.numpy_desugar import desugar_for_python_backend
 
     src = (
@@ -1252,7 +1252,7 @@ def test_ufunc_outer_and_call_fixups():
     assert "np.add.outer" not in out and "reshape(" in out  # outer -> reshape+broadcast
 
 
-def test_add_at_scatter_and_mixed_gather():
+def test_add_at_scatter_and_mixed_gather() -> None:
     """np.add.at -> a scatter loop (accumulates duplicate indices); a mixed
     2-D-array + scalar fancy gather -> a gather loop (numba supports neither)."""
     from numpyto_common.numpy_desugar import desugar_for_python_backend
@@ -1274,7 +1274,7 @@ def test_add_at_scatter_and_mixed_gather():
     assert "np.empty(" in out and "+=" in out and "for " in out
 
 
-def test_reduce_axis_method_form_and_helper_function():
+def test_reduce_axis_method_form_and_helper_function() -> None:
     """``levmask.any(axis=0)`` (method form) lowers, and a reduction in a HELPER
     function is reached (its param ranks inferred from the call site)."""
     from numpyto_common.numpy_desugar import desugar_for_python_backend
@@ -1287,7 +1287,7 @@ def test_reduce_axis_method_form_and_helper_function():
     assert "for " in out
 
 
-def test_histogram_desugar_to_binning_loop():
+def test_histogram_desugar_to_binning_loop() -> None:
     """np.histogram(a, bins[, weights=w])[0] -> a min/max scan + a binning loop
     (numba has no np.histogram); matches the C/Fortran lowering."""
     from numpyto_common.numpy_desugar import desugar_for_python_backend
@@ -1308,7 +1308,7 @@ def test_histogram_desugar_to_binning_loop():
     assert "int(" in out and "np.zeros(" in out and "+= " in out  # binning loop
 
 
-def test_int_matmul_lowers_but_float_matmul_kept():
+def test_int_matmul_lowers_but_float_matmul_kept() -> None:
     """An INTEGER a @ b lowers to a loop (numba's @ is float-only); a float a @ b
     is left for numba's fast BLAS path."""
     from numpyto_common.numpy_desugar import desugar_for_python_backend
@@ -1339,7 +1339,7 @@ def test_int_matmul_lowers_but_float_matmul_kept():
     assert "@" in fout  # float matmul untouched
 
 
-def test_int_matmul_accumulates_in_the_operand_dtype_not_int64():
+def test_int_matmul_accumulates_in_the_operand_dtype_not_int64() -> None:
     """numpy's ``@`` returns ``result_type(a, b)``, so the lowered accumulator must too.
 
     A hardcoded ``np.int64`` widened every int32 port, and storing that back through
@@ -1378,7 +1378,7 @@ def test_int_matmul_accumulates_in_the_operand_dtype_not_int64():
     assert "rj.dtype" in bout and "mask.dtype" not in bout, f"bool operand decided the dtype:\n{bout}"
 
 
-def test_reshape_batched_matmul_lowers():
+def test_reshape_batched_matmul_lowers() -> None:
     """doitgen's reshape(reshape(A,(NR,NQ,1,NP)) @ C4, (NR,NQ,NP)) -> contraction."""
     from numpyto_common.numpy_desugar import desugar_for_python_backend
 
@@ -1402,14 +1402,14 @@ def test_reshape_batched_matmul_lowers():
 #    construct it does NOT own is left verbatim (a clean skip) -- not asserted   #
 #    here. (An unknown *rank* is an inference gap, also left verbatim.)         #
 # --------------------------------------------------------------------------- #
-def test_int_matmul_unsupported_rank_raises():
+def test_int_matmul_unsupported_rank_raises() -> None:
     from numpyto_common.numpy_desugar import _int_matmul_stmts, DesugarError
 
     with pytest.raises(DesugarError):
         _int_matmul_stmts("out", "a", "b", 3, 2, 0, "a.dtype")  # >2-D integer matmul: no lowering
 
 
-def test_reshape_matmul_non_2d_right_operand_raises():
+def test_reshape_matmul_non_2d_right_operand_raises() -> None:
     """Matched the unit-dim reshape-matmul form but the right operand is not 2-D
     -> raise rather than emit a wrong contraction."""
     from numpyto_common.numpy_desugar import desugar_for_python_backend, DesugarError
@@ -1430,7 +1430,7 @@ def test_reshape_matmul_non_2d_right_operand_raises():
         desugar_for_python_backend(src, kir)
 
 
-def test_add_at_mismatched_value_rank_raises():
+def test_add_at_mismatched_value_rank_raises() -> None:
     """np.add.at with values whose ndim is neither scalar nor the index ndim ->
     raise (broadcast alignment we do not model)."""
     from numpyto_common.numpy_desugar import desugar_for_python_backend, DesugarError
@@ -1447,7 +1447,7 @@ def test_add_at_mismatched_value_rank_raises():
         desugar_for_python_backend(src, kir)
 
 
-def test_issparse_folds_to_false_for_dense_abi():
+def test_issparse_folds_to_false_for_dense_abi() -> None:
     """``sp.issparse(x)`` -> ``False`` (the dense-only ABI): numba/pythran cannot
     type scipy.sparse, and the sparse branch is dead -- exactly as C/Fortran prune
     it statically (banded_mmt). Dead-branch elimination then drops it entirely."""
@@ -1473,7 +1473,7 @@ def test_issparse_folds_to_false_for_dense_abi():
     assert "issparse" not in out and "toarray" not in out  # sparse branch folded away and eliminated
 
 
-def test_dead_branch_elim_removes_folded_issparse_branch():
+def test_dead_branch_elim_removes_folded_issparse_branch() -> None:
     """After ``sp.issparse(x)`` folds to False, the dead sparse branch (with its
     ``.toarray()``) is removed -- pythran statically types even a dead branch."""
     from numpyto_common.numpy_desugar import desugar_for_python_backend
@@ -1498,7 +1498,7 @@ def test_dead_branch_elim_removes_folded_issparse_branch():
     assert "toarray" not in out and "issparse" not in out
 
 
-def test_pythran_clean_strips_imports_and_substitutes_precision():
+def test_pythran_clean_strips_imports_and_substitutes_precision() -> None:
     """The pythran module drops imports it cannot resolve (hpcagent_bench framework,
     scipy) and substitutes the np_float / np_complex precision globals."""
     from numpyto_pythran.emit import _clean_for_pythran
@@ -1516,7 +1516,7 @@ def test_pythran_clean_strips_imports_and_substitutes_precision():
     assert "np_float" not in cleaned and "np_complex" not in cleaned and "np.complex128" in cleaned
 
 
-def test_np_flip_lowers_to_reverse_slice():
+def test_np_flip_lowers_to_reverse_slice() -> None:
     """np.flip(x[, axis]) -> a reverse-step slice (pythran's np.flip fails type
     deduction -- durbin); no axis reverses every axis."""
     from numpyto_common.numpy_desugar import desugar_for_python_backend
@@ -1528,7 +1528,7 @@ def test_np_flip_lowers_to_reverse_slice():
     assert "np.flip" not in out and "::-1" in out
 
 
-def test_repeat_axis_lowers_to_gather_loop():
+def test_repeat_axis_lowers_to_gather_loop() -> None:
     """np.repeat(x, m, axis=k) -> out[..., j, ...] = x[..., j // m, ...] (numba
     rejects the axis= kwarg on np.repeat -- stockham)."""
     from numpyto_common.numpy_desugar import desugar_for_python_backend
@@ -1543,7 +1543,7 @@ def test_repeat_axis_lowers_to_gather_loop():
     assert "np.repeat" not in out and "// " in out and "for " in out
 
 
-def test_reshape_of_transpose_forced_contiguous():
+def test_reshape_of_transpose_forced_contiguous() -> None:
     """np.reshape of a transpose (non-contiguous) gets np.ascontiguousarray;
     numba's reshape requires contiguous (stockham's reshape(tmp_perm, (N,)))."""
     from numpyto_common.numpy_desugar import desugar_for_python_backend
@@ -1568,7 +1568,7 @@ def _desugar(src, arrays, syms, input_args, backend):
     return desugar_for_python_backend(src, _py_kir("kernel", src, arrays, syms, input_args), backend=backend)
 
 
-def test_cholesky_lowers_for_pythran_only():
+def test_cholesky_lowers_for_pythran_only() -> None:
     """``np.linalg.cholesky(A)`` -> a Cholesky-Banachiewicz loop nest for pythran;
     numba / dace keep the native intrinsic (backend-capability gated)."""
     src = "def kernel(A):\n    A[:] = np.linalg.cholesky(A) + np.triu(A, k=1)\n"
@@ -1581,7 +1581,7 @@ def test_cholesky_lowers_for_pythran_only():
         assert "np.linalg.cholesky" in _desugar(src, arrays, [], ["A"], be)
 
 
-def test_solve_and_inv_lower_for_pythran_only():
+def test_solve_and_inv_lower_for_pythran_only() -> None:
     """``np.linalg.solve`` / ``np.linalg.inv`` -> Gauss-Jordan with partial
     pivoting for pythran; numba / dace keep the intrinsics."""
     src = "def kernel(A, b, x):\n    x[:] = np.linalg.solve(A, b)\n"
@@ -1597,7 +1597,7 @@ def test_solve_and_inv_lower_for_pythran_only():
     assert "np.linalg.inv" in _desugar(isrc, iarr, [], ["A", "o"], "dace")
 
 
-def _exec_desugared(src, arrays, input_args, scope, backend="pythran"):
+def _exec_desugared(src, arrays, input_args, scope, backend: str = "pythran"):
     """Desugar ``src`` for ``backend`` and exec it against numpy ``scope`` buffers
     -- the strongest correctness check (matches numpy, no tolerance games)."""
     from numpyto_common.numpy_desugar import desugar_for_python_backend
@@ -1610,7 +1610,7 @@ def _exec_desugared(src, arrays, input_args, scope, backend="pythran"):
     return scope
 
 
-def test_cholesky_lowering_matches_numpy():
+def test_cholesky_lowering_matches_numpy() -> None:
     rng = np.random.default_rng(0)
     n = 7
     M = rng.random((n, n))
@@ -1621,7 +1621,7 @@ def test_cholesky_lowering_matches_numpy():
     assert np.allclose(sc["out"], np.linalg.cholesky(A), rtol=1e-12, atol=1e-12)
 
 
-def test_solve_lowering_matches_numpy_1d_and_2d():
+def test_solve_lowering_matches_numpy_1d_and_2d() -> None:
     rng = np.random.default_rng(1)
     n, k = 6, 3
     A = rng.random((n, n)) + n * np.eye(n)
@@ -1637,7 +1637,7 @@ def test_solve_lowering_matches_numpy_1d_and_2d():
     assert np.allclose(sc2["x"], np.linalg.solve(A, B2), rtol=1e-11, atol=1e-11)
 
 
-def test_inv_lowering_matches_numpy_complex():
+def test_inv_lowering_matches_numpy_complex() -> None:
     rng = np.random.default_rng(2)
     n = 5
     A = rng.random((n, n)) + 1j * rng.random((n, n)) + n * np.eye(n)
@@ -1662,7 +1662,7 @@ _EIGH_ARRAYS = [
 ]
 
 
-def test_eigh_generalized_subset_matches_scipy():
+def test_eigh_generalized_subset_matches_scipy() -> None:
     """``w, v = scipy.linalg.eigh(a, b, subset_by_index=[0, k])`` (generalized
     complex-Hermitian, aliased import) lowers to a Cholesky-reduced complex Jacobi
     loop nest and matches scipy: same eigenvalues, and ``a v = w b v``."""
@@ -1685,7 +1685,7 @@ def test_eigh_generalized_subset_matches_scipy():
     assert resid < 1e-9
 
 
-def test_eigh_gated_native_linalg_per_backend():
+def test_eigh_gated_native_linalg_per_backend() -> None:
     """The generalized reduction leans on cholesky/inv/@: numba and dace keep them
     native (np.linalg), pythran lowers them. The eigh call itself is always lowered
     to the Jacobi loop nest (no backend has a generalized complex-Hermitian eigh)."""
@@ -1712,7 +1712,7 @@ def test_eigh_gated_native_linalg_per_backend():
         ),  # 3-D rhs
     ],
 )
-def test_linalg_desugar_raises_on_unsupported_shape(src, arrays, args):
+def test_linalg_desugar_raises_on_unsupported_shape(src, arrays, args) -> None:
     """An owned-but-unhandled operand shape raises DesugarError (never a silent
     miscompile); an unknown-rank operand instead stays verbatim (a clean skip)."""
     from numpyto_common.numpy_desugar import DesugarError
@@ -1740,7 +1740,7 @@ _AZIMINT_SRC = (
 _AZIMINT_ARRAYS = [("data", "float64", ("N",)), ("radius", "float64", ("N",)), ("res", "float64", ("npt",))]
 
 
-def test_masked_mean_lowers_to_accumulate_loop():
+def test_masked_mean_lowers_to_accumulate_loop() -> None:
     """The dynamic ``data[mask]`` select is dropped; its ``.mean()`` becomes a
     mask-guarded accumulate loop with numpy's empty -> nan semantics."""
     out = _desugar(_AZIMINT_SRC, _AZIMINT_ARRAYS, [], ["data", "radius", "npt", "res"], "pythran")
@@ -1749,7 +1749,7 @@ def test_masked_mean_lowers_to_accumulate_loop():
     assert "+= data[" in out and "np.nan" in out  # accumulate loop + empty guard
 
 
-def test_masked_mean_matches_numpy():
+def test_masked_mean_matches_numpy() -> None:
     rng = np.random.default_rng(0)
     n, npt = 200, 17
     data = rng.random(n)
@@ -1769,7 +1769,7 @@ def test_masked_mean_matches_numpy():
     assert np.allclose(sc["res"], ref, rtol=1e-12, atol=1e-12, equal_nan=True)
 
 
-def test_masked_gather_used_non_reduction_stays_verbatim():
+def test_masked_gather_used_non_reduction_stays_verbatim() -> None:
     """A masked select whose result is used any way OTHER than a supported
     reduction is left verbatim (the drop would be unsound) -- a clean skip."""
     src = "def kernel(data, mask, out):\n    v = data[mask]\n    out[0] = v[0]\n"  # indexed, not reduced
@@ -1783,7 +1783,7 @@ def test_masked_gather_used_non_reduction_stays_verbatim():
     assert "v = data[mask]" in out  # not dropped
 
 
-def test_pythran_renames_res_parameter():
+def test_pythran_renames_res_parameter() -> None:
     """A kernel parameter named ``res`` collides with pythran's return-capture
     variable, so the pythran emit renames it (signature + body)."""
     from numpyto_pythran.emit import emit_pythran
@@ -1796,7 +1796,7 @@ def test_pythran_renames_res_parameter():
     assert "res_[0] = data[0] + data[1]" in out  # body reference renamed consistently
 
 
-def test_drop_guards_replaces_raise_and_assert_with_pass():
+def test_drop_guards_replaces_raise_and_assert_with_pass() -> None:
     """Validation guards (``if bad: raise ...`` / ``assert ...``) are dropped to
     ``pass`` for the verbatim backends -- they never fire on oracle-valid inputs
     and their f-string messages / exception types are unlowerable."""
@@ -1824,7 +1824,7 @@ def test_drop_guards_replaces_raise_and_assert_with_pass():
         ("float64", "integer", False),  # float idx is NOT integer -> guard body (raise) runs -> kept-then-dropped
     ],
 )
-def test_issubdtype_folds_from_known_dtype(dtype, category, vanishes):
+def test_issubdtype_folds_from_known_dtype(dtype, category, vanishes) -> None:
     """``np.issubdtype(x.dtype, np.<category>)`` folds to a compile-time bool from
     x's known dtype kind (the isinstance-style check); the validation guard it
     feeds then resolves and disappears. numba/pythran/dace cannot evaluate it."""
@@ -1845,7 +1845,7 @@ def test_issubdtype_folds_from_known_dtype(dtype, category, vanishes):
     assert "raise" not in out and "TypeError" not in out
 
 
-def test_asarray_lowers_like_copy_for_c():
+def test_asarray_lowers_like_copy_for_c() -> None:
     """``np.asarray`` / ``np.ascontiguousarray`` of a materialised array lower like
     ``np.copy`` (a shape-preserving copy) in the C pipeline (dbcsr / minife)."""
     from numpyto_common.lib_nodes import NP_CALL_EXPANDERS, expand_copy
@@ -1854,7 +1854,7 @@ def test_asarray_lowers_like_copy_for_c():
     assert NP_CALL_EXPANDERS[("np", "ascontiguousarray")] is expand_copy
 
 
-def test_pythran_export_dtypes_parses_2d_types():
+def test_pythran_export_dtypes_parses_2d_types() -> None:
     """The oracle marshals pythran args to the export's declared dtypes; the
     export parser must split on top-level commas only -- a 2-D ``int64[:,:]`` type
     carries an inner comma (compute's TypeError was a mis-split here)."""
@@ -1867,7 +1867,7 @@ def test_pythran_export_dtypes_parses_2d_types():
 
 
 @pytest.mark.parametrize("kernel", ["cholesky2", "contour_integral", "azimint_naive", "crc16", "compute"])
-def test_cholesky2_contour_pythran_e2e(kernel):
+def test_cholesky2_contour_pythran_e2e(kernel) -> None:
     """Kernels reclaimed for pythran: cholesky2 (np.linalg.cholesky),
     contour_integral (np.linalg.solve + dead-but-typed np.linalg.inv), azimint_naive
     (masked-mean loop + 'res' param rename), crc16 (uint8-vs-int64 export marshal),
@@ -1916,7 +1916,7 @@ def _float_dtypes(kir):
     return [a.dtype for a in kir.arrays] + [s.dtype for s in kir.scalars] + list(kir.local_dtypes.values())
 
 
-def test_apply_precision_narrows_helper_sub_irs_too():
+def test_apply_precision_narrows_helper_sub_irs_too() -> None:
     from numpyto_common.ir import apply_precision
 
     kir = _kir_with_helper()
@@ -1931,7 +1931,7 @@ def test_apply_precision_narrows_helper_sub_irs_too():
         assert not stale, f"helper {helper.kernel_name!r} kept fp64 dtypes {sorted(set(stale))} after apply_precision"
 
 
-def test_apply_precision_leaves_integers_alone_in_helpers():
+def test_apply_precision_leaves_integers_alone_in_helpers() -> None:
     """The narrow is float/complex only -- an index array inside a helper must stay integer."""
     from numpyto_common.ir import apply_precision
 
@@ -1947,7 +1947,7 @@ def test_apply_precision_leaves_integers_alone_in_helpers():
 # --------------------------------------------------------------------------- #
 
 
-def test_fortran_wraps_a_preset_symbol_used_as_a_condition():
+def test_fortran_wraps_a_preset_symbol_used_as_a_condition() -> None:
     """``if reflect_out:`` where reflect_out is a size-preset entry.
 
     frontend.py routes every ``parameters:`` name to a SymbolDesc, never to ``kir.scalars``, so a
@@ -1972,7 +1972,7 @@ def test_fortran_wraps_a_preset_symbol_used_as_a_condition():
 _VEC = ("float64", ("N",))
 
 
-def test_listcomp_over_constant_range_unrolls_a_runtime_body():
+def test_listcomp_over_constant_range_unrolls_a_runtime_body() -> None:
     """``[f(x, i) for i in range(3)]`` -> a list display of the substituted bodies:
     only the loop (the part the frontend cannot represent) goes away."""
     src = "def kernel(x, out):\n    g = [np.sin(x[i]) for i in range(3)]\n    out[0] = g[0] + g[1] + g[2]\n"
@@ -1982,7 +1982,7 @@ def test_listcomp_over_constant_range_unrolls_a_runtime_body():
     assert "np.sin(x[0])" in out and "np.sin(x[2])" in out, out
 
 
-def test_listcomp_iterable_resolved_through_the_const_name_table():
+def test_listcomp_iterable_resolved_through_the_const_name_table() -> None:
     """The iterable may also be a NAME, resolved through the same ``_const_name_values``
     table the constant fold uses -- not a second constant evaluator."""
     src = "def kernel(x, out):\n    fracs = (0.5, 1.0)\n    g = [x[0] * f for f in fracs]\n    out[0] = g[0] + g[1]\n"
@@ -1999,7 +1999,7 @@ def test_listcomp_iterable_resolved_through_the_const_name_table():
         "[x[i] for i in range(128)]",
     ],
 )
-def test_listcomp_unroll_bails_on_an_unrollable_form(comp):
+def test_listcomp_unroll_bails_on_an_unrollable_form(comp) -> None:
     """A runtime trip count, a guard, a second ``for`` clause, and a length over the
     unroll bound each leave the comprehension verbatim (a loud refusal downstream
     beats a wrong or exploded unroll)."""
@@ -2008,7 +2008,7 @@ def test_listcomp_unroll_bails_on_an_unrollable_form(comp):
     assert "for i in range" in out, f"{comp} must not unroll:\n{out}"
 
 
-def test_ssa_rename_splits_a_reassigned_local():
+def test_ssa_rename_splits_a_reassigned_local() -> None:
     """``t = ...; t = ...`` -> the second binding gets its own name, and the read
     after it follows that name (dace refuses the rebinding, not the values)."""
     src = "def kernel(a, out):\n    t = a * 2.0\n    t = np.sum(t)\n    out[0] = t\n"
@@ -2017,7 +2017,7 @@ def test_ssa_rename_splits_a_reassigned_local():
     assert "out[0] = t__ssa1" in out, f"the read after the rebinding kept the stale name:\n{out}"
 
 
-def test_ssa_rename_reads_track_the_version_in_scope():
+def test_ssa_rename_reads_track_the_version_in_scope() -> None:
     """A read BEFORE the rebinding stays on version 0; every read after it moves to
     the new name. Getting this backwards silently swaps two different values."""
     src = "def kernel(a, out):\n    t = a * 2.0\n    u = t + 1.0\n    t = np.sum(u)\n    out[0] = t + u[0]\n"
@@ -2026,7 +2026,7 @@ def test_ssa_rename_reads_track_the_version_in_scope():
     assert "t__ssa1 = np.sum(u)" in out and "out[0] = t__ssa1 + u[0]" in out, out
 
 
-def test_ssa_rename_bails_when_a_branch_rebinds_the_name():
+def test_ssa_rename_bails_when_a_branch_rebinds_the_name() -> None:
     """A version written inside an ``if`` reaches the join only on one path, so the
     read after it needs a phi node this pass does not build -- leave the name alone."""
     src = "def kernel(a, out, c):\n    t = a * 2.0\n    if c > 0:\n        t = a * 3.0\n    out[0] = t[0]\n"
@@ -2034,7 +2034,7 @@ def test_ssa_rename_bails_when_a_branch_rebinds_the_name():
     assert "__ssa" not in out, f"renamed a name a branch rebinds:\n{out}"
 
 
-def test_ssa_rename_leaves_a_single_binding_and_a_marker_alone():
+def test_ssa_rename_leaves_a_single_binding_and_a_marker_alone() -> None:
     """A name bound once is untouched (no churn in the generated corpus), and neither
     is one bound to the lowering's allocation marker -- dace's _ResolveZeros looks that
     target up BY NAME in ``zeros_locals`` and DROPS an allocation it cannot find."""
@@ -2062,7 +2062,7 @@ _D4 = [("x", "float64", ("N", "M", "K", "L")), ("out", "float64", ("N", "M", "K"
 _D2 = [("x", "float64", ("N", "M")), ("out", "float64", ("N", "M"))]
 
 
-def _exec_source(src, args):
+def _exec_source(src, args) -> None:
     """Run a kernel source VERBATIM under numpy -- the original side of an
     original-vs-desugared equivalence check."""
     ns = {"np": np}
@@ -2079,7 +2079,7 @@ def _keepdims_src(call):
     return f"def kernel(x, out):\n    t = x[0]\n    t = x\n    m = {call}\n    out[:] = x - m\n"
 
 
-def test_keepdims_puts_the_length_1_axis_back_at_its_own_position():
+def test_keepdims_puts_the_length_1_axis_back_at_its_own_position() -> None:
     """``np.sum(x, axis=1, keepdims=True)`` on ``(N, M, K)`` is ``(N, 1, K)`` -- the
     axis comes back WHERE IT WAS. Appending it instead would broadcast the reduction
     against the wrong axis and still typecheck, so the position is asserted, not the
@@ -2097,7 +2097,7 @@ def test_keepdims_puts_the_length_1_axis_back_at_its_own_position():
     assert np.array_equal(ref, x - np.sum(x, axis=1, keepdims=True)), "the fixture itself is wrong"
 
 
-def test_keepdims_negative_axis_anchors_at_the_back():
+def test_keepdims_negative_axis_anchors_at_the_back() -> None:
     """A negative axis counts from the END, and the rank that resolves it is exactly
     what this pass does not have -- so the entries anchor on a TRAILING ellipsis
     instead: ``axis=-2`` -> ``[..., None, :]``, never ``[:, None, ...]``."""
@@ -2112,7 +2112,7 @@ def test_keepdims_negative_axis_anchors_at_the_back():
     assert np.array_equal(ref, got), "desugared negative-axis keepdims does not match verbatim numpy"
 
 
-def test_keepdims_tuple_axis_restores_every_reduced_axis_in_place():
+def test_keepdims_tuple_axis_restores_every_reduced_axis_in_place() -> None:
     """A NON-CONTIGUOUS tuple axis is the case a naive "append k ones" gets wrong:
     ``axis=(1, 3)`` on ``(N, M, K, L)`` is ``(N, 1, K, 1)``, not ``(N, K, 1, 1)``."""
     src = _keepdims_src("np.mean(t, axis=(1, 3), keepdims=True)")
@@ -2136,7 +2136,7 @@ def test_keepdims_tuple_axis_restores_every_reduced_axis_in_place():
         "t.sum(axis=1, keepdims=True)",
     ],
 )
-def test_keepdims_bails_when_the_axes_do_not_resolve(call):
+def test_keepdims_bails_when_the_axes_do_not_resolve(call) -> None:
     """``axis=None`` / no axis keeps EVERY axis (how many is the rank this does not
     have), a mixed-sign tuple needs the rank to interleave its two ends, a symbolic
     axis is not an axis yet, and the method form is not this pass's shape. Each is
@@ -2146,7 +2146,7 @@ def test_keepdims_bails_when_the_axes_do_not_resolve(call):
     assert "keepdims=True" in out, f"{call} must not be rewritten:\n{out}"
 
 
-def test_keepdims_left_to_the_loop_lowering_when_the_rank_is_known():
+def test_keepdims_left_to_the_loop_lowering_when_the_rank_is_known() -> None:
     """No churn: with the operand's rank in hand ``_ReduceAxisInline`` still lowers the
     same call to its explicit loop nest, and this pass never sees it."""
     src = "def kernel(x, out):\n    m = np.sum(x, axis=1, keepdims=True)\n    out[:] = x - m\n"
@@ -2155,7 +2155,7 @@ def test_keepdims_left_to_the_loop_lowering_when_the_rank_is_known():
     assert "np.empty((__rd0_d0, 1, __rd0_d2)" in out, f"keepdims loop nest missing its length-1 axis:\n{out}"
 
 
-def test_keepdims_loop_temp_sizes_the_kept_axis_not_the_reduced_one():
+def test_keepdims_loop_temp_sizes_the_kept_axis_not_the_reduced_one() -> None:
     """netvlad's ``np.sum(exp_x, axis=1, keepdims=True)`` over ``(N, M)`` allocates
     ``(N, 1)``: the temp is the operand's shape with the REDUCED axis set to 1, every
     other extent left where it was. Swapping the two still allocates a rank-2 ``(_, 1)``
@@ -2183,7 +2183,7 @@ _DISPATCH = (
 )
 
 
-def test_boolop_or_test_becomes_an_elif_chain():
+def test_boolop_or_test_becomes_an_elif_chain() -> None:
     """The frontend's runtime-axis dispatch spells both signs of one axis as an ``or``.
     Nesting it moves each comparison out of the BoolOp LIST field dace's generic_visit
     tries to ``.extend()``; only the body is cloned, and the clones are mutually
@@ -2200,7 +2200,7 @@ def test_boolop_or_test_becomes_an_elif_chain():
         assert np.array_equal(ref, got), f"dispatch disagrees at dim={dim}: {ref} vs {got}"
 
 
-def test_boolop_and_test_nests_without_cloning_the_body():
+def test_boolop_and_test_nests_without_cloning_the_body() -> None:
     """``and`` needs no clone at all -- one ``if`` per operand, innermost carrying the
     single body -- and short-circuits in the same order."""
     src = "def kernel(x, dim, out):\n    if dim >= 0 and dim == 1:\n        out[:] = x * 2.0\n"
@@ -2216,7 +2216,7 @@ def test_boolop_and_test_nests_without_cloning_the_body():
         assert np.array_equal(ref, got), f"``and`` rewrite disagrees at dim={dim}"
 
 
-def test_boolop_preserves_short_circuit_and_evaluation_order():
+def test_boolop_preserves_short_circuit_and_evaluation_order() -> None:
     """Each operand still runs at most once, in source order, under the same condition:
     a second operand with a side effect must not fire when the first already decided
     the test. Counted, not argued -- the ``or`` rewrite is the one that could have
@@ -2249,7 +2249,7 @@ def test_boolop_preserves_short_circuit_and_evaluation_order():
         ("dim == 0 or dim == 1 or dim == 2 or dim == 3 or dim == 4", " or "),
     ],
 )
-def test_boolop_bails_on_a_form_it_cannot_lower_for_free(test, keep):
+def test_boolop_bails_on_a_form_it_cannot_lower_for_free(test, keep) -> None:
     """An ``and`` carrying an ``else`` would have to clone the ELSE into every level; a
     test with no bare ``==``/``!=`` never trips the dace bug (and splitting it would
     cost ``_DeadBranchElim`` its whole-BoolOp fold); a disjunction past the clone bound

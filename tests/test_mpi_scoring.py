@@ -43,7 +43,7 @@ def _noop_submission(language: str = "c") -> Submission:
     return NoOpMPIOptimizer().solve(Task(kernel="scaled_add", language=language, residency="distributed"))
 
 
-def test_distributed_scaled_add_scores_solved(mpi_c):
+def test_distributed_scaled_add_scores_solved(mpi_c) -> None:
     task = Task(kernel="scaled_add", language="c", residency="distributed")
     result = scoring.score(_noop_submission(), task, preset="S")
 
@@ -53,7 +53,7 @@ def test_distributed_scaled_add_scores_solved(mpi_c):
     assert result.speedup > 0  # reference == baseline, so a positive (near-1x) ratio
 
 
-def test_distributed_scaled_add_python_delivery_scores_solved():
+def test_distributed_scaled_add_python_delivery_scores_solved() -> None:
     # mpi4py delivery of the same no-op optimizer; override mpi.launcher to match mpi4py's MPI.
     launch = mpi_launch_helpers.mpi4py_launcher()
     if launch is None:
@@ -68,7 +68,7 @@ def test_distributed_scaled_add_python_delivery_scores_solved():
     assert result.build_ok and result.native_ns >= 0 and result.speedup > 0
 
 
-def test_distributed_independent_verify_passes_for_reference(mpi_c):
+def test_distributed_independent_verify_passes_for_reference(mpi_c) -> None:
     sub = _noop_submission()
     task = Task(kernel="scaled_add", language="c", residency="distributed")
     result = scoring.score(sub, task, preset="S")
@@ -80,7 +80,7 @@ def test_distributed_independent_verify_passes_for_reference(mpi_c):
     assert not verdict.dual_oracle_applied  # the C dual-oracle does not apply to the MPI path
 
 
-def test_distributed_leaderboard_routing_scores_solved(mpi_c):
+def test_distributed_leaderboard_routing_scores_solved(mpi_c) -> None:
     # score_task_fuzzed must route a distributed task through the MPI scaling protocol, not the
     # single-node sweep. One measured, verified iteration; s_i >= 1 for reference == baseline.
     from hpcagent_bench.harness.metric import score_task_fuzzed
@@ -98,7 +98,7 @@ def test_distributed_leaderboard_routing_scores_solved(mpi_c):
     assert ts.perf_mode.startswith("mpi:")
 
 
-def test_distributed_bad_kernel_is_a_scored_failure_not_a_crash(mpi_c):
+def test_distributed_bad_kernel_is_a_scored_failure_not_a_crash(mpi_c) -> None:
     # A kernel that does not compile -> a scored Score(correct=False), never a runner death.
     binding = binding_from_spec(BenchSpec.load("scaled_add"))
     stub = gen_kernel_mpi_stub(binding)
@@ -113,7 +113,7 @@ _STENCILS = ["jacobi_2d", "heat_3d"]
 
 
 @pytest.mark.parametrize("kernel", _STENCILS)
-def test_distributed_stencil_scores_solved(kernel, mpi_c):
+def test_distributed_stencil_scores_solved(kernel, mpi_c) -> None:
     # C kernel disables FMA contraction, so the gathered field is bit-exact.
     task = Task(kernel=kernel, language="c", residency="distributed")
     result = scoring.score(NoOpMPIOptimizer().solve(task), task, preset="S")
@@ -122,7 +122,7 @@ def test_distributed_stencil_scores_solved(kernel, mpi_c):
 
 
 @pytest.mark.parametrize("kernel", _STENCILS)
-def test_distributed_stencil_python_delivery_scores_solved(kernel):
+def test_distributed_stencil_python_delivery_scores_solved(kernel) -> None:
     # mpi4py twin of each stencil; override mpi.launcher to match mpi4py's MPI.
     launch = mpi_launch_helpers.mpi4py_launcher()
     if launch is None:
@@ -137,7 +137,7 @@ def test_distributed_stencil_python_delivery_scores_solved(kernel):
     assert result.build_ok and result.native_ns >= 0 and result.speedup > 0
 
 
-def test_distributed_stencil_leaderboard_routing_scores_solved(mpi_c):
+def test_distributed_stencil_leaderboard_routing_scores_solved(mpi_c) -> None:
     # jacobi_2d through the ranked-leaderboard path; `solved` folds in the independent re-verify.
     from hpcagent_bench.harness.metric import score_task_fuzzed
 
@@ -156,7 +156,7 @@ def test_distributed_stencil_leaderboard_routing_scores_solved(mpi_c):
 # --- 2-D block-cyclic distribution (mat_scaled_add): ScaLAPACK-style MxN over a [2,2] hypercube -----
 
 
-def test_distributed_block_cyclic_2d_scores_solved(mpi_c):
+def test_distributed_block_cyclic_2d_scores_solved(mpi_c) -> None:
     task = Task(kernel="mat_scaled_add", language="c", residency="distributed")
     sub = NoOpMPIOptimizer().solve(task)
     assert sub.distribution["grid"] == [2, 2]  # the equal-edge 2-D hypercube for R=4
@@ -165,7 +165,7 @@ def test_distributed_block_cyclic_2d_scores_solved(mpi_c):
     assert result.build_ok and result.native_ns >= 0 and result.speedup > 0
 
 
-def test_distributed_block_cyclic_2d_python_delivery_scores_solved():
+def test_distributed_block_cyclic_2d_python_delivery_scores_solved() -> None:
     # mpi4py twin: proves the 2-D block-cyclic scatter/gather is delivery-agnostic.
     launch = mpi_launch_helpers.mpi4py_launcher()
     if launch is None:
@@ -197,7 +197,7 @@ def _cuda_available() -> bool:
         return False
 
 
-def test_distributed_device_c_delivery_is_scored_failure():
+def test_distributed_device_c_delivery_is_scored_failure() -> None:
     """A plain C/source delivery under device residency is a clean scored failure, never a silent host run."""
     config.set_override("mpi.residency", "device")
     try:
@@ -246,7 +246,7 @@ extern "C" void scaled_add_mpi(
 """
 
 
-def test_distributed_scaled_add_device_cuda_source_scores_solved(mpi_c):
+def test_distributed_scaled_add_device_cuda_source_scores_solved(mpi_c) -> None:
     """REAL GPU run of the C/CUDA driver device path: builds, H2D/D2H mirrors each tile, grades bit-exact."""
     if not _cuda_available():
         pytest.skip("no CUDA device / cupy")
@@ -306,7 +306,7 @@ extern "C" void scaled_add_mpi(
 """
 
 
-def test_distributed_scaled_add_mixed_host_device_scores_solved(mpi_c):
+def test_distributed_scaled_add_mixed_host_device_scores_solved(mpi_c) -> None:
     """REAL GPU run of a genuine mixed-residency kernel: per-array `location` drives a host+device mix."""
     if not _cuda_available():
         pytest.skip("no CUDA device / cupy")
@@ -331,7 +331,7 @@ def test_distributed_scaled_add_mixed_host_device_scores_solved(mpi_c):
     assert result.build_ok and result.native_ns >= 0 and result.speedup > 0
 
 
-def test_distributed_scaled_add_device_python_scores_solved():
+def test_distributed_scaled_add_device_python_scores_solved() -> None:
     """REAL GPU run of the device-residency path: mpi4py stages each tile to the GPU, grades bit-exact."""
     if not _cuda_available():
         pytest.skip("no CUDA device / cupy")
@@ -353,7 +353,7 @@ def test_distributed_scaled_add_device_python_scores_solved():
 # --- multi-node scaling curve (paper sec:distributed): P-sweep needs P a perfect d-th power --------
 
 
-def test_regrid_for_ranks_reshapes_1d_and_skips_unfactorable_nd():
+def test_regrid_for_ranks_reshapes_1d_and_skips_unfactorable_nd() -> None:
     from hpcagent_bench.harness.scoring import _regrid_for_ranks
 
     block = {"axes": [{"grid_dim": 0, "scheme": "block"}]}
@@ -367,7 +367,7 @@ def test_regrid_for_ranks_reshapes_1d_and_skips_unfactorable_nd():
     assert _regrid_for_ranks(two_d, 3) is None  # 3 is not a perfect square => skipped
 
 
-def test_regrid_for_ranks_guards():
+def test_regrid_for_ranks_guards() -> None:
     from hpcagent_bench.harness.scoring import _regrid_for_ranks
 
     block = {"axes": [{"grid_dim": 0, "scheme": "block"}]}
@@ -383,7 +383,7 @@ def test_regrid_for_ranks_guards():
     assert _regrid_for_ranks(three_d, 10) is None  # not a perfect cube
 
 
-def test_score_scaling_strong_times_anchor_once_and_notes_failures(monkeypatch):
+def test_score_scaling_strong_times_anchor_once_and_notes_failures(monkeypatch) -> None:
     """Strong scaling times the anchor ONCE (size cache, reused across P); a failed run at one P is a note."""
     import contextlib
 
@@ -395,7 +395,7 @@ def test_score_scaling_strong_times_anchor_once_and_notes_failures(monkeypatch):
     def _fake_sandbox(binding):  # production Sandbox(binding) takes one arg (69884e44 dropped `task`)
         yield types.SimpleNamespace(build=lambda sub, mode=None: types.SimpleNamespace(ok=True, lib="anchor.so"))
 
-    def _fake_call_isolated(lib, binding, data, lang, reps=1, followups=(), **kw):
+    def _fake_call_isolated(lib, binding, data, lang, reps: int = 1, followups=(), **kw):
         calls["anchor"] += 1
         # (outputs, samples, mem, followup outputs) -- constant serial anchor time
         return ({}, [4000] * max(1, reps), None, [{} for _ in followups])
@@ -443,7 +443,7 @@ def test_score_scaling_strong_times_anchor_once_and_notes_failures(monkeypatch):
     assert runs.mode == "strong"
 
 
-def test_distributed_scaling_curve_e2e(mpi_c):
+def test_distributed_scaling_curve_e2e(mpi_c) -> None:
     """End-to-end P-sweep: MPI scaled_add timed at P in {1,2,4} against a single-node anchor -> strong-scaling curve."""
     import importlib.util
 
@@ -478,7 +478,7 @@ def test_distributed_scaling_curve_e2e(mpi_c):
     assert ts.s_i >= 1.0  # scalar S_i still produced, unchanged by the disclosure curve
 
 
-def test_grading_residency_is_single_node_unless_the_run_opts_in():
+def test_grading_residency_is_single_node_unless_the_run_opts_in() -> None:
     """The default is untouched: no config, no distributed grading, whatever the kernel declares."""
     from hpcagent_bench.harness.task import grading_residency
 
@@ -486,7 +486,7 @@ def test_grading_residency_is_single_node_unless_the_run_opts_in():
     assert grading_residency("gemm", "hip") == "device"
 
 
-def test_grading_residency_routes_mpi_kernels_when_enabled():
+def test_grading_residency_routes_mpi_kernels_when_enabled() -> None:
     """With ``mpi.grade_distributed`` on, a kernel with a decomposition grades distributed.
 
     This is what makes ``scoring.score``'s distributed branch reachable from /score and /submit --

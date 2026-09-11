@@ -47,7 +47,7 @@ _A = np.array([5, 0, 10, 3], dtype=np.int64)
 _B = np.array([4, 4, 4, 4], dtype=np.int64)
 
 
-def test_floor_of_forward_substituted_scalar_stays_real_division():
+def test_floor_of_forward_substituted_scalar_stays_real_division() -> None:
     status = oo.run_op(
         _SRC,
         "f",
@@ -61,7 +61,7 @@ def test_floor_of_forward_substituted_scalar_stays_real_division():
     assert status == {"c": "ok", "cpp": "ok"}, status
 
 
-def test_emitted_c_never_truncates_the_divide_feeding_floor():
+def test_emitted_c_never_truncates_the_divide_feeding_floor() -> None:
     d = pathlib.Path(tempfile.mkdtemp())
     npy = d / "f.py"
     npy.write_text(_SRC)
@@ -110,7 +110,7 @@ def _sym_kir():
     return lower(parse_kernel(d / "k.py", bi))
 
 
-def test_pluto_mode_keeps_the_floord_spelling_for_np_floor_of_symbols():
+def test_pluto_mode_keeps_the_floord_spelling_for_np_floor_of_symbols() -> None:
     emitter = _CBodyEmitter(_sym_kir())
     emitter.pluto = True
     div = ast.parse("N / K", mode="eval").body
@@ -118,7 +118,7 @@ def test_pluto_mode_keeps_the_floord_spelling_for_np_floor_of_symbols():
     assert emitter.emit_expr(call) == "floord(N, K)"
 
 
-def test_pluto_mode_keeps_the_ceild_spelling_for_np_ceil_of_symbols():
+def test_pluto_mode_keeps_the_ceild_spelling_for_np_ceil_of_symbols() -> None:
     emitter = _CBodyEmitter(_sym_kir())
     emitter.pluto = True
     div = ast.parse("N / K", mode="eval").body

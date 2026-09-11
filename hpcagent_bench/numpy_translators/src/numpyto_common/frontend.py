@@ -5178,7 +5178,7 @@ def _build_callsite_stmts(
     hret_shape,
     hret_dtype,
     hidx,
-    inout=False,
+    inout: bool = False,
     live_buffers=frozenset(),
 ):
     """Replacement statements for an array-returning helper call.
@@ -5290,7 +5290,7 @@ def _reorder_helper_call_args(trees: List[ast.AST], helpers: List[KernelIR]) -> 
 class _ReplaceStmts(ast.NodeTransformer):
     """Replace specific ``Assign`` nodes (keyed by ``id``) with a stmt list."""
 
-    def __init__(self, mapping: Dict[int, List[ast.stmt]]):
+    def __init__(self, mapping: Dict[int, List[ast.stmt]]) -> None:
         self.mapping = mapping
 
     def visit_Assign(self, node: ast.Assign):
@@ -7507,7 +7507,7 @@ class _InlineHelpers(ast.NodeTransformer):
       return forms remains in visit_Call.
     """
 
-    def __init__(self, helpers: Dict[str, ast.FunctionDef], counter: Optional[List[int]] = None):
+    def __init__(self, helpers: Dict[str, ast.FunctionDef], counter: Optional[List[int]] = None) -> None:
         self.helpers = helpers
         # The ``__inl<N>_`` prefix counter MUST persist across the parse_kernel
         # inline fixpoint: a nested helper exposed in a later iteration would
@@ -7703,7 +7703,7 @@ def _collect_assigned_names(stmts):
     # would shuffle the emitted prologue -- conv2d_relu_bias_add's stride/padding/dilation.
     out = OrderedSet()
 
-    def _bind(target):
+    def _bind(target) -> None:
         if isinstance(target, ast.Name):
             out.add(target.id)
         elif isinstance(target, ast.Starred):
@@ -7732,7 +7732,7 @@ class _SubstNames(ast.NodeTransformer):
     renames work but a param-arg replacement on a Store context is
     silently rejected to keep AST validity)."""
 
-    def __init__(self, subst: Dict[str, ast.AST]):
+    def __init__(self, subst: Dict[str, ast.AST]) -> None:
         self.subst = subst
 
     def visit_Name(self, node: ast.Name) -> ast.AST:
@@ -8370,7 +8370,7 @@ def _names_used_as_int(tree: ast.AST) -> Set[str]:
     """
     int_uses: Set[str] = set()
 
-    def collect(node):
+    def collect(node) -> None:
         if node is None:
             return
         if isinstance(node, ast.Name):

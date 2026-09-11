@@ -45,7 +45,7 @@ def _assigns_to(text: str, name: str):
     return re.findall(rf"^\s*{name} = .*;$", text, re.M)
 
 
-def test_invariant_scalar_is_replayed_at_the_deeper_use_site():
+def test_invariant_scalar_is_replayed_at_the_deeper_use_site() -> None:
     body = _emit(_CONV, "conv_op")
     assert not _assigns_to(body, "w"), f"the invariant scalar assign survived (POLYCC-001):\n{body}"
     inner = [ln for ln in body.splitlines() if "padded[" in ln and "out_grid[" in ln]
@@ -53,7 +53,7 @@ def test_invariant_scalar_is_replayed_at_the_deeper_use_site():
     assert all("w_box[" in ln for ln in inner), f"the weight read was not replayed inline:\n{inner}"
 
 
-def test_declines_when_the_source_array_is_written_in_the_nest():
+def test_declines_when_the_source_array_is_written_in_the_nest() -> None:
     # Condition 4: replaying the read would cross a store to its own buffer.
     body = _emit(
         _CONV.replace("conv_op", "alias_op").replace(
@@ -66,7 +66,7 @@ def test_declines_when_the_source_array_is_written_in_the_nest():
     assert _assigns_to(body, "w"), f"a written source array must decline the substitution:\n{body}"
 
 
-def test_declines_when_the_scalar_is_read_after_the_loop():
+def test_declines_when_the_scalar_is_read_after_the_loop() -> None:
     # Condition 6: a read past the loop sees the last iteration's value.
     body = _emit(
         _CONV.replace("conv_op(w_box, padded, out_grid, K, N)", "live_op(w_box, padded, tail, out_grid, K, N)").replace(
@@ -79,7 +79,7 @@ def test_declines_when_the_scalar_is_read_after_the_loop():
     assert _assigns_to(body, "w"), f"a scalar live past its loop must decline:\n{body}"
 
 
-def test_declines_when_an_operand_is_reassigned():
+def test_declines_when_an_operand_is_reassigned() -> None:
     # Condition 5: ``k`` is written twice, so a deeper replay reads the second binding.
     body = _emit(
         _CONV.replace("conv_op", "unstable_op").replace(
@@ -91,7 +91,7 @@ def test_declines_when_an_operand_is_reassigned():
     assert _assigns_to(body, "w"), f"an unstable operand must decline the substitution:\n{body}"
 
 
-def test_declines_when_no_read_is_deeper():
+def test_declines_when_no_read_is_deeper() -> None:
     # Condition 7: a same-depth read is not the defect, so replaying is pure growth.
     body = _emit(
         _CONV.replace("conv_op", "flat_op").replace(
@@ -118,7 +118,7 @@ _GATHER = (
 )
 
 
-def test_scalar_laundered_indirection_becomes_literal():
+def test_scalar_laundered_indirection_becomes_literal() -> None:
     """POLYCC-006: the detector reads subscript TEXT, so the gather must reach it."""
     d = pathlib.Path(tempfile.mkdtemp())
     (d / "k_numpy.py").write_text(_GATHER)
@@ -135,7 +135,7 @@ def test_scalar_laundered_indirection_becomes_literal():
     assert scop_nonaffine_reason(scop) == "indirection", f"the gather stayed laundered:\n{scop}"
 
 
-def test_registry_credits_the_substitution():
+def test_registry_credits_the_substitution() -> None:
     """The tripwire's other half: both entries name this pass."""
     dotted = "numpyto_common.lowering._ForwardSubstituteInvariantScalars"
     assert KNOWN_POLYCC_ISSUES["POLYCC-001"].avoided_by == dotted

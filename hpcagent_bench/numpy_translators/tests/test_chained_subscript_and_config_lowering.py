@@ -51,42 +51,42 @@ def _collapse(expr: str, shapes) -> str:
     return ast.unparse(ast.fix_missing_locations(new))
 
 
-def test_collapse_scalar_row_then_slice_column():
+def test_collapse_scalar_row_then_slice_column() -> None:
     # ``tabxx_qr[ia][:, c]`` -- scalar row consumes axis 0; the slice + column
     # apply to the remaining axes -> ``tabxx_qr[ia, :, c]``.
     assert _collapse("A[ia][:, c]", {"A": ("nat", "K", "nij")}) == "A[ia, :, c]"
 
 
-def test_collapse_slice_then_trailing_scalar():
+def test_collapse_slice_then_trailing_scalar() -> None:
     # ``becxx[:, j, k][m]`` -- the trailing index selects the surviving full-slice
     # axis 0 -> ``becxx[m, j, k]``.
     assert _collapse("A[:, j, k][m]", {"A": ("nkb", "nb", "nks")}) == "A[m, j, k]"
 
 
-def test_collapse_bails_on_unknown_base_shape():
+def test_collapse_bails_on_unknown_base_shape() -> None:
     # No shape for the base array -> left chained (cannot resolve trailing axes).
     assert _collapse("A[i][:, c]", {}) == "A[i][:, c]"
 
 
-def test_collapse_bails_on_partial_inner_slice():
+def test_collapse_bails_on_partial_inner_slice() -> None:
     # A bounded inner slice is not a plain associate -> left untouched.
     assert _collapse("A[1:3][j]", {"A": ("n", "m")}) == "A[1:3][j]"
 
 
-def test_collapse_bails_on_fancy_inner_index():
+def test_collapse_bails_on_fancy_inner_index() -> None:
     # ``A[idx][j]`` with ``idx`` an ARRAY is a fancy GATHER (== ``A[idx[j]]``), not
     # a scalar associate -- collapsing to ``A[idx, j]`` would change the access, so
     # it must be left untouched (``idx`` known-array via its shape-table entry).
     assert _collapse("A[idx][j]", {"A": ("n", "m"), "idx": ("k",)}) == "A[idx][j]"
 
 
-def test_collapse_keeps_scalar_inner_when_a_sibling_name_is_an_array():
+def test_collapse_keeps_scalar_inner_when_a_sibling_name_is_an_array() -> None:
     # ``A[i][j]`` -- ``i`` is a plain scalar (absent from the shape table) even
     # though some OTHER name ``idx`` is an array: the scalar associate still fires.
     assert _collapse("A[i][j]", {"A": ("n", "m"), "idx": ("k",)}) == "A[i, j]"
 
 
-def test_collapse_bails_on_ellipsis_inner():
+def test_collapse_bails_on_ellipsis_inner() -> None:
     # An ellipsis stands for an unknown number of axes -> cannot align -> bail.
     assert _collapse("A[..., j][k]", {"A": ("n", "m", "p")}) == "A[..., j][k]"
 
@@ -94,7 +94,7 @@ def test_collapse_bails_on_ellipsis_inner():
 # ---- pure: a boolean preset value is a config-flag name (typed bool) ----
 
 
-def test_bool_preset_names_picks_boolean_flags_not_int_symbols():
+def test_bool_preset_names_picks_boolean_flags_not_int_symbols() -> None:
     params = {
         "S": {"N": 6, "okvan": False, "tqr": False, "negrp": 1},
         "fuzzed": {"N": [6, 16], "okvan": {"set": [False, True]}, "negrp": {"set": [1, 2]}},
@@ -106,7 +106,7 @@ def test_bool_preset_names_picks_boolean_flags_not_int_symbols():
 # ---- numeric: bit-close to numpy across every backend ----
 
 
-def test_chained_column_dot_matches_numpy():
+def test_chained_column_dot_matches_numpy() -> None:
     # ``np.dot(A[ia][:, 1], v[box[ia]])`` -- the collapsed chained column dotted
     # with a materialised-box gather (vexx_k ``_newdxx_r``).
     src = (
@@ -136,7 +136,7 @@ def test_chained_column_dot_matches_numpy():
     assert ok, r
 
 
-def test_slice_assign_gather_offset_matches_numpy():
+def test_slice_assign_gather_offset_matches_numpy() -> None:
     # ``out[k*n:k*n+n] -= r[idx]`` for k in 0,1 -- the length-``n`` gather index
     # ``idx`` must be read at the LOCAL slice offset, so k=1 does not run off it
     # (the vexx_k noncolin npol=2 finalise OOB).
@@ -164,7 +164,7 @@ def test_slice_assign_gather_offset_matches_numpy():
     assert ok, rr
 
 
-def test_shape_of_complex_array_is_integer_bound():
+def test_shape_of_complex_array_is_integer_bound() -> None:
     # ``n = z.shape[0]`` reads a DIMENSION (int) even though ``z`` is complex --
     # a complex-typed loop bound would make ``for i in range(n)`` a type error
     # (vexx_k ``ngm = qgm.shape[0]``).
@@ -195,35 +195,35 @@ def _rewrite_shape(expr: str, shapes) -> str:
     return _unparse(new)
 
 
-def test_shape_index_maps_to_declared_symbol():
+def test_shape_index_maps_to_declared_symbol() -> None:
     # ``A.shape[k]`` -> the k-th token of the provided shape tuple.
     assert _rewrite_shape("A.shape[0]", {"A": ("nat", "K", "nij")}) == "nat"
     assert _rewrite_shape("A.shape[1]", {"A": ("nat", "K", "nij")}) == "K"
     assert _rewrite_shape("A.shape[2]", {"A": ("nat", "K", "nij")}) == "nij"
 
 
-def test_shape_index_in_range_bound_maps_to_symbol():
+def test_shape_index_in_range_bound_maps_to_symbol() -> None:
     # The common ``for i in range(A.shape[0])`` -> ``range(nat)``.
     assert _rewrite_shape("range(A.shape[0])", {"A": ("nat", "K")}) == "range(nat)"
 
 
-def test_shape_index_numeric_dim_is_a_literal():
+def test_shape_index_numeric_dim_is_a_literal() -> None:
     # A concrete (pinned) dimension resolves to an integer literal, not a symbol.
     assert _rewrite_shape("A.shape[1]", {"A": ("N", "3")}) == "3"
 
 
-def test_bare_shape_maps_to_symbol_tuple():
+def test_bare_shape_maps_to_symbol_tuple() -> None:
     # ``A.shape`` (e.g. ``np.zeros(A.shape)``) -> the full symbol tuple.
     assert _rewrite_shape("A.shape", {"A": ("N", "M")}) == "(N, M)"
 
 
-def test_len_and_size_map_to_symbols():
+def test_len_and_size_map_to_symbols() -> None:
     # ``len(A)`` == ``A.shape[0]``; ``A.size`` == product of the shape symbols.
     assert _rewrite_shape("len(A)", {"A": ("N", "M")}) == "N"
     assert _rewrite_shape("A.size", {"A": ("N", "M")}) == "N * M"
 
 
-def test_shape_of_unknown_array_is_left_untouched():
+def test_shape_of_unknown_array_is_left_untouched() -> None:
     # No declared shape -> cannot resolve -> the read is left as-is.
     assert _rewrite_shape("A.shape[0]", {}) == "A.shape[0]"
 
@@ -231,7 +231,7 @@ def test_shape_of_unknown_array_is_left_untouched():
 # ---- .shape read is INTEGER even off a complex array (skips the complex walk) ----
 
 
-def test_reads_complex_skips_shape_subtree_bare_and_compound():
+def test_reads_complex_skips_shape_subtree_bare_and_compound() -> None:
     # ``qgm`` is complex, but a ``.shape`` read yields integer DIMENSIONS. The
     # complex-dtype predicate must skip the ``.shape`` subtree for the bare form
     # AND the compound arithmetic form, else the integer bound is tagged complex
@@ -242,7 +242,7 @@ def test_reads_complex_skips_shape_subtree_bare_and_compound():
     assert _reads_complex(_expr("2 * qgm.shape[0] + 1"), dt) is False
 
 
-def test_reads_complex_still_detects_a_genuine_complex_value_read():
+def test_reads_complex_still_detects_a_genuine_complex_value_read() -> None:
     # A real VALUE read of the complex array (not its shape) is still complex.
     dt = {"qgm": "complex128"}
     assert _reads_complex(_expr("qgm[i] + 1.0"), dt) is True
@@ -268,7 +268,7 @@ def _pad_trailing(rhs_expr: str, start, source_shape):
     return _unparse(rw.visit(_expr(rhs_expr)))
 
 
-def test_trailing_pad_reads_local_offset_for_nonzero_start():
+def test_trailing_pad_reads_local_offset_for_nonzero_start() -> None:
     # ``out[2:2+M] = dH[a, b]`` -- dH rank 3, RHS names 2 axes; the implicit
     # trailing axis is padded with the LHS slice iter at its LOCAL position
     # ``si - 2``, so a non-zero-start destination spans dH's length-M axis from 0
@@ -276,7 +276,7 @@ def test_trailing_pad_reads_local_offset_for_nonzero_start():
     assert _pad_trailing("dH[a, b]", 2, ("A", "B", "M")) == "dH[a, b, si - 2]"
 
 
-def test_trailing_pad_no_offset_for_zero_start():
+def test_trailing_pad_no_offset_for_zero_start() -> None:
     # A zero-start slice needs no correction: local offset == absolute index.
     assert _pad_trailing("dH[a, b]", 0, ("A", "B", "M")) == "dH[a, b, si]"
 
@@ -284,7 +284,7 @@ def test_trailing_pad_no_offset_for_zero_start():
 # ---- iter-start offset copies the shared start node (no AST aliasing) ----
 
 
-def test_iter_minus_start_copies_shared_start_node():
+def test_iter_minus_start_copies_shared_start_node() -> None:
     # ``start`` is the SAME node object as the loop-header ``range`` lower bound, so
     # ``_iter_minus_start`` must embed a COPY -- else one mutable subtree lives in two
     # tree positions and a later in-place rewrite of the loop bound corrupts the
@@ -297,7 +297,7 @@ def test_iter_minus_start_copies_shared_start_node():
     assert embedded and embedded[0] is not start  # a copy, not the aliased node
 
 
-def test_iter_minus_start_zero_start_is_bare_fresh_iter():
+def test_iter_minus_start_zero_start_is_bare_fresh_iter() -> None:
     # start == 0 -> bare iter (no offset), and a FRESH Name (not the passed object).
     iv = ast.Name(id="si", ctx=ast.Load())
     out = _SliceToScalarRewriter._iter_minus_start(iv, ast.Constant(value=0))

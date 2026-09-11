@@ -771,7 +771,7 @@ class TimedCompiledSDFG:
 
     __slots__ = ("_exec", "sdfg", "name")
 
-    def __init__(self, dc_exec: Any, sdfg: Any, name: str):
+    def __init__(self, dc_exec: Any, sdfg: Any, name: str) -> None:
         self._exec = dc_exec
         self.sdfg = sdfg
         self.name = name
@@ -803,7 +803,7 @@ class DaceFramework(Framework):
     """DaCe adapter. Which SDFG pipelines it searches is the FLAVOR's business, not this class's:
     ``dace_cpu`` searches three, ``dace_cpu_canonicalize`` searches exactly one."""
 
-    def __init__(self, fname: str, save_strict: bool = False, load_strict: bool = False):
+    def __init__(self, fname: str, save_strict: bool = False, load_strict: bool = False) -> None:
         self.save_strict = save_strict
         self.load_strict = load_strict
         warnings.filterwarnings("ignore")
@@ -1247,7 +1247,7 @@ class DaceFramework(Framework):
                 native_t = None
         return TimingResult(python=python_t, native=native_t)
 
-    def free_timer(self, timer):
+    def free_timer(self, timer) -> None:
         """Disable instrumentation so it does not persist across frameworks."""
         program = timer.program
         if isinstance(program, TimedCompiledSDFG):
@@ -1319,7 +1319,7 @@ class DaceFramework(Framework):
         values = {renames.get(k, k): v for k, v in resolved.items()} if renames else resolved
         return bind_free_symbols(impl.sdfg, recipes, args, values, bound)
 
-    def set_datatype(self, datatype):
+    def set_datatype(self, datatype) -> None:
         super().set_datatype(datatype)
         # Remember the request so verify() uses the matching tolerance band.
         self.datatype = datatype

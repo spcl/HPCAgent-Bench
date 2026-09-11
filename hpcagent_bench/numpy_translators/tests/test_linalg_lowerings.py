@@ -32,7 +32,7 @@ def _run(stmts, scope):
     return scope
 
 
-def test_linalg_norm_vector_2norm():
+def test_linalg_norm_vector_2norm() -> None:
     fn = ln.NP_CALL_EXPANDERS[("np", "linalg.norm")]
     M = 9
     r = np.random.default_rng(1).random(M)
@@ -60,12 +60,12 @@ def _solve(M, b_node_builder, scope_extra):
     return scope["y"], A, b, fla
 
 
-def test_lstsq_square_bare_name_b():
+def test_lstsq_square_bare_name_b() -> None:
     y, A, b, _ = _solve(6, lambda: ast.Name(id="b", ctx=ast.Load()), {})
     assert np.allclose(y, np.linalg.solve(A, b))
 
 
-def test_lstsq_square_binop_b_materialized():
+def test_lstsq_square_binop_b_materialized() -> None:
     """gmres passes ``beta * e1[:m]`` -- a BinOp b is materialized to a
     fresh temp vector (registered in fresh_local_allocs) before the solve."""
     beta = 2.5
@@ -90,7 +90,7 @@ def _det(M):
     return scope["d"], A, fla
 
 
-def test_linalg_det_matches_numpy():
+def test_linalg_det_matches_numpy() -> None:
     for M in (2, 3, 4, 5):
         d, A, fla = _det(M)
         assert np.isclose(d, np.linalg.det(A))

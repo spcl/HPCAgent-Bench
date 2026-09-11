@@ -24,30 +24,30 @@ def _fold(src: str) -> str:
     return ast.unparse(fn)
 
 
-def test_bounded_slice_local_is_inlined_and_its_binding_dropped():
+def test_bounded_slice_local_is_inlined_and_its_binding_dropped() -> None:
     out = _fold("def f(A, i, b, nlev):\n    top = slice(0, nlev)\n    return A[i, top, b]\n")
     assert "A[i, 0:nlev, b]" in out, out
     assert "slice(" not in out, out
 
 
-def test_slice_none_becomes_a_bare_colon():
+def test_slice_none_becomes_a_bare_colon() -> None:
     """``slice(None)`` is the helper's default window: every level, i.e. a plain ``:``."""
     out = _fold("def f(A, i, b):\n    lvl = slice(None)\n    return A[i, lvl, b]\n")
     assert "A[i, :, b]" in out, out
 
 
-def test_single_argument_slice_is_a_stop_bound():
+def test_single_argument_slice_is_a_stop_bound() -> None:
     """``slice(n)`` is ``:n`` -- the one argument is the STOP, not the start."""
     out = _fold("def f(x, n):\n    w = slice(n)\n    return x[w]\n")
     assert "x[:n]" in out, out
 
 
-def test_step_is_carried():
+def test_step_is_carried() -> None:
     out = _fold("def f(x, a, b, s):\n    w = slice(a, b, s)\n    return x[w]\n")
     assert "x[a:b:s]" in out, out
 
 
-def test_the_same_window_bound_twice_still_folds():
+def test_the_same_window_bound_twice_still_folds() -> None:
     """velocity_tendencies rebinds ``rest = slice(1, nlev)`` in two scopes, identically."""
     src = (
         "def f(x, nlev, flag):\n"
@@ -64,7 +64,7 @@ def test_the_same_window_bound_twice_still_folds():
     assert "slice(" not in out, out
 
 
-def test_two_different_windows_on_one_name_are_left_alone():
+def test_two_different_windows_on_one_name_are_left_alone() -> None:
     """Which window a use sees depends on the binding live at that point, which this pass cannot
     see -- so it declines rather than pick one."""
     src = "def f(x, nlev, flag):\n    w = slice(0, nlev)\n    if flag:\n        w = slice(1, nlev)\n    return x[w]\n"
@@ -72,7 +72,7 @@ def test_two_different_windows_on_one_name_are_left_alone():
     assert "slice(0, nlev)" in out and "slice(1, nlev)" in out, out
 
 
-def test_a_name_used_outside_an_index_keeps_its_binding():
+def test_a_name_used_outside_an_index_keeps_its_binding() -> None:
     """Only index slots are rewritten; a slice passed on as a value still needs the object."""
     out = _fold("def f(x, nlev, g):\n    w = slice(0, nlev)\n    y = g(w)\n    return x[w] + y\n")
     assert "w = slice(0, nlev)" in out, out
@@ -80,6 +80,6 @@ def test_a_name_used_outside_an_index_keeps_its_binding():
 
 
 @pytest.mark.parametrize("expr", ["A[top]", "A[top, b]", "A[i, top, b]"])
-def test_folds_in_every_index_position(expr):
+def test_folds_in_every_index_position(expr) -> None:
     out = _fold(f"def f(A, i, b, nlev):\n    top = slice(0, nlev)\n    return {expr}\n")
     assert "0:nlev" in out, out

@@ -47,7 +47,7 @@ _A = np.array([5, 0, 10, 3], dtype=np.int64)
 _B = np.array([4, 4, 4, 4], dtype=np.int64)
 
 
-def test_floor_of_forward_substituted_scalar_stays_real_division():
+def test_floor_of_forward_substituted_scalar_stays_real_division() -> None:
     status = oo.run_op(
         _SRC,
         "f",
@@ -61,7 +61,7 @@ def test_floor_of_forward_substituted_scalar_stays_real_division():
     assert status == {"fortran": "ok"}, status
 
 
-def test_emitted_fortran_never_calls_aint_on_an_integer_operand():
+def test_emitted_fortran_never_calls_aint_on_an_integer_operand() -> None:
     """Direct text pin: whatever ``_expr_is_integer`` decides about the substituted divide's
     operands, the SAME decision must gate the division's own promotion -- so an ``aint(``
     call's argument is never built from a bare (unwrapped) integer-kind subexpression divide."""

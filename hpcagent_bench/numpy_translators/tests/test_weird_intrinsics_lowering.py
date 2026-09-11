@@ -37,12 +37,12 @@ _ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 _NAN_SUPPRESS = {"pythran": "pythran max/min do not propagate NaN"}
 
 
-def _skip(status, label):
+def _skip(status, label) -> None:
     fails = {b: s for b, s in status.items() if s.startswith("FAIL")}
     assert not fails, f"{label}: {fails}"
 
 
-def _need_toolchain():
+def _need_toolchain() -> None:
     import shutil
 
     if not (shutil.which("gcc") and shutil.which("g++") and shutil.which("gfortran")):
@@ -179,7 +179,7 @@ _CASES = [
 
 
 @pytest.mark.parametrize("label,src,inputs,out_shape,syms,shapes,skip", _CASES, ids=[c[0] for c in _CASES])
-def test_weird_intrinsic_matches_numpy(label, src, inputs, out_shape, syms, shapes, skip):
+def test_weird_intrinsic_matches_numpy(label, src, inputs, out_shape, syms, shapes, skip) -> None:
     """Each weird-intrinsic kernel must match numpy on every backend that does not carry a
     documented lowering gap (skip_backends)."""
     _need_toolchain()
@@ -196,7 +196,7 @@ def test_weird_intrinsic_matches_numpy(label, src, inputs, out_shape, syms, shap
 # ------------------------------------------------------------------------------------------------
 
 
-def test_int_cast_past_2_31():
+def test_int_cast_past_2_31() -> None:
     """``int(x)`` for a value beyond 2^31 must cast to int64, not a 32-bit ``int`` that truncates.
     3_000_000_000 > 2^31 (2_147_483_648): a 32-bit cast wraps to a negative int."""
     _need_toolchain()
@@ -214,7 +214,7 @@ def test_int_cast_past_2_31():
     _skip(status, "int_cast_past_2_31")
 
 
-def test_int64_abs_large_magnitude():
+def test_int64_abs_large_magnitude() -> None:
     """``abs`` on an int64 with |x| > 2^31 must use ``llabs`` (64-bit); C's 32-bit ``abs`` truncates."""
     _need_toolchain()
     src = "import numpy as np\ndef f(a, out):\n    out[0] = abs(a[0])\n"
@@ -231,7 +231,7 @@ def test_int64_abs_large_magnitude():
     _skip(status, "int64_abs_large_magnitude")
 
 
-def test_float_floor_division():
+def test_float_floor_division() -> None:
     """``a // b`` on FLOAT operands is ``floor(a / b)`` (numpy floor_divide). The unconditional
     integer ``int_floor`` uses ``%`` / ``/`` which C rejects on doubles -- an outright compile fail."""
     _need_toolchain()
@@ -248,7 +248,7 @@ def test_float_floor_division():
     _skip(status, "float_floor_division")
 
 
-def test_float32_transcendental_precision():
+def test_float32_transcendental_precision() -> None:
     """A float32 kernel must round each op in float32: the ``f``-suffixed literal (``0.1f``) and the
     single-precision ``sqrtf`` reproduce numpy's per-op float32 rounding. A double literal / double
     ``sqrt`` would compute in double and round once at the store -- a ~1e-7 float32 discrepancy."""
@@ -271,7 +271,7 @@ def test_float32_transcendental_precision():
     _skip(status, "float32_transcendental_precision")
 
 
-def test_complex_dot_no_conjugation():
+def test_complex_dot_no_conjugation() -> None:
     """A rank-1 ``a @ b`` on COMPLEX operands is ``sum(a*b)`` -- numpy dot / matmul do NOT
     conjugate. Fortran's DOT_PRODUCT conjugates its first arg, so the emitter must emit the
     non-conjugating form; distinct real+imag parts make a conjugated result differ."""
@@ -292,7 +292,7 @@ def test_complex_dot_no_conjugation():
     _skip(status, "complex_dot_no_conjugation")
 
 
-def test_signed_right_shift_arithmetic():
+def test_signed_right_shift_arithmetic() -> None:
     """``x >> n`` on a SIGNED int64 is ARITHMETIC (sign-preserving) in numpy. Fortran must emit
     SHIFTA, not ISHFT(x, -n) (a logical / zero-fill shift that mangles negative values)."""
     _need_toolchain()
@@ -310,7 +310,7 @@ def test_signed_right_shift_arithmetic():
     _skip(status, "signed_right_shift_arithmetic")
 
 
-def test_int64_floor_division_precision():
+def test_int64_floor_division_precision() -> None:
     """``a // b`` on large int64 operands must divide in DOUBLE, not the default single-precision
     ``REAL()`` that drops mantissa bits above 2^24. Values near 2^40 expose the single-precision loss."""
     _need_toolchain()

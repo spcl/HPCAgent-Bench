@@ -30,7 +30,7 @@ def _kir(body: str, input_args: list) -> KernelIR:
     return KernelIR(tree=tree, kernel_name="k", input_args=list(input_args))
 
 
-def test_listcomp_target_not_promoted_to_param():
+def test_listcomp_target_not_promoted_to_param() -> None:
     kir = _kir(
         "def k(xs, size, out):\n    out[0] = sum(int(round(fr * size)) for fr in xs)\n",
         ["xs", "size", "out"],
@@ -40,7 +40,7 @@ def test_listcomp_target_not_promoted_to_param():
     assert [s.name for s in kir.symbols] == []
 
 
-def test_setcomp_and_dictcomp_targets_not_promoted():
+def test_setcomp_and_dictcomp_targets_not_promoted() -> None:
     kir = _kir(
         "def k(xs, out):\n    d = {v: v * 2 for v in xs}\n    s = {w for w in xs}\n    out[0] = len(d) + len(s)\n",
         ["xs", "out"],
@@ -50,7 +50,7 @@ def test_setcomp_and_dictcomp_targets_not_promoted():
     assert "w" not in kir.input_args
 
 
-def test_lambda_args_not_promoted():
+def test_lambda_args_not_promoted() -> None:
     kir = _kir(
         "def k(xs, out):\n    f = lambda z: z + 1\n    out[0] = f(xs[0])\n",
         ["xs", "out"],
@@ -59,7 +59,7 @@ def test_lambda_args_not_promoted():
     assert "z" not in kir.input_args
 
 
-def test_walrus_target_not_promoted():
+def test_walrus_target_not_promoted() -> None:
     kir = _kir(
         "def k(xs, out):\n    if (n := len(xs)) > 0:\n        out[0] = n\n",
         ["xs", "out"],
@@ -68,7 +68,7 @@ def test_walrus_target_not_promoted():
     assert "n" not in kir.input_args
 
 
-def test_except_handler_name_not_promoted():
+def test_except_handler_name_not_promoted() -> None:
     kir = _kir(
         "def k(xs, out):\n    try:\n        out[0] = xs[0]\n    except IndexError as err:\n        out[0] = 0\n",
         ["xs", "out"],
@@ -80,7 +80,7 @@ def test_except_handler_name_not_promoted():
 # --- end-to-end pin: the real kernel this was found on --------------------- #
 
 
-def test_distribution_search_no_longer_leaks_fr():
+def test_distribution_search_no_longer_leaks_fr() -> None:
     """distribution_search's ABI must equal the manifest binding exactly, with
     no resurrected ``fr`` comprehension variable trailing the real params."""
     from _bench_yaml import kir_for

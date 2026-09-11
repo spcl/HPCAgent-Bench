@@ -35,17 +35,17 @@ def doc_text():
     return [(p, p.read_text()) for p in DOCS if p.exists()]
 
 
-def test_every_prompt_config_field_has_a_config_key():
+def test_every_prompt_config_field_has_a_config_key() -> None:
     """A field with no config.yaml key cannot be set by a user editing the file."""
     missing = [f.name for f in dataclasses.fields(PromptConfig) if config.get(f"prompt.{f.name}", "?") == "?"]
     assert not missing, f"PromptConfig fields absent from config.yaml: {missing}"
 
 
-def test_prompt_config_and_settings_stay_in_lockstep():
+def test_prompt_config_and_settings_stay_in_lockstep() -> None:
     assert {f.name for f in dataclasses.fields(PromptConfig)} == {f.name for f in dataclasses.fields(PromptSettings)}
 
 
-def test_docs_name_no_prompt_key_that_does_not_exist():
+def test_docs_name_no_prompt_key_that_does_not_exist() -> None:
     """Catches a knob that was removed or renamed but is still documented."""
     fields = {f.name for f in dataclasses.fields(PromptConfig)} | NON_FIELD_PROMPT_KEYS
     stale = []
@@ -56,7 +56,7 @@ def test_docs_name_no_prompt_key_that_does_not_exist():
     assert not stale, f"documented prompt.* keys that no longer exist: {stale}"
 
 
-def test_docs_name_no_attempts_key_that_does_not_exist():
+def test_docs_name_no_attempts_key_that_does_not_exist() -> None:
     fields = {f.name for f in dataclasses.fields(AttemptSettings)}
     stale = []
     for path, text in doc_text():
@@ -66,7 +66,7 @@ def test_docs_name_no_attempts_key_that_does_not_exist():
     assert not stale, f"documented attempts.* keys that no longer exist: {stale}"
 
 
-def test_docs_name_no_variant_that_is_not_registered():
+def test_docs_name_no_variant_that_is_not_registered() -> None:
     """A `--variant X` in the docs must resolve: a built-in, a `task_var<N>.j2` discovery, or
     one the same doc declares in its own `prompt.variants` example."""
     stale = []
@@ -80,7 +80,7 @@ def test_docs_name_no_variant_that_is_not_registered():
     assert not stale, f"documented variants that are not registered: {stale}"
 
 
-def test_docs_name_no_template_that_does_not_exist():
+def test_docs_name_no_template_that_does_not_exist() -> None:
     """A doc naming a template that was renamed/removed sends the reader to nothing."""
     known = {p.name for p in PROMPTS_DIR.rglob("*.j2")}
     stale = []
@@ -92,7 +92,7 @@ def test_docs_name_no_template_that_does_not_exist():
     assert not stale, f"documented templates that do not exist: {stale}"
 
 
-def test_every_internal_doc_link_resolves():
+def test_every_internal_doc_link_resolves() -> None:
     """A renamed heading silently breaks inbound anchors from other docs."""
 
     def anchors(p: pathlib.Path):
@@ -120,7 +120,7 @@ def test_every_internal_doc_link_resolves():
 
 
 @pytest.mark.parametrize("forbidden", ["disclose_public_seed", "PUBLIC seed"])
-def test_the_removed_seed_disclosure_is_gone_everywhere(forbidden):
+def test_the_removed_seed_disclosure_is_gone_everywhere(forbidden) -> None:
     """The seed is never disclosed: the prompt states the RANGE only. Docs must not promise
     otherwise, and no template may reference the removed context keys."""
     hits = [str(p) for p, text in doc_text() if forbidden in text]

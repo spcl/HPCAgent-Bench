@@ -29,19 +29,19 @@ def clean_env(monkeypatch):
     return monkeypatch
 
 
-def test_a_serial_run_is_left_alone(clean_env):
+def test_a_serial_run_is_left_alone(clean_env) -> None:
     """No worker, no race, and no directory the next serial run cannot reuse."""
     pin_per_worker_dace_build_folder()
     assert BUILD_FOLDER_ENV not in os.environ
 
 
-def test_each_worker_gets_its_own_folder(clean_env):
+def test_each_worker_gets_its_own_folder(clean_env) -> None:
     clean_env.setenv("PYTEST_XDIST_WORKER", "gw3")
     pin_per_worker_dace_build_folder()
     assert os.environ[BUILD_FOLDER_ENV] == str(pathlib.Path(".dacecache/gw3"))
 
 
-def test_a_callers_own_pin_is_extended_not_replaced(clean_env):
+def test_a_callers_own_pin_is_extended_not_replaced(clean_env) -> None:
     """Pointing the build at a fast disk has to keep working; it just splits underneath."""
     clean_env.setenv("PYTEST_XDIST_WORKER", "gw1")
     clean_env.setenv(BUILD_FOLDER_ENV, "/scratch/build")
@@ -49,7 +49,7 @@ def test_a_callers_own_pin_is_extended_not_replaced(clean_env):
     assert os.environ[BUILD_FOLDER_ENV] == str(pathlib.Path("/scratch/build/gw1"))
 
 
-def test_the_split_does_not_nest_on_a_second_call(clean_env):
+def test_the_split_does_not_nest_on_a_second_call(clean_env) -> None:
     """A second conftest load in the same worker would otherwise hand it a fresh empty cache."""
     clean_env.setenv("PYTEST_XDIST_WORKER", "gw2")
     pin_per_worker_dace_build_folder()
@@ -57,7 +57,7 @@ def test_the_split_does_not_nest_on_a_second_call(clean_env):
     assert os.environ[BUILD_FOLDER_ENV] == str(pathlib.Path(".dacecache/gw2"))
 
 
-def test_dace_resolves_the_env_var_at_get_time(clean_env):
+def test_dace_resolves_the_env_var_at_get_time(clean_env) -> None:
     """The claim the whole fix rests on: the pin binds however late dace was first imported.
 
     And its converse, which is why the pin is an env var and not ``Config.set``: an env override

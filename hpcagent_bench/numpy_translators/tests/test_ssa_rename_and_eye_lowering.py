@@ -14,7 +14,7 @@ import numpy as np
 from numpyto_common.lowering import _EyeToZerosDiagonal, _ssa_rename_reassigned
 
 
-def test_ssa_rename_rewrites_plain_subscript_fill_target():
+def test_ssa_rename_rewrites_plain_subscript_fill_target() -> None:
     src = "def k(a, out):\n    x = np.copy(a)\n    x = np.zeros((3,))\n    x[0] = 1.0\n    out[0] = x[0]\n"
     tree = ast.parse(src)
     _ssa_rename_reassigned(tree, {"a": ["N"], "out": ["N"]})
@@ -35,7 +35,7 @@ def _apply_eye(expr):
     return ns["X"]
 
 
-def test_eye_lowering_matches_numpy_across_offsets():
+def test_eye_lowering_matches_numpy_across_offsets() -> None:
     for expr, ref in [
         ("np.eye(4)", np.eye(4)),
         ("np.eye(4, k=1)", np.eye(4, k=1)),

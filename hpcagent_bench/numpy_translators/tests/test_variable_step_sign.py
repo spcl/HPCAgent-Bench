@@ -22,7 +22,7 @@ from _native_tu import have_gcc, have_gpp
 _NATIVE = ("c", "cpp", "fortran")
 
 
-def _assert_ok(res):
+def _assert_ok(res) -> None:
     for backend, status in res.items():
         assert status == "ok" or status.startswith("skip"), f"{backend}: {status}"
     assert any(status == "ok" for status in res.values()), f"all skipped (vacuous): {res}"
@@ -42,7 +42,7 @@ def _run(src, ins, n):
     )
 
 
-def test_negative_step_from_a_variable_runs_backwards():
+def test_negative_step_from_a_variable_runs_backwards() -> None:
     # s is -1 only at runtime; a text-sign check sees "s" and picks the forward form.
     src = (
         "import numpy as np\n"
@@ -55,7 +55,7 @@ def test_negative_step_from_a_variable_runs_backwards():
     _assert_ok(_run(src, {"x": np.arange(6, dtype=np.float64)}, 6))
 
 
-def test_negative_step_variable_carries_a_running_value():
+def test_negative_step_variable_carries_a_running_value() -> None:
     # The reverse scan is order-dependent, so a wrong direction or trip count cannot cancel out.
     src = (
         "import numpy as np\n"
@@ -70,7 +70,7 @@ def test_negative_step_variable_carries_a_running_value():
     _assert_ok(_run(src, {"x": np.arange(1, 7, dtype=np.float64)}, 6))
 
 
-def test_positive_step_from_a_variable_still_runs_forwards():
+def test_positive_step_from_a_variable_still_runs_forwards() -> None:
     # The fix must not flip the common case: an unknown-sign step that is POSITIVE at runtime.
     src = (
         "import numpy as np\n"
@@ -83,7 +83,7 @@ def test_positive_step_from_a_variable_still_runs_forwards():
     _assert_ok(_run(src, {"x": np.arange(7, dtype=np.float64)}, 7))
 
 
-def test_literal_negative_step_unaffected():
+def test_literal_negative_step_unaffected() -> None:
     # The statically-known form keeps the plain reverse loop -- guards against a regression there.
     src = (
         "import numpy as np\ndef f(x, out):\n    for i in range(x.shape[0] - 1, -1, -1):\n        out[i] = x[i] * 3.0\n"
@@ -92,7 +92,7 @@ def test_literal_negative_step_unaffected():
 
 
 # --- a runtime-sign loop must not be tagged for OpenMP -------------------------------------------
-def _emit_omp_c(body, shapes, syms, *, cpp=False):
+def _emit_omp_c(body, shapes, syms, *, cpp: bool = False):
     """Emit the PARALLEL C/C++ variant of a one-function kernel."""
     import json
     import pathlib
@@ -112,7 +112,7 @@ def _emit_omp_c(body, shapes, syms, *, cpp=False):
     return (emit_cpp_omp if cpp else emit_c_omp)(kir, fn_name="f")
 
 
-def _compiles_openmp(src, *, cpp=False):
+def _compiles_openmp(src, *, cpp: bool = False):
     import pathlib
     import subprocess
     import tempfile
@@ -138,7 +138,7 @@ _VAR_STEP = (
 
 
 @have_gcc
-def test_variable_step_parallel_c_compiles_under_openmp():
+def test_variable_step_parallel_c_compiles_under_openmp() -> None:
     """A runtime-sign loop is emitted with a ternary controlling predicate, which is NOT an OpenMP
     canonical loop form -- a `#pragma omp parallel for` over it fails with `invalid controlling
     predicate`. The loop must therefore stay serial; it still runs correctly. Regression guard: the
@@ -151,7 +151,7 @@ def test_variable_step_parallel_c_compiles_under_openmp():
 
 
 @have_gpp
-def test_variable_step_parallel_cpp_compiles_under_openmp():
+def test_variable_step_parallel_cpp_compiles_under_openmp() -> None:
     src = _emit_omp_c(_VAR_STEP, {"x": "(n,)", "out": "(n,)"}, {"n": 16}, cpp=True)
     assert "#pragma omp" not in src
     rc, err = _compiles_openmp(src, cpp=True)
@@ -159,7 +159,7 @@ def test_variable_step_parallel_cpp_compiles_under_openmp():
 
 
 @have_gcc
-def test_constant_step_still_parallelises():
+def test_constant_step_still_parallelises() -> None:
     # The fix must not suppress OpenMP on a normal constant-step map.
     src = _emit_omp_c(
         (

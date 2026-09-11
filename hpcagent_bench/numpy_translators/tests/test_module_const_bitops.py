@@ -29,7 +29,7 @@ _CONSTS = (
 )
 
 
-def test_bitops_fold_numerically():
+def test_bitops_fold_numerically() -> None:
     # the folded flag VALUES (``1<<1``==2, ``0xFFFF``==65535, ``A|B``==3) must
     # reproduce bit-exact on every backend (bitwise-on-a-runtime-value is a
     # separate concern -- here the constants are used as plain numbers).
@@ -67,7 +67,7 @@ def _emit(src):
     return emit_c(lower(parse_kernel(npy, d / "bi.json")), fn_name="f")
 
 
-def test_bitops_folded_to_literals_in_emit():
+def test_bitops_folded_to_literals_in_emit() -> None:
     src = _CONSTS + "def f(flags, out):\n out[0] = float(BOTH)\n out[1] = float(CI_DO_COUL)\n"
     c = _emit(src)
     # the flag names must be gone (folded); ``1 << 1`` -> 2, ``A | B`` -> 3.
@@ -75,7 +75,7 @@ def test_bitops_folded_to_literals_in_emit():
     assert "3" in c and "2" in c
 
 
-def test_const_value_recognizes_bit_expressions():
+def test_const_value_recognizes_bit_expressions() -> None:
     # the fold accepts shift / or / and / xor / invert of int literals.
     from numpyto_common.frontend import _inline_module_constants
 

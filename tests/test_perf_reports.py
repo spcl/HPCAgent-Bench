@@ -47,7 +47,7 @@ def _md5(path: pathlib.Path) -> str:
 # --- the knobs -------------------------------------------------------------
 
 
-def test_all_knobs_default_off():
+def test_all_knobs_default_off() -> None:
     """A default run must produce no reports at all."""
     assert perf_reports.enabled("opt_report") is False
     assert perf_reports.enabled("lowered_code") is False
@@ -55,7 +55,7 @@ def test_all_knobs_default_off():
 
 
 @pytest.mark.parametrize("kind", sorted(perf_reports.KINDS))
-def test_knob_is_independently_enabled_by_env(kind, monkeypatch):
+def test_knob_is_independently_enabled_by_env(kind, monkeypatch) -> None:
     """The two capabilities are independent: enabling one must not enable the other."""
     monkeypatch.setenv(f"HPCAGENT_BENCH_PERF_REPORTS_{kind.upper()}", "1")
     assert perf_reports.enabled(kind) is True
@@ -63,7 +63,7 @@ def test_knob_is_independently_enabled_by_env(kind, monkeypatch):
     assert perf_reports.enabled(other) is False
 
 
-def test_unknown_kind_is_rejected():
+def test_unknown_kind_is_rejected() -> None:
     with pytest.raises(KeyError):
         perf_reports.enabled("no_such_report")
 
@@ -71,7 +71,7 @@ def test_unknown_kind_is_rejected():
 # --- the flag table --------------------------------------------------------
 
 
-def test_report_flags_resolve_per_compiler_family():
+def test_report_flags_resolve_per_compiler_family() -> None:
     """One table reaches both families; each gets the channel it actually has."""
     assert report_flags("c") == flags.GCC_OPT_REPORT
     assert report_flags("fortran") == flags.GCC_OPT_REPORT
@@ -80,18 +80,18 @@ def test_report_flags_resolve_per_compiler_family():
     assert "-Rpass" in report_flags("cpp", compiler="clangpp")
 
 
-def test_report_flags_are_empty_when_no_channel_is_wired():
+def test_report_flags_are_empty_when_no_channel_is_wired() -> None:
     """A compiler with no ``report_ref`` reports "not supported" rather than a guessed flag."""
     assert report_flags("cuda", compiler="nvcc") == ""
 
 
-def test_clang_filter_never_matches_every_pass():
+def test_clang_filter_never_matches_every_pass() -> None:
     """``-Rpass=.*`` floods the report with asm-printer noise; the filter must name the vectorizer passes."""
     assert "=.*" not in flags.CLANG_OPT_REPORT
     assert "loop-vectorize" in flags.CLANG_OPT_REPORT
 
 
-def test_report_flags_never_name_a_missing_constant():
+def test_report_flags_never_name_a_missing_constant() -> None:
     """Every ``report_ref`` in the compiler table must name a real :mod:`hpcagent_bench.flags` constant."""
     compilers = cpp_runtime.FRAMEWORK_LANG
     for framework, lang in compilers.items():
@@ -101,7 +101,7 @@ def test_report_flags_never_name_a_missing_constant():
 # --- the writer ------------------------------------------------------------
 
 
-def test_report_path_mirrors_the_benchmark_tree():
+def test_report_path_mirrors_the_benchmark_tree() -> None:
     p = perf_reports.report_path(
         "scientific_computing/map_reduce/arc_distance", "arc_distance", "cc", "default", "lowered_code"
     )
@@ -109,7 +109,7 @@ def test_report_path_mirrors_the_benchmark_tree():
     assert p.name == "arc_distance.cc.default.lowered_code.txt"
 
 
-def test_every_kind_lands_under_its_own_subtree():
+def test_every_kind_lands_under_its_own_subtree() -> None:
     """One root, a subdirectory per kind, and the kind spelled the SAME way in both places.
 
     The previous layout gave ``opt_report`` a second top-level root and wrote it as
@@ -128,13 +128,13 @@ def test_every_kind_lands_under_its_own_subtree():
         assert suffix == f"{kind}.txt", f"{kind} writes {suffix!r}; the suffix must be the kind's name"
 
 
-def test_write_none_means_not_supported_and_writes_nothing(tmp_path, monkeypatch):
+def test_write_none_means_not_supported_and_writes_nothing(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(perf_reports, "REPORTS", tmp_path)
     assert perf_reports.write("a/b", "k", "cc", "default", "opt_report", None) is None
     assert list(tmp_path.rglob("*")) == []
 
 
-def test_write_creates_the_kernel_directory_on_demand(tmp_path, monkeypatch):
+def test_write_creates_the_kernel_directory_on_demand(tmp_path, monkeypatch) -> None:
     """The kernel tree is never materialised up front -- the writer makes only the directory it needs."""
     monkeypatch.setattr(perf_reports, "REPORTS", tmp_path)
     path = perf_reports.write(
@@ -144,7 +144,7 @@ def test_write_creates_the_kernel_directory_on_demand(tmp_path, monkeypatch):
     assert path.parent.is_dir()
 
 
-def test_two_implementations_do_not_overwrite_each_others_report(tmp_path, monkeypatch):
+def test_two_implementations_do_not_overwrite_each_others_report(tmp_path, monkeypatch) -> None:
     """Numba's serial and parallel tracks are separately compiled and timed; must not collapse onto one filename."""
     monkeypatch.setattr(perf_reports, "REPORTS", tmp_path)
     a = perf_reports.write("x", "k", "numba", "nopython-mode", "lowered_code", "SERIAL")
@@ -156,7 +156,7 @@ def test_two_implementations_do_not_overwrite_each_others_report(tmp_path, monke
 # --- the default contract --------------------------------------------------
 
 
-def test_frameworks_without_a_report_answer_not_supported():
+def test_frameworks_without_a_report_answer_not_supported() -> None:
     """``None`` is the default for every hook, so a knob can switch on across a mixed sweep."""
     numpy = generate_framework("numpy")
     assert numpy.opt_report(object(), None) is None
@@ -167,7 +167,7 @@ def test_frameworks_without_a_report_answer_not_supported():
 # --- native: the real report -----------------------------------------------
 
 
-def test_native_opt_report_names_the_vectorized_and_the_refused_loop(backend):
+def test_native_opt_report_names_the_vectorized_and_the_refused_loop(backend) -> None:
     """The report must carry BOTH halves: the width of what vectorized, and the reason for what did not."""
     text = cpp_runtime.opt_report_text(backend, "probe", "cc")
     assert text is not None
@@ -176,20 +176,20 @@ def test_native_opt_report_names_the_vectorized_and_the_refused_loop(backend):
     assert "missed:" in text  # the loop that could not, with its reason
 
 
-def test_native_opt_report_records_the_compile_it_describes(backend):
+def test_native_opt_report_records_the_compile_it_describes(backend) -> None:
     """A report that does not say which flags produced it cannot be read later."""
     text = cpp_runtime.opt_report_text(backend, "probe", "cc")
     assert "-O3" in text and "-march=native" in text
     assert flags.GCC_OPT_REPORT.split()[0] in text
 
 
-def test_native_opt_report_is_none_when_sources_were_never_emitted(tmp_path):
+def test_native_opt_report_is_none_when_sources_were_never_emitted(tmp_path) -> None:
     empty = tmp_path / "cpp_backend"
     empty.mkdir()
     assert cpp_runtime.opt_report_text(empty, "probe", "cc") is None
 
 
-def test_opt_report_does_not_touch_the_timed_library(backend):
+def test_opt_report_does_not_touch_the_timed_library(backend) -> None:
     """THE invariant: the report is a separate compile-only run, so the timed ``.so`` must come out
     byte-identical whether or not reports were switched on."""
     so = cpp_runtime._ensure_built(backend, "probe", "cc")
@@ -201,7 +201,7 @@ def test_opt_report_does_not_touch_the_timed_library(backend):
     assert so.stat().st_mtime_ns == before_mtime, "the report compile relinked the timed library"
 
 
-def test_opt_report_does_not_leave_a_second_copy_of_the_library(backend):
+def test_opt_report_does_not_leave_a_second_copy_of_the_library(backend) -> None:
     """The report path drops the link step; only the real build makes a ``.so``."""
     cpp_runtime.opt_report_text(backend, "probe", "cc")
     assert list(backend.rglob("*.so")) == []
@@ -210,7 +210,7 @@ def test_opt_report_does_not_leave_a_second_copy_of_the_library(backend):
 # --- native: the real disassembly ------------------------------------------
 
 
-def test_native_lowered_code_disassembles_the_timed_library(backend):
+def test_native_lowered_code_disassembles_the_timed_library(backend) -> None:
     so = cpp_runtime._ensure_built(backend, "probe", "cc")
     text = perf_reports.objdump(so)
     assert text is not None
@@ -218,7 +218,7 @@ def test_native_lowered_code_disassembles_the_timed_library(backend):
     assert "<probe_fp64>:" in text  # the kernel symbol, not just the ELF preamble
 
 
-def test_native_lowered_code_shows_the_simd_the_report_claimed(backend):
+def test_native_lowered_code_shows_the_simd_the_report_claimed(backend) -> None:
     """The two capabilities must agree: the report claims a vectorized width, checked against the
     disassembly's real instructions."""
     report = cpp_runtime.opt_report_text(backend, "probe", "cc")
@@ -227,19 +227,19 @@ def test_native_lowered_code_shows_the_simd_the_report_claimed(backend):
     assert "%xmm" in asm or "%ymm" in asm or "%zmm" in asm
 
 
-def test_built_so_never_builds(backend):
+def test_built_so_never_builds(backend) -> None:
     """``lowered_code`` reports on an artifact a timed run made; must not compile one nobody timed."""
     assert cpp_runtime.built_so(backend, "probe", "cc") is None
     cpp_runtime._ensure_built(backend, "probe", "cc")
     assert cpp_runtime.built_so(backend, "probe", "cc") is not None
 
 
-def test_objdump_of_a_missing_library_is_not_supported(tmp_path):
+def test_objdump_of_a_missing_library_is_not_supported(tmp_path) -> None:
     """A diagnostic degrades to "no report"; it never takes down the run."""
     assert perf_reports.objdump(tmp_path / "nope.so") is None
 
 
-def test_objdump_of_a_non_object_is_not_supported(tmp_path):
+def test_objdump_of_a_non_object_is_not_supported(tmp_path) -> None:
     junk = tmp_path / "junk.so"
     junk.write_text("not an ELF file")
     assert perf_reports.objdump(junk) is None
@@ -248,7 +248,7 @@ def test_objdump_of_a_non_object_is_not_supported(tmp_path):
 # --- native: the auto-generated input --------------------------------------
 
 
-def test_generated_source_concatenates_both_precision_sources(backend):
+def test_generated_source_concatenates_both_precision_sources(backend) -> None:
     """The dump must carry every TU that was compiled, each under its own banner, so the exact input
     that was built and timed is recoverable."""
     text = cpp_runtime.generated_source_text(backend, "probe", "cc")
@@ -257,19 +257,19 @@ def test_generated_source_concatenates_both_precision_sources(backend):
     assert "void probe_fp64" in text and "void probe_fp32" in text
 
 
-def test_generated_source_is_none_when_sources_were_never_emitted(tmp_path):
+def test_generated_source_is_none_when_sources_were_never_emitted(tmp_path) -> None:
     empty = tmp_path / "cpp_backend"
     empty.mkdir()
     assert cpp_runtime.generated_source_text(empty, "probe", "cc") is None
 
 
-def test_generated_source_only_reads_never_builds(backend):
+def test_generated_source_only_reads_never_builds(backend) -> None:
     """Dumping the input is a pure read of files a timed run emitted; it must not compile a library."""
     cpp_runtime.generated_source_text(backend, "probe", "cc")
     assert list(backend.rglob("*.so")) == []
 
 
-def test_native_framework_generated_source_hook_dumps_the_input(backend, monkeypatch):
+def test_native_framework_generated_source_hook_dumps_the_input(backend, monkeypatch) -> None:
     """The NativeFramework hook resolves its own cpp_backend + base and returns the emitted source."""
     cc = generate_framework("cc")
     monkeypatch.setattr(cc, "_cpp_backend", lambda bench: backend)
@@ -281,14 +281,14 @@ def test_native_framework_generated_source_hook_dumps_the_input(backend, monkeyp
 # --- numba -----------------------------------------------------------------
 
 
-def test_numba_lowered_code_dumps_real_instructions():
+def test_numba_lowered_code_dumps_real_instructions() -> None:
     """Numba never writes a ``.so``, so it answers with its own asm; compiled HERE (not cache-loaded)
     so the JIT has something to report."""
     numba = import_or_skip("numba")
     numpy = pytest.importorskip("numpy")
 
     @numba.njit  # NOT cache=True: this must be compiled in-process to have asm
-    def scale(out, a):
+    def scale(out, a) -> None:
         for i in range(a.shape[0]):
             out[i] = a[i] * 2.0 + 1.0
 
@@ -299,13 +299,13 @@ def test_numba_lowered_code_dumps_real_instructions():
     assert "%xmm" in text or "%ymm" in text or "%zmm" in text  # real instructions, not a stub
 
 
-def test_numba_hooks_decline_a_plain_python_function():
+def test_numba_hooks_decline_a_plain_python_function() -> None:
     plain = generate_framework("numba")
     assert plain.opt_report(lambda x: x, None) is None
     assert plain.lowered_code(lambda x: x, None) is None
 
 
-def test_numba_reports_nothing_for_a_cache_restored_function(tmp_path, monkeypatch):
+def test_numba_reports_nothing_for_a_cache_restored_function(tmp_path, monkeypatch) -> None:
     """A cache hit restores executable code with no compile-time by-products: ``inspect_asm`` returns
     an instruction-free stub rather than raising, so this must answer "not supported" instead."""
     numba = import_or_skip("numba")

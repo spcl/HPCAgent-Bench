@@ -52,37 +52,37 @@ def _count_for_loops(stmts) -> int:
 # --------------------------------------------------------------------------- #
 
 
-def test_read_axis_none_no_keepdims():
+def test_read_axis_none_no_keepdims() -> None:
     args, kws = _call_args("np.sum(arr)")
     assert _read_axis_keepdims(args, kws) == (None, False)
 
 
-def test_read_axis_int_positive():
+def test_read_axis_int_positive() -> None:
     args, kws = _call_args("np.sum(arr, axis=2)")
     assert _read_axis_keepdims(args, kws) == ([2], False)
 
 
-def test_read_axis_int_negative_unary():
+def test_read_axis_int_negative_unary() -> None:
     args, kws = _call_args("np.sum(arr, axis=-1)")
     assert _read_axis_keepdims(args, kws) == ([-1], False)
 
 
-def test_read_axis_tuple_form():
+def test_read_axis_tuple_form() -> None:
     args, kws = _call_args("np.sum(arr, axis=(1, 2, 3))")
     assert _read_axis_keepdims(args, kws) == ([1, 2, 3], False)
 
 
-def test_read_axis_list_form_with_keepdims():
+def test_read_axis_list_form_with_keepdims() -> None:
     args, kws = _call_args("np.sum(arr, axis=[0, 1], keepdims=True)")
     assert _read_axis_keepdims(args, kws) == ([0, 1], True)
 
 
-def test_read_axis_positional_int():
+def test_read_axis_positional_int() -> None:
     args, kws = _call_args("np.sum(arr, 1)")
     assert _read_axis_keepdims(args, kws) == ([1], False)
 
 
-def test_read_axis_positional_tuple():
+def test_read_axis_positional_tuple() -> None:
     args, kws = _call_args("np.sum(arr, (0, 2))")
     assert _read_axis_keepdims(args, kws) == ([0, 2], False)
 
@@ -92,7 +92,7 @@ def test_read_axis_positional_tuple():
 # --------------------------------------------------------------------------- #
 
 
-def test_sum_axis_0_emits_two_loops_for_2d():
+def test_sum_axis_0_emits_two_loops_for_2d() -> None:
     """``np.sum(arr, axis=0)`` with arr:(N, M) -> outer over M
     (kept axis), inner over N (reduction axis)."""
     args, kws = _call_args("np.sum(arr, axis=0)")
@@ -100,7 +100,7 @@ def test_sum_axis_0_emits_two_loops_for_2d():
     assert _count_for_loops(stmts) == 2
 
 
-def test_sum_axis_1_emits_two_loops_for_3d():
+def test_sum_axis_1_emits_two_loops_for_3d() -> None:
     args, kws = _call_args("np.sum(arr, axis=1)")
     stmts = expand_sum(_target("out"), args, {"arr": ("N", "M", "K")}, kws)
     # 3-D - 1 reduction axis = 2 outer + 1 inner = 3 loops.
@@ -112,7 +112,7 @@ def test_sum_axis_1_emits_two_loops_for_3d():
 # --------------------------------------------------------------------------- #
 
 
-def test_sum_axis_tuple_2_of_4_emits_correct_loop_count():
+def test_sum_axis_tuple_2_of_4_emits_correct_loop_count() -> None:
     """``np.sum(arr, axis=(1, 2))`` on a 4-D array -> 2 outer kept
     axes + 2 inner reduction axes = 4 loops total."""
     args, kws = _call_args("np.sum(arr, axis=(1, 2))")
@@ -120,7 +120,7 @@ def test_sum_axis_tuple_2_of_4_emits_correct_loop_count():
     assert _count_for_loops(stmts) == 4
 
 
-def test_sum_axis_tuple_3_of_4_collapses_to_one_kept_axis():
+def test_sum_axis_tuple_3_of_4_collapses_to_one_kept_axis() -> None:
     """conv2d-style: ``np.sum(arr, axis=(1, 2, 3))`` on a 4-D array
     keeps only axis 0 -> 1 outer loop + 3 inner reduction loops."""
     args, kws = _call_args("np.sum(arr, axis=(1, 2, 3))")
@@ -128,7 +128,7 @@ def test_sum_axis_tuple_3_of_4_collapses_to_one_kept_axis():
     assert _count_for_loops(stmts) == 4
 
 
-def test_sum_axis_tuple_all_axes_reduces_to_scalar():
+def test_sum_axis_tuple_all_axes_reduces_to_scalar() -> None:
     """``np.sum(arr, axis=(0, 1))`` on a 2-D array reduces every axis
     and emits the same code as ``axis=None`` (just two for-loops, no
     Subscripts on the target since out is scalar)."""
@@ -137,7 +137,7 @@ def test_sum_axis_tuple_all_axes_reduces_to_scalar():
     assert _count_for_loops(stmts) == 2
 
 
-def test_sum_axis_tuple_with_keepdims_writes_to_const_zero():
+def test_sum_axis_tuple_with_keepdims_writes_to_const_zero() -> None:
     """With keepdims=True the target subscript fills the reduced
     axes with constant 0. Structural check: a Subscript whose slice
     contains ``Constant(0)`` shows up on the LHS."""
@@ -155,14 +155,14 @@ def test_sum_axis_tuple_with_keepdims_writes_to_const_zero():
     assert has_const_zero
 
 
-def test_sum_axis_list_equivalent_to_tuple():
+def test_sum_axis_list_equivalent_to_tuple() -> None:
     """``axis=[1, 2]`` parses the same as ``axis=(1, 2)``."""
     args, kws = _call_args("np.sum(arr, axis=[1, 2])")
     stmts = expand_sum(_target("out"), args, {"arr": ("N", "H", "W", "C")}, kws)
     assert _count_for_loops(stmts) == 4
 
 
-def test_sum_axis_tuple_with_negative_axis():
+def test_sum_axis_tuple_with_negative_axis() -> None:
     """``axis=(-1,)`` resolves against the operand rank."""
     args, kws = _call_args("np.sum(arr, axis=(-1,))")
     stmts = expand_sum(_target("out"), args, {"arr": ("N", "M")}, kws)
@@ -170,7 +170,7 @@ def test_sum_axis_tuple_with_negative_axis():
     assert _count_for_loops(stmts) == 2
 
 
-def test_sum_axis_tuple_rejects_duplicates():
+def test_sum_axis_tuple_rejects_duplicates() -> None:
     """``np.sum(arr, axis=(1, 1))`` is a user error -- numpy
     rejects this with ValueError; the expander raises
     NotImplementedError so the outer fallback path can take over."""
@@ -189,7 +189,7 @@ def _reshape_to_index(src: str, ranks: Dict[str, int]) -> str:
     return ast.unparse(ast.fix_missing_locations(tree))
 
 
-def test_nested_expand_dims_is_one_subscript():
+def test_nested_expand_dims_is_one_subscript() -> None:
     """Two ``expand_dims`` merge into ONE newaxis subscript, not ``z[:, None, :][:, None, :, :]``.
 
     The chain is what broke the reduction over it: ``_iter_extent_of`` sizes a subscript of a
@@ -199,17 +199,17 @@ def test_nested_expand_dims_is_one_subscript():
     assert _reshape_to_index("np.expand_dims(np.expand_dims(z, axis=1), axis=1)", {"z": 2}) == "z[:, None, None, :]"
 
 
-def test_nested_squeeze_is_one_subscript():
+def test_nested_squeeze_is_one_subscript() -> None:
     """The undo side merges the same way: two ``squeeze`` calls index one subscript."""
     assert _reshape_to_index("np.squeeze(np.squeeze(t, axis=1), axis=1)", {"t": 4}) == "t[:, 0, 0, :]"
 
 
-def test_expand_dims_of_a_partial_slice_is_left_chained():
+def test_expand_dims_of_a_partial_slice_is_left_chained() -> None:
     """A partial slice keeps an offset an outer index would drop, so it is NOT merged."""
     assert _reshape_to_index("np.expand_dims(a[1:3], axis=0)", {"a": 1}) == "a[1:3][None, :]"
 
 
-def test_mean_over_nested_expand_dims():
+def test_mean_over_nested_expand_dims() -> None:
     """``np.mean(np.expand_dims(np.expand_dims(z, 1), 1), axis=(2, 3), keepdims=True)`` --
     the instance-norm operand shape, reduced over a tuple axis."""
     z = np.linspace(-3.0, 5.0, 12).reshape(3, 4)
@@ -232,7 +232,7 @@ def test_mean_over_nested_expand_dims():
     assert all(v == "ok" or v.startswith("skip") for v in res.values()), res
 
 
-def test_instance_norm_over_expanded_operand():
+def test_instance_norm_over_expanded_operand() -> None:
     """The whole idiom the ML corpus writes: mean + var over the expanded axes, then squeeze back.
 
     ``np.var`` shares the reduction operand path with ``np.mean``, and the division by the
@@ -270,7 +270,7 @@ def _full_sum_stmts(shape):
     return expand_sum(_target("s"), args, {"a": shape}, kwargs=kws, local_dtypes={})
 
 
-def test_full_float_sum_is_one_chain():
+def test_full_float_sum_is_one_chain() -> None:
     txt = ast.unparse(ast.fix_missing_locations(ast.Module(body=_full_sum_stmts(("N",)), type_ignores=[])))
     # No block-index division: it is what pet reads as a data-dependent bound (POLYCC-008), and
     # the block accumulator is the scop-external scalar pet then drops (POLYCC-009).
@@ -279,14 +279,14 @@ def test_full_float_sum_is_one_chain():
     assert "128" not in txt, txt
 
 
-def test_full_sum_over_two_axes_is_a_plain_nest():
+def test_full_sum_over_two_axes_is_a_plain_nest() -> None:
     txt = ast.unparse(ast.fix_missing_locations(ast.Module(body=_full_sum_stmts(("M", "N")), type_ignores=[])))
     assert "range(M)" in txt, txt
     assert "range(N)" in txt, txt
     assert "//" not in txt, txt
 
 
-def test_integer_sum_keeps_an_integer_seed():
+def test_integer_sum_keeps_an_integer_seed() -> None:
     args, kws = _call_args("np.sum(a)")
     stmts = expand_sum(_target("s"), args, {"a": ("N",)}, kwargs=kws, local_dtypes={"a": "int64"})
     txt = ast.unparse(ast.fix_missing_locations(ast.Module(body=stmts, type_ignores=[])))
@@ -294,7 +294,7 @@ def test_integer_sum_keeps_an_integer_seed():
     assert "range(N)" in txt, txt
 
 
-def test_axis_sum_keeps_its_per_element_loop():
+def test_axis_sum_keeps_its_per_element_loop() -> None:
     args, kws = _call_args("np.sum(a, axis=1)")
     stmts = expand_sum(_target("s"), args, {"a": ("M", "N")}, kwargs=kws, local_dtypes={})
     txt = ast.unparse(ast.fix_missing_locations(ast.Module(body=stmts, type_ignores=[])))
@@ -303,7 +303,7 @@ def test_axis_sum_keeps_its_per_element_loop():
     assert "//" not in txt, txt
 
 
-def test_sum_adds_initial_exactly_once():
+def test_sum_adds_initial_exactly_once() -> None:
     """``initial=`` seeds the WHOLE sum, not one seed per partial accumulator.
 
     The blocked lowering this replaced once initialised every block accumulator to the reduction's
@@ -327,7 +327,7 @@ def test_sum_adds_initial_exactly_once():
     assert any(v == "ok" for v in res.values()), f"no backend ran it: {res}"
 
 
-def test_large_fp32_sum_stays_within_the_reassociation_band():
+def test_large_fp32_sum_stays_within_the_reassociation_band() -> None:
     """A long float32 sum against numpy's pairwise one, at a REASSOCIATION tolerance.
 
     Reassociating a reduction is sanctioned, so the emitted single chain and numpy's pairwise sum

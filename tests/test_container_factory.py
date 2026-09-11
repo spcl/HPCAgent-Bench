@@ -20,7 +20,7 @@ def clean_backend_env(monkeypatch):
     yield
 
 
-def test_load_backends_lists_every_backend():
+def test_load_backends_lists_every_backend() -> None:
     """Two OCI implementations that consume the shipped image directly, the SIF conversion
     target, the Alps container engine, and the no-container path."""
     spellings, passthrough = containers.load_backends()
@@ -31,7 +31,7 @@ def test_load_backends_lists_every_backend():
     assert spellings["docker"].verb == ("run", "--rm", "--network", "host")
 
 
-def test_oci_is_a_standard_not_a_program():
+def test_oci_is_a_standard_not_a_program() -> None:
     """docker and podman are two IMPLEMENTATIONS of one standard: same verb, same
     bind/workdir/env flags, same image form. Only the NVIDIA flag and the rootless property
     differ, which is why `oci` is an alias over both rather than a runtime of its own. Nothing is
@@ -54,7 +54,7 @@ def test_oci_is_a_standard_not_a_program():
     assert podman.rootless and not docker.rootless  # and the one property that decides defaults
 
 
-def test_a_family_name_resolves_to_whichever_flavour_is_installed(monkeypatch):
+def test_a_family_name_resolves_to_whichever_flavour_is_installed(monkeypatch) -> None:
     """Selecting `oci` says WHICH INTERFACE, not which program. It must ask the machine."""
     monkeypatch.setattr(containers.shutil, "which", lambda name: "/usr/bin/" + name if name == "docker" else None)
     assert containers.resolve_backend("oci") == "docker"
@@ -68,13 +68,13 @@ def test_a_family_name_resolves_to_whichever_flavour_is_installed(monkeypatch):
     assert containers.resolve_backend("ce") == "ce"
 
 
-def test_every_family_has_at_least_one_runtime():
+def test_every_family_has_at_least_one_runtime() -> None:
     """A family nobody implements would resolve to nothing and fail far from its cause."""
     for family in containers.FAMILIES:
         assert containers.family_members(family), family
 
 
-def test_the_default_backend_is_rootless_and_daemonless():
+def test_the_default_backend_is_rootless_and_daemonless() -> None:
     """The fallback has to be something an unprivileged user can actually invoke. docker needs a
     running daemon and a root-equivalent group, which no HPC login node grants; apptainer and ce
     need the OCI image converted first. Only podman is both OCI-native and rootless."""
@@ -85,7 +85,7 @@ def test_the_default_backend_is_rootless_and_daemonless():
     assert spellings["ce"].image_form == "edf"
 
 
-def test_ce_is_a_different_shape_of_backend_not_just_different_flags():
+def test_ce_is_a_different_shape_of_backend_not_just_different_flags() -> None:
     """Alps' container engine has NO wrapper argv: the image comes from an EDF on the srun line
     and the command runs unwrapped. Synthesising a wrapper it does not have would emit an argv
     that cannot run, so local_run_command must hand the command back untouched."""
@@ -96,7 +96,7 @@ def test_ce_is_a_different_shape_of_backend_not_just_different_flags():
     assert all(spellings[name].kind == "exec" for name in containers.EXEC_BACKENDS)
 
 
-def test_native_is_a_supported_backend_not_a_missing_one():
+def test_native_is_a_supported_backend_not_a_missing_one() -> None:
     """A site with no container runtime still has to run. Saying so as a backend keeps that path
     on the same seam as the others; it consumes no image, so asking it for one is an error."""
     spellings, _ = containers.load_backends()
@@ -108,7 +108,7 @@ def test_native_is_a_supported_backend_not_a_missing_one():
         containers.default_image("native")
 
 
-def test_a_sif_is_never_the_distributed_artifact():
+def test_a_sif_is_never_the_distributed_artifact() -> None:
     """An OCI image converts INTO a SIF or a SquashFS and neither converts back, so shipping a
     converted form would strand every user of the other runtimes. Exactly one backend family
     consumes the shipped image unconverted, and the shipped image is OCI."""
@@ -119,7 +119,7 @@ def test_a_sif_is_never_the_distributed_artifact():
     assert spellings["ce"].image_form == "edf"
 
 
-def test_ce_contributes_an_srun_flag_and_refuses_to_be_silent_without_one():
+def test_ce_contributes_an_srun_flag_and_refuses_to_be_silent_without_one() -> None:
     """On Alps a step without --environment runs OUTSIDE the image, on the bare node, which
     looks like a broken environment rather than a missing flag. So a missing EDF raises."""
     assert containers.srun_container_flags("ce", edf="/scratch/loop_level_reasoning.toml") == [
@@ -130,14 +130,14 @@ def test_ce_contributes_an_srun_flag_and_refuses_to_be_silent_without_one():
         containers.srun_container_flags("ce")
 
 
-def test_ce_has_no_image_reference_of_its_own():
+def test_ce_has_no_image_reference_of_its_own() -> None:
     """Its EDF names the image, so asking this factory for one is a category error, not a
     default to invent."""
     with pytest.raises(ValueError, match="no image reference"):
         containers.default_image("ce", "cpu")
 
 
-def test_detect_backend_probes_path_rather_than_assuming(monkeypatch):
+def test_detect_backend_probes_path_rather_than_assuming(monkeypatch) -> None:
     """A login node has podman and no dockerd; a laptop often has the reverse. Detection asks
     the machine instead of trusting the constant."""
     monkeypatch.setattr(containers.shutil, "which", lambda name: "/usr/bin/" + name if name == "docker" else None)
@@ -146,7 +146,7 @@ def test_detect_backend_probes_path_rather_than_assuming(monkeypatch):
     assert containers.detect_backend() is None
 
 
-def test_resolve_backend_precedence(monkeypatch):
+def test_resolve_backend_precedence(monkeypatch) -> None:
     # PATH is pinned so the family fallback is deterministic rather than a property of whichever
     # runtime this developer happens to have installed.
     monkeypatch.setattr(containers.shutil, "which", lambda name: "/usr/bin/" + name)
@@ -158,14 +158,14 @@ def test_resolve_backend_precedence(monkeypatch):
     assert containers.resolve_backend() == "docker"
 
 
-def test_resolve_backend_ignores_the_legacy_bash_var(monkeypatch):
+def test_resolve_backend_ignores_the_legacy_bash_var(monkeypatch) -> None:
     # $HPCAGENT_BENCH_CONTAINER_RUNTIME is the shell launcher's own knob; only $HPCAGENT_BENCH_RUNTIME_BACKEND is shared.
     monkeypatch.setattr(containers.shutil, "which", lambda name: "/usr/bin/" + name)
     monkeypatch.setenv("HPCAGENT_BENCH_CONTAINER_RUNTIME", "apptainer")
     assert containers.resolve_backend() == "docker"  # config's `oci`, not the bash-only var
 
 
-def test_resolve_backend_rejects_unknown():
+def test_resolve_backend_rejects_unknown() -> None:
     # "singularity" is a Harbor PROVIDER name, not a backend this factory spells (apptainer is);
     # neither it nor an unsupported runtime may silently resolve to a neighbouring one.
     for dropped in ("singularity", "udocker", "enroot", "shifter"):
@@ -173,7 +173,7 @@ def test_resolve_backend_rejects_unknown():
             containers.resolve_backend(dropped)
 
 
-def test_local_run_command_apptainer_cpu():
+def test_local_run_command_apptainer_cpu() -> None:
     argv = containers.local_run_command(
         ["python", "-m", "hpcagent_bench.cli", "agent"], backend="apptainer", hardware="cpu", repo_root="/repo"
     )
@@ -194,7 +194,7 @@ def test_local_run_command_apptainer_cpu():
     ]
 
 
-def test_local_run_command_podman_nvidia_gpu_tokens():
+def test_local_run_command_podman_nvidia_gpu_tokens() -> None:
     argv = containers.local_run_command(["run"], backend="podman", hardware="nvidia", repo_root="/r")
     # podman run --rm --network host --device nvidia.com/gpu=all ...
     assert argv[:5] == ["podman", "run", "--rm", "--network", "host"]
@@ -202,18 +202,18 @@ def test_local_run_command_podman_nvidia_gpu_tokens():
     assert argv[-2:] == ["hpcagent_bench:nvidia", "run"]
 
 
-def test_local_run_command_podman_amd_gpu_tokens():
+def test_local_run_command_podman_amd_gpu_tokens() -> None:
     argv = containers.local_run_command(["x"], backend="podman", hardware="amd", repo_root="/r")
     assert "/dev/kfd" in argv and "--group-add" in argv and "keep-groups" in argv
 
 
-def test_local_run_command_rejects_dropped_backend():
+def test_local_run_command_rejects_dropped_backend() -> None:
     for dropped in ("singularity", "udocker", "enroot", "shifter"):
         with pytest.raises(ValueError):
             containers.local_run_command(["x"], backend=dropped)
 
 
-def test_local_run_command_docker_nvidia_uses_the_docker_gpu_spelling():
+def test_local_run_command_docker_nvidia_uses_the_docker_gpu_spelling() -> None:
     """docker and podman differ on exactly one thing that matters here: the NVIDIA flag."""
     argv = containers.local_run_command(["run"], backend="docker", hardware="nvidia", repo_root="/r")
     assert argv[:5] == ["docker", "run", "--rm", "--network", "host"]
@@ -222,7 +222,7 @@ def test_local_run_command_docker_nvidia_uses_the_docker_gpu_spelling():
     assert argv[-2:] == ["hpcagent_bench:nvidia", "run"]
 
 
-def test_harbor_provider_names_docker_and_singularity():
+def test_harbor_provider_names_docker_and_singularity() -> None:
     """Harbor drives docker and singularity. podman and ce have no provider, so they must raise
     rather than emit one Harbor would reject."""
     assert containers.harbor_env_for("docker") == "docker"
@@ -232,7 +232,7 @@ def test_harbor_provider_names_docker_and_singularity():
             containers.harbor_env_for(without)
 
 
-def test_default_image_sif_tag_and_overrides(monkeypatch):
+def test_default_image_sif_tag_and_overrides(monkeypatch) -> None:
     assert containers.default_image("apptainer", "cpu", repo_root="/r") == "/r/hpcagent_bench-cpu.sif"
     assert containers.default_image("podman", "nvidia") == "hpcagent_bench:nvidia"
     monkeypatch.setenv("HPCAGENT_BENCH_SIF", "/scratch/my.sif")
@@ -241,7 +241,7 @@ def test_default_image_sif_tag_and_overrides(monkeypatch):
     assert containers.default_image("podman", "cpu") == "reg/img:tag"
 
 
-def test_collect_env_order_is_pinned(monkeypatch):
+def test_collect_env_order_is_pinned(monkeypatch) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk")  # a passthrough (non-HPCAGENT_BENCH) var
     monkeypatch.setenv("HPCAGENT_BENCH_ZED", "z")  # dynamic HPCAGENT_BENCH_*, sorts last
     monkeypatch.setenv("HPCAGENT_BENCH_ABC", "a")  # dynamic HPCAGENT_BENCH_*, sorts before ZED
@@ -253,13 +253,13 @@ def test_collect_env_order_is_pinned(monkeypatch):
     assert keys.count("HPCAGENT_BENCH_IMAGE") == 1  # no duplicate
 
 
-def test_collect_env_rejects_a_newline_value(monkeypatch):
+def test_collect_env_rejects_a_newline_value(monkeypatch) -> None:
     monkeypatch.setenv("HPCAGENT_BENCH_BAD", "line1\nline2")
     with pytest.raises(ValueError):
         containers.collect_env("cpu")
 
 
-def test_harbor_env_for_maps_and_raises():
+def test_harbor_env_for_maps_and_raises() -> None:
     assert containers.harbor_env_for("apptainer") == "singularity"
     with pytest.raises(ValueError):
         containers.harbor_env_for("podman")  # podman is launched directly, not via Harbor
@@ -293,7 +293,7 @@ def _stub_installer(monkeypatch, bash_returncodes, curl_error=None):
     return calls, sleeps
 
 
-def test_install_apptainer_retries_a_transient_mirror_failure(monkeypatch):
+def test_install_apptainer_retries_a_transient_mirror_failure(monkeypatch) -> None:
     """A mirror blip is retried in a FRESH process; upstream's own loop cannot recover from this."""
     calls, sleeps = _stub_installer(monkeypatch, bash_returncodes=[2, 2, 0])
     assert containers.install_apptainer("/tmp/apptainer-prefix", attempts=4) == 0
@@ -301,7 +301,7 @@ def test_install_apptainer_retries_a_transient_mirror_failure(monkeypatch):
     assert sleeps == [5, 10], "backoff must grow, and must NOT sleep after the attempt that succeeded"
 
 
-def test_install_apptainer_gives_up_and_reports_the_installer_returncode(monkeypatch):
+def test_install_apptainer_gives_up_and_reports_the_installer_returncode(monkeypatch) -> None:
     """Exhausting the attempts still surfaces the real failure -- never a false success."""
     calls, sleeps = _stub_installer(monkeypatch, bash_returncodes=[2, 2, 2])
     assert containers.install_apptainer("/tmp/apptainer-prefix", attempts=3) == 2
@@ -309,14 +309,14 @@ def test_install_apptainer_gives_up_and_reports_the_installer_returncode(monkeyp
     assert sleeps == [5, 10], "no trailing sleep after the final attempt"
 
 
-def test_install_apptainer_retries_a_failed_installer_download(monkeypatch):
+def test_install_apptainer_retries_a_failed_installer_download(monkeypatch) -> None:
     """The installer download is live-network too, so a curl failure retries rather than raising."""
     calls, _ = _stub_installer(monkeypatch, bash_returncodes=[0], curl_error=6)
     assert containers.install_apptainer("/tmp/apptainer-prefix", attempts=3) == 0
     assert calls.count("curl") == 2, "the failed download must be re-fetched, not raised to the caller"
 
 
-def test_install_apptainer_succeeds_first_try_without_sleeping(monkeypatch):
+def test_install_apptainer_succeeds_first_try_without_sleeping(monkeypatch) -> None:
     """The happy path must not pay any backoff (guards against an off-by-one in the loop)."""
     calls, sleeps = _stub_installer(monkeypatch, bash_returncodes=[0])
     assert containers.install_apptainer("/tmp/apptainer-prefix") == 0
@@ -324,7 +324,7 @@ def test_install_apptainer_succeeds_first_try_without_sleeping(monkeypatch):
     assert sleeps == []
 
 
-def test_install_apptainer_clears_a_partial_tree_between_attempts(monkeypatch, tmp_path):
+def test_install_apptainer_clears_a_partial_tree_between_attempts(monkeypatch, tmp_path) -> None:
     """A failed attempt's leftovers must be gone before the retry runs, or upstream hard-refuses on retry."""
     prefix = tmp_path / "apptainer"
     prefix.mkdir()
@@ -347,7 +347,7 @@ def test_install_apptainer_clears_a_partial_tree_between_attempts(monkeypatch, t
     )
 
 
-def test_clean_partial_install_never_touches_a_preexisting_path(tmp_path):
+def test_clean_partial_install_never_touches_a_preexisting_path(tmp_path) -> None:
     """Only paths the attempt created may be removed; `prefix` is caller-supplied (often ~/.local)."""
     prefix = tmp_path / "local"
     (prefix / "share").mkdir(parents=True)
@@ -362,12 +362,12 @@ def test_clean_partial_install_never_touches_a_preexisting_path(tmp_path):
     assert (prefix / "share" / "user_data.txt").read_text() == "do not delete me"
 
 
-def test_clean_partial_install_tolerates_a_missing_prefix(tmp_path):
+def test_clean_partial_install_tolerates_a_missing_prefix(tmp_path) -> None:
     """The very first attempt can fail before the prefix exists at all."""
     containers.clean_partial_install(str(tmp_path / "never-created"), set())
 
 
-def test_ce_stays_its_own_family_even_though_it_is_podman_underneath():
+def test_ce_stays_its_own_family_even_though_it_is_podman_underneath() -> None:
     """CSCS Alps' container engine is podman with SquashFS layers and Cray-tuned OCI hooks, so on
     runtime alone it belongs in the ``oci`` family. It is kept separate on purpose: ``oci`` is
     what a user selects to mean "whatever this machine has", and it must never resolve to the one
@@ -382,7 +382,7 @@ def test_ce_stays_its_own_family_even_though_it_is_podman_underneath():
     assert containers.resolve_backend("oci") in containers.family_members("oci")
 
 
-def test_the_alps_script_reads_the_ce_flag_from_the_spelling_file():
+def test_the_alps_script_reads_the_ce_flag_from_the_spelling_file() -> None:
     """``--environment`` is declared once, in container_backends.txt. The Alps submission script
     derives it from there rather than spelling it again, so a change to how CE is invoked cannot
     leave the cluster path behind."""

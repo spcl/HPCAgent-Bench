@@ -76,7 +76,7 @@ def declared_functions() -> list:
 # --- Config guards: no toolchain needed, so they run in every job -----------------------
 
 
-def test_the_vecmath_header_ships_with_the_package():
+def test_the_vecmath_header_ships_with_the_package() -> None:
     """flags.py -include's this path on every gcc/g++ compile; pyproject + MANIFEST.in must list it."""
     assert flags.VECMATH_H.is_file(), f"{flags.VECMATH_H} is missing"
     root = pathlib.Path(flags.__file__).resolve().parents[1]
@@ -121,7 +121,7 @@ VECLIB_ROUTE = {
 }
 
 
-def test_every_cpu_baseline_is_classified():
+def test_every_cpu_baseline_is_classified() -> None:
     """A new CPU baseline must declare how it reaches libmvec. Without this the guard below only
     checks the constants someone remembered to list, which is exactly how the gaps survived."""
     declared = {name for name in vars(flags) if name.endswith("_BASELINE") or name.startswith("CPU_BASELINE_")}
@@ -139,7 +139,7 @@ LINUX_ONLY = pytest.mark.skipif(not osinfo.IS_LINUX, reason="libmvec is glibc-on
 
 
 @pytest.mark.parametrize("name", sorted(n for n, route in VECLIB_ROUTE.items() if route in ("header", "flag")))
-def test_every_cpu_baseline_reaches_libmvec(name):
+def test_every_cpu_baseline_reaches_libmvec(name) -> None:
     """The point of the whole file: no CPU baseline may silently lack the vector libm while another
     has it, or the compiler axis measures libmvec instead of the compiler."""
     baseline = vars(flags)[name]
@@ -154,7 +154,7 @@ def test_every_cpu_baseline_reaches_libmvec(name):
 
 
 @pytest.mark.parametrize("name", sorted(n for n, route in VECLIB_ROUTE.items() if route == "block"))
-def test_a_block_routed_baseline_declares_its_veclib_ref(name):
+def test_a_block_routed_baseline_declares_its_veclib_ref(name) -> None:
     """A ``block``-routed baseline carries no knob in the constant, so the knob must be declared by
     every compilers.yaml block that uses it -- otherwise the route is a comment, not a flag."""
     users = [b for b in _load_compilers().values() if b.get("baseline_ref") == name]
@@ -165,7 +165,7 @@ def test_a_block_routed_baseline_declares_its_veclib_ref(name):
         assert ref in vars(flags), f"veclib_ref {ref!r} is not a constant in hpcagent_bench.flags"
 
 
-def test_the_fortran_baseline_does_not_carry_the_c_header():
+def test_the_fortran_baseline_does_not_carry_the_c_header() -> None:
     """gfortran rejects a C header (a warning on every compile, fatal under -Werror); it gets libmvec
     from glibc's Fortran directives instead (asserted for real below)."""
     assert "-include" not in flags.CPU_BASELINE_GFORTRAN
@@ -173,14 +173,14 @@ def test_the_fortran_baseline_does_not_carry_the_c_header():
 
 
 @pytest.mark.parametrize("block", ["gfortran", "mpifort"])
-def test_fortran_compilers_use_the_fortran_baseline(block):
+def test_fortran_compilers_use_the_fortran_baseline(block) -> None:
     """Both gfortran blocks must name CPU_BASELINE_GFORTRAN; mpifort wraps gfortran and is easy to forget."""
     compilers = _load_compilers()
     assert compilers[block]["baseline_ref"] == "CPU_BASELINE_GFORTRAN"
 
 
 @LINUX_ONLY
-def test_the_header_declares_nothing_libmvec_does_not_export():
+def test_the_header_declares_nothing_libmvec_does_not_export() -> None:
     """Declaring a function libmvec does not export makes every kernel using it fail to link; assert it
     here, where the message says which function, instead of mid-build."""
     libmvec = ctypes.util.find_library("mvec")
@@ -203,7 +203,7 @@ def test_the_header_declares_nothing_libmvec_does_not_export():
 
 
 @LINUX_ONLY
-def test_gcc_vectorizes_libm_at_the_baseline(tmp_path):
+def test_gcc_vectorizes_libm_at_the_baseline(tmp_path) -> None:
     """The regression this file exists for: before the header, gcc called scalar libm in a loop while
     clang vectorized the same source."""
     assert shutil.which("gcc"), "gcc is required to build native C kernels"
@@ -214,7 +214,7 @@ def test_gcc_vectorizes_libm_at_the_baseline(tmp_path):
 
 
 @LINUX_ONLY
-def test_gxx_vectorizes_libm_at_the_baseline(tmp_path):
+def test_gxx_vectorizes_libm_at_the_baseline(tmp_path) -> None:
     """C++ is a separate risk from C: the decls must survive <cmath>'s extern "C" + noexcept."""
     assert shutil.which("g++"), "g++ is required to build native C++ kernels"
     obj = compile_object(tmp_path, CXX_LIBM_LOOP, ".cpp", "g++", flags.CPU_BASELINE_GCC, languages.std_flag("cpp"))
@@ -222,7 +222,7 @@ def test_gxx_vectorizes_libm_at_the_baseline(tmp_path):
 
 
 @LINUX_ONLY
-def test_gfortran_vectorizes_libm_at_the_baseline(tmp_path):
+def test_gfortran_vectorizes_libm_at_the_baseline(tmp_path) -> None:
     """gfortran gets libmvec for free via the driver spec's pre-include; a host whose spec omits it
     silently loses libmvec while C keeps it, so the fortran column stops being comparable."""
     assert shutil.which("gfortran"), "gfortran is required to build native Fortran kernels"
@@ -243,7 +243,7 @@ def test_gfortran_vectorizes_libm_at_the_baseline(tmp_path):
 
 
 @LINUX_ONLY
-def test_the_fortran_baseline_compiles_without_warnings(tmp_path):
+def test_the_fortran_baseline_compiles_without_warnings(tmp_path) -> None:
     """The concrete reason CPU_BASELINE_GFORTRAN exists: the C/C++ baseline made gfortran warn on every compile."""
     assert shutil.which("gfortran"), "gfortran is required to build native Fortran kernels"
     src = tmp_path / "warn.f90"
@@ -267,7 +267,7 @@ def test_the_fortran_baseline_compiles_without_warnings(tmp_path):
 
 
 @LINUX_ONLY
-def test_the_header_does_not_leak_fast_math_into_libstdcxx(tmp_path):
+def test_the_header_does_not_leak_fast_math_into_libstdcxx(tmp_path) -> None:
     """-D__FAST_MATH__ was rejected because <bits/c++config.h> turns it into _GLIBCXX_FAST_MATH=1,
     changing libstdc++'s complex infinity handling; our header must not do that."""
     assert shutil.which("g++"), "g++ is required to build native C++ kernels"
@@ -288,7 +288,7 @@ def test_the_header_does_not_leak_fast_math_into_libstdcxx(tmp_path):
 
 
 @LINUX_ONLY
-def test_the_header_does_not_change_math_errhandling(tmp_path):
+def test_the_header_does_not_change_math_errhandling(tmp_path) -> None:
     """The C half of the same lie: -D__FAST_MATH__ flips math_errhandling from MATH_ERREXCEPT to 0."""
     assert shutil.which("gcc"), "gcc is required to build native C kernels"
     values = {}

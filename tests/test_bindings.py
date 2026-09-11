@@ -14,7 +14,7 @@ from hpcagent_bench.spec import BenchSpec
 # --- Dense kernel: gemm --- #
 
 
-def test_gemm_canonical_order_and_constness():
+def test_gemm_canonical_order_and_constness() -> None:
     spec = BenchSpec.load("gemm")
     b = binding_from_spec(spec)
 
@@ -45,7 +45,7 @@ def test_gemm_canonical_order_and_constness():
     assert by["alpha"].dtype == "float64"
 
 
-def test_gemm_has_no_timer_arg():
+def test_gemm_has_no_timer_arg() -> None:
     spec = BenchSpec.load("gemm")
     b = binding_from_spec(spec)
     # timing is harness-owned externally (Sec. 6): no timer in the args or the JSON.
@@ -56,7 +56,7 @@ def test_gemm_has_no_timer_arg():
     assert j["packed"] == {}
 
 
-def test_gemm_stub_has_signature_and_todo_not_reference():
+def test_gemm_stub_has_signature_and_todo_not_reference() -> None:
     spec = BenchSpec.load("gemm")
     b = binding_from_spec(spec)
     for lang in LANGS:
@@ -81,7 +81,7 @@ def test_gemm_stub_has_signature_and_todo_not_reference():
     assert c_stub.index("beta") < c_stub.index("workspace")  # scratch pair is trailing
 
 
-def test_stub_restrict_spelling_is_per_language():
+def test_stub_restrict_spelling_is_per_language() -> None:
     """Sec. 5: bare ``restrict`` is C99. A C++-parsed language (cpp / cuda / hip) must get
     ``__restrict__`` -- ``g++ -std=c++20`` rejects ``const double *restrict A`` with
     ``expected ',' or '...' before 'A'``, which no agent can fix without editing the signature
@@ -101,7 +101,7 @@ def test_stub_restrict_spelling_is_per_language():
         assert " restrict " not in stub, lang
 
 
-def test_gemm_host_glue_forwards_pure():
+def test_gemm_host_glue_forwards_pure() -> None:
     spec = BenchSpec.load("gemm")
     b = binding_from_spec(spec)
     glue = gen_host_glue(b)
@@ -110,7 +110,7 @@ def test_gemm_host_glue_forwards_pure():
     assert b.symbols["c"] in glue
 
 
-def test_gemm_json_round_trip():
+def test_gemm_json_round_trip() -> None:
     spec = BenchSpec.load("gemm")
     b = binding_from_spec(spec)
     j = b.to_json()
@@ -131,7 +131,7 @@ def test_gemm_json_round_trip():
 # --- Sparse kernel: spmv (packed group) --- #
 
 
-def test_spmv_packed_group_and_order():
+def test_spmv_packed_group_and_order() -> None:
     spec = BenchSpec.load("spmv")
     assert spec.configurations, "spmv declares its sparse configurations in-repo; losing them is the bug"
     b = binding_from_spec(spec, config="csr")
@@ -165,7 +165,7 @@ def test_spmv_packed_group_and_order():
     assert j["packed"]["A"]["members"] == sorted(g.members)
 
 
-def test_spmv_host_glue_unpacks_handle():
+def test_spmv_host_glue_unpacks_handle() -> None:
     spec = BenchSpec.load("spmv")
     assert spec.configurations, "spmv declares its sparse configurations in-repo; losing them is the bug"
     b = binding_from_spec(spec, config="csr")
@@ -179,7 +179,7 @@ def test_spmv_host_glue_unpacks_handle():
 # --- Phantom-arg filter (Sec. 2) --- #
 
 
-def test_phantom_np_arg_filtered():
+def test_phantom_np_arg_filtered() -> None:
     # A synthetic spec carrying a captured np numpy module param: it must never reach the binding (Sec. 2).
     raw = {
         "short_name": "phantom",
@@ -229,7 +229,7 @@ def _corpus_specs():
             continue
 
 
-def test_no_fractional_scalar_is_bound_as_an_integer():
+def test_no_fractional_scalar_is_bound_as_an_integer() -> None:
     """A scalar whose declared value is fractional must never be bound integer (dt=0.05 -> 0)."""
     import numpy as np
 
@@ -250,7 +250,7 @@ def test_no_fractional_scalar_is_bound_as_an_integer():
     assert not offenders, "the C ABI would truncate a fractional scalar to an integer:\n  " + "\n  ".join(offenders)
 
 
-def test_no_integer_scalar_is_bound_as_a_float():
+def test_no_integer_scalar_is_bound_as_a_float() -> None:
     """The mirror: an integer-declared scalar must not reach the kernel as a double."""
     import numpy as np
 
@@ -273,7 +273,7 @@ def test_no_integer_scalar_is_bound_as_a_float():
     assert not offenders, "an integer-declared scalar would reach the kernel as a float:\n  " + "\n  ".join(offenders)
 
 
-def test_nbody_timestep_survives_the_abi():
+def test_nbody_timestep_survives_the_abi() -> None:
     """The concrete regression: nbody's dt/softening/G must be fp64, not int64 (can't be deleted away)."""
     from hpcagent_bench.spec import BenchSpec
     from hpcagent_bench.support.bindings.contract import binding_from_spec
@@ -293,7 +293,7 @@ def test_nbody_timestep_survives_the_abi():
         assert name not in by, f"nbody.{name} is initialize()-only and must not reach the ABI"
 
 
-def test_every_binding_is_references_then_scalars_each_sorted():
+def test_every_binding_is_references_then_scalars_each_sorted() -> None:
     """The ordering rule of abi_contract.md Sec. 4, asserted for the WHOLE registry rather than for
     gemm alone.
 

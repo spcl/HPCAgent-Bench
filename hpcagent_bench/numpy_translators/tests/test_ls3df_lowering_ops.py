@@ -36,20 +36,20 @@ def _unparse(node):
 # --------------------------------------------------------------------------- #
 
 
-def test_shape_index_on_newaxis_subscript_folds_to_static_dim():
+def test_shape_index_on_newaxis_subscript_folds_to_static_dim() -> None:
     # ``v[..., None].shape[-1]`` on a 3-D ``v`` -> the inserted size-1 axis (1).
     tree = ast.parse("y = v[:, :, :, None].shape[-1]")
     _ShapeMidExpressionRewriter({"v": ["Lb", "Lb", "Lb"]}).visit(tree)
     assert _unparse(tree.body[0].value) == "1"
 
 
-def test_shape_index_on_newaxis_subscript_positive_axis():
+def test_shape_index_on_newaxis_subscript_positive_axis() -> None:
     tree = ast.parse("y = v[:, :, :, None].shape[0]")
     _ShapeMidExpressionRewriter({"v": ["Lb", "Lb", "Lb"]}).visit(tree)
     assert _unparse(tree.body[0].value) == "Lb"
 
 
-def test_bare_shape_on_subscript_base_folds_to_tuple():
+def test_bare_shape_on_subscript_base_folds_to_tuple() -> None:
     # ``psi[f].shape`` -> the residual (Lb, Lb, Lb, nstate) as a literal Tuple.
     tree = ast.parse("s = psi[f].shape")
     _ShapeMidExpressionRewriter({"psi": ["nfrag", "Lb", "Lb", "Lb", "nstate"]}).visit(tree)
@@ -58,7 +58,7 @@ def test_bare_shape_on_subscript_base_folds_to_tuple():
     assert _unparse(val) == "(Lb, Lb, Lb, nstate)"
 
 
-def test_shape_fold_leaves_name_base_untouched_when_unknown():
+def test_shape_fold_leaves_name_base_untouched_when_unknown() -> None:
     # Never-worse: an unknown base is left intact (not mangled).
     tree = ast.parse("y = w[:, None].shape[-1]")
     _ShapeMidExpressionRewriter({}).visit(tree)
@@ -70,22 +70,22 @@ def test_shape_fold_leaves_name_base_untouched_when_unknown():
 # --------------------------------------------------------------------------- #
 
 
-def test_iter_extent_of_fftfreq_is_length_n():
+def test_iter_extent_of_fftfreq_is_length_n() -> None:
     ext = _iter_extent_of(_expr("np.fft.fftfreq(N, d=h)"), {})
     assert ext is not None and len(ext) == 1 and _unparse(ext[0]) == "N"
 
 
-def test_iter_extent_of_fftn_preserves_shape():
+def test_iter_extent_of_fftn_preserves_shape() -> None:
     ext = _iter_extent_of(_expr("np.fft.fftn(rho)"), {"rho": ("N", "N", "N")})
     assert ext is not None and tuple(_unparse(e) for e in ext) == ("N", "N", "N")
 
 
-def test_iter_extent_of_method_reshape_to_tuple():
+def test_iter_extent_of_method_reshape_to_tuple() -> None:
     ext = _iter_extent_of(_expr("mm.reshape((Lb, Lb, Lb, nstate))"), {"mm": ("A", "B")})
     assert tuple(_unparse(e) for e in ext) == ("Lb", "Lb", "Lb", "nstate")
 
 
-def test_iter_extent_of_method_reshape_resolves_neg1():
+def test_iter_extent_of_method_reshape_resolves_neg1() -> None:
     ext = _iter_extent_of(_expr("X.reshape(-1, k)"), {"X": ("Lb", "Lb", "Lb", "nstate")})
     assert ext is not None and len(ext) == 2 and _unparse(ext[1]) == "k"
     # -1 dim = total / product(other dims).
@@ -97,7 +97,7 @@ def test_iter_extent_of_method_reshape_resolves_neg1():
 # --------------------------------------------------------------------------- #
 
 
-def test_tuple_local_propagator_inlines_and_drops_assignment():
+def test_tuple_local_propagator_inlines_and_drops_assignment() -> None:
     tree = ast.parse("shp = (Lb, Lb, Lb, nstate)\nk = shp[-1]\ny = np.reshape(mm, shp)\n")
     _TupleLocalPropagator().run(tree)
     out = _unparse(tree)
@@ -106,7 +106,7 @@ def test_tuple_local_propagator_inlines_and_drops_assignment():
     assert "np.reshape(mm, (Lb, Lb, Lb, nstate))" in out
 
 
-def test_tuple_local_propagator_skips_reassigned_name():
+def test_tuple_local_propagator_skips_reassigned_name() -> None:
     # A twice-assigned Name is not a fixed shape descriptor -- leave it alone.
     tree = ast.parse("shp = (a, b)\nshp = (c, d)\ny = shp[0]\n")
     _TupleLocalPropagator().run(tree)
@@ -118,14 +118,14 @@ def test_tuple_local_propagator_skips_reassigned_name():
 # --------------------------------------------------------------------------- #
 
 
-def test_collect_inlined_scalar_defs_excludes_augassigned_counter():
+def test_collect_inlined_scalar_defs_excludes_augassigned_counter() -> None:
     fn = ast.parse("def k():\n __inl2_na = 0\n __inl2_n = a.shape[0]\n for _ in range(6):\n  __inl2_na += 1\n").body[0]
     defs = _collect_inlined_scalar_defs(fn)
     assert "__inl2_na" not in defs  # mutated counter -- not a fixed dim
     assert defs.get("__inl2_n") == "a.shape[0]"
 
 
-def test_collect_inlined_scalar_defs_excludes_multiply_assigned():
+def test_collect_inlined_scalar_defs_excludes_multiply_assigned() -> None:
     fn = ast.parse("def k():\n __inl1_m = 3\n __inl1_m = 5\n").body[0]
     assert "__inl1_m" not in _collect_inlined_scalar_defs(fn)
 
@@ -135,7 +135,7 @@ def test_collect_inlined_scalar_defs_excludes_multiply_assigned():
 # --------------------------------------------------------------------------- #
 
 
-def test_size_of_compound_token_reparses_to_binop():
+def test_size_of_compound_token_reparses_to_binop() -> None:
     tree = ast.parse("y = off.size")
     _ShapeMidExpressionRewriter({"off": ["na - 1"]}).visit(tree)
     val = tree.body[0].value
@@ -148,7 +148,7 @@ def test_size_of_compound_token_reparses_to_binop():
 # --------------------------------------------------------------------------- #
 
 
-def test_expand_copy_emits_allocation_marker():
+def test_expand_copy_emits_allocation_marker() -> None:
     tgt = ast.Name(id="Cm", ctx=ast.Store())
     stmts = expand_copy(tgt, [ast.Name(id="a", ctx=ast.Load())], {"a": ("n", "n")})
     # First emitted statement allocates the fresh target.
@@ -171,7 +171,7 @@ def _inv_buffer_names(stmts):
     }
 
 
-def test_inv_working_buffer_is_unique_per_call():
+def test_inv_working_buffer_is_unique_per_call() -> None:
     st = {"A": ("__inl3_k", "__inl3_k"), "B": ("__inl5_k", "__inl5_k")}
     s1 = expand_linalg_inv(
         ast.Name(id="X1", ctx=ast.Store()),

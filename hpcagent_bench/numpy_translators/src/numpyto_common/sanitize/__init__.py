@@ -29,7 +29,7 @@ class Rename(ast.NodeTransformer):
     function/argument names and keyword-argument names -- never attribute
     members (so ``cp.zeros`` keeps ``zeros``)."""
 
-    def __init__(self, registry: Dict[str, str]):
+    def __init__(self, registry: Dict[str, str]) -> None:
         self._r = registry
 
     def visit_Name(self, node: ast.Name) -> ast.AST:

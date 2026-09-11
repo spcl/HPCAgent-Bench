@@ -41,7 +41,7 @@ def driver_fixture() -> ModuleType:
 REPLICAS = ["http://a:8000", "http://b:8000", "http://c:8000"]
 
 
-def test_a_late_replica_does_not_abort_the_run(driver, monkeypatch):
+def test_a_late_replica_does_not_abort_the_run(driver, monkeypatch) -> None:
 
     def probe(name: str, url: str, timeout: float, headers=None) -> None:
         if url.startswith("http://b:"):
@@ -51,7 +51,7 @@ def test_a_late_replica_does_not_abort_the_run(driver, monkeypatch):
     assert driver.wait_for_ready_replicas(REPLICAS, 1.0, {}) == ["http://a:8000", "http://c:8000"]
 
 
-def test_no_ready_replica_is_still_a_failure(driver, monkeypatch):
+def test_no_ready_replica_is_still_a_failure(driver, monkeypatch) -> None:
     """Proceeding on a subset must not become proceeding on nothing: with every replica down there
     is no endpoint to serve the agents, and starting anyway would burn the allocation producing
     242 identical connection errors."""
@@ -64,7 +64,7 @@ def test_no_ready_replica_is_still_a_failure(driver, monkeypatch):
         driver.wait_for_ready_replicas(REPLICAS, 1.0, {})
 
 
-def test_ready_replicas_come_back_in_replica_order(driver, monkeypatch):
+def test_ready_replicas_come_back_in_replica_order(driver, monkeypatch) -> None:
     """The first replica is made the slowest, so completion order is the REVERSE of replica order
     and a version that returned as_completed order would fail here."""
 

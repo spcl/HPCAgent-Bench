@@ -140,7 +140,7 @@ def get_4d_tile_offsets(c0, c1, c2, c3, tile_dims: tl.constexpr, matrix_dims: tl
 
 
 @triton.jit
-def grid_sync(barrier):
+def grid_sync(barrier) -> None:
     """Grid-level sync barrier across every thread block; 'barrier' must be an int32 pointer set to 0 or
     2^31 initially. CAUTION: can deadlock if more blocks are spawned than fit concurrently on the GPU --
     use a persistent kernel (one block per SM) or ``launch_cooperative_grid=True`` to fail fast instead."""
@@ -228,7 +228,7 @@ def kernel_mean_and_sumsq(
     N,
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
-):
+) -> None:
     """Mean and mean-square-sum of 'data' along dim M, accumulated into 'out_mean'/'out_stddev' (both
     must be zero-initialized)."""
 
@@ -276,7 +276,7 @@ def kernel_compute_stddev(
     N,
     BLOCK_SIZE_N: tl.constexpr,
     post_process: tl.constexpr = unary_noop,
-):
+) -> None:
     """Computes the standard deviation from 'mean' and the mean-of-squares in 'stddev', stores it back
     to 'stddev' (optionally post-processed by 'post_process')."""
 
@@ -317,7 +317,7 @@ def matmul_kernel_float64(
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
-):
+) -> None:
     """Triton kernel for float64 matrix multiplication."""
     pid_m = tl.program_id(axis=0)
     pid_n = tl.program_id(axis=1)
@@ -460,7 +460,7 @@ def matmul_kernel_float32(
     BLOCK_SIZE_K: tl.constexpr,  #
     GROUP_SIZE_M: tl.constexpr,  #
     ACTIVATION: tl.constexpr,  #
-):
+) -> None:
     """Kernel for computing the matmul C = A x B: A (M, K), B (K, N), C (M, N)."""
     # Map program ids to C blocks in a grouped ordering to promote L2 data reuse.
     pid = tl.program_id(axis=0)
@@ -510,7 +510,7 @@ def matmul_kernel_float32(
     tl.store(c_ptrs, c, mask=c_mask)
 
 
-def matmul_float32(a: torch.Tensor, b: torch.Tensor, activation=""):
+def matmul_float32(a: torch.Tensor, b: torch.Tensor, activation: str = ""):
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
     M, K = a.shape
     K, N = b.shape

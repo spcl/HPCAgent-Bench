@@ -200,7 +200,7 @@ def missing_for_target(report, target):
     return miss
 
 
-def print_human(report):
+def print_human(report) -> None:
     p = report["platform"]
     wsl = " (WSL)" if p.get("wsl") else ""
     print(f"platform: {p['distro']}{wsl}  [{p['system']}/{p['machine']}]\n")

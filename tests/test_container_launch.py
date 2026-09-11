@@ -23,14 +23,14 @@ COMPOSE = REPO / "containers" / "agentbench.compose.yml"
 
 
 # --- structural (always on) ---
-def test_launch_script_is_sudoless():
+def test_launch_script_is_sudoless() -> None:
     text = SCRIPT.read_text()
     # The launch argv is data-driven from container_backends.txt, not a literal "apptainer exec".
     assert "apptainer" in text, "launch script must support the Apptainer backend"
     assert "sudo" not in text, "Apptainer launch must never require sudo"
 
 
-def test_compose_declares_judge_and_agent():
+def test_compose_declares_judge_and_agent() -> None:
     compose = yaml.safe_load(COMPOSE.read_text())
     services = compose["services"]
     assert "judge" in services and "agent" in services
@@ -42,7 +42,7 @@ def _as_list(cmd):
     return cmd if isinstance(cmd, list) else cmd.split()
 
 
-def test_apptainer_runs_unprivileged():
+def test_apptainer_runs_unprivileged() -> None:
     if shutil.which("apptainer") is None:
         pytest.skip("apptainer not installed")
     assert os.geteuid() != 0, "this test asserts the SUDOLESS path (run as non-root)"
@@ -90,7 +90,7 @@ def _size_env():
     return {name: os.environ[name] for name in _SIZE_PINS if name in os.environ}
 
 
-def _exec(sif, *cmd, env=None, background=False, log=None):
+def _exec(sif, *cmd, env=None, background: bool = False, log=None):
     """`apptainer exec` `cmd` in `sif`, with the repo bound + editable-installed into a tmpfs overlay."""
     argv = ["apptainer", "exec", "--writable-tmpfs", "--bind", f"{REPO}:{REPO}", "--pwd", str(REPO)]
     for k, v in (env or {}).items():
@@ -127,7 +127,7 @@ print(json.dumps({{"verify": c.verify(sub, "{KERNEL}"), "score": c.score(sub, "{
 """
 
 
-def test_two_containers_judge_and_agent_via_tools(tmp_path):
+def test_two_containers_judge_and_agent_via_tools(tmp_path) -> None:
     if shutil.which("apptainer") is None:
         pytest.skip("apptainer not installed")
     sif = _judge_sif()
@@ -195,7 +195,7 @@ def test_two_containers_judge_and_agent_via_tools(tmp_path):
         _kill_tree(judge)
 
 
-def _kill_tree(proc):
+def _kill_tree(proc) -> None:
     """Signal the whole process group (apptainer wrapper + in-container serve)."""
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGTERM)

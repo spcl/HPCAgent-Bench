@@ -63,7 +63,7 @@ def _scop(text: str) -> str:
     return m.group(1)
 
 
-def test_an_invariant_floord_leaves_the_subscript_for_a_pre_scop_temp():
+def test_an_invariant_floord_leaves_the_subscript_for_a_pre_scop_temp() -> None:
     text = emit_pluto(_gather_kir(), fn_name="gath")
     body = _scop(text)
     index = re.search(r"a\[([^]]*)\]", body)
@@ -72,20 +72,20 @@ def test_an_invariant_floord_leaves_the_subscript_for_a_pre_scop_temp():
     assert f"{temp} = floord(N, 2);" in text.split("#pragma scop")[0], text
 
 
-def test_the_loop_bound_floord_stays_spelled():
+def test_the_loop_bound_floord_stays_spelled() -> None:
     """POLYCC-008's guard is a BOUND spelling; pet models it there, so the hoist must not take it."""
     body = _scop(emit_pluto(_gather_kir(), fn_name="gath"))
     assert "i < floord(N, 2)" in body, body
 
 
-def test_maximum_takes_the_prelude_macro_in_a_scop_and_the_helper_everywhere_else():
+def test_maximum_takes_the_prelude_macro_in_a_scop_and_the_helper_everywhere_else() -> None:
     body = _scop(emit_pluto(_relu_kir(), fn_name="relu"))
     assert "max(" in body and "__npb_fmax" not in body, body
     c_body = emit_c(_relu_kir(), fn_name="relu")
     assert "__npb_fmax" in c_body.split("void relu", 1)[1], c_body
 
 
-def test_a_call_with_no_macro_twin_and_no_hoist_sink_is_left_alone():
+def test_a_call_with_no_macro_twin_and_no_hoist_sink_is_left_alone() -> None:
     """The guard never invents a spelling: without a proven-invariant sink the call text comes back."""
     assert pluto_call_free("__npb_sign", "x") == "__npb_sign(x)"
     sink = {}
@@ -96,7 +96,7 @@ def test_a_call_with_no_macro_twin_and_no_hoist_sink_is_left_alone():
 @pytest.mark.skipif(shutil.which("polycc") is None, reason="pluto/polycc not installed")
 @pytest.mark.skipif(shutil.which("gcc") is None, reason="gcc not installed")
 @pytest.mark.parametrize("kir_fn,name", [(_gather_kir, "gath"), (_relu_kir, "relu")])
-def test_the_transformed_output_compiles(kir_fn, name):
+def test_the_transformed_output_compiles(kir_fn, name) -> None:
     """The claim that matters: polycc's output has no undeclared ``__pet_ret_0`` left in it."""
     d = pathlib.Path(tempfile.mkdtemp())
     src = d / f"{name}_pluto_input.c"
@@ -111,5 +111,5 @@ def test_the_transformed_output_compiles(kir_fn, name):
     assert cc.returncode == 0, cc.stderr
 
 
-def test_polycc_010_names_the_rule_that_avoids_it():
+def test_polycc_010_names_the_rule_that_avoids_it() -> None:
     assert KNOWN_POLYCC_ISSUES["POLYCC-010"].avoided_by == f"numpyto_c.emit.{pluto_call_free.__name__}"

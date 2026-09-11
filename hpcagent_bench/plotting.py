@@ -352,9 +352,9 @@ def _draw_group_labels(ax, spans: Sequence[GroupSpan], x_right: float) -> None:
 
 
 def plot_heatmap(
-    benchmark="all",
-    preset="S",
-    datatype="float64",
+    benchmark: str = "all",
+    preset: str = "S",
+    datatype: str = "float64",
     variant=None,
     order: str = BY_DWARF,
     db=None,
@@ -538,9 +538,9 @@ def _framework_slots(data: pd.DataFrame, baseline: str = DEFAULT_BASELINE) -> Li
 
 
 def plot_distribution_grid(
-    benchmark="all",
-    preset="S",
-    datatype="float64",
+    benchmark: str = "all",
+    preset: str = "S",
+    datatype: str = "float64",
     variant=None,
     framework: Optional[str] = None,
     kind: str = "violin",

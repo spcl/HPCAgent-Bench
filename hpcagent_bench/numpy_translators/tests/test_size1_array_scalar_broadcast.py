@@ -45,7 +45,7 @@ def _all_ok(res):
     return all(v == "ok" or v.startswith("skip") for v in res.values()), res
 
 
-def test_extent_is_scalar_helper():
+def test_extent_is_scalar_helper() -> None:
     from numpyto_common.lib_nodes import extent_is_scalar
 
     one = tuple(ast.parse("1").body[0].value for _ in range(1))
@@ -56,7 +56,7 @@ def test_extent_is_scalar_helper():
     assert not extent_is_scalar((ast.parse("N").body[0].value,))  # (N,) is a real array
 
 
-def test_scalar_local_from_size1_broadcast_all_backends():
+def test_scalar_local_from_size1_broadcast_all_backends() -> None:
     a = np.array([0.2, 0.9, 0.5, 0.7, 0.1, 0.95, 0.3], dtype=np.float64)
     ok, res = _all_ok(
         run_op(
@@ -96,7 +96,7 @@ def _kir(src):
     return lower(parse_kernel(d / "k_numpy.py", d / "bi.json"))
 
 
-def test_c_declares_scalar_and_scalarises_size1_read():
+def test_c_declares_scalar_and_scalarises_size1_read() -> None:
     from numpyto_c.emit import emit_c
 
     c = emit_c(_kir(_SRC), fn_name="f")
@@ -105,7 +105,7 @@ def test_c_declares_scalar_and_scalarises_size1_read():
     assert "x[0][0]" not in c and "x[0][" not in c  # ...but an explicit x[0] is NOT double-indexed
 
 
-def test_fortran_declares_scalar_and_scalarises_size1_read():
+def test_fortran_declares_scalar_and_scalarises_size1_read() -> None:
     from numpyto_fortran.emit import emit_fortran
 
     f = emit_fortran(_kir(_SRC), fn_name="f")

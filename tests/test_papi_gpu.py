@@ -502,7 +502,9 @@ def test_the_feature_set_only_enumerates_the_components_the_ask_needs(monkeypatc
 
 
 # ------------------------------ measurement: absence is never a zero ------------------------------ #
-def worker(monkeypatch, *, supported=None, unsupported=None, permission=None, device=False, vendor="nvidia") -> dict:
+def worker(
+    monkeypatch, *, supported=None, unsupported=None, permission=None, device: bool = False, vendor: str = "nvidia"
+) -> dict:
     """Drive :func:`papi.gpu_counting_worker` past resolution with a fixed feature set.
 
     Every early return this exercises happens BEFORE PAPI, the driver or the kernel is touched,
@@ -580,7 +582,7 @@ def test_a_refused_permission_is_reported_instead_of_being_counted_around(monkey
     assert row["count"] is None and "ERR_NVGPUCTRPERM" in row["missing"]
 
 
-def segfaulting_worker(*args, **kwargs):
+def segfaulting_worker(*args, **kwargs) -> None:
     """Stand-in for the counting child that dies the way a vendor runtime really dies."""
     # Deliberate: this child is proving the harness survives a fatal signal. pytest enables
     # faulthandler by default and the fork inherits it, so without this the child dumps a
@@ -589,7 +591,7 @@ def segfaulting_worker(*args, **kwargs):
     os.kill(os.getpid(), signal.SIGSEGV)
 
 
-def raising_worker(*args, **kwargs):
+def raising_worker(*args, **kwargs) -> None:
     raise RuntimeError("PAPI_start failed: CUPTI_ERROR_INSUFFICIENT_PRIVILEGES")
 
 

@@ -59,7 +59,7 @@ _A = np.array([-3.5, -1.0, 0.0, 2.5, 5.0, -7.25, 1.5, 4.0], dtype=np.float64)
 _B = np.array([2.0, 3.0, 1.5, 2.0, 4.0, 3.0, 0.5, 1.25], dtype=np.float64)
 
 
-def _emit(body: str, args="a, b, out", shapes=None, syms=None, dtypes=None, isopar=True) -> str:
+def _emit(body: str, args: str = "a, b, out", shapes=None, syms=None, dtypes=None, isopar: bool = True) -> str:
     """Emit ``def k(<args>, N): <body>`` through the C++ backend under test (or plain ``emit_cpp``).
 
     ``args`` is the numpy signature; the last name is declared the graded OUTPUT of the synthesized
@@ -117,7 +117,7 @@ def _stayed_a_loop(text: str) -> bool:
     ],
     ids=["output-last", "output-first", "scalar-param"],
 )
-def test_signature_is_byte_identical_to_the_plain_cpp_backend(body, args, shapes):
+def test_signature_is_byte_identical_to_the_plain_cpp_backend(body, args, shapes) -> None:
     """isopar changes the BODY, never the interface: same symbol, same canonical parameter order
     (pointers by name, then scalars/symbols by name), same types, same ``__restrict__``. Both
     backends read it from one ``_emit_signature``, and this pins that they still do."""
@@ -126,12 +126,12 @@ def test_signature_is_byte_identical_to_the_plain_cpp_backend(body, args, shapes
     )
 
 
-def test_c_linkage_block_is_opened_once():
+def test_c_linkage_block_is_opened_once() -> None:
     text = _emit("    for i in range(N):\n        out[i] = a[i] + b[i]\n")
     assert text.count('extern "C" {') == 1 and text.count('} // extern "C"') == 1
 
 
-def test_library_headers_precede_the_arithmetic_prelude():
+def test_library_headers_precede_the_arithmetic_prelude() -> None:
     """<algorithm> must be parsed BEFORE the prelude's ``max``/``min`` templates are declared: a
     same-named global visible while libstdc++ is being parsed is what detonates inside it."""
     text = _emit("    for i in range(N):\n        out[i] = a[i] + b[i]\n")
@@ -151,7 +151,7 @@ _PAR_UNSEQ_BODIES = [
 
 
 @pytest.mark.parametrize("body", _PAR_UNSEQ_BODIES, ids=range(len(_PAR_UNSEQ_BODIES)))
-def test_map_and_reduce_calls_carry_par_unseq(body):
+def test_map_and_reduce_calls_carry_par_unseq(body) -> None:
     """The policy is the point. Without one, ISO specifies the algorithm as sequential and the
     emitted source licenses nothing the loop did not already license; ``par_unseq`` is what permits
     both threading and vectorization, which is what makes this the analogue of an array intrinsic."""
@@ -163,7 +163,7 @@ def test_map_and_reduce_calls_carry_par_unseq(body):
         assert weaker not in text, (weaker, body)
 
 
-def test_scan_carries_unseq_because_the_parallel_scan_is_wrong_here():
+def test_scan_carries_unseq_because_the_parallel_scan_is_wrong_here() -> None:
     """libstdc++'s parallel scan seeds a block with a value-initialized element instead of the init,
     so a prefix PRODUCT under ``par``/``par_unseq`` comes back all zeros -- measured on g++ 15.2 at
     every size, both float and double. ``unseq`` reaches the same serial recurrence the loop does
@@ -179,12 +179,12 @@ def test_scan_carries_unseq_because_the_parallel_scan_is_wrong_here():
         assert "par_unseq" not in text, text
 
 
-def test_execution_header_precedes_the_arithmetic_prelude():
+def test_execution_header_precedes_the_arithmetic_prelude() -> None:
     text = _emit("    for i in range(N):\n        out[i] = a[i] + b[i]\n")
     assert text.index("#include <execution>") < text.index("constexpr auto max(")
 
 
-def test_never_std_accumulate():
+def test_never_std_accumulate() -> None:
     """``std::accumulate`` is specified strictly left-to-right, which forecloses exactly the
     reassociation this backend exists to allow. Reductions must use std::reduce."""
     text = _emit("    s = 0.0\n    for i in range(N):\n        s = s + a[i]\n    out[0] = s\n")
@@ -195,7 +195,7 @@ def test_never_std_accumulate():
 # --- map: transform / copy / fill -----------------------------------------------------------------
 
 
-def test_binary_elementwise_map_is_one_transform():
+def test_binary_elementwise_map_is_one_transform() -> None:
     text = _body(_emit("    for i in range(N):\n        out[i] = a[i] + b[i]\n"))
     assert (
         "std::transform(std::execution::par_unseq, a, a + __n0, b, out, "
@@ -204,14 +204,14 @@ def test_binary_elementwise_map_is_one_transform():
     assert _calls(text) == ["std::transform("]
 
 
-def test_in_place_map_reuses_the_destination_range():
+def test_in_place_map_reuses_the_destination_range() -> None:
     """``out[i] = out[i] + b[i]``: std::transform explicitly allows result == first1, and the ranges
     here are exactly equal -- not merely overlapping."""
     text = _body(_emit("    for i in range(N):\n        out[i] = out[i] + b[i]\n", args="b, out"))
     assert "std::transform(std::execution::par_unseq, out, out + __n0, b, out, [](double __v0, double __v1)" in text
 
 
-def test_unary_map_carries_the_call_into_the_lambda():
+def test_unary_map_carries_the_call_into_the_lambda() -> None:
     text = _body(_emit("    for i in range(N):\n        out[i] = np.sqrt(a[i]) * 2.0\n"))
     assert (
         "std::transform(std::execution::par_unseq, a, a + __n0, out, [](double __v0) { return static_cast<double>((sqrt(__v0) * 2.0)); });"
@@ -219,17 +219,17 @@ def test_unary_map_carries_the_call_into_the_lambda():
     )
 
 
-def test_plain_move_is_a_copy_not_a_transform():
+def test_plain_move_is_a_copy_not_a_transform() -> None:
     text = _body(_emit("    for i in range(N):\n        out[i] = a[i]\n"))
     assert "std::copy(std::execution::par_unseq, a, a + __n0, out);" in text
 
 
-def test_constant_store_is_a_fill_with_an_explicit_cast():
+def test_constant_store_is_a_fill_with_an_explicit_cast() -> None:
     text = _body(_emit("    for i in range(N):\n        out[i] = 0.0\n"))
     assert "std::fill(std::execution::par_unseq, out, out + __n0, static_cast<double>(0.0));" in text
 
 
-def test_shifted_read_shifts_the_input_range():
+def test_shifted_read_shifts_the_input_range() -> None:
     """``out[i] = a[i-1]`` over ``range(1, N)`` is the same map on a shifted source range; the
     destination is a DIFFERENT array, so the ranges cannot overlap."""
     text = _body(_emit("    for i in range(1, N):\n        out[i] = a[i - 1] + b[i]\n"))
@@ -239,13 +239,13 @@ def test_shifted_read_shifts_the_input_range():
     )
 
 
-def test_invariant_read_of_the_destination_stays_a_loop():
+def test_invariant_read_of_the_destination_stays_a_loop() -> None:
     """``out[i] = a[i] + out[0]`` reads a cell this same call is writing. The loop reads it in its
     own order; std::transform specifies NO order, so the two are not the same computation."""
     assert _stayed_a_loop(_emit("    for i in range(N):\n        out[i] = a[i] + out[0]\n", args="a, out"))
 
 
-def test_invariant_operand_is_captured_not_parameterised():
+def test_invariant_operand_is_captured_not_parameterised() -> None:
     """A loop-invariant read stays inline in the lambda body, which then captures; only the element
     reads become parameters."""
     text = _body(_emit("    for i in range(N):\n        out[i] = a[i] * b[0]\n"))
@@ -255,14 +255,14 @@ def test_invariant_operand_is_captured_not_parameterised():
     )
 
 
-def test_trip_count_is_clamped_so_an_empty_range_is_never_inverted():
+def test_trip_count_is_clamped_so_an_empty_range_is_never_inverted() -> None:
     """A loop whose end runs before its start executes zero times; the same pointer pair handed to
     an algorithm is undefined, so the count is clamped at 0."""
     text = _body(_emit("    for i in range(2, N):\n        out[i] = a[i]\n"))
     assert "const int64_t __n0 = (N) > (2) ? (N) - (2) : 0;" in text
 
 
-def test_row_of_a_2d_array_converts_on_the_contiguous_axis():
+def test_row_of_a_2d_array_converts_on_the_contiguous_axis() -> None:
     """The inner loop walks the FASTEST axis, so one iteration is one element: that row is a range.
     The outer loop stays a loop -- no algorithm expresses a nest."""
     text = _body(
@@ -279,7 +279,7 @@ def test_row_of_a_2d_array_converts_on_the_contiguous_axis():
     )
 
 
-def test_two_reads_on_different_outer_rows_are_two_ranges():
+def test_two_reads_on_different_outer_rows_are_two_ranges() -> None:
     """``out[i, j] = a[2*i, j] + a[2*i+1, j]`` sweeps the same LAST axis twice but two different
     rows. Keying a range on the fastest axis alone collapsed them into one parameter and emitted
     ``__v0 + __v0`` -- a silent miscompile (found on dwt2d's Haar column pass)."""
@@ -299,7 +299,7 @@ def test_two_reads_on_different_outer_rows_are_two_ranges():
     )
 
 
-def test_column_sweep_stays_a_loop():
+def test_column_sweep_stays_a_loop() -> None:
     """``out[j, i]`` walks the SLOW axis: stride N, not 1. No standard algorithm takes a strided
     range, and pretending it does would read the wrong elements."""
     text = _emit(
@@ -313,19 +313,19 @@ def test_column_sweep_stays_a_loop():
 # --- reduce -------------------------------------------------------------------------------------
 
 
-def test_sum_reduction_is_std_reduce_seeded_with_the_live_accumulator():
+def test_sum_reduction_is_std_reduce_seeded_with_the_live_accumulator() -> None:
     """The accumulator's current value is the init, so no pattern-match of the preceding
     ``s = 0.0`` is needed and a pre-seeded accumulator stays correct."""
     text = _body(_emit("    s = 0.0\n    for i in range(N):\n        s = s + a[i]\n    out[0] = s\n"))
     assert "s = std::reduce(std::execution::par_unseq, a, a + __n0, s);" in text
 
 
-def test_product_reduction_names_its_combine():
+def test_product_reduction_names_its_combine() -> None:
     text = _body(_emit("    s = 1.0\n    for i in range(N):\n        s = s * a[i]\n    out[0] = s\n"))
     assert "s = std::reduce(std::execution::par_unseq, a, a + __n0, s, std::multiplies<double>{});" in text
 
 
-def test_max_reduction_uses_the_nan_propagating_combine():
+def test_max_reduction_uses_the_nan_propagating_combine() -> None:
     """numpy's maximum propagates NaN, and so does the prelude's ``max`` -- which makes it
     commutative and associative, hence a legal std::reduce combine."""
     text = _body(_emit("    s = a[0]\n    for i in range(N):\n        s = max(s, a[i])\n    out[0] = s\n"))
@@ -335,12 +335,12 @@ def test_max_reduction_uses_the_nan_propagating_combine():
     )
 
 
-def test_dot_product_is_the_default_transform_reduce():
+def test_dot_product_is_the_default_transform_reduce() -> None:
     text = _body(_emit("    s = 0.0\n    for i in range(N):\n        s = s + a[i] * b[i]\n    out[0] = s\n"))
     assert "s = std::transform_reduce(std::execution::par_unseq, a, a + __n0, b, s);" in text
 
 
-def test_transformed_reduction_keeps_the_combine_in_the_accumulator_type():
+def test_transformed_reduction_keeps_the_combine_in_the_accumulator_type() -> None:
     text = _body(_emit("    s = 0.0\n    for i in range(N):\n        s = s + a[i] * a[i]\n    out[0] = s\n"))
     assert (
         "s = std::transform_reduce(std::execution::par_unseq, a, a + __n0, s, std::plus<double>{}, "
@@ -348,19 +348,19 @@ def test_transformed_reduction_keeps_the_combine_in_the_accumulator_type():
     ) in text
 
 
-def test_reduction_into_an_output_cell_converts_too():
+def test_reduction_into_an_output_cell_converts_too() -> None:
     """``out[0] = out[0] + ...`` is the same reduction with the accumulator living in a buffer."""
     text = _body(_emit("    for i in range(N):\n        out[0] = out[0] + a[i] * b[i]\n"))
     assert "out[0] = std::transform_reduce(std::execution::par_unseq, a, a + __n0, b, out[0]);" in text
 
 
-def test_reduction_over_its_own_array_stays_a_loop():
+def test_reduction_over_its_own_array_stays_a_loop() -> None:
     """``out[0] = out[0] + out[i]`` sweeps a range that CONTAINS the accumulator cell: each
     iteration reads what the previous wrote, which std::reduce does not do."""
     assert _stayed_a_loop(_emit("    for i in range(N):\n        out[0] = out[0] + out[i]\n", args="a, out"))
 
 
-def test_index_valued_body_stays_a_loop():
+def test_index_valued_body_stays_a_loop() -> None:
     """``out[i] = a[i] * i`` needs the INDEX inside the callable, and an algorithm hands its
     callable elements, not indices."""
     assert _stayed_a_loop(_emit("    for i in range(N):\n        out[i] = a[i] * i\n"))
@@ -369,7 +369,7 @@ def test_index_valued_body_stays_a_loop():
 # --- scan ---------------------------------------------------------------------------------------
 
 
-def test_prefix_sum_is_an_inclusive_scan_seeded_from_the_preceding_element():
+def test_prefix_sum_is_an_inclusive_scan_seeded_from_the_preceding_element() -> None:
     text = _body(_emit("    for i in range(1, N):\n        out[i] = out[i - 1] + a[i]\n"))
     assert (
         "std::inclusive_scan(std::execution::unseq, a + ((1)), a + ((1)) + __n0, out + ((1)), "
@@ -379,7 +379,7 @@ def test_prefix_sum_is_an_inclusive_scan_seeded_from_the_preceding_element():
     assert "if (__n0 > 0) {" in text
 
 
-def test_prefix_product_scans_under_multiplies():
+def test_prefix_product_scans_under_multiplies() -> None:
     text = _body(_emit("    for i in range(1, N):\n        out[i] = out[i - 1] * a[i]\n"))
     assert (
         "std::inclusive_scan(std::execution::unseq, a + ((1)), a + ((1)) + __n0, out + ((1)), "
@@ -387,7 +387,7 @@ def test_prefix_product_scans_under_multiplies():
     ) in text
 
 
-def test_per_row_scan_of_a_2d_array_converts():
+def test_per_row_scan_of_a_2d_array_converts() -> None:
     text = _body(
         _emit(
             "    for i in range(N):\n        for j in range(1, N):\n            out[i, j] = out[i, j - 1] + a[i, j]\n",
@@ -402,19 +402,19 @@ def test_per_row_scan_of_a_2d_array_converts():
     assert "std::plus<double>{}, out[(i)*(N) + ((1) - 1)]);" in text
 
 
-def test_scaled_recurrence_stays_a_loop():
+def test_scaled_recurrence_stays_a_loop() -> None:
     """``out[i] = out[i-1]*0.9 + a[i]`` is a first-order recurrence. Its scan form is over affine
     MAPS, not over doubles under plus -- writing it as an inclusive_scan of the elements would
     compute a different function, not a reassociated one."""
     assert _stayed_a_loop(_emit("    for i in range(1, N):\n        out[i] = out[i - 1] * 0.9 + a[i]\n"))
 
 
-def test_stride_two_recurrence_stays_a_loop():
+def test_stride_two_recurrence_stays_a_loop() -> None:
     """``out[i] = out[i-2] + b[i]`` carries over TWO elements: two interleaved scans, not one."""
     assert _stayed_a_loop(_emit("    for i in range(2, N):\n        out[i] = out[i - 2] + b[i]\n", args="b, out"))
 
 
-def test_recurrence_with_a_third_operand_stays_a_loop():
+def test_recurrence_with_a_third_operand_stays_a_loop() -> None:
     """``out[i] = out[i] + out[i-1]*b[i]`` reads the destination at two different offsets: neither a
     map (overlapping ranges) nor a scan (the combine is not the bare associative one)."""
     assert _stayed_a_loop(
@@ -425,27 +425,27 @@ def test_recurrence_with_a_third_operand_stays_a_loop():
 # --- shapes with no faithful spelling stay loops ---------------------------------------------------
 
 
-def test_stencil_stays_a_loop():
+def test_stencil_stays_a_loop() -> None:
     """``out[i] = out[i+1] + b[i]`` is a SHIFTED self-read: as std::transform the input and output
     ranges would overlap without being equal, which is undefined."""
     assert _stayed_a_loop(_emit("    for i in range(N - 1):\n        out[i] = out[i + 1] + b[i]\n", args="b, out"))
 
 
-def test_strided_loop_stays_a_loop():
+def test_strided_loop_stays_a_loop() -> None:
     assert _stayed_a_loop(_emit("    for i in range(0, N, 2):\n        out[i] = a[i] + b[i]\n"))
 
 
-def test_reversed_loop_stays_a_loop():
+def test_reversed_loop_stays_a_loop() -> None:
     assert _stayed_a_loop(_emit("    for i in range(N - 1, 0, -1):\n        out[i] = a[i] + b[i]\n"))
 
 
-def test_scaled_index_stays_a_loop():
+def test_scaled_index_stays_a_loop() -> None:
     assert _stayed_a_loop(
         _emit("    for i in range(N):\n        out[i] = a[2 * i]\n", shapes={"a": "(N,)", "b": "(N,)", "out": "(N,)"})
     )
 
 
-def test_indirect_gather_stays_a_loop():
+def test_indirect_gather_stays_a_loop() -> None:
     """``out[i] = a[ip[i]]`` is a gather: the range it touches is data-dependent."""
     assert _stayed_a_loop(
         _emit(
@@ -457,7 +457,7 @@ def test_indirect_gather_stays_a_loop():
     )
 
 
-def test_indirect_scatter_stays_a_loop():
+def test_indirect_scatter_stays_a_loop() -> None:
     assert _stayed_a_loop(
         _emit(
             "    for i in range(N):\n        out[ip[i]] = a[i]\n",
@@ -468,7 +468,7 @@ def test_indirect_scatter_stays_a_loop():
     )
 
 
-def test_multi_statement_body_stays_a_loop():
+def test_multi_statement_body_stays_a_loop() -> None:
     """Two stores per iteration is a schedule of two maps; converting only one would reorder them
     against each other."""
     assert _stayed_a_loop(
@@ -476,11 +476,11 @@ def test_multi_statement_body_stays_a_loop():
     )
 
 
-def test_conditional_body_stays_a_loop():
+def test_conditional_body_stays_a_loop() -> None:
     assert _stayed_a_loop(_emit("    for i in range(N):\n        if a[i] > 0.0:\n            out[i] = a[i]\n"))
 
 
-def test_body_calling_a_kernel_helper_stays_a_loop():
+def test_body_calling_a_kernel_helper_stays_a_loop() -> None:
     """``par_unseq`` forbids allocation inside an element access function. A kernel HELPER is
     emitted from the same IR as the kernel, so its body may ``malloc`` a local array -- which a
     lambda calling it would then do once per element, on an unspecified thread. Refused."""
@@ -512,7 +512,7 @@ def test_body_calling_a_kernel_helper_stays_a_loop():
     assert not _calls(kernel), kernel
 
 
-def test_narrow_int_elements_stay_a_loop():
+def test_narrow_int_elements_stay_a_loop() -> None:
     """An int32 element PROMOTES to int64 on read (numpy's arithmetic width). A lambda taking it by
     value would compute in int32 and wrap where the loop does not."""
     assert _stayed_a_loop(
@@ -523,7 +523,7 @@ def test_narrow_int_elements_stay_a_loop():
     )
 
 
-def test_every_algorithm_emitted_is_one_we_claim():
+def test_every_algorithm_emitted_is_one_we_claim() -> None:
     """A conversion outside the documented set means an unreviewed algorithm reached the output."""
     bodies = [
         "    for i in range(N):\n        out[i] = a[i] + b[i]\n",
@@ -573,14 +573,14 @@ def _ok(res):
         ("strided_loop", "    for i in range(0, 8, 2):\n        out[i] = a[i] + b[i]\n"),
     ],
 )
-def test_shapes_match_numpy(name, body):
+def test_shapes_match_numpy(name, body) -> None:
     ok, res = _ok(_run(body))
     assert ok, (name, res)
 
 
 @pytest.mark.integration
 @pytest.mark.skipif(not shutil.which("g++"), reason="g++ needed to build the emitted C++")
-def test_two_dimensional_row_map_and_scan_match_numpy():
+def test_two_dimensional_row_map_and_scan_match_numpy() -> None:
     a2 = np.arange(16, dtype=np.float64).reshape(4, 4) - 7.0
     shapes = {"a": "(M, M)", "out": "(M, M)"}
     src = (
@@ -623,7 +623,7 @@ def _oracle():
 
 @pytest.mark.integration
 @pytest.mark.parametrize("kernel,shape", _CORPUS, ids=[k for k, _ in _CORPUS])
-def test_corpus_kernel_matches_numpy(kernel, shape):
+def test_corpus_kernel_matches_numpy(kernel, shape) -> None:
     no = _oracle()
     status = no.run_kernel(kernel, preset="S", precision="fp64", only_backends={"cpp", no.ISOPAR})
     assert status.get(no.ISOPAR) == "ok", f"{kernel} ({shape}): {status}"
@@ -672,7 +672,7 @@ _CONVERSION_CASES = [
 @pytest.mark.integration
 @pytest.mark.skipif(not shutil.which("g++"), reason="g++ needed to build the emitted C++")
 @pytest.mark.parametrize("name,body,dtypes", _CONVERSION_CASES, ids=[c[0] for c in _CONVERSION_CASES])
-def test_emitted_source_has_no_implicit_conversion(name, body, dtypes):
+def test_emitted_source_has_no_implicit_conversion(name, body, dtypes) -> None:
     """Every width or signedness change in the emitted C++ is written as an explicit
     ``static_cast``. Inside a lambda that is load-bearing: the callable's result is converted on the
     way into the output range, where the loop form's assignment used to hide it."""

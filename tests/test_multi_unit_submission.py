@@ -99,7 +99,7 @@ def build(lang, out_dir, extra_sources):
 
 
 @pytest.mark.parametrize("lang", LANGS)
-def test_every_unit_gets_its_own_compile_step(lang, tmp_path):
+def test_every_unit_gets_its_own_compile_step(lang, tmp_path) -> None:
     """Two units, two compile argvs, two distinct objects.
 
     Extension-inclusive object names are the point: an ``entry.o`` for both units is one clobbering
@@ -118,7 +118,7 @@ def test_every_unit_gets_its_own_compile_step(lang, tmp_path):
 
 
 @pytest.mark.parametrize("lang", LANGS)
-def test_the_link_step_names_every_object(lang, tmp_path):
+def test_the_link_step_names_every_object(lang, tmp_path) -> None:
     """The link argv has to carry BOTH objects. Carrying only the entry's is the defect this file
     exists for: the link still succeeds, because an undefined symbol is legal in a ``.so``."""
     entry, kernels = write_units(lang, tmp_path)
@@ -132,7 +132,7 @@ def test_the_link_step_names_every_object(lang, tmp_path):
 
 
 @pytest.mark.parametrize("lang", LANGS)
-def test_the_two_unit_library_resolves_and_computes(lang, tmp_path):
+def test_the_two_unit_library_resolves_and_computes(lang, tmp_path) -> None:
     """Built from both units, the library has no dangling helper and returns the right number."""
     entry, kernels = write_units(lang, tmp_path)
     lib, _, log = build(lang, tmp_path, [kernels])
@@ -144,7 +144,7 @@ def test_the_two_unit_library_resolves_and_computes(lang, tmp_path):
 
 
 @pytest.mark.parametrize("lang", LANGS)
-def test_dropping_the_second_unit_still_links_and_that_is_the_defect(lang, tmp_path):
+def test_dropping_the_second_unit_still_links_and_that_is_the_defect(lang, tmp_path) -> None:
     """The witness. Built from the entry alone the library LINKS -- no error anywhere -- and only
     the dynamic symbol table says the helper is missing. That silence is why the two assertions
     above are on the argv rather than on the exit status of the build."""
@@ -160,7 +160,7 @@ def test_dropping_the_second_unit_still_links_and_that_is_the_defect(lang, tmp_p
 # --- the shape this stands in for ------------------------------------------
 
 
-def test_a_gpu_submission_is_the_two_unit_case_the_host_languages_stand_in_for():
+def test_a_gpu_submission_is_the_two_unit_case_the_host_languages_stand_in_for() -> None:
     """Pins WHY this file uses host languages for a GPU-shaped build: ``source_units`` is where the
     two-unit delivery is decided, and a host language returns one unit, so nothing above could
     reach ``extra_sources`` through a submission. If a host language ever grows a second unit, this

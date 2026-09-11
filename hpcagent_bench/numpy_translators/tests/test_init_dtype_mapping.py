@@ -35,7 +35,7 @@ def _write_harness(tmp_path: pathlib.Path, body: str, short: str = "k") -> pathl
     return numpy_py
 
 
-def test_mismatched_length_skips_positional_mapping(tmp_path):
+def test_mismatched_length_skips_positional_mapping(tmp_path) -> None:
     # 3 returns vs 2 array args, different order: the unsound positional zip
     # would put ``flags``'s int32 onto ``flux`` (float). The length gate must
     # skip it -- only the by-name int32 of ``flags`` survives.
@@ -56,7 +56,7 @@ def test_mismatched_length_skips_positional_mapping(tmp_path):
     assert "flux" not in dtypes  # not corrupted by the misaligned zip
 
 
-def test_equal_length_positional_mapping_renamed(tmp_path):
+def test_equal_length_positional_mapping_renamed(tmp_path) -> None:
     # Equal length AND order: a kernel that RENAMES the harness locals (idx_in
     # <- idx) inherits the int32 via the gated positional fallback.
     numpy_py = _write_harness(
@@ -78,7 +78,7 @@ def test_equal_length_positional_mapping_renamed(tmp_path):
     assert dtypes.get("idx_in") == "int32"  # positional rename mapping applied
 
 
-def test_by_name_dtype_is_recorded(tmp_path):
+def test_by_name_dtype_is_recorded(tmp_path) -> None:
     # The harness local name == kernel arg name: the dtype is recorded under that
     # name regardless of any positional consideration.
     numpy_py = _write_harness(
@@ -106,7 +106,7 @@ def test_by_name_dtype_is_recorded(tmp_path):
 # --------------------------------------------------------------------------- #
 
 
-def test_declared_dtypes_reads_the_arrays_entry():
+def test_declared_dtypes_reads_the_arrays_entry() -> None:
     init = {
         "arrays": {
             "ip": {"shape": "(N,)", "dtype": "int32"},
@@ -117,14 +117,14 @@ def test_declared_dtypes_reads_the_arrays_entry():
     assert declared_dtypes(init) == {"ip": "int32", "z": "complex128"}
 
 
-def test_declared_dtypes_still_accepts_the_legacy_block():
+def test_declared_dtypes_still_accepts_the_legacy_block() -> None:
     # A bench_info JSON on disk may predate the move, and ``init.dtypes`` is also where a
     # non-array name (a symbol / plain scalar) is typed -- both must come through.
     init = {"arrays": {"a": {"shape": "(N,)", "dtype": "int32"}}, "dtypes": {"b": "float32", "n_iter": "int64"}}
     assert declared_dtypes(init) == {"a": "int32", "b": "float32", "n_iter": "int64"}
 
 
-def test_declared_dtypes_prefers_the_arrays_entry_over_the_legacy_block():
+def test_declared_dtypes_prefers_the_arrays_entry_over_the_legacy_block() -> None:
     init = {"arrays": {"a": {"shape": "(N,)", "dtype": "complex128"}}, "dtypes": {"a": "float64"}}
     assert declared_dtypes(init) == {"a": "complex128"}, "the current spelling wins"
 
@@ -136,7 +136,7 @@ def test_declared_dtypes_prefers_the_arrays_entry_over_the_legacy_block():
         ("fft_1d", "x", "complex128"),
     ],
 )
-def test_declared_array_dtype_reaches_the_ir(short, array, dtype):
+def test_declared_array_dtype_reaches_the_ir(short, array, dtype) -> None:
     """The whole seam, on real manifests: manifest -> emit_bridge export -> parse_kernel.
 
     This is the assertion that was missing when the export moved to ``init.arrays``: each of

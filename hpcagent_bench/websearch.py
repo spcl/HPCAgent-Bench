@@ -97,7 +97,7 @@ class WebSearchConfig:
     api_key: Optional[str] = None
     cse_id: Optional[str] = None  # google_cse only (the search-engine cx)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.provider is not None:
             object.__setattr__(self, "provider", Provider(self.provider))  # coerce/validate a string
         if int(self.max_results) < 1:

@@ -54,13 +54,13 @@ def _kir(d: pathlib.Path, body: str):
 
 
 @pytest.mark.parametrize("emit", [emit_c, emit_fortran], ids=["c", "fortran"])
-def test_an_over_ranked_index_is_refused_by_every_native_emitter(emit, tmp_path):
+def test_an_over_ranked_index_is_refused_by_every_native_emitter(emit, tmp_path) -> None:
     with pytest.raises(NotImplementedError) as e:
         emit(_kir(tmp_path, OVER_RANKED), fn_name="k")
     assert str(e.value) == index_rank_error("t", ["N", "N"], 3)
 
 
-def test_a_partial_index_stays_legal_where_the_language_expresses_it(tmp_path):
+def test_a_partial_index_stays_legal_where_the_language_expresses_it(tmp_path) -> None:
     """Fortran's ``t(:, i+1)`` IS a valid array section, so fewer axes than the rank is not the
     error above -- only the excess is. Guards the rank check against over-refusing."""
     kir = _kir(tmp_path, "import numpy as np\ndef k(t, out):\n    out[:] = t[0]\n")

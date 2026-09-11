@@ -39,13 +39,13 @@ def _dense(A):
 # ---------------------------------------------------------------------------
 
 
-def _make_csr(M, N, density=0.3, seed=0):
+def _make_csr(M, N, density: float = 0.3, seed: int = 0):
     A = sp.random(M, N, density=density, format="csr", random_state=seed, dtype=np.float64)
     A.sort_indices()
     return A
 
 
-def test_csr_matvec():
+def test_csr_matvec() -> None:
     M, N = 12, 9
     A = _make_csr(M, N, seed=1)
     x = np.random.default_rng(1).random(N)
@@ -57,7 +57,7 @@ def test_csr_matvec():
     assert np.allclose(y, A @ x)
 
 
-def test_csc_matvec():
+def test_csc_matvec() -> None:
     M, N = 10, 11
     Acsr = _make_csr(M, N, seed=2)
     A = Acsr.tocsc()
@@ -71,7 +71,7 @@ def test_csc_matvec():
     assert np.allclose(y, Acsr @ x)
 
 
-def test_coo_matvec():
+def test_coo_matvec() -> None:
     M, N = 8, 8
     Acsr = _make_csr(M, N, seed=3)
     A = Acsr.tocoo()
@@ -84,7 +84,7 @@ def test_coo_matvec():
     assert np.allclose(y, Acsr @ x)
 
 
-def test_dia_matvec():
+def test_dia_matvec() -> None:
     M = N = 10
     Acsr = _make_csr(M, N, density=0.4, seed=4)
     A = Acsr.todia()
@@ -98,7 +98,7 @@ def test_dia_matvec():
     assert np.allclose(y, Acsr @ x)
 
 
-def test_bcsr_matvec():
+def test_bcsr_matvec() -> None:
     R = C = 2
     Mb, Nb = 4, 3  # block rows / cols
     M, N = Mb * R, Nb * C
@@ -114,7 +114,7 @@ def test_bcsr_matvec():
     assert np.allclose(y, Acsr @ x)
 
 
-def test_bcoo_matvec():
+def test_bcoo_matvec() -> None:
     R = C = 2
     Mb, Nb = 4, 3  # block rows / cols
     M, N = Mb * R, Nb * C
@@ -154,7 +154,7 @@ def _to_ell(A):
     return indices, data, maxnz
 
 
-def test_ell_matvec():
+def test_ell_matvec() -> None:
     M, N = 9, 7
     Acsr = _make_csr(M, N, seed=6)
     indices, data, maxnz = _to_ell(Acsr)
@@ -198,7 +198,7 @@ def _to_jds(A):
     )
 
 
-def test_jds_matvec():
+def test_jds_matvec() -> None:
     M, N = 10, 8
     Acsr = _make_csr(M, N, density=0.4, seed=7)
     perm, jd_ptr, col_ind, jdiag, njd = _to_jds(Acsr)
@@ -275,7 +275,7 @@ def _to_sell(A, C):
     )
 
 
-def test_sell_c_sigma_matvec():
+def test_sell_c_sigma_matvec() -> None:
     M, N, C = 10, 8, 4
     Acsr = _make_csr(M, N, density=0.4, seed=8)
     slice_ptr, col_idx, val, row_len, perm, nslices = _to_sell(Acsr, C)
@@ -313,7 +313,7 @@ def test_sell_c_sigma_matvec():
 # ---------------------------------------------------------------------------
 
 
-def test_csr_csr_dense():
+def test_csr_csr_dense() -> None:
     NI, NK, NJ = 7, 6, 5
     A = _make_csr(NI, NK, seed=10)
     B = _make_csr(NK, NJ, seed=11)
@@ -342,7 +342,7 @@ def test_csr_csr_dense():
     assert np.allclose(M, _dense(A @ B))
 
 
-def test_csr_dense_mat():
+def test_csr_dense_mat() -> None:
     NI, NK, NC = 6, 5, 4
     A = _make_csr(NI, NK, seed=12)
     B = np.random.default_rng(12).random((NK, NC))

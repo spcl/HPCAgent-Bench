@@ -27,12 +27,12 @@ def _all_ok(res):
     return all(v == "ok" or v.startswith("skip") for v in res.values()), res
 
 
-def _z(n=6, seed=0):
+def _z(n: int = 6, seed: int = 0):
     rng = np.random.default_rng(seed)
     return (rng.standard_normal(n) + 1j * rng.standard_normal(n)).astype(np.complex128)
 
 
-def test_scalar_real_imag_in_real_arithmetic():
+def test_scalar_real_imag_in_real_arithmetic() -> None:
     # ``.real`` and ``.imag`` on a complex scalar, combined into a REAL result.
     src = (
         "import numpy as np\n"
@@ -46,7 +46,7 @@ def test_scalar_real_imag_in_real_arithmetic():
     assert ok, res
 
 
-def test_whole_array_real_and_imag():
+def test_whole_array_real_and_imag() -> None:
     # Whole-array ``x.real`` / ``x.imag`` -> a real array.
     for accessor in ("real", "imag"):
         src = f"import numpy as np\ndef k(z, out):\n  out[:] = z.{accessor}\n"
@@ -56,7 +56,7 @@ def test_whole_array_real_and_imag():
         assert ok, (accessor, res)
 
 
-def test_complex_elementwise_output():
+def test_complex_elementwise_output() -> None:
     # ``.imag`` (real) scaling a complex value -> a COMPLEX element-wise store.
     src = "import numpy as np\ndef k(z, out):\n for i in range(z.shape[0]):\n  out[i] = z[i] * z[i].imag + z[i]\n"
     ok, res = _all_ok(
@@ -74,7 +74,7 @@ def test_complex_elementwise_output():
     assert ok, res
 
 
-def test_mixed_real_complex_conditional():
+def test_mixed_real_complex_conditional() -> None:
     # ``z.real if <cond> else z`` -- a REAL branch beside a COMPLEX one. The
     # promotion pass makes both branches complex so Fortran ``merge`` and the JIT
     # unifiers accept it (mirrors QE ``_add_nlxx_pot`` gamma_only ``deexx.real``).
@@ -100,7 +100,7 @@ def test_mixed_real_complex_conditional():
     assert ok, res
 
 
-def test_np_real_imag_function_form():
+def test_np_real_imag_function_form() -> None:
     # ``np.real(z)`` / ``np.imag(z)`` -- the function spelling. Desugars to the
     # same canonical form as the ``.real`` / ``.imag`` accessor.
     src = (
@@ -115,7 +115,7 @@ def test_np_real_imag_function_form():
     assert ok, res
 
 
-def test_conjugate_method_and_np_conj():
+def test_conjugate_method_and_np_conj() -> None:
     # ``z.conjugate()`` / ``z.conj()`` method and ``np.conj(z)`` function all lower
     # (the methods desugar to ``np.conj``).
     for expr in ("z[i].conjugate()", "z[i].conj()", "np.conj(z[i])"):
@@ -135,7 +135,7 @@ def test_conjugate_method_and_np_conj():
         assert ok, (expr, res)
 
 
-def test_real_imag_preserve_complex64():
+def test_real_imag_preserve_complex64() -> None:
     # The element dtype is read from the array, never hardcoded: complex64 stays
     # single precision through the accessor (C ``crealf``/``cimagf`` path).
     z = _z().astype(np.complex64)
@@ -158,7 +158,7 @@ def test_real_imag_preserve_complex64():
 
 
 @pytest.mark.parametrize("view", ["np.transpose(m)", "np.conjugate(m)", "np.where(m.real > -1e30, m, m)"])
-def test_eigh_keeps_its_rotation_unitary_through_a_view(view):
+def test_eigh_keeps_its_rotation_unitary_through_a_view(view) -> None:
     """``np.linalg.eigh`` of a complex matrix reached through a view must still be an eigh.
 
     The Jacobi lowering allocates its work matrices from the operand's ``.dtype`` and derives the
@@ -191,7 +191,7 @@ def test_eigh_keeps_its_rotation_unitary_through_a_view(view):
     assert set(res.values()) == {"ok"}, res
 
 
-def test_conj_survives_a_local_copied_off_a_complex_parameter():
+def test_conj_survives_a_local_copied_off_a_complex_parameter() -> None:
     """``np.conj`` of a local taken off a complex PARAMETER must still conjugate.
 
     Sibling of the eigh view test above, and the same silent failure one step earlier:

@@ -17,7 +17,7 @@ import pytest
 _ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
-def test_wheel_is_pip_installable_and_complete(tmp_path):
+def test_wheel_is_pip_installable_and_complete(tmp_path) -> None:
     """Build a wheel offline and assert it carries every subpackage, config.yaml, and the
     console-script entry point -- i.e. `pip install hpcagent_bench` yields a usable package."""
     rc = subprocess.run(
@@ -51,7 +51,7 @@ def test_wheel_is_pip_installable_and_complete(tmp_path):
     assert "hpcagent-bench-install-apptainer" in zipfile.ZipFile(whl[0]).read(ep).decode()
 
 
-def test_pyproject_declares_a_build_system():
+def test_pyproject_declares_a_build_system() -> None:
     """Without a [build-system], `pip install -e` falls back to legacy `setup.py develop`, which
     ignores the package_dir remap and breaks `import numpyto_common` (what broke the judge container)."""
     pyproject = _ROOT / "pyproject.toml"
@@ -59,7 +59,7 @@ def test_pyproject_declares_a_build_system():
     assert "[build-system]" in pyproject.read_text(), "pyproject.toml declares no [build-system]"
 
 
-def test_container_defs_are_well_formed():
+def test_container_defs_are_well_formed() -> None:
     """Lint the two image defs: the agent image must not install the harness, the verifier image must
     pip-install both distributions, and every %files source path must exist."""
     cpu = (_ROOT / "containers" / "cpu.def").read_text()
@@ -94,7 +94,7 @@ def test_container_defs_are_well_formed():
     not (os.environ.get("HPCAGENT_BENCH_CONTAINER_BUILD_TEST") and shutil.which("apptainer")),
     reason="set HPCAGENT_BENCH_CONTAINER_BUILD_TEST=1 with apptainer to run a real build",
 )
-def test_apptainer_builds_and_imports(tmp_path):
+def test_apptainer_builds_and_imports(tmp_path) -> None:
     """Real build: a minimal image that pip-installs hpcagent_bench and imports numpyto_common (not just
     hpcagent_bench) -- the translator the legacy-develop fallback drops, exercising the fix end to end."""
     sif = tmp_path / "smoke.sif"
