@@ -14,6 +14,7 @@ programs it declares, and how the call reaches each one.
 """
 
 import ast
+import importlib
 import json
 import pathlib
 import sys
@@ -80,6 +81,18 @@ def two_extent_module(tmp_path_factory) -> str:
     return emit_dace(kernel_ir(tmp_path_factory.mktemp("two_extents"), TWO_EXTENTS))
 
 
+def module_symbols(module: str) -> set:
+    """Every name the module binds with ``dc.symbol`` -- what a call site may pass by keyword."""
+    return {
+        node.targets[0].id
+        for node in ast.parse(module).body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and "dc.symbol" in ast.unparse(node.value)
+    }
+
+
 def programs(module: str) -> dict:
     """``{program name: its FunctionDef}`` for every ``@dc.program`` the module declares."""
     return {
@@ -133,7 +146,13 @@ def test_a_helper_takes_its_data_positionally_and_its_symbols_by_keyword(two_ext
                 continue
             assert len(call.args) == len(params), f"{name}: {len(call.args)} positional for {params}"
             passed = {kw.arg for kw in call.keywords}
-            assert passed, f"{name}: its body-only symbol is not passed at all"
+            # EXACTLY the symbols the body needs and no annotation provides. Asserting merely that
+            # something is passed said more than the contract does: a helper all of whose symbols
+            # are inferable needs no keyword at all, and demanding one made this fail for an
+            # emission that was correct.
+            body_names = {n.id for stmt in fn.body for n in ast.walk(stmt) if isinstance(n, ast.Name)}
+            needed = (body_names & module_symbols(two_extent_module)) - annotated - set(params)
+            assert passed == needed, f"{name}: passes {sorted(passed)} for body-only symbols {sorted(needed)}"
             assert not (passed & annotated), f"{name}: {sorted(passed & annotated)} is inferable from a shape"
             assert not (passed & set(params)), f"{name}: {sorted(passed & set(params))} is already a parameter"
 
@@ -159,3 +178,23 @@ def test_the_helper_signature_is_spelled_in_the_helper_own_symbols(two_extent_mo
         # Every extent the signature names is either the helper's own or a module symbol the body
         # never reads under a different name -- never a second name for a dimension the body has one for.
         assert not (annotated & body & params), f"{name}: {sorted(annotated & body & params)} is both data and extent"
+
+
+@pytest.mark.dace_frontend
+def test_the_emitted_module_parses_through_the_dace_frontend(two_extent_module: str, tmp_path) -> None:
+    """The calling convention above is checked on the TEXT, and text can be self-consistent and
+    still wrong: a helper declared over the caller's symbol while its body computes in its own
+    parameter satisfies every assertion here and refuses to parse ("could not broadcast [n] into
+    [N]"). Only the frontend settles it, so the fixture is put through it."""
+    import dace  # noqa: F401 -- the marker gates this test on dace being installed
+
+    sys.path.insert(0, str(tmp_path))
+    try:
+        (tmp_path / "two_extent_dace.py").write_text(two_extent_module)
+        from tests.dace_parse_probe import bind_precision
+
+        bind_precision()
+        module = importlib.import_module("two_extent_dace")
+        module.k.to_sdfg(simplify=False)
+    finally:
+        sys.path.remove(str(tmp_path))

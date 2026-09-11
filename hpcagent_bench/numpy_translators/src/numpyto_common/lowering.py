@@ -6949,7 +6949,14 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
     arithmetic in C and as undefined Fortran.
     """
 
-    def __init__(self, shape_table, real_arrays=None, local_dtypes=None, scalar_defs=None, scalar_helpers=None) -> None:
+    def __init__(
+        self,
+        shape_table: Dict[str, Any],
+        real_arrays: Optional[Set[str]] = None,
+        local_dtypes: Optional[Dict[str, str]] = None,
+        scalar_defs: Optional[Dict[str, ast.expr]] = None,
+        scalar_helpers: Optional[Set[str]] = None,
+    ) -> None:
         # We mutate ``shape_table`` to track Name aliases per Assign in
         # source order. Use a local copy so the caller's table is not
         # repeatedly clobbered when an alias gets reassigned.

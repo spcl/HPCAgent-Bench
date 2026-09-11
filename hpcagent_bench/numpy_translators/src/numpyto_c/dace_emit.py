@@ -4017,7 +4017,13 @@ def caller_side_recipe(owner: ast.FunctionDef, arg: ast.expr, pinned: Dict[str, 
         and isinstance(st.targets[0], ast.Name)
         and st.targets[0].id == arg.id
     ]
-    return folded_with_constants(ast.unparse(bound[0]), pinned) if len(bound) == 1 else ""
+    if bound:
+        return folded_with_constants(ast.unparse(bound[0]), pinned) if len(bound) == 1 else ""
+    # A name the owner never assigns is a symbol of its own, and it STANDS for itself. Without this
+    # a helper whose extent argument is a bare symbol got no recipe at all, so its descriptors kept
+    # the caller's spelling while its body kept the parameter's -- ``_scale`` declared ``[N]`` and
+    # computed in ``n``, which is the one shape in two spellings this whole map exists to collapse.
+    return folded_with_constants(arg.id, pinned)
 
 
 @dataclasses.dataclass(slots=True)

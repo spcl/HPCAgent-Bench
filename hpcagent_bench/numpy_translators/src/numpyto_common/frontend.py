@@ -4560,7 +4560,15 @@ def call_specialized_body(hfn: ast.FunctionDef, pnames: List[str], args: List[as
     return probe
 
 
-def helper_returns_rank0(hfn, pnames, args, arr_by, sca_by, sym_by, fn=None) -> bool:
+def helper_returns_rank0(
+    hfn: ast.FunctionDef,
+    pnames: List[str],
+    args: List[ast.expr],
+    arr_by: Dict[str, ArrayDesc],
+    sca_by: Dict[str, ScalarDesc],
+    sym_by: Dict[str, SymbolDesc],
+    fn: Optional[ast.FunctionDef] = None,
+) -> bool:
     """Whether every RETURN of ``hfn`` is PROVABLY rank 0 -- a reduction, array in and scalar out.
 
     :func:`_helper_return_shape_from_body` answers ``None`` both for a scalar return and for a
