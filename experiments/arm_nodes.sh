@@ -8,8 +8,9 @@ arm_nodes() {
     echo $(( ${inference:-2} + ${agent:-1} + ${judge:-1} ))
 }
 
-# Image pull, engine start and the readiness probe, before any agent runs.
-STAGING_HOURS=${STAGING_HOURS:-2}
+# Image pull, engine start and the readiness probe, before any agent runs. A 6-node kimi GPU arm
+# measures 0.85 h; the rest is margin, because what a short limit loses is the LAST batch's kernels.
+STAGING_HOURS=${STAGING_HOURS:-3}
 
 # arm_walltime <env-file> <kernel count> -> HH:MM:SS
 # An agent batch runs AGENT_TIMEOUT_SECONDS; the roster is served in ceil(kernels/workers) batches.
