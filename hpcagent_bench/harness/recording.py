@@ -18,6 +18,8 @@ versioned or migrated. A schema change means rebuilding the DB (it is a derived
 results cache, cheap to regenerate), not an in-place ALTER path.
 """
 
+from __future__ import annotations
+
 import dataclasses
 import hashlib
 import os
