@@ -437,12 +437,12 @@ class Test(object):
         # Persist via the typed SQLModel schema; agent/prompt_hash are None on this direct-framework path.
         timestamp = int(time.time())
         # native vs container -- a containerized collector sets HPCAGENT_BENCH_RECORD_EXECUTION.
-        execution = str(config.get("record.execution", "native"))
+        execution = config.get_str("record.execution", "native")
         # Which BUILD produced these numbers (dace main vs extended, ...). Read from config for the
         # same reason as `execution`: it is a property of the deployment, so the launcher that
         # arranged the deployment sets it once (HPCAGENT_BENCH_RECORD_BUILD) instead of every call
         # site threading it down. Empty => unlabelled, the single-build case.
-        build = str(config.get("record.build", "")) or None
+        build = config.get_str("record.build", "") or None
         # The flat CLI name splits here and only here: `dace_cpu_parallel` is stored as the backend
         # plus the optimizer inside it, so grouping by backend does not have to know the flavors.
         column, flavor = split_flavor(self.frmwrk.info["simple_name"])

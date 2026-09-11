@@ -78,7 +78,7 @@ def enabled(kind: str) -> bool:
     """
     if kind not in KINDS:
         raise KeyError(f"unknown report kind {kind!r}; known: {sorted(KINDS)}")
-    return bool(config.get(f"perf_reports.{kind}", False))
+    return config.get_bool(f"perf_reports.{kind}", False)
 
 
 def report_root(kind: str) -> pathlib.Path:

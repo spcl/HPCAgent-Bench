@@ -127,6 +127,76 @@ def get(dotted: str, default: Any = None) -> Any:
     return node
 
 
+#: What a config value can be once coerced. A key holding anything else is a config bug, not a type
+#: the callers have to carry.
+ConfigValue = bool | int | float | str | list[object] | dict[str, object] | None
+
+
+def get_str(dotted: str, default: str = "") -> str:
+    """The config value at ``dotted`` as text.
+
+    Typed accessors exist because :func:`get` returns the union above, so every caller of it
+    inherits an unchecked value: a key read as a string and compared against one still type-checks
+    when it holds an int. Each accessor converts once, here, and raises on a value that cannot be
+    the type asked for rather than letting it travel."""
+    value = get(dotted, default)
+    if value is None:
+        return default
+    if isinstance(value, (list, dict)):
+        raise TypeError(f"config {dotted} is {type(value).__name__}, not a string")
+    return str(value)
+
+
+def get_bool(dotted: str, default: bool = False) -> bool:
+    """The config value at ``dotted`` as a flag. ``"true"``/``"1"``/``"yes"``/``"on"`` are true."""
+    value = get(dotted, default)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in ("true", "1", "yes", "on"):
+            return True
+        if text in ("false", "0", "no", "off", ""):
+            return False
+    raise TypeError(f"config {dotted} is {value!r}, not a flag")
+
+
+def get_int(dotted: str, default: int = 0) -> int:
+    """The config value at ``dotted`` as an integer. A float that is not whole is a config bug."""
+    value = get(dotted, default)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if value != int(value):
+            raise TypeError(f"config {dotted} is {value!r}, not an integer")
+        return int(value)
+    if isinstance(value, str):
+        return int(value.strip())
+    raise TypeError(f"config {dotted} is {value!r}, not an integer")
+
+
+def get_float(dotted: str, default: float = 0.0) -> float:
+    """The config value at ``dotted`` as a float."""
+    value = get(dotted, default)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        return float(value.strip())
+    raise TypeError(f"config {dotted} is {value!r}, not a number")
+
+
 @dataclasses.dataclass
 class Section:
     """One ``config.yaml`` block as typed, mutable attributes.

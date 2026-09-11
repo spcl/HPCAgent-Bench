@@ -580,7 +580,7 @@ def kernel_memory_gb(
     given (a fuzz draw, a sweep cell); ``datatype`` is the run precision, so fp32 halves every
     array the manifest pins no dtype on (:func:`working_bytes`).
     """
-    floor = float(config.get("limits.kernel_memory_gb", 10))
+    floor = config.get_float("limits.kernel_memory_gb", 10)
     values = params if params is not None else spec.parameters.get(preset)
     if values is None or spec.init is None:
         return floor

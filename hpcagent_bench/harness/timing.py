@@ -104,7 +104,7 @@ def warmup_count() -> int:
     baseline so the ratio stays fair (warming only one side would bias it). ``min_of_k`` already
     drops the slow cold sample via ``min``; the discard also cleans the distributional backend and
     makes the timed sample list literally warm-only."""
-    return max(0, int(config.get("measurement.warmup", 1)))
+    return max(0, config.get_int("measurement.warmup", 1))
 
 
 def measurement_repeat() -> int:
@@ -113,7 +113,7 @@ def measurement_repeat() -> int:
     drift on rigor. ``measurement.repeat`` (default 50). Distinct from the distributed
     driver's ``mpi.k_repeats`` and the in-optimize variant-selection ``SCORE_REPEAT``,
     which are separate semantics."""
-    return max(1, int(config.get("measurement.repeat", 50)))
+    return max(1, config.get_int("measurement.repeat", 50))
 
 
 def local_repeat() -> int:
@@ -128,7 +128,7 @@ def local_repeat() -> int:
     ``profiling.py``, and ``/baseline`` must keep the ranked count because it advertises the
     number the agent is trying to beat -- ``min`` of fewer samples is never smaller, so a cheap
     baseline there is an easier target than the one ``/submit`` grades against."""
-    return max(1, int(config.get("measurement.local_repeat", 5)))
+    return max(1, config.get_int("measurement.local_repeat", 5))
 
 
 def measurement_baseline() -> str:
@@ -138,7 +138,7 @@ def measurement_baseline() -> str:
     the per-track resolver picks the concrete kind). Callers that legitimately force a
     different baseline (e.g. the distributed adapter pins ``"numpy"``) pass it explicitly
     and skip this."""
-    return str(config.get("measurement.baseline", "auto"))
+    return config.get_str("measurement.baseline", "auto")
 
 
 #: What one timed rep hands back beside its nanoseconds; every rep of one collection agrees on it.
@@ -268,16 +268,16 @@ def reduce(candidate_ns: Sequence[float], baseline_ns: Sequence[float], *, backe
         return reduce_mannwhitney_delta(
             candidate_ns,
             baseline_ns,
-            p=float(config.get("measurement.mannwhitney.p", 0.1)),
-            ratio_step=float(config.get("measurement.mannwhitney.ratio_step", 0.01)),
-            ratio_max=float(config.get("measurement.mannwhitney.ratio_max", 1000.0)),
+            p=config.get_float("measurement.mannwhitney.p", 0.1),
+            ratio_step=config.get_float("measurement.mannwhitney.ratio_step", 0.01),
+            ratio_max=config.get_float("measurement.mannwhitney.ratio_max", 1000.0),
         )
     return reduce_min_of_k(candidate_ns, baseline_ns)
 
 
 def active_backend(backend: str | None = None) -> str:
     """The configured timing backend (``measurement.timing_backend``), or ``backend``."""
-    return backend if backend is not None else str(config.get("measurement.timing_backend", "min_of_k"))
+    return backend if backend is not None else config.get_str("measurement.timing_backend", "min_of_k")
 
 
 def required_repeat(backend: str | None = None) -> int:
@@ -285,7 +285,7 @@ def required_repeat(backend: str | None = None) -> int:
     needs a full sample on each side (``measurement.mannwhitney.repeats``) for the
     U test; ``min_of_k`` needs only one."""
     if active_backend(backend) == "mannwhitney_delta":
-        return int(config.get("measurement.mannwhitney.repeats", 20))
+        return config.get_int("measurement.mannwhitney.repeats", 20)
     return 1
 
 

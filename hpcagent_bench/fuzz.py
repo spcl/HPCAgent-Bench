@@ -147,12 +147,12 @@ def resolve_ranges(
     # `+fuzz` is a MODIFIER on a rung (spec.parse_preset), so the draw is anchored on the rung
     # the caller asked for: XL+fuzz draws around XL, M+fuzz around M. resolve_preset sets
     # fuzz.anchor for every token, so this never reads a stale rung from an earlier call.
-    anchor = str(config.get("fuzz.anchor", "XL"))
+    anchor = config.get_str("fuzz.anchor", "XL")
     base = parameters.get(anchor) or parameters.get("XL") or parameters.get("L") or next(iter(parameters.values()))
     # Defaults track config.yaml. They used to read 0.85/1.15, which silently restored the band
     # that put every draw above 1.00x through the track ceiling whenever the key was absent.
-    lo_m = float(config.get("fuzz.xl_lo_mult", 0.50))
-    hi_m = float(config.get("fuzz.xl_hi_mult", 1.00))
+    lo_m = config.get_float("fuzz.xl_lo_mult", 0.50)
+    hi_m = config.get_float("fuzz.xl_hi_mult", 1.00)
     out: dict[str, Any] = {}
     for name, value in base.items():
         if name in config_names:
@@ -184,7 +184,7 @@ def _apply_size_cap(
     the gate stays cheap+bounded). A cap <= 0 is a no-op. ``config_names`` (see
     :func:`resolve_ranges`) are exempt from the cap -- a size ceiling is a size
     concept, and clamping a config knob would silently change it same as fuzzing it."""
-    cap = int(config.get("fuzz.size_cap", 0)) if cap is None else int(cap)
+    cap = config.get_int("fuzz.size_cap", 0) if cap is None else int(cap)
     if cap <= 0:
         return ranges
     out: dict[str, Any] = {}
@@ -384,7 +384,7 @@ def sample_params(
     :func:`resolve_ranges` so those params are never treated as fuzzable sizes.
     """
     fuzzed = resolve_ranges(parameters, size_cap, config_names)
-    seed = int(config.get("seeds.fuzz", 42)) + int(iteration)
+    seed = config.get_int("seeds.fuzz", 42) + int(iteration)
     distribution = config.get("fuzz.size_distribution", "log_uniform")
     constraints = constraints or []
     for attempt in range(_MAX_RESAMPLE):
@@ -398,7 +398,7 @@ def sample_params(
 
 def iterations() -> int:
     """Configured number of fuzz iterations (``fuzz.iterations``)."""
-    return int(config.get("fuzz.iterations", 20))
+    return config.get_int("fuzz.iterations", 20)
 
 
 def correctness_iterations() -> int:
@@ -663,7 +663,7 @@ def fuzzed_shape(
     sizes resolve against ``config_ns`` instead of a freshly sampled config. Raises
     ``ValueError`` if no draw satisfies ``constraints``. ``config_names`` (declared
     knob names, see :func:`resolve_ranges`) forwards to :func:`_resolve_against`."""
-    seed = int(config.get("seeds.fuzz", 42)) + int(iteration)
+    seed = config.get_int("seeds.fuzz", 42) + int(iteration)
     distribution = config.get("fuzz.size_distribution", "log_uniform")
     return _resolve_against(
         parameters,
@@ -688,34 +688,32 @@ def correctness_size_cap() -> int:
     The global ``fuzz.size_cap`` still bounds it (so a test that shrinks everything
     shrinks the correctness cells too). Does NOT touch the timed large shapes
     (:func:`large_shapes`) or the edge probes."""
-    caps = [
-        c for c in (int(config.get("fuzz.correctness_size_cap", 1024)), int(config.get("fuzz.size_cap", 0))) if c > 0
-    ]
+    caps = [c for c in (config.get_int("fuzz.correctness_size_cap", 1024), config.get_int("fuzz.size_cap", 0)) if c > 0]
     return min(caps) if caps else 0
 
 
 def perf_mode() -> str:
     """The configured performance mode (``perf.mode``)."""
-    return str(config.get("perf.mode", "all_configs_3shapes"))
+    return config.get_str("perf.mode", "all_configs_3shapes")
 
 
 def secret_shape_seed() -> int:
     """The JUDGE-ONLY secret shape seed (``seeds.secret_shape``)."""
-    return int(config.get("seeds.secret_shape", 31337))
+    return config.get_int("seeds.secret_shape", 31337)
 
 
 def default_n_large_shapes() -> int:
     """Configured number of timed large shapes per config (``perf.n_large_shapes``) --
     the ONE source of truth for the count, shared by the fuzz shape draw and the
     prompt's disclosure of how many large shapes are timed."""
-    return int(config.get("perf.n_large_shapes", 3))
+    return config.get_int("perf.n_large_shapes", 3)
 
 
 def public_large_seed_base() -> int:
     """The FIXED PUBLIC base seed for the timed large shapes -- a dedicated offset
     off ``seeds.fuzz``, DISCLOSED to the agent (the public-mode timed sizes are
     reproducible) yet distinct from the correctness fuzz draws."""
-    return int(config.get("seeds.fuzz", 42)) + 10_000
+    return config.get_int("seeds.fuzz", 42) + 10_000
 
 
 def _public_large_seeds(n: int) -> list[int]:

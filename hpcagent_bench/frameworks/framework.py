@@ -848,7 +848,7 @@ class Framework(object):
         series over the kept samples. ``warmup=None`` reads ``measurement.warmup`` (the judge's own policy,
         so a comparison run doesn't drift from it on cold first-touch)."""
         if warmup is None:
-            warmup = max(0, int(config.get("measurement.warmup", 1)))
+            warmup = max(0, config.get_int("measurement.warmup", 1))
         timer = self.create_timer(impl)
         try:
             samples: List[TimingResult] = []
