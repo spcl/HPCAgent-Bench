@@ -26,6 +26,14 @@ the scaled formula (Pernice & Walker 1998, surveyed in Knoll & Keyes Sec. 2.3)
 ``eps = sqrt(macheps) * (1 + ||u||) / ||v||`` rather than a constant -- the ``1 +`` keeps eps finite
 at u = 0, which is every Newton run's starting point here. ``tests/ports/jfnk_bratu`` reruns the
 same solver with a constant eps as the negative control and shows the quadratic rate collapse.
+
+``macheps`` is read off ``u.dtype``, never pinned to float64: it is a ROUND-OFF BOUND, so it has to
+follow the width the solve actually runs at (the translators fold ``np.finfo(...).eps`` to the
+emitted precision for the same reason). Pinning float64 and then running fp32 divides the residual
+difference by an eps ~23000x too small, which amplifies u's own representation error into the
+Jacobian-vector product: Newton then DIVERGES (||F|| 1.8e+02 -> 3.7e+03, |u|max 15.5 against a true
+0.795) instead of converging. With the bound read off the dtype the fp32 solve lands 1.4e-06 from
+the fp64 answer.
 """
 
 import numpy as np
@@ -61,7 +69,7 @@ def bratu_dot(A, B, N):
 
 def bratu_jvp(u, v, Fu, Jv, up, Fp, N, lam):
     """Matrix-free J(u) v ~= (F(u + eps*v) - F(u)) / eps, scaled eps (see module docstring)."""
-    macheps = np.finfo(np.float64).eps
+    macheps = np.finfo(u.dtype).eps
     nu = bratu_norm(u, N)
     nv = bratu_norm(v, N)
     if nv == 0.0:
