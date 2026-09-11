@@ -96,6 +96,35 @@ def block_of(raw: object, field_name: str, source: str) -> dict[str, object]:
     return block
 
 
+def str_block_of(raw: object, field_name: str, source: str) -> dict[str, str]:
+    """One manifest block whose values are all strings. Every entry across the corpus is, so a
+    non-string is a typo caught here rather than an attribute error where the value is read."""
+    out: dict[str, str] = {}
+    for key, value in block_of(raw, field_name, source).items():
+        if not isinstance(value, str):
+            raise ValueError(f"{source}: {field_name}.{key}: expected a string (got {type(value).__name__})")
+        out[key] = value
+    return out
+
+
+def list_block_of(raw: object, field_name: str, source: str) -> dict[str, list[str]]:
+    """One manifest block whose values are all lists of strings."""
+    out: dict[str, list[str]] = {}
+    for key, value in block_of(raw, field_name, source).items():
+        if not isinstance(value, list):
+            raise ValueError(f"{source}: {field_name}.{key}: expected a list (got {type(value).__name__})")
+        # isinstance proves it is a list and nothing about its members, which is what the cast says
+        out[key] = [str(item) for item in cast("list[object]", value)]
+    return out
+
+
+def nested_block_of(raw: object, field_name: str, source: str) -> dict[str, dict[str, object]]:
+    """One manifest block whose values are all mappings."""
+    return {
+        key: block_of(value, f"{field_name}.{key}", source) for key, value in block_of(raw, field_name, source).items()
+    }
+
+
 def as_value(raw: object) -> FuzzValue | None:
     """One parsed node as a declared value, or ``None`` when it is not one (a YAML null, a
     timestamp).
@@ -1003,7 +1032,7 @@ LEVELS = (1, 2, 3)
 #: Default input-data distributions a kernel is fuzzed over (the ``fuzzed``
 #: preset cycles these). A manifest omits ``fuzz`` to take this default; only a
 #: kernel that needs a DIFFERENT set spells it out.
-DEFAULT_FUZZ: dict[str, object] = {"data_distributions": ["uniform", "normal", "lognormal"]}
+DEFAULT_FUZZ: dict[str, list[str]] = {"data_distributions": ["uniform", "normal", "lognormal"]}
 
 
 def derive_array_args(input_args: tuple[str, ...], init: InitSpec | None) -> tuple[str, ...] | None:
@@ -1294,7 +1323,7 @@ class BenchSpec:
     #: writes all of its output.
     output_extent: dict[str, str] = field(default_factory=dict[str, str])
     init: InitSpec | None = None
-    variants: dict[str, dict[str, object]] = field(default_factory=lambda: {"default": dict[str, object]()})
+    variants: dict[str, dict[str, str]] = field(default_factory=lambda: {"default": dict[str, str]()})
     #: Berkeley dwarf. DERIVED from the manifest's own location -- the directory under the track
     #: IS the dwarf, and it agreed with the declared value on 144 of 144 kernels that declared one,
     #: so declaring it was a second copy that could disagree. ``None`` for a flat track.
@@ -1335,7 +1364,7 @@ class BenchSpec:
 
     # v2 co-located-YAML additions (all optional, back-compat defaults).
     languages: tuple[str, ...] = ()
-    fuzz: dict[str, object] = field(default_factory=dict[str, object])
+    fuzz: dict[str, list[str]] = field(default_factory=dict[str, list[str]])
     loop_level_reasoning: dict[str, str] = field(default_factory=dict[str, str])
     notes: str | None = None
 
@@ -1347,7 +1376,7 @@ class BenchSpec:
     # ({size_symbol: [array, axis]}) that pins per-rank local extents for legacy
     # kernels whose shapes are not declarative. Consumed by ``mpi_descriptor`` and
     # ``mpi_sizing``; a nested-permissive block (validated where it is read).
-    mpi: dict[str, object] = field(default_factory=dict[str, object])
+    mpi: dict[str, dict[str, object]] = field(default_factory=dict[str, dict[str, object]])
 
     # The kernel's OWN speedup denominator (optional; absent => the track default applies).
     # Present only for a kernel that commits an upstream-parallel native source beside its
@@ -1801,7 +1830,7 @@ class BenchSpec:
         # means partitioning + rebuilding the coupled indptr/indices/data arrays, which the
         # dense ownership descriptor does not express, so sparse kernels run multi-node only
         # replicated (omit ``mpi:``).
-        mpi_blk = block_of(ext.get("mpi", bench.get("mpi")), "mpi", source)
+        mpi_blk = nested_block_of(ext.get("mpi", bench.get("mpi")), "mpi", source)
         if mpi_blk and sparse_layouts:
             raise ValueError(
                 f"{source}: a kernel with 'sparse_layouts' cannot declare an 'mpi:' block -- "
@@ -1824,7 +1853,9 @@ class BenchSpec:
         track = str(ext.get("track", bench.get("track", "loop_level_reasoning")))
         llr_raw = ext.get("loop_level_reasoning", bench.get("loop_level_reasoning"))
         loop_level_blk = {k: str(v) for k, v in block_of(llr_raw, "loop_level_reasoning", source).items()}
-        fuzz_blk: dict[str, object] = block_of(ext.get("fuzz", bench.get("fuzz")), "fuzz", source) or dict(DEFAULT_FUZZ)
+        fuzz_blk: dict[str, list[str]] = list_block_of(ext.get("fuzz", bench.get("fuzz")), "fuzz", source) or dict(
+            DEFAULT_FUZZ
+        )
         # The config space is TOP-LEVEL and preset-independent; it never lived correctly under
         # 'fuzz:', which reads as "only the fuzzed preset explores configs". Reject the old spelling
         # outright rather than honouring both -- two homes for one space is how a kernel ends up
@@ -1856,7 +1887,7 @@ class BenchSpec:
         min_precision = ext.get("min_precision", bench.get("min_precision"))
         notes = bench.get("notes") or bench.get("_note")
         variants_raw = block_of(bench.get("variants") or {"default": {}}, "variants", source)
-        variants = {v: block_of(blk, f"variants.{v}", source) for v, blk in variants_raw.items()}
+        variants = {v: str_block_of(blk, f"variants.{v}", source) for v, blk in variants_raw.items()}
         return cls(
             short_name=short_name,
             name=str(bench["name"]),
@@ -2090,7 +2121,7 @@ class BenchSpec:
             )
         return out
 
-    def _legacy_sparse_variants(self) -> dict[str, dict[str, object]]:
+    def _legacy_sparse_variants(self) -> dict[str, dict[str, str]]:
         """The ``variants`` entries that describe a sparse ``format``
         (legacy model). Empty for dense kernels whose ``variants`` is just
         the ``{"default": {}}`` placeholder."""
