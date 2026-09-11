@@ -291,9 +291,7 @@ class CallNode:
     dso: str
     self_samples: int = 0
     total_samples: int = 0
-    children: dict[tuple[str, str], "CallNode"] = dataclasses.field(
-        default_factory=dict["tuple[str, str]", "CallNode"]
-    )
+    children: dict[tuple[str, str], "CallNode"] = dataclasses.field(default_factory=dict["tuple[str, str]", "CallNode"])
 
     def child(self, symbol: str, dso: str) -> "CallNode":
         return self.children.setdefault((symbol, dso), CallNode(symbol, dso))

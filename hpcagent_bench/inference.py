@@ -470,9 +470,7 @@ def interval_for(
     return bootstrap_ci(samples, np.median, "median", confidence, n_resamples, "BCa", seed), verdict
 
 
-def fieller_ratio_ci(
-    numerator: Samples, denominator: Samples, confidence: float = DEFAULT_CONFIDENCE
-) -> Interval:
+def fieller_ratio_ci(numerator: Samples, denominator: Samples, confidence: float = DEFAULT_CONFIDENCE) -> Interval:
     """Fieller's theorem interval for the RATIO OF MEANS of two INDEPENDENT normal samples.
 
     A ratio's interval is not the ratio of two intervals: the denominator's uncertainty enters

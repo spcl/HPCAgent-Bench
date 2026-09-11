@@ -202,7 +202,9 @@ def main(argv: list[str] | None = None) -> int:
     # One flag per identity column, each repeatable, so the CLI says exactly what the table says.
     for column in IDENTITY:
         parser.add_argument(
-            f"--{column}", action="append", default=[],
+            f"--{column}",
+            action="append",
+            default=[],
             help=f"keep rows whose run has this {column}; repeatable, omit to keep every value",
         )
     parser.add_argument("--out", type=pathlib.Path, required=True, help="observations CSV to write")
