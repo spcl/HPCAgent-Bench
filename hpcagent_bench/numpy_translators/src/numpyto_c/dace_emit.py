@@ -6,11 +6,11 @@ import dataclasses
 import functools
 import itertools
 import re
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from numpyto_common import dtypes
 from numpyto_common.frontend import fold_shape_expr
-from numpyto_common.ir import KernelIR, shape_dimension_symbols
+from numpyto_common.ir import ArrayDesc, KernelIR, shape_dimension_symbols
 from numpyto_common.lib_nodes import shape_exprs_equal, sympify_shape
 from numpyto_common.lowering import lower
 from numpyto_common.numpy_desugar import _AUG_OP_SRC, desugar_for_python_backend, expr_rank, rank_table
@@ -3463,6 +3463,132 @@ def called_helpers(body: List[ast.stmt], helpers) -> OrderedSet:
     return called
 
 
+def contiguous_subscript(node: ast.Subscript) -> bool:
+    """Whether ``node`` selects a CONTIGUOUS block, so its strides are the ones a plain parameter
+    of that shape declares.
+
+    C order: leading integer indices, then at most one bounded slice, then whole axes.
+    ``Q[k, :, :]`` walks a plane with strides ``(N, 1)``; ``Q[:, :, k]`` walks the same shape with
+    strides ``(N * m, m)``, and a step or an inserted axis is neither.
+    """
+    elements = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
+    spanning = False
+    for element in elements:
+        if inserts_axis(element):
+            return False
+        if isinstance(element, ast.Slice):
+            if element.step is not None:
+                return False
+            if spanning and not (element.lower is None and element.upper is None):
+                return False
+            spanning = True
+        elif spanning:
+            return False  # an index BEHIND a kept axis strides over it
+    return True
+
+
+def sliced_extents(node: ast.Subscript, shapes: Dict[str, List[str]], known: Set[str]) -> Optional[List[str]]:
+    """The extents a subscript leaves behind, by numpy's rank rules: a slice KEEPS an axis, an
+    index DROPS it. ``None`` when the base or a bound is not one this can spell.
+
+    Narrower than :meth:`ResolveShapeReads.sliced` on purpose, and for the opposite reason: the
+    INDEX expression decides no extent, so an index by a loop variable -- ``Q[:, :, k]``, every
+    one of these call sites -- has to leave the shape known, and that method declines it.
+    """
+    if not isinstance(node.value, ast.Name):
+        return None
+    base = shapes.get(node.value.id)
+    elements = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
+    if base is None or len(elements) > len(base):
+        return None
+    tokens: List[str] = []
+    for axis, element in enumerate(elements):
+        if not isinstance(element, ast.Slice):
+            continue
+        if element.step is not None:
+            return None
+        if element.lower is None and element.upper is None:
+            tokens.append(base[axis])
+            continue
+        bounds = [b for b in (element.lower, element.upper) if b is not None]
+        if any(not _is_symbol_expr(b, known) for b in bounds):
+            return None
+        upper = ast.unparse(element.upper) if element.upper is not None else base[axis]
+        if element.lower is None or (isinstance(element.lower, ast.Constant) and element.lower.value == 0):
+            tokens.append(upper)
+        else:
+            tokens.append(f"{upper} - ({ast.unparse(element.lower)})")
+    return tokens + base[len(elements) :]
+
+
+def materialize_strided_helper_args(
+    body: List[ast.stmt],
+    written_by: Dict[str, List[bool]],
+    shapes: Dict[str, List[str]],
+    dtype_of: Dict[str, str],
+    known: Set[str],
+) -> List[ast.stmt]:
+    """``body`` with every non-contiguous slice argument of a kept-helper call copied through a
+    contiguous temp, allocations first.
+
+    dace solves a callee's symbols from what the call passes and equates STRIDES as well as shapes.
+    ``bratu_jvp(u, Q[:, :, k], ...)`` hands a rank-3 array's trailing-index view -- strides
+    ``(N * (m + 1), m + 1)`` -- to a parameter declared ``[N, N]``, whose strides are ``(N, 1)``:
+    the two equations say ``__SOLVE_N = N`` and ``__SOLVE_N = (m + 1) * N`` at once, sympy returns
+    nothing, and the frontend reports "Cannot infer values for symbols in inference". Accepting the
+    view would be worse than refusing it -- the callee would walk the wrong elements -- so the copy
+    is the fix, the same one ``_build_callsite_stmts`` already makes for an array-returning call.
+
+    ``written_by`` says, per call-site position, whether the callee WRITES that parameter; one that
+    it does is copied back after the call, or the sweep would be a silent dropped result.
+
+    The temp is allocated at FUNCTION scope, not beside the call: these calls sit in loops, and one
+    name with one shape is what dace wants. An extent naming anything but a declared array, scalar
+    or symbol is not loop-invariant, and declines the rewrite rather than sizing a buffer off a
+    loop variable.
+    """
+    allocations: List[ast.stmt] = []
+    counter = itertools.count()
+
+    def materialized(stmt: ast.stmt) -> List[ast.stmt]:
+        pre: List[ast.stmt] = []
+        post: List[ast.stmt] = []
+        for call in [n for n in ast.walk(stmt) if isinstance(n, ast.Call)]:
+            if not isinstance(call.func, ast.Name):
+                continue
+            flags = written_by.get(call.func.id)
+            if flags is None or len(flags) != len(call.args):
+                continue
+            for index, arg in enumerate(call.args):
+                if not isinstance(arg, ast.Subscript) or contiguous_subscript(arg):
+                    continue
+                if not isinstance(arg.value, ast.Name) or arg.value.id not in dtype_of:
+                    continue
+                tokens = sliced_extents(arg, shapes, known)
+                if not tokens or any(i not in known for t in tokens for i in _IDENT_RE.findall(t)):
+                    continue
+                name = f"__hslice_{next(counter)}"
+                dtype = dtype_of[arg.value.id]
+                allocations.append(ast.parse(f"{name} = np.empty(({', '.join(tokens)},), dtype=np.{dtype})").body[0])
+                pre.append(ast.parse(f"{name}[:] = {ast.unparse(arg)}").body[0])
+                if flags[index]:
+                    post.append(ast.parse(f"{ast.unparse(arg)} = {name}").body[0])
+                call.args[index] = ast.Name(id=name, ctx=ast.Load())
+        return pre + [stmt] + post
+
+    def rewrite(stmts: List[ast.stmt]) -> List[ast.stmt]:
+        out: List[ast.stmt] = []
+        for stmt in stmts:
+            for field, value in ast.iter_fields(stmt):
+                if isinstance(value, list) and value and all(isinstance(v, ast.stmt) for v in value):
+                    setattr(stmt, field, rewrite(value))
+            out.extend(materialized(stmt))
+        return out
+
+    rewritten = rewrite(body)
+    return allocations + rewritten
+
+
 @dataclasses.dataclass(slots=True)
 class RenderedProgram:
     """One ``@dc.program``: its signature and body, plus what the MODULE has to declare for it.
@@ -3484,12 +3610,16 @@ class RenderedProgram:
     needs_complex: bool
 
 
-def render_program(kir: KernelIR, fn_name: str | None = None) -> RenderedProgram:
+def render_program(kir: KernelIR, fn_name: str | None = None, helpers: Sequence[KernelIR] = ()) -> RenderedProgram:
     """Lower ``kir``'s body into the form dace's frontend parses, and return it with its signature.
 
     Shared by the kernel and by every kept helper: a helper is a ``@dc.program`` of its own, so it
     needs the same desugaring, the same shape-read resolution and the same symbol promotion, and
     running it through a second code path would let the two drift.
+
+    ``helpers`` is the whole kept-helper closure, not ``kir.helpers``: a helper calls a SIBLING and
+    carries no list of its own. It is what :func:`materialize_strided_helper_args` reads to tell a
+    call to one from any other call in the body.
     """
     if names_logical_sparse(kir):
         kir = lower(kir)
@@ -3727,6 +3857,23 @@ def render_program(kir: KernelIR, fn_name: str | None = None) -> RenderedProgram
         and isinstance(body[0].value.value, str)
     ):
         body = body[1:]
+    # After the docstring, so the allocations do not displace it, and after every pass above, so
+    # the argument expressions they rewrite have settled.
+    written_by = {
+        h.kernel_name: [any(a.name == p and a.is_output for a in h.arrays) for p in h.abi_param_order()]
+        for h in helpers
+    }
+    if written_by:
+        local_shapes = {nm: list(dims) for nm, dims in kir.zeros_locals.items()}
+        slice_dtypes = {a.name: a.dtype for a in kir.arrays}
+        slice_dtypes.update({nm: kir.local_dtypes.get(nm, default_dtype) for nm in local_shapes})
+        body = materialize_strided_helper_args(
+            body,
+            written_by,
+            {**arr_shapes, **local_shapes},
+            slice_dtypes,
+            set(arrays) | set(scalars) | set(symbol_names) | set(kir.pinned_consts) | set(kir.inlined_consts),
+        )
     # A kept helper's out-param: redeclare it with the extent its OWN body allocates, so the
     # closing ``hret[:] = out`` compares one expression with itself. See body_allocated_shape.
     hret = kir.return_kind if kir.return_kind in arrays else ""
@@ -3965,6 +4112,54 @@ def with_helper_vocabulary(hkir: KernelIR, binding: HelperBinding) -> KernelIR:
     )
 
 
+def with_solvable_extents(hkir: KernelIR) -> KernelIR:
+    """``hkir`` with every parameter extent dace cannot SOLVE replaced by one symbol of its own.
+
+    dace binds a nested ``@dc.program`` by solving the callee's symbols from the shapes its call
+    site passes, and a compound extent contributes ONE equation however many symbols it spells.
+    ``sgs_apply``'s three CSR parameters are declared ``(3 * NX - 2) * (3 * NY - 2) * (3 * NZ - 2)``
+    and ``NX * NY * NZ + 1`` over a body that names only ``N``: three equations for four unknowns,
+    and sympy answered with a one-parameter family of quadratics -- "Ambiguous values for symbols
+    in inference". A name the callee's body never reads decides nothing the callee computes, so the
+    whole extent becomes one symbol and the system is square again.
+
+    Only an extent naming something nothing else SUPPLIES is rewritten. An identifier the body
+    reads, a pinned config knob, and an identifier some other parameter declares on its own (a
+    bare ``H`` beside an ``H - 2``) are all determined already, and respelling those would retire a
+    name the body or a sibling extent still needs.
+    """
+    body_names = {n.id for n in ast.walk(hkir.tree) if isinstance(n, ast.Name)}
+    bare = {str(d).strip() for a in hkir.arrays for d in a.shape if _IDENT_RE.fullmatch(str(d).strip())}
+    supplied = body_names | bare | set(hkir.pinned_consts) | set(hkir.inlined_consts)
+    taken = {a.name for a in hkir.arrays} | {s.name for s in hkir.scalars} | {s.name for s in hkir.symbols}
+    taken |= body_names | supplied
+    minted: Dict[str, str] = {}
+    arrays: List[ArrayDesc] = []
+    for arr in hkir.arrays:
+        dims: List[str] = []
+        for dim in arr.shape:
+            idents = _IDENT_RE.findall(str(dim))
+            if not idents or all(i in supplied for i in idents):
+                dims.append(str(dim))
+                continue
+            key = fold_shape_expr(str(dim))
+            name = minted.get(key)
+            if name is None:
+                name = f"{hkir.kernel_name}_extent{len(minted)}"
+                while name in taken:
+                    name = f"{name}_"
+                minted[key] = name
+                taken.add(name)
+            dims.append(name)
+        arrays.append(dataclasses.replace(arr, shape=tuple(dims)))
+    if not minted:
+        return hkir
+    # A symbol the rewrite left in no shape is one dace can neither solve nor accept: passing a
+    # keyword the callee does not take is a DaceSyntaxError, so retire it here.
+    standing = {i for a in arrays for d in a.shape for i in _IDENT_RE.findall(str(d))} | body_names
+    return dataclasses.replace(hkir, arrays=arrays, symbols=[s for s in hkir.symbols if s.name in standing])
+
+
 def inferred_symbols(rendered: RenderedProgram) -> Set[str]:
     """The rendered program's symbols dace reads off an ARGUMENT's shape rather than being passed.
 
@@ -4048,7 +4243,10 @@ def render_helper_closure(kir: KernelIR, main: RenderedProgram) -> List[Tuple[Ke
         done.add(name)
         hkir = by_name[name]
         binding = helper_call_bindings(owner, hkir, kir.pinned_consts or {})
-        rendered = render_program(with_helper_vocabulary(hkir, binding), name)
+        # Vocabulary first: a caller recipe that names one of the helper's own parameters is a
+        # better spelling for an extent than a symbol minted for it.
+        settled = with_solvable_extents(with_helper_vocabulary(hkir, binding))
+        rendered = render_program(settled, name, kir.helpers)
         for callee in called_helpers(rendered.body, kir.helpers):
             visit(hkir.tree, callee)
         ordered.append((hkir, rendered))
@@ -4072,7 +4270,7 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
     argument, passed BY KEYWORD (positionally, dace's ``closure_resolver`` indexes its
     parameter-name list with the argument's position and raises ``IndexError``).
     """
-    main = render_program(kir, fn_name or kir.kernel_name)
+    main = render_program(kir, fn_name or kir.kernel_name, kir.helpers)
     helpers = render_helper_closure(kir, main)
     rendered_by_name = {h.kernel_name: r for h, r in helpers}
     kir_by_name = {h.kernel_name: h for h, _ in helpers}

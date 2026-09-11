@@ -4602,6 +4602,49 @@ def _helper_return_shape_from_body(hfn, pnames, args, arr_by, sca_by, sym_by, fn
     return shape, arrays[0].dtype
 
 
+def helper_returns_a_scalar_local(
+    hfn: ast.FunctionDef,
+    pnames: List[str],
+    args: List[ast.expr],
+    arr_by: Dict[str, ArrayDesc],
+    sca_by: Dict[str, ScalarDesc],
+    sym_by: Dict[str, SymbolDesc],
+    fn: Optional[ast.FunctionDef] = None,
+) -> bool:
+    """Whether every ``return`` of ``hfn`` hands back a local the body only ever binds to a SCALAR.
+
+    :func:`_helper_return_shape_from_body` answers ``(None, None)`` for two different things: a
+    return it could not size, and one that carries no extent at all. An accumulator is the second
+    -- ``bratu_dot``'s ``s = 0.0`` then ``s = s + A[i, :] @ B[i, :]``, one row dot product per trip
+    -- and reading it as "could not size" left the call-site guess standing: the target ``h_pk`` has
+    no binding but the call itself, so :func:`_resolve_array_ref` broadcast-joined the call's own
+    (N, N) ARGUMENTS and the helper was given an (N, N) out-param for one number. The caller then
+    stored a whole grid into ``H[p, k]``.
+
+    Deliberately narrow. Only a bare Name return counts, every name it can reach has to be scalar
+    by :func:`scalar_value_names`, and any binding of one that :func:`_iter_extent_of` DOES size
+    revokes the verdict -- that function only ever adds a name, so a local seeded scalar by
+    ``s = 0.0`` and rebound to an array would otherwise keep the seed.
+    """
+    returns = [n.value for n in ast.walk(hfn) if isinstance(n, ast.Return) and n.value is not None]
+    if not returns or any(not isinstance(value, ast.Name) for value in returns):
+        return False
+    arrays, scalars, symbols = _infer_helper_params(pnames, args, arr_by, sca_by, sym_by, fn)
+    if not arrays:
+        return False
+    wanted = {value.id for value in returns}
+    if not wanted <= scalar_value_names(hfn, {d.name for d in (*scalars, *symbols)}):
+        return False
+    table = {a.name: tuple(str(s) for s in a.shape) for a in arrays}
+    for stmt, _ in _statements_in_order(hfn.body):
+        if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1):
+            continue
+        target = stmt.targets[0]
+        if isinstance(target, ast.Name) and target.id in wanted and _iter_extent_of(stmt.value, table):
+            return False
+    return True
+
+
 def value_names(node: ast.AST) -> Set[str]:
     """Every name an expression reads as a VALUE -- a call's callee is not one of them.
 
@@ -5820,10 +5863,17 @@ def _build_helper_kirs(
             # returns, and reading that wrong classifies an array return as by-value: no out-param
             # is added, the returns stay as ``return <expr>``, and every shape-changing call inside
             # one reaches the emitter unlowered, because the expanders only ever see assignments.
+            specialized = call_specialized_body(hfn, pnames, call.args)
             body_shape, body_dtype = _helper_return_shape_from_body(
-                call_specialized_body(hfn, pnames, call.args), pnames, call.args, oarr_by, osca_by, osym_by, owner_fn
+                specialized, pnames, call.args, oarr_by, osca_by, osym_by, owner_fn
             )
-            if body_shape is not None or hret_shape is None:
+            # A body that PROVES its return scalar retires the target's guess as surely as one that
+            # sizes it -- see :func:`helper_returns_a_scalar_local` for what the guess costs.
+            if (
+                body_shape is not None
+                or hret_shape is None
+                or helper_returns_a_scalar_local(specialized, pnames, call.args, oarr_by, osca_by, osym_by, owner_fn)
+            ):
                 hret_shape, hret_dtype = body_shape, body_dtype
 
         if hret_shape is None:
