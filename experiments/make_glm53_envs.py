@@ -21,6 +21,12 @@ load-bearing:
 import pathlib
 import sys
 
+#: The served window, and what a request has to leave room for: the completion reservation plus
+#: one turn, which a compiler log or an asm dump can fill on its own.
+GLM_CONTEXT = 131072
+COMPLETION_RESERVE = 32000
+TURN_HEADROOM = 30000
+
 GLM_ARGS = (
     '"--trust-remote-code --watchdog-timeout 1800 --kv-cache-dtype fp8_e4m3 --page-size 64 '
     "--context-length 131072 --mem-fraction-static 0.50 --cuda-graph-max-bs-decode 64 "
@@ -80,12 +86,17 @@ def derive(src: pathlib.Path, dst: pathlib.Path) -> None:
             out.extend(CE_ENV.strip("\n").splitlines())
             replaced.add("ce_env")
             continue
+        elif line.startswith("CLAUDE_AUTOCOMPACT="):
+            # GLM serves HALF the kimi context, so the inherited threshold would sit above the
+            # window entirely and every agent would 400 before it could ever compact.
+            line = f"CLAUDE_AUTOCOMPACT={GLM_CONTEXT - COMPLETION_RESERVE - TURN_HEADROOM}"
+            replaced.add("autocompact")
         elif line.startswith("SGLANG_EXTRA_ARGS="):
             out.extend(HEADER.strip("\n").splitlines())
             line = f"SGLANG_EXTRA_ARGS={GLM_ARGS}"
             replaced.add("args")
         out.append(line)
-    missing = {"model", "optimizer", "args", "ce_env"} - replaced
+    missing = {"model", "optimizer", "args", "ce_env", "autocompact"} - replaced
     if missing:
         raise SystemExit(f"{src.name}: never matched {sorted(missing)}")
     dst.write_text("\n".join(out) + "\n")
