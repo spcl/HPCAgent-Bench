@@ -37,12 +37,23 @@ def arm_envs() -> list[pathlib.Path]:
     )
 
 
-def test_the_registry_parses_and_has_every_section() -> None:
+def test_the_registry_parses_and_every_section_a_figure_reads_is_populated() -> None:
+    """A renamed or emptied YAML key leaves the section EMPTY rather than missing, because the
+    registry is a record with declared fields. Empty is what would silently put raw tags on an
+    axis, so that -- not the key's presence -- is the property."""
     registry = experiment_tags.registry()
-    assert set(registry) >= {"experiments", "models", "languages"}, sorted(registry)
+    populated = {
+        "experiments": registry.experiments,
+        "models": registry.models,
+        "languages": registry.languages,
+        "packets": registry.packets,
+        "hues": registry.hues,
+        "markers": registry.markers,
+    }
+    assert [name for name, block in populated.items() if not block] == []
 
 
-@pytest.mark.parametrize("model", sorted(experiment_tags.registry()["models"]))
+@pytest.mark.parametrize("model", sorted(experiment_tags.registry().models))
 def test_every_registered_model_has_a_name_and_a_checkpoint(model: str) -> None:
     """A model entry with no checkpoint cannot be checked against reality, which is the point."""
     assert experiment_tags.model_name(model) != model, f"{model} maps to itself"

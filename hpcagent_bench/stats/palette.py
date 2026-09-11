@@ -38,17 +38,17 @@ LOG = logging.getLogger(__name__)
 
 def hues() -> tuple[str, ...]:
     """The categorical ramp. Registry order; see the file for why these hues."""
-    return tuple(registry()["hues"])
+    return registry().hues
 
 
 def markers() -> tuple[str, ...]:
     """The marker shapes, in assignment order."""
-    return tuple(registry()["markers"])
+    return registry().markers
 
 
 def control_color() -> str:
     """The colour of the no-packet control."""
-    return registry()["control_color"]
+    return registry().control_color
 
 
 def lighten(hex_color: str, steps: int) -> str:
@@ -57,7 +57,7 @@ def lighten(hex_color: str, steps: int) -> str:
         return hex_color
     r, g, b = (int(hex_color[i : i + 2], 16) / 255 for i in (1, 3, 5))
     h, lightness, s = colorsys.rgb_to_hls(r, g, b)
-    lightness = min(0.88, lightness + steps * registry()["lightness_step"])
+    lightness = min(0.88, lightness + steps * registry().lightness_step)
     r, g, b = colorsys.hls_to_rgb(h, lightness, s)
     return f"#{round(r * 255):02x}{round(g * 255):02x}{round(b * 255):02x}"
 
