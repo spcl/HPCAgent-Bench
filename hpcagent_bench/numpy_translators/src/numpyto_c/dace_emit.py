@@ -10,7 +10,8 @@ import re
 from typing import Callable, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple, cast
 
 from numpyto_common import dtypes
-from numpyto_common.frontend import PinnedValue, fold_shape_expr
+from numpyto_common import frontend as common_frontend
+from numpyto_common.frontend import PinnedValue, field_nodes, fold_shape_expr
 from numpyto_common.ir import ArrayDesc, KernelIR, shape_dimension_symbols
 from numpyto_common.lib_nodes import shape_exprs_equal
 from numpyto_common.lowering import lower
@@ -18,6 +19,8 @@ from numpyto_common.numpy_desugar import _AUG_OP_SRC, desugar_for_python_backend
 from numpyto_common.ordered import OrderedSet
 
 _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
+#: A decimal point or an exponent -- what makes a shape token a float rather than an extent.
+_FLOAT_LITERAL_RE = re.compile(r"\d*\.\d|\d[eE][-+]?\d")
 
 
 class _ShapeToSymbol(ast.NodeTransformer):
@@ -1378,11 +1381,6 @@ def bare_alias_binding(node: ast.stmt, symbols: FrozenSet[str] = frozenset()) ->
 def view_binding(node: ast.stmt, symbols: FrozenSet[str] = frozenset()) -> Optional[str]:
     """Either spelling that leaves dace holding a View: a kept-dimension slice or a bare alias."""
     return view_slice_binding(node) or bare_alias_binding(node, symbols)
-
-
-def field_children(raw: object) -> List[object]:
-    """One ast field's children: a field holds either a list of nodes or a single value."""
-    return cast("List[object]", raw) if isinstance(raw, list) else [raw]
 
 
 def as_stmt_block(raw: object) -> List[ast.stmt]:
@@ -3156,7 +3154,10 @@ def slice_bound_only_locals(fn_ast: ast.FunctionDef) -> Set[str]:
             return
         for field, value in ast.iter_fields(node):
             here = in_slice or (isinstance(node, ast.Slice) and field in ("lower", "upper", "step"))
-            for child in field_children(value):
+            if isinstance(value, ast.AST):
+                visit(value, here)
+                continue
+            for child in field_nodes(value):
                 if isinstance(child, ast.AST):
                     visit(child, here)
 
@@ -3767,7 +3768,17 @@ def helper_call_bindings(
             if arg.id in pinned:
                 constants[pname] = pinned[arg.id]
             elif arg.id in own and arg.id != pname:
-                aliases.setdefault(arg.id, pname)
+                # One caller name for two of the helper's extents (a square kernel passes
+                # ``kernel_size`` for both ``kh`` and ``kw``) carries no answer to which is which,
+                # and respelling both as the first one declares a width the body never writes:
+                # "could not broadcast [n, c, h - kh + 1, -kw + w + 1] into [..., -kh + w + 1]".
+                if aliases.get(arg.id, pname) != pname:
+                    raise NotImplementedError(
+                        f"helper {hkir.kernel_name!r} takes {aliases[arg.id]!r} and {pname!r} for two "
+                        f"extents its call site both spells {arg.id!r}; the helper's vocabulary cannot "
+                        f"be recovered from that name"
+                    )
+                aliases[arg.id] = pname
         return aliases, constants
     return {}, {}
 
@@ -3808,6 +3819,174 @@ def inferred_symbols(rendered: RenderedProgram) -> Set[str]:
         _, _, annotation = param.partition(":")
         named.update(_IDENT_RE.findall(annotation))
     return {s for s in rendered.symbol_names if s in named}
+
+
+def declared_extents(rendered: RenderedProgram) -> List[str]:
+    """Every per-dimension extent expression in the program's parameter annotations."""
+    out: List[str] = []
+    for param in rendered.params:
+        _, _, annotation = param.partition(":")
+        opened = annotation.find("[")
+        if opened < 0 or not annotation.rstrip().endswith("]"):
+            continue  # a scalar parameter declares no extent
+        out.extend(split_top_level(annotation[opened + 1 : annotation.rstrip().rfind("]")]))
+    return out
+
+
+def split_top_level(text: str) -> List[str]:
+    """``text`` cut on the commas that are not inside brackets, which is one entry per dimension."""
+    parts: List[str] = []
+    depth = 0
+    start = 0
+    for index, char in enumerate(text):
+        if char in "([":
+            depth += 1
+        elif char in ")]":
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append(text[start:index])
+            start = index + 1
+    parts.append(text[start:])
+    return [p.strip() for p in parts if p.strip()]
+
+
+def extent_pins(extent: str, symbol: str) -> bool:
+    """Whether ``extent`` determines ``symbol`` -- two values for it give two different extents.
+
+    A symbol that cancels out (``(ci + 1) * 4 - ci * 4``, ``__sym_span - k + k``) appears in the
+    annotation and constrains nothing, so dace has no equation to solve and reports the argument as
+    missing. Folded rather than compared verbatim, because the cancellation is what has to be seen.
+    """
+    substituted = [_IDENT_RE.sub(lambda m: value if m.group() == symbol else m.group(), extent) for value in ("1", "2")]
+    return fold_shape_expr(substituted[0]) != fold_shape_expr(substituted[1])
+
+
+def unsolvable_signature_symbols(rendered: RenderedProgram) -> List[str]:
+    """The symbols in ``rendered``'s signature that dace cannot recover from the arguments.
+
+    dace binds a nested program's shape symbols by matching each argument's real shape against the
+    declared annotation, so a symbol reaches the callee only if some extent SOLVES for it. Solving
+    is modelled the way substitution works: an extent pins a symbol once every other symbol in it
+    is already pinned, iterated to a fixed point, so a helper whose extents form a solvable system
+    is accepted and only a genuinely free or cancelling symbol is named here.
+    """
+    inferred = inferred_symbols(rendered)
+    extents = declared_extents(rendered)
+    idents = [(extent, {s for s in inferred if s in set(_IDENT_RE.findall(extent))}) for extent in extents]
+    pinned: Set[str] = set()
+    while True:
+        found = {
+            next(iter(unpinned))
+            for extent, symbols in idents
+            if len(unpinned := symbols - pinned) == 1 and extent_pins(extent, next(iter(unpinned)))
+        }
+        if not found - pinned:
+            return sorted(inferred - pinned)
+        pinned |= found
+
+
+def symbolic_float_arguments(owner: ast.FunctionDef, hkir: KernelIR, symbols: Set[str]) -> List[str]:
+    """The call site's scalar arguments whose value is a float built from a shape symbol.
+
+    dace types a nested call's scalar argument through its symbolic layer, and a float over a symbol
+    (``1.0 / (0.016 / N / ...)``) arrives as a ``sympy.Float`` its dtype table has no entry for.
+    """
+    bound = {
+        target.id: node.value
+        for node in ast.walk(owner)
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+    passed = {
+        arg.id
+        for node in ast.walk(owner)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == hkir.kernel_name
+        for arg in node.args
+        if isinstance(arg, ast.Name)
+    }
+    named: List[str] = []
+    for arg in sorted(passed):
+        value = bound.get(arg)
+        if value is None:
+            continue
+        nodes = list(ast.walk(value))
+        floats = any(isinstance(n, ast.Constant) and isinstance(n.value, float) for n in nodes)
+        symbolic = any(isinstance(n, ast.Name) and n.id in symbols for n in nodes)
+        if floats and symbolic:
+            named.append(arg)
+    return named
+
+
+def refuse_unsound_callee(
+    rendered: RenderedProgram, name: str, owner: ast.FunctionDef, hkir: KernelIR, symbols: Set[str]
+) -> None:
+    """Raise unless ``rendered`` is a form dace can be shown to call correctly.
+
+    THE GATE on the kept-helper form. A helper emitted as its own ``@dc.program`` is only sound
+    when dace can bind its signature from the call site, and the emitter answers that POSITIVELY:
+    what it cannot prove solvable is refused here, ``emit_with_inline_fallback`` re-renders the
+    kernel with the helper inlined, and the frontend sees a form that has always worked. A blocklist
+    of kernel names would go stale on the next kernel; this degrades for kernels nobody has seen.
+
+    Three conditions, each read off the signature and the call site alone:
+
+    * every symbol dace must solve from an argument shape is solvable -- see
+      :func:`unsolvable_signature_symbols`;
+    * every extent is integral, since an extent carrying a float literal reaches dace's symbolic
+      layer as a ``sympy.Float`` and dies in a ``KeyError`` on its dtype table;
+    * no scalar argument is a float built from a shape symbol, for the same dtype table -- see
+      :func:`symbolic_float_arguments`.
+
+    Over-refusing is SAFE here and under-refusing is not: a refusal costs the kept-helper form for
+    one kernel and the inlined form is emitted instead, while a miss is a program the frontend
+    rejects at parse time or, worse, one it accepts and computes wrongly.
+
+    Only while a fallback REMAINS. Inlining does not dissolve every helper -- one whose form has no
+    inlinable shape stays a program of its own under ``without_kept_helpers`` -- so refusing on the
+    retry too would answer with no program at all, which costs the kernel its DaCe column entirely
+    rather than degrading it. On the retry the best-effort form is emitted and the frontend gives
+    the verdict.
+
+    What the gate does NOT prove, and what a repair of this path has to fix, measured per kernel
+    against the corpus:
+
+    * the OUT-PARAM extent can disagree with what the body stores into it, because the return
+      classification reads a shape that the specialised body then contradicts
+      (``cp2k_density_matrix_trs4``: declared ``[n_block_rows + 1]``, body writes ``[n_block_rows]``;
+      ``lenet``'s ``maxpool2d`` declares ``int_floor(H - 4, 2)`` and the body writes ``H_out``).
+      Catching it needs shape inference over the body, which the emitter does not have;
+    * a helper's extents can be spelled in the CALLER's vocabulary where no single call-site name
+      recovers the helper's own (``mamba2_return_y``: ``(batch_size, n_heads, n_chunks + 1,
+      n_chunks + 1)`` against a body naming ``span``);
+    * ``gromacs/nbnxm``'s ``_inner_4x4`` loses ``ci`` -- it appears only as ``(ci + 1) * 4 -
+      ci * 4``, which this gate catches, but the argument it should have been is a real omission;
+    * ``conv_standard_1d_dilated_strided`` reaches the frontend with a two-argument ``np.equal``
+      that has no dace replacement, which is a lowering gap and not a signature one;
+    * ``matmul_avg_pool_gelu_scale_max``'s ``_avgpool1d_taps`` takes its ``kernel_size`` and
+      ``stride`` as runtime ``dc.int64`` scalars and then SIZES a tap span with them, so the extent
+      is data-dependent inside the body while the signature itself is solvable.
+    """
+    if common_frontend.HELPERS_KEPT_DISABLED:
+        return
+    unsolvable = unsolvable_signature_symbols(rendered)
+    if unsolvable:
+        raise NotImplementedError(
+            f"program {name!r} declares {unsolvable}, which no argument's shape solves for; dace "
+            f"cannot bind them at the call site"
+        )
+    for extent in declared_extents(rendered):
+        if _FLOAT_LITERAL_RE.search(extent):
+            raise NotImplementedError(
+                f"program {name!r} declares the extent {extent!r}, which is not integral; a float "
+                f"extent reaches dace's symbolic layer as a sympy.Float"
+            )
+    symbolic_floats = symbolic_float_arguments(owner, hkir, symbols)
+    if symbolic_floats:
+        raise NotImplementedError(
+            f"program {name!r} is called with {symbolic_floats}, each a float built from a shape "
+            f"symbol; dace has no dtype for the sympy.Float that reaches it"
+        )
 
 
 def bind_helper_call(node: ast.Call, hkir: KernelIR, rendered: RenderedProgram) -> None:
@@ -3862,6 +4041,58 @@ def bind_helper_calls(
                 bind_helper_call(node, kir_by_name[node.func.id], rendered_by_name[node.func.id])
 
 
+def returns_removed(stmts: List[ast.stmt], tail: List[ast.stmt], name: str) -> List[ast.stmt]:
+    """``stmts`` followed by ``tail``, with every ``return`` gone.
+
+    A branch that returns drops ``tail``, which is exactly what the return said; a branch that
+    falls through carries it, so the statements after an escaping ``if`` move into both of its arms
+    rather than staying where the return would have skipped them. See :func:`body_without_returns`.
+    """
+    out: List[ast.stmt] = []
+    for index, stmt in enumerate(stmts):
+        if isinstance(stmt, ast.Return):
+            if stmt.value is not None:
+                raise NotImplementedError(f"program {name!r} returns a value where an out-param was expected")
+            return out
+        if not any(isinstance(node, ast.Return) for node in ast.walk(stmt)):
+            out.append(stmt)
+            continue
+        if not isinstance(stmt, ast.If):
+            raise NotImplementedError(
+                f"program {name!r} returns from inside a {type(stmt).__name__.lower()}, which has no "
+                f"fall-through arm to carry the statements after it"
+            )
+        rest = returns_removed(stmts[index + 1 :], tail, name)
+        body = returns_removed(stmt.body, rest, name)
+        orelse = returns_removed(stmt.orelse, copy.deepcopy(rest), name)
+        out.append(rebuilt_if(stmt, body, orelse))
+        return out
+    return out + tail
+
+
+def rebuilt_if(stmt: ast.If, body: List[ast.stmt], orelse: List[ast.stmt]) -> ast.If:
+    """``stmt`` with new branches, located where the original was."""
+    node = ast.If(test=stmt.test, body=body or [ast.Pass()], orelse=orelse)
+    ast.copy_location(node, stmt)
+    return ast.fix_missing_locations(node)
+
+
+def without_returns(hkir: KernelIR, name: str) -> KernelIR:
+    """``hkir`` with no ``return`` left in its body, for a program dace calls as a callee.
+
+    A ``return`` inside a nested ``@dc.program`` returns from the CALLER: dace splices the callee's
+    ``ReturnBlock`` into the caller's own control flow, so every statement after the CALL is
+    unreachable and its outputs keep whatever the driver allocated, with nothing raised. A return
+    in tail position of the whole body is dead and goes; an earlier one becomes the branch it
+    already was, with the statements it skipped moved under the arm that reaches them.
+
+    A copy: the same KernelIR feeds the C and Fortran legs, where a return is a return.
+    """
+    tree = copy.deepcopy(hkir.tree)
+    tree.body = returns_removed(tree.body, [], name)
+    return dataclasses.replace(hkir, tree=tree)
+
+
 def render_helper_closure(kir: KernelIR, main: RenderedProgram) -> List[Tuple[KernelIR, RenderedProgram]]:
     """Render every kept helper the kernel reaches, callees included, in definition-before-use order.
 
@@ -3879,7 +4110,10 @@ def render_helper_closure(kir: KernelIR, main: RenderedProgram) -> List[Tuple[Ke
         done.add(name)
         hkir = by_name[name]
         aliases, constants = helper_call_bindings(owner, hkir, kir.pinned_consts or {})
-        rendered = render_program(with_helper_vocabulary(hkir, aliases, constants), name)
+        # Before render_program, not after: the duplication this can make of the statements past a
+        # branch rebinds a view, and the passes that version such a rebinding run in there.
+        rendered = render_program(without_returns(with_helper_vocabulary(hkir, aliases, constants), name), name)
+        refuse_unsound_callee(rendered, name, owner, hkir, {sy.name for sy in kir.symbols})
         for callee in called_helpers(rendered.body, kir.helpers):
             visit(hkir.tree, callee)
         ordered.append((hkir, rendered))
