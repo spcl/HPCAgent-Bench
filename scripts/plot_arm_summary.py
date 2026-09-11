@@ -147,7 +147,7 @@ def draw_metric(ax, frame: pd.DataFrame, column: str, label: str, log: bool) -> 
     # a colour across every figure, and a panel that swapped the channels when a third arm appeared
     # would repaint every series.
     hues = palette.colors(condition_order(frame))
-    shapes = palette.markers(frame.model.unique())
+    shapes = palette.model_markers(frame.model.unique())
     languages = language_order(frame)
     at = {lang: i for i, lang in enumerate(languages)}
     models = palette.in_order(frame.model.unique())
@@ -240,7 +240,7 @@ def handles_for(frame: pd.DataFrame) -> list:
             markersize=9,
             label=experiment_tags.model_name(name),
         )
-        for name, shape in palette.markers(palette.in_order(frame.model.unique())).items()
+        for name, shape in palette.model_markers(palette.in_order(frame.model.unique())).items()
     ]
     conditions = condition_order(frame)
     # A single packet has nothing to contrast, and an entry reading "No Skill Packet" beside a

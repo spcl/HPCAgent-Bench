@@ -12,16 +12,16 @@ the shape and keeps it everywhere.
 
 Three things get coloured, and a figure varies exactly one of them, so they never compete for the
 ramp: a SKILL PACKET (an agent figure), a FRAMEWORK (a compiler/library comparison, which has no
-agent in it), or a MODEL (a figure whose only axis is which LLM ran). Each has its own order
-against the same hues.
+agent in it), or a MODEL (a figure whose only axis is which LLM ran).
 
 A packet combination takes its LEAD packet's hue and one lightness step per additional packet, so
 ``cpfsrc`` and ``cpfsrc+lang-skills`` read as the same treatment family at two strengths. The
-no-packet control is neutral grey: it is the reference every treatment is read against, not one
-more colour among them.
+no-packet control is neutral grey: it is the reference every treatment is read against.
 
-Hues are Okabe-Ito, which is designed for deuteranopia, protanopia and tritanopia; it is
-categorical, so it is the right ramp for identity (viridis is sequential and would imply an order).
+THE VOCABULARY AND THE ORDER ARE DATA, in ``envs/registry.yaml``, beside the display names. They
+were tuples here and names there, which is two registries for one vocabulary -- and the failure
+mode is silent, because a packet missing from one of them still draws, in a hash colour, under a
+raw-string label.
 """
 
 from __future__ import annotations
@@ -31,105 +31,24 @@ import logging
 import zlib
 from collections.abc import Iterable
 
+from hpcagent_bench.experiment_tags import canonical, order, packet_parts, registry
+
 LOG = logging.getLogger(__name__)
 
-#: Okabe-Ito, minus black (reserved for ink) and yellow (illegible on white). Order matters: the
-#: packets named earliest below get the most-separated hues. APPEND ONLY.
-HUES: tuple[str, ...] = (
-    "#0072b2",  # blue
-    "#e69f00",  # orange
-    "#009e73",  # bluish green
-    "#cc79a7",  # reddish purple
-    "#d55e00",  # vermillion
-    "#56b4e9",  # sky blue
-)
 
-#: The no-packet control. Neutral on purpose, and not drawn from HUES.
-CONTROL_COLOR = "#4d4d4d"
-
-#: Packets in hue-assignment order, and the order that picks the LEAD of a combination: the lead of
-#: ``cpfsrc+lang-skills`` is cpfsrc, so a CPF figure's arms stay one family. APPEND ONLY -- inserting
-#: a name repaints every packet after it.
-#:
-#: The first six take the six hues. Past that the ramp wraps, which is safe only for packets that
-#: never share a figure with their twin: `no-score-tool` is its campaign's only packet and
-#: `profiling` only ever rides along with divide-and-conquer, so neither is ever a lead beside the
-#: packet it wraps onto. :func:`colors` warns if that ever stops being true.
-PACKET_ORDER: tuple[str, ...] = (
-    "cpfsrc",
-    "cpf",
-    "lang-skills",
-    "divide-and-conquer",
-    "openmp-offload",
-    "repo",
-    "no-score-tool",
-    "profiling",
-)
-
-#: Models, in shape-assignment order. APPEND ONLY.
-MODEL_ORDER: tuple[str, ...] = ("qwen38", "oss120b", "kimi27sglang", "glm53")
-
-#: Frameworks, most-plotted first so the common ones get the most separated hues. A framework
-#: figure has no agent in it, so these never share a figure with a packet. APPEND ONLY.
-FRAMEWORK_ORDER: tuple[str, ...] = (
-    "numpy",
-    "numba",
-    "cc",
-    "dace_cpu",
-    "fortran",
-    "cpp",
-    "pythran",
-    "cc_autopar",
-    "dace_cpu_canonicalize",
-    "dace_cpu_autoopt",
-    "llvm",
-    "pluto",
-    "polly",
-    "jax",
-    "tvm",
-    "cc_llvm",
-    "cc_llvm_autopar",
-    "cc_nvhpc",
-    "cc_nvhpc_autopar",
-    "cc_oneapi",
-    "flang",
-    "fortran_autopar",
-    "dace_gpu",
-    "dace_gpu_autoopt",
-    "dace_gpu_canonicalize",
-    "cupy",
-    "triton",
-    "ppcg",
-    "ppcg_cuda",
-    "ppcg_hip",
-    "tvm_cpu",
-)
-
-#: Marker shapes. A filled circle, square, triangle and diamond stay apart at 4pt where a pentagon
-#: and a hexagon do not, so identity survives a column-width figure and a greyscale print.
-MARKERS: tuple[str, ...] = ("o", "s", "^", "D", "v", "P", "X", "*")
-
-#: How much lighter each packet BEYOND the lead makes the colour. Large enough to read as a step,
-#: small enough that three steps stay clearly the lead's hue.
-LIGHTNESS_STEP = 0.13
+def hues() -> tuple[str, ...]:
+    """The categorical ramp. Registry order; see the file for why these hues."""
+    return tuple(registry()["hues"])
 
 
-def parts(packet: str) -> tuple[str, ...]:
-    """The packets in a canonical ``packet`` value; ``()`` for the control."""
-    return tuple(p for p in packet.split("+") if p)
+def markers() -> tuple[str, ...]:
+    """The marker shapes, in assignment order."""
+    return tuple(registry()["markers"])
 
 
-def lead(packet: str) -> str:
-    """The packet that decides the hue: the earliest of ``packet``'s parts in :data:`PACKET_ORDER`.
-
-    An unregistered part sorts after every registered one, and by name among themselves, so the
-    lead is a pure function of the value rather than of the order the parts were written in."""
-
-    def rank(name: str) -> tuple[int, str]:
-        return (PACKET_ORDER.index(name), "") if name in PACKET_ORDER else (len(PACKET_ORDER), name)
-
-    found = parts(packet)
-    return min(found, key=rank) if found else ""
+def control_color() -> str:
+    """The colour of the no-packet control."""
+    return registry()["control_color"]
 
 
 def lighten(hex_color: str, steps: int) -> str:
@@ -138,20 +57,44 @@ def lighten(hex_color: str, steps: int) -> str:
         return hex_color
     r, g, b = (int(hex_color[i : i + 2], 16) / 255 for i in (1, 3, 5))
     h, lightness, s = colorsys.rgb_to_hls(r, g, b)
-    lightness = min(0.88, lightness + steps * LIGHTNESS_STEP)
+    lightness = min(0.88, lightness + steps * registry()["lightness_step"])
     r, g, b = colorsys.hls_to_rgb(h, lightness, s)
     return f"#{round(r * 255):02x}{round(g * 255):02x}{round(b * 255):02x}"
 
 
-def ordered_color(order: tuple[str, ...], name: str, kind: str) -> str:
-    """``name``'s hue within one entity ``order``. An unregistered name gets a stable CRC hue.
+def lead(packet: str) -> str:
+    """The packet that decides the hue: the earliest of ``packet``'s parts in registry order.
+
+    An unregistered part sorts after every registered one, and by name among themselves, so the
+    lead is a pure function of the value rather than of the order the parts were written in."""
+    known = hue_order("packets")
+
+    def rank(name: str) -> tuple[int, str]:
+        return (known.index(name), "") if name in known else (len(known), name)
+
+    found = packet_parts(packet)
+    return min(found, key=rank) if found else ""
+
+
+def hue_order(kind: str) -> tuple[str, ...]:
+    """``kind``'s tags in the order that assigns hues.
+
+    The control packet is dropped: it is a registered name with its own neutral colour, and leaving
+    it in the ramp would shift every treatment one hue and repaint every figure already drawn."""
+    return tuple(tag for tag in order(kind) if tag)
+
+
+def ordered_color(kind: str, name: str) -> str:
+    """``name``'s hue within one entity ``kind``. An unregistered name gets a stable CRC hue.
 
     CRC, never ``hash()``: ``hash`` is salted by PYTHONHASHSEED and would hand the same entity a
     different colour in two runs of the same script."""
-    if name in order:
-        return HUES[order.index(name) % len(HUES)]
-    LOG.warning("palette: %s %r is not registered; using a hash colour", kind, name)
-    return HUES[zlib.crc32(name.encode()) % len(HUES)]
+    known, ramp = hue_order(kind), hues()
+    resolved = canonical(kind, name)
+    if resolved in known:
+        return ramp[known.index(resolved) % len(ramp)]
+    LOG.warning("palette: %s %r is not in registry.yaml; using a hash colour", kind, name)
+    return ramp[zlib.crc32(str(name).encode()) % len(ramp)]
 
 
 def warn_on_collision(chosen: dict[str, str], kind: str) -> dict[str, str]:
@@ -162,23 +105,19 @@ def warn_on_collision(chosen: dict[str, str], kind: str) -> dict[str, str]:
     beats no plot, and the fix is another hue, not a dropped series."""
     seen: dict[str, str] = {}
     for name, hue in chosen.items():
-        if hue in seen:
-            LOG.warning("palette: %ss %r and %r both draw %s; extend HUES", kind, seen[hue], name, hue)
-        seen[hue] = name
+        entity = canonical(f"{kind}s", name)
+        if hue in seen and seen[hue] != entity:
+            LOG.warning("palette: %s %r and %r both draw %s; extend hues", kind, seen[hue], name, hue)
+        seen[hue] = entity
     return chosen
-
-
-def hue_of(name: str) -> str:
-    """The base hue of one packet NAME."""
-    return ordered_color(PACKET_ORDER, name, "packet")
 
 
 def color(packet: str) -> str:
     """The one colour ``packet`` wears, in every figure and every process."""
-    found = parts(packet)
+    found = packet_parts(packet)
     if not found:
-        return CONTROL_COLOR
-    return lighten(hue_of(lead(packet)), len(found) - 1)
+        return control_color()
+    return lighten(ordered_color("packets", lead(packet)), len(found) - 1)
 
 
 def colors(packets: Iterable[str]) -> dict[str, str]:
@@ -186,41 +125,46 @@ def colors(packets: Iterable[str]) -> dict[str, str]:
     return warn_on_collision({p: color(p) for p in dict.fromkeys(packets)}, "packet")
 
 
-def in_order(names: Iterable[str], order: tuple[str, ...] = MODEL_ORDER) -> list[str]:
+def in_order(names: Iterable[str], kind: str = "models") -> list[str]:
     """``names`` in registry order, unregistered ones last and alphabetical among themselves.
 
     The draw order of a figure's series, so a dodge or a legend is the same in every figure. Sorting
     by name alone would reorder every panel the day a model is renamed, and an unregistered name
     needs a tiebreak or two of them land in whatever order the frame happened to hold."""
+    known = order(kind)
 
     def rank(name: str) -> tuple[int, str]:
-        return (order.index(name), "") if name in order else (len(order), name)
+        resolved = canonical(kind, name)
+        return (known.index(resolved), "") if resolved in known else (len(known), str(name))
 
     return sorted(dict.fromkeys(names), key=rank)
 
 
 def marker(model: str) -> str:
     """The one SHAPE ``model`` wears. Pairs with :func:`color` so identity is never colour alone."""
-    if model in MODEL_ORDER:
-        return MARKERS[MODEL_ORDER.index(model) % len(MARKERS)]
-    LOG.warning("palette: model %r is not registered in MODEL_ORDER; using a hash marker", model)
-    return MARKERS[zlib.crc32(model.encode()) % len(MARKERS)]
+    known, shapes = order("models"), markers()
+    resolved = canonical("models", model)
+    if resolved in known:
+        return shapes[known.index(resolved) % len(shapes)]
+    LOG.warning("palette: model %r is not in registry.yaml; using a hash marker", model)
+    return shapes[zlib.crc32(str(model).encode()) % len(shapes)]
 
 
-def markers(models: Iterable[str]) -> dict[str, str]:
+def model_markers(models: Iterable[str]) -> dict[str, str]:
     """``{model: marker}`` for one figure."""
     chosen = {m: marker(m) for m in dict.fromkeys(models)}
     seen: dict[str, str] = {}
     for name, shape in chosen.items():
-        if shape in seen:
-            LOG.warning("palette: models %r and %r both draw %r; extend MARKERS", seen[shape], name, shape)
-        seen[shape] = name
+        entity = canonical("models", name)
+        if shape in seen and seen[shape] != entity:
+            LOG.warning("palette: models %r and %r both draw %r; extend markers", seen[shape], name, shape)
+        seen[shape] = entity
     return chosen
 
 
 def framework_color(name: str) -> str:
     """The one colour a framework wears. Frameworks never share a figure with a packet."""
-    return ordered_color(FRAMEWORK_ORDER, name, "framework")
+    return ordered_color("frameworks", name)
 
 
 def framework_colors(names: Iterable[str]) -> dict[str, str]:
@@ -233,7 +177,7 @@ def model_color(name: str) -> str:
 
     Shape identifies the model in every figure; this exists because a figure that varies nothing
     else would otherwise draw four series in one grey."""
-    return ordered_color(MODEL_ORDER, name, "model")
+    return ordered_color("models", name)
 
 
 def model_colors(names: Iterable[str]) -> dict[str, str]:

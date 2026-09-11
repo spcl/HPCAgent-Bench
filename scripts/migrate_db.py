@@ -28,27 +28,41 @@ Row = dict[str, SqlValue]
 #: ``(experiment, model, language, device, packet)`` -- what an arm name resolves to, once.
 Identity = tuple[str, str, str, str, str]
 
+#: Arm-name prefix -> (experiment, device, default language).
+#:
+#: The default is what an arm that names no language ran. git-scicomp's two arms are `-kernel` and
+#: `-repo`, which name the TREATMENT and leave the language implicit; without a default the control
+#: arm of that A/B has no language while its treatment has one, and the pair stops joining.
 #: Arm-name prefix -> (experiment, device). The longest matching prefix wins, so `gpu-llr-focus40`
 #: is not read as `llr-focus40`. Campaign versions stay separate experiments: v9, v10 and v11 ran
 #: different prompts and skill pages, so their rows are not comparable and must not share a tag.
 #: Waves of ONE version DO share it -- `v11w2` is the second wave of v11, not another experiment.
-CAMPAIGNS: dict[str, tuple[str, str]] = {
-    "cpf-llr-focus40": ("llr-focus40", "cpu"),
-    "gpu-llr-focus40": ("llr-focus40", "gpu"),
-    "llr40v9": ("llr-focus40-v9", "cpu"),
-    "llr40v10": ("llr-focus40-v10", "cpu"),
-    "llr40v11": ("llr-focus40-v11", "cpu"),
-    "v11w2": ("llr-focus40-v11", "cpu"),
-    "gpuv2-llr40": ("llr-focus40-v11", "gpu"),
-    "gpuv4-llr40": ("llr-focus40-v11", "gpu"),
-    "llrblind": ("llr-focus40-blind", "cpu"),
-    "git-scicomp": ("git-scicomp", "cpu"),
+CAMPAIGNS: dict[str, tuple[str, str, str]] = {
+    "cpf-llr-focus40": ("llr-focus40", "cpu", "c"),
+    "gpu-llr-focus40": ("llr-focus40", "gpu", "c"),
+    "llr40v9": ("llr-focus40-v9", "cpu", "c"),
+    "llr40v10": ("llr-focus40-v10", "cpu", "c"),
+    "llr40v11": ("llr-focus40-v11", "cpu", "c"),
+    "v11w2": ("llr-focus40-v11", "cpu", "c"),
+    "gpuv2-llr40": ("llr-focus40-v11", "gpu", "c"),
+    "gpuv4-llr40": ("llr-focus40-v11", "gpu", "c"),
+    "llrblind": ("llr-focus40-blind", "cpu", "c"),
+    "git-scicomp": ("git-scicomp", "cpu", "c"),
+    "scicomp-focus40": ("scicomp-focus40", "cpu", "c"),
+    "scicomp-dc": ("scicomp-focus40", "cpu", "c"),
 }
 
 MODELS: tuple[str, ...] = ("kimi27sglang", "oss120b", "qwen38", "glm53")
 
-#: Arm language token -> (language, extra packet). `omp` is a C arm whose directive model is the
-#: treatment; `pytriton` and `triton` are the same language under two spellings.
+#: Arm language token -> (language, extra packet).
+#:
+#: `omp` carries NO packet. It is a C arm compiled for the device, and `device=gpu` with
+#: `language=c` already says offload -- recording a packet for it made a programming model look
+#: like a skill the agent was handed, put it on the packet colour ramp, and made a GPU C arm
+#: incomparable to the CPU C arm it is the treatment of.
+#:
+#: `repo` DOES carry one: being handed the whole repository instead of one kernel is a treatment.
+#: `pytriton` and `triton` are the same language under two spellings.
 LANGUAGES: dict[str, tuple[str, str]] = {
     "c": ("c", ""),
     "cpp": ("cpp", ""),
@@ -57,12 +71,17 @@ LANGUAGES: dict[str, tuple[str, str]] = {
     "cuda": ("cuda", ""),
     "triton": ("triton", ""),
     "pytriton": ("triton", ""),
-    "omp": ("c", "openmp-offload"),
-    "openmp": ("c", "openmp-offload"),
+    "omp": ("c", ""),
+    "openmp": ("c", ""),
     "repo": ("c", "repo"),
 }
 
 PACKETS: dict[str, str] = {"skills": "lang-skills", "cpf": "cpf", "cpfsrc": "cpfsrc", "blind": "no-score-tool"}
+
+#: Tokens that name the CONTROL of their A/B rather than a treatment. `kernel` is the git-scicomp
+#: arm handed one kernel, which is what `repo` is the treatment of; spelling it in the arm name
+#: makes the pair readable, and it carries no packet because the control never does.
+CONTROL_TOKENS: frozenset[str] = frozenset({"kernel", "base", "plain"})
 
 #: run_id prefixes that belong to no experiment: ad-hoc runs, smoke tests, and one launcher that
 #: shipped the variable unexpanded. Their rows are dropped, counted, and reported.
@@ -90,7 +109,7 @@ def parse_arm(arm: str) -> Identity | None:
     prefix = max((p for p in CAMPAIGNS if arm == p or arm.startswith(p + "-")), key=len, default=None)
     if prefix is None:
         raise ValueError(f"no campaign owns arm {arm!r}")
-    experiment, device = CAMPAIGNS[prefix]
+    experiment, device, default_language = CAMPAIGNS[prefix]
     rest = arm[len(prefix) :].strip("-")
     model = next((m for m in MODELS if rest == m or rest.startswith(m + "-")), None)
     if model is None:
@@ -100,6 +119,8 @@ def parse_arm(arm: str) -> Identity | None:
     language = ""
     packets: list[str] = []
     for token in tokens:
+        if token in CONTROL_TOKENS:
+            continue
         if not language and token in LANGUAGES:
             language, extra = LANGUAGES[token]
             if extra:
@@ -107,11 +128,16 @@ def parse_arm(arm: str) -> Identity | None:
         elif token in PACKETS:
             packets.append(PACKETS[token])
         elif token in LANGUAGES:
-            packets.append(LANGUAGES[token][1] or token)
+            # A second language token is a directive model on the first ("c-openmp"), which carries
+            # a packet only if LANGUAGES gives it one -- offload does not, since device says it.
+            extra = LANGUAGES[token][1]
+            if extra:
+                packets.append(extra)
         else:
             raise ValueError(f"unknown token {token!r} in arm {arm!r}")
+    language = language or default_language
     if not language:
-        raise ValueError(f"no language in arm {arm!r}")
+        raise ValueError(f"no language in arm {arm!r} and its campaign names no default")
     return experiment, model, language, device, "+".join(sorted(set(packets)))
 
 

@@ -200,7 +200,7 @@ def draw_absolute(ax, frame: pd.DataFrame, stats: pd.DataFrame) -> list:
     position is the one a reader is looking for.
     """
     hues = palette.model_colors(sorted(frame.model.unique()))
-    shapes = palette.markers(sorted(frame.model.unique()))
+    shapes = palette.model_markers(sorted(frame.model.unique()))
     significant = {
         (row.model, row.language): bool(row.score_sig or row.cost_sig) for row in stats.itertuples(index=False)
     }
