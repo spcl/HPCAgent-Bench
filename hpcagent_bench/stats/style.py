@@ -5,7 +5,8 @@
 Figures from one project that do not look like one project make a reader work out, per figure,
 what is ink and what is data. This fixes the parts that are never data -- type sizes, tick and
 spine weight, grid colour, the neutral inks -- so a plot only has to decide what it is actually
-showing. Colour is NOT here: it belongs to the entity, and :mod:`hpcagent_bench.palette` owns it.
+showing. Colour is NOT here: it belongs to the entity, and :mod:`hpcagent_bench.stats.palette`
+owns it.
 
 Neutrals carry a slight cool bias rather than being a pure grey, so they sit under the palette's
 blues without looking like a different rendering of the page.
@@ -82,8 +83,8 @@ def apply() -> None:
     )
 
 
-def despine(ax, keep: tuple[str, ...] = ("left", "bottom")) -> None:
-    """Drop the spines that only box the data in."""
+def despine(ax, keep: tuple[str, ...] = ("top", "right", "left", "bottom")) -> None:
+    """Colour the kept spines RULE and hide the rest. Defaults to a light grey four-sided frame."""
     for side in ("top", "right", "left", "bottom"):
         ax.spines[side].set_visible(side in keep)
         if side in keep:

@@ -37,7 +37,9 @@ import numpy as np
 import pandas as pd
 from scipy.stats import wilcoxon
 
-from hpcagent_bench import experiment_tags, palette, plotstyle
+from hpcagent_bench import experiment_tags
+from hpcagent_bench.stats import palette
+from hpcagent_bench.stats import style as plotstyle
 
 plotstyle.apply()
 import matplotlib.pyplot as plt
@@ -197,8 +199,8 @@ def draw_absolute(ax, frame: pd.DataFrame, stats: pd.DataFrame) -> list:
     -- the two land on top of each other whenever the packet changed little, and the "with skills"
     position is the one a reader is looking for.
     """
-    hues = palette.colors("model", sorted(frame.model.unique()))
-    shapes = palette.markers("model", sorted(frame.model.unique()))
+    hues = palette.model_colors(sorted(frame.model.unique()))
+    shapes = palette.markers(sorted(frame.model.unique()))
     significant = {
         (row.model, row.language): bool(row.score_sig or row.cost_sig) for row in stats.itertuples(index=False)
     }

@@ -20,7 +20,7 @@ Three files per machine, from one invocation: the banded figure (PDF), the SIMPL
 SVG variant (``<stem>-simple.<machine>.svg``, the one band holding the most points), and the MINI
 SVG (``<stem>-mini.<machine>.svg``, the banded layout at embed size with ``K1..Kn`` ticks).
 
-Data comes from the shipped reader (:func:`hpcagent_bench.plotting.load_results`) and is laid out
+Data comes from the shipped reader (:func:`hpcagent_bench.stats.plotting.load_results`) and is laid out
 with the shipped ordering (:mod:`hpcagent_bench.reporting_order`) -- no second data path. Rows are
 PARTITIONED per machine for the same reason every other figure partitions them: a candidate timed
 on one node over a baseline timed on another is a hardware comparison wearing a software label.
@@ -52,10 +52,10 @@ from typing import Dict, List, NamedTuple, Optional, Sequence, Set, Tuple
 import numpy as np
 import pandas as pd
 
-from hpcagent_bench import plotting  # also selects the headless Agg backend on import
 from hpcagent_bench import stats
 from hpcagent_bench.paths import PLOTS_DIR
 from hpcagent_bench.reporting_order import BY_DWARF, ORDER_MODES, order_rows, row_meta_for
+from hpcagent_bench.stats import plotting  # also selects the headless Agg backend on import
 
 import matplotlib.pyplot as plt  # noqa: E402 -- must follow plotting's backend setup
 
@@ -159,7 +159,7 @@ def speedup_points(
 ) -> List[Point]:
     """Per (kernel, framework) median speed-up over ``baseline``, as plottable points.
 
-    ``summary`` is a :func:`hpcagent_bench.plotting.cell_summary` frame -- one row per
+    ``summary`` is a :func:`hpcagent_bench.stats.plotting.cell_summary` frame -- one row per
     (benchmark, domain, framework) whose ``time`` is the OUTLIER-CLEANED median. The baseline's own
     row is the divisor, not a series, so it is never plotted.
 

@@ -37,7 +37,9 @@ import pathlib
 
 import pandas as pd
 
-from hpcagent_bench import experiment_tags, palette, plotstyle
+from hpcagent_bench import experiment_tags
+from hpcagent_bench.stats import palette
+from hpcagent_bench.stats import style as plotstyle
 
 plotstyle.apply()
 import matplotlib.pyplot as plt  # noqa: E402 -- pyplot must follow plotstyle.apply()
@@ -142,7 +144,7 @@ def segments_for(row, hue: str, gate: str) -> tuple[tuple[float, str, str], ...]
 
 
 def draw(ax, table: pd.DataFrame, roster: int, gate: str) -> None:
-    hues = palette.colors("model", sorted(table.model.unique()))
+    hues = palette.model_colors(sorted(table.model.unique()))
     column = GATES[gate][0]
     ys = range(len(table))
     for y, row in zip(ys, table.itertuples(), strict=True):
@@ -189,7 +191,7 @@ def draw(ax, table: pd.DataFrame, roster: int, gate: str) -> None:
 
 
 def handles_for(table: pd.DataFrame, gate: str) -> list:
-    hues = palette.colors("model", sorted(table.model.unique()))
+    hues = palette.model_colors(sorted(table.model.unique()))
     solid = GATES[gate][1]
     marks = [
         plt.Rectangle((0, 0), 1, 1, color=hue, label=f"{solid} ({experiment_tags.model_name(name)})")
@@ -209,7 +211,8 @@ def handles_for(table: pd.DataFrame, gate: str) -> list:
 def order(table: pd.DataFrame) -> pd.DataFrame:
     """Model first (in the palette's order, so the colours run top to bottom), then language, then
     the packet -- the pairs a reader compares sit next to each other."""
-    keys = table.assign(slot=table.model.map(lambda m: palette.slot("model", m)))
+    rank = {name: i for i, name in enumerate(palette.in_order(table.model.unique()))}
+    keys = table.assign(slot=table.model.map(rank))
     return keys.sort_values(["slot", "language", "skills"]).drop(columns="slot").reset_index(drop=True)
 
 

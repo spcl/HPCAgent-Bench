@@ -53,11 +53,12 @@ import matplotlib.pyplot as plt  # noqa: E402 -- must follow the backend setup
 from scipy.stats import norm  # noqa: E402
 from scipy.stats.mstats import gmean  # noqa: E402
 
-from hpcagent_bench import inference, palette, stats  # noqa: E402
+from hpcagent_bench import inference, stats  # noqa: E402
 from hpcagent_bench.harness import recording  # noqa: E402
 from hpcagent_bench.paths import PLOTS_DIR  # noqa: E402
 from hpcagent_bench.reporting_order import BY_DWARF, GroupSpan, order_rows, row_meta_for  # noqa: E402
 from hpcagent_bench.spec import select_short_names  # noqa: E402
+from hpcagent_bench.stats import palette  # noqa: E402
 
 LOG = logging.getLogger(__name__)
 
@@ -86,10 +87,6 @@ CI_SEED: int = 0
 #: reading a global: which framework is the denominator is a property of the figure being drawn,
 #: not of the process drawing it, and two figures in one process may want different ones.
 DEFAULT_BASELINE: str = "numba"
-
-#: Re-exported so existing callers keep working; :mod:`hpcagent_bench.palette` owns it, and
-#: :func:`framework_color` there is what makes a hue stick to a framework.
-PALETTE: Tuple[str, ...] = palette.PALETTE
 
 
 def baseline_of(frame, default: str = DEFAULT_BASELINE) -> str:
@@ -123,13 +120,13 @@ def baseline_of(frame, default: str = DEFAULT_BASELINE) -> str:
 
 
 def framework_color(name: str) -> str:
-    """A framework's one colour. Thin alias -- :mod:`hpcagent_bench.palette` decides it."""
-    return palette.color("framework", name)
+    """A framework's one colour. Thin alias -- :mod:`hpcagent_bench.stats.palette` decides it."""
+    return palette.framework_color(name)
 
 
 def framework_colors(names) -> dict:
     """``{framework: colour}`` for one figure, with palette.py's collision warning."""
-    return palette.colors("framework", names)
+    return palette.framework_colors(names)
 
 
 def set_usetex(usetex: bool) -> None:

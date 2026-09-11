@@ -63,6 +63,18 @@ def model_checkpoint(model: str) -> str:
     return entry.get("serves", "") if entry else ""
 
 
+def packet_name(packet: str) -> str:
+    """The display spelling of a skill packet. "" is the control, which every figure needs a word
+    for. A combination is spelled as its parts joined by " + ", so an unregistered pairing of two
+    registered packets still reads."""
+    names = registry().get("packets") or {}
+    key = str(packet)
+    if key in names:
+        return names[key]
+    parts = [p for p in key.split("+") if p]
+    return " + ".join(names.get(p, p) for p in parts) if parts else names.get("", "No Skill Packet")
+
+
 def language_name(language: str) -> str:
     """The display spelling of a language. Unknown ones pass through unchanged."""
     names = registry().get("languages") or {}
