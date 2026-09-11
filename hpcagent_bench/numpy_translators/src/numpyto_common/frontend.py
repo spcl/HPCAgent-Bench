@@ -26,6 +26,7 @@ keeps the harness and the emitter aligned.
 import ast
 import contextlib
 import copy
+import dataclasses
 import itertools
 import json
 import os
@@ -4915,6 +4916,38 @@ def reject_subscripted_scalar_params(hfn: ast.FunctionDef, scalars: List[ScalarD
         )
 
 
+def widen_counting_scalar_params(hfn: ast.FunctionDef, scalars: List[ScalarDesc]) -> None:
+    """Re-type, in place, every float SCALAR parameter ``hfn`` counts or indexes with.
+
+    A parameter's dtype is inferred from the CALL-SITE argument, and an argument the resolver
+    cannot type falls through to ``float64`` -- which is what an element of a kernel LOCAL array
+    does (spgemm_hash passes ``row_bin[row]``, an ``int64`` local), and what a local bound from
+    another helper's call does (``ts = _table_size(...)``). Inlined, that cost nothing: the body was
+    spliced into the caller and the value kept its own type. As a kept helper it is a declared
+    ``double``, and the body then counts and subscripts with it -- ``invalid types 'int64_t*
+    [double]' for array subscript`` out of g++, and the same complaint from C and gfortran.
+
+    The body's own use is the evidence: ``range()`` counts, and a subscript indexes, and neither
+    takes a float in any of the three languages. :func:`reject_subscripted_scalar_params` reads the
+    same evidence for the case where the kind, not the width, is wrong.
+    """
+    floats = {s.name for s in scalars if not str(s.dtype).startswith(("int", "uint", "bool"))}
+    if not floats:
+        return
+    counted: Set[str] = set()
+    for node in ast.walk(hfn):
+        positions: List[ast.AST] = []
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "range":
+            positions.extend(node.args)
+        elif isinstance(node, ast.Subscript):
+            positions.append(node.slice)
+        for position in positions:
+            counted |= {n.id for n in ast.walk(position) if isinstance(n, ast.Name) and n.id in floats}
+    for index, desc in enumerate(scalars):
+        if desc.name in counted:
+            scalars[index] = dataclasses.replace(desc, dtype="int64")
+
+
 def _mark_written_outputs(hfn: ast.FunctionDef, arrays: List[ArrayDesc]) -> None:
     """Mark every array param the helper WRITES to (``p[i] = ...``) as an output
     (drops ``const`` on the pointer)."""
@@ -5952,6 +5985,7 @@ def _build_helper_kirs(
             _reject_symbolic_axis(hfn)
             _reject_unsupported_slices(hfn)
             reject_subscripted_scalar_params(hfn, scalars, hdef.name)
+            widen_counting_scalar_params(hfn, scalars)
             _mark_written_outputs(hfn, arrays)
             # Shape symbols this helper's array params name (``ny``/``nx`` in cavity_flow's
             # ``(ny, nx)``) but the call does not pass. The emitters size the dummy's dimensions
@@ -6041,6 +6075,7 @@ def _build_helper_kirs(
         _reject_symbolic_axis(hfn)
         _reject_unsupported_slices(hfn)
         reject_subscripted_scalar_params(hfn, scalars, hdef.name)
+        widen_counting_scalar_params(hfn, scalars)
         _mark_written_outputs(hfn, arrays)
         # ``X = h(X, ...)`` returns into a buffer the call ALREADY passes in. That parameter is
         # in-out and takes ONE ABI slot: appending a separate out-param would put the same pointer
