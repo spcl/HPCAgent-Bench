@@ -26,6 +26,11 @@ import yaml
 
 _PATH = pathlib.Path(__file__).parent / "config.yaml"
 
+#: What a config value can be once coerced. A key holding anything else is a config bug, not a type
+#: the callers have to carry.
+ConfigValue = bool | int | float | str | list[object] | dict[str, object] | None
+
+
 #: In-process runtime overrides (highest precedence). Set programmatically via
 #: :func:`set_override` -- e.g. the judge service pins ``runtime.mp_context`` --
 #: so a component can change a global default WITHOUT touching the environment.
@@ -85,11 +90,6 @@ def overridden(dotted: str, value: ConfigValue) -> Generator[None]:
             set_override(dotted, prev)
         else:
             clear_override(dotted)
-
-
-#: What a config value can be once coerced. A key holding anything else is a config bug, not a type
-#: the callers have to carry.
-ConfigValue = bool | int | float | str | list[object] | dict[str, object] | None
 
 
 def _coerce(s: str) -> ConfigValue:
