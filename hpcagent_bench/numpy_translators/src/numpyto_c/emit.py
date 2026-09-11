@@ -3254,6 +3254,45 @@ def emit_c_helpers(kir: KernelIR, cpp: bool = False, isopar: bool = False) -> st
     )
 
 
+#: Identifiers the C standard headers this emitter already includes (``<stdlib.h>``, ``<string.h>``,
+#: ``<math.h>``, ``<complex.h>`` and their C++ spellings) declare at FILE SCOPE. A pinned knob
+#: spelled like one of these cannot be declared beside it: C23 rejects the ``constexpr`` as an
+#: underspecified declaration of a name already in this scope, C++ as a redeclaration as a
+#: different kind of entity. ``atol`` (rk45_ensemble's absolute tolerance) is the live case.
+_STDLIB_STRING_NAMES = (
+    "abort abs aligned_alloc at_quick_exit atexit atof atoi atol atoll bcmp bcopy bsearch bzero"
+    " calloc div exit free getenv index labs ldiv llabs lldiv malloc mblen mbstowcs mbtowc memchr"
+    " memcmp memcpy memmove memset qsort quick_exit rand random realloc rindex srand strcat strchr"
+    " strcmp strcoll strcpy strcspn strdup strerror strlen strncat strncmp strncpy strndup strpbrk"
+    " strrchr strsep strspn strstr strtod strtof strtok strtol strtold strtoll strtoul strtoull"
+    " strxfrm system wcstombs wctomb"
+).split()
+
+#: ``<math.h>`` / ``<complex.h>`` base names; each also exists with a float (``f``) and a long
+#: double (``l``) suffix, so the suffixes are generated rather than spelled out three times.
+_LIBM_BASE_NAMES = (
+    "acos acosh asin asinh atan atan2 atanh cabs cacos cacosh carg casin casinh catan catanh cbrt"
+    " ccos ccosh ceil cexp cimag clog conj copysign cos cosh cpow cproj creal csin csinh csqrt ctan"
+    " ctanh drem erf erfc exp exp2 expm1 fabs fdim finite floor fma fmax fmin fmod frexp gamma"
+    " hypot ilogb j0 j1 jn ldexp lgamma llrint llround log log10 log1p log2 logb lrint lround modf"
+    " nan nearbyint nextafter nexttoward pow pow10 remainder remquo rint round scalb scalbln scalbn"
+    " significand sin sinh sqrt tan tanh tgamma trunc y0 y1 yn"
+).split()
+
+RESERVED_FILE_SCOPE_NAMES = frozenset(
+    _STDLIB_STRING_NAMES + [base + suffix for base in _LIBM_BASE_NAMES for suffix in ("", "f", "l")]
+)
+
+#: Prefix carried by the DECLARATION of a pinned knob whose name a header already owns. Every USE
+#: keeps the reference's own spelling, through the ``#define`` emitted beside the declaration.
+PINNED_ALIAS_PREFIX = "__npb_pin_"
+
+
+def pinned_const_name(name: str) -> str:
+    """The identifier a pinned knob is declared under -- its own, unless a header already owns it."""
+    return PINNED_ALIAS_PREFIX + name if name in RESERVED_FILE_SCOPE_NAMES else name
+
+
 def pinned_const_block(kir: KernelIR) -> str:
     """File-scope ``constexpr`` for each config knob the manifest pinned to one value.
 
@@ -3262,16 +3301,23 @@ def pinned_const_block(kir: KernelIR) -> str:
     padding are all knowable while the kernel is being compiled, and only a constant lets the
     compiler unroll on them. It is declared here, by NAME, rather than folded into a literal at
     every use, so the emitted code still reads like the reference it came from.
+
+    A knob whose name a header already declares is the one exception: the declaration takes an
+    aliased name and a ``#define`` maps the reference's spelling onto it, which keeps every use
+    site -- body, helper, VLA bound in the signature -- reading as the reference wrote it.
     """
     if not kir.pinned_consts:
         return ""
     type_of = {s.name: dtypes.c_type("int") for s in kir.symbols}
     type_of.update({s.name: _c_type(s.dtype) for s in kir.scalars})
-    lines = []
+    lines: List[str] = []
     for name in sorted(kir.pinned_consts):
         value = kir.pinned_consts[name]
         ctype = type_of.get(name, _c_type("float64"))
-        lines.append(f"constexpr {ctype} {name} = {c_literal(value, ctype)};")
+        declared = pinned_const_name(name)
+        if declared != name:
+            lines.append(f"#define {name} {declared}")
+        lines.append(f"constexpr {ctype} {declared} = {c_literal(value, ctype)};")
     return "\n".join(lines) + "\n\n"
 
 
