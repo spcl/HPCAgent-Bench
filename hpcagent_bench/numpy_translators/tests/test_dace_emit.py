@@ -2028,3 +2028,48 @@ def test_a_tuple_target_element_that_shadows_is_renamed_too() -> None:
     )
     assert "for i_nested1, j in pairs" in got
     assert "a[j] = i_nested1" in got
+
+
+# --------------------------------------------------------------------------- #
+# an accumulate updates the binding in scope; it does not make a new one        #
+# --------------------------------------------------------------------------- #
+
+
+def test_an_accumulator_reshaped_after_its_loop_gets_a_name_of_its_own() -> None:
+    """``acc += tap`` UPDATES the binding in scope; it does not make a new one. Counted as a foreign
+    store it declined every accumulator a later ``acc = acc.reshape(..)`` rebinds -- one dace
+    descriptor asked to hold two shapes, which is ``Cannot reassign value to variable`` and exactly
+    where conv_depthwise_2d_square_input_asymmetric_kernel stopped parsing."""
+    rewritten = value_versioned(
+        "def k(a, out):\n"
+        "    acc = np.zeros((1, 2, 4))\n"
+        "    for i in range(3):\n"
+        "        acc += a[2 * i:2 * i + 2, :][None, :, :]\n"
+        "    acc = acc.reshape((2, 4))\n"
+        "    acc += a[0, 0]\n"
+        "    out[:] = acc\n"
+    )
+    # the accumulate BEFORE the rebind keeps the first name; the one after it moves with the rebind
+    assert "acc += a[2 * i:2 * i + 2, :][None, :, :]" in rewritten
+    assert "acc__v2 = acc.reshape((2, 4))" in rewritten
+    assert "acc__v2 += a[0, 0]" in rewritten
+    assert "out[:] = acc__v2" in rewritten
+
+
+def test_an_accumulate_no_binding_owns_declines_the_whole_name() -> None:
+    """An ``+=`` is a touch, so it has to be OWNED like a read before the name may split. Here every
+    read sits inside the branch that binds it and only the accumulate escapes -- version on the
+    reads alone and the surviving ``acc += ..`` updates the FIRST binding under a name the rewrite
+    no longer feeds. numpy cannot see it (that accumulate is dead), which is why this is asserted on
+    the rewritten source rather than on the numbers."""
+    rewritten = value_versioned(
+        "def k(a, out):\n"
+        "    if a[0, 0] < 1:\n"
+        "        acc = a[0:2, :] * 1.0\n"
+        "        out[:] = acc\n"
+        "        acc = a[2:4, :] * 1.0\n"
+        "        out[:] = acc\n"
+        "    acc += a[4:6, :]\n"
+        "    out[0, 0] = 1.0\n"
+    )
+    assert "__v2" not in rewritten
