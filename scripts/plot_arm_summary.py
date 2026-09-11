@@ -3,9 +3,15 @@
 """Where each ARM landed on one experiment: median speed-up, and median spend, with and without
 the skills packet.
 
-One point per (model, language, condition) -- hollow without the packet, filled with it, joined by
-a thin dashed line. The line's LENGTH and DIRECTION is the treatment effect for that arm, which is
-a thing the eye reads directly where two numbers to subtract are not.
+One point per (model, language, condition). With TWO conditions -- a packet on or off -- they are
+hollow and filled, joined by a thin dashed line whose LENGTH and DIRECTION is the treatment effect,
+which the eye reads directly where two numbers to subtract are not.
+
+With THREE OR MORE, the connector is dropped and the marker carries the condition instead. A line
+through three points asserts an order they do not have: no-packet, cpf and cpfsrc are three
+treatments against one control, not a path, and the segment a reader would measure would depend on
+which two happened to be adjacent. Colour stays the model and shape becomes the condition, so the
+two are still separable without either being colour-alone.
 
 The unit on the y axis is a MEDIAN OVER KERNELS, so a kernel the arm never solved does not quietly
 drop out of one side of the comparison: the per-kernel medians are taken first, then the median
@@ -21,6 +27,7 @@ from __future__ import annotations
 import argparse
 import pathlib
 
+import matplotlib.patches
 import numpy as np
 import pandas as pd
 
@@ -47,7 +54,7 @@ LEGEND_COLS_SINGLE: int = 3
 def arm_points(frame: pd.DataFrame) -> pd.DataFrame:
     """One row per (model, language, condition): median log2 speed-up and median tokens."""
     rows = []
-    for (model, language, skills), part in frame.groupby(["model", "language", "skills"]):
+    for (model, language, condition), part in frame.groupby(["model", "language", "condition"]):
         speed = part.groupby("benchmark")["speedup"].median()
         speed = speed[speed > 0]
         # Tokens per TASK. One episode is one agent working one kernel once, so the max over a
@@ -64,13 +71,48 @@ def arm_points(frame: pd.DataFrame) -> pd.DataFrame:
             {
                 "model": model,
                 "language": language,
-                "skills": bool(skills),
+                "condition": str(condition),
                 "log2_speedup": float(np.median(np.log2(speed.to_numpy(dtype=float)))),
                 "tokens": float(np.median(tokens.to_numpy(dtype=float))),
                 "kernels": int(speed.size),
             }
         )
     return pd.DataFrame(rows)
+
+
+#: The arm KINDS this figure can carry, in legend order, with the suffix each arm name ends in.
+#: `plain` is the control and is spelled by the ABSENCE of a suffix, so it is matched last.
+CONDITIONS: tuple[tuple[str, str, str], ...] = (
+    ("plain", "", "No Skills"),
+    ("skills", "-skills", "Language Skills"),
+    ("cpf", "-cpf", "CPF page"),
+    ("cpfsrc", "-cpfsrc", "CPF drop-in source"),
+)
+
+#: Below this many conditions the pair is joined by a dashed connector; at or above it the marker
+#: carries the condition and nothing is joined. Two is a treatment and its control, which is a
+#: segment; three is three treatments against one control, which is not a path.
+CONNECTOR_MAX: int = 2
+
+
+def condition_of(arm: str) -> str:
+    """The arm's condition, from its suffix. Longest suffix first: `-cpfsrc` also ends in nothing
+    a shorter test would miss, but `-cpf` is a PREFIX of it and would claim it if tried first."""
+    name = str(arm)
+    for key, suffix, _ in sorted(CONDITIONS, key=lambda row: -len(row[1])):
+        if suffix and name.endswith(suffix):
+            return key
+    return "plain"
+
+
+def condition_order(frame) -> list[str]:
+    """The conditions present, in the fixed vocabulary order -- never in the order pandas found."""
+    present = set(frame.condition)
+    return [key for key, _, _ in CONDITIONS if key in present]
+
+
+def condition_label(key: str) -> str:
+    return next(label for name, _, label in CONDITIONS if name == key)
 
 
 #: Languages left to right. A preferred head so the common pair reads C then Fortran; anything
@@ -106,26 +148,53 @@ def draw_metric(ax, frame: pd.DataFrame, column: str, label: str, log: bool) -> 
     spread = np.linspace(-0.26, 0.26, len(models)) if len(models) > 1 else [0.0]
     dodge = dict(zip(models, spread, strict=True))
 
+    conditions = condition_order(frame)
+    joined = len(conditions) <= CONNECTOR_MAX
+    # Shape is the MODEL while a connector still says which points belong together, and the
+    # CONDITION once it does not. Registered off the fixed vocabulary rather than the conditions
+    # this frame happens to hold, so a campaign missing an arm keeps the shapes of the ones it has.
+    cond_shape = palette.markers("condition", [key for key, _, _ in CONDITIONS])
+
     for (model, language), pair in frame.groupby(["model", "language"]):
-        colour, shape = hues[model], shapes[model]
+        colour = hues[model]
         x = at[language] + dodge[model]
-        off, on = pair[~pair.skills], pair[pair.skills]
-        if len(off) == 1 and len(on) == 1:
-            ax.plot(
-                [x, x],
-                [float(off[column].iloc[0]), float(on[column].iloc[0])],
-                linestyle=(0, (3, 3)),
-                linewidth=0.9,
-                color=colour,
-                alpha=0.85,
-                zorder=3,
+        if joined:
+            off = pair[pair.condition == "plain"]
+            on = pair[pair.condition != "plain"]
+            shape = shapes[model]
+            if len(off) == 1 and len(on) == 1:
+                ax.plot(
+                    [x, x],
+                    [float(off[column].iloc[0]), float(on[column].iloc[0])],
+                    linestyle=(0, (3, 3)),
+                    linewidth=0.9,
+                    color=colour,
+                    alpha=0.85,
+                    zorder=3,
+                )
+            if len(off):
+                ax.scatter(
+                    x, off[column], s=130, marker=shape, facecolor="none", edgecolor=colour, linewidth=1.8, zorder=4
+                )
+            if len(on):
+                # Above the hollow partner: the two land on top of each other wherever the packet
+                # changed little, and "with skills" is the position a reader is looking for.
+                ax.scatter(x, on[column], s=130, marker=shape, color=colour, edgecolor="white", linewidth=0.8, zorder=5)
+            continue
+        # Three or more: no connector, and the shape carries the condition. The control stays
+        # HOLLOW so it reads as the thing the others are measured against at a glance.
+        for _, row in pair.iterrows():
+            hollow = row.condition == "plain"
+            ax.scatter(
+                x,
+                row[column],
+                s=130,
+                marker=cond_shape[row.condition],
+                facecolor="none" if hollow else colour,
+                edgecolor=colour if hollow else "white",
+                linewidth=1.8 if hollow else 0.8,
+                zorder=4 if hollow else 5,
             )
-        if len(off):
-            ax.scatter(x, off[column], s=130, marker=shape, facecolor="none", edgecolor=colour, linewidth=1.8, zorder=4)
-        if len(on):
-            # Above the hollow partner: the two land on top of each other wherever the packet
-            # changed little, and "with skills" is the position a reader is looking for.
-            ax.scatter(x, on[column], s=130, marker=shape, color=colour, edgecolor="white", linewidth=0.8, zorder=5)
 
     if log:
         ax.set_yscale("log")
@@ -146,25 +215,47 @@ def handles_for(frame: pd.DataFrame) -> list:
     """The legend both figures carry, entry for entry, so neither is sized differently."""
     hues = palette.colors("model", sorted(frame.model.unique()))
     shapes = palette.markers("model", sorted(frame.model.unique()))
-    marks = [
-        plt.Line2D(
-            [], [], marker=shapes[n], linestyle="none", color=h, markersize=9, label=experiment_tags.model_name(n)
+    conditions = condition_order(frame)
+    joined = len(conditions) <= CONNECTOR_MAX
+    if joined:
+        marks = [
+            plt.Line2D(
+                [], [], marker=shapes[n], linestyle="none", color=h, markersize=9, label=experiment_tags.model_name(n)
+            )
+            for n, h in hues.items()
+        ]
+    else:
+        # A SWATCH, not a marker. Once shape carries the condition, a model entry drawn with the
+        # model's old shape claims a shape the panel does not use -- a reader sees "Kimi = triangle"
+        # beside a triangle that means "CPF page". A patch makes the colour the whole claim.
+        marks = [
+            matplotlib.patches.Patch(facecolor=h, edgecolor="none", label=experiment_tags.model_name(n))
+            for n, h in hues.items()
+        ]
+    cond_shape = palette.markers("condition", [key for key, _, _ in CONDITIONS])
+    # The shape in the legend has to be the shape on the panel, which depends on whether the
+    # connector is drawn -- a legend showing four shapes beside a panel drawn in one is worse than
+    # no legend at all.
+    # A single condition has nothing to distinguish, and an entry reading "No Skills" beside a
+    # figure with no skills dimension states a contrast that is not on the panel.
+    if len(conditions) < 2:
+        return marks
+    entries = []
+    for key in conditions:
+        hollow = key == "plain"
+        entries.append(
+            plt.Line2D(
+                [],
+                [],
+                marker="o" if joined else cond_shape[key],
+                linestyle="none",
+                markerfacecolor="none" if hollow else plotstyle.MUTED,
+                markeredgecolor=plotstyle.MUTED,
+                markersize=9,
+                label=condition_label(key),
+            )
         )
-        for n, h in hues.items()
-    ]
-    return marks + [
-        plt.Line2D(
-            [],
-            [],
-            marker="o",
-            linestyle="none",
-            markerfacecolor="none",
-            markeredgecolor=plotstyle.MUTED,
-            markersize=9,
-            label="No Skills",
-        ),
-        plt.Line2D([], [], marker="o", linestyle="none", color=plotstyle.MUTED, markersize=9, label="Skills"),
-    ]
+    return marks + entries
 
 
 def write(fig, out: pathlib.Path) -> pathlib.Path:
@@ -223,7 +314,7 @@ def load(path: pathlib.Path, prefix: str) -> pd.DataFrame:
     frame = frame[(frame["speedup"] > 0) & frame["tokens"].notna() & (frame["tokens"] > 0)]
     frame = frame.assign(
         model=frame["arm"].astype(str).map(palette.model_of),
-        skills=frame["arm"].astype(str).str.endswith("-skills"),
+        condition=frame["arm"].astype(str).map(condition_of),
     )
     return frame[frame.model != "other"]
 

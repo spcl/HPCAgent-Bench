@@ -110,7 +110,7 @@ mkdir -p "${RUN_DIR}"
 mapfile -t NODES < <(scontrol show hostnames "${SLURM_JOB_NODELIST}")
 export NODE0="${NODES[0]}"
 # Topology follows the ALLOCATION, so the same script measures the kimi config (4 nodes, pp=4)
-# and a pp=1 control on one node: `sbatch --nodes=1 --export=ALL,MODEL_REPO=openai/gpt-oss-120b`.
+# and a pp=1 control on one node: `MODEL_REPO=openai/gpt-oss-120b`. sbatch --nodes=1
 # The control is what tells us whether a low tok/s number is the stack or just the offered load.
 export NNODES="${#NODES[@]}"
 export TP_SIZE="${TP_SIZE:-4}"

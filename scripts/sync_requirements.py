@@ -79,7 +79,21 @@ GENERATED: dict[str, Rendered] = {
     "requirements/nvidia.txt": Rendered(
         ("nvidia",), core=True, options=("--pre",), note="--pre is required for apache-tvm."
     ),
-    "requirements/amd.txt": Rendered(("amd",), core=True, options=("--pre",), note="--pre is required for apache-tvm."),
+    # linting is in the IMAGE, not just a developer's laptop: tests/test_header_hook.py asserts
+    # `shutil.which("ruff")` and the format hook shells out to it, so without it those tests pass
+    # only when the HOST happens to have ruff -- a package from outside, which this image is not
+    # allowed to depend on. Installing it here is what makes the suite runnable in-container.
+    # testing alongside linting, for the same reason and the other half of it: the image can now
+    # run ruff but not pytest, so "the suite is runnable in-container" was only half true. mpi
+    # carries pytest-mpi -- mpi4py itself already arrives with the amd extra, so this adds the
+    # runner and nothing else.
+    "requirements/amd.txt": Rendered(
+        ("amd", "mpi"),
+        core=True,
+        groups=("linting", "testing"),
+        options=("--pre",),
+        note="--pre is required for apache-tvm.",
+    ),
     "requirements/hf.txt": Rendered(
         ("hf",),
         core=False,

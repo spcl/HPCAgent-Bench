@@ -1,6 +1,7 @@
 ---
 name: openacc
 description: "OpenACC offload to an NVIDIA GPU, in C, C++ and Fortran: NVHPC is forced, -Minfo=accel tells you what actually ran on the device, and the flat ABI gives every data clause explicit bounds."
+when: "you are moving a loop onto a GPU with OpenACC directives"
 ---
 
 # openacc

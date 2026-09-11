@@ -108,14 +108,25 @@ MODEL_ORDER: tuple[str, ...] = (
 #: identifies a series.
 MARKERS: tuple[str, ...] = ("o", "s", "^", "D", "v", "P", "X", "*")
 
+#: The arm CONDITIONS, in assignment order. A condition is what a figure varies WITHIN a model --
+#: no packet, the language packet, the CPF page, the CPF drop-in source -- so it is an entity kind
+#: of its own: a figure carrying three of them needs three shapes that are stable across runs and
+#: across campaigns, and taking them off the model order would repaint the models.
+#: APPEND ONLY, for the same reason the model order is.
+CONDITION_ORDER: tuple[str, ...] = ("plain", "skills", "cpf", "cpfsrc")
+
 #: What an entity IS. Two entities of different kinds may share a hue; two of the same kind in one
 #: figure may not, which is what :func:`colors` checks.
-KINDS: tuple[str, ...] = ("framework", "model")
+KINDS: tuple[str, ...] = ("framework", "model", "condition")
 
 #: The live registry: the frozen orders above as a seed, plus whatever :func:`register` adds. A
 #: list rather than the tuple so registration can append; the seed prefix is never reordered, so
 #: an already-published figure cannot be repainted by a later registration.
-ORDERS: dict[str, list[str]] = {"framework": list(FRAMEWORK_ORDER), "model": list(MODEL_ORDER)}
+ORDERS: dict[str, list[str]] = {
+    "framework": list(FRAMEWORK_ORDER),
+    "model": list(MODEL_ORDER),
+    "condition": list(CONDITION_ORDER),
+}
 
 
 def register(kind: str, name: str) -> tuple[str, str]:

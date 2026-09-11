@@ -788,13 +788,15 @@ COMPILER_ALIASES: Dict[str, Tuple[str, ...]] = {
 #: default gcc 7.5.0 with gcc-12/13/14 alongside)::
 #:
 #:     gcc-7   -std=c17    -> unrecognized command line option, did you mean '-std=c11'?
-#:     g++-7   -std=c++23  -> unrecognized command line option, did you mean '-std=c++03'?
+#:     g++-7   -std=c++20  -> unrecognized command line option, did you mean '-std=c++03'?
 #:     gcc-12/13 -std=c23  -> unrecognized command line option, did you mean '-std=c2x'?
-#:     gcc-14  -std=c23    -> ok          g++-12/13/14 -std=c++23 -> ok
+#:     gcc-14  -std=c23    -> ok          g++-12/13/14 -std=c++20 -> ok
 #:
 #: One number per DRIVER, not per family, each traceable to the flag its own block pins:
-#: ``-std=c23`` arrived in GCC 14 (``c2x`` before it) and ``-std=f2018`` in GCC 8; ``-std=c++23``
-#: is spelled ``c++2b`` before GCC 12.
+#: ``-std=c23`` arrived in GCC 14 (``c2x`` before it) and ``-std=f2018`` in GCC 8; ``-std=c++20``
+#: is spelled ``c++2a`` before GCC 10. The C++ floor was 12 while the block pinned c++23 (spelled
+#: ``c++2b`` before that release); the block pins c++20 now, so the number it derives from moved
+#: with it rather than being left behind as a margin no flag asks for.
 #:
 #: clang carries a floor for a DIFFERENT reason: it takes ``-std=c23`` from clang 18, but the C23
 #: feature the stubs emit -- ``constexpr`` on an object definition, N3018 -- only lands in clang 19
@@ -810,7 +812,7 @@ COMPILER_ALIASES: Dict[str, Tuple[str, ...]] = {
 #: resolution question now, and a versioned flang-20+ sibling should win over an older default.
 COMPILER_MIN_MAJOR: Dict[str, int] = {
     "gcc": 14,
-    "g++": 12,
+    "g++": 10,
     "gfortran": 8,
     "clang": 19,
     "flang": 20,

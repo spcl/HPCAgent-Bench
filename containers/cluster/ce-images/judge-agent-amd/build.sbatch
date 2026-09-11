@@ -16,7 +16,10 @@
 #SBATCH --partition=mi300
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=192
+# 96 PHYSICAL cores, not 192 logical: the node is Sockets=4 CoresPerSocket=24
+# ThreadsPerCore=2, and an SMT sibling is not extra compute for a compile.
+#SBATCH --cpus-per-task=96
+#SBATCH --hint=nomultithread
 #SBATCH --mem=0
 #SBATCH --time=24:00:00
 #SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/build-judge-agent-amd-%j.out
@@ -39,6 +42,31 @@ test -x "${IMAGE_DIR}/build.sh"
 mkdir -p "${SCRATCH:?}/ce-images/logs"
 
 export OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?}/ce-images/optarena-ce-amd-mi300-candidate.sqsh}"
+export BUILD_TARGETS="${BUILD_TARGETS:-agent judge}"
+
+# WHICH FILES build.sh WILL ACTUALLY WRITE.
+#
+# build.sh honours OUTPUT_SQSH only for a SINGLE-target build -- with two targets one name cannot
+# mean both -- and otherwise writes each target's own candidate name. This script used to assume
+# OUTPUT_SQSH regardless, which broke twice over: the guard below protected a path nothing was
+# going to be written to, and the report at the end stat'd a name build.sh had deliberately not
+# used. Job 630737 built both images correctly in 3h11m and then exited 2 on `ls` of the name it
+# was told to ignore. Mirror build.sh's rule here instead of guessing at it.
+target_sqsh() {
+    case "$1" in
+        agent) printf '%s/ce-images/optarena-ce-amd-mi300-candidate.sqsh' "${SCRATCH:?}" ;;
+        judge) printf '%s/ce-images/optarena-ce-judge-amd-mi300-candidate.sqsh' "${SCRATCH:?}" ;;
+        *) echo "unknown build target '$1'" >&2; return 2 ;;
+    esac
+}
+built_paths() {
+    local t
+    if [ "$(printf '%s\n' ${BUILD_TARGETS} | wc -w)" -eq 1 ]; then
+        printf '%s\n' "${OUTPUT_SQSH}"
+        return
+    fi
+    for t in ${BUILD_TARGETS}; do target_sqsh "${t}"; printf '\n'; done
+}
 
 # Refuse to write over an image some EDF points a running job at: overwriting a mounted squashfs
 # is how a live arm starts reading a half-written inode table. Ask the EDFs rather than hard-code
@@ -48,19 +76,41 @@ edf_images() {
     grep -hoE '^[[:space:]]*image[[:space:]]*=[[:space:]]*"[^"]+"' "${HOME}/.edf"/*.toml 2>/dev/null \
       | sed -E 's/.*"(.*)"/\1/' | sed -E "s|\$\{SCRATCH\}|${SCRATCH}|g; s|\$SCRATCH|${SCRATCH}|g"
 }
-if edf_images | grep -qxF "${OUTPUT_SQSH}"; then
-    echo "refusing to overwrite ${OUTPUT_SQSH}: an EDF in ${HOME}/.edf mounts it, so a running" >&2
-    echo "arm would read a half-written squashfs. Build to a candidate name and promote by" >&2
-    echo "rename once nothing is using it." >&2
-    exit 2
-fi
+# Check EVERY path this build will write, not just OUTPUT_SQSH: on a two-target build the agent
+# and judge candidates are what land on disk, and neither of them is OUTPUT_SQSH.
+while read -r sqsh; do
+    [ -n "${sqsh}" ] || continue
+    if edf_images | grep -qxF "${sqsh}"; then
+        echo "refusing to overwrite ${sqsh}: an EDF in ${HOME}/.edf mounts it, so a running" >&2
+        echo "arm would read a half-written squashfs. Build to a candidate name and promote by" >&2
+        echo "rename once nothing is using it." >&2
+        exit 2
+    fi
+done <<EOF
+$(built_paths)
+EOF
 
 "${IMAGE_DIR}/build.sh"
 
-ls -lh "${OUTPUT_SQSH}"
-sha256sum "${OUTPUT_SQSH}" | tee "${OUTPUT_SQSH}.sha256"
-cat "${OUTPUT_SQSH}.digest"
-echo "JUDGE+AGENT AMD IMAGE READY: ${OUTPUT_SQSH}"
+# Report every image the build wrote. Missing one is a real failure -- the judge is the image
+# that grades every submission and it once shipped with no .sha256 and nothing saying it existed
+# -- but it has to be the path build.sh USED, or a successful build fails on a name nobody wrote.
+missing=0
+while read -r sqsh; do
+    [ -n "${sqsh}" ] || continue
+    if [ ! -f "${sqsh}" ]; then
+        echo "MISSING: ${sqsh} -- build.sh did not produce it" >&2
+        missing=$((missing + 1))
+        continue
+    fi
+    ls -lh "${sqsh}"
+    sha256sum "${sqsh}" | tee "${sqsh}.sha256"
+    [ -f "${sqsh}.digest" ] && cat "${sqsh}.digest"
+    echo "IMAGE READY: ${sqsh}"
+done <<EOF
+$(built_paths)
+EOF
+[ "${missing}" -eq 0 ] || { echo "${missing} image(s) missing" >&2; exit 2; }
 echo "Verify it before it goes live: scripts/smoke_gpu_profilers.sh via"
 echo "scripts/submit_gpu_profiler_smoke.sbatch -- it reads ARTIFACTS, not exit codes, and fails"
 echo "rocprof-compute specifically when its passes run and its rows are dropped."

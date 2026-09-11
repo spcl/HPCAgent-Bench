@@ -1,6 +1,7 @@
 ---
 name: nsys
 description: Trace a CUDA submission with Nsight Systems -- which kernel, which copy, which gap -- and know when only ncu can answer.
+when: "you are profiling on an NVIDIA GPU and need the device trace rather than a host sample"
 ---
 
 A GPU has no call stack to sample. The host thread launches asynchronously and then waits, so a

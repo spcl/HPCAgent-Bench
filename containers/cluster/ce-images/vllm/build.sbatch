@@ -19,7 +19,11 @@
 #SBATCH --partition=mi300
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=64
+# 96 PHYSICAL cores, not 192 logical: the node is Sockets=4 CoresPerSocket=24
+# ThreadsPerCore=2, and an SMT sibling is not extra compute for a compile.
+#SBATCH --cpus-per-task=96
+#SBATCH --hint=nomultithread
+#SBATCH --mem=0
 #SBATCH --time=08:00:00
 #SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/build-vllm-image-%j.out
 #SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/build-vllm-image-%j.err

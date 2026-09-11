@@ -1,7 +1,7 @@
 ---
 name: divide-and-conquer
 description: Split a kernel too big to reason about into named stages, so the profiler ranks them for you and a wrong answer bisects to one stage.
-when: the kernel has more phases than you can hold in your head, or a profile puts all of it under one symbol, split it into named stages before optimizing anything
+when: "the kernel is too long to optimize in one shot -- several stages to work through, more of it than you can hold in your head at once, or a profile that puts all of it under one symbol"
 ---
 
 A kernel of several hundred lines and a dozen stages does not fail the way a loop nest does. The

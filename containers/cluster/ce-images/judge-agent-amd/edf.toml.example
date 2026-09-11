@@ -31,6 +31,11 @@ writable = true
 entrypoint = false
 
 [env]
+FI_CXI_RX_MATCH_MODE = "software"
+FI_MR_CACHE_MONITOR = "disabled"
+# FI_PROVIDER is deliberately NOT set: this image also runs MPI, and MPICH inherits it.
+# Job 629966 set it and MPI_Init aborted with "OFI call getinfo failed" against a
+# libfabric that has no cxi provider. RCCL reaches cxi through the hook's plugin anyway.
 LC_ALL = "C"
 # The container's own dace must win over anything mounted from the host, and without this it does
 # not. dace is installed editable, so `import dace` goes through a finder -- but a plain DIRECTORY
@@ -67,7 +72,15 @@ PATH = "/opt/gcc/bin:/opt/view/bin:/opt/papi/bin:/opt/rocm/bin:/opt/venv/bin:/us
 # distro libdir last but present: the CXI hook's ld.so.conf.d entry otherwise lands a stale SLES
 # libcurl.so.4 (wanting an openldap 2.4 soname Ubuntu 24.04 does not ship) ahead of the good one,
 # and cmake -- so every DaCe compile -- becomes unrunnable.
+# /opt/aws-ofi-nccl/lib FIRST, and it is load-bearing for the same reason PATH above is: this
+# file re-declares LD_LIBRARY_PATH absolutely, so it OVERRIDES the image's own ENV. The image
+# puts the RCCL net plugin on its path; without the same entry here that is undone at run time,
+# RCCL cannot dlopen libnccl-net.so, and it does not error -- it falls back to TCP sockets over
+# hsn* and is merely slow. Measured (629800/629802, 8 ranks over 2 nodes):
+#   NET/Plugin: Could not find: libnccl-net.so  ->  Using network Socket
 LD_LIBRARY_PATH = "/opt/rocm/lib:/opt/rocm/lib64:/opt/gcc/lib64:/opt/gcc/lib:/opt/view/lib:/opt/view/lib64:/opt/papi/lib:/usr/lib/x86_64-linux-gnu"
+# Name the transport explicitly rather than letting RCCL pick. Same stanza the vLLM EDF carries,
+# which is the one configuration on this cluster measured to actually reach Slingshot.
 # Named, not left to PATH: a stale configure cache beats PATH, so a toolchain that looks selected
 # can still be ignored.
 CC = "/opt/gcc/bin/gcc"
@@ -79,6 +92,22 @@ HWLOC_COMPONENTS = "-opencl,-levelzero,-gl"
 LD_PRELOAD = "/usr/local/lib/libmimalloc.so"
 
 [annotations]
-# Generic ROCm image: the CE CXI hook is how libfabric-aware MPI/RCCL see Slingshot, which is what
-# `netmod=ofi` in the image's MPICH is built to use.
+# The CSCS-documented set. Three hooks, and we previously enabled only the middle one:
+#   10-netstack.sh    source defaults to "artifact"; setting "host" makes it exit(0) and fall back
+#                     to a raw filesystem graft -- which is how a host libcurl needing glibc 2.38
+#                     reached an image with 2.35 and killed its whole OFI stack (629822).
+#   89-libfabric-cxi  the cxi provider and /dev/cxi*.
+#   90-aws-ofi-nccl   exits(0) unless enabled == "true". Never set until now, which is exactly why
+#                     RCCL logged "NET/Plugin: Could not find: libnccl-net.so" and fell back to TCP
+#                     over hsn* (629800/629802).
+#
+# With all three, job 629967 measured on an UNMODIFIED image: /opt/cscs/netstack/librccl-net.so,
+# "Using network AWS Libfabric", GPU Direct RDMA on cxi0-2, 8 ranks over 2 nodes, correct result.
+#
+# Version and name are PINNED rather than left to the hook defaults, so a CSCS-side bump cannot
+# change the fabric under a running campaign.
+com.hooks.netstack.source = "artifact"
+com.hooks.netstack.version = "26.08.1"
+com.hooks.netstack.name = "gpu_rocm7-cxi_13.1.0-ofi_2.6.0-aws_1.20.0"
 com.hooks.cxi.enabled = "true"
+com.hooks.aws_ofi_nccl.enabled = "true"

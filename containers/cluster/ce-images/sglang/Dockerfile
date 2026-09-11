@@ -13,189 +13,38 @@
 # here is derived from that toml, from run_cluster.sh's sglang branch, and from the
 # SGLANG_EXTRA_ARGS of the live .env.llr40v9-{kimi27sglang,qwen38}-* files.
 #
-# The base is ROCm 7.2.0, which is now the global pin -- it is the vendor's own tag for this
-# SGLang release and it is what every measured kimi and qwen38 number was produced on. Pinned by
-# DIGEST because the date-stamped tag is still a tag.
+# UBUNTU 24.04, and that is why this tag rather than the newest 7.2.0 one.
 #
-# Read back from the deployed image, and load-bearing below: Ubuntu 22.04, glibc 2.35, python
-# 3.10 in /opt/venv, torch 2.9.1+rocm7.2.0, triton 3.7.0+amd.rocm7.2.0, sglang
-# 0.5.18.dev20260822 at /sgl-workspace/sglang/python, amd-aiter 0.1.19.post3.dev139 at
-# /sgl-workspace/aiter, flydsl 0.3.1.
-ARG BASE_IMAGE=docker.io/lmsysorg/sglang-rocm:v0.5.18-rocm720-mi30x-20260822\
-@sha256:4af1a96f988c523fd2848138b035eb2bd7654454d4f371e8ab0a379d50ee3feb
+# glibc decides everything here. The CE cxi hook injects the host Slingshot stack -- libfabric
+# 2.3.1, libcxi 1.0.2, SHS 13.1.0 -- built against glibc 2.38. Ubuntu 24.04 is glibc 2.39, so
+# that stack loads and this image takes libfabric and libcxi from the host like the other two.
+# On the previous 22.04 base (glibc 2.35) it could not, and every workaround failed: building a
+# libfabric of our own linked libcurl, which resolved to the host's and needed 2.38 anyway
+# (629822, "Failed to initialize any NET plugin").
+#
+# THE COST: this line is ROCm 7.2.4 / torch 2.10.0 against the 7.2.0 / 2.9.1 the judge and vllm
+# images pin -- lmsysorg publishes exactly one 24.04 line and it is 7.2.4. Inference runs in its
+# own container and shares no library with the judge, so a newer ROCm is contained. But every
+# recorded kimi and qwen38 serving number was taken on 7.2.0 / 2.9.1 / aiter 0.1.19, and this
+# moves all three at once. Re-measure before comparing against any of them.
+#
+# Pinned by DIGEST because a date-stamped tag is still a tag.
+ARG BASE_IMAGE=docker.io/lmsysorg/sglang-rocm:v0.5.19-rocm724-mi30x-20260908\
+@sha256:0405baaf36945fa8164c57d4f1b6b178bae5804fae606ff2db3816a6cab6dafc
 
 # ------------------------------------------------------------------------------------------------
-# Stage 1: a SELF-CONTAINED Slingshot/CXI stack -- cassini headers, libcxi, libfabric with the cxi
-# provider, and the AWS OFI plugin -- all compiled against THIS image's glibc 2.35.
+# One stage. This image builds NO fabric software at all -- no libfabric, no libcxi, no RCCL net
+# plugin. CSCS ships all three as one internally consistent artifact, matched to the host driver,
+# and the enroot hooks install it when the EDF sets com.hooks.netstack / .cxi / .aws_ofi_nccl.
+# Measured on an unmodified image in job 629967:
 #
-# Everything about this stage follows from one measured fact. The host's own libraries cannot be
-# used: /opt/cray/libfabric/2.3.1/lib64/libfabric.so.1.29.1 and /usr/lib64/libcxi.so.1.5.0 both
-# reference GLIBC_2.38, and this image's loader is 2.35. That is 595217 -- grafting the host
-# netstack kills the image's loader -- and it is why the EDF sets neither com.hooks.cxi.enabled nor
-# com.hooks.netstack.source, leaving cross-node RCCL on TCP over hsn*.
+#     plugin:    /opt/cscs/netstack/librccl-net.so
+#     transport: NET/OFI, "Using network AWS Libfabric"
+#     NET/AWS Libfabric : GPU Direct RDMA Enabled for HCA 0 'cxi0' .. 'cxi2'
 #
-# Note this is the OPPOSITE of the vLLM image, whose Ubuntu 24.04 base is glibc 2.39: 2.39 > 2.38,
-# so there the host graft works and the plugin is built against host headers with the runtime
-# coming from the hook. Same cluster, same plugin, two different correct answers, decided purely by
-# which side of 2.38 the base sits on.
-#
-# The versions are the host's, read off the login node rather than guessed:
-#   libfabric 2.3.1 (api 2.3) -> libfabric.so.1.29.1
-#   cray-libcxi-1.0.2, built from SHS 13.1.0 -> libcxi.so.1.5.0
-# libcxi is a userspace shim over the /dev/cxi ioctl uAPI, so its SHS release must match the host
-# kernel driver; SHS_REF is an ARG so that pin can be corrected without touching this file.
-# ------------------------------------------------------------------------------------------------
-FROM ${BASE_IMAGE} AS ofi-builder
-ARG BASE_IMAGE
-ARG SHS_REF=release/shs-13.1.0
-ARG LIBFABRIC_REF=v2.3.1
-ARG AWS_OFI_NCCL_REF=v1.20.0
-USER root
-
-# Every network git call goes through this, and where a mirror is mounted none of them
-# reaches GitHub at all. The `insteadOf` rewrite is what covers the callers the wrapper
-# cannot: spack clones its package repo in-process and vLLM's CMake FetchContent clones
-# triton itself, and both died on the same rate limiting with no retry of their own.
-# Conditional, so a build with no mirror mounted behaves exactly as it did before.
-# `protocol.file.allow` goes with it: git has refused local-path submodule clones since the
-# CVE-2022-39253 fix, and the rewrite turns every submodule URL into exactly that, so
-# `submodule update` aborts with `transport 'file' not allowed` before it looks for the repo.
-# Every network git call goes through this. An unauthenticated clone or fetch from a busy egress
-# IP gets a 401, which git reports as `could not read Username for https://github.com`: it looks
-# like a credentials failure and is a transient one. GIT_TERMINAL_PROMPT=0 makes it fail instead
-# of blocking on a prompt no build has a terminal for; the backoff is what actually fixes it.
-RUN set -eux; \
-    printf '%s\n' \
-      '#!/bin/sh' \
-      'set -eu' \
-      'export GIT_TERMINAL_PROMPT=0' \
-      'n=1' \
-      'while :; do' \
-      '  git "$@" && exit 0' \
-      '  [ "${n}" -ge 10 ] && exit 1' \
-      '  d=$((n * n * 10)); if [ "${d}" -gt 300 ]; then d=300; fi' \
-      '  sleep "${d}"' \
-      '  n=$((n + 1))' \
-      'done' \
-      > /usr/local/bin/gitretry; \
-    chmod 0755 /usr/local/bin/gitretry; \
-    if [ -d /git-mirrors ]; then \
-      for m in /git-mirrors/*/*.git; do \
-        r="${m#/git-mirrors/}"; r="${r%.git}"; \
-        git config --global "url./git-mirrors/${r}.git.insteadOf" "https://github.com/${r}.git"; \
-        git config --global --add "url./git-mirrors/${r}.git.insteadOf" "https://github.com/${r}"; \
-      done; \
-      git config --global --add safe.directory '*'; \
-      git config --global protocol.file.allow always; \
-    fi
-
-# The second list is libcxi's own configure.ac, transcribed: libconfig>=1.5, libuv>=1.18,
-# fuse>=2.9.7, yaml-0.1, libnl-3.0, numa>=2.0 and sensors/sensors.h are each a hard
-# AC_MSG_ERROR, so a missing one fails ./configure a quarter of an hour into the build.
-RUN apt-get update \
- && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      autoconf automake binutils build-essential ca-certificates git \
-      libcurl4-openssl-dev libhwloc-dev libjson-c-dev libnl-3-dev libnl-genl-3-dev \
-      libnuma-dev libtool libyaml-dev make patchelf pkg-config uuid-dev \
-      libconfig-dev libfuse-dev libuv1-dev libsensors-dev \
- && rm -rf /var/lib/apt/lists/*
-
-# The uAPI headers libcxi compiles against, installed headers-only, from TWO repos.
-# cassini-headers carries the hardware definitions; `uapi/misc/cxi.h`, which libcxi.h
-# includes on its first line, is the KERNEL DRIVER's and lives in shs-cxi-driver. Without
-# the second the configure passes and every .lo fails with `uapi/misc/cxi.h: No such file`,
-# a quarter of an hour in, so the test names the miss at the copy instead.
-# csr_defs.json is data, not a header: libcxi generates utils/cxi_dump_csrs.h from it during
-# make, and its loader only looks at /usr/share/cassini-headers or a sibling install tree.
-WORKDIR /tmp/build
-RUN set -eux; \
-    gitretry clone --branch "${SHS_REF}" --depth 1 \
-      https://github.com/HewlettPackard/shs-cassini-headers.git cassini-headers; \
-    git -C cassini-headers rev-parse HEAD > /tmp/cassini-headers.commit; \
-    mkdir -p /opt/ofi/include; \
-    cp -a cassini-headers/include/. /opt/ofi/include/; \
-    gitretry clone --branch "${SHS_REF}" --depth 1 \
-      https://github.com/HewlettPackard/shs-cxi-driver.git cxi-driver; \
-    git -C cxi-driver rev-parse HEAD > /tmp/cxi-driver.commit; \
-    cp -a cxi-driver/include/uapi /opt/ofi/include/; \
-    test -f /opt/ofi/include/uapi/misc/cxi.h; \
-    mkdir -p /usr/share/cassini-headers; \
-    cp -a cassini-headers/share/cassini-headers/csr_defs.json \
-      /usr/share/cassini-headers/
-
-RUN set -eux; \
-    gitretry clone --branch "${SHS_REF}" --depth 1 \
-      https://github.com/HewlettPackard/shs-libcxi.git libcxi; \
-    cd libcxi; \
-    git rev-parse HEAD > /tmp/libcxi.commit; \
-    ./autogen.sh; \
-    CPPFLAGS='-I/opt/ofi/include' ./configure --prefix=/opt/ofi \
-      --disable-static; \
-    make -j"$(nproc)"; \
-    make install; \
-    test -e /opt/ofi/lib/libcxi.so.1
-
-# libfabric with the cxi provider compiled IN. --disable-verbs and friends keep everything else
-# out: this build exists to reach Slingshot, and a provider the cluster does not have is a
-# dependency the image does not need.
-RUN set -eux; \
-    gitretry clone --branch "${LIBFABRIC_REF}" --depth 1 https://github.com/ofiwg/libfabric.git libfabric; \
-    cd libfabric; \
-    git rev-parse HEAD > /tmp/libfabric.commit; \
-    ./autogen.sh; \
-    PKG_CONFIG_PATH=/opt/ofi/lib/pkgconfig \
-    CPPFLAGS='-I/opt/ofi/include' \
-    LDFLAGS='-L/opt/ofi/lib -Wl,-rpath,/opt/ofi/lib' \
-      ./configure --prefix=/opt/ofi --enable-cxi=/opt/ofi \
-        --disable-verbs --disable-psm3 --disable-efa --disable-usnic --disable-opx \
-        --enable-sockets --enable-tcp; \
-    make -j"$(nproc)"; \
-    make install; \
-    test -e /opt/ofi/lib/libfabric.so.1; \
-    LD_LIBRARY_PATH=/opt/ofi/lib /opt/ofi/bin/fi_info -l | grep -q cxi
-
-RUN set -eux; \
-    gitretry clone --branch "${AWS_OFI_NCCL_REF}" --depth 1 https://github.com/aws/aws-ofi-nccl.git plugin; \
-    cd plugin; \
-    git rev-parse HEAD > /tmp/aws-ofi-nccl.commit; \
-    ./autogen.sh; \
-    env \
-      PKG_CONFIG_PATH=/opt/ofi/lib/pkgconfig \
-      LD_LIBRARY_PATH=/opt/ofi/lib:/opt/rocm/lib \
-      CPPFLAGS='-I/opt/ofi/include' \
-      LDFLAGS='-L/opt/ofi/lib -Wl,-rpath,/opt/ofi/lib' \
-      ./configure --prefix=/opt/ofi --with-libfabric=/opt/ofi --with-rocm=/opt/rocm \
-        --disable-tests; \
-    make -j"$(nproc)"; \
-    make install
-
-# RCCL loads libnccl-net.so; the plugin installs as librccl-net.so. Unlike the vLLM image the rpath
-# is KEPT: here /opt/ofi is the runtime location, not a builder staging dir, and the plugin must
-# find the libfabric and libcxi that ship beside it rather than any host copy. The last check is
-# what proves the stack is self-contained -- nothing may resolve outside the image.
-RUN set -eux; \
-    test -e /opt/ofi/lib/librccl-net.so; \
-    ln -sfn librccl-net.so /opt/ofi/lib/libnccl-net.so; \
-    LD_LIBRARY_PATH=/opt/ofi/lib:/opt/rocm/lib ldd -r /opt/ofi/lib/librccl-net.so > /tmp/plugin-ldd.txt; \
-    cat /tmp/plugin-ldd.txt; \
-    ! grep -E 'not found|undefined symbol' /tmp/plugin-ldd.txt; \
-    ! grep -E '/opt/cray|/usr/lib64/libcxi' /tmp/plugin-ldd.txt
-
-RUN { \
-      echo "base_image=${BASE_IMAGE}"; \
-      echo "shs_ref=${SHS_REF}"; \
-      printf 'cassini_headers_commit='; cat /tmp/cassini-headers.commit; \
-      printf 'libcxi_commit='; cat /tmp/libcxi.commit; \
-      echo "libfabric_ref=${LIBFABRIC_REF}"; \
-      printf 'libfabric_commit='; cat /tmp/libfabric.commit; \
-      echo "aws_ofi_nccl_ref=${AWS_OFI_NCCL_REF}"; \
-      printf 'aws_ofi_nccl_commit='; cat /tmp/aws-ofi-nccl.commit; \
-      echo 'host_contract=libfabric_2.3.1_libcxi_1.0.2_SHS13.1.0_glibc_2.38'; \
-      echo 'image_glibc=2.35_so_the_host_stack_cannot_be_mounted'; \
-    } > /opt/ofi/BUILD-MANIFEST.txt
-
-# ------------------------------------------------------------------------------------------------
-# Stage 2: the served image.
+# Nothing here links against libfabric either -- sglang reaches the fabric through RCCL, not MPI,
+# so unlike judge-agent-amd there is not even a compile-time link target to produce. A gate below
+# asserts the shipped image carries none of the three, because any copy would shadow the artifact.
 # ------------------------------------------------------------------------------------------------
 FROM ${BASE_IMAGE} AS final
 USER root
@@ -210,8 +59,8 @@ ARG BASE_IMAGE
 # local dir: path, and that must not become the published base.name.
 ARG BASE_IMAGE_REF="${BASE_IMAGE}"
 LABEL org.opencontainers.image.title="optarena-sglang" \
-      org.opencontainers.image.description="SGLang inference for MI300A: ROCm 7.2, libfabric/CXI, pinned flydsl" \
-      org.opencontainers.image.version="0.5.18" \
+      org.opencontainers.image.description="SGLang inference for MI300A: ROCm 7.2.4, CSCS netstack fabric, pinned flydsl" \
+      org.opencontainers.image.version="0.5.19" \
       org.opencontainers.image.source="https://github.com/spcl/HPCAgent-Bench" \
       org.opencontainers.image.licenses="GPL-3.0-or-later" \
       org.opencontainers.image.base.name="${BASE_IMAGE_REF}"
@@ -269,7 +118,32 @@ RUN /opt/venv/bin/python3 -c "import cupy, flydsl; \
     assert flydsl.__file__.startswith('/opt/'), flydsl.__file__; \
     print('self-contained: cupy', cupy.__version__, '| flydsl', flydsl.__version__)"
 
-COPY --from=ofi-builder /opt/ofi /opt/ofi
+# No RCCL plugin is shipped. CSCS provides one through com.hooks.aws_ofi_nccl.enabled and job
+# 629967 measured it working: /opt/cscs/netstack/librccl-net.so, "Using network AWS Libfabric",
+# GPU Direct RDMA on cxi0-2. This image ships no libfabric, libcxi or plugin -- all three come
+# from the pinned netstack artifact, which also carries its own libc and libcurl and is therefore
+# internally consistent, unlike the host graft that broke this image before (629822).
+# Ship no fabric library OF OUR OWN. The distinction matters and job 629985 is why: the gate used
+# to refuse ANY libfabric anywhere on the filesystem, and it killed the build on
+# /usr/lib/x86_64-linux-gnu/libfabric.so.1.20.0 -- which is not this image's file at all. That path
+# is where the CSCS hook BIND-MOUNTS the artifact's libfabric at run time, verified by mounting the
+# image with no annotations: the file that appears there is dated Aug 18 15:39 nobody:nogroup, the
+# artifact's own stamp, and lsof/mountinfo show it as a lustre bind from
+# /capstor/store/cscs/.../netstack. Refusing it forbade the hook its own mount point.
+#
+# What must NOT ship is a fabric library in a prefix WE control, because those are what RPATH can
+# bind to and RPATH is searched before everything else -- the 629966 failure, where MPICH held a
+# providerless libfabric and neither the hook nor LD_LIBRARY_PATH could displace it.
+RUN set -eux; \
+    rm -f /opt/ofi-sdk/lib/libfabric.so*; \
+    found="$(find /opt/ofi-sdk /opt/ofi /opt/aws-ofi-nccl \
+                  \( -name 'libfabric.so*' -o -name 'libcxi.so*' -o -name 'librccl-net.so*' \) \
+                  2>/dev/null || true)"; \
+    [ -z "${found}" ] \
+      || { echo "this image ships a fabric library in a prefix it controls:" >&2; \
+           echo "${found}" >&2; \
+           echo "RPATH would bind to it and shadow the CSCS netstack artifact" >&2; exit 1; }; \
+    echo "no fabric library in /opt/ofi-sdk, /opt/ofi or /opt/aws-ofi-nccl -- the artifact supplies them"
 
 # Tuned fused_moe Triton configs. Losing these once voided a whole set of throughput numbers, so
 # they are baked rather than dropped: without them kimi served on the default MoE config at ~90
@@ -396,6 +270,59 @@ _prebuild("rms_norm", _rms_norm)
 _prebuild("top_k_top_p_sampling_from_probs", _top_k_top_p)
 _prebuild("top_p_sampling_from_probs", _top_p)
 _prebuild("top_k_renorm_probs", _top_k_renorm)
+# The serving path calls far more than sampling. These eight were read off what GLM-5.3 and kimi
+# actually JIT-built at serve time (628603 built module_custom_all_reduce during startup), so the
+# image ships them instead of paying for them behind a baton lock inside the RPC deadline.
+_bf16, _fp8 = torch.bfloat16, torch.float8_e4m3fnuz
+
+
+def _layernorm2d():
+    n = 7168
+    x = torch.randn(4, n, dtype=_bf16, device=_dev)
+    aiter.layernorm2d_fwd_with_add(torch.empty_like(x), x, x.clone(), torch.empty_like(x),
+                                   torch.ones(n, dtype=_bf16, device=_dev),
+                                   torch.zeros(n, dtype=_bf16, device=_dev), 1e-6)
+
+
+def _dynamic_quant():
+    x = torch.randn(4, 7168, dtype=_bf16, device=_dev)
+    aiter.dynamic_per_tensor_quant(torch.empty(x.shape, dtype=_fp8, device=_dev), x,
+                                   torch.ones(1, dtype=torch.float32, device=_dev))
+
+
+def _silu_and_mul():
+    x = torch.randn(4, 2 * 7168, dtype=_bf16, device=_dev)
+    aiter.silu_and_mul(torch.empty(4, 7168, dtype=_bf16, device=_dev), x)
+
+
+def _reshape_and_cache():
+    k = torch.randn(4, 8, 128, dtype=_bf16, device=_dev)
+    kc = torch.zeros(64, 8, 128, 16, dtype=_bf16, device=_dev)
+    aiter.reshape_and_cache(k, k.clone(), kc, kc.clone(),
+                            torch.arange(4, dtype=torch.int64, device=_dev), "auto")
+
+
+def _moe_sum():
+    # topk MUST be one of 2/4/5. Any other value takes a python-side torch.sum branch that never
+    # reaches the kernel: it would build nothing while _prebuild reported success.
+    x = torch.randn(8, 4, 7168, dtype=_bf16, device=_dev)
+    aiter.moe_sum(x, torch.empty(8, 7168, dtype=_bf16, device=_dev))
+
+
+def _greedy_sample():
+    logits = torch.randn(4, 1024, dtype=torch.float32, device=_dev)
+    aiter.greedy_sample(torch.empty(4, dtype=torch.int64, device=_dev), logits)
+
+
+_prebuild("layernorm2d_fwd_with_add", _layernorm2d)
+_prebuild("dynamic_per_tensor_quant", _dynamic_quant)
+_prebuild("silu_and_mul", _silu_and_mul)
+_prebuild("reshape_and_cache", _reshape_and_cache)
+_prebuild("moe_sum", _moe_sum)
+_prebuild("greedy_sample", _greedy_sample)
+_prebuild("get_padded_m", lambda: aiter.get_padded_m(128, 7168, 7168, 1))
+_prebuild("moe_sorting_opus_get_workspace_size",
+          lambda: aiter.moe_sorting_opus_get_workspace_size(128, 256, 8))
 
 # The defect this step exists to catch, stated as the build's own assertion: an import-only
 # prebuild left module_aiter_core.so and nothing else, and the shell gate below cannot tell that
@@ -417,18 +344,12 @@ RUN set -eux; \
 
 # The EDF's env, restated in the image so it is under the digest rather than only in ~/.edf.
 #
-# LD_LIBRARY_PATH deliberately does NOT include /opt/ofi/lib, and NCCL_NET_PLUGIN is deliberately
-# unset: every measured kimi and qwen38 number ran with cross-node RCCL on TCP over hsn*, and
-# turning the plugin on is a transport change that has to be measured, not a default. To enable it,
-# an EDF adds the same stanza the vLLM one carries:
-#   LD_LIBRARY_PATH = "/opt/ofi/lib:/opt/rocm/lib:/opt/rocm/lib64"
-#   NCCL_NET_PLUGIN = "ofi"   NCCL_NET = "AWS Libfabric"   FI_PROVIDER = "cxi"
-#
-# PATH keeps the image's own ordering, which omits /opt/venv/bin. That omission is why
-# run_cluster.sh names SGLANG_PYTHON=/opt/venv/bin/python3 explicitly: a bare python3 here has
-# neither sglang nor huggingface_hub, and the snapshot resolution dies with model_path empty AFTER
-# the whole allocation is up. Left as the vendor set it rather than "fixed", because the launcher
-# already depends on naming the interpreter and a silently different PATH is a worse surprise.
+# TRANSPORT, named in the image so it is under the digest and not only in somebody's ~/.edf.
+# NO transport variables here. libfabric, libcxi and the RCCL plugin all arrive from the CSCS
+# netstack artifact via the EDF's hooks, and the plugin the hook installs already knows where its
+# libfabric is -- naming NCCL_NET_PLUGIN or FI_PROVIDER in the image would only let a stale value
+# outlive the hook. FI_PROVIDER in particular is not free: set globally it reaches MPI too, and
+# job 629966 aborted MPI_Init with "OFI call getinfo failed" that way.
 ENV HSA_ENABLE_IPC_MODE_LEGACY=1 \
     SAFETENSORS_FAST_GPU=1 \
     HIP_FORCE_DEV_KERNARG=1 \
@@ -484,8 +405,13 @@ assert sorted(p.name for p in (vendor / "triton_3_7_0").glob("E=*.json")) == \
     sorted(c.name for c in configs), "tuned configs did not reach SGLang's lookup path"
 assert (vendor / "triton_3_2_0").is_dir(), "the vendor config set was displaced"
 
-for lib in ("libnccl-net.so", "librccl-net.so", "libfabric.so.1", "libcxi.so.1"):
-    assert (pathlib.Path("/opt/ofi/lib") / lib).exists(), f"OFI stack incomplete: {lib}"
+# The plugin only. libfabric and libcxi are deliberately NOT here -- they are the two things this
+# image takes from the host, through com.hooks.cxi.enabled, because they must match the kernel
+# driver. Asserting their presence would assert the bug this image was just moved off.
+# No fabric libraries here on purpose: the netstack artifact supplies libfabric, libcxi and the
+# RCCL plugin at run time. Asserting ours exist would assert the design this image moved off.
+for stray in ("libfabric.so.1", "libcxi.so.1", "librccl-net.so"):
+    assert not list(pathlib.Path("/opt").rglob(stray)), f"{stray} ships and would shadow the artifact"
 PY
 
 WORKDIR /workspace
@@ -496,10 +422,10 @@ WORKDIR /workspace
 # an unconfined seccomp profile, so the aiter prebuild above launches kernels and the gate fails
 # the build if that ever stops working. What the build has no access to is a Slingshot NIC:
 #
-#   * whether the self-contained CXI stack can open a real /dev/cxi is NOT proven here. libcxi is a
-#     shim over the kernel driver's ioctl uAPI, so SHS_REF must match the host driver. It is pinned
-#     to release/shs-13.1.0 because the login node reports cray-libcxi-1.0.2-SHS13.1.0; a mismatch
-#     shows up as an ioctl failure at fi_getinfo, which only a two-node RCCL run will reveal. This
+#   * the plugin has not yet been shown to select OFI on this base. /dev/cxi0-3 do reach the
+#     container and the image loads under the hook (629822), but the transport that a cross-node
+#     collective actually chooses is only visible in an NCCL_DEBUG=INFO log from a real two-node
+#     run: NET/OFI is the goal, NET/Socket is the silent fallback.
 #     is the highest-risk stage in the file.
 #   * whether SGLang SERVES is a separate question from whether it imports. Run
 #     inference/smoke-kimi-sglang.sbatch before promoting a rebuild.

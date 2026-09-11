@@ -171,7 +171,7 @@ runs:
         # answers happily. That shipped: five jobs went red before anything said the C++ arm was
         # broken. Compile the smallest TU that needs the standard library, here, loudly.
         printf '#include <cstdint>\nint main(){return 0;}\n' > "${RUNNER_TEMP}/cxx-smoke.cpp"
-        clang++ -std=c++23 -fsyntax-only "${RUNNER_TEMP}/cxx-smoke.cpp" \
+        clang++ -std=c++20 -fsyntax-only "${RUNNER_TEMP}/cxx-smoke.cpp" \
           || { echo "::error::clang++ cannot compile a <cstdint> TU -- its selected GCC install has no libstdc++ headers"; \
                clang++ -v -x c++ -E /dev/null 2>&1 | grep -i 'selected gcc installation' >&2; exit 1; }
 

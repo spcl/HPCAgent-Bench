@@ -1,6 +1,7 @@
 ---
 name: rocprof
 description: Read an AMD device profile as an MI300 finding rather than an NVIDIA one, and know which questions this route cannot answer.
+when: "you are profiling on an AMD GPU and need the device trace rather than a host sample"
 ---
 
 The device half of `profiling`, on AMD. `perf` samples a host call stack; a HIP launch is

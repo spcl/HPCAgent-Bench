@@ -51,7 +51,7 @@ for drv in icx icpx ifx; do
     fi
 done
 # icpx ships an EMPTY icpx.cfg and, without a --gcc-toolchain, cannot resolve <vector> at all:
-# `icpx -std=c++23` on a one-line #include is `fatal error: 'vector' file not found` (measured on
+# `icpx` on a one-line #include is `fatal error: 'vector' file not found` (measured on
 # oneAPI 2026.1.1). So Intel C++ was installed and unusable, which no version check would show.
 # Written into the driver's own cfg rather than added to every compile line, so it fixes icpx for
 # the harness, for dace's host build, and for anything an agent invokes -- and so no call site

@@ -35,11 +35,27 @@ set -Eeuo pipefail
 
 PODMAN=(podman)
 ARCHIVE=""
-if [[ "${1:-}" == "--from-archive" ]]; then
-    ARCHIVE="${2:?--from-archive needs the path to a .oci.tar written by build.sh}"
-    shift 2
+CHECK_ONLY=0
+# --check-only runs every gate that can reject an upload and then STOPS: no login, no bytes out.
+# The registry limits below are the reason it exists. A single layer over the ceiling means the
+# image cannot be published at all and the Dockerfile has to split that RUN -- discovering that
+# partway through a 60 GB upload costs the upload and the hours around it. Order matters too:
+# nothing here needs credentials, so readiness can be established before anyone hands them over.
+while [[ "${1:-}" == --* ]]; do
+    case "$1" in
+        --from-archive)
+            ARCHIVE="${2:?--from-archive needs the path to a .oci.tar written by build.sh}"
+            shift 2 ;;
+        --check-only) CHECK_ONLY=1; shift ;;
+        *) echo "unknown flag $1" >&2; exit 2 ;;
+    esac
+done
+# Only a real push needs a destination.
+if (( CHECK_ONLY )); then
+    PUSH_REPO="${PUSH_REPO:-docker.io/local/check-only}"
+else
+    PUSH_REPO="${PUSH_REPO:?set PUSH_REPO, e.g. docker.io/<user>/optarena-judge-agent-amd}"
 fi
-PUSH_REPO="${PUSH_REPO:?set PUSH_REPO, e.g. docker.io/<user>/optarena-judge-agent-amd}"
 
 if [[ -n "${ARCHIVE}" ]]; then
     [[ -f "${ARCHIVE}" ]] || { echo "no archive at ${ARCHIVE}" >&2; exit 2; }
@@ -48,7 +64,16 @@ if [[ -n "${ARCHIVE}" ]]; then
     root="${PUSH_ROOT:-/dev/shm/${USER}/push-$$}"
     mkdir -p "${root}/root" "${root}/run"
     trap 'podman unshare rm -rf "${root}" 2>/dev/null || true' EXIT
-    PODMAN=(podman --root "${root}/root" --runroot "${root}/run" --storage-driver overlay)
+    # ignore_chown_errors is REQUIRED here, not a tuning knob. This system has no /etc/subuid or
+    # /etc/subgid entries, so `podman unshare` gets a uid_map of length 1 (0 -> $UID) and there is
+    # no subordinate id to map a file owned by anything else to. Any layer carrying one -- the
+    # base image's /etc/gshadow is gid 42 -- then fails to unpack with
+    # "lchown /etc/gshadow: invalid argument", and the push dies before a byte goes out. Measured:
+    # the default driver and plain overlay both fail on it, overlay + this option loads cleanly.
+    # The chown is only lost inside this throwaway graphroot; the layer blobs pushed are the
+    # archive's own bytes, so the published image is unaffected.
+    PODMAN=(podman --root "${root}/root" --runroot "${root}/run" --storage-driver overlay
+            --storage-opt ignore_chown_errors=true)
     echo "loading ${ARCHIVE} into ${root}"
     LOCAL_TAG="$("${PODMAN[@]}" pull "oci-archive:${ARCHIVE}" | tail -1)"
     [[ -n "${LOCAL_TAG}" ]] || { echo "loaded nothing from ${ARCHIVE}" >&2; exit 2; }
@@ -79,8 +104,32 @@ fi
 # rejects both of those two-letter suffixes. That combination made this gate exit 2 on EVERY
 # image under `set -e`, with the reason swallowed -- a size check meant to prevent a rejected
 # upload was instead refusing all of them.
-biggest="$("${PODMAN[@]}" history --format json "${LOCAL_TAG}" \
-           | grep -o '"size":[0-9]*' | cut -d: -f2 | sort -n | tail -1)"
+# COMPRESSED blob size, which is what the registry actually receives and what its ceiling is
+# about. `podman history` reports the UNCOMPRESSED diff, and the two differ by ~3x here: it called
+# the sglang image's biggest layer 23.3 GB where the blob that would be uploaded is 7.84 GB. Gating
+# on the uncompressed number condemns images that would upload perfectly well, which is a worse
+# failure than not checking -- it sends you into a rebuild you did not need.
+#
+# For an archive the manifest is authoritative and free to read, so prefer it. Only the in-build
+# path (no archive) falls back to history, and there the number is an upper bound, not the limit.
+biggest=""
+if [[ -n "${ARCHIVE}" ]]; then
+    biggest="$(python3 - "${ARCHIVE}" <<'PY'
+import json, sys, tarfile
+with tarfile.open(sys.argv[1]) as tar:
+    index = json.load(tar.extractfile("index.json"))
+    digest = index["manifests"][0]["digest"].split(":", 1)[1]
+    manifest = json.load(tar.extractfile(f"blobs/sha256/{digest}"))
+    print(max((layer["size"] for layer in manifest.get("layers", [])), default=0))
+PY
+)" || biggest=""
+    [[ -n "${biggest}" ]] && printf 'largest layer measured from the archive manifest (compressed)\n'
+fi
+if [[ -z "${biggest}" ]]; then
+    printf 'no archive manifest; falling back to uncompressed history size (an UPPER BOUND)\n'
+    biggest="$("${PODMAN[@]}" history --format json "${LOCAL_TAG}" \
+               | grep -o '"size":[0-9]*' | cut -d: -f2 | sort -n | tail -1)"
+fi
 if [[ -z "${biggest}" ]]; then
     echo "warning: could not read per-layer sizes; pushing without the layer-ceiling check" >&2
 else
@@ -90,6 +139,15 @@ else
         echo "reject partway through the upload. Split that RUN into smaller layers first." >&2
         exit 2
     fi
+fi
+
+if (( CHECK_ONLY )); then
+    printf 'CHECK ONLY: within registry limits, nothing pushed.\n'
+    printf '  image        %s GB (limit %s)\n' "$(bytes_to_gb "${total}")" "${MAX_IMAGE_GB}"
+    printf '  largest layer %s GB (limit %s)\n' "$(bytes_to_gb "${biggest:-0}")" "${MAX_LAYER_GB}"
+    printf '  manifest     %s\n' "$("${PODMAN[@]}" image inspect --format '{{.ManifestType}}' "${LOCAL_TAG}")"
+    printf '  digest       %s\n' "$("${PODMAN[@]}" image inspect --format '{{.Digest}}' "${LOCAL_TAG}")"
+    exit 0
 fi
 
 if [[ -n "${REGISTRY_USER:-}" && -n "${REGISTRY_TOKEN:-}" ]]; then

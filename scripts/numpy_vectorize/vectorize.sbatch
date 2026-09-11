@@ -98,7 +98,7 @@ export VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS=1800
 # cross-node collectives intermittently and produces silent wrong results rather than an error.
 # Omitting the variable is NOT the same as having GDR off.
 # The three things that make THIS shape fast and correct, all of which the campaign path
-# (containers/cluster/example-script/run_cluster.sh) sets and this standalone job did not:
+# (experiments/run_cluster.sh) sets and this standalone job did not:
 #
 # 1. Tuned fused_moe Triton configs, keyed by (experts, N, device, dtype). Unset, kimi serves on
 #    vLLM's default MoE config and warns it is sub-optimal -- measured ~11x off the reference for

@@ -25,126 +25,23 @@ ARG BASE_IMAGE=docker.io/rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pytorch_release
 @sha256:a3b65813621095e3389269417e963725b59310184588c9d2490d44e6e83fa01c
 
 # ------------------------------------------------------------------------------------------------
-# Stage 1: the AWS OFI plugin (RCCL-OFI), compiled against libfabric built from source at the
-# version the Beverin host runs.
+# ONE stage. This image builds NO fabric software -- no libfabric, no libcxi, no RCCL net plugin.
 #
-# The captured host contract (inference/beverin-rocm723-host-ofi-phase1/README-FIRST.md) is:
-# host glibc 2.38, libfabric 2.3.1 -> libfabric.so.1.29.1, symbol ceiling FABRIC_1.8,
-# libcxi.so.1.5.0, and the runtime libfabric/libcxi arrive from the CE host hook
-# (com.hooks.netstack.source = "host"). So the plugin must COMPILE against 2.3.1 headers and must
-# LINK no higher than FABRIC_1.8, and no libfabric or libcxi may ship in the final image.
+# It used to build an aws-ofi-nccl plugin against a from-source libfabric 2.3.1, with assertions
+# pinning it under the host's FABRIC_1.8 symbol ceiling, because the runtime libfabric came from
+# com.hooks.netstack.source = "host" -- a graft off whatever the login node ran that day. CSCS
+# ships the whole stack as one internally consistent artifact instead (its own libc, libcurl,
+# libcxi, libfabric and plugin), and the enroot hooks install it when the EDF sets
+# com.hooks.netstack / .cxi / .aws_ofi_nccl. Measured on an unmodified image in job 629967:
 #
-# The chain met that by packing an SDK off a live login node with pack-beverin-host-sdk.sh, which
-# is a "run this script first" step -- exactly what one-Dockerfile-end-to-end forbids, and it also
-# makes the image depend on whatever the login node happened to have that day. Building libfabric
-# v2.3.1 from ofiwg source instead makes the compile-time ABI a pinned, reproducible input. The
-# assertions below are what keep that honest: the plugin must need only libfabric.so.1, and must
-# reference no symbol above FABRIC_1.8.
+#     plugin:    /opt/cscs/netstack/librccl-net.so
+#     transport: NET/OFI, "Using network AWS Libfabric"
+#     NET/AWS Libfabric : GPU Direct RDMA Enabled for HCA 0 'cxi0' .. 'cxi2'
+#
+# A shipped copy would SHADOW that artifact, which is the failure the gate below refuses. vLLM
+# reaches the fabric through RCCL, not MPI, so unlike judge-agent-amd there is not even a
+# compile-time link target left to produce.
 # ------------------------------------------------------------------------------------------------
-FROM ${BASE_IMAGE} AS ofi-builder
-ARG BASE_IMAGE
-ARG LIBFABRIC_REF=v2.3.1
-ARG AWS_OFI_NCCL_REF=v1.20.0
-USER root
-
-# Every network git call goes through this, and where a mirror is mounted none of them
-# reaches GitHub at all. The `insteadOf` rewrite is what covers the callers the wrapper
-# cannot: spack clones its package repo in-process and vLLM's CMake FetchContent clones
-# triton itself, and both died on the same rate limiting with no retry of their own.
-# Conditional, so a build with no mirror mounted behaves exactly as it did before.
-# `protocol.file.allow` goes with it: git has refused local-path submodule clones since the
-# CVE-2022-39253 fix, and the rewrite turns every submodule URL into exactly that, so
-# `submodule update` aborts with `transport 'file' not allowed` before it looks for the repo.
-# Every network git call goes through this. An unauthenticated clone or fetch from a busy egress
-# IP gets a 401, which git reports as `could not read Username for https://github.com`: it looks
-# like a credentials failure and is a transient one. GIT_TERMINAL_PROMPT=0 makes it fail instead
-# of blocking on a prompt no build has a terminal for; the backoff is what actually fixes it.
-RUN set -eux; \
-    printf '%s\n' \
-      '#!/bin/sh' \
-      'set -eu' \
-      'export GIT_TERMINAL_PROMPT=0' \
-      'n=1' \
-      'while :; do' \
-      '  git "$@" && exit 0' \
-      '  [ "${n}" -ge 10 ] && exit 1' \
-      '  d=$((n * n * 10)); if [ "${d}" -gt 300 ]; then d=300; fi' \
-      '  sleep "${d}"' \
-      '  n=$((n + 1))' \
-      'done' \
-      > /usr/local/bin/gitretry; \
-    chmod 0755 /usr/local/bin/gitretry; \
-    if [ -d /git-mirrors ]; then \
-      for m in /git-mirrors/*/*.git; do \
-        r="${m#/git-mirrors/}"; r="${r%.git}"; \
-        git config --global "url./git-mirrors/${r}.git.insteadOf" "https://github.com/${r}.git"; \
-        git config --global --add "url./git-mirrors/${r}.git.insteadOf" "https://github.com/${r}"; \
-      done; \
-      git config --global --add safe.directory '*'; \
-      git config --global protocol.file.allow always; \
-    fi
-
-RUN apt-get update \
- && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      autoconf automake binutils build-essential ca-certificates git \
-      libhwloc-dev libnuma-dev libtool make patchelf pkg-config \
- && rm -rf /var/lib/apt/lists/*
-
-# Compile-only libfabric. --disable-verbs and friends keep it to the sockets/tcp core: the plugin
-# needs the headers and the .so to link against, never a provider, because at run time the host
-# hook's libfabric (with cxi) is what gets loaded.
-WORKDIR /tmp/build
-RUN set -eux; \
-    gitretry clone --branch "${LIBFABRIC_REF}" --depth 1 https://github.com/ofiwg/libfabric.git libfabric; \
-    cd libfabric; \
-    git rev-parse HEAD > /tmp/libfabric.commit; \
-    ./autogen.sh; \
-    ./configure --prefix=/opt/ofi-sdk --disable-verbs --disable-psm3 --disable-efa --disable-usnic \
-        --disable-opx --disable-shm --enable-sockets --enable-tcp; \
-    make -j"$(nproc)"; \
-    make install; \
-    test -e /opt/ofi-sdk/lib/libfabric.so.1; \
-    readlink -f /opt/ofi-sdk/lib/libfabric.so.1 > /tmp/libfabric.soname
-
-RUN set -eux; \
-    gitretry clone --branch "${AWS_OFI_NCCL_REF}" --depth 1 https://github.com/aws/aws-ofi-nccl.git aws-ofi-nccl; \
-    cd aws-ofi-nccl; \
-    git rev-parse HEAD > /tmp/aws-ofi-nccl.commit; \
-    ./autogen.sh; \
-    env \
-      PKG_CONFIG_PATH=/opt/ofi-sdk/lib/pkgconfig \
-      LD_LIBRARY_PATH=/opt/ofi-sdk/lib:/opt/rocm/lib \
-      CPPFLAGS='-I/opt/ofi-sdk/include' \
-      LDFLAGS='-L/opt/ofi-sdk/lib -Wl,-rpath-link,/opt/ofi-sdk/lib' \
-      ./configure --prefix=/opt/aws-ofi-nccl --with-libfabric=/opt/ofi-sdk --with-rocm=/opt/rocm \
-        --disable-tests; \
-    make -j"$(nproc)"; \
-    make install
-
-# RCCL loads libnccl-net.so; the plugin installs as librccl-net.so. Strip the builder rpath so
-# nothing resolves back to /opt/ofi-sdk at run time, and refuse any symbol above the host's
-# FABRIC_1.8 ceiling -- that is what makes the plugin loadable against the host hook's libfabric.
-RUN set -eux; \
-    test -e /opt/aws-ofi-nccl/lib/librccl-net.so; \
-    ln -sfn librccl-net.so /opt/aws-ofi-nccl/lib/libnccl-net.so; \
-    find /opt/aws-ofi-nccl/lib -maxdepth 1 -type f -name '*.so*' -exec patchelf --remove-rpath {} \; ; \
-    ! readelf -d /opt/aws-ofi-nccl/lib/librccl-net.so | grep -E 'RPATH|RUNPATH'; \
-    readelf -d /opt/aws-ofi-nccl/lib/librccl-net.so | grep -q 'NEEDED.*libfabric\.so\.1'; \
-    ! readelf --version-info /opt/aws-ofi-nccl/lib/librccl-net.so \
-        | grep -E 'FABRIC_1\.(9|[1-9][0-9])|FABRIC_[2-9]'; \
-    ! find /opt/aws-ofi-nccl \( -name 'libfabric.so*' -o -name 'libcxi.so*' \) | grep .
-
-RUN { \
-      echo "base_image=${BASE_IMAGE}"; \
-      echo "libfabric_ref=${LIBFABRIC_REF}"; \
-      printf 'libfabric_commit='; cat /tmp/libfabric.commit; \
-      printf 'libfabric_soname='; basename "$(cat /tmp/libfabric.soname)"; \
-      echo "aws_ofi_nccl_ref=${AWS_OFI_NCCL_REF}"; \
-      printf 'aws_ofi_nccl_commit='; cat /tmp/aws-ofi-nccl.commit; \
-      echo 'compile_fabric_symbol_ceiling=FABRIC_1.8'; \
-      echo 'runtime_libfabric=provided_by_CSCS_host_hook'; \
-    } > /opt/aws-ofi-nccl/BUILD-MANIFEST.txt
-
 # ------------------------------------------------------------------------------------------------
 # Stage 2: PyTorch 2.11 + vLLM 0.23.0 + flash-attn + aiter, in their own venv at /opt/pytorch211.
 # A SEPARATE venv from the base image's /opt/venv, deliberately: the base ships torch 2.9.1 and
@@ -175,7 +72,7 @@ ARG BASE_IMAGE
 # local dir: path, and that must not become the published base.name.
 ARG BASE_IMAGE_REF="${BASE_IMAGE}"
 LABEL org.opencontainers.image.title="optarena-vllm" \
-      org.opencontainers.image.description="vLLM ${VLLM_VERSION} inference for MI300A: ROCm 7.2, libfabric/CXI, aiter ${AITER_REF}" \
+      org.opencontainers.image.description="vLLM ${VLLM_VERSION} inference for MI300A: ROCm 7.2, CSCS netstack fabric, aiter ${AITER_REF}" \
       org.opencontainers.image.version="${VLLM_VERSION}" \
       org.opencontainers.image.source="https://github.com/spcl/HPCAgent-Bench" \
       org.opencontainers.image.licenses="GPL-3.0-or-later" \
@@ -191,7 +88,7 @@ ENV VIRTUAL_ENV=/opt/pytorch211 \
     HIP_FORCE_DEV_KERNARG=1 \
     TOKENIZERS_PARALLELISM=false \
     PATH=/opt/pytorch211/bin:/opt/rocm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-    LD_LIBRARY_PATH=/opt/aws-ofi-nccl/lib:/opt/rocm/lib:/opt/rocm/lib64
+    LD_LIBRARY_PATH=/opt/rocm/lib:/opt/rocm/lib64
 
 # Read at IMPORT, not only at build: flash_attn_interface.py:11 picks .flash_attn_triton_amd on
 # TRUE and imports flash_attn_2_cuda -- the compiled CK extension a triton-only install does NOT
@@ -214,7 +111,6 @@ ENV FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE
 ARG VLLM_ROCM_AITER_SWITCH=0
 ENV VLLM_ROCM_USE_AITER=${VLLM_ROCM_AITER_SWITCH}
 
-COPY --from=ofi-builder /opt/aws-ofi-nccl /opt/aws-ofi-nccl
 
 # Every network git call goes through this, and where a mirror is mounted none of them
 # reaches GitHub at all. The `insteadOf` rewrite is what covers the callers the wrapper
@@ -462,6 +358,59 @@ _prebuild("rms_norm", _rms_norm)
 _prebuild("top_k_top_p_sampling_from_probs", _top_k_top_p)
 _prebuild("top_p_sampling_from_probs", _top_p)
 _prebuild("top_k_renorm_probs", _top_k_renorm)
+# The serving path calls far more than sampling. These eight were read off what GLM-5.3 and kimi
+# actually JIT-built at serve time (628603 built module_custom_all_reduce during startup), so the
+# image ships them instead of paying for them behind a baton lock inside the RPC deadline.
+_bf16, _fp8 = torch.bfloat16, torch.float8_e4m3fnuz
+
+
+def _layernorm2d():
+    n = 7168
+    x = torch.randn(4, n, dtype=_bf16, device=_dev)
+    aiter.layernorm2d_fwd_with_add(torch.empty_like(x), x, x.clone(), torch.empty_like(x),
+                                   torch.ones(n, dtype=_bf16, device=_dev),
+                                   torch.zeros(n, dtype=_bf16, device=_dev), 1e-6)
+
+
+def _dynamic_quant():
+    x = torch.randn(4, 7168, dtype=_bf16, device=_dev)
+    aiter.dynamic_per_tensor_quant(torch.empty(x.shape, dtype=_fp8, device=_dev), x,
+                                   torch.ones(1, dtype=torch.float32, device=_dev))
+
+
+def _silu_and_mul():
+    x = torch.randn(4, 2 * 7168, dtype=_bf16, device=_dev)
+    aiter.silu_and_mul(torch.empty(4, 7168, dtype=_bf16, device=_dev), x)
+
+
+def _reshape_and_cache():
+    k = torch.randn(4, 8, 128, dtype=_bf16, device=_dev)
+    kc = torch.zeros(64, 8, 128, 16, dtype=_bf16, device=_dev)
+    aiter.reshape_and_cache(k, k.clone(), kc, kc.clone(),
+                            torch.arange(4, dtype=torch.int64, device=_dev), "auto")
+
+
+def _moe_sum():
+    # topk MUST be one of 2/4/5. Any other value takes a python-side torch.sum branch that never
+    # reaches the kernel: it would build nothing while _prebuild reported success.
+    x = torch.randn(8, 4, 7168, dtype=_bf16, device=_dev)
+    aiter.moe_sum(x, torch.empty(8, 7168, dtype=_bf16, device=_dev))
+
+
+def _greedy_sample():
+    logits = torch.randn(4, 1024, dtype=torch.float32, device=_dev)
+    aiter.greedy_sample(torch.empty(4, dtype=torch.int64, device=_dev), logits)
+
+
+_prebuild("layernorm2d_fwd_with_add", _layernorm2d)
+_prebuild("dynamic_per_tensor_quant", _dynamic_quant)
+_prebuild("silu_and_mul", _silu_and_mul)
+_prebuild("reshape_and_cache", _reshape_and_cache)
+_prebuild("moe_sum", _moe_sum)
+_prebuild("greedy_sample", _greedy_sample)
+_prebuild("get_padded_m", lambda: aiter.get_padded_m(128, 7168, 7168, 1))
+_prebuild("moe_sorting_opus_get_workspace_size",
+          lambda: aiter.moe_sorting_opus_get_workspace_size(128, 256, 8))
 
 # The defect this step exists to catch, stated as the build's own assertion: an import-only
 # prebuild left module_aiter_core.so and nothing else, and the shell gate below cannot tell that
@@ -591,6 +540,32 @@ RUN set -eux; \
     git config --global --name-only --get-regexp '^url\..*\.insteadof$' 2>/dev/null \
       | sort -u | while read -r k; do git config --global --unset-all "${k}" || true; done; \
     git config --global --unset-all protocol.file.allow || true
+
+# No fabric library ships. All three -- libfabric, libcxi and the RCCL net plugin -- arrive from
+# the pinned CSCS netstack artifact via the enroot hooks, and that artifact carries its own libc
+# and libcurl, so it is internally consistent in a way a host graft is not. A copy inside the
+# image would be found first and shadow it.
+# Ship no fabric library OF OUR OWN. The distinction matters and job 629985 is why: the gate used
+# to refuse ANY libfabric anywhere on the filesystem, and it killed the build on
+# /usr/lib/x86_64-linux-gnu/libfabric.so.1.20.0 -- which is not this image's file at all. That path
+# is where the CSCS hook BIND-MOUNTS the artifact's libfabric at run time, verified by mounting the
+# image with no annotations: the file that appears there is dated Aug 18 15:39 nobody:nogroup, the
+# artifact's own stamp, and lsof/mountinfo show it as a lustre bind from
+# /capstor/store/cscs/.../netstack. Refusing it forbade the hook its own mount point.
+#
+# What must NOT ship is a fabric library in a prefix WE control, because those are what RPATH can
+# bind to and RPATH is searched before everything else -- the 629966 failure, where MPICH held a
+# providerless libfabric and neither the hook nor LD_LIBRARY_PATH could displace it.
+RUN set -eux; \
+    rm -f /opt/ofi-sdk/lib/libfabric.so*; \
+    found="$(find /opt/ofi-sdk /opt/ofi /opt/aws-ofi-nccl \
+                  \( -name 'libfabric.so*' -o -name 'libcxi.so*' -o -name 'librccl-net.so*' \) \
+                  2>/dev/null || true)"; \
+    [ -z "${found}" ] \
+      || { echo "this image ships a fabric library in a prefix it controls:" >&2; \
+           echo "${found}" >&2; \
+           echo "RPATH would bind to it and shadow the CSCS netstack artifact" >&2; exit 1; }; \
+    echo "no fabric library in /opt/ofi-sdk, /opt/ofi or /opt/aws-ofi-nccl -- the artifact supplies them"
 
 WORKDIR /workspace
 

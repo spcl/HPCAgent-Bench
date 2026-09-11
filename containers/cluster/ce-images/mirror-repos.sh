@@ -12,7 +12,6 @@ QUEUE="
 spack/spack
 spack/spack-packages
 ofiwg/libfabric
-aws/aws-ofi-nccl
 HewlettPackard/shs-cassini-headers
 HewlettPackard/shs-libcxi
 HewlettPackard/shs-cxi-driver

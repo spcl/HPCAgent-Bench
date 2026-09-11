@@ -22,6 +22,8 @@ OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?SCRATCH must be set on CSCS}/ce-images/op
 BASE_REPO="docker.io/rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pytorch_release_2.9.1"
 BASE_DIGEST="sha256:a3b65813621095e3389269417e963725b59310184588c9d2490d44e6e83fa01c"
 BASE_IMAGE="${BASE_IMAGE:-${BASE_REPO}@${BASE_DIGEST}}"
+# This MUST track the Dockerfile's ARG BASE_IMAGE default: passing it here OVERRIDES that default,
+# so a stale line here builds a base the Dockerfile does not name.
 
 mkdir -p "$(dirname "${OUTPUT_SQSH}")"
 
@@ -50,7 +52,3 @@ podman --cgroup-manager=cgroupfs build "${MIRROR_ARGS[@]}" "${GPU_ARGS[@]}" \
   .
 
 ce_export_image "${IMAGE_TAG}" "${OUTPUT_SQSH}"
-# Provenance, not a gate: sglang stages the OFI build at /opt/ofi and the vLLM images at
-# /opt/aws-ofi-nccl. `|| true` because a missing manifest must not fail a build whose
-# squashfs and archive are already written and verified -- which is exactly what it did.
-podman run --rm "${IMAGE_TAG}" cat /opt/aws-ofi-nccl/BUILD-MANIFEST.txt || true

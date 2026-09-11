@@ -29,7 +29,7 @@ from typing import Any
 
 import pytest
 
-EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "containers/cluster/example-script"
+EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "experiments"
 
 # Restated rather than imported from the driver: these are vLLM's series names, so a test that read
 # them off the module under test would keep passing after a typo renamed both at once.

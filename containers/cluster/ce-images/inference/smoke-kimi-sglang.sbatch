@@ -65,6 +65,11 @@ export REASONING_PARSER="${REASONING_PARSER:-kimi_k2}"
 # needs tp=4 x pp=4 over 4 nodes: at pp=2 the weights alone are 378 GB of the ~412 GB a node has
 # free pre-load, a 0.917 floor that leaves no KV pool at all.
 export TP_SIZE="${TP_SIZE:-4}"
+# PP is the allocation by default, which is what the campaign serves. It is a VARIABLE because it
+# is not obviously the right lever: SGLang's own K2.7 recipe uses no pipeline stage at all
+# (--tp 8 --dp 8 --enable-dp-attention), and our own sweep measured pp=4 costing 42% to engine
+# stalls. Setting PP_SIZE=1 with TP_SIZE=8 over two nodes is that recipe on 4-GPU parts.
+export PP_SIZE="${PP_SIZE:-${SLURM_NNODES}}"
 # --language-only is NOT a generic "text only" switch in this SGLang: it selects the VLM
 # ENCODER-DISAGGREGATION receiver role, and server_args._handle_encoder_disaggregation raises
 # outright for any architecture off its allowlist. GLM-5.3 (GlmMoeDsaForCausalLM) is text-only
@@ -115,11 +120,17 @@ SERVE_CPUS="${SERVE_CPUS:-${SLURM_CPUS_ON_NODE:-192}}"
 # the measurement contends with what it is measuring.
 CLIENT_CPUS="${CLIENT_CPUS:-24}"
 
-stage "serving tp=${TP_SIZE} pp=${SLURM_NNODES} across ${SLURM_NNODES} nodes via sglang"
+stage "serving tp=${TP_SIZE} pp=${PP_SIZE} across ${SLURM_NNODES} nodes via sglang"
 srun --nodes="${SLURM_NNODES}" --ntasks="${SLURM_NNODES}" --ntasks-per-node=1 --exclusive --export=ALL \
     --cpus-per-task="${SERVE_CPUS}" --environment="${EDF}" bash -c '
-  export SGLANG_USE_AITER=1
-  export SGLANG_ROCM_FUSED_DECODE_MLA=0
+  export SGLANG_USE_AITER="${SGLANG_USE_AITER:-1}"
+  # FUSED DECODE MLA, off by default because the recipe it came from says so. Overridable from
+  # the submitting environment so an A/B can flip exactly this one flag and nothing else: job
+  # 630338 verified aiter.mla.mla_decode_fwd -- the kernel this routes decode to -- against an
+  # fp32 reference (max|d| 6e-4 at kv1024, 7e-4 at kv4096), which is the prerequisite for
+  # trying it here, NOT evidence that serving with it on is correct. The long-context gates
+  # below are what decide that; short-context accuracy passes on broken kernels.
+  export SGLANG_ROCM_FUSED_DECODE_MLA="${SGLANG_ROCM_FUSED_DECODE_MLA:-0}"
   # slurm cgroup rejects sglang default CPU pinning (psutil EINVAL, 604937 node1)
   export SGLANG_SET_CPU_AFFINITY=0
   export HF_HUB_OFFLINE=1
@@ -137,7 +148,7 @@ srun --nodes="${SLURM_NNODES}" --ntasks="${SLURM_NNODES}" --ntasks-per-node=1 --
     --trust-remote-code \
     ${LANGUAGE_ONLY_ARG} \
     --watchdog-timeout 1800 \
-    --tp-size '"${TP_SIZE}"' --pp-size '"${SLURM_NNODES}"' \
+    --tp-size '"${TP_SIZE}"' --pp-size '"${PP_SIZE}"' \
     --nnodes '"${SLURM_NNODES}"' --node-rank "${SLURM_PROCID}" \
     --dist-init-addr "'"${MASTER}"':29765" \
     --kv-cache-dtype '"${KV_DTYPE}"' \
@@ -327,10 +338,19 @@ def run_arm(name, conc, tools=False):
     print(f'{name} conc={conc} errs={errs} ttft_max={ttft_max:6.1f}s '
           f'agg={toks / wall:7.1f} tok/s per_req={per_req:5.2f} tok/s', flush=True)
 
-print('===== sweep: streamed completions, 10k-token cache-cold prompts =====', flush=True)
+# TOOLS ON EVERY LEG. The campaign never sends a bare completion: every agent request carries a
+# tool schema and goes through /v1/chat/completions, which is a different server path (chat
+# template, tool-call parser, structured-output bookkeeping) from /v1/completions. Measuring
+# three of four legs without tools measured a shape nothing runs, so the sweep now uses the
+# campaign shape at every concurrency. SWEEP_TOOLS=0 restores the bare-completion legs for a
+# deliberate A/B of the tool path's own cost -- it is not the default.
+sweep_tools = os.environ.get('SWEEP_TOOLS', '1') != '0'
+print(f'===== sweep: streamed chat, 10k-token cache-cold prompts, tools={sweep_tools} =====', flush=True)
 for c in [int(x) for x in os.environ.get('SWEEP_CONCURRENCY', '1 8 16').split()]:
-    run_arm('sglang-sweep', c)
-print('===== campaign shape: chat+stream+tools =====', flush=True)
+    run_arm('sglang-sweep', c, tools=sweep_tools)
+# Same shape and concurrency as the last sweep leg, deliberately: a SECOND measurement at conc 16
+# inside one run, which is the only within-run estimate of variance this harness produces.
+print('===== campaign shape: chat+stream+tools (repeat at conc 16) =====', flush=True)
 run_arm('sglang-tools', 16, tools=True)
 
 if FAILURES:

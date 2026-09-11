@@ -158,9 +158,9 @@ Shipped `syrk_numpy.py`:
 ```python
 def kernel(alpha, beta, C, A):
     for i in range(A.shape[0]):
-        C[i, :i + 1] *= beta
+        C[i, : i + 1] *= beta
         for k in range(A.shape[1]):
-            C[i, :i + 1] += alpha * A[i, k] * A[:i + 1, k]
+            C[i, : i + 1] += alpha * A[i, k] * A[: i + 1, k]
 ```
 
 Written `syrk_better_numpy.py` -- same name `kernel`, same parameters, same in-place ABI:
@@ -186,7 +186,7 @@ and make each body one wide strided slice over the whole array:
 span_h, span_w = out.shape[2] * s, out.shape[3] * s
 for ky in range(kh):
     for kx in range(kw):
-        acc += weight[..., ky, kx] * padded[:, :, ky:ky + span_h:s, kx:kx + span_w:s]
+        acc += weight[..., ky, kx] * padded[:, :, ky : ky + span_h : s, kx : kx + span_w : s]
 ```
 
 The window view materializes a `kh*kw`-wide axis and reduces over it; the tap loop touches each
@@ -274,8 +274,7 @@ def f(
     A: Float[ndarray, "N M"],
     x: Float[ndarray, "M"],
     alpha: float,
-) -> Float[ndarray, "N M"]:
-    ...
+) -> Float[ndarray, "N M"]: ...
 ```
 
 Dimensions = semantic constraints:
@@ -330,7 +329,11 @@ No Python `map`/`filter` for numerical per-element work.
 Keep operators:
 
 ```python
-x + y; x - y; x * y; x / y; x ** 2
+x + y
+x - y
+x * y
+x / y
+x**2
 ```
 
 Scalar math -> NumPy:
@@ -418,13 +421,13 @@ Scalar condition -> keep Python `if`.
 
 ```python
 mask = x > 5
-y = x[mask]        # [N] -> [K], K runtime-dependent
+y = x[mask]  # [N] -> [K], K runtime-dependent
 ```
 
 vs
 
 ```python
-y = np.where(mask, x, 0)   # [N] -> [N]
+y = np.where(mask, x, 0)  # [N] -> [N]
 ```
 
 Boolean ops on masks:
@@ -457,7 +460,8 @@ np.flatnonzero     -> flat indices
 
 ```python
 s = 0
-for i in range(N): s += x[i]
+for i in range(N):
+    s += x[i]
 ```
 
 -> `np.sum(x)`
@@ -517,7 +521,7 @@ Count per group: `np.bincount(group, minlength=G)`.
 Contiguous segments with boundary offsets:
 
 ```python
-np.add.reduceat(x, offsets)     # sum x[offsets[i]:offsets[i+1]]
+np.add.reduceat(x, offsets)  # sum x[offsets[i]:offsets[i+1]]
 ```
 
 Also `np.maximum.reduceat`, etc.
@@ -593,15 +597,15 @@ def reverse_and_stride(
 # 8. `None` / `newaxis`
 
 ```python
-x[:, None]    # [N] -> [N,1]
-x[None, :]    # [N] -> [1,N]
+x[:, None]  # [N] -> [N,1]
+x[None, :]  # [N] -> [1,N]
 np.expand_dims(x, axis)  # same, explicit axis
 ```
 
 ### Example: outer product
 
 ```python
-C = a[:, None] * b[None, :]     # [N] x [M] -> [N,M]
+C = a[:, None] * b[None, :]  # [N] x [M] -> [N,M]
 ```
 
 Dedicated: `np.outer(a, b)` for 1D only.
@@ -611,8 +615,8 @@ Dedicated: `np.outer(a, b)` for 1D only.
 Cartesian coordinate grids:
 
 ```python
-X, Y = np.meshgrid(x, y, indexing="ij")   # dense [N,M] each
-I, J = np.ogrid[:N, :M]                   # open: [N,1], [1,M] -- broadcast later
+X, Y = np.meshgrid(x, y, indexing="ij")  # dense [N,M] each
+I, J = np.ogrid[:N, :M]  # open: [N,1], [1,M] -- broadcast later
 ```
 
 Prefer `ogrid`/`None`-broadcast over dense `meshgrid` -- no materialized grid.
@@ -654,7 +658,7 @@ x : [N], idx : [K] -> x[idx] : [K]
 ### Example: coordinate gather
 
 ```python
-out = image[rows, cols]       # paired: image[rows[k], cols[k]]
+out = image[rows, cols]  # paired: image[rows[k], cols[k]]
 ```
 
 Not `image[rows][:, cols]` (Cartesian, wrong).
@@ -665,7 +669,7 @@ Per-row/per-slice gather with index array of matching rank:
 
 ```python
 # gather argmax values
-idx = np.argmax(A, axis=1)                     # [N]
+idx = np.argmax(A, axis=1)  # [N]
 vals = np.take_along_axis(A, idx[:, None], axis=1)[:, 0]
 ```
 
@@ -703,20 +707,20 @@ Loop index -> data:
 
 ```python
 i = np.arange(K)
-y = x[2*i + 1]
+y = x[2 * i + 1]
 ```
 
 Periodic: `y = x[i % N]` -- or `np.roll` if pure rotation:
 
 ```python
-y = np.roll(x, shift)        # circular shift, no manual modular index
+y = np.roll(x, shift)  # circular shift, no manual modular index
 y = np.roll(A, s, axis=0)
 ```
 
 Regular affine pattern -> slice wins:
 
 ```python
-x[1::2]     # not x[np.arange(1, N, 2)]
+x[1::2]  # not x[np.arange(1, N, 2)]
 ```
 
 ---
@@ -726,7 +730,7 @@ x[1::2]     # not x[np.arange(1, N, 2)]
 Never Python-sort array/object pairs.
 
 ```python
-idx = np.argsort(-scores)        # or argsort(...)[::-1]
+idx = np.argsort(-scores)  # or argsort(...)[::-1]
 sorted_boxes = boxes[idx]
 ```
 
@@ -745,14 +749,14 @@ np.take_along_axis    -> apply argsort per-axis
 Top-k pattern:
 
 ```python
-k_idx = np.argpartition(-scores, k)[:k]     # unordered top-k
-k_idx = k_idx[np.argsort(-scores[k_idx])]   # then order if needed
+k_idx = np.argpartition(-scores, k)[:k]  # unordered top-k
+k_idx = k_idx[np.argsort(-scores[k_idx])]  # then order if needed
 ```
 
 Binning pattern:
 
 ```python
-bin_id = np.searchsorted(edges, x)    # or np.digitize(x, edges)
+bin_id = np.searchsorted(edges, x)  # or np.digitize(x, edges)
 ```
 
 Think:
@@ -789,7 +793,8 @@ out[idx] = values
 Accumulation with possibly repeated indices:
 
 ```python
-for i in range(K): out[idx[i]] += values[i]
+for i in range(K):
+    out[idx[i]] += values[i]
 ```
 
 ->
@@ -891,7 +896,7 @@ and that body still belongs here. Vectorize the body, keep the iteration loop.
 `@` when matmul. `einsum` when more general.
 
 ```python
-np.einsum("bnf,nf->b", data, weights)     # [B,N,F] x [N,F] -> [B]
+np.einsum("bnf,nf->b", data, weights)  # [B,N,F] x [N,F] -> [B]
 ```
 
 Grammar:
@@ -917,7 +922,8 @@ Loop-carried dependency:
 
 ```python
 y[0] = x[0]
-for i in range(1, N): y[i] = y[i-1] + x[i]
+for i in range(1, N):
+    y[i] = y[i - 1] + x[i]
 ```
 
 -> `y = np.cumsum(x)`
@@ -953,8 +959,8 @@ expand_dims      -> add size-1 axis
 
 ```python
 # [N,M] -> [M,N]
-A.T                 # correct
-A.reshape(M, N)     # WRONG -- scrambles data
+A.T  # correct
+A.reshape(M, N)  # WRONG -- scrambles data
 ```
 
 ## 19.2 Transpose family
@@ -1044,7 +1050,7 @@ Broadcasting usually beats tile -- do not tile just to match shapes.
 ## 19.6 Padding
 
 ```python
-np.pad(x, pad_width, mode="constant")   # also "edge", "reflect", "wrap"
+np.pad(x, pad_width, mode="constant")  # also "edge", "reflect", "wrap"
 ```
 
 Replaces manual allocate-and-copy border loops.
@@ -1065,15 +1071,16 @@ Windowed loop:
 
 ```python
 for i in range(N - W + 1):
-    y[i] = f(x[i:i+W])
+    y[i] = f(x[i : i + W])
 ```
 
 ->
 
 ```python
 from numpy.lib.stride_tricks import sliding_window_view
-v = sliding_window_view(x, W)      # [N-W+1, W], zero-copy view
-y = v.mean(axis=-1)                # or max, sum, ...
+
+v = sliding_window_view(x, W)  # [N-W+1, W], zero-copy view
+y = v.mean(axis=-1)  # or max, sum, ...
 ```
 
 ND: `sliding_window_view(img, (kh, kw))` -> `[H-kh+1, W-kw+1, kh, kw]`.
@@ -1119,7 +1126,7 @@ Paired-array shuffle -> shared index permutation:
 
 ```python
 p = rng.permutation(N)
-X_shuf, y_shuf = X[p], y[p]      # keeps pairing
+X_shuf, y_shuf = X[p], y[p]  # keeps pairing
 ```
 
 Sampling:
@@ -1140,7 +1147,7 @@ Determinism: seed the Generator, thread `rng` through functions. No global state
 Bad:
 
 ```python
-np.where(x > 0, np.sqrt(x), 0)     # sqrt sees negatives -> warnings/NaN
+np.where(x > 0, np.sqrt(x), 0)  # sqrt sees negatives -> warnings/NaN
 ```
 
 Fix -- masked compute:
@@ -1180,7 +1187,9 @@ float32 + float64 scalar -> promotion rules (NEP 50 in NumPy >=2: python scalars
 Output-follows-input constructors:
 
 ```python
-np.zeros_like(x); np.empty_like(x); np.full_like(x, v)
+np.zeros_like(x)
+np.empty_like(x)
+np.full_like(x, v)
 ```
 
 Do not casually change `int -> float`, `float32 -> float64`.
@@ -1198,7 +1207,7 @@ np.add(a, b, out=buf)
 Preserve observable mutation:
 
 ```python
-x += y        # in-place, caller sees it
+x += y  # in-place, caller sees it
 x[idx] = v
 x[mask] = 0
 ```
@@ -1209,7 +1218,7 @@ Views alias:
 
 ```python
 y = x[1:10]
-y[:] = 0        # modifies x
+y[:] = 0  # modifies x
 ```
 
 Assume aliasing unless contract says otherwise. In-place ops on overlapping views = undefined-ish; copy first when unsure.

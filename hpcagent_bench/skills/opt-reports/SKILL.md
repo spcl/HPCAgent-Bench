@@ -1,6 +1,7 @@
 ---
 name: opt-reports
 description: Generate and read a compiler optimization report -- and tell a legality refusal from a cost-model one.
+when: "a loop you expected to vectorize or parallelize did not, and you want the compiler's own reason"
 ---
 
 A report is the compiler's own account of your loop: what it vectorized and at what width, what it

@@ -6,7 +6,7 @@
 # `Qwen3.8-27B` for the same arm.
 #
 # `models` is checked against what the arms ACTUALLY served (`OPTARENA_OPTIMIZER` in each
-# containers/cluster/example-script/.env.*) by tests/test_display_names.py, so a campaign that
+# experiments/.env.*) by tests/test_display_names.py, so a campaign that
 # swaps a checkpoint cannot silently keep the old label. The serving engine and the quantisation
 # are deliberately NOT in these names -- `kimi27sglang` names SGLang only because the runner had
 # to tell two arms apart, and `-FP8` is a precision; neither is the model, and putting them on an
