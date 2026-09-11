@@ -49,4 +49,4 @@ SOLVER_KERNELS = (
 )
 
 #: The tag every solver kernel carries, and what a sweep selects the family by.
-SOLVER_TAG = "solver"
+SOLVER_TAG = "solvers"
