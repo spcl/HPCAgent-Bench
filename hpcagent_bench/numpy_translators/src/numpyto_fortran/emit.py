@@ -12,7 +12,12 @@ from numpyto_common.ir import ArrayDesc, KernelIR, _is_alloc_marker
 from numpyto_common import dtypes, narrow_int, operators, parallelism
 from numpyto_common.emitter import BaseEmitter, index_rank_error
 from numpyto_common.frontend import _names_used_as_int
-from numpyto_common.lowering import _MATH_INTRINSIC_NAMES, _walk_complex, helper_returns_int
+from numpyto_common.lowering import (
+    _MATH_INTRINSIC_NAMES,
+    _walk_complex,
+    helper_returns_int,
+    integer_valued_locals,
+)
 
 #: Whole-identifier matcher for scanning a shape-token string for the names it references.
 _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
@@ -3538,6 +3543,7 @@ def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
         if isinstance(s, ast.For) and isinstance(s.target, ast.Name):
             declared.add(s.target.id)
     int_uses = _names_used_as_int(kir.tree)
+    int_valued = integer_valued_locals(kir)
     BITWISE_OPS = (ast.BitAnd, ast.BitOr, ast.BitXor, ast.LShift, ast.RShift)
 
     def _produces_bool(node) -> bool:
@@ -3742,6 +3748,13 @@ def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
         #    rejects as mixed kinds ("GNU Extension: Different type kinds"). Step 1 above still
         #    honours a RECORDED narrow dtype, which is evidence.
         if name in int_uses:
+            return int64_kind
+        # 4. Provably integer-VALUED (every assignment is integer arithmetic), the same rule and the
+        #    same helper the C backend types its untagged locals with, so the two backends cannot
+        #    drift. A padded allocation extent (``flat = 8 * N * N * N // 7 + 64``) is never
+        #    subscripted, so step 3 does not see it, and a real(c_double) bound is the REAL array
+        #    index gfortran rejects outright under -std=f2018.
+        if name in int_valued:
             return int64_kind
         if name in complex_names:
             return complex_t
