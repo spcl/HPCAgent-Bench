@@ -3231,6 +3231,64 @@ def body_allocated_shape(body: List[ast.stmt], hret: str, values: Set[str]) -> O
     return [ast.unparse(dim) for dim in allocations[0].elts]
 
 
+class NameExtentExpression(ast.NodeTransformer):
+    """Replace every expression spelled like one of ``minted``'s keys with that key's symbol name."""
+
+    def __init__(self, minted: Dict[str, str]) -> None:
+        self.minted = minted
+
+    def visit_BinOp(self, node: ast.BinOp) -> ast.expr:
+        self.generic_visit(node)
+        name = self.minted.get(ast.unparse(node))
+        if name is None:
+            return node
+        return ast.copy_location(ast.Name(id=name, ctx=ast.Load()), node)
+
+
+def with_named_floor_extents(
+    owner: str,
+    allocated: List[str],
+    body: List[ast.stmt],
+    symbol_names: List[str],
+    taken: Set[str],
+) -> Tuple[List[str], List[ast.stmt], List[str]]:
+    """A kept helper's out-param extents, with every FLOOR-DIVIDED one carrying a symbol of its own.
+
+    dace binds a nested ``@dc.program`` by handing sympy one equation per declared extent and
+    solving for the callee's symbols. ``//`` reaches that solver as ``int_floor(a, b)``, a two-
+    argument ``Function`` head sympy cannot invert, and it does not decline: matched against the
+    caller's own ``int_floor`` it raises ``NotImplementedError: equal function with more than 1
+    argument`` and the whole parse dies. conv_standard_1d_dilated_strided declares
+    ``int_floor(length - 2 * k + 1, 2) + 1`` and conv_transpose2d_max_pool_hardtanh_mean_tanh's
+    pooling helper ``int_floor(oh_ct - maxpool_kernel_size, maxpool_stride) + 1``; both died there.
+
+    Such an equation is REDUNDANT in the first place -- ``length``, ``k`` and ``oh_ct`` are each
+    already determined by an input parameter's own extent -- so naming the whole pooled extent
+    costs no information and leaves the system linear. The name has to reach the BODY as well as
+    the declaration: the body allocates the buffer this parameter is written from and slices the
+    taps it pools, and the two sides must stay one expression or dace refuses the closing write.
+    """
+    minted: Dict[str, str] = {}
+    dims: List[str] = []
+    for dim in allocated:
+        if "//" not in dim:
+            dims.append(dim)
+            continue
+        sym = minted.get(dim)
+        if sym is None:
+            sym = f"{owner}_extent{len(minted)}"
+            while sym in taken:
+                sym = f"{sym}_"
+            minted[dim] = sym
+            taken.add(sym)
+        dims.append(sym)
+    if not minted:
+        return allocated, body, symbol_names
+    named = NameExtentExpression(minted)
+    body = [ast.fix_missing_locations(named.visit(stmt)) for stmt in body]
+    return dims, body, [*symbol_names, *minted.values()]
+
+
 def inline_slice_only_extents(fn_ast: ast.AST, symbols: set, known: set) -> ast.AST:
     """Splice a slice bound's definition into the slice, so two spans that ARE one quantity share
     a spelling.
@@ -3679,7 +3737,12 @@ def without_valueless_returns(body: List[ast.stmt]) -> List[ast.stmt]:
     return kept
 
 
-def render_program(kir: KernelIR, fn_name: str | None = None, helpers: Sequence[KernelIR] = ()) -> RenderedProgram:
+def render_program(
+    kir: KernelIR,
+    fn_name: str | None = None,
+    helpers: Sequence[KernelIR] = (),
+    nested: bool = False,
+) -> RenderedProgram:
     """Lower ``kir``'s body into the form dace's frontend parses, and return it with its signature.
 
     Shared by the kernel and by every kept helper: a helper is a ``@dc.program`` of its own, so it
@@ -3689,6 +3752,10 @@ def render_program(kir: KernelIR, fn_name: str | None = None, helpers: Sequence[
     ``helpers`` is the whole kept-helper closure, not ``kir.helpers``: a helper calls a SIBLING and
     carries no list of its own. It is what :func:`materialize_strided_helper_args` reads to tell a
     call to one from any other call in the body.
+
+    ``nested`` marks a kept helper, whose symbols dace SOLVES from the shapes its call site passes.
+    The kernel program's own symbols are bound by recipe instead, so the two differ in what a
+    declared extent may spell -- see :func:`with_named_floor_extents`.
     """
     if names_logical_sparse(kir):
         kir = lower(kir)
@@ -3951,6 +4018,12 @@ def render_program(kir: KernelIR, fn_name: str | None = None, helpers: Sequence[
         resolvable = set(arrays) | set(scalars) | set(symbol_names)
         allocated = body_allocated_shape(body, hret, set(scalars) | set(symbol_names))
         if allocated and all(i in resolvable for d in allocated for i in _IDENT_RE.findall(d)):
+            if nested:
+                # Only a NESTED program: the kernel's own symbols are bound by recipe from the
+                # harness (``symbol_defs``), and a name minted here would have none.
+                allocated, body, symbol_names = with_named_floor_extents(
+                    name, allocated, body, symbol_names, resolvable | set(bound_names(body))
+                )
             rebuilt = _array_annotation(dataclasses.replace(arrays[hret], shape=tuple(allocated)))
             params = [f"{hret}: {rebuilt}" if p.split(":", 1)[0].strip() == hret else p for p in params]
     if kir.return_kind:
@@ -4401,7 +4474,7 @@ def render_helper_closure(kir: KernelIR, main: RenderedProgram) -> List[Tuple[Ke
         # Vocabulary first: a caller recipe that names one of the helper's own parameters is a
         # better spelling for an extent than a symbol minted for it.
         settled = with_solvable_extents(with_helper_vocabulary(hkir, binding))
-        rendered = render_program(settled, name, kir.helpers)
+        rendered = render_program(settled, name, kir.helpers, nested=True)
         for callee in called_helpers(rendered.body, kir.helpers):
             visit(hkir.tree, callee)
         ordered.append((hkir, rendered))
