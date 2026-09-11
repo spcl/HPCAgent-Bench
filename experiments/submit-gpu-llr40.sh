@@ -111,8 +111,9 @@ for leg in ${LEGS}; do
     for lang in ${LANGUAGES}; do
         for model in ${MODELS}; do
             submit_arm "${model}" "${lang}" "${leg}" "${gate}"
-            [[ "${SUBMIT:-1}" == 1 && "${leg}" == 0 ]] && leg1+=("${SUBMITTED_JID}")
+            if [[ "${SUBMIT:-1}" == 1 && "${leg}" == 0 ]]; then leg1+=("${SUBMITTED_JID}"); fi
         done
     done
-    [[ "${leg}" == 0 && ${#leg1[@]} -gt 0 ]] && gate="$(IFS=:; echo "${leg1[*]}")"
+    # a trailing `[[ ]] &&` would make a false test the script's exit status
+    if [[ "${leg}" == 0 && ${#leg1[@]} -gt 0 ]]; then gate="$(IFS=:; echo "${leg1[*]}")"; fi
 done
