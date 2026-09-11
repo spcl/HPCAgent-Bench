@@ -18,7 +18,7 @@ tree-sitter availability is detected via :func:`importlib.util.find_spec`
 """
 
 import re
-from typing import Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Tuple
 
 from .comments import (
     C_FAMILY,
@@ -77,7 +77,7 @@ def _mangle_with_tree_sitter(src: str, lang: str, name_map: Dict[str, str]) -> s
     # is safe (a non-key node is never rewritten).
     edits: List[Tuple[int, int, bytes]] = []
 
-    def walk(node):
+    def walk(node: Any) -> None:
         children = _ts_children(node)
         if "identifier" in _ts_type(node) and not children:
             start, end = _ts_span(node)
@@ -119,7 +119,7 @@ def _segment_code_spans(src: str, lang: str) -> List[Tuple[int, int]]:
     n = len(src)
     code_start = 0
 
-    def close(end):
+    def close(end: int) -> None:
         if end > code_start:
             spans.append((code_start, end))
 

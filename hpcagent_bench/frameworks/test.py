@@ -7,8 +7,6 @@ import traceback
 import types
 import numpy as np
 
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from sqlmodel import Session
 
 from hpcagent_bench import config, osinfo, perf_reports
@@ -18,57 +16,18 @@ from hpcagent_bench.frameworks.framework import split_flavor
 from hpcagent_bench.frameworks.schema import Result, results_engine
 from hpcagent_bench.harness import recording
 from hpcagent_bench.precision import Precision, TOLERANCE_MATRIX, numpy_dtype, precision_from_datatype, tolerance_band
-from typing import Any, TypedDict
-
-#: A kernel handle: the numpy reference, one framework implementation, or whatever
-#: :meth:`Framework.optimize` returned. The harness binds the arguments by NAME from the manifest
-#: and hands the return straight to the output resolver, so only the owning framework types either.
-Kernel = Callable[..., object]
-
-#: Materialized benchmark inputs, name -> value (ndarray, numpy or Python scalar, dtype, variant
-#: spec). The manifest decides the keys and the shapes, so this is the untyped boundary; every read
-#: below narrows it with isinstance or an exact type test.
-BenchData = dict[str, Any]
-
-#: One run's outputs, in ``output_args`` order, as :func:`utilities.resolve_outputs` binds them.
-#: Only the validator inspects an element, so the harness keeps them opaque.
-Outputs = list[object]
-
-#: What :meth:`Test._execute` returns: ``(outputs, python_times, native_times)`` in milliseconds,
-#: all three None when the implementation failed to load or to run.
-ExecOutcome = tuple[Outputs | None, Sequence[float] | None, Sequence[float] | None]
+from typing import Any, Callable, Dict, FrozenSet, Optional, Sequence, Tuple
 
 #: String-keyed view of the typed TOLERANCE_MATRIX (numpy and Precision-enum spellings), each
 #: entry ``(rtol, atol)``, for callers that key tolerances by string. Not a second table.
-TOLERANCES: dict[str, tuple[float, float]] = {
+TOLERANCES = {
     spelling: band.as_tuple()
     for prec, band in TOLERANCE_MATRIX.items()
     for spelling in (prec.value, numpy_dtype(prec).__name__)
 }
 
 
-class ImplTiming(TypedDict, total=False):
-    """One implementation's result as :meth:`Test.run` reports it: ``python``/``native`` millisecond
-    series (None when there are none), the oracle verdict, and ``failure`` naming the reason when
-    the implementation produced no timings."""
-
-    python: Sequence[float] | None
-    native: Sequence[float] | None
-    validated: bool
-    failure: str
-
-
-@dataclass(slots=True)
-class Sample:
-    """One timed sample of one implementation, in the shape the ``results`` row takes."""
-
-    details: str
-    validated: bool
-    time: float
-    native_time: float | None
-
-
-def tolerances_for(datatype: str | None) -> tuple[float, float]:
+def tolerances_for(datatype: str | None) -> Tuple[float, float]:
     """``(rtol, atol)`` for ``datatype`` in any spelling (numpy/enum/ml_dtypes/None), from the
     single-source TOLERANCE_MATRIX; an unknown datatype falls back to fp64."""
     try:
@@ -78,7 +37,7 @@ def tolerances_for(datatype: str | None) -> tuple[float, float]:
     return tolerance_band(prec).as_tuple()
 
 
-def tolerance_datatype(requested: str | None, detected: type[np.generic] | None) -> str | None:
+def tolerance_datatype(requested: Optional[str], detected: type[np.floating] | None) -> Optional[str]:
     """The datatype whose tolerance band should validate a run: an explicit ``requested`` (--datatype)
     wins; else follow the ACTUAL materialized precision (``detected``) so a legacy kernel defaulting
     to fp32 isn't graded against fp64's tight band; ``None`` detected keeps the fp64 floor."""
@@ -88,9 +47,11 @@ def tolerance_datatype(requested: str | None, detected: type[np.generic] | None)
 
 
 #: Kernels whose ``_numpy`` reference keeps the INTERPRETER in the oracle role, because numba
-#: cannot TYPE it as written. Everything else is njit-compiled: the reference runs, is compared
-#: with allclose and then discarded, so an interpreted loop nest buys nothing but wall clock, and a
-#: slow oracle is charged to the timeout the FRAMEWORK is judged by.
+#: cannot TYPE it as written. Everything else -- 639 of 661 -- is njit-compiled: the reference runs,
+#: is compared with allclose and then discarded, so an interpreted loop nest buys nothing. crc16
+#: spent 25 minutes of a 4 h canon job producing a value nothing times, and wf_diff_skew spent 190 s
+#: of the 200 s budget of the run that FOLLOWS it, which reported the framework as a TIMEOUT for
+#: work the oracle did.
 #:
 #: njit compiles THE SAME SOURCE with no ``parallel=True``, so association and loop order stay the
 #: interpreter's and this is a speed change rather than a semantics change. It is never the speedup
@@ -98,12 +59,16 @@ def tolerance_datatype(requested: str | None, detected: type[np.generic] | None)
 #: interpreter, because a timing that says numpy and measures numba is a lie about the baseline.
 #:
 #: MEASURED, not guessed -- ``scripts/njit_oracle_gate.py`` compiles, RUNS and compares every kernel
-#: at preset S, which is where numpy-vs-numba correctness is established, and regenerates this list
-#: as the union of what each environment refuses. NOT A CORRECTNESS LIST: once the comparison asks
-#: whether the two are reassociations of one computation rather than demanding a fixed rtol,
-#: NOTHING disagrees. These only keep a run from paying a doomed compile; the call-time fallback in
-#: :func:`njit_reference` covers anything added later.
-NJIT_INTERPRETED: frozenset[str] = frozenset(
+#: at preset S, which is where numpy-vs-numba correctness is established; the compiled oracle is
+#: then what runs at the timed preset. Run in BOTH environments and unioned, because the verdict is
+#: toolchain-dependent: this is the union of what the container and the login venv each refused.
+#: NOT A CORRECTNESS LIST -- once the comparison asks whether the two are reassociations of one
+#: computation rather than demanding a fixed rtol (which for an fp32 kernel sits below the format's
+#: own eps and can only be met by bit-identity), NOTHING disagrees in either environment. These are
+#: listed purely so a run does not pay a doomed compile; the call-time fallback in
+#: :func:`njit_reference` covers anything added later, and covers the five the container accepts
+#: and the login venv does not.
+NJIT_INTERPRETED: FrozenSet[str] = frozenset(
     {
         "argmax_over_a_dimension",
         "argmin_over_a_dimension",
@@ -127,16 +92,17 @@ NJIT_INTERPRETED: frozenset[str] = frozenset(
         "resnet_basic_block",
         "sum_reduction_over_a_dimension",
         "vexx_k",
+        "vloc_psi_k_acc",
     }
 )
 
 
-def rebind(func: types.FunctionType, globals_dict: dict[str, Any]) -> types.FunctionType:
+def rebind(func: types.FunctionType, globals_dict: Dict[str, Any]) -> types.FunctionType:
     """``func``'s code object bound to ``globals_dict`` -- same source, different name resolution."""
     return types.FunctionType(func.__code__, globals_dict, func.__name__, func.__defaults__, func.__closure__)
 
 
-def njit_reference(impl: Kernel, bench: Benchmark, data: BenchData | None = None) -> Kernel:
+def njit_reference(impl: Callable, bench: Benchmark, data: Optional[Dict[str, Any]] = None) -> Callable:
     """``impl`` njit-compiled when bench's numpy reference is a known interpreted loop nest.
 
     A compile failure falls back to the interpreter LOUDLY rather than raising: a slow oracle
@@ -147,7 +113,7 @@ def njit_reference(impl: Kernel, bench: Benchmark, data: BenchData | None = None
     lookup -- not a compile-stage error, so it would escape the guard below as a runtime fault and
     leave the oracle with no output at all.
     """
-    module: str | None = bench.info.get("module_name")
+    module = bench.info.get("module_name")
     if module in NJIT_INTERPRETED:
         return impl
     if data is not None and any(isinstance(v, np.ndarray) and v.dtype == np.float16 for v in data.values()):
@@ -157,15 +123,16 @@ def njit_reference(impl: Kernel, bench: Benchmark, data: BenchData | None = None
         from numba.core.errors import LoweringError, TypingError, UnsupportedError
 
         # Every same-module helper is compiled too, against ONE shared globals dict that each
-        # patched function closes over, mutated in place so a helper defined earlier still sees one
-        # added later (what makes mutually recursive helpers resolve). Compiling a helper against
-        # its own globals is not enough: a kernel -> helper -> helper chain leaves the second lookup
-        # on the plain function and numba stops at "Untyped global name".
-        shared: dict[str, Any] = dict(impl.__globals__)
+        # patched function closes over. Compiling a helper against its own original globals is not
+        # enough: a reference whose chain is kernel -> helper -> helper leaves the second lookup
+        # pointing at the plain function, and numba stops at "Untyped global name". The dict is
+        # mutated in place, so a helper defined earlier still sees one added later, which is what
+        # makes mutually recursive helpers resolve.
+        shared = dict(impl.__globals__)
         for name, value in list(shared.items()):
             if isinstance(value, types.FunctionType) and value.__module__ == impl.__module__:
                 shared[name] = njit(cache=True)(rebind(value, shared))
-        compiled: Kernel = njit(cache=True)(rebind(impl, shared))
+        compiled = njit(cache=True)(rebind(impl, shared))
     except Exception as exc:  # noqa: BLE001 -- any numba failure is a fallback, never fatal
         logging.getLogger(__name__).warning(
             "njit reference unavailable for %s (%s); using the interpreter", module, exc
@@ -179,14 +146,14 @@ def njit_reference(impl: Kernel, bench: Benchmark, data: BenchData | None = None
     # COMPILE-stage errors are caught: they are raised before the body runs, so no in-place output
     # buffer has been touched and re-running on the interpreter cannot double-apply. A genuine
     # runtime fault inside compiled code is an ordinary exception and still propagates.
-    compile_stage: tuple[type[BaseException], ...] = (TypingError, UnsupportedError, LoweringError)
-    state: dict[str, bool] = {"compiled": True}
+    compile_stage = (TypingError, UnsupportedError, LoweringError)
+    state = {"compiled": True}
 
     # wraps, and not a bare closure: ``call_args`` reads ``inspect.signature`` and drops to the
     # POSITIONAL abi for anything spelled ``*args``, so an unwrapped guard would quietly change how
     # every oracle is called. ``wraps`` sets ``__wrapped__``, which is what signature() follows.
     @functools.wraps(impl)
-    def guarded(*args: object, **kwargs: object) -> object:
+    def guarded(*args: Any, **kwargs: Any) -> Any:
         if state["compiled"]:
             try:
                 return compiled(*args, **kwargs)
@@ -205,30 +172,18 @@ def njit_reference(impl: Kernel, bench: Benchmark, data: BenchData | None = None
 class Test(object):
     """A class for testing a framework on a benchmark."""
 
-    __slots__ = ("bench", "frmwrk", "numpy", "_last_failure", "_measured_impl")
-
-    bench: Benchmark
-    frmwrk: Framework
-    numpy: Framework | None
-    #: Why the last :meth:`_execute` produced no outputs; None when it produced them.
-    _last_failure: str | None
-    #: The handle :meth:`_execute` actually MEASURED; None until one has been.
-    _measured_impl: Kernel | None
-
-    def __init__(self, bench: Benchmark, frmwrk: Framework, npfrmwrk: Framework | None = None) -> None:
+    def __init__(self, bench: Benchmark, frmwrk: Framework, npfrmwrk: Framework = None) -> None:
         self.bench = bench
         self.frmwrk = frmwrk
         self.numpy = npfrmwrk
-        self._last_failure = None
-        self._measured_impl = None
 
-    def _write_perf_reports(self, frmwrk: Framework, impl: Kernel | None, impl_name: str) -> None:
+    def _write_perf_reports(self, frmwrk: Framework, impl: Any, impl_name: str) -> None:
         """Write whichever optional reports are enabled, under ``perf_reports/`` (both off by default).
         Called only after :meth:`Framework.measure` returns, so it never rebuilds the timed artifact;
         ``impl_name`` keys the report since a framework's implementations are separate compiled
         artifacts. A report failure never sinks the measurement already in hand."""
         info = self.bench.info
-        hooks: dict[str, Callable[[Kernel | None, Benchmark], str | None]] = {
+        hooks = {
             "opt_report": frmwrk.opt_report,
             "lowered_code": frmwrk.lowered_code,
             "generated_source": frmwrk.generated_source,
@@ -248,23 +203,24 @@ class Test(object):
     def _execute(
         self,
         frmwrk: Framework,
-        impl: Kernel,
+        impl: Callable,
         impl_name: str,
         mode: str,
-        bdata: BenchData,
+        bdata: Dict[str, Any],
         repeat: int,
         ignore_errors: bool,
-    ) -> ExecOutcome:
+    ) -> Tuple[Any, Optional[Sequence[float]], Optional[Sequence[float]]]:
         """Run ``impl`` ``repeat`` times via :meth:`Framework.measure`; returns
         ``(outputs, python_time_list, native_time_list)``."""
-        report_str: str = frmwrk.info["full_name"] + " - " + impl_name
+        report_str = frmwrk.info["full_name"] + " - " + impl_name
         # Structured failure reason for the caller to record (no silent drop).
-        self._last_failure = None
+        self._last_failure: Optional[str] = None
         # The handle that was actually MEASURED, published for the report hooks. ``optimize``
         # below rebinds the local ``impl``, which the caller never sees, so without this the
         # diagnostics would describe the PRE-optimize handle: for DaCe that is the parsed
-        # @dace.program, which has no compiled artifact to report on at all.
-        self._measured_impl = impl
+        # @dace.program, which has no compiled artifact to report on at all. Set here rather
+        # than returned because every existing caller unpacks a fixed 3-tuple.
+        self._measured_impl: Any = impl
         try:
             # Optimizer seam (no-op by default): optimize ONCE before the runner +
             # timer are built, so the optimized program is what gets run AND
@@ -315,14 +271,12 @@ class Test(object):
         try:
             plan.before_each()
             plan.run()
-            ret: object = plan.result
+            ret = plan.result
         except Exception as e:
             traceback.print_exception(e)
             self._last_failure = "runtime_error"
             ret = None
-        out: Outputs = util.resolve_outputs(
-            ret, plan.inout_values(), self.bench.info.get("output_args", []), plan.inout_names()
-        )
+        out = util.resolve_outputs(ret, plan.inout_values(), self.bench.info.get("output_args", []), plan.inout_names())
         return out, timelist, native_times
 
     def run(
@@ -332,10 +286,10 @@ class Test(object):
         repeat: int,
         timeout: float = 200.0,
         ignore_errors: bool = True,
-        datatype: str | None = None,
-        variant: str | None = None,
-        fuzz_iteration: int | None = None,
-    ) -> dict[str, ImplTiming]:
+        datatype: Optional[str] = None,
+        variant: Optional[str] = None,
+        fuzz_iteration: Optional[int] = None,
+    ) -> Dict[str, Dict[str, Any]]:
         """Tests the framework against the benchmark."""
         print(
             "***** Testing {f} with {b} on the {p} dataset, datatype {d} *****".format(
@@ -347,19 +301,17 @@ class Test(object):
         )
 
         self.frmwrk.set_datatype(datatype)
-        bdata: BenchData = self.bench.get_data(preset, datatype, variant=variant, fuzz_iteration=fuzz_iteration)
+        bdata = self.bench.get_data(preset, datatype, variant=variant, fuzz_iteration=fuzz_iteration)
 
         # Detect the actual precision of the materialized data (some inputs are plain Python floats
-        # with no declared dtype); also keys the validation band below (see tolerance_datatype). The
-        # two arms are disjoint -- a value is a float scalar or an array, never both.
-        detected_dtype: type[np.generic] | None = None
-        dtypes: set[type[np.generic]] = set()
-        for value in bdata.values():
-            value_type: type[Any] = type(value)
-            if value_type in [np.float32, np.float64]:
-                dtypes.add(value_type)
-            elif value_type is np.ndarray and value.dtype in [np.float32, np.float64]:
-                dtypes.add(type(value.dtype.type()))
+        # with no declared dtype); also keys the validation band below (see tolerance_datatype).
+        detected_dtype = None
+        dtypes = set(type(v) for v in bdata.values() if type(v) in [np.float32, np.float64])
+        dtypes |= set(
+            type(v.dtype.type())
+            for v in bdata.values()
+            if type(v) is np.ndarray and v.dtype in [np.float32, np.float64]
+        )
         if len(dtypes) > 1:
             raise ValueError(
                 "Inconsistent datatypes detected in benchmark data: mixture of float32 and float64 values."
@@ -372,17 +324,15 @@ class Test(object):
             # No --datatype was requested, so set_datatype(None) above bound the framework to fp64
             # (see precision_from_datatype) while a legacy initialize() is free to default to
             # something else -- arc_distance's is np.float32. Harmless for a dynamically-typed
-            # framework, but a compiled backend (DaCe) parses its @dace.program's fixed-width buffer
-            # types from this global BEFORE it ever sees bdata; left at fp64 it binds a float64
-            # kernel to float32 buffers, a real ABI mismatch (undersized reads/writes) rather than a
-            # validation failure. Resync ahead of the implementations()/optimize() call below.
+            # framework (numpy/numba dispatch on the array it is actually handed), but a compiled
+            # backend (DaCe) parses its @dace.program's fixed-width buffer types from this global
+            # BEFORE it ever sees bdata; left at fp64 it binds a float64 kernel to float32 buffers,
+            # a real ABI mismatch (undersized reads/writes) rather than a validation failure. Resync
+            # to what the data actually is, ahead of the implementations()/optimize() call below.
             if datatype is None:
                 self.frmwrk.set_datatype(detected_dtype.__name__)
 
         # Run NumPy for validation
-        np_out: Outputs | None
-        np_impl: Kernel
-        np_impl_name: str
         if validate and self.frmwrk.fname != "numpy" and self.numpy:
             np_impl, np_impl_name = self.numpy.implementations(self.bench)[0]
             np_impl = njit_reference(np_impl, self.bench, bdata)
@@ -392,28 +342,24 @@ class Test(object):
             np_out = None
 
         # `domain` is the only kernel-info field the results table still carries (heatmap groups on it).
-        domain: str = ""
+        domain = ""
         if "domain" in self.bench.info.keys():
             domain = self.bench.info["domain"]
 
-        def first_execution(impl: Kernel, impl_name: str) -> ExecOutcome:
+        @tout.exit_after(timeout)
+        def first_execution(
+            impl: Callable, impl_name: str
+        ) -> Tuple[Any, Optional[Sequence[float]], Optional[Sequence[float]]]:
             return self._execute(self.frmwrk, impl, impl_name, "first/validation", context, 1, ignore_errors)
 
-        # exit_after is untyped, so the decorated handle is named rather than stacked: same wrapper,
-        # a typed call site.
-        timed_first: Callable[[Kernel, str], ExecOutcome] = tout.exit_after(timeout)(first_execution)
-
-        bvalues: list[Sample] = []
+        bvalues = []
         # Per-implementation timing series; consumed by the CLI for JSONL.
-        per_impl_timings: dict[str, ImplTiming] = {}
-        context: BenchData = {**bdata, **self.frmwrk.imports()}
-        impl: Kernel
-        impl_name: str
-        frmwrk_out: Outputs | None
+        per_impl_timings: Dict[str, Dict[str, Any]] = {}
+        context = {**bdata, **self.frmwrk.imports()}
         for impl, impl_name in self.frmwrk.implementations(self.bench):
             self._last_failure = None
             try:
-                frmwrk_out, _, _ = timed_first(impl, impl_name)
+                frmwrk_out, _, _ = first_execution(impl, impl_name)
             except KeyboardInterrupt:
                 print('Implementation "{}" timed out.'.format(impl_name), flush=True)
                 per_impl_timings[impl_name] = {"python": None, "native": None, "validated": False, "failure": "timeout"}
@@ -443,7 +389,7 @@ class Test(object):
                 continue
 
             # Validation
-            valid: bool = True
+            valid = True
             if validate and np_out is None:
                 # The numpy oracle produced no output (failed under ignore_errors); can't assert correctness.
                 valid = False
@@ -454,13 +400,13 @@ class Test(object):
                     else:
                         frmwrk_out = self.frmwrk.copy_back_func()(frmwrk_out)
 
-                    frmwrk_name: str = self.frmwrk.info["full_name"] + " - " + impl_name
+                    frmwrk_name = self.frmwrk.info["full_name"] + " - " + impl_name
 
                     # Keyed by the actual data precision when no --datatype was given, so fp32 data
                     # grades at the fp32 band, not fp64's tight floor; per-bench rtol/atol still win below.
-                    band_rtol, band_atol = tolerances_for(tolerance_datatype(datatype, detected_dtype))
-                    rtol: float = self.bench.info.get("rtol", band_rtol)
-                    atol: float = self.bench.info.get("atol", band_atol)
+                    _r, _a = tolerances_for(tolerance_datatype(datatype, detected_dtype))
+                    rtol = self.bench.info.get("rtol", _r)
+                    atol = self.bench.info.get("atol", _a)
                     valid = util.validate(np_out, frmwrk_out, frmwrk_name, rtol=rtol, atol=atol)
                     if valid:
                         print("{} - {} - validation: SUCCESS".format(frmwrk_name, impl_name))
@@ -479,9 +425,9 @@ class Test(object):
             # returns a compiled artifact (DaCe) they are different objects.
             self._write_perf_reports(self.frmwrk, self._measured_impl, impl_name)
             if timelist:
-                natives: Sequence[float | None] = native_times if native_times else [None] * len(timelist)
+                natives = native_times if native_times else [None] * len(timelist)
                 for t, nt in zip(timelist, natives):
-                    bvalues.append(Sample(details=impl_name, validated=valid, time=t, native_time=nt))
+                    bvalues.append(dict(details=impl_name, validated=valid, time=t, native_time=nt))
                 per_impl_timings[impl_name] = {
                     "python": timelist,
                     "native": native_times,
@@ -516,9 +462,9 @@ class Test(object):
                         framework=column,
                         flavor=flavor,
                         agent=None,
-                        validated=d.validated,
-                        time=d.time,
-                        native_time=d.native_time,
+                        validated=d["validated"],
+                        time=d["time"],
+                        native_time=d.get("native_time"),
                         # The contract -d selects and speedups group by, not the width the buffers came out at.
                         # ``or`` not ``is not None``: an empty -d is absent, not a datatype named "".
                         datatype=datatype or "float64",

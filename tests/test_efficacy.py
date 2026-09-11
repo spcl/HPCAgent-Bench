@@ -25,7 +25,7 @@ def arms(before_s, after_s, before_c, after_c):
     )
 
 
-def test_no_effect_is_exactly_one_and_zero():
+def test_no_effect_is_exactly_one_and_zero() -> None:
     """The anchor the whole scale hangs on: identical arms must read no effect, not 'almost none'."""
     b, a, bc, ac = arms([1.0, 2.0, 0.5], [1.0, 2.0, 0.5], [10.0, 20.0, 5.0], [10.0, 20.0, 5.0])
     r = eff.efficacy(b, a, bc, ac)
@@ -38,7 +38,7 @@ def test_no_effect_is_exactly_one_and_zero():
     assert not r.cost.significant
 
 
-def test_swapping_the_arms_negates_q():
+def test_swapping_the_arms_negates_q() -> None:
     """Antisymmetry. Without it the metric would answer differently depending on which arm the
     caller happened to call 'before', and no ranking built on it would mean anything."""
     b, a, bc, ac = arms([1.0, 2.0, 4.0], [2.0, 2.0, 1.0], [10.0, 30.0, 5.0], [20.0, 10.0, 5.0])
@@ -50,7 +50,7 @@ def test_swapping_the_arms_negates_q():
     assert backward.overall_effect == pytest.approx(1.0 / forward.overall_effect)
 
 
-def test_a_cheaper_arm_is_an_improvement_not_a_regression():
+def test_a_cheaper_arm_is_an_improvement_not_a_regression() -> None:
     """rho_C is INVERTED on purpose. Read the other way round, every intervention that saved tokens
     would be reported as having made things worse -- the sign error the inversion exists to stop."""
     b, a, bc, ac = arms([1.0, 1.0], [1.0, 1.0], [100.0, 200.0], [50.0, 100.0])
@@ -61,7 +61,7 @@ def test_a_cheaper_arm_is_an_improvement_not_a_regression():
     assert r.q > 0.0
 
 
-def test_the_aggregate_is_scale_invariant_across_tasks():
+def test_the_aggregate_is_scale_invariant_across_tasks() -> None:
     """The reason it is a geometric mean. A kernel timed in nanoseconds and one timed in seconds must
     move the aggregate by the same factor for the same RELATIVE change, or the unit picks the winner."""
     b, a, bc, ac = arms([1.0, 1.0, 1.0], [2.0, 3.0, 0.5], [10.0, 10.0, 10.0], [5.0, 20.0, 10.0])
@@ -73,7 +73,7 @@ def test_the_aggregate_is_scale_invariant_across_tasks():
     assert scaled.q == pytest.approx(plain.q)
 
 
-def test_log_rho_is_the_mean_of_the_deltas():
+def test_log_rho_is_the_mean_of_the_deltas() -> None:
     """ln rho and mean(d_i) are the same quantity, and the median, the counts and the interval are
     all computed over d. If these ever disagree the pairing is wrong, not the rounding."""
     b, a, bc, ac = arms([1.0, 2.0, 4.0, 8.0], [3.0, 1.0, 9.0, 2.0], [7.0, 5.0, 11.0, 2.0], [1.0, 9.0, 3.0, 4.0])
@@ -83,7 +83,7 @@ def test_log_rho_is_the_mean_of_the_deltas():
     assert r.q == pytest.approx(0.5 * r.score.log_rho + 0.5 * r.cost.log_rho)
 
 
-def test_the_median_and_the_counts_expose_a_tail_the_mean_hides():
+def test_the_median_and_the_counts_expose_a_tail_the_mean_hides() -> None:
     """The robustness check earning its place: one kernel that moved 100x carries a mean that nine
     regressions should have sunk. The geomean says improvement, the median and the count say not."""
     before = [1.0] * 10
@@ -95,7 +95,7 @@ def test_the_median_and_the_counts_expose_a_tail_the_mean_hides():
     assert r.score.losses == 9 and r.score.wins == 1
 
 
-def test_tasks_are_paired_by_name_not_by_position():
+def test_tasks_are_paired_by_name_not_by_position() -> None:
     """An arm that crashed on a kernel has no row for it. Zipping would pair kernel k against k+1
     and report a difference between two different kernels as an effect."""
     before_s = {"a": 1.0, "b": 2.0, "c": 4.0}
@@ -108,14 +108,14 @@ def test_tasks_are_paired_by_name_not_by_position():
     assert r.score.rho == pytest.approx(2.0)
 
 
-def test_arms_that_share_no_task_are_refused():
+def test_arms_that_share_no_task_are_refused() -> None:
     """Nothing paired means nothing to say, and an empty geomean of 1.0 would say 'no effect'."""
     with pytest.raises(ValueError, match="share no task"):
         eff.efficacy({"a": 1.0}, {"b": 1.0}, {"a": 1.0}, {"b": 1.0})
 
 
 @pytest.mark.parametrize("bad", [0.0, -1.0, float("nan"), float("inf")])
-def test_a_value_that_is_not_a_ratio_is_refused(bad):
+def test_a_value_that_is_not_a_ratio_is_refused(bad) -> None:
     """A zero or negative speedup is a MISSING measurement, not a small one. Skipping it silently
     would change which tasks the pairing covers without the report ever saying so."""
     b, a, bc, ac = arms([1.0, 1.0], [1.0, bad], [1.0, 1.0], [1.0, 1.0])
@@ -123,7 +123,7 @@ def test_a_value_that_is_not_a_ratio_is_refused(bad):
         eff.efficacy(b, a, bc, ac)
 
 
-def test_the_interval_is_deterministic_for_the_same_input():
+def test_the_interval_is_deterministic_for_the_same_input() -> None:
     """The bounds go in a paper. The same inputs have to give the same interval on a rerun."""
     deltas = [0.1, -0.2, 0.4, 0.05, -0.01, 0.9, -0.3]
     first = eff.bootstrap_interval(deltas, resamples=500)
@@ -132,7 +132,7 @@ def test_the_interval_is_deterministic_for_the_same_input():
     assert first != eff.bootstrap_interval(deltas, resamples=500, seed=eff.BOOTSTRAP_SEED + 1)
 
 
-def test_the_interval_brackets_the_mean_and_reads_no_effect_when_it_covers_zero():
+def test_the_interval_brackets_the_mean_and_reads_no_effect_when_it_covers_zero() -> None:
     b, a, bc, ac = arms([1.0, 1.0, 1.0, 1.0], [2.0, 0.5, 2.0, 0.5], [1.0] * 4, [1.0] * 4)
     r = eff.efficacy(b, a, bc, ac, resamples=2000)
     assert r.score.ci_low <= r.score.log_rho <= r.score.ci_high
@@ -140,7 +140,7 @@ def test_the_interval_brackets_the_mean_and_reads_no_effect_when_it_covers_zero(
     assert not r.score.significant, "gains and losses that cancel are no effect, not a small one"
 
 
-def test_a_single_task_cannot_bound_anything():
+def test_a_single_task_cannot_bound_anything() -> None:
     """One paired observation has no spread to resample, and must not print a narrow interval as if
     it did -- a degenerate one at its own value is the honest answer."""
     r = eff.efficacy({"a": 1.0}, {"a": 4.0}, {"a": 1.0}, {"a": 1.0})
@@ -148,7 +148,7 @@ def test_a_single_task_cannot_bound_anything():
     assert r.score.ci_low == pytest.approx(r.score.ci_high) == pytest.approx(math.log(4.0))
 
 
-def test_weights_must_sum_to_one_and_stay_non_negative():
+def test_weights_must_sum_to_one_and_stay_non_negative() -> None:
     b, a, bc, ac = arms([1.0], [2.0], [1.0], [1.0])
     with pytest.raises(ValueError, match="sum to 1"):
         eff.efficacy(b, a, bc, ac, score_weight=0.7, cost_weight=0.7)
@@ -156,7 +156,7 @@ def test_weights_must_sum_to_one_and_stay_non_negative():
         eff.efficacy(b, a, bc, ac, score_weight=1.5, cost_weight=-0.5)
 
 
-def test_a_weighting_can_favour_either_axis_without_moving_the_point():
+def test_a_weighting_can_favour_either_axis_without_moving_the_point() -> None:
     """Q is a PROXY. Changing the weights must move the ranking number and leave the two ratios --
     the thing Pareto dominance is decided on -- exactly where they were."""
     b, a, bc, ac = arms([1.0, 1.0], [4.0, 4.0], [1.0, 1.0], [2.0, 2.0])
@@ -167,7 +167,7 @@ def test_a_weighting_can_favour_either_axis_without_moving_the_point():
     assert score_led.q > even.q, "the cost got worse, so weighting it out must raise Q"
 
 
-def test_dominance_needs_both_axes_and_a_strict_gain_on_one():
+def test_dominance_needs_both_axes_and_a_strict_gain_on_one() -> None:
     def at(rho_s, rho_c):
         b, a, bc, ac = arms([1.0], [rho_s], [1.0], [1.0 / rho_c])
         return eff.efficacy(b, a, bc, ac)
@@ -180,7 +180,7 @@ def test_dominance_needs_both_axes_and_a_strict_gain_on_one():
     assert not eff.dominates(strong, strong), "dominance is strict; nothing dominates itself"
 
 
-def test_the_front_keeps_every_intervention_nothing_dominates():
+def test_the_front_keeps_every_intervention_nothing_dominates() -> None:
     def at(rho_s, rho_c):
         b, a, bc, ac = arms([1.0], [rho_s], [1.0], [1.0 / rho_c])
         return eff.efficacy(b, a, bc, ac)
@@ -189,7 +189,7 @@ def test_the_front_keeps_every_intervention_nothing_dominates():
     assert set(front) == {"cheap", "fast"}
 
 
-def test_the_row_reports_percentages_and_carries_the_robustness_checks():
+def test_the_row_reports_percentages_and_carries_the_robustness_checks() -> None:
     """What lands in the CSV is what a reader sees. A row that dropped the counts would let a
     tail-carried result print as a clean percentage."""
     b, a, bc, ac = arms([1.0, 1.0], [2.0, 3.0], [10.0, 10.0], [5.0, 5.0])

@@ -24,13 +24,13 @@ def load_driver(monkeypatch, **env):
         sys.path.remove(str(EXAMPLE))
 
 
-def test_the_stagger_is_on_by_default(monkeypatch):
+def test_the_stagger_is_on_by_default(monkeypatch) -> None:
     monkeypatch.delenv("AGENT_START_STAGGER_SECONDS", raising=False)
     driver = load_driver(monkeypatch)
     assert driver.AGENT_START_STAGGER_SECONDS > 0, "agents would all start their MCP servers at once"
 
 
-def test_a_wide_node_stays_inside_the_cap(monkeypatch):
+def test_a_wide_node_stays_inside_the_cap(monkeypatch) -> None:
     """The delay is per worker INDEX, so without a cap the last of 120 agents would start minutes
     after the first and lose that time from its own budget."""
     driver = load_driver(monkeypatch)
@@ -40,12 +40,12 @@ def test_a_wide_node_stays_inside_the_cap(monkeypatch):
     assert driver.AGENT_START_STAGGER_MAX_SECONDS <= 300, "a cap this large is not a stagger"
 
 
-def test_the_stagger_can_be_turned_off(monkeypatch):
+def test_the_stagger_can_be_turned_off(monkeypatch) -> None:
     driver = load_driver(monkeypatch, AGENT_START_STAGGER_SECONDS="0")
     assert driver.AGENT_START_STAGGER_SECONDS == 0
 
 
-def test_the_startup_gate_is_the_real_limit(monkeypatch):
+def test_the_startup_gate_is_the_real_limit(monkeypatch) -> None:
     """A fixed delay cannot know how long a startup takes; the semaphore drains at whatever rate
     they actually complete. It has to be well under a node's agent count to mean anything."""
     for key in ("AGENT_START_CONCURRENCY", "AGENT_START_STAGGER_SECONDS"):
@@ -55,14 +55,14 @@ def test_the_startup_gate_is_the_real_limit(monkeypatch):
     assert driver.START_GATE._value == driver.AGENT_START_CONCURRENCY
 
 
-def test_a_failed_mcp_server_is_retried(monkeypatch):
+def test_a_failed_mcp_server_is_retried(monkeypatch) -> None:
     """One process to relaunch against a whole agent budget recorded as nothing."""
     monkeypatch.delenv("AGENT_MCP_ATTEMPTS", raising=False)
     driver = load_driver(monkeypatch)
     assert driver.AGENT_MCP_ATTEMPTS >= 2
 
 
-def test_both_mcp_budgets_are_raised():
+def test_both_mcp_budgets_are_raised() -> None:
     """An agent whose MCP server reports "failed" has no submit tool and records nothing. Claude
     Code has TWO budgets and the connect one defaults to 5 s -- raising only the 30 s startup
     budget leaves the tighter of the pair in place."""

@@ -31,27 +31,27 @@ def _rewrite(src, sparse=()):
 # --------------------------------------------------------------------------- #
 
 
-def test_dot_T_desugars_to_np_transpose():
+def test_dot_T_desugars_to_np_transpose() -> None:
     assert _rewrite("y = x.T") == "y = np.transpose(x)"
 
 
-def test_method_no_args_desugars():
+def test_method_no_args_desugars() -> None:
     assert _rewrite("y = x.transpose()") == "y = np.transpose(x)"
 
 
-def test_method_varargs_packs_into_tuple():
+def test_method_varargs_packs_into_tuple() -> None:
     assert _rewrite("y = x.transpose(1, 0)") == "y = np.transpose(x, (1, 0))"
 
 
-def test_method_tuple_arg_preserved():
+def test_method_tuple_arg_preserved() -> None:
     assert _rewrite("y = x.transpose((0, 2, 1))") == "y = np.transpose(x, (0, 2, 1))"
 
 
-def test_np_transpose_left_alone():
+def test_np_transpose_left_alone() -> None:
     assert _rewrite("y = np.transpose(x, (1, 0))") == "y = np.transpose(x, (1, 0))"
 
 
-def test_sparse_transpose_not_densified():
+def test_sparse_transpose_not_densified() -> None:
     # a sparse matrix's ``A.T`` / ``A.transpose()`` must stay a method so the
     # SpMV hoister can flip CSR<->CSC on its own buffers.
     assert _rewrite("y = A.T @ x", sparse=["A"]) == "y = A.T @ x"
@@ -89,13 +89,13 @@ def _parse(src, input_args, shapes, syms):
     return lower(parse_kernel(npy, p))
 
 
-def test_return_transpose_promotes_reversed_shape():
+def test_return_transpose_promotes_reversed_shape() -> None:
     kir = _parse("import numpy as np\ndef f(x):\n return x.T\n", ["x"], {"x": "(M, N)"}, {"M": 3, "N": 4})
     outs = [a for a in kir.arrays if a.is_output]
     assert len(outs) == 1 and tuple(outs[0].shape) == ("N", "M")
 
 
-def test_return_transpose_axes_promotes_permuted_shape():
+def test_return_transpose_axes_promotes_permuted_shape() -> None:
     kir = _parse(
         "import numpy as np\ndef f(x):\n return np.transpose(x, (0, 2, 1))\n",
         ["x"],
@@ -106,7 +106,7 @@ def test_return_transpose_axes_promotes_permuted_shape():
     assert len(outs) == 1 and tuple(outs[0].shape) == ("A", "C", "B")
 
 
-def test_tuple_return_with_transpose_promotes_both_into_outputs():
+def test_tuple_return_with_transpose_promotes_both_into_outputs() -> None:
     kir = _parse(
         "import numpy as np\ndef f(x, y):\n return x.T, y * 2\n",
         ["x", "y"],
@@ -122,7 +122,7 @@ def test_tuple_return_with_transpose_promotes_both_into_outputs():
 # --------------------------------------------------------------------------- #
 
 
-def _validate_native(src, x, expected, out_shape, shapes, syms):
+def _validate_native(src, x, expected, out_shape, shapes, syms) -> None:
     import _op_oracle as oo
     import numerical_oracle as no
 
@@ -156,12 +156,12 @@ def _validate_native(src, x, expected, out_shape, shapes, syms):
         assert st == "ok", f"{b}: {st}"
 
 
-def test_return_dot_T_matches_numpy_native():
+def test_return_dot_T_matches_numpy_native() -> None:
     x = np.arange(12, dtype=np.float64).reshape(3, 4)
     _validate_native("import numpy as np\ndef f(x):\n return x.T\n", x, x.T, (4, 3), {"x": "(M, N)"}, {"M": 3, "N": 4})
 
 
-def test_return_method_transpose_matches_numpy_native():
+def test_return_method_transpose_matches_numpy_native() -> None:
     x = np.arange(12, dtype=np.float64).reshape(3, 4)
     _validate_native(
         "import numpy as np\ndef f(x):\n return x.transpose(1, 0)\n",

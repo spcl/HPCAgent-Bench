@@ -49,14 +49,14 @@ EXPECTED = (
 
 
 @pytest.mark.parametrize("flavor,scored,build", EXPECTED)
-def test_a_flavor_scores_its_pipeline_and_builds_only_its_parents(flavor, scored, build):
+def test_a_flavor_scores_its_pipeline_and_builds_only_its_parents(flavor, scored, build) -> None:
     """A column pays for its own pipeline and nothing else. With the search rungs gone there is no
     parent to inherit, so anything extra in the build list is work no column asked for."""
     assert FRAMEWORK_META[flavor]["pipelines"] == scored
     assert needed_pipelines(scored) == build
 
 
-def test_every_pipeline_is_scored_by_exactly_one_flavor():
+def test_every_pipeline_is_scored_by_exactly_one_flavor() -> None:
     """Six pipelines, six columns, one each. A pipeline no flavor names is measured by nothing; a
     pipeline two flavors name makes two columns report the same number under different titles."""
     scored = [p for meta in FRAMEWORK_META.values() if meta.get("base") == "dace" for p in meta["pipelines"]]
@@ -65,7 +65,7 @@ def test_every_pipeline_is_scored_by_exactly_one_flavor():
     )
 
 
-def test_parents_come_before_children():
+def test_parents_come_before_children() -> None:
     """A pipeline deepcopies from its parent's OUTPUT, so an order inversion silently optimizes the
     wrong graph rather than raising."""
     for pipe in DACE_PIPELINES:
@@ -75,12 +75,12 @@ def test_parents_come_before_children():
             assert order.index(pipe.parent) < order.index(pipe.name)
 
 
-def test_unknown_pipeline_is_rejected():
+def test_unknown_pipeline_is_rejected() -> None:
     with pytest.raises(KeyError):
         needed_pipelines(("does_not_exist",))
 
 
-def test_only_canonicalize_columns_need_the_fork():
+def test_only_canonicalize_columns_need_the_fork() -> None:
     """The gate is derived from what a flavor RUNS, not from a second hand-maintained list."""
     every = framework_flavors("dace")
     gated = set(preflight.needs_canonicalize(every))
@@ -96,7 +96,7 @@ def test_only_canonicalize_columns_need_the_fork():
     assert "dace_cpu_canonicalize" in gated
 
 
-def test_every_dace_flavor_is_a_deterministic_column():
+def test_every_dace_flavor_is_a_deterministic_column() -> None:
     """A sweep refuses a column it cannot run, so a new flavor missing here fails at submission."""
     assert not preflight.check_deterministic(framework_flavors("dace"))
 
@@ -111,13 +111,13 @@ def test_every_dace_flavor_is_a_deterministic_column():
         ("numpy", ("numpy", None)),
     ],
 )
-def test_the_flat_name_splits_into_framework_and_flavor(flavor, expected):
+def test_the_flat_name_splits_into_framework_and_flavor(flavor, expected) -> None:
     """One name on the CLI, two columns in the DB -- so `GROUP BY framework` still gathers every
     DaCe row instead of scattering it across five names."""
     assert split_flavor(flavor) == expected
 
 
-def test_the_split_is_declared_not_parsed():
+def test_the_split_is_declared_not_parsed() -> None:
     """``dace_cpu_autoopt`` reads equally well as ``dace_cpu`` + ``autoopt`` or ``dace`` +
     ``cpu_parallel``; no underscore rule can tell them apart, so the entry states both halves.
 
@@ -141,7 +141,7 @@ def test_the_split_is_declared_not_parsed():
         ({"flavor": "cpu_autoopt", "column": "dace_cpu"}, "pair does not compose into the name"),
     ],
 )
-def test_a_malformed_flavor_entry_is_rejected_at_import(monkeypatch, broken, why):
+def test_a_malformed_flavor_entry_is_rejected_at_import(monkeypatch, broken, why) -> None:
     """Each of these writes a wrong GROUP BY key onto every row of a finished sweep."""
     entry = {k: v for k, v in {**FRAMEWORK_META["dace_cpu_autoopt"], **broken}.items() if v is not None}
     monkeypatch.setitem(FRAMEWORK_META, "dace_cpu_autoopt", entry)
@@ -149,7 +149,7 @@ def test_a_malformed_flavor_entry_is_rejected_at_import(monkeypatch, broken, why
         check_flavor_registry()
 
 
-def test_the_registry_as_shipped_is_valid():
+def test_the_registry_as_shipped_is_valid() -> None:
     check_flavor_registry()
     for name in FRAMEWORK_META:
         column, flavor = split_flavor(name)
@@ -157,7 +157,7 @@ def test_the_registry_as_shipped_is_valid():
         assert (flavor is None) or name == f"{column}_{flavor}"
 
 
-def test_ranks_per_node_splits_the_node():
+def test_ranks_per_node_splits_the_node() -> None:
     """Four co-resident ranks get a quarter of the threads each; one rank still gets the node."""
     whole = preflight.thread_env()
     quarter = preflight.thread_env(ranks_per_node=4)
@@ -166,7 +166,7 @@ def test_ranks_per_node_splits_the_node():
     assert preflight.thread_env(ranks_per_node=1) == whole
 
 
-def test_absent_shard_csvs_report_instead_of_tracebacking(tmp_path, capsys):
+def test_absent_shard_csvs_report_instead_of_tracebacking(tmp_path, capsys) -> None:
     """The rollup is handed a shell GLOB, which bash passes through verbatim when nothing matches.
 
     So "every rank died before writing a row" arrives as a path containing a `*`. It must say that
@@ -200,7 +200,7 @@ def _sweep_row(**overrides):
     return row
 
 
-def test_summarize_csv_separates_no_rows_from_a_real_failure_count(tmp_path, capsys):
+def test_summarize_csv_separates_no_rows_from_a_real_failure_count(tmp_path, capsys) -> None:
     """A missing/header-only CSV and a CSV with known failures must land on DIFFERENT signals: the
     caller has to tolerate "56 kernels ran, 3 are known-broken" (a real count) without also
     tolerating "the CSV does not exist because nothing ran" (NO_ROWS) -- collapsing both into the
@@ -226,7 +226,7 @@ def test_summarize_csv_separates_no_rows_from_a_real_failure_count(tmp_path, cap
     assert "1 CRASHES" in out
 
 
-def test_cmd_run_framework_summarize_maps_to_the_0_1_2_contract(tmp_path, monkeypatch, capsys):
+def test_cmd_run_framework_summarize_maps_to_the_0_1_2_contract(tmp_path, monkeypatch, capsys) -> None:
     """The CLI must not collapse summarize_csv's verdict into a plain 0/1: 0 all green, 1 a real
     measurement with known failures, 2 the sweep produced nothing (missing or header-only CSV). A
     CI gate that tolerates case 1 must never also tolerate case 2 landing on the same exit code."""
@@ -256,7 +256,7 @@ def test_cmd_run_framework_summarize_maps_to_the_0_1_2_contract(tmp_path, monkey
     assert cli.cmd_run_framework(types.SimpleNamespace(summarize=[str(all_green)])) == 0
 
 
-def test_both_build_modes_expose_the_commands_the_opt_report_replays(tmp_path):
+def test_both_build_modes_expose_the_commands_the_opt_report_replays(tmp_path) -> None:
     """The opt-report replays the compile command DaCe recorded; WHICH record exists is the build mode.
 
     ``compiler.build_mode=native`` -- what CI turns on for every job -- never runs CMake, so there is
@@ -289,7 +289,7 @@ def test_both_build_modes_expose_the_commands_the_opt_report_replays(tmp_path):
     assert recorded_compiles(tmp_path) == [(str(build), argv)]
 
 
-def test_the_build_cache_pins_are_applied_and_survive_a_hostile_conf():
+def test_the_build_cache_pins_are_applied_and_survive_a_hostile_conf() -> None:
     """``pin_build_caching`` exists for the same reason ``pin_cpp_standard`` does: a user's
     ``~/.dace.conf`` must not change what a graded baseline costs to build. Set every pin to the
     WRONG value first, so this fails if the function silently does nothing.
@@ -320,7 +320,7 @@ def test_the_build_cache_pins_are_applied_and_survive_a_hostile_conf():
             dace.Config.set(*key, value=original)
 
 
-def test_ccache_is_offered_to_cmake_without_depending_on_path_order():
+def test_ccache_is_offered_to_cmake_without_depending_on_path_order() -> None:
     """DaCe knows nothing about ccache, so it only helps if the compiler DRIVER is a shim.
     ``CMAKE_<LANG>_COMPILER_LAUNCHER`` asks for it explicitly instead of hoping /usr/lib/ccache
     sorts first on PATH. Skipped where ccache is genuinely absent -- that is a host fact, not a bug.
@@ -353,7 +353,7 @@ def test_ccache_is_offered_to_cmake_without_depending_on_path_order():
                 os.environ[key] = value
 
 
-def test_a_minted_size_symbol_is_bound_from_its_recorded_recipe(monkeypatch):
+def test_a_minted_size_symbol_is_bound_from_its_recorded_recipe(monkeypatch) -> None:
     """``m = N // 2`` is minted as a dace symbol so the frontend can prove shapes equal, but no
     array carries it and no manifest names it -- shape matching alone leaves it free, and the call
     then dies on ``Missing program argument "m"``. The emitter records the closed form; binding it
@@ -366,7 +366,7 @@ def test_a_minted_size_symbol_is_bound_from_its_recorded_recipe(monkeypatch):
     half = dace.symbol("m", dtype=dace.int64)
 
     @dace.program
-    def minted(a: dace.float64[N], out: dace.float64[half]):
+    def minted(a: dace.float64[N], out: dace.float64[half]) -> None:
         out[:] = a[0:half]
 
     impl = TimedCompiledSDFG(None, minted.to_sdfg(simplify=False), "minted")
@@ -386,7 +386,7 @@ def test_a_minted_size_symbol_is_bound_from_its_recorded_recipe(monkeypatch):
     assert got["m"] == 4, "the recipe was not evaluated over the already-bound symbols"
 
 
-def test_every_native_framework_declares_its_language_in_both_registries():
+def test_every_native_framework_declares_its_language_in_both_registries() -> None:
     """A native column missing from either mirror crashes per-kernel INSIDE the fork, so the sweep
     exits 0 having written one ``crash`` row per kernel. Measured: ``cpp`` lost 40 kernels that way."""
     from hpcagent_bench.autogen import NATIVE_FRAMEWORKS
@@ -401,7 +401,7 @@ def test_every_native_framework_declares_its_language_in_both_registries():
 
 
 @pytest.mark.parametrize("missing_from", ["autogen", "cpp_runtime"])
-def test_a_half_registered_native_framework_is_rejected_at_import(monkeypatch, missing_from):
+def test_a_half_registered_native_framework_is_rejected_at_import(monkeypatch, missing_from) -> None:
     """Registering the column here but in only one mirror is the exact shape the ``cpp`` bug had."""
     from hpcagent_bench import autogen
     from hpcagent_bench.benchmarks import cpp_runtime
@@ -413,7 +413,7 @@ def test_a_half_registered_native_framework_is_rejected_at_import(monkeypatch, m
         check_native_registry()
 
 
-def test_every_dace_symbol_a_pipeline_names_still_resolves():
+def test_every_dace_symbol_a_pipeline_names_still_resolves() -> None:
     """The pipelines import DaCe passes lazily, inside the builder, so a rename on the shared
     ``extended`` tree only surfaces when a column runs -- and there the ``ModuleNotFoundError`` is
     caught per kernel and reported as UNSUPPORTED, so the job exits 0 with an empty column.

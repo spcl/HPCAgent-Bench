@@ -13,6 +13,7 @@ true to what the real function does.
 """
 
 import types
+from typing import Any
 
 import pytest
 
@@ -22,28 +23,28 @@ _MISSING_NAME = "hpcagent_bench_test_definitely_absent_tool_9f3c1a"
 
 
 # --- _as_list: scalar/list normalization, shared by every pkgconfig/soname/header spec field ------
-def test_as_list_wraps_a_bare_scalar():
+def test_as_list_wraps_a_bare_scalar() -> None:
     assert discover_tools._as_list("libfoo.so") == ["libfoo.so"]
 
 
-def test_as_list_passes_a_list_through_unchanged():
+def test_as_list_passes_a_list_through_unchanged() -> None:
     assert discover_tools._as_list(["a", "b"]) == ["a", "b"]
 
 
-def test_as_list_of_empty_list_stays_empty():
+def test_as_list_of_empty_list_stays_empty() -> None:
     assert discover_tools._as_list([]) == []
 
 
 # --- _run_version: tries each version arg in order, stops at the first regex match ----------------
-def test_run_version_returns_none_when_no_version_args_are_given():
+def test_run_version_returns_none_when_no_version_args_are_given() -> None:
     assert discover_tools._run_version("anything", None) is None
     assert discover_tools._run_version("anything", []) is None
 
 
-def test_run_version_tries_args_in_order_and_stops_at_the_first_match(monkeypatch):
+def test_run_version_tries_args_in_order_and_stops_at_the_first_match(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
 
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd: list[str], capture_output: bool, text: bool, timeout: int) -> types.SimpleNamespace:
         calls.append(cmd)
         stdout = "tool version 3.14.1\n" if cmd[-1] == "--version" else ""
         return types.SimpleNamespace(stdout=stdout, stderr="")
@@ -57,9 +58,9 @@ def test_run_version_tries_args_in_order_and_stops_at_the_first_match(monkeypatc
     assert calls == [["tool", "-v"], ["tool", "--version"]]
 
 
-def test_run_version_returns_none_when_no_arg_yields_a_version(monkeypatch):
+def test_run_version_returns_none_when_no_arg_yields_a_version(monkeypatch: pytest.MonkeyPatch) -> None:
 
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd: list[str], capture_output: bool, text: bool, timeout: int) -> types.SimpleNamespace:
         return types.SimpleNamespace(stdout="", stderr="")
 
     monkeypatch.setattr(discover_tools, "subprocess", types.SimpleNamespace(run=fake_run))
@@ -67,16 +68,18 @@ def test_run_version_returns_none_when_no_arg_yields_a_version(monkeypatch):
 
 
 # --- detect_binary: absent-name degrade path (no mocking -- the name genuinely cannot resolve) ----
-def test_detect_binary_reports_not_found_for_a_name_that_cannot_exist():
+def test_detect_binary_reports_not_found_for_a_name_that_cannot_exist() -> None:
     assert discover_tools.detect_binary({"names": [_MISSING_NAME]}) == {"found": False}
 
 
-def test_detect_binary_found_path_picks_the_first_matching_name_and_lists_all_variants(monkeypatch):
+def test_detect_binary_found_path_picks_the_first_matching_name_and_lists_all_variants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
 
-    def fake_which(name):
+    def fake_which(name: str) -> str | None:
         return {"gcc-13": "/usr/bin/gcc-13", "gcc": "/usr/bin/gcc"}.get(name)
 
-    def fake_run_version(cmd, args):
+    def fake_run_version(cmd: str, args: list[str]) -> str:
         return "13.2.0"
 
     # Same rebind-the-name reasoning: shutil is shared process-wide, discover_tools's own
@@ -93,36 +96,36 @@ def test_detect_binary_found_path_picks_the_first_matching_name_and_lists_all_va
 
 
 # --- detect_library / detect_header: nothing declared, or nothing resolvable, is "not found" ------
-def test_detect_library_with_no_criteria_reports_not_found():
+def test_detect_library_with_no_criteria_reports_not_found() -> None:
     assert discover_tools.detect_library({}) == {"found": False}
 
 
-def test_detect_header_delegates_to_detect_library_on_the_header_field():
+def test_detect_header_delegates_to_detect_library_on_the_header_field() -> None:
     result = discover_tools.detect_header({"header": [f"{_MISSING_NAME}.h"]})
     assert result == {"found": False}
 
 
 # --- missing_for_target: the pure filter behind the CLI's --require exit code ----------------------
-def _report(**tools):
+def _report(**tools: dict[str, Any]) -> dict[str, Any]:
     return {"categories": {"compilers": tools}}
 
 
-def test_missing_for_target_lists_a_required_and_absent_tool():
+def test_missing_for_target_lists_a_required_and_absent_tool() -> None:
     report = _report(gcc={"found": True, "required_on": ["cpu"]}, nvcc={"found": False, "required_on": ["nvidia"]})
     assert discover_tools.missing_for_target(report, "nvidia") == ["nvcc"]
 
 
-def test_missing_for_target_excludes_a_found_tool_even_if_required():
+def test_missing_for_target_excludes_a_found_tool_even_if_required() -> None:
     report = _report(gcc={"found": True, "required_on": ["cpu"]})
     assert discover_tools.missing_for_target(report, "cpu") == []
 
 
-def test_missing_for_target_excludes_an_absent_but_optional_tool():
+def test_missing_for_target_excludes_an_absent_but_optional_tool() -> None:
     report = _report(clang={"found": False, "required_on": []})
     assert discover_tools.missing_for_target(report, "cpu") == []
 
 
-def test_missing_for_target_only_reports_tools_required_on_the_queried_target():
+def test_missing_for_target_only_reports_tools_required_on_the_queried_target() -> None:
     # Required on nvidia only -- must not show up when checking cpu or amd.
     report = _report(nvcc={"found": False, "required_on": ["nvidia"]})
     assert discover_tools.missing_for_target(report, "cpu") == []
@@ -130,18 +133,18 @@ def test_missing_for_target_only_reports_tools_required_on_the_queried_target():
     assert discover_tools.missing_for_target(report, "nvidia") == ["nvcc"]
 
 
-def test_missing_for_target_a_tool_required_on_several_targets_counts_for_each():
+def test_missing_for_target_a_tool_required_on_several_targets_counts_for_each() -> None:
     report = _report(cudnn={"found": False, "required_on": ["nvidia", "amd"]})
     assert discover_tools.missing_for_target(report, "nvidia") == ["cudnn"]
     assert discover_tools.missing_for_target(report, "amd") == ["cudnn"]
 
 
-def test_missing_for_target_on_an_empty_report_is_empty():
+def test_missing_for_target_on_an_empty_report_is_empty() -> None:
     assert discover_tools.missing_for_target({"categories": {}}, "cpu") == []
 
 
 @pytest.mark.parametrize("target", ["cpu", "nvidia", "amd"])
-def test_missing_for_target_scans_every_category_not_just_the_first(target):
+def test_missing_for_target_scans_every_category_not_just_the_first(target: str) -> None:
     report = {
         "categories": {
             "compilers": {"gcc": {"found": True, "required_on": ["cpu"]}},

@@ -53,7 +53,7 @@ def _driver(cmd) -> str:
 
 
 # --- build_mpi_executable_commands: pure command shape (no compiler needed) ---
-def test_build_commands_compile_each_source_and_link_executable():
+def test_build_commands_compile_each_source_and_link_executable() -> None:
     cmds = build_mpi_executable_commands([("c", Path("k.c"))], Path("d.c"), Path("bench"))
     assert len(cmds) == 3  # compile kernel, compile driver, link
     # the MPICH C wrapper is the default; each source compiles to an object.
@@ -65,12 +65,12 @@ def test_build_commands_compile_each_source_and_link_executable():
     assert "-o" in link and str(Path("bench")) in link
 
 
-def test_build_commands_cc_override_swaps_wrapper():
+def test_build_commands_cc_override_swaps_wrapper() -> None:
     cmds = build_mpi_executable_commands([("c", Path("k.c"))], Path("d.c"), Path("bench"), cc_override={"c": "mpicc"})
     assert all(_driver(argv) == "mpicc" for argv in cmds)  # OpenMPI wrapper for a matching launcher
 
 
-def test_build_commands_fortran_kernel_links_with_fortran_driver():
+def test_build_commands_fortran_kernel_links_with_fortran_driver() -> None:
     # A Fortran kernel + the always-C driver -> link with the Fortran wrapper (pulls libgfortran).
     cmds = build_mpi_executable_commands([("fortran", Path("k.f90"))], Path("d.c"), Path("bench"))
     assert _driver(cmds[0]) == "mpifort.mpich"  # kernel compiled with the Fortran wrapper
@@ -78,18 +78,18 @@ def test_build_commands_fortran_kernel_links_with_fortran_driver():
     assert _driver(cmds[-1]) == "mpifort.mpich"  # link driver = Fortran
 
 
-def test_build_commands_baseline_flows_from_matrix_no_literal_flags():
+def test_build_commands_baseline_flows_from_matrix_no_literal_flags() -> None:
     cmds = build_mpi_executable_commands([("c", Path("k.c"))], Path("d.c"), Path("bench"))
     # -O3/-march come from the matrix baseline, never hard-coded in the yaml template.
     assert any("-O3" in tok for tok in cmds[0])
 
 
-def test_build_commands_empty_sources_raises():
+def test_build_commands_empty_sources_raises() -> None:
     with pytest.raises(ValueError, match="no kernel sources"):
         build_mpi_executable_commands([], Path("d.c"), Path("bench"))
 
 
-def test_build_commands_device_routes_driver_and_link_to_gpu_compiler():
+def test_build_commands_device_routes_driver_and_link_to_gpu_compiler() -> None:
     # Device residency: CUDA kernel + driver both compile with nvcc; the link is nvcc too, not the C wrapper.
     cmds = build_mpi_executable_commands([("cuda", Path("k.cu"))], Path("d.cu"), Path("bench"), driver_lang="cuda")
     assert _driver(cmds[0]) == "nvcc" and str(Path("k.cu")) in cmds[0]  # kernel via nvcc
@@ -97,7 +97,7 @@ def test_build_commands_device_routes_driver_and_link_to_gpu_compiler():
     assert _driver(cmds[-1]) == "nvcc" and "-shared" not in " ".join(cmds[-1])  # link exe with nvcc
 
 
-def test_mpi_wrapper_flags_extracts_include_and_link():
+def test_mpi_wrapper_flags_extracts_include_and_link() -> None:
     # MPICH's `-show` carries -I<include> (compile) and -L/-l<lib> (link); kept so nvcc/hipcc can build MPI code.
     from hpcagent_bench.languages import mpi_wrapper_flags
 
@@ -109,38 +109,38 @@ def test_mpi_wrapper_flags_extracts_include_and_link():
     assert not any(t.startswith("-Wl,") for t in link)  # wrapper hardening dropped (nvcc rejects it)
 
 
-def test_mpi_wrapper_flags_missing_wrapper_is_empty():
+def test_mpi_wrapper_flags_missing_wrapper_is_empty() -> None:
     from hpcagent_bench.languages import mpi_wrapper_flags
 
     assert mpi_wrapper_flags("definitely-not-a-real-compiler-xyz") == ([], [])
 
 
 # --- with_oversubscribe: family-aware, idempotent launcher rewrite (pure, no launch) ---
-def test_oversubscribe_no_op_for_mpich_hydra():
+def test_oversubscribe_no_op_for_mpich_hydra() -> None:
     # Hydra oversubscribes by default and rejects --oversubscribe (OpenMPI-only), so it stays untouched.
     assert mpi_call.with_oversubscribe(["mpiexec.mpich", "-n"]) == ["mpiexec.mpich", "-n"]
     assert mpi_call.with_oversubscribe(["mpiexec", "-n"]) == ["mpiexec", "-n"]
 
 
-def test_oversubscribe_adds_flag_for_openmpi_mpirun():
+def test_oversubscribe_adds_flag_for_openmpi_mpirun() -> None:
     # OpenMPI's mpirun REFUSES to oversubscribe without the flag; insert it before the -n tail.
     assert mpi_call.with_oversubscribe(["mpirun", "-n"]) == ["mpirun", "--oversubscribe", "-n"]
     assert mpi_call.with_oversubscribe(["mpirun.openmpi", "-n"]) == ["mpirun.openmpi", "--oversubscribe", "-n"]
 
 
-def test_oversubscribe_is_idempotent():
+def test_oversubscribe_is_idempotent() -> None:
     already = ["mpirun", "--oversubscribe", "-n"]
     assert mpi_call.with_oversubscribe(already) == already
 
 
-def test_oversubscribe_leaves_srun_to_the_scheduler():
+def test_oversubscribe_leaves_srun_to_the_scheduler() -> None:
     # srun oversubscription is a site allocation concern (--overcommit), not this runner's job.
     assert mpi_call.with_oversubscribe(["srun", "--mpi=pmi2", "-n"]) == ["srun", "--mpi=pmi2", "-n"]
     assert mpi_call.with_oversubscribe([]) == []
 
 
 # --- Sandbox.build_mpi: delivery handling ---
-def test_build_mpi_any_delivery_unsupported():
+def test_build_mpi_any_delivery_unsupported() -> None:
     b = _yax_binding()
     sub = Submission(language="c", library="/tmp/does-not-matter.so")
     with Sandbox(b) as sb:
@@ -148,7 +148,7 @@ def test_build_mpi_any_delivery_unsupported():
     assert not res.ok and "not supported" in res.log
 
 
-def test_build_mpi_python_delivery_stashes_module():
+def test_build_mpi_python_delivery_stashes_module() -> None:
     b = _yax_binding()
     sub = Submission(language="python", source="def kernel_mpi(*a, **k): pass\n")
     with Sandbox(b) as sb:
@@ -157,7 +157,7 @@ def test_build_mpi_python_delivery_stashes_module():
         assert res.lib.read_text().startswith("def kernel_mpi")
 
 
-def test_build_mpi_device_rejects_non_gpu_kernel():
+def test_build_mpi_device_rejects_non_gpu_kernel() -> None:
     # A GPU-located array delivers device pointers, so a plain C kernel_mpi is a clean build failure.
     b = _yax_binding()
     sub = Submission(language="c", source=_C_KERNEL)
@@ -170,7 +170,7 @@ _CUDA_HOST_TU = 'extern "C" void yax_mpi_launch(void);\n'
 _CUDA_DEVICE_TU = "__global__ void yax_k(void) {}\n"
 
 
-def test_build_mpi_writes_both_gpu_translation_units():
+def test_build_mpi_writes_both_gpu_translation_units() -> None:
     """Asserted on DISK, not on the build result, so a runner with no nvcc still grades it.
 
     This path wrote only ``source``, under the name the DEVICE unit owns: the kernels were dropped
@@ -190,7 +190,7 @@ def test_build_mpi_writes_both_gpu_translation_units():
 
 
 # --- End to end: build -> scatter -> launch -> gather (gated on a working MPI toolchain) ---
-def test_build_mpi_and_run_round_trip(tmp_path):
+def test_build_mpi_and_run_round_trip(tmp_path) -> None:
     tc = c_toolchain()
     if tc is None:
         pytest.skip(f"no working MPI C compiler + launcher in this environment: {c_toolchain_diagnosis()}")
@@ -213,7 +213,7 @@ def test_build_mpi_and_run_round_trip(tmp_path):
     assert native_ns >= 0
 
 
-def test_run_nonzero_exit_is_scored_runtimeerror(tmp_path):
+def test_run_nonzero_exit_is_scored_runtimeerror(tmp_path) -> None:
     tc = c_toolchain()
     if tc is None:
         pytest.skip(f"no working MPI launcher in this environment: {c_toolchain_diagnosis()}")
@@ -244,7 +244,7 @@ def _cuda_available() -> bool:
         return False
 
 
-def test_program_argv_python_forwards_device_mask_only_for_device():
+def test_program_argv_python_forwards_device_mask_only_for_device() -> None:
     """`--device-mask <csv>` rides the mpi4py invocation only when some array is device; C never carries it."""
     art, inf, out = Path("/x/bench"), Path("/t/in.bin"), Path("/t/out.bin")
     host = mpi_call._program_argv(art, inf, out, is_python=True, python_exe="py", grid_dims=(4,), device_mask=())
@@ -255,7 +255,7 @@ def test_program_argv_python_forwards_device_mask_only_for_device():
     assert c == ["/x/bench", "/t/in.bin", "/t/out.bin"]  # the mask never leaks into the C program tail
 
 
-def test_stage_host_returns_numpy_and_sizes_workspace():
+def test_stage_host_returns_numpy_and_sizes_workspace() -> None:
     """`_stage` all-host path: compute tiles are the scattered host arrays; workspace is None if 0-byte."""
     from hpcagent_bench.harness import mpi_py_driver
 
@@ -266,7 +266,7 @@ def test_stage_host_returns_numpy_and_sizes_workspace():
     assert ws2.shape == (32,) and ws2.dtype == np.uint8
 
 
-def test_stage_device_mask_copies_only_selected_tiles():
+def test_stage_device_mask_copies_only_selected_tiles() -> None:
     """`_stage` per-array path: only tiles in `on_device` become cupy (H2D); host-located tiles stay numpy."""
     if not _cuda_available():
         pytest.skip("no CUDA device / cupy")

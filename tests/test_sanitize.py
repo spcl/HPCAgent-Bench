@@ -62,7 +62,7 @@ def relu(a):
 # --------------------------------------------------------------------------- #
 
 
-def test_strip_comments_c_removes_all_comments():
+def test_strip_comments_c_removes_all_comments() -> None:
     out = strip_comments(C_SRC, "c")
     # (a bare ``//`` survives inside the string literal asserted below; we check
     # that comment *content* is gone rather than the comment delimiters.)
@@ -79,7 +79,7 @@ def test_strip_comments_c_removes_all_comments():
     assert "double helper(double x)" in out
 
 
-def test_strip_comments_python_removes_comments_and_keeps_strings():
+def test_strip_comments_python_removes_comments_and_keeps_strings() -> None:
     out = strip_comments(PY_SRC, "python")
     assert "# top comment" not in out
     assert "# double it" not in out
@@ -114,7 +114,7 @@ def spmv(a):
 """
 
 
-def test_ported_kernel_keeps_attribution_header():
+def test_ported_kernel_keeps_attribution_header() -> None:
     """A microapp's leading CC-BY / license block is preserved VERBATIM (the
     license requires the notice to survive redistribution); only the body is
     stripped -- so the whole leading block, not just the marked line, stays."""
@@ -124,7 +124,7 @@ def test_ported_kernel_keeps_attribution_header():
     assert "hint: fuse" not in out  # body comment still stripped
 
 
-def test_synthetic_kernel_header_fully_stripped():
+def test_synthetic_kernel_header_fully_stripped() -> None:
     """A synthetic microkernel has no license header, so its leading description
     comment is stripped like any other comment (nothing to attribute)."""
     out = strip_comments(MICROKERNEL_PY, "python")
@@ -133,7 +133,7 @@ def test_synthetic_kernel_header_fully_stripped():
     assert "def spmv(a):" in out
 
 
-def test_c_license_block_preserved():
+def test_c_license_block_preserved() -> None:
     """A multi-line C ``/* ... */`` license header survives; body comments do not."""
     src = (
         "/*\n * Copyright 2020 The Authors.\n"
@@ -146,7 +146,7 @@ def test_c_license_block_preserved():
     assert "drop me" not in out
 
 
-def test_description_below_notice_is_stripped():
+def test_description_below_notice_is_stripped() -> None:
     """A description block separated from the license by a blank comment line (the
     force_lj pattern) is NOT preserved -- only the notice itself survives."""
     src = (
@@ -162,7 +162,7 @@ def test_description_below_notice_is_stripped():
     assert "f_pair = 48" not in out  # the description/formula below the blank `#` is stripped
 
 
-def test_c_preprocessor_after_license_not_leaked():
+def test_c_preprocessor_after_license_not_leaked() -> None:
     """A C `#include` / `*ptr` line after a `//` license is CODE, not header (# and *
     are not C comment starts), so its trailing comment is stripped."""
     src = (
@@ -176,7 +176,7 @@ def test_c_preprocessor_after_license_not_leaked():
     assert "secret" not in out
 
 
-def test_paren_c_only_notice_preserved():
+def test_paren_c_only_notice_preserved() -> None:
     """A notice whose only marker is the ASCII `(c)` is detected and preserved."""
     out = strip_comments("# (c) 2020 Jane Doe. Redistribution permitted.\nimport numpy as np\n", "python")
     assert "(c) 2020 Jane Doe" in out
@@ -187,7 +187,7 @@ def test_paren_c_only_notice_preserved():
 # --------------------------------------------------------------------------- #
 
 
-def test_build_name_map_ordering_and_precedence():
+def test_build_name_map_ordering_and_precedence() -> None:
     nm = build_name_map(["relu", "conv"], ["helper", "pad", "relu"])
     assert nm["relu"] == "kernel1"
     assert nm["conv"] == "kernel2"
@@ -197,7 +197,7 @@ def test_build_name_map_ordering_and_precedence():
     assert nm["relu"] == "kernel1"
 
 
-def test_build_name_map_dedups():
+def test_build_name_map_dedups() -> None:
     nm = build_name_map(["relu", "relu"], ["helper", "helper"])
     assert nm["relu"] == "kernel1"
     assert nm["helper"] == "f1"
@@ -209,7 +209,7 @@ def test_build_name_map_dedups():
 # --------------------------------------------------------------------------- #
 
 
-def test_mangle_c_consistent_and_boundary_safe():
+def test_mangle_c_consistent_and_boundary_safe() -> None:
     name_map = build_name_map(["relu"], ["helper"])
     stripped = strip_comments(C_SRC, "c")
     out = mangle(stripped, "c", name_map)
@@ -227,7 +227,7 @@ def test_mangle_c_consistent_and_boundary_safe():
     assert "int64_t" in out
 
 
-def test_mangle_does_not_touch_strings_or_substrings():
+def test_mangle_does_not_touch_strings_or_substrings() -> None:
     name_map = build_name_map(["relu"], ["helper"])
     stripped = strip_comments(C_SRC, "c")
     out = mangle(stripped, "c", name_map)
@@ -235,7 +235,7 @@ def test_mangle_does_not_touch_strings_or_substrings():
     assert "relu stays in this string" in out
 
 
-def test_mangle_substring_not_corrupted():
+def test_mangle_substring_not_corrupted() -> None:
     # "relu" must not be rewritten inside "relufoo" or "prerelu".
     src = "int relu; int relufoo; int prerelu;"
     name_map = build_name_map(["relu"], [])
@@ -247,7 +247,7 @@ def test_mangle_substring_not_corrupted():
     assert "prekernel1" not in out
 
 
-def test_mangle_python_consistent():
+def test_mangle_python_consistent() -> None:
     name_map = build_name_map(["relu"], ["helper"])
     stripped = strip_comments(PY_SRC, "python")
     out = mangle(stripped, "python", name_map)
@@ -267,7 +267,7 @@ def test_mangle_python_consistent():
 
 
 @pytest.mark.skipif(shutil.which("gcc") is None, reason="gcc not available")
-def test_mangled_c_still_compiles():
+def test_mangled_c_still_compiles() -> None:
     name_map = build_name_map(["relu"], ["helper"])
     stripped = strip_comments(C_SRC, "c")
     out = mangle(stripped, "c", name_map)
@@ -287,7 +287,7 @@ def test_mangled_c_still_compiles():
     importlib.util.find_spec("tree_sitter_language_pack") is None,
     reason="tree-sitter (tree-sitter-language-pack) not installed",
 )
-def test_tree_sitter_path_used_when_available():
+def test_tree_sitter_path_used_when_available() -> None:
     assert TREE_SITTER is True
     # Comment strip + mangle still satisfy the core contract on the ts path.
     out = mangle(strip_comments(C_SRC, "c"), "c", build_name_map(["relu"], ["helper"]))
@@ -304,7 +304,7 @@ def test_tree_sitter_path_used_when_available():
     assert "relu stays in this string // not a comment" in out
 
 
-def test_unsupported_lang_rejected():
+def test_unsupported_lang_rejected() -> None:
     with pytest.raises(ValueError):
         strip_comments("x", "haskell")
     with pytest.raises(ValueError):

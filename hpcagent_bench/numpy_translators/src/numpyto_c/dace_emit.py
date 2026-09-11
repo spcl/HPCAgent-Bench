@@ -6,7 +6,7 @@ import dataclasses
 import functools
 import itertools
 import re
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from numpyto_common import dtypes
 from numpyto_common.frontend import fold_shape_expr
@@ -22,7 +22,7 @@ _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 class _ShapeToSymbol(ast.NodeTransformer):
     """Replace each <array>.shape[<const k>] with the array's k-th declared symbolic shape token."""
 
-    def __init__(self, arr_shapes: Dict[str, List[str]]):
+    def __init__(self, arr_shapes: Dict[str, List[str]]) -> None:
         self.arr_shapes = arr_shapes
 
     def visit_Subscript(self, node: ast.Subscript):
@@ -58,7 +58,7 @@ class SplitTupleAssign(ast.NodeTransformer):
     binds.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.temporaries = 0
 
     def visit_Assign(self, node: ast.Assign):
@@ -123,7 +123,7 @@ class SplitTupleAssign(ast.NodeTransformer):
 class _DropSymbolAssign(ast.NodeTransformer):
     """Drop <sym> = ... where <sym> is a declared size symbol (dace symbols are immutable)."""
 
-    def __init__(self, symbols):
+    def __init__(self, symbols) -> None:
         self.symbols = set(symbols)
 
     def visit_Assign(self, node: ast.Assign):
@@ -141,7 +141,7 @@ class _ResolveZeros(ast.NodeTransformer):
         zeros_fills: Dict[str, str],
         local_dtypes: Dict[str, str],
         default_dtype: str,
-    ):
+    ) -> None:
         self.zeros_locals = zeros_locals
         self.zeros_fills = zeros_fills
         self.local_dtypes = local_dtypes
@@ -220,7 +220,7 @@ class _AnnotateEmptyDtype(ast.NodeTransformer):
     precision-driven float global reproduces that default rather than guessing one.
     """
 
-    def __init__(self, dtype_expr: str):
+    def __init__(self, dtype_expr: str) -> None:
         self.dtype_expr = dtype_expr
 
     def visit_Call(self, node: ast.Call):
@@ -266,7 +266,7 @@ class _FillOutputParamRealloc(ast.NodeTransformer):
     miscompile rather than the missed write it replaces.
     """
 
-    def __init__(self, shapes: Dict[str, List[str]]):
+    def __init__(self, shapes: Dict[str, List[str]]) -> None:
         self.shapes = shapes
 
     def visit_Assign(self, node: ast.Assign):
@@ -387,7 +387,7 @@ _FRAMEWORK_DTYPE_TO_DACE = {"np_float": "dc_float", "np_complex": "dc_complex_fl
 class _RewriteFrameworkDtype(ast.NodeTransformer):
     """Rewrite leaked np_float/np_complex tokens to the dace precision global; tracks complex usage for the import."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.used_complex = False
 
     def visit_Name(self, node: ast.Name):
@@ -434,7 +434,7 @@ class RewriteBuiltinDtype(ast.NodeTransformer):
     emitter declares, so the fp32 leg does not allocate an fp64 workspace.
     """
 
-    def __init__(self, float_dtype: str):
+    def __init__(self, float_dtype: str) -> None:
         self.float_dtype = float_dtype
 
     def visit_keyword(self, node: ast.keyword):
@@ -451,7 +451,7 @@ class RewriteBuiltinDtype(ast.NodeTransformer):
 class _TernaryValueHoister(ast.NodeTransformer):
     """Hoist each ternary-used-as-value to a scalar temp assigned by a guarding if/else appended to prelude."""
 
-    def __init__(self, owner: "_DesugarTernary", prelude: List[ast.stmt]):
+    def __init__(self, owner: "_DesugarTernary", prelude: List[ast.stmt]) -> None:
         self.owner = owner
         self.prelude = prelude
 
@@ -472,7 +472,7 @@ class _TernaryValueHoister(ast.NodeTransformer):
 class _DesugarTernary(ast.NodeTransformer):
     """Lower a ternary (assignment RHS or nested value) to the if/else statement dace's frontend accepts."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.ctr = 0
 
     def visit_FunctionDef(self, node: ast.FunctionDef):
@@ -519,7 +519,7 @@ class _DesugarTernary(ast.NodeTransformer):
 class _MethodReceiverHoister(ast.NodeTransformer):
     """Bind a method call's non-Name receiver to a temp, appended to ``prelude``."""
 
-    def __init__(self, owner: "BindMethodReceiver", prelude: List[ast.stmt]):
+    def __init__(self, owner: "BindMethodReceiver", prelude: List[ast.stmt]) -> None:
         self.owner = owner
         self.prelude = prelude
 
@@ -554,7 +554,7 @@ class BindMethodReceiver(ast.NodeTransformer):
     before the loop would freeze the first value. That construct stays refused, which is honest.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.ctr = 0
 
     def visit_FunctionDef(self, node: ast.FunctionDef):
@@ -612,7 +612,7 @@ class DropIdentityAsarray(ast.NodeTransformer):
     keeps its call: there the constructor is doing real work.
     """
 
-    def __init__(self, ranks: Dict[str, int]):
+    def __init__(self, ranks: Dict[str, int]) -> None:
         self.ranks = ranks
 
     def visit_Call(self, node: ast.Call):
@@ -684,7 +684,7 @@ class ResolveInferredReshape(ast.NodeTransformer):
     guessed at.
     """
 
-    def __init__(self, arr_shapes: Dict[str, List[str]]):
+    def __init__(self, arr_shapes: Dict[str, List[str]]) -> None:
         self.arr_shapes = arr_shapes
 
     def visit_Call(self, node: ast.Call):
@@ -954,7 +954,7 @@ def negative_step(step: ast.expr) -> bool:
 class _DesugarArrayIteration(ast.NodeTransformer):
     """Rewrite 'for x in array' to an indexed range form -- dace's frontend rejects element iteration over an array."""
 
-    def __init__(self, arr_shapes: Dict[str, List[str]]):
+    def __init__(self, arr_shapes: Dict[str, List[str]]) -> None:
         self.arr_shapes = arr_shapes
         self.ctr = 0
 
@@ -980,7 +980,7 @@ class _DesugarArrayIteration(ast.NodeTransformer):
 class _FlipReplacer(ast.NodeTransformer):
     """Replace a materialisable np.flip(base[lo:hi]) with a reversing-copy workspace slice, via the owner."""
 
-    def __init__(self, owner: "_MaterializeDynamicFlip", prelude: List[ast.stmt]):
+    def __init__(self, owner: "_MaterializeDynamicFlip", prelude: List[ast.stmt]) -> None:
         self.owner = owner
         self.prelude = prelude
 
@@ -995,7 +995,7 @@ class _FlipReplacer(ast.NodeTransformer):
 class _MaterializeDynamicFlip(ast.NodeTransformer):
     """Materialise a dynamic-length np.flip into a fixed-extent reversing-copy workspace -- dace rejects a View there."""
 
-    def __init__(self, arr_shapes: Dict[str, List[str]], arr_dtypes: Dict[str, str], symbols: set):
+    def __init__(self, arr_shapes: Dict[str, List[str]], arr_dtypes: Dict[str, str], symbols: set) -> None:
         self.arr_shapes = arr_shapes
         self.arr_dtypes = arr_dtypes
         self.symbols = set(symbols)
@@ -1180,7 +1180,7 @@ class PointwiseScatterToLoop(ast.NodeTransformer):
     :class:`numpyto_common.numpy_desugar._IxWriteToLoop` carries, and undetectable statically.
     """
 
-    def __init__(self, ranks: Dict[str, int]):
+    def __init__(self, ranks: Dict[str, int]) -> None:
         self.ranks = ranks
         self.ctr = 0
 
@@ -1239,7 +1239,7 @@ class PointwiseScatterToLoop(ast.NodeTransformer):
 class _DesugarBroadcastAugAssign(ast.NodeTransformer):
     """Rewrite 'A <op>= b' to 'A[:] = A <op> b' -- dace builds an invalid SDFG for a broadcasting in-place augassign."""
 
-    def __init__(self, array_names: set):
+    def __init__(self, array_names: set) -> None:
         self.array_names = set(array_names)
 
     def visit_AugAssign(self, node: ast.AugAssign):
@@ -1292,7 +1292,7 @@ class _DesugarChainedAssign(ast.NodeTransformer):
     the unroll factor. Repeating the literal is what the reference already means.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.ctr = 0
 
     def visit_Assign(self, node: ast.Assign):
@@ -1317,7 +1317,7 @@ class _DesugarChainedAssign(ast.NodeTransformer):
 class _SubstituteNames(ast.NodeTransformer):
     """Replace every load of a name in ``mapping`` with a copy of its expression."""
 
-    def __init__(self, mapping: Dict[str, ast.AST]):
+    def __init__(self, mapping: Dict[str, ast.AST]) -> None:
         self.mapping = mapping
 
     def visit_Name(self, node: ast.Name):
@@ -1329,7 +1329,7 @@ class _SubstituteNames(ast.NodeTransformer):
 class _DropAliasAssign(ast.NodeTransformer):
     """Drop ``<name> = ...`` for each inlined alias name (its uses are substituted)."""
 
-    def __init__(self, names):
+    def __init__(self, names) -> None:
         self.names = set(names)
 
     def visit_Assign(self, node: ast.Assign):
@@ -1690,7 +1690,7 @@ class ResolveShapeReads(ast.NodeTransformer):
     extent was read as axis 0's.
     """
 
-    def __init__(self, shapes: Dict[str, List[str]]):
+    def __init__(self, shapes: Dict[str, List[str]]) -> None:
         self.shapes: Dict[str, List[str]] = {k: [fold_shape_expr(t) for t in v] for k, v in shapes.items()}
         self.aliases: Dict[str, ast.AST] = {}
         self.alias_seen: set = set()
@@ -2167,7 +2167,7 @@ class _CopyScalarAlias(ResolveShapeReads):
     infer is left alone -- an invented copy on a rank it guessed wrong is a miscompile.
     """
 
-    def __init__(self, shapes: Dict[str, List[str]], floats: set, skip: set):
+    def __init__(self, shapes: Dict[str, List[str]], floats: set, skip: set) -> None:
         super().__init__(shapes)
         self.floats = floats
         self.skip = skip
@@ -2300,7 +2300,7 @@ class HoistCompoundExtents(ast.NodeTransformer):
     anything else would move a read above its write.
     """
 
-    def __init__(self, known: set):
+    def __init__(self, known: set) -> None:
         self.known = known
         self.names: Dict[str, str] = {}
         self.plan: List = []  # (index of the top-level statement to define before, name, expression)
@@ -2397,7 +2397,7 @@ def shape_reaching_names(body: ast.AST, direct: set) -> set:
 class SubstituteScalarValues(ast.NodeTransformer):
     """Replace every READ of a named scalar with its literal value."""
 
-    def __init__(self, values: Dict[str, int]):
+    def __init__(self, values: Dict[str, int]) -> None:
         self.values = values
 
     def visit_Name(self, node: ast.Name):
@@ -2784,7 +2784,7 @@ class LowerCallsDaceCannotReplace(ast.NodeTransformer):
     extents these emit are resolved with every other one.
     """
 
-    def __init__(self, ranks: Dict[str, int], complex_arrays: Optional[Set[str]] = None):
+    def __init__(self, ranks: Dict[str, int], complex_arrays: Optional[Set[str]] = None) -> None:
         self.ranks = ranks
         self.complex_arrays = complex_arrays or set()
         self.counter = 0
@@ -3225,7 +3225,7 @@ def _plan_size_promotion(fn_ast: ast.AST, known: set, symbols: set | None = None
 class _SplitReassignedSize(ast.NodeTransformer):
     """Split a size symbol the body also reassigns: keep the symbol for allocation, route other uses through <name>_iter."""
 
-    def __init__(self, names):
+    def __init__(self, names) -> None:
         self.names = set(names)
         self._defined = set()  # first assignment per name = the (dropped) def
         self._in_alloc_shape = False
@@ -3310,7 +3310,7 @@ def sympy_reserved(name: str) -> bool:
 class RenameNames(ast.NodeTransformer):
     """Rewrite renamed identifiers wherever they appear -- loads, stores and arguments alike."""
 
-    def __init__(self, renames: Dict[str, str]):
+    def __init__(self, renames: Dict[str, str]) -> None:
         self.renames = renames
 
     def visit_Name(self, node: ast.Name):
@@ -3379,19 +3379,33 @@ def called_helpers(body: List[ast.stmt], helpers) -> OrderedSet:
     return called
 
 
-def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
-    """Return the source of a ``<short>_dace.py`` module for ``kir``.
+@dataclasses.dataclass(slots=True)
+class RenderedProgram:
+    """One ``@dc.program``: its signature and body, plus what the MODULE has to declare for it.
 
-    Refuses a body that still CALLS a kept helper. The emitted module is one ``@dc.program`` built
-    from ``kir.tree`` alone, so such a call survives as a name the module never binds and the
-    frontend answers ``Use of undefined variable "relu"`` -- at PARSE time, long after the emit
-    reported success. Raising instead puts the decision back where it is retryable:
-    :func:`numpyto_common.frontend.emit_with_inline_fallback` re-renders with the helpers inlined,
-    which is a form this emitter can express. The C and Fortran legs are unaffected -- they emit a
-    real function per helper, which is why the un-inlined form exists. The test is the CALL and not
-    ``kir.helpers``: a kernel whose helpers were all folded into the body during lowering keeps
-    the un-inlined parse, whose symbol promotion is the better one (gmres' ``max_iter`` stays a
-    runtime argument there and becomes a dc.symbol under inlining).
+    A module holds the kernel program and one program per kept helper, so the declarations are
+    pooled: symbols, pinned constants and the renames a sympy collision forced are module-level
+    facts, while ``params`` and ``body`` are the program's own.
+    """
+
+    name: str
+    params: List[str]
+    body: List[ast.stmt]
+    symbol_names: List[str]
+    #: Per-dimension binding recipe, evaluated by the CALLER. Only the kernel program has one --
+    #: a helper's extents come from the shapes its call site passes, which dace resolves itself.
+    symbol_defs: List[Tuple[str, str]]
+    renames: Dict[str, str]
+    pinned: Dict[str, Any]
+    needs_complex: bool
+
+
+def render_program(kir: KernelIR, fn_name: str | None = None) -> RenderedProgram:
+    """Lower ``kir``'s body into the form dace's frontend parses, and return it with its signature.
+
+    Shared by the kernel and by every kept helper: a helper is a ``@dc.program`` of its own, so it
+    needs the same desugaring, the same shape-read resolution and the same symbol promotion, and
+    running it through a second code path would let the two drift.
     """
     if names_logical_sparse(kir):
         kir = lower(kir)
@@ -3623,13 +3637,6 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
         and isinstance(body[0].value.value, str)
     ):
         body = body[1:]
-    unbound = called_helpers(body, kir.helpers)
-    if unbound:
-        raise ValueError(
-            f"{kir.kernel_name}: the DaCe module is one @dc.program and binds no helper, "
-            f"but the body calls {sorted(unbound)}; render it inlined"
-        )
-
     # A bound name that collides with a sympy callable is not a variable to dace (see
     # sympy_reserved). Rename every one of them and record the map: the emitted program is the only
     # place the new spelling exists, so the caller has to rewrite its keyword arguments to match.
@@ -3667,11 +3674,202 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
         named |= {ident for param in params for ident in _IDENT_RE.findall(param)}
         pinned = {n: v for n, v in pinned.items() if n in named}
 
+    return RenderedProgram(
+        name=name,
+        params=params,
+        body=body,
+        symbol_names=symbol_names,
+        symbol_defs=symbol_defs,
+        renames=renames,
+        pinned=pinned,
+        needs_complex=needs_complex or framework_dtype.used_complex,
+    )
+
+
+def helper_call_bindings(
+    owner: ast.FunctionDef, hkir: KernelIR, pinned: Dict[str, Any]
+) -> Tuple[Dict[str, str], Dict[str, Any]]:
+    """What the helper's call site says about its symbols: ``(aliases, constants)``.
+
+    * ALIASES ``{caller's name for an extent: the helper's own name for it}``. A helper's
+      descriptors spell its extents in the CALLER's vocabulary, because the C and Fortran legs emit
+      those extents as constants and the caller is where the constant is known. A dace program is
+      shape-generic instead: ``_conv2d``'s body names ``n``, ``h``, ``w``, and a signature naming
+      ``batch_size``, ``height``, ``width`` for the same dimensions hands the frontend two symbol
+      sets it cannot prove equal -- "could not broadcast [batch_size, 3, height, width] into
+      [n, 3, h, w]". Adopting the helper's own name makes each extent inferable from its argument.
+    * CONSTANTS ``{the helper's name: the pinned value}``, for a symbol the call binds to one of
+      the kernel's pinned config knobs. Passed as a symbol it stays free while the callee is
+      parsed, so ``(length + 2 * padding - kernel_size) // stride + 1`` never folds to ``length``
+      and the write into a ``[n, c, length]`` out-param is refused. A pinned knob is a
+      compile-time constant in the helper for the same reason it is one in the kernel.
+    """
+    for node in ast.walk(owner):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == hkir.kernel_name):
+            continue
+        abi = hkir.abi_param_order()
+        if node.keywords or len(node.args) != len(abi):
+            return {}, {}
+        own = {s.name for s in hkir.symbols}
+        aliases: Dict[str, str] = {}
+        constants: Dict[str, Any] = {}
+        for pname, arg in zip(abi, node.args):
+            # A bare Name only: the helper's name stands for THIS extent, and an expression is not
+            # one the helper has a name for.
+            if pname not in own or not isinstance(arg, ast.Name):
+                continue
+            if arg.id in pinned:
+                constants[pname] = pinned[arg.id]
+            elif arg.id in own and arg.id != pname:
+                aliases.setdefault(arg.id, pname)
+        return aliases, constants
+    return {}, {}
+
+
+def with_helper_vocabulary(hkir: KernelIR, aliases: Dict[str, str], constants: Dict[str, Any]) -> KernelIR:
+    """``hkir`` with every aliased caller symbol respelled as the helper's own and then retired, and
+    every call-pinned symbol recorded as one of the helper's own constants.
+
+    A copy: the same KernelIR feeds the C and Fortran legs, where the caller's vocabulary is the
+    correct one. Only the shapes move -- the body already speaks the helper's names, which is what
+    made the two sets disagree in the first place.
+    """
+    if not aliases and not constants:
+        return hkir
+
+    def respell(token) -> str:
+        return _IDENT_RE.sub(lambda m: aliases.get(m.group(), m.group()), str(token))
+
+    arrays = [dataclasses.replace(a, shape=tuple(respell(dim) for dim in a.shape)) for a in hkir.arrays]
+    return dataclasses.replace(
+        hkir,
+        arrays=arrays,
+        symbols=[s for s in hkir.symbols if s.name not in aliases],
+        input_args=[n for n in hkir.input_args if n not in aliases],
+        pinned_consts={**hkir.pinned_consts, **constants},
+    )
+
+
+def inferred_symbols(rendered: RenderedProgram) -> Set[str]:
+    """The rendered program's symbols dace reads off an ARGUMENT's shape rather than being passed.
+
+    Every identifier in a parameter annotation qualifies: the annotation is the callee's declared
+    shape, and dace solves it against the shape the call site actually passes. Passing one of these
+    explicitly is refused ("Invalid keyword argument"), so the two sets have to be exact.
+    """
+    named: Set[str] = set()
+    for param in rendered.params:
+        _, _, annotation = param.partition(":")
+        named.update(_IDENT_RE.findall(annotation))
+    return {s for s in rendered.symbol_names if s in named}
+
+
+def bind_helper_call(node: ast.Call, hkir: KernelIR, rendered: RenderedProgram) -> None:
+    """Rewrite one call to a kept helper onto the signature :func:`render_program` gave it.
+
+    The call arrives in ABI order -- references then scalars, each sorted by name -- which is the
+    order the C and Fortran legs emit and has nothing to do with the dace program's parameter
+    order. Rebuild it by NAME: the rendered parameters positionally in their own order, the
+    body-only symbols as keywords, and the shape-inferred symbols dropped.
+    """
+    abi = hkir.abi_param_order()
+    if node.keywords or len(node.args) != len(abi):
+        raise ValueError(f"call to {hkir.kernel_name!r} passes {len(node.args)} arguments for the ABI order {abi}")
+    arg_of = dict(zip(abi, node.args))
+    emitted_from = {emitted: original for original, emitted in rendered.renames.items()}
+    inferred = inferred_symbols(rendered)
+    args: List[ast.expr] = []
+    for param in rendered.params:
+        pname = param.split(":", 1)[0].strip()
+        original = emitted_from.get(pname, pname)
+        if original not in arg_of:
+            raise ValueError(f"{hkir.kernel_name!r} takes {pname!r}, which its call site does not pass")
+        args.append(arg_of[original])
+    # A symbol the emitter MINTED (a hoisted compound extent) has no argument slot; its recipe
+    # names the helper's own parameters, so the call site's arguments spell it. Recipes are in
+    # dependency order, so each is resolved against the ones already bound.
+    bound: Dict[str, ast.expr] = dict(arg_of)
+    for sym, recipe in rendered.symbol_defs:
+        bound.setdefault(sym, SubstituteNames(bound).visit(ast.parse(recipe, mode="eval")).body)
+    keywords: List[ast.keyword] = []
+    for sym in rendered.symbol_names:
+        if sym in inferred:
+            continue  # dace solves it from the argument shape; passing it too is an error there
+        original = emitted_from.get(sym, sym)
+        if original not in bound:
+            raise ValueError(
+                f"{hkir.kernel_name!r} needs {sym!r}, which appears in no parameter shape and which "
+                f"its call site does not pass; dace cannot bind it"
+            )
+        keywords.append(ast.keyword(arg=sym, value=bound[original]))
+    node.args = args
+    node.keywords = keywords
+
+
+def bind_helper_calls(
+    body: List[ast.stmt], rendered_by_name: Dict[str, RenderedProgram], kir_by_name: Dict[str, KernelIR]
+) -> None:
+    """Rewrite every call in ``body`` that names one of the rendered helpers."""
+    for stmt in body:
+        for node in ast.walk(stmt):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in rendered_by_name:
+                bind_helper_call(node, kir_by_name[node.func.id], rendered_by_name[node.func.id])
+
+
+def render_helper_closure(kir: KernelIR, main: RenderedProgram) -> List[Tuple[KernelIR, RenderedProgram]]:
+    """Render every kept helper the kernel reaches, callees included, in definition-before-use order.
+
+    A helper is free to call a SIBLING, so the set is closed by walking what each rendered body
+    still calls. Python binds the name at call time, but emitting a callee first keeps the module
+    readable and matches what the C leg's prototypes buy there.
+    """
+    by_name = {h.kernel_name: h for h in kir.helpers}
+    ordered: List[Tuple[KernelIR, RenderedProgram]] = []
+    done: OrderedSet = OrderedSet()
+
+    def visit(owner: ast.FunctionDef, name: str) -> None:
+        if name in done:
+            return
+        done.add(name)
+        hkir = by_name[name]
+        aliases, constants = helper_call_bindings(owner, hkir, kir.pinned_consts or {})
+        rendered = render_program(with_helper_vocabulary(hkir, aliases, constants), name)
+        for callee in called_helpers(rendered.body, kir.helpers):
+            visit(hkir.tree, callee)
+        ordered.append((hkir, rendered))
+
+    for name in called_helpers(main.body, kir.helpers):
+        visit(kir.tree, name)
+    return ordered
+
+
+def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
+    """Return the source of a ``<short>_dace.py`` module for ``kir``.
+
+    A kept helper is emitted as its own ``@dc.program`` above the kernel, not inlined into it.
+    dace's frontend BINDS a nested program call and rebinds the callee's shape symbols per call
+    site, so one shape-generic helper serves call sites of different extents -- which is the whole
+    reason the un-inlined form exists. Inlining would specialize the helper to one call site's
+    shapes and recopy its body once per call.
+
+    A symbol of the callee's that appears in a parameter's declared SHAPE is inferred from the
+    argument and must not be passed; one that appears only in the callee's BODY is a required
+    argument, passed BY KEYWORD (positionally, dace's ``closure_resolver`` indexes its
+    parameter-name list with the argument's position and raises ``IndexError``).
+    """
+    main = render_program(kir, fn_name or kir.kernel_name)
+    helpers = render_helper_closure(kir, main)
+    rendered_by_name = {h.kernel_name: r for h, r in helpers}
+    kir_by_name = {h.kernel_name: h for h, _ in helpers}
+    for _, rendered in [*helpers, (None, main)]:
+        bind_helper_calls(rendered.body, rendered_by_name, kir_by_name)
+    programs = [r for _, r in helpers] + [main]
+
     out: List[str] = []
     out.append('"""DaCe program auto-generated from the numpy reference by numpyto_c.dace_emit."""')
     out.append("import numpy as np")
     out.append("import dace as dc")
-    imp = "dc_float, dc_complex_float" if (needs_complex or framework_dtype.used_complex) else "dc_float"
+    imp = "dc_float, dc_complex_float" if any(r.needs_complex for r in programs) else "dc_float"
     out.append(f"from hpcagent_bench.frameworks.dace_framework import {imp}")
     # BOTH spellings: the lowering emits bare `sqrt(x)` for a desugared numpy ufunc and keeps a
     # QUALIFIED `math.sqrt(x)` the reference wrote by hand, and the name-import alone makes the
@@ -3679,47 +3877,62 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
     out.append("import math")
     out.append("from math import sin, cos, log, exp, pow, sqrt")
     out.append("")
+    # Pooled across the programs: a declaration is a module-level fact, and a helper shares the
+    # kernel's spelling for a quantity they both take.
+    pinned: Dict[str, Any] = {}
+    for rendered in programs:
+        pinned.update(rendered.pinned)
     for const_name, const_value in pinned.items():
         # Module scope, which the dace frontend reads as a compile-time constant, so the body keeps
         # the manifest's spelling instead of an inlined literal.
         out.append(f"{const_name} = {const_value!r}")
     if pinned:
         out.append("")
+    symbol_names: List[str] = []
+    for rendered in programs:
+        symbol_names.extend(n for n in rendered.symbol_names if n not in symbol_names)
     if symbol_names:
         # One declaration per symbol: dtype and sign are per-symbol facts the generator spelling
         # this replaced could carry neither of. The assumption reaches sympy through
         # dace.symbol's ``**assumptions`` and decides comparisons the solver would otherwise
         # leave symbolic -- so only what is proven is declared, never what is merely likely.
         desc_of = {s.name: s for s in kir.symbols}
+        for helper, _ in helpers:
+            desc_of.update({s.name: s for s in helper.symbols if s.name not in desc_of})
         # Re-derived rather than read off the descriptor: the promotions above append emit-local
         # names no :func:`stamp_symbol_assumptions` pass has seen.
-        dims = shape_dimension_symbols(kir.arrays)
-        # NOT ``name``: this function binds the emitted def's identifier under that spelling.
+        dims = shape_dimension_symbols([*kir.arrays, *(a for h, _ in helpers for a in h.arrays)])
+        signs = dict(kir.symbol_signs)
+        for helper, _ in helpers:
+            signs.update({n: v for n, v in helper.symbol_signs.items() if n not in signs})
         for sym_name in symbol_names:
             desc = desc_of.get(sym_name)
             dtype = _dace_dtype(desc.dtype) if desc else "dc.int64"
             # A promoted scalar has no descriptor; its sign comes from the manifest binding
             # the frontend carried over (``conv_padding: 0`` -> nonnegative).
-            sign = "positive" if sym_name in dims else (desc.assumption if desc else kir.symbol_signs.get(sym_name, ""))
+            sign = "positive" if sym_name in dims else (desc.assumption if desc else signs.get(sym_name, ""))
             assumption = f", {sign}=True" if sign else ""
             out.append(f"{sym_name} = dc.symbol('{sym_name}', dtype={dtype}{assumption})")
         out.append("")
-    if symbol_defs:
-        # Per-dimension binding recipe: caller evaluates these in order at call time. See sparse_oracle._run_dace.
-        out.append(f"__hpcagent_bench_symbol_defs__ = {symbol_defs!r}")
+    if main.symbol_defs:
+        # Per-dimension binding recipe: caller evaluates these in order at call time. See
+        # sparse_oracle._run_dace. The KERNEL's alone -- a helper's extents come from the shapes
+        # its call site passes, which dace resolves without the caller knowing they exist.
+        out.append(f"__hpcagent_bench_symbol_defs__ = {main.symbol_defs!r}")
         out.append("")
-    if renames:
+    if main.renames:
         # ``{manifest name: emitted name}``. See dace_framework.call_args, the one place that
         # applies it -- everything downstream of there already speaks the emitted spelling.
-        out.append(f"__hpcagent_bench_renames__ = {renames!r}")
+        out.append(f"__hpcagent_bench_renames__ = {main.renames!r}")
         out.append("")
-    out.append("")
-    out.append("@dc.program")
-    out.append(f"def {name}({', '.join(params)}):")
-    if not body:
-        out.append("    pass")
-    else:
-        for stmt in body:
-            for line in ast.unparse(stmt).splitlines():
-                out.append("    " + line)
+    for rendered in programs:
+        out.append("")
+        out.append("@dc.program")
+        out.append(f"def {rendered.name}({', '.join(rendered.params)}):")
+        if not rendered.body:
+            out.append("    pass")
+        else:
+            for stmt in rendered.body:
+                for line in ast.unparse(stmt).splitlines():
+                    out.append("    " + line)
     return "\n".join(out) + "\n"

@@ -209,7 +209,7 @@ class _StmtHoister(ast.NodeTransformer):
     statement.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         #: Temp assignments staged for the statement currently being flushed.
         self.pre_stmts: List[ast.stmt] = []
         #: Monotonic id for unique hoist-temp names across the whole body.
@@ -388,7 +388,7 @@ class _AstypeRewriter(ast.NodeTransformer):
       and ``(level == d).astype(np.int64)`` (bfs) lowerable.
     """
 
-    def __init__(self, array_dtypes: Optional[Dict[str, str]] = None, default_float: str = ""):
+    def __init__(self, array_dtypes: Optional[Dict[str, str]] = None, default_float: str = "") -> None:
         #: ``{array_name: dtype}`` so ``(cmp).astype(X.dtype)`` can resolve
         #: ``X.dtype`` to a concrete cast when the receiver is logical.
         self.array_dtypes = array_dtypes or {}
@@ -536,7 +536,9 @@ class _FftGridReshapeRewriter(ast.NodeTransformer):
     ``_expand_dftn`` (both C-order, matching numpy) expand them into loops.
     Runs before LibNodeRewriter."""
 
-    def __init__(self, shape_table: Dict[str, Tuple[str, ...]], local_dtypes: Dict[str, str], counter: List[int]):
+    def __init__(
+        self, shape_table: Dict[str, Tuple[str, ...]], local_dtypes: Dict[str, str], counter: List[int]
+    ) -> None:
         self.shape_table = shape_table
         self.local_dtypes = local_dtypes
         self.counter = counter
@@ -706,7 +708,7 @@ class _ScatterAtRewriter(ast.NodeTransformer):
         shapes: Dict[str, List[str]],
         bool_names: Optional[Set[str]] = None,
         wrapper_defs: Optional[Dict[str, ast.expr]] = None,
-    ):
+    ) -> None:
         self.shapes = shapes
         #: Names proven boolean (:func:`_collect_bool_names`) -- a boolean array
         #: used as the index of a ``.at`` scatter is a MASK, not a gather; letting
@@ -1070,6 +1072,9 @@ class _ConditionalNoneAllocRewriter(ast.NodeTransformer):
     (there its None-ness is observable, so allocating unconditionally would flip the
     guard); that case is the separate is-None allocation-check handling."""
 
+    def __init__(self) -> None:
+        self._none_checked: set[str] = set()
+
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
         # Names whose None-ness is observed (``x is None`` / ``x is not None``): a
         # conditional alloc into one of these must NOT be forced, so record them first.
@@ -1092,7 +1097,7 @@ class _ConditionalNoneAllocRewriter(ast.NodeTransformer):
             len(node.targets) == 1
             and isinstance(node.targets[0], ast.Name)
             and isinstance(node.value, ast.IfExp)
-            and node.targets[0].id not in vars(self).get("_none_checked", set())
+            and node.targets[0].id not in self._none_checked
         ):
             return node
         ifexp = node.value
@@ -1139,7 +1144,7 @@ class _ScalarTimesMatmulRewriter(ast.NodeTransformer):
     A's shape so we can declare the temp.
     """
 
-    def __init__(self, shape_table: Dict[str, List[str]], temps: Dict[str, Tuple[str, ...]], counter):
+    def __init__(self, shape_table: Dict[str, List[str]], temps: Dict[str, Tuple[str, ...]], counter) -> None:
         self.shape_table = shape_table
         self.temps = temps
         self.counter = counter
@@ -1224,7 +1229,7 @@ class _ArrayIterRewriter(ast.NodeTransformer):
     where ``data`` is ``uint8`` should declare ``b`` as ``uint8_t``).
     """
 
-    def __init__(self, shape_table):
+    def __init__(self, shape_table) -> None:
         self.shape_table = shape_table
         self._counter = [0]
         #: Mapping from synthesised loop-var name to the source array.
@@ -1265,7 +1270,7 @@ class _EnumerateZipRewriter(ast.NodeTransformer):
     inlined as the first statement of the loop body.
     """
 
-    def __init__(self, shape_table):
+    def __init__(self, shape_table) -> None:
         self.shape_table = shape_table
 
     @staticmethod
@@ -1385,7 +1390,7 @@ class _TransposeRewriter(ast.NodeTransformer):
       -> ``np.transpose(A[, (axes)])`` (the varargs ints are packed into a tuple).
     """
 
-    def __init__(self, sparse_names=None):
+    def __init__(self, sparse_names=None) -> None:
         #: Logical sparse matrices whose ``A.T`` / ``A.transpose()`` must stay a
         #: transpose ATTRIBUTE/method -- the sparse matmul hoister turns ``A.T @
         #: x`` into a transpose SpMV on A's own buffers (CSR<->CSC). Densifying it
@@ -1507,7 +1512,7 @@ class _ShapeMidExpressionRewriter(ast.NodeTransformer):
     array's does. The Name-base path is unchanged.
     """
 
-    def __init__(self, arrays_shapes):
+    def __init__(self, arrays_shapes) -> None:
         self.arrays_shapes = arrays_shapes
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
@@ -1709,7 +1714,7 @@ class _ScalarFloatTagger(ast.NodeVisitor):
     ever ADDS float tags it can prove (an integer expression stays untagged and keeps the
     old reading). So this can only turn a false promotion OFF -- never a new one on."""
 
-    def __init__(self, tags: Dict[str, str], array_names: Set[str]):
+    def __init__(self, tags: Dict[str, str], array_names: Set[str]) -> None:
         self.tags = tags
         self.array_names = array_names
 
@@ -1746,7 +1751,7 @@ class _TrueDivisionPromoter(ast.NodeTransformer):
     int/int divide down to float32 on an fp32 emit. It also leaves no implicit int -> double
     for the conversion gate; the divide's value is unchanged either way."""
 
-    def __init__(self, local_dtypes, array_names):
+    def __init__(self, local_dtypes, array_names) -> None:
         self.local_dtypes = local_dtypes or {}
         self.array_names = array_names or set()
 
@@ -1786,7 +1791,7 @@ class _MathRewriter(ast.NodeTransformer):
     #: expander owns them instead. They are the ufuncs whose scalar and array forms differ.
     ARRAY_CAPABLE = frozenset({"maximum", "minimum"})
 
-    def __init__(self, array_names=None, defer_array_capable: bool = False):
+    def __init__(self, array_names=None, defer_array_capable: bool = False) -> None:
         self.array_names = array_names or set()
         # Local array shapes are not known yet on the FIRST pass, so an inlined helper's temps are
         # indistinguishable from scalars there. Renaming on that incomplete picture is what emitted
@@ -2905,7 +2910,7 @@ class _EyeToZerosDiagonal(ast.NodeTransformer):
     lowering only -- the python backends keep the builtin ``np.eye``.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._n = 0
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
@@ -3031,7 +3036,7 @@ class _ZerosRewriter(ast.NodeTransformer):
     of from the call's explicit shape argument.
     """
 
-    def __init__(self, shape_table: Optional[Dict[str, Tuple[str, ...]]] = None):
+    def __init__(self, shape_table: Optional[Dict[str, Tuple[str, ...]]] = None) -> None:
         self.zeros: Dict[str, Tuple[str, ...]] = {}
         # Fill kind per harvested local, keyed by name: the constructor
         # attr (``zeros`` / ``ones`` / ``empty`` / ``zeros_like`` / ...).
@@ -3230,7 +3235,7 @@ class _CollapseChainedSubscripts(ast.NodeTransformer):
     rank-rebind rename to see the real result rank.
     """
 
-    def __init__(self, shape_table: Dict[str, Tuple[str, ...]]):
+    def __init__(self, shape_table: Dict[str, Tuple[str, ...]]) -> None:
         self.shape_table = shape_table
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
@@ -3354,7 +3359,7 @@ class _ChainedSubscriptFlattener(ast.NodeTransformer):
     Runs before the ellipsis/scalarize passes so they only ever see a subscript
     whose base is a Name."""
 
-    def __init__(self, shape_table: Optional[Dict[str, Tuple[str, ...]]] = None):
+    def __init__(self, shape_table: Optional[Dict[str, Tuple[str, ...]]] = None) -> None:
         #: Known array shapes, used only to tell a scalar index Name from an index ARRAY.
         #: Empty means "assume every bare Name is a scalar", the pre-gather-aware behaviour.
         self.shape_table = shape_table or {}
@@ -3471,7 +3476,7 @@ class _EllipsisExpander(ast.NodeTransformer):
     _ChainedSubscriptFlattener; a base that is an EXPRESSION is sized through
     :func:`_iter_extent_of`, which is all the rank costs."""
 
-    def __init__(self, array_shapes: Dict[str, List[str]]):
+    def __init__(self, array_shapes: Dict[str, List[str]]) -> None:
         self.array_shapes = array_shapes
 
     def base_rank(self, base: ast.expr) -> Optional[int]:
@@ -3522,7 +3527,7 @@ class _PadImplicitTrailingSlices(ast.NodeTransformer):
     symbol). Advanced indexing (``x[src]`` with ``src`` an index array, the
     fancy-gather path) is left untouched so it is not mis-expanded."""
 
-    def __init__(self, array_shapes: Dict[str, List[str]]):
+    def __init__(self, array_shapes: Dict[str, List[str]]) -> None:
         self.array_shapes = array_shapes
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
@@ -3638,7 +3643,7 @@ def _fold_subarray_aliases(tree: ast.AST, array_shapes: Dict[str, List[str]]) ->
 
     unsafe: set = set()
 
-    def _scan(stmts):
+    def _scan(stmts) -> None:
         for i, s in enumerate(stmts):
             if (
                 isinstance(s, ast.Assign)
@@ -4007,7 +4012,7 @@ class _FlattenChainedSubscripts(ast.NodeTransformer):
     A non-full inner slice (``a[1:5][k]``) carries an offset the flat combine can't
     express, so it is left untouched."""
 
-    def __init__(self, shapes: Dict[str, List[str]]):
+    def __init__(self, shapes: Dict[str, List[str]]) -> None:
         self.shapes = shapes
 
     @staticmethod
@@ -4132,7 +4137,7 @@ class SliceFusion(ast.NodeTransformer):
       shape info too).
     """
 
-    def __init__(self, array_shapes: Dict[str, List[str]]):
+    def __init__(self, array_shapes: Dict[str, List[str]]) -> None:
         self.array_shapes = array_shapes
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
@@ -4320,7 +4325,7 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
     as ``X[i + (c - lhs_start)]``.
     """
 
-    def __init__(self, array_shapes, iter_vars, lhs_ranges, lhs_name, lhs_dims):
+    def __init__(self, array_shapes, iter_vars, lhs_ranges, lhs_name, lhs_dims) -> None:
         self.array_shapes = array_shapes
         self.iter_vars = iter_vars
         self.lhs_ranges = lhs_ranges
@@ -5073,7 +5078,7 @@ class _BooleanMaskRewriter(ast.NodeTransformer):
     ``for i: if I[i]: Z[i] = Z[i]**2 + C[i]``).
     """
 
-    def __init__(self, shape_table, bool_names):
+    def __init__(self, shape_table, bool_names) -> None:
         self.shape_table = shape_table
         #: Names :func:`_collect_bool_names` proved boolean. A bare ``Name`` index is a mask ONLY
         #: if it is in here: shape equality alone cannot tell ``arr[mask]`` from ``arr[int_idx]``,
@@ -5299,7 +5304,7 @@ class _ResolveArrShape(ast.NodeTransformer):
             return tok
 
         class _Sub(ast.NodeTransformer):
-            def __init__(self_inner, current):
+            def __init__(self_inner, current) -> None:
                 self_inner.current = current
 
             def visit_Subscript(self_inner, node):
@@ -5821,7 +5826,7 @@ class _RealConjDropper(ast.NodeTransformer):
     conjugation on a real operand keeps both native backends valid; a genuinely
     complex operand keeps its conjugation."""
 
-    def __init__(self, local_dtypes: Dict[str, str]):
+    def __init__(self, local_dtypes: Dict[str, str]) -> None:
         self.local_dtypes = local_dtypes
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
@@ -6004,7 +6009,7 @@ class _PromoteMixedComplexIfExp(ast.NodeTransformer):
     backend sees a uniform-type select. Numerically identical: the promoted branch
     carries a zero imaginary part. (QE vexx ``_add_nlxx_pot`` gamma_only path.)"""
 
-    def __init__(self, local_dtypes: Dict[str, str]):
+    def __init__(self, local_dtypes: Dict[str, str]) -> None:
         self.local_dtypes = local_dtypes
 
     def visit_IfExp(self, node: ast.IfExp) -> ast.AST:
@@ -6102,7 +6107,7 @@ class _TupleLocalPropagator(ast.NodeTransformer):
     ``pass`` if the tuple assign was a block's sole statement.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.tuples: Dict[str, ast.Tuple] = {}
 
     @classmethod
@@ -6264,7 +6269,7 @@ def _reads_before_rebind(stmts: List[ast.stmt], name: str) -> bool:
 
 
 class _BooleanMaskReductionRewriter(ast.NodeTransformer):
-    def __init__(self, shape_table=None, bool_names=None):
+    def __init__(self, shape_table=None, bool_names=None) -> None:
         self.shape_table = shape_table or {}
         self.bool_names = bool_names or set()
 
@@ -6913,7 +6918,7 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
     arithmetic in C and as undefined Fortran.
     """
 
-    def __init__(self, shape_table, real_arrays=None, local_dtypes=None, scalar_defs=None):
+    def __init__(self, shape_table, real_arrays=None, local_dtypes=None, scalar_defs=None) -> None:
         # We mutate ``shape_table`` to track Name aliases per Assign in
         # source order. Use a local copy so the caller's table is not
         # repeatedly clobbered when an alias gets reassigned.
@@ -7977,7 +7982,7 @@ class _SubscriptifyNames(ast.NodeTransformer):
     """Rewrite ``Name(arr)`` references whose shape matches the loop
     nest's bounds into ``Subscript(arr, idx)``."""
 
-    def __init__(self, shape_table, iters):
+    def __init__(self, shape_table, iters) -> None:
         self.shape_table = shape_table
         self.iters = iters
 
@@ -8356,7 +8361,7 @@ class _TupleAssignRewriter(ast.NodeTransformer):
     ``seed-dtypes-and-harvest``), so no explicit declaration hook is needed.
     """
 
-    def __init__(self, arrays_shapes):
+    def __init__(self, arrays_shapes) -> None:
         self.arrays_shapes = arrays_shapes  # dict[name, list[symbol_name]]
         #: Names introduced as integer scalar locals (collected for the
         #: emitter to declare at the top of the function body).
@@ -9021,7 +9026,7 @@ def _lp_resolve_inlined_shapes(ctx: LoweringContext) -> None:
         resolved = _resolve_shape_attr_tokens(subbed, ctx.param_seed)
         return tuple(new if not _INL_RE.search(new) else str(orig) for orig, new in zip(shape, resolved))
 
-    def _resolve_inl_table(table):
+    def _resolve_inl_table(table) -> None:
         for nm in list(table):
             table[nm] = list(_resolve_inl(table[nm])) if isinstance(table[nm], list) else _resolve_inl(table[nm])
 
@@ -10036,7 +10041,7 @@ def _detect_output_and_index_arrays(kir: KernelIR, helpers: Sequence[KernelIR] =
     scalar_src: Dict[str, str] = {}  # scalar name -> source array
     scalars_used_as_index: Set[str] = set()
 
-    def _walk(node):
+    def _walk(node) -> None:
         if isinstance(node, (ast.Assign, ast.AugAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             for t in targets:

@@ -27,7 +27,7 @@ class _Kir:
     """The fields ``desugar_for_python_backend`` reads off a KernelIR."""
 
     class _Arr:
-        def __init__(self, name, shape, dtype):
+        def __init__(self, name: str, shape: tuple[str, ...], dtype: str) -> None:
             self.name, self.shape, self.dtype = name, shape, dtype
 
     arrays = [_Arr("src", ("N", "M", "K"), "float64"), _Arr("out", ("N", "M", "K"), "float64")]
@@ -35,11 +35,11 @@ class _Kir:
     kernel_name = "pick"
 
 
-def _desugared():
+def _desugared() -> str:
     return desugar_for_python_backend(_SRC, _Kir(), backend="pythran")
 
 
-def test_the_store_becomes_a_loop_over_the_index_array():
+def test_the_store_becomes_a_loop_over_the_index_array() -> None:
     out = _desugared()
     assert "out[ia, :, :]" not in out, out
     loops = [n for n in ast.walk(ast.parse(out)) if isinstance(n, ast.For)]
@@ -53,7 +53,7 @@ def test_the_store_becomes_a_loop_over_the_index_array():
     assert body.endswith(f"[{it}]"), body
 
 
-def test_the_gather_beside_it_is_left_alone():
+def test_the_gather_beside_it_is_left_alone() -> None:
     """The read form is correct in pythran; hoisting it into a point-wise gather loop would
     allocate a rank-1 temp for a rank-3 result and store a plane into a scalar slot."""
     out = _desugared()
@@ -61,7 +61,7 @@ def test_the_gather_beside_it_is_left_alone():
     assert "__gather" not in out, out
 
 
-def test_the_lowered_store_still_answers_what_numpy_answers():
+def test_the_lowered_store_still_answers_what_numpy_answers() -> None:
     rng = np.random.default_rng(0)
     res = run_op(
         _SRC,

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import pathlib
+from typing import Any
 
 import pandas as pd
 
@@ -131,7 +132,7 @@ def arm_label(row: pd.Series) -> str:
     return f"{experiment_tags.model_name(row.model)} / {condition}{' + Skills' if row.skills else ''}"
 
 
-def segments_for(row, hue: str, gate: str) -> tuple[tuple[float, str, str], ...]:
+def segments_for(row: Any, hue: str, gate: str) -> tuple[tuple[float, str, str], ...]:
     """The stacked parts of one bar, in funnel order. ``correct`` has no no-gain split to draw."""
     if gate == "correct":
         return ((row.correct, hue, ""), (row.wrong, WRONG, "///"), (row.ungraded, UNGRADED, "..."))
@@ -143,7 +144,7 @@ def segments_for(row, hue: str, gate: str) -> tuple[tuple[float, str, str], ...]
     )
 
 
-def draw(ax, table: pd.DataFrame, roster: int, gate: str) -> None:
+def draw(ax: plt.Axes, table: pd.DataFrame, roster: int, gate: str) -> None:
     hues = palette.model_colors(sorted(table.model.unique()))
     column = GATES[gate][0]
     ys = range(len(table))
@@ -190,7 +191,7 @@ def draw(ax, table: pd.DataFrame, roster: int, gate: str) -> None:
     ax.tick_params(axis="y", length=0)
 
 
-def handles_for(table: pd.DataFrame, gate: str) -> list:
+def handles_for(table: pd.DataFrame, gate: str) -> list[plt.Rectangle]:
     hues = palette.model_colors(sorted(table.model.unique()))
     solid = GATES[gate][1]
     marks = [

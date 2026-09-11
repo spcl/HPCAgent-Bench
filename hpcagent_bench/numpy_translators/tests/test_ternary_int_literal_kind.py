@@ -27,6 +27,7 @@ _ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 
 
 def _all_ok(res):
+    assert any(v == "ok" for v in res.values()), f"every backend skipped; the comparison never ran: {res}"
     return all(v == "ok" or v.startswith("skip") for v in res.values()), res
 
 
@@ -42,7 +43,7 @@ _SRC = (
 )
 
 
-def test_negative_literal_ternary_matches_int64_partner():
+def test_negative_literal_ternary_matches_int64_partner() -> None:
     idx = np.array([0, 2, 1, 3, 2, 0, 3, 1], dtype=np.int64)
     tab = np.linspace(10.0, 20.0, 4, dtype=np.float64)
     out = np.zeros(8, dtype=np.float64)
@@ -65,7 +66,7 @@ def test_negative_literal_ternary_matches_int64_partner():
 _IFEXP_DECL = re.compile(r"^\s*integer\((?P<kind>c_int\d+_t)\)\s*::\s*(?P<name>\w*ifexp\w*)\s*$", re.M)
 
 
-def test_ifexp_temp_declares_the_int64_kind_of_its_partner_branch():
+def test_ifexp_temp_declares_the_int64_kind_of_its_partner_branch() -> None:
     # Fortran emit: ``c if c > 0 else -1`` becomes an if/else over a temp, and that temp is
     # declared with the JOIN of the two branches -- int64 from ``c``, not int32 from the literal.
     import json

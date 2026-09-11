@@ -61,7 +61,7 @@ def initialize(ngrid, nvec, npol=1, uspp=False, lrot=False, nks=1, current_k=1, 
 
     # ---- global G-sphere (Miller indices + FFT-grid map) ----
     hmax = ngrid // 2 - 1
-    cutoff2 = hmax**2
+    cutoff2 = hmax * hmax
     mill, nl_list = [], []
     for hx in range(-hmax, hmax + 1):
         for hy in range(-hmax, hmax + 1):
@@ -88,7 +88,7 @@ def initialize(ngrid, nvec, npol=1, uspp=False, lrot=False, nks=1, current_k=1, 
     A = np.array([AX, AY, AZ])
     for k in range(nks):
         kpg = mill + xk[:, k][None, :]  # (ngm, 3)  (k+G in crystal)
-        g2kin[:, k] = (A[None, :] * kpg**2).sum(axis=1)
+        g2kin[:, k] = (A[None, :] * (kpg * kpg)).sum(axis=1)
     # sort each k's plane waves by ascending kinetic energy (QE gk_sort), and
     # carry the grid map along so nlk[:, k] stays the map for that ordering.
     nlk = np.zeros((npwx, nks), dtype=np.int64)

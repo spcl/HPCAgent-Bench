@@ -23,16 +23,16 @@ from numpyto_common.lib_nodes import _scalarize_at_iters
 from numpyto_common.lowering import _SliceToScalarRewriter, _const
 
 
-def _iters(n):
+def _iters(n: int) -> list[ast.expr]:
     return [ast.Name(id=f"__w{i}", ctx=ast.Load()) for i in range(n)]
 
 
-def _scalarised(src, shapes, n):
+def _scalarised(src: str, shapes: dict[str, tuple[str, ...]], n: int) -> str:
     """``src`` rendered at an ``n``-deep nest by the np.* expanders' scalariser."""
     return ast.unparse(_scalarize_at_iters(ast.parse(src, mode="eval").body, _iters(n), shapes))
 
 
-def _fused(src, shapes, n):
+def _fused(src: str, shapes: dict[str, tuple[str, ...]], n: int) -> str:
     """``src`` rendered at an ``n``-deep nest by the slice-fusion rewriter (the whole-array path)."""
     full = [ast.Slice(lower=None, upper=None, step=None) for _ in range(n)]
     zero = [(_const(0), _const(0)) for _ in range(n)]
@@ -40,20 +40,20 @@ def _fused(src, shapes, n):
     return ast.unparse(rewriter.visit(ast.parse(src, mode="eval").body))
 
 
-def test_computed_base_is_scalarised_not_subscripted():
+def test_computed_base_is_scalarised_not_subscripted() -> None:
     # The base IS the array; the ``[:, None]`` only says which nest axis it varies along.
     got = _scalarised("(mask != 0)[:, None]", {"mask": ("np",)}, 2)
     assert got == "mask[__w0] != 0", got
     assert "None" not in got, "a literal newaxis reached the emitter"
 
 
-def test_a_lower_rank_subscript_operand_right_aligns():
+def test_a_lower_rank_subscript_operand_right_aligns() -> None:
     # numpy broadcasts right-aligned: under a 4-deep nest a rank-3 read takes the LAST three iters.
     got = _scalarised("cxyz[:a, :b, :c]", {"cxyz": ("A", "B", "C")}, 4)
     assert got == "cxyz[__w1, __w2, __w3]", got
 
 
-def test_an_equal_rank_subscript_operand_is_unchanged():
+def test_an_equal_rank_subscript_operand_is_unchanged() -> None:
     # The offset is zero when the ranks already agree -- the arithmetic that was there before.
     got = _scalarised("cxyz[:a, :b, :c]", {"cxyz": ("A", "B", "C")}, 3)
     assert got == "cxyz[__w0, __w1, __w2]", got
@@ -68,7 +68,7 @@ def test_an_equal_rank_subscript_operand_is_unchanged():
         ("grid[gz[:, None], gy[None, :], 0]", 3, "grid[gz[__w1], gy[__w2], 0]"),
     ],
 )
-def test_open_mesh_gather_binds_each_vector_to_its_own_axis(src, nest, want):
+def test_open_mesh_gather_binds_each_vector_to_its_own_axis(src: str, nest: int, want: str) -> None:
     # ``A[a[:, None, None], b[None, :, None], c[None, None, :]]`` is the open mesh np.ix_ spells:
     # each vector varies along ITS OWN result axis, so each takes its own iter.
     shapes = {"grid": ("N", "N", "N"), "gz": ("nz",), "gy": ("ny",), "gx": ("nx",)}

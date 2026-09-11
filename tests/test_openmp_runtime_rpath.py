@@ -38,7 +38,7 @@ double probe(double *a, int n) {
 """
 
 
-def _stub_driver(tmp_path, answer):
+def _stub_driver(tmp_path: pathlib.Path, answer: pathlib.Path | str) -> str:
     """A fake compiler that answers ``-print-file-name`` with ``answer``, as a real driver does."""
     script = tmp_path / "stubcc"
     script.write_text(f'#!/bin/sh\nprintf "%s\\n" "{answer}"\n')
@@ -46,7 +46,7 @@ def _stub_driver(tmp_path, answer):
     return str(script)
 
 
-def test_a_runtime_in_a_libdir_no_loader_searches_earns_an_rpath(tmp_path):
+def test_a_runtime_in_a_libdir_no_loader_searches_earns_an_rpath(tmp_path: pathlib.Path) -> None:
     libdir = tmp_path / "lib" / "x86_64-unknown-linux-gnu"
     libdir.mkdir(parents=True)
     (libdir / "libomp.so").write_bytes(b"")
@@ -55,7 +55,7 @@ def test_a_runtime_in_a_libdir_no_loader_searches_earns_an_rpath(tmp_path):
     assert languages.driver_library_dir(cc, ("libomp.so",)) == str(libdir)
 
 
-def test_a_runtime_the_loader_already_finds_earns_none(tmp_path):
+def test_a_runtime_the_loader_already_finds_earns_none(tmp_path: pathlib.Path) -> None:
     resident = pathlib.Path("/usr/lib/x86_64-linux-gnu/libgomp.so")
     if not resident.exists():
         pytest.skip(f"{resident} is not installed on this host")
@@ -64,14 +64,16 @@ def test_a_runtime_the_loader_already_finds_earns_none(tmp_path):
     assert languages.driver_library_dir(cc, ("libgomp.so",)) == ""
 
 
-def test_a_driver_that_cannot_place_the_name_earns_none(tmp_path):
+def test_a_driver_that_cannot_place_the_name_earns_none(tmp_path: pathlib.Path) -> None:
     # What gcc answers for libomp.so: the name straight back, with no path in front of it.
     cc = _stub_driver(tmp_path, "libomp.so")
     languages.driver_library_dir.cache_clear()
     assert languages.driver_library_dir(cc, ("libomp.so",)) == ""
 
 
-def test_a_library_only_library_path_can_reach_is_still_named(tmp_path, monkeypatch):
+def test_a_library_only_library_path_can_reach_is_still_named(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # The allocator's case: the driver cannot place libmimalloc.so, and the only directory that
     # can is the one toolchain_env() is about to drop. Naming it is the whole fix.
     viewdir = tmp_path / "view" / "lib"
@@ -85,7 +87,7 @@ def test_a_library_only_library_path_can_reach_is_still_named(tmp_path, monkeypa
 
 
 @pytest.mark.parametrize("block", ["clang", "gcc"])
-def test_an_openmp_shared_library_loads_after_it_links(tmp_path, block):
+def test_an_openmp_shared_library_loads_after_it_links(tmp_path: pathlib.Path, block: str) -> None:
     blocks = languages.compiler_names()
     if block not in blocks:
         pytest.skip(f"no {block!r} block in compilers.yaml")
@@ -104,7 +106,7 @@ def test_an_openmp_shared_library_loads_after_it_links(tmp_path, block):
     ctypes.CDLL(str(lib))
 
 
-def test_the_link_line_carries_the_flag_and_its_runtime():
+def test_the_link_line_carries_the_flag_and_its_runtime() -> None:
     if "clang" not in languages.compiler_names():
         pytest.skip("no 'clang' block in compilers.yaml")
     cc = languages.compiler_driver("clang")

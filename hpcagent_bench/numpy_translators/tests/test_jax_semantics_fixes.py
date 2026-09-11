@@ -19,6 +19,8 @@ jax, so the fork-based ``run_op`` jax path below stays clean); the numerical
 asserts round-trip each idiom through the ``run_op`` oracle against numpy.
 """
 
+import types
+
 import numpy as np
 import pytest
 
@@ -28,7 +30,7 @@ from numpyto_jax.core import emit_jax
 # --------------------------------------------------------------------------- #
 # Source-level: the emitted module text carries each fix.                      #
 # --------------------------------------------------------------------------- #
-def test_emitted_module_enables_x64():
+def test_emitted_module_enables_x64() -> None:
     src = "import numpy as np\ndef f(a, out):\n    out[:] = a / 3.0\n"
     out = emit_jax(src, "f")
     assert "jax.config.update('jax_enable_x64', True)" in out
@@ -36,7 +38,7 @@ def test_emitted_module_enables_x64():
     assert out.index("jax_enable_x64") < out.index("import jax.numpy")
 
 
-def test_scalar_or_kept_python_bool_mask_bitwise():
+def test_scalar_or_kept_python_bool_mask_bitwise() -> None:
     # value ``or`` (truthiness select) stays Python ``or`` -- NOT ``|``.
     val = emit_jax("import numpy as np\ndef f(n, a, out):\n    n = n or a.shape[0]\n    out[0] = float(n)\n", "f")
     assert "n = n or a.shape[0]" in val
@@ -46,13 +48,13 @@ def test_scalar_or_kept_python_bool_mask_bitwise():
     assert "(a > 0) & (a < 1)" in msk
 
 
-def test_full_slice_array_store_preserves_shape_dtype():
+def test_full_slice_array_store_preserves_shape_dtype() -> None:
     out = emit_jax("import numpy as np\ndef f(row, out):\n    out[:] = row\n", "f")
     assert "jnp.broadcast_to(row, out.shape).astype(out.dtype)" in out
     assert "out = row" not in out  # not a bare rebind
 
 
-def test_chained_subscript_store_preserves_full_array():
+def test_chained_subscript_store_preserves_full_array() -> None:
     out = emit_jax("import numpy as np\ndef f(a, out):\n    a[1][2] = 9.0\n    out[:] = a\n", "f")
     assert "a = a.at[1, 2].set(9.0)" in out
     assert "a[1].at" not in out  # the row-collapsing form is gone
@@ -61,7 +63,7 @@ def test_chained_subscript_store_preserves_full_array():
 # --------------------------------------------------------------------------- #
 # Numerical: each idiom round-trips through the run_op oracle vs numpy (jax).  #
 # --------------------------------------------------------------------------- #
-def _oracle():
+def _oracle() -> types.ModuleType:
     import shutil
 
     if not (shutil.which("gcc") and shutil.which("gfortran") and shutil.which("g++")):
@@ -80,14 +82,14 @@ def _oracle():
     return _op_oracle
 
 
-def _assert_jax_ok(status, label):
+def _assert_jax_ok(status: dict[str, str], label: str) -> None:
     s = status["jax"]
     if s.startswith("skip"):
         pytest.skip(f"{label}: jax {s}")
     assert not s.startswith("FAIL"), f"{label}: {s}"
 
 
-def test_float64_precision_kernel():
+def test_float64_precision_kernel() -> None:
     # ``a / 3.0`` differs beyond rtol between float32 (~0.33333334) and float64
     # (0.3333333333333333); without x64 the emitted module would silently
     # narrow and disagree with the numpy reference.
@@ -104,7 +106,7 @@ def test_float64_precision_kernel():
     _assert_jax_ok(st, "float64")
 
 
-def test_or_default_idiom():
+def test_or_default_idiom() -> None:
     # ``n = n or N`` with n=2 must yield 2 (Python truthiness); the old bitwise
     # rewrite ``n | N`` = 2 | 7 = 7 would be wrong.
     no = _oracle()
@@ -120,7 +122,7 @@ def test_or_default_idiom():
     _assert_jax_ok(st, "or-idiom")
 
 
-def test_full_slice_row_broadcast():
+def test_full_slice_row_broadcast() -> None:
     # ``out[:] = row`` broadcasts the (N,) row across every row of the (M, N)
     # output buffer, keeping its declared shape.
     no = _oracle()
@@ -136,7 +138,7 @@ def test_full_slice_row_broadcast():
     _assert_jax_ok(st, "row-broadcast")
 
 
-def test_chained_subscript_2d_store():
+def test_chained_subscript_2d_store() -> None:
     # ``a[1][2] = 9.0`` must set that one element and leave the rest of the 2-D
     # array intact (a row-collapse would shrink ``a`` to ``a[1]``).
     no = _oracle()
@@ -152,7 +154,7 @@ def test_chained_subscript_2d_store():
     _assert_jax_ok(st, "chain-2d")
 
 
-def test_partial_range_loop_is_not_whole_array_vectorized():
+def test_partial_range_loop_is_not_whole_array_vectorized() -> None:
     # A ``for i in range(1, len)`` writes only the tail; lowering it to a whole-array rebind
     # (``a = b * 2.0``) clobbers a[0]. It must stay an index-preserving fori/.at form, while a
     # full-extent ``range(len)`` still vectorizes.
@@ -169,7 +171,7 @@ def test_partial_range_loop_is_not_whole_array_vectorized():
     assert "a = b * 2.0" in emit_jax(full, "f", jit=True)
 
 
-def test_row_reduction_over_indexed_row_uses_axis_not_full_reduce():
+def test_row_reduction_over_indexed_row_uses_axis_not_full_reduce() -> None:
     # ``out[i] = np.sum(a[i])`` is a PER-ROW reduction; devectorising by
     # dropping ``[i]`` alone (the old bug) collapses it to a full-array
     # reduction ``jnp.sum(a)`` -- a scalar instead of one value per row.
@@ -180,7 +182,7 @@ def test_row_reduction_over_indexed_row_uses_axis_not_full_reduce():
         assert f"jnp.{fn}(a)" not in out
 
 
-def test_row_reduction_accidentally_safe_cases_unchanged():
+def test_row_reduction_accidentally_safe_cases_unchanged() -> None:
     # a[i, :] is a Tuple slice, so `i` survives devectorisation and the loop
     # stays carried (unvectorised, index-preserving `.at[i].set` form).
     tuple_slice = emit_jax(
@@ -198,7 +200,7 @@ def test_row_reduction_accidentally_safe_cases_unchanged():
     assert "out = jnp.dot(a, x)" in dot
 
 
-def test_partial_range_preserves_head_end_to_end():
+def test_partial_range_preserves_head_end_to_end() -> None:
     # out[0] is set, then only out[1:] is written; the head must survive (the old
     # whole-array rebind set out[0] to b[0]*2 instead).
     no = _oracle()
@@ -218,7 +220,7 @@ def test_partial_range_preserves_head_end_to_end():
     _assert_jax_ok(st, "partial-range-head")
 
 
-def test_row_reduction_matches_numpy_end_to_end():
+def test_row_reduction_matches_numpy_end_to_end() -> None:
     # ``out[i] = np.sum(a[i])`` over a[3, 4] must yield the 3 per-row sums, not
     # the single scalar 66.0 the old ``jnp.sum(a)`` collapse produced.
     no = _oracle()

@@ -12,9 +12,11 @@ parameter; see tests/test_spec_dimensions_config.py for that half.
 import json
 import pathlib
 import tempfile
+from typing import Any
 
 from numpyto_c.emit import emit_c, emit_cpp
 from numpyto_common.frontend import parse_kernel
+from numpyto_common.ir import KernelIR
 from numpyto_common.lowering import lower
 from numpyto_fortran.emit import emit_fortran
 
@@ -29,7 +31,7 @@ _SRC = (
 )
 
 
-def _kir(pinned=True, src=_SRC, **overrides):
+def _kir(pinned: bool = True, src: str = _SRC, **overrides: Any) -> KernelIR:
     d = pathlib.Path(tempfile.mkdtemp())
     (d / "k_numpy.py").write_text(src)
     bench = {
@@ -51,7 +53,7 @@ def _kir(pinned=True, src=_SRC, **overrides):
     return lower(parse_kernel(d / "k_numpy.py", d / "bi.json"))
 
 
-def test_pinned_knobs_leave_the_abi_and_are_declared_as_constants():
+def test_pinned_knobs_leave_the_abi_and_are_declared_as_constants() -> None:
     kir = _kir()
     assert kir.pinned_consts == {"max_iter": 100, "tol": 1.0e-06}
     # Sec. 4 order over what REMAINS: pointers by name, then the size symbol.
@@ -68,7 +70,7 @@ def test_pinned_knobs_leave_the_abi_and_are_declared_as_constants():
     assert "subroutine f(out, x, n)" in f90
 
 
-def test_a_narrowed_pinned_float_carries_the_literal_suffix_of_its_own_type():
+def test_a_narrowed_pinned_float_carries_the_literal_suffix_of_its_own_type() -> None:
     """A C23 ``constexpr`` initializer must be EXACTLY representable in the declared type.
 
     ``1e-10`` is a DOUBLE literal and no float holds it exactly, so ``constexpr float tol = 1e-10;``
@@ -88,7 +90,7 @@ def test_a_narrowed_pinned_float_carries_the_literal_suffix_of_its_own_type():
     assert "constexpr double tol = 1e-06;" in emit_c(_kir(), fn_name="f")
 
 
-def test_a_narrowed_pinned_float_still_compiles_as_c23():
+def test_a_narrowed_pinned_float_still_compiles_as_c23() -> None:
     """The suffix rule is only worth anything if the compiler agrees -- and the C23 constexpr
     diagnostic is the whole reason this test exists, so it has to be a real compile."""
     import shutil
@@ -106,7 +108,7 @@ def test_a_narrowed_pinned_float_still_compiles_as_c23():
     assert r.returncode == 0, r.stderr
 
 
-def test_without_the_pinned_declaration_the_same_knobs_stay_parameters():
+def test_without_the_pinned_declaration_the_same_knobs_stay_parameters() -> None:
     # The control: identical source and identical `parameters`, only the manifest's `config:` block
     # differs. Without it the knobs are ordinary by-value scalars, which is what a `domain:` knob
     # and every legacy manifest keep.
@@ -128,7 +130,7 @@ _SHAPE_KNOB_BENCH = {
 }
 
 
-def test_a_knob_named_only_in_a_declared_shape_is_still_a_constant():
+def test_a_knob_named_only_in_a_declared_shape_is_still_a_constant() -> None:
     """The kernel never spells ``groups``; only its declared SHAPE does.
 
     Matching ``pinned_config`` against the parse-time signature missed exactly this case, because
@@ -150,7 +152,7 @@ def test_a_knob_named_only_in_a_declared_shape_is_still_a_constant():
     assert "integer(c_int64_t), parameter :: groups = 2_8" in emit_fortran(kir, fn_name="f")
 
 
-def test_a_pinned_knob_the_kernel_never_names_is_not_declared():
+def test_a_pinned_knob_the_kernel_never_names_is_not_declared() -> None:
     """The filter is still a filter.
 
     Taking the whole of ``pinned_config`` would fix the ABI and leave every translation unit

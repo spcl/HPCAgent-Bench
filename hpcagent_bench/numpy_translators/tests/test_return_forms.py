@@ -32,7 +32,7 @@ _ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 _NATIVE = ("c", "cpp", "fortran")
 
 
-def _assert_forms(res: dict):
+def _assert_forms(res: dict) -> None:
     """Every native backend must reproduce numpy bit-exact; a python backend may
     ``skip`` (dependency absent / framework cannot express the op) but must never
     FAIL -- a wrong answer on any backend is a real bug."""
@@ -47,7 +47,7 @@ def _assert_forms(res: dict):
 # --------------------------------------------------------------------------- #
 
 
-def test_inplace_output_buffer():
+def test_inplace_output_buffer() -> None:
     x = np.arange(12, dtype=np.float64).reshape(3, 4)
     res = run_op(
         "import numpy as np\ndef f(x, out):\n out[:] = x * 2.0 + 1.0\n",
@@ -66,7 +66,7 @@ def test_inplace_output_buffer():
 # --------------------------------------------------------------------------- #
 
 
-def test_return_single_array():
+def test_return_single_array() -> None:
     x = np.arange(12, dtype=np.float64).reshape(3, 4)
     res = run_return_op(
         "import numpy as np\ndef f(x):\n return x * 2.0 + 1.0\n",
@@ -80,7 +80,7 @@ def test_return_single_array():
     _assert_forms(res)
 
 
-def test_return_reduction_result():
+def test_return_reduction_result() -> None:
     # a returned reduction (rank-reducing) still promotes to the reduced shape.
     x = np.arange(12, dtype=np.float64).reshape(3, 4)
     res = run_return_op(
@@ -100,7 +100,7 @@ def test_return_reduction_result():
 # --------------------------------------------------------------------------- #
 
 
-def test_return_tuple_of_arrays():
+def test_return_tuple_of_arrays() -> None:
     x = np.arange(12, dtype=np.float64).reshape(3, 4)
     y = np.arange(12, 24, dtype=np.float64).reshape(3, 4)
     res = run_return_op(
@@ -120,7 +120,7 @@ def test_return_tuple_of_arrays():
 # --------------------------------------------------------------------------- #
 
 
-def test_return_scalar():
+def test_return_scalar() -> None:
     v = np.array([3.0, 9.0, 2.0, 7.0, 1.0], dtype=np.float64)
     res = run_return_op(
         "import numpy as np\ndef f(x):\n return int(np.argmax(x))\n",
@@ -140,7 +140,7 @@ def test_return_scalar():
 
 
 @pytest.mark.parametrize("expr", ["x.T", "np.transpose(x)", "x.transpose(1, 0)", "x.transpose((1, 0))"])
-def test_return_transposed_view(expr):
+def test_return_transposed_view(expr: str) -> None:
     x = np.arange(12, dtype=np.float64).reshape(3, 4)
     res = run_return_op(
         f"import numpy as np\ndef f(x):\n return {expr}\n",
@@ -154,7 +154,7 @@ def test_return_transposed_view(expr):
     _assert_forms(res)
 
 
-def test_return_transposed_axes_3d():
+def test_return_transposed_axes_3d() -> None:
     x = np.arange(24, dtype=np.float64).reshape(2, 3, 4)
     res = run_return_op(
         "import numpy as np\ndef f(x):\n return np.transpose(x, (0, 2, 1))\n",
@@ -173,7 +173,7 @@ def test_return_transposed_axes_3d():
 # --------------------------------------------------------------------------- #
 
 
-def _binding_ptr_args(src, inputs, shapes, syms):
+def _binding_ptr_args(src: str, inputs: list[str], shapes: dict[str, str], syms: dict[str, int]) -> list[str]:
     from numpyto_common.frontend import parse_kernel
     from numpyto_common.lowering import lower
     from numpyto_c.bindings import emit_binding
@@ -201,7 +201,7 @@ def _binding_ptr_args(src, inputs, shapes, syms):
     return [a["name"] for a in args if a["kind"].startswith("ptr_")]
 
 
-def test_tuple_return_promotes_both_into_the_abi():
+def test_tuple_return_promotes_both_into_the_abi() -> None:
     # both returned arrays must appear in the emitted ABI as buffer params so a
     # C-based backend has somewhere to write each -- and the numerical check
     # above compares both.
@@ -214,7 +214,7 @@ def test_tuple_return_promotes_both_into_the_abi():
     assert "ret_arr0" in ptrs and "ret_arr1" in ptrs, ptrs
 
 
-def test_scalar_return_promotes_a_buffer_into_the_abi():
+def test_scalar_return_promotes_a_buffer_into_the_abi() -> None:
     ptrs = _binding_ptr_args(
         "import numpy as np\ndef f(x):\n return int(np.argmax(x))\n", ["x"], {"x": "(N,)"}, {"N": 5}
     )

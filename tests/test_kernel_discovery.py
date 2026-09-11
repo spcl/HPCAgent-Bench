@@ -42,7 +42,7 @@ def _kernel_numpy_impls():
 
 
 @pytest.mark.parametrize("stem,npf", _kernel_numpy_impls(), ids=lambda v: v if isinstance(v, str) else "")
-def test_every_manifested_numpy_impl_is_discoverable_and_loads(stem, npf):
+def test_every_manifested_numpy_impl_is_discoverable_and_loads(stem, npf) -> None:
     """A ``<k>_numpy.py`` + ``<k>.yaml`` pair MUST resolve via BenchSpec.load, at the same dir.
 
     This is the exact invariant that would have caught the pruned kernels the day a ``<k>.yaml`` went
@@ -56,7 +56,7 @@ def test_every_manifested_numpy_impl_is_discoverable_and_loads(stem, npf):
     assert resolved == npf.parent.resolve(), f"{stem}: resolves to {resolved}, impl is in {npf.parent}"
 
 
-def test_every_discoverable_kernel_has_a_loadable_manifest():
+def test_every_discoverable_kernel_has_a_loadable_manifest() -> None:
     """The reverse: every yaml the scanner finds must load. A malformed manifest is discovered but
     unusable, which is its own silent gap (it counts toward the suite yet can never run)."""
     bad = []
@@ -68,7 +68,7 @@ def test_every_discoverable_kernel_has_a_loadable_manifest():
     assert not bad, "discoverable manifests that fail to load:\n" + "\n".join(bad)
 
 
-def test_kernel_stems_are_unique():
+def test_kernel_stems_are_unique() -> None:
     """A stem shared by >1 manifest across tracks silently drops out of ``_stem_aliases`` (see
     ``hpcagent_bench.spec._stem_aliases``), so ``BenchSpec.load(stem)`` -- and every stem-keyed
     ``KERNELS`` lookup -- starts raising ``KeyError`` for a kernel that is still on disk. A stale
@@ -83,7 +83,7 @@ def test_kernel_stems_are_unique():
     )
 
 
-def test_discovery_scans_are_nonempty():
+def test_discovery_scans_are_nonempty() -> None:
     """The two guards above pass VACUOUSLY on an empty scan: pytest reports an empty parametrize as a
     skip, and the loop over ``_scan_kernels()`` asserts nothing when it is empty. Pin that both
     discovery mechanisms actually find kernels, so a rglob / rename / BENCH-path regression returning
@@ -100,14 +100,14 @@ _RESTORED_HPC_PORTS = ("examinimd", "dbcsr", "minife", "srad", "reduce_2d", "con
 
 
 @pytest.mark.parametrize("short", _RESTORED_HPC_PORTS)
-def test_restored_hpc_ports_stay_present(short):
+def test_restored_hpc_ports_stay_present(short) -> None:
     s = BenchSpec.load(short)  # raises KeyError if it vanishes again
     assert s.module_name == short
     # It must also be in the e2e sweep's kernel set, or it is discoverable but never actually graded.
     assert short in set(legacy_kernels()) | set(foundation_kernels()), f"{short} is not in the e2e sweep set"
 
 
-def test_selector_returns_db_short_names_not_stems():
+def test_selector_returns_db_short_names_not_stems() -> None:
     """``select_short_names`` (the plot table filter) must return the value the results DB stores in
     its ``benchmark`` column, which is ``BenchSpec.load(k).short_name``.
 

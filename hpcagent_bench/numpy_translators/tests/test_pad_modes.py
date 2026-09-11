@@ -33,15 +33,16 @@ from numpyto_c.emit import emit_c
 _NATIVE = ("c", "cpp", "fortran")
 
 
-def _assert_ok(res, label):
+def _assert_ok(res: dict[str, str], label: str) -> None:
     fails = {b: s for b, s in res.items() if not (s == "ok" or s.startswith("skip"))}
+    assert any(v == "ok" for v in res.values()), f"every backend skipped; the comparison never ran: {res}"
     assert not fails, f"{label}: {fails}"
 
 
 @pytest.mark.parametrize("mode", ["edge", "reflect", "wrap", "symmetric"])
 @pytest.mark.parametrize("n,w", [(6, 2), (4, 5)])  # w > n exercises the multi-period remap
 @pytest.mark.parametrize("symbolic", [True, False])
-def test_pad_boundary_mode(mode, n, w, symbolic):
+def test_pad_boundary_mode(mode: str, n: int, w: int, symbolic: bool) -> None:
     src = f"import numpy as np\ndef pad_op(a, out):\n    out[:] = np.pad(a, {w}, mode='{mode}')\n"
     a = np.random.default_rng(0).random((n,))
     out_shape = (n + 2 * w,)
@@ -61,7 +62,7 @@ def test_pad_boundary_mode(mode, n, w, symbolic):
     _assert_ok(res, label)
 
 
-def test_pad_reflect_size1_axis_repeats():
+def test_pad_reflect_size1_axis_repeats() -> None:
     # reflect on a size-1 axis has period 0 in numpy -> it just repeats the one
     # element; the lowering guards this (no modulo-by-zero) and returns index 0.
     src = "import numpy as np\ndef pad_op(a, out):\n    out[:] = np.pad(a, 2, mode='reflect')\n"
@@ -82,7 +83,7 @@ def _emit_c(mode: str) -> str:
     return text[text.index("void pad_op(") :]
 
 
-def test_pad_edge_clamp_is_a_conditional_expression_not_control_flow():
+def test_pad_edge_clamp_is_a_conditional_expression_not_control_flow() -> None:
     # The property pluto consumes: the clamp is an EXPRESSION, so the pad loop
     # body stays straight-line. Two guard ifs here made pet drop every statement.
     body = _emit_c("edge")
@@ -92,7 +93,7 @@ def test_pad_edge_clamp_is_a_conditional_expression_not_control_flow():
     assert "if (" not in body, f"data-dependent control flow in the padded-index region:\n{body}"
 
 
-def test_pad_edge_clamp_never_self_reads_the_index_scalar():
+def test_pad_edge_clamp_never_self_reads_the_index_scalar() -> None:
     # Each arm recomputes the pre-clamp index; reading __ps<k> back would add a
     # RAW dependence on top of the WAW the single assign already carries.
     for clamp in re.findall(r"^\s+(__ps\d+) = (.+);$", _emit_c("edge"), re.M):

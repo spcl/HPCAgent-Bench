@@ -177,7 +177,7 @@ def pin_core_preexec():
     inherited by the whole child tree. Only wired when :func:`will_pin_affinity`, so the
     ``os.sched_setaffinity`` reference is never reached on a platform without it."""
 
-    def _pin():
+    def _pin() -> None:
         os.sched_setaffinity(0, {PIN_CORE})
 
     return _pin

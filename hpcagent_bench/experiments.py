@@ -26,7 +26,10 @@ import pathlib
 import sqlite3
 import sys
 from collections.abc import Iterable, Iterator
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 LOG = logging.getLogger(__name__)
 
@@ -163,7 +166,7 @@ def read_database(db: Database, want: dict[str, frozenset[str]]) -> Iterator[dic
                 yield record
 
 
-def observations(run_globs: Iterable[str], **identity: str | Iterable[str]) -> Any:
+def observations(run_globs: Iterable[str], **identity: str | Iterable[str]) -> pd.DataFrame:
     """The campaign's observations as a DataFrame, one row per recorded grade.
 
     Selection is by IDENTITY COLUMN, one keyword per column in :data:`IDENTITY`, each taking a value

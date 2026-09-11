@@ -65,12 +65,12 @@ NOT_EXACT = [
 
 
 @pytest.mark.parametrize("expr,expected", CASES)
-def test_folds_to_expected(expr, expected):
+def test_folds_to_expected(expr: str, expected: str) -> None:
     assert fold_shape_expr(expr) == expected
 
 
 @pytest.mark.parametrize("expr,_expected", CASES)
-def test_folding_preserves_value(expr, _expected):
+def test_folding_preserves_value(expr: str, _expected: str) -> None:
     """The folded form must agree with the original on every input, not just on a lucky one."""
     names = sorted({n.id for n in ast.walk(ast.parse(expr, mode="eval")) if isinstance(n, ast.Name)})
     folded = fold_shape_expr(expr)
@@ -80,12 +80,12 @@ def test_folding_preserves_value(expr, _expected):
 
 
 @pytest.mark.parametrize("expr,reason", NOT_EXACT)
-def test_an_inexact_numerator_keeps_its_division(expr, reason):
+def test_an_inexact_numerator_keeps_its_division(expr: str, reason: str) -> None:
     assert fold_shape_expr(expr) == expr, reason
 
 
 @pytest.mark.parametrize("expr,_expected", CASES)
-def test_folding_preserves_value_for_negative_operands_too(expr, _expected):
+def test_folding_preserves_value_for_negative_operands_too(expr: str, _expected: str) -> None:
     """``//`` rounds toward -inf, so a rewrite can agree on every positive input and still be wrong.
 
     The extents this folder sees are sizes, but it is asked about them mid-expression, where a
@@ -100,32 +100,32 @@ def test_folding_preserves_value_for_negative_operands_too(expr, _expected):
         assert eval(folded, {}, env) == eval(expr, {}, env), (expr, folded, env)
 
 
-def test_a_chain_that_cancels_completely_is_left_alone():
+def test_a_chain_that_cancels_completely_is_left_alone() -> None:
     """``a - a`` is 0, but rebuilding it as one needs a term to lead with and there is none. The
     folder returns the node untouched rather than inventing a literal -- an extent of 0 from a
     rewrite would be far worse than an unfolded one."""
     assert fold_shape_expr("a - a") == "a - a"
 
 
-def test_shrinks_the_nested_form():
+def test_shrinks_the_nested_form() -> None:
     deep = "((((width + 6 - 7) // 2 + 1) + 2 - 3) // 2 + 1 + 0 - 1) // 1 + 1"
     assert len(fold_shape_expr(deep)) < len(deep)
 
 
 @pytest.mark.parametrize("expr", ["h", "arr.shape[0]", "n * m", "(h - 1) // 2 + 1"])
-def test_already_minimal_is_left_alone(expr):
+def test_already_minimal_is_left_alone(expr: str) -> None:
     """A token with nothing to gather must come back byte-identical -- the fold is not a reformat."""
     assert fold_shape_expr(expr) == expr
 
 
-def test_unparseable_token_passes_through():
+def test_unparseable_token_passes_through() -> None:
     """Shape tokens are strings from several producers; one that is not a Python expression is
     returned as-is rather than raising, since folding is an optimisation and not a validation."""
     assert fold_shape_expr("n +") == "n +"
 
 
 @pytest.mark.parametrize("expr", ["(h + 2) // 2", "(h - 1) // 2 + 1", "h // 2 * 2", "(h + 3) % 4"])
-def test_division_is_not_distributed(expr):
+def test_division_is_not_distributed(expr: str) -> None:
     """``//`` rounds toward -inf, so pushing a division through an add is wrong for any operand that
     is not an exact multiple. These must survive untouched however tempting they look."""
     assert fold_shape_expr(expr) == expr

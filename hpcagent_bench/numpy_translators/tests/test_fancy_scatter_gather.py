@@ -25,6 +25,7 @@ _ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 
 
 def _all_ok(res):
+    assert any(v == "ok" for v in res.values()), f"every backend skipped; the comparison never ran: {res}"
     return all(v == "ok" or v.startswith("skip") for v in res.values()), res
 
 
@@ -33,7 +34,7 @@ def _boxes(nat, K, N, seed):
     return np.stack([np.sort(rng.choice(N, size=K, replace=False)).astype(np.int64) for _ in range(nat)])
 
 
-def test_scatter_add_materialised_box():
+def test_scatter_add_materialised_box() -> None:
     # ``box = mbox[ia]`` (row -> int index array), then ``out[box] += col * s``:
     # a fancy scatter-ACCUMULATE at the box points (mirrors _addusxx_r on rhoc).
     src = (
@@ -68,7 +69,7 @@ def test_scatter_add_materialised_box():
     assert ok, res
 
 
-def test_scatter_add_duplicate_indices_is_buffered():
+def test_scatter_add_duplicate_indices_is_buffered() -> None:
     # numpy fancy ``A[idx] += rhs`` is BUFFERED, not accumulating: a repeated index
     # is written once (last-write-wins), NOT summed. The lowering snapshots the old
     # gathered values then stores, so duplicate indices match numpy bit-exact.
@@ -92,7 +93,7 @@ def test_scatter_add_duplicate_indices_is_buffered():
     assert ok, res
 
 
-def test_gather_dot_materialised_box():
+def test_gather_dot_materialised_box() -> None:
     # ``vc[box]`` gather (index array) reduced against a column via ``np.dot``
     # (mirrors _newdxx_r: aux = np.dot(qr, vc[box])).
     src = (
@@ -125,7 +126,7 @@ def test_gather_dot_materialised_box():
     assert ok, res
 
 
-def test_roll_axis1():
+def test_roll_axis1() -> None:
     # ``np.roll(A, -1, axis=1)`` circular shift on a bare array.
     src = "import numpy as np\ndef roll_axis1(A, out):\n out[:, :] = np.roll(A, -1, axis=1)\n"
     R, C = 3, 5
@@ -144,7 +145,7 @@ def test_roll_axis1():
     assert ok, res
 
 
-def test_roll_sliced_operand():
+def test_roll_sliced_operand() -> None:
     # ``np.roll(A[:, :, k], ...)`` -- a SLICED operand (2-D view of a 3-D array).
     src = "import numpy as np\ndef roll_slice(buf, out):\n out[:, :] = np.roll(buf[:, :, 0], -1, axis=1)\n"
     R, C, D = 3, 5, 2
@@ -163,7 +164,7 @@ def test_roll_sliced_operand():
     assert ok, res
 
 
-def test_roll_sliced_self_assign():
+def test_roll_sliced_self_assign() -> None:
     # ``X[:, :, k] = np.roll(X[:, :, k], -1, axis=1)`` -- the QE vexx negrp>1
     # band-group shift: sliced operand AND target, in place. The decompose reads a
     # snapshot so the in-place write is safe.
@@ -183,7 +184,7 @@ def test_roll_sliced_self_assign():
 # --------------------------------------------------------------------------- #
 
 
-def test_chained_gather_is_not_flattened_into_one_subscript():
+def test_chained_gather_is_not_flattened_into_one_subscript() -> None:
     """``A[idx][j] == A[idx[j]]``, NOT ``A[idx, j]``.
 
     Flattening it produced a subscript with more indices than the base has axes, and the
@@ -198,7 +199,7 @@ def test_chained_gather_is_not_flattened_into_one_subscript():
     assert _ast.unparse(tree).strip() == "y = x[aj][:, None, :, :]"
 
 
-def test_chained_scalar_index_is_still_flattened():
+def test_chained_scalar_index_is_still_flattened() -> None:
     """A genuinely scalar inner index keeps the existing collapse: ``psi[f][..., 0]``."""
     import ast as _ast
 
@@ -215,7 +216,7 @@ def test_chained_scalar_index_is_still_flattened():
 # --------------------------------------------------------------------------- #
 
 
-def test_gather_two_broadcast_arrays_plus_scalar_axis():
+def test_gather_two_broadcast_arrays_plus_scalar_axis() -> None:
     """``t = A[r, c, 0]``: r (nrow,1) and c (1,ncol) BROADCAST to (nrow,ncol);
     the trailing literal ``0`` is a scalar axis that numpy still counts as
     "advanced" (so it stays adjacent to r/c) but adds neither its own axis
@@ -247,7 +248,7 @@ def test_gather_two_broadcast_arrays_plus_scalar_axis():
     assert ok, res
 
 
-def test_gather_index_array_mixed_with_real_slice():
+def test_gather_index_array_mixed_with_real_slice() -> None:
     """``t = A[r, :]``: a rank-1 index array on axis 0 next to a real ``:``
     slice on axis 1 -- the slice keeps its own axis, the array replaces its
     own axis with its own rank (a single-array adjacent broadcast group)."""
@@ -277,7 +278,7 @@ def test_gather_index_array_mixed_with_real_slice():
     assert ok, res
 
 
-def test_gather_broadcast_axis_extent_one_reads_index_zero():
+def test_gather_broadcast_axis_extent_one_reads_index_zero() -> None:
     """``t = A[r, c]``: r (nrow,1) and c (1,ncol) broadcast to (nrow,ncol) --
     each operand's OWN size-1 axis must read index 0, not the (larger) shared
     iter, or it runs off its length-1 allocation."""
@@ -308,7 +309,7 @@ def test_gather_broadcast_axis_extent_one_reads_index_zero():
     assert ok, res
 
 
-def test_gather_front_placed_broadcast_separated_by_real_slice():
+def test_gather_front_placed_broadcast_separated_by_real_slice() -> None:
     """``t = A[blk[:, :, 0], :, idx[:, :, 0]]``: two COMPOUND array-valued
     advanced indices with a real slice sitting BETWEEN them in the source
     text. numpy moves their broadcast result to the FRONT -- result shape

@@ -37,7 +37,7 @@ def auto_init_specs(minimum_arrays: int = 2, limit: int = 4):
     return found
 
 
-def test_spawn_is_reproducible_and_distinct():
+def test_spawn_is_reproducible_and_distinct() -> None:
     a = [g.random(8) for g in streams.spawn_streams(42, 6)]
     b = [g.random(8) for g in streams.spawn_streams(42, 6)]
     c = [g.random(8) for g in streams.spawn_streams(43, 6)]
@@ -48,14 +48,14 @@ def test_spawn_is_reproducible_and_distinct():
             assert not np.array_equal(a[i], a[j]), f"streams {i} and {j} collided"
 
 
-def test_stream_k_does_not_depend_on_how_many_were_spawned():
+def test_stream_k_does_not_depend_on_how_many_were_spawned() -> None:
     """The whole point: asking for more arrays must not move the ones already there."""
     short = [g.random(8) for g in streams.spawn_streams(7, 3)]
     long = [g.random(8) for g in streams.spawn_streams(7, 9)]
     assert all(np.array_equal(x, y) for x, y in zip(short, long))
 
 
-def test_stream_k_does_not_depend_on_draw_order():
+def test_stream_k_does_not_depend_on_draw_order() -> None:
     """Drawing array 5 first must give array 5 the same values -- a shared stream cannot do this."""
     forward = [g.random(8) for g in streams.spawn_streams(7, 6)]
     generators = streams.spawn_streams(7, 6)
@@ -65,13 +65,13 @@ def test_stream_k_does_not_depend_on_draw_order():
     assert all(np.array_equal(x, y) for x, y in zip(forward, backward))
 
 
-def test_bit_generators_are_round_robined():
+def test_bit_generators_are_round_robined() -> None:
     got = [type(g.bit_generator) for g in streams.spawn_streams(1, 2 * len(streams.ROUND_ROBIN))]
     assert got[: len(streams.ROUND_ROBIN)] == list(streams.ROUND_ROBIN)
     assert got[len(streams.ROUND_ROBIN) :] == list(streams.ROUND_ROBIN), "rotation must repeat"
 
 
-def test_threaded_fill_matches_sequential(monkeypatch):
+def test_threaded_fill_matches_sequential(monkeypatch) -> None:
     tasks = [(lambda g=g: g.uniform(-1000, 1000, 1 << 16)) for g in streams.spawn_streams(11, 8)]
     monkeypatch.setattr(streams, "THREAD_MIN_ELEMENTS", 1 << 62)
     sequential = streams.fill(tasks, elements=1 << 20)
@@ -91,7 +91,7 @@ EXTREME = {"sigma": 90.0, "scale": 1e30, "loc": 1e30}
 @pytest.mark.parametrize("name", STANDARD)
 @pytest.mark.parametrize("precision", list(Precision))
 @pytest.mark.parametrize("spec", [{}, EXTREME], ids=["default", "extreme"])
-def test_standard_distributions_stay_in_the_safe_range(name, precision, spec):
+def test_standard_distributions_stay_in_the_safe_range(name, precision, spec) -> None:
     """EVERY precision, not just the two wide ones: the narrow formats are where the clip does the
     work, and the wide ones are where its absence went unnoticed."""
     got = distributions.generate(name, (2048,), precision, {"rng": np.random.default_rng(5), **spec})
@@ -101,7 +101,7 @@ def test_standard_distributions_stay_in_the_safe_range(name, precision, spec):
     assert np.abs(as_f64).max() <= safe_max(precision)
 
 
-def test_no_precision_has_an_unbounded_ceiling():
+def test_no_precision_has_an_unbounded_ceiling() -> None:
     """``inf`` in the table reads as "wide enough not to worry" and silently disables the clip.
     Every format has a largest finite value, so every entry has to be one."""
     unbounded = [p.value for p in Precision if not np.isfinite(safe_max(p))]
@@ -109,7 +109,7 @@ def test_no_precision_has_an_unbounded_ceiling():
 
 
 @pytest.mark.parametrize("name", STANDARD)
-def test_standard_distributions_follow_their_stream(name):
+def test_standard_distributions_follow_their_stream(name) -> None:
     kwargs = {"rng": np.random.default_rng(3)}
     a = distributions.generate(name, (64,), Precision.FP64, kwargs)
     b = distributions.generate(name, (64,), Precision.FP64, {"rng": np.random.default_rng(3)})
@@ -119,7 +119,7 @@ def test_standard_distributions_follow_their_stream(name):
 
 
 @pytest.mark.parametrize("stem_spec", auto_init_specs(), ids=lambda s: s[0])
-def test_auto_initialize_is_reproducible(stem_spec):
+def test_auto_initialize_is_reproducible(stem_spec) -> None:
     _, spec = stem_spec
     a = auto_initialize(spec, "S", Precision.FP64, seed=42)
     b = auto_initialize(spec, "S", Precision.FP64, seed=42)
@@ -127,7 +127,7 @@ def test_auto_initialize_is_reproducible(stem_spec):
 
 
 @pytest.mark.parametrize("stem_spec", auto_init_specs(), ids=lambda s: s[0])
-def test_auto_initialize_threading_does_not_change_the_data(stem_spec, monkeypatch):
+def test_auto_initialize_threading_does_not_change_the_data(stem_spec, monkeypatch) -> None:
     _, spec = stem_spec
     monkeypatch.setattr(streams, "THREAD_MIN_ELEMENTS", 1 << 62)
     sequential = auto_initialize(spec, "S", Precision.FP64, seed=42)

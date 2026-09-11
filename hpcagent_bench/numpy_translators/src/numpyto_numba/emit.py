@@ -363,7 +363,7 @@ class _SparseMatmulRewriter(ast.NodeTransformer):
     hoisted above it.
     """
 
-    def __init__(self, sparse, symbol_exprs, vectors_only: bool):
+    def __init__(self, sparse, symbol_exprs, vectors_only: bool) -> None:
         self.sparse = sparse
         self.symbol_exprs = symbol_exprs
         self.vectors_only = vectors_only

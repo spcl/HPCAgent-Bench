@@ -51,7 +51,7 @@ def _exec_desugared(src: str, scope: dict, dtypes: dict | None = None) -> dict:
     return scope
 
 
-def test_eigvalsh_lowers_to_eigenvalues_only_nest():
+def test_eigvalsh_lowers_to_eigenvalues_only_nest() -> None:
     """``w = np.linalg.eigvalsh(A)`` rewrites to the shared cyclic-Jacobi sweep
     bound to a single Name -- no ``L^-H`` back-transform, no eigenvector output."""
     txt = ast.unparse(ast.Module(body=_desugar_body(_EIGVALSH_SRC), type_ignores=[]))
@@ -60,7 +60,7 @@ def test_eigvalsh_lowers_to_eigenvalues_only_nest():
     assert txt.rstrip().endswith("w = __eigh0_wa")  # binds ONLY the eigenvalue vector
 
 
-def test_eigvalsh_desugar_matches_numpy():
+def test_eigvalsh_desugar_matches_numpy() -> None:
     """The rewritten eigenvalues-only loop nest, executed as numpy, reproduces
     ``numpy.linalg.eigvalsh`` (ascending) on a real symmetric matrix."""
     n = 5
@@ -71,7 +71,7 @@ def test_eigvalsh_desugar_matches_numpy():
     assert np.all(np.diff(w) >= -1e-9)  # ascending, like numpy
 
 
-def test_eigvalsh_real_operand_drops_real_imag_accessors():
+def test_eigvalsh_real_operand_drops_real_imag_accessors() -> None:
     """A ``A`` DECLARED real (dtype kind ``"float"``) must desugar with no ``.real``/
     ``.imag`` accessor left in the Jacobi sweep: DaCe lowers those to an UNQUALIFIED
     ``real()``/``imag()`` C++ call ADL cannot reach for a non-complex operand
@@ -93,7 +93,7 @@ def test_eigvalsh_real_operand_drops_real_imag_accessors():
     assert np.allclose(w, ref, rtol=1e-6, atol=1e-6)
 
 
-def test_eigvalsh_native_c_fortran_matches_numpy():
+def test_eigvalsh_native_c_fortran_matches_numpy() -> None:
     """Full C + Fortran compile+run of ``w[:] = np.linalg.eigvalsh(A)`` vs numpy."""
     n = 5
     A = _sym(n, 1)
@@ -123,7 +123,7 @@ _DERIVED_OPERAND_SRC = (
 )
 
 
-def test_a_real_operand_stays_real_through_transpose_and_factorisations():
+def test_a_real_operand_stays_real_through_transpose_and_factorisations() -> None:
     """rayleigh_ritz_rotation's shape: the operand is a LOCAL, not a declared array.
 
     ``M = Linv @ h_sub @ Linv.T`` is three assignments and two factorisations away from anything
@@ -138,7 +138,7 @@ def test_a_real_operand_stays_real_through_transpose_and_factorisations():
     assert ".imag" not in txt, f"a real operand built through .T / cholesky / inv still emits .imag:\n{txt}"
 
 
-def test_an_undeclared_operand_keeps_the_complex_form():
+def test_an_undeclared_operand_keeps_the_complex_form() -> None:
     """The other direction, and the one that must never regress: with nothing declared, the
     operand is unknown, and unknown must take the COMPLEX branch. Guessing real here would drop
     an imaginary part -- a wrong answer, not a missed optimisation."""

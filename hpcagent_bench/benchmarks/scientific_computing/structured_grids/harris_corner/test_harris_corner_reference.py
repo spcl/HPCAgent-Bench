@@ -45,7 +45,7 @@ def test_default_matches_pre_exposure_baseline():
     """Default k reproduces the hardcoded-0.04 numerics bit-for-bit."""
     R = _run(())
     assert np.isclose(R.sum(), _BASELINE_R_SUM, rtol=0, atol=1e-8)
-    assert np.isclose((R**2).sum(), _BASELINE_R_SUMSQ, rtol=0, atol=1e-8)
+    assert np.isclose((R * R).sum(), _BASELINE_R_SUMSQ, rtol=0, atol=1e-8)
 
 
 def test_omitting_k_equals_explicit_default():

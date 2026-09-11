@@ -31,7 +31,7 @@ def accepts_positional_dtype(params: Mapping[str, Any], supplied: int) -> bool:
 class Benchmark(object):
     """Reads benchmark manifest info and initializes benchmark data."""
 
-    def __init__(self, bname: str):
+    def __init__(self, bname: str) -> None:
         self.bname = bname
         self.bdata = dict()
 

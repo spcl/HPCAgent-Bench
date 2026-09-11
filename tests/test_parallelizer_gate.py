@@ -26,14 +26,14 @@ def gate_text() -> str:
     return GATE.read_text()
 
 
-def test_the_gate_carries_pollys_real_flags(gate_text: str):
+def test_the_gate_carries_pollys_real_flags(gate_text: str) -> None:
     """Every token of POLLY_PAR must be in the Polly check, or it gates a different compiler."""
     for token in flags.POLLY_PAR.split():
         assert token in gate_text, f"POLLY_PAR token {token!r} is not in the gate"
     assert flags.POLLY_OUTLINE_PATTERN in gate_text
 
 
-def test_the_gate_carries_gcc_autopars_real_flags(gate_text: str):
+def test_the_gate_carries_gcc_autopars_real_flags(gate_text: str) -> None:
     """GCC_AUTOPAR carries a ``{n}`` the gate fills with a literal; every other token must match."""
     for token in flags.GCC_AUTOPAR.split():
         if "{n}" in token:
@@ -43,7 +43,7 @@ def test_the_gate_carries_gcc_autopars_real_flags(gate_text: str):
     assert flags.GCC_AUTOPAR_OUTLINE_PATTERN in gate_text
 
 
-def test_the_gate_carries_nvhpcs_real_flags(gate_text: str):
+def test_the_gate_carries_nvhpcs_real_flags(gate_text: str) -> None:
     assert flags.NVHPC_CONCUR in gate_text
     for token in flags.CPU_BASELINE_NVHPC.split():
         if token == "-fPIC":
@@ -51,14 +51,14 @@ def test_the_gate_carries_nvhpcs_real_flags(gate_text: str):
         assert token in gate_text, f"CPU_BASELINE_NVHPC token {token!r} is not in the gate"
 
 
-def test_the_gate_checks_the_runtime_pattern_the_probe_uses(gate_text: str):
+def test_the_gate_checks_the_runtime_pattern_the_probe_uses(gate_text: str) -> None:
     """A gate matching a narrower runtime set than :func:`flags.probe_autopar` would pass a
     compiler the harness then refuses, or the reverse."""
     for alternative in flags.OMP_RUNTIME_CALL_PATTERN.split("|"):
         assert alternative in gate_text, f"runtime pattern {alternative!r} is not in the gate"
 
 
-def test_the_gate_checks_every_graded_c_and_cpp_driver(gate_text: str):
+def test_the_gate_checks_every_graded_c_and_cpp_driver(gate_text: str) -> None:
     """A driver the harness can select but the gate never compiles is one the image can ship
     broken -- which is exactly how icpx reached production unable to resolve ``<vector>``."""
     from hpcagent_bench import languages

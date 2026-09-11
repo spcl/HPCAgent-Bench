@@ -38,6 +38,7 @@ import pytest
 from _op_oracle import _bench_info, run_op
 
 from numpyto_common.frontend import parse_kernel
+from numpyto_common.ir import KernelIR
 from numpyto_common.lowering import lower
 from numpyto_c.emit import emit_c
 from numpyto_common.tuple_desugar import _drop_dead_none_bindings, desugar_tuples
@@ -45,7 +46,9 @@ from numpyto_common.tuple_desugar import _drop_dead_none_bindings, desugar_tuple
 _NATIVE = ("c", "cpp", "fortran")
 
 
-def _kir_for(src: str, func: str, inputs, outputs, shapes, syms):
+def _kir_for(
+    src: str, func: str, inputs: list[str], outputs: list[str], shapes: dict[str, str], syms: dict[str, int]
+) -> KernelIR:
     """``parse_kernel`` against a throwaway source + bench_info -- the real file-reading entry
     point, matching the sibling ``test_generator_tuple_fold.py``."""
     d = pathlib.Path(tempfile.mkdtemp())
@@ -87,7 +90,7 @@ _TAP_RANGE_SHAPES = {"x": "(N,)", "weight": "(K,)", "out": "(M,)"}
 _TAP_RANGE_SYMS = {"N": 2, "K": 3, "M": 2}
 
 
-def test_none_or_tuple_helper_splices_away():
+def test_none_or_tuple_helper_splices_away() -> None:
     # Structural: no surviving helper, no None literal, and the caller's own "continue" guard
     # is preserved verbatim (not replaced by a flag -- there is nothing to seed, it just skips).
     kir = _kir_for(
@@ -105,7 +108,7 @@ def test_none_or_tuple_helper_splices_away():
     assert "continue" in body
 
 
-def test_none_or_tuple_helper_numeric_and_skips_the_empty_tap():
+def test_none_or_tuple_helper_numeric_and_skips_the_empty_tap() -> None:
     # stride=1, padding=2, dilation=2 over a 2-wide input / 3-tap kernel makes k=0 and k=2 land
     # entirely outside the input (an empty range -> None -> skip) and only k=1 contribute -- this
     # exercises BOTH the skip and the live path, not just one.
@@ -159,7 +162,7 @@ _TAP_NESTED_SRC = (
 )
 
 
-def test_none_or_tuple_helper_splices_when_the_unpack_is_two_loops_deeper():
+def test_none_or_tuple_helper_splices_when_the_unpack_is_two_loops_deeper() -> None:
     """Structural: the helper is gone, and its body landed where the CALL was -- in the outer
     loop, ahead of the inner one -- rather than being duplicated down at the unpack.
 
@@ -185,7 +188,7 @@ def test_none_or_tuple_helper_splices_when_the_unpack_is_two_loops_deeper():
     assert any(isinstance(st, ast.If) and st.body[0].__class__ is ast.Continue for st in inner.body), ast.unparse(inner)
 
 
-def test_none_or_tuple_helper_nested_numeric_and_skips_both_empty_taps():
+def test_none_or_tuple_helper_nested_numeric_and_skips_both_empty_taps() -> None:
     """stride=1, padding=2, dilation=2 leaves k=1 as the only in-range tap on EACH axis, so 8 of
     the 9 (ky, kx) pairs are skipped and the one that survives contracts over both ranges."""
     res = run_op(
@@ -200,7 +203,7 @@ def test_none_or_tuple_helper_nested_numeric_and_skips_both_empty_taps():
     assert res == {"c": "ok", "cpp": "ok", "fortran": "ok"}, res
 
 
-def test_none_or_tuple_helper_two_unpacks_of_one_sentinel_still_refuses():
+def test_none_or_tuple_helper_two_unpacks_of_one_sentinel_still_refuses() -> None:
     """NEGATIVE: the deferred form binds the helper's locals ONCE at the call site, so it holds
     only while the sentinel has exactly one consumer. A second unpack in a sibling branch reads
     the tuple on a path the splice cannot account for -- refuse instead of guessing."""
@@ -229,7 +232,7 @@ def test_none_or_tuple_helper_two_unpacks_of_one_sentinel_still_refuses():
         )
 
 
-def test_none_or_tuple_helper_wrong_guard_shape_still_refuses():
+def test_none_or_tuple_helper_wrong_guard_shape_still_refuses() -> None:
     # NEGATIVE: the caller wraps the live path in ``if tap is not None:`` with no ``continue`` --
     # not the recognised "guard responds with a plain control statement" shape, so the helper is
     # NOT spliced and keeps its un-emittable early ``return None``.
@@ -303,7 +306,7 @@ _ACC_SYMS = {"N": 4, "M": 3}
 
 
 @pytest.mark.parametrize("src", [_ACC_TERNARY_SRC, _ACC_IFELSE_SRC], ids=["ternary", "if_else"])
-def test_accumulator_peels_to_a_flag(src):
+def test_accumulator_peels_to_a_flag(src: str) -> None:
     # Structural: no None literal, an explicit __acc_seen-style flag toggling 0 -> 1 once.
     kir = _kir_for(src, "f", ["x", "out"], ["out"], _ACC_SHAPES, _ACC_SYMS)
     body = ast.unparse(kir.tree)
@@ -313,7 +316,7 @@ def test_accumulator_peels_to_a_flag(src):
 
 
 @pytest.mark.parametrize("src", [_ACC_TERNARY_SRC, _ACC_IFELSE_SRC], ids=["ternary", "if_else"])
-def test_accumulator_all_negative_input_distinguishes_identity_from_zero_seed(src):
+def test_accumulator_all_negative_input_distinguishes_identity_from_zero_seed(src: str) -> None:
     # The bug most likely to slip through a wrong fix: seeding the accumulator with 0.0 (instead of
     # genuinely peeling the first tap) gives the WRONG answer whenever every element is negative,
     # since max(0.0, negative...) never drops below 0. All-negative input makes that divergence
@@ -324,7 +327,7 @@ def test_accumulator_all_negative_input_distinguishes_identity_from_zero_seed(sr
     assert np.all(x < 0)  # the input premise the test relies on
 
 
-def test_accumulator_straight_line_no_loop_still_refuses():
+def test_accumulator_straight_line_no_loop_still_refuses() -> None:
     # NEGATIVE: no loop at all -- a genuinely data-dependent None (the runtime ``flag`` decides
     # whether ``acc`` is ever bound), which is a real runtime question, not a first-iteration
     # toggle. Peeling this would be unsound (there is no "later iteration" to distinguish from
@@ -365,7 +368,7 @@ _DEFAULT_STRIDE_SRC = (
 )
 
 
-def test_default_argument_sentinel_folds_away():
+def test_default_argument_sentinel_folds_away() -> None:
     # Structural: no None literal, no surviving helper -- the guard resolves statically since the
     # call site passed the literal None, and the now-dead init doesn't survive just because the
     # SAME renamed local is read again later, through the guard's own (unconditional) rebind.
@@ -375,7 +378,7 @@ def test_default_argument_sentinel_folds_away():
     assert "None" not in body
 
 
-def test_default_argument_sentinel_numeric():
+def test_default_argument_sentinel_numeric() -> None:
     x = np.arange(8, dtype=np.float64)
     res = run_op(
         _DEFAULT_STRIDE_SRC,
@@ -389,7 +392,7 @@ def test_default_argument_sentinel_numeric():
     assert res == {"c": "ok", "cpp": "ok", "fortran": "ok"}, res
 
 
-def test_default_argument_sentinel_survives_broken_adjacency():
+def test_default_argument_sentinel_survives_broken_adjacency() -> None:
     # An unrelated statement (``unrelated = other + 1.0``) sits between the reassigned param's
     # ``None`` init and the guard that resolves it, so the STRICT adjacency rule does not fire and
     # the init IS read again through the guard's own rebind. This used to refuse; the branch-rebind
@@ -420,7 +423,7 @@ def test_default_argument_sentinel_survives_broken_adjacency():
     assert res == {"c": "ok", "cpp": "ok", "fortran": "ok"}, res
 
 
-def test_a_sentinel_an_is_none_test_still_inspects_is_kept():
+def test_a_sentinel_an_is_none_test_still_inspects_is_kept() -> None:
     # NEGATIVE: here the ``None`` IS the value being read, so the branch-rebind rule must stand
     # back -- dropping the write would change what the surviving test sees.
     fn = ast.parse(
@@ -436,7 +439,7 @@ def test_a_sentinel_an_is_none_test_still_inspects_is_kept():
 # --------------------------------------------------------------------------------------------- #
 
 
-def test_drop_dead_none_bindings_adjacency_unit():
+def test_drop_dead_none_bindings_adjacency_unit() -> None:
     fn = ast.parse("def h(k):\n stride = None\n if stride is None:\n  stride = k\n return stride + 1\n").body[0]
     desugar_tuples(fn, int_scalars=frozenset({"k"}), float_scalars=frozenset(), arrays=frozenset(), ranks={})
     assert ast.unparse(fn) == "def h(k):\n    stride = k\n    return stride + 1"

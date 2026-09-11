@@ -34,6 +34,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Callable
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -54,20 +55,20 @@ SKIP_PREFIXES = ("hpcagent_bench/benchmarks/",)
 SKIP_NAME_MARKERS = ("_generated.",)
 
 
-def _run(cmd):
+def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
 
 
-def _git_lines(args):
+def _git_lines(args: list[str]) -> list[str]:
     out = _run(["git", *args])
     return [ln for ln in out.stdout.splitlines() if ln.strip()] if out.returncode == 0 else []
 
 
-def _ref_exists(ref):
+def _ref_exists(ref: str) -> bool:
     return _run(["git", "rev-parse", "--verify", "--quiet", ref]).returncode == 0
 
 
-def changed_files(base):
+def changed_files(base: str) -> set[str]:
     """Files changed vs ``base`` (merge-base form) plus staged + working-tree edits."""
     files = set()
     if base and _ref_exists(base):
@@ -79,11 +80,11 @@ def changed_files(base):
     return files
 
 
-def all_tracked_files():
+def all_tracked_files() -> set[str]:
     return set(_git_lines(["ls-files"]))
 
 
-def is_skipped(rel, lang):
+def is_skipped(rel: str, lang: str) -> bool:
     posix = rel.replace(os.sep, "/")
     name = posix.rsplit("/", 1)[-1]
     if any(m in name for m in SKIP_NAME_MARKERS):
@@ -91,7 +92,7 @@ def is_skipped(rel, lang):
     return lang != "py" and any(posix.startswith(p) for p in SKIP_PREFIXES)
 
 
-def classify(rel):
+def classify(rel: str) -> str | None:
     ext = Path(rel).suffix.lower()
     if ext in PY_EXT:
         return "py"
@@ -106,14 +107,14 @@ def classify(rel):
 # fix=True it additionally applies the formatter in place -- so the caller's count
 # of "True"s is accurate in both modes (check: how many fail; fix: how many were
 # reformatted).
-def _needs_format_cpp(path, fix):
+def _needs_format_cpp(path: str, fix: bool) -> bool:
     needs = _run(["clang-format", "--dry-run", "-Werror", path]).returncode != 0
     if fix and needs:
         _run(["clang-format", "-i", path])
     return needs
 
 
-def _needs_format_fortran(path, fix):
+def _needs_format_fortran(path: str, fix: bool) -> bool:
     cfg = str(REPO_ROOT / ".fprettify.rc")
     needs = bool(_run(["fprettify", "--config", cfg, "--diff", path]).stdout.strip())
     if fix and needs:
@@ -121,13 +122,16 @@ def _needs_format_fortran(path, fix):
     return needs
 
 
-CHECKERS = {"cpp": (_needs_format_cpp, "clang-format"), "fortran": (_needs_format_fortran, "fprettify")}
+CHECKERS: dict[str, tuple[Callable[[str, bool], bool], str]] = {
+    "cpp": (_needs_format_cpp, "clang-format"),
+    "fortran": (_needs_format_fortran, "fprettify"),
+}
 
 #: The formatter each language is gated by, for the "missing tool" check and the offender report.
-TOOLS = {"py": "ruff", "cpp": "clang-format", "fortran": "fprettify"}
+TOOLS: dict[str, str] = {"py": "ruff", "cpp": "clang-format", "fortran": "fprettify"}
 
 
-def ruff_offenders(rels, fix):
+def ruff_offenders(rels: list[str], fix: bool) -> list[str]:
     """Files ``ruff format`` would rewrite, reformatted in place first when ``fix``.
 
     ``--check`` names them (``Would reformat: <path>``) without writing, and is what the report
@@ -159,7 +163,7 @@ def ruff_offenders(rels, fix):
     return offenders
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--base", default="origin/main", help="git ref to diff against (default: origin/main)")
     ap.add_argument("--all", action="store_true", help="check every tracked source file, not just changed ones")

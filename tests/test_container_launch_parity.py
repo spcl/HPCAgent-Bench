@@ -48,7 +48,7 @@ def controlled_env(backend):
 # purpose -- it has no wrapper argv to compare, and the bash launcher rejects it outright.
 @pytest.mark.parametrize("backend", containers.EXEC_BACKENDS)
 @pytest.mark.parametrize("hardware", ["cpu", "nvidia", "amd"])
-def test_bash_and_python_fold_identical_argv(backend, hardware, monkeypatch):
+def test_bash_and_python_fold_identical_argv(backend, hardware, monkeypatch) -> None:
     env = controlled_env(backend)
     # bash: --print emits one token per line, no exec/probe.
     proc = subprocess.run(

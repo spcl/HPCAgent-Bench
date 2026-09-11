@@ -54,7 +54,7 @@ def _expected():
     return out
 
 
-def _check(cpp):
+def _check(cpp) -> None:
     src = (_CPP_HEADER + _CPP_FOOTER + "#include <cstdio>\n") if cpp else (_C_HEADER + "#include <stdio.h>\n")
     run = build_run_c(src, _driver(), cpp=cpp)
     assert run.returncode == 0, run.stderr
@@ -66,12 +66,12 @@ def _check(cpp):
 
 
 @have_gcc
-def test_c_division_helpers_match_python():
+def test_c_division_helpers_match_python() -> None:
     _check(cpp=False)
 
 
 @have_gpp
-def test_cpp_division_helpers_match_python():
+def test_cpp_division_helpers_match_python() -> None:
     _check(cpp=True)
 
 
@@ -99,7 +99,7 @@ int main(void) {
 
 
 @have_gcc
-def test_float16_operands_take_the_floating_helper():
+def test_float16_operands_take_the_floating_helper() -> None:
     """GCC does not promote _Float16 in arithmetic, so `_Float16 + _Float16` is _Float16 and hit
     `default:` -- the integer helper. 0.5 // 0.25 became int_floor(0, 0) and died with SIGFPE
     (exit 136), and any non-zero pair truncated silently. C++ was unaffected (is_integral_v sends
@@ -115,7 +115,7 @@ def test_float16_operands_take_the_floating_helper():
 
 
 @have_gcc
-def test_unsigned_operands_above_int64_max_are_not_reinterpreted_as_negative():
+def test_unsigned_operands_above_int64_max_are_not_reinterpreted_as_negative() -> None:
     """uint64 is integral, so the integer helper was type-correct but SIGNED: any value above
     INT64_MAX arrived negative. (2**63 + 5) // 2 returned -4611686018427387902."""
     a = (1 << 63) + 5

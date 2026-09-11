@@ -7,6 +7,7 @@ this per-package CLI is the backend that driver dispatches to.
 import argparse
 import pathlib
 import sys
+from collections.abc import Sequence
 
 from numpyto_cupy.emit import emit_cupy
 from numpyto_common.emit_io import write_generated
@@ -51,7 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv=None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     return args.func(args)
 

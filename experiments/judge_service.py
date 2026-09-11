@@ -36,6 +36,10 @@ sys.path.insert(0, str(TOOLS_DIR))
 
 import web_search  # noqa: E402
 
+#: A JSON value as decoded by ``json.loads``: request bodies and the recursive scrub below both
+#: carry this shape.
+JSONValue = dict[str, "JSONValue"] | list["JSONValue"] | str | int | float | bool | None
+
 #: The benchmark judge this router forwards grading to. Its default is the co-located judge on the
 #: next port up from JUDGE_PORT, because this router already owns 8800 on the judge node.
 UPSTREAM_URL = os.environ.get("JUDGE_UPSTREAM_URL", "http://127.0.0.1:8801").rstrip("/")
@@ -98,7 +102,7 @@ def relay(upstream: httpx.Response) -> Response:
     )
 
 
-def read_shared_source(path: Any) -> str:
+def read_shared_source(path: JSONValue) -> str:
     """Text of a submission delivered as a PATH, or ``""`` when there is nothing readable there.
 
     The path arrived over HTTP and means nothing in this container unless it names the filesystem
@@ -280,7 +284,7 @@ async def search(request: SearchRequest) -> dict[str, Any]:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
-def scrub_nonfinite(value: Any) -> Any:
+def scrub_nonfinite(value: JSONValue) -> JSONValue:
     """JSONResponse serializes with allow_nan=False; an upstream inf (speedup with a ~0 ns
     measured run, seen live in 589436) must degrade to null, not 500 the whole submit."""
     if isinstance(value, float) and not math.isfinite(value):

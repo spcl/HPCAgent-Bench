@@ -28,7 +28,7 @@ def _emitter_and_gcc():
 # --- the ScriptedAgent primitive ---------------------------------------------
 
 
-def test_scripted_agent_replays_steps_and_books_tokens():
+def test_scripted_agent_replays_steps_and_books_tokens() -> None:
     """One move per solve(); the last step repeats once exhausted; cost accrues."""
     agent = ScriptedAgent(["void gemm_fp64(){/*1*/}", "void gemm_fp64(){/*2*/}"], cost=(10, 5))
     s1, s2, s3 = agent.solve(TASK), agent.solve(TASK), agent.solve(TASK)
@@ -38,7 +38,7 @@ def test_scripted_agent_replays_steps_and_books_tokens():
     assert agent.usage.total == 45  # 3 calls x (10 + 5)
 
 
-def test_scripted_agent_step_kinds():
+def test_scripted_agent_step_kinds() -> None:
     """A step may be a Submission (verbatim), a callable(task), or an Exception (crash)."""
     verbatim = Submission("c", library="/tmp/libx.so")
     agent = ScriptedAgent([verbatim, lambda t: f"/* {t.kernel} */", ValueError("boom")])
@@ -48,7 +48,7 @@ def test_scripted_agent_step_kinds():
         agent.solve(TASK)  # a scripted crash surfaces as the agent raising (a scored agent_error round)
 
 
-def test_scripted_agent_rejects_empty_script():
+def test_scripted_agent_rejects_empty_script() -> None:
     with pytest.raises(ValueError, match="at least one step"):
         ScriptedAgent([])
 
@@ -95,7 +95,7 @@ def _fake_score(submission, task, **kwargs):
     )
 
 
-def test_scripted_session_walks_every_status_and_keeps_the_best(monkeypatch):
+def test_scripted_session_walks_every_status_and_keeps_the_best(monkeypatch) -> None:
     """A single scripted session climbs the whole status ladder, and the loop keeps the fastest
     correct attempt while the trajectory records every round in order."""
     monkeypatch.setattr(runner, "score", _fake_score)
@@ -113,7 +113,7 @@ def test_scripted_session_walks_every_status_and_keeps_the_best(monkeypatch):
     assert row.tokens == 75
 
 
-def test_scripted_session_all_failing_records_last_attempt(monkeypatch):
+def test_scripted_session_all_failing_records_last_attempt(monkeypatch) -> None:
     """A session that never reaches correct returns the last scored attempt, not a phantom best."""
     monkeypatch.setattr(runner, "score", _fake_score)
     agent = ScriptedAgent(["BUILD_FAIL", "WRONG"], cost=(1, 1))
@@ -122,7 +122,7 @@ def test_scripted_session_all_failing_records_last_attempt(monkeypatch):
     assert [p.status for p in row.trajectory] == ["build_error", "incorrect"]
 
 
-def test_the_row_records_the_delivered_language_beside_the_requested_one(monkeypatch):
+def test_the_row_records_the_delivered_language_beside_the_requested_one(monkeypatch) -> None:
     """The restricted prompt SANCTIONS delivering Python instead of the task's language, so a
     fortran run can legitimately ship python -- and a row that reported only `fortran` would make
     a forced-language experiment unmeasurable. The request keeps its field; the delivery gets its own."""
@@ -136,7 +136,7 @@ def test_the_row_records_the_delivered_language_beside_the_requested_one(monkeyp
     assert row.delivered_language == "python"  # the truth about what was graded
 
 
-def test_the_trajectory_record_carries_the_delivered_language_too(monkeypatch, tmp_path):
+def test_the_trajectory_record_carries_the_delivered_language_too(monkeypatch, tmp_path) -> None:
     """What the runs table records, the ``calls`` table has to record too. A trajectory row naming
     only the REQUESTED language disagrees with its own run row on exactly the axis a forced-language
     arm measures, so the CLI's --record wiring (mirrored here) passes both."""
@@ -168,7 +168,7 @@ def test_the_trajectory_record_carries_the_delivered_language_too(monkeypatch, t
 # --- real end-to-end: a scripted repair through the forked solve_task ----------
 
 
-def test_scripted_repair_build_error_then_correct_real():
+def test_scripted_repair_build_error_then_correct_real() -> None:
     """The real loop, real compiler: round 1 is un-compilable, round 2 is the reference. Driven
     through the forked solve_task."""
     if not _emitter_and_gcc():
@@ -202,7 +202,7 @@ void gemm_fp64(const double *restrict A, const double *restrict B, double *restr
 """
 
 
-def test_scripted_tool_session_verify_then_score_and_submit(make_judge):
+def test_scripted_tool_session_verify_then_score_and_submit(make_judge) -> None:
     """Script the CONTAINER agent loop through the tools client against a live judge -- the exact
     loop prompts/service_task.j2 hands an external agent."""
     if not _emitter_and_gcc():

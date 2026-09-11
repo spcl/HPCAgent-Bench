@@ -35,7 +35,7 @@ _SHAPES = {"a": "(N,)", "b": "(N,)", "out": "(N,)"}
 _DTYPES = {"a": "int64", "b": "int64", "out": "int64"}
 
 
-def _assert_ok(res):
+def _assert_ok(res) -> None:
     for backend, status in res.items():
         assert status == "ok" or status.startswith("skip"), f"{backend}: {status}"
     assert any(status == "ok" for status in res.values()), f"all skipped (vacuous): {res}"
@@ -46,15 +46,15 @@ def _run(body: str):
     return run_op(src, "f", {"a": _A, "b": _B}, {"out": (6,)}, _SYMS, shapes=_SHAPES, backends=_NATIVE, dtypes=_DTYPES)
 
 
-def test_np_power_on_int64_arrays_is_exact():
+def test_np_power_on_int64_arrays_is_exact() -> None:
     _assert_ok(_run("    out[:] = np.power(a, b)"))
 
 
-def test_pow_operator_on_int64_subscripts_is_exact():
+def test_pow_operator_on_int64_subscripts_is_exact() -> None:
     _assert_ok(_run("    for i in range(6):\n        out[i] = a[i] ** b[i]"))
 
 
-def test_np_power_expands_to_a_pow_binop():
+def test_np_power_expands_to_a_pow_binop() -> None:
     # Structural: a ``**`` BinOp, not a ``pow`` call -- that is what puts the C emitter's
     # int-pow routing and Fortran's exact integer ``**`` in the path.
     body = expand_power(
@@ -67,7 +67,7 @@ def test_np_power_expands_to_a_pow_binop():
     assert "pow(" not in src, src
 
 
-def test_float_power_still_matches_numpy():
+def test_float_power_still_matches_numpy() -> None:
     # The float path must keep libm's pow -- fractional exponents have no integer form.
     src = "import numpy as np\ndef f(a, b, out):\n    out[:] = np.power(a, b)\n"
     _assert_ok(

@@ -48,24 +48,24 @@ def _subscriptify(src, iters, shapes):
     return ast.unparse(_SubscriptifyNames(shapes, iters).visit(_expr(src)))
 
 
-def test_newaxis_trailing_binds_leading_iter():
+def test_newaxis_trailing_binds_leading_iter() -> None:
     # ``V[:, None]`` at iters (w0, w1): the slice is axis 0 -> V[w0]; the
     # None axis consumes w1 but adds no source index. (Was wrongly V[w1].)
     assert _subscriptify("V[:, None]", ["__w0", "__w1"], {"V": ("K",)}) == "V[__w0]"
 
 
-def test_newaxis_leading_binds_trailing_iter():
+def test_newaxis_leading_binds_trailing_iter() -> None:
     # ``V[None, :]`` at iters (w0, w1): None consumes w0, slice -> V[w1].
     assert _subscriptify("V[None, :]", ["__w0", "__w1"], {"V": ("K",)}) == "V[__w1]"
 
 
-def test_newaxis_between_axes_on_2d():
+def test_newaxis_between_axes_on_2d() -> None:
     # ``A[:, None, :]`` on (N, M) at iters (w0, w1, w2) -> A[w0, w2].
     out = _subscriptify("A[:, None, :]", ["__w0", "__w1", "__w2"], {"A": ("N", "M")})
     assert out == "A[__w0, __w2]"
 
 
-def test_plain_slice_pair_unchanged_by_newaxis_fix():
+def test_plain_slice_pair_unchanged_by_newaxis_fix() -> None:
     # Regression guard: no newaxis -> the right-alignment is unchanged.
     out = _subscriptify("A[:, j]", ["__w0"], {"A": ("N", "M")})
     assert out == "A[__w0, j]"
@@ -85,7 +85,7 @@ def _hoist(src, shapes):
     return array_temps, scalar_temps, local_dtypes
 
 
-def test_argmax_axis_hoists_to_int64_array_temp():
+def test_argmax_axis_hoists_to_int64_array_temp() -> None:
     arr, scal, dts = _hoist("np.argmax(scores, axis=0)", {"scores": ("K", "K")})
     assert arr and not scal  # array-returning, not scalar
     ((name, shape),) = arr.items()
@@ -93,13 +93,13 @@ def test_argmax_axis_hoists_to_int64_array_temp():
     assert dts[name] == "int64"  # index dtype, not double
 
 
-def test_argmin_axis_hoists_to_int64_array_temp():
+def test_argmin_axis_hoists_to_int64_array_temp() -> None:
     arr, scal, dts = _hoist("np.argmin(scores, axis=1)", {"scores": ("K", "M")})
     ((name, shape),) = arr.items()
     assert shape == ("K",) and dts[name] == "int64"
 
 
-def test_argmax_no_axis_stays_scalar():
+def test_argmax_no_axis_stays_scalar() -> None:
     # Regression guard: full argmax (axis=None) is still a scalar temp.
     arr, scal, dts = _hoist("np.argmax(V)", {"V": ("K",)})
     assert scal and not arr
@@ -110,7 +110,7 @@ def test_argmax_no_axis_stays_scalar():
 # --------------------------------------------------------------------------- #
 
 
-def test_partial_subscript_assign_expands_to_copy_loop():
+def test_partial_subscript_assign_expands_to_copy_loop() -> None:
     shapes = {"back": ("T", "K"), "cb": ("K",)}
     rw = _WholeArrayAssignRewriter(shapes, real_arrays=set(shapes))
     node = ast.parse("back[t] = cb").body[0]
@@ -123,7 +123,7 @@ def test_partial_subscript_assign_expands_to_copy_loop():
     assert "back[t, __w0] = cb[__w0]" in src  # element-wise row copy
 
 
-def test_full_subscript_assign_not_expanded():
+def test_full_subscript_assign_not_expanded() -> None:
     # Regression guard: a fully-indexed scalar store is left alone.
     shapes = {"back": ("T", "K"), "cb": ("K",)}
     rw = _WholeArrayAssignRewriter(shapes, real_arrays=set(shapes))
@@ -182,13 +182,13 @@ def _emit(target):
         return emit_fortran(kir, fn_name="cast_demo")
 
 
-def test_np_dtype_cast_c():
+def test_np_dtype_cast_c() -> None:
     src = _emit("c")
     assert "(int64_t)(xf[0])" in src  # np.int64 -> C int cast
     assert "(double)(xi[0])" in src  # np.float64 -> C double cast
 
 
-def test_np_dtype_cast_fortran():
+def test_np_dtype_cast_fortran() -> None:
     src = _emit("fortran")
     # Conversion intrinsic + KIND token from the registry (never hardcoded);
     # index 0 lowers to the 1-based ``(0) + 1`` subscript.

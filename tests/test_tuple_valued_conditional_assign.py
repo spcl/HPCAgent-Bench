@@ -89,7 +89,7 @@ def _bindings(src, name):
 
 
 @pytest.mark.parametrize("emit", [emit_c, emit_fortran], ids=["c", "fortran"])
-def test_every_unpacked_target_is_bound_exactly_once(emit, kir):
+def test_every_unpacked_target_is_bound_exactly_once(emit, kir) -> None:
     """The whole point of the unpack: four names, four bindings, in either language."""
     src = emit(kir)
     bound = {name: _bindings(src, name) for name in UNPACKED}
@@ -101,7 +101,7 @@ def test_every_unpacked_target_is_bound_exactly_once(emit, kir):
     assert len(set(values)) == len(values), f"unpacked targets share a value: {values}"
 
 
-def test_the_c_emit_projects_each_element_through_the_conditional(kir):
+def test_the_c_emit_projects_each_element_through_the_conditional(kir) -> None:
     """Element ``i`` must come from element ``i`` of BOTH arms, and from no other element."""
     src = emit_c(kir)
     p_line = _bindings(src, "p")[0]

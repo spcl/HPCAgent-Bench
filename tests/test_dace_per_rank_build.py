@@ -46,7 +46,7 @@ def fake_config(monkeypatch, *, native: bool, folder: str = ".dacecache") -> dic
 
 
 @pytest.fixture(autouse=True)
-def no_inherited_rank(monkeypatch):
+def no_inherited_rank(monkeypatch) -> None:
     """The test process may itself have been launched by mpirun; start from a clean slate."""
     for name in LAUNCHERS + ("DACE_BUILD_CACHE_DIR",):
         monkeypatch.delenv(name, raising=False)

@@ -70,19 +70,19 @@ class _NullConn:
         pass
 
 
-def test_a_source_file_delivery_is_kept(router, stored, tmp_path):
+def test_a_source_file_delivery_is_kept(router, stored, tmp_path) -> None:
     """The 7-of-10 case: delivered by path, graded correct, and previously stored nothing."""
     (tmp_path / "gemm.c").write_text("void gemm(void){}", encoding="utf-8")
     router.log_grade("score", {"kernel": "gemm", "language": "c", "source_file": "/shared/gemm.c"}, dict(GRADE))
     assert stored == [("c", "void gemm(void){}")]
 
 
-def test_an_inline_delivery_is_still_kept(router, stored):
+def test_an_inline_delivery_is_still_kept(router, stored) -> None:
     router.log_grade("score", {"kernel": "gemm", "language": "c", "source": "void gemm(void){}"}, dict(GRADE))
     assert stored == [("c", "void gemm(void){}")]
 
 
-def test_both_units_of_a_gpu_delivery_are_kept_and_tagged(router, stored):
+def test_both_units_of_a_gpu_delivery_are_kept_and_tagged(router, stored) -> None:
     router.log_grade(
         "score",
         {"kernel": "gemm", "language": "hip", "source": "/* host */", "device_source": "/* __global__ */"},
@@ -91,13 +91,13 @@ def test_both_units_of_a_gpu_delivery_are_kept_and_tagged(router, stored):
     assert stored == [("hip", "/* host */"), ("hip:device", "/* __global__ */")]
 
 
-def test_a_failing_grade_stores_nothing(router, stored):
+def test_a_failing_grade_stores_nothing(router, stored) -> None:
     """A broken draft is not a candidate for promotion, so it is not worth a row."""
     router.log_grade("score", {"kernel": "gemm", "language": "c", "source": "oops"}, {**GRADE, "correct": False})
     assert stored == []
 
 
-def test_an_unreadable_path_stores_nothing_and_does_not_raise(router, stored):
+def test_an_unreadable_path_stores_nothing_and_does_not_raise(router, stored) -> None:
     """Bookkeeping beside a grade that already happened must never fail the call."""
     router.log_grade("score", {"kernel": "gemm", "language": "c", "source_file": "/shared/absent.c"}, dict(GRADE))
     assert stored == []

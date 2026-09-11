@@ -28,7 +28,7 @@ _KERNELS = so.discover_sparse_kernels()
 _IDS = [k.short for k in _KERNELS]
 
 
-def _kernel_configs():
+def _kernel_configs() -> list[tuple["so.SparseKernel", str]]:
     """(kernel, config_key) pairs enumerated from the registration source
     of truth, ``BenchSpec.expand_layouts()`` (deduped to the emit-distinct
     configuration; runtime distributions don't change the emitted code).
@@ -58,7 +58,7 @@ _KC_IDS = [f"{k.short}-{cfg}" for k, cfg in _KERNEL_CONFIGS]
 @pytest.mark.skipif(not _KERNEL_CONFIGS, reason="no sparse kernels discovered")
 @pytest.mark.parametrize("kernel,config", _KERNEL_CONFIGS, ids=_KC_IDS)
 @pytest.mark.parametrize("seed", [0, 1, 7])
-def test_sparse_kernel_matches_scipy(kernel, config, seed):
+def test_sparse_kernel_matches_scipy(kernel: "so.SparseKernel", config: str, seed: int) -> None:
     res = so.run_kernel(kernel, seed=seed, config_name=config)
     assert res.ok, f"{kernel.short}/{config} (seed={seed}): {res.detail}"
 
@@ -66,7 +66,7 @@ def test_sparse_kernel_matches_scipy(kernel, config, seed):
 @pytest.mark.skipif(not _KERNELS, reason="no sparse kernels discovered")
 @pytest.mark.parametrize("kernel", _KERNELS, ids=_IDS)
 @pytest.mark.parametrize("seed", [0, 1])
-def test_sparse_kernel_jax_matches_scipy(kernel, seed):
+def test_sparse_kernel_jax_matches_scipy(kernel: "so.SparseKernel", seed: int) -> None:
     """Every sparse kernel also validates under JAX. jax runs EAGERLY, so the
     data-dependent CSR slice + gather (spmv/spmm) and the dense ``A @ p`` (the Krylov
     solvers) execute directly on concrete arrays -- no sparse-specific desugaring
@@ -79,7 +79,7 @@ def test_sparse_kernel_jax_matches_scipy(kernel, seed):
 
 @pytest.mark.skipif(not _KERNELS, reason="no sparse kernels discovered")
 @pytest.mark.parametrize("kernel", _KERNELS, ids=_IDS)
-def test_sparse_kernel_dace_matches_scipy(kernel):
+def test_sparse_kernel_dace_matches_scipy(kernel: "so.SparseKernel") -> None:
     """dace validates -- via a real SDFG build + run -- every sparse kernel, incl. gmres.
     Buffer-style CSR (spmv) builds from the UN-lowered kir: dace's SYMBOLIC array shapes
     make the data-dependent slice ``A_indices[A_indptr[i]:A_indptr[i+1]]`` expressible,
@@ -98,7 +98,7 @@ def test_sparse_kernel_dace_matches_scipy(kernel):
     assert res.ok, f"{kernel.short} dace: {res.detail}"
 
 
-def test_gmres_dace_early_convergence_matches_reference():
+def test_gmres_dace_early_convergence_matches_reference() -> None:
     """gmres's workspace dim ``m`` is split into an allocation SYMBOL and a runtime
     ``m_iter`` the convergence break reduces. The parametrized oracle above uses a tiny tol
     so that split path never fires (``m_iter == m`` every run); this drives GENUINE early
@@ -170,7 +170,7 @@ def test_gmres_dace_early_convergence_matches_reference():
     )
 
 
-def test_at_least_the_known_sparse_kernels_are_discovered():
+def test_at_least_the_known_sparse_kernels_are_discovered() -> None:
     """Guards against the discovery silently finding nothing (e.g. a path
     regression). spmv + spmm are migrated to sparse_layouts today."""
     assert {"spmv", "spmm"}.issubset(set(_IDS)), f"expected spmv+spmm among discovered sparse kernels, got {_IDS}"

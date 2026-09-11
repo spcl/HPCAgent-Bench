@@ -22,7 +22,7 @@ def _fn(src: str) -> ast.FunctionDef:
     return ast.parse(src).body[0]
 
 
-def test_separate_rebindings_are_dropped():
+def test_separate_rebindings_are_dropped() -> None:
     fn = _fn(
         "def k(a):\n"
         "    np_float = framework.np_float\n"
@@ -35,14 +35,14 @@ def test_separate_rebindings_are_dropped():
     assert "astype(np_float)" in body, "the dtype NAME must survive; only the assignment goes"
 
 
-def test_a_tuple_rebinding_is_dropped():
+def test_a_tuple_rebinding_is_dropped() -> None:
     """The spelling mandelbrot uses."""
     fn = _fn("def k(a):\n    np_float, np_complex = framework.np_float, framework.np_complex\n    return np_complex\n")
     _strip_framework_dtype_rebinding(fn)
     assert "framework" not in ast.unparse(fn)
 
 
-def test_an_ordinary_assignment_to_the_same_name_survives():
+def test_an_ordinary_assignment_to_the_same_name_survives() -> None:
     """Anti-vacuity: only a rebinding read off a MODULE goes. Dropping any assignment that merely
     mentions the name would delete real computation."""
     fn = _fn("def k(a):\n    np_float = np.float32\n    return a.astype(np_float)\n")
@@ -50,7 +50,7 @@ def test_an_ordinary_assignment_to_the_same_name_survives():
     assert "np_float = np.float32" in ast.unparse(fn)
 
 
-def test_an_unrelated_attribute_assignment_survives():
+def test_an_unrelated_attribute_assignment_survives() -> None:
     """A different name read off the module is somebody else's statement, not this rule's."""
     fn = _fn("def k(a):\n    scale = framework.scale\n    return a * scale\n")
     _strip_framework_dtype_rebinding(fn)

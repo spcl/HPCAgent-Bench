@@ -61,12 +61,12 @@ def _valid_single_array() -> Dict:
 
 
 # --- baseline / edge cases -------------------------------------------------------------------------
-def test_all_empty_is_trivially_valid():
+def test_all_empty_is_trivially_valid() -> None:
     # No arrays declared at all -- every rule's loop is over an empty collection.
     validate_sparse_config({}, {}, {}, [])
 
 
-def test_a_fully_valid_single_array_config_passes():
+def test_a_fully_valid_single_array_config_passes() -> None:
     kw = _valid_single_array()
     assert (
         validate_sparse_config(kw["sparse_layouts"], kw["configurations"], kw["distributions"], kw["array_args"])
@@ -74,7 +74,7 @@ def test_a_fully_valid_single_array_config_passes():
     )
 
 
-def test_non_sparse_array_args_are_untouched():
+def test_non_sparse_array_args_are_untouched() -> None:
     # array_args entries with no sparse_layouts entry at all (dense-only arrays) never trip rule 9.
     kw = _valid_single_array()
     kw["array_args"] = ["A", "alpha", "beta"]
@@ -82,7 +82,7 @@ def test_non_sparse_array_args_are_untouched():
 
 
 # --- rule 1: format must be supported ----------------------------------------------------------
-def test_rule1_unsupported_format_key_is_rejected():
+def test_rule1_unsupported_format_key_is_rejected() -> None:
     layout = SparseLayout(
         logical_shape=("NI",), default_dtype="float64", variants={"not_a_real_format": _csr_layout("A").variants["csr"]}
     )
@@ -91,7 +91,7 @@ def test_rule1_unsupported_format_key_is_rejected():
 
 
 # --- rule 2: required buffer roles per format ----------------------------------------------------
-def test_rule2_missing_required_role_is_rejected():
+def test_rule2_missing_required_role_is_rejected() -> None:
     # CSR needs indptr + indices + data; drop indices.
     variant = SparseLayoutVariant(format="csr", buffers=(_buf("indptr", "A_indptr", "int32"), _buf("data", "A_data")))
     layout = SparseLayout(logical_shape=("NI",), default_dtype="float64", variants={"csr": variant})
@@ -100,7 +100,7 @@ def test_rule2_missing_required_role_is_rejected():
 
 
 # --- rule 3: numeric dtype -----------------------------------------------------------------------
-def test_rule3_unsupported_dtype_is_rejected():
+def test_rule3_unsupported_dtype_is_rejected() -> None:
     layout = _csr_layout("A")
     bad = SparseLayoutVariant(
         format="csr",
@@ -116,7 +116,7 @@ def test_rule3_unsupported_dtype_is_rejected():
 
 
 # --- rule 4: index buffers must be int32/int64 ---------------------------------------------------
-def test_rule4_index_role_with_float_dtype_is_rejected():
+def test_rule4_index_role_with_float_dtype_is_rejected() -> None:
     layout = _csr_layout("A")
     bad = SparseLayoutVariant(
         format="csr",
@@ -131,7 +131,7 @@ def test_rule4_index_role_with_float_dtype_is_rejected():
         validate_sparse_config({"A": layout}, {}, {}, [])
 
 
-def test_rule4_int64_index_buffer_is_accepted():
+def test_rule4_int64_index_buffer_is_accepted() -> None:
     layout = _csr_layout("A")
     ok = SparseLayoutVariant(
         format="csr",
@@ -146,7 +146,7 @@ def test_rule4_int64_index_buffer_is_accepted():
 
 
 # --- rule 5: configuration must name every layout-bearing array ----------------------------------
-def test_rule5_configuration_missing_an_array_entry_is_rejected():
+def test_rule5_configuration_missing_an_array_entry_is_rejected() -> None:
     layout = _csr_layout("A")
     cfg = SparseConfiguration(arrays={})  # 'A' has a layout but no chosen format
     with pytest.raises(SparseConfigError, match="missing entry for array 'A'"):
@@ -154,7 +154,7 @@ def test_rule5_configuration_missing_an_array_entry_is_rejected():
 
 
 # --- rule 6: configuration's format must be declared on the layout -------------------------------
-def test_rule6_configuration_format_not_in_layout_variants_is_rejected():
+def test_rule6_configuration_format_not_in_layout_variants_is_rejected() -> None:
     layout = _csr_layout("A")  # only declares 'csr'
     cfg = SparseConfiguration(arrays={"A": "csc"})
     with pytest.raises(SparseConfigError, match=r"not in sparse_layouts\.A\.variants"):
@@ -162,21 +162,21 @@ def test_rule6_configuration_format_not_in_layout_variants_is_rejected():
 
 
 # --- rule 7: at most one non-dense sparse format per configuration --------------------------------
-def test_rule7_mixing_two_sparse_formats_in_one_configuration_is_rejected():
+def test_rule7_mixing_two_sparse_formats_in_one_configuration_is_rejected() -> None:
     layouts = {"A": _csr_layout("A"), "B": _coo_layout("B")}
     cfg = SparseConfiguration(arrays={"A": "csr", "B": "coo"})
     with pytest.raises(SparseConfigError, match="cannot mix sparse formats"):
         validate_sparse_config(layouts, {"mixed": cfg}, {}, [])
 
 
-def test_rule7_dense_plus_one_sparse_format_is_allowed():
+def test_rule7_dense_plus_one_sparse_format_is_allowed() -> None:
     layouts = {"A": _csr_layout("A"), "C": _dense_layout("C")}
     cfg = SparseConfiguration(arrays={"A": "csr", "C": "dense"})
     validate_sparse_config(layouts, {"mixed": cfg}, {}, [])
 
 
 # --- rule 8: distribution must point at a real configuration --------------------------------------
-def test_rule8_distribution_pointing_at_unknown_configuration_is_rejected():
+def test_rule8_distribution_pointing_at_unknown_configuration_is_rejected() -> None:
     kw = _valid_single_array()
     dist = SparseDistribution(configuration="nonexistent", distribution="uniform")
     with pytest.raises(SparseConfigError, match="configuration 'nonexistent' not in configurations"):
@@ -184,14 +184,14 @@ def test_rule8_distribution_pointing_at_unknown_configuration_is_rejected():
 
 
 # --- rule 9: array_args must be logical names, not physical buffer names --------------------------
-def test_rule9_physical_buffer_name_in_array_args_is_rejected():
+def test_rule9_physical_buffer_name_in_array_args_is_rejected() -> None:
     kw = _valid_single_array()
     with pytest.raises(SparseConfigError, match="'A_indptr' is a physical buffer name"):
         validate_sparse_config(kw["sparse_layouts"], kw["configurations"], kw["distributions"], ["A_indptr"])
 
 
 # --- rule 10: distinct configurations must be distinct mappings (order-independent) ---------------
-def test_rule10_duplicate_configuration_mappings_are_rejected():
+def test_rule10_duplicate_configuration_mappings_are_rejected() -> None:
     layout = _csr_layout("A")
     cfg_a = SparseConfiguration(arrays={"A": "csr"})
     cfg_b = SparseConfiguration(arrays={"A": "csr"})
@@ -199,7 +199,7 @@ def test_rule10_duplicate_configuration_mappings_are_rejected():
         validate_sparse_config({"A": layout}, {"first": cfg_a, "second": cfg_b}, {}, [])
 
 
-def test_rule10_duplicate_detection_ignores_dict_key_insertion_order():
+def test_rule10_duplicate_detection_ignores_dict_key_insertion_order() -> None:
     # Same {array: format} content, keys inserted in a different order -- still a duplicate,
     # because the fingerprint is a frozenset of items, not the insertion-ordered dict. Uses a
     # second array pinned to 'dense' (not another sparse format) so rule 7 does not fire first.
@@ -210,7 +210,7 @@ def test_rule10_duplicate_detection_ignores_dict_key_insertion_order():
         validate_sparse_config(layouts, {"first": cfg_a, "second": cfg_b}, {}, [])
 
 
-def test_rule10_different_configurations_are_not_flagged_as_duplicates():
+def test_rule10_different_configurations_are_not_flagged_as_duplicates() -> None:
     layout = _csr_layout("A")
     dense = SparseLayoutVariant(format="dense", buffers=(_buf("data", "A_data"),))
     layout.variants["dense"] = dense
@@ -220,7 +220,7 @@ def test_rule10_different_configurations_are_not_flagged_as_duplicates():
 
 
 # --- rule 11: physical buffer names follow <logical>_<role> ---------------------------------------
-def test_rule11_buffer_name_not_matching_logical_role_convention_is_rejected():
+def test_rule11_buffer_name_not_matching_logical_role_convention_is_rejected() -> None:
     variant = SparseLayoutVariant(
         format="csr",
         buffers=(
@@ -235,7 +235,7 @@ def test_rule11_buffer_name_not_matching_logical_role_convention_is_rejected():
 
 
 # --- ordering guarantee: rules fire in ascending order, first violation wins ----------------------
-def test_first_violation_wins_when_multiple_rules_are_broken():
+def test_first_violation_wins_when_multiple_rules_are_broken() -> None:
     # Both rule 1 (bad format key) and rule 11 (bad buffer name) are broken here; rule 1 must fire.
     variant = SparseLayoutVariant(
         format="csr",
@@ -250,7 +250,7 @@ def test_first_violation_wins_when_multiple_rules_are_broken():
         validate_sparse_config({"A": layout}, {}, {}, [])
 
 
-def test_error_message_includes_the_source_label():
+def test_error_message_includes_the_source_label() -> None:
     layout = SparseLayout(
         logical_shape=("NI",), default_dtype="float64", variants={"nonsense": _csr_layout("A").variants["csr"]}
     )
@@ -258,6 +258,6 @@ def test_error_message_includes_the_source_label():
         validate_sparse_config({"A": layout}, {}, {}, [], source="my_bench.yaml")
 
 
-def test_layout_of_wrong_type_is_rejected():
+def test_layout_of_wrong_type_is_rejected() -> None:
     with pytest.raises(SparseConfigError, match="expected SparseLayout, got str"):
         validate_sparse_config({"A": "not_a_layout"}, {}, {}, [])

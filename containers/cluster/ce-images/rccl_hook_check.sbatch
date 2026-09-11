@@ -18,6 +18,11 @@
 #SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/rccl-hook-%j.err
 
 set -Eeuo pipefail
+
+# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
+# process's CWD, littering the checkout with core_nid<node>_<pid> files on a filesystem whose
+# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
+ulimit -c 0
 SCRATCH="${SCRATCH:-/capstor/scratch/cscs/${USER}/x86_64}"
 # ANY image, not just the judge-agent one. This replaced sglang_cxi_check.sbatch and
 # experiments/test-rccl-ofi-2node.sbatch, both of which ran a variant of this test but were written

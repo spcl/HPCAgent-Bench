@@ -115,7 +115,7 @@ def _iter_sized_fortran() -> str:
     return fortran(_ITER_SIZED, "f", ["r", "y"], ["out"], _ITER_SHAPES, _ITER_SYMS)
 
 
-def test_an_iterator_sized_temp_allocates_against_the_renamed_do_variable():
+def test_an_iterator_sized_temp_allocates_against_the_renamed_do_variable() -> None:
     text = _iter_sized_fortran()
     allocs = _ALLOCATE.findall(text)
     assert allocs, f"the iterator-sized temp no longer allocates at all:\n{text}"
@@ -129,7 +129,7 @@ def test_an_iterator_sized_temp_allocates_against_the_renamed_do_variable():
     )
 
 
-def test_an_iterator_sized_temp_allocates_inside_the_loop_not_at_the_top():
+def test_an_iterator_sized_temp_allocates_inside_the_loop_not_at_the_top() -> None:
     """The extent only EXISTS inside the loop, so a function-top ALLOCATE cannot be right even if
     it somehow named a declared variable."""
     text = _iter_sized_fortran()
@@ -141,7 +141,7 @@ def test_an_iterator_sized_temp_allocates_inside_the_loop_not_at_the_top():
     assert "allocate(" in body[1], f"the temp never allocates inside the loop:\n{text}"
 
 
-def test_every_allocate_extent_names_something_the_subroutine_declares():
+def test_every_allocate_extent_names_something_the_subroutine_declares() -> None:
     """The general form of the bug: with no ``implicit none``, an undeclared extent is not an
     error, it is a garbage-valued INTEGER. ``-fimplicit-none`` is what says so."""
     text = _iter_sized_fortran()
@@ -149,7 +149,7 @@ def test_every_allocate_extent_names_something_the_subroutine_declares():
     assert not diag, f"the emitted subroutine names an undeclared identifier:\n{diag}\n{text}"
 
 
-def test_the_iterator_sized_temp_computes_the_reference_numbers():
+def test_the_iterator_sized_temp_computes_the_reference_numbers() -> None:
     rng = np.random.default_rng(0)
     status = run_op(
         _ITER_SIZED,
@@ -196,7 +196,7 @@ def _helper_ret_fortran(precision) -> str:
 
 
 @pytest.mark.parametrize("precision", [None, "float32"])
-def test_the_helper_result_dummy_carries_the_kernels_float_kind(precision):
+def test_the_helper_result_dummy_carries_the_kernels_float_kind(precision) -> None:
     text = _helper_ret_fortran(precision)
     if "intent(out) :: hret_" not in text:
         pytest.skip("the fixture helper is no longer kept as a contained subroutine")
@@ -210,13 +210,13 @@ def test_the_helper_result_dummy_carries_the_kernels_float_kind(precision):
 
 
 @pytest.mark.parametrize("precision", [None, "float32"])
-def test_the_helper_call_typechecks_at_both_precisions(precision):
+def test_the_helper_call_typechecks_at_both_precisions(precision) -> None:
     """The wrong kind is not a warning: gfortran refuses the CALL, so the kernel does not build."""
     diag = compiles_with_implicit_none(_helper_ret_fortran(precision))
     assert not diag, f"precision={precision}:\n{diag}"
 
 
-def test_the_kernel_float_precision_is_where_the_kind_comes_from():
+def test_the_kernel_float_precision_is_where_the_kind_comes_from() -> None:
     """Pins the derivation rather than the literal: the dummy takes the accumulator dtype of the
     kernel's precision, the same rule ``_collect_implicit_locals`` types the caller's temp by."""
     assert dtypes.fortran_kind(dtypes.accumulator_dtype("float32")) == "real(c_float)"
@@ -246,7 +246,7 @@ def _logical_fortran() -> str:
     return fortran(_LOGICAL_BOTH_WAYS, "f", ["a"], ["out"], _LOGICAL_SHAPES, _LOGICAL_SYMS)
 
 
-def test_a_number_stored_into_a_logical_converts_by_truthiness():
+def test_a_number_stored_into_a_logical_converts_by_truthiness() -> None:
     text = _logical_fortran()
     assert "logical(c_bool) :: m(" in text, f"the mask local is no longer LOGICAL:\n{text}"
     assert re.search(r"m\(\(i_l\d+\) \+ 1\) = \(x_ifexp\d+\) /= 0", text), (
@@ -254,7 +254,7 @@ def test_a_number_stored_into_a_logical_converts_by_truthiness():
     )
 
 
-def test_a_logical_read_in_arithmetic_promotes_to_zero_or_one():
+def test_a_logical_read_in_arithmetic_promotes_to_zero_or_one() -> None:
     """numpy's bool -> 0/1 promotion, spelled as the MERGE Fortran needs; ``a + m`` is a type
     error without it, so the alternative is not a wrong number but no kernel at all."""
     text = _logical_fortran()
@@ -263,7 +263,7 @@ def test_a_logical_read_in_arithmetic_promotes_to_zero_or_one():
     )
 
 
-def test_the_logical_conversions_compile_and_compute_the_reference_numbers():
+def test_the_logical_conversions_compile_and_compute_the_reference_numbers() -> None:
     diag = compiles_with_implicit_none(_logical_fortran())
     assert not diag, diag
     rng = np.random.default_rng(1)
@@ -281,7 +281,7 @@ def test_the_logical_conversions_compile_and_compute_the_reference_numbers():
     assert status["c"] == "ok", status
 
 
-def test_a_logical_operand_of_a_comparison_is_left_alone():
+def test_a_logical_operand_of_a_comparison_is_left_alone() -> None:
     """The promotion is for ARITHMETIC only -- a mask feeding ``.and.`` / a condition must stay
     LOGICAL, or the same fix that lets ``a + m`` compile stops ``if (m(i))`` from compiling."""
     src = (
@@ -314,7 +314,7 @@ _HELPER_MASK = (
 )
 
 
-def test_a_kept_helpers_mask_is_logical_to_its_own_body_too():
+def test_a_kept_helpers_mask_is_logical_to_its_own_body_too() -> None:
     """The logical-ness oracle is per-EMITTER, and a kept helper gets its own.
 
     Left unfed, the helper's body emitter saw an untyped name where its own declaration pass had
@@ -348,7 +348,7 @@ def _solve_fortran() -> str:
     return fortran(_SOLVE, "f", ["A", "B"], ["out"], _SOLVE_SHAPES, _SOLVE_SYMS)
 
 
-def test_every_do_variable_is_read_by_the_body_it_controls():
+def test_every_do_variable_is_read_by_the_body_it_controls() -> None:
     """A DO variable that appears ONLY in its own header is the signature of this bug.
 
     The rename pass gives each of the six ``__sol_c`` loops its own DO variable, but the tree it
@@ -367,14 +367,14 @@ def test_every_do_variable_is_read_by_the_body_it_controls():
     )
 
 
-def test_no_two_sibling_loops_share_a_do_variable():
+def test_no_two_sibling_loops_share_a_do_variable() -> None:
     """Fortran has one scope per subroutine, so the uniquification is not cosmetic: two DO
     statements on one variable in the same nest is a different program, not a style question."""
     heads = _DO_HEADER.findall(_solve_fortran())
     assert len(heads) == len(set(heads)), f"a DO variable is opened twice: {sorted(heads)}"
 
 
-def test_the_solve_lowering_computes_the_reference_numbers():
+def test_the_solve_lowering_computes_the_reference_numbers() -> None:
     rng = np.random.default_rng(7)
     a = rng.standard_normal((5, 5)) + 5.0 * np.eye(5)  # diagonally dominant: no pivot degeneracy
     status = run_op(

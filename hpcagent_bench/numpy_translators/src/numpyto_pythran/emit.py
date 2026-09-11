@@ -8,8 +8,6 @@ for symbols).
 
 import ast
 import copy
-from typing import Dict, List
-
 from numpyto_common import dtypes
 from numpyto_common.ir import ArrayDesc, KernelIR
 from numpyto_common.numpy_desugar import expr_rank
@@ -20,10 +18,10 @@ class _SubstitutePrecisionGlobals(ast.NodeTransformer):
     ``np.float64``/``np.complex128``. numba resolves them at import time;
     pythran needs a concrete dtype and can't import the framework."""
 
-    def __init__(self, subs: dict):
+    def __init__(self, subs: dict[str, str]) -> None:
         self.subs = subs
 
-    def visit_Name(self, node: ast.Name):
+    def visit_Name(self, node: ast.Name) -> ast.AST:
         if isinstance(node.ctx, ast.Load) and node.id in self.subs:
             return ast.copy_location(ast.parse(self.subs[node.id], mode="eval").body, node)
         return node
@@ -40,11 +38,11 @@ _PYTHRAN_RESERVED_PARAMS = {"res"}
 class _RenameName(ast.NodeTransformer):
     """Rename every ``Name`` load/store of ``old`` to ``new`` within a scope."""
 
-    def __init__(self, old: str, new: str):
+    def __init__(self, old: str, new: str) -> None:
         self.old = old
         self.new = new
 
-    def visit_Name(self, node: ast.Name):
+    def visit_Name(self, node: ast.Name) -> ast.Name:
         if node.id == self.old:
             node.id = self.new
         return node
@@ -109,7 +107,7 @@ class _PythranMaterialize(ast.NodeTransformer):
     wrapping a plain/concrete arg is a harmless no-op. Native backends never
     see this pass."""
 
-    def __init__(self, local_funcs: set):
+    def __init__(self, local_funcs: set) -> None:
         self.local_funcs = local_funcs
 
     @staticmethod
@@ -233,7 +231,7 @@ class _PythranSafeMatVec(ast.NodeTransformer):
     (2-D, 1-D) shape this corpus hits -- 1-D dot (pythran's own, unaffected ddot path) and 2-D-by
     2-D matmul are left as ``@``."""
 
-    def __init__(self, ranks: Dict[str, int]):
+    def __init__(self, ranks: dict[str, int]) -> None:
         self.ranks = ranks
 
     def visit_BinOp(self, node: ast.BinOp) -> ast.AST:
@@ -263,7 +261,7 @@ class _EllipsisToSlice(ast.NodeTransformer):
     the kir array table) is left untouched -- pythran still rejects it, but
     no kernel currently emits that form."""
 
-    def __init__(self, ranks: Dict[str, int]):
+    def __init__(self, ranks: dict[str, int]) -> None:
         self.ranks = ranks
 
     @staticmethod
@@ -294,7 +292,7 @@ class _EllipsisToSlice(ast.NodeTransformer):
                 # so it became ``p[:, None]`` -- rank 2 where numpy gives rank 3, and the operand
                 # then broadcast against a different set of axes.
                 fill = rank - sum(1 for e in sl.elts if not self._is_ellipsis(e) and not self._is_newaxis(e))
-                elts: List[ast.AST] = []
+                elts: list[ast.AST] = []
                 for e in sl.elts:
                     if self._is_ellipsis(e):
                         elts.extend(ast.Slice() for _ in range(max(fill, 0)))
@@ -320,7 +318,7 @@ class DeadCodePrune(ast.NodeTransformer):
     Non-function module statements (imports, PPM constants) are always kept.
     No-op when the entry is absent or the whole module is reachable."""
 
-    def __init__(self, entry: str):
+    def __init__(self, entry: str) -> None:
         self.entry = entry
 
     def visit_Module(self, node: ast.Module) -> ast.AST:
@@ -353,7 +351,7 @@ class KwargsToPositional(ast.NodeTransformer):
     targets are considered -- library calls (``np.zeros(.., dtype=..)``)
     keep their keywords."""
 
-    def __init__(self, signatures: Dict[str, tuple]):
+    def __init__(self, signatures: dict[str, tuple]) -> None:
         # name -> (param_names, {param_name: default_ast})
         self.signatures = signatures
 
@@ -520,7 +518,7 @@ def emit_pythran(numpy_source: str, kir: KernelIR) -> str:
     # Truncate the export at the first unclassified optional param; a
     # REQUIRED one with no dtype still hits the loud-failure guard below.
     n_required = len(kfn.args.args) - len(kfn.args.defaults)
-    types: List[str] = []
+    types: list[str] = []
     for idx, arg in enumerate(def_params):
         if arg in sym_by_name:
             types.append("int")

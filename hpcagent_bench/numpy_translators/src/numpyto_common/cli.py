@@ -37,6 +37,7 @@ per-package CLIs already need); the driver itself only resolves the module.
 import argparse
 import importlib
 import sys
+from collections.abc import Sequence
 
 #: target name -> backend CLI module exposing ``main(argv)``. The C backend
 #: backs three targets -- ``c`` / ``polly`` / ``pluto`` -- because one emit
@@ -68,7 +69,7 @@ _PARALLEL_TARGETS = {"c_omp", "cpp_omp", "fortran_omp"}
 _ISOPAR_TARGETS = {"cpp_isopar"}
 
 
-def main(argv=None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     ap = argparse.ArgumentParser(
         prog="numpyto", description="Unified NumpyToX emitter: emit a numpy kernel to a target language."

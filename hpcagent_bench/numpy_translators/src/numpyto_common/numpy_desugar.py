@@ -869,7 +869,7 @@ class _IndexLeadingAxis(ast.NodeTransformer):
     dropping it to a 2-D operand. Names of rank <= 2 are left untouched (a
     shared 2-D right operand broadcasts across the batch)."""
 
-    def __init__(self, bv: str, ranks: Dict[str, int]):
+    def __init__(self, bv: str, ranks: Dict[str, int]) -> None:
         self.bv = bv
         self.ranks = ranks
 
@@ -892,7 +892,7 @@ class _BatchedMatmulToLoop(ast.NodeTransformer):
     (>=3-D) form -- and Fortran has no matmul-broadcast either, so this is the
     universal "batched GEMM = for-loop over GEMMs" lowering."""
 
-    def __init__(self, ranks: Dict[str, int]):
+    def __init__(self, ranks: Dict[str, int]) -> None:
         self.ranks = ranks
         self._ctr = 0
         self.changed = False
@@ -1070,7 +1070,7 @@ class _PadInline(ast.NodeTransformer):
     its own ``np.pad`` -- see :func:`_pad_constant_inline_stmts`.
     """
 
-    def __init__(self, ranks: Dict[str, int], lower_symbolic_constant: bool = False):
+    def __init__(self, ranks: Dict[str, int], lower_symbolic_constant: bool = False) -> None:
         self.ranks = ranks
         self.lower_symbolic_constant = lower_symbolic_constant
         self.changed = False
@@ -1157,7 +1157,7 @@ class _EinsumHoister(ast.NodeTransformer):
     with a fresh temp Name, accumulating the temp's compute statements in
     ``self.pre`` to be spliced before the statement."""
 
-    def __init__(self, ctr: int):
+    def __init__(self, ctr: int) -> None:
         self.ctr = ctr
         self.pre: List[ast.stmt] = []
 
@@ -1183,7 +1183,7 @@ class _EinsumInline(ast.NodeTransformer):
     contraction loop nest. Handles einsum nested in arithmetic (seissol's
     ``Q[:] = Q + np.einsum(...)``)."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.changed = False
         self._ctr = 0
 
@@ -1318,7 +1318,7 @@ class _FftInline(ast.NodeTransformer):
     argument (``ifftn(u1 * np.exp(...))``) is hoisted to a temp first so the loop
     body can index it; a non-constant axis spec leaves the call verbatim."""
 
-    def __init__(self, ranks: Dict[str, int], array_dtypes: Dict[str, str]):
+    def __init__(self, ranks: Dict[str, int], array_dtypes: Dict[str, str]) -> None:
         self.ranks = ranks
         self.array_dtypes = array_dtypes
         self.changed = False
@@ -1392,7 +1392,7 @@ def _mgrid_inline_stmts(tnames: List[str], slices: List[ast.AST], ctr: int) -> O
 class _MgridInline(ast.NodeTransformer):
     """Replace ``i, j = np.mgrid[s0, s1]`` with explicit ``arange`` broadcasts."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.changed = False
         self._ctr = 0
 
@@ -1434,7 +1434,7 @@ class _FancyGatherHoister(ast.NodeTransformer):
     it: an axis a ``None`` pins to extent 1 in one entry takes its extent from another entry
     and is read at 0, not at the loop iterator (see :func:`_newaxis_singletons`)."""
 
-    def __init__(self, ranks: Dict[str, int], ctr: int):
+    def __init__(self, ranks: Dict[str, int], ctr: int) -> None:
         self.ranks = ranks
         self.ctr = ctr
         self.pre: List[ast.stmt] = []
@@ -1498,7 +1498,7 @@ class _FancyGatherInline(ast.NodeTransformer):
     """Hoist multi-array fancy gathers out of any value-bearing statement into a
     preceding gather loop (handles ``chk[i] = np.sum(u2[q, r, s])``)."""
 
-    def __init__(self, ranks: Dict[str, int]):
+    def __init__(self, ranks: Dict[str, int]) -> None:
         self.ranks = ranks
         self.changed = False
         self._ctr = 0
@@ -1700,7 +1700,7 @@ class _ReduceAxisHoister(ast.NodeTransformer):
     graph``) is hoisted to a temp first; a non-constant axis or a rank<2
     (scalar-result) reduction is left verbatim (numba's no-axis scalar form)."""
 
-    def __init__(self, ranks: Dict[str, int], ctr: int, dtypes: Optional[Dict[str, str]] = None):
+    def __init__(self, ranks: Dict[str, int], ctr: int, dtypes: Optional[Dict[str, str]] = None) -> None:
         self.ranks = ranks
         self.ctr = ctr
         self.dtypes = dtypes or {}
@@ -1760,7 +1760,7 @@ class _ReduceAxisInline(ast.NodeTransformer):
     reduction loops (handles ``V = np.max(s, axis=0) + e`` and the bare
     ``mean = np.mean(data, axis=0)``)."""
 
-    def __init__(self, ranks: Dict[str, int], dtypes: Optional[Dict[str, str]] = None):
+    def __init__(self, ranks: Dict[str, int], dtypes: Optional[Dict[str, str]] = None) -> None:
         self.ranks = ranks
         self.dtypes = dtypes or {}
         self.changed = False
@@ -1867,7 +1867,7 @@ class _CallFixups(ast.NodeTransformer):
     builtin ``abs(<array>)`` -> ``np.abs(<array>)`` (numba's builtin ``abs``
     types scalars only, not arrays -- mandelbrot's ``abs(Z)`` on complex grids)."""
 
-    def __init__(self, ranks: Dict[str, int]):
+    def __init__(self, ranks: Dict[str, int]) -> None:
         self.ranks = ranks
         self.changed = False
 
@@ -1978,7 +1978,7 @@ class _UfuncOuterHoister(ast.NodeTransformer):
     (numba has no ufunc.outer): ``a[:,None] op b[None,:]`` as a (len_a, len_b)
     grid. Non-Name operands are unparsed inline into hoisted temps first."""
 
-    def __init__(self, ranks: Dict[str, int], ctr: int):
+    def __init__(self, ranks: Dict[str, int], ctr: int) -> None:
         self.ranks = ranks
         self.ctr = ctr
         self.pre: List[ast.stmt] = []
@@ -2009,7 +2009,7 @@ class _UfuncOuterInline(ast.NodeTransformer):
     """Hoist ufunc.outer out of any value-bearing statement (floyd_warshall's
     ``np.minimum(path, np.add.outer(path[:,k], path[k,:]))``)."""
 
-    def __init__(self, ranks: Dict[str, int]):
+    def __init__(self, ranks: Dict[str, int]) -> None:
         self.ranks = ranks
         self.changed = False
         self._ctr = 0
@@ -2045,7 +2045,7 @@ class _ScalarizeMask(ast.NodeTransformer):
     alone (they broadcast). Turns a whole-array masked expression into the
     per-element body of a guarded loop."""
 
-    def __init__(self, maskdump: str, idx_slice: ast.AST, arank: int, ranks: Dict[str, int]):
+    def __init__(self, maskdump: str, idx_slice: ast.AST, arank: int, ranks: Dict[str, int]) -> None:
         self.maskdump = maskdump
         self.idx_slice = idx_slice
         self.arank = arank
@@ -2080,7 +2080,7 @@ class _MaskedAssignToLoop(ast.NodeTransformer):
     inline Compare/``& | ^ ~`` combo of that rank. A same-rank INTEGER index
     Name is a fancy index, not a mask -- left verbatim (clean skip)."""
 
-    def __init__(self, ranks: Dict[str, int], dtypes: Dict[str, str]):
+    def __init__(self, ranks: Dict[str, int], dtypes: Dict[str, str]) -> None:
         self.ranks = ranks
         self.dtypes = dtypes
         self.changed = False
@@ -2222,7 +2222,7 @@ class _MaskedReduceHoister(ast.NodeTransformer):
     name) inside one statement with a fresh temp Name, emitting its accumulate
     loop into ``self.pre``."""
 
-    def __init__(self, gathers: Dict[str, tuple], ranks: Dict[str, int], ctr: int):
+    def __init__(self, gathers: Dict[str, tuple], ranks: Dict[str, int], ctr: int) -> None:
         self.gathers = gathers
         self.ranks = ranks
         self.ctr = ctr
@@ -2251,7 +2251,7 @@ class _MaskedReduceInline(ast.NodeTransformer):
     would DCE the now-unused select anyway. ``gathers`` is pre-vetted so every use
     of the name is a reduction, making the drop safe."""
 
-    def __init__(self, gathers: Dict[str, tuple], ranks: Dict[str, int]):
+    def __init__(self, gathers: Dict[str, tuple], ranks: Dict[str, int]) -> None:
         self.gathers = gathers
         self.ranks = ranks
         self.changed = False
@@ -2481,7 +2481,7 @@ class _AddAtInline(ast.NodeTransformer):
     index arrays + scalar axes (icon_scatter's ``np.add.at(out, (i2d, jk, j2d),
     val)``); the driver is the first index array, scalars ride each iteration."""
 
-    def __init__(self, ranks: Dict[str, int]):
+    def __init__(self, ranks: Dict[str, int]) -> None:
         self.ranks = ranks
         self.changed = False
         self._ctr = 0
@@ -2646,7 +2646,7 @@ class _HistogramHoister(ast.NodeTransformer):
     those edges (numpy's own correction) and accumulating ``1`` (or ``w[i]``). numba has no
     np.histogram; this is the same loop the C/Fortran backends lower (azimint_hist)."""
 
-    def __init__(self, ctr: int):
+    def __init__(self, ctr: int) -> None:
         self.ctr = ctr
         self.pre: List[ast.stmt] = []
 
@@ -2851,7 +2851,7 @@ class _HistogramInline(ast.NodeTransformer):
     """Hoist ``np.histogram(...)[0]`` out of any value-bearing statement into its
     preceding binning loop (azimint's ``histw = np.histogram(r, n, weights=d)[0]``)."""
 
-    def __init__(self, ranks: Dict[str, int]):
+    def __init__(self, ranks: Dict[str, int]) -> None:
         self.changed = False
         self._ctr = 0
 
@@ -2933,7 +2933,7 @@ class _IntMatmulHoister(ast.NodeTransformer):
     (bfs's ``frontier @ graph``) fails to type; float matmul is LEFT for numba's
     fast path. Owned-but-unhandled shapes (unknown rank, >2-D) raise DesugarError."""
 
-    def __init__(self, ranks: Dict[str, int], dtypes: Dict[str, str], ctr: int):
+    def __init__(self, ranks: Dict[str, int], dtypes: Dict[str, str], ctr: int) -> None:
         self.ranks = ranks
         self.dtypes = dtypes
         self.ctr = ctr
@@ -2982,7 +2982,7 @@ class _IntMatmulInline(ast.NodeTransformer):
     """Hoist integer matmuls out of any value-bearing statement (bfs's
     ``reach = frontier @ graph``)."""
 
-    def __init__(self, ranks: Dict[str, int], dtypes: Dict[str, str]):
+    def __init__(self, ranks: Dict[str, int], dtypes: Dict[str, str]) -> None:
         self.ranks = ranks
         self.dtypes = dtypes
         self.changed = False
@@ -3046,7 +3046,7 @@ class _ReshapeContiguousInline(ast.NodeTransformer):
     requires a contiguous array (stockham's ``np.reshape(tmp_perm, (N,))`` where
     ``tmp_perm = np.transpose(yv, ...)``). A no-op for already-contiguous inputs."""
 
-    def __init__(self, noncontig: set):
+    def __init__(self, noncontig: set) -> None:
         self.noncontig = noncontig
         self.changed = False
 
@@ -3074,7 +3074,7 @@ class _RepeatAxisHoister(ast.NodeTransformer):
     ``axis``). numba rejects the ``axis=`` kwarg on np.repeat (stockham's
     ``np.repeat(reshape(tmp, (R, R**i, 1)), R**(K-i-1), axis=2)``)."""
 
-    def __init__(self, ranks: Dict[str, int], ctr: int):
+    def __init__(self, ranks: Dict[str, int], ctr: int) -> None:
         self.ranks = ranks
         self.ctr = ctr
         self.pre: List[ast.stmt] = []
@@ -3118,7 +3118,7 @@ class _RepeatAxisHoister(ast.NodeTransformer):
 class _RepeatAxisInline(ast.NodeTransformer):
     """Hoist ``np.repeat(..., axis=k)`` out of any value-bearing statement."""
 
-    def __init__(self, ranks: Dict[str, int]):
+    def __init__(self, ranks: Dict[str, int]) -> None:
         self.ranks = ranks
         self.changed = False
         self._ctr = 0
@@ -3183,7 +3183,7 @@ class _NormalizeNegativeAxis(ast.NodeTransformer):
     Only the ``axis=`` keyword form is normalized -- positional axis position
     differs per op (``np.roll``'s 2nd positional arg is the shift, not axis)."""
 
-    def __init__(self, ranks: Dict[str, int]):
+    def __init__(self, ranks: Dict[str, int]) -> None:
         self.ranks = ranks
         self.changed = False
 
@@ -3228,7 +3228,7 @@ class _DropGuards(ast.NodeTransformer):
     numba/pythran/dace need not express. ``pass`` (not deletion) keeps an
     otherwise-empty ``if`` body syntactically valid."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.changed = False
 
     def visit_Raise(self, node: ast.Raise):
@@ -3281,7 +3281,7 @@ class _IssubdtypeFold(ast.NodeTransformer):
     backends would do natively. Left verbatim when the kind or category is
     unknown."""
 
-    def __init__(self, dtypes: Dict[str, str]):
+    def __init__(self, dtypes: Dict[str, str]) -> None:
         self.dtypes = dtypes
         self.changed = False
 
@@ -3311,7 +3311,7 @@ class _DeadBranchElim(ast.NodeTransformer):
     the dead sparse branch entirely -- numba DCEs it before typing, but pythran
     statically types it (``.toarray()`` on a dense array) and errors otherwise."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.changed = False
 
     def _const_bool(self, node: ast.AST):
@@ -3439,7 +3439,7 @@ class _FinfoEpsFold(ast.NodeTransformer):
     as :func:`_fd_step`.
     """
 
-    def __init__(self, precision: Optional[str] = None):
+    def __init__(self, precision: Optional[str] = None) -> None:
         self.eps = dtypes.float_eps(_working_float_dtype(precision))
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
@@ -3507,7 +3507,7 @@ class _SubstLenWithIndex(ast.NodeTransformer):
     is exactly ``i`` -- so the loop-index substitution is semantics-preserving.
     """
 
-    def __init__(self, name: str, idx: str):
+    def __init__(self, name: str, idx: str) -> None:
         self.name = name
         self.idx = idx
 
@@ -3901,7 +3901,7 @@ class _CurveFitRewriter(ast.NodeTransformer):
     reads it. A live ``pcov`` raises rather than silently emitting nothing.
     """
 
-    def __init__(self, tree: ast.Module, kernel: ast.FunctionDef, precision: Optional[str] = None):
+    def __init__(self, tree: ast.Module, kernel: ast.FunctionDef, precision: Optional[str] = None) -> None:
         self.tree = tree
         self.kernel = kernel
         self.ctr = 0
@@ -3991,7 +3991,7 @@ class _NegParamIndexFold(ast.NodeTransformer):
     fold a negative index only against a STATIC extent) cannot resolve it.
     """
 
-    def __init__(self, name: str, nexpr: str):
+    def __init__(self, name: str, nexpr: str) -> None:
         self.name = name
         self.nexpr = nexpr
 
@@ -4079,7 +4079,7 @@ class _ReshapeMatmulInline(ast.NodeTransformer):
     a genuinely different reshape is left verbatim. A matched-but-inconsistent
     shape (Y not 2-D) raises DesugarError rather than miscompiling."""
 
-    def __init__(self, ranks: Dict[str, int]):
+    def __init__(self, ranks: Dict[str, int]) -> None:
         self.ranks = ranks
         self.changed = False
         self._ctr = 0
@@ -4245,7 +4245,7 @@ class _LinalgHoister(ast.NodeTransformer):
         lower_ops: set,
         ctr: int,
         lower_solve_rhs_ranks: frozenset = frozenset(),
-    ):
+    ) -> None:
         self.ranks = ranks
         self.dtypes = dtypes
         self.lower_ops = lower_ops
@@ -4354,7 +4354,7 @@ class _LinalgInline(ast.NodeTransformer):
         dtypes: Dict[str, str],
         lower_ops: set,
         lower_solve_rhs_ranks: frozenset = frozenset(),
-    ):
+    ) -> None:
         self.ranks = ranks
         self.dtypes = dtypes
         self.lower_ops = lower_ops
@@ -4704,7 +4704,7 @@ class _EighLoopRewriter(ast.NodeTransformer):
         dtypes: Dict[str, str],
         kernel_name: Optional[str] = None,
         array_dtypes: Optional[Dict[str, str]] = None,
-    ):
+    ) -> None:
         self.alias_names = alias_names
         self.declared = dtypes
         self.dtypes = dtypes
@@ -4857,7 +4857,7 @@ class _EighCallHoister(ast.NodeTransformer):
     eligible eigh-assign (:func:`_is_eigh_assign_target`) is left in place. Runs on the
     whole module (helpers included) BEFORE the loop rewriter, mirroring its scope."""
 
-    def __init__(self, alias_names: set):
+    def __init__(self, alias_names: set) -> None:
         self.alias_names = alias_names
         self.pre: List[ast.stmt] = []
         self._ctr = 0
@@ -4934,7 +4934,7 @@ class _EighInline(ast.NodeTransformer):
         alias_names: set,
         dtypes: Dict[str, str],
         array_dtypes: Optional[Dict[str, str]] = None,
-    ):
+    ) -> None:
         self.ranks = ranks
         self.alias_names = alias_names
         self.dtypes = dtypes
@@ -5124,7 +5124,7 @@ class _DecomposeRollSlice(ast.NodeTransformer):
     in-place write is safe. numpy and the Python backends roll a slice verbatim, so
     this is native-only (the band-group circular shift in QE vexx negrp>1)."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.changed = False
         self._n = 0
 
@@ -5184,7 +5184,7 @@ class _ComplexAccessorToFunc(ast.NodeTransformer):
     (for Python backends that already run ``.real``/``.imag`` verbatim, but
     whose pythran path lacks the ``.conjugate()`` method)."""
 
-    def __init__(self, conjugate_only: bool = False):
+    def __init__(self, conjugate_only: bool = False) -> None:
         self.changed = False
         self.conjugate_only = conjugate_only
 
@@ -5262,7 +5262,7 @@ class _UfuncReduceToReducer(ast.NodeTransformer):
     elementwise-ufunc desugars so ``np.add`` inside ``np.add.reduce`` is never
     mistaken for an elementwise add."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.changed = False
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
@@ -5316,7 +5316,7 @@ class _ElementalUfuncToPrimitive(ast.NodeTransformer):
     casing. Reused operands are deep-copied so no AST node is shared between
     two positions."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.changed = False
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
@@ -5388,7 +5388,7 @@ class _FancySliceStoreToLoop(ast.NodeTransformer):
     unconditionally took the wrong plane and, where the extents differed, failed to broadcast.
     """
 
-    def __init__(self, ranks: Dict[str, int], dtypes: Dict[str, str]):
+    def __init__(self, ranks: Dict[str, int], dtypes: Dict[str, str]) -> None:
         self.ranks = ranks
         self.dtypes = dtypes
         self.changed = False
@@ -5447,7 +5447,7 @@ class _FancySliceStoreToLoop(ast.NodeTransformer):
 class _SubstituteName(ast.NodeTransformer):
     """Replace bare ``name`` with the parsed ``text`` (used to index a gather array at a loop iter)."""
 
-    def __init__(self, name: str, text: str):
+    def __init__(self, name: str, text: str) -> None:
         self.name = name
         self.repl = ast.parse(text, mode="eval").body
 
@@ -5472,7 +5472,7 @@ class _IxWriteToLoop(ast.NodeTransformer):
     numpy's gather-add-scatter applies the update once -- undetectable statically,
     and no kernel builds an ``ix_`` grid with duplicates."""
 
-    def __init__(self, ranks: Dict[str, int], dtypes: Dict[str, str]):
+    def __init__(self, ranks: Dict[str, int], dtypes: Dict[str, str]) -> None:
         self.ranks = ranks
         self.dtypes = dtypes
         self.changed = False
@@ -5614,7 +5614,7 @@ class _ConstComprehensionFold(ast.NodeTransformer):
     all count as runtime. Inner comprehensions fold first, so a nested one is a
     literal by the time the outer is tested."""
 
-    def __init__(self, consts: Dict[str, object]):
+    def __init__(self, consts: Dict[str, object]) -> None:
         self.consts = consts
         self.changed = False
 

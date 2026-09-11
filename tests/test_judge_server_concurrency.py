@@ -27,7 +27,7 @@ class FakeResult:
 class ConcurrencyProbe:
     """Stands in for score(): records the peak number of grades running at once."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.active = 0
         self.peak = 0
         self.lock = threading.Lock()
@@ -44,7 +44,7 @@ class ConcurrencyProbe:
                 self.active -= 1
 
 
-def test_judge_server_bounds_concurrent_grades_to_device_slots(monkeypatch):
+def test_judge_server_bounds_concurrent_grades_to_device_slots(monkeypatch) -> None:
     probe = ConcurrencyProbe()
     monkeypatch.setattr(service, "score", probe)
     real_get = service.config.get  # capture BEFORE patching (else the lambda recurses)
@@ -58,7 +58,7 @@ def test_judge_server_bounds_concurrent_grades_to_device_slots(monkeypatch):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
-    def fire():
+    def fire() -> None:
         # `rank` is part of the wire contract on every graded route (the judge below runs at the
         # default rank 0); without it the request is refused before it ever reaches a device slot.
         body = json.dumps({"kernel": "gemm", "language": "c", "rank": 0, "source": "int x;"}).encode()

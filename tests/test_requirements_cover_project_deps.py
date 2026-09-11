@@ -88,7 +88,7 @@ def parse_requirements(path: pathlib.Path) -> frozenset[str]:
 DEPENDENCIES = project_dependencies(PYPROJECT)
 
 
-def test_dependencies_parse_to_the_known_deps():
+def test_dependencies_parse_to_the_known_deps() -> None:
     """Sanity check on the toml parse itself, independent of the assertions below -- if this list
     came back empty or truncated, the coverage test would pass for the wrong reason (nothing left
     to check)."""
@@ -97,7 +97,7 @@ def test_dependencies_parse_to_the_known_deps():
     assert len(DEPENDENCIES) >= 8
 
 
-def test_package_name_strips_specifiers_extras_and_markers():
+def test_package_name_strips_specifiers_extras_and_markers() -> None:
     cases = {
         "numpy>=2,<3": "numpy",
         "jax[cuda12]": "jax",
@@ -109,19 +109,19 @@ def test_package_name_strips_specifiers_extras_and_markers():
         assert package_name(spec) == expected
 
 
-def test_normalize_follows_pep_503():
+def test_normalize_follows_pep_503() -> None:
     assert normalize("ml_dtypes") == normalize("ml-dtypes") == "ml-dtypes"
     assert normalize("PyYAML") == "pyyaml"
     assert normalize("tree_sitter.language--pack") == "tree-sitter-language-pack"
 
 
-def test_parse_requirements_skips_comments_and_pip_options(tmp_path):
+def test_parse_requirements_skips_comments_and_pip_options(tmp_path) -> None:
     path = tmp_path / "req.txt"
     path.write_text("# a comment\n--pre\nnumpy>=2,<3\n\n--no-binary=mpi4py\nmpi4py\n")
     assert parse_requirements(path) == frozenset({"numpy", "mpi4py"})
 
 
-def test_generated_requirements_are_in_sync_with_pyproject():
+def test_generated_requirements_are_in_sync_with_pyproject() -> None:
     """The real gate. A dependency edited in pyproject and not regenerated here would ship to the CE
     images as the OLD list, silently -- a container build is the only thing that would notice, hours
     later and on a different machine."""
@@ -132,7 +132,7 @@ def test_generated_requirements_are_in_sync_with_pyproject():
     )
 
 
-def test_self_referencing_extras_expand():
+def test_self_referencing_extras_expand() -> None:
     """``cpu``/``nvidia``/``amd`` each pull the shared stack in as ``hpcagent_bench[frameworks]``. If
     that stopped expanding, the hardware files would ship the platform bits and none of the shared
     ones -- a short file that still looks plausible."""
@@ -143,13 +143,13 @@ def test_self_referencing_extras_expand():
     assert "cupy-cuda13x" in resolved  # came from nvidia itself
 
 
-def test_a_cyclic_extra_is_rejected_rather_than_recursing():
+def test_a_cyclic_extra_is_rejected_rather_than_recursing() -> None:
     extras = {"a": ["hpcagent_bench[b]"], "b": ["hpcagent_bench[a]"]}
     with pytest.raises(ValueError, match="includes itself"):
         sync_requirements.resolve("a", extras)
 
 
-def test_every_requirements_file_is_generated_or_declared_hand_maintained():
+def test_every_requirements_file_is_generated_or_declared_hand_maintained() -> None:
     """A new hand-written file under requirements/ is a new place for the list to drift. Adding one
     means either giving it an extra to generate from, or saying here why it has none."""
     on_disk = {str(p.relative_to(paths.ROOT)) for p in REQUIREMENTS_DIR.glob("*.txt")}
@@ -158,7 +158,7 @@ def test_every_requirements_file_is_generated_or_declared_hand_maintained():
     assert not unaccounted, f"requirements files that are neither generated nor declared hand-maintained: {unaccounted}"
 
 
-def test_dependencies_are_a_subset_of_amd_and_nvidia_requirements():
+def test_dependencies_are_a_subset_of_amd_and_nvidia_requirements() -> None:
     """What the generation is FOR: every runtime import pyproject declares must be preinstalled in
     the hardware requirements file the CE image actually installs, since the judge never installs
     the project inside the mounted-repo container. Generation makes this hold by construction --

@@ -59,40 +59,40 @@ def _run3(body):
     )
 
 
-def _ok(res):
+def _ok(res) -> None:
     # Both keys asserted: ``all()`` over an empty result is vacuously true, so a harness that
     # returned nothing would read as a pass.
     assert set(res) == {"c", "fortran"}, res
     assert all(v == "ok" for v in res.values()), res
 
 
-def test_scatter_with_trailing_slice_matches_numpy():
+def test_scatter_with_trailing_slice_matches_numpy() -> None:
     _ok(_run2("    out[ia, :] = src[ia, :] * 2.0\n"))
 
 
-def test_scatter_with_index_expression_and_slice_matches_numpy():
+def test_scatter_with_index_expression_and_slice_matches_numpy() -> None:
     """The spelling that used to emit invalid pointer arithmetic instead of declining."""
     _ok(_run2("    out[ia, :] = src[ia - 1, :] * 2.0\n"))
 
 
-def test_three_d_two_trailing_slices_matches_numpy():
+def test_three_d_two_trailing_slices_matches_numpy() -> None:
     """fv3's own shape: one index axis, two whole axes behind it."""
     _ok(_run3("    out[ia, :, :] = src[ia - 1, :, :] * 2.0\n"))
 
 
-def test_scalar_axis_between_index_and_slice_matches_numpy():
+def test_scalar_axis_between_index_and_slice_matches_numpy() -> None:
     """A scalar axis contributes NO result axis; opening a loop iter for it would put the
     iters out of step with the RHS."""
     _ok(_run3("    out[ia, 0, :] = src[ia, 1, :] * 2.0\n"))
 
 
-def test_duplicate_index_is_last_write_wins():
+def test_duplicate_index_is_last_write_wins() -> None:
     """numpy's buffered fancy assignment resolves a repeated index by last write, and the
     per-element loop must agree rather than writing both."""
     _ok(_run2("    ia[1] = 1\n    out[ia, :] = src[ia, :] * 2.0\n"))
 
 
-def test_index_behind_a_slice_matches_numpy():
+def test_index_behind_a_slice_matches_numpy() -> None:
     """``out[:, ia]`` puts the index array BEHIND a ``:``, which numpy answers by moving that
     axis to the FRONT of the result. Filling the loop iters in SUBSCRIPT order there writes the
     wrong axes -- a silently wrong answer, which is why this used to decline. The iters are now
@@ -101,22 +101,22 @@ def test_index_behind_a_slice_matches_numpy():
     _ok(_run2("    out[:, ia] = src[:, ia] * 2.0\n"))
 
 
-def test_index_behind_a_slice_with_an_index_expression_matches_numpy():
+def test_index_behind_a_slice_with_an_index_expression_matches_numpy() -> None:
     _ok(_run2("    out[:, ia] = src[:, ia - 1] * 2.0\n"))
 
 
-def test_index_between_two_slices_matches_numpy():
+def test_index_between_two_slices_matches_numpy() -> None:
     """fv3_dycore's y-direction edge fixup: ``al[:, ja, :nk]``."""
     _ok(_run3("    out[:, ia, :] = src[:, ia - 1, :] * 2.0\n"))
 
 
-def test_bounded_slices_beside_the_index_matches_numpy():
+def test_bounded_slices_beside_the_index_matches_numpy() -> None:
     """A bounded ``a:b`` axis is a loop over the slice EXTENT offset by its lower bound; both
     sides carry their own offset, so the iters stay 0-based and agree."""
     _ok(_run3("    out[ia, :, 0:2] = src[ia - 1, :, 1:3] * 2.0\n"))
 
 
-def test_a_strided_slice_beside_the_index_is_still_declined():
+def test_a_strided_slice_beside_the_index_is_still_declined() -> None:
     """``::2`` would need step arithmetic this loop does not do; writing the wrong elements is
     worse than declining, so the expander must leave the statement alone.
 

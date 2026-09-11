@@ -32,7 +32,7 @@ def _fold(src: str, shapes) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def test_view_folds_into_a_plain_subscript():
+def test_view_folds_into_a_plain_subscript() -> None:
     # ``x_g = padded[:, g*ipg:(g+1)*ipg]`` (padded rank 4) then a full 4-index
     # use -- the untouched axes pass straight through, the offset axis composes
     # to ``g * ipg + 1``. This is the exact grouped-conv shape from
@@ -43,7 +43,7 @@ def test_view_folds_into_a_plain_subscript():
     assert "out[0] = padded[0, g * ipg + 1, 2, 3]" in lowered
 
 
-def test_further_slice_composes_offset_and_stride():
+def test_further_slice_composes_offset_and_stride() -> None:
     # ``row = arr[0:20:2]`` is itself a STRIDED view; slicing it again
     # (``row[a:b:c]``) must compose both the offset (``step*inner_start``) and
     # the stride (``step_outer*step_inner``), not just reuse ``a:b:c`` verbatim.
@@ -55,7 +55,7 @@ def test_further_slice_composes_offset_and_stride():
     assert "win = arr[2 * a:2 * b:2 * c]" in lowered
 
 
-def test_integer_view_index_drops_the_axis():
+def test_integer_view_index_drops_the_axis() -> None:
     # ``row = mat[i, a:b]`` -- ``i`` is an INTEGER index and drops axis 0 (numpy
     # squeeze); axis 1 stays a real bounded slice (not trimmed to nothing, so
     # :func:`_fold_subarray_aliases` -- which bails on any surviving Slice --
@@ -68,7 +68,7 @@ def test_integer_view_index_drops_the_axis():
     assert "out[0] = mat[i, a + j]" in lowered
 
 
-def test_implicit_trailing_dimensions_are_padded():
+def test_implicit_trailing_dimensions_are_padded() -> None:
     # ``arr[:, a:b]`` on a 4-D array means ``arr[:, a:b, :, :]`` -- the pass must
     # pad the missing trailing axes itself (this AST predates any external
     # padding pass) so a 4-index use still composes correctly.
@@ -83,7 +83,7 @@ def test_implicit_trailing_dimensions_are_padded():
 # --------------------------------------------------------------------------- #
 
 
-def test_view_written_through_is_not_folded():
+def test_view_written_through_is_not_folded() -> None:
     # ``view[0, 0] = 5`` writes THROUGH the alias -- it is a genuine alias, not a
     # private copy, so folding would silently redirect that store onto ``arr``
     # at the wrong composed offset instead of leaving the (correct) alias write
@@ -93,7 +93,7 @@ def test_view_written_through_is_not_folded():
     assert lowered == ast.unparse(ast.parse(src))
 
 
-def test_negative_step_view_is_not_folded():
+def test_negative_step_view_is_not_folded() -> None:
     # ``a[::-2]`` is a numpy REVERSE: the implicit start is the LAST element, not
     # 0, which the ``start + step*index`` composition assumes. A literal negative
     # step is provably wrong to compose (unlike a symbolic step, always emitted
@@ -104,7 +104,7 @@ def test_negative_step_view_is_not_folded():
     assert lowered == ast.unparse(ast.parse(src))
 
 
-def test_base_rewritten_between_bind_and_use_is_not_folded():
+def test_base_rewritten_between_bind_and_use_is_not_folded() -> None:
     # ``arr`` is reassigned after ``view`` captures a slice of the ORIGINAL
     # ``arr`` -- composing ``view[0, 1]`` against the (rebound) name ``arr``
     # would read whatever ``something_else`` returns, not the array ``view``
@@ -119,7 +119,7 @@ def test_base_rewritten_between_bind_and_use_is_not_folded():
 # --------------------------------------------------------------------------- #
 
 
-def test_grouped_slab_view_matches_numpy_through_c():
+def test_grouped_slab_view_matches_numpy_through_c() -> None:
     # A minimal grouped-conv-shaped kernel: a per-group offset view (``x_g``),
     # then a FURTHER strided sub-window of it (``window``) feeding an
     # accumulation -- the exact ``view-of-a-view`` chain conv2d_batch_norm_scaling
@@ -153,7 +153,7 @@ def test_grouped_slab_view_matches_numpy_through_c():
     assert res["c"] == "ok", res
 
 
-def test_conv2d_batch_norm_scaling_c_matches_numpy():
+def test_conv2d_batch_norm_scaling_c_matches_numpy() -> None:
     # The actual benchmark this cause was reported against -- a further check that
     # the fold is not just structurally plausible but numerically exact once
     # compiled and run.
@@ -163,7 +163,7 @@ def test_conv2d_batch_norm_scaling_c_matches_numpy():
     assert status.get("c") == "ok", status
 
 
-def test_a_folded_staging_local_is_reported_dead():
+def test_a_folded_staging_local_is_reported_dead() -> None:
     # A folded alias whose name no longer appears anywhere is reported back so the
     # caller can drop its entry from ``zeros_locals``: the slice lifter's ``__hcall``
     # staging copy is exactly this shape, and leaving it allocated emits a
@@ -177,7 +177,7 @@ def test_a_folded_staging_local_is_reported_dead():
     assert "__hcall1" not in ast.unparse(tree)
 
 
-def test_a_declined_fold_reports_nothing_dead():
+def test_a_declined_fold_reports_nothing_dead() -> None:
     # The write-through alias of test_view_written_through_is_not_folded: the name
     # stays live, so nothing may be pruned from the allocation table.
     src = "def f(x, out):\n    v = x[0:3, :]\n    v[1, 2] = 5.0\n    out[0] = v[1, 2]\n"
@@ -185,7 +185,7 @@ def test_a_declined_fold_reports_nothing_dead():
     assert _fold_slice_view_aliases(tree, {"x": ["n", "m"], "v": ["3", "m"]}) == OrderedSet()
 
 
-def test_chained_index_array_split_by_a_slice_is_not_flattened():
+def test_chained_index_array_split_by_a_slice_is_not_flattened() -> None:
     # numpy's advanced-index FRONT-PLACEMENT rule, checked against numpy first: a plain integer is
     # an advanced index beside an index array, so ``A[2][:3, idx]`` keeps its slice axis in place
     # (3, 2) while the flattened ``A[2, :3, idx]`` has the pair SEPARATED and moves the broadcast

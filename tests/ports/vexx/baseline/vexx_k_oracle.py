@@ -125,7 +125,7 @@ class VexxCtx(ctypes.Structure):
     _fields_ = [(k, _CI) for k in _INTS] + [(k, _CD) for k in _DBLS] + [(k, _VP) for k in _PTRS]
 
 
-def build_so(force=False):
+def build_so(force: bool = False):
     if SO.exists() and not force and SO.stat().st_mtime >= CPP.stat().st_mtime:
         return SO
     from tests.port_toolchain import gxx
@@ -221,17 +221,17 @@ def vexx_all_paths(
     coulomb_fac_q=None,
     qgm_q=None,
     sf_q=None,
-    x_gamma_extrapolation=False,
-    grid_factor=1.0,
+    x_gamma_extrapolation: bool = False,
+    grid_factor: float = 1.0,
     at=None,
-    nq1=1,
-    nq2=1,
-    nq3=1,
-    eps_gcv=1e-6,
-    use_coulomb_vcut_ws=False,
-    use_coulomb_vcut_spheric=False,
+    nq1: int = 1,
+    nq2: int = 1,
+    nq3: int = 1,
+    eps_gcv: float = 1e-6,
+    use_coulomb_vcut_ws: bool = False,
+    use_coulomb_vcut_spheric: bool = False,
     vcut_a=None,
-    vcut_cutoff=0.0,
+    vcut_cutoff: float = 0.0,
     vcut_corrected=None,
 ):
     """C++-oracle vexx. Same contract as ``vexx_k_numpy.vexx_all_paths``: accumulate

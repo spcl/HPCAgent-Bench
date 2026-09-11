@@ -16,7 +16,7 @@ def restore_seed():
     config.set_override("seeds.fuzz", orig)
 
 
-def test_parse_preset_bases():
+def test_parse_preset_bases() -> None:
     assert parse_preset("S") == ("S", None, "S")
     assert parse_preset("XL") == ("XL", None, "XL")
     # `fuzzed` is the historical spelling of `XL+fuzz` and must keep resolving to it.
@@ -28,7 +28,7 @@ def test_parse_preset_bases():
     assert parse_preset("M+fuzz:42") == ("fuzzed", 42, "M")
 
 
-def test_parse_preset_seed():
+def test_parse_preset_seed() -> None:
     assert parse_preset("fuzzed:42") == ("fuzzed", 42, "XL")
     assert parse_preset("fuzzed:0") == ("fuzzed", 0, "XL")
 
@@ -46,32 +46,32 @@ def test_parse_preset_seed():
         "Q+fuzz",  # unknown rung
     ],
 )
-def test_parse_preset_rejects(bad):
+def test_parse_preset_rejects(bad) -> None:
     with pytest.raises(ValueError):
         parse_preset(bad)
 
 
-def test_preset_arg_validates_and_roundtrips():
+def test_preset_arg_validates_and_roundtrips() -> None:
     assert preset_arg("fuzzed:7") == "fuzzed:7"
     assert preset_arg("XL") == "XL"
     with pytest.raises(ValueError):
         preset_arg("nope")
 
 
-def test_resolve_preset_seed_overrides_config(restore_seed):
+def test_resolve_preset_seed_overrides_config(restore_seed) -> None:
     base = resolve_preset("fuzzed:12345")
     assert base == "fuzzed"
     assert int(config.get("seeds.fuzz")) == 12345
 
 
-def test_resolve_preset_bare_fuzzed_keeps_config_seed(restore_seed):
+def test_resolve_preset_bare_fuzzed_keeps_config_seed(restore_seed) -> None:
     # bare `fuzzed` must NOT override -- it runs at the config default seed.
     config.set_override("seeds.fuzz", 999)
     assert resolve_preset("fuzzed") == "fuzzed"
     assert int(config.get("seeds.fuzz")) == 999
 
 
-def test_resolve_preset_fixed_size_is_passthrough(restore_seed):
+def test_resolve_preset_fixed_size_is_passthrough(restore_seed) -> None:
     config.set_override("seeds.fuzz", 555)
     assert resolve_preset("L") == "L"
     assert int(config.get("seeds.fuzz")) == 555  # a fixed preset never touches the seed
@@ -80,7 +80,7 @@ def test_resolve_preset_fixed_size_is_passthrough(restore_seed):
 @pytest.mark.parametrize(
     "selector", ["scientific_computing@lvl1", "lvl2", "scientific_computing/structured_grids@lvl_1"]
 )
-def test_select_short_names_normalizes_level_forms(selector):
+def test_select_short_names_normalizes_level_forms(selector) -> None:
     # bare-level (lvl2 -> all@lvl2) and underscore (@lvl_1 -> @lvl1) must resolve.
     names = select_short_names(selector)
     assert isinstance(names, list)

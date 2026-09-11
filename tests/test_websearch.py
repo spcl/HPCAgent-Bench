@@ -20,7 +20,7 @@ _ALL_KEYS = sorted(
 
 
 @pytest.fixture(autouse=True)
-def _clean_search_env(monkeypatch):
+def _clean_search_env(monkeypatch) -> None:
     for k in _ALL_KEYS:
         monkeypatch.delenv(k, raising=False)
 
@@ -41,7 +41,7 @@ def _body(req):
 # --- the config dataclass -----------------------------------------------------
 
 
-def test_config_coerces_and_validates():
+def test_config_coerces_and_validates() -> None:
     assert WebSearchConfig(provider="tavily").provider is Provider.TAVILY  # string coerced to enum
     assert WebSearchConfig().provider is None  # auto-detect
     with pytest.raises(ValueError):
@@ -53,46 +53,46 @@ def test_config_coerces_and_validates():
 # --- provider selection -------------------------------------------------------
 
 
-def test_explicit_config_provider_wins(monkeypatch):
+def test_explicit_config_provider_wins(monkeypatch) -> None:
     monkeypatch.setenv("TAVILY_API_KEY", "T")  # even with tavily configured ...
     assert websearch.resolve_provider(WebSearchConfig(provider="brave")) is Provider.BRAVE  # ... explicit wins
 
 
-def test_env_override_selects_provider(monkeypatch):
+def test_env_override_selects_provider(monkeypatch) -> None:
     monkeypatch.setenv("HPCAGENT_BENCH_WEBSEARCH_PROVIDER", "serper")
     assert websearch.resolve_provider(WebSearchConfig()) is Provider.SERPER
 
 
-def test_autodetect_follows_declaration_priority(monkeypatch):
+def test_autodetect_follows_declaration_priority(monkeypatch) -> None:
     monkeypatch.setenv("BRAVE_API_KEY", "B")
     monkeypatch.setenv("SERPER_API_KEY", "S")  # serper is declared before brave -> wins
     assert websearch.resolve_provider(WebSearchConfig()) is Provider.SERPER
     assert websearch.available_providers() == [Provider.SERPER, Provider.BRAVE]
 
 
-def test_brave_second_env_var_is_accepted(monkeypatch):
+def test_brave_second_env_var_is_accepted(monkeypatch) -> None:
     monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "B")  # the alternate key name
     assert Provider.BRAVE in websearch.available_providers()
 
 
-def test_google_cse_needs_both_key_and_cx(monkeypatch):
+def test_google_cse_needs_both_key_and_cx(monkeypatch) -> None:
     monkeypatch.setenv("GOOGLE_CSE_API_KEY", "K")
     assert Provider.GOOGLE_CSE not in websearch.available_providers()  # key alone is not enough
     monkeypatch.setenv("GOOGLE_CSE_ID", "CX")
     assert Provider.GOOGLE_CSE in websearch.available_providers()
 
 
-def test_no_provider_configured_raises():
+def test_no_provider_configured_raises() -> None:
     with pytest.raises(WebSearchError, match="no web-search provider"):
         websearch.resolve_provider(WebSearchConfig())
 
 
-def test_missing_api_key_raises():
+def test_missing_api_key_raises() -> None:
     with pytest.raises(WebSearchError, match="no API key"):
         search("q", WebSearchConfig(provider="tavily"))  # provider forced, but no key anywhere
 
 
-def test_empty_query_raises():
+def test_empty_query_raises() -> None:
     with pytest.raises(ValueError, match="non-empty"):
         search("   ", WebSearchConfig(provider="tavily", api_key="K"), transport=lambda req: {})
 
@@ -111,32 +111,32 @@ def _capture(provider, canned=None):
     return box["req"]
 
 
-def test_tavily_request_is_post_with_bearer_and_query():
+def test_tavily_request_is_post_with_bearer_and_query() -> None:
     req = _capture(Provider.TAVILY)
     assert req.full_url == "https://api.tavily.com/search" and req.method == "POST"
     assert _body(req)["query"] == "gemm avx512" and _body(req)["max_results"] == 5
     assert _headers(req)["authorization"] == "Bearer K"
 
 
-def test_serper_request_sends_api_key_header():
+def test_serper_request_sends_api_key_header() -> None:
     req = _capture(Provider.SERPER)
     assert req.method == "POST" and _headers(req)["x-api-key"] == "K"
     assert _body(req)["q"] == "gemm avx512"
 
 
-def test_brave_request_is_get_with_subscription_token():
+def test_brave_request_is_get_with_subscription_token() -> None:
     req = _capture(Provider.BRAVE)
     assert req.method == "GET" and _headers(req)["x-subscription-token"] == "K"
     assert _query(req)["q"] == ["gemm avx512"] and _query(req)["count"] == ["5"]
 
 
-def test_google_cse_request_carries_key_and_cx():
+def test_google_cse_request_carries_key_and_cx() -> None:
     req = _capture(Provider.GOOGLE_CSE)
     q = _query(req)
     assert q["key"] == ["K"] and q["cx"] == ["CX"] and q["q"] == ["gemm avx512"]
 
 
-def test_perplexity_request_is_a_chat_completion():
+def test_perplexity_request_is_a_chat_completion() -> None:
     req = _capture(Provider.PERPLEXITY)
     assert req.full_url == "https://api.perplexity.ai/chat/completions"
     assert _body(req)["messages"][0]["content"] == "gemm avx512"
@@ -165,7 +165,7 @@ _CANNED = {
 
 
 @pytest.mark.parametrize("provider", list(Provider))
-def test_every_provider_normalizes_to_one_shape(provider):
+def test_every_provider_normalizes_to_one_shape(provider) -> None:
     canned, expect_answer = _CANNED[provider]
     resp = search("q", WebSearchConfig(provider=provider, api_key="K", cse_id="CX"), transport=lambda req: canned)
     assert isinstance(resp, SearchResponse) and resp.provider == provider.value
@@ -179,13 +179,13 @@ def test_every_provider_normalizes_to_one_shape(provider):
     assert resp.answer == expect_answer
 
 
-def test_max_results_trims_the_list():
+def test_max_results_trims_the_list() -> None:
     many = {"results": [{"title": f"t{i}", "url": f"http://{i}", "content": ""} for i in range(20)]}
     resp = search("q", WebSearchConfig(provider="tavily", api_key="K", max_results=3), transport=lambda req: many)
     assert len(resp.results) == 3
 
 
-def test_api_key_override_bypasses_env():
+def test_api_key_override_bypasses_env() -> None:
     """A key on the config is used even with nothing in the environment."""
     resp = search(
         "q",
@@ -198,12 +198,12 @@ def test_api_key_override_bypasses_env():
 # --- CLI ----------------------------------------------------------------------
 
 
-def test_cli_list_reports_configured(capsys, monkeypatch):
+def test_cli_list_reports_configured(capsys, monkeypatch) -> None:
     monkeypatch.setenv("TAVILY_API_KEY", "T")
     assert websearch.main(["--list"]) == 0
     assert "tavily" in capsys.readouterr().out
 
 
-def test_cli_errors_when_nothing_configured(capsys):
+def test_cli_errors_when_nothing_configured(capsys) -> None:
     assert websearch.main(["some query"]) == 1  # no provider key in the (cleaned) env
     assert "error" in capsys.readouterr().err.lower()

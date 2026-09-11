@@ -34,7 +34,7 @@ from hpcagent_bench.harness.cluster_launch import (
 class FakeProc:
     """Stand-in for a subprocess.Popen: poll() returns the fixed code (None = still running)."""
 
-    def __init__(self, code):
+    def __init__(self, code) -> None:
         self.code = code
 
     def poll(self):
@@ -45,13 +45,13 @@ HEAD = RankRole(VLLM_HEAD, 0, 0, is_driver=True)
 WORKER = RankRole(VLLM_WORKER, 0, 0, is_driver=False)
 
 
-def test_expected_world_is_inference_plus_judge():
+def test_expected_world_is_inference_plus_judge() -> None:
     assert expected_world(2, 1, 1) == 3  # 2 single-node endpoints + 1 judge
     assert expected_world(1, 4, 2) == 6  # 1 four-node endpoint + 2 judges
     assert expected_world(3, 2, 4) == 10
 
 
-def test_plan_single_node_endpoints():
+def test_plan_single_node_endpoints() -> None:
     roles = plan_roles(3, inference_endpoints=2, nodes_per_vllm=1, judge_nodes=1)
     assert [r.role for r in roles] == [VLLM_HEAD, VLLM_HEAD, JUDGE]
     assert [r.endpoint for r in roles] == [0, 1, 0]  # judges carry their JUDGE rank, not -1
@@ -60,7 +60,7 @@ def test_plan_single_node_endpoints():
     assert [r.head_rank for r in roles[:2]] == [0, 1]
 
 
-def test_plan_multinode_endpoints_group_by_k():
+def test_plan_multinode_endpoints_group_by_k() -> None:
     # I=2 endpoints x K=2 nodes + J=1 judge = 5 nodes
     roles = plan_roles(5, inference_endpoints=2, nodes_per_vllm=2, judge_nodes=1)
     assert [r.role for r in roles] == [VLLM_HEAD, VLLM_WORKER, VLLM_HEAD, VLLM_WORKER, JUDGE]
@@ -71,18 +71,18 @@ def test_plan_multinode_endpoints_group_by_k():
     assert not any(r.is_driver for r in roles[1:])
 
 
-def test_plan_rejects_wrong_world_size():
+def test_plan_rejects_wrong_world_size() -> None:
     with pytest.raises(ValueError, match="world size 4 != I.K . J = 3"):
         plan_roles(4, inference_endpoints=2, nodes_per_vllm=1, judge_nodes=1)
 
 
 @pytest.mark.parametrize("endpoints,k,judge", [(0, 1, 1), (1, 0, 1), (1, 1, 0), (-1, 1, 1)])
-def test_plan_rejects_nonpositive_counts(endpoints, k, judge):
+def test_plan_rejects_nonpositive_counts(endpoints, k, judge) -> None:
     with pytest.raises(ValueError, match=">= 1"):
         plan_roles(max(endpoints * k + judge, 1), endpoints, k, judge)
 
 
-def test_assemble_urls_orders_by_endpoint_then_rank():
+def test_assemble_urls_orders_by_endpoint_then_rank() -> None:
     # deliberately out of rank order to prove the sort keys, K=2 (rank 1/3 are workers -> no URL)
     gathered = [
         {"rank": 4, "role": JUDGE, "endpoint": 0, "hostname": "nid04"},
@@ -97,7 +97,7 @@ def test_assemble_urls_orders_by_endpoint_then_rank():
     assert judge_urls == ["http://nid04:8800", "http://nid05:8800"]  # judges by rank
 
 
-def test_a_judges_endpoint_is_its_index_into_judge_urls():
+def test_a_judges_endpoint_is_its_index_into_judge_urls() -> None:
     """A judge's ``endpoint`` is the rank it is served with (``serve --rank``) AND its position in
     the driver's ``judge_urls`` -- both are the judges in MPI-rank order. If they could differ,
     every worker bound to a judge would address it by the wrong rank and be refused."""
@@ -108,7 +108,7 @@ def test_a_judges_endpoint_is_its_index_into_judge_urls():
     assert [r.endpoint for r in roles if r.role == JUDGE] == [0, 1, 2]
 
 
-def test_start_judge_tells_the_judge_its_rank(monkeypatch):
+def test_start_judge_tells_the_judge_its_rank(monkeypatch) -> None:
     """The launcher owns the mapping and passes --rank EXPLICITLY; a judge never infers its own
     identity from the ambient MPI/SLURM environment (which holds the WORLD rank, not this)."""
     seen = []
@@ -119,26 +119,26 @@ def test_start_judge_tells_the_judge_its_rank(monkeypatch):
     assert cmd[-2:] == ["--oracle", "numpy"]  # passthrough still last
 
 
-def test_vllm_command_single_node_has_no_pipeline_or_ray():
+def test_vllm_command_single_node_has_no_pipeline_or_ray() -> None:
     cmd = vllm_command("Qwen/Q", 8000, tensor_parallel=4, pipeline_parallel=1, extra=[])
     assert "--tensor-parallel-size" in cmd and cmd[cmd.index("--tensor-parallel-size") + 1] == "4"
     assert "--pipeline-parallel-size" not in cmd
     assert "ray" not in cmd
 
 
-def test_vllm_command_multinode_turns_on_ray_pipeline():
+def test_vllm_command_multinode_turns_on_ray_pipeline() -> None:
     cmd = vllm_command("big/model", 8000, tensor_parallel=4, pipeline_parallel=3, extra=["--max-model-len", "8192"])
     assert cmd[cmd.index("--pipeline-parallel-size") + 1] == "3"
     assert cmd[cmd.index("--distributed-executor-backend") + 1] == "ray"
     assert cmd[-2:] == ["--max-model-len", "8192"]  # passthrough preserved, at the end
 
 
-def test_endpoint_hostport_parses_v1_suffix_and_bare():
+def test_endpoint_hostport_parses_v1_suffix_and_bare() -> None:
     assert endpoint_hostport("http://nid00:8000/v1") == ("nid00", 8000)
     assert endpoint_hostport("nid07:8800") == ("nid07", 8800)
 
 
-def test_settle_rounds_normal_and_floored_at_two():
+def test_settle_rounds_normal_and_floored_at_two() -> None:
     assert settle_rounds(1800.0, poll_interval=5.0) == 360
     # a sub-2*interval timeout must still get >= 2 rounds (>= 1 poll AFTER a grace sleep), never 1/0,
     # else a spawn that dies just after Popen is misreported pending instead of dead
@@ -148,24 +148,24 @@ def test_settle_rounds_normal_and_floored_at_two():
 
 
 @pytest.mark.parametrize("bad", [float("inf"), float("-inf"), float("nan")])
-def test_settle_rounds_non_finite_does_not_crash(bad):
+def test_settle_rounds_non_finite_does_not_crash(bad) -> None:
     # argparse's type=float accepts 'inf'/'nan'; these must NOT crash int(), just cap to a long wait
     assert settle_rounds(bad, poll_interval=5.0) == 24 * 3600 // 5
 
 
-def test_rank_status_dead_when_a_server_exited_nonzero():
+def test_rank_status_dead_when_a_server_exited_nonzero() -> None:
     # a server process that exited with a non-zero code is fatal -> the settle loop aborts the run
     st = rank_status(HEAD, [FakeProc(1)], vllm_port=8000, judge_port=8800, hostname="nid00", rank=0)
     assert st["kind"] == "dead" and "rc=1" in st["detail"]
 
 
-def test_rank_status_worker_ready_while_alive_needs_no_port():
+def test_rank_status_worker_ready_while_alive_needs_no_port() -> None:
     # a ray worker has no serving port of its own -> ready as soon as its join process is alive
     st = rank_status(WORKER, [FakeProc(None)], vllm_port=8000, judge_port=8800, hostname="nid01", rank=1)
     assert st["kind"] == "ready"
 
 
-def test_rank_status_pending_until_port_binds_then_ready():
+def test_rank_status_pending_until_port_binds_then_ready() -> None:
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.bind(("127.0.0.1", 0))  # reserve a free port but do NOT listen yet
     port = listener.getsockname()[1]
@@ -179,29 +179,29 @@ def test_rank_status_pending_until_port_binds_then_ready():
         listener.close()
 
 
-def test_traditional_world_is_optimizer_plus_judge():
+def test_traditional_world_is_optimizer_plus_judge() -> None:
     assert expected_traditional_world(4, 1) == 5
     assert expected_traditional_world(1, 2) == 3
 
 
-def test_plan_traditional_puts_optimizers_first_and_driver_on_rank0():
+def test_plan_traditional_puts_optimizers_first_and_driver_on_rank0() -> None:
     roles = plan_traditional_roles(5, optimizer_nodes=4, judge_nodes=1)
     assert [r.role for r in roles] == [OPTIMIZER] * 4 + [JUDGE]
     assert [i for i, r in enumerate(roles) if r.is_driver] == [0]
 
 
-def test_plan_traditional_rejects_wrong_world_size():
+def test_plan_traditional_rejects_wrong_world_size() -> None:
     with pytest.raises(ValueError, match="O \\+ J"):
         plan_traditional_roles(6, optimizer_nodes=4, judge_nodes=1)
 
 
 @pytest.mark.parametrize("optimizers,judges", [(0, 1), (1, 0)])
-def test_plan_traditional_rejects_nonpositive_counts(optimizers, judges):
+def test_plan_traditional_rejects_nonpositive_counts(optimizers, judges) -> None:
     with pytest.raises(ValueError, match=">= 1"):
         plan_traditional_roles(optimizers + judges, optimizer_nodes=optimizers, judge_nodes=judges)
 
 
-def test_optimizer_rank_is_ready_without_binding_a_port():
+def test_optimizer_rank_is_ready_without_binding_a_port() -> None:
     """An optimizer rank hosts no server, so probing a port would strand it as 'pending' forever."""
     me = RankRole(OPTIMIZER, -1, -1, is_driver=True)
     status = rank_status(me, [], vllm_port=8000, judge_port=8800, hostname="n0", rank=0)

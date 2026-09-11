@@ -15,18 +15,20 @@ a host-only run, which is its own failure.
 
 import types
 
+import pytest
+
 from hpcagent_bench.frameworks import dace_framework
 
 
 class FakeStream:
-    def __init__(self, log):
+    def __init__(self, log: list[str]) -> None:
         self.log = log
 
-    def synchronize(self):
+    def synchronize(self) -> None:
         self.log.append("synchronize")
 
 
-def fake_device_module(log):
+def fake_device_module(log: list[str]) -> types.SimpleNamespace:
     """The shape ``import_device_array_module()`` returns, down to the attribute path used."""
     stream = FakeStream(log)
     return types.SimpleNamespace(
@@ -34,7 +36,7 @@ def fake_device_module(log):
     )
 
 
-def make_framework(arch, log, monkeypatch):
+def make_framework(arch: str, log: list[str], monkeypatch: pytest.MonkeyPatch) -> dace_framework.DaceFramework:
     fw = dace_framework.DaceFramework.__new__(dace_framework.DaceFramework)
     fw.info = {"arch": arch}
     monkeypatch.setattr(
@@ -44,19 +46,19 @@ def make_framework(arch, log, monkeypatch):
     return fw
 
 
-def test_gpu_stop_timer_waits_for_the_device(monkeypatch):
+def test_gpu_stop_timer_waits_for_the_device(monkeypatch: pytest.MonkeyPatch) -> None:
     log = []
     fw = make_framework("gpu", log, monkeypatch)
     fw.synchronize_device()
     assert log == ["synchronize"], "a GPU measurement must wait for the kernel before reading the clock"
 
 
-def test_cpu_never_touches_a_device_module(monkeypatch):
+def test_cpu_never_touches_a_device_module(monkeypatch: pytest.MonkeyPatch) -> None:
     """On CPU the call is a no-op -- importing a device module on a host-only run is a failure."""
     log = []
     fw = make_framework("cpu", log, monkeypatch)
 
-    def explode():
+    def explode() -> None:
         raise AssertionError("a CPU run must not import the device array module")
 
     monkeypatch.setattr("hpcagent_bench.harness.native_call.import_device_array_module", explode)
@@ -64,7 +66,7 @@ def test_cpu_never_touches_a_device_module(monkeypatch):
     assert log == []
 
 
-def test_both_timer_ends_synchronize(monkeypatch):
+def test_both_timer_ends_synchronize(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stop is the one that fixes the undercount; start keeps queued work out of t0."""
     log = []
     fw = make_framework("gpu", log, monkeypatch)
@@ -78,7 +80,7 @@ def test_both_timer_ends_synchronize(monkeypatch):
     assert log == ["synchronize", "synchronize"], "the clock must be read with the kernel finished"
 
 
-def test_every_gpu_framework_reaches_a_synchronize():
+def test_every_gpu_framework_reaches_a_synchronize() -> None:
     """The fix lives in the BASE, so a GPU framework cannot miss it by not overriding a timer.
 
     PlutoFramework (ppcg, ppcg_cuda, ppcg_hip) and TVMFramework ride the default host clock and
@@ -106,7 +108,7 @@ def test_every_gpu_framework_reaches_a_synchronize():
     assert issubclass(TritonFramework, TorchCudaEventTiming)
 
 
-def test_the_base_timer_synchronizes(monkeypatch):
+def test_the_base_timer_synchronizes(monkeypatch: pytest.MonkeyPatch) -> None:
     """The base is where the fix lives now, so it is what the test pins."""
     from hpcagent_bench.frameworks.framework import Framework
 

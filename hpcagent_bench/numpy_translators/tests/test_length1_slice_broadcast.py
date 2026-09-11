@@ -34,34 +34,35 @@ def check(body: str, out_shape: tuple, shapes: dict) -> None:
         backends=BACKENDS,
     )
     bad = {k: v for k, v in result.items() if v != "ok" and not v.startswith("skip")}
+    assert any(v == "ok" for v in result.values()), f"every backend skipped; the comparison never ran: {result}"
     assert not bad, bad
 
 
-def test_a_length_1_slice_broadcasts_instead_of_advancing():
+def test_a_length_1_slice_broadcasts_instead_of_advancing() -> None:
     """``a[:, 0:1]`` is column 0 read for EVERY output column -- the case that was miscompiled."""
     check("    out[:, :] = a[:, 0:1] + b[:, :]\n", (M, N), SHAPES_2D)
 
 
-def test_a_length_1_slice_broadcasts_under_multiplication_too():
+def test_a_length_1_slice_broadcasts_under_multiplication_too() -> None:
     """Not addition-specific: the defect is in the index mapping, so every operator inherits it."""
     check("    out[:, :] = a[:, 0:1] * b[:, :]\n", (M, N), SHAPES_2D)
 
 
-def test_an_integer_index_drops_the_axis():
+def test_an_integer_index_drops_the_axis() -> None:
     """The other rule, and the reason the first cannot simply be 'squeeze size-1 dims': ``a[i, 0]``
     is a scalar spread along the row, which is a DIFFERENT computation from ``a[:, 0:1]``."""
     check("    for i in range(a.shape[0]):\n        out[i, :] = a[i, 0] + b[i, :]\n", (M, N), SHAPES_2D)
 
 
-def test_a_length_1_slice_as_the_assignment_TARGET_keeps_its_axis():
+def test_a_length_1_slice_as_the_assignment_TARGET_keeps_its_axis() -> None:
     check("    out[:, 0:1] = a[:, 0:1]\n", (M, N), SHAPES_2D)
 
 
-def test_a_length_1_row_slice_keeps_the_leading_axis():
+def test_a_length_1_row_slice_keeps_the_leading_axis() -> None:
     check("    out[0:1, :] = a[0:1, :] + b[0:1, :]\n", (M, N), SHAPES_2D)
 
 
-def test_reducing_over_a_length_1_axis_yields_the_lower_rank():
+def test_reducing_over_a_length_1_axis_yields_the_lower_rank() -> None:
     """``np.sum(a[:, 0:1], axis=1)`` reduces a kept axis of extent 1 -- the rank drops because the
     REDUCTION removed it, not because the slice was size 1."""
     check("    out[:] = np.sum(a[:, 0:1], axis=1)\n", (M,), {"a": "(M, N)", "b": "(M, N)", "out": "(M,)"})
@@ -85,10 +86,11 @@ def check_broadcast(body: str) -> None:
         backends=BACKENDS,
     )
     bad = {k: v for k, v in result.items() if v != "ok" and not v.startswith("skip")}
+    assert any(v == "ok" for v in result.values()), f"every backend skipped; the comparison never ran: {result}"
     assert not bad, bad
 
 
-def test_a_declared_size_1_axis_broadcasts_under_a_newaxis():
+def test_a_declared_size_1_axis_broadcasts_under_a_newaxis() -> None:
     """cfd's ``pressure[..., np.newaxis] * normal``.
 
     ``...`` expands to full slices, so the operand reaches the scalarizer as ``p[:, :, None]`` --
@@ -99,12 +101,12 @@ def test_a_declared_size_1_axis_broadcasts_under_a_newaxis():
     check_broadcast("    out[:] = p[..., np.newaxis] * n\n")
 
 
-def test_the_same_operand_spelled_without_the_ellipsis():
+def test_the_same_operand_spelled_without_the_ellipsis() -> None:
     """``p[:, :, None]`` is what the ellipsis expands to; both spellings must agree."""
     check_broadcast("    out[:] = p[:, :, None] * n\n")
 
 
-def test_a_size_1_axis_still_broadcasts_when_it_is_the_leading_one():
+def test_a_size_1_axis_still_broadcasts_when_it_is_the_leading_one() -> None:
     """The rule is per-axis, not "the last axis": pinning must follow the size-1 axis wherever the
     array declares it."""
     rng = np.random.default_rng(0)
@@ -119,10 +121,11 @@ def test_a_size_1_axis_still_broadcasts_when_it_is_the_leading_one():
         backends=BACKENDS,
     )
     bad = {k: v for k, v in result.items() if v != "ok" and not v.startswith("skip")}
+    assert any(v == "ok" for v in result.values()), f"every backend skipped; the comparison never ran: {result}"
     assert not bad, bad
 
 
-def test_a_newaxis_BEFORE_the_size_1_axis_still_pins_the_right_one():
+def test_a_newaxis_BEFORE_the_size_1_axis_still_pins_the_right_one() -> None:
     """A leading newaxis shifts every following element one result axis to the right without
     consuming a source axis. Reading the operand's extent at the subscript POSITION rather than at
     the source axis would ask ``(1, 3)`` about axis 1 and pin the wrong one.
@@ -145,4 +148,5 @@ def test_a_newaxis_BEFORE_the_size_1_axis_still_pins_the_right_one():
         skip_backends={"pythran": "pythran miscompiles a LEADING-newaxis broadcast"},
     )
     bad = {k: v for k, v in result.items() if v != "ok" and not v.startswith("skip")}
+    assert any(v == "ok" for v in result.values()), f"every backend skipped; the comparison never ran: {result}"
     assert not bad, bad

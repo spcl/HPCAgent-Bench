@@ -26,6 +26,7 @@ run) against numpy.
 import importlib.util
 import pathlib
 import tempfile
+import types
 
 import numpy as np
 import pytest
@@ -38,7 +39,7 @@ from numpyto_pythran.emit import _pythran_scalar_type
 # --------------------------------------------------------------------------- #
 # Shared oracle loader (mirrors test_jax_semantics_fixes).                     #
 # --------------------------------------------------------------------------- #
-def _oracle():
+def _oracle() -> types.ModuleType:
     import shutil
 
     if not (shutil.which("gcc") and shutil.which("gfortran") and shutil.which("g++")):
@@ -54,7 +55,7 @@ def _oracle():
     return _op_oracle
 
 
-def _assert_ok(status, backend, label):
+def _assert_ok(status: dict[str, str], backend: str, label: str) -> None:
     s = status[backend]
     if s.startswith("skip"):
         pytest.skip(f"{label}: {backend} {s}")
@@ -75,7 +76,7 @@ _SCAN = (
 _ELEMENTWISE = "import numpy as np\ndef f(x, out):\n    for i in range(x.shape[0]):\n        out[i] = x[i] * 2.0\n"
 
 
-def test_every_numba_emit_is_parallel():
+def test_every_numba_emit_is_parallel() -> None:
     """There is ONE numba build and it carries ``parallel=True``.
 
     Numba is the scientific_computing speedup denominator, so a serial emit would quietly measure
@@ -88,7 +89,7 @@ def test_every_numba_emit_is_parallel():
         assert "@nb.njit()" not in out
 
 
-def test_numba_parallel_does_not_prange_scan():
+def test_numba_parallel_does_not_prange_scan() -> None:
     # The scan reads a[i-1] (a previously-written cell): prange would reorder
     # iterations and read a not-yet-written value. Must stay serial ``range``.
     out = emit_numba(_SCAN)
@@ -96,7 +97,7 @@ def test_numba_parallel_does_not_prange_scan():
     assert "in range(1, x.shape[0])" in out
 
 
-def test_numba_parallel_pranges_independent_loop():
+def test_numba_parallel_pranges_independent_loop() -> None:
     # A pure elementwise map (each iteration touches only its own cell) IS safe.
     out = emit_numba(_ELEMENTWISE)
     assert "for i in nb.prange(" in out
@@ -110,12 +111,12 @@ def test_numba_parallel_pranges_independent_loop():
         ("        out[i] = out[i - 1] + x[i]\n", "index-shifted stencil"),
     ],
 )
-def test_numba_parallel_refuses_dependent_loops(body, label):
+def test_numba_parallel_refuses_dependent_loops(body: str, label: str) -> None:
     src = "import numpy as np\ndef f(x, out, perm):\n    for i in range(x.shape[0]):\n" + body
     assert "nb.prange" not in emit_numba(src), label
 
 
-def test_numba_scan_via_oracle():
+def test_numba_scan_via_oracle() -> None:
     # End-to-end through run_op: the prefix sum must match
     # numpy exactly on the numba backend.
     no = _oracle()
@@ -131,7 +132,7 @@ def test_numba_scan_via_oracle():
     _assert_ok(st, "numba", "numba-scan")
 
 
-def test_numba_parallel_scan_stays_correct():
+def test_numba_parallel_scan_stays_correct() -> None:
     # Prove the emitted scan is numerically correct (the serial fallback
     # produces the true prefix sum; a blind prange would race and diverge).
     if importlib.util.find_spec("numba") is None:
@@ -153,21 +154,21 @@ def test_numba_parallel_scan_stays_correct():
 # --------------------------------------------------------------------------- #
 # 2. pythran: dtype fail-loud + NaN-propagating max/min/sign.                  #
 # --------------------------------------------------------------------------- #
-def test_pythran_scalar_type_resolves_int_bool():
+def test_pythran_scalar_type_resolves_int_bool() -> None:
     # Known non-float dtypes map to their pythran spelling (not float64).
     assert _pythran_scalar_type("int", "x") == "int"
     assert _pythran_scalar_type("int32", "x") == "int32"
     assert _pythran_scalar_type("bool", "x") == "bool"
 
 
-def test_pythran_scalar_type_unknown_fails_loud():
+def test_pythran_scalar_type_unknown_fails_loud() -> None:
     # An unmappable dtype must raise, NOT silently become float64 (a wrong
     # element type type-puns the oracle's positional call).
     with pytest.raises(ValueError, match="cannot map dtype"):
         _pythran_scalar_type("float128", "array 'q'")
 
 
-def test_pythran_int_param_roundtrips():
+def test_pythran_int_param_roundtrips() -> None:
     # ``k`` (used only as a ``range`` bound) is declared ``int`` and drives the
     # loop count; the result must match numpy on the pythran backend.
     no = _oracle()
@@ -184,7 +185,7 @@ def test_pythran_int_param_roundtrips():
     _assert_ok(st, "pythran", "pythran-int-param")
 
 
-def test_pythran_maximum_propagates_nan():
+def test_pythran_maximum_propagates_nan() -> None:
     # numpy's np.maximum propagates NaN; pythran's suppresses it. The rewrite
     # restores propagation -- checked with equal_nan comparison in the oracle.
     no = _oracle()
@@ -201,7 +202,7 @@ def test_pythran_maximum_propagates_nan():
     _assert_ok(st, "pythran", "pythran-maximum-nan")
 
 
-def test_pythran_sign_propagates_nan():
+def test_pythran_sign_propagates_nan() -> None:
     no = _oracle()
     src = "import numpy as np\ndef f(a, out):\n    out[:] = np.sign(a)\n"
     st = no.run_op(
@@ -222,7 +223,7 @@ def test_pythran_sign_propagates_nan():
 _CUPY_SRC = "import numpy\ndef f(a, out):\n    out[:] = numpy.sqrt(a) + numpy.pi\n"
 
 
-def test_cupy_import_form_binds_cp_consistently():
+def test_cupy_import_form_binds_cp_consistently() -> None:
     out = emit_cupy(_CUPY_SRC)
     assert "import cupy as cp" in out
     assert "import numpy" not in out
@@ -232,7 +233,7 @@ def test_cupy_import_form_binds_cp_consistently():
     assert "cp.sqrt(a)" in out and "cp.pi" in out
 
 
-def test_cupy_import_form_runs_on_gpu():
+def test_cupy_import_form_runs_on_gpu() -> None:
     cp = pytest.importorskip("cupy")
     try:
         _ = int((cp.arange(3) + 1).sum())  # probe a real device.

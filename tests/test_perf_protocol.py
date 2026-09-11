@@ -20,17 +20,17 @@ pytestmark = pytest.mark.real_fuzz
 # --------------------------------------------------------------------------- #
 # enumerate_configs
 # --------------------------------------------------------------------------- #
-def test_enumerate_configs_none_yields_single_empty():
+def test_enumerate_configs_none_yields_single_empty() -> None:
     assert fuzz.enumerate_configs(None) == [{}]
     assert fuzz.enumerate_configs({}) == [{}]
 
 
-def test_enumerate_configs_valid_list_verbatim():
+def test_enumerate_configs_valid_list_verbatim() -> None:
     configs = [{"mode": "a"}, {"mode": "b"}]
     assert fuzz.enumerate_configs(configs) == [{"mode": "a"}, {"mode": "b"}]
 
 
-def test_enumerate_configs_caps_at_max(caplog):
+def test_enumerate_configs_caps_at_max(caplog) -> None:
     # a valid list of 12 configs is capped to a deterministic seeded subset of 5
     configs = [{"i": i} for i in range(12)]
     got = fuzz.enumerate_configs(configs, max_configs=5)
@@ -40,7 +40,7 @@ def test_enumerate_configs_caps_at_max(caplog):
     assert fuzz.enumerate_configs(configs, max_configs=5) == got
 
 
-def test_enumerate_configs_no_cap_when_under_limit():
+def test_enumerate_configs_no_cap_when_under_limit() -> None:
     configs = [{"i": 0}, {"i": 1}, {"i": 2}]
     assert fuzz.enumerate_configs(configs, max_configs=5) == configs
 
@@ -48,7 +48,7 @@ def test_enumerate_configs_no_cap_when_under_limit():
 # --------------------------------------------------------------------------- #
 # edge_shapes
 # --------------------------------------------------------------------------- #
-def test_edge_shapes_are_small_absolute_independent_of_range():
+def test_edge_shapes_are_small_absolute_independent_of_range() -> None:
     # The fuzz range starts LARGE (lo=4096); edge shapes must still be the small
     # structural sizes {1,3,5,6,7}, NOT clamped up to the large lower bound -- this
     # is the central anti-special-casing guarantee.
@@ -57,7 +57,7 @@ def test_edge_shapes_are_small_absolute_independent_of_range():
     assert {lbl: s["N"] for lbl, s in shapes.items()} == {"one": 1, "odd": 3, "prime": 7, "nonpow2": 6, "nonaligned": 5}
 
 
-def test_edge_shapes_capped_at_declared_maximum():
+def test_edge_shapes_capped_at_declared_maximum() -> None:
     # the only bound that holds: an edge value cannot exceed the declared max.
     params = {"fuzzed": {"N": [1, 4]}}
     vals = {s["N"] for _, s in fuzz.edge_shapes(params)}
@@ -65,7 +65,7 @@ def test_edge_shapes_capped_at_declared_maximum():
     assert 1 in vals  # "one" always probes the degenerate size
 
 
-def test_edge_shapes_merges_config_and_resolves_derive():
+def test_edge_shapes_merges_config_and_resolves_derive() -> None:
     params = {"fuzzed": {"n": [4, 64], "nn": {"derive": "n*n"}}}
     shapes = fuzz.edge_shapes(params, config={"mode": "x"})
     for _, s in shapes:
@@ -73,7 +73,7 @@ def test_edge_shapes_merges_config_and_resolves_derive():
         assert s["nn"] == s["n"] * s["n"]  # derive resolved off the edge root
 
 
-def test_edge_shapes_skips_constraint_rejected_category():
+def test_edge_shapes_skips_constraint_rejected_category() -> None:
     # N must be even -> of {1,3,7,6,5} only nonpow2=6 is even and survives.
     params = {"fuzzed": {"N": [16, 4096]}}
     shapes = fuzz.edge_shapes(params, constraints=["N % 2 == 0"])
@@ -84,7 +84,7 @@ def test_edge_shapes_skips_constraint_rejected_category():
 # --------------------------------------------------------------------------- #
 # large_shapes
 # --------------------------------------------------------------------------- #
-def test_large_shapes_default_mode_n_and_upper_half():
+def test_large_shapes_default_mode_n_and_upper_half() -> None:
     params = {"fuzzed": {"N": [16, 4096]}}
     shapes = fuzz.large_shapes(params, mode="all_configs_3shapes", n=3)
     assert len(shapes) == 3
@@ -92,14 +92,14 @@ def test_large_shapes_default_mode_n_and_upper_half():
     assert all(s["N"] >= 2056 for _, s in shapes)
 
 
-def test_large_shapes_reproducible_public_seed():
+def test_large_shapes_reproducible_public_seed() -> None:
     params = {"fuzzed": {"N": [16, 4096]}}
     a = fuzz.large_shapes(params, mode="all_configs_3shapes", n=3)
     b = fuzz.large_shapes(params, mode="all_configs_3shapes", n=3)
     assert [s for _, s in a] == [s for _, s in b]  # same fixed public seed => identical
 
 
-def test_large_shapes_secret_mode_n_shapes_and_seed_dependent():
+def test_large_shapes_secret_mode_n_shapes_and_seed_dependent() -> None:
     params = {"fuzzed": {"N": [16, 4096]}}
     # secret mode times the SAME number of shapes as public (n, default 3), just
     # drawn from the hidden seed instead of the public one.
@@ -112,7 +112,7 @@ def test_large_shapes_secret_mode_n_shapes_and_seed_dependent():
     assert [s["N"] for _, s in s1] != [s["N"] for _, s in s2]
 
 
-def test_large_shapes_merges_config():
+def test_large_shapes_merges_config() -> None:
     params = {"fuzzed": {"N": [16, 4096]}}
     shapes = fuzz.large_shapes(params, config={"layout": "soa"}, mode="all_configs_3shapes", n=2)
     assert all(s["layout"] == "soa" for _, s in shapes)
@@ -121,7 +121,7 @@ def test_large_shapes_merges_config():
 # --------------------------------------------------------------------------- #
 # fuzzed_shape (the per-config crossing of the k-iteration correctness sweep)
 # --------------------------------------------------------------------------- #
-def test_fuzzed_shape_is_reproducible_and_config_merged():
+def test_fuzzed_shape_is_reproducible_and_config_merged() -> None:
     params = {"fuzzed": {"N": [16, 4096]}}
     a = fuzz.fuzzed_shape(params, 0, config_ns={"mode": "x"})
     b = fuzz.fuzzed_shape(params, 0, config_ns={"mode": "x"})
@@ -130,14 +130,14 @@ def test_fuzzed_shape_is_reproducible_and_config_merged():
     assert 16 <= a["N"] <= 4096
 
 
-def test_fuzzed_shape_iterations_differ():
+def test_fuzzed_shape_iterations_differ() -> None:
     params = {"fuzzed": {"N": [16, 4096]}}
     p0 = fuzz.fuzzed_shape(params, 0)
     p1 = fuzz.fuzzed_shape(params, 1)
     assert p0["N"] != p1["N"]  # distinct iterations sample distinct sizes
 
 
-def test_fuzzed_shape_resolves_derive_against_config():
+def test_fuzzed_shape_resolves_derive_against_config() -> None:
     params = {"fuzzed": {"n": [4, 64], "nn": {"derive": "n*n"}}}
     s = fuzz.fuzzed_shape(params, 3, config_ns={"flag": 1})
     assert s["nn"] == s["n"] * s["n"]

@@ -19,10 +19,17 @@ _ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 
 
 def _ok(res):
+    """``(every backend agreed, the statuses)`` -- and at least one actually RAN.
+
+    Without the second half every backend reporting ``skip:`` is indistinguishable from every
+    backend agreeing, so the whole file goes green having verified nothing. The same guard is
+    spelled out in test_microapps.py, which is where this one was missing from.
+    """
+    assert any(v == "ok" for v in res.values()), f"every backend skipped; nothing was verified: {res}"
     return all(v == "ok" or v.startswith("skip") for v in res.values()), res
 
 
-def test_take_flat_1d():
+def test_take_flat_1d() -> None:
     a = np.arange(8, dtype=np.float64)
     idx = np.array([3, 1, 4, 1], dtype=np.int64)
     src = (
@@ -68,17 +75,17 @@ def _take_axis(axis, out_shape, out_sym):
     )
 
 
-def test_take_axis0_row_gather():
+def test_take_axis0_row_gather() -> None:
     ok, res = _ok(_take_axis(0, (3, 4), "(NIDX, N)"))
     assert ok, res
 
 
-def test_take_negative_axis():
+def test_take_negative_axis() -> None:
     ok, res = _ok(_take_axis(-1, (3, 3), "(M, NIDX)"))
     assert ok, res
 
 
-def test_take_intermediate_local_operand():
+def test_take_intermediate_local_operand() -> None:
     """The source is an intermediate local (``tmp = a + 1``) -- the ML gather-after-compute
     case; its shape is inferred so the gather output allocates correctly."""
     a = np.arange(12, dtype=np.float64).reshape(3, 4)

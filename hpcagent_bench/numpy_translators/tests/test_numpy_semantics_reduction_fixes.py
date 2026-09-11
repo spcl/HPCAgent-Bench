@@ -36,6 +36,7 @@ _ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 
 
 def _ok(res):
+    assert any(v == "ok" for v in res.values()), f"every backend skipped; the comparison never ran: {res}"
     return all(v == "ok" or v.startswith("skip") for v in res.values()), res
 
 
@@ -44,7 +45,7 @@ def _call_args(src):
     return call.args, call.keywords
 
 
-def _target(name="out"):
+def _target(name: str = "out"):
     return ast.Name(id=name, ctx=ast.Store())
 
 
@@ -58,7 +59,7 @@ def _src(stmts):
 # --------------------------------------------------------------------------- #
 
 
-def test_sum_integer_uses_int_accumulator_and_int64_dtype():
+def test_sum_integer_uses_int_accumulator_and_int64_dtype() -> None:
     args, kws = _call_args("np.sum(a)")
     ld = {"a": "int64"}
     stmts = expand_sum(_target(), args, {"a": ("N",)}, kws, local_dtypes=ld)
@@ -68,7 +69,7 @@ def test_sum_integer_uses_int_accumulator_and_int64_dtype():
     assert ld["out"] == "int64"  # result upcast to int64 (numpy rule)
 
 
-def test_prod_integer_uses_int_accumulator():
+def test_prod_integer_uses_int_accumulator() -> None:
     args, kws = _call_args("np.prod(a)")
     ld = {"a": "int32"}
     stmts = expand_prod(_target(), args, {"a": ("N",)}, kws, local_dtypes=ld)
@@ -77,7 +78,7 @@ def test_prod_integer_uses_int_accumulator():
     assert ld["out"] == "int64"
 
 
-def test_sum_float_keeps_float_accumulator():
+def test_sum_float_keeps_float_accumulator() -> None:
     args, kws = _call_args("np.sum(a)")
     ld = {"a": "float64"}
     stmts = expand_sum(_target(), args, {"a": ("N",)}, kws, local_dtypes=ld)
@@ -85,7 +86,7 @@ def test_sum_float_keeps_float_accumulator():
     assert "out" not in ld
 
 
-def test_integer_sum_prod_numeric_all_backends():
+def test_integer_sum_prod_numeric_all_backends() -> None:
     a = np.array([1, 2, 3, 4, 5], dtype=np.int64)
     src = "import numpy as np\ndef f(a, s, p):\n s[0] = np.sum(a)\n p[0] = np.prod(a)\n"
     res = run_op(
@@ -107,20 +108,20 @@ def test_integer_sum_prod_numeric_all_backends():
 # --------------------------------------------------------------------------- #
 
 
-def test_max_emits_nan_test():
+def test_max_emits_nan_test() -> None:
     args, kws = _call_args("np.max(a)")
     stmts = expand_max(_target(), args, {"a": ("N",)}, kws)
     # A NaN element must win: the update tests ``x != x`` (NaN self-inequality).
     assert "!=" in _src(stmts)
 
 
-def test_min_emits_nan_test():
+def test_min_emits_nan_test() -> None:
     args, kws = _call_args("np.min(a)")
     stmts = expand_min(_target(), args, {"a": ("N",)}, kws)
     assert "!=" in _src(stmts)
 
 
-def test_max_min_nan_propagation_all_backends():
+def test_max_min_nan_propagation_all_backends() -> None:
     a = np.array([1.0, np.nan, 2.0, -3.0])
     src = "import numpy as np\ndef f(a, mx, mn):\n mx[0] = np.max(a)\n mn[0] = np.min(a)\n"
     # pythran runs the full reduction natively, and its runtime ``np.max`` /
@@ -141,7 +142,7 @@ def test_max_min_nan_propagation_all_backends():
     assert ok, res
 
 
-def test_argmax_argmin_first_nan_index_all_backends():
+def test_argmax_argmin_first_nan_index_all_backends() -> None:
     a = np.array([1.0, 5.0, np.nan, 2.0, np.nan])  # first NaN at index 2
     assert np.argmax(a) == 2 and np.argmin(a) == 2
     src = "import numpy as np\ndef f(a, i, j):\n i[0] = np.argmax(a)\n j[0] = np.argmin(a)\n"
@@ -168,19 +169,19 @@ def test_argmax_argmin_first_nan_index_all_backends():
 # --------------------------------------------------------------------------- #
 
 
-def test_max_zero_length_axis_refuses():
+def test_max_zero_length_axis_refuses() -> None:
     args, kws = _call_args("np.max(a)")
     with pytest.raises(NotImplementedError):
         expand_max(_target(), args, {"a": ("0",)}, kws)
 
 
-def test_min_zero_length_reduction_axis_refuses():
+def test_min_zero_length_reduction_axis_refuses() -> None:
     args, kws = _call_args("np.min(a, axis=1)")
     with pytest.raises(NotImplementedError):
         expand_min(_target(), args, {"a": ("N", "0")}, kws)
 
 
-def test_max_zero_length_kept_axis_ok():
+def test_max_zero_length_kept_axis_ok() -> None:
     # A zero-length KEPT axis is fine (no reduction over it); only a zero-length
     # REDUCED axis has no identity.
     args, kws = _call_args("np.max(a, axis=1)")
@@ -192,7 +193,7 @@ def test_max_zero_length_kept_axis_ok():
 # --------------------------------------------------------------------------- #
 
 
-def test_std_ddof_changes_divisor():
+def test_std_ddof_changes_divisor() -> None:
     args, kws = _call_args("np.std(a, ddof=1)")
     src = _src(expand_std(_target(), args, {"a": ("N",)}, kws))
     assert "- 1" in src  # divisor N - 1
@@ -201,7 +202,7 @@ def test_std_ddof_changes_divisor():
     assert "- 1" not in src0  # default ddof=0 -> plain N
 
 
-def test_var_ddof_numeric_all_backends():
+def test_var_ddof_numeric_all_backends() -> None:
     a = np.array([2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0])
     src = "import numpy as np\ndef f(a, v, s):\n v[0] = np.var(a, ddof=1)\n s[0] = np.std(a, ddof=2)\n"
     res = run_op(
@@ -222,13 +223,13 @@ def test_var_ddof_numeric_all_backends():
 # --------------------------------------------------------------------------- #
 
 
-def test_sum_initial_seeds_accumulator():
+def test_sum_initial_seeds_accumulator() -> None:
     args, kws = _call_args("np.sum(a, initial=5.0)")
     stmts = expand_sum(_target(), args, {"a": ("N",)}, kws)
     assert stmts[0].value.value == 5.0
 
 
-def test_initial_numeric_all_backends():
+def test_initial_numeric_all_backends() -> None:
     a = np.array([1.0, 2.0, 3.0, 4.0])
     src = (
         "import numpy as np\ndef f(a, s, p, mx, mn):\n"
@@ -255,14 +256,14 @@ def test_initial_numeric_all_backends():
 # --------------------------------------------------------------------------- #
 
 
-def test_mean_float_input_preserves_dtype_in_desugar():
+def test_mean_float_input_preserves_dtype_in_desugar() -> None:
     float_src = _src(_reduce_axis_stmts("t", "s", "mean", [0], 2, 0, elem_is_float=True))
     assert "s.dtype" in float_src and "np.float64" not in float_src
     int_src = _src(_reduce_axis_stmts("t", "s", "mean", [0], 2, 0, elem_is_float=False))
     assert "np.float64" in int_src  # integer input upcasts to float64
 
 
-def test_var_float_input_preserves_dtype_in_desugar():
+def test_var_float_input_preserves_dtype_in_desugar() -> None:
     assert "s.dtype" in _src(_reduce_axis_stmts("t", "s", "var", [0], 2, 0, elem_is_float=True))
     assert "s.dtype" in _src(_reduce_axis_stmts("t", "s", "std", [0], 2, 0, elem_is_float=True))
 
@@ -272,7 +273,7 @@ def test_var_float_input_preserves_dtype_in_desugar():
 # --------------------------------------------------------------------------- #
 
 
-def test_axis_sum_prod_integer_input_allocates_int64():
+def test_axis_sum_prod_integer_input_allocates_int64() -> None:
     # The axis-reduction TEMP used to be allocated at the INPUT width (``s.dtype``), so an
     # int32 column sum wrapped past 2^31. numpy upcasts an integer accumulator to int64.
     for op in ("sum", "prod"):
@@ -280,7 +281,7 @@ def test_axis_sum_prod_integer_input_allocates_int64():
         assert "np.int64" in _src(_reduce_axis_stmts("t", "s", op, [0], 2, 0, elem_kind="bool"))
 
 
-def test_axis_sum_float_and_elementwise_ops_keep_input_dtype():
+def test_axis_sum_float_and_elementwise_ops_keep_input_dtype() -> None:
     # float sums stay at the input width (float32 must not become int64/float64), and
     # min/max pick an ELEMENT, so they keep the input dtype even for an integer input.
     assert "s.dtype" in _src(_reduce_axis_stmts("t", "s", "sum", [0], 2, 0, elem_kind="float"))
@@ -288,7 +289,7 @@ def test_axis_sum_float_and_elementwise_ops_keep_input_dtype():
         assert "s.dtype" in _src(_reduce_axis_stmts("t", "s", op, [0], 2, 0, elem_kind="int"))
 
 
-def test_axis_sum_int32_overflow_all_backends():
+def test_axis_sum_int32_overflow_all_backends() -> None:
     # each column sums to 4 * 2**30 = 2**32, which does NOT fit int32.
     x = np.full((4, 3), 2**30, dtype=np.int32)
     assert np.sum(x, axis=0).dtype == np.int64  # numpy anchor
@@ -311,7 +312,7 @@ def test_axis_sum_int32_overflow_all_backends():
 # --------------------------------------------------------------------------- #
 
 
-def test_concatenate_negative_axis_all_backends():
+def test_concatenate_negative_axis_all_backends() -> None:
     a = np.arange(6.0).reshape(2, 3)
     b = (np.arange(4.0) + 10).reshape(2, 2)
     src = "import numpy as np\ndef f(a, b, out):\n out[:] = np.concatenate((a, b), axis=-1)\n"
@@ -341,14 +342,14 @@ def _unp(exts):
     return tuple(ast.unparse(e) for e in exts)
 
 
-def test_broadcast_extents_size1_symmetric():
+def test_broadcast_extents_size1_symmetric() -> None:
     assert _unp(_broadcast_extents(_ext("N", "1"), _ext("N", "M"))) == ("N", "M")
     assert _unp(_broadcast_extents(_ext("M"), _ext("N", "M"))) == ("N", "M")
     assert _unp(_broadcast_extents(_ext("1"), _ext("N"))) == ("N",)
     assert _unp(_broadcast_extents(_ext("N", "M"), _ext("N", "1"))) == ("N", "M")
 
 
-def test_maximum_broadcast_lower_rank_first_operand_all_backends():
+def test_maximum_broadcast_lower_rank_first_operand_all_backends() -> None:
     a = np.array([1.0, 5.0, 3.0])  # (M,)
     B = np.array(
         [
@@ -370,7 +371,7 @@ def test_maximum_broadcast_lower_rank_first_operand_all_backends():
     assert ok, res
 
 
-def test_multiply_broadcast_row_vector_all_backends():
+def test_multiply_broadcast_row_vector_all_backends() -> None:
     a = np.array([[2.0, 3.0, 4.0]])  # (1, M)
     B = np.array(
         [
@@ -397,7 +398,7 @@ def test_multiply_broadcast_row_vector_all_backends():
 # --------------------------------------------------------------------------- #
 
 
-def test_expr_rank_ellipsis():
+def test_expr_rank_ellipsis() -> None:
     ranks = {"a": 3, "b": 4}
     assert expr_rank(ast.parse("a[..., i]", mode="eval").body, ranks) == 2  # was 1 pre-fix
     assert expr_rank(ast.parse("a[...]", mode="eval").body, ranks) == 3
@@ -410,7 +411,7 @@ def test_expr_rank_ellipsis():
 # --------------------------------------------------------------------------- #
 
 
-def test_int_true_division_all_backends():
+def test_int_true_division_all_backends() -> None:
     a = np.array([7, 1, 9], dtype=np.int64)
     b = np.array([2, 4, 2], dtype=np.int64)
     src = "import numpy as np\ndef f(a, b, out):\n out[0] = a[0] / b[0]\n out[1] = a[1] / b[1]\n out[2] = a[2] / b[2]\n"
@@ -428,7 +429,7 @@ def test_int_true_division_all_backends():
     assert ok, res
 
 
-def test_explicit_float_cast_in_division_all_backends():
+def test_explicit_float_cast_in_division_all_backends() -> None:
     a = np.array([7, 3], dtype=np.int64)
     b = np.array([2, 4], dtype=np.int64)
     src = "import numpy as np\ndef f(a, b, out):\n out[0] = float(a[0]) / b[0]\n out[1] = float(a[1]) / b[1]\n"

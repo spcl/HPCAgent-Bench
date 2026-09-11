@@ -159,7 +159,7 @@ def _outputs(proc: subprocess.CompletedProcess, count: int) -> np.ndarray:
 
 
 @pytest.mark.integration
-def test_guarded_division_does_not_divide_by_zero():
+def test_guarded_division_does_not_divide_by_zero() -> None:
     if not shutil.which("gfortran"):
         pytest.skip("gfortran needed to compile the emitted Fortran")
     expected = _python_reference(_DIV_SRC, "f", (_DIV_A, _DIV_X), np.zeros(_N))
@@ -180,7 +180,7 @@ def test_guarded_division_does_not_divide_by_zero():
 
 
 @pytest.mark.integration
-def test_guarded_subscript_does_not_read_out_of_bounds():
+def test_guarded_subscript_does_not_read_out_of_bounds() -> None:
     if not shutil.which("gfortran"):
         pytest.skip("gfortran needed to compile the emitted Fortran")
     expected = _python_reference(_OOB_SRC, "g", (_OOB_A, _OOB_IDX), np.zeros(_N))
@@ -199,7 +199,7 @@ def test_guarded_subscript_does_not_read_out_of_bounds():
         np.testing.assert_allclose(_outputs(proc, _N), expected, rtol=1e-12, atol=0.0)
 
 
-def test_while_test_ifexp_is_reevaluated_across_continue():
+def test_while_test_ifexp_is_reevaluated_across_continue() -> None:
     """A ``while`` whose TEST is an ``IfExp`` re-runs that test every iteration, so the hoisted temp
     has to be recomputed at the loop tail AND before every ``continue`` -- ``continue`` emits as
     Fortran ``cycle``, which jumps straight past the tail. Reading a stale temp is a wrong VALUE,
@@ -231,7 +231,7 @@ def test_while_test_ifexp_is_reevaluated_across_continue():
     assert status == {"c": "ok", "cpp": "ok", "fortran": "ok"}, status
 
 
-def test_guarded_ifexp_c_and_cpp_unaffected():
+def test_guarded_ifexp_c_and_cpp_unaffected() -> None:
     # C's ?: already short-circuits; the Fortran-only hoist must not have disturbed those emitters.
     shapes = {"a": "(N,)", "x": "(N,)", "out": "(N,)"}
     status = oo.run_op(

@@ -5,6 +5,7 @@ both the DDL (``create_all``) and row inserts, replacing the old hand-written CR
 
 from typing import Optional
 
+from sqlalchemy.engine import Engine
 from sqlmodel import Field, SQLModel, create_engine
 
 
@@ -53,7 +54,7 @@ class Result(SQLModel, table=True):
     gpu: Optional[str] = None
 
 
-def add_missing_columns(engine) -> None:
+def add_missing_columns(engine: Engine) -> None:
     """Add to an EXISTING ``results`` table any nullable column :class:`Result` has grown since.
 
     ``create_all`` is CREATE TABLE IF NOT EXISTS: it builds the table when absent and does nothing
@@ -84,7 +85,7 @@ def add_missing_columns(engine) -> None:
         conn.commit()
 
 
-def results_engine(db_path: str):
+def results_engine(db_path: str) -> Engine:
     """A SQLModel engine for the results DB at ``db_path``, with the schema ensured: the table is
     created from :class:`Result` when absent, and reconciled to it when present
     (:func:`add_missing_columns`)."""

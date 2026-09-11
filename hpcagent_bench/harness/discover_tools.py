@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import sys
+from typing import Any
 
 import yaml
 
@@ -23,7 +24,7 @@ TARGETS = ("cpu", "nvidia", "amd")
 _VERSION_RE = re.compile(r"\d+(?:\.\d+)+")
 
 
-def detect_platform():
+def detect_platform() -> dict[str, Any]:
     sysname = platform.system()  # Linux / Darwin / Windows
     info = {"system": sysname.lower(), "machine": platform.machine(), "wsl": False}
     if sysname == "Darwin":
@@ -41,7 +42,7 @@ def detect_platform():
     return info
 
 
-def _linux_distro():
+def _linux_distro() -> str:
     try:
         kv = dict(
             line.rstrip().split("=", 1)
@@ -55,7 +56,7 @@ def _linux_distro():
     return f"{name} {ver}".strip()
 
 
-def _accel_roots():
+def _accel_roots() -> list[str]:
     """CUDA + ROCm roots (which are usually NOT on the default loader path)."""
     roots = []
     for env in ("CUDA_HOME", "CUDA_PATH", "CUDA_ROOT"):
@@ -70,7 +71,7 @@ def _accel_roots():
 
 
 @functools.lru_cache(maxsize=1)
-def _lib_dirs():
+def _lib_dirs() -> list[str]:
     dirs = ["/usr/lib", "/usr/local/lib", "/lib", "/usr/lib64", "/lib64", "/opt/homebrew/lib", "/usr/local/opt"]
     dirs += [os.path.join(r, sub) for r in _accel_roots() for sub in ("lib", "lib64", "targets/x86_64-linux/lib")]
     dirs += [p for p in os.environ.get("LD_LIBRARY_PATH", "").split(os.pathsep) if p]
@@ -78,7 +79,7 @@ def _lib_dirs():
 
 
 @functools.lru_cache(maxsize=1)
-def _include_dirs():
+def _include_dirs() -> list[str]:
     dirs = ["/usr/include", "/usr/local/include", "/opt/homebrew/include"]
     dirs += [os.path.join(r, "include") for r in _accel_roots()]
     dirs += [p for p in os.environ.get("CPATH", "").split(os.pathsep) if p]
@@ -86,7 +87,7 @@ def _include_dirs():
 
 
 @functools.lru_cache(maxsize=1)
-def _ldconfig_index():
+def _ldconfig_index() -> dict[str, str]:
     """soname -> path map from `ldconfig -p` (Linux glibc only; empty elsewhere)."""
     if not shutil.which("ldconfig"):
         return {}
@@ -94,7 +95,7 @@ def _ldconfig_index():
         out = subprocess.run(["ldconfig", "-p"], capture_output=True, text=True, timeout=10).stdout
     except (OSError, subprocess.SubprocessError):
         return {}
-    index = {}
+    index: dict[str, str] = {}
     for line in out.splitlines():
         # "\tlibcublas.so.12 (libc6,x86-64) => /usr/lib/x86_64-linux-gnu/libcublas.so.12"
         if "=>" not in line:
@@ -105,7 +106,7 @@ def _ldconfig_index():
     return index
 
 
-def _run_version(cmd, args):
+def _run_version(cmd: str, args: list[str] | None) -> str | None:
     for a in args or []:
         try:
             r = subprocess.run([cmd, a], capture_output=True, text=True, timeout=10)
@@ -118,7 +119,7 @@ def _run_version(cmd, args):
     return None
 
 
-def detect_binary(spec):
+def detect_binary(spec: dict[str, Any]) -> dict[str, Any]:
     found = []
     for name in spec["names"]:
         path = shutil.which(name)
@@ -135,11 +136,11 @@ def detect_binary(spec):
     }
 
 
-def _as_list(v):
+def _as_list(v: str | list[str]) -> list[str]:
     return v if isinstance(v, list) else [v]
 
 
-def detect_library(spec):
+def detect_library(spec: dict[str, Any]) -> dict[str, Any]:
     # 1) pkg-config (authoritative; gives a version)
     if shutil.which("pkg-config"):
         for pc in _as_list(spec.get("pkgconfig", [])):
@@ -169,16 +170,16 @@ def detect_library(spec):
     return {"found": False}
 
 
-def detect_header(spec):
+def detect_header(spec: dict[str, Any]) -> dict[str, Any]:
     return detect_library({"header": spec["header"]})
 
 
 DETECTORS = {"binary": detect_binary, "library": detect_library, "header": detect_header}
 
 
-def discover():
+def discover() -> dict[str, Any]:
     toolset = yaml.safe_load(TOOLSET.read_text())
-    report = {"platform": detect_platform(), "categories": {}}
+    report: dict[str, Any] = {"platform": detect_platform(), "categories": {}}
     for cat, tools in toolset.items():
         out = {}
         for tool, spec in tools.items():
@@ -191,7 +192,7 @@ def discover():
     return report
 
 
-def missing_for_target(report, target):
+def missing_for_target(report: dict[str, Any], target: str) -> list[str]:
     miss = []
     for cat in report["categories"].values():
         for tool, res in cat.items():
@@ -200,7 +201,7 @@ def missing_for_target(report, target):
     return miss
 
 
-def print_human(report):
+def print_human(report: dict[str, Any]) -> None:
     p = report["platform"]
     wsl = " (WSL)" if p.get("wsl") else ""
     print(f"platform: {p['distro']}{wsl}  [{p['system']}/{p['machine']}]\n")
@@ -223,7 +224,7 @@ def print_human(report):
         print(f"target {target:7}: {status}")
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--json", action="store_true", help="emit JSON")
     ap.add_argument("--yaml", action="store_true", help="emit YAML")

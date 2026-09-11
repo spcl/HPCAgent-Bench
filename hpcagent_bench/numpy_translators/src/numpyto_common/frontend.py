@@ -4495,6 +4495,24 @@ def target_shape_is_the_call_itself(fn: ast.FunctionDef, lhs, arr_by: Dict[str, 
     )
 
 
+def call_specialized_body(hfn: ast.FunctionDef, pnames: List[str], args: List[ast.expr]) -> ast.FunctionDef:
+    """A COPY of ``hfn`` with this call site's literal arguments bound and the guards they decide gone.
+
+    The return classification has to read the body this call site produces, not the generic one.
+    ``_conv2d``'s two arms return different extents, and two return shapes retire the array-return
+    path outright ("one pointer cannot carry both") -- at a call site where the guard is decided
+    and exactly one arm survives. Classified by-value, an array return emits a function typed
+    ``double`` that hands back a pointer, and the out-param buffer the caller allocates for it
+    takes the shape of whatever else was in scope.
+
+    A copy, because the real body is specialised further down the same pass, after several
+    rewrites that must see the parameters this substitution would have removed.
+    """
+    probe = copy.deepcopy(hfn)
+    _bind_call_constants(probe, {pn: a for pn, a in zip(pnames, args) if _literal_call_arg(a)})
+    return probe
+
+
 def _helper_return_shape_from_body(hfn, pnames, args, arr_by, sca_by, sym_by, fn=None):
     """``(shape_strings, dtype)`` for a helper whose RETURN EXPRESSION is array-valued.
 
@@ -5160,7 +5178,7 @@ def _build_callsite_stmts(
     hret_shape,
     hret_dtype,
     hidx,
-    inout=False,
+    inout: bool = False,
     live_buffers=frozenset(),
 ):
     """Replacement statements for an array-returning helper call.
@@ -5272,7 +5290,7 @@ def _reorder_helper_call_args(trees: List[ast.AST], helpers: List[KernelIR]) -> 
 class _ReplaceStmts(ast.NodeTransformer):
     """Replace specific ``Assign`` nodes (keyed by ``id``) with a stmt list."""
 
-    def __init__(self, mapping: Dict[int, List[ast.stmt]]):
+    def __init__(self, mapping: Dict[int, List[ast.stmt]]) -> None:
         self.mapping = mapping
 
     def visit_Assign(self, node: ast.Assign):
@@ -5385,6 +5403,10 @@ def _bind_call_constants(hfn: ast.FunctionDef, consts: Dict[str, ast.expr]) -> N
         hfn.body.insert(0, ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=copy.deepcopy(consts[name])))
     if consts:
         _FoldStaticNoneBranches().visit(hfn)
+        # Same pruning one step wider: the substitution decides ordinary guards too, and
+        # ``_conv2d``'s ``if kh == 1 and kw == 1 and stride == 1 and padding == 0`` is the shape
+        # it leaves behind. An undecided guard is left exactly as it is.
+        fold_constant_branches(hfn)
         hfn.body = _drop_unreachable_after_return(hfn.body)
         ast.fix_missing_locations(hfn)
 
@@ -5744,22 +5766,17 @@ def _build_helper_kirs(
         # consumes it (lulesh's face-node loops, which only surface once its helpers survive).
         _unroll_const_list_loops(hfn)
 
-        if hret_shape is None:
-            # No call site stores the result into an array -- ``_conv2d(...)`` is only ever an
-            # ARGUMENT to another helper (resnet101's ``_batch_norm(_conv2d(x, w, 1, 0), ...)``).
-            # The helper's own body still says what it returns, and reading that wrong classifies
-            # an array return as by-value: no out-param is added, the returns stay as
-            # ``return <expr>``, and every shape-changing call inside one reaches the emitter
-            # unlowered, because the expanders only ever see assignments.
-            hret_shape, hret_dtype = _helper_return_shape_from_body(
-                hfn, pnames, call.args, oarr_by, osca_by, osym_by, owner_fn
-            )
-        elif target_shape_is_the_call_itself(owner_fn, lhs, oarr_by, hdef.name):
-            # The target told us nothing the call did not; ask the body, which knows what it writes.
+        if hret_shape is None or target_shape_is_the_call_itself(owner_fn, lhs, oarr_by, hdef.name):
+            # Either no call site stores the result into an array -- ``_conv2d(...)`` is only ever
+            # an ARGUMENT to another helper (resnet101's ``_batch_norm(_conv2d(x, w, 1, 0), ..)``)
+            # -- or the target told us nothing the call did not. The helper's own body says what it
+            # returns, and reading that wrong classifies an array return as by-value: no out-param
+            # is added, the returns stay as ``return <expr>``, and every shape-changing call inside
+            # one reaches the emitter unlowered, because the expanders only ever see assignments.
             body_shape, body_dtype = _helper_return_shape_from_body(
-                hfn, pnames, call.args, oarr_by, osca_by, osym_by, owner_fn
+                call_specialized_body(hfn, pnames, call.args), pnames, call.args, oarr_by, osca_by, osym_by, owner_fn
             )
-            if body_shape is not None:
+            if body_shape is not None or hret_shape is None:
                 hret_shape, hret_dtype = body_shape, body_dtype
 
         if hret_shape is None:
@@ -6160,6 +6177,77 @@ def _build_helper_kirs(
 #: which binds no helper at all: conv_pointwise_2d and kl_div_loss emitted no DaCe program because
 #: of one precondition line apiece.
 INLINABLE_STMTS = (ast.Assign, ast.AugAssign, ast.For, ast.If, ast.Expr, ast.While, ast.Assert, ast.Pass)
+
+
+def constant_truth(test: ast.expr) -> Optional[bool]:
+    """``test``'s value when every leaf is a literal, else ``None``.
+
+    Narrow on purpose: literals, ``and``/``or`` over them, ``not``, and a comparison of two
+    literals. That is the shape SPECIALISATION leaves behind -- a guard on pinned scalars becomes
+    ``True and True and True and True`` -- and nothing wider is needed to recognize it.
+    """
+    if isinstance(test, ast.Constant):
+        return bool(test.value)
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        inner = constant_truth(test.operand)
+        return None if inner is None else not inner
+    if isinstance(test, ast.BoolOp):
+        values = [constant_truth(v) for v in test.values]
+        if any(v is None for v in values):
+            return None
+        return all(values) if isinstance(test.op, ast.And) else any(values)
+    if isinstance(test, ast.Compare) and len(test.ops) == 1:
+        try:
+            left, right = ast.literal_eval(test.left), ast.literal_eval(test.comparators[0])
+        except (ValueError, TypeError, SyntaxError):
+            return None
+        op = test.ops[0]
+        for kind, answer in (
+            (ast.Eq, left == right),
+            (ast.NotEq, left != right),
+            (ast.Lt, left < right),
+            (ast.LtE, left <= right),
+            (ast.Gt, left > right),
+            (ast.GtE, left >= right),
+        ):
+            if isinstance(op, kind):
+                return bool(answer)
+    return None
+
+
+def fold_constant_branches(fn: ast.FunctionDef) -> bool:
+    """Replace every ``if`` in ``fn`` whose test is a compile-time constant with the taken branch.
+
+    Specialisation is what makes this pay: cloning a helper per call signature pins its scalar
+    arguments, so ``_conv2d``'s ``if kh == 1 and kw == 1 and stride == 1 and padding == 0`` reads
+    ``if False and False and False and True`` in the stride-2 clone. Both arms return, and they
+    return DIFFERENT extents -- which retires the array-return classification for a helper where
+    only one arm is reachable.
+    """
+    changed = False
+
+    def walk(body: List[ast.stmt]) -> List[ast.stmt]:
+        nonlocal changed
+        out: List[ast.stmt] = []
+        for stmt in body:
+            if isinstance(stmt, (ast.If, ast.For, ast.While)):
+                stmt.body, stmt.orelse = walk(stmt.body), walk(stmt.orelse)
+            elif isinstance(stmt, ast.Try):
+                stmt.body, stmt.orelse = walk(stmt.body), walk(stmt.orelse)
+                stmt.finalbody = walk(stmt.finalbody)
+            if isinstance(stmt, ast.If):
+                taken = constant_truth(stmt.test)
+                if taken is not None:
+                    changed = True
+                    out.extend(stmt.body if taken else stmt.orelse)
+                    continue
+            out.append(stmt)
+        return out
+
+    fn.body = walk(fn.body)
+    if changed:
+        ast.fix_missing_locations(fn)
+    return changed
 
 
 def _collect_inlinable_helpers(tree: ast.Module, kernel_fn: ast.FunctionDef) -> Dict[str, ast.FunctionDef]:
@@ -7419,7 +7507,7 @@ class _InlineHelpers(ast.NodeTransformer):
       return forms remains in visit_Call.
     """
 
-    def __init__(self, helpers: Dict[str, ast.FunctionDef], counter: Optional[List[int]] = None):
+    def __init__(self, helpers: Dict[str, ast.FunctionDef], counter: Optional[List[int]] = None) -> None:
         self.helpers = helpers
         # The ``__inl<N>_`` prefix counter MUST persist across the parse_kernel
         # inline fixpoint: a nested helper exposed in a later iteration would
@@ -7615,7 +7703,7 @@ def _collect_assigned_names(stmts):
     # would shuffle the emitted prologue -- conv2d_relu_bias_add's stride/padding/dilation.
     out = OrderedSet()
 
-    def _bind(target):
+    def _bind(target) -> None:
         if isinstance(target, ast.Name):
             out.add(target.id)
         elif isinstance(target, ast.Starred):
@@ -7644,7 +7732,7 @@ class _SubstNames(ast.NodeTransformer):
     renames work but a param-arg replacement on a Store context is
     silently rejected to keep AST validity)."""
 
-    def __init__(self, subst: Dict[str, ast.AST]):
+    def __init__(self, subst: Dict[str, ast.AST]) -> None:
         self.subst = subst
 
     def visit_Name(self, node: ast.Name) -> ast.AST:
@@ -8282,7 +8370,7 @@ def _names_used_as_int(tree: ast.AST) -> Set[str]:
     """
     int_uses: Set[str] = set()
 
-    def collect(node):
+    def collect(node) -> None:
         if node is None:
             return
         if isinstance(node, ast.Name):

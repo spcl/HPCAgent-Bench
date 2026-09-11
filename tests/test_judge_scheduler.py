@@ -36,19 +36,19 @@ from hpcagent_bench.harness.judge_scheduler import (
 GB = 1 << 30
 
 
-def test_device_slot_holds_kind_and_index():
+def test_device_slot_holds_kind_and_index() -> None:
     gpu = DeviceSlot("gpu", 1)
     assert gpu.kind == "gpu" and gpu.index == 1
     cpu = DeviceSlot("cpu", 0)
     assert cpu.kind == "cpu" and cpu.index == 0
 
 
-def test_local_gpu_count_is_a_nonnegative_int():
+def test_local_gpu_count_is_a_nonnegative_int() -> None:
     n = js.local_gpu_count()
     assert isinstance(n, int) and n >= 0
 
 
-def test_judge_config_defaults_from_config(monkeypatch):
+def test_judge_config_defaults_from_config(monkeypatch: pytest.MonkeyPatch) -> None:
     # No configured GPUs and none detected -> a single CPU slot (cpu box default).
     monkeypatch.setattr(js, "local_gpu_count", lambda: 0)
     config.set_override("judge.gpus_per_node", None)
@@ -61,7 +61,7 @@ def test_judge_config_defaults_from_config(monkeypatch):
         config.clear_override("judge.cpu_slots_per_node")
 
 
-def test_judge_config_gpu_box_defaults_no_cpu_slot():
+def test_judge_config_gpu_box_defaults_no_cpu_slot() -> None:
     # GPUs present (configured) -> 0 CPU slots by default (GPU kernels time on the GPU slots).
     config.set_override("judge.gpus_per_node", 4)
     config.set_override("judge.cpu_slots_per_node", None)
@@ -76,7 +76,7 @@ def test_judge_config_gpu_box_defaults_no_cpu_slot():
 # ---- the plan: how much each rank reserves, and who warms what --------------------------------
 
 
-def demands(*sizes):
+def demands(*sizes: int) -> list[KernelDemand]:
     """One resolved demand per size, named by position, holding a digest per variant."""
     return [
         KernelDemand(f"k{i}", array_bytes=size, output_bytes=HASH_DIGEST_BYTES * 5, variants=5)
@@ -84,7 +84,7 @@ def demands(*sizes):
     ]
 
 
-def test_every_rank_reserves_the_same_pool_sized_by_the_whole_selection():
+def test_every_rank_reserves_the_same_pool_sized_by_the_whole_selection() -> None:
     """The largest kernel sets the pool for EVERY rank, not just the rank that got it. A rank sized
     to its own share could not grade a request handed to it because it happened to be idle."""
     plan = plan_judges(demands(1 * GB, 8 * GB, 2 * GB), capacity_bytes=64 * GB, workspace_bytes=4 * GB, judges=3)
@@ -94,7 +94,7 @@ def test_every_rank_reserves_the_same_pool_sized_by_the_whole_selection():
     assert [len(j.kernels) for j in plan.judges] == [1, 1, 1]
 
 
-def test_an_empty_rank_is_still_sized_for_the_biggest_kernel():
+def test_an_empty_rank_is_still_sized_for_the_biggest_kernel() -> None:
     """More judges than kernels is a normal over-provision. The idle rank must still be able to
     grade the largest kernel the run can send it."""
     plan = plan_judges(demands(6 * GB), capacity_bytes=64 * GB, workspace_bytes=1 * GB, judges=4)
@@ -103,7 +103,7 @@ def test_an_empty_rank_is_still_sized_for_the_biggest_kernel():
     assert plan.pool_bytes == int(math.ceil(RUN_POOL_FACTOR * 6 * GB))
 
 
-def test_precompute_lists_stay_within_one_kernel_of_each_other():
+def test_precompute_lists_stay_within_one_kernel_of_each_other() -> None:
     """The deal is round-robin over a descending sort, so no rank warms twice another's share."""
     plan = plan_judges(
         demands(*[(i + 1) * (1 << 20) for i in range(101)]), capacity_bytes=64 * GB, workspace_bytes=1 * GB, judges=8
@@ -113,7 +113,7 @@ def test_precompute_lists_stay_within_one_kernel_of_each_other():
     assert sum(counts) == 101
 
 
-def test_the_assignment_covers_every_resolved_kernel_exactly_once():
+def test_the_assignment_covers_every_resolved_kernel_exactly_once() -> None:
     plan = plan_judges(
         demands(*[(i + 1) * (1 << 20) for i in range(20)]), capacity_bytes=64 * GB, workspace_bytes=1 * GB, judges=3
     )
@@ -121,7 +121,7 @@ def test_the_assignment_covers_every_resolved_kernel_exactly_once():
     assert sum(len(j.kernels) for j in plan.judges) == 20
 
 
-def test_the_plan_does_not_depend_on_the_order_the_demands_arrive_in():
+def test_the_plan_does_not_depend_on_the_order_the_demands_arrive_in() -> None:
     """A login node and a rank inside the job must agree byte for byte, and they build the demand
     list from independent walks of the manifest tree."""
     sizes = [(i + 1) * (1 << 20) for i in range(30)]
@@ -131,7 +131,7 @@ def test_the_plan_does_not_depend_on_the_order_the_demands_arrive_in():
     assert forward.pool_bytes == reverse.pool_bytes
 
 
-def test_a_kernel_too_big_for_the_device_is_reported_not_placed():
+def test_a_kernel_too_big_for_the_device_is_reported_not_placed() -> None:
     """Reported, because it needs a bigger device -- no packing makes 40 GB of arrays fit 8 GB."""
     plan = plan_judges(demands(1 * GB, 40 * GB), capacity_bytes=8 * GB, workspace_bytes=1 * GB, judges=2)
     assert [k for k, _ in plan.infeasible] == ["k1"]
@@ -140,7 +140,7 @@ def test_a_kernel_too_big_for_the_device_is_reported_not_placed():
     assert plan.pool_bytes == int(math.ceil(RUN_POOL_FACTOR * 1 * GB))
 
 
-def test_an_unpredictable_footprint_is_never_packed_as_free():
+def test_an_unpredictable_footprint_is_never_packed_as_free() -> None:
     """``sizing.working_bytes`` returns unknown, not zero, for a kernel whose shapes do not resolve;
     a plan that treated the two alike would size a pool the kernel then overruns."""
     unknown = KernelDemand("opaque", 0, 0, reason="opaque: init declares no shapes", variants=5)
@@ -149,7 +149,7 @@ def test_an_unpredictable_footprint_is_never_packed_as_free():
     assert "opaque" not in plan.assignment
 
 
-def test_the_digest_cache_is_not_a_sizing_term():
+def test_the_digest_cache_is_not_a_sizing_term() -> None:
     """The whole design rests on this: holding digests instead of arrays keeps the per-rank cache in
     the kilobytes, which is why the judge count is policy rather than a memory result."""
     plan = plan_judges(demands(*[1 << 20] * 509), capacity_bytes=64 * GB, workspace_bytes=1 * GB, judges=1)
@@ -160,7 +160,7 @@ def test_the_digest_cache_is_not_a_sizing_term():
 # ---- the reservation: the plan becoming memory the judge holds --------------------------------
 
 
-def test_reserving_more_host_memory_than_exists_fails_at_startup():
+def test_reserving_more_host_memory_than_exists_fails_at_startup() -> None:
     """The judge refuses to serve rather than discovering the shortfall on some later grade."""
     if memory_pool.host_available_bytes() is None:
         pytest.skip("/proc/meminfo is Linux-only and this host has none")
@@ -168,7 +168,7 @@ def test_reserving_more_host_memory_than_exists_fails_at_startup():
         memory_pool.reserve_host(1 << 60)
 
 
-def test_a_reservation_the_host_can_meet_reports_that_it_pooled_nothing():
+def test_a_reservation_the_host_can_meet_reports_that_it_pooled_nothing() -> None:
     """numpy has no Python-level allocator hook, so the host path verifies and says so -- claiming a
     pool it did not install would be the one dishonest outcome."""
     if memory_pool.host_available_bytes() is None:
@@ -178,6 +178,6 @@ def test_a_reservation_the_host_can_meet_reports_that_it_pooled_nothing():
     assert "not pooled" in detail
 
 
-def test_reserving_nothing_is_not_an_error():
+def test_reserving_nothing_is_not_an_error() -> None:
     """The default for a local judge: allocate on demand, exactly as before the pool existed."""
     assert memory_pool.reserve(0, 0) == (False, "nothing to reserve")

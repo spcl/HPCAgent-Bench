@@ -334,7 +334,7 @@ def signed_rank_normal_p(w_plus: float, n: int, absolute: list[float]) -> float:
     groups: dict[float, int] = {}
     for value in absolute:
         groups[value] = groups.get(value, 0) + 1
-    variance -= sum(size**3 - size for size in groups.values()) / 48.0
+    variance -= sum((size * size * size) - size for size in groups.values()) / 48.0
     if variance <= 0.0:
         return 1.0
     return min(1.0, math.erfc(abs(w_plus - mean) / math.sqrt(2.0 * variance)))

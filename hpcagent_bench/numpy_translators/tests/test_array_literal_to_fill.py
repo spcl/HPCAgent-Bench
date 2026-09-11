@@ -44,7 +44,7 @@ def _decl_of(text: str, name: str) -> str:
     return hits[0]
 
 
-def test_symbolic_index_vector_runs():
+def test_symbolic_index_vector_runs() -> None:
     """The fv3 form end to end: elements are arithmetic over scalars, and the array is only
     ever a subscript index."""
     src = (
@@ -68,7 +68,7 @@ def test_symbolic_index_vector_runs():
     assert all(v == "ok" for v in res.values()), res
 
 
-def test_int_literal_list_is_an_integer_buffer():
+def test_int_literal_list_is_an_integer_buffer() -> None:
     """An int list is an integer buffer, as it is in numpy. Emitted as double it would be a
     subscript of the wrong type, which is the failure this rule exists to prevent."""
     text = emit_c_for(
@@ -78,7 +78,7 @@ def test_int_literal_list_is_an_integer_buffer():
     assert "int" in _decl_of(text, "ia"), _decl_of(text, "ia")
 
 
-def test_float_literal_list_is_a_float_buffer():
+def test_float_literal_list_is_a_float_buffer() -> None:
     """The same rule the other way: a float list is NOT narrowed to an index type just because
     the mechanism was built for index vectors."""
     text = emit_c_for(
@@ -94,7 +94,7 @@ def test_float_literal_list_is_a_float_buffer():
     assert "double" in decl or "float" in decl, decl
 
 
-def test_elements_stored_in_order():
+def test_elements_stored_in_order() -> None:
     """The stores are what carry the values; a missing or reordered one is silent."""
     text = emit_c_for(
         ("import numpy as np\ndef pick(src, out):\n    ia = np.array([0, 2, 3])\n    out[ia, :] = src[ia, :] * 2.0\n"),
@@ -104,7 +104,7 @@ def test_elements_stored_in_order():
     assert re.search(r"ia\[2\] = 3;", text), text
 
 
-def test_symbolic_elements_not_read_as_an_index_still_refuse():
+def test_symbolic_elements_not_read_as_an_index_still_refuse() -> None:
     """Nothing in the AST types ``lo``/``hi``, and the array is read as a VALUE here, not as a
     subscript. Guessing double would be a miscompile; the refusal is the correct answer."""
     src = (
@@ -119,7 +119,7 @@ def test_symbolic_elements_not_read_as_an_index_still_refuse():
         emit_c_for(src, "pick")
 
 
-def test_nested_literal_still_refuses():
+def test_nested_literal_still_refuses() -> None:
     """``np.array([[...], [...]])`` builds a 2-D array; this rewriter claims the flat literal
     only, and a partial claim on the nested one would size the buffer wrong."""
     src = (

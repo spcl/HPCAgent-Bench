@@ -60,7 +60,7 @@ def fake_urlopen(captured: list, health: dict | None = None, body: dict | None =
     return opener
 
 
-def test_a_promotion_names_the_judge_rank(promoter, monkeypatch):
+def test_a_promotion_names_the_judge_rank(promoter, monkeypatch) -> None:
     """The whole bug: without this the judge refuses with a 400 and nothing is ever recovered."""
     captured: list = []
     monkeypatch.setattr(promoter.urllib.request, "urlopen", fake_urlopen(captured))
@@ -72,22 +72,22 @@ def test_a_promotion_names_the_judge_rank(promoter, monkeypatch):
     assert outcome.startswith("SUBMITTED")
 
 
-def test_the_rank_is_asked_of_the_judge_itself(promoter, monkeypatch):
+def test_the_rank_is_asked_of_the_judge_itself(promoter, monkeypatch) -> None:
     """Configured ranks go stale; /health is the one route that reports its own."""
     monkeypatch.setattr(promoter.urllib.request, "urlopen", fake_urlopen([], health={"judge_rank": 2}))
     assert promoter.judge_rank("http://judge:8800") == 2
 
 
-def test_the_upstream_judges_spelling_is_accepted_too(promoter, monkeypatch):
+def test_the_upstream_judges_spelling_is_accepted_too(promoter, monkeypatch) -> None:
     """The router answers `judge_rank`, the judge behind it `rank`; either is authoritative."""
     monkeypatch.setattr(promoter.urllib.request, "urlopen", fake_urlopen([], health={"rank": 1}))
     assert promoter.judge_rank("http://judge:8800") == 1
 
 
-def test_an_unreachable_judge_falls_back_rather_than_skipping(promoter, monkeypatch):
+def test_an_unreachable_judge_falls_back_rather_than_skipping(promoter, monkeypatch) -> None:
     """A promotion attempted with the default rank still beats one never attempted."""
 
-    def boom(req, timeout=None):
+    def boom(req, timeout=None) -> None:
         raise OSError("no route to host")
 
     monkeypatch.setattr(promoter.urllib.request, "urlopen", boom)
@@ -97,7 +97,7 @@ def test_an_unreachable_judge_falls_back_rather_than_skipping(promoter, monkeypa
     assert promoter.judge_rank("http://judge:8800") == 5
 
 
-def test_a_gpu_promotion_carries_both_translation_units(promoter, monkeypatch):
+def test_a_gpu_promotion_carries_both_translation_units(promoter, monkeypatch) -> None:
     captured: list = []
     monkeypatch.setattr(promoter.urllib.request, "urlopen", fake_urlopen(captured))
     item = {
@@ -132,7 +132,7 @@ def make_run_dir(tmp_path: pathlib.Path, rows: list[tuple[str, str, str]]) -> pa
     return tmp_path
 
 
-def test_the_device_row_is_never_submitted_as_the_host_source(promoter, tmp_path):
+def test_the_device_row_is_never_submitted_as_the_host_source(promoter, tmp_path) -> None:
     """Both halves sort together by ts, so an unfiltered 'newest wins' picks the device unit."""
     run_dir = make_run_dir(tmp_path, [("hip", "host.hip", "/* host */"), ("hip:device", "dev.hip", "/* __global__ */")])
     (item,) = promoter.candidates(run_dir)
@@ -141,7 +141,7 @@ def test_the_device_row_is_never_submitted_as_the_host_source(promoter, tmp_path
     assert item["device_source"] == "/* __global__ */"
 
 
-def test_a_host_only_arm_promotes_without_a_device_unit(promoter, tmp_path):
+def test_a_host_only_arm_promotes_without_a_device_unit(promoter, tmp_path) -> None:
     run_dir = make_run_dir(tmp_path, [("c", "gemm.c", "void gemm(void){}")])
     (item,) = promoter.candidates(run_dir)
     assert item["source"] == "void gemm(void){}"
@@ -167,20 +167,20 @@ def make_run_dir_many(tmp_path: pathlib.Path, kernels: list[tuple[str, float]]) 
     return tmp_path
 
 
-def test_the_biggest_win_is_promoted_first(promoter, tmp_path):
+def test_the_biggest_win_is_promoted_first(promoter, tmp_path) -> None:
     """The budget can cut this list short, so order has to follow WORTH. Alphabetically, `alpha`
     at 1.1x would outrank `zeta` at 76.6x and be the one that survived a truncation."""
     run_dir = make_run_dir_many(tmp_path, [("alpha", 1.1), ("zeta", 76.6), ("mid", 4.0)])
     assert [item["kernel"] for item in promoter.candidates(run_dir)] == ["zeta", "mid", "alpha"]
 
 
-def test_the_budget_stops_the_pass_and_names_what_it_cut(promoter, tmp_path, monkeypatch, capsys):
+def test_the_budget_stops_the_pass_and_names_what_it_cut(promoter, tmp_path, monkeypatch, capsys) -> None:
     """Teardown runs inside the job's remaining wall clock: a pass that outlives it is killed with
     the allocation, losing even the promotions it already landed."""
     run_dir = make_run_dir_many(tmp_path, [("alpha", 1.1), ("zeta", 76.6), ("mid", 4.0)])
     attempted: list[str] = []
 
-    def slow(judge, item, dry_run, rank, timeout=0.0):
+    def slow(judge, item, dry_run, rank, timeout: float = 0.0):
         attempted.append(item["kernel"])
         return "SUBMITTED speedup=1.00x"
 
@@ -199,7 +199,7 @@ def test_the_budget_stops_the_pass_and_names_what_it_cut(promoter, tmp_path, mon
     assert "mid" in out and "alpha" in out
 
 
-def test_a_lone_candidate_gets_the_whole_budget_not_a_fixed_slice(promoter, tmp_path, monkeypatch):
+def test_a_lone_candidate_gets_the_whole_budget_not_a_fixed_slice(promoter, tmp_path, monkeypatch) -> None:
     """The case that lost tsvc_2_s2233 on all four v11w2 fortran arms.
 
     Each had exactly ONE unsubmitted kernel and 1800s of budget, and each cut the grade at a fixed
@@ -208,7 +208,7 @@ def test_a_lone_candidate_gets_the_whole_budget_not_a_fixed_slice(promoter, tmp_
     run_dir = make_run_dir_many(tmp_path, [("tsvc_2_s2233", 3.0)])
     handed: list[float] = []
 
-    def record_timeout(judge, item, dry_run, rank, timeout=0.0):
+    def record_timeout(judge, item, dry_run, rank, timeout: float = 0.0):
         handed.append(timeout)
         return "SUBMITTED speedup=3.00x"
 
@@ -221,7 +221,7 @@ def test_a_lone_candidate_gets_the_whole_budget_not_a_fixed_slice(promoter, tmp_
     assert handed and handed[0] > 900.0, f"a lone candidate must get more than the old fixed slice, got {handed}"
 
 
-def test_one_workers_submission_does_not_suppress_anothers_on_the_same_kernel(promoter, tmp_path):
+def test_one_workers_submission_does_not_suppress_anothers_on_the_same_kernel(promoter, tmp_path) -> None:
     """Two agents handed the same kernel are two EPISODES, so they are two promotable rows.
 
     Promotion used to be keyed by kernel: any submission of `gemm` removed `gemm` from the
@@ -256,7 +256,7 @@ def test_one_workers_submission_does_not_suppress_anothers_on_the_same_kernel(pr
     )
 
 
-def test_sources_may_spell_the_kernel_as_a_full_key(promoter, tmp_path):
+def test_sources_may_spell_the_kernel_as_a_full_key(promoter, tmp_path) -> None:
     """``calls`` holds the short name; ``sources`` holds whatever the agent sent as ``kernel``.
 
     The prompt tells the agent to send the FULL registry key, so on scientific_computing the two
@@ -284,7 +284,7 @@ def test_sources_may_spell_the_kernel_as_a_full_key(promoter, tmp_path):
     assert promoter.short_name("gemm") == "gemm"
 
 
-def test_a_submission_under_either_spelling_suppresses_promotion(promoter, tmp_path):
+def test_a_submission_under_either_spelling_suppresses_promotion(promoter, tmp_path) -> None:
     """A worker that DID submit must not be promoted again just because the spellings differ."""
     rank = tmp_path / "judge" / "rank-0"
     rank.mkdir(parents=True)
@@ -319,7 +319,7 @@ def workspace_run(tmp_path: pathlib.Path, name: str, body: str) -> pathlib.Path:
     return tmp_path
 
 
-def test_workspace_candidate_reads_the_file_the_agent_left(promoter, tmp_path):
+def test_workspace_candidate_reads_the_file_the_agent_left(promoter, tmp_path) -> None:
     run = workspace_run(tmp_path, "argmax_with_index.c", "void argmax(void) {}\n")
     item = promoter.workspace_candidate(run, "llrblind-oss120b-c.n0.p7.w7", "loop_level_reasoning/argmax_with_index")
     assert item["language"] == "c"
@@ -330,7 +330,7 @@ def test_workspace_candidate_reads_the_file_the_agent_left(promoter, tmp_path):
     assert promoter.HARVESTED_TAG != promoter.PROMOTED_TAG
 
 
-def test_workspace_candidate_keys_on_the_problem_index_not_the_worker(promoter, tmp_path):
+def test_workspace_candidate_keys_on_the_problem_index_not_the_worker(promoter, tmp_path) -> None:
     """agent_driver names the folder agent-<problem index>. On an arm running several agents per
     task the worker index differs, and a folder picked by it is another agent's answer."""
     run = workspace_run(tmp_path, "kernel.f90", "subroutine k\nend subroutine\n")
@@ -339,7 +339,7 @@ def test_workspace_candidate_keys_on_the_problem_index_not_the_worker(promoter, 
     assert promoter.workspace_candidate(run, "arm.n0.p3.w7", "track/kernel") is None
 
 
-def test_workspace_candidate_pairs_the_device_unit(promoter, tmp_path):
+def test_workspace_candidate_pairs_the_device_unit(promoter, tmp_path) -> None:
     """A hip delivery is two translation units and the host half alone does not build, so a harvest
     that sent only `source` would be refused for a reason that looks like the agent's fault."""
     run = workspace_run(tmp_path, "stencil.cpp", "// host\n")
@@ -349,12 +349,12 @@ def test_workspace_candidate_pairs_the_device_unit(promoter, tmp_path):
     assert item["device_source"] == "// device\n"
 
 
-def test_workspace_candidate_is_absent_when_the_agent_wrote_nothing(promoter, tmp_path):
+def test_workspace_candidate_is_absent_when_the_agent_wrote_nothing(promoter, tmp_path) -> None:
     (tmp_path / "shared" / "agent-7").mkdir(parents=True)
     assert promoter.workspace_candidate(tmp_path, "arm.n0.p7.w7", "track/kernel") is None
 
 
-def test_harvest_is_off_unless_the_arm_asks(promoter, monkeypatch):
+def test_harvest_is_off_unless_the_arm_asks(promoter, monkeypatch) -> None:
     """Off by default and it must stay that way: every other campaign's promotion path only ever
     offers the judge an answer the agent VERIFIED, and harvesting unverified files by default would
     silently add rows to arms whose numbers are already published."""
@@ -364,7 +364,7 @@ def test_harvest_is_off_unless_the_arm_asks(promoter, monkeypatch):
     assert promoter.harvest_enabled()
 
 
-def test_promote_sends_the_items_own_tag(promoter, monkeypatch):
+def test_promote_sends_the_items_own_tag(promoter, monkeypatch) -> None:
     """The judge is told WHICH recovery this is, because `submissions.optimizer` is the only place
     an analysis can hold a harvest and a submission apart."""
     captured: list = []

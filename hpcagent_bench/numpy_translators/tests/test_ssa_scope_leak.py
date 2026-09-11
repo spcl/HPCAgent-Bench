@@ -20,13 +20,13 @@ from _op_oracle import run_op
 _NATIVE = ("c", "cpp", "fortran")
 
 
-def _assert_ok(res):
+def _assert_ok(res: dict[str, str]) -> None:
     for backend, status in res.items():
         assert status == "ok" or status.startswith("skip"), f"{backend}: {status}"
     assert any(status == "ok" for status in res.values()), f"all skipped (vacuous): {res}"
 
 
-def _run(src, n=4):
+def _run(src: str, n: int = 4) -> dict[str, str]:
     return run_op(
         src,
         "f",
@@ -53,7 +53,7 @@ _REBIND_IN_UNTAKEN_BRANCH = (
 )
 
 
-def test_conditional_shape_rebinding_is_refused_not_miscompiled():
+def test_conditional_shape_rebinding_is_refused_not_miscompiled() -> None:
     # Whichever branch runs is a RUNTIME fact, so no static buffer choice is correct. Refusing is
     # the only sound answer -- silently binding to either one is the bug this pins. The oracle
     # reports an emit-time refusal as a status rather than propagating it, so assert on that.
@@ -62,7 +62,7 @@ def test_conditional_shape_rebinding_is_refused_not_miscompiled():
         assert "conditional control flow" in status, f"{backend}: {status}"
 
 
-def test_unconditional_rebinding_at_top_level_still_versions():
+def test_unconditional_rebinding_at_top_level_still_versions() -> None:
     # The supported case: both extents are live on every path, so each gets its own buffer.
     src = (
         "import numpy as np\n"
@@ -80,7 +80,7 @@ def test_unconditional_rebinding_at_top_level_still_versions():
     _assert_ok(_run(src))
 
 
-def test_same_shape_rebinding_reuses_one_buffer():
+def test_same_shape_rebinding_reuses_one_buffer() -> None:
     # A rebinding to the SAME extent is not a new buffer and must not be renamed at all, inside
     # control flow or out of it.
     src = (
@@ -99,7 +99,7 @@ def test_same_shape_rebinding_reuses_one_buffer():
     _assert_ok(_run(src))
 
 
-def test_sibling_loop_nests_may_reuse_a_name_at_different_shapes():
+def test_sibling_loop_nests_may_reuse_a_name_at_different_shapes() -> None:
     # The shape ICON's velocity_tendencies actually has: two INDEPENDENT temporaries that happen to
     # share the name `t`, each written and fully consumed inside its own nest, at different extents.
     # Nothing reads `t` after either nest, so there is no ambiguity -- refusing this would reject a
@@ -122,7 +122,7 @@ def test_sibling_loop_nests_may_reuse_a_name_at_different_shapes():
     _assert_ok(_run(src))
 
 
-def test_two_shapes_per_loop_iteration_are_not_refused():
+def test_two_shapes_per_loop_iteration_are_not_refused() -> None:
     """daubechies_dwt2d's shape: a name re-bound to a second extent inside a loop body, where the
     re-entry read is preceded by a re-binding at the TOP of the body.
 
@@ -151,7 +151,7 @@ def test_two_shapes_per_loop_iteration_are_not_refused():
     _assert_ok(_run(src))
 
 
-def test_reentry_read_before_any_rebinding_is_still_refused():
+def test_reentry_read_before_any_rebinding_is_still_refused() -> None:
     """The kill is what makes the loop case safe, so a body with NO kill before the read must still
     be refused -- otherwise this change would have traded a false positive for a false negative.
 
@@ -175,7 +175,7 @@ def test_reentry_read_before_any_rebinding_is_still_refused():
         assert "conditional control flow" in status, f"{backend}: {status}"
 
 
-def test_rebinding_confined_to_a_loop_body_does_not_escape():
+def test_rebinding_confined_to_a_loop_body_does_not_escape() -> None:
     # x is re-bound and fully consumed inside the loop body; nothing after the loop reads it, so
     # there is no ambiguity to refuse and the kernel must still translate.
     src = (
@@ -205,16 +205,16 @@ from numpyto_common.lowering import _ssa_rename_reassigned  # noqa: E402
 _SHAPES = {"a": ["n"], "out": ["n"]}
 
 
-def _lower(body):
+def _lower(body: str) -> None:
     _ssa_rename_reassigned(ast.parse("import numpy as np\n" + body), dict(_SHAPES))
 
 
-def _assert_refused(body):
+def _assert_refused(body: str) -> None:
     with pytest.raises(NotImplementedError, match="conditional control flow"):
         _lower(body)
 
 
-def test_rebinding_nested_below_the_loop_body_is_refused():
+def test_rebinding_nested_below_the_loop_body_is_refused() -> None:
     """The guard consulted only the IMMEDIATELY enclosing block, so a rebinding one level deeper
     escaped it -- the same miscompile the guard exists for, just nested. Every enclosing loop's
     re-entry POINT is carried down now and truncated per name at the mint site (the truncation
@@ -230,7 +230,7 @@ def k(a, out, n, m, iters):
 """)
 
 
-def test_the_killing_statement_own_rhs_read_still_counts():
+def test_the_killing_statement_own_rhs_read_still_counts() -> None:
     # `X = np.zeros(n) + X[0]` kills X, but its RHS reads the previous binding FIRST. Truncating
     # the prefix before the whole statement skipped that read.
     _assert_refused("""
@@ -244,7 +244,7 @@ def k(a, out, n, m, T):
 """)
 
 
-def test_augmented_assignment_counts_as_a_read():
+def test_augmented_assignment_counts_as_a_read() -> None:
     # `e += 1.0` reads and writes the SAME buffer, but its bare-Name target carries ctx=Store, so
     # it was neither a kill (correctly) nor a read (wrongly) and liveness answered "dead".
     _assert_refused("""
@@ -257,7 +257,7 @@ def k(a, out, n, m):
 """)
 
 
-def test_a_zero_trip_for_target_is_not_a_kill():
+def test_a_zero_trip_for_target_is_not_a_kill() -> None:
     """`for e in range(k)` with a runtime k == 0 never binds e, so the previous binding survives --
     may-define, not must-define. Treating it as a kill dropped every read before it."""
     _assert_refused("""
@@ -272,7 +272,7 @@ def k(a, out, n, m, iters):
 """)
 
 
-def test_while_test_runs_after_the_body():
+def test_while_test_runs_after_the_body() -> None:
     # A While re-tests its condition after the body, so the test is live-after code too.
     _assert_refused("""
 def k(a, out, n, m):
@@ -284,7 +284,7 @@ def k(a, out, n, m):
 """)
 
 
-def test_starred_and_nested_unpacking_are_recognised_as_kills():
+def test_starred_and_nested_unpacking_are_recognised_as_kills() -> None:
     """A target form the kill scan does not recognise is not symmetric: the prefix is not truncated,
     extra reads are counted, and a WORKING kernel is refused -- the regression class this whole
     guard has already caused once."""

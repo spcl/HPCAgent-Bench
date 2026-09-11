@@ -7,6 +7,7 @@ emitting a reference no compiler accepts."""
 import json
 import pathlib
 import sys
+from typing import Callable
 
 import pytest
 
@@ -14,6 +15,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "hpcagent_b
 
 from numpyto_common.emitter import index_rank_error  # noqa: E402
 from numpyto_common.frontend import parse_kernel  # noqa: E402
+from numpyto_common.ir import KernelIR  # noqa: E402
 from numpyto_common.lowering import lower  # noqa: E402
 from numpyto_c.emit import emit_c  # noqa: E402
 from numpyto_fortran.emit import emit_fortran  # noqa: E402
@@ -22,7 +24,7 @@ from numpyto_fortran.emit import emit_fortran  # noqa: E402
 OVER_RANKED = "import numpy as np\ndef k(t, out):\n    out[0] = t[0, 1][0]\n"
 
 
-def _kir(d: pathlib.Path, body: str):
+def _kir(d: pathlib.Path, body: str) -> KernelIR:
     (d / "k_numpy.py").write_text(body)
     (d / "k.json").write_text(
         json.dumps(
@@ -54,13 +56,15 @@ def _kir(d: pathlib.Path, body: str):
 
 
 @pytest.mark.parametrize("emit", [emit_c, emit_fortran], ids=["c", "fortran"])
-def test_an_over_ranked_index_is_refused_by_every_native_emitter(emit, tmp_path):
+def test_an_over_ranked_index_is_refused_by_every_native_emitter(
+    emit: Callable[..., str], tmp_path: pathlib.Path
+) -> None:
     with pytest.raises(NotImplementedError) as e:
         emit(_kir(tmp_path, OVER_RANKED), fn_name="k")
     assert str(e.value) == index_rank_error("t", ["N", "N"], 3)
 
 
-def test_a_partial_index_stays_legal_where_the_language_expresses_it(tmp_path):
+def test_a_partial_index_stays_legal_where_the_language_expresses_it(tmp_path: pathlib.Path) -> None:
     """Fortran's ``t(:, i+1)`` IS a valid array section, so fewer axes than the rank is not the
     error above -- only the excess is. Guards the rank check against over-refusing."""
     kir = _kir(tmp_path, "import numpy as np\ndef k(t, out):\n    out[:] = t[0]\n")

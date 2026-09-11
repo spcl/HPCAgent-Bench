@@ -21,22 +21,23 @@ import tempfile
 import pytest
 
 from _bench_yaml import REPO, SRC, bench_info_for, kir_for, numpy_py_for
+from numpyto_common.ir import KernelIR
 
 
-def _kir(short):
+def _kir(short: str) -> KernelIR:
     # parse + lower (off the YAML): lowering is what materialises the integer
     # shape symbols (NI, NJ, NK ...) the signature declares, so param_order
     # sees them.
     return kir_for(short, do_lower=True)
 
 
-def _abi_expected(kir):
+def _abi_expected(kir: KernelIR) -> list[str]:
     refs = sorted(a.name for a in kir.arrays)
     scalars = sorted([s.name for s in kir.symbols] + [s.name for s in kir.scalars])
     return refs + scalars
 
 
-def test_gemm_param_order_is_references_then_scalars():
+def test_gemm_param_order_is_references_then_scalars() -> None:
     kir = _kir("gemm")
     order = kir.param_order()
     # references (A, B, C) alpha-sorted come first, then the scalars+symbols
@@ -46,7 +47,7 @@ def test_gemm_param_order_is_references_then_scalars():
     assert order == _abi_expected(kir)
 
 
-def test_references_group_precedes_scalar_group():
+def test_references_group_precedes_scalar_group() -> None:
     kir = _kir("gemm")
     order = kir.param_order()
     array_names = {a.name for a in kir.arrays}
@@ -60,7 +61,7 @@ def test_references_group_precedes_scalar_group():
     assert scals == sorted(scals)
 
 
-def test_signature_and_binding_agree_with_param_order():
+def test_signature_and_binding_agree_with_param_order() -> None:
     # The emitted C signature, the binding JSON, and param_order must all be
     # the same ABI order (else the positional ctypes call is permuted). The
     # bench_info is synthesized from the YAML (the source of truth); the
@@ -88,7 +89,7 @@ def test_signature_and_binding_agree_with_param_order():
     assert [a["name"] for a in binding["args"]] == expected
 
 
-def test_matches_canonical_abi_contract_generator():
+def test_matches_canonical_abi_contract_generator() -> None:
     # Cross-check against the authoritative hpcagent_bench/bindings generator (the
     # abi_contract.md Sec. 4 source), which ships in this repo -- so its absence is a
     # real break, not an environment gate.

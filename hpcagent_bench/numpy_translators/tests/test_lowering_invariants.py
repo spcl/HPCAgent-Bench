@@ -53,26 +53,26 @@ def _fresh_ctx():
     return ctx
 
 
-def test_lower_with_flag_on_does_not_false_trip(monkeypatch):
+def test_lower_with_flag_on_does_not_false_trip(monkeypatch) -> None:
     # The checker must accept every intermediate state of a real lowering.
     monkeypatch.setenv(_INVARIANT_ENV, "1")
     kir = lower(_parsed_kir())
     assert kir.zeros_locals  # np.zeros((6,)) harvested -> proves the pipeline ran
 
 
-def test_clean_context_passes():
+def test_clean_context_passes() -> None:
     # A well-formed post-lowering context trips nothing.
     _assert_lowering_invariants("some-phase", _fresh_ctx())
 
 
-def test_tree_drift_is_caught():
+def test_tree_drift_is_caught() -> None:
     ctx = _fresh_ctx()
     ctx.tree = ast.parse("x = 1")  # no longer aliases ctx.kir.tree
     with pytest.raises(AssertionError, match=r"drift-phase.*no longer aliases"):
         _assert_lowering_invariants("drift-phase", ctx)
 
 
-def test_non_functiondef_tree_is_caught():
+def test_non_functiondef_tree_is_caught() -> None:
     ctx = _fresh_ctx()
     ctx.kir.tree = ast.parse("x = 1")  # a Module, not a FunctionDef
     ctx.tree = ctx.kir.tree  # keep aliasing so the FunctionDef check is what fires
@@ -80,14 +80,14 @@ def test_non_functiondef_tree_is_caught():
         _assert_lowering_invariants("bad-tree-phase", ctx)
 
 
-def test_wrong_side_table_container_is_caught():
+def test_wrong_side_table_container_is_caught() -> None:
     ctx = _fresh_ctx()
     ctx.kir.local_dtypes = []  # declared a dict; a list is a corruption
     with pytest.raises(AssertionError, match=r"container-phase.*kir.local_dtypes.*expected dict"):
         _assert_lowering_invariants("container-phase", ctx)
 
 
-def test_malformed_ast_is_caught():
+def test_malformed_ast_is_caught() -> None:
     ctx = _fresh_ctx()
     # A fresh FunctionDef whose one statement is an Assign with no value -- valid
     # container types, aliasing holds, but it cannot unparse.

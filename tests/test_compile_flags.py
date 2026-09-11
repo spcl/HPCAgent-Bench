@@ -43,7 +43,7 @@ _FORTRAN_CASES = [
 
 
 @pytest.mark.parametrize("name,exe,baseline,ext,src", _CC_CASES, ids=[c[0] for c in _CC_CASES])
-def test_cpu_baseline_compiles_and_runs(name, exe, baseline, ext, src):
+def test_cpu_baseline_compiles_and_runs(name, exe, baseline, ext, src) -> None:
     if shutil.which(exe) is None:
         pytest.skip(f"{exe} not installed")
     with tempfile.TemporaryDirectory() as d:
@@ -59,7 +59,7 @@ def test_cpu_baseline_compiles_and_runs(name, exe, baseline, ext, src):
 
 
 @pytest.mark.parametrize("name,baseline", _FORTRAN_CASES, ids=[c[0] for c in _FORTRAN_CASES])
-def test_fortran_baseline_compiles_and_runs(name, baseline):
+def test_fortran_baseline_compiles_and_runs(name, baseline) -> None:
     exe = languages.resolve_compiler(name)
     if exe is None:
         pytest.skip(f"{name} not installed")
@@ -84,7 +84,7 @@ def _compiler_blocks():
     return _load_compilers()
 
 
-def test_every_compilers_yaml_ref_resolves():
+def test_every_compilers_yaml_ref_resolves() -> None:
     """A baseline_ref / autopar_ref naming a nonexistent constant is dead config."""
     flag_vars = vars(flags)
     bad = []
@@ -96,7 +96,7 @@ def test_every_compilers_yaml_ref_resolves():
     assert not bad, f"compilers.yaml names constants that do not exist in hpcagent_bench.flags: {bad}"
 
 
-def test_every_shared_library_block_compiles_position_independent():
+def test_every_shared_library_block_compiles_position_independent() -> None:
     """Position-independent code is enforced globally, not remembered per block.
 
     Every non-MPI block links ``-shared`` and the judge ``dlopen``s the result, so an object built
@@ -131,7 +131,7 @@ def test_every_shared_library_block_compiles_position_independent():
     )
 
 
-def test_flang_uses_the_flang_baseline_not_the_clang_one():
+def test_flang_uses_the_flang_baseline_not_the_clang_one() -> None:
     """flang must not inherit the C/C++ clang baseline; pinned by name since the toolchain may be absent."""
     block = _compiler_blocks()["flang"]
     assert block["baseline_ref"] == "FLANG_BASELINE", (
@@ -139,7 +139,7 @@ def test_flang_uses_the_flang_baseline_not_the_clang_one():
     )
 
 
-def test_every_native_flavor_is_wired_end_to_end():
+def test_every_native_flavor_is_wired_end_to_end() -> None:
     """A flavor built through the C-ABI path must be registered in every table that path reads.
 
     Both bases, not just ``native``: ``pluto`` subclasses NativeFramework and its flavors compile,
@@ -160,7 +160,7 @@ def test_every_native_flavor_is_wired_end_to_end():
     )
 
 
-def test_a_cpp_flavor_names_its_compiler_explicitly():
+def test_a_cpp_flavor_names_its_compiler_explicitly() -> None:
     """Any cpp flavor absent from FRAMEWORK_COMPILER silently gets the g++ default."""
     from hpcagent_bench.benchmarks.cpp_runtime import FRAMEWORK_COMPILER, FRAMEWORK_LANG
     from hpcagent_bench.frameworks.framework import FRAMEWORK_META
@@ -176,7 +176,7 @@ def test_a_cpp_flavor_names_its_compiler_explicitly():
     )
 
 
-def test_gcc_autopar_carries_graphite_and_gcc_accepts_it():
+def test_gcc_autopar_carries_graphite_and_gcc_accepts_it() -> None:
     """GCC_AUTOPAR pairs -ftree-parallelize-loops with Graphite; asserts gcc accepts the composed line."""
     if shutil.which("gcc") is None:
         pytest.fail("gcc is required for the native cc/cc_autopar flavors")
@@ -196,7 +196,7 @@ def test_gcc_autopar_carries_graphite_and_gcc_accepts_it():
         assert proc.returncode == 0, f"gcc rejected the Graphite autopar line:\n$ {' '.join(cmd)}\n{proc.stderr}"
 
 
-def test_gcc_autopar_bakes_the_resolved_core_count():
+def test_gcc_autopar_bakes_the_resolved_core_count() -> None:
     """-ftree-parallelize-loops={n} must be substituted before it reaches gcc, or it would be rejected."""
     autopar = flags.GCC_AUTOPAR.format(n=flags.ncores())
     assert "{n}" not in autopar
@@ -219,7 +219,7 @@ def fake_path(tmp_path, monkeypatch):
     languages.resolve_compiler.cache_clear()
 
 
-def test_a_driver_below_its_floor_is_not_resolved(fake_path):
+def test_a_driver_below_its_floor_is_not_resolved(fake_path) -> None:
     """A too-old driver must MISS, not be handed a flag its release cannot parse.
 
     Each floor in COMPILER_MIN_MAJOR is a flag the block pins: gcc 14 for -std=c23 (gcc-13 answers
@@ -236,21 +236,21 @@ def test_a_driver_below_its_floor_is_not_resolved(fake_path):
         )
 
 
-def test_resolve_compiler_prefers_the_highest_version_numerically(fake_path):
+def test_resolve_compiler_prefers_the_highest_version_numerically(fake_path) -> None:
     """A lexical sort picks ``zzc-9`` and silently pins the suite to an ancient toolchain."""
     for name in ("zzc-9", "zzc-14", "zzc-21"):
         make_fake_driver(fake_path, name)
     assert languages.resolve_compiler("zzc") == str(fake_path / "zzc-21")
 
 
-def test_resolve_compiler_prefers_the_unversioned_driver(fake_path):
+def test_resolve_compiler_prefers_the_unversioned_driver(fake_path) -> None:
     """The unversioned driver is the distro's chosen default; a higher sibling must not win."""
     make_fake_driver(fake_path, "zzc")
     make_fake_driver(fake_path, "zzc-21")
     assert languages.resolve_compiler("zzc") == str(fake_path / "zzc")
 
 
-def test_resolve_compiler_follows_the_flang_rename(fake_path):
+def test_resolve_compiler_follows_the_flang_rename(fake_path) -> None:
     """LLVM renamed ``flang-new`` to ``flang``; either spelling must find what is installed.
 
     The 22 is load-bearing: flang carries a COMPILER_MIN_MAJOR of 20 (the release that
@@ -261,7 +261,7 @@ def test_resolve_compiler_follows_the_flang_rename(fake_path):
     assert languages.resolve_compiler("flang") == str(fake_path / "flang-new-22")
 
 
-def test_resolve_compiler_reports_a_genuinely_absent_driver(fake_path):
+def test_resolve_compiler_reports_a_genuinely_absent_driver(fake_path) -> None:
     """None, not a guess -- a fabricated path turns a clean skip into a confusing exec failure."""
     assert languages.resolve_compiler("zzc") is None
 
@@ -289,7 +289,7 @@ _CPP_STD = "-std=c++20"
 _VENDOR_CAPPED = {"nvc": "-c23"}
 
 
-def test_every_c_family_block_pins_a_language_standard():
+def test_every_c_family_block_pins_a_language_standard() -> None:
     """A C or C++ block with no ``-std=`` inherits the driver's default, which is not the policy.
 
     Measured: hipcc defaults to ``__cplusplus 201703L`` -- C++17 -- while every other C++ block
@@ -307,7 +307,7 @@ def test_every_c_family_block_pins_a_language_standard():
     assert not missing, f"C-family blocks pinning no language standard: {sorted(missing)}"
 
 
-def test_the_cpp_standard_is_the_same_everywhere_it_is_not_vendor_capped():
+def test_the_cpp_standard_is_the_same_everywhere_it_is_not_vendor_capped() -> None:
     """Every C++ target -- host, CUDA and HIP -- pins the SAME standard.
 
     It used to be c++23 on the host and c++20 on the device, which made `lang-cpp` describe a

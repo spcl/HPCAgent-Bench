@@ -44,14 +44,14 @@ def parse(src: str) -> ast.FunctionDef:
     return next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef))
 
 
-def test_a_docstring_does_not_stop_the_fold():
+def test_a_docstring_does_not_stop_the_fold() -> None:
     """The docstring is an ``Expr`` and it is the FIRST statement, so a fold that stopped at the
     first non-assignment folded nothing at all and every helper below looked unfoldable."""
     folded = _folded_straight_line(parse(TAP_SPAN).body)
     assert [type(s).__name__ for s in folded] == ["If", "If", "Return"]
 
 
-def test_locals_interleaved_with_guards_are_all_folded():
+def test_locals_interleaved_with_guards_are_all_folded() -> None:
     """``_tap_span`` bails, computes ``iz_hi``, bails again, then computes the bounds it returns.
     Folding only a LEADING run leaves the later locals bound to nothing the expression can see."""
     expr = _return_expression(_folded_straight_line(parse(TAP_SPAN).body))
@@ -60,21 +60,21 @@ def test_locals_interleaved_with_guards_are_all_folded():
     assert all(isinstance(leaf, ast.Tuple) for leaf in _tuple_leaves(expr))
 
 
-def test_a_rebound_local_declines():
+def test_a_rebound_local_declines() -> None:
     """One substitution cannot stand for two values, so a name bound twice refuses outright rather
     than folding whichever binding it saw last."""
     rebound = "def f(a):\n    t = a + 1\n    t = t * 2\n    return t, t\n"
     assert _folded_straight_line(parse(rebound).body) is None
 
 
-def test_a_guard_that_rebinds_a_folded_local_declines():
+def test_a_guard_that_rebinds_a_folded_local_declines() -> None:
     """A local reassigned inside a branch is live differently on each path; substituting its first
     value into the reads after the branch would silently compute the wrong bound."""
     rebinding_guard = "def f(a, c):\n    t = a + 1\n    if c:\n        t = 0\n    return t, t\n"
     assert _folded_straight_line(parse(rebinding_guard).body) is None
 
 
-def test_a_statement_the_fold_cannot_express_declines():
+def test_a_statement_the_fold_cannot_express_declines() -> None:
     """Only assignments, guards and returns. A loop has no single-expression form, and guessing one
     would splice a body that does not run."""
     looping = "def f(a, n):\n    t = a\n    for i in range(n):\n        t = t + i\n    return t, t\n"
@@ -82,7 +82,7 @@ def test_a_statement_the_fold_cannot_express_declines():
 
 
 @pytest.mark.parametrize("stride", [1, 2, 3])
-def test_the_folded_expression_computes_what_the_helper_computes(stride):
+def test_the_folded_expression_computes_what_the_helper_computes(stride) -> None:
     """The whole point. Every path through ``_tap_span`` -- both bail-outs and the live one -- over
     the parameter space a transposed convolution actually reaches. A fold that is merely shorter,
     or that gets one bound off by one, emits a plausible kernel that quietly writes the wrong

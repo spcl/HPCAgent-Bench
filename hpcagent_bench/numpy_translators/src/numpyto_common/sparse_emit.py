@@ -72,16 +72,16 @@ def _store(s: str) -> ast.Name:
     return ast.Name(id=s, ctx=ast.Store())
 
 
-def _const(v) -> ast.Constant:
+def _const(v: int | float) -> ast.Constant:
     return ast.Constant(value=v)
 
 
-def _range_call(start, stop) -> ast.Call:
+def _range_call(start: Optional[ast.expr], stop: ast.expr) -> ast.Call:
     args = [start, stop] if start is not None else [stop]
     return ast.Call(func=_name("range"), args=args, keywords=[])
 
 
-def _subscript(base: str, *axes: ast.expr, ctx=None) -> ast.Subscript:
+def _subscript(base: str, *axes: ast.expr, ctx: Optional[ast.expr_context] = None) -> ast.Subscript:
     if not axes:
         raise ValueError(f"_subscript: empty axes for {base}")
     sl = axes[0] if len(axes) == 1 else ast.Tuple(elts=list(axes), ctx=ast.Load())

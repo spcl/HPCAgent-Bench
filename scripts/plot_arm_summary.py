@@ -27,6 +27,8 @@ from __future__ import annotations
 import argparse
 import pathlib
 
+import matplotlib.axes
+import matplotlib.figure
 import matplotlib.patches
 import numpy as np
 import pandas as pd
@@ -108,7 +110,7 @@ def condition_of(arm: str) -> str:
     return ""
 
 
-def condition_order(frame) -> list[str]:
+def condition_order(frame: pd.DataFrame) -> list[str]:
     """The conditions present, in the fixed vocabulary order -- never in the order pandas found."""
     present = set(frame.condition)
     return [key for _, key in CONDITIONS if key in present]
@@ -130,7 +132,7 @@ def language_order(frame: pd.DataFrame) -> list[str]:
     return head + sorted(present - set(head))
 
 
-def draw_metric(ax, frame: pd.DataFrame, column: str, label: str, log: bool) -> None:
+def draw_metric(ax: matplotlib.axes.Axes, frame: pd.DataFrame, column: str, label: str, log: bool) -> None:
     """One x slot per LANGUAGE; the models scattered WITHIN it; the two conditions joined.
 
     The language is the category and the model is a series inside it, which is the way round the
@@ -260,7 +262,7 @@ def handles_for(frame: pd.DataFrame) -> list:
     return marks + entries
 
 
-def write(fig, out: pathlib.Path) -> pathlib.Path:
+def write(fig: matplotlib.figure.Figure, out: pathlib.Path) -> pathlib.Path:
     """Save at EXACTLY the figure size.
 
     ``bbox_inches="standard"``, not ``None``: None means "use the rcParam", and this repo sets

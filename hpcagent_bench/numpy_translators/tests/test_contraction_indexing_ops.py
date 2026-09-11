@@ -7,6 +7,7 @@ covered by ``test_contraction_indexing_ops_e2e`` via the standalone oracle.
 """
 
 import ast
+import types
 
 import pytest
 
@@ -37,11 +38,11 @@ from numpyto_common.lib_nodes import (
 from numpyto_common.lowering import _EllipsisExpander, _FullCallHoister, _MatmulCallRewriter, _ReshapeMethodRewriter
 
 
-def _name(n):
+def _name(n: str) -> ast.Name:
     return ast.Name(id=n, ctx=ast.Load())
 
 
-def _unparse(stmts):
+def _unparse(stmts: list[ast.stmt]) -> str:
     mod = ast.fix_missing_locations(ast.Module(body=list(stmts), type_ignores=[]))
     return ast.unparse(mod)
 
@@ -51,7 +52,7 @@ def _unparse(stmts):
 # --------------------------------------------------------------------------- #
 
 
-def test_matmul_call_normalized_to_binop():
+def test_matmul_call_normalized_to_binop() -> None:
     tree = ast.parse("c = np.matmul(a, b)")
     _MatmulCallRewriter().visit(tree)
     rhs = tree.body[0].value
@@ -59,7 +60,7 @@ def test_matmul_call_normalized_to_binop():
     assert rhs.left.id == "a" and rhs.right.id == "b"
 
 
-def test_matmul_call_three_args_left_alone():
+def test_matmul_call_three_args_left_alone() -> None:
     # ``np.matmul(a, b, out)`` (out= kwarg form) is not the 2-arg shape we map.
     tree = ast.parse("c = np.matmul(a, b, out)")
     _MatmulCallRewriter().visit(tree)
@@ -71,16 +72,16 @@ def test_matmul_call_three_args_left_alone():
 # --------------------------------------------------------------------------- #
 
 
-def test_matmul_result_shape_both_batched():
+def test_matmul_result_shape_both_batched() -> None:
     assert _matmul_result_shape(("B", "M", "K"), ("B", "K", "N")) == ("B", "M", "N")
 
 
-def test_matmul_result_shape_one_sided_batched():
+def test_matmul_result_shape_one_sided_batched() -> None:
     assert _matmul_result_shape(("B", "M", "K"), ("K", "N")) == ("B", "M", "N")
     assert _matmul_result_shape(("M", "K"), ("B", "K", "N")) == ("B", "M", "N")
 
 
-def test_matmul_result_shape_batch_mismatch_is_none():
+def test_matmul_result_shape_batch_mismatch_is_none() -> None:
     # Different leading batch dims do not contract.
     assert _matmul_result_shape(("B", "M", "K"), ("C", "K", "N")) is None
 
@@ -90,12 +91,12 @@ def test_matmul_result_shape_batch_mismatch_is_none():
 # --------------------------------------------------------------------------- #
 
 
-def test_dims_agree_needs_no_aliases_when_spelled_alike():
+def test_dims_agree_needs_no_aliases_when_spelled_alike() -> None:
     assert dims_agree("N", "N")
     assert not dims_agree("N", "M")
 
 
-def test_dims_agree_through_a_dimension_alias():
+def test_dims_agree_through_a_dimension_alias() -> None:
     # ``batch, channels, h, w = x.shape`` binds locals the init.shapes side spells with symbols.
     aliases = {"batch": "batch_size", "channels": "embed_dim"}
     assert dims_agree("channels", "embed_dim", aliases)
@@ -103,14 +104,14 @@ def test_dims_agree_through_a_dimension_alias():
     assert not dims_agree("channels", "batch_size", aliases)
 
 
-def test_dims_agree_symbolically_when_substitution_leaves_arithmetic():
+def test_dims_agree_symbolically_when_substitution_leaves_arithmetic() -> None:
     # swin's patch-merge doubles a stage's channels: the two sides stay textually different
     # after substitution, and only the symbolic rung settles them.
     assert dims_agree("4 * c", "16 * embed_dim", {"c": "4 * embed_dim"})
     assert not dims_agree("4 * c", "15 * embed_dim", {"c": "4 * embed_dim"})
 
 
-def test_dims_agree_resolves_a_shape_read_against_the_table():
+def test_dims_agree_resolves_a_shape_read_against_the_table() -> None:
     # An inlined helper spells its dims as a read off a LOCAL array, which no alias resolves.
     aliases = {"__inl91_c": "__inl8_y.shape[3]"}
     table = {"__inl8_y": ("b", "h", "w", "embed_dim")}
@@ -118,18 +119,18 @@ def test_dims_agree_resolves_a_shape_read_against_the_table():
     assert not dims_agree("__inl91_c", "h", aliases, table)
 
 
-def _no_simplify(monkeypatch):
+def _no_simplify(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make ``sympy.simplify`` fatal, so a test can pin which rung settled a pair."""
     import sympy
 
-    def explode(*_args, **_kwargs):
+    def explode(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("sympy.simplify was reached")
 
     monkeypatch.setattr(sympy, "simplify", explode)
     shape_exprs_equal.cache_clear()
 
 
-def test_a_polynomial_difference_never_reaches_simplify(monkeypatch):
+def test_a_polynomial_difference_never_reaches_simplify(monkeypatch: pytest.MonkeyPatch) -> None:
     # An expanded polynomial is canonical, so a non-zero expansion is already the answer. simplify
     # was measured at 785 ms on one of these pairs.
     _no_simplify(monkeypatch)
@@ -137,21 +138,21 @@ def test_a_polynomial_difference_never_reaches_simplify(monkeypatch):
     assert not dims_agree("4 * c", "15 * embed_dim", {"c": "4 * embed_dim"})
 
 
-def test_a_conv_extent_is_refuted_numerically_not_symbolically(monkeypatch):
+def test_a_conv_extent_is_refuted_numerically_not_symbolically(monkeypatch: pytest.MonkeyPatch) -> None:
     # The dominant shape in the ML track: a floor makes the difference non-polynomial, so only the
     # numeric point settles it short of simplify.
     _no_simplify(monkeypatch)
     assert not dims_agree("n * ((h - 2) // 1 + 1) * ((w - 2) // 1 + 1)", "n * oh * ow", {"zz": "1"})
 
 
-def test_the_numeric_probe_refutes_a_pair_that_agrees_at_the_first_point():
+def test_the_numeric_probe_refutes_a_pair_that_agrees_at_the_first_point() -> None:
     # ``2 * a`` and ``a + 7`` both give 14 at a = 7, which is why one point is not enough.
     import sympy
 
     assert shape_exprs_differ_numerically(sympy.sympify("2 * a"), sympy.sympify("a + 7"))
 
 
-def test_the_numeric_probe_never_refutes_an_equal_pair():
+def test_the_numeric_probe_never_refutes_an_equal_pair() -> None:
     # The refutation may only ever answer False faster -- never claim a difference that is not there.
     import sympy
 
@@ -160,7 +161,7 @@ def test_the_numeric_probe_never_refutes_an_equal_pair():
     assert not shape_exprs_differ_numerically(sympy.sympify("2 * (c // g)"), sympy.sympify("(c // g) + (c // g)"))
 
 
-def test_the_symbolic_rung_is_asked_about_each_pair_once():
+def test_the_symbolic_rung_is_asked_about_each_pair_once() -> None:
     # The symbolic compare is 61% of a densenet lowering uncached, and reshape_axis_groups asks
     # about the same pair once per axis of every reshape.
     shape_exprs_equal.cache_clear()
@@ -172,7 +173,7 @@ def test_the_symbolic_rung_is_asked_about_each_pair_once():
     assert (info.misses, info.hits) == (1, 2)
 
 
-def test_the_symbolic_key_does_not_depend_on_argument_order():
+def test_the_symbolic_key_does_not_depend_on_argument_order() -> None:
     # A zero difference is symmetric, so the mirrored pair must not take a second entry.
     shape_exprs_equal.cache_clear()
     aliases = {"c": "4 * embed_dim"}
@@ -182,22 +183,22 @@ def test_the_symbolic_key_does_not_depend_on_argument_order():
     assert (info.misses, info.hits) == (1, 1)
 
 
-def test_sympify_shape_declines_a_token_that_does_not_parse():
+def test_sympify_shape_declines_a_token_that_does_not_parse() -> None:
     # None is what makes dims_agree answer False instead of raising out of the expander.
     assert sympify_shape("a b c") is None
     assert str(sympify_shape("4 * embed_dim")) == "4*embed_dim"
 
 
-def test_dims_agree_is_false_on_an_unparseable_token():
+def test_dims_agree_is_false_on_an_unparseable_token() -> None:
     # Unresolvable must decline, never claim agreement: a wrong True contracts over two extents.
     assert not dims_agree("a b c", "embed_dim", {"zz": "1"})
 
 
-def test_substitute_dim_aliases_stops_on_a_self_referential_def():
+def test_substitute_dim_aliases_stops_on_a_self_referential_def() -> None:
     assert substitute_dim_aliases("n", {"n": "n + 1"}) == "(n + 1)"
 
 
-def test_matmul_result_shape_accepts_an_aliased_contraction_dim():
+def test_matmul_result_shape_accepts_an_aliased_contraction_dim() -> None:
     aliases = {"channels": "embed_dim"}
     assert _matmul_result_shape(("seq", "batch", "channels"), ("embed_dim", "3 * embed_dim")) is None
     assert _matmul_result_shape(("seq", "batch", "channels"), ("embed_dim", "3 * embed_dim"), aliases) == (
@@ -207,7 +208,7 @@ def test_matmul_result_shape_accepts_an_aliased_contraction_dim():
     )
 
 
-def test_matmul_result_shape_aliased_batch_dim_still_checks_rank():
+def test_matmul_result_shape_aliased_batch_dim_still_checks_rank() -> None:
     # An alias must not let a rank-3 operand contract with a rank-4 one.
     aliases = {"batch": "batch_size"}
     assert _matmul_result_shape(("batch", "M", "K"), ("batch_size", "H", "K", "N"), aliases) is None
@@ -218,16 +219,16 @@ def test_matmul_result_shape_aliased_batch_dim_still_checks_rank():
 # --------------------------------------------------------------------------- #
 
 
-def test_parse_einsum_explicit():
+def test_parse_einsum_explicit() -> None:
     assert _parse_einsum_subscripts("ij,jk->ik") == (["ij", "jk"], "ik")
 
 
-def test_parse_einsum_implicit_output():
+def test_parse_einsum_implicit_output() -> None:
     # numpy implicit output = singly-occurring indices, alphabetical.
     assert _parse_einsum_subscripts("ij,jk") == (["ij", "jk"], "ik")
 
 
-def test_parse_einsum_ellipsis_unsupported():
+def test_parse_einsum_ellipsis_unsupported() -> None:
     with pytest.raises(NotImplementedError):
         _parse_einsum_subscripts("...ij->...i")
 
@@ -241,13 +242,13 @@ from types import SimpleNamespace  # noqa: E402
 from numpyto_common.numpy_desugar import desugar_for_python_backend  # noqa: E402
 
 
-def _kir(kernel_name, **arrays):
+def _kir(kernel_name: str, **arrays: tuple[str, ...]) -> SimpleNamespace:
     """Minimal KernelIR stand-in: name + (name -> shape-tuple) arrays."""
     arrs = [SimpleNamespace(name=n, shape=s) for n, s in arrays.items()]
     return SimpleNamespace(kernel_name=kernel_name, arrays=arrs)
 
 
-def test_batched_matmul_desugars_to_gemm_loop():
+def test_batched_matmul_desugars_to_gemm_loop() -> None:
     # The canonical SeisSol batched GEMM: 3-D ``I`` @ shared 2-D ``star``.
     src = "def kernel(Q, I, star):\n    Q[:] = Q + I @ star\n"
     kir = _kir("kernel", Q=("b", "n", "q"), I=("b", "n", "q"), star=("q", "q"))
@@ -264,14 +265,14 @@ def test_batched_matmul_desugars_to_gemm_loop():
     assert "star[__bm0]" not in body_src and "star" in body_src
 
 
-def test_2d_matmul_left_verbatim():
+def test_2d_matmul_left_verbatim() -> None:
     # An ordinary 2-D GEMM is supported by numba/pythran -> emit unchanged.
     src = "def kernel(C, A, B):\n    C[:] = A @ B\n"
     kir = _kir("kernel", C=("m", "n"), A=("m", "k"), B=("k", "n"))
     assert desugar_for_python_backend(src, kir) == src
 
 
-def test_reshape_wrapped_matmul_lowers_to_contraction():
+def test_reshape_wrapped_matmul_lowers_to_contraction() -> None:
     # doitgen: ``np.reshape(np.reshape(A, (NR, NQ, 1, NP)) @ C4, (NR, NQ, NP))``.
     # The batched-matmul pass still refuses reshape-wrapped operands (indexing the
     # leading axis would miscompile), but the dedicated reshape-matmul pass
@@ -283,13 +284,13 @@ def test_reshape_wrapped_matmul_lowers_to_contraction():
     assert "@" not in out and "reshape" not in out and "for " in out
 
 
-def test_no_matmul_returned_bytewise_unchanged():
+def test_no_matmul_returned_bytewise_unchanged() -> None:
     # No trigger token at all -> byte-for-byte identity (no reparse churn).
     src = "def kernel(a, b):\n    a[:] = a + b  # comment kept\n"
     assert desugar_for_python_backend(src, _kir("kernel", a=("n",), b=("n",))) is src
 
 
-def test_np_pad_edge_inlined_to_loop_nest():
+def test_np_pad_edge_inlined_to_loop_nest() -> None:
     # numba / pythran cannot type np.pad -> inline an edge-pad copy loop nest.
     src = (
         "def kernel(in_grid, out_grid, N, R):\n"
@@ -303,7 +304,7 @@ def test_np_pad_edge_inlined_to_loop_nest():
     assert "min(max(" in out  # edge clamp
 
 
-def test_np_pad_per_axis_tuple_widths():
+def test_np_pad_per_axis_tuple_widths() -> None:
     # vector stencils use per-axis ((R,R),...,(0,0)) widths -> last axis unpadded.
     src = (
         "def kernel(in_grid, out_grid, N, R):\n"
@@ -314,7 +315,7 @@ def test_np_pad_per_axis_tuple_widths():
     assert "np.pad" not in out and out.count("for ") >= 4  # rank-4 nest
 
 
-def test_einsum_inlined_to_contraction_loops():
+def test_einsum_inlined_to_contraction_loops() -> None:
     # The SeisSol tensor contraction: 3-operand einsum nested in an add.
     src = "def kernel(Q, I, kDivM, star):\n    Q[:] = Q + np.einsum('dkl,blq,dqp->bkp', kDivM, I, star)\n"
     kir = _kir("kernel", Q=("b", "k", "p"), I=("b", "l", "q"), kDivM=("d", "k", "l"), star=("d", "q", "p"))
@@ -324,7 +325,7 @@ def test_einsum_inlined_to_contraction_loops():
     assert "Q[:] = Q + __es0" in out  # einsum hoisted to a temp, add preserved
 
 
-def test_einsum_matmul_has_output_loops_and_summed_inner():
+def test_einsum_matmul_has_output_loops_and_summed_inner() -> None:
     st = {"a": ("M", "K"), "b": ("K", "N")}
     out = _unparse(expand_einsum(_name("out"), [ast.Constant("ij,jk->ik"), _name("a"), _name("b")], st))
     # i, k are output loops; j is the summed accumulation loop.
@@ -335,20 +336,20 @@ def test_einsum_matmul_has_output_loops_and_summed_inner():
     assert "out[__es_i, __es_k] +=" in out
 
 
-def test_einsum_trace_is_scalar_accumulation():
+def test_einsum_trace_is_scalar_accumulation() -> None:
     st = {"a": ("M", "M")}
     out = _unparse(expand_einsum(_name("s"), [ast.Constant("ii->"), _name("a")], st))
     # No output letters -> scalar target, single summed loop over the diagonal.
     assert "s = 0.0" in out and "s += a[__es_i, __es_i]" in out
 
 
-def test_einsum_transpose_no_summation():
+def test_einsum_transpose_no_summation() -> None:
     st = {"a": ("M", "N")}
     out = _unparse(expand_einsum(_name("out"), [ast.Constant("ij->ji"), _name("a")], st))
     assert "out[__es_j, __es_i] = a[__es_i, __es_j]" in out
 
 
-def test_einsum_seissol_three_operand():
+def test_einsum_seissol_three_operand() -> None:
     st = {"g": ("D", "KK", "L"), "h": ("NB", "L", "Q"), "c": ("D", "Q", "P")}
     out = _unparse(
         expand_einsum(_name("out"), [ast.Constant("dkl,blq,dqp->bkp"), _name("g"), _name("h"), _name("c")], st)
@@ -364,7 +365,7 @@ def test_einsum_seissol_three_operand():
 # --------------------------------------------------------------------------- #
 
 
-def test_tensordot_axes1_is_matmul_contraction():
+def test_tensordot_axes1_is_matmul_contraction() -> None:
     st = {"a": ("M", "K"), "b": ("K", "N")}
     out = _unparse(
         expand_tensordot(
@@ -374,20 +375,20 @@ def test_tensordot_axes1_is_matmul_contraction():
     assert "out[__es_a, __es_c] +=" in out  # contracts the shared K axis
 
 
-def test_inner_rank1_is_dot():
+def test_inner_rank1_is_dot() -> None:
     st = {"u": ("K",), "v": ("K",)}
     out = _unparse(expand_inner(_name("s"), [_name("u"), _name("v")], st))
     assert "s = 0.0" in out and "s += u[__r0] * v[__r0]" in out
 
 
-def test_vdot_real_no_conjugate():
+def test_vdot_real_no_conjugate() -> None:
     # Real operands: no conj() call (CONJG/__npb_conj is invalid on a real scalar).
     st = {"u": ("K",), "v": ("K",)}
     out = _unparse(expand_vdot(_name("s"), [_name("u"), _name("v")], st, local_dtypes={}))
     assert "conj" not in out and "s += u[__vd] * v[__vd]" in out
 
 
-def test_vdot_complex_conjugates_first_operand():
+def test_vdot_complex_conjugates_first_operand() -> None:
     st = {"u": ("K",), "v": ("K",)}
     out = _unparse(expand_vdot(_name("s"), [_name("u"), _name("v")], st, local_dtypes={"u": "complex128"}))
     assert "np.conj(u[__vd])" in out
@@ -398,12 +399,12 @@ def test_vdot_complex_conjugates_first_operand():
 # --------------------------------------------------------------------------- #
 
 
-def test_trace_sums_diagonal():
+def test_trace_sums_diagonal() -> None:
     out = _unparse(expand_trace(_name("s"), [_name("a")], {"a": ("M", "M")}))
     assert "s = 0.0" in out and "s += a[__tr, __tr]" in out
 
 
-def test_diagonal_copies_diagonal():
+def test_diagonal_copies_diagonal() -> None:
     out = _unparse(expand_diagonal(_name("out"), [_name("a")], {"a": ("M", "M")}))
     assert "out[__dg] = a[__dg, __dg]" in out
 
@@ -413,19 +414,19 @@ def test_diagonal_copies_diagonal():
 # --------------------------------------------------------------------------- #
 
 
-def test_cumsum_1d_prefix_recurrence():
+def test_cumsum_1d_prefix_recurrence() -> None:
     out = _unparse(expand_cumsum(_name("out"), [_name("a")], {"a": ("N",)}))
     assert "out[0] = a[0]" in out
     assert "out[__cs0] = out[__cs0 - 1] + a[__cs0]" in out
     assert "range(1, N)" in out
 
 
-def test_cumprod_uses_mult():
+def test_cumprod_uses_mult() -> None:
     out = _unparse(expand_cumprod(_name("out"), [_name("a")], {"a": ("N",)}))
     assert "out[__cs0] = out[__cs0 - 1] * a[__cs0]" in out
 
 
-def test_cumsum_axis1_scans_inner_axis():
+def test_cumsum_axis1_scans_inner_axis() -> None:
     out = _unparse(
         expand_cumsum(
             _name("out"), [_name("a")], {"a": ("M", "N")}, kwargs=[ast.keyword(arg="axis", value=ast.Constant(1))]
@@ -441,7 +442,7 @@ def test_cumsum_axis1_scans_inner_axis():
 # --------------------------------------------------------------------------- #
 
 
-def test_median_sorts_and_picks_middle():
+def test_median_sorts_and_picks_middle() -> None:
     allocs = {}
     out = _unparse(expand_median(_name("s"), [_name("a")], {"a": ("N",)}, fresh_local_allocs=allocs))
     assert "__md_buf" in allocs  # scratch buffer registered
@@ -455,7 +456,7 @@ def test_median_sorts_and_picks_middle():
 # --------------------------------------------------------------------------- #
 
 
-def test_roll_uses_modular_source_index():
+def test_roll_uses_modular_source_index() -> None:
     out = _unparse(expand_roll(_name("out"), [_name("a"), ast.Constant(3)], {"a": ("N",)}))
     # ((i - shift) % N + N) % N keeps the source index non-negative.
     assert "out[__rl0] = a[((__rl0 - 3) % N + N) % N]" in out
@@ -466,7 +467,7 @@ def test_roll_uses_modular_source_index():
 # --------------------------------------------------------------------------- #
 
 
-def test_reshape_method_varargs_to_func():
+def test_reshape_method_varargs_to_func() -> None:
     tree = ast.parse("y = a.reshape(3, 4)")
     _ReshapeMethodRewriter().visit(tree)
     call = tree.body[0].value
@@ -475,14 +476,14 @@ def test_reshape_method_varargs_to_func():
     assert isinstance(call.args[1], ast.Tuple) and len(call.args[1].elts) == 2
 
 
-def test_reshape_method_tuple_to_func():
+def test_reshape_method_tuple_to_func() -> None:
     tree = ast.parse("y = a.reshape((3, 4))")
     _ReshapeMethodRewriter().visit(tree)
     call = tree.body[0].value
     assert call.func.value.id == "np" and len(call.args[1].elts) == 2
 
 
-def test_ellipsis_trailing_expands_to_full_slices():
+def test_ellipsis_trailing_expands_to_full_slices() -> None:
     tree = ast.parse("y = a[..., 0]")
     _EllipsisExpander({"a": ["M", "N", "P"]}).visit(tree)
     sub = tree.body[0].value
@@ -491,7 +492,7 @@ def test_ellipsis_trailing_expands_to_full_slices():
     assert isinstance(elts[2], ast.Constant) and elts[2].value == 0
 
 
-def test_ellipsis_leading_expands_to_full_slices():
+def test_ellipsis_leading_expands_to_full_slices() -> None:
     tree = ast.parse("y = a[0, ...]")
     _EllipsisExpander({"a": ["M", "N", "P"]}).visit(tree)
     elts = tree.body[0].value.slice.elts
@@ -504,23 +505,23 @@ def test_ellipsis_leading_expands_to_full_slices():
 # --------------------------------------------------------------------------- #
 
 
-def test_tril_registered():
+def test_tril_registered() -> None:
     assert ("np", "tril") in NP_CALL_EXPANDERS
 
 
-def test_tril_keeps_lower_triangle():
+def test_tril_keeps_lower_triangle() -> None:
     out = _unparse(expand_tril(_name("out"), [_name("a")], {"a": ("M", "M")}))
     # lower triangle keeps ``j <= i`` (the complement of triu's ``j >= i``).
     assert "__j <= __i" in out
     assert "a[__i, __j]" in out and "else 0.0" in out
 
 
-def test_triu_keeps_upper_triangle():
+def test_triu_keeps_upper_triangle() -> None:
     out = _unparse(expand_triu(_name("out"), [_name("a")], {"a": ("M", "M")}))
     assert "__j >= __i" in out
 
 
-def test_nested_full_is_spilled_so_triu_sees_a_name():
+def test_nested_full_is_spilled_so_triu_sees_a_name() -> None:
     """The transformer causal mask buries ``np.full`` two calls deep. ``_CallHoister``'s
     triu first-arg spill is gated on a resolvable extent, and an inline constructor is
     never sized by the shape harvest, so without this spill the whole ``np.triu`` reached
@@ -535,7 +536,7 @@ def test_nested_full_is_spilled_so_triu_sees_a_name():
     assert f"np.triu({spilled.targets[0].id}, 1)" in ast.unparse(rest)
 
 
-def test_direct_full_assign_is_left_for_the_full_rewriter():
+def test_direct_full_assign_is_left_for_the_full_rewriter() -> None:
     """``X = np.full(...)`` is what ``_FullLikeRewriter`` consumes -- spilling it too
     would interpose a pointless whole-array copy."""
     tree = ast.parse("mask = np.full((n, n), -np.inf)")
@@ -543,7 +544,7 @@ def test_direct_full_assign_is_left_for_the_full_rewriter():
     assert len(tree.body) == 1 and ast.unparse(tree.body[0]) == "mask = np.full((n, n), -np.inf)"
 
 
-def test_linalg_norm_ord1_inf_vector_and_matrix():
+def test_linalg_norm_ord1_inf_vector_and_matrix() -> None:
     """np.linalg.norm ord=1 -> sum|v| (vector) / max column abs-sum (matrix),
     ord=inf -> max|v| / max row abs-sum, all without sqrt. A POSITIONAL ord must
     not be misread as ``axis`` (the pre-fix bug returned the L2 norm); an
@@ -567,7 +568,7 @@ def test_linalg_norm_ord1_inf_vector_and_matrix():
 # --------------------------------------------------------------------------- #
 
 
-def _oracle():
+def _oracle() -> types.ModuleType:
     import shutil
 
     if not (shutil.which("gcc") and shutil.which("gfortran") and shutil.which("g++")):
@@ -601,7 +602,7 @@ _ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 _MUST_NOT_ALL_SKIP = ("c", "cpp", "fortran")
 
 
-def _assert_ok(status, label):
+def _assert_ok(status: dict[str, str], label: str) -> None:
     fails = {b: s for b, s in status.items() if s.startswith("FAIL")}
     assert not fails, f"{label}: {fails}"
     native = {b: status.get(b) for b in _MUST_NOT_ALL_SKIP}
@@ -734,7 +735,15 @@ def _assert_ok(status, label):
     ],
     ids=lambda v: v if isinstance(v, str) and v.isidentifier() else "",
 )
-def test_contraction_indexing_ops_e2e(label, src, func, ins, out_shape, syms, shapes):
+def test_contraction_indexing_ops_e2e(
+    label: str,
+    src: str,
+    func: str,
+    ins: list[tuple[str, tuple[int, ...] | str]],
+    out_shape: tuple[int, ...],
+    syms: dict[str, int],
+    shapes: dict[str, str],
+) -> None:
     import numpy as np
 
     no = _oracle()
@@ -749,7 +758,7 @@ def test_contraction_indexing_ops_e2e(label, src, func, ins, out_shape, syms, sh
     _assert_ok(status, label)
 
 
-def test_triu_of_inline_full_mask_e2e():
+def test_triu_of_inline_full_mask_e2e() -> None:
     """The transformer causal mask verbatim: an inline ``np.full`` under an inline
     ``np.triu``, inside a BinOp. Its own test rather than a row in the table above,
     because adding a row reflows the whole parametrize literal under the formatter.
@@ -777,7 +786,7 @@ def test_triu_of_inline_full_mask_e2e():
 # --------------------------------------------------------------------------- #
 
 
-def _reshape_src_index(order):
+def _reshape_src_index(order: str | None) -> str:
     """Lower ``out = np.reshape(A, (P, Q), order=order)`` for A:(N,), out:(P,Q)
     and return the unparsed source subscript expression A[...]."""
     target = ast.Name(id="out", ctx=ast.Store())
@@ -790,33 +799,33 @@ def _reshape_src_index(order):
     return txt.split("A[", 1)[1].split("]", 1)[0]
 
 
-def test_reshape_c_order_row_major_index():
+def test_reshape_c_order_row_major_index() -> None:
     # C order: flat = r0 * Q + r1 -> A[(__r0) * Q + __r1]; Q scales the row.
     idx = _reshape_src_index("C")
     assert "* Q" in idx or ") * (Q)" in idx
     assert "* P" not in idx
 
 
-def test_reshape_f_order_column_major_index():
+def test_reshape_f_order_column_major_index() -> None:
     # F order: flat = r0 + r1 * P -> A[__r0 + (__r1) * P]; P scales the column.
     idx = _reshape_src_index("F")
     assert "* P" in idx or ") * (P)" in idx
     assert "* Q" not in idx
 
 
-def test_reshape_default_is_c_order():
+def test_reshape_default_is_c_order() -> None:
     # No order= kwarg defaults to C (matches numpy + prior behaviour).
     assert _reshape_src_index(None) == _reshape_src_index("C")
 
 
-def test_sympify_shape_declines_a_read_past_the_end_of_a_tuple_token():
+def test_sympify_shape_declines_a_read_past_the_end_of_a_tuple_token() -> None:
     # sympify EVALUATES the token, so an out-of-range read arrives as a bare IndexError from
     # inside sympy's parser -- uncaught, it aborted the whole reshape expander.
     assert sympify_shape("(out_channels, 1, 1)[3]") is None
     assert str(sympify_shape("(out_channels, 1, 1)[0]")) == "out_channels"
 
 
-def test_a_floordiv_extent_equals_the_int_floor_spelling_of_itself():
+def test_a_floordiv_extent_equals_the_int_floor_spelling_of_itself() -> None:
     """``a // b`` and ``int_floor(a, b)`` are one quantity in two vocabularies -- ``//`` is what a
     manifest and a numpy reference write, ``int_floor`` is what the C and dace sides name it. Left
     unnormalised, sympify makes the first a ``floor`` and the second an opaque Function, and a
@@ -826,7 +835,7 @@ def test_a_floordiv_extent_equals_the_int_floor_spelling_of_itself():
     assert shape_exprs_equal("(h + 2 * p - k) // s + 1", "int_floor(h + 2 * p - k, s) + 1")
 
 
-def test_the_normalised_floor_still_cancels_against_a_bare_extent():
+def test_the_normalised_floor_still_cancels_against_a_bare_extent() -> None:
     """Why the normalisation goes TOWARD sympy's ``floor`` and not toward ``int_floor``: an integer
     symbol lets sympy cancel ``floor(2 * oh / 2)`` to ``oh``, and an opaque ``int_floor`` never
     cancels against anything. Normalising the other way would trade one missed pair for many."""
@@ -835,7 +844,7 @@ def test_the_normalised_floor_still_cancels_against_a_bare_extent():
     assert shape_exprs_equal("(2 * oh) // 2", "oh")
 
 
-def test_a_floordiv_by_a_different_divisor_is_still_unequal():
+def test_a_floordiv_by_a_different_divisor_is_still_unequal() -> None:
     """The negative control. Collapsing both spellings onto one head must not collapse the operands
     with them -- a wrong True here contracts over two different extents, which is a miscompile."""
     shape_exprs_equal.cache_clear()
