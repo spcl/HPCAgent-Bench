@@ -18,7 +18,7 @@ from typing import List, Tuple
 import pandas as pd
 import pytest
 
-from hpcagent_bench.stats import plotting
+from hpcagent_bench.stats.figures import results as plotting
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
@@ -303,6 +303,27 @@ def test_every_output_is_written_per_machine(tmp_path: pathlib.Path) -> None:
     assert [pathlib.Path(p).name.split(".")[0] for p in svgs] == ["speedup-mini", "speedup-simple"]
     assert pathlib.Path(pdfs[0]).read_bytes().startswith(b"%PDF-")
     assert all(b"<svg" in pathlib.Path(p).read_bytes() for p in svgs)
+
+
+def test_the_figure_writes_the_costs_and_the_interval_behind_every_ratio(tmp_path: pathlib.Path) -> None:
+    """SC15 Rule 4 and Rules 5/7, as an artifact rather than a caption: the table beside the figure
+    carries the milliseconds each ratio was taken over and the interval around it, and it is what a
+    rerun is diffed on -- the image moves whenever the frame does."""
+    import pandas as pd
+
+    from tests.test_inference_plots import build_results_db
+
+    db = tmp_path / "results.db"
+    build_results_db(db, shift=0.5)
+    written = speedup.plot_signed_speedup(
+        db=str(db), preset="S", output=str(tmp_path / "speedup.pdf"), usetex=False, baseline="numpy"
+    )
+    tables = [p for p in written if p.endswith(".csv")]
+    assert len(tables) == 1, written
+    frame = pd.read_csv(tables[0])
+    assert list(frame.columns) == list(speedup.TABLE_COLUMNS)
+    assert (frame["baseline_ms"] > 0).all() and (frame["candidate_ms"] > 0).all()
+    assert (frame["speedup_low"] <= frame["speedup_high"]).all()
 
 
 def baseline_only_db(path: pathlib.Path) -> None:

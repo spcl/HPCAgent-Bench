@@ -31,30 +31,22 @@ from __future__ import annotations
 import argparse
 import pathlib
 
-import math
 
 import numpy as np
 import pandas as pd
-from scipy.stats import wilcoxon
 
 from hpcagent_bench import experiment_tags
 from hpcagent_bench.stats import palette
+from hpcagent_bench.stats import summary
 from hpcagent_bench.stats import style as plotstyle
 
 plotstyle.apply()
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FixedLocator, NullFormatter
 
-BOOTSTRAP: int = 4000
-SEED: int = 0
 #: A ratio this far from 1.0 is inside the "no change" band for labelling purposes only; the star
 #: is decided by the interval, never by this.
 NEUTRAL: float = 1.0
-
-#: Fewest paired kernels before an interval is claimed. The exact signed-rank test cannot produce
-#: a two-sided p below 0.0625 at n=5, so under this an interval would assert a precision the test
-#: cannot deliver.
-MIN_PAIRS: int = 6
 
 #: Ticks in RATIO units on a log2 axis. Labelled as ratios, not as exponents: a reader wants to see
 #: "2x", not "1".
@@ -79,22 +71,14 @@ def tick_label(value: float) -> str:
 #: interpolate a value from two ticks.
 
 
-def per_kernel(frame: pd.DataFrame, value: str) -> pd.Series:
-    """Median ``value`` per kernel -- the unit everything downstream resamples."""
-    return frame.groupby("benchmark")[value].median()
-
-
-def ratio_with_ci(
-    before: pd.Series, after: pd.Series, rng: np.random.Generator, invert: bool
-) -> tuple[float, float, float, float]:
+def ratio_with_ci(before: pd.Series, after: pd.Series, invert: bool) -> tuple[float, float, float, float]:
     """Hodges-Lehmann ratio over the kernels BOTH sides cover, with a distribution-free CI and p.
 
     RANK-BASED, not a bootstrap of the mean, and the reason is the shape of this data: a per-kernel
     speed-up ratio is heavy-tailed (one kernel at 40x against a median near 2x), and a mean in log
-    space still lets that kernel carry the estimate. The Hodges-Lehmann estimator -- the median of
-    the Walsh averages -- is the location estimate the signed-rank test inverts, so the point, the
-    interval and the p value all describe the same thing, which a bootstrap mean beside a separate
-    test does not.
+    space still lets that kernel carry the estimate. The estimator, its interval and its p value
+    come from :func:`hpcagent_bench.stats.summary.paired_change`, so all three describe one
+    quantity -- which a bootstrap mean beside a separate test does not.
 
     PAIRED, by kernel: both sides ran the same 40 kernels, and the pairing is most of the
     precision here. Mann-Whitney is the unpaired sibling and would throw that away -- with n=40
@@ -102,7 +86,8 @@ def ratio_with_ci(
     almost nothing. Restricted to the shared kernels for the same reason as before: a ratio taken
     over two different kernel sets is a change plus whatever the sets differ by.
 
-    Returns ``(ratio, low, high, p)``; all four are NaN when the sides share nothing usable.
+    Returns ``(ratio, low, high, p)`` on the RATIO scale; all four are NaN when the sides share
+    nothing usable.
     """
     shared = before.index.intersection(after.index)
     if len(shared) == 0:
@@ -112,45 +97,17 @@ def ratio_with_ci(
     b, a = b[keep], a[keep]
     if b.size == 0:
         return (float("nan"),) * 4
-    logs = np.log(b / a) if invert else np.log(a / b)
-    if logs.size < MIN_PAIRS:
-        # Below this the signed-rank test cannot reach 0.05 whatever the data says (its smallest
-        # attainable two-sided p at n=5 is 0.0625), so an interval would be decoration.
-        return float(np.exp(np.median(logs))), float("nan"), float("nan"), float("nan")
-    result = wilcoxon(logs, method="exact" if logs.size <= 25 else "auto")
-    low, high = hodges_lehmann_ci(logs)
-    return float(np.exp(walsh_median(logs))), float(np.exp(low)), float(np.exp(high)), float(result.pvalue)
-
-
-def walsh_median(values: np.ndarray) -> float:
-    """The Hodges-Lehmann point estimate: the median of every pairwise average ``(x_i + x_j)/2``."""
-    i, j = np.triu_indices(values.size, k=0)
-    return float(np.median((values[i] + values[j]) / 2.0))
-
-
-def hodges_lehmann_ci(values: np.ndarray, alpha: float = 0.05) -> tuple[float, float]:
-    """Distribution-free CI for the Hodges-Lehmann estimate, by inverting the signed-rank test.
-
-    The interval is the k-th smallest and k-th largest Walsh average, where k comes from the
-    signed-rank null distribution. No normality assumption and no resampling: for a given n the
-    endpoints are a deterministic function of the data, so the published figure cannot move
-    because a seed changed.
-    """
-    i, j = np.triu_indices(values.size, k=0)
-    walsh = np.sort((values[i] + values[j]) / 2.0)
-    n = values.size
-    # Normal approximation to the signed-rank quantile, which is what the standard tables tabulate
-    # and is accurate well below the n this figure ever sees.
-    mean = n * (n + 1) / 4.0
-    sd = math.sqrt(n * (n + 1) * (2 * n + 1) / 24.0)
-    k = int(math.floor(mean - 1.959963985 * sd))
-    k = min(max(k, 0), walsh.size // 2 - 1) if walsh.size >= 2 else 0
-    return float(walsh[k]), float(walsh[walsh.size - 1 - k])
+    change = summary.paired_change(np.log(b / a) if invert else np.log(a / b))
+    return (
+        float(np.exp(change.estimate)),
+        float(np.exp(change.low)),
+        float(np.exp(change.high)),
+        change.pvalue,
+    )
 
 
 def points(before: pd.DataFrame, after: pd.DataFrame) -> pd.DataFrame:
     """One row per (model, language) present in both experiments."""
-    rng = np.random.default_rng(SEED)
     rows = []
     keys = sorted(
         set(map(tuple, before[["model", "language"]].drop_duplicates().to_numpy()))
@@ -159,8 +116,12 @@ def points(before: pd.DataFrame, after: pd.DataFrame) -> pd.DataFrame:
     for model, language in keys:
         b = before[(before.model == model) & (before.language == language)]
         a = after[(after.model == model) & (after.language == language)]
-        score, s_low, s_high, s_p = ratio_with_ci(per_kernel(b, "speedup"), per_kernel(a, "speedup"), rng, False)
-        cost, c_low, c_high, c_p = ratio_with_ci(per_kernel(b, "tokens"), per_kernel(a, "tokens"), rng, True)
+        score, s_low, s_high, s_p = ratio_with_ci(
+            summary.median_per_kernel(b, "speedup"), summary.median_per_kernel(a, "speedup"), False
+        )
+        cost, c_low, c_high, c_p = ratio_with_ci(
+            summary.median_per_kernel(b, "tokens"), summary.median_per_kernel(a, "tokens"), True
+        )
         rows.append(
             {
                 "model": model,
@@ -171,7 +132,11 @@ def points(before: pd.DataFrame, after: pd.DataFrame) -> pd.DataFrame:
                 "cost": cost,
                 "cost_low": c_low,
                 "cost_high": c_high,
-                "kernels": len(per_kernel(b, "speedup").index.intersection(per_kernel(a, "speedup").index)),
+                "kernels": len(
+                    summary.median_per_kernel(b, "speedup").index.intersection(
+                        summary.median_per_kernel(a, "speedup").index
+                    )
+                ),
                 # "Significant" here means only: the interval does not straddle no-change.
                 "score_p": s_p,
                 "cost_p": c_p,
@@ -353,9 +318,9 @@ def absolute_points(frame: pd.DataFrame) -> pd.DataFrame:
     """
     rows = []
     for (model, language, skills), part in frame.groupby(["model", "language", "skills"]):
-        speed = part.groupby("benchmark")["speedup"].median()
+        speed = summary.median_per_kernel(part, "speedup")
         speed = speed[speed > 0]
-        tokens = part.groupby(["benchmark", "run_id"])["tokens"].max().groupby("benchmark").median()
+        tokens = summary.median_per_kernel(part, "tokens", within=("run_id",))
         tokens = tokens[tokens > 0]
         if speed.empty or tokens.empty:
             continue
@@ -391,7 +356,7 @@ def load(path: pathlib.Path, prefix: str) -> pd.DataFrame:
         frame = frame[frame["arm"].astype(str).str.startswith(prefix)]
     frame = frame[(frame["speedup"] > 0) & frame["tokens"].notna() & (frame["tokens"] > 0)]
     frame = frame.assign(
-        model=frame["arm"].astype(str).map(palette.model_of),
+        model=frame["arm"].astype(str).map(experiment_tags.model_of),
         skills=frame["arm"].astype(str).str.endswith("-skills"),
     )
     return frame[frame.model != "other"]

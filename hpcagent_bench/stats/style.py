@@ -14,10 +14,12 @@ blues without looking like a different rendering of the page.
 
 from __future__ import annotations
 
+import pathlib
 from collections.abc import Sequence
 from typing import Literal
 
 import matplotlib
+import matplotlib.pyplot as plt
 from matplotlib.artist import Artist
 from matplotlib.axes import Axes
 from matplotlib.axis import Axis
@@ -256,3 +258,49 @@ def point_mark(ax: Axes, x: float, y: float, color: str, marker: str, filled: bo
         linewidth=1.8,
         zorder=MARK_Z,
     )
+
+
+def row_axis(ax: Axes, labels: Sequence[str]) -> None:
+    """A categorical y axis with one named row per series, top row first.
+
+    The rows are NAMES, so the axis carries no grid and no minor ticks: a guide line per category
+    measures nothing. Limits are set with half a row of air at each end so the topmost and
+    bottommost marks are not clipped by the frame.
+    """
+    ax.set_yticks(range(len(labels)))  # pyright: ignore[reportUnknownMemberType]
+    ax.set_yticklabels(list(labels), fontsize=LABEL_PT, color=INK)  # pyright: ignore[reportUnknownMemberType]
+    ax.set_ylim(len(labels) - 0.5, -0.5)
+    ax.tick_params(axis="y", length=0)
+    despine(ax)
+
+
+def right_label(ax: Axes, row: int, text: str, color: str = MUTED) -> None:
+    """A short annotation just outside the right edge of ``row`` -- the n a reader needs at the mark.
+
+    Outside the frame rather than inside it: an n printed among the points is one more thing on the
+    value axis, and a reader who is estimating a position has to decide it is not data.
+    """
+    ax.annotate(  # pyright: ignore[reportUnknownMemberType]
+        text,
+        xy=(1.006, 1.0 - (row + 0.5) / max(len(ax.get_yticks()), 1)),
+        xycoords="axes fraction",
+        fontsize=ANNOTATION_PT,
+        color=color,
+        ha="left",
+        va="center",
+        annotation_clip=False,
+    )
+
+
+def save(fig: Figure, stem: pathlib.Path) -> pathlib.Path:
+    """Write ``fig`` as both PDF and SVG under ``stem``, and close it. Returns ``stem``.
+
+    Two formats because the two consumers differ: a paper takes the PDF, and a web or slide build
+    takes the SVG. Closing matters in a loop -- matplotlib keeps every open figure alive, and a
+    sweep that renders one per directory otherwise ends up holding all of them.
+    """
+    stem.parent.mkdir(parents=True, exist_ok=True)
+    for suffix in (".pdf", ".svg"):
+        fig.savefig(stem.with_suffix(suffix))  # pyright: ignore[reportUnknownMemberType]
+    plt.close(fig)
+    return stem

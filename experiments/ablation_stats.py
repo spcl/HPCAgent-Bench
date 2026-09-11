@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import importlib.util
 import itertools
 import math
 import pathlib
@@ -45,10 +46,6 @@ import random
 import sqlite3
 import statistics
 import sys
-
-#: Wilcoxon sample sizes up to this get the exact null distribution; above it the normal
-#: approximation is both accurate and the only affordable option (the DP table grows as n^2).
-EXACT_MAX_N = 25
 
 PER_PROBLEM_SUFFIX = "-per-problem.csv"
 PAIRS_SUFFIX = "-pairs.csv"
@@ -278,86 +275,40 @@ def mcnemar_exact(only_a: int, only_b: int) -> float:
     return min(1.0, 2.0 * tail / (2**n))
 
 
-def average_ranks(values: list[float]) -> list[float]:
-    """Ranks 1..n of ``values``, ties sharing their block's mean rank (the midrank convention the
-    signed-rank variance correction below assumes)."""
-    order = sorted(range(len(values)), key=lambda i: values[i])
-    ranks = [0.0] * len(values)
-    start = 0
-    while start < len(order):
-        stop = start
-        while stop + 1 < len(order) and values[order[stop + 1]] == values[order[start]]:
-            stop += 1
-        shared = (start + stop) / 2.0 + 1.0
-        for position in range(start, stop + 1):
-            ranks[order[position]] = shared
-        start = stop + 1
-    return ranks
+#: The Wilcoxon rule -- the exact/approximation threshold and the exact null -- loaded BY PATH from
+#: the one module that owns it. Not `import hpcagent_bench.stats.signed_rank`: that walks the
+#: package __init__ chain into numpy and scipy, and this script's whole point is that it runs from a
+#: shell that never activated the benchmark environment. The file itself is stdlib-only, so reading
+#: it costs nothing this script does not already have, and the threshold cannot drift from the one
+#: the figures use. tests/test_signed_rank.py proves the two implementations agree.
+SIGNED_RANK_SOURCE = pathlib.Path(__file__).resolve().parent.parent / "hpcagent_bench" / "stats" / "signed_rank.py"
 
 
-def signed_rank_null_counts(n: int) -> list[int]:
-    """How many of the 2**n sign assignments give each possible W+ value, by subset-sum DP.
-
-    Under the null every rank 1..n is added to W+ or not with probability 1/2 independently, so the
-    exact distribution is the number of subsets of {1..n} summing to each total -- a knapsack count,
-    O(n^3) time and O(n^2) memory, trivial at n <= 25.
-    """
-    counts = [0] * (n * (n + 1) // 2 + 1)
-    counts[0] = 1
-    for rank in range(1, n + 1):
-        for total in range(len(counts) - 1, rank - 1, -1):
-            counts[total] += counts[total - rank]
-    return counts
-
-
-def signed_rank_exact_p(statistic: float, n: int) -> float:
-    """Two-sided exact p for the signed-rank statistic ``min(W+, W-)`` at sample size ``n``.
-
-    ``statistic`` is rounded UP: midranks can put it half way between two lattice points of the
-    tie-free null distribution used here, and rounding up is the conservative choice (a larger
-    p-value) rather than one that could manufacture significance.
-    """
-    counts = signed_rank_null_counts(n)
-    cutoff = min(len(counts) - 1, math.ceil(statistic - 1e-12))
-    return min(1.0, 2.0 * sum(counts[: cutoff + 1]) / (2**n))
+def load_signed_rank():
+    """The shared signed-rank module, imported from its file. Raises when it is not there: a copy of
+    the rule kept locally for resilience is exactly the drift this exists to end."""
+    spec = importlib.util.spec_from_file_location("hpcagent_bench_signed_rank", SIGNED_RANK_SOURCE)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"cannot load the shared signed-rank rule from {SIGNED_RANK_SOURCE}")
+    module = importlib.util.module_from_spec(spec)
+    # Registered BEFORE exec: a module loaded by path alone has no sys.modules entry, and anything
+    # resolving an annotation through sys.modules[__module__] then gets None.
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
-def signed_rank_normal_p(w_plus: float, n: int, absolute: list[float]) -> float:
-    """Two-sided normal-approximation p, with the standard tie correction on the variance.
+signed_rank = load_signed_rank()
 
-    Tied |d| values share a midrank, which makes W+ less variable than the tie-free formula assumes;
-    without the correction the test would be anti-conservative exactly on the data where ties are
-    common (many kernels landing on the same speedup).
-    """
-    mean = n * (n + 1) / 4.0
-    variance = n * (n + 1) * (2 * n + 1) / 24.0
-    groups: dict[float, int] = {}
-    for value in absolute:
-        groups[value] = groups.get(value, 0) + 1
-    variance -= sum((size * size * size) - size for size in groups.values()) / 48.0
-    if variance <= 0.0:
-        return 1.0
-    return min(1.0, math.erfc(abs(w_plus - mean) / math.sqrt(2.0 * variance)))
+#: Sample sizes up to this get the exact null. NOT a local choice: read from the shared rule, so
+#: this script and the figures cannot switch to the approximation at different n.
+EXACT_MAX_N = signed_rank.EXACT_MAX_N
 
 
 def wilcoxon_signed_rank(diffs: list[float]) -> tuple[int, float]:
-    """Paired Wilcoxon signed-rank over ``diffs``; returns ``(n used, two-sided p)``.
-
-    Zero differences are dropped (Wilcoxon's original treatment): they support neither direction,
-    and keeping them would inflate n and shrink the p-value for free. Everything zero, or nothing to
-    test, leaves n = 0 and p = 1.
-    """
-    nonzero = [d for d in diffs if d != 0.0]
-    n = len(nonzero)
-    if n == 0:
-        return 0, 1.0
-    absolute = [abs(d) for d in nonzero]
-    ranks = average_ranks(absolute)
-    w_plus = sum(rank for rank, diff in zip(ranks, nonzero) if diff > 0.0)
-    w_minus = sum(ranks) - w_plus
-    if n <= EXACT_MAX_N:
-        return n, signed_rank_exact_p(min(w_plus, w_minus), n)
-    return n, signed_rank_normal_p(w_plus, n, absolute)
+    """Paired Wilcoxon signed-rank over ``diffs``; returns ``(n used, two-sided p)``."""
+    n, p, _method = signed_rank.signed_rank_p(diffs)
+    return n, p
 
 
 def hodges_lehmann(values: list[float]) -> float:

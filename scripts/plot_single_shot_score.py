@@ -101,7 +101,7 @@ def arm_rows(shots: pd.DataFrame, roster: int, min_speedup: float) -> pd.DataFra
         rows.append(
             {
                 "arm": arm,
-                "model": palette.model_of(arm),
+                "model": experiment_tags.model_of(arm),
                 "language": str(part["language"].mode().iat[0]),
                 "skills": arm.endswith("-skills"),
                 "scored": int(faster.sum()),

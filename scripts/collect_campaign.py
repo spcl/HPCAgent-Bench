@@ -22,13 +22,13 @@ from __future__ import annotations
 import argparse
 import collections
 import glob
-import math
 import os
 import pathlib
 import statistics
 import sys
 
 from hpcagent_bench.harness import recording
+from hpcagent_bench.stats import summary
 
 # Speed-up is a RATIO, so the arm is summarised by its GEOMETRIC mean. An arithmetic mean is wrong
 # for ratios in the obvious way -- one 40x kernel drags it past anything the arm achieves normally --
@@ -108,16 +108,14 @@ def collect(run_dirs: list[str], out_dir: pathlib.Path) -> dict:
 
 
 def geomean(speedups: list[float]) -> float | None:
-    """Geometric mean of a speed-up set, or ``None`` when it has none.
+    """Geometric mean of a speed-up set to three places, or ``None`` when it has none.
 
     Non-positive values are DROPPED rather than clamped: a speed-up of zero or below is not a slow
     ratio, it is a missing measurement, and clamping one to a small epsilon would drag the geomean
     toward zero and read as a catastrophic regression that never happened.
     """
-    usable = [s for s in speedups if s > 0]
-    if not usable:
-        return None
-    return round(math.exp(statistics.fmean(math.log(s) for s in usable)), 3)
+    usable = summary.usable_ratios(speedups, label="arm summary", warn=False)
+    return round(summary.geomean(usable), 3) if usable.size else None
 
 
 def median(speedups: list[float]) -> float | None:

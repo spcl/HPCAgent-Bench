@@ -52,7 +52,8 @@ from scipy.stats import kurtosis, mannwhitneyu  # pyright: ignore[reportMissingT
 from scipy.stats import norm, shapiro, skew  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
 from scipy.stats import t, wilcoxon  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
 
-from hpcagent_bench.stats.summary import DEFAULT_CONFIDENCE, DEFAULT_RESAMPLES
+from hpcagent_bench.stats import summary
+from hpcagent_bench.stats.summary import DEFAULT_CONFIDENCE, DEFAULT_RESAMPLES, Interval
 
 #: One timing sample per element. float64 is what ``np.asarray(..., dtype=float)`` produces.
 FloatArray = npt.NDArray[np.float64]
@@ -63,8 +64,9 @@ Samples = Sequence[float] | FloatArray
 #: A statistic of one sample. ``np.median`` (the default here) and ``np.min`` are what callers pass.
 Statistic = Callable[[FloatArray], float]
 
-#: Default two-sided error rate for every test and interval here.
-DEFAULT_ALPHA: float = 0.05
+#: Default two-sided error rate for every test and interval here. One definition, in
+#: :mod:`hpcagent_bench.stats.summary`, which the paired estimator there already reports against.
+DEFAULT_ALPHA: float = summary.DEFAULT_ALPHA
 #: The confidence level and bootstrap replicate count come from :mod:`hpcagent_bench.stats`, not
 #: restated here. Both modules quote intervals of the same resolution BY CONSTRUCTION -- a second
 #: copy of the number is a second thing to keep in step, and the comment that used to sit here said
@@ -133,25 +135,6 @@ class NormalityVerdict:
     rejected: bool  # did the test reject at alpha, before the practical-significance veto
     negligible: bool  # is the departure too small to matter (the veto)
     reason: str
-
-
-@dataclass(frozen=True, slots=True)
-class Interval:
-    """A confidence interval and, critically, WHAT IT IS FOR. An interval around the mean is not
-    an interval around the min-of-k; ``statistic`` keeps the two from being confused in a table
-    or a figure caption."""
-
-    statistic: str  # "mean" | "median" | "min_of_k" | "speedup(min_of_k)" | ...
-    point: float
-    low: float
-    high: float
-    confidence: float
-    method: str  # "t" | "bootstrap-BCa" | "bootstrap-percentile" | "rank-median" | "fieller"
-    n: int
-
-    def label(self) -> str:
-        """One-line figure/table label naming both the statistic and the interval kind."""
-        return f"{int(round(self.confidence * 100))}% {self.method} CI for {self.statistic}"
 
 
 @dataclass(frozen=True, slots=True)

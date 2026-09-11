@@ -43,6 +43,7 @@ import math
 import pathlib
 import re
 import sqlite3
+import warnings
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, cast
@@ -52,8 +53,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd  # pyright: ignore[reportMissingTypeStubs] -- pandas ships none
 
-matplotlib.use("Agg")  # headless: save to file, never open a window
-import matplotlib.pyplot as plt  # noqa: E402 -- must follow the backend setup
+import matplotlib.pyplot as plt  # noqa: E402 -- must follow the package's backend setup
 
 from matplotlib.axes import Axes  # noqa: E402
 from matplotlib.collections import LineCollection, PolyCollection  # noqa: E402
@@ -63,9 +63,9 @@ from matplotlib.patches import Patch, Rectangle  # noqa: E402
 
 # scipy ships no type stubs, so what it hands back is converted explicitly at each call site.
 from scipy.stats import norm  # noqa: E402 # pyright: ignore[reportMissingTypeStubs]
-from scipy.stats.mstats import gmean  # noqa: E402 # pyright: ignore[reportMissingTypeStubs]
 
-from hpcagent_bench import inference, stats  # noqa: E402
+from hpcagent_bench import inference, stats
+from hpcagent_bench.stats import summary  # noqa: E402
 from hpcagent_bench.harness import recording  # noqa: E402
 from hpcagent_bench.paths import PLOTS_DIR  # noqa: E402
 from hpcagent_bench.reporting_order import BY_DWARF, GroupSpan, order_rows, row_meta_for  # noqa: E402
@@ -156,8 +156,31 @@ def my_round(x: float, width: int) -> str:
 
 
 def my_geomean(x: pd.Series) -> float:
-    """Geomean that ignores NA values."""
-    return float(gmean(x.dropna()))  # pyright: ignore[reportUnknownArgumentType] -- unstubbed scipy
+    """The column's geomean over the cells that carry a ratio; NaN when none does.
+
+    NOT :func:`scipy.stats.mstats.gmean`, which this used to be. ``gmean``'s ``log(0)`` sends the
+    WHOLE column to 0.0, so a single unmeasured cell entered as a zero made a framework's summary
+    read as a total collapse -- a figure showing an arm at 0.00x when nothing regressed. Every
+    other copy of the geometric mean in this repo dropped that cell;
+    :func:`~hpcagent_bench.stats.summary.usable_ratios` is now the one that does it here.
+
+    A dropped cell is NAMED, because the useful question is which kernel produced a zero and why.
+    ``x`` is indexed by kernel, so the warning quotes ``kernel=value`` for each one.
+    """
+    present = x.dropna()
+    values: FloatArray = present.to_numpy(dtype=np.float64)
+    usable = summary.usable_ratios(values, warn=False)
+    if usable.size != values.size:
+        rejected = present[(~np.isfinite(values)) | (values <= 0.0)]
+        named = ", ".join(f"{kernel}={value:g}" for kernel, value in rejected.items())
+        message = (
+            f"geomean: dropped {rejected.size} cell(s) that are not finite positive ratios: {named}. "
+            f"A zero here is an UNMEASURED cell, not a total regression -- find out why it is zero "
+            f"rather than plotting it. It is excluded from this geomean."
+        )
+        LOG.warning("%s", message)
+        warnings.warn(message, stacklevel=2)
+    return summary.geomean(usable) if usable.size else float("nan")
 
 
 def my_speedup_abbr(x: float) -> str:
@@ -489,14 +512,15 @@ def heatmap_figure(data: pd.DataFrame, order: str, output: str, baseline: str = 
     best_wide = best_wide.sort_values("benchmark", key=by_rank).reset_index(drop=True)
     best_wide_time = best_wide_time.sort_values("benchmark", key=by_rank).reset_index(drop=True)
 
-    overall: pd.DataFrame = pd.melt(best_wide.drop(["domain"], axis=1), ["benchmark"])
+    # Indexed by kernel so a dropped cell can be NAMED rather than counted.
+    overall: pd.DataFrame = pd.melt(best_wide.drop(["domain"], axis=1), ["benchmark"]).set_index("benchmark")
     overall = overall.groupby(["framework"]).value.apply(my_geomean).reset_index()
     overall_wide: pd.DataFrame = overall.pivot_table(columns="framework", values="value", dropna=False).reset_index(
         drop=True
     )
     overall_wide = overall_wide[frmwrks]
 
-    overall_time: pd.DataFrame = pd.melt(best_wide_time.drop(["domain"], axis=1), ["benchmark"])
+    overall_time: pd.DataFrame = pd.melt(best_wide_time.drop(["domain"], axis=1), ["benchmark"]).set_index("benchmark")
     overall_time = overall_time.groupby(["framework"]).value.apply(my_geomean).reset_index()
     overall_time_wide: pd.DataFrame = overall_time.pivot_table(
         columns="framework", values="value", dropna=False

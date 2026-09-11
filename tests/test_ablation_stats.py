@@ -345,7 +345,9 @@ def test_wilcoxon_over_arms_uses_log_speedup(ablation_stats, tmp_path) -> None:
 
 
 def test_average_ranks_shares_the_block_mean(ablation_stats) -> None:
-    assert ablation_stats.average_ranks([3.0, 1.0, 1.0, 2.0]) == [4.0, 1.5, 1.5, 3.0]
+    """Reached through the shared rule this script loads, which is the one place ranking lives; the
+    property is the midrank convention the tie-corrected variance in that module assumes."""
+    assert ablation_stats.signed_rank.average_ranks([3.0, 1.0, 1.0, 2.0]) == [4.0, 1.5, 1.5, 3.0]
 
 
 def test_hodges_lehmann_is_the_walsh_median(ablation_stats) -> None:

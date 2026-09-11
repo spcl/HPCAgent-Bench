@@ -195,6 +195,35 @@ def packet_parts(packet: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(p for p in found if p))
 
 
+@functools.lru_cache(maxsize=1, typed=True)
+def model_spellings() -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """``(model, its dash-bounded spellings)`` in registry order -- the table :func:`model_of` scans."""
+    aliases = registry().aliases.get("models", {})
+    return tuple(
+        (model, tuple(f"-{name}-" for name in (model, *(a for a, target in aliases.items() if target == model))))
+        for model in order("models")
+    )
+
+
+def model_of(arm: str, unknown: str = "other") -> str:
+    """The model tag an arm ran, read out of its name; ``unknown`` when none is found.
+
+    Arms are ``<experiment>-<model>-<language>[-skills]``, so the model is a whole dash-delimited
+    token rather than a substring -- ``-c`` must not match inside ``kimi27sglang``. Registry order
+    decides which token wins when an arm somehow carries two, and an alias resolves to the entity
+    it names so two spellings of one model never split into two series.
+
+    This is the LAST resort. An arm string is provenance, and every campaign since the identity
+    columns landed records its model in the database instead; parse the arm only for a CSV that
+    predates them.
+    """
+    padded = f"-{arm}-"
+    for model, spellings in model_spellings():
+        if any(spelling in padded for spelling in spellings):
+            return model
+    return unknown
+
+
 def language_name(language: str) -> str:
     """The display spelling of a language. Unknown ones pass through unchanged."""
     key = canonical("languages", str(language).lower())
