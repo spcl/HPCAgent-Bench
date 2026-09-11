@@ -27,7 +27,7 @@ TOLERANCES = {
 }
 
 
-def tolerances_for(datatype) -> Tuple[float, float]:
+def tolerances_for(datatype: str | None) -> Tuple[float, float]:
     """``(rtol, atol)`` for ``datatype`` in any spelling (numpy/enum/ml_dtypes/None), from the
     single-source TOLERANCE_MATRIX; an unknown datatype falls back to fp64."""
     try:
@@ -37,7 +37,7 @@ def tolerances_for(datatype) -> Tuple[float, float]:
     return tolerance_band(prec).as_tuple()
 
 
-def tolerance_datatype(requested: Optional[str], detected) -> Optional[str]:
+def tolerance_datatype(requested: Optional[str], detected: type[np.floating] | None) -> Optional[str]:
     """The datatype whose tolerance band should validate a run: an explicit ``requested`` (--datatype)
     wins; else follow the ACTUAL materialized precision (``detected``) so a legacy kernel defaulting
     to fp32 isn't graded against fp64's tight band; ``None`` detected keeps the fp64 floor."""
@@ -102,7 +102,7 @@ def rebind(func: types.FunctionType, globals_dict: Dict[str, Any]) -> types.Func
     return types.FunctionType(func.__code__, globals_dict, func.__name__, func.__defaults__, func.__closure__)
 
 
-def njit_reference(impl: Callable, bench, data: Optional[Dict[str, Any]] = None) -> Callable:
+def njit_reference(impl: Callable, bench: Benchmark, data: Optional[Dict[str, Any]] = None) -> Callable:
     """``impl`` njit-compiled when bench's numpy reference is a known interpreted loop nest.
 
     A compile failure falls back to the interpreter LOUDLY rather than raising: a slow oracle
@@ -153,7 +153,7 @@ def njit_reference(impl: Callable, bench, data: Optional[Dict[str, Any]] = None)
     # POSITIONAL abi for anything spelled ``*args``, so an unwrapped guard would quietly change how
     # every oracle is called. ``wraps`` sets ``__wrapped__``, which is what signature() follows.
     @functools.wraps(impl)
-    def guarded(*args, **kwargs):
+    def guarded(*args: Any, **kwargs: Any) -> Any:
         if state["compiled"]:
             try:
                 return compiled(*args, **kwargs)
@@ -289,7 +289,7 @@ class Test(object):
         datatype: Optional[str] = None,
         variant: Optional[str] = None,
         fuzz_iteration: Optional[int] = None,
-    ):
+    ) -> Dict[str, Dict[str, Any]]:
         """Tests the framework against the benchmark."""
         print(
             "***** Testing {f} with {b} on the {p} dataset, datatype {d} *****".format(
@@ -347,7 +347,9 @@ class Test(object):
             domain = self.bench.info["domain"]
 
         @tout.exit_after(timeout)
-        def first_execution(impl, impl_name):
+        def first_execution(
+            impl: Callable, impl_name: str
+        ) -> Tuple[Any, Optional[Sequence[float]], Optional[Sequence[float]]]:
             return self._execute(self.frmwrk, impl, impl_name, "first/validation", context, 1, ignore_errors)
 
         bvalues = []

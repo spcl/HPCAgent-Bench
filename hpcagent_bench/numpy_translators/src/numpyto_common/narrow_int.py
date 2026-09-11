@@ -32,9 +32,13 @@ which the recursion already covers.
 """
 
 import ast
-from typing import Callable, Optional
+from typing import Callable
 
 from numpyto_common import dtypes
+
+#: A resolved dtype category: a canonical integer dtype name, ``_FLOAT``, ``_WEAK_INT``, or
+#: ``_UNKNOWN`` (``None``).
+Category = str | None
 
 #: Result-dtype categories the inference returns. A concrete integer carries its
 #: canonical numpy dtype name; the rest are sentinels distinct from any dtype name.
@@ -64,7 +68,7 @@ _INT_PRESERVING = (
 #: (bounded by the dividend) or ``&``/``|``/``^``/``>>`` (never grow past the width).
 _WRAP_BINOPS = (ast.Add, ast.Sub, ast.Mult, ast.Pow, ast.LShift)
 
-NameDtype = Callable[[str], Optional[str]]
+NameDtype = Callable[[str], str | None]
 
 
 def _is_float_or_complex(dtype: str) -> bool:
@@ -75,7 +79,7 @@ def _is_float_or_complex(dtype: str) -> bool:
     return c.startswith("float") or c.startswith("complex")
 
 
-def _narrow_width(dtype: str) -> Optional[int]:
+def _narrow_width(dtype: str) -> int | None:
     """Itemsize (bytes) of a NARROW integer dtype (< the 8-byte ABI int), else None."""
     if not dtypes.is_integer(dtype):
         return None
@@ -83,7 +87,7 @@ def _narrow_width(dtype: str) -> Optional[int]:
     return w if w < 8 else None
 
 
-def _leaf_dtype(dtype: Optional[str]):
+def _leaf_dtype(dtype: str | None) -> Category:
     """Category of a resolved leaf dtype: its canonical integer name, ``_FLOAT``, or
     ``_UNKNOWN`` (bool / fp8-storage / unresolved -- none is a narrow-int arithmetic
     operand)."""
@@ -96,7 +100,7 @@ def _leaf_dtype(dtype: Optional[str]):
     return _UNKNOWN
 
 
-def _combine(a, b):
+def _combine(a: Category, b: Category) -> Category:
     """Numpy promotion of two inferred categories."""
     if a is _UNKNOWN or b is _UNKNOWN:
         return _UNKNOWN
@@ -111,7 +115,7 @@ def _combine(a, b):
     return dtypes.promote_integers(a, b)  # both concrete integers
 
 
-def _infer(node: ast.AST, name_dtype: NameDtype):
+def _infer(node: ast.AST, name_dtype: NameDtype) -> Category:
     """The numpy result-dtype category of an expression."""
     if isinstance(node, ast.Constant):
         v = node.value
@@ -142,7 +146,7 @@ def _infer(node: ast.AST, name_dtype: NameDtype):
     return _UNKNOWN  # Call / Compare / BoolOp / IfExp -> not a narrow-int wrap site
 
 
-def wrap_dtype(node: ast.AST, name_dtype: NameDtype) -> Optional[str]:
+def wrap_dtype(node: ast.AST, name_dtype: NameDtype) -> str | None:
     """The canonical narrow integer dtype a node's numpy result must be wrapped to
     (e.g. ``"int8"``), or None when no wrap is needed.
 
