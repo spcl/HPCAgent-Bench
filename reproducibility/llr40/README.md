@@ -301,6 +301,15 @@ of them can be bypassed by a caller that forgets.
 
 - **Geometric mean, always.** A speed-up is a ratio. Every aggregate is a geomean and every axis
   carrying one is logarithmic.
+- **A ratio travels with its costs and its interval.** `per_arm_summary.csv` carries
+  `median_baseline_ns` and `median_native_ns` beside every geomean, because 1.4x on a 3 ms kernel
+  and 1.4x on a 3 s one are different results and the ratio cannot tell them apart; and
+  `geomean_solved_low` / `_high`, the 95% log-t interval over that arm's kernels, because the graded
+  speed-up is an aggregate over repeated runs and two bare points cannot be compared. Both checks
+  are enforced by `hpcagent_bench.stats.rules` at the point the table is built. The per-KERNEL
+  dumbbell cannot meet the interval rule: one graded aggregate per kernel and language is all this
+  artifact holds, the judge's repeat samples are not in it, and the figure footnote says so rather
+  than implying a spread nobody measured.
 - **One denominator per aggregate, and it is part of the key.** `baseline` is the reference the
   judge divided by, and it is a property of the JOB: 32 of the 38 jobs graded against the
   single-core C lowering, 6 against parallel numba. The same agent work on `tsvc_2_s231` reads
@@ -363,7 +372,7 @@ of them can be bypassed by a caller that forgets.
 | `per_arm_kernel.csv` / `.md` | 307 | one row per (arm, baseline, kernel): best speed-up, submission count, source path |
 | `arm_by_kernel_speedup.csv` | 25 x 40 | (arm, baseline) x kernel matrix of best verified speed-up, for pivoting |
 | `arm_by_kernel_counts.csv` | 25 x 40 | the same matrix of submission counts |
-| `per_arm_summary.csv` / `.md` | 25 | per (arm, baseline): both policy geomeans with the n behind each |
+| `per_arm_summary.csv` / `.md` | 25 | per (arm, baseline): both policy geomeans, the n, the log-t interval and the two times behind the ratio |
 | `arm_pairs.csv` / `.md` | 432 | every arm pair sharing a denominator, over one kernel set, with what matching dropped |
 | `arm_ranking.csv` | 50 | the k-way ranking a sorted bar chart asserts, over the kernels EVERY arm of the group solved |
 | `denominator_split.csv` | 38 | which job graded against which reference |
