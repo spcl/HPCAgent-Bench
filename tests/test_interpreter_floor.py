@@ -74,3 +74,26 @@ def test_every_module_actually_compiles():
         except SyntaxError as exc:
             broken.append(f"{path}:{exc.lineno}: {exc.msg}")
     assert broken == [], broken
+
+
+def test_the_numba_emitter_keeps_its_output_importable():
+    """The emitter prepends a banner, imports and a warnings call above the reference it copies, so
+    a reference carrying a future import would push that import past the start of the file -- where
+    it is a SyntaxError on first import, and where ast.parse still calls it clean."""
+    import sys
+
+    sys.path.insert(0, str(paths.BENCHMARKS.parent / "numpy_translators" / "src"))
+    from numpyto_numba.emit import emit_numba
+
+    source = (
+        "from __future__ import annotations\n"
+        '"""A reference that carries a future import."""\n'
+        "import numpy as np\n"
+        "\n"
+        "def kernel(a: np.ndarray) -> np.ndarray:\n"
+        "    for i in range(a.shape[0]):\n"
+        "        a[i] = a[i] + 1\n"
+        "    return a\n"
+    )
+    emitted = emit_numba(source)
+    compile(emitted, "emitted.py", "exec", dont_inherit=True)
