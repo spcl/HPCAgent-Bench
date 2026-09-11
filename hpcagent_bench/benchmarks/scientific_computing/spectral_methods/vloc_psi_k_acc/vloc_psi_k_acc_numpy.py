@@ -43,8 +43,8 @@
 # numbers them 1-based).  current_k stays 1-based like the Fortran module
 # variable, so the current column of igk_k is igk_k[:, current_k - 1].  psic
 # flat layout is Fortran column-major on (nr1,nr2,nr3): flat = i1 + nr1*(i2 +
-# nr2*i3), i.e. reshape(..., order="F") -- element-for-element the Fortran
-# psic array.
+# nr2*i3) -- element-for-element the Fortran psic array, spelled here as a
+# C-order reshape with the axes REVERSED (the same view; see _invfft_wave).
 
 import numpy as np
 
@@ -58,18 +58,25 @@ def _invfft_wave(psic, nnr, nr1, nr2, nr3):
     nnr is PASSED, not recomputed as nr1*nr2*nr3: it is psic's own extent, and the flatten
     below writes back into psic. Recomputed, the write is one quantity in two spellings and
     the DaCe frontend cannot prove the product equals the declared extent.
+
+    The REVERSED axes are the Fortran layout, spelled in C order. QE's psic is column-major on
+    (nr1, nr2, nr3), and a C-order view of the same buffer with the axes reversed holds exactly
+    those elements: reshape((nr3, nr2, nr1)) IS reshape((nr1, nr2, nr3), order="F").T. An n-D
+    transform is invariant under that permutation, so the round trip agrees with the F-order
+    spelling to rounding -- and it asks nothing of a backend that ignores an order= keyword,
+    which numba rejects outright and DaCe carried into the transform as a plain C read.
     """
-    grid = psic.reshape((nr1, nr2, nr3), order="F")
-    psic[:] = (np.fft.ifftn(grid) * nnr).reshape(nnr, order="F")
+    grid = psic.reshape((nr3, nr2, nr1))
+    psic[:] = (np.fft.ifftn(grid) * nnr).reshape(nnr)
 
 
 def _fwfft_wave(psic, nnr, nr1, nr2, nr3):
     """fwfft('Wave'): forward FFT e^{-iG.r} scaled by 1/nnr (the QE forward normalization).
 
-    nnr is psic's declared extent -- see :func:`_invfft_wave`.
+    nnr is psic's declared extent, and the axes are reversed -- see :func:`_invfft_wave` for both.
     """
-    grid = psic.reshape((nr1, nr2, nr3), order="F")
-    psic[:] = (np.fft.fftn(grid) / nnr).reshape(nnr, order="F")
+    grid = psic.reshape((nr3, nr2, nr1))
+    psic[:] = (np.fft.fftn(grid) / nnr).reshape(nnr)
 
 
 def _fftx_c2psi_k(psic, c, nl, igk, ngk):

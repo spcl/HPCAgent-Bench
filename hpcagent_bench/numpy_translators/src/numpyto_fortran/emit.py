@@ -1312,13 +1312,33 @@ class _FortranBodyEmitter(BaseEmitter):
             stack.extend(ast.iter_child_nodes(cur))
         return hits
 
-    def _reads_index_array(self, node: ast.AST) -> bool:
-        """``node`` IS one index-array read, so the delivered value is already the subscript.
+    def _additive_index_chain(self, node: ast.AST, hit: ast.AST) -> bool:
+        """``node`` is ``hit`` with integer terms ADDED to or SUBTRACTED from it.
 
-        An axis that mixes an index read with anything else is REFUSED, not guessed: the buffer
-        carries exactly one base shift, and ``idx[i] + k`` would silently consume it as though it
-        were part of ``k``. Rewriting the reference to subscript with the index directly is the
-        fix -- that is the canonical form the tag exists to describe.
+        Addition commutes with the base shift, which is what makes this safe: the delivered value
+        is ``r + base``, so ``perm[i] + 1`` is ``(r + 1) + base`` -- the element numpy's
+        ``perm[i] + 1`` names, spelled identically. A CSR row bound is exactly this shape
+        (``L_indptr[row + 1]``, sptrsv_level), so refusing it refused the access the tag exists
+        for. Multiplication does not commute, and neither does the read sitting on the right of a
+        subtraction (``k - perm[i]`` negates the base), so both stay refused.
+        """
+        node = _peel_int_casts(node)
+        if node is hit:
+            return True
+        if not isinstance(node, ast.BinOp) or not isinstance(node.op, (ast.Add, ast.Sub)):
+            return False
+        if self._index_reads(node.left):
+            return self._additive_index_chain(node.left, hit)
+        if isinstance(node.op, ast.Sub):
+            return False
+        return self._additive_index_chain(node.right, hit)
+
+    def _reads_index_array(self, node: ast.AST) -> bool:
+        """``node`` delivers one index-array value, so it is already the subscript.
+
+        Integer terms may travel with it -- :meth:`_additive_index_chain` has why the shift
+        survives that. Anything else is REFUSED, not guessed: the buffer carries exactly one base
+        shift, and ``idx[i] * k`` would silently consume it as though it were part of ``k``.
         """
         if not self.index_arrays:
             return False  # the common case: no declared index arrays, no walk
@@ -1326,13 +1346,15 @@ class _FortranBodyEmitter(BaseEmitter):
         hits = self._index_reads(node)
         if not hits:
             return False
-        if len(hits) == 1 and hits[0] is node:
+        if len(hits) == 1 and self._additive_index_chain(node, hits[0]):
             return True
         raise NotImplementedError(
             f"{self.kir.short_name or self.kir.kernel_name}: subscript {ast.unparse(node)!r} combines an "
-            f"index_array read with other terms. An index array is delivered in the target language's "
-            f"own base, so it must be used as the subscript itself (``a[ip[j]]``), not inside "
-            f"arithmetic -- fold the offset into the generated index data instead."
+            f"index_array read with terms the base shift does not survive. Such a buffer arrives in "
+            f"the target language's own base, so a value may be the subscript itself (``a[ip[j]]``) "
+            f"or that plus/minus integers (``a[ip[j] + 1]``), but not scaled or mixed with a second "
+            f"read. A buffer whose values are also COMPARED against 0-based quantities has no "
+            f"single base and must not carry index_array in its manifest at all."
         )
 
     def _is_index_value(self, node: ast.AST) -> bool:
