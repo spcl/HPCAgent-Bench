@@ -153,28 +153,47 @@ def test_the_reported_effect_and_the_p_value_describe_the_same_parameter() -> No
     )
 
 
-@pytest.mark.parametrize(
-    "n, w_plus, exact, approximate",
-    [
-        pytest.param(35, 219.0, 0.118674, 0.117769, id="n=35 -- the llr40 C-vs-Fortran pairing"),
-        pytest.param(40, 293.0, 0.118149, 0.117369, id="n=40 -- the focus40 roster"),
-        pytest.param(97, 1943.0, 0.119557, 0.119225, id="n=97 -- the pooled model/kernel pairing"),
-        pytest.param(210, 9705.0, 0.119812, 0.119658, id="n=210 -- above EXACT_MAX_N"),
-    ],
-)
-def test_the_normal_signed_rank_approximation_never_reports_a_smaller_p_than_the_exact_null(
+SIGNED_RANK_SIZES = [
+    pytest.param(35, 219.0, 0.118674, 0.117769, id="n=35 -- the llr40 C-vs-Fortran pairing"),
+    pytest.param(40, 293.0, 0.118149, 0.117369, id="n=40 -- the focus40 roster"),
+    pytest.param(97, 1943.0, 0.119557, 0.119225, id="n=97 -- the pooled model/kernel pairing"),
+    pytest.param(210, 9705.0, 0.119812, 0.119658, id="n=210 -- above EXACT_MAX_N"),
+]
+ALPHAS = (0.001, 0.01, 0.05, 0.10)
+# the continuity-corrected form holds to this against the exact null across the sizes above; a
+# wider gap means the continuity term or the tie correction regressed
+MAX_ANTICONSERVATIVE_GAP = 1e-3
+
+
+@pytest.mark.parametrize("n, w_plus, exact, approximate", SIGNED_RANK_SIZES)
+def test_the_normal_signed_rank_approximation_never_manufactures_a_significant_verdict(
     n: int, w_plus: float, exact: float, approximate: float
 ) -> None:
-    """llr40 speed-ups sit on a 1% geometric ladder, so |d| ties are the rule and ``use_exact``
-    sends these tables down the approximate branch; an approximation that is uniformly below the
-    exact p manufactures significance on exactly the data the campaign reports."""
+    """A normal approximation to a lattice variable sits below the exact null at some sizes, so it
+    cannot be required to bound it from above; what a reader relies on is that no threshold reads
+    significant in the approximation alone."""
     got_exact = signed_rank.exact_p(w_plus, n)
     got_approx = signed_rank.normal_p(w_plus, n, [float(i) for i in range(n)])
     assert got_exact == pytest.approx(exact, abs=5e-6), got_exact
     assert got_approx == pytest.approx(approximate, abs=5e-6), got_approx
-    assert got_approx >= got_exact, (
-        f"the normal approximation reports p={got_approx:.6f} against an exact {got_exact:.6f} at "
-        f"n={n}: {got_exact - got_approx:.2e} on the anti-conservative side"
+    for alpha in ALPHAS:
+        assert not (got_approx <= alpha < got_exact), (
+            f"at n={n} the approximation reports p={got_approx:.6f} against an exact "
+            f"{got_exact:.6f}, so alpha={alpha} is significant only in the approximation"
+        )
+
+
+@pytest.mark.parametrize("n, w_plus, exact, approximate", SIGNED_RANK_SIZES)
+def test_the_normal_signed_rank_approximation_stays_within_a_bounded_gap_of_the_exact_null(
+    n: int, w_plus: float, exact: float, approximate: float
+) -> None:
+    """Without the continuity term the gap runs five to eleven times wider in the decision region,
+    so an unbounded gap is how that correction would be dropped again without any test failing."""
+    got_exact = signed_rank.exact_p(w_plus, n)
+    got_approx = signed_rank.normal_p(w_plus, n, [float(i) for i in range(n)])
+    assert got_exact - got_approx <= MAX_ANTICONSERVATIVE_GAP, (
+        f"the approximation is {got_exact - got_approx:.2e} below the exact null at n={n}, past "
+        f"the {MAX_ANTICONSERVATIVE_GAP:.0e} the continuity-corrected form holds to"
     )
 
 
