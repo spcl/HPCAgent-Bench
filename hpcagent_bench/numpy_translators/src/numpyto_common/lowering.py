@@ -4134,6 +4134,8 @@ class SliceFusion(ast.NodeTransformer):
 
     def __init__(self, array_shapes: Dict[str, List[str]]):
         self.array_shapes = array_shapes
+        #: Monotonic id for the invariant-read temps staged ahead of a fused nest.
+        self.invariant_ctr: List[int] = [0]
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         self.generic_visit(node)
@@ -4206,8 +4208,12 @@ class SliceFusion(ast.NodeTransformer):
             ctx=ast.Store(),
         )
 
+        # A loop-invariant ELEMENT read of the array this statement writes is served from a
+        # slot a previous iteration may already have stored to, so it is staged ahead of the
+        # nest -- see :class:`_HoistInvariantSelfReads`.
+        hoister = _HoistInvariantSelfReads(lhs_name, self.array_shapes, self.invariant_ctr)
         rhs_rewriter = _SliceToScalarRewriter(self.array_shapes, iter_vars, ranges, lhs_name, lhs_dims)
-        new_rhs = rhs_rewriter.visit(copy.deepcopy(value))
+        new_rhs = rhs_rewriter.visit(hoister.visit(copy.deepcopy(value)))
         # A top-level RHS Name (``corr[i+1:M, i] = __mm4``) isn't visited by
         # NodeTransformer unless asked -- subscriptify it explicitly.
         new_rhs = rhs_rewriter._maybe_subscriptify(new_rhs)
@@ -4232,6 +4238,8 @@ class SliceFusion(ast.NodeTransformer):
                     orelse=[],
                 )
             ]
+        if hoister.staged:
+            return [*hoister.staged, *body]
         return body[0] if len(body) == 1 else body
 
     def _axis_length(self, array_name: str, axis: int) -> ast.AST:
@@ -4309,6 +4317,75 @@ class SliceFusion(ast.NodeTransformer):
         ):
             return _binop(self._axis_length(name, axis), ast.Sub(), _const(idx.operand.value))
         return idx
+
+
+#: Prefix of the temps :class:`_HoistInvariantSelfReads` stages ahead of a fused loop nest.
+INVARIANT_SELF_READ_PREFIX = "__sfinv"
+
+
+class _HoistInvariantSelfReads(ast.NodeTransformer):
+    """Stage every loop-invariant ELEMENT read of the array a fused assignment writes.
+
+    :class:`SliceFusion` turns ``A[k, k:] = A[k, k:] / A[k, k]`` into a loop that stores one
+    element per iteration, and the ``si1 == k`` iteration overwrites the pivot ``A[k, k]``:
+    every later iteration then divides by the value it just stored. numpy evaluates the whole
+    RHS against the PRE-assignment array, so the pivot is read once, ahead of the nest. The
+    Gauss-elimination family (``row -= factor * pivot_row``) is where this bites.
+
+    Invariance is decided structurally -- full rank, no ``Slice``, no newaxis, no index array
+    in any axis -- so the staged value is by construction the one every iteration would have
+    loaded. That is why staging is also correct for a NON-aliasing kernel (cholesky / lu read
+    ``A[k, k]`` while writing rows ``k + 1:``): same value, one load instead of a trip count's
+    worth. A read under an ``IfExp`` / ``BoolOp`` keeps its guard -- hoisting past the test
+    that exists to keep the element from being addressed would fault where numpy does not.
+    """
+
+    def __init__(self, lhs_name: str, array_shapes: Dict[str, List[str]], counter: List[int]) -> None:
+        self.lhs_name = lhs_name
+        self.array_shapes = array_shapes
+        self.counter = counter
+        #: ``<name> = <read>`` assignments to place before the nest, in staging order.
+        self.staged: List[ast.stmt] = []
+        self._by_source: Dict[str, str] = {}
+
+    def visit_IfExp(self, node: ast.IfExp) -> ast.AST:
+        return node
+
+    def visit_BoolOp(self, node: ast.BoolOp) -> ast.AST:
+        return node
+
+    def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        self.generic_visit(node)
+        if not self._is_invariant_element(node):
+            return node
+        key = ast.unparse(node)
+        name = self._by_source.get(key)
+        if name is None:
+            self.counter[0] += 1
+            name = f"{INVARIANT_SELF_READ_PREFIX}{self.counter[0]}"
+            self._by_source[key] = name
+            self.staged.append(ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=node))
+        return ast.Name(id=name, ctx=ast.Load())
+
+    def _is_invariant_element(self, node: ast.Subscript) -> bool:
+        """True when ``node`` reads ONE element of the written array at an index no iter var moves."""
+        if not (isinstance(node.value, ast.Name) and node.value.id == self.lhs_name):
+            return False
+        if not isinstance(node.ctx, ast.Load):
+            return False
+        rank = len(self.array_shapes.get(self.lhs_name) or ())
+        dims = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
+        if rank == 0 or len(dims) != rank:
+            return False
+        for dim in dims:
+            if isinstance(dim, ast.Slice) or _is_newaxis(dim):
+                return False
+            if isinstance(dim, ast.Attribute) and dim.attr == "newaxis":
+                return False
+            # An index ARRAY makes the read a gather, whose result is not one element.
+            if any(isinstance(n, ast.Name) and n.id in self.array_shapes for n in ast.walk(dim)):
+                return False
+        return True
 
 
 class _SliceToScalarRewriter(ast.NodeTransformer):
