@@ -1,5 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
+
 """Hardware counters through PAPI: ONE metric per run, each run in its own crashable child.
 
 The ``perf`` half of "measure the machine, not the clock" lives in
@@ -176,6 +177,7 @@ context, so a second GPU or another thread's context contributes nothing -- whic
 indistinguishable, in the number alone, from a kernel that did no work.
 """
 
+from __future__ import annotations
 import ctypes
 import ctypes.util
 import functools

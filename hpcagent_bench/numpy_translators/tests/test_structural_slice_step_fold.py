@@ -20,6 +20,7 @@ A manifest-constant symbol that is NOT an ABI argument still folds -- ``_FoldCon
 because nothing passes it at run time. Only names the binding passes are excluded.
 """
 
+from __future__ import annotations
 import ast
 import json
 import pathlib

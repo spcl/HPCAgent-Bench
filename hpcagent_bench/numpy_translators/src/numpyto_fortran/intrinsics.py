@@ -1,5 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
+
 """Which numpy calls the Fortran backend renders as an intrinsic instead of a loop nest.
 
 Lowering expands a numpy call to an explicit loop for EVERY target, which is right for C -- it has
@@ -16,6 +17,7 @@ numpy's, and a wrong ``dim`` is a silently wrong answer rather than a refusal. `
 are held back for the neighbouring reason -- ``MAXLOC`` is 1-based where numpy is 0-based.
 """
 
+from __future__ import annotations
 import ast
 from typing import Dict, List, Optional, Set, Tuple
 

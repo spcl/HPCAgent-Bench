@@ -8,6 +8,7 @@ and write positions. A negative SLICE bound (``a[:-1]``) is a different construc
 and is left to the slice lowering (it already works).
 """
 
+from __future__ import annotations
 import ast
 
 import numpy as np

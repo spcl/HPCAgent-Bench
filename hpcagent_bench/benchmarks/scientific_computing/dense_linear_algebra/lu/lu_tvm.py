@@ -28,6 +28,7 @@ rank-1 update. Two fixed full-size PrimFuncs, each compiled once:
 The ``(i, j)`` lower loop and the per-row upper step are driven in Python.
 """
 
+from __future__ import annotations
 import tvm
 from tvm import te
 

@@ -1,5 +1,6 @@
 """CPU TVM impl of TSVC ``vsumr`` (full reduction ``sum_out[0] = sum(a)``)."""
 
+from __future__ import annotations
 import tvm
 from tvm import te
 

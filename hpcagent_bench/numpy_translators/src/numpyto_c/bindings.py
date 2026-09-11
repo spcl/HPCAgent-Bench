@@ -1,5 +1,6 @@
 """Emit the JSON binding file ``wrap_kernel`` uses to build ctypes argtypes without reading the C source."""
 
+from __future__ import annotations
 import json
 import pathlib
 from typing import Any, Dict, List

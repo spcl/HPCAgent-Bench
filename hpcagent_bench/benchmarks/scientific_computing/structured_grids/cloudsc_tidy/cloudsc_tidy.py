@@ -7,6 +7,7 @@
 # drawn at cloud-free magnitude (1e-12) and half at cloudy magnitude, so both arms
 # of the guard are exercised; the ice is cloud-free throughout, as it is above the
 # freezing level.
+from __future__ import annotations
 
 from typing import Optional
 

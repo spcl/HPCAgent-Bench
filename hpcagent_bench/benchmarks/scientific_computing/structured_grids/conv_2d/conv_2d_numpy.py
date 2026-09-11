@@ -6,6 +6,7 @@ The reference walks the (2R+1)^2 taps and accumulates weighted contributions int
 the numerical result identical.
 """
 
+from __future__ import annotations
 import numpy as np
 
 

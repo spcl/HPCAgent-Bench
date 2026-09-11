@@ -1,3 +1,4 @@
+from __future__ import annotations
 import numpy as np
 
 # Convergence is the solver's own accuracy requirement, so it is fixed: a relative term

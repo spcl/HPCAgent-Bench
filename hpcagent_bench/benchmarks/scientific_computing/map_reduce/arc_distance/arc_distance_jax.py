@@ -1,5 +1,6 @@
 # Copyright (c) 2019, Serge Guelton
 # All rights reserved.
+from __future__ import annotations
 
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:

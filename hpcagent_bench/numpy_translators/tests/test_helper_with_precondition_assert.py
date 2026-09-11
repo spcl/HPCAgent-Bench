@@ -10,6 +10,7 @@ survives as a CALL -- which a ``@dc.program`` cannot make, since it binds no hel
 ``assert groups == 1`` line was the whole reason conv_pointwise_2d emitted no DaCe program at all.
 """
 
+from __future__ import annotations
 import ast
 
 import numpy as np

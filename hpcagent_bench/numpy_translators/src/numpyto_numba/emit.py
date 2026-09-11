@@ -30,6 +30,7 @@ Correctness wins over speed here -- a loop that cannot be PROVEN
 independent is left serial (plain ``range``), never guessed parallel.
 """
 
+from __future__ import annotations
 import ast
 import re
 

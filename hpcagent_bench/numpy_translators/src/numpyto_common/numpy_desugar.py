@@ -14,6 +14,7 @@ parsed :class:`KernelIR` (declared arrays) plus a light local-allocation walk
 rank > 2) from an ordinary 2-D one (which numba / pythran handle).
 """
 
+from __future__ import annotations
 import ast
 import re
 import copy

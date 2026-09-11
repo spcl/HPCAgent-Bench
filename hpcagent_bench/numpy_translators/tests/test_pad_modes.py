@@ -17,6 +17,7 @@ data-dependent control flow inside the loop body, which pet/pluto refuses to
 schedule -- measured, the whole scop came back with empty statement bodies.
 """
 
+from __future__ import annotations
 import json
 import pathlib
 import re

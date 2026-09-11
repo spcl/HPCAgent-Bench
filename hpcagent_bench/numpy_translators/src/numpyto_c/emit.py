@@ -1,5 +1,6 @@
 """C99 / C++ / Pluto-input emitters via a hand-rolled Python AST -> C walker (1D pointers always, no ast.unparse)."""
 
+from __future__ import annotations
 import ast
 import copy
 import math

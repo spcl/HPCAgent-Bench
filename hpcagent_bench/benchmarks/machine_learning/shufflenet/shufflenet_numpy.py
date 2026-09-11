@@ -14,6 +14,7 @@ constructor defaults, so every channel count below is a literal. Upstream never 
 inside a stage, so the spatial extent is fixed by the stem alone.
 """
 
+from __future__ import annotations
 import numpy as np
 
 

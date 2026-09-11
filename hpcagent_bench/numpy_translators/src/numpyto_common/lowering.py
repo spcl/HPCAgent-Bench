@@ -30,6 +30,7 @@ The Foundation corpus exercises only ``math.exp``, ``math.sqrt`` and
 ``np.zeros``; the other rules are declared but inert until a kernel uses them.
 """
 
+from __future__ import annotations
 import ast
 import copy
 import itertools

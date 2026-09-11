@@ -7,6 +7,7 @@ desugars a body-level memset into the affine loop it is (``_fill_loop_stmt``), s
 translation unit is the normal output.
 """
 
+from __future__ import annotations
 import json
 import pathlib
 import re

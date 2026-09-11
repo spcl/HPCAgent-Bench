@@ -1,9 +1,11 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
+
 """Data-distribution plugin axis: each distribution is a callable registered via
 ``@register_distribution("name")`` as ``fn(shape, precision, spec) -> ndarray | dict``; adding one is a
 new file under this package, auto-discovered via pkgutil.iter_modules on import."""
 
+from __future__ import annotations
 import importlib
 import pkgutil
 from typing import Any, Callable

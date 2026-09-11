@@ -17,6 +17,7 @@ translation is orthogonal to the config flags -- one binary handles all of them)
     ``si0 - ip*n``, not the absolute ``si0`` (which runs off ``nlg``).
 """
 
+from __future__ import annotations
 import ast
 
 import numpy as np

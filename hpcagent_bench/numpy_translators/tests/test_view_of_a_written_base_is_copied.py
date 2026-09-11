@@ -11,6 +11,7 @@ The copy is only taken where every read of the view precedes the first store: a 
 view AFTER writing the base is relying on the aliasing, and a copy would answer the wrong array.
 """
 
+from __future__ import annotations
 import ast
 
 import numpy as np

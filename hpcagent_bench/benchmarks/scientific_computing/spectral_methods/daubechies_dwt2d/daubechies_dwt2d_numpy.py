@@ -8,6 +8,7 @@ two halves separately and writing each result straight into its own quadrant of 
 both full-block temporaries, and with them a read and a write of the block per level.
 """
 
+from __future__ import annotations
 import numpy as np
 
 

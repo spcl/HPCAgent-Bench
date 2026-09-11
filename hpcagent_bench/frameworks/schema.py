@@ -1,8 +1,10 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
+
 """Typed SQLModel schema for the framework-benchmark ``results`` table: the single Result model derives
 both the DDL (``create_all``) and row inserts, replacing the old hand-written CREATE TABLE/INSERT pair."""
 
+from __future__ import annotations
 from typing import Optional
 
 from sqlalchemy.engine import Engine

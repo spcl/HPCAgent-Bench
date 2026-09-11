@@ -16,6 +16,7 @@ emit+compile+run numerical check of the fix lives in
 ``test_translator_feature_fixes::test_feature_kernels_e2e[cloudsc]``.
 """
 
+from __future__ import annotations
 import pathlib
 import textwrap
 

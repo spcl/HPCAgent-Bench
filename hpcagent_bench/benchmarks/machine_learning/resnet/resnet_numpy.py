@@ -10,6 +10,7 @@ sqrt-of-std (rather than of variance) is the reference's own definition, which t
 reproduce rather than correct.
 """
 
+from __future__ import annotations
 import numpy as np
 
 

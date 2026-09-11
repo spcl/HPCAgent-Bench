@@ -1,5 +1,6 @@
 """CPU TVM covariance2 = np.cov(data.T); same multi-stage TIR as covariance, identical when float_n==N."""
 
+from __future__ import annotations
 import tvm
 from tvm import te
 

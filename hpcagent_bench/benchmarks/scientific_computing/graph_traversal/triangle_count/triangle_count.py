@@ -3,6 +3,7 @@
 # Clustered undirected graph, degree-oriented into a DAG exactly as GraphAIBench's
 # GraphT::orientation does (src/common/graph.cc), then handed to the kernel as CSR + the
 # per-edge source array the CUDA edge-parallel kernel reads.
+from __future__ import annotations
 
 from typing import Optional
 

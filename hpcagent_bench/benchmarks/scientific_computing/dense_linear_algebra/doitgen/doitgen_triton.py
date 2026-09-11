@@ -1,3 +1,4 @@
+from __future__ import annotations
 import triton
 import triton.language as tl
 import itertools

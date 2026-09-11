@@ -1,5 +1,6 @@
 """CLI entry point for emitting one kernel's C / C++ / Pluto files; backend for ``numpyto --target {c,polly,pluto}``."""
 
+from __future__ import annotations
 import argparse
 import pathlib
 import sys

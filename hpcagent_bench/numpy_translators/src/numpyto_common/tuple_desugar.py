@@ -1,5 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
+
 """Scalarize compile-time tuples so no tuple value ever reaches an emitter.
 
 C has no tuple, Fortran has no tuple, and none of these tuples needs one: the ports build them
@@ -25,6 +26,7 @@ Anything undecidable is left exactly as it was: this pass narrows, it never gues
 Entry point: :func:`desugar_tuples`.
 """
 
+from __future__ import annotations
 import ast
 import copy
 from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple

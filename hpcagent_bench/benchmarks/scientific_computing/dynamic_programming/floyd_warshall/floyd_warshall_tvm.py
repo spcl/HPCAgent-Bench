@@ -1,5 +1,6 @@
 """CPU TVM Floyd-Warshall: one pivot-sweep PrimFunc, driven by a Python k-loop with buffer ping-pong."""
 
+from __future__ import annotations
 import tvm
 from tvm import te
 

@@ -11,6 +11,7 @@ including a chain of views (``window = x_g[...]`` where ``x_g`` is itself a
 view), and refuses to fold whenever it cannot prove the fold is sound.
 """
 
+from __future__ import annotations
 import ast
 
 import numpy as np

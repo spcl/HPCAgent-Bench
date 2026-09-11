@@ -1,5 +1,6 @@
 """Fortran 2008 emitter walking the same KernelIR that NumpyToC produces, exported with bind(C, name=...)."""
 
+from __future__ import annotations
 import ast
 import copy
 import dataclasses

@@ -14,6 +14,7 @@ threshold and a body-assigned staged read. This is the numpyto side of the nest-
 ctypes arg ``c_double``); locking it here keeps the two in step.
 """
 
+from __future__ import annotations
 import ctypes
 import json
 import pathlib

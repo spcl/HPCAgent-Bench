@@ -1,5 +1,6 @@
 """CPU TVM impl of the deep-learning ``conv2d_bias`` microbench."""
 
+from __future__ import annotations
 import tvm
 from tvm import te
 

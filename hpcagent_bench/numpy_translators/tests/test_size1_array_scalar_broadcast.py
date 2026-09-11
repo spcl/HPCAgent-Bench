@@ -15,6 +15,7 @@ broadcast is a SCALAR: the fix stops registering such a local as an array (``ext
 scalarises a bare size-1-array READ to ``x[0]`` / ``x(1)`` (without double-indexing an explicit ``x[0]``).
 """
 
+from __future__ import annotations
 import ast
 import json
 import pathlib

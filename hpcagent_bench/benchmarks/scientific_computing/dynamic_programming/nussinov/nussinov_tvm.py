@@ -1,5 +1,6 @@
 """CPU TVM nussinov (RNA folding DP): process cells by increasing length L, one PrimFunc per L."""
 
+from __future__ import annotations
 import numpy as np
 
 import tvm

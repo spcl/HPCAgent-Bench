@@ -1,11 +1,13 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
+
 """Compile-time tuples must be gone before emit -- C and Fortran have no tuple to lower one to.
 
 Each test asserts on the desugared source, since the failure this pass exists to prevent is an
 ``ast.Tuple`` surviving into value position, where the emitter refuses it.
 """
 
+from __future__ import annotations
 import ast
 import textwrap
 

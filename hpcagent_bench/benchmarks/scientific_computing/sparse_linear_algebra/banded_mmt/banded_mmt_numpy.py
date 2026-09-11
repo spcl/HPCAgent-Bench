@@ -1,4 +1,5 @@
 # Bounded Matrix_1 * Matrix_2 * Transposed_1  (A @ B @ A^T, banded inputs)
+from __future__ import annotations
 import numpy as np
 
 

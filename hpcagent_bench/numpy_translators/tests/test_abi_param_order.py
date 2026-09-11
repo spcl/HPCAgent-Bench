@@ -12,6 +12,7 @@ signature and the binding JSON, so pinning it here pins the whole ABI. Imports
 resolve via PYTHONPATH (the suite convention) -- no ``sys.path`` mutation.
 """
 
+from __future__ import annotations
 import json
 import pathlib
 import subprocess

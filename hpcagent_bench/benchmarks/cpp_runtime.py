@@ -1,5 +1,6 @@
 """Shared loader for the native (C / C++ / Fortran) benchmark backends."""
 
+from __future__ import annotations
 import ctypes
 import importlib
 import pathlib

@@ -7,6 +7,7 @@ lulesh flag masks use bit-ops (``CI_DO_COUL = 1 << 1``, ``0x1 | 0x2``,
 constant name unresolved (``FAIL:unresolved:CI_DO_COUL``). These pin the fold.
 """
 
+from __future__ import annotations
 import ast
 
 import numpy as np

@@ -8,6 +8,7 @@ kernels by name through the YAML, never a hand-built ``bench_info/<short>.json``
 path or the old per-kernel folder layout.
 """
 
+from __future__ import annotations
 import contextlib
 import os
 import pathlib

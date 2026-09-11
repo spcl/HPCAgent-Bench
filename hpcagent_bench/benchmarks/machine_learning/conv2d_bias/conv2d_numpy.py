@@ -5,6 +5,7 @@ contracts the whole spatial extent against weights[ki, kj] (a C_in x C_out matmu
 wide tensordot, and the taps accumulate.
 """
 
+from __future__ import annotations
 import numpy as np
 
 

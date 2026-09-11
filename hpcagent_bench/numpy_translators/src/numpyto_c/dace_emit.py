@@ -1,5 +1,6 @@
 """Emit a DaCe @dc.program from the canonical numpy reference, sharing IR/classification with the C/Fortran emitters."""
 
+from __future__ import annotations
 import ast
 import copy
 import dataclasses

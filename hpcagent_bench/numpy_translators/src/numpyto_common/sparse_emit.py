@@ -15,6 +15,7 @@ Raises :class:`NotImplementedError` for unimplemented combinations so the
 hoister falls back to the dense path or reports an actionable error.
 """
 
+from __future__ import annotations
 import ast
 from typing import Callable, Dict, List, Optional, Tuple
 

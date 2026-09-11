@@ -1,5 +1,6 @@
 """CPU TVM impl of numerically-stable ``softmax`` over the last axis."""
 
+from __future__ import annotations
 import tvm
 from tvm import te
 

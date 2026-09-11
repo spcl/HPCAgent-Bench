@@ -1,5 +1,6 @@
 """CPU TVM durbin (Levinson-Durbin): fixed dot/update PrimFuncs driven over k; alpha/beta recur in Python."""
 
+from __future__ import annotations
 import numpy as np
 
 import tvm

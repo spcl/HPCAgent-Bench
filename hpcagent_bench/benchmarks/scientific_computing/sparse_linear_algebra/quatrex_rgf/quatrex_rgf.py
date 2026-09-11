@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Input generator for the QuaTrEx RGF selected solve.
+from __future__ import annotations
 
 from typing import Optional
 

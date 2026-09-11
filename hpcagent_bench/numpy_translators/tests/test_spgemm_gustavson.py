@@ -12,6 +12,7 @@ toolchain in the loop. What this does NOT cover is the walker's lowering of thos
 belongs to the native oracle.
 """
 
+from __future__ import annotations
 import ast
 from typing import Callable
 
