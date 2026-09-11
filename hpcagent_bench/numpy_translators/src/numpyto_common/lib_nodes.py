@@ -8928,6 +8928,13 @@ class _CallHoister(ast.NodeTransformer):
         # complex-typed Name references is tagged ``complex128``.
         self.local_dtypes: Dict[str, str] = local_dtypes if local_dtypes is not None else {}
         self.pre_stmts: List[ast.stmt] = []
+        #: Never populated on this class; forwarded to the nested ``_MatmulHoister``,
+        #: which treats ``None`` the same as an empty sparse-array table.
+        self.sparse: Optional[Dict[str, object]] = None
+        #: Axis/keepdims of the reduction call ``visit_Call`` is currently hoisting;
+        #: read back by ``_derive_output_shape`` within that same call.
+        self._cur_axis: Optional[List[int]] = None
+        self._cur_keepdims: bool = False
 
     def _infer_complex(self, expr: ast.AST) -> bool:
         """``True`` iff ``expr`` reads a complex value (skipping ``.shape`` reads)."""
@@ -8969,7 +8976,7 @@ class _CallHoister(ast.NodeTransformer):
             self.array_temps,
             self.counter,
             local_dtypes=self.local_dtypes,
-            sparse=vars(self).get("sparse"),
+            sparse=self.sparse,
             dim_aliases=self.dim_aliases,
             blas=self.blas,
         )
@@ -9458,7 +9465,7 @@ class _CallHoister(ast.NodeTransformer):
                 if src_shape:
                     # args doesn't carry keywords (those are on the parent
                     # call), so read the live axis/keepdims stash visit_Call set.
-                    kw_axes, kw_keep = vars(self).get("_cur_axis"), vars(self).get("_cur_keepdims", False)
+                    kw_axes, kw_keep = self._cur_axis, self._cur_keepdims
                     if kw_axes is None:
                         return None  # scalar -- not array-shape
                     # ``_read_axis_keepdims`` returns a list or None; normalise

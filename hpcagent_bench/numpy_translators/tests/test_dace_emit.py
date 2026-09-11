@@ -88,10 +88,10 @@ def emitted_renames(src: str) -> dict:
 
 
 def _emit(short):
-    # Drive off the co-located YAML (bench_info/*.json is gone); emit_bridge
-    # synthesizes the transient JSON the emitter reads. Through the inline fallback, exactly like
-    # autogen._emit_dace: a level-3 kernel keeps its helpers at parse time and the DaCe module --
-    # one @dc.program -- can only render the inlined form, so the PARSE has to sit inside the retry.
+    # Drive off the co-located YAML (bench_info/*.json is gone); emit_bridge synthesizes the
+    # transient JSON the emitter reads. Through the inline fallback, exactly like autogen._emit_dace:
+    # the emitter renders a kept helper as its own @dc.program now, but the fallback still exists for
+    # the forms it cannot express, and the PARSE has to sit inside the retry either way.
     def render():
         with bench_info_for(short) as (_, numpy_py, bi):
             kir = parse_kernel(numpy_py, bi)
@@ -110,7 +110,12 @@ def test_emits_valid_dc_program_with_symbols_dropped(short):
         for n in ast.walk(tree)
         if isinstance(n, ast.FunctionDef) and any("program" in ast.unparse(d) for d in n.decorator_list)
     ]
-    assert len(progs) == 1, f"{short}: expected one @dc.program"
+    # ONE program, and that is a claim about loop_level_reasoning rather than about the emitter: the
+    # track is single loop nests, so no kernel here keeps a helper for the emitter to give one to.
+    assert not kir.helpers, (
+        f"{short}: a loop_level_reasoning kernel kept helpers: {[h.kernel_name for h in kir.helpers]}"
+    )
+    assert len(progs) == 1, f"{short}: expected one @dc.program, got {[p.name for p in progs]}"
     fn = progs[0]
     assert fn.name == kir.kernel_name
     params = {a.arg for a in fn.args.args}
@@ -284,10 +289,14 @@ def test_dace_keeps_native_linalg():
 
 @pytest.mark.parametrize("kernel", _FEATURE_KERNELS)
 def test_dace_feature_kernels_desugared(kernel):
-    """Each desugar-requiring kernel emits ONE parseable ``@dc.program`` with
-    size symbols module-level (not parameters) and NO residual construct dace
-    cannot trace -- the same np.fft / np.add.at / np.mgrid / np.histogram /
-    ufunc.outer lowering numba and pythran get."""
+    """Each desugar-requiring kernel emits parseable ``@dc.program``s with size symbols module-level
+    (not parameters) and NO residual construct dace cannot trace -- the same np.fft / np.add.at /
+    np.mgrid / np.histogram / ufunc.outer lowering numba and pythran get.
+
+    The kernel program is LAST. It used to be the only one: a kept helper is now emitted as its own
+    ``@dc.program`` above it rather than inlined, so a module carries one program per helper the
+    body still calls, plus the kernel. The symbol check below is about the KERNEL's signature --
+    a helper's extents are bound from the shapes its call site passes."""
     kir, src = _emit(kernel)
     tree = ast.parse(src)  # must be valid Python
     progs = [
@@ -295,8 +304,12 @@ def test_dace_feature_kernels_desugared(kernel):
         for n in ast.walk(tree)
         if isinstance(n, ast.FunctionDef) and any("program" in ast.unparse(d) for d in n.decorator_list)
     ]
-    assert len(progs) == 1, f"{kernel}: expected one @dc.program"
-    params = {a.arg for a in progs[0].args.args}
+    assert progs, f"{kernel}: emitted no @dc.program at all"
+    assert progs[-1].name == kir.kernel_name, f"{kernel}: the kernel program is not last: {[p.name for p in progs]}"
+    helper_names = {h.kernel_name for h in kir.helpers}
+    stray = [p.name for p in progs[:-1] if p.name not in helper_names]
+    assert not stray, f"{kernel}: a program that is neither the kernel nor a kept helper: {stray}"
+    params = {a.arg for a in progs[-1].args.args}
     assert not (params & {s.name for s in kir.symbols}), f"{kernel}: symbol leaked into the signature"
     for tok in ("np.fft", "np.add.at", "np.mgrid", "np.histogram", ".outer(", "np.ndarray("):
         assert tok not in src, f"{kernel}: unsupported intrinsic {tok!r} was not desugared for dace"
@@ -1626,8 +1639,9 @@ def test_scalar_used_only_as_a_body_extent_is_promoted_to_a_symbol():
         for n in ast.walk(ast.parse(src))
         if isinstance(n, ast.FunctionDef) and any("program" in ast.unparse(d) for d in n.decorator_list)
     ]
-    assert len(progs) == 1
-    params = {a.arg for a in progs[0].args.args}
+    # The KERNEL program is last; a kept helper gets its own above it.
+    assert progs and progs[-1].name == kir.kernel_name, [p.name for p in progs]
+    params = {a.arg for a in progs[-1].args.args}
     assert "C_before_fc1" not in params, "extent-valued scalar is still a program parameter"
     assert "dc.symbol" in src and "'C_before_fc1'" in src, "C_before_fc1 is not declared a dc.symbol"
     # It has to be the SAME symbol the reshape reads, not a second name for the extent.

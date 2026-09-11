@@ -6,7 +6,7 @@ import math
 import pathlib
 import re
 from functools import lru_cache
-from typing import Callable, Dict, List, NamedTuple, Optional, Set, Tuple
+from typing import Callable, Dict, List, NamedTuple, Optional, Set, Tuple, Union
 
 from numpyto_common.ir import ArrayDesc, KernelIR
 from numpyto_common import dtypes, narrow_int, operators, parallelism
@@ -495,6 +495,22 @@ class _CBodyEmitter(BaseEmitter):
         self._loop_iter_names: Set[str] = set()
         # Per-statement FIFO of shapes for a reassigned local, popped at each __hpcagent_bench_zeros__() marker in source order.
         self._reassign_shapes: Dict[str, List[Tuple[str, ...]]] = {k: list(v) for k, v in kir.reassign_shapes.items()}
+        #: VLA local -> shape tokens; overwritten by :func:`_emit_body` with this kernel's actual set.
+        self.inline_local_decls: Dict[str, Tuple[str, ...]] = {}
+        #: dtype tag for an inline VLA local, keyed by name; overwritten alongside inline_local_decls.
+        self.local_dtypes_for_inline: Dict[str, str] = {}
+        #: Deferred-malloc local -> (size, C type, fill kind); overwritten by :func:`_emit_body`.
+        self.deferred_malloc_decls: Dict[str, Tuple[str, str, Optional[str]]] = {}
+        #: Deferred-malloc local -> last size string allocated, so a same-size __reassign__ can reuse the buffer.
+        self._deferred_alloc_size: Dict[str, str] = {}
+        #: Fn-top zeros/ones local -> (size, C type, fill kind) to re-run on an in-loop reset.
+        self.zeros_refill: Dict[str, Tuple[str, str, str]] = {}
+        #: Memoised _kernel_fp8_fns() result; False means not yet computed (the real result may be None).
+        self._fp8_fns_cache: Union[_Fp8Fns, None, bool] = False
+        #: Memoised _all_int_locals() result.
+        self._int_locals_cache: Optional[Set[str]] = None
+        #: Memoised _float_scalar_names() result.
+        self._fsn_cache: Optional[Set[str]] = None
 
     # ----- statement-level ------------------------------------------------
 
@@ -1039,7 +1055,7 @@ class _CBodyEmitter(BaseEmitter):
         enclosing block keeps every loop variable its extent names in scope, since the ``if`` sits
         inside those loops already.
         """
-        inline_locals = vars(self).get("inline_local_decls", {})
+        inline_locals = self.inline_local_decls
         if not inline_locals:
             return ""
         decls = []
@@ -1053,7 +1069,7 @@ class _CBodyEmitter(BaseEmitter):
                 continue
             name = stmt.targets[0].id
             shape = inline_locals.pop(name)
-            local_dtypes = vars(self).get("local_dtypes_for_inline", {})
+            local_dtypes = self.local_dtypes_for_inline
             size_tokens = [f"({_c_shape_token(s)})" for s in shape] if shape else []
             size = " * ".join(size_tokens) if size_tokens else "1"
             c_type = _c_type(local_dtypes.get(name, _default_float_dtype(self.kir)))
@@ -1115,7 +1131,7 @@ class _CBodyEmitter(BaseEmitter):
                 if fifo:
                     self.array_shapes[t] = list(fifo.pop(0))
                 # Deferred-malloc local: shape depends on a body-computed scalar; allocate once it's in scope.
-                deferred = vars(self).get("deferred_malloc_decls", {})
+                deferred = self.deferred_malloc_decls
                 if t in deferred:
                     size, c_type, fill = deferred[t]
                     # Reallocate only when the buffer doesn't exist or its size changed; a same-size
@@ -1124,7 +1140,7 @@ class _CBodyEmitter(BaseEmitter):
                     # size stays the same while the runtime footprint changes, so force a fresh allocation
                     # -- UNLESS the reassign is self-referential (``U = U * sign(...)``): its loop reads
                     # the OLD buffer at every index, which a free+malloc here hands back uninitialised.
-                    sizes = vars(self).setdefault("_deferred_alloc_size", {})
+                    sizes = self._deferred_alloc_size
                     prev = sizes.get(t)
                     symbolic_size = any(c.isalpha() for c in size)
                     if prev == size and not (is_reassign and symbolic_size and not self_ref):
@@ -1156,10 +1172,10 @@ class _CBodyEmitter(BaseEmitter):
                         lines.append(self._body_fill_stmt(t, size, c_type, fill, indent))
                     return "\n".join(lines)
                 # Inline-declare this local here if its shape depends on a loop var only in scope inside this block (C99 VLA).
-                inline_locals = vars(self).get("inline_local_decls", {})
+                inline_locals = self.inline_local_decls
                 if t in inline_locals:
                     shape = inline_locals.pop(t)  # only emit decl once
-                    local_dtypes = vars(self).get("local_dtypes_for_inline", {})
+                    local_dtypes = self.local_dtypes_for_inline
                     size_tokens = [f"({_c_shape_token(s)})" for s in shape] if shape else []
                     size = " * ".join(size_tokens) if size_tokens else "1"
                     default_float = _default_float_dtype(self.kir)
@@ -1167,7 +1183,7 @@ class _CBodyEmitter(BaseEmitter):
                     c_type = _c_type(dtype_tag)
                     return f"{indent}{c_type} {t}[{size}];"
                 # A fn-top zeros/ones local reset in a loop must be re-filled; skip the refill for a __reassign__ self-update.
-                refill = vars(self).get("zeros_refill", {})
+                refill = self.zeros_refill
                 if t in refill and not is_reassign:
                     size, c_type, kind = refill[t]
                     return self._body_fill_stmt(t, size, c_type, kind, indent)
@@ -1242,7 +1258,7 @@ class _CBodyEmitter(BaseEmitter):
 
     def _kernel_fp8_fns(self):
         """The kernel's single fp8 format's helpers, or None if it uses none (mixing both formats is refused)."""
-        cache = vars(self).get("_fp8_fns_cache", False)
+        cache = self._fp8_fns_cache
         if cache is not False:
             return cache
         used = _fp8_dtypes_used(self.kir)
@@ -1818,7 +1834,7 @@ class _CBodyEmitter(BaseEmitter):
 
     def _all_int_locals(self) -> Set[str]:
         """Cached set of all locals known to be int: int kernel scalars + tuple-unpack int_locals + needs_int promotions."""
-        cached = vars(self).get("_int_locals_cache")
+        cached = self._int_locals_cache
         if cached is not None:
             return cached
         out: Set[str] = set()
@@ -1905,7 +1921,7 @@ class _CBodyEmitter(BaseEmitter):
 
     def _float_scalar_names(self) -> set:
         """Body-computed scalar locals that hold a float value, inferred to a fixpoint (absent from local_dtypes)."""
-        cache = vars(self).get("_fsn_cache")
+        cache = self._fsn_cache
         if cache is not None:
             return cache
         floats: set = set()

@@ -1070,6 +1070,9 @@ class _ConditionalNoneAllocRewriter(ast.NodeTransformer):
     (there its None-ness is observable, so allocating unconditionally would flip the
     guard); that case is the separate is-None allocation-check handling."""
 
+    def __init__(self) -> None:
+        self._none_checked: set[str] = set()
+
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
         # Names whose None-ness is observed (``x is None`` / ``x is not None``): a
         # conditional alloc into one of these must NOT be forced, so record them first.
@@ -1092,7 +1095,7 @@ class _ConditionalNoneAllocRewriter(ast.NodeTransformer):
             len(node.targets) == 1
             and isinstance(node.targets[0], ast.Name)
             and isinstance(node.value, ast.IfExp)
-            and node.targets[0].id not in vars(self).get("_none_checked", set())
+            and node.targets[0].id not in self._none_checked
         ):
             return node
         ifexp = node.value

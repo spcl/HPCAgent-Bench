@@ -5,7 +5,7 @@ import copy
 import dataclasses
 import math
 import re
-from typing import Callable, Dict, List, NamedTuple, Optional, Set, Tuple
+from typing import Callable, Dict, List, Literal, NamedTuple, Optional, Set, Tuple
 
 from numpyto_fortran.intrinsics import literal_axis, reshape_dims
 from numpyto_common.ir import ArrayDesc, KernelIR, _is_alloc_marker
@@ -794,7 +794,7 @@ class _FortranBodyEmitter(BaseEmitter):
     def _emit_return(self, node: ast.Return, indent: str) -> str:
         # In a HELPER subroutine the returned value is written to the out-param
         # return_mode (Fortran has no by-value return in this scheme), then a bare return.
-        mode = vars(self).get("return_mode")
+        mode = self.return_mode
         if mode is not None and node.value is not None:
             return f"{indent}{mode} = {self.emit_expr(node.value)}\n{indent}return"
         return f"{indent}return"
@@ -872,6 +872,25 @@ class _FortranBodyEmitter(BaseEmitter):
         # Whether the body references IEEE infinity/NaN, which Fortran expresses via
         # ieee_value -- gates a `use, intrinsic :: ieee_arithmetic` in the preamble.
         self._used_ieee = False
+        #: Int-typed PARAMETER array names (0/1-flag use wraps with /= 0); populated by the caller.
+        self._int_array_names: Set[str] = set()
+        #: Lazy cache of names typed integer (symbols + int-dtype scalars); see _is_int_flag_scalar.
+        self._int_scalar_names: Optional[Set[str]] = None
+        #: Lazy cache of bool-typed scalar params; see _bool_scalar_names.
+        self._bool_scalar_names_cache: Optional[Set[str]] = None
+        #: Local array names declared logical(c_bool); populated by the caller (see _logical_locals).
+        self._logical_array_locals: Set[str] = set()
+        #: name -> resolved element dtype of a fresh local array; populated by the caller.
+        self._local_elem_dtypes: Dict[str, str] = {}
+        #: name -> (reversed shape, Fortran type) for a local whose allocate must land at its
+        #: np.zeros marker site (in loop scope); populated by the caller.
+        self.inline_alloc_locals: Dict[str, Tuple[List[str], str]] = {}
+        #: Lazy cache of the kernel's fp8 rounding procedures. False means "not yet computed" --
+        #: a real cached result may legitimately be None.
+        self._fp8_fns_cache: Optional[_Fp8Fns] | Literal[False] = False
+        #: name -> int-kind tag ("int32"/"int64") for implicit-local bitwise propagation;
+        #: populated by the caller.
+        self._int_kinds: Dict[str, str] = {}
 
     def _emit_for(self, node: ast.For, indent: str) -> str:
         target = node.target
@@ -951,10 +970,10 @@ class _FortranBodyEmitter(BaseEmitter):
 
     def _is_int_flag_scalar(self, node: ast.AST) -> bool:
         """arr[i] (int param array) or a bare int scalar param used as a 0/1 flag; can't retype to logical (C ABI)."""
-        ints = vars(self).get("_int_array_names", set())
+        ints = self._int_array_names
         if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) and node.value.id in ints:
             return True
-        int_scalars = vars(self).get("_int_scalar_names")
+        int_scalars = self._int_scalar_names
         if int_scalars is None:
             # Symbols too, not just scalars: a ``parameters:`` preset entry becomes a SymbolDesc
             # (frontend.py), so a 0/1 config toggle declared there (crc16's ``reflect_out``) is an
@@ -997,8 +1016,8 @@ class _FortranBodyEmitter(BaseEmitter):
         # has two: a name this pass named logical, and a name whose recorded element dtype is bool
         # (``nz = qq > 1e-08``). Reading only the first left this oracle disagreeing with the
         # ``logical(c_bool)`` the same emitter had already declared.
-        logicals = vars(self).get("_logical_array_locals", set())
-        elem = vars(self).get("_local_elem_dtypes", {})
+        logicals = self._logical_array_locals
+        elem = self._local_elem_dtypes
         base = (
             node.value.id
             if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name)
@@ -1010,7 +1029,7 @@ class _FortranBodyEmitter(BaseEmitter):
 
     def _bool_scalar_names(self) -> Set[str]:
         """Scalar params the frontend typed bool; they declare logical(c_bool) already, so must NOT be wrapped /= 0."""
-        names = vars(self).get("_bool_scalar_names_cache")
+        names = self._bool_scalar_names_cache
         if names is None:
             names = {s.name for s in self.kir.scalars if s.dtype in ("bool", "bool_")}
             self._bool_scalar_names_cache = names
@@ -1113,7 +1132,7 @@ class _FortranBodyEmitter(BaseEmitter):
             # For locals whose shape uses a loop iter, emit an ALLOCATE here (the
             # loop iter is now in scope); caller pre-populates inline_alloc_locals.
             if isinstance(target, ast.Name):
-                inline = vars(self).get("inline_alloc_locals", {})
+                inline = self.inline_alloc_locals
                 if target.id in inline:
                     rev_shape, _ftype = inline[target.id]
                     dims = ", ".join(rev_shape)
@@ -1145,7 +1164,7 @@ class _FortranBodyEmitter(BaseEmitter):
                     )
                     if not is_reassign:
                         kind = self.kir.zeros_fills.get(target.id)
-                        is_logical = target.id in vars(self).get("_logical_array_locals", set())
+                        is_logical = target.id in self._logical_array_locals
                         if kind in ("zeros", "zeros_like"):
                             alloc += f"\n{indent}{t} = {'.false.' if is_logical else '0'}"
                         elif kind in ("ones", "ones_like"):
@@ -1160,7 +1179,7 @@ class _FortranBodyEmitter(BaseEmitter):
                 # re-filled: Fortran does NOT zero arrays at declaration.
                 kind = self.kir.zeros_fills.get(target.id)
                 # A LOGICAL array fills with .false./.true. -- Fortran rejects int 0/1 there.
-                is_logical = target.id in vars(self).get("_logical_array_locals", set())
+                is_logical = target.id in self._logical_array_locals
                 if kind in ("zeros", "zeros_like"):
                     return f"{indent}{target.id} = {'.false.' if is_logical else '0'}"
                 if kind in ("ones", "ones_like"):
@@ -1170,7 +1189,7 @@ class _FortranBodyEmitter(BaseEmitter):
         if (
             isinstance(target, ast.Subscript)
             and isinstance(target.value, ast.Name)
-            and target.value.id in vars(self).get("_logical_array_locals", set())
+            and target.value.id in self._logical_array_locals
             and isinstance(node.value, ast.Constant)
             and isinstance(node.value.value, (int, bool))
         ):
@@ -1280,7 +1299,7 @@ class _FortranBodyEmitter(BaseEmitter):
 
     def _kernel_fp8_fns(self):
         """The kernel's single fp8 format's procedures, or None if it uses none (mixing both formats is refused)."""
-        cache = vars(self).get("_fp8_fns_cache", False)
+        cache = self._fp8_fns_cache
         if cache is not False:
             return cache
         used = _fp8_dtypes_used(self.kir)
@@ -1702,7 +1721,7 @@ class _FortranBodyEmitter(BaseEmitter):
                     return self._int_tag(decl.dtype) is None and decl.dtype != "bool"
             # Fresh local arrays carry their resolved element dtype in the emit-time
             # local-dtype map, not in kir.arrays.
-            dt = vars(self).get("_local_elem_dtypes", {}).get(base.id)
+            dt = self._local_elem_dtypes.get(base.id)
             if dt is not None:
                 return self._int_tag(dt) is None and dt not in ("bool", "bool_")
             return False
@@ -1760,7 +1779,7 @@ class _FortranBodyEmitter(BaseEmitter):
         # Boolean-mask indexing arr[mask] -> Fortran PACK(arr, mask). Detect by
         # looking at the slice slot for a Name resolving to a known-logical local.
         if isinstance(node.value, ast.Name) and isinstance(node.slice, ast.Name):
-            logical_locals = vars(self).get("_logical_array_locals", set())
+            logical_locals = self._logical_array_locals
             if node.slice.id in logical_locals:
                 return f"PACK({node.value.id}, {node.slice.id})"
         # Tuple subscripted by a constant integer: resolve at emit time (a
@@ -2335,7 +2354,7 @@ class _FortranBodyEmitter(BaseEmitter):
             if s.name == name and self._int_tag(s.dtype):
                 return self._int_tag(s.dtype)
         # Implicit-local types set via the emit-time int_kinds map (bitwise-int64 propagation).
-        int_kinds = vars(self).get("_int_kinds", {})
+        int_kinds = self._int_kinds
         dt = int_kinds.get(name)
         if dt in self._INT_KIND_SUFFIX:
             return dt
@@ -2346,7 +2365,7 @@ class _FortranBodyEmitter(BaseEmitter):
             return dt
         # Fresh local arrays carry their resolved element dtype in the emit-time
         # local-dtype map -- return its int tag so it's kinded like a declared one.
-        dt = vars(self).get("_local_elem_dtypes", {}).get(name)
+        dt = self._local_elem_dtypes.get(name)
         if dt is not None:
             return self._int_tag(dt)
         return None

@@ -28,6 +28,7 @@ different parameter names -- they are plain pass-through JSON, exactly the input
 ``fuzz.sample_params`` already consumes.
 """
 
+import dataclasses
 import json
 import subprocess
 from dataclasses import dataclass
@@ -72,7 +73,10 @@ class ExportRow:
     warnings: str  # JSON list[str]; empty when the row is fully clean
 
     def to_dict(self) -> Dict[str, Any]:
-        return dict(vars(self))
+        # dataclasses.fields, not vars(self): the field list is the declared schema, and vars()
+        # raises once this carries __slots__. Shallow like the dict(vars(...)) it replaces --
+        # asdict() would deep-copy every value, which the callers do not want.
+        return {f.name: getattr(self, f.name) for f in dataclasses.fields(self)}
 
 
 def _numpy_reference_source(spec: BenchSpec) -> str:

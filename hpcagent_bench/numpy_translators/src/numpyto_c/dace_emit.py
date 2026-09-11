@@ -3686,8 +3686,9 @@ def render_program(kir: KernelIR, fn_name: str | None = None) -> RenderedProgram
     )
 
 
-def helper_call_bindings(owner: ast.FunctionDef, hkir: KernelIR,
-                         pinned: Dict[str, Any]) -> Tuple[Dict[str, str], Dict[str, Any]]:
+def helper_call_bindings(
+    owner: ast.FunctionDef, hkir: KernelIR, pinned: Dict[str, Any]
+) -> Tuple[Dict[str, str], Dict[str, Any]]:
     """What the helper's call site says about its symbols: ``(aliases, constants)``.
 
     * ALIASES ``{caller's name for an extent: the helper's own name for it}``. A helper's
@@ -3735,6 +3736,7 @@ def with_helper_vocabulary(hkir: KernelIR, aliases: Dict[str, str], constants: D
     """
     if not aliases and not constants:
         return hkir
+
     def respell(token) -> str:
         return _IDENT_RE.sub(lambda m: aliases.get(m.group(), m.group()), str(token))
 
@@ -3804,8 +3806,9 @@ def bind_helper_call(node: ast.Call, hkir: KernelIR, rendered: RenderedProgram) 
     node.keywords = keywords
 
 
-def bind_helper_calls(body: List[ast.stmt], rendered_by_name: Dict[str, RenderedProgram],
-                      kir_by_name: Dict[str, KernelIR]) -> None:
+def bind_helper_calls(
+    body: List[ast.stmt], rendered_by_name: Dict[str, RenderedProgram], kir_by_name: Dict[str, KernelIR]
+) -> None:
     """Rewrite every call in ``body`` that names one of the rendered helpers."""
     for stmt in body:
         for node in ast.walk(stmt):

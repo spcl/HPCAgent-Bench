@@ -6202,8 +6202,14 @@ def constant_truth(test: ast.expr) -> Optional[bool]:
         except (ValueError, TypeError, SyntaxError):
             return None
         op = test.ops[0]
-        for kind, answer in ((ast.Eq, left == right), (ast.NotEq, left != right), (ast.Lt, left < right),
-                             (ast.LtE, left <= right), (ast.Gt, left > right), (ast.GtE, left >= right)):
+        for kind, answer in (
+            (ast.Eq, left == right),
+            (ast.NotEq, left != right),
+            (ast.Lt, left < right),
+            (ast.LtE, left <= right),
+            (ast.Gt, left > right),
+            (ast.GtE, left >= right),
+        ):
             if isinstance(op, kind):
                 return bool(answer)
     return None
