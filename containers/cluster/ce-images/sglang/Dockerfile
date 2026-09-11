@@ -342,6 +342,54 @@ RUN set -eux; \
     test ! -e /tmp/aiter-home/.aiter; \
     rm -rf /tmp/aiter-home
 
+# GLM-5.3 and every other GlmMoeDsa/DeepSeek fp8 checkpoint, fixed IN THE PACKAGE.
+#
+# sglang's DeepSeek weight loader reads `weight_scale.format_ue8m0` as a plain attribute. fp8.py
+# stamps that attribute onto a scale tensor, but on gfx942 the fp8-fnuz branch runs
+# normalize_e4m3fn_to_e4m3fnuz first, which returns a FRESH tensor carrying no such attribute, so
+# the loader raises AttributeError before the model is up. The branch is AMD-only, which is why it
+# ships broken; 0.5.19 and the 20260909 nightly both still carry it.
+#
+# The fix is the guard the SAME TREE already uses in fp8_utils.py, and False is correct rather than
+# merely safe: the branch it guards leads to should_deepgemm_weight_requant_ue8m0, and deepgemm is
+# NVIDIA-only, so the block is dead on this hardware.
+#
+# In the source, not monkeypatched onto torch.Tensor by a host sitecustomize on PYTHONPATH: a host
+# path is invisible to the image digest, and the per-role mount policy does not carry it into the
+# inference container, so the patch silently did not apply. The build FAILS when the pattern is
+# absent, so a release that fixes this upstream is reported here instead of being patched twice.
+RUN /opt/venv/bin/python3 <<'PY'
+import pathlib
+import re
+import sys
+
+# A READ of .format_ue8m0. An assignment target (a single = that is not ==) is left alone: fp8.py
+# stamps the attribute all over and rewriting those would not parse.
+PATTERN = re.compile(r"(?<![\w.])(\w+)\.format_ue8m0\b(?!\s*=(?!=))")
+GUARD = r'getattr(\1, "format_ue8m0", False)'
+
+tree = pathlib.Path("/sgl-workspace/sglang/python/sglang")
+patched = []
+for path in sorted(tree.rglob("*.py")):
+    text = path.read_text()
+    fixed = PATTERN.sub(GUARD, text)
+    if fixed != text:
+        path.write_text(fixed)
+        patched.append(f"{path.relative_to(tree)}: {len(PATTERN.findall(text))}")
+if not patched:
+    sys.exit("no unguarded .format_ue8m0 read found; upstream may have fixed it -- drop this step")
+print("format_ue8m0 guarded in:", *patched, sep="\n  ", flush=True)
+for path in tree.rglob("*.py"):
+    assert not PATTERN.search(path.read_text()), path
+PY
+
+# The aiter kernel fused_qk_norm_rope_cache_quant.cu does static_cast<float>(__half) while the
+# PyTorch extension build defines -D__HIP_NO_HALF_CONVERSIONS__ / -D__HIP_NO_HALF_OPERATORS__,
+# which remove __half's conversion and arithmetic operators. hipcc APPENDS this and a later -U
+# beats an earlier -D, so the JIT build gets them back without patching the kernel. In the image
+# rather than in a second EDF: every checkpoint that JITs that kernel needs it.
+ENV HIPCC_COMPILE_FLAGS_APPEND="-U__HIP_NO_HALF_CONVERSIONS__ -U__HIP_NO_HALF_OPERATORS__"
+
 # The EDF's env, restated in the image so it is under the digest rather than only in ~/.edf.
 #
 # TRANSPORT, named in the image so it is under the digest and not only in somebody's ~/.edf.
