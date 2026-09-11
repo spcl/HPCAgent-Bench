@@ -27,7 +27,7 @@ init:
   arrays:
     A: (N, M, K)
     B: (K, L)
-    out: (N, L, L)
+    out: (N, M, L)
 output_args:
 - out
 experiment_tags:

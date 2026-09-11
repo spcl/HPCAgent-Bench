@@ -27,7 +27,7 @@ init:
   arrays:
     A: (batch_size, m, k)
     B: (batch_size, k, n)
-    out: (batch_size, batch_size, n)
+    out: (batch_size, m, n)
 output_args:
 - out
 experiment_tags:
