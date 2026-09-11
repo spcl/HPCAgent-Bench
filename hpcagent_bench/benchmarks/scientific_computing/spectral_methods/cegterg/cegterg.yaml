@@ -189,3 +189,4 @@ output_args:
 min_precision: fp64
 experiment_tags:
 - qe
+- scicomp-focus40

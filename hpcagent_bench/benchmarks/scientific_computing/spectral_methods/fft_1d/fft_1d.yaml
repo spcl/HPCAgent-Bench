@@ -39,3 +39,4 @@ output_args:
 - z
 experiment_tags:
 - fft_1d
+- scicomp-focus40

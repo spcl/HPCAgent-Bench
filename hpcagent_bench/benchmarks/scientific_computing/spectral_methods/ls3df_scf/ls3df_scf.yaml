@@ -102,3 +102,4 @@ fuzz:
   - nstate >= 1
 experiment_tags:
 - ls3df
+- scicomp-focus40

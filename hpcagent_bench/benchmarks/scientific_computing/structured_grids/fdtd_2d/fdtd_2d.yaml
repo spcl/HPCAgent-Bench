@@ -72,3 +72,4 @@ mpi:
 experiment_tags:
 - npbench
 - polybench
+- scicomp-focus40

@@ -30,3 +30,4 @@ output_args:
 experiment_tags:
 - npbench
 - polybench
+- scicomp-focus40

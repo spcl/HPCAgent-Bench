@@ -113,3 +113,4 @@ precisions:
 - fp64
 experiment_tags:
 - gromacs
+- scicomp-focus40

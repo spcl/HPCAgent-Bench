@@ -22,6 +22,8 @@
 # hyperresist in its BOUT.inp.
 name: BOUT++ ELM peeling-ballooning RHS
 level: 3
+experiment_tags:
+- scicomp-focus40
 parameters:
   S:
     NX: 68

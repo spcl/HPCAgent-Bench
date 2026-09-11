@@ -111,3 +111,4 @@ distributions:
     distribution: diagonal
 experiment_tags:
 - sparse
+- scicomp-focus40

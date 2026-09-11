@@ -37,3 +37,4 @@ output_args:
 - out
 experiment_tags:
 - dwt2d
+- scicomp-focus40

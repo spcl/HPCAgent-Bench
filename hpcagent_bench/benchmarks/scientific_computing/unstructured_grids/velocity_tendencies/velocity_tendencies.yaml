@@ -405,3 +405,4 @@ output_args:
   - z_vt_ie
 experiment_tags:
 - weather_stencils
+- scicomp-focus40
