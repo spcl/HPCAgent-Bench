@@ -3604,9 +3604,24 @@ def _apply_subscript_axes(dims: List, sub_slice: ast.AST) -> List:
     axes = sub_slice.elts if isinstance(sub_slice, ast.Tuple) else [sub_slice]
     ell = [i for i, ax in enumerate(axes) if isinstance(ax, ast.Constant) and ax.value is Ellipsis]
     if ell:
-        axes = axes[: ell[0]] + [ast.Slice()] * max(0, len(dims) - (len(axes) - 1)) + axes[ell[0] + 1 :]
+        # Counted over the axes that CONSUME a source dimension: a newaxis consumes none, so
+        # including one here makes the ellipsis stand for one axis too few.
+        consuming = sum(1 for ax in axes if not _is_newaxis(ax)) - 1
+        axes = axes[: ell[0]] + [ast.Slice()] * max(0, len(dims) - consuming) + axes[ell[0] + 1 :]
     kept = []
-    for ax, dim in zip(axes, dims):
+    source = 0
+    for ax in axes:
+        # ``None`` / ``np.newaxis`` INSERTS a length-1 axis and consumes no source dimension.
+        # Walked positionally against ``dims`` it consumed one instead, so ``x1[:, None, :]`` on
+        # an (batch, features) array came back rank-1 ``(batch,)`` -- a helper parameter then
+        # declared one axis for an argument carrying three.
+        if _is_newaxis(ax):
+            kept.append("1")
+            continue
+        if source >= len(dims):
+            break
+        dim = dims[source]
+        source += 1
         if not isinstance(ax, ast.Slice):
             continue
         extent = sliced_extent(dim, ax)
@@ -3617,7 +3632,7 @@ def _apply_subscript_axes(dims: List, sub_slice: ast.AST) -> List:
         if extent is None:
             return []
         kept.append(extent)
-    kept.extend(dims[len(axes) :])
+    kept.extend(dims[source:])
     return kept
 
 
@@ -4449,13 +4464,44 @@ def _propagate_local_extents(hfn: ast.FunctionDef, table: Dict[str, Tuple[str, .
             table[name] = tuple(ast.unparse(d) for d in ext)
 
 
-def _extent_operands_resolved(value: ast.expr, hfn: ast.FunctionDef, table: Dict[str, Tuple[str, ...]]) -> bool:
+def scalar_value_names(hfn: ast.FunctionDef, seed: Set[str]) -> Set[str]:
+    """Names bound to a SCALAR in ``hfn``, seeded with its scalar and symbol PARAMETERS.
+
+    Absence from the extent table conflates "this is a scalar" with "this is an array the sweep
+    could not size", and reading a divisor as the second declines a helper whose return shape is
+    fully known: ``_avgpool2d`` returns ``acc / (kh * kw)``, and ``kh``/``kw`` -- locals bound from
+    scalar parameters -- made the whole return unresolvable, so the out-param fell back to a
+    broadcast join over the ARGUMENTS and the caller allocated the pool's INPUT shape.
+
+    Source order is enough to chain: each local is decided against the ones bound before it.
+    """
+    known = set(seed)
+    for stmt, _ in _statements_in_order(hfn.body):
+        if not isinstance(stmt, ast.Assign) or len(stmt.targets) != 1:
+            continue
+        target = stmt.targets[0]
+        targets = target.elts if isinstance(target, ast.Tuple) else [target]
+        if not all(isinstance(t, ast.Name) for t in targets):
+            continue
+        values = stmt.value.elts if isinstance(stmt.value, ast.Tuple) else [stmt.value] * len(targets)
+        if len(values) != len(targets):
+            continue
+        for name_node, value in zip(targets, values):
+            if all(n.id in known for n in ast.walk(value) if isinstance(n, ast.Name)):
+                known.add(name_node.id)
+    return known
+
+
+def _extent_operands_resolved(
+    value: ast.expr, hfn: ast.FunctionDef, table: Dict[str, Tuple[str, ...]], scalars: Set[str]
+) -> bool:
     """Whether every name the expression uses AS AN ARRAY has an extent in ``table``.
 
     Only the positions that carry an extent are checked -- a direct operand of an arithmetic
     BinOp, and a subscript base. A name in any other position is a scalar (mamba2's ``span``
     inside ``np.full((span, span), ...)``), and demanding an extent for it declines helpers that
-    are perfectly resolvable.
+    are perfectly resolvable. ``scalars`` names the ones that carry a value rather than an extent
+    even in an operand position -- see :func:`scalar_value_names`.
     """
     operands: List[ast.expr] = []
     for node in ast.walk(value):
@@ -4463,7 +4509,7 @@ def _extent_operands_resolved(value: ast.expr, hfn: ast.FunctionDef, table: Dict
             operands.extend([node.left, node.right])
         elif isinstance(node, ast.Subscript):
             operands.append(node.value)
-    return not any(isinstance(op, ast.Name) and op.id not in table for op in operands)
+    return not any(isinstance(op, ast.Name) and op.id not in table and op.id not in scalars for op in operands)
 
 
 def target_shape_is_the_call_itself(fn: ast.FunctionDef, lhs, arr_by: Dict[str, ArrayDesc], name: str) -> bool:
@@ -4528,15 +4574,16 @@ def _helper_return_shape_from_body(hfn, pnames, args, arr_by, sca_by, sym_by, fn
     returns = [n.value for n in ast.walk(hfn) if isinstance(n, ast.Return) and n.value is not None]
     if not returns:
         return None, None
-    arrays, _, _ = _infer_helper_params(pnames, args, arr_by, sca_by, sym_by, fn)
+    arrays, scalars, symbols = _infer_helper_params(pnames, args, arr_by, sca_by, sym_by, fn)
     if not arrays:
         return None, None
+    scalar_names = scalar_value_names(hfn, {d.name for d in (*scalars, *symbols)})
     table = {a.name: tuple(str(s) for s in a.shape) for a in arrays}
     # A return expression is built from the helper's own locals (mamba2's
     # ``return seg + np.triu(__full1, 1)``), not from its parameters directly, so sizing it needs
     # those locals too -- propagated forward, since each is sized against the ones before it.
     _propagate_local_extents(hfn, table)
-    if any(not _extent_operands_resolved(value, hfn, table) for value in returns):
+    if any(not _extent_operands_resolved(value, hfn, table, scalar_names) for value in returns):
         # ``_iter_extent_of`` answers a BinOp with the operand it COULD size when the other comes
         # back None. That is a serviceable broadcast hint and a wrong allocation: mamba2's
         # ``seg + np.triu(...)`` reported the triangle's ``(span, span)`` for a 4-D result, which

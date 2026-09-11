@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from numpyto_common import dtypes
 from numpyto_common.frontend import fold_shape_expr
 from numpyto_common.ir import KernelIR, shape_dimension_symbols
-from numpyto_common.lib_nodes import shape_exprs_equal
+from numpyto_common.lib_nodes import shape_exprs_equal, sympify_shape
 from numpyto_common.lowering import lower
 from numpyto_common.numpy_desugar import _AUG_OP_SRC, desugar_for_python_backend, expr_rank, rank_table
 from numpyto_common.ordered import OrderedSet
@@ -352,6 +352,31 @@ class _FloorDivToIntFloor(ast.NodeTransformer):
         return ast.copy_location(call, node)
 
 
+@functools.lru_cache(maxsize=4096, typed=True)
+def extent_without_dead_symbols(text: str) -> str:
+    """``text`` with any symbol that CANCELS out of it gone, or ``text`` unchanged.
+
+    A slice extent arrives as ``hi - lo``: ``x[ci * 4:(ci + 1) * 4]`` declares
+    ``(ci + 1) * 4 - ci * 4``, which is 4 whatever ``ci`` is. dace reads the declaration literally,
+    cannot solve a symbol the shape does not really contain, and asks the caller for it --
+    "Argument number mismatch ... Missing arguments: {'ci'}".
+
+    Only a strictly SMALLER symbol set is taken, and only when the folded form needs no
+    floor/ceiling: an extent this cannot simplify keeps the exact spelling the rest of the emitter
+    matches on, and ``//`` never round-trips through sympy's ``floor``.
+    """
+    named = {i for i in _IDENT_RE.findall(text)}
+    if not named:
+        return text
+    folded = sympify_shape(text)
+    if folded is None or len(folded.free_symbols) >= len(named):
+        return text
+    rendered = str(folded)
+    if any(head in rendered for head in ("floor", "ceiling", "Piecewise")):
+        return text
+    return rendered
+
+
 def _declared_extent(dim) -> str:
     """One declared extent, with ``//`` spelled the way the frontend spells it inside the body.
 
@@ -361,7 +386,7 @@ def _declared_extent(dim) -> str:
     and the frontend, unable to prove them equal, refuses the broadcast -- stride-2 dilated conv
     was the first corpus case where the divisor is not 1 and the two stop folding together.
     """
-    text = str(dim)
+    text = extent_without_dead_symbols(str(dim))
     if "//" not in text:
         return text
     tree = _FloorDivToIntFloor().visit(ast.parse(text, mode="eval"))
@@ -914,18 +939,32 @@ class DivisibleStridedSpan(ast.NodeTransformer):
 
     @staticmethod
     def span_expr(element: ast.Slice) -> Optional[ast.expr]:
-        """The span out of ``upper``: ``upper`` itself when the slice starts at 0, else what is added
-        to ``lower``. A stop that is not ``lower + <span>`` is not this idiom."""
+        """The span out of ``upper``: ``upper`` itself when the slice starts at 0, else what is left
+        once ``lower`` is taken out of it. A stop that does not contain ``lower`` is not this idiom.
+
+        Over the whole ``+`` chain, not just its top node: ``oy0 + (h - 1) * stride + 1`` parses
+        left-associatively, so ``upper.left`` is ``oy0 + (h - 1) * stride`` and ``upper.right`` is
+        ``1``, and a match against ``lower`` on either one fails for a slice that carries the idiom.
+        """
         upper = element.upper
         if element.lower is None:
             return upper
         lower = ast.unparse(element.lower)
-        if isinstance(upper, ast.BinOp) and isinstance(upper.op, ast.Add):
-            if ast.unparse(upper.left) == lower:
-                return upper.right
-            if ast.unparse(upper.right) == lower:
-                return upper.left
-        return None
+        terms: List[ast.expr] = []
+        pending = [upper]
+        while pending:
+            term = pending.pop()
+            if isinstance(term, ast.BinOp) and isinstance(term.op, ast.Add):
+                pending.extend([term.right, term.left])
+            else:
+                terms.append(term)
+        spelled = [ast.unparse(t) for t in terms]
+        if lower not in spelled:
+            return None
+        rest = [t for t, text in zip(terms, spelled) if text != lower]
+        if len(rest) != len(terms) - 1 or not rest:
+            return None  # ``lower`` appearing twice is not this idiom either
+        return functools.reduce(lambda left, right: ast.BinOp(left=left, op=ast.Add(), right=right), rest)
 
 
 def is_literal_one(node: ast.AST) -> bool:
@@ -3120,6 +3159,51 @@ def slice_bound_only_locals(fn_ast: ast.AST) -> set:
     return inside - outside
 
 
+def body_allocated_shape(body: List[ast.stmt], hret: str, values: Set[str]) -> Optional[List[str]]:
+    """The shape the BODY allocates for what it writes into ``hret``, or ``None``.
+
+    A kept helper's out-param is declared in the CALLER's vocabulary, because the caller is what
+    allocates the buffer and the C and Fortran legs emit those extents as constants. Its body
+    reaches the same extent through its OWN promoted symbols -- ``out = np.zeros((n, c, oh, ow))``
+    against a declaration reading ``int_floor(227 - 10*dilation, stride) + 1`` -- and dace has no
+    way to prove one equals the other, so the closing ``hret[:] = out`` is refused. Declaring the
+    parameter with the body's spelling makes the two sides the same expression, and dace then
+    SOLVES ``oh`` from the shape the caller passes, which is the caller-vocabulary form.
+    """
+    stores = [
+        st
+        for st in body
+        if isinstance(st, ast.Assign)
+        and len(st.targets) == 1
+        and isinstance(st.targets[0], ast.Subscript)
+        and isinstance(st.targets[0].value, ast.Name)
+        and st.targets[0].value.id == hret
+        and isinstance(st.targets[0].slice, ast.Slice)
+        and st.targets[0].slice.lower is None
+        and st.targets[0].slice.upper is None
+    ]
+    if len(stores) != 1:
+        return None  # two writers spell two extents; neither is THE shape
+    # ``acc / kernel_size`` is ``acc``'s shape: ``values`` names what carries a VALUE rather than
+    # an extent, so peeling those leaves the one array the store is shaped by. Two of them left is
+    # a broadcast this cannot size, and it declines rather than pick one.
+    written = list({n.id for n in ast.walk(stores[0].value) if isinstance(n, ast.Name) and n.id not in values})
+    if len(written) != 1:
+        return None
+    allocations = [
+        shape_argument(st.value)
+        for st in body
+        if isinstance(st, ast.Assign)
+        and len(st.targets) == 1
+        and isinstance(st.targets[0], ast.Name)
+        and st.targets[0].id == written[0]
+        and shape_argument(st.value) is not None
+    ]
+    if len(allocations) != 1 or not isinstance(allocations[0], (ast.Tuple, ast.List)):
+        return None
+    return [ast.unparse(dim) for dim in allocations[0].elts]
+
+
 def inline_slice_only_extents(fn_ast: ast.AST, symbols: set, known: set) -> ast.AST:
     """Splice a slice bound's definition into the slice, so two spans that ARE one quantity share
     a spelling.
@@ -3592,7 +3676,13 @@ def render_program(kir: KernelIR, fn_name: str | None = None) -> RenderedProgram
         fn_ast = _inline_symbol_aliases(fn_ast, set(symbol_names) | set(promotable) | loop_syms, known)
     # AFTER the alias inliner: the tap-loop span reaches here as the name ``span_h``, and only the
     # inlining above turns it into the ``A * stride + 1`` this matches on.
-    fn_ast = inline_slice_only_extents(fn_ast, set(symbol_names) | loop_syms, known)
+    # Integer scalar PARAMETERS count as symbols here: dace promotes each to its own ``__sym_x``
+    # the moment a slice bound reads it, so a span built from one is a symbolic expression whether
+    # or not this emitter calls it a symbol. Leaving ``stride`` out left ``span_h = (oh - 1) *
+    # stride + 1`` un-spliced, and dace then compared ``ceiling(__sym_span_h/__sym_stride)``
+    # against ``oh`` with no way to cancel the two minted names.
+    int_scalars = {n for n, d in scalars.items() if d.dtype.startswith(("int", "uint"))}
+    fn_ast = inline_slice_only_extents(fn_ast, set(symbol_names) | loop_syms | int_scalars, known)
     fn_ast = DivisibleStridedSpan().visit(fn_ast)
     ast.fix_missing_locations(fn_ast)
     # dace forbids a data-dependent array shape; promote body-computed size scalars to dc.symbols the caller binds.
@@ -3637,6 +3727,24 @@ def render_program(kir: KernelIR, fn_name: str | None = None) -> RenderedProgram
         and isinstance(body[0].value.value, str)
     ):
         body = body[1:]
+    # A kept helper's out-param: redeclare it with the extent its OWN body allocates, so the
+    # closing ``hret[:] = out`` compares one expression with itself. See body_allocated_shape.
+    hret = kir.return_kind if kir.return_kind in arrays else ""
+    if hret:
+        resolvable = set(arrays) | set(scalars) | set(symbol_names)
+        allocated = body_allocated_shape(body, hret, set(scalars) | set(symbol_names))
+        if allocated and all(i in resolvable for d in allocated for i in _IDENT_RE.findall(d)):
+            rebuilt = _array_annotation(dataclasses.replace(arrays[hret], shape=tuple(allocated)))
+            params = [f"{hret}: {rebuilt}" if p.split(":", 1)[0].strip() == hret else p for p in params]
+    if kir.return_kind:
+        # A HELPER's symbol the settled program never names -- retired by the redeclaration above,
+        # or cancelled out of an extent by extent_without_dead_symbols -- is not a symbol dace can
+        # solve OR accept: passing a keyword the callee does not take is a DaceSyntaxError.
+        used = {i for param in params for i in _IDENT_RE.findall(param.split(":", 1)[1])}
+        used |= {n.id for n in ast.walk(ast.Module(body=body, type_ignores=[])) if isinstance(n, ast.Name)}
+        symbol_names = [s for s in symbol_names if s in used]
+        symbol_defs = [(n, e) for n, e in symbol_defs if n in used]
+
     # A bound name that collides with a sympy callable is not a variable to dace (see
     # sympy_reserved). Rename every one of them and record the map: the emitted program is the only
     # place the new spelling exists, so the caller has to rewrite its keyword arguments to match.
@@ -3686,10 +3794,55 @@ def render_program(kir: KernelIR, fn_name: str | None = None) -> RenderedProgram
     )
 
 
-def helper_call_bindings(
-    owner: ast.FunctionDef, hkir: KernelIR, pinned: Dict[str, Any]
-) -> Tuple[Dict[str, str], Dict[str, Any]]:
-    """What the helper's call site says about its symbols: ``(aliases, constants)``.
+def folded_with_constants(text: str, pinned: Dict[str, Any]) -> str:
+    """``text`` with every pinned knob replaced by its value, then folded.
+
+    One canonical form for both sides of a lookup. ``c_out_per_group = out_channels //
+    conv_transpose_groups`` and a ``bias`` declared ``out_channels`` long are the same extent
+    whenever the knob is 1, and only substituting the knob makes the two texts say so.
+
+    Through sympy, not the syntactic folder: the two spellings of one extent differ by arithmetic
+    the identities do not reach -- ``1 * (kernel_size - 1) + output_padding + 1`` against
+    ``kernel_size + output_padding`` -- and a key that is not canonical answers for nothing. The
+    result is never emitted, only compared, so ``floor`` appearing in it costs nothing.
+    """
+    substituted = _IDENT_RE.sub(lambda m: str(pinned[m.group()]) if m.group() in pinned else m.group(), text)
+    canonical = sympify_shape(substituted)
+    return str(canonical) if canonical is not None else fold_shape_expr(substituted)
+
+
+def caller_side_recipe(owner: ast.FunctionDef, arg: ast.expr, pinned: Dict[str, Any]) -> str:
+    """The folded expression a call ARGUMENT stands for, or ``""`` when there is not one.
+
+    An expression argument is its own recipe; a bare Name is one only through the owner's single
+    assignment to it. Anything bound more than once has no one recipe and is declined.
+    """
+    if not isinstance(arg, ast.Name):
+        return folded_with_constants(ast.unparse(arg), pinned)
+    bound = [
+        st.value
+        for st in ast.walk(owner)
+        if isinstance(st, ast.Assign)
+        and len(st.targets) == 1
+        and isinstance(st.targets[0], ast.Name)
+        and st.targets[0].id == arg.id
+    ]
+    return folded_with_constants(ast.unparse(bound[0]), pinned) if len(bound) == 1 else ""
+
+
+@dataclasses.dataclass(slots=True)
+class HelperBinding:
+    """What one call site says about a kept helper's symbols. See :func:`helper_call_bindings`."""
+
+    aliases: Dict[str, str] = dataclasses.field(default_factory=dict)
+    constants: Dict[str, Any] = dataclasses.field(default_factory=dict)
+    collapse: Dict[str, str] = dataclasses.field(default_factory=dict)
+    expressions: Dict[str, str] = dataclasses.field(default_factory=dict)
+    pinned: Dict[str, Any] = dataclasses.field(default_factory=dict)
+
+
+def helper_call_bindings(owner: ast.FunctionDef, hkir: KernelIR, pinned: Dict[str, Any]) -> HelperBinding:
+    """What the helper's call site says about its symbols.
 
     * ALIASES ``{caller's name for an extent: the helper's own name for it}``. A helper's
       descriptors spell its extents in the CALLER's vocabulary, because the C and Fortran legs emit
@@ -3703,50 +3856,112 @@ def helper_call_bindings(
       parsed, so ``(length + 2 * padding - kernel_size) // stride + 1`` never folds to ``length``
       and the write into a ``[n, c, length]`` out-param is refused. A pinned knob is a
       compile-time constant in the helper for the same reason it is one in the kernel.
+    * EXPRESSIONS ``{the caller's expression for an extent: the helper's own name for it}``. A
+      helper's descriptors spell an extent the way the CALLER computes it, and the helper has a
+      parameter standing for that same quantity -- ``weight``'s ``out_channels //
+      conv_transpose_groups`` against the ``c_out_per_group`` the call passes for it. dace cannot
+      prove one equals the other, so a write into ``out[:, g * c_out_per_group : ...]`` is refused
+      for a contribution the weight sized. Respelling the shape with the parameter makes dace
+      SOLVE it from the argument instead.
+    * COLLAPSE ``{a later helper name for an extent: the first}``, for the parameters a call site
+      binds to ONE caller symbol. ``_conv2d(..., kh, kw)`` called with ``kernel_size`` twice has a
+      square kernel at THIS call site; leaving the second name standing declares the return shape
+      in terms of ``kh`` while the body still computes in ``kw``, which the frontend reads as two
+      unequal extents -- "could not broadcast [.., -kw + w + 1] into [.., -kh + w + 1]".
     """
     for node in ast.walk(owner):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == hkir.kernel_name):
             continue
         abi = hkir.abi_param_order()
         if node.keywords or len(node.args) != len(abi):
-            return {}, {}
+            return HelperBinding()
         own = {s.name for s in hkir.symbols}
-        aliases: Dict[str, str] = {}
-        constants: Dict[str, Any] = {}
+        binding = HelperBinding(pinned=dict(pinned))
         for pname, arg in zip(abi, node.args):
             # A bare Name only: the helper's name stands for THIS extent, and an expression is not
             # one the helper has a name for.
             if pname not in own or not isinstance(arg, ast.Name):
                 continue
             if arg.id in pinned:
-                constants[pname] = pinned[arg.id]
-            elif arg.id in own and arg.id != pname:
-                aliases.setdefault(arg.id, pname)
-        return aliases, constants
-    return {}, {}
+                binding.constants[pname] = pinned[arg.id]
+            elif arg.id in own:
+                first = binding.aliases.setdefault(arg.id, pname)
+                if first != pname:
+                    binding.collapse[pname] = first
+        # Scalars too, not only symbols: an extent the CALL SITE computes arrives as an integer
+        # scalar parameter (``c_out_per_group``) and only becomes a dc.symbol later, when
+        # render_program sees it size an array.
+        extents = own | {d.name for d in hkir.scalars}
+        ambiguous: Set[str] = set()
+        for pname, arg in zip(abi, node.args):
+            if pname not in extents or pname in binding.constants:
+                continue
+            # A bare Name is the caller's own local for the quantity, so its DEFINITION is the
+            # expression a descriptor would have been written with.
+            recipe = caller_side_recipe(owner, arg, pinned)
+            if not recipe:
+                continue
+            # A recipe that folds to ONE name the helper already holds is that name: with
+            # ``groups`` pinned to 1, ``c_out_per_group = out_channels // groups`` IS
+            # ``out_channels``, and keeping both leaves the body writing ``c_out_per_group``
+            # columns into a ``bias`` declared ``out_channels`` long.
+            if _IDENT_RE.fullmatch(recipe) and recipe in own and recipe != pname:
+                binding.collapse[pname] = recipe
+            elif recipe in binding.expressions:
+                # TWO parameters computed the same way. Picking either respells an extent with a
+                # name the body may not use for it -- ``_maxpool3d``'s input width ``w`` was
+                # declared ``ow``, the POOLED width, because a pinned kernel size made the two
+                # recipes fold alike. An ambiguous key answers for neither.
+                ambiguous.add(recipe)
+            else:
+                binding.expressions[recipe] = pname
+        for recipe in ambiguous:
+            binding.expressions.pop(recipe, None)
+        # An alias of a name to ITSELF retires the parameter it names; it is only here so a second
+        # parameter bound to the same argument collapses onto it.
+        binding.aliases = {caller: own_name for caller, own_name in binding.aliases.items() if caller != own_name}
+        return binding
+    return HelperBinding()
 
 
-def with_helper_vocabulary(hkir: KernelIR, aliases: Dict[str, str], constants: Dict[str, Any]) -> KernelIR:
+def with_helper_vocabulary(hkir: KernelIR, binding: HelperBinding) -> KernelIR:
     """``hkir`` with every aliased caller symbol respelled as the helper's own and then retired, and
     every call-pinned symbol recorded as one of the helper's own constants.
 
     A copy: the same KernelIR feeds the C and Fortran legs, where the caller's vocabulary is the
     correct one. Only the shapes move -- the body already speaks the helper's names, which is what
-    made the two sets disagree in the first place.
+    made the two sets disagree in the first place. A COLLAPSED name is the exception: the body is
+    the only place it stands, so the rename lands there.
     """
-    if not aliases and not constants:
+    if not (binding.aliases or binding.constants or binding.collapse or binding.expressions):
         return hkir
+    respelling = {**binding.aliases, **binding.collapse}
 
     def respell(token) -> str:
-        return _IDENT_RE.sub(lambda m: aliases.get(m.group(), m.group()), str(token))
+        # Whole-dimension first: a match on the caller's recipe replaces the extent outright, and
+        # respelling its identifiers one at a time would leave a different expression behind. Only
+        # a COMPOUND extent: a bare symbol is a name the helper already has, and rewriting it to a
+        # parameter that happens to equal it at this call site renames the wrong axis --
+        # ``x``'s own ``c_in`` became the group width ``c_in // groups`` reaches when groups is 1.
+        if len(_IDENT_RE.findall(str(token))) > 1 or not _IDENT_RE.fullmatch(str(token).strip()):
+            named = binding.expressions.get(folded_with_constants(str(token), binding.pinned))
+            if named is not None:
+                return named
+        return _IDENT_RE.sub(lambda m: respelling.get(m.group(), m.group()), str(token))
 
+    tree = hkir.tree
+    if binding.collapse:
+        tree = copy.deepcopy(hkir.tree)
+        tree.body = [RenameNames(binding.collapse).visit(stmt) for stmt in tree.body]
+    retired = {*binding.aliases, *binding.collapse}
     arrays = [dataclasses.replace(a, shape=tuple(respell(dim) for dim in a.shape)) for a in hkir.arrays]
     return dataclasses.replace(
         hkir,
+        tree=tree,
         arrays=arrays,
-        symbols=[s for s in hkir.symbols if s.name not in aliases],
-        input_args=[n for n in hkir.input_args if n not in aliases],
-        pinned_consts={**hkir.pinned_consts, **constants},
+        symbols=[s for s in hkir.symbols if s.name not in retired],
+        input_args=[n for n in hkir.input_args if n not in retired],
+        pinned_consts={**hkir.pinned_consts, **binding.constants},
     )
 
 
@@ -3832,8 +4047,8 @@ def render_helper_closure(kir: KernelIR, main: RenderedProgram) -> List[Tuple[Ke
             return
         done.add(name)
         hkir = by_name[name]
-        aliases, constants = helper_call_bindings(owner, hkir, kir.pinned_consts or {})
-        rendered = render_program(with_helper_vocabulary(hkir, aliases, constants), name)
+        binding = helper_call_bindings(owner, hkir, kir.pinned_consts or {})
+        rendered = render_program(with_helper_vocabulary(hkir, binding), name)
         for callee in called_helpers(rendered.body, kir.helpers):
             visit(hkir.tree, callee)
         ordered.append((hkir, rendered))
@@ -3925,6 +4140,11 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
         # applies it -- everything downstream of there already speaks the emitted spelling.
         out.append(f"__hpcagent_bench_renames__ = {main.renames!r}")
         out.append("")
+    # Which of the module's programs is the KERNEL. Kept helpers are @dc.programs too, so a reader
+    # can no longer take the sole one, and the name matches neither the file stem (lenet ->
+    # lenet5) nor a fixed word (nussinov -> kernel).
+    out.append(f"__hpcagent_bench_program__ = {main.name!r}")
+    out.append("")
     for rendered in programs:
         out.append("")
         out.append("@dc.program")

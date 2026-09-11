@@ -18,10 +18,13 @@ import ast
 import copy
 import re
 from functools import lru_cache
-from typing import Any, Callable, Dict, FrozenSet, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Sequence, Set, Tuple
 
 from numpyto_common import dtypes
 from numpyto_common.ir import tag_numpy_origin
+
+if TYPE_CHECKING:
+    import sympy
 
 #: Pseudo-call a BLAS-capable target's emitter renders as its gemm. Emitted ONLY when the caller
 #: asked for ``blas``; every other target keeps the loop nest, so this name never reaches them.
@@ -36,7 +39,7 @@ def _name(n: str) -> ast.Name:
     return ast.Name(id=n, ctx=ast.Load())
 
 
-def _const(v) -> ast.Constant:
+def _const(v: Any) -> ast.Constant:
     # numpy scalars (np.int64(0)) aren't Python int, so Fortran emit misclassifies
     # a size symbol built from one as REAL, and numpy 2.0's repr unparses it as
     # ``np.int64(0)``, breaking dace's sympy range parse. Coerce so every backend
@@ -61,7 +64,7 @@ def _make_iter_name(prefix: str, depth: int) -> str:
     return f"{prefix}{depth}"
 
 
-def _wrap_for_loops(iters: List[str], bounds, body: List[ast.stmt]) -> List[ast.stmt]:
+def _wrap_for_loops(iters: List[str], bounds: Sequence[str | ast.expr], body: List[ast.stmt]) -> List[ast.stmt]:
     """Wrap ``body`` in nested ``for v in range(bound):`` loops, outermost first.
 
     ``bounds`` entries are either a string (rendered via :func:`_const_or_name`)
@@ -211,7 +214,7 @@ def _slice_step_expr(sl: ast.Slice) -> Optional[ast.expr]:
     return step
 
 
-def _slice_step_any(sl: ast.Slice):
+def _slice_step_any(sl: ast.Slice) -> int | ast.expr | None:
     """A slice's step as a literal ``int``, as an ``ast.expr`` when it is symbolic, or ``None``.
 
     The one accessor the index and extent builders share, so a symbolic stride can never reach one
@@ -221,13 +224,13 @@ def _slice_step_any(sl: ast.Slice):
     return const if const is not None else _slice_step_expr(sl)
 
 
-def _step_is_negative(step) -> bool:
+def _step_is_negative(step: int | ast.expr | None) -> bool:
     """``step`` is a literal negative stride -- the numpy reverse. A symbolic step is never this:
     it is emitted as a positive stride, which is the only sign a bounded slice can carry."""
     return isinstance(step, int) and step < 0
 
 
-def _step_node(step) -> ast.expr:
+def _step_node(step: ast.expr | int) -> ast.expr:
     """``step`` as an expression, whether it arrived as a literal int or already as one."""
     return _const(step) if isinstance(step, int) else step
 
@@ -286,7 +289,7 @@ def _is_scalar_axis(elt: ast.expr) -> bool:
     return isinstance(elt, ast.Name)
 
 
-def _operand_token_shape(node: ast.expr, shape_table):
+def _operand_token_shape(node: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> Optional[Tuple[str, ...]]:
     """Residual shape TOKENS (not AST nodes -- stays consistent with the shape
     table) of an einsum/contraction operand. Bare ``Name(A)`` -> A's declared
     shape. Anything else (a Subscript slice/index chain, a matmul, a
@@ -301,7 +304,7 @@ def _operand_token_shape(node: ast.expr, shape_table):
     return tuple(ast.unparse(e) for e in ext) if ext is not None else None
 
 
-def _chained_base_shape(node: ast.expr, shape_table):
+def _chained_base_shape(node: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> Optional[Tuple[str, ...]]:
     """Residual token-shape of a SCALAR-chained subscript base ``A[i, j][...]``,
     when every inner index is a single-axis scalar (int Constant / bare Name):
     numpy combined-basic-indexing drops one leading axis per scalar, e.g.
@@ -323,7 +326,9 @@ def _chained_base_shape(node: ast.expr, shape_table):
     return _operand_token_shape(node, shape_table)
 
 
-def _contraction_result_extent(expr: ast.Call, shape_table):
+def _contraction_result_extent(
+    expr: ast.Call, shape_table: Dict[str, Tuple[str, ...]]
+) -> Optional[Tuple[ast.expr, ...]]:
     """Output iter-extent of an ``np.einsum``/``tensordot``/``inner`` call.
     einsum uses its subscript string directly; tensordot/inner are mapped to
     an equivalent einsum spec first. ``None`` if operand shapes don't resolve."""
@@ -445,7 +450,7 @@ class ArrayMethodRewriter(ast.NodeTransformer):
     ``np.sum(A)`` over them would index a CSR triple as a 2-D matrix.
     """
 
-    def __init__(self, sparse_names=None) -> None:
+    def __init__(self, sparse_names: Optional[Iterable[str]] = None) -> None:
         self.sparse_names = set(sparse_names or ())
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
@@ -479,7 +484,7 @@ def _np_call_attr(func: ast.expr) -> Optional[str]:
     return None
 
 
-def concat_extent(attr: str, expr: ast.Call, shape_table: Dict[str, Tuple[str, ...]]):
+def concat_extent(attr: str, expr: ast.Call, shape_table: Dict[str, Tuple[str, ...]]) -> Optional[Tuple[ast.expr, ...]]:
     """Extent of a concatenation call, or ``None`` when the operands do not agree on one.
 
     Every operand must size, share a rank, and agree on every axis but the joined one, whose
@@ -521,7 +526,7 @@ def concat_extent(attr: str, expr: ast.Call, shape_table: Dict[str, Tuple[str, .
     return tuple(joined if k == axis else extents[0][k] for k in range(rank))
 
 
-def sum_width_tokens(tokens) -> str:
+def sum_width_tokens(tokens: Sequence[str]) -> str:
     """The concatenated width of ``tokens``, folded when every one of them is a literal.
 
     ``"3"``, not ``"1+1+1"``: this token becomes a stride in the emitted index arithmetic, and the
@@ -1439,7 +1444,7 @@ def _advanced_index_rank(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]
     return None
 
 
-def _slice_start(ax: ast.Slice, axis_len: Optional[ast.expr], step) -> Optional[ast.expr]:
+def _slice_start(ax: ast.Slice, axis_len: Optional[ast.expr], step: int | ast.expr | None) -> Optional[ast.expr]:
     """First SOURCE index a slice reads. ``lower`` when given (negative resolved
     against ``axis_len``), else 0 -- except under a NEGATIVE step, where numpy
     flips the default and starts at the last element ``axis_len - 1``
@@ -1457,7 +1462,7 @@ def _slice_start(ax: ast.Slice, axis_len: Optional[ast.expr], step) -> Optional[
     return _const(0)
 
 
-def _strided_index(ivar: ast.expr, start: Optional[ast.expr], step) -> ast.expr:
+def _strided_index(ivar: ast.expr, start: Optional[ast.expr], step: int | ast.expr | None) -> ast.expr:
     """Source index of result position ``ivar`` within a slice ``[start::step]``:
     ``start + ivar * step``. Must stay in lockstep with :func:`_iter_extent_of`,
     which counts ``ceil(extent / |step|)`` elements -- an index that ignored
@@ -1471,7 +1476,9 @@ def _strided_index(ivar: ast.expr, start: Optional[ast.expr], step) -> ast.expr:
     return ast.BinOp(left=pos, op=ast.Add(), right=start)
 
 
-def _subscript_result_rank(expr: ast.Subscript, axes: List[ast.expr], shape, shape_table) -> int:
+def _subscript_result_rank(
+    expr: ast.Subscript, axes: List[ast.expr], shape: Optional[Tuple[str, ...]], shape_table: Dict[str, Tuple[str, ...]]
+) -> int:
     """Result-axis count of a subscript, counted by the SAME rules that consume iters below.
 
     A slice or a newaxis contributes one axis; an advanced-index group contributes its shared
@@ -1685,7 +1692,7 @@ def _ctor_fill_element(expr: ast.Call) -> Optional[ast.expr]:
     return None if value is None else _const(value)
 
 
-def _eval_axes(node) -> Optional[List[int]]:
+def _eval_axes(node: ast.expr) -> Optional[List[int]]:
     """``[k]`` / ``[k1, k2, ...]`` for a literal axis spec, ``None`` when it is not one.
 
     ``None`` here means UNREADABLE, which is not the same as "no axis given" -- callers have to
@@ -1705,7 +1712,7 @@ def _eval_axes(node) -> Optional[List[int]]:
     return None
 
 
-def _read_axis_keepdims(args, kwargs):
+def _read_axis_keepdims(args: List[ast.expr], kwargs: Optional[List[ast.keyword]]) -> Tuple[Optional[List[int]], bool]:
     """Return ``(axes, keepdims)`` from a call, keyword or positional. ``axes``:
     ``None`` for full reduction (``np.X(arr)``); ``[k]`` for single-axis
     (``np.X(arr, axis=k)``, negative ``axis=-1`` accepted); ``[k1, k2, ...]`` for
@@ -1746,7 +1753,16 @@ def _read_axis_keepdims(args, kwargs):
     return axes, keepdims
 
 
-def _expand_axis_reduction(target, args, kwargs, shape_table, init, op_fn, post_fn=None, update_fn=None):
+def _expand_axis_reduction(
+    target: ast.expr,
+    args: List[ast.expr],
+    kwargs: Optional[List[ast.keyword]],
+    shape_table: Dict[str, Tuple[str, ...]],
+    init: ast.expr,
+    op_fn: Optional[Callable[[ast.expr, ast.expr], ast.expr]],
+    post_fn: Optional[Callable[[ast.expr, ast.expr], ast.stmt]] = None,
+    update_fn: Optional[Callable[[ast.expr, ast.expr, ast.expr], ast.stmt]] = None,
+) -> List[ast.stmt]:
     """Generic axis-aware reduction. Lowers ``out = np.X(arr, axis=k,
     keepdims=True)`` into a nested loop, non-reduction axes outside and the
     reduction axis inside; writes through to ``out`` at the kept axes (axis
@@ -1919,7 +1935,7 @@ def _expand_axis_reduction(target, args, kwargs, shape_table, init, op_fn, post_
     return _wrap_for_loops(outer_iter_names, bounds, body)
 
 
-def _init_for(init, arr, n_dim):
+def _init_for(init: ast.expr, arr: ast.expr, n_dim: int) -> ast.expr:
     """Resolve init for full reduction: rewrite max/min first-element to
     a fully-zeroed subscript if needed."""
     if isinstance(init, ast.Subscript):
@@ -1932,7 +1948,7 @@ def _init_for(init, arr, n_dim):
     return init
 
 
-def _read_kwarg(kwargs, name):
+def _read_kwarg(kwargs: Optional[List[ast.keyword]], name: str) -> Optional[ast.expr]:
     """Return the AST value of keyword ``name`` in ``kwargs`` (list of
     ``ast.keyword``), or ``None`` when absent."""
     for kw in kwargs or []:
@@ -1941,7 +1957,7 @@ def _read_kwarg(kwargs, name):
     return None
 
 
-def _reduction_elem_is_integer(args, local_dtypes):
+def _reduction_elem_is_integer(args: List[ast.expr], local_dtypes: Optional[Dict[str, str]]) -> bool:
     """True when the reduced array (first arg, a bare Name) is tagged an
     integer / boolean dtype -- numpy upcasts int8/16/32/bool to int64 for
     ``sum`` / ``prod``, so the accumulator must be an integer, not a float."""
@@ -1951,14 +1967,14 @@ def _reduction_elem_is_integer(args, local_dtypes):
     return dt is not None and dt.startswith(("int", "uint", "bool"))
 
 
-def _nan_reduce_op(cmp):
+def _nan_reduce_op(cmp: type[ast.cmpop]) -> Callable[[ast.expr, ast.expr], ast.expr]:
     """Running max/min update that propagates NaN like numpy: ``x if (x <cmp> acc
     or x != x) else acc``. The ``x != x`` test lets a NaN element win, and once
     the accumulator is NaN it stays (nothing compares ``<cmp>`` against a NaN).
     Matches numpy (``np.max``/``np.min`` return NaN if any element is NaN),
     unlike C's ``fmax``/the ``max`` macro, which suppress NaN."""
 
-    def _f(acc, x):
+    def _f(acc: ast.expr, x: ast.expr) -> ast.expr:
         return ast.IfExp(
             test=ast.BoolOp(
                 op=ast.Or(),
@@ -1974,7 +1990,13 @@ def _nan_reduce_op(cmp):
     return _f
 
 
-def expand_sum(target, args, shape_table, kwargs=None, local_dtypes=None):
+def expand_sum(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
+    local_dtypes: Optional[Dict[str, str]] = None,
+) -> List[ast.stmt]:
     is_int = _reduction_elem_is_integer(args, local_dtypes)
     if is_int and local_dtypes is not None and isinstance(target, ast.Name):
         local_dtypes[target.id] = "int64"
@@ -1988,7 +2010,12 @@ def expand_sum(target, args, shape_table, kwargs=None, local_dtypes=None):
     )
 
 
-def expand_max(target, args, shape_table, kwargs=None):
+def expand_max(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
+) -> List[ast.stmt]:
     arr = args[0]
     _reject_zero_size_reduction(args, kwargs, shape_table)
     return _expand_axis_reduction(
@@ -2001,7 +2028,12 @@ def expand_max(target, args, shape_table, kwargs=None):
     )
 
 
-def expand_min(target, args, shape_table, kwargs=None):
+def expand_min(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
+) -> List[ast.stmt]:
     arr = args[0]
     _reject_zero_size_reduction(args, kwargs, shape_table)
     return _expand_axis_reduction(
@@ -2014,7 +2046,9 @@ def expand_min(target, args, shape_table, kwargs=None):
     )
 
 
-def _reject_zero_size_reduction(args, kwargs, shape_table) -> None:
+def _reject_zero_size_reduction(
+    args: List[ast.expr], kwargs: Optional[List[ast.keyword]], shape_table: Dict[str, Tuple[str, ...]]
+) -> None:
     """Refuse to lower ``np.max``/``np.min`` over a statically zero-length
     reduction axis: numpy raises ``zero-size array to reduction ... which has no
     identity``, and the seed ``arr[..., 0]`` would read OOB. Raise
@@ -2033,7 +2067,12 @@ def _reject_zero_size_reduction(args, kwargs, shape_table) -> None:
             raise NotImplementedError("zero-size array to reduction which has no identity")
 
 
-def expand_mean(target, args, shape_table, kwargs=None):
+def expand_mean(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
+) -> List[ast.stmt]:
     # Special form ``np.mean(arr[mask])``, ``mask`` a same-length boolean array:
     # boolean fancy indexing produces a dynamic-length compacted view we don't
     # materialise, so emit a masked-sum + count loop directly.
@@ -2101,7 +2140,13 @@ def expand_mean(target, args, shape_table, kwargs=None):
     )
 
 
-def expand_prod(target, args, shape_table, kwargs=None, local_dtypes=None):
+def expand_prod(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
+    local_dtypes: Optional[Dict[str, str]] = None,
+) -> List[ast.stmt]:
     is_int = _reduction_elem_is_integer(args, local_dtypes)
     if is_int and local_dtypes is not None and isinstance(target, ast.Name):
         local_dtypes[target.id] = "int64"
@@ -2115,29 +2160,36 @@ def expand_prod(target, args, shape_table, kwargs=None, local_dtypes=None):
     )
 
 
-def _truthy(x):
+def _truthy(x: ast.expr) -> ast.Compare:
     """``x != 0`` -- element truthiness. On a boolean mask the Fortran emitter
     folds ``<logical> /= 0`` back to the bare logical; C reads it as 0/1."""
     return ast.Compare(left=x, ops=[ast.NotEq()], comparators=[_const(0)])
 
 
-def _falsy(x):
+def _falsy(x: ast.expr) -> ast.Compare:
     return ast.Compare(left=x, ops=[ast.Eq()], comparators=[_const(0)])
 
 
-def _if_set(test_fn, value_fn):
+def _if_set(
+    test_fn: Callable[[ast.expr], ast.expr], value_fn: Callable[[ast.expr], ast.expr]
+) -> Callable[[ast.expr, ast.expr, ast.expr], ast.stmt]:
     """Build an ``update_fn`` that, per element, tests ``test_fn(src)`` and on
     hit assigns ``value_fn(load)`` to the accumulator. Keeps the accumulator
     INTEGER (0/1 or a count) so no backend needs bool-as-int arithmetic (which
     Fortran rejects)."""
 
-    def _f(store, load, src):
+    def _f(store: ast.expr, load: ast.expr, src: ast.expr) -> ast.If:
         return ast.If(test=test_fn(src), body=[ast.Assign(targets=[store], value=value_fn(load))], orelse=[])
 
     return _f
 
 
-def expand_any(target, args, shape_table, kwargs=None):
+def expand_any(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
+) -> List[ast.stmt]:
     """``s = np.any(A [, axis=k, keepdims=...])`` -- OR reduction. Init=0; each
     truthy element sets the (integer 0/1) accumulator to 1."""
     return _expand_axis_reduction(
@@ -2151,7 +2203,12 @@ def expand_any(target, args, shape_table, kwargs=None):
     )
 
 
-def expand_all(target, args, shape_table, kwargs=None):
+def expand_all(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
+) -> List[ast.stmt]:
     """``s = np.all(A [, axis=k, keepdims=...])`` -- AND reduction. Init=1; each
     falsy element clears the (integer 0/1) accumulator to 0."""
     return _expand_axis_reduction(
@@ -2159,7 +2216,12 @@ def expand_all(target, args, shape_table, kwargs=None):
     )
 
 
-def expand_count_nonzero(target, args, shape_table, kwargs=None):
+def expand_count_nonzero(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
+) -> List[ast.stmt]:
     """``s = np.count_nonzero(A [, axis=k, keepdims=...])`` -- count of non-zero
     elements. Init=0; each truthy element increments the integer accumulator."""
     return _expand_axis_reduction(
@@ -2173,7 +2235,12 @@ def expand_count_nonzero(target, args, shape_table, kwargs=None):
     )
 
 
-def expand_argmax(target, args, shape_table, kwargs=None):
+def expand_argmax(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
+) -> List[ast.stmt]:
     """``i = np.argmax(A [, axis=k, keepdims=...])`` -- index of the maximum.
     Only ``axis=None`` (flat, scalar result) and ``axis=int`` are implemented;
     axis-tuple raises ``NotImplementedError`` (caller can express it via a
@@ -2181,11 +2248,22 @@ def expand_argmax(target, args, shape_table, kwargs=None):
     return _expand_arg_reduction(target, args, shape_table, kwargs, op="argmax")
 
 
-def expand_argmin(target, args, shape_table, kwargs=None):
+def expand_argmin(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
+) -> List[ast.stmt]:
     return _expand_arg_reduction(target, args, shape_table, kwargs, op="argmin")
 
 
-def _expand_arg_reduction(target, args, shape_table, kwargs, op: str):
+def _expand_arg_reduction(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]],
+    op: str,
+) -> List[ast.stmt]:
     """``argmax``/``argmin`` shared scaffold. Supports the full ``axis = None /
     int / tuple / list`` matrix: ``None`` is a full reduction to a single flat
     index; an int reduces one axis, keeping the others at the input's extent,
@@ -2221,7 +2299,7 @@ def _expand_arg_reduction(target, args, shape_table, kwargs, op: str):
     red_iter_names = [_make_iter_name("__ard", i) for i in range(len(axes_norm))]
     red_iter_map = dict(zip(axes_norm, red_iter_names))
 
-    def _src_elts():
+    def _src_elts() -> List[ast.expr]:
         out = []
         outer_pos = 0
         for k in range(n_dim):
@@ -2232,7 +2310,7 @@ def _expand_arg_reduction(target, args, shape_table, kwargs, op: str):
                 outer_pos += 1
         return out
 
-    def _out_elts():
+    def _out_elts() -> List[ast.expr]:
         out = []
         outer_pos = 0
         for k in range(n_dim):
@@ -2244,7 +2322,7 @@ def _expand_arg_reduction(target, args, shape_table, kwargs, op: str):
                 outer_pos += 1
         return out
 
-    def _init_src_elts():
+    def _init_src_elts() -> List[ast.expr]:
         # First-element init: reduction axes pinned at 0, kept axes at
         # outer iter.
         out = []
@@ -2453,7 +2531,7 @@ def expand_dot(target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tu
     return [ast.Assign(targets=[target], value=_const(0.0))] + loop
 
 
-def _read_fft_norm(args, kwargs) -> str:
+def _read_fft_norm(args: List[ast.expr], kwargs: Optional[List[ast.keyword]]) -> str:
     """``norm`` of an ``np.fft.*`` call -- ``'backward'`` (default)/``'forward'``/
     ``'ortho'`` -- from keyword ``norm=`` or positional slot 3. Missing /
     non-literal / ``None`` falls back to ``'backward'`` (unnormalized forward,
@@ -2464,13 +2542,13 @@ def _read_fft_norm(args, kwargs) -> str:
     return "backward"
 
 
-def _read_fft_axes(args, kwargs, rank: int, is_n: bool) -> List[int]:
+def _read_fft_axes(args: List[ast.expr], kwargs: Optional[List[ast.keyword]], rank: int, is_n: bool) -> List[int]:
     """Resolve the transform axes for an ``np.fft.*`` call. ``fft``/``ifft`` take
     a single ``axis`` (default last); ``fftn``/``ifftn`` take an ``axes``
     sequence (default all axes); ``fft2``/``ifft2`` are ``fftn`` over the last
     two axes. Negative axes wrap modulo ``rank``."""
 
-    def _norm(a):
+    def _norm(a: int) -> int:
         # An axis outside the rank means the rank we resolved is not the operand's real rank -- vexx
         # reshapes through a ``.ndim``-conditional tuple that never folds, so the spilled operand is
         # recorded rank 1 and ``axes=(0, 1, 2)`` indexed past the iterator list. Declining is the
@@ -2498,7 +2576,7 @@ def _expand_dftn(
     shape_table: Dict[str, Tuple[str, ...]],
     inverse: bool,
     is_n: bool = True,
-    kwargs=None,
+    kwargs: Optional[List[ast.keyword]] = None,
 ) -> List[ast.stmt]:
     """``out = np.fft.fft/ifft/fft2/ifft2/fftn/ifftn(x)`` -> a naive DFT.
     Correctness-only (O(prod(N_t)^2) over the transform axes), kept tiny via the
@@ -2572,24 +2650,49 @@ def _expand_dftn(
     return _wrap_for_loops(o_iters, list(shape), body)
 
 
-def expand_fftn(target, args, shape_table, kwargs=None):
+def expand_fftn(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
+) -> List[ast.stmt]:
     return _expand_dftn(target, args, shape_table, inverse=False, is_n=True, kwargs=kwargs)
 
 
-def expand_ifftn(target, args, shape_table, kwargs=None):
+def expand_ifftn(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
+) -> List[ast.stmt]:
     return _expand_dftn(target, args, shape_table, inverse=True, is_n=True, kwargs=kwargs)
 
 
-def expand_fft(target, args, shape_table, kwargs=None):
+def expand_fft(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
+) -> List[ast.stmt]:
     # 1-D DFT along a single ``axis`` (default last); for a 1-D input == fftn.
     return _expand_dftn(target, args, shape_table, inverse=False, is_n=False, kwargs=kwargs)
 
 
-def expand_ifft(target, args, shape_table, kwargs=None):
+def expand_ifft(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
+) -> List[ast.stmt]:
     return _expand_dftn(target, args, shape_table, inverse=True, is_n=False, kwargs=kwargs)
 
 
-def expand_fftfreq(target, args, shape_table, kwargs=None) -> List[ast.stmt]:
+def expand_fftfreq(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
+) -> List[ast.stmt]:
     """``np.fft.fftfreq(n, d=1.0)`` -> DFT sample frequencies (length ``n``):
     ``out[i] = (i if i <= (n - 1) // 2 else i - n) / (n * d)``. Indices up to
     ``(n - 1) // 2`` are non-negative frequencies, the rest wrap negative,
@@ -2684,7 +2787,10 @@ def expand_copy(
 
 
 def expand_bincount(
-    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
 ) -> List[ast.stmt]:
     """``out = np.bincount(idx, weights=w, minlength=M)`` -> zero ``M`` slots, then scatter-add.
 
@@ -2735,7 +2841,7 @@ def expand_bincount(
 
 
 def expand_outer(
-    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], op=None
+    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], op: Optional[ast.operator] = None
 ) -> List[ast.stmt]:
     """``out = np.outer(a, b)`` -> ``out[i, j] = a[i] * b[j]``. ``op`` defaults to
     ``Mult()``; pass ``ast.Add()`` for ``np.add.outer`` (sum-outer-product).
@@ -2766,11 +2872,16 @@ def expand_outer(
     return _wrap_for_loops(["__i", "__j"], bounds, body)
 
 
-def expand_add_outer(target, args, shape_table):
+def expand_add_outer(target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     return expand_outer(target, args, shape_table, op=ast.Add())
 
 
-def _expand_elementwise(target, args, shape_table, op_fn):
+def _expand_elementwise(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    op_fn: Callable[[ast.expr, ast.expr], ast.expr],
+) -> List[ast.stmt]:
     """``out = op(a, b)`` -> per-element loop nest.
 
     Iteration extent comes from the first array-valued operand
@@ -2801,7 +2912,7 @@ def _expand_elementwise(target, args, shape_table, op_fn):
     iters = [_name(f"__r{i}") for i in range(len(extent))]
 
     # Constants / scalar Names broadcast; arrays scalarize.
-    def maybe_scalar(node):
+    def maybe_scalar(node: ast.expr) -> ast.expr:
         if isinstance(node, ast.Constant):
             return node
         if isinstance(node, ast.Name) and not shape_table.get(node.id):
@@ -2824,19 +2935,19 @@ def _expand_elementwise(target, args, shape_table, op_fn):
     return out
 
 
-def expand_minimum(t, a, s):
+def expand_minimum(t: ast.expr, a: List[ast.expr], s: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     return _expand_elementwise(t, a, s, lambda x, y: ast.Call(func=_name("min"), args=[x, y], keywords=[]))
 
 
-def expand_maximum(t, a, s):
+def expand_maximum(t: ast.expr, a: List[ast.expr], s: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     return _expand_elementwise(t, a, s, lambda x, y: ast.Call(func=_name("max"), args=[x, y], keywords=[]))
 
 
-def expand_add(t, a, s):
+def expand_add(t: ast.expr, a: List[ast.expr], s: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     return _expand_elementwise(t, a, s, lambda x, y: ast.BinOp(left=x, op=ast.Add(), right=y))
 
 
-def expand_multiply(t, a, s):
+def expand_multiply(t: ast.expr, a: List[ast.expr], s: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     return _expand_elementwise(t, a, s, lambda x, y: ast.BinOp(left=x, op=ast.Mult(), right=y))
 
 
@@ -2850,7 +2961,7 @@ def expand_power(t: ast.expr, a: List[ast.expr], s: Dict[str, Tuple[str, ...]]) 
     return _expand_elementwise(t, a, s, lambda x, y: ast.BinOp(left=x, op=ast.Pow(), right=y))
 
 
-def expand_subtract(t, a, s):
+def expand_subtract(t: ast.expr, a: List[ast.expr], s: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     return _expand_elementwise(t, a, s, lambda x, y: ast.BinOp(left=x, op=ast.Sub(), right=y))
 
 
@@ -2876,84 +2987,91 @@ def expand_divide(
     return _expand_elementwise(target, args, shape_table, op_fn)
 
 
-def _cmp(op):
+def _cmp(op: type[ast.cmpop]) -> Callable[[ast.expr, ast.expr], ast.expr]:
     """Return an op_fn that builds ``ast.Compare(left=x, ops=[op], comparators=[y])``."""
     return lambda x, y: ast.Compare(left=x, ops=[op()], comparators=[y])
 
 
-def expand_less(t, a, s):
+def expand_less(t: ast.expr, a: List[ast.expr], s: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     return _expand_elementwise(t, a, s, _cmp(ast.Lt))
 
 
-def expand_less_equal(t, a, s):
+def expand_less_equal(t: ast.expr, a: List[ast.expr], s: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     return _expand_elementwise(t, a, s, _cmp(ast.LtE))
 
 
-def expand_greater(t, a, s):
+def expand_greater(t: ast.expr, a: List[ast.expr], s: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     return _expand_elementwise(t, a, s, _cmp(ast.Gt))
 
 
-def expand_greater_equal(t, a, s):
+def expand_greater_equal(t: ast.expr, a: List[ast.expr], s: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     return _expand_elementwise(t, a, s, _cmp(ast.GtE))
 
 
-def expand_equal(t, a, s):
+def expand_equal(t: ast.expr, a: List[ast.expr], s: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     return _expand_elementwise(t, a, s, _cmp(ast.Eq))
 
 
-def expand_not_equal(t, a, s):
+def expand_not_equal(t: ast.expr, a: List[ast.expr], s: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     return _expand_elementwise(t, a, s, _cmp(ast.NotEq))
 
 
-def expand_logical_and(t, a, s):
+def expand_logical_and(t: ast.expr, a: List[ast.expr], s: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     return _expand_elementwise(t, a, s, lambda x, y: ast.BoolOp(op=ast.And(), values=[x, y]))
 
 
-def expand_logical_or(t, a, s):
+def expand_logical_or(t: ast.expr, a: List[ast.expr], s: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     return _expand_elementwise(t, a, s, lambda x, y: ast.BoolOp(op=ast.Or(), values=[x, y]))
 
 
-def expand_logical_not(target, args, shape_table):
+def expand_logical_not(
+    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]]
+) -> List[ast.stmt]:
     """``out = np.logical_not(a)`` -> per-element ``out[i] = not a[i]``."""
     return _unary_elementwise(target, args, shape_table, lambda x: ast.UnaryOp(op=ast.Not(), operand=x))
 
 
-def expand_negative(t, a, s):
+def expand_negative(t: ast.expr, a: List[ast.expr], s: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     """``out = np.negative(a)`` -> ``out[i] = -a[i]``."""
     if not args_one_name(a):
         raise NotImplementedError("np.negative needs a Name arg")
     return _unary_elementwise(t, a, s, lambda x: ast.UnaryOp(op=ast.USub(), operand=x))
 
 
-def expand_tanh(t, a, s):
+def expand_tanh(t: ast.expr, a: List[ast.expr], s: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     return _unary_elementwise(t, a, s, lambda x: ast.Call(func=_name("tanh"), args=[x], keywords=[]))
 
 
-def expand_sin_arr(t, a, s):
+def expand_sin_arr(t: ast.expr, a: List[ast.expr], s: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     return _unary_elementwise(t, a, s, lambda x: ast.Call(func=_name("sin"), args=[x], keywords=[]))
 
 
-def expand_cos_arr(t, a, s):
+def expand_cos_arr(t: ast.expr, a: List[ast.expr], s: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     return _unary_elementwise(t, a, s, lambda x: ast.Call(func=_name("cos"), args=[x], keywords=[]))
 
 
-def expand_exp_arr(t, a, s):
+def expand_exp_arr(t: ast.expr, a: List[ast.expr], s: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     return _unary_elementwise(t, a, s, lambda x: ast.Call(func=_name("exp"), args=[x], keywords=[]))
 
 
-def expand_log_arr(t, a, s):
+def expand_log_arr(t: ast.expr, a: List[ast.expr], s: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     return _unary_elementwise(t, a, s, lambda x: ast.Call(func=_name("log"), args=[x], keywords=[]))
 
 
-def expand_sqrt_arr(t, a, s):
+def expand_sqrt_arr(t: ast.expr, a: List[ast.expr], s: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     return _unary_elementwise(t, a, s, lambda x: ast.Call(func=_name("sqrt"), args=[x], keywords=[]))
 
 
-def args_one_name(args):
+def args_one_name(args: List[ast.expr]) -> bool:
     return args and isinstance(args[0], ast.Name)
 
 
-def _unary_elementwise(target, args, shape_table, op_fn):
+def _unary_elementwise(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    op_fn: Callable[[ast.expr], ast.expr],
+) -> List[ast.stmt]:
     """Common scaffold for ``out = np.<unary>(expr)`` -> per-element op.
 
     Accepts any array-valued expression: bare Name, slice subscript,
@@ -3020,7 +3138,7 @@ def expand_where(target: ast.expr, args: List[ast.expr], shape_table: Dict[str, 
     idx = _name(iters[0]) if len(iters) == 1 else ast.Tuple(elts=[_name(i) for i in iters], ctx=ast.Load())
     iter_nodes = [_name(i) for i in iters]
 
-    def maybe_sub(arg):
+    def maybe_sub(arg: ast.expr) -> ast.expr:
         return _scalarize_at_iters(arg, iter_nodes, shape_table)
 
     ternary = ast.IfExp(test=maybe_sub(args[0]), body=maybe_sub(args[1]), orelse=maybe_sub(args[2]))
@@ -3028,7 +3146,7 @@ def expand_where(target: ast.expr, args: List[ast.expr], shape_table: Dict[str, 
     return _wrap_for_loops(iters, shape, body)
 
 
-def _kwarg_or_pos(args: List[ast.expr], kwargs, pos: int, name: str):
+def _kwarg_or_pos(args: List[ast.expr], kwargs: Optional[List[ast.keyword]], pos: int, name: str) -> Optional[ast.expr]:
     """Resolve a numpy arg passed positionally OR by keyword: ``args[pos]`` if
     present, else the ``name=`` keyword value from ``kwargs``, else ``None``.
     Lets an expander accept both ``np.transpose(A, (1,0,2))`` and
@@ -3045,7 +3163,10 @@ def _kwarg_or_pos(args: List[ast.expr], kwargs, pos: int, name: str):
 
 
 def expand_transpose(
-    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
 ) -> List[ast.stmt]:
     """``out = np.transpose(A[, axes])`` -> nested per-element copy. Supports any
     rank N >= 1 with an explicit perm (Tuple/List of int constants, positional or
@@ -3106,7 +3227,10 @@ def _const_axis(node: Optional[ast.expr], rank: int) -> Optional[int]:
 
 
 def expand_swapaxes(
-    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
 ) -> List[ast.stmt]:
     """``out = np.swapaxes(a, i, j)`` -> ``np.transpose(a, perm)`` with ``perm`` the
     identity permutation with axes ``i`` and ``j`` exchanged (constant int axes). Reuses
@@ -3128,7 +3252,10 @@ def expand_swapaxes(
 
 
 def expand_moveaxis(
-    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
 ) -> List[ast.stmt]:
     """``out = np.moveaxis(a, source, destination)`` -> ``np.transpose(a, perm)`` with
     ``perm`` numpy's own algorithm (drop axis ``source``, reinsert it at ``destination``
@@ -3153,7 +3280,10 @@ def expand_moveaxis(
 
 
 def expand_expand_dims(
-    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
 ) -> List[ast.stmt]:
     """``out = np.expand_dims(a, axis)`` -> ``np.reshape(a, <a's shape with a size-1 axis
     inserted at axis>)`` -- a metadata view, lowered as the reshape flat-copy."""
@@ -3173,7 +3303,10 @@ def expand_expand_dims(
 
 
 def expand_squeeze(
-    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
 ) -> List[ast.stmt]:
     """``out = np.squeeze(a[, axis])`` -> ``np.reshape(a, <a's shape with the size-1
     axis / all size-1 axes dropped>)``. Without ``axis`` every unit dim is dropped; with
@@ -3198,7 +3331,10 @@ def expand_squeeze(
 
 
 def expand_take(
-    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
 ) -> List[ast.stmt]:
     """``out = np.take(a, idx[, axis=k])`` -> a gather loop nest. With ``axis=k``,
     the k-th axis is indexed by 1-D ``idx`` (out's k-th extent = idx's length),
@@ -3416,7 +3552,10 @@ MESHGRID_AXIS_KW = "__meshgrid_axis__"
 
 
 def expand_meshgrid(
-    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
 ) -> List[ast.stmt]:
     """Emit ONE broadcast output of ``np.meshgrid(a0, a1, ..., a_{k-1})``. Given
     1-D inputs of lengths ``(N0, ..., N_{k-1})``: ``indexing='ij'`` gives every
@@ -3504,7 +3643,11 @@ def expand_eye(target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tu
 
 
 def _expand_triangular(
-    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs, lower: bool
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]],
+    lower: bool,
 ) -> List[ast.stmt]:
     """Shared triu/tril lowering: copy ``A[i, j]`` where it's on the kept side of
     the ``i + k`` diagonal, else 0. ``lower=False`` keeps ``j >= i + k`` (upper);
@@ -3550,7 +3693,10 @@ def _expand_triangular(
 
 
 def expand_triu(
-    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
 ) -> List[ast.stmt]:
     """``out = np.triu(A [, k])`` -> ``out[i, j] = A[i, j] if j >= i+k else 0``.
     Optional ``k`` offset (default 0) selects the diagonal; ``k=1`` skips the
@@ -3652,7 +3798,9 @@ def expand_hstack(target: ast.expr, args: List[ast.expr], shape_table: Dict[str,
     return out
 
 
-def _concat_operands_axis(args, kwargs, shape_table):
+def _concat_operands_axis(
+    args: List[ast.expr], kwargs: Optional[List[ast.keyword]], shape_table: Dict[str, Tuple[str, ...]]
+) -> Tuple[List[Optional[str]], List[Tuple[str, ...]], int]:
     """Shared parse for ``np.concatenate`` / ``np.stack``-style calls: return
     ``(names, shapes, axis)``. The sequence is the first positional arg (a
     tuple/list of array Names); ``axis`` is a keyword or the 2nd positional
@@ -3704,9 +3852,9 @@ def expand_concatenate(
     target: ast.expr,
     args: List[ast.expr],
     shape_table: Dict[str, Tuple[str, ...]],
-    kwargs=None,
-    local_dtypes=None,
-    fresh_local_allocs=None,
+    kwargs: Optional[List[ast.keyword]] = None,
+    local_dtypes: Optional[Dict[str, str]] = None,
+    fresh_local_allocs: Optional[Dict[str, Tuple[str, ...]]] = None,
 ) -> List[ast.stmt]:
     """``out = np.concatenate((a, b, ...), axis=k)`` -- join along ``axis``. Each
     operand copies into ``out`` at its cumulative offset along ``axis`` (other
@@ -3784,7 +3932,7 @@ def _axis_literal_or_refuse(node: Optional[ast.expr], what: str, default: Option
     return axis
 
 
-def _mul_exts(exprs) -> ast.expr:
+def _mul_exts(exprs: Iterable[ast.expr]) -> ast.expr:
     """Left-folded product of the given extent expressions (``1`` when empty) -- used to
     size a ``reshape(-1)`` dimension from the source extent and the other target dims."""
     exprs = list(exprs)
@@ -3796,7 +3944,7 @@ def _mul_exts(exprs) -> ast.expr:
     return prod
 
 
-def _stack_axis(args, kwargs, rank: int) -> int:
+def _stack_axis(args: List[ast.expr], kwargs: Optional[List[ast.keyword]], rank: int) -> int:
     """The (possibly negative) NEW-axis position for ``np.stack``, normalized to
     ``[0, rank]`` (an insert position, so ``rank`` -- append -- is valid, unlike
     concatenate's ``[0, rank)``)."""
@@ -3809,7 +3957,10 @@ def _stack_axis(args, kwargs, rank: int) -> int:
 
 
 def expand_stack(
-    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
 ) -> List[ast.stmt]:
     """``out = np.stack((a, b, ...), axis=k)`` -- join N same-shape operands along
     a NEW axis ``k`` (out's k-th extent = N, rank = operand rank + 1). Operand
@@ -3845,7 +3996,10 @@ def expand_stack(
 
 
 def expand_flip(
-    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
 ) -> List[ast.stmt]:
     """``out = np.flip(A[, axis])`` -> reverse-order copy. Without ``axis`` EVERY axis is
     reversed (numpy's default); with ``axis=k`` only that axis. N-D: a loop nest over the
@@ -3887,7 +4041,10 @@ def expand_flip(
 
 
 def expand_diff(
-    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
 ) -> List[ast.stmt]:
     """``out = np.diff(A[, n][, axis])`` -> ``A[..., 1:, ...] - A[..., :-1, ...]`` along ``axis``.
 
@@ -3932,7 +4089,12 @@ def expand_diff(
     return _wrap_for_loops(iters, bounds, body)
 
 
-def expand_std(target, args, shape_table, kwargs=None):
+def expand_std(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
+) -> List[ast.stmt]:
     """``s = np.std(A [, axis=k, keepdims=...])`` -- mean + sum of squared
     deviations + sqrt, over the unified axis-aware reduction scaffold (axis=None
     full reduction, axis=k vector along kept axes, keepdims preserves a size-1
@@ -3944,14 +4106,25 @@ def expand_std(target, args, shape_table, kwargs=None):
     return _expand_var_or_std(target, args, shape_table, kwargs, finish="sqrt")
 
 
-def expand_var(target, args, shape_table, kwargs=None):
+def expand_var(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
+) -> List[ast.stmt]:
     """``s = np.var(A [, axis=k, keepdims=...])`` -- mean + sum of
     squared deviations, no sqrt. Shares the scaffold with
     :func:`expand_std` (axis-tuple supported)."""
     return _expand_var_or_std(target, args, shape_table, kwargs, finish="none")
 
 
-def _expand_var_or_std(target, args, shape_table, kwargs, finish: str):
+def _expand_var_or_std(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]],
+    finish: str,
+) -> List[ast.stmt]:
     """Shared scaffold for ``np.var``/``np.std`` -- variance with optional sqrt
     finalisation. Supports the full ``axis = None/int/tuple/list`` and
     ``keepdims`` matrix: walks kept axes outside, reduces each reduction axis
@@ -4008,7 +4181,7 @@ def _expand_var_or_std(target, args, shape_table, kwargs, finish: str):
     red_iter_names = [_make_iter_name("__srd", i) for i in range(len(axes_norm))]
     red_iter_map = dict(zip(axes_norm, red_iter_names))
 
-    def _src_elts():
+    def _src_elts() -> List[ast.expr]:
         out = []
         outer_pos = 0
         for k in range(n_dim):
@@ -4019,7 +4192,7 @@ def _expand_var_or_std(target, args, shape_table, kwargs, finish: str):
                 outer_pos += 1
         return out
 
-    def _out_elts():
+    def _out_elts() -> List[ast.expr]:
         out = []
         outer_pos = 0
         for k in range(n_dim):
@@ -4181,7 +4354,7 @@ def expand_dot_2d(target: ast.expr, args: List[ast.expr], shape_table: Dict[str,
 # Einsum / tensor-contraction family.
 
 
-def _parse_einsum_subscripts(spec: str):
+def _parse_einsum_subscripts(spec: str) -> Tuple[List[str], str]:
     """Split ``"ij,jk->ik"`` into ``(["ij", "jk"], "ik")``. The explicit ``->``
     form is required; the implicit-output form (no ``->``) is synthesised as
     numpy does: every index appearing exactly once across all inputs, in
@@ -4240,7 +4413,13 @@ def _expand_einsum_ellipsis(spec: str, ranks: List[int]) -> str:
 _OP_SPILL_TEMP = [0]
 
 
-def _materialize_operands(operands, shape_table, prefix: str, local_dtypes=None, fresh_local_allocs=None):
+def _materialize_operands(
+    operands: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    prefix: str,
+    local_dtypes: Optional[Dict[str, str]] = None,
+    fresh_local_allocs: Optional[Dict[str, Tuple[str, ...]]] = None,
+) -> Tuple[List[ast.stmt], List[ast.expr]]:
     """Spill every non-Name operand into a fresh scratch buffer. Several
     expanders (einsum, concatenate) are written against bare-Name operands, but
     a kernel may hand them a slice/call/arithmetic expression -- dwt2d's
@@ -4294,8 +4473,8 @@ def expand_einsum(
     target: ast.expr,
     args: List[ast.expr],
     shape_table: Dict[str, Tuple[str, ...]],
-    local_dtypes=None,
-    fresh_local_allocs=None,
+    local_dtypes: Optional[Dict[str, str]] = None,
+    fresh_local_allocs: Optional[Dict[str, Tuple[str, ...]]] = None,
 ) -> List[ast.stmt]:
     """Lower ``np.einsum(subscripts, *operands)`` to a nested loop nest. Output
     indices become nested loops over the result; indices summed away (in the
@@ -4389,9 +4568,9 @@ def expand_tensordot(
     target: ast.expr,
     args: List[ast.expr],
     shape_table: Dict[str, Tuple[str, ...]],
-    kwargs=None,
-    local_dtypes=None,
-    fresh_local_allocs=None,
+    kwargs: Optional[List[ast.keyword]] = None,
+    local_dtypes: Optional[Dict[str, str]] = None,
+    fresh_local_allocs: Optional[Dict[str, Tuple[str, ...]]] = None,
 ) -> List[ast.stmt]:
     """``np.tensordot(a, b, axes)`` -> an equivalent einsum.
 
@@ -4436,14 +4615,14 @@ def expand_tensordot(
     )
 
 
-def _axes_kwarg(kwargs):
+def _axes_kwarg(kwargs: Optional[List[ast.keyword]]) -> ast.expr:
     for kw in kwargs or []:
         if kw.arg == "axes":
             return kw.value
     return _const(2)
 
 
-def _tensordot_axes(node: ast.expr, ra: int, rb: int):
+def _tensordot_axes(node: ast.expr, ra: int, rb: int) -> Tuple[List[int], List[int]]:
     """Resolve tensordot ``axes`` into ``(a_axes, b_axes)``, normalised against each operand's rank.
 
     An axis past the operand's rank means the rank we resolved is not the rank the kernel meant --
@@ -4458,7 +4637,7 @@ def _tensordot_axes(node: ast.expr, ra: int, rb: int):
         return list(range(ra - k, ra)), list(range(k))
     if isinstance(node, (ast.Tuple, ast.List)) and len(node.elts) == 2:
 
-        def _axis_literal(x):
+        def _axis_literal(x: ast.expr) -> Any:
             # A negative axis parses as UnaryOp(USub), not Constant -- reading ``.value`` off it
             # raised AttributeError out of the sizer, the same escaped-exception class as the
             # out-of-range index below.
@@ -4468,12 +4647,12 @@ def _tensordot_axes(node: ast.expr, ra: int, rb: int):
                 raise NotImplementedError("tensordot axes entries must be integer literals")
             return value
 
-        def _axis_list(e):
+        def _axis_list(e: ast.expr) -> List[Any]:
             if isinstance(e, (ast.Tuple, ast.List)):
                 return [_axis_literal(x) for x in e.elts]
             return [_axis_literal(e)]
 
-        def _normalised(axes, rank, side):
+        def _normalised(axes: List[Any], rank: int, side: str) -> List[int]:
             out = []
             for ax in axes:
                 if not isinstance(ax, int):
@@ -4515,7 +4694,10 @@ def expand_inner(target: ast.expr, args: List[ast.expr], shape_table: Dict[str, 
 
 
 def expand_vdot(
-    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], local_dtypes=None
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    local_dtypes: Optional[Dict[str, str]] = None,
 ) -> List[ast.stmt]:
     """``np.vdot(a, b)`` -> ``sum(conj(a) * b)`` over the flattened operands.
     The conjugate is emitted only when the first operand is complex (a no-op
@@ -4543,7 +4725,7 @@ def expand_vdot(
     return [ast.Assign(targets=[_store(target.id)], value=_const(0.0)), *_wrap_for_loops([it], [shape[0]], body)]
 
 
-def _pad_widths(pad_arg: Optional[ast.expr], n_axes: int):
+def _pad_widths(pad_arg: Optional[ast.expr], n_axes: int) -> Optional[List[Tuple[ast.expr, ast.expr]]]:
     """Per-axis ``(before, after)`` pad widths for an ``np.pad`` call. Accepts
     the two numpy spellings the corpus uses: a scalar ``R`` (int/Name), padding
     every axis ``(R, R)``; or a tuple of per-axis ``(before, after)`` pairs --
@@ -4565,7 +4747,7 @@ def _pad_widths(pad_arg: Optional[ast.expr], n_axes: int):
     return None
 
 
-def _pad_output_extent(src_extent, pad_arg: Optional[ast.expr]):
+def _pad_output_extent(src_extent: Tuple[ast.expr, ...], pad_arg: Optional[ast.expr]) -> Optional[Tuple[ast.expr, ...]]:
     """Output extent of ``np.pad``: each source axis grown by ``before+after``.
 
     ``src_extent`` is the tuple of source-axis extent AST nodes; returns the
@@ -4580,7 +4762,7 @@ def _pad_output_extent(src_extent, pad_arg: Optional[ast.expr]):
     return tuple(out)
 
 
-def _pad_src_base_and_lead(src_node: ast.expr):
+def _pad_src_base_and_lead(src_node: ast.expr) -> Optional[Tuple[str, List[ast.expr]]]:
     """Split an ``np.pad`` source into ``(base_name, lead_scalar_indices)``. A
     bare ``Name`` pads the whole array (no lead). A ``Subscript`` with leading
     SCALAR indices -- ``in_grid[b]`` (stencil_4d) -- pads the sliced sub-array,
@@ -4603,7 +4785,7 @@ def _pad_src_base_and_lead(src_node: ast.expr):
     return None
 
 
-def _pad_mode_str(args: List[ast.expr], kwargs) -> str:
+def _pad_mode_str(args: List[ast.expr], kwargs: Optional[List[ast.keyword]]) -> str:
     """The ``mode`` string of an ``np.pad`` call (default numpy ``constant``)."""
     m = _kwarg_or_pos(args, kwargs or [], 2, "mode")
     if isinstance(m, ast.Constant) and isinstance(m.value, str):
@@ -4611,7 +4793,7 @@ def _pad_mode_str(args: List[ast.expr], kwargs) -> str:
     return "constant"
 
 
-def _pad_fill(kwargs) -> ast.expr:
+def _pad_fill(kwargs: Optional[List[ast.keyword]]) -> ast.expr:
     """``np.pad``'s ``constant_values``, or numpy's own default of 0.
 
     A per-axis sequence is refused rather than guessed. Not cosmetic: max_filter pads its tail with
@@ -4631,9 +4813,9 @@ def expand_pad(
     target: ast.expr,
     args: List[ast.expr],
     shape_table: Dict[str, Tuple[str, ...]],
-    kwargs=None,
-    local_dtypes=None,
-    fresh_local_allocs=None,
+    kwargs: Optional[List[ast.keyword]] = None,
+    local_dtypes: Optional[Dict[str, str]] = None,
+    fresh_local_allocs: Optional[Dict[str, Tuple[str, ...]]] = None,
 ) -> List[ast.stmt]:
     """``padded = np.pad(src, pad_width, mode=...)`` -> a ghost-cell fill loop.
     Each source axis grows by its ``before + after`` width (scalar ``R`` pads
@@ -4665,19 +4847,19 @@ def expand_pad(
         raise NotImplementedError(f"np.pad mode={mode!r} unsupported")
     rank = len(view)
 
-    def _before(k):
+    def _before(k: int) -> ast.expr:
         return copy.deepcopy(widths[k][0])
 
-    def _dim(k):
+    def _dim(k: int) -> ast.expr:
         return copy.deepcopy(view[k])
 
     out_bounds = [b for b in _pad_output_extent(tuple(_dim(k) for k in range(rank)), pad_arg)]
 
-    def _store_target(idx_nodes):
+    def _store_target(idx_nodes: List[ast.expr]) -> ast.Subscript:
         sl = idx_nodes[0] if rank == 1 else ast.Tuple(elts=idx_nodes, ctx=ast.Load())
         return ast.Subscript(value=_name(target.id), slice=sl, ctx=ast.Store())
 
-    def _src_read(idx_nodes):
+    def _src_read(idx_nodes: List[ast.expr]) -> ast.Subscript:
         full = [copy.deepcopy(e) for e in lead] + idx_nodes
         sl = full[0] if len(full) == 1 else ast.Tuple(elts=full, ctx=ast.Load())
         return ast.Subscript(value=_name(base_name), slice=sl, ctx=ast.Load())
@@ -4831,7 +5013,10 @@ def expand_diagonal(target: ast.expr, args: List[ast.expr], shape_table: Dict[st
 
 
 def expand_diag(
-    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
 ) -> List[ast.stmt]:
     """``np.diag(v [, k])`` -- construct a diagonal matrix, or extract one. 1-D
     ``v`` of shape ``(n,)`` -> an ``(n+|k|, n+|k|)`` matrix, all zeros except
@@ -4893,7 +5078,7 @@ def expand_diag(
     return zero_loops + _wrap_for_loops([it], [n_tok], set_body)
 
 
-def _scan_target_offsets(target, ndim):
+def _scan_target_offsets(target: ast.expr, ndim: int) -> Tuple[str, List[Optional[ast.expr]]]:
     """Resolve a cumulative-scan assignment target into ``(base_name, starts)``.
     ``starts[k]`` is the lower bound to add to the operand's index along axis
     ``k`` (``None`` for a zero/omitted lower bound). A bare ``Name`` target
@@ -4920,7 +5105,14 @@ def _scan_target_offsets(target, ndim):
     raise NotImplementedError("cumulative scan: unsupported target")
 
 
-def _expand_cumulative(target, args, shape_table, op, kwargs=None, combine=None):
+def _expand_cumulative(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    op: Optional[ast.operator],
+    kwargs: Optional[List[ast.keyword]] = None,
+    combine: Optional[Callable[[ast.expr, ast.expr], ast.expr]] = None,
+) -> List[ast.stmt]:
     """Shared prefix-scan for cumsum/cumprod/maximum.accumulate/minimum.accumulate.
     1-D (or ``axis=None`` over a 1-D operand): ``out[0] = a[0]``, then ``out[i] =
     combine(out[i-1], a[i])``. N-D with ``axis=k``: same recurrence along axis
@@ -4945,16 +5137,16 @@ def _expand_cumulative(target, args, shape_table, op, kwargs=None, combine=None)
     iters = {i: f"__cs{i}" for i in range(n)}
     sc = iters[axis]
 
-    def _idx(scan_expr):
+    def _idx(scan_expr: ast.expr) -> ast.expr:
         elts = [scan_expr if i == axis else _name(iters[i]) for i in range(n)]
         return elts[0] if n == 1 else ast.Tuple(elts=elts, ctx=ast.Load())
 
     target_base, t_start = _scan_target_offsets(target, n)
 
-    def _add_off(e, off):
+    def _add_off(e: ast.expr, off: Optional[ast.expr]) -> ast.expr:
         return e if off is None else ast.BinOp(left=e, op=ast.Add(), right=copy.deepcopy(off))
 
-    def _tidx(scan_expr):
+    def _tidx(scan_expr: ast.expr) -> ast.expr:
         # Target index space = operand index space shifted by the slice's
         # per-axis lower bound (``out[1:] = np.cumsum(a)`` writes ``out[1+i]``).
         elts = [_add_off(scan_expr if i == axis else _name(iters[i]), t_start[i]) for i in range(n)]
@@ -4987,19 +5179,29 @@ def _expand_cumulative(target, args, shape_table, op, kwargs=None, combine=None)
     return _wrap_for_loops([iters[i] for i in outer], [shape[i] for i in outer], inner)
 
 
-def expand_cumsum(target, args, shape_table, kwargs=None):
+def expand_cumsum(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
+) -> List[ast.stmt]:
     return _expand_cumulative(target, args, shape_table, ast.Add(), kwargs)
 
 
-def expand_cumprod(target, args, shape_table, kwargs=None):
+def expand_cumprod(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
+) -> List[ast.stmt]:
     return _expand_cumulative(target, args, shape_table, ast.Mult(), kwargs)
 
 
-def _running_extreme_combine(cmp):
+def _running_extreme_combine(cmp: type[ast.cmpop]) -> Callable[[ast.expr, ast.expr], ast.expr]:
     """``prev if (prev cmp cur) else cur`` -- the scalar running-max/min a cumulative
     ``maximum``/``minimum`` accumulate needs (no numpy ufunc survives to the backend)."""
 
-    def combine(prev, cur):
+    def combine(prev: ast.expr, cur: ast.expr) -> ast.expr:
         return ast.IfExp(
             test=ast.Compare(left=copy.deepcopy(prev), ops=[cmp()], comparators=[copy.deepcopy(cur)]),
             body=copy.deepcopy(prev),
@@ -5009,12 +5211,22 @@ def _running_extreme_combine(cmp):
     return combine
 
 
-def expand_cummax(target, args, shape_table, kwargs=None):
+def expand_cummax(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
+) -> List[ast.stmt]:
     """``np.maximum.accumulate(a)`` -> running maximum (``out[i] = max(out[i-1], a[i])``)."""
     return _expand_cumulative(target, args, shape_table, None, kwargs, combine=_running_extreme_combine(ast.GtE))
 
 
-def expand_cummin(target, args, shape_table, kwargs=None):
+def expand_cummin(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
+) -> List[ast.stmt]:
     """``np.minimum.accumulate(a)`` -> running minimum (``out[i] = min(out[i-1], a[i])``)."""
     return _expand_cumulative(target, args, shape_table, None, kwargs, combine=_running_extreme_combine(ast.LtE))
 
@@ -5074,7 +5286,14 @@ def _make_sort_routine(buf: str, n: ast.expr, prefix: str) -> List[ast.stmt]:
     ]
 
 
-def expand_median(target, args, shape_table, kwargs=None, local_dtypes=None, fresh_local_allocs=None) -> List[ast.stmt]:
+def expand_median(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
+    local_dtypes: Optional[Dict[str, str]] = None,
+    fresh_local_allocs: Optional[Dict[str, Tuple[str, ...]]] = None,
+) -> List[ast.stmt]:
     """``np.median(a)`` (full, flattened) -> copy + insertion-sort + pick the
     middle element (mean of the two middles for an even count).
 
@@ -5137,7 +5356,12 @@ def expand_median(target, args, shape_table, kwargs=None, local_dtypes=None, fre
     return [*copy_loops, *sort, store]
 
 
-def expand_sort(target, args, shape_table, kwargs=None) -> List[ast.stmt]:
+def expand_sort(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
+) -> List[ast.stmt]:
     """``np.sort(a)`` (1-D, ascending) -> copy ``a`` into the target buffer, then
     an in-place insertion sort of that buffer. Only the 1-D form is lowered. The
     target may be an output parameter (``out[:] = np.sort(a)``) or a fresh local
@@ -5168,7 +5392,13 @@ def expand_sort(target, args, shape_table, kwargs=None) -> List[ast.stmt]:
     return [*copy_loops, *sort]
 
 
-def expand_searchsorted(target, args, shape_table, kwargs=None, local_dtypes=None) -> List[ast.stmt]:
+def expand_searchsorted(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
+    local_dtypes: Optional[Dict[str, str]] = None,
+) -> List[ast.stmt]:
     """``np.searchsorted(a, v, side=...)`` -> a binary search per element of ``v``.
 
     ``a`` is a sorted 1-D array; the result is an int64 array shaped like ``v``, holding for each
@@ -5240,7 +5470,7 @@ def expand_searchsorted(target, args, shape_table, kwargs=None, local_dtypes=Non
     return _wrap_for_loops(iters, list(values_shape), search)
 
 
-def _flat_index(iters: List[str], shape) -> ast.expr:
+def _flat_index(iters: List[str], shape: Tuple[str, ...]) -> ast.expr:
     """Row-major flat index ``((i0*d1 + i1)*d2 + i2)...`` for ``iters`` over
     ``shape``."""
     idx: ast.expr = _name(iters[0])
@@ -5251,7 +5481,12 @@ def _flat_index(iters: List[str], shape) -> ast.expr:
     return idx
 
 
-def expand_roll(target, args, shape_table, kwargs=None) -> List[ast.stmt]:
+def expand_roll(
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
+) -> List[ast.stmt]:
     """``np.roll(a, shift, axis)`` -> ``out[i] = a[(i - shift) % n]`` along the
     rolled axis (1-D, or N-D with an explicit axis)."""
     if len(args) < 2 or not isinstance(args[0], ast.Name):
@@ -5303,7 +5538,7 @@ def expand_roll(target, args, shape_table, kwargs=None) -> List[ast.stmt]:
     return _wrap_for_loops(iters, list(shape), body)
 
 
-def _axis_kwarg(kwargs):
+def _axis_kwarg(kwargs: Optional[List[ast.keyword]]) -> Optional[ast.expr]:
     for kw in kwargs or []:
         if kw.arg == "axis":
             return kw.value
@@ -5311,7 +5546,10 @@ def _axis_kwarg(kwargs):
 
 
 def expand_tril(
-    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
 ) -> List[ast.stmt]:
     """``np.tril(A, k=0)`` -> lower-triangular copy (zero where ``j > i + k``).
 
@@ -5437,7 +5675,7 @@ def expand_reshape(
     target: ast.expr,
     args: List[ast.expr],
     shape_table: Dict[str, Tuple[str, ...]],
-    kwargs=None,
+    kwargs: Optional[List[ast.keyword]] = None,
     dim_aliases: Optional[Dict[str, str]] = None,
 ) -> List[ast.stmt]:
     """``out = np.reshape(A, (m, n, ...))`` -> rank-aware loop-nest copy.
@@ -5514,7 +5752,7 @@ def expand_reshape(
             return toks[0]
         return "(" + " * ".join(f"({t})" for t in toks) + ")"
 
-    def _stride(shape, i: int) -> str:
+    def _stride(shape: Tuple[str, ...], i: int) -> str:
         # Stride of axis ``i`` = product of the FASTER-varying axes: the trailing
         # axes in C order, the leading axes in F order.
         faster = list(shape[:i]) if fortran else list(shape[i + 1 :])
@@ -5602,8 +5840,8 @@ def _expand_repeat_prefix_sum(
     a_shape: Tuple[str, ...],
     k_arg: ast.expr,
     shape_table: Dict[str, Tuple[str, ...]],
-    local_dtypes,
-    fresh_local_allocs,
+    local_dtypes: Optional[Dict[str, str]],
+    fresh_local_allocs: Optional[Dict[str, Tuple[str, ...]]],
 ) -> List[ast.stmt]:
     """Per-element ``np.repeat`` count -- the destination offset is the
     RUNNING prefix sum of the counts, not ``outer * K`` (that formula reads
@@ -5684,9 +5922,9 @@ def expand_repeat(
     target: ast.expr,
     args: List[ast.expr],
     shape_table: Dict[str, Tuple[str, ...]],
-    kwargs=None,
-    local_dtypes=None,
-    fresh_local_allocs=None,
+    kwargs: Optional[List[ast.keyword]] = None,
+    local_dtypes: Optional[Dict[str, str]] = None,
+    fresh_local_allocs: Optional[Dict[str, Tuple[str, ...]]] = None,
 ) -> List[ast.stmt]:
     """``out = np.repeat(A, K, axis=N)`` -> tile-and-write loop nest. Source
     ``A`` of shape ``(s0, ..., sN, ..., sM-1)`` becomes ``out`` of shape
@@ -5850,7 +6088,10 @@ def _classify_norm_ord(node: Optional[ast.expr]) -> Optional[str]:
 
 
 def expand_linalg_norm(
-    target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]], kwargs=None
+    target: ast.expr,
+    args: List[ast.expr],
+    shape_table: Dict[str, Tuple[str, ...]],
+    kwargs: Optional[List[ast.keyword]] = None,
 ) -> List[ast.stmt]:
     """``s = np.linalg.norm(v[, ord, axis=None, keepdims=False])``. numpy puts
     ``ord`` SECOND (positional) -- unlike a reduction, whose second positional
@@ -6006,8 +6247,8 @@ def expand_lstsq(
     target: ast.expr,
     args: List[ast.expr],
     shape_table: Dict[str, Tuple[str, ...]],
-    kwargs=None,
-    fresh_local_allocs=None,
+    kwargs: Optional[List[ast.keyword]] = None,
+    fresh_local_allocs: Optional[Dict[str, Tuple[str, ...]]] = None,
 ) -> List[ast.stmt]:
     """``y = np.linalg.lstsq(A, b, rcond=...)[0]`` -> in-place Gaussian
     elimination with partial pivoting, writing the solution into ``target``.
@@ -6160,7 +6401,7 @@ def expand_lstsq(
     return pre + [fwd, bs]
 
 
-def _lstsq_first_axis_size(node: ast.expr, shape_table: Dict[str, Tuple[str, ...]]):
+def _lstsq_first_axis_size(node: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> Optional[ast.expr]:
     """First-axis size of ``node`` as an AST expression: bare Name -> shape_table
     lookup; Subscript ``H[:m, ...]`` -> the explicit ``m`` stop."""
     if isinstance(node, ast.Name):
@@ -6186,7 +6427,7 @@ def _lstsq_first_axis_size(node: ast.expr, shape_table: Dict[str, Tuple[str, ...
     return None
 
 
-def _lstsq_array_base(node: ast.expr):
+def _lstsq_array_base(node: ast.expr) -> Tuple[Optional[str], Optional[List[Optional[ast.expr]]]]:
     """Return ``(name, base_offsets)`` for a Name or simple slice subscript.
     ``base_offsets`` is the lower-bound shift per axis (list of ast.expr) so the
     expander can rewrite ``A[i, j]`` as ``Name[i + base0, j + base1]``. Zero for
@@ -6207,7 +6448,7 @@ def _lstsq_array_base(node: ast.expr):
     return None, None
 
 
-def _lstsq_index2d(name: str, i: ast.expr, j: ast.expr, base) -> ast.Subscript:
+def _lstsq_index2d(name: str, i: ast.expr, j: ast.expr, base: Optional[List[Optional[ast.expr]]]) -> ast.Subscript:
     """Build ``name[i, j]`` (or ``name[i + base0, j + base1]`` when
     a non-zero base is present)."""
     if base is not None:
@@ -6226,7 +6467,7 @@ def _lstsq_index2d(name: str, i: ast.expr, j: ast.expr, base) -> ast.Subscript:
     return ast.Subscript(value=_name(name), slice=ast.Tuple(elts=[slot_i, slot_j], ctx=ast.Load()), ctx=ast.Load())
 
 
-def _lstsq_index1d(name: str, i: ast.expr, base) -> ast.Subscript:
+def _lstsq_index1d(name: str, i: ast.expr, base: Optional[List[Optional[ast.expr]]]) -> ast.Subscript:
     if base is not None and not (isinstance(base[0], ast.Constant) and base[0].value == 0):
         slot = ast.BinOp(left=i, op=ast.Add(), right=base[0])
     else:
@@ -6428,7 +6669,7 @@ def expand_histogram(
     target: ast.expr,
     args: List[ast.expr],
     shape_table: Dict[str, Tuple[str, ...]],
-    kwargs=None,
+    kwargs: Optional[List[ast.keyword]] = None,
     local_dtypes: Optional[Dict[str, str]] = None,
     fresh_local_allocs: Optional[Dict[str, Tuple[str, ...]]] = None,
 ) -> List[ast.stmt]:
@@ -6558,7 +6799,7 @@ def expand_histogram(
     if fresh_local_allocs is not None:
         fresh_local_allocs[edges_name] = (bins_dim,)
 
-    def edge_at(idx: ast.expr, ctx) -> ast.Subscript:
+    def edge_at(idx: ast.expr, ctx: ast.expr_context) -> ast.Subscript:
         """``<edges>[idx]`` -- a FRESH Subscript per call; a shared node is renamed in place by
         the Fortran emitter's loop-variable uniquifier (see expand_linalg_inv)."""
         return ast.Subscript(value=_name(edges_name), slice=idx, ctx=ctx)
@@ -6698,7 +6939,7 @@ def expand_linalg_solve(
     target: ast.expr,
     args: List[ast.expr],
     shape_table: Dict[str, Tuple[str, ...]],
-    kwargs=None,
+    kwargs: Optional[List[ast.keyword]] = None,
     local_dtypes: Optional[Dict[str, str]] = None,
     fresh_local_allocs: Optional[Dict[str, Tuple[str, ...]]] = None,
 ) -> List[ast.stmt]:
@@ -6776,12 +7017,12 @@ def expand_linalg_solve(
     # ``b`` indexing depends on rank.
     is_2d = len(b_shape) == 2
 
-    def b_load(r, c=None):
+    def b_load(r: ast.expr, c: Optional[ast.expr] = None) -> ast.Subscript:
         if is_2d:
             return ast.Subscript(value=_name(target.id), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Load())
         return ast.Subscript(value=_name(target.id), slice=r, ctx=ast.Load())
 
-    def b_store(r, c=None):
+    def b_store(r: ast.expr, c: Optional[ast.expr] = None) -> ast.Subscript:
         if is_2d:
             return ast.Subscript(value=_name(target.id), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Store())
         return ast.Subscript(value=_name(target.id), slice=r, ctx=ast.Store())
@@ -7015,7 +7256,7 @@ def expand_linalg_inv(
     target: ast.expr,
     args: List[ast.expr],
     shape_table: Dict[str, Tuple[str, ...]],
-    kwargs=None,
+    kwargs: Optional[List[ast.keyword]] = None,
     local_dtypes: Optional[Dict[str, str]] = None,
     fresh_local_allocs: Optional[Dict[str, Tuple[str, ...]]] = None,
 ) -> List[ast.stmt]:
@@ -7245,7 +7486,7 @@ def expand_linalg_det(
     target: ast.expr,
     args: List[ast.expr],
     shape_table: Dict[str, Tuple[str, ...]],
-    kwargs=None,
+    kwargs: Optional[List[ast.keyword]] = None,
     local_dtypes: Optional[Dict[str, str]] = None,
     fresh_local_allocs: Optional[Dict[str, Tuple[str, ...]]] = None,
 ) -> List[ast.stmt]:
@@ -7616,7 +7857,7 @@ def _binary_call_expander(c_name: str) -> Callable:
     call (``np.arctan2(a, b)`` -> ``out[i] = atan2(a[i], b[i])``).
     Broadcasts a scalar second operand. Mirrors :func:`expand_power`."""
 
-    def _expand(target, args, shape_table):
+    def _expand(target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
         if len(args) != 2:
             raise NotImplementedError(f"np.{c_name} needs 2 args")
         a, b = args
@@ -7676,7 +7917,7 @@ NP_ZEROS_ALIASES: Tuple[str, ...] = (
 )
 
 
-def _static_shape_of(expr, axis, shape_table):
+def _static_shape_of(expr: ast.expr, axis: int, shape_table: Dict[str, Tuple[str, ...]]) -> Optional[str]:
     """Static (loop-var-free) shape token for the given axis of an expression,
     or None if not derivable. ``Subscript(Name, ...)`` returns the source
     array's full axis size from its declared shape, regardless of slice
@@ -7702,7 +7943,7 @@ def _static_shape_of(expr, axis, shape_table):
     return None
 
 
-def _call_to_str(node):
+def _call_to_str(node: ast.expr) -> str:
     """Render an extent AST node as a shape-table token string."""
     if isinstance(node, ast.Constant) and isinstance(node.value, int):
         return str(node.value)
@@ -7778,7 +8019,7 @@ def substitute_dim_aliases(
 
 
 @lru_cache(maxsize=None, typed=True)
-def sympify_shape(text: str):
+def sympify_shape(text: str) -> "sympy.Expr | None":
     """``text`` as a sympy expression, or ``None`` when it does not parse.
 
     One shape token is compared against many others, so without this the same string is re-parsed
@@ -7831,7 +8072,7 @@ def sympify_shape(text: str):
 DIM_PROBE_POINTS: Tuple[Tuple[int, ...], ...] = ((7, 11, 13, 17, 19, 23, 29, 31), (3, 41, 5, 37, 2, 43, 11, 47))
 
 
-def shape_exprs_differ_numerically(ea, eb) -> bool:
+def shape_exprs_differ_numerically(ea: "sympy.Expr", eb: "sympy.Expr") -> bool:
     """``True`` when the two expressions disagree at one integer point, which REFUTES equality.
 
     Shape tokens agree when they agree as FUNCTIONS of their symbols, so one disagreeing
@@ -8480,12 +8721,12 @@ class _MatmulHoister(ast.NodeTransformer):
 
     def __init__(
         self,
-        shape_table,
-        temp_arrays,
-        temp_counter,
-        local_dtypes=None,
-        sparse=None,
-        dim_aliases=None,
+        shape_table: Dict[str, Tuple[str, ...]],
+        temp_arrays: Dict[str, Tuple[str, ...]],
+        temp_counter: List[int],
+        local_dtypes: Optional[Dict[str, str]] = None,
+        sparse: Optional[Dict[str, object]] = None,
+        dim_aliases: Optional[Dict[str, str]] = None,
         blas: bool = False,
     ) -> None:
         self.shape_table = shape_table
@@ -8613,7 +8854,7 @@ class _MatmulHoister(ast.NodeTransformer):
                     seen.append(tgt.id)
         return [_alloc_marker(n) for n in seen] + stmts
 
-    def _try_hoist_sparse_matmul(self, node: ast.BinOp):
+    def _try_hoist_sparse_matmul(self, node: ast.BinOp) -> Optional[Tuple[str, List[ast.stmt]]]:
         """Route ``A @ B`` through the sparse emitter when an operand carries a
         sparse layout. Returns ``(temp_name, stmts)`` for the fresh result
         temp, or ``None`` when neither operand is sparse (dense path handles
@@ -8739,7 +8980,9 @@ class _MatmulHoister(ast.NodeTransformer):
             f"{rank} not supported ({node.left.id} @ {node.right.id})."
         )
 
-    def _materialise_dense_operand(self, expr: ast.expr, max_rank: Optional[int] = None):
+    def _materialise_dense_operand(
+        self, expr: ast.expr, max_rank: Optional[int] = None
+    ) -> Tuple[Optional[str], List[ast.stmt]]:
         """Copy a non-Name dense matmul operand into a fresh temp array, so the consumer -- which
         requires a *declared* array -- sees a bare Name. Two callers want this: the SpMV/SpMM
         expanders, for a column slice like ``Q[:, k]`` in ``A @ Q[:, k]``, and the dense hoister,
@@ -8784,7 +9027,7 @@ class _MatmulHoister(ast.NodeTransformer):
             )
         return temp, [body]
 
-    def _transpose_sparse_desc(self, operand):
+    def _transpose_sparse_desc(self, operand: ast.expr) -> Optional[Tuple[object, bool]]:
         """If ``operand`` is ``A.T`` for a sparse ``A``, return ``(desc, transposed)`` describing
         ``A.T`` so the matvec dispatcher emits ``A.T @ x`` directly; ``None`` otherwise.
 
@@ -8825,7 +9068,7 @@ class _MatmulHoister(ast.NodeTransformer):
             return SparseArrayDesc(name=d.name, format=d.format, logical_shape=swapped, buffers=dict(d.buffers)), True
         return None
 
-    def _sparse_matvec(self, sp_desc, dense_name: str, temp: str, transposed: bool = False):
+    def _sparse_matvec(self, sp_desc: object, dense_name: str, temp: str, transposed: bool = False) -> List[ast.stmt]:
         """Build the per-format matvec loop nest filling 1-D ``temp``.
 
         Derives each format's extra size symbols from the sparse
@@ -8845,7 +9088,7 @@ class _MatmulHoister(ast.NodeTransformer):
         n_rows = sp_desc.logical_shape[0] if sp_desc.logical_shape else "0"
         n_cols = sp_desc.logical_shape[1] if len(sp_desc.logical_shape) > 1 else "0"
 
-        def _buf_shape(role, axis):
+        def _buf_shape(role: str, axis: int) -> Optional[str]:
             """Shape token of the physical buffer for ``role`` at ``axis``,
             looked up from the shape table (physical buffers are declared
             arrays)."""
@@ -8921,7 +9164,14 @@ class _CallHoister(ast.NodeTransformer):
     """
 
     def __init__(
-        self, shape_table, scalar_temps, array_temps, counter, local_dtypes=None, dim_aliases=None, blas: bool = False
+        self,
+        shape_table: Dict[str, Tuple[str, ...]],
+        scalar_temps: Dict[str, bool],
+        array_temps: Dict[str, Tuple[str, ...]],
+        counter: List[int],
+        local_dtypes: Optional[Dict[str, str]] = None,
+        dim_aliases: Optional[Dict[str, str]] = None,
+        blas: bool = False,
     ) -> None:
         self.shape_table = shape_table
         self.scalar_temps = scalar_temps
@@ -8947,7 +9197,7 @@ class _CallHoister(ast.NodeTransformer):
         """``True`` iff ``expr`` reads a complex value (skipping ``.shape`` reads)."""
         return _reads_complex(expr, self.local_dtypes)
 
-    def _key_of(self, call: ast.Call):
+    def _key_of(self, call: ast.Call) -> Optional[Tuple[str, str]]:
         func = call.func
         if isinstance(func, ast.Attribute):
             if isinstance(func.value, ast.Name):
@@ -9252,7 +9502,9 @@ class _CallHoister(ast.NodeTransformer):
         self.pre_stmts.append(ast.Assign(targets=[ast.Name(id=temp, ctx=ast.Store())], value=node))
         return ast.Name(id=temp, ctx=ast.Load())
 
-    def _derive_output_shape(self, key, args, keywords=None):
+    def _derive_output_shape(
+        self, key: Tuple[str, str], args: List[ast.expr], keywords: Optional[List[ast.keyword]] = None
+    ) -> Optional[Tuple[str, ...]]:
         op = key[1]
         # Tensor contractions (einsum/tensordot/inner): reuse the shared
         # output-extent resolver so the hoister can lift a contraction out of a
@@ -9531,7 +9783,7 @@ class _CallHoister(ast.NodeTransformer):
         return None
 
     @staticmethod
-    def _extent_to_shape_token(node):
+    def _extent_to_shape_token(node: ast.expr) -> str:
         """Render an extent AST as a shape-table token (string): Constants ->
         int string; Names -> name; BinOps -> ``ast.unparse`` (e.g. ``N - 2``),
         which the emitter treats as a non-int symbolic shape.
@@ -9547,8 +9799,15 @@ import inspect
 
 
 def _call_expander(
-    expander, target, args, keywords, shape_table, local_dtypes=None, fresh_local_allocs=None, dim_aliases=None
-):
+    expander: Callable,
+    target: ast.expr,
+    args: List[ast.expr],
+    keywords: List[ast.keyword],
+    shape_table: Dict[str, Tuple[str, ...]],
+    local_dtypes: Optional[Dict[str, str]] = None,
+    fresh_local_allocs: Optional[Dict[str, Tuple[str, ...]]] = None,
+    dim_aliases: Optional[Dict[str, str]] = None,
+) -> List[ast.stmt]:
     """Adapter: pass ``keywords``/``local_dtypes``/``fresh_local_allocs`` to
     expanders that accept them, else call with the legacy signature. The two
     extra tables let an expander register internal working buffers (shape +
@@ -10073,7 +10332,7 @@ class LibNodeRewriter(ast.NodeTransformer):
                 self.local_dtypes[target_id] = "complex128"
             return
 
-    def _lookup(self, call: ast.Call):
+    def _lookup(self, call: ast.Call) -> Optional[Tuple[str, str]]:
         """Resolve a ``Call.func`` to a registry key. Recognises both
         ``np.<name>`` and ``np.linalg.<name>`` (the latter an Attribute whose
         value is itself an Attribute on a Name); the registry key encodes the
@@ -10240,7 +10499,7 @@ class LibNodeRewriter(ast.NodeTransformer):
             return prelude + [node]
         return node
 
-    def _target_renders(self, key, call: ast.Call) -> bool:
+    def _target_renders(self, key: Optional[Tuple[str, str]], call: ast.Call) -> bool:
         """The target claims this call as its own intrinsic, so leave it unexpanded.
 
         The shape table goes with it: the claim has to be decidable here, because past this point
@@ -10314,7 +10573,7 @@ class LibNodeRewriter(ast.NodeTransformer):
             out.append(stmt)
         return out
 
-    def _flatten_visit_list(self, stmts):
+    def _flatten_visit_list(self, stmts: List[ast.stmt]) -> List[ast.stmt]:
         """Visit each stmt; flatten any nested lists returned by visits
         (visit_Assign can return ``[prelude..., assign]`` lists)."""
         out = []
