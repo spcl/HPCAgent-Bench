@@ -98,6 +98,9 @@ make_arm_problems() {  # make_arm_problems <kind> <--skill args>
 submit_arm() {  # submit_arm <model> <kind: plain|dc|cpf|dc-cpf> <deps or empty>
     local model="$1" kind="$2" deps="${3:-}"
     local arm="${EXPERIMENT}-${model}-${kind}" env=".env.${EXPERIMENT}-${model}-${kind}"
+    # an arm env is pinned key by key, so a gate that returns midway would leave a file that looks
+    # complete and silently lacks a key: build under a staging name and rename once every gate passes
+    local staged="${env}.staging"
     local extra="" problems page cpf=0
     local -a pages=()
     case "${kind}" in
@@ -115,8 +118,8 @@ submit_arm() {  # submit_arm <model> <kind: plain|dc|cpf|dc-cpf> <deps or empty>
     sed -e "s|^PROBLEMS_FILE=.*|PROBLEMS_FILE=${problems}|" \
         -e "s|^CAMPAIGN_ARM=.*|CAMPAIGN_ARM=${arm}|" \
         -e "s|^RUN_ROOT=.*|RUN_ROOT=\${SCRATCH:-/iopsstor/scratch/cscs/\$USER}/hpcagent-bench-runs/${EXPERIMENT}-${STAMP}|" \
-        ".env.${BASE_ENV[${model}]}" | grep -vE '^[[:space:]]*(#|$)' >"${env}"
-    record_identity "${env}" "${RECORD_EXPERIMENT}" "${model}" "${LANGUAGE}" cpu "${record_packet}" "${arm}"
+        ".env.${BASE_ENV[${model}]}" | grep -vE '^[[:space:]]*(#|$)' >"${staged}"
+    record_identity "${staged}" "${RECORD_EXPERIMENT}" "${model}" "${LANGUAGE}" cpu "${record_packet}" "${arm}"
     # pin_env_kv not `>>`: base envs carry AGENT_TIMEOUT_SECONDS twice, breaking arm_nodes.sh's -oP
     local kv
     for kv in "AGENT_TIMEOUT_SECONDS=${AGENT_TIMEOUT_SECONDS}" \
@@ -127,7 +130,7 @@ submit_arm() {  # submit_arm <model> <kind: plain|dc|cpf|dc-cpf> <deps or empty>
               "LANGUAGE=${LANGUAGE}" \
               "AGENT_SINGLE_SUBMISSION=1" \
               "AGENT_SUBMISSION_POLICY_FILE=submission-single.md"; do
-        pin_env_kv "${env}" "${kv}"
+        pin_env_kv "${staged}" "${kv}"
     done
     if (( cpf )); then
         local absent
@@ -137,16 +140,17 @@ submit_arm() {  # submit_arm <model> <kind: plain|dc|cpf|dc-cpf> <deps or empty>
             echo "  render them all first: ./prerender_cpf.sh outer ${CPF_FORMS_DIR} \\" >&2
             echo "      \"$(IFS=,; echo "${ROSTER[*]}")\" \"${OPTARENA}\" cpu" >&2
             # a trailing `[[ ]] &&` would make a false test this function's exit status
-            if [[ "${SUBMIT:-1}" == 1 ]]; then return 2; fi
+            if [[ "${SUBMIT:-1}" == 1 ]]; then rm -f "${staged}"; return 2; fi
         fi
-        pin_env_kv "${env}" "HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR=${CPF_FORMS_DIR}"
+        pin_env_kv "${staged}" "HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR=${CPF_FORMS_DIR}"
     fi
 
     # an agent 400s and records NOTHING once input + completion passes the served context
-    check_context_budget "${env}" || return 2
+    check_context_budget "${staged}" || { rm -f "${staged}"; return 2; }
     local nodes walltime
-    nodes=$(arm_nodes "${env}")
-    walltime=${TIME_LIMIT:-$(arm_walltime "${env}" "${N_PROBLEMS}")}
+    nodes=$(arm_nodes "${staged}")
+    walltime=${TIME_LIMIT:-$(arm_walltime "${staged}" "${N_PROBLEMS}")}
+    mv "${staged}" "${env}"
     if [[ "${SUBMIT:-1}" != 1 ]]; then
         echo "prepared ${arm} (${nodes} nodes, ${walltime}, ${N_PROBLEMS} problems," \
              "packet '${record_packet}')${deps:+ after ${deps}} -- not submitted"

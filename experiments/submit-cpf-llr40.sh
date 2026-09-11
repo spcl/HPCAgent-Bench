@@ -85,6 +85,9 @@ submit_arm() {  # submit_arm <model> <language> <kind:plain|skills|cpf|cpfsrc>
     local arm="${EXPERIMENT}-${model}-${lang}${sfx}"
     # keyed by MODEL too: same-language arms can owe different kernel subsets in the same wave
     local env=".env.${arm}" problems="problems-${EXPERIMENT}-${model}-${lang}${sfx}.jsonl"
+    # an arm env is written key by key, so a gate that bails midway leaves a file that looks
+    # complete and silently lacks a key: build under a staging name, rename once gates pass
+    local staged="${env}.staging"
     local target; target=$(target_for "${lang}")
     local image=cpu; [[ "${target}" == gpu ]] && image=amd
 
@@ -105,17 +108,17 @@ submit_arm() {  # submit_arm <model> <language> <kind:plain|skills|cpf|cpfsrc>
         -e "s|^LANGUAGE=.*|LANGUAGE=${lang}|" \
         -e "s|^AMD_CE_ENV=.*|AMD_CE_ENV=${CPF_CE_ENV}|" \
         -e "s|^RUN_ROOT=.*|RUN_ROOT=\${SCRATCH:-/iopsstor/scratch/cscs/\$USER}/hpcagent-bench-runs/${EXPERIMENT}-${STAMP}|" \
-        ".env.base-${model}" | grep -vE '^[[:space:]]*(#|$)' >"${env}"
+        ".env.base-${model}" | grep -vE '^[[:space:]]*(#|$)' >"${staged}"
     local packet=""
     case "${kind}" in
         skills) packet="lang-skills" ;;
         cpf) packet="cpf" ;;
         cpfsrc) packet="cpfsrc" ;;
     esac
-    record_identity "${env}" "${RECORD_EXPERIMENT}" "${model}" "${lang}" "${target}" "${packet}" "${arm}"
+    record_identity "${staged}" "${RECORD_EXPERIMENT}" "${model}" "${lang}" "${target}" "${packet}" "${arm}"
     # sourced under `set -a`: reaches every role including the inference server, not just the agent
     local kv
-    for kv in ${EXTRA_ENV_KV:-}; do echo "${kv}" >>"${env}"; done
+    for kv in ${EXTRA_ENV_KV:-}; do echo "${kv}" >>"${staged}"; done
     if [[ "${kind}" == cpfsrc ]]; then
         local forms="${CPF_DROPIN_DIR:-${SCRATCH:?}/cpf-dropin-${target}-${TAG}}"
         local absent
@@ -123,13 +126,14 @@ submit_arm() {  # submit_arm <model> <language> <kind:plain|skills|cpf|cpfsrc>
         if [[ -n "${absent}" ]]; then
             echo "no drop-in form at ${forms} for: $(tr '\n' ' ' <<<"${absent}")" >&2
             echo "  render them: CPF_DROPIN=1 ./prerender_cpf.sh outer ${forms} \"\${KERNELS}\" \"\${OPT}\" ${target}" >&2
+            rm -f "${staged}"
             exit 2
         fi
-        echo "CPF_DROPIN_DIR=${forms}" >>"${env}"
+        echo "CPF_DROPIN_DIR=${forms}" >>"${staged}"
     fi
     # base env is a CPU arm's: a device arm needs prompt-gpu.md or LANGUAGE=hip meets a CPU prompt
     if [[ "${target}" == gpu ]]; then
-        sed -i -e "s|^AGENT_PROMPT_FILE=.*|AGENT_PROMPT_FILE=prompt-gpu.md|" "${env}"
+        sed -i -e "s|^AGENT_PROMPT_FILE=.*|AGENT_PROMPT_FILE=prompt-gpu.md|" "${staged}"
     fi
     # only the TREATED arm points at pre-rendered forms (unset reads as 200 "unavailable", silently
     # measuring nothing). One directory per TARGET, keyed by TARGET+ROSTER: cpu holds both c/c++.
@@ -141,12 +145,14 @@ submit_arm() {  # submit_arm <model> <language> <kind:plain|skills|cpf|cpfsrc>
         if [[ -n "${absent}" ]]; then
             echo "no pre-rendered ${target} form at ${forms} for: $(tr '\n' ' ' <<<"${absent}")" >&2
             echo "  render them all first: ./prerender_cpf.sh outer ${forms} \"\${KERNELS}\" \"\${OPT}\" ${target}" >&2
+            rm -f "${staged}"
             exit 2
         fi
-        echo "HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR=${forms}" >>"${env}"
+        echo "HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR=${forms}" >>"${staged}"
     fi
 
-    check_context_budget "${env}" || exit 2
+    check_context_budget "${staged}" || { rm -f "${staged}"; exit 2; }
+    mv "${staged}" "${env}"
     local nodes n_kernels
     nodes=$(arm_nodes "${env}")
     # grep -c prints 0 AND exits non-zero on an empty file, so the count is read, then defaulted
