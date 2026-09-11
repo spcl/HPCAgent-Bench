@@ -84,8 +84,16 @@ def test_an_unknown_pin_names_the_allowed_set_and_its_key(_reset_pin):
 
 
 def test_family_names_is_the_one_vocabulary():
-    assert languages.family_names() == tuple(languages.COMPILER_FAMILIES)
-    assert languages.family_names()[0] == languages.default_family()
+    """Not ``family_names() == tuple(COMPILER_FAMILIES)``, which is that function's own body
+    restated, nor ``family_names()[0] == default_family()``, which is the other's. Both passed
+    whatever the table said, including an empty one. The facts a caller actually leans on are that
+    the vocabulary is non-empty, that the default is IN it, and that every family maps to the
+    ``install.spack`` name its compilers.yaml blocks are matched on."""
+    names = languages.family_names()
+    assert names, "no requestable toolchain family; every submission naming one would be refused"
+    assert languages.default_family() in names
+    spack_names = set(languages.COMPILER_FAMILIES.values())
+    assert len(spack_names) == len(names), f"two families share one spack name: {languages.COMPILER_FAMILIES}"
 
 
 # --- Task F: a submission's 'compiler' field reaches the build argv --------

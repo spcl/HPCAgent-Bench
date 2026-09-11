@@ -35,7 +35,8 @@ def test_the_tool_description_says_it_is_a_suggestion(monkeypatch):
     text = tool.DESCRIPTION.lower()
     assert "suggestion" in text, "the description must not present the form as ground truth"
     assert "prove" in text, "it must say a sequential loop is one that was not PROVEN independent"
-    assert "not drop-in" in text or "not drop-in" in text.replace("-", "-"), "it must warn against pasting it in"
+    # One clause, not two: the second was ``text.replace("-", "-")``, which is ``text``.
+    assert "not drop-in" in text, "it must warn against pasting it in"
 
 
 def test_the_skill_states_both_directions_of_wrongness():
