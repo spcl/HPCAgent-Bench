@@ -61,7 +61,9 @@ def test_every_submission_field_the_judge_reads_is_one_the_client_can_send() -> 
     in the direction that matters: the Python snippet cannot express the delivery the prompt taught.
     """
     source = inspect.getsource(service._submission_from_body)
-    read = set(re.findall(r"body\.get\(\"([a-z_]+)\"", source))
+    # The body is read through a RequestBody accessor named for the field's TYPE (text / strings /
+    # mapping / present), so the key is the accessor's first argument whichever accessor is used.
+    read = set(re.findall(r"body\.[a-z_]+\(\"([a-z_]+)\"", source))
     assert "source_file" in read, "the body reader no longer parses source_file -- update this test"
     unsendable = sorted(read - {f.name for f in dataclasses.fields(Submission)})
     assert not unsendable, (

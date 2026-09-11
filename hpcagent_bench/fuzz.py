@@ -230,7 +230,7 @@ _UNRESOLVED = object()
 _MAX_RESAMPLE = 1000
 #: Functions callable from derive/construct/in/rule/constraint expressions.
 #: Only these names may be CALLED -- everything else (attribute access, imports,
-#: other builtins) is rejected by the AST walk in :func:`_safe_eval`.
+#: other builtins) is rejected by the AST walk in :func:`safe_eval`.
 _EVAL_FUNCS = {"min": min, "max": max, "int": int, "abs": abs, "round": round, "len": len, "bool": bool, "float": float}
 
 #: Permitted binary / unary / comparison operators.
@@ -254,7 +254,7 @@ _CMPOPS = {
 }
 
 
-def _safe_eval(expr: str, names: dict[str, FuzzValue]) -> FuzzValue:
+def safe_eval(expr: str, names: dict[str, FuzzValue]) -> FuzzValue:
     """Evaluate a fuzz expression against ``names`` WITHOUT Python ``eval``.
 
     Supports arithmetic, comparisons, boolean / ternary logic, literals,
@@ -321,13 +321,13 @@ def _try_resolve(
     ``_UNRESOLVED`` when a dependency isn't available yet (topo retry)."""
     if is_derive(spec):
         try:
-            return _safe_eval(spec["derive"], resolved)
+            return safe_eval(spec["derive"], resolved)
         except NameError:
             return _UNRESOLVED
     if is_construct(spec):
         local = {k: _sample_leaf(v, rng, distribution) for k, v in spec.items() if k != "construct"}
         try:
-            return _safe_eval(spec["construct"], {**resolved, **local})
+            return safe_eval(spec["construct"], {**resolved, **local})
         except NameError:
             return _UNRESOLVED
     return _sample_leaf(spec, rng, distribution)
@@ -393,7 +393,7 @@ def sample_params(
         rng = np.random.default_rng(seed + attempt * 1_000_003)
         out = _resolve_config(configs, rng) if configs else {}
         out.update(_resolve_sizes(fuzzed, out, rng, distribution))
-        if all(_safe_eval(c, out) for c in constraints):
+        if all(safe_eval(c, out) for c in constraints):
             return out
     raise ValueError(f"could not satisfy constraints {constraints} in {_MAX_RESAMPLE} tries")
 
@@ -482,7 +482,7 @@ def _resolve_against(
         rng = np.random.default_rng(int(seed) + attempt * 1_000_003)
         out = dict(fixed)
         out.update(_resolve_sizes(fuzzed, out, rng, distribution))
-        if all(_safe_eval(c, out) for c in constraints):
+        if all(safe_eval(c, out) for c in constraints):
             return out
     raise ValueError(f"could not satisfy constraints {constraints} for config {fixed}")
 

@@ -44,14 +44,14 @@ except ImportError:  # PyYAML built without libyaml
 from hpcagent_bench import config, paths
 from hpcagent_bench import dtypes as dtype_registry
 from hpcagent_bench.flags import Mode
-from hpcagent_bench.fuzz import FuzzValue, _safe_eval, is_range, is_set
+from hpcagent_bench.fuzz import FuzzValue, safe_eval, is_range, is_set
 from hpcagent_bench.precision import Precision
 from hpcagent_bench.support.distributions import domain as domain_mod
 
 #: One complete config: every ``config:`` symbol bound to one value. What
 #: :attr:`BenchSpec.config_space` enumerates and what a ``constraints:`` expression is evaluated
 #: over. Values are spelled as ``fuzz.FuzzValue`` because a row is handed to the same evaluator the
-#: fuzzer resolves its draws with (:func:`hpcagent_bench.fuzz._safe_eval`).
+#: fuzzer resolves its draws with (:func:`hpcagent_bench.fuzz.safe_eval`).
 ConfigRow = dict[str, FuzzValue]
 
 #: ``{preset: {symbol: value}}`` -- the size table a manifest declares under ``dimensions:`` /
@@ -718,14 +718,14 @@ def _config_product(knobs: dict[str, ConfigKnob], constraints: tuple[str, ...]) 
 def _constraint_holds(expr: str, row: ConfigRow) -> bool:
     """``expr`` evaluated over one config row; True when the row does not bind every name it uses."""
     try:
-        return bool(_safe_eval(expr, row))
+        return bool(safe_eval(expr, row))
     except NameError:
         return True
 
 
 def _validate_constraints(constraints: tuple[str, ...], parameters_view: PresetTable, kernel: str, source: str) -> None:
     """Reject at LOAD any ``constraints:`` expression that is false, or names an undeclared symbol,
-    at any CONCRETE preset. Evaluated by ``fuzz._safe_eval`` -- AST-restricted, never Python ``eval``.
+    at any CONCRETE preset. Evaluated by ``fuzz.safe_eval`` -- AST-restricted, never Python ``eval``.
 
     The ``fuzzed`` preset is skipped: its values are fuzz SPECS (``[lo, hi]`` intervals, ``{set:
     [...]}``, ``{construct: ...}``), not numbers, so a numeric predicate over them is a type error
@@ -739,7 +739,7 @@ def _validate_constraints(constraints: tuple[str, ...], parameters_view: PresetT
             continue
         for expr in constraints:
             try:
-                ok = _safe_eval(expr, names)
+                ok = safe_eval(expr, names)
             except NameError as exc:
                 raise ValueError(
                     f"{source}: {kernel}: constraint {expr!r} references undeclared name "
@@ -913,7 +913,7 @@ def _validate_packed_shapes(
             inner: FuzzValue | None
             for combo in itertools.product(*sets.values()):
                 try:
-                    inner = _safe_eval(inner_expr, {**namespace, **dict(zip(sets, combo))})
+                    inner = safe_eval(inner_expr, {**namespace, **dict(zip(sets, combo))})
                 except Exception:  # noqa: BLE001 -- unresolvable is "not checkable", not an error
                     inner = None
                 if not isinstance(inner, int) or isinstance(inner, bool):
@@ -1373,7 +1373,7 @@ class BenchSpec:
     config: dict[str, ConfigKnob] = field(default_factory=dict[str, ConfigKnob])
     config_valid: tuple[ConfigRow, ...] = ()
     #: Cross-dimension/config invariants (e.g. ``"lvn <= nproma"``), validated at LOAD for every
-    #: preset via :func:`_validate_constraints` (reuses ``fuzz._safe_eval``). Over the mapping
+    #: preset via :func:`_validate_constraints` (reuses ``fuzz.safe_eval``). Over the mapping
     #: composition they double as the FILTER rules that carve the product down (see
     #: :func:`_config_product`).
     constraints: tuple[str, ...] = ()

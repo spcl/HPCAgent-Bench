@@ -51,7 +51,7 @@ import yaml
 
 from hpcagent_bench import config
 from hpcagent_bench.dtypes import storage_dtype
-from hpcagent_bench.fuzz import _safe_eval
+from hpcagent_bench.fuzz import safe_eval
 from hpcagent_bench.precision import numpy_dtype, precision_from_datatype
 from hpcagent_bench.spec import BenchSpec, SparseLayoutVariant, module_level_constants
 
@@ -410,7 +410,7 @@ def variant_bytes(variant: SparseLayoutVariant, namespace: Mapping[str, object])
     total = 0
     for buf in variant.buffers:
         try:
-            shape = _safe_eval("(" + ", ".join(buf.shape) + ",)", namespace)
+            shape = safe_eval("(" + ", ".join(buf.shape) + ",)", namespace)
         except Exception:  # noqa: BLE001 -- a shape naming an underivable symbol is not a byte count
             return None
         if not all(isinstance(d, (int, float)) and not isinstance(d, bool) for d in shape):
@@ -498,7 +498,7 @@ def working_bytes(
         if wanted is not None and array not in wanted:
             continue
         try:
-            shape = _safe_eval(str(expr), namespace)
+            shape = safe_eval(str(expr), namespace)
         except Exception:  # noqa: BLE001 -- an unresolvable shape is not a byte count; report unknown
             return None
         dims = tuple(shape) if isinstance(shape, (tuple, list)) else (shape,)
@@ -592,7 +592,7 @@ def kernel_memory_gb(
     request = 0
     if workspace is not None:
         try:
-            request = max(0, math.ceil(_safe_eval(str(workspace), shape_namespace(spec, values))))
+            request = max(0, math.ceil(safe_eval(str(workspace), shape_namespace(spec, values))))
         except Exception:  # noqa: BLE001 -- native_call validates the request for real (a scored
             request = 0  # error); an unresolvable one simply adds nothing to the cap here
     return max((MEMORY_COPIES * arrays + request) / BYTES_PER_GB, floor)
@@ -721,7 +721,7 @@ def constraint_violations(spec: BenchSpec, preset: str, values: Mapping[str, obj
     out: List[str] = []
     for expr in spec.constraints:
         try:
-            if not _safe_eval(expr, names):
+            if not safe_eval(expr, names):
                 out.append(f"{preset}: constraint {expr!r} does not hold")
         except Exception as exc:  # noqa: BLE001 -- an unevaluable constraint is itself a failure
             out.append(f"{preset}: constraint {expr!r} could not be evaluated: {exc}")
