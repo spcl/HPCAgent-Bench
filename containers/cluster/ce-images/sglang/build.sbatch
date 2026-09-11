@@ -36,11 +36,13 @@ set -Eeuxo pipefail
 ulimit -c 0
 
 # Slurm SPOOLS the batch script, so BASH_SOURCE points at /var/spool/slurmd -- pass the directory
-# rather than deriving it (this is exactly what killed build job 600467). --chdir sets it for free.
+# rather than deriving it. $PWD is right either way: --chdir sets the job's cwd, and without it the
+# cwd IS the submit dir. SLURM_SUBMIT_DIR is NOT -- it is where sbatch was RUN, which --chdir does
+# not change, so a --chdir invocation resolved to the wrong tree and died on the test below.
 # IMAGE_DIR, the same name all five builders take. This one also answers to SGLANG_DIR, which is
 # what it used to be called and what older submit lines still say.
-IMAGE_DIR="${IMAGE_DIR:-${SGLANG_DIR:-${SLURM_SUBMIT_DIR:-$PWD}}}"
-test -x "${IMAGE_DIR}/build.sh"
+IMAGE_DIR="${IMAGE_DIR:-${SGLANG_DIR:-$PWD}}"
+test -x "${IMAGE_DIR}/build.sh" || { echo "no build.sh under IMAGE_DIR=${IMAGE_DIR}" >&2; exit 2; }
 
 export OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?}/ce-images/optarena-sglang-candidate.sqsh}"
 

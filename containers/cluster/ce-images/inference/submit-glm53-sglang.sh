@@ -32,6 +32,11 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 # backslash-continued command: a comment line in the middle ends it at the '#', and every variable
 # after that point is silently dropped. That is exactly what happened to 630363/630364/630374/
 # 630375 -- they lost MODEL_REPO and served KIMI under a GLM job name.
+# EDF, PINNED. smoke-kimi-sglang.sbatch defaults to sglang-latest, and an image whose sglang
+# still reads weight_scale.format_ue8m0 as a plain attribute cannot load GLM at all: it dies
+# ~31 min in with AttributeError, after the weights are on the nodes. Overridable for testing a
+# candidate image.
+EDF="${EDF:-${HOME}/.edf/sglang-latest.toml}" \
 MODEL_REPO=zai-org/GLM-5.3 \
 SERVED_MODEL=glm-5.3 \
 TOOL_PARSER=glm47 \

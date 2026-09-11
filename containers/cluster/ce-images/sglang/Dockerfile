@@ -365,7 +365,10 @@ import sys
 
 # A READ of .format_ue8m0. An assignment target (a single = that is not ==) is left alone: fp8.py
 # stamps the attribute all over and rewriting those would not parse.
-PATTERN = re.compile(r"(?<![\w.])(\w+)\.format_ue8m0\b(?!\s*=(?!=))")
+# The receiver may be a dotted CHAIN (layer.weight_scale.format_ue8m0), not just a bare name. A
+# pattern that excludes a leading dot misses those, and because the assertion below reuses it, such
+# a read would slip through while the build still reported success.
+PATTERN = re.compile(r"(?<![\w.])((?:\w+\.)*\w+)\.format_ue8m0\b(?!\s*=(?!=))")
 GUARD = r'getattr(\1, "format_ue8m0", False)'
 
 tree = pathlib.Path("/sgl-workspace/sglang/python/sglang")
