@@ -106,21 +106,33 @@ With the **aiter** attention backend, the engine multiplies `--mem-fraction-stat
 internally before using it. A configured 0.588 is an effective 0.50; a configured 0.247 is an
 effective 0.21.
 
+The derate is conditional. `arg_groups/attention_hook.py` applies it only when
+`attention_backend == "aiter"` **and** `context_len > 8192`. On any other backend, or at a short
+context, the configured fraction is the effective fraction.
+
 **Never move one of these two without the other.** Dropping the backend while leaving the number
 alone leaves a KV pool too small to hold a working set. Raising the number while dropping the
-backend overshoots into the host OOM killer. Both directions have happened here (measured
-2026-09-06; the derate itself is unchanged since).
+backend overshoots into the host OOM killer.
 
-The repository attributes the 0.85 derate two ways -- the model configuration files call it aiter's
-internal multiplier, the serving smoke calls it the vision-model derate. The arithmetic is the same
-0.85 in both accounts, and the rule is the same either way.
+Read the resulting pool from the allocator's own `KV size: X GB` line. Never infer it from the
+flag: which backend carries the number decides whether the 0.85 applies, so one flag value means
+two different pools.
 
-**`SGLANG_USE_AITER=1` does not select the attention backend.** It switches aiter **ops**. Unset,
-SGLang picks the attention backend itself, and on ROCm that is **triton** -- so a server that sets
-only the environment variable has been serving triton attention all along. Name
-`--attention-backend` explicitly, and check the value against `python3 -m sglang.launch_server
---help` **inside the image** before using it: an unrecognised value is an argparse error that takes
-down every rank at launch.
+**`SGLANG_USE_AITER=1` does not select the attention backend.** It switches aiter **ops**, and it
+is worth keeping on: without it the ROCm path loses aiter's preshuffled paged-MQA kernel and forces
+`page_size` to 1 whatever the flag says.
+
+**The default backend is per-model, not per-platform.** With `--attention-backend` unset, a model's
+own override picks it: kimi gets aiter, GLM-5.3 gets `dsa` from
+`arg_groups/model_overrides/deepseek_v2.py`. There is no single ROCm default to reason from.
+
+**Naming the backend explicitly is not always the safe choice.** An explicit value SUPPRESSES the
+model's own override, which is how GLM-5.3 loses `dsa`. Omit the flag where the model selects
+correctly for itself; name it only where the model's own choice is wrong, and check the value
+against `python3 -m sglang.launch_server --help` **inside the image** first, since an unrecognised
+value is an argparse error that takes down every rank at launch.
+
+Confirm what the engine actually chose by reading `attention_backend=` back out of the server log.
 
 Which backend a given model should use, and what it measured, is on that model's page. It is not the
 same answer for every model.
@@ -212,7 +224,7 @@ These apply only to a server split across nodes.
 
 | Variable | Value | Why |
 |---|---|---|
-| `SGLANG_USE_AITER` | `1` | Switches aiter **ops**. Does **not** select the attention backend -- name that separately. |
+| `SGLANG_USE_AITER` | `1` | Switches aiter **ops**. Does **not** select the attention backend, which defaults per model. |
 | `SGLANG_SET_CPU_AFFINITY` | `0` | SGLang's own pinning is rejected by the Slurm cgroup here and the process dies on a `psutil` error. |
 | `AITER_JIT_DIR`, `AITER_ROOT_DIR` | a persistent path, or the image's baked one | aiter ships no prebuilt objects and JIT-builds on first **use**, not on import, behind a lock. Cold, that build can outrun the engine's watchdog and the server never serves a token. Warm, it costs nothing. Some aiter code paths ignore `AITER_JIT_DIR` and use `$HOME` instead, so point `HOME` somewhere persistent too. |
 | `TRITON_CACHE_DIR` | a persistent path | Unset, it defaults under `$HOME` and every job re-JITs every kernel -- *during inference*, not at startup. Generation then arrives in bursts between total stalls. |
