@@ -4001,7 +4001,7 @@ def folded_with_constants(text: str, pinned: Dict[str, Any]) -> str:
     return str(canonical) if canonical is not None else fold_shape_expr(substituted)
 
 
-def caller_side_recipe(owner: ast.FunctionDef, arg: ast.expr, pinned: Dict[str, Any]) -> str:
+def caller_side_recipe(owner: ast.FunctionDef, arg: ast.expr, pinned: Dict[str, Any], descriptors: Set[str]) -> str:
     """The folded expression a call ARGUMENT stands for, or ``""`` when there is not one.
 
     An expression argument is its own recipe; a bare Name is one only through the owner's single
@@ -4023,7 +4023,13 @@ def caller_side_recipe(owner: ast.FunctionDef, arg: ast.expr, pinned: Dict[str, 
     # a helper whose extent argument is a bare symbol got no recipe at all, so its descriptors kept
     # the caller's spelling while its body kept the parameter's -- ``_scale`` declared ``[N]`` and
     # computed in ``n``, which is the one shape in two spellings this whole map exists to collapse.
-    return folded_with_constants(arg.id, pinned)
+    # A bare symbol the owner never assigns is NOT taken as its own recipe. It reads like the same
+    # extent under two names, and collapsing them does fix `_scale` (declared [N], computing in n,
+    # which will not parse -- see test_dace_helper_programs). But the rename reaches the body and
+    # only half the descriptors, and max_pooling_2d then failed to parse with
+    # "[batch_size, c, h, w] into [batch_size, channels, height, width]". Declined until the
+    # rename is applied to both sides at once.
+    return ""
 
 
 @dataclasses.dataclass(slots=True)
@@ -4163,13 +4169,14 @@ def helper_call_bindings(owner: ast.FunctionDef, hkir: KernelIR, pinned: Dict[st
         # scalar parameter (``c_out_per_group``) and only becomes a dc.symbol later, when
         # render_program sees it size an array.
         extents = own | scalar_names
+        declared = {i for a in hkir.arrays for dim in a.shape for i in _IDENT_RE.findall(str(dim))}
         ambiguous: Set[str] = set()
         for pname, arg in zip(abi, node.args):
             if pname not in extents or pname in binding.constants or pname in binding.collapse:
                 continue
             # A bare Name is the caller's own local for the quantity, so its DEFINITION is the
             # expression a descriptor would have been written with.
-            recipe = caller_side_recipe(owner, arg, pinned)
+            recipe = caller_side_recipe(owner, arg, pinned, declared)
             if not recipe:
                 continue
             # A recipe that folds to ONE name the helper already holds is that name: with
