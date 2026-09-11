@@ -45,7 +45,6 @@ from hpcagent_bench import paths
 from hpcagent_bench.spec import BenchSpec
 from hpcagent_bench.support.bindings.contract import (
     WORKSPACE_NAME,
-    workspace_c_params,
     WORKSPACE_SIZE_NAME,
     Arg,
     Binding,
@@ -106,12 +105,16 @@ def resolve_program(module: ModuleType, path: pathlib.Path) -> DaceProgram | Non
 
 
 def binding_for(rendering: Rendering, kernel: str, symbol: str) -> Binding:
-    """The CPF entry point's own binding, read off the PREPARED SDFG.
+    """The CPF entry point's own binding, read off the PREPARED SDFG in the RENDERED order.
 
     ``rendering.sdfg`` rather than the SDFG handed to the renderer: preparation expands library
     nodes through their pure implementations, and an expansion can introduce an extent symbol the
     library node had kept to itself. Reading the original's ``arglist()`` would drop that symbol and
     the caller would run the kernel on an uninitialized extent.
+
+    ``rendering.arguments`` rather than that arglist's own iteration order: a drop-in is rendered
+    in the ABI's order, and a binding that published the arglist order instead would describe a
+    signature the file does not have.
     """
     from dace import data as dace_data
     from dace.codegen.cpf import readonly_entry_arrays
@@ -122,8 +125,10 @@ def binding_for(rendering: Rendering, kernel: str, symbol: str) -> Binding:
     # ``const`` flag and the rendered signature from disagreeing (they did, and cppcheck reported
     # ``constParameterPointer`` on every read-only pointer as a result).
     readonly = readonly_entry_arrays(sdfg)
+    arglist = sdfg.arglist()
     args: list[Arg] = []
-    for name, desc in sdfg.arglist().items():
+    for name in rendering.arguments:
+        desc = arglist[name]
         dtype = desc.dtype.as_numpy_dtype().name
         if isinstance(desc, dace_data.Array):
             shape = tuple(str(dim) for dim in desc.shape)
@@ -205,6 +210,11 @@ def add_workspace(sdfg: SDFG) -> None:
     signature whether or not the body still mentions it (SDFG.interface_symbols). So this needs no
     forcing at all -- unlike a size parameter such as ``K``, which is in no shape and would
     otherwise vanish.
+
+    Nothing reading it is also why CPF renders it ``const uint8_t *`` where the ABI declares it
+    non-const, and CPF renders every by-value scalar without the ``const`` the ABI gives it. Both
+    are qualifiers C linkage ignores: the drop-in links and runs either way, and re-spelling them
+    would change nothing a compiler can see.
     """
     from dace import data as dace_data
 
@@ -259,41 +269,6 @@ def force_abi_symbols(sdfg: SDFG, wanted: Sequence[str]) -> tuple[str, ...]:
         host.code.as_string = f"{ABI_SYMBOL_LOCAL}{name} = {name}\n" + host.code.as_string
         forced.append(name)
     return tuple(forced)
-
-
-def param_name(decl: str) -> str:
-    """The declared name in one C parameter (``const double * restrict a`` -> ``a``)."""
-    return re.sub(r"[^A-Za-z0-9_]", " ", decl).split()[-1]
-
-
-def reorder_entry(code: str, symbol: str, order: Sequence[str], lang: str = "c") -> str:
-    """Rewrite the entry's parameter list into ``order``.
-
-    CPF emits every array then every scalar, each sorted by name, so ``workspace`` lands with the
-    pointers and ``workspace_size`` with the scalars. The ABI appends BOTH after the kernel's own
-    arguments, which puts a pointer behind scalars -- an order no name-sort can reach. Since the
-    body does not depend on the parameter order and the unit declares the entry exactly ONCE (it is
-    self-contained: no prototype, no header), rewriting the list is the whole fix.
-
-    Refuses on any disagreement about the SET of parameters rather than dropping or inventing one.
-    """
-    match = re.search(rf"(?m)^(\s*(?:extern \"C\" )?void {re.escape(symbol)}\()([^)]*)(\))", code)
-    if match is None:
-        raise ValueError(f"no entry {symbol!r} to reorder")
-    decls = [d.strip() for d in match.group(2).split(",") if d.strip()]
-    by_name = {param_name(d): d for d in decls}
-    if set(by_name) != set(order):
-        raise ValueError(f"entry takes {sorted(by_name)} but the ABI is {sorted(order)}")
-    # The reserved pair is spelled by the ABI, not by the renderer. CPF sees an array nothing
-    # writes and qualifies it ``const``; the contract says workspace is scratch the kernel MAY
-    # write, and workspace_size is the one that is const. C linkage ignores both qualifiers, so a
-    # mismatch here links silently and only misleads the reader -- which is the whole audience for
-    # a file handed to an agent as its starting source.
-    spelled = dict(by_name)
-    for decl in workspace_c_params(lang):
-        spelled[param_name(decl)] = decl
-    rebuilt = match.group(1) + ", ".join(spelled[name] for name in order) + match.group(3)
-    return code[: match.start()] + rebuilt + code[match.end() :]
 
 
 def clean_form(code: str, forced: Sequence[str]) -> str:
@@ -378,18 +353,14 @@ def render_sdfg(
     finalize_for_target(sdfg, target, validate=True)
     # The CANONICAL symbol, so the rendered unit is a DROP-IN for the kernel it replaces: the
     # head-start arm hands this file to an agent as its starting source and the judge links
-    # <kernel>_fp64. Safe because the argument list agrees -- CPF orders by SDFG.arglist(), which
-    # sorts arrays then scalars by name, and that matches binding_from_spec on 39 of the 40
-    # llr-focus40 kernels. The 40th differs by a symbol the ABI passes and the graph never had,
-    # which force_abi_symbols puts back; render_sdfg then checks the two agree and refuses if not,
-    # so a future divergence is a MISSING form rather than a symbol called with the wrong arguments.
-    # OPT-IN, because it cannot be delivered for every kernel yet. The ABI is the kernel's own
-    # arguments, then the reserved scratch PAIR -- and that interleaves an array (workspace) after
-    # the scalars, while dace emits all arrays then all scalars. No naming or forcing reaches that
-    # order; CPF has to be told it. Until then the default stays the `_cpf` form, which is what the
-    # canonical_parallel_form tool serves and what every current arm reads, and asking for a
-    # drop-in on a kernel whose order cannot be matched REFUSES rather than emitting a form the
-    # judge would call with shifted arguments.
+    # <kernel>_fp64. The ABI is the kernel's own arguments THEN the reserved scratch pair, which
+    # puts a POINTER behind the scalars; CPF's own order is SDFG.arglist(), every array by name
+    # then every scalar by name, so no naming or forcing reaches the ABI order. CPF is TOLD it
+    # instead -- render(order=...) -- and refuses unless the order names exactly the parameters the
+    # entry takes. What can still differ is that SET: a symbol the ABI passes and the graph never
+    # had, which force_abi_symbols puts back, and the scratch pair, which add_workspace puts back.
+    # A future divergence is therefore a MISSING form rather than a symbol called with shifted
+    # arguments.
     # The entry's name, ALWAYS: the default form is CPF's own symbol, which is what the
     # canonical_parallel_form tool serves and what the test dlsym's. Only a drop-in overrides it.
     sdfg.name = base
@@ -409,28 +380,31 @@ def render_sdfg(
         # the judge IMAGE, so renaming the file is the fix that needs no rebuild. Only the entry
         # SYMBOL is canonical, which is the half a drop-in actually needs.
 
+    # The ABI is the kernel's own arguments THEN the reserved scratch pair -- the order the stub
+    # and the host glue emit, not binding.args, which stops at the kernel's own. Handed to the
+    # renderer rather than applied to its output: rewriting a rendered signature is a second copy
+    # of splitting rules CPF already owns, and the drift ends in a symbol the judge links and calls
+    # with its arguments shifted.
+    abi_args: list[str] | None = None
+    if dropin:
+        abi_args = [arg.name for arg in native.args] + [WORKSPACE_NAME, WORKSPACE_SIZE_NAME]
     # The device form is one unit holding both the host code and the kernels, which is a dialect of
     # its own; ``--language`` chooses between the two host spellings and says nothing about it.
     emitted = DEVICE_LANGUAGE if target == "gpu" else language
-    rendering = render(sdfg, language=emitted)
+    try:
+        rendering = render(sdfg, language=emitted, order=abi_args)
+    except ValueError as exc:
+        if abi_args is None:
+            raise
+        raise ValueError(
+            f"{spec.short_name}: cannot publish a drop-in -- {exc} The judge links this symbol "
+            f"and would call it with its arguments shifted."
+        ) from exc
     out_dir.mkdir(parents=True, exist_ok=True)
     source = out_dir / f"{base}.{LANGUAGE_EXT[emitted]}"
     cpf_binding = binding_for(rendering, spec.short_name, base)
-    # The signature the unit ACTUALLY exports, against the ABI it claims to be a drop-in for. A
-    # mismatch here would be a symbol the judge links and calls with the wrong arguments, which no
-    # compiler catches across a rename -- so it is a refusal, not a warning.
     code = clean_form(rendering.code, forced)
-    if dropin:
-        # The ABI is the kernel's own arguments THEN the reserved scratch pair -- the order the
-        # stub and the host glue emit, not binding.args, which stops at the kernel's own.
-        abi_args = [arg.name for arg in native.args] + [WORKSPACE_NAME, WORKSPACE_SIZE_NAME]
-        try:
-            code = reorder_entry(code, native.symbol, abi_args, "c" if emitted == "c" else "cpp")
-        except ValueError as exc:
-            raise ValueError(
-                f"{spec.short_name}: cannot publish a drop-in -- {exc}. The judge links this "
-                f"symbol and would call it with its arguments shifted."
-            ) from exc
+    if abi_args is not None:
         rec["abi_order"] = abi_args
     source.write_text(code)
     binding = out_dir / f"{base}_binding.json"
