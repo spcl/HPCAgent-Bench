@@ -56,7 +56,7 @@ STORES = ["out[:, ~valid] = 0.0", "out[:, valid] = 0.0", "out[:, ~valid] = 7.5"]
 
 
 @pytest.mark.parametrize("store", STORES)
-def test_axis_mask_store_agrees_with_numpy(store) -> None:
+def test_axis_mask_store_agrees_with_numpy(store: str) -> None:
     status = run_op(
         kernel(store),
         "am",
@@ -72,7 +72,7 @@ def test_axis_mask_store_agrees_with_numpy(store) -> None:
 
 
 @pytest.mark.parametrize("target", ["c", "fortran"])
-def test_axis_mask_lowers_to_a_guarded_nest(target) -> None:
+def test_axis_mask_lowers_to_a_guarded_nest(target: str) -> None:
     """The store becomes a per-element loop with an ``if`` -- not a gather, not a whole-row copy."""
     src = emit("out[:, ~valid] = 0.0", target)
     assert "if" in src.lower(), src

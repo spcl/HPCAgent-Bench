@@ -19,7 +19,7 @@ from numpyto_c.emit import emit_c
 _ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 
 
-def _all_ok(res):
+def _all_ok(res: dict[str, str]) -> tuple[bool, dict[str, str]]:
     assert any(v == "ok" for v in res.values()), f"every backend skipped; the comparison never ran: {res}"
     return all(v == "ok" or v.startswith("skip") for v in res.values()), res
 
@@ -41,7 +41,7 @@ def test_bitops_fold_numerically() -> None:
     assert ok, res
 
 
-def _emit(src):
+def _emit(src: str) -> str:
     import json
     import pathlib
     import tempfile

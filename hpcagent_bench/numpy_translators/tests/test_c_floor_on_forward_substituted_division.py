@@ -28,6 +28,7 @@ import numpy as np
 import _op_oracle as oo
 from numpyto_c.emit import _CBodyEmitter, emit_c, emit_pluto
 from numpyto_common.frontend import parse_kernel
+from numpyto_common.ir import KernelIR
 from numpyto_common.lowering import lower
 
 #: Mirrors cp2k_grid_integrate's periodic-wrap shape (see the Fortran test for the full kernel
@@ -102,7 +103,7 @@ _SYM_SRC = (
 )
 
 
-def _sym_kir():
+def _sym_kir() -> KernelIR:
     d = pathlib.Path(tempfile.mkdtemp())
     (d / "k.py").write_text(_SYM_SRC)
     bi = d / "bi.json"

@@ -9,6 +9,7 @@ there, including in scripts that are GENERATED rather than checked in.
 """
 
 import importlib.util
+import pathlib
 import subprocess
 import sys
 
@@ -31,7 +32,7 @@ def test_every_sbatch_emitter_disables_core_dumps() -> None:
     assert not missing, f"sbatch emitters without `{check_core_dumps.GUARD}`: {[str(p) for p in missing]}"
 
 
-def test_emitter_without_the_guard_is_reported(tmp_path) -> None:
+def test_emitter_without_the_guard_is_reported(tmp_path: pathlib.Path) -> None:
     """The check must FAIL on a regression -- a clean repo alone does not prove it looks."""
     bad = tmp_path / "emitter.py"
     bad.write_text('TEMPLATE = """#!/bin/bash\n#SBATCH --job-name=x\nsrun true\n"""\n')

@@ -42,7 +42,7 @@ _STAGED_SRC = (
 )
 
 
-def _bench_info(func, scalar):
+def _bench_info(func: str, scalar: str) -> dict[str, object]:
     """bench_info for a kernel ``func(a, out, <scalar>)`` with ``scalar`` declared a FLOAT in
     ``init.scalars`` (NOT an integer sizing symbol in ``parameters``)."""
     return {
@@ -61,7 +61,7 @@ def _bench_info(func, scalar):
     }
 
 
-def _emit(src, func, scalar):
+def _emit(src: str, func: str, scalar: str) -> tuple[pathlib.Path, str, str, str]:
     from numpyto_common.frontend import parse_kernel
     from numpyto_common.lowering import lower
     from numpyto_c.emit import emit_c, emit_cpp
@@ -76,7 +76,7 @@ def _emit(src, func, scalar):
     return d, c, cpp, f90
 
 
-def _scalar_desc(src, func, scalar):
+def _scalar_desc(src: str, func: str, scalar: str) -> tuple[dict[str, str], set[str]]:
     from numpyto_common.frontend import parse_kernel
 
     d = pathlib.Path(tempfile.mkdtemp())
@@ -167,7 +167,7 @@ def test_staged_scalar_fortran_compiles_and_runs() -> None:
     assert abs(out[0] - expected) < 1e-9, f"got {out[0]}, expected masked sum {expected}"
 
 
-def _shutil_which(name):
+def _shutil_which(name: str) -> str | None:
     import shutil
 
     return shutil.which(name)

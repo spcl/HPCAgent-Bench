@@ -21,7 +21,7 @@ from numpyto_common.numpy_desugar import (
 )
 
 
-def _apply(pass_obj, src: str) -> str:
+def _apply(pass_obj: ast.NodeTransformer, src: str) -> str:
     body: list = []
     for stmt in ast.parse(src).body:
         res = pass_obj.visit(stmt)

@@ -17,7 +17,7 @@ import ast
 from numpyto_common.numpy_desugar import _AddAtInline, _SpliceErrstate, expr_rank, rank_table
 
 
-def _apply(pass_obj, src: str) -> str:
+def _apply(pass_obj: ast.NodeTransformer, src: str) -> str:
     """Run one desugar pass over ``src``'s statements, the way the pipeline drives them."""
     body: list = []
     for stmt in ast.parse(src).body:

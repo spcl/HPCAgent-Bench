@@ -17,6 +17,7 @@ from _native_tu import build_run_c, have_gcc
 from _op_oracle import _bench_info
 from numpyto_c.emit import _C_HEADER, emit_c, emit_pluto, pluto_floordiv
 from numpyto_common.frontend import parse_kernel
+from numpyto_common.ir import KernelIR
 from numpyto_common.lowering import lower
 
 from hpcagent_bench.pluto_affine import KNOWN_POLYCC_ISSUES
@@ -25,7 +26,13 @@ from hpcagent_bench.pluto_affine import KNOWN_POLYCC_ISSUES
 _PAIRS = [(7, 2), (-7, 2), (7, -2), (-7, -2), (8, 4), (-8, 4), (0, 5)]
 
 
-def _lower_src(src: str, fn: str, shapes, syms, dtypes=None):
+def _lower_src(
+    src: str,
+    fn: str,
+    shapes: dict[str, str],
+    syms: dict[str, int],
+    dtypes: dict[str, str] | None = None,
+) -> KernelIR:
     d = pathlib.Path(tempfile.mkdtemp())
     (d / "k_numpy.py").write_text(src)
     bi = _bench_info(fn, ["a"], ["out"], shapes, syms, dtypes)
@@ -33,7 +40,7 @@ def _lower_src(src: str, fn: str, shapes, syms, dtypes=None):
     return lower(parse_kernel(d / "k_numpy.py", d / "bi.json"))
 
 
-def _int_bound_kir():
+def _int_bound_kir() -> KernelIR:
     """``N // 8`` as a loop BOUND: both operands are Python ints (a symbol and a literal)."""
     return _lower_src(
         "import numpy as np\n"
@@ -47,7 +54,7 @@ def _int_bound_kir():
     )
 
 
-def _float_floordiv_kir():
+def _float_floordiv_kir() -> KernelIR:
     """``a[i] // 3.0`` on a float array: the operands are NOT integers."""
     return _lower_src(
         "import numpy as np\n"
@@ -88,7 +95,7 @@ def test_float_floordiv_stays_on_the_generic_macro() -> None:
 
 
 @pytest.mark.parametrize("name,helper", [("floord", "__npb_floordiv_i"), ("ceild", "__npb_ceildiv_i")])
-def test_prelude_defines_the_named_builtins_over_the_existing_helpers(name, helper) -> None:
+def test_prelude_defines_the_named_builtins_over_the_existing_helpers(name: str, helper: str) -> None:
     """Guarded, because polycc prepends its own ``#define floord``/``ceild`` (POLYCC-004), and
     delegating rather than restating keeps one definition of the semantics."""
     assert (

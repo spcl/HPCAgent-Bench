@@ -20,13 +20,13 @@ from _op_oracle import run_op
 _NATIVE = ("c", "cpp", "fortran")
 
 
-def _assert_ok(res) -> None:
+def _assert_ok(res: dict[str, str]) -> None:
     for backend, status in res.items():
         assert status == "ok" or status.startswith("skip"), f"{backend}: {status}"
     assert any(status == "ok" for status in res.values()), f"all skipped (vacuous): {res}"
 
 
-def _run(src, n: int = 4):
+def _run(src: str, n: int = 4) -> dict[str, str]:
     return run_op(
         src,
         "f",
@@ -205,11 +205,11 @@ from numpyto_common.lowering import _ssa_rename_reassigned  # noqa: E402
 _SHAPES = {"a": ["n"], "out": ["n"]}
 
 
-def _lower(body) -> None:
+def _lower(body: str) -> None:
     _ssa_rename_reassigned(ast.parse("import numpy as np\n" + body), dict(_SHAPES))
 
 
-def _assert_refused(body) -> None:
+def _assert_refused(body: str) -> None:
     with pytest.raises(NotImplementedError, match="conditional control flow"):
         _lower(body)
 

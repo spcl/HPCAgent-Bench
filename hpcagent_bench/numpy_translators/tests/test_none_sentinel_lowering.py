@@ -38,6 +38,7 @@ import pytest
 from _op_oracle import _bench_info, run_op
 
 from numpyto_common.frontend import parse_kernel
+from numpyto_common.ir import KernelIR
 from numpyto_common.lowering import lower
 from numpyto_c.emit import emit_c
 from numpyto_common.tuple_desugar import _drop_dead_none_bindings, desugar_tuples
@@ -45,7 +46,9 @@ from numpyto_common.tuple_desugar import _drop_dead_none_bindings, desugar_tuple
 _NATIVE = ("c", "cpp", "fortran")
 
 
-def _kir_for(src: str, func: str, inputs, outputs, shapes, syms):
+def _kir_for(
+    src: str, func: str, inputs: list[str], outputs: list[str], shapes: dict[str, str], syms: dict[str, int]
+) -> KernelIR:
     """``parse_kernel`` against a throwaway source + bench_info -- the real file-reading entry
     point, matching the sibling ``test_generator_tuple_fold.py``."""
     d = pathlib.Path(tempfile.mkdtemp())
@@ -303,7 +306,7 @@ _ACC_SYMS = {"N": 4, "M": 3}
 
 
 @pytest.mark.parametrize("src", [_ACC_TERNARY_SRC, _ACC_IFELSE_SRC], ids=["ternary", "if_else"])
-def test_accumulator_peels_to_a_flag(src) -> None:
+def test_accumulator_peels_to_a_flag(src: str) -> None:
     # Structural: no None literal, an explicit __acc_seen-style flag toggling 0 -> 1 once.
     kir = _kir_for(src, "f", ["x", "out"], ["out"], _ACC_SHAPES, _ACC_SYMS)
     body = ast.unparse(kir.tree)
@@ -313,7 +316,7 @@ def test_accumulator_peels_to_a_flag(src) -> None:
 
 
 @pytest.mark.parametrize("src", [_ACC_TERNARY_SRC, _ACC_IFELSE_SRC], ids=["ternary", "if_else"])
-def test_accumulator_all_negative_input_distinguishes_identity_from_zero_seed(src) -> None:
+def test_accumulator_all_negative_input_distinguishes_identity_from_zero_seed(src: str) -> None:
     # The bug most likely to slip through a wrong fix: seeding the accumulator with 0.0 (instead of
     # genuinely peeling the first tap) gives the WRONG answer whenever every element is negative,
     # since max(0.0, negative...) never drops below 0. All-negative input makes that divergence

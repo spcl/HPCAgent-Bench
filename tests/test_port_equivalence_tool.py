@@ -10,6 +10,7 @@ the tool resolves the checkout at module level, and a wrong working directory us
 ``CalledProcessError`` from ``git rev-parse`` instead of a sentence naming the problem.
 """
 
+import pathlib
 import subprocess
 import sys
 
@@ -27,7 +28,7 @@ KERNEL = "tsvc_2_s453"
 ENV = {"CUDA_VISIBLE_DEVICES": "", "PYTHONHASHSEED": "0", "OMP_NUM_THREADS": "1"}
 
 
-def run(args, cwd, timeout: int = 300):
+def run(args: list[str], cwd: pathlib.Path, timeout: int = 300) -> subprocess.CompletedProcess[str]:
     import os
 
     return subprocess.run(
@@ -55,7 +56,7 @@ def test_an_unported_kernel_compares_equal_to_its_own_baseline() -> None:
     assert "bit-identical" in proc.stdout, proc.stdout
 
 
-def test_a_wrong_working_directory_is_diagnosed_and_not_a_traceback(tmp_path) -> None:
+def test_a_wrong_working_directory_is_diagnosed_and_not_a_traceback(tmp_path: pathlib.Path) -> None:
     """Pointed at a tree that is not this repo, the tool must say which files are missing.
 
     It may assume the checkout EXISTS -- every skill here does -- but not that the caller is
@@ -71,7 +72,9 @@ def test_a_wrong_working_directory_is_diagnosed_and_not_a_traceback(tmp_path) ->
 
 @pytest.mark.integration
 @pytest.mark.parametrize("language,ext", [("c", "c"), ("c++", "cpp")])
-def test_emit_cpf_renders_the_same_kernel_to_a_self_contained_unit(tmp_path, language, ext) -> None:
+def test_emit_cpf_renders_the_same_kernel_to_a_self_contained_unit(
+    tmp_path: pathlib.Path, language: str, ext: str
+) -> None:
     """``--emit-cpf`` goes numpy + manifest -> SDFG -> one translation unit, via ``cpf_bridge``.
 
     Integration-marked: it runs the DaCe frontend, which is the slow and wedge-prone half. The

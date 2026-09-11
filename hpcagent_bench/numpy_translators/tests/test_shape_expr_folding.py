@@ -65,12 +65,12 @@ NOT_EXACT = [
 
 
 @pytest.mark.parametrize("expr,expected", CASES)
-def test_folds_to_expected(expr, expected) -> None:
+def test_folds_to_expected(expr: str, expected: str) -> None:
     assert fold_shape_expr(expr) == expected
 
 
 @pytest.mark.parametrize("expr,_expected", CASES)
-def test_folding_preserves_value(expr, _expected) -> None:
+def test_folding_preserves_value(expr: str, _expected: str) -> None:
     """The folded form must agree with the original on every input, not just on a lucky one."""
     names = sorted({n.id for n in ast.walk(ast.parse(expr, mode="eval")) if isinstance(n, ast.Name)})
     folded = fold_shape_expr(expr)
@@ -80,12 +80,12 @@ def test_folding_preserves_value(expr, _expected) -> None:
 
 
 @pytest.mark.parametrize("expr,reason", NOT_EXACT)
-def test_an_inexact_numerator_keeps_its_division(expr, reason) -> None:
+def test_an_inexact_numerator_keeps_its_division(expr: str, reason: str) -> None:
     assert fold_shape_expr(expr) == expr, reason
 
 
 @pytest.mark.parametrize("expr,_expected", CASES)
-def test_folding_preserves_value_for_negative_operands_too(expr, _expected) -> None:
+def test_folding_preserves_value_for_negative_operands_too(expr: str, _expected: str) -> None:
     """``//`` rounds toward -inf, so a rewrite can agree on every positive input and still be wrong.
 
     The extents this folder sees are sizes, but it is asked about them mid-expression, where a
@@ -113,7 +113,7 @@ def test_shrinks_the_nested_form() -> None:
 
 
 @pytest.mark.parametrize("expr", ["h", "arr.shape[0]", "n * m", "(h - 1) // 2 + 1"])
-def test_already_minimal_is_left_alone(expr) -> None:
+def test_already_minimal_is_left_alone(expr: str) -> None:
     """A token with nothing to gather must come back byte-identical -- the fold is not a reformat."""
     assert fold_shape_expr(expr) == expr
 
@@ -125,7 +125,7 @@ def test_unparseable_token_passes_through() -> None:
 
 
 @pytest.mark.parametrize("expr", ["(h + 2) // 2", "(h - 1) // 2 + 1", "h // 2 * 2", "(h + 3) % 4"])
-def test_division_is_not_distributed(expr) -> None:
+def test_division_is_not_distributed(expr: str) -> None:
     """``//`` rounds toward -inf, so pushing a division through an add is wrong for any operand that
     is not an exact multiple. These must survive untouched however tempting they look."""
     assert fold_shape_expr(expr) == expr

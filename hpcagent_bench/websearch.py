@@ -46,7 +46,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable
 
 
 class Provider(str, Enum):
@@ -65,7 +65,7 @@ class Provider(str, Enum):
 
 
 #: provider -> the env var(s) that hold its API key (any one present = configured).
-_ENV_KEYS: Dict[Provider, tuple] = {
+_ENV_KEYS: dict[Provider, tuple[str, ...]] = {
     Provider.TAVILY: ("TAVILY_API_KEY",),
     Provider.SERPER: ("SERPER_API_KEY",),
     Provider.BRAVE: ("BRAVE_API_KEY", "BRAVE_SEARCH_API_KEY"),
@@ -91,11 +91,11 @@ class WebSearchConfig:
     override the env-resolved credentials (e.g. to pass a key held elsewhere).
     """
 
-    provider: Optional[Provider] = None
+    provider: Provider | None = None
     max_results: int = 5
     timeout: float = 30.0
-    api_key: Optional[str] = None
-    cse_id: Optional[str] = None  # google_cse only (the search-engine cx)
+    api_key: str | None = None
+    cse_id: str | None = None  # google_cse only (the search-engine cx)
 
     def __post_init__(self) -> None:
         if self.provider is not None:
@@ -119,12 +119,12 @@ class SearchResponse:
 
     query: str
     provider: str
-    results: List[SearchResult]
-    answer: Optional[str] = None
+    results: list[SearchResult]
+    answer: str | None = None
 
 
 # ------------------------------------------------------------- env / selection --
-def _env_key(provider: Provider) -> Optional[str]:
+def _env_key(provider: Provider) -> str | None:
     for name in _ENV_KEYS[provider]:
         value = os.environ.get(name)
         if value:
@@ -141,7 +141,7 @@ def _configured(provider: Provider) -> bool:
     return True
 
 
-def available_providers() -> List[Provider]:
+def available_providers() -> list[Provider]:
     """The providers with a usable key in the current environment (priority order)."""
     return [p for p in Provider if _configured(p)]
 
@@ -169,7 +169,7 @@ def resolve_provider(config: WebSearchConfig) -> Provider:
     raise WebSearchError("no web-search provider configured; set one of the API keys: " + _env_hint())
 
 
-def _credentials(provider: Provider, config: WebSearchConfig) -> tuple:
+def _credentials(provider: Provider, config: WebSearchConfig) -> tuple[str, str | None]:
     key = config.api_key or _env_key(provider)
     if not key:
         raise WebSearchError(
@@ -183,11 +183,11 @@ def _credentials(provider: Provider, config: WebSearchConfig) -> tuple:
 
 
 # ---------------------------------------------------------------- HTTP helpers --
-def _get_request(url: str, params: dict, headers: dict) -> urllib.request.Request:
+def _get_request(url: str, params: dict[str, Any], headers: dict[str, str]) -> urllib.request.Request:
     return urllib.request.Request(f"{url}?{urllib.parse.urlencode(params)}", headers=headers, method="GET")
 
 
-def post_request(url: str, body: dict, headers: dict) -> urllib.request.Request:
+def post_request(url: str, body: dict[str, Any], headers: dict[str, str]) -> urllib.request.Request:
     """Build a JSON POST ``Request`` to ``url`` (``body`` as the JSON payload,
     ``Content-Type: application/json`` merged with ``headers``). Shared by the
     per-provider request builders here and the chat agents' HTTP transport."""
@@ -197,7 +197,7 @@ def post_request(url: str, body: dict, headers: dict) -> urllib.request.Request:
     )
 
 
-def _http_json(request: urllib.request.Request, timeout: float) -> dict:
+def _http_json(request: urllib.request.Request, timeout: float) -> dict[str, Any]:
     """The default transport: perform ``request`` and parse the JSON body, turning
     an HTTP/URL error into a :class:`WebSearchError` (never a bare stack trace)."""
     try:
@@ -211,7 +211,7 @@ def _http_json(request: urllib.request.Request, timeout: float) -> dict:
 
 
 # ------------------------------------------------------- per-provider requests --
-def _req_tavily(q, key, cse_id, cfg):
+def _req_tavily(q: str, key: str, cse_id: str | None, cfg: WebSearchConfig) -> urllib.request.Request:
     return post_request(
         "https://api.tavily.com/search",
         {"query": q, "max_results": cfg.max_results, "include_answer": True},
@@ -219,11 +219,11 @@ def _req_tavily(q, key, cse_id, cfg):
     )
 
 
-def _req_serper(q, key, cse_id, cfg):
+def _req_serper(q: str, key: str, cse_id: str | None, cfg: WebSearchConfig) -> urllib.request.Request:
     return post_request("https://google.serper.dev/search", {"q": q, "num": cfg.max_results}, {"X-API-KEY": key})
 
 
-def _req_brave(q, key, cse_id, cfg):
+def _req_brave(q: str, key: str, cse_id: str | None, cfg: WebSearchConfig) -> urllib.request.Request:
     return _get_request(
         "https://api.search.brave.com/res/v1/web/search",
         {"q": q, "count": cfg.max_results},
@@ -231,11 +231,11 @@ def _req_brave(q, key, cse_id, cfg):
     )
 
 
-def _req_exa(q, key, cse_id, cfg):
+def _req_exa(q: str, key: str, cse_id: str | None, cfg: WebSearchConfig) -> urllib.request.Request:
     return post_request("https://api.exa.ai/search", {"query": q, "numResults": cfg.max_results}, {"x-api-key": key})
 
 
-def _req_google_cse(q, key, cse_id, cfg):
+def _req_google_cse(q: str, key: str, cse_id: str | None, cfg: WebSearchConfig) -> urllib.request.Request:
     return _get_request(
         "https://www.googleapis.com/customsearch/v1",
         {"key": key, "cx": cse_id, "q": q, "num": min(cfg.max_results, 10)},
@@ -243,7 +243,7 @@ def _req_google_cse(q, key, cse_id, cfg):
     )
 
 
-def _req_bing(q, key, cse_id, cfg):
+def _req_bing(q: str, key: str, cse_id: str | None, cfg: WebSearchConfig) -> urllib.request.Request:
     return _get_request(
         "https://api.bing.microsoft.com/v7.0/search",
         {"q": q, "count": cfg.max_results},
@@ -251,23 +251,23 @@ def _req_bing(q, key, cse_id, cfg):
     )
 
 
-def _req_serpapi(q, key, cse_id, cfg):
+def _req_serpapi(q: str, key: str, cse_id: str | None, cfg: WebSearchConfig) -> urllib.request.Request:
     return _get_request(
         "https://serpapi.com/search.json", {"engine": "google", "q": q, "num": cfg.max_results, "api_key": key}, {}
     )
 
 
-def _req_you(q, key, cse_id, cfg):
+def _req_you(q: str, key: str, cse_id: str | None, cfg: WebSearchConfig) -> urllib.request.Request:
     return _get_request("https://api.ydc-index.io/search", {"query": q}, {"X-API-Key": key})
 
 
-def _req_jina(q, key, cse_id, cfg):
+def _req_jina(q: str, key: str, cse_id: str | None, cfg: WebSearchConfig) -> urllib.request.Request:
     return _get_request(
         "https://s.jina.ai/", {"q": q}, {"Authorization": f"Bearer {key}", "Accept": "application/json"}
     )
 
 
-def _req_perplexity(q, key, cse_id, cfg):
+def _req_perplexity(q: str, key: str, cse_id: str | None, cfg: WebSearchConfig) -> urllib.request.Request:
     return post_request(
         "https://api.perplexity.ai/chat/completions",
         {"model": "sonar", "messages": [{"role": "user", "content": q}]},
@@ -275,7 +275,7 @@ def _req_perplexity(q, key, cse_id, cfg):
     )
 
 
-_REQUEST: Dict[Provider, Callable] = {
+_REQUEST: dict[Provider, Callable[[str, str, str | None, WebSearchConfig], urllib.request.Request]] = {
     Provider.TAVILY: _req_tavily,
     Provider.SERPER: _req_serper,
     Provider.BRAVE: _req_brave,
@@ -290,7 +290,7 @@ _REQUEST: Dict[Provider, Callable] = {
 
 
 # --------------------------------------------------------- per-provider parsers --
-def _hit(item: dict, title_key: str, url_key: str, content_key: str) -> SearchResult:
+def _hit(item: dict[str, Any], title_key: str, url_key: str, content_key: str) -> SearchResult:
     return SearchResult(
         title=str(item.get(title_key, "") or ""),
         url=str(item.get(url_key, "") or ""),
@@ -298,23 +298,25 @@ def _hit(item: dict, title_key: str, url_key: str, content_key: str) -> SearchRe
     )
 
 
-def _hits(items, title_key, url_key, content_key, cfg) -> List[SearchResult]:
+def _hits(
+    items: list[dict[str, Any]] | None, title_key: str, url_key: str, content_key: str, cfg: WebSearchConfig
+) -> list[SearchResult]:
     return [_hit(it, title_key, url_key, content_key) for it in (items or [])[: cfg.max_results]]
 
 
-def _parse_tavily(data, cfg):
+def _parse_tavily(data: dict[str, Any], cfg: WebSearchConfig) -> tuple[list[SearchResult], str | None]:
     return _hits(data.get("results"), "title", "url", "content", cfg), data.get("answer")
 
 
-def _parse_serper(data, cfg):
+def _parse_serper(data: dict[str, Any], cfg: WebSearchConfig) -> tuple[list[SearchResult], str | None]:
     return _hits(data.get("organic"), "title", "link", "snippet", cfg), (data.get("answerBox") or {}).get("answer")
 
 
-def _parse_brave(data, cfg):
+def _parse_brave(data: dict[str, Any], cfg: WebSearchConfig) -> tuple[list[SearchResult], str | None]:
     return _hits((data.get("web") or {}).get("results"), "title", "url", "description", cfg), None
 
 
-def _parse_exa(data, cfg):
+def _parse_exa(data: dict[str, Any], cfg: WebSearchConfig) -> tuple[list[SearchResult], str | None]:
     items = data.get("results") or []
     results = [
         SearchResult(
@@ -327,21 +329,21 @@ def _parse_exa(data, cfg):
     return results, None
 
 
-def _parse_google_cse(data, cfg):
+def _parse_google_cse(data: dict[str, Any], cfg: WebSearchConfig) -> tuple[list[SearchResult], str | None]:
     return _hits(data.get("items"), "title", "link", "snippet", cfg), None
 
 
-def _parse_bing(data, cfg):
+def _parse_bing(data: dict[str, Any], cfg: WebSearchConfig) -> tuple[list[SearchResult], str | None]:
     return _hits((data.get("webPages") or {}).get("value"), "name", "url", "snippet", cfg), None
 
 
-def _parse_serpapi(data, cfg):
+def _parse_serpapi(data: dict[str, Any], cfg: WebSearchConfig) -> tuple[list[SearchResult], str | None]:
     return _hits(data.get("organic_results"), "title", "link", "snippet", cfg), (data.get("answer_box") or {}).get(
         "answer"
     )
 
 
-def _parse_you(data, cfg):
+def _parse_you(data: dict[str, Any], cfg: WebSearchConfig) -> tuple[list[SearchResult], str | None]:
     items = data.get("hits") or []
     results = []
     for it in items[: cfg.max_results]:
@@ -353,11 +355,11 @@ def _parse_you(data, cfg):
     return results, None
 
 
-def _parse_jina(data, cfg):
+def _parse_jina(data: dict[str, Any], cfg: WebSearchConfig) -> tuple[list[SearchResult], str | None]:
     return _hits(data.get("data"), "title", "url", "content", cfg), None
 
 
-def _parse_perplexity(data, cfg):
+def _parse_perplexity(data: dict[str, Any], cfg: WebSearchConfig) -> tuple[list[SearchResult], str | None]:
     choices = data.get("choices") or []
     answer = (choices[0].get("message") or {}).get("content", "") if choices else ""
     citations = data.get("citations") or []
@@ -365,7 +367,7 @@ def _parse_perplexity(data, cfg):
     return results, answer or None
 
 
-_PARSE: Dict[Provider, Callable] = {
+_PARSE: dict[Provider, Callable[[dict[str, Any], WebSearchConfig], tuple[list[SearchResult], str | None]]] = {
     Provider.TAVILY: _parse_tavily,
     Provider.SERPER: _parse_serper,
     Provider.BRAVE: _parse_brave,
@@ -382,9 +384,9 @@ _PARSE: Dict[Provider, Callable] = {
 # ----------------------------------------------------------------- public entry --
 def search(
     query: str,
-    config: Optional[WebSearchConfig] = None,
+    config: WebSearchConfig | None = None,
     *,
-    transport: Optional[Callable[[urllib.request.Request], dict]] = None,
+    transport: Callable[[urllib.request.Request], dict[str, Any]] | None = None,
 ) -> SearchResponse:
     """Search ``query`` and return a normalized :class:`SearchResponse`.
 
@@ -404,7 +406,7 @@ def search(
     return SearchResponse(query=query, provider=provider.value, results=results, answer=answer)
 
 
-def main(argv=None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="hpcagent_bench.websearch", description="Provider-agnostic web search.")
     parser.add_argument("query", nargs="?", help="the search query")
     parser.add_argument("--provider", choices=[p.value for p in Provider], help="force a provider (else auto-detect)")

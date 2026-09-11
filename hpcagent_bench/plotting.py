@@ -41,7 +41,7 @@ import os
 import pathlib
 import re
 import sqlite3
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Sequence
 
 import matplotlib
 import numpy as np
@@ -49,6 +49,8 @@ import pandas as pd
 
 matplotlib.use("Agg")  # headless: save to file, never open a window
 import matplotlib.pyplot as plt  # noqa: E402 -- must follow the backend setup
+from matplotlib.axes import Axes  # noqa: E402
+from matplotlib.figure import Figure  # noqa: E402
 
 from scipy.stats import norm  # noqa: E402
 from scipy.stats.mstats import gmean  # noqa: E402
@@ -89,10 +91,10 @@ DEFAULT_BASELINE: str = "numba"
 
 #: Re-exported so existing callers keep working; :mod:`hpcagent_bench.palette` owns it, and
 #: :func:`framework_color` there is what makes a hue stick to a framework.
-PALETTE: Tuple[str, ...] = palette.PALETTE
+PALETTE: tuple[str, ...] = palette.PALETTE
 
 
-def baseline_of(frame, default: str = DEFAULT_BASELINE) -> str:
+def baseline_of(frame: pd.DataFrame, default: str = DEFAULT_BASELINE) -> str:
     """The denominator a slice of observations was actually GRADED against.
 
     The baseline is a property of the track and the campaign, not of the figure: llr40v9 and v10
@@ -127,7 +129,7 @@ def framework_color(name: str) -> str:
     return palette.color("framework", name)
 
 
-def framework_colors(names) -> dict:
+def framework_colors(names: Sequence[str]) -> dict[str, str]:
     """``{framework: colour}`` for one figure, with palette.py's collision warning."""
     return palette.colors("framework", names)
 
@@ -138,18 +140,18 @@ def set_usetex(usetex: bool) -> None:
     matplotlib.rcParams["text.usetex"] = usetex
 
 
-def my_round(x, width):
+def my_round(x: float, width: int) -> str:
     float_format = "{:." + f"{width}" + "f}"
     return float_format.format(x)
 
 
-def my_geomean(x):
+def my_geomean(x: pd.Series) -> float:
     """Geomean that ignores NA values."""
     x = x.dropna()
     return gmean(x)
 
 
-def my_speedup_abbr(x):
+def my_speedup_abbr(x: float) -> str:
     """Short speedup label with an up/down indicator."""
     prefix = ""
     label = ""
@@ -169,7 +171,7 @@ def my_speedup_abbr(x):
     return str(label)
 
 
-def my_runtime_abbr(x):
+def my_runtime_abbr(x: float) -> str:
     """Short runtime label; DB times are in milliseconds."""
     if math.isnan(x):
         return ""
@@ -178,7 +180,7 @@ def my_runtime_abbr(x):
     return str(my_round(x, 2)) + " ms"
 
 
-def save_figure(output: str, fig) -> str:
+def save_figure(output: str, fig: Figure) -> str:
     """Write ``fig`` to ``output``, creating its directory."""
     pathlib.Path(output).parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output, dpi=600, bbox_inches="tight")
@@ -187,11 +189,11 @@ def save_figure(output: str, fig) -> str:
 
 
 def load_results(
-    db: Optional[str],
+    db: str | None,
     benchmark: str = "all",
     preset: str = "S",
     datatype: str = "float64",
-    variant: Optional[str] = None,
+    variant: str | None = None,
     baseline: str = DEFAULT_BASELINE,
 ) -> pd.DataFrame:
     """Read + filter the ``results`` table into the per-sample frame both figures consume.
@@ -283,7 +285,7 @@ def machine_label(cpu: object, gpu: object) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", "-".join(parts)).strip("-") or "unknown"
 
 
-def machine_groups(data: pd.DataFrame) -> List[Tuple[str, pd.DataFrame]]:
+def machine_groups(data: pd.DataFrame) -> list[tuple[str, pd.DataFrame]]:
     """Split rows into one frame per ``(cpu, gpu)``: a figure may only compare one machine's runs.
 
     Every other axis in :func:`load_results` FOLDS -- flavor and build join the framework name so
@@ -335,12 +337,12 @@ def cell_summary(data: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["benchmark", "domain", "framework", "time", "ci_low", "ci_high", "ci_perc"])
 
 
-def _reorder_rows(names: Sequence[str], order: str) -> Tuple[List[str], List[GroupSpan]]:
+def _reorder_rows(names: Sequence[str], order: str) -> tuple[list[str], list[GroupSpan]]:
     """Ordered short_names + group spans for a set of plotted benchmark names."""
     return order_rows(row_meta_for(list(names)), order)
 
 
-def _draw_group_labels(ax, spans: Sequence[GroupSpan], x_right: float) -> None:
+def _draw_group_labels(ax: Axes, spans: Sequence[GroupSpan], x_right: float) -> None:
     """Draw a separator line at each internal group boundary and the group's y-axis text to
     the right of the heatmap (``clip_on=False``; the caller saves with ``bbox_inches='tight'``
     so the outside text is kept)."""
@@ -355,13 +357,13 @@ def plot_heatmap(
     benchmark: str = "all",
     preset: str = "S",
     datatype: str = "float64",
-    variant=None,
+    variant: str | None = None,
     order: str = BY_DWARF,
-    db=None,
-    output=PLOTS_DIR + "/heatmap.pdf",
+    db: str | None = None,
+    output: str = PLOTS_DIR + "/heatmap.pdf",
     usetex: bool = True,
     baseline: str = DEFAULT_BASELINE,
-) -> List[str]:
+) -> list[str]:
     """Read ``db`` and emit ONE speedup heatmap PER MACHINE; returns the paths written.
 
     A plural return, because a results DB may hold rows from more than one node and those may
@@ -519,7 +521,7 @@ def heatmap_figure(data: pd.DataFrame, order: str, output: str, baseline: str = 
     return save_figure(output, fig)
 
 
-def _grid_shape(n: int) -> Tuple[int, int]:
+def _grid_shape(n: int) -> tuple[int, int]:
     """rows, cols for ``n`` per-kernel cells: a single kernel is 1x1, otherwise up to 4
     columns (``ceil(sqrt(n))`` capped) so each cell stays >= ~1.6in wide at a two-column
     paper width."""
@@ -530,7 +532,7 @@ def _grid_shape(n: int) -> Tuple[int, int]:
     return nrows, ncols
 
 
-def _framework_slots(data: pd.DataFrame, baseline: str = DEFAULT_BASELINE) -> List[str]:
+def _framework_slots(data: pd.DataFrame, baseline: str = DEFAULT_BASELINE) -> list[str]:
     """The FULL framework set across the plotted scope, in a fixed slot order (numpy first as
     the reference, then alphabetical). Every panel reserves one slot per framework here, so a
     kernel missing a framework leaves an empty gap instead of re-packing the present ones."""
@@ -541,16 +543,16 @@ def plot_distribution_grid(
     benchmark: str = "all",
     preset: str = "S",
     datatype: str = "float64",
-    variant=None,
-    framework: Optional[str] = None,
+    variant: str | None = None,
+    framework: str | None = None,
     kind: str = "violin",
     order: str = BY_DWARF,
-    db=None,
+    db: str | None = None,
     baseline: str = DEFAULT_BASELINE,
-    output=PLOTS_DIR + "/distribution.pdf",
+    output: str = PLOTS_DIR + "/distribution.pdf",
     col_width_in: float = 3.4,
     usetex: bool = True,
-) -> List[str]:
+) -> list[str]:
     """Emit ONE per-kernel distribution grid (violin or box) PER MACHINE; returns the paths written.
 
     Plural for the same reason as :func:`plot_heatmap`: rows from two nodes may not share a figure,
@@ -658,7 +660,9 @@ def distribution_figure(
     return save_figure(output, fig)
 
 
-def draw_interval_band(ax, interval, orientation: str = "horizontal", color: str = "#d64550") -> None:
+def draw_interval_band(
+    ax: Axes, interval: inference.Interval, orientation: str = "horizontal", color: str = "#d64550"
+) -> None:
     """Shade an :class:`~hpcagent_bench.inference.Interval` on ``ax`` and mark its point estimate.
 
     The band is drawn the same way whatever produced it; the KIND of interval is communicated by
@@ -776,11 +780,11 @@ def corpus_comparisons(
     benchmark: str = "all",
     preset: str = "S",
     datatype: str = "float64",
-    variant: Optional[str] = None,
-    db: Optional[str] = None,
+    variant: str | None = None,
+    db: str | None = None,
     alpha: float = inference.DEFAULT_ALPHA,
     method: str = "fdr_bh",
-) -> List[inference.CorpusComparison]:
+) -> list[inference.CorpusComparison]:
     """Per-kernel candidate-vs-baseline significance across the whole corpus in scope, with
     multiplicity correction applied.
 
@@ -797,7 +801,7 @@ def corpus_comparisons(
     kernels = list(dict.fromkeys(data["benchmark"].tolist()))
     ordered, _spans = _reorder_rows(kernels, BY_DWARF)
     # Ordered: the key order reaches the report table, so it must not depend on hash order.
-    cells: "collections.OrderedDict[str, Tuple[np.ndarray, np.ndarray]]" = collections.OrderedDict()
+    cells: "collections.OrderedDict[str, tuple[np.ndarray, np.ndarray]]" = collections.OrderedDict()
     for kernel in ordered:
         sub = data[data["benchmark"] == kernel]
         cand = sub[sub["framework"] == candidate]["time"].to_numpy()

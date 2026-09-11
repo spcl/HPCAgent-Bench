@@ -29,7 +29,7 @@ from numpyto_common.lib_nodes import _read_axis_keepdims, expand_sum
 _ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 
 
-def _call_args(src: str):
+def _call_args(src: str) -> tuple[list[ast.expr], list[ast.keyword]]:
     call = ast.parse(src, mode="eval").body
     return call.args, call.keywords
 
@@ -38,7 +38,7 @@ def _target(name: str) -> ast.Name:
     return ast.Name(id=name, ctx=ast.Store())
 
 
-def _count_for_loops(stmts) -> int:
+def _count_for_loops(stmts: list[ast.stmt]) -> int:
     n = 0
     for stmt in stmts:
         for sub in ast.walk(stmt):
@@ -265,7 +265,7 @@ def test_instance_norm_over_expanded_operand() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _full_sum_stmts(shape):
+def _full_sum_stmts(shape: tuple[str, ...]) -> list[ast.stmt]:
     args, kws = _call_args("np.sum(a)")
     return expand_sum(_target("s"), args, {"a": shape}, kwargs=kws, local_dtypes={})
 

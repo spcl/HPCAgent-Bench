@@ -172,7 +172,7 @@ def markdown(data: list) -> str:
     return "\n".join(lines) + "\n"
 
 
-def main(argv=None) -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--write", action="store_true", help=f"patch {DOC.relative_to(ROOT)} between its markers")
     args = ap.parse_args(argv)

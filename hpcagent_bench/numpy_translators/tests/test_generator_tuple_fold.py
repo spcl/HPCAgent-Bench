@@ -30,6 +30,7 @@ import numpy as np
 from _op_oracle import _bench_info, run_op
 
 from numpyto_common.frontend import parse_kernel
+from numpyto_common.ir import KernelIR
 from numpyto_common.lowering import lower
 from numpyto_c.emit import emit_c
 from numpyto_common.tuple_desugar import desugar_tuples
@@ -42,7 +43,14 @@ _AS_TUPLE = (
 )
 
 
-def _kir_for(src: str, func: str, inputs, outputs, shapes, syms):
+def _kir_for(
+    src: str,
+    func: str,
+    inputs: list[str],
+    outputs: list[str],
+    shapes: dict[str, str],
+    syms: dict[str, int],
+) -> KernelIR:
     """``parse_kernel`` against a throwaway source + bench_info, same shape as the real
     frontend entry point (JSON on disk), so this exercises the actual file-reading path."""
     d = pathlib.Path(tempfile.mkdtemp())

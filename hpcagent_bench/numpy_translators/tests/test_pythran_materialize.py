@@ -10,7 +10,7 @@ import ast
 from numpyto_pythran.emit import _PythranMaterialize
 
 
-def _apply(src, local_funcs):
+def _apply(src: str, local_funcs: list[str]) -> str:
     tree = ast.parse(src)
     tree = _PythranMaterialize(set(local_funcs)).visit(tree)
     ast.fix_missing_locations(tree)

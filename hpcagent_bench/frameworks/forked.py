@@ -4,6 +4,7 @@
 
 import ctypes
 import multiprocessing
+import multiprocessing.queues
 import os
 import queue
 import signal
@@ -11,10 +12,12 @@ import sys
 import time
 import traceback
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, ParamSpec
 
 from hpcagent_bench import osinfo
 from hpcagent_bench.isolation import pause_openmp_pools
+
+P = ParamSpec("P")
 
 #: Grace period (seconds) to drain the result queue after the child exits cleanly.
 _DRAIN_S = 5.0
@@ -101,7 +104,12 @@ def die_with_parent() -> None:
         os._exit(0)
 
 
-def _child(fn, args, kwargs, q) -> None:
+def _child(
+    fn: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    q: "multiprocessing.queues.Queue[tuple[str, Any]]",
+) -> None:
     die_with_parent()
     # First act, before any work: this is what arms the parent's deadline (see run_forked).
     q.put(("started", None))
@@ -122,7 +130,7 @@ def _child(fn, args, kwargs, q) -> None:
         q.put(("error", tb))
 
 
-def take_result(q, timeout):
+def take_result(q: "multiprocessing.queues.Queue[tuple[str, Any]]", timeout: float) -> tuple[str, Any] | None:
     """Next item from ``q`` that is a RESULT, or None within ``timeout``.
 
     ``started`` is a clock signal rather than an outcome, and a child that starts and finishes
@@ -138,7 +146,7 @@ def take_result(q, timeout):
             return item
 
 
-def _drain(progress_q, current):
+def _drain(progress_q: "multiprocessing.queues.Queue[Any]", current: Any) -> Any:
     """Return the last item pushed to ``progress_q`` (or ``current``), so a kill preserves the last progress."""
     try:
         while True:
@@ -149,13 +157,13 @@ def _drain(progress_q, current):
 
 
 def run_forked(
-    fn: Callable,
-    *args,
+    fn: Callable[P, Any],
+    *args: P.args,
     label: str = "",
     timeout: Optional[float] = None,
     stream_progress: bool = False,
     mp_context: Optional[str] = None,
-    **kwargs,
+    **kwargs: P.kwargs,
 ) -> RunResult:
     """Run ``fn(*args, **kwargs)`` in a forked child; returns a failed RunResult (cause logged to stdout) on
     a fatal signal, exception, or timeout overrun, else ``ok=True`` with the picklable return value.

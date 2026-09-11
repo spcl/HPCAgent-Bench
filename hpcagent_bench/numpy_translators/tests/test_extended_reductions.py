@@ -22,7 +22,7 @@ from numpyto_common.lib_nodes import (
 )
 
 
-def _call_args(src: str):
+def _call_args(src: str) -> tuple[list[ast.expr], list[ast.keyword]]:
     call = ast.parse(src, mode="eval").body
     return call.args, call.keywords
 
@@ -31,7 +31,7 @@ def _target(name: str) -> ast.Name:
     return ast.Name(id=name, ctx=ast.Store())
 
 
-def _count_for_loops(stmts) -> int:
+def _count_for_loops(stmts: list[ast.stmt]) -> int:
     n = 0
     for stmt in stmts:
         for sub in ast.walk(stmt):

@@ -48,7 +48,7 @@ def test_local_gpu_count_is_a_nonnegative_int() -> None:
     assert isinstance(n, int) and n >= 0
 
 
-def test_judge_config_defaults_from_config(monkeypatch) -> None:
+def test_judge_config_defaults_from_config(monkeypatch: pytest.MonkeyPatch) -> None:
     # No configured GPUs and none detected -> a single CPU slot (cpu box default).
     monkeypatch.setattr(js, "local_gpu_count", lambda: 0)
     config.set_override("judge.gpus_per_node", None)
@@ -76,7 +76,7 @@ def test_judge_config_gpu_box_defaults_no_cpu_slot() -> None:
 # ---- the plan: how much each rank reserves, and who warms what --------------------------------
 
 
-def demands(*sizes):
+def demands(*sizes: int) -> list[KernelDemand]:
     """One resolved demand per size, named by position, holding a digest per variant."""
     return [
         KernelDemand(f"k{i}", array_bytes=size, output_bytes=HASH_DIGEST_BYTES * 5, variants=5)

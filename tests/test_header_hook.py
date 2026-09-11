@@ -14,6 +14,7 @@ the two fixers cannot fight -- restamping or shifting the notice on every commit
 import importlib.util
 import shutil
 import subprocess
+import types
 from pathlib import Path
 from typing import List
 
@@ -26,7 +27,7 @@ HEADER: tuple = (
 )
 
 
-def _load_check_headers():
+def _load_check_headers() -> types.ModuleType:
     """Import ``scripts/check_headers.py`` as a module (it is not an installed package)."""
     spec = importlib.util.spec_from_file_location("check_headers", REPO / "scripts" / "check_headers.py")
     module = importlib.util.module_from_spec(spec)

@@ -46,7 +46,7 @@ class _Kir:
     """The fields ``desugar_for_python_backend`` reads off a KernelIR."""
 
     class _Arr:
-        def __init__(self, name, shape, dtype) -> None:
+        def __init__(self, name: str, shape: tuple[str, ...], dtype: str) -> None:
             self.name, self.shape, self.dtype = name, shape, dtype
 
     arrays = [

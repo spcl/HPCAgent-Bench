@@ -8,14 +8,13 @@ to ``lax.fori_loop`` / ``while_loop`` and never unrolls.
 """
 
 import ast
-from typing import Optional, Tuple
 
 #: Symbol-name fragments that mark a time-stepping loop bound (HPCAgent-Bench /
 #: polybench convention). Matched case-insensitively as a substring of the symbol
 #: name, so ``TSTEPS`` / ``tsteps`` / ``NITER`` / ``n_niter_outer`` all count. A
 #: separator inside the fragment breaks it: ``t_steps`` does NOT match, because no
 #: entry below is a substring of it.
-TIMESTEP_SYMBOLS: Tuple[str, ...] = (
+TIMESTEP_SYMBOLS: tuple[str, ...] = (
     "TSTEPS",
     "TSTEP",
     "TIMESTEPS",
@@ -27,7 +26,7 @@ TIMESTEP_SYMBOLS: Tuple[str, ...] = (
 )
 
 
-def _range_bound_names(node: ast.For):
+def _range_bound_names(node: ast.For) -> set[str] | None:
     """Names referenced in the ``range(...)`` bounds of a ``for`` loop, or
     ``None`` if the loop is not a ``for x in range(...)``."""
     it = node.iter
@@ -41,7 +40,7 @@ def _range_bound_names(node: ast.For):
     return names
 
 
-def is_timestep_loop(node: ast.AST, timestep_symbols: Tuple[str, ...] = TIMESTEP_SYMBOLS) -> bool:
+def is_timestep_loop(node: ast.AST, timestep_symbols: tuple[str, ...] = TIMESTEP_SYMBOLS) -> bool:
     """True when ``node`` is a ``for`` loop whose range bound references a
     time-stepping symbol (so it must stay rolled, never unrolled)."""
     if not isinstance(node, ast.For):
@@ -72,7 +71,7 @@ class UnsupportedParallelError(NotImplementedError):
     the sequential emitter (which is always valid)."""
 
 
-def index_exprs(sub: ast.Subscript) -> list:
+def index_exprs(sub: ast.Subscript) -> list[ast.expr]:
     """The per-axis index expressions of a subscript (``A[i, j]`` -> ``[i, j]``)."""
     sl = sub.slice
     return list(sl.elts) if isinstance(sl, ast.Tuple) else [sl]
@@ -115,9 +114,9 @@ def subscript_idx_safe(sub: ast.Subscript, idx: str) -> bool:
     return bare
 
 
-def written_arrays(body: ast.AST) -> set:
+def written_arrays(body: ast.AST) -> set[str]:
     """Names of arrays written (via a subscript store or aug-store) anywhere in ``body``."""
-    out: set = set()
+    out: set[str] = set()
     for n in ast.walk(body):
         targets = n.targets if isinstance(n, ast.Assign) else ([n.target] if isinstance(n, ast.AugAssign) else [])
         for t in targets:
@@ -126,18 +125,18 @@ def written_arrays(body: ast.AST) -> set:
     return out
 
 
-def _load_names(node: ast.AST) -> set:
+def _load_names(node: ast.AST) -> set[str]:
     """Bare names READ (Load context) anywhere in ``node``."""
     return {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
 
 
-def _bare_store_names(node: ast.AST) -> set:
+def _bare_store_names(node: ast.AST) -> set[str]:
     """Names bound by a bare-Name store (assignment / loop target) in ``node`` --
     scalar variables, not subscript element stores."""
     return {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
 
 
-def _reads_before_write(stmts: list, scalars: set, defined: set) -> bool:
+def _reads_before_write(stmts: list[ast.stmt], scalars: set[str], defined: set[str]) -> bool:
     """True if some scalar in ``scalars`` is READ before it is WRITTEN, in execution
     order over ``stmts`` (a loop-carried scalar: the read observes a prior iteration's
     value). ``defined`` is the set already bound on entry. Conservative across control
@@ -195,12 +194,12 @@ def assigns_a_live_out_scalar(node: ast.For) -> bool:
     return bool(_bare_store_names(body) - iterators - _load_names(body))
 
 
-def _bare_axes(sub: ast.Subscript, idx: str) -> set:
+def _bare_axes(sub: ast.Subscript, idx: str) -> set[int]:
     """Axis positions where ``idx`` appears as a BARE index in ``sub``."""
     return {k for k, e in enumerate(index_exprs(sub)) if isinstance(e, ast.Name) and e.id == idx}
 
 
-def written_partition_consistent(body: ast.AST, idx: str, written: set) -> bool:
+def written_partition_consistent(body: ast.AST, idx: str, written: set[str]) -> bool:
     """A parallel loop on ``idx`` partitions each written array along ONE axis. If
     ``idx`` indexes a written array on two DIFFERENT axes across its accesses
     (``A[i, j]`` written but ``A[j, i]`` read -- an in-place transpose), the
@@ -247,7 +246,7 @@ _MIN_NAMES = frozenset({"min", "minimum", "amin", "fmin"})
 _AUG_REDUCTION_OP = {ast.Add: "+", ast.Mult: "*"}
 
 
-def _call_leaf(func: ast.AST):
+def _call_leaf(func: ast.AST) -> str | None:
     """The bare / attribute-leaf name of a call target (``max`` or ``np.maximum`` -> the last name)."""
     if isinstance(func, ast.Name):
         return func.id
@@ -256,7 +255,7 @@ def _call_leaf(func: ast.AST):
     return None
 
 
-def reduction_op(value: ast.AST, acc: str):
+def reduction_op(value: ast.AST, acc: str) -> str | None:
     """If ``value`` combines the accumulator ``acc`` with one other term under an
     OpenMP-expressible associative operator, return the clause operator
     ('+', '*', 'max', 'min'); else None. Recognizes ``acc + x`` / ``acc * x``
@@ -287,7 +286,7 @@ def _reads_acc(node: ast.AST, acc: str) -> bool:
     return isinstance(node, ast.Name) and node.id == acc
 
 
-def loop_reduction(node: ast.AST):
+def loop_reduction(node: ast.AST) -> tuple[str, str] | None:
     """If ``node`` is a ``for`` loop whose ONLY cross-iteration dependence is a
     single scalar accumulator combined under an OpenMP-expressible operator
     (+, *, max, min), return ``(op, acc_name)`` for a ``reduction(op:acc)``
@@ -372,7 +371,7 @@ def any_parallelizable_loop(tree: ast.AST) -> bool:
     )
 
 
-def range_step_sign(step_node: Optional[ast.AST]) -> Optional[int]:
+def range_step_sign(step_node: ast.AST | None) -> int | None:
     """+1 / -1 when a ``range()`` step's sign is decidable from the AST alone, else ``None``
     (a runtime-only sign -- the emitted C/Fortran loop then needs a ternary-guarded direction,
     which is not a canonical OpenMP loop form). Mirrors

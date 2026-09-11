@@ -26,7 +26,7 @@ def test_ssa_rename_rewrites_plain_subscript_fill_target() -> None:
     assert "\n    x[0] = 1.0" not in out, out
 
 
-def _apply_eye(expr):
+def _apply_eye(expr: str) -> np.ndarray:
     mod = ast.parse(f"X = {expr}")
     _EyeToZerosDiagonal().visit(mod)
     ast.fix_missing_locations(mod)

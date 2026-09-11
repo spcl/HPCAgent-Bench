@@ -21,16 +21,17 @@ import tempfile
 import pytest
 
 from _bench_yaml import REPO, SRC, bench_info_for, kir_for, numpy_py_for
+from numpyto_common.ir import KernelIR
 
 
-def _kir(short):
+def _kir(short: str) -> KernelIR:
     # parse + lower (off the YAML): lowering is what materialises the integer
     # shape symbols (NI, NJ, NK ...) the signature declares, so param_order
     # sees them.
     return kir_for(short, do_lower=True)
 
 
-def _abi_expected(kir):
+def _abi_expected(kir: KernelIR) -> list[str]:
     refs = sorted(a.name for a in kir.arrays)
     scalars = sorted([s.name for s in kir.symbols] + [s.name for s in kir.scalars])
     return refs + scalars

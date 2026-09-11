@@ -43,7 +43,7 @@ import math
 import pathlib
 import sys
 from dataclasses import asdict, dataclass
-from typing import Dict, List, Mapping, Optional, Tuple
+from typing import Dict, List, Mapping, Optional, TextIO, Tuple
 
 import numpy as np
 
@@ -185,7 +185,7 @@ def human(nbytes: int) -> str:
     return f"{nbytes} B"
 
 
-def print_table(rows: List[PresetSize], stream=sys.stdout) -> None:
+def print_table(rows: List[PresetSize], stream: TextIO = sys.stdout) -> None:
     """One line per cell: kernel, preset, tier, footprint, largest array."""
     width = max((len(r.kernel) for r in rows), default=10)
     for row in rows:
@@ -203,7 +203,7 @@ def print_packing(
     rank_counts: List[int],
     ranks_per_node: Optional[int] = None,
     node_ram_bytes: Optional[int] = None,
-    stream=sys.stdout,
+    stream: TextIO = sys.stdout,
 ) -> int:
     """Stride vs LPT max-rank predicted load, per preset and rank count.
 

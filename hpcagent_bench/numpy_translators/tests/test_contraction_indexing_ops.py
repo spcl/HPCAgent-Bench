@@ -7,6 +7,7 @@ covered by ``test_contraction_indexing_ops_e2e`` via the standalone oracle.
 """
 
 import ast
+import types
 
 import pytest
 
@@ -37,11 +38,11 @@ from numpyto_common.lib_nodes import (
 from numpyto_common.lowering import _EllipsisExpander, _FullCallHoister, _MatmulCallRewriter, _ReshapeMethodRewriter
 
 
-def _name(n):
+def _name(n: str) -> ast.Name:
     return ast.Name(id=n, ctx=ast.Load())
 
 
-def _unparse(stmts):
+def _unparse(stmts: list[ast.stmt]) -> str:
     mod = ast.fix_missing_locations(ast.Module(body=list(stmts), type_ignores=[]))
     return ast.unparse(mod)
 
@@ -118,18 +119,18 @@ def test_dims_agree_resolves_a_shape_read_against_the_table() -> None:
     assert not dims_agree("__inl91_c", "h", aliases, table)
 
 
-def _no_simplify(monkeypatch) -> None:
+def _no_simplify(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make ``sympy.simplify`` fatal, so a test can pin which rung settled a pair."""
     import sympy
 
-    def explode(*_args, **_kwargs) -> None:
+    def explode(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("sympy.simplify was reached")
 
     monkeypatch.setattr(sympy, "simplify", explode)
     shape_exprs_equal.cache_clear()
 
 
-def test_a_polynomial_difference_never_reaches_simplify(monkeypatch) -> None:
+def test_a_polynomial_difference_never_reaches_simplify(monkeypatch: pytest.MonkeyPatch) -> None:
     # An expanded polynomial is canonical, so a non-zero expansion is already the answer. simplify
     # was measured at 785 ms on one of these pairs.
     _no_simplify(monkeypatch)
@@ -137,7 +138,7 @@ def test_a_polynomial_difference_never_reaches_simplify(monkeypatch) -> None:
     assert not dims_agree("4 * c", "15 * embed_dim", {"c": "4 * embed_dim"})
 
 
-def test_a_conv_extent_is_refuted_numerically_not_symbolically(monkeypatch) -> None:
+def test_a_conv_extent_is_refuted_numerically_not_symbolically(monkeypatch: pytest.MonkeyPatch) -> None:
     # The dominant shape in the ML track: a floor makes the difference non-polynomial, so only the
     # numeric point settles it short of simplify.
     _no_simplify(monkeypatch)
@@ -241,7 +242,7 @@ from types import SimpleNamespace  # noqa: E402
 from numpyto_common.numpy_desugar import desugar_for_python_backend  # noqa: E402
 
 
-def _kir(kernel_name, **arrays):
+def _kir(kernel_name: str, **arrays: tuple[str, ...]) -> SimpleNamespace:
     """Minimal KernelIR stand-in: name + (name -> shape-tuple) arrays."""
     arrs = [SimpleNamespace(name=n, shape=s) for n, s in arrays.items()]
     return SimpleNamespace(kernel_name=kernel_name, arrays=arrs)
@@ -567,7 +568,7 @@ def test_linalg_norm_ord1_inf_vector_and_matrix() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _oracle():
+def _oracle() -> types.ModuleType:
     import shutil
 
     if not (shutil.which("gcc") and shutil.which("gfortran") and shutil.which("g++")):
@@ -601,7 +602,7 @@ _ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 _MUST_NOT_ALL_SKIP = ("c", "cpp", "fortran")
 
 
-def _assert_ok(status, label) -> None:
+def _assert_ok(status: dict[str, str], label: str) -> None:
     fails = {b: s for b, s in status.items() if s.startswith("FAIL")}
     assert not fails, f"{label}: {fails}"
     native = {b: status.get(b) for b in _MUST_NOT_ALL_SKIP}
@@ -734,7 +735,15 @@ def _assert_ok(status, label) -> None:
     ],
     ids=lambda v: v if isinstance(v, str) and v.isidentifier() else "",
 )
-def test_contraction_indexing_ops_e2e(label, src, func, ins, out_shape, syms, shapes) -> None:
+def test_contraction_indexing_ops_e2e(
+    label: str,
+    src: str,
+    func: str,
+    ins: list[tuple[str, tuple[int, ...] | str]],
+    out_shape: tuple[int, ...],
+    syms: dict[str, int],
+    shapes: dict[str, str],
+) -> None:
     import numpy as np
 
     no = _oracle()
@@ -777,7 +786,7 @@ def test_triu_of_inline_full_mask_e2e() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _reshape_src_index(order):
+def _reshape_src_index(order: str | None) -> str:
     """Lower ``out = np.reshape(A, (P, Q), order=order)`` for A:(N,), out:(P,Q)
     and return the unparsed source subscript expression A[...]."""
     target = ast.Name(id="out", ctx=ast.Store())

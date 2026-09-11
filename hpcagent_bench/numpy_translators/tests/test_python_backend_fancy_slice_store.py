@@ -27,7 +27,7 @@ class _Kir:
     """The fields ``desugar_for_python_backend`` reads off a KernelIR."""
 
     class _Arr:
-        def __init__(self, name, shape, dtype) -> None:
+        def __init__(self, name: str, shape: tuple[str, ...], dtype: str) -> None:
             self.name, self.shape, self.dtype = name, shape, dtype
 
     arrays = [_Arr("src", ("N", "M", "K"), "float64"), _Arr("out", ("N", "M", "K"), "float64")]
@@ -35,7 +35,7 @@ class _Kir:
     kernel_name = "pick"
 
 
-def _desugared():
+def _desugared() -> str:
     return desugar_for_python_backend(_SRC, _Kir(), backend="pythran")
 
 

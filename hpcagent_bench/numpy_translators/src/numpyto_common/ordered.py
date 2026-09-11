@@ -20,48 +20,50 @@ a symbol list), ``sorted()`` at the point of emission is the stronger answer and
 directly there; this type is for the cases that must keep source order.
 """
 
-from typing import Any, Dict, Iterable, Iterator
+from typing import Generic, Iterable, Iterator, TypeVar
+
+T = TypeVar("T")
 
 
-class OrderedSet:
+class OrderedSet(Generic[T]):
     """A ``set`` that iterates in insertion order. Only the operations the translators
     actually use are implemented; add the one you need here rather than reaching for a
     plain ``set`` at the call site."""
 
     __slots__ = ("items",)
 
-    def __init__(self, iterable: Iterable[Any] = ()) -> None:
-        self.items: Dict[Any, None] = dict.fromkeys(iterable)
+    def __init__(self, iterable: Iterable[T] = ()) -> None:
+        self.items: dict[T, None] = dict.fromkeys(iterable)
 
-    def add(self, item: Any) -> None:
+    def add(self, item: T) -> None:
         self.items[item] = None
 
-    def discard(self, item: Any) -> None:
+    def discard(self, item: T) -> None:
         self.items.pop(item, None)
 
-    def __contains__(self, item: Any) -> bool:
+    def __contains__(self, item: object) -> bool:
         return item in self.items
 
-    def __iter__(self) -> Iterator[Any]:
+    def __iter__(self) -> Iterator[T]:
         return iter(self.items)
 
     def __len__(self) -> int:
         return len(self.items)
 
-    def update(self, iterable: Iterable[Any]) -> None:
+    def update(self, iterable: Iterable[T]) -> None:
         for item in iterable:
             self.items[item] = None
 
-    def __or__(self, other: Iterable[Any]) -> "OrderedSet":
-        merged = OrderedSet(self.items)
+    def __or__(self, other: Iterable[T]) -> "OrderedSet[T]":
+        merged: OrderedSet[T] = OrderedSet(self.items)
         merged.update(other)
         return merged
 
-    def __ior__(self, other: Iterable[Any]) -> "OrderedSet":
+    def __ior__(self, other: Iterable[T]) -> "OrderedSet[T]":
         self.update(other)
         return self
 
-    def __eq__(self, other: Any) -> bool:
+    def __eq__(self, other: object) -> bool:
         # Compares equal to a plain set of the same members: callers and their tests treat
         # this as a set, and order is a property of iteration, not of set identity.
         if isinstance(other, OrderedSet):

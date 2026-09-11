@@ -28,6 +28,8 @@ import subprocess
 import tempfile
 import types
 
+from collections.abc import Callable
+
 import numpy as np
 import pytest
 
@@ -53,7 +55,7 @@ def spec() -> BenchSpec:
     return BenchSpec.load(KERNEL)
 
 
-def numpy_reference(spec: BenchSpec):
+def numpy_reference(spec: BenchSpec) -> Callable[..., None]:
     """The kernel's numpy function, imported from the reference the dace sibling was generated from."""
     module = importlib.import_module(
         ".".join(
@@ -87,7 +89,9 @@ def build(source: pathlib.Path, language: str) -> ctypes.CDLL:
 
 @pytest.mark.integration
 @pytest.mark.parametrize("language", sorted(DRIVERS))
-def test_a_kernel_renders_to_a_unit_that_builds_and_reproduces_numpy(spec, language, tmp_path) -> None:
+def test_a_kernel_renders_to_a_unit_that_builds_and_reproduces_numpy(
+    spec: BenchSpec, language: str, tmp_path: pathlib.Path
+) -> None:
     record = cpf_bridge.render_kernel(spec, tmp_path, language=language)
     assert record["verdict"] == "ok", f"{KERNEL} did not render: {record}"
 
@@ -118,7 +122,9 @@ def test_a_kernel_renders_to_a_unit_that_builds_and_reproduces_numpy(spec, langu
     np.testing.assert_allclose(arrays["distance_matrix"], expected["distance_matrix"], rtol=1e-12, atol=0.0)
 
 
-def test_the_target_reaches_the_child_and_the_device_is_not_hidden(monkeypatch, tmp_path) -> None:
+def test_the_target_reaches_the_child_and_the_device_is_not_hidden(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
     """A gpu render must be ASKED for and must be able to SEE a device.
 
     Both halves have a silent failure mode. A ``--target`` the parent forgets to forward renders
@@ -133,7 +139,7 @@ def test_the_target_reaches_the_child_and_the_device_is_not_hidden(monkeypatch, 
         stdout = '{"verdict": "ok"}'
         stderr = ""
 
-    def fake_run(cmd, env=None, **kwargs):
+    def fake_run(cmd: list[str], env: dict[str, str] | None = None, **kwargs: object) -> Done:
         seen["cmd"] = cmd
         seen["env"] = env
         return Done()

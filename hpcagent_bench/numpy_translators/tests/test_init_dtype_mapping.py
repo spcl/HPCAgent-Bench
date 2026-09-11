@@ -35,7 +35,7 @@ def _write_harness(tmp_path: pathlib.Path, body: str, short: str = "k") -> pathl
     return numpy_py
 
 
-def test_mismatched_length_skips_positional_mapping(tmp_path) -> None:
+def test_mismatched_length_skips_positional_mapping(tmp_path: pathlib.Path) -> None:
     # 3 returns vs 2 array args, different order: the unsound positional zip
     # would put ``flags``'s int32 onto ``flux`` (float). The length gate must
     # skip it -- only the by-name int32 of ``flags`` survives.
@@ -56,7 +56,7 @@ def test_mismatched_length_skips_positional_mapping(tmp_path) -> None:
     assert "flux" not in dtypes  # not corrupted by the misaligned zip
 
 
-def test_equal_length_positional_mapping_renamed(tmp_path) -> None:
+def test_equal_length_positional_mapping_renamed(tmp_path: pathlib.Path) -> None:
     # Equal length AND order: a kernel that RENAMES the harness locals (idx_in
     # <- idx) inherits the int32 via the gated positional fallback.
     numpy_py = _write_harness(
@@ -78,7 +78,7 @@ def test_equal_length_positional_mapping_renamed(tmp_path) -> None:
     assert dtypes.get("idx_in") == "int32"  # positional rename mapping applied
 
 
-def test_by_name_dtype_is_recorded(tmp_path) -> None:
+def test_by_name_dtype_is_recorded(tmp_path: pathlib.Path) -> None:
     # The harness local name == kernel arg name: the dtype is recorded under that
     # name regardless of any positional consideration.
     numpy_py = _write_harness(
@@ -136,7 +136,7 @@ def test_declared_dtypes_prefers_the_arrays_entry_over_the_legacy_block() -> Non
         ("fft_1d", "x", "complex128"),
     ],
 )
-def test_declared_array_dtype_reaches_the_ir(short, array, dtype) -> None:
+def test_declared_array_dtype_reaches_the_ir(short: str, array: str, dtype: str) -> None:
     """The whole seam, on real manifests: manifest -> emit_bridge export -> parse_kernel.
 
     This is the assertion that was missing when the export moved to ``init.arrays``: each of

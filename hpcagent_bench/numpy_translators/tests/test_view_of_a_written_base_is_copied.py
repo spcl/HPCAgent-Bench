@@ -42,7 +42,7 @@ _NEVER_WRITTEN = """def f(src, out, n, half):
 """
 
 
-def _names(src):
+def _names(src: str) -> set[str]:
     return views_of_written_bases(ast.parse(src).body[0])
 
 

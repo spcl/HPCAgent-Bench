@@ -2,9 +2,9 @@
 
 import json
 import pathlib
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-from numpyto_common.ir import KernelIR
+from numpyto_common.ir import ArrayDesc, KernelIR, ScalarDesc, SymbolDesc
 from numpyto_common import dtypes
 from numpyto_common.naming import entry_symbol
 
@@ -25,7 +25,12 @@ def _scalar_kind(dtype: str) -> str:
         return "double"
 
 
-def _arg_entry(name: str, sym_by_name, arr_by_name, sca_by_name) -> Dict[str, Any]:
+def _arg_entry(
+    name: str,
+    sym_by_name: Dict[str, SymbolDesc],
+    arr_by_name: Dict[str, ArrayDesc],
+    sca_by_name: Dict[str, ScalarDesc],
+) -> Dict[str, Any]:
     """One ``{name, kind[, shape]}`` binding entry, classified from the IR."""
     if name in sym_by_name:
         return {"name": name, "kind": _scalar_kind("int")}  # int64 (canonical)
@@ -35,7 +40,9 @@ def _arg_entry(name: str, sym_by_name, arr_by_name, sca_by_name) -> Dict[str, An
     return {"name": name, "kind": _scalar_kind(sca_by_name[name].dtype)}
 
 
-def emit_binding(kir: KernelIR, out_path: pathlib.Path, base_name: str = None, symbol: str = None) -> Dict[str, Any]:
+def emit_binding(
+    kir: KernelIR, out_path: pathlib.Path, base_name: Optional[str] = None, symbol: Optional[str] = None
+) -> Dict[str, Any]:
     """Write ``<out_path>`` (the C-ABI arg list + symbol/source names per language) and return it."""
     sym_by_name = {s.name: s for s in kir.symbols}
     arr_by_name = {a.name: a for a in kir.arrays}
@@ -67,7 +74,7 @@ def emit_binding(kir: KernelIR, out_path: pathlib.Path, base_name: str = None, s
 
 
 def emit_pluto_binding(
-    kir: KernelIR, out_path: pathlib.Path, base_name: str = None, symbol: str = None
+    kir: KernelIR, out_path: pathlib.Path, base_name: Optional[str] = None, symbol: Optional[str] = None
 ) -> Dict[str, Any]:
     """Binding for the Pluto backend: same schema as :func:`emit_binding`, args ordered symbols/arrays/scalars."""
     sym_by_name = {s.name: s for s in kir.symbols}

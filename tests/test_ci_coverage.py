@@ -104,7 +104,7 @@ def test_no_workflow_declares_the_same_key_twice() -> None:
     class NoDuplicates(yaml.SafeLoader):
         pass
 
-    def strict_mapping(loader, node, deep: bool = False):
+    def strict_mapping(loader: yaml.SafeLoader, node: yaml.MappingNode, deep: bool = False) -> dict[object, object]:
         seen = set()
         for key_node, _ in node.value:
             key = loader.construct_object(key_node, deep=deep)

@@ -36,7 +36,15 @@ from numpyto_common.lib_nodes import _reduction_misses_target, _retarget_scalar_
 DLA = tu.REPO / "hpcagent_bench" / "benchmarks" / "scientific_computing" / "dense_linear_algebra"
 
 
-def _pattern(target, body, *, augmented: bool = False, iterable: str = "range(i)", init: str = "0.0", step: str = "+="):
+def _pattern(
+    target: str,
+    body: str,
+    *,
+    augmented: bool = False,
+    iterable: str = "range(i)",
+    init: str = "0.0",
+    step: str = "+=",
+) -> tuple[ast.stmt, list[ast.stmt]]:
     """``__mm1 = <init>; for __mml1 in <iterable>: __mm1 += <body>`` plus the statement
     that consumes ``__mm1`` -- the exact shape ``_hoist_value`` leaves behind.
 
@@ -48,16 +56,16 @@ def _pattern(target, body, *, augmented: bool = False, iterable: str = "range(i)
     return node, prelude
 
 
-def _unparse(stmts):
+def _unparse(stmts: list[ast.stmt]) -> str:
     return ast.unparse(ast.fix_missing_locations(ast.Module(body=list(stmts), type_ignores=[])))
 
 
-def _emit_fortran(short):
+def _emit_fortran(short: str) -> str:
     with tempfile.TemporaryDirectory() as d:
         return tu.emit_source(short, DLA / short / f"{short}_numpy.py", "fortran", d)
 
 
-def _joined(src):
+def _joined(src: str) -> str:
     """Fortran free-form continuations (``... &\\n    &...``) split one statement across lines, so a
     statement only matches after they are rejoined. Which statements wrap depends on identifier
     length, which the DO-variable uniquifier below changes."""
@@ -143,7 +151,7 @@ def test_sliced_destination_is_left_alone() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _misses(target, body, iterable: str = "range(i)"):
+def _misses(target: str, body: str, iterable: str = "range(i)") -> bool:
     loop = ast.parse(f"for __mml1 in {iterable}:\n    pass\n").body[0]
     return _reduction_misses_target(ast.parse(target).body[0].value, loop, ast.parse(body).body[0].value)
 
@@ -235,20 +243,20 @@ def test_fortran_carries_the_same_retarget() -> None:
 M, N = 9, 7
 
 
-def _emit(short, cpp):
+def _emit(short: str, cpp: bool) -> str:
     with tempfile.TemporaryDirectory() as d:
         numpy_py = DLA / short / f"{short}_numpy.py"
         return tu.emit_cpp_source(short, numpy_py, d) if cpp else tu.emit_source(short, numpy_py, "c", d)
 
 
-def _inputs(short):
+def _inputs(short: str) -> dict[str, object]:
     rng = np.random.default_rng(0)
     if short == "symm":
         return dict(A=rng.random((M, M)), B=rng.random((M, N)), C=rng.random((M, N)), alpha=1.5, beta=0.75)
     return dict(A=rng.random((M, M)), B=rng.random((M, N)), alpha=1.5)
 
 
-def _reference(short, args):
+def _reference(short: str, args: dict[str, object]) -> np.ndarray:
     """Run the kernel's OWN ``*_numpy.py`` (in-place) and return the output buffer --
     the emitted C must reproduce the shipped reference, not a paraphrase of it."""
     path = DLA / short / f"{short}_numpy.py"
@@ -264,7 +272,7 @@ def _reference(short, args):
     return ref[out]
 
 
-def _driver(short, args, want):
+def _driver(short: str, args: dict[str, object], want: np.ndarray) -> str:
     if short == "symm":
         call = f"symm_fp64(A, B, C, {M}, {N}, {args['alpha']}, {args['beta']});"
         bufs = (
@@ -298,7 +306,7 @@ int main(void) {{
 """
 
 
-def _check(short, cpp) -> None:
+def _check(short: str, cpp: bool) -> None:
     args = _inputs(short)
     want = _reference(short, args)
     run = tu.build_run_c(_emit(short, cpp), _driver(short, args, want), cpp=cpp)

@@ -14,26 +14,30 @@ import re
 import shutil
 import subprocess
 import tempfile
+from typing import Callable
 
 import pytest
 
 from _op_oracle import _bench_info
 from numpyto_c.emit import emit_c, emit_pluto, pluto_call_free
 from numpyto_common.frontend import parse_kernel
+from numpyto_common.ir import KernelIR
 from numpyto_common.lowering import lower
 
 from hpcagent_bench import pluto_transform
 from hpcagent_bench.pluto_affine import KNOWN_POLYCC_ISSUES
 
 
-def _lower_src(src: str, fn: str, inputs, outputs, shapes, syms):
+def _lower_src(
+    src: str, fn: str, inputs: list[str], outputs: list[str], shapes: dict[str, str], syms: dict[str, int]
+) -> KernelIR:
     d = pathlib.Path(tempfile.mkdtemp())
     (d / "k_numpy.py").write_text(src)
     (d / "bi.json").write_text(json.dumps(_bench_info(fn, inputs, outputs, shapes, syms)))
     return lower(parse_kernel(d / "k_numpy.py", d / "bi.json"))
 
 
-def _gather_kir():
+def _gather_kir() -> KernelIR:
     """``a[i + N // 2]`` -- the floor division sits in a SUBSCRIPT and in the loop bound."""
     return _lower_src(
         "import numpy as np\ndef gath(a, out, N):\n    for i in range(N // 2):\n        out[i] = a[i + N // 2]\n",
@@ -45,7 +49,7 @@ def _gather_kir():
     )
 
 
-def _relu_kir():
+def _relu_kir() -> KernelIR:
     """``np.maximum`` on a loop-varying operand: nothing to hoist, so only a spelling removes the call."""
     return _lower_src(
         "import numpy as np\ndef relu(a, out, N):\n    for i in range(N):\n        out[i] = np.maximum(a[i], 0.0)\n",
@@ -96,7 +100,7 @@ def test_a_call_with_no_macro_twin_and_no_hoist_sink_is_left_alone() -> None:
 @pytest.mark.skipif(shutil.which("polycc") is None, reason="pluto/polycc not installed")
 @pytest.mark.skipif(shutil.which("gcc") is None, reason="gcc not installed")
 @pytest.mark.parametrize("kir_fn,name", [(_gather_kir, "gath"), (_relu_kir, "relu")])
-def test_the_transformed_output_compiles(kir_fn, name) -> None:
+def test_the_transformed_output_compiles(kir_fn: Callable[[], KernelIR], name: str) -> None:
     """The claim that matters: polycc's output has no undeclared ``__pet_ret_0`` left in it."""
     d = pathlib.Path(tempfile.mkdtemp())
     src = d / f"{name}_pluto_input.c"

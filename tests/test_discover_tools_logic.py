@@ -13,6 +13,7 @@ true to what the real function does.
 """
 
 import types
+from typing import Any
 
 import pytest
 
@@ -40,10 +41,10 @@ def test_run_version_returns_none_when_no_version_args_are_given() -> None:
     assert discover_tools._run_version("anything", []) is None
 
 
-def test_run_version_tries_args_in_order_and_stops_at_the_first_match(monkeypatch) -> None:
+def test_run_version_tries_args_in_order_and_stops_at_the_first_match(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
 
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd: list[str], capture_output: bool, text: bool, timeout: int) -> types.SimpleNamespace:
         calls.append(cmd)
         stdout = "tool version 3.14.1\n" if cmd[-1] == "--version" else ""
         return types.SimpleNamespace(stdout=stdout, stderr="")
@@ -57,9 +58,9 @@ def test_run_version_tries_args_in_order_and_stops_at_the_first_match(monkeypatc
     assert calls == [["tool", "-v"], ["tool", "--version"]]
 
 
-def test_run_version_returns_none_when_no_arg_yields_a_version(monkeypatch) -> None:
+def test_run_version_returns_none_when_no_arg_yields_a_version(monkeypatch: pytest.MonkeyPatch) -> None:
 
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd: list[str], capture_output: bool, text: bool, timeout: int) -> types.SimpleNamespace:
         return types.SimpleNamespace(stdout="", stderr="")
 
     monkeypatch.setattr(discover_tools, "subprocess", types.SimpleNamespace(run=fake_run))
@@ -71,12 +72,14 @@ def test_detect_binary_reports_not_found_for_a_name_that_cannot_exist() -> None:
     assert discover_tools.detect_binary({"names": [_MISSING_NAME]}) == {"found": False}
 
 
-def test_detect_binary_found_path_picks_the_first_matching_name_and_lists_all_variants(monkeypatch) -> None:
+def test_detect_binary_found_path_picks_the_first_matching_name_and_lists_all_variants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
 
-    def fake_which(name):
+    def fake_which(name: str) -> str | None:
         return {"gcc-13": "/usr/bin/gcc-13", "gcc": "/usr/bin/gcc"}.get(name)
 
-    def fake_run_version(cmd, args):
+    def fake_run_version(cmd: str, args: list[str]) -> str:
         return "13.2.0"
 
     # Same rebind-the-name reasoning: shutil is shared process-wide, discover_tools's own
@@ -103,7 +106,7 @@ def test_detect_header_delegates_to_detect_library_on_the_header_field() -> None
 
 
 # --- missing_for_target: the pure filter behind the CLI's --require exit code ----------------------
-def _report(**tools):
+def _report(**tools: dict[str, Any]) -> dict[str, Any]:
     return {"categories": {"compilers": tools}}
 
 
@@ -141,7 +144,7 @@ def test_missing_for_target_on_an_empty_report_is_empty() -> None:
 
 
 @pytest.mark.parametrize("target", ["cpu", "nvidia", "amd"])
-def test_missing_for_target_scans_every_category_not_just_the_first(target) -> None:
+def test_missing_for_target_scans_every_category_not_just_the_first(target: str) -> None:
     report = {
         "categories": {
             "compilers": {"gcc": {"found": True, "required_on": ["cpu"]}},

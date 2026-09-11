@@ -1,5 +1,14 @@
 name: CI
 
+# The interpreter every job runs. ONE place, because it was seventeen literals and a bump that
+# missed one gives a matrix testing two Pythons while reporting one. 3.14 is the default: it is
+# the fastest release, and every dependency this repo pins ships a cp314 wheel -- numba 0.67
+# (the graded baseline, and the one most likely to lag) included. dace is installed from git at
+# the tip of extended rather than from PyPI, so CI is where its 3.14 support is actually proven;
+# if a job fails on the interpreter rather than on the code, this line is the revert.
+env:
+  PYTHON_VERSION: '3.14'
+
 # Parallel CPU runners, each a self-contained slice of the pipeline (was one ~200-min sequential
 # runner). Shared toolchain + base pip come from
 # ./.github/actions/setup; each job adds only the extra it needs, so ONLY frameworks-pluto pays for
@@ -231,7 +240,7 @@ jobs:
           submodules: recursive
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ env.PYTHON_VERSION }}
 
       # ccache -- emitted kernels are byte-identical across runs (deterministic emit, no
       # embedded paths or timestamps), so every CI run recompiles the very same TUs.
@@ -533,7 +542,7 @@ jobs:
           submodules: recursive
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ env.PYTHON_VERSION }}
       - uses: ./.github/actions/setup
 
       - name: Phase 5 -- e2e numerical sweep [${{ matrix.backend }}] @ S
@@ -616,7 +625,7 @@ jobs:
           submodules: recursive
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ env.PYTHON_VERSION }}
 
       # Same ccache setup as `unit`; the key is namespaced by github.job, so this job
       # warms its own cache rather than contending for that one.
@@ -861,7 +870,7 @@ jobs:
           submodules: recursive
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ env.PYTHON_VERSION }}
 
       # ccache -- emitted kernels are byte-identical across runs (deterministic emit, no
       # embedded paths or timestamps), so every CI run recompiles the very same TUs.
@@ -1009,7 +1018,7 @@ jobs:
           submodules: recursive
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ env.PYTHON_VERSION }}
       - uses: ./.github/actions/setup
 
       - name: Phase 8 -- the DaCe frontend still reads what the generator emits
@@ -1087,7 +1096,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ env.PYTHON_VERSION }}
 
       # ccache -- emitted kernels are byte-identical across runs (deterministic emit, no
       # embedded paths or timestamps), so every CI run recompiles the very same TUs.
@@ -1213,7 +1222,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ env.PYTHON_VERSION }}
 
       # ccache -- emitted kernels are byte-identical across runs (deterministic emit, no
       # embedded paths or timestamps), so every CI run recompiles the very same TUs.
@@ -1442,7 +1451,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ env.PYTHON_VERSION }}
 
       # ccache -- emitted kernels are byte-identical across runs (deterministic emit, no
       # embedded paths or timestamps), so every CI run recompiles the very same TUs.
@@ -1650,7 +1659,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ env.PYTHON_VERSION }}
 
       # ccache -- emitted kernels are byte-identical across runs (deterministic emit, no
       # embedded paths or timestamps), so every CI run recompiles the very same TUs.
@@ -1759,7 +1768,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ env.PYTHON_VERSION }}
       - uses: ./.github/actions/setup
 
       - name: Setup -- Apptainer (sudoless install script)
@@ -1958,7 +1967,7 @@ jobs:
           submodules: recursive
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ env.PYTHON_VERSION }}
 
       # ccache -- emitted kernels are byte-identical across runs (deterministic emit, no
       # embedded paths or timestamps), so every CI run recompiles the very same TUs.
@@ -2190,7 +2199,7 @@ jobs:
           submodules: recursive
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ env.PYTHON_VERSION }}
       - uses: ./.github/actions/setup
         with:
           # The parquet writer lives in the `hf` extra. This job was lifted out of `mpi`, which
@@ -2268,7 +2277,7 @@ jobs:
           submodules: recursive
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ env.PYTHON_VERSION }}
 
       # ccache -- emitted kernels are byte-identical across runs (deterministic emit, no
       # embedded paths or timestamps), so every CI run recompiles the very same TUs.
@@ -2437,7 +2446,7 @@ jobs:
           submodules: recursive
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ env.PYTHON_VERSION }}
       - uses: ./.github/actions/setup
 
       - name: The compiled oracle still computes what the interpreter computes @ S
@@ -2530,7 +2539,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ env.PYTHON_VERSION }}
 
       # ccache -- emitted kernels are byte-identical across runs (deterministic emit, no
       # embedded paths or timestamps), so every CI run recompiles the very same TUs.
@@ -2629,7 +2638,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ env.PYTHON_VERSION }}
       - uses: ./.github/actions/setup
         with:
           # the GPU codegen columns
@@ -2677,7 +2686,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ env.PYTHON_VERSION }}
       # coverage alone -- this job combines artifacts and never imports the package, so naming the
       # group WITHOUT the project keeps it off torch and dace and makes it the fastest job in the
       # run.

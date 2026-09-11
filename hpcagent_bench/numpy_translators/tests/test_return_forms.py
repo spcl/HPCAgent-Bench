@@ -140,7 +140,7 @@ def test_return_scalar() -> None:
 
 
 @pytest.mark.parametrize("expr", ["x.T", "np.transpose(x)", "x.transpose(1, 0)", "x.transpose((1, 0))"])
-def test_return_transposed_view(expr) -> None:
+def test_return_transposed_view(expr: str) -> None:
     x = np.arange(12, dtype=np.float64).reshape(3, 4)
     res = run_return_op(
         f"import numpy as np\ndef f(x):\n return {expr}\n",
@@ -173,7 +173,7 @@ def test_return_transposed_axes_3d() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _binding_ptr_args(src, inputs, shapes, syms):
+def _binding_ptr_args(src: str, inputs: list[str], shapes: dict[str, str], syms: dict[str, int]) -> list[str]:
     from numpyto_common.frontend import parse_kernel
     from numpyto_common.lowering import lower
     from numpyto_c.bindings import emit_binding

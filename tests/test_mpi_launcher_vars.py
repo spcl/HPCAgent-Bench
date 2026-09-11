@@ -17,7 +17,7 @@ from hpcagent_bench.support.collect.sweep import MPI_LAUNCHER_VARS, drop_mpi_lau
 
 
 @pytest.fixture(name="launcher_env")
-def launcher_env_fixture(monkeypatch):
+def launcher_env_fixture(monkeypatch: pytest.MonkeyPatch):
     """A process that looks like a rank of a pmix-launched step, plus the shard variable."""
     for var in MPI_LAUNCHER_VARS:
         monkeypatch.delenv(var, raising=False)
@@ -44,7 +44,7 @@ def test_slurm_procid_survives(launcher_env) -> None:
     assert os.environ["SLURM_PROCID"] == "2"
 
 
-def test_it_is_idempotent_and_quiet_when_nothing_is_set(monkeypatch) -> None:
+def test_it_is_idempotent_and_quiet_when_nothing_is_set(monkeypatch: pytest.MonkeyPatch) -> None:
     for var in MPI_LAUNCHER_VARS:
         monkeypatch.delenv(var, raising=False)
     assert drop_mpi_launcher_vars() == []
@@ -66,7 +66,7 @@ def test_the_list_still_covers_what_dace_triggers_on() -> None:
     )
 
 
-def test_the_distributed_residency_keeps_its_launcher_variables(launcher_env, monkeypatch) -> None:
+def test_the_distributed_residency_keeps_its_launcher_variables(launcher_env, monkeypatch: pytest.MonkeyPatch) -> None:
     """An MPI rank must NOT be stripped: MPI is what the launcher already prepared for it.
 
     The two residencies fail in opposite directions -- a single-node child that lets MPI come up

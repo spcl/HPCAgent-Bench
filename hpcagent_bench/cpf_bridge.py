@@ -36,7 +36,8 @@ import subprocess
 import sys
 import time
 import traceback
-from typing import Any, Dict, List, Optional, Sequence
+from types import ModuleType
+from typing import TYPE_CHECKING, Any, Sequence
 
 from numpyto_common.naming import fptype_tag, short_for
 
@@ -50,6 +51,12 @@ from hpcagent_bench.support.bindings.contract import (
     Binding,
     binding_from_spec,
 )
+
+if TYPE_CHECKING:
+    from dace import SDFG
+    from dace import dtypes as dace_dtypes
+    from dace.codegen.cpf import Rendering
+    from dace.frontend.python.parser import DaceProgram
 
 #: CPF dialect -> the source extension its text is written with.
 LANGUAGE_EXT = {"c++": "cpp", "c": "c", "hip": "hip"}
@@ -84,7 +91,7 @@ def program_name(path: pathlib.Path) -> str:
     return path.stem
 
 
-def resolve_program(module, path: pathlib.Path):
+def resolve_program(module: ModuleType, path: pathlib.Path) -> DaceProgram | None:
     """The ``DaceProgram`` in ``module``, or ``None``.
 
     The program's name does not always match the file stem (a kernel whose function is named for
@@ -98,7 +105,7 @@ def resolve_program(module, path: pathlib.Path):
     return programs[0] if len(programs) == 1 else None
 
 
-def binding_for(rendering, kernel: str, symbol: str) -> Binding:
+def binding_for(rendering: Rendering, kernel: str, symbol: str) -> Binding:
     """The CPF entry point's own binding, read off the PREPARED SDFG.
 
     ``rendering.sdfg`` rather than the SDFG handed to the renderer: preparation expands library
@@ -115,7 +122,7 @@ def binding_for(rendering, kernel: str, symbol: str) -> Binding:
     # ``const`` flag and the rendered signature from disagreeing (they did, and cppcheck reported
     # ``constParameterPointer`` on every read-only pointer as a result).
     readonly = readonly_entry_arrays(sdfg)
-    args: List[Arg] = []
+    args: list[Arg] = []
     for name, desc in sdfg.arglist().items():
         dtype = desc.dtype.as_numpy_dtype().name
         if isinstance(desc, dace_data.Array):
@@ -143,21 +150,21 @@ DACE_BANNER = "/* DaCe AUTO-GENERATED FILE. DO NOT MODIFY */"
 ABI_SYMBOL_LOCAL = "_abi_unused_"
 
 
-def dace_int64():
+def dace_int64() -> dace_dtypes.typeclass:
     """``dace.int64``, imported late -- this module is imported without dace on the parent side."""
     import dace
 
     return dace.int64
 
 
-def dace_uint8():
+def dace_uint8() -> dace_dtypes.typeclass:
     """``dace.uint8``, imported late for the same reason."""
     import dace
 
     return dace.uint8
 
 
-def dace_symbolic():
+def dace_symbolic() -> ModuleType:
     """``dace.symbolic``, imported late for the same reason."""
     from dace import symbolic
 
@@ -184,7 +191,7 @@ C_DTYPE = {
 }
 
 
-def add_workspace(sdfg) -> None:
+def add_workspace(sdfg: SDFG) -> None:
     """Give the SDFG the reserved scratch pair, so the rendered entry is callable through the ABI.
 
     ``workspace`` / ``workspace_size`` are not in ``binding.args``: the stub and the host glue
@@ -213,7 +220,7 @@ def add_workspace(sdfg) -> None:
     assert isinstance(sdfg.arrays[WORKSPACE_NAME], dace_data.Array)
 
 
-def force_abi_symbols(sdfg, wanted) -> Tuple[str, ...]:
+def force_abi_symbols(sdfg: SDFG, wanted: Sequence[str]) -> tuple[str, ...]:
     """Make ``wanted`` symbols part of the entry signature even where nothing uses them.
 
     A size parameter the ABI passes can be absent from the SDFG entirely: ``fuse_move_ifs`` takes
@@ -309,7 +316,7 @@ def render_sdfg(
     precision: str,
     target: str = "cpu",
     dropin: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Steps 1-4 for one kernel, in THIS process. Returns the verdict record.
 
     Called by :func:`main`; :func:`render_kernel` is the out-of-process front door and is what
@@ -326,7 +333,7 @@ def render_sdfg(
 
     short = short_for(numpy_py)
     base = f"{short}_{fptype_tag(precision)}_cpf"
-    rec: Dict[str, Any] = {
+    rec: dict[str, Any] = {
         "kernel": spec.short_name,
         "language": language,
         "precision": precision or "fp64",
@@ -387,7 +394,7 @@ def render_sdfg(
     # canonical_parallel_form tool serves and what the test dlsym's. Only a drop-in overrides it.
     sdfg.name = base
     native = binding_from_spec(spec)
-    forced: Tuple[str, ...] = ()
+    forced: tuple[str, ...] = ()
     if dropin:
         rec["canonical_entry"] = native.symbol
         add_workspace(sdfg)
@@ -444,8 +451,8 @@ def render_kernel(
     target: str = "cpu",
     timeout: float = RENDER_TIMEOUT_S,
     dropin: bool = False,
-    extra_env: Optional[Dict[str, str]] = None,
-) -> Dict[str, Any]:
+    extra_env: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """Render ``spec``'s kernel to a self-contained TU in ``out_dir``; returns the verdict record.
 
     Takes the loaded :class:`~hpcagent_bench.spec.BenchSpec` for the same reason
@@ -504,7 +511,7 @@ def render_kernel(
     }
 
 
-def track_specs(track: str) -> List[BenchSpec]:
+def track_specs(track: str) -> list[BenchSpec]:
     """Every registered spec on ``track``, ordered by name.
 
     Loaded rather than listed because a registry key is not always loadable (an entry whose
@@ -512,7 +519,7 @@ def track_specs(track: str) -> List[BenchSpec]:
     """
     from hpcagent_bench.spec import KERNELS
 
-    specs: List[BenchSpec] = []
+    specs: list[BenchSpec] = []
     for key in sorted(KERNELS):
         try:
             spec = BenchSpec.load(key.rsplit("/", 1)[-1])
@@ -532,14 +539,14 @@ def render_track(
     target: str = "cpu",
     timeout: float = RENDER_TIMEOUT_S,
     dropin: bool = False,
-    jsonl: Optional[os.PathLike] = None,
-) -> List[Dict[str, Any]]:
+    jsonl: os.PathLike[str] | None = None,
+) -> list[dict[str, Any]]:
     """Render every kernel on ``track``, appending one verdict per line to ``jsonl``.
 
     Written as it goes rather than at the end: a sweep over a few hundred kernels is minutes per
     kernel, and a run that is interrupted has to leave behind what it already learned.
     """
-    records: List[Dict[str, Any]] = []
+    records: list[dict[str, Any]] = []
     sink = pathlib.Path(jsonl).open("a") if jsonl is not None else None
     try:
         for index, spec in enumerate(track_specs(track), start=1):
@@ -557,7 +564,7 @@ def render_track(
     return records
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     """The child: render ONE kernel and print its verdict as a single JSON line.
 
     Every failure mode is a verdict rather than a traceback to stderr, so a sweep reading stdout
@@ -578,7 +585,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     spec = BenchSpec.load(args.kernel)
     numpy_py = paths.BENCHMARKS / spec.relative_path / f"{spec.module_name}_numpy.py"
-    rec: Dict[str, Any] = {"kernel": spec.short_name, "language": args.language}
+    rec: dict[str, Any] = {"kernel": spec.short_name, "language": args.language}
     if not numpy_py.exists():
         rec["verdict"] = "noemit"
         rec["error"] = f"no numpy reference at {numpy_py}"

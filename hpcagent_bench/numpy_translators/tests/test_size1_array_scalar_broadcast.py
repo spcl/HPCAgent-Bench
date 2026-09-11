@@ -24,6 +24,8 @@ import numpy as np
 
 from _op_oracle import run_op
 
+from numpyto_common.ir import KernelIR
+
 _ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 
 # max + argmax over ``a`` seeded from the size-1 buffer x[0]; ``c`` is the s315 scalar-from-size-1-broadcast.
@@ -40,7 +42,7 @@ _SRC = (
 )
 
 
-def _all_ok(res):
+def _all_ok(res: dict[str, str]) -> tuple[bool, dict[str, str]]:
     assert any(v == "ok" for v in res.values()), f"every backend skipped; the comparison never ran: {res}"
     return all(v == "ok" or v.startswith("skip") for v in res.values()), res
 
@@ -72,7 +74,7 @@ def test_scalar_local_from_size1_broadcast_all_backends() -> None:
     assert ok, res
 
 
-def _kir(src):
+def _kir(src: str) -> KernelIR:
     from numpyto_common.frontend import parse_kernel
     from numpyto_common.lowering import lower
 

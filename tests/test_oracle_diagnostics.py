@@ -12,6 +12,7 @@ import subprocess
 import pytest
 
 import tests.numerical_oracle as no
+import pathlib
 
 
 def _proc(returncode: int = 1, stdout: str = "", stderr: str = ""):
@@ -64,7 +65,7 @@ def test_diag_ignores_trailing_blank_lines() -> None:
     assert no._diag(_proc(stderr="real error\n\n   \n")) == ": real error"
 
 
-def test_emit_returns_the_translator_message(monkeypatch, tmp_path) -> None:
+def test_emit_returns_the_translator_message(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
     """A failing emit surfaces the translator's exception text through ``_emit``'s diagnostic."""
     real = subprocess.run
 
@@ -83,7 +84,7 @@ def test_emit_returns_the_translator_message(monkeypatch, tmp_path) -> None:
     assert diag == ": NotImplementedError: shape rebinding is not lowerable"
 
 
-def test_compile_failure_status_carries_the_compiler_error(monkeypatch) -> None:
+def test_compile_failure_status_carries_the_compiler_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """End to end: a broken native compile reports gcc's message in the status, not ``FAIL:compile``."""
     real = subprocess.run
 
@@ -113,7 +114,7 @@ _NINJA_LOG = (
 )
 
 
-def test_dace_probe_verdict_carries_the_decisive_compiler_lines(capsys) -> None:
+def test_dace_probe_verdict_carries_the_decisive_compiler_lines(capsys: pytest.CaptureFixture[str]) -> None:
     """A ``compile_fail`` verdict must name the cause. Head-truncating this log reported
     ``CompilationError: Compiler failure:`` -- the phase again, with the diagnosis thrown away.
 

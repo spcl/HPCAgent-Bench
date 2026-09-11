@@ -12,9 +12,11 @@ parameter; see tests/test_spec_dimensions_config.py for that half.
 import json
 import pathlib
 import tempfile
+from typing import Any
 
 from numpyto_c.emit import emit_c, emit_cpp
 from numpyto_common.frontend import parse_kernel
+from numpyto_common.ir import KernelIR
 from numpyto_common.lowering import lower
 from numpyto_fortran.emit import emit_fortran
 
@@ -29,7 +31,7 @@ _SRC = (
 )
 
 
-def _kir(pinned: bool = True, src=_SRC, **overrides):
+def _kir(pinned: bool = True, src: str = _SRC, **overrides: Any) -> KernelIR:
     d = pathlib.Path(tempfile.mkdtemp())
     (d / "k_numpy.py").write_text(src)
     bench = {

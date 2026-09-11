@@ -23,16 +23,16 @@ from numpyto_common.lib_nodes import _scalarize_at_iters
 from numpyto_common.lowering import _SliceToScalarRewriter, _const
 
 
-def _iters(n):
+def _iters(n: int) -> list[ast.expr]:
     return [ast.Name(id=f"__w{i}", ctx=ast.Load()) for i in range(n)]
 
 
-def _scalarised(src, shapes, n):
+def _scalarised(src: str, shapes: dict[str, tuple[str, ...]], n: int) -> str:
     """``src`` rendered at an ``n``-deep nest by the np.* expanders' scalariser."""
     return ast.unparse(_scalarize_at_iters(ast.parse(src, mode="eval").body, _iters(n), shapes))
 
 
-def _fused(src, shapes, n):
+def _fused(src: str, shapes: dict[str, tuple[str, ...]], n: int) -> str:
     """``src`` rendered at an ``n``-deep nest by the slice-fusion rewriter (the whole-array path)."""
     full = [ast.Slice(lower=None, upper=None, step=None) for _ in range(n)]
     zero = [(_const(0), _const(0)) for _ in range(n)]
@@ -68,7 +68,7 @@ def test_an_equal_rank_subscript_operand_is_unchanged() -> None:
         ("grid[gz[:, None], gy[None, :], 0]", 3, "grid[gz[__w1], gy[__w2], 0]"),
     ],
 )
-def test_open_mesh_gather_binds_each_vector_to_its_own_axis(src, nest, want) -> None:
+def test_open_mesh_gather_binds_each_vector_to_its_own_axis(src: str, nest: int, want: str) -> None:
     # ``A[a[:, None, None], b[None, :, None], c[None, None, :]]`` is the open mesh np.ix_ spells:
     # each vector varies along ITS OWN result axis, so each takes its own iter.
     shapes = {"grid": ("N", "N", "N"), "gz": ("nz",), "gy": ("ny",), "gx": ("nx",)}

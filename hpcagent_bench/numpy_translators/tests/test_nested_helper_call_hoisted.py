@@ -17,6 +17,7 @@ import numpy as np
 
 from _op_oracle import run_op
 from numpyto_common.frontend import parse_kernel
+from numpyto_common.ir import KernelIR
 from numpyto_common.lowering import lower
 from numpyto_fortran.emit import emit_fortran
 
@@ -32,7 +33,7 @@ _NESTED = (
 )
 
 
-def _kir(src, dtypes=None):
+def _kir(src: str, dtypes: dict[str, str] | None = None) -> KernelIR:
     d = pathlib.Path(tempfile.mkdtemp())
     (d / "k_numpy.py").write_text(src)
     bench = {

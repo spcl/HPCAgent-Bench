@@ -41,7 +41,7 @@ MODE_SRC = (
 )
 
 
-def flags(*names):
+def flags(*names: str) -> frozenset[str]:
     return frozenset(names)
 
 
@@ -62,7 +62,7 @@ def test_a_mode_compare_is_a_static_flag_test() -> None:
         ("mode == 'a' == 'b'", "a chained compare has no single decidable pair"),
     ],
 )
-def test_an_undecidable_compare_is_not_a_static_flag_test(expr, reason) -> None:
+def test_an_undecidable_compare_is_not_a_static_flag_test(expr: str, reason: str) -> None:
     """Fusing an undecidable guard would leave an ``IfExp`` over ARRAY branches standing, which C's
     ``?:`` rejects outright and Fortran's ``merge`` evaluates on BOTH arms -- so a guarded division
     or subscript would run on exactly the values the guard exists to exclude."""

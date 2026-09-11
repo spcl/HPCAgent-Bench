@@ -26,7 +26,10 @@ import pathlib
 import sqlite3
 import sys
 from collections.abc import Iterable, Iterator
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 LOG = logging.getLogger(__name__)
 
@@ -159,7 +162,9 @@ def read_database(db: Database, prefixes: tuple[str, ...], exclude: frozenset[st
                 yield record
 
 
-def observations(run_globs: Iterable[str], experiment: str | Iterable[str] = "", exclude: Iterable[str] = ()) -> Any:
+def observations(
+    run_globs: Iterable[str], experiment: str | Iterable[str] = "", exclude: Iterable[str] = ()
+) -> pd.DataFrame:
     """The campaign's observations as a DataFrame, one row per recorded grade.
 
     ``experiment`` is an arm prefix, or several -- pass every label a campaign used, not just the

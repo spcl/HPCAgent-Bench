@@ -21,7 +21,7 @@ import ast
 from numpyto_common.parallelism import loop_is_parallel_safe, loop_reduction
 
 
-def _stmt(src):
+def _stmt(src: str) -> ast.stmt:
     return ast.parse(src).body[0]
 
 

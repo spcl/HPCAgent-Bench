@@ -13,6 +13,7 @@ belongs to the native oracle.
 """
 
 import ast
+from typing import Callable
 
 import numpy as np
 import pytest
@@ -24,7 +25,7 @@ sp = pytest.importorskip("scipy.sparse")
 _BUFS = ("indptr", "indices", "data")
 
 
-def _build_fn(n_rows_sym: str = "NR", n_cols_sym: str = "NK"):
+def _build_fn(n_rows_sym: str = "NR", n_cols_sym: str = "NK") -> Callable[..., None]:
     """Compile the expander's statements into a callable over the named buffers."""
     lhs = {b: f"A_{b}" for b in _BUFS}
     rhs = {b: f"B_{b}" for b in _BUFS}
@@ -46,7 +47,7 @@ def _build_fn(n_rows_sym: str = "NR", n_cols_sym: str = "NK"):
     return ns["spgemm"]
 
 
-def _run(A, B):
+def _run(A: sp.csr_matrix, B: sp.csr_matrix) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """``A @ B`` through the emitted SpGEMM; returns an unsorted-column CSR triple."""
     nr, nk = A.shape[0], B.shape[1]
     # Worst-case output nnz, the bound the caller is documented to size C's buffers to.
@@ -72,7 +73,7 @@ def _run(A, B):
     return c_indptr, c_indices, c_data
 
 
-def _dense(A, B):
+def _dense(A: sp.csr_matrix, B: sp.csr_matrix) -> tuple[np.ndarray, np.ndarray]:
     """The emitted result densified, so the comparison does not depend on column order.
 
     The expander drains columns in linked-list pop order, so C's columns are UNSORTED within a row
@@ -86,12 +87,12 @@ def _dense(A, B):
     return out, c_indptr
 
 
-def _rand(m, n, density, seed):
+def _rand(m: int, n: int, density: float, seed: int) -> sp.csr_matrix:
     return sp.random(m, n, density=density, format="csr", random_state=seed, dtype=np.float64)
 
 
 @pytest.mark.parametrize("seed", [0, 1, 2, 3, 4])
-def test_matches_scipy_on_random_matrices(seed) -> None:
+def test_matches_scipy_on_random_matrices(seed: int) -> None:
     A, B = _rand(9, 7, 0.3, seed), _rand(7, 11, 0.3, seed + 100)
     got, _ = _dense(A, B)
     np.testing.assert_allclose(got, (A @ B).toarray(), rtol=1e-12, atol=0.0)

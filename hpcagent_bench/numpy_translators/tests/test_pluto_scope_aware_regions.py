@@ -15,6 +15,7 @@ import tempfile
 from _op_oracle import _bench_info
 from numpyto_c.emit import emit_pluto
 from numpyto_common.frontend import parse_kernel
+from numpyto_common.ir import KernelIR
 from numpyto_common.lowering import lower
 
 from hpcagent_bench.pluto_affine import KNOWN_POLYCC_ISSUES, has_scop, scop_nonaffine_reason
@@ -24,19 +25,21 @@ from hpcagent_bench.pluto_transform import dedupe_scratch_declarations
 UNSCOPABLE = ("malloc(", "calloc(", "free(", "memset(", "memcpy(", "while (")
 
 
-def _lower_src(src: str, fn: str, inputs, outputs, shapes, syms):
+def _lower_src(
+    src: str, fn: str, inputs: list[str], outputs: list[str], shapes: dict[str, str], syms: dict[str, int]
+) -> KernelIR:
     d = pathlib.Path(tempfile.mkdtemp())
     (d / "k_numpy.py").write_text(src)
     (d / "bi.json").write_text(json.dumps(_bench_info(fn, inputs, outputs, shapes, syms)))
     return lower(parse_kernel(d / "k_numpy.py", d / "bi.json"))
 
 
-def _regions(text: str):
+def _regions(text: str) -> list[str]:
     """The body of every ``#pragma scop`` region in ``text``, in order."""
     return re.findall(r"#pragma scop(.*?)#pragma endscop", text, re.S)
 
 
-def _sized_zeros_kir():
+def _sized_zeros_kir() -> KernelIR:
     """A zero-filled local whose size is body-computed: its malloc cannot leave the body."""
     return _lower_src(
         "import numpy as np\n"
@@ -55,7 +58,7 @@ def _sized_zeros_kir():
     )
 
 
-def _two_nests_kir():
+def _two_nests_kir() -> KernelIR:
     """Two independent nests with a body-computed allocation wedged between them."""
     return _lower_src(
         "import numpy as np\n"
@@ -74,7 +77,7 @@ def _two_nests_kir():
     )
 
 
-def _clamp_kir():
+def _clamp_kir() -> KernelIR:
     """A data-dependent ``if`` nest between two plain nests (pet_to_pluto.cpp:565 refuses it)."""
     return _lower_src(
         "import numpy as np\n"

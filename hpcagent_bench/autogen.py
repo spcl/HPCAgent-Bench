@@ -27,7 +27,7 @@ import json
 import pathlib
 import subprocess
 import sys
-from typing import Dict, Iterable, List, Optional
+from collections.abc import Iterable
 
 from hpcagent_bench import framework_cache, paths
 from hpcagent_bench.emit_bridge import bench_info_tempfile
@@ -74,7 +74,7 @@ def _emit_jax(numpy_py: pathlib.Path, bench_info: pathlib.Path, out: pathlib.Pat
     return write_generated(out, src, source=numpy_py.name)
 
 
-def _emit_cli(module: str, numpy_py: pathlib.Path, out_dir: pathlib.Path, extra: List[str]) -> str:
+def _emit_cli(module: str, numpy_py: pathlib.Path, out_dir: pathlib.Path, extra: list[str]) -> str:
     cmd = [sys.executable, "-m", module, "emit", "--kernel", str(numpy_py), "--out", str(out_dir), *extra]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
@@ -98,14 +98,14 @@ def _emit_target(target: str, numpy_py: pathlib.Path, kdir: pathlib.Path, bench_
     raise ValueError(f"unknown auto-gen target {target!r}; known: {TARGETS}")
 
 
-def emit_targets(spec, targets: Iterable[str]) -> Dict[str, str]:
+def emit_targets(spec: BenchSpec, targets: Iterable[str]) -> dict[str, str]:
     """Emit ``targets`` for one :class:`~hpcagent_bench.spec.BenchSpec` to their
     canonical names (override-aware). Returns ``{target: status}``."""
     kdir = paths.BENCHMARKS / spec.relative_path
     numpy_py = kdir / f"{spec.module_name}_numpy.py"
     if not numpy_py.exists():
         return {}
-    out: Dict[str, str] = {}
+    out: dict[str, str] = {}
     with bench_info_tempfile(spec) as bi:
         for t in targets:
             try:
@@ -155,7 +155,7 @@ def ensure(key: str, targets: Iterable[str]) -> None:
     with bench_info_tempfile(spec) as bi:
         fingerprint = framework_cache.source_fingerprint(numpy_py, bi.read_bytes())
     cache_dir = framework_cache.kernel_cache_dir(kdir)
-    to_emit: List[str] = []
+    to_emit: list[str] = []
     for t in targets:
         canonical = kdir / _file_for(spec.module_name, t)
         # A hand-written override (present, no generation marker) always wins -- never emitted,
@@ -219,11 +219,11 @@ NATIVE_FRAMEWORKS = {
 _NATIVE_PRECISIONS = ("", "float32")
 
 
-def _wrapper_path(spec) -> pathlib.Path:
+def _wrapper_path(spec: BenchSpec) -> pathlib.Path:
     return paths.BENCHMARKS / spec.relative_path / f"{spec.module_name}_cpp.py"
 
 
-def _native_targets(spec) -> List[tuple]:
+def _native_targets(spec: BenchSpec) -> list[tuple]:
     """``[(config_or_None, native_base)]`` -- one entry per emit-distinct layout.
 
     A dense kernel yields ``[(None, <module>)]``; a sparse kernel yields one
@@ -235,7 +235,7 @@ def _native_targets(spec) -> List[tuple]:
     :meth:`BenchSpec.native_base` is the single source of truth for the stem (it
     matches what the emitter derives from the reference filename)."""
     seen: set = set()
-    out: List[tuple] = []
+    out: list[tuple] = []
     for rb in spec.expand_layouts():
         cfg = None if rb.config_key == "dense" else rb.config_key
         base = spec.native_base(rb.config_key)
@@ -246,7 +246,7 @@ def _native_targets(spec) -> List[tuple]:
     return out
 
 
-def _wrapper_src(spec) -> str:
+def _wrapper_src(spec: BenchSpec) -> str:
     """Generate the ``<module>_cpp.py`` wrapper. Exposes ``kernel_<fw>`` per
     native framework; for a sparse kernel each configuration also gets a
     ``kernel_<fw>_<config>`` entry (each layout is independently runnable) and
@@ -269,7 +269,7 @@ def _wrapper_src(spec) -> str:
     return "\n".join(lines) + "\n"
 
 
-def emit_native(spec, langs: Iterable[str]) -> Dict[str, str]:
+def emit_native(spec: BenchSpec, langs: Iterable[str]) -> dict[str, str]:
     """Emit the native sources for ``langs`` (both precisions, every layout) +
     the ``_cpp.py`` wrapper for one spec. Returns ``{tag: status}`` (best-effort).
 
@@ -281,7 +281,7 @@ def emit_native(spec, langs: Iterable[str]) -> Dict[str, str]:
 
     kdir = paths.BENCHMARKS / spec.relative_path
     numpy_py = kdir / f"{spec.module_name}_numpy.py"
-    out: Dict[str, str] = {}
+    out: dict[str, str] = {}
     if not numpy_py.exists():
         return out
     cppdir = kdir / "cpp_backend"
@@ -298,7 +298,7 @@ def emit_native(spec, langs: Iterable[str]) -> Dict[str, str]:
     return out
 
 
-def ensure_native(key: str, lang: Optional[str] = None) -> None:
+def ensure_native(key: str, lang: str | None = None) -> None:
     """Generate the native sources (+ wrapper) for the kernel registered under
     ``key``. ``lang`` restricts to one language (else all of NATIVE_FRAMEWORKS).
 

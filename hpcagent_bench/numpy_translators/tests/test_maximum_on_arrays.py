@@ -19,7 +19,7 @@ from _op_oracle import run_op
 from numpyto_common.lowering import _MathRewriter
 
 
-def rewrite(expr: str, array_names, defer: bool) -> str:
+def rewrite(expr: str, array_names: tuple[str, ...], defer: bool) -> str:
     tree = ast.parse(expr, mode="eval")
     _MathRewriter(set(array_names), defer_array_capable=defer).visit(tree)
     return ast.unparse(tree)
@@ -60,7 +60,7 @@ def test_other_intrinsics_are_never_deferred() -> None:
 _ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 
 
-def all_ok(res):
+def all_ok(res: dict[str, str]) -> tuple[bool, dict[str, str]]:
     """``(every backend agreed, the statuses)`` -- and at least one actually RAN.
 
     Without the second half every backend reporting ``skip:`` is indistinguishable from every

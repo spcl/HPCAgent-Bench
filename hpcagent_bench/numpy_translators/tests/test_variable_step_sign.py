@@ -22,13 +22,13 @@ from _native_tu import have_gcc, have_gpp
 _NATIVE = ("c", "cpp", "fortran")
 
 
-def _assert_ok(res) -> None:
+def _assert_ok(res: dict[str, str]) -> None:
     for backend, status in res.items():
         assert status == "ok" or status.startswith("skip"), f"{backend}: {status}"
     assert any(status == "ok" for status in res.values()), f"all skipped (vacuous): {res}"
 
 
-def _run(src, ins, n):
+def _run(src: str, ins: dict[str, np.ndarray], n: int) -> dict[str, str]:
     names = list(ins) + ["out"]
     return run_op(
         src,
@@ -92,7 +92,7 @@ def test_literal_negative_step_unaffected() -> None:
 
 
 # --- a runtime-sign loop must not be tagged for OpenMP -------------------------------------------
-def _emit_omp_c(body, shapes, syms, *, cpp: bool = False):
+def _emit_omp_c(body: str, shapes: dict[str, str], syms: dict[str, int], *, cpp: bool = False) -> str:
     """Emit the PARALLEL C/C++ variant of a one-function kernel."""
     import json
     import pathlib
@@ -112,7 +112,7 @@ def _emit_omp_c(body, shapes, syms, *, cpp: bool = False):
     return (emit_cpp_omp if cpp else emit_c_omp)(kir, fn_name="f")
 
 
-def _compiles_openmp(src, *, cpp: bool = False):
+def _compiles_openmp(src: str, *, cpp: bool = False) -> tuple[int, str]:
     import pathlib
     import subprocess
     import tempfile

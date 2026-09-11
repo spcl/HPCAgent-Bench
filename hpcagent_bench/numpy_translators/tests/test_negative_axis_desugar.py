@@ -20,17 +20,17 @@ from _op_oracle import run_op
 from numpyto_common.numpy_desugar import _NormalizeNegativeAxis, desugar_for_python_backend
 
 
-def _kir(kernel_name, **arrays):
+def _kir(kernel_name: str, **arrays: tuple[str, ...]) -> SimpleNamespace:
     arrs = [SimpleNamespace(name=n, shape=s, dtype="float64") for n, s in arrays.items()]
     return SimpleNamespace(kernel_name=kernel_name, arrays=arrs)
 
 
-def _desugar(body, **arrays):
+def _desugar(body: str, **arrays: tuple[str, ...]) -> str:
     src = "import numpy as np\ndef f(a, b, out):\n" + body
     return desugar_for_python_backend(src, _kir("f", **arrays), backend="pythran")
 
 
-def _norm_axis(expr, ranks):
+def _norm_axis(expr: str, ranks: dict[str, int]) -> int | ast.expr:
     """Run ``_NormalizeNegativeAxis`` over one expression; return the axis kwarg
     value (an int) after normalization, or the raw node when left verbatim."""
     call = ast.parse(expr, mode="eval").body
@@ -107,7 +107,7 @@ def test_positive_stack_axis_returned_verbatim() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _pythran_ok(res):
+def _pythran_ok(res: dict[str, str]) -> tuple[bool, dict[str, str]]:
     return res["pythran"] in ("ok",) or res["pythran"].startswith("skip"), res
 
 

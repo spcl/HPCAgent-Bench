@@ -143,7 +143,9 @@ def snap_power_of_two(value: float) -> int:
     return 1 << round(math.log2(value))
 
 
-def interpolate_symbol(small, large, fraction: float):
+def interpolate_symbol(
+    small: bool | int | float | str, large: bool | int | float | str, fraction: float
+) -> bool | int | float | str:
     """One symbol's value at ``fraction`` of the way from ``small`` to ``large``, geometrically.
 
     Equal ends carry through unchanged, which is how a non-size symbol (a stride, a flag, a
@@ -308,7 +310,7 @@ def ladder_violations(ladder: Mapping[str, Mapping[str, object]]) -> List[str]:
     return out
 
 
-def format_scalar(value) -> str:
+def format_scalar(value: bool | int | float | str) -> str:
     """A YAML scalar for ``value`` in the corpus's manifest style (``true``/``false``, plain ints)."""
     if isinstance(value, bool):
         return "true" if value else "false"

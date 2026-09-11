@@ -19,7 +19,13 @@ ARRAYS = frozenset({"x", "out"})
 RANKS = {"x": 4, "out": 4}
 
 
-def desugared(body: str, int_scalars=SCALARS, float_scalars=frozenset(), arrays=ARRAYS, ranks=None) -> str:
+def desugared(
+    body: str,
+    int_scalars: frozenset[str] = SCALARS,
+    float_scalars: frozenset[str] = frozenset(),
+    arrays: frozenset[str] = ARRAYS,
+    ranks: dict[str, int] | None = None,
+) -> str:
     fn = ast.parse(textwrap.dedent(body)).body[0]
     desugar_tuples(
         fn, int_scalars=int_scalars, float_scalars=float_scalars, arrays=arrays, ranks=RANKS if ranks is None else ranks
@@ -66,7 +72,7 @@ def test_a_generator_over_a_literal_range_unrolls() -> None:
 
 
 @pytest.mark.parametrize("rank,want", [(4, "(1, x.shape[1], 1, 1)"), (2, "(1, x.shape[1])")])
-def test_a_broadcast_shape_padded_to_an_array_rank_folds(rank, want) -> None:
+def test_a_broadcast_shape_padded_to_an_array_rank_folds(rank: int, want: str) -> None:
     """``(1,) * (x.ndim - 2)``. The rank-2 case repeats ZERO times: the empty tuple is falsy but
     correct, so the fold must test for None rather than truthiness."""
     got = desugared(
@@ -102,7 +108,7 @@ def test_an_isinstance_guard_on_an_integer_knob_takes_the_true_branch() -> None:
 
 
 @pytest.mark.parametrize("spelling", ["int", "np.integer"])
-def test_a_one_sided_isinstance_on_a_declared_knob_stays_undecided(spelling) -> None:
+def test_a_one_sided_isinstance_on_a_declared_knob_stays_undecided(spelling: str) -> None:
     """A preset symbol arrives as a Python int, an init.scalars entry as a numpy scalar, and
     ``isinstance(np.int64(3), int)`` is FALSE. Folding either spelling would make the emitted kernel
     take a branch the numpy oracle does not."""

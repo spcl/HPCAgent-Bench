@@ -28,6 +28,7 @@ import argparse
 import subprocess
 import sys
 from pathlib import Path
+from typing import Iterator
 
 DEFAULT_MAX_KB = 500
 #: Hand-written text gets its own, larger ceiling. What the hook is for is a BINARY blob -- a
@@ -40,7 +41,7 @@ DEFAULT_MAX_TEXT_KB = 1024
 BYTES_PER_KB = 1024
 
 
-def staged_files():
+def staged_files() -> List[str]:
     """Return the repo's currently-staged file paths (added / copied / modified)."""
     out = subprocess.run(
         ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"], capture_output=True, text=True
@@ -50,7 +51,7 @@ def staged_files():
     return [ln for ln in out.stdout.splitlines() if ln.strip()]
 
 
-def is_text(path):
+def is_text(path: Path) -> bool:
     """True when the file decodes as UTF-8 -- the property that separates source from a blob.
 
     Sniffed rather than keyed off the extension: a ``.py`` can be a generated megabyte of table
@@ -68,7 +69,7 @@ def is_text(path):
     return True
 
 
-def oversized(paths, max_bytes, max_text_bytes):
+def oversized(paths: List[str], max_bytes: int, max_text_bytes: int) -> Iterator[Tuple[str, int, int]]:
     """Yield ``(path, size_bytes, limit_bytes)`` for each existing regular file over its limit."""
     for rel in paths:
         path = Path(rel)
@@ -80,7 +81,7 @@ def oversized(paths, max_bytes, max_text_bytes):
             yield rel, size, limit
 
 
-def main(argv=None):
+def main(argv: List[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--max-kb", type=int, default=DEFAULT_MAX_KB, help="binary size limit in KiB (default: 500)")
     ap.add_argument(

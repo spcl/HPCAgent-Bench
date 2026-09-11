@@ -19,7 +19,7 @@ import functools
 import json
 import os
 import pathlib
-from typing import Any, ClassVar, Optional, Tuple
+from typing import Any, ClassVar, Iterator, Optional, Tuple
 
 import yaml
 
@@ -65,7 +65,7 @@ def restore_overrides(snapshot: dict) -> None:
 
 
 @contextlib.contextmanager
-def overridden(dotted: str, value: Any):
+def overridden(dotted: str, value: Any) -> Iterator[None]:
     """Override ``dotted`` for the block, then restore exactly what was there.
 
     For a component that must pin a global for the duration of a call (the static pipeline

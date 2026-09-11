@@ -80,6 +80,6 @@ def test_a_name_used_outside_an_index_keeps_its_binding() -> None:
 
 
 @pytest.mark.parametrize("expr", ["A[top]", "A[top, b]", "A[i, top, b]"])
-def test_folds_in_every_index_position(expr) -> None:
+def test_folds_in_every_index_position(expr: str) -> None:
     out = _fold(f"def f(A, i, b, nlev):\n    top = slice(0, nlev)\n    return {expr}\n")
     assert "0:nlev" in out, out

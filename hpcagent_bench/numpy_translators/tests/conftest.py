@@ -7,8 +7,10 @@ this conftest before collecting any test module in the directory.
 import os
 import sys
 
+import pytest
 
-def pytest_configure(config) -> None:
+
+def pytest_configure(config: pytest.Config) -> None:
     # Same wording as the top-level tests/conftest.py: this suite has its own conftest, so a
     # marker registered there is unknown here and every use warns.
     config.addinivalue_line(

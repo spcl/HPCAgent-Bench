@@ -87,12 +87,12 @@ def emitted_renames(src: str) -> dict:
     return {}
 
 
-def _emit(short):
+def _emit(short: str) -> tuple[KernelIR, str]:
     # Drive off the co-located YAML (bench_info/*.json is gone); emit_bridge synthesizes the
     # transient JSON the emitter reads. Through the inline fallback, exactly like autogen._emit_dace:
     # the emitter renders a kept helper as its own @dc.program now, but the fallback still exists for
     # the forms it cannot express, and the PARSE has to sit inside the retry either way.
-    def render():
+    def render() -> tuple[KernelIR, str]:
         with bench_info_for(short) as (_, numpy_py, bi):
             kir = parse_kernel(numpy_py, bi)
         return kir, emit_dace(kir)
@@ -102,7 +102,7 @@ def _emit(short):
 
 @pytest.mark.skipif(not _KERNELS, reason="no loop_level_reasoning kernels")
 @pytest.mark.parametrize("short", _KERNELS)
-def test_emits_valid_dc_program_with_symbols_dropped(short) -> None:
+def test_emits_valid_dc_program_with_symbols_dropped(short: str) -> None:
     kir, src = _emit(short)
     tree = ast.parse(src)  # must be valid Python
     progs = [
@@ -288,7 +288,7 @@ def test_dace_keeps_native_linalg() -> None:
 
 
 @pytest.mark.parametrize("kernel", _FEATURE_KERNELS)
-def test_dace_feature_kernels_desugared(kernel) -> None:
+def test_dace_feature_kernels_desugared(kernel: str) -> None:
     """Each desugar-requiring kernel emits parseable ``@dc.program``s with size symbols module-level
     (not parameters) and NO residual construct dace cannot trace -- the same np.fft / np.add.at /
     np.mgrid / np.histogram / ufunc.outer lowering numba and pythran get.
@@ -324,7 +324,14 @@ def test_dace_feature_kernels_desugared(kernel) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _resolve(lines, zeros_locals, *, zeros_fills=None, local_dtypes=None, default: str = "float64"):
+def _resolve(
+    lines: list[str],
+    zeros_locals: dict[str, tuple[str, ...]],
+    *,
+    zeros_fills: dict[str, str] | None = None,
+    local_dtypes: dict[str, str] | None = None,
+    default: str = "float64",
+) -> list[str]:
     """Run ``_ResolveZeros`` over a function whose body is ``lines`` and return the
     resolved body as unparsed source strings (markers dropped -> fewer lines)."""
     fn = ast.parse("def k():\n" + "".join(f"    {ln}\n" for ln in lines)).body[0]

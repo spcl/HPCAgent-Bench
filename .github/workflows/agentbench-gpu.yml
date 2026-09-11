@@ -7,6 +7,9 @@ name: agentbench-gpu
 
 # Disabled as an automatic job: a self-hosted GPU runner is not guaranteed to be
 # attached, so it only runs when triggered by hand from the Actions tab.
+env:
+  PYTHON_VERSION: '3.14'
+
 on:
   workflow_dispatch:
 
@@ -25,7 +28,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install
         # The nvidia extra is what requirements/nvidia.txt was: cupy + jax[cuda12] + triton +

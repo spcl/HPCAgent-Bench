@@ -34,7 +34,7 @@ from numpyto_common.lib_nodes import NP_CALL_EXPANDERS
 _NATIVE = ("c", "fortran")
 
 
-def _assert_ok(res, label) -> None:
+def _assert_ok(res: dict[str, str], label: str) -> None:
     fails = {b: s for b, s in res.items() if not (s == "ok" or s.startswith("skip"))}
     assert any(v == "ok" for v in res.values()), f"every backend skipped; the comparison never ran: {res}"
     assert not fails, f"{label}: {fails}"
@@ -45,7 +45,7 @@ def _oracle_available() -> None:
         pytest.skip("gcc/gfortran needed for the native numerical check")
 
 
-def _lower_source(src: str, func: str, shapes, syms) -> str:
+def _lower_source(src: str, func: str, shapes: dict[str, str], syms: dict[str, int]) -> str:
     """Run the full front-end + lowering pipeline and return the unparsed AST.
 
     Mirrors the standalone oracle's emit path but stops before code emission so a

@@ -16,7 +16,7 @@ which is exactly what the rotation exists to prevent -- so keep the declarations
 normal's magnitudes) rather than resampling, so the spread a kernel was tuned for survives.
 """
 
-from typing import Any, Optional, Tuple, Union
+from collections.abc import Sequence
 
 import numpy as np
 
@@ -30,10 +30,14 @@ SIGN_DOMAINS = ("positive", "nonneg", "negative", "nonpos")
 #: request on top of one is a manifest conflict rather than something to silently reconcile.
 STRUCTURAL = frozenset({"well_conditioned", "near_singular", "stable", "unstable"})
 
-Domain = Union[str, Tuple[float, float], None]
+Domain = str | tuple[float, float] | None
+
+#: A manifest's raw ``domains`` entry, before :func:`parse` normalises it: ``None``, ``"any"``, one
+#: of the sign-domain strings, or a ``[low, high]`` pair.
+RawDomain = str | Sequence[float] | None
 
 
-def parse(declared: Any) -> Domain:
+def parse(declared: RawDomain) -> Domain:
     """Normalise a manifest ``domains`` entry; ``None``/``"any"`` mean unconstrained."""
     if declared is None or declared == "any":
         return None
@@ -87,6 +91,6 @@ def apply(raw: np.ndarray, domain: Domain, precision: Precision) -> np.ndarray:
     return raw
 
 
-def of(spec: Optional[dict]) -> Domain:
+def of(spec: dict[str, object] | None) -> Domain:
     """The domain carried on a generator ``spec``, already normalised."""
     return parse((spec or {}).get("domain"))

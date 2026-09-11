@@ -17,9 +17,10 @@ confined to ``tmp_path``.
 """
 
 from numpyto_common.emit_io import AUTO_MARKER, is_generated, is_override, write_generated
+import pathlib
 
 
-def test_writes_to_new_path_and_stamps_marker(tmp_path) -> None:
+def test_writes_to_new_path_and_stamps_marker(tmp_path: pathlib.Path) -> None:
     out = tmp_path / "gemm_cupy.py"
     status = write_generated(out, "print(1)\n", source="gemm_numpy.py")
     assert status == "ok"
@@ -32,7 +33,7 @@ def test_writes_to_new_path_and_stamps_marker(tmp_path) -> None:
     assert is_generated(out) and not is_override(out)
 
 
-def test_regenerate_refreshes_a_generated_file(tmp_path) -> None:
+def test_regenerate_refreshes_a_generated_file(tmp_path: pathlib.Path) -> None:
     out = tmp_path / "gemm_cupy.py"
     assert write_generated(out, "print(1)\n", source="gemm_numpy.py") == "ok"
     # a marked (generated) file is NOT protected -- a re-run refreshes it in place.
@@ -41,7 +42,7 @@ def test_regenerate_refreshes_a_generated_file(tmp_path) -> None:
     assert "print(2)" in body and "print(1)" not in body
 
 
-def test_hand_override_is_never_clobbered(tmp_path) -> None:
+def test_hand_override_is_never_clobbered(tmp_path: pathlib.Path) -> None:
     """The clobber guard: a file present with an ordinary (non-marker) first line is a
     hand override -- ``write_generated`` refuses it and leaves the bytes untouched."""
     out = tmp_path / "gemm_numba.py"
@@ -54,7 +55,7 @@ def test_hand_override_is_never_clobbered(tmp_path) -> None:
     assert out.read_text() == original  # not a single byte rewritten
 
 
-def test_marker_mention_in_line1_docstring_is_not_generated(tmp_path) -> None:
+def test_marker_mention_in_line1_docstring_is_not_generated(tmp_path: pathlib.Path) -> None:
     """A hand file whose line-1 docstring merely NAMES the marker is not a generated
     file (the marker must follow a comment lead), so it is protected as an override --
     exactly the misclassification the guard is written to avoid."""
@@ -67,7 +68,7 @@ def test_marker_mention_in_line1_docstring_is_not_generated(tmp_path) -> None:
     assert out.read_text() == original
 
 
-def test_legacy_marker_is_recognized_as_generated(tmp_path) -> None:
+def test_legacy_marker_is_recognized_as_generated(tmp_path: pathlib.Path) -> None:
     """A file stamped by an earlier generator (legacy marker on line 1) is recognized
     as generated, so migration to the canonical name refreshes it rather than mistaking
     it for a hand override."""
@@ -78,7 +79,7 @@ def test_legacy_marker_is_recognized_as_generated(tmp_path) -> None:
     assert "code = 2" in out.read_text()
 
 
-def test_c_and_fortran_comment_leads(tmp_path) -> None:
+def test_c_and_fortran_comment_leads(tmp_path: pathlib.Path) -> None:
     c_out = tmp_path / "kernel.c"
     assert write_generated(c_out, "int main(){ return 0; }\n", line_comment="// ") == "ok"
     assert c_out.read_text().splitlines()[0].startswith("// " + AUTO_MARKER)
@@ -92,13 +93,13 @@ def test_c_and_fortran_comment_leads(tmp_path) -> None:
     assert is_generated(f_out)
 
 
-def test_missing_path_is_neither_generated_nor_override(tmp_path) -> None:
+def test_missing_path_is_neither_generated_nor_override(tmp_path: pathlib.Path) -> None:
     missing = tmp_path / "does_not_exist.py"
     assert not is_generated(missing)
     assert not is_override(missing)
 
 
-def test_parent_directories_are_created(tmp_path) -> None:
+def test_parent_directories_are_created(tmp_path: pathlib.Path) -> None:
     nested = tmp_path / "sub" / "deeper" / "gemm_numba.py"
     assert not nested.parent.exists()
     assert write_generated(nested, "x = 1\n") == "ok"

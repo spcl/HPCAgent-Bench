@@ -19,6 +19,8 @@ jax, so the fork-based ``run_op`` jax path below stays clean); the numerical
 asserts round-trip each idiom through the ``run_op`` oracle against numpy.
 """
 
+import types
+
 import numpy as np
 import pytest
 
@@ -61,7 +63,7 @@ def test_chained_subscript_store_preserves_full_array() -> None:
 # --------------------------------------------------------------------------- #
 # Numerical: each idiom round-trips through the run_op oracle vs numpy (jax).  #
 # --------------------------------------------------------------------------- #
-def _oracle():
+def _oracle() -> types.ModuleType:
     import shutil
 
     if not (shutil.which("gcc") and shutil.which("gfortran") and shutil.which("g++")):
@@ -80,7 +82,7 @@ def _oracle():
     return _op_oracle
 
 
-def _assert_jax_ok(status, label) -> None:
+def _assert_jax_ok(status: dict[str, str], label: str) -> None:
     s = status["jax"]
     if s.startswith("skip"):
         pytest.skip(f"{label}: jax {s}")

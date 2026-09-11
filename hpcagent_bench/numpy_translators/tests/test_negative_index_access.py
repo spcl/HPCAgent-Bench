@@ -18,7 +18,7 @@ from numpyto_c.emit import _negative_const_k
 _ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 
 
-def _all_ok(res):
+def _all_ok(res: dict[str, str]) -> tuple[bool, dict[str, str]]:
     """``(every backend agreed, the statuses)`` -- and at least one actually RAN.
 
     Without the second half every backend reporting ``skip:`` is indistinguishable from every
@@ -47,7 +47,7 @@ def test_negative_const_k_recognizes_forms() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _emit_c(src, inputs, shapes, syms):
+def _emit_c(src: str, inputs: list[str], shapes: dict[str, str], syms: dict[str, int]) -> str:
     import json
     import pathlib
     import tempfile

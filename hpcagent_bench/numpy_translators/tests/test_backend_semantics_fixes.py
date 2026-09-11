@@ -26,6 +26,7 @@ run) against numpy.
 import importlib.util
 import pathlib
 import tempfile
+import types
 
 import numpy as np
 import pytest
@@ -38,7 +39,7 @@ from numpyto_pythran.emit import _pythran_scalar_type
 # --------------------------------------------------------------------------- #
 # Shared oracle loader (mirrors test_jax_semantics_fixes).                     #
 # --------------------------------------------------------------------------- #
-def _oracle():
+def _oracle() -> types.ModuleType:
     import shutil
 
     if not (shutil.which("gcc") and shutil.which("gfortran") and shutil.which("g++")):
@@ -54,7 +55,7 @@ def _oracle():
     return _op_oracle
 
 
-def _assert_ok(status, backend, label) -> None:
+def _assert_ok(status: dict[str, str], backend: str, label: str) -> None:
     s = status[backend]
     if s.startswith("skip"):
         pytest.skip(f"{label}: {backend} {s}")
@@ -110,7 +111,7 @@ def test_numba_parallel_pranges_independent_loop() -> None:
         ("        out[i] = out[i - 1] + x[i]\n", "index-shifted stencil"),
     ],
 )
-def test_numba_parallel_refuses_dependent_loops(body, label) -> None:
+def test_numba_parallel_refuses_dependent_loops(body: str, label: str) -> None:
     src = "import numpy as np\ndef f(x, out, perm):\n    for i in range(x.shape[0]):\n" + body
     assert "nb.prange" not in emit_numba(src), label
 
