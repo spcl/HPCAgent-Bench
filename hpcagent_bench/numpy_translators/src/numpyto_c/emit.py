@@ -1510,14 +1510,59 @@ class _CBodyEmitter(BaseEmitter):
         fns = _fp8_fns(self._name_dtype(node.id) or "")
         return f"{fns.promote}({access})" if fns is not None else access
 
+    def contiguous_subarray_arg(self, node: ast.expr) -> Optional[str]:
+        """``a[k, :, :]`` as a pointer INTO ``a``, or None when the slice has no pointer spelling.
+
+        Row-major makes the sub-array selected by leading scalar indices plus whole trailing axes
+        contiguous, so a helper declaring the lower rank receives exactly the buffer its own
+        descriptor describes. A slice on a LEADING axis (``a[:, :, k]``) selects a strided view
+        instead; C has no pointer for that, so it stays refused rather than silently handed the
+        wrong elements.
+        """
+        if not isinstance(node, ast.Subscript) or not isinstance(node.value, ast.Name):
+            return None
+        shape = self.array_shapes.get(node.value.id)
+        if not shape:
+            return None
+        self._normalize_negative_indices(node)
+        sl = node.slice
+        elts = list(sl.elts) if isinstance(sl, ast.Tuple) else [sl]
+        if len(elts) != len(shape) or any(_is_newaxis_or_ellipsis(e) for e in elts):
+            return None
+        lead = 0
+        while lead < len(elts) and not isinstance(elts[lead], ast.Slice):
+            lead += 1
+        if lead == 0 or lead == len(elts):
+            return None
+        if not all(is_whole_axis_slice(e) for e in elts[lead:]):
+            return None
+        # A leading axis indexed by an index ARRAY is numpy fancy indexing, which gathers rather
+        # than offsets; a tuple/list element is the same story.
+        for e in elts[:lead]:
+            if isinstance(e, (ast.Tuple, ast.List, ast.Starred)):
+                return None
+            if isinstance(e, ast.Name) and self.array_shapes.get(e.id):
+                return None
+        indices = [self.emit_expr(e) for e in elts[:lead]]
+        if node.value.id in self.multidim_arrays:
+            return node.value.id + "".join(f"[{i}]" for i in indices)
+        offset = self._flatten_indices(shape[:lead], indices)
+        for dim in shape[lead:]:
+            offset = f"({offset})*({_c_shape_token(dim)})"
+        return f"{node.value.id} + {offset}"
+
     def _emit_helper_arg(self, node: ast.expr, param_is_array: bool) -> str:
         """One argument of a kernel-helper call: an ARRAY parameter takes the pointer.
 
         ``emit_expr`` renders a size-1 array Name as its sole element, which is what a value
         expression wants and what a pointer parameter cannot take.
         """
-        if param_is_array and isinstance(node, ast.Name) and self.array_shapes.get(node.id):
-            return node.id
+        if param_is_array:
+            if isinstance(node, ast.Name) and self.array_shapes.get(node.id):
+                return node.id
+            subarray = self.contiguous_subarray_arg(node)
+            if subarray is not None:
+                return subarray
         return self.emit_expr(node)
 
     def _emit_call(self, node: ast.Call) -> str:
@@ -2004,6 +2049,11 @@ def _negative_const_k(node: ast.AST):
     ):
         return node.operand.value
     return None
+
+
+def is_whole_axis_slice(e: ast.AST) -> bool:
+    """True for a bare ``:`` -- no start, no stop, no step."""
+    return isinstance(e, ast.Slice) and e.lower is None and e.upper is None and e.step is None
 
 
 def _is_newaxis_or_ellipsis(e: ast.AST) -> bool:

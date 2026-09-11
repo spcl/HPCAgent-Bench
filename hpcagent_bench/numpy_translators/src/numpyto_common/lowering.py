@@ -2394,8 +2394,27 @@ def _ctor_shape_arg(call: ast.Call) -> Optional[ast.expr]:
     return None
 
 
+def is_scalar_helper_call(node: ast.AST, scalar_helpers: Optional[Set[str]]) -> bool:
+    """Whether ``node`` calls a kernel helper emitted as a by-value SCALAR function.
+
+    Such a call is rank 0 whatever its arguments are. :func:`_iter_extent_of` reads a call it does
+    not recognise as ELEMENTWISE and answers with the broadcast join of the arguments, which sizes
+    a reduction's scalar result like the array it reduces -- and the caller then broadcasts the
+    call over that buffer, one invocation per element.
+    """
+    return (
+        bool(scalar_helpers)
+        and isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in scalar_helpers
+    )
+
+
 def _harvest_local_shapes(
-    tree: ast.AST, shape_table: Dict[str, Tuple[str, ...]], dtype_table: Optional[Dict[str, str]] = None
+    tree: ast.AST,
+    shape_table: Dict[str, Tuple[str, ...]],
+    dtype_table: Optional[Dict[str, str]] = None,
+    scalar_helpers: Optional[Set[str]] = None,
 ) -> None:
     """Pre-scan the body for ``name = np.<alloc>(...)`` and seed the
     shape table with the inferred output shapes.
@@ -2477,6 +2496,8 @@ def _harvest_local_shapes(
             and isinstance(rhs.func.value, ast.Name)
             and rhs.func.value.id == "np"
         ):
+            if is_scalar_helper_call(rhs, scalar_helpers):
+                continue
             # Last-ditch: a BinOp / UnaryOp / Compare / BoolOp / Subscript
             # whose operands have known shapes -- mirror the (broadcast /
             # slice / gather) extent. Lets the harvest see ``x = a + b``, a
@@ -5536,8 +5557,16 @@ class _LiftFreshArrayFromSlices(ast.NodeTransformer):
     ``__hpcagent_bench_zeros__()`` (which the emitter already swallows).
     """
 
-    def __init__(self, shapes: Dict[str, List[str]], local_dtypes: Optional[Dict[str, str]] = None) -> None:
+    def __init__(
+        self,
+        shapes: Dict[str, List[str]],
+        local_dtypes: Optional[Dict[str, str]] = None,
+        scalar_helpers: Optional[Set[str]] = None,
+    ) -> None:
         self.shapes: Dict[str, List[str]] = dict(shapes)
+        #: By-value scalar helpers -- see :func:`is_scalar_helper_call`. A call to one is rank 0
+        #: even though its ARGUMENTS carry slices (``bratu_dot(Q[p, :, :], w, N)``).
+        self.scalar_helpers: Set[str] = set(scalar_helpers or ())
         self.new_locals: Dict[str, Tuple[str, ...]] = {}
         # Side-effect: when the RHS contains a complex literal like
         # ``1j``, infer that the fresh local should be declared as
@@ -5555,6 +5584,8 @@ class _LiftFreshArrayFromSlices(ast.NodeTransformer):
             return node
         target = node.targets[0]
         if not isinstance(target, ast.Name):
+            return node
+        if is_scalar_helper_call(node.value, self.scalar_helpers):
             return node
         if not (self._has_slice_subscript(node.value) or self._is_array_binop(node.value)):
             return node
@@ -6918,7 +6949,7 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
     arithmetic in C and as undefined Fortran.
     """
 
-    def __init__(self, shape_table, real_arrays=None, local_dtypes=None, scalar_defs=None) -> None:
+    def __init__(self, shape_table, real_arrays=None, local_dtypes=None, scalar_defs=None, scalar_helpers=None) -> None:
         # We mutate ``shape_table`` to track Name aliases per Assign in
         # source order. Use a local copy so the caller's table is not
         # repeatedly clobbered when an alias gets reassigned.
@@ -6928,6 +6959,8 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         #: is a genuinely NEW local whose shape the later slice-fusion pass needs;
         #: see :attr:`discovered_shapes`.
         self._input_keys = set(shape_table)
+        #: Kernel helpers emitted as by-value scalar functions -- see :func:`is_scalar_helper_call`.
+        self.scalar_helpers: Set[str] = set(scalar_helpers or ())
         #: Shared dtype tag table. Alias / BinOp expansions propagate
         #: dtype here so the emitter sees the right C type for a
         #: complex-RHS local that was never directly declared.
@@ -7517,7 +7550,11 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
                 and node.value.func.id == "__hpcagent_bench_zeros__"
             )
         ):
-            ext = _iter_extent_of(node.value, self.shape_table)
+            ext = (
+                None
+                if is_scalar_helper_call(node.value, self.scalar_helpers)
+                else _iter_extent_of(node.value, self.shape_table)
+            )
             # All-size-1 broadcast -> a scalar local, not a ``T x[1]`` array (see extent_is_scalar).
             if ext is not None and not extent_is_scalar(ext):
                 self.shape_table[target.id] = tuple(ast.unparse(e) for e in ext)
@@ -8726,6 +8763,9 @@ class LoweringContext:
         ] = None
         #: Target renders a dense 2-D float GEMM as a BLAS call; see :func:`lower`.
         self.blas: bool = False
+        #: By-value scalar helpers this IR can call but does not itself list -- a HELPER body's
+        #: own IR carries no helper list, so its siblings are handed down by :func:`lower`.
+        self.sibling_scalar_helpers: Set[str] = set()
         #: The working (lowered) IR -- what :func:`lower` returns.
         self.kir = lowered
         #: Shortcut to the function-body AST every pass rewrites in place.
@@ -8908,6 +8948,12 @@ def _lp_pre_libnode_normalize(ctx: LoweringContext) -> None:
     ast.fix_missing_locations(tree)
 
 
+def scalar_return_helpers(ctx: "LoweringContext") -> Set[str]:
+    """Names of the by-value SCALAR helpers reachable from the body being lowered."""
+    own = {h.kernel_name for h in ctx.original_kir.helpers if h.return_kind == "scalar"}
+    return own | ctx.sibling_scalar_helpers
+
+
 def _lp_seed_dtypes_and_harvest(ctx: LoweringContext) -> None:
     """Seed local dtypes (signature + boolean constructors), unify mixed-complex
     selects, SSA-rename reassigned locals, then harvest local-array shapes."""
@@ -8958,7 +9004,7 @@ def _lp_seed_dtypes_and_harvest(ctx: LoweringContext) -> None:
     # so each version registers under its own name and downstream passes (harvest /
     # LibNodeRewriter / lifter) see unambiguous shapes per local.
     _ssa_rename_reassigned(tree, ctx.arrays_shapes)
-    _harvest_local_shapes(tree, ctx.lib_shape_table, ctx.local_dtypes)
+    _harvest_local_shapes(tree, ctx.lib_shape_table, ctx.local_dtypes, scalar_return_helpers(ctx))
     # Unify a mixed real/complex conditional's branches (``d = z.real if flag else
     # z``) so Fortran ``merge`` (strict same-type) and the JIT type unifiers see a
     # uniform complex select instead of a real-vs-complex pair (QE vexx gamma_only
@@ -9152,6 +9198,7 @@ def _lp_libnode_expand(ctx: LoweringContext) -> None:
     # by the zeros pass as local arrays.
     ctx.lib_rewriter = LibNodeRewriter(
         ctx.lib_shape_table,
+        scalar_helpers=scalar_return_helpers(ctx),
         known_arrays=set(ctx.arrays_shapes.keys()),
         local_dtypes=ctx.local_dtypes,
         sparse=ctx.original_kir.sparse,
@@ -9337,6 +9384,7 @@ def _lp_whole_array_and_zeros(ctx: LoweringContext) -> None:
         real_arrays,
         local_dtypes=ctx.local_dtypes,
         scalar_defs=_collect_inlined_scalar_defs(tree, None),
+        scalar_helpers=scalar_return_helpers(ctx),
     )
     ctx.wa_rewriter.visit(tree)
     # Fold the shapes the whole-array pass inferred for genuinely-new locals
@@ -9424,7 +9472,9 @@ def _lp_slice_normalize_and_lift(ctx: LoweringContext) -> None:
     # a ``Name = np.zeros(extent); Name[:] = expr`` pair so slice fusion can lower
     # the per-element loop. Computes the shape from the iteration extent of the RHS,
     # registers the new local in both ``shapes`` and ``zeros_locals``.
-    ctx.lifter = _LiftFreshArrayFromSlices(shapes, local_dtypes=ctx.local_dtypes)
+    ctx.lifter = _LiftFreshArrayFromSlices(
+        shapes, local_dtypes=ctx.local_dtypes, scalar_helpers=scalar_return_helpers(ctx)
+    )
     new_locals = ctx.lifter.run(tree)
     if new_locals:
         for name, shape in new_locals.items():
@@ -9620,7 +9670,10 @@ def _lp_lower_helpers(ctx: LoweringContext) -> None:
     return-extraction is a parse_kernel step, not a lowering pass)."""
     for helper in ctx.original_kir.helpers:
         retype_int_helper_scalars(helper)
-    ctx.kir.helpers = [lower(h) for h in ctx.original_kir.helpers]
+    # A helper body calls its SIBLINGS, and its own IR lists none of them; hand the by-value
+    # scalar ones down so the shape passes read such a call as rank 0 rather than elementwise.
+    siblings = scalar_return_helpers(ctx)
+    ctx.kir.helpers = [lower(h, scalar_helpers=siblings) for h in ctx.original_kir.helpers]
 
 
 #: The lowering pipeline as data: an ordered list of ``(name, phase)`` pairs run
@@ -9795,6 +9848,7 @@ def lower(
         Callable[[Tuple[str, str], ast.Call, Dict[str, Tuple[str, ...]], Dict[str, str]], bool]
     ] = None,
     blas: bool = False,
+    scalar_helpers: Optional[Set[str]] = None,
 ) -> KernelIR:
     """Return a lowered copy of ``kir`` ready for backend emission.
 
@@ -9829,6 +9883,7 @@ def lower(
     ctx = LoweringContext(kir, copy.deepcopy(kir))
     ctx.native_call = native_call
     ctx.blas = blas
+    ctx.sibling_scalar_helpers = set(scalar_helpers or ())
     for _name, _phase in _LOWER_PHASES:
         _phase(ctx)
         if check is not None:
