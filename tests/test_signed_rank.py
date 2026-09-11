@@ -63,7 +63,9 @@ def test_the_two_paths_agree_on_a_zero_bearing_sample(n: int) -> None:
     used, stdlib_p, method = signed_rank.signed_rank_p(values)
     assert used == n - 2
     nonzero = [v for v in values if v != 0.0]
-    expected = float(wilcoxon(nonzero, method="exact" if method.endswith("exact") else "approx").pvalue)
+    expected = float(
+        wilcoxon(nonzero, method="exact" if method.endswith("exact") else "approx", correction=True).pvalue
+    )
     assert stdlib_p == pytest.approx(expected, rel=1e-12, abs=1e-15)
 
 
@@ -71,7 +73,11 @@ def test_the_two_paths_agree_on_a_zero_bearing_sample(n: int) -> None:
 def test_a_tied_sample_takes_the_approximation_in_both_paths(n: int) -> None:
     """The exact null counts subsets of the DISTINCT ranks 1..n. With a tie the ranks are midranks
     and that lattice no longer holds, so an "exact" p there is wrong rather than imprecise. Neither
-    path may claim it, and both must fall to the SAME tie-corrected approximation."""
+    path may claim it, and both must fall to the SAME tie- and continuity-corrected approximation.
+
+    ``correction=True`` is asked for EXPLICITLY on the scipy side because scipy defaults it off
+    while the stdlib path always applies the half-step; the default would make this a comparison of
+    two different tests that happen to be close."""
     values = np.round(np.random.default_rng(n).normal(0.3, 1.0, n), 1).tolist()
     absolute = [abs(v) for v in values if v != 0.0]
     assert len(set(absolute)) < len(absolute), "fixture is not tied; the property is untested"
@@ -79,7 +85,7 @@ def test_a_tied_sample_takes_the_approximation_in_both_paths(n: int) -> None:
     used, stdlib_p, method = signed_rank.signed_rank_p(values)
     assert method == "signed-rank-approx"
     nonzero = [v for v in values if v != 0.0]
-    expected = float(wilcoxon(nonzero, method="approx", zero_method="wilcox").pvalue)
+    expected = float(wilcoxon(nonzero, method="approx", zero_method="wilcox", correction=True).pvalue)
     assert used == len(nonzero)
     assert stdlib_p == pytest.approx(expected, rel=1e-9, abs=1e-12)
 

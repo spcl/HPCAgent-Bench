@@ -381,7 +381,9 @@ def paired_change(differences: Samples, alpha: float = DEFAULT_ALPHA) -> PairedC
     method = "signed-rank-exact" if exact else "signed-rank-approx"
     # The method is passed EXPLICITLY. scipy's "auto" is a library default that has moved before and
     # can move again on a bump, and the moment it does this path stops agreeing with the stdlib one.
-    result = wilcoxon(nonzero, method="exact" if exact else "approx", zero_method="wilcox")
+    # correction=True for the same reason: scipy defaults it OFF, the stdlib normal_p applies the
+    # half-step, and the two would report different p on every tied sample without it.
+    result = wilcoxon(nonzero, method="exact" if exact else "approx", zero_method="wilcox", correction=True)
     walsh = walsh_averages(nonzero)
     mean = n * (n + 1) / 4.0
     sd = math.sqrt(n * (n + 1) * (2 * n + 1) / 24.0)

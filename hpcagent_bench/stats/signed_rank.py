@@ -23,17 +23,17 @@ THE CUTOFF IS MEASURED, not inherited. The exact null is a subset-sum count over
     n         25     40     50    100    150     200     300     578
     DP     0.5ms  3.0ms  6.5ms   58ms  200ms   474ms   1.60s  11.79s
 
-and the normal approximation's worst absolute error against the exact p, over effects spanning
-p = 0.001 to 0.9:
+and the continuity-corrected normal approximation's worst absolute error against the exact p, over
+effects spanning p = 0.001 to 0.9:
 
     n          25       40      100      200      578
-    max|dp|  1.5e-2   8.4e-3   2.7e-3   1.2e-3   3.4e-4
+    max|dp|  6.6e-3   4.1e-3   1.7e-3   8.3e-4   2.9e-4
 
 200 is where the DP stops being free -- it is the last size under half a second, and the cost grows
 as n^3 with big-integer coefficients past it. It also covers every paired-kernel count these tables
 reach: the llr focus roster is 40 kernels and the largest campaign roster is 242 problems, of which
-a PAIR covers fewer. Above 200 the approximation is within 1.2e-3 absolute of the exact p, which is
-a quarter of the 4.3e-3 discrepancy that made this rule necessary, and it keeps shrinking.
+a PAIR covers fewer. Above 200 the approximation is within 8.3e-4 absolute of the exact p, which is
+a fifth of the 4.3e-3 discrepancy that made this rule necessary, and it keeps shrinking.
 
 The count for one ``n`` is cached, so a table comparing many arm pairs at the same ``n`` pays the
 DP once.
@@ -109,11 +109,19 @@ def exact_p(statistic: float, n: int) -> float:
 
 
 def normal_p(w_plus: float, n: int, absolute: Sequence[float]) -> float:
-    """Two-sided normal-approximation p, with the standard tie correction on the variance.
+    """Two-sided normal-approximation p, tie-corrected on the variance and continuity-corrected on
+    the deviation.
 
     Tied ``|d|`` values share a midrank, which makes ``W+`` less variable than the tie-free formula
     assumes; without the correction the test would be anti-conservative exactly on the data where
     ties are common (many kernels landing on the same speedup).
+
+    ``W+`` is a lattice variable of spacing 1 and the normal density is continuous, so the tail it
+    stands in for runs to the lattice point's outer EDGE: the deviation loses the half step. Both
+    reference implementations subtract it (scipy ``correction=True``, R ``wilcox.test`` correct) and
+    :mod:`hpcagent_bench.stats.summary` asks scipy for it, so the two paths stay one test. Measured
+    over the whole lattice at exact p <= 0.10, it cuts the worst anti-conservative gap against the
+    exact null by 5x to 11x: 1.7e-3 to 3.2e-4 at n = 40, 2.0e-4 to 7.5e-5 at n = 200.
     """
     mean = n * (n + 1) / 4.0
     variance = n * (n + 1) * (2 * n + 1) / 24.0
@@ -123,7 +131,8 @@ def normal_p(w_plus: float, n: int, absolute: Sequence[float]) -> float:
     variance -= sum((size * size * size) - size for size in groups.values()) / 48.0
     if variance <= 0.0:
         return 1.0
-    return min(1.0, math.erfc(abs(w_plus - mean) / math.sqrt(2.0 * variance)))
+    deviation = abs(abs(w_plus - mean) - 0.5)
+    return min(1.0, math.erfc(deviation / math.sqrt(2.0 * variance)))
 
 
 def signed_rank_p(diffs: Sequence[float]) -> tuple[int, float, str]:
