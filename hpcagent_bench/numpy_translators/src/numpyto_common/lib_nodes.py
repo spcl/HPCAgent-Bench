@@ -10162,8 +10162,13 @@ class LibNodeRewriter(ast.NodeTransformer):
         native_call: Optional[Callable[[Tuple[str, str], ast.Call, Dict, Dict], bool]] = None,
         native_dtypes: Optional[Dict[str, str]] = None,
         blas: bool = False,
+        scalar_helpers: Optional[Set[str]] = None,
     ) -> None:
         self.shape_table = shape_table
+        #: Kernel helpers emitted as by-value SCALAR functions. A call to one is rank 0 whatever
+        #: its array arguments are, and the generic extent sizer reads an unrecognised call as
+        #: elementwise -- which sizes a reduction's result like the array it reduces.
+        self.scalar_helpers: Set[str] = set(scalar_helpers or ())
         #: Target renders a dense 2-D float GEMM as a BLAS call. Threaded to the matmul hoister;
         #: every other matmul shape (batched, transposed, matvec, sparse, non-float) keeps its loops.
         self.blas = blas
@@ -10312,6 +10317,9 @@ class LibNodeRewriter(ast.NodeTransformer):
         # covers ``cols = A_col[A_row[i]:A_row[i+1]]`` (dynamic-bound slice) and
         # ``y = arr[idx]`` (fancy gather), so the next statement sees the
         # local's shape when hoisting a matmul.
+        # A by-value helper call is rank 0; see :attr:`scalar_helpers`.
+        if isinstance(rhs, ast.Call) and isinstance(rhs.func, ast.Name) and rhs.func.id in self.scalar_helpers:
+            return
         if isinstance(rhs, (ast.BinOp, ast.UnaryOp, ast.IfExp, ast.Call, ast.Subscript)):
             ext = _iter_extent_of(rhs, self.shape_table)
             if ext is not None:

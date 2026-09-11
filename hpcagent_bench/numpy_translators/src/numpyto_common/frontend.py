@@ -4559,6 +4559,28 @@ def call_specialized_body(hfn: ast.FunctionDef, pnames: List[str], args: List[as
     return probe
 
 
+def helper_returns_rank0(hfn, pnames, args, arr_by, sca_by, sym_by, fn=None) -> bool:
+    """Whether every RETURN of ``hfn`` is PROVABLY rank 0 -- a reduction, array in and scalar out.
+
+    :func:`_helper_return_shape_from_body` answers ``None`` both for a scalar return and for a
+    body it could not size, and a caller that has only a target-side GUESS to fall back on needs
+    to know which. Provable means all three: the parameters sized (nothing is known about a body
+    whose own arguments did not resolve), every return expression's array operands resolved, and
+    the extent calculus then reporting no axes at all.
+    """
+    returns = [n.value for n in ast.walk(hfn) if isinstance(n, ast.Return) and n.value is not None]
+    if not returns:
+        return False
+    arrays, _, _ = _infer_helper_params(pnames, args, arr_by, sca_by, sym_by, fn)
+    if not arrays:
+        return False
+    table = {a.name: tuple(str(s) for s in a.shape) for a in arrays}
+    _propagate_local_extents(hfn, table)
+    if any(not _extent_operands_resolved(value, hfn, table) for value in returns):
+        return False
+    return all(_iter_extent_of(value, table) is None for value in returns)
+
+
 def _helper_return_shape_from_body(hfn, pnames, args, arr_by, sca_by, sym_by, fn=None):
     """``(shape_strings, dtype)`` for a helper whose RETURN EXPRESSION is array-valued.
 
@@ -5820,10 +5842,23 @@ def _build_helper_kirs(
             # returns, and reading that wrong classifies an array return as by-value: no out-param
             # is added, the returns stay as ``return <expr>``, and every shape-changing call inside
             # one reaches the emitter unlowered, because the expanders only ever see assignments.
+            probe = call_specialized_body(hfn, pnames, call.args)
             body_shape, body_dtype = _helper_return_shape_from_body(
-                call_specialized_body(hfn, pnames, call.args), pnames, call.args, oarr_by, osca_by, osym_by, owner_fn
+                probe, pnames, call.args, oarr_by, osca_by, osym_by, owner_fn
             )
-            if body_shape is not None or hret_shape is None:
+            # ``None`` from the body means two different things and they want opposite decisions:
+            # "this returns a scalar" and "this could not be sized". Only the first may overrule a
+            # target-side guess. A helper whose body PROVABLY returns rank 0 is a reduction (array
+            # in, scalar out) -- bdf_newton_krylov's WRMS norms, jfnk_bratu's 2-norms and dot
+            # products -- and keeping the guess there (the broadcast join of the call's own
+            # arguments) classified it as array-returning: the caller allocated an operand-shaped
+            # buffer and the call was broadcast over it, one invocation per element of the very
+            # array it reduces, which is a double handed to a pointer parameter.
+            if (
+                body_shape is not None
+                or hret_shape is None
+                or helper_returns_rank0(probe, pnames, call.args, oarr_by, osca_by, osym_by, owner_fn)
+            ):
                 hret_shape, hret_dtype = body_shape, body_dtype
 
         if hret_shape is None:
