@@ -155,19 +155,26 @@ def read_arms(paths: Sequence[pathlib.Path]) -> collections.Counter:
     return counts
 
 
-def copy_table(dest: sqlite3.Connection, src: sqlite3.Connection, table: str,
-               identity: Callable[[str], tuple[str, str, str, str, str] | None]) -> tuple[int, int]:
-    """Copy one table, filling the identity columns and moving the old language to delivered_language.
+def copy_table(
+    dest: sqlite3.Connection,
+    src: sqlite3.Connection,
+    table: str,
+    identity: Callable[[str], tuple[str, str, str, str, str] | None],
+) -> tuple[int, int]:
+    """Copy one table, deriving the identity columns for any row that does not already carry them.
 
-    The old ``language`` is the request body's claim, which an agent controls; bodies arrived naming
-    ``py``, ``zzz`` and a file path. The arm's language replaces it and the claim is kept beside it."""
+    A pre-identity row's ``language`` is the request body's claim, which an agent controls: bodies
+    arrived naming ``py``, ``zzz`` and a file path. The arm's language replaces it and the claim
+    moves to ``delivered_language``. A row that already has an identity is copied verbatim."""
     have = {r[1] for r in src.execute(f"PRAGMA table_info({table})")}
     want = [r[1] for r in dest.execute(f"PRAGMA table_info({table})") if r[1] != "id"]
     shared = [c for c in want if c in have]
     rows, dropped = [], 0
     for row in src.execute(f"SELECT {', '.join(shared)} FROM {table}"):
         record = dict(zip(shared, row))
-        if table != "benchmarks":
+        if table != "benchmarks" and not record.get("model"):
+            # a row written since the identity columns exist already carries all of this, and
+            # rewriting it would put the arm's language into delivered_language, losing the claim
             tags = identity(record.get("run_id", ""))
             if tags is None:
                 dropped += 1
@@ -238,6 +245,7 @@ def main() -> None:
 
     def identity(run_id: str) -> tuple[str, str, str, str, str] | None:
         return mapping.get(arm_of(run_id))
+
     written = collections.Counter()
     try:
         dest.execute("PRAGMA foreign_keys = OFF")
