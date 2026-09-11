@@ -8,7 +8,7 @@ import itertools
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from numpyto_common import dtypes
+from numpyto_common import dtypes, frontend
 from numpyto_common.frontend import fold_shape_expr
 from numpyto_common.ir import KernelIR, shape_dimension_symbols
 from numpyto_common.lib_nodes import shape_exprs_equal, sympify_shape
@@ -3841,6 +3841,29 @@ class HelperBinding:
     pinned: Dict[str, Any] = dataclasses.field(default_factory=dict)
 
 
+def captured_parameter_names(hkir: KernelIR, abi: List[str], args: List[ast.expr]) -> List[str]:
+    """The helper parameters whose NAME the descriptors already spell for a DIFFERENT quantity.
+
+    A helper's descriptors are written in the CALLER's vocabulary while its body speaks its own
+    parameter names, and the two vocabularies can use one word twice. ``_maxpool3d(x, kernel_size,
+    stride, ...)`` is called with the POOL window for ``kernel_size`` and receives an input
+    declared ``(D - 1) * stride + 1 * (kernel_size - 1) + 1`` -- the CONV kernel and the CONV
+    stride. C and Fortran evaluate that extent at the call site, where the caller's meaning is the
+    only one in scope; a dace program turns it into a module-level ``dc.symbol`` the callee's
+    parameter of the same name then shadows, so one symbol stands for two extents.
+
+    Only a name bound to something other than the caller's own name for it qualifies -- a
+    parameter handed the caller's identically-named symbol is the same quantity twice.
+    """
+    extents = {s.name for s in hkir.symbols} | {d.name for d in hkir.scalars}
+    spelled = {ident for arr in hkir.arrays for dim in arr.shape for ident in _IDENT_RE.findall(str(dim))}
+    return sorted(
+        pname
+        for pname, arg in zip(abi, args)
+        if pname in extents and pname in spelled and not (isinstance(arg, ast.Name) and arg.id == pname)
+    )
+
+
 def helper_call_bindings(owner: ast.FunctionDef, hkir: KernelIR, pinned: Dict[str, Any]) -> HelperBinding:
     """What the helper's call site says about its symbols.
 
@@ -3850,7 +3873,9 @@ def helper_call_bindings(owner: ast.FunctionDef, hkir: KernelIR, pinned: Dict[st
       shape-generic instead: ``_conv2d``'s body names ``n``, ``h``, ``w``, and a signature naming
       ``batch_size``, ``height``, ``width`` for the same dimensions hands the frontend two symbol
       sets it cannot prove equal -- "could not broadcast [batch_size, 3, height, width] into
-      [n, 3, h, w]". Adopting the helper's own name makes each extent inferable from its argument.
+      [n, 3, h, w]". Adopting the helper's own name makes each extent inferable from its argument,
+      unless that name is one :func:`captured_parameter_names` reports, in which case the caller's
+      spelling is kept and a helper left with no un-captured spelling is refused outright.
     * CONSTANTS ``{the helper's name: the pinned value}``, for a symbol the call binds to one of
       the kernel's pinned config knobs. Passed as a symbol it stays free while the callee is
       parsed, so ``(length + 2 * padding - kernel_size) // stride + 1`` never folds to ``length``
@@ -3867,8 +3892,14 @@ def helper_call_bindings(owner: ast.FunctionDef, hkir: KernelIR, pinned: Dict[st
       binds to ONE caller symbol. ``_conv2d(..., kh, kw)`` called with ``kernel_size`` twice has a
       square kernel at THIS call site; leaving the second name standing declares the return shape
       in terms of ``kh`` while the body still computes in ``kw``, which the frontend reads as two
-      unequal extents -- "could not broadcast [.., -kw + w + 1] into [.., -kh + w + 1]".
+      unequal extents -- "could not broadcast [.., -kw + w + 1] into [.., -kh + w + 1]". A SCALAR
+      parameter collapses the same way, onto the symbol its argument already names.
     """
+    sites = sum(
+        1
+        for node in ast.walk(owner)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == hkir.kernel_name
+    )
     for node in ast.walk(owner):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == hkir.kernel_name):
             continue
@@ -3876,7 +3907,10 @@ def helper_call_bindings(owner: ast.FunctionDef, hkir: KernelIR, pinned: Dict[st
         if node.keywords or len(node.args) != len(abi):
             return HelperBinding()
         own = {s.name for s in hkir.symbols}
+        scalar_names = {d.name for d in hkir.scalars}
+        captured = captured_parameter_names(hkir, abi, node.args)
         binding = HelperBinding(pinned=dict(pinned))
+        bound_to: Dict[str, List[str]] = {}
         for pname, arg in zip(abi, node.args):
             # A bare Name only: the helper's name stands for THIS extent, and an expression is not
             # one the helper has a name for.
@@ -3885,16 +3919,57 @@ def helper_call_bindings(owner: ast.FunctionDef, hkir: KernelIR, pinned: Dict[st
             if arg.id in pinned:
                 binding.constants[pname] = pinned[arg.id]
             elif arg.id in own:
-                first = binding.aliases.setdefault(arg.id, pname)
-                if first != pname:
-                    binding.collapse[pname] = first
+                bound_to.setdefault(arg.id, []).append(pname)
+        for caller_name, names in bound_to.items():
+            # A CAPTURED name cannot be the one kept: the descriptors already spell the caller's
+            # quantity with it, so keeping it would leave one symbol standing for two extents.
+            usable = [pname for pname in names if pname not in captured] or names
+            binding.aliases[caller_name] = usable[0]
+            for pname in names:
+                if pname != usable[0]:
+                    binding.collapse[pname] = usable[0]
+        # A SCALAR parameter handed the very caller symbol one of the helper's own symbols already
+        # stands for is that symbol under a second name. ``_conv_transpose2d`` takes ``stride`` by
+        # value while its return descriptor spells the same quantity ``conv_transpose_stride``, so
+        # the body mints ``oh`` from a runtime scalar while the out-param is declared from a
+        # symbol, and dace refuses the write between two extents it cannot relate. The symbol is
+        # the canonical one -- a runtime scalar cannot size a dace descriptor at all.
+        #
+        # Two conditions. ONE call site, because respelling a SHAPE costs nothing at a second site
+        # (dace re-solves a declared extent per call) while retiring a runtime scalar spends the
+        # value that site would have passed -- ``_scale(v, k, n)`` called at ``N`` and at ``2 * N``
+        # is shape-generic precisely because ``n`` stays a parameter. And a quantity no descriptor
+        # states OUTRIGHT, because a symbol standing alone as a dimension is solved from its
+        # argument and the body's own name for it already rides along as a keyword.
+        bare = {str(dim).strip() for arr in hkir.arrays for dim in arr.shape if _IDENT_RE.fullmatch(str(dim).strip())}
+        for pname, arg in zip(abi, node.args if sites == 1 else []):
+            if pname not in scalar_names or not isinstance(arg, ast.Name) or arg.id in bare:
+                continue
+            canonical = binding.aliases.get(arg.id, arg.id if arg.id in own else None)
+            if canonical is not None and canonical != pname and canonical not in bare:
+                binding.collapse[pname] = canonical
+        for pname in captured:
+            if pname in binding.collapse:
+                continue  # respelled onto a name the descriptors do not already spell
+            if pname in binding.constants and pinned.get(pname) == binding.constants[pname]:
+                continue  # both spellings are the same pinned knob, so one value serves both
+            if frontend.HELPERS_KEPT_DISABLED:
+                # The inlined form is where a refusal would have LANDED, and this helper is still
+                # here: it resisted inlining, so refusing again only loses the kernel. Emit what
+                # the emitter emitted before the capture was recognised.
+                continue
+            raise NotImplementedError(
+                f"helper {hkir.kernel_name!r} takes {pname!r}, which its own descriptors already "
+                f"spell for the caller's {pname!r}; one dc.symbol cannot carry both extents, so "
+                f"the helper must be inlined into its caller"
+            )
         # Scalars too, not only symbols: an extent the CALL SITE computes arrives as an integer
         # scalar parameter (``c_out_per_group``) and only becomes a dc.symbol later, when
         # render_program sees it size an array.
-        extents = own | {d.name for d in hkir.scalars}
+        extents = own | scalar_names
         ambiguous: Set[str] = set()
         for pname, arg in zip(abi, node.args):
-            if pname not in extents or pname in binding.constants:
+            if pname not in extents or pname in binding.constants or pname in binding.collapse:
                 continue
             # A bare Name is the caller's own local for the quantity, so its DEFINITION is the
             # expression a descriptor would have been written with.
@@ -3960,6 +4035,7 @@ def with_helper_vocabulary(hkir: KernelIR, binding: HelperBinding) -> KernelIR:
         tree=tree,
         arrays=arrays,
         symbols=[s for s in hkir.symbols if s.name not in retired],
+        scalars=[s for s in hkir.scalars if s.name not in retired],
         input_args=[n for n in hkir.input_args if n not in retired],
         pinned_consts={**hkir.pinned_consts, **binding.constants},
     )
