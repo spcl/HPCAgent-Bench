@@ -16,7 +16,7 @@ import collections
 import pathlib
 import sqlite3
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
@@ -100,6 +100,9 @@ UNATTRIBUTED: tuple[str, ...] = (
 )
 
 TABLES: tuple[str, ...] = ("benchmarks", "submissions", "attempts", "calls", "sources")
+
+#: Tables carrying a run_id, so the set of runs to write into `runs` can be collected from them.
+RUN_TABLES: tuple[str, ...] = ("submissions", "attempts", "calls", "sources", "completions")
 
 
 def parse_arm(arm: str) -> Identity | None:
@@ -194,38 +197,59 @@ def copy_table(
     table: str,
     identity: Callable[[str], Identity | None],
 ) -> tuple[int, int]:
-    """Copy one table, deriving the identity columns for any row that does not already carry them.
+    """Copy one table's MEASUREMENT columns, dropping rows whose run has no identity.
 
-    A pre-identity row's ``language`` is the request body's claim, which an agent controls: bodies
-    arrived naming ``py``, ``zzz`` and a file path. The arm's language replaces it and the claim
-    moves to ``delivered_language``. A row that already has an identity is copied verbatim."""
+    The identity itself is not copied: it goes to ``runs`` once per run (:func:`write_runs`) rather
+    than onto every row of it. The source may carry those columns -- three schema vintages exist --
+    and they are simply not among the destination's, so they are left behind.
+
+    One value does move. A pre-identity row's ``language`` is the request body's CLAIM, which an
+    agent controls: bodies arrived naming ``py``, ``zzz`` and a file path. That claim belongs in
+    ``delivered_language``, and the arm's real language is on the run."""
     have = {r[1] for r in src.execute(f"PRAGMA table_info({table})")}
     want = [r[1] for r in dest.execute(f"PRAGMA table_info({table})") if r[1] != "id"]
     shared = [c for c in want if c in have]
+    read = sorted(set(shared) | ({"run_id", "language"} & have))
     rows: list[tuple[list[str], tuple[SqlValue, ...]]] = []
     dropped = 0
-    for row in src.execute(f"SELECT {', '.join(shared)} FROM {table}"):
-        record: Row = dict(zip(shared, row))
-        if table != "benchmarks" and not record.get("model"):
-            # a row written since the identity columns exist already carries all of this, and
-            # rewriting it would put the arm's language into delivered_language, losing the claim
+    for row in src.execute(f"SELECT {', '.join(read)} FROM {table}"):
+        record: Row = dict(zip(read, row))
+        if table != "benchmarks":
             run_id = str(record.get("run_id") or "")
-            tags = identity(run_id)
-            if tags is None:
+            if identity(run_id) is None:
                 dropped += 1
                 continue
-            experiment, model, language, device, packet = tags
-            if "delivered_language" in want:
+            # Only a row that predates `delivered_language` needs the claim moved; a newer row
+            # already separates the two and rewriting it would overwrite the claim with a copy.
+            if "delivered_language" in want and not record.get("delivered_language"):
                 record["delivered_language"] = str(record.get("language") or "")
-            record.update(experiment=experiment, model=model, device=device, packet=packet, arm=arm_of(run_id))
-            if "language" in want:
-                record["language"] = language
         cols = [c for c in want if c in record]
         rows.append((cols, tuple(record[c] for c in cols)))
     verb = "INSERT OR REPLACE" if table == "benchmarks" else "INSERT"
     for cols, values in rows:
         dest.execute(f"{verb} INTO {table}({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})", values)
     return len(rows), dropped
+
+
+def write_runs(dest: sqlite3.Connection, run_ids: Iterable[str], identity: Callable[[str], Identity | None]) -> int:
+    """One ``runs`` row per run id, from the arm mapping. Returns how many were written.
+
+    ``rep`` is 1 for every migrated run. The repetition index did not exist before this schema --
+    a run id is ``<arm>.n<node>.p<agent>.w<worker>`` and carries no repetition -- so claiming to
+    recover it would be inventing it. Campaigns run from here on record their own."""
+    written = 0
+    for run_id in sorted({r for r in run_ids if r}):
+        tags = identity(run_id)
+        if tags is None:
+            continue
+        experiment, model, language, device, packet = tags
+        dest.execute(
+            "INSERT OR IGNORE INTO runs(run_id, experiment, model, language, device, packet, rep, arm) "
+            "VALUES (?,?,?,?,?,?,1,?)",
+            (run_id, experiment, model, language, device, packet, arm_of(run_id)),
+        )
+        written += 1
+    return written
 
 
 def main() -> None:
@@ -288,6 +312,12 @@ def main() -> None:
             src = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
             try:
                 present = {r[0] for r in src.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                # `runs` FIRST: every measurement row joins to it, so a shard that fails halfway
+                # leaves identified rows rather than orphans.
+                seen: set[str] = set()
+                for table in (t for t in RUN_TABLES if t in present):
+                    seen.update(str(r[0]) for r in src.execute(f"SELECT DISTINCT run_id FROM {table}"))
+                written["runs"] += write_runs(dest, seen, identity)
                 for table in TABLES:
                     if table in present:
                         n, _dropped = copy_table(dest, src, table, identity)

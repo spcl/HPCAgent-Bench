@@ -298,7 +298,7 @@ class GpuProfilerUnavailable(RuntimeError):
         self.cause = cause
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class GpuRun:
     """One traced run: how long the host measured, and what the device actually did.
 

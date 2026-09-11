@@ -29,14 +29,14 @@ import sys
 #: kernel's taxonomy and a content-addressed prompt are the same fact whichever rank observed them,
 #: so they dedup on their primary key instead of multiplying. Every other table is a row log whose
 #: synthetic ``id`` collides across shards; its ids are dropped and reassigned by the destination.
-MERGE_VERB = {"benchmarks": "INSERT OR REPLACE", "prompts": "INSERT OR IGNORE"}
+MERGE_VERB: dict[str, str] = {"benchmarks": "INSERT OR REPLACE", "prompts": "INSERT OR IGNORE"}
 
 #: ``benchmarks`` before anything that foreign-keys to it, ``prompts`` next for the same reason; the
 #: rest sorted, so a merge is reproducible rather than dependent on sqlite_master order.
-MERGE_FIRST = ("benchmarks", "prompts")
+MERGE_FIRST: tuple[str, ...] = ("benchmarks", "prompts")
 
 #: ``.../judge/rank-<k>/`` -- the per-rank directory run_cluster.sh creates.
-RANK_DIR = re.compile(r"^rank-(\d+)$")
+RANK_DIR: re.Pattern[str] = re.compile(r"^rank-(\d+)$")
 
 
 def shard_paths(run_dir: pathlib.Path) -> list[pathlib.Path]:
@@ -68,7 +68,7 @@ def shard_tables(conn: sqlite3.Connection) -> list[tuple[str, str]]:
     rows = conn.execute(
         "SELECT name, sql FROM shard.sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
     ).fetchall()
-    by_name = {name: sql for name, sql in rows if sql}
+    by_name: dict[str, str] = {str(name): str(sql) for name, sql in rows if sql}
     ordered = [name for name in MERGE_FIRST if name in by_name]
     ordered += sorted(set(by_name) - set(MERGE_FIRST))
     return [(name, by_name[name]) for name in ordered]
@@ -80,8 +80,8 @@ def shared_columns(conn: sqlite3.Connection, table: str, skip_id: bool) -> list[
     The intersection, not the destination's list, because ranks can run different code versions -- a
     shard missing a column the destination gained would make ``SELECT`` name a column that does not
     exist there, and the whole merge would die on one stale shard."""
-    dest = [row[1] for row in conn.execute(f"PRAGMA main.table_info({table})").fetchall()]
-    src = {row[1] for row in conn.execute(f"PRAGMA shard.table_info({table})").fetchall()}
+    dest: list[str] = [str(row[1]) for row in conn.execute(f"PRAGMA main.table_info({table})").fetchall()]
+    src: set[str] = {str(row[1]) for row in conn.execute(f"PRAGMA shard.table_info({table})").fetchall()}
     return [c for c in dest if c in src and not (skip_id and c == "id")]
 
 
@@ -143,11 +143,11 @@ def synthesize_fallback_submissions(conn: sqlite3.Connection) -> int:
     check, so the provenance must stay visible). ``baseline_ns``/``native_ns`` stay NULL: the calls
     log does not carry them. Runs before the calls log (or before its route/correct columns) exist
     are skipped loudly rather than half-filled."""
-    tables = {row[0] for row in conn.execute("SELECT name FROM main.sqlite_master WHERE type = 'table'")}
+    tables = {str(row[0]) for row in conn.execute("SELECT name FROM main.sqlite_master WHERE type = 'table'")}
     if "calls" not in tables or "submissions" not in tables:
         print("fallback: no calls/submissions table; nothing to synthesize")
         return 0
-    call_cols = {row[1] for row in conn.execute("PRAGMA main.table_info(calls)")}
+    call_cols = {str(row[1]) for row in conn.execute("PRAGMA main.table_info(calls)")}
     if not {"route", "correct", "speedup", "benchmark"} <= call_cols:
         print("fallback: calls table predates route/correct columns; nothing to synthesize")
         return 0
@@ -176,7 +176,7 @@ def synthesize_fallback_submissions(conn: sqlite3.Connection) -> int:
     # whatever the judge-verified submissions ran at -- learn it from them (submit calls as backup).
     preset_filter = ""
     if "preset" in call_cols:
-        row = conn.execute(
+        row: tuple[object, ...] | None = conn.execute(
             "SELECT preset FROM main.submissions GROUP BY preset ORDER BY COUNT(*) DESC, preset LIMIT 1"
         ).fetchone()
         if row is None:
@@ -241,14 +241,14 @@ def merge(run_dir: pathlib.Path, out: pathlib.Path) -> int:
         # their natural key, so the rows a shard contributed and the rows that ended up in the file
         # are different numbers, and only the second one describes what a reader will see.
         print(f"merged {len(shards)} shards into {out}")
-        tables = [
-            row[0]
+        tables: list[str] = [
+            str(row[0])
             for row in conn.execute(
                 "SELECT name FROM main.sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
             )
         ]
         for table in tables:
-            count = conn.execute(f"SELECT count(*) FROM main.{table}").fetchone()[0]
+            count = int(conn.execute(f"SELECT count(*) FROM main.{table}").fetchone()[0])
             total += count
             print(f"  {table}: {count}")
         print(f"  total: {total}")
@@ -258,15 +258,17 @@ def merge(run_dir: pathlib.Path, out: pathlib.Path) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("run_dir", help="the run directory (RUN_DIR), holding judge/rank-<k>/")
     parser.add_argument(
         "--out", default=None, help="destination DB (default <run dir>/results-merged.db); rebuilt from the shards"
     )
     args = parser.parse_args(argv)
+    run_dir_arg: str = args.run_dir
+    out_arg: str | None = args.out
 
-    run_dir = pathlib.Path(args.run_dir)
-    out = pathlib.Path(args.out) if args.out else run_dir / "results-merged.db"
+    run_dir = pathlib.Path(run_dir_arg)
+    out = pathlib.Path(out_arg) if out_arg else run_dir / "results-merged.db"
     # An empty or absent run raises SystemExit from merge itself, with the path it looked in.
     merge(run_dir, out)
     return 0

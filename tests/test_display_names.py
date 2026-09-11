@@ -33,8 +33,7 @@ SEED = re.compile(r"^\.env\.(base|llrbase)-")
 
 def arm_envs() -> list[pathlib.Path]:
     return sorted(
-        p for p in ENVS.glob(".env.*")
-        if p.is_file() and not p.name.endswith(".example") and not SEED.match(p.name)
+        p for p in ENVS.glob(".env.*") if p.is_file() and not p.name.endswith(".example") and not SEED.match(p.name)
     )
 
 

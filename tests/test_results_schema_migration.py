@@ -96,7 +96,7 @@ def test_the_plot_loader_folds_flavor_and_build_back_into_one_series(tmp_path, m
     same optimizer measured on two DaCe trees -- average into one silently wrong line."""
     import pandas as pd
 
-    from hpcagent_bench import plotting
+    from hpcagent_bench.stats import plotting
 
     path = str(tmp_path / "hpcagent_bench.db")
     engine = results_engine(path)
@@ -146,7 +146,7 @@ def test_the_plot_loader_partitions_machines_instead_of_folding_them(tmp_path, m
     candidate timed on one node with a baseline timed on another yields a hardware comparison that
     every row still looks well-formed under. So machines PARTITION into separate figures.
     """
-    from hpcagent_bench import plotting
+    from hpcagent_bench.stats import plotting
 
     path = str(tmp_path / "hpcagent_bench.db")
     engine = results_engine(path)

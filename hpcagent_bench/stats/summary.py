@@ -20,10 +20,19 @@ Reported defaults (so a run's rigor is documented, not implicit):
 """
 
 import warnings
-from typing import Sequence, Tuple
+from collections.abc import Sequence
 
 import numpy as np
-from scipy.stats import bootstrap
+import numpy.typing as npt
+
+# scipy ships no type stubs; its result is read on two suppressed lines below and converted to float there.
+from scipy.stats import bootstrap  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
+
+#: One timing sample per element. float64 is what ``np.asarray(..., dtype=float)`` produces.
+FloatArray = npt.NDArray[np.float64]
+
+#: What both entry points accept: a plain sequence of numbers, or an already-built float array.
+Samples = Sequence[float] | FloatArray
 
 #: MAD -> normal-sigma consistency constant (1 / 0.6745). A modified z-score of ``k`` is
 #: ``k`` robust standard deviations above the median.
@@ -44,8 +53,8 @@ DEFAULT_CI_METHOD: str = "percentile"
 
 
 def drop_outliers(
-    samples: Sequence[float], threshold: float = DEFAULT_MAD_Z, warn: bool = True, label: str = ""
-) -> Tuple[np.ndarray, np.ndarray]:
+    samples: Samples, threshold: float = DEFAULT_MAD_Z, warn: bool = True, label: str = ""
+) -> tuple[FloatArray, FloatArray]:
     """Drop upper-tail outliers by robust modified z-score, one-sided (slow side only).
 
     ``modified_z = (x - median) / (1.4826 * MAD)``; a sample with ``modified_z > threshold``
@@ -60,12 +69,12 @@ def drop_outliers(
     Fewer than 3 samples, or a degenerate spread (MAD == 0, i.e. at least half identical),
     yield no drops.
     """
-    x = np.asarray(samples, dtype=float)
-    empty = np.empty(0, dtype=float)
+    x: FloatArray = np.asarray(samples, dtype=np.float64)
+    empty: FloatArray = np.empty(0, dtype=np.float64)
     if x.size < 3:
         return x, empty
     med = float(np.median(x))
-    abs_dev = np.abs(x - med)
+    abs_dev: FloatArray = np.abs(x - med)
     scale = float(np.median(abs_dev)) * _MAD_TO_SIGMA
     if scale == 0.0:
         # >= half the samples equal the median, so MAD is 0 and the modified z is undefined.
@@ -74,10 +83,11 @@ def drop_outliers(
         scale = float(np.mean(abs_dev)) * _MEANAD_TO_SIGMA
     if scale == 0.0:
         return x, empty  # truly all identical: no robust scale, nothing to flag
-    modified_z = (x - med) / scale
-    drop_mask = modified_z > threshold  # upper (slow) tail only
-    kept, dropped = x[~drop_mask], x[drop_mask]
-    if warn and dropped.size:
+    modified_z: FloatArray = (x - med) / scale
+    drop_mask: npt.NDArray[np.bool_] = modified_z > threshold  # upper (slow) tail only
+    kept: FloatArray = x[~drop_mask]
+    dropped: FloatArray = x[drop_mask]
+    if warn and dropped.size != 0:
         prefix = f"{label}: " if label else ""
         warnings.warn(
             f"{prefix}dropped {dropped.size} slow outlier sample(s) "
@@ -88,7 +98,7 @@ def drop_outliers(
 
 
 def median_ci(
-    samples: Sequence[float],
+    samples: Samples,
     confidence: float = DEFAULT_CONFIDENCE,
     n_resamples: int = DEFAULT_RESAMPLES,
     method: str = DEFAULT_CI_METHOD,
@@ -96,7 +106,7 @@ def median_ci(
     warn: bool = True,
     label: str = "",
     seed: int = 0,
-) -> Tuple[float, float, float, int]:
+) -> tuple[float, float, float, int]:
     """Median and a non-parametric bootstrap CI, after robust outlier rejection.
 
     Runs :func:`scipy.stats.bootstrap` on the median with the module defaults
@@ -105,7 +115,7 @@ def median_ci(
     first (:func:`drop_outliers`, which warns). A point CI ``(m, m, m)`` is returned when
     there is no spread or too few samples to bootstrap.
     """
-    x = np.asarray(samples, dtype=float)
+    x: FloatArray = np.asarray(samples, dtype=np.float64)
     n_dropped = 0
     if drop:
         x, dropped = drop_outliers(x, warn=warn, label=label)
@@ -115,13 +125,15 @@ def median_ci(
     med = float(np.median(x))
     if x.size < 3 or float(np.ptp(x)) == 0.0:
         return med, med, med, n_dropped
-    res = bootstrap(
+    res = bootstrap(  # pyright: ignore[reportUnknownVariableType] -- unstubbed scipy
         (x,),
         np.median,
         confidence_level=confidence,
         n_resamples=n_resamples,
         method=method,
         vectorized=True,
-        random_state=np.random.default_rng(seed),
+        random_state=np.random.default_rng(seed),  # pyright: ignore[reportCallIssue] -- scipy compat spelling
     )
-    return med, float(res.confidence_interval.low), float(res.confidence_interval.high), n_dropped
+    low = float(res.confidence_interval.low)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+    high = float(res.confidence_interval.high)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+    return med, low, high, n_dropped

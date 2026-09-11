@@ -14,9 +14,18 @@ blues without looking like a different rendering of the page.
 
 from __future__ import annotations
 
-import math
+from collections.abc import Sequence
+from typing import Literal
 
 import matplotlib
+from matplotlib.artist import Artist
+from matplotlib.axes import Axes
+from matplotlib.axis import Axis
+from matplotlib.figure import Figure
+from matplotlib.ticker import AutoMinorLocator, FuncFormatter, LogLocator, MaxNLocator, NullFormatter
+
+# matplotlib's drawing calls end in an untyped ``**kwargs``, so every call below suppresses the
+# unknown-member report that fact produces; the arguments themselves are checked.
 
 #: Ink, in decreasing emphasis. Text NEVER takes a series colour: a coloured mark beside a label
 #: carries the identity, and a coloured label just makes the text harder to read.
@@ -83,7 +92,7 @@ def apply() -> None:
     )
 
 
-def despine(ax, keep: tuple[str, ...] = ("top", "right", "left", "bottom")) -> None:
+def despine(ax: Axes, keep: tuple[str, ...] = ("top", "right", "left", "bottom")) -> None:
     """Colour the kept spines RULE and hide the rest. Defaults to a light grey four-sided frame."""
     for side in ("top", "right", "left", "bottom"):
         ax.spines[side].set_visible(side in keep)
@@ -91,7 +100,7 @@ def despine(ax, keep: tuple[str, ...] = ("top", "right", "left", "bottom")) -> N
             ax.spines[side].set_color(RULE)
 
 
-def title(fig, text: str, subtitle: str = "") -> float:
+def title(fig: Figure, text: str, subtitle: str = "") -> float:
     """Centred title; returns the top of the plot area for ``tight_layout(rect=...)``.
 
     ``subtitle`` is accepted and IGNORED. It used to render a how-to-read sentence under the
@@ -100,15 +109,15 @@ def title(fig, text: str, subtitle: str = "") -> float:
     so the callers do not all have to change at once, and so a caller passing one is not silently
     dropping information it thought was displayed.
     """
-    height = fig.get_size_inches()[1]
+    height = float(fig.get_size_inches()[1])
     # Work in inches, then convert: a fraction of a 4-inch figure is a different gap than the same
     # fraction of a 12-inch one, which is what made the fixed offsets collide.
     top = 1.0 - (0.34 / height)
-    fig.text(0.5, top, text, fontsize=TITLE_PT, color=INK, ha="center", va="top")
+    fig.text(0.5, top, text, fontsize=TITLE_PT, color=INK, ha="center", va="top")  # pyright: ignore[reportUnknownMemberType]
     return max(0.5, top - 0.30 / height)
 
 
-def legend_below(fig, handles, ncol: int = 0, y: float = 0.0) -> None:
+def legend_below(fig: Figure, handles: Sequence[Artist], ncol: int = 0, y: float = 0.0) -> None:
     """One legend, under the whole figure, centred. Never inside the axes.
 
     An in-axes legend has to be placed, and every placement is a bet that one corner stays empty.
@@ -117,11 +126,11 @@ def legend_below(fig, handles, ncol: int = 0, y: float = 0.0) -> None:
     Below the figure there is no corner to lose, and the legend is in the same place in every
     figure, which is the point of a shared style.
     """
-    fig.legend(
+    fig.legend(  # pyright: ignore[reportUnknownMemberType]
         handles=handles,
-        loc="lower center" if y else "upper center",
+        loc="lower center" if y != 0.0 else "upper center",
         bbox_to_anchor=(0.5, y),
-        ncol=ncol or min(len(handles), 5),
+        ncol=ncol if ncol != 0 else min(len(handles), 5),
         frameon=False,
         fontsize=LABEL_PT,
         markerscale=1.4,
@@ -152,7 +161,9 @@ def decade_label(value: float, _position: int = 0) -> str:
     return f"{value:g}"
 
 
-def value_axis(ax, axis: str = "y", minor: bool = True, log_base: float = 10.0, major: bool = True) -> None:
+def value_axis(
+    ax: Axes, axis: Literal["x", "y"] = "y", minor: bool = True, log_base: float = 10.0, major: bool = True
+) -> None:
     """Ticks and grid for the axis carrying the MEASURED quantity.
 
     Majors get a labelled line, minors an unlabelled fainter one: reading a value off a chart is
@@ -164,10 +175,8 @@ def value_axis(ax, axis: str = "y", minor: bool = True, log_base: float = 10.0, 
     object under a private name, and a wrong guess puts the minor lines at the wrong ratios --
     which looks like a grid and reads as a lie.
     """
-    from matplotlib.ticker import AutoMinorLocator, FuncFormatter, LogLocator, MaxNLocator, NullFormatter
-
-    target = ax.yaxis if axis == "y" else ax.xaxis
-    scale = ax.get_yscale() if axis == "y" else ax.get_xscale()
+    target: Axis = ax.yaxis if axis == "y" else ax.xaxis
+    scale: str = ax.get_yscale() if axis == "y" else ax.get_xscale()
     if scale == "log":
         # A log axis needs log-spaced minors, and AutoMinorLocator refuses one outright ("does not
         # work on logarithmic scales").
@@ -195,7 +204,9 @@ def value_axis(ax, axis: str = "y", minor: bool = True, log_base: float = 10.0, 
             # others, which is worse than a coarse one because the spacing stops meaning anything.
             # These fill all three intervals at roughly even spacing in LOG space, which is the
             # space the reader is interpolating in.
-            subs = LOG10_MINOR_SUBS if log_base == 10.0 else tuple(float(n) for n in range(2, int(log_base))) or (2.0,)
+            subs: tuple[float, ...] = LOG10_MINOR_SUBS
+            if log_base != 10.0:
+                subs = tuple(float(n) for n in range(2, int(log_base))) or (2.0,)
             target.set_minor_locator(LogLocator(base=log_base, subs=subs, numticks=100))
             target.set_minor_formatter(NullFormatter())
     else:
@@ -205,11 +216,13 @@ def value_axis(ax, axis: str = "y", minor: bool = True, log_base: float = 10.0, 
         target.set_major_locator(MaxNLocator(nbins=8, steps=[1, 2, 2.5, 5, 10]))
         if minor:
             target.set_minor_locator(AutoMinorLocator(2))
-    ax.grid(axis=axis, which="major", color=RULE, linewidth=0.7, zorder=0)
+    ax.grid(axis=axis, which="major", color=RULE, linewidth=0.7, zorder=0)  # pyright: ignore[reportUnknownMemberType]
     if minor:
         # Dashed, so a minor line is never mistaken for a major one at a glance -- weight alone
         # does not separate them once a figure is reduced for print.
-        ax.grid(axis=axis, which="minor", color=RULE, linewidth=0.45, linestyle=(0, (2, 3)), alpha=0.9, zorder=0)
+        ax.grid(  # pyright: ignore[reportUnknownMemberType]
+            axis=axis, which="minor", color=RULE, linewidth=0.45, linestyle=(0, (2, 3)), alpha=0.9, zorder=0
+        )
     ax.set_axisbelow(True)
 
 
@@ -223,15 +236,17 @@ CONNECTOR_Z: float = 4.0
 MARK_Z: float = 5.0
 
 
-def point_mark(ax, x, y, color: str, marker: str, filled: bool, size: float = 110.0) -> None:
+def point_mark(ax: Axes, x: float, y: float, color: str, marker: str, filled: bool, size: float = 110.0) -> None:
     """One point of a two-condition pair, drawn as a white disc plus the mark itself.
 
     The white disc is drawn under a FILLED mark too. It masks the grid and every connector that
     does not end here, so the only line a reader sees inside a mark is that mark's own -- with a
     transparent centre, three models' connectors crossing one point read as a mesh.
     """
-    ax.scatter(x, y, s=size, marker=marker, color="white", edgecolor="none", zorder=FILL_Z)
-    ax.scatter(
+    ax.scatter(  # pyright: ignore[reportUnknownMemberType]
+        x, y, s=size, marker=marker, color="white", edgecolor="none", zorder=FILL_Z
+    )
+    ax.scatter(  # pyright: ignore[reportUnknownMemberType]
         x,
         y,
         s=size,

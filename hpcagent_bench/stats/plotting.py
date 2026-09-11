@@ -35,23 +35,33 @@ stack.
 """
 
 import collections
+import dataclasses
 import logging
 import math
-import os
 import pathlib
 import re
 import sqlite3
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
+from typing import Literal, cast
 
 import matplotlib
 import numpy as np
-import pandas as pd
+import numpy.typing as npt
+import pandas as pd  # pyright: ignore[reportMissingTypeStubs] -- pandas ships none
 
 matplotlib.use("Agg")  # headless: save to file, never open a window
 import matplotlib.pyplot as plt  # noqa: E402 -- must follow the backend setup
 
-from scipy.stats import norm  # noqa: E402
-from scipy.stats.mstats import gmean  # noqa: E402
+from matplotlib.axes import Axes  # noqa: E402
+from matplotlib.collections import LineCollection, PolyCollection  # noqa: E402
+from matplotlib.figure import Figure  # noqa: E402
+from matplotlib.lines import Line2D  # noqa: E402
+from matplotlib.patches import Patch, Rectangle  # noqa: E402
+
+# scipy ships no type stubs, so what it hands back is converted explicitly at each call site.
+from scipy.stats import norm  # noqa: E402 # pyright: ignore[reportMissingTypeStubs]
+from scipy.stats.mstats import gmean  # noqa: E402 # pyright: ignore[reportMissingTypeStubs]
 
 from hpcagent_bench import inference, stats  # noqa: E402
 from hpcagent_bench.harness import recording  # noqa: E402
@@ -61,6 +71,9 @@ from hpcagent_bench.spec import select_short_names  # noqa: E402
 from hpcagent_bench.stats import palette  # noqa: E402
 
 LOG = logging.getLogger(__name__)
+
+#: One timing sample, or one plotted number, per element.
+FloatArray = npt.NDArray[np.float64]
 
 
 class NoBaselineRows(ValueError):
@@ -89,7 +102,7 @@ CI_SEED: int = 0
 DEFAULT_BASELINE: str = "numba"
 
 
-def baseline_of(frame, default: str = DEFAULT_BASELINE) -> str:
+def baseline_of(frame: pd.DataFrame, default: str = DEFAULT_BASELINE) -> str:
     """The denominator a slice of observations was actually GRADED against.
 
     The baseline is a property of the track and the campaign, not of the figure: llr40v9 and v10
@@ -103,11 +116,11 @@ def baseline_of(frame, default: str = DEFAULT_BASELINE) -> str:
     be a worse failure than naming the one the campaign ran on. A genuinely mixed slice is warned
     about and its majority used, because that is a slice that should have been split.
     """
-    if "baseline" not in getattr(frame, "columns", ()):
+    if "baseline" not in frame.columns:
         return default
-    counts = frame["baseline"].dropna().astype(str).str.strip()
-    counts = counts[counts != ""].value_counts()
-    if counts.empty:
+    named = frame["baseline"].dropna().astype(str).str.strip()
+    counts = named[named != ""].value_counts()
+    if bool(counts.empty):
         return default
     winner = str(counts.index[0])
     if len(counts) > 1 and counts.iloc[1] > 0.05 * counts.iloc[0]:
@@ -124,7 +137,7 @@ def framework_color(name: str) -> str:
     return palette.framework_color(name)
 
 
-def framework_colors(names) -> dict:
+def framework_colors(names: Iterable[str]) -> dict[str, str]:
     """``{framework: colour}`` for one figure, with palette.py's collision warning."""
     return palette.framework_colors(names)
 
@@ -135,47 +148,39 @@ def set_usetex(usetex: bool) -> None:
     matplotlib.rcParams["text.usetex"] = usetex
 
 
-def my_round(x, width):
+def my_round(x: float, width: int) -> str:
     float_format = "{:." + f"{width}" + "f}"
     return float_format.format(x)
 
 
-def my_geomean(x):
+def my_geomean(x: pd.Series) -> float:
     """Geomean that ignores NA values."""
-    x = x.dropna()
-    return gmean(x)
+    return float(gmean(x.dropna()))  # pyright: ignore[reportUnknownArgumentType] -- unstubbed scipy
 
 
-def my_speedup_abbr(x):
+def my_speedup_abbr(x: float) -> str:
     """Short speedup label with an up/down indicator."""
-    prefix = ""
-    label = ""
     if math.isnan(x):
         return ""
-    if x < 1:
-        prefix = "^"
-        x = 1 / x
-    elif x > 1:
-        prefix = "v"
-    if x > 100:
-        x = int(x)
-    if x > 1000:
-        label = prefix + str(my_round(x / 1000, 1)) + "k"
-    else:
-        label = prefix + str(my_round(x, 1))
-    return str(label)
+    prefix = "^" if x < 1 else ("v" if x > 1 else "")
+    value = 1 / x if x < 1 else x
+    if value > 100:
+        value = float(int(value))  # above 100x the fraction is noise, so the label drops it
+    if value > 1000:
+        return prefix + my_round(value / 1000, 1) + "k"
+    return prefix + my_round(value, 1)
 
 
-def my_runtime_abbr(x):
+def my_runtime_abbr(x: float) -> str:
     """Short runtime label; DB times are in milliseconds."""
     if math.isnan(x):
         return ""
     if x >= 1000:
-        return str(my_round(x / 1000, 2)) + " s"
-    return str(my_round(x, 2)) + " ms"
+        return my_round(x / 1000, 2) + " s"
+    return my_round(x, 2) + " ms"
 
 
-def save_figure(output: str, fig) -> str:
+def save_figure(output: str, fig: Figure) -> str:
     """Write ``fig`` to ``output``, creating its directory."""
     pathlib.Path(output).parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output, dpi=600, bbox_inches="tight")
@@ -184,11 +189,11 @@ def save_figure(output: str, fig) -> str:
 
 
 def load_results(
-    db: Optional[str],
+    db: str | None,
     benchmark: str = "all",
     preset: str = "S",
     datatype: str = "float64",
-    variant: Optional[str] = None,
+    variant: str | None = None,
     baseline: str = DEFAULT_BASELINE,
 ) -> pd.DataFrame:
     """Read + filter the ``results`` table into the per-sample frame both figures consume.
@@ -203,7 +208,7 @@ def load_results(
     """
     # A distributed run leaves one DB per rank and no merged file until something asks for it; this
     # is that ask, so plotting a sharded run needs no separate aggregation step.
-    target = db or recording.base_db_path()
+    target = db if db is not None else recording.base_db_path()
     aggregate = recording.ensure_aggregated(target)
     # sqlite3.connect CREATES an absent file, so a run that recorded nothing reaches the query with
     # an empty DB and dies on a bare "no such table: results" naming neither the path it opened nor
@@ -219,13 +224,13 @@ def load_results(
             f"-- check that leg, not the plot."
         )
     conn = sqlite3.connect(aggregate)
-    data = pd.read_sql_query("SELECT * FROM results", conn)
+    data: pd.DataFrame = pd.read_sql_query("SELECT * FROM results", conn)
     conn.close()
 
     data = data.drop(["timestamp"], axis=1).reset_index(drop=True)
 
     if benchmark != "all":
-        keep = set(select_short_names(benchmark))
+        keep: set[str] = set(select_short_names(benchmark))
         data = data[data["benchmark"].isin(keep)].reset_index(drop=True)
 
     data = data[data["domain"] != ""]
@@ -280,7 +285,7 @@ def machine_label(cpu: object, gpu: object) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", "-".join(parts)).strip("-") or "unknown"
 
 
-def machine_groups(data: pd.DataFrame) -> List[Tuple[str, pd.DataFrame]]:
+def machine_groups(data: pd.DataFrame) -> list[tuple[str, pd.DataFrame]]:
     """Split rows into one frame per ``(cpu, gpu)``: a figure may only compare one machine's runs.
 
     Every other axis in :func:`load_results` FOLDS -- flavor and build join the framework name so
@@ -296,14 +301,14 @@ def machine_groups(data: pd.DataFrame) -> List[Tuple[str, pd.DataFrame]]:
     # string. They were then two figures competing for one filename, the second silently
     # overwriting the first: on the llr XL scope that split 9,957 rows into 2,264 (no cc, skipped)
     # and 7,693, and the figure that survived was missing a third of the machine's data.
-    normalized = data.assign(
+    normalized: pd.DataFrame = data.assign(
         cpu=data["cpu"].fillna("").astype(str),
         gpu=data["gpu"].fillna("").astype(str),
     )
-    grouped = [
-        (machine_label(cpu, gpu), rows.drop(["cpu", "gpu"], axis=1).reset_index(drop=True))
-        for (cpu, gpu), rows in normalized.groupby(["cpu", "gpu"], dropna=False)
-    ]
+    grouped: list[tuple[str, pd.DataFrame]] = []
+    for keys, rows in normalized.groupby(["cpu", "gpu"], dropna=False):
+        cpu, gpu = cast("tuple[str, str]", keys)
+        grouped.append((machine_label(cpu, gpu), rows.drop(["cpu", "gpu"], axis=1).reset_index(drop=True)))
     return sorted(grouped, key=lambda pair: pair[0])
 
 
@@ -318,26 +323,49 @@ def machine_output(output: str, label: str) -> str:
     return str(path.with_name(f"{path.stem}.{label}{path.suffix}"))
 
 
+@dataclass(frozen=True, slots=True)
+class CellSummary:
+    """One ``(benchmark, domain, framework)`` cell of the :func:`cell_summary` frame.
+
+    :ivar time: the outlier-cleaned median, which is both the plotted value and the one
+        best-selection reads.
+    :ivar ci_perc: the bootstrap CI width as a percent of that median.
+    """
+
+    benchmark: str
+    domain: str
+    framework: str
+    time: float
+    ci_low: float
+    ci_high: float
+    ci_perc: float
+
+
+#: Column order of the :func:`cell_summary` frame, which is :class:`CellSummary`'s field order.
+CELL_COLUMNS: tuple[str, ...] = tuple(f.name for f in dataclasses.fields(CellSummary))
+
+
 def cell_summary(data: pd.DataFrame) -> pd.DataFrame:
     """Per ``(benchmark, domain, framework)`` cell: the outlier-cleaned median and its
     bootstrap CI (:func:`hpcagent_bench.stats.median_ci`, which warns -- naming the cell -- on
     each dropped sample). Returns columns ``benchmark, domain, framework, time, ci_low,
     ci_high, ci_perc`` where ``time`` is the cleaned median (used for best-selection AND the
     plotted value) and ``ci_perc`` is the CI width as a percent of that median."""
-    rows = []
-    for (b, dom, fw), g in data.groupby(["benchmark", "domain", "framework"], dropna=False):
+    rows: list[CellSummary] = []
+    for keys, g in data.groupby(["benchmark", "domain", "framework"], dropna=False):
+        b, dom, fw = cast("tuple[str, str, str]", keys)
         med, lo, hi, _n = stats.median_ci(g["time"].to_numpy(), label=f"{b}@{fw}", seed=CI_SEED)
-        perc = ((hi - lo) / med * 100.0) if (med and not math.isnan(med) and med != 0) else 0.0
-        rows.append(dict(benchmark=b, domain=dom, framework=fw, time=med, ci_low=lo, ci_high=hi, ci_perc=perc))
-    return pd.DataFrame(rows, columns=["benchmark", "domain", "framework", "time", "ci_low", "ci_high", "ci_perc"])
+        perc = ((hi - lo) / med * 100.0) if (med != 0.0 and not math.isnan(med)) else 0.0
+        rows.append(CellSummary(b, dom, fw, med, lo, hi, perc))
+    return pd.DataFrame([dataclasses.asdict(r) for r in rows], columns=list(CELL_COLUMNS))
 
 
-def _reorder_rows(names: Sequence[str], order: str) -> Tuple[List[str], List[GroupSpan]]:
+def reorder_rows(names: Sequence[str], order: str) -> tuple[list[str], list[GroupSpan]]:
     """Ordered short_names + group spans for a set of plotted benchmark names."""
     return order_rows(row_meta_for(list(names)), order)
 
 
-def _draw_group_labels(ax, spans: Sequence[GroupSpan], x_right: float) -> None:
+def draw_group_labels(ax: Axes, spans: Sequence[GroupSpan], x_right: float) -> None:
     """Draw a separator line at each internal group boundary and the group's y-axis text to
     the right of the heatmap (``clip_on=False``; the caller saves with ``bbox_inches='tight'``
     so the outside text is kept)."""
@@ -345,20 +373,22 @@ def _draw_group_labels(ax, spans: Sequence[GroupSpan], x_right: float) -> None:
         if span.start > 0:
             ax.axhline(span.start - 0.5, color="0.15", linewidth=1.1)
         mid = (span.start + span.end - 1) / 2.0
-        ax.text(x_right, mid, span.label, ha="left", va="center", rotation=90, fontsize=7, clip_on=False)
+        ax.text(  # pyright: ignore[reportUnknownMemberType] -- matplotlib takes untyped **kwargs
+            x_right, mid, span.label, ha="left", va="center", rotation=90, fontsize=7, clip_on=False
+        )
 
 
 def plot_heatmap(
-    benchmark="all",
-    preset="S",
-    datatype="float64",
-    variant=None,
+    benchmark: str = "all",
+    preset: str = "S",
+    datatype: str = "float64",
+    variant: str | None = None,
     order: str = BY_DWARF,
-    db=None,
-    output=PLOTS_DIR + "/heatmap.pdf",
+    db: str | None = None,
+    output: str = PLOTS_DIR + "/heatmap.pdf",
     usetex: bool = True,
     baseline: str = DEFAULT_BASELINE,
-) -> List[str]:
+) -> list[str]:
     """Read ``db`` and emit ONE speedup heatmap PER MACHINE; returns the paths written.
 
     A plural return, because a results DB may hold rows from more than one node and those may
@@ -390,7 +420,7 @@ def plot_heatmap(
             f"datatype={datatype!r} variant={variant!r} db={db!r}. The DB has no "
             f"validated, domained rows matching that selection."
         )
-    written = []
+    written: list[str] = []
     for label, rows in groups:
         try:
             written.append(heatmap_figure(rows, order, machine_output(output, label), baseline))
@@ -403,6 +433,20 @@ def plot_heatmap(
     return written
 
 
+def ink_for(ratio: float) -> str:
+    """Cell text colour: grey inside the pale middle of the ramp, white on its saturated ends."""
+    magnitude = 1 / ratio if ratio < 1 else ratio
+    return "grey" if magnitude < 1.3 else "white"
+
+
+def ci_superscript(summary: pd.DataFrame, benchmark: str, framework: str) -> str:
+    """The cell's CI width as a mathtext superscript percent; empty when the frame has no cell."""
+    cell = summary[(summary["framework"] == framework) & (summary["benchmark"] == benchmark)]
+    perc_col = cast("pd.Series", cell["ci_perc"])
+    perc = int(perc_col.to_numpy()[0]) if len(perc_col) != 0 else 0
+    return f"$^{{({perc})}}$" if perc > 0 else ""
+
+
 def heatmap_figure(data: pd.DataFrame, order: str, output: str, baseline: str = DEFAULT_BASELINE) -> str:
     """Draw ONE machine's speedup heatmap to ``output``; returns the path written.
 
@@ -413,7 +457,7 @@ def heatmap_figure(data: pd.DataFrame, order: str, output: str, baseline: str = 
     summary = cell_summary(data)
     best = summary[["benchmark", "domain", "framework", "time"]].copy()
 
-    frmwrks = list(data["framework"].unique())
+    frmwrks = cast("list[str]", list(data["framework"].unique()))
     # Raised, not asserted, and the CALLER decides: figures are emitted one per machine, and a
     # machine that ran only one framework has nothing to divide by. That is a thin slice of the
     # data, not a broken run, and it used to take the whole plot down with it.
@@ -421,94 +465,83 @@ def heatmap_figure(data: pd.DataFrame, order: str, output: str, baseline: str = 
         raise NoBaselineRows(f"no {baseline} rows to divide by; frameworks present: {sorted(frmwrks)}")
     frmwrks.remove(baseline)
     frmwrks.append(baseline)
-    lfilter = ["benchmark", "domain"] + frmwrks
+    lfilter: list[str] = ["benchmark", "domain"] + frmwrks
 
     # Wide form: normalise every framework's median to NumPy's; keep the raw times for the
     # NumPy column and the geomean Total.
-    best_wide = best.pivot_table(index=["benchmark", "domain"], columns="framework", values="time").reset_index()
+    best_wide: pd.DataFrame = best.pivot_table(
+        index=["benchmark", "domain"], columns="framework", values="time"
+    ).reset_index()
     best_wide = best_wide[lfilter].reset_index(drop=True)
-    best_wide_time = best_wide.copy(deep=True)
+    best_wide_time: pd.DataFrame = best_wide.copy(deep=True)
     for f in frmwrks:
         best_wide[f] = best_wide[f] / best_wide_time[baseline]
 
     # Row ordering: reindex both the ratio and the raw-time frames identically.
-    ordered_names, spans = _reorder_rows(best_wide["benchmark"].tolist(), order)
-    rank = {n: i for i, n in enumerate(ordered_names)}
-    best_wide = best_wide.sort_values("benchmark", key=lambda c: c.map(rank)).reset_index(drop=True)
-    best_wide_time = best_wide_time.sort_values("benchmark", key=lambda c: c.map(rank)).reset_index(drop=True)
+    ordered_names, spans = reorder_rows(cast("list[str]", best_wide["benchmark"].tolist()), order)
+    rank: dict[str, int] = {n: i for i, n in enumerate(ordered_names)}
 
-    overall = best_wide.drop(["domain"], axis=1)
-    overall = pd.melt(overall, ["benchmark"])
+    def by_rank(column: pd.Series) -> pd.Series:
+        return column.map(rank)
+
+    best_wide = best_wide.sort_values("benchmark", key=by_rank).reset_index(drop=True)
+    best_wide_time = best_wide_time.sort_values("benchmark", key=by_rank).reset_index(drop=True)
+
+    overall: pd.DataFrame = pd.melt(best_wide.drop(["domain"], axis=1), ["benchmark"])
     overall = overall.groupby(["framework"]).value.apply(my_geomean).reset_index()
-    overall_wide = overall.pivot_table(columns="framework", values="value", dropna=False).reset_index(drop=True)
-    overall_wide = overall_wide[frmwrks]
-
-    overall_time = best_wide_time.drop(["domain"], axis=1)
-    overall_time = pd.melt(overall_time, ["benchmark"])
-    overall_time = overall_time.groupby(["framework"]).value.apply(my_geomean).reset_index()
-    overall_time_wide = overall_time.pivot_table(columns="framework", values="value", dropna=False).reset_index(
+    overall_wide: pd.DataFrame = overall.pivot_table(columns="framework", values="value", dropna=False).reset_index(
         drop=True
     )
+    overall_wide = overall_wide[frmwrks]
+
+    overall_time: pd.DataFrame = pd.melt(best_wide_time.drop(["domain"], axis=1), ["benchmark"])
+    overall_time = overall_time.groupby(["framework"]).value.apply(my_geomean).reset_index()
+    overall_time_wide: pd.DataFrame = overall_time.pivot_table(
+        columns="framework", values="value", dropna=False
+    ).reset_index(drop=True)
 
     plt.style.use("classic")
     figsz = (len(frmwrks) + 1, 12)
     fig, (ax2, ax1) = plt.subplots(2, 1, figsize=figsz, sharex=True, gridspec_kw={"height_ratios": [0.1, 5.7]})
 
-    hm_data_all = overall_wide
-    ax2.imshow(hm_data_all.to_numpy(), cmap="RdYlGn_r", interpolation="nearest", vmin=0, vmax=2, aspect="auto")
+    totals = cast("FloatArray", overall_wide.to_numpy())
+    total_baseline = cast("FloatArray", overall_time_wide[baseline].to_numpy())
+    ax2.imshow(totals, cmap="RdYlGn_r", interpolation="nearest", vmin=0, vmax=2, aspect="auto")
     ax2.set_yticks(np.arange(1))
     ax2.set_yticklabels(["Total"])
     for j in range(len(overall_wide.columns)):
         if j < len(overall_wide.columns) - 1:
-            label = hm_data_all.to_numpy()[0, j]
-            t = label
-            if t < 1:
-                t = 1 / t
-            if t < 1.3:
-                ax2.text(j, 0, my_speedup_abbr(label), ha="center", va="center", color="grey", fontsize=8)
-            else:
-                ax2.text(j, 0, my_speedup_abbr(label), ha="center", va="center", color="white", fontsize=8)
+            ratio = totals[0, j]
+            ax2.text(j, 0, my_speedup_abbr(ratio), ha="center", va="center", color=ink_for(ratio), fontsize=8)
         else:
-            label = overall_time_wide[baseline].to_numpy()[0]
-            ax2.text(j, 0, my_runtime_abbr(label), ha="center", va="center", color="white", fontsize=8)
+            ax2.text(j, 0, my_runtime_abbr(total_baseline[0]), ha="center", va="center", color="white", fontsize=8)
 
-    hm_data = best_wide.drop(["benchmark", "domain"], axis=1)
-    ax1.imshow(hm_data.to_numpy(), cmap="RdYlGn_r", interpolation="nearest", vmin=0, vmax=2, aspect="auto")
+    hm_data: pd.DataFrame = best_wide.drop(["benchmark", "domain"], axis=1)
+    ratios = cast("FloatArray", hm_data.to_numpy())
+    base_times = cast("FloatArray", best_wide_time[baseline].to_numpy())
+    names = cast("list[str]", best_wide["benchmark"].tolist())
+    columns = cast("list[str]", hm_data.columns.tolist())
+    ax1.imshow(ratios, cmap="RdYlGn_r", interpolation="nearest", vmin=0, vmax=2, aspect="auto")
 
-    ax1.set_xticks(np.arange(len(hm_data.columns)))
-    ax1.set_yticks(np.arange(len(best_wide["benchmark"])))
-    ax1.set_xticklabels(hm_data.columns)
-    ax1.set_yticklabels(best_wide["benchmark"])
+    ax1.set_xticks(np.arange(len(columns)))
+    ax1.set_yticks(np.arange(len(names)))
+    ax1.set_xticklabels(columns)
+    ax1.set_yticklabels(names)
     plt.setp(ax1.get_xticklabels(), rotation=90, ha="right", rotation_mode="anchor")
 
-    for i in range(len(best_wide["benchmark"])):
-        for j in range(len(hm_data.columns)):
-            b = best_wide["benchmark"][i]
-            f = hm_data.columns[j]
-            if j < len(hm_data.columns) - 1:
-                label = hm_data.to_numpy()[i, j]
-                if math.isnan(label):
-                    pass  # NaN cell renders blank
-                else:
-                    p = summary[(summary["framework"] == f) & (summary["benchmark"] == b)]["ci_perc"]
-                    ci = int(p.to_numpy()[0]) if len(p) else 0
-                    if ci > 0:
-                        ci = "$^{(" + str(ci) + ")}$"
-                    else:
-                        ci = ""
-                    t = label
-                    if t < 1:
-                        t = 1 / t
-                    if t < 1.3:
-                        ax1.text(j, i, my_speedup_abbr(label) + ci, ha="center", va="center", color="grey", fontsize=8)
-                    else:
-                        ax1.text(j, i, my_speedup_abbr(label) + ci, ha="center", va="center", color="white", fontsize=8)
-            else:
-                label = best_wide_time[baseline].to_numpy()[i]
-                ax1.text(j, i, my_runtime_abbr(label), ha="center", va="center", color="black", fontsize=8)
+    for i in range(len(names)):
+        for j in range(len(columns)):
+            if j == len(columns) - 1:
+                ax1.text(j, i, my_runtime_abbr(base_times[i]), ha="center", va="center", color="black", fontsize=8)
+                continue
+            ratio = ratios[i, j]
+            if math.isnan(ratio):
+                continue  # NaN cell renders blank
+            ci = ci_superscript(summary, names[i], columns[j])
+            ax1.text(j, i, my_speedup_abbr(ratio) + ci, ha="center", va="center", color=ink_for(ratio), fontsize=8)
 
     # Group separators + right-side y-axis group text (structured grids / tsvc2 / machine_learning / ...).
-    _draw_group_labels(ax1, spans, x_right=len(hm_data.columns) - 0.35)
+    draw_group_labels(ax1, spans, x_right=len(columns) - 0.35)
 
     ax1.set_ylabel("Benchmarks", labelpad=0)
 
@@ -516,7 +549,7 @@ def heatmap_figure(data: pd.DataFrame, order: str, output: str, baseline: str = 
     return save_figure(output, fig)
 
 
-def _grid_shape(n: int) -> Tuple[int, int]:
+def grid_shape(n: int) -> tuple[int, int]:
     """rows, cols for ``n`` per-kernel cells: a single kernel is 1x1, otherwise up to 4
     columns (``ceil(sqrt(n))`` capped) so each cell stays >= ~1.6in wide at a two-column
     paper width."""
@@ -527,27 +560,28 @@ def _grid_shape(n: int) -> Tuple[int, int]:
     return nrows, ncols
 
 
-def _framework_slots(data: pd.DataFrame, baseline: str = DEFAULT_BASELINE) -> List[str]:
+def framework_slots(data: pd.DataFrame, baseline: str = DEFAULT_BASELINE) -> list[str]:
     """The FULL framework set across the plotted scope, in a fixed slot order (numpy first as
     the reference, then alphabetical). Every panel reserves one slot per framework here, so a
     kernel missing a framework leaves an empty gap instead of re-packing the present ones."""
-    return sorted(data["framework"].unique(), key=lambda f: (f != baseline, f))
+    present = cast("list[str]", list(data["framework"].unique()))
+    return sorted(present, key=lambda f: (f != baseline, f))
 
 
 def plot_distribution_grid(
-    benchmark="all",
-    preset="S",
-    datatype="float64",
-    variant=None,
-    framework: Optional[str] = None,
+    benchmark: str = "all",
+    preset: str = "S",
+    datatype: str = "float64",
+    variant: str | None = None,
+    framework: str | None = None,
     kind: str = "violin",
     order: str = BY_DWARF,
-    db=None,
+    db: str | None = None,
     baseline: str = DEFAULT_BASELINE,
-    output=PLOTS_DIR + "/distribution.pdf",
+    output: str = PLOTS_DIR + "/distribution.pdf",
     col_width_in: float = 3.4,
     usetex: bool = True,
-) -> List[str]:
+) -> list[str]:
     """Emit ONE per-kernel distribution grid (violin or box) PER MACHINE; returns the paths written.
 
     Plural for the same reason as :func:`plot_heatmap`: rows from two nodes may not share a figure,
@@ -577,7 +611,7 @@ def plot_distribution_grid(
     everything = load_results(db, benchmark, preset, datatype, variant, baseline)
     if framework is not None:
         everything = everything[everything["framework"] == framework].reset_index(drop=True)
-    if everything.empty:
+    if bool(everything.empty):
         raise RuntimeError(f"no rows to plot for benchmark={benchmark!r} preset={preset!r} datatype={datatype!r}")
     return [
         distribution_figure(rows, kind, order, machine_output(output, label), col_width_in, baseline)
@@ -594,14 +628,14 @@ def distribution_figure(
     per-machine partition belongs above the drawing, not threaded through it.
     """
 
-    kernels = list(dict.fromkeys(data["benchmark"].tolist()))  # unique, insertion order
-    ordered, _spans = _reorder_rows(kernels, order)
+    kernels = list(dict.fromkeys(cast("list[str]", data["benchmark"].tolist())))  # unique, insertion order
+    ordered, _spans = reorder_rows(kernels, order)
 
-    slots = _framework_slots(data, baseline)  # FIXED slot per framework, shared by every panel
+    slots = framework_slots(data, baseline)  # FIXED slot per framework, shared by every panel
     colors = framework_colors(slots)
     nslots = len(slots)
 
-    nrows, ncols = _grid_shape(len(ordered))
+    nrows, ncols = grid_shape(len(ordered))
     fig_w = col_width_in if ncols == 1 else min(2 * col_width_in, ncols * col_width_in)
     fig_h = max(2.1, nrows * 2.0)
     fig, axes = plt.subplots(nrows, ncols, figsize=(fig_w, fig_h), squeeze=False)
@@ -611,7 +645,8 @@ def distribution_figure(
         ax = axes[idx // ncols][idx % ncols]
         sub = data[data["benchmark"] == kernel]
         for slot, fw in enumerate(slots):
-            samples = sub[sub["framework"] == fw]["time"].to_numpy()
+            times = cast("pd.Series", sub[sub["framework"] == fw]["time"])
+            samples = cast("FloatArray", times.to_numpy())
             if samples.size == 0:
                 continue  # empty gap at this framework's fixed slot; never re-pack
             kept, _dropped = stats.drop_outliers(samples, label=f"{kernel}@{fw}")
@@ -619,19 +654,20 @@ def distribution_figure(
                 continue
             if kind == "violin":
                 parts = ax.violinplot([kept], positions=[slot], widths=v_width, showmedians=True, showextrema=False)
-                for body in parts["bodies"]:
+                for body in cast("list[PolyCollection]", parts["bodies"]):
                     body.set_facecolor(colors[fw])
                     body.set_edgecolor(colors[fw])
                     body.set_alpha(0.75)
                 if "cmedians" in parts:
-                    parts["cmedians"].set_color("black")
-                    parts["cmedians"].set_linewidth(0.8)
+                    medians = cast("LineCollection", parts["cmedians"])
+                    medians.set_color("black")
+                    medians.set_linewidth(0.8)
             else:
                 bp = ax.boxplot([kept], positions=[slot], widths=v_width * 0.75, showfliers=False, patch_artist=True)
-                for patch in bp["boxes"]:
+                for patch in cast("list[Patch]", bp["boxes"]):
                     patch.set_facecolor(colors[fw])
                     patch.set_alpha(0.75)
-                for med in bp["medians"]:
+                for med in cast("list[Line2D]", bp["medians"]):
                     med.set_color("black")
         ax.set_xlim(-0.6, nslots - 0.4)  # CONSTANT across panels
         ax.set_xticks(range(nslots))
@@ -646,8 +682,8 @@ def distribution_figure(
         axes[idx // ncols][idx % ncols].axis("off")
 
     # One shared framework legend (colour -> framework), above the grid.
-    handles = [plt.Rectangle((0, 0), 1, 1, color=colors[fw]) for fw in slots]
-    fig.legend(
+    handles = [Rectangle((0, 0), 1, 1, color=colors[fw]) for fw in slots]
+    fig.legend(  # pyright: ignore[reportUnknownMemberType] -- matplotlib takes untyped **kwargs
         handles, slots, loc="upper center", ncol=min(nslots, 6), bbox_to_anchor=(0.5, 1.02), fontsize=7, frameon=False
     )
 
@@ -655,7 +691,12 @@ def distribution_figure(
     return save_figure(output, fig)
 
 
-def draw_interval_band(ax, interval, orientation: str = "horizontal", color: str = "#d64550") -> None:
+def draw_interval_band(
+    ax: Axes,
+    interval: inference.Interval,
+    orientation: Literal["horizontal", "vertical"] = "horizontal",
+    color: str = "#d64550",
+) -> None:
     """Shade an :class:`~hpcagent_bench.inference.Interval` on ``ax`` and mark its point estimate.
 
     The band is drawn the same way whatever produced it; the KIND of interval is communicated by
@@ -663,10 +704,12 @@ def draw_interval_band(ax, interval, orientation: str = "horizontal", color: str
     a reader must not have to infer "parametric or bootstrap?" from a shade of red."""
     if not (math.isfinite(interval.low) and math.isfinite(interval.high)):
         return
-    span = ax.axvspan if orientation == "horizontal" else ax.axhspan
-    line = ax.axvline if orientation == "horizontal" else ax.axhline
-    span(interval.low, interval.high, color=color, alpha=0.18, zorder=0)
-    line(interval.point, color=color, linewidth=1.2, zorder=1)
+    if orientation == "horizontal":
+        ax.axvspan(interval.low, interval.high, color=color, alpha=0.18, zorder=0)
+        ax.axvline(interval.point, color=color, linewidth=1.2, zorder=1)
+    else:
+        ax.axhspan(interval.low, interval.high, color=color, alpha=0.18, zorder=0)
+        ax.axhline(interval.point, color=color, linewidth=1.2, zorder=1)
 
 
 def plot_sample_diagnostics(
@@ -696,7 +739,7 @@ def plot_sample_diagnostics(
         the same cleaned sample the heatmap summarises.
     """
     set_usetex(usetex)
-    x = inference.clean(samples)
+    x: FloatArray = inference.clean(samples)
     n_dropped = 0
     if drop:
         x, dropped = stats.drop_outliers(x, label=title)
@@ -704,19 +747,24 @@ def plot_sample_diagnostics(
     if x.size == 0:
         raise RuntimeError(f"no usable samples to plot for {title!r}")
 
-    interval, verdict = inference.interval_for(x, confidence=confidence, alpha=alpha, seed=CI_SEED)
+    # interval_for spells its samples Sequence[float] and reads them through numpy, so the array is
+    # what it wants; the cast states that rather than copying the sample into a list.
+    interval, verdict = inference.interval_for(
+        cast("Sequence[float]", x), confidence=confidence, alpha=alpha, seed=CI_SEED
+    )
     fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(6.8, 2.8))
-    head = title or "sample"
-    if n_dropped:
+    head = title if title != "" else "sample"
+    if n_dropped != 0:
         head = f"{head} ({n_dropped} outlier(s) dropped)"
 
     if verdict.normal:
         bins = max(10, min(40, int(math.sqrt(x.size))))
         ax_left.hist(x, bins=bins, density=True, color="#2a78d6", alpha=0.55, edgecolor="white", linewidth=0.4)
-        grid = np.linspace(float(x.min()), float(x.max()), 256)
+        grid: FloatArray = np.linspace(float(x.min()), float(x.max()), 256)
         mu, sigma = float(np.mean(x)), float(np.std(x, ddof=1))
         if sigma > 0:  # a fitted curve is drawn ONLY on this branch
-            ax_left.plot(grid, norm.pdf(grid, mu, sigma), color="#d64550", linewidth=1.4, label="fitted normal")
+            density = cast("FloatArray", norm.pdf(grid, mu, sigma))
+            ax_left.plot(grid, density, color="#d64550", linewidth=1.4, label="fitted normal")
             ax_left.legend(fontsize=6, frameon=False)
         draw_interval_band(ax_left, interval)
         ax_left.set_xlabel(f"time ({units})", fontsize=7)
@@ -726,7 +774,7 @@ def plot_sample_diagnostics(
         ordered = np.sort(x)
         offset = 0.375 if ordered.size <= 10 else 0.5
         probs = (np.arange(1, ordered.size + 1) - offset) / (ordered.size + 1 - 2 * offset)
-        theoretical = norm.ppf(probs) * sigma + mu
+        theoretical = cast("FloatArray", norm.ppf(probs)) * sigma + mu
         ax_right.plot(theoretical, ordered, marker="o", linestyle="none", markersize=2.4, color="#2a78d6")
         lims = [float(min(theoretical.min(), ordered.min())), float(max(theoretical.max(), ordered.max()))]
         ax_right.plot(lims, lims, color="#8a8a86", linewidth=0.9, linestyle="--")
@@ -735,9 +783,9 @@ def plot_sample_diagnostics(
         ax_right.set_title(f"QQ vs normal (1-$r^2$ = {verdict.qq_departure:.2g})", fontsize=7)
     else:
         # ECDF: every sample visible, no binning choice, no implied smooth density.
-        ordered = np.sort(x)
-        ecdf = np.arange(1, ordered.size + 1) / ordered.size
-        ax_left.step(ordered, ecdf, where="post", color="#2a78d6", linewidth=1.2)
+        ordered_samples = np.sort(x)
+        ecdf: FloatArray = np.arange(1, ordered_samples.size + 1) / ordered_samples.size
+        ax_left.step(ordered_samples, ecdf, where="post", color="#2a78d6", linewidth=1.2)
         draw_interval_band(ax_left, interval)
         ax_left.set_xlabel(f"time ({units})", fontsize=7)
         ax_left.set_ylabel("ECDF", fontsize=7)
@@ -751,7 +799,7 @@ def plot_sample_diagnostics(
         if "cmedians" in parts:
             parts["cmedians"].set_color("black")
             parts["cmedians"].set_linewidth(0.8)
-        jitter = np.random.default_rng(CI_SEED).uniform(-0.16, 0.16, x.size)  # raw points, never hidden
+        jitter: FloatArray = np.random.default_rng(CI_SEED).uniform(-0.16, 0.16, x.size)  # raw points, never hidden
         ax_right.plot(jitter, x, marker="o", linestyle="none", markersize=2.0, color="#1baf7a", alpha=0.7)
         draw_interval_band(ax_right, interval, orientation="vertical")
         ax_right.set_xticks([])
@@ -773,11 +821,11 @@ def corpus_comparisons(
     benchmark: str = "all",
     preset: str = "S",
     datatype: str = "float64",
-    variant: Optional[str] = None,
-    db: Optional[str] = None,
+    variant: str | None = None,
+    db: str | None = None,
     alpha: float = inference.DEFAULT_ALPHA,
     method: str = "fdr_bh",
-) -> List[inference.CorpusComparison]:
+) -> list[inference.CorpusComparison]:
     """Per-kernel candidate-vs-baseline significance across the whole corpus in scope, with
     multiplicity correction applied.
 
@@ -791,15 +839,20 @@ def corpus_comparisons(
     as a finding. Kernels are returned in the shared report order so the table is deterministic.
     """
     data = load_results(db, benchmark, preset, datatype, variant, baseline)
-    kernels = list(dict.fromkeys(data["benchmark"].tolist()))
-    ordered, _spans = _reorder_rows(kernels, BY_DWARF)
+    kernels = list(dict.fromkeys(cast("list[str]", data["benchmark"].tolist())))
+    ordered, _spans = reorder_rows(kernels, BY_DWARF)
     # Ordered: the key order reaches the report table, so it must not depend on hash order.
-    cells: "collections.OrderedDict[str, Tuple[np.ndarray, np.ndarray]]" = collections.OrderedDict()
+    cells: collections.OrderedDict[str, tuple[FloatArray, FloatArray]] = collections.OrderedDict()
     for kernel in ordered:
-        sub = data[data["benchmark"] == kernel]
-        cand = sub[sub["framework"] == candidate]["time"].to_numpy()
-        base = sub[sub["framework"] == baseline]["time"].to_numpy()
+        rows = data[data["benchmark"] == kernel]
+        cand_times = cast("pd.Series", rows[rows["framework"] == candidate]["time"])
+        base_times = cast("pd.Series", rows[rows["framework"] == baseline]["time"])
+        cand = cast("FloatArray", cand_times.to_numpy())
+        base = cast("FloatArray", base_times.to_numpy())
         if cand.size < 2 or base.size < 2:
             continue  # nothing to test; a 1-sample cell would fabricate a p-value
         cells[kernel] = (cand, base)
-    return inference.compare_corpus(cells, paired=False, alpha=alpha, method=method)
+    # compare_corpus spells its samples Sequence[float] and reads them through numpy, so an array
+    # is what it wants; the cast states that rather than copying every cell into a list.
+    typed_cells = cast("Mapping[str, tuple[Sequence[float], Sequence[float]]]", cells)
+    return inference.compare_corpus(typed_cells, paired=False, alpha=alpha, method=method)
