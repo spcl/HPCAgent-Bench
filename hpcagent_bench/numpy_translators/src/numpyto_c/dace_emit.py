@@ -3610,6 +3610,48 @@ class RenderedProgram:
     needs_complex: bool
 
 
+def exits_with_valueless_return(body: List[ast.stmt]) -> bool:
+    """Whether ``body`` ends in a ``return`` that carries no value."""
+    return bool(body) and isinstance(body[-1], ast.Return) and body[-1].value is None
+
+
+def without_valueless_returns(body: List[ast.stmt]) -> List[ast.stmt]:
+    """``body``, in TAIL position, with every ``return`` that carries no value structured away.
+
+    :func:`numpyto_common.frontend._rewrite_returns_to_outparam` closes a promoted-return helper
+    with ``hret[:] = expr`` plus a bare ``return``, which is what the C and Fortran legs emit as a
+    ``void`` out-param procedure. dace lowers any ``return`` into a ReturnBlock, and its codegen
+    emits a nested program's blocks INLINE in the caller's function -- so that bare return becomes
+    a C ``return;`` that leaves the CALLER. Every statement after the call site is skipped and the
+    kernel computes a wrong answer in silence, which is how eigh_test, nbody, channel_flow and
+    cp2k_density_matrix_trs4 all stopped agreeing with numpy.
+
+    Two exact rewrites, both of which say what falling off the end already says:
+
+    * a return in tail position, and anything after it in the same list, is dropped;
+    * a guard that exits (``if c: <A>; return`` with ``<B>`` after it) becomes ``if c: <A> else:
+      <B>``, which puts ``<A>`` and ``<B>`` back in tail position for the recursion.
+
+    A return this cannot reach -- inside a loop, or under a guard that already carries an ``else``
+    -- is left alone rather than guessed at.
+    """
+    kept: List[ast.stmt] = []
+    for index, stmt in enumerate(body):
+        if isinstance(stmt, ast.Return) and stmt.value is None:
+            return kept
+        rest = body[index + 1 :]
+        guard_exits = isinstance(stmt, ast.If) and not stmt.orelse and exits_with_valueless_return(stmt.body)
+        if isinstance(stmt, ast.If) and (not rest or guard_exits):
+            trailing = stmt.orelse if not rest else rest
+            arm = without_valueless_returns(stmt.body)
+            stmt.body = arm if arm else [ast.copy_location(ast.Pass(), stmt)]
+            stmt.orelse = without_valueless_returns(trailing)
+            kept.append(stmt)
+            return kept
+        kept.append(stmt)
+    return kept
+
+
 def render_program(kir: KernelIR, fn_name: str | None = None, helpers: Sequence[KernelIR] = ()) -> RenderedProgram:
     """Lower ``kir``'s body into the form dace's frontend parses, and return it with its signature.
 
@@ -3857,6 +3899,7 @@ def render_program(kir: KernelIR, fn_name: str | None = None, helpers: Sequence[
         and isinstance(body[0].value.value, str)
     ):
         body = body[1:]
+    body = without_valueless_returns(body)
     # After the docstring, so the allocations do not displace it, and after every pass above, so
     # the argument expressions they rewrite have settled.
     written_by = {
