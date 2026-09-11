@@ -22,11 +22,17 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from hpcagent_bench.harness import recording
 
+#: What sqlite hands back and takes. Named so a row is a typed mapping rather than a bag.
+SqlValue = str | int | float | bytes | None
+Row = dict[str, SqlValue]
+#: ``(experiment, model, language, device, packet)`` -- what an arm name resolves to, once.
+Identity = tuple[str, str, str, str, str]
+
 #: Arm-name prefix -> (experiment, device). The longest matching prefix wins, so `gpu-llr-focus40`
 #: is not read as `llr-focus40`. Campaign versions stay separate experiments: v9, v10 and v11 ran
 #: different prompts and skill pages, so their rows are not comparable and must not share a tag.
 #: Waves of ONE version DO share it -- `v11w2` is the second wave of v11, not another experiment.
-CAMPAIGNS = {
+CAMPAIGNS: dict[str, tuple[str, str]] = {
     "cpf-llr-focus40": ("llr-focus40", "cpu"),
     "gpu-llr-focus40": ("llr-focus40", "gpu"),
     "llr40v9": ("llr-focus40-v9", "cpu"),
@@ -39,11 +45,11 @@ CAMPAIGNS = {
     "git-scicomp": ("git-scicomp", "cpu"),
 }
 
-MODELS = ("kimi27sglang", "oss120b", "qwen38", "glm53")
+MODELS: tuple[str, ...] = ("kimi27sglang", "oss120b", "qwen38", "glm53")
 
 #: Arm language token -> (language, extra packet). `omp` is a C arm whose directive model is the
 #: treatment; `pytriton` and `triton` are the same language under two spellings.
-LANGUAGES = {
+LANGUAGES: dict[str, tuple[str, str]] = {
     "c": ("c", ""),
     "cpp": ("cpp", ""),
     "fortran": ("fortran", ""),
@@ -56,11 +62,11 @@ LANGUAGES = {
     "repo": ("c", "repo"),
 }
 
-PACKETS = {"skills": "lang-skills", "cpf": "cpf", "cpfsrc": "cpfsrc", "blind": "no-score-tool"}
+PACKETS: dict[str, str] = {"skills": "lang-skills", "cpf": "cpf", "cpfsrc": "cpfsrc", "blind": "no-score-tool"}
 
 #: run_id prefixes that belong to no experiment: ad-hoc runs, smoke tests, and one launcher that
 #: shipped the variable unexpanded. Their rows are dropped, counted, and reported.
-UNATTRIBUTED = (
+UNATTRIBUTED: tuple[str, ...] = (
     "adhoc",
     "run1",
     "run2",
@@ -74,10 +80,10 @@ UNATTRIBUTED = (
     "gpusmoke5-hip-cpf",
 )
 
-TABLES = ("benchmarks", "submissions", "attempts", "calls", "sources")
+TABLES: tuple[str, ...] = ("benchmarks", "submissions", "attempts", "calls", "sources")
 
 
-def parse_arm(arm: str) -> tuple[str, str, str, str, str] | None:
+def parse_arm(arm: str) -> Identity | None:
     """``(experiment, model, language, device, packet)`` for one arm name, or None if unattributed."""
     if arm in UNATTRIBUTED:
         return None
@@ -91,7 +97,8 @@ def parse_arm(arm: str) -> tuple[str, str, str, str, str] | None:
         raise ValueError(f"no known model in arm {arm!r}")
     rest = rest[len(model) :]
     tokens = [t for t in rest.strip("-").split("-") if t]
-    language, packets = "", []
+    language = ""
+    packets: list[str] = []
     for token in tokens:
         if not language and token in LANGUAGES:
             language, extra = LANGUAGES[token]
@@ -132,16 +139,16 @@ def is_shard(path: pathlib.Path) -> bool:
 
 def shard_paths(targets: Sequence[str]) -> list[pathlib.Path]:
     """Every results DB under the given run roots or files, sorted so a merge is reproducible."""
-    found = []
+    found: list[pathlib.Path] = []
     for target in targets:
         path = pathlib.Path(target)
         found.extend([path] if path.is_file() else path.rglob("*.db"))
     return sorted({p.resolve() for p in found if is_shard(p)})
 
 
-def read_arms(paths: Sequence[pathlib.Path]) -> collections.Counter:
+def read_arms(paths: Sequence[pathlib.Path]) -> collections.Counter[str]:
     """``arm -> row count`` across every shard, so a mapping can be checked before anything is written."""
-    counts = collections.Counter()
+    counts: collections.Counter[str] = collections.Counter()
     for path in paths:
         conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
         try:
@@ -159,7 +166,7 @@ def copy_table(
     dest: sqlite3.Connection,
     src: sqlite3.Connection,
     table: str,
-    identity: Callable[[str], tuple[str, str, str, str, str] | None],
+    identity: Callable[[str], Identity | None],
 ) -> tuple[int, int]:
     """Copy one table, deriving the identity columns for any row that does not already carry them.
 
@@ -169,22 +176,22 @@ def copy_table(
     have = {r[1] for r in src.execute(f"PRAGMA table_info({table})")}
     want = [r[1] for r in dest.execute(f"PRAGMA table_info({table})") if r[1] != "id"]
     shared = [c for c in want if c in have]
-    rows, dropped = [], 0
+    rows: list[tuple[list[str], tuple[SqlValue, ...]]] = []
+    dropped = 0
     for row in src.execute(f"SELECT {', '.join(shared)} FROM {table}"):
-        record = dict(zip(shared, row))
+        record: Row = dict(zip(shared, row))
         if table != "benchmarks" and not record.get("model"):
             # a row written since the identity columns exist already carries all of this, and
             # rewriting it would put the arm's language into delivered_language, losing the claim
-            tags = identity(record.get("run_id", ""))
+            run_id = str(record.get("run_id") or "")
+            tags = identity(run_id)
             if tags is None:
                 dropped += 1
                 continue
             experiment, model, language, device, packet = tags
             if "delivered_language" in want:
-                record["delivered_language"] = record.get("language") or ""
-            record.update(
-                experiment=experiment, model=model, device=device, packet=packet, arm=arm_of(record.get("run_id", ""))
-            )
+                record["delivered_language"] = str(record.get("language") or "")
+            record.update(experiment=experiment, model=model, device=device, packet=packet, arm=arm_of(run_id))
             if "language" in want:
                 record["language"] = language
         cols = [c for c in want if c in record]
@@ -214,7 +221,9 @@ def main() -> None:
         sys.exit("no result DBs under the given sources")
     counts = read_arms(paths)
 
-    mapping, unmapped, skipped = {}, [], 0
+    mapping: dict[str, Identity] = {}
+    unmapped: list[tuple[str, int, str]] = []
+    skipped = 0
     for arm, n in sorted(counts.items()):
         try:
             tags = parse_arm(arm)
@@ -243,10 +252,10 @@ def main() -> None:
         pathlib.Path(args.out + suffix).unlink(missing_ok=True)
     dest = recording.connect(args.out)
 
-    def identity(run_id: str) -> tuple[str, str, str, str, str] | None:
+    def identity(run_id: str) -> Identity | None:
         return mapping.get(arm_of(run_id))
 
-    written = collections.Counter()
+    written: collections.Counter[str] = collections.Counter()
     try:
         dest.execute("PRAGMA foreign_keys = OFF")
         for path in paths:

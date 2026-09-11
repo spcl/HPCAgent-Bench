@@ -1,0 +1,11 @@
+{
+  "//": "Files held to strict typing: every function annotated, no name changing type, no dynamic",
+  "//2": "instance attributes. The list GROWS as a file is cleaned; a file is never removed from it.",
+  "//3": "Run: pyright --project pyrightconfig.strict.json",
+  "include": [
+    "hpcagent_bench/stats/palette.py",
+    "scripts/migrate_db.py"
+  ],
+  "typeCheckingMode": "strict",
+  "reportMissingImports": false
+}
