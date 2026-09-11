@@ -36,7 +36,7 @@ def _base_sdfg():
 
 def test_cpu_canonicalize_runs_the_fork_canonicalize_pipeline(base_sdfg) -> None:
     ctx = DaceFramework("dace_cpu")._build_context()
-    assert ctx["device"] is dace.dtypes.DeviceType.CPU, "dace_cpu did not resolve to the CPU device"
+    assert ctx.device is dace.dtypes.DeviceType.CPU, "dace_cpu did not resolve to the CPU device"
 
     pipeline_canonicalize(base_sdfg, ctx)
 
