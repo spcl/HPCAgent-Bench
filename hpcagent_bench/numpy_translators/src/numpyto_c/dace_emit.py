@@ -4019,16 +4019,12 @@ def caller_side_recipe(owner: ast.FunctionDef, arg: ast.expr, pinned: Dict[str, 
     ]
     if bound:
         return folded_with_constants(ast.unparse(bound[0]), pinned) if len(bound) == 1 else ""
-    # A name the owner never assigns is a symbol of its own, and it STANDS for itself. Without this
-    # a helper whose extent argument is a bare symbol got no recipe at all, so its descriptors kept
-    # the caller's spelling while its body kept the parameter's -- ``_scale`` declared ``[N]`` and
-    # computed in ``n``, which is the one shape in two spellings this whole map exists to collapse.
-    # A bare symbol the owner never assigns is NOT taken as its own recipe. It reads like the same
-    # extent under two names, and collapsing them does fix `_scale` (declared [N], computing in n,
-    # which will not parse -- see test_dace_helper_programs). But the rename reaches the body and
-    # only half the descriptors, and max_pooling_2d then failed to parse with
-    # "[batch_size, c, h, w] into [batch_size, channels, height, width]". Declined until the
-    # rename is applied to both sides at once.
+    # A name the owner never assigns has no recipe: it IS the caller's symbol, and which of the two
+    # spellings survives is the ALIAS pass's call, made with the captured names in hand. Answering
+    # here as well put BOTH directions in one map -- ``channels -> c`` from the alias pass beside
+    # ``c -> channels`` from this one -- and with_helper_vocabulary then moved the two sides apart,
+    # respelling the descriptors caller->helper while RenameNames took the body helper->caller:
+    # max_pooling_2d declared [batch_size, c, h, w] over a body computing in channels/height/width.
     return ""
 
 
@@ -4137,18 +4133,18 @@ def helper_call_bindings(owner: ast.FunctionDef, hkir: KernelIR, pinned: Dict[st
         # symbol, and dace refuses the write between two extents it cannot relate. The symbol is
         # the canonical one -- a runtime scalar cannot size a dace descriptor at all.
         #
-        # Two conditions. ONE call site, because respelling a SHAPE costs nothing at a second site
-        # (dace re-solves a declared extent per call) while retiring a runtime scalar spends the
-        # value that site would have passed -- ``_scale(v, k, n)`` called at ``N`` and at ``2 * N``
-        # is shape-generic precisely because ``n`` stays a parameter. And a quantity no descriptor
-        # states OUTRIGHT, because a symbol standing alone as a dimension is solved from its
-        # argument and the body's own name for it already rides along as a keyword.
-        bare = {str(dim).strip() for arr in hkir.arrays for dim in arr.shape if _IDENT_RE.fullmatch(str(dim).strip())}
+        # ONE call site, because respelling a SHAPE costs nothing at a second site (dace re-solves a
+        # declared extent per call) while retiring a runtime scalar spends the value that site would
+        # have passed. A symbol the descriptors state OUTRIGHT is no exception, though it was read
+        # as one: the reading was that dace solves such a symbol from the argument while the body's
+        # own name rides along as a keyword, so both are bound -- but BOUND IS NOT EQUAL, and
+        # ``_scale`` declared ``[N]`` over a body allocating ``np.empty(n)`` had its closing write
+        # refused ("could not broadcast input array from shape [n] into shape [N]").
         for pname, arg in zip(abi, node.args if sites == 1 else []):
-            if pname not in scalar_names or not isinstance(arg, ast.Name) or arg.id in bare:
+            if pname not in scalar_names or not isinstance(arg, ast.Name):
                 continue
             canonical = binding.aliases.get(arg.id, arg.id if arg.id in own else None)
-            if canonical is not None and canonical != pname and canonical not in bare:
+            if canonical is not None and canonical != pname:
                 binding.collapse[pname] = canonical
         for pname in captured:
             if pname in binding.collapse:
