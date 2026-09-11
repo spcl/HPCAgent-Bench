@@ -76,11 +76,16 @@ def test_the_name_is_the_manifest_stem():
 
 
 def test_a_manifest_may_not_declare_a_second_identity(tmp_path):
-    """The guard itself: declaring a differing short_name is an error, not a silent alias."""
+    """The guard itself: a kernel has ONE name, and the manifest stem is it.
+
+    ``short_name`` used to be declarable and had to agree with the stem; it is now retired
+    outright, so the refusal comes from the unknown-field check rather than from a comparison.
+    Either way the manifest does not load, which is the property worth pinning -- a second
+    identity that silently aliased is what the field could have become."""
     manifest = tmp_path / "some_kernel.yaml"
     manifest.write_text("name: Some Kernel\nshort_name: sk\nfunc_name: some_kernel\noutput_args: [out]\n")
     raw = yaml.safe_load(manifest.read_text())
-    with pytest.raises(ValueError, match="one name"):
+    with pytest.raises(ValueError, match="short_name"):
         BenchSpec.from_yaml(raw, source=str(manifest))
 
 
