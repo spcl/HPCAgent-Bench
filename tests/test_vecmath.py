@@ -132,6 +132,12 @@ def test_every_cpu_baseline_is_classified():
     )
 
 
+#: libmvec is glibc's. The seven tests below used a bare ``if not osinfo.IS_LINUX: return``, which
+#: reports PASS having asserted nothing -- worse than a skip, because nothing in the summary says
+#: the body never ran. A mark makes the exclusion visible and countable.
+LINUX_ONLY = pytest.mark.skipif(not osinfo.IS_LINUX, reason="libmvec is glibc-only; no macOS equivalent")
+
+
 @pytest.mark.parametrize("name", sorted(n for n, route in VECLIB_ROUTE.items() if route in ("header", "flag")))
 def test_every_cpu_baseline_reaches_libmvec(name):
     """The point of the whole file: no CPU baseline may silently lack the vector libm while another
@@ -173,11 +179,10 @@ def test_fortran_compilers_use_the_fortran_baseline(block):
     assert compilers[block]["baseline_ref"] == "CPU_BASELINE_GFORTRAN"
 
 
+@LINUX_ONLY
 def test_the_header_declares_nothing_libmvec_does_not_export():
     """Declaring a function libmvec does not export makes every kernel using it fail to link; assert it
     here, where the message says which function, instead of mid-build."""
-    if not osinfo.IS_LINUX:
-        return
     libmvec = ctypes.util.find_library("mvec")
     assert libmvec, "glibc libmvec not found on this host; CPU_BASELINE_GCC would emit unresolvable calls"
     path = subprocess.run(
@@ -197,11 +202,10 @@ def test_the_header_declares_nothing_libmvec_does_not_export():
 # --- Behavioural guards: gcc/g++/gfortran are present in every job that runs these -------
 
 
+@LINUX_ONLY
 def test_gcc_vectorizes_libm_at_the_baseline(tmp_path):
     """The regression this file exists for: before the header, gcc called scalar libm in a loop while
     clang vectorized the same source."""
-    if not osinfo.IS_LINUX:
-        return
     assert shutil.which("gcc"), "gcc is required to build native C kernels"
     obj = compile_object(tmp_path, C_LIBM_LOOP, ".c", "gcc", flags.CPU_BASELINE_GCC, languages.std_flag("c"))
     calls = libmvec_calls(obj)
@@ -209,20 +213,18 @@ def test_gcc_vectorizes_libm_at_the_baseline(tmp_path):
     assert any("_exp" in s for s in calls) and any("_log" in s for s in calls), f"got {sorted(calls)}"
 
 
+@LINUX_ONLY
 def test_gxx_vectorizes_libm_at_the_baseline(tmp_path):
     """C++ is a separate risk from C: the decls must survive <cmath>'s extern "C" + noexcept."""
-    if not osinfo.IS_LINUX:
-        return
     assert shutil.which("g++"), "g++ is required to build native C++ kernels"
     obj = compile_object(tmp_path, CXX_LIBM_LOOP, ".cpp", "g++", flags.CPU_BASELINE_GCC, languages.std_flag("cpp"))
     assert libmvec_calls(obj), "g++ emitted NO libmvec calls at CPU_BASELINE_GCC"
 
 
+@LINUX_ONLY
 def test_gfortran_vectorizes_libm_at_the_baseline(tmp_path):
     """gfortran gets libmvec for free via the driver spec's pre-include; a host whose spec omits it
     silently loses libmvec while C keeps it, so the fortran column stops being comparable."""
-    if not osinfo.IS_LINUX:
-        return
     assert shutil.which("gfortran"), "gfortran is required to build native Fortran kernels"
     obj = compile_object(
         tmp_path,
@@ -240,10 +242,9 @@ def test_gfortran_vectorizes_libm_at_the_baseline(tmp_path):
     )
 
 
+@LINUX_ONLY
 def test_the_fortran_baseline_compiles_without_warnings(tmp_path):
     """The concrete reason CPU_BASELINE_GFORTRAN exists: the C/C++ baseline made gfortran warn on every compile."""
-    if not osinfo.IS_LINUX:
-        return
     assert shutil.which("gfortran"), "gfortran is required to build native Fortran kernels"
     src = tmp_path / "warn.f90"
     src.write_text(FORTRAN_LIBM_LOOP)
@@ -265,11 +266,10 @@ def test_the_fortran_baseline_compiles_without_warnings(tmp_path):
 # --- Why the header, and not -D__FAST_MATH__ --------------------------------------------
 
 
+@LINUX_ONLY
 def test_the_header_does_not_leak_fast_math_into_libstdcxx(tmp_path):
     """-D__FAST_MATH__ was rejected because <bits/c++config.h> turns it into _GLIBCXX_FAST_MATH=1,
     changing libstdc++'s complex infinity handling; our header must not do that."""
-    if not osinfo.IS_LINUX:
-        return
     assert shutil.which("g++"), "g++ is required to build native C++ kernels"
     probe = tmp_path / "leak.cpp"
     probe.write_text(
@@ -287,10 +287,9 @@ def test_the_header_does_not_leak_fast_math_into_libstdcxx(tmp_path):
     assert poisoned.returncode != 0, "probe is vacuous: it does not even detect a real -ffast-math"
 
 
+@LINUX_ONLY
 def test_the_header_does_not_change_math_errhandling(tmp_path):
     """The C half of the same lie: -D__FAST_MATH__ flips math_errhandling from MATH_ERREXCEPT to 0."""
-    if not osinfo.IS_LINUX:
-        return
     assert shutil.which("gcc"), "gcc is required to build native C kernels"
     values = {}
     for label, extra in (("with", ["-include", str(flags.VECMATH_H)]), ("without", [])):

@@ -37,8 +37,17 @@ def test_emitter_without_the_guard_is_reported(tmp_path):
     bad.write_text('TEMPLATE = """#!/bin/bash\n#SBATCH --job-name=x\nsrun true\n"""\n')
     assert check_core_dumps.emitters([str(bad)]) == [bad]
 
-    bad.write_text('TEMPLATE = """#!/bin/bash\n#SBATCH --job-name=x\nulimit -c 0\nsrun true\n"""\n')
-    assert check_core_dumps.GUARD in bad.read_text()
+    # Through the SCRIPT, because the offender rule -- "emits a header AND lacks the guard" -- is an
+    # inline comprehension in main() and is not callable on its own. ``emitters()`` answers only the
+    # first half, so it still returns the guarded file; the previous assertion here sidestepped that
+    # by checking ``GUARD in bad.read_text()``, which is the string the line above had just written.
+    guarded = tmp_path / "guarded.py"
+    guarded.write_text('TEMPLATE = """#!/bin/bash\n#SBATCH --job-name=x\nulimit -c 0\nsrun true\n"""\n')
+    assert check_core_dumps.emitters([str(guarded)]) == [guarded], "it still emits a header"
+    script = paths.ROOT / "scripts" / "check_core_dumps.py"
+    for target, expected in ((bad, 1), (guarded, 0)):
+        proc = subprocess.run([sys.executable, str(script), str(target)], capture_output=True, text=True)
+        assert proc.returncode == expected, f"{target.name}: rc={proc.returncode}\n{proc.stderr}"
 
 
 def test_checker_passes_over_the_whole_repo():
