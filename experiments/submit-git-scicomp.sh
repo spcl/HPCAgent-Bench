@@ -75,6 +75,7 @@ submit_arm() {
     fi
     local kv
     for kv in "${kvs[@]}"; do pin_env_kv "${env}" "${kv}"; done
+    check_context_budget "${env}" || exit 2
     local nodes; nodes=$(arm_nodes "${env}")
     if [[ "${SUBMIT:-1}" != 1 ]]; then
         echo "prepared ${arm} (${nodes} nodes)${dep:+ after ${dep}} -- not submitted"
