@@ -59,10 +59,16 @@ def seed_shard(path: pathlib.Path, *, run_id: str, kernel: str = "gemm", ts: int
             "INSERT OR REPLACE INTO benchmarks(name, track, dwarf, source) VALUES (?,?,?,?)",
             (kernel, "scientific_computing", "dense_la", None),
         )
+        # The arm's language is one runs row per run, not a column on the measurement row.
         conn.execute(
-            "INSERT INTO submissions(run_id, ts, benchmark, preset, datatype, language, "
-            "source_mode, optimizer, baseline, speedup) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (run_id, ts, kernel, "S", "float64", "c", "restricted", "noop", "c", 1.5),
+            "INSERT OR IGNORE INTO runs(run_id, experiment, model, language, device, packet, rep, arm) "
+            "VALUES (?, 'validate', 'qwen38', 'c', 'cpu', '', 1, 'validate-qwen38-c')",
+            (run_id,),
+        )
+        conn.execute(
+            "INSERT INTO submissions(run_id, ts, benchmark, preset, datatype, "
+            "source_mode, optimizer, baseline, speedup) VALUES (?,?,?,?,?,?,?,?,?)",
+            (run_id, ts, kernel, "S", "float64", "restricted", "noop", "c", 1.5),
         )
         conn.commit()
     finally:
@@ -215,9 +221,9 @@ def test_merge_results_carries_the_call_trajectory(tmp_path) -> None:
         conn = recording.connect(str(run_dir / "judge" / f"rank-{rank}" / "hpcagent_bench.db"))
         try:
             conn.execute(
-                "INSERT INTO calls(run_id, ts, benchmark, preset, datatype, language, source_mode, "
-                "round, tokens, status, route) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                (f"r{rank}", 1, "gemm", "S", "float64", "c", "restricted", 1, 0, "build_error", "score"),
+                "INSERT INTO calls(run_id, ts, benchmark, preset, datatype, source_mode, "
+                "round, tokens, status, route) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (f"r{rank}", 1, "gemm", "S", "float64", "restricted", 1, 0, "build_error", "score"),
             )
             conn.commit()
         finally:
