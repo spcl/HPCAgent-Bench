@@ -145,10 +145,7 @@ def read_database(db: Database, want: dict[str, frozenset[str]]) -> Iterator[dic
                 continue
             # LEFT JOIN, not JOIN: a row whose run was never recorded is a fact about that run and
             # has to reach the caller as an unidentified row, not vanish from the count.
-            query = (
-                f"SELECT t.*, {selected} "  # noqa: S608 -- fixed names
-                f"FROM {table} t LEFT JOIN runs r USING (run_id) ORDER BY t.ts, t.id"
-            )
+            query = f"SELECT t.*, {selected} FROM {table} t LEFT JOIN runs r USING (run_id) ORDER BY t.ts, t.id"
             for row in conn.execute(query):
                 record = dict(row)
                 if not selects(record, want):
