@@ -137,7 +137,7 @@ def packet_skills_text(spec: str, language: str) -> str:
         if not language and "'lang-'" in message:
             raise ValueError(f"--packet {spec!r} expands the language page (lang); pass --language") from None
         raise
-    names = list(packet.skills)
+    names = list(packet.pages)
     if not names:
         return ""
     shipped = load_skills(())
