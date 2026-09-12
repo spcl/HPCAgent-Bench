@@ -1451,6 +1451,21 @@ class _TransposeRewriter(ast.NodeTransformer):
         )
 
 
+def negative_literal_offset(node: ast.AST) -> int | None:
+    """``K`` for a negative integer literal ``-K`` -- a signed ``Constant`` or ``UnaryOp(USub, Constant)``, the
+    form numpy source parses to -- else None. Numpy counts such an index from the end of its axis."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, int) and node.value < 0:
+        return -node.value
+    if (
+        isinstance(node, ast.UnaryOp)
+        and isinstance(node.op, ast.USub)
+        and isinstance(node.operand, ast.Constant)
+        and isinstance(node.operand.value, int)
+    ):
+        return node.operand.value
+    return None
+
+
 def _const_int_index(node: ast.AST) -> Optional[int]:
     """Return the integer value of a constant subscript index (``arr[3]`` /
     ``arr[-1]``), or ``None`` for a non-constant one. Numpy spells a negative
@@ -4237,15 +4252,9 @@ class SliceFusion(ast.NodeTransformer):
         """
         if bound is None:
             return default() if callable(default) else default
-        if isinstance(bound, ast.Constant) and isinstance(bound.value, int) and bound.value < 0:
-            return _binop(self._axis_length(array_name, axis), ast.Sub(), _const(-bound.value))
-        if (
-            isinstance(bound, ast.UnaryOp)
-            and isinstance(bound.op, ast.USub)
-            and isinstance(bound.operand, ast.Constant)
-            and isinstance(bound.operand.value, int)
-        ):
-            return _binop(self._axis_length(array_name, axis), ast.Sub(), _const(bound.operand.value))
+        k = negative_literal_offset(bound)
+        if k is not None:
+            return _binop(self._axis_length(array_name, axis), ast.Sub(), _const(k))
         return bound
 
     def _scalar_slice(self, lhs_dims, iter_vars, ranges, name) -> ast.AST:
@@ -4277,15 +4286,9 @@ class SliceFusion(ast.NodeTransformer):
         wrap-around, so leaving it literal indexes ``arr[... + (-1)]``
         out of bounds (the deriche heap corruption). Other indices pass
         through unchanged so ``N - 1`` etc. survive."""
-        if isinstance(idx, ast.Constant) and isinstance(idx.value, int) and idx.value < 0:
-            return _binop(self._axis_length(name, axis), ast.Sub(), _const(-idx.value))
-        if (
-            isinstance(idx, ast.UnaryOp)
-            and isinstance(idx.op, ast.USub)
-            and isinstance(idx.operand, ast.Constant)
-            and isinstance(idx.operand.value, int)
-        ):
-            return _binop(self._axis_length(name, axis), ast.Sub(), _const(idx.operand.value))
+        k = negative_literal_offset(idx)
+        if k is not None:
+            return _binop(self._axis_length(name, axis), ast.Sub(), _const(k))
         return idx
 
 
@@ -4896,16 +4899,7 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
         semantics. Mirrors :meth:`SliceFusion._resolve_scalar_index` but
         reads the operand shape from ``self.array_shapes`` (RHS side)."""
         shape = self.array_shapes.get(array_name) if array_name else None
-        val = None
-        if isinstance(idx, ast.Constant) and isinstance(idx.value, int) and idx.value < 0:
-            val = -idx.value
-        elif (
-            isinstance(idx, ast.UnaryOp)
-            and isinstance(idx.op, ast.USub)
-            and isinstance(idx.operand, ast.Constant)
-            and isinstance(idx.operand.value, int)
-        ):
-            val = idx.operand.value
+        val = negative_literal_offset(idx)
         if val is not None and shape and axis < len(shape):
             axis_len = (
                 _const(int(shape[axis]))
@@ -4929,22 +4923,10 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
         if bound is None:
             return default
         shape = self.array_shapes.get(array_name) if array_name else None
-        if isinstance(bound, ast.Constant) and isinstance(bound.value, int) and bound.value < 0:
-            if shape and axis < len(shape):
-                axis_len = (
-                    _const(int(shape[axis])) if shape[axis].isdigit() else ast.Name(id=shape[axis], ctx=ast.Load())
-                )
-                return _binop(axis_len, ast.Sub(), _const(-bound.value))
-        if (
-            isinstance(bound, ast.UnaryOp)
-            and isinstance(bound.op, ast.USub)
-            and isinstance(bound.operand, ast.Constant)
-            and isinstance(bound.operand.value, int)
-            and shape
-            and axis < len(shape)
-        ):
+        k = negative_literal_offset(bound)
+        if k is not None and shape and axis < len(shape):
             axis_len = _const(int(shape[axis])) if shape[axis].isdigit() else ast.Name(id=shape[axis], ctx=ast.Load())
-            return _binop(axis_len, ast.Sub(), _const(bound.operand.value))
+            return _binop(axis_len, ast.Sub(), _const(k))
         return bound
 
 

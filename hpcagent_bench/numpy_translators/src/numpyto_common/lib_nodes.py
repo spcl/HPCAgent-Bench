@@ -19,6 +19,7 @@ import ast
 import copy
 import re
 from functools import lru_cache
+from collections.abc import Collection, Mapping, Sequence
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 
 from numpyto_common import dtypes
@@ -1728,6 +1729,39 @@ def _read_axis_keepdims(args, kwargs):
     return axes, keepdims
 
 
+def reduction_source_index(
+    n_dim: int, axes: Collection[int], red_iter_map: Mapping[int, str], outer_iter_names: Sequence[str]
+) -> list[ast.expr]:
+    """Subscript entries reading a reduced operand: a reduced axis takes its reduction iterator, the rest
+    take the outer iterators in order."""
+    out: list[ast.expr] = []
+    outer_pos = 0
+    for k in range(n_dim):
+        if k in axes:
+            out.append(_name(red_iter_map[k]))
+        else:
+            out.append(_name(outer_iter_names[outer_pos]))
+            outer_pos += 1
+    return out
+
+
+def reduction_output_index(
+    n_dim: int, axes: Collection[int], outer_iter_names: Sequence[str], keepdims: bool
+) -> list[ast.expr]:
+    """Subscript entries writing a reduction result: a reduced axis is dropped (index 0 under keepdims), the
+    rest take the outer iterators in order."""
+    out: list[ast.expr] = []
+    outer_pos = 0
+    for k in range(n_dim):
+        if k in axes:
+            if keepdims:
+                out.append(_const(0))
+        else:
+            out.append(_name(outer_iter_names[outer_pos]))
+            outer_pos += 1
+    return out
+
+
 def _expand_axis_reduction(target, args, kwargs, shape_table, init, op_fn, post_fn=None, update_fn=None):
     """Generic axis-aware reduction. Lowers ``out = np.X(arr, axis=k,
     keepdims=True)`` into a nested loop, non-reduction axes outside and the
@@ -1816,32 +1850,9 @@ def _expand_axis_reduction(target, args, kwargs, shape_table, init, op_fn, post_
     red_iter_names = [_make_iter_name("__rd", i) for i in range(len(axes_norm))]
     red_iter_map = dict(zip(axes_norm, red_iter_names))
 
-    def _src_elts() -> List[ast.expr]:
-        out = []
-        outer_pos = 0
-        for k in range(n_dim):
-            if k in axes_set:
-                out.append(_name(red_iter_map[k]))
-            else:
-                out.append(_name(outer_iter_names[outer_pos]))
-                outer_pos += 1
-        return out
-
-    def _out_elts() -> List[ast.expr]:
-        out = []
-        outer_pos = 0
-        for k in range(n_dim):
-            if k in axes_set:
-                if keepdims:
-                    out.append(_const(0))
-            else:
-                out.append(_name(outer_iter_names[outer_pos]))
-                outer_pos += 1
-        return out
-
-    src_elts = _src_elts()
+    src_elts = reduction_source_index(n_dim, axes_set, red_iter_map, outer_iter_names)
     src_slot = src_elts[0] if n_dim == 1 else ast.Tuple(elts=src_elts, ctx=ast.Load())
-    out_elts = _out_elts()
+    out_elts = reduction_output_index(n_dim, axes_set, outer_iter_names, keepdims)
     if len(out_elts) == 0:
         # No kept axes and no keepdims -- scalar result. Falls back to
         # the full-reduction style.
@@ -2203,29 +2214,6 @@ def _expand_arg_reduction(target, args, shape_table, kwargs, op: str):
     red_iter_names = [_make_iter_name("__ard", i) for i in range(len(axes_norm))]
     red_iter_map = dict(zip(axes_norm, red_iter_names))
 
-    def _src_elts():
-        out = []
-        outer_pos = 0
-        for k in range(n_dim):
-            if k in axes_set:
-                out.append(_name(red_iter_map[k]))
-            else:
-                out.append(_name(outer_iter_names[outer_pos]))
-                outer_pos += 1
-        return out
-
-    def _out_elts():
-        out = []
-        outer_pos = 0
-        for k in range(n_dim):
-            if k in axes_set:
-                if keepdims:
-                    out.append(_const(0))
-            else:
-                out.append(_name(outer_iter_names[outer_pos]))
-                outer_pos += 1
-        return out
-
     def _init_src_elts():
         # First-element init: reduction axes pinned at 0, kept axes at
         # outer iter.
@@ -2239,10 +2227,10 @@ def _expand_arg_reduction(target, args, shape_table, kwargs, op: str):
                 outer_pos += 1
         return out
 
-    src_elts = _src_elts()
+    src_elts = reduction_source_index(n_dim, axes_set, red_iter_map, outer_iter_names)
     src_slot = src_elts[0] if n_dim == 1 else ast.Tuple(elts=src_elts, ctx=ast.Load())
     src_sub = ast.Subscript(value=_name(a.id), slice=src_slot, ctx=ast.Load())
-    out_elts = _out_elts()
+    out_elts = reduction_output_index(n_dim, axes_set, outer_iter_names, keepdims)
     init_src_elts = _init_src_elts()
     init_slot = init_src_elts[0] if n_dim == 1 else ast.Tuple(elts=init_src_elts, ctx=ast.Load())
     init_val = ast.Subscript(value=_name(a.id), slice=init_slot, ctx=ast.Load())
@@ -3990,32 +3978,9 @@ def _expand_var_or_std(target, args, shape_table, kwargs, finish: str):
     red_iter_names = [_make_iter_name("__srd", i) for i in range(len(axes_norm))]
     red_iter_map = dict(zip(axes_norm, red_iter_names))
 
-    def _src_elts():
-        out = []
-        outer_pos = 0
-        for k in range(n_dim):
-            if k in axes_set:
-                out.append(_name(red_iter_map[k]))
-            else:
-                out.append(_name(outer_iter_names[outer_pos]))
-                outer_pos += 1
-        return out
-
-    def _out_elts():
-        out = []
-        outer_pos = 0
-        for k in range(n_dim):
-            if k in axes_set:
-                if keepdims:
-                    out.append(_const(0))
-            else:
-                out.append(_name(outer_iter_names[outer_pos]))
-                outer_pos += 1
-        return out
-
-    src_elts = _src_elts()
+    src_elts = reduction_source_index(n_dim, axes_set, red_iter_map, outer_iter_names)
     src_slot = src_elts[0] if n_dim == 1 else ast.Tuple(elts=src_elts, ctx=ast.Load())
-    out_elts = _out_elts()
+    out_elts = reduction_output_index(n_dim, axes_set, outer_iter_names, keepdims)
     is_scalar_target = len(out_elts) == 0
     if is_scalar_target:
         out_sub: ast.expr = target
@@ -8894,6 +8859,22 @@ class _MatmulHoister(ast.NodeTransformer):
         raise NotImplementedError(f"sparse matvec for format {fmt!r} not supported.")
 
 
+def numpy_call_key(call: ast.Call) -> tuple[str, str] | None:
+    """The expander registry key for a call: ``np.<name>`` -> ``("np", name)``, ``np.linalg.<name>`` ->
+    ``("np", "linalg.<name>")``, ``<module>.<name>`` -> ``(module, name)``; None for anything else."""
+    func = call.func
+    if isinstance(func, ast.Attribute):
+        if isinstance(func.value, ast.Name):
+            return ("np" if func.value.id == "np" else func.value.id, func.attr)
+        if (
+            isinstance(func.value, ast.Attribute)
+            and isinstance(func.value.value, ast.Name)
+            and func.value.value.id == "np"
+        ):
+            return ("np", f"{func.value.attr}.{func.attr}")
+    return None
+
+
 class _CallHoister(ast.NodeTransformer):
     """Hoist any registered ``np.*`` call buried in an expression to a fresh
     temp ``__cb<n>``; the expander then lowers ``__cb<n> = call(...)``. A
@@ -8929,19 +8910,6 @@ class _CallHoister(ast.NodeTransformer):
         """``True`` iff ``expr`` reads a complex value (skipping ``.shape`` reads)."""
         return _reads_complex(expr, self.local_dtypes)
 
-    def _key_of(self, call: ast.Call):
-        func = call.func
-        if isinstance(func, ast.Attribute):
-            if isinstance(func.value, ast.Name):
-                return ("np" if func.value.id == "np" else func.value.id, func.attr)
-            if (
-                isinstance(func.value, ast.Attribute)
-                and isinstance(func.value.value, ast.Name)
-                and func.value.value.id == "np"
-            ):
-                return ("np", f"{func.value.attr}.{func.attr}")
-        return None
-
     def visit_Call(self, node: ast.Call) -> ast.AST:
         # ``np.repeat(src, np.diff(p))``: the count's telescoping sum (see
         # expand_repeat / _diff_operand) needs the ORIGINAL ``np.diff`` call
@@ -8950,7 +8918,7 @@ class _CallHoister(ast.NodeTransformer):
         # ``__cb<n>`` temp before the repeat expander ever ran, losing the one
         # piece of syntax that proves the sum is derivable. Visit every other
         # child normally and leave that one argument untouched.
-        if self._key_of(node) == ("np", "repeat") and len(node.args) >= 2 and _diff_operand(node.args[1]) is not None:
+        if numpy_call_key(node) == ("np", "repeat") and len(node.args) >= 2 and _diff_operand(node.args[1]) is not None:
             node.func = self.visit(node.func)
             node.args = [(a if i == 1 else self.visit(a)) for i, a in enumerate(node.args)]
             node.keywords = [self.visit(kw) for kw in node.keywords]
@@ -8981,7 +8949,7 @@ class _CallHoister(ast.NodeTransformer):
         # spills ``psi_frag[f]`` and hoists as ``np.roll(__cb<n>, m, axis)`` --
         # otherwise the whole-array roll stays buried in the broadcast BinOp
         # and the per-element scalarizer mangles it into a scalar-arg roll.
-        key = self._key_of(node)
+        key = numpy_call_key(node)
         if (
             key
             in (
@@ -9068,7 +9036,7 @@ class _CallHoister(ast.NodeTransformer):
                     # per-element copy via _WholeArrayAssignRewriter.
                     self.pre_stmts.append(ast.Assign(targets=[ast.Name(id=temp, ctx=ast.Store())], value=first))
                 node.args[0] = ast.Name(id=temp, ctx=ast.Load())
-        key = self._key_of(node)
+        key = numpy_call_key(node)
         if key is None or key not in NP_CALL_EXPANDERS:
             return node
         # Stash axis/keepdims kwargs for the reduction case so
@@ -10055,25 +10023,6 @@ class LibNodeRewriter(ast.NodeTransformer):
                 self.local_dtypes[target_id] = "complex128"
             return
 
-    def _lookup(self, call: ast.Call):
-        """Resolve a ``Call.func`` to a registry key. Recognises both
-        ``np.<name>`` and ``np.linalg.<name>`` (the latter an Attribute whose
-        value is itself an Attribute on a Name); the registry key encodes the
-        qualified form as ``("np", "linalg.cholesky")``.
-        """
-        func = call.func
-        if isinstance(func, ast.Attribute):
-            if isinstance(func.value, ast.Name):
-                return ("np" if func.value.id == "np" else func.value.id, func.attr)
-            if (
-                isinstance(func.value, ast.Attribute)
-                and isinstance(func.value.value, ast.Name)
-                and func.value.value.id == "np"
-            ):
-                # ``np.linalg.cholesky`` -> key ("np", "linalg.cholesky")
-                return ("np", f"{func.value.attr}.{func.attr}")
-        return None
-
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         # Captured BEFORE any rewriting: once the RHS is hoisted its arguments are temps, and the
         # note is meant to read as the numpy the kernel was written in.
@@ -10089,7 +10038,7 @@ class LibNodeRewriter(ast.NodeTransformer):
             and isinstance(node.targets[0].value, ast.Name)
             and _is_full_slice_subscript(node.targets[0])
             and isinstance(node.value, ast.Call)
-            and self._lookup(node.value) in NP_CALL_EXPANDERS
+            and numpy_call_key(node.value) in NP_CALL_EXPANDERS
         ):
             node.targets[0] = ast.Name(id=node.targets[0].value.id, ctx=ast.Store())
         # ``y = np.linalg.lstsq(A, b, rcond=...)[0]`` canonicalisation: strip
@@ -10104,7 +10053,7 @@ class LibNodeRewriter(ast.NodeTransformer):
             and node.value.slice.value == 0
         ):
             inner = node.value.value
-            inner_key = self._lookup(inner)
+            inner_key = numpy_call_key(inner)
             if inner_key in {("np", "linalg.lstsq"), ("np", "histogram")}:
                 node.value = inner
         node.value, prelude = self._hoist_value(node.value)
@@ -10135,7 +10084,7 @@ class LibNodeRewriter(ast.NodeTransformer):
         if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
             target = node.targets[0]
             if isinstance(node.value, ast.Call):
-                key = self._lookup(node.value)
+                key = numpy_call_key(node.value)
                 expander = NP_CALL_EXPANDERS.get(key) if key else None
                 if expander is not None and self._target_renders(key, node.value):
                     return node
@@ -10200,7 +10149,7 @@ class LibNodeRewriter(ast.NodeTransformer):
             and isinstance(node.targets[0].value, ast.Name)
             and isinstance(node.value, ast.Call)
         ):
-            key = self._lookup(node.value)
+            key = numpy_call_key(node.value)
             if key in _SLICE_TARGET_EXPANDERS:
                 try:
                     expanded = _call_expander(
@@ -10247,7 +10196,7 @@ class LibNodeRewriter(ast.NodeTransformer):
                 and isinstance(stmt.targets[0], ast.Name)
                 and isinstance(stmt.value, ast.Call)
             ):
-                key = self._lookup(stmt.value)
+                key = numpy_call_key(stmt.value)
                 expander = NP_CALL_EXPANDERS.get(key) if key else None
                 if expander is not None and self._target_renders(key, stmt.value):
                     out.append(stmt)
