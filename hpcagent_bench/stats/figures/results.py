@@ -150,12 +150,12 @@ def set_usetex(usetex: bool) -> None:
     matplotlib.rcParams["text.usetex"] = usetex
 
 
-def my_round(x: float, width: int) -> str:
+def format_fixed(x: float, width: int) -> str:
     float_format = "{:." + f"{width}" + "f}"
     return float_format.format(x)
 
 
-def my_geomean(x: pd.Series) -> float:
+def column_geomean(x: pd.Series) -> float:
     """The column's geomean over the cells that carry a ratio; NaN when none does.
 
     NOT :func:`scipy.stats.mstats.gmean`, which this used to be. ``gmean``'s ``log(0)`` sends the
@@ -183,7 +183,7 @@ def my_geomean(x: pd.Series) -> float:
     return summary.geomean(usable) if usable.size else float("nan")
 
 
-def my_speedup_abbr(x: float) -> str:
+def abbreviate_speedup(x: float) -> str:
     """Short speedup label with an up/down indicator."""
     if math.isnan(x):
         return ""
@@ -192,17 +192,17 @@ def my_speedup_abbr(x: float) -> str:
     if value > 100:
         value = float(int(value))  # above 100x the fraction is noise, so the label drops it
     if value > 1000:
-        return prefix + my_round(value / 1000, 1) + "k"
-    return prefix + my_round(value, 1)
+        return prefix + format_fixed(value / 1000, 1) + "k"
+    return prefix + format_fixed(value, 1)
 
 
-def my_runtime_abbr(x: float) -> str:
+def abbreviate_runtime(x: float) -> str:
     """Short runtime label; DB times are in milliseconds."""
     if math.isnan(x):
         return ""
     if x >= 1000:
-        return my_round(x / 1000, 2) + " s"
-    return my_round(x, 2) + " ms"
+        return format_fixed(x / 1000, 2) + " s"
+    return format_fixed(x, 2) + " ms"
 
 
 def save_figure(output: str, fig: Figure) -> str:
@@ -379,7 +379,7 @@ def cell_summary(data: pd.DataFrame) -> pd.DataFrame:
     rows: list[CellSummary] = []
     for keys, g in data.groupby(["benchmark", "domain", "framework"], dropna=False):
         b, dom, fw = cast("tuple[str, str, str]", keys)
-        med, lo, hi, _n = stats.median_ci(g["time"].to_numpy(), label=f"{b}@{fw}", seed=CI_SEED)
+        med, lo, hi = stats.median_ci(g["time"].to_numpy(), label=f"{b}@{fw}", seed=CI_SEED)[:3]
         perc = ((hi - lo) / med * 100.0) if (med != 0.0 and not math.isnan(med)) else 0.0
         rows.append(CellSummary(b, dom, fw, med, lo, hi, perc))
     return pd.DataFrame([dataclasses.asdict(r) for r in rows], columns=list(CELL_COLUMNS))
@@ -514,14 +514,14 @@ def heatmap_figure(data: pd.DataFrame, order: str, output: str, baseline: str = 
 
     # Indexed by kernel so a dropped cell can be NAMED rather than counted.
     overall: pd.DataFrame = pd.melt(best_wide.drop(["domain"], axis=1), ["benchmark"]).set_index("benchmark")
-    overall = overall.groupby(["framework"]).value.apply(my_geomean).reset_index()
+    overall = overall.groupby(["framework"]).value.apply(column_geomean).reset_index()
     overall_wide: pd.DataFrame = overall.pivot_table(columns="framework", values="value", dropna=False).reset_index(
         drop=True
     )
     overall_wide = overall_wide[frmwrks]
 
     overall_time: pd.DataFrame = pd.melt(best_wide_time.drop(["domain"], axis=1), ["benchmark"]).set_index("benchmark")
-    overall_time = overall_time.groupby(["framework"]).value.apply(my_geomean).reset_index()
+    overall_time = overall_time.groupby(["framework"]).value.apply(column_geomean).reset_index()
     overall_time_wide: pd.DataFrame = overall_time.pivot_table(
         columns="framework", values="value", dropna=False
     ).reset_index(drop=True)
@@ -538,9 +538,9 @@ def heatmap_figure(data: pd.DataFrame, order: str, output: str, baseline: str = 
     for j in range(len(overall_wide.columns)):
         if j < len(overall_wide.columns) - 1:
             ratio = totals[0, j]
-            ax2.text(j, 0, my_speedup_abbr(ratio), ha="center", va="center", color=ink_for(ratio), fontsize=8)
+            ax2.text(j, 0, abbreviate_speedup(ratio), ha="center", va="center", color=ink_for(ratio), fontsize=8)
         else:
-            ax2.text(j, 0, my_runtime_abbr(total_baseline[0]), ha="center", va="center", color="white", fontsize=8)
+            ax2.text(j, 0, abbreviate_runtime(total_baseline[0]), ha="center", va="center", color="white", fontsize=8)
 
     hm_data: pd.DataFrame = best_wide.drop(["benchmark", "domain"], axis=1)
     ratios = cast("FloatArray", hm_data.to_numpy())
@@ -558,13 +558,13 @@ def heatmap_figure(data: pd.DataFrame, order: str, output: str, baseline: str = 
     for i in range(len(names)):
         for j in range(len(columns)):
             if j == len(columns) - 1:
-                ax1.text(j, i, my_runtime_abbr(base_times[i]), ha="center", va="center", color="black", fontsize=8)
+                ax1.text(j, i, abbreviate_runtime(base_times[i]), ha="center", va="center", color="black", fontsize=8)
                 continue
             ratio = ratios[i, j]
             if math.isnan(ratio):
                 continue  # NaN cell renders blank
             ci = ci_superscript(summary, names[i], columns[j])
-            ax1.text(j, i, my_speedup_abbr(ratio) + ci, ha="center", va="center", color=ink_for(ratio), fontsize=8)
+            ax1.text(j, i, abbreviate_speedup(ratio) + ci, ha="center", va="center", color=ink_for(ratio), fontsize=8)
 
     # Group separators + right-side y-axis group text (structured grids / tsvc2 / machine_learning / ...).
     draw_group_labels(ax1, spans, x_right=len(columns) - 0.35)
@@ -615,7 +615,7 @@ def plot_distribution_grid(
 
     Modelled on npbench's per-kernel subplot grid (framework-coloured, one shared legend), but
     with FIXED per-framework slots: every panel reserves one slot per framework in
-    :func:`_framework_slots`, each violin/box drawn at its framework's CONSTANT slot index and
+    :func:`framework_slots`, each violin/box drawn at its framework's CONSTANT slot index and
     CONSTANT width. A kernel missing a framework leaves an empty gap at that slot -- the present
     ones are never re-packed -- so glyph widths stay uniform whether or not a framework ran (the
     bug that made sparse panels render thick, ugly bars). ``xlim`` and ``xticks`` are constant
@@ -655,7 +655,7 @@ def distribution_figure(
     """
 
     kernels = list(dict.fromkeys(cast("list[str]", data["benchmark"].tolist())))  # unique, insertion order
-    ordered, _spans = reorder_rows(kernels, order)
+    ordered = reorder_rows(kernels, order)[0]
 
     slots = framework_slots(data, baseline)  # FIXED slot per framework, shared by every panel
     colors = framework_colors(slots)
@@ -675,7 +675,7 @@ def distribution_figure(
             samples = cast("FloatArray", times.to_numpy())
             if samples.size == 0:
                 continue  # empty gap at this framework's fixed slot; never re-pack
-            kept, _dropped = stats.drop_outliers(samples, label=f"{kernel}@{fw}")
+            kept = stats.drop_outliers(samples, label=f"{kernel}@{fw}")[0]
             if kept.size == 0:
                 continue
             if kind == "violin":
@@ -866,7 +866,7 @@ def corpus_comparisons(
     """
     data = load_results(db, benchmark, preset, datatype, variant, baseline)
     kernels = list(dict.fromkeys(cast("list[str]", data["benchmark"].tolist())))
-    ordered, _spans = reorder_rows(kernels, BY_DWARF)
+    ordered = reorder_rows(kernels, BY_DWARF)[0]
     # Ordered: the key order reaches the report table, so it must not depend on hash order.
     cells: collections.OrderedDict[str, tuple[FloatArray, FloatArray]] = collections.OrderedDict()
     for kernel in ordered:
