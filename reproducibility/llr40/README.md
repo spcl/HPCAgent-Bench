@@ -464,11 +464,17 @@ Read this before quoting any number.
 8. **fp32 lowerings and their reports were never raced.** The campaigns are float64 only.
 9. **`timings/canon_by_kernel_617510.csv` is carried forward, not measured here.** It is the
    compiler-side canonicalization timing (`base_ms`, `canon_ms`, `canon_speedup`) for 244 kernels,
-   re-derived by an earlier extraction from `sched-ab/llr-canon-cpu-617510.out`. **That log no
+   re-derived from `sched-ab/llr-canon-cpu-617510.out` by the `llr8` extraction
+   (`extract_llr40.py --canon sched-ab/llr-canon-cpu-617510.out --arm-prefix llr8`). **That log no
    longer exists on disk** -- scratch is volatile -- so this CSV cannot be regenerated from its
    source and is the only surviving copy. It is a compiler measurement over a fixed kernel set with
    no agent in it, so it is NOT a result of these campaigns; it is here because it times the same
-   roster.
+   roster. Geometric mean canonicalization speedup: 1.1357x over the 242 kernels that measured
+   cleanly, 1.2893x over the focus-40 subset (complete at 40/40). `indirect_gather_3nbr` and
+   `tsvc_2_s4116` failed measurement on a driver bug and carry no timings; both are outside the
+   focus-40 set. `data-llr8-superseded/` holds the full `llr8` campaign extraction this CSV came
+   from (three models -- Qwen3.8, GPT-OSS-120B, Kimi K2.7 -- over the same 40-kernel roster);
+   it is gitignored and kept locally as the only surviving copy, since the source log is gone.
 10. **No per-call source text exists** and never did. 0 of 4,450 `call` rows carry a graded source;
     4,426 fall back to `last_saved`, which is not the text of that round, and 24 have nothing.
 11. **`delivered_language` cannot group a speed-up table** -- it is empty on all 805 graded rows.
@@ -481,9 +487,3 @@ Read this before quoting any number.
     produced them, not a portable target. Regenerating elsewhere changes them.
 14. **`detail`** -- the compiler log or numeric mismatch behind a failure -- is not exported; it
     stays in the judge databases. `reason` carries the classification.
-
-## Superseded
-
-`README-llr8-superseded.md` and `data-llr8-superseded/` are the previous extraction of this same
-folder, which covered the `llr8` campaign over the same roster. Kept because that campaign's canon
-CSV is the only copy of a log that is gone; regenerate the rest with the command in that README.
