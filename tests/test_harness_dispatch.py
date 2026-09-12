@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import time
+import types
 
 import pytest
 
@@ -537,3 +538,17 @@ def test_the_token_report_counts_a_runners_usage_file(tmp_path) -> None:
         "turns": 2,
     }
     assert totals["agents"] == 1
+
+
+def test_a_node_whose_agents_all_submitted_or_hit_a_cap_exits_zero(driver: types.ModuleType) -> None:
+    """633012, 633168 and 633169: every agent ended on 123-126, the node exited 1, and the step's
+    nonzero exit tore down the services while other nodes still had budget."""
+    ends = [0, driver.RC_SUBMITTED, driver.RC_TIMEOUT, driver.RC_TOKEN_BUDGET, driver.RC_CONTEXT]
+    assert driver.node_exit_status(ends) == 0
+    assert driver.node_exit_status([driver.RC_SUBMITTED] * 30) == 0
+
+
+def test_a_node_exits_nonzero_only_when_every_agent_failed(driver: types.ModuleType) -> None:
+    assert driver.node_exit_status([1, driver.RC_API_TIMEOUT, -9]) == 1
+    assert driver.node_exit_status([1, driver.RC_API_TIMEOUT, driver.RC_SUBMITTED]) == 0
+    assert driver.node_exit_status([]) == 0

@@ -992,8 +992,14 @@ role_srun() {
     local nodes="$1" nodelist="$2" ce_env="$3" image="$4" role_flag="$5"
     local mount bind
     local -a srun_args wrap gpu_flags vols
+    # A dead service rank takes its step down. An agent node's exit status does not: killing the
+    # other agent nodes cut their last minutes of budget (633012, 633168, 633169).
+    local kill_on_bad_exit=1
+    if [[ "${role_flag}" == "--agent-node" ]]; then
+        kill_on_bad_exit=0
+    fi
     srun_args=(--nodes="${nodes}" --ntasks="${nodes}" --ntasks-per-node=1
-        --nodelist="${nodelist}" --exclusive --kill-on-bad-exit=1 --export=ALL)
+        --nodelist="${nodelist}" --exclusive --kill-on-bad-exit="${kill_on_bad_exit}" --export=ALL)
     if [[ "${role_flag}" == "--judge-node" ]]; then
         # One task per socket, each bound to GRADE_CPUS physical cores. --ntasks is overridden
         # here (role_srun's default is one per node) so SLURM_PROCID stays globally unique across
@@ -1021,7 +1027,8 @@ role_srun() {
         local mask
         mask="$(colocate_mask "${role_flag}")" || { echo "COLOCATE: no CPUs left for ${role_flag}" >&2; exit 2; }
         srun_args=(--nodes=1 --ntasks=1 --ntasks-per-node=1 --nodelist="${nodelist}" --overlap
-            --kill-on-bad-exit=1 --export=ALL --mem=0 --cpus-per-task="${SLURM_CPUS_ON_NODE:-$(nproc)}"
+            --kill-on-bad-exit="${kill_on_bad_exit}" --export=ALL --mem=0
+            --cpus-per-task="${SLURM_CPUS_ON_NODE:-$(nproc)}"
             --cpu-bind="mask_cpu:${mask}")
     fi
     gpu_flags=()

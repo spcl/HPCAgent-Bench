@@ -16,7 +16,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from types import ModuleType
 from typing import TYPE_CHECKING, NamedTuple, TextIO, TypedDict, cast
 
@@ -928,6 +928,8 @@ RC_TOKEN_BUDGET = 125
 RC_CONTEXT = 126
 RC_API_TIMEOUT = 127
 RC_SUBMITTED = 123
+#: Episode ends that are results, not faults. An API timeout still counts as a failure.
+CLEAN_ENDS = frozenset({0, RC_SUBMITTED, RC_TIMEOUT, RC_TOKEN_BUDGET, RC_CONTEXT})
 
 #: vLLM's refusal text, as it reaches the transcript's closing event. Substring of the served
 #: message ("Input length (66001) exceeds model's maximum context length (65536)"), campaign 594529.
@@ -2102,7 +2104,7 @@ def main() -> int:
         )
         sampler.start()
 
-    failures = 0
+    rcs: list[int] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
             # len(local_problems), NOT workers: the pool is sized for the biggest arm, and dealing
@@ -2112,9 +2114,7 @@ def main() -> int:
             ): problem
             for worker_index, (problem_index, problem) in enumerate(local_problems)
         }
-        for future in concurrent.futures.as_completed(futures):
-            if future.result() != 0:
-                failures += 1
+        rcs.extend(future.result() for future in concurrent.futures.as_completed(futures))
 
     if sampler is not None:
         stop_sampling.set()
@@ -2123,11 +2123,19 @@ def main() -> int:
         sampler.join(timeout=METRICS_TIMEOUT_SECONDS)
         report_aggregate_throughput(aggregate_state["samples"], aggregate_state["missed"])
 
-    print(f"node {node}: {failures}/{len(local_problems)} agents exited nonzero", flush=True)
-    # One agent hitting its turn or wall-clock budget is campaign DATA (a censored problem), not a
-    # pipeline fault -- propagating it kills the whole allocation mid-arm (585108: 1 rc=1 out of 10
-    # cancelled every service). Only every-agent-failed still signals broken infrastructure.
-    return 1 if failures == len(local_problems) else 0
+    failures = sum(rc not in CLEAN_ENDS for rc in rcs)
+    print(f"node {node}: {failures}/{len(rcs)} agents failed (rcs {sorted(set(rcs))})", flush=True)
+    return node_exit_status(rcs)
+
+
+def node_exit_status(rcs: Sequence[int]) -> int:
+    """1 only when every agent on the node failed, which signals broken infrastructure.
+
+    One failed agent is campaign data (585108: 1 rc=1 out of 10 cancelled every service). Submitting
+    or reaching a cap is an end, not a failure: counting those failed 633012, 633168 and 633169, whose
+    agents had all finished.
+    """
+    return 1 if rcs and all(rc not in CLEAN_ENDS for rc in rcs) else 0
 
 
 if __name__ == "__main__":
