@@ -152,7 +152,7 @@ if [[ -z "${FAST_SCRATCH}" ]]; then
     if [[ -d "/iopsstor/scratch/cscs/${USER}" ]]; then
         FAST_SCRATCH="/iopsstor/scratch/cscs/${USER}"
     else
-        FAST_SCRATCH="${SCRATCH}"
+        FAST_SCRATCH="${SCRATCH:-}"
     fi
 fi
 export FAST_SCRATCH
