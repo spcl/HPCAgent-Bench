@@ -265,6 +265,15 @@ class KernelIR:
     #: the ABI, which is why :meth:`param_order` drops them. They stay in ``symbols`` / ``scalars``
     #: so lowering still resolves every body reference to them by name.
     pinned_consts: Dict[str, Any] = field(default_factory=dict)
+    #: ``{name: value}`` for each manifest name that reaches the kernel ONLY through a declared
+    #: array shape -- no parameter, no body reference -- and holds the SAME integer in every
+    #: preset. conv_depthwise_separable_2d declares ``out`` with ``dilation``, whose stages the
+    #: body spells ``depthwise_dilation`` / ``pointwise_dilation``; one quantity, three spellings,
+    #: and nothing the kernel computes can observe the first. An emitter that needs the declared
+    #: extent to AGREE with the computed one reads this and substitutes the literal, which is the
+    #: only thing that unifies the spellings. The others ignore it and keep the token symbolic, so
+    #: no ABI moves.
+    shape_only_consts: Dict[str, int] = field(default_factory=dict)
 
     def param_order(self, extra_ref: Optional[str] = None) -> List[str]:
         """Return the argument names in **ABI order**.

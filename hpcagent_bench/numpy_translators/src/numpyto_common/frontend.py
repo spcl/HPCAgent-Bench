@@ -1110,6 +1110,45 @@ def pinned_config_in_use(
     return {n: v for n, v in pinned.items() if n in used}
 
 
+def shape_only_constants(
+    parameters: Dict,
+    scalars: Dict,
+    arrays: List[ArrayDesc],
+    fn: ast.FunctionDef,
+    input_args: List[str],
+    pinned: Dict[str, Any],
+) -> Dict[str, int]:
+    """Manifest names a declared shape spells and NOTHING else does, pinned to one preset value.
+
+    ``pinned_config_in_use`` is the mirror of this: it keeps a ``config:`` knob a declared shape
+    reaches, because the knob is real and the kernel names it -- and every knob it keeps is named
+    in ``pinned`` here, so the two partitions do not overlap. What is left is reached by the
+    declared shape ALONE -- no parameter takes it, no statement reads it -- so the only thing that
+    can ever observe it is the extent it spells. conv_depthwise_separable_2d declares ``out``
+    through ``dilation`` while its body convolves with ``depthwise_dilation``; both are 1 in every
+    preset, but a backend that has to PROVE the declared extent equals the computed one has no way
+    to relate two names the kernel never puts in the same expression.
+
+    Pinned across every preset is what makes the value sound, and the harness says so rather than
+    this docstring assuming it: ``fuzz.resolve_ranges`` hands a parameter identical in every preset
+    straight back as ``[value, value]`` -- "not a size", in its words -- so nothing downstream can
+    ever draw another one. A name that DOES move along the preset ladder is a size the harness
+    scales, and baking one preset's choice into an artifact that serves all of them is the
+    miscompile :func:`_structural_constants` records for the body.
+    """
+    spelled: Set[str] = set()
+    for arr in arrays:
+        for tok in arr.shape:
+            spelled.update(SHAPE_IDENT.findall(str(tok)))
+    named = set(input_args) | set(pinned) | {arr.name for arr in arrays}
+    named.update(node.id for node in ast.walk(fn) if isinstance(node, ast.Name))
+    return {
+        name: value
+        for name, value in _preset_constant_symbols(parameters, scalars).items()
+        if name in spelled and name not in named
+    }
+
+
 def build_kernel_ir(
     numpy_py: pathlib.Path,
     bench_info: pathlib.Path,
@@ -1624,6 +1663,7 @@ def build_kernel_ir(
     _fold_consts_into_shapes(arrays, inlined_consts)
 
     short_name = info.get("short_name", func_name)
+    pinned: Dict[str, PinnedValue] = pinned_values(info.get("pinned_config"))
     kir = KernelIR(
         tree=fn,
         kernel_name=func_name,
@@ -1638,7 +1678,10 @@ def build_kernel_ir(
         # Pinned config knobs stay in ``symbols``/``scalars`` (the body reads them by name and
         # lowering has to resolve them) but leave the ABI: they are compile-time constants the
         # native emitters declare (see :attr:`KernelIR.pinned_consts`).
-        pinned_consts=pinned_config_in_use(pinned_values(info.get("pinned_config")), fn, arrays, input_args),
+        pinned_consts=pinned_config_in_use(pinned, fn, arrays, input_args),
+        # A manifest name only a declared shape spells is a constant no emitted artifact can
+        # observe; the emitters that must prove an extent identity substitute it, the rest do not.
+        shape_only_consts=shape_only_constants(parameters, _init_scalars, arrays, fn, input_args, pinned),
     )
     # Helpers that survived the inlining fixpoint as CALLS (an early ``return`` /
     # recursion blocks inlining) become their own native functions -- the early
