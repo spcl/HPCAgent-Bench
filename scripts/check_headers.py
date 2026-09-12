@@ -30,9 +30,10 @@ file is missing the header (the offenders and the fix command are printed).
 
 import argparse
 import re
-import subprocess
 import sys
 from pathlib import Path
+
+from hpcagent_bench.precommit_support import git_tracked
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -65,8 +66,7 @@ def in_scope(rel):
 
 
 def tracked_python():
-    out = subprocess.run(["git", "ls-files"], cwd=REPO_ROOT, capture_output=True, text=True)
-    return [ln for ln in out.stdout.splitlines() if ln.strip()] if out.returncode == 0 else []
+    return git_tracked(cwd=REPO_ROOT)
 
 
 def prefix_len(lines):
