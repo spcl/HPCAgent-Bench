@@ -222,6 +222,9 @@ def _run_distributed(
     overrides = {"mpi.mode": mode, "mpi.ranks": 4, "mpi.leaderboard_preset": "M", "mpi.rank_counts": rank_counts}
     if suspect_above is not None:
         overrides["record.speedup_suspect_above"] = suspect_above
+        # scoring.suspect_threshold refuses a threshold at or below a CENSORING backend's credit
+        # ceiling, so a test that moves the threshold must also name an uncensored backend.
+        overrides["measurement.timing_backend"] = "min_of_k"
     real_get = M.config.get
     monkeypatch.setattr(M.config, "get", lambda key, default=None: overrides.get(key, real_get(key, default)))
     monkeypatch.setattr(
@@ -285,10 +288,14 @@ def test_distributed_no_sweep_leaves_scaling_none(monkeypatch) -> None:
 # --- suspect flag reads record.speedup_suspect_above instead of a bare 1000.0 literal ---
 
 
-def test_distributed_suspect_default_threshold_unchanged(monkeypatch) -> None:
-    """No override: the config default (1000.0) still flags a speedup no real kernel reaches,
-    same as the old hardcoded compare."""
-    ts = _run_distributed(monkeypatch, rank_counts=[], speedup=5000.0)
+def test_distributed_suspect_default_threshold_flags_an_unreachable_speedup(monkeypatch) -> None:
+    """No override: the shipped default still flags a speedup no real kernel reaches.
+
+    Read off the config rather than pinned to a literal. The default moved from 1000.0 to 6000.0
+    once the flag stopped being a saturation test, and a test that hardcodes the number reports the
+    move as a regression."""
+    over_default = scoring.suspect_threshold() * 2.0
+    ts = _run_distributed(monkeypatch, rank_counts=[], speedup=over_default)
     assert ts.suspect_count == 1
     assert ts.iterations[0].suspect is True
 

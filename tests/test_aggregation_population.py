@@ -440,3 +440,22 @@ def test_a_k_way_ranking_is_over_the_kernels_every_arm_of_the_group_solved(analy
     assert set(solved.n_common) == {1}, solved[["arm", "n_common"]].to_dict("records")
     assert set(solved.kernels) == {"k1"}
     assert set(solved.arms_in_group) == {3}
+
+
+def test_a_host_row_faster_than_every_device_row_is_returned_as_impossible() -> None:
+    """The s316 reproducer. A host submission timing a ~4 GB min reduction at 18.6 us while the
+    fastest MI300A row on the same size needs 1.29 ms did not touch the array, and no ratio
+    threshold separates it from the real 3510x device win in the same corpus."""
+    rows = pd.DataFrame(
+        [
+            {"device": "cpu", "benchmark": "tsvc_2_s316", "baseline_ns": 243664504, "native_ns": 18580},
+            {"device": "cpu", "benchmark": "tsvc_2_s316", "baseline_ns": 243664504, "native_ns": 18850},
+            {"device": "cpu", "benchmark": "tsvc_2_s316", "baseline_ns": 243664504, "native_ns": 20050},
+            {"device": "cpu", "benchmark": "tsvc_2_s316", "baseline_ns": 243664504, "native_ns": 21278343},
+            {"device": "gpu", "benchmark": "tsvc_2_s316", "baseline_ns": 243600646, "native_ns": 1293437},
+            {"device": "gpu", "benchmark": "tsvc_2_s255", "baseline_ns": 4654176719, "native_ns": 1415578},
+            {"device": "cpu", "benchmark": "tsvc_2_s255", "baseline_ns": 115755860, "native_ns": 1467978},
+        ]
+    )
+    impossible = population.host_rows_beating_every_device_row(rows)
+    assert sorted(impossible.native_ns.tolist()) == [18580, 18850, 20050]
