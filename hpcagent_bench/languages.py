@@ -240,8 +240,7 @@ OFFLOAD_CC_ENV = "HPCAGENT_BENCH_OFFLOAD_CC_{family}_{vendor}"
 #: Search-path variables a compile must NOT inherit from whoever started the harness. clang resolves
 #: the OpenMP DEVICE bitcode (``libomptarget-amdgpu-<gfx>.bc``) through ``LIBRARY_PATH``, so a login
 #: shell exporting ``$HOME/.local/lib`` makes an offload link fail with a missing-file error naming a
-#: directory nobody configured -- measured on this cluster, where clearing it is the whole fix and
-#: the region then runs on the device. The include variables are the same hazard one step earlier:
+#: directory nobody configured. The include variables are the same hazard one step earlier:
 #: they decide which headers a graded build compiles against. Cleared rather than overridden, so the
 #: toolchain uses its own defaults.
 OFFLOAD_ENV_STRIP: Tuple[str, ...] = ("LIBRARY_PATH", "CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH")
@@ -275,7 +274,7 @@ OFFLOAD_MEMORY_ENV = "HPCAGENT_BENCH_OFFLOAD_MEMORY"
 #:
 #: BOTH HALVES OR NEITHER. ``unified`` needs ``xnack+`` compiled INTO the target and ``HSA_XNACK=1``
 #: set at RUN time. With the target built ``xnack+`` and the variable unset the kernel does not fall
-#: back -- it dies with "memory access fault by GPU", measured on this image. So the run environment
+#: back -- it dies with "memory access fault by GPU". So the run environment
 #: is returned from the same place the flags are, and neither is reachable without the other.
 OFFLOAD_MEMORY_MODES: Tuple[str, ...] = ("explicit", "unified")
 
@@ -547,17 +546,6 @@ def offload_arch(model: str, vendor: str, *, run: bool = True) -> str:
     return ""
 
 
-def offload_model_available(model: str, vendor: str) -> bool:
-    """Whether ``model`` has ANY toolchain on ``vendor`` here, without probing a device.
-
-    A pure registry question -- one entry per (family, vendor) in :data:`OFFLOAD_REFS` -- so it is
-    cheap enough for a prompt to ask per page. ``openacc`` on ``amd`` is the case that matters: its
-    only family is nvhpc, which does not offload to AMD, so the pair has no entry and the page that
-    teaches it is text for a toolchain that cannot be reached.
-    """
-    return OFFLOAD_REFS.get((offload_family(model), vendor), {}).get(model) is not None
-
-
 def offload_flags(model: str, vendor: str, *, arch: Optional[str] = None) -> str:
     """The ``model`` offload flags for GPU leg ``vendor``; ``""`` when the leg is unsupported.
 
@@ -783,35 +771,16 @@ COMPILER_ALIASES: Dict[str, Tuple[str, ...]] = {
 
 #: Lowest driver major that can build what this driver's ``compilers.yaml`` block asks of it.
 #:
-#: An unversioned driver below its floor is NOT "a compiler we can use": it is on PATH, it
-#: accepts the invocation shape, and it then rejects the very ``-std=`` the block pins. Without
-#: a floor it SHADOWS a good versioned sibling, so a host whose default ``gcc`` is ancient fails
-#: every C build while ``gcc-14`` sits unused next to it. Measured on this login node (SUSE,
-#: default gcc 7.5.0 with gcc-12/13/14 alongside)::
+#: An unversioned driver below its floor is on PATH and accepts the invocation shape, then rejects
+#: the ``-std=`` its block pins; without a floor it SHADOWS a good versioned sibling (a default
+#: gcc 7 fails every C build while ``gcc-14`` sits next to it).
 #:
-#:     gcc-7   -std=c17    -> unrecognized command line option, did you mean '-std=c11'?
-#:     g++-7   -std=c++20  -> unrecognized command line option, did you mean '-std=c++03'?
-#:     gcc-12/13 -std=c23  -> unrecognized command line option, did you mean '-std=c2x'?
-#:     gcc-14  -std=c23    -> ok          g++-12/13/14 -std=c++20 -> ok
-#:
-#: One number per DRIVER, not per family, each traceable to the flag its own block pins:
-#: ``-std=c23`` arrived in GCC 14 (``c2x`` before it) and ``-std=f2018`` in GCC 8; ``-std=c++20``
-#: is spelled ``c++2a`` before GCC 10. The C++ floor was 12 while the block pinned c++23 (spelled
-#: ``c++2b`` before that release); the block pins c++20 now, so the number it derives from moved
-#: with it rather than being left behind as a margin no flag asks for.
-#:
-#: clang carries a floor for a DIFFERENT reason: it takes ``-std=c23`` from clang 18, but the C23
-#: feature the stubs emit -- ``constexpr`` on an object definition, N3018 -- only lands in clang 19
-#: (clang.llvm.org/c_status.html). A clang 18 host therefore ACCEPTS the dialect and then rejects
-#: the constant, failing only the kernels that declare ``init.constants``; the floor turns that
-#: into a clean resolution miss instead.
-#:
-#: flang's floor is ``-fdo-concurrent-to-openmp=host``, which arrived in LLVM 20. That used to be
-#: a preflight concern only, and the note here said inventing a floor would just reject working
-#: hosts -- no longer true: the flag now rides on EVERY graded flang build (the flang block's
-#: ``doconcurrent_ref``), because a `do concurrent` loop compiled without it runs serial under a
-#: parallel name. Below 20 the driver rejects the flag and no Fortran builds at all, so this is a
-#: resolution question now, and a versioned flang-20+ sibling should win over an older default.
+#: One number per DRIVER, each traceable to the flag its own block pins: ``-std=c23`` arrived in
+#: GCC 14 (``c2x`` before it), ``-std=f2018`` in GCC 8, and ``-std=c++20`` is spelled ``c++2a``
+#: before GCC 10. clang takes ``-std=c23`` from 18, but ``constexpr`` on an object definition
+#: (N3018), which the stubs emit for ``init.constants``, lands only in clang 19. flang needs
+#: ``-fdo-concurrent-to-openmp=host`` (LLVM 20), which every graded flang build carries through its
+#: block's ``doconcurrent_ref``.
 COMPILER_MIN_MAJOR: Dict[str, int] = {
     "gcc": 14,
     "g++": 10,
