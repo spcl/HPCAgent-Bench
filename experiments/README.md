@@ -176,8 +176,9 @@ back to `dirname $0` only when run standalone: a copy that used `$0` would resol
 `./materialize_shared.sh`, `..` and the bare `PROBLEMS_FILE` name against `RUN_DIR`.
 
 Preparation is **cached** under `.cache/` in the repository root, so a re-run does not regenerate
-what already exists: `generated/` (emitted C/C++/Fortran sources, content-keyed), `cpf/<target>/`,
-`packs/`, and `jit/<image>/`. `jit/` must stay image-keyed; `generated/` deliberately is not,
+what already exists: `generated/` (emitted C/C++/Fortran sources, content-keyed), `packs/` and
+`jit/<image>/`. Pre-rendered canonical parallel forms are not cached here: they are an experiment
+input, and live under `$SCRATCH/campaigns/<tag>/<target>/` (`campaign_dirs.sh`). `jit/` must stay image-keyed; `generated/` deliberately is not,
 because the emit is a function of the numpy source alone. Measured: 20 sources emitted in 11.4 s
 cold, 20 served from cache in 2.0 s warm.
 
