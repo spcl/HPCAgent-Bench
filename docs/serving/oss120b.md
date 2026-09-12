@@ -9,7 +9,7 @@ Authoritative source: `experiments/.env.base-oss120b` plus the `vllm-latest` EDF
 
 ---
 
-## Best known configuration (2026-09-11)
+## Current configuration
 
 | | |
 |---|---|
@@ -40,9 +40,10 @@ MODEL=oss120b ./serve-only.sbatch
 
 ### Where this configuration sits against the KV pool threshold
 
-[`knobs.md`](knobs.md) explains the threshold: above a pool-to-working-set ratio of about **1.15**
+[`knobs.md`](knobs.md) explains the threshold: above a pool-to-working-set ratio near **1.0**
 every configuration reaches a prefix-cache hit rate of 0.984-0.988; below it, every configuration
-thrashes.
+thrashes. The crossing is bracketed between 0.90 and 1.04 on another model, so read the hit rate
+rather than carrying a ratio across engines.
 
 **This model's ratio has not been measured.** The threshold was established on Qwen3.8 under SGLang;
 the mechanism is a property of prefix caching rather than of an engine, but neither the number nor
@@ -53,8 +54,9 @@ differently from SGLang:
 grep -aE "KV cache|GPU KV cache size|Available KV cache memory" server-0.log
 ```
 
-Estimate your working set as concurrent conversations times their largest prompt, and aim the pool
-at about 1.3x it.
+Estimate your working set as concurrent conversations times their largest prompt, size the pool
+above it, and confirm with the per-request prefix-cache hit rate: 0.98 or better means you are on
+the right side of the threshold.
 
 ---
 
@@ -63,23 +65,22 @@ at about 1.3x it.
 - **Use vLLM 0.23.0, not 0.27.1.** On one pinned node, the same probe and the same parsers:
   **3013 tok/s against 2405** -- 0.27.1 is about **25% slower**, entirely in decode (steady state
   3187 against 2540; prefill matched to 0.3%). Same dtype, quantization, MoE and attention backends,
-  same torch and triton (measured 2026-09-08). The `vllm-latest` EDF points at the 0.23.0 image;
-  0.27.1 was retired the same day and lives on a parked branch.
+  same torch and triton. The `vllm-latest` EDF points at the 0.23.0 image; no 0.27.1 image or EDF
+  is built or registered, and that tree lives on the `parked/vllm-0271` branch.
 - **Set `VLLM_PLUGINS` to an allowlist.** Unset means **load everything**, and one auto-loaded
   plugin kills the server at startup -- see the DON'T list for the failure. The value in use is
   `lora_filesystem_resolver,lora_hf_hub_resolver`: naming what you want excludes the offender while
-  keeping the LoRA resolvers (measured 2026-09-09).
+  keeping the LoRA resolvers.
 - **Keep `VLLM_PLUGINS` in exactly one place, the EDF.** Two owners that can disagree is worse than
-  one: a shell-exported value overrides the EDF and wins silently. One stale empty `VLLM_PLUGINS=`
-  still exists in a derived configuration under `experiments/`; it is a leftover, not a second
-  opinion.
+  one: a value exported by a campaign env overrides the EDF and wins silently. No `experiments/`
+  env sets it.
 - **Pass `--generation-config auto`.** It honours the model's own `generation_config.json`.
 - **Pass all three tool and reasoning flags**: `--enable-auto-tool-choice`,
   `--tool-call-parser openai`, `--reasoning-parser openai_gptoss`. SGLang has no
   `--enable-auto-tool-choice`, so a launch line ported from an SGLang model arrives missing it and
   fails at the first tool call rather than at startup.
 - **Keep `--safetensors-load-strategy prefetch` with `HF_HOME` on `iopsstor`.** Checkpoint loading
-  is many concurrent large reads: 9.45 GB/s against 0.83 at 16 readers (measured 2026-08-26).
+  is many concurrent large reads: 9.45 GB/s against 0.83 at 16 readers.
 - **Run one server per node and let the client spread load.** Several nodes give independent
   replicas, each binding port 8000 on its own hostname with its own KV cache.
 - **Re-measure after any image rebuild.** The EDF names an unversioned image, so a rebuild changes
@@ -94,7 +95,7 @@ at about 1.3x it.
   ImportError: cannot import name 'SamplingParams' from 'vllm' (unknown location)
   ```
   The server dies at startup. This checkpoint is pre-quantized mxfp4 and never needs online
-  quantization (measured 2026-09-09).
+  quantization.
 - **Do not conclude from a bare smoke that the plugin allowlist is unnecessary.** A minimal server
   starts fine with plugins on; the cycle closes only once the surrounding environment (the aiter
   settings a full deployment carries) changes the import graph. "It worked when I tried it" is not
@@ -103,7 +104,7 @@ at about 1.3x it.
   `generation_config.json` and silently changes sampling. It changed sampling in twenty
   configuration files once before anyone noticed, and nothing in the log announces it.
 - **Do not pipeline this model across nodes.** It fits in one. `pp=4` cost about **42%** of engine
-  time to stalls on this fleet while single-node servers lost none (measured 2026-08-30).
+  time to stalls on this fleet while single-node servers lost none.
 - **Do not pin a versioned image to freeze behaviour.** Pinning also freezes every later fix to that
   image. Prefer the unversioned name and re-measure after a rebuild.
 - **Do not raise `--gpu-memory-utilization` by analogy with a discrete GPU.** On this part it is
@@ -114,16 +115,16 @@ at about 1.3x it.
 
 ## Open questions
 
-- **Where this model's KV pool sits against the 1.15 threshold**, and whether the threshold holds at
-  the same crossing point under vLLM's prefix cache as under SGLang's. Not measured.
-- **Whether a newer vLLM has recovered the 25% decode loss.** The comparison is from 2026-09-08 and
-  applies to 0.27.1 specifically. A later release is untested here.
+- **Where this model's KV pool sits against the threshold**, and whether the crossing point is the
+  same under vLLM's prefix cache as under SGLang's. Not measured.
+- **Whether a newer vLLM has recovered the 25% decode loss.** The comparison covers 0.27.1 only.
+  A later release is untested here.
 
 ---
 
 ## The data behind the instructions
 
-### Engine version, one pinned node, same probe and parsers (2026-09-08)
+### Engine version, one pinned node, same probe and parsers
 
 | Version | Aggregate | Steady-state decode | Prefill |
 |---|---|---|---|
