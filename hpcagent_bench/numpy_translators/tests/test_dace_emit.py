@@ -977,6 +977,44 @@ def test_a_rename_of_a_promoted_extent_reuses_that_symbol_instead_of_minting_a_s
     assert len(shapes) == 2 and shapes[0] == shapes[1], shapes
 
 
+@pytest.mark.parametrize(
+    ("rebinding", "src"),
+    [
+        (
+            "augmented assignment",
+            (
+                "def k(a, x):\n    n = 0\n    for i in range(4):\n        a[n] = x[i]\n        n += 1\n"
+                "    t = np.zeros((n, n), a.dtype)\n    t[:] = a[:n]\n"
+            ),
+        ),
+        (
+            "loop target",
+            (
+                "def k(a, x):\n    n = 0\n    for n in range(4):\n        a[n] = x[n]\n"
+                "    t = np.zeros((n, n), a.dtype)\n    t[:] = a[:n]\n"
+            ),
+        ),
+        (
+            "tuple target",
+            (
+                "def k(a, x):\n    n = 0\n    m = 1\n    for i in range(4):\n        a[n] = x[i]\n"
+                "        m, n = n, m + n\n    t = np.zeros((n, n), a.dtype)\n    t[:] = a[:n]\n"
+            ),
+        ),
+    ],
+)
+def test_a_size_local_mutated_after_its_definition_is_neither_inlined_nor_promoted(rebinding: str, src: str) -> None:
+    """ls3df_scf counts Lanczos steps with ``na = 0`` then ``na += 1`` and sizes ``np.diag(alphas[:na])``
+    after the loop. Inlined as its first value the tridiagonal came out 0x0 and ``na += 1`` read a name
+    no longer bound; promoted to a symbol bound to that first value, the 0x0 eigh workspace was written
+    over the counted range."""
+    fn = ast.parse(src).body[0]
+    out = ast.unparse(_inline_symbol_aliases(fn, set(), {"a", "x"}))
+    assert "n = 0" in out and "np.zeros((n, n)" in out and "a[:n]" in out, (rebinding, out)
+    promoted, _, _ = _plan_size_promotion(fn, {"a", "x"})
+    assert "n" not in promoted, (rebinding, promoted)
+
+
 def test_swapaxes_becomes_the_transpose_dace_does_have() -> None:
     """netvlad: dace has no ``swapaxes`` and refuses the callback's return value. The rewrite needs
     the operand RANK, which only this flow-sensitive table has."""

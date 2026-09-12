@@ -2576,21 +2576,34 @@ def _shape_ident_candidates(fn_ast: ast.FunctionDef, known: Set[str]) -> Set[str
 def _scan_size_assigns(
     fn_ast: ast.FunctionDef, targets: Set[str]
 ) -> Tuple[Dict[str, ast.expr], List[str], OrderedSet[str]]:
-    """For each name in targets: its first (defining) RHS, def order, and which names are reassigned."""
+    """For each name in targets: its first (defining) RHS, def order, and which names are reassigned.
+
+    Only a name whose every store is a plain ``name = ...`` has a definition. One also stored as a
+    counter, a loop target or a tuple target (``n += 1``) holds a path-dependent value and is left out:
+    inlined as its first value, or promoted to a symbol bound to it, every read after the update is wrong.
+    """
     first_rhs: Dict[str, ast.expr] = {}
     order: List[str] = []
     counts: Dict[str, int] = {}
+    plain: set[int] = set()
+    mutated: set[str] = set()
     for node in ast.walk(fn_ast):
         if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
             nm = node.targets[0].id
+            plain.add(id(node.targets[0]))
             if nm in targets:
                 counts[nm] = counts.get(nm, 0) + 1
                 if nm not in first_rhs:
                     first_rhs[nm] = node.value
                     order.append(nm)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store) and node.id in targets:
+            if id(node) not in plain:
+                mutated.add(node.id)
+    order = [nm for nm in order if nm not in mutated]
+    first_rhs = {nm: first_rhs[nm] for nm in order}
     # Ordered: the caller PREPENDS one ``<nm>_iter = <nm>`` statement per reassigned name to the
     # emitted body, so this order is statement order in the generated program.
-    reassigned = OrderedSet(nm for nm, c in counts.items() if c > 1)
+    reassigned = OrderedSet(nm for nm, c in counts.items() if c > 1 and nm not in mutated)
     return first_rhs, order, reassigned
 
 
