@@ -20,7 +20,7 @@ import re
 import copy
 import math
 from collections.abc import Sequence
-from typing import Dict, FrozenSet, Iterator, List, Optional, Set, Tuple
+from typing import Dict, FrozenSet, Iterator, List, Optional, Protocol, Set, Tuple
 
 from numpyto_common import dtypes
 from numpyto_common.lib_nodes import _const_int, _iter_extent_of, _parse_einsum_subscripts, extent_is_scalar
@@ -1179,37 +1179,59 @@ class _EinsumHoister(ast.NodeTransformer):
         return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
 
 
-class _EinsumInline(ast.NodeTransformer):
-    """Hoist ``np.einsum`` out of any value-bearing statement into a preceding
-    contraction loop nest. Handles einsum nested in arithmetic (seissol's
-    ``Q[:] = Q + np.einsum(...)``)."""
+class StatementHoister(Protocol):
+    """An expression rewriter that swaps a call for a fresh temp (numbered from ``ctr``) and queues
+    the statements computing that temp in ``pre``."""
+
+    ctr: int
+    pre: list[ast.stmt]
+
+    def visit(self, node: ast.AST) -> ast.AST: ...
+
+
+class ValueHoistInline(ast.NodeTransformer):
+    """Hoist a call out of any value-bearing statement (Assign / AugAssign / Return / Expr): the
+    hoister from :meth:`make_hoister` replaces it with a temp, and the statements computing that
+    temp are spliced in front. ``ctr`` carries across statements so every temp name is fresh."""
 
     def __init__(self) -> None:
         self.changed = False
-        self._ctr = 0
+        self.ctr = 0
 
-    def _hoist(self, node):
+    def make_hoister(self, ctr: int) -> StatementHoister:
+        raise NotImplementedError
+
+    def hoist(self, node: ast.Assign | ast.AugAssign | ast.Return | ast.Expr) -> ast.stmt | list[ast.stmt]:
         if vars(node).get("value") is None:
             return node
-        h = _EinsumHoister(self._ctr)
+        h = self.make_hoister(self.ctr)
         node.value = h.visit(node.value)
-        self._ctr = h.ctr
+        self.ctr = h.ctr
         if h.pre:
             self.changed = True
             return h.pre + [node]
         return node
 
-    def visit_Assign(self, node):
-        return self._hoist(node)
+    def visit_Assign(self, node: ast.Assign) -> ast.stmt | list[ast.stmt]:
+        return self.hoist(node)
 
-    def visit_AugAssign(self, node):
-        return self._hoist(node)
+    def visit_AugAssign(self, node: ast.AugAssign) -> ast.stmt | list[ast.stmt]:
+        return self.hoist(node)
 
-    def visit_Return(self, node):
-        return self._hoist(node)
+    def visit_Return(self, node: ast.Return) -> ast.stmt | list[ast.stmt]:
+        return self.hoist(node)
 
-    def visit_Expr(self, node):
-        return self._hoist(node)
+    def visit_Expr(self, node: ast.Expr) -> ast.stmt | list[ast.stmt]:
+        return self.hoist(node)
+
+
+class _EinsumInline(ValueHoistInline):
+    """Hoist ``np.einsum`` out of any value-bearing statement into a preceding
+    contraction loop nest. Handles einsum nested in arithmetic (seissol's
+    ``Q[:] = Q + np.einsum(...)``)."""
+
+    def make_hoister(self, ctr: int) -> StatementHoister:
+        return _EinsumHoister(ctr)
 
 
 def _fft_axes(fattr: str, call: ast.Call, rank: int):
@@ -1495,37 +1517,16 @@ class _FancyGatherHoister(ast.NodeTransformer):
         return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
 
 
-class _FancyGatherInline(ast.NodeTransformer):
+class _FancyGatherInline(ValueHoistInline):
     """Hoist multi-array fancy gathers out of any value-bearing statement into a
     preceding gather loop (handles ``chk[i] = np.sum(u2[q, r, s])``)."""
 
     def __init__(self, ranks: Dict[str, int]) -> None:
+        super().__init__()
         self.ranks = ranks
-        self.changed = False
-        self._ctr = 0
 
-    def _hoist(self, node):
-        if vars(node).get("value") is None:
-            return node
-        h = _FancyGatherHoister(self.ranks, self._ctr)
-        node.value = h.visit(node.value)
-        self._ctr = h.ctr
-        if h.pre:
-            self.changed = True
-            return h.pre + [node]
-        return node
-
-    def visit_Assign(self, node):
-        return self._hoist(node)
-
-    def visit_AugAssign(self, node):
-        return self._hoist(node)
-
-    def visit_Return(self, node):
-        return self._hoist(node)
-
-    def visit_Expr(self, node):
-        return self._hoist(node)
+    def make_hoister(self, ctr: int) -> StatementHoister:
+        return _FancyGatherHoister(self.ranks, ctr)
 
 
 #: Reductions numba does NOT accept an ``axis=`` kwarg for (unlike ``sum`` /
@@ -1756,39 +1757,18 @@ class _ReduceAxisHoister(ast.NodeTransformer):
         return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
 
 
-class _ReduceAxisInline(ast.NodeTransformer):
+class _ReduceAxisInline(ValueHoistInline):
     """Hoist axis reductions out of any value-bearing statement into preceding
     reduction loops (handles ``V = np.max(s, axis=0) + e`` and the bare
     ``mean = np.mean(data, axis=0)``)."""
 
     def __init__(self, ranks: Dict[str, int], dtypes: Optional[Dict[str, str]] = None) -> None:
+        super().__init__()
         self.ranks = ranks
         self.dtypes = dtypes or {}
-        self.changed = False
-        self._ctr = 0
 
-    def _hoist(self, node):
-        if vars(node).get("value") is None:
-            return node
-        h = _ReduceAxisHoister(self.ranks, self._ctr, self.dtypes)
-        node.value = h.visit(node.value)
-        self._ctr = h.ctr
-        if h.pre:
-            self.changed = True
-            return h.pre + [node]
-        return node
-
-    def visit_Assign(self, node):
-        return self._hoist(node)
-
-    def visit_AugAssign(self, node):
-        return self._hoist(node)
-
-    def visit_Return(self, node):
-        return self._hoist(node)
-
-    def visit_Expr(self, node):
-        return self._hoist(node)
+    def make_hoister(self, ctr: int) -> StatementHoister:
+        return _ReduceAxisHoister(self.ranks, ctr, self.dtypes)
 
 
 def _keepdims_index(axes: list[int]) -> list[ast.expr] | None:
@@ -2006,37 +1986,16 @@ class _UfuncOuterHoister(ast.NodeTransformer):
         return ast.copy_location(ast.Name(id=p, ctx=ast.Load()), node)
 
 
-class _UfuncOuterInline(ast.NodeTransformer):
+class _UfuncOuterInline(ValueHoistInline):
     """Hoist ufunc.outer out of any value-bearing statement (floyd_warshall's
     ``np.minimum(path, np.add.outer(path[:,k], path[k,:]))``)."""
 
     def __init__(self, ranks: Dict[str, int]) -> None:
+        super().__init__()
         self.ranks = ranks
-        self.changed = False
-        self._ctr = 0
 
-    def _hoist(self, node):
-        if vars(node).get("value") is None:
-            return node
-        h = _UfuncOuterHoister(self.ranks, self._ctr)
-        node.value = h.visit(node.value)
-        self._ctr = h.ctr
-        if h.pre:
-            self.changed = True
-            return h.pre + [node]
-        return node
-
-    def visit_Assign(self, node):
-        return self._hoist(node)
-
-    def visit_AugAssign(self, node):
-        return self._hoist(node)
-
-    def visit_Return(self, node):
-        return self._hoist(node)
-
-    def visit_Expr(self, node):
-        return self._hoist(node)
+    def make_hoister(self, ctr: int) -> StatementHoister:
+        return _UfuncOuterHoister(self.ranks, ctr)
 
 
 class _ScalarizeMask(ast.NodeTransformer):
@@ -2244,7 +2203,7 @@ class _MaskedReduceHoister(ast.NodeTransformer):
         return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
 
 
-class _MaskedReduceInline(ast.NodeTransformer):
+class _MaskedReduceInline(ValueHoistInline):
     """Drop each lowerable ``v = a[mask]`` boolean-select and inline its reductions
     (``res[i] = v.mean()`` -> accumulate loop) -- azimint_naive's ``values =
     data[mask]; res[i] = values.mean()``. The masked select is a dynamic-length
@@ -2253,23 +2212,14 @@ class _MaskedReduceInline(ast.NodeTransformer):
     of the name is a reduction, making the drop safe."""
 
     def __init__(self, gathers: Dict[str, tuple], ranks: Dict[str, int]) -> None:
+        super().__init__()
         self.gathers = gathers
         self.ranks = ranks
-        self.changed = False
-        self._ctr = 0
 
-    def _hoist(self, node):
-        if node.value is None:
-            return node
-        h = _MaskedReduceHoister(self.gathers, self.ranks, self._ctr)
-        node.value = h.visit(node.value)
-        self._ctr = h.ctr
-        if h.pre:
-            self.changed = True
-            return h.pre + [node]
-        return node
+    def make_hoister(self, ctr: int) -> StatementHoister:
+        return _MaskedReduceHoister(self.gathers, self.ranks, ctr)
 
-    def visit_Assign(self, node: ast.Assign):
+    def visit_Assign(self, node: ast.Assign) -> ast.stmt | List[ast.stmt]:
         if (
             len(node.targets) == 1
             and isinstance(node.targets[0], ast.Name)
@@ -2278,16 +2228,7 @@ class _MaskedReduceInline(ast.NodeTransformer):
         ):
             self.changed = True
             return []  # drop the masked select; each reduction inlines its own loop
-        return self._hoist(node)
-
-    def visit_AugAssign(self, node):
-        return self._hoist(node)
-
-    def visit_Return(self, node):
-        return self._hoist(node)
-
-    def visit_Expr(self, node):
-        return self._hoist(node)
+        return self.hoist(node)
 
 
 _AT_OPS = {"add": "+=", "subtract": "-=", "multiply": "*="}
@@ -2848,36 +2789,12 @@ class _UfuncOutInline(ast.NodeTransformer):
         return rw if rw is not None else node
 
 
-class _HistogramInline(ast.NodeTransformer):
+class _HistogramInline(ValueHoistInline):
     """Hoist ``np.histogram(...)[0]`` out of any value-bearing statement into its
     preceding binning loop (azimint's ``histw = np.histogram(r, n, weights=d)[0]``)."""
 
-    def __init__(self, ranks: Dict[str, int]) -> None:
-        self.changed = False
-        self._ctr = 0
-
-    def _hoist(self, node):
-        if vars(node).get("value") is None:
-            return node
-        h = _HistogramHoister(self._ctr)
-        node.value = h.visit(node.value)
-        self._ctr = h.ctr
-        if h.pre:
-            self.changed = True
-            return h.pre + [node]
-        return node
-
-    def visit_Assign(self, node):
-        return self._hoist(node)
-
-    def visit_AugAssign(self, node):
-        return self._hoist(node)
-
-    def visit_Return(self, node):
-        return self._hoist(node)
-
-    def visit_Expr(self, node):
-        return self._hoist(node)
+    def make_hoister(self, ctr: int) -> StatementHoister:
+        return _HistogramHoister(ctr)
 
 
 def _int_matmul_acc_dtype(aid: str, bid: str, ka: str, kb: str) -> str:
@@ -2979,38 +2896,17 @@ class _IntMatmulHoister(ast.NodeTransformer):
         return node
 
 
-class _IntMatmulInline(ast.NodeTransformer):
+class _IntMatmulInline(ValueHoistInline):
     """Hoist integer matmuls out of any value-bearing statement (bfs's
     ``reach = frontier @ graph``)."""
 
     def __init__(self, ranks: Dict[str, int], dtypes: Dict[str, str]) -> None:
+        super().__init__()
         self.ranks = ranks
         self.dtypes = dtypes
-        self.changed = False
-        self._ctr = 0
 
-    def _hoist(self, node):
-        if vars(node).get("value") is None:
-            return node
-        h = _IntMatmulHoister(self.ranks, self.dtypes, self._ctr)
-        node.value = h.visit(node.value)
-        self._ctr = h.ctr
-        if h.pre:
-            self.changed = True
-            return h.pre + [node]
-        return node
-
-    def visit_Assign(self, node):
-        return self._hoist(node)
-
-    def visit_AugAssign(self, node):
-        return self._hoist(node)
-
-    def visit_Return(self, node):
-        return self._hoist(node)
-
-    def visit_Expr(self, node):
-        return self._hoist(node)
+    def make_hoister(self, ctr: int) -> StatementHoister:
+        return _IntMatmulHoister(self.ranks, self.dtypes, ctr)
 
 
 def _is_transpose_expr(v: ast.AST) -> bool:
@@ -3116,36 +3012,15 @@ class _RepeatAxisHoister(ast.NodeTransformer):
         return ast.copy_location(ast.Name(id=out, ctx=ast.Load()), node)
 
 
-class _RepeatAxisInline(ast.NodeTransformer):
+class _RepeatAxisInline(ValueHoistInline):
     """Hoist ``np.repeat(..., axis=k)`` out of any value-bearing statement."""
 
     def __init__(self, ranks: Dict[str, int]) -> None:
+        super().__init__()
         self.ranks = ranks
-        self.changed = False
-        self._ctr = 0
 
-    def _hoist(self, node):
-        if vars(node).get("value") is None:
-            return node
-        h = _RepeatAxisHoister(self.ranks, self._ctr)
-        node.value = h.visit(node.value)
-        self._ctr = h.ctr
-        if h.pre:
-            self.changed = True
-            return h.pre + [node]
-        return node
-
-    def visit_Assign(self, node):
-        return self._hoist(node)
-
-    def visit_AugAssign(self, node):
-        return self._hoist(node)
-
-    def visit_Return(self, node):
-        return self._hoist(node)
-
-    def visit_Expr(self, node):
-        return self._hoist(node)
+    def make_hoister(self, ctr: int) -> StatementHoister:
+        return _RepeatAxisHoister(self.ranks, ctr)
 
 
 #: numpy ops whose RESULT keeps the operand's dimensionality, so a negative
@@ -4339,7 +4214,7 @@ class _LinalgHoister(ast.NodeTransformer):
         return {"cholesky": self._chol, "inv": self._inv}[op](node)
 
 
-class _LinalgInline(ast.NodeTransformer):
+class _LinalgInline(ValueHoistInline):
     """Hoist ``np.linalg.cholesky/solve/inv`` out of any value-bearing statement
     into its preceding loop nest (cholesky2's ``A[:] = np.linalg.cholesky(A) +
     np.triu(A, k=1)`` -- the cholesky is computed into a fresh temp BEFORE ``A`` is
@@ -4356,35 +4231,14 @@ class _LinalgInline(ast.NodeTransformer):
         lower_ops: set,
         lower_solve_rhs_ranks: frozenset = frozenset(),
     ) -> None:
+        super().__init__()
         self.ranks = ranks
         self.dtypes = dtypes
         self.lower_ops = lower_ops
         self.lower_solve_rhs_ranks = lower_solve_rhs_ranks
-        self.changed = False
-        self._ctr = 0
 
-    def _hoist(self, node):
-        if node.value is None:
-            return node
-        h = _LinalgHoister(self.ranks, self.dtypes, self.lower_ops, self._ctr, self.lower_solve_rhs_ranks)
-        node.value = h.visit(node.value)
-        self._ctr = h.ctr
-        if h.pre:
-            self.changed = True
-            return h.pre + [node]
-        return node
-
-    def visit_Assign(self, node):
-        return self._hoist(node)
-
-    def visit_AugAssign(self, node):
-        return self._hoist(node)
-
-    def visit_Return(self, node):
-        return self._hoist(node)
-
-    def visit_Expr(self, node):
-        return self._hoist(node)
+    def make_hoister(self, ctr: int) -> StatementHoister:
+        return _LinalgHoister(self.ranks, self.dtypes, self.lower_ops, ctr, self.lower_solve_rhs_ranks)
 
 
 def _eigh_w_dtype(is_real: bool, names, array_dtypes: Dict[str, str]) -> Optional[str]:
@@ -6324,7 +6178,7 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
             # LAST of the three: the repeat lowering above reads ``np.diff(p)`` structurally, so the
             # slice rewrite has to come after it.
             _DiffToSliceDifference(),
-            _HistogramInline(ranks),
+            _HistogramInline(),
             _RepeatAxisInline(ranks),
             _ReshapeContiguousInline(noncontig),
             _IntMatmulInline(ranks, dtypes),
