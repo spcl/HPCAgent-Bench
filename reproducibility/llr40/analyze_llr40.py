@@ -771,7 +771,9 @@ def place_legend(ax: plt.Axes, handles: list) -> None:
     ax.legend(
         handles=handles,
         loc="upper center",
-        bbox_to_anchor=(0.5, -0.055 - min(2.2 / len(ax.get_yticks()), 0.30)),
+        # an empty axis has no ticks, and a small campaign does produce one: the offset is
+        # capped anyway, so the tickless case takes the cap rather than dividing by zero
+        bbox_to_anchor=(0.5, -0.055 - (min(2.2 / len(ax.get_yticks()), 0.30) if len(ax.get_yticks()) else 0.30)),
         ncol=len(handles),
         frameon=False,
         fontsize=9,
