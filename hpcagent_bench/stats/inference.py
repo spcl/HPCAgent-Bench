@@ -4,9 +4,9 @@
 """Statistical inference for timing claims: normality verdicts, confidence intervals chosen by
 that verdict, and significance / equivalence tests between two systems.
 
-Sibling of :mod:`hpcagent_bench.stats` (which owns robust outlier rejection and the median
-bootstrap CI the heatmap already prints). This module answers the question a reviewer asks of a
-speed-up table: *is this above measurement noise?*
+Built on :mod:`hpcagent_bench.stats.summary`, which owns the bootstrap interval, the Mann-Whitney
+and the signed-rank tests; this module chooses among them for a timing sample. It answers the
+question a reviewer asks of a speed-up table: *is this above measurement noise?*
 
 WHAT THE HARNESS ACTUALLY MEASURES (the facts these choices rest on)
 -------------------------------------------------------------------
@@ -36,7 +36,7 @@ WHAT THE HARNESS ACTUALLY MEASURES (the facts these choices rest on)
 
 from __future__ import annotations
 import math
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol, TypedDict, cast
 
@@ -44,25 +44,21 @@ import numpy as np
 import numpy.typing as npt
 
 # scipy ships no type stubs. Each value it returns is typed where it is read: a test result
-# through :class:`TestResult`, a bootstrap through :class:`BootstrapResult`, a distribution
-# quantile through ``float()`` on a suppressed line.
-from scipy.stats import binom, bootstrap  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
+# through :class:`TestResult`, a distribution quantile through ``float()`` on a suppressed line.
+from scipy.stats import binom  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
 from scipy.stats import false_discovery_control  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
-from scipy.stats import kurtosis, mannwhitneyu  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
+from scipy.stats import kurtosis  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
 from scipy.stats import norm, shapiro, skew  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
-from scipy.stats import t, wilcoxon  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
+from scipy.stats import t  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
 
 from hpcagent_bench.stats import summary
-from hpcagent_bench.stats.summary import DEFAULT_CONFIDENCE, DEFAULT_RESAMPLES, Interval
+from hpcagent_bench.stats.summary import DEFAULT_CONFIDENCE, DEFAULT_RESAMPLES, Interval, Statistic
 
 #: One timing sample per element. float64 is what ``np.asarray(..., dtype=float)`` produces.
 FloatArray = npt.NDArray[np.float64]
 
 #: What every entry point accepts: a plain sequence of numbers, or an already-built float array.
 Samples = Sequence[float] | FloatArray
-
-#: A statistic of one sample. ``np.median`` (the default here) and ``np.min`` are what callers pass.
-Statistic = Callable[[FloatArray], float]
 
 #: Default two-sided error rate for every test and interval here. One definition, in
 #: :mod:`hpcagent_bench.stats.summary`, which the paired estimator there already reports against.
@@ -99,19 +95,6 @@ class TestResult(Protocol):
 
     statistic: float
     pvalue: float
-
-
-class ConfidenceIntervalResult(Protocol):
-    """The ``confidence_interval`` field of a scipy bootstrap result."""
-
-    low: float
-    high: float
-
-
-class BootstrapResult(Protocol):
-    """What :func:`scipy.stats.bootstrap` returns, in the one field this module reads."""
-
-    confidence_interval: ConfidenceIntervalResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -355,53 +338,6 @@ def median_rank_ci(samples: Samples, confidence: float = DEFAULT_CONFIDENCE) -> 
     return Interval("median", med, float(x[k - 1]), float(x[n - k]), confidence, "rank-median", n)
 
 
-def bootstrap_ci(
-    samples: Samples,
-    statistic: Statistic = np.median,
-    name: str = "median",
-    confidence: float = DEFAULT_CONFIDENCE,
-    n_resamples: int = DEFAULT_RESAMPLES,
-    method: str = "BCa",
-    seed: int = DEFAULT_SEED,
-) -> Interval:
-    """Non-parametric bootstrap interval for whatever ``statistic`` actually gets reported.
-
-    BCa by default -- it corrects both the median bias and the skew of the bootstrap
-    distribution, which matters precisely because timing samples are skewed. BCa's acceleration
-    term needs a jackknife and degenerates on tiny or near-constant samples, so a failure falls
-    back to the percentile interval and SAYS SO in ``method``; a silent method swap would make
-    two differently-derived intervals look alike in a table."""
-    x = clean(samples)
-    n = int(x.size)
-    point = float(statistic(x)) if n else float("nan")
-    if n < 3 or float(np.ptp(x)) == 0.0:
-        return Interval(name, point, point, point, confidence, f"bootstrap-{method}", n)
-
-    def vectorized(a: FloatArray, axis: int = -1) -> FloatArray:
-        return np.apply_along_axis(statistic, axis, a)
-
-    for attempt in (method, "percentile"):
-        try:
-            res = cast(
-                BootstrapResult,
-                bootstrap(
-                    (x,),
-                    vectorized,
-                    confidence_level=confidence,
-                    n_resamples=n_resamples,
-                    method=attempt,
-                    vectorized=True,
-                    random_state=np.random.default_rng(seed),  # pyright: ignore[reportCallIssue]
-                ),
-            )
-        except (ValueError, ZeroDivisionError, FloatingPointError):
-            continue
-        low, high = float(res.confidence_interval.low), float(res.confidence_interval.high)
-        if math.isfinite(low) and math.isfinite(high):
-            return Interval(name, point, low, high, confidence, f"bootstrap-{attempt}", n)
-    return Interval(name, point, point, point, confidence, "bootstrap-degenerate", n)
-
-
 def min_of_k_ci(
     samples: Samples,
     k: int,
@@ -452,7 +388,8 @@ def interval_for(
     verdict = verdict if verdict is not None else check_normality(samples, alpha=alpha)
     if verdict.normal:
         return mean_ci_t(samples, confidence=confidence), verdict
-    return bootstrap_ci(samples, np.median, "median", confidence, n_resamples, "BCa", seed), verdict
+    interval = summary.bootstrap_ci(clean(samples), np.median, "median", confidence, n_resamples, "BCa", seed)
+    return interval, verdict
 
 
 def fieller_ratio_ci(numerator: Samples, denominator: Samples, confidence: float = DEFAULT_CONFIDENCE) -> Interval:
@@ -565,11 +502,7 @@ def mann_whitney(a: Samples, b: Samples, alpha: float = DEFAULT_ALPHA) -> Compar
             False,
             alpha,
         )
-    try:
-        result = cast(TestResult, mannwhitneyu(x, y, alternative="two-sided"))
-        statistic, pvalue = float(result.statistic), float(result.pvalue)
-    except ValueError:  # every value identical on both sides -> no rank information
-        statistic, pvalue = float("nan"), 1.0
+    statistic, pvalue = summary.rank_sum_test(x, y)
     med_a, med_b = float(np.median(x)), float(np.median(y))
     ratio = (med_b / med_a) if med_a else float("nan")
     effect = cliffs_delta(statistic, n_a, n_b) if math.isfinite(statistic) else 0.0
@@ -593,8 +526,7 @@ def wilcoxon_signed_rank(a: Samples, b: Samples, alpha: float = DEFAULT_ALPHA) -
     n = int(x.size)
     if n < 2 or np.all(x == y):
         return Comparison("wilcoxon-signed-rank", float("nan"), 1.0, 0.0, "rank-biserial", 1.0, n, n, False, alpha)
-    result = cast(TestResult, wilcoxon(x, y, alternative="two-sided", zero_method="wilcox"))
-    statistic, pvalue = float(result.statistic), float(result.pvalue)
+    statistic, pvalue = summary.signed_rank_test(x - y)[:2]
     # Matched-pairs rank-biserial: signed-rank sums normalised by the total rank mass.
     nonzero = int(np.count_nonzero(x - y))
     total = nonzero * (nonzero + 1) / 2.0
@@ -639,13 +571,8 @@ def tost_equivalence(
         if paired:
             if np.all(x == scaled):
                 return 1.0
-            signed = wilcoxon(x, scaled, alternative=alternative, zero_method="wilcox")
-            return float(cast(TestResult, signed).pvalue)
-        try:
-            ranked = mannwhitneyu(x, scaled, alternative=alternative)
-            return float(cast(TestResult, ranked).pvalue)
-        except ValueError:
-            return 1.0
+            return summary.signed_rank_test(x - scaled, alternative)[1]
+        return summary.rank_sum_test(x, scaled, alternative)[1]
 
     # Upper: a is stochastically BELOW the b*(1+margin) bound. Lower: a is ABOVE b*(1-margin).
     p_upper = one_sided(y * (1.0 + margin), "less")

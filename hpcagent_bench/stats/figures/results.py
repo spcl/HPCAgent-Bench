@@ -14,12 +14,12 @@ then machine_learning.
   flow emits it, because its ratio axis reads a 0.5x regression as a smaller event than a 1.5x
   win (``scripts/plot_speedup.py`` is the speed-up figure a run plots). The per-cell median
   used for best-selection AND the bootstrap-CI superscript both come from OUTLIER-CLEANED
-  samples via :func:`hpcagent_bench.stats.median_ci` (which warns, naming the cell, on every
+  samples via :func:`hpcagent_bench.stats.summary.median_ci` (which warns, naming the cell, on every
   dropped sample); NumPy's own column shows absolute runtimes.
 * :func:`plot_distribution_grid` -- the full per-sample distribution per kernel as a grid of
   violin or box plots, sized to a two-column scientific-paper width.
 * :func:`plot_sample_diagnostics` -- the honest per-sample figure. A fitted normal curve is
-  drawn ONLY when :func:`hpcagent_bench.inference.check_normality` says the sample is normal;
+  drawn ONLY when :func:`hpcagent_bench.stats.inference.check_normality` says the sample is normal;
   otherwise the panel is an ECDF plus a violin with the raw points overlaid. Drawing a Gaussian
   over right-skewed wall-clock is the misleading plot this function exists to prevent. Either
   way the confidence band is LABELLED with its kind, so a reader knows whether they are looking
@@ -44,7 +44,7 @@ import pathlib
 import re
 import sqlite3
 import warnings
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, cast
 
@@ -64,7 +64,7 @@ from matplotlib.patches import Patch, Rectangle  # noqa: E402
 # scipy ships no type stubs, so what it hands back is converted explicitly at each call site.
 from scipy.stats import norm  # noqa: E402 # pyright: ignore[reportMissingTypeStubs]
 
-from hpcagent_bench import inference, stats
+from hpcagent_bench.stats import inference
 from hpcagent_bench.stats import summary  # noqa: E402
 from hpcagent_bench.harness import recording  # noqa: E402
 from hpcagent_bench.paths import PLOTS_DIR  # noqa: E402
@@ -132,16 +132,6 @@ def baseline_of(frame: pd.DataFrame, default: str = DEFAULT_BASELINE) -> str:
             winner,
         )
     return winner
-
-
-def framework_color(name: str) -> str:
-    """A framework's one colour. Thin alias -- :mod:`hpcagent_bench.stats.palette` decides it."""
-    return palette.framework_color(name)
-
-
-def framework_colors(names: Iterable[str]) -> dict[str, str]:
-    """``{framework: colour}`` for one figure, with palette.py's collision warning."""
-    return palette.framework_colors(names)
 
 
 def set_usetex(usetex: bool) -> None:
@@ -372,14 +362,14 @@ CELL_COLUMNS: tuple[str, ...] = tuple(f.name for f in dataclasses.fields(CellSum
 
 def cell_summary(data: pd.DataFrame) -> pd.DataFrame:
     """Per ``(benchmark, domain, framework)`` cell: the outlier-cleaned median and its
-    bootstrap CI (:func:`hpcagent_bench.stats.median_ci`, which warns -- naming the cell -- on
+    bootstrap CI (:func:`hpcagent_bench.stats.summary.median_ci`, which warns -- naming the cell -- on
     each dropped sample). Returns columns ``benchmark, domain, framework, time, ci_low,
     ci_high, ci_perc`` where ``time`` is the cleaned median (used for best-selection AND the
     plotted value) and ``ci_perc`` is the CI width as a percent of that median."""
     rows: list[CellSummary] = []
     for keys, g in data.groupby(["benchmark", "domain", "framework"], dropna=False):
         b, dom, fw = cast("tuple[str, str, str]", keys)
-        med, lo, hi = stats.median_ci(g["time"].to_numpy(), label=f"{b}@{fw}", seed=CI_SEED)[:3]
+        med, lo, hi = summary.median_ci(g["time"].to_numpy(), label=f"{b}@{fw}", seed=CI_SEED)[:3]
         perc = ((hi - lo) / med * 100.0) if (med != 0.0 and not math.isnan(med)) else 0.0
         rows.append(CellSummary(b, dom, fw, med, lo, hi, perc))
     return pd.DataFrame([dataclasses.asdict(r) for r in rows], columns=list(CELL_COLUMNS))
@@ -622,7 +612,7 @@ def plot_distribution_grid(
     across panels.
 
     Each cell shows the full outlier-cleaned sample spread
-    (:func:`hpcagent_bench.stats.drop_outliers`, which warns on a drop). Scope is the same
+    (:func:`hpcagent_bench.stats.summary.drop_outliers`, which warns on a drop). Scope is the same
     selector grammar as :func:`plot_heatmap` (single kernel = 1x1, an explicit list, a whole
     track, a subtrack-per-level via ``@lvl<n>``), kernels ordered by the shared scheme. The
     figure is sized to a two-column paper width (``col_width_in`` per paper column, ~3.4in).
@@ -658,7 +648,7 @@ def distribution_figure(
     ordered = reorder_rows(kernels, order)[0]
 
     slots = framework_slots(data, baseline)  # FIXED slot per framework, shared by every panel
-    colors = framework_colors(slots)
+    colors = palette.framework_colors(slots)
     nslots = len(slots)
 
     nrows, ncols = grid_shape(len(ordered))
@@ -675,7 +665,7 @@ def distribution_figure(
             samples = cast("FloatArray", times.to_numpy())
             if samples.size == 0:
                 continue  # empty gap at this framework's fixed slot; never re-pack
-            kept = stats.drop_outliers(samples, label=f"{kernel}@{fw}")[0]
+            kept = summary.drop_outliers(samples, label=f"{kernel}@{fw}")[0]
             if kept.size == 0:
                 continue
             if kind == "violin":
@@ -723,10 +713,10 @@ def draw_interval_band(
     orientation: Literal["horizontal", "vertical"] = "horizontal",
     color: str = "#d64550",
 ) -> None:
-    """Shade an :class:`~hpcagent_bench.inference.Interval` on ``ax`` and mark its point estimate.
+    """Shade an :class:`~hpcagent_bench.stats.inference.Interval` on ``ax`` and mark its point estimate.
 
     The band is drawn the same way whatever produced it; the KIND of interval is communicated by
-    :meth:`~hpcagent_bench.inference.Interval.label` in the panel title, never by the styling --
+    :meth:`~hpcagent_bench.stats.inference.Interval.label` in the panel title, never by the styling --
     a reader must not have to infer "parametric or bootstrap?" from a shade of red."""
     if not (math.isfinite(interval.low) and math.isfinite(interval.high)):
         return
@@ -757,18 +747,18 @@ def plot_sample_diagnostics(
       points overlaid. No Gaussian is drawn. The band is the bootstrap interval for the MEDIAN,
       because that -- not the mean -- is the statistic the non-parametric branch reports.
 
-    Both panels label the interval with :meth:`~hpcagent_bench.inference.Interval.label`, and the
+    Both panels label the interval with :meth:`~hpcagent_bench.stats.inference.Interval.label`, and the
     figure title carries the verdict's reason, so the figure is self-describing in a paper.
 
     :param drop: apply the shared robust upper-outlier rejection first
-        (:func:`hpcagent_bench.stats.drop_outliers`, which warns on a drop) so this figure shows
+        (:func:`hpcagent_bench.stats.summary.drop_outliers`, which warns on a drop) so this figure shows
         the same cleaned sample the heatmap summarises.
     """
     set_usetex(usetex)
     x: FloatArray = inference.clean(samples)
     n_dropped = 0
     if drop:
-        x, dropped = stats.drop_outliers(x, label=title)
+        x, dropped = summary.drop_outliers(x, label=title)
         n_dropped = int(dropped.size)
     if x.size == 0:
         raise RuntimeError(f"no usable samples to plot for {title!r}")
@@ -858,10 +848,10 @@ def corpus_comparisons(
     Reads the per-SAMPLE ``results`` rows (the framework track persists one row per repetition,
     so the raw repeats this needs actually exist -- the agent-track ``submissions`` table keeps
     only reduced numbers and cannot be tested this way). Samples are INDEPENDENT: each framework
-    is measured in its own process, so :func:`hpcagent_bench.inference.compare_corpus` runs
+    is measured in its own process, so :func:`hpcagent_bench.stats.inference.compare_corpus` runs
     Mann-Whitney, not Wilcoxon signed-rank.
 
-    ⛔ Only :attr:`~hpcagent_bench.inference.CorpusComparison.significant_adjusted` may be quoted
+    Only :attr:`~hpcagent_bench.stats.inference.CorpusComparison.significant_adjusted` may be quoted
     as a finding. Kernels are returned in the shared report order so the table is deterministic.
     """
     data = load_results(db, benchmark, preset, datatype, variant, baseline)

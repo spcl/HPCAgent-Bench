@@ -1,7 +1,7 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """End-to-end reporting test: produce a results DB, then drive the WHOLE reporting path over it
--- ``plot_heatmap`` + ``plot_distribution_grid`` + ``stats.median_ci`` -- and assert the PDFs come
+-- ``plot_heatmap`` + ``plot_distribution_grid`` + ``median_ci`` -- and assert the PDFs come
 out non-empty and the stats are finite.
 
 The DB is produced by a REAL native (no-container) run when that is feasible on the box: numpy +
@@ -26,7 +26,7 @@ from typing import List
 import numpy as np
 import pytest
 
-from hpcagent_bench import stats
+from hpcagent_bench.stats.summary import median_ci
 from hpcagent_bench.stats.figures.results import (
     cell_summary,
     load_results,
@@ -251,6 +251,6 @@ def test_reporting_pipeline_end_to_end(tmp_path, capsys) -> None:
 
     # median_ci over a real cell's samples: median finite and bracketed by its CI.
     numpy_cell = data[(data["framework"] == "numpy")]["time"].to_numpy()
-    med, lo, hi, _n = stats.median_ci(numpy_cell, warn=False)
+    med, lo, hi = median_ci(numpy_cell, warn=False)[:3]
     assert np.isfinite([med, lo, hi]).all()
     assert lo <= med <= hi

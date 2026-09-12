@@ -34,7 +34,7 @@ a mean is pulled toward the slow tail while the median is not.
 ## Outlier rejection: robust modified z-score, upper tail only
 
 Before summarizing we drop only the **very bad** samples (e.g. a ~10x slowdown from an OS
-hiccup), using a robust rule that a single huge sample cannot mask (`stats.drop_outliers`):
+hiccup), using a robust rule that a single huge sample cannot mask (`summary.drop_outliers`):
 
 - modified z = `(x - median) / (1.4826 * MAD)`, where MAD is the median absolute deviation.
   Median and MAD are used (not mean/std) precisely so the outlier being removed does not
@@ -50,7 +50,7 @@ hiccup), using a robust rule that a single huge sample cannot mask (`stats.drop_
 
 ## Confidence interval: non-parametric bootstrap of the median
 
-The CI on the median comes from `scipy.stats.bootstrap` (`stats.median_ci`), after outlier
+The CI on the median comes from `scipy.stats.bootstrap` (`summary.median_ci`), after outlier
 rejection. Reported defaults:
 
 | parameter | default | note |
@@ -69,7 +69,7 @@ calling the bootstrap.
 Per (framework, kernel) we keep the median-fastest implementation, then normalize its median
 runtime to NumPy's on the same inputs: `speedup = t_numpy / t_framework` (> 1 = faster than
 NumPy). The per-group **Total** is the **geometric mean** of speedups over
-`stats.usable_ratios` (`stats.geomean`), the correct average for ratios: a missing or
+`summary.usable_ratios` (`summary.geomean`), the correct average for ratios: a missing or
 non-positive cell is dropped with a warning rather than clamped to zero -- `scipy.stats.gmean`'s
 `log(0)` would turn one absent measurement into a geomean of 0.0 for the whole row. NumPy's own
 column shows absolute runtimes.
@@ -115,7 +115,7 @@ An NPBench-style `RdYlGn_r` heatmap (a structural copy of NPBench's `plot_result
 kernels, columns = frameworks, each cell the median speedup vs NumPy with a bootstrap-CI
 **width** superscript (as % of the median), and a geomean **Total** row. The per-cell median used
 for both best-selection **and** the plotted value comes from **outlier-cleaned** samples, and the
-CI from the same cleaned samples, using one `stats.median_ci` call per cell (`cell_summary`), which
+CI from the same cleaned samples, using one `summary.median_ci` call per cell (`cell_summary`), which
 warns (naming the cell, e.g. `heat_3d@dace_cpu`) on every dropped sample. Selectable by kernel /
 track / dwarf / `@lvl<n>` / preset / precision.
 
@@ -125,7 +125,7 @@ The full sample distribution per kernel (not just the median), as a grid of viol
 (`kind='violin'|'box'`), modelled on NPBench's per-kernel subplot grid (framework-coloured, one
 shared legend). Scope: a single kernel (1x1), an explicit list, a whole track, or a
 subtrack-per-level (same selector grammar as the heatmap). Samples are outlier-cleaned
-(`stats.drop_outliers`, which warns). The grid is sized to fit a **two-column scientific-paper**
+(`summary.drop_outliers`, which warns). The grid is sized to fit a **two-column scientific-paper**
 width (~3.4in per paper column).
 
 Every panel reserves a **fixed slot per framework** (the full framework set across the scope, NumPy
