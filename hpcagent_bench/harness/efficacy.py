@@ -257,6 +257,10 @@ class Efficacy:
     ``Q == 0`` exactly at no effect, ``exp(Q)`` reads as one overall multiplicative effect, and
     swapping the arms negates it (:func:`Efficacy.swapped` asserts nothing -- the antisymmetry is a
     property of the form, and ``test_swapping_the_arms_negates_q`` is what holds it).
+
+    ``tasks`` is what the pairing KEPT and ``unmatched`` is what it DROPPED: every task at least one
+    of the four mappings carries and another lacks. The survivors are not a fair sample of the
+    roster, so a result that names only them lets a claim about forty tasks rest on two.
     """
 
     score: Ratio
@@ -265,6 +269,7 @@ class Efficacy:
     score_weight: float
     cost_weight: float
     tasks: Tuple[str, ...]
+    unmatched: tuple[str, ...] = ()
 
     @property
     def overall_effect(self) -> float:
@@ -363,6 +368,7 @@ def efficacy(
     shared = sorted(set(before_scores) & set(after_scores) & set(before_costs) & set(after_costs))
     if not shared:
         raise ValueError("the arms share no task, so there is nothing paired to compare")
+    seen = set(before_scores) | set(after_scores) | set(before_costs) | set(after_costs)
 
     score = ratio(
         [before_scores[t] for t in shared],
@@ -386,6 +392,7 @@ def efficacy(
         score_weight=score_weight,
         cost_weight=cost_weight,
         tasks=tuple(shared),
+        unmatched=tuple(sorted(seen - set(shared))),
     )
 
 
@@ -425,6 +432,7 @@ def as_row(name: str, item: Efficacy) -> Dict[str, object]:
     return {
         "intervention": name,
         "tasks": len(item.tasks),
+        "unmatched": len(item.unmatched),
         **axis_columns("score", item.score, unfamilied, ""),
         **axis_columns("cost", item.cost, unfamilied, ""),
         "q": item.q,
@@ -459,6 +467,7 @@ def family_rows(
             {
                 "intervention": name,
                 "tasks": len(item.tasks),
+                "unmatched": len(item.unmatched),
                 **axis_columns("score", item.score, verdicts[2 * index], family),
                 **axis_columns("cost", item.cost, verdicts[2 * index + 1], family),
                 "q": item.q,
