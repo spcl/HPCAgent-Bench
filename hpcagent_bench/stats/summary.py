@@ -75,6 +75,11 @@ MEANAD_TO_SIGMA: float = 1.253314
 #: "very bad" (OS-hiccup) samples, not ordinary run-to-run jitter.
 DEFAULT_MAD_Z: float = 5.0
 
+#: Fewest samples a percentile bootstrap of a MEDIAN can say anything about. Below it the resampled
+#: median takes only a handful of values and the 2.5/97.5 percentiles land on the data points
+#: themselves: measured widths did not shrink with n (0.16 at n=2 against 0.64 at n=3-4).
+MIN_INTERVAL_SAMPLES: int = 5
+
 #: Bootstrap median-CI defaults, exposed so callers and docs can report them.
 DEFAULT_CONFIDENCE: float = 0.95
 DEFAULT_RESAMPLES: int = 9999
@@ -135,8 +140,12 @@ def median_ci(
     warn: bool = True,
     label: str = "",
     seed: int = 0,
+    min_n: int = 0,
 ) -> tuple[float, float, float, int]:
     """Median and a non-parametric bootstrap CI, after robust outlier rejection.
+
+    Fewer than ``min_n`` samples (after the drop) get the median with a NaN interval: a cell that
+    thin supports no interval, and a point drawn as one would claim a precision it does not have.
 
     Runs :func:`scipy.stats.bootstrap` on the median with the module defaults
     (``method='percentile'``, ``confidence_level=0.95``, ``n_resamples=9999``). Returns
@@ -151,6 +160,8 @@ def median_ci(
         n_dropped = int(dropped.size)
     if x.size == 0:
         return float("nan"), float("nan"), float("nan"), n_dropped
+    if x.size < min_n:
+        return float(np.median(x)), math.nan, math.nan, n_dropped
     interval = bootstrap_ci(x, np.median, "median", confidence, n_resamples, method, seed)
     return interval.point, interval.low, interval.high, n_dropped
 

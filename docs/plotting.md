@@ -108,9 +108,11 @@ mark and the vertical leg reads as the change in spend.
 from several different arms, not repeats of one condition -- on llr40v11 every one of its 120 token
 cells mixed the skills and no-skills arms. A bootstrap interval or a scatter of those episodes would
 say nothing about sampling uncertainty there, since the spread is mostly the treatment, so it draws
-the median alone. `plot_arm_summary.py` draws no interval either: it plots locations, not a test,
-and whether a difference is real is `plot_score_change.py`'s question -- drawing the test in both
-invites reading one finding as two.
+the median alone. `plot_arm_summary.py` and `plot_score_change.py` plot one value per KERNEL, so
+each median there carries its percentile bootstrap interval over kernels
+(`population.kernel_medians`) as a whisker beside the mark, withheld below
+`summary.MIN_INTERVAL_SAMPLES` kernels, and the table carries the two median times behind the
+speed-up. Whether a difference is real stays `plot_score_change.py`'s paired test.
 
 **Rank statistics on these samples.** Per-kernel speed-ups are heavy-tailed and a mean in log space
 still lets one 40x kernel carry the estimate. `plot_score_change.py` uses Hodges-Lehmann with a

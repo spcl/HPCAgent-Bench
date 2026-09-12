@@ -133,6 +133,19 @@ def test_the_family_the_marks_are_corrected_over_is_every_test_the_figure_could_
     assert plot.family_size(frame) == 12
 
 
+def thin(log2_speedup: float, tokens: float) -> dict[str, float]:
+    """An ``absolute_points`` row over too few kernels for an interval, as the table writes one."""
+    nan = float("nan")
+    return {
+        "log2_speedup": log2_speedup,
+        "log2_speedup_low": nan,
+        "log2_speedup_high": nan,
+        "tokens": tokens,
+        "tokens_low": nan,
+        "tokens_high": nan,
+    }
+
+
 @pytest.mark.parametrize(
     "score_verdict, cost_verdict, starred",
     [
@@ -152,8 +165,8 @@ def test_the_figure_stars_a_point_only_on_a_corrected_verdict(
 
     frame = pd.DataFrame(
         [
-            {"model": "qwen38", "language": "c", "skills": False, "log2_speedup": 1.0, "tokens": 1000.0},
-            {"model": "qwen38", "language": "c", "skills": True, "log2_speedup": 1.4, "tokens": 900.0},
+            {"model": "qwen38", "language": "c", "skills": False, **thin(1.0, 1000.0)},
+            {"model": "qwen38", "language": "c", "skills": True, **thin(1.4, 900.0)},
         ]
     )
     stats = pd.DataFrame(
@@ -183,8 +196,8 @@ def test_the_figure_names_the_correction_and_the_size_of_the_family() -> None:
 
     frame = pd.DataFrame(
         [
-            {"model": "qwen38", "language": "c", "skills": False, "log2_speedup": 1.0, "tokens": 1000.0},
-            {"model": "qwen38", "language": "c", "skills": True, "log2_speedup": 1.4, "tokens": 900.0},
+            {"model": "qwen38", "language": "c", "skills": False, **thin(1.0, 1000.0)},
+            {"model": "qwen38", "language": "c", "skills": True, **thin(1.4, 900.0)},
         ]
     )
     stats = pd.DataFrame(

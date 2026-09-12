@@ -34,7 +34,7 @@ import numpy as np
 import pandas as pd
 
 from hpcagent_bench import experiment_tags
-from hpcagent_bench.stats import palette, population
+from hpcagent_bench.stats import palette, population, rules
 from hpcagent_bench.stats import style as plotstyle
 
 plotstyle.apply()
@@ -56,26 +56,19 @@ LEGEND_COLS_SINGLE: int = 3
 
 
 def arm_points(frame: pd.DataFrame) -> pd.DataFrame:
-    """One row per (model, language, condition): median log2 speed-up and median tokens."""
+    """One row per (model, language, condition): :func:`~hpcagent_bench.stats.population.kernel_medians`
+    with the per-episode median as a kernel's spend, checked against SC15 Rules 4 and 5 before it is drawn."""
     rows = []
     for (model, language, condition), part in frame.groupby(["model", "language", "condition"]):
-        speed = population.kernel_answers(part).speedup
-        speed = speed[speed > 0]
-        tokens = population.kernel_tokens(part, "median")
-        tokens = tokens[tokens > 0]
-        if speed.empty or tokens.empty:
-            continue
-        rows.append(
-            {
-                "model": model,
-                "language": language,
-                "condition": str(condition),
-                "log2_speedup": float(np.median(np.log2(speed.to_numpy(dtype=float)))),
-                "tokens": float(np.median(tokens.to_numpy(dtype=float))),
-                "kernels": int(speed.size),
-            }
-        )
-    return pd.DataFrame(rows)
+        point = population.kernel_medians(part, "median")
+        if point is not None:
+            rows.append({"model": model, "language": language, "condition": str(condition), **point})
+    table = pd.DataFrame(rows)
+    if table.empty:
+        return table
+    rules.require_costs(table, "log2_speedup", ["baseline_ns", "native_ns"])
+    rules.require_interval(table, "log2_speedup", "log2_speedup_low", "log2_speedup_high")
+    return rules.require_interval(table, "tokens", "tokens_low", "tokens_high")
 
 
 #: Arm-name suffix -> the packet it means. The suffix is read only because the observations CSV
@@ -126,6 +119,17 @@ def language_order(frame: pd.DataFrame) -> list[str]:
     return head + sorted(present - set(head))
 
 
+def draw_intervals(ax: matplotlib.axes.Axes, x: float, pair: pd.DataFrame, column: str, hues: dict[str, str]) -> None:
+    """Each condition's interval as a thin whisker just BESIDE its mark, so the connector drawn through
+    the marks is never read as an interval. A condition too thin for one draws none."""
+    ordered = pair.sort_values("condition")
+    offsets = np.linspace(-0.07, 0.07, len(ordered)) if len(ordered) > 1 else np.array([0.07])
+    for offset, (_, row) in zip(offsets, ordered.iterrows(), strict=True):
+        low, high = float(row[f"{column}_low"]), float(row[f"{column}_high"])
+        if np.isfinite(low) and np.isfinite(high):
+            ax.vlines(x + offset, low, high, color=hues[row.condition], linewidth=1.4, alpha=0.75, zorder=2)
+
+
 def draw_metric(ax: matplotlib.axes.Axes, frame: pd.DataFrame, column: str, label: str, log: bool) -> None:
     """One x slot per LANGUAGE; the models scattered WITHIN it; the two conditions joined.
 
@@ -156,6 +160,7 @@ def draw_metric(ax: matplotlib.axes.Axes, frame: pd.DataFrame, column: str, labe
     for (model, language), pair in frame.groupby(["model", "language"]):
         x = at[language] + dodge[model]
         shape = shapes[model]
+        draw_intervals(ax, x, pair, column, hues)
         if joined:
             off = pair[pair.condition == ""]
             on = pair[pair.condition != ""]

@@ -43,7 +43,7 @@ import pandas as pd
 
 from hpcagent_bench import experiment_tags
 from hpcagent_bench.harness import efficacy
-from hpcagent_bench.stats import palette, population, summary
+from hpcagent_bench.stats import palette, population, rules, summary
 from hpcagent_bench.stats import style as plotstyle
 
 plotstyle.apply()
@@ -178,6 +178,19 @@ def points(before: pd.DataFrame, after: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def draw_interval(ax: plt.Axes, row: pd.Series, colour: str) -> None:
+    """One mark's two intervals, as thin crossed whiskers: speed-up across, spend up. A mark too thin
+    for an interval on an axis draws none there."""
+    x, y = float(row.log2_speedup), float(row.tokens)
+    x_low, x_high, y_low, y_high = (
+        float(row[c]) for c in ("log2_speedup_low", "log2_speedup_high", "tokens_low", "tokens_high")
+    )
+    if np.isfinite(x_low) and np.isfinite(x_high):
+        ax.hlines(y, x_low, x_high, color=colour, linewidth=1.1, alpha=0.55, zorder=1)
+    if np.isfinite(y_low) and np.isfinite(y_high):
+        ax.vlines(x, y_low, y_high, color=colour, linewidth=1.1, alpha=0.55, zorder=1)
+
+
 def draw_absolute(ax, frame: pd.DataFrame, stats: pd.DataFrame) -> list:
     """Median speed-up against median spend, with each arm's TWO CONDITIONS joined.
 
@@ -213,6 +226,8 @@ def draw_absolute(ax, frame: pd.DataFrame, stats: pd.DataFrame) -> list:
         # "with skills" mark and the vertical leg reads as the change in spend.
         x_off, x_on = float(off.log2_speedup.iloc[0]), float(on.log2_speedup.iloc[0])
         y_off, y_on = float(off.tokens.iloc[0]), float(on.tokens.iloc[0])
+        for side in (off, on):
+            draw_interval(ax, side.iloc[0], colour)
         ax.plot(
             [x_off, x_on, x_on],
             [y_off, y_off, y_on],
@@ -368,23 +383,15 @@ def absolute_points(frame: pd.DataFrame) -> pd.DataFrame:
     """
     rows = []
     for (model, language, skills), part in frame.groupby(["model", "language", "skills"]):
-        speed = population.kernel_answers(part).speedup
-        speed = speed[speed > 0]
-        tokens = population.kernel_tokens(part, "sum")
-        tokens = tokens[tokens > 0]
-        if speed.empty or tokens.empty:
-            continue
-        rows.append(
-            {
-                "model": model,
-                "language": language,
-                "skills": bool(skills),
-                "log2_speedup": float(np.median(np.log2(speed.to_numpy(dtype=float)))),
-                "tokens": float(np.median(tokens.to_numpy(dtype=float))),
-                "kernels": int(speed.size),
-            }
-        )
-    return pd.DataFrame(rows)
+        point = population.kernel_medians(part, "sum")
+        if point is not None:
+            rows.append({"model": model, "language": language, "skills": bool(skills), **point})
+    table = pd.DataFrame(rows)
+    if table.empty:
+        return table
+    rules.require_costs(table, "log2_speedup", ["baseline_ns", "native_ns"])
+    rules.require_interval(table, "log2_speedup", "log2_speedup_low", "log2_speedup_high")
+    return rules.require_interval(table, "tokens", "tokens_low", "tokens_high")
 
 
 def figure_absolute(frame: pd.DataFrame, stats: pd.DataFrame, label: str, out: pathlib.Path) -> pathlib.Path:
