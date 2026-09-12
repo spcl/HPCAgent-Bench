@@ -58,14 +58,15 @@ def test_max_memory_empty_is_zero() -> None:
 @pytest.mark.parametrize(
     "pairs,expected",
     [
-        ([(200, 100), (100, 200)], 1.25),  # mean of candidate/baseline ratios: 2.0 and 0.5 -> 1.25
+        ([(200, 100), (100, 200)], 1.0),  # ratios 2.0 and 0.5 cancel
+        ([(400, 100), (100, 100)], 2.0),  # sqrt(4.0 * 1.0), where an arithmetic mean says 2.5
         ([(200, 100), (300, 0)], 2.0),  # the (300, 0) pair has no baseline peak and is excluded
     ],
-    ids=["mean-ratio", "excludes-missing-baseline"],
+    ids=["reciprocal-ratios-cancel", "geometric-not-arithmetic", "excludes-missing-baseline"],
 )
-def test_norm_memory_is_the_mean_ratio_over_tasks_with_a_baseline(pairs, expected) -> None:
-    """NMU is the mean of candidate/baseline ratios; a task with no baseline peak (denominator 0)
-    is excluded, not averaged in as a spurious ratio."""
+def test_norm_memory_is_the_geometric_mean_ratio_over_tasks_with_a_baseline(pairs, expected) -> None:
+    """NMU aggregates ratios, so a halving and a doubling must cancel; a task with no baseline peak
+    (denominator 0) is excluded, not averaged in as a spurious ratio."""
     assert norm_memory(pairs) == pytest.approx(expected)
 
 
