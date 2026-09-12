@@ -52,7 +52,9 @@ def monitor_report_fixture():
 
 
 def seed_shard(path: pathlib.Path, *, run_id: str, kernel: str = "gemm", ts: int = 1) -> None:
-    """One valid submissions row in a fresh shard DB, same shape as test_db_aggregate.py's _seed."""
+    """One valid submissions row plus the run it belongs to, in a fresh shard DB -- the same shape
+    as test_db_aggregate.py's ``_seed``. The measurement row carries no ``language``; the identity a
+    figure groups by is the ``runs`` row joined by ``run_id``."""
     conn = recording.connect(str(path))
     try:
         conn.execute(
@@ -60,9 +62,14 @@ def seed_shard(path: pathlib.Path, *, run_id: str, kernel: str = "gemm", ts: int
             (kernel, "scientific_computing", "dense_la", None),
         )
         conn.execute(
-            "INSERT INTO submissions(run_id, ts, benchmark, preset, datatype, language, "
-            "source_mode, optimizer, baseline, speedup) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (run_id, ts, kernel, "S", "float64", "c", "restricted", "noop", "c", 1.5),
+            "INSERT OR IGNORE INTO runs(run_id, experiment, model, language, device, packet, rep, arm, first_seen) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (run_id, "validate", "stub-model", "c", "cpu", "", 1, run_id.split(".")[0], ts),
+        )
+        conn.execute(
+            "INSERT INTO submissions(run_id, ts, benchmark, preset, datatype, "
+            "source_mode, optimizer, baseline, speedup) VALUES (?,?,?,?,?,?,?,?,?)",
+            (run_id, ts, kernel, "S", "float64", "restricted", "noop", "c", 1.5),
         )
         conn.commit()
     finally:
@@ -215,9 +222,9 @@ def test_merge_results_carries_the_call_trajectory(tmp_path) -> None:
         conn = recording.connect(str(run_dir / "judge" / f"rank-{rank}" / "hpcagent_bench.db"))
         try:
             conn.execute(
-                "INSERT INTO calls(run_id, ts, benchmark, preset, datatype, language, source_mode, "
-                "round, tokens, status, route) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                (f"r{rank}", 1, "gemm", "S", "float64", "c", "restricted", 1, 0, "build_error", "score"),
+                "INSERT INTO calls(run_id, ts, benchmark, preset, datatype, source_mode, "
+                "round, tokens, status, route) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (f"r{rank}", 1, "gemm", "S", "float64", "restricted", 1, 0, "build_error", "score"),
             )
             conn.commit()
         finally:
@@ -235,8 +242,14 @@ def test_merge_results_carries_the_call_trajectory(tmp_path) -> None:
     conn = sqlite3.connect(str(out))
     try:
         assert [row[0] for row in conn.execute("SELECT route FROM calls ORDER BY run_id")] == ["score", "score"]
+        # A calls row holds no language of its own: it names a run, and the run names the arm's
+        # language. Carrying `calls` without `runs` would merge a trajectory nothing can attribute.
+        attributed = [
+            row[0] for row in conn.execute("SELECT r.language FROM calls JOIN runs r USING (run_id) ORDER BY run_id")
+        ]
     finally:
         conn.close()
+    assert attributed == ["c", "c"]
 
 
 # --- monitor_report must skip a garbage CSV, not lose the good ones with it ---------------------------

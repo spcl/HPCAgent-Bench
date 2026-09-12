@@ -725,13 +725,21 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-#: Conflict rule for the two NATURAL-key tables: a kernel's taxonomy and a content-addressed prompt
-#: are the same fact whichever shard observed them, so they dedup on their primary key instead of
-#: multiplying. Every other table is a row log whose synthetic ``id`` collides across shards; its
+#: Conflict rule for the three NATURAL-key tables: a kernel's taxonomy and a content-addressed
+#: prompt are the same fact whichever shard observed them, so they dedup on their primary key
+#: instead of multiplying. ``runs`` joins them, with the verb :func:`upsert_run` already writes it
+#: under: a run's identity is one fact per ``run_id`` and every rank of that run writes it, so the
+#: second copy is the same row and not a conflict. Under a plain INSERT that duplicate raises
+#: UNIQUE and takes the whole merge down, every table with it.
+#: Every other table is a row log whose synthetic ``id`` collides across shards; its
 #: ids are dropped and reassigned by the destination. Tables are discovered from the shard rather
 #: than listed here, so the framework ``results`` table -- a different module's schema in the same
 #: file -- and any table added later are merged without a second list to keep in sync.
-_MERGE_VERB: dict[str, str] = {"benchmarks": "INSERT OR REPLACE", "prompts": "INSERT OR IGNORE"}
+_MERGE_VERB: dict[str, str] = {
+    "benchmarks": "INSERT OR REPLACE",
+    "prompts": "INSERT OR IGNORE",
+    "runs": "INSERT OR IGNORE",
+}
 
 #: ``benchmarks`` before anything that foreign-keys to it; ``prompts`` next for the same reason.
 #: The remainder is sorted, so a merge is reproducible rather than dependent on sqlite_master order.
