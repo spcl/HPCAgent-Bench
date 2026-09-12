@@ -267,7 +267,9 @@ experiments/results/
 # scratch; this keeps a stale or hand-run log from being committed again (db2027bd did).
 experiments/logs/
 experiments/*.err
-experiments/gap/
+
+# check_offload_claims.py's default --workdir: compiled probes and their .c sources
+experiments/work/
 
 # SQLite sidecars of the repo-root results DB (a run-benchmark invoked from here leaves them).
 hpcagent_bench.db-*
