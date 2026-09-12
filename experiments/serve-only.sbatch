@@ -47,7 +47,9 @@ INFERENCE_NODES="${INFERENCE_NODES:-1}"
 INFERENCE_MODE="${INFERENCE_MODE:-replicas}"
 VLLM_PORT="${VLLM_PORT:-8000}"
 SERVED_MODEL="${VLLM_SERVED_MODEL:-optarena-vllm}"
-READY_TIMEOUT="${VLLM_READY_TIMEOUT_SECONDS:-2400}"
+# same precedence the campaign path uses, so one key covers both; 2400 could not hold a
+# GLM-5.3 start, whose slowest stage alone reaches 4200 s before KV alloc and graph capture
+READY_TIMEOUT="${VLLM_READY_TIMEOUT_SECONDS:-${AGENT_READY_TIMEOUT_SECONDS:-7200}}"
 RUN_ROOT="${RUN_ROOT:?RUN_ROOT must name a writable directory}"
 
 if [[ -z "${SLURM_JOB_ID:-}" ]]; then
