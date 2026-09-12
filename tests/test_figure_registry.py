@@ -147,15 +147,17 @@ def test_every_packet_the_arm_summary_can_colour_is_registered() -> None:
     """The condition vocabulary is typed into the script, so no row has to exist for it to reach a legend."""
     summary = load_script("plot_arm_summary")
     named = set(experiment_tags.names("packets"))
-    packets = [key for _, key in summary.CONDITIONS]
+    packets = list(summary.CONDITION_ORDER)
     unknown = [p for p in packets if any(part not in named for part in experiment_tags.packet_parts(p))]
-    assert not unknown, f"plot_arm_summary.CONDITIONS colours {unknown}, which no `packets` key of registry.yaml names"
+    assert not unknown, (
+        f"plot_arm_summary.CONDITION_ORDER colours {unknown}, which no `packets` key of registry.yaml names"
+    )
 
 
 @pytest.mark.parametrize("width", [2, 4], ids=["joined pair", "unjoined conditions"])
 def test_the_arm_summary_figure_colours_only_registered_packets(width: int, caplog: pytest.LogCaptureFixture) -> None:
     summary = load_script("plot_arm_summary")
-    conditions = [key for _, key in summary.CONDITIONS][:width]
+    conditions = list(summary.CONDITION_ORDER)[:width]
     assert identity_warnings(summary, conditions, caplog) == []
 
 
@@ -165,6 +167,18 @@ def test_the_registry_check_catches_a_figure_colouring_an_unregistered_packet(
     """A check that cannot fail guards nothing. The condition vocabulary is the only route a packet has into
     this figure, so an unregistered one is added there and must come back as a warning."""
     summary = load_script("plot_arm_summary")
-    monkeypatch.setattr(summary, "CONDITIONS", (*summary.CONDITIONS, ("-mystery", "a-packet-nobody-registered")))
+    monkeypatch.setattr(summary, "CONDITION_ORDER", (*summary.CONDITION_ORDER, "a-packet-nobody-registered"))
     warnings = identity_warnings(summary, ["", "a-packet-nobody-registered"], caplog)
     assert any("a-packet-nobody-registered" in message for message in warnings), warnings
+
+
+def test_arm_summary_load_reads_the_condition_off_the_recorded_packet(tmp_path) -> None:
+    """An arm renamed away from the ``-cpf`` suffix, but recording the ``cpf`` packet, must still
+    load under that condition -- the arm name used to be the only route in (``condition_of``)."""
+    summary = load_script("plot_arm_summary")
+    path = tmp_path / "observations.csv"
+    pd.DataFrame([{"arm": "renamed-qwen38-c", "packet": "cpf"}]).to_csv(path, index=False)
+
+    frame = summary.load(path, prefix="")
+
+    assert frame.set_index("arm").condition["renamed-qwen38-c"] == "cpf"
