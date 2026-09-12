@@ -60,19 +60,16 @@ if TYPE_CHECKING:
 #: CPF dialect -> the source extension its text is written with.
 LANGUAGE_EXT = {"c++": "cpp", "c": "c", "hip": "hip"}
 
-#: The dialect a device render takes, whatever ``--language`` asked for. A GPU SDFG carries device
-#: storages and schedules, and the host dialects refuse those outright ("CPF renders one
-#: translation unit, but ... has the GPU_Device schedule"), so the target decides this and the
-#: language flag only picks between the two HOST spellings.
+#: The dialect a device render takes, regardless of ``--language``: a GPU SDFG carries device
+#: storages/schedules the host dialects refuse outright, so the target decides this and
+#: ``--language`` only picks between the two HOST spellings.
 DEVICE_LANGUAGE = "hip"
 
-#: Postfixes a generated impl's stem carries over its kernel's ``@dace.program`` name. Longest
-#: first: ``_dace_cpu`` also ends in nothing shared with ``_dace``, but a future ``_dace_x`` would
-#: be shadowed by the bare suffix if this were sorted the other way.
+#: Postfixes a generated impl's stem carries over its ``@dace.program`` name, longest first:
+#: sorting the other way would let the bare ``_dace`` suffix shadow a future ``_dace_x``.
 IMPL_POSTFIXES = ("_dace_gpu", "_dace_cpu", "_dace")
 
-#: Config key holding the wall clock for ONE kernel's render, read through
-#: :func:`render_timeout_s`.
+#: Config key for one kernel's render wall clock (see :func:`render_timeout_s`).
 RENDER_TIMEOUT_KEY = "timeouts.cpf_render_s"
 
 #: Fallback for :data:`RENDER_TIMEOUT_KEY` when the config file does not carry it.
@@ -95,9 +92,8 @@ def render_timeout_s() -> float:
     return float(cast("float", config.get(RENDER_TIMEOUT_KEY, RENDER_TIMEOUT_DEFAULT_S)))
 
 
-#: ``abi`` tag on a CPF binding. Deliberately not the native ``ABI_TAG``: the argument list is the
-#: SDFG's own, so a consumer that reads this file must not assume the native contract's rules
-#: (canonical ordering, the reserved workspace pair, 1-based index rebasing).
+#: ``abi`` tag on a CPF binding, deliberately not the native ``ABI_TAG``: the argument list is the
+#: SDFG's own, so a consumer must not assume the native contract (ordering, workspace pair, 1-based rebasing).
 CPF_ABI = "cpf/1"
 
 
@@ -148,10 +144,9 @@ def binding_for(rendering: Rendering, kernel: str, symbol: str) -> Binding:
     from dace.codegen.cpf import readonly_entry_arrays
 
     sdfg = rendering.sdfg
-    # The renderer's OWN answer, not a second derivation of it: CPF qualifies exactly these
-    # parameters ``const`` in the signature it emits, so asking it is what keeps the published
-    # ``const`` flag and the rendered signature from disagreeing (they did, and cppcheck reported
-    # ``constParameterPointer`` on every read-only pointer as a result).
+    # The renderer's OWN answer, not a second derivation: CPF qualifies these params ``const`` in
+    # the signature it emits, so asking it keeps the two from disagreeing (cppcheck once reported
+    # ``constParameterPointer`` on every read-only pointer when they did).
     readonly = readonly_entry_arrays(sdfg)
     arglist = sdfg.arglist()
     args: list[Arg] = []
@@ -162,24 +157,20 @@ def binding_for(rendering: Rendering, kernel: str, symbol: str) -> Binding:
             shape = tuple(str(dim) for dim in desc.shape)
             args.append(Arg(name=name, kind="ptr", dtype=dtype, is_const=name in readonly, shape=shape))
         else:
-            # A scalar in the arglist is either a symbol or a read-only scalar parameter; CPF has
-            # already promoted every WRITTEN one to a length-1 array, so what is left is by-value.
+            # A scalar here is a symbol or read-only param; CPF already promoted every WRITTEN one to length-1.
             role = "symbol" if name not in sdfg.arrays else None
             args.append(Arg(name=name, kind="scalar", dtype=dtype, is_const=True, role=role))
-    # Keyed ``c`` because that is the slot ``Binding.symbol`` reads, and this binding's entry IS a
-    # C symbol -- CPF's, not the native emitter's. Under any other key the property would fall back
-    # to ``<kernel>_fp64``, which is the NATIVE symbol: the one name this file exists to not claim.
-    # ``abi`` is what says the argument list follows the SDFG's order rather than the native ABI.
+    # Keyed ``c``: that is the slot ``Binding.symbol`` reads, and this entry IS a C symbol (CPF's,
+    # not the native emitter's) -- any other key falls back to ``<kernel>_fp64``, the NATIVE symbol
+    # this file exists to not claim. ``abi`` says the argument list follows the SDFG's own order.
     return Binding(kernel=kernel, config="dense", args=tuple(args), symbols={"c": symbol}, abi=CPF_ABI)
 
 
-#: DaCe stamps this on every generated unit. Correct for a file nobody edits and wrong for the one
-#: the head-start arm hands an agent AS its starting source: an agent told to optimize a file that
-#: says DO NOT MODIFY is an agent given two contradictory instructions.
+#: DaCe stamps this on every generated unit -- correct for a file nobody edits, wrong for the one
+#: the head-start arm hands an agent to optimize: "DO NOT MODIFY" contradicts the task.
 DACE_BANNER = "/* DaCe AUTO-GENERATED FILE. DO NOT MODIFY */"
 
-#: Prefix for the local a forced ABI symbol is assigned to. Named so :func:`clean_form`
-#: can find exactly these and nothing a kernel would legitimately declare.
+#: Prefix for a forced ABI symbol's local -- unique enough that :func:`clean_form` matches only these.
 ABI_SYMBOL_LOCAL = "_abi_unused_"
 
 
@@ -204,8 +195,7 @@ def dace_symbolic() -> ModuleType:
     return symbolic
 
 
-#: C spelling of the dtypes an ABI argument can carry. Only what the canonical binding actually
-#: uses; anything else is a kernel this adapter has no business guessing at.
+#: C spelling of the dtypes an ABI argument can carry -- only what the canonical binding uses.
 C_DTYPE = {
     "float64": "double",
     "float32": "float",
@@ -253,8 +243,7 @@ def add_workspace(sdfg: SDFG) -> None:
     size = dace_symbolic().symbol(WORKSPACE_SIZE_NAME, dace_int64())
     sdfg.add_array(WORKSPACE_NAME, [size], dace_uint8(), transient=False)
     # A non-transient array nothing reads is still an argument, but dace validation wants every
-    # descriptor reachable; the entry takes it and the body ignores it, which is what the ABI says
-    # it is -- scratch the kernel may use, not storage it must.
+    # descriptor reachable -- the entry takes it, the body ignores it, exactly what the ABI wants.
     assert isinstance(sdfg.arrays[WORKSPACE_NAME], dace_data.Array)
 
 
@@ -303,8 +292,7 @@ def clean_form(code: str, forced: Sequence[str]) -> str:
     """The rendered TU as a file an agent can be handed: no DaCe banner, no forcing artefacts."""
     code = code.replace(DACE_BANNER + "\n", "").replace(DACE_BANNER, "")
     for name in forced:
-        # The whole line, indentation included -- what is left otherwise is a blank the reader has
-        # to wonder about. Matches the declaration only; a real use of the symbol is untouched.
+        # The whole line, indentation included, so no blank is left unexplained; a real use of the symbol is untouched.
         code = re.sub(
             rf"(?m)^[ \t]*(?:auto|int64_t|long long)\s+{ABI_SYMBOL_LOCAL}{name}\s*=\s*{name}\s*;\s*\n", "", code
         )
@@ -343,9 +331,8 @@ def render_sdfg(
         "target": target,
     }
 
-    # Every generated impl annotates with these module-level names, which are None until a
-    # framework binds a precision. Without the binding the whole corpus fails at import with
-    # "NoneType is not subscriptable" -- a harness artifact that would read as a render verdict.
+    # Every generated impl annotates these module-level names, None until a framework binds a
+    # precision -- unbound, the whole corpus fails at import ("NoneType is not subscriptable").
     prec = precision_from_datatype(precision or None)
     dace_framework.dc_float = {
         Precision.FP64: dace.float64,
@@ -367,30 +354,19 @@ def render_sdfg(
         return rec
 
     sdfg = prog.to_sdfg(simplify=True)
-    # canonicalize is stage one and stops where the target begins -- it leaves every open choice
-    # PARALLEL but decides no OpenMP region. finalize_for_target runs the CPU specialization that
-    # does, and CPF renders exactly the schedules it finds: without this tail the translation unit
-    # is correct and entirely sequential, which is the opposite of the point.
-    # The fork's documented order, and the GPU one has a step between the two:
-    # canonicalize(target='gpu') -> offload_to_gpu -> finalize_for_target('gpu'). finalize REJECTS
-    # a graph that was never offloaded, so a wiring mistake fails here instead of quietly
-    # finalizing a host-scheduled graph and rendering it as if it were the device form.
+    # canonicalize leaves every choice PARALLEL but decides no OpenMP region -- skip the tail below
+    # and the unit renders correct but entirely SEQUENTIAL. GPU adds offload_to_gpu between the two
+    # calls; finalize REJECTS a graph never offloaded, so a wiring bug fails loudly, not silently.
     canonicalize(sdfg, validate=True, validate_all=False, target=target)
     if target == "gpu":
         offload_to_gpu(sdfg)
     finalize_for_target(sdfg, target, validate=True)
-    # The CANONICAL symbol, so the rendered unit is a DROP-IN for the kernel it replaces: the
-    # head-start arm hands this file to an agent as its starting source and the judge links
-    # <kernel>_fp64. The ABI is the kernel's own arguments THEN the reserved scratch pair, which
-    # puts a POINTER behind the scalars; CPF's own order is SDFG.arglist(), every array by name
-    # then every scalar by name, so no naming or forcing reaches the ABI order. CPF is TOLD it
-    # instead -- render(order=...) -- and refuses unless the order names exactly the parameters the
-    # entry takes. What can still differ is that SET: a symbol the ABI passes and the graph never
-    # had, which force_abi_symbols puts back, and the scratch pair, which add_workspace puts back.
-    # A future divergence is therefore a MISSING form rather than a symbol called with shifted
-    # arguments.
-    # The entry's name, ALWAYS: the default form is CPF's own symbol, which is what the
-    # canonical_parallel_form tool serves and what the test dlsym's. Only a drop-in overrides it.
+    # sdfg.name = base is CPF's OWN default symbol (what canonical_parallel_form serves and the
+    # test dlsym's); only a drop-in overrides it with the canonical native symbol so the unit is a
+    # DROP-IN the judge can link as <kernel>_fp64. ABI order is the kernel's args THEN the reserved
+    # scratch pair (pointer behind the scalars) -- different from CPF's own arglist() order (arrays
+    # then scalars, by name) -- so render(order=...) is TOLD the ABI order; force_abi_symbols and
+    # add_workspace fill any gap, so a future mismatch surfaces as a MISSING form, not shifted args.
     sdfg.name = base
     native = binding_from_spec(spec)
     forced: tuple[str, ...] = ()
@@ -401,23 +377,18 @@ def render_sdfg(
         if forced:
             rec["forced_abi_symbols"] = list(forced)
         sdfg.name = native.symbol
-        # The FILE keeps the ``_cpf`` suffix even for a drop-in. The judge's
-        # /canonical_parallel_form route globs ``<kernel>_*_cpf.<ext>`` and answers a miss with
-        # ``unavailable`` and HTTP 200 -- so a directory of drop-ins named ``<kernel>_fp64.c``
-        # serves NOTHING and the treated arm silently becomes its own control. That route lives in
-        # the judge IMAGE, so renaming the file is the fix that needs no rebuild. Only the entry
-        # SYMBOL is canonical, which is the half a drop-in actually needs.
+        # The FILE keeps its ``_cpf`` suffix even for a drop-in: the judge's /canonical_parallel_form
+        # route globs ``<kernel>_*_cpf.<ext>`` and a miss silently answers ``unavailable`` (HTTP 200),
+        # so a drop-in named ``<kernel>_fp64.c`` would serve nothing. Only the SYMBOL must be canonical.
 
-    # The ABI is the kernel's own arguments THEN the reserved scratch pair -- the order the stub
-    # and the host glue emit, not binding.args, which stops at the kernel's own. Handed to the
-    # renderer rather than applied to its output: rewriting a rendered signature is a second copy
-    # of splitting rules CPF already owns, and the drift ends in a symbol the judge links and calls
-    # with its arguments shifted.
+    # ABI order is the kernel's own arguments THEN the reserved scratch pair (the stub/host-glue
+    # order), handed to the renderer rather than applied after: reimplementing CPF's own splitting
+    # here would drift, and the judge would call a symbol with its arguments shifted.
     abi_args: list[str] | None = None
     if dropin:
         abi_args = [arg.name for arg in native.args] + [WORKSPACE_NAME, WORKSPACE_SIZE_NAME]
-    # The device form is one unit holding both the host code and the kernels, which is a dialect of
-    # its own; ``--language`` chooses between the two host spellings and says nothing about it.
+    # The device form is one unit holding host code and kernels -- its own dialect; --language only
+    # picks between the two HOST spellings.
     emitted = DEVICE_LANGUAGE if target == "gpu" else language
     try:
         rendering = render(sdfg, language=emitted, order=abi_args)
@@ -485,10 +456,9 @@ def render_kernel(
         cmd += ["--target", target]
     if dropin:
         cmd += ["--dropin"]
-    # A CPU rendering must not see a GPU (the frontend would offload nothing, but cupy imports and
-    # device probes cost seconds each), and PYTHONHASHSEED pins the set iteration DaCe's
-    # determinism rests on. A GPU rendering is the opposite case and must NOT be blinded: hiding
-    # the device from the offload pass is how a device form comes back host-scheduled.
+    # A CPU rendering must not see a GPU (cupy imports and device probes cost seconds each), and
+    # PYTHONHASHSEED pins the set-iteration order DaCe's determinism rests on. A GPU rendering is
+    # the opposite case and must NOT be blinded, or the offload pass comes back host-scheduled.
     env = {**os.environ, "PYTHONHASHSEED": "0", **(extra_env or {})}
     if target == "cpu":
         env["CUDA_VISIBLE_DEVICES"] = ""
@@ -497,9 +467,8 @@ def render_kernel(
     try:
         proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=budget)
     except subprocess.TimeoutExpired:
-        # The budget is NAMED in the verdict, and so is the knob that moves it: a timeout says the
-        # render outran this number, not that the kernel cannot render, and the two read the same
-        # in a sweep log unless the record carries the cap it hit.
+        # The budget is NAMED in the verdict along with the knob that moves it: a timeout says the
+        # render outran this number, not that the kernel cannot render at all.
         return {
             "kernel": spec.short_name,
             "language": language,
