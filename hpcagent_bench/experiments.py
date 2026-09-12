@@ -20,6 +20,7 @@ reader must never be able to damage them by being re-run.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import glob
 import logging
 import pathlib
@@ -134,7 +135,8 @@ def read_database(db: Database, want: dict[str, frozenset[str]]) -> Iterator[dic
         LOG.warning("experiments: cannot read %s (%s); skipped", db.path, exc)
         return
     conn.row_factory = sqlite3.Row
-    with conn:
+    # closing(), not `with conn:` -- a connection's own context manager commits and never closes.
+    with contextlib.closing(conn):
         tables = frozenset(r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'"))
         if "runs" not in tables:
             LOG.warning("experiments: %s predates the runs table; run scripts/migrate_db.py", db.path)
