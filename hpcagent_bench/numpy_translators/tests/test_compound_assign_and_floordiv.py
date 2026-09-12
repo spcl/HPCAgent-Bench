@@ -8,6 +8,7 @@
   ``|a/b| > 2^63`` (1e20 // 2 wrapped instead of 5e19). It now yields a real floor.
 """
 
+from __future__ import annotations
 import numpy as np
 from _op_oracle import run_op
 

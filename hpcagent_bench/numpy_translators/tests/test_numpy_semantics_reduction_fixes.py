@@ -15,6 +15,7 @@ broadcast of BOTH operands, symmetric size-1 broadcast, ellipsis subscript rank,
 and int/int true division.
 """
 
+from __future__ import annotations
 import ast
 
 import numpy as np

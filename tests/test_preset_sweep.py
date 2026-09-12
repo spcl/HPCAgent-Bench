@@ -6,6 +6,7 @@ These assert the COMPOSED command + thread env for given flags without a schedul
 without running any kernel (no subprocess, no build). The script is loaded from its file
 path (scripts/ is not an importable package)."""
 
+import sys
 import importlib.util
 import pathlib
 
@@ -21,6 +22,9 @@ def load_sweep():
     """Load scripts/preset_sweep.py as a module (it is a script, not a package member)."""
     spec = importlib.util.spec_from_file_location("preset_sweep", SCRIPT)
     module = importlib.util.module_from_spec(spec)
+    # Registered BEFORE exec: dataclasses resolves a string annotation through
+    # sys.modules[cls.__module__], which is None for a module loaded by path alone.
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 

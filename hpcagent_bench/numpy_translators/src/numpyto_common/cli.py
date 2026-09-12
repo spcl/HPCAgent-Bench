@@ -34,6 +34,7 @@ Importing a backend requires its ``src`` on ``PYTHONPATH`` (the same wiring the
 per-package CLIs already need); the driver itself only resolves the module.
 """
 
+from __future__ import annotations
 import argparse
 import importlib
 import sys

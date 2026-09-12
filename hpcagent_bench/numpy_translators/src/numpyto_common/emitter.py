@@ -14,6 +14,7 @@ through a leaky hook surface. A subclass is free to override ``emit_stmt``
 wholesale if a target ever needs a different dispatch.
 """
 
+from __future__ import annotations
 import ast
 from typing import List, Optional, Sequence
 

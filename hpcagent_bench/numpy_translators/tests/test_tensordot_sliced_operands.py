@@ -14,6 +14,7 @@ the emitter unexpanded (``NotImplementedError: call to np.tensordot not
 supported``). ``expand_tensordot`` itself also rejected non-Name operands.
 """
 
+from __future__ import annotations
 import ast
 import json
 import pathlib

@@ -1,3 +1,4 @@
+from __future__ import annotations
 import numpy as np
 
 # PPM coefficients (pyFV3/stencils/ppm.py), as float literals so the constant inliner folds them.

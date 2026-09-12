@@ -1,5 +1,6 @@
 """CPU TVM impl of azimint_naive (masked per-bin mean over radii); rmax baked as compile-time constant."""
 
+from __future__ import annotations
 import tvm
 from tvm import te
 

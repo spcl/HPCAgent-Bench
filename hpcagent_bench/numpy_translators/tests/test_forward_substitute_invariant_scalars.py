@@ -5,6 +5,7 @@ substituting it also makes scalar-laundered indirection literal (POLYCC-006). As
 emitted C, since the emitted text is what polycc reads.
 """
 
+from __future__ import annotations
 import json
 import pathlib
 import re

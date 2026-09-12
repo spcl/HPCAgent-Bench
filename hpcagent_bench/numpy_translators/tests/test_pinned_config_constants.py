@@ -9,6 +9,7 @@ both binding JSONs and ``binding_from_spec``. A knob with a ``domain:`` is a rea
 parameter; see tests/test_spec_dimensions_config.py for that half.
 """
 
+from __future__ import annotations
 import json
 import pathlib
 import tempfile

@@ -1,5 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
+
 """Framework registry: the core types eagerly, every backend on first use.
 
 The backend modules are the expensive part of this package -- importing dace, jax and
@@ -14,6 +15,7 @@ Adding a backend means adding its public names to :data:`_LAZY_EXPORTS`;
 backend import creeps back into this module.
 """
 
+from __future__ import annotations
 import importlib
 from typing import Any
 

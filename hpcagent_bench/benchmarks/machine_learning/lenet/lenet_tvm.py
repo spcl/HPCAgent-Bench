@@ -1,5 +1,6 @@
 """CPU TVM impl of the ``lenet5`` deep-learning microapp (inference)."""
 
+from __future__ import annotations
 import tvm
 from tvm import te
 

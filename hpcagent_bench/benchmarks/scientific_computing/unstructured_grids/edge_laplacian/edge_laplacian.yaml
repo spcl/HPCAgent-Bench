@@ -53,3 +53,4 @@ output_args:
 - Lx
 experiment_tags:
 - unstructured_grids
+- scicomp-focus40

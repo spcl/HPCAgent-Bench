@@ -20,7 +20,7 @@ Three files per machine, from one invocation: the banded figure (PDF), the SIMPL
 SVG variant (``<stem>-simple.<machine>.svg``, the one band holding the most points), and the MINI
 SVG (``<stem>-mini.<machine>.svg``, the banded layout at embed size with ``K1..Kn`` ticks).
 
-Data comes from the shipped reader (:func:`hpcagent_bench.plotting.load_results`) and is laid out
+Data comes from the shipped reader (:func:`hpcagent_bench.stats.figures.results.load_results`) and is laid out
 with the shipped ordering (:mod:`hpcagent_bench.reporting_order`) -- no second data path. Rows are
 PARTITIONED per machine for the same reason every other figure partitions them: a candidate timed
 on one node over a baseline timed on another is a hardware comparison wearing a software label.
@@ -52,10 +52,11 @@ from typing import Dict, List, NamedTuple, Optional, Sequence, Set, Tuple
 import numpy as np
 import pandas as pd
 
-from hpcagent_bench import plotting  # also selects the headless Agg backend on import
 from hpcagent_bench import stats
+from hpcagent_bench.stats import rules
 from hpcagent_bench.paths import PLOTS_DIR
 from hpcagent_bench.reporting_order import BY_DWARF, ORDER_MODES, order_rows, row_meta_for
+from hpcagent_bench.stats.figures import results as plotting  # also selects the headless Agg backend on import
 
 import matplotlib.pyplot as plt  # noqa: E402 -- must follow plotting's backend setup
 
@@ -100,20 +101,10 @@ class Point(NamedTuple):
 MIN_BOX_SAMPLES: int = 4
 
 
-def signed_change(ratio: float) -> float:
-    """Speed-up ratio -> signed relative change. ``2x -> +1``, ``1x -> 0``, ``0.5x -> -1``.
-
-    ``r >= 1`` maps to ``r - 1`` and ``r < 1`` to ``-(1/r - 1)``, so a 2x win (+1) and a 2x
-    slow-down (-1) are the same distance from 0. That symmetry is the whole point of the figure.
-
-    Anything that is not a finite POSITIVE ratio -- 0, negative, +/-inf, NaN, a cell that was
-    never measured -- returns NaN, never 0.0: 0 is the exact value of "measured, and nothing
-    changed", and an absent measurement must not be able to claim it. :func:`speedup_points` drops
-    those cells and warns, naming each one.
-    """
-    if not math.isfinite(ratio) or ratio <= 0.0:
-        return math.nan
-    return ratio - 1.0 if ratio >= 1.0 else -(1.0 / ratio - 1.0)
+#: Speed-up ratio -> signed relative change, so a 2x win (+1) and a 2x slow-down (-1) sit the same
+#: distance from 0. One definition, in :mod:`hpcagent_bench.stats.summary`; :func:`speedup_points`
+#: drops the cells it returns NaN for and warns, naming each one.
+signed_change = stats.signed_change
 
 
 def band_of(change: float) -> Optional[str]:
@@ -159,7 +150,7 @@ def speedup_points(
 ) -> List[Point]:
     """Per (kernel, framework) median speed-up over ``baseline``, as plottable points.
 
-    ``summary`` is a :func:`hpcagent_bench.plotting.cell_summary` frame -- one row per
+    ``summary`` is a :func:`hpcagent_bench.stats.figures.results.cell_summary` frame -- one row per
     (benchmark, domain, framework) whose ``time`` is the OUTLIER-CLEANED median. The baseline's own
     row is the divisor, not a series, so it is never plotted.
 
@@ -207,6 +198,64 @@ def speedup_points(
             f"(missing baseline, or a non-positive / non-finite median): {', '.join(unusable)}"
         )
     return points
+
+
+def data_table(summary: pd.DataFrame, points: Sequence[Point], baseline: str) -> pd.DataFrame:
+    """The figure's DATA TABLE: every plotted cell's ratio, the COSTS behind it, and its interval.
+
+    SC15 Rule 4 (report the costs a ratio is taken over) and Rules 5 and 7 (nondeterministic data
+    carries an interval) are kept by building the table the figure is diffed on out of the same
+    numbers the figure draws, and then running the checks on it. A figure that could not supply a
+    cost or an interval fails here rather than shipping a bare ratio.
+
+    The interval is the CANDIDATE's cleaned median bootstrap CI, mapped onto the speed-up scale by
+    the same fixed baseline the point uses; the ends swap, because a slower candidate time is a
+    smaller speed-up.
+    """
+    times = {
+        (str(row.benchmark), str(row.framework)): (float(row.time), float(row.ci_low), float(row.ci_high))
+        for row in summary.itertuples(index=False)
+    }
+    records: List[Dict[str, object]] = []
+    for point in points:
+        base = times.get((point.kernel, baseline))
+        cell = times.get((point.kernel, point.framework))
+        base_time = base[0] if base else math.nan
+        candidate, low, high = cell if cell else (math.nan, math.nan, math.nan)
+        records.append(
+            {
+                "kernel": point.kernel,
+                "framework": point.framework,
+                "speedup": point.ratio,
+                "signed_change": point.change,
+                "band": point.band,
+                "crashed": point.crashed,
+                "baseline_ms": base_time,
+                "candidate_ms": candidate,
+                "speedup_low": base_time / high if high > 0.0 else math.nan,
+                "speedup_high": base_time / low if low > 0.0 else math.nan,
+                "repetitions": len(point.samples),
+            }
+        )
+    frame = pd.DataFrame.from_records(records, columns=TABLE_COLUMNS)
+    rules.require_costs(frame, "speedup", ("baseline_ms", "candidate_ms"))
+    return rules.require_interval(frame, "speedup", "speedup_low", "speedup_high")
+
+
+#: Column order of the emitted data table, so two runs diff like with like.
+TABLE_COLUMNS: Tuple[str, ...] = (
+    "kernel",
+    "framework",
+    "speedup",
+    "signed_change",
+    "band",
+    "crashed",
+    "baseline_ms",
+    "candidate_ms",
+    "speedup_low",
+    "speedup_high",
+    "repetitions",
+)
 
 
 def plotted_kernels(points: Sequence[Point], order: str = BY_DWARF) -> List[str]:
@@ -751,6 +800,10 @@ def plot_signed_speedup(
                     f"not as a box -- re-run those cells with more repetitions for a spread"
                 )
         kernels = plotted_kernels(points, order)
+        table_path = pathlib.Path(plotting.machine_output(output, label)).with_suffix(".csv")
+        table_path.parent.mkdir(parents=True, exist_ok=True)
+        data_table(plotting.cell_summary(rows), points, baseline).to_csv(table_path, index=False)
+        written.append(str(table_path))
         written.append(banded_figure(points, kernels, plotting.machine_output(output, label), boxes, compact))
         written.append(
             simple_figure(points, kernels, plotting.machine_output(variant_output(output, "simple"), label), boxes)

@@ -11,6 +11,7 @@ first difference expands -- ``n > 1`` needs a temporary per stage, and ``prepend
 concatenate the caller can spell.
 """
 
+from __future__ import annotations
 import ast
 
 import numpy as np

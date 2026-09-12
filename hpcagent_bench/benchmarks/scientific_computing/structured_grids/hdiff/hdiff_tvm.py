@@ -25,6 +25,7 @@ consume), so no clamping is needed. ``np.where(cond, 0, res)`` becomes
 ``te.if_then_else(cond, 0.0, res)`` with the strict ``> 0`` test.
 """
 
+from __future__ import annotations
 import tvm
 from tvm import te
 

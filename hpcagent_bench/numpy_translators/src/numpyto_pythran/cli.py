@@ -4,6 +4,7 @@ Canonical front door is ``numpyto --target pythran`` (numpyto_common.cli);
 this per-package CLI is the backend that driver dispatches to.
 """
 
+from __future__ import annotations
 import argparse
 import pathlib
 import sys

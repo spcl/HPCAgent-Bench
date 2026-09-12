@@ -1,5 +1,6 @@
 """CPU TVM impl of arc_distance (pairwise great-circle distance)."""
 
+from __future__ import annotations
 import tvm
 from tvm import te
 

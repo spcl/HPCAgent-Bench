@@ -6,6 +6,7 @@ output buffer with the reversed / permuted shape (``_shape_from_transpose`` +
 the frontend return-promotion), and reproduces numpy bit-exact on c/cpp/fortran.
 """
 
+from __future__ import annotations
 import ast
 import json
 import pathlib

@@ -52,19 +52,19 @@ DISPATCH = {
         "cmd_run_framework",
     ),
     "run-sparse": ("hpcagent_bench.support.collect.sweep", "run_sparse_sweep", ["run-sparse"], "cmd_run_sparse"),
-    "plot": ("hpcagent_bench.plotting", "plot_heatmap", ["plot"], "cmd_plot"),
+    "plot": ("hpcagent_bench.stats.figures.results", "plot_heatmap", ["plot"], "cmd_plot"),
     "quickstart": ("hpcagent_bench.support.collect.quickstart", "quickstart", ["quickstart"], "cmd_quickstart"),
     "pluto-survey": ("hpcagent_bench.support.collect.pluto_survey", "survey", ["pluto-survey"], "cmd_pluto_survey"),
 }
 
 
 #: Names a stubbed module must expose BESIDES its dispatch function, because a cmd_* handler
-#: imports them in the same statement: ``from hpcagent_bench.plotting import DEFAULT_BASELINE,
+#: imports them in the same statement: ``from hpcagent_bench.stats.figures.results import DEFAULT_BASELINE,
 #: plot_heatmap``. cli.py resolves --baseline's default in the handler rather than at parse time so
 #: that plotting, and matplotlib under it, stays unimported for every other subcommand -- so a stub
 #: carrying only the function raises ImportError before the recorder is ever reached. The value is
 #: never asserted; it exists so the name resolves, and says where it came from if one ever is.
-STUB_CONSTANTS = {"hpcagent_bench.plotting": {"DEFAULT_BASELINE": "<stub-default-baseline>"}}
+STUB_CONSTANTS = {"hpcagent_bench.stats.figures.results": {"DEFAULT_BASELINE": "<stub-default-baseline>"}}
 
 
 def _stub_module(monkeypatch, dotted, funcname, recorder) -> None:
@@ -174,7 +174,7 @@ def test_run_benchmark_resolves_preset_and_forwards_flags(monkeypatch) -> None:
 
 def test_plot_forwards_db_and_output_defaults(monkeypatch) -> None:
     calls = []
-    _stub_module(monkeypatch, "hpcagent_bench.plotting", "plot_heatmap", lambda **k: calls.append(k))
+    _stub_module(monkeypatch, "hpcagent_bench.stats.figures.results", "plot_heatmap", lambda **k: calls.append(k))
     assert main(["plot"]) == 0
     kwargs = calls[0]
     assert kwargs["db"] is None  # resolved downstream to record.db_path, the one source of truth

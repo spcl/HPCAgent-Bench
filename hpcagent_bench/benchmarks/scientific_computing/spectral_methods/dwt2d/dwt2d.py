@@ -3,6 +3,7 @@
 #
 # A random square image (side a power of two) for the 2-D discrete wavelet
 # transform (Rodinia ``dwt2d``).
+from __future__ import annotations
 
 from typing import Optional
 

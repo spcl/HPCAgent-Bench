@@ -6,6 +6,7 @@ on -- a single ``te.compute`` is the right primitive. Uses the shared
 the exact TIR.
 """
 
+from __future__ import annotations
 import tvm
 from tvm import te
 

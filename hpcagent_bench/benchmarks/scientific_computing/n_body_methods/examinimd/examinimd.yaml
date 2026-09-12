@@ -104,3 +104,4 @@ precisions:
 - fp64
 experiment_tags:
 - examinimd
+- scicomp-focus40

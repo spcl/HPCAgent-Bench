@@ -1,5 +1,6 @@
 """CPU TVM impl of TSVC ``s1244`` -- two outputs with an anti-dependence::"""
 
+from __future__ import annotations
 import tvm
 from tvm import te
 

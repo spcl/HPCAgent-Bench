@@ -1,17 +1,9 @@
 #!/usr/bin/env bash
 # One line per llr campaign arm: where it is, and whether its agents are actually working.
-#
 #   ./arm_status.sh              # every arm of ours in the queue
 #   ./arm_status.sh 604719 ...   # named jobs, running or finished
-#
-# The columns answer the three questions an arm can fail at, in the order they fail:
-#   mcp      agents whose MCP init CONNECTED / agents started. Anything below 1.0 is the storm
-#            that logged itself as success and submitted nothing (see the 08-21/08-22 findings).
-#   turns    assistant turns produced. Zero long after the engine is up means starved, not slow.
-#   tok/s    the driver's aggregate line, with the per-ACTIVE-REQUEST rate beside it -- the
-#            quantity that decides agent sizing. Below ~2 is the starved regime.
-# A number is only as fresh as the last sample; a serving engine that is still capturing graphs
-# reports zeros that are startup, not failure.
+# mcp < 1.0: the MCP-storm case that logs success but submits nothing. tok/s: per-active-request
+# rate decides agent sizing, below ~2 is starved. Zeros right after engine-up are startup, not fail.
 set -uo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 RUN_ROOT="${RUN_ROOT:-${SCRATCH:-/iopsstor/scratch/cscs/$USER}/hpcagent-bench-runs}"
@@ -30,11 +22,6 @@ for job in "${jobs[@]}"; do
     started=$(ls "${node_dir}" 2>/dev/null | wc -l)
     connected=$(grep -ho '"status":"connected"' "${node_dir}"/*/claude.log 2>/dev/null | wc -l)
     turns=$(grep -ho '"type":"assistant"' "${node_dir}"/*/claude.log 2>/dev/null | wc -l)
-    # The driver prints one of these per sample; the last is the current state of the arm.
-    # Where beverin.sbatch's --output actually goes. It used to read a bare `results/`, which is
-    # the path the sbatch wrote to before it moved under RUN_ROOT -- so the directory sat empty and
-    # every arm reported "no sample yet" whatever it was doing. Derived from RUN_ROOT so the two
-    # cannot drift again.
     log="${RUN_ROOT}/slurm/beverin-services-${job}.out"
     line=$([[ -f "${log}" ]] && tr '\r' '\n' <"${log}" |
         grep -oE "aggregate throughput: t=[0-9]+s [0-9.]+ tok/s running=[0-9]+ waiting=[0-9]+" | tail -1)

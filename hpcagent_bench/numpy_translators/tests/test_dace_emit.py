@@ -13,6 +13,7 @@ Fidelity to a *running* dace program is established separately by the
 output matching the known-good original VectraArtifacts dace source.
 """
 
+from __future__ import annotations
 import ast
 import re
 import textwrap

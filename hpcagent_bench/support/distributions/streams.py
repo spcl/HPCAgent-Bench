@@ -1,5 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
+
 """One RNG stream per array, instead of one stream per kernel.
 
 A single ``default_rng(seed)`` threaded through every array makes array *N*'s values depend on how
@@ -15,6 +16,7 @@ The bit generators are round-robined over the spawned children. MT19937 is delib
 1.9x slower than PCG64 for the same fill and 2.5KB of state per stream, in exchange for nothing.
 """
 
+from __future__ import annotations
 import concurrent.futures
 from typing import Any, Callable, List, Sequence
 

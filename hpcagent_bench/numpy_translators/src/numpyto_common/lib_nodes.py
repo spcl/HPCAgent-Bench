@@ -14,6 +14,7 @@ Registry keys are the POST-``_MathRewriter`` call shape: ``np.sum`` is still
 ``Attribute(Name('np'), 'sum')``; ``math.exp`` is already a bare ``exp`` Name.
 """
 
+from __future__ import annotations
 import ast
 import copy
 import re

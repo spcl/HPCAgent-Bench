@@ -1,5 +1,6 @@
 """CPU TVM impl of the 3-layer ``mlp`` deep-learning microapp."""
 
+from __future__ import annotations
 import tvm
 from tvm import te
 

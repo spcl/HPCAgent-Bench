@@ -36,6 +36,8 @@ request builder, and one parser -- no caller change.
     python -m hpcagent_bench.websearch --list          # which providers have a key here
 """
 
+from __future__ import annotations
+
 import argparse
 import dataclasses
 import json
@@ -44,9 +46,10 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable
+from typing import TypeAlias, cast
 
 
 class Provider(str, Enum):
@@ -123,6 +126,48 @@ class SearchResponse:
     answer: str | None = None
 
 
+# --------------------------------------------------------------- JSON boundary --
+#: What a JSON request body may hold. ``json.dumps`` accepts exactly this, so a value it would
+#: refuse cannot reach the wire.
+JsonValue: TypeAlias = "str | int | float | bool | None | list[JsonValue] | dict[str, JsonValue]"
+
+#: One decoded JSON object, straight off the wire. Its members are ``object`` until converted; the
+#: accessors below are the single place that says what each one really is.
+JsonObject: TypeAlias = "dict[str, object]"
+
+#: What a query string may carry. ``cse_id`` is ``None`` for every provider but google_cse, and
+#: urlencode spells that as the literal "None" -- which is what the unconfigured request already
+#: sent, so it stays a value the type admits rather than a case hidden behind a cast.
+QueryValue: TypeAlias = "str | int | None"
+
+
+def json_object(raw: object) -> JsonObject:
+    """One JSON object, with the weakest TRUE statement about its contents.
+
+    ``isinstance(raw, dict)`` proves it is a mapping and nothing about what is in it. A provider
+    that omits a block, or fills it with a scalar, reads as empty rather than raising -- the
+    parsers then return no hits, which is what an empty block means."""
+    return cast("JsonObject", raw) if isinstance(raw, dict) else {}
+
+
+def json_array(raw: object) -> list[object]:
+    """One JSON array, with the weakest TRUE statement about its contents (see :func:`json_object`)."""
+    return cast("list[object]", raw) if isinstance(raw, list) else []
+
+
+def json_text(block: JsonObject, key: str) -> str:
+    """``block[key]`` as text. Absent, null, or empty all read as ``""``, so a provider that sends
+    a field it has nothing for yields an empty string and not the word "None"."""
+    value = block.get(key)
+    return str(value) if value else ""
+
+
+def json_answer(block: JsonObject, key: str) -> str | None:
+    """``block[key]`` as an answer string, or ``None`` when the provider did not answer."""
+    value = block.get(key)
+    return None if value is None else str(value)
+
+
 # ------------------------------------------------------------- env / selection --
 def _env_key(provider: Provider) -> str | None:
     for name in _ENV_KEYS[provider]:
@@ -183,11 +228,11 @@ def _credentials(provider: Provider, config: WebSearchConfig) -> tuple[str, str 
 
 
 # ---------------------------------------------------------------- HTTP helpers --
-def _get_request(url: str, params: dict[str, Any], headers: dict[str, str]) -> urllib.request.Request:
+def _get_request(url: str, params: dict[str, QueryValue], headers: dict[str, str]) -> urllib.request.Request:
     return urllib.request.Request(f"{url}?{urllib.parse.urlencode(params)}", headers=headers, method="GET")
 
 
-def post_request(url: str, body: dict[str, Any], headers: dict[str, str]) -> urllib.request.Request:
+def post_request(url: str, body: dict[str, JsonValue], headers: dict[str, str]) -> urllib.request.Request:
     """Build a JSON POST ``Request`` to ``url`` (``body`` as the JSON payload,
     ``Content-Type: application/json`` merged with ``headers``). Shared by the
     per-provider request builders here and the chat agents' HTTP transport."""
@@ -197,17 +242,23 @@ def post_request(url: str, body: dict[str, Any], headers: dict[str, str]) -> url
     )
 
 
-def _http_json(request: urllib.request.Request, timeout: float) -> dict[str, Any]:
+def _http_json(request: urllib.request.Request, timeout: float) -> JsonObject:
     """The default transport: perform ``request`` and parse the JSON body, turning
-    an HTTP/URL error into a :class:`WebSearchError` (never a bare stack trace)."""
+    an HTTP/URL error into a :class:`WebSearchError` (never a bare stack trace).
+
+    Every provider here answers with a JSON object; a body that decodes to anything else is
+    named as such at the boundary, since the parsers downstream read it as a mapping."""
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
+            payload: object = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", "replace")[:500]
         raise WebSearchError(f"web search HTTP {exc.code}: {body}") from exc
     except urllib.error.URLError as exc:
         raise WebSearchError(f"web search request failed: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise WebSearchError(f"web search response is a JSON {type(payload).__name__}, not an object")
+    return cast("JsonObject", payload)
 
 
 # ------------------------------------------------------- per-provider requests --
@@ -290,84 +341,86 @@ _REQUEST: dict[Provider, Callable[[str, str, str | None, WebSearchConfig], urlli
 
 
 # --------------------------------------------------------- per-provider parsers --
-def _hit(item: dict[str, Any], title_key: str, url_key: str, content_key: str) -> SearchResult:
+#: What every parser hands back: the normalized hits, plus the provider's answer when it has one.
+Parsed: TypeAlias = "tuple[list[SearchResult], str | None]"
+
+
+def _hit(item: JsonObject, title_key: str, url_key: str, content_key: str) -> SearchResult:
     return SearchResult(
-        title=str(item.get(title_key, "") or ""),
-        url=str(item.get(url_key, "") or ""),
-        content=str(item.get(content_key, "") or ""),
+        title=json_text(item, title_key), url=json_text(item, url_key), content=json_text(item, content_key)
     )
 
 
 def _hits(
-    items: list[dict[str, Any]] | None, title_key: str, url_key: str, content_key: str, cfg: WebSearchConfig
+    items: list[object], title_key: str, url_key: str, content_key: str, cfg: WebSearchConfig
 ) -> list[SearchResult]:
-    return [_hit(it, title_key, url_key, content_key) for it in (items or [])[: cfg.max_results]]
+    return [_hit(json_object(it), title_key, url_key, content_key) for it in items[: cfg.max_results]]
 
 
-def _parse_tavily(data: dict[str, Any], cfg: WebSearchConfig) -> tuple[list[SearchResult], str | None]:
-    return _hits(data.get("results"), "title", "url", "content", cfg), data.get("answer")
+def _parse_tavily(data: JsonObject, cfg: WebSearchConfig) -> Parsed:
+    return _hits(json_array(data.get("results")), "title", "url", "content", cfg), json_answer(data, "answer")
 
 
-def _parse_serper(data: dict[str, Any], cfg: WebSearchConfig) -> tuple[list[SearchResult], str | None]:
-    return _hits(data.get("organic"), "title", "link", "snippet", cfg), (data.get("answerBox") or {}).get("answer")
+def _parse_serper(data: JsonObject, cfg: WebSearchConfig) -> Parsed:
+    hits = _hits(json_array(data.get("organic")), "title", "link", "snippet", cfg)
+    return hits, json_answer(json_object(data.get("answerBox")), "answer")
 
 
-def _parse_brave(data: dict[str, Any], cfg: WebSearchConfig) -> tuple[list[SearchResult], str | None]:
-    return _hits((data.get("web") or {}).get("results"), "title", "url", "description", cfg), None
+def _parse_brave(data: JsonObject, cfg: WebSearchConfig) -> Parsed:
+    results = json_array(json_object(data.get("web")).get("results"))
+    return _hits(results, "title", "url", "description", cfg), None
 
 
-def _parse_exa(data: dict[str, Any], cfg: WebSearchConfig) -> tuple[list[SearchResult], str | None]:
-    items = data.get("results") or []
-    results = [
-        SearchResult(
-            title=str(it.get("title", "") or ""),
-            url=str(it.get("url", "") or ""),
-            content=str(it.get("text", "") or it.get("snippet", "") or ""),
-        )
-        for it in items[: cfg.max_results]
-    ]
+def _parse_exa(data: JsonObject, cfg: WebSearchConfig) -> Parsed:
+    results: list[SearchResult] = []
+    for raw in json_array(data.get("results"))[: cfg.max_results]:
+        item = json_object(raw)
+        content = json_text(item, "text") or json_text(item, "snippet")
+        results.append(SearchResult(title=json_text(item, "title"), url=json_text(item, "url"), content=content))
     return results, None
 
 
-def _parse_google_cse(data: dict[str, Any], cfg: WebSearchConfig) -> tuple[list[SearchResult], str | None]:
-    return _hits(data.get("items"), "title", "link", "snippet", cfg), None
+def _parse_google_cse(data: JsonObject, cfg: WebSearchConfig) -> Parsed:
+    return _hits(json_array(data.get("items")), "title", "link", "snippet", cfg), None
 
 
-def _parse_bing(data: dict[str, Any], cfg: WebSearchConfig) -> tuple[list[SearchResult], str | None]:
-    return _hits((data.get("webPages") or {}).get("value"), "name", "url", "snippet", cfg), None
+def _parse_bing(data: JsonObject, cfg: WebSearchConfig) -> Parsed:
+    results = json_array(json_object(data.get("webPages")).get("value"))
+    return _hits(results, "name", "url", "snippet", cfg), None
 
 
-def _parse_serpapi(data: dict[str, Any], cfg: WebSearchConfig) -> tuple[list[SearchResult], str | None]:
-    return _hits(data.get("organic_results"), "title", "link", "snippet", cfg), (data.get("answer_box") or {}).get(
-        "answer"
-    )
+def _parse_serpapi(data: JsonObject, cfg: WebSearchConfig) -> Parsed:
+    hits = _hits(json_array(data.get("organic_results")), "title", "link", "snippet", cfg)
+    return hits, json_answer(json_object(data.get("answer_box")), "answer")
 
 
-def _parse_you(data: dict[str, Any], cfg: WebSearchConfig) -> tuple[list[SearchResult], str | None]:
-    items = data.get("hits") or []
-    results = []
-    for it in items[: cfg.max_results]:
-        snippets = it.get("snippets")
-        content = " ".join(snippets) if isinstance(snippets, list) else str(it.get("description", "") or "")
-        results.append(
-            SearchResult(title=str(it.get("title", "") or ""), url=str(it.get("url", "") or ""), content=content)
-        )
+def _parse_you(data: JsonObject, cfg: WebSearchConfig) -> Parsed:
+    results: list[SearchResult] = []
+    for raw in json_array(data.get("hits"))[: cfg.max_results]:
+        item = json_object(raw)
+        snippets = item.get("snippets")
+        passages = json_array(snippets)
+        # you.com sends the body as a list of passages, and an EMPTY list is still that answer (no
+        # body). A hit that sends no list at all carries a plain description instead.
+        joined = " ".join(str(part) for part in passages)
+        content = joined if isinstance(snippets, list) else json_text(item, "description")
+        results.append(SearchResult(title=json_text(item, "title"), url=json_text(item, "url"), content=content))
     return results, None
 
 
-def _parse_jina(data: dict[str, Any], cfg: WebSearchConfig) -> tuple[list[SearchResult], str | None]:
-    return _hits(data.get("data"), "title", "url", "content", cfg), None
+def _parse_jina(data: JsonObject, cfg: WebSearchConfig) -> Parsed:
+    return _hits(json_array(data.get("data")), "title", "url", "content", cfg), None
 
 
-def _parse_perplexity(data: dict[str, Any], cfg: WebSearchConfig) -> tuple[list[SearchResult], str | None]:
-    choices = data.get("choices") or []
-    answer = (choices[0].get("message") or {}).get("content", "") if choices else ""
-    citations = data.get("citations") or []
+def _parse_perplexity(data: JsonObject, cfg: WebSearchConfig) -> Parsed:
+    choices = json_array(data.get("choices"))
+    message = json_object(json_object(choices[0]).get("message")) if choices else {}
+    citations = json_array(data.get("citations"))
     results = [SearchResult(title="", url=str(u), content="") for u in citations[: cfg.max_results]]
-    return results, answer or None
+    return results, json_text(message, "content") or None
 
 
-_PARSE: dict[Provider, Callable[[dict[str, Any], WebSearchConfig], tuple[list[SearchResult], str | None]]] = {
+_PARSE: dict[Provider, Callable[[JsonObject, WebSearchConfig], Parsed]] = {
     Provider.TAVILY: _parse_tavily,
     Provider.SERPER: _parse_serper,
     Provider.BRAVE: _parse_brave,
@@ -386,7 +439,7 @@ def search(
     query: str,
     config: WebSearchConfig | None = None,
     *,
-    transport: Callable[[urllib.request.Request], dict[str, Any]] | None = None,
+    transport: Callable[[urllib.request.Request], JsonObject] | None = None,
 ) -> SearchResponse:
     """Search ``query`` and return a normalized :class:`SearchResponse`.
 

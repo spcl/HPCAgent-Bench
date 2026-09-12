@@ -7,6 +7,7 @@ mapping is a rule rather than a table. A rule that silently stops matching would
 "provenance skipped" for the whole family without failing anything -- hence these assertions.
 """
 
+import sys
 import importlib.util
 import pathlib
 
@@ -29,6 +30,9 @@ def load_collector():
         "collect_reference_sources", REPO / "scripts" / "collect_reference_sources.py"
     )
     module = importlib.util.module_from_spec(spec)
+    # Registered BEFORE exec: dataclasses resolves a string annotation through
+    # sys.modules[cls.__module__], which is None for a module loaded by path alone.
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 

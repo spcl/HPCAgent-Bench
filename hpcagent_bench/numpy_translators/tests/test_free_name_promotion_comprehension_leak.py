@@ -19,6 +19,7 @@ cases below are not hit by any live kernel yet, so they are pinned directly
 against the pass rather than through the full emit pipeline.
 """
 
+from __future__ import annotations
 import ast
 
 from numpyto_common.ir import KernelIR

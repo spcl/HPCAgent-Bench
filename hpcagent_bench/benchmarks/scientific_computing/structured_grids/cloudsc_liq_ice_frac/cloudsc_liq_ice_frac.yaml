@@ -7,6 +7,8 @@
 # count, is the axis a preset grows.
 name: CLOUDSC Liquid/Ice Fraction
 level: 1
+experiment_tags:
+- scicomp-focus40
 parameters:
   S:
     KLEV: 137

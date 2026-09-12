@@ -27,6 +27,7 @@ harnesses, and other non-essential components required only by the original
 application.
 """
 
+from __future__ import annotations
 import numpy as np
 
 NUMBER_PAR_PER_BOX = 100

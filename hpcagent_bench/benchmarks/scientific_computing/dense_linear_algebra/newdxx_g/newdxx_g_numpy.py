@@ -28,6 +28,7 @@
 # 0-based; eigts* span [-nr, nr] so eigts1(mill(1,ig), na) becomes
 # eigts1[mill[0, :] + nr1, na]; ijtoh entries beyond a species' nh are -1
 # (never read).
+from __future__ import annotations
 
 import numpy as np
 

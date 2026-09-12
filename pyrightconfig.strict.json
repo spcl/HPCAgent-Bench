@@ -1,0 +1,22 @@
+{
+  "//": "Files held to strict typing: every function annotated, no name changing type, no dynamic",
+  "//2": "instance attributes, no Any that is not a validated boundary. The list GROWS as a file is",
+  "//3": "cleaned; a file is never removed from it. Run: pyright --project pyrightconfig.strict.json",
+  "//4": "reportMissingTypeStubs is off: scipy and several other deps ship no stubs, which is a fact",
+  "//5": "about them rather than about this code.",
+  "include": [
+    "experiments/agent_driver.py",
+    "hpcagent_bench/config.py",
+    "hpcagent_bench/experiment_tags.py",
+    "hpcagent_bench/frameworks/native_framework.py",
+    "hpcagent_bench/initialize.py",
+    "hpcagent_bench/spec.py",
+    "hpcagent_bench/stats/palette.py",
+    "hpcagent_bench/stats/summary.py",
+    "hpcagent_bench/websearch.py",
+    "scripts/migrate_db.py"
+  ],
+  "typeCheckingMode": "strict",
+  "reportMissingImports": false,
+  "reportMissingTypeStubs": false
+}

@@ -9,6 +9,7 @@
 # w-wide window whatever i's offset within its block. Max is associative and
 # commutative, so this is bit-identical to the naive fold, only re-ordered; the
 # win is O(1) numpy calls per pass instead of O(r).
+from __future__ import annotations
 
 import numpy as np
 

@@ -8,6 +8,8 @@
 # the column count, is the axis a preset grows.
 name: CLOUDSC Tendency Initialization
 level: 1
+experiment_tags:
+- scicomp-focus40
 parameters:
   S:
     NCLV: 5

@@ -4,6 +4,7 @@ pattern this corpus prefers over a sliding_window_view reduction. Nothing below 
 the shipped reference.
 """
 
+from __future__ import annotations
 import numpy as np
 
 

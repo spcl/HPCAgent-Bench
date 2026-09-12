@@ -1,9 +1,12 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
+
 """Run a callable in a forked child and SURFACE its failure (signal/traceback/timeout) instead of eating it."""
 
+from __future__ import annotations
 import ctypes
 import multiprocessing
+import multiprocessing.context
 import multiprocessing.queues
 import os
 import queue
@@ -11,16 +14,50 @@ import signal
 import sys
 import time
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Optional, ParamSpec
+from typing import Generic, Literal, ParamSpec, TypeAlias, TypeVar
 
 from hpcagent_bench import osinfo
 from hpcagent_bench.isolation import pause_openmp_pools
 
 P = ParamSpec("P")
 
+#: What the child hands back: whatever the callable returns. A progress snapshot stands in for that
+#: return value (the best-so-far a killed child would have returned), so it is the same type.
+# No PEP 696 default: that is 3.13+, and the interpreter materialize_shared picks inside a
+# container can be older, where it raises TypeError at import and takes the whole arm down.
+# Covariant: a RunResult is read, never written, so one of a concrete payload type is usable
+# wherever a helper reads any of them (forked_failure_reason, the OOM classifier).
+ResultT = TypeVar("ResultT", covariant=True)
+
+#: One message on the result queue: the start stamp that arms the parent's deadline, the child's
+#: return value (``None`` when the queue could not take the real one), or its traceback text.
+ChildMessage: TypeAlias = (
+    tuple[Literal["started"], None] | tuple[Literal["ok"], ResultT | None] | tuple[Literal["error"], str]
+)
+
+#: The subset of :data:`ChildMessage` that ENDS a run; ``started`` is a clock signal, not an outcome.
+ResultMessage: TypeAlias = tuple[Literal["ok"], ResultT | None] | tuple[Literal["error"], str]
+
+ChildQueue: TypeAlias = "multiprocessing.queues.Queue[ChildMessage[ResultT]]"
+ProgressQueue: TypeAlias = "multiprocessing.queues.Queue[ResultT]"
+
+#: A start-method context that can fork a process. ``get_context(method)`` is typed as the BaseContext
+#: those three derive from, which declares no ``Process``.
+ProcessContext: TypeAlias = (
+    multiprocessing.context.ForkContext
+    | multiprocessing.context.SpawnContext
+    | multiprocessing.context.ForkServerContext
+)
+CONCRETE_CONTEXTS = (
+    multiprocessing.context.ForkContext,
+    multiprocessing.context.SpawnContext,
+    multiprocessing.context.ForkServerContext,
+)
+
 #: Grace period (seconds) to drain the result queue after the child exits cleanly.
-_DRAIN_S = 5.0
+DRAIN_S = 5.0
 
 #: How long the child may take to say it started before the deadline is armed anyway. An
 #: unbounded wait on a child that never runs is worse than a slightly wrong clock.
@@ -56,18 +93,19 @@ def is_core_dumping(pid: int) -> bool:
 
 
 @dataclass
-class RunResult:
+class RunResult(Generic[ResultT]):
     """Outcome of a forked run: ``ok`` is the success signal; on failure ``signal``/``error`` name the
-    cause (see :func:`forked_failure_reason`); ``result`` carries the picklable return value."""
+    cause (see :func:`forked_failure_reason`); ``result`` carries the picklable return value, or the
+    last streamed progress snapshot when the child was killed before returning."""
 
     ok: bool
-    exit_code: Optional[int] = None
-    signal: Optional[str] = None
-    error: Optional[str] = None
-    result: Any = None
+    exit_code: int | None = None
+    signal: str | None = None
+    error: str | None = None
+    result: ResultT | None = None
 
 
-def forked_failure_reason(r: RunResult) -> str:
+def forked_failure_reason(r: RunResult[object]) -> str:
     """One-line cause for a failed :class:`RunResult`: signal name, else last traceback line, else "unknown"."""
     return r.signal or (r.error.strip().splitlines()[-1] if r.error else "unknown")
 
@@ -104,11 +142,20 @@ def die_with_parent() -> None:
         os._exit(0)
 
 
-def _child(
-    fn: Callable[..., Any],
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
-    q: "multiprocessing.queues.Queue[tuple[str, Any]]",
+def process_context(method: str) -> ProcessContext:
+    """The start-method context named by ``method``, checked to carry the process factory this
+    module forks through. An unknown method raises out of ``get_context`` itself."""
+    ctx = multiprocessing.get_context(method)
+    if not isinstance(ctx, CONCRETE_CONTEXTS):  # unreachable: the three are every named method
+        raise RuntimeError(f"start method {method!r} resolves to a context with no Process")
+    return ctx
+
+
+def child_main(
+    fn: Callable[..., ResultT],
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+    q: ChildQueue[ResultT],
 ) -> None:
     die_with_parent()
     # First act, before any work: this is what arms the parent's deadline (see run_forked).
@@ -130,7 +177,7 @@ def _child(
         q.put(("error", tb))
 
 
-def take_result(q: "multiprocessing.queues.Queue[tuple[str, Any]]", timeout: float) -> tuple[str, Any] | None:
+def take_result(q: ChildQueue[ResultT], timeout: float) -> ResultMessage[ResultT] | None:
     """Next item from ``q`` that is a RESULT, or None within ``timeout``.
 
     ``started`` is a clock signal rather than an outcome, and a child that starts and finishes
@@ -146,7 +193,7 @@ def take_result(q: "multiprocessing.queues.Queue[tuple[str, Any]]", timeout: flo
             return item
 
 
-def _drain(progress_q: "multiprocessing.queues.Queue[Any]", current: Any) -> Any:
+def drain_progress(progress_q: ProgressQueue[ResultT], current: ResultT | None) -> ResultT | None:
     """Return the last item pushed to ``progress_q`` (or ``current``), so a kill preserves the last progress."""
     try:
         while True:
@@ -157,44 +204,46 @@ def _drain(progress_q: "multiprocessing.queues.Queue[Any]", current: Any) -> Any
 
 
 def run_forked(
-    fn: Callable[P, Any],
+    fn: Callable[P, ResultT],
     *args: P.args,
     label: str = "",
-    timeout: Optional[float] = None,
+    timeout: float | None = None,
     stream_progress: bool = False,
-    mp_context: Optional[str] = None,
+    mp_context: str | None = None,
     **kwargs: P.kwargs,
-) -> RunResult:
+) -> RunResult[ResultT]:
     """Run ``fn(*args, **kwargs)`` in a forked child; returns a failed RunResult (cause logged to stdout) on
     a fatal signal, exception, or timeout overrun, else ``ok=True`` with the picklable return value.
     ``stream_progress=True`` preserves the child's last ``progress`` snapshot even if it is later killed."""
     # fork is cheap on Linux/WSL2; spawn on macOS, where forking after numpy/BLAS threads can abort the child.
-    ctx = multiprocessing.get_context(mp_context if mp_context is not None else osinfo.mp_context())
+    ctx = process_context(mp_context if mp_context is not None else osinfo.mp_context())
     # fork() duplicates only the calling thread, so a child entering a parallel region with the
     # parent's pool live blocks forever -- libgomp installs no pthread_atfork handler. No-op under spawn.
     pause_openmp_pools()
-    q = ctx.Queue()
-    progress_q = ctx.Queue() if stream_progress else None
+    q: ChildQueue[ResultT] = ctx.Queue()
+    progress_q: ProgressQueue[ResultT] | None = ctx.Queue() if stream_progress else None
+    call_kwargs: dict[str, object] = dict(kwargs)
     if progress_q is not None:
-        kwargs = {**kwargs, "progress": progress_q}
-    p = ctx.Process(target=_child, args=(fn, args, kwargs, q))
+        call_kwargs["progress"] = progress_q
+    p = ctx.Process(target=child_main, args=(fn, args, call_kwargs, q))
     tag = f"[{label}] " if label else ""
     p.start()
-    last_progress = None
+    last_progress: ResultT | None = None
     # The deadline measures the CHILD'S runtime, so the child arms it by reporting that it started
     # -- not p.start(). Fork/spawn latency is the parent's cost (seconds under spawn, and on a
     # loaded box a fork can be slow to schedule too); billing it to the callee means a child that
     # takes longer to reach its first bytecode than its own timeout is SIGTERMed before it runs,
     # and every failure it was about to report is attributed to a clock it never got to start.
     started_at = time.monotonic()
-    deadline = None
+    deadline: float | None = None
     # Poll so the result queue drains while the child is alive -- a payload bigger than the OS
     # pipe buffer would otherwise block the child's feeder thread forever (join-then-read deadlocks).
     poll = 0.1
-    result_item = None  # (status, payload) once the child's single result is received
+    #: The child's single result message, once received.
+    result_item: ResultMessage[ResultT] | None = None
     while p.is_alive():
         if progress_q is not None:
-            last_progress = _drain(progress_q, last_progress)
+            last_progress = drain_progress(progress_q, last_progress)
         # Until the child reports in, the ceiling is its own timeout plus the arming grace, so a
         # child that never runs at all still ends rather than hanging the parent forever.
         limit = (
@@ -211,7 +260,7 @@ def run_forked(
                 p.kill()  # parent on an unbounded join -- escalate to SIGKILL
                 p.join()
             if progress_q is not None:
-                last_progress = _drain(progress_q, last_progress)
+                last_progress = drain_progress(progress_q, last_progress)
             # The child can die of its OWN fatal signal in the window between the deadline check
             # and terminate() -- a segfaulting vendor runtime on a loaded box is exactly that race.
             # Reporting it as TIMEOUT hides the cause the caller is trying to attribute, so the
@@ -227,6 +276,7 @@ def run_forked(
             sys.stdout.flush()
             return RunResult(ok=False, signal="TIMEOUT", error=msg, result=last_progress)
         if result_item is None:
+            item: ChildMessage[ResultT] | None = None
             try:
                 item = q.get(timeout=poll)
             except queue.Empty:
@@ -238,7 +288,7 @@ def run_forked(
         else:
             p.join(poll)
     if progress_q is not None:
-        last_progress = _drain(progress_q, last_progress)
+        last_progress = drain_progress(progress_q, last_progress)
     ec = p.exitcode
     if ec is not None and ec < 0:  # killed by a fatal signal (segfault, abort, ...)
         try:
@@ -250,7 +300,7 @@ def run_forked(
         sys.stdout.flush()
         return RunResult(ok=False, exit_code=ec, signal=sig, error=msg, result=last_progress)
     if result_item is None:  # not drained in-loop -- covers the clean-exit race window
-        result_item = take_result(q, _DRAIN_S)
+        result_item = take_result(q, DRAIN_S)
         if result_item is None:
             return RunResult(
                 ok=False,
@@ -262,7 +312,6 @@ def run_forked(
                 ),
                 result=last_progress,
             )
-    status, payload = result_item
-    if status == "ok":
-        return RunResult(ok=True, exit_code=ec, result=payload)
-    return RunResult(ok=False, exit_code=ec, error=payload, result=last_progress)
+    if result_item[0] == "ok":
+        return RunResult(ok=True, exit_code=ec, result=result_item[1])
+    return RunResult(ok=False, exit_code=ec, error=result_item[1], result=last_progress)

@@ -1,5 +1,6 @@
 # Copyright 2025 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
+
 """Insertion-ordered set -- the ONE place the translators get set semantics from.
 
 A plain ``set`` iterates in hash order. For ``str`` elements that order is fixed only
@@ -20,6 +21,7 @@ a symbol list), ``sorted()`` at the point of emission is the stronger answer and
 directly there; this type is for the cases that must keep source order.
 """
 
+from __future__ import annotations
 from typing import Generic, Iterable, Iterator, TypeVar
 
 T = TypeVar("T")

@@ -23,6 +23,7 @@ the two diverge for a couple dozen real kernels, and the old code silently repor
 for every one of them (script is loaded from its file path -- ``scripts/`` is not a package)."""
 
 import dataclasses
+import sys
 import importlib.util
 import pathlib
 import types
@@ -40,6 +41,9 @@ def load_extrapolate() -> types.ModuleType:
     """Load scripts/extrapolate_sizes.py as a module (it is a script, not a package member)."""
     spec = importlib.util.spec_from_file_location("extrapolate_sizes", SCRIPT)
     module = importlib.util.module_from_spec(spec)
+    # Registered BEFORE exec: dataclasses resolves a string annotation through
+    # sys.modules[cls.__module__], which is None for a module loaded by path alone.
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 

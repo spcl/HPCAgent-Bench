@@ -1,5 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
+
 """A tuple assignment is lowered to one statement per name before the DaCe emitter's shape passes.
 
 ``n, c, h, w = x.shape`` is what the helper inliner emits, and leaving it whole was the single
@@ -11,6 +12,7 @@ The SWAP case is the one that must not be lowered naively: statements in source 
 overwrite a name before the other read it, which is a wrong answer rather than a refusal.
 """
 
+from __future__ import annotations
 import ast
 
 from numpyto_c.dace_emit import SplitTupleAssign

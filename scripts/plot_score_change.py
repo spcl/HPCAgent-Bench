@@ -20,39 +20,41 @@ is faster but it costs.
 
 Both are ratios, so both are aggregated in LOG space, by the Hodges-Lehmann estimator with a
 distribution-free interval from the Wilcoxon signed-rank test. The sampling unit is the KERNEL and
-the two sides are paired on it. A star marks a point the signed-rank test separates from no change
-at p < 0.05; points that fail it are drawn hollow, so the figure never asserts an effect it cannot
-support.
+the two sides are paired on it.
+
+THE MARKS ARE CORRECTED. One figure is not one test: three models x two languages x two axes is
+twelve signed-rank tests, and twelve uncorrected 5% thresholds paint at least one star on 46% of
+figures where nothing happened. The family is therefore declared once (:func:`points` tests every
+(model, language) on both axes), the p values are Benjamini-Hochberg adjusted across it, and the
+star is gated on the ADJUSTED value -- an uncorrected star and a corrected star look identical to a
+reader, so the legend names the correction and the size of the family. A point whose pairing is
+too small for the test to run at all reads ``underpowered`` and is never starred.
 
 """
 
 from __future__ import annotations
 
 import argparse
+import math
 import pathlib
 
-import math
 
 import numpy as np
 import pandas as pd
-from scipy.stats import wilcoxon
 
-from hpcagent_bench import experiment_tags, palette, plotstyle
+from hpcagent_bench import experiment_tags
+from hpcagent_bench.harness import efficacy
+from hpcagent_bench.stats import palette
+from hpcagent_bench.stats import summary
+from hpcagent_bench.stats import style as plotstyle
 
 plotstyle.apply()
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FixedLocator, NullFormatter
 
-BOOTSTRAP: int = 4000
-SEED: int = 0
 #: A ratio this far from 1.0 is inside the "no change" band for labelling purposes only; the star
 #: is decided by the interval, never by this.
 NEUTRAL: float = 1.0
-
-#: Fewest paired kernels before an interval is claimed. The exact signed-rank test cannot produce
-#: a two-sided p below 0.0625 at n=5, so under this an interval would assert a precision the test
-#: cannot deliver.
-MIN_PAIRS: int = 6
 
 #: Ticks in RATIO units on a log2 axis. Labelled as ratios, not as exponents: a reader wants to see
 #: "2x", not "1".
@@ -77,22 +79,14 @@ def tick_label(value: float) -> str:
 #: interpolate a value from two ticks.
 
 
-def per_kernel(frame: pd.DataFrame, value: str) -> pd.Series:
-    """Median ``value`` per kernel -- the unit everything downstream resamples."""
-    return frame.groupby("benchmark")[value].median()
-
-
-def ratio_with_ci(
-    before: pd.Series, after: pd.Series, rng: np.random.Generator, invert: bool
-) -> tuple[float, float, float, float]:
+def ratio_with_ci(before: pd.Series, after: pd.Series, invert: bool) -> tuple[float, float, float, float]:
     """Hodges-Lehmann ratio over the kernels BOTH sides cover, with a distribution-free CI and p.
 
     RANK-BASED, not a bootstrap of the mean, and the reason is the shape of this data: a per-kernel
     speed-up ratio is heavy-tailed (one kernel at 40x against a median near 2x), and a mean in log
-    space still lets that kernel carry the estimate. The Hodges-Lehmann estimator -- the median of
-    the Walsh averages -- is the location estimate the signed-rank test inverts, so the point, the
-    interval and the p value all describe the same thing, which a bootstrap mean beside a separate
-    test does not.
+    space still lets that kernel carry the estimate. The estimator, its interval and its p value
+    come from :func:`hpcagent_bench.stats.summary.paired_change`, so all three describe one
+    quantity -- which a bootstrap mean beside a separate test does not.
 
     PAIRED, by kernel: both sides ran the same 40 kernels, and the pairing is most of the
     precision here. Mann-Whitney is the unpaired sibling and would throw that away -- with n=40
@@ -100,7 +94,8 @@ def ratio_with_ci(
     almost nothing. Restricted to the shared kernels for the same reason as before: a ratio taken
     over two different kernel sets is a change plus whatever the sets differ by.
 
-    Returns ``(ratio, low, high, p)``; all four are NaN when the sides share nothing usable.
+    Returns ``(ratio, low, high, p)`` on the RATIO scale; all four are NaN when the sides share
+    nothing usable.
     """
     shared = before.index.intersection(after.index)
     if len(shared) == 0:
@@ -110,45 +105,24 @@ def ratio_with_ci(
     b, a = b[keep], a[keep]
     if b.size == 0:
         return (float("nan"),) * 4
-    logs = np.log(b / a) if invert else np.log(a / b)
-    if logs.size < MIN_PAIRS:
-        # Below this the signed-rank test cannot reach 0.05 whatever the data says (its smallest
-        # attainable two-sided p at n=5 is 0.0625), so an interval would be decoration.
-        return float(np.exp(np.median(logs))), float("nan"), float("nan"), float("nan")
-    result = wilcoxon(logs, method="exact" if logs.size <= 25 else "auto")
-    low, high = hodges_lehmann_ci(logs)
-    return float(np.exp(walsh_median(logs))), float(np.exp(low)), float(np.exp(high)), float(result.pvalue)
-
-
-def walsh_median(values: np.ndarray) -> float:
-    """The Hodges-Lehmann point estimate: the median of every pairwise average ``(x_i + x_j)/2``."""
-    i, j = np.triu_indices(values.size, k=0)
-    return float(np.median((values[i] + values[j]) / 2.0))
-
-
-def hodges_lehmann_ci(values: np.ndarray, alpha: float = 0.05) -> tuple[float, float]:
-    """Distribution-free CI for the Hodges-Lehmann estimate, by inverting the signed-rank test.
-
-    The interval is the k-th smallest and k-th largest Walsh average, where k comes from the
-    signed-rank null distribution. No normality assumption and no resampling: for a given n the
-    endpoints are a deterministic function of the data, so the published figure cannot move
-    because a seed changed.
-    """
-    i, j = np.triu_indices(values.size, k=0)
-    walsh = np.sort((values[i] + values[j]) / 2.0)
-    n = values.size
-    # Normal approximation to the signed-rank quantile, which is what the standard tables tabulate
-    # and is accurate well below the n this figure ever sees.
-    mean = n * (n + 1) / 4.0
-    sd = math.sqrt(n * (n + 1) * (2 * n + 1) / 24.0)
-    k = int(math.floor(mean - 1.959963985 * sd))
-    k = min(max(k, 0), walsh.size // 2 - 1) if walsh.size >= 2 else 0
-    return float(walsh[k]), float(walsh[walsh.size - 1 - k])
+    change = summary.paired_change(np.log(b / a) if invert else np.log(a / b))
+    return (
+        float(np.exp(change.estimate)),
+        float(np.exp(change.low)),
+        float(np.exp(change.high)),
+        change.pvalue,
+    )
 
 
 def points(before: pd.DataFrame, after: pd.DataFrame) -> pd.DataFrame:
-    """One row per (model, language) present in both experiments."""
-    rng = np.random.default_rng(SEED)
+    """One row per (model, language) present in both experiments, with the flags corrected.
+
+    THE FAMILY IS THIS TABLE: every (model, language) the two sides share, on both axes. It is
+    built here, in one place, rather than left to whichever loop a reader of the figure imagines --
+    which is how twelve tests came to be thresholded one at a time. ``score_verdict`` and
+    ``cost_verdict`` are the only columns a mark or a sentence may be taken from; ``score_p`` is
+    the raw test and ``score_p_adjusted`` is it corrected across the family.
+    """
     rows = []
     keys = sorted(
         set(map(tuple, before[["model", "language"]].drop_duplicates().to_numpy()))
@@ -157,8 +131,12 @@ def points(before: pd.DataFrame, after: pd.DataFrame) -> pd.DataFrame:
     for model, language in keys:
         b = before[(before.model == model) & (before.language == language)]
         a = after[(after.model == model) & (after.language == language)]
-        score, s_low, s_high, s_p = ratio_with_ci(per_kernel(b, "speedup"), per_kernel(a, "speedup"), rng, False)
-        cost, c_low, c_high, c_p = ratio_with_ci(per_kernel(b, "tokens"), per_kernel(a, "tokens"), rng, True)
+        score, s_low, s_high, s_p = ratio_with_ci(
+            summary.median_per_kernel(b, "speedup"), summary.median_per_kernel(a, "speedup"), False
+        )
+        cost, c_low, c_high, c_p = ratio_with_ci(
+            summary.median_per_kernel(b, "tokens"), summary.median_per_kernel(a, "tokens"), True
+        )
         rows.append(
             {
                 "model": model,
@@ -169,18 +147,31 @@ def points(before: pd.DataFrame, after: pd.DataFrame) -> pd.DataFrame:
                 "cost": cost,
                 "cost_low": c_low,
                 "cost_high": c_high,
-                "kernels": len(per_kernel(b, "speedup").index.intersection(per_kernel(a, "speedup").index)),
-                # "Significant" here means only: the interval does not straddle no-change.
+                "kernels": len(
+                    summary.median_per_kernel(b, "speedup").index.intersection(
+                        summary.median_per_kernel(a, "speedup").index
+                    )
+                ),
+                # The raw test. The verdict columns below are what may be read as a finding, and
+                # they come from the whole family at once -- reading a threshold off one row is the
+                # multiplicity error this table exists to avoid.
                 "score_p": s_p,
                 "cost_p": c_p,
-                # Significance is the TEST's, not a glance at the interval: the two agree by
-                # construction here (the CI inverts the same signed-rank test), and reading it off
-                # the p keeps them from drifting apart if either is ever changed alone.
-                "score_sig": bool(s_p < 0.05),
-                "cost_sig": bool(c_p < 0.05),
             }
         )
-    return pd.DataFrame(rows).dropna(subset=["score", "cost"])
+    frame = pd.DataFrame(rows).dropna(subset=["score", "cost"])
+    if frame.empty:
+        return frame
+    # Interleaved score, cost, score, cost ... so each row's pair of verdicts comes back adjacent.
+    family = [value for row in frame.itertuples(index=False) for value in (row.score_p, row.cost_p)]
+    verdicts = efficacy.correct_family(family)
+    return frame.assign(
+        score_p_adjusted=[v.adjusted for v in verdicts[0::2]],
+        cost_p_adjusted=[v.adjusted for v in verdicts[1::2]],
+        score_verdict=[v.label for v in verdicts[0::2]],
+        cost_verdict=[v.label for v in verdicts[1::2]],
+        family_size=sum(1 for v in verdicts if math.isfinite(v.adjusted)),
+    )
 
 
 def draw_absolute(ax, frame: pd.DataFrame, stats: pd.DataFrame) -> list:
@@ -197,10 +188,13 @@ def draw_absolute(ax, frame: pd.DataFrame, stats: pd.DataFrame) -> list:
     -- the two land on top of each other whenever the packet changed little, and the "with skills"
     position is the one a reader is looking for.
     """
-    hues = palette.colors("model", sorted(frame.model.unique()))
-    shapes = palette.markers("model", sorted(frame.model.unique()))
+    hues = palette.model_colors(sorted(frame.model.unique()))
+    shapes = palette.model_markers(sorted(frame.model.unique()))
+    # Gated on the ADJUSTED verdict, on either axis. An arm the packet moved on tokens alone is a
+    # real finding, so the mark fires on either -- which is exactly why both axes are one family.
     significant = {
-        (row.model, row.language): bool(row.score_sig or row.cost_sig) for row in stats.itertuples(index=False)
+        (row.model, row.language): efficacy.SIGNIFICANT in (row.score_verdict, row.cost_verdict)
+        for row in stats.itertuples(index=False)
     }
     for (model, language), pair in frame.groupby(["model", "language"]):
         colour, shape = hues[model], shapes[model]
@@ -306,12 +300,30 @@ def draw_absolute(ax, frame: pd.DataFrame, stats: pd.DataFrame) -> list:
             label="No Skills",
         ),
         plt.Line2D([], [], marker="o", linestyle="none", color=plotstyle.MUTED, markersize=9, label="Skills"),
-        plt.Line2D([], [], marker="*", linestyle="none", color=plotstyle.MUTED, markersize=11, label="p < 0.05"),
+        plt.Line2D(
+            [],
+            [],
+            marker="*",
+            linestyle="none",
+            color=plotstyle.MUTED,
+            markersize=11,
+            # The correction and the family are ON the figure: a reader cannot tell a corrected
+            # star from an uncorrected one by looking at it, and this is the only place the two
+            # differ visibly.
+            label=f"BH q < 0.05 of {family_size(stats)}",
+        ),
     ]
     for which, width, style in (("major", 0.7, "-"), ("minor", 0.45, (0, (2, 3)))):
         ax.grid(axis="both", which=which, color=plotstyle.RULE, linewidth=width, linestyle=style, zorder=0)
     ax.set_axisbelow(True)
     return handles
+
+
+def family_size(stats: pd.DataFrame) -> int:
+    """How many tests the figure's marks were corrected over; 0 when the table carries none."""
+    if stats.empty or "family_size" not in stats:
+        return 0
+    return int(stats.family_size.iloc[0])
 
 
 PANEL_SIZE: tuple[float, float] = (8.4, 5.2)
@@ -351,9 +363,9 @@ def absolute_points(frame: pd.DataFrame) -> pd.DataFrame:
     """
     rows = []
     for (model, language, skills), part in frame.groupby(["model", "language", "skills"]):
-        speed = part.groupby("benchmark")["speedup"].median()
+        speed = summary.median_per_kernel(part, "speedup")
         speed = speed[speed > 0]
-        tokens = part.groupby(["benchmark", "run_id"])["tokens"].max().groupby("benchmark").median()
+        tokens = summary.median_per_kernel(part, "tokens", within=("run_id",))
         tokens = tokens[tokens > 0]
         if speed.empty or tokens.empty:
             continue
@@ -377,7 +389,7 @@ def figure_absolute(frame: pd.DataFrame, stats: pd.DataFrame, label: str, out: p
     # Two per row, and the keys kept SHORT. The canvas is fixed, so anything wider than it falls
     # off the edge rather than widening the figure -- and the model names alone ("Kimi-K2.7-Code")
     # are long enough that three columns no longer fit. The test behind the star is named in the
-    # caption, not on the chart: "p < 0.05" is what the reader needs at the mark.
+    # caption; what the reader needs AT the mark is that the threshold was corrected and over what.
     plotstyle.legend_below(fig, handles, ncol=2, y=0.015)
     plotstyle.title(fig, label)
     return write(fig, out)
@@ -389,7 +401,7 @@ def load(path: pathlib.Path, prefix: str) -> pd.DataFrame:
         frame = frame[frame["arm"].astype(str).str.startswith(prefix)]
     frame = frame[(frame["speedup"] > 0) & frame["tokens"].notna() & (frame["tokens"] > 0)]
     frame = frame.assign(
-        model=frame["arm"].astype(str).map(palette.model_of),
+        model=frame["arm"].astype(str).map(experiment_tags.model_of),
         skills=frame["arm"].astype(str).str.endswith("-skills"),
     )
     return frame[frame.model != "other"]
@@ -399,6 +411,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("observations", type=pathlib.Path)
     parser.add_argument("--experiment", required=True, help="arm prefix naming ONE campaign")
+    parser.add_argument(
+        "--treatment",
+        default="skills",
+        help="arm suffix marking the TREATED side (skills, cpf, cpfsrc); the control is the arm "
+        "without any suffix, so a campaign carrying several treatments is read one at a time "
+        "against the same control rather than against each other",
+    )
     parser.add_argument("--label", default="", help="figure title; defaults to the campaign's display name")
     parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/score_change.pdf"))
     parser.add_argument("--table", type=pathlib.Path, default=pathlib.Path("data/score_change.csv"))
@@ -407,10 +426,16 @@ def main() -> None:
     frame_all = load(args.observations, args.experiment)
     # The two SIDES are the treatment, not two campaigns: an arm carrying the packet against the
     # arm that did not. Split on the suffix the submit scripts already use.
-    skills = frame_all[frame_all["arm"].astype(str).str.endswith("-skills")]
-    before, after = frame_all.drop(skills.index), skills
+    suffix = f"-{args.treatment}"
+    # The CONTROL is the arm with no suffix at all, never "everything that is not the treatment":
+    # a campaign carrying skills, cpf and cpfsrc would otherwise put two other treatments into the
+    # control side and report a contrast against a mixture.
+    names = frame_all["arm"].astype(str)
+    treated = frame_all[names.str.endswith(suffix)]
+    control = frame_all[~names.str.contains(r"-(?:skills|cpf|cpfsrc)$", regex=True)]
+    before, after = control, treated
     if before.empty or after.empty:
-        raise SystemExit(f"empty side: no-skills={len(before)} skills={len(after)}")
+        raise SystemExit(f"empty side: control={len(before)} {args.treatment}={len(after)}")
     frame = points(before, after)
     if frame.empty:
         raise SystemExit("no (model, language) appears in both experiments")
@@ -420,9 +445,12 @@ def main() -> None:
     absolute = absolute_points(frame_all)
     absolute.to_csv(args.table.with_name(args.table.stem + "-absolute" + args.table.suffix), index=False)
     written = figure_absolute(absolute, frame, label, args.out)
+    score_hits = int((frame.score_verdict == efficacy.SIGNIFICANT).sum())
+    cost_hits = int((frame.cost_verdict == efficacy.SIGNIFICANT).sum())
+    withheld = int((frame.score_verdict == efficacy.UNDERPOWERED).sum())
     print(
-        f"{len(frame)} points; {int(frame.score_sig.sum())} score-significant, "
-        f"{int(frame.cost_sig.sum())} cost-significant"
+        f"{len(frame)} points; BH over {family_size(frame)} tests: {score_hits} score-significant, "
+        f"{cost_hits} cost-significant, {withheld} score pairings too small to test"
     )
     print(f"table  -> {args.table}")
     print(f"figure -> {written} (+ .png)")

@@ -3,6 +3,7 @@
 #
 # Initial temperature and power volumes for the HotSpot 3D thermal simulation
 # (Rodinia ``hotspot3D``).
+from __future__ import annotations
 
 from typing import Optional
 

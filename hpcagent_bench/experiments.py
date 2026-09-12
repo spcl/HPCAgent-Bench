@@ -77,11 +77,10 @@ def agent_indices(run_id: str | None) -> tuple[str, str, str]:
     return node, problem, worker
 
 
-def uses_skills(arm: str) -> bool:
-    """Whether the arm shipped the skill packet. The ``-skills`` TOKEN is how every launcher names
-    the treated arm, and a token test rather than a substring keeps ``no-skills-baseline`` from
-    matching if such an arm is ever named."""
-    return "skills" in arm.split("-")
+#: The identity a row is selected and grouped by, read off ``runs`` rather than off a name. The
+#: launcher writes every one of these into the arm's .env (``experiments/record_identity.sh``) and
+#: the judge copies them onto the run, so a query filters on columns.
+IDENTITY: tuple[str, ...] = ("experiment", "model", "language", "device", "packet", "rep", "arm")
 
 
 def discover_databases(run_globs: Iterable[str]) -> list[Database]:
@@ -104,25 +103,25 @@ def discover_databases(run_globs: Iterable[str]) -> list[Database]:
     return list(found.values())
 
 
-def selects(arm: str, prefixes: tuple[str, ...], exclude: frozenset[str]) -> bool:
-    """Whether an arm belongs to the requested experiment.
+def selects(row: dict[str, Any], want: dict[str, frozenset[str]]) -> bool:
+    """Whether a row matches the requested identity.
 
-    ``prefixes`` is a TUPLE because one campaign's arms are spread over several labels: llr40v11
-    named its first wave ``llr40v11-*`` and every completion wave ``v11w2-*``, so a single prefix
-    keeps one half and silently drops the other. Empty keeps every real arm.
+    ``want`` is ``{column: accepted values}`` over :data:`IDENTITY`; an absent column accepts
+    everything. Matching is on the COLUMNS, not on a name: an arm prefix could not express "the GPU
+    half of llr-focus40 with no packet" without naming every arm that happens to be in it, and it
+    silently dropped a campaign's second wave whenever the wave was renamed.
 
-    ``exclude`` drops an arm by one of its hyphen-separated TOKENS, which is how a model is named
-    in the label. A token test rather than a substring keeps a short name from matching a longer
-    one by accident.
+    A row whose run carries no identity (an ad-hoc grade, a smoke) matches only when nothing is
+    requested, so it never lands inside a filtered experiment.
     """
-    if arm in PSEUDO_ARMS:
-        return False
-    if not exclude.isdisjoint(arm.split("-")):
-        return False
-    return not prefixes or arm.startswith(prefixes)
+    for column, accepted in want.items():
+        value = row.get(column)
+        if value is None or str(value) not in accepted:
+            return False
+    return True
 
 
-def read_database(db: Database, prefixes: tuple[str, ...], exclude: frozenset[str]) -> Iterator[dict[str, Any]]:
+def read_database(db: Database, want: dict[str, frozenset[str]]) -> Iterator[dict[str, Any]]:
     """Rows one database contributes. Never raises on a bad database -- it yields nothing and warns.
 
     An unreadable database in a campaign of hundreds is a fact to report, not a reason to abandon
@@ -137,23 +136,28 @@ def read_database(db: Database, prefixes: tuple[str, ...], exclude: frozenset[st
     conn.row_factory = sqlite3.Row
     with conn:
         tables = frozenset(r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'"))
+        if "runs" not in tables:
+            LOG.warning("experiments: %s predates the runs table; run scripts/migrate_db.py", db.path)
+            return
         for table in RECORD_TABLES:
             if table not in tables:
                 continue
-            for row in conn.execute(f"SELECT * FROM {table} ORDER BY ts, id"):  # noqa: S608 -- fixed names
-                run_id = row["run_id"] if "run_id" in row.keys() else ""
-                arm = arm_of(run_id)
-                if not selects(arm, prefixes, exclude):
-                    continue
-                node, problem, worker = agent_indices(run_id)
+            # LEFT JOIN, not JOIN: a row whose run was never recorded is a fact about that run and
+            # has to reach the caller as an unidentified row, not vanish from the count.
+            query = (
+                f"SELECT t.*, {', '.join('r.' + c for c in IDENTITY)} "  # noqa: S608 -- fixed names
+                f"FROM {table} t LEFT JOIN runs r USING (run_id) ORDER BY t.ts, t.id"
+            )
+            for row in conn.execute(query):
                 record = dict(row)
+                if not selects(record, want):
+                    continue
+                node, problem, worker = agent_indices(record.get("run_id") or "")
                 record.update(
                     {
                         "run_root": db.run_root,
                         "job": db.job,
                         "record": table,
-                        "arm": arm,
-                        "skills": uses_skills(arm),
                         "node_index": node,
                         "problem_index": problem,
                         "worker_index": worker,
@@ -162,13 +166,13 @@ def read_database(db: Database, prefixes: tuple[str, ...], exclude: frozenset[st
                 yield record
 
 
-def observations(
-    run_globs: Iterable[str], experiment: str | Iterable[str] = "", exclude: Iterable[str] = ()
-) -> pd.DataFrame:
+def observations(run_globs: Iterable[str], **identity: str | Iterable[str]) -> pd.DataFrame:
     """The campaign's observations as a DataFrame, one row per recorded grade.
 
-    ``experiment`` is an arm prefix, or several -- pass every label a campaign used, not just the
-    one it started under.
+    Selection is by IDENTITY COLUMN, one keyword per column in :data:`IDENTITY`, each taking a value
+    or several: ``observations(roots, experiment="llr-focus40", device="gpu")``. Nothing here reads
+    an arm name, which is the point -- an arm prefix could not say "the GPU half with no packet",
+    and it silently dropped a campaign's second wave every time the wave was renamed.
 
     pandas is imported HERE rather than at module scope: the harness imports this module on a
     compute node where pandas is not part of the runtime, and an extraction dependency must not
@@ -176,13 +180,18 @@ def observations(
     """
     import pandas as pd
 
-    prefixes = (experiment,) if isinstance(experiment, str) else tuple(experiment)
-    prefixes = tuple(p for p in prefixes if p)
-    excluded = frozenset(exclude)
+    unknown = sorted(set(identity) - set(IDENTITY))
+    if unknown:
+        raise TypeError(f"not identity columns: {unknown}; expected any of {list(IDENTITY)}")
+    want = {
+        column: frozenset([value] if isinstance(value, str) else [str(v) for v in value])
+        for column, value in identity.items()
+        if value != "" or column == "packet"  # '' IS the control packet, and a value everywhere else
+    }
     databases = discover_databases(run_globs)
     if not databases:
         raise SystemExit(f"no judge database under {list(run_globs)}")
-    rows = [row for db in databases for row in read_database(db, prefixes, excluded)]
+    rows = [row for db in databases for row in read_database(db, want)]
     LOG.info("experiments: %d databases -> %d observations", len(databases), len(rows))
     return pd.DataFrame(rows)
 
@@ -190,17 +199,22 @@ def observations(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runs", action="append", required=True, help="run-root glob; repeatable")
-    parser.add_argument(
-        "--experiment", action="append", default=[], help="arm prefix selecting the campaign; repeatable"
-    )
-    parser.add_argument("--exclude", action="append", default=[], help="drop arms carrying this token; repeatable")
+    # One flag per identity column, each repeatable, so the CLI says exactly what the table says.
+    for column in IDENTITY:
+        parser.add_argument(
+            f"--{column}",
+            action="append",
+            default=[],
+            help=f"keep rows whose run has this {column}; repeatable, omit to keep every value",
+        )
     parser.add_argument("--out", type=pathlib.Path, required=True, help="observations CSV to write")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    frame = observations(args.runs, args.experiment, args.exclude)
+    selection = {column: getattr(args, column) for column in IDENTITY if getattr(args, column)}
+    frame = observations(args.runs, **selection)
     if frame.empty:
-        raise SystemExit(f"no observations for experiment {args.experiment or '(all)'}")
+        raise SystemExit(f"no observations for {selection or '(every identity)'}")
     args.out.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(args.out, index=False)
     arms = sorted(frame["arm"].unique())

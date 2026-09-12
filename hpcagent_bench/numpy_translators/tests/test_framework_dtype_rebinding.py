@@ -13,6 +13,7 @@ NAME by ``_NP_DTYPE_NAMES`` and narrowed to the run precision by the precision p
 frontend drops it for every backend at once.
 """
 
+from __future__ import annotations
 import ast
 
 from numpyto_common.frontend import _strip_framework_dtype_rebinding

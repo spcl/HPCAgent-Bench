@@ -45,3 +45,4 @@ fuzz:
   - k <= ngrid
 experiment_tags:
 - ls3df
+- scicomp-focus40

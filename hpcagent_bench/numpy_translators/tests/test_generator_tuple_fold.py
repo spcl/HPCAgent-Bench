@@ -20,6 +20,7 @@ These tests pin the AST after the fold (not just "it did not raise"), plus one n
 through the real C/C++/Fortran backends via the existing oracle harness.
 """
 
+from __future__ import annotations
 import ast
 import json
 import pathlib

@@ -34,7 +34,7 @@ import merge_results
 import monitor_report
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(slots=True)
 class CheckResult:
     name: str
     ok: bool
@@ -63,7 +63,7 @@ def check_db_shards(run_dir: pathlib.Path) -> CheckResult:
     for shard in shards:
         try:
             conn = sqlite3.connect(shard.resolve().as_uri() + "?mode=ro", uri=True)
-            counts[shard] = conn.execute("SELECT COUNT(*) FROM submissions").fetchone()[0]
+            counts[shard] = int(conn.execute("SELECT COUNT(*) FROM submissions").fetchone()[0])
             conn.close()
         except sqlite3.Error as exc:
             bad.append(f"{shard}: {exc}")
@@ -71,8 +71,8 @@ def check_db_shards(run_dir: pathlib.Path) -> CheckResult:
     if len(shards) != len(rank_dirs):
         bad.append(f"{len(rank_dirs)} rank dirs but only {len(shards)} produced a .db shard")
 
-    merged_total = None
-    coverage = None
+    merged_total: int | None = None
+    coverage: int | None = None
     if not bad:
         with tempfile.TemporaryDirectory() as tmp:
             out = pathlib.Path(tmp) / "results-merged.db"
@@ -81,10 +81,10 @@ def check_db_shards(run_dir: pathlib.Path) -> CheckResult:
                 conn = sqlite3.connect(out)
                 # Rows, for the conservation check below -- submissions is append-only and an agent
                 # resubmits freely, so this counts attempts and NOT how much of the track was done.
-                merged_total = conn.execute("SELECT COUNT(*) FROM submissions").fetchone()[0]
+                merged_total = int(conn.execute("SELECT COUNT(*) FROM submissions").fetchone()[0])
                 # Distinct kernels, which is the number that says whether an arm is usable: llr4
                 # arms reported hundreds of rows while having actually graded 12 to 81 of 242.
-                coverage = conn.execute("SELECT COUNT(DISTINCT benchmark) FROM submissions").fetchone()[0]
+                coverage = int(conn.execute("SELECT COUNT(DISTINCT benchmark) FROM submissions").fetchone()[0])
                 conn.close()
             except (SystemExit, sqlite3.Error) as exc:
                 bad.append(f"merge failed: {exc}")
@@ -128,7 +128,7 @@ def check_agent_logs(run_dir: pathlib.Path) -> CheckResult:
     if not worker_dirs:
         return CheckResult("agent_logs", False, f"no problem-*-worker-* dirs under {agents_dir}")
 
-    empty = []
+    empty: list[str] = []
     for worker_dir in worker_dirs:
         log = worker_dir / "claude.log"
         if not log.is_file() or log.stat().st_size == 0:
@@ -149,7 +149,7 @@ def check_monitor(run_dir: pathlib.Path) -> CheckResult:
     if not csv_paths:
         return CheckResult("monitor", False, f"no CSV files under {monitor_dir}")
 
-    empty = []
+    empty: list[str] = []
     for path in csv_paths:
         try:
             stats = monitor_report.compute_node_stats(path)
@@ -176,7 +176,7 @@ CHECKS: dict[str, Callable[[pathlib.Path], CheckResult]] = {
 def run_checks(run_dir: pathlib.Path) -> list[CheckResult]:
     """Run every check, catching anything a check did not anticipate so one bad subtree cannot
     take the whole report down with a traceback."""
-    results = []
+    results: list[CheckResult] = []
     for name, check in CHECKS.items():
         try:
             results.append(check(run_dir))
@@ -196,12 +196,13 @@ def print_report(run_dir: pathlib.Path, results: list[CheckResult]) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("run_dir", type=pathlib.Path, help="the run directory (RUN_ROOT/<jobid>) to validate")
     args = parser.parse_args(argv)
+    run_dir: pathlib.Path = args.run_dir
 
-    results = run_checks(args.run_dir)
-    print_report(args.run_dir, results)
+    results = run_checks(run_dir)
+    print_report(run_dir, results)
     return 0 if all(r.ok for r in results) else 1
 
 

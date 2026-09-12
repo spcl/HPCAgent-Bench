@@ -16,6 +16,7 @@ the two compiled half-steps with the in/out buffer aliased. We return
 ``(A, B)`` in ``output_args`` order.
 """
 
+from __future__ import annotations
 import tvm
 from tvm import te
 

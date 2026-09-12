@@ -17,6 +17,7 @@ tree-sitter availability is detected via :func:`importlib.util.find_spec`
 (no bare try-import dispatch).
 """
 
+from __future__ import annotations
 import re
 from typing import Any, Dict, Iterable, List, Tuple
 

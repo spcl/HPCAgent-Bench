@@ -14,6 +14,7 @@ numerically vs numpy across the full backend matrix (skip-tolerant), on whole ar
 on a slice.
 """
 
+from __future__ import annotations
 import ast
 
 import numpy as np

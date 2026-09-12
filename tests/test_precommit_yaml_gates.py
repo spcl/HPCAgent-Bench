@@ -31,6 +31,9 @@ def load_check_manifest_structure() -> Any:
         "check_manifest_structure", REPO / "scripts" / "check_manifest_structure.py"
     )
     module = importlib.util.module_from_spec(spec)
+    # Registered BEFORE exec: dataclasses resolves a string annotation through
+    # sys.modules[cls.__module__], which is None for a module loaded by path alone.
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 

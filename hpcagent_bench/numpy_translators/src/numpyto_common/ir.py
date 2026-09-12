@@ -7,6 +7,7 @@ subscript resolution. Reusable as-is once ``NumpyToDaCe`` lands; only
 NumpyToC consumes it for now.
 """
 
+from __future__ import annotations
 import ast
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple, Union

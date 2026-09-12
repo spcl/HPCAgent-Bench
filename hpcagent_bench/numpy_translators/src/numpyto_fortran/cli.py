@@ -1,5 +1,6 @@
 """CLI for NumpyToFortran; backend for ``numpyto --target fortran``."""
 
+from __future__ import annotations
 import argparse
 import pathlib
 import sys

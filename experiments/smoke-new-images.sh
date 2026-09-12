@@ -1,17 +1,9 @@
 #!/usr/bin/env bash
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-#
-# Container acceptance: does a freshly BUILT image actually serve?
-#
-# The build gates prove the image assembles and imports -- an import is not a kernel launch and a
-# launch is not a served token, which is why every build script says NOT VERIFIED at the end. This
-# closes that gap by pointing the EXISTING inference smokes at the candidate .sqsh instead of the
-# deployed one: an EDF is written per candidate and the smoke runs unchanged, so a pass here means
-# the same thing a pass on the deployed image means.
-#
-#   ./smoke-new-images.sh                 # every candidate that exists
-#   ./smoke-new-images.sh sglang          # just one
+# Container acceptance: points the EXISTING inference smokes at a candidate .sqsh (per-candidate
+# EDF, smoke unchanged) instead of the deployed image, since build gates prove import not serving.
+#   ./smoke-new-images.sh   ./smoke-new-images.sh sglang
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
@@ -21,7 +13,6 @@ EDF_DIR="${HOME}/.edf"
 SMOKES="../containers/cluster/ce-images/inference"
 mkdir -p "${EDF_DIR}"
 
-# candidate .sqsh -> the smoke that knows how to drive that engine
 declare -A SMOKE=(
   [sglang]="${SMOKES}/smoke-kimi-sglang.sbatch"
   [vllm]="${SMOKES}/smoke-kimi-eager-pg.sbatch"
@@ -30,18 +21,8 @@ declare -A SQSH=(
   [sglang]="${IMAGES}/optarena-sglang-candidate.sqsh"
   [vllm]="${IMAGES}/optarena-vllm-candidate.sqsh"
 )
-# What each engine is ACCEPTED on is the model the campaign actually serves from it: kimi on
-# sglang, gpt-oss on vLLM. Running kimi against a vLLM candidate measures a configuration we
-# already know is not viable (4.1 s per forward pass at campaign context) over 4 nodes, so it
-# would burn the allocation to reproduce a dead end rather than accept the image. The oss control
-# is one node at pp=1 and is the run smoke-kimi-eager-pg.sbatch documents for exactly this.
-# sglang is FOUR nodes, not the recipe's two: PP spans the allocation, so the node count sets
-# how much of the model each stage holds and therefore what --mem-fraction-static can mean.
-# The campaign runs pp=4 -- "Load weight end. quant=compressed-tensors, mem usage=171.07 GB,
-# avail mem=241.29 GB" -- where the floor is 1 - 241/412 = 0.415 and the campaign's 0.42
-# clears it. At pp=2 each stage holds twice the weights and sglang refuses 0.42 outright
-# ("minimum viable = 0.7525", 621070). Accepting at pp=2 would have meant accepting a
-# fraction, a KV pool and a stage size the campaign never serves.
+# sglang is 4 nodes not 2: pp=2 halves the per-stage weights, and sglang refuses the campaign's
+# mem-fraction outright at that ratio
 declare -A NODES=([sglang]=4 [vllm]=1)
 declare -A MODEL=([vllm]=openai/gpt-oss-120b)
 
@@ -55,8 +36,6 @@ for name in "${candidates[@]}"; do
     printf '%-12s SKIP  no candidate image at %s\n' "${name}" "${sqsh}"
     continue
   fi
-  # The digest sidecar is what makes a pass attributable to a BUILD rather than to a file name;
-  # a candidate without one was not written by build.sh and is not what we mean to accept.
   test -s "${sqsh}.digest" || { echo "${name}: no .digest beside ${sqsh}" >&2; exit 1; }
   edf="${EDF_DIR}/candidate-${name}.toml"
   {
@@ -64,16 +43,9 @@ for name in "${candidates[@]}"; do
     printf '# image digest: %s\n' "$(cat "${sqsh}.digest")"
     printf 'image = "%s"\n\n' "${sqsh}"
     printf 'mounts = [\n  "/capstor:/capstor",\n  "/iopsstor:/iopsstor"\n]\n'
-    # PATH is DECLARED, not inherited. The CE does not preserve the image's own ENV reliably: with
-    # no [env] block it handed the sglang image a PATH without /opt/venv/bin, so `python3` was the
-    # distro interpreter and every framework in the image looked absent. That is how verify_image
-    # reported numpy, torch, sglang, aiter, triton and flydsl all missing from an image carrying
-    # every one of them (job 627151), and a serving smoke would fail the same way for the same
-    # reason. Both interpreter prefixes are named because only one exists per image.
+    # PATH declared not inherited: the CE does not preserve the image's own PATH reliably
     printf '\n[env]\n'
-    # Per image, not one PATH for all: the rocm/pytorch base ships /opt/venv, and the vLLM
-    # images install vLLM into /opt/pytorch211, so naming /opt/venv/bin first probes the base
-    # venv and misses vllm entirely (627183).
+    # per image: rocm/pytorch ships /opt/venv, vLLM images install into /opt/pytorch211
     case "${name}" in
       sglang)          img_path="/opt/venv/bin" ;;
       vllm)            img_path="/opt/pytorch211/bin" ;;
@@ -82,46 +54,21 @@ for name in "${candidates[@]}"; do
     printf 'PATH = "%s:/opt/rocm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"\n' "${img_path}"
   } > "${edf}"
   printf '%-12s EDF=%s\n' "${name}" "${edf}"
-  # PG_PATCH_DIR: the eager-PG smoke insists on an EXTERNAL sitecustomize.py, from the era when the
-  # patch was injected at run time. The candidate images bake it in (vllm/Dockerfile COPYs it to
-  # /opt/vllm-eager-pg), so this only satisfies the smoke's precondition with the identical file
-  # rather than changing what is tested; without it the job exits in one second (620856).
-  # Logs to scratch, not to logs/ under the submit directory -- that is the source tree.
-  # Parsers are model-specific and the serve flags carry spaces, so they travel as environment
-  # (sbatch propagates it) rather than through --export, which splits on commas.
+  # PG_PATCH_DIR satisfies eager-PG's baked-in sitecustomize.py precondition; without it, exits fast
   oss=()
   if [[ -n "${MODEL[${name}]:-}" ]]; then
     oss=(MODEL_REPO="${MODEL[${name}]}" TOOL_PARSER=openai REASONING_PARSER=openai_gptoss
          EXTRA_SERVE_ARGS="--dtype bfloat16")
   fi
-  # The sglang smoke defaults to the official aiter recipe it was written to evaluate. Acceptance
-  # asks a different question -- does this image serve what the CAMPAIGN serves -- so the three
-  # knobs .env.kvfix3-kimi27sglang-c settled on are passed through: triton attention and the
-  # decode graph cap that bought 4.7x KV. 256k context is free at that cap. The hierarchical
-  # cache was DROPPED 2026-09-09: hicache_ratio 2.0 mirrors the KV pool into a host tier that
-  # on MI300A is the same physical RAM, so it triples the cost of every token and OOM-killed
-  # the eff 0.50 and 0.55 arms with no traceback.
-  # SGLANG_EXTRA_ARGS and MEM_FRACTION are DEFAULTS here, not overrides: tuning a serving knob
-  # means running this driver against the same image with one value changed, and a hardcoded
-  # assignment made that impossible -- the 0.42-vs-0.50 mem-fraction pair had to be run by hand.
+  # matches the CAMPAIGN's serving knobs, not the smoke's own aiter recipe (defaults, overridable)
   sgl=()
   if [[ "${name}" == sglang ]]; then
     sgl=(CONTEXT_LEN="${CONTEXT_LEN:-262144}"
          MEM_FRACTION="${MEM_FRACTION:-0.42}"
          SGLANG_EXTRA_ARGS="${SGLANG_EXTRA_ARGS:---attention-backend triton --cuda-graph-max-bs-decode 64}")
   fi
-  # TUNED_MOE_DIR defaults to <submit dir>/moe-configs, and this driver submits from HERE, where
-  # there is no such folder -- an empty one reads as "tuned" and is how a smoke measures the
-  # untuned ceiling and calls it a result. Name the real folder. E=128,N=192 is the gpt-oss shape.
-  # BOTH EDF names: smoke-kimi-sglang.sbatch reads EDF, smoke-kimi-eager-pg.sbatch reads
-  # INFERENCE_EDF and defaults it to the DEPLOYED 0.27.1 image. Setting only EDF is why 620860 and
-  # 620870 ran the deployed image and 620870 reproduced the documented 0.27.1 gpt-oss failure, as if
-  # the candidate had regressed. Each smoke prints the environment it opened, so a log carries the
-  # proof. Keep this one command unbroken -- a comment between continuations ends it, and the tail
-  # then submits with none of these set (620910/620911).
-  # DEPEND_ON chains the submission behind existing jobs (colon-separated), the same knob and the
-  # same reason as submit-git-scicomp.sh: beverin allows 36 nodes at once, and a smoke submitted
-  # into a full cluster does not queue politely -- it starts, and the campaign is over the cap.
+  # both EDF names set: INFERENCE_EDF otherwise defaults to the deployed image. DEPEND_ON keeps
+  # this under beverin's 36-node cap. NOTE: no comment may sit inside the command below.
   dep=()
   [[ -n "${DEPEND_ON:-}" ]] && dep=(--dependency="afterany:${DEPEND_ON}")
   env "${oss[@]}" "${sgl[@]}" \

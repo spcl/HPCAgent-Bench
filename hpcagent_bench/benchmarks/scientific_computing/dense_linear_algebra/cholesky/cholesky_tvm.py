@@ -1,5 +1,6 @@
 """CPU/GPU TVM cholesky: right-looking column, one te.compute per column, ping-pong buffers."""
 
+from __future__ import annotations
 import tvm
 from tvm import te
 

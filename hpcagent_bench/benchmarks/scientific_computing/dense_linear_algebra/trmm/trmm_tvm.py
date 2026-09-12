@@ -1,5 +1,6 @@
 """CPU TVM trmm -- meta_schedule autotuned. B = alpha*(B + L^T-style masked accumulate over k>i)."""
 
+from __future__ import annotations
 import tvm
 from tvm import te
 

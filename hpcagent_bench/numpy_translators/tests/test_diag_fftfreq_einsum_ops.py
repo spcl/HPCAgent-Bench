@@ -10,6 +10,7 @@ oracle does the insertion), so the subsequent ``numpyto_common`` import resolves
 this file itself performs no path manipulation.
 """
 
+from __future__ import annotations
 import ast
 import shutil
 

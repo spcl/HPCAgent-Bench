@@ -16,6 +16,7 @@ Availability is detected with :func:`importlib.util.find_spec` (no bare
 try-import-on-string dispatch).
 """
 
+from __future__ import annotations
 import importlib.util
 import io
 import re

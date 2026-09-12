@@ -18,6 +18,7 @@ runtime ``te.var`` scalars: one compiled kernel per shape serves every
 iteration.
 """
 
+from __future__ import annotations
 import numpy as np
 import tvm
 from tvm import te

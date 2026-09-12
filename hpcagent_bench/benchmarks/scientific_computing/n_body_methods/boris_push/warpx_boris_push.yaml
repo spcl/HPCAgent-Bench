@@ -100,3 +100,4 @@ mpi:
 experiment_tags:
 - mpi-focus32
 - warpx
+- scicomp-focus40

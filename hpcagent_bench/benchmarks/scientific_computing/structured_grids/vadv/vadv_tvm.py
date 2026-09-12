@@ -1,5 +1,6 @@
 """CPU/GPU TVM Thomas tridiagonal vadv solver; k-loop driven in Python, active plane k a runtime scalar."""
 
+from __future__ import annotations
 import tvm
 from tvm import te
 

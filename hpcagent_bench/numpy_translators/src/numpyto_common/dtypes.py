@@ -16,6 +16,7 @@ language is one field here + populating the rows + a ``_gen_<lang>`` renderer).
 dtypes are not marshalled by the ctypes paths.
 """
 
+from __future__ import annotations
 import ctypes
 from dataclasses import dataclass
 from functools import lru_cache

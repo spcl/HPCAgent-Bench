@@ -66,3 +66,4 @@ precisions:
 - fp64
 experiment_tags:
 - sw4
+- scicomp-focus40

@@ -9,9 +9,57 @@ A metric that silently loses one of them still prints a plausible percentage.
 
 import math
 
+import numpy as np
 import pytest
 
 from hpcagent_bench.harness import efficacy as eff
+from hpcagent_bench.stats import summary
+
+#: ``log(c_best_su / fortran_best_su)`` for every kernel in the shipped
+#: ``reproducibility/llr40/analysis/per_language_kernel.csv`` that both languages reached: the
+#: real shape a paired delta has here, right-tailed with exact ties from the 1% speedup ladder.
+#: A Gaussian fixture would measure a distribution this analysis never sees.
+LLR40_LOG_DELTAS: tuple[float, ...] = (
+    0.358216,
+    1.303498,
+    0.039798,
+    1.194033,
+    1.034826,
+    0.348268,
+    -0.019896,
+    -1.860710,
+    0.169168,
+    0.049760,
+    -0.636832,
+    0.069630,
+    0.676656,
+    0.009941,
+    0.000000,
+    0.417899,
+    -0.417953,
+    -0.039774,
+    0.169167,
+    0.089531,
+    -0.636824,
+    0.009952,
+    2.378006,
+    0.039796,
+    0.000000,
+    1.273632,
+    0.000000,
+    0.159217,
+    -0.089515,
+    0.179090,
+    0.039808,
+    1.701534,
+    -0.149319,
+    0.159276,
+    -0.059627,
+    0.298405,
+    0.348472,
+    -0.676398,
+    0.000000,
+)
 
 
 def arms(before_s, after_s, before_c, after_c):
@@ -34,8 +82,7 @@ def test_no_effect_is_exactly_one_and_zero() -> None:
     assert r.q == pytest.approx(0.0)
     assert r.overall_effect == pytest.approx(1.0)
     assert r.score.wins == 0 and r.score.losses == 0 and r.score.ties == 3
-    assert not r.score.significant, "an interval that cannot exclude zero must not read as an effect"
-    assert not r.cost.significant
+    assert r.score.pvalue == 1.0 and r.cost.pvalue == 1.0
 
 
 def test_swapping_the_arms_negates_q() -> None:
@@ -132,12 +179,34 @@ def test_the_interval_is_deterministic_for_the_same_input() -> None:
     assert first != eff.bootstrap_interval(deltas, resamples=500, seed=eff.BOOTSTRAP_SEED + 1)
 
 
-def test_the_interval_brackets_the_mean_and_reads_no_effect_when_it_covers_zero() -> None:
+def test_the_bootstrap_interval_brackets_the_mean_it_bounds() -> None:
+    """The bootstrap interval is FOR ``rho``, so it has to contain it. It decides nothing: its
+    measured coverage against a null is 0.70 at n = 4, which is not a 5% statement about anything."""
     b, a, bc, ac = arms([1.0, 1.0, 1.0, 1.0], [2.0, 0.5, 2.0, 0.5], [1.0] * 4, [1.0] * 4)
     r = eff.efficacy(b, a, bc, ac, resamples=2000)
     assert r.score.ci_low <= r.score.log_rho <= r.score.ci_high
     assert r.score.ci_low <= 0.0 <= r.score.ci_high
-    assert not r.score.significant, "gains and losses that cancel are no effect, not a small one"
+
+
+def test_gains_and_losses_that_cancel_are_not_significant() -> None:
+    """The null case the whole decision exists to get right: six tasks, three up and three down by
+    the same factor, is no effect -- not a small one, and not an effect whose sign the mean picked."""
+    b, a, bc, ac = arms([1.0] * 6, [2.0, 0.5, 2.0, 0.5, 2.0, 0.5], [1.0] * 6, [1.0] * 6)
+    r = eff.efficacy(b, a, bc, ac)
+    rows = eff.family_rows({"cancel": r})
+    assert rows[0]["score_verdict"] == eff.NOT_SIGNIFICANT
+    assert r.score.pvalue > 0.05
+
+
+def test_a_pair_with_too_few_tasks_reports_underpowered_rather_than_a_boolean() -> None:
+    """A two-task pair cannot reach any alpha whatever it measured, and the llr40 skill pairs run
+    at n = 2, 3 and 4. A boolean column has only 'yes' and 'no' to say, and both are wrong there."""
+    b, a, bc, ac = arms([1.0, 1.0], [4.0, 4.0], [100.0, 100.0], [25.0, 25.0])
+    r = eff.efficacy(b, a, bc, ac)
+    assert r.score.underpowered and math.isnan(r.score.pvalue)
+    rows = eff.family_rows({"tiny": r})
+    assert rows[0]["score_verdict"] == eff.UNDERPOWERED and rows[0]["cost_verdict"] == eff.UNDERPOWERED
+    assert rows[0]["score_hl_pct"] > 0.0, "the ESTIMATE still stands; only the interval is withheld"
 
 
 def test_a_single_task_cannot_bound_anything() -> None:
@@ -192,9 +261,105 @@ def test_the_front_keeps_every_intervention_nothing_dominates() -> None:
 def test_the_row_reports_percentages_and_carries_the_robustness_checks() -> None:
     """What lands in the CSV is what a reader sees. A row that dropped the counts would let a
     tail-carried result print as a clean percentage."""
-    b, a, bc, ac = arms([1.0, 1.0], [2.0, 3.0], [10.0, 10.0], [5.0, 5.0])
+    b, a, bc, ac = arms([1.0] * 8, [2.0, 3.0] * 4, [10.0] * 8, [5.0] * 8)
     row = eff.as_row("skills", eff.efficacy(b, a, bc, ac))
-    assert row["intervention"] == "skills" and row["tasks"] == 2
+    assert row["intervention"] == "skills" and row["tasks"] == 8
     assert row["score_pct"] > 0.0 and row["cost_pct"] == pytest.approx(100.0)
-    for key in ("score_wins", "score_losses", "score_median_delta", "score_ci_low_pct", "score_significant"):
+    for key in ("score_wins", "score_losses", "score_median_delta", "score_ci_low_pct", "score_p_value"):
         assert key in row, f"the row dropped {key}, which is the check the percentage cannot make"
+    assert row["score_verdict"] == eff.UNCORRECTED, "a row outside a family is not a finding"
+    assert math.isnan(float(row["score_p_adjusted"]))
+
+
+def flat_pair(score_ratio: float, cost_ratio: float, tasks: int = 12) -> eff.Efficacy:
+    """One intervention whose every task moved by the same two factors, for counting flags."""
+    b, a, bc, ac = arms([1.0] * tasks, [score_ratio] * tasks, [100.0] * tasks, [100.0 / cost_ratio] * tasks)
+    return eff.efficacy(b, a, bc, ac)
+
+
+def test_every_flag_in_a_table_is_corrected_across_the_family_it_belongs_to() -> None:
+    """Three models x two languages x two axes is twelve tests, and twelve uncorrected 5%
+    thresholds fire at least once on 46% of tables where nothing happened. The correction has to
+    be over the family, not over whichever row the reader is looking at."""
+    members = {f"m{i}": flat_pair(1.02, 1.02, tasks=6 + i) for i in range(6)}
+    rows = eff.family_rows(members, family="skills")
+    assert len(rows) == 6
+    for row in rows:
+        assert row["score_family"] == "skills" and row["cost_family"] == "skills"
+        assert float(row["score_p_adjusted"]) >= float(row["score_p_value"]), (
+            "an adjusted p below the raw one would be a correction in the wrong direction"
+        )
+    raw = [float(row["score_p_value"]) for row in rows]
+    adjusted = [float(row["score_p_adjusted"]) for row in rows]
+    assert min(adjusted) > min(raw), "twelve tests corrected as one must move at least one threshold"
+
+
+def test_a_pooled_row_built_from_the_family_is_not_counted_as_a_thirteenth_test() -> None:
+    """The pooled row re-reads the same tasks the pair rows already carry. Entered into the
+    correction it would weaken every member with its own evidence and then present that evidence a
+    second time as a finding of its own."""
+    members = {f"m{i}": flat_pair(2.0, 1.5) for i in range(3)}
+    pooled = flat_pair(2.0, 1.5, tasks=36)
+    with_pool = eff.family_rows(members, dependent={"skills:all": pooled})
+    without = eff.family_rows(members)
+    assert len(with_pool) == 4
+    assert [row["score_p_adjusted"] for row in with_pool[:3]] == [row["score_p_adjusted"] for row in without]
+    assert with_pool[-1]["score_verdict"] == eff.NOT_INDEPENDENT
+    assert math.isnan(float(with_pool[-1]["score_p_adjusted"]))
+
+
+def test_a_test_that_was_never_run_does_not_enter_the_correction() -> None:
+    """An underpowered pair performed no test, so counting it in m would raise every real member's
+    threshold to pay for a claim nobody made."""
+    tested = {"big": flat_pair(2.0, 1.5)}
+    mixed = {"big": flat_pair(2.0, 1.5), "tiny": flat_pair(2.0, 1.5, tasks=2)}
+    alone = eff.family_rows(tested)
+    beside = eff.family_rows(mixed)
+    assert beside[1]["score_verdict"] == eff.UNDERPOWERED
+    assert float(beside[0]["score_p_adjusted"]) == pytest.approx(float(alone[0]["score_p_adjusted"]))
+
+
+#: Trials per size in the coverage simulation, and the seed that pins it. A coverage claim has to
+#: be measured; at 500 trials the Monte-Carlo error on a 5% rate is about 1 point.
+COVERAGE_TRIALS: int = 500
+COVERAGE_SEED: int = 20260911
+
+
+def false_positive_rate(population: np.ndarray, n: int) -> tuple[float, float, float]:
+    """``(false positives, coverage of the emitted intervals, share withheld)`` over one size."""
+    rng = np.random.default_rng(COVERAGE_SEED)
+    false_positives, emitted = 0, 0
+    for _ in range(COVERAGE_TRIALS):
+        change = summary.paired_change(rng.choice(population, size=n, replace=True))
+        if not math.isfinite(change.low):
+            continue
+        emitted += 1
+        false_positives += int(not change.low <= 0.0 <= change.high)
+    coverage = math.nan if emitted == 0 else 1.0 - false_positives / emitted
+    return false_positives / COVERAGE_TRIALS, coverage, 1.0 - emitted / COVERAGE_TRIALS
+
+
+@pytest.mark.parametrize(
+    "n_pairs, max_false_positive, min_coverage, withheld_share",
+    [
+        pytest.param(2, 0.0, math.nan, 1.0, id="n=2 -- withheld, an llr40 skill pair"),
+        pytest.param(4, 0.0, math.nan, 1.0, id="n=4 -- withheld, an llr40 skill pair"),
+        pytest.param(10, 0.08, 0.90, 0.0, id="n=10"),
+        pytest.param(20, 0.08, 0.90, 0.0, id="n=20"),
+        pytest.param(39, 0.08, 0.90, 0.0, id="n=39 -- the focus40 roster"),
+    ],
+)
+def test_the_significance_decision_holds_its_nominal_level_on_the_real_delta_shape(
+    n_pairs: int, max_false_positive: float, min_coverage: float, withheld_share: float
+) -> None:
+    """The decision behind ``score_verdict`` fires on a population with no effect at most 5% of the
+    time, or the flag is the least reliable number in the table printed as the most confident one.
+    The percentile bootstrap of the mean it replaced missed the same null on 27% of samples at
+    n = 4 and 7% at n = 39."""
+    population = np.asarray(LLR40_LOG_DELTAS, dtype=float)
+    population = population - summary.hodges_lehmann(population)
+    rate, coverage, withheld = false_positive_rate(population, n_pairs)
+    assert withheld == pytest.approx(withheld_share)
+    assert rate <= max_false_positive, f"fired on {rate:.1%} of null samples at n={n_pairs}"
+    if not math.isnan(min_coverage):
+        assert coverage >= min_coverage, f"covered the null on {coverage:.3f} of samples at n={n_pairs}"
