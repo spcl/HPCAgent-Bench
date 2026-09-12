@@ -20,8 +20,6 @@ Everything here was measured on **Beverin**: AMD MI300A (`gfx942`) APU nodes, 4 
 Slurm, CSCS Container Engine. Numbers do not carry to a discrete-GPU cluster; several of them do
 not even carry to MI300X.
 
----
-
 ## 1. The shortest path
 
 ```bash
@@ -58,8 +56,6 @@ does one thing: sets the judge and agent node counts to zero.
 The server stays up until the job's wall clock expires (4 h by default, `--time` to change it) or
 until you `scancel` it.
 
----
-
 ## 2. What a container environment is here, and which one to use
 
 Beverin runs jobs through the **CSCS Container Engine (CE)**. You do not run `docker` or
@@ -95,8 +91,6 @@ below. There is no separate GLM build.
 
 If `~/.edf` is empty, `containers/cluster/ce-images/install_edfs.sh` registers the repo's copies
 against the images named in `containers/cluster/ce-images/images.env`.
-
----
 
 ## 3. Submitting: the Slurm flags, and why each one
 
@@ -149,8 +143,6 @@ The same bug class hits any step you run *alongside* the server (a benchmark cli
 those one socket's physical cores -- `--cpus-per-task=24 --hint=nomultithread` -- enough not to be
 the bottleneck, not so much that the measurement contends with what it is measuring.
 
----
-
 ## 4. Finding the endpoint and talking to it
 
 The server binds `0.0.0.0` on port 8000 of its node. There is no gateway and no proxy: the URL is
@@ -199,8 +191,6 @@ Qwen3.8 and gpt-oss-120b fit in one node. If you allocate several, you get **ind
 rather than one bigger server -- each binds port 8000 on its own hostname and holds its own KV
 cache. That multiplies throughput but does not raise the ceiling for a single conversation, and a
 client must spread its requests itself.
-
----
 
 ## 5. The model pages
 
@@ -270,8 +260,6 @@ hardware -- see `knobs.md` section on the KV pool.
 weights, then a KV cache size, then graph capture, then the HTTP server. The `Available KV cache
 memory` line plays the role that `KV Cache is allocated` plays in SGLang.
 
----
-
 ## 7. Mechanism: how a configuration key becomes a command-line flag
 
 Three pieces of machinery here behave in ways a reader outside the project will not guess. Each has
@@ -336,8 +324,6 @@ job has no other roles, so `serve-only.sbatch` uses the registered EDF as-is, wi
 The difference is usually invisible and once was not: a model whose loader patch arrives through a
 path under `/capstor` loads fine under the wide mounts and dies under the narrow ones. If a model
 serves for you here and fails inside a benchmark run, suspect the mounts before the model.
-
----
 
 ## 8. Where the real numbers live
 

@@ -7,8 +7,6 @@ Authoritative source: `experiments/.env.base-oss120b` plus the `vllm-latest` EDF
 `VLLM_PLUGINS`. If this page and those disagree, they are right. Cross-model background is in
 [`knobs.md`](knobs.md).
 
----
-
 ## Current configuration
 
 | | |
@@ -57,8 +55,6 @@ grep -aE "KV cache|GPU KV cache size|Available KV cache memory" server-0.log
 Estimate your working set as concurrent conversations times their largest prompt, size the pool
 above it, and confirm with the per-request prefix-cache hit rate: 0.98 or better means you are on
 the right side of the threshold.
-
----
 
 ## DO
 
@@ -119,8 +115,6 @@ the right side of the threshold.
   same under vLLM's prefix cache as under SGLang's. Not measured.
 - **Whether a newer vLLM has recovered the 25% decode loss.** The comparison covers 0.27.1 only.
   A later release is untested here.
-
----
 
 ## The data behind the instructions
 

@@ -6,8 +6,6 @@ one to start from.
 Authoritative source: `experiments/.env.base-qwen38`. If this page and that file disagree, the file
 is right. Cross-model background is in [`knobs.md`](knobs.md).
 
----
-
 ## Configuration
 
 | | |
@@ -44,8 +42,6 @@ cd experiments
 ./serve-only.sbatch          # qwen38 is the default MODEL
 ```
 
----
-
 ## The one mechanism behind every memory knob here
 
 The KV pool must **exceed the working set**, where the working set is the number of concurrent
@@ -62,8 +58,6 @@ At 40 concurrent conversations, the load this endpoint is sized for:
 
 Both are above the line, which is the point of the configuration. Serve more conversations, or
 longer ones, and you fall off it: **measure your own working set and keep the pool above it.**
-
----
 
 ## DO
 
@@ -131,8 +125,6 @@ longer ones, and you fall off it: **measure your own working set and keep the po
   refuses to start with it. Do not reason from this model to that one.
 - **Do not let the serving step run without `--cpus-per-task`.** A step that does not ask gets one
   core of 192, and the server degrades with load rather than failing. See [`README.md`](README.md).
-
----
 
 ## Open
 

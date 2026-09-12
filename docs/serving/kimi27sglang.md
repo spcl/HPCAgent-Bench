@@ -6,9 +6,7 @@ four-node layout is not a throughput choice: it is the only way to serve it here
 Authoritative source: `experiments/.env.base-kimi27sglang`. If this page and that file disagree, the
 file is right. Cross-model background is in [`knobs.md`](knobs.md).
 
----
-
-## Best known configuration (2026-09-11)
+## Current configuration
 
 | | |
 |---|---|
@@ -48,22 +46,19 @@ MODEL=kimi27sglang ./serve-only.sbatch
 
 ### Where this configuration sits against the KV pool threshold
 
-[`knobs.md`](knobs.md) explains the threshold: above a pool-to-working-set ratio of about **1.15**
-every configuration reaches a prefix-cache hit rate of 0.984-0.988; below it, every configuration
-thrashes.
-
-**This model's ratio has not been measured.** The threshold was established on Qwen3.8. The
-mechanism is not model-specific, so apply it here by measuring rather than by assuming:
+[`knobs.md`](knobs.md) explains the threshold: above the crossing ratio every configuration reaches
+a prefix-cache hit rate of 0.984-0.988; below it, every configuration thrashes. The crossing ratio
+is model-specific and was measured near 1.0 on Qwen3.8. This model's own crossing has not been
+measured, so read the hit rate directly instead of assuming a ratio from another model:
 
 ```bash
 grep -a "max_total_num_tokens\|KV Cache is allocated" server-0.log     # your pool
+grep -a "cached_tokens"                                server-0.log   # your hit rate
 ```
 
 Estimate your working set as concurrent conversations times their largest prompt, and aim the pool
-at about 1.3x it. `--mem-fraction-static 0.588` is already at this model's ceiling, so if you land
-below the threshold the lever is **fewer concurrent conversations**, not a bigger fraction.
-
----
+at about 1.3x it. `--mem-fraction-static 0.588` is already at this model's ceiling, so if the hit
+rate is falling, the lever is fewer concurrent conversations, not a bigger fraction.
 
 ## DO
 
@@ -148,14 +143,12 @@ below the threshold the lever is **fewer concurrent conversations**, not a bigge
 
 ## Open questions
 
-- **Where this model's pool sits against the 1.15 threshold.** Not measured. The threshold was
-  established on Qwen3.8 and the mechanism is not model-specific, but this model's pool size and a
-  realistic working set have never been put side by side. Measure before tuning.
+- **Where this model's pool sits against the KV pool threshold.** Not measured. The threshold was
+  established on Qwen3.8, and whether the crossing ratio carries to this model is unknown. Measure
+  this model's own pool against a realistic working set, and read the prefix-cache hit rate.
 - **Whether `--context-length` below 262144 would free useful pool.** The 2026-08-29 result says the
   window is free, which implies not, but that was measured on the declared window rather than on
   pool size directly.
-
----
 
 ## The data behind the instructions
 

@@ -26,8 +26,6 @@ numbers come from a load of 20 or 40 long-lived streams that re-send a growing c
 that is the only regime in which the cache knobs are visible at all: a cold one-shot smoke reports
 them as null.
 
----
-
 ## The MI300A memory model -- read this before any knob
 
 MI300A is an **APU**. The GPUs and the host share one physical pool of memory. Three consequences
@@ -51,8 +49,6 @@ that break the intuition from discrete GPUs:
 Because the budget is shared, an out-of-memory death arrives as the host OOM killer taking the
 process: the log stops, there is no Python traceback, and the exit status is a signal. Do not look
 for a stack trace that does not exist; look at the last `avail mem=` line.
-
----
 
 ## The KV pool threshold: pool divided by working set, near 1.0
 
@@ -100,8 +96,6 @@ that model's shipped configuration sits.
 **Watch it live** with `--enable-cache-report`: a hit rate that **falls** as conversations grow is
 the ratio crossing below the threshold in front of you.
 
----
-
 ## `--mem-fraction-static` and `--attention-backend aiter` are one decision
 
 With the **aiter** attention backend, the engine multiplies `--mem-fraction-static` by **0.85**
@@ -139,8 +133,6 @@ Confirm what the engine actually chose by reading `attention_backend=` back out 
 Which backend a given model should use, and what it measured, is on that model's page. It is not the
 same answer for every model.
 
----
-
 ## HiCache is wrong on this hardware
 
 **Do not set `--enable-hierarchical-cache` or `--hicache-ratio`.**
@@ -154,8 +146,6 @@ so every cached token costs twice. The server dies to the host OOM killer with n
 
 Nothing in the repository's current configurations sets it. Older launch lines that do -- including
 one snapshot in `containers/cluster/ce-images/IMAGE_REQUIREMENTS.md` -- are superseded.
-
----
 
 ## Both parsers, always
 
@@ -174,8 +164,6 @@ answers with prose *about* the call passes every throughput check ever written.
 
 The parser names are per model and are listed on each model's page.
 
----
-
 ## Topology
 
 **Use pipeline parallelism only when the model does not fit in one node.**
@@ -192,8 +180,6 @@ aggregate throughput and does nothing for a single conversation; the client must
 against one Kimi K2.7 endpoint produced less useful work than one, because they compete for the same
 KV pool and evict each other's prefixes. If you have four nodes and four users, four one-node
 servers beat one four-node server -- when the model fits.
-
----
 
 ## Multi-node fabric
 
@@ -220,8 +206,6 @@ These apply only to a server split across nodes.
   `LD_PRELOAD=/opt/cscs/netstack/libhwloc.so.15`. The serving images here ship no MPI and need
   nothing of the kind.
 
----
-
 ## Cross-model environment variables
 
 | Variable | Value | Why |
@@ -234,8 +218,6 @@ These apply only to a server split across nodes.
 | `NCCL_NET_GDR_LEVEL` | `0` | Multi-node only; see above. |
 | `TOKENIZERS_PARALLELISM` | `false` | Silences a fork warning; no measured effect. |
 
----
-
 ## Flags that are cheap and worth setting everywhere
 
 | Flag | Why |
@@ -244,8 +226,6 @@ These apply only to a server split across nodes.
 | `--enable-cache-report` | Puts `cached_tokens` in each response's usage block, so you see the prefix-cache hit rate **per request** rather than in aggregate. This is the diagnostic that matters on this hardware: it is how you watch the pool-to-working-set ratio cross the threshold described above. |
 | `--watchdog-timeout 1800` | A genuinely wedged engine still surfaces as a dead server rather than a job that hangs to its wall clock. |
 | `--max-running-requests 128` | Caps concurrency at the scheduler. It does not reserve memory. |
-
----
 
 ## Slurm flags that are serving knobs in disguise
 
@@ -257,7 +237,5 @@ These apply only to a server split across nodes.
 | `--cpus-per-task` | `${SLURM_CPUS_ON_NODE}` for the server | A step that does not ask gets **one** core of 192. The server then degrades with load rather than failing: 2 s per decode step early, 147 s after half an hour, with nothing queued. Measured against 88-91 tok/s for the same model with the CPUs it needs (2026-08-31). Give a client or probe running alongside one socket instead: `--cpus-per-task=24 --hint=nomultithread`. See the README for the full account. |
 | `--gpus-per-node` | `4` | Every recipe here is tensor-parallel 4 inside a node. |
 | `ulimit -c 0` | in the script | Beverin's `core_pattern` is machine-global; a crash otherwise drops a zero-byte stub in the working directory. Slurm propagates the limit to steps. |
-
----
 
 For how to start a server, find it and read its log, see [`README.md`](README.md) in this folder.
