@@ -709,10 +709,11 @@ RUN set -eux; \
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash -; \
     apt-get install -y --no-install-recommends nodejs; \
     rm -rf /var/lib/apt/lists/*; \
-    claude_code_version=2.1.197; \
+    claude_code_version=2.1.233; \
     npm install -g "@anthropic-ai/claude-code@${claude_code_version}"; \
     claude --version | grep -qF "${claude_code_version}" \
       || { echo "claude --version is not ${claude_code_version}: $(claude --version)" >&2; exit 1; }; \
+    claude --help | grep -qF -- --autocompact || { echo "claude has no --autocompact" >&2; exit 1; }; \
     node_major="$(node --version | sed 's/^v//; s/\..*//')"; \
     [ "${node_major}" -ge 18 ] \
       || { echo "node >= 18 required by @anthropic-ai/claude-code, found $(node --version)" >&2; exit 1; }; \

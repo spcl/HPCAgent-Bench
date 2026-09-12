@@ -1154,15 +1154,18 @@ RUN set -eux; \
 # so unminimize runs after the library layers and its reinstall restores their pages too.
 #
 # claude-code is pinned: unpinned, the layer caches on the command string forever and the image
-# ages onto whatever the first build happened to pull. Pinned to the version already shipping.
+# ages onto whatever the first build happened to pull. 2.1.233 is a version the driver was measured
+# on, and it takes --autocompact (added in 2.1.221; 2.1.197 rejects it, so its arms ran without the
+# CLAUDE_AUTOCOMPACT wall).
 RUN set -eux; \
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash -; \
     apt-get install -y --no-install-recommends nodejs; \
     rm -rf /var/lib/apt/lists/*; \
-    claude_code_version=2.1.197; \
+    claude_code_version=2.1.233; \
     npm install -g "@anthropic-ai/claude-code@${claude_code_version}"; \
     claude --version | grep -qF "${claude_code_version}" \
       || { echo "claude --version is not ${claude_code_version}: $(claude --version)" >&2; exit 1; }; \
+    claude --help | grep -qF -- --autocompact || { echo "claude has no --autocompact" >&2; exit 1; }; \
     node_major="$(node --version | sed 's/^v//; s/\..*//')"; \
     [ "${node_major}" -ge 18 ] \
       || { echo "node >= 18 required by @anthropic-ai/claude-code, found $(node --version)" >&2; exit 1; }; \
