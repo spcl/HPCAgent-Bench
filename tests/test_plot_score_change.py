@@ -152,6 +152,47 @@ def test_load_reads_skills_off_the_recorded_packet_not_the_arm_name(tmp_path: pa
     assert bool(by_arm["qwen38-c-skills"]) is False
 
 
+def test_load_counts_a_composite_packet_as_skilled(tmp_path: pathlib.Path) -> None:
+    """``llrsingle`` records ``lang-skills+no-score-tool``; comparing the whole packet for
+    equality against the bare ``lang-skills`` key read every one of its skilled arms as
+    unskilled."""
+    path = tmp_path / "observations.csv"
+    pd.DataFrame(
+        [
+            {"arm": "llrsingle-qwen38-c-skills", "packet": "lang-skills+no-score-tool"},
+            {"arm": "llrsingle-qwen38-c", "packet": "no-score-tool"},
+        ]
+    ).to_csv(path, index=False)
+
+    frame = plot.load(path, prefix="")
+
+    by_arm = frame.set_index("arm").skills
+    assert bool(by_arm["llrsingle-qwen38-c-skills"]) is True
+    assert bool(by_arm["llrsingle-qwen38-c"]) is False
+
+
+def test_main_splits_a_composite_control_from_a_composite_treatment(tmp_path: pathlib.Path) -> None:
+    """The control side is the arm carrying NONE of the known treatments, not the arm recording no
+    packet at all: ``llrsingle``'s control still carries ``no-score-tool``, and its treated arm
+    carries it ALONGSIDE ``lang-skills`` -- an equality check against a bare packet put both sides
+    outside the split entirely."""
+    path = tmp_path / "observations.csv"
+    pd.DataFrame(
+        [
+            {"arm": "llrsingle-qwen38-c-skills", "packet": "lang-skills+no-score-tool"},
+            {"arm": "llrsingle-qwen38-c", "packet": "no-score-tool"},
+        ]
+    ).to_csv(path, index=False)
+
+    frame_all = plot.load(path, prefix="")
+    treated = frame_all[frame_all.packet.map(lambda p: plot.packets.has_part(p, "skills"))]
+    control = frame_all[
+        frame_all.packet.map(lambda p: not any(plot.packets.has_part(p, t) for t in ("skills", "cpf", "cpfsrc")))
+    ]
+    assert set(treated.arm) == {"llrsingle-qwen38-c-skills"}
+    assert set(control.arm) == {"llrsingle-qwen38-c"}
+
+
 def thin(log2_speedup: float, tokens: float) -> dict[str, float]:
     """An ``absolute_points`` row over too few kernels for an interval, as the table writes one."""
     nan = float("nan")
