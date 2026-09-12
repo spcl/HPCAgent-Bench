@@ -237,7 +237,6 @@ def _apply_h_psi_collinear(
     gmap = np.asarray(nlk)[:npw_k, ck0].astype(np.int64)
     vrs2 = vrs if vrs.ndim == 2 else vrs[:, None]
     vkbk = np.asarray(vkb)[:npw_k, :, ck0]
-    has_nl = vkbk.shape[1] > 0
     for ip in range(npol):
         b = slice(ip * npwx, ip * npwx + npw_k)
         X_b = X[b, :]
@@ -250,7 +249,7 @@ def _apply_h_psi_collinear(
         for i in range(npw_k):
             for jj in range(m):
                 H[base + i, jj] += __h_tmp[i, jj]
-        if has_nl:
+        if vkbk.shape[1] > 0:
             ps = _matmul_ctA_B(vkbk, X_b, npw_k, vkbk.shape[1], m)
             __h_tmp2 = vkbk @ (deeq @ ps)
             for i in range(npw_k):
@@ -289,12 +288,11 @@ def _apply_s_psi_noncollinear(X, vkb, qq, npw_k, npwx, ck0, uspp, m):
     S = np.zeros((npwx * npol, m), dtype=np.complex128)
     if uspp:
         vkbk = np.asarray(vkb)[:npw_k, :, ck0]
-        has_nl = vkbk.shape[1] > 0
         for ip in range(npol):
             b = slice(ip * npwx, ip * npwx + npw_k)
             X_b = X[b, :]
             S[b, :] = X_b
-            if has_nl:
+            if vkbk.shape[1] > 0:
                 bv = _matmul_ctA_B(vkbk, X_b, npw_k, vkbk.shape[1], m)
                 __snc_tmp = vkbk @ (qq @ bv)
                 base = ip * npwx
