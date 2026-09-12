@@ -88,22 +88,98 @@ models:
 # picks the LEAD of a combination: the lead of `cpfsrc+lang-skills` is cpfsrc, so a CPF figure's
 # arms stay one family.
 #
-# The empty key is the control, which every figure needs a word for. A packet names a SKILL the
-# agent was given, never a device and never a programming model: `device=gpu` with `language=c` is
-# OpenMP offload by construction, so there is no offload packet.
+# The empty key is the control, which every figure needs a word for. A packet names a SKILL (or a
+# set of skills + tools + env switches) the agent was given, never a device and never a programming
+# model: `device=gpu` with `language=c` is OpenMP offload by construction, so there is no offload
+# packet.
+#
+# A value here is EITHER a plain string (the display name, and nothing else is switched on) OR a
+# mapping read by :mod:`hpcagent_bench.packets`:
+#   name:    display name (required in the mapping form)
+#   skills:  skill page directories to stage; the token `lang` expands to the caller's
+#            `lang-<language>` page plus `openmp-<language>` when that page exists, and `*` means
+#            every shipped page
+#   packets: other registered packet keys this one composes (resolved recursively)
+#   env:     KEY -> value env switches; a value may hold `${VAR}`, filled from the caller's
+#            environment at resolve time
+#   method:  a directory name under containers/agent/packets/ (AGENT_PACKET), at most one per
+#            resolved packet
+#   color:   an explicit hex colour, overriding the registry-order hue rule
+#
+# A single skill is automatically its own packet and needs no entry here; only a named or a
+# multi-skill combination is registered. `lang` and `all-in` are APPENDED at the end, after
+# `autokernel`, to keep this file append-only -- see the header note on repaint.
 packets:
   "": No Skill Packet
-  cpfsrc: Canonical Parallel Form
-  cpf: Canonical Parallel Form Page
-  lang-skills: Language Skill Packet
-  divide-and-conquer: Divide and Conquer
-  profiling: Profiling Tools
-  repo: Whole Repository
-  no-score-tool: No Score Tool
-  rocprof: ROCm Profiler
-  nsys: Nsight Systems
-  opt-reports: Optimization Reports
-  autokernel: AutoKernel Method
+  cpfsrc:
+    name: Canonical Parallel Form
+    env:
+      CPF_DROPIN_DIR: "${CPF_VIEW}"
+  cpf:
+    name: Canonical Parallel Form Page
+    skills:
+      - canonical-parallel-form
+    env:
+      HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR: "${CPF_VIEW}"
+  lang-skills:
+    name: All Skill Pages
+    skills:
+      - "*"
+    env:
+      AGENT_HINTS_FILE: hints-and-triggers.md
+  divide-and-conquer:
+    name: Divide and Conquer
+    skills:
+      - divide-and-conquer
+  profiling:
+    name: Profiling Tools
+    skills:
+      - profiling
+    packets:
+      - rocprof
+      - nsys
+      - opt-reports
+  repo:
+    name: Whole Repository
+    env:
+      REPO_LAYOUT: "1"
+      REPO_LAYOUT_PYTHON: "${REPO_LAYOUT_PYTHON}"
+      REPO_LAYOUT_LANGUAGE: c
+      AGENT_PROMPT_FILE: prompt-repo.md
+  no-score-tool:
+    name: No Score Tool
+    env:
+      AGENT_SCORE_TOOL: "0"
+      HPCAGENT_BENCH_SERVICE_SCORE_ENABLED: "0"
+      AGENT_SUBMISSION_POLICY_FILE: submission-blind.md
+  rocprof:
+    name: ROCm Profiler
+    skills:
+      - rocprof
+  nsys:
+    name: Nsight Systems
+    skills:
+      - nsys
+  opt-reports:
+    name: Optimization Reports
+    skills:
+      - opt-reports
+  autokernel:
+    name: AutoKernel Method
+    method: autokernel
+    env:
+      AGENT_PACKET: autokernel
+  lang:
+    name: Language Pages
+    skills:
+      - lang
+  all-in:
+    name: All-in
+    packets:
+      - cpfsrc
+      - divide-and-conquer
+      - profiling
+      - lang
 
 # Where the kernel was TIMED. `cpu` is the default a launcher stamps when it says nothing.
 devices:
