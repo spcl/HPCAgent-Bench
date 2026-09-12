@@ -36,7 +36,11 @@ def test_pluto_skips_when_native_emit_fails(monkeypatch) -> None:
 #: oversubscribed machine, and eager jax spends its time tracing rather than in proportion to the
 #: problem. So the retry gets a larger bounded budget instead of a smaller problem alone -- which is
 #: what the CI runner needs, where a two-core box runs this alongside a whole phase at -n auto.
-_JAX_RETRY_TIMEOUT_S = 600
+#: Sized so the first try's ``JAX_FORK_TIMEOUT_S`` (180) plus this retry stays under the unit sweep's
+#: ``--timeout=600``: at 600 the retry outlived the test's own timeout, which exits the xdist worker
+#: while the retry child is still alive (run 34690017930, shard 0, wedged at 99% on
+#: ``test_vexx_k_config_parameter_validates_under_jax[noncolin]``).
+_JAX_RETRY_TIMEOUT_S = 360
 
 
 def _jax_ok(short, **kwargs):
