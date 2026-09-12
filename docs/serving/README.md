@@ -75,7 +75,7 @@ MODEL=glm53        ./serve-only.sbatch
 
 The name after `MODEL=` is the suffix of a file in `experiments/`: `MODEL=qwen38` reads
 `.env.base-qwen38`. Those are the same files the benchmark campaigns serve from, so the endpoint
-you get is the endpoint they get. The launcher layers `experiments/.env.serve-only` on top, which
+you get is the endpoint they get. The launcher layers `experiments/serve-only.env` on top, which
 does one thing: sets the judge and agent node counts to zero.
 
 The server stays up until the job's wall clock expires (4 h by default, `--time` to change it) or
@@ -334,7 +334,7 @@ supposed to prevent exactly that. If you template a flag, use the dash form.
 
 ### Configuration files are layered, last assignment wins
 
-`serve-only.sbatch` sources the model's file first and `experiments/.env.serve-only` second, under
+`serve-only.sbatch` sources the model's file first and `experiments/serve-only.env` second, under
 `set -a`, so every value is exported and a later assignment overrides an earlier one. The override
 file sets the judge and agent node counts to zero and redirects the run root; everything else comes
 from the model's own file, unchanged. That is what keeps this documentation and a real deployment
@@ -367,7 +367,7 @@ serves for you here and fails inside a benchmark run, suspect the mounts before 
 
 - the model pages above -- per-model instructions with their evidence.
 - [`knobs.md`](knobs.md) -- the cross-model knobs, dated.
-- `experiments/serve-only.sbatch` and `experiments/.env.serve-only` -- the launcher this page
+- `experiments/serve-only.sbatch` and `experiments/serve-only.env` -- the launcher this page
   describes. The first is the job; the second is the three-line override that removes the
   benchmark roles from a model's own configuration.
 - `experiments/.env.base-<model>` -- the authoritative launch line per model, with its own inline

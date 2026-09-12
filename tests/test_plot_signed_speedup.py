@@ -18,6 +18,7 @@ from typing import List, Tuple
 import pandas as pd
 import pytest
 
+from hpcagent_bench.stats import summary
 from hpcagent_bench.stats.figures import results as plotting
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
@@ -53,15 +54,15 @@ def summary_for(cells) -> pd.DataFrame:
 
 @pytest.mark.parametrize("ratio,expected", [(1.0, 0.0), (2.0, 1.0), (3.0, 2.0), (0.5, -1.0), (0.25, -3.0)])
 def test_the_landmarks_the_spec_names(ratio: float, expected: float) -> None:
-    assert speedup.signed_change(ratio) == pytest.approx(expected)
+    assert summary.signed_change(ratio) == pytest.approx(expected)
 
 
 @pytest.mark.parametrize("magnitude", [1.0, 1.25, 1.5, 2.0, 3.0, 10.0, 100.0])
 def test_a_win_and_a_loss_of_the_same_size_are_the_same_distance_from_zero(magnitude: float) -> None:
     """⛔ THE point of the figure. On a raw ratio axis a 0.5x regression sits 0.5 below 1.0 while
     the 2.0x win sits 1.0 above it, so the eye reads the regression as the smaller event."""
-    win = speedup.signed_change(magnitude)
-    loss = speedup.signed_change(1.0 / magnitude)
+    win = summary.signed_change(magnitude)
+    loss = summary.signed_change(1.0 / magnitude)
     assert win == pytest.approx(-loss)
     assert win == pytest.approx(magnitude - 1.0)
 
@@ -69,7 +70,7 @@ def test_a_win_and_a_loss_of_the_same_size_are_the_same_distance_from_zero(magni
 @pytest.mark.parametrize("ratio", [0.0, -1.0, -0.5, math.inf, -math.inf, math.nan])
 def test_an_unusable_ratio_is_nan_never_zero(ratio: float) -> None:
     """0 means "measured, nothing changed". A cell that was never measured must not claim it."""
-    value = speedup.signed_change(ratio)
+    value = summary.signed_change(ratio)
     assert math.isnan(value), f"{ratio} became {value}, which will be plotted"
 
 
@@ -93,14 +94,14 @@ def test_an_unusable_ratio_is_nan_never_zero(ratio: float) -> None:
 )
 def test_the_band_edges(ratio: float, band: str) -> None:
     """The band named for an edge owns it: 2x and 10x are both ``2x .. 10x``."""
-    assert speedup.band_of(speedup.signed_change(ratio)) == band
+    assert speedup.band_of(summary.signed_change(ratio)) == band
 
 
 @pytest.mark.parametrize("magnitude", [1.0, 1.5, 2.0, 9.9, 10.0, 50.0])
 def test_a_band_holds_a_win_and_its_mirrored_loss(magnitude: float) -> None:
     """Bands are keyed on magnitude, never on sign -- a 3x regression is read on the same axis as
     a 3x win, which is what makes the panels comparable."""
-    assert speedup.band_of(speedup.signed_change(magnitude)) == speedup.band_of(speedup.signed_change(1.0 / magnitude))
+    assert speedup.band_of(summary.signed_change(magnitude)) == speedup.band_of(summary.signed_change(1.0 / magnitude))
 
 
 def test_an_unplottable_change_has_no_band() -> None:

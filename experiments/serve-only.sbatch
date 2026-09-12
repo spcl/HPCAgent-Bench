@@ -30,7 +30,7 @@ export SCRIPT_DIR
 
 MODEL="${MODEL:-qwen38}"
 BASE_ENV="${SERVE_BASE_ENV:-${SCRIPT_DIR}/.env.base-${MODEL}}"
-SERVE_ENV="${SERVE_ENV_FILE:-${SCRIPT_DIR}/.env.serve-only}"
+SERVE_ENV="${SERVE_ENV_FILE:-${SCRIPT_DIR}/serve-only.env}"
 for env_file in "${BASE_ENV}" "${SERVE_ENV}"; do
     [[ -f "${env_file}" ]] || { echo "missing env file ${env_file}" >&2; exit 2; }
 done

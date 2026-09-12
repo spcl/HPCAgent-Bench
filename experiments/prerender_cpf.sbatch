@@ -66,19 +66,25 @@ echo "prerender ${TARGET}: ${#ordered[@]} kernels, ${ranks} ranks x ${cores} cor
 echo "  cache ${CPF_CACHE}"
 echo "  view  ${VIEW}"
 echo "  dace  ${DACE_TREE} ($(git -C "${DACE_TREE}" rev-parse HEAD 2>/dev/null || echo 'no checkout'))"
+# --kill-on-bad-exit=0: a rank's own fail verdicts never end the shard early. A rank exits nonzero
+# only for an internal error (broken toolchain, unwritable cache, dace edited mid-run), and only
+# then should this status stay nonzero.
 status=0
-srun --ntasks="${ranks}" --cpus-per-task="${cores}" --hint=nomultithread --mem=0 \
+srun --ntasks="${ranks}" --cpus-per-task="${cores}" --hint=nomultithread --mem=0 --kill-on-bad-exit=0 \
     python3 -m hpcagent_bench.cpf_prerender --cache "${CPF_CACHE}" --view "${VIEW}" \
     --kernels "${KERNEL_LIST}" --target "${TARGET}" || status=$?
 
+# The roster-wide verdict table: every shard has finished (or failed hard) by the time this runs, so
+# a miss here is a real gap, never a sibling rank still rendering.
 langs="c c++"
 [[ "${TARGET}" == gpu ]] && langs=hip
+checks_status=0
 for lang in ${langs}; do
     for mode in form dropin; do
         miss=$(python3 -m hpcagent_bench.cpf_cache check --view "${VIEW}" --kernels "${KERNEL_LIST}" \
-               --language "${lang}" --mode "${mode}" || true)
+               --language "${lang}" --mode "${mode}") || checks_status=1
         echo "${lang} ${mode}: $(( ${#ordered[@]} - $(grep -c . <<<"${miss}" || true) )) of ${#ordered[@]} served"
         [[ -z "${miss}" ]] || sed 's/^/  missing /' <<<"${miss}"
     done
 done
-exit "${status}"
+exit $(( status == 0 ? checks_status : 1 ))

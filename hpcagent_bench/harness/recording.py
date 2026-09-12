@@ -634,9 +634,11 @@ def packet_tag() -> str:
     """``record.packet`` as a canonical key: packet names sorted and joined with ``+``.
 
     Sorted so ``a+b`` and ``b+a`` are one condition rather than two, which is what makes the column
-    groupable. The empty string is the no-packet control, not a missing value."""
+    groupable. The empty string is the no-packet control, not a missing value. Accepts ``;`` as a
+    separator too, so an ad-hoc spec (see :mod:`hpcagent_bench.packets`) records the same key
+    whether it is written ``a;b`` or ``a+b``."""
     raw = str(config.get("record.packet", "") or "")
-    return "+".join(sorted({part for part in re.split(r"[+,\s]+", raw) if part}))
+    return "+".join(sorted({part for part in re.split(r"[+;,\s]+", raw) if part}))
 
 
 def language_tag() -> str | None:

@@ -43,7 +43,7 @@ import pandas as pd
 
 from hpcagent_bench import experiment_tags
 from hpcagent_bench.harness import efficacy
-from hpcagent_bench.stats import palette, population, summary
+from hpcagent_bench.stats import palette, population, rules, summary
 from hpcagent_bench.stats import style as plotstyle
 
 plotstyle.apply()
@@ -52,10 +52,6 @@ import matplotlib.pyplot as plt  # pyplot must follow plotstyle.apply()
 #: A ratio this far from 1.0 is inside the "no change" band for labelling purposes only; the star
 #: is decided by the interval, never by this.
 NEUTRAL: float = 1.0
-
-#: Order an episode's graded rows are read in. ``ts_ms`` ties when two land in the same
-#: millisecond; ``attempt_index`` breaks it in the order the agent made them.
-SUBMISSION_ORDER: tuple[str, str] = ("ts_ms", "attempt_index")
 
 #: Ticks in RATIO units on a log2 axis. Labelled as ratios, not as exponents: a reader wants to see
 #: "2x", not "1".
@@ -115,41 +111,6 @@ def ratio_with_ci(before: pd.Series, after: pd.Series, invert: bool) -> tuple[fl
     )
 
 
-def scores(frame: pd.DataFrame) -> pd.Series:
-    """One speed-up per kernel for one side of the pair: the best FINAL answer.
-
-    Read off the GRADED rows and reduced by the scoring policy
-    (:func:`hpcagent_bench.stats.population.final_answers`): within an episode the last verified
-    submission counts, and the maximum is kept across the episodes of that side. A ``call`` row
-    carries a speed-up for a round the judge never persisted, and a median over those rows -- which
-    this figure used to take -- weights a kernel by how many rounds the agent spent on it.
-    """
-    graded = frame[frame.record == "submission"]
-    if graded.empty:
-        return pd.Series(dtype=float)
-    best = population.final_answers(graded, SUBMISSION_ORDER, ("arm", "benchmark"))
-    return best.groupby("benchmark").speedup.max()
-
-
-def costs(frame: pd.DataFrame) -> pd.Series:
-    """One token spend per kernel for one side of the pair.
-
-    ``calls.tokens`` is CUMULATIVE through a call, so an episode's spend is its own maximum and a
-    kernel's is the SUM over its episodes. Summing the rows instead counts every earlier call once
-    per later one, and a median over them is a median of running totals.
-    """
-    calls = frame[frame.record == "call"].copy()
-    if calls.empty:
-        return pd.Series(dtype=float)
-    calls["tokens"] = pd.to_numeric(calls.tokens, errors="coerce")
-    calls = calls.dropna(subset=["tokens", "benchmark"])
-    if calls.empty:
-        return pd.Series(dtype=float)
-    per_episode = population.per_episode_max(calls, "tokens")
-    totals = per_episode.groupby("benchmark").tokens.sum()
-    return totals[totals > 0]
-
-
 def points(before: pd.DataFrame, after: pd.DataFrame) -> pd.DataFrame:
     """One row per (model, language) present in both experiments, with the flags corrected.
 
@@ -179,9 +140,9 @@ def points(before: pd.DataFrame, after: pd.DataFrame) -> pd.DataFrame:
         graded = pd.concat([b, a])
         graded = graded[graded.record == "submission"]
         population.one_denominator(graded.baseline.tolist(), label=f"{model}/{language}")
-        before_score, after_score = scores(b), scores(a)
+        before_score, after_score = population.kernel_answers(b).speedup, population.kernel_answers(a).speedup
         score, s_low, s_high, s_p = ratio_with_ci(before_score, after_score, False)
-        cost, c_low, c_high, c_p = ratio_with_ci(costs(b), costs(a), True)
+        cost, c_low, c_high, c_p = ratio_with_ci(population.kernel_tokens(b), population.kernel_tokens(a), True)
         rows.append(
             {
                 "model": model,
@@ -213,6 +174,19 @@ def points(before: pd.DataFrame, after: pd.DataFrame) -> pd.DataFrame:
         cost_verdict=[v.label for v in verdicts[1::2]],
         family_size=sum(1 for v in verdicts if math.isfinite(v.adjusted)),
     )
+
+
+def draw_interval(ax: plt.Axes, row: pd.Series, colour: str) -> None:
+    """One mark's two intervals, as thin crossed whiskers: speed-up across, spend up. A mark too thin
+    for an interval on an axis draws none there."""
+    x, y = float(row.log2_speedup), float(row.tokens)
+    x_low, x_high, y_low, y_high = (
+        float(row[c]) for c in ("log2_speedup_low", "log2_speedup_high", "tokens_low", "tokens_high")
+    )
+    if np.isfinite(x_low) and np.isfinite(x_high):
+        ax.hlines(y, x_low, x_high, color=colour, linewidth=1.1, alpha=0.55, zorder=1)
+    if np.isfinite(y_low) and np.isfinite(y_high):
+        ax.vlines(x, y_low, y_high, color=colour, linewidth=1.1, alpha=0.55, zorder=1)
 
 
 def draw_absolute(ax, frame: pd.DataFrame, stats: pd.DataFrame) -> list:
@@ -250,6 +224,8 @@ def draw_absolute(ax, frame: pd.DataFrame, stats: pd.DataFrame) -> list:
         # "with skills" mark and the vertical leg reads as the change in spend.
         x_off, x_on = float(off.log2_speedup.iloc[0]), float(on.log2_speedup.iloc[0])
         y_off, y_on = float(off.tokens.iloc[0]), float(on.tokens.iloc[0])
+        for side in (off, on):
+            draw_interval(ax, side.iloc[0], colour)
         ax.plot(
             [x_off, x_on, x_on],
             [y_off, y_off, y_on],
@@ -405,23 +381,15 @@ def absolute_points(frame: pd.DataFrame) -> pd.DataFrame:
     """
     rows = []
     for (model, language, skills), part in frame.groupby(["model", "language", "skills"]):
-        speed = scores(part)
-        speed = speed[speed > 0]
-        tokens = costs(part)
-        tokens = tokens[tokens > 0]
-        if speed.empty or tokens.empty:
-            continue
-        rows.append(
-            {
-                "model": model,
-                "language": language,
-                "skills": bool(skills),
-                "log2_speedup": float(np.median(np.log2(speed.to_numpy(dtype=float)))),
-                "tokens": float(np.median(tokens.to_numpy(dtype=float))),
-                "kernels": int(speed.size),
-            }
-        )
-    return pd.DataFrame(rows)
+        point = population.kernel_medians(part)
+        if point is not None:
+            rows.append({"model": model, "language": language, "skills": bool(skills), **point})
+    table = pd.DataFrame(rows)
+    if table.empty:
+        return table
+    rules.require_costs(table, "log2_speedup", ["baseline_ns", "native_ns"])
+    rules.require_interval(table, "log2_speedup", "log2_speedup_low", "log2_speedup_high")
+    return rules.require_interval(table, "tokens", "tokens_low", "tokens_high")
 
 
 def figure_absolute(frame: pd.DataFrame, stats: pd.DataFrame, label: str, out: pathlib.Path) -> pathlib.Path:

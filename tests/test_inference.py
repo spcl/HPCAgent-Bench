@@ -1,6 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Tests for hpcagent_bench.inference: normality verdicts, verdict-selected confidence intervals,
+"""Tests for hpcagent_bench.stats.inference: normality verdicts, verdict-selected confidence intervals,
 two-sample significance / equivalence, and multiple-comparison correction.
 
 The tests are written as PROPERTIES over generated samples of KNOWN distribution: a check that
@@ -18,7 +18,7 @@ import numpy as np
 import pytest
 from scipy.stats import anderson as scipy_anderson
 
-from hpcagent_bench import inference
+from hpcagent_bench.stats import inference, summary
 
 #: Distinct seeds per property so a lucky draw cannot carry a passing assertion between tests.
 SEEDS = (0, 1, 2, 3, 4)
@@ -178,7 +178,7 @@ def test_t_interval_coverage_rate_is_near_nominal() -> None:
 @pytest.mark.parametrize("seed", SEEDS)
 def test_bootstrap_median_interval_covers_the_true_median(seed: int) -> None:
     """Lognormal(0, 0.5) scaled by 100 has median exactly 100."""
-    interval = inference.bootstrap_ci(lognormal_sample(seed, n=400), np.median, "median", n_resamples=2000)
+    interval = summary.bootstrap_ci(lognormal_sample(seed, n=400), np.median, "median", n_resamples=2000)
     assert interval.low < 100.0 < interval.high
     assert interval.method in ("bootstrap-BCa", "bootstrap-percentile")
 
@@ -194,8 +194,8 @@ def test_rank_median_interval_covers_the_true_median(seed: int) -> None:
 def test_bootstrap_interval_is_reproducible_from_its_seed() -> None:
     """A published figure must redraw identically from the same DB."""
     x = lognormal_sample(0)
-    first = inference.bootstrap_ci(x, np.median, "median", n_resamples=2000, seed=7)
-    second = inference.bootstrap_ci(x, np.median, "median", n_resamples=2000, seed=7)
+    first = summary.bootstrap_ci(x, np.median, "median", n_resamples=2000, seed=7)
+    second = summary.bootstrap_ci(x, np.median, "median", n_resamples=2000, seed=7)
     assert (first.low, first.high) == (second.low, second.high)
 
 
@@ -242,8 +242,8 @@ def test_speedup_interval_is_not_the_ratio_of_two_separate_intervals() -> None:
     baseline = 200.0 * generator.lognormal(0.0, 0.25, 120)
     candidate = 100.0 * generator.lognormal(0.0, 0.25, 120)
     ratio = inference.speedup_ci(baseline, candidate, n_resamples=3000)
-    b_ci = inference.bootstrap_ci(baseline, np.median, "median", n_resamples=3000)
-    c_ci = inference.bootstrap_ci(candidate, np.median, "median", n_resamples=3000)
+    b_ci = summary.bootstrap_ci(baseline, np.median, "median", n_resamples=3000)
+    c_ci = summary.bootstrap_ci(candidate, np.median, "median", n_resamples=3000)
     naive_low, naive_high = b_ci.low / c_ci.high, b_ci.high / c_ci.low
     assert naive_low < ratio.low and ratio.high < naive_high
 

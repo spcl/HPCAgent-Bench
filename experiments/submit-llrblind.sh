@@ -12,6 +12,7 @@ ulimit -c 0
 . ./arm_nodes.sh
 . ./pin_env_kv.sh
 . ./record_identity.sh
+. ./submit_common.sh
 
 EXPERIMENT=${EXPERIMENT:-llrblind}
 RECORD_EXPERIMENT=${RECORD_EXPERIMENT:-llr-focus40}
@@ -52,9 +53,7 @@ submit_arm() {
     # an arm env is written key by key, so a gate that bails midway leaves a file that looks
     # complete and silently lacks a key: build under a staging name, rename once gates pass
     local staged="${env}.staging"
-    sed -e "s|^CAMPAIGN_ARM=.*|CAMPAIGN_ARM=${arm}|" \
-        -e "s|^RUN_ROOT=.*|RUN_ROOT=\${SCRATCH:-/iopsstor/scratch/cscs/\$USER}/hpcagent-bench-runs/${EXPERIMENT}-${STAMP}|" \
-        "${base}" | grep -vE '^[[:space:]]*(#|$)' >"${staged}"
+    stage_base_env "${base}" "${arm}" "${EXPERIMENT}" "${STAMP}" "${staged}"
     # every arm here withholds the score tool; the language packet is the second axis
     local packet=no-score-tool
     [[ "${skills}" == skills ]] && packet="lang-skills+no-score-tool"
@@ -92,20 +91,8 @@ submit_arm() {
     pin_env_kv "${staged}" "AGENT_NODES=${needed}"
     # a single-submission arm has one shot per kernel, so a compaction overrun costs the whole
     # episode and records nothing; refuse rather than spend the walltime finding out
-    check_context_budget "${staged}" || { rm -f "${staged}"; exit 2; }
-    mv "${staged}" "${env}"
-    local nodes; nodes=$(arm_nodes "${env}")
-    if [[ "${SUBMIT:-1}" != 1 ]]; then
-        echo "  prepared ${arm} (${nodes} nodes)${BEGIN:+ begin ${BEGIN}}${DEPEND_ON:+ after ${DEPEND_ON}} -- not submitted"
-        return 0
-    fi
-    local dep=(); [[ -n "${DEPEND_ON:-}" ]] && dep=(--dependency="afterany:${DEPEND_ON}")
-    local jid
-    jid=$(sbatch --parsable --nodes="${nodes}" --time="${WALLCLOCK}" --job-name="${arm}" "${dep[@]}" \
-          ${BEGIN:+--begin="${BEGIN}"} \
-          --export=ALL,CLUSTER_ENV_FILE="${PWD}/${env}" beverin.sbatch)
-    echo "  ${arm} -> ${jid} (${nodes} nodes)${BEGIN:+ begin ${BEGIN}}"
-    SUBMITTED_JID="${jid}"
+    finalize_staged_env "${staged}" "${env}" || exit 2
+    submit_arm_job "${env}" "${arm}" "${WALLCLOCK}" "${DEPEND_ON:-}" "${BEGIN}"
 }
 
 total=0

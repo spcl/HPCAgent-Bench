@@ -21,9 +21,10 @@ from __future__ import annotations
 import dataclasses
 import functools
 import pathlib
+import re
+from typing import cast
 
 import yaml
-from typing import cast
 
 REGISTRY = pathlib.Path(__file__).resolve().parent / "envs" / "registry.yaml"
 
@@ -44,6 +45,20 @@ class ModelEntry:
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
+class PacketDef:
+    """One packet's raw definition, before ``${VAR}`` placeholders are filled or ``lang``/``*``
+    are expanded into concrete skill pages -- see :mod:`hpcagent_bench.packets`, the resolver that
+    reads this."""
+
+    name: str
+    skills: tuple[str, ...]
+    packets: tuple[str, ...]
+    env: tuple[tuple[str, str], ...]
+    method: str
+    color: str
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
 class Registry:
     """The parsed registry, with the shape its consumers actually read.
 
@@ -58,6 +73,7 @@ class Registry:
     experiments: Names
     models: dict[str, ModelEntry]
     packets: Names
+    packet_defs: dict[str, PacketDef]
     devices: Names
     languages: Names
     frameworks: Names
@@ -93,8 +109,36 @@ def names_of(raw: object, key: str) -> Names:
     """One ``kind -> {tag: name}`` block, with every key and value forced to text.
 
     YAML reads an unquoted ``on`` as True and a bare version as a float, so a tag can arrive as a
-    non-string and then never match the string a figure looks up."""
-    return {str(tag): str(name) for tag, name in as_block(raw).items()}
+    non-string and then never match the string a figure looks up. An entry may also be a mapping
+    (a packet's definition), in which case its ``name`` field is the display name."""
+    out: Names = {}
+    for tag, entry in as_block(raw).items():
+        out[str(tag)] = str(as_block(entry).get("name", tag)) if isinstance(entry, dict) else str(entry)
+    return out
+
+
+def packet_defs_of(raw: object) -> dict[str, PacketDef]:
+    """The ``packets`` block's raw definitions, for :mod:`hpcagent_bench.packets` to resolve.
+
+    A plain string entry (a display name only) carries no skills, env or method. A mapping entry
+    reads ``skills``, ``packets``, ``env``, ``method`` and ``color`` -- all optional beyond
+    ``name``."""
+    out: dict[str, PacketDef] = {}
+    for tag, entry in as_block(raw).items():
+        if isinstance(entry, dict):
+            fields = as_block(entry)
+            env_block = as_block(fields.get("env"))
+            out[str(tag)] = PacketDef(
+                name=str(fields.get("name", tag)),
+                skills=tuple(str(s) for s in as_list(fields.get("skills"))),
+                packets=tuple(str(p) for p in as_list(fields.get("packets"))),
+                env=tuple((str(k), str(v)) for k, v in env_block.items()),
+                method=str(fields.get("method", "")),
+                color=str(fields.get("color", "")),
+            )
+        else:
+            out[str(tag)] = PacketDef(name=str(entry), skills=(), packets=(), env=(), method="", color="")
+    return out
 
 
 @functools.lru_cache(maxsize=1, typed=True)
@@ -113,6 +157,7 @@ def registry() -> Registry:
         experiments=names_of(doc.get("experiments"), "experiments"),
         models=models_of(doc.get("models")),
         packets=names_of(doc.get("packets"), "packets"),
+        packet_defs=packet_defs_of(doc.get("packets")),
         devices=names_of(doc.get("devices"), "devices"),
         languages=names_of(doc.get("languages"), "languages"),
         frameworks=names_of(doc.get("frameworks"), "frameworks"),
@@ -193,8 +238,11 @@ def packet_name(packet: str) -> str:
 def packet_parts(packet: str) -> tuple[str, ...]:
     """The packets in a canonical ``packet`` value, aliases resolved and empties dropped; ``()``
     for the control. One definition, because the palette and the labels have to agree on what a
-    combination CONTAINS or a figure colours a series its legend does not name."""
-    found = [canonical("packets", p) for p in str(packet).split("+")]
+    combination CONTAINS or a figure colours a series its legend does not name.
+
+    Splits on ``+`` (the recorded, already-canonical join) and ``;`` (an ad-hoc packet spec, see
+    :mod:`hpcagent_bench.packets`), so a value recorded either way parses to the same parts."""
+    found = [canonical("packets", p) for p in re.split(r"[+;]+", str(packet))]
     return tuple(dict.fromkeys(p for p in found if p))
 
 

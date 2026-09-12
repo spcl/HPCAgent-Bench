@@ -292,15 +292,18 @@ def right_label(ax: Axes, row: int, text: str, color: str = MUTED) -> None:
     )
 
 
-def save(fig: Figure, stem: pathlib.Path) -> pathlib.Path:
-    """Write ``fig`` as both PDF and SVG under ``stem``, and close it. Returns ``stem``.
+def save(fig: Figure, stem: pathlib.Path, formats: Sequence[str] = ("pdf", "png"), fixed: bool = False) -> pathlib.Path:
+    """Write ``fig`` under ``stem`` once per suffix in ``formats``, and close it. Returns ``stem``.
 
-    Two formats because the two consumers differ: a paper takes the PDF, and a web or slide build
-    takes the SVG. Closing matters in a loop -- matplotlib keeps every open figure alive, and a
-    sweep that renders one per directory otherwise ends up holding all of them.
+    A paper takes the PDF; a web page takes the PNG (at 200 dpi) or the SVG. ``fixed`` keeps the
+    canvas at its figsize instead of cropping to the ink, which is what keeps two paired figures
+    the same size: a tight box is sized by each figure's own legend. Closing matters in a loop --
+    matplotlib keeps every open figure alive, and a sweep that renders one per directory otherwise
+    ends up holding all of them.
     """
     stem.parent.mkdir(parents=True, exist_ok=True)
-    for suffix in (".pdf", ".svg"):
-        fig.savefig(stem.with_suffix(suffix))  # pyright: ignore[reportUnknownMemberType]
+    box = fig.bbox_inches if fixed else "tight"
+    for suffix in formats:
+        fig.savefig(stem.with_suffix(f".{suffix}"), dpi=200, bbox_inches=box)  # pyright: ignore[reportUnknownMemberType]
     plt.close(fig)
     return stem

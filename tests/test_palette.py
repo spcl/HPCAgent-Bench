@@ -7,6 +7,7 @@ the same colour in every figure, dropping a series does not repaint the survivor
 reads as its lead packet's family, and identity is never carried by colour alone.
 """
 
+import logging
 import pathlib
 
 import pytest
@@ -168,3 +169,20 @@ def test_offload_is_a_device_and_a_language_not_a_packet():
     recorded under it comparable to a CPU arm on the same packet axis."""
     assert palette.color("openmp-offload") == palette.control_color()
     assert palette.color("openmp-offload+lang-skills") == palette.color("lang-skills")
+
+
+def test_a_language_wears_the_same_registered_colour_whatever_else_the_figure_holds(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
+        alone = palette.language_colors(["c"])
+        together = palette.language_colors(["fortran", "cpp", "c"])
+    assert alone["c"] == together["c"]
+    assert len(set(together.values())) == 3, together
+    assert "registry.yaml" not in caplog.text
+
+
+def test_an_unregistered_language_draws_but_warns(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
+        palette.language_colors(["a-language-nobody-registered"])
+    assert "a-language-nobody-registered" in caplog.text

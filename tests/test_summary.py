@@ -13,8 +13,9 @@ import math
 import numpy as np
 import pandas as pd
 import pytest
+from scipy.stats import wilcoxon
 
-from hpcagent_bench.stats import summary
+from hpcagent_bench.stats import inference, summary
 
 
 @pytest.mark.parametrize(
@@ -54,6 +55,15 @@ def test_geomean_refuses_what_is_not_a_set_of_ratios(bad: list[float]) -> None:
     happened -- so the arithmetic raises and the caller has to say that dropping is what it means."""
     with pytest.raises(ValueError):
         summary.geomean(bad)
+
+
+def test_geomean_asked_to_drop_skips_missing_measurements_and_has_none_for_an_empty_set() -> None:
+    """``unusable="drop"`` is the caller saying a zero, a negative or a non-finite entry is a missing
+    measurement. What is left is averaged; nothing left has no geometric mean, which is NaN rather
+    than the 0.0 of a collapse or the 1.0 of no change."""
+    assert summary.geomean([2.0, 0.0, -1.0, math.nan, 8.0], unusable="drop") == pytest.approx(4.0)
+    assert math.isnan(summary.geomean([0.0, -1.0], unusable="drop"))
+    assert math.isnan(summary.geomean([], unusable="drop"))
 
 
 def test_usable_ratios_drops_and_warns() -> None:
@@ -173,3 +183,43 @@ def test_the_estimator_does_not_change_with_n() -> None:
     few = [0.1, 0.9, -0.4]
     assert summary.paired_change(few).estimate == pytest.approx(summary.hodges_lehmann(few))
     assert summary.paired_change(few).estimate != pytest.approx(float(np.median(few)))
+
+
+def test_a_timing_comparison_and_a_paired_change_report_one_signed_rank_p() -> None:
+    """Two call sites into scipy chose exact-or-approximate independently and disagreed on tied data;
+    both now read the one test, so the same differences give the same p wherever they are tested."""
+    before = np.array([10.0, 12.0, 9.0, 14.0, 11.0, 13.0, 10.5, 12.5, 9.5, 15.0])
+    after = np.array([9.0, 11.0, 9.5, 12.0, 10.0, 12.0, 9.5, 12.0, 9.0, 13.0])
+    expected = summary.signed_rank_test(after - before)[1]
+    assert inference.compare(after, before, paired=True).pvalue == expected
+    assert summary.paired_change(after - before).pvalue == expected
+
+
+def test_a_tied_sample_takes_the_corrected_approximation_not_an_exact_count() -> None:
+    """The exact null counts subsets of DISTINCT ranks, so on tied differences it is wrong rather than
+    precise. scipy's automatic choice counted exactly there: llr40v11-oss120b-c read p = 0.38052
+    instead of 0.38708."""
+    differences = [0.1, 0.1, 0.2, -0.3, 0.4, 0.4, 0.5, -0.1, 0.6, 0.7]
+    _, pvalue, method, n = summary.signed_rank_test(differences)
+    assert (method, n) == ("signed-rank-approx", 10)
+    assert pvalue == pytest.approx(float(wilcoxon(differences, method="approx", correction=True).pvalue))
+
+
+def test_a_cell_below_the_interval_floor_reports_its_median_without_an_interval() -> None:
+    median, low, high, dropped = summary.median_ci([1.0, 2.0, 4.0], drop=False, min_n=summary.MIN_INTERVAL_SAMPLES)
+    assert (median, dropped) == (2.0, 0)
+    assert math.isnan(low) and math.isnan(high)
+
+
+def test_a_bootstrap_over_log_ratios_keeps_the_negative_values() -> None:
+    """A log speed-up below zero is a slow-down, not a broken timer reading; cleaning it away would move
+    every interval of a regressing arm toward zero."""
+    logs = [-1.0, -0.8, -0.6, -0.5, -0.4, -0.2, 0.1, 0.3]
+    interval = summary.bootstrap_ci(logs, np.median, "median", n_resamples=999, method="percentile")
+    assert interval.n == len(logs)
+    assert interval.point == pytest.approx(-0.45)
+    assert interval.low < interval.point < interval.high
+
+
+def test_a_rank_sum_over_two_identical_samples_finds_no_difference() -> None:
+    assert summary.rank_sum_test([3.0, 3.0, 3.0], [3.0, 3.0, 3.0])[1] == pytest.approx(1.0)

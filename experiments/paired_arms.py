@@ -155,14 +155,8 @@ def tokens_by_arm_kernel(observations: pd.DataFrame) -> dict[tuple[str, str], fl
     kernel's is the SUM over its episodes; summing the rows would count every earlier call once per
     later one.
     """
-    rows = observations[observations.record == "call"].copy()
-    rows["tokens"] = pd.to_numeric(rows.tokens, errors="coerce")
-    rows = rows.dropna(subset=["tokens", "arm", "benchmark"])
-    if rows.empty:
-        return {}
-    per_episode = population.per_episode_max(rows, "tokens", keep=("arm",))
-    totals = per_episode.groupby(["arm", "benchmark"], as_index=False).tokens.sum()
-    return {(str(r.arm), str(r.benchmark)): float(r.tokens) for r in totals.itertuples() if r.tokens > 0}
+    totals = population.kernel_tokens(observations, ("arm", "benchmark"))
+    return {(str(arm), str(kernel)): float(spend) for (arm, kernel), spend in totals.items()}
 
 
 def arm_aggregates(

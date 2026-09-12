@@ -9,7 +9,7 @@ Two things are wrong with a raw ratio axis, and this figure exists to fix both:
 * **The scale lies about direction.** Every slow-down is crushed into the 0..1 sliver while every
   speed-up gets an unbounded tail, so the eye reads a 0.5x regression as SMALLER than a 1.5x win
   when they are the same magnitude. Here the y axis is the signed relative change
-  (:func:`signed_change`): 1.0x sits at 0, 2x at +1, 3x at +2, and a 2x slow-down at -1 -- the same
+  (:func:`hpcagent_bench.stats.summary.signed_change`): 1.0x sits at 0, 2x at +1, 3x at +2, and a 2x slow-down at -1 -- the same
   distance from 0 as the 2x win.
 * **One outlier flattens everything.** A single 100x kernel on a shared axis compresses the rest
   into a line. So the kernels are split by the MAGNITUDE of their change into three panels --
@@ -52,7 +52,8 @@ from typing import Dict, List, NamedTuple, Optional, Sequence, Set, Tuple
 import numpy as np
 import pandas as pd
 
-from hpcagent_bench import stats
+from hpcagent_bench.stats import palette
+from hpcagent_bench.stats.summary import drop_outliers, signed_change
 from hpcagent_bench.stats import rules
 from hpcagent_bench.paths import PLOTS_DIR
 from hpcagent_bench.reporting_order import BY_DWARF, ORDER_MODES, order_rows, row_meta_for
@@ -101,12 +102,6 @@ class Point(NamedTuple):
 MIN_BOX_SAMPLES: int = 4
 
 
-#: Speed-up ratio -> signed relative change, so a 2x win (+1) and a 2x slow-down (-1) sit the same
-#: distance from 0. One definition, in :mod:`hpcagent_bench.stats.summary`; :func:`speedup_points`
-#: drops the cells it returns NaN for and warns, naming each one.
-signed_change = stats.signed_change
-
-
 def band_of(change: float) -> Optional[str]:
     """Which panel a signed change belongs in; ``None`` when it is not plottable (NaN).
 
@@ -134,11 +129,11 @@ def cell_changes(samples: Sequence[float], base_time: float, label: str = "") ->
     spread out of two unrelated ones. Holding the divisor fixed makes the box exactly what it
     claims to be -- the CANDIDATE's run-to-run spread, expressed in speed-up units.
 
-    Cleaned with the same :func:`hpcagent_bench.stats.drop_outliers` the median goes through, so the
+    Cleaned with the same :func:`hpcagent_bench.stats.summary.drop_outliers` the median goes through, so the
     box and the marker describe one set of numbers. Warning is suppressed here: ``cell_summary``
     already warned about these very samples, and warning twice reads as two findings.
     """
-    kept = stats.drop_outliers(np.asarray(samples, dtype=float), warn=False, label=label)[0]
+    kept = drop_outliers(np.asarray(samples, dtype=float), warn=False, label=label)[0]
     if not base_time > 0.0:
         return ()
     changes = [signed_change(base_time / t) for t in (float(v) for v in kept) if t > 0.0]
@@ -274,7 +269,7 @@ def framework_colors(points: Sequence[Point]) -> Dict[str, str]:
     framework keeps its colour across the whole report."""
     names = sorted({point.framework for point in points})
     # One global map, so a framework wears the same hue here as in the heatmap grid.
-    return plotting.framework_colors(names)
+    return palette.framework_colors(names)
 
 
 def band_limits(band: str, changes: Sequence[float]) -> Tuple[float, float]:

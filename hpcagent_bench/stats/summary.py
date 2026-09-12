@@ -38,9 +38,9 @@ Reported defaults (so a run's rigor is documented, not implicit):
 from __future__ import annotations
 import math
 import warnings
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import numpy.typing as npt
@@ -60,17 +60,25 @@ FloatArray = npt.NDArray[np.float64]
 #: What both entry points accept: a plain sequence of numbers, or an already-built float array.
 Samples = Sequence[float] | FloatArray
 
+#: A numpy reduction taking ``axis``: ``np.median``, ``np.mean`` or ``np.min``.
+Statistic = Callable[..., "float | FloatArray"]
+
 #: MAD -> normal-sigma consistency constant (1 / 0.6745). A modified z-score of ``k`` is
 #: ``k`` robust standard deviations above the median.
-_MAD_TO_SIGMA: float = 1.4826
+MAD_TO_SIGMA: float = 1.4826
 
 #: Mean-absolute-deviation -> normal-sigma constant (sqrt(pi/2)). Used only as the fallback
 #: robust scale when MAD == 0 (>= half the samples identical) -- Iglewicz-Hoaglin.
-_MEANAD_TO_SIGMA: float = 1.253314
+MEANAD_TO_SIGMA: float = 1.253314
 
 #: Default upper modified-z threshold. 5 keeps the median plus a ~5 robust-sigma slow tail --
 #: "very bad" (OS-hiccup) samples, not ordinary run-to-run jitter.
 DEFAULT_MAD_Z: float = 5.0
+
+#: Fewest samples a percentile bootstrap of a MEDIAN can say anything about. Below it the resampled
+#: median takes only a handful of values and the 2.5/97.5 percentiles land on the data points
+#: themselves: measured widths did not shrink with n (0.16 at n=2 against 0.64 at n=3-4).
+MIN_INTERVAL_SAMPLES: int = 5
 
 #: Bootstrap median-CI defaults, exposed so callers and docs can report them.
 DEFAULT_CONFIDENCE: float = 0.95
@@ -101,12 +109,12 @@ def drop_outliers(
         return x, empty
     med = float(np.median(x))
     abs_dev: FloatArray = np.abs(x - med)
-    scale = float(np.median(abs_dev)) * _MAD_TO_SIGMA
+    scale = float(np.median(abs_dev)) * MAD_TO_SIGMA
     if scale == 0.0:
         # >= half the samples equal the median, so MAD is 0 and the modified z is undefined.
         # Fall back to the mean absolute deviation about the median (Iglewicz-Hoaglin) so a
         # clear outlier above an otherwise-constant cluster is still caught.
-        scale = float(np.mean(abs_dev)) * _MEANAD_TO_SIGMA
+        scale = float(np.mean(abs_dev)) * MEANAD_TO_SIGMA
     if scale == 0.0:
         return x, empty  # truly all identical: no robust scale, nothing to flag
     modified_z: FloatArray = (x - med) / scale
@@ -132,8 +140,12 @@ def median_ci(
     warn: bool = True,
     label: str = "",
     seed: int = 0,
+    min_n: int = 0,
 ) -> tuple[float, float, float, int]:
     """Median and a non-parametric bootstrap CI, after robust outlier rejection.
+
+    Fewer than ``min_n`` samples (after the drop) get the median with a NaN interval: a cell that
+    thin supports no interval, and a point drawn as one would claim a precision it does not have.
 
     Runs :func:`scipy.stats.bootstrap` on the median with the module defaults
     (``method='percentile'``, ``confidence_level=0.95``, ``n_resamples=9999``). Returns
@@ -148,23 +160,10 @@ def median_ci(
         n_dropped = int(dropped.size)
     if x.size == 0:
         return float("nan"), float("nan"), float("nan"), n_dropped
-    med = float(np.median(x))
-    if x.size < 3 or float(np.ptp(x)) == 0.0:
-        return med, med, med, n_dropped
-    from scipy.stats import bootstrap  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
-
-    res = bootstrap(  # pyright: ignore[reportUnknownVariableType] -- unstubbed scipy
-        (x,),
-        np.median,
-        confidence_level=confidence,
-        n_resamples=n_resamples,
-        method=method,
-        vectorized=True,
-        random_state=np.random.default_rng(seed),  # pyright: ignore[reportCallIssue] -- scipy compat spelling
-    )
-    low = float(res.confidence_interval.low)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
-    high = float(res.confidence_interval.high)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
-    return med, low, high, n_dropped
+    if x.size < min_n:
+        return float(np.median(x)), math.nan, math.nan, n_dropped
+    interval = bootstrap_ci(x, np.median, "median", confidence, n_resamples, method, seed)
+    return interval.point, interval.low, interval.high, n_dropped
 
 
 #: Two-sided error rate every interval and test here defaults to.
@@ -219,6 +218,99 @@ class PairedChange:
         return Interval(name, self.estimate, self.low, self.high, confidence, self.method, self.n)
 
 
+def bootstrap_ci(
+    samples: Samples,
+    statistic: Statistic = np.median,
+    name: str = "median",
+    confidence: float = DEFAULT_CONFIDENCE,
+    n_resamples: int = DEFAULT_RESAMPLES,
+    method: str = "BCa",
+    seed: int = 0,
+) -> Interval:
+    """Non-parametric bootstrap interval for ``statistic`` of ``samples``, the one bootstrap here.
+
+    ``statistic`` is a numpy reduction taking ``axis`` (``np.median``, ``np.mean``, ``np.min``), so
+    scipy evaluates every resample in one vectorized call. ``samples`` is used as given: a timing
+    caller cleans it first, and a log-ratio caller must keep its negative values.
+
+    BCa's acceleration term needs a jackknife and degenerates on tiny or near-constant samples, so
+    a failure falls back to the percentile interval and SAYS SO in ``method``; a silent method swap
+    would make two differently-derived intervals look alike in a table. Fewer than 3 samples or no
+    spread returns the point as a degenerate interval.
+    """
+    x: FloatArray = np.asarray(samples, dtype=np.float64)
+    n = int(x.size)
+    point = float(statistic(x)) if n else math.nan
+    if n < 3 or float(np.ptp(x)) == 0.0:
+        return Interval(name, point, point, point, confidence, f"bootstrap-{method}", n)
+    from scipy.stats import bootstrap  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
+
+    for attempt in dict.fromkeys((method, "percentile")):
+        try:
+            res = bootstrap(  # pyright: ignore[reportUnknownVariableType] -- unstubbed scipy
+                (x,),
+                statistic,
+                confidence_level=confidence,
+                n_resamples=n_resamples,
+                method=attempt,
+                vectorized=True,
+                random_state=np.random.default_rng(seed),  # pyright: ignore[reportCallIssue] -- scipy compat spelling
+            )
+        except (ValueError, ZeroDivisionError, FloatingPointError):
+            continue
+        low = float(res.confidence_interval.low)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+        high = float(res.confidence_interval.high)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+        if math.isfinite(low) and math.isfinite(high):
+            return Interval(name, point, low, high, confidence, f"bootstrap-{attempt}", n)
+    return Interval(name, point, point, point, confidence, "bootstrap-degenerate", n)
+
+
+def rank_sum_test(a: Samples, b: Samples, alternative: str = "two-sided") -> tuple[float, float]:
+    """``(U, p)`` of the Mann-Whitney U test for INDEPENDENT ``a`` and ``b``, the one Mann-Whitney here.
+
+    Every value identical on both sides carries no rank information, so that returns ``(nan, 1.0)``
+    whether scipy raises or hands back a NaN p.
+    """
+    from scipy.stats import mannwhitneyu  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
+
+    try:
+        result = mannwhitneyu(np.asarray(a, dtype=np.float64), np.asarray(b, dtype=np.float64), alternative=alternative)
+    except ValueError:
+        return math.nan, 1.0
+    pvalue = float(result.pvalue)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+    if not math.isfinite(pvalue):
+        return math.nan, 1.0
+    return float(result.statistic), pvalue  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+
+
+def signed_rank_test(differences: Samples, alternative: str = "two-sided") -> tuple[float, float, str, int]:
+    """``(statistic, p, method, n)`` of the Wilcoxon signed-rank test, the one signed-rank call here.
+
+    Non-finite and zero differences are dropped (Wilcoxon's original treatment). Exact or approximate
+    is decided by :func:`hpcagent_bench.stats.signed_rank.use_exact` and passed to scipy EXPLICITLY:
+    scipy's ``auto`` is a library default that has moved before, and the moment it moves this path
+    stops agreeing with the stdlib one. ``correction=True`` for the same reason: the stdlib
+    ``normal_p`` applies the half-step. Nothing left to test returns ``(nan, 1.0, "degenerate", 0)``.
+    """
+    x: FloatArray = np.asarray(differences, dtype=np.float64)
+    nonzero: FloatArray = x[np.isfinite(x) & (x != 0.0)]
+    n = int(nonzero.size)
+    if n == 0:
+        return math.nan, 1.0, "degenerate", 0
+    from scipy.stats import wilcoxon  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
+
+    exact = signed_rank.use_exact(np.abs(nonzero).tolist())
+    result = wilcoxon(
+        nonzero,
+        method="exact" if exact else "approx",
+        zero_method="wilcox",
+        correction=True,
+        alternative=alternative,
+    )
+    method = "signed-rank-exact" if exact else "signed-rank-approx"
+    return float(result.statistic), float(result.pvalue), method, n  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+
+
 def usable_ratios(values: Samples, label: str = "", warn: bool = True) -> FloatArray:
     """The entries of ``values`` a geometric mean may be taken over: finite and strictly positive.
 
@@ -242,15 +334,21 @@ def usable_ratios(values: Samples, label: str = "", warn: bool = True) -> FloatA
     return x[keep]
 
 
-def geomean(values: Samples) -> float:
+def geomean(values: Samples, unusable: Literal["raise", "drop"] = "raise") -> float:
     """Geometric mean of strictly positive ``values``, in log space so a long product cannot overflow.
 
-    Raises on an empty sequence or a non-positive entry rather than skipping it: both are the
-    caller handing over something that is not a set of ratios, and dropping one silently changes
-    which kernels the summary is over without saying so. Filter with :func:`usable_ratios` first
-    when dropping IS the intent; it warns.
+    ``unusable="raise"`` (the default) raises on an empty sequence or a non-positive entry: both are
+    the caller handing over something that is not a set of ratios, and dropping one silently changes
+    which kernels the summary is over without saying so. ``unusable="drop"`` is the caller saying that
+    dropping IS the intent: a zero, negative or non-finite entry is a missing measurement and is
+    dropped, and a set with nothing usable left has no geometric mean, so it returns NaN -- never a
+    0.0 or a 1.0, which are the exact values of a total collapse and of no change.
     """
     x: FloatArray = np.asarray(values, dtype=np.float64)
+    if unusable == "drop":
+        x = x[np.isfinite(x) & (x > 0.0)]
+        if x.size == 0:
+            return math.nan
     if x.size == 0:
         raise ValueError("the geometric mean of no values is undefined")
     bad: FloatArray = x[~(np.isfinite(x) & (x > 0.0))]
@@ -372,22 +470,13 @@ def paired_change(differences: Samples, alpha: float = DEFAULT_ALPHA) -> PairedC
     point = hodges_lehmann(nonzero)
     if n < MIN_PAIRS_FOR_INTERVAL:
         return PairedChange(point, math.nan, math.nan, math.nan, n, wins, losses, ties, "underpowered")
-    from scipy.stats import (  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
-        norm,
-        wilcoxon,
-    )
+    from scipy.stats import norm  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
 
-    exact = signed_rank.use_exact(np.abs(nonzero).tolist())
-    method = "signed-rank-exact" if exact else "signed-rank-approx"
-    # The method is passed EXPLICITLY. scipy's "auto" is a library default that has moved before and
-    # can move again on a bump, and the moment it does this path stops agreeing with the stdlib one.
-    # correction=True for the same reason: scipy defaults it OFF, the stdlib normal_p applies the
-    # half-step, and the two would report different p on every tied sample without it.
-    result = wilcoxon(nonzero, method="exact" if exact else "approx", zero_method="wilcox", correction=True)
+    pvalue, method = signed_rank_test(nonzero)[1:3]
     walsh = walsh_averages(nonzero)
     mean = n * (n + 1) / 4.0
     sd = math.sqrt(n * (n + 1) * (2 * n + 1) / 24.0)
     z = float(norm.ppf(1.0 - alpha / 2.0))
     cutoff = min(max(math.floor(mean - z * sd), 0), walsh.size // 2 - 1)
     low, high = float(walsh[cutoff]), float(walsh[walsh.size - 1 - cutoff])
-    return PairedChange(point, low, high, float(result.pvalue), n, wins, losses, ties, method)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+    return PairedChange(point, low, high, pvalue, n, wins, losses, ties, method)

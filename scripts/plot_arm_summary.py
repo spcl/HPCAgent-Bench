@@ -34,7 +34,7 @@ import numpy as np
 import pandas as pd
 
 from hpcagent_bench import experiment_tags
-from hpcagent_bench.stats import palette, population
+from hpcagent_bench.stats import palette, population, rules
 from hpcagent_bench.stats import style as plotstyle
 
 plotstyle.apply()
@@ -54,70 +54,21 @@ PANEL_MARGINS: dict[str, float] = {"left": 0.17, "right": 0.975, "top": 0.855, "
 #: The pair figure is twice as wide and takes them all in one row.
 LEGEND_COLS_SINGLE: int = 3
 
-#: Order an episode's graded rows are read in, as in ``plot_score_change.py``.
-SUBMISSION_ORDER: tuple[str, str] = ("ts_ms", "attempt_index")
-
-
-def arm_scores(frame: pd.DataFrame) -> pd.Series:
-    """One speed-up per kernel for one arm: the best FINAL answer.
-
-    Read off the GRADED rows and reduced by the scoring policy
-    (:func:`hpcagent_bench.stats.population.final_answers`): within an episode the last verified
-    submission counts, the maximum is kept across the arm's episodes. A ``call`` row carries a
-    speed-up for a round the judge never persisted, so a median over call rows weights a kernel by
-    how many rounds the agent spent on it rather than by what the arm delivered.
-    """
-    graded = frame[frame.record == "submission"]
-    if graded.empty:
-        return pd.Series(dtype=float)
-    best = population.final_answers(graded, SUBMISSION_ORDER, ("arm", "benchmark"))
-    return best.groupby("benchmark").speedup.max()
-
-
-def arm_costs(frame: pd.DataFrame) -> pd.Series:
-    """Tokens per KERNEL for one arm: the per-episode total, median over that kernel's episodes.
-
-    ``calls.tokens`` is CUMULATIVE through a call, so an episode's spend is its own maximum. The
-    MEDIAN over a kernel's episodes on purpose, not a sum: this figure reports what a task typically
-    cost the arm, and a sum would report how many agents it ran. One runaway episode -- an agent
-    looping on a build error until its budget runs out, two orders of magnitude off the rest of its
-    own arm -- must not set the number for the whole arm, which is why neither level takes a mean.
-    The episode is :data:`~hpcagent_bench.stats.population.EPISODE_KEY`; ``run_id`` alone repeats
-    across jobs and merges two agents into one.
-    """
-    calls = frame[frame.record == "call"].copy()
-    if calls.empty:
-        return pd.Series(dtype=float)
-    calls["tokens"] = pd.to_numeric(calls.tokens, errors="coerce")
-    calls = calls.dropna(subset=["tokens", "benchmark"])
-    if calls.empty:
-        return pd.Series(dtype=float)
-    per_episode = population.per_episode_max(calls, "tokens")
-    totals = per_episode.groupby("benchmark").tokens.median()
-    return totals[totals > 0]
-
 
 def arm_points(frame: pd.DataFrame) -> pd.DataFrame:
-    """One row per (model, language, condition): median log2 speed-up and median tokens."""
+    """One row per (model, language, condition): :func:`~hpcagent_bench.stats.population.kernel_medians`,
+    a kernel's spend being the sum over its episodes, checked against SC15 Rules 4 and 5 before it is drawn."""
     rows = []
     for (model, language, condition), part in frame.groupby(["model", "language", "condition"]):
-        speed = arm_scores(part)
-        speed = speed[speed > 0]
-        tokens = arm_costs(part)
-        tokens = tokens[tokens > 0]
-        if speed.empty or tokens.empty:
-            continue
-        rows.append(
-            {
-                "model": model,
-                "language": language,
-                "condition": str(condition),
-                "log2_speedup": float(np.median(np.log2(speed.to_numpy(dtype=float)))),
-                "tokens": float(np.median(tokens.to_numpy(dtype=float))),
-                "kernels": int(speed.size),
-            }
-        )
-    return pd.DataFrame(rows)
+        point = population.kernel_medians(part)
+        if point is not None:
+            rows.append({"model": model, "language": language, "condition": str(condition), **point})
+    table = pd.DataFrame(rows)
+    if table.empty:
+        return table
+    rules.require_costs(table, "log2_speedup", ["baseline_ns", "native_ns"])
+    rules.require_interval(table, "log2_speedup", "log2_speedup_low", "log2_speedup_high")
+    return rules.require_interval(table, "tokens", "tokens_low", "tokens_high")
 
 
 #: Arm-name suffix -> the packet it means. The suffix is read only because the observations CSV
@@ -168,6 +119,17 @@ def language_order(frame: pd.DataFrame) -> list[str]:
     return head + sorted(present - set(head))
 
 
+def draw_intervals(ax: matplotlib.axes.Axes, x: float, pair: pd.DataFrame, column: str, hues: dict[str, str]) -> None:
+    """Each condition's interval as a thin whisker just BESIDE its mark, so the connector drawn through
+    the marks is never read as an interval. A condition too thin for one draws none."""
+    ordered = pair.sort_values("condition")
+    offsets = np.linspace(-0.07, 0.07, len(ordered)) if len(ordered) > 1 else np.array([0.07])
+    for offset, (_, row) in zip(offsets, ordered.iterrows(), strict=True):
+        low, high = float(row[f"{column}_low"]), float(row[f"{column}_high"])
+        if np.isfinite(low) and np.isfinite(high):
+            ax.vlines(x + offset, low, high, color=hues[row.condition], linewidth=1.4, alpha=0.75, zorder=2)
+
+
 def draw_metric(ax: matplotlib.axes.Axes, frame: pd.DataFrame, column: str, label: str, log: bool) -> None:
     """One x slot per LANGUAGE; the models scattered WITHIN it; the two conditions joined.
 
@@ -198,6 +160,7 @@ def draw_metric(ax: matplotlib.axes.Axes, frame: pd.DataFrame, column: str, labe
     for (model, language), pair in frame.groupby(["model", "language"]):
         x = at[language] + dodge[model]
         shape = shapes[model]
+        draw_intervals(ax, x, pair, column, hues)
         if joined:
             off = pair[pair.condition == ""]
             on = pair[pair.condition != ""]
