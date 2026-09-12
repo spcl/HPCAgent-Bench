@@ -12,11 +12,20 @@ absent, and these are what stop the loudness from being the only thing between a
 paper.
 """
 
+import importlib.util
 import logging
+import sys
+from types import ModuleType
 
+import matplotlib
+
+matplotlib.use("Agg")
+
+import matplotlib.pyplot as plt
+import pandas as pd
 import pytest
 
-from hpcagent_bench import experiment_tags
+from hpcagent_bench import experiment_tags, paths
 from hpcagent_bench.stats import palette
 from hpcagent_bench.stats.figures import results, signed
 
@@ -89,3 +98,73 @@ def test_an_arm_name_resolves_to_a_registered_model_or_to_nothing() -> None:
     for arm in ("llr40-oss120b-c-skills", "cpf-kimi27sglang-fortran", "llr40-gpt-oss-120b-c", "llr4-qwen30b-c"):
         resolved = experiment_tags.model_of(arm)
         assert resolved in registered or resolved == "other", f"{arm} -> {resolved!r}"
+
+
+def load_script(name: str) -> ModuleType:
+    """A figure script under ``scripts/``, which is not a package."""
+    spec = importlib.util.spec_from_file_location(name, paths.ROOT / "scripts" / f"{name}.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def arm_frame(conditions: list[str]) -> pd.DataFrame:
+    """``plot_arm_summary.arm_points`` rows, one per (model, language, condition)."""
+    rows = []
+    for model in ("qwen38", "oss120b"):
+        for condition in conditions:
+            rows.append(
+                {
+                    "model": model,
+                    "language": "c",
+                    "condition": condition,
+                    "log2_speedup": 1.0,
+                    "log2_speedup_low": 0.5,
+                    "log2_speedup_high": 1.5,
+                    "tokens": 1e5,
+                    "tokens_low": 8e4,
+                    "tokens_high": 1.2e5,
+                    "baseline_ns": 1e6,
+                    "native_ns": 5e5,
+                    "kernels": 12,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def identity_warnings(summary: ModuleType, conditions: list[str], caplog: pytest.LogCaptureFixture) -> list[str]:
+    """The palette warnings the arm-summary figure raises while drawing ``conditions``."""
+    fig, ax = plt.subplots()
+    with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
+        summary.draw_metric(ax, arm_frame(conditions), "log2_speedup", "Speedup", log=False)
+    plt.close(fig)
+    return [r.getMessage() for r in caplog.records if r.name == palette.LOG.name and "registry.yaml" in r.getMessage()]
+
+
+def test_every_packet_the_arm_summary_can_colour_is_registered() -> None:
+    """The condition vocabulary is typed into the script, so no row has to exist for it to reach a legend."""
+    summary = load_script("plot_arm_summary")
+    named = set(experiment_tags.names("packets"))
+    packets = [key for _, key in summary.CONDITIONS]
+    unknown = [p for p in packets if any(part not in named for part in experiment_tags.packet_parts(p))]
+    assert not unknown, f"plot_arm_summary.CONDITIONS colours {unknown}, which no `packets` key of registry.yaml names"
+
+
+@pytest.mark.parametrize("width", [2, 4], ids=["joined pair", "unjoined conditions"])
+def test_the_arm_summary_figure_colours_only_registered_packets(width: int, caplog: pytest.LogCaptureFixture) -> None:
+    summary = load_script("plot_arm_summary")
+    conditions = [key for _, key in summary.CONDITIONS][:width]
+    assert identity_warnings(summary, conditions, caplog) == []
+
+
+def test_the_registry_check_catches_a_figure_colouring_an_unregistered_packet(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A check that cannot fail guards nothing. The condition vocabulary is the only route a packet has into
+    this figure, so an unregistered one is added there and must come back as a warning."""
+    summary = load_script("plot_arm_summary")
+    monkeypatch.setattr(summary, "CONDITIONS", (*summary.CONDITIONS, ("-mystery", "a-packet-nobody-registered")))
+    warnings = identity_warnings(summary, ["", "a-packet-nobody-registered"], caplog)
+    assert any("a-packet-nobody-registered" in message for message in warnings), warnings

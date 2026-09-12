@@ -375,7 +375,7 @@ def campaign_shard(run_dir: pathlib.Path) -> None:
 
 
 def test_the_campaign_table_and_the_artifact_table_reduce_the_same_way(analyze, tmp_path) -> None:
-    """``collect_campaign.py`` and ``analyze_llr40.py`` publish the same per-arm number from the same
+    """``collect_campaign.py`` and ``stats.arms`` publish the same per-arm number from the same
     rows. They reduced differently -- max over every submission row against last-per-episode then max
     -- and the shipped artifact carried the first while documenting the second, a gap of up to 7.14x."""
     collect = load_by_path(REPO / "scripts" / "collect_campaign.py", "collect_campaign")
@@ -457,3 +457,51 @@ def test_a_host_row_faster_than_every_device_row_is_returned_as_impossible() -> 
     )
     impossible = population.host_rows_beating_every_device_row(rows)
     assert sorted(impossible.native_ns.tolist()) == [18580, 18850, 20050]
+
+
+def kernel_slice(kernels: int) -> pd.DataFrame:
+    """One arm's graded answer and token spend on each of ``kernels`` kernels, one episode each."""
+    rows: list[dict[str, object]] = []
+    for index in range(kernels):
+        kernel = f"k{index}"
+        rows.append(
+            {
+                "record": "submission",
+                "benchmark": kernel,
+                "run_id": f"w{index}",
+                "speedup": 2.0**index,
+                "ts_ms": 1,
+                "tokens": None,
+                "baseline_ns": 1000.0 * (index + 1),
+                "native_ns": 500.0,
+            }
+        )
+        rows.append(
+            {
+                "record": "call",
+                "benchmark": kernel,
+                "run_id": f"w{index}",
+                "speedup": 1.0,
+                "ts_ms": 2,
+                "tokens": 100.0 * (index + 1),
+                "baseline_ns": 0.0,
+                "native_ns": 0.0,
+            }
+        )
+    return submissions(rows)
+
+
+def test_an_arm_point_carries_its_interval_and_the_costs_behind_its_speed_up() -> None:
+    """SC15 Rules 4 and 5: a median of nondeterministic ratios travels with its interval and with the
+    two times the ratio is a quotient of."""
+    point = population.kernel_medians(kernel_slice(7), "median")
+    assert point is not None
+    assert point["log2_speedup"] == pytest.approx(3.0)
+    assert point["log2_speedup_low"] < 3.0 < point["log2_speedup_high"]
+    assert (point["baseline_ns"], point["native_ns"], point["kernels"]) == (4000.0, 500.0, 7)
+
+
+def test_an_arm_point_over_too_few_kernels_withholds_its_interval() -> None:
+    point = population.kernel_medians(kernel_slice(3), "median")
+    assert point is not None
+    assert pd.isna(point["log2_speedup_low"]) and pd.isna(point["tokens_high"])
