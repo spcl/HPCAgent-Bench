@@ -7,12 +7,19 @@ import math
 import pathlib
 import re
 from functools import lru_cache
-from typing import Callable, Dict, List, NamedTuple, Optional, Set, Tuple, Union
+from typing import Callable, Dict, List, NamedTuple, Optional, Set, Tuple
 
 from numpyto_common.ir import ArrayDesc, KernelIR
-from numpyto_common import dtypes, narrow_int, operators, parallelism
+from numpyto_common import dtypes, operators, parallelism
 from numpyto_common.ordered import OrderedSet
-from numpyto_common.emitter import BaseEmitter, index_rank_error
+from numpyto_common.emitter import (
+    BaseEmitter,
+    TupleTargetSplitter,
+    fp8_dtypes_used,
+    fp8_function_names,
+    fp8_functions,
+    index_rank_error,
+)
 from numpyto_common.frontend import _names_used_as_int
 from numpyto_common.lib_nodes import BLAS_GEMM_MARKER
 from numpyto_common.lowering import _walk_complex, helper_returns_int
@@ -209,29 +216,8 @@ def _is_narrow_int(dtype: str) -> bool:
         return False
 
 
-class _Fp8Fns(NamedTuple):
-    """The three prelude entry points for one fp8 format."""
-
-    promote: str  # storage byte -> float
-    demote: str  # float -> storage byte
-    round: str  # float -> float, rounded to the fp8 grid
-
-
 #: Prelude function names per fp8 format, keyed by the canonical registry dtype (bodies in _FP8_HELPERS).
-_FP8_FNS = {
-    "float8_e4m3": _Fp8Fns("__npb_e4m3_to_f32", "__npb_f32_to_e4m3", "__npb_rn_e4m3"),
-    "float8_e5m2": _Fp8Fns("__npb_e5m2_to_f32", "__npb_f32_to_e5m2", "__npb_rn_e5m2"),
-}
-
-#: BinOp ops that are never fp8 arithmetic (bit/shift work is integer); the fp8 round-to-grid wrap skips them.
-_FP8_NON_ARITH_OPS = (ast.BitAnd, ast.BitOr, ast.BitXor, ast.LShift, ast.RShift)
-
-
-def _fp8_fns(dtype: str):
-    """:class:`_Fp8Fns` for a storage-only (fp8) dtype, else None (gated on the registry)."""
-    if not dtype or not dtypes.is_storage_only(dtype):
-        return None
-    return _FP8_FNS[dtypes.canonical(dtype)]
+C_FP8_NAMES = fp8_function_names("__npb_")
 
 
 def _default_float_dtype(kir: KernelIR) -> str:
@@ -369,7 +355,7 @@ def _isopar_elem_ok(dtype: Optional[str]) -> bool:
         ct = dtypes.c_type(dtype)
     except KeyError:
         return False  # unrecognised dtype: _c_type would silently call it double
-    return not (_is_narrow_int(dtype) or _fp8_fns(dtype) is not None or "_Complex" in ct)
+    return not (_is_narrow_int(dtype) or fp8_functions(dtype, C_FP8_NAMES) is not None or "_Complex" in ct)
 
 
 def _join_offset(inner: Tuple[Optional[ast.AST], int], node: ast.AST, op) -> Tuple[Optional[ast.AST], int]:
@@ -443,6 +429,7 @@ class _CBodyEmitter(BaseEmitter):
     _KW_BREAK = "break;"
     _COMMENT = ("/*", "*/")
     _KW_CONTINUE = "continue;"
+    fp8_names = C_FP8_NAMES
 
     def __init__(self, kir: KernelIR, multidim_arrays: Optional[Set[str]] = None) -> None:
         self.kir = kir
@@ -506,8 +493,6 @@ class _CBodyEmitter(BaseEmitter):
         self._deferred_alloc_size: Dict[str, str] = {}
         #: Fn-top zeros/ones local -> (size, C type, fill kind) to re-run on an in-loop reset.
         self.zeros_refill: Dict[str, Tuple[str, str, str]] = {}
-        #: Memoised _kernel_fp8_fns() result; False means not yet computed (the real result may be None).
-        self._fp8_fns_cache: Union[_Fp8Fns, None, bool] = False
         #: Memoised _all_int_locals() result.
         self._int_locals_cache: Optional[Set[str]] = None
         #: Memoised _float_scalar_names() result.
@@ -1194,19 +1179,10 @@ class _CBodyEmitter(BaseEmitter):
             self.array_shapes[target.id] = list(self.array_shapes[node.value.id])
         rhs = self.emit_expr(node.value)
         lhs = self.emit_expr(target)
-        fns = self._store_fns(target)
+        fns = self.store_fns(target)
         if fns is not None:  # fp8 target: demote the float RHS back to the byte
             rhs = f"{fns.demote}({rhs})"
         return f"{indent}{lhs} = {rhs};"
-
-    def _store_fns(self, target: ast.AST):
-        """:class:`_Fp8Fns` when an assignment target is an fp8 element/name, else None (the store half of promote/demote)."""
-        base = target
-        while isinstance(base, ast.Subscript):
-            base = base.value
-        if not isinstance(base, ast.Name):
-            return None
-        return _fp8_fns(self._name_dtype(base.id) or "")
 
     def _emit_augassign(self, node: ast.AugAssign, indent: str) -> str:
         # // and % have no C compound operator with numpy semantics (// needs int_floor,
@@ -1221,7 +1197,7 @@ class _CBodyEmitter(BaseEmitter):
             raise NotImplementedError(f"augmented op {type(node.op).__name__}")
         lhs = self.emit_expr(node.target)
         rhs = self.emit_expr(node.value)
-        fns = self._store_fns(node.target)
+        fns = self.store_fns(node.target)
         if fns is not None:
             # fp8 storage can't use C's += (target is 1-byte): expand to explicit load/op/store (read promotes, result demotes).
             return f"{indent}{lhs} = {fns.demote}({fns.promote}({lhs}) {op} ({rhs}));"
@@ -1229,63 +1205,10 @@ class _CBodyEmitter(BaseEmitter):
 
     # ----- expression-level -----------------------------------------------
 
-    def emit_expr(self, node: ast.AST) -> str:
-        """Emit an expression, re-rounding a float BinOp result to the fp8 grid (per-op in numpy)
-        and re-wrapping a narrow-int +/-/* result back to its element width (numpy wraps there;
-        the promoting read computes wide, so an intermediate that overflows would not)."""
-        text = self._emit_expr_inner(node)
-        if isinstance(node, ast.BinOp):
-            text = self._fp8_round(node, text)
-        wrap = narrow_int.wrap_dtype(node, self._wrap_name_dtype)
-        if wrap is not None:
-            text = f"(({_c_type(wrap)})({text}))"
-        return text
+    def wrap_narrow(self, text: str, wrap: str) -> str:
+        return f"(({_c_type(wrap)})({text}))"
 
-    def _wrap_name_dtype(self, name: str) -> Optional[str]:
-        """Name -> numpy dtype for the narrow-int wrap oracle; a shape symbol is the wide int64."""
-        for s in self.kir.symbols:
-            if s.name == name:
-                return "int64"
-        return self._name_dtype(name)
-
-    def _fp8_round(self, node: ast.BinOp, text: str) -> str:
-        """Wrap a float BinOp result in the fp8 round-to-grid helper (per-op rounding is load-bearing, not decorative)."""
-        if isinstance(node.op, _FP8_NON_ARITH_OPS):
-            return text
-        fns = self._kernel_fp8_fns()
-        if fns is None or not self._touches_fp8(node):
-            return text
-        return f"{fns.round}({text})"
-
-    def _kernel_fp8_fns(self):
-        """The kernel's single fp8 format's helpers, or None if it uses none (mixing both formats is refused)."""
-        cache = self._fp8_fns_cache
-        if cache is not False:
-            return cache
-        used = _fp8_dtypes_used(self.kir)
-        if len(used) > 1:
-            raise NotImplementedError(
-                f"kernel {self.kir.kernel_name!r} mixes fp8 formats {used}: the grid each "
-                f"intermediate rounds to is ambiguous"
-            )
-        fns = _fp8_fns(used[0]) if used else None
-        self._fp8_fns_cache = fns
-        return fns
-
-    def _touches_fp8(self, node: ast.AST) -> bool:
-        """True when the subtree reads an fp8 array/scalar/local, so the enclosing op yields an fp8 float to re-round."""
-        for sub in ast.walk(node):
-            if isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Name):
-                name = sub.value.id
-            elif isinstance(sub, ast.Name):
-                name = sub.id
-            else:
-                continue
-            if _fp8_fns(self._name_dtype(name) or "") is not None:
-                return True
-        return False
-
-    def _emit_expr_inner(self, node: ast.AST) -> str:
+    def emit_expr_inner(self, node: ast.AST) -> str:
         if isinstance(node, ast.Constant):
             v = node.value
             if isinstance(v, bool):
@@ -1311,7 +1234,7 @@ class _CBodyEmitter(BaseEmitter):
             # A size-1 array read bare in a value expression is its sole element: emit x[0], not the pointer x.
             shape = self.array_shapes.get(node.id)
             access = f"{node.id}[0]" if (shape and all(str(s) == "1" for s in shape)) else node.id
-            return self._promote_name_read(node, access)
+            return self.promote_name_read(node, access)
         if isinstance(node, ast.UnaryOp):
             # ~x on a boolean operand is numpy logical negation, not bitwise NOT -- emit ! so a 0/1 bool inverts to 1/0.
             if isinstance(node.op, ast.Invert) and self._operand_is_bool(node.operand):
@@ -1488,14 +1411,14 @@ class _CBodyEmitter(BaseEmitter):
         if not (isinstance(node.ctx, ast.Load) and isinstance(base, ast.Name)):
             return access
         dtype = self._dtype_for_name(base.id) or ""
-        fns = _fp8_fns(dtype)
+        fns = self.fp8_fns(dtype)
         if fns is not None:
             return f"{fns.promote}({access})"
         if _is_narrow_int(dtype):
             return f"(({_c_type('int')})({access}))"
         return access
 
-    def _name_dtype(self, name: str):
+    def name_dtype(self, name: str):
         """dtype of a bare Name -- a local, an array, or a scalar param (_dtype_for_name alone misses by-value scalars)."""
         dt = self._dtype_for_name(name)
         if dt is None:
@@ -1503,13 +1426,6 @@ class _CBodyEmitter(BaseEmitter):
                 if sca.name == name:
                     return sca.dtype
         return dt
-
-    def _promote_name_read(self, node: ast.Name, access: str) -> str:
-        """Promote a bare fp8 Name to float on READ -- the Name-level twin of :meth:`_promote_read`."""
-        if not isinstance(node.ctx, ast.Load):
-            return access
-        fns = _fp8_fns(self._name_dtype(node.id) or "")
-        return f"{fns.promote}({access})" if fns is not None else access
 
     def _emit_helper_arg(self, node: ast.expr, param_is_array: bool) -> str:
         """One argument of a kernel-helper call: an ARRAY parameter takes the pointer.
@@ -1763,7 +1679,7 @@ class _CBodyEmitter(BaseEmitter):
         if not self._is_int_operand(node, allow_array=False):
             return False
         for sub in ast.walk(node):
-            if isinstance(sub, ast.Name) and (self._name_dtype(sub.id) or "").startswith("uint"):
+            if isinstance(sub, ast.Name) and (self.name_dtype(sub.id) or "").startswith("uint"):
                 return False
         return True
 
@@ -2215,57 +2131,6 @@ def _integer_valued_locals(kir: KernelIR) -> Set[str]:
     return candidates & assumed
 
 
-def _tuple_element(node: ast.AST, i: int, n: int) -> Optional[ast.expr]:
-    """Element ``i`` of an ``n``-wide tuple-valued expression, or None when it is not one.
-
-    A conditional over tuples is projected by pushing the index through it, so the guards are
-    duplicated and the tuples disappear.
-    """
-    if isinstance(node, ast.Tuple):
-        return copy.deepcopy(node.elts[i]) if len(node.elts) == n else None
-    if isinstance(node, ast.IfExp):
-        body = _tuple_element(node.body, i, n)
-        orelse = _tuple_element(node.orelse, i, n)
-        if body is None or orelse is None:
-            return None
-        return ast.IfExp(test=copy.deepcopy(node.test), body=body, orelse=orelse)
-    return None
-
-
-class _TupleTargetSplitter(ast.NodeTransformer):
-    """Rewrite ``a, b, c = <tuple-valued expr>`` into one scalar assignment per element.
-
-    C has no tuple. The frontend splices a tuple-returning helper into its call site as a SINGLE
-    expression -- a conditional selecting between tuple literals -- so the only tuple reaching emit
-    is the one that conditional yields, and the lowering splitter (which matches a bare tuple RHS)
-    leaves it alone. Every element repeats the guards; the compiler CSEs them back.
-
-    Declines when a target name is read by the RHS: the split would then bind from an already
-    updated value, and python binds every target from the old ones.
-    """
-
-    def visit_Assign(self, node: ast.Assign) -> object:
-        self.generic_visit(node)
-        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Tuple):
-            return node
-        targets = node.targets[0].elts
-        if not all(isinstance(t, ast.Name) for t in targets):
-            return node
-        names = {t.id for t in targets}
-        if any(isinstance(sub, ast.Name) and sub.id in names for sub in ast.walk(node.value)):
-            return node
-        parts = [_tuple_element(node.value, i, len(targets)) for i in range(len(targets))]
-        if any(p is None for p in parts):
-            return node
-        out: List[ast.stmt] = []
-        for target, part in zip(targets, parts):
-            stmt = ast.Assign(targets=[copy.deepcopy(target)], value=part)
-            ast.copy_location(stmt, node)
-            ast.fix_missing_locations(stmt)
-            out.append(stmt)
-        return out
-
-
 def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
     """Return (name, c_type) pairs for implicit scalar locals needing a C decl, type inferred in priority order."""
     declared: Set[str] = set()
@@ -2511,7 +2376,7 @@ def _emit_body(
     emitter.parallel = parallel
     emitter.isopar = isopar
     # Tuple targets carry no declaration and no C form; split before the locals are harvested.
-    _TupleTargetSplitter().visit(kir.tree)
+    TupleTargetSplitter().visit(kir.tree)
     zeros = kir.zeros_locals
     zeros_fills = kir.zeros_fills
     int_locals = kir.int_locals
@@ -3175,25 +3040,9 @@ _FP8_HELPERS = {
 }
 
 
-def _fp8_dtypes_used(kir: KernelIR) -> List[str]:
-    """The canonical storage-only (fp8) dtypes this kernel mentions, deduped; drives prelude injection + promote/demote."""
-    seen: List[str] = []
-    for dt in (
-        *(a.dtype for a in kir.arrays),
-        *(s.dtype for s in kir.scalars),
-        *kir.local_dtypes.values(),
-        kir.float_precision or "",
-    ):
-        if dt and dtypes.is_storage_only(dt):
-            canon = dtypes.canonical(dt)
-            if canon not in seen:
-                seen.append(canon)
-    return seen
-
-
 def _fp8_prelude(kir: KernelIR) -> str:
     """Storage typedef + conversions for each fp8 format the kernel uses; empty for a non-fp8 kernel."""
-    return "".join(_FP8_HELPERS[dt].format(ct=dtypes.c_type(dt)) for dt in _fp8_dtypes_used(kir))
+    return "".join(_FP8_HELPERS[dt].format(ct=dtypes.c_type(dt)) for dt in fp8_dtypes_used(kir))
 
 
 def _helper_return_ctype(hkir: KernelIR) -> str:
@@ -3359,21 +3208,9 @@ def emit_cpp_isopar(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     )
 
 
-def _require_parallelizable(kir: KernelIR) -> None:
-    """Refuse a kernel the parallel variant can't soundly emit: a colliding scatter, or no parallelizable loop."""
-    if parallelism.has_indirect_scatter(kir.tree):
-        raise parallelism.UnsupportedParallelError(
-            f"{kir.kernel_name}: data-dependent scatter write needs an atomic; no parallel variant"
-        )
-    if not parallelism.any_parallelizable_loop(kir.tree):
-        raise parallelism.UnsupportedParallelError(
-            f"{kir.kernel_name}: no iteration-independent or reduction loop to parallelize"
-        )
-
-
 def emit_c_omp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     """C99 with OpenMP #pragma omp parallel for on each outermost independent/reduction loop; same symbol as emit_c."""
-    _require_parallelizable(kir)
+    parallelism.require_parallelizable(kir)
     name = fn_name or f"{kir.kernel_name}_d_c"
     helpers = emit_c_helpers(kir)
     signature = _emit_signature(kir, name)
@@ -3383,7 +3220,7 @@ def emit_c_omp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
 
 def emit_cpp_omp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     """C++ counterpart of :func:`emit_c_omp` (see it); same symbol as :func:`emit_cpp`."""
-    _require_parallelizable(kir)
+    parallelism.require_parallelizable(kir)
     name = fn_name or f"{kir.kernel_name}_d"
     helpers = emit_c_helpers(kir, cpp=True)
     signature = _emit_signature(kir, name).replace("*restrict ", "*__restrict__ ")
