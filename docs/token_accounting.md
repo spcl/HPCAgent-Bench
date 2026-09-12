@@ -16,16 +16,25 @@ Neither token number is "the" number. They answer different questions and differ
 
 ## Where the raw counts come from
 
-Two collectors, one formula, both reading the agent's own stream-json transcript:
+For the Claude harness, two collectors, one formula, both reading the agent's own stream-json
+transcript:
 
 - `agent_driver.accumulate_total_tokens` -> `tokens.json`, per worker. Also what
   `AGENT_MAX_TOKENS` enforces.
 - `containers/agent/tools/http_json.transcript_tokens` -> the `tokens` column on every judge call.
-  The judge never sees the transcript, which is why served rows logged 0 before this existed.
+  The judge never sees the transcript, so without this collector a served row's `tokens` column
+  reads 0.
 
-Both keep the **last usage per `message.id`**: one assistant turn arrives as several events, each
-repeating the whole turn's usage, so summing the events multiplies a turn by its content-block
-count.
+A non-Claude harness (mini-SWE, OpenHands, optimas) writes no stream-json transcript. It writes
+`usage.jsonl` instead: one JSON object per model call with four disjoint fields (`input`,
+`cached_input`, `output`, `reasoning`), defined in `experiments/harnesses.py`. The same `tokens`
+column reads it through `$OPTARENA_USAGE_PATH` (`containers/agent/tools/http_json.py`), and
+`experiments/token_report.py` reads it for a run-level report the same way it reads a Claude
+transcript.
+
+Both stream-json collectors keep the **last usage per `message.id`**: one assistant turn arrives
+as several events, each repeating the whole turn's usage, so summing the events multiplies a turn
+by its content-block count.
 
 Three fields matter, and two of them are not where you would expect:
 
@@ -92,10 +101,10 @@ and oss120b on vLLM.
 Our own servers report a **99.3% prefix cache hit rate** on these runs, so the re-sent transcript is
 nearly free in compute while `billed` charges it in full.
 
-An earlier version of this model charged cache reads at 50%, OpenAI's published rate. That was
-wrong in unit: `cached` is a sum over turns of something that existed once, so any nonzero fraction
-prices a phantom -- and prices it in proportion to turn count, which is exactly the bias a
-cross-model comparison must not absorb.
+Charging a cache hit at any nonzero fraction (e.g. OpenAI's published 50% rate) is wrong in unit:
+`cached` is a sum over turns of something that existed once, so any nonzero fraction prices a
+phantom -- and prices it in proportion to turn count, which is exactly the bias a cross-model
+comparison must not absorb.
 
 ## The unit this setting actually pays in
 

@@ -1,12 +1,18 @@
 # Plotting
 
-Three shared modules. Each rule below exists because the failure named beside it happened here.
+How to turn a campaign's run directories into a figure: the shared modules every figure script
+imports, the extraction step, and the drawing rules each one follows. For the statistics behind
+the framework/kernel corpus figures (the speedup heatmap and the per-kernel distribution grid),
+see [measurement_statistics.md](measurement_statistics.md).
+
+Three shared modules, all under `hpcagent_bench/stats/` except `experiment_tags.py`. Each rule
+below exists because the failure named beside it happened here.
 
 | module | owns |
 |---|---|
-| `palette.py` | which colour and which SHAPE an entity wears |
-| `plotstyle.py` | everything that is never data: type, grid, legend, ticks, title |
-| `experiment_tags.py` | how a campaign, model or language is SPELLED |
+| `hpcagent_bench/stats/palette.py` | which colour and which SHAPE an entity wears |
+| `hpcagent_bench/stats/style.py` | everything that is never data: type, grid, legend, ticks, title |
+| `hpcagent_bench/experiment_tags.py` | how a campaign, model or language is SPELLED |
 
 ## Extract once, plot from the CSV
 
@@ -41,13 +47,15 @@ Each writes a PDF, a PNG, and the TABLE behind the figure -- a figure nobody can
 ## A new figure
 
 ```python
-from hpcagent_bench import experiment_tags, palette, plotstyle
+from hpcagent_bench import experiment_tags
+from hpcagent_bench.stats import palette
+from hpcagent_bench.stats import style as plotstyle
 
 plotstyle.apply()                       # BEFORE importing pyplot
 import matplotlib.pyplot as plt
 
 models = sorted(frame.model.unique())
-hues, shapes = palette.colors("model", models), palette.markers("model", models)
+hues, shapes = palette.model_colors(models), palette.model_markers(models)
 
 fig, ax = plt.subplots(figsize=(8.4, 5.2))
 for model in models:
@@ -66,16 +74,20 @@ fig.savefig("out.pdf", bbox_inches=fig.bbox_inches)
 
 ## Rules
 
-**Identity is the entity's, not the figure's.** `palette.register(kind, name)` returns
-`(colour, marker)`, keyed by name and idempotent. Indexing by a series' position meant dropping a
-column repainted the survivors, and a framework wore one hue in the heatmap and another in the
-speed-up chart. Shape is a second channel because colour alone does not survive greyscale or a
-column-width shrink. `FRAMEWORK_ORDER` / `MODEL_ORDER` are **append only** -- inserting a name
-re-colours every published figure, so an unused name keeps its slot.
+**Identity is the entity's, not the figure's.** `palette.color(name)` / `palette.colors(names)`
+(packets), `palette.model_color(name)` / `palette.model_colors(names)`, and
+`palette.framework_color(name)` / `palette.framework_colors(names)` all key by the entity's name,
+not by its position in whatever list one figure happened to hold. Indexing by position meant
+dropping a column repainted the survivors, and a framework wore one hue in the heatmap and another
+in the speed-up chart. Shape is a second channel (`palette.model_markers(names)`) because colour
+alone does not survive greyscale or a column-width shrink. Key order in
+`hpcagent_bench/envs/registry.yaml` is **append only** -- inserting a name mid-list re-colours
+every published figure already drawn (`tests/test_palette.py` pins each entity's colour so a
+reorder fails loudly), so an unused name keeps its slot.
 
-**Names come from `envs/display_names.yaml`**, not literals. Spelled at three call sites they
-disagreed, one figure saying `qwen38` where its neighbour said `Qwen3.8-27B`. Unknown tags fall
-back unchanged so a new campaign never breaks a plot; `tests/test_display_names.py` stops that
+**Names come from `hpcagent_bench/envs/registry.yaml`**, not literals. Spelled at three call sites
+they disagreed, one figure saying `qwen38` where its neighbour said `Qwen3.8-27B`. Unknown tags
+fall back unchanged so a new campaign never breaks a plot; `tests/test_display_names.py` stops that
 fallback going unnoticed by checking each model tag against the checkpoint its arms served. Serving
 details stay out of names -- `sglang` and `-FP8` are an engine and a precision, and on an axis they
 read as different models.
@@ -83,20 +95,22 @@ read as different models.
 **Log space for ratios.** A speed-up is multiplicative; on a linear axis every slow-down is crushed
 into `[0, 1)` and `0.5x` reads as smaller than `1.5x`.
 
-**The baseline is a property of the data.** `plotting.baseline_of(frame)` reads the column the
-judge stamped; `DEFAULT_BASELINE` (`numba`) is only the fallback. v9/v10 graded against C, v11 on
-against numba -- a figure that picks its own denominator plots a ratio nobody scored.
+**The baseline is a property of the data.** `hpcagent_bench.stats.figures.results.baseline_of(frame)`
+reads the column the judge stamped; `DEFAULT_BASELINE` (`numba`) is only the fallback. v9/v10 graded
+against C, v11 against numba -- a figure that picks its own denominator plots a ratio nobody scored.
 
 **Connectors are elbows, never diagonals.** The straight segment passes through coordinates that
 were never measured, and on a plot about where something landed a reader takes the path for data.
-Same reason a Pareto front is a step, and steps `where="pre"` -- both axes are good-is-up, so
-`"post"` draws the front through the dominating corner.
+`plot_score_change.py` draws the horizontal leg first, so the corner sits under the "with skills"
+mark and the vertical leg reads as the change in spend.
 
-**Draw no interval you cannot support.** A percentile bootstrap of a MEDIAN at n=2 returns the two
-data points. Measured: width 0.16 at n=2 against 0.64 at n=3-4 -- it did not shrink with n, because
-it was never measuring uncertainty. Under `MIN_INTERVAL_SAMPLES` a cell is hollow and asserts
-nothing. Where an interval would span two CONDITIONS rather than repeats of one, draw none: on
-llr40v11 all 120 token cells mixed the skills and no-skills arms.
+**Draw no interval you cannot support.** `plot_tokens.py`'s cells hold a handful of episodes drawn
+from several different arms, not repeats of one condition -- on llr40v11 every one of its 120 token
+cells mixed the skills and no-skills arms. A bootstrap interval or a scatter of those episodes would
+say nothing about sampling uncertainty there, since the spread is mostly the treatment, so it draws
+the median alone. `plot_arm_summary.py` draws no interval either: it plots locations, not a test,
+and whether a difference is real is `plot_score_change.py`'s question -- drawing the test in both
+invites reading one finding as two.
 
 **Rank statistics on these samples.** Per-kernel speed-ups are heavy-tailed and a mean in log space
 still lets one 40x kernel carry the estimate. `plot_score_change.py` uses Hodges-Lehmann with a
@@ -122,12 +136,16 @@ minor lines at wrong ratios.
 | script | figure |
 |---|---|
 | `plot_arm_summary.py` | per-arm median speed-up and spend; one x slot per LANGUAGE, models dodged inside |
-
-The speed-up in all three comes from the `submission` rows and the cost from the `call` rows, each
-reduced by `hpcagent_bench.stats.population`: the last verified submission per episode then the max
-across episodes for score, and the per-episode maximum of the cumulative token counter for cost. One
-predicate over both columns keeps only the rows that carry both, which is the call rows alone.
 | `plot_score_change.py` | speed-up against spend, two marks per arm joined by an elbow, quadrants named |
 | `plot_tokens.py` | median tokens per task, per kernel, per model |
-| `plot_speedup.py` | per-kernel signed speed-up in magnitude bands, per machine |
-| `plotting.py` | the framework heatmap, and the reader everything loads through |
+| `plot_speedup.py` | per-kernel signed speed-up in magnitude bands, per machine (see [measurement_statistics.md](measurement_statistics.md)) |
+
+The first three read the CSV this page's extraction step produces. The speed-up in each comes from
+the `submission` rows and the cost from the `call` rows, both reduced by
+`hpcagent_bench.stats.population`: the last verified submission per episode then the max across
+episodes for score, and the per-episode maximum of the cumulative token counter for cost. One
+predicate over both columns keeps only the rows that carry both, which is the call rows alone.
+
+The framework/kernel corpus figures (the speedup heatmap and the per-kernel distribution grid) read
+the results DB instead of this CSV; they are documented in
+[measurement_statistics.md](measurement_statistics.md).
