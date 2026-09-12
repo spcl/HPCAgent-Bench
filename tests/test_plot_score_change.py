@@ -57,6 +57,32 @@ DECISIVE: tuple[float, ...] = tuple(1.25 + 0.01 * k for k in range(KERNELS))
 FLAT: tuple[float, ...] = tuple(1.05 if k % 2 == 0 else 1.0 / 1.05 for k in range(KERNELS))
 
 
+def episode(arm: str, model: str, language: str, kernel: int, run: str, speedup: float, tokens: float) -> list[dict]:
+    """One episode as the judge records it: a GRADED row carrying the speed-up and no token count,
+    and a ``call`` row carrying the cumulative token count and no timings.
+
+    Two record types because the figure's two axes come off two different ones. A fixture with one
+    row carrying both is the shape that let the loader filter on ``speedup > 0 and tokens > 0`` and
+    silently keep the call rows alone.
+    """
+    common = {
+        "arm": arm,
+        "model": model,
+        "language": language,
+        "benchmark": f"k{kernel}",
+        "run_root": run,
+        "job": run,
+        "run_id": run,
+        "baseline": "numba",
+        "attempt_index": 1,
+        "ts_ms": kernel,
+    }
+    return [
+        {**common, "record": "submission", "speedup": speedup, "tokens": None},
+        {**common, "record": "call", "speedup": speedup, "tokens": tokens},
+    ]
+
+
 def observations(gains: tuple[float, ...], winner: tuple[str, str] | None) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Control and treated frames for all six cells, ``gains`` applied to ``winner`` alone.
 
@@ -69,26 +95,10 @@ def observations(gains: tuple[float, ...], winner: tuple[str, str] | None) -> tu
             for kernel in range(KERNELS):
                 treated_cell = winner is None or (model, language) == winner
                 gain = gains[kernel] if treated_cell else FLAT[kernel]
-                control.append(
-                    {
-                        "model": model,
-                        "language": language,
-                        "benchmark": f"k{kernel}",
-                        "run_id": f"{model}-{language}-{kernel}",
-                        "speedup": 2.0,
-                        "tokens": 1000.0,
-                    }
-                )
-                treated.append(
-                    {
-                        "model": model,
-                        "language": language,
-                        "benchmark": f"k{kernel}",
-                        "run_id": f"{model}-{language}-{kernel}-t",
-                        "speedup": 2.0 * gain,
-                        "tokens": 1000.0 / gain,
-                    }
-                )
+                arm = f"{model}-{language}"
+                run = f"{arm}-{kernel}"
+                control += episode(arm, model, language, kernel, run, 2.0, 1000.0)
+                treated += episode(f"{arm}-skills", model, language, kernel, f"{run}-t", 2.0 * gain, 1000.0 / gain)
     return pd.DataFrame(control), pd.DataFrame(treated)
 
 

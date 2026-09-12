@@ -107,6 +107,43 @@ def last_per_episode(frame: pd.DataFrame, order: Sequence[str]) -> pd.DataFrame:
     return frame.sort_values(list(order)).drop_duplicates(list(EPISODE_KEY), keep="last")
 
 
+def per_episode_max(frame: pd.DataFrame, column: str, keep: Sequence[str] = ()) -> pd.DataFrame:
+    """One row per episode carrying that episode's MAXIMUM of ``column``, plus ``keep``.
+
+    For a cumulative counter this is the episode's own total. ``calls.tokens`` is cumulative through
+    a call, so summing its rows counts every earlier call once per later one and inflates a long
+    repair loop quadratically; taking the maximum reads the total the episode actually reached.
+    Callers aggregate the episodes themselves, because a kernel's total spend (a SUM over its
+    episodes) and an arm's typical task cost (a MEDIAN over them) are different quantities and this
+    module will not pick one for them.
+
+    ``keep`` names columns that are constant within an episode -- the arm, the model, the condition
+    -- so a caller can group on them afterwards without a second join.
+    """
+    missing = [name for name in (column, *EPISODE_KEY, *keep) if name not in frame.columns]
+    if missing:
+        raise MixedPopulationError(f"cannot reduce episodes without {missing}")
+    return frame.groupby([*EPISODE_KEY, *keep], as_index=False)[column].max()
+
+
+def final_answers(frame: pd.DataFrame, order: Sequence[str], by: Sequence[str]) -> pd.DataFrame:
+    """The rows that are each ``by`` group's best FINAL answer, as whole rows.
+
+    The scoring policy in two steps, in one place. WITHIN an episode the LAST verified submission
+    counts, because evaluation is single-shot and a max over an episode's submissions scores
+    best-of-N attempts rather than the answer the agent stopped at; ACROSS episodes the maximum is
+    kept, because how many agents an arm runs is a property of the arm. Whole rows come back so a
+    caller can take the timings, the source path or the denominator of the row that won.
+
+    ``frame`` must be the GRADED rows. A ``call`` row carries a speed-up for a round the judge did
+    not persist, and a reduction over those is over a population no claim is about.
+    """
+    if "speedup" not in frame.columns:
+        raise MixedPopulationError("a final answer is decided by speedup; the frame carries none")
+    episodes = last_per_episode(frame[frame.speedup > 0], order)
+    return episodes.sort_values("speedup", ascending=False).drop_duplicates(list(by), keep="first")
+
+
 @dataclass(frozen=True, slots=True)
 class ArmAggregate:
     """One arm's speed-up aggregate, carrying the population it is over.

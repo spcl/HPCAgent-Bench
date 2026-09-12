@@ -162,9 +162,7 @@ def best_per_arm_kernel(subs: pd.DataFrame) -> pd.DataFrame:
     ``ablation_stats.py --dedup final``, that script's default, is the same reduction.
     """
     positive = subs[subs.speedup > 0]
-    episodes = population.last_per_episode(positive, SUBMISSION_ORDER)
-    order = episodes.sort_values("speedup", ascending=False)
-    best = order.drop_duplicates(["arm", "baseline", "benchmark"], keep="first")
+    best = population.final_answers(subs, SUBMISSION_ORDER, ("arm", "baseline", "benchmark"))
     counts = positive.groupby(["arm", "baseline", "benchmark"], as_index=False).agg(
         n_submissions=("speedup", "size"), median_speedup=("speedup", "median")
     )
@@ -344,7 +342,7 @@ def tokens_per_arm_kernel(observations: pd.DataFrame) -> pd.DataFrame:
     rows = observations[observations.record == "call"].copy()
     rows["tokens"] = pd.to_numeric(rows.tokens, errors="coerce")
     rows = rows.dropna(subset=["tokens", "arm", "benchmark"])
-    per_episode = rows.groupby([*population.EPISODE_KEY, "arm"], as_index=False).tokens.max()
+    per_episode = population.per_episode_max(rows, "tokens", keep=("arm",))
     totals = per_episode.groupby(["arm", "benchmark"], as_index=False).tokens.sum()
     return totals[totals.tokens > 0]
 

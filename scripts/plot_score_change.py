@@ -38,23 +38,24 @@ import argparse
 import math
 import pathlib
 
-
 import numpy as np
 import pandas as pd
 
 from hpcagent_bench import experiment_tags
 from hpcagent_bench.harness import efficacy
-from hpcagent_bench.stats import palette
-from hpcagent_bench.stats import summary
+from hpcagent_bench.stats import palette, population, summary
 from hpcagent_bench.stats import style as plotstyle
 
 plotstyle.apply()
-import matplotlib.pyplot as plt
-from matplotlib.ticker import FixedLocator, NullFormatter
+import matplotlib.pyplot as plt  # pyplot must follow plotstyle.apply()
 
 #: A ratio this far from 1.0 is inside the "no change" band for labelling purposes only; the star
 #: is decided by the interval, never by this.
 NEUTRAL: float = 1.0
+
+#: Order an episode's graded rows are read in. ``ts_ms`` ties when two land in the same
+#: millisecond; ``attempt_index`` breaks it in the order the agent made them.
+SUBMISSION_ORDER: tuple[str, str] = ("ts_ms", "attempt_index")
 
 #: Ticks in RATIO units on a log2 axis. Labelled as ratios, not as exponents: a reader wants to see
 #: "2x", not "1".
@@ -114,6 +115,41 @@ def ratio_with_ci(before: pd.Series, after: pd.Series, invert: bool) -> tuple[fl
     )
 
 
+def scores(frame: pd.DataFrame) -> pd.Series:
+    """One speed-up per kernel for one side of the pair: the best FINAL answer.
+
+    Read off the GRADED rows and reduced by the scoring policy
+    (:func:`hpcagent_bench.stats.population.final_answers`): within an episode the last verified
+    submission counts, and the maximum is kept across the episodes of that side. A ``call`` row
+    carries a speed-up for a round the judge never persisted, and a median over those rows -- which
+    this figure used to take -- weights a kernel by how many rounds the agent spent on it.
+    """
+    graded = frame[frame.record == "submission"]
+    if graded.empty:
+        return pd.Series(dtype=float)
+    best = population.final_answers(graded, SUBMISSION_ORDER, ("arm", "benchmark"))
+    return best.groupby("benchmark").speedup.max()
+
+
+def costs(frame: pd.DataFrame) -> pd.Series:
+    """One token spend per kernel for one side of the pair.
+
+    ``calls.tokens`` is CUMULATIVE through a call, so an episode's spend is its own maximum and a
+    kernel's is the SUM over its episodes. Summing the rows instead counts every earlier call once
+    per later one, and a median over them is a median of running totals.
+    """
+    calls = frame[frame.record == "call"].copy()
+    if calls.empty:
+        return pd.Series(dtype=float)
+    calls["tokens"] = pd.to_numeric(calls.tokens, errors="coerce")
+    calls = calls.dropna(subset=["tokens", "benchmark"])
+    if calls.empty:
+        return pd.Series(dtype=float)
+    per_episode = population.per_episode_max(calls, "tokens")
+    totals = per_episode.groupby("benchmark").tokens.sum()
+    return totals[totals > 0]
+
+
 def points(before: pd.DataFrame, after: pd.DataFrame) -> pd.DataFrame:
     """One row per (model, language) present in both experiments, with the flags corrected.
 
@@ -122,21 +158,30 @@ def points(before: pd.DataFrame, after: pd.DataFrame) -> pd.DataFrame:
     which is how twelve tests came to be thresholded one at a time. ``score_verdict`` and
     ``cost_verdict`` are the only columns a mark or a sentence may be taken from; ``score_p`` is
     the raw test and ``score_p_adjusted`` is it corrected across the family.
+
+    A leg is a (model, language) BOTH sides landed a GRADED answer for. One that appears only on
+    the call rows -- an arm that ran and never had a submission persisted -- is not a comparison and
+    is absent rather than entered at zero.
+
+    A pair is drawn inside ONE denominator. ``one_denominator`` raises rather than pooling a slice
+    whose two sides were divided by different references, because their quotient is not a
+    comparison of the two conditions.
     """
     rows = []
+    graded_before, graded_after = before[before.record == "submission"], after[after.record == "submission"]
     keys = sorted(
-        set(map(tuple, before[["model", "language"]].drop_duplicates().to_numpy()))
-        & set(map(tuple, after[["model", "language"]].drop_duplicates().to_numpy()))
+        set(map(tuple, graded_before[["model", "language"]].drop_duplicates().to_numpy()))
+        & set(map(tuple, graded_after[["model", "language"]].drop_duplicates().to_numpy()))
     )
     for model, language in keys:
         b = before[(before.model == model) & (before.language == language)]
         a = after[(after.model == model) & (after.language == language)]
-        score, s_low, s_high, s_p = ratio_with_ci(
-            summary.median_per_kernel(b, "speedup"), summary.median_per_kernel(a, "speedup"), False
-        )
-        cost, c_low, c_high, c_p = ratio_with_ci(
-            summary.median_per_kernel(b, "tokens"), summary.median_per_kernel(a, "tokens"), True
-        )
+        graded = pd.concat([b, a])
+        graded = graded[graded.record == "submission"]
+        population.one_denominator(graded.baseline.tolist(), label=f"{model}/{language}")
+        before_score, after_score = scores(b), scores(a)
+        score, s_low, s_high, s_p = ratio_with_ci(before_score, after_score, False)
+        cost, c_low, c_high, c_p = ratio_with_ci(costs(b), costs(a), True)
         rows.append(
             {
                 "model": model,
@@ -147,11 +192,7 @@ def points(before: pd.DataFrame, after: pd.DataFrame) -> pd.DataFrame:
                 "cost": cost,
                 "cost_low": c_low,
                 "cost_high": c_high,
-                "kernels": len(
-                    summary.median_per_kernel(b, "speedup").index.intersection(
-                        summary.median_per_kernel(a, "speedup").index
-                    )
-                ),
+                "kernels": len(before_score.index.intersection(after_score.index)),
                 # The raw test. The verdict columns below are what may be read as a finding, and
                 # they come from the whole family at once -- reading a threshold off one row is the
                 # multiplicity error this table exists to avoid.
@@ -358,14 +399,15 @@ def write(fig, out: pathlib.Path) -> pathlib.Path:
 def absolute_points(frame: pd.DataFrame) -> pd.DataFrame:
     """One row per (model, language, condition): median log2 speed-up and median tokens per task.
 
-    Medians over KERNELS, taken per kernel first, so a kernel one condition happened to attempt
-    more often does not weigh more heavily in that condition's summary.
+    Medians over KERNELS, over the same one-value-per-kernel reduction the paired table uses, so
+    the two panels of this figure describe one population. The speed-up is the best final answer
+    and the cost is the kernel's episode total.
     """
     rows = []
     for (model, language, skills), part in frame.groupby(["model", "language", "skills"]):
-        speed = summary.median_per_kernel(part, "speedup")
+        speed = scores(part)
         speed = speed[speed > 0]
-        tokens = summary.median_per_kernel(part, "tokens", within=("run_id",))
+        tokens = costs(part)
         tokens = tokens[tokens > 0]
         if speed.empty or tokens.empty:
             continue
@@ -399,7 +441,10 @@ def load(path: pathlib.Path, prefix: str) -> pd.DataFrame:
     frame = pd.read_csv(path, low_memory=False)
     if prefix:
         frame = frame[frame["arm"].astype(str).str.startswith(prefix)]
-    frame = frame[(frame["speedup"] > 0) & frame["tokens"].notna() & (frame["tokens"] > 0)]
+    # NO filter on speedup or tokens here. The two axes come off DIFFERENT record types -- the score
+    # from the graded submissions, the cost from the call rows that carry a token count -- and one
+    # predicate over both columns keeps only the rows that have both, which is the call rows alone.
+    # That silently dropped every graded submission and scored the figure on intermediate rounds.
     frame = frame.assign(
         model=frame["arm"].astype(str).map(experiment_tags.model_of),
         skills=frame["arm"].astype(str).str.endswith("-skills"),
