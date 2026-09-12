@@ -29,14 +29,15 @@ import sqlite3
 import subprocess
 import tempfile
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, NamedTuple, Protocol, Sequence
+from typing import NamedTuple, Protocol
 
 from hpcagent_bench import config, languages, paths
+from hpcagent_bench.frameworks.utilities import cpu_model
 from hpcagent_bench.harness.envelope import Submission
 from hpcagent_bench.harness.scoring import Score, VerifyResult, suspect_timing
 from hpcagent_bench.harness.task import Task
-from hpcagent_bench.frameworks.utilities import cpu_model
 from hpcagent_bench.spec import BenchSpec
 
 _BENCHMARKS_DDL = """
@@ -710,17 +711,25 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-#: Conflict rule for the two NATURAL-key tables: a kernel's taxonomy and a content-addressed prompt
-#: are the same fact whichever shard observed them, so they dedup on their primary key instead of
-#: multiplying. Every other table is a row log whose synthetic ``id`` collides across shards; its
-#: ids are dropped and reassigned by the destination. Tables are discovered from the shard rather
-#: than listed here, so the framework ``results`` table -- a different module's schema in the same
-#: file -- and any table added later are merged without a second list to keep in sync.
-_MERGE_VERB: dict[str, str] = {"benchmarks": "INSERT OR REPLACE", "prompts": "INSERT OR IGNORE"}
+#: Conflict rule for the NATURAL-key tables: a kernel's taxonomy, a content-addressed prompt and a
+#: run's identity are the same fact whichever shard observed them, so they dedup on their primary
+#: key instead of multiplying. ``runs`` in particular is written by upsert_run's own ``INSERT OR
+#: IGNORE`` per shard -- a run served by several ranks writes the SAME run_id into every rank's
+#: shard -- so a plain ``INSERT`` here collides on ``runs.run_id`` the moment a second shard carries
+#: that run. Every other table is a row log whose synthetic ``id`` collides across shards; its ids
+#: are dropped and reassigned by the destination. Tables are discovered from the shard rather than
+#: listed here, so the framework ``results`` table -- a different module's schema in the same file
+#: -- and any table added later are merged without a second list to keep in sync.
+_MERGE_VERB: dict[str, str] = {
+    "benchmarks": "INSERT OR REPLACE",
+    "prompts": "INSERT OR IGNORE",
+    "runs": "INSERT OR IGNORE",
+}
 
-#: ``benchmarks`` before anything that foreign-keys to it; ``prompts`` next for the same reason.
-#: The remainder is sorted, so a merge is reproducible rather than dependent on sqlite_master order.
-_MERGE_FIRST = ("benchmarks", "prompts")
+#: ``benchmarks`` before anything that foreign-keys to it; ``prompts`` and ``runs`` next for the
+#: same reason. The remainder is sorted, so a merge is reproducible rather than dependent on
+#: sqlite_master order.
+_MERGE_FIRST = ("benchmarks", "prompts", "runs")
 
 
 def _shard_tables(conn: sqlite3.Connection) -> list[tuple[str, str]]:
@@ -887,7 +896,7 @@ def ensure_aggregated(path: str | None = None) -> str:
 
 def upsert_benchmark(conn: sqlite3.Connection, spec: BenchSpec) -> None:
     """Record the kernel's taxonomy once (normalized dimension the rows FK to)."""
-    reasoning: dict[str, Any] = spec.loop_level_reasoning or {}
+    reasoning: dict[str, str] = spec.loop_level_reasoning or {}
     source: str | None = reasoning.get("source")
     conn.execute(
         "INSERT OR REPLACE INTO benchmarks(name, track, dwarf, source) VALUES (?,?,?,?)",
@@ -899,7 +908,9 @@ def upsert_benchmark(conn: sqlite3.Connection, spec: BenchSpec) -> None:
 def _commit_sha() -> str | None:
     """Best-effort current git commit (provenance); ``None`` outside a repo."""
     try:
-        out = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, timeout=5)
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, timeout=5, check=False
+        )
         if out.returncode != 0:
             return None
         return out.stdout.strip() or None
@@ -1014,7 +1025,11 @@ def row_sql(table: str, row: Row, omit: frozenset[str] = frozenset()) -> str:
     return f"INSERT INTO {table}({', '.join(columns)}) VALUES ({','.join('?' * len(columns))})"
 
 
-def row_params(row: Row, omit: frozenset[str] = frozenset()) -> tuple[Any, ...]:
+#: What a SQLite bind parameter may be -- every field of :data:`Row` is one of these.
+SqlParam = str | int | float | None
+
+
+def row_params(row: Row, omit: frozenset[str] = frozenset()) -> tuple[SqlParam, ...]:
     """``row``'s values, in the order :func:`row_sql` names the columns."""
     names = [f.name for f in dataclasses.fields(row)]
     return tuple(value for name, value in zip(names, dataclasses.astuple(row)) if name not in omit)
