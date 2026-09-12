@@ -2,11 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
-import inspect
 import importlib
 import importlib.metadata
-import numpy as np
-import pathlib
+import inspect
 import time
 from collections.abc import Callable, Mapping, Sequence
 from types import ModuleType
@@ -16,11 +14,13 @@ from typing import (
     NotRequired,
     Protocol,
     Self,
-    TypeGuard,
     TypedDict,
+    TypeGuard,
     TypeVar,
     runtime_checkable,
 )
+
+import numpy as np
 
 from hpcagent_bench import config, precision
 from hpcagent_bench.frameworks import Benchmark
@@ -291,7 +291,7 @@ class Timer:
     free_timer. Holds only state; ``state`` carries the device event pair a GPU framework records
     into, and is None for the default host clock (DaCe reads its native time off the SDFG report)."""
 
-    __slots__ = ("program", "t0", "state")
+    __slots__ = ("program", "state", "t0")
 
     def __init__(self, program: KernelImpl) -> None:
         self.program = program
@@ -344,6 +344,7 @@ FrameworkMeta = TypedDict(
     "FrameworkMeta",
     {
         "base": str,
+        "sweep_deterministic": bool,
         "full_name": str,
         "prefix": str,
         "postfix": str,
@@ -365,9 +366,12 @@ FrameworkMeta = TypedDict(
 #: :class:`Framework` subclass via :func:`framework_class`. ``arch`` is cpu/gpu; ``postfix`` selects the
 #: impl file; ``precisions`` is the set the flavor can execute (else the sweep records status="skip").
 #: native/pluto flavors also carry ``language``/``compiler``, plus a ``flags`` preset for polly/pluto.
+#: ``sweep_deterministic`` is what a deterministic (unjudged, no-agent) sweep may select
+#: (:func:`hpcagent_bench.harness.preflight.check_deterministic` derives its column list from it).
 FRAMEWORK_META: dict[str, FrameworkMeta] = {
     "numpy": {
         "base": "numpy",
+        "sweep_deterministic": True,
         "full_name": "NumPy",
         "prefix": "np",
         "postfix": "numpy",
@@ -376,6 +380,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     },
     "numba": {
         "base": "numba",
+        "sweep_deterministic": False,
         "full_name": "Numba",
         "prefix": "nb",
         "postfix": "numba",
@@ -384,6 +389,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     },
     "cupy": {
         "base": "cupy",
+        "sweep_deterministic": False,
         "full_name": "CuPy",
         "prefix": "cp",
         "postfix": "cupy",
@@ -392,6 +398,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     },
     "jax": {
         "base": "jax",
+        "sweep_deterministic": False,
         "full_name": "Jax",
         "prefix": "jax",
         "postfix": "jax",
@@ -400,6 +407,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     },
     "pythran": {
         "base": "pythran",
+        "sweep_deterministic": False,
         "full_name": "Pythran",
         "prefix": "pt",
         "postfix": "pythran",
@@ -417,6 +425,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     # the column happened to pick.
     "dace_cpu": {
         "base": "dace",
+        "sweep_deterministic": True,
         "full_name": "DaCe CPU",
         "prefix": "dc",
         "postfix": "dace",
@@ -426,6 +435,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     },
     "dace_gpu": {
         "base": "dace",
+        "sweep_deterministic": True,
         "full_name": "DaCe GPU",
         "prefix": "dc",
         "postfix": "dace",
@@ -440,6 +450,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     # better" from "the fork's DaCe is different".
     "dace_cpu_autoopt": {
         "base": "dace",
+        "sweep_deterministic": True,
         "full_name": "DaCe CPU auto_optimize",
         "prefix": "dc",
         "postfix": "dace",
@@ -451,6 +462,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     },
     "dace_gpu_autoopt": {
         "base": "dace",
+        "sweep_deterministic": True,
         "full_name": "DaCe GPU auto_optimize",
         "prefix": "dc",
         "postfix": "dace",
@@ -462,6 +474,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     },
     "dace_cpu_canonicalize": {
         "base": "dace",
+        "sweep_deterministic": True,
         "full_name": "DaCe CPU canonicalize",
         "prefix": "dc",
         "postfix": "dace",
@@ -473,6 +486,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     },
     "dace_gpu_canonicalize": {
         "base": "dace",
+        "sweep_deterministic": True,
         "full_name": "DaCe GPU canonicalize",
         "prefix": "dc",
         "postfix": "dace",
@@ -487,6 +501,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     # base (a source-to-source toolchain compiling a different generated source).
     "cc": {
         "base": "native",
+        "sweep_deterministic": True,
         "full_name": "C (gcc)",
         "prefix": "cc",
         "postfix": "cpp",
@@ -498,6 +513,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     # gcc's auto-parallelizer, the GCC half of the autopar axis clang already had via polly.
     "cc_autopar": {
         "base": "native",
+        "sweep_deterministic": True,
         "full_name": "C autopar (gcc)",
         "prefix": "cc_autopar",
         "postfix": "cpp",
@@ -518,6 +534,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     # parallel name. Seven variants, not eight, and the methodology says why.
     "cc_llvm": {
         "base": "native",
+        "sweep_deterministic": False,
         "full_name": "C (clang)",
         "prefix": "cc_llvm",
         "postfix": "cpp",
@@ -528,6 +545,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     },
     "cc_llvm_autopar": {
         "base": "native",
+        "sweep_deterministic": False,
         "full_name": "C Polly (clang)",
         "prefix": "cc_llvm_autopar",
         "postfix": "cpp",
@@ -539,6 +557,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     },
     "cc_oneapi": {
         "base": "native",
+        "sweep_deterministic": False,
         "full_name": "C (icx)",
         "prefix": "cc_oneapi",
         "postfix": "cpp",
@@ -549,6 +568,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     },
     "cc_nvhpc": {
         "base": "native",
+        "sweep_deterministic": False,
         "full_name": "C (nvc)",
         "prefix": "cc_nvhpc",
         "postfix": "cpp",
@@ -559,6 +579,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     },
     "cc_nvhpc_autopar": {
         "base": "native",
+        "sweep_deterministic": False,
         "full_name": "C autopar (nvc)",
         "prefix": "cc_nvhpc_autopar",
         "postfix": "cpp",
@@ -570,6 +591,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     },
     "llvm": {
         "base": "native",
+        "sweep_deterministic": True,
         "full_name": "C++ (clang)",
         "prefix": "llvm",
         "postfix": "cpp",
@@ -584,6 +606,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     # this entry is what makes gcc/g++/gfortran a complete set for one family.
     "cpp": {
         "base": "native",
+        "sweep_deterministic": True,
         "full_name": "C++ (g++)",
         "prefix": "cpp",
         "postfix": "cpp",
@@ -594,6 +617,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     },
     "fortran": {
         "base": "native",
+        "sweep_deterministic": True,
         "full_name": "Fortran (gfortran)",
         "prefix": "fortran",
         "postfix": "cpp",
@@ -605,6 +629,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     # The Fortran half of the autopar axis (same emitted Fortran as "fortran", autopar flags differ).
     "fortran_autopar": {
         "base": "native",
+        "sweep_deterministic": True,
         "full_name": "Fortran autopar (gfortran)",
         "prefix": "fortran_autopar",
         "postfix": "cpp",
@@ -617,6 +642,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     # LLVM Fortran, the flang half of the gfortran/flang pair (declines cleanly if the driver is absent).
     "flang": {
         "base": "native",
+        "sweep_deterministic": True,
         "full_name": "Fortran (flang)",
         "prefix": "flang",
         "postfix": "cpp",
@@ -627,6 +653,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     },
     "polly": {
         "base": "native",
+        "sweep_deterministic": True,
         "full_name": "C++ Polly (clang)",
         "prefix": "polly",
         "postfix": "cpp",
@@ -642,6 +669,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     # CPU number with a GPU one.
     "pluto": {
         "base": "pluto",
+        "sweep_deterministic": True,
         "full_name": "Polyhedral CPU (Pluto)",
         "prefix": "pluto",
         "postfix": "cpp",
@@ -653,6 +681,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     },
     "ppcg": {
         "base": "pluto",
+        "sweep_deterministic": False,
         "full_name": "Polyhedral GPU (PPCG)",
         "prefix": "ppcg",
         "postfix": "cpp",
@@ -672,6 +701,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     # would rather ask whatever is installed.
     "ppcg_cuda": {
         "base": "pluto",
+        "sweep_deterministic": False,
         "full_name": "Polyhedral GPU (PPCG, CUDA)",
         "prefix": "ppcg_cuda",
         "postfix": "cpp",
@@ -686,6 +716,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     # compilers.yaml, so it is the only thing that needs stating.
     "ppcg_hip": {
         "base": "pluto",
+        "sweep_deterministic": False,
         "full_name": "Polyhedral GPU (PPCG, HIP)",
         "prefix": "ppcg_hip",
         "postfix": "cpp",
@@ -697,6 +728,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     },
     "triton": {
         "base": "triton",
+        "sweep_deterministic": False,
         "full_name": "Triton",
         "prefix": "tr",
         "postfix": "triton",
@@ -715,7 +747,8 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     # TVM: one base, two hardware flavors (distinct impl files -> distinct postfix).
     "tvm": {
         "base": "tvm",
-        "full_name": "tvm",
+        "sweep_deterministic": False,
+        "full_name": "TVM",
         "prefix": "tvm",
         "postfix": "tvm",
         "arch": "gpu",
@@ -723,7 +756,8 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     },
     "tvm_cpu": {
         "base": "tvm",
-        "full_name": "tvm_cpu",
+        "sweep_deterministic": False,
+        "full_name": "TVM (CPU)",
         "prefix": "tvm_cpu",
         "postfix": "tvm_cpu",
         "arch": "cpu",
@@ -790,14 +824,14 @@ def framework_class(fname: str) -> type[Framework]:
     """Map a framework name to its :class:`Framework` subclass via its ``base`` (imported lazily to
     dodge the circular import)."""
     from hpcagent_bench.frameworks import (
-        Framework,
-        NumbaFramework,
         CupyFramework,
-        JaxFramework,
-        PythranFramework,
         DaceFramework,
+        Framework,
+        JaxFramework,
         NativeFramework,
+        NumbaFramework,
         PlutoFramework,
+        PythranFramework,
         TritonFramework,
         TVMFramework,
     )
@@ -819,7 +853,7 @@ def framework_class(fname: str) -> type[Framework]:
     return base_class[FRAMEWORK_META[fname]["base"]]
 
 
-class Framework(object):
+class Framework:
     """Base per-backend adapter: default implementations()/call_args()/timing hooks a subclass overrides
     per flavor; used directly (unsubclassed) for the numpy flavor -- see :data:`FRAMEWORK_META`."""
 
@@ -863,15 +897,6 @@ class Framework(object):
         """Returns the copy-method used for copying benchmark outputs back to the host."""
         return lambda x: x
 
-    def impl_files(self, bench: Benchmark) -> Sequence[tuple[pathlib.Path, str]]:
-        """Returns the framework's implementation files for ``bench``."""
-
-        package_dir = pathlib.Path(__file__).parent.parent.absolute()  # hpcagent_bench/
-        pymod_path = package_dir.joinpath(
-            "benchmarks", bench.info["relative_path"], f"{bench.info['module_name']}_{self.info['postfix']}.py"
-        )
-        return [(pymod_path, "default")]
-
     def autogen_targets(self) -> Sequence[str]:
         """Sibling targets this framework can auto-generate from the numpy reference when its impl file
         is missing; default empty (hand-written/native frameworks are not auto-generated here)."""
@@ -914,7 +939,7 @@ class Framework(object):
     def after_setup(self) -> None:
         """Hook run after the fresh input copies, outside the timed bracket (default no-op);
         override e.g. to sync a device stream before timing starts (cupy)."""
-        return None
+        return
 
     def call_args(
         self, bench: Benchmark, impl: KernelImpl, resolved: dict[str, ArgValue], bdata: BenchData
@@ -1039,7 +1064,7 @@ class Framework(object):
 
     def free_timer(self, timer: Timer) -> None:
         """Release timer state after the repeat loop (default no-op)."""
-        return None
+        return
 
     def measure(
         self,
