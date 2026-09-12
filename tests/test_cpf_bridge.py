@@ -30,6 +30,7 @@ import tempfile
 import types
 
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
@@ -38,6 +39,9 @@ from hpcagent_bench import cpf_bridge, cpf_cache, languages, paths
 from hpcagent_bench.harness.native_call import _call_native
 from hpcagent_bench.spec import BenchSpec
 from hpcagent_bench.support.bindings.contract import binding_from_spec
+
+if TYPE_CHECKING:
+    from dace import SDFG
 
 #: The kernel under test, and the extent its symbolic dimension is rendered at.
 KERNEL = "arc_distance"
@@ -356,3 +360,93 @@ def test_the_entry_program_resolves_when_the_module_holds_several() -> None:
     helpers = module_of(HELPER_PROGRAM_SOURCE)
     assert entry_name(helpers, "vexx_k") == "vexx_all_paths"
     assert entry_name(helpers, "vexx_k", "vexx_all_paths") == "vexx_all_paths"
+
+
+#: An impl whose entry writes its output in place and ALSO returns it, the shape ``examinimd`` has,
+#: next to one that returns a value no argument holds.
+RETURNING_PROGRAM_SOURCE = """
+import dace as dc
+
+N = dc.symbol("N", dtype=dc.int64, positive=True)
+
+
+@dc.program
+def returns_output(a: dc.float64[N], b: dc.float64[N]):
+    b[:] = a * 2.0
+    return b
+
+
+@dc.program
+def returns_computed(a: dc.float64[N], b: dc.float64[N]):
+    b[:] = a * 2.0
+    return a + b
+"""
+
+
+def returning_spec() -> BenchSpec:
+    """A real spec for ``(a, b)`` over ``N``: ``a`` read, ``b`` written in place, ``N`` the size symbol."""
+    return BenchSpec(
+        short_name="returns",
+        name="returns",
+        relative_path="stub/returns",
+        module_name="returns",
+        func_name="returns_output",
+        parameters={"S": {"N": EXTENT}},
+        input_args=("N",),
+        array_args=("a", "b"),
+        output_args=("b",),
+    )
+
+
+def canonical_program(entry: str, work: pathlib.Path) -> "SDFG":
+    """``entry`` from :data:`RETURNING_PROGRAM_SOURCE`, parsed and canonicalized for the cpu.
+
+    Imported from a real file: the dace frontend reads a program's source back through ``inspect``,
+    which an ``exec``-ed module cannot answer.
+    """
+    path = work / "returning_dace.py"
+    path.write_text(RETURNING_PROGRAM_SOURCE)
+    loader = importlib.util.spec_from_file_location("returning_dace", path)
+    assert loader is not None and loader.loader is not None
+    module = importlib.util.module_from_spec(loader)
+    loader.loader.exec_module(module)
+    prog = cpf_bridge.resolve_program(module, path, entry)
+    assert prog is not None
+    sdfg = prog.to_sdfg(simplify=True)
+    cpf_bridge.canonicalize_for(sdfg, "cpu")
+    return sdfg
+
+
+@pytest.mark.integration
+def test_a_dropin_of_a_kernel_that_returns_its_output_takes_the_abi_and_runs(tmp_path: pathlib.Path) -> None:
+    """``return b`` after writing ``b`` in place hands the caller nothing it does not already hold, so
+    the native ABI has no return slot. DaCe still gives the value its own out-parameter ``__return``,
+    and a drop-in that kept it could not be rendered in the ABI order at all. The rendered signature
+    must be the ABI exactly, and the harness's own caller must read the output back through it."""
+    spec = returning_spec()
+    native = binding_from_spec(spec)
+    abi = [a.name for a in native.args] + ["workspace", "workspace_size"]
+    form = cpf_bridge.render_canonical(
+        spec, spec.short_name, canonical_program("returns_output", tmp_path), "c", "fp64", "cpu", True
+    )
+    assert form.entry == native.symbol
+    assert declared_parameters(form.code, form.entry) == abi
+    assert [arg["name"] for arg in json.loads(form.binding)["args"]] == abi
+
+    source = tmp_path / form.name
+    source.write_text(form.code)
+    library = build_dropin(source, tmp_path)
+    a = np.random.default_rng(0).random(EXTENT)
+    outs, _, _ = _call_native(library, native, {"a": a, "b": np.zeros(EXTENT), "N": EXTENT}, "c", workspace_bytes="8*N")
+    np.testing.assert_allclose(outs["b"], 2.0 * a, rtol=1e-12, atol=0.0)
+
+
+@pytest.mark.integration
+def test_a_dropin_refuses_a_returned_value_no_argument_holds(tmp_path: pathlib.Path) -> None:
+    """``return a + b`` is a result only ``__return`` carries; a drop-in without that slot would link,
+    run and lose it, so the ordered render must still refuse and name the slot."""
+    spec = returning_spec()
+    with pytest.raises(ValueError, match="__return"):
+        cpf_bridge.render_canonical(
+            spec, spec.short_name, canonical_program("returns_computed", tmp_path), "c", "fp64", "cpu", True
+        )

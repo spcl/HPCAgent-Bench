@@ -104,6 +104,29 @@ def test_a_command_outlives_the_judge_timeout(harness) -> None:
     assert harness.miniswe.command_timeout({}) > 300
 
 
+# ---------------------------------------------------------------------------------------------------
+# mini-SWE's LocalEnvironment runs commands through bash, not the platform shell
+
+
+def run_as_local_environment(harness: types.SimpleNamespace, command: str) -> subprocess.CompletedProcess[str]:
+    """The wrapped command through ``shell=True``, the way mini-SWE's ``LocalEnvironment`` runs it."""
+    wrapped = harness.miniswe.bash_command(command)
+    return subprocess.run(wrapped, shell=True, capture_output=True, text=True, check=False, timeout=30)
+
+
+def test_a_miniswe_command_runs_under_bash(harness: types.SimpleNamespace) -> None:
+    """dash rejected ``time`` (rc 127) and ``[[ ]]`` in smoke 634022."""
+    result = run_as_local_environment(harness, '[[ 1 == 1 ]] && time true && echo "bash=${BASH_VERSION}"')
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.startswith("bash=") and result.stdout.strip() != "bash="
+
+
+def test_a_miniswe_command_keeps_its_quoting_and_exit_code(harness: types.SimpleNamespace) -> None:
+    command = "x='a b'\nprintf '%s|' \"$x\" \"it's\" $'tab\\there'\nexit 3"
+    result = run_as_local_environment(harness, command)
+    assert (result.returncode, result.stdout) == (3, "a b|it's|tab\there|")
+
+
 def test_the_miniswe_config_sets_no_budget_of_its_own(harness) -> None:
     """The driver owns wall clock and tokens; a limit here would end episodes the driver thinks are live."""
     config = yaml.safe_load(harness.miniswe.CONFIG.read_text(encoding="utf-8"))

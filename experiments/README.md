@@ -502,9 +502,11 @@ with no assigned problems exits successfully.
 7. When the agent step finishes, the orchestrator returns its status and its
    exit trap terminates the vLLM and judge steps.
 
-The role steps use `--exclusive` and `--kill-on-bad-exit=1`. A service failure
-therefore fails its Slurm step rather than leaving a partial role silently
-running. Cancel the full allocation with:
+The role steps use `--exclusive`. The inference and judge steps also use
+`--kill-on-bad-exit=1`, so a service failure fails its Slurm step rather than
+leaving a partial role silently running. The agent step uses
+`--kill-on-bad-exit=0`: one agent node's exit status does not end the agents
+on the other nodes. Cancel the full allocation with:
 
 ```bash
 scancel <job-id>
