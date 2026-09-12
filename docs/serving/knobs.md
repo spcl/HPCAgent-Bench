@@ -13,14 +13,13 @@ measured on one model lives on that model's page instead:
 A knob measured on two models with different answers appears on both pages with both numbers. It is
 not averaged into one claim here.
 
-**Every number carries the date it was measured.** A serving number ages: the engine, the ROCm
-build and the image all move. A number from three months ago is a hypothesis, not a fact. Re-measure
-before you build a decision on anything below that is more than a couple of months old. Where a
-claim survives only as a comment in a configuration file, with no measurement artefact left on
+A serving number ages: the engine, the ROCm build and the image all move. Treat a number you cannot
+reproduce today as a hypothesis, not a fact, and re-measure before building a decision on it. Where
+a claim survives only as a comment in a configuration file, with no measurement artefact left on
 disk, this documentation says so.
 
-**How to read a measurement.** Node-to-node throughput spread on Beverin is about **30%** (measured
-2026-09-04), so a single-shot A/B across two nodes cannot resolve anything under about 1.3x. Every
+**How to read a measurement.** Node-to-node throughput spread on Beverin is about **30%**, so a
+single-shot A/B across two nodes cannot resolve anything under about 1.3x. Every
 comparison in this folder that quotes a ratio was run **back to back on one node**. Throughput
 numbers come from a load of 20 or 40 long-lived streams that re-send a growing conversation, because
 that is the only regime in which the cache knobs are visible at all: a cold one-shot smoke reports
@@ -41,7 +40,7 @@ that break the intuition from discrete GPUs:
    set by the weights, and at pipeline depth `pp` each stage holds `1/pp` of them. Halve the node
    count and each stage holds twice as much; the floor can then exceed the value you set, and
    SGLang refuses at startup with a "minimum viable = ..." message. **The fix for that message is
-   more nodes, not a bigger fraction** (measured 2026-09-02). Per-model floors and the exact values
+   more nodes, not a bigger fraction**. Per-model floors and the exact values
    in use are on the model pages.
 3. **Spilling KV to "host memory" spills it into the same pool.** See HiCache below. There is no
    second tier here.
@@ -141,11 +140,11 @@ Elsewhere, hierarchical caching mirrors the KV cache into host RAM so evicted pr
 back instead of recomputed -- trading cheap host memory for expensive device memory. On an APU,
 host memory **is** the pool the KV cache and the weights already live in. `--hicache-ratio 2.0`
 therefore offloads nothing: it allocates a second copy of the KV cache in the same physical memory,
-so every cached token costs twice. The server dies to the host OOM killer with no traceback
-(measured 2026-09-03).
+so every cached token costs twice. The server dies to the host OOM killer with no traceback.
 
-Nothing in the repository's current configurations sets it. Older launch lines that do -- including
-one snapshot in `containers/cluster/ce-images/IMAGE_REQUIREMENTS.md` -- are superseded.
+None of the `.env.base-*` files in `experiments/` set it. One example launch line in
+`containers/cluster/ce-images/IMAGE_REQUIREMENTS.md` still shows it; that line is not a
+configuration this repository runs.
 
 ## Both parsers, always
 
@@ -155,7 +154,7 @@ most common way to get a server that looks healthy and is not.
 Name only one and the server starts normally. Then the first request that uses the other feature
 fails -- in some builds with a 400 that the calling client records as a success, in others with the
 model's tool call arriving as prose describing the call rather than a structured `tool_calls` entry.
-Nothing in the server log says "parser". Observed repeatedly since 2026-08-20.
+Nothing in the server log says "parser". Observed repeatedly.
 
 **Verify rather than assume.** Send one request carrying a tool schema and assert that
 `choices[0].message.tool_calls[0]` exists and that `reasoning_content` is non-empty. A server that
@@ -168,7 +167,7 @@ The parser names are per model and are listed on each model's page.
 
 **Use pipeline parallelism only when the model does not fit in one node.**
 
-**`pp=4` costs about 42% of engine time to stalls** (measured 2026-08-30). For a model that already
+**`pp=4` costs about 42% of engine time to stalls.** For a model that already
 fits in a node, splitting it adds a network hop per token and buys nothing. For a model that does
 not fit, that cost is the price of serving it at all.
 
@@ -176,7 +175,7 @@ not fit, that cost is the price of serving it at all.
 Each replica binds the same port on its own hostname and holds its own KV cache. That multiplies
 aggregate throughput and does nothing for a single conversation; the client must spread load itself.
 
-**One client per server beats several** on the large models (measured 2026-08-28): four clients
+**One client per server beats several** on the large models: four clients
 against one Kimi K2.7 endpoint produced less useful work than one, because they compete for the same
 KV pool and evict each other's prefixes. If you have four nodes and four users, four one-node
 servers beat one four-node server -- when the model fits.
@@ -186,18 +185,15 @@ servers beat one four-node server -- when the model fits.
 These apply only to a server split across nodes.
 
 - **`NCCL_NET_GDR_LEVEL=0`.** RCCL enables GPU-direct RDMA by itself. On this fabric it silently
-  corrupts cross-node collectives -- wrong sums, not an error (measured 2026-08-25). Note the
+  corrupts cross-node collectives -- wrong sums, not an error. Note the
   variable name: `NCCL_NET_GDR_LEVEL`, not `NCCL_GDR_LEVEL`.
 - **Do not disable PyNCCL to work around a collective problem.** It costs about 20x: without it
   every collective goes through a path that is not graph-capturable, so graph capture stalls, eager
-  mode goes on, and decode drops from about 17 tok/s per request to 1.4 on the same topology
-  (measured 2026-08-24).
+  mode goes on, and decode drops from about 17 tok/s per request to 1.4 on the same topology.
 - **Confirm the fabric is actually being used.** `grep -a "Using network" server-0.log` should say
   `AWS Libfabric`. A line like `NET/Plugin: Could not find: libnccl-net.so` means RCCL fell back to
   TCP: correct answers, several times slower, no error. The EDFs in this repository enable the three
-  CE hooks that prevent this, verified on an unmodified image 2026-09-09. Before that date the
-  SGLang EDF carried only one of them and could not serve multi-node at all -- if you are reading an
-  older note that says so, it is out of date.
+  CE hooks that prevent this.
 - **`--pre-warm-nccl`** initialises the collective library at startup instead of on the first
   request. Set on the multi-node recipes. It moves a cost rather than removing one, but it moves it
   out of the first user's latency.
@@ -214,7 +210,7 @@ These apply only to a server split across nodes.
 | `SGLANG_SET_CPU_AFFINITY` | `0` | SGLang's own pinning is rejected by the Slurm cgroup here and the process dies on a `psutil` error. |
 | `AITER_JIT_DIR`, `AITER_ROOT_DIR` | a persistent path, or the image's baked one | aiter ships no prebuilt objects and JIT-builds on first **use**, not on import, behind a lock. Cold, that build can outrun the engine's watchdog and the server never serves a token. Warm, it costs nothing. Some aiter code paths ignore `AITER_JIT_DIR` and use `$HOME` instead, so point `HOME` somewhere persistent too. |
 | `TRITON_CACHE_DIR` | a persistent path | Unset, it defaults under `$HOME` and every job re-JITs every kernel -- *during inference*, not at startup. Generation then arrives in bursts between total stalls. |
-| `HF_HOME` | on `iopsstor`, not `capstor` | Checkpoint loading is many concurrent large reads: 9.45 GB/s against 0.83 at 16 readers (measured 2026-08-26). Also set a wide Lustre stripe on the hub directory, or a download lands on one storage target and reads back at that one target's bandwidth. |
+| `HF_HOME` | on `iopsstor`, not `capstor` | Checkpoint loading is many concurrent large reads: 9.45 GB/s against 0.83 at 16 readers. Also set a wide Lustre stripe on the hub directory, or a download lands on one storage target and reads back at that one target's bandwidth. |
 | `NCCL_NET_GDR_LEVEL` | `0` | Multi-node only; see above. |
 | `TOKENIZERS_PARALLELISM` | `false` | Silences a fork warning; no measured effect. |
 
@@ -234,7 +230,7 @@ These apply only to a server split across nodes.
 | `--partition` | `mi300` | The default partition is `mi200`: different hardware, none of this applies. |
 | `--account` | **omit** | The default association works. Naming one splits otherwise identical jobs across project accounts. |
 | `--mem=0` | always | A step's memory cgroup is sized from its CPU share. Without this the server is capped far below the node and dies during weight load. |
-| `--cpus-per-task` | `${SLURM_CPUS_ON_NODE}` for the server | A step that does not ask gets **one** core of 192. The server then degrades with load rather than failing: 2 s per decode step early, 147 s after half an hour, with nothing queued. Measured against 88-91 tok/s for the same model with the CPUs it needs (2026-08-31). Give a client or probe running alongside one socket instead: `--cpus-per-task=24 --hint=nomultithread`. See the README for the full account. |
+| `--cpus-per-task` | `${SLURM_CPUS_ON_NODE}` for the server | A step that does not ask gets **one** core of 192. The server then degrades with load rather than failing: 2 s per decode step early, 147 s after half an hour, with nothing queued. Measured against 88-91 tok/s for the same model with the CPUs it needs. Give a client or probe running alongside one socket instead: `--cpus-per-task=24 --hint=nomultithread`. See the README for the full account. |
 | `--gpus-per-node` | `4` | Every recipe here is tensor-parallel 4 inside a node. |
 | `ulimit -c 0` | in the script | Beverin's `core_pattern` is machine-global; a crash otherwise drops a zero-byte stub in the working directory. Slurm propagates the limit to steps. |
 

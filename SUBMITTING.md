@@ -1,15 +1,16 @@
 # Submitting a campaign on Beverin
 
-Every command below runs from `experiments/`.
+Node budget, arm sizing, and how to watch and cancel a running campaign. Every command below runs
+from `experiments/`.
 
 ```bash
 cd experiments
 ```
 
-The live campaign is `llr8`: the `llr-focus40` tag (40 kernels, one agent each) crossed over two
-models and two languages, in two legs -- base prompt, and hints plus the per-language skills
-packet. See `experiments/README.md` for what an arm IS; this page is how to
-put one on the machine.
+An arm is one `.env.<arm>` file: role sizes, the problems list, the language and the treatment all
+come from it. See [`experiments/README.md`](experiments/README.md) for what an arm is and how the
+role split works, and [`experiments/AMD-SUBMISSION.md`](experiments/AMD-SUBMISSION.md) for the
+current `submit-<family>.sh` scripts and `run_campaign.sh`, which this page assumes.
 
 ## Node budget
 
@@ -17,71 +18,51 @@ Hard ceiling: **36 nodes in flight**, agreed with the team sharing the machine.
 
 | model | nodes per arm | why |
 |---|---|---|
-| qwen30b | 6 | 1 inference + 1 agent + 4 judge |
+| qwen38 | 6 | 1 inference + 1 agent + 4 judge |
 | oss120b | 8 | 1 inference + 1 agent + 6 judge |
 
-`JUDGE_NODES` is sized from the measured grading rate, not picked: judges >= agents x
-grades-per-agent-per-hour / 30. One judge node runs `JUDGES_PER_NODE` judges, one per socket.
+`JUDGE_NODES` is sized from the measured grading rate, not picked, and the unit is nodes, not
+judges: a node runs `JUDGES_PER_NODE` judges, one per socket.
+
+    JUDGE_NODES = ceil(peak grades-per-hour / (170 x JUDGES_PER_NODE)), minimum 1
+
+170 is one rank's measured rate with headroom: a grade compiles, runs and times a submission in
+16-21s, so a rank sustains around 200 grades per hour.
 
 **Never pass `--nodes` yourself.** `arm_nodes.sh` derives it from the arm's own `.env`, and
 `beverin.sbatch` exits 2 before the run starts if the allocation disagrees with
 `INFERENCE_NODES + AGENT_NODES + JUDGE_NODES`.
 
-**No `--account` on beverin.** The user default association is `root`, and `root`, `a-g200` and
-`a-g34` all carry QOS `normal` with no GrpTRES, MaxJobs, MaxSubmit, MaxTRES or priority set --
-measured, and a 2-node accountless job allocated and ran (600940). Omitting the flag costs nothing
-in scheduling and stops jobs from silently splitting across two project accounts depending on
+**No `--account` on beverin.** Every association carries the same QOS, so naming one costs nothing
+in scheduling and only risks jobs silently splitting across two project accounts depending on
 which command line was typed.
 
 ## Submitting
 
-One script. `MODEL` names the family and therefore the env files
-(`.env.llr8-<MODEL>-<lang>[-skills]`). Extra arguments pass through to `sbatch` verbatim.
+Each campaign family owns a `submit-<family>.sh` script in `experiments/` that builds or points at
+a problem list, picks the `.env.<arm>` files for its arms, and submits each through
+`beverin.sbatch`; `run_campaign.sh <variant> [sbatch args...]` is the generic single-arm entry
+point several of them use. Read the header comment of the script you are running for its exact
+knobs (model, language, leg) and see
+[`experiments/AMD-SUBMISSION.md`](experiments/AMD-SUBMISSION.md) for the current family list.
 
-| knob | values | default |
-|---|---|---|
-| `MODEL` | `qwen30b` `oss120b` | **required** |
-| `LANGS` | `c` `fortran`, space separated | both |
-| `LEGS` | `1` (base) `2` (skills) | both |
-| `TIME` | wall clock | `08:00:00` |
-| `CAMPAIGN` | job-name prefix | `llr8` |
+To submit one arm directly against an existing `.env.<arm>` file:
 
 ```bash
-MODEL=qwen30b ./submit-llr8.sh --partition=mi300     # 4 arms, peaks at 12 nodes
-MODEL=oss120b ./submit-llr8.sh --partition=mi300     # 4 arms, peaks at 16 nodes
-```
-
-Both models together is 28 nodes at peak, inside the ceiling. Within a leg the languages are
-chained `--dependency=afterany`, so at most one language of each leg holds nodes -- the pair costs
-wall clock instead of nodes. `afterany`, never `afterok`: an arm that dies still leaves a usable
-judge DB and you want the pair either way.
-
-Narrow it to one arm by naming the slice:
-
-```bash
-LANGS=c LEGS=1 MODEL=qwen30b ./submit-llr8.sh --partition=mi300
+sbatch --nodes="$(. ./arm_nodes.sh; arm_nodes .env.<arm>)" \
+    --time=08:00:00 --partition=mi300 --job-name=<arm> \
+    --export=ALL,CLUSTER_ENV_FILE="$PWD/.env.<arm>" beverin.sbatch
 ```
 
 A smoke run is the same command with the walltime cut, which answers "does a task reach an agent,
-get graded, and come back" before you commit a wave:
-
-```bash
-TIME=01:00:00 LANGS=c LEGS=1 MODEL=qwen30b ./submit-llr8.sh --partition=mi300
-```
+get graded, and come back" before you commit a wave.
 
 ## Before you submit
 
 **The skills packet is FROZEN INTO the problems file.** `make_problems.py` inlines the `SKILL.md`
 bodies at generation time; a running arm never re-reads the pages. The submitter refuses a stale
 list rather than grading a treatment nobody meant to run, so an edited page shows up as a refused
-submit:
-
-```bash
-re-run the arm's submit-*.sh
-```
-
-The lists are named for the TAG, not the campaign -- `llr8` reuses the `llr6` focus40 lists
-unchanged, which is what makes the two campaigns comparable.
+submit; regenerate the problems list and re-run the arm's `submit-*.sh` when a skills page changes.
 
 Then confirm nothing is already running and the budget has room:
 
@@ -96,10 +77,10 @@ squeue -u "$USER" -o "%.10i %.30j %.9T %.10M %.5D %R"
 sacct -j <jobid> -o JobID,JobName%30,State,Elapsed,ExitCode --parsable2
 
 # the job's own logs
-tail -f results/beverin-services-<jobid>.err
+tail -f "${SCRATCH}/hpcagent-bench-runs/slurm/beverin-services-<jobid>.err"
 
 # is the engine actually decoding?  zero of these after requests arrive = a wedged engine
-grep -c 'Avg generation throughput' results/beverin-services-<jobid>.out
+grep -c 'Avg generation throughput' "${SCRATCH}/hpcagent-bench-runs/slurm/beverin-services-<jobid>.out"
 
 # did the agents get their tools?  an agent whose MCP server failed at init never submits,
 # burns its whole budget in api_retry, and still exits rc=0 -- so this is not visible in sacct.
@@ -122,8 +103,8 @@ PY
 
 `RUN_ROOT` is `$SCRATCH/hpcagent-bench-runs` (see the arm's `.env`).
 
-Completion counts matter: an arm cut off by wall clock is `COMPLETED` but did not finish all 40
-kernels. Check the counts before treating an arm as done.
+Completion counts matter: an arm cut off by wall clock is `COMPLETED` but did not finish its
+full kernel list. Check the counts before treating an arm as done.
 
 After the job, fold the per-rank judge DBs into one and read the balance report:
 
@@ -136,7 +117,7 @@ python3 monitor_report.py <RUN_ROOT>/<jobid>/monitor
 
 ```bash
 scancel <jobid> [<jobid> ...]
-scancel -u "$USER" --name=llr8-qwen30b-c     # by arm name, since every arm is --job-name'd
+scancel -u "$USER" --name=<arm>               # by arm name, since every arm is --job-name'd
 ```
 
 Judge shards written before the cancel survive under `<RUN_ROOT>/<jobid>/judge/`, so a cancelled
@@ -155,12 +136,12 @@ arm still carries partial results.
   the skills pages, the manifests and the problems lists are all read LIVE from
   `HPCAGENT_BENCH_REPO`, which is the submitting worktree. A `.env.<arm>` is read when the job
   STARTS, not when you submit it, so moving one breaks a pending arm.
-- **Arms are only comparable if the serve config is identical.** Changing an `.env.llr8-*` file
+- **Arms are only comparable if the serve config is identical.** Changing an `.env.<arm>` file
   mid-campaign splits the A/B.
 - **An arm that logs requests but zero `Avg generation throughput` is wedged, not slow.** It will
   burn its whole wall clock. Kill it.
 - **An agent whose MCP server failed at init never submits** and still exits rc=0, so the arm
-  looks healthy in `sacct`. Historically 22-25% of every arm's first wave. `AGENT_START_CONCURRENCY`
+  looks healthy in `sacct`. This has cost 22-25% of an arm's first wave. `AGENT_START_CONCURRENCY`
   staggers the starts; check the connected count rather than assuming.
 - **Image patches rewrite the image IN PLACE**, so never let one land while arms are queued
   against it.
@@ -190,14 +171,14 @@ sbatch --partition=mi300 --export=ALL,IMAGE_DIR=$PWD/vllm           vllm/build.s
 replaced. It is kept because arms are still running on those images, not because it is how a new
 image gets built.
 
-Promotion is verify, then rename. There is ONE version per role, so the rename is what publishes:
+Promotion is verify, then rename. There is ONE version per role, so the rename is what publishes.
+`promote_image.sh` does both the rename and the `.digest`/`.sha256` sidecar move, then repoints
+the EDFs:
 
 ```bash
 sbatch --export=ALL,IMAGE=$SCRATCH/ce-images/optarena-ce-amd-mi300-candidate.sqsh,\
 PROFILE=judge-agent-amd verify_image.sbatch     # 0 failures, nothing resolving outside
-mv $SCRATCH/ce-images/optarena-ce-amd-mi300-candidate.sqsh \
-   $SCRATCH/ce-images/optarena-ce-amd-mi300.sqsh    # move the .digest and .sha256 with it
-ALLOW_REPOINT=1 ./install_edfs.sh
+./promote_image.sh judge-agent-amd              # or --all for every role with a candidate
 ```
 
 A rename is safe while arms are running: a mounted squashfs is held by its inode, so a job that
@@ -208,7 +189,7 @@ place, which is why build.sbatch refuses to when an EDF mounts it.
 
 `run_cluster.sh` puts `HF_HOME` and `VLLM_CACHE_ROOT` on iopsstor (9.45 GB/s at 16 readers vs
 capstor's 0.83) and sets a PFL default on the hub dir: narrow below 64 MiB, 16 OSTs at 4 MiB
-above. Verified 2026-08-19 -- every large blob of all five models is striped 16. Re-check with:
+above. Every large blob of the served models is striped 16. Re-check with:
 
 ```bash
 lfs getstripe -c <blob> | head -1     # head, NOT tail: getstripe prints a trailing blank line

@@ -14,7 +14,8 @@ from a sick one. Then:
 - [`knobs.md`](knobs.md) -- what is genuinely cross-model: the APU memory model, the KV pool
   threshold, the aiter derate, HiCache, the multi-node fabric and the Slurm shape.
 
-Measurements carry the date they were taken, because a serving number ages.
+A serving number ages as the engine, the ROCm build and the image move. Re-measure before you build
+a decision on a number you cannot reproduce today.
 
 Everything here was measured on **Beverin**: AMD MI300A (`gfx942`) APU nodes, 4 GPUs per node,
 Slurm, CSCS Container Engine. Numbers do not carry to a discrete-GPU cluster; several of them do
@@ -22,8 +23,8 @@ not even carry to MI300X.
 
 ## 1. The shortest path
 
-**Prerequisite, once per account:** `ls ~/.edf` should list `sglang-latest`, `sglang-candidate` (or
-`sglang-glm-halfconv`) and `vllm-latest`. If it does not:
+**Prerequisite, once per account:** `ls ~/.edf` should list `sglang-latest`, `sglang-candidate` and
+`vllm-latest`. If it does not:
 
 ```bash
 containers/cluster/ce-images/install_edfs.sh
@@ -106,12 +107,14 @@ people:
 | EDF | Engine | Use it for |
 |---|---|---|
 | `sglang-latest` | SGLang | Qwen3.8, Kimi K2.7 |
-| `sglang-glm-halfconv` | SGLang | GLM-5.3 only |
+| `sglang-candidate` | SGLang | GLM-5.3 only |
 | `vllm-latest` | vLLM | gpt-oss-120b |
 
-`sglang-glm-halfconv` points at the **same image** as `sglang-latest`. It differs by exactly two
-environment variables, both needed to get GLM-5.3 to load at all -- see the per-model recipes
-below. There is no separate GLM build.
+`sglang-candidate` is the pre-promotion staging EDF for the sglang role, and it is currently the
+only sglang EDF whose image can load GLM-5.3: the DeepSeek weight loader's `format_ue8m0` guard and
+`HIPCC_COMPILE_FLAGS_APPEND` are baked into that image. The other sglang EDFs reach the same patch
+only through a `PYTHONPATH` under `/capstor`, which the inference role's mount policy drops, so
+they fail to load GLM-5.3 -- see [`glm53.md`](glm53.md).
 
 If `~/.edf` is empty, `containers/cluster/ce-images/install_edfs.sh` registers the repo's copies
 against the images named in `containers/cluster/ce-images/images.env`.
@@ -243,20 +246,17 @@ Each node writes `server-<rank>.log` in the run directory the launcher prints. B
 because these logs contain progress bars and other binary noise.
 
 **How long "still loading" lasts before it means something is wrong.** `serve-only.sbatch` polls
-for up to `VLLM_READY_TIMEOUT_SECONDS` (default 2400 s, 40 minutes) and then reports the job as
-failed. Weight load alone can take longer than that on the larger, multi-node models -- see each
-model's page for its own number -- so on those models a long silence is normal, not wedged. Pass a
-bigger value when starting the job:
+for up to `VLLM_READY_TIMEOUT_SECONDS`, falling back to `AGENT_READY_TIMEOUT_SECONDS` and then to a
+7200 s default when neither is set, and reports the job failed once that runs out. Weight load
+alone can take longer than that on the larger, multi-node models -- see each model's page for its
+own number -- so on those models a long silence is normal, not wedged. Each model's `.env.base-*`
+file sets one of these two variables high enough to cover its own slowest stage; check the file
+before assuming a run is wedged. Pass a bigger value on the command line for a run you expect to
+start slower than that:
 
 ```bash
-VLLM_READY_TIMEOUT_SECONDS=7200 MODEL=glm53 ./serve-only.sbatch
+VLLM_READY_TIMEOUT_SECONDS=10800 MODEL=glm53 ./serve-only.sbatch
 ```
-
-**GLM-5.3 needs this override.** `.env.base-glm53` never sets `VLLM_READY_TIMEOUT_SECONDS`, so
-`serve-only.sbatch` falls back to its 2400 s default, well under this model's slowest pipeline
-stage (see [`glm53.md`](glm53.md) for the number). Without the override above, `serve-only.sbatch`
-kills a healthy server for looking dead. `AGENT_READY_TIMEOUT_SECONDS` is set correctly in that
-file, but that variable is read by the benchmark's agent driver, not by `serve-only.sbatch`.
 
 ### SGLang, a healthy startup, in order
 
@@ -349,11 +349,9 @@ Some models' per-run configurations are produced by a generator script from a ba
 setting has to change, it must change in the base **and** in the generator. Change one and the two
 disagree, and which value a server gets depends on which file it was launched from.
 
-This is live, not theoretical. On 2026-09-11 GLM-5.3's base file named one container image while its
-generator named another; both were checked in and both were plausible. The two have since been
-converged. The rule that follows: **never fix a setting in a generated file** -- it will be
-regenerated over -- and when you find a base and a generator disagreeing, treat it as the bug rather
-than picking the value you prefer.
+**Never fix a setting in a generated file** -- it will be regenerated over. When a base file and its
+generator disagree (for example `.env.base-glm53` and `make_glm53_envs.py`), treat the disagreement
+as the bug rather than picking the value you prefer.
 
 ### The campaign launcher narrows container mounts; this one does not
 
