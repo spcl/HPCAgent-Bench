@@ -11,8 +11,10 @@ things are being distributed, not because three scripts drifted apart.
 
 `submit_xl.sbatch` is not a fourth shape: it is the corpus sweep at the `XL` rung, with both
 native tracks run back to back in one allocation under distinct `RUN_TAG`s. It resolves every
-selector before spending allocation time and refuses a non-`XL` preset, because the four-ranks-
-per-node reasoning below is about `XL` specifically.
+selector before spending allocation time, so a typo in a track name fails in the first second
+rather than after the first track has run. `PRESET` defaults to `XL` (the four-ranks-per-node
+reasoning below is about `XL` specifically) but stays overridable, e.g. for a smaller correctness
+run at a different node count.
 
 ## 1. Corpus sweep -- static round-robin, no coordination
 
@@ -36,8 +38,9 @@ set at 4 GB on every track, so four ranks hold ~16 GB of live data. The 20 GB `s
 `RLIMIT_AS` limit, not a reservation, and the ceiling that sized the data is five times tighter,
 so four caps cannot bind at once.
 
-**Planned change** (`DESIGN_static_workload_distribution.md`): replace the stride with an LPT
-bin-pack now that per-kernel cost is known, subject to a per-node memory cap.
+The stride has been replaced by an LPT bin-pack keyed on predicted per-kernel cost; a
+per-node memory cap is supported by the packer but not yet wired into the production
+call site. See [`DESIGN_static_workload_distribution.md`](DESIGN_static_workload_distribution.md).
 
 ## 2. Role deployment -- rank number IS the role
 

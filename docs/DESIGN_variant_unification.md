@@ -8,7 +8,7 @@ Four unrelated things are called *variant*. Measured, not guessed:
 |---|---|---|
 | `variants:` manifest block | legacy sparse: one entry = one matrix format + one distribution | 7 manifests |
 | `hidden.VARIANTS` | held-out input rotation h1..h5, the correctness gate | `support/distributions/hidden.py` |
-| `variant_spec` | the dict `variants:` feeds into `initialize` and into hand-written init funcs | `initialize.py:133`, 11 kernel `.py` |
+| `variant_spec` | the dict `variants:` feeds into `initialize` and into hand-written init funcs | `initialize.py:219`, 11 kernel `.py` |
 | ~~`SCORED_VARIANTS`~~ | **DONE**: now each flavor's `pipelines`, and the word "variant" is gone from the DaCe side | `framework.py` FRAMEWORK_META, `dace_framework.DEFAULT_PIPELINES` |
 
 Only the second one is modern and documented. The rest are the same word wearing
@@ -17,8 +17,8 @@ other jobs.
 ## The live bug this causes
 
 6 of the 7 `variants:` manifests ALSO declare `configurations:`. `expand_layouts`
-(`spec.py:1464`) returns on the `configurations` branch and never reads `variants:` --
-but `Benchmark.get_data` (`frameworks/benchmark.py:75`) still reads `info["variants"]`
+(`spec.py:2050`) returns on the `configurations` branch and never reads `variants:` --
+but `Benchmark.get_data` (`frameworks/benchmark.py:104`) still reads `info["variants"]`
 to pick `variant_spec` and its `distribution` override.
 
 So the LAYOUT comes from one block and the DISTRIBUTION comes from the other. Nothing
