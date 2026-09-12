@@ -47,6 +47,7 @@ CAMPAIGNS: dict[str, tuple[str, str, str]] = {
     "gpuv2-llr40": ("llr-focus40-v11", "gpu", "c"),
     "gpuv4-llr40": ("llr-focus40-v11", "gpu", "c"),
     "llrblind": ("llr-focus40-blind", "cpu", "c"),
+    "llrsingle": ("llr-focus40", "cpu", "c"),
     "git-scicomp": ("git-scicomp", "cpu", "c"),
     "scicomp-focus40": ("scicomp-focus40", "cpu", "c"),
     "scicomp-dc": ("scicomp-focus40", "cpu", "c"),
@@ -234,7 +235,10 @@ def write_runs(dest: sqlite3.Connection, run_ids: Iterable[str], identity: Calla
 
     ``rep`` is 1 for every migrated run. The repetition index did not exist before this schema --
     a run id is ``<arm>.n<node>.p<agent>.w<worker>`` and carries no repetition -- so claiming to
-    recover it would be inventing it. Campaigns run from here on record their own."""
+    recover it would be inventing it. Campaigns run from here on record their own.
+
+    ``harness`` is NULL for the same reason: no arm name carries one, and the rows those campaigns
+    wrote live record NULL too, so a migrated run and a live run of one arm stay one group."""
     written = 0
     for run_id in sorted({r for r in run_ids if r}):
         tags = identity(run_id)
@@ -242,8 +246,8 @@ def write_runs(dest: sqlite3.Connection, run_ids: Iterable[str], identity: Calla
             continue
         experiment, model, language, device, packet = tags
         dest.execute(
-            "INSERT OR IGNORE INTO runs(run_id, experiment, model, language, device, packet, rep, arm) "
-            "VALUES (?,?,?,?,?,?,1,?)",
+            "INSERT OR IGNORE INTO runs(run_id, experiment, model, language, device, packet, rep, arm, harness) "
+            "VALUES (?,?,?,?,?,?,1,?,NULL)",
             (run_id, experiment, model, language, device, packet, arm_of(run_id)),
         )
         written += 1
