@@ -19,8 +19,8 @@ import ast
 import re
 import copy
 import math
-from collections.abc import Sequence
-from typing import Dict, FrozenSet, Iterator, List, Optional, Set, Tuple
+from collections.abc import Callable, Sequence
+from typing import Dict, FrozenSet, Iterator, List, Optional, Set, Tuple, Union
 
 from numpyto_common import dtypes
 from numpyto_common.lib_nodes import _const_int, _iter_extent_of, _parse_einsum_subscripts, extent_is_scalar
@@ -1317,7 +1317,14 @@ class _FftInline(ast.NodeTransformer):
     ``fftn``/``ifftn`` -- lowering all variants uniformly keeps one code path
     (the loop DFT matches numpy to ~1e-15 at any realistic size). A non-Name
     argument (``ifftn(u1 * np.exp(...))``) is hoisted to a temp first so the loop
-    body can index it; a non-constant axis spec leaves the call verbatim."""
+    body can index it; a non-constant axis spec leaves the call verbatim.
+
+    A transform that is one OPERAND of a larger right-hand side
+    (``np.fft.ifftn(g) * nnr``, QE's unscaled backward transform) is hoisted the
+    same way and then lowered, because the whole point is that no ``np.fft`` call
+    survives into the emitted program. dace does not refuse a surviving call --
+    it binds its own N-D DFT library node, whose symbolic normalization factor
+    codegens as an INTEGER division and silently zeroes every output element."""
 
     def __init__(self, ranks: Dict[str, int], array_dtypes: Dict[str, str]) -> None:
         self.ranks = ranks
@@ -1331,7 +1338,7 @@ class _FftInline(ast.NodeTransformer):
             return node
         fattr = _np_fft_attr(node.value)
         if fattr is None or not node.value.args:
-            return node
+            return self._hoist_operand_transform(node)
         tgt = node.targets[0]
         if isinstance(tgt, ast.Name):
             tname, alloc = tgt.id, True
@@ -1363,6 +1370,53 @@ class _FftInline(ast.NodeTransformer):
         self._ctr += 1
         self.changed = True
         return pre + stmts
+
+    def _hoist_operand_transform(self, node: ast.Assign) -> Union[ast.Assign, List[ast.stmt]]:
+        """``out = <expr with np.fft.X(a) inside>`` -> bind each transform to its own temp first.
+
+        :meth:`visit_Assign` matches a BARE transform call, so the emitted program kept the call
+        whenever the reference wrapped it -- the QE normalization ``np.fft.ifftn(g) * nnr`` is one.
+        Each hoisted binding is re-fed through :meth:`visit_Assign`, which lowers it to the loop
+        DFT, so the statement list this returns carries no ``np.fft`` call either.
+        """
+        found: List[Tuple[str, ast.Call]] = []
+
+        def bind(call: ast.Call) -> Optional[ast.Name]:
+            if _np_fft_attr(call) is None or not call.args:
+                return None
+            rank = expr_rank(call.args[0], self.ranks)
+            if rank is None or rank < 1:
+                return None
+            name = f"__fth{len(found)}_{self._ctr}"
+            self.ranks[name] = rank
+            found.append((name, call))
+            return ast.Name(id=name, ctx=ast.Load())
+
+        value = _SubstituteFftCalls(bind).visit(node.value)
+        if not found:
+            return node
+        out: List[ast.stmt] = []
+        for name, call in found:
+            binding = ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=call)
+            ast.copy_location(binding, node)
+            ast.fix_missing_locations(binding)
+            lowered = self.visit_Assign(binding)
+            out.extend(lowered if isinstance(lowered, list) else [lowered])
+        node.value = value
+        ast.fix_missing_locations(node)
+        out.append(node)
+        return out
+
+
+class _SubstituteFftCalls(ast.NodeTransformer):
+    """Replace every ``np.fft.*`` call ``visitor`` accepts with the Name it returns."""
+
+    def __init__(self, visitor: Callable[[ast.Call], Optional[ast.Name]]) -> None:
+        self.visitor = visitor
+
+    def visit_Call(self, node: ast.Call) -> ast.expr:
+        self.generic_visit(node)
+        return self.visitor(node) or node
 
 
 def _mgrid_inline_stmts(tnames: List[str], slices: List[ast.AST], ctr: int) -> Optional[List[ast.stmt]]:
