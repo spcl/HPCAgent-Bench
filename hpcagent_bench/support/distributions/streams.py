@@ -17,8 +17,10 @@ The bit generators are round-robined over the spawned children. MT19937 is delib
 """
 
 from __future__ import annotations
+
 import concurrent.futures
-from typing import Any, Callable, List, Sequence
+from collections.abc import Callable, Sequence
+from typing import Any
 
 import numpy as np
 from numpy.random import PCG64, PCG64DXSM, SFC64, Generator, Philox, SeedSequence
@@ -32,7 +34,7 @@ ROUND_ROBIN = (PCG64, PCG64DXSM, SFC64, Philox)
 THREAD_MIN_ELEMENTS = 1 << 22
 
 
-def spawn_streams(seed: Any, count: int) -> List[Generator]:
+def spawn_streams(seed: int | None, count: int) -> list[Generator]:
     """``count`` independent generators, round-robined over :data:`ROUND_ROBIN`.
 
     ``seed`` of ``None`` still spawns -- the children are independent of each other, just not
@@ -43,7 +45,7 @@ def spawn_streams(seed: Any, count: int) -> List[Generator]:
     ]
 
 
-def fill(tasks: Sequence[Callable[[], Any]], elements: int, workers: int = 8) -> List[Any]:
+def fill(tasks: Sequence[Callable[[], Any]], elements: int, workers: int = 8) -> list[Any]:
     """Run the per-array fills, on threads once there is enough work to pay for them.
 
     Order-preserving, and identical to calling each task in turn: the tasks draw from streams that
