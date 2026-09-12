@@ -107,7 +107,7 @@ TIMEOUT_REASONS = frozenset({"hang"})
 #: hand-editing a ``*_dace.py``, which is regenerated from the numpy reference on the next miss.
 #: Keyed on the kernel directory's PATH under ``benchmarks/`` -- see :func:`kernel_of`.
 #:
-#: The causes on the list below, one process per kernel (60 of 652):
+#: The causes on the list below, one process per kernel (58 of 652):
 #:   broadcast      47 -- two extents that ARE one quantity reach a write spelled differently, and
 #:                        the frontend re-promotes each to a fresh symbol it cannot prove equal.
 #:                        Down from 108 by two repairs -- a tap loop's strided span spelled
@@ -141,18 +141,12 @@ TIMEOUT_REASONS = frozenset({"hang"})
 #:                        known scalar by shape inference alone
 #:   hang            3 -- the frontend does not finish parsing inside the budget; the deep vision
 #:                        nets spend it in sympy over per-layer extent expressions
-#:   dace_const_fold 1 -- dace folds an expression whose symbols CANCEL into a symbol-free
-#:                        sympy.Float, which its own type gates have no key for. Fixed in
-#:                        dace and waiting on the extended tip; not ours. Down from 2:
-#:                        conv_depthwise_separable_2d parses since ``freeze_shape_only_parameters``
-#:                        spells its shape-only ``dilation`` as the pinned literal
-#:                        (re-measured 2026-09-12 against the extended tip)
 #:   reassign        1 -- a second assignment to an array/View name the frontend treats as
 #:                        single-assignment. Down from 2: lulesh parses, on the same stale-entry
 #:                        finding as the broadcast eight
 #:   keyerror        2 -- a DaCe-internal ``KeyError`` naming a symbol the program reassigns
 #:   symbolic_or     2 -- ``if dim == 0 or dim == -2`` over symbols
-#:   symbol_data     2 -- a scalar used BOTH as data and as a shape symbol ("Cannot create symbol
+#:   symbol_data     1 -- a scalar used BOTH as data and as a shape symbol ("Cannot create symbol
 #:                        X, the name is used by a data descriptor")
 #:
 #: NOT on this list, and not measured by the ratchet at all: a kernel whose DaCe program does not
@@ -211,7 +205,6 @@ REFUSED: Dict[str, str] = {
     "machine_learning/resnet101": "hang",
     "machine_learning/shufflenet_unit": "misc",
     "machine_learning/squeezenet": "misc",
-    "machine_learning/swin_mlp": "symbol_data",
     "machine_learning/unet_softmax": "broadcast",
     "machine_learning/vision_transformer": "broadcast",
     "scientific_computing/spectral_methods/cegterg": "keyerror",
@@ -225,7 +218,6 @@ REFUSED: Dict[str, str] = {
     # such a value where it is produced (hotspot-const-fold, 0bd65f83c, 765 frontend tests
     # green); this entry comes off the moment that reaches the extended tip CI installs
     # from, and the ratchet fails until it does.
-    "scientific_computing/structured_grids/hotspot_rodinia": "dace_const_fold",
 }
 
 
