@@ -143,7 +143,8 @@ def call_json(url: str, data: bytes | None, timeout: float) -> dict[str, Any]:
             except json.JSONDecodeError:
                 return {"ok": True, "status": response.status, "text": body}
     except urllib.error.HTTPError as exc:  # a subclass of URLError: must be caught first
-        text = exc.read().decode("utf-8", errors="replace")
+        with exc:  # the error is also the open response; closing it avoids a leaked socket
+            text = exc.read().decode("utf-8", errors="replace")
         try:
             details: Any = json.loads(text)
         except json.JSONDecodeError:
