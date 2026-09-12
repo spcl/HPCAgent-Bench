@@ -19,6 +19,7 @@ import json
 import pathlib
 import sqlite3
 import sys
+import time
 from types import ModuleType
 
 import pytest
@@ -373,3 +374,67 @@ def test_promote_sends_the_items_own_tag(promoter, monkeypatch) -> None:
     item = {"kernel": "k", "language": "c", "source": "x", "run_id": "r", "optimizer": promoter.HARVESTED_TAG}
     assert promoter.promote("http://judge", item, dry_run=False, rank=0).startswith("SUBMITTED")
     assert json.loads(captured[-1].data)["optimizer"] == promoter.HARVESTED_TAG
+
+
+def submit_timeouts(promoter: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Run the agent-exit promotion against a fake judge; return the timeout each /submit was sent with."""
+    run_dir = make_run_dir(tmp_path, [("c", "gemm.c", "void gemm(void){}")])
+    opener = fake_urlopen([])
+    timeouts: list[float] = []
+
+    def timed(req: object, timeout: float = 0.0) -> object:
+        if isinstance(req, promoter.urllib.request.Request) and req.full_url.endswith("/submit"):
+            timeouts.append(timeout)
+        return opener(req, timeout)
+
+    monkeypatch.setattr(promoter.urllib.request, "urlopen", timed)
+    assert promoter.promote_one_worker(run_dir, "http://judge:8800", "arm.n0.p1.w1").startswith("SUBMITTED")
+    return timeouts
+
+
+@pytest.mark.parametrize(
+    "wall_left_s,more_than_s",
+    [
+        # 633871: 58 min of allocation left at the kill. The fixed 1800 s gave up first, and the
+        # teardown right after it killed the grade the judge was still running.
+        (3500.0, 1800.0),
+        # Nearly out of wall: a wait past the job's end cannot land a grade, only delay teardown.
+        (900.0, 0.0),
+    ],
+)
+def test_a_promotion_waits_as_long_as_the_job_allows_not_a_fixed_cap(
+    promoter: ModuleType,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    wall_left_s: float,
+    more_than_s: float,
+) -> None:
+    """The agent-exit promotion's wait is set by the allocation's end, less the teardown margin."""
+    monkeypatch.setenv("SLURM_JOB_END_TIME", str(int(time.time() + wall_left_s)))
+    (timeout,) = submit_timeouts(promoter, tmp_path, monkeypatch)
+    assert more_than_s < timeout <= wall_left_s - promoter.TEARDOWN_MARGIN_S, timeout
+
+
+def test_outside_slurm_a_promotion_waits_as_long_as_the_router_does(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One wait, one knob: the router gives up on the judge at JUDGE_UPSTREAM_TIMEOUT_SECONDS, so a
+    promotion that gave up sooner abandoned a grade the router was still waiting for."""
+    monkeypatch.delenv("SLURM_JOB_END_TIME", raising=False)
+    monkeypatch.setenv("JUDGE_UPSTREAM_TIMEOUT_SECONDS", "4321")
+    promoter = load_example_module("promote_unsubmitted")
+    assert submit_timeouts(promoter, tmp_path, monkeypatch) == [4321.0]
+
+
+def test_a_promotion_the_job_cannot_wait_for_is_never_sent(
+    promoter: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sent anyway, its grade would take the judge's slot from a worker whose promotion can still
+    land, and then die with the job."""
+    monkeypatch.setenv("SLURM_JOB_END_TIME", str(int(time.time() + promoter.TEARDOWN_MARGIN_S / 2)))
+    run_dir = make_run_dir(tmp_path, [("c", "gemm.c", "void gemm(void){}")])
+    captured: list = []
+    monkeypatch.setattr(promoter.urllib.request, "urlopen", fake_urlopen(captured))
+    outcome = promoter.promote_one_worker(run_dir, "http://judge:8800", "arm.n0.p1.w1")
+    assert outcome.startswith("not attempted"), outcome
+    assert captured == [], "no request may reach the judge"
