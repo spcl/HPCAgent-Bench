@@ -36,11 +36,13 @@ def test_pluto_skips_when_native_emit_fails(monkeypatch) -> None:
 #: oversubscribed machine, and eager jax spends its time tracing rather than in proportion to the
 #: problem. So the retry gets a larger bounded budget instead of a smaller problem alone -- which is
 #: what the CI runner needs, where a two-core box runs this alongside a whole phase at -n auto.
-#: Sized so the first try's ``JAX_FORK_TIMEOUT_S`` (180) plus this retry stays under the unit sweep's
-#: ``--timeout=600``: at 600 the retry outlived the test's own timeout, which exits the xdist worker
-#: while the retry child is still alive (run 34690017930, shard 0, wedged at 99% on
-#: ``test_vexx_k_config_parameter_validates_under_jax[noncolin]``).
-_JAX_RETRY_TIMEOUT_S = 360
+_JAX_RETRY_TIMEOUT_S = 600
+
+#: A test that retries owns BOTH budgets, so its own pytest timeout covers the first try, the retry and
+#: the kernel's other backends. Under the sweep's ``--timeout=600`` the retry outlived the test: the
+#: worker was exited with the retry child still running (run 34690017930 wedged unit shard 0 at 99%), and
+#: shrinking the retry to fit instead left it too short to finish on the runner (run 34694810993).
+JAX_RETRY_TEST_TIMEOUT_S = no.JAX_FORK_TIMEOUT_S + _JAX_RETRY_TIMEOUT_S + 120
 
 
 def _jax_ok(short, **kwargs):
@@ -57,6 +59,7 @@ def _jax_ok(short, **kwargs):
     return res
 
 
+@pytest.mark.timeout(JAX_RETRY_TEST_TIMEOUT_S)
 def test_jax_only_request_is_not_blocked_by_native_emit(monkeypatch) -> None:
     # A jax-only request must never surface a native-emit FAIL: the native backends
     # aren't even requested, so the result carries only the jax outcome.
@@ -67,6 +70,7 @@ def test_jax_only_request_is_not_blocked_by_native_emit(monkeypatch) -> None:
     assert res["jax"] == "ok"
 
 
+@pytest.mark.timeout(JAX_RETRY_TEST_TIMEOUT_S)
 def test_vexx_k_validates_on_every_native_backend_and_jax() -> None:
     """vexx_k -- the corpus's densest complex kernel -- emits + validates bit-exact on C, C++, Fortran
     and jax. Regression guard for a once-mistyped-real complex accumulator (``deexx``). numba emits
@@ -103,6 +107,7 @@ def _vexx_cfg_id(cfg):
 _VEXX_JAX_MAX_SIZE = 12
 
 
+@pytest.mark.timeout(JAX_RETRY_TEST_TIMEOUT_S)
 @pytest.mark.parametrize("cfg", _vexx_configs(), ids=_vexx_cfg_id)
 def test_vexx_k_config_parameter_validates_under_jax(cfg) -> None:
     """Every config-parameter combination validates bit-exact under jax at the S size, crossing size
