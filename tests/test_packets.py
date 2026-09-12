@@ -224,3 +224,17 @@ def test_packet_color_of_an_ad_hoc_combination_is_deterministic() -> None:
     first = packets.packet_color("mystery-tool;another-mystery")
     second = packets.packet_color("another-mystery;mystery-tool")
     assert first == second == palette.color("mystery-tool;another-mystery")
+
+
+def test_an_unfilled_resolve_keeps_the_placeholder_templates_the_db_records() -> None:
+    """fill=False is the packet's definition, not one launch: no environment is needed and every
+    ${VAR} survives verbatim, including through a composition."""
+    assert packets.resolve("cpfsrc", "c", environ={}, fill=False).env == (("CPF_DROPIN_DIR", "${CPF_VIEW}"),)
+    assert (
+        dict(packets.resolve("repo", "c", environ={}, fill=False).env)["REPO_LAYOUT_PYTHON"] == "${REPO_LAYOUT_PYTHON}"
+    )
+    all_in = packets.resolve("all-in", "c", environ={}, fill=False)
+    assert dict(all_in.env) == {"CPF_DROPIN_DIR": "${CPF_VIEW}"}
+    assert {"lang-c", "openmp-c", "divide-and-conquer", "profiling", "rocprof", "nsys", "opt-reports"} <= set(
+        all_in.skills
+    )

@@ -97,6 +97,7 @@ def expand_token(
     env: dict[str, str],
     methods: dict[str, str],
     seen: set[str],
+    fill: bool,
 ) -> None:
     """Recursively expand ``token`` into ``skills``/``env``/``methods``, in place.
 
@@ -114,9 +115,9 @@ def expand_token(
         for page in expand_skill_token(skill_token, language):
             skills[page] = None
     for sub_packet in definition.packets:
-        expand_token(sub_packet, language, environ, definitions, skills, env, methods, seen)
+        expand_token(sub_packet, language, environ, definitions, skills, env, methods, seen, fill)
     for key, raw_value in definition.env:
-        value = fill_placeholder(raw_value, environ, token, key)
+        value = fill_placeholder(raw_value, environ, token, key) if fill else raw_value
         if key in env and env[key] != value:
             raise ValueError(f"packet {token!r} sets {key}={value!r} but it is already {env[key]!r}")
         env[key] = value
@@ -124,12 +125,15 @@ def expand_token(
         methods[token] = definition.method
 
 
-def resolve(spec: str, language: str, environ: Mapping[str, str] | None = None) -> Packet:
+def resolve(spec: str, language: str, environ: Mapping[str, str] | None = None, *, fill: bool = True) -> Packet:
     """``spec`` (a registered key, a skill name, or a ``;``-separated list of either) resolved into
     the skills to stage, the env to set and the method to run, for a run in ``language``.
 
-    Unknown tokens, a missing ``${VAR}``, or two packets disagreeing on one env key all raise a
-    ``ValueError`` naming what is wrong."""
+    ``fill=False`` keeps every ``${VAR}`` template as written: the packet's DEFINITION, which is what
+    a results DB records, rather than one launch's values.
+
+    Unknown tokens, a missing ``${VAR}`` (when filling), or two packets disagreeing on one env key all
+    raise a ``ValueError`` naming what is wrong."""
     env_source = environ if environ is not None else os.environ
     tokens = spec_parts(spec)
     definitions = tags.registry().packet_defs
@@ -141,7 +145,7 @@ def resolve(spec: str, language: str, environ: Mapping[str, str] | None = None) 
     methods: dict[str, str] = {}
     seen: set[str] = set()
     for token in tokens:
-        expand_token(token, language, env_source, definitions, skills, env, methods, seen)
+        expand_token(token, language, env_source, definitions, skills, env, methods, seen, fill)
     distinct_methods = sorted(set(methods.values()))
     if len(distinct_methods) > 1:
         raise ValueError(f"packet spec {spec!r} combines methods {distinct_methods}; at most one is allowed")
