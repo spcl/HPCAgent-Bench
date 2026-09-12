@@ -18,6 +18,8 @@ from __future__ import annotations
 import pathlib
 from typing import Union
 
+from numpyto_common.naming import short_for
+
 #: Token written on the first line of every generated file. Absence of this
 #: token (and of any legacy marker below) in an existing file marks it a
 #: hand-written override.
@@ -90,3 +92,19 @@ def write_generated(out_path: Union[str, pathlib.Path], src: str, *, line_commen
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(note + src)
     return "ok"
+
+
+def write_python_sibling(
+    kernel: pathlib.Path, out_dir: pathlib.Path, config: str | None, framework: str, src: str, prog: str
+) -> int:
+    """Write ``src`` as the ``<short>[_<config>]_<framework>.py`` sibling of ``kernel`` and report it on stdout.
+
+    A sparse config names a distinct sub-benchmark (spmv_csr vs spmv_csc) whose buffer-style body is the dense
+    one, so only the filename carries the layout tag.
+    """
+    short = short_for(kernel)
+    base = f"{short}_{config}" if config else short
+    name = f"{base}_{framework}.py"
+    status = write_generated(out_dir / name, src, source=f"{short}_numpy.py")
+    print(f"{prog}: {status} {name}")
+    return 0
