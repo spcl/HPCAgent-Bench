@@ -70,6 +70,7 @@ def test_yaml_style_catches_a_tab_and_trailing_whitespace(tmp_path: Path) -> Non
 GOOD_NUMPY = "def kern(a, out):\n    out[0] = a[0]\n    return out\n"
 
 GOOD_MANIFEST = """# test manifest
+level: 1
 parameters:
   S:
     N: 4
@@ -135,6 +136,17 @@ def test_manifest_structure_catches_malformed_yaml(tmp_path: Path, monkeypatch: 
     p = make_kernel(module, tmp_path, monkeypatch, "parameters: [1, 2\n", "kern_yaml")
     probs = violations_of(module, p)
     assert probs is not None and "parse" in probs[0]
+
+
+def test_manifest_structure_fails_on_a_kernel_rule_the_schema_accepts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``BenchSpec.from_yaml`` loads a manifest with no ``level:``; ``validate_kernel`` rejects it, and the
+    hook has to fail the commit on that too."""
+    module = load_check_manifest_structure()
+    p = make_kernel(module, tmp_path, monkeypatch, GOOD_MANIFEST.replace("level: 1\n", ""), "kern_nolevel")
+    assert module.main([str(p)]) == 1
+    assert "kern_nolevel: kernel without an explicit level" in capsys.readouterr().out
 
 
 def test_manifest_hook_bootstraps_its_own_path(tmp_path: Path) -> None:
