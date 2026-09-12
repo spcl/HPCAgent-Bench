@@ -96,7 +96,7 @@ def test_the_plot_loader_folds_flavor_and_build_back_into_one_series(tmp_path, m
     same optimizer measured on two DaCe trees -- average into one silently wrong line."""
     import pandas as pd
 
-    from hpcagent_bench.stats import plotting
+    from hpcagent_bench.stats.figures import results
 
     path = str(tmp_path / "hpcagent_bench.db")
     engine = results_engine(path)
@@ -126,8 +126,8 @@ def test_the_plot_loader_folds_flavor_and_build_back_into_one_series(tmp_path, m
             )
         session.commit()
 
-    monkeypatch.setattr(plotting.recording, "ensure_aggregated", lambda p: p)
-    data = plotting.load_results(path, preset="S")
+    monkeypatch.setattr(results.recording, "ensure_aggregated", lambda p: p)
+    data = results.load_results(path, preset="S")
     assert isinstance(data, pd.DataFrame)
     assert sorted(data["framework"]) == [
         "dace_cpu",
@@ -146,7 +146,7 @@ def test_the_plot_loader_partitions_machines_instead_of_folding_them(tmp_path, m
     candidate timed on one node with a baseline timed on another yields a hardware comparison that
     every row still looks well-formed under. So machines PARTITION into separate figures.
     """
-    from hpcagent_bench.stats import plotting
+    from hpcagent_bench.stats.figures import results
 
     path = str(tmp_path / "hpcagent_bench.db")
     engine = results_engine(path)
@@ -175,8 +175,8 @@ def test_the_plot_loader_partitions_machines_instead_of_folding_them(tmp_path, m
             )
         session.commit()
 
-    monkeypatch.setattr(plotting.recording, "ensure_aggregated", lambda p: p)
-    groups = plotting.machine_groups(plotting.load_results(path, preset="S"))
+    monkeypatch.setattr(results.recording, "ensure_aggregated", lambda p: p)
+    groups = results.machine_groups(results.load_results(path, preset="S"))
 
     # Three machines: two CPU-only boxes, plus the xeon's GPU runs -- which are a DIFFERENT
     # experiment from the same xeon's CPU runs and must not share a figure with them.
@@ -186,6 +186,6 @@ def test_the_plot_loader_partitions_machines_instead_of_folding_them(tmp_path, m
         assert "cpu" not in frame.columns and "gpu" not in frame.columns
 
     # Every machine gets its own file, so one cannot silently overwrite another.
-    names = [plotting.machine_output("plots/heatmap.pdf", label) for label, _ in groups]
+    names = [results.machine_output("plots/heatmap.pdf", label) for label, _ in groups]
     assert len(set(names)) == len(names)
     assert names[0] == "plots/heatmap.epyc.pdf"
