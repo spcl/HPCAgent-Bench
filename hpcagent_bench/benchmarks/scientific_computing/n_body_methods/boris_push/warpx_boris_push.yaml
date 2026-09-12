@@ -101,3 +101,4 @@ experiment_tags:
 - mpi-focus32
 - warpx
 - scicomp-focus40
+- harness-focus20

@@ -25,3 +25,4 @@ loop_level_reasoning:
   source: tsvc_2_5
 experiment_tags:
 - llr-focus40
+- harness-focus20

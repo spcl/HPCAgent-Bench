@@ -31,3 +31,4 @@ loop_level_reasoning:
     coefficient varies per element, so no closed form collapses the recurrence.
 experiment_tags:
 - llr-focus40
+- harness-focus20

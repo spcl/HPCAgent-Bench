@@ -13,14 +13,13 @@ import pathlib
 import sqlite3
 import tempfile
 import time
-from typing import List
 
 import pytest
 
 from hpcagent_bench.harness import recording
 
 
-def _seed(path: str, *, run: str, kernels: List[str], with_results: bool = True, language: str = "c") -> None:
+def _seed(path: str, *, run: str, kernels: list[str], with_results: bool = True, language: str = "c") -> None:
     """Write one shard: dimension rows, the run identity, and one row in each id-bearing log table.
 
     The measurement tables carry no ``language`` of their own -- the identity a figure groups by is
@@ -139,6 +138,27 @@ def test_two_ranks_of_one_run_merge_instead_of_colliding(tmp_path: pathlib.Path)
         assert [r[0] for r in conn.execute("SELECT language FROM runs")] == ["c"]
     finally:
         conn.close()
+
+
+def test_aggregate_merges_a_run_id_shared_by_multiple_shards(tmp_path) -> None:
+    """A run served by several ranks writes the SAME run_id into every rank's own shard (upsert_run
+    is INSERT OR IGNORE per shard, not a cross-shard dedup), so the second shard's identity row for
+    that run_id must not collide with the first's on ``runs.run_id`` -- it is the same fact."""
+    base = str(tmp_path / "hpcagent_bench.db")
+    _seed(recording.shard_db_path(0, base), run="shared", kernels=["gemm"])
+    _seed(recording.shard_db_path(1, base), run="shared", kernels=["spmv"])
+
+    recording.aggregate(base)
+
+    assert _count(base, "runs") == 1
+    conn = sqlite3.connect(base)
+    try:
+        rows = conn.execute("SELECT run_id, model, arm FROM runs").fetchall()
+    finally:
+        conn.close()
+    assert rows == [("shared", "stub-model", "shared")]
+    # The row logs still concatenate; only the run's identity dedups.
+    assert _count(base, "submissions") == 2
 
 
 def test_aggregate_survives_a_shard_missing_a_column(tmp_path) -> None:
