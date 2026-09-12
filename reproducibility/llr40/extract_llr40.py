@@ -32,6 +32,7 @@ Re-running over unchanged inputs reproduces byte-identical output.
 
 import argparse
 import concurrent.futures
+import contextlib
 import csv
 import glob
 import hashlib
@@ -332,7 +333,8 @@ def read_db(db: Database, focus: frozenset[str], arm_prefix: str, excluded: froz
         broken = {"run_root": db.run_root, "job": db.job, "db": str(db.path), "record": f"unreadable:{exc}"}
         return DbResult([broken], [], 0)
     conn.row_factory = sqlite3.Row
-    with conn:
+    # ``with conn:`` alone only commits; it never closes the connection.
+    with contextlib.closing(conn):
         tables = frozenset(r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'"))
         # runs.harness is absent from a DB written before the column; its rows get "".
         harnesses: dict[str, str] = {}
