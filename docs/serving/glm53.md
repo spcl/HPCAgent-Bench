@@ -26,7 +26,7 @@ file.
 --watchdog-timeout 1800
 --kv-cache-dtype fp8_e4m3
 --page-size 64
---context-length 131072
+--context-length 262144
 --mem-fraction-static 0.55
 --cuda-graph-max-bs-decode 64
 --enable-metrics
@@ -58,9 +58,9 @@ pool(f) = 39.0M * (f - 0.4838) tokens          90470 tokens per GB per rank
 | **0.55** | **2,583,744** | serves, 27.6 to 29.3 GB of KV per rank |
 | 0.62 | -- | host OOM killer takes the heaviest pipeline stage |
 
-Size the pool against the ARM, not against the device. An arm runs 20 agents on one agent node and
-`CLAUDE_AUTOCOMPACT` caps each conversation at 69072 tokens, so the working set is 1.38M tokens and
-0.55 puts pool over working set at 1.87.
+Size the pool against the ARM, not against the device. An arm runs 20 agents on one agent node, and
+`CLAUDE_AUTOCOMPACT` tracks the served 262144-token window. The pool-to-working-set ratio at that
+window has not been measured, so read the prefix-cache hit rate rather than assume a number.
 
 That ratio is a **threshold, not a slope**: above the crossing the prefix cache holds, below it
 every turn re-prefills, and moving within either regime buys almost nothing. The crossing is
@@ -74,6 +74,14 @@ and the slowest stage observed took over 4200 s against 1521 s for the same conf
 machine. Time to a live API is the slowest stage plus about 130 s for the KV allocation plus about
 1080 s of graph capture. Size any readiness cap well above 6000 s, and size it on the slowest
 stage, never on the first stage to report.
+
+Outside a campaign, `serve-only.sbatch` needs that cap named explicitly: `.env.base-glm53` does not
+set `VLLM_READY_TIMEOUT_SECONDS`, so the launcher's own 2400 s default applies and gives up on a
+server that is still healthy. Start it with:
+
+```bash
+VLLM_READY_TIMEOUT_SECONDS=7200 MODEL=glm53 ./serve-only.sbatch
+```
 
 ## DO
 

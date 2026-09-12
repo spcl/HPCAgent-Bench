@@ -22,6 +22,20 @@ not even carry to MI300X.
 
 ## 1. The shortest path
 
+**Prerequisite, once per account:** `ls ~/.edf` should list `sglang-latest`, `sglang-candidate` (or
+`sglang-glm-halfconv`) and `vllm-latest`. If it does not:
+
+```bash
+containers/cluster/ce-images/install_edfs.sh
+```
+
+If that refuses because an image is not on scratch yet, pull it first (minutes, not hours, since it
+downloads the published bytes rather than rebuilding them):
+
+```bash
+sbatch containers/cluster/ce-images/pull_images.sbatch
+```
+
 ```bash
 cd experiments
 SUBMIT=0 ./serve-only.sbatch        # see what it would do
@@ -36,9 +50,19 @@ endpoint URL and a ready-to-paste `curl`. Watch the job's output file for that b
 ===== endpoint is live =====
 base URL:   http://nid002968:8000/v1
 model name: optarena-vllm
+replicas:   http://nid002968:8000/v1
 health:     curl -s http://nid002968:8000/v1/models
+metrics:    curl -s http://nid002968:8000/metrics
 server log: /capstor/scratch/cscs/<you>/x86_64/inference-server/<jobid>/server-0.log
+
+curl -s http://nid002968:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"optarena-vllm","max_tokens":128,"messages":[{"role":"user","content":"Say hi."}]}'
+
+The endpoint takes no API key. It stays up until this job ends; scancel <jobid> to stop it.
 ```
+
+That last block is printed verbatim by the job, curl command included -- copy it and run it.
 
 Pick another model with `MODEL=`:
 
@@ -217,6 +241,22 @@ lives on that model's page, and where two models disagree, both pages say so.
 
 Each node writes `server-<rank>.log` in the run directory the launcher prints. Below, `grep -a`
 because these logs contain progress bars and other binary noise.
+
+**How long "still loading" lasts before it means something is wrong.** `serve-only.sbatch` polls
+for up to `VLLM_READY_TIMEOUT_SECONDS` (default 2400 s, 40 minutes) and then reports the job as
+failed. Weight load alone can take longer than that on the larger, multi-node models -- see each
+model's page for its own number -- so on those models a long silence is normal, not wedged. Pass a
+bigger value when starting the job:
+
+```bash
+VLLM_READY_TIMEOUT_SECONDS=7200 MODEL=glm53 ./serve-only.sbatch
+```
+
+**GLM-5.3 needs this override.** `.env.base-glm53` never sets `VLLM_READY_TIMEOUT_SECONDS`, so
+`serve-only.sbatch` falls back to its 2400 s default, well under this model's slowest pipeline
+stage (see [`glm53.md`](glm53.md) for the number). Without the override above, `serve-only.sbatch`
+kills a healthy server for looking dead. `AGENT_READY_TIMEOUT_SECONDS` is set correctly in that
+file, but that variable is read by the benchmark's agent driver, not by `serve-only.sbatch`.
 
 ### SGLang, a healthy startup, in order
 

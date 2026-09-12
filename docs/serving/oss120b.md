@@ -7,7 +7,7 @@ Authoritative source: `experiments/.env.base-oss120b` plus the `vllm-latest` EDF
 `VLLM_PLUGINS`. If this page and those disagree, they are right. Cross-model background is in
 [`knobs.md`](knobs.md).
 
-## Current configuration
+## Configuration
 
 | | |
 |---|---|
