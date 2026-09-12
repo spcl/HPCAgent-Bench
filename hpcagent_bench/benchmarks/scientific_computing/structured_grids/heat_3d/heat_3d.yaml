@@ -52,3 +52,4 @@ experiment_tags:
 - mpi-focus32
 - polybench
 - scicomp-focus40
+- harness-focus20

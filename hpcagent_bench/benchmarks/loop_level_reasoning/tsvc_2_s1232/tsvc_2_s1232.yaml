@@ -36,3 +36,4 @@ loop_level_reasoning:
     rectangular loop-interchange machinery does not handle.
 experiment_tags:
 - llr-focus40
+- harness-focus20
