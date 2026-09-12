@@ -98,6 +98,13 @@ env:
 # cap. Both are back to a split, with the reason recorded at each; the ports-cegterg fusion, whose
 # eight configurations are eight independent tests, ran in 15 minutes and stays.
 #
+# 2026-09-12: 24 containers -> 19, on run 34690017930's STEP times against the ~2.5-3 minutes of
+# setup each container pays. The translator tree's three legs ran 270 + 303 + 264 s of pytest with
+# ccache touching 1, 1 and 12 compiles (no cold-cache term), so they are one leg again. njit-oracle's
+# shards measured 22.6 / 2.2 / 12.2 min: shard 0 holds cloudsc and stays alone, 1 and 2 share a
+# container. ports-cegterg (7.5 min) is a step on mpi (13.0 min), and hf-export (3.0 min, 2.7 of it
+# setup) is a step on coverage, which already needs every job the publish gate reads.
+#
 # frameworks-pluto stays separate: its own range is 15m05s-28m18s
 # across the same two runs, it is the only runner building Pluto from source (its own LLVM-17
 # toolchain, unrelated to MPI/OpenMPI or DaCe's per-kernel C++ builds), and a bad day on both sides
@@ -136,20 +143,19 @@ env:
 #   e2e-numba-jax           e2e[numba, jax]
 #   container-image         build + smoke-launch the agent-bench cpu image, + the agent-bench suite
 #   integration             -m integration under tests/
-#   integration_translators -m integration under the numpy-translator tree      (MATRIX: 3 legs --
-#                           the ABI corpus sweep is one test over the registry and takes a
-#                           container per half, everything else shares the third)
+#   integration_translators -m integration under the numpy-translator tree      (one leg; the
+#                           registry shard knob is kept at 0/1)
 #   port-fidelity           the DaCe frontend over the generated corpus         (MATRIX: 3 shards
 #                           of the corpus, HPCAGENT_BENCH_DACE_PARSE_SHARD)
 #   dace-numeric            the generated DaCe corpus vs numpy (a C++ build per kernel, -n 4)
-#   ports-cegterg           one port's eigensolver oracle (all eight configurations in one
-#                           container; HPCAGENT_BENCH_CEGTERG_SHARD is still the knob)
 #   mpi                     the whole MPI/distributed track (descriptor + driver codegen + launch +
 #                           scoring + halo + sizing) on MPICH + a source-built mpi4py (ONLY MPI
-#                           build), plus port fidelity (minus cegterg) + benchmark reference
-#                           validation (gt4py) + torch agreement
-#   hf-export               the HuggingFace dataset build, and its gated publish -- the ONLY job
-#                           with a `needs:`, because the publish reads three jobs' result
+#                           build), plus port fidelity (cegterg as its own step) + benchmark
+#                           reference validation (gt4py) + torch agreement
+#   njit-oracle             the compiled numpy reference vs the interpreted one (MATRIX: shard 0
+#                           of 3 alone, shards 1 and 2 together)
+#   coverage                the combined total, then the HuggingFace dataset build and its gated
+#                           publish -- the only job with a `needs:`
 #
 # GPU frameworks (triton, tvm-gpu) self-skip here and run in agentbench-gpu.yml.
 
@@ -605,7 +611,7 @@ jobs:
   # they shared a step the finished half's verdict was buried under the unfinished one's log.
   #
   # Deliberately NOT `needs: [unit]`: a Phase 1 unit failure must not hide what the integration
-  # tests would have said. Only the PUBLISH step is gated on both (see the hf-export phase in mpi).
+  # tests would have said. Only the PUBLISH step is gated on both (see the hf-export steps in coverage).
   # ===========================================================================================
   integration:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
@@ -819,34 +825,16 @@ jobs:
       fail-fast: false
       matrix:
         leg:
-          # test_abi_corpus_agreement.py sweeps the whole registry, and it is BACK ON TWO SHARDS
-          # (halves measured 1054 s and 536 s on run 34122110084). Whole, at ~1590 s, it fit the
-          # container on typical setup and had done for three runs at 30-31 minutes -- what it
-          # does not fit is a container whose SETUP took 17m07s, which is what happened on run
-          # 34228549272. The pre-registered trigger here was "re-split past ~1800 s of sweep", and
-          # that trigger read the wrong number: the sweep never grew, the slack did. See the job
-          # budget below for the measurement.
-          #
-          # Halving the sweep buys 9 minutes of it back (a 26.5-minute body becomes 17.6), which
-          # is what carries a 17-minute setup stall: 3 + 17 + 17.6 fits 45 where 3 + 17 + 26.5 did
-          # not. The cost is ONE more container paying a setup that is ~1 minute in the ordinary
-          # case, and the shard knob and the two tests that police it were kept for exactly this.
-          - id: abi-corpus-0
-            shard: "0/2"
-            select: >-
-              hpcagent_bench/numpy_translators/tests/test_abi_corpus_agreement.py
-          - id: abi-corpus-1
-            shard: "1/2"
-            select: >-
-              hpcagent_bench/numpy_translators/tests/test_abi_corpus_agreement.py
-          - id: rest
-            # 0/1 is the whole registry, and here that is fine: the fold sweep's two halves
-            # measured 3.0 + 8.8 min on run 34058390220, so whole it is ~12 min against the same
-            # budget, and every other test on this leg is per-kernel already.
+          # ONE leg again, 2026-09-12. Run 34690017930 measured the three it had been (both ABI
+          # halves and `rest`) at 270 + 303 + 264 s of pytest, with ccache touching 1, 1 and 12
+          # compiles -- ~14 minutes of work behind three ~2.6-minute setups. Whole it is ~14 + 3,
+          # which still leaves the 17-minute Launchpad setup tail (see the budget below) room under
+          # 45, and the ABI file's slowest test stays far inside --timeout=1300. The shard knob and
+          # the tests that police it stay, so a re-split is a matrix edit again.
+          - id: tree
             shard: "0/1"
             select: >-
               hpcagent_bench/numpy_translators/tests/
-              --ignore=hpcagent_bench/numpy_translators/tests/test_abi_corpus_agreement.py
     # Phase 6t (25) + setup. 25 and not 40: a job budget must exceed the sum of its steps, and at
     # 40 this one did not -- run 34228549272 died on the 45-minute JOB cap with 15 minutes of its
     # own step budget still unspent, so the step cap never applied and the run named nothing.
@@ -1928,7 +1916,7 @@ jobs:
   # that `needs:` was making all ~12 minutes of THIS job wait for them. What is left here is ~12
   # minutes that now start when the run does.
   #
-  # tests/ports/cegterg is NOT in Phase 2b -- it is its own job. See the note there.
+  # tests/ports/cegterg is NOT in Phase 2b -- it is its own step, Phase 2b-cegterg. See the note there.
   # ===========================================================================================
   mpi:
     # No `needs:` any more, and that is the point. This job runs ~12 minutes and used to wait for
@@ -1941,10 +1929,9 @@ jobs:
     if: ${{ !cancelled() && !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
     name: mpi + references (distributed track, port fidelity)
     runs-on: ubuntu-latest
-    # Measured on run 33626484866: setup 5m30s + mpi phases 0m24s + Phase 2c 2m00s + hf-export
-    # seconds, and Phase 2b's non-cegterg remainder + Phase 8b on top. ~12m expected; 40 leaves
-    # better than 3x, and stays under the 45-minute per-container ceiling even on a cold cache.
-    timeout-minutes: 40
+    # Run 34690017930: 13.0 min whole, then Phase 2b-cegterg's 7.5 on top -- ~21. 45, the ceiling,
+    # because the step caps below (Phase 3 10 + 2b 12 + 2b-cegterg 16 + 8b 6) have to sum under it.
+    timeout-minutes: 45
     env:
       # OpenMPI on a GH-Actions runner has no high-speed fabric (no InfiniBand / UCX device), so pin
       # the simple self + shared-memory transports and disable UCX's VFS probe -- otherwise MPI_Init
@@ -1956,14 +1943,12 @@ jobs:
       OMPI_MCA_rmaps_base_oversubscribe: "1"
       UCX_VFS_ENABLE: "n"
       # Job-level so every pytest here collects; --cov-report= suppresses the per-job
-      # render (the combine job owns the only report). hf-export's phase runs no pytest, so this
-      # is simply unused there, same as it already is during every non-pytest setup step above.
+      # render (the combine job owns the only report).
       PYTEST_ADDOPTS: "--cov=hpcagent_bench --cov-append --cov-report="
     steps:
       - uses: actions/checkout@v4
         with:
-          # hf-export needs this (KernelBench provenance) and so does Phase 8b, which compares each
-          # ML port against the upstream model that lives in the submodule.
+          # Phase 8b compares each ML port against the upstream model that lives in the submodule.
           submodules: recursive
       - uses: actions/setup-python@v5
         with:
@@ -2072,16 +2057,14 @@ jobs:
       # Moved off the translators runner, which was the workflow's critical path at 40m32s while
       # this one finished in 5m09s. Neither phase needs MPI; they need a runner with headroom.
       - name: Phase 2b -- port fidelity (numpy port vs original C/C++/Fortran reference)
-        # --ignore=tests/ports/cegterg: that one port is its own JOB (ports-cegterg below), because
-        # its eigensolver oracle is roughly an hour of compute on its own while the other eighteen
-        # ports together are minutes. The two selections partition tests/ports/ exactly -- this step
-        # runs everything the directory holds except that subdirectory, and that job runs it.
+        # --ignore=tests/ports/cegterg: that one port is its own STEP (Phase 2b-cegterg below),
+        # because it wants one BLAS thread per xdist worker where this one runs serial. The two
+        # selections partition tests/ports/ exactly.
         #
-        # 18, on the last measurement that got past the cegterg abort: 10m32s (run 33320330731) and
-        # 9m54s (33283870554), both for the whole tree. The 3m rows in recent runs are the SIGABRT,
-        # not a duration. This selection is 788 of the 830 tests those runs carried.
+        # 12: 6.3 min on run 34690017930 for this selection (788 of the 830 tests), and the caps on
+        # this job have to sum under its 45.
         if: ${{ !cancelled() }}
-        timeout-minutes: 18
+        timeout-minutes: 12
         #
         # --forked: every port oracle here is hand-written C/C++/Fortran reached through ctypes, so
         # a bad index does not raise -- it aborts the INTERPRETER, taking the whole session with it.
@@ -2091,6 +2074,25 @@ jobs:
         run: |
           python -m pytest -q -p no:cacheprovider -rfEs --timeout=600 --forked \
             --ignore=tests/ports/cegterg tests/ports/
+
+      # cegterg is a Davidson eigensolver: the two `*_converges_to_direct_solve` families run the SCF
+      # loop and the C++ reference to convergence for eight (npol, uspp, lrot) configurations. It was
+      # its own container until 2026-09-12, when run 34690017930 measured it at 7.5 min of step behind
+      # 2.5 of setup. HPCAGENT_BENCH_CEGTERG_SHARD stays the re-split knob.
+      - name: Phase 2b-cegterg -- the cegterg port against its C++ reference and a direct solve
+        # One BLAS thread per worker so the parallelism lives in ONE place: -n auto spreads TESTS over
+        # the runner, and threaded BLAS inside four workers oversubscribes two physical cores.
+        # --timeout=900 sits under the step cap so a hang is named; the whole directory is 7.5 min.
+        if: ${{ !cancelled() }}
+        timeout-minutes: 16
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+          HPCAGENT_BENCH_CEGTERG_SHARD: "0/1"
+        run: |
+          python -m pytest -q -p no:cacheprovider -rfEs -n auto --durations=25 \
+            --timeout=900 --forked tests/ports/cegterg/
 
 
       - name: Phase 2c -- benchmark reference validation (numpy vs naive loop / GT4Py DSL / physics)
@@ -2169,82 +2171,6 @@ jobs:
           include-hidden-files: true
           if-no-files-found: ignore
 
-  # ===========================================================================================
-  # hf-export -- build the HuggingFace dataset, and on a push to main publish it.
-  #
-  # It is the ONLY job in the file with a `needs:`, and it has one for a reason nothing else does:
-  # the publish is gated on the suite being green, so it has to read three jobs' `result`. It rode
-  # on `mpi` from 2026-08-11 to save a queue slot back when only three jobs could start at once;
-  # that limit is gone (see the banner at the top), and what the fusion cost instead was the whole
-  # run's critical path -- `mpi` is ~12 minutes of work that sat behind 45 minutes of waiting.
-  #
-  # Two minutes of `export-hf` on its own runner is the cheaper half of that trade. The gate is
-  # unchanged: same three jobs, same all-green condition, same push-to-main-only publish.
-  # ===========================================================================================
-  hf-export:
-    # !cancelled(): the parquet artifact is worth having from a run that went red; only the PUBLISH
-    # reads the gate below. `needs` still means this job waits for those three to finish -- that is
-    # the point of it, and it is now the only job in the file paying that wait.
-    if: ${{ !cancelled() && !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    needs: [unit, integration, integration_translators]
-    name: hf-export (HuggingFace dataset)
-    runs-on: ubuntu-latest
-    # Run 31023526869 measured the export at 2m37s; setup is ~5 warm. 20 is better than 2x.
-    timeout-minutes: 20
-    env:
-      PYTEST_ADDOPTS: "--cov=hpcagent_bench --cov-append --cov-report="
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - uses: ./.github/actions/setup
-        with:
-          # The parquet writer lives in the `hf` extra. This job was lifted out of `mpi`, which
-          # asked for `gt4py hf mpi`; the extra has to come with it or export-hf dies on pyarrow.
-          extras: "hf"
-
-      - name: Phase 7 -- export (+ publish on a main push) the HuggingFace dataset
-        # export-hf always writes the parquet artifact -- unconditionally, on `!cancelled()`.
-        # PUBLISH keeps hf-export's original all-or-nothing gate: it fires only on a push to main
-        # with HF_TOKEN + HF_DATASET_REPO set AND every `needs` green -- never publish a dataset
-        # from a run where unit or either half of integration went red. integration_translators is
-        # in the list because it used to BE part of integration: without it, splitting that job
-        # would have quietly narrowed the gate from "the whole integration marker was green" to
-        # "half of it was".
-        if: ${{ !cancelled() }}
-        timeout-minutes: 12
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_DATASET_REPO: ${{ vars.HF_DATASET_REPO }}
-        run: |
-          PUSH=""
-          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ] \
-              && [ -n "$HF_DATASET_REPO" ] && [ -n "$HF_TOKEN" ] \
-              && [ "${{ needs.unit.result }}" = "success" ] && [ "${{ needs.integration.result }}" = "success" ] \
-              && [ "${{ needs.integration_translators.result }}" = "success" ]; then
-            PUSH="--push $HF_DATASET_REPO"
-          fi
-          python -m hpcagent_bench.cli export-hf --selector all --out hpcagent_bench_hf.parquet $PUSH
-
-      - name: Phase 7 -- upload the HF dataset as a workflow artifact
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: hpcagent_bench-hf-dataset
-          path: hpcagent_bench_hf.parquet
-          if-no-files-found: ignore
-
-      - name: Upload coverage data
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-hf-export
-          path: .coverage*
-          include-hidden-files: true
-          if-no-files-found: ignore
   # ===========================================================================================
   # dace-numeric -- does the generated DaCe corpus still COMPUTE what numpy computes? A C++ build
   # and a run per kernel, which is a different cost class from every other phase, and at 50m+ it
@@ -2408,7 +2334,11 @@ jobs:
       # a verdict. A shard that dies must not hide which kernels the other two graded.
       fail-fast: false
       matrix:
-        shard: [0, 1, 2]
+        # Dealt over THREE, run in TWO containers (2026-09-12). Run 34690017930 measured the three
+        # steps at 22.6, 2.2 and 12.2 min: shard 0 carries cloudsc and has no room for more, while
+        # shard 1 was a 5-minute container that was mostly setup. Keeping the deal at /3 keeps
+        # cloudsc's hand exactly as measured; HPCAGENT_BENCH_NJIT_SHARD takes an index LIST.
+        shard: ["0", "1,2"]
     # THREE shards, and the budget below is set by the SLOWEST KERNEL rather than by the average.
     # Shards 1 and 2 run 229 cases each in 3m59s and 6m16s (run 34221523664). Shard 0 needs 28m07s
     # to reach 95%, and `cloudsc` alone -- 2092 lines of numpy, the largest reference in the
@@ -2437,7 +2367,7 @@ jobs:
     env:
       PYTEST_ADDOPTS: "--cov=hpcagent_bench --cov-append --cov-report="
       # Read by tests/test_njit_reference.py::shard, which partitions ALL_MODULES round-robin.
-      # test_the_shards_partition_the_registry_rather_than_sampling_it pins that the three hands
+      # test_the_shards_partition_the_registry_rather_than_sampling_it pins that the matrix's hands
       # cover the registry, and test_the_matrix_runs_every_shard_it_deals_into that CI runs them.
       HPCAGENT_BENCH_NJIT_SHARD: ${{ matrix.shard }}/3
     steps:
@@ -2482,142 +2412,6 @@ jobs:
           include-hidden-files: true
           if-no-files-found: ignore
 
-
-  # ===========================================================================================
-  # ports-cegterg -- one port's oracle, on its own runner, because it is the only one of the
-  # nineteen in tests/ports/ that costs hours rather than seconds.
-  #
-  # cegterg is a Davidson eigensolver: the two `*_converges_to_direct_solve` families run the
-  # SCF loop and the C++ reference to convergence for eight (npol, uspp, lrot) configurations.
-  # They used to cost microseconds because they were broken -- a C++ index off-by-one aborted the
-  # process partway through the file (SIGABRT, exit 134, run 33626484866) and a missing `nkb`
-  # argument made twenty-four of them die on NameError before doing any work. Both are fixed, so
-  # the tests now actually execute.
-  #
-  # MEASURED SINGLE-THREADED, which is the shape this job actually runs in (OMP_NUM_THREADS=1
-  # below), rather than at the 6-way BLAS the first estimate was taken at. The two npol values are
-  # not one cost class:
-  #   npol=1 configuration    152.5 s across its five tests
-  #   npol=2 configuration   2035   s across the same five, of which ONE test is 812 s
-  # so the eight together are ~70 min of serial single-thread work, not the ~35 the npol=1 reading
-  # alone suggested. (Both on a 16-core dev box; the npol=2 run was under load ~55, so its number
-  # is an upper bound and the npol=1 one, taken at load ~22, is closer to true.)
-  #
-  # ONE container, ``0/1``, and the dev-box arithmetic above is not what CI measures: run
-  # 34058390220 timed the four shards at 1.6 + 2.0 + 4.0 + 4.0 = 11.6 min of phase work between
-  # them, against ~3 min of setup EACH. Four containers for twelve minutes is three runners spent
-  # on setup, and with the concurrency ceiling back (see the banner at the top) it is also three
-  # slots somebody else queues behind. The knob stays: _shard PARTITIONS the configuration list,
-  # test_the_shards_partition_the_configurations_rather_than_sampling_them still runs it at every
-  # count, and the matrix is what a future re-split edits.
-  # ===========================================================================================
-  ports-cegterg:
-    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: port fidelity (cegterg eigensolver oracle)
-    runs-on: ubuntu-latest
-    strategy:
-      # fail-fast: false -- kept with the one-entry matrix, so a re-split does not silently
-      # reintroduce cancelling: the configurations are independent physics, and a failure at
-      # npol=2 says nothing about npol=1.
-      fail-fast: false
-      matrix:
-        shard: [0]
-    # ~12 min of phase work measured whole (run 34058390220, summed over the four shards it then
-    # had), spread over TESTS by -n auto. 45 is the ceiling this file holds every job to.
-    timeout-minutes: 45
-    env:
-      PYTEST_ADDOPTS: "--cov=hpcagent_bench --cov-append --cov-report="
-      # One BLAS thread per worker, because the parallelism has to live in ONE place. Multithreaded
-      # BLAS drew ~6 cores per test on a 16-core box for a 152.5 s -> 137 s saving, i.e. almost
-      # nothing; four xdist workers each doing that on a 4-vCPU runner is 24 threads over 2 physical
-      # cores, which is slower than either alone. -n auto below spends the runner across TESTS.
-      OMP_NUM_THREADS: "1"
-      OPENBLAS_NUM_THREADS: "1"
-      MKL_NUM_THREADS: "1"
-      HPCAGENT_BENCH_CEGTERG_SHARD: "${{ matrix.shard }}/1"
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      # ccache -- emitted kernels are byte-identical across runs (deterministic emit, no
-      # embedded paths or timestamps), so every CI run recompiles the very same TUs.
-      # compilers.yaml invokes bare `gcc`/`g++`/`gfortran`, so putting the shim dir first on
-      # PATH routes the whole build through the cache without touching any build code.
-      - name: Setup -- ccache
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends ccache
-          echo "/usr/lib/ccache" >> "$GITHUB_PATH"
-          echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
-          CCACHE_DIR="$HOME/.ccache" ccache --set-config max_size=1G
-          # Namespaced by uarch -- see the same block in `unit` for what a foreign-uarch hit costs.
-          cpu_key=$(awk -F': ' '/^(model name|flags)/ {print $2}' /proc/cpuinfo |
-            head -2 | sha256sum | cut -c1-12)
-          test -n "$cpu_key" || { echo "could not derive a CPU key" >&2; exit 1; }
-          echo "CPU_KEY=$cpu_key" >> "$GITHUB_ENV"
-      # RESTORE and SAVE are separate actions here -- see the note on the same pair in `unit`. This
-      # job is the one that measured why: it restored a stale prefix key at 45.81% hits, spent its
-      # whole step budget, and then saved nothing because the combined action skips post-save on a
-      # failed job -- so the next run restored the same stale entry and did it again.
-      # The key carries the MATRIX value too: every shard of a matrix job shares one `github.job`,
-      # so without it the shards all write the same key, only the first save lands, and the prefix
-      # restore hands one shard's objects to a shard that compiled something else.
-      - name: Setup -- restore the compile cache
-        uses: actions/cache/restore@v4
-        with:
-          path: ~/.ccache
-          key: ccache-${{ github.job }}-${{ matrix.shard }}-${{ env.CPU_KEY }}-${{ github.run_id }}
-          restore-keys: ccache-${{ github.job }}-${{ matrix.shard }}-${{ env.CPU_KEY }}-
-      # Zero AFTER the restore: the cache carries its own counters back, so zeroing earlier
-      # would make the end-of-job stats cumulative instead of this run's hit rate.
-      - name: Setup -- reset the ccache counters
-        run: ccache --zero-stats
-
-      - uses: ./.github/actions/setup
-
-      - name: Phase 2b-cegterg -- the cegterg port against its C++ reference and a direct solve
-        # --timeout=1800, not the 600 the rest of tests/ports/ runs at, and UNDER the step cap
-        # rather than over it: a per-test timeout that outlives its step names the test, where a
-        # step cap firing prints no summary at all. That number is a HANG detector and has to be
-        # sized against the machine: the slowest single test measured 812 s single-threaded on a
-        # loaded 16-core box, and this runner has two physical cores and one BLAS thread per
-        # worker, so 600 would fire on a test that is merely running.
-        #
-        # -n auto with the default per-test distribution, NOT --dist loadfile: every heavy test is
-        # in one file, so loadfile would pin all eight to one worker and buy nothing. The ctypes
-        # reference build is lru_cached per PROCESS, so each worker pays it once (seconds) and the
-        # tests themselves share no state.
-        if: ${{ !cancelled() }}
-        timeout-minutes: 38
-        run: |
-          python -m pytest -q -p no:cacheprovider -rfEs -n auto --durations=25 \
-            --timeout=1800 --forked tests/ports/cegterg/
-
-      # Hit rate is the whole point of the cache -- surface it so a regression to 0% is visible.
-      - name: ccache statistics
-        if: always()
-        run: ccache --show-stats
-
-      # if: always() -- this job is the reason the pair is split. A red run still compiled, and
-      # saving its objects is what turns the next run warm; the key carries github.run_id, so every
-      # run writes a fresh entry and never collides with the one it restored.
-      - name: Save the compile cache
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: ~/.ccache
-          key: ccache-${{ github.job }}-${{ matrix.shard }}-${{ env.CPU_KEY }}-${{ github.run_id }}
-
-      - name: Upload coverage data
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-ports-cegterg-${{ matrix.shard }}
-          path: .coverage*
-          include-hidden-files: true
-          if-no-files-found: ignore
 
   # ===========================================================================================
   # gpu -- DISABLED extra runner (blocked). GPU codegen tests (tvm-gpu / triton) belong on a real
@@ -2675,21 +2469,23 @@ jobs:
     name: coverage (combined total)
     # Every job that uploads coverage data has to be named here, or the download runs before it
     # finishes and the total is built from a subset -- which prints a perfectly plausible
-    # percentage and stays green. dace-numeric and ports-cegterg split back out of mpi and
-    # integration_translators out of integration on 2026-09-02, so all three are listed.
+    # percentage and stays green. dace-numeric split back out of mpi and integration_translators out
+    # of integration on 2026-09-02, so both are listed.
     needs: [unit, e2e-numba-jax, integration, integration_translators, translators, frameworks-pluto, e2e-native,
-            e2e-pythran, container-image, mpi, hf-export, dace-numeric, ports-cegterg, port-fidelity,
-            njit-oracle]
+            e2e-pythran, container-image, mpi, dace-numeric, port-fidelity, njit-oracle]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Combine ~1 min, then the HF export's setup (~3, and 17 seen on a Launchpad stall) and its 12.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The HF export reads KernelBench provenance out of the submodule.
+          submodules: recursive
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      # coverage alone -- this job combines artifacts and never imports the package, so naming the
-      # group WITHOUT the project keeps it off torch and dace and makes it the fastest job in the
-      # run.
+      # coverage alone FIRST -- the combine never imports the package, so naming the group WITHOUT
+      # the project reports the total before the HF export's full setup below starts.
       - name: Setup -- the coverage tool, and nothing else
         run: |
           python -m pip install --upgrade pip
@@ -2721,7 +2517,7 @@ jobs:
           # Silent partial combines are what hid the collision through every green run: a total
           # built from one job of seven still prints a plausible percentage. So every file has to
           # be ACCOUNTED FOR, which is not the same as combined: coverage.py hashes the databases
-          # and skips exact duplicates, and the port-fidelity / ports-cegterg shards split
+          # and skips exact duplicates, and the port-fidelity shards split
           # parametrized cases of ONE test file, so each shard measures the same line set and
           # every shard past the first is a byte-identical duplicate. Demanding "Combined N" made
           # that permanent red. Counting combined + skipped still catches a file that was neither.
@@ -2759,3 +2555,45 @@ jobs:
             coverage.txt
             htmlcov/
           if-no-files-found: warn
+
+      # hf-export -- build the HuggingFace dataset, and on a push to main publish it. Its own
+      # container until 2026-09-12 (3.0 min, 2.7 of it setup, run 34690017930). It lives here because
+      # this is the job that already waits for every job its publish gate reads, and it comes AFTER
+      # the report so a failing export never withholds the total. !cancelled(): the parquet artifact
+      # is worth having from a red run; only the publish reads the gate.
+      - uses: ./.github/actions/setup
+        if: ${{ !cancelled() }}
+        with:
+          # The parquet writer lives in the `hf` extra.
+          extras: "hf"
+
+      - name: Phase 7 -- export (+ publish on a main push) the HuggingFace dataset
+        # export-hf always writes the parquet artifact -- unconditionally, on `!cancelled()`.
+        # PUBLISH keeps hf-export's original all-or-nothing gate: it fires only on a push to main
+        # with HF_TOKEN + HF_DATASET_REPO set AND every `needs` green -- never publish a dataset
+        # from a run where unit or either half of integration went red. integration_translators is
+        # in the list because it used to BE part of integration: without it, splitting that job
+        # would have quietly narrowed the gate from "the whole integration marker was green" to
+        # "half of it was".
+        if: ${{ !cancelled() }}
+        timeout-minutes: 12
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ vars.HF_DATASET_REPO }}
+        run: |
+          PUSH=""
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ] \
+              && [ -n "$HF_DATASET_REPO" ] && [ -n "$HF_TOKEN" ] \
+              && [ "${{ needs.unit.result }}" = "success" ] && [ "${{ needs.integration.result }}" = "success" ] \
+              && [ "${{ needs.integration_translators.result }}" = "success" ]; then
+            PUSH="--push $HF_DATASET_REPO"
+          fi
+          python -m hpcagent_bench.cli export-hf --selector all --out hpcagent_bench_hf.parquet $PUSH
+
+      - name: Phase 7 -- upload the HF dataset as a workflow artifact
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: hpcagent_bench-hf-dataset
+          path: hpcagent_bench_hf.parquet
+          if-no-files-found: ignore
