@@ -54,56 +54,14 @@ PANEL_MARGINS: dict[str, float] = {"left": 0.17, "right": 0.975, "top": 0.855, "
 #: The pair figure is twice as wide and takes them all in one row.
 LEGEND_COLS_SINGLE: int = 3
 
-#: Order an episode's graded rows are read in, as in ``plot_score_change.py``.
-SUBMISSION_ORDER: tuple[str, str] = ("ts_ms", "attempt_index")
-
-
-def arm_scores(frame: pd.DataFrame) -> pd.Series:
-    """One speed-up per kernel for one arm: the best FINAL answer.
-
-    Read off the GRADED rows and reduced by the scoring policy
-    (:func:`hpcagent_bench.stats.population.final_answers`): within an episode the last verified
-    submission counts, the maximum is kept across the arm's episodes. A ``call`` row carries a
-    speed-up for a round the judge never persisted, so a median over call rows weights a kernel by
-    how many rounds the agent spent on it rather than by what the arm delivered.
-    """
-    graded = frame[frame.record == "submission"]
-    if graded.empty:
-        return pd.Series(dtype=float)
-    best = population.final_answers(graded, SUBMISSION_ORDER, ("arm", "benchmark"))
-    return best.groupby("benchmark").speedup.max()
-
-
-def arm_costs(frame: pd.DataFrame) -> pd.Series:
-    """Tokens per KERNEL for one arm: the per-episode total, median over that kernel's episodes.
-
-    ``calls.tokens`` is CUMULATIVE through a call, so an episode's spend is its own maximum. The
-    MEDIAN over a kernel's episodes on purpose, not a sum: this figure reports what a task typically
-    cost the arm, and a sum would report how many agents it ran. One runaway episode -- an agent
-    looping on a build error until its budget runs out, two orders of magnitude off the rest of its
-    own arm -- must not set the number for the whole arm, which is why neither level takes a mean.
-    The episode is :data:`~hpcagent_bench.stats.population.EPISODE_KEY`; ``run_id`` alone repeats
-    across jobs and merges two agents into one.
-    """
-    calls = frame[frame.record == "call"].copy()
-    if calls.empty:
-        return pd.Series(dtype=float)
-    calls["tokens"] = pd.to_numeric(calls.tokens, errors="coerce")
-    calls = calls.dropna(subset=["tokens", "benchmark"])
-    if calls.empty:
-        return pd.Series(dtype=float)
-    per_episode = population.per_episode_max(calls, "tokens")
-    totals = per_episode.groupby("benchmark").tokens.median()
-    return totals[totals > 0]
-
 
 def arm_points(frame: pd.DataFrame) -> pd.DataFrame:
     """One row per (model, language, condition): median log2 speed-up and median tokens."""
     rows = []
     for (model, language, condition), part in frame.groupby(["model", "language", "condition"]):
-        speed = arm_scores(part)
+        speed = population.kernel_answers(part).speedup
         speed = speed[speed > 0]
-        tokens = arm_costs(part)
+        tokens = population.kernel_tokens(part, "median")
         tokens = tokens[tokens > 0]
         if speed.empty or tokens.empty:
             continue

@@ -151,33 +151,20 @@ def collect(run_dirs: list[str], out_dir: pathlib.Path) -> dict:
     return {"arms": per_arm, "empty": empty}
 
 
-def geomean(speedups: list[float]) -> float | None:
-    """Geometric mean of a speed-up set to three places, or ``None`` when it has none.
-
-    Non-positive values are DROPPED rather than clamped: a speed-up of zero or below is not a slow
-    ratio, it is a missing measurement, and clamping one to a small epsilon would drag the geomean
-    toward zero and read as a catastrophic regression that never happened.
-    """
-    usable = summary.usable_ratios(speedups, label="arm summary", warn=False)
-    return round(summary.geomean(usable), 3) if usable.size else None
-
-
-def median(speedups: list[float]) -> float | None:
-    return round(statistics.median(speedups), 3) if speedups else None
-
-
 def summary_rows(per_arm: dict) -> list[tuple]:
     """One tuple per ``(arm, baseline)``, in SUMMARY_COLUMNS order, sorted.
 
     ``geomean_solved`` names its own population: it is over the kernels the arm VERIFIED under that
     denominator, so it answers "how good when it works" and NOT "how good overall". Two rows of this
     table are not a comparison -- each is over a different kernel set. ``ablation_stats.py`` and
-    ``reproducibility/llr40/analyze_llr40.py`` are where an arm-versus-arm number is formed, over one
+    :mod:`hpcagent_bench.stats.arms` are where an arm-versus-arm number is formed, over one
     kernel set, with the kernels each arm missed counted.
     """
     rows = []
     for arm, baseline in sorted(per_arm):
         entry = per_arm[(arm, baseline)]
+        values = list(entry["best_by_bench"].values())
+        usable = summary.usable_ratios(values, label="arm summary", warn=False)
         # llr4-qwen30b-c / llr4-qwen30b-c-skills: the trailing token is the ablation, the one before
         # it the language, and what is left the model.
         parts = arm.split("-")
@@ -195,8 +182,8 @@ def summary_rows(per_arm: dict) -> list[tuple]:
                 entry["runs"],
                 entry["subs"],
                 len(entry["benchmarks"]),
-                geomean(list(entry["best_by_bench"].values())),
-                median(list(entry["best_by_bench"].values())),
+                round(summary.geomean(usable), 3) if usable.size else None,
+                round(statistics.median(values), 3) if values else None,
                 entry["suspect"],
             )
         )

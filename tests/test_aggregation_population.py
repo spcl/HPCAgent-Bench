@@ -336,7 +336,6 @@ def test_the_score_change_figure_scores_graded_rows_and_costs_call_rows() -> Non
     """Its loader filtered on ``speedup > 0 and tokens > 0``, and only a ``call`` row has both, so
     every graded submission was dropped and the figure scored intermediate rounds. The two axes come
     off different record types and neither may be read from the other's rows."""
-    change = load_by_path(REPO / "scripts" / "plot_score_change.py", "plot_score_change")
     rows = submissions(
         [
             {"record": "submission", "run_id": "w0", "speedup": 7.0, "ts_ms": 2, "tokens": None},
@@ -344,8 +343,8 @@ def test_the_score_change_figure_scores_graded_rows_and_costs_call_rows() -> Non
             {"record": "call", "run_id": "w0", "speedup": 3.0, "ts_ms": 3, "tokens": 900.0},
         ]
     )
-    assert change.scores(rows).tolist() == [7.0]
-    assert change.costs(rows).tolist() == [900.0]
+    assert population.kernel_answers(rows).speedup.tolist() == [7.0]
+    assert population.kernel_tokens(rows, "sum").tolist() == [900.0]
 
 
 # --------------------------------------------------------------------------- #
