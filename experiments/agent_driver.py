@@ -16,7 +16,12 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from typing import NamedTuple, TextIO, TypedDict, cast
+from collections.abc import Callable
+from types import ModuleType
+from typing import TYPE_CHECKING, NamedTuple, TextIO, TypedDict, cast
+
+if TYPE_CHECKING:
+    from harnesses import Closing, Context, Harness
 
 #: Every tool ``containers/agent/tools/mcp_server.py`` serves. A tool the server advertises but this
 #: list omits is invisible to the model and NOTHING fails -- the run merely comes out worse, with an
@@ -1117,17 +1122,20 @@ def read_new_lines(path: pathlib.Path, offset: int) -> tuple[int, list[str]]:
     return offset + cut + 1, data[:cut].decode("utf-8", errors="replace").splitlines()
 
 
-def transcript_total_tokens(log_path: pathlib.Path) -> int:
+def transcript_total_tokens(
+    log_path: pathlib.Path, fold: Callable[[list[str], dict[str, int]], int] = accumulate_total_tokens
+) -> int:
     """Total tokens the finished agent consumed, folded from its whole transcript.
 
     The budget watcher keeps the same running total, but only when AGENT_MAX_TOKENS armed it, so
     this re-folds the file at exit and is the one number every run has. Unreadable transcript = 0.
+    ``fold`` is the harness's reader: claude's stream-json by default, a runner's usage.jsonl.
     """
     try:
         lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return 0
-    return accumulate_total_tokens(lines, {})
+    return fold(lines, {})
 
 
 def cost_breakdown(log: pathlib.Path) -> dict[str, float]:
@@ -1159,6 +1167,7 @@ def write_cost_record(
     tokens: int,
     turns: int,
     subtype: str,
+    transcript: pathlib.Path | None = None,
 ) -> None:
     """Write this worker's cost record beside its transcript. Never raises.
 
@@ -1182,7 +1191,7 @@ def write_cost_record(
     # The breakdown, alongside rather than instead. `tokens` charges a 173-turn episode for its
     # prompt 173 times; these separate what was re-sent from what was computed, and recover the
     # thinking these endpoints report as zero. See docs/token_accounting.md.
-    record.update(cost_breakdown(path.parent / "claude.log"))
+    record.update(cost_breakdown(transcript or path.parent / "claude.log"))
     try:
         path.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
     except OSError:
@@ -1328,6 +1337,16 @@ def start_agent(
         log.flush()
 
 
+def start_runner(
+    command: list[str], workdir: pathlib.Path, environment: dict[str, str], log: TextIO, cpus: list[int]
+) -> subprocess.Popen[bytes]:
+    """Spawn a harness that reports no MCP readiness, under the same start gate and pinning."""
+    with START_GATE:
+        process = subprocess.Popen(command, cwd=workdir, env=environment, stdout=log, stderr=subprocess.STDOUT)
+        pin(process, cpus, log)
+    return process
+
+
 def crashed(returncode: int, log_path: pathlib.Path) -> bool:
     """True when the agent died on a fault rather than on a budget it was given.
 
@@ -1336,6 +1355,11 @@ def crashed(returncode: int, log_path: pathlib.Path) -> bool:
     closing result event -- a nonzero exit after the CLI reported a result is the CLI's own verdict
     on the run, and relaunching would overwrite it.
     """
+    return closing_crashed(returncode, transcript_closing(log_path))
+
+
+def closing_crashed(returncode: int, closing: Closing) -> bool:
+    """:func:`crashed` for any harness, read off the record the attempt closed with."""
     if returncode in (RC_TIMEOUT, RC_TOKEN_BUDGET, RC_CONTEXT, RC_SUBMITTED):
         return False
     # A client-side request timeout is the ONE fault the CLI reports as a result, so the rule below
@@ -1345,11 +1369,11 @@ def crashed(returncode: int, log_path: pathlib.Path) -> bool:
     # dependable here: its sibling, the context death, ships this same closing event with rc=0.
     # Relaunching cannot hand out a second allowance either -- the deadline the caller relaunches
     # under is the PROBLEM's, and the `spent` guard closes it.
-    if api_timeout(log_path):
+    if closing.api_timeout:
         return True
     if returncode == 0:
         return False
-    return result_event(log_path) is None
+    return not closing.recorded
 
 
 class ResultEvent(NamedTuple):
@@ -1439,6 +1463,22 @@ def api_timeout(log_path: pathlib.Path) -> bool:
     return event is not None and event.is_error and API_TIMEOUT_MARK in event.text
 
 
+def transcript_closing(log_path: pathlib.Path) -> Closing:
+    """claude's transcript as a :class:`~harnesses.Closing`, read off its closing ``result`` event."""
+    subtype, turns = final_result(log_path)
+    return harness_module().Closing(
+        recorded=result_event(log_path) is not None,
+        subtype=subtype,
+        turns=turns,
+        context_overflow=context_overflow(log_path),
+        api_timeout=api_timeout(log_path),
+    )
+
+
+def claude_closing(workdir: pathlib.Path) -> Closing:
+    return transcript_closing(workdir / "claude.log")
+
+
 #: The file tools/submit.py writes once the judge has answered its ONE submission, in the agent's
 #: own workdir. Keep in step with submit.SPENT_MARKER / $AGENT_SUBMISSION_MARKER.
 SUBMISSION_MARKER = os.environ.get("AGENT_SUBMISSION_MARKER", ".submission-spent")
@@ -1491,9 +1531,16 @@ def watch_submission(process: subprocess.Popen[bytes], marker: pathlib.Path, sta
 
 
 def watch_token_budget(
-    process: subprocess.Popen[bytes], log_path: pathlib.Path, max_tokens: int, state: AgentState
+    process: subprocess.Popen[bytes],
+    log_path: pathlib.Path,
+    max_tokens: int,
+    state: AgentState,
+    fold: Callable[[list[str], dict[str, int]], int] = accumulate_total_tokens,
 ) -> None:
-    """Kill ``process`` once its transcript has reported more than ``max_tokens`` total tokens."""
+    """Kill ``process`` once its transcript has reported more than ``max_tokens`` total tokens.
+
+    ``fold`` reads the harness's own record: claude's stream-json by default, a runner's usage.jsonl.
+    """
     offset = 0
     total_by_message: dict[str, int] = {}
     while process.poll() is None:
@@ -1501,7 +1548,7 @@ def watch_token_budget(
         offset, lines = read_new_lines(log_path, offset)
         if not lines:
             continue
-        state["tokens"] = accumulate_total_tokens(lines, total_by_message)
+        state["tokens"] = fold(lines, total_by_message)
         if state["tokens"] > max_tokens:
             state["exceeded"] = True
             terminate(process)
@@ -1530,6 +1577,122 @@ def promote_at_agent_exit(run_id: str, judge_url: str, kernel: str = "") -> str:
         return promote_unsubmitted.promote_one_worker(pathlib.Path(run_dir), judge_url, run_id, kernel=kernel)
     except Exception as exc:  # noqa: BLE001 -- see the docstring: never fail an agent's teardown
         return f"error:{type(exc).__name__}"
+
+
+def harness_module() -> ModuleType:
+    """``harnesses.py`` from beside this file, imported on first use.
+
+    Not a top-level import, for the reason ``token_cost`` is not one either: tests load this file by
+    path with nothing on ``sys.path``, and the agent image runs it as a script from the checkout.
+    """
+    here = str(pathlib.Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import harnesses
+
+    return harnesses
+
+
+def harness_spec(name: str) -> Harness:
+    """The spec for ``name``: claude's is built from this file's own functions, a runner's is in
+    ``harnesses.py``."""
+    harnesses = harness_module()
+    if name != harnesses.CLAUDE:
+        return harnesses.RUNNERS[name]
+    return harnesses.Harness(
+        name=harnesses.CLAUDE,
+        log_name="claude.log",
+        tokens_name="claude.log",
+        records=("claude.log",),
+        mcp_gate=True,
+        command=claude_command,
+        env=claude_env,
+        fold_tokens=accumulate_total_tokens,
+        closing=claude_closing,
+    )
+
+
+def claude_command(context: Context) -> list[str]:
+    """The claude CLI invocation for one agent. Built per attempt; nothing in it changes between them."""
+    prompt = context.prompt
+    mcp_config = context.mcp_config
+    # Read once and passed through as the string it already was: an unparseable value must keep
+    # failing at the CLI, where the message names the flag, rather than in the driver.
+    turn_cap = os.environ.get("CLAUDE_MAX_TURNS", "40")
+    # claude cannot see the served window and compacts too late for it, so the flag is how the wall
+    # is declared. Unset leaves the command byte-identical: older agent images have no such flag.
+    autocompact = os.environ.get("CLAUDE_AUTOCOMPACT", "").strip()
+    claude_bin = os.environ.get("CLAUDE_BIN", "claude")
+    if autocompact and not claude_supports_autocompact(claude_bin):
+        # Loud, and once per driver process: the arm now runs WITHOUT the compaction wall its .env
+        # asked for, which is a real difference from an arm whose image accepts the flag.
+        print(
+            f"agent_driver: {claude_bin} does not accept --autocompact; running WITHOUT the "
+            f"CLAUDE_AUTOCOMPACT={autocompact} wall. Rebuild the image against a CLI that has it "
+            "if this arm must match one that does.",
+            flush=True,
+        )
+        autocompact = ""
+
+    command = [
+        claude_bin,
+        "--bare",
+        # The prompt must precede the variadic tool flags: after --disallowedTools it is consumed
+        # as deny rules and claude exits 1 with no input (all 10 agents, 585091).
+        "--print",
+        prompt,
+        "--model",
+        os.environ.get("CLAUDE_MODEL", "optarena-llm"),
+        "--max-turns",
+        turn_cap,
+        *(["--autocompact", autocompact] if autocompact else []),
+        # Non-interactive: a permission prompt has no one to answer it, and a --print agent that
+        # pauses to ask simply ends its run unsubmitted (5 of 10 agents, 585108).
+        "--permission-mode",
+        "bypassPermissions",
+        # Full per-turn JSONL transcript in claude.log: the judge records /submit only, so iteration
+        # counts (turns, score calls) exist nowhere else on the cluster path. Logging format only --
+        # the agent loop is unchanged. stream-json requires --verbose under --print.
+        "--verbose",
+        "--output-format",
+        "stream-json",
+        "--mcp-config",
+        str(mcp_config),
+        "--strict-mcp-config",
+        # Bash is ON: the local toolchain (gcc/g++/gfortran, python3, objdump) is how an agent
+        # checks a rewrite for free before spending a judge call. These THREE are the whole
+        # built-in set under --bare: naming Write/MultiEdit/Glob/Grep here published none of
+        # them (measured, claude 2.1.224 and 2.1.233 -- `--tools default` also yields exactly
+        # these three), while the prompt promised all seven, so agents hunted for a Write that
+        # was never there. Creating a file is a shell heredoc on this path.
+        "--tools",
+        "Read,Edit,Bash",
+        "--allowedTools",
+        "Bash",
+        *[f"mcp__optarena__{name}" for name in AGENT_TOOLS],
+        "--disallowedTools",
+        "WebFetch",
+        "WebSearch",
+        "Task",
+        "Agent",
+    ]
+    return command
+
+
+def claude_env(context: Context, base: dict[str, str]) -> dict[str, str]:
+    """The shared environment plus the two variables only claude reads."""
+    environment = dict(base)
+    # Direct mode (default): claude speaks vLLM's native /v1/messages; agents stripe over the
+    # replicas the same way problems stripe over judges. ANTHROPIC_BASE_URL must be the server
+    # root -- the client appends /v1/messages itself.
+    if os.environ.get("AGENT_LLM_MODE", "direct") != "litellm":
+        environment["ANTHROPIC_BASE_URL"] = context.replica_root
+    # The MCP tool process reports the agent's running spend to the judge with every grade, and it
+    # finds the transcript through this variable. It inherits our cwd today, so a relative default
+    # happens to work -- naming the path outright means a future cwd change cannot silently zero
+    # the token column again.
+    environment["CLAUDE_LOG_PATH"] = str(context.workdir / "claude.log")
+    return environment
 
 
 def run_agent(
@@ -1622,66 +1785,6 @@ def run_agent(
         encoding="utf-8",
     )
 
-    # Read once and passed through as the string it already was: an unparseable value must keep
-    # failing at the CLI, where the message names the flag, rather than in the driver.
-    turn_cap = os.environ.get("CLAUDE_MAX_TURNS", "40")
-    # claude cannot see the served window and compacts too late for it, so the flag is how the wall
-    # is declared. Unset leaves the command byte-identical: older agent images have no such flag.
-    autocompact = os.environ.get("CLAUDE_AUTOCOMPACT", "").strip()
-    claude_bin = os.environ.get("CLAUDE_BIN", "claude")
-    if autocompact and not claude_supports_autocompact(claude_bin):
-        # Loud, and once per driver process: the arm now runs WITHOUT the compaction wall its .env
-        # asked for, which is a real difference from an arm whose image accepts the flag.
-        print(
-            f"agent_driver: {claude_bin} does not accept --autocompact; running WITHOUT the "
-            f"CLAUDE_AUTOCOMPACT={autocompact} wall. Rebuild the image against a CLI that has it "
-            "if this arm must match one that does.",
-            flush=True,
-        )
-        autocompact = ""
-
-    command = [
-        claude_bin,
-        "--bare",
-        # The prompt must precede the variadic tool flags: after --disallowedTools it is consumed
-        # as deny rules and claude exits 1 with no input (all 10 agents, 585091).
-        "--print",
-        prompt,
-        "--model",
-        os.environ.get("CLAUDE_MODEL", "optarena-llm"),
-        "--max-turns",
-        turn_cap,
-        *(["--autocompact", autocompact] if autocompact else []),
-        # Non-interactive: a permission prompt has no one to answer it, and a --print agent that
-        # pauses to ask simply ends its run unsubmitted (5 of 10 agents, 585108).
-        "--permission-mode",
-        "bypassPermissions",
-        # Full per-turn JSONL transcript in claude.log: the judge records /submit only, so iteration
-        # counts (turns, score calls) exist nowhere else on the cluster path. Logging format only --
-        # the agent loop is unchanged. stream-json requires --verbose under --print.
-        "--verbose",
-        "--output-format",
-        "stream-json",
-        "--mcp-config",
-        str(mcp_config),
-        "--strict-mcp-config",
-        # Bash is ON: the local toolchain (gcc/g++/gfortran, python3, objdump) is how an agent
-        # checks a rewrite for free before spending a judge call. These THREE are the whole
-        # built-in set under --bare: naming Write/MultiEdit/Glob/Grep here published none of
-        # them (measured, claude 2.1.224 and 2.1.233 -- `--tools default` also yields exactly
-        # these three), while the prompt promised all seven, so agents hunted for a Write that
-        # was never there. Creating a file is a shell heredoc on this path.
-        "--tools",
-        "Read,Edit,Bash",
-        "--allowedTools",
-        "Bash",
-        *[f"mcp__optarena__{name}" for name in AGENT_TOOLS],
-        "--disallowedTools",
-        "WebFetch",
-        "WebSearch",
-        "Task",
-        "Agent",
-    ]
     # Striped by the problem's index in the FULL list, not by the worker slot: a slot is reused by
     # whatever problem lands in it next, so slot striping spreads the POOL over the judges while
     # leaving which judge grades a given problem up to scheduling order.
@@ -1724,24 +1827,19 @@ def run_agent(
     # judge records without them is one no arm, node or worker can be recovered from afterwards.
     environment.update(identity_env(problem_index, worker_index))
 
-    # Direct mode (default): claude speaks vLLM's native /v1/messages; agents stripe over the
-    # replicas the same way problems stripe over judges. ANTHROPIC_BASE_URL must be the server
-    # root -- the client appends /v1/messages itself.
-    if os.environ.get("AGENT_LLM_MODE", "direct") != "litellm":
-        endpoints = vllm_urls()
-        endpoint = endpoints[problem_index % len(endpoints)]
-        environment["ANTHROPIC_BASE_URL"] = server_root(endpoint)
+    harnesses = harness_module()
+    harness = harness_spec(harnesses.selected_harness())
+    # Every harness stripes onto a replica the way problems stripe onto judges; claude reads its
+    # server root, a runner the /v1 path under it.
+    endpoints = vllm_urls()
+    replica_root = server_root(endpoints[problem_index % len(endpoints)])
 
     # Hard budget caps per agent process, the backstop so one wedged agent cannot hold the Slurm
     # step to its time limit and take every later problem in the queue down with it. The SOFT half
     # is budget_note() above, which states these same numbers to the agent. Either may be armed,
     # both may be armed, and whichever trips first kills the process; 0 = that cap is off.
-    log_path = workdir / "claude.log"
-    # The MCP tool process reports the agent's running spend to the judge with every grade, and it
-    # finds the transcript through this variable. It inherits our cwd today, so a relative default
-    # happens to work -- naming the path outright means a future cwd change cannot silently zero
-    # the token column again.
-    environment["CLAUDE_LOG_PATH"] = str(log_path)
+    log_path = workdir / harness.log_name
+    tokens_path = workdir / harness.tokens_name
     state: AgentState = {"tokens": 0, "exceeded": False}
     mcp_attempts = crash_attempts = 1
     # The budget is the PROBLEM's, not the attempt's. A relaunch that started its own full clock
@@ -1753,19 +1851,42 @@ def run_agent(
     marker = workdir / SUBMISSION_MARKER
     if submit_single_submission():
         marker.unlink(missing_ok=True)
+    context = harnesses.Context(
+        harness=harness.name,
+        workdir=workdir,
+        prompt=prompt,
+        prompt_file=prompt_file,
+        mcp_config=mcp_config,
+        replica_root=replica_root,
+        kernel=environment["KERNEL"],
+        language=environment["LANGUAGE"],
+        deadline=deadline,
+        marker=marker.absolute(),
+    )
+    environment = harness.env(context, environment)
     while True:
         state = {"tokens": 0, "exceeded": False, "submitted": False}
+        command = harness.command(context)
+        # A runner APPENDS to its usage and end files, so what an earlier run left there would be
+        # read as this attempt's. The log needs no such step: "w" below truncates it.
+        for record in harness.records[1:]:
+            (workdir / record).unlink(missing_ok=True)
         # Still "w": every reader of this file assumes ONE run in it -- mcp_failed() returns the
         # FIRST init event and start_agent truncates on an MCP retry -- so appending would hand
         # attempt 2 attempt 1's init verdict. The previous attempt is preserved by moving it aside
         # below instead, which keeps the evidence without breaking that assumption.
         with log_path.open("w", encoding="utf-8") as log:
-            process, mcp_attempts = start_agent(command, workdir, environment, log, log_path, cpus)
+            if harness.mcp_gate:
+                process, mcp_attempts = start_agent(command, workdir, environment, log, log_path, cpus)
+            else:
+                process = start_runner(command, workdir, environment, log, cpus)
             watchers: list[threading.Thread] = []
             if max_tokens > 0:
                 watchers.append(
                     threading.Thread(
-                        target=watch_token_budget, args=(process, log_path, max_tokens, state), daemon=True
+                        target=watch_token_budget,
+                        args=(process, tokens_path, max_tokens, state, harness.fold_tokens),
+                        daemon=True,
                     )
                 )
             if submit_single_submission():
@@ -1795,8 +1916,9 @@ def run_agent(
                 )
                 returncode = RC_TOKEN_BUDGET
             spent = deadline and time.monotonic() >= deadline
-            if not crashed(returncode, log_path) or crash_attempts >= AGENT_CRASH_ATTEMPTS or spent:
-                if spent and crashed(returncode, log_path):
+            attempt_crashed = closing_crashed(returncode, harness.closing(workdir))
+            if not attempt_crashed or crash_attempts >= AGENT_CRASH_ATTEMPTS or spent:
+                if spent and attempt_crashed:
                     log.write("\nagent_driver: crashed with no wall clock left to relaunch in\n")
                 break
             crash_attempts += 1
@@ -1808,14 +1930,22 @@ def run_agent(
         # Without this the next iteration's "w" deleted the transcript of the crash -- and the note
         # just written saying it happened -- leaving crash_attempts= on the summary line as the only
         # trace that anything went wrong, with nothing anywhere saying why.
-        log_path.replace(workdir / f"claude.attempt{crash_attempts - 1}.log")
+        for record in harness.records:
+            kept = workdir / record
+            if kept.exists():
+                kept.replace(kept.with_name(f"{kept.stem}.attempt{crash_attempts - 1}{kept.suffix}"))
+    closing = harness.closing(workdir)
+    is_claude = harness.name == harnesses.CLAUDE
     # Only over a 0: a run the driver killed has the cap it hit already recorded, and the transcript
-    # of a killed run has no closing event to read anyway.
-    if returncode == 0 and context_overflow(log_path):
+    # of a killed run has no closing event to read anyway. A runner's end file names the overflow
+    # whatever the runner exited with, so there only the driver's own caps outrank it.
+    if closing.context_overflow and (
+        returncode == 0 or (not is_claude and returncode not in (RC_TIMEOUT, RC_TOKEN_BUDGET, RC_SUBMITTED))
+    ):
         returncode = RC_CONTEXT
     # Named in the rc for the same reason: the subtype the CLI leaves behind says "success", so the
     # rc is the only field that can tell a run out of API from a run out of work.
-    if returncode not in (RC_TIMEOUT, RC_TOKEN_BUDGET, RC_CONTEXT, RC_SUBMITTED) and api_timeout(log_path):
+    if returncode not in (RC_TIMEOUT, RC_TOKEN_BUDGET, RC_CONTEXT, RC_SUBMITTED) and closing.api_timeout:
         returncode = RC_API_TIMEOUT
     reason = ""
     if returncode == RC_TIMEOUT:
@@ -1833,12 +1963,14 @@ def run_agent(
     # The turn cap, reported by COUNT as well as by subtype: the count is the CLI's own number and
     # survives the subtype being spelled differently by a later version, so an arm whose agents all
     # ran out of turns cannot read as an arm whose agents all finished.
-    subtype, turns = final_result(log_path)
+    subtype, turns = closing.subtype, closing.turns
     # Cost sidecar, written whatever the exit was. The DB carries the spend at each GRADE, so an
     # agent that never reached the judge -- crashed, timed out, ran out of turns -- would otherwise
     # leave no cost trace at all, and those are exactly the expensive failures worth pricing.
-    tokens_total = transcript_total_tokens(log_path)
-    write_cost_record(workdir / "tokens.json", problem, worker_index, returncode, tokens_total, turns, subtype)
+    tokens_total = transcript_total_tokens(tokens_path, harness.fold_tokens)
+    write_cost_record(
+        workdir / "tokens.json", problem, worker_index, returncode, tokens_total, turns, subtype, tokens_path
+    )
     if turns:
         reason += f" turns={turns}"
     if mcp_attempts > 1:
@@ -1863,7 +1995,9 @@ def run_agent(
         )
         if promoted:
             reason += f" promoted={promoted}"
-    if turn_cap.strip().isdigit() and turns >= int(turn_cap) > 0:
+    # The turn cap is claude's --max-turns; a runner has none.
+    turn_cap = os.environ.get("CLAUDE_MAX_TURNS", "40")
+    if is_claude and turn_cap.strip().isdigit() and turns >= int(turn_cap) > 0:
         reason += " censored=turns"
     print(
         f"problem={problem['id']} worker={worker_index} judge={judge_rank} rc={returncode} log={log_path}{reason}",
@@ -1873,6 +2007,8 @@ def run_agent(
 
 
 def main() -> int:
+    # First, so a misspelled harness ends the step before it waits on any service.
+    harness_module().selected_harness()
     replicas = vllm_urls()
     judges = judge_urls()
     vllm_headers: dict[str, str] = {}
