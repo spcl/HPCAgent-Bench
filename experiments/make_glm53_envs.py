@@ -25,6 +25,10 @@ GLM_CONTEXT = 131072
 COMPLETION_RESERVE = 32000
 TURN_HEADROOM = 30000
 
+#: Slowest pipeline stage (1521 s to over 5400 s measured) plus KV allocation plus graph capture.
+#: The inherited 7200 expires while the server is still loading and the arm abandons it.
+READY_TIMEOUT = 10800
+
 GLM_ARGS = (
     '"--trust-remote-code --watchdog-timeout 1800 --kv-cache-dtype fp8_e4m3 --page-size 64 '
     "--context-length 131072 --mem-fraction-static 0.55 --cuda-graph-max-bs-decode 64 "
@@ -77,6 +81,17 @@ def derive(src: pathlib.Path, dst: pathlib.Path) -> None:
         elif line.startswith(("AITER_USE_FLYDSL_MOE_SORTING=", "SGLANG_ATTENTION_BACKEND=")):
             # Re-emitted with the args, so there is exactly one assignment in the result.
             continue
+        elif line.startswith("VLLM_READY_TIMEOUT_SECONDS="):
+            # Shadowed: agent_driver falls back to it only when AGENT_READY is unset, and it
+            # reads as if it bounded the server wait.
+            replaced.add("dead_ready")
+            continue
+        elif line.startswith("VLLM_ENGINE_READY_TIMEOUT_S="):
+            line = f"VLLM_ENGINE_READY_TIMEOUT_S={READY_TIMEOUT}"
+            replaced.add("engine_ready")
+        elif line.startswith("AGENT_READY_TIMEOUT_SECONDS="):
+            line = f"AGENT_READY_TIMEOUT_SECONDS={READY_TIMEOUT}"
+            replaced.add("agent_ready")
         elif line.startswith("INFERENCE_CE_ENV="):
             # Without this branch a regeneration drops GLM back to the shared EDF, which cannot
             # load GLM-5.3 at all, and the arm looks correct until the loader dies on format_ue8m0.
@@ -97,7 +112,16 @@ def derive(src: pathlib.Path, dst: pathlib.Path) -> None:
             line = f"SGLANG_EXTRA_ARGS={GLM_ARGS}"
             replaced.add("args")
         out.append(line)
-    missing = {"model", "optimizer", "args", "ce_env", "autocompact"} - replaced
+    missing = {
+        "model",
+        "optimizer",
+        "args",
+        "ce_env",
+        "autocompact",
+        "dead_ready",
+        "engine_ready",
+        "agent_ready",
+    } - replaced
     if missing:
         raise SystemExit(f"{src.name}: never matched {sorted(missing)}")
     dst.write_text("\n".join(out) + "\n")
