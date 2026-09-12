@@ -9,7 +9,7 @@ Four unrelated things are called *variant*. Measured, not guessed:
 | `variants:` manifest block | legacy sparse: one entry = one matrix format + one distribution | 7 manifests |
 | `hidden.VARIANTS` | held-out input rotation h1..h5, the correctness gate | `support/distributions/hidden.py` |
 | `variant_spec` | the dict `variants:` feeds into `initialize` and into hand-written init funcs | `initialize.py:133`, 11 kernel `.py` |
-| ~~`SCORED_VARIANTS`~~ | **DONE** — now each flavor's `pipelines`, and the word "variant" is gone from the DaCe side | `framework.py` FRAMEWORK_META, `dace_framework.DEFAULT_PIPELINES` |
+| ~~`SCORED_VARIANTS`~~ | **DONE**: now each flavor's `pipelines`, and the word "variant" is gone from the DaCe side | `framework.py` FRAMEWORK_META, `dace_framework.DEFAULT_PIPELINES` |
 
 Only the second one is modern and documented. The rest are the same word wearing
 other jobs.
@@ -53,8 +53,8 @@ Reserve *variant* for the hidden rotation. Delete or rename the other three.
    the 4 non-sparse ones accept it and never read it.
 5. `--variant` CLI flag becomes `--configuration`. That is what it selects.
 6. ~~`SCORED_VARIANTS` becomes `SCORED_PIPELINES`.~~ **Done**, and better than proposed: the
-   set is not a module constant at all any more but a property of the framework FLAVOR
-   (`FRAMEWORK_META[...]["pipelines"]`), so `dace_cpu_canonicalize` is one column running one
+   set is a property of the framework FLAVOR (`FRAMEWORK_META[...]["pipelines"]`), not a
+   module constant, so `dace_cpu_canonicalize` is one column running one
    pipeline instead of a search whose winner the DB never recorded.
 
 ## What must not change
