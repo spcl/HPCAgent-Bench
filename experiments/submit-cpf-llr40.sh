@@ -47,26 +47,15 @@ target_for() {  # target_for <language> -> cpu|gpu
     echo cpu
 }
 
-# form_ext <language> -- rendered-form extension, keyed on the arm's own language (never a sibling)
-form_ext() { case "$1" in cpp) echo cpp ;; hip) echo hip ;; cuda) echo cu ;; *) echo "$1" ;; esac; }
+# tool_dialect <language> -- the dialect the canonical_parallel_form tool asks for on this arm
+tool_dialect() { case "$1" in c) echo c ;; *) echo c++ ;; esac; }
 
-# forms_missing <dir> <ext> -- kernels of ${KERNELS} with no <kernel>_*_cpf.<ext> in <dir>, checked
-# per KERNEL by name (a missing form reads as HTTP 200 "unavailable", not an error); a drop-in
-# directory is additionally checked against the drop-in SIGNATURE (workspace_size)
+# forms_missing <view> <language> <mode> -- one line per kernel of ${KERNELS} the cache view cannot
+# serve, naming the missing key (a missing form reads as HTTP 200 "unavailable", not an error); a
+# check that fails for any other reason prints a line too, so the caller refuses either way
 forms_missing() {
-    local dir="$1" ext="$2" kernel form dropin=0
-    [[ -e "${dir}/.cpf-dropin" ]] && dropin=1
-    for kernel in ${KERNELS//,/ }; do
-        form=""
-        if [[ -d "${dir}" ]]; then
-            form=$(compgen -G "${dir}/${kernel}"'_*_cpf.'"${ext}" | head -1 || true)
-        fi
-        if [[ -z "${form}" ]]; then
-            echo "${kernel}"
-        elif (( dropin )) && ! grep -q workspace_size "${form}"; then
-            echo "${kernel} (form is not a drop-in)"
-        fi
-    done
+    "${PY}" -m hpcagent_bench.cpf_cache check --view "$1" --language "$2" --mode "$3" --kernels "${KERNELS}" \
+        || [[ $? == 1 ]] || echo "cpf_cache check failed for view $1"
 }
 
 # arm KIND: plain (control), skills (full language packet), cpf (page + pre-rendered forms),
@@ -120,12 +109,13 @@ submit_arm() {  # submit_arm <model> <language> <kind:plain|skills|cpf|cpfsrc>
     local kv
     for kv in ${EXTRA_ENV_KV:-}; do echo "${kv}" >>"${staged}"; done
     if [[ "${kind}" == cpfsrc ]]; then
-        local forms="${CPF_DROPIN_DIR:-${SCRATCH:?}/cpf-dropin-${target}-${TAG}}"
+        local forms="${CPF_DROPIN_DIR:-${SCRATCH:?}/cpf-view-${target}-${TAG}}"
         local absent
-        absent=$(forms_missing "${forms}" "$(form_ext "${lang}")")
+        absent=$(forms_missing "${forms}" "${lang}" dropin)
         if [[ -n "${absent}" ]]; then
-            echo "no drop-in form at ${forms} for: $(tr '\n' ' ' <<<"${absent}")" >&2
-            echo "  render them: CPF_DROPIN=1 ./prerender_cpf.sh outer ${forms} \"\${KERNELS}\" \"\${OPT}\" ${target}" >&2
+            echo "the view ${forms} cannot serve a drop-in for:" >&2
+            sed 's/^/  /' <<<"${absent}" >&2
+            echo "  render them: VIEW=${forms} TARGET=${target} KERNELS=\"\${KERNELS}\" sbatch prerender_cpf.sbatch" >&2
             rm -f "${staged}"
             exit 2
         fi
@@ -135,16 +125,16 @@ submit_arm() {  # submit_arm <model> <language> <kind:plain|skills|cpf|cpfsrc>
     if [[ "${target}" == gpu ]]; then
         sed -i -e "s|^AGENT_PROMPT_FILE=.*|AGENT_PROMPT_FILE=prompt-gpu.md|" "${staged}"
     fi
-    # only the TREATED arm points at pre-rendered forms (unset reads as 200 "unavailable", silently
-    # measuring nothing). One directory per TARGET, keyed by TARGET+ROSTER: cpu holds both c/c++.
+    # only the TREATED arm points at a cache view (unset reads as 200 "unavailable", silently
+    # measuring nothing). One view per TARGET+ROSTER serves both c/c++ and both modes.
     if [[ "${cpf}" == 1 ]]; then
-        local default_forms="${SCRATCH:?}/cpf-forms-${target}-${TAG}"
-        local forms="${CPF_FORMS_DIR:-${default_forms}}"
+        local forms="${CPF_FORMS_DIR:-${SCRATCH:?}/cpf-view-${target}-${TAG}}"
         local absent
-        absent=$(forms_missing "${forms}" "$(form_ext "${lang}")")
+        absent=$(forms_missing "${forms}" "$(tool_dialect "${lang}")" form)
         if [[ -n "${absent}" ]]; then
-            echo "no pre-rendered ${target} form at ${forms} for: $(tr '\n' ' ' <<<"${absent}")" >&2
-            echo "  render them all first: ./prerender_cpf.sh outer ${forms} \"\${KERNELS}\" \"\${OPT}\" ${target}" >&2
+            echo "the view ${forms} cannot serve a ${target} form for:" >&2
+            sed 's/^/  /' <<<"${absent}" >&2
+            echo "  render them all first: VIEW=${forms} TARGET=${target} KERNELS=\"\${KERNELS}\" sbatch prerender_cpf.sbatch" >&2
             rm -f "${staged}"
             exit 2
         fi

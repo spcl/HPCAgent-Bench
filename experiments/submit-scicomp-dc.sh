@@ -47,8 +47,8 @@ mapfile -t ROSTER < <(sed -e 's/#.*//' -e 's/[[:space:]]*$//' "${KERNELS_FILE}" 
 N_PROBLEMS=$(( ${#ROSTER[@]} * REPEAT ))
 # one wave: a second batch costs another AGENT_TIMEOUT_SECONDS and the partition tops out at 24 h
 AGENT_NODES=${AGENT_NODES:-$(( (N_PROBLEMS + AGENTS_PER_NODE - 1) / AGENTS_PER_NODE ))}
-# one directory per TARGET+ROSTER: a mixed directory would hand a CPU arm a device form
-CPF_FORMS_DIR=${CPF_FORMS_DIR:-${SCRATCH:?}/cpf-forms-cpu-${RECORD_EXPERIMENT}}
+# one cache view per TARGET+ROSTER, pinned to one target so it cannot hand a CPU arm a device form
+CPF_FORMS_DIR=${CPF_FORMS_DIR:-${SCRATCH:?}/cpf-view-cpu-${RECORD_EXPERIMENT}}
 # scaled by the roster's LEVEL MIX, so a roster edit moves it; judge_nodes.py carries the reasoning
 JUDGE_NODES=${JUDGE_NODES:-$("${PY}" ./judge_nodes.py "${KERNELS_FILE}")}
 
@@ -68,20 +68,15 @@ canonical_packet() {
     for page in "$@"; do packet_key "${page}"; done | grep . | LC_ALL=C sort -u | paste -sd+ -
 }
 
-# forms_missing <dir> -- roster kernels with no `<kernel>_<fptype>_cpf.c` under <dir>. An arm whose
-# form directory is short answers `unavailable` with HTTP 200 for those kernels, silently, so a
-# treated arm missing forms measures nothing on them. The precision tag is ONE segment: a prefix
-# match would count cloudsc_init as a form for cloudsc and report the roster complete.
+# forms_missing <view> -- one line per roster kernel the cache view cannot serve in the dialect the
+# tool asks for, naming the missing key. An arm whose view is short answers `unavailable` with HTTP
+# 200 for those kernels, silently, so a treated arm missing forms measures nothing on them. Lookup is
+# by exact name: cloudsc_init never counts as a form for cloudsc. A failed check prints a line too.
 forms_missing() {
-    local dir="$1" kernel path stem
-    for kernel in "${ROSTER[@]}"; do
-        for path in "${dir}/${kernel}"_*_cpf.c; do
-            [[ -e "${path}" ]] || continue
-            stem="${path##*/}"; stem="${stem#"${kernel}_"}"; stem="${stem%_cpf.c}"
-            [[ "${stem}" == *_* ]] || continue 2
-        done
-        echo "${kernel}"
-    done
+    local dialect=c++
+    [[ "${LANGUAGE}" == c ]] && dialect=c
+    "${PY}" -m hpcagent_bench.cpf_cache check --view "$1" --language "${dialect}" --mode form \
+        --kernels "$(IFS=,; echo "${ROSTER[*]}")" || [[ $? == 1 ]] || echo "cpf_cache check failed for view $1"
 }
 
 make_arm_problems() {  # make_arm_problems <kind> <--skill args>
@@ -141,9 +136,9 @@ submit_arm() {  # submit_arm <model> <kind: plain|dc|cpf|dc-cpf> <deps or empty>
         local absent
         absent=$(forms_missing "${CPF_FORMS_DIR}")
         if [[ -n "${absent}" ]]; then
-            echo "${arm}: no pre-rendered cpu form at ${CPF_FORMS_DIR} for: $(tr '\n' ' ' <<<"${absent}")" >&2
-            echo "  render them all first: ./prerender_cpf.sh outer ${CPF_FORMS_DIR} \\" >&2
-            echo "      \"$(IFS=,; echo "${ROSTER[*]}")\" \"${OPTARENA}\" cpu" >&2
+            echo "${arm}: the view ${CPF_FORMS_DIR} cannot serve a cpu form for:" >&2
+            sed 's/^/  /' <<<"${absent}" >&2
+            echo "  render them all first: VIEW=${CPF_FORMS_DIR} KERNELS_FILE=${KERNELS_FILE} sbatch prerender_cpf.sbatch" >&2
             # a trailing `[[ ]] &&` would make a false test this function's exit status
             if [[ "${SUBMIT:-1}" == 1 ]]; then rm -f "${staged}"; return 2; fi
         fi
