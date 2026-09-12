@@ -79,9 +79,11 @@ def test_a_tied_sample_takes_the_approximation_in_both_paths(n: int) -> None:
     used, stdlib_p, method = signed_rank.signed_rank_p(values)
     assert method == "signed-rank-approx"
     nonzero = [v for v in values if v != 0.0]
-    expected = float(wilcoxon(nonzero, method="approx", zero_method="wilcox").pvalue)
+    # NOT scipy's "approx": that branch omits both the continuity correction and the kurtosis term
+    # and so reports a p below the exact null. Both of OUR paths take signed_rank.normal_p.
     assert used == len(nonzero)
-    assert stdlib_p == pytest.approx(expected, rel=1e-9, abs=1e-12)
+    assert stdlib_p == pytest.approx(summary.paired_change(values).pvalue, rel=1e-12, abs=1e-15)
+    assert stdlib_p >= float(wilcoxon(nonzero, method="approx", zero_method="wilcox").pvalue)
 
 
 @pytest.mark.parametrize("n", EXACT_RANGE)

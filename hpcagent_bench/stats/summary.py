@@ -381,11 +381,19 @@ def paired_change(differences: Samples, alpha: float = DEFAULT_ALPHA) -> PairedC
     method = "signed-rank-exact" if exact else "signed-rank-approx"
     # The method is passed EXPLICITLY. scipy's "auto" is a library default that has moved before and
     # can move again on a bump, and the moment it does this path stops agreeing with the stdlib one.
-    result = wilcoxon(nonzero, method="exact" if exact else "approx", zero_method="wilcox")
+    # The APPROXIMATE branch is ours, not scipy's: scipy's normal branch carries neither the
+    # continuity correction nor the kurtosis term, so it reports a p below the exact null.
+    absolute = np.abs(nonzero)
+    if exact:
+        pvalue = float(wilcoxon(nonzero, method="exact", zero_method="wilcox").pvalue)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+    else:
+        ranks = signed_rank.average_ranks(absolute.tolist())
+        w_plus = math.fsum(rank for rank, diff in zip(ranks, nonzero.tolist()) if diff > 0.0)
+        pvalue = signed_rank.normal_p(w_plus, n, absolute.tolist())
     walsh = walsh_averages(nonzero)
     mean = n * (n + 1) / 4.0
     sd = math.sqrt(n * (n + 1) * (2 * n + 1) / 24.0)
     z = float(norm.ppf(1.0 - alpha / 2.0))
     cutoff = min(max(math.floor(mean - z * sd), 0), walsh.size // 2 - 1)
     low, high = float(walsh[cutoff]), float(walsh[walsh.size - 1 - cutoff])
-    return PairedChange(point, low, high, float(result.pvalue), n, wins, losses, ties, method)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+    return PairedChange(point, low, high, pvalue, n, wins, losses, ties, method)
