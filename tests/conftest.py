@@ -14,6 +14,11 @@ from hpcagent_bench.api import RunConfig
 from hpcagent_bench.harness.service import make_server
 from hpcagent_bench.harness.tools import DEFAULT_RANK
 
+#: Every env var that could make ``recording.db_shard()`` see a rank: the explicit override plus
+#: every launcher's own rank variable. A test asserting single-writer (unsharded) behaviour has to
+#: clear all four, or a rank leaked from the host running pytest silently shards it instead.
+RANK_ENV_VARS = ("HPCAGENT_BENCH_DB_SHARD", "SLURM_PROCID", "OMPI_COMM_WORLD_RANK", "PMI_RANK")
+
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
