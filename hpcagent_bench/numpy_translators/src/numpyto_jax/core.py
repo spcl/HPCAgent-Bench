@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import ast
 import copy
-from typing import List, Optional, Set
+from typing import List, Optional, Set, Tuple
 
 
 class EmitError(Exception):
@@ -1346,7 +1346,8 @@ def emit_jax(numpy_src: str, func_name: str, jit: bool = False) -> str:
     # lowers to ``jnp.where``.
     concrete = _concrete_params(funcs, func_name, kernel_static) if jit else {}
 
-    head = [
+    future_imports, extra_imports = _extra_imports(tree)
+    head = future_imports + [
         "import jax",
         # numpy defaults to 64-bit; jax narrows to 32-bit unless x64 is
         # enabled -- set at the TOP of the module so it applies before any
@@ -1358,7 +1359,7 @@ def emit_jax(numpy_src: str, func_name: str, jit: bool = False) -> str:
     ]
     # Carry over the module's own imports (minus numpy -- jnp replaces it) so
     # e.g. a TSVC kernel's ``from math import sin, sqrt`` resolves.
-    head += _extra_imports(tree)
+    head += extra_imports
     head += ["", ""]
     consts = _module_constants(tree, func_name)
     if consts:
@@ -1667,19 +1668,27 @@ def _functionalize_bare_expr(call: ast.AST) -> Optional[ast.Assign]:
     return None
 
 
-def _extra_imports(tree: ast.Module) -> List[str]:
-    """The module's own import statements, minus ``numpy`` (``jnp`` stands in)."""
-    out: List[str] = []
+def _extra_imports(tree: ast.Module) -> Tuple[List[str], List[str]]:
+    """The module's own import statements, minus ``numpy`` (``jnp`` stands in),
+    split into ``(future, other)``.
+
+    A ``from __future__`` import is only legal as the first statement of a module
+    (a docstring may precede it), and the kernel source may carry one wherever it
+    likes. The emitted module puts the future group ahead of the jax preamble, so
+    the assembled source compiles whatever the kernel's own ordering was."""
+    future: List[str] = []
+    other: List[str] = []
     for s in tree.body:
         if isinstance(s, ast.Import):
             names = [a for a in s.names if a.name.split(".")[0] != "numpy"]
             if names:
-                out.append(ast.unparse(ast.Import(names=names)))
+                other.append(ast.unparse(ast.Import(names=names)))
         elif isinstance(s, ast.ImportFrom):
-            if (s.module or "").split(".")[0] == "numpy":
+            root = (s.module or "").split(".")[0]
+            if root == "numpy":
                 continue
-            out.append(ast.unparse(s))
-    return out
+            (future if root == "__future__" else other).append(ast.unparse(s))
+    return future, other
 
 
 def _module_constants(tree: ast.Module, func_name: str) -> List[str]:
