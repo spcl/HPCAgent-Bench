@@ -354,6 +354,7 @@ FrameworkMeta = TypedDict(
         "column": NotRequired[str],
         "flavor": NotRequired[str],
         "language": NotRequired[str],
+        "emit_language": NotRequired[str],
         "compiler": NotRequired[str],
         "flags": NotRequired[str],
         "simple_name": NotRequired[str],
@@ -365,7 +366,8 @@ FrameworkMeta = TypedDict(
 #: (dace_cpu/dace_gpu share base "dace", cc/llvm/fortran/polly share "native"); the base selects the
 #: :class:`Framework` subclass via :func:`framework_class`. ``arch`` is cpu/gpu; ``postfix`` selects the
 #: impl file; ``precisions`` is the set the flavor can execute (else the sweep records status="skip").
-#: native/pluto flavors also carry ``language``/``compiler``, plus a ``flags`` preset for polly/pluto.
+#: native/pluto flavors also carry ``language`` (what the column compiles), ``emit_language`` when its
+#: sources start from another translator output, ``compiler``, and a ``flags`` preset for polly/pluto.
 #: ``sweep_deterministic`` is what a deterministic (unjudged, no-agent) sweep may select
 #: (:func:`hpcagent_bench.harness.preflight.check_deterministic` derives its column list from it).
 FRAMEWORK_META: dict[str, FrameworkMeta] = {
@@ -674,7 +676,8 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "prefix": "pluto",
         "postfix": "cpp",
         "arch": "cpu",
-        "language": "cpp",
+        # polycc reads the C target's ``_pluto_input.c`` and writes C (VLA ``restrict`` parameters).
+        "language": "c",
         "compiler": "clang",
         "flags": "pluto",
         "precisions": IEEE_PRECISIONS,
@@ -691,6 +694,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         # The compiler is not restated: compilers.yaml already maps the language to its block
         # (cuda -> nvcc, hip -> hipcc), and restating it is what left this entry saying nvcc on
         # an AMD node.
+        "emit_language": "c",
         "language": gpu_backend(),
         "precisions": IEEE_PRECISIONS,
     },
@@ -708,6 +712,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "arch": "gpu",
         "column": "ppcg",
         "flavor": "cuda",
+        "emit_language": "c",
         "language": "cuda",
         "precisions": IEEE_PRECISIONS,
     },
@@ -723,6 +728,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "arch": "gpu",
         "column": "ppcg",
         "flavor": "hip",
+        "emit_language": "c",
         "language": "hip",
         "precisions": IEEE_PRECISIONS,
     },
@@ -820,37 +826,43 @@ def check_flavor_registry() -> None:
             )
 
 
-def framework_class(fname: str) -> type[Framework]:
-    """Map a framework name to its :class:`Framework` subclass via its ``base`` (imported lazily to
-    dodge the circular import)."""
-    from hpcagent_bench.frameworks import (
-        CupyFramework,
-        DaceFramework,
-        Framework,
-        JaxFramework,
-        NativeFramework,
-        NumbaFramework,
-        PlutoFramework,
-        PythranFramework,
-        TritonFramework,
-        TVMFramework,
+def framework_bases() -> tuple[str, ...]:
+    """Every ``base`` in :data:`FRAMEWORK_META`, in registry order."""
+    return tuple(dict.fromkeys(meta["base"] for meta in FRAMEWORK_META.values()))
+
+
+def base_framework_class(base: str) -> type[Framework]:
+    """The adapter class of ``base``, imported on first use so no optional backend loads eagerly.
+
+    ``numpy`` is :class:`Framework` itself. Any other base ``foo`` is the :class:`Framework` subclass
+    named ``FooFramework`` in ``hpcagent_bench/frameworks/foo_framework.py``; the name matches
+    case-insensitively, which is how ``tvm`` finds ``TVMFramework``."""
+    if base == "numpy":
+        return Framework
+    module_name = f"hpcagent_bench.frameworks.{base}_framework"
+    expected_file = f"hpcagent_bench/frameworks/{base}_framework.py"
+    try:
+        module = importlib.import_module(module_name)
+    except ModuleNotFoundError as exc:
+        if exc.name != module_name:
+            raise
+        raise ModuleNotFoundError(
+            f"framework base {base!r} needs its adapter class in {expected_file}, which does not exist",
+            name=module_name,
+        ) from exc
+    for name, value in vars(module).items():
+        if name.lower() == f"{base}framework" and isinstance(value, type) and issubclass(value, Framework):
+            return value
+    raise ImportError(
+        f"{expected_file} defines no Framework subclass named {base}Framework (case-insensitive)", name=module_name
     )
 
-    base_class: dict[str, type[Framework]] = {
-        "numpy": Framework,
-        "numba": NumbaFramework,
-        "cupy": CupyFramework,
-        "jax": JaxFramework,
-        "pythran": PythranFramework,
-        "dace": DaceFramework,
-        "native": NativeFramework,
-        "pluto": PlutoFramework,
-        "triton": TritonFramework,
-        "tvm": TVMFramework,
-    }
+
+def framework_class(fname: str) -> type[Framework]:
+    """Map a framework name to its :class:`Framework` subclass via its ``base``."""
     if fname not in FRAMEWORK_META:
         raise KeyError(f"unknown framework {fname!r}; known: {sorted(FRAMEWORK_META)}")
-    return base_class[FRAMEWORK_META[fname]["base"]]
+    return base_framework_class(FRAMEWORK_META[fname]["base"])
 
 
 class Framework:
@@ -1113,30 +1125,23 @@ def generate_framework(fname: str, save_strict: bool = False, load_strict: bool 
     return cls(fname)
 
 
-def check_native_registry() -> None:
-    """Every ``base: native`` framework must declare its language in BOTH sibling registries.
+def native_column_languages() -> dict[str, tuple[str, str]]:
+    """``column -> (emit_language, language)`` for every ``native``/``pluto`` column, in registry order.
 
-    ``autogen.NATIVE_FRAMEWORKS`` (which language to EMIT) and ``cpp_runtime.FRAMEWORK_LANG`` (which
-    language to COMPILE) are documented as mirrors of each other, but nothing checked it. A column
-    registered here and missing from them is not a startup error: it resolves, prints its full name,
-    and then raises ``KeyError`` inside the per-kernel fork, so the sweep exits 0 having written one
-    ``crash`` row per kernel -- which reads downstream as "the column ran and every kernel failed".
-    Measured: the ``cpp`` column lost a 40-kernel sweep that way.
-
-    ``language`` is not re-derived here; the entry states it and this asserts the others agree."""
-    from hpcagent_bench.autogen import NATIVE_FRAMEWORKS
-    from hpcagent_bench.benchmarks.cpp_runtime import FRAMEWORK_LANG
-
+    ``language`` is what the column compiles (``cpp_runtime.FRAMEWORK_LANG``); ``emit_language`` is the
+    translator output its sources start from (``autogen.NATIVE_FRAMEWORKS``) and defaults to ``language``.
+    Both tables are this projection, so a column cannot be registered in one and missing from the other."""
+    columns: dict[str, tuple[str, str]] = {}
     for name, meta in FRAMEWORK_META.items():
-        if meta.get("base") != "native":
+        if meta["base"] not in ("native", "pluto"):
             continue
-        if name not in NATIVE_FRAMEWORKS:
-            raise KeyError(f"native framework {name!r} has no autogen.NATIVE_FRAMEWORKS entry")
-        if name not in FRAMEWORK_LANG:
-            raise KeyError(f"native framework {name!r} has no cpp_runtime.FRAMEWORK_LANG entry")
+        language = meta.get("language")
+        if language is None:
+            raise KeyError(f"native framework {name!r} declares no language")
+        columns[name] = (meta.get("emit_language", language), language)
+    return columns
 
 
 # A malformed flavor entry is a wrong GROUP BY key on every row it writes, and the rows outlive the
 # run. Checked once, here, at import -- there is no later moment at which noticing still helps.
 check_flavor_registry()
-check_native_registry()
