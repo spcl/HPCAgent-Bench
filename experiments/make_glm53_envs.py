@@ -21,7 +21,7 @@ import sys
 
 #: The served window, and what a request has to leave room for: the completion reservation plus
 #: one turn, which a compiler log or an asm dump can fill on its own.
-GLM_CONTEXT = 131072
+GLM_CONTEXT = 262144
 COMPLETION_RESERVE = 32000
 TURN_HEADROOM = 30000
 
@@ -31,7 +31,7 @@ READY_TIMEOUT = 10800
 
 GLM_ARGS = (
     '"--trust-remote-code --watchdog-timeout 1800 --kv-cache-dtype fp8_e4m3 --page-size 64 '
-    "--context-length 131072 --mem-fraction-static 0.55 --cuda-graph-max-bs-decode 64 "
+    "--context-length 262144 --mem-fraction-static 0.55 --cuda-graph-max-bs-decode 64 "
     "--enable-metrics --pre-warm-nccl --reasoning-parser glm45 --tool-call-parser glm47 "
     '--dsa-prefill-backend tilelang --dsa-decode-backend tilelang --enable-cache-report"'
 )
@@ -57,8 +57,8 @@ HEADER = """
 # shrinks the KV pool toward zero: pool(f) = 39.0M * (f - 0.4838) tokens at tp4 x pp4. Below 0.486
 # sglang refuses and at 0.62 the host OOM killer takes the heaviest pipeline stage, whose 206.1 GB
 # is the one to size against -- the stages are UNEVEN (172.4/197.2/203.8/206.1 GB). 0.55 gives a
-# 2.58M-token pool against the 1.38M an arm's 20 agents hold, a pool/working-set ratio of 1.87
-# where the prefix cache holds.
+# 2.58M-token pool; the 1.38M working-set and 1.87 ratio below it were measured at the 131072
+# window this env used to serve and are unverified at GLM_CONTEXT's current value.
 # SGLANG_ATTENTION_BACKEND is assigned EMPTY so no --attention-backend reaches the server and
 # GlmMoeDsaForCausalLM selects dsa from its own config. An explicit aiter suppresses that and also
 # scales mem-fraction-static by 0.85, so the flag would no longer be the effective fraction.
@@ -99,8 +99,8 @@ def derive(src: pathlib.Path, dst: pathlib.Path) -> None:
             replaced.add("ce_env")
             continue
         elif line.startswith("CLAUDE_AUTOCOMPACT="):
-            # GLM serves HALF the kimi context, so the inherited threshold would sit above the
-            # window entirely and every agent would 400 before it could ever compact.
+            # GLM and kimi now serve the same window, so this recomputes to the kimi value; kept
+            # as its own branch since GLM_CONTEXT can still move independently of the kimi source.
             line = f"CLAUDE_AUTOCOMPACT={GLM_CONTEXT - COMPLETION_RESERVE - TURN_HEADROOM}"
             replaced.add("autocompact")
         elif line.startswith("SGLANG_EXTRA_ARGS="):
