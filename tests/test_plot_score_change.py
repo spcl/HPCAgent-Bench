@@ -133,6 +133,25 @@ def test_the_family_the_marks_are_corrected_over_is_every_test_the_figure_could_
     assert plot.family_size(frame) == 12
 
 
+def test_load_reads_skills_off_the_recorded_packet_not_the_arm_name(tmp_path: pathlib.Path) -> None:
+    """An arm renamed away from the ``-skills`` suffix, but recording the ``lang-skills`` packet,
+    must still load as skilled -- and one still literally suffixed ``-skills`` that recorded no
+    packet must not."""
+    path = tmp_path / "observations.csv"
+    pd.DataFrame(
+        [
+            {"arm": "renamed-qwen38-c", "packet": "skills"},
+            {"arm": "qwen38-c-skills", "packet": ""},
+        ]
+    ).to_csv(path, index=False)
+
+    frame = plot.load(path, prefix="")
+
+    by_arm = frame.set_index("arm").skills
+    assert bool(by_arm["renamed-qwen38-c"]) is True
+    assert bool(by_arm["qwen38-c-skills"]) is False
+
+
 def thin(log2_speedup: float, tokens: float) -> dict[str, float]:
     """An ``absolute_points`` row over too few kernels for an interval, as the table writes one."""
     nan = float("nan")
