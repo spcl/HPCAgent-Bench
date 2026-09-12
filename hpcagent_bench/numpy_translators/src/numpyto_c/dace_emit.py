@@ -1610,6 +1610,21 @@ def version_reallocations(fn: ast.FunctionDef) -> None:
     version_rebound_names(fn, allocation_binding, {n for n, texts in spellings.items() if len(texts) > 1})
 
 
+def binds_a_view(node: ast.stmt) -> bool:
+    """``name = <expr>[...]`` whose subscript keeps a dimension, over any base: the View dace refuses to
+    rebind. A chained ``a[f][..., 0]`` counts, which :func:`view_slice_binding` does not name; a bare
+    ``name = other`` does not, since without the symbol table ``edge = N`` may read a dc.symbol."""
+    if not (isinstance(node, ast.Assign) and isinstance(node.value, ast.Subscript)):
+        return False
+    index = node.value.slice
+    elements = index.elts if isinstance(index, ast.Tuple) else [index]
+    return any(
+        isinstance(element, (ast.Slice, ast.Starred))
+        or (isinstance(element, ast.Constant) and element.value is Ellipsis)
+        for element in elements
+    )
+
+
 def version_rebound_names(
     fn: ast.FunctionDef,
     binding_of: Callable[[ast.stmt], Optional[str]],
@@ -1634,6 +1649,12 @@ def version_rebound_names(
     gmres' ``m_iter``, seeded at top level and advanced by ``m_iter = k + 1`` two blocks down,
     stopped advancing. Bindings in SIBLING blocks are unaffected, which is the common case this
     function exists for: esirkepov binds ``cum_x`` in three arms of one branch, none inside another.
+
+    A nested value binding is not declined when an OUTER binding of the name is a view and there are
+    two or more outer bindings: it is part of the live range of the outer region enclosing it, and
+    renames with that region. ls3df_scf binds ``v`` to a view, rebinds it to ``v / norm``, then
+    updates it in a loop; declining the whole name for the loop left the View and the value under
+    one name, which dace refuses. A name bound only to values keeps its name: dace rebinds those.
     """
     declined: List[str] = []
     blocks = statement_lists(fn)
@@ -1655,9 +1676,21 @@ def version_rebound_names(
             declined.append(name)
             continue  # something else writes the name; its value is no longer just these bindings
         reached = [{id(node) for stmt in owned for node in ast.walk(stmt)} for _, owned in regions]
-        if any(id(binding) in nodes for binding, _ in regions for nodes in reached):
-            declined.append(name)
-            continue  # a binding NESTED in another's extent: the reads after it belong to both
+        nested = {id(binding) for binding, _ in regions if any(id(binding) in nodes for nodes in reached)}
+        if nested:
+            # A nested value binding belongs to the one outer region enclosing it and renames with it.
+            # Only done to separate a View from the values bound after it: dace rebinds a value name.
+            outer = [index for index, (binding, _) in enumerate(regions) if id(binding) not in nested]
+            if (
+                len(outer) < 2
+                or not any(binds_a_view(regions[index][0]) for index in outer)
+                or any(view_binding(binding) for binding, _ in regions if id(binding) in nested)
+                or any(sum(key in reached[index] for index in outer) != 1 for key in nested)
+            ):
+                declined.append(name)
+                continue  # a binding NESTED in another's extent: the reads after it belong to both
+            regions = [regions[index] for index in outer]
+            reached = [reached[index] for index in outer]
         if any(sum(id(load) in nodes for nodes in reached) != 1 for load in loads.get(name, [])):
             declined.append(name)
             continue  # a read no region owns, or one two regions reach: neither is a rename
@@ -1672,7 +1705,7 @@ def version_rebound_names(
                 bound.id = renamed
             for stmt in owned:
                 for node in ast.walk(stmt):
-                    if isinstance(node, ast.Name) and node.id == name and isinstance(node.ctx, ast.Load):
+                    if isinstance(node, ast.Name) and node.id == name:
                         node.id = renamed
     return declined
 
