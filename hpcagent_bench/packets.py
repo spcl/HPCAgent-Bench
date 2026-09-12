@@ -179,6 +179,14 @@ def canonical(spec: str) -> str:
     return "+".join(sorted(parts))
 
 
+def has_part(spec: str, part: str) -> bool:
+    """Whether ``spec``'s canonical parts include ``part`` -- true for a bare match and for any
+    composite carrying it (``lang-skills+no-score-tool`` carries ``skills``). ``part`` is
+    canonicalized too, so a caller may pass either spelling; a composite that is not a registered
+    key of its own still decomposes correctly since :func:`spec_parts` splits on ``+``."""
+    return canonical(part) in spec_parts(spec)
+
+
 def label(spec: str) -> str:
     """Display text for ``spec``: a registered key's name, or its parts' names joined `` + ``."""
     return tags.packet_name("+".join(spec_parts(spec)))
