@@ -30,6 +30,13 @@ real kernels and a rewrite cookbook.
 
 ## 2. The Three Invariants
 
+### Data model -- tensors only
+
+A kernel handles tensors and nothing else: float or integer arrays of fixed rank. A **scalar** is a
+rank-0 tensor and is passed by copy. A **size symbol** is a named integer scalar whose meaning is an
+extent (`N`, `nnz`); declared shapes are spelled in size symbols. No list, dict, tuple or object ever
+holds a value (Invariant 3).
+
 ### Invariant 1 -- Static shape, known at declaration
 
 Every array -- input *or* temporary -- has a shape fully determined by the kernel's

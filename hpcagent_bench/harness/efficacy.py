@@ -257,6 +257,11 @@ class Efficacy:
     ``Q == 0`` exactly at no effect, ``exp(Q)`` reads as one overall multiplicative effect, and
     swapping the arms negates it (:func:`Efficacy.swapped` asserts nothing -- the antisymmetry is a
     property of the form, and ``test_swapping_the_arms_negates_q`` is what holds it).
+
+    ``tasks`` is what the pairing KEPT; ``unmatched`` is what it dropped because it was missing on
+    at least one side -- a name in only one arm's score mapping, only one arm's cost mapping, or
+    absent altogether. Reporting only ``tasks`` lets a four-kernel table quietly become a two-kernel
+    one with nothing in the record saying so.
     """
 
     score: Ratio
@@ -265,6 +270,7 @@ class Efficacy:
     score_weight: float
     cost_weight: float
     tasks: Tuple[str, ...]
+    unmatched: Tuple[str, ...]
 
     @property
     def overall_effect(self) -> float:
@@ -350,7 +356,9 @@ def efficacy(
     Keyed by task rather than positional, and INTERSECTED rather than zipped, because an arm that
     crashed on a kernel has no row for it: pairing by position would silently compare kernel k in
     one arm against kernel k+1 in the other. The task order is sorted so the bootstrap draws the
-    same resamples for the same set however the callers built their mappings.
+    same resamples for the same set however the callers built their mappings. Every name absent
+    from the intersection is recorded on the result as ``unmatched``, not just dropped, so a
+    caller cannot report "N tasks" while quietly comparing on fewer.
     """
     if cost_weight is None:
         cost_weight = 1.0 - score_weight
@@ -360,9 +368,11 @@ def efficacy(
     if score_weight < 0.0 or cost_weight < 0.0:
         raise ValueError(f"a negative weight inverts the quantity it weights; got {score_weight}, {cost_weight}")
 
+    universe = set(before_scores) | set(after_scores) | set(before_costs) | set(after_costs)
     shared = sorted(set(before_scores) & set(after_scores) & set(before_costs) & set(after_costs))
     if not shared:
         raise ValueError("the arms share no task, so there is nothing paired to compare")
+    unmatched = tuple(sorted(universe - set(shared)))
 
     score = ratio(
         [before_scores[t] for t in shared],
@@ -386,6 +396,7 @@ def efficacy(
         score_weight=score_weight,
         cost_weight=cost_weight,
         tasks=tuple(shared),
+        unmatched=unmatched,
     )
 
 
@@ -425,6 +436,7 @@ def as_row(name: str, item: Efficacy) -> Dict[str, object]:
     return {
         "intervention": name,
         "tasks": len(item.tasks),
+        "unmatched": len(item.unmatched),
         **axis_columns("score", item.score, unfamilied, ""),
         **axis_columns("cost", item.cost, unfamilied, ""),
         "q": item.q,
@@ -459,6 +471,7 @@ def family_rows(
             {
                 "intervention": name,
                 "tasks": len(item.tasks),
+                "unmatched": len(item.unmatched),
                 **axis_columns("score", item.score, verdicts[2 * index], family),
                 **axis_columns("cost", item.cost, verdicts[2 * index + 1], family),
                 "q": item.q,

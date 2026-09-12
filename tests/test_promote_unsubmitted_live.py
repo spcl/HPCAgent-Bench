@@ -252,7 +252,9 @@ def add_blind_worker(rank_dir: pathlib.Path, run_id: str, bench: str, submitted:
     con.close()
 
 
-def test_a_blind_worker_that_submitted_gets_no_workspace_harvest(promoter, judge, tmp_path, monkeypatch) -> None:
+def test_a_blind_worker_that_submitted_gets_no_workspace_harvest(
+    promoter: ModuleType, judge: str, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The blind arm's shape, and the defect it hid: with no score route ``candidates`` returns
     nothing for EVERY worker, so the harvest fallback is what runs. A worker that already submitted
     must still be left alone -- a harvest lands later than the agent's own row, and the scoring rule
@@ -271,7 +273,7 @@ def test_a_blind_worker_that_submitted_gets_no_workspace_harvest(promoter, judge
 
 
 def test_a_blind_worker_that_never_submitted_still_gets_its_workspace_harvested(
-    promoter, judge, tmp_path, monkeypatch
+    promoter: ModuleType, judge: str, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The control. Without it the test above would pass against a fallback that harvests nothing at
     all, which is the other way for an arm with no score route to record no answers."""

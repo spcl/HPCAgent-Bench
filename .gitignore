@@ -280,3 +280,6 @@ scratchpad/
 
 # make_problems writes this beside its output and renames it away
 experiments/*.jsonl.tmp
+
+# The trimmed llr40 rows tests/test_inference_audit.py reduces over; the artifact's own data/ is regenerated.
+!tests/data/llr40/data/*.csv

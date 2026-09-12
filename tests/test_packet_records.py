@@ -32,7 +32,7 @@ PRE_PACKETS_RUNS_UPSERT = (
 )
 
 
-def _definition(packet: str, language: str) -> str:
+def packet_definition(packet: str, language: str) -> str:
     """The exact JSON text :func:`recording.record_packet_definition` is expected to store."""
     try:
         payload: dict[str, object] = dataclasses.asdict(packets.resolve(packet, language, environ={}, fill=False))
@@ -41,7 +41,7 @@ def _definition(packet: str, language: str) -> str:
     return json.dumps(payload, sort_keys=True)
 
 
-def _rows(db: str) -> list[tuple[str, str, str]]:
+def packet_rows(db: str) -> list[tuple[str, str, str]]:
     """Every recorded ``(packet, language, definition)``, sorted for a stable comparison."""
     conn = sqlite3.connect(db)
     try:
@@ -50,7 +50,7 @@ def _rows(db: str) -> list[tuple[str, str, str]]:
         conn.close()
 
 
-def _pre_packets_db(db: str) -> None:
+def pre_packets_db(db: str) -> None:
     """A DB with one run, as a judge from before the ``packets`` table left it."""
     conn = recording.connect(db)
     try:
@@ -69,7 +69,7 @@ def _pre_packets_db(db: str) -> None:
         stripped.close()
 
 
-def _seed_packet(db: str, packet: str, language: str, run_id: str) -> None:
+def seed_packet(db: str, packet: str, language: str, run_id: str) -> None:
     """Write one run through the real path (:func:`recording.upsert_run`), so its packet
     definition is recorded the way a live judge would record it."""
     with config.overridden("record.packet", packet), config.overridden("record.language", language):
@@ -83,8 +83,8 @@ def _seed_packet(db: str, packet: str, language: str, run_id: str) -> None:
 
 def test_a_new_db_records_one_packets_row_per_packet_language(tmp_path: pathlib.Path) -> None:
     db = str(tmp_path / "r.db")
-    _seed_packet(db, "all-in", "c", "run1")
-    assert _rows(db) == [("all-in", "c", _definition("all-in", "c"))]
+    seed_packet(db, "all-in", "c", "run1")
+    assert packet_rows(db) == [("all-in", "c", packet_definition("all-in", "c"))]
 
     conn = sqlite3.connect(db)
     try:
@@ -99,15 +99,15 @@ def test_a_new_db_records_one_packets_row_per_packet_language(tmp_path: pathlib.
 
 def test_the_control_packet_is_recorded_as_its_empty_definition(tmp_path: pathlib.Path) -> None:
     db = str(tmp_path / "r.db")
-    _seed_packet(db, "", "c", "run1")
-    assert _rows(db) == [("", "c", _definition("", "c"))]
+    seed_packet(db, "", "c", "run1")
+    assert packet_rows(db) == [("", "c", packet_definition("", "c"))]
 
 
 def test_an_old_db_gains_the_packets_table_on_open_and_still_accepts_upserts(tmp_path: pathlib.Path) -> None:
     db = str(tmp_path / "old.db")
-    _pre_packets_db(db)
-    _seed_packet(db, "lang", "c", "new.n0.p0.w1")
-    assert _rows(db) == [("lang", "c", _definition("lang", "c"))]
+    pre_packets_db(db)
+    seed_packet(db, "lang", "c", "new.n0.p0.w1")
+    assert packet_rows(db) == [("lang", "c", packet_definition("lang", "c"))]
 
 
 def test_an_older_writer_still_records_after_the_packets_table_exists(tmp_path: pathlib.Path) -> None:
@@ -131,13 +131,13 @@ def test_an_older_writer_still_records_after_the_packets_table_exists(tmp_path: 
     finally:
         conn.close()
     assert run_ids == ["late.n0.p0.w0"]
-    assert _rows(db) == []  # the old writer never resolved a definition
+    assert packet_rows(db) == []  # the old writer never resolved a definition
 
 
 def test_a_bad_packet_spec_records_an_error_definition_without_raising(tmp_path: pathlib.Path) -> None:
     db = str(tmp_path / "r.db")
-    _seed_packet(db, "nosuchpacket", "c", "run1")
-    (row,) = _rows(db)
+    seed_packet(db, "nosuchpacket", "c", "run1")
+    (row,) = packet_rows(db)
     packet, language, definition_json = row
     assert (packet, language) == ("nosuchpacket", "c")
     payload = json.loads(definition_json)
@@ -149,8 +149,8 @@ def test_merge_carries_packets_rows_and_tolerates_shards_without_them(tmp_path: 
     base = str(tmp_path / "hpcagent_bench.db")
     shard0 = recording.shard_db_path(0, base)
     shard1 = recording.shard_db_path(1, base)
-    _seed_packet(shard0, "cpf", "c", "r0")
-    _seed_packet(shard1, "lang", "fortran", "r1")
+    seed_packet(shard0, "cpf", "c", "r0")
+    seed_packet(shard1, "lang", "fortran", "r1")
 
     # a third shard predating the packets table entirely -- must not break the merge
     no_table = recording.shard_db_path(2, base)
@@ -172,10 +172,10 @@ def test_merge_carries_packets_rows_and_tolerates_shards_without_them(tmp_path: 
 
     recording.aggregate(base)
 
-    assert _rows(base) == sorted(
+    assert packet_rows(base) == sorted(
         [
-            ("cpf", "c", _definition("cpf", "c")),
-            ("lang", "fortran", _definition("lang", "fortran")),
+            ("cpf", "c", packet_definition("cpf", "c")),
+            ("lang", "fortran", packet_definition("lang", "fortran")),
         ]
     )
 
@@ -203,9 +203,9 @@ def test_the_migrate_db_backfill_is_idempotent(tmp_path: pathlib.Path) -> None:
     finally:
         conn.close()
     assert (first, second) == (2, 0)
-    assert _rows(db) == sorted(
+    assert packet_rows(db) == sorted(
         [
-            ("cpf", "c", _definition("cpf", "c")),
-            ("lang", "fortran", _definition("lang", "fortran")),
+            ("cpf", "c", packet_definition("cpf", "c")),
+            ("lang", "fortran", packet_definition("lang", "fortran")),
         ]
     )

@@ -15,6 +15,9 @@ import pathlib
 import tempfile
 from typing import Any
 
+import pytest
+
+from _native_tu import build_run_c, have_gcc, have_gpp
 from numpyto_c.emit import emit_c, emit_cpp
 from numpyto_common.frontend import parse_kernel
 from numpyto_common.ir import KernelIR
@@ -162,3 +165,70 @@ def test_a_pinned_knob_the_kernel_never_names_is_not_declared() -> None:
     kir = _kir(src=_SHAPE_KNOB_SRC, pinned=False, pinned_config={"groups": 2, "unused": 7}, **_SHAPE_KNOB_BENCH)
     assert kir.pinned_consts == {"groups": 2}
     assert "unused" not in emit_c(kir, fn_name="f")
+
+
+_LIBC_NAME_SRC = "import numpy as np\ndef f(x, atol, rtol, out):\n out[:] = x * (atol + rtol)\n"
+
+_LIBC_NAME_BENCH = {
+    "func_name": "f",
+    "parameters": {"S": {"n": 4, "atol": 1.0e-09, "rtol": 1.0e-06}},
+    "input_args": ["x", "atol", "rtol", "out"],
+    "array_args": ["x", "out"],
+    "output_args": ["out"],
+    "init": {"shapes": {"x": "(n,)", "out": "(n,)"}},
+}
+
+_LIBC_NAME_DRIVER = (
+    "int main(void) {\n"
+    "    const double x[4] = {1.0, 2.0, 3.0, 4.0};\n"
+    "    double out[4] = {0.0, 0.0, 0.0, 0.0};\n"
+    "    f(out, x, (int64_t)4);\n"
+    "    for (int i = 0; i < 4; ++i) {\n"
+    "        if (fabs(out[i] - x[i] * (1e-09 + 1e-06)) > 1e-18) return 1;\n"
+    "    }\n"
+    "    return 0;\n"
+    "}\n"
+)
+
+
+def _libc_name_kir() -> KernelIR:
+    return _kir(src=_LIBC_NAME_SRC, pinned=False, pinned_config={"atol": 1.0e-09, "rtol": 1.0e-06}, **_LIBC_NAME_BENCH)
+
+
+def test_a_pinned_knob_named_like_a_libc_function_is_declared_under_an_alias() -> None:
+    """``atol`` is rk45_ensemble's absolute tolerance AND ``long atol(const char *)`` in <stdlib.h>.
+
+    A file-scope ``constexpr double atol`` therefore lands beside a declaration the headers already
+    made: C23 rejects it as "underspecified declaration of 'atol', which is already declared in this
+    scope", C++ as "'constexpr const double atol' redeclared as different kind of entity", and the
+    C++ leg then fails a second time on ``atol + rtol`` -- no ``operator+`` for a function and a
+    double. The declaration takes an emitter-owned name and a ``#define`` maps the knob's own
+    spelling onto it, so only the declaration line moves and every use reads like the reference.
+    """
+    kir = _libc_name_kir()
+    assert kir.pinned_consts == {"atol": 1.0e-09, "rtol": 1.0e-06}
+    c = emit_c(kir, fn_name="f")
+    assert "#define atol __npb_pin_atol" in c
+    assert "constexpr double __npb_pin_atol = 1e-09;" in c
+    # The sibling knob no header owns is the control: it keeps its own name, alias-free.
+    assert "constexpr double rtol = 1e-06;" in c
+    assert "#define rtol" not in c
+    body = c.split("void f(", 1)[1]
+    assert "atol" in body and "__npb_pin_atol" not in body, "the use site must read as the reference wrote it"
+    cpp = emit_cpp(kir, fn_name="f")
+    assert "#define atol __npb_pin_atol" in cpp
+    assert "constexpr double __npb_pin_atol = 1e-09;" in cpp
+
+
+@have_gcc
+@pytest.mark.integration
+def test_a_knob_named_like_a_libc_function_computes_with_its_pinned_value_in_c() -> None:
+    """The alias has to survive the preprocessor, not just a string match: the driver checks that
+    ``atol`` in the body still means 1e-09 and not <stdlib.h>'s string conversion."""
+    assert build_run_c(emit_c(_libc_name_kir(), fn_name="f"), _LIBC_NAME_DRIVER).returncode == 0
+
+
+@have_gpp
+@pytest.mark.integration
+def test_a_knob_named_like_a_libc_function_computes_with_its_pinned_value_in_cpp() -> None:
+    assert build_run_c(emit_cpp(_libc_name_kir(), fn_name="f"), _LIBC_NAME_DRIVER, cpp=True).returncode == 0

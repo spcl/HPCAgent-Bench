@@ -10,12 +10,13 @@ and say so wrongly. The ONE thing it withholds is the held-out seed's own verdic
 oracle to iterate against rather than a measurement.
 """
 
-import sys
 import importlib.util
 import json
 import pathlib
 import re
+import sys
 import threading
+from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Dict, List, Tuple
@@ -309,6 +310,19 @@ def calls_db(tmp_path, monkeypatch):
             config.clear_override(key)
 
 
+@pytest.fixture()
+def arm_language() -> Iterator[str]:
+    """Pin ``record.language`` the way an arm's launcher exports it, so the expected value is the
+    contract rather than whatever the request body happened to claim."""
+    from hpcagent_bench import config
+
+    config.set_override("record.language", "c")
+    try:
+        yield "c"
+    finally:
+        config.clear_override("record.language")
+
+
 def logged_calls(db: str) -> List[Dict[str, Any]]:
     import sqlite3
 
@@ -320,31 +334,34 @@ def logged_calls(db: str) -> List[Dict[str, Any]]:
         conn.close()
 
 
-def test_a_score_grade_is_logged_as_a_call(client, calls_db) -> None:
-    """The judge upstream records only /submit, so an agent's ITERATION history exists only if this
-    router logs it: without this row the failures before a success are unmeasurable. The language is
-    the arm's (record.language), carried by the run the call belongs to."""
+def run_languages(db: str) -> List[Any]:
+    """The language of every run in ``db``, which is where a logged call's language lives."""
     import sqlite3
 
-    from hpcagent_bench import config
+    conn = sqlite3.connect(db)
+    try:
+        return [row[0] for row in conn.execute("SELECT language FROM runs ORDER BY run_id")]
+    finally:
+        conn.close()
 
+
+def test_a_score_grade_is_logged_as_a_call(client, calls_db, arm_language: str) -> None:
+    """The judge upstream records only /submit, so an agent's ITERATION history exists only if this
+    router logs it: without this row the failures before a success are unmeasurable.
+
+    The language is asserted through the RUN, not off the row: a call carries no language of its
+    own, and the one an experiment groups by is the arm's declaration (``record.language``, pinned
+    by the fixture), never the request body's claim -- bodies have arrived naming ``py`` and ``zzz``.
+    """
     StubJudge.reply = (200, {**GRADE, "hidden_total": 0, "hidden_passed": 0})
     body = {**SUBMISSION, "run_id": "llr2-c.n0.p3.w1", "optimizer": "gpt-oss-120b"}
-    config.set_override("record.language", "c")
-    try:
-        assert client.post("/score", json=body).status_code == 200
-    finally:
-        config.clear_override("record.language")
+    assert client.post("/score", json=body).status_code == 200
     (row,) = logged_calls(calls_db())
     assert (row["route"], row["status"], row["round"]) == ("score", "ok", 1)
     assert row["run_id"] == "llr2-c.n0.p3.w1" and row["optimizer"] == "gpt-oss-120b"
     assert row["benchmark"] == "gemm" and row["speedup"] == 4.5
-    conn = sqlite3.connect(calls_db())
-    try:
-        languages = conn.execute("SELECT r.language FROM calls JOIN runs r USING (run_id)").fetchall()
-    finally:
-        conn.close()
-    assert languages == [("c",)]
+    assert "language" not in row, "the call log must not carry a second, disagreeable copy"
+    assert run_languages(calls_db()) == ["c"]
 
 
 def test_a_failed_score_grade_is_logged_too(client, calls_db) -> None:

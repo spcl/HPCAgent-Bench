@@ -2395,8 +2395,27 @@ def _ctor_shape_arg(call: ast.Call) -> Optional[ast.expr]:
     return None
 
 
+def is_scalar_helper_call(node: ast.AST, scalar_helpers: Optional[Set[str]]) -> bool:
+    """Whether ``node`` calls a kernel helper emitted as a by-value SCALAR function.
+
+    Such a call is rank 0 whatever its arguments are. :func:`_iter_extent_of` reads a call it does
+    not recognise as ELEMENTWISE and answers with the broadcast join of the arguments, which sizes
+    a reduction's scalar result like the array it reduces -- and the caller then broadcasts the
+    call over that buffer, one invocation per element.
+    """
+    return (
+        bool(scalar_helpers)
+        and isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in scalar_helpers
+    )
+
+
 def _harvest_local_shapes(
-    tree: ast.AST, shape_table: Dict[str, Tuple[str, ...]], dtype_table: Optional[Dict[str, str]] = None
+    tree: ast.AST,
+    shape_table: Dict[str, Tuple[str, ...]],
+    dtype_table: Optional[Dict[str, str]] = None,
+    scalar_helpers: Optional[Set[str]] = None,
 ) -> None:
     """Pre-scan the body for ``name = np.<alloc>(...)`` and seed the
     shape table with the inferred output shapes.
@@ -2478,6 +2497,8 @@ def _harvest_local_shapes(
             and isinstance(rhs.func.value, ast.Name)
             and rhs.func.value.id == "np"
         ):
+            if is_scalar_helper_call(rhs, scalar_helpers):
+                continue
             # Last-ditch: a BinOp / UnaryOp / Compare / BoolOp / Subscript
             # whose operands have known shapes -- mirror the (broadcast /
             # slice / gather) extent. Lets the harvest see ``x = a + b``, a
@@ -4140,6 +4161,8 @@ class SliceFusion(ast.NodeTransformer):
 
     def __init__(self, array_shapes: Dict[str, List[str]]) -> None:
         self.array_shapes = array_shapes
+        #: Monotonic id for the invariant-read temps staged ahead of a fused nest.
+        self.invariant_ctr: List[int] = [0]
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         self.generic_visit(node)
@@ -4212,8 +4235,12 @@ class SliceFusion(ast.NodeTransformer):
             ctx=ast.Store(),
         )
 
+        # A loop-invariant ELEMENT read of the array this statement writes is served from a
+        # slot a previous iteration may already have stored to, so it is staged ahead of the
+        # nest -- see :class:`_HoistInvariantSelfReads`.
+        hoister = _HoistInvariantSelfReads(lhs_name, self.array_shapes, self.invariant_ctr)
         rhs_rewriter = _SliceToScalarRewriter(self.array_shapes, iter_vars, ranges, lhs_name, lhs_dims)
-        new_rhs = rhs_rewriter.visit(copy.deepcopy(value))
+        new_rhs = rhs_rewriter.visit(hoister.visit(copy.deepcopy(value)))
         # A top-level RHS Name (``corr[i+1:M, i] = __mm4``) isn't visited by
         # NodeTransformer unless asked -- subscriptify it explicitly.
         new_rhs = rhs_rewriter._maybe_subscriptify(new_rhs)
@@ -4238,6 +4265,8 @@ class SliceFusion(ast.NodeTransformer):
                     orelse=[],
                 )
             ]
+        if hoister.staged:
+            return [*hoister.staged, *body]
         return body[0] if len(body) == 1 else body
 
     def _axis_length(self, array_name: str, axis: int) -> ast.AST:
@@ -4315,6 +4344,75 @@ class SliceFusion(ast.NodeTransformer):
         ):
             return _binop(self._axis_length(name, axis), ast.Sub(), _const(idx.operand.value))
         return idx
+
+
+#: Prefix of the temps :class:`_HoistInvariantSelfReads` stages ahead of a fused loop nest.
+INVARIANT_SELF_READ_PREFIX = "__sfinv"
+
+
+class _HoistInvariantSelfReads(ast.NodeTransformer):
+    """Stage every loop-invariant ELEMENT read of the array a fused assignment writes.
+
+    :class:`SliceFusion` turns ``A[k, k:] = A[k, k:] / A[k, k]`` into a loop that stores one
+    element per iteration, and the ``si1 == k`` iteration overwrites the pivot ``A[k, k]``:
+    every later iteration then divides by the value it just stored. numpy evaluates the whole
+    RHS against the PRE-assignment array, so the pivot is read once, ahead of the nest. The
+    Gauss-elimination family (``row -= factor * pivot_row``) is where this bites.
+
+    Invariance is decided structurally -- full rank, no ``Slice``, no newaxis, no index array
+    in any axis -- so the staged value is by construction the one every iteration would have
+    loaded. That is why staging is also correct for a NON-aliasing kernel (cholesky / lu read
+    ``A[k, k]`` while writing rows ``k + 1:``): same value, one load instead of a trip count's
+    worth. A read under an ``IfExp`` / ``BoolOp`` keeps its guard -- hoisting past the test
+    that exists to keep the element from being addressed would fault where numpy does not.
+    """
+
+    def __init__(self, lhs_name: str, array_shapes: Dict[str, List[str]], counter: List[int]) -> None:
+        self.lhs_name = lhs_name
+        self.array_shapes = array_shapes
+        self.counter = counter
+        #: ``<name> = <read>`` assignments to place before the nest, in staging order.
+        self.staged: List[ast.stmt] = []
+        self._by_source: Dict[str, str] = {}
+
+    def visit_IfExp(self, node: ast.IfExp) -> ast.AST:
+        return node
+
+    def visit_BoolOp(self, node: ast.BoolOp) -> ast.AST:
+        return node
+
+    def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        self.generic_visit(node)
+        if not self._is_invariant_element(node):
+            return node
+        key = ast.unparse(node)
+        name = self._by_source.get(key)
+        if name is None:
+            self.counter[0] += 1
+            name = f"{INVARIANT_SELF_READ_PREFIX}{self.counter[0]}"
+            self._by_source[key] = name
+            self.staged.append(ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=node))
+        return ast.Name(id=name, ctx=ast.Load())
+
+    def _is_invariant_element(self, node: ast.Subscript) -> bool:
+        """True when ``node`` reads ONE element of the written array at an index no iter var moves."""
+        if not (isinstance(node.value, ast.Name) and node.value.id == self.lhs_name):
+            return False
+        if not isinstance(node.ctx, ast.Load):
+            return False
+        rank = len(self.array_shapes.get(self.lhs_name) or ())
+        dims = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
+        if rank == 0 or len(dims) != rank:
+            return False
+        for dim in dims:
+            if isinstance(dim, ast.Slice) or _is_newaxis(dim):
+                return False
+            if isinstance(dim, ast.Attribute) and dim.attr == "newaxis":
+                return False
+            # An index ARRAY makes the read a gather, whose result is not one element.
+            if any(isinstance(n, ast.Name) and n.id in self.array_shapes for n in ast.walk(dim)):
+                return False
+        return True
 
 
 class _SliceToScalarRewriter(ast.NodeTransformer):
@@ -5537,8 +5635,16 @@ class _LiftFreshArrayFromSlices(ast.NodeTransformer):
     ``__hpcagent_bench_zeros__()`` (which the emitter already swallows).
     """
 
-    def __init__(self, shapes: Dict[str, List[str]], local_dtypes: Optional[Dict[str, str]] = None) -> None:
+    def __init__(
+        self,
+        shapes: Dict[str, List[str]],
+        local_dtypes: Optional[Dict[str, str]] = None,
+        scalar_helpers: Optional[Set[str]] = None,
+    ) -> None:
         self.shapes: Dict[str, List[str]] = dict(shapes)
+        #: By-value scalar helpers -- see :func:`is_scalar_helper_call`. A call to one is rank 0
+        #: even though its ARGUMENTS carry slices (``bratu_dot(Q[p, :, :], w, N)``).
+        self.scalar_helpers: Set[str] = set(scalar_helpers or ())
         self.new_locals: Dict[str, Tuple[str, ...]] = {}
         # Side-effect: when the RHS contains a complex literal like
         # ``1j``, infer that the fresh local should be declared as
@@ -5556,6 +5662,8 @@ class _LiftFreshArrayFromSlices(ast.NodeTransformer):
             return node
         target = node.targets[0]
         if not isinstance(target, ast.Name):
+            return node
+        if is_scalar_helper_call(node.value, self.scalar_helpers):
             return node
         if not (self._has_slice_subscript(node.value) or self._is_array_binop(node.value)):
             return node
@@ -6919,7 +7027,14 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
     arithmetic in C and as undefined Fortran.
     """
 
-    def __init__(self, shape_table, real_arrays=None, local_dtypes=None, scalar_defs=None) -> None:
+    def __init__(
+        self,
+        shape_table: Dict[str, Any],
+        real_arrays: Optional[Set[str]] = None,
+        local_dtypes: Optional[Dict[str, str]] = None,
+        scalar_defs: Optional[Dict[str, ast.expr]] = None,
+        scalar_helpers: Optional[Set[str]] = None,
+    ) -> None:
         # We mutate ``shape_table`` to track Name aliases per Assign in
         # source order. Use a local copy so the caller's table is not
         # repeatedly clobbered when an alias gets reassigned.
@@ -6929,6 +7044,8 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         #: is a genuinely NEW local whose shape the later slice-fusion pass needs;
         #: see :attr:`discovered_shapes`.
         self._input_keys = set(shape_table)
+        #: Kernel helpers emitted as by-value scalar functions -- see :func:`is_scalar_helper_call`.
+        self.scalar_helpers: Set[str] = set(scalar_helpers or ())
         #: Shared dtype tag table. Alias / BinOp expansions propagate
         #: dtype here so the emitter sees the right C type for a
         #: complex-RHS local that was never directly declared.
@@ -7518,7 +7635,11 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
                 and node.value.func.id == "__hpcagent_bench_zeros__"
             )
         ):
-            ext = _iter_extent_of(node.value, self.shape_table)
+            ext = (
+                None
+                if is_scalar_helper_call(node.value, self.scalar_helpers)
+                else _iter_extent_of(node.value, self.shape_table)
+            )
             # All-size-1 broadcast -> a scalar local, not a ``T x[1]`` array (see extent_is_scalar).
             if ext is not None and not extent_is_scalar(ext):
                 self.shape_table[target.id] = tuple(ast.unparse(e) for e in ext)
@@ -8727,6 +8848,9 @@ class LoweringContext:
         ] = None
         #: Target renders a dense 2-D float GEMM as a BLAS call; see :func:`lower`.
         self.blas: bool = False
+        #: By-value scalar helpers this IR can call but does not itself list -- a HELPER body's
+        #: own IR carries no helper list, so its siblings are handed down by :func:`lower`.
+        self.sibling_scalar_helpers: Set[str] = set()
         #: The working (lowered) IR -- what :func:`lower` returns.
         self.kir = lowered
         #: Shortcut to the function-body AST every pass rewrites in place.
@@ -8909,6 +9033,12 @@ def _lp_pre_libnode_normalize(ctx: LoweringContext) -> None:
     ast.fix_missing_locations(tree)
 
 
+def scalar_return_helpers(ctx: "LoweringContext") -> Set[str]:
+    """Names of the by-value SCALAR helpers reachable from the body being lowered."""
+    own = {h.kernel_name for h in ctx.original_kir.helpers if h.return_kind == "scalar"}
+    return own | ctx.sibling_scalar_helpers
+
+
 def _lp_seed_dtypes_and_harvest(ctx: LoweringContext) -> None:
     """Seed local dtypes (signature + boolean constructors), unify mixed-complex
     selects, SSA-rename reassigned locals, then harvest local-array shapes."""
@@ -8959,7 +9089,7 @@ def _lp_seed_dtypes_and_harvest(ctx: LoweringContext) -> None:
     # so each version registers under its own name and downstream passes (harvest /
     # LibNodeRewriter / lifter) see unambiguous shapes per local.
     _ssa_rename_reassigned(tree, ctx.arrays_shapes)
-    _harvest_local_shapes(tree, ctx.lib_shape_table, ctx.local_dtypes)
+    _harvest_local_shapes(tree, ctx.lib_shape_table, ctx.local_dtypes, scalar_return_helpers(ctx))
     # Unify a mixed real/complex conditional's branches (``d = z.real if flag else
     # z``) so Fortran ``merge`` (strict same-type) and the JIT type unifiers see a
     # uniform complex select instead of a real-vs-complex pair (QE vexx gamma_only
@@ -9153,6 +9283,7 @@ def _lp_libnode_expand(ctx: LoweringContext) -> None:
     # by the zeros pass as local arrays.
     ctx.lib_rewriter = LibNodeRewriter(
         ctx.lib_shape_table,
+        scalar_helpers=scalar_return_helpers(ctx),
         known_arrays=set(ctx.arrays_shapes.keys()),
         local_dtypes=ctx.local_dtypes,
         sparse=ctx.original_kir.sparse,
@@ -9338,6 +9469,7 @@ def _lp_whole_array_and_zeros(ctx: LoweringContext) -> None:
         real_arrays,
         local_dtypes=ctx.local_dtypes,
         scalar_defs=_collect_inlined_scalar_defs(tree, None),
+        scalar_helpers=scalar_return_helpers(ctx),
     )
     ctx.wa_rewriter.visit(tree)
     # Fold the shapes the whole-array pass inferred for genuinely-new locals
@@ -9425,7 +9557,9 @@ def _lp_slice_normalize_and_lift(ctx: LoweringContext) -> None:
     # a ``Name = np.zeros(extent); Name[:] = expr`` pair so slice fusion can lower
     # the per-element loop. Computes the shape from the iteration extent of the RHS,
     # registers the new local in both ``shapes`` and ``zeros_locals``.
-    ctx.lifter = _LiftFreshArrayFromSlices(shapes, local_dtypes=ctx.local_dtypes)
+    ctx.lifter = _LiftFreshArrayFromSlices(
+        shapes, local_dtypes=ctx.local_dtypes, scalar_helpers=scalar_return_helpers(ctx)
+    )
     new_locals = ctx.lifter.run(tree)
     if new_locals:
         for name, shape in new_locals.items():
@@ -9621,7 +9755,10 @@ def _lp_lower_helpers(ctx: LoweringContext) -> None:
     return-extraction is a parse_kernel step, not a lowering pass)."""
     for helper in ctx.original_kir.helpers:
         retype_int_helper_scalars(helper)
-    ctx.kir.helpers = [lower(h) for h in ctx.original_kir.helpers]
+    # A helper body calls its SIBLINGS, and its own IR lists none of them; hand the by-value
+    # scalar ones down so the shape passes read such a call as rank 0 rather than elementwise.
+    siblings = scalar_return_helpers(ctx)
+    ctx.kir.helpers = [lower(h, scalar_helpers=siblings) for h in ctx.original_kir.helpers]
 
 
 #: The lowering pipeline as data: an ordered list of ``(name, phase)`` pairs run
@@ -9796,6 +9933,7 @@ def lower(
         Callable[[Tuple[str, str], ast.Call, Dict[str, Tuple[str, ...]], Dict[str, str]], bool]
     ] = None,
     blas: bool = False,
+    scalar_helpers: Optional[Set[str]] = None,
 ) -> KernelIR:
     """Return a lowered copy of ``kir`` ready for backend emission.
 
@@ -9830,6 +9968,7 @@ def lower(
     ctx = LoweringContext(kir, copy.deepcopy(kir))
     ctx.native_call = native_call
     ctx.blas = blas
+    ctx.sibling_scalar_helpers = set(scalar_helpers or ())
     for _name, _phase in _LOWER_PHASES:
         _phase(ctx)
         if check is not None:
@@ -9906,6 +10045,78 @@ _INT_PRESERVING_OPS = (
     ast.BitOr,
     ast.BitXor,
 )
+
+
+def integer_valued_locals(kir: KernelIR) -> Set[str]:
+    """Body-computed scalar locals that provably hold an INTEGER value.
+
+    Shared by the C and Fortran emitters: a local absent from every dtype table otherwise falls
+    back to the kernel float type, and then an integer accumulator that grows past 2**53 (``h = 1``
+    then ``h = h * 3`` for 35 rounds) is silently rounded -- no cast, no warning, just the wrong
+    last digits -- while a padded allocation extent becomes a REAL array bound gfortran rejects
+    under ``-std=f2018``.
+
+    Greatest fixpoint: every unpinned assigned local starts ASSUMED integer, then any local
+    with an assignment whose right-hand side is not provably integer under the current
+    assumption is dropped, until nothing changes. The optimistic start is what lets a
+    self-referential accumulator hold (``h = h * 3`` needs ``h`` integer to prove ``h``
+    integer); the drop rule is what keeps ``x = 0.5`` and reads of float arrays out. Names
+    whose dtype is already pinned (params, arrays, ``local_dtypes``) are never candidates --
+    they only feed the right-hand-side test."""
+    pinned: Dict[str, bool] = {a.name: dtypes.is_integer(a.dtype) for a in kir.arrays}
+    pinned.update({s.name: dtypes.is_integer(s.dtype) for s in kir.scalars})
+    pinned.update({n: dtypes.is_integer(dt) for n, dt in kir.local_dtypes.items()})
+    for name in kir.int_locals:
+        pinned[name] = True
+    for sym in kir.symbols:
+        pinned[sym.name] = True
+    # Assignments per candidate; a for-loop target is emitted as an int64 counter.
+    assigns: Dict[str, List[ast.expr]] = {}
+    for node in ast.walk(kir.tree):
+        if isinstance(node, ast.For) and isinstance(node.target, ast.Name):
+            pinned[node.target.id] = True
+        elif isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name):
+                    assigns.setdefault(tgt.id, []).append(node.value)
+        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+            assigns.setdefault(node.target.id, []).append(ast.BinOp(left=node.target, op=node.op, right=node.value))
+    candidates = {n for n in assigns if n not in pinned}
+    assumed = candidates | {n for n, is_int in pinned.items() if is_int}
+    array_dtypes = {a.name: a.dtype for a in kir.arrays}
+
+    def provable(node: ast.AST) -> bool:
+        if isinstance(node, ast.Constant):
+            return isinstance(node.value, int) and not isinstance(node.value, bool)
+        if isinstance(node, ast.Name):
+            return node.id in assumed
+        if isinstance(node, ast.Subscript):
+            base = node.value
+            while isinstance(base, ast.Subscript):
+                base = base.value
+            if not isinstance(base, ast.Name):
+                return False
+            dt = kir.local_dtypes.get(base.id) or array_dtypes.get(base.id)
+            return dt is not None and dtypes.is_integer(dt)
+        if isinstance(node, ast.BinOp):
+            return isinstance(node.op, _INT_PRESERVING_OPS) and provable(node.left) and provable(node.right)
+        if isinstance(node, ast.UnaryOp):
+            return isinstance(node.op, (ast.USub, ast.UAdd, ast.Invert)) and provable(node.operand)
+        if isinstance(node, ast.IfExp):
+            return provable(node.body) and provable(node.orelse)
+        # int(x) / len(x) are integer whatever the argument is.
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            return node.func.id in ("int", "len")
+        return False
+
+    changed = True
+    while changed:
+        changed = False
+        for name in sorted(candidates & assumed):
+            if not all(provable(v) for v in assigns[name]):
+                assumed.discard(name)
+                changed = True
+    return candidates & assumed
 
 
 def _integer_bindings(fn: ast.FunctionDef, name: str) -> List[ast.expr]:

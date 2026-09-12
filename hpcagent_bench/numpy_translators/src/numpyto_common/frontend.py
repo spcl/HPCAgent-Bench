@@ -27,6 +27,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import copy
+import dataclasses
 import itertools
 import json
 import os
@@ -1109,6 +1110,45 @@ def pinned_config_in_use(
     return {n: v for n, v in pinned.items() if n in used}
 
 
+def shape_only_constants(
+    parameters: Dict,
+    scalars: Dict,
+    arrays: List[ArrayDesc],
+    fn: ast.FunctionDef,
+    input_args: List[str],
+    pinned: Dict[str, PinnedValue],
+) -> Dict[str, int]:
+    """Manifest names a declared shape spells and NOTHING else does, pinned to one preset value.
+
+    ``pinned_config_in_use`` is the mirror of this: it keeps a ``config:`` knob a declared shape
+    reaches, because the knob is real and the kernel names it -- and every knob it keeps is named
+    in ``pinned`` here, so the two partitions do not overlap. What is left is reached by the
+    declared shape ALONE -- no parameter takes it, no statement reads it -- so the only thing that
+    can ever observe it is the extent it spells. conv_depthwise_separable_2d declares ``out``
+    through ``dilation`` while its body convolves with ``depthwise_dilation``; both are 1 in every
+    preset, but a backend that has to PROVE the declared extent equals the computed one has no way
+    to relate two names the kernel never puts in the same expression.
+
+    Pinned across every preset is what makes the value sound, and the harness says so rather than
+    this docstring assuming it: ``fuzz.resolve_ranges`` hands a parameter identical in every preset
+    straight back as ``[value, value]`` -- "not a size", in its words -- so nothing downstream can
+    ever draw another one. A name that DOES move along the preset ladder is a size the harness
+    scales, and baking one preset's choice into an artifact that serves all of them is the
+    miscompile :func:`_structural_constants` records for the body.
+    """
+    spelled: Set[str] = set()
+    for arr in arrays:
+        for tok in arr.shape:
+            spelled.update(SHAPE_IDENT.findall(str(tok)))
+    named = set(input_args) | set(pinned) | {arr.name for arr in arrays}
+    named.update(node.id for node in ast.walk(fn) if isinstance(node, ast.Name))
+    return {
+        name: value
+        for name, value in _preset_constant_symbols(parameters, scalars).items()
+        if name in spelled and name not in named
+    }
+
+
 def build_kernel_ir(
     numpy_py: pathlib.Path,
     bench_info: pathlib.Path,
@@ -1159,6 +1199,8 @@ def build_kernel_ir(
 
     src = numpy_py.read_text()
     tree = ast.parse(src, filename=str(numpy_py))
+    UnpackedOpenMeshToGrid().visit(tree)
+    ast.fix_missing_locations(tree)
     # Rewrite ``w, v = eigh(a[, b], ...)`` (np.linalg / scipy.linalg / the
     # ``_sci_eigh`` alias) to a self-contained complex-Hermitian eigh loop nest
     # BEFORE helper inlining, so the module-level alias import is still in scope
@@ -1623,6 +1665,7 @@ def build_kernel_ir(
     _fold_consts_into_shapes(arrays, inlined_consts)
 
     short_name = info.get("short_name", func_name)
+    pinned: Dict[str, PinnedValue] = pinned_values(info.get("pinned_config"))
     kir = KernelIR(
         tree=fn,
         kernel_name=func_name,
@@ -1637,7 +1680,10 @@ def build_kernel_ir(
         # Pinned config knobs stay in ``symbols``/``scalars`` (the body reads them by name and
         # lowering has to resolve them) but leave the ABI: they are compile-time constants the
         # native emitters declare (see :attr:`KernelIR.pinned_consts`).
-        pinned_consts=pinned_config_in_use(pinned_values(info.get("pinned_config")), fn, arrays, input_args),
+        pinned_consts=pinned_config_in_use(pinned, fn, arrays, input_args),
+        # A manifest name only a declared shape spells is a constant no emitted artifact can
+        # observe; the emitters that must prove an extent identity substitute it, the rest do not.
+        shape_only_consts=shape_only_constants(parameters, _init_scalars, arrays, fn, input_args, pinned),
     )
     # Helpers that survived the inlining fixpoint as CALLS (an early ``return`` /
     # recursion blocks inlining) become their own native functions -- the early
@@ -2778,6 +2824,57 @@ def _unique_name(base: str, taken: OrderedSet[str]) -> str:
     return f"{base}{k}"
 
 
+class UnpackedOpenMeshToGrid(ast.NodeTransformer):
+    """``gx, gy, gz = np.ix_(a, b, c)`` and ``A[gx, gy, gz]`` -> ``grid = np.ix_(a, b, c)`` and ``A[grid]``.
+
+    The per-axis names are one open mesh spelled three ways, and shape inference and lowering read
+    the mesh through a single bound name: a tuple of three index arrays reaching them is taken for an
+    ordinary advanced index, so the gather's result has no extent and everything computed from it
+    fails further down. Only a use naming exactly the unpacked names, in order, is rewritten.
+    """
+
+    def __init__(self) -> None:
+        self.grids: Dict[Tuple[str, ...], str] = {}
+
+    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+        target = node.targets[0] if len(node.targets) == 1 else None
+        operands = np_ix_operands(node.value)
+        if (
+            isinstance(target, ast.Tuple)
+            and all(isinstance(e, ast.Name) for e in target.elts)
+            and operands is not None
+            and len(operands) == len(target.elts)
+        ):
+            names = tuple(e.id for e in target.elts)
+            grid = self.grids.setdefault(names, "_".join(names))
+            return ast.copy_location(ast.Assign(targets=[ast.Name(id=grid, ctx=ast.Store())], value=node.value), node)
+        return self.generic_visit(node)
+
+    def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        self.generic_visit(node)
+        index = node.slice
+        if isinstance(index, ast.Tuple) and all(isinstance(e, ast.Name) for e in index.elts):
+            grid = self.grids.get(tuple(e.id for e in index.elts))
+            if grid is not None:
+                node.slice = ast.Name(id=grid, ctx=ast.Load())
+        return node
+
+
+def np_ix_operands(value: ast.AST) -> Optional[List[ast.expr]]:
+    """The index arrays of an ``np.ix_(a, b, c)`` call, else ``None``."""
+    if (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Attribute)
+        and value.func.attr == "ix_"
+        and isinstance(value.func.value, ast.Name)
+        and value.func.value.id in ("np", "numpy")
+        and value.args
+        and not value.keywords
+    ):
+        return list(value.args)
+    return None
+
+
 class _FoldTupleLocals(ast.NodeTransformer):
     """Inline tuple-valued local bindings and fold tuple concatenation.
 
@@ -3711,9 +3808,24 @@ def _apply_subscript_axes(dims: List[str], sub_slice: ast.AST) -> List[str]:
         axes = [sub_slice]
     ell = [i for i, ax in enumerate(axes) if isinstance(ax, ast.Constant) and ax.value is Ellipsis]
     if ell:
-        axes = axes[: ell[0]] + [ast.Slice()] * max(0, len(dims) - (len(axes) - 1)) + axes[ell[0] + 1 :]
+        # Counted over the axes that CONSUME a source dimension: a newaxis consumes none, so
+        # including one here makes the ellipsis stand for one axis too few.
+        consuming = sum(1 for ax in axes if not _is_newaxis(ax)) - 1
+        axes = axes[: ell[0]] + [ast.Slice()] * max(0, len(dims) - consuming) + axes[ell[0] + 1 :]
     kept: List[str] = []
-    for ax, dim in zip(axes, dims):
+    source = 0
+    for ax in axes:
+        # ``None`` / ``np.newaxis`` INSERTS a length-1 axis and consumes no source dimension.
+        # Walked positionally against ``dims`` it consumed one instead, so ``x1[:, None, :]`` on
+        # an (batch, features) array came back rank-1 ``(batch,)`` -- a helper parameter then
+        # declared one axis for an argument carrying three.
+        if _is_newaxis(ax):
+            kept.append("1")
+            continue
+        if source >= len(dims):
+            break
+        dim = dims[source]
+        source += 1
         if not isinstance(ax, ast.Slice):
             continue
         extent = sliced_extent(dim, ax)
@@ -3724,7 +3836,7 @@ def _apply_subscript_axes(dims: List[str], sub_slice: ast.AST) -> List[str]:
         if extent is None:
             return []
         kept.append(extent)
-    kept.extend(dims[len(axes) :])
+    kept.extend(dims[source:])
     return kept
 
 
@@ -4577,43 +4689,44 @@ def _propagate_local_extents(hfn: ast.FunctionDef, table: Dict[str, Tuple[str, .
             table[name] = tuple(ast.unparse(d) for d in ext)
 
 
-def _numeric_locals(hfn: ast.FunctionDef, scalars: Set[str]) -> Set[str]:
-    """Locals of ``hfn`` bound to integer arithmetic over names already known to be scalar.
+def scalar_value_names(hfn: ast.FunctionDef, seed: Set[str]) -> Set[str]:
+    """Names bound to a SCALAR in ``hfn``, seeded with its scalar and symbol PARAMETERS.
 
-    A pool's ``out_len = (length - kernel_size) // stride + 1`` is one of these: it is not an array
-    and it never gets an extent, so an expression naming it must not be declined for lacking one.
+    Absence from the extent table conflates "this is a scalar" with "this is an array the sweep
+    could not size", and reading a divisor as the second declines a helper whose return shape is
+    fully known: ``_avgpool2d`` returns ``acc / (kh * kw)``, and ``kh``/``kw`` -- locals bound from
+    scalar parameters -- made the whole return unresolvable, so the out-param fell back to a
+    broadcast join over the ARGUMENTS and the caller allocated the pool's INPUT shape.
+
+    Source order is enough to chain: each local is decided against the ones bound before it.
     """
-    known = set(scalars)
-    while True:
-        grew = False
-        for stmt in hfn.body:
-            if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1):
-                continue
-            target = stmt.targets[0]
-            if not isinstance(target, ast.Name) or target.id in known:
-                continue
-            names = {n.id for n in ast.walk(stmt.value) if isinstance(n, ast.Name)}
-            if names and names <= known and not any(isinstance(n, ast.Call) for n in ast.walk(stmt.value)):
-                known.add(target.id)
-                grew = True
-        if not grew:
-            return known - set(scalars)
+    known = set(seed)
+    for stmt, _ in _statements_in_order(hfn.body):
+        if not isinstance(stmt, ast.Assign) or len(stmt.targets) != 1:
+            continue
+        target = stmt.targets[0]
+        targets = target.elts if isinstance(target, ast.Tuple) else [target]
+        if not all(isinstance(t, ast.Name) for t in targets):
+            continue
+        values = stmt.value.elts if isinstance(stmt.value, ast.Tuple) else [stmt.value] * len(targets)
+        if len(values) != len(targets):
+            continue
+        for name_node, value in zip(targets, values):
+            if all(n.id in known for n in ast.walk(value) if isinstance(n, ast.Name)):
+                known.add(name_node.id)
+    return known
 
 
 def _extent_operands_resolved(
-    value: ast.expr, hfn: ast.FunctionDef, table: Dict[str, Tuple[str, ...]], scalars: Set[str] = frozenset()
+    value: ast.expr, hfn: ast.FunctionDef, table: Dict[str, Tuple[str, ...]], scalars: Set[str]
 ) -> bool:
     """Whether every name the expression uses AS AN ARRAY has an extent in ``table``.
 
     Only the positions that carry an extent are checked -- a direct operand of an arithmetic
     BinOp, and a subscript base. A name in any other position is a scalar (mamba2's ``span``
     inside ``np.full((span, span), ...)``), and demanding an extent for it declines helpers that
-    are perfectly resolvable.
-
-    A name KNOWN to be a scalar is resolved even in an extent-carrying position: dividing an array
-    by one is the commonest tail a helper has (``return acc / kernel_size``), and asking a scalar
-    for an extent declined the whole helper -- which then took the caller's guess at the target's
-    shape, the pool's INPUT length rather than its output.
+    are perfectly resolvable. ``scalars`` names the ones that carry a value rather than an extent
+    even in an operand position -- see :func:`scalar_value_names`.
     """
     operands: List[ast.expr] = []
     for node in ast.walk(value):
@@ -4673,6 +4786,37 @@ def call_specialized_body(hfn: ast.FunctionDef, pnames: List[str], args: List[as
     return probe
 
 
+def helper_returns_rank0(
+    hfn: ast.FunctionDef,
+    pnames: List[str],
+    args: List[ast.expr],
+    arr_by: Dict[str, ArrayDesc],
+    sca_by: Dict[str, ScalarDesc],
+    sym_by: Dict[str, SymbolDesc],
+    fn: Optional[ast.FunctionDef] = None,
+) -> bool:
+    """Whether every RETURN of ``hfn`` is PROVABLY rank 0 -- a reduction, array in and scalar out.
+
+    :func:`_helper_return_shape_from_body` answers ``None`` both for a scalar return and for a
+    body it could not size, and a caller that has only a target-side GUESS to fall back on needs
+    to know which. Provable means all three: the parameters sized (nothing is known about a body
+    whose own arguments did not resolve), every return expression's array operands resolved, and
+    the extent calculus then reporting no axes at all.
+    """
+    returns = [n.value for n in ast.walk(hfn) if isinstance(n, ast.Return) and n.value is not None]
+    if not returns:
+        return False
+    arrays, scalars, symbols = _infer_helper_params(pnames, args, arr_by, sca_by, sym_by, fn)
+    if not arrays:
+        return False
+    scalar_names = scalar_value_names(hfn, {d.name for d in (*scalars, *symbols)})
+    table = {a.name: tuple(str(s) for s in a.shape) for a in arrays}
+    _propagate_local_extents(hfn, table)
+    if any(not _extent_operands_resolved(value, hfn, table, scalar_names) for value in returns):
+        return False
+    return all(_iter_extent_of(value, table) is None for value in returns)
+
+
 def _helper_return_shape_from_body(
     hfn: ast.FunctionDef,
     pnames: List[str],
@@ -4696,17 +4840,16 @@ def _helper_return_shape_from_body(
     returns = [n.value for n in ast.walk(hfn) if isinstance(n, ast.Return) and n.value is not None]
     if not returns:
         return None, None
-    arrays, inferred_scalars, inferred_symbols = _infer_helper_params(pnames, args, arr_by, sca_by, sym_by, fn)
+    arrays, scalars, symbols = _infer_helper_params(pnames, args, arr_by, sca_by, sym_by, fn)
     if not arrays:
         return None, None
+    scalar_names = scalar_value_names(hfn, {d.name for d in (*scalars, *symbols)})
     table = {a.name: tuple(str(s) for s in a.shape) for a in arrays}
     # A return expression is built from the helper's own locals (mamba2's
     # ``return seg + np.triu(__full1, 1)``), not from its parameters directly, so sizing it needs
     # those locals too -- propagated forward, since each is sized against the ones before it.
     _propagate_local_extents(hfn, table)
-    known_scalars = {sc.name for sc in inferred_scalars} | {sy.name for sy in inferred_symbols}
-    known_scalars |= _numeric_locals(hfn, known_scalars | set(table))
-    if any(not _extent_operands_resolved(value, hfn, table, known_scalars) for value in returns):
+    if any(not _extent_operands_resolved(value, hfn, table, scalar_names) for value in returns):
         # ``_iter_extent_of`` answers a BinOp with the operand it COULD size when the other comes
         # back None. That is a serviceable broadcast hint and a wrong allocation: mamba2's
         # ``seg + np.triu(...)`` reported the triangle's ``(span, span)`` for a 4-D result, which
@@ -5050,6 +5193,38 @@ def reject_subscripted_scalar_params(hfn: ast.FunctionDef, scalars: List[ScalarD
             f"helper {name!r} indexes {indexed}, which the call site typed as scalars; "
             f"the argument's shape is not resolvable where the helper is built"
         )
+
+
+def widen_counting_scalar_params(hfn: ast.FunctionDef, scalars: List[ScalarDesc]) -> None:
+    """Re-type, in place, every float SCALAR parameter ``hfn`` counts or indexes with.
+
+    A parameter's dtype is inferred from the CALL-SITE argument, and an argument the resolver
+    cannot type falls through to ``float64`` -- which is what an element of a kernel LOCAL array
+    does (spgemm_hash passes ``row_bin[row]``, an ``int64`` local), and what a local bound from
+    another helper's call does (``ts = _table_size(...)``). Inlined, that cost nothing: the body was
+    spliced into the caller and the value kept its own type. As a kept helper it is a declared
+    ``double``, and the body then counts and subscripts with it -- ``invalid types 'int64_t*
+    [double]' for array subscript`` out of g++, and the same complaint from C and gfortran.
+
+    The body's own use is the evidence: ``range()`` counts, and a subscript indexes, and neither
+    takes a float in any of the three languages. :func:`reject_subscripted_scalar_params` reads the
+    same evidence for the case where the kind, not the width, is wrong.
+    """
+    floats = {s.name for s in scalars if not str(s.dtype).startswith(("int", "uint", "bool"))}
+    if not floats:
+        return
+    counted: Set[str] = set()
+    for node in ast.walk(hfn):
+        positions: List[ast.AST] = []
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "range":
+            positions.extend(node.args)
+        elif isinstance(node, ast.Subscript):
+            positions.append(node.slice)
+        for position in positions:
+            counted |= {n.id for n in ast.walk(position) if isinstance(n, ast.Name) and n.id in floats}
+    for index, desc in enumerate(scalars):
+        if desc.name in counted:
+            scalars[index] = dataclasses.replace(desc, dtype="int64")
 
 
 def _mark_written_outputs(hfn: ast.FunctionDef, arrays: List[ArrayDesc]) -> None:
@@ -5952,28 +6127,31 @@ def _build_helper_kirs(
         # consumes it (lulesh's face-node loops, which only surface once its helpers survive).
         _unroll_const_list_loops(hfn)
 
-        # The body is asked in EVERY case, not only when the target said nothing. Reading it wrong
-        # classifies an array return as by-value: no out-param is added, the returns stay as
-        # ``return <expr>``, and every shape-changing call inside one reaches the emitter unlowered,
-        # because the expanders only ever see assignments.
-        body_shape, body_dtype = _helper_return_shape_from_body(
-            call_specialized_body(hfn, pnames, call.args), pnames, call.args, oarr_by, osca_by, osym_by, owner_fn
-        )
         if hret_shape is None or target_shape_is_the_call_itself(owner_fn, lhs, oarr_by, hdef.name):
-            # ``_conv2d(...)`` is only ever an ARGUMENT to another helper (resnet101's
-            # ``_batch_norm(_conv2d(x, w, 1, 0), ..)``), or the target told us nothing the call did
-            # not, so the body is the only answer there is.
-            if body_shape is not None or hret_shape is None:
+            # Either no call site stores the result into an array -- ``_conv2d(...)`` is only ever
+            # an ARGUMENT to another helper (resnet101's ``_batch_norm(_conv2d(x, w, 1, 0), ..)``)
+            # -- or the target told us nothing the call did not. The helper's own body says what it
+            # returns, and reading that wrong classifies an array return as by-value: no out-param
+            # is added, the returns stay as ``return <expr>``, and every shape-changing call inside
+            # one reaches the emitter unlowered, because the expanders only ever see assignments.
+            probe = call_specialized_body(hfn, pnames, call.args)
+            body_shape, body_dtype = _helper_return_shape_from_body(
+                probe, pnames, call.args, oarr_by, osca_by, osym_by, owner_fn
+            )
+            # ``None`` from the body means two different things and they want opposite decisions:
+            # "this returns a scalar" and "this could not be sized". Only the first may overrule a
+            # target-side guess. A helper whose body PROVABLY returns rank 0 is a reduction (array
+            # in, scalar out) -- bdf_newton_krylov's WRMS norms, jfnk_bratu's 2-norms and dot
+            # products -- and keeping the guess there (the broadcast join of the call's own
+            # arguments) classified it as array-returning: the caller allocated an operand-shaped
+            # buffer and the call was broadcast over it, one invocation per element of the very
+            # array it reduces, which is a double handed to a pointer parameter.
+            if (
+                body_shape is not None
+                or hret_shape is None
+                or helper_returns_rank0(probe, pnames, call.args, oarr_by, osca_by, osym_by, owner_fn)
+            ):
                 hret_shape, hret_dtype = body_shape, body_dtype
-        elif body_shape is not None and list(body_shape) != list(hret_shape):
-            # An out-param is written BY the helper's body, so the body is the authority on its
-            # extents and a disagreement is a defect in the target's. ``_resolve_array_ref`` chases
-            # an undeclared local like ``x2 = _avgpool1d_taps(x1, ...)`` by reading the binding Call
-            # as elementwise, and answers with the broadcast join of its ARGUMENTS -- the pool's
-            # INPUT length. Even a target the chase DID size is the callee's return respelled in the
-            # CALLER's names, which is the vocabulary split a dace program cannot relate: lenet's
-            # ``maxpool2d`` declared ``int_floor(H - 4, 2)`` against a body writing ``H_out``.
-            hret_shape, hret_dtype = body_shape, body_dtype
 
         if hret_shape is None:
             # SCALAR (by-value) return -- params inferred straight from the call. A compile-time
@@ -6101,6 +6279,7 @@ def _build_helper_kirs(
             _reject_symbolic_axis(hfn)
             _reject_unsupported_slices(hfn)
             reject_subscripted_scalar_params(hfn, scalars, hdef.name)
+            widen_counting_scalar_params(hfn, scalars)
             _mark_written_outputs(hfn, arrays)
             # Shape symbols this helper's array params name (``ny``/``nx`` in cavity_flow's
             # ``(ny, nx)``) but the call does not pass. The emitters size the dummy's dimensions
@@ -6190,6 +6369,7 @@ def _build_helper_kirs(
         _reject_symbolic_axis(hfn)
         _reject_unsupported_slices(hfn)
         reject_subscripted_scalar_params(hfn, scalars, hdef.name)
+        widen_counting_scalar_params(hfn, scalars)
         _mark_written_outputs(hfn, arrays)
         # ``X = h(X, ...)`` returns into a buffer the call ALREADY passes in. That parameter is
         # in-out and takes ONE ABI slot: appending a separate out-param would put the same pointer

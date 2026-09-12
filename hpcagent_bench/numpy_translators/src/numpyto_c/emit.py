@@ -15,7 +15,7 @@ from numpyto_common.ordered import OrderedSet
 from numpyto_common.emitter import BaseEmitter, index_rank_error
 from numpyto_common.frontend import _names_used_as_int
 from numpyto_common.lib_nodes import BLAS_GEMM_MARKER
-from numpyto_common.lowering import _walk_complex, helper_returns_int
+from numpyto_common.lowering import _walk_complex, helper_returns_int, integer_valued_locals
 
 #: Whole-identifier matcher for scanning a shape-token string for the names it references.
 _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
@@ -1511,14 +1511,59 @@ class _CBodyEmitter(BaseEmitter):
         fns = _fp8_fns(self._name_dtype(node.id) or "")
         return f"{fns.promote}({access})" if fns is not None else access
 
+    def contiguous_subarray_arg(self, node: ast.expr) -> Optional[str]:
+        """``a[k, :, :]`` as a pointer INTO ``a``, or None when the slice has no pointer spelling.
+
+        Row-major makes the sub-array selected by leading scalar indices plus whole trailing axes
+        contiguous, so a helper declaring the lower rank receives exactly the buffer its own
+        descriptor describes. A slice on a LEADING axis (``a[:, :, k]``) selects a strided view
+        instead; C has no pointer for that, so it stays refused rather than silently handed the
+        wrong elements.
+        """
+        if not isinstance(node, ast.Subscript) or not isinstance(node.value, ast.Name):
+            return None
+        shape = self.array_shapes.get(node.value.id)
+        if not shape:
+            return None
+        self._normalize_negative_indices(node)
+        sl = node.slice
+        elts = list(sl.elts) if isinstance(sl, ast.Tuple) else [sl]
+        if len(elts) != len(shape) or any(_is_newaxis_or_ellipsis(e) for e in elts):
+            return None
+        lead = 0
+        while lead < len(elts) and not isinstance(elts[lead], ast.Slice):
+            lead += 1
+        if lead == 0 or lead == len(elts):
+            return None
+        if not all(is_whole_axis_slice(e) for e in elts[lead:]):
+            return None
+        # A leading axis indexed by an index ARRAY is numpy fancy indexing, which gathers rather
+        # than offsets; a tuple/list element is the same story.
+        for e in elts[:lead]:
+            if isinstance(e, (ast.Tuple, ast.List, ast.Starred)):
+                return None
+            if isinstance(e, ast.Name) and self.array_shapes.get(e.id):
+                return None
+        indices = [self.emit_expr(e) for e in elts[:lead]]
+        if node.value.id in self.multidim_arrays:
+            return node.value.id + "".join(f"[{i}]" for i in indices)
+        offset = self._flatten_indices(shape[:lead], indices)
+        for dim in shape[lead:]:
+            offset = f"({offset})*({_c_shape_token(dim)})"
+        return f"{node.value.id} + {offset}"
+
     def _emit_helper_arg(self, node: ast.expr, param_is_array: bool) -> str:
         """One argument of a kernel-helper call: an ARRAY parameter takes the pointer.
 
         ``emit_expr`` renders a size-1 array Name as its sole element, which is what a value
         expression wants and what a pointer parameter cannot take.
         """
-        if param_is_array and isinstance(node, ast.Name) and self.array_shapes.get(node.id):
-            return node.id
+        if param_is_array:
+            if isinstance(node, ast.Name) and self.array_shapes.get(node.id):
+                return node.id
+            subarray = self.contiguous_subarray_arg(node)
+            if subarray is not None:
+                return subarray
         return self.emit_expr(node)
 
     def _emit_call(self, node: ast.Call) -> str:
@@ -1847,7 +1892,7 @@ class _CBodyEmitter(BaseEmitter):
         # Locals the decl pass declares int64 because every assignment is integer
         # arithmetic -- the two must agree, else ``h ** k`` on an ``int64_t h`` would
         # still route through the double pow.
-        out.update(_integer_valued_locals(self.kir))
+        out.update(integer_valued_locals(self.kir))
         self._int_locals_cache = out
         return out
 
@@ -2007,6 +2052,11 @@ def _negative_const_k(node: ast.AST):
     return None
 
 
+def is_whole_axis_slice(e: ast.AST) -> bool:
+    """True for a bare ``:`` -- no start, no stop, no step."""
+    return isinstance(e, ast.Slice) and e.lower is None and e.upper is None and e.step is None
+
+
 def _is_newaxis_or_ellipsis(e: ast.AST) -> bool:
     """True for a None/np.newaxis/... element -- negative-index normalization must not fire when one is present."""
     if isinstance(e, ast.Constant) and (e.value is None or e.value is Ellipsis):
@@ -2128,93 +2178,6 @@ def _c_shape_token(tok: str) -> str:
     return out
 
 
-#: Operators that keep an integer result when both operands are integer. ``Div`` is
-#: absent on purpose -- numpy ``/`` is true division and lowering already casts it.
-_INT_PRESERVING_BINOPS: Tuple[type, ...] = (
-    ast.Add,
-    ast.Sub,
-    ast.Mult,
-    ast.Mod,
-    ast.FloorDiv,
-    ast.Pow,
-    ast.LShift,
-    ast.RShift,
-    ast.BitAnd,
-    ast.BitOr,
-    ast.BitXor,
-)
-
-
-def _integer_valued_locals(kir: KernelIR) -> Set[str]:
-    """Body-computed scalar locals that provably hold an INTEGER value.
-
-    Without this a local absent from every dtype table falls back to ``double``, and an
-    integer accumulator that grows past 2**53 (``h = 1`` then ``h = h * 3`` for 35 rounds)
-    is silently rounded -- no cast, no warning, just the wrong last digits.
-
-    Greatest fixpoint: every unpinned assigned local starts ASSUMED integer, then any local
-    with an assignment whose right-hand side is not provably integer under the current
-    assumption is dropped, until nothing changes. The optimistic start is what lets a
-    self-referential accumulator hold (``h = h * 3`` needs ``h`` integer to prove ``h``
-    integer); the drop rule is what keeps ``x = 0.5`` and reads of float arrays out. Names
-    whose dtype is already pinned (params, arrays, ``local_dtypes``) are never candidates --
-    they only feed the right-hand-side test."""
-    pinned: Dict[str, bool] = {a.name: dtypes.is_integer(a.dtype) for a in kir.arrays}
-    pinned.update({s.name: dtypes.is_integer(s.dtype) for s in kir.scalars})
-    pinned.update({n: dtypes.is_integer(dt) for n, dt in kir.local_dtypes.items()})
-    for name in kir.int_locals:
-        pinned[name] = True
-    for sym in kir.symbols:
-        pinned[sym.name] = True
-    # Assignments per candidate; a for-loop target is emitted as an int64 counter.
-    assigns: Dict[str, List[ast.expr]] = {}
-    for node in ast.walk(kir.tree):
-        if isinstance(node, ast.For) and isinstance(node.target, ast.Name):
-            pinned[node.target.id] = True
-        elif isinstance(node, ast.Assign):
-            for tgt in node.targets:
-                if isinstance(tgt, ast.Name):
-                    assigns.setdefault(tgt.id, []).append(node.value)
-        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
-            assigns.setdefault(node.target.id, []).append(ast.BinOp(left=node.target, op=node.op, right=node.value))
-    candidates = {n for n in assigns if n not in pinned}
-    assumed = candidates | {n for n, is_int in pinned.items() if is_int}
-    array_dtypes = {a.name: a.dtype for a in kir.arrays}
-
-    def provable(node: ast.AST) -> bool:
-        if isinstance(node, ast.Constant):
-            return isinstance(node.value, int) and not isinstance(node.value, bool)
-        if isinstance(node, ast.Name):
-            return node.id in assumed
-        if isinstance(node, ast.Subscript):
-            base = node.value
-            while isinstance(base, ast.Subscript):
-                base = base.value
-            if not isinstance(base, ast.Name):
-                return False
-            dt = kir.local_dtypes.get(base.id) or array_dtypes.get(base.id)
-            return dt is not None and dtypes.is_integer(dt)
-        if isinstance(node, ast.BinOp):
-            return isinstance(node.op, _INT_PRESERVING_BINOPS) and provable(node.left) and provable(node.right)
-        if isinstance(node, ast.UnaryOp):
-            return isinstance(node.op, (ast.USub, ast.UAdd, ast.Invert)) and provable(node.operand)
-        if isinstance(node, ast.IfExp):
-            return provable(node.body) and provable(node.orelse)
-        # int(x) / len(x) are integer whatever the argument is.
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            return node.func.id in ("int", "len")
-        return False
-
-    changed = True
-    while changed:
-        changed = False
-        for name in sorted(candidates & assumed):
-            if not all(provable(v) for v in assigns[name]):
-                assumed.discard(name)
-                changed = True
-    return candidates & assumed
-
-
 def _tuple_element(node: ast.AST, i: int, n: int) -> Optional[ast.expr]:
     """Element ``i`` of an ``n``-wide tuple-valued expression, or None when it is not one.
 
@@ -2278,7 +2241,7 @@ def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
     seen: Set[str] = set(declared)
     # Per-array element-dtype map for Name = Subscript(arr, scalar) inheritance (x = data[i] where data is uint8).
     array_dtypes = {a.name: a.dtype for a in kir.arrays}
-    int_valued = _integer_valued_locals(kir)
+    int_valued = integer_valued_locals(kir)
     # An untyped float local -- a var/std accumulator, a running max -- follows the KERNEL's float
     # precision, exactly as a local array already does. A hard-coded double here made an fp32
     # kernel accumulate at a precision numpy never uses (numpy sums a float32 array in float32),
@@ -3255,6 +3218,45 @@ def emit_c_helpers(kir: KernelIR, cpp: bool = False, isopar: bool = False) -> st
     )
 
 
+#: Identifiers the C standard headers this emitter already includes (``<stdlib.h>``, ``<string.h>``,
+#: ``<math.h>``, ``<complex.h>`` and their C++ spellings) declare at FILE SCOPE. A pinned knob
+#: spelled like one of these cannot be declared beside it: C23 rejects the ``constexpr`` as an
+#: underspecified declaration of a name already in this scope, C++ as a redeclaration as a
+#: different kind of entity. ``atol`` (rk45_ensemble's absolute tolerance) is the live case.
+_STDLIB_STRING_NAMES = (
+    "abort abs aligned_alloc at_quick_exit atexit atof atoi atol atoll bcmp bcopy bsearch bzero"
+    " calloc div exit free getenv index labs ldiv llabs lldiv malloc mblen mbstowcs mbtowc memchr"
+    " memcmp memcpy memmove memset qsort quick_exit rand random realloc rindex srand strcat strchr"
+    " strcmp strcoll strcpy strcspn strdup strerror strlen strncat strncmp strncpy strndup strpbrk"
+    " strrchr strsep strspn strstr strtod strtof strtok strtol strtold strtoll strtoul strtoull"
+    " strxfrm system wcstombs wctomb"
+).split()
+
+#: ``<math.h>`` / ``<complex.h>`` base names; each also exists with a float (``f``) and a long
+#: double (``l``) suffix, so the suffixes are generated rather than spelled out three times.
+_LIBM_BASE_NAMES = (
+    "acos acosh asin asinh atan atan2 atanh cabs cacos cacosh carg casin casinh catan catanh cbrt"
+    " ccos ccosh ceil cexp cimag clog conj copysign cos cosh cpow cproj creal csin csinh csqrt ctan"
+    " ctanh drem erf erfc exp exp2 expm1 fabs fdim finite floor fma fmax fmin fmod frexp gamma"
+    " hypot ilogb j0 j1 jn ldexp lgamma llrint llround log log10 log1p log2 logb lrint lround modf"
+    " nan nearbyint nextafter nexttoward pow pow10 remainder remquo rint round scalb scalbln scalbn"
+    " significand sin sinh sqrt tan tanh tgamma trunc y0 y1 yn"
+).split()
+
+RESERVED_FILE_SCOPE_NAMES = frozenset(
+    _STDLIB_STRING_NAMES + [base + suffix for base in _LIBM_BASE_NAMES for suffix in ("", "f", "l")]
+)
+
+#: Prefix carried by the DECLARATION of a pinned knob whose name a header already owns. Every USE
+#: keeps the reference's own spelling, through the ``#define`` emitted beside the declaration.
+PINNED_ALIAS_PREFIX = "__npb_pin_"
+
+
+def pinned_const_name(name: str) -> str:
+    """The identifier a pinned knob is declared under -- its own, unless a header already owns it."""
+    return PINNED_ALIAS_PREFIX + name if name in RESERVED_FILE_SCOPE_NAMES else name
+
+
 def pinned_const_block(kir: KernelIR) -> str:
     """File-scope ``constexpr`` for each config knob the manifest pinned to one value.
 
@@ -3263,16 +3265,23 @@ def pinned_const_block(kir: KernelIR) -> str:
     padding are all knowable while the kernel is being compiled, and only a constant lets the
     compiler unroll on them. It is declared here, by NAME, rather than folded into a literal at
     every use, so the emitted code still reads like the reference it came from.
+
+    A knob whose name a header already declares is the one exception: the declaration takes an
+    aliased name and a ``#define`` maps the reference's spelling onto it, which keeps every use
+    site -- body, helper, VLA bound in the signature -- reading as the reference wrote it.
     """
     if not kir.pinned_consts:
         return ""
     type_of = {s.name: dtypes.c_type("int") for s in kir.symbols}
     type_of.update({s.name: _c_type(s.dtype) for s in kir.scalars})
-    lines = []
+    lines: List[str] = []
     for name in sorted(kir.pinned_consts):
         value = kir.pinned_consts[name]
         ctype = type_of.get(name, _c_type("float64"))
-        lines.append(f"constexpr {ctype} {name} = {c_literal(value, ctype)};")
+        declared = pinned_const_name(name)
+        if declared != name:
+            lines.append(f"#define {name} {declared}")
+        lines.append(f"constexpr {ctype} {declared} = {c_literal(value, ctype)};")
     return "\n".join(lines) + "\n\n"
 
 
