@@ -37,11 +37,11 @@ import sys
 import time
 import traceback
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any, Sequence, cast
 
 from numpyto_common.naming import fptype_tag, short_for
 
-from hpcagent_bench import paths
+from hpcagent_bench import config, paths
 from hpcagent_bench.spec import BenchSpec
 from hpcagent_bench.support.bindings.contract import (
     WORKSPACE_NAME,
@@ -71,10 +71,29 @@ DEVICE_LANGUAGE = "hip"
 #: be shadowed by the bare suffix if this were sorted the other way.
 IMPL_POSTFIXES = ("_dace_gpu", "_dace_cpu", "_dace")
 
-#: Wall clock for one kernel's render. The frontend parse dominates it -- the same budget
-#: ``tests/test_dace_frontend_validity.py`` gives one kernel, since this runs that parse and then
-#: strictly more work on top of it.
-RENDER_TIMEOUT_S = 1800.0
+#: Config key holding the wall clock for ONE kernel's render, read through
+#: :func:`render_timeout_s`.
+RENDER_TIMEOUT_KEY = "timeouts.cpf_render_s"
+
+#: Fallback for :data:`RENDER_TIMEOUT_KEY` when the config file does not carry it.
+RENDER_TIMEOUT_DEFAULT_S = 14400.0
+
+
+def render_timeout_s() -> float:
+    """Wall clock one kernel's render is given, in seconds.
+
+    Read per call rather than bound once: the default is a whole-corpus compromise and a sweep over
+    the large end of a track raises it through ``HPCAGENT_BENCH_TIMEOUTS_CPF_RENDER_S``, which a
+    module-level constant or a default argument would have frozen at import.
+
+    The budget is deliberately far above the observed cost of an ordinary kernel (seconds to a few
+    minutes). The two largest references on scientific_computing spent a full half hour in the
+    frontend parse without finishing, which bounds the budget from BELOW and says nothing about
+    where the parse actually lands, so the cap is set where an answer is still worth the wall clock
+    and its job is only to stop a wedged render from taking the sweep with it.
+    """
+    return float(cast("float", config.get(RENDER_TIMEOUT_KEY, RENDER_TIMEOUT_DEFAULT_S)))
+
 
 #: ``abi`` tag on a CPF binding. Deliberately not the native ``ABI_TAG``: the argument list is the
 #: SDFG's own, so a consumer that reads this file must not assume the native contract's rules
@@ -90,18 +109,27 @@ def program_name(path: pathlib.Path) -> str:
     return path.stem
 
 
-def resolve_program(module: ModuleType, path: pathlib.Path) -> DaceProgram | None:
-    """The ``DaceProgram`` in ``module``, or ``None``.
+def resolve_program(module: ModuleType, path: pathlib.Path, entry: str = "") -> DaceProgram | None:
+    """The ``DaceProgram`` in ``module`` that is the kernel's ENTRY POINT, or ``None``.
 
-    The program's name does not always match the file stem (a kernel whose function is named for
-    the algorithm rather than the file), so a sole program in the module is taken as the answer.
-    Two of them with neither matching the stem is ambiguous and stays unresolved.
+    ``entry`` is the manifest's ``func_name``, and it is asked first because it is the only name
+    that is DECLARED. The file stem answers next, for a caller that holds no spec. Both can miss: a
+    kernel whose function is named for the algorithm rather than the file matches neither.
+
+    A module holding several programs is the normal case, not the ambiguous one -- the emitter
+    keeps each inlined helper as its own ``@dc.program`` -- so the last two readings work down from
+    that: the helpers it generates are ``_``-prefixed, which leaves one public program, and a
+    module with a single program of any name is that program.
     """
-    prog = vars(module).get(program_name(path))
-    if prog is not None:
-        return prog
-    programs = [v for v in vars(module).values() if type(v).__name__ == "DaceProgram"]
-    return programs[0] if len(programs) == 1 else None
+    programs = [(name, value) for name, value in vars(module).items() if type(value).__name__ == "DaceProgram"]
+    by_name = dict(programs)
+    for name in (entry, program_name(path)):
+        if name in by_name:
+            return by_name[name]
+    public = [value for name, value in programs if not name.startswith("_")]
+    if len(public) == 1:
+        return public[0]
+    return programs[0][1] if len(programs) == 1 else None
 
 
 def binding_for(rendering: Rendering, kernel: str, symbol: str) -> Binding:
@@ -333,7 +361,7 @@ def render_sdfg(
         return rec
     impl = numpy_py.parent / f"{spec.module_name}_dace.py"
     module = importlib.import_module(".".join(impl.relative_to(paths.ROOT).with_suffix("").parts))
-    prog = resolve_program(module, impl)
+    prog = resolve_program(module, impl, spec.func_name)
     if prog is None:
         rec["verdict"] = "noprogram"
         return rec
@@ -423,7 +451,7 @@ def render_kernel(
     language: str = "c++",
     precision: str = "",
     target: str = "cpu",
-    timeout: float = RENDER_TIMEOUT_S,
+    timeout: float | None = None,
     dropin: bool = False,
     extra_env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
@@ -464,11 +492,22 @@ def render_kernel(
     env = {**os.environ, "PYTHONHASHSEED": "0", **(extra_env or {})}
     if target == "cpu":
         env["CUDA_VISIBLE_DEVICES"] = ""
+    budget = render_timeout_s() if timeout is None else timeout
     started = time.monotonic()
     try:
-        proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=budget)
     except subprocess.TimeoutExpired:
-        return {"kernel": spec.short_name, "language": language, "verdict": "timeout", "seconds": timeout}
+        # The budget is NAMED in the verdict, and so is the knob that moves it: a timeout says the
+        # render outran this number, not that the kernel cannot render, and the two read the same
+        # in a sweep log unless the record carries the cap it hit.
+        return {
+            "kernel": spec.short_name,
+            "language": language,
+            "verdict": "timeout",
+            "seconds": budget,
+            "error": f"render exceeded {budget:.0f}s; raise "
+            f"$HPCAGENT_BENCH_{RENDER_TIMEOUT_KEY.replace('.', '_').upper()} to give it more",
+        }
     seconds = time.monotonic() - started
     for line in reversed(proc.stdout.strip().splitlines()):
         if line.startswith("{"):
@@ -511,7 +550,7 @@ def render_track(
     language: str = "c++",
     precision: str = "",
     target: str = "cpu",
-    timeout: float = RENDER_TIMEOUT_S,
+    timeout: float | None = None,
     dropin: bool = False,
     jsonl: os.PathLike[str] | None = None,
 ) -> list[dict[str, Any]]:
