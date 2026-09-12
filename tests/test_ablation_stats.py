@@ -429,7 +429,11 @@ def test_iteration_counts_counts_turns_and_tool_calls(iteration_counts, tmp_path
     assert (row["problem"], row["worker"]) == ("0", "0")
     assert (row["turns"], row["tool_uses"]) == ("2", "7")
     assert (row["score_calls"], row["submit_calls"]) == ("2", "1")
-    assert (row["profile_calls"], row["task_calls"]) == ("1", "1")
+    assert row["profile_calls"] == "1"
+    # The log calls the retired `task` tool: it counts toward tool_uses and has no column. Every registered
+    # tool has one, called or not.
+    assert "task_calls" not in row
+    assert (row["canonical_parallel_form_calls"], row["search_calls"]) == ("0", "0")
     assert row["syntax_check_calls"] == "1"
 
     err = capsys.readouterr().err
