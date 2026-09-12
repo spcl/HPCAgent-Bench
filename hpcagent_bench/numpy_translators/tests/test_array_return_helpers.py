@@ -258,6 +258,22 @@ _DTYPE_OF_SRC = (
 )
 
 
+def test_an_out_param_takes_its_extent_from_the_body_not_the_call_arguments() -> None:
+    """``scale_up`` returns ``v``, so the out-param it is written into is ``v``-shaped.
+
+    The classification used to read the CALL SITE's target instead. ``out`` is declared ``(n,)``,
+    and for a target nothing sizes ``_resolve_array_ref`` answers with the broadcast join over the
+    binding call's ARGUMENTS -- so the helper declared a buffer its own body contradicts. The two
+    agree in this fixture only because the preset binds ``n`` to 8; the corpus has kernels where
+    they do not, and there the frontend refuses the write into the out-param.
+    """
+    kir = _helper_kir(_DTYPE_OF_SRC, "")
+    shapes = {a.name: tuple(str(s) for s in a.shape) for a in kir.helpers[0].arrays}
+    assert shapes["__hret_0"] == shapes["v"], (
+        f"the out-param is {shapes['__hret_0']} and the value the body returns is {shapes['v']}"
+    )
+
+
 def test_array_return_helper_buffers_follow_kernel_precision() -> None:
     # ``dtype=x.dtype`` is "whatever x is", so the helper's argument and its synthesized out-param
     # must narrow with the kernel. Read as the literal tag ``"dtype"`` they missed every emitter's
@@ -268,16 +284,15 @@ def test_array_return_helper_buffers_follow_kernel_precision() -> None:
 
     kir = _helper_kir(_DTYPE_OF_SRC, "float32")
     assert [(a.name, a.dtype) for a in kir.helpers[0].arrays] == [("v", "float32"), ("__hret_0", "float32")]
+    assert ("static void scale_up(float *restrict __hret_0, const float *restrict v, const float s)") in emit_c(
+        kir, fn_name="f"
+    )
     assert (
-        "static void scale_up(float *restrict __hret_0, const float *restrict v, const int64_t n, const float s)"
-    ) in emit_c(kir, fn_name="f")
-    assert (
-        "static void scale_up(float *__restrict__ __hret_0, const float *__restrict__ v, "
-        "const int64_t n, const float s)"
+        "static void scale_up(float *__restrict__ __hret_0, const float *__restrict__ v, const float s)"
     ) in emit_cpp(kir, fn_name="f")
     f90 = emit_fortran(kir, fn_name="f")
     assert "real(c_float), intent(in) :: v(8)" in f90
-    assert "real(c_float), intent(inout) :: x_hret_0(n)" in f90
+    assert "real(c_float), intent(inout) :: x_hret_0(8)" in f90
 
 
 def test_fp64_helper_buffers_are_unchanged() -> None:
@@ -287,16 +302,15 @@ def test_fp64_helper_buffers_are_unchanged() -> None:
 
     kir = _helper_kir(_DTYPE_OF_SRC, "")
     assert [(a.name, a.dtype) for a in kir.helpers[0].arrays] == [("v", "float64"), ("__hret_0", "float64")]
+    assert ("static void scale_up(double *restrict __hret_0, const double *restrict v, const double s)") in emit_c(
+        kir, fn_name="f"
+    )
     assert (
-        "static void scale_up(double *restrict __hret_0, const double *restrict v, const int64_t n, const double s)"
-    ) in emit_c(kir, fn_name="f")
-    assert (
-        "static void scale_up(double *__restrict__ __hret_0, const double *__restrict__ v, "
-        "const int64_t n, const double s)"
+        "static void scale_up(double *__restrict__ __hret_0, const double *__restrict__ v, const double s)"
     ) in emit_cpp(kir, fn_name="f")
     f90 = emit_fortran(kir, fn_name="f")
     assert "real(c_double), intent(in) :: v(8)" in f90
-    assert "real(c_double), intent(inout) :: x_hret_0(n)" in f90
+    assert "real(c_double), intent(inout) :: x_hret_0(8)" in f90
 
 
 def test_an_unresolvable_buffer_dtype_refuses() -> None:

@@ -4577,13 +4577,43 @@ def _propagate_local_extents(hfn: ast.FunctionDef, table: Dict[str, Tuple[str, .
             table[name] = tuple(ast.unparse(d) for d in ext)
 
 
-def _extent_operands_resolved(value: ast.expr, hfn: ast.FunctionDef, table: Dict[str, Tuple[str, ...]]) -> bool:
+def _numeric_locals(hfn: ast.FunctionDef, scalars: Set[str]) -> Set[str]:
+    """Locals of ``hfn`` bound to integer arithmetic over names already known to be scalar.
+
+    A pool's ``out_len = (length - kernel_size) // stride + 1`` is one of these: it is not an array
+    and it never gets an extent, so an expression naming it must not be declined for lacking one.
+    """
+    known = set(scalars)
+    while True:
+        grew = False
+        for stmt in hfn.body:
+            if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1):
+                continue
+            target = stmt.targets[0]
+            if not isinstance(target, ast.Name) or target.id in known:
+                continue
+            names = {n.id for n in ast.walk(stmt.value) if isinstance(n, ast.Name)}
+            if names and names <= known and not any(isinstance(n, ast.Call) for n in ast.walk(stmt.value)):
+                known.add(target.id)
+                grew = True
+        if not grew:
+            return known - set(scalars)
+
+
+def _extent_operands_resolved(
+    value: ast.expr, hfn: ast.FunctionDef, table: Dict[str, Tuple[str, ...]], scalars: Set[str] = frozenset()
+) -> bool:
     """Whether every name the expression uses AS AN ARRAY has an extent in ``table``.
 
     Only the positions that carry an extent are checked -- a direct operand of an arithmetic
     BinOp, and a subscript base. A name in any other position is a scalar (mamba2's ``span``
     inside ``np.full((span, span), ...)``), and demanding an extent for it declines helpers that
     are perfectly resolvable.
+
+    A name KNOWN to be a scalar is resolved even in an extent-carrying position: dividing an array
+    by one is the commonest tail a helper has (``return acc / kernel_size``), and asking a scalar
+    for an extent declined the whole helper -- which then took the caller's guess at the target's
+    shape, the pool's INPUT length rather than its output.
     """
     operands: List[ast.expr] = []
     for node in ast.walk(value):
@@ -4591,7 +4621,7 @@ def _extent_operands_resolved(value: ast.expr, hfn: ast.FunctionDef, table: Dict
             operands.extend([node.left, node.right])
         elif isinstance(node, ast.Subscript):
             operands.append(node.value)
-    return not any(isinstance(op, ast.Name) and op.id not in table for op in operands)
+    return not any(isinstance(op, ast.Name) and op.id not in table and op.id not in scalars for op in operands)
 
 
 def target_shape_is_the_call_itself(
@@ -4666,7 +4696,7 @@ def _helper_return_shape_from_body(
     returns = [n.value for n in ast.walk(hfn) if isinstance(n, ast.Return) and n.value is not None]
     if not returns:
         return None, None
-    arrays, _, _ = _infer_helper_params(pnames, args, arr_by, sca_by, sym_by, fn)
+    arrays, inferred_scalars, inferred_symbols = _infer_helper_params(pnames, args, arr_by, sca_by, sym_by, fn)
     if not arrays:
         return None, None
     table = {a.name: tuple(str(s) for s in a.shape) for a in arrays}
@@ -4674,7 +4704,9 @@ def _helper_return_shape_from_body(
     # ``return seg + np.triu(__full1, 1)``), not from its parameters directly, so sizing it needs
     # those locals too -- propagated forward, since each is sized against the ones before it.
     _propagate_local_extents(hfn, table)
-    if any(not _extent_operands_resolved(value, hfn, table) for value in returns):
+    known_scalars = {sc.name for sc in inferred_scalars} | {sy.name for sy in inferred_symbols}
+    known_scalars |= _numeric_locals(hfn, known_scalars | set(table))
+    if any(not _extent_operands_resolved(value, hfn, table, known_scalars) for value in returns):
         # ``_iter_extent_of`` answers a BinOp with the operand it COULD size when the other comes
         # back None. That is a serviceable broadcast hint and a wrong allocation: mamba2's
         # ``seg + np.triu(...)`` reported the triangle's ``(span, span)`` for a 4-D result, which
@@ -5920,18 +5952,28 @@ def _build_helper_kirs(
         # consumes it (lulesh's face-node loops, which only surface once its helpers survive).
         _unroll_const_list_loops(hfn)
 
+        # The body is asked in EVERY case, not only when the target said nothing. Reading it wrong
+        # classifies an array return as by-value: no out-param is added, the returns stay as
+        # ``return <expr>``, and every shape-changing call inside one reaches the emitter unlowered,
+        # because the expanders only ever see assignments.
+        body_shape, body_dtype = _helper_return_shape_from_body(
+            call_specialized_body(hfn, pnames, call.args), pnames, call.args, oarr_by, osca_by, osym_by, owner_fn
+        )
         if hret_shape is None or target_shape_is_the_call_itself(owner_fn, lhs, oarr_by, hdef.name):
-            # Either no call site stores the result into an array -- ``_conv2d(...)`` is only ever
-            # an ARGUMENT to another helper (resnet101's ``_batch_norm(_conv2d(x, w, 1, 0), ..)``)
-            # -- or the target told us nothing the call did not. The helper's own body says what it
-            # returns, and reading that wrong classifies an array return as by-value: no out-param
-            # is added, the returns stay as ``return <expr>``, and every shape-changing call inside
-            # one reaches the emitter unlowered, because the expanders only ever see assignments.
-            body_shape, body_dtype = _helper_return_shape_from_body(
-                call_specialized_body(hfn, pnames, call.args), pnames, call.args, oarr_by, osca_by, osym_by, owner_fn
-            )
+            # ``_conv2d(...)`` is only ever an ARGUMENT to another helper (resnet101's
+            # ``_batch_norm(_conv2d(x, w, 1, 0), ..)``), or the target told us nothing the call did
+            # not, so the body is the only answer there is.
             if body_shape is not None or hret_shape is None:
                 hret_shape, hret_dtype = body_shape, body_dtype
+        elif body_shape is not None and list(body_shape) != list(hret_shape):
+            # An out-param is written BY the helper's body, so the body is the authority on its
+            # extents and a disagreement is a defect in the target's. ``_resolve_array_ref`` chases
+            # an undeclared local like ``x2 = _avgpool1d_taps(x1, ...)`` by reading the binding Call
+            # as elementwise, and answers with the broadcast join of its ARGUMENTS -- the pool's
+            # INPUT length. Even a target the chase DID size is the callee's return respelled in the
+            # CALLER's names, which is the vocabulary split a dace program cannot relate: lenet's
+            # ``maxpool2d`` declared ``int_floor(H - 4, 2)`` against a body writing ``H_out``.
+            hret_shape, hret_dtype = body_shape, body_dtype
 
         if hret_shape is None:
             # SCALAR (by-value) return -- params inferred straight from the call. A compile-time
