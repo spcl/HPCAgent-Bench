@@ -1152,11 +1152,17 @@ RUN set -eux; \
 # Node from nodesource rather than the distro package, which is too old for
 # @anthropic-ai/claude-code. The ROCm base is a MINIMIZED Ubuntu -- dpkg strips /usr/share/man --
 # so unminimize runs after the library layers and its reinstall restores their pages too.
+#
+# claude-code is pinned: unpinned, the layer caches on the command string forever and the image
+# ages onto whatever the first build happened to pull. Pinned to the version already shipping.
 RUN set -eux; \
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash -; \
     apt-get install -y --no-install-recommends nodejs; \
     rm -rf /var/lib/apt/lists/*; \
-    npm install -g @anthropic-ai/claude-code; \
+    claude_code_version=2.1.197; \
+    npm install -g "@anthropic-ai/claude-code@${claude_code_version}"; \
+    claude --version | grep -qF "${claude_code_version}" \
+      || { echo "claude --version is not ${claude_code_version}: $(claude --version)" >&2; exit 1; }; \
     node_major="$(node --version | sed 's/^v//; s/\..*//')"; \
     [ "${node_major}" -ge 18 ] \
       || { echo "node >= 18 required by @anthropic-ai/claude-code, found $(node --version)" >&2; exit 1; }; \
@@ -1176,9 +1182,26 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*; \
     man -w gcc >/dev/null || { echo "manpages missing: unminimize did not take" >&2; exit 1; }
 
+# ---------------------------------------------------------------------------------------------
+# 13a. Isolated venvs for the non-Claude harnesses (mini-SWE-agent, OpenHands), python3.12, kept
+# off the system pip so their deps cannot displace system litellm[proxy]==1.94.0.
+#
+# Only the two requirements files are copied here, not the whole containers/agent tree: that tree
+# holds prompts and tool scripts that change on every harness iteration, and copying it before
+# this pip-install layer would invalidate the layer on every one of those unrelated edits. The
+# full tree is still COPY'd below for everything else the agent stage needs.
+COPY containers/agent/harness/requirements-miniswe.txt containers/agent/harness/requirements-openhands.txt \
+     /opt/optarena-agent/harness/
+RUN set -eux; \
+    uv venv --python /usr/bin/python3.12 /opt/harness/miniswe; \
+    uv pip install --python /opt/harness/miniswe/bin/python --no-cache \
+      -r /opt/optarena-agent/harness/requirements-miniswe.txt; \
+    uv venv --python /usr/bin/python3.12 /opt/harness/openhands; \
+    uv pip install --python /opt/harness/openhands/bin/python --no-cache \
+      -r /opt/optarena-agent/harness/requirements-openhands.txt
+
 COPY containers/agent /opt/optarena-agent
 COPY containers/judge /opt/optarena-judge
-RUN chmod +x /opt/optarena-agent/start_agents.sh /opt/optarena-agent/start_run.sh
 
 # ---------------------------------------------------------------------------------------------
 # 14. The final gate.
@@ -1254,6 +1277,8 @@ RUN set -eux; \
                 amdclang mpicc gcc clang flang; do \
       command -v "${tool}" >/dev/null || { echo "${tool} is missing from the image" >&2; exit 1; }; \
     done; \
+    /opt/harness/miniswe/bin/python -c 'import minisweagent'; \
+    /opt/harness/openhands/bin/python -c 'import openhands.sdk, openhands.tools'; \
     sh /stdpar-gate.sh; \
     sh /parallelizer-gate.sh; \
     LD_PRELOAD=/usr/local/lib/libmimalloc.so /bin/true \

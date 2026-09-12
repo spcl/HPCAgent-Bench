@@ -1,9 +1,10 @@
-# Judge Placeholder Tools
+# Judge Tools
 
-The judge container is intentionally empty for now. This directory only prepares
-the execution part of one future judge tool: `web_search`.
+The AMD judge-agent image copies this directory to `/opt/optarena-judge`. It holds one tool,
+`web_search`: `experiments/judge_service.py` reads it from `/opt/optarena-judge/tools`, and
+`experiments/run_cluster.sh` puts `containers/judge/tools` on the judge's `PYTHONPATH`.
 
-`web_search` is process-oriented. A later service can start it once per query:
+`web_search` is process-oriented and runs once per query:
 
 ```bash
 python3 /opt/optarena-judge/tools/web_search.py --query "best rocBLAS batched GEMM API"
@@ -20,8 +21,9 @@ judge/
   .env.example
   requirements.txt
   tools/web_search.py
-  tests/test_web_search.py
 ```
+
+The network-free test is `tests/test_judge_web_search.py` at the repository root.
 
 ## Configuration
 
@@ -41,19 +43,24 @@ Optional:
 
 ```bash
 SERPAPI_URL=https://serpapi.com/search.json
+WEBSEARCH_LLM_API_KEY=
 WEBSEARCH_TIMEOUT_SECONDS=60
 WEBSEARCH_MAX_RESULTS=5
 WEBSEARCH_MAX_PAGES=3
 WEBSEARCH_MAX_CHARS_PER_PAGE=6000
 WEBSEARCH_CRAWL_CONCURRENCY=3
 WEBSEARCH_CHECK_ROBOTS_TXT=true
+WEBSEARCH_PAGE_TIMEOUT_MS=30000
 WEBSEARCH_BM25_THRESHOLD=1.0
+WEBSEARCH_BM25_LANGUAGE=english
 WEBSEARCH_LLM_MAX_TOKENS=4096
 WEBSEARCH_LLM_TOKEN_FIELD=max_tokens
 WEBSEARCH_LLM_TEMPERATURE=
 WEBSEARCH_LLM_REASONING_EFFORT=minimal
 WEBSEARCH_LLM_VERBOSITY=low
 WEBSEARCH_LLM_EMPTY_RETRY_MULTIPLIER=4
+# test/dev only: JSON mapping URL -> page text; when set, Crawl4AI is skipped
+WEBSEARCH_FAKE_CRAWL_JSON=
 ```
 
 ## Run
