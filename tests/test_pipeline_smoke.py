@@ -29,7 +29,7 @@ from hpcagent_bench.frameworks.schema import Result, results_engine
 # fixture naming its own was green until that default moved (numpy -> numba) and left the figure
 # with no denominator -- "no machine in scope has numba rows to divide by".
 from hpcagent_bench.emit_bridge import legacy_bench_info_dict
-from hpcagent_bench.stats.plotting import DEFAULT_BASELINE
+from hpcagent_bench.stats.figures.results import DEFAULT_BASELINE
 from hpcagent_bench.spec import BenchSpec
 from tests.plot_family import one_plot
 
