@@ -454,6 +454,19 @@ def test_arm_parts_reads_the_recorded_packet_not_the_arm_name(analyze) -> None:
     assert analyze.arm_parts("v9-qwen38-c", "") == ("v9", "qwen38", "c", 0)
 
 
+def test_arm_parts_counts_a_composite_packet_as_skilled(analyze) -> None:
+    """``llrsingle`` records ``lang-skills+no-score-tool`` on its treated arms -- a bare equality
+    check against the canonical ``lang-skills`` key missed this composite entirely and read every
+    one of that campaign's skilled arms as unskilled."""
+    assert analyze.arm_parts("llrsingle-oss120b-c-skills", "lang-skills+no-score-tool") == (
+        "llrsingle",
+        "oss120b",
+        "c",
+        1,
+    )
+    assert analyze.arm_parts("llrsingle-oss120b-c", "no-score-tool")[3] == 0
+
+
 def test_arm_packet_map_canonicalizes_and_refuses_a_split_arm(analyze) -> None:
     """One packet per arm, alias-resolved through packets.canonical; an arm somehow carrying two
     raw spellings that resolve to different keys is a labelling bug and must raise, not pick one."""
