@@ -43,7 +43,7 @@ from numpyto_common import dtypes
 from numpyto_common.ir import _COMPLEX_FOR_FLOAT, KernelIR, SymbolDesc, stamp_symbol_assumptions
 from numpyto_common.ordered import OrderedSet
 from numpyto_common.subscripts import has_slice_subscript, is_ellipsis, is_full_slice
-from numpyto_common.numpy_desugar import _np_linalg_attr
+from numpyto_common.numpy_desugar import np_submodule_attr
 from numpyto_common.lib_nodes import (
     ARRAY_METHOD_SHAPE_OPS,
     ArrayMethodRewriter,
@@ -2474,7 +2474,7 @@ def _harvest_local_shapes(
         # solve(A, b)`` like the SQUARE A rather than like b. A 1-D b then has
         # its reads padded to a phantom second dim (``x[i]`` -> ``x[i, :]``).
         # Register what the solve / inv / cholesky expanders actually write.
-        _lin_op = _np_linalg_attr(rhs)
+        _lin_op = np_submodule_attr(rhs, "linalg")
         if _lin_op in ("solve", "inv", "cholesky"):
             # ``solve`` returns x with b's shape; ``inv`` / ``cholesky`` are
             # shape-preserving in their single operand.

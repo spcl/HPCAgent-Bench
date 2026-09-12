@@ -119,16 +119,15 @@ def _np_attr(node: ast.AST) -> Optional[str]:
     return None
 
 
-def _np_fft_attr(node: ast.AST) -> Optional[str]:
-    """``np.fft.<attr>(...)`` / ``numpy.fft.<attr>(...)`` call -> ``attr`` (one
-    of ``fft``/``ifft``/``fft2``/``ifft2``/``fftn``/``ifftn``), else None. The
-    call func is a two-level Attribute (``np.fft.fft``), so the single-level
-    ``_np_attr`` misses it."""
+def np_submodule_attr(node: ast.AST, submodule: str) -> Optional[str]:
+    """``np.<submodule>.<attr>(...)`` / ``numpy.<submodule>.<attr>(...)`` call (``np.fft.fft``,
+    ``np.linalg.solve``) -> ``attr``, else None. The call func is a two-level Attribute, so the
+    single-level ``_np_attr`` misses it."""
     if (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and isinstance(node.func.value, ast.Attribute)
-        and node.func.value.attr == "fft"
+        and node.func.value.attr == submodule
         and isinstance(node.func.value.value, ast.Name)
         and node.func.value.value.id in ("np", "numpy")
     ):
@@ -306,7 +305,7 @@ def expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
     if isinstance(value, ast.Call):
         if isinstance(value.func, ast.Name) and value.func.id == "abs" and value.args:
             return expr_rank(value.args[0], ranks)  # builtin abs is elementwise
-        if _np_fft_attr(value) and value.args:
+        if np_submodule_attr(value, "fft") and value.args:
             return expr_rank(value.args[0], ranks)  # fft/ifft/fftn... preserve rank
         attr = _np_attr(value)
         if attr in ("arange", "linspace"):
@@ -760,7 +759,7 @@ def _dtype_kind(value: ast.AST, dtypes: Dict[str, str]) -> Optional[str]:
     if isinstance(value, ast.Call):
         # ``np.linalg`` first: it is a TWO-level attribute, so the single-level ``_np_attr`` below
         # reads it as nothing and every value derived from a factorisation would go unknown.
-        linalg = _np_linalg_attr(value)
+        linalg = np_submodule_attr(value, "linalg")
         if linalg in ("cholesky", "inv") and value.args:
             return _dtype_kind(value.args[0], dtypes)  # a factor/inverse keeps the operand's kind
         if linalg == "solve" and len(value.args) >= 2:
@@ -1337,7 +1336,7 @@ class _FftInline(ast.NodeTransformer):
         self.generic_visit(node)
         if len(node.targets) != 1:
             return node
-        fattr = _np_fft_attr(node.value)
+        fattr = np_submodule_attr(node.value, "fft")
         if fattr is None or not node.value.args:
             return node
         tgt = node.targets[0]
@@ -1513,11 +1512,6 @@ class _FancyGatherInline(ValueHoistInline):
 
     def make_hoister(self, ctr: int) -> StatementHoister:
         return _FancyGatherHoister(self.ranks, ctr)
-
-
-#: Reductions numba does NOT accept an ``axis=`` kwarg for (unlike ``sum`` /
-#: ``prod``, which it supports natively). ``mean`` additionally has no axis form.
-_REDUCE_AXIS_OPS = {"sum", "prod", "mean", "std", "var", "min", "max", "amin", "amax", "argmin", "argmax", "any", "all"}
 
 
 def _const_int(node: ast.AST) -> Optional[int]:
@@ -1698,12 +1692,12 @@ class _ReduceAxisHoister(ast.NodeTransformer):
         self.generic_visit(node)
         kw = {k.arg: k.value for k in node.keywords}
         npop = _np_attr(node)
-        if npop in _REDUCE_AXIS_OPS and node.args:  # np.mean(x, axis=k)
+        if npop in REDUCE_FNS and node.args:  # np.mean(x, axis=k)
             op, arg = npop, node.args[0]
             ax = kw.get("axis") or (node.args[1] if len(node.args) > 1 else None)
         elif (
             isinstance(node.func, ast.Attribute)
-            and node.func.attr in _REDUCE_AXIS_OPS
+            and node.func.attr in REDUCE_FNS
             and not (isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy"))
         ):
             op, arg = node.func.attr, node.func.value  # x.mean(axis=k) method form
@@ -1806,7 +1800,7 @@ class _KeepdimsToNewaxis(ast.NodeTransformer):
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
         kw = next((k for k in node.keywords if k.arg == "keepdims"), None)
-        if kw is None or not node.args or _np_attr(node) not in _REDUCE_AXIS_OPS:
+        if kw is None or not node.args or _np_attr(node) not in REDUCE_FNS:
             return node
         if not (isinstance(kw.value, ast.Constant) and kw.value.value is True):
             return node
@@ -1926,12 +1920,12 @@ class _CallFixups(ast.NodeTransformer):
 _OUTER_OPS = {"add": "+", "subtract": "-", "multiply": "*", "divide": "/", "true_divide": "/"}
 
 
-def _ufunc_outer_op(node: ast.AST) -> Optional[str]:
-    """``np.<op>.outer(...)`` -> ``<op>`` (add/subtract/multiply/...) else None."""
+def ufunc_method_op(node: ast.AST, method: str) -> Optional[str]:
+    """``np.<op>.<method>(...)`` (``np.add.outer`` / ``np.subtract.at``) -> ``<op>``, else None."""
     if (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "outer"
+        and node.func.attr == method
         and isinstance(node.func.value, ast.Attribute)
         and isinstance(node.func.value.value, ast.Name)
         and node.func.value.value.id in ("np", "numpy")
@@ -1952,7 +1946,7 @@ class _UfuncOuterHoister(ast.NodeTransformer):
 
     def visit_Call(self, node: ast.Call):
         self.generic_visit(node)
-        op = _ufunc_outer_op(node)
+        op = ufunc_method_op(node, "outer")
         if op not in _OUTER_OPS or len(node.args) != 2:
             return node
         a, b = node.args
@@ -2220,20 +2214,6 @@ class _MaskedReduceInline(ValueHoistInline):
 _AT_OPS = {"add": "+=", "subtract": "-=", "multiply": "*="}
 
 
-def _ufunc_at_op(node: ast.AST) -> Optional[str]:
-    """``np.add.at(...)`` / ``np.subtract.at`` / ``np.multiply.at`` -> the op."""
-    if (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "at"
-        and isinstance(node.func.value, ast.Attribute)
-        and isinstance(node.func.value.value, ast.Name)
-        and node.func.value.value.id in ("np", "numpy")
-    ):
-        return node.func.value.attr
-    return None
-
-
 class _DiffToSliceDifference(ast.NodeTransformer):
     """``np.diff(p)`` -> ``p[1:] - p[:-1]``.
 
@@ -2417,7 +2397,7 @@ class _AddAtInline(ast.NodeTransformer):
     def visit_Expr(self, node: ast.Expr):
         self.generic_visit(node)
         call = node.value
-        op = _ufunc_at_op(call) if isinstance(call, ast.Call) else None
+        op = ufunc_method_op(call, "at") if isinstance(call, ast.Call) else None
         if op not in _AT_OPS or len(call.args) < 2 or not isinstance(call.args[0], ast.Name):
             return node
         A = call.args[0].id
@@ -3349,7 +3329,7 @@ def _list_display_elts(node: ast.AST) -> Optional[List[ast.expr]]:
     return list(node.elts)
 
 
-def _len_call_of(node: ast.AST, name: str) -> bool:
+def is_len_of(node: ast.AST, name: str) -> bool:
     """``len(<name>)`` -- the list's running length."""
     return (
         isinstance(node, ast.Call)
@@ -3375,7 +3355,7 @@ class _SubstLenWithIndex(ast.NodeTransformer):
 
     def visit_Call(self, node: ast.Call):
         self.generic_visit(node)
-        if _len_call_of(node, self.name):
+        if is_len_of(node, self.name):
             return ast.copy_location(ast.Name(id=self.idx, ctx=ast.Load()), node)
         return node
 
@@ -3508,7 +3488,7 @@ def _plan_list_build(body: List[ast.stmt], start: int, name: str):
             and isinstance(stmt.test, ast.Compare)
             and len(stmt.test.ops) == 1
             and isinstance(stmt.test.ops[0], ast.Lt)
-            and _len_call_of(stmt.test.left, name)
+            and is_len_of(stmt.test.left, name)
             and len(stmt.body) == 1
         ):
             got = _appended_elts(stmt.body[0], name)
@@ -4001,22 +3981,6 @@ class _ReshapeMatmulInline(ast.NodeTransformer):
         return [ast.copy_location(s, node) for s in ast.parse("\n".join(lines)).body] + [node]
 
 
-def _np_linalg_attr(node: ast.AST) -> Optional[str]:
-    """``np.linalg.<attr>(...)`` / ``numpy.linalg.<attr>(...)`` call -> ``attr``
-    (``cholesky``/``solve``/``inv``), else None. Like :func:`_np_fft_attr` but for
-    the two-level ``np.linalg`` prefix the single-level ``_np_attr`` misses."""
-    if (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and isinstance(node.func.value, ast.Attribute)
-        and node.func.value.attr == "linalg"
-        and isinstance(node.func.value.value, ast.Name)
-        and node.func.value.value.id in ("np", "numpy")
-    ):
-        return node.func.attr
-    return None
-
-
 def _cholesky_lines(temp: str, a: str, n: str, p: str, hermitian: bool = False) -> List[str]:
     """Source lines computing ``np.linalg.cholesky(a)`` into a freshly zeroed
     ``temp`` via the Cholesky-Banachiewicz triple loop (same O(n^3) form the
@@ -4190,7 +4154,7 @@ class _LinalgHoister(ast.NodeTransformer):
 
     def visit_Call(self, node: ast.Call):
         self.generic_visit(node)  # inner linalg calls first
-        op = _np_linalg_attr(node)
+        op = np_submodule_attr(node, "linalg")
         if not node.args:
             return node
         if op == "solve":
@@ -4644,7 +4608,7 @@ def _eigh_call_kind(node: ast.AST, alias_names: set):
     if not isinstance(node, ast.Call) or not node.args:
         return None
     f = node.func
-    linalg_attr = _np_linalg_attr(node)
+    linalg_attr = np_submodule_attr(node, "linalg")
     scipy_attr = (
         f.attr
         if isinstance(f, ast.Attribute)

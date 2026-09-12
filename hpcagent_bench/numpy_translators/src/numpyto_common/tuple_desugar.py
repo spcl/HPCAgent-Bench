@@ -31,7 +31,7 @@ import ast
 import copy
 from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 
-from numpyto_common.numpy_desugar import expr_rank
+from numpyto_common.numpy_desugar import expr_rank, is_len_of
 from numpyto_common.ordered import OrderedSet
 
 #: Module aliases a kernel may spell numpy as.
@@ -917,17 +917,6 @@ def literal_list_bind(stmt: ast.stmt) -> Optional[Tuple[str, List[ast.Constant]]
     if not all(isinstance(e, ast.Constant) and isinstance(e.value, (int, float)) for e in elts):
         return None
     return stmt.targets[0].id, list(elts)
-
-
-def is_len_of(node: ast.AST, name: str) -> bool:
-    return (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "len"
-        and len(node.args) == 1
-        and isinstance(node.args[0], ast.Name)
-        and node.args[0].id == name
-    )
 
 
 def growth_loop(stmt: ast.stmt, name: str) -> Optional[Tuple[ast.expr, ast.expr]]:
