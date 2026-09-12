@@ -24,9 +24,10 @@ the slice-assign it should be).
 
 import argparse
 import ast
-import subprocess
 import sys
 from pathlib import Path
+
+from hpcagent_bench.precommit_support import git_tracked, is_generated_source
 
 #: Where kernels live.
 BENCH_ROOT = "hpcagent_bench/benchmarks"
@@ -37,26 +38,14 @@ NUMPY_MODULES = frozenset({"np", "numpy"})
 
 def tracked_sources():
     """Every tracked Python file under the benchmarks tree (standalone-scan fallback)."""
-    out = subprocess.run(["git", "ls-files", f"{BENCH_ROOT}/**/*.py"], capture_output=True, text=True)
-    if out.returncode != 0:
-        return []
-    return [ln for ln in out.stdout.splitlines() if ln.strip()]
-
-
-def is_generated(path: Path) -> bool:
-    """A generated sibling carries the autogen marker on its first line."""
-    try:
-        with path.open(encoding="utf-8") as handle:
-            return "hpcagent_bench-autogen" in handle.readline()
-    except OSError:
-        return False
+    return git_tracked(f"{BENCH_ROOT}/**/*.py")
 
 
 def offenders(paths):
     """Yield ``(path, lineno, source_line)`` for each ``np.<f>(..., out=X)`` call."""
     for rel in paths:
         path = Path(rel)
-        if BENCH_ROOT not in path.as_posix() or path.suffix != ".py" or is_generated(path):
+        if BENCH_ROOT not in path.as_posix() or path.suffix != ".py" or is_generated_source(path):
             continue
         try:
             text = path.read_text(encoding="utf-8")

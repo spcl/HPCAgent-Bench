@@ -711,7 +711,6 @@ RUN set -eux; \
     npm --version
 
 COPY containers/agent /opt/optarena-agent
-RUN chmod +x /opt/optarena-agent/start_agents.sh /opt/optarena-agent/start_run.sh
 
 # --- the gate ----------------------------------------------------------------------------------
 # Guard the build, do not just install. Everything below fails the IMAGE rather than the campaign.

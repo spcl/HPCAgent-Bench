@@ -75,13 +75,10 @@ machine. Time to a live API is the slowest stage plus about 130 s for the KV all
 1080 s of graph capture. Size any readiness cap well above 6000 s, and size it on the slowest
 stage, never on the first stage to report.
 
-Outside a campaign, `serve-only.sbatch` needs that cap named explicitly: `.env.base-glm53` does not
-set `VLLM_READY_TIMEOUT_SECONDS`, so the launcher's own 2400 s default applies and gives up on a
-server that is still healthy. Start it with:
-
-```bash
-VLLM_READY_TIMEOUT_SECONDS=7200 MODEL=glm53 ./serve-only.sbatch
-```
+`serve-only.sbatch` polls for up to `VLLM_READY_TIMEOUT_SECONDS`, or `AGENT_READY_TIMEOUT_SECONDS`
+if that is unset, or 7200 s if neither is set. `.env.base-glm53` does not set
+`VLLM_READY_TIMEOUT_SECONDS` but does set `AGENT_READY_TIMEOUT_SECONDS=10800`, comfortably above
+the slowest stage above, so no override is needed to start this model with `serve-only.sbatch`.
 
 ## DO
 

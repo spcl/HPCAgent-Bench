@@ -75,10 +75,6 @@ def resolve_shared(path: str) -> pathlib.Path:
     return resolved
 
 
-#: Filenames a ``-l<name>`` link token can resolve to, in the order the linker tries them.
-LIB_PATTERNS = ("lib{name}.so", "lib{name}.a")
-
-
 def installed_libraries() -> list[str]:
     """The ``-l`` names the shared folder can satisfy, sorted.
 

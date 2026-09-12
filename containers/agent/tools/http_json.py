@@ -143,7 +143,8 @@ def call_json(url: str, data: bytes | None, timeout: float) -> dict[str, Any]:
             except json.JSONDecodeError:
                 return {"ok": True, "status": response.status, "text": body}
     except urllib.error.HTTPError as exc:  # a subclass of URLError: must be caught first
-        text = exc.read().decode("utf-8", errors="replace")
+        with exc:  # the error is also the open response; closing it avoids a leaked socket
+            text = exc.read().decode("utf-8", errors="replace")
         try:
             details: Any = json.loads(text)
         except json.JSONDecodeError:
@@ -206,6 +207,39 @@ def identity_fields() -> dict[str, str]:
 USAGE_FIELDS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")
 
 
+#: The ``usage.jsonl`` fields one model call CONSUMED, for a runner harness (mini-SWE, OpenHands,
+#: Optimas) that writes one JSON line per call instead of a claude transcript. The four are disjoint
+#: (uncached prompt, cached prompt, completion, reasoning), so all of them count. Same duplication
+#: rule as USAGE_FIELDS: ``experiments/harnesses.py`` is not on this path.
+USAGE_JSONL_FIELDS = ("input", "cached_input", "output", "reasoning")
+
+
+def usage_jsonl_tokens(path: str) -> int:
+    """A runner's CUMULATIVE consumed tokens: every call in its usage.jsonl, summed. Never raises."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            lines = handle.readlines()
+    except OSError:
+        return 0
+    total = 0
+    for line in lines:
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue  # the tail can be half-written while the runner is mid-append
+        if not isinstance(record, dict):
+            continue
+        for field in USAGE_JSONL_FIELDS:
+            value = record.get(field)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            total += int(value)
+    return total
+
+
 def transcript_tokens() -> int:
     """The agent's CUMULATIVE consumed tokens so far, read from its own stream-json transcript.
 
@@ -216,7 +250,13 @@ def transcript_tokens() -> int:
 
     Never raises and never blocks a grade: a missing, unreadable or half-written transcript returns
     0, because a token count is bookkeeping and the grade the agent is paying for is not.
+
+    ``$OPTARENA_USAGE_PATH`` names a runner harness's usage.jsonl instead, and wins when set: such a
+    harness writes no stream-json transcript at all.
     """
+    usage_path = os.environ.get("OPTARENA_USAGE_PATH", "").strip()
+    if usage_path:
+        return usage_jsonl_tokens(usage_path)
     path = os.environ.get("CLAUDE_LOG_PATH", "").strip() or "claude.log"
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as handle:

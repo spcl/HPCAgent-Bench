@@ -46,12 +46,14 @@ TRACK_MACHINE_LEARNING: str = "machine_learning"
 TRACK_OTHER: str = "other"
 
 #: Fixed section order: HPC -> loop_level_reasoning -> ML -> other.
-_SECTION_ORDER: Dict[str, int] = {
-    TRACK_SCIENTIFIC_COMPUTING: 0,
-    TRACK_LOOP_LEVEL_REASONING: 1,
-    TRACK_MACHINE_LEARNING: 2,
-    TRACK_OTHER: 3,
-}
+_SECTION_ORDER: tuple[str, ...] = (
+    TRACK_SCIENTIFIC_COMPUTING,
+    TRACK_LOOP_LEVEL_REASONING,
+    TRACK_MACHINE_LEARNING,
+    TRACK_OTHER,
+)
+#: Sections sorted by :func:`_sort_key`; the rest keep the caller's order (ML is never ordered).
+_SORTED_SECTIONS: tuple[str, ...] = (TRACK_SCIENTIFIC_COMPUTING, TRACK_LOOP_LEVEL_REASONING)
 
 #: Sort sentinel for an unlabeled level (sorts after 1/2/3).
 _LEVEL_LAST: int = 1 << 30
@@ -143,11 +145,7 @@ def _spans(ordered: Sequence[RowMeta], order: str) -> List[GroupSpan]:
         j = i + 1
         while j < n and _span_key_label(ordered[j], order)[0] == key:
             j += 1
-        lvl = (
-            ordered[i].level
-            if order == BY_LEVEL and ordered[i].track in (TRACK_SCIENTIFIC_COMPUTING, TRACK_LOOP_LEVEL_REASONING)
-            else None
-        )
+        lvl = ordered[i].level if order == BY_LEVEL and ordered[i].track in _SORTED_SECTIONS else None
         spans.append(GroupSpan(label=label, start=i, end=j, track=ordered[i].track, level=lvl))
         i = j
     return spans
@@ -163,20 +161,12 @@ def order_rows(rows: Sequence[RowMeta], order: str = BY_DWARF) -> Tuple[List[str
     """
     if order not in ORDER_MODES:
         raise ValueError(f"unknown order {order!r}; choose from {ORDER_MODES}")
-    buckets: Dict[str, List[RowMeta]] = {
-        TRACK_SCIENTIFIC_COMPUTING: [],
-        TRACK_LOOP_LEVEL_REASONING: [],
-        TRACK_MACHINE_LEARNING: [],
-        TRACK_OTHER: [],
-    }
+    buckets: Dict[str, List[RowMeta]] = {track: [] for track in _SECTION_ORDER}
     for rm in rows:
         buckets[rm.track if rm.track in buckets else TRACK_OTHER].append(rm)
     ordered: List[RowMeta] = []
-    # HPC + loop_level_reasoning are sorted; ML + other keep insertion order (ML is never ordered).
-    ordered += sorted(buckets[TRACK_SCIENTIFIC_COMPUTING], key=lambda r: _sort_key(r, order))
-    ordered += sorted(buckets[TRACK_LOOP_LEVEL_REASONING], key=lambda r: _sort_key(r, order))
-    ordered += buckets[TRACK_MACHINE_LEARNING]
-    ordered += buckets[TRACK_OTHER]
+    for track, bucket in buckets.items():
+        ordered += sorted(bucket, key=lambda r: _sort_key(r, order)) if track in _SORTED_SECTIONS else bucket
     return [rm.short_name for rm in ordered], _spans(ordered, order)
 
 
@@ -188,16 +178,10 @@ def _short_name_index() -> Dict[str, "object"]:
     stores), NOT the directory stem the selector grammar uses -- the two differ for kernels
     like ``heat_3d`` (stem) / ``heat_3d`` (short_name). Memoized; ~1s to parse every manifest.
 
-    A manifest that fails to parse is SKIPPED rather than propagated, which is what makes
-    :func:`row_meta_for`'s "never crashes a plot" promise true. It was not: this used to call
-    ``KERNELS.specs()``, which is all-or-nothing, so ONE malformed manifest anywhere in the corpus
-    killed every plot -- including plots of a selection that does not contain it. Measured: a
-    density-matrix kernel readded under the pre-rename ``benchmarks/hpc/`` path carries
-    ``track: hpc`` with a ``scale:``, ``validate_scale`` rejects the pair, and an NPBench lvl2
-    heatmap that references no CP2K kernel at all died in row ORDERING.
-
-    Same policy, and the same reasoning, as ``spec._safe_level`` / ``spec._safe_labels``. Scoped to
-    this index on purpose: ``KERNELS.specs()`` stays strict for the tools that must not silently
+    A manifest that fails to parse is SKIPPED rather than propagated, which keeps
+    :func:`row_meta_for`'s "never crashes a plot" promise: one malformed manifest must not kill a
+    plot of a selection that does not contain it. Same policy as ``spec._safe_level`` /
+    ``spec._safe_labels``; ``KERNELS.specs()`` stays strict for the tools that must not silently
     skip a kernel (``apply_sizes``, ``size_audit``, ``cli`` corpus listing).
     """
     from hpcagent_bench.spec import KERNELS, BenchSpec
@@ -227,11 +211,7 @@ def row_meta_for(short_names: Sequence[str]) -> List[RowMeta]:
         if spec is None:
             out.append(RowMeta(sn, TRACK_OTHER, None, None))
             continue
-        track = (
-            spec.track
-            if spec.track in (TRACK_SCIENTIFIC_COMPUTING, TRACK_LOOP_LEVEL_REASONING, TRACK_MACHINE_LEARNING)
-            else TRACK_OTHER
-        )
+        track = spec.track if spec.track in _SECTION_ORDER else TRACK_OTHER
         out.append(RowMeta(sn, track, structural_group(spec, track), spec.level))
     return out
 

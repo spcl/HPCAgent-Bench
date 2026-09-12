@@ -232,43 +232,21 @@ def test_the_mcp_server_advertises_the_judge_routes_and_relays_a_refusal(agent_t
 
 
 def test_the_launcher_allows_every_tool_the_server_advertises(agent_tools) -> None:
-    """A tool the MCP server serves but ``--allowedTools`` omits is invisible to the model.
+    """A tool the MCP server serves but the launcher's ``AGENT_TOOLS`` omits is invisible to the model.
 
     Nothing fails when these two drift: the server answers ``tools/list`` with the full set, the CLI
     silently withholds the ones it was not told about, and the run merely comes out worse -- an agent
     that never scored an iteration or never profiled, with no error anywhere to explain why. That is
-    why this reads the launcher's own line rather than trusting a second list kept in a doc.
+    why this reads the launcher's own tuple rather than trusting a second list kept in a doc.
     """
     served = set(agent_tools.mcp_server.TOOLS)
-    launcher = (TOOLS_DIR.parent / "start_agents.sh").read_text()
-    allowed = set(re.findall(r'"mcp__optarena__(\w+)"', launcher))
-    assert allowed == served, (
-        f"start_agents.sh and MCP server disagree; advertised but blocked: "
-        f"{sorted(served - allowed)}, allowed but not served: {sorted(allowed - served)}"
-    )
-
-    # The cluster example does NOT go through start_agents.sh -- run_cluster.sh --agent-node runs
-    # agent_driver.py, which builds its own claude invocation. It is a second copy of the same list
-    # and drifted from the server independently.
+    # run_cluster.sh --agent-node runs agent_driver.py, which builds the claude invocation.
     driver = TOOLS_DIR.parents[2] / "experiments" / "agent_driver.py"
     driver_tools = set(re.findall(r"^AGENT_TOOLS = \(([^)]*)\)", driver.read_text(), re.MULTILINE)[0].split(","))
     driver_tools = {name.strip().strip('"') for name in driver_tools if name.strip()}
     assert driver_tools == served, (
         f"agent_driver.py and MCP server disagree; advertised but blocked: {sorted(served - driver_tools)}"
     )
-
-
-def test_the_launcher_exports_what_the_tools_read_from_the_environment(agent_tools) -> None:
-    """The MCP server is a SEPARATE process, so a bare assignment reaches nothing.
-
-    ``LANGUAGE=cpp`` without ``export`` left the tools on their own default (``c``) while the prompt
-    told the model ``cpp`` -- on a language-enforced track that is a 400 per submission, and on an
-    unenforced one a run silently graded in a language nobody asked for.
-    """
-    launcher = (TOOLS_DIR.parent / "start_agents.sh").read_text()
-    exported = set(re.findall(r"^export (\w+)=", launcher, re.MULTILINE))
-    for name in ("LANGUAGE", "JUDGE_URL", "JUDGE_RANK", "JUDGE_INPUT_MODE"):
-        assert name in exported, f"{name} is read by containers/agent/tools but never exported to them"
 
 
 def test_the_language_enum_is_the_judges_whole_delivery_vocabulary(agent_tools) -> None:

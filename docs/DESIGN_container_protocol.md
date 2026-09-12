@@ -1,11 +1,16 @@
 # DESIGN: container protocol -- a task declares needs, a family renders them
 
-## The model, corrected
+This page defines how a task's container needs (GPU, mounts, network, fabric) are
+declared once and rendered per backend into whatever that backend actually consumes:
+an argv, an EDF file, or nothing. It also records why `oci` is an alias, not a
+runtime, and why `native` and `ce` are separate families.
+
+## The model
 
 OCI is a **standard**, not a runtime. Docker implements it; podman implements it too.
-An earlier version of this file made `oci` a runtime family, which is a category
-error: nothing is ever launched as `oci`. It is an alias meaning "any OCI-compliant
-implementation this machine has", and it always resolves to a program.
+`oci` is not a runtime itself: nothing is ever launched as `oci`. It is an alias
+meaning "any OCI-compliant implementation this machine has", and it always resolves
+to a program that a caller can actually invoke.
 
 Implementations, and what each consumes:
 
@@ -23,8 +28,8 @@ at every call site.
 
 **Conversion is one-way, and that is why the shipped artifact is OCI.** An OCI image
 converts into a SquashFS or a SIF; neither converts back. Ship a SIF and a docker user
-has nothing to run. HPC sites do convert — pulling an OCI image over a parallel
-filesystem is slow, which is the entire reason SquashFS and SIF exist — so the
+has nothing to run. HPC sites do convert -- pulling an OCI image over a parallel
+filesystem is slow, which is the entire reason SquashFS and SIF exist -- so the
 artifact has to be the one every site can convert *from*.
 
 `oci` resolves to docker first, since that is the implementation most users have. The
@@ -34,7 +39,7 @@ grants.
 
 CE stays its own family even though it is podman underneath, because what it adds is
 the Cray OCI hooks that give the container correct, fast access to the GPU and the
-NIC — and because resolving `oci` must never land on the one implementation with no
+NIC -- and because resolving `oci` must never land on the one implementation with no
 local launch form.
 
 ## State today

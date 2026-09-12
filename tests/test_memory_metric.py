@@ -33,14 +33,18 @@ def _ts(peak_bytes, baseline_peak_bytes, solved: bool = True, s_i: float = 1.0):
 # --- the pure MU function ---------------------------------------------------
 
 
-def test_max_memory_is_mean_of_increments() -> None:
-    """MU is the plain mean over tasks of the kernel-attributable increments."""
-    assert max_memory([100, 200, 300]) == pytest.approx(200.0)
-
-
-def test_max_memory_excludes_unmeasured_peak() -> None:
-    """A task with no measured peak (every run crashed) is excluded, not averaged in as a spurious 0."""
-    assert max_memory([100, 0, 300]) == pytest.approx(200.0)  # mean(100, 300), not mean(100, 0, 300)
+@pytest.mark.parametrize(
+    "increments,expected",
+    [
+        ([100, 200, 300], 200.0),
+        ([100, 0, 300], 200.0),  # excludes the unmeasured (0) peak: mean(100, 300), not mean(100, 0, 300)
+    ],
+    ids=["mean-of-increments", "excludes-unmeasured-peak"],
+)
+def test_max_memory_is_the_mean_of_measured_increments(increments, expected) -> None:
+    """MU is the plain mean over tasks of the kernel-attributable increments; a task with no
+    measured peak (every run crashed) is excluded, not averaged in as a spurious 0."""
+    assert max_memory(increments) == pytest.approx(expected)
 
 
 def test_max_memory_empty_is_zero() -> None:
@@ -80,18 +84,22 @@ def test_norm_memory_unmeasured_reads_as_unmeasured() -> None:
 # --- the wiring on aggregate ------------------------------------------------
 
 
-def test_aggregate_exposes_mu_and_nmu() -> None:
-    """``SuiteScore`` carries MU (mean increment) and NMU (mean ratio)."""
-    s = M.aggregate([_ts(100, 50), _ts(300, 150)])
-    assert s.max_memory_bytes == pytest.approx(200.0)  # mean(100, 300)
-    assert s.norm_memory == pytest.approx(2.0)  # mean(100/50, 300/150) = mean(2.0, 2.0)
-
-
-def test_aggregate_missing_baseline_excluded_from_nmu() -> None:
-    """A task lacking a baseline peak still counts toward MU but is dropped from NMU."""
-    s = M.aggregate([_ts(200, 100), _ts(400, 0)])  # second task: no C baseline
-    assert s.max_memory_bytes == pytest.approx(300.0)  # mean(200, 400) -- both increments count
-    assert s.norm_memory == pytest.approx(2.0)  # only 200/100; the 400 task is excluded
+@pytest.mark.parametrize(
+    "task_scores,expected_max_memory,expected_norm_memory",
+    [
+        # mean(100, 300); mean(100/50, 300/150) = mean(2.0, 2.0)
+        ([(100, 50), (300, 150)], 200.0, 2.0),
+        # second task has no C baseline: both increments count toward MU, only 200/100 toward NMU
+        ([(200, 100), (400, 0)], 300.0, 2.0),
+    ],
+    ids=["every-task-has-a-baseline", "a-task-missing-its-baseline-is-excluded-from-nmu"],
+)
+def test_aggregate_exposes_mu_and_nmu(task_scores, expected_max_memory, expected_norm_memory) -> None:
+    """``SuiteScore`` carries MU (mean increment, every task) and NMU (mean ratio, tasks with a
+    baseline only) -- a task lacking a baseline peak still counts toward MU but is dropped from NMU."""
+    s = M.aggregate([_ts(peak, baseline) for peak, baseline in task_scores])
+    assert s.max_memory_bytes == pytest.approx(expected_max_memory)
+    assert s.norm_memory == pytest.approx(expected_norm_memory)
 
 
 def test_memory_metric_is_additive_not_replacing_the_ranked_score() -> None:
@@ -174,7 +182,7 @@ def test_the_legacy_queue_channel_carries_the_worker_payload(tmp_path) -> None:
     )
 
     assert len(q.items) == 1
-    status, outputs, samples, peak_bytes, increment_bytes, followups, device_bytes = q.items[0]
+    status, outputs, samples, peak_bytes, increment_bytes, _, _ = q.items[0]
     assert status == "ok", outputs
     assert set(outputs) == {"y"} and len(samples) == 1
     # No increment assertion here: in-process, the baseline is pytest's own high-water mark.
@@ -193,7 +201,7 @@ def test_the_increment_is_per_call_not_per_batch(tmp_path) -> None:
         "    _HELD.append(np.ones(4_000_000, dtype=np.float64))  # ~32 MB, never freed\n"
         "    return x + float(_HELD[-1][0])\n"
     )
-    common = dict(device=False, timeout=120, py_meta=("kern", ("x",), ("y",)))
+    common = {"device": False, "timeout": 120, "py_meta": ("kern", ("x",), ("y",))}
     _, _, one, _ = native_call._call_isolated(str(kernel), _BINDING, {"x": np.zeros(4)}, "python", reps=1, **common)
     _, _, many, _ = native_call._call_isolated(str(kernel), _BINDING, {"x": np.zeros(4)}, "python", reps=6, **common)
 

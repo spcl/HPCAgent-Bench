@@ -35,28 +35,26 @@ def test_affine_subscripts_are_not_flagged() -> None:
     assert _scop_nonaffine_reason(_scop("for (i = 0; i < N; i += 2) c[i] = a[i] + b[(i - 3)];")) is None
 
 
-def test_multidim_separate_subscripts_stay_affine() -> None:
-    # ``table[i][j]`` is two SEPARATE affine subscripts, not a nested (indirect) one.
-    assert _scop_nonaffine_reason(_scop("table[i][j] = table[(i + 1)][(j - 1)];")) is None
-
-
 def test_indirection_is_flagged() -> None:
     assert _scop_nonaffine_reason(_scop("a[i] = (a[i] + (b[ip[i]] * 2.0));")) == "indirection"
     # Indirection nested one level deeper is still caught.
     assert _scop_nonaffine_reason(_scop("out[idx[k]] = v[k];")) == "indirection"
 
 
-def test_modulo_index_is_flagged() -> None:
-    assert _scop_nonaffine_reason(_scop("a[i % k] = b[i];")) == "modulo"
-
-
-def test_integer_division_index_is_flagged() -> None:
-    assert _scop_nonaffine_reason(_scop("a[i / 2] = b[i];")) == "integer-division"
-
-
-def test_value_side_division_is_not_flagged() -> None:
-    # ``/`` OUTSIDE a subscript (in the value) does not affect the polyhedral model.
-    assert _scop_nonaffine_reason(_scop("a[i] = (b[i] / 2.0);")) is None
+@pytest.mark.parametrize(
+    "code,expected_reason",
+    [
+        # ``table[i][j]`` is two SEPARATE affine subscripts, not a nested (indirect) one.
+        ("table[i][j] = table[(i + 1)][(j - 1)];", None),
+        # ``/`` OUTSIDE a subscript (in the value) does not affect the polyhedral model.
+        ("a[i] = (b[i] / 2.0);", None),
+        ("a[i % k] = b[i];", "modulo"),
+        ("a[i / 2] = b[i];", "integer-division"),
+    ],
+    ids=["multidim-subscripts-stay-affine", "value-side-division-not-flagged", "modulo-flagged", "int-div-flagged"],
+)
+def test_a_non_affine_subscript_kind_is_named_and_an_affine_one_is_not(code, expected_reason) -> None:
+    assert _scop_nonaffine_reason(_scop(code)) == expected_reason
 
 
 def test_no_pragma_falls_back_to_scanning_whole_text() -> None:
@@ -122,8 +120,8 @@ def test_gather_kernel_scop_is_detected_nonaffine() -> None:
     """End-to-end: ``reroll_gather`` (``b[ip[i]]``) emits an affine-looking loop but
     an indirect access, so the detector flags its real scop -- the pluto path then
     skips it instead of miscompiling."""
-    from hpcagent_bench.spec import BenchSpec
     from hpcagent_bench.emit_bridge import legacy_bench_info_dict
+    from hpcagent_bench.spec import BenchSpec
 
     info = legacy_bench_info_dict(BenchSpec.load("reroll_gather"))["benchmark"]
     td = Path(tempfile.mkdtemp())

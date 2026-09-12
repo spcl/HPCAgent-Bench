@@ -22,7 +22,7 @@ doc is the *why* behind each such disposition.
 > Rule of thumb: **we never paper over a tool miscompile with a tuning flag** (see
 > `tests/numerical_oracle.py` `_run_pluto`). If our emitted C/Fortran is bit-exact vs numpy and the
 > tool still produces wrong output, that is a tool bug -- reclassify it as a skip, do not mutate emit
-> just to placate the tool unless the change is a legitimately better shape. For pluto this is now
+> just to placate the tool unless the change is a legitimately better shape. For pluto this is
 > **automatic**: a post-transform `FAIL:*` whose sibling `c` backend is `ok` is recorded as
 > `skip:unsupported:pluto-miscompile:*` (see Sec. 2).
 
@@ -79,13 +79,14 @@ of the scop so `pet`/`pluto` stops miscompiling it. Gated on the pluto backend w
 | #2 non-unit-stride loop -> unit counter + affine induction | tsvc_2_s116 (+probe unrolled_dense, reroll_saxpy7, strided tsvc) | when `self.pluto` and `abs(step)!=1` constant, emit `int64 v=lo+step*__piv;` over a unit `__piv` (pet models `i+=4` as unit stride -> wrong indices) | `numpyto_c/emit.py` `_emit_for` | planned |
 | #3 scalar full-reduction -> accumulate into destination element | lda_xc_potential (+likely ecrad_clamped_reduction, quasi_affine_reduce_*, atax-class) | retarget `float(np.sum(...))` temp to `out[0]` when it has a single downstream array-element store (pet drops the scalar `__cb=0` init+accum -> uninit read) | lib_nodes / numpy_desugar | planned |
 
-### 1c-2. Scope-aware scop emission (landed 08-10)
+### 1c-2. Scope-aware scop emission (landed)
 
-The pluto emit used to bracket the whole function in one `#pragma scop`. pet rejects the **entire**
-region a construct it cannot model lands in, so a single `memset` or `malloc` anywhere in a kernel
-cost every loop nest in it -- 8 corpus kernels sat in a "pet-unsupported" bucket for that reason
-alone. The emit is now per-NEST: `numpyto_c.emit.pluto_scop_regions` runs at every block depth from
-`_CBodyEmitter.emit_block` and wraps each *scopable run* of statements in its own region.
+pet rejects the **entire** region a construct it cannot model lands in, so bracketing a whole
+function in one `#pragma scop` costs every loop nest in it the moment a single `memset` or
+`malloc` appears anywhere in the kernel -- that pattern put 8 corpus kernels in a
+"pet-unsupported" bucket for no reason but scope size. The emit is per-NEST instead:
+`numpyto_c.emit.pluto_scop_regions` runs at every block depth from `_CBodyEmitter.emit_block` and
+wraps each *scopable run* of statements in its own region.
 **Several scops per translation unit is the normal output, not a fallback.**
 
 | Piece | What it does | Location |
@@ -94,7 +95,7 @@ alone. The emit is now per-NEST: `numpyto_c.emit.pluto_scop_regions` runs at eve
 | per-nest, every depth | called from `emit_block`, so a malloc before an *inner* nest scopes that inner nest rather than losing the whole outer one; an enclosing run subsumes what its children marked (scops do not nest) | `numpyto_c/emit.py` `_CBodyEmitter.emit_block` |
 | unscopable set | `malloc`/`calloc`/`realloc`/`free`/`memset`/`memcpy`/`memmove`/`while`, plus an `if` whose condition reads an array or a float (POLYCC-013) | `_PLUTO_UNSCOPABLE_RE`, `_pluto_unscopable` |
 | memset desugar | a zero/one fill emitted **in the body** becomes the affine loop nest it is, so it can stay inside a region instead of splitting it; the fill in the pre-scop declaration block keeps `memset` | `numpyto_c/emit.py` `_fill_loop_stmt`, `_body_fill_stmt` |
-| multi-scop detector | `scop_nonaffine_reason` scans **every** region, not just the first (a gather in the second one used to go unseen) | `hpcagent_bench/pluto_affine.py` |
+| multi-scop detector | `scop_nonaffine_reason` scans **every** region, not just the first, so a gather in a later region is not missed | `hpcagent_bench/pluto_affine.py` |
 | no-region decline | a TU that marks no region is not a scop input -- polycc would hand it straight back and the column would time untransformed C | `pluto_affine.has_scop`, `pluto_transform.scop_inputs`, `numerical_oracle._run_pluto` |
 | pet re-parse `omp.h` | polycc re-parses its own output per additional scop; the stub header makes multi-region TUs transform (POLYCC-011) | `pluto_transform.PET_OMP_SHIM` |
 
@@ -154,7 +155,7 @@ backend. All **landed**.
 **Pluto verdict (root-caused live):** for every `::pluto` failure our emitted C is **bit-exact vs
 numpy** (`run_kernel(..., only_backends={'c'})` -> `ok`). `polycc` accepts the affine scop (RC=0)
 then silently miscompiles. Of 45 pairs: 3 are correct non-affine skips, ~8-12 are sidesteppable by
-an emit-shape change (Sec. 1c), and the rest are irreducible tool defects that now auto-classify as
+an emit-shape change (Sec. 1c), and the rest are irreducible tool defects that auto-classify as
 `skip:unsupported:pluto-miscompile` (c-ok guarded).
 
 | Signature | Representative kernels | Root cause | Verdict | Disposition |
@@ -170,18 +171,18 @@ an emit-shape change (Sec. 1c), and the rest are irreducible tool defects that n
 | transformed-C fails to compile | durbin | pluto emits invalid C | **pluto bug** | auto-skip (pluto-miscompile) |
 | loop-carried tsvc (not individually root-caused) | ~14 tsvc_2_* | provisional pluto miscompile | **pluto (provisional)** | auto-skip (pluto-miscompile); probe for stride/reduction shape (Sec. 1c) to recover `ok` |
 
-**Pluto's irreducible set can't shrink via any lowering change -- and no longer needs to.** With
-`e2e_known_failures.txt` gone, `_run_pluto` auto-classifies every post-transform `FAIL:*` whose
-sibling `c` backend is `ok` as `skip:unsupported:pluto-miscompile:*` (our own C proves the affine
-scop bit-exact, so the fault is polycc's schedule). The "pluto bug" **Disposition** column above
-collapses to that one automatic skip -- the table stays as the root-cause record, no per-kernel
-list to maintain. A genuine emit regression also reds `c`, so that pluto pair stays a real
-`FAIL:*` -- the guard keeps it honest. `*::pluto` rows still worth an emit-shape fix (Sec. 1c)
-remain flagged there; landing one turns the skip back into an `ok`.
+**Pluto's irreducible set cannot shrink via any lowering change, and does not have to.**
+`_run_pluto` auto-classifies every post-transform `FAIL:*` whose sibling `c` backend is `ok` as
+`skip:unsupported:pluto-miscompile:*` (our own C proves the affine scop bit-exact, so the fault is
+polycc's schedule). The "pluto bug" **Disposition** column above collapses to that one automatic
+skip -- the table stays as the root-cause record, no per-kernel list to maintain. A genuine emit
+regression also reds `c`, so that pluto pair stays a real `FAIL:*` -- the guard keeps it honest.
+`*::pluto` rows still worth an emit-shape fix (Sec. 1c) remain flagged there; landing one turns the
+skip back into an `ok`.
 
 ---
 
-## 3. Gate semantics (strict-green) & the former LS3DF slice
+## 3. Gate semantics (strict-green)
 
 Each `(kernel, backend)` pair resolves to exactly one of:
 
@@ -193,18 +194,11 @@ Each `(kernel, backend)` pair resolves to exactly one of:
   Sec. 2).
 - **`FAIL:*`** -- a real codegen/correctness gap -> **reds the build**.
 
-The old Sec. 3 table listed the LS3DF pairs that were then xfail-tolerated. Every native one is now
-resolved -- all 8 LS3DF stems are `ok` on c / cpp / fortran -- and the pluto ones auto-skip. Verified
-with `run_kernel(...)`:
-
-| Former xfail entry | Was | Now |
-|---|---|---|
-| chebyshev_filter_subspace::{c,cpp,fortran} | whole-array buffer swap | **ok** -- Sec. 1a rebind (landed) |
-| fragment_patch_density::{c,cpp,fortran} | einsum non-Name + `np.ix_` scatter | **ok** -- einsum + index path (landed) |
-| rayleigh_ritz_rotation::{c,cpp,fortran} | argmax-in-subscript | **ok** -- Sec. 1a computed-index hoist (landed) |
-| ls3df_scf::{c,cpp,fortran} | eigvalsh + diag + fftfreq + list-refactor | **ok** -- Sec. 1a/Sec. 1b/Sec. 1e combined (landed) |
-| lda_xc_potential::pluto | pet drops scalar-reduction init+accum | `skip:unsupported:pluto-miscompile:exc:*` (emit-shape fix #3, Sec. 1c, would restore `ok`) |
-| kleinman_bylander_nonlocal::pluto | pluto smartfuse int64 overflow | `skip:unsupported:pluto-miscompile:hpsi:*` (irreducible pluto bug) |
+All 8 LS3DF stems (chebyshev_filter_subspace, fragment_patch_density, rayleigh_ritz_rotation,
+ls3df_scf) are `ok` on c / cpp / fortran (Sec. 1a/1b/1e). Their pluto pairs auto-skip:
+`lda_xc_potential::pluto` is `skip:unsupported:pluto-miscompile:exc:*` (emit-shape fix #3, Sec. 1c,
+would restore `ok`), `kleinman_bylander_nonlocal::pluto` is
+`skip:unsupported:pluto-miscompile:hpsi:*` (irreducible pluto bug, Sec. 2).
 
 ---
 
@@ -213,6 +207,6 @@ with `run_kernel(...)`:
 When you add a desugaring: add a Sec. 1 row (op, kernels, mechanism, file:line, status). When you
 root-cause a backend miscompile: add a Sec. 2 row with the decisive evidence (the tool error string
 or the diverging output) and the verdict (ours vs tool). When a pair's classification changes
-(`FAIL:*` -> `ok`, or `FAIL:*` -> `skip:*`): update the Sec. 3 slice so the gate and this doc never
-drift -- there is no `e2e_known_failures.txt` to sync any more; the classification now lives in
-`tests/numerical_oracle.py`.
+(`FAIL:*` -> `ok`, or `FAIL:*` -> `skip:*`): update the summary in Sec. 3 so the gate and this doc
+stay in step -- the classification lives in `tests/numerical_oracle.py`, not in a separate
+xfail file.

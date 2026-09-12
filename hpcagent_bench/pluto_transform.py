@@ -8,14 +8,10 @@
 output). Compiling the result is therefore the caller's job, which is what makes the
 Pluto column a BUILD PATH and not a flag preset.
 
-Every consumer lives here so they cannot drift apart again: the timed build
-(``benchmarks.cpp_runtime``, via :func:`transformed_sources`), the transformation report
-(``frameworks.pluto_framework``, via :data:`POLYCC_REPORT_ARGS`) and the numerical oracle
-(``tests.numerical_oracle._run_pluto``, via :func:`run_polycc`). They used to be separate --
-the report described a polycc run whose output nothing compiled, the column timed the
-untransformed source under Pluto's name, and the oracle validated a ``--pet``-only binary
-while the column timed a ``--pet --tile --parallel`` one -- and one module owning the
-invocation is what stops any of that from being expressible.
+Every consumer goes through here, so the timed build (``benchmarks.cpp_runtime``, via
+:func:`transformed_sources`), the transformation report (``frameworks.pluto_framework``, via
+:data:`POLYCC_REPORT_ARGS`) and the numerical oracle (``tests.numerical_oracle._run_pluto``, via
+:func:`run_polycc`) cannot describe, time and validate different transforms.
 
 There is no ``plutocc``: this Pluto installs ``clan``, ``pet``, ``pluto`` and ``polycc``,
 and ``polycc`` is the driver.
@@ -73,7 +69,7 @@ def polycc_exe() -> Optional[str]:
 #: The header :func:`pet_parse_env` shadows ``<bits/math-vector.h>`` with, for the pet parse only.
 #: glibc's real header opens by including these same stubs and adds the vector-math declarations
 #: only under ``__FAST_MATH__`` on x86_64, so on that architecture this reduces to what pet already
-#: saw -- measured: the transform of an affine matmul is BYTE-IDENTICAL with and without it.
+#: saw.
 PET_MATH_VECTOR_SHIM = (
     "/* Neutralised for pet scop extraction only -- see pluto_transform.pet_parse_env.\n"
     "   These are the empty SIMD declarations glibc's own <bits/math-vector.h> starts\n"
@@ -85,8 +81,8 @@ PET_MATH_VECTOR_SHIM = (
 #: MULTI-scop translation unit one scop at a time, re-parsing its own OUTPUT for the next one -- and
 #: that output opens with the ``#include <omp.h>`` polycc prepends, which pet's flag-less libclang
 #: does not find on its default search path, so every scop after the first is lost with "No SCoPs
-#: extracted". Nothing polycc emits CALLS the runtime (measured: no ``omp_*`` reference in its
-#: output, only ``#pragma omp parallel for``), so the declarations below are all a re-parse needs.
+#: extracted". polycc's output carries only ``#pragma omp parallel for`` and calls no ``omp_*``
+#: function, so the declarations below are all a re-parse needs.
 PET_OMP_SHIM = (
     "/* Parse-only <omp.h> for pet scop re-extraction -- see pluto_transform.pet_parse_env. */\n"
     "typedef struct { int __pet_shim; } omp_lock_t;\n"
@@ -150,15 +146,13 @@ OVERRIDE_PRECISIONS: Tuple[str, ...] = ("fp64", "fp32")
 #: generated set, and sharing a filename is how "replaces" quietly becomes "races with".
 OVERRIDE_INPUT_SUFFIX = "_pluto_override_input.c"
 
-#: Suffix of the transformed override. Also distinct from the generated ``_pluto.c``: the override
-#: used to publish its fp64 transform straight onto ``<base>_fp64_pluto.c``, the generated fp64
-#: name, so the two paths wrote one file.
+#: Suffix of the transformed override. Also distinct from the generated ``_pluto.c``, so the override
+#: and translator paths never publish to one file.
 OVERRIDE_OUTPUT_SUFFIX = "_pluto_override.c"
 
 #: Double-precision libm spellings and their float counterparts, for the fp32 specialization. Every
-#: libm call in all 23 tracked overrides sits inside the preamble's ``#define <NAME>_FUN(...)``
-#: lines (measured: 21 each of ``sqrt(``/``exp(``/``pow(``, exactly one per preamble, none in any
-#: kernel body), which is why the rewrite below only has to touch those lines.
+#: libm call in the tracked overrides sits inside the preamble's ``#define <NAME>_FUN(...)`` lines,
+#: none in a kernel body, so the rewrite below only touches those lines.
 _FP32_LIBM: Dict[str, str] = {"sqrt": "sqrtf", "exp": "expf", "pow": "powf"}
 
 
@@ -169,7 +163,7 @@ def specialize_override(text: str, base: str, fptype: str) -> str:
     so the file answers an fp64 request and nothing else. The benchmarks it backs default to
     ``float32`` (``initialize(..., datatype=np.float32)``), so the timed column asks for
     ``<base>_fp32``, the library exports only ``<base>_fp64``, and the measurement dies with
-    ``no symbol for fp32`` -- job 4391506, four of four override-backed lvl1 kernels.
+    ``no symbol for fp32``.
 
     The specialization is a RETYPE of the canonical scop, never a reinterpretation of its memory:
     the fp32 unit declares ``float`` parameters, so float32 buffers are read as float32 by a
@@ -240,9 +234,6 @@ def override_scop_inputs(cpp_backend: pathlib.Path, override: pathlib.Path, base
     kernel gets its fp32 by retyping the canonical PolyBench source, not by falling back to the
     emitter for the precision the override does not spell. The generated ``<base>_fp*_pluto_input.c``
     family is neither read nor written here, and the names cannot collide with it.
-
-    Materializing at all is what changed: the override used to be handed to polycc as-is, which is
-    only expressible while one precision is enough.
     """
     cpp_backend.mkdir(parents=True, exist_ok=True)
     text = override.read_text()
@@ -283,10 +274,8 @@ def transformed_path(scop: pathlib.Path) -> pathlib.Path:
     the name ``numpyto_c.bindings.emit_pluto_binding`` already declares as the Pluto source.
 
     An override-derived scop (``<base>_fpNN_pluto_override_input.c``,
-    :func:`override_scop_inputs`) transforms in place too, onto a name of its OWN family. It used
-    to land on ``<base>_fp64_pluto.c`` -- the generated fp64 output's name -- so the override path
-    and the translator path published to one file, and the fp32 and fp64 transforms of the same
-    override had nowhere to sit side by side.
+    :func:`override_scop_inputs`) transforms in place too, onto a name of its OWN family, so it never
+    shares a file with the translator path and its fp32 and fp64 transforms sit side by side.
 
     A tracked :func:`override_source` (``<base>_pluto_reference.c``) handed in directly is STATIC
     and lives in the kernel's source dir, so its transform is redirected into that kernel's
@@ -387,21 +376,12 @@ def run_polycc(
     Runs in a throwaway cwd because polycc drops a ``<stem>.pluto.cloog`` intermediate beside
     the working directory; ``out`` is absolute, so only the litter is confined.
 
-    polycc is told to write a UNIQUE ``-o`` path next to ``out`` (a name ``tempfile.mkstemp``
-    reserved), never ``out`` itself, and a success is published into ``out`` with one
-    ``os.replace`` at the end. ``out`` is a fixed, shared path -- for an :func:`override_source`
-    scop it is a tracked file's sibling in the real ``cpp_backend``, not a caller's private temp
-    dir -- so two overlapping callers (the timed build and the numerical oracle, or two test
-    workers) used to hand polycc the SAME ``-o`` argument and race truncating it: measured, six
-    concurrent runs of one scop through the OLD direct-write path came back with FIVE different
-    outputs, including a 0-byte file, from otherwise-identical inputs and otherwise-deterministic
-    polycc (a serial repeat of the same run is always byte-identical). ``os.replace`` on the same
-    filesystem is atomic, so a concurrent reader now only ever observes a complete ``out`` -- the
-    one before this call or the one after it, never a torn write from either.
+    polycc writes a UNIQUE ``-o`` path next to ``out`` (a name ``tempfile.mkstemp`` reserved) and a
+    success is published with one atomic ``os.replace``, so concurrent callers sharing ``out`` (the
+    timed build and the numerical oracle, or two test workers) only ever observe a complete file.
 
-    A FAILED run leaves ``out`` untouched -- there is nothing partial to clean up there any more,
-    since polycc never wrote to it -- so a stale-but-complete previous transform survives a
-    transient failure instead of being thrown away.
+    A FAILED run leaves ``out`` untouched, so a complete previous transform survives a transient
+    failure.
 
     The argv is RETURNED rather than reconstructed by the caller: the transformation report echoes
     the command it ran, and a second copy built from a second ``shutil.which`` can print something

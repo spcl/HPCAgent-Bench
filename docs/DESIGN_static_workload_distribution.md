@@ -1,48 +1,59 @@
 # DESIGN: job launch -- two distributions, both static
 
+This page explains the two ways a kernel selection is spread across ranks -- corpus
+sharding (one rank per kernel) and problem decomposition (many ranks per kernel) --
+and why the assignment is a pure function computed identically by every rank, with no
+coordination at launch time.
+
 ## Two patterns, one launcher
 
 - **corpus** -- one rank computes one whole kernel; P ranks cover P different kernels.
-  This is `--shard i/P` off `SLURM_PROCID` (`submit_deterministic.sbatch:147`,
-  `submit_loop_level_reasoning_alps.sbatch:147`). Ranks never talk.
+  This is `--shard i/P` off `SLURM_PROCID` (`submit_deterministic.sbatch`,
+  `submit_loop_level_reasoning_alps.sbatch`). Ranks never talk.
 - **problem** -- P ranks collectively compute ONE kernel; the problem is split.
-  Plumbing exists (`Descriptor(ranks=P)`, strong/weak sizing, `mpi.rank_counts`) and
-  has never been run above 1 rank.
+  Plumbing exists (`Descriptor.from_submission(..., ranks=P)`, strong/weak sizing in
+  `harness/mpi_sizing.py`, `mpi.rank_counts`) and has never been run above 1 rank.
 
-One flag selects: `--distribute=corpus|problem`. Everything below is static -- the
-assignment is a pure function of `(kernel list, cost vector, ranks, nodes)`, so every
-rank computes the identical answer alone. No master, no work stealing, no
-communication. That is not a performance choice, it is a reproducibility one: the
-results DB is keyed by shard, so the same job must produce the same partition twice.
+Which pattern applies is a property of which submission script and CLI subcommand a
+job uses (`run-framework --shard` for corpus, `submit_mpi_scaling.sbatch` for
+problem), not a single shared flag. Everything below is static -- the assignment is a
+pure function of `(kernel list, cost vector, ranks, nodes)`, so every rank computes the
+identical answer alone. No master, no work stealing, no communication. That is not a
+performance choice, it is a reproducibility one: the results DB is keyed by shard, so
+the same job must produce the same partition twice.
 
-## corpus: round-robin was a guess, and it no longer has to be
+## corpus: round-robin was a guess, and LPT bin-packing replaced it
 
-`shard_names` (`support/collect/sweep.py:159`) keeps `names[index::total]`. Its own
-comment gives the reason: neighbours in the sorted name list tend to be similar
-sizes, so a stride spreads them. That was the right call when kernel cost was unknown.
+`shard_names` (`support/collect/sweep.py`) used to keep `names[index::total]`, a pure
+stride: neighbours in the sorted name list tend to be similar sizes, so a stride
+spreads them. That was the right call when kernel cost was unknown.
 
-It is known now. The preset ladder fitted every kernel against a work model and a
-footprint, so each kernel has a predicted time and a predicted working set at every
-rung. Replace the stride with **LPT bin-packing**: sort descending by predicted cost,
-give each kernel to the least-loaded rank. Deterministic, same on every rank, no
-coordination.
+It is known now. The preset ladder fits every kernel against a work model and a
+footprint, so each kernel has a predicted time at every rung. `shard_names` passes that
+preset into `sizing.pack_lpt`, which sorts kernels descending by predicted cost and
+gives each to the least-loaded rank -- deterministic, same on every rank, no
+coordination. This is the default path in `run-framework` whenever a preset is known.
 
-Keep the stride as the fallback for when no cost model resolves (opaque kernels --
-`size_audit.py` already classifies those as `opaque` / `unresolved`). A kernel with no
-prediction is packed last, round-robin, so an unknown cost cannot skew the packing.
+The stride remains the fallback for when no cost model resolves at all (opaque
+kernels -- `size_audit.py` classifies those as `opaque` / `unresolved`); a kernel with
+no prediction is packed last, round-robin, so an unknown cost cannot skew the packing.
 
-## corpus: the second dimension is memory, and it is why ranks != nodes
+## corpus: the second dimension is memory, declared but not yet wired
 
-XL is bounded at 4 GB. Four ranks on one node at XL is 16 GB of concurrent working
-set. So the packer is two-dimensional: balance predicted TIME across ranks, subject to
-`sum(concurrent footprint on a node) <= node RAM`.
+XL is bounded at 4 GB (`sizing.XL_BYTE_CEILING`). Four ranks on one node at XL is 16 GB
+of concurrent working set. `pack_lpt` already accepts `ranks_per_node` and
+`node_ram_bytes` and raises when a packing would overrun the node's memory budget
+(`sizing.node_footprint_violations`, exercised directly in `tests/test_corpus_packing.py`)
+-- the two-dimensional packer (balance TIME across ranks, subject to
+`sum(concurrent footprint on a node) <= node RAM`) exists as a function.
 
-That constraint cannot even be stated today, because the harness only ever requests a
-RANK count and never a node count -- `RANKS="${SLURM_JOB_NUM_NODES:-1}"` in both
-sbatch scripts takes the NODE count and calls it ranks, which is only correct while
-`--ntasks-per-node=1`. Fix: carry both. `ranks` is how many workers; `nodes` is how
-many machines they sit on; ranks-per-node is what the memory constraint needs.
-`mpi.rank_counts` is already named correctly and stays.
+What is missing is wiring: the one production call site, `sweep.shard_names` inside
+`run-framework`, calls `pack_lpt` with cost only, never with `ranks_per_node` /
+`node_ram_bytes`, so the memory check never runs on a real job today. `submit_deterministic.sbatch`
+already derives `RANKS` and `RANKS_PER_NODE` correctly (as distinct SLURM-provided values, not by
+conflating a node count with a rank count), so both numbers `shard_names` would need are
+already available at the call site; only the plumbing from there into `pack_lpt` is
+missing.
 
 ## problem: what is missing
 
@@ -60,8 +71,10 @@ many machines they sit on; ranks-per-node is what the memory constraint needs.
 ## Gate
 
 - corpus, P=4: the four shards partition the kernel list exactly -- no overlap, no gap,
-  no kernel dropped. Holds for both the packer and the fallback stride.
-- corpus: predicted max-rank load under LPT is lower than under the stride, measured
-  on the real corpus. If it is not, keep the stride and delete the packer.
+  no kernel dropped. Holds for both the packer and the fallback stride
+  (`tests/test_corpus_packing.py`).
+- corpus: wiring `ranks_per_node` / `node_ram_bytes` through `shard_names` must not
+  change the partition for a job whose packing already fits the node budget -- only a
+  job that would have overrun it should see a different split or a refusal.
 - problem, P in {2,4,8}: output equals the 1-rank output bitwise, at preset S.
 - The partition is byte-identical across two runs of the same job.

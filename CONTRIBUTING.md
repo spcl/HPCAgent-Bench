@@ -8,7 +8,7 @@ Contributor guide: **[README](README.md)** (the single doc). Jump to:
   podman by default, docker a drop-in) + Apptainer `.def` per hardware (cpu/nvidia/amd).
 - [**Add a language**](docs/adding_benchmarks_containers_languages.md#add-a-language) -- two edits (incl. a
   Rust example).
-- [**The optimizer loop & scoring**](README.md#the-optimizer-loop--scoring) and
+- [**The optimizer loop & scoring**](README.md#how-it-works) and
   [**how the prompt is generated**](docs/prompts.md).
 
 Normative reference specs:

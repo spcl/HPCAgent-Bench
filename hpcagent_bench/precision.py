@@ -89,16 +89,11 @@ def numpy_dtype(precision: Precision) -> type:
     return DTYPES[precision]
 
 
-#: Largest magnitude a sample may take before the cast to ``precision`` would
-#: overflow to ``inf``. The wide formats (fp64/fp32, and bf16 which shares the
-#: fp32 exponent range) need no clip; the narrow formats round just under their
-#: true finite max (fp16 65504, fp8_e4m3 448, fp8_e5m2 57344). This is the ONE
-#: table every distribution clips against -- see :func:`safe_max`.
-#: Every entry is FINITE. ``inf`` here means "never clip", which made the ceiling a no-op for the
-#: three wide formats -- a manifest asking for a large ``sigma``/``scale`` then overflowed the cast
-#: to ``inf`` (measured: lognormal at sigma=90 goes non-finite at fp32 and bf16, and numpy raises
-#: "overflow encountered in cast" doing it). bf16 carries fp32's exponent range with fewer mantissa
-#: bits, so its ceiling is its own largest normal, not fp32's.
+#: Largest magnitude a sample may take before the cast to ``precision`` would overflow to ``inf``;
+#: the ONE table every distribution clips against (see :func:`safe_max`). Every entry is finite, so a
+#: large ``sigma``/``scale`` is clipped at the wide formats too: they sit at their largest finite
+#: value (bf16 at its own, not fp32's), the narrow formats just under theirs (fp16 65504, fp8_e4m3
+#: 448, fp8_e5m2 57344).
 _SAFE_MAGNITUDE: Dict[Precision, float] = {
     Precision.FP64: 1.7976931348623157e308,
     Precision.FP32: 3.4028234663852886e38,
@@ -211,16 +206,10 @@ def derived_band(precision: Precision) -> ToleranceBand:
 #: reduction); the low-precision formats keep the bands the fp16/bf16/fp8 kernels
 #: were tuned against. A precision NOT listed here takes its derived band.
 #:
-#: Every ``atol`` here is at least one ULP of its own format, and that is not decoration --
-#: it is the floor :func:`atol_below_one_ulp` pins. A reference value of exactly 0.0 has no
-#: relative neighbourhood, so ``rtol`` cannot reach it and ``atol`` is the only term that
-#: can; set below the format's own resolution it demands agreement finer than the format can
-#: represent, which no pair of correct implementations can deliver. The fp8 rows used to do
-#: exactly that (``1e-2`` against an eps of ``0.125``, ``1e-1`` against ``0.25``), and
-#: arc_distance at fp8 failed on ~9% of its elements with numpy and jax both correct and
-#: agreeing to 0 ULP at the median. Raising the two atols to their eps -- rtol untouched --
-#: takes that to 0 failing of 100000. fp16 (atol 1.02x eps) and bf16 (1.28x eps) already sat
-#: on this rule; only fp8 was written as a round decimal.
+#: Every ``atol`` is at least one ULP of its own format (:func:`atol_below_one_ulp` pins it): a
+#: reference value of exactly 0.0 is reachable only through ``atol``, and an ``atol`` below the
+#: format's resolution demands agreement no pair of correct implementations can deliver. The fp8
+#: rows sit exactly at their eps.
 _BAND_OVERRIDES: Dict[Precision, ToleranceBand] = {
     Precision.FP64: ToleranceBand(1e-9, 1e-11),
     Precision.FP32: ToleranceBand(1e-3, 1e-5),

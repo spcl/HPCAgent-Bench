@@ -33,13 +33,48 @@ THINKING_MARK = '"thinking_tokens"'
 RESULT_MARK = '"type":"result"'
 
 
+#: What a runner harness writes instead of a claude transcript: one JSON line per model call,
+#: ``{"input", "cached_input", "output", "reasoning"}``, plus harness-end.json when it closed cleanly.
+USAGE_NAME = "usage.jsonl"
+END_NAME = "harness-end.json"
+
+
 def agent_logs(run_dir: pathlib.Path) -> Iterator[pathlib.Path]:
     """Every agent transcript under ``run_dir``, in a stable order."""
-    yield from sorted(run_dir.glob("agents/*/*/claude.log"))
+    yield from sorted([*run_dir.glob("agents/*/*/claude.log"), *run_dir.glob(f"agents/*/*/{USAGE_NAME}")])
+
+
+def scan_usage(path: pathlib.Path) -> dict[str, float]:
+    """Token totals for one runner's usage.jsonl.
+
+    The four counts are disjoint. ``usage`` keeps the uncached prompt apart, as an Anthropic usage
+    block does, while the per-model line reads the whole prompt; reasoning fills both thinking
+    counters, because here the server's count is the only one there is."""
+    out: dict[str, float] = collections.defaultdict(float)
+    with path.open(errors="ignore") as fh:
+        for line in fh:
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(rec, dict):
+                continue
+            out["usage_input"] += rec.get("input", 0)
+            out["model_input"] += rec.get("input", 0) + rec.get("cached_input", 0)
+            out["usage_output"] += rec.get("output", 0)
+            out["model_output"] += rec.get("output", 0)
+            out["thinking_reported"] += rec.get("reasoning", 0)
+            out["thinking_streamed"] += rec.get("reasoning", 0)
+            out["cache_read"] += rec.get("cached_input", 0)
+            out["turns"] += 1
+    out["agents"] += (path.parent / END_NAME).is_file()
+    return out
 
 
 def scan(path: pathlib.Path) -> dict[str, float]:
     """Token totals for one agent transcript."""
+    if path.name == USAGE_NAME:
+        return scan_usage(path)
     out: dict[str, float] = collections.defaultdict(float)
     with path.open(errors="ignore") as fh:
         for line in fh:

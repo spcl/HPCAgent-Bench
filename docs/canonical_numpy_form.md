@@ -81,7 +81,7 @@ Index arrays with **scalars or slices over their declared axes**. A row of a 3-D
 array is taken with a *full* index, never a chained/partial one. No fancy indexing
 (`a[index_array]`) in compute -- that routes only through the sparse layout system.
 
-**Non-canonical** -- `contour_integral_numpy.py:13`: `Ham` is 3-D, but `Ham[n]`
+**Non-canonical** -- `contour_integral_numpy.py:20`: `Ham` is 3-D, but `Ham[n]`
 takes a 2-D slab with a chained (rank-reducing) subscript that then participates in
 an array add:
 
@@ -92,9 +92,9 @@ for n in range(slab_per_bc + 1):
     Tz += zz * Ham[n]            # Ham[n] is a 2-D slab of a 3-D array
 ```
 
-`_emit_subscript` has to *infer* that `Ham[n]` is a `[n, :, :]` slab and re-expand
-it; the "chained `[][]` fallback" exists exactly for this and is a known source of
-wrong indices.
+`_emit_subscript` would have to *infer* that `Ham[n]` is a `[n, :, :]` slab and
+re-expand it; the C/C++/Fortran emitter refuses a rank mismatch like this one with
+`NotImplementedError` rather than guess at it (Sec. 5).
 
 **Canonical** -- index every axis explicitly in a loop nest:
 
@@ -381,23 +381,24 @@ for i in range(M):
 
 ## 5. What CNF Lets the Translator Delete
 
-With CNF guaranteed, these `lowering.py` mechanisms can be retired:
+With CNF guaranteed, these `numpyto_common/lowering.py` mechanisms can be retired:
 
-- **`_ssa_rename_reassigned`** (lowering.py:558) -- invented fresh names for variables
-  reassigned with a new shape. Invariant 1 means a name never changes shape, so there
-  is nothing to rename.
-- **`_LiftFreshArrayFromSlices`** (lowering.py:1774) -- lifted a fresh array out of
-  slice expressions when a buffer's shape did not match its slice writes; its own
-  comment notes it *"bails on the shape mismatch."* Declare-then-fill (Inv. 3)
-  removes the mismatch.
-- **Chained-subscript heroics in `_emit_subscript`** (emit.py:364, the
-  *"Fall back to chained `[][]` if we have no shape info"* branch at emit.py:378) --
-  full-rank indexing (Inv. 2) means the emitter always has shape info and never needs
-  the fallback.
-- **Rank-aware `expand_reshape` fallback** (lowering.py:2167+, the `x = np.reshape(x,
-  ...)` rewrite and the `x.shape = expr` pre-pass at lowering.py:2958) -- reshape only
-  ever targets a fresh buffer of a declared shape (Inv. 1 / cookbook 4.2, 4.4), so the
-  rank-changing in-place reshape path disappears.
+- **`_ssa_rename_reassigned`** -- invented fresh names (`<name>__v<n>`) for variables
+  reassigned with a new broadcast extent. Invariant 1 means a name never changes
+  shape, so there is nothing to rename.
+- **`_LiftFreshArrayFromSlices`** -- lifted a fresh array out of slice expressions
+  when a buffer's shape did not match its slice writes; `_ssa_rename_reassigned`'s
+  own docstring notes that without it, this lifter *"bails on the shape mismatch."*
+  Declare-then-fill (Inv. 3) removes the mismatch.
+- **Rank-aware `expand_reshape` fallback** (the in-place `x = np.reshape(x, ...)`
+  rewrite and its `x.shape = expr` pre-pass) -- reshape only ever targets a fresh
+  buffer of a declared shape (Inv. 1 / cookbook 4.2, 4.4), so the rank-changing
+  in-place reshape path disappears.
+
+`numpyto_c/emit.py`'s `_emit_subscript` already took this step: a rank-mismatched
+subscript on a flat C pointer used to silently emit an uncompilable chained
+`w[i][j]` access; it now raises `NotImplementedError` instead of guessing. Full-rank
+indexing (Inv. 2) means that error never fires on a CNF kernel.
 
 The `shape_table`/`_harvest_local_shapes` machinery can then be a single up-front
 declaration scan instead of a mutable structure threaded through ~22 passes.
@@ -423,11 +424,11 @@ the line and names the canonical fix (it is never auto-rewritten):
 Error messages should name the line, the violated invariant, and the cookbook entry:
 
 ```
-contour_integral_numpy.py:13: CNF Invariant 2 (explicit indexing):
+contour_integral_numpy.py:20: CNF Invariant 2 (explicit indexing):
     chained subscript `Ham[n]` on 3-D array `Ham`.
     Fix (cookbook 4.1): index every axis, e.g. `Ham[n, i, j]` in a loop nest.
 
-stockham_fft_numpy.py:21: CNF Invariant 1 (static shape):
+stockham_fft_numpy.py:26: CNF Invariant 1 (static shape):
     `np.reshape` changes the rank of live array `y`.
     Fix (cookbook 4.2/4.4): reshape into a freshly declared buffer.
 ```

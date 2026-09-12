@@ -5,13 +5,15 @@ by NumpyToX, hand-written as a reference, or produced by an agent -- exposes the
 **same** C-ABI symbol shape defined here. One contract lets the harness compile,
 link, time, and call any implementation in any language through a single
 `wrap_kernel` path, and lets an agent "add a path" by filling one generated
-stub.
+stub. Every language shares one entry symbol, `<short>_fp64` (Sec. 7), so the
+single-node C, C++, Fortran, CUDA and HIP artifacts for one kernel are
+interchangeable at the ABI level.
 
 This document is the single source of truth. Three parties implement it:
 
 | Party | Obligation |
 |---|---|
-| **NumpyToX emitters** (other chat) | emit `<short>_<lang>_auto.*` symbols in this exact shape |
+| **NumpyToX emitters** (other chat) | emit `<short>_<fptype>.*` sources exporting the `<short>_fp64` symbol in this exact shape |
 | **`hpcagent_bench/support/bindings/`** (harness, Workstream F) | generate the per-kernel binding JSON + the call-stub + host glue *from* this contract |
 | **Implementer / agent** | fill the generated stub body; never touch the signature |
 
@@ -229,10 +231,13 @@ The call is repeated and the fastest (min) sample is kept.
 ## 7. Per-language rendering
 
 Same logical contract, idiomatic surface per language. All emit a `bind(C)` /
-`extern "C"` symbol named `<short>_<lang>_auto` (suffix from
-`_BACKEND_SYMBOL_SUFFIX`). Supported targets: **C, C++, Fortran, CUDA, HIP**
-(CUDA/HIP are host-entry C-ABI functions -- Sec. 10). Every dtype<->type mapping
-comes from the single registry (`numpyto_common.dtypes`).
+`extern "C"` symbol named `<short>_fp64` (`numpyto_common.naming.entry_symbol`:
+lowercased, then folded to Fortran's 63-character limit with a digest suffix if
+needed) -- the SAME symbol for every language, so the single-node C, C++,
+Fortran, CUDA and HIP artifacts of one kernel bind identically. Supported
+targets: **C, C++, Fortran, CUDA, HIP** (CUDA/HIP are host-entry C-ABI functions
+-- Sec. 10). Every dtype<->type mapping comes from the single registry
+(`numpyto_common.dtypes`).
 
 - **C**: `void f(const double *restrict A, double *restrict C, const int64_t N, uint8_t *restrict workspace, const int64_t workspace_size)`
 - **C++ / CUDA / HIP**: the same signature with `__restrict__` in place of `restrict`
@@ -257,7 +262,7 @@ write it beside the generated sources as `<short>[_<layout>]_<precision>_binding
 ```json
 {
   "kernel": "gemm",
-  "symbol": "gemm_c_auto",
+  "symbol": "gemm_fp64",
   "abi": "c-abi-v2",
   "args": [
     {"name": "A", "kind": "ptr", "dtype": "float64", "const": true,  "shape": ["NI","NK"]},
@@ -273,8 +278,8 @@ write it beside the generated sources as `<short>[_<layout>]_<precision>_binding
   "workspace": {"name": "workspace", "kind": "ptr", "dtype": "uint8", "const": false,
                 "size_name": "workspace_size", "size_dtype": "int64",
                 "position": "trailing", "nullable": true},
-  "symbols": {"c": "gemm_c_auto", "cpp": "gemm_cpp_auto", "fortran": "gemm_fortran_auto",
-              "cuda": "gemm_cuda_auto", "hip": "gemm_hip_auto"}
+  "symbols": {"c": "gemm_fp64", "cpp": "gemm_fp64", "fortran": "gemm_fp64",
+              "cuda": "gemm_fp64", "hip": "gemm_fp64"}
 }
 ```
 
@@ -293,10 +298,10 @@ name), and which the host glue unpacks from the single logical `A` at call time.
 
 Logical: `C[NI,NJ] = alpha*A[NI,NK] @ B[NK,NJ] + beta*C` (C is in-out).
 
-Canonical C symbol:
+Canonical C symbol (same name in every language, Sec. 7):
 
 ```c
-void gemm_c_auto(const double *restrict A,    // ptr, in
+void gemm_fp64(const double *restrict A,    // ptr, in
                  const double *restrict B,    // ptr, in
                  double       *restrict C,    // ptr, in-out (output)
                  const long NI, const long NJ, const long NK,   // symbols, alpha-sorted

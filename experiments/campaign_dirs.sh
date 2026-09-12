@@ -14,9 +14,9 @@
 #   campaigns/<tag>/owed              the same, for a campaign whose arms span both targets
 #   campaigns/<tag>/snapshot          the source trees a prerender was pinned to
 #
-# forms and dropin hold DIFFERENT artefacts under the same file names: a drop-in carries the
-# workspace pair in its signature and a read form does not. prerender_cpf.sh marks a drop-in
-# directory with .cpf-dropin so a caller that does not know the mode cannot re-render it as plain.
+# forms and dropin are CPF cache views (hpcagent_bench/cpf_cache.py): pointer files into one
+# content-addressed cache, where the read form and the drop-in are separate entries under separate
+# keys. One view serves both modes, so the two may be the same directory.
 
 campaign_root() { printf '%s/campaigns/%s\n' "${SCRATCH:?}" "${1:?tag}"; }
 

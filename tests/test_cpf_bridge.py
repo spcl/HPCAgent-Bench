@@ -22,6 +22,7 @@ buffer written through a map.
 
 import ctypes
 import importlib
+import importlib.util
 import json
 import pathlib
 import subprocess
@@ -33,7 +34,7 @@ from collections.abc import Callable
 import numpy as np
 import pytest
 
-from hpcagent_bench import languages, cpf_bridge, paths
+from hpcagent_bench import cpf_bridge, cpf_cache, languages, paths
 from hpcagent_bench.harness.native_call import _call_native
 from hpcagent_bench.spec import BenchSpec
 from hpcagent_bench.support.bindings.contract import binding_from_spec
@@ -190,6 +191,55 @@ def test_a_dropin_renders_in_abi_order_and_runs_through_the_native_caller(
     assert outs, "the kernel declared no outputs"
     for name, got in outs.items():
         np.testing.assert_allclose(got, expected[name], rtol=1e-12, atol=0.0)
+
+
+def declared_parameters(code: str, symbol: str) -> list[str]:
+    """Parameter names of ``symbol``'s definition in a rendered unit, in declaration order."""
+    opened = code.index(f"void {symbol}(") + len(f"void {symbol}(")
+    return [d.strip().split()[-1].lstrip("*") for d in code[opened : code.index(")", opened)].split(",")]
+
+
+@pytest.mark.integration
+def test_a_prerender_caches_both_modes_and_a_rerun_renders_nothing(spec: BenchSpec, tmp_path: pathlib.Path) -> None:
+    """One prerender publishes the read form and the drop-in under keys a second interpreter derives
+    again: the rerun is all hits, so the SDFG digest is stable across processes. The drop-in served
+    from the cache must declare exactly the ABI order its manifest records, its binding must list the
+    same order, and both must name the canonical symbol the judge links -- not CPF's own."""
+    found = importlib.util.find_spec("dace")
+    assert found is not None and found.origin is not None
+    cache = tmp_path / "cache"
+    kwargs = {
+        "languages": ["c"],
+        "precision": "",
+        "target": "cpu",
+        "dace_package_root": pathlib.Path(found.origin).resolve().parents[1],
+        "dace_source": "test-source",
+    }
+    first = cpf_bridge.prerender_kernel(spec, cache, **kwargs)["results"]["c"]
+    assert {mode: outcome["verdict"] for mode, outcome in first.items()} == {"form": "ok", "dropin": "ok"}, first
+    assert not any(outcome["cached"] for outcome in first.values())
+    assert first["form"]["key"] != first["dropin"]["key"]
+
+    second = cpf_bridge.prerender_kernel(spec, cache, **kwargs)["results"]["c"]
+    assert {mode: (o["key"], o["cached"]) for mode, o in second.items()} == {
+        mode: (o["key"], True) for mode, o in first.items()
+    }
+
+    view = tmp_path / "view"
+    cpf_cache.open_view(view, cache, "cpu", "test-source")
+    cpf_cache.record(view, spec.short_name, "c", "fp64", second)
+    source, binding_path = cpf_cache.resolve(view, spec.short_name, "c", "fp64", "dropin")
+    manifest = json.loads((source.parent / cpf_cache.MANIFEST_NAME).read_text())
+    native = binding_from_spec(spec)
+    assert manifest["abi_order"] == [a.name for a in native.args] + ["workspace", "workspace_size"]
+    assert manifest["entry"] == native.symbol
+    assert declared_parameters(source.read_text(), manifest["entry"]) == manifest["abi_order"]
+    binding = json.loads(binding_path.read_text())
+    assert [arg["name"] for arg in binding["args"]] == manifest["abi_order"]
+    assert binding["symbol"] == native.symbol
+
+    form, _ = cpf_cache.resolve(view, spec.short_name, "c", "fp64", "form")
+    assert "workspace_size" not in form.read_text(), "the read form must not carry the drop-in's scratch pair"
 
 
 def test_the_target_reaches_the_child_and_the_device_is_not_hidden(
