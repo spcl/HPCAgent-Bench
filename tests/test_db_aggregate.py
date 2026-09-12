@@ -121,7 +121,7 @@ def test_aggregate_merges_every_table_and_reassigns_ids(tmp_path) -> None:
     assert tagged == [("c", 2), ("fortran", 2)]
 
 
-def test_two_ranks_of_one_run_merge_instead_of_colliding(tmp_path) -> None:
+def test_two_ranks_of_one_run_merge_instead_of_colliding(tmp_path: pathlib.Path) -> None:
     """``runs`` is keyed by ``run_id`` and every rank of a run writes its own shard with that same
     row -- :func:`recording.upsert_run` calls a second rank writing it "the normal case". Merged
     with a plain INSERT the second copy raises UNIQUE and takes the WHOLE merge down, so a

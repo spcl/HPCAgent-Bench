@@ -20,9 +20,21 @@ Everything here was measured on **Beverin**: AMD MI300A (`gfx942`) APU nodes, 4 
 Slurm, CSCS Container Engine. Numbers do not carry to a discrete-GPU cluster; several of them do
 not even carry to MI300X.
 
----
-
 ## 1. The shortest path
+
+**Prerequisite, once per account:** `ls ~/.edf` should list `sglang-latest`, `sglang-candidate` (or
+`sglang-glm-halfconv`) and `vllm-latest`. If it does not:
+
+```bash
+containers/cluster/ce-images/install_edfs.sh
+```
+
+If that refuses because an image is not on scratch yet, pull it first (minutes, not hours, since it
+downloads the published bytes rather than rebuilding them):
+
+```bash
+sbatch containers/cluster/ce-images/pull_images.sbatch
+```
 
 ```bash
 cd experiments
@@ -38,9 +50,19 @@ endpoint URL and a ready-to-paste `curl`. Watch the job's output file for that b
 ===== endpoint is live =====
 base URL:   http://nid002968:8000/v1
 model name: optarena-vllm
+replicas:   http://nid002968:8000/v1
 health:     curl -s http://nid002968:8000/v1/models
+metrics:    curl -s http://nid002968:8000/metrics
 server log: /capstor/scratch/cscs/<you>/x86_64/inference-server/<jobid>/server-0.log
+
+curl -s http://nid002968:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"optarena-vllm","max_tokens":128,"messages":[{"role":"user","content":"Say hi."}]}'
+
+The endpoint takes no API key. It stays up until this job ends; scancel <jobid> to stop it.
 ```
+
+That last block is printed verbatim by the job, curl command included -- copy it and run it.
 
 Pick another model with `MODEL=`:
 
@@ -57,8 +79,6 @@ does one thing: sets the judge and agent node counts to zero.
 
 The server stays up until the job's wall clock expires (4 h by default, `--time` to change it) or
 until you `scancel` it.
-
----
 
 ## 2. What a container environment is here, and which one to use
 
@@ -95,8 +115,6 @@ below. There is no separate GLM build.
 
 If `~/.edf` is empty, `containers/cluster/ce-images/install_edfs.sh` registers the repo's copies
 against the images named in `containers/cluster/ce-images/images.env`.
-
----
 
 ## 3. Submitting: the Slurm flags, and why each one
 
@@ -149,8 +167,6 @@ The same bug class hits any step you run *alongside* the server (a benchmark cli
 those one socket's physical cores -- `--cpus-per-task=24 --hint=nomultithread` -- enough not to be
 the bottleneck, not so much that the measurement contends with what it is measuring.
 
----
-
 ## 4. Finding the endpoint and talking to it
 
 The server binds `0.0.0.0` on port 8000 of its node. There is no gateway and no proxy: the URL is
@@ -200,8 +216,6 @@ rather than one bigger server -- each binds port 8000 on its own hostname and ho
 cache. That multiplies throughput but does not raise the ceiling for a single conversation, and a
 client must spread its requests itself.
 
----
-
 ## 5. The model pages
 
 One page per model. Each leads with the best configuration we currently know, then a list of what to
@@ -227,6 +241,22 @@ lives on that model's page, and where two models disagree, both pages say so.
 
 Each node writes `server-<rank>.log` in the run directory the launcher prints. Below, `grep -a`
 because these logs contain progress bars and other binary noise.
+
+**How long "still loading" lasts before it means something is wrong.** `serve-only.sbatch` polls
+for up to `VLLM_READY_TIMEOUT_SECONDS` (default 2400 s, 40 minutes) and then reports the job as
+failed. Weight load alone can take longer than that on the larger, multi-node models -- see each
+model's page for its own number -- so on those models a long silence is normal, not wedged. Pass a
+bigger value when starting the job:
+
+```bash
+VLLM_READY_TIMEOUT_SECONDS=7200 MODEL=glm53 ./serve-only.sbatch
+```
+
+**GLM-5.3 needs this override.** `.env.base-glm53` never sets `VLLM_READY_TIMEOUT_SECONDS`, so
+`serve-only.sbatch` falls back to its 2400 s default, well under this model's slowest pipeline
+stage (see [`glm53.md`](glm53.md) for the number). Without the override above, `serve-only.sbatch`
+kills a healthy server for looking dead. `AGENT_READY_TIMEOUT_SECONDS` is set correctly in that
+file, but that variable is read by the benchmark's agent driver, not by `serve-only.sbatch`.
 
 ### SGLang, a healthy startup, in order
 
@@ -269,8 +299,6 @@ hardware -- see `knobs.md` section on the KV pool.
 `grep -aE "Loading|KV cache|Capturing|Application startup complete" server-0.log`. The same shape:
 weights, then a KV cache size, then graph capture, then the HTTP server. The `Available KV cache
 memory` line plays the role that `KV Cache is allocated` plays in SGLang.
-
----
 
 ## 7. Mechanism: how a configuration key becomes a command-line flag
 
@@ -336,8 +364,6 @@ job has no other roles, so `serve-only.sbatch` uses the registered EDF as-is, wi
 The difference is usually invisible and once was not: a model whose loader patch arrives through a
 path under `/capstor` loads fine under the wide mounts and dies under the narrow ones. If a model
 serves for you here and fails inside a benchmark run, suspect the mounts before the model.
-
----
 
 ## 8. Where the real numbers live
 

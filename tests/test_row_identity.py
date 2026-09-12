@@ -14,6 +14,7 @@ condition.
 """
 
 import sqlite3
+import pathlib
 
 import pytest
 
@@ -249,7 +250,9 @@ def test_a_submission_records_both_languages(tmp_path, tagged):
     assert _runs(db, ("language",)) == [("fortran",)]
 
 
-def test_every_graded_row_reads_its_language_from_its_run(tmp_path, tagged):
+def test_every_graded_row_reads_its_language_from_its_run(
+    tmp_path: pathlib.Path, tagged: tuple[str, str, str, str, str]
+) -> None:
     """The DDL saying ``runs`` has the column proves nothing: what an analysis needs is that every
     WRITER reaches it from a measurement row. ``record`` (submissions and attempts) and
     ``record_call`` (calls) are the three, and all three must land on the ONE value -- the copies on

@@ -138,7 +138,7 @@ def cell_changes(samples: Sequence[float], base_time: float, label: str = "") ->
     box and the marker describe one set of numbers. Warning is suppressed here: ``cell_summary``
     already warned about these very samples, and warning twice reads as two findings.
     """
-    kept, _dropped = stats.drop_outliers(np.asarray(samples, dtype=float), warn=False, label=label)
+    kept = stats.drop_outliers(np.asarray(samples, dtype=float), warn=False, label=label)[0]
     if not base_time > 0.0:
         return ()
     changes = [signed_change(base_time / t) for t in (float(v) for v in kept) if t > 0.0]
@@ -265,7 +265,7 @@ def plotted_kernels(points: Sequence[Point], order: str = BY_DWARF) -> List[str]
     were already named by :func:`speedup_points`'s warning.
     """
     names = list(dict.fromkeys(point.kernel for point in points))
-    ordered, _spans = order_rows(row_meta_for(names), order)
+    ordered = order_rows(row_meta_for(names), order)[0]
     return ordered
 
 

@@ -142,7 +142,7 @@ def legend_below(fig: Figure, handles: Sequence[Artist], ncol: int = 0, y: float
     )
 
 
-def decade_label(value: float, _position: int = 0) -> str:
+def decade_label(value: float, position: int = 0) -> str:
     """A log-axis major as a plain number with a magnitude suffix: 500K, 1M, 2.5M.
 
     NOT scientific notation. A token count is a quantity a reader compares and quotes, and

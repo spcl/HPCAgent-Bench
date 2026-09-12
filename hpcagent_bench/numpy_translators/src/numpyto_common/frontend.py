@@ -6074,17 +6074,18 @@ def _build_helper_kirs(
         # consumes it (lulesh's face-node loops, which only surface once its helpers survive).
         _unroll_const_list_loops(hfn)
 
+        # The body is asked in EVERY case, not only when the target said nothing. Reading it wrong
+        # classifies an array return as by-value: no out-param is added, the returns stay as
+        # ``return <expr>``, and every shape-changing call inside one reaches the emitter unlowered,
+        # because the expanders only ever see assignments.
+        probe = call_specialized_body(hfn, pnames, call.args)
+        body_shape, body_dtype = _helper_return_shape_from_body(
+            probe, pnames, call.args, oarr_by, osca_by, osym_by, owner_fn
+        )
         if hret_shape is None or target_shape_is_the_call_itself(owner_fn, lhs, oarr_by, hdef.name):
-            # Either no call site stores the result into an array -- ``_conv2d(...)`` is only ever
-            # an ARGUMENT to another helper (resnet101's ``_batch_norm(_conv2d(x, w, 1, 0), ..)``)
-            # -- or the target told us nothing the call did not. The helper's own body says what it
-            # returns, and reading that wrong classifies an array return as by-value: no out-param
-            # is added, the returns stay as ``return <expr>``, and every shape-changing call inside
-            # one reaches the emitter unlowered, because the expanders only ever see assignments.
-            probe = call_specialized_body(hfn, pnames, call.args)
-            body_shape, body_dtype = _helper_return_shape_from_body(
-                probe, pnames, call.args, oarr_by, osca_by, osym_by, owner_fn
-            )
+            # ``_conv2d(...)`` is only ever an ARGUMENT to another helper (resnet101's
+            # ``_batch_norm(_conv2d(x, w, 1, 0), ..)``), or the target told us nothing the call did
+            # not, so the body is the only answer there is.
             # ``None`` from the body means two different things and they want opposite decisions:
             # "this returns a scalar" and "this could not be sized". Only the first may overrule a
             # target-side guess. A helper whose body PROVABLY returns rank 0 is a reduction (array
@@ -6099,6 +6100,14 @@ def _build_helper_kirs(
                 or helper_returns_rank0(probe, pnames, call.args, oarr_by, osca_by, osym_by, owner_fn)
             ):
                 hret_shape, hret_dtype = body_shape, body_dtype
+        elif body_shape is not None and list(body_shape) != list(hret_shape):
+            # An out-param is written BY the helper's body, so the body is the authority on its
+            # extents and a disagreement is a defect in the target's. ``_resolve_array_ref`` chases
+            # an undeclared local like ``x2 = _avgpool1d_taps(x1, ...)`` by reading the binding Call
+            # as elementwise, and answers with the broadcast join of its ARGUMENTS -- the pool's
+            # INPUT length. Even a target the chase DID size is the callee's return respelled in the
+            # CALLER's names, which is the vocabulary split a dace program cannot relate.
+            hret_shape, hret_dtype = body_shape, body_dtype
 
         if hret_shape is None:
             # SCALAR (by-value) return -- params inferred straight from the call. A compile-time

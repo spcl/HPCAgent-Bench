@@ -4,8 +4,10 @@
 structured result instead of eating it -- the native-collection contract."""
 
 import faulthandler
+import inspect
 import os
 import pathlib
+import pickle
 import signal
 import subprocess
 import sys
@@ -212,3 +214,19 @@ def test_a_forked_child_does_not_outlive_the_process_that_forked_it(tmp_path) ->
     finally:
         if forker.poll() is None:
             forker.kill()
+
+
+def test_the_child_entry_point_keeps_the_name_a_running_judge_pickles() -> None:
+    """``Process(target=...)`` under forkserver/spawn pickles the target BY QUALIFIED NAME, so the
+    name is an ABI between a judge service and the children it starts.
+
+    A judge service outlives a checkout update: it holds ``forked`` from the tree as it was when it
+    started and keeps naming the entry point the way that tree spelled it, while a forkserver daemon
+    it respawns imports THIS file. Drop the historical spelling and every forked grade such a parent
+    starts dies on an AttributeError the parent only sees as a broken result pipe -- a whole arm's
+    rows lost with no failing kernel to point at. Both names must resolve, to ONE function, through
+    a pickle round trip, and take the argument tuple run_forked builds.
+    """
+    assert forked._child is forked.child_main
+    assert pickle.loads(pickle.dumps(forked._child)) is forked.child_main
+    assert list(inspect.signature(forked.child_main).parameters) == ["fn", "args", "kwargs", "q"]

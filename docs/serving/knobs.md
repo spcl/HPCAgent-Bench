@@ -26,8 +26,6 @@ numbers come from a load of 20 or 40 long-lived streams that re-send a growing c
 that is the only regime in which the cache knobs are visible at all: a cold one-shot smoke reports
 them as null.
 
----
-
 ## The MI300A memory model -- read this before any knob
 
 MI300A is an **APU**. The GPUs and the host share one physical pool of memory. Three consequences
@@ -52,9 +50,7 @@ Because the budget is shared, an out-of-memory death arrives as the host OOM kil
 process: the log stops, there is no Python traceback, and the exit status is a signal. Do not look
 for a stack trace that does not exist; look at the last `avail mem=` line.
 
----
-
-## The KV pool threshold: pool divided by working set, near 1.15
+## The KV pool threshold: pool divided by working set, near 1.0
 
 **This is the mechanism behind every cache knob in this folder. Read it before tuning any of them.**
 
@@ -67,9 +63,11 @@ pool / working set        pool         = max_total_num_tokens, printed at startu
                                          at their largest
 ```
 
-**Above about 1.15, every configuration lands at a prefix-cache hit rate of 0.984 to 0.988. Below
+**Above the crossing, every configuration lands at a prefix-cache hit rate of 0.984 to 0.988. Below
 it, every configuration thrashes.** Measured on Qwen3.8 across 14 leg-concurrency cells with no
-exceptions (2026-09-11).
+exceptions, and bracketed by a factorial probe to between ratio 0.90 (hit 0.601) and 1.04 (hit
+0.984), so on this model the crossing is near 1.0. Treat the figure as model-specific and read the
+hit rate rather than trusting a number from another model.
 
 Three things follow, and they matter more than any individual flag:
 
@@ -98,34 +96,42 @@ that model's shipped configuration sits.
 **Watch it live** with `--enable-cache-report`: a hit rate that **falls** as conversations grow is
 the ratio crossing below the threshold in front of you.
 
----
-
 ## `--mem-fraction-static` and `--attention-backend aiter` are one decision
 
 With the **aiter** attention backend, the engine multiplies `--mem-fraction-static` by **0.85**
 internally before using it. A configured 0.588 is an effective 0.50; a configured 0.247 is an
 effective 0.21.
 
+The derate is conditional. `arg_groups/attention_hook.py` applies it only when
+`attention_backend == "aiter"` **and** `context_len > 8192`. On any other backend, or at a short
+context, the configured fraction is the effective fraction.
+
 **Never move one of these two without the other.** Dropping the backend while leaving the number
 alone leaves a KV pool too small to hold a working set. Raising the number while dropping the
-backend overshoots into the host OOM killer. Both directions have happened here (measured
-2026-09-06; the derate itself is unchanged since).
+backend overshoots into the host OOM killer.
 
-The repository attributes the 0.85 derate two ways -- the model configuration files call it aiter's
-internal multiplier, the serving smoke calls it the vision-model derate. The arithmetic is the same
-0.85 in both accounts, and the rule is the same either way.
+Read the resulting pool from the allocator's own `KV size: X GB` line. Never infer it from the
+flag: which backend carries the number decides whether the 0.85 applies, so one flag value means
+two different pools.
 
-**`SGLANG_USE_AITER=1` does not select the attention backend.** It switches aiter **ops**. Unset,
-SGLang picks the attention backend itself, and on ROCm that is **triton** -- so a server that sets
-only the environment variable has been serving triton attention all along. Name
-`--attention-backend` explicitly, and check the value against `python3 -m sglang.launch_server
---help` **inside the image** before using it: an unrecognised value is an argparse error that takes
-down every rank at launch.
+**`SGLANG_USE_AITER=1` does not select the attention backend.** It switches aiter **ops**, and it
+is worth keeping on: without it the ROCm path loses aiter's preshuffled paged-MQA kernel and forces
+`page_size` to 1 whatever the flag says.
+
+**The default backend is per-model, not per-platform.** With `--attention-backend` unset, a model's
+own override picks it: kimi gets aiter, GLM-5.3 gets `dsa` from
+`arg_groups/model_overrides/deepseek_v2.py`. There is no single ROCm default to reason from.
+
+**Naming the backend explicitly is not always the safe choice.** An explicit value SUPPRESSES the
+model's own override, which is how GLM-5.3 loses `dsa`. Omit the flag where the model selects
+correctly for itself; name it only where the model's own choice is wrong, and check the value
+against `python3 -m sglang.launch_server --help` **inside the image** first, since an unrecognised
+value is an argparse error that takes down every rank at launch.
+
+Confirm what the engine actually chose by reading `attention_backend=` back out of the server log.
 
 Which backend a given model should use, and what it measured, is on that model's page. It is not the
 same answer for every model.
-
----
 
 ## HiCache is wrong on this hardware
 
@@ -140,8 +146,6 @@ so every cached token costs twice. The server dies to the host OOM killer with n
 
 Nothing in the repository's current configurations sets it. Older launch lines that do -- including
 one snapshot in `containers/cluster/ce-images/IMAGE_REQUIREMENTS.md` -- are superseded.
-
----
 
 ## Both parsers, always
 
@@ -160,8 +164,6 @@ answers with prose *about* the call passes every throughput check ever written.
 
 The parser names are per model and are listed on each model's page.
 
----
-
 ## Topology
 
 **Use pipeline parallelism only when the model does not fit in one node.**
@@ -178,8 +180,6 @@ aggregate throughput and does nothing for a single conversation; the client must
 against one Kimi K2.7 endpoint produced less useful work than one, because they compete for the same
 KV pool and evict each other's prefixes. If you have four nodes and four users, four one-node
 servers beat one four-node server -- when the model fits.
-
----
 
 ## Multi-node fabric
 
@@ -206,13 +206,11 @@ These apply only to a server split across nodes.
   `LD_PRELOAD=/opt/cscs/netstack/libhwloc.so.15`. The serving images here ship no MPI and need
   nothing of the kind.
 
----
-
 ## Cross-model environment variables
 
 | Variable | Value | Why |
 |---|---|---|
-| `SGLANG_USE_AITER` | `1` | Switches aiter **ops**. Does **not** select the attention backend -- name that separately. |
+| `SGLANG_USE_AITER` | `1` | Switches aiter **ops**. Does **not** select the attention backend, which defaults per model. |
 | `SGLANG_SET_CPU_AFFINITY` | `0` | SGLang's own pinning is rejected by the Slurm cgroup here and the process dies on a `psutil` error. |
 | `AITER_JIT_DIR`, `AITER_ROOT_DIR` | a persistent path, or the image's baked one | aiter ships no prebuilt objects and JIT-builds on first **use**, not on import, behind a lock. Cold, that build can outrun the engine's watchdog and the server never serves a token. Warm, it costs nothing. Some aiter code paths ignore `AITER_JIT_DIR` and use `$HOME` instead, so point `HOME` somewhere persistent too. |
 | `TRITON_CACHE_DIR` | a persistent path | Unset, it defaults under `$HOME` and every job re-JITs every kernel -- *during inference*, not at startup. Generation then arrives in bursts between total stalls. |
@@ -220,18 +218,14 @@ These apply only to a server split across nodes.
 | `NCCL_NET_GDR_LEVEL` | `0` | Multi-node only; see above. |
 | `TOKENIZERS_PARALLELISM` | `false` | Silences a fork warning; no measured effect. |
 
----
-
 ## Flags that are cheap and worth setting everywhere
 
 | Flag | Why |
 |---|---|
 | `--enable-metrics` | Prometheus metrics at `/metrics`: token throughput, running and waiting counts. The cheapest way to watch a live server. |
-| `--enable-cache-report` | Puts `cached_tokens` in each response's usage block, so you see the prefix-cache hit rate **per request** rather than in aggregate. This is the diagnostic that matters on this hardware: it is how you watch the pool-to-working-set ratio cross the 1.15 threshold described above. |
+| `--enable-cache-report` | Puts `cached_tokens` in each response's usage block, so you see the prefix-cache hit rate **per request** rather than in aggregate. This is the diagnostic that matters on this hardware: it is how you watch the pool-to-working-set ratio cross the threshold described above. |
 | `--watchdog-timeout 1800` | A genuinely wedged engine still surfaces as a dead server rather than a job that hangs to its wall clock. |
 | `--max-running-requests 128` | Caps concurrency at the scheduler. It does not reserve memory. |
-
----
 
 ## Slurm flags that are serving knobs in disguise
 
@@ -243,7 +237,5 @@ These apply only to a server split across nodes.
 | `--cpus-per-task` | `${SLURM_CPUS_ON_NODE}` for the server | A step that does not ask gets **one** core of 192. The server then degrades with load rather than failing: 2 s per decode step early, 147 s after half an hour, with nothing queued. Measured against 88-91 tok/s for the same model with the CPUs it needs (2026-08-31). Give a client or probe running alongside one socket instead: `--cpus-per-task=24 --hint=nomultithread`. See the README for the full account. |
 | `--gpus-per-node` | `4` | Every recipe here is tensor-parallel 4 inside a node. |
 | `ulimit -c 0` | in the script | Beverin's `core_pattern` is machine-global; a crash otherwise drops a zero-byte stub in the working directory. Slurm propagates the limit to steps. |
-
----
 
 For how to start a server, find it and read its log, see [`README.md`](README.md) in this folder.

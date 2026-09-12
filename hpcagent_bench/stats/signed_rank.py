@@ -23,17 +23,17 @@ THE CUTOFF IS MEASURED, not inherited. The exact null is a subset-sum count over
     n         25     40     50    100    150     200     300     578
     DP     0.5ms  3.0ms  6.5ms   58ms  200ms   474ms   1.60s  11.79s
 
-and the normal approximation's worst absolute error against the exact p, over effects spanning
-p = 0.001 to 0.9:
+and the continuity-corrected normal approximation's worst absolute error against the exact p, over
+effects spanning p = 0.001 to 0.9:
 
     n          25       40      100      200      578
-    max|dp|  1.5e-2   8.4e-3   2.7e-3   1.2e-3   3.4e-4
+    max|dp|  6.6e-3   4.1e-3   1.7e-3   8.3e-4   2.9e-4
 
 200 is where the DP stops being free -- it is the last size under half a second, and the cost grows
 as n^3 with big-integer coefficients past it. It also covers every paired-kernel count these tables
 reach: the llr focus roster is 40 kernels and the largest campaign roster is 242 problems, of which
-a PAIR covers fewer. Above 200 the approximation is within 1.2e-3 absolute of the exact p, which is
-a quarter of the 4.3e-3 discrepancy that made this rule necessary, and it keeps shrinking.
+a PAIR covers fewer. Above 200 the approximation is within 8.3e-4 absolute of the exact p, which is
+a fifth of the 4.3e-3 discrepancy that made this rule necessary, and it keeps shrinking.
 
 The count for one ``n`` is cached, so a table comparing many arm pairs at the same ``n`` pays the
 DP once.
@@ -108,51 +108,31 @@ def exact_p(statistic: float, n: int) -> float:
     return min(1.0, 2.0 * sum(counts[: cutoff + 1]) / (2**n))
 
 
-def standard_normal_cdf(z: float) -> float:
-    """``P(Z <= z)`` for the standard normal, from ``math.erfc`` (stdlib only, by module policy)."""
-    return 0.5 * math.erfc(-z / math.sqrt(2.0))
-
-
-def standard_normal_pdf(z: float) -> float:
-    """The standard normal density at ``z``."""
-    return math.exp(-0.5 * z * z) / math.sqrt(2.0 * math.pi)
-
-
 def normal_p(w_plus: float, n: int, absolute: Sequence[float]) -> float:
-    """Two-sided normal-approximation p for ``W+``: CONTINUITY-CORRECTED, kurtosis-corrected, and
-    conservative by construction.
+    """Two-sided normal-approximation p, tie-corrected on the variance and continuity-corrected on
+    the deviation.
 
-    Three things a plain ``erfc(|W+ - mean| / sqrt(2 var))`` gets wrong, in the order they bite.
+    Tied ``|d|`` values share a midrank, which makes ``W+`` less variable than the tie-free formula
+    assumes; without the correction the test would be anti-conservative exactly on the data where
+    ties are common (many kernels landing on the same speedup).
 
-    TIES. Tied ``|d|`` values share a midrank, which makes ``W+`` less variable than the tie-free
-    formula assumes. Every cumulant here is summed over the ACTUAL midranks, so the tie correction
-    is not a bolt-on: ``sum(r^2)/4`` is identically ``n(n+1)(2n+1)/24 - sum(t^3 - t)/48``, and the
-    same summation extends the correction to the fourth cumulant, which no closed form covers.
-
-    CONTINUITY. ``W+`` lives on a lattice. The exact two-sided p is ``2 P(W+ <= w)``, whose normal
-    image is the half-line up to the cell EDGE ``w + 1/2``, so the deviation carried into the tail
-    is ``|W+ - mean| - 1/2``. Omitting that half step reports a smaller p than the exact null at
-    every n -- 2.8e-3 too small at n = 35, still 2.9e-4 too small at n = 210.
-
-    KURTOSIS. The signed-rank null is LIGHT-tailed: its fourth cumulant ``-sum(r^4)/8`` is
-    negative, so the normal understates ``P(W+ <= w)`` through the whole shoulder ``|z| < sqrt(3)``
-    -- which is where p = 0.05 to 0.15 lands, exactly the range a significance claim turns on. The
-    Edgeworth term ``phi(z) (gamma2/24) He3(z)`` removes that O(1/n) error.
-
-    The Edgeworth series is truncated, and its remainder is not signed, so the magnitude of the
-    last retained term is ADDED as the truncation guard. That is what makes the result conservative
-    rather than merely accurate: the reported p is never below the exact null's at any n these
-    tables reach, and it costs at most 8.1e-4 of excess p at n = 35, shrinking as 1/n.
+    ``W+`` is a lattice variable of spacing 1 and the normal density is continuous, so the tail it
+    stands in for runs to the lattice point's outer EDGE: the deviation loses the half step. Both
+    reference implementations subtract it (scipy ``correction=True``, R ``wilcox.test`` correct) and
+    :mod:`hpcagent_bench.stats.summary` asks scipy for it, so the two paths stay one test. Measured
+    over the whole lattice at exact p <= 0.10, it cuts the worst anti-conservative gap against the
+    exact null by 5x to 11x: 1.7e-3 to 3.2e-4 at n = 40, 2.0e-4 to 7.5e-5 at n = 200.
     """
-    ranks = average_ranks(absolute)
-    mean = math.fsum(ranks) / 2.0
-    variance = math.fsum(rank * rank for rank in ranks) / 4.0
+    mean = n * (n + 1) / 4.0
+    variance = n * (n + 1) * (2 * n + 1) / 24.0
+    groups: dict[float, int] = {}
+    for value in absolute:
+        groups[value] = groups.get(value, 0) + 1
+    variance -= sum((size * size * size) - size for size in groups.values()) / 48.0
     if variance <= 0.0:
         return 1.0
-    kurtosis = -math.fsum(rank**4 for rank in ranks) / (8.0 * variance * variance)
-    z = -max(0.0, abs(w_plus - mean) - 0.5) / math.sqrt(variance)
-    edgeworth = standard_normal_pdf(z) * (kurtosis / 24.0) * (z * z * z - 3.0 * z)
-    return min(1.0, max(0.0, 2.0 * (standard_normal_cdf(z) - edgeworth + abs(edgeworth))))
+    deviation = abs(abs(w_plus - mean) - 0.5)
+    return min(1.0, math.erfc(deviation / math.sqrt(2.0 * variance)))
 
 
 def signed_rank_p(diffs: Sequence[float]) -> tuple[int, float, str]:

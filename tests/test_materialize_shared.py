@@ -238,8 +238,11 @@ def test_every_campaign_variant_declares_its_own_arm() -> None:
         # is a seed the generator consumes, never a label the judge records. Blanking it would
         # break the generator; demanding it match the filename would demand a base call itself an
         # arm. Nothing submits a base directly -- run_campaign.sh takes a variant.
+        # .env.serve-only is a LAUNCHER override layered over a base, not an arm: serve-only.sbatch
+        # removes the judge and agent roles, and a CAMPAIGN_ARM key there would make audit_envs.py
+        # score a run that grades nothing.
         if (
-            path.name == ".env.example"
+            path.name in (".env.example", ".env.serve-only")
             or path.name.startswith((".env.base-", ".env.llrbase-"))
             or path.suffix in (".bak", ".v2bak")
         ):

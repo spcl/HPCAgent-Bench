@@ -161,7 +161,7 @@ def test_an_unmeasured_cell_is_dropped_from_the_geomean_and_named() -> None:
     column = pd.Series([2.0, 0.0, 8.0], index=["gemm", "jacobi_2d", "nbody"])
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        value = results.my_geomean(column)
+        value = results.column_geomean(column)
 
     assert value == pytest.approx(4.0), "one unmeasured cell must not decide the framework's summary"
     assert len(caught) == 1
@@ -182,5 +182,5 @@ def test_a_column_of_only_unmeasured_cells_is_not_a_zero() -> None:
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        value = results.my_geomean(pd.Series([0.0, -1.0], index=["a", "b"]))
+        value = results.column_geomean(pd.Series([0.0, -1.0], index=["a", "b"]))
     assert np.isnan(value)

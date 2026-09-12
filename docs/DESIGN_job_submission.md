@@ -17,7 +17,7 @@ per-node reasoning below is about `XL` specifically.
 ## 1. Corpus sweep -- static round-robin, no coordination
 
 `sbatch -N 8` gives a nodelist. One task per node. Each rank reads `SLURM_PROCID` and takes
-`--shard rank/N`, which is `names[rank::N]` — a stride, so neighbours in the sorted list (similar
+`--shard rank/N`, which is `names[rank::N]`, a stride, so neighbours in the sorted list (similar
 sizes) land on different ranks. Every rank computes the same partition alone: no master, no work
 stealing, and the same job twice produces the same split, which matters because the results DB is
 keyed by shard.
@@ -27,7 +27,7 @@ Each rank writes its OWN CSV and DB shard. One shared file is not an option: SQL
 
 Container: one per rank, `--environment=$EDF` on every `srun` step (Alps) or the exec wrapper
 locally. A step without it silently runs on the bare node, which reads as a broken environment
-rather than a missing flag — so the factory refuses instead.
+rather than a missing flag, so the factory refuses instead.
 
 **Ranks per node.** Non-agent mode runs NATIVE, so one rank is one deterministic optimizer that
 compiles, runs and validates its own output -- no inference endpoint, no judge, nothing to place
@@ -43,7 +43,7 @@ bin-pack now that per-kernel cost is known, subject to a per-node memory cap.
 
 One `srun` across the whole allocation, one task per node; `cluster_launch.py` maps rank to role.
 Agentic: ranks `[0, I*K)` serve inference, `[I*K, I*K+J)` judge, rank 0 also drives. Traditional:
-ranks `[0, O)` optimize, then judge. The allocation is checked up front — a rank that never gets
+ranks `[0, O)` optimize, then judge. The allocation is checked up front: a rank that never gets
 a role would otherwise wait out the entire time limit before anyone hears about it.
 
 ### vLLM
@@ -53,11 +53,11 @@ node, exposing one URL.
 
 - One node per endpoint is the default. Tensor-parallel across that node's 4 GH200 GPUs.
 - A model too big for one node sets `NODES_PER_VLLM=K`: K containers form a **ray** cluster
-  behind ONE URL — tensor-parallel within each node, pipeline-parallel across the K. Ray, not
+  behind ONE URL: tensor-parallel within each node, pipeline-parallel across the K. Ray, not
   MPI; the transport is NCCL over the fabric.
 - No container ever spans a node. K nodes means K containers plus a ray head.
 - What the container needs from the site: the GPUs (`--device nvidia.com/gpu=all` / the CE GPU
-  hook) and, for K>1, the fabric — without it NCCL falls back to TCP over the management network
+  hook) and, for K>1, the fabric; without it NCCL falls back to TCP over the management network
   and it reads as a slow model rather than a misconfigured launch.
 - The driver only ever sees an HTTP endpoint, so a hosted API and a locally served model are the
   same thing to everything downstream.
@@ -70,11 +70,11 @@ the ranks placed and connected; what a kernel does with them once connected (hal
 distribution) is [mpi_patterns.md](mpi_patterns.md) and
 [`hpcagent_bench/docs/mpi_distributions.md`](../hpcagent_bench/docs/mpi_distributions.md).
 
-**The model.** One container per rank, one rank per container. Containers do not cluster —
+**The model.** One container per rank, one rank per container. Containers do not cluster;
 Slurm places them and MPI connects the processes inside them. Ranks discover each other through
 the **PMI/PMIx** the site's `srun` provides: `srun --mpi=pmix` exports the PMIx server address
 and rank/size into each container's environment, and the MPI inside the container attaches to it.
-That is why a container never needs to see another container's filesystem or network namespace —
+That is why a container never needs to see another container's filesystem or network namespace;
 it only needs the PMI socket and the fabric device.
 
 **The one hard requirement, and the one real failure mode.** The MPI inside the image must be
@@ -82,7 +82,7 @@ ABI-compatible with the site's PMI and fabric. It is not automatic:
 
 - Open MPI and MPICH have *different ABIs*. An image built against one cannot attach to a launcher
   expecting the other. This is exactly what XaaS names as the barrier (arXiv:2401.04552,
-  arXiv:2509.17914) — a compiled image is portable, not performance-portable.
+  arXiv:2509.17914): a compiled image is portable, not performance-portable.
 - Two ways out, and a site picks one: **hybrid** (the image carries a matching MPI and uses the
   host's PMI), or **bind-mount** (the site's MPI and libfabric are injected into the container).
   On Alps the second is what the Cray OCI hooks do, which is why the MPI track must enable the

@@ -177,6 +177,15 @@ def child_main(
         q.put(("error", tb))
 
 
+#: WIRE NAME for :func:`child_main`, not a private helper. ``Process(target=...)`` under
+#: forkserver/spawn pickles the target BY QUALIFIED NAME, so the name a long-lived judge service
+#: holds in memory is the one its children must resolve on disk -- and a judge that outlives a
+#: checkout update keeps asking for this spelling. A forkserver daemon it respawns imports this
+#: file fresh, and without the name every forked grade that parent starts dies on a broken result
+#: pipe. An ALIAS, never a second body: two would let the two entry points drift apart.
+_child = child_main
+
+
 def take_result(q: ChildQueue[ResultT], timeout: float) -> ResultMessage[ResultT] | None:
     """Next item from ``q`` that is a RESULT, or None within ``timeout``.
 
