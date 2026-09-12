@@ -1199,6 +1199,8 @@ def build_kernel_ir(
 
     src = numpy_py.read_text()
     tree = ast.parse(src, filename=str(numpy_py))
+    UnpackedOpenMeshToGrid().visit(tree)
+    ast.fix_missing_locations(tree)
     # Rewrite ``w, v = eigh(a[, b], ...)`` (np.linalg / scipy.linalg / the
     # ``_sci_eigh`` alias) to a self-contained complex-Hermitian eigh loop nest
     # BEFORE helper inlining, so the module-level alias import is still in scope
@@ -2820,6 +2822,57 @@ def _unique_name(base: str, taken: OrderedSet[str]) -> str:
     while f"{base}{k}" in taken:
         k += 1
     return f"{base}{k}"
+
+
+class UnpackedOpenMeshToGrid(ast.NodeTransformer):
+    """``gx, gy, gz = np.ix_(a, b, c)`` and ``A[gx, gy, gz]`` -> ``grid = np.ix_(a, b, c)`` and ``A[grid]``.
+
+    The per-axis names are one open mesh spelled three ways, and shape inference and lowering read
+    the mesh through a single bound name: a tuple of three index arrays reaching them is taken for an
+    ordinary advanced index, so the gather's result has no extent and everything computed from it
+    fails further down. Only a use naming exactly the unpacked names, in order, is rewritten.
+    """
+
+    def __init__(self) -> None:
+        self.grids: Dict[Tuple[str, ...], str] = {}
+
+    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+        target = node.targets[0] if len(node.targets) == 1 else None
+        operands = np_ix_operands(node.value)
+        if (
+            isinstance(target, ast.Tuple)
+            and all(isinstance(e, ast.Name) for e in target.elts)
+            and operands is not None
+            and len(operands) == len(target.elts)
+        ):
+            names = tuple(e.id for e in target.elts)
+            grid = self.grids.setdefault(names, "_".join(names))
+            return ast.copy_location(ast.Assign(targets=[ast.Name(id=grid, ctx=ast.Store())], value=node.value), node)
+        return self.generic_visit(node)
+
+    def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        self.generic_visit(node)
+        index = node.slice
+        if isinstance(index, ast.Tuple) and all(isinstance(e, ast.Name) for e in index.elts):
+            grid = self.grids.get(tuple(e.id for e in index.elts))
+            if grid is not None:
+                node.slice = ast.Name(id=grid, ctx=ast.Load())
+        return node
+
+
+def np_ix_operands(value: ast.AST) -> Optional[List[ast.expr]]:
+    """The index arrays of an ``np.ix_(a, b, c)`` call, else ``None``."""
+    if (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Attribute)
+        and value.func.attr == "ix_"
+        and isinstance(value.func.value, ast.Name)
+        and value.func.value.id in ("np", "numpy")
+        and value.args
+        and not value.keywords
+    ):
+        return list(value.args)
+    return None
 
 
 class _FoldTupleLocals(ast.NodeTransformer):
@@ -6074,18 +6127,17 @@ def _build_helper_kirs(
         # consumes it (lulesh's face-node loops, which only surface once its helpers survive).
         _unroll_const_list_loops(hfn)
 
-        # The body is asked in EVERY case, not only when the target said nothing. Reading it wrong
-        # classifies an array return as by-value: no out-param is added, the returns stay as
-        # ``return <expr>``, and every shape-changing call inside one reaches the emitter unlowered,
-        # because the expanders only ever see assignments.
-        probe = call_specialized_body(hfn, pnames, call.args)
-        body_shape, body_dtype = _helper_return_shape_from_body(
-            probe, pnames, call.args, oarr_by, osca_by, osym_by, owner_fn
-        )
         if hret_shape is None or target_shape_is_the_call_itself(owner_fn, lhs, oarr_by, hdef.name):
-            # ``_conv2d(...)`` is only ever an ARGUMENT to another helper (resnet101's
-            # ``_batch_norm(_conv2d(x, w, 1, 0), ..)``), or the target told us nothing the call did
-            # not, so the body is the only answer there is.
+            # Either no call site stores the result into an array -- ``_conv2d(...)`` is only ever
+            # an ARGUMENT to another helper (resnet101's ``_batch_norm(_conv2d(x, w, 1, 0), ..)``)
+            # -- or the target told us nothing the call did not. The helper's own body says what it
+            # returns, and reading that wrong classifies an array return as by-value: no out-param
+            # is added, the returns stay as ``return <expr>``, and every shape-changing call inside
+            # one reaches the emitter unlowered, because the expanders only ever see assignments.
+            probe = call_specialized_body(hfn, pnames, call.args)
+            body_shape, body_dtype = _helper_return_shape_from_body(
+                probe, pnames, call.args, oarr_by, osca_by, osym_by, owner_fn
+            )
             # ``None`` from the body means two different things and they want opposite decisions:
             # "this returns a scalar" and "this could not be sized". Only the first may overrule a
             # target-side guess. A helper whose body PROVABLY returns rank 0 is a reduction (array
@@ -6100,14 +6152,6 @@ def _build_helper_kirs(
                 or helper_returns_rank0(probe, pnames, call.args, oarr_by, osca_by, osym_by, owner_fn)
             ):
                 hret_shape, hret_dtype = body_shape, body_dtype
-        elif body_shape is not None and list(body_shape) != list(hret_shape):
-            # An out-param is written BY the helper's body, so the body is the authority on its
-            # extents and a disagreement is a defect in the target's. ``_resolve_array_ref`` chases
-            # an undeclared local like ``x2 = _avgpool1d_taps(x1, ...)`` by reading the binding Call
-            # as elementwise, and answers with the broadcast join of its ARGUMENTS -- the pool's
-            # INPUT length. Even a target the chase DID size is the callee's return respelled in the
-            # CALLER's names, which is the vocabulary split a dace program cannot relate.
-            hret_shape, hret_dtype = body_shape, body_dtype
 
         if hret_shape is None:
             # SCALAR (by-value) return -- params inferred straight from the call. A compile-time

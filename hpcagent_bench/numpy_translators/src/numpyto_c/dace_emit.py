@@ -2589,7 +2589,11 @@ def freeze_shape_only_parameters(kir: KernelIR) -> KernelIR:
         return kir
     values = {name: int(value) for name, value in kir.shape_only_consts.items()}
     arrays = [dataclasses.replace(a, shape=tuple(_frozen_extent(s, values) for s in a.shape)) for a in kir.arrays]
-    return dataclasses.replace(kir, arrays=arrays)
+    # The body too: once helpers are kept, the buffer the kernel allocates for a helper argument is
+    # spelled off the same declared extent, and freezing only the declaration left mlp's ``w1`` at
+    # ``[C_in, 30000]`` against a ``[N, S0]`` argument buffer dace could not relate to it.
+    tree = ast.fix_missing_locations(SubstituteScalarValues(values).visit(copy.deepcopy(kir.tree)))
+    return dataclasses.replace(kir, arrays=arrays, tree=tree)
 
 
 def _frozen_extent(dim: str, values: Dict[str, int]) -> str:
@@ -4796,6 +4800,68 @@ def render_helper_closure(kir: KernelIR, main: RenderedProgram) -> List[Tuple[Ke
     for name in called_helpers(main.body, kir.helpers):
         visit(kir.tree, name)
     return ordered
+
+
+def substituted_extent(token: object, substitutions: Dict[str, str]) -> str:
+    """``token`` with every substituted symbol spelled as the expression its call site binds it to."""
+    if not substitutions:
+        return str(token)
+    return _IDENT_RE.sub(
+        lambda m: f"({substitutions[m.group()]})" if m.group() in substitutions else m.group(), str(token)
+    )
+
+
+def allocation_shapes(body: List[ast.stmt]) -> Dict[str, List[str]]:
+    """``{local: its allocation's per-axis extents}`` for every ``<local> = np.empty(...)`` in ``body``."""
+    found: Dict[str, List[str]] = {}
+    for stmt in body:
+        if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
+            continue
+        shape = shape_argument(stmt.value)
+        if shape is None:
+            continue
+        elements = shape.elts if isinstance(shape, (ast.Tuple, ast.List)) else [shape]
+        found[stmt.targets[0].id] = [ast.unparse(element) for element in elements]
+    return found
+
+
+def full_slice_target(target: ast.expr) -> Optional[str]:
+    """The array name a ``<name>[:] = ...`` statement writes WHOLE, or ``None`` for anything else."""
+    if isinstance(target, ast.Name):
+        return target.id
+    if not (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)):
+        return None
+    element = target.slice
+    if isinstance(element, ast.Slice) and element.lower is None and element.upper is None and element.step is None:
+        return target.value.id
+    return None
+
+
+def output_write_extents(
+    main: RenderedProgram, declared: Dict[str, Tuple[str, ...]], pinned: Dict[str, PinnedValue] | None = None
+) -> List[Tuple[str, str, List[str], List[str]]]:
+    """``(array, workspace, declared extents, workspace extents)`` per whole-array copy in ``main``.
+
+    One entry per ``<declared array>[:] = <workspace>`` the kernel performs, with the pinned knobs
+    already substituted into both sides. The two extent lists are the same quantity spelled by the
+    MANIFEST and by the reference's own body, which is what makes them comparable at all.
+    """
+    literals = {name: str(value) for name, value in (pinned or {}).items()}
+    allocated = allocation_shapes(main.body)
+    pairs: List[Tuple[str, str, List[str], List[str]]] = []
+    for stmt in main.body:
+        if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.value, ast.Name)):
+            continue
+        name = full_slice_target(stmt.targets[0])
+        source = allocated.get(stmt.value.id)
+        if name is None or source is None or name not in declared:
+            continue
+        target = [substituted_extent(token, literals) for token in declared[name]]
+        source = [substituted_extent(token, literals) for token in source]
+        if len(target) != len(source):
+            continue  # a rank difference is a broadcast the frontend decides, not a spelling
+        pairs.append((name, stmt.value.id, target, source))
+    return pairs
 
 
 def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
