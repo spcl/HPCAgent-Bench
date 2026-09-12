@@ -447,15 +447,26 @@ def child_result(stdout: str) -> JsonObject | None:
     return None
 
 
-def as_int(value: object, field: str) -> int:
-    """One integer field off a child's result line.
+def as_int(value: object, field: str = "") -> int:
+    """One integer scalar off a child's result line or an HTTP request body.
 
-    ``int`` of a number or of its decimal spelling, as the protocol carries it; anything else is a
-    line the workload printed under :data:`RESULT_PREFIX` rather than the child's own.
-    """
+    ``int`` of a number or of its decimal spelling, as either protocol carries it; anything else
+    raises, naming ``field`` in the message when the caller has one (a child's result line always
+    does; a generic request-body reader may not)."""
     if isinstance(value, (int, float, str)):
         return int(value)
-    raise TypeError(f"{field} came back as {type(value).__name__}, not a number")
+    if field:
+        raise TypeError(f"{field} came back as {type(value).__name__}, not a number")
+    raise TypeError(f"expected a number, got {type(value).__name__}")
+
+
+def as_float(value: object, field: str = "") -> float:
+    """``float`` counterpart of :func:`as_int`, same coercion and error rules."""
+    if isinstance(value, (int, float, str)):
+        return float(value)
+    if field:
+        raise TypeError(f"{field} came back as {type(value).__name__}, not a number")
+    raise TypeError(f"expected a number, got {type(value).__name__}")
 
 
 def counted_result(raw: JsonObject) -> papi.MetricRow:
