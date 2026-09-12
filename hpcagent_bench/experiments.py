@@ -80,7 +80,7 @@ def agent_indices(run_id: str | None) -> tuple[str, str, str]:
 #: The identity a row is selected and grouped by, read off ``runs`` rather than off a name. The
 #: launcher writes every one of these into the arm's .env (``experiments/record_identity.sh``) and
 #: the judge copies them onto the run, so a query filters on columns.
-IDENTITY: tuple[str, ...] = ("experiment", "model", "language", "device", "packet", "rep", "arm")
+IDENTITY: tuple[str, ...] = ("experiment", "model", "language", "device", "packet", "rep", "arm", "harness")
 
 
 def discover_databases(run_globs: Iterable[str]) -> list[Database]:
@@ -139,13 +139,16 @@ def read_database(db: Database, want: dict[str, frozenset[str]]) -> Iterator[dic
         if "runs" not in tables:
             LOG.warning("experiments: %s predates the runs table; run scripts/migrate_db.py", db.path)
             return
+        # A DB written before an identity column existed (runs.harness) yields NULL for it.
+        have = frozenset(r[1] for r in conn.execute("PRAGMA table_info(runs)"))
+        selected = ", ".join(f"r.{c}" if c in have else f"NULL AS {c}" for c in IDENTITY)
         for table in RECORD_TABLES:
             if table not in tables:
                 continue
             # LEFT JOIN, not JOIN: a row whose run was never recorded is a fact about that run and
             # has to reach the caller as an unidentified row, not vanish from the count.
             query = (
-                f"SELECT t.*, {', '.join('r.' + c for c in IDENTITY)} "  # noqa: S608 -- fixed names
+                f"SELECT t.*, {selected} "  # noqa: S608 -- fixed names
                 f"FROM {table} t LEFT JOIN runs r USING (run_id) ORDER BY t.ts, t.id"
             )
             for row in conn.execute(query):

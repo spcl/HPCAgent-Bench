@@ -14,8 +14,10 @@ measurable without polluting rankings.
 
 All times are host-measured nanoseconds (the agent cannot forge them). There is ONE
 schema -- the DDL below -- created idempotently on :func:`connect`; the DB is NOT
-versioned or migrated. A schema change means rebuilding the DB (it is a derived
-results cache, cheap to regenerate), not an in-place ALTER path.
+versioned. The one in-place change is appending a nullable column listed in
+:data:`_ADDED_COLUMNS` to a DB that predates it, which an older writer tolerates because
+every INSERT names its columns. Any other schema change means rebuilding the DB (it is a
+derived results cache, cheap to regenerate).
 """
 
 from __future__ import annotations
@@ -267,7 +269,9 @@ def cap_detail(text: str, cap: int = DETAIL_CAP) -> str:
 #: in. A campaign that reports a spread across repetitions cannot compute one without this.
 #:
 #: `experiment` is NULL when the writer named none. `packet` is '' for the control, which is a
-#: value and not a missing one. `device` defaults to cpu.
+#: value and not a missing one. `device` defaults to cpu. `harness` is the agent harness that drove
+#: the run (claude, miniswe, openhands, optimas), NULL when the arm named none; it is LAST so a DB
+#: that gained it through :data:`_ADDED_COLUMNS` has the same column order as a fresh one.
 _RUNS_DDL = """
 CREATE TABLE IF NOT EXISTS runs (
     run_id     TEXT PRIMARY KEY,
@@ -278,9 +282,14 @@ CREATE TABLE IF NOT EXISTS runs (
     packet     TEXT NOT NULL DEFAULT '',    -- skill packets, sorted and '+'-joined; '' is base
     rep        INTEGER NOT NULL DEFAULT 1,  -- 1-based repetition of this arm
     arm        TEXT,                        -- provenance only; nothing may parse it
-    first_seen INTEGER                      -- epoch ms (UTC) the run first wrote a row
+    first_seen INTEGER,                     -- epoch ms (UTC) the run first wrote a row
+    harness    TEXT                         -- agent harness; NULL = the arm named none
 );
 """
+
+#: ``(table, column, type)`` appended to a DB whose table predates the column. Nullable only: an
+#: older writer's INSERT omits it and must still succeed.
+_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (("runs", "harness", "TEXT"),)
 
 _INDEXES = (
     "CREATE INDEX IF NOT EXISTS ix_sub_bench ON submissions(benchmark, preset, datatype)",
@@ -297,7 +306,7 @@ _INDEXES = (
     # the reproducibility lookup: the source behind one graded row
     "CREATE INDEX IF NOT EXISTS ix_sources_row ON sources(run_id, benchmark, ts)",
     # the identity lookup: every figure groups by this tuple, now once per run rather than per row
-    "CREATE INDEX IF NOT EXISTS ix_runs_ident ON runs(experiment, model, language, device, packet)",
+    "CREATE INDEX IF NOT EXISTS ix_runs_ident ON runs(experiment, model, language, device, packet, harness)",
 )
 
 #: Rank-identity variables a launcher exports, in preference order. ``HPCAGENT_BENCH_DB_SHARD`` is
@@ -654,6 +663,13 @@ def rep_tag() -> int:
     return rep
 
 
+def harness_tag() -> str | None:
+    """``record.harness`` -- the agent harness that drove the arm (``claude``, ``miniswe``,
+    ``openhands``, ``optimas``), or None when the arm named none."""
+    harness = str(config.get("record.harness", "") or "").strip()
+    return harness or None
+
+
 class Identity(NamedTuple):
     """WHO produced a row. One row of ``runs``, and the tuple every figure groups by."""
 
@@ -664,11 +680,21 @@ class Identity(NamedTuple):
     packet: str
     rep: int
     arm: str | None
+    harness: str | None
 
 
 def identity() -> Identity:
     """The identity of the run this judge is recording for."""
-    return Identity(experiment_tag(), model_tag(), language_tag(), device_tag(), packet_tag(), rep_tag(), arm_tag())
+    return Identity(
+        experiment_tag(),
+        model_tag(),
+        language_tag(),
+        device_tag(),
+        packet_tag(),
+        rep_tag(),
+        arm_tag(),
+        harness_tag(),
+    )
 
 
 def upsert_run(conn: sqlite3.Connection, run_id: str, ts: int, language: str | None = None) -> None:
@@ -690,8 +716,8 @@ def upsert_run(conn: sqlite3.Connection, run_id: str, ts: int, language: str | N
         who = who._replace(language=language)
     conn.execute(
         "INSERT OR IGNORE INTO runs(run_id, experiment, model, language, device, packet, rep, arm, "
-        "first_seen) VALUES (?,?,?,?,?,?,?,?,?)",
-        (run_id, who.experiment, who.model, who.language, who.device, who.packet, who.rep, who.arm, ts),
+        "first_seen, harness) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (run_id, who.experiment, who.model, who.language, who.device, who.packet, who.rep, who.arm, ts, who.harness),
     )
 
 
@@ -706,6 +732,10 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     cur.execute(_SUBMISSIONS_DDL)
     cur.execute(_ATTEMPTS_DDL)
     cur.execute(_CALLS_DDL)
+    # Before the indexes, which may name an added column.
+    for table, column, kind in _ADDED_COLUMNS:
+        if not column_exists(conn, table, column):
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
     for stmt in _INDEXES:
         cur.execute(stmt)
     conn.commit()
@@ -743,7 +773,8 @@ def _shard_tables(conn: sqlite3.Connection) -> list[tuple[str, str]]:
 
 
 def column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
-    """Does ``table`` carry ``column`` in THIS database (schema is forward-only, never migrated)?"""
+    """Does ``table`` carry ``column`` in THIS database? A reader opening a DB read-only sees whatever
+    vintage wrote it, since only :func:`connect` appends :data:`_ADDED_COLUMNS`."""
     return any(row[1] == column for row in conn.execute(f"PRAGMA table_info({table})"))
 
 
