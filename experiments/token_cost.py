@@ -124,7 +124,9 @@ def usage_episode_cost(path: pathlib.Path) -> dict[str, float]:
     so the row carries no wall_ms/api_ms.
     """
     fresh = cached = previous_input = output = thinking = calls = 0
-    for line in path.open(errors="replace"):
+    with path.open(errors="replace") as handle:
+        lines = list(handle)
+    for line in lines:
         line = line.strip()
         if not line.startswith("{"):
             continue
@@ -163,7 +165,9 @@ def episode_cost(log: pathlib.Path) -> dict[str, float]:
     thinking = 0
     output_total = 0
     wall_ms = api_ms = 0
-    for line in log.open(errors="replace"):
+    with log.open(errors="replace") as handle:
+        lines = list(handle)
+    for line in lines:
         line = line.strip()
         if not line.startswith("{"):
             continue
