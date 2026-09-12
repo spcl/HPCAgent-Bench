@@ -283,14 +283,10 @@ def tokens_per_arm_kernel(observations: pd.DataFrame) -> pd.DataFrame:
     kernel's is the sum over its episodes; summing the rows would count every earlier call again,
     once per later one, and inflate a long repair loop quadratically.
     """
-    if "tokens" not in observations:
+    totals = population.kernel_tokens(observations, ("arm", "benchmark"))
+    if totals.empty:
         return pd.DataFrame(columns=["arm", "benchmark", "tokens"])
-    rows = observations[observations.record == "call"].copy()
-    rows["tokens"] = pd.to_numeric(rows.tokens, errors="coerce")
-    rows = rows.dropna(subset=["tokens", "arm", "benchmark"])
-    per_episode = population.per_episode_max(rows, "tokens", keep=("arm",))
-    totals = per_episode.groupby(["arm", "benchmark"], as_index=False).tokens.sum()
-    return totals[totals.tokens > 0]
+    return totals.reset_index()
 
 
 def intervention_pairs(arms: pd.DataFrame) -> list[tuple[str, str, str, str, str]]:

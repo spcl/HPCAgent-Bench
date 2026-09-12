@@ -343,7 +343,7 @@ def test_the_score_change_figure_scores_graded_rows_and_costs_call_rows() -> Non
         ]
     )
     assert population.kernel_answers(rows).speedup.tolist() == [7.0]
-    assert population.kernel_tokens(rows, "sum").tolist() == [900.0]
+    assert population.kernel_tokens(rows).tolist() == [900.0]
 
 
 # --------------------------------------------------------------------------- #
@@ -494,7 +494,7 @@ def kernel_slice(kernels: int) -> pd.DataFrame:
 def test_an_arm_point_carries_its_interval_and_the_costs_behind_its_speed_up() -> None:
     """SC15 Rules 4 and 5: a median of nondeterministic ratios travels with its interval and with the
     two times the ratio is a quotient of."""
-    point = population.kernel_medians(kernel_slice(7), "median")
+    point = population.kernel_medians(kernel_slice(7))
     assert point is not None
     assert point["log2_speedup"] == pytest.approx(3.0)
     assert point["log2_speedup_low"] < 3.0 < point["log2_speedup_high"]
@@ -502,6 +502,29 @@ def test_an_arm_point_carries_its_interval_and_the_costs_behind_its_speed_up() -
 
 
 def test_an_arm_point_over_too_few_kernels_withholds_its_interval() -> None:
-    point = population.kernel_medians(kernel_slice(3), "median")
+    point = population.kernel_medians(kernel_slice(3))
     assert point is not None
     assert pd.isna(point["log2_speedup_low"]) and pd.isna(point["tokens_high"])
+
+
+def test_a_kernels_token_spend_is_the_sum_over_every_episode_run_on_it() -> None:
+    """Costs add: two agents on one kernel each spent their own total, and the kernel cost both. A median
+    over the episodes would report half of what was paid for the kernel's answer."""
+    rows = submissions(
+        [
+            {"record": "call", "run_id": "w0", "tokens": 100.0},
+            {"record": "call", "run_id": "w0", "tokens": 300.0},
+            {"record": "call", "run_id": "w1", "tokens": 200.0},
+        ]
+    )
+    assert population.kernel_tokens(rows).to_dict() == {"k": 500.0}
+    assert population.kernel_tokens(rows, ("arm", "benchmark")).to_dict() == {("a", "k"): 500.0}
+
+
+def test_an_arm_point_charges_each_kernel_the_sum_of_its_episodes() -> None:
+    """The arm-summary and score-change figures read one spend per kernel; with two episodes of 100
+    tokens on a kernel that spend is 200, not the 100 a median over episodes gives."""
+    frame = pd.concat([kernel_slice(1), kernel_slice(1).assign(run_id="w9")], ignore_index=True)
+    point = population.kernel_medians(frame)
+    assert point is not None
+    assert point["tokens"] == pytest.approx(200.0)

@@ -1,11 +1,13 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Median tokens per kernel, per model, for one experiment.
+"""Median tokens per EPISODE, per kernel and model, for one experiment.
 
 Tokens are the other half of a result. A model that reaches the same speed-up for a third of the
 spend is a different proposition from one that does not, and a speed-up chart alone cannot say so.
 
-The MEDIAN per (model, kernel), never the mean: an agent that loops on a build error until its
+A per-episode quantity, named so: what one agent run typically spent, never the spend on a kernel,
+which is the sum over its episodes (:func:`hpcagent_bench.stats.population.kernel_tokens`). The
+MEDIAN per (model, kernel), never the mean: an agent that loops on a build error until its
 budget runs out lands two orders of magnitude off the rest of its own arm, and one such episode
 moves a mean far enough to invert the ordering between two models.
 
@@ -33,7 +35,7 @@ SEED: int = 0
 
 
 def cells(frame: pd.DataFrame) -> pd.DataFrame:
-    """One row per (model, kernel): median tokens, the episodes behind it, and how many there are."""
+    """One row per (model, kernel): the median episode spend, the episodes behind it, and how many there are."""
     rows = []
     for (model, kernel), group in frame.groupby(["model", "benchmark"], sort=True):
         tokens = group["tokens"].to_numpy(dtype=float)
@@ -42,7 +44,7 @@ def cells(frame: pd.DataFrame) -> pd.DataFrame:
                 "model": model,
                 "benchmark": kernel,
                 "n": int(tokens.size),
-                "median_tokens": float(np.median(tokens)),
+                "median_episode_tokens": float(np.median(tokens)),
                 # Kept so the figure can draw what was actually measured, and the CSV can be
                 # re-analysed without going back to the observations file.
                 "episodes": sorted(float(v) for v in tokens),
@@ -53,7 +55,7 @@ def cells(frame: pd.DataFrame) -> pd.DataFrame:
 
 def draw(cell_frame: pd.DataFrame, experiment: str, out: pathlib.Path, unit: str = "tokens") -> pathlib.Path:
     """Kernels down the y axis so their names read horizontally; one coloured mark per model."""
-    order = summary.median_per_kernel(cell_frame, "median_tokens").sort_values().index.tolist()
+    order = summary.median_per_kernel(cell_frame, "median_episode_tokens").sort_values().index.tolist()
     models = [m for m in palette.order("models") if m in set(cell_frame["model"])]
     hues = palette.model_colors(models)
     positions = {kernel: i for i, kernel in enumerate(order)}
@@ -77,7 +79,7 @@ def draw(cell_frame: pd.DataFrame, experiment: str, out: pathlib.Path, unit: str
         # read them as noise.
         ax.scatter(
             x,
-            part["median_tokens"].to_numpy(),
+            part["median_episode_tokens"].to_numpy(),
             s=52,
             color=hues[model],
             marker=shapes[model],
@@ -88,7 +90,7 @@ def draw(cell_frame: pd.DataFrame, experiment: str, out: pathlib.Path, unit: str
         )
     ax.set_yscale("log")
     # Short: a long y label on a wide short figure runs up into the title.
-    ax.set_ylabel(f"Median {unit.title()} per Task")
+    ax.set_ylabel(f"Median {unit.title()} per Episode")
     ax.set_xlabel("")
     ax.set_xticks(range(len(order)))
     ax.set_xticklabels(order, fontsize=plotstyle.ANNOTATION_PT, rotation=90)

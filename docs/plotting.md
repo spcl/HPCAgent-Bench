@@ -114,6 +114,10 @@ each median there carries its percentile bootstrap interval over kernels
 `summary.MIN_INTERVAL_SAMPLES` kernels, and the table carries the two median times behind the
 speed-up. Whether a difference is real stays `plot_score_change.py`'s paired test.
 
+**Costs add.** A kernel's token spend is the sum over every episode and attempt the arm ran on it
+(`population.kernel_tokens`), the cost behind that kernel's answer. A statistic over episodes, such
+as `plot_tokens.py`'s `median_episode_tokens`, is a per-episode quantity and says so in its name.
+
 **Rank statistics on these samples.** Per-kernel speed-ups are heavy-tailed and a mean in log space
 still lets one 40x kernel carry the estimate. `plot_score_change.py` uses Hodges-Lehmann with a
 distribution-free signed-rank interval, paired by kernel -- Mann-Whitney is the unpaired sibling
@@ -139,7 +143,7 @@ minor lines at wrong ratios.
 |---|---|
 | `plot_arm_summary.py` | per-arm median speed-up and spend; one x slot per LANGUAGE, models dodged inside |
 | `plot_score_change.py` | speed-up against spend, two marks per arm joined by an elbow, quadrants named |
-| `plot_tokens.py` | median tokens per task, per kernel, per model |
+| `plot_tokens.py` | median tokens per episode, per kernel, per model |
 | `plot_speedup.py` | per-kernel signed speed-up in magnitude bands, per machine (see [measurement_statistics.md](measurement_statistics.md)) |
 
 The first three read the CSV this page's extraction step produces. The speed-up in each comes from
