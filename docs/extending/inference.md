@@ -59,7 +59,7 @@ Fix a value in the base and its generator together; the next run overwrites a ge
 
 **3. Serve it alone.** From `experiments/`, `SUBMIT=0 MODEL=<tag> ./serve-only.sbatch` prints the
 plan and `MODEL=<tag> ./serve-only.sbatch` runs the campaign's own `--vllm-node` role with the base
-env plus `.env.serve-only`, sized from `INFERENCE_NODES`, and prints a working `curl`. For the
+env plus `serve-only.env`, sized from `INFERENCE_NODES`, and prints a working `curl`. For the
 tool-call, reasoning and long-context accuracy gates on SGLang, submit the smoke from its own
 directory, where its log path and verifier resolve:
 
