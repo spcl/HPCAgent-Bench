@@ -54,7 +54,7 @@ for a stack trace that does not exist; look at the last `avail mem=` line.
 
 ---
 
-## The KV pool threshold: pool divided by working set, near 1.15
+## The KV pool threshold: pool divided by working set, near 1.0
 
 **This is the mechanism behind every cache knob in this folder. Read it before tuning any of them.**
 
@@ -67,9 +67,11 @@ pool / working set        pool         = max_total_num_tokens, printed at startu
                                          at their largest
 ```
 
-**Above about 1.15, every configuration lands at a prefix-cache hit rate of 0.984 to 0.988. Below
+**Above the crossing, every configuration lands at a prefix-cache hit rate of 0.984 to 0.988. Below
 it, every configuration thrashes.** Measured on Qwen3.8 across 14 leg-concurrency cells with no
-exceptions (2026-09-11).
+exceptions, and bracketed by a factorial probe to between ratio 0.90 (hit 0.601) and 1.04 (hit
+0.984), so on this model the crossing is near 1.0. Treat the figure as model-specific and read the
+hit rate rather than trusting a number from another model.
 
 Three things follow, and they matter more than any individual flag:
 
@@ -239,7 +241,7 @@ These apply only to a server split across nodes.
 | Flag | Why |
 |---|---|
 | `--enable-metrics` | Prometheus metrics at `/metrics`: token throughput, running and waiting counts. The cheapest way to watch a live server. |
-| `--enable-cache-report` | Puts `cached_tokens` in each response's usage block, so you see the prefix-cache hit rate **per request** rather than in aggregate. This is the diagnostic that matters on this hardware: it is how you watch the pool-to-working-set ratio cross the 1.15 threshold described above. |
+| `--enable-cache-report` | Puts `cached_tokens` in each response's usage block, so you see the prefix-cache hit rate **per request** rather than in aggregate. This is the diagnostic that matters on this hardware: it is how you watch the pool-to-working-set ratio cross the threshold described above. |
 | `--watchdog-timeout 1800` | A genuinely wedged engine still surfaces as a dead server rather than a job that hangs to its wall clock. |
 | `--max-running-requests 128` | Caps concurrency at the scheduler. It does not reserve memory. |
 
