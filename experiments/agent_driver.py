@@ -1444,6 +1444,22 @@ def api_timeout(log_path: pathlib.Path) -> bool:
 SUBMISSION_MARKER = os.environ.get("AGENT_SUBMISSION_MARKER", ".submission-spent")
 
 
+def spent_its_submission(workdir: pathlib.Path) -> bool:
+    """Whether this agent used its one submission, read off the MARKER and never off the exit code.
+
+    ``RC_SUBMITTED`` says only that :func:`watch_submission` saw the marker BEFORE the process
+    ended, and it polls every :data:`TOKEN_POLL_SECONDS`, so an agent that submits and then closes
+    its own turn exits 0 first. On one blind arm 35 of 40 agents wrote the marker and 15 carried
+    rc=123: reading the exit code as the submission census called the other 20 non-submitters, both
+    in the job log and in the gate that decides whether to promote over their answer.
+
+    ``tools/submit.py`` writes the marker AFTER the judge answered, so it records the act and not
+    the intent, and a refused body leaves none. A multi-submission arm writes none at all, so every
+    caller here reads False there, which is the behaviour those arms already had.
+    """
+    return (workdir / SUBMISSION_MARKER).exists()
+
+
 class AgentState(TypedDict, total=False):
     """What the watcher threads report back about the agent process they watch.
 
@@ -1810,8 +1826,10 @@ def run_agent(
         reason = " died=context"
     elif returncode == RC_API_TIMEOUT:
         reason = " died=api_timeout"
-    elif returncode == RC_SUBMITTED:
-        reason = " ended=submitted"
+    # The log line states the ACT, from the marker: rc says why the agent ended, not what it did.
+    spent_submission = spent_its_submission(workdir)
+    if spent_submission:
+        reason += " submitted=1"
     # The turn cap, reported by COUNT as well as by subtype: the count is the CLI's own number and
     # survives the subtype being spelled differently by a later version, so an arm whose agents all
     # ran out of turns cannot read as an arm whose agents all finished.
@@ -1833,9 +1851,11 @@ def run_agent(
     # gone, inside whatever wall clock the allocation has left, and shares ONE budget across every
     # candidate -- 627129 had three, the first two spent the budget and the third was never
     # attempted. Here there is exactly one candidate, the judge is still up, and the job has hours
-    # in hand. Only when this agent did NOT submit: RC_SUBMITTED means the recorded grade is
-    # already its own, and promoting over it would replace a deliberate answer with an older one.
-    if returncode != RC_SUBMITTED:
+    # in hand. Only when this agent did NOT spend its submission: the grade it recorded is its own
+    # deliberate answer, and promoting over it would replace that with one it did not choose.
+    # promote_unsubmitted refuses on the judge's own rows too, so this gate decides only whether the
+    # attempt is made; the two agreed on every harvest row of the blind campaign, 93 of them.
+    if not spent_submission:
         promoted = promote_at_agent_exit(
             identity_env(problem_index, worker_index)["OPTARENA_RUN_ID"],
             judge_url,
