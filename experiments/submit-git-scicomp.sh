@@ -39,11 +39,8 @@ mv -f "${PROBLEMS}.tmp" "${PROBLEMS}"
 . ./arm_nodes.sh
 . ./pin_env_kv.sh
 . ./record_identity.sh
+. ./submit_common.sh
 problems_fresh "${PROBLEMS}" || exit 2
-
-# newest env per model, inherited whole so serving config cannot also vary between arms
-declare -A BASE_ENV=([oss120b]=llrbase-oss120b-c [qwen38]=llrbase-qwen38-c \
-                     [kimi27sglang]=llrbase-kimi27sglang-c)
 
 submit_arm() {
     local model="$1" layout="$2" dep="${3:-}"
@@ -52,10 +49,8 @@ submit_arm() {
     # an arm env is written key by key, so a gate that bails midway leaves a file that looks
     # complete and silently lacks a key: build under a staging name, rename once gates pass
     local staged="${env}.staging"
-    sed -e "s|^PROBLEMS_FILE=.*|PROBLEMS_FILE=${PROBLEMS}|" \
-        -e "s|^CAMPAIGN_ARM=.*|CAMPAIGN_ARM=${arm}|" \
-        -e "s|^RUN_ROOT=.*|RUN_ROOT=\${SCRATCH:-/iopsstor/scratch/cscs/\$USER}/hpcagent-bench-runs/${EXPERIMENT}-${STAMP}|" \
-        ".env.${BASE_ENV[${model}]}" | grep -vE '^[[:space:]]*(#|$)' >"${staged}"
+    stage_base_env ".env.${LLRBASE_ENV[${model}]}" "${arm}" "${EXPERIMENT}" "${STAMP}" "${staged}" \
+        -e "s|^PROBLEMS_FILE=.*|PROBLEMS_FILE=${PROBLEMS}|"
     local packet=""; [[ "${layout}" == repo ]] && packet=repo
     record_identity "${staged}" "${RECORD_EXPERIMENT}" "${model}" "${lang}" cpu "${packet}" "${arm}"
     # pin_env_kv not `>>`: a duplicated key breaks arm_nodes.sh's -oP + arithmetic
@@ -78,17 +73,8 @@ submit_arm() {
     fi
     local kv
     for kv in "${kvs[@]}"; do pin_env_kv "${staged}" "${kv}"; done
-    check_context_budget "${staged}" || { rm -f "${staged}"; exit 2; }
-    mv "${staged}" "${env}"
-    local nodes; nodes=$(arm_nodes "${env}")
-    if [[ "${SUBMIT:-1}" != 1 ]]; then
-        echo "prepared ${arm} (${nodes} nodes)${dep:+ after ${dep}} -- not submitted"
-        return
-    fi
-    SUBMITTED_JID=$(sbatch --parsable ${dep:+--dependency="afterany:${dep}"} --nodes="${nodes}" \
-        --time="${TIME_LIMIT}" --job-name="${arm}" \
-        --export=ALL,CLUSTER_ENV_FILE="${PWD}/${env}" beverin.sbatch)
-    echo "submitted ${arm} -> ${SUBMITTED_JID} (${nodes} nodes)"
+    finalize_staged_env "${staged}" "${env}" || exit 2
+    submit_arm_job "${env}" "${arm}" "${TIME_LIMIT}" "${dep}"
 }
 
 SUBMITTED_JID=""

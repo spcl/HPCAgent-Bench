@@ -35,14 +35,11 @@ ARMS=${ARMS:-"plain dc cpf dc-cpf"}
 . ./arm_nodes.sh
 . ./pin_env_kv.sh
 . ./record_identity.sh
+. ./submit_common.sh
 
-# the C arm's own base, inherited whole so the serving config cannot also vary between arms
-declare -A BASE_ENV=([oss120b]=llrbase-oss120b-c [qwen38]=llrbase-qwen38-c \
-                     [kimi27sglang]=llrbase-kimi27sglang-c [glm53]=llrbase-glm53-c)
 
 [[ -s "${KERNELS_FILE}" ]] || { echo "KERNELS_FILE ${KERNELS_FILE} is missing or empty" >&2; exit 2; }
-# a roster line may carry a trailing `# dwarf` note, so the name is what precedes the first `#`
-mapfile -t ROSTER < <(sed -e 's/#.*//' -e 's/[[:space:]]*$//' "${KERNELS_FILE}" | grep .)
+mapfile -t ROSTER < <(kernels_file_list "${KERNELS_FILE}")
 (( ${#ROSTER[@]} > 0 )) || { echo "KERNELS_FILE ${KERNELS_FILE} names no kernels" >&2; exit 2; }
 N_PROBLEMS=$(( ${#ROSTER[@]} * REPEAT ))
 # one wave: a second batch costs another AGENT_TIMEOUT_SECONDS and the partition tops out at 24 h
@@ -115,10 +112,8 @@ submit_arm() {  # submit_arm <model> <kind: plain|dc|cpf|dc-cpf> <deps or empty>
     if (( ${#pages[@]} )); then record_packet="$(canonical_packet "${pages[@]}")"; fi
     problems="$(make_arm_problems "${kind}" "${extra}")" || return 2
 
-    sed -e "s|^PROBLEMS_FILE=.*|PROBLEMS_FILE=${problems}|" \
-        -e "s|^CAMPAIGN_ARM=.*|CAMPAIGN_ARM=${arm}|" \
-        -e "s|^RUN_ROOT=.*|RUN_ROOT=\${SCRATCH:-/iopsstor/scratch/cscs/\$USER}/hpcagent-bench-runs/${EXPERIMENT}-${STAMP}|" \
-        ".env.${BASE_ENV[${model}]}" | grep -vE '^[[:space:]]*(#|$)' >"${staged}"
+    stage_base_env ".env.${LLRBASE_ENV[${model}]}" "${arm}" "${EXPERIMENT}" "${STAMP}" "${staged}" \
+        -e "s|^PROBLEMS_FILE=.*|PROBLEMS_FILE=${problems}|"
     record_identity "${staged}" "${RECORD_EXPERIMENT}" "${model}" "${LANGUAGE}" cpu "${record_packet}" "${arm}"
     # pin_env_kv not `>>`: base envs carry AGENT_TIMEOUT_SECONDS twice, breaking arm_nodes.sh's -oP
     local kv
@@ -146,21 +141,10 @@ submit_arm() {  # submit_arm <model> <kind: plain|dc|cpf|dc-cpf> <deps or empty>
     fi
 
     # an agent 400s and records NOTHING once input + completion passes the served context
-    check_context_budget "${staged}" || { rm -f "${staged}"; return 2; }
-    local nodes walltime
-    nodes=$(arm_nodes "${staged}")
-    walltime=${TIME_LIMIT:-$(arm_walltime "${staged}" "${N_PROBLEMS}")}
-    mv "${staged}" "${env}"
-    if [[ "${SUBMIT:-1}" != 1 ]]; then
-        echo "prepared ${arm} (${nodes} nodes, ${walltime}, ${N_PROBLEMS} problems," \
-             "packet '${record_packet}')${deps:+ after ${deps}} -- not submitted"
-        return 0
-    fi
-    local dep=(); [[ -n "${deps}" ]] && dep=(--dependency="afterany:${deps}")
-    SUBMITTED_JID=$(sbatch --parsable --nodes="${nodes}" --time="${walltime}" \
-        --job-name="${arm}" "${dep[@]}" \
-        --export=ALL,CLUSTER_ENV_FILE="${PWD}/${env}" beverin.sbatch)
-    echo "submitted ${arm} -> ${SUBMITTED_JID} (${nodes} nodes, ${walltime})"
+    local walltime=${TIME_LIMIT:-$(arm_walltime "${staged}" "${N_PROBLEMS}")}
+    finalize_staged_env "${staged}" "${env}" || return 2
+    submit_arm_job "${env}" "${arm}" "${walltime}" "${deps}" "" \
+        ", ${walltime}, ${N_PROBLEMS} problems, packet '${record_packet}'"
 }
 
 SUBMITTED_JID=""
