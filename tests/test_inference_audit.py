@@ -12,16 +12,14 @@ right-tailed, a handful of kernels per arm pair (llr40's skill pairs are n = 2, 
 1% geometric quantisation ladder that guarantees ties in |d|.
 """
 
-import importlib.util
 import math
 import pathlib
-from types import ModuleType
 
 import numpy as np
 import pytest
 
 from hpcagent_bench.harness import efficacy, metric
-from hpcagent_bench.stats import signed_rank, summary
+from hpcagent_bench.stats import arms, signed_rank, summary
 
 #: The real paired set the published C-vs-Fortran claim rests on: ``log(c_best_su / fortran_best_su)``
 #: for every kernel in ``reproducibility/llr40/analysis/per_language_kernel.csv`` that both languages
@@ -237,15 +235,6 @@ def test_a_paired_comparison_reports_how_many_units_it_dropped() -> None:
 ARTIFACT = pathlib.Path(__file__).resolve().parents[1] / "reproducibility" / "llr40"
 
 
-def load_analyze_llr40() -> ModuleType:
-    """``analyze_llr40.py`` is a script beside its artifact, not an installed module."""
-    spec = importlib.util.spec_from_file_location("analyze_llr40", ARTIFACT / "analyze_llr40.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 @pytest.mark.parametrize(
     "arm, published_geomean",
     [
@@ -262,10 +251,10 @@ def test_the_shipped_llr40_arm_table_reproduces_from_the_shipped_observations(
     """The tables and the figure in ``reproducibility/llr40/analysis`` are the artifact a reader
     checks the campaign against; a table built by a reduction the script no longer performs ranks
     the arms by how often each agent resubmitted rather than by what it produced."""
-    module = load_analyze_llr40()
+    module = arms
     observations = module.load_observations(ARTIFACT)
     best = module.best_per_arm_kernel(module.submissions_with_sources(ARTIFACT, observations))
-    recomputed = module.geomean(best[best.arm == arm].best_speedup)
+    recomputed = summary.geomean(best[best.arm == arm].best_speedup, unusable="drop")
     assert recomputed == pytest.approx(published_geomean, rel=1e-3), (
         f"{arm}: the shipped per_arm_summary.csv says {published_geomean}x, the current reduction "
         f"gives {recomputed:.3f}x"

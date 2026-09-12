@@ -309,7 +309,7 @@ def draw(rows: Sequence[Row], title: str, xlabel: str, stem: pathlib.Path) -> pa
         handle.set_label(label)
     style.legend_below(fig, handles, ncol=3, y=0.015)
     style.title(fig, title)
-    return style.save(fig, stem)
+    return style.save(fig, stem, formats=("pdf", "svg"))
 
 
 def arm_rows(root: pathlib.Path, arms: Mapping[str, str] = ARMS, baseline: str = BASELINE) -> list[Row]:

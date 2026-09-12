@@ -183,3 +183,8 @@ def model_color(name: str) -> str:
 def model_colors(names: Iterable[str]) -> dict[str, str]:
     """``{model: colour}`` for one figure."""
     return warn_on_collision({n: model_color(n) for n in dict.fromkeys(names)}, "model")
+
+
+def language_colors(names: Iterable[str]) -> dict[str, str]:
+    """``{language: colour}`` for a figure whose ONLY axis is which language an arm asked for."""
+    return warn_on_collision({n: ordered_color("languages", n) for n in dict.fromkeys(names)}, "language")

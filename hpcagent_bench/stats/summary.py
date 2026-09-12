@@ -40,7 +40,7 @@ import math
 import warnings
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import numpy.typing as npt
@@ -323,15 +323,21 @@ def usable_ratios(values: Samples, label: str = "", warn: bool = True) -> FloatA
     return x[keep]
 
 
-def geomean(values: Samples) -> float:
+def geomean(values: Samples, unusable: Literal["raise", "drop"] = "raise") -> float:
     """Geometric mean of strictly positive ``values``, in log space so a long product cannot overflow.
 
-    Raises on an empty sequence or a non-positive entry rather than skipping it: both are the
-    caller handing over something that is not a set of ratios, and dropping one silently changes
-    which kernels the summary is over without saying so. Filter with :func:`usable_ratios` first
-    when dropping IS the intent; it warns.
+    ``unusable="raise"`` (the default) raises on an empty sequence or a non-positive entry: both are
+    the caller handing over something that is not a set of ratios, and dropping one silently changes
+    which kernels the summary is over without saying so. ``unusable="drop"`` is the caller saying that
+    dropping IS the intent: a zero, negative or non-finite entry is a missing measurement and is
+    dropped, and a set with nothing usable left has no geometric mean, so it returns NaN -- never a
+    0.0 or a 1.0, which are the exact values of a total collapse and of no change.
     """
     x: FloatArray = np.asarray(values, dtype=np.float64)
+    if unusable == "drop":
+        x = x[np.isfinite(x) & (x > 0.0)]
+        if x.size == 0:
+            return math.nan
     if x.size == 0:
         raise ValueError("the geometric mean of no values is undefined")
     bad: FloatArray = x[~(np.isfinite(x) & (x > 0.0))]
