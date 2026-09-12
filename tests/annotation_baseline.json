@@ -236,7 +236,7 @@
  "tests/test_integration_sweep.py": 15,
  "tests/test_interpreter_floor.py": 7,
  "tests/test_judge_router_preset_label.py": 7,
- "tests/test_judge_router_proxy.py": 53,
+ "tests/test_judge_router_proxy.py": 51,
  "tests/test_judge_router_source_store.py": 14,
  "tests/test_judge_routing.py": 49,
  "tests/test_judge_server_concurrency.py": 4,
