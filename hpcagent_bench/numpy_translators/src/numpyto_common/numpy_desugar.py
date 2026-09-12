@@ -23,8 +23,9 @@ from collections.abc import Sequence
 from typing import Dict, FrozenSet, Iterator, List, Optional, Protocol, Set, Tuple
 
 from numpyto_common import dtypes
-from numpyto_common.lib_nodes import _const_int, _iter_extent_of, _parse_einsum_subscripts, extent_is_scalar
+from numpyto_common.lib_nodes import _iter_extent_of, _parse_einsum_subscripts, extent_is_scalar
 from numpyto_common.ordered import OrderedSet
+from numpyto_common.subscripts import is_ellipsis, is_full_slice, is_newaxis
 
 #: Tuple-shape lengths currently known to :func:`expr_rank`. Set by
 # :func:`rank_table` while it is iterating so ``.reshape(name)`` can report the
@@ -141,21 +142,6 @@ def _tuple_len(node: ast.AST) -> Optional[int]:
     return None
 
 
-def _is_newaxis(e: ast.AST) -> bool:
-    """``None`` / ``np.newaxis`` / bare ``newaxis`` -- a subscript newaxis."""
-    return (
-        (isinstance(e, ast.Constant) and e.value is None)
-        or (isinstance(e, ast.Attribute) and e.attr == "newaxis")
-        or (isinstance(e, ast.Name) and e.id == "newaxis")
-    )
-
-
-def _is_ellipsis(e: ast.AST) -> bool:
-    """A ``...`` subscript entry (``ast.Constant(Ellipsis)``). It expands to
-    full slices over every otherwise-unindexed axis, so it drops NO axis."""
-    return isinstance(e, ast.Constant) and e.value is Ellipsis
-
-
 def _newaxis_singletons(value: ast.AST, rank: int) -> frozenset:
     """Axes of ``value`` a literal ``None`` in its own subscript pins to extent 1.
 
@@ -173,11 +159,11 @@ def _newaxis_singletons(value: ast.AST, rank: int) -> frozenset:
     if not isinstance(value, ast.Subscript):
         return frozenset()
     elts = list(value.slice.elts) if isinstance(value.slice, ast.Tuple) else [value.slice]
-    if any(_is_ellipsis(e) for e in elts):
+    if any(is_ellipsis(e) for e in elts):
         return frozenset()
     axes, out = [], 0
     for e in elts:
-        if _is_newaxis(e):
+        if is_newaxis(e):
             axes.append(out)
             out += 1
         elif isinstance(e, ast.Slice):
@@ -268,9 +254,9 @@ def expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
         sl = value.slice
         if isinstance(sl, ast.Slice):
             return base  # a full/partial slice keeps the rank
-        if _is_newaxis(sl):
+        if is_newaxis(sl):
             return base + 1  # a[None] / a[np.newaxis] -- a newaxis adds a dimension
-        if _is_ellipsis(sl):
+        if is_ellipsis(sl):
             return base  # a[...] keeps every axis
         if isinstance(sl, ast.Tuple):
             # slices keep a dim, newaxis adds one, a SCALAR index removes one, and an ellipsis
@@ -290,9 +276,9 @@ def expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
             drop = 0
             adv_ranks = []
             for e in sl.elts:
-                if isinstance(e, ast.Slice) or _is_ellipsis(e):
+                if isinstance(e, ast.Slice) or is_ellipsis(e):
                     continue
-                if _is_newaxis(e):
+                if is_newaxis(e):
                     drop -= 1
                     continue
                 idx_rank = expr_rank(e, ranks)
@@ -1473,7 +1459,7 @@ class _FancyGatherHoister(ast.NodeTransformer):
         elts = node.slice.elts
         if not arank or len(elts) != arank:
             return node
-        if any(isinstance(e, ast.Slice) or _is_newaxis(e) or _is_ellipsis(e) for e in elts):
+        if any(isinstance(e, ast.Slice) or is_newaxis(e) or is_ellipsis(e) for e in elts):
             # Point-wise only. A ``:`` axis survives into the RESULT, so the rank-1 temp this
             # allocates could not hold it -- the loop would store a plane into a scalar slot.
             return node
@@ -2144,7 +2130,7 @@ def _is_bool_mask(mask: ast.AST, a: ast.AST, ranks: Dict[str, int], dtypes: Dict
     """True iff ``mask`` is a boolean array of ``a``'s rank -- a bool-kind Name or
     an inline Compare / BoolOp / logical_* combo -- i.e. ``a[mask]`` is a boolean
     select (not an integer fancy index or a scalar/slice index)."""
-    if isinstance(mask, (ast.Tuple, ast.Slice)) or _is_newaxis(mask):
+    if isinstance(mask, (ast.Tuple, ast.Slice)) or is_newaxis(mask):
         return False
     ar = expr_rank(a, ranks)
     if ar is None or expr_rank(mask, ranks) != ar:
@@ -4906,7 +4892,7 @@ def _param_body_rank_evidence(fn: ast.FunctionDef) -> Dict[str, int]:
                 if k is not None and k >= 0:
                     bump(v.value.id, k + 1)  # p.shape[k] -> rank >= k+1
             elif isinstance(v, ast.Name) and isinstance(node.slice, ast.Tuple):
-                bump(v.id, sum(0 if _is_newaxis(e) else 1 for e in node.slice.elts))
+                bump(v.id, sum(0 if is_newaxis(e) else 1 for e in node.slice.elts))
     return ev
 
 
@@ -5752,11 +5738,6 @@ def _bcast_tokens(a: List[str], b: List[str]) -> List[str]:
     return [y if x == _ONE else x for x, y in zip(a, b)]
 
 
-def _is_full_slice(e: ast.AST) -> bool:
-    """A bare ``:`` entry -- it keeps its base axis whole."""
-    return isinstance(e, ast.Slice) and (e.lower, e.upper, e.step) == (None, None, None)
-
-
 def _slice_extent_token(e: ast.Slice, base: Optional[str]) -> Optional[str]:
     """A ``Slice`` entry's extent as a source token, or None when it cannot be read off the text."""
     if e.step is not None:
@@ -5786,18 +5767,18 @@ def _without_leading_newaxis(e: ast.expr) -> Optional[ast.expr]:
     the singleton back when the operand broadcasts, so the two spell one value."""
     if not isinstance(e, ast.Subscript):
         return None
-    if _is_newaxis(e.slice):
+    if is_newaxis(e.slice):
         return e.value
     if not isinstance(e.slice, ast.Tuple):
         return None
     entries = list(e.slice.elts)
     n = 0
-    while n < len(entries) and _is_newaxis(entries[n]):
+    while n < len(entries) and is_newaxis(entries[n]):
         n += 1
     if n == 0:
         return None
     rest = entries[n:]
-    while rest and _is_full_slice(rest[-1]):
+    while rest and is_full_slice(rest[-1]):
         rest.pop()
     if not rest:
         return e.value
@@ -5888,7 +5869,7 @@ class _OuterBroadcastPeel(ast.NodeTransformer):
         entries = list(sub.slice.elts) if isinstance(sub.slice, ast.Tuple) else [sub.slice]
         axes, bi = [], 0
         for i, e in enumerate(entries):
-            if _is_newaxis(e):
+            if is_newaxis(e):
                 axes.append((i, "new", _ONE))
             elif isinstance(e, ast.Slice):
                 if bi >= len(base):
@@ -5988,7 +5969,7 @@ class _OuterBroadcastPeel(ast.NodeTransformer):
         every TRAILING full slice (``a[i, :]`` IS ``a[i]``)."""
         kept: List[ast.expr] = []
         for i, e in enumerate(entries):
-            if _is_newaxis(e):
+            if is_newaxis(e):
                 continue
             if isinstance(e, ast.Slice):
                 lone = _one_slice_index(e)
@@ -5998,7 +5979,7 @@ class _OuterBroadcastPeel(ast.NodeTransformer):
                 kept.append(lone)
                 continue
             kept.append(e)
-        while kept and _is_full_slice(kept[-1]):
+        while kept and is_full_slice(kept[-1]):
             kept.pop()
         if not kept:
             return base
@@ -6010,7 +5991,7 @@ class _OuterBroadcastPeel(ast.NodeTransformer):
         if not (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)):
             return None
         entries = list(target.slice.elts) if isinstance(target.slice, ast.Tuple) else [target.slice]
-        if not all(_is_full_slice(e) for e in entries) or len(entries) > rank:
+        if not all(is_full_slice(e) for e in entries) or len(entries) > rank:
             return None
         return target.value.id if self.ranks.get(target.value.id) == rank else None
 

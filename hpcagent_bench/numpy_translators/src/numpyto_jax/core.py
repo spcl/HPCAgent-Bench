@@ -273,6 +273,7 @@ def _np_to_jnp(tree: ast.AST) -> ast.AST:
 # step depends on the previous, and unrolling blows up the trace. Shared
 # classification rule lives in :mod:`numpyto_common.parallelism`.
 from numpyto_common.parallelism import is_timestep_loop as _is_timestep_loop  # noqa: E402
+from numpyto_common.subscripts import is_full_slice
 
 
 class LoopKind:
@@ -545,7 +546,7 @@ def _functionalize_stmt(s: ast.stmt) -> List[ast.stmt]:
         arr_name = _base_name(arr)
         sl = indices[0] if len(indices) == 1 else ast.Tuple(elts=indices, ctx=ast.Load())
         name = ast.Name(id=arr_name, ctx=ast.Store())
-        if _is_full_slice(sl):
+        if is_full_slice(sl):
             # a[:] = <scalar> fills every element; a plain a = <scalar> would
             # rebind a to a SCALAR. jnp.full_like keeps a's shape/dtype
             # (edge_laplacian's ``Lx[:] = 0.0``).
@@ -610,10 +611,6 @@ def _base_name(t: ast.AST) -> str:
 def _load(t: ast.AST) -> ast.AST:
     t2 = ast.fix_missing_locations(ast.parse(ast.unparse(t), mode="eval").body)
     return t2
-
-
-def _is_full_slice(sl: ast.AST) -> bool:
-    return isinstance(sl, ast.Slice) and sl.lower is None and sl.upper is None and sl.step is None
 
 
 def _broadcast_astype(arr: ast.AST, value: ast.expr) -> ast.Call:
@@ -2168,7 +2165,7 @@ def _dyn_slice_info(node: ast.AST, lv: Set[str]):
     # the 1-D axis mask broadcasts cleanly against).
     p = dyn_positions[0]
     for k, e in enumerate(elts):
-        if k != p and isinstance(e, ast.Slice) and not _is_full_slice(e):
+        if k != p and isinstance(e, ast.Slice) and not is_full_slice(e):
             return None
     s = elts[p]
     return node.value, p, s.lower, s.upper

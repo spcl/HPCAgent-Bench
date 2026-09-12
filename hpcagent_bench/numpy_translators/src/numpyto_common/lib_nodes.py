@@ -23,6 +23,7 @@ from typing import Any, Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 
 from numpyto_common import dtypes
 from numpyto_common.ir import tag_numpy_origin
+from numpyto_common.subscripts import has_slice_subscript, is_full_slice
 
 #: Pseudo-call a BLAS-capable target's emitter renders as its gemm. Emitted ONLY when the caller
 #: asked for ``blas``; every other target keeps the loop nest, so this name never reaches them.
@@ -119,34 +120,14 @@ def _simplify_sub(hi: ast.AST, lo: ast.AST) -> Optional[ast.AST]:
     return None
 
 
-def _is_full_slice_elt(e: ast.AST) -> bool:
-    """Return True when subscript element ``e`` is a bare ``:`` -- a WHOLE-axis
-    selection, i.e. semantically the same as omitting the axis."""
-    return isinstance(e, ast.Slice) and e.lower is None and e.upper is None and e.step is None
-
-
 def _is_full_slice_subscript(node: ast.Subscript) -> bool:
     """Return True when ``node`` is a Subscript whose slice is a
     full slice ``:`` (or a tuple of full slices ``:, :``)."""
     sl = node.slice
     if isinstance(sl, ast.Slice):
-        return _is_full_slice_elt(sl)
+        return is_full_slice(sl)
     if isinstance(sl, ast.Tuple):
-        return all(_is_full_slice_elt(e) for e in sl.elts)
-    return False
-
-
-def _has_slice_subscript(expr: ast.AST) -> bool:
-    """True when ``expr`` contains a Subscript with a literal ``ast.Slice`` axis.
-    Tells the call hoister whether the temp it emits needs an explicit slice-LHS
-    form so slice-fusion can lower the per-element copy."""
-    for sub in ast.walk(expr):
-        if isinstance(sub, ast.Subscript):
-            sl = sub.slice
-            if isinstance(sl, ast.Slice):
-                return True
-            if isinstance(sl, ast.Tuple) and any(isinstance(e, ast.Slice) for e in sl.elts):
-                return True
+        return all(is_full_slice(e) for e in sl.elts)
     return False
 
 
@@ -4596,7 +4577,7 @@ def _pad_src_base_and_lead(src_node: ast.expr):
         # ``in_grid[b, :, :, :]`` before this runs, and a bare ``:`` selects the
         # same sub-array the lead-indexed form names. A PARTIAL slice (``a:b``)
         # still bails out below.
-        while elts and _is_full_slice_elt(elts[-1]):
+        while elts and is_full_slice(elts[-1]):
             elts.pop()
         if any(isinstance(e, ast.Slice) for e in elts):
             return None
@@ -9060,7 +9041,7 @@ class _CallHoister(ast.NodeTransformer):
                 # final shape. Emit the slice-LHS form instead: marker +
                 # ``__cb[:, ...] = first``; slice-fusion lowers this into a
                 # per-element copy later.
-                if _has_slice_subscript(first):
+                if has_slice_subscript(first):
                     rank = len(shape)
                     slice_form = (
                         ast.Slice(lower=None, upper=None, step=None)
