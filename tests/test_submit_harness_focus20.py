@@ -77,6 +77,7 @@ KNOBS = frozenset(
         "LANGUAGE",
         "TAG",
         "OPTIMAS_CE_ENV",
+        "EXTRA_ENV_KV",
         "COLOCATE",
         "DRY_RUN",
         "PYTHONPATH",
@@ -304,6 +305,24 @@ def test_an_arm_env_that_differs_outside_the_arm_keys_stops_the_wave(tmp_path: p
     assert result.returncode == 2
     assert "fairness:" in result.stderr and "AGENT_SINGLE_SUBMISSION" in result.stderr
     assert "prepared" not in result.stdout
+    assert not (root / "sbatch-called").exists()
+
+
+def test_extra_env_kv_is_pinned_into_every_arm_and_may_not_set_an_arm_key(tmp_path: pathlib.Path) -> None:
+    """EXTRA_ENV_KV points a whole wave at other images (a smoke on candidate EDFs) without breaking
+    invariant 9; a key the arms are allowed to differ on would, so it is refused before any write."""
+    root = submit_tree(tmp_path)
+    extra = "AMD_CE_ENV=optarena-amd-mi300-candidate JUDGE_CE_ENV=optarena-judge-amd-mi300-candidate"
+    knobs = {"KERNELS": "tsvc_2_s2233", "REPEAT": "1", "EXPERIMENT": "xkv", "RECORD_EXPERIMENT": "xkv"}
+    result = run_submit(root, EXTRA_ENV_KV=extra, HARNESSES="claude miniswe", **knobs)
+    assert result.returncode == 0, result.stderr
+    for harness in ("claude", "miniswe"):
+        env = env_dict(root / "experiments" / f".env.xkv-qwen38-{harness}")
+        assert env["AMD_CE_ENV"] == "optarena-amd-mi300-candidate"
+        assert env["JUDGE_CE_ENV"] == "optarena-judge-amd-mi300-candidate"
+    refused = run_submit(submit_tree(tmp_path / "refused"), EXTRA_ENV_KV="AGENT_CE_ENV=x", **knobs)
+    assert refused.returncode == 2
+    assert "may not set arm key AGENT_CE_ENV" in refused.stderr
     assert not (root / "sbatch-called").exists()
 
 
