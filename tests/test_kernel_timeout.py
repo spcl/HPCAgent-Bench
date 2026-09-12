@@ -186,17 +186,18 @@ def pinned_guillotine():
             config.clear_override(k)
 
 
-def test_guillotine_scales_with_the_measured_baseline(pinned_guillotine) -> None:
-    assert guillotine_seconds(2_000_000_000, 300.0) == 20.0  # 2s baseline x factor 10
-
-
-def test_guillotine_floor_covers_sub_millisecond_baselines(pinned_guillotine) -> None:
-    # 0.2 ms x 10 is 2 ms -- under the one-time page-fault cost the warmup rep absorbs.
-    assert guillotine_seconds(200_000, 300.0) == 5.0
-
-
-def test_guillotine_never_exceeds_the_kernel_budget(pinned_guillotine) -> None:
-    assert guillotine_seconds(60_000_000_000, 300.0) == 300.0
+@pytest.mark.parametrize(
+    "baseline_ns,expected_s",
+    [
+        (2_000_000_000, 20.0),  # 2s baseline x factor 10
+        # 0.2 ms x 10 is 2 ms -- under the one-time page-fault cost the warmup rep absorbs.
+        (200_000, 5.0),
+        (60_000_000_000, 300.0),
+    ],
+    ids=["scales-with-baseline", "floor-covers-sub-millisecond", "never-exceeds-budget"],
+)
+def test_guillotine_seconds_bounds_the_timeout(pinned_guillotine, baseline_ns, expected_s) -> None:
+    assert guillotine_seconds(baseline_ns, 300.0) == expected_s
 
 
 def test_guillotine_is_off_without_a_baseline_or_a_factor(pinned_guillotine) -> None:

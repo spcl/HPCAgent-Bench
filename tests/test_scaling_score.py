@@ -150,17 +150,19 @@ def test_score_all_measured_filtered_is_none() -> None:
     assert scaling_score("k", "strong", 4000, {2: 0, 4: -1}) is None
 
 
-def test_score_scalar_zero_missing_p_falls_back_and_skips() -> None:
-    """A P absent from anchor_ns falls back to the scalar; a zero scalar there drops just that P,
-    the rest of the curve stands."""
-    s = scaling_score("k", "strong", 0, {2: 500, 4: 500}, anchor_ns={2: 1000})
-    assert [p.ranks for p in s.points] == [2]  # P=4 falls back to scalar 0 and is dropped
-
-
-def test_score_zero_dict_entry_does_not_fall_back_to_scalar() -> None:
-    """A zeroed anchor_ns entry is used as-is (0 => dropped); a positive scalar does NOT rescue it."""
-    s = scaling_score("k", "strong", 2000, {2: 500, 4: 500}, anchor_ns={2: 0})
-    assert [p.ranks for p in s.points] == [4]  # P=2 uses dict 0 (dropped); P=4 falls back to 2000
+@pytest.mark.parametrize(
+    "anchor_scalar,anchor_ns,expected_ranks",
+    [
+        (0, {2: 1000}, [2]),  # P=4 absent from anchor_ns falls back to scalar 0 and is dropped
+        (2000, {2: 0}, [4]),  # P=2 uses the dict's zero as-is (dropped); a positive scalar does not rescue it
+    ],
+    ids=["scalar-zero-missing-p-falls-back-and-skips", "zero-dict-entry-does-not-fall-back-to-scalar"],
+)
+def test_score_anchor_ns_falls_back_to_the_scalar_only_when_the_p_is_absent(
+    anchor_scalar, anchor_ns, expected_ranks
+) -> None:
+    s = scaling_score("k", "strong", anchor_scalar, {2: 500, 4: 500}, anchor_ns=anchor_ns)
+    assert [p.ranks for p in s.points] == expected_ranks
 
 
 def test_score_all_nonpositive_anchor_is_none() -> None:

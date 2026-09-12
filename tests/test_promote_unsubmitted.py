@@ -72,16 +72,17 @@ def test_a_promotion_names_the_judge_rank(promoter, monkeypatch) -> None:
     assert outcome.startswith("SUBMITTED")
 
 
-def test_the_rank_is_asked_of_the_judge_itself(promoter, monkeypatch) -> None:
-    """Configured ranks go stale; /health is the one route that reports its own."""
-    monkeypatch.setattr(promoter.urllib.request, "urlopen", fake_urlopen([], health={"judge_rank": 2}))
-    assert promoter.judge_rank("http://judge:8800") == 2
-
-
-def test_the_upstream_judges_spelling_is_accepted_too(promoter, monkeypatch) -> None:
-    """The router answers `judge_rank`, the judge behind it `rank`; either is authoritative."""
-    monkeypatch.setattr(promoter.urllib.request, "urlopen", fake_urlopen([], health={"rank": 1}))
-    assert promoter.judge_rank("http://judge:8800") == 1
+@pytest.mark.parametrize(
+    "health,expected_rank",
+    [
+        ({"judge_rank": 2}, 2),  # /health is the one route that reports its own, configured ranks go stale
+        ({"rank": 1}, 1),  # the router answers `judge_rank`, the judge behind it `rank`; either is authoritative
+    ],
+    ids=["judge_rank-key", "rank-key"],
+)
+def test_the_rank_is_asked_of_the_judge_itself(promoter, monkeypatch, health, expected_rank) -> None:
+    monkeypatch.setattr(promoter.urllib.request, "urlopen", fake_urlopen([], health=health))
+    assert promoter.judge_rank("http://judge:8800") == expected_rank
 
 
 def test_an_unreachable_judge_falls_back_rather_than_skipping(promoter, monkeypatch) -> None:
