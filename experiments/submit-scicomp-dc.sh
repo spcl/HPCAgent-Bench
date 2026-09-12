@@ -68,13 +68,18 @@ canonical_packet() {
     for page in "$@"; do packet_key "${page}"; done | grep . | LC_ALL=C sort -u | paste -sd+ -
 }
 
-# forms_missing <dir> -- roster kernels with no `<kernel>_*_cpf.c` under <dir>. An arm whose form
-# directory is short answers `unavailable` with HTTP 200 for those kernels, silently, so a treated
-# arm missing forms measures nothing on them.
+# forms_missing <dir> -- roster kernels with no `<kernel>_<fptype>_cpf.c` under <dir>. An arm whose
+# form directory is short answers `unavailable` with HTTP 200 for those kernels, silently, so a
+# treated arm missing forms measures nothing on them. The precision tag is ONE segment: a prefix
+# match would count cloudsc_init as a form for cloudsc and report the roster complete.
 forms_missing() {
-    local dir="$1" kernel
+    local dir="$1" kernel path stem
     for kernel in "${ROSTER[@]}"; do
-        [[ -d "${dir}" ]] && compgen -G "${dir}/${kernel}"'_*_cpf.c' >/dev/null && continue
+        for path in "${dir}/${kernel}"_*_cpf.c; do
+            [[ -e "${path}" ]] || continue
+            stem="${path##*/}"; stem="${stem#"${kernel}_"}"; stem="${stem%_cpf.c}"
+            [[ "${stem}" == *_* ]] || continue 2
+        done
         echo "${kernel}"
     done
 }
