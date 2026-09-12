@@ -359,6 +359,10 @@ PY
                 --nnodes "${INFERENCE_NODES}"
                 --node-rank "${node_rank}"
                 --dist-init-addr "${VLLM_MASTER_HOST}:${VLLM_MASTER_PORT}"
+                # SGLang passes this to every model-parallel subgroup (parallel_state
+                # _MODEL_PARALLEL_GROUP_TIMEOUT), pp:device included. Unset it is torch's 600 s, and a
+                # pp:device SEND watchdog at 600 s aborted 633011. Same value as vLLM's pipeline branch.
+                --dist-timeout "${SGLANG_DIST_TIMEOUT_SECONDS:-${VLLM_DISTRIBUTED_TIMEOUT_SECONDS:-3600}}"
             )
         fi
         if [[ -n "${SGLANG_EXTRA_ARGS:-}" ]]; then

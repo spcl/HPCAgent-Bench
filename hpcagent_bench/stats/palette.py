@@ -14,9 +14,9 @@ Three things get coloured, and a figure varies exactly one of them, so they neve
 ramp: a SKILL PACKET (an agent figure), a FRAMEWORK (a compiler/library comparison, which has no
 agent in it), or a MODEL (a figure whose only axis is which LLM ran).
 
-A packet combination takes its LEAD packet's hue and one lightness step per additional packet, so
-``cpfsrc`` and ``cpfsrc+lang-skills`` read as the same treatment family at two strengths. The
-no-packet control is neutral grey: it is the reference every treatment is read against.
+A packet's colour is :func:`hpcagent_bench.packets.packet_color`, the one packet colour rule: its LEAD
+packet's hue and one lightness step per additional packet, so ``cpfsrc`` and ``cpfsrc+lang-skills``
+read as the same treatment family at two strengths, and neutral grey for the no-packet control.
 
 THE VOCABULARY AND THE ORDER ARE DATA, in ``envs/registry.yaml``, beside the display names. They
 were tuples here and names there, which is two registries for one vocabulary -- and the failure
@@ -26,12 +26,12 @@ raw-string label.
 
 from __future__ import annotations
 
-import colorsys
 import logging
 import zlib
 from collections.abc import Iterable
 
-from hpcagent_bench.experiment_tags import canonical, order, packet_parts, registry
+from hpcagent_bench import packets
+from hpcagent_bench.experiment_tags import canonical, order, registry
 
 LOG = logging.getLogger(__name__)
 
@@ -49,31 +49,6 @@ def markers() -> tuple[str, ...]:
 def control_color() -> str:
     """The colour of the no-packet control."""
     return registry().control_color
-
-
-def lighten(hex_color: str, steps: int) -> str:
-    """``hex_color`` moved ``steps`` toward white in HLS, capped short of white so it stays visible."""
-    if steps <= 0:
-        return hex_color
-    r, g, b = (int(hex_color[i : i + 2], 16) / 255 for i in (1, 3, 5))
-    h, lightness, s = colorsys.rgb_to_hls(r, g, b)
-    lightness = min(0.88, lightness + steps * registry().lightness_step)
-    r, g, b = colorsys.hls_to_rgb(h, lightness, s)
-    return f"#{round(r * 255):02x}{round(g * 255):02x}{round(b * 255):02x}"
-
-
-def lead(packet: str) -> str:
-    """The packet that decides the hue: the earliest of ``packet``'s parts in registry order.
-
-    An unregistered part sorts after every registered one, and by name among themselves, so the
-    lead is a pure function of the value rather than of the order the parts were written in."""
-    known = hue_order("packets")
-
-    def rank(name: str) -> tuple[int, str]:
-        return (known.index(name), "") if name in known else (len(known), name)
-
-    found = packet_parts(packet)
-    return min(found, key=rank) if found else ""
 
 
 def hue_order(kind: str) -> tuple[str, ...]:
@@ -113,16 +88,18 @@ def warn_on_collision(chosen: dict[str, str], kind: str) -> dict[str, str]:
 
 
 def color(packet: str) -> str:
-    """The one colour ``packet`` wears, in every figure and every process."""
-    found = packet_parts(packet)
-    if not found:
-        return control_color()
-    return lighten(ordered_color("packets", lead(packet)), len(found) - 1)
+    """The one colour ``packet`` wears, in every figure and every process: the resolver's rule, with a
+    warning for each part registry.yaml does not name, since the resolver draws that part in a hash hue."""
+    known = set(hue_order("packets"))
+    for part in packets.spec_parts(packet):
+        if part not in known:
+            LOG.warning("palette: packets %r is not in registry.yaml; using a hash colour", part)
+    return packets.packet_color(packet)
 
 
-def colors(packets: Iterable[str]) -> dict[str, str]:
+def colors(names: Iterable[str]) -> dict[str, str]:
     """``{packet: colour}`` for one figure."""
-    return warn_on_collision({p: color(p) for p in dict.fromkeys(packets)}, "packet")
+    return warn_on_collision({p: color(p) for p in dict.fromkeys(names)}, "packet")
 
 
 def in_order(names: Iterable[str], kind: str = "models") -> list[str]:

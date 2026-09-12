@@ -13,6 +13,7 @@ import pathlib
 import pytest
 import yaml
 
+from hpcagent_bench import packets
 from hpcagent_bench.stats import palette
 
 REGISTRY = yaml.safe_load((pathlib.Path(palette.__file__).parents[1] / "envs" / "registry.yaml").read_text())
@@ -47,7 +48,7 @@ def test_colour_does_not_depend_on_the_other_series():
 
 def test_a_combination_keeps_its_lead_packets_family():
     """`cpfsrc+lang-skills` is a CPF arm carrying a second packet, and reads as one."""
-    assert palette.lead("cpfsrc+lang-skills") == "cpfsrc"
+    assert packets.lead(packets.spec_parts("cpfsrc+lang-skills")) == "cpfsrc"
     assert palette.color("cpfsrc+lang-skills") != palette.color("cpfsrc")
     assert palette.color("cpfsrc+lang-skills") != palette.color("lang-skills")
 
@@ -61,7 +62,7 @@ def test_each_extra_packet_is_one_step_lighter():
     one = palette.color("cpfsrc+lang-skills")
     two = palette.color("cpfsrc+lang-skills+profiling")
     assert base != one != two
-    assert palette.lighten(base, 1) == one and palette.lighten(base, 2) == two
+    assert packets.lighten(base, 1) == one and packets.lighten(base, 2) == two
 
 
 def test_the_six_hues_are_distinct():

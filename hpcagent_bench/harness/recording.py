@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import json
 import os
 import pathlib
 import re
@@ -35,7 +36,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import NamedTuple, Protocol
 
-from hpcagent_bench import config, languages, osinfo, paths
+from hpcagent_bench import config, languages, osinfo, packets, paths
 from hpcagent_bench.frameworks.utilities import cpu_model
 from hpcagent_bench.harness.envelope import Submission
 from hpcagent_bench.harness.scoring import Score, VerifyResult, suspect_timing
@@ -299,6 +300,26 @@ CREATE TABLE IF NOT EXISTS runs (
     arm        TEXT,                        -- provenance only; nothing may parse it
     first_seen INTEGER,                     -- epoch ms (UTC) the run first wrote a row
     harness    TEXT                         -- agent harness; NULL = the arm named none
+);
+"""
+
+#: One row per (packet, language) ever RECORDED, holding its resolved definition -- see
+#: :mod:`hpcagent_bench.packets` and the immutability rule at the top of ``envs/registry.yaml``: a
+#: key's definition is fixed the moment a run records it, so results stay interpretable even after
+#: the registry changes what that key means going forward (a changed definition gets a new key; a
+#: rename goes through ``aliases:`` at read time). ``definition`` is the JSON of the ``fill=False``
+#: :class:`hpcagent_bench.packets.Packet` -- the template, not one launch's filled-in env values --
+#: with its keys sorted so the text is stable across writers. ``registry_commit`` is the git commit
+#: :mod:`hpcagent_bench.packets` was imported from, best-effort ("" outside a repo). Keyed on
+#: ``(packet, language)`` because a packet's skills (the ``lang`` token) depend on the language.
+PACKETS_DDL = """
+CREATE TABLE IF NOT EXISTS packets (
+    packet          TEXT NOT NULL,
+    language        TEXT NOT NULL,
+    definition      TEXT NOT NULL,
+    registry_commit TEXT NOT NULL DEFAULT '',
+    first_seen      INTEGER NOT NULL,
+    PRIMARY KEY (packet, language)
 );
 """
 
@@ -714,6 +735,26 @@ def identity() -> Identity:
     )
 
 
+def record_packet_definition(conn: sqlite3.Connection, packet: str, language: str, ts: int) -> int:
+    """``INSERT OR IGNORE`` (packet, language)'s resolved (``fill=False``) DEFINITION, once.
+
+    A recorded key's definition is immutable (see ``envs/registry.yaml``'s top-of-file rules), so
+    the first write wins and later runs of the same (packet, language) are a no-op. Never raises:
+    an unresolvable spec (an unknown key, a ``lang`` page the language lacks, ...) is stored as
+    ``{"error": ..., "spec": packet}`` instead, so a bad packet can never break grading. Returns 1
+    when a new row was written, 0 when (packet, language) was already recorded."""
+    try:
+        payload: dict[str, object] = dataclasses.asdict(packets.resolve(packet, language, environ={}, fill=False))
+    except ValueError as exc:
+        payload = {"error": str(exc), "spec": packet}
+    definition = json.dumps(payload, sort_keys=True)
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO packets(packet, language, definition, registry_commit, first_seen) VALUES (?,?,?,?,?)",
+        (packet, language, definition, _commit_sha() or "", ts),
+    )
+    return cur.rowcount
+
+
 def upsert_run(conn: sqlite3.Connection, run_id: str, ts: int, language: str | None = None) -> None:
     """Record WHO this run is, once.
 
@@ -736,6 +777,7 @@ def upsert_run(conn: sqlite3.Connection, run_id: str, ts: int, language: str | N
         "first_seen, harness) VALUES (?,?,?,?,?,?,?,?,?,?)",
         (run_id, who.experiment, who.model, who.language, who.device, who.packet, who.rep, who.arm, ts, who.harness),
     )
+    record_packet_definition(conn, who.packet, who.language or "", ts)
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
@@ -743,6 +785,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     cur = conn.cursor()
     cur.execute(_BENCHMARKS_DDL)
     cur.execute(_RUNS_DDL)
+    cur.execute(PACKETS_DDL)
     cur.execute(_PROMPTS_DDL)
     cur.execute(_COMPLETIONS_DDL)
     cur.execute(_SOURCES_DDL)
@@ -771,6 +814,7 @@ _MERGE_VERB: dict[str, str] = {
     "benchmarks": "INSERT OR REPLACE",
     "prompts": "INSERT OR IGNORE",
     "runs": "INSERT OR IGNORE",
+    "packets": "INSERT OR IGNORE",
 }
 
 #: ``benchmarks`` before anything that foreign-keys to it; ``prompts`` and ``runs`` next for the

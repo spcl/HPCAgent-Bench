@@ -16,6 +16,7 @@ import collections
 import pathlib
 import sqlite3
 import sys
+import time
 from collections.abc import Callable, Iterable, Sequence
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
@@ -254,6 +255,23 @@ def write_runs(dest: sqlite3.Connection, run_ids: Iterable[str], identity: Calla
     return written
 
 
+def backfill_packets(dest: sqlite3.Connection) -> int:
+    """A ``packets`` row for every DISTINCT ``(packet, language)`` already in ``runs`` -- for a DB
+    written before that table existed. Idempotent (``INSERT OR IGNORE`` inside
+    :func:`recording.record_packet_definition`) and touches no other table; a run with no declared
+    language contributes nothing, since ``packets.language`` is NOT NULL and there is no arm text
+    to derive one from. Returns how many NEW rows were written."""
+    ts = int(time.time() * 1000)
+    pairs = dest.execute("SELECT DISTINCT packet, language FROM runs").fetchall()
+    written = 0
+    for packet, language in pairs:
+        if language is None:
+            continue
+        written += recording.record_packet_definition(dest, str(packet), str(language), ts)
+    dest.commit()
+    return written
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("sources", nargs="+", help="run roots or individual result DBs")
@@ -327,6 +345,7 @@ def main() -> None:
             finally:
                 src.close()
             dest.commit()
+        written["packets"] = backfill_packets(dest)
         dest.execute("PRAGMA foreign_keys = ON")
         dest.execute(f"PRAGMA user_version = {recording.DERIVED_MARK}")
         dest.commit()
