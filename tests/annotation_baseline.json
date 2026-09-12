@@ -336,7 +336,6 @@
  "tests/test_token_usage.py": 7,
  "tests/test_tolerance_matrix.py": 1,
  "tests/test_track_oracle.py": 33,
- "tests/test_tree_structure.py": 7,
  "tests/test_tsvc_cpp_references.py": 6,
  "tests/test_tuple_valued_conditional_assign.py": 8,
  "tests/test_untouched_output_diagnostic.py": 14,
