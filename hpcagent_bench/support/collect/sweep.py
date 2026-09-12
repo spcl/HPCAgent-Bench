@@ -19,6 +19,7 @@ import csv
 import os
 import pathlib
 import sqlite3
+import statistics
 import sys
 import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -394,11 +395,12 @@ NO_ROWS = -1
 
 
 def best_ms(native: Optional[Sequence[float]], python: Optional[Sequence[float]]) -> Optional[float]:
-    """The best (min) timed sample in ms: the compiled ``native`` series when present, else
-    ``python``. ``None`` when neither series has a positive sample."""
+    """The MEDIAN timed sample in ms, which is what the ``median_ms`` column it fills says it holds:
+    the compiled ``native`` series when present, else ``python``. ``None`` when neither series has a
+    positive sample."""
     series = native or python or []
     vals = [float(v) for v in series if v]
-    return min(vals) if vals else None
+    return statistics.median(vals) if vals else None
 
 
 def sweep_rows(
