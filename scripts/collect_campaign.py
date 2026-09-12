@@ -174,7 +174,7 @@ def summary_rows(per_arm: dict) -> list[tuple]:
         if len(raw_packets) > 1:
             raise ValueError(f"arm {arm!r} baseline {baseline!r} recorded more than one packet: {sorted(raw_packets)}")
         packet = packets.canonical(raw_packets.pop() if raw_packets else "")
-        skills = "on" if packet == "lang-skills" else "off"
+        skills = "on" if packets.has_part(packet, "skills") else "off"
         # llr4-qwen30b-c / llr4-qwen30b-c-skills: with the ablation known, the token before it is
         # the language and what is left is the model.
         parts = arm.split("-")
