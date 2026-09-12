@@ -45,10 +45,6 @@ RECORD_TABLES: tuple[str, ...] = ("calls", "submissions", "attempts")
 #: silently returns nothing on the next layout, which reads as "this campaign recorded nothing".
 DB_SKIP_NAMES: frozenset[str] = frozenset({"cache.db", "index.db"})
 
-#: An arm label that is not a condition. ``adhoc`` is a grade recorded with no run id -- a manual
-#: judge call -- and counting it as an arm puts a phantom column in every per-arm figure.
-PSEUDO_ARMS: frozenset[str] = frozenset({"", "adhoc"})
-
 
 class Database(NamedTuple):
     """One judge database and where it came from, so a row can name its own origin."""
