@@ -319,14 +319,29 @@ def logged_calls(db: str) -> List[Dict[str, Any]]:
 
 def test_a_score_grade_is_logged_as_a_call(client, calls_db) -> None:
     """The judge upstream records only /submit, so an agent's ITERATION history exists only if this
-    router logs it: without this row the failures before a success are unmeasurable."""
+    router logs it: without this row the failures before a success are unmeasurable. The language is
+    the arm's (record.language), carried by the run the call belongs to."""
+    import sqlite3
+
+    from hpcagent_bench import config
+
     StubJudge.reply = (200, {**GRADE, "hidden_total": 0, "hidden_passed": 0})
     body = {**SUBMISSION, "run_id": "llr2-c.n0.p3.w1", "optimizer": "gpt-oss-120b"}
-    assert client.post("/score", json=body).status_code == 200
+    config.set_override("record.language", "c")
+    try:
+        assert client.post("/score", json=body).status_code == 200
+    finally:
+        config.clear_override("record.language")
     (row,) = logged_calls(calls_db())
     assert (row["route"], row["status"], row["round"]) == ("score", "ok", 1)
     assert row["run_id"] == "llr2-c.n0.p3.w1" and row["optimizer"] == "gpt-oss-120b"
-    assert row["benchmark"] == "gemm" and row["language"] == "c" and row["speedup"] == 4.5
+    assert row["benchmark"] == "gemm" and row["speedup"] == 4.5
+    conn = sqlite3.connect(calls_db())
+    try:
+        languages = conn.execute("SELECT r.language FROM calls JOIN runs r USING (run_id)").fetchall()
+    finally:
+        conn.close()
+    assert languages == [("c",)]
 
 
 def test_a_failed_score_grade_is_logged_too(client, calls_db) -> None:
