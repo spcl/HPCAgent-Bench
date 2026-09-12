@@ -95,7 +95,7 @@ def draw(cell_frame: pd.DataFrame, experiment: str, out: pathlib.Path, unit: str
     ax.set_xlim(-0.8, len(order) - 0.2)
     plotstyle.value_axis(ax, "y", log_base=10.0)
     plotstyle.despine(ax)
-    handles, _labels = ax.get_legend_handles_labels()
+    handles = ax.get_legend_handles_labels()[0]
     handles = handles + [
         plt.Line2D(
             [],
