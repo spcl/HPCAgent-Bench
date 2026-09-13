@@ -20,8 +20,6 @@ from types import ModuleType
 
 import pytest
 
-from tests.optional_imports import import_or_skip
-
 SERVICE = pathlib.Path(__file__).resolve().parents[1] / "experiments/judge_service.py"
 
 #: A passing grade, carrying every field Score declares without a default.
@@ -38,8 +36,9 @@ GRADE = {
 
 @pytest.fixture(name="router")
 def router_fixture() -> ModuleType:
-    import_or_skip("fastapi")
-    import_or_skip("httpx")
+    import fastapi  # noqa: F401
+    import httpx  # noqa: F401
+
     spec = importlib.util.spec_from_file_location("judge_service_store", SERVICE)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module

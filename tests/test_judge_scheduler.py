@@ -162,8 +162,7 @@ def test_the_digest_cache_is_not_a_sizing_term() -> None:
 
 def test_reserving_more_host_memory_than_exists_fails_at_startup() -> None:
     """The judge refuses to serve rather than discovering the shortfall on some later grade."""
-    if memory_pool.host_available_bytes() is None:
-        pytest.skip("/proc/meminfo is Linux-only and this host has none")
+    assert memory_pool.host_available_bytes() is not None, "/proc/meminfo is Linux-only and this host has none"
     with pytest.raises(MemoryError):
         memory_pool.reserve_host(1 << 60)
 
@@ -171,8 +170,7 @@ def test_reserving_more_host_memory_than_exists_fails_at_startup() -> None:
 def test_a_reservation_the_host_can_meet_reports_that_it_pooled_nothing() -> None:
     """numpy has no Python-level allocator hook, so the host path verifies and says so -- claiming a
     pool it did not install would be the one dishonest outcome."""
-    if memory_pool.host_available_bytes() is None:
-        pytest.skip("/proc/meminfo is Linux-only and this host has none")
+    assert memory_pool.host_available_bytes() is not None, "/proc/meminfo is Linux-only and this host has none"
     pooled, detail = memory_pool.reserve(1 << 20, 0, device=None)
     assert pooled is False
     assert "not pooled" in detail

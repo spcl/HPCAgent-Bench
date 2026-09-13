@@ -20,7 +20,6 @@ import pathlib
 import pytest
 
 from hpcagent_bench.frameworks import dace_framework
-from tests.optional_imports import import_or_skip
 
 #: The launcher variables, each of which alone must be enough to detect a rank.
 LAUNCHERS = ("OMPI_COMM_WORLD_RANK", "PMI_RANK", "SLURM_PROCID", "MV2_COMM_WORLD_RANK")
@@ -177,6 +176,7 @@ def test_rank_env_covers_every_launcher_dace_knows() -> None:
     """DaCe splits the build folder on any of ITS names; a name only DaCe knows leaves mpi_rank()
     None, so the PCH cache stays shared across ranks while the build folder splits -- the exact
     half-partitioned state that produced the original library-load races."""
-    dace_sdfg = import_or_skip("dace.sdfg.sdfg")
+    from dace.sdfg import sdfg as dace_sdfg
+
     missing = sorted(set(dace_sdfg.LAUNCHER_RANK_VARS) - set(dace_framework.RANK_ENV))
     assert not missing, f"DaCe learned launcher variables we do not probe: {missing}"

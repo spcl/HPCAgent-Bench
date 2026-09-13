@@ -18,7 +18,7 @@ import math
 
 import pytest
 
-from _native_tu import build_run_c, have_gcc, have_gpp
+from _native_tu import build_run_c
 from numpyto_c.emit import _C_HEADER, _CPP_HEADER, _CPP_FOOTER
 
 # Sign matrix: same-sign, mixed-sign, exact division, and a unit divisor.
@@ -65,12 +65,10 @@ def _check(cpp) -> None:
         assert g == pytest.approx(e), f"got {g}, expected {e}"
 
 
-@have_gcc
 def test_c_division_helpers_match_python() -> None:
     _check(cpp=False)
 
 
-@have_gpp
 def test_cpp_division_helpers_match_python() -> None:
     _check(cpp=True)
 
@@ -98,7 +96,6 @@ int main(void) {
 """
 
 
-@have_gcc
 def test_float16_operands_take_the_floating_helper() -> None:
     """GCC does not promote _Float16 in arithmetic, so `_Float16 + _Float16` is _Float16 and hit
     `default:` -- the integer helper. 0.5 // 0.25 became int_floor(0, 0) and died with SIGFPE
@@ -114,7 +111,6 @@ def test_float16_operands_take_the_floating_helper() -> None:
     assert float(out[1]) == 1.5, f"3.5 % 2.0 -> {out[1]}, expected numpy's 1.5"
 
 
-@have_gcc
 def test_unsigned_operands_above_int64_max_are_not_reinterpreted_as_negative() -> None:
     """uint64 is integral, so the integer helper was type-correct but SIGNED: any value above
     INT64_MAX arrived negative. (2**63 + 5) // 2 returned -4611686018427387902."""

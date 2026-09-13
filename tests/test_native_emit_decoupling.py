@@ -8,7 +8,6 @@ gap is already the ``c`` FAIL), not a duplicate FAIL."""
 import pytest
 
 import tests.numerical_oracle as no
-from tests.optional_imports import import_or_skip
 
 
 def test_native_emit_failure_marks_native_but_still_runs_python_backends(monkeypatch) -> None:
@@ -56,7 +55,8 @@ def _jax_ok(short, **kwargs):
 def test_jax_only_request_is_not_blocked_by_native_emit(monkeypatch) -> None:
     # A jax-only request must never surface a native-emit FAIL: the native backends
     # aren't even requested, so the result carries only the jax outcome.
-    import_or_skip("jax")
+    import jax  # noqa: F401
+
     monkeypatch.setattr(no, "_emit", lambda *a, **k: (False, ""))
     res = _jax_ok("cond_reduce_sum", only_backends={"jax"})
     assert set(res) == {"jax"}
@@ -67,7 +67,8 @@ def test_vexx_k_validates_on_every_native_backend_and_jax() -> None:
     """vexx_k -- the corpus's densest complex kernel -- emits + validates bit-exact on C, C++, Fortran
     and jax. Regression guard for a once-mistyped-real complex accumulator (``deexx``). numba emits
     its own module but cannot JIT the augmentation tables, so it legitimately SKIPs."""
-    import_or_skip("jax")
+    import jax  # noqa: F401
+
     res = _jax_ok("vexx_k", only_backends={"c", "cpp", "fortran", "numba", "jax"})
     assert res["c"] == "ok", res["c"]
     assert res["cpp"] == "ok", res["cpp"]
@@ -103,7 +104,8 @@ _VEXX_JAX_MAX_SIZE = 12
 def test_vexx_k_config_parameter_validates_under_jax(cfg) -> None:
     """Every config-parameter combination validates bit-exact under jax at the S size, crossing size
     with config to drive okvan True/False code paths that S alone leaves dead."""
-    import_or_skip("jax")
+    import jax  # noqa: F401
+
     # PAW and real-space augmentation are ultrasoft features (okpaw => okvan, tqr => okvan).
     if cfg.get("okpaw") or cfg.get("tqr"):
         assert cfg.get("okvan"), f"invalid config (okpaw/tqr require okvan): {cfg}"

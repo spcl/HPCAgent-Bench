@@ -23,8 +23,6 @@ from urllib.parse import urlparse
 
 import pytest
 
-from tests.optional_imports import import_or_skip
-
 if TYPE_CHECKING:
     from fastapi.testclient import TestClient
 
@@ -106,8 +104,9 @@ def upstream():
 
 @pytest.fixture(scope="module")
 def service():
-    import_or_skip("fastapi")
-    import_or_skip("httpx")
+    import fastapi  # noqa: F401
+    import httpx  # noqa: F401
+
     spec = importlib.util.spec_from_file_location("judge_service_example", SERVICE)
     module = importlib.util.module_from_spec(spec)
     # Registered BEFORE exec: dataclasses resolves a string annotation through

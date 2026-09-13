@@ -21,10 +21,6 @@ REPO_ROOT = pathlib.Path(containers.__file__).resolve().parent.parent
 LAUNCHER = REPO_ROOT / "scripts" / "run_agent_in_container.sh"
 AGENT_ARGS = ["--kernels", "gemm", "--baseline", "c"]
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("bash") is None or not LAUNCHER.exists(), reason="needs bash + the launcher script"
-)
-
 
 def controlled_env(backend):
     """A reproducible environment: the ambient PATH etc., every HPCAGENT_BENCH_*/passthrough var
@@ -49,6 +45,7 @@ def controlled_env(backend):
 @pytest.mark.parametrize("backend", containers.EXEC_BACKENDS)
 @pytest.mark.parametrize("hardware", ["cpu", "nvidia", "amd"])
 def test_bash_and_python_fold_identical_argv(backend, hardware, monkeypatch) -> None:
+    assert shutil.which("bash") and LAUNCHER.exists(), "needs bash + the launcher script"
     env = controlled_env(backend)
     # bash: --print emits one token per line, no exec/probe.
     proc = subprocess.run(

@@ -18,7 +18,7 @@ import pathlib
 
 import pytest
 
-from _native_tu import build_run_c_include, have_gcc, have_gpp
+from _native_tu import build_run_c_include
 from numpyto_c.emit import ARITH_HEADER_NAME, _C_HEADER, _CPP_ARITH, arith_header_source, write_arith_header
 
 #: (a, b) with every sign combination, plus exact division and a zero dividend.
@@ -62,13 +62,11 @@ def _check(result) -> None:
         assert float(g) == float(e), (got, exp)
 
 
-@pytest.mark.skipif(not have_gcc(), reason="gcc not installed")
 def test_c_header_compiles_standalone_and_floors_toward_negative_infinity() -> None:
     src = arith_header_source("c")
     _check(build_run_c_include(ARITH_HEADER_NAME["c"], src, _driver(ARITH_HEADER_NAME["c"])))
 
 
-@pytest.mark.skipif(not have_gpp(), reason="g++ not installed")
 def test_cpp_header_compiles_standalone_and_floors_toward_negative_infinity() -> None:
     src = arith_header_source("cpp")
     _check(build_run_c_include(ARITH_HEADER_NAME["cpp"], src, _driver(ARITH_HEADER_NAME["cpp"]), cpp=True))

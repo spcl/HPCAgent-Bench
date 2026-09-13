@@ -81,7 +81,8 @@ def test_emit_cpf_renders_the_same_kernel_to_a_self_contained_unit(
     assertion is that the TOOL reaches the bridge and reports it -- what the bridge itself
     guarantees about the text is ``tests/test_cpf_bridge.py``'s subject, not this file's.
     """
-    pytest.importorskip("dace")
+    import dace  # noqa: F401
+
     out = tmp_path / "cpf"
     proc = run(
         [KERNEL, "--emit-cpf", str(out), "--cpf-language", language, "--require-cpf"], cwd=paths.ROOT, timeout=1800

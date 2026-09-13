@@ -18,6 +18,8 @@ import json
 import shlex
 import types
 
+import pathlib
+
 import pytest
 
 from hpcagent_bench.frameworks.dace_framework import (
@@ -319,18 +321,22 @@ def test_the_build_cache_pins_are_applied_and_survive_a_hostile_conf() -> None:
             dace.Config.set(*key, value=original)
 
 
-def test_ccache_is_offered_to_cmake_without_depending_on_path_order() -> None:
+def test_ccache_is_offered_to_cmake_without_depending_on_path_order(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """DaCe knows nothing about ccache, so it only helps if the compiler DRIVER is a shim.
     ``CMAKE_<LANG>_COMPILER_LAUNCHER`` asks for it explicitly instead of hoping /usr/lib/ccache
-    sorts first on PATH. Skipped where ccache is genuinely absent -- that is a host fact, not a bug.
+    sorts first on PATH. A stub ``ccache`` first on PATH stands in for the real one: what is under
+    test is that a ccache the lookup finds is handed to CMake, not ccache itself.
     """
     import os
-    import shutil
 
     from hpcagent_bench.frameworks.dace_framework import pin_build_caching
 
-    if shutil.which("ccache") is None:
-        pytest.skip("no ccache on this host")
+    stub = tmp_path / "ccache"
+    stub.write_text('#!/bin/sh\nexec "$@"\n')
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
     # Every launcher pin_build_caching sets, not the two this test asserts on: CUDA is the one it
     # would leak, and a leaked CMAKE_CUDA_COMPILER_LAUNCHER silently routes a later test's nvcc
     # through ccache. Test-order dependence, and the pollution direction is toward passing.
@@ -357,7 +363,7 @@ def test_a_minted_size_symbol_is_bound_from_its_recorded_recipe(monkeypatch) -> 
     array carries it and no manifest names it -- shape matching alone leaves it free, and the call
     then dies on ``Missing program argument "m"``. The emitter records the closed form; binding it
     here is the only place the value exists."""
-    dace = pytest.importorskip("dace")
+    import dace
     import numpy as np
     from hpcagent_bench.frameworks.dace_framework import DaceFramework, TimedCompiledSDFG
 

@@ -74,6 +74,7 @@ from numpyto_common.frontend import (
 from numpyto_common.ir import ArrayDesc, KernelIR, SymbolDesc, stamp_symbol_assumptions  # noqa: E402
 
 _KERNELS = foundation_kernels()
+assert _KERNELS, "no loop_level_reasoning kernels"
 
 
 def emitted_renames(src: str) -> dict:
@@ -102,7 +103,6 @@ def _emit(short: str) -> tuple[KernelIR, str]:
     return emit_with_inline_fallback(render)
 
 
-@pytest.mark.skipif(not _KERNELS, reason="no loop_level_reasoning kernels")
 @pytest.mark.parametrize("short", _KERNELS)
 def test_emits_valid_dc_program_with_symbols_dropped(short: str) -> None:
     kir, src = _emit(short)
@@ -209,7 +209,6 @@ def test_a_declared_extent_spells_floor_division_the_way_the_frontend_does() -> 
     not agree on ``//``: sympy answers ``floor(x/2 + 1/2)`` and dace's parser answers
     ``int_floor(x, 2)``. One extent then reaches the write under two spellings and the broadcast is
     refused -- conv_standard_1d_dilated_strided, the moment its stride stopped being 1."""
-    pytest.importorskip("dace")
     import dace as dc
     import sympy
     from dace import symbolic
@@ -231,7 +230,6 @@ def test_a_declared_extent_spells_floor_division_the_way_the_frontend_does() -> 
 def test_a_declared_extent_whose_divisor_is_one_still_folds_to_the_dividend() -> None:
     """The corpus spelling that always worked: ``groups`` is 1, so both readings fold away. The
     respelling must leave it exactly there rather than freeze an ``int_floor(C, 1)`` node."""
-    pytest.importorskip("dace")
     import dace as dc
 
     emitted = _array_annotation(ArrayDesc(name="w", dtype="float64", shape=("C // 1",)))
@@ -1277,7 +1275,8 @@ def test_argument_named_after_a_sympy_callable_is_renamed_with_an_exported_map()
     the parse dies as ``SympifyError: cannot sympify object of type <class 'function'>`` the moment
     the name reaches a memlet subset. The emitted program is the only place the new spelling exists,
     so the rename has to reach every use AND be exported for the caller's keyword arguments."""
-    pytest.importorskip("dace")
+    import dace  # noqa: F401
+
     src = emit_dace(kir_for("crc16"))
     assert "__hpcagent_bench_renames__ = {'poly': '__poly'}" in src
     assert "__poly: dc.int64" in src  # the signature carries the new spelling ...
@@ -1291,7 +1290,8 @@ def test_a_renamed_array_argument_keeps_its_shape_symbols() -> None:
     """dfa's ``symbols`` is an ARRAY, and it is the indirection ``trans[state, symbols[i]]`` that
     sympifies it -- so the rename is not a scalar-only fix. Its shape symbol ``N`` is NOT reserved
     and must survive untouched, or the caller binds a symbol the SDFG does not have."""
-    pytest.importorskip("dace")
+    import dace  # noqa: F401
+
     src = emit_dace(kir_for("dfa"))
     assert "__hpcagent_bench_renames__ = {'symbols': '__symbols'}" in src
     assert "__symbols: dc.int64[N]" in src
@@ -1311,7 +1311,8 @@ def test_a_reserved_name_that_is_only_called_is_left_alone() -> None:
     """``sqrt``/``exp``/``log`` are sympy callables too, but a kernel CALLS them -- dace resolves the
     call through its own replacement table. Renaming a name the program never binds would rewrite
     ``sqrt(x)`` into an undefined ``__sqrt(x)``; only bound names are candidates."""
-    pytest.importorskip("dace")
+    import dace  # noqa: F401
+
     from numpyto_c.dace_emit import bound_names, sympy_reserved
 
     assert sympy_reserved("sqrt") and sympy_reserved("exp")  # premise: they ARE reserved
@@ -1590,7 +1591,8 @@ def test_a_scalar_index_binding_is_not_a_view() -> None:
 
 def test_cloudsc_emits_one_name_per_za_col_binding() -> None:
     """The end-to-end shape: cloudsc binds ``za_col`` to the same slice twice in one loop body."""
-    pytest.importorskip("dace")
+    import dace  # noqa: F401
+
     src = emit_dace(kir_for("cloudsc"))
     assert "za_col__v2 = za[jk - 1, kidia - 1:kfdia]" in src
     prog = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef))

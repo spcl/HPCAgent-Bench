@@ -13,7 +13,7 @@ import tempfile
 
 import pytest
 
-from _native_tu import build_run_c, have_gcc
+from _native_tu import build_run_c
 from _op_oracle import _bench_info
 from numpyto_c.emit import _C_HEADER, emit_c, emit_pluto, pluto_floordiv
 from numpyto_common.frontend import parse_kernel
@@ -104,7 +104,6 @@ def test_prelude_defines_the_named_builtins_over_the_existing_helpers(name: str,
     )
 
 
-@pytest.mark.skipif(not have_gcc(), reason="gcc not installed")
 def test_floord_and_ceild_agree_with_the_helpers_they_alias() -> None:
     """The spelling claim, executed: same values for both signs, and the guarded block compiles."""
     lines = ["#include <stdio.h>", "int main(void) {"]

@@ -17,7 +17,6 @@ from hpcagent_bench import flags, perf_reports
 from hpcagent_bench.benchmarks import cpp_runtime
 from hpcagent_bench.frameworks import generate_framework
 from hpcagent_bench.languages import report_flags
-from tests.optional_imports import import_or_skip
 
 #: One kernel per precision: a loop that MUST vectorize followed by one that CANNOT (a dependence),
 #: so one report states both a width and a refusal. Symbol carries precision since both sources link
@@ -284,8 +283,8 @@ def test_native_framework_generated_source_hook_dumps_the_input(backend, monkeyp
 def test_numba_lowered_code_dumps_real_instructions() -> None:
     """Numba never writes a ``.so``, so it answers with its own asm; compiled HERE (not cache-loaded)
     so the JIT has something to report."""
-    numba = import_or_skip("numba")
-    numpy = pytest.importorskip("numpy")
+    import numba
+    import numpy
 
     @numba.njit  # NOT cache=True: this must be compiled in-process to have asm
     def scale(out, a) -> None:
@@ -308,7 +307,8 @@ def test_numba_hooks_decline_a_plain_python_function() -> None:
 def test_numba_reports_nothing_for_a_cache_restored_function(tmp_path, monkeypatch) -> None:
     """A cache hit restores executable code with no compile-time by-products: ``inspect_asm`` returns
     an instruction-free stub rather than raising, so this must answer "not supported" instead."""
-    numba = import_or_skip("numba")
+    import numba  # noqa: F401
+
     src = tmp_path / "cached_kernel.py"
     src.write_text("import numba as nb\n\n@nb.njit(cache=True)\ndef k(x):\n    return x * 2.0 + 1.0\n")
     monkeypatch.syspath_prepend(str(tmp_path))

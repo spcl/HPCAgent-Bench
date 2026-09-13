@@ -15,7 +15,7 @@ import tempfile
 
 import pytest
 
-from _native_tu import build_run_c, have_gcc, have_gpp
+from _native_tu import build_run_c
 from _op_oracle import _bench_info
 from numpyto_c.emit import emit_c, emit_cpp
 from numpyto_common.frontend import parse_kernel
@@ -154,21 +154,18 @@ def test_a_deferred_allocation_inside_a_loop_frees_the_previous_iteration() -> N
     )
 
 
-@have_gcc
 def test_a_deferred_loop_allocation_runs_leak_free_under_address_sanitizer() -> None:
     run = build_run_c(emitted(cpp=False, source=IN_LOOP_ALLOC), IN_LOOP_DRIVER, sanitize=True)
     assert run.returncode == 0, f"{run.stdout}\n{run.stderr}"
     assert "detected memory leaks" not in run.stderr, run.stderr
 
 
-@have_gcc
 def test_generated_c_runs_leak_free_under_address_sanitizer() -> None:
     run = build_run_c(emitted(cpp=False), DRIVER, sanitize=True)
     assert run.returncode == 0, f"{run.stdout}\n{run.stderr}"
     assert "detected memory leaks" not in run.stderr, run.stderr
 
 
-@have_gpp
 def test_generated_cpp_runs_leak_free_under_address_sanitizer() -> None:
     run = build_run_c(emitted(cpp=True), DRIVER, cpp=True, sanitize=True)
     assert run.returncode == 0, f"{run.stdout}\n{run.stderr}"

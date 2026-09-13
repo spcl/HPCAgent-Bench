@@ -1,6 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Native (C / C++ / Fortran) on-demand generation + the canonical ABI. Skips cleanly where the
+"""Native (C / C++ / Fortran) on-demand generation + the canonical ABI. Fails where the
 translators or a compiler are absent."""
 
 import importlib.util
@@ -64,10 +64,10 @@ def test_native_base_follows_the_module_stem() -> None:
     assert spec.native_base() == "sp_bicg" and spec.native_base("csr") == "sp_bicg_csr"
 
 
-@pytest.mark.skipif(not _emitter_present(), reason="translators absent")
 def test_emit_native_resolves_the_manifest_by_stem() -> None:
     """emit_native must emit through the MODULE stem: a kernel is registered under its own name,
     but its emitted artifacts are named after the numpy reference they came from."""
+    assert _emitter_present(), "translators absent"
     from hpcagent_bench.autogen import emit_native
 
     spec = BenchSpec.load(DENSE)
@@ -87,9 +87,9 @@ def test_emit_native_resolves_the_manifest_by_stem() -> None:
         assert f"{spec.native_base()}_{fptype}(" in src.read_text()  # symbol == file stem
 
 
-@pytest.mark.skipif(not _emitter_present(), reason="translators absent")
 def test_emit_names_and_marker() -> None:
     """numpyto_c writes <short>_fp64/<short>_fp32 sources whose symbol == stem."""
+    assert _emitter_present(), "translators absent"
     from hpcagent_bench.emit_bridge import emit_kernel
 
     spec = BenchSpec.load(KERNEL)
@@ -108,7 +108,6 @@ def test_emit_names_and_marker() -> None:
                 assert "_auto" not in text  # no legacy suffix
 
 
-@pytest.mark.skipif(not _emitter_present(), reason="translators absent")
 @pytest.mark.parametrize("kernel", [CONFIGURED, KERNEL])
 def test_emitted_symbol_matches_the_binding(kernel, tmp_path) -> None:
     """The symbol the emitter DEFINES and the symbol the harness BINDS have to be one name.
@@ -121,6 +120,7 @@ def test_emitted_symbol_matches_the_binding(kernel, tmp_path) -> None:
     unscoreable in all four arms of the git-scicomp campaign. The dense kernel is the control: it
     declares no configuration, so both sides must still land on the bare stem.
     """
+    assert _emitter_present(), "translators absent"
     from hpcagent_bench.emit_bridge import emit_kernel
     from hpcagent_bench.support.bindings.contract import binding_from_spec
 
@@ -137,7 +137,7 @@ def test_emitted_symbol_matches_the_binding(kernel, tmp_path) -> None:
 
 
 #: Some clang builds accept ``-mllvm -polly`` and outline nothing; the harness then refuses the
-#: framework outright. Gate on the SAME probe it gates on, or the skip and the harness disagree.
+#: framework outright. Assert the SAME probe it gates on, or the test and the harness disagree.
 _POLLY = flags.polly_capability()
 
 #: NOT ``pluto``. This test calls the built symbol POSITIONALLY in the canonical ABI order (sorted
@@ -154,10 +154,11 @@ _WRAP_FRAMEWORKS = ["cc", "llvm", "fortran", "polly"]
 @pytest.mark.parametrize("framework", _WRAP_FRAMEWORKS)
 @pytest.mark.parametrize("dtype,fptype", [(np.float64, "fp64"), (np.float32, "fp32")])
 def test_wrap_kernel_matches_numpy(framework, dtype, fptype) -> None:
-    if not _emitter_present() or not shutil.which(_COMPILER[framework]):
-        pytest.skip(f"translators or {_COMPILER[framework]} absent")
-    if framework == "polly" and _POLLY.verdict is not flags.AutoparVerdict.OK:
-        pytest.skip(f"this host's polly is {_POLLY.verdict.value}: {_POLLY.detail}")
+    assert _emitter_present() and shutil.which(_COMPILER[framework]), f"translators or {_COMPILER[framework]} absent"
+    if framework == "polly":
+        assert _POLLY.verdict is flags.AutoparVerdict.OK, (
+            f"this host's polly is {_POLLY.verdict.value}: {_POLLY.detail}"
+        )
     from hpcagent_bench.emit_bridge import emit_kernel
     from hpcagent_bench.benchmarks import cpp_runtime
 
@@ -199,9 +200,7 @@ def test_wrap_kernel_matches_numpy(framework, dtype, fptype) -> None:
 @pytest.mark.parametrize("framework", ["cc", "llvm"])
 @pytest.mark.parametrize("dtype,fptype", [(np.float64, "fp64"), (np.float32, "fp32")])
 def test_sparse_layout_is_a_subbenchmark(framework, dtype, fptype) -> None:
-    if not _emitter_present() or not shutil.which(_COMPILER[framework]):
-        pytest.skip(f"translators or {_COMPILER[framework]} absent")
-    pytest.importorskip("scipy")
+    assert _emitter_present() and shutil.which(_COMPILER[framework]), f"translators or {_COMPILER[framework]} absent"
     import scipy.sparse as sp
     from hpcagent_bench.autogen import ensure_native, _native_targets
     from hpcagent_bench.benchmarks import cpp_runtime
@@ -247,8 +246,7 @@ def test_sparse_layout_is_a_subbenchmark(framework, dtype, fptype) -> None:
 
 def test_symbols_and_iterators_are_int64() -> None:
     """Every backend declares size symbols AND loop iterators at the int64 ABI width (abi_contract.md)."""
-    if not _emitter_present():
-        pytest.skip("translators absent")
+    assert _emitter_present(), "translators absent"
     from hpcagent_bench.emit_bridge import emit_kernel
 
     spec = BenchSpec.load("gemm")
@@ -270,8 +268,7 @@ def test_symbols_and_iterators_are_int64() -> None:
 def test_pluto_emits_multidim_for_rank2_arrays() -> None:
     """The Pluto input emits every rank>=2 array as a direct VLA parameter so pet extracts an affine
     scop; the flat-pointer form yields zero statements and silently miscompiles to a no-op."""
-    if not _emitter_present():
-        pytest.skip("translators absent")
+    assert _emitter_present(), "translators absent"
     import json
     from hpcagent_bench.emit_bridge import emit_kernel
 
@@ -301,8 +298,7 @@ def test_pluto_call_order_is_polyccs_not_the_canonical_abi(tmp_path, monkeypatch
     order instead of declining, the positional ctypes call would have handed a pointer to
     ``int64_t LEN_1D`` -- a segfault on a good day and numbers on a bad one.
     """
-    if not _emitter_present():
-        pytest.skip("translators absent")
+    assert _emitter_present(), "translators absent"
     import json
 
     from hpcagent_bench.emit_bridge import emit_kernel
@@ -327,8 +323,7 @@ def test_pluto_call_order_is_polyccs_not_the_canonical_abi(tmp_path, monkeypatch
 
 def test_pluto_keeps_rank1_arrays_flat() -> None:
     """A purely rank-1 kernel keeps flat pointer params -- a 1-D ``a[i]`` is already affine, no VLA needed."""
-    if not _emitter_present():
-        pytest.skip("translators absent")
+    assert _emitter_present(), "translators absent"
     from hpcagent_bench.emit_bridge import emit_kernel
 
     spec = BenchSpec.load(KERNEL)  # tsvc_2_s212: a, b, c, d all 1-D
@@ -387,8 +382,7 @@ def test_int32_array_promoted_on_read(framework, target, compiler, ext) -> None:
     import json
     import subprocess
 
-    if not _emitter_present() or not shutil.which(compiler):
-        pytest.skip(f"translators or {compiler} absent")
+    assert _emitter_present() and shutil.which(compiler), f"translators or {compiler} absent"
 
     with tempfile.TemporaryDirectory() as d:
         out = pathlib.Path(d)

@@ -128,10 +128,7 @@ def test_staged_scalar_fortran_compiles_and_runs() -> None:
     import shutil
     import subprocess
 
-    if shutil.which("gfortran") is None:
-        import pytest
-
-        pytest.skip("no gfortran")
+    assert shutil.which("gfortran") is not None, "no gfortran"
     d, _c, _cpp, f90 = _emit(_STAGED_SRC, "g", "v")
     (d / "g.f90").write_text(f90)
     so = d / "libg.so"
@@ -177,10 +174,7 @@ def test_threshold_scalar_not_truncated_end_to_end_c() -> None:
     # Discriminating run: thr = 0.5, a in [0, 1). A double `thr` sums only a[i] > 0.5; a truncated int
     # `thr` (== 0) would sum EVERY element. The two differ, so a regression to int is loud.
     cc = _shutil_which("gcc") or _shutil_which("clang")
-    if cc is None:
-        import pytest
-
-        pytest.skip("no C compiler")
+    assert cc is not None, "no C compiler"
     import subprocess
 
     d, c, _cpp, _f90 = _emit(_THRESH_SRC, "f", "thr")

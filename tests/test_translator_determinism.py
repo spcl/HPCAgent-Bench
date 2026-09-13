@@ -38,8 +38,6 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List
 
-import pytest
-
 #: Every emitter front door. One parse feeds the C family and Fortran; the source-to-source
 #: targets (dace/jax/cupy/numba/pythran) run their own rewriters, so they get their own digest.
 TARGETS = ("c", "cpp", "pluto", "fortran", "dace", "jax", "pythran", "numba", "cupy")
@@ -180,11 +178,11 @@ def seeded_runs() -> Dict[str, Dict[str, Dict[str, Dict[str, str]]]]:
     return dict(zip(SEEDS, runs))
 
 
-@pytest.mark.skipif(not TRANSLATORS_PRESENT, reason="translators absent")
 def test_witness_kernels_actually_emit() -> None:
     """Premise for the two guards below. If the witnesses stopped emitting -- renamed,
     retired, or refused by every backend -- the comparisons would pass on empty output and
     prove nothing. Assert real text first."""
+    assert TRANSLATORS_PRESENT, "translators absent"
     digests_by_kernel = seeded_runs()[SEEDS[0]]["first"]
     # Full mode lists kernels by their ``family/group/name`` registry path, the always-on set by
     # bare name; both name the same kernel, so match on the trailing component.
@@ -198,11 +196,11 @@ def test_witness_kernels_actually_emit() -> None:
         assert len(emitted) >= 4, f"{key}: only {emitted} emitted; the witness set no longer covers the emitters"
 
 
-@pytest.mark.skipif(not TRANSLATORS_PRESENT, reason="translators absent")
 def test_emit_is_stable_within_one_process() -> None:
     """Axis (a): two emits, one interpreter. Fails on state that outlives an emit -- an
     unreset name counter, or a container ordered by ``id()``. Checked at BOTH seeds, since
     an allocator-ordered container is not the seed's to fix."""
+    assert TRANSLATORS_PRESENT, "translators absent"
     for seed, run in seeded_runs().items():
         assert run["first"] == run["second"], (
             f"emit differs on a second call in the SAME process "
@@ -210,11 +208,11 @@ def test_emit_is_stable_within_one_process() -> None:
         )
 
 
-@pytest.mark.skipif(not TRANSLATORS_PRESENT, reason="translators absent")
 def test_emit_is_stable_across_hash_seeds() -> None:
     """Axis (b): one emit per interpreter, two different PYTHONHASHSEED values. Fails on
     ``str``-keyed set/dict iteration order reaching the text. Must be a subprocess -- the
     seed is fixed before this module is imported."""
+    assert TRANSLATORS_PRESENT, "translators absent"
     runs = seeded_runs()
     left, right = runs[SEEDS[0]]["first"], runs[SEEDS[1]]["first"]
     assert left == right, (

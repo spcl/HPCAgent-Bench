@@ -7,11 +7,10 @@ Python snippet:
 
 * all comments removed;
 * mapped names rewritten everywhere and consistently;
-* mangled C still compiles (``gcc -fsyntax-only``; skipped if gcc absent);
+* mangled C still compiles (``gcc -fsyntax-only``);
 * a non-mapped keyword / identifier is left untouched.
 
-tree-sitter-only assertions are guarded behind ``find_spec`` so the suite
-passes on the stdlib fallback (tree-sitter is not installed in CI here).
+gcc and tree-sitter-language-pack are required; their tests fail when either is absent.
 """
 
 import importlib.util
@@ -266,8 +265,8 @@ def test_mangle_python_consistent() -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.skipif(shutil.which("gcc") is None, reason="gcc not available")
 def test_mangled_c_still_compiles() -> None:
+    assert shutil.which("gcc") is not None, "gcc not available"
     name_map = build_name_map(["relu"], ["helper"])
     stripped = strip_comments(C_SRC, "c")
     out = mangle(stripped, "c", name_map)
@@ -279,15 +278,14 @@ def test_mangled_c_still_compiles() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# tree-sitter parity (only when installed)
+# tree-sitter parity
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.skipif(
-    importlib.util.find_spec("tree_sitter_language_pack") is None,
-    reason="tree-sitter (tree-sitter-language-pack) not installed",
-)
 def test_tree_sitter_path_used_when_available() -> None:
+    assert importlib.util.find_spec("tree_sitter_language_pack") is not None, (
+        "tree-sitter (tree-sitter-language-pack) not installed"
+    )
     assert TREE_SITTER is True
     # Comment strip + mangle still satisfy the core contract on the ts path.
     out = mangle(strip_comments(C_SRC, "c"), "c", build_name_map(["relu"], ["helper"]))

@@ -227,7 +227,6 @@ def test_the_timeout_reaches_the_child_as_a_per_rep_bound(monkeypatch) -> None:
     assert seen["timeout"] == pytest.approx(2.0 * 5)  # 4 timed + 1 warmup, as the outer backstop
 
 
-@pytest.mark.skipif(not osinfo.IS_LINUX, reason="the per-rep guard uses SIGALRM, which is POSIX-only")
 def test_one_hung_rep_dies_at_the_per_rep_bound_not_the_batch_budget(tmp_path) -> None:
     """At the defaults the batch budget is 300s x 101 = 8.4h -- a judge slot held most of a
     day. A Python SIGALRM handler cannot fix it: it never runs inside a spinning kernel."""
@@ -250,7 +249,6 @@ def test_one_hung_rep_dies_at_the_per_rep_bound_not_the_batch_budget(tmp_path) -
     assert elapsed < 2.0 * 21 / 2, f"killed at {elapsed:.1f}s -- that is the BATCH budget, not one rep's"
 
 
-@pytest.mark.skipif(not osinfo.IS_LINUX, reason="the per-rep guard uses SIGALRM, which is POSIX-only")
 def test_a_slow_but_finite_run_is_not_killed_by_the_per_rep_guard(tmp_path) -> None:
     """Per REP, not cumulative: a measurement whose TOTAL exceeds one rep's allowance must
     survive, or every slow kernel is a false timeout."""

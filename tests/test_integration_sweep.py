@@ -40,13 +40,15 @@ NATIVE_FRAMEWORK = "polly"
 SWEEP_BASELINE = "numpy"
 
 #: Some clang builds accept ``-mllvm -polly`` and outline nothing; the harness then drops the column
-#: as UNSUPPORTED, so the rows below never exist. Gate on the SAME probe the harness gates on, or the
-#: skip and the column disagree.
+#: as UNSUPPORTED, so the rows below never exist. Asserted with the SAME probe the harness gates on,
+#: so the failure names the verdict that dropped the column.
 _POLLY = flags.polly_capability()
-requires_polly = pytest.mark.skipif(
-    _POLLY.verdict is not flags.AutoparVerdict.OK,
-    reason=f"this host's polly is {_POLLY.verdict.value}: {_POLLY.detail}",
-)
+
+
+def assert_polly_outlines() -> None:
+    """Every supported host's Polly outlines; a probe verdict other than OK is a broken environment."""
+    assert _POLLY.verdict is flags.AutoparVerdict.OK, f"this host's polly is {_POLLY.verdict.value}: {_POLLY.detail}"
+
 
 PRESET = "S"
 
@@ -181,10 +183,10 @@ def test_plot_renders_a_real_pdf(sweep) -> None:
     assert len(re.findall(rb"/Type\s*/Page[^s]", blob)) == 1
 
 
-@requires_polly
 def test_native_autopar_leg_validates(sweep) -> None:
     """The auto-generated native kernels were emitted, built, ran, and validated: the C++ source was
     generated from the numpy reference, compiled, dlopened, and agreed with NumPy."""
+    assert_polly_outlines()
     expected = short_names_for(NATIVE_SELECTOR)
     rows = rows_for(sweep / "hpcagent_bench.db", NATIVE_FRAMEWORK)
     assert {r["benchmark"] for r in rows} == expected
@@ -198,7 +200,7 @@ def test_native_autopar_leg_validates(sweep) -> None:
 #: The autopar flavors and the flag each must actually reach the compiler with. cc_autopar's
 #: ``{n}`` field must be substituted -- gcc rejects a literal ``-ftree-parallelize-loops={n}``.
 AUTOPAR_FRAMEWORKS = [
-    pytest.param("polly", "-polly-parallel", marks=requires_polly, id="polly"),
+    pytest.param("polly", "-polly-parallel", id="polly"),
     pytest.param("cc_autopar", "-ftree-parallelize-loops=", id="cc_autopar"),
 ]
 
@@ -209,6 +211,8 @@ def test_native_leg_requests_autopar(framework, want_flag, monkeypatch) -> None:
     on the compile command, not a runtime speedup, since clang accepts ``-mllvm -polly`` with only a
     warning when its LLVM has no Polly). Spies on ``_ensure_built`` for real rather than re-deriving
     the command, which would be a tautology that never touches the build."""
+    if framework == "polly":
+        assert_polly_outlines()
     assert framework in cpp_runtime.FRAMEWORK_FLAGS, f"{framework} has no autopar flag preset"
     spec = BenchSpec.load(sorted(KERNELS.select_keys(NATIVE_SELECTOR))[0].rsplit("/", 1)[-1])
     cpp_backend = pathlib.Path(hpcagent_bench.__file__).parent / "benchmarks" / spec.relative_path / "cpp_backend"
@@ -238,10 +242,10 @@ def test_native_leg_requests_autopar(framework, want_flag, monkeypatch) -> None:
     assert "{n}" not in extra, f"{framework}: the core-count field was never substituted: {extra!r}"
 
 
-@requires_polly
 def test_speedup_against_numpy_is_computable(sweep) -> None:
     """Both legs are in one db, so every native kernel has a numpy baseline to divide. No speedup value
     is asserted (CI runners are noisy); only that the comparison exists and is finite."""
+    assert_polly_outlines()
     db = sweep / "hpcagent_bench.db"
     baseline = {r["benchmark"]: r["time"] for r in rows_for(db, "numpy")}
     native = {r["benchmark"]: r["time"] for r in rows_for(db, NATIVE_FRAMEWORK)}

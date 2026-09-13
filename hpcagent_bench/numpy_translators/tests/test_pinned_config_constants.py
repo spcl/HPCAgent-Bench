@@ -97,10 +97,7 @@ def test_a_narrowed_pinned_float_still_compiles_as_c23() -> None:
     import subprocess
     from numpyto_common.ir import apply_precision
 
-    if shutil.which("gcc") is None:  # pragma: no cover -- toolchain gate
-        import pytest
-
-        pytest.skip("gcc not installed")
+    assert shutil.which("gcc") is not None, "gcc not installed"
     d = pathlib.Path(tempfile.mkdtemp())
     src = d / "k.c"
     src.write_text(emit_c(apply_precision(_kir(), "float32"), fn_name="f"))

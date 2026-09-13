@@ -12,7 +12,7 @@ the inline-expression forms (``square``/``reciprocal``/``sign``/
 
 Each case builds a tiny kernel, emits it, compiles a shared library and
 calls it via ctypes (the binding JSON drives the argument order, exactly
-like the numerical oracle). Skips a backend whose compiler is absent.
+like the numerical oracle). Fails a backend whose compiler is absent.
 """
 
 import ctypes
@@ -128,8 +128,7 @@ def _numpy_ref(fn: str, nargs: int, a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 def _run_backend(backend: str, fn: str, nargs: int) -> None:
     emit, sym_key, fname, compile_cmd, exe = _BACKENDS[backend]
-    if shutil.which(exe) is None:
-        pytest.skip(f"{exe} not available")
+    assert shutil.which(exe) is not None, f"{exe} not available"
     with tempfile.TemporaryDirectory() as td:
         d = pathlib.Path(td)
         kir = _kernel_ir(d, fn, nargs)

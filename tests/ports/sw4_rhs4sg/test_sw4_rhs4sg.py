@@ -21,7 +21,9 @@
 4. **Structure.** The SBP coefficient tables are bit-exact against upstream's own
    Fortran generator, and the kernel writes exactly the planes upstream writes.
 
-Layers needing a compiler skip cleanly when it is absent.
+Layers needing a compiler require it on PATH. The bit-exact replay of the captured production
+call is a strict xfail: the capture came from Apple clang, and clang 22 fuses multiply-adds
+differently.
 """
 
 import ctypes
@@ -83,8 +85,7 @@ def _build(tmp: Path, cc: str, contract: str, tag: str) -> ctypes.CDLL:
         capture_output=True,
         text=True,
     )
-    if r.returncode != 0:
-        pytest.skip(f"vendored SW4Lite kernel failed to compile ({tag}):\n{r.stderr[-2000:]}")
+    assert r.returncode == 0, f"vendored SW4Lite kernel failed to compile ({tag}):\n{r.stderr[-2000:]}"
     dll = ctypes.CDLL(str(lib))
     dll.sw4_rhs4sg_xcheck.restype = None
     dll.sw4_rhs4sg_xcheck.argtypes = [_P] * 10 + [_CI, _CI, _CI, _D, _CI, _CI]
@@ -101,8 +102,7 @@ def native(tmp_path_factory: pytest.TempPathFactory) -> ctypes.CDLL:
     express an FMA -- see ``test_matches_captured_production_call``.
     """
     cc = shutil.which("cc") or shutil.which("clang") or shutil.which("gcc")
-    if cc is None:
-        pytest.skip("no C compiler on PATH")
+    assert cc is not None, "no C compiler on PATH"
     return _build(tmp_path_factory.mktemp("sw4_xcheck"), cc, "off", "nofma")
 
 
@@ -115,16 +115,8 @@ def native_contracted(tmp_path_factory: pytest.TempPathFactory) -> ctypes.CDLL:
     same contraction setting -- and a compiler that makes the same fusion choices,
     so this is restricted to the clang family the capture was made with.
     """
-    cc = shutil.which("cc") or shutil.which("clang") or shutil.which("gcc")
-    if cc is None:
-        pytest.skip("no C compiler on PATH")
-    ver = subprocess.run([cc, "--version"], capture_output=True, text=True).stdout
-    if "clang" not in ver.lower():
-        pytest.skip(
-            "bit-exact replay of the captured call is pinned to the clang family "
-            "that produced it; other compilers fuse differently (few-ULP agreement "
-            "is still gated by test_matches_captured_production_call)"
-        )
+    cc = shutil.which("clang")
+    assert cc is not None, "clang is not on PATH"
     return _build(tmp_path_factory.mktemp("sw4_xcheck_fma"), cc, "on", "fma")
 
 
@@ -288,6 +280,11 @@ def test_matches_captured_production_call(native: ctypes.CDLL) -> None:
     assert np.array_equal(lu_numpy, lu_native_11)
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="the capture came from Apple clang; clang 22 fuses multiply-adds differently (max |diff| 1.8e-12 "
+    "on the cluster), and few-ULP agreement is gated by test_matches_captured_production_call",
+)
 def test_captured_call_replays_bit_exactly_under_production_flags(native_contracted: ctypes.CDLL) -> None:
     """With the production build's FP contraction, the vendored kernel IS the application."""
     d, N_I, N_J, N_K, lo, hi, h = _load_capture()
@@ -444,8 +441,7 @@ def test_sbp_coefficients_match_upstream_fortran(tmp_path: Path) -> None:
     """Regenerate acof/bope/ghcof with upstream's own Fortran and compare bitwise."""
     fc = shutil.which("gfortran")
     cc = shutil.which("cc") or shutil.which("clang") or shutil.which("gcc")
-    if fc is None or cc is None:
-        pytest.skip("gfortran and a C compiler are needed to regenerate the SBP tables")
+    assert fc is not None and cc is not None, "gfortran and a C compiler are needed to regenerate the SBP tables"
 
     driver = tmp_path / "gen.c"
     driver.write_text("""
@@ -472,20 +468,17 @@ int main(void) {
         text=True,
         cwd=tmp_path,
     )
-    if r.returncode != 0:
-        pytest.skip(f"upstream boundaryOp.f failed to compile:\n{r.stderr[-2000:]}")
+    assert r.returncode == 0, f"upstream boundaryOp.f failed to compile:\n{r.stderr[-2000:]}"
     cobj = tmp_path / "gen.o"
     r = subprocess.run([cc, "-O2", "-c", str(driver), "-o", str(cobj)], capture_output=True, text=True, cwd=tmp_path)
-    if r.returncode != 0:
-        pytest.skip(f"driver failed to compile:\n{r.stderr[-2000:]}")
+    assert r.returncode == 0, f"driver failed to compile:\n{r.stderr[-2000:]}"
     exe = tmp_path / "gen"
     # Link with the Fortran driver: it knows where its own runtime lives, which a bare
     # `cc ... -lgfortran` does not on a machine where libgfortran is off the default path.
     link = subprocess.run(
         [fc, "-O2", str(cobj), str(obj), "-o", str(exe)], capture_output=True, text=True, cwd=tmp_path
     )
-    if link.returncode != 0:
-        pytest.skip(f"could not link against gfortran runtime:\n{link.stderr[-2000:]}")
+    assert link.returncode == 0, f"could not link against gfortran runtime:\n{link.stderr[-2000:]}"
     run = subprocess.run([str(exe)], capture_output=True, text=True, cwd=tmp_path)
     assert run.returncode == 0, run.stderr
 

@@ -743,6 +743,6 @@ subroutine VARCOEFFS4(acof, ghcof)
   acof(6, 8, 6) = -1.D0/8.D0
   acof(6, 8, 7) = 1.D0/6.D0
   acof(6, 8, 8) = -1.D0/8.D0
-  ***129 non - zero out of 384.
+! 129 non-zero out of 384.
 end
 

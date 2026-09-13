@@ -270,7 +270,8 @@ def test_dace_builds_with_the_compiler_the_cpp_column_resolves() -> None:
     everything else's GCC 16, and 13 is the major dace itself warns mislowers a masked select to
     silent zeros -- a wrong baseline that reports as a passing one.
     """
-    compiler_family = pytest.importorskip("dace.codegen.compiler_family")
+    from dace.codegen import compiler_family
+
     block = languages.compiler_for_family("cpp", languages.resolve_family("cpp"))
     assert block, "compilers.yaml wires no cpp block for the default family"
     expected = languages.resolve_compiler(languages.compiler_driver(block))
