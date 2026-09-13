@@ -100,10 +100,9 @@ def _rows(db: pathlib.Path) -> int:
 
 
 @pytest.mark.integration
+@pytest.mark.distro("console_script")
 def test_one_rank_job_shards_by_rank_and_rolls_up(tmp_path) -> None:
     """The whole script: preflights, sharded run-framework argv, per-rank DB, merged rollup."""
-    if shutil.which("hpcagent-bench") is None:
-        pytest.skip("hpcagent-bench console script is not installed")
 
     env = _job_env(tmp_path)
     done = subprocess.run(

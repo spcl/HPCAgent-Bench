@@ -42,6 +42,7 @@ import pytest
 
 from hpcagent_bench import flags, languages
 from hpcagent_bench.flags import Mode
+from tests import toolchains
 
 #: ``STDPAR_PROBE_SOURCE`` is the evidence (one ``std::execution::par_unseq`` call, owned by
 #: :mod:`hpcagent_bench.flags`); this only bolts a C-linkage entry onto it so the built ``.so`` can
@@ -219,10 +220,11 @@ extern "C" int stub_probe(void) {
 
 
 def cpp_blocks():
-    """``compilers.yaml``'s single-node C++ blocks, as ``(name, block)``. Read from the table
-    rather than listed here, so a new C++ toolchain is gated the day it is added."""
+    """``compilers.yaml``'s single-node C++ blocks, as ``(name, block)`` params carrying the vendor
+    toolchain marker of their driver. Read from the table rather than listed here, so a new C++
+    toolchain is gated the day it is added."""
     return [
-        (name, block)
+        pytest.param(name, block, id=name, marks=toolchains.driver_marks(block["cc"]))
         for name, block in sorted(languages._load_compilers().items())
         if block.get("lang") == "cpp" and not block.get("mpi")
     ]
@@ -236,23 +238,22 @@ def resolved_cc(block) -> str:
 
 
 def require_compiler(block) -> str:
-    """Case 1: no such driver on this host -> DEFERRED."""
+    """Case 1: the driver is on this host. A vendor driver's case is selected by its toolchain marker."""
     exe = languages.resolve_compiler(block["cc"])
-    if exe is None:
-        pytest.skip(f"toolchain absent: {block['cc']} is not on PATH")
+    assert exe is not None, f"toolchain absent: {block['cc']} is not on PATH"
     return exe
 
 
 def require_compiles(block, source: str, suffix: str, extra: str = "") -> None:
-    """Case 2: the driver exists but cannot build ``source`` at the harness's own standard ->
-    DEFERRED, quoting the compiler and its version so the log says WHICH environment declined."""
+    """Case 2: the driver builds ``source`` at the harness's own standard; a refusal fails, quoting the
+    compiler and its version so the log says WHICH environment declined."""
     exe = require_compiler(block)
     lang = block["lang"]
     argv = [exe, *languages.baseline_flags(lang).split(), *languages.std_flag(lang).split(), *extra.split()]
     complaint = compile_complaint(argv, source, suffix)
     if complaint is not None:
         version = subprocess.run([exe, "--version"], capture_output=True, text=True).stdout.splitlines()
-        pytest.skip(
+        pytest.fail(
             f"environment cannot build this construct: {exe} "
             f"({version[0] if version else 'version unknown'}) rejected it -- {complaint}"
         )
@@ -296,11 +297,9 @@ def undefined_symbols(lib: pathlib.Path) -> str:
     and is bound by the loader, which is precisely the reference the gate is looking for.
     """
     nm = shutil.which("nm")
-    if nm is None:
-        pytest.skip("toolchain absent: nm is not on PATH -- cannot read the symbol table")
+    assert nm is not None, "toolchain absent: nm is not on PATH -- cannot read the symbol table"
     proc = subprocess.run([nm, "-D", "-u", str(lib)], capture_output=True, text=True, timeout=60)
-    if proc.returncode != 0:
-        pytest.skip(f"environment cannot read this object: nm -D -u failed -- {proc.stderr.strip()[-200:]}")
+    assert proc.returncode == 0, f"environment cannot read this object: nm -D -u failed -- {proc.stderr.strip()[-200:]}"
     return proc.stdout
 
 
@@ -312,11 +311,11 @@ def needed_libraries(lib: pathlib.Path) -> str:
     the gate is actually asserting -- the linker recorded this runtime as required.
     """
     objdump = shutil.which("objdump")
-    if objdump is None:
-        pytest.skip("toolchain absent: objdump is not on PATH -- cannot read DT_NEEDED")
+    assert objdump is not None, "toolchain absent: objdump is not on PATH -- cannot read DT_NEEDED"
     proc = subprocess.run([objdump, "-p", str(lib)], capture_output=True, text=True, timeout=60)
-    if proc.returncode != 0:
-        pytest.skip(f"environment cannot read this object: objdump -p failed -- {proc.stderr.strip()[-200:]}")
+    assert proc.returncode == 0, (
+        f"environment cannot read this object: objdump -p failed -- {proc.stderr.strip()[-200:]}"
+    )
     return "\n".join(line for line in proc.stdout.splitlines() if "NEEDED" in line)
 
 
@@ -673,8 +672,8 @@ def test_skill_taught_parallelism_dispatches_into_its_runtime(case, tmp_path) ->
     signal was a campaign's worth of Fortran agents failing to beat their baseline.
     """
     taught_block(case)
-    if case.runtime == "stdpar" and languages.isopar_capability().verdict is not flags.AutoparVerdict.OK:
-        pytest.skip(
+    if case.runtime == "stdpar":
+        assert languages.isopar_capability().verdict is flags.AutoparVerdict.OK, (
             "environment cannot build this construct: this host's <execution> backend is "
             "not parallel (no TBB headers), so a runtime call is not expected here"
         )
@@ -756,14 +755,14 @@ def autopar_pool_size(exe: str, graded: str, n: int, workdir: pathlib.Path, omp_
 def test_gcc_autopar_thread_count_has_no_ceiling(tmp_path) -> None:
     """Every rung of the ladder must produce a pool of exactly that many threads."""
     _cname, block = languages._compiler_for_lang(languages._load_compilers(), "fortran")
-    if "gfortran" not in block["cc"]:
-        pytest.skip(
-            f"environment cannot build this construct: this tree's fortran driver is "
-            f"{block['cc']}, and parloops is a gcc flag"
-        )
+    assert "gfortran" in block["cc"], (
+        f"environment cannot build this construct: this tree's fortran driver is "
+        f"{block['cc']}, and parloops is a gcc flag"
+    )
     exe = require_compiler(block)
-    if not pathlib.Path("/proc/self/status").is_file():
-        pytest.skip("toolchain absent: no /proc/self/status here, so the running pool size is unreadable")
+    assert pathlib.Path("/proc/self/status").is_file(), (
+        "no /proc/self/status here, so the running pool size is unreadable"
+    )
 
     graded = languages._resolve_baseline(block, Mode.SINGLE_CORE)
     cores = flags.ncores()
@@ -780,22 +779,19 @@ def test_gcc_autopar_thread_count_has_no_ceiling(tmp_path) -> None:
 def test_omp_num_threads_cannot_widen_a_baked_autopar_count(tmp_path) -> None:
     """The environment must not move the baked count -- grading_ncores() is only sound if it holds."""
     _cname, block = languages._compiler_for_lang(languages._load_compilers(), "fortran")
-    if "gfortran" not in block["cc"]:
-        pytest.skip(
-            f"environment cannot build this construct: this tree's fortran driver is "
-            f"{block['cc']}, and parloops is a gcc flag"
-        )
+    assert "gfortran" in block["cc"], (
+        f"environment cannot build this construct: this tree's fortran driver is "
+        f"{block['cc']}, and parloops is a gcc flag"
+    )
     exe = require_compiler(block)
-    if not pathlib.Path("/proc/self/status").is_file():
-        pytest.skip("toolchain absent: no /proc/self/status here, so the running pool size is unreadable")
+    assert pathlib.Path("/proc/self/status").is_file(), (
+        "no /proc/self/status here, so the running pool size is unreadable"
+    )
 
     graded = languages._resolve_baseline(block, Mode.SINGLE_CORE)
     ladder = autopar_ladder(flags.ncores())
     narrow, wide = ladder[0], ladder[-1]
-    if narrow == wide:
-        pytest.skip(
-            "environment cannot build this construct: this host has too few cores for a narrow-vs-wide pair to differ"
-        )
+    assert narrow != wide, "this host has too few cores for a narrow-vs-wide pair to differ"
 
     assert autopar_pool_size(exe, graded, narrow, tmp_path, omp_num_threads=wide) == narrow, (
         f"OMP_NUM_THREADS={wide} widened a build baked at {narrow} threads. If the environment can move the count "

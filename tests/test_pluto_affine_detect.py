@@ -13,7 +13,6 @@ merely miscompiles is NOT flagged here -- that stays a tracked FAIL/xfail.
 
 import importlib
 import re
-import shutil
 import tempfile
 from pathlib import Path
 
@@ -115,7 +114,7 @@ def test_every_avoided_by_resolves_to_a_real_attribute() -> None:
     assert checked, "no entry claims a guard -- the tripwire would be vacuous"
 
 
-@pytest.mark.skipif(shutil.which("polycc") is None, reason="pluto/polycc not installed")
+@pytest.mark.pluto("polycc")
 def test_gather_kernel_scop_is_detected_nonaffine() -> None:
     """End-to-end: ``reroll_gather`` (``b[ip[i]]``) emits an affine-looking loop but
     an indirect access, so the detector flags its real scop -- the pluto path then

@@ -1615,7 +1615,7 @@ def _setup(ni, nj, nk, hord, grid_type):
     return d
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 @pytest.mark.parametrize("iord", [5, 6, 7])
 @pytest.mark.parametrize("grid_type", [0, 1, 2, 3])
 def test_xppm_matches_gt4py(iord, grid_type):
@@ -1646,7 +1646,7 @@ def test_xppm_matches_gt4py(iord, grid_type):
     assert np.array_equal(xflux[sl], gt[sl])
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 @pytest.mark.parametrize("jord", [5, 6, 7])
 @pytest.mark.parametrize("grid_type", [0, 1, 2, 3])
 def test_yppm_matches_gt4py(jord, grid_type):
@@ -1678,7 +1678,7 @@ def test_yppm_matches_gt4py(jord, grid_type):
 
 
 # fvtp2d helpers bit-exact vs GT4Py
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_q_i_stencil_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     d = _setup(24, 24, 6, 5, 3)
@@ -1703,7 +1703,7 @@ def test_q_i_stencil_matches_gt4py():
     assert np.array_equal(q_i[sl], gt[sl])
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_q_j_stencil_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     d = _setup(24, 24, 6, 5, 3)
@@ -1728,7 +1728,7 @@ def test_q_j_stencil_matches_gt4py():
     assert np.array_equal(q_j[sl], gt[sl])
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_final_fluxes_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     d = _setup(24, 24, 6, 5, 3)
@@ -1765,7 +1765,7 @@ def test_final_fluxes_matches_gt4py():
 
 
 # delnflux pieces bit-exact vs GT4Py
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_delnflux_fx_fy_d2_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     d = _setup(24, 24, 6, 5, 3)
@@ -1798,7 +1798,7 @@ def test_delnflux_fx_fy_d2_matches_gt4py():
     assert np.array_equal(fy[i0 : i1 + 1, j0 : j1 + 2], gfy[i0 : i1 + 1, j0 : j1 + 2])
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 @pytest.mark.parametrize("nord", [2])
 def test_delnflux_higher_order_matches_gt4py(nord):
     """del-4 (nord=2) fluxes bit-exact vs a GT4Py DelnFluxNoSG reconstruction; del-6 needs nhalo>=4, unexercised."""
@@ -1888,7 +1888,7 @@ def test_copy_corners_identity():
 
 
 # finite_volume_transport composition (grid_type>=3 interior) end-to-end
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 @pytest.mark.parametrize("hord", [5, 6, 7])
 def test_fvtp2d_composition_matches_gt4py(hord):
     """Full fv_tp_2d (no del-n) composed in numpy vs the same chain in GT4Py (grid_type=3, no edge regions)."""
@@ -2091,7 +2091,7 @@ def _ij(a):
     return a[:, :, 0].copy()
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_geoadjust_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _csw_fields()
@@ -2120,7 +2120,7 @@ def test_geoadjust_matches_gt4py():
     assert np.array_equal(vtn[:, 1:], gvt[:, 1:])
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_compute_nonhydro_fluxes_x_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _csw_fields()
@@ -2149,7 +2149,7 @@ def test_compute_nonhydro_fluxes_x_matches_gt4py():
     assert np.array_equal(fx2[1:, :], gfx2[1:, :])
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_transportdelp_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _csw_fields()
@@ -2189,7 +2189,7 @@ def test_transportdelp_matches_gt4py():
     assert np.array_equal(wc[i0:i1, j0:j1], gwc[i0:i1, j0:j1])
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_kinetic_energy_vorticity_interior_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _csw_fields()
@@ -2216,7 +2216,7 @@ def test_kinetic_energy_vorticity_interior_matches_gt4py():
     assert np.array_equal(vort[: nx - 1, : ny - 1], gvort[: nx - 1, : ny - 1])
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_circulation_cgrid_interior_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _csw_fields()
@@ -2229,7 +2229,7 @@ def test_circulation_cgrid_interior_matches_gt4py():
     assert np.array_equal(vc_out[1:, 1:], gvc[1:, 1:])
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_absolute_vorticity_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _csw_fields()
@@ -2244,7 +2244,7 @@ def test_absolute_vorticity_matches_gt4py():
     assert np.array_equal(vn, gv)
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_update_velocity_interior_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _csw_fields()
@@ -2290,7 +2290,7 @@ def test_update_velocity_interior_matches_gt4py():
     assert np.array_equal(vcn[: nx - 1, 1:], gvc[: nx - 1, 1:])
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_divergence_corner_gt4_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _csw_fields()
@@ -2313,7 +2313,7 @@ def test_divergence_corner_gt4_matches_gt4py():
 
 
 # d2a2c_vect leaf stencils + grid_type==4 composition bit-exact vs GT4Py
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_d2a2c_leaf_stencils_match_gt4py():
     """The d2a2c leaf stencils (lagrange interp, contravariant components, ut_main, vt_main) each bit-exact vs GT4Py."""
     npy = _load("fv3_dycore_numpy")
@@ -2397,7 +2397,7 @@ def test_d2a2c_leaf_stencils_match_gt4py():
     assert np.array_equal(vtc[isc - 1 : iec + 2, jsc - 1 : jec + 2], gvtc[isc - 1 : iec + 2, jsc - 1 : jec + 2])
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_d2a2c_gt4_composition_matches_gt4py():
     """Full d2a2c_vect (grid_type==4) composed in numpy vs the identical chain in GT4Py, over the deep interior."""
     npy = _load("fv3_dycore_numpy")
@@ -2491,7 +2491,7 @@ def test_d2a2c_gt4_composition_matches_gt4py():
 
 
 # c_sw (grid_type==4) FULL composition bit-exact vs GT4Py over the interior
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 @pytest.mark.parametrize("nord", [0, 1])
 def test_c_sw_gt4_composition_matches_gt4py(nord):
     """The full c_sw C-grid solver step for grid_type==4 vs the identical GT4Py chain, deep interior."""
@@ -2752,7 +2752,7 @@ def _dsw_fields(seed=21):
     return out
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_dsw_flux_capacitor_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _dsw_fields()
@@ -2783,7 +2783,7 @@ def test_dsw_flux_capacitor_matches_gt4py():
     assert np.array_equal(xf, gxf) and np.array_equal(yf, gyf)
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_dsw_heat_diss_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _dsw_fields()
@@ -2819,7 +2819,7 @@ def test_dsw_heat_diss_matches_gt4py():
     assert np.array_equal(dw[sl], gdw[sl])
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_dsw_apply_fluxes_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _dsw_fields()
@@ -2841,7 +2841,7 @@ def test_dsw_apply_fluxes_matches_gt4py():
     assert np.array_equal(q[sl], gq[sl])
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_dsw_apply_pt_delp_fluxes_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _dsw_fields()
@@ -2876,7 +2876,7 @@ def test_dsw_apply_pt_delp_fluxes_matches_gt4py():
     assert np.array_equal(dpn[s2], gdp[s2])
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_dsw_adjust_w_and_qcon_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _dsw_fields()
@@ -2893,7 +2893,7 @@ def test_dsw_adjust_w_and_qcon_matches_gt4py():
     assert np.array_equal(w, gw) and np.array_equal(qc, gqc)
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_dsw_compute_vorticity_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _dsw_fields()
@@ -2916,7 +2916,7 @@ def test_dsw_compute_vorticity_matches_gt4py():
     assert np.array_equal(vort[sl], gv[sl])
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_dsw_rel_vorticity_to_abs_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _dsw_fields()
@@ -2929,7 +2929,7 @@ def test_dsw_rel_vorticity_to_abs_matches_gt4py():
     assert np.array_equal(av, gav)
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_dsw_u_and_v_from_ke_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _dsw_fields()
@@ -2948,7 +2948,7 @@ def test_dsw_u_and_v_from_ke_matches_gt4py():
     assert np.array_equal(vn[i0 : i1 + 2, j0 : j1 + 1], gv[i0 : i1 + 2, j0 : j1 + 1])
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_dsw_vort_differencing_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _dsw_fields()
@@ -2968,7 +2968,7 @@ def test_dsw_vort_differencing_matches_gt4py():
     assert np.array_equal(vyd[i0 : i1 + 2, j0 : j1 + 1], gvy[i0 : i1 + 2, j0 : j1 + 1])
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_dsw_update_u_and_v_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _dsw_fields()
@@ -2989,7 +2989,7 @@ def test_dsw_update_u_and_v_matches_gt4py():
     assert np.array_equal(vn[i0 : i1 + 2, j0 : j1 + 1], gv[i0 : i1 + 2, j0 : j1 + 1])
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_dsw_accumulate_heat_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _dsw_fields()
@@ -3004,7 +3004,7 @@ def test_dsw_accumulate_heat_matches_gt4py():
     assert np.array_equal(hst, ghst) and np.array_equal(det, gdet)
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 @pytest.mark.parametrize("iord", [5, 6, 7])
 def test_dsw_advect_u_along_x_matches_gt4py(iord):
     """xtp_u advect_u_along_x (iord<8, grid_type>=3 interior) vs GT4Py."""
@@ -3034,7 +3034,7 @@ def test_dsw_advect_u_along_x_matches_gt4py(iord):
     assert np.array_equal(up[i0 : i1 + 2, :], gup[i0 : i1 + 2, :])
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 @pytest.mark.parametrize("jord", [5, 6, 7])
 def test_dsw_advect_v_along_y_matches_gt4py(jord):
     """ytp_v advect_v_along_y (jord<8, grid_type>=3 interior) vs GT4Py."""
@@ -3119,7 +3119,7 @@ def _ddamp_fields(seed=41):
     return out
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_fxadv_fluxes_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _ddamp_fields()
@@ -3184,7 +3184,7 @@ def test_fxadv_fluxes_matches_gt4py():
     assert np.array_equal(yaf[:, j0 : j1 + 2], gyaf[:, j0 : j1 + 2])
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_vc_uc_from_divg_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _ddamp_fields()
@@ -3203,7 +3203,7 @@ def test_vc_uc_from_divg_matches_gt4py():
     assert np.array_equal(uc[1 : nx - 1, 1 : ny - 1], guc[1 : nx - 1, 1 : ny - 1])
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_redo_divg_d_gt4_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _ddamp_fields()
@@ -3216,7 +3216,7 @@ def test_redo_divg_d_gt4_matches_gt4py():
     assert np.array_equal(dd[1:nx, 1:ny], gdd[1:nx, 1:ny])
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_damping_nord_highorder_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _ddamp_fields()
@@ -3249,7 +3249,7 @@ def test_damping_nord_highorder_matches_gt4py():
     assert np.array_equal(ke[sl], gke[sl])
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_smag_corner_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _ddamp_fields()
@@ -3281,7 +3281,7 @@ def test_smag_corner_matches_gt4py():
     assert np.allclose(sc[sl], gsc[sl], rtol=0, atol=1e-14)
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 @pytest.mark.parametrize("hord", [5, 6, 7])
 def test_compute_kinetic_energy_gt4_matches_gt4py(hord):
     npy = _load("fv3_dycore_numpy")
@@ -3343,7 +3343,7 @@ def test_compute_kinetic_energy_gt4_matches_gt4py(hord):
     assert np.array_equal(ke[sl], gke[sl])
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_heat_source_from_vort_damping_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _ddamp_fields()
@@ -3393,7 +3393,7 @@ def test_heat_source_from_vort_damping_matches_gt4py():
     assert np.array_equal(hs[sl], ghs[sl])
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 @pytest.mark.parametrize("nord", [1, 2])
 def test_divergence_damping_gt4_composition_matches_gt4py(nord):
     """Full divergence_damping (grid_type>=3, uniform nord, do_zero_order=False) vs the identical GT4Py chain."""
@@ -3505,7 +3505,7 @@ def test_divergence_damping_gt4_composition_matches_gt4py(nord):
 
 
 # fvtp2d mass-flux + del-n damping variant bit-exact vs GT4Py
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 @pytest.mark.parametrize("with_mass", [False, True])
 def test_fvtp2d_massflux_delnflux_matches_gt4py(with_mass):
     """_fv_tp_2d with x/y mass fluxes + nord==0 del-n damping vs the same chain reconstructed in GT4Py."""
@@ -3691,7 +3691,7 @@ def _dsw_full_fields(seed=99):
     return out
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_d_sw_gt4_composition_matches_gt4py():
     """Full d_sw(...) for grid_type==4 vs a GT4Py reconstruction of the same __call__ chain; validates ORCHESTRATION."""
     npy = _load("fv3_dycore_numpy")
@@ -4195,7 +4195,7 @@ def _vert_fields(seed=51, nk=NK_C):
     return out
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_gz_from_surface_height_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _vert_fields()
@@ -4210,7 +4210,7 @@ def test_gz_from_surface_height_matches_gt4py():
     assert np.array_equal(gz, ggz)
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_interface_pressure_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _vert_fields()
@@ -4224,7 +4224,7 @@ def test_interface_pressure_matches_gt4py():
     assert np.array_equal(pem, gpem)
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_compute_geopotential_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _vert_fields()
@@ -4237,7 +4237,7 @@ def test_compute_geopotential_matches_gt4py():
     assert np.array_equal(gz, ggz)
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_sim1_solver_matches_gt4py():
     """SIM1 tridiagonal vertical solver vs GT4Py (FORWARD/BACKWARD sweeps)."""
     npy = _load("fv3_dycore_numpy")
@@ -4293,7 +4293,7 @@ def test_sim1_solver_matches_gt4py():
     assert np.allclose(pen[sl], gpe[sl], rtol=0, atol=1e-9), "pe"
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_riem_solver_c_matches_gt4py():
     """C-grid Riemann solver (precompute -> sim1 -> finalize) vs GT4Py chain."""
     npy = _load("fv3_dycore_numpy")
@@ -4382,7 +4382,7 @@ def test_riem_solver_c_matches_gt4py():
     assert np.allclose(pef[sl], gpef[sl], rtol=0, atol=1e-9), "pef"
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_update_dz_c_matches_gt4py():
     """updatedzc (gt>=3) update_dz_c vs GT4Py (winds interp + gz advect + monotone)."""
     npy = _load("fv3_dycore_numpy")
@@ -4421,7 +4421,7 @@ def test_update_dz_c_matches_gt4py():
     assert np.allclose(ws[sl], gws[sl], rtol=0, atol=1e-9), "ws"
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_p_grad_c_nonhydro_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _vert_fields()
@@ -4456,7 +4456,7 @@ def test_p_grad_c_nonhydro_matches_gt4py():
 
 
 # Nonhydrostatic vertical machinery (D-grid side) bit-exact vs GT4Py
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_riem_solver3_matches_gt4py():
     """D-grid Riemann solver (precompute -> sim1 -> finalize) vs GT4Py chain."""
     npy = _load("fv3_dycore_numpy")
@@ -4596,7 +4596,7 @@ def test_riem_solver3_matches_gt4py():
     assert np.allclose(ppe[sl], gppe[sl], rtol=0, atol=1e-7), "ppe"
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_cubic_spline_interp_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _vert_fields(seed=62)
@@ -4616,7 +4616,7 @@ def test_cubic_spline_interp_matches_gt4py():
     assert np.allclose(qi, gqi, rtol=1e-13, atol=1e-13)
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_apply_height_fluxes_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _vert_fields(seed=63)
@@ -4658,7 +4658,7 @@ def test_apply_height_fluxes_matches_gt4py():
     assert np.allclose(ws[sl], gws[sl], rtol=1e-13, atol=1e-12), "ws"
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_nh_p_grad_leaves_match_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _vert_fields(seed=64)
@@ -4727,7 +4727,7 @@ def test_nh_p_grad_leaves_match_gt4py():
     assert np.allclose(vn[slv], gv[slv], rtol=1e-12, atol=0), "calc_v"
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_update_dz_d_gt4_runs_and_matches_components():
     """update_dz_d_gt4 composition runs end-to-end with finite output and the height monotone-thickness invariant."""
     npy = _load("fv3_dycore_numpy")
@@ -4759,7 +4759,7 @@ def test_update_dz_d_gt4_runs_and_matches_components():
         assert np.all(height[sl][:, :, k] >= height[sl][:, :, k + 1] - 1e-9)
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_nh_p_grad_gt4_composition_matches_gt4py():
     """nh_p_grad_gt4 (gt==4) vs a GT4Py reconstruction: a2b of pp/pk3/gz/delp, then set_k0 + calc_u/calc_v."""
     npy = _load("fv3_dycore_numpy")
@@ -5236,7 +5236,7 @@ def _dyn_core_reference(
 
 
 # Vertical remapping leaves bit-exact vs GT4Py
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_fix_tracer_matches_gt4py():
     """fillz.fix_tracer (negative-tracer borrow/fill column pass) vs GT4Py."""
     npy = _load("fv3_dycore_numpy")
@@ -5259,7 +5259,7 @@ def test_fix_tracer_matches_gt4py():
     assert np.allclose(qn[sl], gq[sl], rtol=1e-13, atol=1e-14)
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_map_single_set_dp_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     nhalo, ni, nj, nk = 3, 12, 12, 8
@@ -5277,7 +5277,7 @@ def test_map_single_set_dp_matches_gt4py():
     assert np.array_equal(lev, glev)
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_lagrangian_contributions_matches_gt4py():
     """map_single.lagrangian_contributions (PPM remap, data-dependent source-layer while-loop) vs GT4Py."""
     npy = _load("fv3_dycore_numpy")
@@ -5341,7 +5341,7 @@ def _moist_fields(seed=91):
     return out
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_moist_pkz_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _moist_fields()
@@ -5410,7 +5410,7 @@ def test_moist_pkz_matches_gt4py():
         assert np.allclose(a[sl], ga[sl], rtol=1e-13, atol=1e-13), nm
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_moist_pt_last_step_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _moist_fields()
@@ -5461,7 +5461,7 @@ def test_moist_pt_last_step_matches_gt4py():
 
 
 # remap_profile (iv=1, kord<9) bit-exact vs GT4Py
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_remap_profile_iv1_kordsmall_matches_gt4py():
     """RemapProfile (iv=1, kord=8) vs verbatim pyfv3 GTScript; bit-exact incl. edges (prior bug: q[nk] mis-indexed)."""
     npy = _load("fv3_dycore_numpy")
@@ -5511,7 +5511,7 @@ def test_remap_profile_iv1_kordsmall_matches_gt4py():
 
 
 # tracer_2d_1l leaves bit-exact vs GT4Py
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_tracer_flux_compute_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     f = _ddamp_fields(seed=111)
@@ -5566,7 +5566,7 @@ def test_tracer_flux_compute_matches_gt4py():
     assert np.allclose(yfx[i0 : i1 + 1, j0 : j1 + 2], gyfx[i0 : i1 + 1, j0 : j1 + 2], rtol=1e-13, atol=1e-13)
 
 
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_divide_fluxes_and_apply_flux_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
     nhalo, ni, nj, nk = 3, 12, 12, 8
@@ -5611,7 +5611,7 @@ def test_divide_fluxes_and_apply_flux_matches_gt4py():
 
 
 # tracer_advection (gt==4) orchestration validation
-@pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
+@pytest.mark.gt4py
 def test_tracer_advection_gt4_orchestration():
     """tracer_advection_gt4 validated: ORCHESTRATION of GT4Py-validated leaves vs a hand-wired reference."""
     npy = _load("fv3_dycore_numpy")

@@ -97,11 +97,11 @@ def test_a_call_with_no_macro_twin_and_no_hoist_sink_is_left_alone() -> None:
     assert pluto_call_free("floord", "N, 2", sink) == "__pl0", "same call must reuse one temp"
 
 
-@pytest.mark.skipif(shutil.which("polycc") is None, reason="pluto/polycc not installed")
-@pytest.mark.skipif(shutil.which("gcc") is None, reason="gcc not installed")
+@pytest.mark.pluto("polycc")
 @pytest.mark.parametrize("kir_fn,name", [(_gather_kir, "gath"), (_relu_kir, "relu")])
 def test_the_transformed_output_compiles(kir_fn: Callable[[], KernelIR], name: str) -> None:
     """The claim that matters: polycc's output has no undeclared ``__pet_ret_0`` left in it."""
+    assert shutil.which("gcc"), "gcc not installed"
     d = pathlib.Path(tempfile.mkdtemp())
     src = d / f"{name}_pluto_input.c"
     src.write_text(emit_pluto(kir_fn(), fn_name=name))

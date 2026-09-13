@@ -40,18 +40,6 @@ CLONE_TIMEOUT = 900
 BUILD_TIMEOUT = 5400
 PROBE_TIMEOUT = 900
 
-requires_dace = pytest.mark.skipif(
-    importlib.util.find_spec("dace") is None, reason="dace not importable: no BLAS library node can be expanded here"
-)
-requires_build_tools = pytest.mark.skipif(
-    any(shutil.which(tool) is None for tool in ("git", "make", "gfortran")),
-    reason="git/make/gfortran missing: OpenBLAS cannot be built from source on this host",
-)
-requires_system_openblas = pytest.mark.skipif(
-    ctypes.util.find_library("openblas") is None or ctypes.util.find_library("blas") is None,
-    reason="no distro OpenBLAS on this host: install libopenblas-dev (CI gets it from .github/actions/setup)",
-)
-
 
 def cache_root() -> pathlib.Path:
     return pathlib.Path(os.environ.get(CACHE_ENV_VAR, pathlib.Path.home() / ".cache" / "optarena-blas"))
@@ -95,6 +83,8 @@ def run_step(command: list, timeout: int) -> None:
 
 def build_openblas_openmp() -> pathlib.Path:
     """Build the pinned OpenBLAS with OpenMP threading into the persistent cache, once."""
+    missing = [tool for tool in ("git", "make", "gfortran") if shutil.which(tool) is None]
+    assert not missing, f"{missing} missing: OpenBLAS cannot be built from source on this host"
     library = built_library()
     if library.exists():
         return library
@@ -127,6 +117,9 @@ def run_probe(
     name: str, build_folder: pathlib.Path, *, hide_system: bool, openblas_dir: pathlib.Path | None = None
 ) -> dict:
     """Compile a GEMM in a child process and return its JSON report."""
+    assert importlib.util.find_spec("dace") is not None, (
+        "dace not importable: no BLAS library node can be expanded here"
+    )
     env = dict(os.environ)
     env["DACE_default_build_folder"] = str(build_folder)
     for variable in ("OPENBLAS_DIR", "OPENBLAS_ROOT", "OPENBLAS_HOME", "OpenBLAS_HOME"):
@@ -141,7 +134,6 @@ def run_probe(
 
 @pytest.mark.integration
 @pytest.mark.timeout(BUILD_TIMEOUT)
-@requires_build_tools
 def test_source_built_openblas_is_openmp_threaded() -> None:
     """The cached from-source build is the OpenMP flavor -- not pthreads, not serial."""
     library = build_openblas_openmp()
@@ -155,8 +147,6 @@ def test_source_built_openblas_is_openmp_threaded() -> None:
 
 @pytest.mark.integration
 @pytest.mark.timeout(BUILD_TIMEOUT)
-@requires_dace
-@requires_build_tools
 def test_dace_links_the_source_built_openblas(tmp_path) -> None:
     """``OPENBLAS_DIR`` at the from-source build makes DaCe link exactly that library."""
     library = build_openblas_openmp()
@@ -180,8 +170,7 @@ def test_dace_links_the_source_built_openblas(tmp_path) -> None:
 
 
 @pytest.mark.integration
-@requires_dace
-@requires_system_openblas
+@pytest.mark.distro("openblas")
 def test_dace_links_the_system_openblas(tmp_path) -> None:
     """With no override, DaCe links the apt-installed OpenBLAS behind the distro alternatives."""
     report = run_probe("openblas_gemm_system", tmp_path / "dacecache", hide_system=False)

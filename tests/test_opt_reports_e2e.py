@@ -17,10 +17,8 @@ concatenated (polycc's transformation report + clang's remarks), while dace's is
 compile command CMake recorded for the C++ dace generated -- neither shares code with the other.
 """
 
-import importlib.util
 import os
 import pathlib
-import shutil
 import subprocess
 import sys
 
@@ -63,17 +61,8 @@ MIN_REPORT_BYTES = 512
 #: A stub matplotlib figure is ~1.2 kB; a real heatmap with three columns is tens of kB.
 MIN_PDF_BYTES = 8_000
 
-#: Toolchain predicates -- EXPLICIT, so "pluto is not installed on this runner" and "pluto stopped
-#: producing reports" can never be the same outcome. polycc is what the pluto report shells out to;
-#: dace is an import. Neither is wrapped in try/except: a missing tool is a property of the host,
-#: which is a question with a direct answer.
-requires_polycc = pytest.mark.skipif(
-    shutil.which("polycc") is None, reason="polycc not installed: the pluto column cannot be built here"
-)
-requires_dace = pytest.mark.skipif(
-    importlib.util.find_spec("dace") is None,
-    reason="dace not importable: the dace_cpu_autoopt column cannot be built here",
-)
+#: The dace_cpu_autoopt column is built by every supported install; the pluto column needs the
+#: source-built polycc, which is what the ``pluto`` marker on each test below names.
 
 
 def kernel_specs() -> list[BenchSpec]:
@@ -158,8 +147,7 @@ def test_the_two_report_kinds_have_separate_roots() -> None:
     assert perf_reports.report_root("lowered_code") == paths.ROOT / "perf_reports" / "lowered_code"
 
 
-@requires_polycc
-@requires_dace
+@pytest.mark.pluto
 @pytest.mark.integration
 @pytest.mark.parametrize("framework", ["dace_cpu_autoopt", "pluto"])
 @pytest.mark.parametrize("kind", list(KINDS))
@@ -176,8 +164,7 @@ def test_both_columns_write_both_reports(swept: pathlib.Path, framework: str, ki
             assert size >= MIN_REPORT_BYTES, f"{path} is {size} bytes -- a report that says nothing"
 
 
-@requires_polycc
-@requires_dace
+@pytest.mark.pluto
 @pytest.mark.integration
 def test_the_pluto_report_carries_both_tools(swept: pathlib.Path) -> None:
     """pluto's opt-report is polycc's transformation report AND the compiler's vectorization remarks.
@@ -189,8 +176,7 @@ def test_the_pluto_report_carries_both_tools(swept: pathlib.Path) -> None:
             assert "remark:" in text or "Rpass" in text, f"{path} lost the compiler section"
 
 
-@requires_polycc
-@requires_dace
+@pytest.mark.pluto
 @pytest.mark.integration
 def test_the_dace_report_names_the_pipeline_it_measured(swept: pathlib.Path) -> None:
     """A dace report that does not say which pipeline produced it cannot be attributed to a flavor,
@@ -201,8 +187,7 @@ def test_the_dace_report_names_the_pipeline_it_measured(swept: pathlib.Path) -> 
             assert "pipeline: autoopt" in path.read_text(), f"{path} does not name its pipeline"
 
 
-@requires_polycc
-@requires_dace
+@pytest.mark.pluto
 @pytest.mark.integration
 def test_the_run_plots_a_speedup_table(swept: pathlib.Path) -> None:
     """The whole point of running three columns into one DB: a speedup table against numpy. Rendered

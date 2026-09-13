@@ -547,7 +547,7 @@ def test_completions_are_appended_not_deduped(tmp_path) -> None:
 
 
 # --------------------------- the optional dependency degrades cleanly --------------------------- #
-@pytest.mark.skipif(importlib.util.find_spec("optimas") is None, reason="upstream optimas-ai not installed")
+@pytest.mark.agent_extras("optimas")
 def test_upstream_optimas_opro_drives_the_propose_seam(monkeypatch) -> None:
     """The REAL OPRO, wired to our LocalReward as its metric. No network: the proposer LLM is stubbed.
 
@@ -563,7 +563,7 @@ def test_upstream_optimas_opro_drives_the_propose_seam(monkeypatch) -> None:
     assert chosen == "BLOCK AND VECTORIZE"
 
 
-@pytest.mark.skipif(importlib.util.find_spec("optimas") is None, reason="upstream optimas-ai not installed")
+@pytest.mark.agent_extras("optimas")
 def test_upstream_optimas_proposer_never_returns_an_already_evaluated_instruction(monkeypatch) -> None:
     """Returning a seen instruction would make the outer loop skip on the local estimate and stall."""
     import optimas.optim.opro as opro_module

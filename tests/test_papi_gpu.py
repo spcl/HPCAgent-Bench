@@ -23,17 +23,10 @@ from typing import Dict, Sequence, Tuple
 
 import pytest
 
-from hpcagent_bench import osinfo
 from hpcagent_bench.harness import papi
 
 #: The environment predicate the hardware-gated tests key on -- a name, not a swallowed exception.
 PAPI_LIBRARY = ctypes.util.find_library("papi")
-
-requires_papi = pytest.mark.skipif(
-    not (osinfo.IS_LINUX and PAPI_LIBRARY),
-    reason="no libpapi on this host (ctypes.util.find_library('papi') found nothing), so PAPI's "
-    "component table cannot be read; install PAPI to exercise these",
-)
 
 
 def component(name: str, *, index: int = 0, enabled: bool = True, reason: str = "", short: str = "") -> dict:
@@ -631,7 +624,7 @@ def test_a_group_costs_one_run_per_metric_and_ships_the_caveats(monkeypatch) -> 
 
 
 # ------------------------------ against a real PAPI ------------------------------ #
-@requires_papi
+@pytest.mark.papi
 def test_the_component_table_is_read_from_libpapi_not_from_a_list() -> None:
     """No component is hardcoded anywhere, so this is what proves the struct read works at all --
     and it is the assertion that fails first if a future PAPI moves the prefix."""
@@ -641,7 +634,7 @@ def test_the_component_table_is_read_from_libpapi_not_from_a_list() -> None:
     assert all(row["name"] for row in rows), "a nameless component means the struct offsets moved"
 
 
-@requires_papi
+@pytest.mark.papi
 def test_every_gpu_component_gets_a_verdict_on_a_real_install() -> None:
     """Whatever this host has, no component may come back as neither present nor explained."""
     for name, row in papi.component_report().items():
@@ -651,14 +644,14 @@ def test_every_gpu_component_gets_a_verdict_on_a_real_install() -> None:
             assert row["reason"].strip(), f"{name}: disabled with no reason"
 
 
-@requires_papi
+@pytest.mark.papi
+@pytest.mark.gpu("device")
 def test_a_built_gpu_component_resolves_at_least_one_metric_of_its_vendor() -> None:
     """The end-to-end resolution check, on whatever this box actually has. A component that
     enumerates thousands of events and answers no metric means the candidate ladder has drifted
     away from the names PAPI publishes."""
     live = [name for name, row in papi.component_report().items() if row["enabled"] and row["events"]]
-    if not live:
-        pytest.skip(f"this PAPI has no enabled GPU component with events: {sorted(papi.GPU_COMPONENTS)}")
+    assert live, f"this PAPI has no enabled GPU component with events: {sorted(papi.GPU_COMPONENTS)}"
     for vendor, names in papi.VENDOR_COMPONENTS.items():
         if not set(names) & set(live):
             continue

@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Opt-in integration test: build the container and smoke-check it.
 
-This actually invokes ``docker build`` (slow, needs a daemon + network), so it is
-SKIPPED unless ``HPCAGENT_BENCH_DOCKER_TEST=1`` and docker is reachable. It builds the
+This actually invokes ``docker build`` (slow, needs a daemon + network), so it carries the
+``docker`` marker: deselected unless ``-m docker`` names it, and failing then if no daemon answers. It builds the
 ``cpu`` image from its Dockerfile and asserts:
 
 * the image builds on the pinned base (Ubuntu 26.04);
@@ -14,7 +14,7 @@ SKIPPED unless ``HPCAGENT_BENCH_DOCKER_TEST=1`` and docker is reachable. It buil
 
 Run it with::
 
-    HPCAGENT_BENCH_DOCKER_TEST=1 pytest tests/test_container_build.py
+    pytest -m docker tests/test_container_build.py
 """
 
 import os
@@ -28,10 +28,7 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 DOCKERFILE = "containers/hpcagent_bench.Dockerfile"
 IMAGE = "hpcagent_bench:test-cpu"
 
-pytestmark = pytest.mark.skipif(
-    os.environ.get("HPCAGENT_BENCH_DOCKER_TEST") != "1" or shutil.which("docker") is None,
-    reason="set HPCAGENT_BENCH_DOCKER_TEST=1 with a reachable docker daemon to run container-build tests",
-)
+pytestmark = pytest.mark.docker
 
 
 def _docker(*args, timeout: int = 1800):

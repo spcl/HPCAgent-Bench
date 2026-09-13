@@ -32,29 +32,6 @@ from hpcagent_bench.flags import Mode
 from hpcagent_bench.harness import papi, profiling
 from tests.papi_probe import CAN_COUNT, PAPI_LIBRARY, armable
 
-#: CI sets this the moment it apt-installs libpapi-dev (.github/workflows/tests.yml, unit job), so
-#: test_the_papi_provisioning_step_actually_worked below can tell "this job never had PAPI" (fine,
-#: not what the flag claims) from "this job installed PAPI and it still did not load" (a broken
-#: provisioning step, which must fail loud rather than silently widen every skip above it).
-CI_EXPECTS_PAPI = os.environ.get("HPCAGENT_BENCH_CI_PAPI_INSTALLED")
-
-requires_papi = pytest.mark.skipif(
-    not (osinfo.IS_LINUX and PAPI_LIBRARY),
-    reason="no PAPI on this host (ctypes.util.find_library('papi') found nothing, or this is not "
-    "Linux), so there is no library to ask anything of. A host that HAS PAPI and no countable "
-    "event does not skip -- it asserts the refusal instead.",
-)
-
-requires_counters = pytest.mark.skipif(
-    not CAN_COUNT,
-    reason="this host arms no hardware counter: either no PAPI, or papi.perf_event_reason() names "
-    "a blocked gate (paranoid sysctl, no perf_event subsystem, or no countable event at all -- "
-    "common on hosted CI runners, whose hypervisor commonly does not pass the PMU through to the "
-    "guest regardless of the sysctl). What such a host DOES report is asserted by the measuring "
-    "tests below; these few are claims ABOUT a CPU that has counters and have nothing to check "
-    "here. Install PAPI and/or lower kernel.perf_event_paranoid to exercise them.",
-)
-
 
 def unarmable_events(metric: str) -> set:
     """The events ``metric`` would want that this CPU cannot arm -- what a refusal must NAME."""
@@ -62,22 +39,17 @@ def unarmable_events(metric: str) -> set:
     return wanted.difference(papi.available_events() if CAN_COUNT else ())
 
 
+@pytest.mark.papi
 def test_the_papi_provisioning_step_actually_worked() -> None:
-    """CI_EXPECTS_PAPI turns a silent, permanently-skipped ``requires_papi`` set back into a red
-    job the moment the *provisioning* breaks (apt drift, a renamed package, a loader path change)
-    -- the failure mode this whole file was quietly in before the unit job installed libpapi-dev.
+    """A job that selects ``papi`` installed libpapi for it, so a library that does not load is a
+    broken provisioning step (apt drift, a renamed package, a loader path change), never a host limit.
 
     Deliberately checks only ``PAPI_LIBRARY``, not ``papi.perf_event_reason()``: a hosted runner's
-    hypervisor commonly does not expose hardware counters to the guest at all, which is an honest
-    environment limit and not a broken install -- asserting that too would fail this canary on
-    every such runner for a reason nobody can fix from this repo.
+    hypervisor commonly exposes no hardware counter to the guest, and that is the ``hw_counters``
+    marker's question, which no CI job selects.
     """
-    if not CI_EXPECTS_PAPI:
-        pytest.skip("HPCAGENT_BENCH_CI_PAPI_INSTALLED is unset; not a job that provisions PAPI")
     assert PAPI_LIBRARY, (
-        "HPCAGENT_BENCH_CI_PAPI_INSTALLED is set but "
-        "ctypes.util.find_library('papi') found nothing -- the CI install step "
-        "silently stopped installing PAPI"
+        "ctypes.util.find_library('papi') found nothing -- the install step silently stopped installing PAPI"
     )
 
 
@@ -438,13 +410,13 @@ def test_check_names_a_cause_a_caller_can_branch_on() -> None:
     assert excinfo.value.cause in ("not_linux", "papi_missing")
 
 
-@requires_papi
+@pytest.mark.papi
 def test_the_version_probe_finds_the_installed_papi() -> None:
     """No PAPI version is hardcoded anywhere, so this is what proves the probe works at all."""
     assert papi.initialised() is not None
 
 
-@requires_papi
+@pytest.mark.papi
 def test_availability_comes_from_papi_and_is_a_strict_subset_of_the_presets() -> None:
     """What comes back is what ARMS. A machine whose hypervisor passes no PMU through has a full
     preset table and can count none of it, so it must report the empty set and the named cause --
@@ -461,7 +433,7 @@ def test_availability_comes_from_papi_and_is_a_strict_subset_of_the_presets() ->
     assert not every_candidate.issubset(set(events))
 
 
-@requires_papi
+@pytest.mark.papi
 def test_at_least_one_metric_resolves_on_a_real_cpu() -> None:
     """And on a CPU that arms nothing, every metric is refused WITH the events it wanted -- the
     absence is enumerated, never a silent empty table."""
@@ -524,7 +496,7 @@ def test_an_event_papi_knows_but_cannot_arm_is_not_countable() -> None:
         assert lib.destroyed == 1, "a probe that leaks an event set per preset runs the process dry"
 
 
-@requires_counters
+@pytest.mark.hw_counters("papi")
 def test_the_counter_budget_is_reported_so_multiplexing_stays_checkable() -> None:
     """Every candidate must fit the budget, or the counts this module returns are estimates."""
     budget = papi.hardware_counters()
@@ -569,7 +541,7 @@ def test_thread_ids_put_the_calling_thread_first() -> None:
     assert sorted(tids[1:]) == list(tids[1:])
 
 
-@requires_papi
+@pytest.mark.papi
 def test_the_count_covers_the_timed_call_and_nothing_else(monkeypatch) -> None:
     """The assertion this whole module exists for: gemm at preset S does 2*NI*NJ*NK multiply-adds,
     so a correctly bracketed fp-op count lands ON that number. A count that also swept up
@@ -656,7 +628,7 @@ def refusing_open_counter(original):
     return refuse
 
 
-@requires_papi
+@pytest.mark.papi
 def test_a_threaded_kernel_is_counted_on_every_thread_and_degrades_out_loud(monkeypatch) -> None:
     """The headline of the multithreaded path: an OpenMP kernel's fp-op count must equal
     2*NI*NJ*NK whatever the thread count, because the WORK does not change.
@@ -681,8 +653,7 @@ def test_a_threaded_kernel_is_counted_on_every_thread_and_degrades_out_loud(monk
     from hpcagent_bench.support.bindings.contract import binding_from_spec
 
     threads = min(4, flags.ncores())
-    if threads < 2:
-        pytest.skip(f"only {flags.ncores()} physical core(s) available; nothing to parallelise over")
+    assert threads >= 2, f"only {flags.ncores()} physical core(s) available; nothing to parallelise over"
     for key, value in {**flags.cpu_env(Mode.MULTI_CORE, threads=threads), **papi.PINNED_ENV}.items():
         monkeypatch.setenv(key, value)  # set BEFORE the .so loads, which is when OpenMP reads them
 
@@ -721,7 +692,7 @@ def test_a_threaded_kernel_is_counted_on_every_thread_and_degrades_out_loud(monk
     )
 
 
-@requires_papi
+@pytest.mark.papi
 def test_open_counter_names_a_thread_it_cannot_attach_to() -> None:
     """The refusal is a REASON, not a warning: one thread we cannot see makes the sum wrong."""
     lib = papi.initialised()
@@ -1006,7 +977,7 @@ def openmp_threads(monkeypatch) -> int:
     return threads
 
 
-@requires_counters
+@pytest.mark.hw_counters("papi")
 def test_the_per_thread_report_recovers_a_KNOWN_work_distribution(monkeypatch) -> None:
     """The headline: a process-wide count cannot tell these two kernels apart, and this can.
 
@@ -1022,14 +993,14 @@ def test_the_per_thread_report_recovers_a_KNOWN_work_distribution(monkeypatch) -
     from hpcagent_bench.spec import BenchSpec
     from hpcagent_bench.support.bindings.contract import binding_from_spec
 
-    if (
-        papi.resolve("cycles", papi.available_events()) is None
-        or papi.resolve("instructions", papi.available_events()) is None
-    ):
-        pytest.skip(f"no cycle/instruction preset on this CPU; available: {papi.available_events()}")
+    assert papi.resolve("cycles", papi.available_events()) is not None, (
+        f"no cycle preset on this CPU; available: {papi.available_events()}"
+    )
+    assert papi.resolve("instructions", papi.available_events()) is not None, (
+        f"no instruction preset on this CPU; available: {papi.available_events()}"
+    )
     threads = openmp_threads(monkeypatch)
-    if threads < 4:
-        pytest.skip(f"only {flags.ncores()} physical core(s); the 1:2:3:4 schedule needs 4 threads")
+    assert threads >= 4, f"only {flags.ncores()} physical core(s); the 1:2:3:4 schedule needs 4 threads"
     binding = binding_from_spec(BenchSpec.load("gemm"))
     data = _data_seeded("gemm", "S", "float64", 42)
     reports = {}
@@ -1070,7 +1041,7 @@ def test_the_per_thread_report_recovers_a_KNOWN_work_distribution(monkeypatch) -
     assert skewed["imbalance"]["max_over_mean"] > 1.3 * balanced["imbalance"]["max_over_mean"]
 
 
-@requires_papi
+@pytest.mark.papi
 def test_a_serial_kernel_is_refused_as_not_openmp_rather_than_reported_balanced(monkeypatch) -> None:
     """A single thread has no distribution. Reporting 1.00x for it would be a perfectly balanced
     parallel kernel and a serial one rendered identically.

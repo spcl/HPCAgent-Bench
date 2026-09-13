@@ -294,16 +294,14 @@ jobs:
       # The paranoid sysctl is best-effort (`|| true`): GitHub's own hosted-runner hypervisor is
       # widely reported to not expose hardware PMU counters to the guest AT ALL, independent of
       # this sysctl (actions/runner-images#4974, #11789), so lowering it may buy nothing. Because
-      # of that, `requires_papi` also gates on `papi.perf_event_reason()` (paranoid > 2, or no
-      # perf_event subsystem at all) -- these tests may still legitimately skip here, and that is
-      # an honest environment limit this step cannot force open. CI_EXPECTS_PAPI below only
-      # asserts the LIBRARY installed, which is the half this step actually controls.
-      - name: Setup -- PAPI (tests/test_papi_counters.py's requires_papi gate)
+      # of that, the counting tests carry the `hw_counters` marker, which no job selects: an honest
+      # environment limit this step cannot force open. Phase 1 selects `papi`, so a library this
+      # step failed to install fails those tests instead of deselecting them.
+      - name: Setup -- PAPI (the papi marker's libpapi)
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends libpapi-dev
           sudo sysctl -w kernel.perf_event_paranoid=1 >/dev/null 2>&1 || true
-          echo "HPCAGENT_BENCH_CI_PAPI_INSTALLED=1" >> "$GITHUB_ENV"
 
       # Phase 0 runs BEFORE the heavy setup so a formatting slip fails in seconds. ruff /
       # fprettify / clang-format ship as wheels (the clang-format wheel carries the binary), and
@@ -478,8 +476,12 @@ jobs:
           # whatever the sweep is doing when the cap lands is the last line in the log. This is the
           # same argument the -q ban above already makes -- it just has to survive a kill, not a
           # clean finish, and that needs the name printed BEFORE the test rather than after.
+          # The toolchain markers this job provisions (tests/toolchains.py). A test carrying any other
+          # toolchain marker is deselected here; one carrying these fails if its toolchain is absent.
+          marks="papi or oneapi or distro or agent_extras"
+          [ "${{ matrix.shard }}" != 0 ] || marks="$marks or nvhpc"
           python -m pytest -p no:cacheprovider -rfEs -n auto --dist loadgroup --durations=25 -v \
-            --timeout=600 --timeout-method=thread $files
+            --timeout=600 --timeout-method=thread -m "$marks or not ($marks)" $files
 
       # Hit rate is the whole point of the cache -- surface it so a regression to 0% is visible.
       - name: ccache statistics
@@ -739,7 +741,7 @@ jobs:
         run: |
           python -m pytest -p no:cacheprovider -rfEs --timeout=1500 --timeout-method=thread --durations=25 \
             --ignore=tests/test_dace_numeric_agreement.py \
-            -m integration tests/
+            -m "integration and (oneapi or distro or not (oneapi or distro))" tests/
 
       - name: ccache statistics
         if: always()
@@ -1353,7 +1355,7 @@ jobs:
           HPCAGENT_BENCH_TVM_NOTUNE: "1"
           HPCAGENT_BENCH_TVM_METASCHEDULE_TRIALS: "2"
         run: |
-          python -m pytest -q -p no:cacheprovider -rfEs --timeout=1500 \
+          python -m pytest -q -p no:cacheprovider -rfEs --timeout=1500 -m "pluto or not pluto" \
             tests/test_frameworks.py \
             tests/test_fp16.py \
             tests/test_default_datatype_tolerance.py
@@ -1364,7 +1366,7 @@ jobs:
       - name: Phase 4b -- Pluto unit tests (polycc present only here)
         if: ${{ !cancelled() }}
         run: |
-          python -m pytest -q -p no:cacheprovider -rfEs --timeout=900 \
+          python -m pytest -q -p no:cacheprovider -rfEs --timeout=900 -m "pluto or not pluto" \
             tests/test_pluto_affine_detect.py \
             tests/test_pluto_genuine.py \
             tests/test_pluto_override.py \
@@ -1387,7 +1389,7 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 25
         run: |
-          python -m pytest -q -p no:cacheprovider -rfEs --timeout=1200 tests/test_opt_reports_e2e.py
+          python -m pytest -q -p no:cacheprovider -rfEs --timeout=1200 -m "pluto or not pluto" tests/test_opt_reports_e2e.py
 
       # Hit rate is the whole point of the cache -- surface it so a regression to 0% is visible.
       - name: ccache statistics
@@ -1870,7 +1872,8 @@ jobs:
             done ) &
           sampler=$!
           trap 'kill "$sampler" 2>/dev/null || true' EXIT
-          python -m pytest -v -p no:cacheprovider -rfEs --timeout=1500 tests/test_container_launch.py
+          python -m pytest -v -p no:cacheprovider -rfEs --timeout=1500 -m "apptainer or not apptainer" \
+            tests/test_container_launch.py
 
       # Moved off `unit` 2026-09-02, which was 44m36s against a 45-minute ceiling. It lands HERE
       # rather than on a new runner because this job is the other half of the same subject -- the
@@ -2048,7 +2051,7 @@ jobs:
       - name: Phase 2 -- driver / stub codegen + ABI shape (mpicc.mpich -c compile checks)
         if: ${{ !cancelled() }}
         run: |
-          python -m pytest -q -p no:cacheprovider -rfEs --timeout=600 \
+          python -m pytest -q -p no:cacheprovider -rfEs --timeout=600 -m "mpi or not mpi" \
             tests/test_mpi_driver_codegen.py \
             tests/test_mpi_halo.py
 
@@ -2062,7 +2065,7 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 10
         run: |
-          python -m pytest -q -p no:cacheprovider -rfEs --timeout=1500 \
+          python -m pytest -q -p no:cacheprovider -rfEs --timeout=1500 -m "mpi or not mpi" \
             tests/test_mpi_call.py \
             tests/test_mpi_drivers_launch.py \
             tests/test_mpi_correctness_oracle.py \
@@ -2089,7 +2092,7 @@ jobs:
         # because the run simply stopped. Forked, that same abort is one red test (`CRASHED with
         # signal 6`) and the other 787 still run. Coverage survives it -- checked, not assumed.
         run: |
-          python -m pytest -q -p no:cacheprovider -rfEs --timeout=600 --forked \
+          python -m pytest -q -p no:cacheprovider -rfEs --timeout=600 --forked -m "distro or not distro" \
             --ignore=tests/ports/cegterg tests/ports/
 
 
@@ -2118,7 +2121,7 @@ jobs:
           # Discover the whole tree rather than listing files: the xsbench / gromacs / lavamd
           # reference suites sat outside an explicit list here and so never ran in CI at all.
           python -m pytest -q -p no:cacheprovider -rfEs --import-mode=importlib -n auto --timeout=600 \
-            hpcagent_bench/benchmarks/
+            -m "gt4py or not gt4py" hpcagent_bench/benchmarks/
 
       # Moved off `port-fidelity` 2026-09-02. It costs 36s and shared a runner with a step that
       # dies on a 75-minute cap with its output still buffered, so the only thing that job could
@@ -2593,7 +2596,7 @@ jobs:
         timeout-minutes: 38
         run: |
           python -m pytest -q -p no:cacheprovider -rfEs -n auto --durations=25 \
-            --timeout=1800 --forked tests/ports/cegterg/
+            --timeout=1800 --forked -m "distro or not distro" tests/ports/cegterg/
 
       # Hit rate is the whole point of the cache -- surface it so a regression to 0% is visible.
       - name: ccache statistics
@@ -2645,7 +2648,7 @@ jobs:
           extras: "tvm triton"
       - name: GPU frameworks + fp16 (tvm-gpu / triton targets)
         run: |
-          python -m pytest -q -p no:cacheprovider -rfEs --timeout=1500 \
+          python -m pytest -q -p no:cacheprovider -rfEs --timeout=1500 -m "gpu or not gpu" \
             tests/test_frameworks.py tests/test_fp16.py
 
       # if: always() -- a job that went red still covered lines on the way, and the total is more

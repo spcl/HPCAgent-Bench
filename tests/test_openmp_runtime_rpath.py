@@ -55,10 +55,9 @@ def test_a_runtime_in_a_libdir_no_loader_searches_earns_an_rpath(tmp_path: pathl
     assert languages.driver_library_dir(cc, ("libomp.so",)) == str(libdir)
 
 
+@pytest.mark.distro("libgomp")
 def test_a_runtime_the_loader_already_finds_earns_none(tmp_path: pathlib.Path) -> None:
     resident = pathlib.Path("/usr/lib/x86_64-linux-gnu/libgomp.so")
-    if not resident.exists():
-        pytest.skip(f"{resident} is not installed on this host")
     cc = _stub_driver(tmp_path, resident)
     languages.driver_library_dir.cache_clear()
     assert languages.driver_library_dir(cc, ("libgomp.so",)) == ""
@@ -89,11 +88,9 @@ def test_a_library_only_library_path_can_reach_is_still_named(
 @pytest.mark.parametrize("block", ["clang", "gcc"])
 def test_an_openmp_shared_library_loads_after_it_links(tmp_path: pathlib.Path, block: str) -> None:
     blocks = languages.compiler_names()
-    if block not in blocks:
-        pytest.skip(f"no {block!r} block in compilers.yaml")
+    assert block in blocks, f"no {block!r} block in compilers.yaml"
     cc = languages.compiler_driver(block)
-    if languages.resolve_compiler(cc) is None:
-        pytest.skip(f"{cc} is not installed on this host")
+    assert languages.resolve_compiler(cc) is not None, f"{cc} is not installed on this host"
     src = tmp_path / "omp_probe.c"
     src.write_text(_OMP_TU)
     lib = tmp_path / "libomp_probe.so"
@@ -107,17 +104,14 @@ def test_an_openmp_shared_library_loads_after_it_links(tmp_path: pathlib.Path, b
 
 
 def test_the_link_line_carries_the_flag_and_its_runtime() -> None:
-    if "clang" not in languages.compiler_names():
-        pytest.skip("no 'clang' block in compilers.yaml")
+    assert "clang" in languages.compiler_names(), "no 'clang' block in compilers.yaml"
     cc = languages.compiler_driver("clang")
-    if languages.resolve_compiler(cc) is None:
-        pytest.skip(f"{cc} is not installed on this host")
+    assert languages.resolve_compiler(cc) is not None, f"{cc} is not installed on this host"
     cmds = languages.build_shared_lib_commands("c", pathlib.Path("k.c"), pathlib.Path("libk.so"), compiler="clang")
     link = cmds[-1]
     flag = next((t for t in link if t in languages.OPENMP_BASELINE_FLAGS), None)
     assert flag is not None, link
     runtime = languages.driver_library_dir(cc, languages.OPENMP_RUNTIME_SONAMES.get(flag, ("libomp.so", "libgomp.so")))
-    if not runtime:
-        pytest.skip(f"{cc} resolves its OpenMP runtime without help")
+    assert runtime, f"{cc} resolves its OpenMP runtime without help, so there is no rpath to check"
     assert f"-Wl,-rpath,{runtime}" in link, link
     assert os.path.exists(runtime)

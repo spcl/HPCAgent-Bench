@@ -83,11 +83,6 @@ def committed():
     return out
 
 
-def has_cpp_source() -> bool:
-    """Whether the C++ source of record is on this machine (it is not vendored into the repo)."""
-    return all((port.DEFAULT_CPP_ROOT / sub).is_dir() for sub, _ in port.FAMILIES.values())
-
-
 def signature(text: str):
     """``(symbol, [param declarations])`` for the reference's entry point."""
     match = ENTRY.search(_COMMENT.sub(" ", text))
@@ -316,7 +311,7 @@ def test_a_hand_written_body_cannot_drift_off_its_manifest() -> None:
         port.HAND_WRITTEN["safety_map_of_scans"] = original
 
 
-@pytest.mark.skipif(not has_cpp_source(), reason="the TSVC C++ source of record is not on this machine")
+@pytest.mark.upstream_sources("tsvc")
 def test_the_committed_files_are_exactly_what_the_porter_produces() -> None:
     """The porter is the maintenance path: a hand edit here is lost on its next run, and a divergence
     means the committed file no longer has the provenance its header claims. Re-rendering and

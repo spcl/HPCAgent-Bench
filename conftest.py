@@ -13,4 +13,7 @@ own, so a test importing ``conftest`` by name gets whichever was imported first.
 
 from dace_build_isolation import pin_per_worker_dace_build_folder
 
+#: Toolchain markers, their ``-m`` selection and the no-skip guard, for every tree (tests/toolchains.py).
+pytest_plugins = ("tests.toolchains",)
+
 pin_per_worker_dace_build_folder()

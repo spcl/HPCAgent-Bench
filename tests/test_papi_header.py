@@ -28,26 +28,14 @@ import subprocess
 
 import pytest
 
-from hpcagent_bench import languages, osinfo
+from hpcagent_bench import languages
 from hpcagent_bench.harness import papi
 from hpcagent_bench.helpers.papi import header
-from tests.papi_probe import CAN_COUNT, PAPI_LIBRARY, armable
+from tests.papi_probe import CAN_COUNT, armable
 
 TEXT = header.HEADER.read_text()
 
 GCC = languages.resolve_compiler("gcc")
-
-requires_gcc = pytest.mark.skipif(
-    not GCC,
-    reason="no gcc on this host (languages.resolve_compiler('gcc') found "
-    "nothing), so the header cannot be compiled here",
-)
-requires_papi = pytest.mark.skipif(
-    not (osinfo.IS_LINUX and PAPI_LIBRARY),
-    reason="no PAPI on this host (ctypes.util.find_library('papi') found nothing, or this is not "
-    "Linux), so the header cannot dlopen it and there is no report to read at all. A host that "
-    "HAS PAPI and no countable event does not skip -- it asserts the degraded report instead",
-)
 
 #: Every event the metric table can ask for, as ``HPC_PAPI_UNAVAILABLE`` takes them. Handing the
 #: header all of them turns any machine into the one the runner is: PAPI present, PMU absent.
@@ -199,7 +187,9 @@ def test_report_rows_are_derive_input() -> None:
 
 def build(tmp_path: pathlib.Path, source: str, lang: str = "c") -> pathlib.Path:
     """Compile ``source`` against the tracked header at the standard the harness builds with."""
-    compiler = GCC if lang == "c" else (languages.resolve_compiler("g++") or GCC)
+    assert GCC, "no gcc on this host (languages.resolve_compiler('gcc') found nothing)"
+    compiler = GCC if lang == "c" else languages.resolve_compiler("g++")
+    assert compiler, "no g++ on this host (languages.resolve_compiler('g++') found nothing)"
     path = tmp_path / f"probe.{'c' if lang == 'c' else 'cpp'}"
     path.write_text(source)
     binary = tmp_path / "probe"
@@ -224,21 +214,17 @@ def build(tmp_path: pathlib.Path, source: str, lang: str = "c") -> pathlib.Path:
     return binary
 
 
-@requires_gcc
 def test_header_compiles_warning_free(tmp_path: pathlib.Path) -> None:
     """``-Werror`` at the standard ``compilers.yaml`` names. It compiles under strict ISO C, which
     is why nothing here calls a POSIX function that a feature-test macro would have to unlock."""
     build(tmp_path, PROBE)
 
 
-@requires_gcc
-@pytest.mark.skipif(not languages.resolve_compiler("g++"), reason="no g++ on this host")
 def test_header_compiles_as_cxx(tmp_path: pathlib.Path) -> None:
     """The corpus's native kernels are C++, so the header has to be includable from one."""
     build(tmp_path, PROBE, lang="cpp")
 
 
-@requires_gcc
 def test_declarations_only_without_the_implementation_macro(tmp_path: pathlib.Path) -> None:
     """stb-style: a second TU includes the header for its declarations and defines nothing, so a
     multi-TU program has ONE set of counters rather than one per TU."""
@@ -281,8 +267,7 @@ def counted(tmp_path: pathlib.Path, *args: str, **env: str) -> dict:
     return json.loads(out.read_text())
 
 
-@requires_gcc
-@requires_papi
+@pytest.mark.papi
 def test_a_counted_region_reports_counts_and_ratios(tmp_path: pathlib.Path) -> None:
     """The whole point, end to end: a bracketed OpenMP region comes back with a per-thread cycle
     count and an IPC that ``papi.derive`` computed from the header's raw numbers.
@@ -317,8 +302,7 @@ def test_a_counted_region_reports_counts_and_ratios(tmp_path: pathlib.Path) -> N
     assert papi.derive(report["metrics"])["ratios"]["ipc"]["value"] > 0
 
 
-@requires_gcc
-@requires_papi
+@pytest.mark.papi
 def test_a_report_that_gives_up_before_selection_still_names_the_events(tmp_path: pathlib.Path) -> None:
     """Degrading BY NAME has to hold on the path that gives up BEFORE any metric is reached.
 
@@ -335,8 +319,7 @@ def test_a_report_that_gives_up_before_selection_still_names_the_events(tmp_path
         assert papi.METRICS[row["metric"]][0][0] in row["missing"], row
 
 
-@requires_gcc
-@requires_papi
+@pytest.mark.papi
 def test_absence_is_null_and_failure_is_zero_with_an_error(tmp_path: pathlib.Path) -> None:
     """The two ways a number can be missing, kept apart. A metric this CPU cannot express is
     ``null`` with a reason -- in a FAILED report too, naming the events it wanted; the failed
@@ -372,8 +355,7 @@ def armed_metrics(report: dict) -> list:
     return [row["metric"] for row in report["metrics"] if "missing" not in row]
 
 
-@requires_gcc
-@requires_papi
+@pytest.mark.papi
 def test_the_budget_bounds_one_armed_set(tmp_path: pathlib.Path) -> None:
     """One armed set, never multiplexed: a metric that does not fit is refused by name and told
     which knob buys it a run of its own. A CPU that can arm nothing arms nothing at any budget,
@@ -392,8 +374,7 @@ def test_the_budget_bounds_one_armed_set(tmp_path: pathlib.Path) -> None:
     assert dropped and all("HPC_PAPI_METRICS=" in row["missing"] for row in dropped)
 
 
-@requires_gcc
-@requires_papi
+@pytest.mark.papi
 def test_selecting_a_metric_keeps_the_denominators(tmp_path: pathlib.Path) -> None:
     """``HPC_PAPI_METRICS`` cannot deselect ``cycles`` / ``instructions``: a metric counted in a
     second run is comparable with the first run's only through a denominator both of them saw.
@@ -410,8 +391,7 @@ def test_selecting_a_metric_keeps_the_denominators(tmp_path: pathlib.Path) -> No
         assert armed_metrics(report) == [] and report["cause"] == "events_unsupported"
 
 
-@requires_gcc
-@requires_papi
+@pytest.mark.papi
 def test_read_prints_the_error_before_the_counts(tmp_path: pathlib.Path) -> None:
     """A failed report is all zeros, so a reader that reaches the table before the error reads a
     fast kernel out of a broken run. The cause is whichever one this machine produced -- the

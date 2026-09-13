@@ -3,7 +3,7 @@
 """Build tests: verify the package is pip-installable and the container defs are well-formed. The full
 HPC image is too large to build in a unit test, so these cover packaging completeness and the .def
 install flow instead. ``test_apptainer_builds_and_imports`` does a real minimal build; opt-in via
-``HPCAGENT_BENCH_CONTAINER_BUILD_TEST=1`` since it pulls a base image and takes a minute."""
+``-m apptainer`` since it pulls a base image and takes a minute."""
 
 import os
 import pathlib
@@ -116,10 +116,7 @@ def test_container_defs_are_well_formed() -> None:
                 assert (_ROOT / src).exists(), f"%files source {src!r} does not exist"
 
 
-@pytest.mark.skipif(
-    not (os.environ.get("HPCAGENT_BENCH_CONTAINER_BUILD_TEST") and shutil.which("apptainer")),
-    reason="set HPCAGENT_BENCH_CONTAINER_BUILD_TEST=1 with apptainer to run a real build",
-)
+@pytest.mark.apptainer
 def test_apptainer_builds_and_imports(tmp_path) -> None:
     """Real build: a minimal image that pip-installs hpcagent_bench and imports numpyto_common (not just
     hpcagent_bench) -- the translator the legacy-develop fallback drops, exercising the fix end to end."""
@@ -136,8 +133,9 @@ From: python:3.12-slim
     python -c "import numpyto_common; print('import OK')"
 """)
     build = subprocess.run(["apptainer", "build", str(sif), str(deffile)], capture_output=True, text=True, check=False)
-    if build.returncode != 0 and any(s in build.stderr for s in ("newuidmap", "fakeroot", "subuid")):
-        pytest.skip(f"host cannot build unprivileged (apptainer rootless tooling missing): {build.stderr.strip()}")
+    assert build.returncode == 0 or not any(s in build.stderr for s in ("newuidmap", "fakeroot", "subuid")), (
+        f"host cannot build unprivileged (apptainer rootless tooling missing): {build.stderr.strip()}"
+    )
     assert build.returncode == 0, build.stderr
     run = subprocess.run(
         ["apptainer", "run", str(sif), "python", "-c", "import numpyto_common"],

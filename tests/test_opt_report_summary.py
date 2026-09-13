@@ -280,13 +280,20 @@ def test_the_summary_is_plain_text_and_ends_with_the_raw_report_path() -> None:
     assert rendered.splitlines()[-1].startswith("raw report: ")
 
 
-@pytest.mark.parametrize("compiler", ["gcc", "clang", "gcc-16", "clang-22"])
+@pytest.mark.parametrize(
+    "compiler",
+    [
+        "gcc",
+        "clang",
+        pytest.param("gcc-16", marks=pytest.mark.distro("gcc-16")),
+        pytest.param("clang-22", marks=pytest.mark.distro("clang-22")),
+    ],
+)
 def test_a_real_compile_reports_the_ground_truth_of_the_source(
     compiler: str, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Every installed version: a hand-written gcc 16 fixture was wrong, a real compile said so."""
-    if shutil.which(compiler) is None:
-        pytest.skip(f"{compiler} is not on PATH: the compile cannot run on this host")
+    assert shutil.which(compiler) is not None, f"{compiler} is not on PATH: the compile cannot run on this host"
     monkeypatch.chdir(tmp_path)
     (tmp_path / "k.c").write_text(SOURCE)
 
@@ -310,8 +317,7 @@ def test_a_real_compile_reports_the_ground_truth_of_the_source(
 def test_a_failed_compile_is_named_instead_of_reading_as_silence(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    if shutil.which("gcc") is None:
-        pytest.skip("gcc is not on PATH: the compile cannot run on this host")
+    assert shutil.which("gcc") is not None, "gcc is not on PATH: the compile cannot run on this host"
     monkeypatch.chdir(tmp_path)
     (tmp_path / "bad.c").write_text("void f(void) { this is not c; }\n")
 

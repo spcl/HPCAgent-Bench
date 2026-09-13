@@ -21,7 +21,6 @@ from typing import ClassVar
 
 import pytest
 
-from tests.optional_imports import import_or_skip
 
 SERVICE = pathlib.Path(__file__).resolve().parents[1] / "experiments" / "judge_service.py"
 
@@ -72,9 +71,10 @@ class HeldGrade(BaseHTTPRequestHandler):
 @pytest.fixture(name="router")
 def router_fixture(monkeypatch: pytest.MonkeyPatch) -> Iterator[int]:
     """The router served by uvicorn over a real socket in front of :class:`HeldGrade`; yields its port."""
-    import_or_skip("fastapi")
-    import_or_skip("httpx")
-    uvicorn = import_or_skip("uvicorn")
+    import fastapi  # noqa: F401 -- the judge-proxy extra, which the unit job installs
+    import httpx  # noqa: F401
+    import uvicorn
+
     spec = importlib.util.spec_from_file_location("judge_service_disconnect", SERVICE)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
