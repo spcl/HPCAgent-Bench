@@ -9,6 +9,7 @@ every campaign submitted today goes through ``record_identity`` with seven argum
 import importlib.util
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 
@@ -29,17 +30,25 @@ PRE_HARNESS_LINES = [
     "HPCAGENT_BENCH_RECORD_ARM=harness-focus20-qwen38-claude",
 ]
 
+#: The last line stamped from a script inside a git checkout, which this test tree is.
+COMMIT_LINE = (
+    "HPCAGENT_BENCH_RECORD_COMMIT="
+    + subprocess.run(
+        ["git", "-C", str(paths.ROOT), "rev-parse", "--short", "HEAD"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+)
+
 MIGRATE_SPEC = importlib.util.spec_from_file_location("migrate_db", paths.ROOT / "scripts" / "migrate_db.py")
 migrate = importlib.util.module_from_spec(MIGRATE_SPEC)
 sys.modules[MIGRATE_SPEC.name] = migrate
 MIGRATE_SPEC.loader.exec_module(migrate)
 
 
-def stamp(env: pathlib.Path, *harness: str) -> subprocess.CompletedProcess[str]:
+def stamp(env: pathlib.Path, *harness: str, script: pathlib.Path = SCRIPT) -> subprocess.CompletedProcess[str]:
     """Source the launcher helper and stamp one arm, passing ``harness`` only when given."""
     identity = ("harness-focus20", "qwen38", "c", "cpu", "", "harness-focus20-qwen38-claude")
     return subprocess.run(
-        ["bash", "-c", '. "$0" && record_identity "$@"', str(SCRIPT), str(env), *identity, *harness],
+        ["bash", "-c", '. "$0" && record_identity "$@"', str(script), str(env), *identity, *harness],
         capture_output=True,
         text=True,
         check=False,
@@ -51,14 +60,33 @@ def test_an_arm_that_names_no_harness_stamps_what_it_did_before(tmp_path: pathli
     env = tmp_path / ".env.arm"
     done = stamp(env, *harness)
     assert done.returncode == 0, done.stderr
-    assert env.read_text().splitlines() == PRE_HARNESS_LINES
+    assert env.read_text().splitlines() == [*PRE_HARNESS_LINES, COMMIT_LINE]
 
 
 def test_a_named_harness_is_stamped(tmp_path: pathlib.Path):
     env = tmp_path / ".env.arm"
     done = stamp(env, "miniswe")
     assert done.returncode == 0, done.stderr
-    assert env.read_text().splitlines() == [*PRE_HARNESS_LINES, "HPCAGENT_BENCH_RECORD_HARNESS=miniswe"]
+    assert env.read_text().splitlines() == [*PRE_HARNESS_LINES, "HPCAGENT_BENCH_RECORD_HARNESS=miniswe", COMMIT_LINE]
+
+
+def test_the_submitting_checkout_commit_is_stamped(tmp_path: pathlib.Path) -> None:
+    """containers/agent is mounted from the submitting tree, so its commit is the code the arm ran; the
+    judge cannot resolve it because the container sees the tree without its repository."""
+    env = tmp_path / ".env.arm"
+    done = stamp(env)
+    assert done.returncode == 0, done.stderr
+    assert COMMIT_LINE.removeprefix("HPCAGENT_BENCH_RECORD_COMMIT=")
+    assert env.read_text().splitlines()[-1] == COMMIT_LINE
+
+
+def test_a_script_outside_a_git_checkout_stamps_no_commit_rather_than_a_guess(tmp_path: pathlib.Path) -> None:
+    script = tmp_path / "record_identity.sh"
+    shutil.copy(SCRIPT, script)
+    env = tmp_path / ".env.arm"
+    done = stamp(env, script=script)
+    assert done.returncode == 0, done.stderr
+    assert env.read_text().splitlines() == PRE_HARNESS_LINES
 
 
 def test_an_unknown_harness_is_refused_before_anything_is_stamped(tmp_path: pathlib.Path):
