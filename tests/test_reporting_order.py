@@ -3,8 +3,12 @@
 """Unit tests for hpcagent_bench.reporting_order: the pure row/group ordering shared by the
 report figures. Exercised against a synthetic benchmark->metadata table -- no matplotlib, no DB."""
 
+import pathlib
 from typing import List
 
+import pytest
+
+from hpcagent_bench import spec
 from hpcagent_bench.reporting_order import (
     BY_LEVEL,
     BY_DWARF,
@@ -15,6 +19,7 @@ from hpcagent_bench.reporting_order import (
     TRACK_MACHINE_LEARNING,
     TRACK_OTHER,
     order_rows,
+    row_meta_for,
 )
 
 
@@ -146,3 +151,15 @@ def test_unknown_order_mode_rejected() -> None:
 
     with pytest.raises(ValueError):
         order_rows([], "by_nonsense")
+
+
+def test_row_metadata_follows_a_refreshed_registry(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The figures band DB short_names through the registry; an index memoized past
+    KERNELS.refresh() keeps banding a kernel the corpus no longer has."""
+    assert row_meta_for(["gemm"])[0].track == TRACK_SCIENTIFIC_COMPUTING
+    monkeypatch.setattr(spec.paths, "BENCHMARKS", tmp_path)
+    spec.KERNELS.refresh()
+    try:
+        assert row_meta_for(["gemm"])[0].track == TRACK_OTHER
+    finally:
+        spec.KERNELS.refresh()

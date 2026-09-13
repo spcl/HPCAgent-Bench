@@ -28,7 +28,6 @@ unit-tested against a synthetic metadata table; :func:`row_meta_for` is the thin
 :class:`RowMeta`.
 """
 
-import functools
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -169,13 +168,13 @@ def order_rows(rows: Sequence[RowMeta], order: str = BY_DWARF) -> Tuple[List[str
     return [rm.short_name for rm in ordered], _spans(ordered, order)
 
 
-@functools.lru_cache(maxsize=1)
 def _short_name_index() -> Dict[str, "object"]:
     """``{spec.short_name: BenchSpec}`` over the whole corpus.
 
     Keyed on the manifest's ``short_name`` (the value the results ``benchmark`` column
     stores), NOT the directory stem the selector grammar uses -- the two differ for kernels
-    like ``heat_3d`` (stem) / ``heat_3d`` (short_name). Memoized; ~1s to parse every manifest.
+    like ``heat_3d`` (stem) / ``heat_3d`` (short_name). Not memoized here: ``load_spec`` holds the
+    parses and ``KERNELS.refresh()`` drops them, so a rebuild over warm specs is ~0.3ms.
 
     A manifest that fails to parse is SKIPPED rather than propagated, which keeps
     :func:`row_meta_for`'s "never crashes a plot" promise: one malformed manifest must not kill a
