@@ -12,7 +12,7 @@ reproduce numpy):
   Name the backends emit.
 * **a simultaneous whole-array rebind** -- ``x, y = y, x + y`` inside a loop
   (chebyshev_filter_subspace's ``X, Y, sigma = Y, Ynew, sigma_new``):
-  ``_TupleAssignRewriter`` stages every RHS into a temp buffer and copies the
+  ``ShapeTableTupleSplit`` stages every RHS into a temp buffer and copies the
   temps into the targets, so the post-state matches numpy's simultaneous bind
   (copy-through, not a pointer swap the static backends cannot express).
 * **real dtype of a ``.real`` / ``.imag`` scalar temp** -- ``d = A[i, j].real``

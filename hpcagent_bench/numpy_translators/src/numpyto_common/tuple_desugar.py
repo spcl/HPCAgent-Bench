@@ -515,7 +515,7 @@ class TupleDesugar:
         It also returns ``None`` on a simultaneous bind whose elements still read a target the
         split would have overwritten (``a, b = b, a + b``). A sequential split reads the NEW ``a``
         and the kernel computes the wrong numbers with no diagnostic. Left standing, the statement
-        reaches ``lowering._TupleAssignRewriter``, which stages the elements through temps.
+        reaches ``lowering.ShapeTableTupleSplit``, which stages the elements through temps.
         """
         targets = stmt.targets[0].elts
         if not all(isinstance(t, ast.Name) for t in targets):
