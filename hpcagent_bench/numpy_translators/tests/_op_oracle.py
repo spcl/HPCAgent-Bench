@@ -219,11 +219,11 @@ def run_op(
                 try:
                     # Forked child: a miscompiled kernel can segfault / corrupt the
                     # heap in the ctypes call, which a bare in-process ``_invoke``
-                    # would let take down the whole pytest worker. ``_invoke_isolated``
+                    # would let take down the whole pytest worker. ``invoke_isolated``
                     # runs it in a child and reports the crash as a ``FAIL`` string.
                     # frozenset(): these kernels are ad-hoc numpy source with no manifest, so no
                     # buffer is tagged index_array and nothing is rebased at the seam.
-                    status[b] = _no._invoke_isolated(
+                    status[b] = _no.invoke_isolated(
                         "cpp" if b == _no.ISOPAR else b,
                         binding,
                         so,
@@ -607,7 +607,7 @@ def run_return_op(
                     continue
                 try:
                     # frozenset(): ad-hoc numpy source, no manifest, so no buffer is index_array-tagged.
-                    status[b] = _no._invoke_isolated(
+                    status[b] = _no.invoke_isolated(
                         b, binding, so, by, syms, expected, out_names, rtol, atol, frozenset()
                     )
                 except Exception as exc:  # noqa: BLE001

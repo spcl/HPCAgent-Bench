@@ -175,7 +175,8 @@ def test_a_host_oom_is_told_apart_from_a_bad_submission() -> None:
     "fork_call",
     [
         "from hpcagent_bench.frameworks.forked import run_forked; run_forked(child, timeout=120)",
-        "import numerical_oracle; numerical_oracle._forked_status(child, 120)",
+        "import numerical_oracle; numerical_oracle.isolated_status(child, label='orphan', "
+        "timeout_s=120, timeout_status='FAIL:timeout')",
     ],
     ids=["run_forked", "numerical_oracle"],
 )
@@ -188,8 +189,8 @@ def test_a_forked_child_does_not_outlive_the_process_that_forked_it(tmp_path, fo
     controller over, so the controller never sees EOF, xdist never reports the worker down, and the
     session waits on an empty queue until the job cap kills it having printed nothing. That is the
     whole failure, so what is asserted is the child's DEATH, not a flag: kill the forker outright
-    and the grandchild must be gone. The numerical oracle forks on its own rather than through
-    run_forked, and its jax leg wedged unit shard 0 of run 34690017930 exactly this way.
+    and the grandchild must be gone. The numerical oracle isolates its legs through its own entry
+    point, and its jax leg wedged unit shard 0 of run 34690017930 exactly this way.
     """
     marker = tmp_path / "child.pid"
     script = tmp_path / "forker.py"
@@ -200,7 +201,9 @@ def test_a_forked_child_does_not_outlive_the_process_that_forked_it(tmp_path, fo
         "def child():\n"
         f"    pathlib.Path({str(marker)!r}).write_text(str(__import__('os').getpid()))\n"
         "    time.sleep(120)\n"
-        f"{fork_call}\n"
+        # Guarded: a spawned child re-imports this script as __mp_main__ to find ``child``.
+        "if __name__ == '__main__':\n"
+        f"    {fork_call}\n"
     )
     forker = subprocess.Popen([sys.executable, str(script)])
     try:

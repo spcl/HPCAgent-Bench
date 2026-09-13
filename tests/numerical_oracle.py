@@ -9,13 +9,11 @@ import os
 import pathlib
 import pickle
 import re
-import select
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
-import time
+from collections.abc import Callable
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -130,7 +128,7 @@ os.environ.setdefault("JAX_PLATFORMS", "cpu")
 from hpcagent_bench import dtypes as _dtypes  # noqa: E402
 from hpcagent_bench import languages  # noqa: E402
 from hpcagent_bench import paths  # noqa: E402
-from hpcagent_bench.frameworks.forked import die_with_parent, run_forked  # noqa: E402
+from hpcagent_bench.frameworks.forked import run_forked  # noqa: E402
 from hpcagent_bench.spec import BenchSpec  # noqa: E402
 from hpcagent_bench.support.bindings.contract import index_base  # noqa: E402
 from hpcagent_bench.initialize import auto_initialize  # noqa: E402
@@ -857,7 +855,8 @@ def run_kernel(
                 status[backend] = "FAIL:compile" + _diag(c)
                 continue
             try:
-                status[backend] = _invoke_isolated(
+                assert binding is not None, "the native emit succeeded, so its binding was read"
+                status[backend] = invoke_isolated(
                     backend, binding, so, by, syms, expected, compare, rtol, atol, index_names
                 )
             except Exception as exc:  # noqa: BLE001
@@ -1017,25 +1016,37 @@ def _dep_available(dep: str) -> bool:
 
 
 def _run_py_backend(backend, short, info, by, syms, expected, compare, rtol, atol, emit_prec: str = "") -> str:
-    """Validate a Python/JIT backend vs numpy in a forked child (extension modules can't unload)."""
+    """Validate a Python/JIT backend vs numpy in an isolated child (extension modules can't unload)."""
     import importlib.util  # noqa: F401 -- kept for the compute body below
 
     _cli, _extra, _pattern, dep = PY_BACKENDS[backend]
     if not _dep_available(dep):
         return "skip:not-installed"
-    return _forked_status(
-        lambda: _py_backend_compute(backend, short, info, by, syms, expected, compare, rtol, atol, emit_prec),
-        PY_FORK_TIMEOUT_S,
+    return isolated_status(
+        _py_backend_compute,
+        backend,
+        short,
+        info,
+        by,
+        syms,
+        expected,
+        compare,
+        rtol,
+        atol,
+        emit_prec,
+        label=f"{backend}:{short}",
+        timeout_s=PY_FORK_TIMEOUT_S,
+        timeout_status="skip:too-long",
     )
 
 
 def _py_backend_compute(backend, short, info, by, syms, expected, compare, rtol, atol, emit_prec: str = "") -> str:
-    """Emit + compile + import + run + compare a Python/JIT backend, only in the forked child."""
+    """Emit + compile + import + run + compare a Python/JIT backend, only in the isolated child."""
     import importlib.util
 
     cli, extra, pattern, dep = PY_BACKENDS[backend]
     # Before the emitted module is imported, because that import is what pulls numba in and numba
-    # reads NUMBA_OPT once, at import. Safe to set in place: this only ever runs in the forked child.
+    # reads NUMBA_OPT once, at import. Safe to set in place: this only ever runs in the isolated child.
     if backend == "numba" and short in NUMBA_LOW_OPT:
         os.environ["NUMBA_OPT"] = NUMBA_LOW_OPT[short]
     npy = REPO / "hpcagent_bench" / "benchmarks" / info["relative_path"] / f"{info['module_name']}_numpy.py"
@@ -1143,46 +1154,37 @@ def _py_backend_compute(backend, short, info, by, syms, expected, compare, rtol,
         return "ok"
 
 
-def _forked_status(compute, timeout_s: float) -> str:
-    """Run ``compute()`` in a forked child (contains RSS growth, segfaults, JAX fork-after-threads
-    deadlock); SIGKILLed and reported ``skip:too-long`` past ``timeout_s``."""
-    r, w = os.pipe()
-    pid = os.fork()
-    if pid == 0:  # child
-        die_with_parent()
-        os.close(r)
-        try:
-            res = compute()
-        except Exception as exc:  # noqa: BLE001
-            res = f"FAIL:{type(exc).__name__}"
-        try:
-            os.write(w, res.encode()[:4096])
-        finally:
-            os._exit(0)
-    os.close(w)  # parent
-    deadline = time.monotonic() + timeout_s
-    chunks = []
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            os.close(r)
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            os.waitpid(pid, 0)
-            return "skip:too-long"
-        if not select.select([r], [], [], remaining)[0]:
-            continue  # nothing yet -> re-check the deadline
-        b = os.read(r, 4096)
-        if not b:
-            break
-        chunks.append(b)
-    os.close(r)
-    _, st = os.waitpid(pid, 0)
-    if os.WIFSIGNALED(st):
-        return f"FAIL:crash:SIG{os.WTERMSIG(st)}"
-    return b"".join(chunks).decode() or "FAIL:no-result"
+#: Byte cap on a child's status, the one the old fork pipe imposed, so a long status reads the same.
+STATUS_BYTES = 4096
+
+
+def guarded_status(task: Callable[..., str], *args: object) -> str:
+    """Child side of :func:`isolated_status`: an exception out of ``task`` becomes ``FAIL:<type>``.
+    Module-level because a spawned child unpickles it by qualified name."""
+    try:
+        status = task(*args)
+    except Exception as exc:  # noqa: BLE001
+        status = f"FAIL:{type(exc).__name__}"
+    return status.encode()[:STATUS_BYTES].decode(errors="ignore")
+
+
+def isolated_status(task: Callable[..., str], *args: object, label: str, timeout_s: float, timeout_status: str) -> str:
+    """Run ``task(*args)`` in a SPAWNED child that contains its RSS, its crash and its hang.
+
+    A fatal signal reads ``FAIL:crash:SIG<n>``, a child still running ``timeout_s`` after it
+    started is killed and reads ``timeout_status``, and a child that ends without a status reads
+    ``FAIL:no-result``. Spawned, not forked: a pytest-xdist worker already runs threads (execnet
+    I/O, BLAS and OpenMP pools), a forked child can deadlock on a lock one of them held, and
+    CPython warns on every such fork. ``task`` crosses by qualified name, so it is module-level.
+    """
+    outcome = run_forked(guarded_status, task, *args, label=label, timeout=timeout_s, mp_context="spawn")
+    if outcome.ok:
+        return outcome.result or "FAIL:no-result"
+    if outcome.signal == "TIMEOUT":
+        return timeout_status
+    if outcome.exit_code is not None and outcome.exit_code < 0:
+        return f"FAIL:crash:SIG{-outcome.exit_code}"
+    return "FAIL:no-result"
 
 
 def _run_jax_backend(
@@ -1205,7 +1207,7 @@ def _run_jax_backend(
     # both tries of test_jax_only_request_is_not_blocked_by_native_emit ran into their caps on run
     # 34703271829 for a kernel that takes ~10 s. A fresh interpreter inherits no locks; run_forked
     # starts the clock only once that child reports in, so its import time is not billed to jax.
-    outcome = run_forked(
+    return isolated_status(
         _jax_compute,
         short,
         info,
@@ -1217,17 +1219,9 @@ def _run_jax_backend(
         atol,
         emit_prec,
         label=f"jax:{short}",
-        timeout=JAX_FORK_TIMEOUT_S if timeout_s is None else timeout_s,
-        mp_context="spawn",
+        timeout_s=JAX_FORK_TIMEOUT_S if timeout_s is None else timeout_s,
+        timeout_status="skip:too-long",
     )
-    if outcome.ok:
-        return outcome.result or "FAIL:no-result"
-    if outcome.signal == "TIMEOUT":
-        return "skip:too-long"
-    if outcome.signal is not None and outcome.signal in signal.Signals.__members__:
-        return f"FAIL:crash:SIG{signal.Signals[outcome.signal].value}"
-    last_line = (outcome.error or "").strip().splitlines()[-1:] or ["no-result"]
-    return f"FAIL:{last_line[0].split(':', 1)[0].rsplit('.', 1)[-1] or 'no-result'}"
 
 
 def _jax_compute(short, info, by, syms, expected, compare, rtol, atol, emit_prec: str) -> str:
@@ -1387,7 +1381,7 @@ def _run_pluto(
         pb = tdp / f"{base}_{fptype}_pluto_binding.json"
         pluto_binding = json.loads(pb.read_text()) if pb.exists() else binding
         try:
-            result = _invoke_isolated("c", pluto_binding, so, by, syms, expected, compare, rtol, atol, index_names)
+            result = invoke_isolated("c", pluto_binding, so, by, syms, expected, compare, rtol, atol, index_names)
         except Exception as exc:  # noqa: BLE001
             # An exception ESCAPING the invoke is a defect in this harness, not in what polycc
             # produced -- the invoke reports a run failure as a status string. Reported under its
@@ -1481,53 +1475,42 @@ def _run_isopar(
     if c.returncode:
         return "FAIL:compile" + _diag(c)
     try:
-        return _invoke_isolated("cpp", binding, so, by, syms, expected, compare, rtol, atol, index_names)
+        return invoke_isolated("cpp", binding, so, by, syms, expected, compare, rtol, atol, index_names)
     except Exception as exc:  # noqa: BLE001
         return f"FAIL:{type(exc).__name__}"
 
 
-def _invoke_isolated(backend, binding, so, by, syms, expected, compare, rtol, atol, index_names) -> str:
-    """Run a compiled backend's ctypes call in a forked child, so a miscompile (heap corruption,
-    segfault) reports ``FAIL:crash:SIG<n>`` instead of killing the whole sweep."""
-    r, w = os.pipe()
-    pid = os.fork()
-    if pid == 0:  # child
-        die_with_parent()
-        os.close(r)
-        try:
-            res = _invoke(backend, binding, so, by, syms, expected, compare, rtol, atol, index_names)
-        except Exception as exc:  # noqa: BLE001
-            res = f"FAIL:{type(exc).__name__}"
-        try:
-            os.write(w, res.encode()[:4096])
-        finally:
-            os._exit(0)
-    os.close(w)  # parent
-    # Bound the wait: a miscompiled kernel can spin forever, so poll the pipe against a
-    # deadline and SIGKILL on expiry (FAIL:timeout) rather than block on os.read.
-    deadline = time.monotonic() + _INVOKE_TIMEOUT_S
-    chunks = []
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            os.close(r)
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            os.waitpid(pid, 0)
-            return "FAIL:timeout"
-        if not select.select([r], [], [], remaining)[0]:
-            continue
-        b = os.read(r, 4096)
-        if not b:
-            break
-        chunks.append(b)
-    os.close(r)
-    _, st = os.waitpid(pid, 0)
-    if os.WIFSIGNALED(st):
-        return f"FAIL:crash:SIG{os.WTERMSIG(st)}"
-    return b"".join(chunks).decode() or "FAIL:no-result"
+def invoke_isolated(
+    backend: str,
+    binding: dict[str, Any],
+    so: pathlib.Path | str,
+    by: dict[str, Any],
+    syms: dict[str, Any],
+    expected: dict[str, np.ndarray],
+    compare: list[str],
+    rtol: float,
+    atol: float,
+    index_names: frozenset[str],
+) -> str:
+    """Run a compiled backend's ctypes call in an isolated child, so a miscompile (heap corruption,
+    segfault) reports ``FAIL:crash:SIG<n>`` and one that spins past the invoke cap ``FAIL:timeout``,
+    instead of taking the whole sweep down."""
+    return isolated_status(
+        _invoke,
+        backend,
+        binding,
+        so,
+        by,
+        syms,
+        expected,
+        compare,
+        rtol,
+        atol,
+        index_names,
+        label=f"{backend}:{pathlib.Path(so).name}",
+        timeout_s=_INVOKE_TIMEOUT_S,
+        timeout_status="FAIL:timeout",
+    )
 
 
 def _invoke(backend, binding, so, by, syms, expected, compare, rtol, atol, index_names=frozenset()) -> str:
