@@ -315,13 +315,12 @@ def test_memory_backed_storage_is_refused(tmp_path) -> None:
     memory_dir = next(
         (
             d
-            for d in (tmp_path, pathlib.Path(tempfile.gettempdir()))
+            for d in (tmp_path, pathlib.Path(tempfile.gettempdir()), pathlib.Path("/dev/shm"))
             if recording.memory_backed_fstype(str(d)) is not None
         ),
         None,
     )
-    if memory_dir is None:
-        pytest.skip("no memory-backed temp directory on this host")
+    assert memory_dir is not None, "no tmpfs under tmp_path, the temp dir or /dev/shm in /proc/mounts"
     config.set_override("record.db_path", str(memory_dir / "hpcagent_bench.db"))
     try:
         with pytest.raises(ValueError, match="memory-backed"):

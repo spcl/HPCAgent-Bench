@@ -112,16 +112,17 @@ def recorded_identity(text: str) -> dict[str, str]:
     return {key: value.strip() for key, value in found if key != "ENABLED"}
 
 
-@pytest.mark.parametrize("env", arm_envs(), ids=lambda p: p.name)
+def stamped_arm_envs() -> list[pathlib.Path]:
+    """Arm envs that stamp an identity; one that stamps nothing predates the identity columns."""
+    return [p for p in arm_envs() if recorded_identity(p.read_text(encoding="utf-8", errors="replace"))]
+
+
+@pytest.mark.parametrize("env", stamped_arm_envs(), ids=lambda p: p.name)
 def test_every_value_an_arm_records_is_registered(env: pathlib.Path) -> None:
     """Every identity value that reaches the database can be coloured and labelled.
 
-    Checked per ARM rather than over the union, so the failure names the file to fix. An env that
-    stamps nothing is skipped: it predates the identity columns and its rows carry NULL, which is a
-    fact about that campaign and not an unregistered value."""
+    Checked per ARM rather than over the union, so the failure names the file to fix."""
     identity = recorded_identity(env.read_text(encoding="utf-8", errors="replace"))
-    if not identity:
-        pytest.skip("no recorded identity; predates the identity columns")
 
     unknown = []
     for key, kind in RECORDED.items():
