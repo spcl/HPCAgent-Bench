@@ -90,7 +90,9 @@ def stem(name: str) -> str:
     return name.split("(")[0]
 
 
-def test_an_nsys_trace_is_read_into_every_kernel_transfer_and_launch_geometry(tmp_path, monkeypatch) -> None:
+def test_an_nsys_trace_is_read_into_every_kernel_transfer_and_launch_geometry(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The four reports nsys writes are the whole device side of /profile; a reader that loses one
     loses the kernels, the copies or the geometry without any error."""
     device = tmp_path / "nvidiactl"
@@ -124,7 +126,7 @@ def test_an_nsys_trace_is_read_into_every_kernel_transfer_and_launch_geometry(tm
 
 
 def test_a_rocprofv3_trace_is_read_into_the_same_run_shape_with_unmeasured_volumes_absent(
-    tmp_path, monkeypatch
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The AMD arm must fill the rows the NVIDIA arm fills, with the copy volume rocprofv3 never
     measures as None and the lane width read from the agent report rather than assumed."""
@@ -156,7 +158,9 @@ def test_a_rocprofv3_trace_is_read_into_the_same_run_shape_with_unmeasured_volum
 
 
 @pytest.mark.parametrize("language,arm", [("cuda", "nvidia"), ("hip", "amd")])
-def test_the_language_alone_picks_the_vendor_arm(tmp_path, monkeypatch, language, arm) -> None:
+def test_the_language_alone_picks_the_vendor_arm(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, language: str, arm: str
+) -> None:
     """nsys cannot see an AMD queue and rocprof cannot see a CUDA one, so a wrong branch is an empty
     trace reported as a device that did nothing."""
     taken: list[tuple[str, str | None]] = []
@@ -203,7 +207,7 @@ def traced_run(*, device_ns: int = 1_200_000, reps: int = 3, elapsed_ns: int = 6
     ids=["warmup-launches-are-divided-out", "no-warmup", "no-measured-time"],
 )
 def test_the_device_share_is_traced_time_per_traced_rep_over_the_best_measured_rep(
-    device_ns, reps, warmup, elapsed_ns, per_rep, pct
+    device_ns: int, reps: int, warmup: int, elapsed_ns: int, per_rep: float, pct: float
 ) -> None:
     """The trace covers the warmup launches and elapsed_ns is one measured rep, so the share divides
     by every traced rep; a measured time of zero is no share rather than a division by zero."""
@@ -239,7 +243,9 @@ class FakeSandbox:
         return self.built
 
 
-def test_a_traced_submission_answers_with_the_payload_of_the_run_it_asked_for(tmp_path, monkeypatch) -> None:
+def test_a_traced_submission_answers_with_the_payload_of_the_run_it_asked_for(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The traced child reads the request this route writes, so the preset, the reps and the library
     in that request are the run the payload describes."""
     lib = tmp_path / "libgemm.so"
@@ -255,7 +261,7 @@ def test_a_traced_submission_answers_with_the_payload_of_the_run_it_asked_for(tm
         profiler: tuple[str, str],
         timeout: float,
         min_percent: float,
-    ):
+    ) -> gpu_profiling.GpuRun:
         traced.update(request=json.loads(request.read_text()), language=language, min_percent=min_percent)
         return traced_run()
 
@@ -272,7 +278,7 @@ def test_a_traced_submission_answers_with_the_payload_of_the_run_it_asked_for(tm
 
 
 def test_a_submission_that_does_not_build_answers_with_the_compiler_log_and_traces_nothing(
-    tmp_path, monkeypatch
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A build failure is a normal answer with the compiler's words in it, never a trace of nothing."""
 
@@ -296,7 +302,9 @@ def rocm_host(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(gpu_profiling, "KFD_DEVICE", kfd)
 
 
-def test_a_hung_rocminfo_is_a_timed_out_refusal_not_a_raw_timeout(tmp_path, monkeypatch) -> None:
+def test_a_hung_rocminfo_is_a_timed_out_refusal_not_a_raw_timeout(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The probe runs before the build, outside the trace's timeout mapping, so its deadline reached
     the route as a raw exception and answered 500 with no cause."""
     rocm_host(tmp_path, monkeypatch)
@@ -308,7 +316,7 @@ def test_a_hung_rocminfo_is_a_timed_out_refusal_not_a_raw_timeout(tmp_path, monk
 
 
 def test_each_amd_profile_request_probes_the_device_once_and_the_next_request_probes_again(
-    tmp_path, monkeypatch
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The rocminfo probe ran twice per request. Device access can change between requests, so the
     next request must probe afresh rather than reuse a verdict."""
