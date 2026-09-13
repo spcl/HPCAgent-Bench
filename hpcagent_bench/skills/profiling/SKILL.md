@@ -282,14 +282,14 @@ operations as the vector unit is wide. `fma_instructions` and `integer_instructi
 instruction counts -- PAPI has no op-count preset for either on any CPU. Never multiply them by a
 vector width you have not read off the disassembly.
 
-**A zero is a measurement, not an absence.** `fma_instructions` reads exactly 0 for a gemm full of
-FMAs on any CPU where `PAPI_FMA_INS` is a *derived* preset the vendor does not feed. `count:null`
+**A zero is a measurement, not an absence.** `fma_instructions` reads exactly 0 for a matrix multiply
+full of FMAs on any CPU where `PAPI_FMA_INS` is a *derived* preset the vendor does not feed. `count:null`
 means unavailable; `0` means PAPI counted and got nothing, which is either true or a broken
 derivation. Cross-check a suspicious zero against `objdump -d` before you conclude anything from
 it.
 
-**Counts are summed over every thread**, worker threads included. So a count is thread-count invariant when the work is: gemm
-counts the same `fp_ops` at 1 thread and at 8. If it does not, the parallel version is doing extra
+**Counts are summed over every thread**, worker threads included. So a count is thread-count invariant when the work is: a matrix
+multiply counts the same `fp_ops` at 1 thread and at 8. If it does not, the parallel version is doing extra
 work, and that is a finding. (The master thread opens one attached event set per worker thread and
 sums them.) `scope` says which threads were counted; `scope: calling_thread`
 plus a `fallback` reason means the host refused the attach and the number is the master's share
