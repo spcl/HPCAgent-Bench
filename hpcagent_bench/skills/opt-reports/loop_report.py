@@ -456,7 +456,7 @@ def build_summary(
 # Driving the compiler
 
 
-@functools.lru_cache(typed=True)
+@functools.lru_cache(maxsize=None, typed=True)
 def compiler_family(compiler: str) -> str:
     proc = subprocess.run([compiler, "--version"], capture_output=True, text=True, check=False)
     banner = (proc.stdout or proc.stderr).splitlines()

@@ -37,7 +37,7 @@ ConfigValue = bool | int | float | str | list[object] | dict[str, object] | None
 _OVERRIDES: dict[str, ConfigValue] = {}
 
 
-@functools.lru_cache(maxsize=1)
+@functools.lru_cache(maxsize=1, typed=True)
 def _cfg() -> dict[str, object]:
     raw = yaml.safe_load(_PATH.read_text())
     if not isinstance(raw, dict):
@@ -296,7 +296,7 @@ class Settings:
     attempts: AttemptSettings
 
 
-@functools.lru_cache(maxsize=1)
+@functools.lru_cache(maxsize=1, typed=True)
 def settings() -> Settings:
     """The process-wide :class:`Settings`, loaded from ``config.yaml`` on first use."""
     return Settings(prompt=PromptSettings.load(), attempts=AttemptSettings.load())
