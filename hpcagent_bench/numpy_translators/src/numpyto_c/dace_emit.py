@@ -3783,8 +3783,10 @@ def render_program(
     # Rewrite leaked np_float/np_complex tokens to the dace precision global the module binds.
     framework_dtype = _RewriteFrameworkDtype()
     fn_ast = framework_dtype.visit(fn_ast)
+    # Declared ranks for every rank table below: the arrays, and each scalar or size symbol at rank 0.
+    chain_ranks = {**{a.name: len(a.shape) for a in kir.arrays}, **dict.fromkeys([*scalars, *symbol_names], 0)}
     # ``np.asarray`` has no dace replacement; on an array it is numpy's own identity, so it goes.
-    fn_ast = DropIdentityAsarray(rank_table(fn_ast, {a.name: len(a.shape) for a in kir.arrays})).visit(fn_ast)
+    fn_ast = DropIdentityAsarray(rank_table(fn_ast, chain_ranks)).visit(fn_ast)
     # dace's frontend has no conditional expression (RHS or nested value): lower both to if/else.
     fn_ast = _DesugarTernary().visit(fn_ast)
     # dace's frontend takes one comparator per Compare: split a chained range test into its links.
@@ -3815,7 +3817,6 @@ def render_program(
     fn_ast = _MaterializeDynamicFlip(arr_shapes, arr_dtypes, set(symbol_names)).visit(fn_ast)
     ast.fix_missing_locations(fn_ast)
     # dace cannot codegen a chained assignment: one binding per target, the value evaluated once.
-    chain_ranks = {**{a.name: len(a.shape) for a in kir.arrays}, **dict.fromkeys([*scalars, *symbol_names], 0)}
     fn_ast = dace_chained_assign_split(chain_ranks).visit(fn_ast)
     fn_ast = _DropRedundantSliceStore().visit(fn_ast)
     ast.fix_missing_locations(fn_ast)
@@ -3823,7 +3824,7 @@ def render_program(
     fn_ast = _DesugarBroadcastAugAssign(set(arrays)).visit(fn_ast)
     ast.fix_missing_locations(fn_ast)
     # dace does not lower a point-wise fancy-index WRITE; it answers garbage rather than refusing.
-    scatter_ranks = rank_table(fn_ast, {a.name: len(a.shape) for a in kir.arrays})
+    scatter_ranks = rank_table(fn_ast, chain_ranks)
     scatter_ranks.update(loop_target_ranks(fn_ast))
     fn_ast = PointwiseScatterToLoop(scatter_ranks).visit(fn_ast)
     ast.fix_missing_locations(fn_ast)
@@ -3852,9 +3853,8 @@ def render_program(
     ast.fix_missing_locations(fn_ast)
     # Before every .shape pass: what dace has no replacement for becomes a callback, and the
     # lowerings below spell their extents as .shape reads for those passes to resolve like any other.
-    declared_ranks = {nm: len(dims) for nm, dims in arr_shapes.items()}
     complex_arrays = {nm for nm, dt in arr_dtypes.items() if "complex" in dt}
-    fn_ast = LowerCallsDaceCannotReplace(rank_table(fn_ast, declared_ranks), complex_arrays).visit(fn_ast)
+    fn_ast = LowerCallsDaceCannotReplace(rank_table(fn_ast, chain_ranks), complex_arrays).visit(fn_ast)
     ast.fix_missing_locations(fn_ast)
     fn_ast = _ShapeToSymbol(arr_shapes).visit(fn_ast)
     # ... and every remaining .shape read, including on a transient: one unresolved read makes the

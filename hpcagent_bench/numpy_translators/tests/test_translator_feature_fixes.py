@@ -2065,7 +2065,7 @@ def _exec_source(src, args) -> None:
 
 def _keepdims_src(call):
     """A kernel whose reduction operand has NO known rank: ``t`` is bound at two
-    different ranks, so ``_drop_rank_conflicts`` forgets it and ``hoist_reduce_axis``
+    different ranks, so ``drop_rank_conflicts`` forgets it and ``hoist_reduce_axis``
     (which needs the rank to build its loop nest) declines -- leaving the keepdims
     pass as the only thing between the kwarg and dace. Every ML port stages one ``x``
     through differently-shaped rebindings exactly like this."""

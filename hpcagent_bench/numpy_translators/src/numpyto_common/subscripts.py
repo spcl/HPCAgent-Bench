@@ -23,6 +23,11 @@ def is_newaxis(e: ast.AST) -> bool:
     )
 
 
+def is_slice_call(e: ast.AST) -> bool:
+    """A ``slice(...)`` call entry: a slice spelled as a call, which keeps its axis like ``a:b`` does."""
+    return isinstance(e, ast.Call) and isinstance(e.func, ast.Name) and e.func.id == "slice"
+
+
 def has_slice_subscript(expr: ast.AST) -> bool:
     """True when ``expr`` contains a Subscript with a literal ``ast.Slice`` axis."""
     for sub in ast.walk(expr):

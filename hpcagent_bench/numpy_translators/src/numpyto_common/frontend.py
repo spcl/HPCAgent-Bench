@@ -78,6 +78,7 @@ from numpyto_common.numpy_desugar import (
     name_value_pairs,
     rank_table,
     rewrite_curve_fit,
+    scalar_rank_seed,
     shape_table,
 )
 from numpyto_common.tuple_desugar import desugar_tuples
@@ -1380,6 +1381,10 @@ def build_kernel_ir(
     # against the values the call site actually passed.
     _scalar_names = frozenset(input_args) - frozenset(array_args)
     _init_scalars = as_block(init_block.get("scalars"))
+    # The manifest's scalars and size symbols are rank 0 beside the declared arrays: a binary op over
+    # an operand the rank table does not know has no rank.
+    manifest_scalars = sorted(_scalar_names | frozenset(_init_scalars) | frozenset(preset_symbols))
+    declared_seed = {**dict.fromkeys(manifest_scalars, 0), **_declared_ranks(shapes_raw)}
 
     def _resolve_axes(target: ast.FunctionDef) -> None:
         """Put every structural position into the literal form the nest is built from, then refuse
@@ -1392,14 +1397,14 @@ def build_kernel_ir(
         ).apply(target)
         ast.fix_missing_locations(target)
         # expand_dims/swapaxes first: they become plain indexing, which the tuple pass can then rank.
-        _AxisReshapeToIndexing(rank_table(target, _declared_ranks(shapes_raw)), _scalar_names).visit(target)
+        _AxisReshapeToIndexing(rank_table(target, declared_seed), _scalar_names).visit(target)
         ast.fix_missing_locations(target)
         desugar_tuples(
             target,
             int_scalars=_scalar_names - frozenset(_float_preset_names),
             float_scalars=frozenset(_float_preset_names) & _scalar_names,
             arrays=frozenset(array_args),
-            ranks=rank_table(target, _declared_ranks(shapes_raw)),
+            ranks=rank_table(target, declared_seed),
         )
         # Whatever axis did not become a literal above has no emittable loop nest. Refuse it here
         # rather than let a downstream reader mistake it for "no axis at all". A slice step and a
@@ -1410,11 +1415,11 @@ def build_kernel_ir(
     # An axis the ABI supplies has no single nest, but the operand's RANK is known, so the honest
     # emission is every nest it could pick plus the run-time choice between them -- never the
     # manifest default, which the harness need not pass.
-    _dispatch = _runtime_axis_dispatch(fn, _scalar_names, rank_table(fn, _declared_ranks(shapes_raw)))
-    if _dispatch is None:
+    axis_dispatch = _runtime_axis_dispatch(fn, _scalar_names, rank_table(fn, declared_seed))
+    if axis_dispatch is None:
         _resolve_axes(fn)
     else:
-        _specialize_runtime_axis(fn, _dispatch[0], _dispatch[1], frozenset(input_args), _resolve_axes)
+        _specialize_runtime_axis(fn, axis_dispatch[0], axis_dispatch[1], frozenset(input_args), _resolve_axes)
 
     _rename_rebound_parameters(fn, frozenset(array_args) - frozenset(output_args))
     version_rebound_locals(fn, frozenset(input_args) | frozenset(output_args) | frozenset(array_args))
@@ -5660,7 +5665,9 @@ def _desugar_helper_tuples(
     # check is exact here -- same split the emitters use, not a guess.
     int_scalars = frozenset(s.name for s in scalars if dtypes.is_integer(s.dtype)) | frozenset(s.name for s in symbols)
     float_scalars = frozenset(s.name for s in scalars if s.dtype.startswith("float"))
-    desugar_tuples(hfn, int_scalars=int_scalars, float_scalars=float_scalars, arrays=frozenset(ranks), ranks=ranks)
+    # Scalar and size-symbol params are rank 0, so an expression over them keeps its rank.
+    seed = {**scalar_rank_seed(scalars, symbols), **ranks}
+    desugar_tuples(hfn, int_scalars=int_scalars, float_scalars=float_scalars, arrays=frozenset(ranks), ranks=seed)
 
 
 def _fold_call_arg_constant(
@@ -5681,15 +5688,18 @@ def _fold_call_arg_constant(
     return folded if isinstance(folded, ast.Constant) else None
 
 
-def _rewrite_helper_axes(hfn: ast.FunctionDef, arrays: List[ArrayDesc], scalars: List[ScalarDesc]) -> None:
+def rewrite_helper_axes(
+    hfn: ast.FunctionDef, arrays: List[ArrayDesc], scalars: List[ScalarDesc], symbols: Sequence[SymbolDesc] = ()
+) -> None:
     """The axis-to-indexing rewrite the kernel body gets, against the helper's OWN param ranks.
 
     ``expand_dims`` / ``squeeze`` / ``swapaxes`` / ``moveaxis`` are pure index rewrites, but each
     needs the operand's rank. A helper that survives inlining never went through the kernel's own
     pass, so squeezenet's ``np.moveaxis(x, 1, -1)`` on a helper parameter reached lowering as an
-    unsupported call while the SAME line inside an inlined helper folded.
+    unsupported call while the SAME line inside an inlined helper folded. Scalar and size-symbol
+    params are rank 0, so an expression over them keeps its rank.
     """
-    ranks = {a.name: len(a.shape) for a in arrays}
+    ranks = {**scalar_rank_seed(scalars, symbols), **{a.name: len(a.shape) for a in arrays}}
     _AxisReshapeToIndexing(rank_table(hfn, ranks), frozenset(s.name for s in scalars)).visit(hfn)
     ast.fix_missing_locations(hfn)
 
@@ -6156,7 +6166,7 @@ def _build_helper_kirs(
             # KernelIR and never went through that call. Must run BEFORE the structural-axis
             # guards below: an unfolded ``axes = tuple(range(2, x.ndim))`` is still a runtime
             # Call at that point, which is exactly the "symbolic axis" the guard exists to catch.
-            _rewrite_helper_axes(hfn, arrays, scalars)
+            rewrite_helper_axes(hfn, arrays, scalars, symbols)
             _desugar_helper_tuples(hfn, arrays, scalars, symbols)
             # A helper whose folded body is nothing but ``return (a, b, ...)`` has no C/Fortran
             # ABI -- there is no tuple return value -- so it is not emitted as a function at all.
@@ -6341,7 +6351,7 @@ def _build_helper_kirs(
         # See the scalar-return branch above: fold this helper's own compile-time tuples against
         # its param ranks BEFORE the structural-axis guards, and before ``hret`` (not yet a real
         # body reference) is appended to ``arrays`` below.
-        _rewrite_helper_axes(hfn, arrays, scalars)
+        rewrite_helper_axes(hfn, arrays, scalars, symbols)
         _desugar_helper_tuples(hfn, arrays, scalars, symbols)
         _reject_symbolic_axis(hfn)
         _reject_unsupported_slices(hfn)
