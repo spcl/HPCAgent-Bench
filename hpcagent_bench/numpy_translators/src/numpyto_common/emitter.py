@@ -26,6 +26,7 @@ from typing import List, NamedTuple, Optional, Sequence
 
 from numpyto_common import dtypes, narrow_int
 from numpyto_common.ir import KernelIR, numpy_origin
+from numpyto_common.statement_desugar import Spelled, SplitTupleUnpack
 
 
 def index_rank_error(name: str, shape: Optional[Sequence[str]], n_indices: int) -> str:
@@ -106,37 +107,27 @@ def tuple_element(node: ast.AST, i: int, n: int) -> ast.expr | None:
     return None
 
 
-class TupleTargetSplitter(ast.NodeTransformer):
+class TupleTargetSplitter(SplitTupleUnpack):
     """Rewrite ``a, b, c = <tuple-valued expr>`` into one scalar assignment per element.
 
     Neither C nor Fortran has a tuple. The frontend splices a tuple-returning helper into its call
     site as a SINGLE expression -- a conditional selecting between tuple literals -- which the
-    lowering splitter (matching a bare tuple RHS) leaves alone. Every element repeats the guards.
+    lowering split (matching a bare tuple RHS) leaves alone. Every element repeats the guards.
 
-    Declines when a target name is read by the RHS: python binds every target from the OLD values,
-    and a sequential split would read one already updated.
+    A racing statement stays whole: python binds every target from the OLD values, and a temp minted
+    here would reach the emitter after its locals are harvested, undeclared.
     """
 
-    def visit_Assign(self, node: ast.Assign) -> object:
-        self.generic_visit(node)
-        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Tuple):
-            return node
-        targets = node.targets[0].elts
-        if not all(isinstance(t, ast.Name) for t in targets):
-            return node
-        names = {t.id for t in targets}
-        if any(isinstance(sub, ast.Name) and sub.id in names for sub in ast.walk(node.value)):
-            return node
-        parts = [tuple_element(node.value, i, len(targets)) for i in range(len(targets))]
-        if any(p is None for p in parts):
-            return node
-        out: list[ast.stmt] = []
-        for target, part in zip(targets, parts):
-            stmt = ast.Assign(targets=[copy.deepcopy(target)], value=part)
-            ast.copy_location(stmt, node)
-            ast.fix_missing_locations(stmt)
-            out.append(stmt)
-        return out
+    def values(self, targets: list[ast.expr], value: ast.expr) -> Spelled | None:
+        if isinstance(value, ast.Tuple):
+            return super().values(targets, value)
+        parts: list[ast.expr] = []
+        for position in range(len(targets)):
+            part = tuple_element(value, position, len(targets))
+            if part is None:
+                return None
+            parts.append(part)
+        return [], parts
 
 
 class BaseEmitter:

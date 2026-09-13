@@ -16,7 +16,13 @@ from numpyto_common.lib_nodes import shape_exprs_equal, sympify_shape
 from numpyto_common.lowering import lower
 from numpyto_common.numpy_desugar import _AUG_OP_SRC, desugar_for_python_backend, expr_rank, rank_table
 from numpyto_common.ordered import OrderedSet
-from numpyto_common.statement_desugar import DesugarArrayIteration, SplitChainedAssign, is_scalar_literal
+from numpyto_common.statement_desugar import (
+    DesugarArrayIteration,
+    SplitChainedAssign,
+    SplitTupleUnpack,
+    Spelled,
+    is_scalar_literal,
+)
 
 _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 #: A decimal point or an exponent -- what makes a shape token a float rather than an extent.
@@ -46,7 +52,7 @@ class _ShapeToSymbol(ast.NodeTransformer):
         return node
 
 
-class SplitTupleAssign(ast.NodeTransformer):
+class SplitTupleAssign(SplitTupleUnpack):
     """Lower a tuple assignment into one statement per name.
 
     ``n, c, h, w = x.shape`` is what the helper inliner emits, and it is the single biggest reason a
@@ -56,73 +62,38 @@ class SplitTupleAssign(ast.NodeTransformer):
     ``n = x.shape[0]`` etc., the existing shape passes resolve each one: declared arrays through
     :class:`_ShapeToSymbol`, transients through :func:`_inline_transient_shape_scalars`.
 
-    A SWAP (``a, b = b, a``) must go through temporaries. Emitting the statements in order would
-    overwrite ``a`` before ``b`` reads it, which is a silent wrong answer rather than a refusal, so
-    every source is latched first whenever the right-hand side reads any name the left-hand side
-    binds.
+    A SWAP (``a, b = b, a``) goes through ``__hpcagent_bench_tuple<k>`` temporaries: emitting the
+    statements in order would overwrite ``a`` before ``b`` reads it, which is a silent wrong answer
+    rather than a refusal.
     """
 
-    def __init__(self) -> None:
-        self.temporaries = 0
-
-    def visit_Assign(self, node: ast.Assign):
-        self.generic_visit(node)
-        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Tuple):
-            return node
-        elts = node.targets[0].elts
-        names = [e.id for e in elts if isinstance(e, ast.Name)]
-        if len(names) != len(elts):
-            return node  # a subscript or attribute target is not a plain unpack
-        value = node.value
-        if isinstance(value, ast.Tuple):
-            if len(value.elts) != len(names):
-                return node
-            reads = {n.id for e in value.elts for n in ast.walk(e) if isinstance(n, ast.Name)}
-            if reads & set(names):
-                return self.through_temporaries(node, names, value.elts)
-            return self.located(node, [(nm, elt) for nm, elt in zip(names, value.elts)])
-        if isinstance(value, ast.Attribute) and value.attr == "shape":
-            # Re-reading ``.shape`` per name is free: it is resolved to declared extents below, and
-            # never survives as a runtime read.
-            base, prelude = value.value, []
-            if not isinstance(base, ast.Name):
-                # ``n, c, h, w = np.maximum(t, 0.0).shape``: name the operand first, or each of the
-                # four reads would carry its own copy of the call. The temporary is elementwise, so
-                # the shape resolver can follow it to the operand's own extents.
-                temporary = f"__hpcagent_bench_shaped{self.temporaries}"
-                self.temporaries += 1
-                prelude = [(temporary, base)]
-                base = ast.Name(id=temporary, ctx=ast.Load())
-            reads = [
-                (
-                    nm,
-                    ast.Subscript(
-                        value=ast.Attribute(value=copy.deepcopy(base), attr="shape", ctx=ast.Load()),
-                        slice=ast.Constant(value=index),
-                        ctx=ast.Load(),
-                    ),
-                )
-                for index, nm in enumerate(names)
-            ]
-            return self.located(node, prelude + reads)
-        return node
-
-    def through_temporaries(self, node: ast.Assign, names: List[str], sources: List[ast.expr]) -> List[ast.stmt]:
-        latched: List[Tuple[str, ast.expr]] = []
-        pairs: List[str] = []
-        for source in sources:
-            temporary = f"__hpcagent_bench_tuple{self.temporaries}"
-            self.temporaries += 1
-            latched.append((temporary, source))
-            pairs.append(temporary)
-        return self.located(node, latched + [(nm, ast.Name(id=t, ctx=ast.Load())) for nm, t in zip(names, pairs)])
-
-    @staticmethod
-    def located(node: ast.Assign, pairs: List[Tuple[str, ast.expr]]) -> List[ast.stmt]:
-        return [
-            ast.copy_location(ast.Assign(targets=[ast.Name(id=nm, ctx=ast.Store())], value=val), node)
-            for nm, val in pairs
+    def values(self, targets: list[ast.expr], value: ast.expr) -> Spelled | None:
+        if not (isinstance(value, ast.Attribute) and value.attr == "shape"):
+            return super().values(targets, value)
+        # Re-reading ``.shape`` per name is free: it is resolved to declared extents below, and
+        # never survives as a runtime read.
+        base = value.value
+        prelude: list[ast.stmt] = []
+        if not isinstance(base, ast.Name):
+            # ``n, c, h, w = np.maximum(t, 0.0).shape``: name the operand first, or each of the
+            # four reads would carry its own copy of the call. The temporary is elementwise, so
+            # the shape resolver can follow it to the operand's own extents.
+            temporary = f"__hpcagent_bench_shaped{self.temps}"
+            self.temps += 1
+            prelude.append(ast.Assign(targets=[ast.Name(id=temporary, ctx=ast.Store())], value=base))
+            base = ast.Name(id=temporary, ctx=ast.Load())
+        reads: list[ast.expr] = [
+            ast.Subscript(
+                value=ast.Attribute(value=copy.deepcopy(base), attr="shape", ctx=ast.Load()),
+                slice=ast.Constant(value=index),
+                ctx=ast.Load(),
+            )
+            for index in range(len(targets))
         ]
+        return prelude, reads
+
+    def temp_name(self, position: int) -> str:
+        return f"__hpcagent_bench_tuple{self.temps}"
 
 
 class _DropSymbolAssign(ast.NodeTransformer):

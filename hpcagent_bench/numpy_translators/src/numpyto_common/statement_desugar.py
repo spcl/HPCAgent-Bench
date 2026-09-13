@@ -1,12 +1,14 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Two statement desugars every backend runs: element iteration over an array, and chained assignment.
+"""Statement desugars every backend runs: element iteration over an array, chained assignment, tuple unpack.
 
-dace, native lowering and jax each carried a copy of both. The copies differed in where an array's
-leading extent comes from and in how a chained value reaches its targets; those are the parameters.
+dace, native lowering and jax each carried a copy of the first two; dace, native lowering and the C /
+Fortran emitters each carried a tuple-unpack split. The copies differed in where an array's leading
+extent comes from, in how a chained value reaches its targets, and in which right sides an unpack
+spells per target; those are the parameters and hooks.
 
-Entry points: :class:`DesugarArrayIteration` and :class:`SplitChainedAssign`.
+Entry points: :class:`DesugarArrayIteration`, :class:`SplitChainedAssign` and :class:`SplitTupleUnpack`.
 """
 
 import ast
@@ -340,3 +342,114 @@ class SplitChainedAssign(StatementTransformer):
                 found.add(name)
             pending.extend(ast.iter_child_nodes(node))
         return found
+
+
+#: Statements that run before the split bindings, and one value per target.
+Spelled = tuple[list[ast.stmt], list[ast.expr]]
+
+
+def is_self_copy(target: ast.expr, value: ast.expr) -> bool:
+    """``n = n``: the binding writes back the value it reads."""
+    return isinstance(target, ast.Name) and isinstance(value, ast.Name) and value.id == target.id
+
+
+def written_name(target: ast.expr) -> str | None:
+    """The name a target writes: itself, or the array a subscript stores into."""
+    while isinstance(target, ast.Subscript):
+        target = target.value
+    return target.id if isinstance(target, ast.Name) else None
+
+
+def races(targets: list[ast.expr], values: list[ast.expr], changed: list[int]) -> bool:
+    """A changed value reads a name a changed target writes, so a sequential split could read it updated."""
+    written = OrderedSet(written_name(targets[position]) for position in changed)
+    return any(
+        isinstance(sub, ast.Name) and sub.id in written for position in changed for sub in ast.walk(values[position])
+    )
+
+
+class SplitTupleUnpack(StatementTransformer):
+    """``a, b = x, y`` -> ``a = x; b = y``, python's simultaneous bind kept.
+
+    Python evaluates the whole right side before it binds any target. When a value reads a name a
+    target writes, every changed value is latched in a temp first and the targets bind from the temps;
+    a positional self-copy (``n = n``) writes back what it reads, so it binds plainly after them. A right
+    side with no per-target spelling -- a call returning a tuple, a starred element -- stays whole.
+
+    Per-backend hooks: :attr:`TARGETS`, :meth:`values` and :meth:`temp_name`.
+    """
+
+    #: Target node types a split may bind; any other target leaves the statement whole.
+    TARGETS: tuple[type[ast.expr], ...] = (ast.Name,)
+
+    def __init__(self) -> None:
+        #: Temps minted so far.
+        self.temps = 0
+        #: Racing statements met so far.
+        self.racing = 0
+
+    def values(self, targets: list[ast.expr], value: ast.expr) -> Spelled | None:
+        """The per-target spelling of ``value``, or ``None`` when it has none."""
+        return ([], value.elts) if isinstance(value, ast.Tuple) else None
+
+    def temp_name(self, position: int) -> str | None:
+        """The temp that latches the value at ``position``, or ``None`` to leave a racing statement whole."""
+        return None
+
+    def generic_visit(self, node: ast.AST) -> ast.AST:
+        for block in statement_blocks(node):
+            spliced: list[ast.AST] = []
+            for stmt in block:
+                if isinstance(stmt, ast.Assign):
+                    spliced.extend(self.split(stmt))
+                else:
+                    spliced.append(self.generic_visit(stmt))
+            block[:] = spliced
+        return node
+
+    def unpacked(self, node: ast.Assign) -> tuple[list[ast.expr], Spelled] | None:
+        """The targets of the unpack ``node`` and one value per target, or ``None`` when it stays whole."""
+        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Tuple):
+            return None
+        targets = node.targets[0].elts
+        if not all(isinstance(target, self.TARGETS) for target in targets):
+            return None
+        spelled = self.values(targets, node.value)
+        if spelled is None or len(spelled[1]) != len(targets):
+            return None
+        return None if any(isinstance(value, ast.Starred) for value in spelled[1]) else (targets, spelled)
+
+    def split(self, node: ast.Assign) -> list[ast.stmt]:
+        """The bindings ``node`` splits into, or ``[node]`` when it stays whole."""
+        unpacked = self.unpacked(node)
+        if unpacked is None:
+            return [node]
+        targets, (prelude, values) = unpacked
+        changed = [position for position, value in enumerate(values) if not is_self_copy(targets[position], value)]
+        if not races(targets, values, changed):
+            return placed(node, [*prelude, *map(assign, targets, values)])
+        latched = self.latched(targets, values, changed)
+        return [node] if latched is None else placed(node, [*prelude, *latched])
+
+    def latched(self, targets: list[ast.expr], values: list[ast.expr], changed: list[int]) -> list[ast.stmt] | None:
+        """Temps for the changed values, the changed targets bound from them, then the self-copies."""
+        self.racing += 1
+        holders: list[str] = []
+        for position in changed:
+            holder = self.temp_name(position)
+            if holder is None:
+                return None
+            self.temps += 1
+            holders.append(holder)
+        changing = OrderedSet(changed)
+        kept = [position for position in range(len(targets)) if position not in changing]
+        return [
+            *(bind(holder, values[position]) for holder, position in zip(holders, changed)),
+            *(assign(targets[position], load(holder)) for holder, position in zip(holders, changed)),
+            *(assign(targets[position], values[position]) for position in kept),
+        ]
+
+
+def assign(target: ast.expr, value: ast.expr) -> ast.Assign:
+    """``target = value``."""
+    return ast.Assign(targets=[target], value=value)

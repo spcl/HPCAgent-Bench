@@ -46,10 +46,13 @@ from numpyto_common.numpy_desugar import np_submodule_attr
 from numpyto_common.statement_desugar import (
     DesugarArrayIteration,
     SplitChainedAssign,
+    SplitTupleUnpack,
+    Spelled,
     bind,
     element_read,
     indexed_loop,
     pair_names,
+    written_name,
 )
 from numpyto_common.lib_nodes import (
     ARRAY_METHOD_SHAPE_OPS,
@@ -8475,138 +8478,57 @@ class _SubscriptifyNames(ast.NodeTransformer):
         return node
 
 
-def _target_base_name(node: ast.AST) -> Optional[str]:
-    """Root name of an assignment target (``out[i][j]`` -> ``out``, a bare ``x``
-    -> ``x``), or ``None`` when the target is not name-rooted."""
-    while isinstance(node, ast.Subscript):
-        node = node.value
-    return node.id if isinstance(node, ast.Name) else None
+class ShapeTableTupleSplit(SplitTupleUnpack):
+    """Native lowering's tuple split: subscript targets too, and ``n, k = arr.shape`` from the shape table.
 
+    * ``a, b, c = X, Y, Z`` -> three assignments (jacobi_2d_tile_4lvlsilly); ``KE[0], PE[0] = a, b``
+      from a helper's tuple return stores each element into its array.
+    * ``n, k = arr.shape`` -> the shape symbols, when ``arr``'s shape is known (thomas_solve,
+      vertical_flux_prefix_scan).
 
-class _TupleAssignRewriter(ast.NodeTransformer):
-    """Expand tuple-LHS assignments into per-element statements.
-
-    Two source shapes covered:
-
-    * ``a, b, c = X, Y, Z`` -> three assignments (jacobi_2d_tile_4lvlsilly).
-    * ``n, k = arr.shape`` -> substitute the shape symbols if known
-      (thomas_solve, vertical_flux_prefix_scan).
-
-    Integer local names produced by either path are collected in
-    :attr:`int_locals` so the emitter can emit ``int n;`` declarations
-    before first use.
-
-    A tuple assign binds every target from the OLD values simultaneously
-    (``a, b = b, a + b``). A plain sequential split reads an already-updated
-    target, so when any RHS element reads a target name this pass evaluates
-    each RHS into a fresh temp first and binds the targets from the temps --
-    restoring numpy/python simultaneity. Temps are dtyped by the later harvest
-    phase from their RHS (this rewriter runs in ``normalize-calls``, before
-    ``seed-dtypes-and-harvest``), so no explicit declaration hook is needed.
+    Integer names bound either way are collected in :attr:`int_locals` so the emitter declares them
+    ``int`` before first use. A racing element (``a, b = b, a + b``, ``out[i], out[j] = out[j],
+    out[i]``) goes through ``__swap<k>_<position>`` temps, dtyped by the later harvest phase from their
+    right side: this split runs in ``normalize-calls``, before ``seed-dtypes-and-harvest``. A self-copy
+    (``n, m = n, m`` after shape resolution) stays a plain binding, which keeps promote-params seeing
+    ``n`` / ``m`` as scalar parameters; :class:`_SelfAssignDropper` deletes it at the end of the phase.
     """
 
-    def __init__(self, arrays_shapes) -> None:
-        self.arrays_shapes = arrays_shapes  # dict[name, list[symbol_name]]
-        #: Names introduced as integer scalar locals (collected for the
-        #: emitter to declare at the top of the function body).
+    TARGETS = (ast.Name, ast.Subscript)
+
+    def __init__(self, arrays_shapes: Mapping[str, Sequence[str]]) -> None:
+        super().__init__()
+        self.arrays_shapes = arrays_shapes
+        #: Names introduced as integer scalar locals, for the emitter to declare.
         self.int_locals: List[str] = []
-        #: Monotonic counter for unique swap-temp names across the body.
-        self._ctr: List[int] = [0]
 
-    def visit_Assign(self, node: ast.Assign) -> ast.AST:
-        if not (len(node.targets) == 1 and isinstance(node.targets[0], ast.Tuple)):
-            return node
-        names = [e.id for e in node.targets[0].elts if isinstance(e, ast.Name)]
-        if len(names) != len(node.targets[0].elts):
-            # Mixed Subscript / Name targets, e.g. ``KE[0], PE[0] = (a, b)``
-            # from helper-return tuple unpacking. Split into per-element
-            # Assigns when the RHS is a Tuple literal of matching length so
-            # the emit walker sees plain Subscript-assigns. Each element's
-            # store target reused as-is; the RHS expressions are unparsed
-            # back into source so ast.parse rebuilds them in the new
-            # context.
-            tgt_elts = node.targets[0].elts
-            if isinstance(node.value, ast.Tuple) and len(node.value.elts) == len(tgt_elts):
-                val_elts = node.value.elts
-                # Simultaneous bind (numpy): every target reads the OLD values.
-                # A subscript target written here must not be observed already
-                # updated by another element's RHS -- ``out[i], out[j] = out[j],
-                # out[i]`` split sequentially double-reads the overwritten slot.
-                # Stage each RHS into a fresh temp when a written base array is
-                # read by any element; else a plain split preserves the order.
-                written_bases = {b for b in (_target_base_name(t) for t in tgt_elts) if b}
-                read_names = {nd.id for v in val_elts for nd in ast.walk(v) if isinstance(nd, ast.Name)}
-                stmts: List[ast.stmt] = []
-                if written_bases & read_names:
-                    self._ctr[0] += 1
-                    pfx = f"__swap{self._ctr[0]}_"
-                    for i, val in enumerate(val_elts):
-                        stmts.extend(ast.parse(f"{pfx}{i} = {ast.unparse(val)}").body)
-                    for i, tgt in enumerate(tgt_elts):
-                        stmts.extend(ast.parse(f"{ast.unparse(tgt)} = {pfx}{i}").body)
-                    return stmts
-                for tgt, val in zip(tgt_elts, val_elts):
-                    # Preserve the per-element store context (Subscript store /
-                    # Name store) by parsing the unparsed form.
-                    stmts.extend(ast.parse(f"{ast.unparse(tgt)} = {ast.unparse(val)}").body)
-                return stmts
-            return node
+    def values(self, targets: list[ast.expr], value: ast.expr) -> Spelled | None:
+        names = [target.id for target in targets if isinstance(target, ast.Name)]
+        if len(names) != len(targets):
+            return super().values(targets, value)
+        if isinstance(value, ast.Attribute) and value.attr == "shape" and isinstance(value.value, ast.Name):
+            return self.shape_values(names, value.value.id)
+        if isinstance(value, ast.Tuple) and len(value.elts) == len(names) and all(map(is_int_constant, value.elts)):
+            self.int_locals.extend(names)
+        return super().values(targets, value)
 
-        # arr.shape RHS -> shape-symbol substitution.
-        if (
-            isinstance(node.value, ast.Attribute)
-            and node.value.attr == "shape"
-            and isinstance(node.value.value, ast.Name)
-        ):
-            arr_name = node.value.value.id
-            shape = self.arrays_shapes.get(arr_name)
-            if shape is None or len(shape) != len(names):
-                return node
-            # A self-copy (``H = H``, the shape symbol resolving to the target's own
-            # name) needs no int declaration: it is promoted to a shape PARAMETER, and
-            # ``_integer_valued_locals`` pins every ``kir.symbols`` name int anyway.
-            # Declaring it would shadow the parameter with an uninitialised local.
-            self.int_locals.extend(n for n, sym in zip(names, shape) if n != sym)
-            text = "\n".join(f"{n} = {sym}" for n, sym in zip(names, shape))
-            return ast.parse(text).body
+    def shape_values(self, names: List[str], array: str) -> Spelled | None:
+        """The shape symbols of ``array`` for ``names``, or ``None`` when its shape is unknown or of another rank."""
+        shape = self.arrays_shapes.get(array)
+        if shape is None or len(shape) != len(names):
+            return None
+        # A self-copy (``H = H``) is promoted to a shape PARAMETER, and ``_integer_valued_locals`` pins
+        # every ``kir.symbols`` name int anyway. Declaring it would shadow the parameter with an
+        # uninitialized local.
+        self.int_locals.extend(name for name, token in zip(names, shape) if name != token)
+        return [], [_token_to_ast(token) for token in shape]
 
-        # Tuple RHS -> per-element assignment.
-        if isinstance(node.value, ast.Tuple) and len(node.value.elts) == len(names):
-            elts = node.value.elts
-            if all(isinstance(v, ast.Constant) and isinstance(v.value, int) for v in elts):
-                # Pure int-constant tuple (grid dims): no read-after-write
-                # hazard is possible, so emit direct int locals.
-                self.int_locals.extend(names)
-                text = "\n".join(f"{n} = {ast.unparse(v)}" for n, v in zip(names, elts))
-                return ast.parse(text).body
-            # Positional self-copies (``x = x``) never race, so they drop out of the
-            # hazard test. They are common after shape-symbol resolution rewrites
-            # ``n, m = arr.shape`` into ``n, m = n, m``. Splitting them plainly (rather
-            # than staging them through a temp) is what keeps promote-params seeing
-            # n / m as scalar parameters -- a temp would make them body-defined locals.
-            # The resulting ``n = n`` statements are then deleted outright by
-            # :class:`_SelfAssignDropper` at the end of this phase; promotion is
-            # unaffected because ``_body_defined_locals`` already ignores an assign
-            # whose target appears in its own RHS.
-            changed = [i for i, v in enumerate(elts) if not (isinstance(v, ast.Name) and v.id == names[i])]
-            written = {names[i] for i in changed}
-            read = {nd.id for i in changed for nd in ast.walk(elts[i]) if isinstance(nd, ast.Name)}
-            if written & read:
-                # Read-after-write hazard: a reassigned target is read by another
-                # element (``a, b = b, a + b``). Stage each changed RHS into a
-                # fresh temp, bind the targets from the temps, and keep any
-                # self-copies as plain no-op splits.
-                self._ctr[0] += 1
-                pfx = f"__swap{self._ctr[0]}_"
-                lines = [f"{pfx}{i} = {ast.unparse(elts[i])}" for i in changed]
-                lines += [f"{names[i]} = {pfx}{i}" for i in changed]
-                lines += [f"{names[i]} = {ast.unparse(elts[i])}" for i in range(len(names)) if i not in set(changed)]
-                return ast.parse("\n".join(lines)).body
-            # No hazard: plain per-element split.
-            text = "\n".join(f"{n} = {ast.unparse(v)}" for n, v in zip(names, elts))
-            return ast.parse(text).body
+    def temp_name(self, position: int) -> str:
+        return f"__swap{self.racing}_{position}"
 
-        return node
+
+def is_int_constant(node: ast.expr) -> bool:
+    return isinstance(node, ast.Constant) and isinstance(node.value, int)
 
 
 class _SelfAssignDropper(ast.NodeTransformer):
@@ -8763,7 +8685,7 @@ class _ForwardSubstituteInvariantScalars(ast.NodeTransformer):
             elif isinstance(node, (ast.Assign, ast.AugAssign)):
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
                 for tgt in targets:
-                    base = _target_base_name(tgt)
+                    base = written_name(tgt)
                     if base is not None:
                         written.add(base)
         # One pass, so the depth test is O(1) and gates the costly liveness walk.
@@ -8789,7 +8711,7 @@ class _ForwardSubstituteInvariantScalars(ast.NodeTransformer):
             if not _fwd_subst_is_pure(expr):
                 return False
             for sub in subscripts:  # aliasing: a replayed read must not cross its own store
-                base = _target_base_name(sub)
+                base = written_name(sub)
                 if base is None or base in written:
                     return False
             for node in ast.walk(expr):  # every operand stable between the assign and the reads
@@ -8994,7 +8916,7 @@ def _lp_normalize_calls(ctx: LoweringContext) -> None:
     chain_ranks = {name: len(shape) for name, shape in ash.items()}
     chain_ranks.update((desc.name, 0) for desc in (*ctx.kir.scalars, *ctx.kir.symbols))
     SplitChainedAssign(lambda ordinal: f"__chain{ordinal}", seed_ranks=chain_ranks).visit(tree)
-    tuple_rewriter = _TupleAssignRewriter(ash)
+    tuple_rewriter = ShapeTableTupleSplit(ash)
     tuple_rewriter.visit(tree)
     # Stash the int-locals so the emitter can declare them.
     ctx.kir.int_locals = tuple_rewriter.int_locals
@@ -9261,7 +9183,7 @@ def _lp_normalize_index_access(ctx: LoweringContext) -> None:
     # inlined local stayed a tuple and reached the emitter as a value -- "expression Tuple", the
     # single largest emit failure in the corpus. Extends int_locals rather than replacing it; the
     # first pass's names are still live.
-    tuple_rewriter = _TupleAssignRewriter(shapes)
+    tuple_rewriter = ShapeTableTupleSplit(shapes)
     tuple_rewriter.visit(tree)
     ctx.kir.int_locals += [n for n in tuple_rewriter.int_locals if n not in ctx.kir.int_locals]
     _TupleLocalPropagator().run(tree)
