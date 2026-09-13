@@ -185,29 +185,34 @@ def test_roll_sliced_self_assign() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_chained_gather_is_not_flattened_into_one_subscript() -> None:
+def test_chained_gather_composes_the_outer_index_into_the_index_array() -> None:
     """``A[idx][j] == A[idx[j]]``, NOT ``A[idx, j]``.
 
-    Flattening it produced a subscript with more indices than the base has axes, and the
-    scalarizer then handed the outer iterators to the wrong axes.
+    Flattening positionally produced a subscript with more indices than the base has axes, and the
+    scalarizer then handed the outer iterators to the wrong axes. An outer entry that lands on a
+    gathered axis indexes the index array instead, a newaxis between two of them included.
     """
     import ast as _ast
 
-    from numpyto_common.lowering import _ChainedSubscriptFlattener
+    from numpyto_common.lowering import ChainedSubscriptFlattener
+
+    x = np.arange(12.0).reshape(4, 3)
+    aj = np.array([[2, 0], [1, 3], [3, 3]])
+    assert np.array_equal(x[aj][:, None, :, :], x[aj[:, None], :])
 
     tree = _ast.parse("y = x[aj][:, None, :, :]")
-    _ChainedSubscriptFlattener({"x": ("n", "3"), "aj": ("p", "j")}).visit(tree)
-    assert _ast.unparse(tree).strip() == "y = x[aj][:, None, :, :]"
+    ChainedSubscriptFlattener({"x": ("n", "3"), "aj": ("p", "j")}).visit(tree)
+    assert _ast.unparse(tree).strip() == "y = x[aj[:, None], :]"
 
 
 def test_chained_scalar_index_is_still_flattened() -> None:
     """A genuinely scalar inner index keeps the existing collapse: ``psi[f][..., 0]``."""
     import ast as _ast
 
-    from numpyto_common.lowering import _ChainedSubscriptFlattener
+    from numpyto_common.lowering import ChainedSubscriptFlattener
 
     tree = _ast.parse("y = psi[f][..., 0]")
-    _ChainedSubscriptFlattener({"psi": ("F", "X", "Y", "K")}).visit(tree)
+    ChainedSubscriptFlattener({"psi": ("F", "X", "Y", "K")}).visit(tree)
     assert _ast.unparse(tree).strip() == "y = psi[f, ..., 0]"
 
 

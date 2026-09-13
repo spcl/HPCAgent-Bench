@@ -21,11 +21,13 @@ from __future__ import annotations
 import ast
 
 import numpy as np
+import pytest
 from _op_oracle import run_op
 
 from numpyto_common.frontend import _collect_bool_preset_names
 from numpyto_common.lib_nodes import _reads_complex
-from numpyto_common.lowering import _CollapseChainedSubscripts, _ShapeMidExpressionRewriter, _SliceToScalarRewriter
+from numpyto_common import lowering
+from numpyto_common.lowering import ChainedSubscriptFlattener
 
 _ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 
@@ -47,8 +49,10 @@ def _unparse(node: ast.AST) -> str:
 
 
 def _collapse(expr: str, shapes) -> str:
+    # The pre-harvest configuration: every base axis the rank names is spelled out.
     node = ast.parse(expr, mode="eval").body
-    new = _CollapseChainedSubscripts({k: tuple(v) for k, v in shapes.items()}).visit(node)
+    table = {k: tuple(v) for k, v in shapes.items()}
+    new = ChainedSubscriptFlattener(table, explicit_trailing_axes=True).visit(node)
     return ast.unparse(ast.fix_missing_locations(new))
 
 
@@ -64,21 +68,21 @@ def test_collapse_slice_then_trailing_scalar() -> None:
     assert _collapse("A[:, j, k][m]", {"A": ("nkb", "nb", "nks")}) == "A[m, j, k]"
 
 
-def test_collapse_bails_on_unknown_base_shape() -> None:
-    # No shape for the base array -> left chained (cannot resolve trailing axes).
-    assert _collapse("A[i][:, c]", {}) == "A[i][:, c]"
+def test_collapse_of_an_unsized_base_continues_on_the_axes_after_the_inner() -> None:
+    # No shape for the base: the outer entries still land on the axes right after the scalar
+    # inner, whatever the rank, so ``A[i][:, c]`` is ``A[i, :, c]``.
+    assert _collapse("A[i][:, c]", {}) == "A[i, :, c]"
 
 
-def test_collapse_bails_on_partial_inner_slice() -> None:
-    # A bounded inner slice is not a plain associate -> left untouched.
-    assert _collapse("A[1:3][j]", {"A": ("n", "m")}) == "A[1:3][j]"
+def test_collapse_rebases_an_index_through_a_partial_inner_slice() -> None:
+    # ``A[1:3][j]`` is ``A[1 + j]``: the bounded slice shifts the origin of the axis ``j`` indexes.
+    assert _collapse("A[1:3][j]", {"A": ("n", "m")}) == "A[1 + j, :]"
 
 
-def test_collapse_bails_on_fancy_inner_index() -> None:
+def test_collapse_indexes_into_a_fancy_inner_index() -> None:
     # ``A[idx][j]`` with ``idx`` an ARRAY is a fancy GATHER (== ``A[idx[j]]``), not
-    # a scalar associate -- collapsing to ``A[idx, j]`` would change the access, so
-    # it must be left untouched (``idx`` known-array via its shape-table entry).
-    assert _collapse("A[idx][j]", {"A": ("n", "m"), "idx": ("k",)}) == "A[idx][j]"
+    # a scalar associate -- ``A[idx, j]`` would read a column instead of row ``idx[j]``.
+    assert _collapse("A[idx][j]", {"A": ("n", "m"), "idx": ("k",)}) == "A[idx[j], :]"
 
 
 def test_collapse_keeps_scalar_inner_when_a_sibling_name_is_an_array() -> None:
@@ -87,9 +91,89 @@ def test_collapse_keeps_scalar_inner_when_a_sibling_name_is_an_array() -> None:
     assert _collapse("A[i][j]", {"A": ("n", "m"), "idx": ("k",)}) == "A[i, j]"
 
 
-def test_collapse_bails_on_ellipsis_inner() -> None:
-    # An ellipsis stands for an unknown number of axes -> cannot align -> bail.
-    assert _collapse("A[..., j][k]", {"A": ("n", "m", "p")}) == "A[..., j][k]"
+def test_collapse_expands_an_inner_ellipsis_against_the_base_rank() -> None:
+    # ``A[..., j]`` on a rank-3 base is ``A[:, :, j]``, so ``[k]`` lands on axis 0.
+    assert _collapse("A[..., j][k]", {"A": ("n", "m", "p")}) == "A[k, :, j]"
+
+
+# ---- chained index arrays: composed into one subscript, two-step where numpy transposes ----
+
+ABI_BACKENDS = ("c", "fortran")
+
+
+def test_an_outer_row_and_column_land_on_the_gathered_row_and_the_base_column() -> None:
+    # ``A[idx][j, k]``: ``j`` picks gathered row ``idx[j]``, ``k`` the base column after it.
+    A = np.arange(20.0).reshape(4, 5)
+    idx = np.array([3, 0, 2])
+    assert A[idx][1, 4] == A[idx[1], 4]
+    node = ast.parse("A[idx][j, k]", mode="eval").body
+    new = ChainedSubscriptFlattener({"A": ("n", "m"), "idx": ("p",)}).visit(node)
+    assert _unparse(new) == "A[idx[j], k]"
+
+
+def test_a_gather_then_a_row_index_reads_the_gathered_row() -> None:
+    # ``A[idx][j]`` is row ``idx[j]`` of A. The last flattening phase used to emit ``A[idx, j]``, a
+    # column read that compiles on a square A and returns wrong numbers.
+    src = "import numpy as np\ndef f(A, idx, out):\n    for j in range(idx.shape[0]):\n        out[j, :] = A[idx][j]\n"
+    M = 4
+    A = np.random.default_rng(3).standard_normal((M, M))
+    idx = np.array([3, 1, 0, 2], dtype=np.int64)
+    res = run_op(
+        src,
+        "f",
+        {"A": A, "idx": idx},
+        {"out": (M, M)},
+        {"M": M},
+        shapes={"A": "(M,M)", "idx": "(M,)", "out": "(M,M)"},
+        backends=ABI_BACKENDS,
+    )
+    ok, r = _ok(res)
+    assert ok, r
+
+
+def test_a_gather_through_a_partial_slice_offsets_the_index_array() -> None:
+    # ``a[1:5][jdx]`` is ``a[1 + jdx]``. Every flattening phase used to decline it, and the chain
+    # reached the emitter as an index with more axes than ``a`` has.
+    src = "import numpy as np\ndef f(a, jdx, out):\n    out[:] = a[1:5][jdx]\n"
+    N, P = 6, 4
+    a = np.random.default_rng(4).standard_normal(N)
+    jdx = np.array([3, 1, 0, 2], dtype=np.int64)
+    res = run_op(
+        src,
+        "f",
+        {"a": a, "jdx": jdx},
+        {"out": (P,)},
+        {"N": N, "P": P},
+        shapes={"a": "(N,)", "jdx": "(P,)", "out": "(P,)"},
+        backends=ABI_BACKENDS,
+    )
+    ok, r = _ok(res)
+    assert ok, r
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="the flattener keeps the exact two-step A[2, :3, :][:, idx]; a later lowering pass still "
+    "merges it into a 5-axis index the emitter refuses (before: flat A[2, :3, idx], SIG11)",
+)
+def test_an_index_array_split_from_a_scalar_by_a_slice_keeps_its_axis_order() -> None:
+    # ``A[2][:3, idx]`` is (3, P), the flat ``A[2, :3, idx]`` is (P, 3). The pre-harvest phase used
+    # to emit the flat form, which crashed the C kernel.
+    src = "import numpy as np\ndef f(A, idx, out):\n    out[:, :] = A[2][:3, idx]\n"
+    F, X, Y, P = 3, 5, 7, 2
+    A = np.random.default_rng(5).standard_normal((F, X, Y))
+    idx = np.array([0, 2], dtype=np.int64)
+    res = run_op(
+        src,
+        "f",
+        {"A": A, "idx": idx},
+        {"out": (3, P)},
+        {"F": F, "X": X, "Y": Y, "P": P},
+        shapes={"A": "(F,X,Y)", "idx": "(P,)", "out": "(3,P)"},
+        backends=ABI_BACKENDS,
+    )
+    ok, r = _ok(res)
+    assert ok, r
 
 
 # ---- pure: a boolean preset value is a config-flag name (typed bool) ----
@@ -192,7 +276,7 @@ def test_shape_of_complex_array_is_integer_bound() -> None:
 
 def _rewrite_shape(expr: str, shapes) -> str:
     node = _expr(expr)
-    new = _ShapeMidExpressionRewriter({k: tuple(v) for k, v in shapes.items()}).visit(node)
+    new = lowering._ShapeMidExpressionRewriter({k: tuple(v) for k, v in shapes.items()}).visit(node)
     return _unparse(new)
 
 
@@ -259,7 +343,7 @@ def _pad_trailing(rhs_expr: str, start, source_shape):
     # starts at ``start``, on a partial-scalar RHS of a higher-rank source.
     iv = ast.Name(id="si", ctx=ast.Load())
     lhs_slice = ast.Slice(lower=(None if start == 0 else ast.Constant(start)), upper=None, step=None)
-    rw = _SliceToScalarRewriter(
+    rw = lowering._SliceToScalarRewriter(
         array_shapes={"dH": tuple(source_shape)},
         iter_vars=[iv],
         lhs_ranges=[(ast.Constant(start), ast.Constant(start + 3))],
@@ -292,7 +376,7 @@ def test_iter_minus_start_copies_shared_start_node() -> None:
     # gather offset (and vice versa).
     start = _expr("ip * n")  # a shared BinOp: the slice lower bound / loop start
     iv = ast.Name(id="si", ctx=ast.Load())
-    out = _SliceToScalarRewriter._iter_minus_start(iv, start)
+    out = lowering._SliceToScalarRewriter._iter_minus_start(iv, start)
     assert _unparse(out) == "si - ip * n"
     embedded = [b for b in ast.walk(out) if isinstance(b, ast.BinOp) and isinstance(b.op, ast.Mult)]
     assert embedded and embedded[0] is not start  # a copy, not the aliased node
@@ -301,6 +385,6 @@ def test_iter_minus_start_copies_shared_start_node() -> None:
 def test_iter_minus_start_zero_start_is_bare_fresh_iter() -> None:
     # start == 0 -> bare iter (no offset), and a FRESH Name (not the passed object).
     iv = ast.Name(id="si", ctx=ast.Load())
-    out = _SliceToScalarRewriter._iter_minus_start(iv, ast.Constant(value=0))
+    out = lowering._SliceToScalarRewriter._iter_minus_start(iv, ast.Constant(value=0))
     assert _unparse(out) == "si"
     assert out is not iv
