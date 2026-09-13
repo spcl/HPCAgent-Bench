@@ -283,7 +283,11 @@ CAUSES = (
     "kfd_permission_denied",
     "rocprof_failed",
     "rocprof_report_missing",
+    "kernel_share_missing",
 )
+
+#: Column prefixes that carry a kernel's share of device time, in priority order.
+KERNEL_SHARE_COLUMNS = ("Time (%)", "Time(%)", "Percentage")
 
 
 class GpuProfilerUnavailable(RuntimeError):
@@ -822,7 +826,16 @@ def kernel_stats(rows: Sequence[CsvRow], min_percent: float = 0.0) -> tuple[list
     ``mean_ns`` is the number to optimize against: total time is a launch-count artifact when the
     rep count changes, the mean is not. Kernels below ``min_percent`` of device time are dropped
     and COUNTED, so the caller can say how many rather than quietly shortening the list.
+
+    A report with rows but no share column raises ``kernel_share_missing``: read as 0.0, every
+    kernel would fall below ``min_percent`` and the profile would come back empty and unflagged.
     """
+    if rows and not any(find(row, *KERNEL_SHARE_COLUMNS)[0] for row in rows):
+        raise GpuProfilerUnavailable(
+            "kernel_share_missing",
+            f"the kernel report has no share column (looked for {list(KERNEL_SHARE_COLUMNS)}; it has "
+            f"{sorted(rows[0])}): the profiler renamed it, so no kernel can be ranked or filtered",
+        )
     stats: list[KernelStat] = [
         {
             "name": column(row, "Name"),
