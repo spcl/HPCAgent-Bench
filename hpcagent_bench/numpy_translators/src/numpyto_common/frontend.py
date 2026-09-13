@@ -75,12 +75,13 @@ from numpyto_common.numpy_desugar import (
     expr_rank,
     fold_finfo_eps,
     extent_tokens,
+    fold_list_accumulators,
     name_value_pairs,
     rank_table,
     rewrite_curve_fit,
     shape_table,
 )
-from numpyto_common.tuple_desugar import desugar_tuples, fold_list_accumulators
+from numpyto_common.tuple_desugar import desugar_tuples
 
 
 def native_desugar(fn: ast.FunctionDef) -> None:

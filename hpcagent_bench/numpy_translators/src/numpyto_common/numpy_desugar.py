@@ -19,6 +19,7 @@ import ast
 import re
 import copy
 import math
+from dataclasses import dataclass
 from collections.abc import Callable, Sequence
 from typing import Dict, FrozenSet, Iterator, List, Optional, Set, Tuple, Union
 
@@ -3528,22 +3529,15 @@ def _working_float_dtype(precision: Optional[str] = None) -> str:
     return dtypes.canonical(precision) if precision else "float64"
 
 
-def _list_display_elts(node: ast.AST) -> Optional[List[ast.expr]]:
-    """A 1-D ``[e0, e1, ...]`` display -> its element expressions, else None.
-
-    Only a flat list of NON-display elements qualifies: a nested list / tuple
-    element (``peaks = [(1580.0, 9.0), ...]``) is a 2-D literal this 1-D
-    array fold would mis-shape, so it is refused.
-    """
-    if not isinstance(node, ast.List):
-        return None
-    if any(isinstance(e, (ast.List, ast.Tuple, ast.Starred)) for e in node.elts):
+def list_display_elts(node: ast.AST) -> Optional[List[ast.expr]]:
+    """A 1-D ``[e0, e1, ...]`` display -> its elements; a nested display or a star is refused."""
+    if not isinstance(node, ast.List) or any(isinstance(e, (ast.List, ast.Tuple, ast.Starred)) for e in node.elts):
         return None
     return list(node.elts)
 
 
-def _len_call_of(node: ast.AST, name: str) -> bool:
-    """``len(<name>)`` -- the list's running length."""
+def is_len_of(node: ast.AST, name: str) -> bool:
+    """``len(name)`` -- the list's running length."""
     return (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
@@ -3554,31 +3548,20 @@ def _len_call_of(node: ast.AST, name: str) -> bool:
     )
 
 
-class _SubstLenWithIndex(ast.NodeTransformer):
-    """``len(<name>)`` -> ``<idx>`` inside an appended value expression.
+class SubstituteLen(ast.NodeTransformer):
+    """``len(name)`` -> the fill index: the element landing at ``i`` was appended at length ``i``."""
 
-    In ``while len(c) < K: c.append(1200.0 + 200.0 * len(c))`` the appended value
-    reads the length AT append time, which for the element landing at index ``i``
-    is exactly ``i`` -- so the loop-index substitution is semantics-preserving.
-    """
-
-    def __init__(self, name: str, idx: str) -> None:
+    def __init__(self, name: str, index: str) -> None:
         self.name = name
-        self.idx = idx
+        self.index = index
 
-    def visit_Call(self, node: ast.Call):
+    def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
-        if _len_call_of(node, self.name):
-            return ast.copy_location(ast.Name(id=self.idx, ctx=ast.Load()), node)
-        return node
+        return ast.Name(id=self.index, ctx=ast.Load()) if is_len_of(node, self.name) else node
 
 
-def _appended_elts(stmt: ast.stmt, name: str) -> Optional[List[ast.expr]]:
-    """One list-grow statement -> the element expressions it appends, else None.
-
-    Accepts ``name.append(e)``, ``name += [e...]`` and ``name = name + [e...]``
-    -- the three spellings the corpus uses to build a parameter vector.
-    """
+def appended_elts(stmt: ast.stmt, name: str) -> Optional[List[ast.expr]]:
+    """``name.append(e)``, ``name += [e, ...]`` or ``name = name + [e, ...]`` -> the appended elements."""
     if (
         isinstance(stmt, ast.Expr)
         and isinstance(stmt.value, ast.Call)
@@ -3587,6 +3570,7 @@ def _appended_elts(stmt: ast.stmt, name: str) -> Optional[List[ast.expr]]:
         and isinstance(stmt.value.func.value, ast.Name)
         and stmt.value.func.value.id == name
         and len(stmt.value.args) == 1
+        and not stmt.value.keywords
     ):
         return [stmt.value.args[0]]
     if (
@@ -3595,7 +3579,7 @@ def _appended_elts(stmt: ast.stmt, name: str) -> Optional[List[ast.expr]]:
         and isinstance(stmt.target, ast.Name)
         and stmt.target.id == name
     ):
-        return _list_display_elts(stmt.value)
+        return list_display_elts(stmt.value)
     if (
         isinstance(stmt, ast.Assign)
         and len(stmt.targets) == 1
@@ -3606,195 +3590,297 @@ def _appended_elts(stmt: ast.stmt, name: str) -> Optional[List[ast.expr]]:
         and isinstance(stmt.value.left, ast.Name)
         and stmt.value.left.id == name
     ):
-        return _list_display_elts(stmt.value.right)
+        return list_display_elts(stmt.value.right)
     return None
 
 
-def _off_add(off: str, delta: str) -> str:
-    """``off + delta`` as a source string, folding the literal + literal case so
-    the common ``0 + 1 + 1`` prefix stays a plain ``2`` in the emitted index."""
-    try:
-        return str(int(off) + int(delta))
-    except ValueError:
-        return f"{off} + {delta}" if off != "0" else delta
-
-
-def _range_bound(node: ast.AST) -> Optional[ast.expr]:
-    """``range(E)`` -> ``E`` (single-argument form only), else None."""
-    if (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "range"
-        and len(node.args) == 1
+def range_growth(stmt: ast.stmt, name: str) -> Optional[Tuple[str, ast.expr, List[ast.expr]]]:
+    """``for v in range(E): <grows of name>`` -> ``(v, E, elements per trip)``."""
+    if not (isinstance(stmt, ast.For) and isinstance(stmt.target, ast.Name) and not stmt.orelse):
+        return None
+    trips = stmt.iter
+    if not (
+        isinstance(trips, ast.Call)
+        and isinstance(trips.func, ast.Name)
+        and trips.func.id == "range"
+        and len(trips.args) == 1
+        and not trips.keywords
     ):
-        return node.args[0]
+        return None
+    per: List[ast.expr] = []
+    for sub in stmt.body:
+        grown = appended_elts(sub, name)
+        if grown is None:
+            return None
+        per.extend(grown)
+    return (stmt.target.id, trips.args[0], per) if per else None
+
+
+def growth_loop(stmt: ast.stmt, name: str) -> Optional[Tuple[ast.expr, ast.expr]]:
+    """``while len(name) < bound: <one-element grow>`` -> ``(bound, element)``."""
+    if not (isinstance(stmt, ast.While) and not stmt.orelse and len(stmt.body) == 1):
+        return None
+    test = stmt.test
+    if not (
+        isinstance(test, ast.Compare)
+        and len(test.ops) == 1
+        and isinstance(test.ops[0], ast.Lt)
+        and is_len_of(test.left, name)
+    ):
+        return None
+    grown = appended_elts(stmt.body[0], name)
+    if grown is None or len(grown) != 1:
+        return None
+    return test.comparators[0], grown[0]
+
+
+def cut_target(stmt: Optional[ast.stmt], name: str, bound: ast.expr) -> Optional[str]:
+    """``target = name[:bound]`` -> ``target``: a cut to the length the growth loop was bounded by."""
+    if not (
+        isinstance(stmt, ast.Assign)
+        and len(stmt.targets) == 1
+        and isinstance(stmt.targets[0], ast.Name)
+        and isinstance(stmt.value, ast.Subscript)
+        and isinstance(stmt.value.value, ast.Name)
+        and stmt.value.value.id == name
+    ):
+        return None
+    cut = stmt.value.slice
+    if (
+        isinstance(cut, ast.Slice)
+        and cut.lower is None
+        and cut.step is None
+        and cut.upper is not None
+        and ast.dump(cut.upper) == ast.dump(bound)
+    ):
+        return stmt.targets[0].id
     return None
 
 
-def _plan_list_build(body: List[ast.stmt], start: int, name: str):
-    """Plan the fold of the list variable ``name`` built from ``body[start]``.
+def mutation_count(node: ast.AST, name: str) -> int:
+    """Stores to ``name`` plus ``name.append`` calls -- every mutation the fold has to account for."""
+    total = 0
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Name) and isinstance(sub.ctx, (ast.Store, ast.Del)) and sub.id == name:
+            total += 1
+        elif (
+            isinstance(sub, ast.Call)
+            and isinstance(sub.func, ast.Attribute)
+            and sub.func.attr == "append"
+            and isinstance(sub.func.value, ast.Name)
+            and sub.func.value.id == name
+        ):
+            total += 1
+    return total
 
-    Returns ``(stmts, next_index)`` (replacement statements, index past the
-    last statement consumed) or ``None`` to leave the build verbatim (an
-    unrecognised mutation -- the emitter's ``List`` guard then fails loudly,
-    same as without this pass).
 
-    Recognised build shape (raman_fitting's peak-centre / initial-guess
-    preludes), in order::
+def name_count(node: ast.AST, name: str) -> int:
+    return sum(1 for sub in ast.walk(node) if isinstance(sub, ast.Name) and sub.id == name)
 
-        name = [<scalar>, ...]              # seed display (possibly empty)
-        for v in range(E):                  # fixed number of elements per trip
-            name += [<scalar>, ...]
-        while len(name) < E:                # extend to a symbolic length
-            name.append(<expr of len(name)>)
-        name = name[:E]                     # truncate to the final length
-        name += [<scalar>, ...]
 
-    Each element's destination index is a symbolic offset, so the result is a
-    plain ``np.zeros`` + indexed stores whose length is an expression in the
-    kernel's size symbols -- ``npeaks`` is ``params.shape[0]``, a RUNTIME
-    argument, so a fixed-length literal array would be wrong for a different K.
+def offset_add(offset: str, delta: str) -> str:
+    """``offset + delta`` as source, folding literal + literal so a constant prefix stays one number."""
+    if delta == "0":
+        return offset
+    if offset == "0":
+        return delta
+    if offset.isdigit() and delta.isdigit():
+        return str(int(offset) + int(delta))
+    return f"{offset} + {delta}"
+
+
+def bound_fits(offset: str, bound: ast.expr) -> bool:
+    """``offset <= bound`` is known, so ``while len(name) < bound`` leaves exactly ``bound`` elements.
+
+    Python leaves ``max(offset, bound)``. An extent is never negative, so only an empty prefix fits
+    a symbolic bound.
     """
-    seed = _list_display_elts(body[start].value)
+    limit = _const_int(bound)
+    if limit is None:
+        return offset == "0"
+    return offset.isdigit() and int(offset) <= limit
+
+
+def integer_expression(node: ast.expr, counters: FrozenSet[str]) -> bool:
+    """Built from int literals and loop counters by integer-closed operators."""
+    if isinstance(node, ast.Constant):
+        return type(node.value) is int
+    if isinstance(node, ast.Name):
+        return node.id in counters
+    if isinstance(node, ast.UnaryOp):
+        return isinstance(node.op, (ast.UAdd, ast.USub)) and integer_expression(node.operand, counters)
+    if isinstance(node, ast.BinOp):
+        return (
+            isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.FloorDiv, ast.Mod))
+            and integer_expression(node.left, counters)
+            and integer_expression(node.right, counters)
+        )
+    return False
+
+
+@dataclass(frozen=True, slots=True)
+class ListSegment:
+    """Elements a build appends from offset ``base``.
+
+    ``kind`` is ``"lit"`` (``elements`` in order), ``"for"`` (``elements`` per ``counter`` trip over
+    ``range(bound)``) or ``"while"`` (``elements[0]`` at every index from ``base`` to ``bound``).
+    """
+
+    kind: str
+    base: str
+    elements: List[ast.expr]
+    counter: str = ""
+    bound: Optional[ast.expr] = None
+
+
+def plan_list_build(
+    block: List[ast.stmt], start: int, fn: ast.FunctionDef, vectors: FrozenSet[str], index: str
+) -> Optional[Tuple[List[ast.stmt], int]]:
+    """The fold of the list bound at ``block[start]`` -> ``(replacement, end)``, or None to leave it.
+
+    Recognized, in execution order::
+
+        name = [e, ...]                       # seed display (possibly empty)
+        name.append(e) / name += [e, ...]     # straight growth
+        for v in range(E): name += [e, ...]   # a fixed stride per trip
+        while len(name) < E: name.append(<expr of len(name)>)
+        name = name[:E]                       # or ``other = name[:E]``, then ``name`` is never read
+
+    Every length is an expression in the kernel's symbols, never data-dependent: a ``while`` with no
+    cut leaves ``max(offset, E)`` elements and is refused unless ``offset <= E`` is known.
+    """
+    stmt = block[start]
+    if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
+        return None
+    name = stmt.targets[0].id
+    seed = list_display_elts(stmt.value)
     if seed is None:
         return None
-    # (kind, base_offset, payload) segments in build order.
-    segs: List[Tuple[str, str, object]] = [("lit", "0", seed)]
-    off = _off_add("0", str(len(seed)))
-    trunc: Optional[str] = None
-    all_int = all(
-        isinstance(e, ast.Constant) and isinstance(e.value, int) and not isinstance(e.value, bool) for e in seed
-    )
-    j = start + 1
-    while j < len(body):
-        stmt = body[j]
-        elts = _appended_elts(stmt, name)
-        if elts is not None:  # straight-line append / extend
-            if trunc is not None:
-                return None  # a grow AFTER the truncate: length no longer well defined
-            segs.append(("lit", off, elts))
-            off = _off_add(off, str(len(elts)))
-            all_int = all_int and all(isinstance(e, ast.Constant) and isinstance(e.value, int) for e in elts)
-            j += 1
+    segments = [ListSegment("lit", "0", seed)]
+    offset = str(len(seed))
+    length: Optional[str] = None
+    end = start + 1
+    while end < len(block) and length is None:
+        grown = appended_elts(block[end], name)
+        if grown is not None:
+            segments.append(ListSegment("lit", offset, grown))
+            offset = offset_add(offset, str(len(grown)))
+            end += 1
             continue
-        # ``for v in range(E): name += [...]`` -- a fixed stride per trip.
-        if isinstance(stmt, ast.For) and isinstance(stmt.target, ast.Name) and not stmt.orelse:
-            bound = _range_bound(stmt.iter)
-            if bound is None:
-                return None
-            per: List[ast.expr] = []
-            for sub in stmt.body:
-                got = _appended_elts(sub, name)
-                if got is None:
-                    return None  # loop does more than grow the list -> not ours
-                per.extend(got)
-            if not per or trunc is not None:
-                return None
-            segs.append(("for", off, (stmt.target.id, ast.unparse(bound), per)))
-            off = _off_add(off, f"{len(per)} * ({ast.unparse(bound)})")
-            all_int = False
-            j += 1
+        trip = range_growth(block[end], name)
+        if trip is not None:
+            counter, trips, per = trip
+            segments.append(ListSegment("for", offset, per, counter, trips))
+            offset = offset_add(offset, f"{len(per)} * ({ast.unparse(trips)})")
+            end += 1
             continue
-        # ``while len(name) < E: name.append(<expr>)`` -- extend to length E.
-        if (
-            isinstance(stmt, ast.While)
-            and isinstance(stmt.test, ast.Compare)
-            and len(stmt.test.ops) == 1
-            and isinstance(stmt.test.ops[0], ast.Lt)
-            and _len_call_of(stmt.test.left, name)
-            and len(stmt.body) == 1
-        ):
-            got = _appended_elts(stmt.body[0], name)
-            if got is None or len(got) != 1 or trunc is not None:
-                return None
-            bound = ast.unparse(stmt.test.comparators[0])
-            # The while alone leaves length max(len(seed), E); only a following
-            # ``name = name[:E]`` on the SAME bound pins it to E. Without that the
-            # length is a max() this fold does not model -- leave it verbatim.
-            nxt = body[j + 1] if j + 1 < len(body) else None
-            if not (
-                isinstance(nxt, ast.Assign)
-                and len(nxt.targets) == 1
-                and isinstance(nxt.targets[0], ast.Name)
-                and nxt.targets[0].id == name
-                and isinstance(nxt.value, ast.Subscript)
-                and isinstance(nxt.value.value, ast.Name)
-                and nxt.value.value.id == name
-                and isinstance(nxt.value.slice, ast.Slice)
-                and nxt.value.slice.lower is None
-                and nxt.value.slice.step is None
-                and nxt.value.slice.upper is not None
-                and ast.unparse(nxt.value.slice.upper) == bound
-            ):
-                return None
-            segs.append(("while", off, (bound, got[0])))
-            trunc = bound
-            all_int = False
-            j += 2
-            continue
-        break
-    length = trunc if trunc is not None else off
-    if length == "0":
-        return None  # an empty list nothing grows -- not an array build
-    pfx = f"__lst_{name}"
-    dtype = "np.int64" if all_int else "np.float64"
-    lines = [f"{name} = np.zeros(({length},), dtype={dtype})"]
-    for kind, base, payload in segs:
-        if kind == "lit":
-            for k, e in enumerate(payload):
-                idx = _off_add(base, str(k))
-                store = f"{name}[{idx}] = {ast.unparse(e)}"
-                # A truncating build may drop seed elements (K < len(seed)), so a
-                # direct store is guarded by the final length; an untruncated
-                # build stores unconditionally.
-                lines.append(f"if {idx} < {length}:\n    {store}" if trunc is not None else store)
-        elif kind == "for":
-            var, bound, per = payload
-            lines.append(f"for {var} in range({bound}):")
-            for k, e in enumerate(per):
-                idx = _off_add(f"{len(per)} * {var}", str(k))
-                lines.append(f"    {name}[{_off_add(base, idx)}] = {ast.unparse(e)}")
-        else:  # "while" -- elements at index base .. length-1, value reads its own index
-            bound, val = payload
-            idx = f"{pfx}_i"
-            filled = ast.unparse(_SubstLenWithIndex(name, idx).visit(copy.deepcopy(val)))
-            lines.append(f"for {idx} in range({base}, {bound}):\n    {name}[{idx}] = {filled}")
-    return ast.parse("\n".join(lines)).body, j
+        fill = growth_loop(block[end], name)
+        if fill is None:
+            break
+        bound, step = fill
+        segments.append(
+            ListSegment("while", offset, [SubstituteLen(name, index).visit(copy.deepcopy(step))], index, bound)
+        )
+        cut = cut_target(block[end + 1] if end + 1 < len(block) else None, name, bound)
+        if cut == name:
+            length, end = f"({ast.unparse(bound)})", end + 2
+        elif cut is not None and name_count(fn, name) == sum(name_count(s, name) for s in block[start : end + 2]):
+            # The cut into a fresh name is the list's only reader: its length past ``bound`` is unobservable.
+            length, end = f"({ast.unparse(bound)})", end + 1
+        elif bound_fits(offset, bound):
+            offset, end = f"({ast.unparse(bound)})", end + 1
+        else:
+            return None
+    pinned = length is not None
+    if length is None:
+        length = offset
+    if length == "0" or (len(segments) == 1 and name not in vectors):
+        return None
+    if mutation_count(fn, name) != sum(mutation_count(s, name) for s in block[start:end]):
+        return None
+    reads = [e for segment in segments for e in segment.elements]
+    reads.extend(segment.bound for segment in segments if segment.bound is not None)
+    if any(name_count(e, name) for e in reads):
+        return None  # an element or bound reading the list would read the preallocated buffer instead
+    return list_build_statements(name, segments, length, pinned), end
 
 
-def _fold_list_preludes(fn: ast.FunctionDef) -> None:
-    """Fold kernel-body Python list builds into ``np.zeros`` + indexed stores.
+def list_build_statements(name: str, segments: List[ListSegment], length: str, pinned: bool) -> List[ast.stmt]:
+    """The planned build as an allocation plus stores; a cut length guards every store it may drop."""
+    integral = all(integer_expression(e, frozenset({s.counter})) for s in segments for e in s.elements)
+    lines = [f"{name} = np.zeros({length}, dtype=np.{'int64' if integral else 'float64'})"]
+    fill = segments[-1]
+    prefix = [e for s in segments[:-1] for e in s.elements]
+    if (
+        fill.kind == "while"
+        and all(s.kind == "lit" for s in segments[:-1])
+        and all(isinstance(e, ast.Constant) and isinstance(e.value, (int, float)) for e in prefix)
+    ):
+        # One loop over the whole length: literal slots pick their constant, the rest the growth rule.
+        value = ast.unparse(fill.elements[0])
+        for pos in range(len(prefix) - 1, -1, -1):
+            value = f"({ast.unparse(prefix[pos])}) if {fill.counter} == {pos} else ({value})"
+        lines.append(f"for {fill.counter} in range({length}):\n    {name}[{fill.counter}] = {value}")
+        return ast.parse("\n".join(lines)).body
+    for segment in segments:
+        if segment.kind == "while":
+            store = f"{name}[{segment.counter}] = {ast.unparse(segment.elements[0])}"
+            lines.append(
+                f"for {segment.counter} in range({segment.base}, ({ast.unparse(segment.bound)})):\n    {store}"
+            )
+            continue
+        indent = "    " if segment.kind == "for" else ""
+        if segment.kind == "for":
+            lines.append(f"for {segment.counter} in range({ast.unparse(segment.bound)}):")
+        stride = len(segment.elements)
+        for k, element in enumerate(segment.elements):
+            slot = offset_add(f"{stride} * {segment.counter}", str(k)) if segment.kind == "for" else str(k)
+            slot = offset_add(segment.base, slot)
+            store = f"{name}[{slot}] = {ast.unparse(element)}"
+            lines.append(f"{indent}if {slot} < {length}:\n{indent}    {store}" if pinned else f"{indent}{store}")
+    return ast.parse("\n".join(lines)).body
 
-    Native emitters have no list type (a surviving ``List`` display is a hard
-    ``NotImplementedError`` at emit), and a symbolic-length list can't be a
-    fixed literal array either. Only top-level statements of ``fn`` are
-    considered -- where the corpus builds parameter vectors, keeping the
-    offset bookkeeping (must see statements in execution order) simple. An
-    unrecognised build is left untouched, so this pass can only turn an emit
-    failure into a success.
+
+def statement_blocks(node: ast.AST) -> List[List[ast.stmt]]:
+    """Every statement list under ``node``, so a list built inside a loop or a branch folds too."""
+    blocks: List[List[ast.stmt]] = []
+    for sub in ast.walk(node):
+        for value in vars(sub).values():
+            if isinstance(value, list) and any(isinstance(v, ast.stmt) for v in value):
+                blocks.append(value)
+    return blocks
+
+
+def fold_list_accumulators(fn: ast.FunctionDef, vectors: FrozenSet[str] = frozenset()) -> None:
+    """Rewrite a Python list built by growth into an array plus indexed stores, in every block of ``fn``.
+
+    No emitter has a list type, and ``len`` of one is not a symbol: left as a list, lowering reads
+    ``len(centre)`` as the ARRAY extent, the growth guard becomes ``npeaks < npeaks`` and the kernel
+    computes the wrong values. See :func:`plan_list_build` for the recognized builds. A name mutated
+    anywhere the build does not account for is left alone, and so is a bare display unless the
+    caller names it in ``vectors`` (``curve_fit``'s ``p0``, which the LM lowering indexes).
     """
-    out: List[ast.stmt] = []
-    i = 0
-    changed = False
-    while i < len(fn.body):
-        stmt = fn.body[i]
-        if (
-            isinstance(stmt, ast.Assign)
-            and len(stmt.targets) == 1
-            and isinstance(stmt.targets[0], ast.Name)
-            and isinstance(stmt.value, ast.List)
-        ):
-            plan = _plan_list_build(fn.body, i, stmt.targets[0].id)
-            if plan is not None:
-                out.extend(plan[0])
-                i = plan[1]
-                changed = True
+    taken = OrderedSet(sub.id for sub in ast.walk(fn) if isinstance(sub, ast.Name))
+    for block in statement_blocks(fn):
+        start = 0
+        while start < len(block):
+            stmt = block[start]
+            if not (isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.List)):
+                start += 1
                 continue
-        out.append(stmt)
-        i += 1
-    if changed:
-        fn.body = out
-        ast.fix_missing_locations(fn)
+            # Numbered per function: two builds in sibling blocks must not share a fill index.
+            number = 1
+            while f"__la{number}" in taken:
+                number += 1
+            plan = plan_list_build(block, start, fn, vectors, f"__la{number}")
+            if plan is None:
+                start += 1
+                continue
+            replacement, end = plan
+            taken.add(f"__la{number}")
+            block[start:end] = replacement
+            start += len(replacement)
+    ast.fix_missing_locations(fn)
 
 
 def _curve_fit_lm_lines(
@@ -3935,6 +4021,14 @@ def _curve_fit_call(node: ast.AST) -> Optional[ast.Call]:
     return None
 
 
+def curve_fit_guess(call: ast.Call) -> Optional[ast.expr]:
+    """``p0`` of a ``curve_fit`` call, by keyword or as the fourth positional argument."""
+    guess = next((kw.value for kw in call.keywords if kw.arg == "p0"), None)
+    if guess is None and len(call.args) >= 4:
+        return call.args[3]
+    return guess
+
+
 class _CurveFitRewriter(ast.NodeTransformer):
     """``popt, pcov = curve_fit(f, x, y, p0=g)`` -> a naive LM loop nest.
 
@@ -4017,9 +4111,7 @@ class _CurveFitRewriter(ast.NodeTransformer):
                     f"curve_fit: keyword {kw.arg!r} changes the fit; the LM lowering "
                     "only reproduces the unweighted, unbounded, FD-Jacobian form"
                 )
-        p0 = next((kw.value for kw in call.keywords if kw.arg == "p0"), None)
-        if p0 is None and len(call.args) >= 4:
-            p0 = call.args[3]
+        p0 = curve_fit_guess(call)
         if len(call.args) < 3 or p0 is None:
             raise DesugarError("curve_fit: need f, xdata, ydata and an explicit p0")
         f, x, y = call.args[0], call.args[1], call.args[2]
@@ -4076,12 +4168,12 @@ def rewrite_curve_fit(tree: ast.Module, kernel: ast.FunctionDef, precision: Opti
     the emitted body -- ``apply_precision`` later remaps dtype tables only and
     cannot reach a literal (see :func:`_fd_step`). ``None`` keeps the fp64 rule.
     """
-    fits = [n for n in ast.walk(kernel) if _curve_fit_call(n) is not None]
+    fits = [n for n in ast.walk(kernel) if isinstance(n, ast.Call) and _curve_fit_call(n) is not None]
     if not fits:
         return
-    # The list preludes build the p0 vector this fit consumes, so they must be
-    # arrays before the LM lines index them.
-    _fold_list_preludes(kernel)
+    # The LM lines index the p0 vector, so it must be an array first -- even a bare display.
+    guesses = [curve_fit_guess(call) for call in fits]
+    fold_list_accumulators(kernel, frozenset(guess.id for guess in guesses if isinstance(guess, ast.Name)))
     rw = _CurveFitRewriter(tree, kernel, precision)
     kernel.body = [s for stmt in kernel.body for s in _as_stmts(rw.visit(stmt))]
     if not rw.changed:
