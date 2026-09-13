@@ -9,7 +9,6 @@ leading extent comes from and in how a chained value reaches its targets; those 
 Entry points: :class:`DesugarArrayIteration` and :class:`SplitChainedAssign`.
 """
 
-from __future__ import annotations
 import ast
 import copy
 from collections.abc import Callable, Collection, Mapping

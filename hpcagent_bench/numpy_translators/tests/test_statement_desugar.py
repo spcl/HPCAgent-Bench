@@ -4,7 +4,6 @@
 walks the leading axis. The three backends share one pass for each (``numpyto_common.statement_desugar``).
 """
 
-from __future__ import annotations
 import ast
 import json
 import pathlib
