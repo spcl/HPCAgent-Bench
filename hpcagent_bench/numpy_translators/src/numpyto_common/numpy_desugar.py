@@ -20,7 +20,7 @@ import copy
 import math
 from dataclasses import dataclass
 from collections.abc import Callable, Sequence
-from typing import Dict, FrozenSet, Iterator, List, Optional, Protocol, Set, Tuple, Union
+from typing import Dict, FrozenSet, Iterator, List, Optional, Set, Tuple, Union
 
 from numpyto_common import dtypes
 from numpyto_common.lib_nodes import iter_extent_of, parse_einsum_subscripts, extent_is_scalar
@@ -1192,85 +1192,187 @@ def _einsum_inline_stmts(subs: str, operands: List[str], ctr: int):
     return ast.parse("\n".join(src)).body, p
 
 
-class _EinsumHoister(ast.NodeTransformer):
-    """Replace each ``np.einsum(...)`` (bare-Name operands) inside one statement
-    with a fresh temp Name, accumulating the temp's compute statements in
-    ``self.pre`` to be spliced before the statement."""
+@dataclass(frozen=True, slots=True)
+class HoistTables:
+    """One function scope's facts the value-hoist forms read, built once before that scope's passes run."""
 
-    def __init__(self, ctr: int) -> None:
-        self.ctr = ctr
-        self.pre: List[ast.stmt] = []
+    ranks: dict[str, int]
+    dtypes: dict[str, str]
+    #: Vetted ``v = a[mask]`` boolean selects (:func:`_masked_reduce_map`).
+    gathers: dict[str, tuple]
+    #: The ``np.linalg`` ops the backend lacks, and the ``solve`` rhs ranks it lowers anyway.
+    lower_ops: set
+    solve_rhs_ranks: frozenset
 
-    def visit_Call(self, node: ast.Call) -> ast.AST:
-        self.generic_visit(node)  # inner einsums first
-        if _np_attr(node) != "einsum" or not node.args:
+
+def always_live(tables: HoistTables) -> bool:
+    """The liveness hook of a form that can match in any scope."""
+    return True
+
+
+def drops_nothing(stmt: ast.stmt, tables: HoistTables) -> bool:
+    """The statement hook of a form that only hoists."""
+    return False
+
+
+@dataclass(frozen=True, slots=True)
+class HoistForm:
+    """One expression form :class:`ValueHoist` lowers into loops.
+
+    ``rewrite`` swaps a matched node for a fresh temp (numbered from the hoist's ``ctr``) and queues the statements
+    computing it on the hoist, or returns None. It can only match in a statement holding a cue: a node whose type is
+    in ``cue_kinds`` or an attribute named in ``cue_attrs``. ``live`` says whether a scope's tables let the form match
+    at all; ``drop`` removes a whole statement.
+    """
+
+    cue_attrs: frozenset[str]
+    cue_kinds: tuple[type[ast.AST], ...]
+    rewrite: Callable[[ast.AST, "ValueHoist"], ast.expr | None]
+    live: Callable[[HoistTables], bool] = always_live
+    drop: Callable[[ast.stmt, HoistTables], bool] = drops_nothing
+
+
+VALUE_STATEMENTS = (ast.Assign, ast.AugAssign, ast.Return, ast.Expr)
+#: Expressions binding names for their own body: a temp hoisted out of one cannot read those names.
+BINDING_EXPRESSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp, ast.Lambda)
+
+
+def has_cue(value: ast.AST, form: HoistForm) -> bool:
+    """Whether ``value`` holds a cue of ``form``: one scan, so a value the form cannot match is never rewritten."""
+    attrs, kinds = form.cue_attrs, form.cue_kinds
+    stack: list[object] = [value]
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, ast.AST):
+            continue  # a None dict key
+        if type(node) in kinds or (type(node) is ast.Attribute and node.attr in attrs):
+            return True
+        for child in vars(node).values():
+            if type(child) is list:
+                stack.extend(child)
+            elif isinstance(child, ast.AST):
+                stack.append(child)
+    return False
+
+
+def scope_bound_names(node: ast.AST) -> OrderedSet[str]:
+    """Every parameter and stored name under a comprehension or lambda: a superset of what it binds for its body."""
+    names: OrderedSet[str] = OrderedSet()
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.arg):
+            names.add(sub.arg)
+        elif isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store):
+            names.add(sub.id)
+    return names
+
+
+def reads_any(node: ast.AST, names: OrderedSet[str]) -> bool:
+    """Whether ``node`` reads or writes a name in ``names``."""
+    return any(isinstance(sub, ast.Name) and sub.id in names for sub in ast.walk(node))
+
+
+class FormRewriter(ast.NodeTransformer):
+    """Rewrite one statement's value with a hoist's form, bottom-up so inner matches go first. A node reading a name
+    an enclosing comprehension or lambda binds stays put: its temp would be computed before that name exists."""
+
+    def __init__(self, hoist: "ValueHoist") -> None:
+        self.hoist = hoist
+        self.bound: OrderedSet[str] = OrderedSet()
+
+    def visit(self, node: ast.AST) -> ast.AST:
+        if isinstance(node, BINDING_EXPRESSIONS):
+            enclosing = self.bound
+            self.bound = enclosing | scope_bound_names(node)
+            self.generic_visit(node)
+            self.bound = enclosing
             return node
-        if not (isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)):
+        self.generic_visit(node)
+        if self.bound and reads_any(node, self.bound):
             return node
-        operands = node.args[1:]
-        if not operands or not all(isinstance(o, ast.Name) for o in operands):
-            return node  # only bare-array operands -> else leave verbatim
-        stmts, temp = _einsum_inline_stmts(node.args[0].value, [o.id for o in operands], self.ctr)
-        if stmts is None:
-            return node
-        self.ctr += 1
-        self.pre.extend(stmts)
-        return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
+        replacement = self.hoist.form.rewrite(node, self.hoist)
+        return node if replacement is None else ast.copy_location(replacement, node)
 
 
-class StatementHoister(Protocol):
-    """An expression rewriter that swaps a call for a fresh temp (numbered from ``ctr``) and queues
-    the statements computing that temp in ``pre``."""
+class ValueHoist:
+    """Hoist one :class:`HoistForm` out of every value-bearing statement (Assign / AugAssign / Return / Expr), splicing
+    the statements computing each temp in front of it. Walks statements only and rewrites just the values holding the
+    form's cue. ``ctr`` carries across statements so every temp name is fresh."""
 
-    ctr: int
-    pre: list[ast.stmt]
+    __slots__ = ("form", "tables", "live", "ctr", "pre", "changed")
 
-    def visit(self, node: ast.AST) -> ast.AST: ...
-
-
-class ValueHoistInline(ast.NodeTransformer):
-    """Hoist a call out of any value-bearing statement (Assign / AugAssign / Return / Expr): the
-    hoister from :meth:`make_hoister` replaces it with a temp, and the statements computing that
-    temp are spliced in front. ``ctr`` carries across statements so every temp name is fresh."""
-
-    def __init__(self) -> None:
-        self.changed = False
+    def __init__(self, form: HoistForm, tables: HoistTables) -> None:
+        self.form = form
+        self.tables = tables
+        self.live = form.live(tables)
         self.ctr = 0
+        self.pre: list[ast.stmt] = []
+        self.changed = False
 
-    def make_hoister(self, ctr: int) -> StatementHoister:
-        raise NotImplementedError
+    def visit(self, stmt: ast.stmt) -> list[ast.stmt]:
+        return self.block([stmt]) if self.live else [stmt]
 
-    def hoist(self, node: ast.Assign | ast.AugAssign | ast.Return | ast.Expr) -> ast.stmt | list[ast.stmt]:
-        if vars(node).get("value") is None:
-            return node
-        h = self.make_hoister(self.ctr)
-        node.value = h.visit(node.value)
-        self.ctr = h.ctr
-        if h.pre:
+    def queue(self, lines: list[str]) -> None:
+        """Queue source lines computing a temp, spliced in front of the current statement."""
+        self.pre.extend(ast.parse("\n".join(lines)).body)
+
+    def block(self, stmts: list[ast.stmt]) -> list[ast.stmt]:
+        out: list[ast.stmt] = []
+        for stmt in stmts:
+            if isinstance(stmt, VALUE_STATEMENTS):
+                out.extend(self.statement(stmt))
+            else:
+                self.descend(stmt)
+                out.append(stmt)
+        return out
+
+    def descend(self, node: ast.AST) -> None:
+        """Hoist in every statement list under a compound statement, handler and match-case bodies included."""
+        fields = vars(node)
+        for name in type(node)._fields:
+            children = fields.get(name)
+            if type(children) is not list or not children:
+                continue
+            if isinstance(children[0], ast.stmt):
+                children[:] = self.block(children)
+            elif isinstance(children[0], (ast.excepthandler, ast.match_case)):
+                for owner in children:
+                    self.descend(owner)
+
+    def statement(self, stmt: ast.Assign | ast.AugAssign | ast.Return | ast.Expr) -> list[ast.stmt]:
+        if self.form.drop(stmt, self.tables):
             self.changed = True
-            return h.pre + [node]
-        return node
-
-    def visit_Assign(self, node: ast.Assign) -> ast.stmt | list[ast.stmt]:
-        return self.hoist(node)
-
-    def visit_AugAssign(self, node: ast.AugAssign) -> ast.stmt | list[ast.stmt]:
-        return self.hoist(node)
-
-    def visit_Return(self, node: ast.Return) -> ast.stmt | list[ast.stmt]:
-        return self.hoist(node)
-
-    def visit_Expr(self, node: ast.Expr) -> ast.stmt | list[ast.stmt]:
-        return self.hoist(node)
+            return []
+        value = stmt.value
+        if value is None or not has_cue(value, self.form):
+            return [stmt]
+        stmt.value = FormRewriter(self).visit(value)
+        if not self.pre:
+            return [stmt]
+        self.changed = True
+        hoisted, self.pre = self.pre, []
+        return hoisted + [stmt]
 
 
-class EinsumInline(ValueHoistInline):
-    """Hoist ``np.einsum`` out of any value-bearing statement into a preceding
-    contraction loop nest. Handles einsum nested in arithmetic (seissol's
-    ``Q[:] = Q + np.einsum(...)``)."""
+def hoist_einsum(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
+    """``np.einsum("<subs>", *names)`` -> the temp its contraction loop nest fills; handles einsum nested in
+    arithmetic (seissol's ``Q[:] = Q + np.einsum(...)``)."""
+    if not isinstance(node, ast.Call) or _np_attr(node) != "einsum" or not node.args:
+        return None
+    subs, operands = node.args[0], node.args[1:]
+    if not (isinstance(subs, ast.Constant) and isinstance(subs.value, str)):
+        return None
+    names = [o.id for o in operands if isinstance(o, ast.Name)]
+    if not operands or len(names) != len(operands):
+        return None  # only bare-array operands -> else leave verbatim
+    stmts, temp = _einsum_inline_stmts(subs.value, names, hoist.ctr)
+    if stmts is None:
+        return None
+    hoist.ctr += 1
+    hoist.pre.extend(stmts)
+    return ast.Name(id=temp, ctx=ast.Load())
 
-    def make_hoister(self, ctr: int) -> StatementHoister:
-        return _EinsumHoister(ctr)
+
+EINSUM_HOIST = HoistForm(frozenset({"einsum"}), (), hoist_einsum)
 
 
 def _fft_axes(fattr: str, call: ast.Call, rank: int):
@@ -1537,10 +1639,46 @@ class _MgridInline(ast.NodeTransformer):
         return stmts
 
 
-class _FancyGatherHoister(ast.NodeTransformer):
-    """Replace each multi-index fancy gather ``A[idx0, idx1, ...]`` (a Tuple index,
-    one entry per axis, with >=1 index ARRAY entry) inside one statement with a
-    fresh temp Name, accumulating the temp's gather loop in ``self.pre``. numba
+def fancy_gather_lines(
+    arr: str, elts: list[ast.expr], elt_ranks: list[int | None], driver_rank: int, p: str
+) -> list[str]:
+    """Source lines gathering ``arr[elts]`` point-wise into ``<p>_o``, one loop per driver axis."""
+    iters = [f"{p}_i{k}" for k in range(driver_rank)]
+    it = ", ".join(iters)
+    # Which array entries pin which axes to extent 1 -- a pinned axis is read at 0 rather
+    # than at the iterator, because the entry has one plane there and the gather has many.
+    idx_j = [j for j, r in enumerate(elt_ranks) if (r or 0) >= 1]
+    singles = {j: _newaxis_singletons(elts[j], driver_rank) for j in idx_j}
+    pre: list[str] = []
+    idx_exprs: list[str] = []
+    for j, e in enumerate(elts):
+        if j not in singles:
+            idx_exprs.append(ast.unparse(e))
+            continue
+        t = f"{p}_x{j}"
+        pre.append(f"{t} = {ast.unparse(e)}")
+        idx_exprs.append(f"{t}[{', '.join('0' if k in singles[j] else iters[k] for k in range(driver_rank))}]")
+    # The result's shape is spelled by BROADCASTING the entries, never by naming their
+    # extents: an extent read back per axis re-spells a shape the rest of the statement
+    # already carries, which a symbolic-shape backend cannot prove equal.
+    driver = f"{p}_x{idx_j[0]}"
+    if any(singles.values()):
+        driver = f"{p}_b"
+        pre.append(f"{driver} = " + " + ".join(f"{p}_x{j} * 0" for j in idx_j))
+    extents = [f"{driver}.shape[{k}]" for k in range(driver_rank)]
+    temp = f"{p}_o"
+    lines = pre + [f"{temp} = np.empty({driver}.shape, {arr}.dtype)"]
+    deepen = ""
+    for k in range(driver_rank):
+        lines.append(f"{deepen}for {iters[k]} in range({extents[k]}):")
+        deepen += "    "
+    lines.append(f"{deepen}{temp}[{it}] = {arr}[{', '.join(idx_exprs)}]")
+    return lines
+
+
+def hoist_fancy_gather(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
+    """A multi-index fancy gather ``A[idx0, idx1, ...]`` (a Tuple index, one entry per axis, with >=1 index ARRAY entry)
+    -> the temp its gather loop fills (handles ``chk[i] = np.sum(u2[q, r, s])``). numba
     supports a single advanced index ``A[idx]`` but not the multi-index
     (``UniTuple``) point-wise gather -- neither all-1-D (fft_3d's ``u2[q,r,s]``)
     nor mixed 2-D-array + scalar (icon_gather's ``A[nbr[:,:,n]-1, jk,
@@ -1549,77 +1687,34 @@ class _FancyGatherHoister(ast.NodeTransformer):
     All array entries must share the driver rank, and they BROADCAST against each other over
     it: an axis a ``None`` pins to extent 1 in one entry takes its extent from another entry
     and is read at 0, not at the loop iterator (see :func:`_newaxis_singletons`)."""
-
-    def __init__(self, ranks: Dict[str, int], ctr: int) -> None:
-        self.ranks = ranks
-        self.ctr = ctr
-        self.pre: List[ast.stmt] = []
-
-    def visit_Subscript(self, node: ast.Subscript):
-        self.generic_visit(node)
-        if not (
-            isinstance(node.value, ast.Name) and isinstance(node.ctx, ast.Load) and isinstance(node.slice, ast.Tuple)
-        ):
-            return node
-        arr = node.value.id
-        arank = self.ranks.get(arr)
-        elts = node.slice.elts
-        if not arank or len(elts) != arank:
-            return node
-        if any(isinstance(e, ast.Slice) or is_newaxis(e) or is_ellipsis(e) for e in elts):
-            # Point-wise only. A ``:`` axis survives into the RESULT, so the rank-1 temp this
-            # allocates could not hold it -- the loop would store a plane into a scalar slot.
-            return node
-        elt_ranks = [expr_rank(e, self.ranks) for e in elts]
-        arrs = [r for r in elt_ranks if r and r >= 1]
-        if not arrs or any(r != arrs[0] for r in arrs):
-            return node  # need >=1 index array; all arrays share the driver rank
-        driver_rank = arrs[0]
-        p = f"__gather{self.ctr}"
-        self.ctr += 1
-        iters = [f"{p}_i{k}" for k in range(driver_rank)]
-        it = ", ".join(iters)
-        # Which array entries pin which axes to extent 1 -- a pinned axis is read at 0 rather
-        # than at the iterator, because the entry has one plane there and the gather has many.
-        idx_j = [j for j, r in enumerate(elt_ranks) if (r or 0) >= 1]
-        singles = {j: _newaxis_singletons(elts[j], driver_rank) for j in idx_j}
-        pre, idx_exprs = [], []
-        for j, e in enumerate(elts):
-            if j not in singles:
-                idx_exprs.append(ast.unparse(e))
-                continue
-            t = f"{p}_x{j}"
-            pre.append(f"{t} = {ast.unparse(e)}")
-            idx_exprs.append(f"{t}[{', '.join('0' if k in singles[j] else iters[k] for k in range(driver_rank))}]")
-        # The result's shape is spelled by BROADCASTING the entries, never by naming their
-        # extents: an extent read back per axis re-spells a shape the rest of the statement
-        # already carries, which a symbolic-shape backend cannot prove equal.
-        driver = f"{p}_x{idx_j[0]}"
-        if any(singles.values()):
-            driver = f"{p}_b"
-            pre.append(f"{driver} = " + " + ".join(f"{p}_x{j} * 0" for j in idx_j))
-        extents = [f"{driver}.shape[{k}]" for k in range(driver_rank)]
-        temp = f"{p}_o"
-        lines = pre + [f"{temp} = np.empty({driver}.shape, {arr}.dtype)"]
-        deepen = ""
-        for k in range(driver_rank):
-            lines.append(f"{deepen}for {iters[k]} in range({extents[k]}):")
-            deepen += "    "
-        lines.append(f"{deepen}{temp}[{it}] = {arr}[{', '.join(idx_exprs)}]")
-        self.pre.extend(ast.parse("\n".join(lines)).body)
-        return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
+    if not (
+        isinstance(node, ast.Subscript)
+        and isinstance(node.value, ast.Name)
+        and isinstance(node.ctx, ast.Load)
+        and isinstance(node.slice, ast.Tuple)
+    ):
+        return None
+    ranks = hoist.tables.ranks
+    arr = node.value.id
+    arank = ranks.get(arr)
+    elts = node.slice.elts
+    if not arank or len(elts) != arank:
+        return None
+    if any(isinstance(e, ast.Slice) or is_newaxis(e) or is_ellipsis(e) for e in elts):
+        # Point-wise only. A ``:`` axis survives into the RESULT, so the rank-1 temp this
+        # allocates could not hold it -- the loop would store a plane into a scalar slot.
+        return None
+    elt_ranks = [expr_rank(e, ranks) for e in elts]
+    arrs = [r for r in elt_ranks if r and r >= 1]
+    if not arrs or any(r != arrs[0] for r in arrs):
+        return None  # need >=1 index array; all arrays share the driver rank
+    p = f"__gather{hoist.ctr}"
+    hoist.ctr += 1
+    hoist.queue(fancy_gather_lines(arr, elts, elt_ranks, arrs[0], p))
+    return ast.Name(id=f"{p}_o", ctx=ast.Load())
 
 
-class FancyGatherInline(ValueHoistInline):
-    """Hoist multi-array fancy gathers out of any value-bearing statement into a
-    preceding gather loop (handles ``chk[i] = np.sum(u2[q, r, s])``)."""
-
-    def __init__(self, ranks: Dict[str, int]) -> None:
-        super().__init__()
-        self.ranks = ranks
-
-    def make_hoister(self, ctr: int) -> StatementHoister:
-        return _FancyGatherHoister(self.ranks, ctr)
+FANCY_GATHER_HOIST = HoistForm(frozenset(), (ast.Tuple,), hoist_fancy_gather)
 
 
 def _const_int(node: ast.AST) -> Optional[int]:
@@ -1782,81 +1877,74 @@ def _reduce_axis_stmts(
     return ast.parse("\n".join(lines)).body
 
 
-class _ReduceAxisHoister(ast.NodeTransformer):
-    """Replace each ``np.mean/min/max/argmin/argmax/any/all(x, axis=<int>)`` --
-    OR the method form ``x.mean(axis=<int>)`` (velocity's ``levmask.any(axis=0)``)
-    -- inside one statement with a fresh temp Name, accumulating its reduction
-    loop in ``self.pre``. A non-Name ``x`` (bellman_ford's ``dist[:, None] +
-    graph``) is hoisted to a temp first; a non-constant axis or a rank<2
-    (scalar-result) reduction is left verbatim (numba's no-axis scalar form)."""
-
-    def __init__(self, ranks: Dict[str, int], ctr: int, dtypes: Optional[Dict[str, str]] = None) -> None:
-        self.ranks = ranks
-        self.ctr = ctr
-        self.dtypes = dtypes or {}
-        self.pre: List[ast.stmt] = []
-
-    def visit_Call(self, node: ast.Call):
-        self.generic_visit(node)
-        kw = {k.arg: k.value for k in node.keywords}
-        npop = _np_attr(node)
-        if npop in REDUCE_FNS and node.args:  # np.mean(x, axis=k)
-            op, arg = npop, node.args[0]
-            ax = kw.get("axis") or (node.args[1] if len(node.args) > 1 else None)
-        elif (
-            isinstance(node.func, ast.Attribute)
-            and node.func.attr in REDUCE_FNS
-            and not (isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy"))
-        ):
-            op, arg = node.func.attr, node.func.value  # x.mean(axis=k) method form
-            ax = kw.get("axis") or (node.args[0] if node.args else None)
-        else:
-            return node
-        rank = expr_rank(arg, self.ranks)
-        if rank is None or rank < 2:
-            return node
-        axes = _axis_list(ax, rank)
-        if not axes:
-            return node
-        kd = kw.get("keepdims")
-        keepdims = isinstance(kd, ast.Constant) and kd.value is True
-        if len(axes) == rank and not keepdims:
-            return node  # every axis reduced -> a scalar; leave the backend's full reduction
-        if op in ("argmin", "argmax") and len(axes) > 1:
-            return node  # numpy itself rejects a tuple axis for argmin/argmax
-        if isinstance(arg, ast.Name):
-            sname = arg.id
-        else:
-            sname = f"__rsrc{self.ctr}"
-            self.pre.extend(ast.parse(f"{sname} = {ast.unparse(arg)}").body)
-        ddof = 0
-        if op in ("var", "std"):
-            dkw = kw.get("ddof")
-            if isinstance(dkw, ast.Constant) and isinstance(dkw.value, int) and not isinstance(dkw.value, bool):
-                ddof = dkw.value
-            elif dkw is not None:
-                return node  # non-constant ddof: cannot fold the divisor, leave verbatim
-        temp = f"__rdo{self.ctr}"
-        elem_kind = _dtype_kind(arg, self.dtypes)
-        self.pre.extend(
-            _reduce_axis_stmts(temp, sname, op, axes, rank, self.ctr, keepdims, elem_kind == "float", ddof, elem_kind)
-        )
-        self.ctr += 1
-        return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
+def reduce_call_parts(node: ast.Call, kw: dict[str | None, ast.expr]) -> tuple[str, ast.expr, ast.expr | None] | None:
+    """``(op, operand, axis)`` of ``np.<op>(x, axis=k)`` or of the method form ``x.<op>(axis=k)``, else None."""
+    npop = _np_attr(node)
+    if npop is not None and npop in REDUCE_FNS and node.args:
+        return npop, node.args[0], kw.get("axis") or (node.args[1] if len(node.args) > 1 else None)
+    func = node.func
+    if (
+        isinstance(func, ast.Attribute)
+        and func.attr in REDUCE_FNS
+        and not (isinstance(func.value, ast.Name) and func.value.id in ("np", "numpy"))
+    ):
+        return func.attr, func.value, kw.get("axis") or (node.args[0] if node.args else None)
+    return None
 
 
-class ReduceAxisInline(ValueHoistInline):
-    """Hoist axis reductions out of any value-bearing statement into preceding
-    reduction loops (handles ``V = np.max(s, axis=0) + e`` and the bare
-    ``mean = np.mean(data, axis=0)``)."""
+def reduce_ddof(op: str, ddof: ast.expr | None) -> int | None:
+    """The ``ddof`` a var/std reduction divides by (0 for every other op), or None when it is not a literal int."""
+    if op not in ("var", "std") or ddof is None:
+        return 0
+    if isinstance(ddof, ast.Constant) and isinstance(ddof.value, int) and not isinstance(ddof.value, bool):
+        return ddof.value
+    return None
 
-    def __init__(self, ranks: Dict[str, int], dtypes: Optional[Dict[str, str]] = None) -> None:
-        super().__init__()
-        self.ranks = ranks
-        self.dtypes = dtypes or {}
 
-    def make_hoister(self, ctr: int) -> StatementHoister:
-        return _ReduceAxisHoister(self.ranks, ctr, self.dtypes)
+def hoist_reduce_axis(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
+    """``np.mean/min/max/argmin/argmax/any/all(x, axis=<int>)`` -- OR the method form ``x.mean(axis=<int>)``
+    (velocity's ``levmask.any(axis=0)``) -- -> the temp its reduction loop fills (``V = np.max(s, axis=0) + e``). A
+    non-Name ``x`` (bellman_ford's ``dist[:, None] + graph``) is hoisted to a temp first; a non-constant axis or
+    ddof, or a rank<2 (scalar-result) reduction is left verbatim (numba's no-axis scalar form)."""
+    if not isinstance(node, ast.Call):
+        return None
+    kw = {k.arg: k.value for k in node.keywords}
+    parts = reduce_call_parts(node, kw)
+    if parts is None:
+        return None
+    op, arg, ax = parts
+    rank = expr_rank(arg, hoist.tables.ranks)
+    if rank is None or rank < 2:
+        return None
+    axes = _axis_list(ax, rank)
+    if not axes:
+        return None
+    kd = kw.get("keepdims")
+    keepdims = isinstance(kd, ast.Constant) and kd.value is True
+    if len(axes) == rank and not keepdims:
+        return None  # every axis reduced -> a scalar; leave the backend's full reduction
+    if op in ("argmin", "argmax") and len(axes) > 1:
+        return None  # numpy itself rejects a tuple axis for argmin/argmax
+    ddof = reduce_ddof(op, kw.get("ddof"))
+    if ddof is None:
+        # Non-constant ddof: the divisor cannot fold. Refused before the operand is hoisted, whose
+        # temp would otherwise stay behind unread and collide with the next reduction's.
+        return None
+    if isinstance(arg, ast.Name):
+        sname = arg.id
+    else:
+        sname = f"__rsrc{hoist.ctr}"
+        hoist.queue([f"{sname} = {ast.unparse(arg)}"])
+    temp = f"__rdo{hoist.ctr}"
+    elem_kind = _dtype_kind(arg, hoist.tables.dtypes)
+    hoist.pre.extend(
+        _reduce_axis_stmts(temp, sname, op, axes, rank, hoist.ctr, keepdims, elem_kind == "float", ddof, elem_kind)
+    )
+    hoist.ctr += 1
+    return ast.Name(id=temp, ctx=ast.Load())
+
+
+REDUCE_AXIS_HOIST = HoistForm(frozenset(REDUCE_FNS), (), hoist_reduce_axis)
 
 
 def _keepdims_index(axes: list[int]) -> list[ast.expr] | None:
@@ -1891,7 +1979,7 @@ class _KeepdimsToNewaxis(ast.NodeTransformer):
     refuses the whole program with ``_sum() got an unexpected keyword argument
     'keepdims'``. The newaxis subscript restores exactly what the kwarg asked for.
 
-    Second in line behind :class:`ReduceAxisInline`, which lowers the same call to an
+    Second in line behind :func:`hoist_reduce_axis`, which lowers the same call to an
     explicit loop nest whenever it knows the operand's rank; this takes only what that
     declined -- a reduction over a name the flow-insensitive rank table had to forget
     (every ML port rebinds one ``x`` through differently-shaped stages). Hence the
@@ -2042,48 +2130,35 @@ def ufunc_method_op(node: ast.AST, method: str) -> Optional[str]:
     return None
 
 
-class _UfuncOuterHoister(ast.NodeTransformer):
-    """Replace ``np.add.outer(a, b)`` (1-D operands) with a reshape+broadcast temp
-    (numba has no ufunc.outer): ``a[:,None] op b[None,:]`` as a (len_a, len_b)
-    grid. Non-Name operands are unparsed inline into hoisted temps first."""
-
-    def __init__(self, ranks: Dict[str, int], ctr: int) -> None:
-        self.ranks = ranks
-        self.ctr = ctr
-        self.pre: List[ast.stmt] = []
-
-    def visit_Call(self, node: ast.Call):
-        self.generic_visit(node)
-        op = ufunc_method_op(node, "outer")
-        if op not in _OUTER_OPS or len(node.args) != 2:
-            return node
-        a, b = node.args
-        if expr_rank(a, self.ranks) != 1 or expr_rank(b, self.ranks) != 1:
-            return node  # only the 1-D x 1-D outer grid
-        p = f"__ao{self.ctr}"
-        self.ctr += 1
-        na, nb, sym = f"{p}_a", f"{p}_b", _OUTER_OPS[op]
-        # ``.copy()`` -- a strided slice (floyd's ``path[:, k]`` column) is
-        # non-contiguous, and numba's reshape requires a contiguous array.
-        src = [
+def hoist_ufunc_outer(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
+    """``np.add.outer(a, b)`` (1-D operands) -> a reshape+broadcast temp (numba has no ufunc.outer): ``a[:,None] op
+    b[None,:]`` as a (len_a, len_b) grid (floyd_warshall's ``np.minimum(path, np.add.outer(path[:,k], path[k,:]))``).
+    Non-Name operands are unparsed inline into hoisted temps first."""
+    if not isinstance(node, ast.Call):
+        return None
+    op = ufunc_method_op(node, "outer")
+    if op is None or op not in _OUTER_OPS or len(node.args) != 2:
+        return None
+    a, b = node.args
+    ranks = hoist.tables.ranks
+    if expr_rank(a, ranks) != 1 or expr_rank(b, ranks) != 1:
+        return None  # only the 1-D x 1-D outer grid
+    p = f"__ao{hoist.ctr}"
+    hoist.ctr += 1
+    na, nb, sym = f"{p}_a", f"{p}_b", _OUTER_OPS[op]
+    # ``.copy()`` -- a strided slice (floyd's ``path[:, k]`` column) is
+    # non-contiguous, and numba's reshape requires a contiguous array.
+    hoist.queue(
+        [
             f"{na} = ({ast.unparse(a)}).copy()",
             f"{nb} = ({ast.unparse(b)}).copy()",
             f"{p} = {na}.reshape({na}.shape[0], 1) {sym} {nb}.reshape(1, {nb}.shape[0])",
         ]
-        self.pre.extend(ast.parse("\n".join(src)).body)
-        return ast.copy_location(ast.Name(id=p, ctx=ast.Load()), node)
+    )
+    return ast.Name(id=p, ctx=ast.Load())
 
 
-class UfuncOuterInline(ValueHoistInline):
-    """Hoist ufunc.outer out of any value-bearing statement (floyd_warshall's
-    ``np.minimum(path, np.add.outer(path[:,k], path[k,:]))``)."""
-
-    def __init__(self, ranks: Dict[str, int]) -> None:
-        super().__init__()
-        self.ranks = ranks
-
-    def make_hoister(self, ctr: int) -> StatementHoister:
-        return _UfuncOuterHoister(self.ranks, ctr)
+UFUNC_OUTER_HOIST = HoistForm(frozenset({"outer"}), (), hoist_ufunc_outer)
 
 
 class _ScalarizeMask(ast.NodeTransformer):
@@ -2265,58 +2340,43 @@ def _masked_reduce_map(fn: ast.AST, ranks: Dict[str, int], dtypes: Dict[str, str
     return ok
 
 
-class _MaskedReduceHoister(ast.NodeTransformer):
-    """Replace each ``v.mean()`` / ``np.mean(v)`` (v a lowerable masked-gather
-    name) inside one statement with a fresh temp Name, emitting its accumulate
-    loop into ``self.pre``."""
-
-    def __init__(self, gathers: Dict[str, tuple], ranks: Dict[str, int], ctr: int) -> None:
-        self.gathers = gathers
-        self.ranks = ranks
-        self.ctr = ctr
-        self.pre: List[ast.stmt] = []
-
-    def visit_Call(self, node: ast.Call):
-        self.generic_visit(node)
-        hit = _masked_reduce_of(node, self.gathers)
-        if hit is None:
-            return node
-        op, v = hit
-        a, mask = self.gathers[v]
-        p = f"__mr{self.ctr}"
-        self.ctr += 1
-        temp = f"{p}_o"
-        lines = _masked_reduce_lines(temp, a.id, ast.unparse(mask), expr_rank(a, self.ranks), op, p)
-        self.pre.extend(ast.parse("\n".join(lines)).body)
-        return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
+def hoist_masked_reduce(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
+    """``v.mean()`` / ``np.mean(v)`` (v a lowerable masked-gather name) -> the temp its accumulate loop fills --
+    azimint_naive's ``values = data[mask]; res[i] = values.mean()``. The masked select is a dynamic-length array
+    pythran cannot type (auto-before-deduction) and dace cannot shape; numba would DCE the now-unused select anyway."""
+    gathers = hoist.tables.gathers
+    hit = _masked_reduce_of(node, gathers)
+    if hit is None:
+        return None
+    op, v = hit
+    a, mask = gathers[v]
+    p = f"__mr{hoist.ctr}"
+    hoist.ctr += 1
+    temp = f"{p}_o"
+    hoist.queue(_masked_reduce_lines(temp, a.id, ast.unparse(mask), expr_rank(a, hoist.tables.ranks), op, p))
+    return ast.Name(id=temp, ctx=ast.Load())
 
 
-class MaskedReduceInline(ValueHoistInline):
-    """Drop each lowerable ``v = a[mask]`` boolean-select and inline its reductions
-    (``res[i] = v.mean()`` -> accumulate loop) -- azimint_naive's ``values =
-    data[mask]; res[i] = values.mean()``. The masked select is a dynamic-length
-    array pythran cannot type (auto-before-deduction) and dace cannot shape; numba
-    would DCE the now-unused select anyway. ``gathers`` is pre-vetted so every use
-    of the name is a reduction, making the drop safe."""
+def has_masked_selects(tables: HoistTables) -> bool:
+    """Whether the scope holds a vetted masked select to drop and reduce."""
+    return bool(tables.gathers)
 
-    def __init__(self, gathers: Dict[str, tuple], ranks: Dict[str, int]) -> None:
-        super().__init__()
-        self.gathers = gathers
-        self.ranks = ranks
 
-    def make_hoister(self, ctr: int) -> StatementHoister:
-        return _MaskedReduceHoister(self.gathers, self.ranks, ctr)
+def drops_masked_select(stmt: ast.stmt, tables: HoistTables) -> bool:
+    """A vetted ``v = a[mask]`` select: ``gathers`` is pre-vetted so every use of ``v`` is a reduction that inlines
+    its own loop, making the drop safe."""
+    return (
+        isinstance(stmt, ast.Assign)
+        and len(stmt.targets) == 1
+        and isinstance(stmt.targets[0], ast.Name)
+        and stmt.targets[0].id in tables.gathers
+        and isinstance(stmt.value, ast.Subscript)
+    )
 
-    def visit_Assign(self, node: ast.Assign) -> ast.stmt | List[ast.stmt]:
-        if (
-            len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Name)
-            and node.targets[0].id in self.gathers
-            and isinstance(node.value, ast.Subscript)
-        ):
-            self.changed = True
-            return []  # drop the masked select; each reduction inlines its own loop
-        return self.hoist(node)
+
+MASKED_REDUCE_HOIST = HoistForm(
+    frozenset(_MASKED_REDUCE_OPS), (), hoist_masked_reduce, has_masked_selects, drops_masked_select
+)
 
 
 _AT_OPS = {"add": "+=", "subtract": "-=", "multiply": "*="}
@@ -2654,95 +2714,89 @@ class _SearchsortedMaterialize(ast.NodeTransformer):
         return out
 
 
-class _HistogramHoister(ast.NodeTransformer):
-    """Replace ``np.histogram(a, bins[, lo, hi][, weights=w])[0]`` with a fresh
-    temp Name, emitting the numpy-histogram loop into ``self.pre``: a min/max scan
+def hoist_histogram(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
+    """``np.histogram(a, bins[, lo, hi][, weights=w])[0]`` -> the temp its binning loop fills (azimint's ``histw =
+    np.histogram(r, n, weights=d)[0]``): a min/max scan
     for the default range, the ``np.linspace(lo, hi, bins + 1)`` edge array, then per-element
     binning ``b = int((a-lo)*bins/(hi-lo))`` clamped to ``[0, bins-1]``, walked one step against
     those edges (numpy's own correction) and accumulating ``1`` (or ``w[i]``). numba has no
     np.histogram; this is the same loop the C/Fortran backends lower (azimint_hist)."""
-
-    def __init__(self, ctr: int) -> None:
-        self.ctr = ctr
-        self.pre: List[ast.stmt] = []
-
-    def visit_Subscript(self, node: ast.Subscript):
-        self.generic_visit(node)
-        if not (
-            isinstance(node.slice, ast.Constant)
-            and node.slice.value == 0
-            and _np_attr(node.value) == "histogram"
-            and len(node.value.args) >= 2
-        ):
-            return node
-        call = node.value
-        a, bins = ast.unparse(call.args[0]), ast.unparse(call.args[1])
-        kw = {k.arg: k.value for k in call.keywords}
-        lo = hi = None
-        if len(call.args) >= 4:
-            lo, hi = call.args[2], call.args[3]
-        rng = kw.get("range")
-        if isinstance(rng, ast.Tuple) and len(rng.elts) == 2:
-            lo, hi = rng.elts
-        weights = kw.get("weights")
-        p = f"__hist{self.ctr}"
-        self.ctr += 1
-        lines = []
-        if lo is None or hi is None:
-            lo_s, hi_s = f"{p}_lo", f"{p}_hi"
-            lines += [
-                f"{lo_s} = {a}[0]",
-                f"{hi_s} = {a}[0]",
-                f"for {p}_s in range({a}.shape[0]):",
-                f"    if {a}[{p}_s] < {lo_s}: {lo_s} = {a}[{p}_s]",
-                f"    if {a}[{p}_s] > {hi_s}: {hi_s} = {a}[{p}_s]",
-            ]
-        else:
-            lo_s, hi_s = f"({ast.unparse(lo)})", f"({ast.unparse(hi)})"
-        temp = f"{p}_o"
-        # numpy's histogram is int64 COUNTS when unweighted and the weights' own dtype when
-        # weighted -- never an unconditional float64, which both lies about the unweighted
-        # result and narrows a float32 weighted one. A non-Name weights expression is hoisted
-        # so the dtype can be read off a name rather than re-evaluating the expression.
-        if weights is None:
-            wdtype, add = "np.int64", "1"
-        else:
-            wname = weights.id if isinstance(weights, ast.Name) else f"{p}_w"
-            if not isinstance(weights, ast.Name):
-                lines.append(f"{wname} = {ast.unparse(weights)}")
-            wdtype, add = f"{wname}.dtype", f"{wname}[{p}_i]"
-        # numpy's bin is defined by its EDGE ARRAY, not by the closed form below: it truncates
-        # the same index and then walks it one step against linspace's edges. The two round
-        # apart, and without the walk 6 of azimint_hist's 400000 fp32 samples land one bin over
-        # -- 0.2% on a bin ratio, past the fp32 band. So the edges are rebuilt with linspace's
-        # own arithmetic and, crucially, in the SAMPLE dtype, one rounding per statement: half
-        # an ulp of edge is worth ~20 misbinned samples at this count. Only edges 0..bins-1 are
-        # read (the walk up stops at bins-1), hence ``bins`` entries and no top edge.
-        edges = f"{p}_e"
+    if not (isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant) and node.slice.value == 0):
+        return None
+    call = node.value
+    if not (isinstance(call, ast.Call) and _np_attr(call) == "histogram" and len(call.args) >= 2):
+        return None
+    a, bins = ast.unparse(call.args[0]), ast.unparse(call.args[1])
+    kw = {k.arg: k.value for k in call.keywords}
+    lo: ast.expr | None = None
+    hi: ast.expr | None = None
+    if len(call.args) >= 4:
+        lo, hi = call.args[2], call.args[3]
+    rng = kw.get("range")
+    if isinstance(rng, ast.Tuple) and len(rng.elts) == 2:
+        lo, hi = rng.elts
+    weights = kw.get("weights")
+    p = f"__hist{hoist.ctr}"
+    hoist.ctr += 1
+    lines: list[str] = []
+    if lo is None or hi is None:
+        lo_s, hi_s = f"{p}_lo", f"{p}_hi"
         lines += [
-            f"{edges} = np.zeros({bins}, {a}.dtype)",
-            f"{edges}[0] = ({hi_s} - {lo_s}) / {bins}",
-            f"{p}_st = {edges}[0]",
-            f"for {p}_j in range({bins}):",
-            f"    {edges}[{p}_j] = {p}_j * {p}_st",
-            f"    {edges}[{p}_j] = {edges}[{p}_j] + {lo_s}",
+            f"{lo_s} = {a}[0]",
+            f"{hi_s} = {a}[0]",
+            f"for {p}_s in range({a}.shape[0]):",
+            f"    if {a}[{p}_s] < {lo_s}: {lo_s} = {a}[{p}_s]",
+            f"    if {a}[{p}_s] > {hi_s}: {hi_s} = {a}[{p}_s]",
         ]
-        # numpy drops samples outside [lo, hi] (only the last bin is closed); the clamp alone
-        # would fold them into bin 0 / bin-1 instead. Guard the increment. For an auto lo/hi
-        # (a.min()/a.max()) every element is in range, so the guard is a no-op there.
-        lines += [
-            f"{temp} = np.zeros({bins}, {wdtype})",
-            f"for {p}_i in range({a}.shape[0]):",
-            f"    if {lo_s} <= {a}[{p}_i] and {a}[{p}_i] <= {hi_s}:",
-            f"        {p}_b = int(({a}[{p}_i] - {lo_s}) * {bins} / ({hi_s} - {lo_s}))",
-            f"        if {p}_b < 0: {p}_b = 0",
-            f"        if {p}_b > {bins} - 1: {p}_b = {bins} - 1",
-            f"        if {a}[{p}_i] < {edges}[{p}_b]: {p}_b = {p}_b - 1",
-            f"        if {p}_b < {bins} - 1 and {a}[{p}_i] >= {edges}[{p}_b + 1]: {p}_b = {p}_b + 1",
-            f"        {temp}[{p}_b] += {add}",
-        ]
-        self.pre.extend(ast.parse("\n".join(lines)).body)
-        return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
+    else:
+        lo_s, hi_s = f"({ast.unparse(lo)})", f"({ast.unparse(hi)})"
+    temp = f"{p}_o"
+    # numpy's histogram is int64 COUNTS when unweighted and the weights' own dtype when
+    # weighted -- never an unconditional float64, which both lies about the unweighted
+    # result and narrows a float32 weighted one. A non-Name weights expression is hoisted
+    # so the dtype can be read off a name rather than re-evaluating the expression.
+    if weights is None:
+        wdtype, add = "np.int64", "1"
+    else:
+        wname = weights.id if isinstance(weights, ast.Name) else f"{p}_w"
+        if not isinstance(weights, ast.Name):
+            lines.append(f"{wname} = {ast.unparse(weights)}")
+        wdtype, add = f"{wname}.dtype", f"{wname}[{p}_i]"
+    # numpy's bin is defined by its EDGE ARRAY, not by the closed form below: it truncates
+    # the same index and then walks it one step against linspace's edges. The two round
+    # apart, and without the walk 6 of azimint_hist's 400000 fp32 samples land one bin over
+    # -- 0.2% on a bin ratio, past the fp32 band. So the edges are rebuilt with linspace's
+    # own arithmetic and, crucially, in the SAMPLE dtype, one rounding per statement: half
+    # an ulp of edge is worth ~20 misbinned samples at this count. Only edges 0..bins-1 are
+    # read (the walk up stops at bins-1), hence ``bins`` entries and no top edge.
+    edges = f"{p}_e"
+    lines += [
+        f"{edges} = np.zeros({bins}, {a}.dtype)",
+        f"{edges}[0] = ({hi_s} - {lo_s}) / {bins}",
+        f"{p}_st = {edges}[0]",
+        f"for {p}_j in range({bins}):",
+        f"    {edges}[{p}_j] = {p}_j * {p}_st",
+        f"    {edges}[{p}_j] = {edges}[{p}_j] + {lo_s}",
+    ]
+    # numpy drops samples outside [lo, hi] (only the last bin is closed); the clamp alone
+    # would fold them into bin 0 / bin-1 instead. Guard the increment. For an auto lo/hi
+    # (a.min()/a.max()) every element is in range, so the guard is a no-op there.
+    lines += [
+        f"{temp} = np.zeros({bins}, {wdtype})",
+        f"for {p}_i in range({a}.shape[0]):",
+        f"    if {lo_s} <= {a}[{p}_i] and {a}[{p}_i] <= {hi_s}:",
+        f"        {p}_b = int(({a}[{p}_i] - {lo_s}) * {bins} / ({hi_s} - {lo_s}))",
+        f"        if {p}_b < 0: {p}_b = 0",
+        f"        if {p}_b > {bins} - 1: {p}_b = {bins} - 1",
+        f"        if {a}[{p}_i] < {edges}[{p}_b]: {p}_b = {p}_b - 1",
+        f"        if {p}_b < {bins} - 1 and {a}[{p}_i] >= {edges}[{p}_b + 1]: {p}_b = {p}_b + 1",
+        f"        {temp}[{p}_b] += {add}",
+    ]
+    hoist.queue(lines)
+    return ast.Name(id=temp, ctx=ast.Load())
+
+
+HISTOGRAM_HOIST = HoistForm(frozenset({"histogram"}), (), hoist_histogram)
 
 
 #: binary arithmetic ufuncs whose ``out=`` form maps to a plain BinOp.
@@ -2863,14 +2917,6 @@ class _UfuncOutInline(ast.NodeTransformer):
         return rw if rw is not None else node
 
 
-class HistogramInline(ValueHoistInline):
-    """Hoist ``np.histogram(...)[0]`` out of any value-bearing statement into its
-    preceding binning loop (azimint's ``histw = np.histogram(r, n, weights=d)[0]``)."""
-
-    def make_hoister(self, ctr: int) -> StatementHoister:
-        return _HistogramHoister(ctr)
-
-
 def _int_matmul_acc_dtype(aid: str, bid: str, ka: str, kb: str) -> str:
     """Accumulator dtype for an integer ``a @ b``, as source the emitted program evaluates.
 
@@ -2918,69 +2964,43 @@ def _int_matmul_stmts(temp: str, a: str, b: str, ra: int, rb: int, ctr: int, acc
     )
 
 
-class _IntMatmulHoister(ast.NodeTransformer):
-    """Replace each INTEGER ``a @ b`` / ``np.matmul`` / ``np.dot`` (both operands
-    integer/bool kind) with a temp Name, emitting an explicit loop into
-    ``self.pre``. numba's ``@`` is BLAS-backed and float-only, so int matmul
-    (bfs's ``frontier @ graph``) fails to type; float matmul is LEFT for numba's
-    fast path. Owned-but-unhandled shapes (unknown rank, >2-D) raise DesugarError."""
-
-    def __init__(self, ranks: Dict[str, int], dtypes: Dict[str, str], ctr: int) -> None:
-        self.ranks = ranks
-        self.dtypes = dtypes
-        self.ctr = ctr
-        self.pre: List[ast.stmt] = []
-
-    def _lower(self, a: ast.expr, b: ast.expr):
-        ka, kb = _dtype_kind(a, self.dtypes), _dtype_kind(b, self.dtypes)
-        if ka not in ("int", "bool") or kb not in ("int", "bool"):
-            return None  # not (definitely) an integer matmul -> leave for numba's float @
-        ra, rb = expr_rank(a, self.ranks), expr_rank(b, self.ranks)
-        if ra is None or rb is None:
-            return None  # can't determine the shape -> leave verbatim (a clean skip),
-            # NOT a raise: an unknown rank is an inference gap, not a known-unsupported shape.
-        p = f"__mmi{self.ctr}"
-        pre = []
-        aid = a.id if isinstance(a, ast.Name) else f"{p}_a"
-        bid = b.id if isinstance(b, ast.Name) else f"{p}_b"
-        if not isinstance(a, ast.Name):
-            pre.append(f"{aid} = {ast.unparse(a)}")
-        if not isinstance(b, ast.Name):
-            pre.append(f"{bid} = {ast.unparse(b)}")
-        temp = f"{p}_o"
-        acc = _int_matmul_acc_dtype(aid, bid, ka, kb)
-        self.pre.extend(ast.parse("\n".join(pre + _int_matmul_stmts(temp, aid, bid, ra, rb, self.ctr, acc))).body)
-        self.ctr += 1
-        return ast.Name(id=temp, ctx=ast.Load())
-
-    def visit_BinOp(self, node: ast.BinOp):
-        self.generic_visit(node)
-        if isinstance(node.op, ast.MatMult):
-            rep = self._lower(node.left, node.right)
-            if rep is not None:
-                return ast.copy_location(rep, node)
-        return node
-
-    def visit_Call(self, node: ast.Call):
-        self.generic_visit(node)
-        if _np_attr(node) in ("matmul", "dot") and len(node.args) == 2:
-            rep = self._lower(node.args[0], node.args[1])
-            if rep is not None:
-                return ast.copy_location(rep, node)
-        return node
+def int_matmul_temp(a: ast.expr, b: ast.expr, hoist: ValueHoist) -> ast.expr | None:
+    """The temp an INTEGER ``a @ b`` loop fills, or None when an operand is not (definitely) integer/bool."""
+    dtypes, ranks = hoist.tables.dtypes, hoist.tables.ranks
+    ka, kb = _dtype_kind(a, dtypes), _dtype_kind(b, dtypes)
+    if ka not in ("int", "bool") or kb not in ("int", "bool"):
+        return None  # not (definitely) an integer matmul -> leave for numba's float @
+    ra, rb = expr_rank(a, ranks), expr_rank(b, ranks)
+    if ra is None or rb is None:
+        return None  # can't determine the shape -> leave verbatim (a clean skip),
+        # NOT a raise: an unknown rank is an inference gap, not a known-unsupported shape.
+    p = f"__mmi{hoist.ctr}"
+    pre = []
+    aid = a.id if isinstance(a, ast.Name) else f"{p}_a"
+    bid = b.id if isinstance(b, ast.Name) else f"{p}_b"
+    if not isinstance(a, ast.Name):
+        pre.append(f"{aid} = {ast.unparse(a)}")
+    if not isinstance(b, ast.Name):
+        pre.append(f"{bid} = {ast.unparse(b)}")
+    temp = f"{p}_o"
+    acc = _int_matmul_acc_dtype(aid, bid, ka, kb)
+    hoist.queue(pre + _int_matmul_stmts(temp, aid, bid, ra, rb, hoist.ctr, acc))
+    hoist.ctr += 1
+    return ast.Name(id=temp, ctx=ast.Load())
 
 
-class IntMatmulInline(ValueHoistInline):
-    """Hoist integer matmuls out of any value-bearing statement (bfs's
-    ``reach = frontier @ graph``)."""
+def hoist_int_matmul(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
+    """An INTEGER ``a @ b`` / ``np.matmul`` / ``np.dot`` (both operands integer/bool kind) -> the temp its explicit
+    loop fills (bfs's ``reach = frontier @ graph``). numba's ``@`` is BLAS-backed and float-only, so int matmul fails
+    to type; float matmul is LEFT for numba's fast path. Owned-but-unhandled shapes (>2-D) raise DesugarError."""
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.MatMult):
+        return int_matmul_temp(node.left, node.right, hoist)
+    if isinstance(node, ast.Call) and _np_attr(node) in ("matmul", "dot") and len(node.args) == 2:
+        return int_matmul_temp(node.args[0], node.args[1], hoist)
+    return None
 
-    def __init__(self, ranks: Dict[str, int], dtypes: Dict[str, str]) -> None:
-        super().__init__()
-        self.ranks = ranks
-        self.dtypes = dtypes
 
-    def make_hoister(self, ctr: int) -> StatementHoister:
-        return _IntMatmulHoister(self.ranks, self.dtypes, ctr)
+INT_MATMUL_HOIST = HoistForm(frozenset({"matmul", "dot"}), (ast.MatMult,), hoist_int_matmul)
 
 
 def _is_transpose_expr(v: ast.AST) -> bool:
@@ -3038,63 +3058,48 @@ class _ReshapeContiguousInline(ast.NodeTransformer):
         return node
 
 
-class _RepeatAxisHoister(ast.NodeTransformer):
-    """Replace ``np.repeat(x, m, axis=k)`` (constant axis, scalar count) with a
-    temp Name, emitting the gather loop ``out[..., j, ...] = x[..., j // m, ...]``
-    into ``self.pre`` (numpy repeats each slice ``m`` times consecutively along
-    ``axis``). numba rejects the ``axis=`` kwarg on np.repeat (stockham's
-    ``np.repeat(reshape(tmp, (R, R**i, 1)), R**(K-i-1), axis=2)``)."""
-
-    def __init__(self, ranks: Dict[str, int], ctr: int) -> None:
-        self.ranks = ranks
-        self.ctr = ctr
-        self.pre: List[ast.stmt] = []
-
-    def visit_Call(self, node: ast.Call):
-        self.generic_visit(node)
-        if _np_attr(node) != "repeat" or len(node.args) < 2:
-            return node
-        kw = {k.arg: k.value for k in node.keywords}
-        ax = kw.get("axis") or (node.args[2] if len(node.args) > 2 else None)
-        if not (isinstance(ax, ast.Constant) and isinstance(ax.value, int)):
-            return node  # no axis / non-constant -> leave verbatim (a clean skip)
-        x, m = node.args[0], node.args[1]
-        rank = expr_rank(x, self.ranks)
-        if rank is None:
-            return node
-        k = ax.value % rank
-        p = f"__rp{self.ctr}"
-        self.ctr += 1
-        pre = []
-        if isinstance(x, ast.Name):
-            xid = x.id
-        else:
-            xid = f"{p}_x"
-            pre.append(f"{xid} = {ast.unparse(x)}")
-        ms = f"({ast.unparse(m)})"
-        dims = [(f"{xid}.shape[{d}] * {ms}" if d == k else f"{xid}.shape[{d}]") for d in range(rank)]
-        iters = [f"{p}_i{d}" for d in range(rank)]
-        out = f"{p}_o"
-        lines = pre + [f"{out} = np.empty(({', '.join(dims)},), {xid}.dtype)"]
-        deep = ""
-        for d in range(rank):
-            lines.append(f"{deep}for {iters[d]} in range({dims[d]}):")
-            deep += "    "
-        src_idx = ", ".join((f"{iters[k]} // {ms}" if d == k else iters[d]) for d in range(rank))
-        lines.append(f"{deep}{out}[{', '.join(iters)}] = {xid}[{src_idx}]")
-        self.pre.extend(ast.parse("\n".join(lines)).body)
-        return ast.copy_location(ast.Name(id=out, ctx=ast.Load()), node)
+def hoist_repeat_axis(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
+    """``np.repeat(x, m, axis=k)`` (literal axis, scalar count) -> the temp its gather loop ``out[..., j, ...] =
+    x[..., j // m, ...]`` fills (numpy repeats each slice ``m`` times consecutively along ``axis``). numba rejects the
+    ``axis=`` kwarg on np.repeat (stockham's ``np.repeat(reshape(tmp, (R, R**i, 1)), R**(K-i-1), axis=2)``)."""
+    if not isinstance(node, ast.Call) or _np_attr(node) != "repeat" or len(node.args) < 2:
+        return None
+    kw = {k.arg: k.value for k in node.keywords}
+    ax = kw.get("axis") or (node.args[2] if len(node.args) > 2 else None)
+    axis = None if ax is None else _const_int(ax)
+    if axis is None:
+        return None  # no axis / non-literal -> leave verbatim (a clean skip)
+    x, m = node.args[0], node.args[1]
+    rank = expr_rank(x, hoist.tables.ranks)
+    if rank is None or not -rank <= axis < rank:
+        # An axis outside the rank means the rank estimate is wrong; wrapping it into range
+        # would repeat along a different axis, so leave the call verbatim (as :func:`_axis_list`).
+        return None
+    k = axis % rank
+    p = f"__rp{hoist.ctr}"
+    hoist.ctr += 1
+    pre = []
+    if isinstance(x, ast.Name):
+        xid = x.id
+    else:
+        xid = f"{p}_x"
+        pre.append(f"{xid} = {ast.unparse(x)}")
+    ms = f"({ast.unparse(m)})"
+    dims = [(f"{xid}.shape[{d}] * {ms}" if d == k else f"{xid}.shape[{d}]") for d in range(rank)]
+    iters = [f"{p}_i{d}" for d in range(rank)]
+    out = f"{p}_o"
+    lines = pre + [f"{out} = np.empty(({', '.join(dims)},), {xid}.dtype)"]
+    deep = ""
+    for d in range(rank):
+        lines.append(f"{deep}for {iters[d]} in range({dims[d]}):")
+        deep += "    "
+    src_idx = ", ".join((f"{iters[k]} // {ms}" if d == k else iters[d]) for d in range(rank))
+    lines.append(f"{deep}{out}[{', '.join(iters)}] = {xid}[{src_idx}]")
+    hoist.queue(lines)
+    return ast.Name(id=out, ctx=ast.Load())
 
 
-class RepeatAxisInline(ValueHoistInline):
-    """Hoist ``np.repeat(..., axis=k)`` out of any value-bearing statement."""
-
-    def __init__(self, ranks: Dict[str, int]) -> None:
-        super().__init__()
-        self.ranks = ranks
-
-    def make_hoister(self, ctr: int) -> StatementHoister:
-        return _RepeatAxisHoister(self.ranks, ctr)
+REPEAT_AXIS_HOIST = HoistForm(frozenset({"repeat"}), (), hoist_repeat_axis)
 
 
 #: numpy ops whose RESULT keeps the operand's dimensionality, so a negative
@@ -4252,142 +4257,105 @@ def _gauss_jordan_lines(aw: str, o: str, n: str, m: Optional[str], p: str) -> Li
     )
 
 
-class _LinalgHoister(ast.NodeTransformer):
-    """Replace each lowerable ``np.linalg.cholesky/solve/inv(...)`` inside one
-    statement with a fresh temp Name, emitting its loop nest into ``self.pre``.
-    Only ops in ``lower_ops`` are touched (a backend whose native ``np.linalg``
-    handles an op leaves it verbatim), plus the ``solve`` right-hand-side ranks in
-    ``lower_solve_rhs_ranks`` that a nominally-native backend does not really support
-    (see :data:`_LOWER_SOLVE_RHS_RANKS`). Owned-but-unhandled variants (a >2-D
-    operand) raise :class:`DesugarError`; an unknown-rank operand is left verbatim
-    (an inference gap, a clean backend skip). A non-Name operand is materialised
-    to a temp first so the loop body can index it."""
-
-    def __init__(
-        self,
-        ranks: Dict[str, int],
-        dtypes: Dict[str, str],
-        lower_ops: set,
-        ctr: int,
-        lower_solve_rhs_ranks: frozenset = frozenset(),
-    ) -> None:
-        self.ranks = ranks
-        self.dtypes = dtypes
-        self.lower_ops = lower_ops
-        self.lower_solve_rhs_ranks = lower_solve_rhs_ranks
-        self.ctr = ctr
-        self.pre: List[ast.stmt] = []
-
-    def _src_name(self, node: ast.AST, p: str, tag: str) -> str:
-        """A Name operand is used directly; an expression is materialised to a
-        contiguous temp (so the loop body can index it repeatedly)."""
-        if isinstance(node, ast.Name):
-            return node.id
-        nm = f"{p}_{tag}"
-        self.pre.append(ast.parse(f"{nm} = np.ascontiguousarray({ast.unparse(node)})").body[0])
-        return nm
-
-    def _emit(self, lines: List[str]) -> None:
-        self.pre.extend(ast.parse("\n".join(lines)).body)
-
-    def _chol(self, node: ast.Call):
-        a = node.args[0]
-        ra = expr_rank(a, self.ranks)
-        if ra is None:
-            return node  # unknown rank -> verbatim (inference gap, not a raise)
-        if ra != 2:
-            raise DesugarError(f"np.linalg.cholesky: only a 2-D operand is lowered (got ndim {ra})")
-        p = f"__chol{self.ctr}"
-        self.ctr += 1
-        an = self._src_name(a, p, "a")
-        temp = f"{p}_o"
-        self._emit(_cholesky_lines(temp, an, f"{an}.shape[0]", p, hermitian=_dtype_kind(a, self.dtypes) == "complex"))
-        return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
-
-    def _solve(self, node: ast.Call):
-        if len(node.args) < 2:
-            return node
-        a, b = node.args[0], node.args[1]
-        ra, rb = expr_rank(a, self.ranks), expr_rank(b, self.ranks)
-        if ra is None or rb is None:
-            return node
-        # Gated here rather than in ``visit_Call`` because ownership depends on the rhs RANK, and
-        # because the raises below must stay silent for a call this backend handles natively.
-        if "solve" not in self.lower_ops and rb not in self.lower_solve_rhs_ranks:
-            return node
-        if ra != 2:
-            raise DesugarError(f"np.linalg.solve: A must be 2-D (got ndim {ra})")
-        if rb not in (1, 2):
-            raise DesugarError(f"np.linalg.solve: b must be 1-D or 2-D (got ndim {rb})")
-        p = f"__solv{self.ctr}"
-        self.ctr += 1
-        an, bn = self._src_name(a, p, "a"), self._src_name(b, p, "b")
-        temp = f"{p}_o"
-        self._emit(
-            [f"{p}_aw = {an}.copy()", f"{temp} = {bn}.copy()"]
-            + _gauss_jordan_lines(f"{p}_aw", temp, f"{an}.shape[0]", (f"{bn}.shape[1]" if rb == 2 else None), p)
-        )
-        return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
-
-    def _inv(self, node: ast.Call):
-        a = node.args[0]
-        ra = expr_rank(a, self.ranks)
-        if ra is None:
-            return node
-        if ra != 2:
-            raise DesugarError(f"np.linalg.inv: only a 2-D operand is lowered (got ndim {ra})")
-        p = f"__inv{self.ctr}"
-        self.ctr += 1
-        an = self._src_name(a, p, "a")
-        temp, n = f"{p}_o", f"{an}.shape[0]"
-        self._emit(
-            [
-                f"{p}_aw = {an}.copy()",
-                f"{temp} = np.zeros(({n}, {n}), {an}.dtype)",
-                f"for {p}_d in range({n}):",
-                f"    {temp}[{p}_d, {p}_d] = 1",
-            ]
-            + _gauss_jordan_lines(f"{p}_aw", temp, n, n, p)
-        )
-        return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
-
-    def visit_Call(self, node: ast.Call):
-        self.generic_visit(node)  # inner linalg calls first
-        op = np_submodule_attr(node, "linalg")
-        if not node.args:
-            return node
-        if op == "solve":
-            return self._solve(node)  # gates itself: ownership is rank-dependent
-        if op not in self.lower_ops:
-            return node
-        return {"cholesky": self._chol, "inv": self._inv}[op](node)
+def linalg_operand(node: ast.expr, p: str, tag: str, hoist: ValueHoist) -> str:
+    """A Name operand is used directly; an expression is materialised to a
+    contiguous temp (so the loop body can index it repeatedly)."""
+    if isinstance(node, ast.Name):
+        return node.id
+    nm = f"{p}_{tag}"
+    hoist.queue([f"{nm} = np.ascontiguousarray({ast.unparse(node)})"])
+    return nm
 
 
-class LinalgInline(ValueHoistInline):
-    """Hoist ``np.linalg.cholesky/solve/inv`` out of any value-bearing statement
-    into its preceding loop nest (cholesky2's ``A[:] = np.linalg.cholesky(A) +
-    np.triu(A, k=1)`` -- the cholesky is computed into a fresh temp BEFORE ``A`` is
-    overwritten, so the in-place read is safe; contour_integral's ``X =
-    np.linalg.solve(Tz, Y)`` nested in a for-loop). Only backends lacking a native
-    ``np.linalg`` (pythran) enable this wholesale; numba / dace keep the intrinsic
-    except for the ``solve`` right-hand-side ranks their library node cannot expand
-    (see :data:`_LOWER_SOLVE_RHS_RANKS`)."""
+def hoist_cholesky(node: ast.Call, hoist: ValueHoist) -> ast.expr | None:
+    a = node.args[0]
+    ra = expr_rank(a, hoist.tables.ranks)
+    if ra is None:
+        return None  # unknown rank -> verbatim (inference gap, not a raise)
+    if ra != 2:
+        raise DesugarError(f"np.linalg.cholesky: only a 2-D operand is lowered (got ndim {ra})")
+    p = f"__chol{hoist.ctr}"
+    hoist.ctr += 1
+    an = linalg_operand(a, p, "a", hoist)
+    temp = f"{p}_o"
+    hermitian = _dtype_kind(a, hoist.tables.dtypes) == "complex"
+    hoist.queue(_cholesky_lines(temp, an, f"{an}.shape[0]", p, hermitian=hermitian))
+    return ast.Name(id=temp, ctx=ast.Load())
 
-    def __init__(
-        self,
-        ranks: Dict[str, int],
-        dtypes: Dict[str, str],
-        lower_ops: set,
-        lower_solve_rhs_ranks: frozenset = frozenset(),
-    ) -> None:
-        super().__init__()
-        self.ranks = ranks
-        self.dtypes = dtypes
-        self.lower_ops = lower_ops
-        self.lower_solve_rhs_ranks = lower_solve_rhs_ranks
 
-    def make_hoister(self, ctr: int) -> StatementHoister:
-        return _LinalgHoister(self.ranks, self.dtypes, self.lower_ops, ctr, self.lower_solve_rhs_ranks)
+def hoist_solve(node: ast.Call, hoist: ValueHoist) -> ast.expr | None:
+    if len(node.args) < 2:
+        return None
+    a, b = node.args[0], node.args[1]
+    tables = hoist.tables
+    ra, rb = expr_rank(a, tables.ranks), expr_rank(b, tables.ranks)
+    if ra is None or rb is None:
+        return None
+    # Gated here rather than in ``hoist_linalg`` because ownership depends on the rhs RANK, and
+    # because the raises below must stay silent for a call this backend handles natively.
+    if "solve" not in tables.lower_ops and rb not in tables.solve_rhs_ranks:
+        return None
+    if ra != 2:
+        raise DesugarError(f"np.linalg.solve: A must be 2-D (got ndim {ra})")
+    if rb not in (1, 2):
+        raise DesugarError(f"np.linalg.solve: b must be 1-D or 2-D (got ndim {rb})")
+    p = f"__solv{hoist.ctr}"
+    hoist.ctr += 1
+    an, bn = linalg_operand(a, p, "a", hoist), linalg_operand(b, p, "b", hoist)
+    temp = f"{p}_o"
+    hoist.queue(
+        [f"{p}_aw = {an}.copy()", f"{temp} = {bn}.copy()"]
+        + _gauss_jordan_lines(f"{p}_aw", temp, f"{an}.shape[0]", (f"{bn}.shape[1]" if rb == 2 else None), p)
+    )
+    return ast.Name(id=temp, ctx=ast.Load())
+
+
+def hoist_inv(node: ast.Call, hoist: ValueHoist) -> ast.expr | None:
+    a = node.args[0]
+    ra = expr_rank(a, hoist.tables.ranks)
+    if ra is None:
+        return None
+    if ra != 2:
+        raise DesugarError(f"np.linalg.inv: only a 2-D operand is lowered (got ndim {ra})")
+    p = f"__inv{hoist.ctr}"
+    hoist.ctr += 1
+    an = linalg_operand(a, p, "a", hoist)
+    temp, n = f"{p}_o", f"{an}.shape[0]"
+    hoist.queue(
+        [
+            f"{p}_aw = {an}.copy()",
+            f"{temp} = np.zeros(({n}, {n}), {an}.dtype)",
+            f"for {p}_d in range({n}):",
+            f"    {temp}[{p}_d, {p}_d] = 1",
+        ]
+        + _gauss_jordan_lines(f"{p}_aw", temp, n, n, p)
+    )
+    return ast.Name(id=temp, ctx=ast.Load())
+
+
+LINALG_LOWERINGS: dict[str, Callable[[ast.Call, ValueHoist], ast.expr | None]] = {
+    "cholesky": hoist_cholesky,
+    "inv": hoist_inv,
+}
+
+
+def hoist_linalg(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
+    """A lowerable ``np.linalg.cholesky/solve/inv(...)`` -> the temp its loop nest fills (cholesky2's ``A[:] =
+    np.linalg.cholesky(A) + np.triu(A, k=1)`` -- the cholesky is computed into a fresh temp BEFORE ``A`` is
+    overwritten, so the in-place read is safe; contour_integral's ``X = np.linalg.solve(Tz, Y)`` nested in a
+    for-loop). Only ops in ``lower_ops`` are touched (a backend whose native ``np.linalg`` handles an op leaves it
+    verbatim), plus the ``solve`` right-hand-side ranks in ``solve_rhs_ranks`` that a nominally-native backend does
+    not really support (see :data:`_LOWER_SOLVE_RHS_RANKS`). Owned-but-unhandled variants (a >2-D operand) raise
+    :class:`DesugarError`; an unknown-rank operand is left verbatim (an inference gap, a clean backend skip). A
+    non-Name operand is materialised to a temp first so the loop body can index it."""
+    if not isinstance(node, ast.Call) or not node.args:
+        return None
+    op = np_submodule_attr(node, "linalg")
+    if op == "solve":
+        return hoist_solve(node, hoist)  # gates itself: ownership is rank-dependent
+    if op is None or op not in hoist.tables.lower_ops:
+        return None
+    return LINALG_LOWERINGS[op](node, hoist)
 
 
 def _eigh_w_dtype(is_real: bool, names, array_dtypes: Dict[str, str]) -> Optional[str]:
@@ -4535,7 +4503,7 @@ def _eigh_stmts(
     via the Cholesky factor of ``b`` (``b = L L^H``): ``C = L^-1 a L^-H`` is
     Hermitian with the same eigenvalues, and its eigenvectors back-transform
     as ``x = L^-H y``. ``cholesky``/``inv``/``@`` stay ``np.linalg``/matmul for
-    native backends (numba/dace) and are lowered by :class:`LinalgInline` for
+    native backends (numba/dace) and are lowered by :data:`LINALG_HOIST` for
     pythran. The standard eigh is the self-contained Jacobi above, unless
     ``native_std`` (backends whose ``np.linalg.eigh`` handles standard
     complex-Hermitian natively -- jax), which emits a single
@@ -4925,11 +4893,11 @@ class _EighInline(ast.NodeTransformer):
     :func:`_eigh_stmts`). Handles the tuple-target eigenpair form and the
     eigenvalues-only single-target form (``np.linalg.eigvalsh`` or
     ``eigh(..., eigvals_only=True)``); a non-``Name`` operand is materialised first.
-    Runs BEFORE :class:`LinalgInline` so the cholesky/inv it emits are themselves
+    Runs BEFORE :data:`LINALG_HOIST` so the cholesky/inv it emits are themselves
     lowered for pythran.
 
     ``dtypes`` is the per-function dtype-KIND table (:func:`_dtype_table`),
-    consulted the same way :class:`LinalgInline` consults it for its ``hermitian``
+    consulted the same way :func:`hoist_cholesky` consults it for its ``hermitian``
     flag -- see :func:`_eigh_operand_is_real`."""
 
     def __init__(
@@ -5030,6 +4998,14 @@ _NATIVE_LINALG: Dict[Optional[str], set] = {
 #: so the frontend accepts the program and the failure surfaces only once a library node expands.
 #: Lowering just that variant keeps the native matrix solve (contour_integral's 2-D rhs) intact.
 _LOWER_SOLVE_RHS_RANKS: Dict[Optional[str], frozenset] = {"dace": frozenset({1})}
+
+
+def lowers_linalg(tables: HoistTables) -> bool:
+    """Whether the backend lowers any ``np.linalg`` call at all (pythran every op, dace a ``solve`` rhs rank)."""
+    return bool(tables.lower_ops or tables.solve_rhs_ranks)
+
+
+LINALG_HOIST = HoistForm(frozenset(_LINALG_LOWERABLE), (), hoist_linalg, lowers_linalg)
 
 
 def _param_body_rank_evidence(fn: ast.FunctionDef) -> Dict[str, int]:
@@ -6329,6 +6305,7 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
         noncontig = _noncontig_names(fn)
         masked_gathers = _masked_reduce_map(fn, ranks, dtypes)
         consts = _const_name_values(fn)
+        tables = HoistTables(ranks, dtypes, masked_gathers, lower_linalg, lower_solve_rhs_ranks)
         passes = [
             _DropGuards(),
             # First: it splices statements OUT of a ``with`` body, and every pass below walks only
@@ -6344,23 +6321,23 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
             IxWriteToLoop(ranks, dtypes, fn),
             _FancySliceStoreToLoop(ranks, dtypes),
             _EighInline(ranks, eigh_aliases, dtypes, kir_array_dtypes),
-            LinalgInline(ranks, dtypes, lower_linalg, lower_solve_rhs_ranks),
+            ValueHoist(LINALG_HOIST, tables),
             _ReshapeMatmulInline(ranks),
             _BatchedMatmulToLoop(ranks),
             _PadInline(ranks, lower_symbolic_constant=backend == "dace"),
-            EinsumInline(),
+            ValueHoist(EINSUM_HOIST, tables),
             _FftInline(ranks, kir_array_dtypes),
             _MgridInline(),
-            FancyGatherInline(ranks),
-            ReduceAxisInline(ranks, dtypes),
+            ValueHoist(FANCY_GATHER_HOIST, tables),
+            ValueHoist(REDUCE_AXIS_HOIST, tables),
             # Directly behind it: takes only the keepdims reductions the loop lowering
             # declined (an operand whose rank the table had to forget).
             _KeepdimsToNewaxis(),
-            MaskedReduceInline(masked_gathers, ranks),
+            ValueHoist(MASKED_REDUCE_HOIST, tables),
             _CallFixups(ranks),
             _IssubdtypeFold(dtypes),
             _DeadBranchElim(),
-            UfuncOuterInline(ranks),
+            ValueHoist(UFUNC_OUTER_HOIST, tables),
             _MaskedAssignToLoop(ranks, dtypes),
             _AddAtInline(ranks),
             _SearchsortedMaterialize(),
@@ -6372,10 +6349,10 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
             # LAST of the three: the repeat lowering above reads ``np.diff(p)`` structurally, so the
             # slice rewrite has to come after it.
             _DiffToSliceDifference(),
-            HistogramInline(),
-            RepeatAxisInline(ranks),
+            ValueHoist(HISTOGRAM_HOIST, tables),
+            ValueHoist(REPEAT_AXIS_HOIST, tables),
             _ReshapeContiguousInline(noncontig),
-            IntMatmulInline(ranks, dtypes),
+            ValueHoist(INT_MATMUL_HOIST, tables),
             _ComplexAccessorToFunc(conjugate_only=True),
             _ElementalUfuncToPrimitive(),
             # numba only, and LAST of the rewrites: it peels an outer-product broadcast into a

@@ -1,7 +1,7 @@
 """np.histogram(a, bins, range=(lo, hi)) must DROP samples outside [lo, hi].
 
 Both histogram lowerings (the AST expand_histogram in lib_nodes and the string-template
-_HistogramHoister in numpy_desugar) clamped an out-of-range element into bin 0 / bin-1
+hoist_histogram in numpy_desugar) clamped an out-of-range element into bin 0 / bin-1
 instead, inflating the edge bins. numpy only keeps [lo, hi] (the last bin closed).
 
 The AST clamp's bounds are int()-wrapped so every min/max operand is int64 -- Fortran's
