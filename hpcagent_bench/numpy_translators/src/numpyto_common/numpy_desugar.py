@@ -31,7 +31,7 @@ from numpyto_common.subscripts import is_ellipsis, is_full_slice, is_newaxis
 #: Tuple-shape lengths currently known to :func:`expr_rank`. Set by
 # :func:`rank_table` while it is iterating so ``.reshape(name)`` can report the
 # tuple's actual rank instead of the rank-1 guess a bare Name gets.
-_active_tuple_lengths: Optional[Dict[str, int]] = None
+active_tuple_lengths: Optional[Dict[str, int]] = None
 
 
 class DesugarError(NotImplementedError):
@@ -397,7 +397,7 @@ def expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
             # shape TUPLE, which is a rank this cannot count.
             n = _tuple_len(value.args[0])
             if n is None and len(value.args) == 1 and isinstance(value.args[0], ast.Name):
-                n = (_active_tuple_lengths or {}).get(value.args[0].id)
+                n = (active_tuple_lengths or {}).get(value.args[0].id)
             if n is None and (len(value.args) > 1 or isinstance(value.args[0], (ast.Name, ast.Constant))):
                 n = len(value.args)
             if n is not None:
@@ -564,24 +564,25 @@ def rank_table(tree: ast.AST, seed: Dict[str, int], call_returns: Optional[Dict[
     (a ``{helper: return_ndim}`` map) lets a local bound to a helper call inherit
     that helper's return rank (the ML kernels thread arrays through relu/conv2d
     helpers, which ``expr_rank`` cannot see into)."""
-    global _active_tuple_lengths
+    global active_tuple_lengths
     ranks = dict(seed)
+    # The tree does not change while the table converges: index its bindings once, not every round.
+    bindings, first_values = name_binding_index(tree)
     for _ in range(8):
         changed = False
-        _active_tuple_lengths = _build_tuple_lengths(tree, ranks, seed_ranks=seed)
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-                r = expr_rank(node.value, ranks)
-                if r is None and call_returns is not None:
-                    r = _call_return_rank(node.value, call_returns)
-                if r is not None and ranks.get(node.targets[0].id) != r:
-                    ranks[node.targets[0].id] = r
-                    changed = True
+        active_tuple_lengths = tuple_lengths(bindings, first_values, ranks, seed)
+        for name, value in bindings:
+            r = expr_rank(value, ranks)
+            if r is None and call_returns is not None:
+                r = _call_return_rank(value, call_returns)
+            if r is not None and ranks.get(name) != r:
+                ranks[name] = r
+                changed = True
         if not changed:
             break
-    _active_tuple_lengths = _build_tuple_lengths(tree, ranks, seed_ranks=seed)
+    active_tuple_lengths = tuple_lengths(bindings, first_values, ranks, seed)
     _drop_rank_conflicts(tree, ranks, seed)
-    _active_tuple_lengths = None
+    active_tuple_lengths = None
     return ranks
 
 
@@ -694,13 +695,6 @@ def _tuple_expr_len(
     return None
 
 
-def _iter_function_bodies(node: ast.AST):
-    """Yield every Assign-bearing body under ``node`` (module or function)."""
-    for child in ast.walk(node):
-        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module, ast.ClassDef)):
-            yield from child.body
-
-
 def _build_tuple_lengths(
     tree: ast.AST, ranks: Dict[str, int], seed_ranks: Optional[Dict[str, int]] = None
 ) -> Dict[str, int]:
@@ -713,16 +707,41 @@ def _build_tuple_lengths(
     # recurses, so a chain of tuple locals cost assigns x depth x nodes -- 564s of densenet121's
     # 729s lowering sat under this one call. setdefault keeps the same first-in-body binding the
     # scan returned.
-    assigns: Dict[str, ast.expr] = {}
-    for node in _iter_function_bodies(tree):
-        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-            assigns.setdefault(node.targets[0].id, node.value)
-    lengths: Dict[str, int] = {}
+    bindings, first_values = name_binding_index(tree)
+    return tuple_lengths(bindings, first_values, ranks, seed_ranks)
+
+
+def name_binding_index(tree: ast.AST) -> tuple[list[tuple[str, ast.expr]], dict[str, ast.expr]]:
+    """Every single-Name ``name = value`` under ``tree`` in ``ast.walk`` order, and each name's first one
+    in a module, function or class body.
+
+    One walk: breadth-first meets a body's statements after their owner, grouped in owner order.
+    """
+    bindings: list[tuple[str, ast.expr]] = []
+    first: dict[str, ast.expr] = {}
+    body_statements: OrderedSet[int] = OrderedSet()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-            length = _tuple_expr_len(node.value, ranks, assigns, seed_ranks=seed_ranks)
-            if length is not None:
-                lengths[node.targets[0].id] = length
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module, ast.ClassDef)):
+            body_statements.update(id(stmt) for stmt in node.body)
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            bindings.append((node.targets[0].id, node.value))
+            if id(node) in body_statements:
+                first.setdefault(node.targets[0].id, node.value)
+    return bindings, first
+
+
+def tuple_lengths(
+    bindings: list[tuple[str, ast.expr]],
+    first_values: dict[str, ast.expr],
+    ranks: dict[str, int],
+    seed_ranks: dict[str, int] | None,
+) -> dict[str, int]:
+    """Each bound name whose value is a tuple of statically known length, with that length."""
+    lengths: dict[str, int] = {}
+    for name, value in bindings:
+        length = _tuple_expr_len(value, ranks, first_values, seed_ranks=seed_ranks)
+        if length is not None:
+            lengths[name] = length
     return lengths
 
 
@@ -5018,15 +5037,15 @@ def _return_rank(
 ) -> Optional[int]:
     """Rank of ``fn``'s returned value (the max over its ``return`` statements),
     given a rank table for its body -- so a caller can propagate it."""
-    global _active_tuple_lengths
-    prev = _active_tuple_lengths
-    _active_tuple_lengths = _build_tuple_lengths(fn, ranks, seed_ranks=seed_ranks)
+    global active_tuple_lengths
+    prev = active_tuple_lengths
+    active_tuple_lengths = _build_tuple_lengths(fn, ranks, seed_ranks=seed_ranks)
     try:
         rs = [expr_rank(n.value, ranks) for n in ast.walk(fn) if isinstance(n, ast.Return) and n.value is not None]
         rs = [r for r in rs if r is not None]
         return max(rs) if rs else None
     finally:
-        _active_tuple_lengths = prev
+        active_tuple_lengths = prev
 
 
 def _infer_param_ranks(

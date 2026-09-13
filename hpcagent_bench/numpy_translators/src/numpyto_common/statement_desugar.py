@@ -63,7 +63,27 @@ def indexed_loop(node: ast.For, index: str, extent: ast.expr, binds: list[ast.st
     return ast.fix_missing_locations(ast.copy_location(loop, node))
 
 
-class DesugarArrayIteration(ast.NodeTransformer):
+#: The fields that hold statements, in ``_fields`` order.
+STATEMENT_LISTS = ("body", "orelse", "finalbody")
+#: Those, and the handlers / match cases that hold more statements, in ``_fields`` order.
+STATEMENT_FIELDS = ("body", "handlers", "orelse", "finalbody", "cases")
+
+
+def statement_blocks(node: ast.AST) -> list[list[ast.AST]]:
+    fields = vars(node)
+    return [block for name in STATEMENT_FIELDS if isinstance(block := fields.get(name), list)]
+
+
+class StatementTransformer(ast.NodeTransformer):
+    """A transformer that walks statements only: no statement sits inside an expression, so skip them all."""
+
+    def generic_visit(self, node: ast.AST) -> ast.AST:
+        for block in statement_blocks(node):
+            block[:] = [self.visit(child) for child in block]
+        return node
+
+
+class DesugarArrayIteration(StatementTransformer):
     """``for x in arr`` -> ``for i in range(<leading extent>): x = arr[i]``.
 
     Neither dace, C, Fortran nor a traced jax loop walks an array by element. ``extent_of`` gives an
@@ -133,6 +153,15 @@ def rebound_names(stmt: ast.stmt, watched: Collection[str], in_place: bool) -> O
     return rebound
 
 
+def read_name(node: ast.AST, names: Collection[str]) -> str | None:
+    """The name in ``names`` that ``node`` reads: a loaded ``Name``, or the ``Name`` an ``x += v`` updates."""
+    if isinstance(node, ast.Name) and node.id in names and isinstance(node.ctx, ast.Load):
+        return node.id
+    if isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name) and node.target.id in names:
+        return node.target.id
+    return None
+
+
 def is_plain_rebinding(stmt: ast.stmt, rebound: Collection[str]) -> bool:
     """``stmt`` is an assignment whose targets bind every name in ``rebound``, and nothing else in it does."""
     if not isinstance(stmt, ast.Assign):
@@ -157,7 +186,7 @@ def leaves_block(node: ast.AST) -> bool:
     return any(leaves_block(child) for child in ast.iter_child_nodes(node))
 
 
-class SplitChainedAssign(ast.NodeTransformer):
+class SplitChainedAssign(StatementTransformer):
     """``a = b = v`` -> one binding per target, ``v`` evaluated once, numpy's aliasing kept.
 
     * ``repeat_literals``: a numeric literal repeats at each target, which is the same value. dace
@@ -202,9 +231,10 @@ class SplitChainedAssign(ast.NodeTransformer):
         self.scope, self.ranks = outer_scope, outer_ranks
 
     def generic_visit(self, node: ast.AST) -> ast.AST:
-        blocks = [value for name, value in ast.iter_fields(node) if isinstance(value, list)]
-        for block in blocks:
-            if any(isinstance(item, ast.stmt) for item in block):
+        fields = vars(node)
+        for name in STATEMENT_LISTS:
+            block = fields.get(name)
+            if isinstance(block, list):
                 self.split_block(block, node is self.scope)
         return super().generic_visit(node)
 
@@ -297,15 +327,17 @@ class SplitChainedAssign(ast.NodeTransformer):
 
     def reads(self, names: Collection[str], skipped: Collection[int]) -> OrderedSet[str]:
         """The ``names`` read anywhere in the scope outside the node ids in ``skipped``."""
+        if self.scope is None:
+            return OrderedSet(names)
         found: OrderedSet[str] = OrderedSet()
-        pending: list[ast.AST] = [self.scope] if self.scope is not None else []
-        while pending:
+        pending: list[ast.AST] = [self.scope]
+        wanted = len(OrderedSet(names))
+        while pending and len(found) < wanted:  # every name found: nothing left to learn
             node = pending.pop()
             if id(node) in skipped:
                 continue
-            if isinstance(node, ast.Name) and node.id in names and isinstance(node.ctx, ast.Load):
-                found.add(node.id)
-            elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name) and node.target.id in names:
-                found.add(node.target.id)
+            name = read_name(node, names)
+            if name is not None:
+                found.add(name)
             pending.extend(ast.iter_child_nodes(node))
-        return found if self.scope is not None else OrderedSet(names)
+        return found
