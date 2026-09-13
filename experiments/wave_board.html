@@ -1,0 +1,259 @@
+<title>Beverin Wave Board</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500&display=swap">
+<style>
+:root {
+  --ground: #f3f5f4;
+  --surface: #ffffff;
+  --ink: #18211d;
+  --muted: #5d6a64;
+  --rule: #d8dfdb;
+  --cell-empty: #e4e9e6;
+  --accent: #0d6b67;
+  --complete: #2c7a4b;
+  --running: #2b5fc4;
+  --incomplete: #a86200;
+  --void: #b0281f;
+  --complete-soft: #e3f1e8;
+  --running-soft: #e5ecfa;
+  --incomplete-soft: #f7ecdc;
+  --void-soft: #f8e3e1;
+  --display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #101513; --surface: #171e1b; --ink: #e4ebe7; --muted: #95a39c; --rule: #2a3430;
+    --cell-empty: #26302c; --accent: #4db3ab; --complete: #5cc488; --running: #7ea6ff;
+    --incomplete: #e3a347; --void: #f07b70; --complete-soft: #1c3226; --running-soft: #1d2a45;
+    --incomplete-soft: #3a2c16; --void-soft: #3d1f1c;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #101513; --surface: #171e1b; --ink: #e4ebe7; --muted: #95a39c; --rule: #2a3430;
+  --cell-empty: #26302c; --accent: #4db3ab; --complete: #5cc488; --running: #7ea6ff;
+  --incomplete: #e3a347; --void: #f07b70; --complete-soft: #1c3226; --running-soft: #1d2a45;
+  --incomplete-soft: #3a2c16; --void-soft: #3d1f1c;
+}
+* { box-sizing: border-box; }
+body { background: var(--ground); color: var(--ink); font: 14px/1.5 var(--body); }
+.page { max-width: 1180px; margin: 0 auto; padding-inline: 20px; padding-block: 28px 64px; display: grid; gap: 28px; }
+header.top { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 12px 32px; border-bottom: 1px solid var(--rule); padding-bottom: 18px; }
+h1 { font: 600 30px/1.1 var(--display); letter-spacing: 0.01em; margin: 0; text-wrap: balance; }
+.sub { color: var(--muted); margin: 6px 0 0; max-width: 62ch; }
+.stamp { font: 13px var(--mono); color: var(--muted); text-align: right; }
+.stamp b { color: var(--ink); font-weight: 500; }
+.tally { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.tile { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 12px 14px; display: grid; gap: 2px; }
+.tile .n { font: 600 28px/1 var(--display); font-variant-numeric: tabular-nums; }
+.tile .l { font: 500 12px var(--display); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.tile .d { font-size: 12px; color: var(--muted); }
+.tile.complete .n { color: var(--complete); } .tile.running .n { color: var(--running); }
+.tile.incomplete .n { color: var(--incomplete); } .tile.void .n { color: var(--void); }
+.filters { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; }
+.filters fieldset { border: 0; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.filters legend { float: left; font: 500 12px var(--display); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-right: 4px; }
+.chip { font: 12px var(--mono); border: 1px solid var(--rule); background: var(--surface); color: var(--ink); border-radius: 999px; padding: 3px 10px; cursor: pointer; }
+.chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.chip:focus-visible, .jobs a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+section.exp { display: grid; gap: 10px; }
+.exp-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+.exp-head h2 { font: 600 20px/1.2 var(--display); margin: 0; text-wrap: balance; }
+.exp-head .key { font: 12px var(--mono); color: var(--muted); }
+.exp-head .facts { font-size: 13px; color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+.pill { font: 500 11px var(--display); text-transform: uppercase; letter-spacing: 0.08em; border-radius: 3px; padding: 2px 7px; white-space: nowrap; }
+.pill.complete { color: var(--complete); background: var(--complete-soft); }
+.pill.running { color: var(--running); background: var(--running-soft); }
+.pill.incomplete { color: var(--incomplete); background: var(--incomplete-soft); }
+.pill.void { color: var(--void); background: var(--void-soft); }
+.table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; }
+table { border-collapse: collapse; width: 100%; min-width: 860px; }
+th { font: 500 11px var(--display); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+td { padding: 8px 12px; border-bottom: 1px solid var(--rule); vertical-align: middle; }
+tr:last-child td { border-bottom: 0; }
+td.arm { font: 13px var(--mono); }
+td.arm .variant { color: var(--ink); } td.arm .model { color: var(--muted); }
+td.num { font: 13px var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+td.num .owed { color: var(--incomplete); }
+.strip { display: grid; grid-auto-flow: column; grid-auto-columns: 7px; gap: 2px; height: 14px; }
+.strip i { display: block; border-radius: 1px; background: var(--cell-empty); }
+.strip i.on { background: var(--complete); }
+tr.void .strip i { background: var(--void-soft); }
+.note { font-size: 12px; color: var(--void); margin-top: 3px; }
+.jobs { display: flex; flex-wrap: wrap; gap: 4px; }
+.jobs a { font: 11px var(--mono); padding: 1px 6px; border-radius: 3px; border: 1px solid var(--rule); color: var(--muted); text-decoration: none; white-space: nowrap; }
+.jobs a.s-COMPLETED { color: var(--complete); border-color: color-mix(in srgb, var(--complete) 40%, var(--rule)); }
+.jobs a.s-RUNNING, .jobs a.s-PENDING { color: var(--running); border-color: var(--running); }
+.jobs a.s-FAILED, .jobs a.s-TIMEOUT, .jobs a.s-OUT_OF_MEMORY, .jobs a.s-NODE_FAIL { color: var(--incomplete); }
+.jobs a.s-CANCELLED { text-decoration: line-through; }
+.legend { font-size: 12px; color: var(--muted); display: grid; gap: 4px; border-top: 1px solid var(--rule); padding-top: 14px; max-width: 90ch; }
+.empty { color: var(--muted); font-style: italic; }
+@media (max-width: 520px) { h1 { font-size: 24px; } .stamp { text-align: left; } }
+@media (prefers-reduced-motion: no-preference) { .chip { transition: box-shadow 120ms, color 120ms; } }
+</style>
+
+<div class="page">
+  <header class="top">
+    <div>
+      <h1>Beverin Wave Board</h1>
+      <p class="sub">Every HPCAgent-Bench experiment arm on beverin: how many roster kernels already carry a judge row, which slurm jobs ran it, and what the next wave still owes.</p>
+    </div>
+    <div class="stamp">snapshot <b id="stamp"></b><br><span id="cluster"></span></div>
+  </header>
+
+  <div class="tally" id="tally"></div>
+
+  <div class="filters">
+    <fieldset id="f-status"><legend>Status</legend></fieldset>
+    <fieldset id="f-model"><legend>Model</legend></fieldset>
+    <fieldset id="f-device"><legend>Device</legend></fieldset>
+  </div>
+
+  <main id="board" style="display:grid;gap:30px"></main>
+
+  <div class="legend">
+    <div><span class="pill complete">complete</span> every roster kernel has a row in <code>submissions</code> or <code>attempts</code>, over the union of all waves.</div>
+    <div><span class="pill running">running</span> a job for the arm is running or queued. <span class="pill incomplete">incomplete</span> kernels are owed and nothing is queued: the next wave runs exactly that complement.</div>
+    <div><span class="pill void">void</span> the recorded rows measured a broken treatment and the whole roster is owed again.</div>
+    <div>Job chips: green COMPLETED, amber FAILED or TIMEOUT, struck-through CANCELLED. A kimi arm labelled FAILED with every agent finished is the rc 123-125 teardown, not a crash. Smoke arms have no roster.</div>
+  </div>
+</div>
+
+<script type="application/json" id="data">__STATUS_JSON__</script>
+<script>
+const DATA = JSON.parse(document.getElementById("data").textContent);
+const STATUSES = ["complete", "running", "incomplete", "void"];
+const MODEL_NAMES = { kimi27sglang: "Kimi-K2.7-Code", oss120b: "GPT-OSS-120B", qwen38: "Qwen3.8-27B", glm53: "GLM-5.3", "": "none" };
+const filters = { status: new Set(), model: new Set(), device: new Set() };
+
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (key === "class") node.className = value; else node.setAttribute(key, value);
+  }
+  for (const child of children) node.append(child);
+  return node;
+}
+
+function owed(arm) { return arm.roster ? arm.roster - arm.done : 0; }
+
+function experimentStatus(arms) {
+  if (arms.some(a => a.status === "running")) return "running";
+  if (arms.every(a => a.status === "complete")) return "complete";
+  if (arms.some(a => a.status === "void")) return "void";
+  return "incomplete";
+}
+
+function groups(arms) {
+  const byKey = new Map();
+  for (const arm of arms) {
+    const key = arm.experiment + "|" + arm.device;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(arm);
+  }
+  const order = [...byKey.entries()].map(([key, list]) => ({ key, list, status: experimentStatus(list) }));
+  const rank = { running: 0, incomplete: 1, void: 1, complete: 2 };
+  return order.sort((x, y) => rank[x.status] - rank[y.status] || x.key.localeCompare(y.key));
+}
+
+function renderTally() {
+  const tally = document.getElementById("tally");
+  const exps = groups(DATA.arms);
+  for (const status of STATUSES) {
+    const arms = DATA.arms.filter(a => a.status === status);
+    const expCount = exps.filter(g => g.status === status).length;
+    const kernels = arms.reduce((sum, a) => sum + owed(a), 0);
+    const detail = status === "complete" ? `${expCount} experiment groups fully done`
+      : status === "running" ? `${arms.reduce((s, a) => s + a.jobs.filter(j => j.state === "RUNNING" || j.state === "PENDING").length, 0)} jobs running or queued`
+      : `${kernels} roster kernels owed`;
+    tally.append(el("div", { class: "tile " + status },
+      el("span", { class: "l" }, status), el("span", { class: "n" }, String(arms.length)),
+      el("span", { class: "d" }, `arms, ${detail}`)));
+  }
+}
+
+function renderFilters() {
+  const options = {
+    status: STATUSES,
+    model: [...new Set(DATA.arms.map(a => a.model))].sort(),
+    device: [...new Set(DATA.arms.map(a => a.device))].sort(),
+  };
+  for (const [name, values] of Object.entries(options)) {
+    const box = document.getElementById("f-" + name);
+    for (const value of values) {
+      const label = name === "model" ? MODEL_NAMES[value] || value : value;
+      const chip = el("button", { class: "chip", type: "button", id: `chip-${name}-${value || "none"}`, "aria-pressed": "false" }, label);
+      chip.addEventListener("click", () => {
+        const on = !filters[name].has(value);
+        on ? filters[name].add(value) : filters[name].delete(value);
+        chip.setAttribute("aria-pressed", String(on));
+        renderBoard();
+      });
+      box.append(chip);
+    }
+  }
+}
+
+function strip(arm) {
+  const box = el("div", { class: "strip", role: "img", "aria-label": `${arm.done} of ${arm.roster} kernels` });
+  for (let i = 0; i < arm.roster; i++) box.append(el("i", { class: i < arm.done ? "on" : "" }));
+  return box;
+}
+
+function jobChips(arm) {
+  const box = el("div", { class: "jobs" });
+  for (const job of arm.jobs) {
+    const title = `${job.state}, ${job.nodes} node${job.nodes === 1 ? "" : "s"}, ${job.start} to ${job.end}`;
+    box.append(el("a", { class: "s-" + job.state, title, tabindex: "0" }, `${job.id} ${job.state.slice(0, 4).toLowerCase()}`));
+  }
+  if (!arm.jobs.length) box.append(el("span", { class: "empty" }, "no job found"));
+  return box;
+}
+
+function visible(arm) {
+  return (!filters.status.size || filters.status.has(arm.status))
+    && (!filters.model.size || filters.model.has(arm.model))
+    && (!filters.device.size || filters.device.has(arm.device));
+}
+
+function renderBoard() {
+  const board = document.getElementById("board");
+  board.replaceChildren();
+  for (const group of groups(DATA.arms)) {
+    const arms = group.list.filter(visible);
+    if (!arms.length) continue;
+    const first = group.list[0];
+    const done = group.list.reduce((s, a) => s + a.done, 0);
+    const roster = group.list.reduce((s, a) => s + a.roster, 0);
+    const owedTotal = group.list.reduce((s, a) => s + owed(a), 0);
+    const head = el("div", { class: "exp-head" },
+      el("h2", {}, first.experiment_name + (first.device === "GPU" && !/GPU/.test(first.experiment_name) ? ", GPU" : "")),
+      el("span", { class: "key" }, `${first.experiment} / ${first.device.toLowerCase()}`),
+      el("span", { class: "pill " + group.status }, group.status),
+      el("span", { class: "facts" }, roster ? `${group.list.length} arms, ${done}/${roster} kernel rows, ${owedTotal} owed` : `${group.list.length} arms, smoke (no roster)`));
+    const tbody = el("tbody");
+    for (const arm of arms.sort((x, y) => x.model.localeCompare(y.model) || x.variant.localeCompare(y.variant))) {
+      const armCell = el("td", { class: "arm" },
+        el("span", { class: "variant" }, arm.variant || "base"), " ", el("span", { class: "model" }, MODEL_NAMES[arm.model] || arm.model));
+      if (arm.void) armCell.append(el("div", { class: "note" }, arm.void));
+      const counts = el("td", { class: "num" }, arm.roster ? `${arm.done}/${arm.roster}` : "n/a");
+      if (owed(arm)) counts.append(" ", el("span", { class: "owed" }, `(${owed(arm)} owed)`));
+      tbody.append(el("tr", { class: arm.status },
+        armCell, el("td", {}, arm.roster ? strip(arm) : el("span", { class: "empty" }, "no roster")),
+        counts, el("td", {}, el("span", { class: "pill " + arm.status }, arm.status)), el("td", {}, jobChips(arm))));
+    }
+    const table = el("table", {},
+      el("thead", {}, el("tr", {}, el("th", {}, "Arm"), el("th", {}, "Kernel coverage"), el("th", {}, "Rows"), el("th", {}, "Status"), el("th", {}, "Slurm jobs"))),
+      tbody);
+    board.append(el("section", { class: "exp" }, head, el("div", { class: "table-wrap" }, table)));
+  }
+  if (!board.children.length) board.append(el("p", { class: "empty" }, "No arm matches these filters."));
+}
+
+document.getElementById("stamp").textContent = DATA.generated;
+document.getElementById("cluster").textContent = DATA.cluster;
+renderTally();
+renderFilters();
+renderBoard();
+</script>
