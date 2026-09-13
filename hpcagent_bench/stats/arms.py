@@ -141,7 +141,8 @@ def best_per_arm_kernel(subs: pd.DataFrame) -> pd.DataFrame:
         n_submissions=("speedup", "size"), median_speedup=("speedup", "median")
     )
     columns = ["arm", "baseline", "language", "benchmark", "speedup", "baseline_ns", "native_ns"]
-    columns += ["source_path", "suspect", "packet"]
+    # an observations file extracted before the packet column still reduces; arm_packet_map reads it as ""
+    columns += ["source_path", "suspect"] + [c for c in ("packet",) if c in best.columns]
     out = best[columns].rename(columns={"speedup": "best_speedup"}).merge(counts, on=["arm", "baseline", "benchmark"])
     return out.sort_values(["arm", "baseline", "benchmark"]).reset_index(drop=True)
 
