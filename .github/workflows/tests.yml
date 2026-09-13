@@ -148,7 +148,9 @@ env:
 #   port-fidelity           the DaCe frontend over the generated corpus         (MATRIX: 3 shards
 #                           of the corpus, HPCAGENT_BENCH_DACE_PARSE_SHARD)
 #   dace-numeric            the generated DaCe corpus vs numpy (a C++ build per kernel, -n 4)
-#   mpi                     the whole MPI/distributed track (descriptor + driver codegen + launch +
+#   dace-lowering           every level-3 DaCe port lowers to an SDFG           (MATRIX: 2 shards,
+#                           HPCAGENT_BENCH_DACE_PARSE_SHARD, -n 2)
+#   mpi                  the whole MPI/distributed track (descriptor + driver codegen + launch +
 #                           scoring + halo + sizing) on MPICH + a source-built mpi4py (ONLY MPI
 #                           build), plus port fidelity (cegterg as its own step) + benchmark
 #                           reference validation (gt4py) + torch agreement
@@ -2309,6 +2311,54 @@ jobs:
           path: .coverage*
           include-hidden-files: true
           if-no-files-found: ignore
+
+  # ===========================================================================================
+  # dace-lowering -- does every level-3 kernel's generated DaCe port still LOWER (to_sdfg with
+  # simplification)? Measured 2026-09-13 against dace extended 62ba39a, one port at a time on a dev
+  # box shared with other jobs: 104 ports, 370 s to emit, 3128 s to lower the 103 that finish
+  # (densenet121 slowest at 764 s), and densenet201 still in the frontend when a 3 GB cap killed it
+  # at 992 s. dace-numeric's step already runs 20-30 of its 38 minutes and port-fidelity's 27-31,
+  # so neither can take it: this is its own runner, and no compile means no ccache.
+  #
+  # Two shards, dealt by shard_of on port-fidelity's PARSE_COST weights. Those measured costs deal
+  # to 2479 s and 2520 s serial (emit + lower, densenet201 at its 1500 s cap). densenet201 is now
+  # DESELECTED (test_dace_port_lowering.DESELECTED) until its frontend parse time is fixed, so
+  # shard 0 no longer waits on that cap; shard 1 is ~21 min at -n 2; + ~3 emit + ~3 setup -> ~27.
+  # ===========================================================================================
+  dace-lowering:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
+    name: dace-lowering[${{ matrix.shard }}] (level-3 DaCe ports lower to an SDFG)
+    runs-on: ubuntu-latest
+    strategy:
+      # fail-fast: false -- one shard's regression must not cancel the other shard's verdict.
+      fail-fast: false
+      matrix:
+        shard: [0, 1]
+    # ~27 min projected worst shard (see above) + setup; the step caps at 38.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: ./.github/actions/setup
+
+      - name: Every level-3 DaCe port lowers, or fails the way LOWERING_REFUSED records
+        if: ${{ !cancelled() }}
+        # No coverage: the work is the dace frontend inside spawned children, which the coverage
+        # config does not measure. Emit ONCE before xdist forks (prewarm), so the workers' own
+        # emits are cache hits and never race. --timeout sits over LOWER_TIMEOUT_S (1500 s), so
+        # the child's own timeout reports a verdict first.
+        timeout-minutes: 38
+        env:
+          HPCAGENT_BENCH_DACE_PARSE_SHARD: "${{ matrix.shard }}/2"
+        run: |
+          python -c "from tests.test_dace_port_lowering import prewarm; \
+            print(prewarm(), 'dace ports ready')"
+          python -m pytest -p no:cacheprovider -rfEsxX -n 2 -v -m dace_lowering \
+            --maxfail=20 --timeout=1800 --timeout-method=thread tests/test_dace_port_lowering.py
 
   # ===========================================================================================
   # njit-oracle -- the numpy-vs-numba oracle comparison over the whole kernel registry.
