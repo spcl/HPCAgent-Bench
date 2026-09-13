@@ -109,6 +109,8 @@ ROCPROF_CAUSES = (
     "rocprof_report_missing",
     "no_kernels",
     "counters_unsupported",
+    "kernel_share_missing",
+    "timed_out",
 )
 
 
