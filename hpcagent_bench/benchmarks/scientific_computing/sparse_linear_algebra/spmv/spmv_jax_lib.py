@@ -1,5 +1,4 @@
 # Sparse Matrix-Vector Multiplication (SpMV)
-from __future__ import annotations
 from jax.experimental import sparse as jax_sparse
 import scipy
 

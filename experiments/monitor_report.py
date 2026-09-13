@@ -10,8 +10,6 @@ CSV format: a fixed 8-column header, optionally followed by per-GPU columns
 Both shapes are read header-driven -- old, 8-column files parse exactly as before.
 """
 
-from __future__ import annotations
-
 import argparse
 import csv
 import re

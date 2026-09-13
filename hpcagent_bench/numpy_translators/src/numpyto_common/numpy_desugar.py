@@ -14,7 +14,6 @@ parsed :class:`KernelIR` (declared arrays) plus a light local-allocation walk
 rank > 2) from an ordinary 2-D one (which numba / pythran handle).
 """
 
-from __future__ import annotations
 import ast
 import re
 import copy
@@ -31,7 +30,7 @@ from numpyto_common.subscripts import is_ellipsis, is_full_slice, is_newaxis
 #: Tuple-shape lengths currently known to :func:`expr_rank`. Set by
 # :func:`rank_table` while it is iterating so ``.reshape(name)`` can report the
 # tuple's actual rank instead of the rank-1 guess a bare Name gets.
-active_tuple_lengths: Optional[Dict[str, int]] = None
+active_tuple_lengths: Optional[Dict[str, Optional[int]]] = None
 
 
 class DesugarError(NotImplementedError):
@@ -396,8 +395,15 @@ def expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
             # ndim 0. The single-arg spelling stays restricted: a lone Name may hold the whole
             # shape TUPLE, which is a rank this cannot count.
             n = _tuple_len(value.args[0])
-            if n is None and len(value.args) == 1 and isinstance(value.args[0], ast.Name):
-                n = (active_tuple_lengths or {}).get(value.args[0].id)
+            lengths = active_tuple_lengths or {}
+            if (
+                n is None
+                and len(value.args) == 1
+                and isinstance(value.args[0], ast.Name)
+                and value.args[0].id in lengths
+            ):
+                # A shape tuple whose length is not known yet has no rank to report: 1 would be a guess.
+                return lengths[value.args[0].id]
             if n is None and (len(value.args) > 1 or isinstance(value.args[0], (ast.Name, ast.Constant))):
                 n = len(value.args)
             if n is not None:
@@ -667,8 +673,8 @@ def _tuple_expr_len(
         visited = set()
     if isinstance(value, (ast.Tuple, ast.List)):
         return len(value.elts)
-    if isinstance(value, ast.Attribute) and value.attr == "shape" and isinstance(value.value, ast.Name):
-        return ranks.get(value.value.id)
+    if isinstance(value, ast.Attribute) and value.attr == "shape":
+        return expr_rank(value.value, ranks)
     if isinstance(value, ast.Name) and value.id not in visited:
         visited.add(value.id)
         bound = assigns.get(value.id)
@@ -697,7 +703,7 @@ def _tuple_expr_len(
 
 def _build_tuple_lengths(
     tree: ast.AST, ranks: Dict[str, int], seed_ranks: Optional[Dict[str, int]] = None
-) -> Dict[str, int]:
+) -> Dict[str, Optional[int]]:
     """Map each local bound to a statically-known tuple shape to its length.
 
     Used by :func:`expr_rank` while ``rank_table`` is iterating, so
@@ -735,14 +741,35 @@ def tuple_lengths(
     first_values: dict[str, ast.expr],
     ranks: dict[str, int],
     seed_ranks: dict[str, int] | None,
-) -> dict[str, int]:
-    """Each bound name whose value is a tuple of statically known length, with that length."""
-    lengths: dict[str, int] = {}
+) -> dict[str, int | None]:
+    """Each bound name whose value is a tuple form, with its length when statically known, else None."""
+    lengths: dict[str, int | None] = {}
     for name, value in bindings:
         length = _tuple_expr_len(value, ranks, first_values, seed_ranks=seed_ranks)
         if length is not None:
             lengths[name] = length
+        elif tuple_valued(value, first_values):
+            lengths.setdefault(name, None)
     return lengths
+
+
+def tuple_valued(value: ast.AST, assigns: Dict[str, ast.expr], visited: FrozenSet[str] = frozenset()) -> bool:
+    """True iff ``value`` is one of the tuple forms :func:`_tuple_expr_len` sizes, whether or not its
+    length is known yet.
+
+    ls3df_scf's ``shp = Y.shape`` is a tuple before ``Y`` has a rank. Counted as one dimension,
+    ``reshape(shp)`` made ``Y`` rank 1 through the CheFSI cycle, and ``X.shape[-1]`` became ``X.shape[0]``.
+    """
+    if isinstance(value, (ast.Tuple, ast.List)):
+        return True
+    if isinstance(value, ast.Attribute):
+        return value.attr == "shape"
+    if isinstance(value, ast.Name):
+        bound = assigns.get(value.id)
+        return bound is not None and value.id not in visited and tuple_valued(bound, assigns, visited | {value.id})
+    if isinstance(value, ast.BinOp) and isinstance(value.op, (ast.Add, ast.Mult)):
+        return tuple_valued(value.left, assigns, visited) or tuple_valued(value.right, assigns, visited)
+    return False
 
 
 def _dtype_kind(value: ast.AST, dtypes: Dict[str, str]) -> Optional[str]:
@@ -5334,6 +5361,51 @@ def _ix_vectors(node: ast.AST) -> Optional[List[ast.expr]]:
     return None
 
 
+def ix_unpack_scatters(fn: ast.AST) -> Dict[int, List[ast.expr]]:
+    """``id`` of each store target ``A[g0, g1, ..]`` whose indices are, in order, the names one
+    ``g0, g1, .. = np.ix_(v0, v1, ..)`` bound earlier in the same block -> that call's vectors.
+
+    The unpacked grids select the same open mesh as ``A[np.ix_(v0, v1, ..)]``; ls3df_scf scatters its
+    fragment density through them, and dace refuses a store through rank-3 index arrays. The vectors
+    read at the store are that selection only while nothing in between rebinds a grid or a name a
+    vector reads, so the first statement storing one ends the search.
+    """
+    found: Dict[int, List[ast.expr]] = {}
+    for parent in ast.walk(fn):
+        for field in ("body", "orelse", "finalbody"):
+            block = vars(parent).get(field)
+            if not isinstance(block, list):
+                continue
+            for index, stmt in enumerate(block):
+                if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1):
+                    continue
+                unpack = stmt.targets[0]
+                vecs = _ix_vectors(stmt.value)
+                if vecs is None or not isinstance(unpack, ast.Tuple) or len(unpack.elts) != len(vecs):
+                    continue
+                grids = [e.id for e in unpack.elts if isinstance(e, ast.Name)]
+                if len(grids) != len(vecs):
+                    continue
+                watched = set(grids) | {n.id for v in vecs for n in ast.walk(v) if isinstance(n, ast.Name)}
+                for later in block[index + 1 :]:
+                    if any(
+                        isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store) and n.id in watched
+                        for n in ast.walk(later)
+                    ):
+                        break
+                    for node in ast.walk(later):
+                        stores = node.targets if isinstance(node, ast.Assign) else []
+                        stores = [node.target] if isinstance(node, ast.AugAssign) else stores
+                        for target in stores:
+                            if (
+                                isinstance(target, ast.Subscript)
+                                and isinstance(target.slice, ast.Tuple)
+                                and [e.id if isinstance(e, ast.Name) else None for e in target.slice.elts] == grids
+                            ):
+                                found[id(target)] = vecs
+    return found
+
+
 #: augmented-assignment op -> its source spelling (the scatter loop is emitted as text).
 _AUG_OP_SRC = {
     ast.Add: "+=",
@@ -5432,7 +5504,7 @@ class _SubstituteName(ast.NodeTransformer):
         return copy.deepcopy(self.repl) if node.id == self.name else node
 
 
-class _IxWriteToLoop(ast.NodeTransformer):
+class IxWriteToLoop(ast.NodeTransformer):
     """``A[np.ix_(i, j, k)] = / += rhs`` -> an explicit loop nest over the index
     vectors. ``np.ix_`` selects the OUTER PRODUCT of its vectors -- element
     ``(p, q, r)`` of the selection is ``A[i[p], j[q], k[r]]``, never the zip-style
@@ -5449,16 +5521,21 @@ class _IxWriteToLoop(ast.NodeTransformer):
     numpy's gather-add-scatter applies the update once -- undetectable statically,
     and no kernel builds an ``ix_`` grid with duplicates."""
 
-    def __init__(self, ranks: Dict[str, int], dtypes: Dict[str, str]) -> None:
+    def __init__(self, ranks: Dict[str, int], dtypes: Dict[str, str], fn: ast.AST) -> None:
         self.ranks = ranks
         self.dtypes = dtypes
         self.changed = False
         self._ctr = 0
+        self.fn = fn
+        self.unpacked: Optional[Dict[int, List[ast.expr]]] = None
 
     def _lower(self, node: ast.stmt, target: ast.expr, op: str) -> ast.AST:
         if not (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)):
             return node
-        vecs = _ix_vectors(target.slice)
+        # Built on first use: every pass ahead of this one has already rewritten the whole body.
+        if self.unpacked is None:
+            self.unpacked = ix_unpack_scatters(self.fn)
+        vecs = _ix_vectors(target.slice) or self.unpacked.get(id(target))
         if vecs is None or self.ranks.get(target.value.id) != len(vecs):
             return node
         if any(_dtype_kind(v, self.dtypes) == "bool" for v in vecs):
@@ -6264,7 +6341,7 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
             # const folds, whose "bound exactly once" table the clones would otherwise stale.
             _BoolOpIfToChain(),
             _NormalizeNegativeAxis(ranks),
-            _IxWriteToLoop(ranks, dtypes),
+            IxWriteToLoop(ranks, dtypes, fn),
             _FancySliceStoreToLoop(ranks, dtypes),
             _EighInline(ranks, eigh_aliases, dtypes, kir_array_dtypes),
             LinalgInline(ranks, dtypes, lower_linalg, lower_solve_rhs_ranks),

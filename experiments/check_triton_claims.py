@@ -8,8 +8,6 @@ act on: wave width, the two num_stages defaults, the cluster error, fp8 type nam
 small tl.dot is really tolerated. A claim that no longer holds is a page edit.
 """
 
-from __future__ import annotations
-
 import json
 import pathlib
 import sys

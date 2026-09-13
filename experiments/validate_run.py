@@ -16,8 +16,6 @@ agents/, no monitor/) fails that one check with a message; it never raises.
 - monitor: every ``monitor/*.csv`` parses (via ``monitor_report.compute_node_stats``) with >= 1 sample.
 """
 
-from __future__ import annotations
-
 import argparse
 import dataclasses
 import pathlib

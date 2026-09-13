@@ -31,7 +31,6 @@ inside the width, so they cannot either. Only their sub-expressions can overflow
 which the recursion already covers.
 """
 
-from __future__ import annotations
 import ast
 from typing import Callable
 

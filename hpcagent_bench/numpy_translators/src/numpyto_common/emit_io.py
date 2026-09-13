@@ -13,8 +13,6 @@ refreshes it but never clobbers an override. To turn a generated file into
 an override, delete the marker line (or replace the file).
 """
 
-from __future__ import annotations
-
 import pathlib
 from typing import Union
 

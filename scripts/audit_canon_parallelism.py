@@ -31,8 +31,6 @@ Usage:  python3 scripts/audit_canon_parallelism.py [--kernels a,b,c] [--pipeline
                                                    [--out audit.csv] [--limit N]
 """
 
-from __future__ import annotations
-
 import argparse
 import copy
 import csv

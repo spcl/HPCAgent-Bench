@@ -1,6 +1,5 @@
 """CPU TVM impl of the ResNet-50 bottleneck residual block (inference)."""
 
-from __future__ import annotations
 import tvm
 from tvm import te
 

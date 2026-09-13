@@ -12,6 +12,7 @@ import ast
 import builtins
 import pathlib
 import re
+import subprocess
 from collections.abc import Callable
 
 import pytest
@@ -50,6 +51,13 @@ def sources() -> list[pathlib.Path]:
     return [p for p in sorted(root.rglob("*.py")) if not p.name.endswith("_generated.py")]
 
 
+def repo_sources() -> list[pathlib.Path]:
+    """Every tracked hand-written module: the package plus the drivers, tools and tests beside it."""
+    root = paths.BENCHMARKS.parent.parent
+    listed = subprocess.run(["git", "ls-files", "-z", "*.py"], cwd=root, capture_output=True, text=True, check=True)
+    return [root / p for p in listed.stdout.split("\0") if p and not p.endswith("_generated.py")]
+
+
 def too_new_typing_names(source: str) -> list[str]:
     """`from typing import X` or `typing.X` for an X above the floor, outside a `try` that falls back."""
     found: list[str] = []
@@ -71,6 +79,13 @@ def too_new_typing_names(source: str) -> list[str]:
     return found
 
 
+def is_type_checking(test: ast.expr) -> bool:
+    """`if TYPE_CHECKING:` -- a block that binds nothing when the module runs."""
+    return (isinstance(test, ast.Name) and test.id == "TYPE_CHECKING") or (
+        isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
+    )
+
+
 def bindings(stmt: ast.stmt) -> set[str]:
     """Names a statement binds in the scope it runs in; a def or class body binds in its own."""
     names: set[str] = set()
@@ -79,6 +94,9 @@ def bindings(stmt: ast.stmt) -> set[str]:
         node = stack.pop()
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             names.add(node.name)
+            continue
+        if isinstance(node, ast.If) and is_type_checking(node.test):
+            stack.extend(node.orelse)
             continue
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             names.update((alias.asname or alias.name).partition(".")[0] for alias in node.names)
@@ -92,6 +110,8 @@ def bindings(stmt: ast.stmt) -> set[str]:
 
 def blocks(stmt: ast.stmt) -> list[list[ast.stmt]]:
     """The statement lists that run in the same scope as `stmt`."""
+    if isinstance(stmt, ast.If) and is_type_checking(stmt.test):
+        return [stmt.orelse]
     if isinstance(stmt, (ast.If, ast.For, ast.AsyncFor, ast.While)):
         return [stmt.body, stmt.orelse]
     if isinstance(stmt, (ast.With, ast.AsyncWith)):
@@ -112,45 +132,59 @@ def annotations_of(stmt: ast.stmt) -> list[ast.expr]:
     return []
 
 
-def annotation_faults(annotation: ast.expr, bound: set[str], starred: bool) -> list[str]:
+def string_aliases(source: str) -> frozenset[str]:
+    """Names bound as `X: TypeAlias = "..."`, which are a str at runtime."""
+    return frozenset(
+        stmt.target.id
+        for stmt in ast.parse(source).body
+        if isinstance(stmt, ast.AnnAssign)
+        and isinstance(stmt.target, ast.Name)
+        and isinstance(stmt.value, ast.Constant)
+        and isinstance(stmt.value.value, str)
+        and "TypeAlias" in ast.unparse(stmt.annotation)
+    )
+
+
+def is_runtime_str(node: ast.expr, aliases: frozenset[str]) -> bool:
+    """A string literal, or a name spelled as a string TypeAlias."""
+    return (isinstance(node, ast.Constant) and isinstance(node.value, str)) or (
+        isinstance(node, ast.Name) and node.id in aliases
+    )
+
+
+def annotation_faults(annotation: ast.expr, bound: set[str], starred: bool, aliases: frozenset[str]) -> list[str]:
     """What evaluating `annotation` raises when only `bound` names exist yet."""
     faults: list[str] = []
     for node in ast.walk(annotation):
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
-            if any(isinstance(side, ast.Constant) and isinstance(side.value, str) for side in (node.left, node.right)):
+            if any(is_runtime_str(side, aliases) for side in (node.left, node.right)):
                 faults.append(f"{node.lineno}: a string joined with | is a TypeError")
+        elif isinstance(node, ast.Subscript) and is_runtime_str(node.value, aliases):
+            faults.append(f"{node.lineno}: a string subscripted is a TypeError")
         elif isinstance(node, ast.Name) and not starred and node.id not in bound:
             faults.append(f"{node.lineno}: {node.id} is not bound yet, a NameError")
     return faults
 
 
-def scope_faults(body: list[ast.stmt], bound: set[str], starred: bool) -> list[str]:
+def scope_faults(body: list[ast.stmt], bound: set[str], starred: bool, aliases: frozenset[str]) -> list[str]:
     """Walk one scope in execution order, checking each eager annotation against what is bound."""
     faults: list[str] = []
     for stmt in body:
         for annotation in annotations_of(stmt):
-            faults.extend(annotation_faults(annotation, bound, starred))
+            faults.extend(annotation_faults(annotation, bound, starred, aliases))
         if isinstance(stmt, ast.ClassDef):
-            faults.extend(scope_faults(stmt.body, set(bound), starred))
+            faults.extend(scope_faults(stmt.body, set(bound), starred, aliases))
         for block in blocks(stmt):
-            faults.extend(scope_faults(block, set(bound), starred))
+            faults.extend(scope_faults(block, set(bound), starred, aliases))
         bound.update(bindings(stmt))
     return faults
 
 
-def eager_annotation_faults(source: str) -> list[str]:
+def eager_annotation_faults(source: str, imported: frozenset[str] = frozenset()) -> list[str]:
     """Import-time annotation failures on the floor, which evaluates annotations when defined."""
     tree = ast.parse(source)
-    postponed = any(
-        isinstance(stmt, ast.ImportFrom)
-        and stmt.module == "__future__"
-        and any(a.name == "annotations" for a in stmt.names)
-        for stmt in tree.body
-    )
-    if postponed:
-        return []
     starred = any(isinstance(n, ast.ImportFrom) and any(a.name == "*" for a in n.names) for n in ast.walk(tree))
-    return scope_faults(tree.body, set(dir(builtins)), starred)
+    return scope_faults(tree.body, set(dir(builtins)), starred, imported | string_aliases(source))
 
 
 #: Defects that reached a py3.12 judge while the venv imported them clean, each with its verdict.
@@ -164,9 +198,24 @@ FLOOR_DEFECTS = (
     ("_OVERRIDES: dict[str, ConfigValue] = {}\nConfigValue = bool | int | str | None\n", eager_annotation_faults, True),
     ("def lookup(key: str) -> 'Entry' | None:\n    return None\n", eager_annotation_faults, True),
     (
-        "from __future__ import annotations\n_OVERRIDES: dict[str, ConfigValue] = {}\nConfigValue = int\n",
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import pandas as pd\ndef rows(f: pd.DataFrame) -> None: ...\n",
+        eager_annotation_faults,
+        True,
+    ),
+    (
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import pandas as pd\ndef rows(f: 'pd.DataFrame') -> None: ...\n",
         eager_annotation_faults,
         False,
+    ),
+    (
+        'from typing import TypeAlias\nValue: TypeAlias = "int | list[Value]"\ndef first(v: Value) -> Value | None: ...\n',
+        eager_annotation_faults,
+        True,
+    ),
+    (
+        'from typing import TypeAlias, TypeVar\nT = TypeVar("T")\nBox: TypeAlias = "list[T]"\ndef first(b: Box[T]) -> None: ...\n',
+        eager_annotation_faults,
+        True,
     ),
     ("ConfigValue = int\n_OVERRIDES: dict[str, ConfigValue] = {}\n", eager_annotation_faults, False),
 )
@@ -212,29 +261,6 @@ def test_every_module_actually_compiles():
     assert broken == [], broken
 
 
-def test_the_numba_emitter_keeps_its_output_importable():
-    """The emitter prepends a banner, imports and a warnings call above the reference it copies, so
-    a reference carrying a future import would push that import past the start of the file -- where
-    it is a SyntaxError on first import, and where ast.parse still calls it clean."""
-    import sys
-
-    sys.path.insert(0, str(paths.BENCHMARKS.parent / "numpy_translators" / "src"))
-    from numpyto_numba.emit import emit_numba
-
-    source = (
-        "from __future__ import annotations\n"
-        '"""A reference that carries a future import."""\n'
-        "import numpy as np\n"
-        "\n"
-        "def kernel(a: np.ndarray) -> np.ndarray:\n"
-        "    for i in range(a.shape[0]):\n"
-        "        a[i] = a[i] + 1\n"
-        "    return a\n"
-    )
-    emitted = emit_numba(source)
-    compile(emitted, "emitted.py", "exec", dont_inherit=True)
-
-
 def test_no_typing_name_newer_than_the_interpreter_floor() -> None:
     """`from typing import TypeIs` parses and compiles on every version, so neither check above sees
     it; on the floor it is an ImportError in every grading child the judge forks."""
@@ -245,14 +271,38 @@ def test_no_typing_name_newer_than_the_interpreter_floor() -> None:
 def test_no_annotation_the_floor_evaluates_at_import_can_raise() -> None:
     """The venv defers annotations, the floor evaluates them where they are defined: a forward name or
     a string joined with `|` imports clean in the suite and kills the judge's imports."""
-    hits = [f"{path}:{hit}" for path in sources() for hit in eager_annotation_faults(path.read_text())]
+    modules = {path: path.read_text() for path in repo_sources()}
+    aliases = frozenset().union(*(string_aliases(text) for text in modules.values()))
+    hits = [f"{path}:{hit}" for path, text in modules.items() for hit in eager_annotation_faults(text, aliases)]
+    assert hits == [], hits
+
+
+def test_no_module_postpones_annotations() -> None:
+    """On the 3.12 floor a future import buys nothing but a second annotation semantics: it hides the
+    forward name the check above exists to catch, and an emitter that prepends a header to a
+    reference carrying one turns it into a SyntaxError."""
+    hits = [
+        str(path)
+        for path in repo_sources()
+        if any(isinstance(n, ast.ImportFrom) and n.module == "__future__" for n in ast.parse(path.read_text()).body)
+    ]
     assert hits == [], hits
 
 
 @pytest.mark.parametrize(
     "source, rule, flagged",
     FLOOR_DEFECTS,
-    ids=["typeis", "typeis-guarded", "forward-name", "string-union", "postponed", "bound-first"],
+    ids=[
+        "typeis",
+        "typeis-guarded",
+        "forward-name",
+        "string-union",
+        "type-checking-only",
+        "type-checking-quoted",
+        "string-alias-union",
+        "string-alias-subscript",
+        "bound-first",
+    ],
 )
 def test_the_floor_rules_flag_the_defects_that_reached_a_judge(
     source: str, rule: "Callable[[str], list[str]]", flagged: bool

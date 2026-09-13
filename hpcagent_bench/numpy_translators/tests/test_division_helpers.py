@@ -14,7 +14,6 @@ holds only for a positive divisor), so it is verified here directly rather than 
 unexercised.
 """
 
-from __future__ import annotations
 import math
 
 import pytest

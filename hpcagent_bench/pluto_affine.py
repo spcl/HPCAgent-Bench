@@ -17,8 +17,6 @@ MEASURED to do wrong, and of the standing caveats that make a green polycc run m
 looks. Both are consumed the same way: import from here, never restate.
 """
 
-from __future__ import annotations
-
 import re
 from dataclasses import dataclass
 from typing import Dict, Optional

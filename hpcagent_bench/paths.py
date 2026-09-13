@@ -8,7 +8,6 @@ was triplicated across :mod:`hpcagent_bench.frameworks.benchmark`,
 :mod:`hpcagent_bench.frameworks.framework`, and the top-level
 ``run_*.py`` drivers. Consolidate here so a layout change touches one file."""
 
-from __future__ import annotations
 import os
 import pathlib
 

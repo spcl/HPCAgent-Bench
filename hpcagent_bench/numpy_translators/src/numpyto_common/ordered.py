@@ -21,7 +21,6 @@ a symbol list), ``sorted()`` at the point of emission is the stronger answer and
 directly there; this type is for the cases that must keep source order.
 """
 
-from __future__ import annotations
 from typing import Generic, Iterable, Iterator, TypeVar
 
 T = TypeVar("T")

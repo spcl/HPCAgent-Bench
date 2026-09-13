@@ -1,7 +1,5 @@
 """Poll cluster services, shard problems, and run several isolated agents."""
 
-from __future__ import annotations
-
 import concurrent.futures
 import functools
 import importlib.util
@@ -1397,7 +1395,7 @@ def crashed(returncode: int, log_path: pathlib.Path) -> bool:
     return closing_crashed(returncode, transcript_closing(log_path))
 
 
-def closing_crashed(returncode: int, closing: Closing) -> bool:
+def closing_crashed(returncode: int, closing: "Closing") -> bool:
     """:func:`crashed` for any harness, read off the record the attempt closed with."""
     if returncode in (RC_TIMEOUT, RC_TOKEN_BUDGET, RC_CONTEXT, RC_SUBMITTED):
         return False
@@ -1422,11 +1420,6 @@ class ResultEvent(NamedTuple):
     CLI closes a run that hit the served context window, and one whose request outlived the client
     timeout, with subtype ``success``, marking each only with ``is_error`` and a phrase in the
     result text.
-
-    A NamedTuple and not a dataclass because this file is also loaded through a spec loader that
-    leaves it out of ``sys.modules``: the dataclass machinery resolves the string annotations this
-    module's ``from __future__ import annotations`` produces through ``sys.modules[__module__]``,
-    which is None under that loader and raises before the module finishes executing.
     """
 
     subtype: str
@@ -1502,7 +1495,7 @@ def api_timeout(log_path: pathlib.Path) -> bool:
     return event is not None and event.is_error and API_TIMEOUT_MARK in event.text
 
 
-def transcript_closing(log_path: pathlib.Path) -> Closing:
+def transcript_closing(log_path: pathlib.Path) -> "Closing":
     """claude's transcript as a :class:`~harnesses.Closing`, read off its closing ``result`` event."""
     subtype, turns = final_result(log_path)
     return harness_module().Closing(
@@ -1514,7 +1507,7 @@ def transcript_closing(log_path: pathlib.Path) -> Closing:
     )
 
 
-def claude_closing(workdir: pathlib.Path) -> Closing:
+def claude_closing(workdir: pathlib.Path) -> "Closing":
     return transcript_closing(workdir / "claude.log")
 
 
@@ -1632,7 +1625,7 @@ def harness_module() -> ModuleType:
     return harnesses
 
 
-def harness_spec(name: str) -> Harness:
+def harness_spec(name: str) -> "Harness":
     """The spec for ``name``: claude's is built from this file's own functions, a runner's is in
     ``harnesses.py``."""
     harnesses = harness_module()
@@ -1651,7 +1644,7 @@ def harness_spec(name: str) -> Harness:
     )
 
 
-def claude_command(context: Context) -> list[str]:
+def claude_command(context: "Context") -> list[str]:
     """The claude CLI invocation for one agent. Built per attempt; nothing in it changes between them."""
     prompt = context.prompt
     mcp_config = context.mcp_config
@@ -1718,7 +1711,7 @@ def claude_command(context: Context) -> list[str]:
     return command
 
 
-def claude_env(context: Context, base: dict[str, str]) -> dict[str, str]:
+def claude_env(context: "Context", base: dict[str, str]) -> dict[str, str]:
     """The shared environment plus the two variables only claude reads."""
     environment = dict(base)
     # Direct mode (default): claude speaks vLLM's native /v1/messages; agents stripe over the

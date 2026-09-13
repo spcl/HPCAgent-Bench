@@ -9,7 +9,6 @@ Python (a stencil has no high-level TOPI op, so ``te.compute`` is the right
 primitive).
 """
 
-from __future__ import annotations
 import tvm
 from tvm import te
 

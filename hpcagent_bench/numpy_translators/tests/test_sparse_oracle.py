@@ -11,7 +11,6 @@ edit here. Each kernel runs under several seeds to shake out
 density/structure-dependent bugs.
 """
 
-from __future__ import annotations
 import pathlib
 import sys
 

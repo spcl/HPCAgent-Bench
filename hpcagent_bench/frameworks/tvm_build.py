@@ -4,7 +4,6 @@
 """Shared TVM build/tune plumbing (target construction, the tune_tir/compile_tir/tvm.compile autotuning
 pipeline, a shape-keyed compile cache, output allocation) so a per-kernel file is just TIR + entry point."""
 
-from __future__ import annotations
 import os
 import tempfile
 from typing import Callable

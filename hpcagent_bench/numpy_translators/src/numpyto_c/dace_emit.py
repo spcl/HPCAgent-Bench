@@ -1,6 +1,5 @@
 """Emit a DaCe @dc.program from the canonical numpy reference, sharing IR/classification with the C/Fortran emitters."""
 
-from __future__ import annotations
 import ast
 import copy
 import dataclasses
@@ -1195,7 +1194,7 @@ class PointwiseScatterToLoop(ast.NodeTransformer):
     a slice or an Ellipsis among the indices is a mixed basic/advanced selection whose result axes
     are not the zip, and a rank>=2 index selects a grid. A repeated value inside one index vector
     ACCUMULATES here where numpy's gather-add-scatter applies the update once -- the same caveat
-    :class:`numpyto_common.numpy_desugar._IxWriteToLoop` carries, and undetectable statically.
+    :class:`numpyto_common.numpy_desugar.IxWriteToLoop` carries, and undetectable statically.
     """
 
     def __init__(self, ranks: Dict[str, int]) -> None:
@@ -1567,9 +1566,14 @@ def inplace_update_targets(fn: ast.FunctionDef) -> Set[int]:
     }
 
 
-def version_rebound_views(fn: ast.FunctionDef) -> List[str]:
-    """Give each rebinding of a view name its own name. Returns the names it DECLINED."""
-    return version_rebound_names(fn, view_slice_binding)
+def version_rebound_views(fn: ast.FunctionDef, symbols: FrozenSet[str] = frozenset()) -> List[str]:
+    """Give each rebinding of a view name its own name. Returns the names it DECLINED.
+
+    Both View spellings count. ls3df_scf's inlined CheFSI binds ``X = <reshaped block>`` and swaps
+    ``X, Y = Y, Ynew`` in the loop: every binding of ``X`` is a bare alias, and dace refused the
+    loop's one (``Cannot reassign View``) because only a slice binding was considered here.
+    """
+    return version_rebound_names(fn, lambda stmt: view_binding(stmt, symbols))
 
 
 def version_reallocations(fn: ast.FunctionDef) -> None:
@@ -1587,6 +1591,21 @@ def version_reallocations(fn: ast.FunctionDef) -> None:
             if name is not None and isinstance(stmt, ast.Assign):
                 spellings.setdefault(name, set()).add(ast.unparse(stmt.value))
     version_rebound_names(fn, allocation_binding, {n for n, texts in spellings.items() if len(texts) > 1})
+
+
+def binds_a_view(node: ast.stmt) -> bool:
+    """``name = <expr>[...]`` whose subscript keeps a dimension, over any base: the View dace refuses to
+    rebind. A chained ``a[f][..., 0]`` counts, which :func:`view_slice_binding` does not name; a bare
+    ``name = other`` does not, since without the symbol table ``edge = N`` may read a dc.symbol."""
+    if not (isinstance(node, ast.Assign) and isinstance(node.value, ast.Subscript)):
+        return False
+    index = node.value.slice
+    elements = index.elts if isinstance(index, ast.Tuple) else [index]
+    return any(
+        isinstance(element, (ast.Slice, ast.Starred))
+        or (isinstance(element, ast.Constant) and element.value is Ellipsis)
+        for element in elements
+    )
 
 
 def version_rebound_names(
@@ -1619,6 +1638,12 @@ def version_rebound_names(
     as a foreign store instead declined every accumulator that is later reshaped, which is the shape
     conv_depthwise_2d_square_input_asymmetric_kernel's ``out = out.reshape(..)`` asks dace to give
     one descriptor.
+
+    A nested value binding is not declined when an OUTER binding of the name is a view and there are
+    two or more outer bindings: it is part of the live range of the outer region enclosing it, and
+    renames with that region. ls3df_scf binds ``v`` to a view, rebinds it to ``v / norm``, then
+    updates it in a loop; declining the whole name for the loop left the View and the value under
+    one name, which dace refuses. A name bound only to values keeps its name: dace rebinds those.
     """
     declined: List[str] = []
     blocks = statement_lists(fn)
@@ -1641,9 +1666,23 @@ def version_rebound_names(
             declined.append(name)
             continue  # something else writes the name; its value is no longer just these bindings
         reached = [{id(node) for stmt in owned for node in ast.walk(stmt)} for _, owned in regions]
-        if any(id(binding) in nodes for binding, _ in regions for nodes in reached):
-            declined.append(name)
-            continue  # a binding NESTED in another's extent: the reads after it belong to both
+        nested = {
+            id(binding) for binding, owned_statements in regions if any(id(binding) in nodes for nodes in reached)
+        }
+        if nested:
+            # A nested value binding belongs to the one outer region enclosing it and renames with it.
+            # Only done to separate a View from the values bound after it: dace rebinds a value name.
+            outer = [index for index, (binding, owned_statements) in enumerate(regions) if id(binding) not in nested]
+            if (
+                len(outer) < 2
+                or not any(binds_a_view(regions[index][0]) for index in outer)
+                or any(view_binding(binding) for binding, owned_statements in regions if id(binding) in nested)
+                or any(sum(key in reached[index] for index in outer) != 1 for key in nested)
+            ):
+                declined.append(name)
+                continue  # a binding NESTED in another's extent: the reads after it belong to both
+            regions = [regions[index] for index in outer]
+            reached = [reached[index] for index in outer]
         touches = [node for node in loads.get(name, []) + stores.get(name, []) if id(node) not in bound_here]
         if any(sum(id(touch) in nodes for nodes in reached) != 1 for touch in touches):
             declined.append(name)
@@ -1659,11 +1698,7 @@ def version_rebound_names(
                 bound.id = renamed
             for stmt in owned:
                 for node in ast.walk(stmt):
-                    if (
-                        isinstance(node, ast.Name)
-                        and node.id == name
-                        and (isinstance(node.ctx, ast.Load) or id(node) in updates)
-                    ):
+                    if isinstance(node, ast.Name) and node.id == name:
                         node.id = renamed
     return declined
 
@@ -2562,21 +2597,34 @@ def _shape_ident_candidates(fn_ast: ast.FunctionDef, known: Set[str]) -> Set[str
 def _scan_size_assigns(
     fn_ast: ast.FunctionDef, targets: Set[str]
 ) -> Tuple[Dict[str, ast.expr], List[str], OrderedSet[str]]:
-    """For each name in targets: its first (defining) RHS, def order, and which names are reassigned."""
+    """For each name in targets: its first (defining) RHS, def order, and which names are reassigned.
+
+    Only a name whose every store is a plain ``name = ...`` has a definition. One also stored as a
+    counter, a loop target or a tuple target (``n += 1``) holds a path-dependent value and is left out:
+    inlined as its first value, or promoted to a symbol bound to it, every read after the update is wrong.
+    """
     first_rhs: Dict[str, ast.expr] = {}
     order: List[str] = []
     counts: Dict[str, int] = {}
+    plain: set[int] = set()
+    mutated: set[str] = set()
     for node in ast.walk(fn_ast):
         if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
             nm = node.targets[0].id
+            plain.add(id(node.targets[0]))
             if nm in targets:
                 counts[nm] = counts.get(nm, 0) + 1
                 if nm not in first_rhs:
                     first_rhs[nm] = node.value
                     order.append(nm)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store) and node.id in targets:
+            if id(node) not in plain:
+                mutated.add(node.id)
+    order = [nm for nm in order if nm not in mutated]
+    first_rhs = {nm: first_rhs[nm] for nm in order}
     # Ordered: the caller PREPENDS one ``<nm>_iter = <nm>`` statement per reassigned name to the
     # emitted body, so this order is statement order in the generated program.
-    reassigned = OrderedSet(nm for nm, c in counts.items() if c > 1)
+    reassigned = OrderedSet(nm for nm, c in counts.items() if c > 1 and nm not in mutated)
     return first_rhs, order, reassigned
 
 
@@ -3913,7 +3961,7 @@ def render_program(
     # descriptor also cannot hold two shapes, so a re-allocation gets its own name too.
     symbol_set = frozenset(symbol_names)
     copy_view_bindings(fn_ast, mixed_view_names(fn_ast, symbol_set), symbol_set)
-    copy_view_bindings(fn_ast, set(version_rebound_views(fn_ast)), symbol_set)
+    copy_view_bindings(fn_ast, set(version_rebound_views(fn_ast, symbol_set)), symbol_set)
     copy_view_bindings(fn_ast, views_of_written_bases(fn_ast), symbol_set)
     version_reallocations(fn_ast)
     # Widest last: a name bound to a computed value in two arms of a branch is one descriptor dace

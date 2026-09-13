@@ -14,8 +14,7 @@ Flags, by AST inspection:
    read-only uses are never flagged.
 3. Import patterns: a redundant self-alias (``import x as x`` or
    ``from m import x as x``), any import alias starting with ``_``, and
-   ``from m import _name`` with no alias. ``from __future__ import ...`` is
-   always allowed.
+   ``from m import _name`` with no alias.
 
 Two modes. ``--diff [REF]`` (the default, used by pre-commit) reports only
 violations on lines added relative to the git index (``git diff --cached``) or
@@ -30,8 +29,6 @@ Output: ``path:line:col: NAMEnnn message``, one per violation, sorted by
 position; exit 1 when any violation is reported. Non-``.py`` arguments are
 skipped, so it accepts file lists the way pre-commit passes them.
 """
-
-from __future__ import annotations
 
 import argparse
 import ast
@@ -113,8 +110,6 @@ class NameVisitor(ast.NodeVisitor):
             self.flag_import_alias(alias, node, dotted=True)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        if node.module == "__future__":
-            return
         for alias in node.names:
             self.flag_import_alias(alias, node, dotted=False)
 

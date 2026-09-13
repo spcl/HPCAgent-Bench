@@ -14,7 +14,6 @@
 #   obc_blocks   = None    -- contact self-energies pre-folded into the diagonal blocks
 #   symmetry     = None    -- both triangles written out
 #   return_retarded = True, return_current = False
-from __future__ import annotations
 
 import numpy as np
 

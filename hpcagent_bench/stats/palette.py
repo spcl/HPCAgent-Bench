@@ -24,8 +24,6 @@ mode is silent, because a packet missing from one of them still draws, in a hash
 raw-string label.
 """
 
-from __future__ import annotations
-
 import logging
 import zlib
 from collections.abc import Iterable

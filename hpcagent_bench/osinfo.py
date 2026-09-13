@@ -10,7 +10,6 @@ helper (:func:`mp_context`) is the exception and reads the runtime config.
 WSL2 is a real Linux kernel, so it is ``IS_LINUX`` and needs no special casing.
 """
 
-from __future__ import annotations
 import platform
 import signal
 import sys
@@ -75,6 +74,17 @@ def host_name() -> str:
     if env:
         return env
     return platform.node() or "unknown"
+
+
+def node_name() -> str:
+    """The node a measurement runs on: ``$SLURMD_NODENAME`` under Slurm, else the hostname.
+
+    ``cpu_model`` names the hardware and every node of a homogeneous cluster shares it, so it cannot
+    tell a candidate timed on one node from a baseline timed on another; this can."""
+    import os
+    import socket
+
+    return os.environ.get("SLURMD_NODENAME") or socket.gethostname()
 
 
 @lru_cache(maxsize=1, typed=True)

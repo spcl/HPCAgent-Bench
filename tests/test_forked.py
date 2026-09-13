@@ -11,6 +11,7 @@ import pickle
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
@@ -239,3 +240,48 @@ def test_the_child_entry_point_keeps_the_name_a_running_judge_pickles() -> None:
     assert forked._child is forked.child_main
     assert pickle.loads(pickle.dumps(forked._child)) is forked.child_main
     assert list(inspect.signature(forked.child_main).parameters) == ["fn", "args", "kwargs", "q"]
+
+
+def process_gone(pid: int, within: float) -> bool:
+    """True once ``pid`` no longer exists or is a zombie waiting to be reaped."""
+    deadline = time.monotonic() + within
+    while time.monotonic() < deadline:
+        try:
+            state = pathlib.Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+        except (FileNotFoundError, IndexError):
+            return True
+        if state == "Z":
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_an_abandoned_run_forked_kills_its_child_and_says_so() -> None:
+    """A grade whose client left must give its device slot back now, not at the child's own timeout."""
+    abandoned = threading.Event()
+    threading.Timer(0.3, abandoned.set).start()
+    begun = time.monotonic()
+    with forked.abandoned_by(abandoned):
+        r = run_forked(_hang, timeout=60)
+    assert (r.ok, r.signal) == (False, "ABANDONED"), r
+    assert time.monotonic() - begun < 10, "the child ran on after its caller was abandoned"
+
+
+def test_an_abandoned_command_kills_every_process_it_started() -> None:
+    """A profile is perf over a python child over a forked measurement; killing perf alone leaves the
+    measurement on the cores the next grade is timed on."""
+    abandoned = threading.Event()
+    threading.Timer(0.5, abandoned.set).start()
+    with forked.abandoned_by(abandoned):
+        done = forked.run_command(["sh", "-c", "sleep 60 & echo $!; wait"], timeout=120)
+    grandchild = int(done.stdout.split()[0])
+    assert done.returncode == -signal.SIGKILL, done
+    assert process_gone(grandchild, within=10), f"grandchild {grandchild} outlived the abandoned command"
+
+
+def test_a_command_past_its_timeout_raises_with_what_it_printed() -> None:
+    """The profilers report a wedged run from the output on its TimeoutExpired, as subprocess.run hands it,
+    including inside a served request that nobody has abandoned."""
+    with forked.abandoned_by(threading.Event()), pytest.raises(subprocess.TimeoutExpired) as wedged:
+        forked.run_command(["sh", "-c", "echo early; sleep 60"], timeout=0.5)
+    assert wedged.value.stdout == "early\n"

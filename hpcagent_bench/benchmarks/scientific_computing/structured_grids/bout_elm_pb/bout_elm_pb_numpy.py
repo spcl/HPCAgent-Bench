@@ -88,7 +88,6 @@ Simplifications, and only these
   this and the reference agree to the last bit.
 """
 
-from __future__ import annotations
 import numpy as np
 
 

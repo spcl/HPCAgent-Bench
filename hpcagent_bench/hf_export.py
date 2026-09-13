@@ -29,7 +29,6 @@ different parameter names -- they are plain pass-through JSON, exactly the input
 ``fuzz.sample_params`` already consumes.
 """
 
-from __future__ import annotations
 import dataclasses
 import json
 import subprocess

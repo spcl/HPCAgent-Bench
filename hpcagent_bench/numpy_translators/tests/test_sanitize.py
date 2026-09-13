@@ -2,7 +2,6 @@
 for the Python-emitting backends before container handoff. Pure-logic unit
 test; imports resolve via PYTHONPATH."""
 
-from __future__ import annotations
 import ast
 
 from numpyto_common.sanitize import sanitize

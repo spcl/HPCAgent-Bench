@@ -39,7 +39,6 @@ family as its argument, corrects across it (Benjamini-Hochberg), and reports a r
 family's own data -- a pooled row over the same tasks -- with its p value and no verdict.
 """
 
-from __future__ import annotations
 import math
 import random
 import statistics

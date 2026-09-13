@@ -1,6 +1,5 @@
 """CPU TVM impl of TSVC ``vdotr`` (``dot_out[0] = sum(a*b)``)."""
 
-from __future__ import annotations
 import tvm
 from tvm import te
 

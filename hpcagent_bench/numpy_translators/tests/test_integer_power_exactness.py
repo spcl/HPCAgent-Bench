@@ -18,7 +18,6 @@ Fixed in the SHARED routing (``_emit_pow`` + ``expand_power`` emitting ``**``), 
 spellings and both native backends move together.
 """
 
-from __future__ import annotations
 import ast
 
 import numpy as np

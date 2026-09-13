@@ -16,8 +16,6 @@ low: no import side effects, and language-agnostic introspection.
   per-kernel ``rtol`` / ``atol`` is rejected at load time.
 """
 
-from __future__ import annotations
-
 import ast
 import functools
 import itertools
@@ -125,7 +123,7 @@ def nested_block_of(raw: object, field_name: str, source: str) -> dict[str, dict
     }
 
 
-def as_value(raw: object) -> FuzzValue | None:
+def as_value(raw: object) -> "FuzzValue | None":
     """One parsed node as a declared value, or ``None`` when it is not one (a YAML null, a
     timestamp).
 
@@ -631,7 +629,7 @@ class ConfigKnob:
     """
 
     domain: tuple[FuzzValue, ...] | None = None
-    value: FuzzValue | None = None
+    value: "FuzzValue | None" = None
     selects: str | None = None
 
     @property
@@ -789,7 +787,7 @@ _SHAPE_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 @functools.lru_cache(maxsize=None, typed=True)
-def module_level_constants(relative_path: str, module_name: str) -> dict[str, FuzzValue | None]:
+def module_level_constants(relative_path: str, module_name: str) -> "dict[str, FuzzValue | None]":
     """``{name: value}`` for the top-level assignments in the kernel's ``<module>_numpy.py``
     reference (e.g. cloudsc's module-level ``nclv = 5``).
 

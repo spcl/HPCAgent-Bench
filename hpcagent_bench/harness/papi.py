@@ -81,7 +81,7 @@ all. Measured against an OpenMP kernel of known arithmetic: exact, on the nose.
 
 Two preconditions are CHECKED rather than assumed. The thread pool must already exist when the
 counters arm, so arming happens after a warmup rep; and the thread set must not move during the
-run, which is re-read at stop and fails the metric if it did. SMT is pinned around
+run, which is re-read at every rep boundary and fails the metric if it did. SMT is pinned around
 (:data:`PINNED_ENV`) rather than assumed absent, and reported either way: siblings share L1/L2, so
 an unpinned cache count measures the pair.
 
@@ -177,7 +177,6 @@ context, so a second GPU or another thread's context contributes nothing -- whic
 indistinguishable, in the number alone, from a kernel that did no work.
 """
 
-from __future__ import annotations
 import ctypes
 import ctypes.util
 import functools
@@ -1129,6 +1128,7 @@ def counted_run(
     buffers: list[tuple[ctypes.Array[ctypes.c_longlong], ctypes.Array[ctypes.c_longlong]]] = []
     readings: list[tuple[int, tuple[tuple[int, tuple[int, ...]], ...]]] = []
     calls: list[int] = []
+    seen: set[int] = set()
     scope = CounterScope(threads=(), how="all_threads", fallback=None)
 
     def arm() -> None:
@@ -1158,6 +1158,9 @@ def counted_run(
             return time.perf_counter_ns() - start
         if index == warm:
             arm()
+        # Sampled at every rep boundary, outside the read bracket: a thread that lives between two
+        # boundaries is named at teardown even if it is gone by then.
+        seen.update(thread_ids())
         # Read-delta rather than start/stop per rep: PAPI_start arms the counters once, and a pair
         # of reads is the cheapest bracket that still isolates ONE call.
         for (_tid, eventset), (before, _after) in zip(handles, buffers):
@@ -1168,6 +1171,7 @@ def counted_run(
         ns = time.perf_counter_ns() - t0
         for (_tid, eventset), (_before, after) in zip(handles, buffers):
             demand(lib, lib.PAPI_read(eventset, after), "PAPI_read")
+        seen.update(thread_ids())
         rows = tuple(
             (tid, tuple(int(after[i] - before[i]) for i in range(width)))
             for (tid, _es), (before, after) in zip(handles, buffers)
@@ -1190,9 +1194,10 @@ def counted_run(
     )
     # No thread may have APPEARED under the counters. A pool that grew mid-run leaves work on a
     # thread nothing was attached to, and every total is short by exactly that -- a wrong number
-    # with no symptom, which is the one outcome worth failing the metric over. A thread that
-    # EXITED is not checked here: its own PAPI_read would have failed loudly first.
-    appeared = tuple(sorted(set(thread_ids()) - set(scope.threads)))
+    # with no symptom, which is the one outcome worth failing the metric over. The union over every
+    # rep boundary catches a thread that came and went between two of them; one born and joined
+    # inside a single call is still invisible from outside the .so.
+    appeared = tuple(sorted(seen.union(thread_ids()).difference(scope.threads)))
     # Disarm only, and unchecked: the counts are already harvested per rep, so a teardown error
     # must not be allowed to throw away good numbers.
     for _tid, eventset in handles:

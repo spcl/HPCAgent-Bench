@@ -14,7 +14,6 @@ all: BACK TO BACK on the trailing axes, which the front end rewrites to a chaine
 first, plus the rank-independence guard the extent fold behind it rests on.
 """
 
-from __future__ import annotations
 import ast
 
 import numpy as np

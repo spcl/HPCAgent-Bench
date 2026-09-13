@@ -18,7 +18,6 @@ descriptor table and
 adapter, which also advertises its :attr:`Framework.SUPPORTED_PRECISIONS`.
 """
 
-from __future__ import annotations
 import argparse
 import dataclasses
 import json

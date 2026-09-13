@@ -35,7 +35,6 @@ Reported defaults (so a run's rigor is documented, not implicit):
   obeys too; the method is passed to scipy explicitly rather than left to its ``auto`` heuristic.
 """
 
-from __future__ import annotations
 import math
 import warnings
 from collections.abc import Callable, Sequence
@@ -406,8 +405,8 @@ def signed_changes(ratios: Samples) -> FloatArray:
 
 
 def median_per_kernel(
-    frame: pd.DataFrame, value: str, kernel: str = "benchmark", within: Sequence[str] = ()
-) -> pd.Series:
+    frame: "pd.DataFrame", value: str, kernel: str = "benchmark", within: Sequence[str] = ()
+) -> "pd.Series":
     """One value per kernel -- the unit every corpus-level statistic here is taken over.
 
     A summary must never be pooled over RAW rows. An agent that resubmits a kernel ten times

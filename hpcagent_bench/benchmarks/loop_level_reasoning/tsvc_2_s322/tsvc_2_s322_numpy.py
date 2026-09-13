@@ -3,7 +3,6 @@
 
 """TSVC tsvc_2 kernel ``s322`` (numpy reference)."""
 
-from __future__ import annotations
 import numpy as np
 
 

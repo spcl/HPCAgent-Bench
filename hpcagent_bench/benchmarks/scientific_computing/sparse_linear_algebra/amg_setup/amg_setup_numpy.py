@@ -22,7 +22,6 @@ ever being cleared in full. It is what makes the RAP linear in the output nonzer
 quadratic in the coarse dimension.
 """
 
-from __future__ import annotations
 import numpy as np
 
 #: Levels the offset table can hold. Coarsening is by a factor of at least 4 per level, so 16

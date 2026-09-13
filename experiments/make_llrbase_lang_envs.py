@@ -7,8 +7,9 @@ two lines (LANGUAGE, AGENT_HINTS_FILE); the rest, SGLANG_EXTRA_ARGS and VLLM_EXT
 was hand-copied into all four. A serving tune applied to only one sibling is how an arm and its
 language counterpart silently confound the axis a campaign is measuring.
 
-glm53 is out of scope: its llrbase pair is already owned by make_glm53_envs.py, and it has no
-fortran sibling to derive. oss120b is out of scope here too: its llrbase-c is mid-edit (a
+glm53's -c and -c-skills are owned by make_glm53_envs.py, which derives them from the kimi sglang
+pair; only its fortran and fortran-skills siblings are derived here, from that same -c file, the
+same as every other model's. oss120b is out of scope here: its llrbase-c is mid-edit (a
 context-window change) in this same tree, and deriving siblings from it now would fold an
 unrelated, unfinished change into this one.
 """
@@ -22,7 +23,7 @@ sys.path.insert(0, str(REPO))
 
 from hpcagent_bench import packets
 
-MODELS = ("qwen38", "kimi27sglang")
+MODELS = ("qwen38", "kimi27sglang", "glm53")
 #: The lang-skills packet's own env, not a second hand-typed copy of it.
 HINTS_FILE = dict(packets.resolve("lang-skills", "c").env)["AGENT_HINTS_FILE"]
 

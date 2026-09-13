@@ -13,7 +13,6 @@ Fidelity to a *running* dace program is established separately by the
 output matching the known-good original VectraArtifacts dace source.
 """
 
-from __future__ import annotations
 import ast
 import re
 import textwrap
@@ -37,6 +36,7 @@ from numpyto_c.dace_emit import (
     ResolveInferredReshape,
     DesugarContractionFreeEinsum,
     ResolveShapeReads,
+    SplitTupleAssign,
     RewriteBuiltinDtype,
     _AnnotateEmptyDtype,
     _CopyScalarAlias,
@@ -966,6 +966,84 @@ def test_a_rename_of_a_promoted_extent_reuses_that_symbol_instead_of_minting_a_s
     assert len(shapes) == 2 and shapes[0] == shapes[1], shapes
 
 
+@pytest.mark.parametrize(
+    ("rebinding", "src"),
+    [
+        (
+            "augmented assignment",
+            (
+                "def k(a, x):\n    n = 0\n    for i in range(4):\n        a[n] = x[i]\n        n += 1\n"
+                "    t = np.zeros((n, n), a.dtype)\n    t[:] = a[:n]\n"
+            ),
+        ),
+        (
+            "loop target",
+            (
+                "def k(a, x):\n    n = 0\n    for n in range(4):\n        a[n] = x[n]\n"
+                "    t = np.zeros((n, n), a.dtype)\n    t[:] = a[:n]\n"
+            ),
+        ),
+        (
+            "tuple target",
+            (
+                "def k(a, x):\n    n = 0\n    m = 1\n    for i in range(4):\n        a[n] = x[i]\n"
+                "        m, n = n, m + n\n    t = np.zeros((n, n), a.dtype)\n    t[:] = a[:n]\n"
+            ),
+        ),
+    ],
+)
+def test_a_size_local_mutated_after_its_definition_is_neither_inlined_nor_promoted(rebinding: str, src: str) -> None:
+    """ls3df_scf counts Lanczos steps with ``na = 0`` then ``na += 1`` and sizes ``np.diag(alphas[:na])``
+    after the loop. Inlined as its first value the tridiagonal came out 0x0 and ``na += 1`` read a name
+    no longer bound; promoted to a symbol bound to that first value, the 0x0 eigh workspace was written
+    over the counted range."""
+    fn = ast.parse(src).body[0]
+    out = ast.unparse(_inline_symbol_aliases(fn, set(), {"a", "x"}))
+    assert "n = 0" in out and "np.zeros((n, n)" in out and "a[:n]" in out, (rebinding, out)
+    promoted = _plan_size_promotion(fn, {"a", "x"})[0]
+    assert "n" not in promoted, (rebinding, promoted)
+
+
+def test_a_bare_alias_rebound_inside_a_loop_is_copied_rather_than_left_a_view() -> None:
+    """ls3df_scf's inlined CheFSI binds ``X = <reshaped block>`` and swaps ``X, Y = Y, Ynew`` in the loop, so
+    every binding of ``X`` is a bare alias and the loop's one reassigns the View dace made for the first:
+    ``Cannot reassign View "__inl4_X"``. The live ranges overlap across the loop, so no rename separates
+    them; each binding copies instead, and the numbers must not move."""
+    src = (
+        "def k(a, out):\n"
+        "    b = a.reshape((6, 4))\n"
+        "    x = b\n"
+        "    y = x * 0.5\n"
+        "    for it in range(3):\n"
+        "        ynew = y * 2.0 - x\n"
+        "        x, y = y, ynew\n"
+        "    out[:] = x\n"
+    )
+    fn = SplitTupleAssign().visit(ast.parse(src).body[0])
+    ast.fix_missing_locations(fn)
+    copy_view_bindings(fn, mixed_view_names(fn))
+    copy_view_bindings(fn, version_rebound_views(fn))
+    version_rebound_names(fn, value_binding)
+    rewritten = ast.unparse(fn)
+    outputs = []
+    for text in (src, rewritten):
+        scope = {"np": np}
+        exec(text, scope)  # noqa: S102 -- the source is a literal in this test
+        out = np.zeros((6, 4))
+        scope["k"](np.arange(24, dtype=np.float64), out)
+        outputs.append(out)
+    assert np.array_equal(*outputs), rewritten
+    bindings = [line.strip() for line in rewritten.splitlines() if line.strip().startswith("x = ")]
+    assert len(bindings) == 2 and all(b.startswith("x = np.copy(") for b in bindings), rewritten
+
+
+def test_a_rebound_alias_of_a_symbol_is_not_copied() -> None:
+    """``m = n`` reads a scalar the caller bound as a dc.symbol; a copy would ask dace for an array of it."""
+    fn = ast.parse("def k(a, n):\n    m = n\n    for i in range(3):\n        m = i\n        a[m] = 1.0\n").body[0]
+    copy_view_bindings(fn, version_rebound_views(fn, frozenset({"n", "i"})), frozenset({"n", "i"}))
+    assert "np.copy" not in ast.unparse(fn), ast.unparse(fn)
+
+
 def test_swapaxes_becomes_the_transpose_dace_does_have() -> None:
     """netvlad: dace has no ``swapaxes`` and refuses the callback's return value. The rewrite needs
     the operand RANK, which only this flow-sensitive table has."""
@@ -1290,6 +1368,47 @@ def test_a_view_name_also_bound_to_a_value_is_copied_instead_of_versioned() -> N
     )
     assert "horiz = np.copy(a[:, 0])" in src
     assert "horiz__v2" not in src  # the copy settles it; there is no second name
+
+
+def test_a_view_rebound_to_a_value_before_a_loop_carried_update_gets_a_name_per_live_range() -> None:
+    """ls3df_scf binds ``v = psi_frag[f][..., 0]``, normalizes it as ``v = v / norm`` and advances it in
+    the loop as ``v_prev, v = v, w / beta``. The loop's binding sits inside the normalized value's live
+    range, and declining the whole name for it left the View and the value under one name: dace's
+    ``Cannot reassign View "__inl2_v"``. The View keeps ``v``; the value and its update share a new name."""
+    src = (
+        "def k(a, out):\n"
+        "    v = a[1:3, :][:, 0:4]\n"
+        "    v = v / 2.0\n"
+        "    v_prev = np.zeros_like(v)\n"
+        "    for it in range(3):\n"
+        "        w = v * 3.0 - v_prev\n"
+        "        v_prev, v = v, w / 4.0\n"
+        "    out[:] = v\n"
+    )
+    fn = SplitTupleAssign().visit(ast.parse(src).body[0])
+    ast.fix_missing_locations(fn)
+    copy_view_bindings(fn, mixed_view_names(fn))
+    copy_view_bindings(fn, version_rebound_views(fn))
+    version_rebound_names(fn, value_binding)
+    rewritten = ast.unparse(fn)
+    outputs = []
+    for text in (src, rewritten):
+        scope = {"np": np}
+        exec(text, scope)  # noqa: S102 -- the source is a literal in this test
+        out = np.zeros((2, 4))
+        scope["k"](np.arange(24, dtype=np.float64).reshape(6, 4), out)
+        outputs.append(out)
+    assert np.array_equal(*outputs), rewritten
+    bindings = [line.strip() for line in rewritten.splitlines() if line.strip().startswith("v = ")]
+    assert bindings == ["v = a[1:3, :][:, 0:4]"], rewritten
+    assert "out[:] = v__v2" in rewritten, rewritten
+
+    # tsvc_2_vsumr's ``s = 0.0`` and mg_vcycle's ``edge = N`` bind no View: dace rebinds those as they are.
+    value_fn = ast.parse(
+        "def k(a, out, n):\n    s = n\n    s = 1.0\n    for i in range(4):\n        s = s + a[i]\n    out[0] = s\n"
+    ).body[0]
+    version_rebound_names(value_fn, value_binding)
+    assert "__v2" not in ast.unparse(value_fn), ast.unparse(value_fn)
 
 
 def test_a_view_written_through_is_left_alone() -> None:

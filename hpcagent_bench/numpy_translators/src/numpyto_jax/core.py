@@ -25,8 +25,6 @@ Scope: prototype covering elementwise / reduction / matmul / solver shapes;
 unsupported constructs raise ``EmitError`` so the driver can fall back.
 """
 
-from __future__ import annotations
-
 import ast
 import copy
 from typing import List, Optional, Set, Tuple

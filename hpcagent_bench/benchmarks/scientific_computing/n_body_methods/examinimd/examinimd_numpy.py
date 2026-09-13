@@ -29,7 +29,6 @@ binning infrastructure, integrators, I/O, thermo output, benchmark harnesses,
 and other non-essential application components.
 """
 
-from __future__ import annotations
 from typing import Iterable, Tuple
 
 import numpy as np

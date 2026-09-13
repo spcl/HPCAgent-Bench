@@ -9,8 +9,6 @@ claim from the page, expressed as a program plus the verdict the page predicts. 
 what the toolchain actually did, so a mismatch is a page edit rather than an opinion.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import os

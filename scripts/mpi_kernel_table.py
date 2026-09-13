@@ -11,8 +11,6 @@ hand drifts from the first the moment someone edits a manifest, which is the fai
 Writes between the markers in ``docs/mpi_patterns.md``; prints to stdout otherwise.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import pathlib

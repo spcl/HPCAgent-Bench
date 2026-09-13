@@ -1,6 +1,5 @@
 """NumPy adaptation of GROMACS's nbnxn_kernel_4x4_ElecQSTab_VdwLJ_F_ref reference kernel (LGPL-2.1+)."""
 
-from __future__ import annotations
 import math
 import numpy as np
 

@@ -7,7 +7,6 @@
   (element ``(i, i+k)``), not always the main diagonal.
 """
 
-from __future__ import annotations
 import ast
 
 import numpy as np

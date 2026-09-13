@@ -19,8 +19,6 @@ Manifests are edited as TEXT. Round-tripping them through a YAML dump would drop
 the corpus, and the comments are where the traps are written down.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import pathlib

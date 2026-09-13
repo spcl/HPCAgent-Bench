@@ -20,8 +20,6 @@ Regenerating restores the single ABI both sides already agree on -- the emitter 
 ``support.bindings.contract`` derive the symbol from the same ``naming.entry_symbol``.
 """
 
-from __future__ import annotations
-
 import argparse
 import pathlib
 import subprocess

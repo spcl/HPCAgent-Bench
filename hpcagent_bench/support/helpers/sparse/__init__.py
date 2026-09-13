@@ -7,5 +7,3 @@
 * :mod:`.triton_sparse` -- TritonSpMV
 * :mod:`.tvm_sparse` -- TvmSpMV / to_numpy
 """
-
-from __future__ import annotations

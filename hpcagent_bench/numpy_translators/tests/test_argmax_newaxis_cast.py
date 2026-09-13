@@ -14,7 +14,6 @@
 Each test pins one rule so a regression points straight at it.
 """
 
-from __future__ import annotations
 import ast
 import json
 import pathlib

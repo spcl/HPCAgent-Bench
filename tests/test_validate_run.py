@@ -30,10 +30,7 @@ GARBAGE_BYTES = b"\xff\xfe" * 100
 
 
 def load_example_module(name: str) -> ModuleType:
-    """``sys.modules`` must carry the module BEFORE exec: several of these modules declare a
-    ``@dataclass`` under ``from __future__ import annotations``, and dataclass field resolution looks
-    up ``sys.modules[cls.__module__]`` -- an unregistered module makes that lookup ``None`` and
-    crashes."""
+    """Registered in ``sys.modules`` before exec, as a real import does."""
     spec = importlib.util.spec_from_file_location(name, EXAMPLE / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module

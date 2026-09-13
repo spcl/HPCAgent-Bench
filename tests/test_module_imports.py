@@ -3,8 +3,8 @@
 """Every module a job imports, imported.
 
 This exists because a one-line import failure cost six GPU arms. `config.py` annotated a
-module-level name with a type alias defined sixty lines further down; the module has no
-`from __future__ import annotations`, so the annotation was evaluated at import and every process
+module-level name with a type alias defined sixty lines further down; a module-level annotation
+is evaluated at import on the 3.12 floor, so every process
 that touched `hpcagent_bench` died on `NameError: name 'ConfigValue' is not defined`. Nothing in
 the suite imported that chain in a fresh interpreter, so it was green while the queue was not.
 

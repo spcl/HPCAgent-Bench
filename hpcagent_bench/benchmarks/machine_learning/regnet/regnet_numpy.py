@@ -6,7 +6,6 @@ also drops the ``-inf`` buffer the loop had to seed. The unused ``_conv2d``/``_b
 ``_stage`` definitions are not carried over.
 """
 
-from __future__ import annotations
 import numpy as np
 
 

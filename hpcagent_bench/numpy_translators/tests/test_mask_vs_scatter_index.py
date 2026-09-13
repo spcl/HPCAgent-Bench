@@ -15,7 +15,6 @@ index set is shorter. That is what silently miscompiled lulesh's ``xdd[symmX] = 
 it, ``_BooleanMaskRewriter`` did not.
 """
 
-from __future__ import annotations
 import json
 import pathlib
 import tempfile

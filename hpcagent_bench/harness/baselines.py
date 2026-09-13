@@ -44,7 +44,6 @@ Runs reach the results DB through the paths that already exist --
 are the identity a comparison reads.
 """
 
-from __future__ import annotations
 import dataclasses
 import json
 import os

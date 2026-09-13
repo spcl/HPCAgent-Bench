@@ -4,7 +4,6 @@
 """Typed SQLModel schema for the framework-benchmark ``results`` table: the single Result model derives
 both the DDL (``create_all``) and row inserts, replacing the old hand-written CREATE TABLE/INSERT pair."""
 
-from __future__ import annotations
 from typing import ClassVar
 
 from sqlalchemy import Table
@@ -58,6 +57,9 @@ class Result(SQLModel, table=True):
     # device that took no part in the run must not split the figure for it, or the same CPU
     # measurement lands in two plots because someone swapped a card that was never used.
     gpu: str | None = None
+    # The NODE (osinfo.node_name). ``cpu`` cannot separate two nodes of one cluster, and a ratio
+    # across two nodes is a hardware comparison. NULL == recorded before the column existed.
+    node: str | None = None
 
 
 def add_missing_columns(engine: Engine) -> None:

@@ -36,8 +36,6 @@ whose script owns its own skip policy). With no files given -- standalone, or th
 gate in ``tests/test_yaml_style.py`` -- it scans every tracked owned YAML instead.
 """
 
-from __future__ import annotations
-
 import argparse
 import pathlib
 import subprocess

@@ -16,8 +16,6 @@ The bit generators are round-robined over the spawned children. MT19937 is delib
 1.9x slower than PCG64 for the same fill and 2.5KB of state per stream, in exchange for nothing.
 """
 
-from __future__ import annotations
-
 import concurrent.futures
 from collections.abc import Callable, Sequence
 from typing import Any

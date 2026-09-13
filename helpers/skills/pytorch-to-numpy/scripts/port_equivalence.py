@@ -20,8 +20,6 @@ Repo-local: it finds the checkout from the current directory and says so plainly
 somewhere else, rather than raising an import error three frames down.
 """
 
-from __future__ import annotations
-
 import argparse
 import importlib.util
 import inspect

@@ -3,7 +3,6 @@
 
 """QUEST's upstream MHA decode path: estimate, page top-k, sparse attention."""
 
-from __future__ import annotations
 import numpy as np
 
 

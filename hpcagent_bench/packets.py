@@ -18,8 +18,6 @@ for an unregistered part. ``palette.color`` computes the same values; it is expe
 calling :func:`packet_color` directly once this module lands.
 """
 
-from __future__ import annotations
-
 import colorsys
 import dataclasses
 import os

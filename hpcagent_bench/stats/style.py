@@ -12,8 +12,6 @@ Neutrals carry a slight cool bias rather than being a pure grey, so they sit und
 blues without looking like a different rendering of the page.
 """
 
-from __future__ import annotations
-
 import pathlib
 from collections.abc import Sequence
 from typing import Literal

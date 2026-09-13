@@ -7,7 +7,6 @@ Each test asserts on the desugared source, since the failure this pass exists to
 ``ast.Tuple`` surviving into value position, where the emitter refuses it.
 """
 
-from __future__ import annotations
 import ast
 import textwrap
 

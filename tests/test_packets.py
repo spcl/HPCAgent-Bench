@@ -7,8 +7,6 @@ no-score-tool, autokernel, all-in), an implicit single-skill packet, an ad-hoc `
 the error paths, and the identity/colour round trips that ``runs.packet`` already depends on.
 """
 
-from __future__ import annotations
-
 import dataclasses
 
 import pytest

@@ -8,7 +8,6 @@ already marshals results, timeouts and fatal signals; this module supplies only 
 thing it was missing.
 """
 
-from __future__ import annotations
 import ctypes
 import os
 import warnings

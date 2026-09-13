@@ -17,8 +17,6 @@ Databases are opened READ-ONLY (``mode=ro``). A campaign's run roots are the onl
 reader must never be able to damage them by being re-run.
 """
 
-from __future__ import annotations
-
 import argparse
 import contextlib
 import glob
@@ -164,7 +162,7 @@ def read_database(db: Database, want: dict[str, frozenset[str]]) -> Iterator[dic
                 yield record
 
 
-def observations(run_globs: Iterable[str], **identity: str | Iterable[str]) -> pd.DataFrame:
+def observations(run_globs: Iterable[str], **identity: str | Iterable[str]) -> "pd.DataFrame":
     """The campaign's observations as a DataFrame, one row per recorded grade.
 
     Selection is by IDENTITY COLUMN, one keyword per column in :data:`IDENTITY`, each taking a value

@@ -11,8 +11,6 @@ The tool is intentionally service-agnostic:
 A later HTTP service can either spawn this file per request or import run_web_search().
 """
 
-from __future__ import annotations
-
 import argparse
 import asyncio
 import contextlib

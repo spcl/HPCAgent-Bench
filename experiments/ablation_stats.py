@@ -26,15 +26,12 @@ comparison by itself.
 
 Deliberately stdlib-only (no scipy, no numpy): this runs on a login node from a shell that never
 activated the benchmark's environment. The two tests are small and implemented exactly. Needs
-python3.8+ (the ``from __future__ import annotations`` below is what makes the ``X | None`` hints
-legal that far back); the repo venv's python is the recommended interpreter.
+python3.12+; the repo venv's python is the recommended interpreter.
 
 Writes ``<prefix>-per-problem.csv`` (one row per kernel, one column pair per arm) and
 ``<prefix>-pairs.csv`` (one row per arm pair per test). A single arm is legal: the per-problem CSV
 is still written and the pairs CSV holds just its header.
 """
-
-from __future__ import annotations
 
 import argparse
 import csv

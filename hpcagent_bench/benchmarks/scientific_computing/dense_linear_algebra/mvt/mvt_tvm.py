@@ -1,6 +1,5 @@
 """CPU TVM mvt -- meta_schedule autotuned. x1 += A@y_1 ; x2 += y_2@A. Two mat-vec reductions + add stages."""
 
-from __future__ import annotations
 import tvm
 from tvm import te
 

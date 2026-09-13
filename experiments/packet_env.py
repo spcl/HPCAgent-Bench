@@ -18,8 +18,6 @@ one a sourcing shell already has), and the last line is always
 ``.env`` for the results DB. The empty spec (the control) prints only that one line, empty.
 """
 
-from __future__ import annotations
-
 import argparse
 import pathlib
 import sys

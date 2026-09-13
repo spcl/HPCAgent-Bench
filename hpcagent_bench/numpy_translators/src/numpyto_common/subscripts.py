@@ -1,7 +1,5 @@
 """Predicates over numpy subscript entries, shared by the frontend, the lowering and the backends."""
 
-from __future__ import annotations
-
 import ast
 
 

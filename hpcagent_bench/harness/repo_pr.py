@@ -19,7 +19,6 @@ failure yields an unopened PR (a safe, rejected default), never a crash -- the g
 mangled agent repo.
 """
 
-from __future__ import annotations
 import dataclasses
 import os
 import pathlib

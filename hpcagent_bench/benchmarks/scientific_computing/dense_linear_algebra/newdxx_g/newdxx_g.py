@@ -36,7 +36,6 @@ duplicate-free (QE's invariant: distinct G-vectors occupy distinct FFT-grid
 cells).
 """
 
-from __future__ import annotations
 from typing import Optional
 
 import numpy as np
