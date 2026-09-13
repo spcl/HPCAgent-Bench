@@ -10,6 +10,7 @@ shape unexpressible, so a later simplification cannot quietly restore it.
 import importlib.util
 import pathlib
 import sys
+from types import ModuleType
 
 import pandas as pd
 import pytest
@@ -461,7 +462,7 @@ def test_a_k_way_ranking_is_over_the_kernels_every_arm_of_the_group_solved(analy
     assert set(solved.arms_in_group) == {3}
 
 
-def test_arm_parts_reads_the_recorded_packet_not_the_arm_name(analyze) -> None:
+def test_arm_parts_reads_the_recorded_packet_not_the_arm_name(analyze: ModuleType) -> None:
     """The skills flag (the 4th field) is sourced from the RECORDED packet, not from
     ``pieces[-1] == "skills"``: an arm literally named with the suffix that recorded no packet
     reads unskilled, and one named without it that recorded the packet reads skilled."""
@@ -474,7 +475,7 @@ def test_arm_parts_reads_the_recorded_packet_not_the_arm_name(analyze) -> None:
     assert analyze.arm_parts("v9-qwen38-c", "") == ("v9", "qwen38", "c", 0)
 
 
-def test_arm_parts_counts_a_composite_packet_as_skilled(analyze) -> None:
+def test_arm_parts_counts_a_composite_packet_as_skilled(analyze: ModuleType) -> None:
     """``llrsingle`` records ``lang-skills+no-score-tool`` on its treated arms -- a bare equality
     check against the canonical ``lang-skills`` key missed this composite entirely and read every
     one of that campaign's skilled arms as unskilled."""
@@ -487,7 +488,7 @@ def test_arm_parts_counts_a_composite_packet_as_skilled(analyze) -> None:
     assert analyze.arm_parts("llrsingle-oss120b-c", "no-score-tool")[3] == 0
 
 
-def test_arm_packet_map_canonicalizes_and_refuses_a_split_arm(analyze) -> None:
+def test_arm_packet_map_canonicalizes_and_refuses_a_split_arm(analyze: ModuleType) -> None:
     """One packet per arm, alias-resolved through packets.canonical; an arm somehow carrying two
     raw spellings that resolve to different keys is a labelling bug and must raise, not pick one."""
     frame = pd.DataFrame([{"arm": "a", "packet": "skills"}, {"arm": "a", "packet": "skills"}])

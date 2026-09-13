@@ -14,6 +14,7 @@ paper.
 
 import importlib.util
 import logging
+import pathlib
 import sys
 from types import ModuleType
 
@@ -172,7 +173,7 @@ def test_the_registry_check_catches_a_figure_colouring_an_unregistered_packet(
     assert any("a-packet-nobody-registered" in message for message in warnings), warnings
 
 
-def test_arm_summary_load_reads_the_condition_off_the_recorded_packet(tmp_path) -> None:
+def test_arm_summary_load_reads_the_condition_off_the_recorded_packet(tmp_path: pathlib.Path) -> None:
     """An arm renamed away from the ``-cpf`` suffix, but recording the ``cpf`` packet, must still
     load under that condition -- the arm name used to be the only route in (``condition_of``)."""
     summary = load_script("plot_arm_summary")
