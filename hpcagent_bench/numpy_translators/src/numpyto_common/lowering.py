@@ -3447,6 +3447,8 @@ class ChainedSubscriptFlattener(ast.NodeTransformer):
                 continue
             label = inner_axes[consumed]
             consumed += 1
+            if pending and newaxis_after_last_gather(label, inner_axes, consumed - 1, adv_rank):
+                return None
             self.attach_newaxes(pending, label, slot_newaxes, adv_newaxes, tail)
             pending.clear()
             model = entry_model(elt, elt_rank, label, outer_rank, "outer")
@@ -3473,9 +3475,12 @@ class ChainedSubscriptFlattener(ast.NodeTransformer):
                 folded_outer[i] = ast.Slice()
                 folded = True
         if pending:
+            label = inner_axes[consumed] if consumed < len(inner_axes) else ("rest", 0)
+            if newaxis_after_last_gather(label, inner_axes, consumed, adv_rank):
+                return None
             self.attach_newaxes(
                 pending,
-                inner_axes[consumed] if consumed < len(inner_axes) else ("rest", 0),
+                label,
                 slot_newaxes,
                 adv_newaxes,
                 tail,
@@ -3570,6 +3575,14 @@ class ChainedSubscriptFlattener(ast.NodeTransformer):
             return array, layout
         indexed = ast.Subscript(value=array, slice=index_slot(entries), ctx=ast.Load())
         return (self.visit_Subscript(indexed) if isinstance(array, ast.Subscript) else indexed), layout
+
+
+def newaxis_after_last_gather(label: AxisLabel, inner_axes: List[AxisLabel], position: int, adv_rank: int) -> bool:
+    """Whether outer newaxes just before result axis ``inner_axes[position]`` sit right after the index
+    arrays' LAST broadcast axis (``A[idx][:, None]``). No flat form survives that: at base level
+    (``A[idx, None]``) and inside the array (``A[idx[:, None]]``) the scalarizers read the newaxis as one
+    more gathered axis, so the chain stays two-step."""
+    return label[0] != "adv" and position > 0 and inner_axes[position - 1] == ("adv", adv_rank - 1)
 
 
 def _name_of_subscript(node: ast.Subscript) -> Optional[str]:
