@@ -22,9 +22,9 @@ def _isolated_cache() -> Iterator[None]:
     """The module memoizes with ``lru_cache(maxsize=1)`` -- clear before AND after so a fake
     report never leaks into a later test (in this file or, worse, a real host probe elsewhere in
     the same xdist worker) and a real probe never pollutes a later assertion here."""
-    resources.available_resources.cache_clear()
+    resources.probed_resources.cache_clear()
     yield
-    resources.available_resources.cache_clear()
+    resources.probed_resources.cache_clear()
 
 
 def _fake_report() -> dict[str, Any]:
@@ -75,6 +75,23 @@ def test_discovery_failure_degrades_instead_of_raising(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(discover_tools, "discover", boom)
     assert resources.available_resources() == {"platform": "unknown", "compilers": [], "libraries": []}
+
+
+def test_a_failed_discovery_is_not_cached(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A probe that threw once (a PATH not set up yet) must not pin an empty toolchain on every
+    later prompt in the process."""
+    outcomes: list[str] = []
+
+    def flaky_discover() -> dict[str, Any]:
+        outcomes.append("called")
+        if len(outcomes) == 1:
+            raise RuntimeError("ldconfig not on PATH")
+        return _fake_report()
+
+    monkeypatch.setattr(discover_tools, "discover", flaky_discover)
+    assert resources.available_resources()["compilers"] == []
+    second = resources.available_resources()
+    assert second["compilers"] == [{"name": "gcc", "version": "13.2.0"}], second
 
 
 def test_result_is_cached_across_calls_until_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
