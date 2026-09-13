@@ -88,6 +88,24 @@ def db_files(run_dir: pathlib.Path) -> list[str]:
     return sorted(glob.glob(str(run_dir / "judge" / "rank-*" / "*.db")))
 
 
+def shard_rows(db: str, sql: str, args: tuple = ()) -> list[tuple]:
+    """``sql``'s rows from one judge shard, or none when the shard has no schema.
+
+    A rank directory can hold an empty file named after another shard (633717: 0-byte
+    ``hpcagent_bench2.db`` beside rank 3's real one). Querying it raised "no such table", and the one
+    except around a promotion turned that into a failed promotion for every worker of the job.
+    """
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        return con.execute(sql, args).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" not in str(exc):
+            raise
+        return []
+    finally:
+        con.close()
+
+
 def submitted_pairs(run_dir: pathlib.Path, only_run_id: str = "") -> set[tuple[str, str]]:
     """Every ``(run_id, kernel)`` this run already holds a submission for.
 
@@ -103,13 +121,9 @@ def submitted_pairs(run_dir: pathlib.Path, only_run_id: str = "") -> set[tuple[s
     args: tuple = (only_run_id,) if only_run_id else ()
     pairs: set[tuple[str, str]] = set()
     for db in db_files(run_dir):
-        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-        try:
-            for bench, run_id in con.execute(f"select benchmark, run_id from submissions{where}", args):
-                if bench and run_id:
-                    pairs.add((run_id, short_name(bench)))
-        finally:
-            con.close()
+        for bench, run_id in shard_rows(db, f"select benchmark, run_id from submissions{where}", args):
+            if bench and run_id:
+                pairs.add((run_id, short_name(bench)))
     return pairs
 
 
@@ -127,20 +141,17 @@ def candidates(run_dir: pathlib.Path, only_run_id: str = "") -> list[dict[str, s
     best: dict[tuple[str, str], float] = {}
     args: tuple = (only_run_id,) if only_run_id else ()
     for db in db_files(run_dir):
-        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-        try:
-            for bench, run_id, speedup in con.execute(
-                f"select benchmark, run_id, speedup from calls where correct = 1 and speedup > 1.0"
-                f"{' and run_id = ?' if only_run_id else ''}",
-                args,
-            ):
-                if not bench or not run_id:
-                    continue
-                key = (run_id, short_name(bench))
-                if key not in best or speedup > best[key]:
-                    best[key] = float(speedup)
-        finally:
-            con.close()
+        for bench, run_id, speedup in shard_rows(
+            db,
+            f"select benchmark, run_id, speedup from calls where correct = 1 and speedup > 1.0"
+            f"{' and run_id = ?' if only_run_id else ''}",
+            args,
+        ):
+            if not bench or not run_id:
+                continue
+            key = (run_id, short_name(bench))
+            if key not in best or speedup > best[key]:
+                best[key] = float(speedup)
 
     out: list[dict[str, str]] = []
     store = run_dir / "judge"
@@ -260,26 +271,21 @@ def last_source(run_dir: pathlib.Path, bench: str, run_id: str, language: str = 
     """
     best: tuple[int, str, str] | None = None
     for db in db_files(run_dir):
-        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-        try:
-            # Matched on the short name, not the stored string: the two tables spell a kernel
-            # differently on some tracks (see short_name).
-            for stored_bench, ts, path, stored in con.execute(
-                "select benchmark, ts, path, language from sources where run_id = ? order by ts",
-                (run_id,),
-            ):
-                if short_name(stored_bench) != short_name(bench):
+        # Matched on the short name, not the stored string: the two tables spell a kernel
+        # differently on some tracks (see short_name).
+        for stored_bench, ts, path, stored in shard_rows(
+            db, "select benchmark, ts, path, language from sources where run_id = ? order by ts", (run_id,)
+        ):
+            if short_name(stored_bench) != short_name(bench):
+                continue
+            stored = stored or "c"
+            if language:
+                if stored != language:
                     continue
-                stored = stored or "c"
-                if language:
-                    if stored != language:
-                        continue
-                elif stored.endswith(DEVICE_SUFFIX):
-                    continue
-                if best is None or ts > best[0]:
-                    best = (ts, path, stored)
-        finally:
-            con.close()
+            elif stored.endswith(DEVICE_SUFFIX):
+                continue
+            if best is None or ts > best[0]:
+                best = (ts, path, stored)
     return (best[1], best[2]) if best else None
 
 

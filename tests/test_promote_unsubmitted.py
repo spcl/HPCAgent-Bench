@@ -438,3 +438,32 @@ def test_a_promotion_the_job_cannot_wait_for_is_never_sent(
     outcome = promoter.promote_one_worker(run_dir, "http://judge:8800", "arm.n0.p1.w1")
     assert outcome.startswith("not attempted"), outcome
     assert captured == [], "no request may reach the judge"
+
+
+def add_schemaless_shards(run_dir: pathlib.Path) -> None:
+    """The 633717 layout: a zero-byte file named after another shard, and a rank that never wrote."""
+    (run_dir / "judge" / "rank-0" / "hpcagent_bench2.db").write_bytes(b"")
+    (run_dir / "judge" / "rank-1").mkdir()
+    (run_dir / "judge" / "rank-1" / "hpcagent_bench1.db").write_bytes(b"")
+
+
+def test_a_shard_with_no_schema_does_not_fail_every_promotion(promoter: ModuleType, tmp_path: pathlib.Path) -> None:
+    """An empty shard answered "no such table", and the catch-all reported every worker's promotion
+    as failed: 110 of 120 workers on 633717 lost their verified kernel."""
+    run_dir = make_run_dir(tmp_path, [("c", "gemm.c", "void gemm(void){}")])
+    add_schemaless_shards(run_dir)
+    (item,) = promoter.candidates(run_dir)
+    assert item["source"] == "void gemm(void){}"
+    assert promoter.submitted_pairs(run_dir) == set()
+
+
+def test_a_shard_with_a_wrong_schema_still_fails_loudly(promoter: ModuleType, tmp_path: pathlib.Path) -> None:
+    """Only a missing schema is skipped: a shard whose table lacks a column is a real fault."""
+    rank = tmp_path / "judge" / "rank-0"
+    rank.mkdir(parents=True)
+    con = sqlite3.connect(rank / "hpcagent_bench0.db")
+    con.execute("create table submissions (benchmark text)")
+    con.commit()
+    con.close()
+    with pytest.raises(sqlite3.OperationalError, match="no such column"):
+        promoter.submitted_pairs(tmp_path)
